@@ -19,6 +19,8 @@ from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispat
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_common import _compact_by_keep_mask_to_size
 from levanter.grug._moe.ep_ragged_all_to_all import (
+    _decode_slot_metadata,
+    _encode_slot_metadata,
     _fixed_a2a_core,
     _fixed_dispatch_gather_reference,
     _fixed_dispatch_gather_sonic,
@@ -69,6 +71,17 @@ def _make_dense_mesh() -> Mesh:
         axis_names=("data", "model"),
         axis_types=(AxisType.Explicit, AxisType.Explicit),
     )
+
+
+@pytest.mark.parametrize("payload_dtype", [jnp.bfloat16, jnp.float16, jnp.float32])
+def test_embedded_slot_metadata_round_trip(payload_dtype: jnp.dtype):
+    slots = jnp.array([0, 1, 255, 256, 65535, 65536, 262144, (1 << 24) - 1], dtype=jnp.int32)
+
+    words = _encode_slot_metadata(slots, payload_dtype)
+    decoded = _decode_slot_metadata(words)
+
+    assert words.shape == (slots.shape[0], 3)
+    np.testing.assert_array_equal(np.asarray(decoded), np.asarray(slots))
 
 
 def _make_ep_mesh_or_none() -> Mesh | None:
@@ -195,6 +208,31 @@ def _reference_sparse_clone_weight_exchange(
         output_position = jnp.where(segment_positions < segment_size, output_position, max_receiver_segments)
         output = output.at[output_position].set(all_send_weights[sender_index, input_position], mode="drop")
     return output
+
+
+def _reference_echo_ragged_all_to_all(
+    inputs: jax.Array,
+    outputs: jax.Array,
+    input_offsets: jax.Array,
+    send_sizes: jax.Array,
+    output_offsets: jax.Array,
+    recv_sizes: jax.Array,
+) -> jax.Array:
+    del recv_sizes
+    all_inputs = jax.lax.all_gather(inputs, "expert")
+    all_input_offsets = jax.lax.all_gather(input_offsets, "expert")
+    all_send_sizes = jax.lax.all_gather(send_sizes, "expert")
+    all_output_offsets = jax.lax.all_gather(output_offsets, "expert")
+    receiver_index = jax.lax.axis_index("expert")
+    segment_positions = jnp.arange(outputs.shape[0], dtype=jnp.int32)
+    for sender_index in range(all_inputs.shape[0]):
+        segment_size = all_send_sizes[sender_index, receiver_index]
+        input_position = all_input_offsets[sender_index, receiver_index] + segment_positions
+        input_position = jnp.minimum(input_position, inputs.shape[0] - 1)
+        output_position = all_output_offsets[sender_index, receiver_index] + segment_positions
+        output_position = jnp.where(segment_positions < segment_size, output_position, outputs.shape[0])
+        outputs = outputs.at[output_position].set(all_inputs[sender_index, input_position], mode="drop")
+    return outputs
 
 
 def _make_abstract_moe_mesh(*, data: int, expert: int, model: int) -> AbstractMesh:
@@ -2281,13 +2319,24 @@ def test_sparse_clone_weight_metadata_matches_sender_receiver_segments():
 
 
 @pytest.mark.parametrize(
-    ("pooled_dispatch", "sparse_weights", "mnnvl_transport", "echo_dispatch"),
+    (
+        "pooled_dispatch",
+        "sparse_weights",
+        "mnnvl_transport",
+        "echo_ragged_transport",
+        "echo_dispatch",
+        "embedded_slot_metadata",
+        "pipeline_chunks",
+    ),
     [
-        (False, False, False, False),
-        (True, False, False, False),
-        (True, True, False, False),
-        (True, True, False, True),
-        (True, True, True, True),
+        (False, False, False, False, False, False, 1),
+        (True, False, False, False, False, False, 1),
+        (True, True, False, False, False, False, 1),
+        (True, True, False, False, True, False, 1),
+        (True, True, False, False, True, False, 2),
+        (True, True, False, False, True, True, 1),
+        (True, True, True, False, True, False, 1),
+        (True, True, False, True, True, False, 1),
     ],
 )
 def test_same_expert_cloned_fixed_a2a_matches_dense_value_and_grad(
@@ -2295,7 +2344,10 @@ def test_same_expert_cloned_fixed_a2a_matches_dense_value_and_grad(
     pooled_dispatch: bool,
     sparse_weights: bool,
     mnnvl_transport: bool,
+    echo_ragged_transport: bool,
     echo_dispatch: bool,
+    embedded_slot_metadata: bool,
+    pipeline_chunks: int,
 ):
     mesh = _make_ep_mesh_or_none()
     if mesh is None:
@@ -2323,9 +2375,22 @@ def test_same_expert_cloned_fixed_a2a_matches_dense_value_and_grad(
             "_sparse_clone_weight_exchange",
             _reference_sparse_clone_weight_exchange,
         )
+    if echo_ragged_transport:
+        monkeypatch.setenv("SCALE_A2A_ECHO_RAGGED_TRANSPORT", "1")
+        if not any(device.platform == "gpu" for device in jax.devices()):
+            monkeypatch.setattr(
+                ep_ragged_a2a,
+                "_echo_ragged_all_to_all",
+                _reference_echo_ragged_all_to_all,
+            )
     if echo_dispatch:
         monkeypatch.setenv("SCALE_A2A_ECHO_CLONES", "1")
-
+    if embedded_slot_metadata:
+        monkeypatch.setenv("SCALE_A2A_EMBED_SLOT_METADATA", "1")
+        monkeypatch.setenv("SCALE_A2A_CLONE_TOKEN_PADDING_EXPERTS", "5")
+    if pipeline_chunks > 1:
+        monkeypatch.setenv("SCALE_A2A_CLONE_PIPELINE_CHUNKS", str(pipeline_chunks))
+        monkeypatch.setenv("SCALE_A2A_CLONE_TOKEN_PADDING_EXPERTS", "2")
     tokens = len(jax.devices()) * 8
     hidden_dim = 8
     intermediate_dim = 12
