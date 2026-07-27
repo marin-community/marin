@@ -114,9 +114,13 @@ The minimum live experiment launched
 `grug-agentic-s3-step1903` / `grug-opencode-id --limit 1`. All eight ranks used
 distributed streaming and read 15.6 GiB in 14.63–14.75 seconds, instead of
 each reading 124.9 GiB in 57–229 seconds. vLLM registered its endpoint and
-Harbor received HTTP 200 responses from `/v1/chat/completions`. If S3 faults
-persist, the next bounded experiment is `RUNAI_STREAMER_CONCURRENCY=4` against
-the same command.
+Harbor received sustained HTTP 200 responses from `/v1/chat/completions` for
+more than 30 minutes without reloading the model. One request returned HTTP
+400 without a server exception and later requests succeeded. One Harbor
+attempt also failed to download agent logs and hit a Daytona sandbox-removal
+race; the inference serve stayed healthy, so neither event was a streamer or
+S3-loading failure. If S3 faults persist, the next bounded experiment is
+`RUNAI_STREAMER_CONCURRENCY=4` against the same command.
 
 ## How OPS.md could have shortened this
 
