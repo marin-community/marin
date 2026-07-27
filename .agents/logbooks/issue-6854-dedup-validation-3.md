@@ -649,3 +649,61 @@ are recorded in the previous volumes.
   `(13, 128)`, p1 `(44, 5376)`, p2 `(77, 0)`, and p3 `(109, 4224)`. All four
   semantic-review parents, brokers, and 2-H100 workers remain healthy at batch
   priority.
+
+## 2026-07-27 20:17 UTC — two metadata-only duplicates
+
+- Audits `/rav/rav-datakit-6854-audit-fast-1957-v1458`,
+  `/rav/rav-datakit-6854-audit-fast-2009-v1463`, and
+  `/rav/rav-datakit-6854-audit-fast-2015-v1468` independently reread 22 new
+  checkpoints containing 2,810 pairs. They reproduced 10,509 valid model
+  attempts; one invalid attempt had already been retried and excluded. Two
+  treatment outcomes required full-text adjudication:
+
+  - decision-file 109, semantic offset 4,736, pair row 7,985 is a true
+    duplicate. Both documents contain the same Inspire2Live cancer article and
+    all substantive claims. The differences are title and section-heading
+    formatting, publication metadata, and a byline. Its inspection, manual
+    Parquet, and marker SHA-256 values are
+    `233da253fe899dae05a8a103244af4e7d47c21c804f11f1e779b8162ea331ef6`,
+    `d02900f710cd49428de33bfb05fb79002ba6a4ead5f0aae731a4fb26249f0d75`,
+    and
+    `99116decd4064a5f9afd268e074e7345c14e22c1a5ac2be5153844fd18d51020`.
+  - decision-file 109, semantic offset 5,632, pair row 8,861 is a true
+    duplicate. Both documents contain the same nursing-center description. The
+    member title restates the facility already named in the body, while its
+    pricing footer supplies no price or distinct claim. Its corresponding
+    SHA-256 values are
+    `436882cc9e9130b6a8e984dcd441c06cecc9b7dd910e5ad80f1d499dbb299504`,
+    `172994dbbf14a5462bda580d90bd20f76c1b9faefb5388a849f0c69faf3a0a5a`,
+    and
+    `e7941491f2dbe6a125a1030d16890ce70b580c403e384b9078504d471af06125`.
+
+  Separate publish and verify-only jobs wrote and then reproduced each complete
+  source, inspection, manual Parquet, marker, and evidence payload.
+- `/rav/rav-datakit-6854-reconcile-manual-2014-v1467` verified 2,477
+  checkpoints and complete manual coverage for all 369 unresolved outcomes.
+  Applying 77 false-positive and 292 true-duplicate manual decisions gives:
+
+  | Arm | Pairs | False positives | True duplicates | False-positive rate |
+  | --- | ---: | ---: | ---: | ---: |
+  | baseline | 250,458 | 159,345 | 91,113 | 63.6214% |
+  | treatment | 64,077 | 33,260 | 30,817 | 51.9063% |
+  | combined | 314,535 | 192,605 | 121,930 | 61.2348% |
+
+  The baseline-minus-treatment gap is 11.7151 percentage points. This snapshot
+  covers 41.6448% of the 755,281 semantic candidates. Its immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-2014.json`
+  with SHA-256
+  `693c460035dfa4319088392d5673e7a9691704e3f3b383b8cbf80bf3fb8914cb`.
+  The semantic, manual-marker, and manual-Parquet path-manifest SHA-256 values
+  are
+  `5097302644b71f384bf9cef5f637490d5845bbd31556e5d8bbe92e93e8adb5a4`,
+  `b538c8414d2b0bf61de92b3d773a065387c96793be1ad393d91cd35484e6747d`,
+  and
+  `f659b01c678bda00d96dcc1cc92b75721cf552a7a823c1140a1097c0675dd5ed`.
+  No manual outcome is missing. Historical shadow-record anomaly counts remain
+  unchanged and marker-bound records remain internally consistent.
+- The independently audited total is 314,663 pairs. The next frontiers are p0
+  `(13, 1664)`, p1 `(45, 0)`, p2 `(77, 128)`, and p3 `(110, 0)`. All four
+  semantic-review parents, brokers, and 2-H100 workers remain healthy at batch
+  priority.
