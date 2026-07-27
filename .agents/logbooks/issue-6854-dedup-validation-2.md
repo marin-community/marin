@@ -16,6 +16,112 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T02:07:00Z — 210,019 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0154-v812` independently
+  revalidated 15 checkpoints containing 1,920 pairs. The model labeled 1,001
+  false positives and 916 true duplicates and left three outcomes unresolved.
+  Twenty-one pairs used chunked review and 1,899 used direct review. All 5,635
+  judgments and request attempts were valid on their first attempt. The
+  checkpoints and outcome Parquet SHA-256 values are:
+
+  - p0 decision-file 8 offsets 4,864 through 5,504:
+    `93ade0fdf1e8b80e3cf9103b6292092b89f4c39a49dbcd523b41dde8ac1afdee`,
+    `4003cb0e1f0bcbc4bc5020daaf8f3752f19596437952c4a958ba141bc5c8b7ee`,
+    `997f72334b4e914a730e077863e7f92abc2c641e69bcc37342ef65b9569709e0`,
+    `5c5706648a55705cc874fd903d996400cd2c16ba7d14e4f74db2c49d522a2267`,
+    `610c2fa7aebec93fee79a4e7ed3045ecdc0061b76b901de0c283ca240da76556`,
+    and
+    `64c52ac49e46c896f89ff325e53cd9f60ea700eb8be189cb1601c9b8c02a8565`;
+  - p1 decision-file 40 offsets 2,432 through 3,072:
+    `54f64ed72fafd38acea4921dd5aaf466ec9c441b306ce0d20a49b4cb33ed8efb`,
+    `4c3ca23bdd93195bb7bfd1e00558012aff809b9076c58d6b370d3527cc20aa12`,
+    `c4db6f6a4c8c14460f12109c7267215d02741664f6e48287e9dbf044e998fc92`,
+    `36da66fd0318e1f48ec13f3cfa695dc1348335ce2de41714932c060947ff584d`,
+    `aa612373e853dea888c16dd0324af24f53c5daf38ff796b55f43d9b0c9863fef`,
+    and
+    `2ad8337ad172b5e7cc5c0ad52a2baaecd60424bb80b643f677dd631da198fe84`;
+  - p3 decision-file 105 offsets 256, 384, and 512:
+    `ea483e25ed35c21e5c3dc5ee7fb9f82a6da712e2910898e1266b853e7eddc05b`,
+    `fb7cdd1d1cd4de0761a393f85d059250fc77d1e79d0c5e26d38e12645eb5ae3b`,
+    and
+    `423795299a050c2a10a7432e51894e8b4d61edef621360d6eab20dffa6884ad2`.
+
+- Complete-text inspection resolves baseline row 4,071 as a true duplicate
+  under the low-value-template boundary. Both texts are the same incoherent
+  ItExamLab certification-dump SEO page. The member substitutes Cisco 300-070
+  and synthetic testimonial names, locations, and scores where the canonical
+  uses IBM C2040-415 and other testimonials. These are exam and testimonial
+  slots, not distinct training content. The 1,195/1,378-character,
+  26/28-line texts have character, line, and word-sequence similarities of
+  0.743879, 0.481481, and 0.689038. The inspection and semantic-judgment
+  SHA-256 values are
+  `3d76f968e2851189ff3f5eb50647cdbcc8f31366babe2e63107f192eb444a780`
+  and
+  `1a372e62624e37065dc074746aaebb638452bc75d2ca3a16181473d8036711c4`.
+  `/rav/datakit-6854-inspect-row4071-0155-v813`,
+  `/rav/datakit-6854-publish-row4071-0158-v816`, and
+  `/rav/datakit-6854-verify-row4071-0161-v821` persisted and independently
+  verified the decision. The manual-Parquet and marker SHA-256 values are
+  `6a8145322090463bdaab033e9cfae657669a76c6ef54bdde1ae19dbf23d3b09f`
+  and
+  `bcbb31add873fb702a87162a7f91656106d4f04bf152297309666a08a60fd7c0`.
+
+- Complete-text inspection resolves baseline row 4,334 as a false positive.
+  The pages share sentence-spun erectile-dysfunction and Red Boost material,
+  but the member contains whole sections absent from the canonical: ginseng
+  and L-arginine treatments, surgery, detailed Red Boost claims, tongkat ali,
+  and claimed benefits. These are substantive advice and claims beyond the
+  SEO-title slot. The 9,830/8,086-character, 88/68-line texts have similarities
+  of 0.717013, 0.448718, and 0.659874. The inspection and semantic-judgment
+  SHA-256 values are
+  `01281c160fc7a8b063f00f9134b4b32de2255c30087c2dda2b55c71dbd0754da`
+  and
+  `a1c002cde1fe176abecf6f57f99227efe0c181051ed60a16d029adf374def96e`.
+  `/rav/datakit-6854-inspect-row4334-0155-v814`,
+  `/rav/datakit-6854-publish-row4334-0158-v817`, and
+  `/rav/datakit-6854-verify-row4334-0160-v820` persisted and independently
+  verified the decision. The manual-Parquet and marker SHA-256 values are
+  `216af4ae266453e3fbdcfe6a8ba424f8251b3237c30337c45111355ff0a1a6ca`
+  and
+  `80230ce849cd28bcfcd7a05e7ab89fc82e67962010a5fafb4d33b33c0d2a3dd0`.
+
+- Complete-text inspection resolves baseline row 5,001 as a false positive.
+  The pages share a localized tree-service scaffold, but the member contains a
+  full service inventory and complete guidance about vehicle, sprinkler,
+  branch, lawn-equipment, watering, pruning, and soil risks. The canonical
+  lacks or truncates those sections. This content is more than the D24 versus
+  Chanonrock location slot. The 3,406/2,760-character, 65/37-line texts have
+  similarities of 0.719105, 0.372549, and 0.662188. The inspection and
+  semantic-judgment SHA-256 values are
+  `0a8d345e8bbacdd439a7892717aaf8d4dc8797a23138986086cddac803054dfa`
+  and
+  `66e264f88121739be11a2c1c64a13a69946061312f978c7e95fabd95eececf81`.
+  `/rav/datakit-6854-inspect-row5001-0156-v815`,
+  `/rav/datakit-6854-publish-row5001-0159-v818`, and
+  `/rav/datakit-6854-verify-row5001-0160-v819` persisted and independently
+  verified the decision. The manual-Parquet and marker SHA-256 values are
+  `9c3f4aadb591e89fc82fc86031e32a60b4c7fd682dfdb3d452c9efef5644d77a`
+  and
+  `6043dde55306d9c38da24b947970c1b83390f6b724df90e0cde3fadc2210763d`.
+
+- Replacing the three unresolved outcomes with one true duplicate and two
+  false positives gives 1,003 false positives and 917 true duplicates in the
+  new batch. Across the stable 1,653-checkpoint snapshot, all 251 unresolved
+  model outcomes are covered by 192 true-duplicate and 59 false-positive
+  manual records. The adjusted totals are:
+
+  - baseline: 168,602 pairs, 107,030 false positives, 61,572 true duplicates;
+  - treatment: 41,417 pairs, 21,422 false positives, 19,995 true duplicates;
+  - combined: 210,019 pairs, 128,452 false positives, 81,567 true duplicates.
+
+- The next audit frontiers are p0 `(8, 5,632)`, p1 `(40, 3,200)`, p2
+  `(73, 0)`, and p3 `(105, 640)`. The pending p2 checkpoint remains the
+  107,659,309-character code batch with 24 oversized pairs and 846 review
+  units. At audit time the pending p3 checkpoint contained 3,317,223
+  characters and no oversized pairs. All four batch-priority 2-H100 workers
+  remain active.
+
 ### 2026-07-27T01:53:00Z — 208,099 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0141-v796` independently
