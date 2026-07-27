@@ -280,3 +280,23 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - The actual correctness test is split assembly against the ordered default-remat derivative using the same saved VJP primals and routes. No-checkpoint should remain diagnostic-only.
 - Next action:
   - Always run split single-finish assembly and require its saved default-context forward plus every assembled gradient leaf to match ordered default remat at relative-L2 `0.002`. Use the resulting exact failing leaves to rank any additional compact saved boundaries; do not add large activation residuals or launch L8.
+
+### 2026-07-26 18:29 PDT - split assembly is reduced to four parameter leaves
+- Hypothesis: With compact router state saved, split single-finish assembly against ordered default remat will identify the remaining component-boundary errors without relying on the no-checkpoint program.
+- Commit Hash: `94df400795` makes no-checkpoint diagnostic-only and always gates split assembly against ordered default remat using exact saved VJP primals and routes.
+- Command: Parent `/dlwh/jaxpp-group2-router-remat-r13b-94df4007-20260726-1826` ran `--diagnostic router-remat-reference` from clean commit `94df400795e2de206f68bafc01383a22f554eca1`; child `/dlwh/jaxpp-group2-router-remat-r13b-94df4007-20260726-1826/0`.
+- Results:
+  - Saved split primals matched ordered default remat exactly: both projected losses, post-attention, MLP inputs, shared outputs, pre-MoE values, routed outputs, block outputs, and router statistics had relative-L2 `0.0`. Selected-route assignment/token mismatches and routing-count mismatches were all `0`.
+  - Split input gradients passed at `0.00129074/0.00128271`. Fifteen of nineteen parameter leaves passed. Four failed:
+    - `attn_gated_norm.w_down`: `0.00382351`, absolute-L2 `0.0933898`, maximum absolute error `0.0009765625`.
+    - `attn_gated_norm.w_up`: `0.00297817`, absolute-L2 `0.0718864`, maximum absolute error `0.0009765625`.
+    - `attn.w_k`: `0.00227959`, absolute-L2 `2.08499`, maximum absolute error `0.0166016`.
+    - `mlp.router`: `0.00504063`, absolute-L2 `0.273595`, maximum absolute error `0.00463867`.
+  - MoE expert and shared-expert gradients passed exactly. Joined finish versus two single finishes was exact except for the summed router leaf at `0.00549688`; same-index per-microbatch router gradients were `0.00504075/0.00505789`.
+  - Same-index pre-task VJPs isolated the dense residuals: `attn_gated_norm.w_down` reached `0.00402792/0.00400447`, `attn_gated_norm.w_up` `0.00314646/0.00312173`, and `attn.w_k` `0.00228338/0.00227572`. Cross-index controls remained strongly negative.
+  - The no-checkpoint diagnostic remained the r13 signature and did not affect the gate. Iris reached the strict split assertion after `2m14.3s`; the parent and child are terminal with no retry or live allocation.
+- Interpretation:
+  - Saving compact router state converts the earlier order-one split failure into a near-pass. The remaining router leaf is the known per-call BF16 accumulation issue. Three pre-task leaves independently exceed the threshold by small margins.
+  - Further broad activation retention is not justified. The next remat experiment should rank compact normalization/attention residuals that can affect only these three dense leaves, with retained-byte accounting.
+- Next action:
+  - Inspect RMS/gated-normalization and CuTe attention backward residuals. Add only compact named intermediates with a plausible dependency path to the three dense failures, and keep the distinct-MLP/master-precision router-gradient arm separate. Do not launch L8 or retain full token-by-hidden activations without another explicit decision.
