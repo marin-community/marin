@@ -1335,3 +1335,22 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - The nightly was needed only to work around the original module-level `jax.Inline` reference. Commit `87917d0469` removes that host constraint, and locked worker JAX `0.11.0` already supports `XLA_LATE`.
 - Next action:
   - Run one stable-worker control from `87917d0469`, omitting the nightly flag so workers retain JAX/JAXlib `0.11.0` and NCCL `2.28.9`. Only stable four-rank execution justifies the exact b8192/m256 run.
+
+### 2026-07-27 08:21 PDT - Stable workers reproduce the outlined L24 thunk failure
+- Snapshot:
+  - Parent `/dlwh/iris-run-job-20260727-151235` and child `/dlwh/iris-run-job-20260727-151235/grug-train-jaxpp-rno2a-ring-ep2d4-explicitbwd-fp8-l24-e64k4-b512-s4096-p4m16-outline-stable-compile-r4-20260727` ran clean commit `87917d0469`.
+  - Workers used locked JAX/JAXlib `0.11.0`, JaxPP `7091a9b5ce02`, and NCCL `2.28.9`, removing the nightly JAX and NCCL `2.30.7` used by r3.
+- Command:
+  - `GRUG_JAXPP_LOG_LOCAL_MEMORY_PLAN=false TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --cluster cw-rno2a --prefix s3://marin-us-east-02a/marin --run-id jaxpp-rno2a-ring-ep2d4-explicitbwd-fp8-l24-e64k4-b512-s4096-p4m16-outline-stable-compile-r4-20260727 --schedule std_1f1b --implementation explicit_mpmd --explicit-mpmd-schedule-mode default --explicit-mpmd-pipeline-wire-format fp8 --explicit-mpmd-stage-task-microbatch-group-size 1 --expert-gradient-accumulation fused_fp32_data_local --physical-stages 4 --logical-stages 4 --stage-layer-counts 6,6,6,6 --microbatches 16 --nodes 4 --gpus-per-replica 8 --expert-axis 2 --layers 24 --experts 64 --top-k 4 --vocab-size 8192 --batch 512 --seq-len 4096 --moe-implementation ring --attention-implementation gpu_fa4_cute --ragged-dot-implementation triton --ragged-dot-block-k 32 --ragged-dot-num-warps 8 --loss-implementation xla --steps 3 --tracker wandb --xla-memory-fraction 0.70 --remat save_moe`.
+- Result:
+  - All four ranks rendezvoused on one coordinator and entered six-layer compilation. Rank 0 compiled stage-0 forward tasks; rank 1 compiled stage-1 forward tasks and reached `stage1_backward_accumulating`; rank 2 compiled stage-2 forward and `stage2_backward_accumulating`; rank 3 compiled `stage3_loss_backward_accumulating` in about `54s` and its backward-wire pack.
+  - Rank 3 then waited at `thunk initialization completion for device ordinal 0; run_id=622354233`. XLA warned after `10s` and aborted after `30s`: only `1/8` expected local-device threads reached the rendezvous.
+  - The native stack is `xla::gpu::GpuExecutable::ExecuteThunksImpl -> xla::gpu::RendezvousAfterInitialization -> xla::Rendezvous`. Rank 3 exited `139`. There was no OOM, Python exception, loss, step, or MFU.
+  - Iris began attempt 1 setup. The parent was stopped before another model compile. Parent and child are terminal `killed`; the child summary records one failure, four preemptions from coordinated cancellation, rank-3 exit `139`, and all `4/4` tasks complete. No live descendant remains.
+  - [W&B](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-ep2d4-explicitbwd-fp8-l24-e64k4-b512-s4096-p4m16-outline-stable-compile-r4-20260727) remains stale `running` with `lastHistoryStep=-1`; it has topology/configuration summary data but no history rows.
+- Interpretation:
+  - The same thunk-initialization rendezvous fails under stable JAX/JAXlib `0.11.0` and NCCL `2.28.9` as under nightly JAX/JAXlib `0.11.1.dev20260725` and NCCL `2.30.7`. The failure is therefore independent of that runtime/transport change.
+  - The late outline clears the former monolithic stage-3 compilation boundary, but the resulting six-layer executable is not runnable. This is an XLA GPU thunk-initialization failure, not DIME communicator setup, HBM exhaustion, or the retry coordinator bug.
+  - No numerical parity result was produced. The accepted policy remains relative-L2 `<=0.002` for floating outputs, loss, and every gradient leaf, with routing/counts/drops exact.
+- Decision:
+  - Do not launch the exact L24 batch8192/m256 run from this outline. Minimize the six-layer thunk-initialization failure before another performance attempt.
