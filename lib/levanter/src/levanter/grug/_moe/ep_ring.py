@@ -5,6 +5,7 @@
 
 import math
 from collections.abc import Callable
+from functools import partial
 from typing import Literal, NamedTuple
 
 import jax
@@ -464,6 +465,27 @@ def _bulk_ring_from_routing_accumulating_weight_gradient(
     return output, accumulation_token
 
 
+@partial(jax.jit, inline=jax.Inline.XLA_LATE)
+def _outlined_accumulating_weight_cotangent(
+    lhs: jax.Array,
+    rhs: jax.Array,
+    group_sizes: jax.Array,
+    accumulator: jax.Array,
+    output_cotangent: jax.Array,
+    accumulation_scale: jax.Array,
+) -> jax.Array:
+    """Keep the FP32 weight cotangent custom call as a late-inline compiler unit."""
+    _, weight_cotangent = ragged_dot_accumulating_weight_gradient_backward(
+        lhs,
+        rhs,
+        group_sizes,
+        accumulator,
+        output_cotangent,
+        accumulation_scale,
+    )
+    return weight_cotangent
+
+
 def _bulk_ring_from_routing_accumulating_weight_gradient_backward(
     x_local: Float[Array, "Tlocal H"],
     combine_weights_local: Float[Array, "Tlocal K"],
@@ -511,7 +533,15 @@ def _bulk_ring_from_routing_accumulating_weight_gradient_backward(
     out_dispatch_cotangent = weighted_output_cotangent * dispatch.weight_dispatch[:, None]
     weight_dispatch_cotangent = jnp.sum(weighted_output_cotangent * out_dispatch, axis=-1)
 
-    expert_hidden_cotangent, w2_cotangent = ragged_dot_accumulating_weight_gradient_backward(
+    expert_hidden_cotangent, _ = ragged_dot_accumulating_weight_gradient_backward(
+        expert_hidden,
+        moe_w2_local,
+        dispatch.group_sizes,
+        w2_accumulator_local,
+        out_dispatch_cotangent,
+        accumulation_scale,
+    )
+    w2_cotangent = _outlined_accumulating_weight_cotangent(
         expert_hidden,
         moe_w2_local,
         dispatch.group_sizes,
@@ -522,7 +552,15 @@ def _bulk_ring_from_routing_accumulating_weight_gradient_backward(
     gate_cotangent = activation_pullback(expert_hidden_cotangent * up)[0]
     up_cotangent = expert_hidden_cotangent * activated_gate
     w13_out_cotangent = jnp.concatenate((gate_cotangent, up_cotangent), axis=-1)
-    x_dispatch_cotangent, w13_cotangent = ragged_dot_accumulating_weight_gradient_backward(
+    x_dispatch_cotangent, _ = ragged_dot_accumulating_weight_gradient_backward(
+        dispatch.x_dispatch,
+        moe_w13_local,
+        dispatch.group_sizes,
+        w13_accumulator_local,
+        w13_out_cotangent,
+        accumulation_scale,
+    )
+    w13_cotangent = _outlined_accumulating_weight_cotangent(
         dispatch.x_dispatch,
         moe_w13_local,
         dispatch.group_sizes,
