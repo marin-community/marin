@@ -102,12 +102,26 @@ def run_arm(mesh, tensors, *, mxfp8_dispatch, producer):
     return out, grads, (fwd, fwd_args), (grad, grad_args)
 
 
-def time_fn(fn, args, *, iters=20, warmup=5):
+def _barrier(tag):
+    if jax.process_count() > 1:
+        multihost_utils.sync_global_devices(tag)
+
+
+def time_fn(fn, args, *, iters=20, warmup=5, tag="t"):
+    """Wall time per call, barriered across processes.
+
+    `block_until_ready` only waits on process-local shards, so without global
+    barriers processes drift and a later arm can appear to absorb an earlier
+    arm's queued work -- which produced an impossible 2.77x on the first EP16
+    attempt. The barriers make each measurement span the slowest process.
+    """
     for _ in range(warmup):
         jax.block_until_ready(fn(*args))
+    _barrier(f"{tag}_start")
     start = time.perf_counter()
     for _ in range(iters):
         jax.block_until_ready(fn(*args))
+    _barrier(f"{tag}_end")
     return (time.perf_counter() - start) / iters * 1e3
 
 
@@ -223,10 +237,10 @@ def main():
             "dispatch_bytes_ratio": 33.0 / 64.0,
         }
 
-        results["fwd_ms_control"] = time_fn(*fwd_ctl, iters=args.iters)
-        results["fwd_ms_wire"] = time_fn(*fwd_wire, iters=args.iters)
-        results["grad_ms_control"] = time_fn(*gfn_ctl, iters=args.iters)
-        results["grad_ms_wire"] = time_fn(*gfn_wire, iters=args.iters)
+        results["fwd_ms_control"] = time_fn(*fwd_ctl, iters=args.iters, tag="fwd_ms_control")
+        results["fwd_ms_wire"] = time_fn(*fwd_wire, iters=args.iters, tag="fwd_ms_wire")
+        results["grad_ms_control"] = time_fn(*gfn_ctl, iters=args.iters, tag="grad_ms_control")
+        results["grad_ms_wire"] = time_fn(*gfn_wire, iters=args.iters, tag="grad_ms_wire")
 
     results["fwd_speedup"] = results["fwd_ms_control"] / results["fwd_ms_wire"]
     results["grad_speedup"] = results["grad_ms_control"] / results["grad_ms_wire"]
