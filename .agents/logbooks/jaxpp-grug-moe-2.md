@@ -544,3 +544,19 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - Restore the known-good complete TE VJP, discard only its token-gradient result, and substitute the ring token gradient. This retains extra TE token-gradient work, so the next direct gate must measure the cost rather than assuming DCE.
 - Next action:
   - Run the same strict direct gate with the complete TE VJP plus ring token VJP. Require all metrics at most `0.002` and at least `1.12x` value-and-grad speedup before reduced pipeline integration.
+
+### 2026-07-26 23:29 PDT - complete TE VJP remains non-finite when composed with ring VJP
+- Hypothesis: Retaining the original complete TE VJP will restore the previously finite parameter gradients, while replacing only its reported token gradient with the exact bulk-ring result.
+- Commit Hash: `ad7be4336b`.
+- Command: Matched one-H100x8 strict rerun `/dlwh/ncclep-h100-ring-token-gradient-r14-20260727`.
+- Results:
+  - Iris succeeded in `9m02.9s`; all eight ranks exited `0`, no retry occurred, and no resource remains live.
+  - Loss, output, and token gradient remained bitwise equal to the FP32 ring oracle. Routing-gradient relative-L2 remained `8.1766e-5`.
+  - W13 and W2 gradients remained non-finite. Ring references were finite and routing was balanced with zero drops. The strict gate stopped before timing.
+  - StableHLO counts were unchanged from r13: hybrid 4 all-gathers, 4 all-reduces, 2 reduce-scatters, and 17 custom calls; ring 4, 5, 3, and 6.
+- Interpretation:
+  - The full-MLP bulk-ring token gradient is exact, but composing it with the NCCL_EP VJP in one executable destabilizes the TE expert-weight gradient path. Retaining the complete TE VJP does not fix the interaction.
+  - Executing separate TE and ring backward executables would avoid this compilation interaction but necessarily adds a second full routed-MLP backward. Given ring's `23.4ms` and TE's `17.6ms` prior direct medians, the optimistic sum cannot beat the ring baseline. Stop this hybrid rather than spend another build allocation on a guaranteed performance negative.
+  - Keep `ring_token_gradient` as a bounded reproducer. Do not integrate or pipeline it.
+- Next action:
+  - Return to the valid group-size-one exact-ring graph. Prototype saving compact block inputs and running block-local combined VJPs so backward can eliminate recomputed primal MoE collectives without the measured split-backward duplication.
