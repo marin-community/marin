@@ -257,7 +257,7 @@ def build_plan(
         "-lnccl",
         "-lcudart",
         "-ldl",
-        "-pthread",
+        "-Xcompiler=-pthread",
         "-Xlinker=-rpath",
         f"-Xlinker={nccl_library_path.parent}",
         "-o",
