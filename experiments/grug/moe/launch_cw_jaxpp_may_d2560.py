@@ -197,8 +197,20 @@ def nccl_ep_setup_scripts(*, overflow_policy: Literal["trap", "drop"]) -> tuple[
     )
 
 
-def ubx_setup_scripts(*, source_root: str, revision: str) -> tuple[str, ...]:
+def ubx_setup_scripts(*, source_root: str, revision: str, gpu_allocator: str | None) -> tuple[str, ...]:
     """Build pinned NCCL UB-X and persist the exact runtime before JAX starts."""
+    activation_exports = [
+        "  printf 'export CUDA_HOME=%q\\n' \"$cuda_root\"",
+        "  printf 'export CUDA_PATH=%q\\n' \"$cuda_root\"",
+        "  printf 'export PATH=%q/bin:$PATH\\n' \"$cuda_root\"",
+        f"  printf 'export NCCL_UBX_SOURCE=%q\\n' {source_root!r}",
+        f"  printf 'export LD_PRELOAD=%q\\n' {source_root!r}/build/lib/libnccl.so.2",
+        f"  printf 'export LD_LIBRARY_PATH=%q/build/lib:%q/lib:${{LD_LIBRARY_PATH:-}}\\n' "
+        f'{source_root!r} "$cuda_root"',
+    ]
+    if gpu_allocator is not None:
+        activation_exports.append(f"  printf 'export TF_GPU_ALLOCATOR=%q\\n' {gpu_allocator!r}")
+
     return (
         "\n".join(
             [
@@ -229,13 +241,7 @@ def ubx_setup_scripts(*, source_root: str, revision: str) -> tuple[str, ...]:
                 'rm -f "$wheel_nccl"',
                 f'ln -s {source_root!r}/build/lib/libnccl.so.2 "$wheel_nccl"',
                 "{",
-                "  printf 'export CUDA_HOME=%q\\n' \"$cuda_root\"",
-                "  printf 'export CUDA_PATH=%q\\n' \"$cuda_root\"",
-                "  printf 'export PATH=%q/bin:$PATH\\n' \"$cuda_root\"",
-                f"  printf 'export NCCL_UBX_SOURCE=%q\\n' {source_root!r}",
-                f"  printf 'export LD_PRELOAD=%q\\n' {source_root!r}/build/lib/libnccl.so.2",
-                f"  printf 'export LD_LIBRARY_PATH=%q/build/lib:%q/lib:${{LD_LIBRARY_PATH:-}}\\n' "
-                f'{source_root!r} "$cuda_root"',
+                *activation_exports,
                 '} >> "$IRIS_VENV/bin/activate"',
             ]
         )
@@ -488,6 +494,7 @@ def build_jaxpp_may_checkpoint(*, version: str = "dev") -> ArtifactStep[Levanter
         post_setup_scripts += ubx_setup_scripts(
             source_root=os.environ.get("NCCL_UBX_SOURCE_ROOT", DEFAULT_NCCL_UBX_SOURCE_ROOT),
             revision=os.environ.get("NCCL_UBX_REVISION", DEFAULT_NCCL_UBX_REVISION),
+            gpu_allocator=os.environ.get("TF_GPU_ALLOCATOR"),
         )
 
     mpmd_dim = 1 if pipeline is None else pipeline.mpmd_dim or pipeline.stages
