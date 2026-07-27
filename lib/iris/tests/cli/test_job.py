@@ -272,7 +272,7 @@ def test_job_wait_reports_terminal_state_and_exit_status(
     expected_exit_code: int,
 ) -> None:
     class WaitClusterClient:
-        def wait_for_job(self, job_id, timeout, poll_interval):
+        def wait_for_job(self, job_id, _timeout, _poll_interval):
             return _job_pb2.JobStatus(job_id=job_id.to_wire(), state=state)
 
     monkeypatch.setattr("iris.cli.job._remote_client", lambda _ctx: IrisClient(WaitClusterClient()))

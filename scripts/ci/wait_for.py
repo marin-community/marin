@@ -14,6 +14,10 @@ the built-in kinds cover common PR and Iris waits without shell parsing:
     github.review <PR>      fires on a decisive review, or one whose body raises a concern
     iris.job <job-id>       fires when an Iris job reaches a terminal state (in-task only)
 
+``iris.job`` runs the Iris client's blocking ``Job.wait`` in a daemon worker. Its
+state polling and controller retries use the Iris client policy; the selector
+interval options apply to the sources the selector polls itself.
+
 ``github.pr_comment`` and ``github.review`` skip low-signal chatter by default so the
 caller is not woken for nothing. A catalog of rules (``COMMENT_RULES``) names, per bot,
 the mundane shapes that bot emits: the in-progress placeholder it posts the moment a PR
@@ -686,7 +690,7 @@ def _timeout_result(sources: list[Source]) -> dict:
 
 
 def select_loop(sources: list[Source], *, deadline: float | None, backoff: BackoffConfig) -> dict:
-    """Poll each source on its own backoff; return the first fired event, or a timeout result."""
+    """Check each source on its own backoff and honor asynchronous source wakeups."""
     wakeup = Event()
     for source in sources:
         source._attach_wakeup(wakeup)
@@ -773,10 +777,10 @@ def _iris_job_waiter_from_job_info() -> Callable[[JobName], job_pb2.JobStatus]:
 )
 @click.option("--timeout", default=None, help="Overall deadline, e.g. 90, 30m, 4h. Default: wait indefinitely.")
 @click.option("--poll-timeout", default="120", help="Per-attempt timeout for `poll` commands.")
-@click.option("--initial-interval", default="10", help="First backoff interval per source.")
-@click.option("--max-interval", default="120", help="Backoff ceiling per source.")
-@click.option("--factor", default=2.0, type=float, help="Backoff growth factor.")
-@click.option("--jitter", default=0.1, type=float, help="Backoff jitter fraction in [0, 1).")
+@click.option("--initial-interval", default="10", help="First selector-polled source backoff interval.")
+@click.option("--max-interval", default="120", help="Selector-polled source backoff ceiling.")
+@click.option("--factor", default=2.0, type=float, help="Selector-polled source backoff growth factor.")
+@click.option("--jitter", default=0.1, type=float, help="Selector-polled source backoff jitter fraction in [0, 1).")
 @click.option("--repo", default=None, help="OWNER/NAME (default: gh auto-detect from cwd).")
 @click.option("--ignore-author", "ignore_authors", multiple=True, help="Comment/review author to ignore (repeatable).")
 @click.option("--include-self", is_flag=True, help="Do not ignore the authenticated user's own comments.")
