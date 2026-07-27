@@ -42,7 +42,7 @@ from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
 from levanter.grug.attention import AttentionMask, ThdSegmentMetadata
-from levanter.grug.grug_moe import MOE_REMAT_SAVE_NAMES
+from levanter.grug.grug_moe import MOE_REMAT_SAVE_NAMES, resolve_moe_implementation
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
@@ -315,7 +315,7 @@ class GrugRunConfig:
         if (
             pipeline is not None
             and pipeline.explicit_mpmd_stage_task_microbatch_group_size == 2
-            and self.model.moe_implementation != "ring"
+            and resolve_moe_implementation(self.model.moe_implementation) != "ring"
         ):
             raise ValueError("grouped explicit MPMD stage tasks require the exact bulk-ring MoE implementation")
         if self.model.moe_implementation in _NCCL_EP_IMPLEMENTATIONS:
@@ -2832,7 +2832,7 @@ def _make_explicit_mpmd_train_step(
 
     def explicit_group2_pre_bootstrap(
         block_params,
-        qb_beta,
+        stage_qb_betas,
         hidden,
         mask,
         *,
@@ -2851,7 +2851,7 @@ def _make_explicit_mpmd_train_step(
         )
         return explicit_router_pre_boundary_bootstrap(
             block_params,
-            qb_beta,
+            stage_qb_betas[block_index],
             hidden,
             layer_mask,
             mp,
@@ -2863,7 +2863,7 @@ def _make_explicit_mpmd_train_step(
 
     def explicit_group2_pre_backward(
         block_params,
-        qb_beta,
+        stage_qb_betas,
         hidden,
         boundary_cotangents,
         mask,
@@ -2883,7 +2883,7 @@ def _make_explicit_mpmd_train_step(
         )
         return explicit_router_pre_boundary_primal_and_value_and_grads(
             block_params,
-            qb_beta,
+            stage_qb_betas[block_index],
             hidden,
             boundary_cotangents,
             layer_mask,
@@ -2896,18 +2896,19 @@ def _make_explicit_mpmd_train_step(
 
     def explicit_group2_finish_forward(
         block_params,
-        qb_beta,
+        stage_qb_betas,
         post_attention,
         mlp_inputs,
         shared_outputs,
         routing_states,
         *,
         stage_index: int,
+        block_index: int,
     ):
         output_cotangents = tuple(jnp.zeros_like(hidden) for hidden in post_attention)
         return explicit_routing_finish_boundary_forward(
             block_params,
-            qb_beta,
+            stage_qb_betas[block_index],
             post_attention,
             mlp_inputs,
             shared_outputs,
@@ -2920,7 +2921,7 @@ def _make_explicit_mpmd_train_step(
 
     def explicit_group2_finish_backward(
         block_params,
-        qb_beta,
+        stage_qb_betas,
         post_attention,
         mlp_inputs,
         shared_outputs,
@@ -2928,10 +2929,11 @@ def _make_explicit_mpmd_train_step(
         output_cotangents,
         *,
         stage_index: int,
+        block_index: int,
     ):
         return explicit_routing_finish_boundary_value_and_grads(
             block_params,
-            qb_beta,
+            stage_qb_betas[block_index],
             post_attention,
             mlp_inputs,
             shared_outputs,
@@ -3630,7 +3632,7 @@ def _make_explicit_mpmd_train_step(
                         out_shardings=explicit_pre_out_shardings[stage_index][block_index],
                     )(
                         stage_params.blocks[block_index],
-                        stage_qb_betas[block_index],
+                        stage_qb_betas,
                         block_inputs[microbatch_offset],
                         stage_batches[microbatch_offset].attn_mask,
                     )
@@ -3642,14 +3644,18 @@ def _make_explicit_mpmd_train_step(
                 shared_outputs = tuple(boundaries[2] for boundaries in pre_boundaries)
                 routing_states = tuple(boundaries[3] for boundaries in pre_boundaries)
                 finish_forward = mpmd.task(
-                    functools.partial(explicit_group2_finish_forward, stage_index=stage_index),
+                    functools.partial(
+                        explicit_group2_finish_forward,
+                        stage_index=stage_index,
+                        block_index=block_index,
+                    ),
                     name=(
                         f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_" f"block{block_index}_joined_expert_forward"
                     ),
                     out_shardings=explicit_finish_forward_out_shardings[stage_index],
                 )(
                     stage_params.blocks[block_index],
-                    stage_qb_betas[block_index],
+                    stage_qb_betas,
                     post_attention,
                     mlp_inputs,
                     shared_outputs,
@@ -3691,14 +3697,18 @@ def _make_explicit_mpmd_train_step(
                 shared_outputs = tuple(boundaries[2] for boundaries in pre_boundaries)
                 routing_states = tuple(boundaries[3] for boundaries in pre_boundaries)
                 finish_backward = mpmd.task(
-                    functools.partial(explicit_group2_finish_backward, stage_index=stage_index),
+                    functools.partial(
+                        explicit_group2_finish_backward,
+                        stage_index=stage_index,
+                        block_index=block_index,
+                    ),
                     name=(
                         f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_" f"block{block_index}_joined_expert_backward"
                     ),
                     out_shardings=explicit_finish_backward_out_shardings[stage_index][block_index],
                 )(
                     stage_params.blocks[block_index],
-                    stage_qb_betas[block_index],
+                    stage_qb_betas,
                     post_attention,
                     mlp_inputs,
                     shared_outputs,
@@ -3729,7 +3739,7 @@ def _make_explicit_mpmd_train_step(
                         out_shardings=explicit_pre_out_shardings[stage_index][block_index],
                     )(
                         stage_params.blocks[block_index],
-                        stage_qb_betas[block_index],
+                        stage_qb_betas,
                         block_inputs[microbatch_offset],
                         boundary_cotangents[microbatch_offset],
                         stage_batches[microbatch_offset].attn_mask,

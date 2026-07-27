@@ -267,7 +267,38 @@ def test_grouped_stage_task_config_rejects_unsupported_modes(overrides, message)
         GrugJaxPPConfig(**kwargs)
 
 
-def test_grouped_stage_tasks_require_exact_bulk_ring_model() -> None:
+@pytest.mark.parametrize("moe_implementation", ("ring", None))
+def test_grouped_stage_tasks_accept_exact_bulk_ring_model(moe_implementation) -> None:
+    pipeline = GrugJaxPPConfig(
+        stages=2,
+        microbatches=2,
+        schedule="std_1f1b",
+        implementation="explicit_mpmd",
+        explicit_mpmd_stage_task_microbatch_group_size=2,
+    )
+    model = GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=64,
+        intermediate_dim=64,
+        num_layers=2,
+        num_heads=2,
+        num_kv_heads=2,
+        num_experts=4,
+        num_experts_per_token=2,
+        moe_implementation=moe_implementation,
+    )
+
+    config = GrugRunConfig(
+        model=model,
+        data=LmDataConfig(tokenizer="passthrough", vocab_size=128, components={}),
+        resources=ResourceConfig.with_cpu(),
+        trainer=GrugTrainerConfig(pipeline=pipeline),
+    )
+
+    assert config.model.moe_implementation is moe_implementation
+
+
+def test_grouped_stage_tasks_reject_non_ring_model() -> None:
     pipeline = GrugJaxPPConfig(
         stages=2,
         microbatches=2,
