@@ -747,3 +747,20 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - The measured direct projection composed with the independently validated `1.0179x` inter-stage FP8 gain must exceed `20.0` MFU before a reduced JaxPP run.
 - Next action:
   - Babysitter `019fa2ad-61ec-7083-8940-8def207885fa` owns the run through terminal state. If the direct gate passes, test a reduced JaxPP integration before any exact L24 allocation.
+
+### 2026-07-27 01:27 PDT - Fused accumulator composes to 20.014 MFU
+- Commit Hash: `d5abcea1ab`.
+- Result:
+  - `/dlwh/ep-ring-data4-ep2-fused-fp32acc-r20-20260727` succeeded in `64.3s` with exit `0`, no retries or preemptions, and no live resources.
+  - Loss was exact. Output, x-gradient, combine-gradient, W13-gradient, and W2-gradient relative-L2 was `3.7290e-6`, `1.6161e-5`, `3.5092e-7`, `0.00165882`, and `0.00165596`. Every metric passes the accepted `0.002` threshold; drops were exactly zero in both arms.
+  - Forward median improved from `8.74646ms` to `6.01689ms`.
+  - Local VAG plus donated FP32 accumulation improved from `18.85226ms` to `15.05985ms`. This recovers `0.28841ms` versus the unfused r19 treatment and clears the modeled `0.283ms` requirement by approximately `0.005ms`.
+  - FP32 gradient sync and BF16 weight materialization took `4.06902ms` and `2.34195ms`, or `0.025043ms` amortized per m256 layer-microbatch.
+  - StableHLO reports zero data-axis collectives in local VAG, two data-axis reduce-scatters in sync, and two data-axis all-gathers in materialization.
+  - Compiler alias size for treatment VAG is `1,258,291,200` bytes. Peak and temporary estimates are `4,615,717,188` and `2,475,840,792` bytes. No Pallas alias, `vmap`, compiler, or OOM failure occurred.
+  - Direct projection is `75.25110s` and `19.66233` MFU. Composing the independently validated `1.0179x` inter-stage FP8 gain gives `73.92780s` and `20.01429` MFU.
+- Interpretation:
+  - The direct exact-geometry gate is promotable, but its composed margin is only `0.01429` MFU (`0.071%`). Treat the result as evidence to attempt reduced JaxPP integration, not as proof that exact L24 exceeds 20.
+  - The fused epilogue saved the required memory traffic without changing the accepted numerical result. The next risk is lifecycle integration: JaxPP must keep replicated BF16 expert compute weights and donated FP32 data-local accumulators across microbatches, then reduce-scatter/materialize once per optimizer step.
+- Next action:
+  - Design and run the smallest reduced JaxPP gate. Require numerical sanity, correct per-stage sharding and accumulator lifecycle, and measured throughput improvement before any exact L24 run.
