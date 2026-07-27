@@ -9,7 +9,7 @@ export default {
         mono: ['"Noto Sans Mono Variable"', 'monospace'],
       },
       colors: {
-        ink: '#17211b',
+        ink: 'var(--color-ink)',
         moss: '#315c43',
         fern: '#477d5a',
         mist: '#edf2ec',

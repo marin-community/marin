@@ -5,7 +5,8 @@
 
 :root {
   --color-cream: #f8f6ef;
-  color: #17211b;
+  --color-ink: #17211b;
+  color: var(--color-ink);
   background: var(--color-cream);
   font-synthesis: none;
 }

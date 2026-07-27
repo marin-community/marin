@@ -10,11 +10,12 @@ import os
 from collections.abc import Iterable
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 import dashboard as echo_dashboard
 import hybrid_search
 import schema
+import search_config
 import sqlalchemy
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastembed import TextEmbedding
@@ -150,6 +151,14 @@ def wiki_entry(row: sqlalchemy.Row) -> WikiEntry:
     return WikiEntry(snippet=wiki_snippet(row), body=row.body, **fields)
 
 
+def wiki_score_columns() -> tuple[sqlalchemy.ColumnElement[Any], ...]:
+    return (
+        sqlalchemy.literal(0.0).label("score"),
+        sqlalchemy.literal(None).label("distance"),
+        sqlalchemy.literal(None).label("lexical_score"),
+    )
+
+
 def vector(values: Iterable[float]) -> list[float]:
     return [float(value) for value in values]
 
@@ -205,7 +214,7 @@ def search(
     source: str | None = Query(None, enum=list(SOURCES)),
     kind: str | None = Query(None, enum=list(KINDS)),
     since: datetime | None = Query(None, description="ISO date lower bound on chunk date."),
-    limit: int = Query(10, ge=1, le=100),
+    limit: int = Query(search_config.DEFAULT_SEARCH_LIMIT, ge=1, le=search_config.MAX_SEARCH_LIMIT),
 ) -> list[Hit]:
     """Hybrid full-text and semantic search over GitHub and Discord activity."""
     query = q.strip()
@@ -232,7 +241,7 @@ def grep(
     pattern: str = Query(description="Exact substring (SQL wildcards are escaped)."),
     source: str | None = Query(None, enum=list(SOURCES)),
     kind: str | None = Query(None, enum=list(KINDS)),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=search_config.MAX_SEARCH_LIMIT),
 ) -> list[Hit]:
     """Case-insensitive substring scan, newest first — for identifiers and exact strings."""
     query = sqlalchemy.select(
@@ -318,7 +327,7 @@ def search_wiki(
     engine: Engine,
     model: Model,
     q: str = Query("", description="Query text. Blank returns recently updated notes."),
-    limit: int = Query(10, ge=1, le=100),
+    limit: int = Query(search_config.DEFAULT_SEARCH_LIMIT, ge=1, le=search_config.MAX_SEARCH_LIMIT),
 ) -> list[WikiSummary]:
     query = q.strip()
     with engine.connect() as conn:
@@ -326,9 +335,7 @@ def search_wiki(
             statement = (
                 sqlalchemy.select(
                     schema.wiki_entries,
-                    sqlalchemy.literal(0.0).label("score"),
-                    sqlalchemy.literal(None).label("distance"),
-                    sqlalchemy.literal(None).label("lexical_score"),
+                    *wiki_score_columns(),
                 )
                 .order_by(schema.wiki_entries.c.updated_at.desc())
                 .limit(limit)
@@ -348,9 +355,7 @@ def search_wiki(
 def get_wiki_entry(entry_id: int, engine: Engine) -> WikiEntry:
     statement = sqlalchemy.select(
         schema.wiki_entries,
-        sqlalchemy.literal(0.0).label("score"),
-        sqlalchemy.literal(None).label("distance"),
-        sqlalchemy.literal(None).label("lexical_score"),
+        *wiki_score_columns(),
     ).where(schema.wiki_entries.c.id == entry_id)
     with engine.connect() as conn:
         row = conn.execute(statement).first()
@@ -382,9 +387,7 @@ def add_wiki_entry(
         )
         .returning(
             schema.wiki_entries,
-            sqlalchemy.literal(0.0).label("score"),
-            sqlalchemy.literal(None).label("distance"),
-            sqlalchemy.literal(None).label("lexical_score"),
+            *wiki_score_columns(),
         )
     )
     with engine.begin() as conn:
@@ -400,9 +403,7 @@ def reference_wiki_entry(entry_id: int, engine: Engine) -> WikiEntry:
         .values(reference_count=schema.wiki_entries.c.reference_count + 1)
         .returning(
             schema.wiki_entries,
-            sqlalchemy.literal(0.0).label("score"),
-            sqlalchemy.literal(None).label("distance"),
-            sqlalchemy.literal(None).label("lexical_score"),
+            *wiki_score_columns(),
         )
     )
     with engine.begin() as conn:

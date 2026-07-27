@@ -9,10 +9,12 @@ without a live Postgres. PostgreSQL ranking is not covered here.
 """
 
 import contextlib
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import app as echo
 import pytest
+import sqlalchemy
 from fastapi.testclient import TestClient
 
 
@@ -36,7 +38,7 @@ class FakeConn:
         self._sink = sink
 
     def execute(self, statement, *args):
-        self._sink.append(str(statement))
+        self._sink.append(statement)
         return FakeResult(self._rows)
 
     @contextlib.contextmanager
@@ -51,17 +53,17 @@ class FakeConn:
 
 
 class FakeEngine:
-    """Returns `rows` from every query and records compiled SQL into `statements`."""
+    """Returns `rows` from every query and records executed SQL expressions."""
 
     def __init__(self, rows):
         self.rows = rows
-        self.statements: list[str] = []
+        self.executions: list[sqlalchemy.ClauseElement] = []
 
     def connect(self):
-        return FakeConn(self.rows, self.statements)
+        return FakeConn(self.rows, self.executions)
 
     def begin(self):
-        return FakeConn(self.rows, self.statements)
+        return FakeConn(self.rows, self.executions)
 
 
 class FakeModel:
@@ -82,6 +84,13 @@ def make_row(**values):
     return type("Row", (), {"_mapping": values, **values})()
 
 
+@dataclass(frozen=True)
+class ApiHarness:
+    client: TestClient
+    engine: FakeEngine
+    model: FakeModel
+
+
 @pytest.fixture
 def client_with():
     def _install(rows):
@@ -89,7 +98,7 @@ def client_with():
         model = FakeModel()
         echo.app.dependency_overrides[echo.get_engine] = lambda: engine
         echo.app.dependency_overrides[echo.get_model] = lambda: model
-        return TestClient(echo.app), engine, model
+        return ApiHarness(TestClient(echo.app), engine, model)
 
     yield _install
     echo.app.dependency_overrides.clear()
@@ -109,24 +118,24 @@ def test_iap_caller_strips_provider_prefix():
 
 def test_work_log_list_omits_body(client_with):
     row = make_row(id=1, at=datetime(2026, 7, 23, tzinfo=UTC), author="a", project="p", title="t", body="secret body")
-    client, _, _ = client_with([row])
-    entries = client.get("/work_log").json()
+    harness = client_with([row])
+    entries = harness.client.get("/work_log").json()
     assert entries == [{"id": 1, "at": "2026-07-23T00:00:00Z", "author": "a", "project": "p", "title": "t"}]
     assert "body" not in entries[0]
 
 
 def test_work_log_detail_includes_body(client_with):
     row = make_row(id=1, at=datetime(2026, 7, 23, tzinfo=UTC), author="a", project="p", title="t", body="the body")
-    client, _, _ = client_with([row])
-    assert client.get("/work_log/1").json()["body"] == "the body"
+    harness = client_with([row])
+    assert harness.client.get("/work_log/1").json()["body"] == "the body"
 
 
 def test_add_work_log_attributes_to_iap_caller_not_client(client_with):
     row = make_row(
         id=5, at=datetime(2026, 7, 23, tzinfo=UTC), author="bob@openathena.ai", project="p", title="t", body=None
     )
-    client, _, _ = client_with([row])
-    resp = client.post(
+    harness = client_with([row])
+    resp = harness.client.post(
         "/work_log",
         json={"project": "p", "title": "t", "author": "somebody-else"},
         headers={"X-Goog-Authenticated-User-Email": "accounts.google.com:bob@openathena.ai"},
@@ -136,8 +145,8 @@ def test_add_work_log_attributes_to_iap_caller_not_client(client_with):
 
 
 def test_missing_chunk_is_404(client_with):
-    client, _, _ = client_with([])
-    assert client.get("/chunks/999").status_code == 404
+    harness = client_with([])
+    assert harness.client.get("/chunks/999").status_code == 404
 
 
 def test_activity_search_uses_query_encoder(client_with):
@@ -154,19 +163,19 @@ def test_activity_search_uses_query_encoder(client_with):
         distance=0.2,
         lexical_score=0.5,
     )
-    client, _, model = client_with([row])
-    response = client.get("/search", params={"q": "grafana"})
+    harness = client_with([row])
+    response = harness.client.get("/search", params={"q": "grafana"})
     assert response.status_code == 200
     assert response.json()[0]["title"] == "Grafana dashboards"
-    assert model.queries == ["grafana"]
-    assert model.passages == []
+    assert harness.model.queries == ["grafana"]
+    assert harness.model.passages == []
 
 
 def test_activity_search_rejects_whitespace_without_embedding(client_with):
-    client, _, model = client_with([])
-    response = client.get("/search", params={"q": "   "})
+    harness = client_with([])
+    response = harness.client.get("/search", params={"q": "   "})
     assert response.status_code == 422
-    assert model.queries == []
+    assert harness.model.queries == []
 
 
 def test_add_wiki_embeds_applicability_hint_and_body_as_passage(client_with):
@@ -183,8 +192,8 @@ def test_add_wiki_embeds_applicability_hint_and_body_as_passage(client_with):
         distance=None,
         lexical_score=None,
     )
-    client, _, model = client_with([row])
-    response = client.post(
+    harness = client_with([row])
+    response = harness.client.post(
         "/wiki",
         json={
             "title": "  Grafana access  ",
@@ -194,22 +203,23 @@ def test_add_wiki_embeds_applicability_hint_and_body_as_passage(client_with):
         headers={"X-Goog-Authenticated-User-Email": "accounts.google.com:agent@openathena.ai"},
     )
     assert response.status_code == 201
-    assert response.json()["author"] == "agent@openathena.ai"
-    assert response.json()["use_when"] == "Use this when you need to inspect training dashboards."
-    assert model.passages == [
+    insert_params = harness.engine.executions[-1].compile().params
+    assert insert_params["author"] == "agent@openathena.ai"
+    assert insert_params["use_when"] == "Use this when you need to inspect training dashboards."
+    assert harness.model.passages == [
         "Grafana access\n\nUse when: Use this when you need to inspect training dashboards.\n\nUse the IAP route."
     ]
-    assert model.queries == []
+    assert harness.model.queries == []
 
 
 def test_add_wiki_requires_applicability_hint(client_with):
-    client, _, model = client_with([])
-    response = client.post("/wiki", json={"title": "Grafana access", "body": "Use the IAP route."})
+    harness = client_with([])
+    response = harness.client.post("/wiki", json={"title": "Grafana access", "body": "Use the IAP route."})
     assert response.status_code == 422
-    assert model.passages == []
+    assert harness.model.passages == []
 
 
 def test_missing_wiki_entry_is_404(client_with):
-    client, _, _ = client_with([])
-    assert client.get("/wiki/999").status_code == 404
-    assert client.post("/wiki/999/references").status_code == 404
+    harness = client_with([])
+    assert harness.client.get("/wiki/999").status_code == 404
+    assert harness.client.post("/wiki/999/references").status_code == 404

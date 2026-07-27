@@ -121,15 +121,13 @@ users or grant PostgreSQL table privileges; the owning service stack must do bot
 Echo owns the `loom-vm` Cloud SQL principal, login roles, and table grants in
 `infra/echo`.
 
-The production declaration includes the shared Marin Pulumi key. An identity that
-already has access must apply this change once because a stack cannot bootstrap access
-to its own secrets-provider key.
+A stack cannot bootstrap access to its own secrets-provider key. An identity that
+already has key access must apply any new `vmPulumiKmsKeys` grant.
 
-The VM currently has enough access to read Echo and the shared Pulumi state. An Echo
-preview additionally needs the KMS grant above. A future Echo deploy should add
-mutating permissions only after reviewing its preview; the resource graph currently
-requires Cloud Run, Cloud Scheduler, Cloud SQL, Artifact Registry, service-account,
-project-IAM, Secret Manager IAM, and IAP IAM administration, plus access to
+Previewing Echo requires read access to its resources, Pulumi state objects, and
+secrets-provider key. Deploying Echo also requires mutation access for Cloud Run,
+Cloud Scheduler, Cloud SQL, Artifact Registry, service accounts, project IAM, Secret
+Manager IAM, and IAP IAM, plus payload access to
 `cloudsql-pulumi-admin-password`. Prefer the existing project custom IAP IAM role and
 secret-level access over project-wide `roles/iap.admin` or
 `roles/secretmanager.admin`.

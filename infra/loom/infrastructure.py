@@ -34,6 +34,7 @@ DATA_DISK_DEVICE_NAME = "loom-data"
 SECRET_ACCESSOR_ROLE = "roles/secretmanager.secretAccessor"
 LOG_WRITER_ROLE = "roles/logging.logWriter"
 KMS_ENCRYPTER_DECRYPTER_ROLE = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
+RESOURCE_HASH_LENGTH = 10
 SERVICE_ACCOUNT_MEMBER = "serviceAccount:{}"
 WEB_FIREWALL_TAG = "loom-web"
 SSH_FIREWALL_TAG = "loom-ssh"
@@ -756,7 +757,7 @@ def _create_secrets(
     )
     profile_readers = []
     for secret_project, secret_name in sorted(set(profile_secret_refs)):
-        suffix = hashlib.sha256(f"{secret_project}/{secret_name}".encode()).hexdigest()[:10]
+        suffix = hashlib.sha256(f"{secret_project}/{secret_name}".encode()).hexdigest()[:RESOURCE_HASH_LENGTH]
         profile_readers.append(
             gcp.secretmanager.SecretIamMember(
                 f"loom-profile-secret-{suffix}",
@@ -887,7 +888,7 @@ def _create_vm_permissions(
     member = pulumi.Output.format(SERVICE_ACCOUNT_MEMBER, vm_account.email)
     grants: list[pulumi.Resource] = []
     for role in sorted(config.vm_project_roles):
-        suffix = hashlib.sha256(role.encode()).hexdigest()[:10]
+        suffix = hashlib.sha256(role.encode()).hexdigest()[:RESOURCE_HASH_LENGTH]
         grants.append(
             gcp.projects.IAMMember(
                 f"loom-vm-project-role-{suffix}",
@@ -898,7 +899,7 @@ def _create_vm_permissions(
             )
         )
     for crypto_key in sorted(config.vm_pulumi_kms_keys):
-        suffix = hashlib.sha256(crypto_key.encode()).hexdigest()[:10]
+        suffix = hashlib.sha256(crypto_key.encode()).hexdigest()[:RESOURCE_HASH_LENGTH]
         grants.append(
             gcp.kms.CryptoKeyIAMMember(
                 f"loom-vm-pulumi-kms-{suffix}",
