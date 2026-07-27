@@ -65,7 +65,7 @@ def test_reference_maps_and_ring_indices_cover_the_same_accepted_routes() -> Non
 def test_admission_requires_exactness_relative_l2_and_speedup() -> None:
     passing = admission_result(
         route_exact=True,
-        output_relative_l2={"output": 0.0019},
+        candidate_relative_l2={"ubx_vs_fp32_identity_reference": 0.0019},
         ring_p50_ms=11.0,
         ubx_p50_ms=10.0,
         relative_l2_limit=0.002,
@@ -73,7 +73,7 @@ def test_admission_requires_exactness_relative_l2_and_speedup() -> None:
     )
     bad_route = admission_result(
         route_exact=False,
-        output_relative_l2={"output": 0.0},
+        candidate_relative_l2={"ubx_vs_fp32_identity_reference": 0.0},
         ring_p50_ms=12.0,
         ubx_p50_ms=10.0,
         relative_l2_limit=0.002,
@@ -81,7 +81,7 @@ def test_admission_requires_exactness_relative_l2_and_speedup() -> None:
     )
     bad_output = admission_result(
         route_exact=True,
-        output_relative_l2={"output": 0.0021},
+        candidate_relative_l2={"ubx_vs_fp32_identity_reference": 0.0021},
         ring_p50_ms=12.0,
         ubx_p50_ms=10.0,
         relative_l2_limit=0.002,
@@ -89,7 +89,7 @@ def test_admission_requires_exactness_relative_l2_and_speedup() -> None:
     )
     bad_speed = admission_result(
         route_exact=True,
-        output_relative_l2={"output": 0.0},
+        candidate_relative_l2={"ubx_vs_fp32_identity_reference": 0.0},
         ring_p50_ms=10.99,
         ubx_p50_ms=10.0,
         relative_l2_limit=0.002,
@@ -97,6 +97,7 @@ def test_admission_requires_exactness_relative_l2_and_speedup() -> None:
     )
 
     assert passing["passed"]
+    assert passing["candidate_reference"] == "fp32_identity"
     assert not bad_route["passed"]
     assert not bad_output["passed"]
     assert not bad_speed["passed"]

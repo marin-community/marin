@@ -30,8 +30,10 @@ Each routing case fails the process unless all conditions hold:
 1. UB-X token offsets, top-k dispatch maps, PUSH inverse maps, expert counts,
    accepted routes, and drops exactly match the independent Ring oracle.
 2. BF16 dispatch is bitwise exact.
-3. Dispatch output, Ring output, UB-X output, and UB-X-versus-Ring output are
-   finite and no worse than `0.002` relative L2 against their stated reference.
+3. UB-X output is finite and no worse than `0.002` relative L2 against the
+   FP32 identity-expert reference. Ring-versus-FP32 and UB-X-versus-Ring errors
+   remain reported as diagnostics, but do not reject a more accurate candidate
+   because the BF16 Ring control follows a different rounding path.
 4. `ring_p50_ms / ubx_p50_ms >= 1.10`.
 
 The two-route launcher uses `set -o pipefail`, so success means both route

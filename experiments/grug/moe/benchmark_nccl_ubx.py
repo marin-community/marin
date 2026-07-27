@@ -349,20 +349,22 @@ def ring_assignment_indices(plan: RoutePlan, config: BenchmarkConfig, rank: int)
 def admission_result(
     *,
     route_exact: bool,
-    output_relative_l2: dict[str, float],
+    candidate_relative_l2: dict[str, float],
     ring_p50_ms: float,
     ubx_p50_ms: float,
     relative_l2_limit: float,
     required_speedup: float,
 ) -> dict[str, Any]:
     speedup = ring_p50_ms / ubx_p50_ms
-    floating_output_passed = all(
-        math.isfinite(value) and value <= relative_l2_limit for value in output_relative_l2.values()
+    candidate_output_passed = all(
+        math.isfinite(value) and value <= relative_l2_limit for value in candidate_relative_l2.values()
     )
     return {
-        "passed": route_exact and floating_output_passed and speedup >= required_speedup,
+        "passed": route_exact and candidate_output_passed and speedup >= required_speedup,
         "route_count_drop_exact": route_exact,
-        "floating_output_passed": floating_output_passed,
+        "candidate_output_passed": candidate_output_passed,
+        "candidate_reference": "fp32_identity",
+        "candidate_relative_l2": candidate_relative_l2,
         "relative_l2_limit": relative_l2_limit,
         "required_speedup": required_speedup,
         "transport_speedup_vs_ring": speedup,
@@ -776,10 +778,14 @@ def _run_gpu(config: BenchmarkConfig, source: Path) -> tuple[dict[str, Any], boo
             timing_samples[name].append(_measure_slowest_rank_ms(torch, dist, arm, device))
     timings = {name: _timing_summary(samples) for name, samples in timing_samples.items()}
 
-    output_relative_l2 = {name: metrics["all_rank_max_relative_l2_error"] for name, metrics in output_metrics.items()}
+    candidate_relative_l2 = {
+        "ubx_vs_fp32_identity_reference": output_metrics["ubx_vs_fp32_identity_reference"][
+            "all_rank_max_relative_l2_error"
+        ]
+    }
     admission = admission_result(
         route_exact=route_exact,
-        output_relative_l2=output_relative_l2,
+        candidate_relative_l2=candidate_relative_l2,
         ring_p50_ms=timings["ring"]["p50_ms"],
         ubx_p50_ms=timings["ubx"]["p50_ms"],
         relative_l2_limit=config.relative_l2_limit,
