@@ -16,6 +16,54 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T05:35:54Z — 233,272 pairs verified
+
+- `/rav/rav-datakit-6854-audit-next-checkpoints-0303-v968` independently
+  revalidated p0 decision-file 9 offset 4,352 and p1 decision-file 41 offset
+  4,480. Their 256 baseline pairs contain 129 model false positives, 126 model
+  true duplicates, and one unresolved outcome. All pairs used direct review.
+  Nine invalid responses caused six judgments to retry; 524 valid judgments
+  were produced across 533 request attempts. The p0 and p1 outcome Parquet
+  SHA-256 values are
+  `390952ad0507eedca3fb40894753e898ecbd00cfac4ffb40f2ccb5abead5712d`
+  and
+  `b7f92ac47858d8e830f1f864296293aeb0d93a5b49ba42628d5e59d8043fa44d`.
+- Complete-text inspection resolves p0 row 7,468 as a false positive. The
+  506- and 485-character examples share only the generic instruction to reason
+  through a math question and end with `####`. The member asks for and solves
+  the polynomial expansion `(9x+2)(4x^2+3)` using FOIL; the canonical asks for
+  and solves `54 × 46` using difference of squares. The problems, reasoning,
+  intermediate calculations, and answers are distinct. Character, line, and
+  word-sequence similarities are 0.694248, 0.258065, and 0.577778. Member and
+  canonical SHA-256 values are
+  `5ba7c6bf6f9525605500dc3dacaa10bdd00deca0fe14bd9ae4c3353a2a2c97a4`
+  and
+  `987b60cb2ac229ddf85800ae1271c587ef6e72ae2d9c9078fd832a86c4c23c24`.
+- `/rav/rav-datakit-6854-inspect-row7468-0304-v969` persisted the complete
+  pair and diff with inspection SHA-256
+  `3d515da8ded08083bdc4a7059693e6cc816c4d9fad2374bdd42d599e5ab1b30e`.
+  `/rav/rav-datakit-6854-publish-row7468-0305-v970` wrote the immutable
+  false-positive record, and `/rav/rav-datakit-6854-verify-row7468-0306-v971`
+  independently reread every bound source and output artifact. The
+  semantic-judgment, manual-Parquet, and marker SHA-256 values are
+  `de73a952987905c4cd2c2937ad623118988f728913bd9aa208db0241cdb70889`,
+  `c6229ce1ecd2ad452e25fefa936dbd1cb471ead5d1a0a1420dfb2a49bc65a568`,
+  and
+  `1be76a1aba453754bb8d51a1f947cc3fa4b9a0f448e473dc4984593034aba542`.
+- Replacing the unresolved outcome gives 130 false positives and 126 true
+  duplicates in the block. Across the stable 1,836-checkpoint snapshot, all
+  280 unresolved model outcomes are covered by 216 true-duplicate and 64
+  false-positive manual records. The adjusted totals are:
+
+  - baseline: 188,039 pairs, 119,218 false positives, 68,821 true duplicates;
+  - treatment: 45,233 pairs, 23,368 false positives, 21,865 true duplicates;
+  - combined: 233,272 pairs, 142,586 false positives, 90,686 true duplicates.
+
+- The next audit frontiers are p0 `(9, 4,480)`, p1 `(41, 4,608)`,
+  p2 `(74, 0)`, and p3 `(106, 128)`. The p0 and p1 pending checkpoints contain
+  4,134,678 and 7,474,278 characters. All four batch-priority 2-H100 workers
+  remain active with zero Kubernetes restarts.
+
 ### 2026-07-27T05:30:37Z — 233,016 pairs verified
 
 - `/rav/rav-datakit-6854-audit-next-checkpoints-0302-v967` independently
