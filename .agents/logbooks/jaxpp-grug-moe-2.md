@@ -995,3 +995,15 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
 - Gate:
   - Require successful profiler start, stop, upload, and terminal training state.
   - Attribute the exact regression to named stage tasks, compute/communication/stall shares, collectives, and idle gaps. Compare with `scratch/jaxpp_profile_b96_gpipe_artifact_summary.json` or the best available exact baseline profile before selecting another optimization.
+
+### 2026-07-27 04:20 PDT - Profile r1 capture succeeds but upload targets the wrong S3 backend
+- Result:
+  - Parent `/dlwh/iris-run-job-20260727-105805` reached profiler start at step 8 and stopped after step 9.
+  - Upload to `s3://marin-na/tmp/ttl=30d/xprof/...` failed with `InvalidRegion: Region does not match`. Rank 0 raised `RuntimeError: Failed to upload XProf profile`, leaving the distributed job stranded after the profile window.
+  - The parent and all four ranks were stopped with no retry or live resource. W&B [profile r1](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-ep2d4-fusedacc-fp8-l24-e64k4-b512-s4096-p4m16-profile-r1-20260727) is `finished` at step 9 with no profiler artifact.
+  - Steps 2-7 before profiling averaged `16.2476` MFU and `5.7232s`; profiled steps 8-9 averaged `15.8469` MFU and `5.8679s`.
+- Root cause:
+  - The launcher configures `AWS_ENDPOINT_URL` for the selected CoreWeave cluster, here `cwlota.com`, but its default prefix remains `s3://marin-na/marin`, which is Cloudflare R2. The CoreWeave endpoint cannot upload to the R2 bucket.
+  - `cw-rno2a` configures `MARIN_PREFIX: s3://marin-us-east-02a/marin`, matching the cluster's object-store endpoint and credentials. Passing that prefix explicitly keeps the XProf TTL artifact on the same backend and region.
+- Next action:
+  - Relaunch the unchanged profile as r2 with `--prefix s3://marin-us-east-02a/marin`. Require artifact upload before profile analysis.
