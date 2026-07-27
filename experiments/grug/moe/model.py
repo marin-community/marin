@@ -10,6 +10,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 import dataclasses
 import math
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Literal
 
 import equinox as eqx
@@ -57,6 +58,13 @@ GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 1
+
+
+class NestedSubsetSchedule(StrEnum):
+    """How multi-size nested expert subsets are selected during training."""
+
+    FIXED = "fixed"
+    ROTATING = "rotating"
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -126,6 +134,8 @@ class GrugModelConfig:
     full bank so the subset remains balanced over expert-parallel ranks."""
     nested_expert_counts: tuple[int, ...] = ()
     """Rotating expert-subset sizes used by hierarchical nesting experiments."""
+    nested_subset_schedule: NestedSubsetSchedule = NestedSubsetSchedule.ROTATING
+    """Whether each nested size uses one fixed subset or rotates across cosets."""
     nested_batch_fraction: float = 0.0
     """Fraction of training rows restricted to a configured nested subset."""
     num_layers: int = 6
@@ -254,6 +264,9 @@ class GrugModelConfig:
             capacity_factor=float(_hf_config_attr(hf_config, ("capacity_factor",), 1.0)),
             nested_expert_count=_hf_config_attr(hf_config, ("nested_expert_count",)),
             nested_expert_counts=tuple(_hf_config_attr(hf_config, ("nested_expert_counts",), ())),
+            nested_subset_schedule=NestedSubsetSchedule(
+                _hf_config_attr(hf_config, ("nested_subset_schedule",), NestedSubsetSchedule.ROTATING)
+            ),
             nested_batch_fraction=float(_hf_config_attr(hf_config, ("nested_batch_fraction",), 0.0)),
             num_layers=int(_hf_config_attr(hf_config, ("num_layers", "num_hidden_layers"), 24)),
             num_heads=int(_hf_config_attr(hf_config, ("num_heads", "num_attention_heads"), 16)),
@@ -292,6 +305,7 @@ class GrugModelConfig:
             "capacity_factor": self.capacity_factor,
             "nested_expert_count": self.nested_expert_count,
             "nested_expert_counts": self.nested_expert_counts,
+            "nested_subset_schedule": self.nested_subset_schedule.value,
             "nested_batch_fraction": self.nested_batch_fraction,
             "moe_intermediate_size": self.intermediate_dim,
             "shared_expert_intermediate_size": self.shared_expert_intermediate_dim,

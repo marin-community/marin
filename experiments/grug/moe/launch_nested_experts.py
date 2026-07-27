@@ -9,7 +9,8 @@ extractable, interleaved E128 subset.
 
 Required environment:
 
-    NESTED_ARM    large | small | nested25 | nested50 | ladder25 | ladder50 | breakout25
+    NESTED_ARM    large | small | nested25 | nested50 | ladder25 | ladder50 |
+                  fixed25 | fixed50 | breakout25
     NESTED_PHASE  smoke | full | cooldown
 
 Optional overrides:
@@ -63,7 +64,7 @@ from experiments.grug.moe.launch import (
     run_grug_moe_trial,
     slimpajama_6b_dataset,
 )
-from experiments.grug.moe.model import GrugModelConfig
+from experiments.grug.moe.model import GrugModelConfig, NestedSubsetSchedule
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 from experiments.llama import llama3_tokenizer
 
@@ -72,6 +73,7 @@ _TARGET_STEPS = 8192
 _LARGE_EXPERTS = 256
 _SMALL_EXPERTS = 128
 _NESTED_LADDER = (128, 32, 8, 1)
+_FIXED_LADDER = (128, 16)
 _GPUS_PER_NODE = 4
 _DEFAULT_NODES = 16
 _DEFAULT_EXPERT_AXIS = 64
@@ -96,6 +98,8 @@ class NestedArm(StrEnum):
     NESTED_50 = "nested50"
     LADDER_25 = "ladder25"
     LADDER_50 = "ladder50"
+    FIXED_25 = "fixed25"
+    FIXED_50 = "fixed50"
     BREAKOUT_25 = "breakout25"
 
     @property
@@ -108,6 +112,8 @@ class NestedArm(StrEnum):
             NestedArm.BREAKOUT_25: "NEST-MOE-005",
             NestedArm.LADDER_25: "NEST-MOE-006",
             NestedArm.LADDER_50: "NEST-MOE-007",
+            NestedArm.FIXED_25: "NEST-MOE-008",
+            NestedArm.FIXED_50: "NEST-MOE-009",
         }[self]
 
 
@@ -159,6 +165,16 @@ def _arm_model(
             num_experts=_LARGE_EXPERTS,
             nested_expert_count=_SMALL_EXPERTS,
             nested_batch_fraction=0.5,
+            **common,
+        )
+    if arm in (NestedArm.FIXED_25, NestedArm.FIXED_50):
+        fraction = 0.25 if arm is NestedArm.FIXED_25 else 0.5
+        return dataclasses.replace(
+            base_model,
+            num_experts=_LARGE_EXPERTS,
+            nested_expert_counts=_FIXED_LADDER,
+            nested_subset_schedule=NestedSubsetSchedule.FIXED,
+            nested_batch_fraction=fraction,
             **common,
         )
     fraction = 0.25 if arm is NestedArm.LADDER_25 else 0.5

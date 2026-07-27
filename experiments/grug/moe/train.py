@@ -46,6 +46,7 @@ from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.model import (
     GrugModelConfig,
+    NestedSubsetSchedule,
     Transformer,
     extract_nested_expert_model,
     nested_expert_eligibility,
@@ -522,8 +523,11 @@ def _training_expert_eligibility(
     level_ids = event_ids % len(model_config.nested_expert_counts)
     eligible_counts = nested_counts[level_ids]
     strides = model_config.num_experts // eligible_counts
-    subset_cycles = event_ids // len(model_config.nested_expert_counts)
-    offsets = subset_cycles % strides
+    if model_config.nested_subset_schedule is NestedSubsetSchedule.FIXED:
+        offsets = jnp.zeros_like(strides)
+    else:
+        subset_cycles = event_ids // len(model_config.nested_expert_counts)
+        offsets = subset_cycles % strides
     nested = expert_ids[None, :] % strides[:, None] == offsets[:, None]
     return jnp.where(restricted_rows[:, None], nested, True)
 

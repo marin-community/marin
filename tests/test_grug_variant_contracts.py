@@ -350,6 +350,22 @@ def test_nested_moe_launcher_builds_power_ladder(monkeypatch, tmp_path):
     assert trainer.load_checkpoint_path == "s3://test/prior/checkpoints"
 
 
+def test_nested_moe_launcher_builds_fixed_chain(monkeypatch, tmp_path):
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    monkeypatch.setenv("NESTED_ARM", "fixed25")
+    monkeypatch.setenv("NESTED_PHASE", "full")
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+
+    step = launch_nested_experts.build(version="dev")
+    _seed_cache_records(step, str(tmp_path))
+    config = materialized_config(step, str(tmp_path))
+
+    assert config.model.num_experts == 256
+    assert config.model.nested_expert_counts == (128, 16)
+    assert config.model.nested_subset_schedule is model_module.NestedSubsetSchedule.FIXED
+    assert config.model.nested_batch_fraction == 0.25
+
+
 def test_nested_moe_launcher_builds_fresh_optimizer_breakout(monkeypatch, tmp_path):
     checkpoint_root = "s3://test/nested25/checkpoints"
     monkeypatch.setenv("NESTED_ARM", "breakout25")
@@ -752,6 +768,28 @@ def test_grug_moe_power_ladder_rotates_levels_and_subsets():
     assert eligible_counts.tolist() == [4, 8, 2, 8, 1, 8, 4, 8, 2, 8, 1, 8]
     assert np.asarray(eligibility)[0].tolist() == [True, False, True, False, True, False, True, False]
     assert np.asarray(eligibility)[6].tolist() == [False, True, False, True, False, True, False, True]
+
+
+def test_grug_moe_fixed_ladder_reuses_one_nested_chain():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    config = dataclasses.replace(
+        _nested_grug_model_config(model_module),
+        nested_expert_count=None,
+        nested_expert_counts=(4, 2, 1),
+        nested_subset_schedule=model_module.NestedSubsetSchedule.FIXED,
+    )
+
+    eligibility = train_module._training_expert_eligibility(config, batch_size=12, step=jnp.array(0))
+
+    assert eligibility is not None
+    eligible_counts = np.asarray(eligibility).sum(axis=-1)
+    assert eligible_counts.tolist() == [4, 8, 2, 8, 1, 8, 4, 8, 2, 8, 1, 8]
+    np.testing.assert_array_equal(np.asarray(eligibility)[0], np.asarray(eligibility)[6])
+    np.testing.assert_array_equal(np.asarray(eligibility)[2], np.asarray(eligibility)[8])
+    np.testing.assert_array_equal(np.asarray(eligibility)[4], np.asarray(eligibility)[10])
+    assert np.all(np.asarray(eligibility)[4] <= np.asarray(eligibility)[2])
+    assert np.all(np.asarray(eligibility)[2] <= np.asarray(eligibility)[0])
 
 
 def test_grug_moe_nested_evaluation_samples_evenly_spaced_offsets():
