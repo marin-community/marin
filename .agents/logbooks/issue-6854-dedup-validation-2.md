@@ -16,6 +16,89 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T12:39:00Z — 273,303 pairs verified; all 320 ambiguities covered
+
+- `/rav/rav-datakit-6854-reconcile-manual-1239-v1192` independently
+  reconciled 2,151 completed semantic checkpoints and all 320 unresolved model
+  outcomes. Every unresolved outcome has one consistent full-text decision;
+  none are missing. The snapshot covers 273,303 of 755,281 semantic
+  candidates (36.19%). Applying the 70 false-positive and 250 true-duplicate
+  manual decisions gives:
+
+  - baseline: 218,937 pairs, 138,944 false positives, and 79,993 true
+    duplicates;
+  - treatment: 54,366 pairs, 28,130 false positives, and 26,236 true
+    duplicates;
+  - combined: 167,074 false positives and 106,229 true duplicates.
+
+  The immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-1239.json`
+  with SHA-256
+  `47cfc8fa18c9e927e58aa26e2722ac1e3568b7e8160553077c6ffe2e64d755eb`.
+- Four new ambiguities were resolved from complete persisted texts, exact
+  diffs, and every model judgment:
+
+  - baseline decision-file 75 row 2,503 is a false positive. The shared
+    treefrog study text is not the whole member: it uniquely adds
+    `Osteocephalus heyeri`, a Dan Moen photo credit, and a factual fragment
+    contrasting lowland and higher-elevation species distributions. Member,
+    canonical, and inspection SHA-256 values are
+    `ac66716360a794aed0ec5fdeb07dfb62f066a249f3cd002f204bbb9fc121d148`,
+    `76bf046700a651640ec3d8cb7e9b715d5bf584d6bc79e715ea2f4078ed9a12d3`,
+    and
+    `f0a9abf241d42f33cca1ca9b93c08e1c94a79d2c9c51d607f694d2b6ddabc65b`.
+  - treatment decision-file 107 row 9,131 is a true duplicate. The complete
+    257-line depression question, choices, and reasoning are identical; only
+    the answer formatting changes from `\boxed{E}` to `\boxed{\text{E}}`.
+    Member, canonical, and inspection SHA-256 values are
+    `b3cac9fa3c045eaf294db8a6274767356a2f3aebe34155d2c860e3df56f53a62`,
+    `d389e784f5eb8abe28489b172c2aebe05ce8dbc75e8f93381bec2eb9485a6d11`,
+    and
+    `744ae4162e01a4d64bd9883d2b004852d9f9085d44c4c2c519720f41ea64b5f8`.
+  - baseline decision-file 75 row 3,668 is a false positive. The pair shares
+    plot text but names different films: the member title is `Cruising` and
+    the canonical title is `The Imitation Game`. The title is the only entity
+    label, so deletion loses substantive entity information. Member,
+    canonical, and inspection SHA-256 values are
+    `a0aa1964d02c0b8795701ce6710bb05fd3aaabb3681b77c5df10fac401ba09f0`,
+    `390b174e861ffb26127ba51197325fd1abed0a4fb6120907a0a041b8ee48ccac`,
+    and
+    `fa95385e91f2d60d59383ed55939c0d8770327148e183a97a4ccb213d01df443`.
+  - baseline decision-file 11 row 7,533 is a true duplicate. The complete
+    82-line Transatlantic Slave Trade question, choices, and reasoning are
+    identical; only the answer formatting changes from `\boxed{B}` to
+    `\boxed{\text{B}}`. Member, canonical, and inspection SHA-256 values are
+    `a0df05f9ca2d3aaac7e349db401ac184a226393f90526fcd997e12b97233fd38`,
+    `a63eb485a1756e4350253864a635f6b4717a0be44b14c63aedc81c1e7d774f64`,
+    and
+    `25c8b64b5da19e64dc428346600a7f322965e71c1b6626453395a734c4d9565a`.
+
+- Four separate publish jobs wrote immutable, evidence-bound decisions. Four
+  verify-only jobs independently reread the source pairs, semantic evidence,
+  inspections, deterministic Parquet bytes, and completion markers. Their
+  manual-Parquet/marker SHA-256 pairs, in row order, are:
+
+  - row 2,503:
+    `cbe22e3307d47dc295122878ac6495e3c6d633987f45029d94cd2c00accf1e5c`
+    /
+    `b9385f402f4a5498d53fe52b35ebfbbefb319caa2b7a2e546969686e4af63f78`;
+  - row 9,131:
+    `e2b152b6eff9ccc8bedbd9330930be729e0db52420111a7d41cdd33803038417`
+    /
+    `b18cfe8b313826582fc13453108c55b54bf751168dbb7373570da837f5d32167`;
+  - row 3,668:
+    `dcad228f9aeaaf22000ae38fbae31abd25339c35e42b67c17a4aafe4d2db254b`
+    /
+    `ac1a958963e88985aa183d91796ce551a077acb8719e3132b7582be154d09527`;
+  - row 7,533:
+    `2bb73e5a0c5d6ab49f2949db412fa4cf3196d85438f758b91360460ba41aaa85`
+    /
+    `74afc7c3d6ca6273f0b35e258bd18a0a2cd9bbcc329151165ffc1f1543eae2c`.
+
+- The four batch-priority 2-H100 workers remain active and are returning HTTP
+  200 responses. All 12 root, broker, and GPU pods are Ready with zero
+  Kubernetes restarts.
+
 ### 2026-07-27T12:24:30Z — 270,515 pairs verified; all 316 ambiguities covered
 
 - `/rav/rav-datakit-6854-reconcile-manual-1222-v1177` independently
