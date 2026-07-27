@@ -317,3 +317,21 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - The joined finish now differentiates only expert execution and returns per-microbatch combine-weight cotangents. Each pre/router VJP owns its original attention, dense, routing, and auxiliary-loss derivative before master-precision gradient summation.
 - Next action:
   - Stop at this direct milestone. The next separate gate is JaxPP task integration of the same pre/router and expert-only finish boundaries; do not launch L8 or L24 before that component task graph passes the same per-leaf `0.002` and exact-route checks.
+
+### 2026-07-26 19:24 PDT - explicit router state passes the seven-task JaxPP graph
+- Hypothesis: The r14 explicit-router boundary will retain exact routing and per-leaf relative-L2 at most `0.002` when represented as separate JaxPP MPMD pre, joined-expert, backward, and master-gradient reduction tasks.
+- Commit Hash: `cd87b638fc` adds the one-block seven-task JaxPP gate, real stage shardings, distinct combine-weight cotangents, and structural assertions.
+- Command: Parent `/dlwh/jaxpp-group2-explicit-routing-mpmd-r15-cd87b638-20260727-022028` ran `--diagnostic explicit-routing-mpmd` from clean commit `cd87b638fc8c51dff47dcfb858a4bb10eaa4b5df`; child `/dlwh/jaxpp-group2-explicit-routing-mpmd-r15-cd87b638-20260727-022028/0`. The target remained d2560/e64/top-k4/sequence 4096/global microbatch 32/local 4, one H100x8 node, BF16 CuTe FA4, exact ring EP8, `save_moe`, Triton block-k 32/eight warps, JAX `0.11.1.dev20260725`, NCCL `2.30.7`, and patched JaxPP `7091a9b5`.
+- Results:
+  - JaxPP versus ordered passed with exact selected routes and routing counts, no failed leaves, and no divergent forward boundary. Maximum parameter relative-L2 was `0.0018017726988870581`; maximum input relative-L2 was `0.000030204541776493355`.
+  - JaxPP versus the matching direct graph passed. Maximum parameter relative-L2 was `0.00041523254248327415`; maximum input relative-L2 was `0.000011830357357974469`.
+  - The pre-task JAXPR contained `338` attention operations, `4` router operations, and no ring body. The joined-expert JAXPR contained exactly two ring bodies and no attention or router operation.
+  - Joined-expert backward returned two distinct combine-weight cotangent leaves, each with shape `[131072, 4]`. The graph used seven tasks and no receive buffers.
+  - Lowering took approximately `0.01734s`, precompilation `2.514s`, and execution `0.1513s`.
+  - Iris succeeded with exit `0` after `2m15.26s`, with zero failures or preemptions and no live allocation.
+- Interpretation:
+  - The explicit-router component boundary survives JaxPP task localization. JaxPP introduces no threshold failure relative to either the ordered reference or the direct r14 graph.
+  - Separate pre/router tasks, one expert-only paired task, distinct combine-weight cotangents, separate pre backwards, and master-precision gradient reduction form the correctness architecture for production group-size-two execution.
+  - This is a one-block correctness and compile gate. Production scheduling, multi-block caching, and L8 throughput remain untested.
+- Next action:
+  - Integrate the same graph into production explicit-MPMD `std_1f1b` group-size-two scheduling without duplicating the harness task functions. Preserve the existing tuple wire format and group-size-one path. Review and locally validate the production integration before launching an L8 smoke.
