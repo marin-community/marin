@@ -65,6 +65,10 @@ def deployment_config() -> DeploymentConfig:
         data_disk_gb=500,
         dotenv_secret_version=3,
         snapshot_retention_days=14,
+        vm_project_roles=("roles/cloudsql.client", "roles/cloudsql.instanceUser"),
+        vm_pulumi_kms_keys=(
+            "projects/example/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key",
+        ),
         prune_deployment=True,
         profiles=(
             ProfileConfig.parse(
@@ -115,6 +119,19 @@ def test_empty_runtime_policy_cannot_prune_existing_profiles() -> None:
 def test_domain_is_a_canonical_hostname() -> None:
     with pytest.raises(ValueError, match="canonical hostname"):
         replace(deployment_config(), domain="https://loom.example.com/")
+
+
+def test_vm_permissions_require_canonical_unique_resource_names() -> None:
+    with pytest.raises(ValueError, match="vmProjectRoles"):
+        replace(deployment_config(), vm_project_roles=("cloudsql.client",))
+    with pytest.raises(ValueError, match="vmPulumiKmsKeys"):
+        replace(
+            deployment_config(),
+            vm_pulumi_kms_keys=(
+                "projects/example/locations/us-central1/keyRings/key/cryptoKeys/key",
+                "projects/example/locations/us-central1/keyRings/key/cryptoKeys/key",
+            ),
+        )
 
 
 def test_github_federations_require_unique_names_and_known_profiles() -> None:
@@ -200,6 +217,15 @@ def test_deployment_models_durable_resources_without_secret_payloads():
         log_writer = by_name(mocks, "loom-vm-log-writer")
         assert log_writer.inputs["role"] == "roles/logging.logWriter"
         assert log_writer.inputs["member"] == "serviceAccount:loom-vm@example.iam.gserviceaccount.com"
+        project_roles = {
+            resource.inputs["role"] for resource in mocks.resources if resource.name.startswith("loom-vm-project-role-")
+        }
+        assert project_roles == {"roles/cloudsql.client", "roles/cloudsql.instanceUser"}
+        kms_grant = next(resource for resource in mocks.resources if resource.name.startswith("loom-vm-pulumi-kms-"))
+        assert kms_grant.inputs["role"] == "roles/cloudkms.cryptoKeyEncrypterDecrypter"
+        assert field(kms_grant.inputs, "crypto_key_id", "cryptoKeyId") == (
+            "projects/example/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key"
+        )
 
     return infrastructure.instance.id.apply(check)
 
