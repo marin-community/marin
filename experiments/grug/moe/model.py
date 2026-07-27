@@ -10,6 +10,7 @@ full-causal MoE blocks run through a single ``lax.scan`` over stacked blocks.
 """
 
 import dataclasses
+import math
 import os
 from dataclasses import dataclass
 from typing import Literal
@@ -174,6 +175,10 @@ class GrugModelConfig:
     over_encoding_vocab_size: int = 0
     over_encoding_splits: int = 4
     over_encoding_num_grams: int = 3
+    # Row-shard the OE tables (over the batch/data axes) instead of replicating them. Enables a large
+    # OE vocab (e.g. 8% of model params) that could never fit replicated. At 1 rack the routing
+    # all-to-all is intra-rack (data axis == the NVLink domain); see _oe_rowwise_lookup.
+    over_encoding_sharded: bool = False
     # Apply a learnable GatedNorm after each RMSNorm (attn + mlp inputs). Off in the barebones default.
     gated_norm: bool = False
     # Per-head sigmoid attention gate: gate = 2*sigmoid(x @ attn_gate), a scalar per (token, head)
@@ -883,15 +888,86 @@ def _causal_ngram_ids(
     return (ngram_hash % jnp.uint32(modulus)).astype(jnp.int32)
 
 
+def _oe_shard_a2a_params(shard_counts: Int[Array, "S S"], shard_id: Int[Array, ""]):
+    """Per-shard (offset, size) tuples for the id->owner and embedding->requester ragged_all_to_alls."""
+    row = shard_counts[shard_id]
+    input_offsets = jnp.cumsum(jnp.concatenate((jnp.array([0], dtype=row.dtype), row[:-1])))
+    recv_sizes = shard_counts[:, shard_id]
+    sender_output_offsets = jnp.cumsum(shard_counts, axis=0, dtype=shard_counts.dtype) - shard_counts
+    return input_offsets, row, sender_output_offsets[shard_id], recv_sizes
+
+
+def _oe_rowwise_lookup_local(
+    table_local: Float[Array, "Vlocal D"], ids_local: Int[Array, "Blocal S"], *, dp_size: int
+) -> Float[Array, "Blocal S D"]:
+    """Inside shard_map: route ids to their row-owner shard, gather locally, route embeddings back."""
+    axis_name = _BATCH_AXES
+    shard_id = jax.lax.axis_index(axis_name)
+    flat_ids = ids_local.reshape(-1)
+    local_rows = table_local.shape[0]
+    owners = flat_ids // local_rows
+    local_ids = flat_ids % local_rows
+    sort_indices = jnp.argsort(owners, stable=True)
+    sorted_local_ids = local_ids[sort_indices]
+    send_counts = jnp.bincount(owners, length=dp_size).astype(jnp.int32)
+    all_shard_counts = jax.lax.all_gather(send_counts, axis_name)
+    input_offsets, send_sizes, output_offsets, recv_sizes = _oe_shard_a2a_params(all_shard_counts, shard_id)
+    capacity = flat_ids.shape[0] * dp_size
+    dispatched_ids = jax.lax.ragged_all_to_all(
+        sorted_local_ids,
+        jnp.zeros((capacity,), dtype=jnp.int32),
+        input_offsets,
+        send_sizes,
+        output_offsets,
+        recv_sizes,
+        axis_name=axis_name,
+    )
+    dispatched_embeddings = table_local[dispatched_ids]
+    r_in, r_send, r_out, r_recv = _oe_shard_a2a_params(all_shard_counts.T, shard_id)
+    returned = jax.lax.ragged_all_to_all(
+        dispatched_embeddings,
+        jnp.zeros((flat_ids.shape[0], table_local.shape[1]), dtype=table_local.dtype),
+        r_in,
+        r_send,
+        r_out,
+        r_recv,
+        axis_name=axis_name,
+    )
+    unsorted = returned[jnp.argsort(sort_indices)]
+    return unsorted.reshape(*ids_local.shape, table_local.shape[1])
+
+
+def _oe_rowwise_lookup(table: Float[Array, "V D"], ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
+    """Look up a row-sharded OE table without ever materializing it replicated. The ragged_all_to_all
+    runs over ``_BATCH_AXES``; at 1 rack that is the ``data`` axis == the NVLink domain, so it stays
+    intra-rack (no cross-rack kAllToAll wedge). Multi-rack keeps this intra-rack iff the mesh places
+    ``data`` within a rack and ``replica_dcn`` across racks."""
+    mesh = get_abstract_mesh()
+    dp_size = math.prod(_mesh_axis_size(mesh, axis_name) for axis_name in _BATCH_AXES)
+    if dp_size == 1:
+        return table.at[ids].get(out_sharding=P(_BATCH_AXES, None, None))
+    if table.shape[0] % dp_size != 0:
+        raise ValueError(f"OE table rows ({table.shape[0]}) must be divisible by DP size ({dp_size})")
+    table = reshard(table, P(_BATCH_AXES, None))
+    ids = reshard(ids, P(_BATCH_AXES, None))
+    return shard_map(
+        lambda t, i: _oe_rowwise_lookup_local(t, i, dp_size=dp_size),
+        mesh=mesh,
+        in_specs=(P(_BATCH_AXES, None), P(_BATCH_AXES, None)),
+        out_specs=P(_BATCH_AXES, None, None),
+    )(table, ids)
+
+
 class OverEncoding(eqx.Module):
     """Hierarchical input-only n-gram embedding tables (orders 2..num_grams, ``splits`` hashes each)."""
 
-    tables: jax.Array  # [num_tables, physical_rows, slice_dim], replicated
+    tables: jax.Array  # [num_tables, physical_rows, slice_dim]; replicated, or rows-sharded if ``sharded``
     projections: tuple[jax.Array, ...]  # each [slice_dim, hidden], replicated
     logical_vocab_sizes: tuple[int, ...] = eqx.field(static=True)
     splits: int = eqx.field(static=True)
     num_grams: int = eqx.field(static=True)
     base_vocab_size: int = eqx.field(static=True)
+    sharded: bool = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: "GrugModelConfig", *, key: PRNGKeyArray) -> "OverEncoding":
@@ -910,8 +986,10 @@ class OverEncoding(eqx.Module):
                 for index in range(num_tables)
             )
         )
-        # Capped OE: fully replicate the (small) stacked tables so the lookup reuses _embedding_gather.
-        tables = reshard(table_values, P(None, None, None))
+        # Sharded: row-shard over the batch axes (intra-rack at 1 rack) so a large vocab fits. Replicated:
+        # keep the (small) table on every device and reuse the wedge-safe _embedding_gather.
+        table_spec = P(None, _BATCH_AXES, None) if cfg.over_encoding_sharded else P(None, None, None)
+        tables = reshard(table_values, table_spec)
         projection_std = 1.0 / (slice_dim**0.5)
         projections = tuple(
             reshard(
@@ -927,6 +1005,7 @@ class OverEncoding(eqx.Module):
             splits=cfg.over_encoding_splits,
             num_grams=cfg.over_encoding_num_grams,
             base_vocab_size=cfg.vocab_size,
+            sharded=cfg.over_encoding_sharded,
         )
 
     @named_call
@@ -942,8 +1021,10 @@ class OverEncoding(eqx.Module):
                     base_vocab_size=self.base_vocab_size,
                     segment_ids=segment_ids,
                 )
-                # Replicated per-table gather (wedge-safe), then project the slice up to full hidden.
-                embedding_slice = _embedding_gather(self.tables[table_index], ids)
+                # Row-sharded (intra-rack all-to-all) or replicated (wedge-safe gather) per-table
+                # lookup, then project the slice up to full hidden.
+                table = self.tables[table_index]
+                embedding_slice = _oe_rowwise_lookup(table, ids) if self.sharded else _embedding_gather(table, ids)
                 projected = jnp.einsum(
                     "bsd,dh->bsh", embedding_slice, self.projections[table_index], out_sharding=_batch_spec()
                 )

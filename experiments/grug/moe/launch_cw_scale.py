@@ -166,6 +166,7 @@ def build_scale_model() -> GrugModelConfig:
         over_encoding_vocab_size=env_int("SCALE_OE_VOCAB", 0),
         over_encoding_splits=env_int("SCALE_OE_SPLITS", 4),
         over_encoding_num_grams=env_int("SCALE_OE_GRAMS", 3),
+        over_encoding_sharded=os.environ.get("SCALE_OE_SHARD") == "1",
         mtp_head_only=os.environ.get("SCALE_MTP_HEAD_ONLY") == "1",
         mtp_head_global=os.environ.get("SCALE_MTP_LOCAL") != "1",
         mtp_dense=os.environ.get("SCALE_MTP_DENSE") == "1",
