@@ -343,9 +343,121 @@ def test_data_local_expert_gradients_sync_only_at_step_boundary():
             out_shardings=(w13_gradient_sharding, w2_gradient_sharding),
         )(w13, w2)
 
+        def fused_input_loss(x, combine_weights):
+            output, _, token = moe_mlp_accumulating_weight_gradient(
+                x,
+                selected_experts,
+                combine_weights,
+                w13,
+                w2,
+                zero_w13,
+                zero_w2,
+                implementation="ring",
+                mesh=mesh,
+                capacity_factor=1.0,
+            )
+            return jnp.sum(output.astype(jnp.float32) * output_cotangent) + token
+
+        def ordinary_input_loss(x, combine_weights):
+            output = moe_mlp(
+                x,
+                selected_experts,
+                combine_weights,
+                w13,
+                w2,
+                implementation="ring",
+                mesh=mesh,
+                capacity_factor=1.0,
+            )
+            return jnp.sum(output.astype(jnp.float32) * output_cotangent)
+
+        fused_x, fused_combine_weights = jax.jit(
+            jax.grad(fused_input_loss, argnums=(0, 1)),
+            out_shardings=(batch_sharding, batch_sharding),
+        )(x, combine_weights)
+        ordinary_x, ordinary_combine_weights = jax.jit(
+            jax.grad(ordinary_input_loss, argnums=(0, 1)),
+            out_shardings=(batch_sharding, batch_sharding),
+        )(x, combine_weights)
+
         for actual, expected in (
+            (fused_x, ordinary_x),
+            (fused_combine_weights, ordinary_combine_weights),
             (synced.w13[0], ordinary_w13),
             (synced.w2[0], ordinary_w2),
+        ):
+            actual = np.asarray(actual)
+            expected = np.asarray(expected, dtype=np.float32)
+            relative_l2 = np.linalg.norm(actual - expected) / np.linalg.norm(expected)
+            assert relative_l2 <= 0.002
+
+        def two_block_fused_loss(first_w13, first_w2, second_w13, second_w2):
+            hidden, _, first_token = moe_mlp_accumulating_weight_gradient(
+                x,
+                selected_experts,
+                combine_weights,
+                first_w13,
+                first_w2,
+                zero_w13,
+                zero_w2,
+                implementation="ring",
+                mesh=mesh,
+                capacity_factor=1.0,
+            )
+            output, _, second_token = moe_mlp_accumulating_weight_gradient(
+                hidden,
+                selected_experts,
+                combine_weights,
+                second_w13,
+                second_w2,
+                zero_w13,
+                zero_w2,
+                implementation="ring",
+                mesh=mesh,
+                capacity_factor=1.0,
+            )
+            return jnp.sum(output.astype(jnp.float32) * output_cotangent) + first_token + second_token
+
+        two_block_local_backward = jax.jit(
+            jax.grad(two_block_fused_loss, argnums=(0, 1, 2, 3)),
+            out_shardings=(expert_sharding,) * 4,
+        ).lower(w13, w2, w13, w2).compile()
+        two_block_local_gradients = two_block_local_backward(w13, w2, w13, w2)
+        first_two_block_synced = sync_compiled(*two_block_local_gradients[:2])
+        second_two_block_synced = sync_compiled(*two_block_local_gradients[2:])
+
+        def two_block_ordinary_loss(first_w13, first_w2, second_w13, second_w2):
+            hidden = moe_mlp(
+                x,
+                selected_experts,
+                combine_weights,
+                first_w13,
+                first_w2,
+                implementation="ring",
+                mesh=mesh,
+                capacity_factor=1.0,
+            )
+            output = moe_mlp(
+                hidden,
+                selected_experts,
+                combine_weights,
+                second_w13,
+                second_w2,
+                implementation="ring",
+                mesh=mesh,
+                capacity_factor=1.0,
+            )
+            return jnp.sum(output.astype(jnp.float32) * output_cotangent)
+
+        two_block_ordinary_gradients = jax.jit(
+            jax.grad(two_block_ordinary_loss, argnums=(0, 1, 2, 3)),
+            out_shardings=(w13_gradient_sharding, w2_gradient_sharding) * 2,
+        )(w13, w2, w13, w2)
+        for actual, expected in (
+            (first_two_block_synced.w13[0], two_block_ordinary_gradients[0]),
+            (first_two_block_synced.w2[0], two_block_ordinary_gradients[1]),
+            (second_two_block_synced.w13[0], two_block_ordinary_gradients[2]),
+            (second_two_block_synced.w2[0], two_block_ordinary_gradients[3]),
         ):
             actual = np.asarray(actual)
             expected = np.asarray(expected, dtype=np.float32)

@@ -647,4 +647,54 @@ def ragged_dot_accumulating_weight_gradient(
     return out, token
 
 
-__all__ = ["Implementation", "ragged_dot", "ragged_dot_accumulating_weight_gradient"]
+def ragged_dot_accumulating_weight_gradient_backward(
+    lhs: jax.Array,
+    rhs: jax.Array,
+    group_sizes: jax.Array,
+    accumulator: jax.Array,
+    output_cotangent: jax.Array,
+    accumulation_scale: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    """Apply the explicit pullback for an accumulating Triton ragged dot.
+
+    This is the same first-order rule used by
+    :func:`ragged_dot_accumulating_weight_gradient`, exposed for callers that
+    provide a larger custom VJP and cannot differentiate through the enclosing
+    operation without introducing unwanted collective reductions.
+    """
+    if not _has_pallas_triton:
+        raise NotImplementedError("Pallas Triton backend is not available")
+    if output_cotangent.shape[0] != lhs.shape[0]:
+        raise ValueError(
+            f"output cotangent rows must match lhs rows; got {output_cotangent.shape[0]} and {lhs.shape[0]}"
+        )
+
+    original_rows = lhs.shape[0]
+    if original_rows % 512:
+        pad_length = 512 - original_rows % 512
+        lhs = jax.lax.pad(lhs, jnp.zeros((), dtype=lhs.dtype), [(0, pad_length, 0), (0, 0, 0)])
+        output_cotangent = jax.lax.pad(
+            output_cotangent,
+            jnp.zeros((), dtype=output_cotangent.dtype),
+            [(0, pad_length, 0), (0, 0, 0)],
+        )
+
+    lhs_cotangent = _triton_pallas_call(output_cotangent, rhs, group_sizes, _DLHS_DIM_NUMS)
+    rhs_cotangent = _triton_ragged_contracting_dim_accumulating_pallas_call(
+        lhs,
+        output_cotangent,
+        group_sizes,
+        accumulator,
+        accumulation_scale,
+    )
+    if original_rows % 512:
+        lhs_cotangent = lhs_cotangent[:original_rows]
+    return lhs_cotangent, rhs_cotangent
+
+
+__all__ = [
+    "Implementation",
+    "ragged_dot",
+    "ragged_dot_accumulating_weight_gradient",
+    "ragged_dot_accumulating_weight_gradient_backward",
+]

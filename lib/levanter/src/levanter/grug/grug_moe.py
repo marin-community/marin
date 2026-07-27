@@ -55,6 +55,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import (
     _moe_mlp_ep_ring_local,
     _moe_mlp_ep_ring_local_accumulating_weight_gradient,
+    _moe_mlp_ep_ring_local_accumulating_weight_gradient_backward,
     _moe_mlp_ep_ring_quack_local,
 )
 from levanter.grug._moe.ep_ring_fused import _moe_mlp_ep_ring_fused_local
@@ -555,35 +556,20 @@ def moe_mlp_accumulating_weight_gradient(
             output_cotangent_local,
             token_cotangent_local,
         ):
-            def differentiable_local_fn(
+            return _moe_mlp_ep_ring_local_accumulating_weight_gradient_backward(
                 x_local,
+                selected_experts_local,
                 combine_weights_local,
                 w_up_gate_local,
                 w_down_local,
                 w13_accumulator_local,
                 w2_accumulator_local,
-            ):
-                out, _, token = local_fn(
-                    x_local,
-                    selected_experts_local,
-                    combine_weights_local,
-                    w_up_gate_local,
-                    w_down_local,
-                    w13_accumulator_local,
-                    w2_accumulator_local,
-                )
-                return out, token
-
-            _, pullback = jax.vjp(
-                differentiable_local_fn,
-                x_local,
-                combine_weights_local,
-                w_up_gate_local,
-                w_down_local,
-                w13_accumulator_local,
-                w2_accumulator_local,
+                output_cotangent_local,
+                token_cotangent_local,
+                activation_fn=activation_fn,
+                num_experts=num_experts,
+                capacity_factor=capacity_factor,
             )
-            return pullback((output_cotangent_local, token_cotangent_local))
 
         local_gradients = shard_map(
             local_bwd,
@@ -604,8 +590,6 @@ def moe_mlp_accumulating_weight_gradient(
                 batch_spec,
                 weight_spec,
                 weight_spec,
-                weight_spec,
-                weight_spec,
             ),
             check_vma=False,
         )(
@@ -624,8 +608,6 @@ def moe_mlp_accumulating_weight_gradient(
             combine_weights_gradient,
             w_up_gate_gradient,
             w_down_gradient,
-            w13_accumulator_gradient,
-            w2_accumulator_gradient,
         ) = local_gradients
         return (
             x_gradient,
@@ -633,8 +615,8 @@ def moe_mlp_accumulating_weight_gradient(
             combine_weights_gradient,
             w_up_gate_gradient,
             w_down_gradient,
-            w13_accumulator_gradient,
-            w2_accumulator_gradient,
+            None,
+            None,
         )
 
     mapped_fn.defvjp(mapped_fwd, mapped_bwd)

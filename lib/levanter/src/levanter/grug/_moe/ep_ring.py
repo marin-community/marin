@@ -12,7 +12,11 @@ import jax.numpy as jnp
 from haliax.jax_utils import tree_checkpoint_name
 from jaxtyping import Array, Bool, Float, Int
 
-from haliax.nn.ragged_dot import ragged_dot, ragged_dot_accumulating_weight_gradient
+from haliax.nn.ragged_dot import (
+    ragged_dot,
+    ragged_dot_accumulating_weight_gradient,
+    ragged_dot_accumulating_weight_gradient_backward,
+)
 from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_DISPATCH_OUTPUT,
@@ -460,6 +464,101 @@ def _bulk_ring_from_routing_accumulating_weight_gradient(
     return output, accumulation_token
 
 
+def _bulk_ring_from_routing_accumulating_weight_gradient_backward(
+    x_local: Float[Array, "Tlocal H"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    w13_accumulator_local: Float[Array, "Elocal H I2"],
+    w2_accumulator_local: Float[Array, "Elocal I H"],
+    routing: _RingRouting,
+    output_cotangent_local: Float[Array, "Tlocal H"],
+    accumulation_scale: Float[Array, ""],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+) -> tuple[
+    Float[Array, "Tlocal H"],
+    Float[Array, "Tlocal K"],
+    Float[Array, "Elocal H I2"],
+    Float[Array, "Elocal I H"],
+]:
+    """Apply the explicit local pullback for accumulating bulk Ring."""
+    dispatch = _bulk_ring_dispatch_from_routing(
+        x_local,
+        combine_weights_local,
+        routing,
+    )
+
+    w13_out, _ = ragged_dot_accumulating_weight_gradient(
+        dispatch.x_dispatch,
+        moe_w13_local,
+        dispatch.group_sizes,
+        w13_accumulator_local,
+    )
+    moe_dim = moe_w2_local.shape[1]
+    gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+    activated_gate, activation_pullback = jax.vjp(activation_fn, gate)
+    expert_hidden = activated_gate * up
+    out_dispatch, _ = ragged_dot_accumulating_weight_gradient(
+        expert_hidden,
+        moe_w2_local,
+        dispatch.group_sizes,
+        w2_accumulator_local,
+    )
+
+    output_cotangent_global = jax.lax.all_gather(output_cotangent_local, "expert", tiled=True)
+    weighted_output_cotangent = jnp.take(output_cotangent_global, dispatch.token_global, axis=0)
+    out_dispatch_cotangent = weighted_output_cotangent * dispatch.weight_dispatch[:, None]
+    weight_dispatch_cotangent = jnp.sum(weighted_output_cotangent * out_dispatch, axis=-1)
+
+    expert_hidden_cotangent, w2_cotangent = ragged_dot_accumulating_weight_gradient_backward(
+        expert_hidden,
+        moe_w2_local,
+        dispatch.group_sizes,
+        w2_accumulator_local,
+        out_dispatch_cotangent,
+        accumulation_scale,
+    )
+    gate_cotangent = activation_pullback(expert_hidden_cotangent * up)[0]
+    up_cotangent = expert_hidden_cotangent * activated_gate
+    w13_out_cotangent = jnp.concatenate((gate_cotangent, up_cotangent), axis=-1)
+    x_dispatch_cotangent, w13_cotangent = ragged_dot_accumulating_weight_gradient_backward(
+        dispatch.x_dispatch,
+        moe_w13_local,
+        dispatch.group_sizes,
+        w13_accumulator_local,
+        w13_out_cotangent,
+        accumulation_scale,
+    )
+
+    valid = routing.valid
+    x_take_cotangent = jnp.where(valid[:, None], x_dispatch_cotangent, jnp.zeros_like(x_dispatch_cotangent))
+    x_global_shape = (routing.tokens_per_shard * routing.expert_axis_size, x_local.shape[1])
+    x_global_cotangent = (
+        jnp.zeros(x_global_shape, dtype=x_local.dtype).at[dispatch.token_global].add(x_take_cotangent, mode="drop")
+    )
+    x_cotangent = jax.lax.psum_scatter(x_global_cotangent, "expert", scatter_dimension=0, tiled=True)
+
+    weight_cotangent = jnp.where(valid, weight_dispatch_cotangent, jnp.zeros_like(weight_dispatch_cotangent))
+    combine_weights_global_shape = (
+        routing.tokens_per_shard * routing.expert_axis_size,
+        routing.topk,
+    )
+    combine_weights_global_cotangent = (
+        jnp.zeros(math.prod(combine_weights_global_shape), dtype=combine_weights_local.dtype)
+        .at[routing.assignment_indices]
+        .add(weight_cotangent.astype(combine_weights_local.dtype), mode="drop")
+        .reshape(combine_weights_global_shape)
+    )
+    combine_weights_cotangent = jax.lax.psum_scatter(
+        combine_weights_global_cotangent,
+        "expert",
+        scatter_dimension=0,
+        tiled=True,
+    )
+    return x_cotangent, combine_weights_cotangent, w13_cotangent, w2_cotangent
+
+
 def _bulk_ring_fp8_wire_from_routing(
     x_local: Float[Array, "Tlocal H"],
     combine_weights_local: Float[Array, "Tlocal K"],
@@ -823,6 +922,47 @@ def _moe_mlp_ep_ring_local_accumulating_weight_gradient(
     )
     dropped_total = jax.lax.psum(routing.dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
     return out_local, dropped_total, accumulation_token
+
+
+def _moe_mlp_ep_ring_local_accumulating_weight_gradient_backward(
+    x_local: Float[Array, "Tlocal H"],
+    selected_experts_local: Int[Array, "Tlocal K"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    w13_accumulator_local: Float[Array, "Elocal H I2"],
+    w2_accumulator_local: Float[Array, "Elocal I H"],
+    output_cotangent_local: Float[Array, "Tlocal H"],
+    accumulation_scale: Float[Array, ""],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[
+    Float[Array, "Tlocal H"],
+    Float[Array, "Tlocal K"],
+    Float[Array, "Elocal H I2"],
+    Float[Array, "Elocal I H"],
+]:
+    """Apply accumulating Ring's explicit local pullback."""
+    routing = _ring_routing_prepass(
+        selected_experts_local,
+        local_experts=moe_w13_local.shape[0],
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+    )
+    return _bulk_ring_from_routing_accumulating_weight_gradient_backward(
+        x_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        w13_accumulator_local,
+        w2_accumulator_local,
+        routing,
+        output_cotangent_local,
+        accumulation_scale,
+        activation_fn=activation_fn,
+    )
 
 
 def _moe_mlp_ep_ring_fp8_wire_approx_local(

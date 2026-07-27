@@ -1078,3 +1078,30 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
 - Gate:
   - Compare non-profiled steps, preferably steps 2-7 and 11-19, against old L8 fused mean `16.1404` MFU.
   - Verify from the trace that the twelve per-stage FP32 all-reduces observed in each old six-layer `backward_accumulating` are removed or materially reduced. Record communication share, all-reduce, SendRecv, and all-gather counts before deciding whether to launch exact L24.
+
+### 2026-07-27 05:35 PDT - L8 manual-VJP r1 hits a two-layer compiler cliff
+- Result:
+  - Parent `/dlwh/iris-run-job-20260727-120800` reached distributed setup, lowering, DIME initialization, and local task compilation on all four ranks, but completed no training step and never entered the profiler window.
+  - Rank 3 began compiling `grug_1f1b_mb0_stage3_loss_backward_accumulating` at `12:10:46Z`. Two thread dumps about three minutes apart remained in `backend_compile_and_load -> compile_or_get_cached -> pxla -> apply_task -> eval_local`.
+  - Rank 3's eight GPUs remained at 100% utilization with about `61.4 GiB` allocated each. After more than 23 minutes without a phase change, the parent was stopped. Parent and child are terminal `killed`; all four child tasks exited `0`; no failed or live resource remains.
+- Interpretation:
+  - The one-layer L4 task compiles and executes, while the two-layer final-stage loss/backward does not finish compilation. This localizes the cliff to graph growth from the manual custom VJP's nested `jax.vjp` over the complete Ring forward in each block, not to a runtime collective or memory-capacity failure.
+  - The run used pre-merge snapshot `674ed8af27` and JAX `0.10.1`; the branch now includes stable JAX `0.11.0`, but stable XLA still predates the July 24 device-initiated ragged-all-to-all kernel.
+- External audit:
+  - OpenXLA commit [`acb5aaffe4c0`](https://github.com/openxla/xla/commit/acb5aaffe4c0d844bacb57ad85234422f0ceaae0) adds opt-in device-initiated ragged all-to-all behind `--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true`.
+  - Stable JAX `0.11.0` does not contain that commit. The July 25 nightly does, but the authoritative JaxPP production graph was already tested with NCCL `2.30.7`: direct controls pass while the pipeline path deadlocks or produces catastrophic stage-0 gradients. There is no released runtime change that justifies another target sweep, so Ring remains the transport baseline.
+- Next action:
+  - Replace the nested whole-Ring VJP with an explicit local Ring pullback, then repeat the same L8 gate from the merged JAX `0.11.0` stack.
+
+### 2026-07-27 05:46 PDT - Replace nested Ring AD with an explicit pullback
+- Implementation:
+  - Added an explicit accumulating ragged-dot backward entry point that reuses the existing Triton `dlhs` and FP32 accumulating `drhs` kernels.
+  - The Ring custom VJP now recomputes routing, dispatch, expert activations, and combine state, then explicitly transposes the expert-axis gather/scatter path. It no longer calls `jax.vjp` over the complete local Ring graph inside `shard_map`.
+  - Accumulator inputs are explicitly nondifferentiable. W13/W2 cotangents remain data-local under `check_vma=False` and still synchronize only at the optimizer boundary.
+- Validation:
+  - The four-device CPU regression still finds zero all-reduces and zero reduce-scatters in the one-block weight-only local backward, and exactly two reduce-scatters in the step-boundary synchronization.
+  - Activation, router-combine, W13, and W2 cotangents all pass the accepted relative-L2 ceiling `<=0.002`; output values and dropped-route counts remain exact.
+  - A two-distinct-block regression lowers, compiles, executes, and passes the same per-leaf numerical policy in `33.88s` test time. This exercises the graph shape that failed in the L8 task without incorrectly reusing one expert tensor across layers.
+  - `uv run pytest -q tests/test_grug_moe_accumulating_api.py` reports `2 passed`; the combined accumulating API/config selection reports `9 passed`. Changed-file pre-commit, including Pyrefly, passes.
+- Next action:
+  - Snapshot this implementation and rerun the unchanged L8 EP2/data4 profile gate. Require compile completion, finite steps, and trace evidence before an exact L24 launch.
