@@ -16,6 +16,66 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T00:30:00Z — 199,532 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0025-v748` independently
+  revalidated five baseline checkpoints: p0 decision-file 8 offsets 1,152,
+  1,280, and 1,408, and p2 decision-file 72 offsets 3,072 and 3,200. Their
+  640 pairs contain 448 model false positives, 191 model true duplicates, and
+  one unresolved outcome. Two pairs were chunked and 638 were direct. All
+  1,442 judgments and request attempts were valid on their first attempt. The
+  outcome Parquet SHA-256 values are:
+
+  - p0:
+    `984f09add835fab2e9d126793b359b0dd1f6f352195735e86d1a3a652f2fbc4a`,
+    `9cc8ec2229f3478a849ab1c7e42f11cb2730fb3d7b78b146575db523d2b802ea`,
+    and
+    `144a0b095d773832c62b44ba5de438f99167f14afc51a75e64a5cf1410297522`;
+  - p2:
+    `5a75ba5f4ed4b32c9b82fa6e0c87034354b465dd5de48070d1a8e2f66ceedd95`
+    and
+    `4ed5b568e28279cc0e7ec29be3107cbe942b6b82e9400bd5e3ad336cdfea5a17`.
+
+- Complete-text inspection resolves baseline
+  `part-00072-of-00128.parquet:5232` as a true duplicate. The 174-line member
+  and 169-line canonical are corrupted paraphrases of the same Papaya Global
+  payroll and Deel-comparison SEO article. Both follow the same progression
+  through cross-border payments, relocation policy, workforce payments,
+  EOR/PEO options, product pricing, and the final Deel/Papaya comparison.
+  The member-specific `Llc 750 Estate Drive` phrase is a repeated keyword
+  injection; the remaining differences are broken, truncated, or reordered
+  copies rather than a distinct factual payload. Character, line, and
+  word-sequence similarities are 0.667009, 0.413994, and 0.598593. The
+  22,876/21,933-character member and canonical SHA-256 values are
+  `70bd6a1e74b2c011400d59977452df03cd2f068f1e787be74d047952d747c7e6`
+  and
+  `290c90b5384dda0528093e6dbe8f5560e883cb5d22c4bc6e4496880e65a35681`.
+
+- `/rav/datakit-6854-inspect-row5232-0026-v749` persisted the complete pair and
+  276-line diff with inspection SHA-256
+  `80682fabef763e1ba649dcce2c4bbda20fe985ac859291e74bacf3c4fa983ca2`.
+  `/rav/datakit-6854-publish-row5232-0029-v750` wrote the immutable
+  true-duplicate record, and `/rav/datakit-6854-verify-row5232-0030-v751`
+  independently reread the source pair, semantic checkpoint, inspection,
+  deterministic Parquet bytes, and completion marker. The semantic-evidence,
+  manual-Parquet, and marker SHA-256 values are
+  `b04e506d840af63b0bdf0b41811b3525c341163e4ca181cd68c9fbc51e13570a`,
+  `ee6e92637f9560fd362ac636df700cd25217cab8bc71299c8d636d567a2fd45a`,
+  and `813d144291a4110d47b74db30fdeb032ce148e049fa45e92a0b60de33fee0b34`.
+
+- Across the stable 1,571-checkpoint snapshot, all 232 unresolved model
+  outcomes are covered by 180 true-duplicate and 52 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 160,283 pairs, 101,906 false positives, 58,377 true duplicates;
+  - treatment: 39,249 pairs, 20,316 false positives, 18,933 true duplicates;
+  - combined: 199,532 pairs, 122,222 false positives, 77,310 true duplicates.
+
+- The next audit frontiers are p0 `(8, 1,536)`, p1 `(40, 128)`, p2
+  `(72, 3,328)`, and p3 `(105, 0)`. P0 and p2 each have another pending
+  128-pair checkpoint. P1 and p3 continue processing unusually large code
+  documents. All four batch-priority 2-H100 workers remain active.
+
 ### 2026-07-27T00:23:00Z — 198,892 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0021-v747` independently
