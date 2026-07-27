@@ -157,6 +157,10 @@ class GrugModelConfig:
     # Expert count for the MTP block; 0 (default) = same as the trunk. Fewer experts shrinks the MTP
     # block's params + expert-gather transient, which otherwise OOMs the HBM-bound trunk.
     mtp_num_experts: int = 0
+    # MLP intermediate width for the MTP block; 0 (default) = same as the trunk's intermediate_dim
+    # (one routed-expert width, 0.5x hidden). A trunk layer applies ~3x hidden of *active* MLP
+    # (shared + top-k routed), so widen this to give the dense MTP head trunk-comparable capacity.
+    mtp_intermediate_dim: int = 0
     # Use a dense-MLP MTP block instead of a MoE one (bypasses the standalone QuACK grouped GEMM).
     mtp_dense: bool = False
     # Baseline MTP: projection -> shared head only, no attention/MLP block at all (isolates block cost).
@@ -402,8 +406,12 @@ class CausalSelfAttention(eqx.Module):
         v = rearrange(v_flat, "... (m d) -> ... m d", d=head_dim)
 
         # Heterogeneous GQA: on the global layers use fewer distinct KV heads. Slice K/V to the logical
-        # head count and repeat each head back to the stored width (so FA4 sees one static shape), then
-        # select per layer. The stored-width (usually local) side is a no-op.
+        # head count and repeat each head back to the stored width (so FA4 sees one static shape). Branch
+        # on the per-layer scalar ``is_global`` with lax.cond so each layer runs only its own path. A
+        # jnp.where would evaluate *both* branches every layer -- materialising the repeat + select on the
+        # (majority) local layers that discard it -- which measured ~2pt slower AND OOM'd at b1024 with a
+        # 1x MTP MLP, where the cond form fits and runs near the uniform baseline. The stored-width side is
+        # a no-op passthrough. (cond compiles cleanly under the FSDP/model SPMD partitioner here.)
         if self.cfg.local_kv_heads is not None and self.cfg.global_kv_heads is not None and is_global is not None:
             stored = self.cfg.stored_kv_heads
 
@@ -412,10 +420,12 @@ class CausalSelfAttention(eqx.Module):
                     return proj
                 return align_kv_heads(proj[:, :, :num_kv, :], num_q_heads=stored)
 
-            local_k, local_v = _logical_kv(k, self.cfg.local_kv_heads), _logical_kv(v, self.cfg.local_kv_heads)
-            global_k, global_v = _logical_kv(k, self.cfg.global_kv_heads), _logical_kv(v, self.cfg.global_kv_heads)
-            k = jnp.where(is_global, global_k, local_k)
-            v = jnp.where(is_global, global_v, local_v)
+            k, v = jax.lax.cond(
+                is_global,
+                lambda kv: (_logical_kv(kv[0], self.cfg.global_kv_heads), _logical_kv(kv[1], self.cfg.global_kv_heads)),
+                lambda kv: (_logical_kv(kv[0], self.cfg.local_kv_heads), _logical_kv(kv[1], self.cfg.local_kv_heads)),
+                (k, v),
+            )
 
         disable_rope = is_global if (is_global is not None and self.cfg.disable_long_rope) else None
         q = rms_norm(q)
@@ -867,16 +877,23 @@ class Transformer(eqx.Module):
                 raise ValueError(f"only mtp_depth=1 is supported, got {cfg.mtp_depth}")
             # Derive MTP keys off the base key so the trunk block RNG is unchanged when MTP is off.
             mtp_block_key, mtp_proj_key = random.split(random.fold_in(key, 0x4D5450), 2)
-            # A plain MoE block: no QB (avoids threading its load-balance stat back), no global/hetero
-            # interleave (single block, called with is_global=None), optionally fewer experts to fit
-            # HBM. Other features follow cfg.
+            # A plain MoE block: no QB (avoids threading its load-balance stat back), no per-layer
+            # global/hetero interleave (single block), optionally fewer experts to fit HBM. Other
+            # features follow cfg. When hetero-KV is on, the head runs a uniform KV width matching its
+            # span -- global_kv for the full-document head (mtp_head_global), local_kv for the local head
+            # -- since one block has no per-layer is_global switch to slice on.
             mtp_experts = cfg.mtp_num_experts or cfg.num_experts
+            mtp_kv_heads = cfg.num_kv_heads
+            if cfg.local_kv_heads is not None and cfg.global_kv_heads is not None:
+                mtp_kv_heads = cfg.global_kv_heads if cfg.mtp_head_global else cfg.local_kv_heads
             mtp_cfg = dataclasses.replace(
                 cfg,
                 qb_routing=False,
                 global_every=0,
                 local_kv_heads=None,
                 global_kv_heads=None,
+                num_kv_heads=mtp_kv_heads,
+                intermediate_dim=cfg.mtp_intermediate_dim or cfg.intermediate_dim,
                 mtp_depth=0,
                 num_experts=mtp_experts,
                 num_experts_per_token=min(cfg.num_experts_per_token, mtp_experts),

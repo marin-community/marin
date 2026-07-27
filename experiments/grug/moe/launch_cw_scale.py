@@ -141,6 +141,10 @@ def build_scale_model() -> GrugModelConfig:
         base,
         vocab_size=VOCAB_SIZE,
         head_dim=HEAD_DIM,
+        # num_heads/num_kv_heads default to the heuristic's hidden/128 sizing; override to run wider
+        # (or narrower) attention than the hidden width implies, e.g. 48 q-heads at hidden 5120.
+        num_heads=env_int("SCALE_NUM_HEADS", base.num_heads),
+        num_kv_heads=env_int("SCALE_NUM_KV_HEADS", base.num_kv_heads),
         num_layers=env_int("SCALE_NUM_LAYERS", 48),
         num_experts=env_int("SCALE_NUM_EXPERTS", 64),
         num_experts_per_token=env_int("SCALE_TOP_K", 4),
@@ -158,6 +162,7 @@ def build_scale_model() -> GrugModelConfig:
         mtp_depth=env_int("SCALE_MTP_DEPTH", 0),
         mtp_loss_weight=env_float("SCALE_MTP_WEIGHT", 0.3),
         mtp_num_experts=env_int("SCALE_MTP_NUM_EXPERTS", 0),
+        mtp_intermediate_dim=env_int("SCALE_MTP_INTERMEDIATE", 0),
         mtp_head_only=os.environ.get("SCALE_MTP_HEAD_ONLY") == "1",
         mtp_head_global=os.environ.get("SCALE_MTP_LOCAL") != "1",
         mtp_dense=os.environ.get("SCALE_MTP_DENSE") == "1",
