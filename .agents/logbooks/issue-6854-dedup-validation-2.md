@@ -16,6 +16,89 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T02:59:00Z — 216,959 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0193-v858` independently
+  revalidated four p3 decision-file 105 checkpoints containing 512 baseline
+  pairs. The model labeled 365 false positives and 143 true duplicates and
+  left four outcomes unresolved. All pairs used direct review. The audit
+  reread 1,065 judgments and 1,081 request attempts: 1,059 attempts were
+  valid, 22 were invalid, and ten judgments required retries. The offsets and
+  outcome Parquet SHA-256 values are:
+
+  - offset 4,096:
+    `0b1e8d4094e713a7d72643be5ef448c72384eb6ea3f0b1ca4dd8598c21271f7d`;
+  - offset 4,224:
+    `b9dcd234f707dea35514a1f5eb0061020d7610a6de2788a96ba5f48f3fbb054d`;
+  - offset 4,352:
+    `d9539a26e09c939faa142835cef1db7be7af924108f7846e1a3c8defaebcbbd2`;
+  - offset 4,480:
+    `4d41b64cdf8c0ac47d5c07ce14c718e85a2102c7bd347ae93ac955cef9f5d1bc`.
+
+- Complete-text inspection resolves all four ambiguous SFT pairs as true
+  duplicates. Each pair has identical questions, choices, reasoning,
+  explanations, and answers; the sole changed line wraps the final answer
+  letter in `\text{}` inside `\boxed{}`. The cases are:
+
+  - row 7,619, CABG answer B: 6,896/6,889 characters and 99/99 lines, with
+    character, line, and word-sequence similarities of 0.999492, 0.989899,
+    and 0.999539. `/rav/datakit-6854-inspect-row7619-0194-v859`,
+    `/rav/datakit-6854-publish-row7619-0198-v863`, and
+    `/rav/datakit-6854-verify-row7619-0205-v870` persisted and verified the
+    decision. The inspection, semantic-judgment, manual-Parquet, and marker
+    SHA-256 values are
+    `aa8bd6864d8853e91cf3decd95475de8e09086c15875bc9012408559644b2d84`,
+    `062bf592e0e9a2434e2a250c6b092d6fd0a79397a54e2271780ccba148c43f22`,
+    `8e6049fc60b18ebdd7753b4216523ddb8abc0391c8ea5f240982ce0c34d15ef2`,
+    and
+    `c61d412ae57fb5a870974080ba5bad1844e43e6645ff057c2aed654de470b7d3`;
+  - row 7,622, network-topology answer D: 11,983/11,976 characters and
+    166/166 lines, with similarities of 0.999708, 0.993976, and 0.999742.
+    `/rav/datakit-6854-inspect-row7622-0195-v860`,
+    `/rav/datakit-6854-publish-row7622-0199-v864`, and
+    `/rav/datakit-6854-verify-row7622-0204-v869` persisted and verified the
+    decision. The corresponding hashes are
+    `e9d9669ca440bbe33b71f7a7c0739c3b38e51b54562657d3dedd43f6d0287abd`,
+    `8e2d0f487b7afe8c01e800207672b2d84b4d96dd431a2780bc681c3f69eda2cb`,
+    `f2c61fe63d5460d08aeaba2483a6d540aba99ea06d556114265f85c10d67e869`,
+    and
+    `06ec24c29b631d48fd5b18f731d423e40db28802ce74bee6764dc0a87edc8979`;
+  - row 7,627, environmental-engineering answer B: 13,078/13,071 characters
+    and 370/370 lines, with similarities of 0.999732, 0.997297, and 0.999754.
+    `/rav/datakit-6854-inspect-row7627-0196-v861`,
+    `/rav/datakit-6854-publish-row7627-0200-v865`, and
+    `/rav/datakit-6854-verify-row7627-0203-v868` persisted and verified the
+    decision. The corresponding hashes are
+    `575b64fc96347020833c430a77539a7e8b6693d1668733280f1b0623a0bed8e8`,
+    `39d9508b9c0f6b115f51af5388b6278f448b7e039149d742f0934088ed729ffe`,
+    `bd459d56abfefa91699e6e84f77c6ef98dd2983bff45fab3fc5d7109cf2daaf4`,
+    and
+    `7637b1efee7d76aac531e2fbd63bdbd0b07c0fdc029f3d0b0eaa96179f99fcd3`;
+  - row 7,634, environmental-justice answer C: 7,457/7,450 characters and
+    93/93 lines, with similarities of 0.999530, 0.989247, and 0.999534.
+    `/rav/datakit-6854-inspect-row7634-0197-v862`,
+    `/rav/datakit-6854-publish-row7634-0201-v866`, and
+    `/rav/datakit-6854-verify-row7634-0202-v867` persisted and verified the
+    decision. The corresponding hashes are
+    `e56619c1c102c9198b37f0a181cf8b71cc7374a45c15576f1b917d4baa0993fb`,
+    `f5dcff3bb055e4be190660b72c6825643764129a67ab5bdac42ef8f0219d80aa`,
+    `b407f206be9cfbd235a6e6b5bc84f6287f267089636bd35dc6a238d70ada4290`,
+    and
+    `b3e337d56ab355db07a57d498c83aa667514b650402dd9ee8f186aa58a293dca`.
+
+- Replacing the four unresolved outcomes with true duplicates gives 365 false
+  positives and 147 true duplicates in the new batch. Across the stable
+  1,708-checkpoint snapshot, all 264 unresolved model outcomes are covered by
+  203 true-duplicate and 61 false-positive manual records. The adjusted totals
+  are:
+
+  - baseline: 174,159 pairs, 110,626 false positives, 63,533 true duplicates;
+  - treatment: 42,800 pairs, 22,152 false positives, 20,648 true duplicates;
+  - combined: 216,959 pairs, 132,778 false positives, 84,181 true duplicates.
+
+- The next audit frontiers are p0 `(9, 0)`, p1 `(41, 0)`, p2 `(73, 128)`, and
+  p3 `(105, 4,608)`. All four batch-priority 2-H100 workers remain active.
+
 ### 2026-07-27T02:50:00Z — 216,447 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0192-v857` independently
