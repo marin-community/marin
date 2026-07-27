@@ -6,7 +6,7 @@
 Each source-shard's scatter output is a set of zstd-compressed Parquet files,
 one combined file per flush (``c{chunk:04d}.parquet``) containing all target
 shards' data sorted by ``(_SHARD_COL, _SORT_KEY_COL)``.  A msgpack sidecar
-(``.scatter_meta``) records ``files -> [{path, bytes}, ...]``, a global
+(``metadata.msgpack``) records ``files -> [path, ...]``, a global
 ``avg_item_bytes`` estimate, and exact per-target-shard payload bytes
 (``shard_bytes``) used by reducers to size the external-sort decision.
 
@@ -18,8 +18,8 @@ The resulting LazyFrames are merged via ``external_sort_merge`` (two-pass
 fan-in merge with ``sink_parquet`` pass-1, fully streaming).
 
 Write-side memory is bounded by cgroup memory usage: when the process exceeds
-``_SCATTER_FLUSH_THRESHOLD`` of the container limit, all buffers are flushed
-together into one combined file and usage drops to ``_SCATTER_FLUSH_TARGET``.
+``_SCATTER_FLUSH_THRESHOLD`` of the task memory limit, all buffers are flushed
+together into one combined file.
 
 Routing columns (``__zephyr_shard__``, ``__zephyr_sort_key__``) are added
 in ``_items_to_dataframe``; ``__zephyr_shard__`` is stripped on read,
@@ -47,7 +47,7 @@ from rigging.filesystem import StoragePath, open_url, url_to_fs
 from rigging.timing import RateLimiter, log_time
 
 from zephyr.external_sort import external_sort_merge
-from zephyr.shard_keys import composite_sort_key, deterministic_hash
+from zephyr.shard_keys import deterministic_hash
 from zephyr.worker_context import _worker_ctx_var
 from zephyr.writers import ensure_parent_dir
 
@@ -103,8 +103,6 @@ _SCATTER_READ_POLARS_ROW_OVERHEAD = 2
 _SCATTER_READ_PYTHON_ROW_OVERHEAD = 2
 
 _PROGRESS_LOG_INTERVAL_SECONDS = 60.0
-# Fraction of local disk space to use for shuffle.
-_LOCAL_DISK_SHUFFLE_UTILIZATION = 0.9
 # Polars streaming chunk size, important to avoid excessive memory usage during merge.
 _POLARS_STREAMING_CHUNK_SIZE = 10000
 
@@ -122,13 +120,11 @@ _SORT_VALUE_TMP_COL = "__zephyr_sort_value_tmp__"
 
 # Python items consumed before creating a DataFrame.
 _DATAFRAME_ROW_COUNT = 1000
-# Number of write() calls between buffer compaction passes.
-_BUFFER_COMPACTION_INTERVAL = 100
 # Number of write() calls between memory checks.
 _MEMORY_CHECK_INTERVAL = 10
-# Flush scatter buffers when cgroup memory exceeds this fraction of the container
-# limit, and keep flushing until usage drops to _SCATTER_FLUSH_TARGET.
+# Flush all scatter buffers when task memory usage exceeds this fraction.
 _SCATTER_FLUSH_THRESHOLD = 0.75
+# Nominal post-flush target fraction; logged for operator visibility.
 _SCATTER_FLUSH_TARGET = 0.60
 # Threshold for triggering a gc.collect() after a flush.
 _GC_FLUSH_SIZE_THRESHOLD_BYTES = 8 * 1024 * 1024
@@ -480,9 +476,9 @@ class ScatterWriter:
     ``[_SHARD_COL, _SORT_KEY_COL]`` with row groups sized so Polars predicate
     pushdown skips non-target row groups on the read side.
 
-    Flushing is cgroup-memory-based: when the container memory usage exceeds
-    ``_SCATTER_FLUSH_THRESHOLD``, all buffers are flushed together into one
-    combined file until usage drops to ``_SCATTER_FLUSH_TARGET``.
+    Flushing is task-memory-based: when task memory usage exceeds
+    ``_SCATTER_FLUSH_THRESHOLD``, all buffered frames are flushed together into
+    one combined file.
     """
 
     def __init__(
@@ -496,16 +492,18 @@ class ScatterWriter:
         self._data_path = data_path if data_path.endswith("/") else f"{data_path}/"
         self._key_fn = key_fn
         self._sort_fn = sort_fn
-        self._sort_key = composite_sort_key(key_fn, sort_fn)
 
         self._source_shard = source_shard
         self._combiner_fn = combiner_fn
-        self._memory_available_bytes = TaskResources.from_environment().memory_bytes
+        ctx = _worker_ctx_var.get()
+        if ctx is not None and ctx.task_memory_bytes > 0:
+            self._memory_available_bytes = ctx.task_memory_bytes
+        else:
+            self._memory_available_bytes = TaskResources.from_environment().memory_bytes
         if self._memory_available_bytes == 0:
             logger.warning("No memory available for scatter write, defaulting to 1GB. This will likely fail.")
             self._memory_available_bytes = 1024 * 1024 * 1024
         self._flush_threshold_bytes = int(self._memory_available_bytes * _SCATTER_FLUSH_THRESHOLD)
-        self._flush_target_bytes = int(self._memory_available_bytes * _SCATTER_FLUSH_TARGET)
 
         # Buffered DataFrames, combined into one file per flush. Buffering
         # frames (not Python items) keeps the writer format-agnostic: a future
