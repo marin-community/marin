@@ -2221,3 +2221,27 @@ bash experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit \
     `gpu_allocator=cuda_malloc_async` on every worker and no BFC initialization.
   - Only after that gate succeeds, rerun the unchanged exact vector-copy L24 batch8192/m256 configuration.
     The numerical admission policy remains exact routes/counts/drops and relative-L2 `<=0.002`.
+
+### 2026-07-27 16:24 PDT - Async allocator reaches every worker
+- Snapshot:
+  - Parent `/dlwh/iris-run-job-20260727-231017` and child
+    `/dlwh/iris-run-job-20260727-231017/grug-train-jaxpp-rno2a-ubx-asyncpersist-l8-e64k4-b32-s4096-p4m4-r5-20260727`
+    ran clean commit `5bf8770bfe`, including allocator-persistence commit `74284d7c3b`.
+  - The reduced gate was L8/d2560/e64/top-k4/sequence4096, batch32/m4, split `2,2,2,2`, EP8 UB-X,
+    explicit `std_1f1b`, ordinary expert gradients, BF16 wire, CuTe FA4, Triton block-k 32/eight warps,
+    `save_moe`, XLA fraction `0.70`, task-only local precompile, and `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Result:
+  - All four setup scripts persisted `TF_GPU_ALLOCATOR=cuda_malloc_async`, and ranks 0-3 each logged
+    `gpu_allocator=cuda_malloc_async` at UB-X bootstrap.
+  - No `BFCAllocator` or `GPU_*_bfc` line appeared. No explicit CUDA async-pool initialization line was
+    emitted at the available verbosity, so the worker environment plus absence of BFC is the gate evidence.
+  - The ranks precompiled `18/17/17/17` tasks, crossed the barrier, and completed `4/4` steps.
+  - [W&B](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ubx-asyncpersist-l8-e64k4-b32-s4096-p4m4-r5-20260727)
+    finished with final loss `11.70016`, mean/p50 MFU `8.1430/8.1525`, final duration `0.33553s`, and final
+    throughput `390,647 tokens/s`.
+  - Parent and child succeeded with exit `0`, no failure or preemption, and no live resource remains.
+    Coordination-service warnings occurred only during successful distributed teardown after W&B finished.
+- Decision:
+  - The allocator propagation gate passes. Launch the unchanged exact vector-copy run as parent
+    `/dlwh/iris-run-job-20260727-232350`, requiring `10/10` steps and W&B steps 2-9.
+  - Compare its mean MFU with scalar UB-X `19.8996`; only strict mean MFU `>20` completes the performance goal.
