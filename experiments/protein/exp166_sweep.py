@@ -13,27 +13,59 @@ W&B run and suggested Iris job identities so three regional executions can race 
 changing trial identity. ``TPU`` is execution-only and must be a 64-256 chip v5e/v6e slice
 or a v5p slice with at least 32 chips (``v5p-64`` or larger).
 
-The amino-acid augmentation hook is intentionally a fail-closed stub. Preview works, but
-lowering a run raises until the augmentation behavior is designed and implemented.
+At training time, every packed example receives a fresh deterministic re-permutation of
+the two-token ``<pN> <AA>`` sequence statements (and the two terminus statements) in each
+document. Position assignments, contacts, segment boundaries, and validation data are
+unchanged.
 
 Preview one regional execution without lowering or submitting it::
 
     TRIAL=lr3p162e-3-wd0p2-bs64-scratch TPU=v6e-64 REGION=europe-west4 PREVIEW=yes \\
         uv run python -m experiments.protein.exp166_sweep
+
+Launch one run (secrets come from the Iris command, never the config)::
+
+    source ~/marin.env && uv run iris --cluster marin job run \\
+        --user "$USERNAME" --no-wait --region europe-west4 --memory=1GB \\
+        -e WANDB_API_KEY "$WANDB_API_KEY" \\
+        -e HUGGING_FACE_HUB_TOKEN "$HF_TOKEN" \\
+        -e WANDB_ENTITY "$WANDB_ENTITY" -e WANDB_PROJECT "$WANDB_PROJECT" \\
+        -e TRIAL lr3p162e-3-wd0p2-bs64-scratch \\
+        -e TPU v6e-64 -e REGION europe-west4 \\
+        -- python -m experiments.protein.exp166_sweep
+
+Smoke-test the same path under an isolated identity. ``SMOKE_STEPS`` defaults to 2::
+
+    source ~/marin.env && uv run iris --cluster marin job run \\
+        --user "$USERNAME" --no-wait --region europe-west4 --memory=1GB \\
+        -e WANDB_API_KEY "$WANDB_API_KEY" \\
+        -e HUGGING_FACE_HUB_TOKEN "$HF_TOKEN" \\
+        -e WANDB_ENTITY "$WANDB_ENTITY" -e WANDB_PROJECT "$WANDB_PROJECT" \\
+        -e SMOKE yes -e TRIAL lr3p162e-3-wd0p2-bs64-scratch \\
+        -e TPU v6e-4 -e REGION europe-west4 \\
+        -- python -m experiments.protein.exp166_sweep
 """
 
 import logging
 import math
 import os
-from dataclasses import dataclass, replace
+from collections.abc import Sequence
+from dataclasses import dataclass, fields, replace
 from enum import StrEnum
 
+import jax
+import numpy as np
 from fray.cluster import ResourceConfig
 from fray.types import get_tpu_topology, tpu_family
+from haliax import Axis
+from jaxtyping import PRNGKeyArray
+from levanter.data.dataset import AsyncDataset
 from levanter.data.text.datasets import BlockShuffleConfig, LmDataConfig
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
+from levanter.models.lm_model import LmExample
 from levanter.models.qwen import Qwen3Config
 from levanter.optim.config import AdamConfig
+from levanter.schedule import BatchSchedule
 from marin.execution.lazy import ArtifactStep, lower
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import tokenized
@@ -56,6 +88,11 @@ EXP117_VERSION: str = "2026.07.13.02"
 CACHE_VERSION: str = "2026.07.13.1"
 RUN_PREFIX: str = "prot-exp166-cv1-aaaug"
 WANDB_GROUP: str = "exp166-contacts-v1-aa-augmentation"
+SMOKE_RUN_PREFIX: str = "prot-exp166-aaaug-smoke"
+SMOKE_WANDB_GROUP: str = "exp166-aaaug-smoke"
+SMOKE_VERSION: str = "v3"
+SMOKE_STEPS_DEFAULT: int = 2
+SMOKE_MAX_EVAL_BATCHES: int = 1
 
 TOKENIZER: str = "timodonnell/contacts-v1-tokenizer@5d68a24a899f"
 VOCAB_SIZE: int = 2845
@@ -66,6 +103,17 @@ VAL_DOCS: str = f"{_DOCS_BASE}/val/*.parquet"
 COMPONENT_TRAIN: str = "tokenized/contacts-v1"
 COMPONENT_VAL: str = "tokenized/contacts-v1-val"
 TRAIN_TOKENS: int = 4_676_753_425
+
+# Token ids from the pinned contacts-v1 tokenizer. The augmentation validates these
+# at training startup before touching examples.
+CONTACTS_V1_TOKEN_IDS: dict[str, int] = {
+    "<contacts-v1>": 2,
+    "<begin_sequence>": 8,
+    "<begin_statements>": 9,
+}
+AA_AUGMENTATION_SEED: int = 166
+AA_AUGMENTATION_LOG_LIMIT: int = 4
+_augmentation_log_count = 0
 
 
 # --- Fixed recipe ------------------------------------------------------------
@@ -193,7 +241,7 @@ def parse_tpu() -> str:
     tpu = os.environ.get("TPU", "").strip().lower()
     if not tpu:
         raise SystemExit("missing required env var TPU")
-    validate_tpu(tpu)
+    validate_tpu(tpu, allow_smaller=smoke())
     return tpu
 
 
@@ -208,10 +256,24 @@ def preview() -> bool:
     return os.environ.get("PREVIEW", "").strip().lower() in {"yes", "true", "1"}
 
 
-def validate_tpu(tpu: str) -> None:
+def smoke() -> bool:
+    return os.environ.get("SMOKE", "").strip().lower() in {"yes", "true", "1"}
+
+
+def smoke_steps() -> int:
+    raw = os.environ.get("SMOKE_STEPS", str(SMOKE_STEPS_DEFAULT))
+    steps = int(raw)
+    if steps < 1:
+        raise SystemExit(f"SMOKE_STEPS must be >= 1, got {steps}")
+    return steps
+
+
+def validate_tpu(tpu: str, *, allow_smaller: bool = False) -> None:
     """Enforce the large-slice floor while allowing every region."""
     family = tpu_family(tpu)
     chips = get_tpu_topology(tpu).chip_count
+    if allow_smaller and family in CORRECTION_FACTORS:
+        return
     if family in {"v5e", "v6e"} and 64 <= chips <= 256:
         return
     if family == "v5p" and chips >= 32:
@@ -229,6 +291,11 @@ def regional_run_id(trial: Trial, region: str) -> str:
 def regional_job_id(trial: Trial, region: str, tpu: str) -> str:
     """Suggested Iris job identity; attempts may append ``-aN``."""
     return f"{regional_run_id(trial, region)}-{tpu}"
+
+
+def smoke_run_id(trial: Trial, region: str, tpu: str) -> str:
+    """Identity-isolated smoke run for one trial, region, and slice."""
+    return f"{SMOKE_RUN_PREFIX}-{MODEL_SIZE}-{trial.trial_id}-{region}-{tpu}-{SMOKE_VERSION}"
 
 
 # --- Checkpoint initialization ----------------------------------------------
@@ -305,13 +372,160 @@ def _tokenize_cache(name: str, docs: str, *, validation: bool) -> ArtifactStep[T
     )
 
 
-def augment_amino_acids(_data: LmDataConfig) -> LmDataConfig:
-    """Randomize already-randomized amino acids in training examples only.
+@dataclass(frozen=True)
+class AugmentationStats:
+    """Observable effect of re-randomizing sequence statements in one packed example."""
 
-    Deliberate stub: we will design the token-level transformation, randomness, and
-    validation isolation together before enabling experiment launches.
+    documents: int = 0
+    residue_statements: int = 0
+    moved_statements: int = 0
+    changed_token_positions: int = 0
+
+
+def shuffle_amino_acid_statements(
+    token_ids: np.ndarray,
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, AugmentationStats]:
+    """Re-permute each contacts-v1 sequence section without changing its meaning.
+
+    A sequence section consists entirely of two-token statements: one ``<pN> <AA>``
+    statement per residue plus the N/C terminus statements. The source corpus shuffles
+    these statements once during document generation. This augmentation applies a fresh
+    statement-level permutation to every document in a packed training example. Position
+    assignments and the structure section are left byte-for-byte unchanged.
     """
-    raise NotImplementedError("exp166 amino-acid augmentation is not implemented")
+    if token_ids.ndim != 1:
+        raise ValueError(f"expected one token sequence, got shape {token_ids.shape}")
+
+    augmented = token_ids.copy()
+    begin_sequence_id = CONTACTS_V1_TOKEN_IDS["<begin_sequence>"]
+    begin_statements_id = CONTACTS_V1_TOKEN_IDS["<begin_statements>"]
+    documents = 0
+    residue_statements = 0
+    moved_statements = 0
+    cursor = 0
+
+    while cursor < augmented.size:
+        begin_offsets = np.flatnonzero(augmented[cursor:] == begin_sequence_id)
+        if begin_offsets.size == 0:
+            break
+        begin = cursor + int(begin_offsets[0])
+        structure_offsets = np.flatnonzero(augmented[begin + 1 :] == begin_statements_id)
+        if structure_offsets.size == 0:
+            raise ValueError("contacts-v1 sequence marker has no following structure marker")
+        structure = begin + 1 + int(structure_offsets[0])
+        sequence_length = structure - begin - 1
+        if sequence_length % 2:
+            raise ValueError(f"contacts-v1 sequence section has odd token count {sequence_length}")
+
+        statement_count = sequence_length // 2
+        if statement_count < 2:
+            raise ValueError(f"contacts-v1 sequence section has only {statement_count} statement(s)")
+        statements = augmented[begin + 1 : structure].reshape(statement_count, 2).copy()
+        permutation = rng.permutation(statement_count)
+        augmented[begin + 1 : structure] = statements[permutation].reshape(-1)
+        documents += 1
+        # Every valid contacts-v1 document has exactly two terminus statements.
+        residue_statements += statement_count - 2
+        moved_statements += int(np.count_nonzero(permutation != np.arange(statement_count)))
+        cursor = structure + 1
+
+    return augmented, AugmentationStats(
+        documents=documents,
+        residue_statements=residue_statements,
+        moved_statements=moved_statements,
+        changed_token_positions=int(np.count_nonzero(augmented != token_ids)),
+    )
+
+
+def _augmentation_rng(seed: int, index: int) -> np.random.Generator:
+    if index < 0:
+        raise ValueError(f"dataset index must be nonnegative, got {index}")
+    entropy = [seed, index & 0xFFFFFFFF, index >> 32]
+    return np.random.default_rng(np.random.SeedSequence(entropy))
+
+
+def _augment_lm_example(example: LmExample, *, seed: int, index: int) -> LmExample:
+    global _augmentation_log_count
+
+    original = np.asarray(jax.device_get(example.tokens.array))
+    augmented, stats = shuffle_amino_acid_statements(original, _augmentation_rng(seed, index))
+    if stats.documents == 0:
+        raise ValueError("packed contacts-v1 training example contains no complete document")
+
+    token_array = jax.device_put(augmented, example.tokens.array.sharding)
+    result = replace(example, tokens=replace(example.tokens, array=token_array))
+
+    if jax.process_index() == 0 and _augmentation_log_count < AA_AUGMENTATION_LOG_LIMIT:
+        logging.getLogger(__name__).info(
+            "exp166 AA augmentation runtime effect: documents=%d residue_statements=%d "
+            "moved_statements=%d changed_token_positions=%d",
+            stats.documents,
+            stats.residue_statements,
+            stats.moved_statements,
+            stats.changed_token_positions,
+        )
+        _augmentation_log_count += 1
+    return result
+
+
+class AminoAcidAugmentedDataset(AsyncDataset[LmExample]):
+    """Apply deterministic, occurrence-indexed augmentation without invoking JAX PRNGs."""
+
+    def __init__(self, dataset: AsyncDataset[LmExample], seed: int):
+        self.dataset = dataset
+        self.seed = seed
+
+    async def async_len(self) -> int:
+        return await self.dataset.async_len()
+
+    def is_finite(self) -> bool:
+        return self.dataset.is_finite()
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[LmExample]:
+        examples = await self.dataset.get_batch(indices)
+        return [
+            _augment_lm_example(example, seed=self.seed, index=index)
+            for index, example in zip(indices, examples, strict=True)
+        ]
+
+
+def _validate_contacts_v1_tokenizer(data: LmDataConfig) -> None:
+    tokenizer = data.the_tokenizer
+    observed = tokenizer.convert_tokens_to_ids(list(CONTACTS_V1_TOKEN_IDS))
+    expected = list(CONTACTS_V1_TOKEN_IDS.values())
+    if observed != expected or len(tokenizer) != VOCAB_SIZE:
+        message = f"contacts-v1 tokenizer contract changed: {observed=}, {expected=}, vocab_size={len(tokenizer)}"
+        raise ValueError(message)
+
+
+@dataclass(frozen=True)
+class AminoAcidAugmentedDataConfig(LmDataConfig):
+    """LmDataConfig variant that augments only the global-indexed training stream."""
+
+    augmentation_seed: int = AA_AUGMENTATION_SEED
+
+    def train_set(
+        self,
+        Pos: Axis,
+        batch_schedule: BatchSchedule,
+        *,
+        key: PRNGKeyArray,
+    ) -> AsyncDataset[LmExample]:
+        _validate_contacts_v1_tokenizer(self)
+        dataset = super().train_set(Pos, batch_schedule, key=key)
+        # This wrapper sits outside MixtureDataset, so ``index`` is the global
+        # training occurrence rather than the finite cache index. A document
+        # therefore gets a fresh deterministic view each time the mixture restarts.
+        # NumPy owns the augmentation RNG so data loading never mixes a CPU JAX key
+        # with the active TPU mesh.
+        return AminoAcidAugmentedDataset(dataset, self.augmentation_seed)
+
+
+def augment_amino_acids(data: LmDataConfig) -> LmDataConfig:
+    """Enable training-only sequence-statement augmentation."""
+    values = {field.name: getattr(data, field.name) for field in fields(LmDataConfig)}
+    return AminoAcidAugmentedDataConfig(**values)
 
 
 def _training_env() -> dict[str, str]:
@@ -322,7 +536,7 @@ def _training_env() -> dict[str, str]:
     return env
 
 
-def _tags(trial: Trial, region: str) -> list[str]:
+def _tags(trial: Trial, region: str, *, num_train_steps: int) -> list[str]:
     point = trial.point
     params = MODEL_CONFIG.total_trainable_params(VOCAB_SIZE)
     tags = [
@@ -341,8 +555,8 @@ def _tags(trial: Trial, region: str) -> list[str]:
         f"wd={point.weight_decay:g}",
         f"exp117_loss={point.exp117_loss:.8f}",
         f"region={region}",
-        f"steps={point.num_train_steps}",
-        f"tokens={point.batch_size * SEQ_LEN * point.num_train_steps}",
+        f"steps={num_train_steps}",
+        f"tokens={point.batch_size * SEQ_LEN * num_train_steps}",
         f"version={VERSION}",
         f"cache_version={CACHE_VERSION}",
     ]
@@ -354,11 +568,59 @@ def _tags(trial: Trial, region: str) -> list[str]:
 # --- Run construction --------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class RunShape:
+    """Identity and bounded cadence for a production or smoke execution."""
+
+    run_id: str
+    wandb_group: str
+    num_train_steps: int
+    steps_per_eval: int
+    checkpoint_keep: list[dict[str, int]] | None
+    max_eval_batches: int | None
+    tags: list[str]
+    mode: str
+
+
+def production_shape(trial: Trial, region: str) -> RunShape:
+    point = trial.point
+    return RunShape(
+        run_id=regional_run_id(trial, region),
+        wandb_group=WANDB_GROUP,
+        num_train_steps=point.num_train_steps,
+        steps_per_eval=point.steps_per_eval,
+        checkpoint_keep=[{"every": point.steps_per_epoch}],
+        max_eval_batches=None,
+        tags=_tags(trial, region, num_train_steps=point.num_train_steps),
+        mode="production",
+    )
+
+
+def smoke_shape(trial: Trial, region: str, tpu: str, steps: int) -> RunShape:
+    every = max(1, steps // 2)
+    tags = [
+        *_tags(trial, region, num_train_steps=steps),
+        "smoke",
+        f"tpu={tpu}",
+        f"smoke_version={SMOKE_VERSION}",
+    ]
+    return RunShape(
+        run_id=smoke_run_id(trial, region, tpu),
+        wandb_group=SMOKE_WANDB_GROUP,
+        num_train_steps=steps,
+        steps_per_eval=every,
+        checkpoint_keep=None,
+        max_eval_batches=SMOKE_MAX_EVAL_BATCHES,
+        tags=tags,
+        mode="smoke",
+    )
+
+
 def _apply_recipe_overrides(
     step: ArtifactStep[LevanterCheckpoint],
     *,
     tpu: str,
-    checkpoint_every: int,
+    shape: RunShape,
 ) -> ArtifactStep[LevanterCheckpoint]:
     """Apply the exp117 data/checkpoint recipe and the exp166 augmentation hook."""
     base_build_config = step.build_config
@@ -367,10 +629,10 @@ def _apply_recipe_overrides(
         pod = base_build_config(ctx)
         trainer = replace(
             pod.train_config.trainer,
-            max_eval_batches=None,
+            max_eval_batches=shape.max_eval_batches,
             checkpointer=replace(
                 pod.train_config.trainer.checkpointer,
-                keep=[{"every": checkpoint_every}],
+                keep=shape.checkpoint_keep,
             ),
         )
         data = pod.train_config.data
@@ -393,9 +655,9 @@ def _apply_recipe_overrides(
     return replace(step, build_config=build_config)
 
 
-def build_run(trial: Trial, tpu: str, region: str) -> ArtifactStep[LevanterCheckpoint]:
+def build_run(trial: Trial, shape: RunShape, tpu: str, region: str) -> ArtifactStep[LevanterCheckpoint]:
     point = trial.point
-    name = regional_run_id(trial, region)
+    name = shape.run_id
     train_cache = _tokenize_cache(COMPONENT_TRAIN, TRAIN_DOCS, validation=False)
     val_cache = _tokenize_cache(COMPONENT_VAL, VAL_DOCS, validation=True)
     step = train_lm(
@@ -411,43 +673,43 @@ def build_run(trial: Trial, tpu: str, region: str) -> ArtifactStep[LevanterCheck
         validation=[val_cache],
         batch_size=point.batch_size,
         seq_len=SEQ_LEN,
-        num_train_steps=point.num_train_steps,
+        num_train_steps=shape.num_train_steps,
         z_loss_weight=None,
         evals=None,
         resources=ResourceConfig.with_tpu(tpu, regions=singleton_region_list(region)),
         version=VERSION,
         init_from=initial_checkpoint(trial),
         tensor_parallel_size=placement_axes(tpu, point.batch_size)[1],
-        steps_per_eval=point.steps_per_eval,
+        steps_per_eval=shape.steps_per_eval,
         wandb_project=os.environ.get("WANDB_PROJECT", "marin"),
-        wandb_group=WANDB_GROUP,
+        wandb_group=shape.wandb_group,
         run_id=name,
-        tags=_tags(trial, region),
+        tags=shape.tags,
         env_vars=_training_env(),
     )
-    return _apply_recipe_overrides(step, tpu=tpu, checkpoint_every=point.steps_per_epoch)
+    return _apply_recipe_overrides(step, tpu=tpu, shape=shape)
 
 
-def _print_preview(trial: Trial, tpu: str, region: str) -> None:
+def _print_preview(trial: Trial, shape: RunShape, tpu: str, region: str) -> None:
     point = trial.point
     per_device_parallelism, grad_accum = batch_fit(tpu, point.batch_size)
     data_axis_size, tensor_parallel_size = placement_axes(tpu, point.batch_size)
     init = initial_checkpoint(trial)
     checkpoint = init.adopt_source if init is not None else "random initialization"
     print(
-        "PREVIEW exp166 -- no lower or submit\n"
+        f"PREVIEW exp166 [{shape.mode}] -- no lower or submit\n"
         f"  trial_id={trial.trial_id}\n"
-        f"  run_id={regional_run_id(trial, region)}\n"
+        f"  run_id={shape.run_id} wandb_group={shape.wandb_group}\n"
         f"  suggested_job_id={regional_job_id(trial, region, tpu)}\n"
         f"  lr={point.learning_rate:g} wd={point.weight_decay:g} batch_size={point.batch_size}\n"
         f"  exp117_loss={point.exp117_loss:.8f}\n"
-        f"  steps={point.num_train_steps} steps/eval={point.steps_per_eval} "
-        f"checkpoint_every={point.steps_per_epoch}\n"
+        f"  steps={shape.num_train_steps} steps/eval={shape.steps_per_eval} "
+        f"checkpoint_keep={shape.checkpoint_keep}\n"
         f"  initialization={checkpoint}\n"
         f"  tpu={tpu} region={region} prefix={marin_prefix_for_region(region)}\n"
         f"  per_device_parallelism={per_device_parallelism} grad_accum={grad_accum}\n"
         f"  data_axis_size={data_axis_size} tensor_parallel_size={tensor_parallel_size}\n"
-        "  amino_acid_augmentation=STUB (launch intentionally blocked)",
+        "  amino_acid_augmentation=per-training-occurrence sequence-statement permutation",
         flush=True,
     )
 
@@ -457,10 +719,11 @@ def main() -> None:
     trial = parse_trial()
     tpu = parse_tpu()
     region = parse_region()
+    shape = smoke_shape(trial, region, tpu, smoke_steps()) if smoke() else production_shape(trial, region)
     if preview():
-        _print_preview(trial, tpu, region)
+        _print_preview(trial, shape, tpu, region)
         return
-    StepRunner().run([lower(build_run(trial, tpu, region))])
+    StepRunner().run([lower(build_run(trial, shape, tpu, region))])
 
 
 if __name__ == "__main__":
