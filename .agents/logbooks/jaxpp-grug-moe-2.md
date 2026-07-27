@@ -587,3 +587,30 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - Focused tests pass `20/20`; changed-file precommit including Pyrefly passes; `git diff --check` is clean.
 - Next action:
   - Commit and run the one-H100x8 exact d2560/i1280/e64/top-k4/microbatch32/sequence-4096 direct A/B. Require finite output and all gradients, relative-L2 at most `0.002` for each, zero drop mismatch, and at least `1.10x` median value-and-grad speedup.
+
+### 2026-07-27 00:02 PDT - FP8 bulk-ring wire is faster but numerically invalid
+- Commit Hash: `0b2c2ec387`.
+- Command: One H100x8 RNO2A job `/dlwh/ep-ring-fp8-wire-approx-r15-20260727` compared ring and `ring_fp8_wire_approx` at d2560/i1280/e64/top-k4/microbatch32/sequence-4096/capacity-1.25, with 10 warmups and 50 alternating samples.
+- Results:
+  - Iris succeeded in `1m14.01s`; the task exited `0`, no retry occurred, and no resource remains live.
+  - Routing remained balanced at 8,192 assignments per expert, 65,536 accepted assignments per rank, 81,920 local capacity, and zero drops in both arms.
+  - Output relative-L2 was `0.0462873`, with `23.36%` mismatches and maximum absolute error `0.125`.
+  - Candidate x, routing-weight, W13, and W2 gradient norms were all exactly zero, producing relative-L2 `1.0` against finite nonzero references. The FP8 cast/collective transpose does not provide the required training gradient.
+  - Forward median improved from `10.3982ms` to `9.49133ms` (`1.09555x`). Value-and-grad median improved from `22.8937ms` to `21.0599ms` (`1.08708x`).
+- Interpretation:
+  - The FP8 payload collectives produce a real direct speedup, but output error is over 23 times the accepted `0.002` ceiling and gradients are invalid. The VAG gain also misses the independent `1.10x` promotion threshold.
+  - A straight-through custom transpose could make gradients nonzero but cannot repair the already-invalid forward output. E4M3's quantization error is the blocker, not only autodiff plumbing.
+  - Keep the benchmark as evidence and do not integrate or pipeline this mode.
+- Next action:
+  - Inspect the default NCCL channel count from the r12 logs. Run a bounded exact channel-count gate only if default large-payload ring collectives leave plausible unused channel parallelism; otherwise stop NCCL tuning.
+
+### 2026-07-27 00:10 PDT - default NCCL already uses 24 channels
+- Hypothesis: The exact ring collectives may leave unused channel parallelism that a forced channel count can recover.
+- Evidence:
+  - The default arm of `/dlwh/ep-ring-nccl-protocol-ab-r12-20260727` reports the 80 MiB all-gather and reduce-scatter as `RING/SIMPLE channel{Lo..Hi}={0..23}`.
+  - The 256 KiB collectives also span channels `0..23`, either as one operation or two ranges split at channels 11 and 12.
+- Interpretation:
+  - NCCL already selects 24 channels for the target collectives. There is no evidence of unused channel parallelism, so a forced 24- or 32-channel sweep lacks a credible promotion path.
+  - Stop NCCL environment tuning. The exact bulk-ring path remains the valid implementation, but protocol, algorithm, and channel overrides have not produced a useful speedup.
+- Next action:
+  - Rank structural changes that reduce the number of exact MoE collectives or overlap them with expert compute. Require a direct value-and-grad projection capable of closing the remaining `9.54%` relative L24 gap before another pipeline allocation.
