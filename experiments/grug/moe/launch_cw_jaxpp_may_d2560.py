@@ -31,6 +31,7 @@ from experiments.grug.moe.heuristic import MoeHeuristic
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_bool, env_int, run_grug_moe_trial
 from experiments.grug.moe.model import GrugModelConfig, RematMode, ResearchFp8ExpertGemmConfig
 from experiments.grug.moe.train import (
+    ExpertGradientAccumulation,
     ExplicitMpmdPipelineWireFormat,
     GrugJaxPPConfig,
     GrugTrainerConfig,
@@ -342,6 +343,10 @@ def build_pipeline_config() -> GrugJaxPPConfig:
             SonicFsdpMaterialization,
             os.environ.get("PP_SONIC_FSDP_MATERIALIZATION", "per_task"),
         ),
+        expert_gradient_accumulation=cast(
+            ExpertGradientAccumulation,
+            os.environ.get("PP_EXPERT_GRADIENT_ACCUMULATION", "ordinary"),
+        ),
     )
 
 
@@ -373,6 +378,14 @@ def build_jaxpp_may_checkpoint(*, version: str = "dev") -> ArtifactStep[Levanter
             raise ValueError(
                 "staged_per_step Sonic FSDP materialization requires MAY_EXPERT_AXIS=1 because Sonic does not "
                 "support expert parallelism"
+            )
+    if pipeline is not None and pipeline.expert_gradient_accumulation == "fused_fp32_data_local":
+        if model.moe_implementation != "ring":
+            raise ValueError("fused_fp32_data_local expert gradients require MAY_MOE_IMPLEMENTATION=ring")
+        if expert_axis <= 1 or expert_axis >= gpus_per_replica:
+            raise ValueError(
+                "fused_fp32_data_local expert gradients require both expert and data parallelism; "
+                f"got MAY_EXPERT_AXIS={expert_axis} and MAY_GPUS_PER_REPLICA={gpus_per_replica}"
             )
     if model.moe_implementation in _NCCL_EP_IMPLEMENTATIONS:
         if pipeline is None or pipeline.implementation != "explicit_mpmd":

@@ -25,6 +25,7 @@ EXPLICIT_MPMD_SCHEDULE_MODE="default"
 EXPLICIT_MPMD_PIPELINE_WIRE_FORMAT="bf16"
 EXPLICIT_MPMD_STAGE_TASK_MICROBATCH_GROUP_SIZE=1
 SONIC_FSDP_MATERIALIZATION="per_task"
+EXPERT_GRADIENT_ACCUMULATION="ordinary"
 PIPELINE="true"
 PHYSICAL_STAGES=4
 LOGICAL_STAGES=""
@@ -88,6 +89,8 @@ Options:
                             (default: 1).
   --sonic-fsdp-materialization NAME
                             per_task or staged_per_step (default: per_task).
+  --expert-gradient-accumulation NAME
+                            ordinary or fused_fp32_data_local (default: ordinary).
   --no-pipeline             Run the same model/backend without JaxPP for isolation.
   --physical-stages N       PP_MPMD_DIM / physical pipeline ranks (default: 4).
   --logical-stages N        PP_STAGES / logical pipeline stage cuts. Omit to infer per schedule.
@@ -154,6 +157,7 @@ while [ "$#" -gt 0 ]; do
             shift 2
             ;;
         --sonic-fsdp-materialization) SONIC_FSDP_MATERIALIZATION="$2"; shift 2 ;;
+        --expert-gradient-accumulation) EXPERT_GRADIENT_ACCUMULATION="$2"; shift 2 ;;
         --no-pipeline) PIPELINE="false"; shift ;;
         --physical-stages) PHYSICAL_STAGES="$2"; shift 2 ;;
         --logical-stages) LOGICAL_STAGES="$2"; shift 2 ;;
@@ -341,6 +345,38 @@ if [ "$SONIC_FSDP_MATERIALIZATION" = staged_per_step ]; then
     fi
 fi
 
+case "$EXPERT_GRADIENT_ACCUMULATION" in
+    ordinary|fused_fp32_data_local) ;;
+    *)
+        echo "ERROR: unsupported expert gradient accumulation mode: $EXPERT_GRADIENT_ACCUMULATION" >&2
+        exit 1
+        ;;
+esac
+
+if [ "$EXPERT_GRADIENT_ACCUMULATION" = fused_fp32_data_local ]; then
+    if [ "$PIPELINE" != true ] || [ "$IMPLEMENTATION" != explicit_mpmd ] || [ "$SCHEDULE" != std_1f1b ]; then
+        echo "ERROR: fused_fp32_data_local requires pipeline, explicit_mpmd, and std_1f1b" >&2
+        exit 1
+    fi
+    if [ "$EXPLICIT_MPMD_SCHEDULE_MODE" != default ] || \
+        [ "$EXPLICIT_MPMD_STAGE_TASK_MICROBATCH_GROUP_SIZE" -ne 1 ]; then
+        echo "ERROR: fused_fp32_data_local requires default schedule mode and stage-task group size 1" >&2
+        exit 1
+    fi
+    if [ "$MICROBATCHES" -le 1 ]; then
+        echo "ERROR: fused_fp32_data_local requires --microbatches greater than 1" >&2
+        exit 1
+    fi
+    if [ "$MOE_IMPLEMENTATION" != ring ]; then
+        echo "ERROR: fused_fp32_data_local requires --moe-implementation ring" >&2
+        exit 1
+    fi
+    if [ "$EXPERT_AXIS" -le 1 ] || [ "$EXPERT_AXIS" -ge "$GPUS_PER_REPLICA" ]; then
+        echo "ERROR: fused_fp32_data_local requires both expert and data parallelism" >&2
+        exit 1
+    fi
+fi
+
 case "$REMAT" in
     recompute_all|save_moe) ;;
     *)
@@ -464,6 +500,7 @@ ENV_ARGS=(
     -e PP_EXPLICIT_MPMD_PIPELINE_WIRE_FORMAT "$EXPLICIT_MPMD_PIPELINE_WIRE_FORMAT"
     -e PP_EXPLICIT_MPMD_STAGE_TASK_MICROBATCH_GROUP_SIZE "$EXPLICIT_MPMD_STAGE_TASK_MICROBATCH_GROUP_SIZE"
     -e PP_SONIC_FSDP_MATERIALIZATION "$SONIC_FSDP_MATERIALIZATION"
+    -e PP_EXPERT_GRADIENT_ACCUMULATION "$EXPERT_GRADIENT_ACCUMULATION"
     -e PP_SCHEDULE "$SCHEDULE"
     -e PP_MPMD_DIM "$PHYSICAL_STAGES"
     -e PP_MICROBATCHES "$MICROBATCHES"
@@ -569,6 +606,7 @@ explicit_mpmd_schedule_mode: $EXPLICIT_MPMD_SCHEDULE_MODE
 explicit_mpmd_pipeline_wire_format: $EXPLICIT_MPMD_PIPELINE_WIRE_FORMAT
 explicit_mpmd_stage_task_microbatch_group_size: $EXPLICIT_MPMD_STAGE_TASK_MICROBATCH_GROUP_SIZE
 sonic_fsdp_materialization: $SONIC_FSDP_MATERIALIZATION
+expert_gradient_accumulation: $EXPERT_GRADIENT_ACCUMULATION
 pipeline: $PIPELINE
 physical_stages: $PHYSICAL_STAGES
 logical_stages: ${LOGICAL_STAGES:-inferred}

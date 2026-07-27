@@ -86,6 +86,49 @@ def _validate_fp8_wire_contract(
         raise ValueError("approximate FP8 ring wire W13 output must be twice the W2 intermediate dimension")
 
 
+def _validate_accumulating_weight_gradient_contract(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    w13_accumulator_local: jax.Array,
+    w2_accumulator_local: jax.Array,
+) -> None:
+    if x_local.dtype != jnp.bfloat16 or moe_w13_local.dtype != jnp.bfloat16 or moe_w2_local.dtype != jnp.bfloat16:
+        raise TypeError("accumulating Ring requires bfloat16 activations and expert compute weights")
+    if w13_accumulator_local.dtype != jnp.float32 or w2_accumulator_local.dtype != jnp.float32:
+        raise TypeError("accumulating Ring requires float32 expert-gradient accumulators")
+    if not jnp.issubdtype(selected_experts_local.dtype, jnp.integer):
+        raise TypeError("accumulating Ring requires integer selected experts")
+    if not jnp.issubdtype(combine_weights_local.dtype, jnp.floating):
+        raise TypeError("accumulating Ring requires floating-point combine weights")
+    if x_local.ndim != 2 or selected_experts_local.ndim != 2 or combine_weights_local.ndim != 2:
+        raise ValueError("accumulating Ring inputs must have shapes [T,H], [T,K], and [T,K]")
+    if moe_w13_local.ndim != 3 or moe_w2_local.ndim != 3:
+        raise ValueError("accumulating Ring weights must have shapes [Elocal,H,2I] and [Elocal,I,H]")
+    if selected_experts_local.shape != combine_weights_local.shape:
+        raise ValueError("accumulating Ring selected experts and combine weights must have the same shape")
+    if x_local.shape[0] != selected_experts_local.shape[0]:
+        raise ValueError("accumulating Ring routing must have one row per activation token")
+    if moe_w13_local.shape[0] != moe_w2_local.shape[0]:
+        raise ValueError("accumulating Ring W13 and W2 must have the same local expert count")
+    if moe_w13_local.shape[1] != x_local.shape[1] or moe_w2_local.shape[2] != x_local.shape[1]:
+        raise ValueError("accumulating Ring W13/W2 hidden dimensions must match the activations")
+    if moe_w13_local.shape[2] != 2 * moe_w2_local.shape[1]:
+        raise ValueError("accumulating Ring W13 output must be twice the W2 intermediate dimension")
+    if w13_accumulator_local.shape != moe_w13_local.shape:
+        raise ValueError(
+            "accumulating Ring W13 accumulator must match the compute weight shape; "
+            f"got {w13_accumulator_local.shape} and {moe_w13_local.shape}"
+        )
+    if w2_accumulator_local.shape != moe_w2_local.shape:
+        raise ValueError(
+            "accumulating Ring W2 accumulator must match the compute weight shape; "
+            f"got {w2_accumulator_local.shape} and {moe_w2_local.shape}"
+        )
+
+
 def _quantize_fp8_wire_per_token(
     value: Float[Array, "T H"],
     *,
@@ -747,7 +790,21 @@ def _moe_mlp_ep_ring_local_accumulating_weight_gradient(
     num_experts: int,
     capacity_factor: float,
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""], Float[Array, ""]]:
-    """Benchmark-only Ring path that aliases FP32 expert-gradient accumulators."""
+    """Ring path whose expert-weight VJPs include data-local FP32 accumulators.
+
+    The scalar token is zero in the forward pass. Callers must add it to the
+    normalized loss with coefficient exactly one so reverse mode includes each
+    prior accumulator once.
+    """
+    _validate_accumulating_weight_gradient_contract(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        w13_accumulator_local,
+        w2_accumulator_local,
+    )
     routing = _ring_routing_prepass(
         selected_experts_local,
         local_experts=moe_w13_local.shape[0],

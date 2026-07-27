@@ -16,6 +16,7 @@ Implementation overview:
 
 from collections.abc import Callable
 from functools import partial
+from math import prod
 
 import equinox as eqx
 import jax
@@ -52,7 +53,11 @@ from levanter.grug._moe.ep_common import (
 from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
 from levanter.grug._moe.ep_ncclep import moe_mlp_ep_ncclep
 from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
-from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local, _moe_mlp_ep_ring_quack_local
+from levanter.grug._moe.ep_ring import (
+    _moe_mlp_ep_ring_local,
+    _moe_mlp_ep_ring_local_accumulating_weight_gradient,
+    _moe_mlp_ep_ring_quack_local,
+)
 from levanter.grug._moe.ep_ring_fused import _moe_mlp_ep_ring_fused_local
 from levanter.grug._moe.ep_ring_local_combine import _moe_mlp_ep_ring_local_combine_local
 from levanter.grug._moe.ep_ring_ppermute import _moe_mlp_ep_ring_ppermute_local
@@ -135,6 +140,35 @@ class MoEExpertMlp(eqx.Module):
             capacity_factor=self.capacity_factor,
             report_capacity_overflow=report_capacity_overflow,
             ragged_dot_ops=self.ragged_dot_ops,
+        )
+
+    @named_call
+    def accumulating_weight_gradient(
+        self,
+        x: Float[Array, "T D"],
+        selected_experts: Int[Array, "T K"],
+        combine_weights: Float[Array, "T K"],
+        w13_accumulator: Float[Array, "E D I2"],
+        w2_accumulator: Float[Array, "E I D"],
+        *,
+        mesh: jax.sharding.AbstractMesh | None = None,
+    ) -> tuple[Float[Array, "T D"], Int[Array, ""], Float[Array, ""]]:
+        """Run Ring EP while accumulating FP32 expert-weight cotangents."""
+        if self.ragged_dot_ops is not None:
+            raise ValueError("FP32 expert-gradient accumulation does not support custom ragged-dot operations")
+        w_gate_up = jnp.concatenate([self.w_gate, self.w_up], axis=-1)
+        return moe_mlp_accumulating_weight_gradient(
+            x,
+            selected_experts,
+            combine_weights,
+            w_gate_up,
+            self.w_down,
+            w13_accumulator,
+            w2_accumulator,
+            activation=self.activation,
+            implementation=self.implementation,
+            mesh=mesh,
+            capacity_factor=self.capacity_factor,
         )
 
 
@@ -357,6 +391,136 @@ def moe_mlp(
     return out
 
 
+@named_call
+def moe_mlp_accumulating_weight_gradient(
+    x: Float[Array, "T D"],
+    selected_experts: Int[Array, "T K"],
+    combine_weights: Float[Array, "T K"],
+    w_up_gate: Float[Array, "E D I2"],
+    w_down: Float[Array, "E I D"],
+    w13_accumulator: Float[Array, "E D I2"],
+    w2_accumulator: Float[Array, "E I D"],
+    *,
+    activation: MoeActivation = ActivationFunctionEnum.silu,
+    implementation: MoeImplementation | str | None = None,
+    mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
+) -> tuple[Float[Array, "T D"], Int[Array, ""], Float[Array, ""]]:
+    """Run Ring EP with data-local FP32 expert-gradient accumulation.
+
+    The accumulators have the ordinary expert-weight shapes and use
+    ``P("expert", None, None)``. Their physical values may intentionally differ
+    across the data axis under ``shard_map(check_vma=False)``. They must remain
+    inside the controlled task chain until an explicit data-axis synchronization;
+    generic resharding or host reads before that synchronization are invalid.
+
+    The returned scalar token is numerically zero. Callers must add it to the
+    normalized loss with coefficient exactly one.
+    """
+    resolved_implementation = resolve_moe_implementation(implementation)
+    if resolved_implementation != "ring":
+        raise ValueError(
+            "FP32 expert-gradient accumulation requires the exact Ring EP implementation; "
+            f"got {resolved_implementation!r}"
+        )
+    if mesh is None:
+        mesh = _current_mesh()
+    if mesh is None or mesh.empty or not _mesh_has_axis(mesh, "expert") or not _mesh_has_axis(mesh, "data"):
+        raise ValueError("FP32 expert-gradient accumulation requires a non-empty mesh with data and expert axes")
+    if x.ndim != 2:
+        raise ValueError(f"x must be rank-2 [T, D], got shape={x.shape}")
+    if selected_experts.ndim != 2 or combine_weights.ndim != 2:
+        raise ValueError("selected_experts and combine_weights must both have shape [T, K]")
+    if selected_experts.shape != combine_weights.shape or selected_experts.shape[0] != x.shape[0]:
+        raise ValueError("selected_experts and combine_weights must have identical [T, K] shapes matching x")
+    if not jnp.issubdtype(selected_experts.dtype, jnp.integer):
+        raise TypeError("selected_experts must have an integer dtype")
+    if x.dtype != jnp.bfloat16 or w_up_gate.dtype != jnp.bfloat16 or w_down.dtype != jnp.bfloat16:
+        raise TypeError("FP32 expert-gradient accumulation requires bfloat16 activations and compute weights")
+    if w_up_gate.ndim != 3 or w_down.ndim != 3:
+        raise ValueError("expert weights must have shapes [E,D,2I] and [E,I,D]")
+    if w_up_gate.shape[0] != w_down.shape[0]:
+        raise ValueError("W13 and W2 must have the same expert dimension")
+    if w_up_gate.shape[1] != x.shape[1] or w_down.shape[2] != x.shape[1]:
+        raise ValueError("W13/W2 hidden dimensions must match x")
+    if w_up_gate.shape[2] != 2 * w_down.shape[1]:
+        raise ValueError("W13 output dimension must be twice the W2 intermediate dimension")
+    if w13_accumulator.shape != w_up_gate.shape or w2_accumulator.shape != w_down.shape:
+        raise ValueError(
+            "FP32 expert-gradient accumulator shapes must match the compute weights; "
+            f"got {w13_accumulator.shape}/{w2_accumulator.shape} and {w_up_gate.shape}/{w_down.shape}"
+        )
+    if w13_accumulator.dtype != jnp.float32 or w2_accumulator.dtype != jnp.float32:
+        raise TypeError("expert-gradient accumulators must have dtype float32")
+
+    num_experts = int(w_up_gate.shape[0])
+    expert_axis_size = _mesh_axis_size(mesh, "expert")
+    if num_experts % expert_axis_size != 0:
+        raise ValueError(f"num_experts={num_experts} must be divisible by expert axis size={expert_axis_size}")
+    activation_fn = activation.to_jax_fn() if isinstance(activation, ActivationFunctionEnum) else activation
+    batch_spec = _batch_spec_from_x(x, mesh)
+    weight_spec = P("expert", None, None)
+
+    x = _reshard_for_shard_map(x, mesh, batch_spec)
+    selected_experts = _reshard_for_shard_map(selected_experts, mesh, batch_spec)
+    combine_weights = _reshard_for_shard_map(combine_weights, mesh, batch_spec)
+    w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, weight_spec)
+    w_down = _reshard_for_shard_map(w_down, mesh, weight_spec)
+
+    token_replica_count = prod(int(axis_size) for axis_size in mesh.shape.values())
+
+    def local_fn(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        w_up_gate_local,
+        w_down_local,
+        w13_accumulator_local,
+        w2_accumulator_local,
+    ):
+        out, dropped, token = _moe_mlp_ep_ring_local_accumulating_weight_gradient(
+            x_local,
+            selected_experts_local,
+            combine_weights_local,
+            w_up_gate_local,
+            w_down_local,
+            w13_accumulator_local,
+            w2_accumulator_local,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+            capacity_factor=capacity_factor,
+        )
+        # shard_map divides the cotangent of a replicated P() scalar among its
+        # replicas. The token is zero, so this restores unit cotangent on every
+        # data-local expert accumulator without changing the forward value.
+        return out, dropped, token * token_replica_count
+
+    shard_fn = shard_map(
+        local_fn,
+        mesh=mesh,
+        in_specs=(
+            batch_spec,
+            batch_spec,
+            batch_spec,
+            weight_spec,
+            weight_spec,
+            weight_spec,
+            weight_spec,
+        ),
+        out_specs=(batch_spec, P(), P()),
+        check_vma=False,
+    )
+    return shard_fn(
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        w13_accumulator,
+        w2_accumulator,
+    )
+
+
 __all__ = [
     "MoeActivation",
     "MoEExpertMlp",
@@ -365,6 +529,7 @@ __all__ = [
     "MoeRaggedDotOps",
     "PspecAxis",
     "moe_mlp",
+    "moe_mlp_accumulating_weight_gradient",
     "resolve_moe_implementation",
     "split_moe_w13_output",
 ]

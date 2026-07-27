@@ -106,6 +106,7 @@ JaxPPExplicitMpmdScheduleMode = Literal["default", "transfer_priority", "input_g
 ExplicitMpmdPipelineWireFormat = Literal["bf16", "fp8"]
 Fp8PipelineWireDtype = Literal["e4m3", "e5m2"]
 SonicFsdpMaterialization = Literal["per_task", "staged_per_step"]
+ExpertGradientAccumulation = Literal["ordinary", "fused_fp32_data_local"]
 _RESEARCH_FP8_EXPERT_GEMM_SCHEDULES = ("gpipe", "interleaved_gpipe", "std_1f1b")
 _NCCL_EP_IMPLEMENTATIONS = ("nccl_ep", "nccl_ep_drop")
 
@@ -162,12 +163,15 @@ class GrugJaxPPConfig:
     explicit_mpmd_pipeline_wire_format: ExplicitMpmdPipelineWireFormat = "bf16"
     explicit_mpmd_stage_task_microbatch_group_size: int = 1
     sonic_fsdp_materialization: SonicFsdpMaterialization = "per_task"
+    expert_gradient_accumulation: ExpertGradientAccumulation = "ordinary"
 
     def __post_init__(self) -> None:
         if self.explicit_mpmd_schedule_mode not in ("default", "transfer_priority", "input_gradient_first"):
             raise ValueError(f"unknown explicit MPMD schedule mode: {self.explicit_mpmd_schedule_mode}")
         if self.sonic_fsdp_materialization not in ("per_task", "staged_per_step"):
             raise ValueError(f"unknown Sonic FSDP materialization mode: {self.sonic_fsdp_materialization}")
+        if self.expert_gradient_accumulation not in ("ordinary", "fused_fp32_data_local"):
+            raise ValueError(f"unknown expert gradient accumulation mode: {self.expert_gradient_accumulation}")
         if self.explicit_mpmd_pipeline_wire_format not in ("bf16", "fp8"):
             raise ValueError(f"unknown explicit MPMD pipeline wire format: {self.explicit_mpmd_pipeline_wire_format}")
         if self.stages <= 0:
@@ -254,6 +258,20 @@ class GrugJaxPPConfig:
                 )
             if self.microbatches == 1:
                 raise ValueError("staged_per_step Sonic FSDP materialization requires microbatches > 1")
+        if self.expert_gradient_accumulation == "fused_fp32_data_local":
+            if self.implementation != "explicit_mpmd" or self.schedule != "std_1f1b":
+                raise ValueError(
+                    "fused FP32 data-local expert gradients require "
+                    "implementation='explicit_mpmd' and schedule='std_1f1b'"
+                )
+            if self.explicit_mpmd_schedule_mode != "default":
+                raise ValueError(
+                    "fused FP32 data-local expert gradients require the default explicit MPMD schedule mode"
+                )
+            if self.explicit_mpmd_stage_task_microbatch_group_size != 1:
+                raise ValueError("fused FP32 data-local expert gradients require stage-task microbatch group size 1")
+            if self.microbatches == 1:
+                raise ValueError("fused FP32 data-local expert gradients require microbatches > 1")
         if self.schedule in ("zero_bubble", "dualpipe_v") and self.microbatches < self.stages:
             raise ValueError(
                 f"{self.schedule} requires microbatches >= stages; got "
@@ -322,6 +340,11 @@ class GrugRunConfig:
             and resolve_moe_implementation(self.model.moe_implementation) != "ring"
         ):
             raise ValueError("grouped explicit MPMD stage tasks require the exact bulk-ring MoE implementation")
+        if pipeline is not None and pipeline.expert_gradient_accumulation == "fused_fp32_data_local":
+            if resolve_moe_implementation(self.model.moe_implementation) != "ring":
+                raise ValueError("fused FP32 data-local expert gradients require the exact bulk-ring MoE implementation")
+            if self.trainer.expert_axis_size <= 1:
+                raise ValueError("fused FP32 data-local expert gradients require expert_axis_size greater than 1")
         if self.model.moe_implementation in _NCCL_EP_IMPLEMENTATIONS:
             if pipeline is None or pipeline.implementation != "explicit_mpmd":
                 raise ValueError("NCCL_EP requires the explicit MPMD JaxPP pipeline")
@@ -1002,6 +1025,62 @@ class GrugPipelineTrainState:
     opt_state: tuple[optax.OptState, ...]
     ema_params: tuple[TransformerPipelineStage, ...] | None
     pending_qb_betas: tuple[jax.Array, ...]
+
+
+@register_dataclass
+@dataclass(frozen=True)
+class StageExpertGradientAccumulators:
+    """Data-local FP32 expert gradients carried between stage backward tasks."""
+
+    w13: tuple[jax.Array, ...]
+    w2: tuple[jax.Array, ...]
+
+
+def _stage_without_expert_gradients(stage: TransformerPipelineStage) -> TransformerPipelineStage:
+    blocks = []
+    for block in stage.blocks:
+        expert_mlp = block.mlp.expert_mlp
+        expert_mlp = eqx.tree_at(
+            lambda module: (module.w_gate, module.w_up, module.w_down),
+            expert_mlp,
+            (None, None, None),
+        )
+        mlp = eqx.tree_at(lambda module: module.expert_mlp, block.mlp, expert_mlp)
+        blocks.append(eqx.tree_at(lambda module: module.mlp, block, mlp))
+    return eqx.tree_at(lambda module: module.blocks, stage, tuple(blocks))
+
+
+def _stage_expert_gradient_accumulators(
+    stage: TransformerPipelineStage,
+) -> StageExpertGradientAccumulators:
+    return StageExpertGradientAccumulators(
+        w13=tuple(
+            jnp.concatenate((block.mlp.expert_mlp.w_gate, block.mlp.expert_mlp.w_up), axis=-1) for block in stage.blocks
+        ),
+        w2=tuple(block.mlp.expert_mlp.w_down for block in stage.blocks),
+    )
+
+
+def _stage_with_expert_gradients(
+    ordinary_gradients: TransformerPipelineStage,
+    expert_gradients: StageExpertGradientAccumulators,
+) -> TransformerPipelineStage:
+    if len(expert_gradients.w13) != len(ordinary_gradients.blocks) or len(expert_gradients.w2) != len(
+        ordinary_gradients.blocks
+    ):
+        raise ValueError("expert gradient accumulator count must match the stage block count")
+    blocks = []
+    for block_index, block in enumerate(ordinary_gradients.blocks):
+        intermediate_dim = expert_gradients.w2[block_index].shape[1]
+        w_gate, w_up = jnp.split(expert_gradients.w13[block_index], [intermediate_dim], axis=-1)
+        expert_mlp = eqx.tree_at(
+            lambda module: (module.w_gate, module.w_up, module.w_down),
+            block.mlp.expert_mlp,
+            (w_gate, w_up, expert_gradients.w2[block_index]),
+        )
+        mlp = eqx.tree_at(lambda module: module.expert_mlp, block.mlp, expert_mlp)
+        blocks.append(eqx.tree_at(lambda module: module.mlp, block, mlp))
+    return eqx.tree_at(lambda module: module.blocks, ordinary_gradients, tuple(blocks))
 
 
 def _is_overwrite(value) -> bool:
@@ -2783,19 +2862,32 @@ def _make_explicit_mpmd_train_step(
         _tree_named_shardings_on_stage(mpmd_mesh, mpmd_index, opt_state)
         for mpmd_index, opt_state in zip(stage_mpmd_indices, sample_state.opt_state, strict=True)
     )
-
+    fused_expert_accumulation = pipeline.expert_gradient_accumulation == "fused_fp32_data_local"
+    ordinary_gradient_shardings = tuple(_stage_without_expert_gradients(stage) for stage in param_shardings)
+    expert_accumulator_shardings = tuple(
+        StageExpertGradientAccumulators(
+            w13=tuple(NamedSharding(mpmd_mesh.unstack[mpmd_index], P("expert", None, None)) for _ in stage.blocks),
+            w2=tuple(NamedSharding(mpmd_mesh.unstack[mpmd_index], P("expert", None, None)) for _ in stage.blocks),
+        )
+        for mpmd_index, stage in zip(stage_mpmd_indices, sample_state.params, strict=True)
+    )
     compute_param_shardings = []
-    stages_with_sonic_weights = []
+    stages_with_materialized_expert_weights = []
     for mpmd_index, stage_params, stage_shardings in zip(
         stage_mpmd_indices, sample_state.params, param_shardings, strict=True
     ):
         stage_mesh = mpmd_mesh.unstack[mpmd_index]
-        has_sonic_weights = False
+        has_materialized_expert_weights = False
         for block_index, block in enumerate(stage_params.blocks):
-            if block.mlp is None or block.mlp.expert_mlp.implementation != "sonic":
+            implementation = block.mlp.expert_mlp.implementation
+            if implementation != "sonic" and not (fused_expert_accumulation and implementation == "ring"):
                 continue
-            has_sonic_weights = True
-            replicated_expert_sharding = NamedSharding(stage_mesh, P())
+            has_materialized_expert_weights = True
+            replicated_expert_sharding = (
+                NamedSharding(stage_mesh, P("expert", None, None))
+                if fused_expert_accumulation
+                else NamedSharding(stage_mesh, P())
+            )
             for weight_name in ("w_gate", "w_up", "w_down"):
                 stage_shardings = eqx.tree_at(
                     lambda tree, block_index=block_index, weight_name=weight_name: getattr(
@@ -2805,13 +2897,18 @@ def _make_explicit_mpmd_train_step(
                     replicated_expert_sharding,
                 )
         compute_param_shardings.append(stage_shardings)
-        stages_with_sonic_weights.append(has_sonic_weights)
+        stages_with_materialized_expert_weights.append(has_materialized_expert_weights)
     compute_param_shardings = tuple(compute_param_shardings)
-    stages_with_sonic_weights = tuple(stages_with_sonic_weights)
-    if pipeline.sonic_fsdp_materialization == "staged_per_step" and not all(stages_with_sonic_weights):
-        missing_stages = tuple(index for index, has_weights in enumerate(stages_with_sonic_weights) if not has_weights)
+    stages_with_materialized_expert_weights = tuple(stages_with_materialized_expert_weights)
+    staged_compute_materialization = (
+        pipeline.sonic_fsdp_materialization == "staged_per_step" or fused_expert_accumulation
+    )
+    if staged_compute_materialization and not all(stages_with_materialized_expert_weights):
+        missing_stages = tuple(
+            index for index, has_weights in enumerate(stages_with_materialized_expert_weights) if not has_weights
+        )
         raise ValueError(
-            "staged_per_step Sonic FSDP materialization requires Sonic expert weights on every stage; "
+            "staged expert materialization requires supported expert weights on every stage; "
             f"missing stages: {missing_stages}"
         )
 
@@ -2981,6 +3078,57 @@ def _make_explicit_mpmd_train_step(
 
         return jax.grad(activation_projection, argnums=(0, 1))(params, hidden)
 
+    def stage0_backward_accumulating(
+        params: TransformerPipelineStage,
+        qb_betas: jax.Array,
+        batch: GrugLmExample,
+        d_hidden: jax.Array,
+        accumulators: StageExpertGradientAccumulators,
+    ):
+        def activation_projection(stage_params):
+            compute_params = _compute_stage(stage_params, qb_betas, mp)
+            hidden = compute_params.embed_tokens(batch.tokens)
+            hidden, _, accumulation_token = compute_params.block_range_accumulating_weight_gradient(
+                hidden,
+                accumulators.w13,
+                accumulators.w2,
+                mask=batch.attn_mask,
+            )
+            projection = jnp.sum(hidden.astype(jnp.float32) * d_hidden.astype(jnp.float32))
+            return projection + accumulation_token
+
+        stage_gradients = jax.grad(activation_projection)(params)
+        return (
+            _stage_without_expert_gradients(stage_gradients),
+            _stage_expert_gradient_accumulators(stage_gradients),
+        )
+
+    def stage_backward_accumulating(
+        params: TransformerPipelineStage,
+        qb_betas: jax.Array,
+        hidden: jax.Array,
+        batch: GrugLmExample,
+        d_hidden: jax.Array,
+        accumulators: StageExpertGradientAccumulators,
+    ):
+        def activation_projection(stage_params, stage_hidden):
+            compute_params = _compute_stage(stage_params, qb_betas, mp)
+            stage_hidden, _, accumulation_token = compute_params.block_range_accumulating_weight_gradient(
+                stage_hidden,
+                accumulators.w13,
+                accumulators.w2,
+                mask=batch.attn_mask,
+            )
+            projection = jnp.sum(stage_hidden.astype(jnp.float32) * d_hidden.astype(jnp.float32))
+            return projection + accumulation_token
+
+        stage_gradients, input_gradient = jax.grad(activation_projection, argnums=(0, 1))(params, hidden)
+        return (
+            _stage_without_expert_gradients(stage_gradients),
+            _stage_expert_gradient_accumulators(stage_gradients),
+            input_gradient,
+        )
+
     def stage_input_gradient_backward(params, qb_betas, hidden, batch, d_hidden):
         return _stage_input_gradient_backward(params, qb_betas, hidden, batch, d_hidden, mp)
 
@@ -3020,6 +3168,46 @@ def _make_explicit_mpmd_train_step(
             params, hidden
         )
         return loss, qb_betas_next, grads, d_hidden
+
+    def last_stage_loss_and_grads_accumulating(
+        params: TransformerPipelineStage,
+        qb_betas: jax.Array,
+        hidden: jax.Array,
+        batch: GrugLmExample,
+        accumulators: StageExpertGradientAccumulators,
+    ):
+        def loss_fn(stage_params, stage_hidden):
+            compute_params = _compute_stage(stage_params, qb_betas, mp)
+            stage_hidden, router_metrics, accumulation_token = compute_params.block_range_accumulating_weight_gradient(
+                stage_hidden,
+                accumulators.w13,
+                accumulators.w2,
+                mask=batch.attn_mask,
+            )
+            stage_hidden = compute_params.finalize_hidden(stage_hidden)
+            loss, metrics = compute_params.hidden_next_token_loss(
+                stage_hidden,
+                batch.tokens,
+                batch.loss_weight,
+                router_metrics,
+                reduction="mean",
+                logsumexp_weight=z_loss,
+                return_router_metrics=True,
+            )
+            return loss + accumulation_token, metrics["qb_beta_per_layer"]
+
+        (loss, qb_betas_next), (stage_gradients, input_gradient) = jax.value_and_grad(
+            loss_fn,
+            argnums=(0, 1),
+            has_aux=True,
+        )(params, hidden)
+        return (
+            loss,
+            qb_betas_next,
+            _stage_without_expert_gradients(stage_gradients),
+            _stage_expert_gradient_accumulators(stage_gradients),
+            input_gradient,
+        )
 
     def explicit_group2_pre_bootstrap(
         block_params,
@@ -3234,19 +3422,92 @@ def _make_explicit_mpmd_train_step(
     def materialize_compute_params(params: TransformerPipelineStage):
         return params
 
-    def sonic_materialization_completion_token(
+    def expert_materialization_completion_token(
         params: TransformerPipelineStage,
         incoming_token: jax.Array,
     ) -> jax.Array:
         completion_token = incoming_token.astype(jnp.float32)
         for block in params.blocks:
-            if block.mlp is None or block.mlp.expert_mlp.implementation != "sonic":
+            implementation = block.mlp.expert_mlp.implementation
+            if implementation != "sonic" and not (fused_expert_accumulation and implementation == "ring"):
                 continue
             expert_mlp = block.mlp.expert_mlp
             completion_token = completion_token + jnp.sum(expert_mlp.w_gate[0, :, 0], dtype=jnp.float32)
             completion_token = completion_token + jnp.sum(expert_mlp.w_up[0, :, 0], dtype=jnp.float32)
             completion_token = completion_token + jnp.sum(expert_mlp.w_down[0, 0, :], dtype=jnp.float32)
         return completion_token
+
+    def initialize_expert_gradient_accumulators(
+        params: TransformerPipelineStage,
+    ) -> StageExpertGradientAccumulators:
+        return StageExpertGradientAccumulators(
+            w13=tuple(
+                jnp.zeros(
+                    (
+                        block.mlp.expert_mlp.w_gate.shape[0],
+                        block.mlp.expert_mlp.w_gate.shape[1],
+                        block.mlp.expert_mlp.w_gate.shape[2] + block.mlp.expert_mlp.w_up.shape[2],
+                    ),
+                    dtype=jnp.float32,
+                )
+                for block in params.blocks
+            ),
+            w2=tuple(jnp.zeros_like(block.mlp.expert_mlp.w_down, dtype=jnp.float32) for block in params.blocks),
+        )
+
+    def sync_expert_gradient_accumulators(
+        accumulators: StageExpertGradientAccumulators,
+    ) -> StageExpertGradientAccumulators:
+        mesh = jax.sharding.get_abstract_mesh()
+
+        def sync_w13(value):
+            return jax.lax.psum_scatter(value, "data", scatter_dimension=1, tiled=True)
+
+        def sync_w2(value):
+            return jax.lax.psum_scatter(value, "data", scatter_dimension=2, tiled=True)
+
+        return StageExpertGradientAccumulators(
+            w13=tuple(
+                jax.shard_map(
+                    sync_w13,
+                    mesh=mesh,
+                    in_specs=P("expert", None, None),
+                    out_specs=P("expert", "data", None),
+                    check_vma=False,
+                )(value)
+                for value in accumulators.w13
+            ),
+            w2=tuple(
+                jax.shard_map(
+                    sync_w2,
+                    mesh=mesh,
+                    in_specs=P("expert", None, None),
+                    out_specs=P("expert", None, "data"),
+                    check_vma=False,
+                )(value)
+                for value in accumulators.w2
+            ),
+        )
+
+    def average_expert_gradients(
+        accumulators: StageExpertGradientAccumulators,
+    ) -> StageExpertGradientAccumulators:
+        scale = jnp.asarray(1.0 / pipeline.microbatches, dtype=jnp.float32)
+        return StageExpertGradientAccumulators(
+            w13=tuple(value * scale for value in accumulators.w13),
+            w2=tuple(value * scale for value in accumulators.w2),
+        )
+
+    def update_fused_expert_stage(
+        params: TransformerPipelineStage,
+        opt_state: optax.OptState,
+        ordinary_gradient_sum: TransformerPipelineStage,
+        expert_accumulators: StageExpertGradientAccumulators,
+    ):
+        ordinary_gradients = _average_microbatch_tree(ordinary_gradient_sum, pipeline.microbatches)
+        expert_gradients = average_expert_gradients(sync_expert_gradient_accumulators(expert_accumulators))
+        gradients = _stage_with_expert_gradients(ordinary_gradients, expert_gradients)
+        return update_stage(params, opt_state, gradients)
 
     def add_trees(left, right):
         return _accumulate_microbatch_tree(left, right)
@@ -3725,8 +3986,20 @@ def _make_explicit_mpmd_train_step(
         grouped_stage_outputs = {}
         compute_params = (
             {}
-            if pipeline.sonic_fsdp_materialization == "staged_per_step"
+            if staged_compute_materialization
             else {stage_index: stage_params for stage_index, stage_params in enumerate(params)}
+        )
+        expert_accumulators = (
+            [
+                mpmd.task(
+                    initialize_expert_gradient_accumulators,
+                    name=f"grug_1f1b_stage{stage_index}_initialize_expert_gradient_accumulators",
+                    out_shardings=expert_accumulator_shardings[stage_index],
+                )(stage_params)
+                for stage_index, stage_params in enumerate(params)
+            ]
+            if fused_expert_accumulation
+            else [None] * num_stages
         )
         materialization_token_futures = {}
         prioritize_transfers = pipeline.explicit_mpmd_schedule_mode == "transfer_priority"
@@ -3800,14 +4073,14 @@ def _make_explicit_mpmd_train_step(
                 incoming_token = materialization_token_futures[stage_index].done()
             stage_params = mpmd.task(
                 materialize_compute_params,
-                name=f"grug_1f1b_stage{stage_index}_materialize_sonic_weights",
+                name=f"grug_1f1b_stage{stage_index}_materialize_expert_weights",
                 out_shardings=compute_param_shardings[stage_index],
             )(params[stage_index])
             compute_params[stage_index] = stage_params
             if stage_index + 1 < num_stages:
                 completion_token = mpmd.task(
-                    sonic_materialization_completion_token,
-                    name=f"grug_1f1b_stage{stage_index}_sonic_materialization_completion_token",
+                    expert_materialization_completion_token,
+                    name=f"grug_1f1b_stage{stage_index}_expert_materialization_completion_token",
                     out_shardings=stage_token_shardings[stage_index],
                 )(stage_params, incoming_token)
                 materialization_token_futures[stage_index + 1] = mpmd.transfer(
@@ -4170,16 +4443,41 @@ def _make_explicit_mpmd_train_step(
                         out_shardings=last_stage_head_gradient_shardings,
                     )
                 else:
-                    loss, stage_qb_betas, stage_grads, d_hidden = mpmd.task(
-                        last_stage_loss_and_grads,
-                        name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_loss_backward",
-                        out_shardings=(
-                            last_loss_sharding,
-                            qb_shardings[stage_index],
-                            param_shardings[stage_index],
-                            activation_shardings[stage_index],
-                        ),
-                    )(stage_params, qb_betas[stage_index], stage_inputs[key], stage_batches[0])
+                    if fused_expert_accumulation:
+                        (
+                            loss,
+                            stage_qb_betas,
+                            stage_grads,
+                            expert_accumulators[stage_index],
+                            d_hidden,
+                        ) = mpmd.task(
+                            last_stage_loss_and_grads_accumulating,
+                            name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_loss_backward_accumulating",
+                            out_shardings=(
+                                last_loss_sharding,
+                                qb_shardings[stage_index],
+                                ordinary_gradient_shardings[stage_index],
+                                expert_accumulator_shardings[stage_index],
+                                activation_shardings[stage_index],
+                            ),
+                        )(
+                            stage_params,
+                            qb_betas[stage_index],
+                            stage_inputs[key],
+                            stage_batches[0],
+                            expert_accumulators[stage_index],
+                        )
+                    else:
+                        loss, stage_qb_betas, stage_grads, d_hidden = mpmd.task(
+                            last_stage_loss_and_grads,
+                            name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_loss_backward",
+                            out_shardings=(
+                                last_loss_sharding,
+                                qb_shardings[stage_index],
+                                param_shardings[stage_index],
+                                activation_shardings[stage_index],
+                            ),
+                        )(stage_params, qb_betas[stage_index], stage_inputs[key], stage_batches[0])
                 if prioritize_transfers:
                     d_hidden_futures[(stage_index - 1, microbatch_key)] = send_pipeline_wire_value(
                         d_hidden,
@@ -4205,7 +4503,11 @@ def _make_explicit_mpmd_train_step(
                         grads[stage_index],
                         stage_grads,
                         name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_accumulate_grads",
-                        out_shardings=param_shardings[stage_index],
+                        out_shardings=(
+                            ordinary_gradient_shardings[stage_index]
+                            if fused_expert_accumulation
+                            else param_shardings[stage_index]
+                        ),
                     )
                 if not prioritize_transfers:
                     d_hidden_futures[(stage_index - 1, microbatch_key)] = send_pipeline_wire_value(
@@ -4262,16 +4564,31 @@ def _make_explicit_mpmd_train_step(
                         out_shardings=stage0_embedding_gradient_shardings,
                     )
                 else:
-                    stage_grads = mpmd.task(
-                        stage0_backward,
-                        name=f"grug_1f1b_mb{microbatch_name}_stage0_backward",
-                        out_shardings=param_shardings[0],
-                    )(stage_params, qb_betas[0], stage_batches[0], d_hidden)
+                    if fused_expert_accumulation:
+                        stage_grads, expert_accumulators[0] = mpmd.task(
+                            stage0_backward_accumulating,
+                            name=f"grug_1f1b_mb{microbatch_name}_stage0_backward_accumulating",
+                            out_shardings=(ordinary_gradient_shardings[0], expert_accumulator_shardings[0]),
+                        )(
+                            stage_params,
+                            qb_betas[0],
+                            stage_batches[0],
+                            d_hidden,
+                            expert_accumulators[0],
+                        )
+                    else:
+                        stage_grads = mpmd.task(
+                            stage0_backward,
+                            name=f"grug_1f1b_mb{microbatch_name}_stage0_backward",
+                            out_shardings=param_shardings[0],
+                        )(stage_params, qb_betas[0], stage_batches[0], d_hidden)
                     grads[0] = accumulate_or_set(
                         grads[0],
                         stage_grads,
                         name=f"grug_1f1b_mb{microbatch_name}_stage0_accumulate_grads",
-                        out_shardings=param_shardings[0],
+                        out_shardings=(
+                            ordinary_gradient_shardings[0] if fused_expert_accumulation else param_shardings[0]
+                        ),
                     )
                 backward_done.add(key)
                 return
@@ -4289,11 +4606,29 @@ def _make_explicit_mpmd_train_step(
                 )
                 accumulate_grouped_block_gradients(stage_index, block_gradients, microbatch_name)
             else:
-                stage_grads, d_hidden = mpmd.task(
-                    stage_backward,
-                    name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_backward",
-                    out_shardings=(param_shardings[stage_index], activation_shardings[stage_index]),
-                )(stage_params, qb_betas[stage_index], stage_inputs[key], stage_batches[0], d_hidden)
+                if fused_expert_accumulation:
+                    stage_grads, expert_accumulators[stage_index], d_hidden = mpmd.task(
+                        stage_backward_accumulating,
+                        name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_backward_accumulating",
+                        out_shardings=(
+                            ordinary_gradient_shardings[stage_index],
+                            expert_accumulator_shardings[stage_index],
+                            activation_shardings[stage_index],
+                        ),
+                    )(
+                        stage_params,
+                        qb_betas[stage_index],
+                        stage_inputs[key],
+                        stage_batches[0],
+                        d_hidden,
+                        expert_accumulators[stage_index],
+                    )
+                else:
+                    stage_grads, d_hidden = mpmd.task(
+                        stage_backward,
+                        name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_backward",
+                        out_shardings=(param_shardings[stage_index], activation_shardings[stage_index]),
+                    )(stage_params, qb_betas[stage_index], stage_inputs[key], stage_batches[0], d_hidden)
             if prioritize_transfers:
                 d_hidden_futures[(stage_index - 1, microbatch_key)] = send_pipeline_wire_value(
                     d_hidden,
@@ -4307,7 +4642,11 @@ def _make_explicit_mpmd_train_step(
                     grads[stage_index],
                     stage_grads,
                     name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_accumulate_grads",
-                    out_shardings=param_shardings[stage_index],
+                    out_shardings=(
+                        ordinary_gradient_shardings[stage_index]
+                        if fused_expert_accumulation
+                        else param_shardings[stage_index]
+                    ),
                 )
             if not prioritize_transfers:
                 d_hidden_futures[(stage_index - 1, microbatch_key)] = send_pipeline_wire_value(
@@ -4506,20 +4845,35 @@ def _make_explicit_mpmd_train_step(
             for stage_index, stage_qb_betas in enumerate(qb_betas_next)
         ]
         if pipeline.explicit_mpmd_stage_task_microbatch_group_size == 1:
-            grads = [
-                mpmd.task(
+            for stage_index in range(num_stages):
+                stage_grads = grads[stage_index]
+                if stage_grads is None:
+                    raise ValueError(f"1F1B did not accumulate gradients for stage {stage_index}")
+                if fused_expert_accumulation:
+                    stage_expert_accumulators = expert_accumulators[stage_index]
+                    if stage_expert_accumulators is None:
+                        raise ValueError(f"1F1B did not accumulate expert gradients for stage {stage_index}")
+                    params[stage_index], opt_state[stage_index] = mpmd.task(
+                        update_fused_expert_stage,
+                        name=f"grug_1f1b_stage{stage_index}_update_fused_expert",
+                        out_shardings=(param_shardings[stage_index], opt_state_shardings[stage_index]),
+                    )(
+                        params[stage_index],
+                        opt_state[stage_index],
+                        stage_grads,
+                        stage_expert_accumulators,
+                    )
+                    continue
+                averaged_grads = mpmd.task(
                     average_tree,
                     name=f"grug_1f1b_stage{stage_index}_average_grads",
                     out_shardings=param_shardings[stage_index],
                 )(stage_grads)
-                for stage_index, stage_grads in enumerate(grads)
-            ]
-            for stage_index in range(num_stages):
                 params[stage_index], opt_state[stage_index] = mpmd.task(
                     update_stage,
                     name=f"grug_1f1b_stage{stage_index}_update",
                     out_shardings=(param_shardings[stage_index], opt_state_shardings[stage_index]),
-                )(params[stage_index], opt_state[stage_index], grads[stage_index])
+                )(params[stage_index], opt_state[stage_index], averaged_grads)
         else:
             for stage_index in range(num_stages):
                 if any(block_gradient is None for block_gradient in grouped_block_grads[stage_index]):

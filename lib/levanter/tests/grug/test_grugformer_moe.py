@@ -41,6 +41,7 @@ from levanter.grug.grug_moe import (
     _expand_from_keep_mask,
     _shard_a2a_params,
     moe_mlp,
+    moe_mlp_accumulating_weight_gradient,
 )
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -1529,6 +1530,148 @@ def test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity():
     assert out.shape == (tokens, hidden_dim)
     assert dropped.shape == ()
     assert int(dropped) > 0
+
+
+def test_moe_mlp_accumulating_weight_gradient_adds_prior_only_to_weight_cotangents(monkeypatch):
+    mesh = _make_ep_ring_test_mesh_or_none()
+    if mesh is None:
+        pytest.skip("requires at least two devices")
+
+    ragged_dot_module = __import__("haliax.nn.ragged_dot", fromlist=[""])
+
+    def fake_triton_pallas_call(
+        lhs,
+        rhs,
+        group_sizes,
+        ragged_dot_dimension_numbers=ragged_dot_module._DEFAULT_DIM_NUMS,
+        *,
+        output_dtype=None,
+    ):
+        output = jax.lax.ragged_dot_general(
+            lhs=lhs,
+            rhs=rhs,
+            group_sizes=group_sizes,
+            ragged_dot_dimension_numbers=ragged_dot_dimension_numbers,
+        )
+        return output if output_dtype is None else output.astype(output_dtype)
+
+    def fake_accumulating_pallas_call(lhs, rhs, group_sizes, accumulator, accumulation_scale):
+        fresh_gradient = fake_triton_pallas_call(
+            lhs,
+            rhs,
+            group_sizes,
+            ragged_dot_module._DRHS_DIM_NUMS,
+            output_dtype=jnp.float32,
+        )
+        return fresh_gradient + accumulation_scale * accumulator
+
+    monkeypatch.setattr(ragged_dot_module, "_has_pallas_triton", True)
+    monkeypatch.setattr(ragged_dot_module, "_triton_pallas_call", fake_triton_pallas_call)
+    monkeypatch.setattr(
+        ragged_dot_module,
+        "_triton_ragged_contracting_dim_accumulating_pallas_call",
+        fake_accumulating_pallas_call,
+    )
+
+    expert_size = mesh.shape["expert"]
+    num_experts = 2 * expert_size
+    tokens = expert_size * 4
+    hidden_dim = 4
+    intermediate_dim = 3
+    topk = 2
+    keys = jax.random.split(jax.random.key(91), 6)
+    x = jax.random.normal(keys[0], (tokens, hidden_dim), dtype=jnp.bfloat16)
+    selected_experts = jnp.arange(tokens * topk, dtype=jnp.int32).reshape(tokens, topk) % num_experts
+    combine_weights = jax.nn.softmax(
+        jax.random.normal(keys[1], (tokens, topk), dtype=jnp.float32),
+        axis=-1,
+    ).astype(jnp.bfloat16)
+    w13 = jax.random.normal(
+        keys[2],
+        (num_experts, hidden_dim, 2 * intermediate_dim),
+        dtype=jnp.bfloat16,
+    )
+    w2 = jax.random.normal(
+        keys[3],
+        (num_experts, intermediate_dim, hidden_dim),
+        dtype=jnp.bfloat16,
+    )
+    w13_prior = jax.random.normal(keys[4], w13.shape, dtype=jnp.float32)
+    w2_prior = jax.random.normal(keys[5], w2.shape, dtype=jnp.float32)
+    output_cotangent = jnp.arange(tokens * hidden_dim, dtype=jnp.float32).reshape(tokens, hidden_dim) / 100
+
+    batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
+    expert_sharding = NamedSharding(mesh, P("expert", None, None))
+
+    def sharded(value, sharding):
+        return jax.device_put(value, sharding)
+
+    x = sharded(x, batch_sharding)
+    selected_experts = sharded(selected_experts, batch_sharding)
+    combine_weights = sharded(combine_weights, batch_sharding)
+    output_cotangent = sharded(output_cotangent, batch_sharding)
+    w13 = sharded(w13, expert_sharding)
+    w2 = sharded(w2, expert_sharding)
+    w13_prior = sharded(w13_prior, expert_sharding)
+    w2_prior = sharded(w2_prior, expert_sharding)
+    zero_w13 = sharded(jnp.zeros(w13.shape, dtype=jnp.float32), expert_sharding)
+    zero_w2 = sharded(jnp.zeros(w2.shape, dtype=jnp.float32), expert_sharding)
+
+    def loss(x, combine_weights, w13, w2, w13_accumulator, w2_accumulator):
+        output, dropped, token = moe_mlp_accumulating_weight_gradient(
+            x,
+            selected_experts,
+            combine_weights,
+            w13,
+            w2,
+            w13_accumulator,
+            w2_accumulator,
+            implementation="ring",
+            mesh=mesh,
+            capacity_factor=1.0,
+        )
+        value = jnp.sum(output.astype(jnp.float32) * output_cotangent) + token
+        return value, (output, dropped, token)
+
+    value_and_grad = jax.value_and_grad(loss, argnums=(0, 1, 2, 3, 4, 5), has_aux=True)
+    with jax.set_mesh(mesh):
+        (zero_value, zero_aux), zero_gradients = value_and_grad(
+            x,
+            combine_weights,
+            w13,
+            w2,
+            zero_w13,
+            zero_w2,
+        )
+        (prior_value, prior_aux), prior_gradients = value_and_grad(
+            x,
+            combine_weights,
+            w13,
+            w2,
+            w13_prior,
+            w2_prior,
+        )
+
+    np.testing.assert_array_equal(np.asarray(prior_aux[0]), np.asarray(zero_aux[0]))
+    assert int(prior_aux[1]) == int(zero_aux[1])
+    assert float(prior_aux[2]) == 0.0
+    assert float(prior_value) == float(zero_value)
+    np.testing.assert_array_equal(np.asarray(prior_gradients[0]), np.asarray(zero_gradients[0]))
+    np.testing.assert_array_equal(np.asarray(prior_gradients[1]), np.asarray(zero_gradients[1]))
+    np.testing.assert_allclose(
+        np.asarray(prior_gradients[2]),
+        np.asarray(zero_gradients[2] + w13_prior),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+    np.testing.assert_allclose(
+        np.asarray(prior_gradients[3]),
+        np.asarray(zero_gradients[3] + w2_prior),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+    np.testing.assert_array_equal(np.asarray(prior_gradients[4]), np.zeros(w13.shape, dtype=np.float32))
+    np.testing.assert_array_equal(np.asarray(prior_gradients[5]), np.zeros(w2.shape, dtype=np.float32))
 
 
 def test_ragged_a2a_receiver_clipping_respects_capacity():

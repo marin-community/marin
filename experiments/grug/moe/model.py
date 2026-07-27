@@ -795,6 +795,22 @@ class MoEMLP(eqx.Module):
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         return apply_moe_routing(self.expert_mlp, x, self.route(x))
 
+    @named_call
+    def accumulating_weight_gradient(
+        self,
+        x: Float[Array, "B S D"],
+        w13_accumulator: Float[Array, "E D I2"],
+        w2_accumulator: Float[Array, "E I D"],
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], Float[Array, ""]]:
+        """Run routed experts with data-local FP32 expert-gradient accumulation."""
+        return apply_moe_routing_accumulating_weight_gradient(
+            self.expert_mlp,
+            x,
+            self.route(x),
+            w13_accumulator,
+            w2_accumulator,
+        )
+
 
 class MoERoutingState(eqx.Module):
     """Transient router output consumed by an explicit expert task."""
@@ -825,6 +841,34 @@ def apply_moe_routing(
     router_stats["capacity_overflow"] = dropped_assignments.astype(jnp.float32)
     routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
     return reshard(routed, _batch_spec()), router_stats
+
+
+def apply_moe_routing_accumulating_weight_gradient(
+    expert_mlp: MoEExpertMlp,
+    x: Float[Array, "B S D"],
+    routing: MoERoutingState,
+    w13_accumulator: Float[Array, "E D I2"],
+    w2_accumulator: Float[Array, "E I D"],
+) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], Float[Array, ""]]:
+    """Run explicit routing while accumulating data-local FP32 expert gradients.
+
+    The returned token must be added to the normalized loss with coefficient
+    exactly one.
+    """
+    b, s, _ = x.shape
+    x_flat = rearrange(x, "b s d -> (b s) d")
+    routed_flat, dropped_assignments, accumulation_token = expert_mlp.accumulating_weight_gradient(
+        x_flat,
+        routing.selected_experts,
+        routing.combine_weights,
+        w13_accumulator,
+        w2_accumulator,
+        mesh=get_abstract_mesh(),
+    )
+    router_stats = dict(routing.router_stats)
+    router_stats["capacity_overflow"] = dropped_assignments.astype(jnp.float32)
+    routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
+    return reshard(routed, _batch_spec()), router_stats, accumulation_token
 
 
 class Block(eqx.Module):
@@ -875,6 +919,23 @@ class Block(eqx.Module):
         return x, router_stats
 
     @named_call
+    def moe_residual_accumulating_weight_gradient(
+        self,
+        x: Float[Array, "B S D"],
+        w13_accumulator: Float[Array, "E D I2"],
+        w2_accumulator: Float[Array, "E I D"],
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], Float[Array, ""]]:
+        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
+        mlp_out, router_stats, accumulation_token = self.mlp.accumulating_weight_gradient(
+            mlp_in,
+            w13_accumulator,
+            w2_accumulator,
+        )
+        if self.shared is not None:
+            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+        return x + mlp_out, router_stats, accumulation_token
+
+    @named_call
     def __call__(
         self,
         x: Float[Array, "B S D"],
@@ -884,6 +945,19 @@ class Block(eqx.Module):
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         x = self.attention_residual(x, mask, use_pko=use_pko, disable_rope=disable_rope)
         return self.moe_residual(x)
+
+    @named_call
+    def accumulating_weight_gradient(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        w13_accumulator: Float[Array, "E D I2"],
+        w2_accumulator: Float[Array, "E I D"],
+        use_pko: bool = False,
+        disable_rope: bool = False,
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], Float[Array, ""]]:
+        x = self.attention_residual(x, mask, use_pko=use_pko, disable_rope=disable_rope)
+        return self.moe_residual_accumulating_weight_gradient(x, w13_accumulator, w2_accumulator)
 
     @named_call
     def grouped_call(
@@ -1238,6 +1312,31 @@ def _run_block_with_remat(
     return eqx.filter_checkpoint(block, policy=remat_policy)(hidden, mask, use_pko, disable_rope)
 
 
+def _run_block_accumulating_weight_gradient_with_remat(
+    block: Block,
+    hidden: Float[Array, "B S D"],
+    mask: AttentionMask | jax.Array,
+    w13_accumulator: Float[Array, "E D I2"],
+    w2_accumulator: Float[Array, "E I D"],
+    *,
+    use_pko: bool,
+    disable_rope: bool,
+    remat_mode: RematMode,
+) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], Float[Array, ""]]:
+    remat_policy = None
+    if remat_mode == "save_moe":
+        remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+    return eqx.filter_checkpoint(Block.accumulating_weight_gradient, policy=remat_policy)(
+        block,
+        hidden,
+        mask,
+        w13_accumulator,
+        w2_accumulator,
+        use_pko,
+        disable_rope,
+    )
+
+
 def _run_grouped_block_with_remat(
     block: Block,
     hidden: Float[Array, "B S D"],
@@ -1324,6 +1423,44 @@ class TransformerPipelineStage(eqx.Module):
         )
 
     @named_call
+    def run_block_accumulating_weight_gradient(
+        self,
+        local_index: int,
+        hidden: Float[Array, "B S D"],
+        w13_accumulator: Float[Array, "E D I2"],
+        w2_accumulator: Float[Array, "E I D"],
+        mask: AttentionMask | jax.Array | None = None,
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], Float[Array, ""]]:
+        """Run one Ring block with a data-local FP32 accumulator pair."""
+        if mask is None:
+            mask = AttentionMask.causal()
+        if not 0 <= local_index < len(self.blocks):
+            raise ValueError(f"local block index must be in [0, {len(self.blocks)}), got {local_index}")
+        if self.blocks[local_index].mlp.expert_mlp.implementation != "ring":
+            raise ValueError("FP32 expert-gradient accumulation requires the exact Ring EP implementation")
+
+        layer_index = self.start_layer + local_index
+        is_last = layer_index == self.config.num_layers - 1
+        is_long = layer_index % 4 == 3 or is_last
+        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        layer_mask = AttentionMask(
+            is_causal=True,
+            sliding_window=None if is_long else self.config.sliding_window,
+            segment_ids=segment_ids,
+            thd_segment_metadata=mask.thd_segment_metadata if isinstance(mask, AttentionMask) else None,
+        )
+        return _run_block_accumulating_weight_gradient_with_remat(
+            self.blocks[local_index],
+            hidden,
+            layer_mask,
+            w13_accumulator,
+            w2_accumulator,
+            use_pko=is_long and not self.config.disable_pko,
+            disable_rope=is_long and self.config.disable_long_rope,
+            remat_mode=self.config.remat_mode,
+        )
+
+    @named_call
     def run_grouped_block(
         self,
         local_index: int,
@@ -1376,6 +1513,53 @@ class TransformerPipelineStage(eqx.Module):
         if mark_stage_end:
             hidden = _mark_pipeline_stage_end(hidden, layer_index=self.end_layer - 1)
         return hidden, _stack_router_metrics(moe_router_stats)
+
+    @named_call
+    def block_range_accumulating_weight_gradient(
+        self,
+        hidden: Float[Array, "B S D"],
+        w13_accumulators: tuple[jax.Array, ...],
+        w2_accumulators: tuple[jax.Array, ...],
+        mask: AttentionMask | jax.Array | None = None,
+        *,
+        mark_stage_end: bool = False,
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], Float[Array, ""]]:
+        """Run all stage blocks with one data-local accumulator pair per block.
+
+        Accumulator values use ordinary expert-weight shapes and may be
+        physically divergent across the data axis. They must stay in the
+        controlled ``check_vma=False`` task chain until explicit synchronization.
+        The returned token must be added to the normalized loss with coefficient
+        exactly one.
+        """
+        if mask is None:
+            mask = AttentionMask.causal()
+        if not self.blocks:
+            raise ValueError("pipeline stages must own at least one transformer block")
+        if len(w13_accumulators) != len(self.blocks) or len(w2_accumulators) != len(self.blocks):
+            raise ValueError(
+                "expert-gradient accumulator counts must match the stage block count; "
+                f"got {len(w13_accumulators)} W13, {len(w2_accumulators)} W2, and {len(self.blocks)} blocks"
+            )
+
+        moe_router_stats: list[dict[str, jax.Array]] = []
+        accumulation_token = jnp.zeros((), dtype=jnp.float32)
+        for local_index, (w13_accumulator, w2_accumulator) in enumerate(
+            zip(w13_accumulators, w2_accumulators, strict=True)
+        ):
+            hidden, router_stats, block_token = self.run_block_accumulating_weight_gradient(
+                local_index,
+                hidden,
+                w13_accumulator,
+                w2_accumulator,
+                mask,
+            )
+            moe_router_stats.append(router_stats)
+            accumulation_token = accumulation_token + block_token
+
+        if mark_stage_end:
+            hidden = _mark_pipeline_stage_end(hidden, layer_index=self.end_layer - 1)
+        return hidden, _stack_router_metrics(moe_router_stats), accumulation_token
 
     @named_call
     def finalize_hidden(self, hidden: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
