@@ -227,3 +227,254 @@ are recorded in the previous volumes.
   `(76, 768)`, and p3 `(108, 5,120)`. The p1 giant checkpoint and four
   2-H100 batch-priority jobs remain healthy; all 12 pods are Ready with zero
   restarts.
+
+### 2026-07-27T18:13:18Z — 301,372 pairs verified; all 362 ambiguities covered
+
+- `/rav/rav-datakit-6854-reconcile-manual-1635-v1375` first established a
+  fully reconciled 295,453-pair checkpoint. It reread and hash-verified 2,327
+  semantic checkpoints and covered all 351 unresolved model outcomes. Applying
+  74 manual false-positive and 277 manual true-duplicate decisions gives:
+
+  - baseline: 236,262 pairs, 149,809 false positives, and 86,453 true
+    duplicates;
+  - treatment: 59,191 pairs, 30,668 false positives, and 28,523 true
+    duplicates;
+  - combined: 180,477 false positives and 114,976 true duplicates.
+
+  False-positive rates are 63.4080% for baseline and 51.8119% for treatment,
+  an 11.5961 percentage-point reduction. The immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-1635.json`
+  with SHA-256
+  `2877b49f3739fc554bae8e40906f0cd9849aefcc23b8b78fcb1e49caf3c43dfb`.
+- Eight full-text decisions close the ambiguities between the prior
+  291,062-pair checkpoint and the 295,453-pair checkpoint. All are true
+  duplicates:
+
+  - baseline row 8,399 is the same 27-line article with one appended
+    related-story teaser. Member/canonical, inspection, semantic-judgment,
+    manual-Parquet, and marker SHA-256 values are
+    `11a9711f2f786fce3068053576fcee2f24cfdf3064ee1042f57fb857025fdc2d` /
+    `1d3d36e4f0c3539139dc79a938512fe5e35b28405eedf88a6b72445b5fbd8b2c`,
+    `5fdf7668b6bbf227701eb8b6978334be8a4a0ea26e1014b63694289cd5c1be74`,
+    `b5012dc99af8121f37b5a875b379ad0dcb989f531893bb7c3a8e5be0c13df3da`,
+    `6790f0a834358c559e60c84802f5c36e752201f192ea9cc3ba74eabb221470e4`,
+    and
+    `c09fd4b09c2f5adc53da5be368f0b42d2390d3c8d77b79d343937696f501027c`;
+  - baseline row 8,656 is a low-value college SEO template whose factual
+    differences are institution and program slots. Hashes in the same order
+    are
+    `df94ab854683c7832b1f3dda801a64f6ad3e5c8dbeb6dab3f0f708330e1ffc57` /
+    `8d55778ed0cda0da08f5da52cfdd6fa8e7451ecdb77c66a4d95e53b6d5717be2`,
+    `f4ca901169f5bd02a2c5165984a5c2ab93fcee59f28336420ce712b9d3530770`,
+    `322a25ce084071bf7d962e53206232dbb1ea52060085d47354306f5782bef503`,
+    `b6b4a726e3e40a14256e182b6ede32ae42b6b7438e78f87d4ec8575c420d742c`,
+    and
+    `eeb5899ce093b4c3bb43a5ea60beea4e331c0d9fd8316d07a97917e59d613930`;
+  - baseline rows 8,984, 8,999, and 9,000 have 184/183, 163/162, and 82/81
+    identical lines. Their only differences are equivalent boxed-answer
+    formatting. The five-hash tuples are:
+    `75195b9283184aeb3b4e3cd2804ab0ede31a98c540da6c5d57f7fef935e58eb1` /
+    `ce739514410bd8cf07d37aae2a9269e10a5d02a7ef9bd3603486ffd13717194c`,
+    `971194a894af7aa291d43ec0981ad61f45abbb7bd4c5d8fcd8679f744edfaf85`,
+    `1b059234982d44cfbbafadfeb8c60a0d6cc38ec202ffc3795aef2030837ae340`,
+    `0b5687211e0a065ac03daa8c0c1f79bc1be73c5c4eb0e5cbc2ae2d23e4ebfc59`,
+    `8df7ac9390df3a389d101ed644ca7ce1cfa81eb2f5c7301db5f5e3d790826e60`;
+    `838e34c32d63f6d2f6aa856fc36fefe6b475f321b69bcdfea54cc8dd2efc33ae` /
+    `190b37e987e314ae2a4528fc5260b47dcce074a2a79bb6d5f58176e3b27f0624`,
+    `705c7b722ac70f812dec5d036bca2ca33c2f70db69194169010a97a9c1622b34`,
+    `ac671c37e0514e1c5809372dc95074a040a9ae64afb688e8fc0b61b7e6276290`,
+    `654c6a1aebb997e947df876de01bbcd2d257b28b400d14ccb0b7acbc40e9710f`,
+    `0434c55855469f899728a822e178e6f1d2840d7c6a15ead87421a7ab1586f194`;
+    and
+    `768c73ab60abb7b54a144f9ddf372093507ca7b8e75237bb11c5d490a3ab0dc2` /
+    `0e385ab7c6d60f0fd842f7298cb4a47eb46dc2506cd07f90da79a5c7004daca7`,
+    `518bfa9a046a945c06a932c9a14937002fbcb5bd41c7bbbfc7ef21159a1357bd`,
+    `c4a1b4668077f7c336aac13a2651e4bf445643a0cf19fffc59d2a9b4f1081742`,
+    `9d8b88b94bc01b4fbd523cccb4e3b6c0c03bdaa02505bd002492d5536c33a930`,
+    `a4eb72ec7eb38b91f108d4d0bb295cc913a9aca21c2e5ea7b5680b3c872e5f2e`;
+  - treatment row 2,517 is a baby-name/numerology SEO template. Hashes are
+    `6c0e7b92810649e6dd3285edb929d95ee2b41501529240062469298cc186c1bf` /
+    `65c7cf0cff9c8d186a15c8c82f41d5683434ad494aa8fb3fd0661635d0de65bf`,
+    `a599221c5ec53f7fbf82bfe1c5c8a07532e955b32f7ff67452df70f84fb54b89`,
+    `372bc33d9407d38f2cee4caa849474492b6e1430b2d331fc5e498cce1ed6b537`,
+    `26a9212ce14e097012d88b7702a71f05c44393839634e55f19da1e467243d2fb`,
+    and
+    `ad7890280b3a147c62dfc68103e1a0c85b4b0da30793f180f53a59105963732b`;
+  - treatment row 4,876 is an AncientFaces surname template. Hashes are
+    `7d8b48223bf044e47c995e965674040c51a032cdf4a09bb853da2169afbdb34e` /
+    `601a3dde5681f75a466ffb662db60199e2247144c9597fa901cf865f914fa2ec`,
+    `29ef365b9ced58065f21253188554454c4eb550e170095dff95dfd717c48f7b5`,
+    `2025816facb53128ef0e4cf53fa84ae2b8adf41b02a2027d0bcf36cc6677b180`,
+    `997745b17d8d68f2bb00db586ab2d2d93c4a3b6c1c6fa7c73342521abdf8d5c6`,
+    and
+    `8c26696e8d9d984e81fe6425db7d1c2d8b9e0fbe875a0826fb6e0cf47b44ed64`;
+  - treatment row 3,427 is the same medical article with a related-article
+    teaser. Hashes are
+    `3afc633a533663cdb814cfd288b071a72ebaa903a094b5727099c3cd53d1abee` /
+    `3a685187aa3ce0a194dbcdba0e8e8794efde7f09bc0eb4feb459efac2f4f15d9`,
+    `a16403e939c7544478bc0034177b56e7656062957403975b3888750eeccd3564`,
+    `b2688a487080f784fdafa33db775e12b17a88c8ee6e22bc1410c399e4570b9b4`,
+    `ecaf87cd3e1ef3dfaf189e5ac95a3585d4a562a4ac1ab0cfbb7a7089761e8b92`,
+    and
+    `5d8572b865355336722aed0c977545cbdbe79ddd32801dbb5f758dbdac2b0417`.
+
+  Eight independent verify-only jobs reread the source rows, outcome Parquets,
+  inspection artifacts, manual decisions, and markers and reproduced every
+  byte and hash.
+- The next 5,919 completed pairs introduced 11 unresolved model outcomes. Full
+  persisted-text review labels nine true duplicates and two false positives:
+
+  - baseline row 5,575 is a sentence-spun satellite-internet SEO article. The
+    location, provider, headings, and synonyms fill the pinned low-value
+    template slots. Member/canonical, inspection, judgment, manual, and marker
+    SHA-256 values are
+    `8187caa4716e67dd4054c2431448748e5208ecdabb25c84d3d532e05d0752355` /
+    `a57b09fab5f4c05b5da866505d9bed30c0f4124507a769b9e32292ae33fb5683`,
+    `ace90a39c3b677f59b85c7e3af33e12890bf27e45dcf791232dec0d8a3dba36e`,
+    `be1a19d8ec2d5ab946c20d16124bcb4cef2cd662240faba97b52c7f7e781f5ca`,
+    `b6329a51d94c31acc803ea9f4e9b9db5b5b836897a11e2f9b790e9b7b4625c6f`,
+    and
+    `94b5e786a9d562b7e9b0b767e241cc7ef0bfe87239194ab35d8f70f422049310`;
+  - baseline row 5,682 is a false positive. Both pages use a Grammarly SEO
+    scaffold, but the member adds a first-person claim about using the product
+    to learn French and additional feature claims. Hashes are
+    `54bf41539f9c5c81c512035fa10cc8e0d10c7f8ed74f048f27119fdd12510bf7` /
+    `b96e0239ebb9ad11b2e660ad8dd032cc93c93a2c3c3b91365461a2d6a9235286`,
+    `76b7f6a614871bcb94b36d6eee20173d9fcdd5a234f3aa68eb203d4385ade714`,
+    `f8f15413f5c2fdec3adfbed55dc404a9e88707fc83817d7111892d4991b1d126`,
+    `2aecf1af21207940c498ee8e23456567879cdb9df0df536342c281fed1de81d1`,
+    and
+    `7b62e420a7d7b37ca4094270a62a9ecd8eeeed3888d7b9f19cb9463aa310df32`;
+  - baseline row 7,341 is a false positive. The member asks for a symbolic
+    product whose answer is `120a^10`; the canonical asks for `54 * 46`, whose
+    answer is 2,484. Hashes are
+    `0ed8a4dc5ecaccb711f71f9ae7ddb25a493eff750fe3ee2eb5c1c2b9a463ff76` /
+    `987b60cb2ac229ddf85800ae1271c587ef6e72ae2d9c9078fd832a86c4c23c24`,
+    `6906d3d3e63220fa41b0d52be0ce2e6d77953636f38385b6437059de40b8b4c0`,
+    `b923b7be31f4cade56a395d54db8daab91c9227599363723d052c9c19836a6c4`,
+    `65b45eba328b7e9857ad5287fba5be10c49c6607c378de609457151b4011d86d`,
+    and
+    `d41ffebce521d7c955d982e5f156a068971a6448890577b61c4bd83364c3d564`;
+  - baseline rows 7,379, 7,637, 7,604, 7,609, and 7,610 are formatting-only
+    duplicates. Exact line comparison finds 219/220, 113/114, 135/136, 61/62,
+    and 169/170 identical lines; the remaining line changes only
+    `\boxed{X}` to `\boxed{\text{X}}`. Their hash tuples are:
+    `89fa521c9217666806d7730e0188f71708b04689eed368ca558573560a985a0d` /
+    `12b9429ab49a78795ed4c1bc2c332e60829d83f31eae942b4c5bb8bddeb69157`,
+    `041aa5ca35eb5fd61750818b634ddb6df0329ef893270fe0fa5882004ec07957`,
+    `9bff97158d5c44906fcda4b26ea5a8362076814414571c3e2f4c9b267c6261ae`,
+    `343a10e4c1396f6fc1540055bc0331831af228de60760c9ff9d9f14cebbba43e`,
+    `4d1d4f251f4103d598f1a64730d4434c437ff1223f3c6d60fb2756c4587235b6`;
+    `3f549f8a4cab6bf126a0fd61b70697d9ae46521eca1a4b29a5ccff96fa136106` /
+    `1cdbdf0b62292cf9de7b2cc755faecca00c0fddd9440569db5156c25a1a18b90`,
+    `0e4f0d3834d63c81ce374c6b5a02f2e6a6ce717ec8f95efb07f16ac1dfc430e1`,
+    `c71bdd5c6db459c72e8de79867398dd5218ead5302da0d3fb29c6e9900f2e131`,
+    `3d120dd8d367ed754e06cc73b61f447bf247e4dece38dcf0d1ad97f2d8a8498a`,
+    `b3718038dc761873215a832a17c26a2f1543e8d1f176a1dac1698ea39c1ec328`;
+    `b782c230ebd353b1d694cb887251244ff0a2874b581097959ac3c80f489db5c2` /
+    `8ae79f6516a907b12582162256a756b62abdc516afc374e4648fb2fefe8f0db2`,
+    `862620c3a82092bdf3ff307467b04931412bc999724a2c7e81fcfa366c6c49d7`,
+    `08fd269bcea4550a1c267cb84b3d221030cf1145c9fc9543ed917c2dc840807f`,
+    `952c38d07bad25eb6976d0a7011f9f6242913183758ad1f556c8a242ab0577c6`,
+    `65d7c71285d85c5e2a4e83110f42cd2886dd25544ed69d788af31bcf5d6087c4`;
+    `003ca93bcb4d39dc7bab32252fb85abd7d5d8c14ea305bdd22d842c7fa7959d9` /
+    `9eef48b4627b82cb278cf126ea1af2df36ea968292a01caf1a86644f2ca07584`,
+    `4a48aba1695f222223b580a1b6a67b9dec2a6f966b0f82efd6ed97d29682094f`,
+    `b7bec3a2616fb0360d386914dd3131689580b1c061f37edbf866383e0890fbdb`,
+    `c1c6719fcfb7dd5fa62cc955ba3b7b7daca3ac5bf019a2e25dfc85893acd5580`,
+    `59b196303e41a2fc450f032cda5a6f824bbcf3ef06a23c1538930e803a6aa7a7`;
+    and
+    `b2d764511ba264b5309a05758de58e78a4a3316ed774703edee71003f63f02f7` /
+    `617c3dda6eb72f452a30066d8b10ef62c6b488d075cb68dc01ba52925d9e6f3d`,
+    `0c952eb18603d30de59714fb78cb3c2f8d3c2d19c63313235bce4c79cf37ee32`,
+    `796eb17ae643336e6eefd923b40038f163aa7af7cbe409da9f5d32092ebed88b`,
+    `ac9ef20ebd6d239b626fb8e6088359859fec7c7c88f690509b308359b6998502`,
+    `4945d47e3e4af7dd7bc968a7f0d1a73403932e8be259d765090cf957e0c21cbf`;
+  - treatment rows 9,033 and 9,069 are formatting-only duplicates with
+    388/389 and 61/62 identical lines. Their hash tuples are
+    `5dea2d66f28687ed1109fcf014bc8c48a9a87d72496739cbb0f3b68a97ebcd31` /
+    `b73ae5af67cbedc077fae9beb8bded0459d71167a43a893926ba0d135aed92ac`,
+    `b8307ed46da1fa905f5150a16da22c757f23cf872147a9374154b0251479b798`,
+    `58af7ec921145ee12e55a3085bc54a1dd4b8454d1eb81c4046c67b5b32610b78`,
+    `d896537efdbb3cca6f7f0e2717931e58ba0156c85d737cd8f71aa1bb455479ca`,
+    `1c22af81a361336d57c061421353dbf05df31449f04065ce75721808ffc83efb`;
+    and
+    `c289064b8f6e62deeba2c81d2970fc0cee9c3fd84c15aa84ddf89a3091acb7fe` /
+    `dc0ff1775e481d8ea36f43c724f8fb83b578eb6305213689e81513659fc15be3`,
+    `528db82be74a67279d4adcaaeee2ba3244a99df2a36be585e179cffd1750e33a`,
+    `f4c987ac67de1202c2bf42b9a50497ade38804b2c11fefe0ab603d45e05f090f`,
+    `24dcdcf56aa281ae40a921d84c80e3d62f401b3ec8d35cb42269af008c4aa767`,
+    `4631000f71450799f04565d97e3452579205501473fdbf9a7fb69a105f46a474`;
+  - treatment row 9,056 is the same raw pair as baseline row 7,604 and has
+    the same formatting-only difference. Its inspection, judgment, manual, and
+    marker SHA-256 values are
+    `099db2f006ba8e4d64c27bb59cd91123d0092a53a1bcfa39dadff123d9a56be9`,
+    `d19f311211bf8f0a726df97d857382bc88927388c74d3ae0ee9aab533a447c45`,
+    `57306cb0fd7a72621cf624411ee09bdcbea50ecb499fb575aa9a0373d78b1b2b`,
+    and
+    `5f393b9e2f1d425ed12b19fd0c13ee3a251cf9fc06d8df860643dd03e4e9dae9`.
+
+  `/rav/rav-datakit-6854-verify-row5575-v1402` through
+  `/rav/rav-datakit-6854-verify-row9056-v1412` independently reread every
+  source row and artifact and reproduced all 11 decisions and hashes.
+- `/rav/rav-datakit-6854-reconcile-manual-1808-v1413` then ran:
+
+  ```text
+  scratch/iris-cli-env/bin/iris \
+    --config lib/iris/config/cw-rno2a.yaml job run --no-wait \
+    --enable-extra-resources --cpu 4 --memory 32g --disk 20g \
+    --priority batch --extra marin-core:cpu \
+    --job-name rav-datakit-6854-reconcile-manual-1808-v1413 -- \
+    python experiments/datakit/scripts/dedup_ab_reconcile_manual_tmp.py \
+    --snapshot 20260727-1808
+  ```
+
+  It verified 2,374 semantic checkpoints and all 362 unresolved outcomes.
+  There are no missing manual outcomes. Applying 76 false-positive and 286
+  true-duplicate manual decisions gives:
+
+  | Arm | Pairs | False positives | True duplicates | False-positive rate |
+  | --- | ---: | ---: | ---: | ---: |
+  | baseline | 239,769 | 152,302 | 87,467 | 63.5203% |
+  | treatment | 61,603 | 31,950 | 29,653 | 51.8644% |
+  | combined | 301,372 | 184,252 | 117,120 | 61.1378% |
+
+  The baseline-minus-treatment gap is 11.6559 percentage points. The snapshot
+  covers 39.9020% of the 755,281 semantic candidates. The immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-1808.json`
+  with SHA-256
+  `fe3fbdb153b6ed4e908be07469e97435b4bbc3809c5ab5d5a0d646689560dc5d`.
+  The path-manifest SHA-256 values for semantic markers, manual markers, and
+  manual Parquets are
+  `2c52c1ff845ce365e08c4c1056d9388dcf9df78d7c92e0ed3e37f2d29a7af4f4`,
+  `082eec344c6b1d66e57e117059a57aee16566fbf3223aaeb7b8bf5480d3491b8`,
+  and
+  `20e2b3bd822e12d7b0f7f134a200c66f77a51a9bedacb9ea5b6badcc2795c8fe`.
+  The only anomalies remain historical shadow records: two same-label
+  duplicate manual Parquet keys, three obsolete outcome-hash bindings, and
+  146 orphan manual Parquets. Marker-bound records are internally consistent;
+  duplicate manual keys, extra decisions, extra Parquets, and missing Parquets
+  are all zero.
+- Audit jobs from
+  `/rav/rav-datakit-6854-audit-fast-1754-v1377` through
+  `/rav/rav-datakit-6854-audit-fast-1811-v1416` independently reread the
+  advancing completion markers. Two formerly blocking giant checkpoints
+  completed:
+
+  - p1 decision-file 44 offset 0 contains 128 pairs and 122,322,523 combined
+    characters; its outcome SHA-256 is
+    `516550f56d40a13c8411b3156fe8648f510850288adaa95f7615c029639635f6`;
+  - p3 decision-file 109 offset 0 contains 128 pairs and 109,562,149 combined
+    characters; its outcome SHA-256 is
+    `e8f5f3a07b2b1385c15a6cc705a46a44bf403a95cfad5cb68e9720d943dc0012`.
+
+  The audits rediscovered the 11 manually closed cases above and found no
+  additional ambiguity. `/rav/rav-datakit-6854-audit-fast-1813-v1417`
+  records the current four pending frontiers: p0 `(13, 0)`, p1 `(44, 128)`,
+  p2 `(77, 0)`, and p3 `(109, 128)`. Each is an unfinished large-text
+  checkpoint; combined character counts are 120,292,052, 64,263,142,
+  139,043,746, and 48,729,275.
+- The four semantic-review parents, four inference brokers, and four 2-H100
+  workers remain running at batch priority. The durable code/logbook commit
+  before this entry is
+  `9e1b676311a903f1f297629bf1b02a20e643bd11`.
