@@ -6,7 +6,8 @@
 Runs the four best completed 8-epoch configurations from MarinFold #117
 (https://github.com/Open-Athena/MarinFold/issues/117) with training-time amino-acid
 augmentation. Each configuration is trained both from scratch and from its corresponding
-exp117 checkpoint, for eight logical trials total.
+exp117 checkpoint, for eight logical trials total. Checkpoint trials strictly load the
+exp117 model subtree into a fresh optimizer and exp166 schedule at step 0.
 
 ``TRIAL`` identifies a logical trial and excludes region. ``REGION`` is included in the
 W&B run and suggested Iris job identities so three regional executions can race without
@@ -48,16 +49,19 @@ Smoke-test the same path under an isolated identity. ``SMOKE_STEPS`` defaults to
 
 import logging
 import os
+import posixpath
 from collections.abc import Sequence
 from dataclasses import dataclass, fields, replace
 from enum import StrEnum
 
+import fsspec
 import jax
 import numpy as np
 from fray.cluster import ResourceConfig
 from fray.types import get_tpu_topology, tpu_family
 from haliax import Axis
 from jaxtyping import PRNGKeyArray
+from levanter.checkpoint import latest_checkpoint_path
 from levanter.data.dataset import AsyncDataset
 from levanter.data.text.datasets import BlockShuffleConfig, LmDataConfig
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
@@ -72,6 +76,7 @@ from marin.experiment.train import train_lm
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.rl.placement import marin_prefix_for_region, singleton_region_list
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem import TransferBudget, prefix_join, record_transfer
 
 from experiments.coral.batch_calibration import (
     TpuBatchConfig,
@@ -90,7 +95,7 @@ RUN_PREFIX: str = "prot-exp166-cv1-aaaug"
 WANDB_GROUP: str = "exp166-contacts-v1-aa-augmentation"
 SMOKE_RUN_PREFIX: str = "prot-exp166-aaaug-smoke"
 SMOKE_WANDB_GROUP: str = "exp166-aaaug-smoke"
-SMOKE_VERSION: str = "v4"
+SMOKE_VERSION: str = "v7"
 SMOKE_STEPS_DEFAULT: int = 2
 SMOKE_MAX_EVAL_BATCHES: int = 1
 
@@ -103,6 +108,7 @@ VAL_DOCS: str = f"{_DOCS_BASE}/val/*.parquet"
 COMPONENT_TRAIN: str = "tokenized/contacts-v1"
 COMPONENT_VAL: str = "tokenized/contacts-v1-val"
 TRAIN_TOKENS: int = 4_676_753_425
+EXP117_CHECKPOINT_TRANSFER_BUDGET_GB: int = 24
 
 # Token ids from the pinned contacts-v1 tokenizer. The augmentation validates these
 # at training startup before touching examples.
@@ -150,6 +156,7 @@ class Point:
     weight_decay: float
     batch_size: int
     exp117_run: str
+    exp117_region: str
     exp117_loss: float
 
     @property
@@ -176,6 +183,7 @@ POINTS: tuple[Point, ...] = (
         weight_decay=0.2,
         batch_size=64,
         exp117_run="prot-exp117-cv1-s02-1_5b-e8-lr3p162e-3-wd0p2-bs64-europe-west4",
+        exp117_region="europe-west4",
         exp117_loss=2.7130589485168457,
     ),
     Point(
@@ -184,6 +192,7 @@ POINTS: tuple[Point, ...] = (
         weight_decay=1.6,
         batch_size=64,
         exp117_run="prot-exp117-cv1-s02-1_5b-e8-lr3p162e-4-wd1p6-bs64-us-east5",
+        exp117_region="us-east5",
         exp117_loss=2.733017921447754,
     ),
     Point(
@@ -192,6 +201,7 @@ POINTS: tuple[Point, ...] = (
         weight_decay=0.1,
         batch_size=128,
         exp117_run="prot-exp117-cv1-s02-1_5b-e8-lr3p162e-3-wd0p1-bs128-europe-west4",
+        exp117_region="europe-west4",
         exp117_loss=2.736903667449951,
     ),
     Point(
@@ -200,6 +210,7 @@ POINTS: tuple[Point, ...] = (
         weight_decay=0.8,
         batch_size=128,
         exp117_run="prot-exp117-cv1-s02-1_5b-e8-lr1e-3-wd0p8-bs128-us-east5",
+        exp117_region="us-east5",
         exp117_loss=2.7450978755950928,
     ),
 )
@@ -301,13 +312,96 @@ def smoke_run_id(trial: Trial, region: str, tpu: str) -> str:
 # --- Checkpoint initialization ----------------------------------------------
 
 
+@dataclass(frozen=True)
+class StageCheckpointConfig:
+    """Copy the final exp117 checkpoint into this execution's regional bucket."""
+
+    source_run_path: str
+    output_path: str
+    transfer_budget_gb: int
+
+
+def _checkpoint_objects(fs, checkpoint_path: str) -> dict[str, dict]:
+    objects = fs.find(checkpoint_path, detail=True)
+    return {path: info for path, info in objects.items() if info.get("type") != "directory"}
+
+
+def _stage_checkpoint(config: StageCheckpointConfig) -> None:
+    source_checkpoints = prefix_join(config.source_run_path, "checkpoints")
+    source_checkpoint = latest_checkpoint_path(source_checkpoints)
+    checkpoint_name = source_checkpoint.rstrip("/").rsplit("/", 1)[-1]
+    destination_checkpoint = prefix_join(prefix_join(config.output_path, "checkpoints"), checkpoint_name)
+
+    source_fs, source_path = fsspec.core.url_to_fs(source_checkpoint)
+    destination_fs, destination_path = fsspec.core.url_to_fs(destination_checkpoint)
+    if type(source_fs) is not type(destination_fs):
+        raise TypeError(
+            f"checkpoint staging requires one filesystem type, got {type(source_fs)} and {type(destination_fs)}"
+        )
+
+    source_objects = _checkpoint_objects(source_fs, source_path)
+    if not source_objects:
+        raise FileNotFoundError(f"no objects found in exp117 checkpoint {source_checkpoint}")
+    total_bytes = sum(int(info.get("size", 0)) for info in source_objects.values())
+
+    if source_checkpoint != destination_checkpoint:
+        budget = TransferBudget(limit_bytes=config.transfer_budget_gb * 1024**3)
+        record_transfer(total_bytes, source_checkpoint, budget=budget)
+        logging.info(
+            "Staging exp117 checkpoint %s -> %s (%d objects, %.2f GiB)",
+            source_checkpoint,
+            destination_checkpoint,
+            len(source_objects),
+            total_bytes / 1024**3,
+        )
+        for source_object in source_objects:
+            relative_path = posixpath.relpath(source_object, source_path)
+            destination_object = posixpath.join(destination_path, relative_path)
+            destination_fs.makedirs(posixpath.dirname(destination_object), exist_ok=True)
+            source_fs.copy(source_object, destination_object)
+
+    destination_objects = _checkpoint_objects(destination_fs, destination_path)
+    source_sizes = {
+        posixpath.relpath(path, source_path): int(info.get("size", 0)) for path, info in source_objects.items()
+    }
+    destination_sizes = {
+        posixpath.relpath(path, destination_path): int(info.get("size", 0)) for path, info in destination_objects.items()
+    }
+    if destination_sizes != source_sizes:
+        missing = sorted(source_sizes.keys() - destination_sizes.keys())
+        extra = sorted(destination_sizes.keys() - source_sizes.keys())
+        mismatched = sorted(
+            path
+            for path in source_sizes.keys() & destination_sizes.keys()
+            if source_sizes[path] != destination_sizes[path]
+        )
+        raise RuntimeError(
+            f"incomplete staged checkpoint at {destination_checkpoint}: {missing=}, {extra=}, {mismatched=}"
+        )
+    logging.info(
+        "Exp117 checkpoint ready at region-local path %s (%d objects, %.2f GiB)",
+        destination_checkpoint,
+        len(destination_objects),
+        total_bytes / 1024**3,
+    )
+
+
 def exp117_checkpoint(point: Point) -> ArtifactStep[LevanterCheckpoint]:
-    """Adopt the relocated exp117 output through the region-local mirror filesystem."""
-    return ArtifactStep.adopt(
-        name=f"adopted/exp117/{point.key}",
+    """Stage the relocated exp117 checkpoint into the execution region before TPU allocation."""
+    source_run_path = (
+        f"{marin_prefix_for_region(point.exp117_region)}/checkpoints/protein/{point.exp117_run}/{EXP117_VERSION}"
+    )
+
+    return ArtifactStep(
+        name=f"checkpoints/protein/{point.exp117_run}",
         version=EXP117_VERSION,
-        source=f"mirror://checkpoints/protein/{point.exp117_run}/{EXP117_VERSION}",
-        kind=LevanterCheckpoint,
+        artifact_type=LevanterCheckpoint,
+        run=_stage_checkpoint,
+        build_config=lambda ctx: StageCheckpointConfig(
+            source_run_path=source_run_path,
+            output_path=ctx.output_path,
+            transfer_budget_gb=EXP117_CHECKPOINT_TRANSFER_BUDGET_GB,
+        ),
     )
 
 
@@ -550,7 +644,7 @@ def _tags(trial: Trial, region: str, *, num_train_steps: int) -> list[str]:
         f"cache_version={CACHE_VERSION}",
     ]
     if trial.initialization is Initialization.EXP117:
-        tags.append(f"source_checkpoint={point.exp117_run}")
+        tags.append(f"source_checkpoint=exp117/{point.key}")
     return tags
 
 
@@ -635,7 +729,19 @@ def _apply_recipe_overrides(
                 per_device_parallelism=batch_config.per_device_parallelism,
                 per_device_eval_parallelism=batch_config.per_device_parallelism,
             )
-        train_config = replace(pod.train_config, trainer=trainer, data=data, data_seed=DATA_SEED)
+        # Exp117 trials are an ablation from pretrained weights, not a continuation of
+        # exp117's finished optimizer/schedule. Move the staged native checkpoint onto
+        # Levanter's strict model-only initialization path: fresh optimizer, fresh data
+        # order, and exp166 step 0.
+        initialize_model_from_checkpoint_path = pod.train_config.initialize_from_checkpoint_path
+        train_config = replace(
+            pod.train_config,
+            trainer=trainer,
+            data=data,
+            data_seed=DATA_SEED,
+            initialize_from_checkpoint_path=None,
+            initialize_model_from_checkpoint_path=initialize_model_from_checkpoint_path,
+        )
         return replace(pod, train_config=train_config)
 
     return replace(step, build_config=build_config)
@@ -681,7 +787,11 @@ def _print_preview(trial: Trial, shape: RunShape, tpu: str, region: str) -> None
     point = trial.point
     batch_config = batch_fit(tpu, point.batch_size)
     init = initial_checkpoint(trial)
-    checkpoint = init.adopt_source if init is not None else "random initialization"
+    checkpoint = (
+        f"region-local staged exp117/{point.key} from {point.exp117_region}"
+        if init is not None
+        else "random initialization"
+    )
     print(
         f"PREVIEW exp166 [{shape.mode}] -- no lower or submit\n"
         f"  trial_id={trial.trial_id}\n"

@@ -67,8 +67,10 @@ by parsing run names.
   completion timestamp as the winner and retain the other completed run as a
   duplicate execution artifact, not an independent trial result.
 - A scratch trial restarts from random initialization after a cross-region
-  move. An `exp117-init` trial restarts from its corresponding mirrored exp117
-  checkpoint. Exp166 intermediate checkpoints do not move between regions.
+  move. An `exp117-init` trial stages its corresponding exp117 checkpoint
+  region-locally, then strictly loads only the model subtree into a fresh
+  optimizer and exp166 schedule at step 0. Exp166 intermediate checkpoints do
+  not move between regions.
 - At most one dispatch may be active for a given `(trial_id, region)`. Violating
   this invariant can make two jobs write the same regional checkpoint.
 

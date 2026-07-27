@@ -1,9 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+
 import numpy as np
 
-from experiments.protein.exp166_sweep import CONTACTS_V1_TOKEN_IDS, shuffle_amino_acid_statements
+from experiments.protein.exp166_sweep import (
+    CONTACTS_V1_TOKEN_IDS,
+    POINTS,
+    Initialization,
+    StageCheckpointConfig,
+    Trial,
+    _stage_checkpoint,
+    _tags,
+    shuffle_amino_acid_statements,
+)
 
 
 def _document(sequence_statements: list[tuple[int, int]], structure_tokens: list[int]) -> list[int]:
@@ -58,3 +69,36 @@ def test_shuffle_amino_acid_statements_changes_order_and_preserves_document_mean
     ):
         assert sorted(augmented_statements) == sorted(original_statements)
         assert np.array_equal(augmented_structure, original_structure)
+
+
+def test_exp117_tags_use_compact_checkpoint_identity():
+    for point in POINTS:
+        tags = _tags(Trial(point, Initialization.EXP117), "europe-west4", num_train_steps=2)
+
+        assert f"source_checkpoint=exp117/{point.key}" in tags
+        assert all(1 <= len(tag) <= 64 for tag in tags)
+
+
+def test_stage_checkpoint_copies_latest_complete_checkpoint(tmp_path):
+    source = tmp_path / "source"
+    older = source / "checkpoints" / "step-3"
+    latest = source / "checkpoints" / "step-7"
+    destination = tmp_path / "destination"
+    for checkpoint, step in ((older, 3), (latest, 7)):
+        (checkpoint / "d").mkdir(parents=True)
+        (checkpoint / "metadata.json").write_text(json.dumps({"step": step, "timestamp": f"2026-07-27T00:00:0{step}"}))
+        (checkpoint / "manifest.ocdbt").write_bytes(f"manifest-{step}".encode())
+        (checkpoint / "d" / "tensor").write_bytes(f"tensor-{step}".encode())
+
+    config = StageCheckpointConfig(
+        source_run_path=str(source),
+        output_path=str(destination),
+        transfer_budget_gb=1,
+    )
+    _stage_checkpoint(config)
+
+    copied = destination / "checkpoints" / "step-7"
+    assert (copied / "metadata.json").read_bytes() == (latest / "metadata.json").read_bytes()
+    assert (copied / "manifest.ocdbt").read_bytes() == b"manifest-7"
+    assert (copied / "d" / "tensor").read_bytes() == b"tensor-7"
+    assert not (destination / "checkpoints" / "step-3").exists()
