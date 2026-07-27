@@ -1118,3 +1118,18 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - Every floating output, loss, and gradient leaf has zero relative-L2 difference in the synthetic fixture. Routing counts and drops are exact.
 - Interpretation:
   - The compile cliff comes from replay and transpose construction across each unrolled full Ring block. It is not isolated to grouped-matmul lowering. The production explicit pullback in `eda3bac52a` removes that nested whole-block transformation without requiring a scanned transformer representation.
+
+### 2026-07-27 05:54 PDT - L8 explicit-backward profile is blocked by an obsolete CUTLASS patch
+- Snapshot: `eda3bac52a`.
+- Jobs:
+  - Parent `/dlwh/iris-run-job-20260727-124912`.
+  - Child `/dlwh/iris-run-job-20260727-124912/grug-train-jaxpp-rno2a-ring-ep2d4-explicitbwd-fp8-l8-e64k4-b512-s4096-p4m16-profile-r2-20260727`.
+- Result:
+  - All four H100x8 ranks failed during setup in `patch_cutlass_dsl_mlir_type_guard.sh`. The patch expected `_isa` in `cutlass/_mlir/dialects/arith.py`; CUTLASS DSL `4.6.0` removed that helper, so every rank reported `Hunk #1 FAILED at 18`.
+  - Iris retried the deterministic setup failure three times. The parent was stopped to end the retry loop. Parent and child are terminal `killed`; all four child tasks are complete and no resource remains live. The child summary reports `failures=3`, `preemptions=4`, task 0 exit `1`, and tasks 1-3 exit `0` after termination.
+  - The run did not reach JAX distributed setup, lowering, `grug_1f1b_mb0_stage3_loss_backward_accumulating`, training, or profiling. W&B has no run with the requested ID, and no profiler artifact exists.
+- Interpretation:
+  - This attempt says nothing about explicit-backward compile time, MFU, FP32 all-reduces, SendRecv, all-gathers, or compute/communication/stall shares. The old L8 fused `16.1404` MFU result remains the comparison point.
+  - Package inspection confirms that CUTLASS DSL `4.6.0` has no `_isa` implementation to patch. The setup helper must treat the missing helper as an obsolete-patch no-op before the unchanged L8 gate can run.
+- Next action:
+  - Make the CUTLASS patch helper version-aware, validate it against `4.6.0`, then relaunch the same L8 profile gate under a fresh run ID and dedicated babysitter.
