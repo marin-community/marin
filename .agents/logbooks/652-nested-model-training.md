@@ -825,3 +825,26 @@ launch:
   `init_from` field. Replacement jobs must log
   `Initialized weights from .../step-8192` and begin with losses near the
   4.295B-token endpoints before they pass initialization validation.
+
+### 2026-07-27 17:26 - Valid weights-only continuation running
+
+- Launched `r31` through the main `marin` controller on
+  `cw-us-east-08a`, 16 nodes and 64 GB200s per arm:
+  - `/power/nest-moe-extend-large-r31-coord`;
+  - `/power/nest-moe-extend-small-r31-coord`;
+  - `/power/nest-moe-extend-ladder25-r31-coord`;
+  - `/power/nest-moe-extend-ladder50-r31-coord`.
+- Every training child searched its new output directory, found no prior run
+  state, and then explicitly loaded the corresponding immutable `r25`
+  `step-8192` checkpoint through the weights-only path.
+- E256 reached phase step 248 and E128 step 263 with finite losses around
+  `4.6`; ladder50 was also finite. Ladder25 was still amortizing its first
+  compilation.
+- All four arms subsequently passed phase step 512, the peak of the
+  fresh-optimizer warmup, with finite losses. The valid continuation therefore
+  passes both initialization and early stability gates.
+- Median step durations after phase step 100 were `0.2134 s` for E256,
+  `0.2179 s` for E128, `0.2122 s` for ladder25, and `0.2121 s` for ladder50.
+  At this early point the nested arms are within measurement noise of E256
+  (`-0.55%` and `-0.60%`), while E128 is `+2.11%`. Final cost estimates will
+  use the full steady-state histories.

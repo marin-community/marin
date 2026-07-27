@@ -2,7 +2,8 @@
 
 Date: 2026-07-27
 
-Status: interim; a 16.1B-token continuation is planned from these checkpoints.
+Status: interim; a 16.1B-token weights-only continuation is running from these
+checkpoints.
 
 ## Decision
 
@@ -205,14 +206,44 @@ model and a production-quality small checkpoint.
 
 ## Continuation
 
-The extension will resume the full model and optimizer state at step 8,192,
-train through step 38,912, and add 16.106B tokens per arm. It retains E256,
-E128, ladder25, and ladder50 so the long curve remains paired.
+The extension initializes each arm from its step-8,192 model weights, resets
+the optimizer and data phase, and adds 30,720 updates, or 16.106B tokens. It
+uses 10% of the original peak learning rate with a 512-update warmup. E256,
+E128, ladder25, and ladder50 remain paired, but the final report will treat
+this explicitly as a weights-only second phase rather than a seamless
+full-state continuation.
 
-Evaluation will occur every 8,192 global steps. Ladder runs will evaluate all
-two E128 cosets and four evenly spaced offsets at E32, E8, and E1. This tests
-whether the poor offset-zero result is typical of each miniature size or an
-unlucky subset.
+This amendment followed two common-mode resume failures. Changing the total
+schedule first caused a 16x learning-rate discontinuity; preserving the
+schedule then exposed a separate non-finite optimizer-state restore. Neither
+failure depended on nested routing. The valid replacement wave explicitly
+loaded the original weights and all four arms passed the 512-update warmup peak
+with finite losses.
+
+Evaluation occurs every 8,192 phase-local steps. Ladder runs evaluate both E128
+cosets and four evenly spaced offsets at E32, E8, and E1. This tests whether
+the poor offset-zero result is typical of each miniature size or an unlucky
+subset.
+
+### Live continuation snapshot
+
+The valid wave passed the 512-update warmup peak with finite losses in every
+arm. A snapshot after roughly 1,900–2,400 logged updates per arm measured
+median post-warmup step times of 213.36 ms for E256, 217.61 ms for E128,
+212.28 ms for ladder25, and 212.10 ms for ladder50. Relative to concurrent
+E256, the nested arms were -0.51% and -0.59%; this is evidence of no measurable
+surcharge, not evidence that masking makes the matrix multiply faster.
+
+![Live training loss across the original and weights-only continuation phases.](assets/nested-model-training-final-loss.png)
+
+The live W&B runs are
+[E256 control](https://wandb.ai/marin-community/marin_moe/runs/nest-moe-001-full-d768-s2048-e256-extend16b-r31),
+[E128 control](https://wandb.ai/marin-community/marin_moe/runs/nest-moe-002-full-d768-s2048-e128-extend16b-r31),
+[ladder25](https://wandb.ai/marin-community/marin_moe/runs/nest-moe-006-full-d768-s2048-e256-extend16b-r31),
+and
+[ladder50](https://wandb.ai/marin-community/marin_moe/runs/nest-moe-007-full-d768-s2048-e256-extend16b-r31).
+Paloma and multi-offset miniature-model results begin at the 8,192-update
+continuation gate.
 
 Machine-readable results are in
 [`nested-model-training-cost-results.json`](assets/nested-model-training-cost-results.json)
