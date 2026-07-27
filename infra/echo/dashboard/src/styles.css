@@ -1,0 +1,36 @@
+@import '@fontsource-variable/noto-sans';
+@import '@fontsource-variable/noto-sans-mono';
+@import 'tailwindcss';
+@config '../tailwind.config.ts';
+
+:root {
+  --color-cream: #f8f6ef;
+  --color-ink: #17211b;
+  color: var(--color-ink);
+  background: var(--color-cream);
+  font-synthesis: none;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background:
+    radial-gradient(circle at 85% 5%, rgb(218 232 218 / 65%), transparent 28rem),
+    radial-gradient(circle at 5% 45%, rgb(236 222 193 / 55%), transparent 25rem),
+    var(--color-cream);
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+a:focus-visible {
+  outline: 3px solid rgb(71 125 90 / 35%);
+  outline-offset: 2px;
+}

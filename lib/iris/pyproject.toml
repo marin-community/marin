@@ -15,9 +15,9 @@ dependencies = [
     # explicitly. The native floor must include COLUMN_TYPE_MAP, used by
     # TelltaleMetric.labels.
     "marin-finelog >= 0.2.10",
-    "marin-finelog-server >= 0.2.12.dev202607250802",
+    "marin-finelog-server>=0.2.13.dev30223685542",
     # Platform companion wheel containing the Rust-owned public proxy listener.
-    "marin-iris-native >= 0.1.3",
+    "marin-iris-native>=0.1.5.dev30223685542",
     "click>=8.3.1",
     "cloudpickle>=3.1.2",
     "connect-python>=0.9.0",

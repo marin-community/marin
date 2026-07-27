@@ -12,6 +12,9 @@ each executor. An evaluation failure is recorded and later evaluations continue.
 the current and remaining evaluations are recorded as infrastructure failures. This directory holds
 the model and suite catalogs, Marin fleet policy, and CLI choices.
 
+The user-facing [evaluation guide](../../docs/tutorials/run-lm-evals.md) contains model-specific
+commands, suite constraints, launch controls, and result locations.
+
 ## Commands
 
 Run through the module:

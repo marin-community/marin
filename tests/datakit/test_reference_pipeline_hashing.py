@@ -75,6 +75,19 @@ def test_minhash_params_rekey_minhash_and_dedup():
     assert changed["datakit/dedup"].hash_id != base["datakit/dedup"].hash_id
 
 
+def test_decon_drop_set_tracks_normalized_source_identity():
+    base = _steps_by_name(_build())["datakit/decon_drop/_combined"].hash_id
+    sources = _sources()
+    sources["a"] = dataclasses.replace(sources["a"], hash_attrs={"revision": 1})
+    changed = reference_datakit_steps(
+        sources,
+        quality_model="gs://some-region/quality/pooled_junkgate2",
+        quality_model_version="pooled-junkgate2",
+        scale=SMOKE_SCALE,
+    )
+    assert _steps_by_name(changed)["datakit/decon_drop/_combined"].hash_id != base
+
+
 def test_centroid_seed_rekeys_training():
     base = _steps_by_name(_build())["datakit/cluster/train_centroids"].hash_id
     seeded = dataclasses.replace(SMOKE_SCALE.cluster, train_seed=7)

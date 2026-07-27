@@ -7,6 +7,8 @@ finish.
 
 Harbor provides containerized agent benchmarks such as Terminal-Bench, SWE-bench Verified, AIME,
 GAIA, BFCL, and Aider. Trials can run in Daytona or another Harbor-supported sandbox environment.
+See [Running Evaluations with Marin](tutorials/run-lm-evals.md) for the model and suite command
+matrix. This page documents Harbor-specific configuration and output behavior.
 
 ## Run a benchmark
 

@@ -5043,7 +5043,6 @@ gpu = [
     { name = "jax", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, extra = ["cuda13"], marker = "extra == 'extra-10-marin-core-gpu' or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-vllm' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
     { name = "jax-triton", marker = "sys_platform == 'linux'" },
     { name = "nvidia-cublas", version = "13.4.1.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
-    { name = "nvidia-cufile", marker = "sys_platform == 'linux'" },
     { name = "nvidia-cutlass-dsl", extra = ["cu13"], marker = "(sys_platform == 'linux' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-vllm') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-vllm' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
     { name = "nvidia-nccl-cu13", marker = "sys_platform == 'linux'" },
     { name = "quack-kernels", marker = "sys_platform == 'linux'" },
@@ -5360,7 +5359,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "marin-dupekit-native", specifier = ">=0.1.2.dev0" },
+    { name = "marin-dupekit-native", specifier = ">=0.1.4.dev30223685542" },
     { name = "pytest-benchmark", marker = "extra == 'benchmark'", specifier = ">=5.2.3" },
     { name = "pytest-memray", marker = "extra == 'benchmark'", specifier = ">=1.8.0" },
 ]
@@ -5384,17 +5383,17 @@ test = [
 
 [[package]]
 name = "marin-dupekit-native"
-version = "0.1.3.dev202607162252"
+version = "0.1.4.dev30223685542"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyarrow" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/08/79/c182b3483a7ab08086d738c12bd6d4e08cff81b3895f3b8858b1e04c6438/marin_dupekit_native-0.1.3.dev202607162252.tar.gz", hash = "sha256:31a1efef191d96df32e62377a0587cda5bd47a2fd76c49706070b32feedfbcf4", size = 22401, upload-time = "2026-07-16T22:58:18.454Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f0/9f/a600c79a10c3fe5e0c7ffdfb3f24ce44c8278d1c8920ab562877cf172088/marin_dupekit_native-0.1.4.dev30223685542.tar.gz", hash = "sha256:c5ec1d753b2077bdded6cca403ac96ed822e4268062be26e8cbaa04e33fef9aa", size = 22174, upload-time = "2026-07-26T23:25:30.878Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/08/50/5b9b758042503fa769d54a4837ba60930ea7d46026f794dfe0a28eb3267d/marin_dupekit_native-0.1.3.dev202607162252-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:1fd976670745af81d2dc6ca2342fcb58b7ca64acf653074e50ca89f50228964b", size = 4527051, upload-time = "2026-07-16T22:58:09.948Z" },
-    { url = "https://files.pythonhosted.org/packages/37/9d/b1e41b78b1998e1db4b5401ec2296674dec47cd18863d31649799f6708e4/marin_dupekit_native-0.1.3.dev202607162252-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:f76b76e4b5cd1e54d503e5d1179f2539345cea4c96e48ec5c1180b885de8e78c", size = 4181539, upload-time = "2026-07-16T22:58:12.236Z" },
-    { url = "https://files.pythonhosted.org/packages/3e/5c/ad51d1b69080a7e0e7f08db35b8998efbd20cb2e41e3155f1a701ad1270a/marin_dupekit_native-0.1.3.dev202607162252-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:3d5f8c3aeaef51a4ea7ae2ec01dca252153ec45ca157c02400de6c5d5ba9ba5a", size = 4393264, upload-time = "2026-07-16T22:58:14.1Z" },
-    { url = "https://files.pythonhosted.org/packages/d5/91/95a22b88d94c1ce44808e30790dc88b6484d25fd982901f23926a9d9d2bd/marin_dupekit_native-0.1.3.dev202607162252-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:3b194b43728954f03a2015546faadc6049eca2ce4a65d30547bb783f54529e14", size = 4723816, upload-time = "2026-07-16T22:58:15.969Z" },
+    { url = "https://files.pythonhosted.org/packages/3e/72/89906afb7a8ce3841255125eacce2896eb60815e1bcb0b20c933fe1d4df7/marin_dupekit_native-0.1.4.dev30223685542-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:45253c786e4eac29b9c93d05e71f49b2df672625af85a014bdb10c7f8ec2608c", size = 4526972, upload-time = "2026-07-26T23:25:22.588Z" },
+    { url = "https://files.pythonhosted.org/packages/4b/d9/74b84bf3f1d9edf18f1960037b874e43909dd91db73883d9b6f27316812b/marin_dupekit_native-0.1.4.dev30223685542-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:499d4ad1524f2df5afa29633cbaa27c72e172cd78eddef42455dcc1919d76dc6", size = 4181542, upload-time = "2026-07-26T23:25:24.495Z" },
+    { url = "https://files.pythonhosted.org/packages/d1/e3/8e1ac37084980a912420d6168445baa407862771a806439dbc788bbbc4fa/marin_dupekit_native-0.1.4.dev30223685542-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:942b9b6e46ca0966ae8e0b584e6195baf2a35c135e35d71158b33060351142c8", size = 4392908, upload-time = "2026-07-26T23:25:26.404Z" },
+    { url = "https://files.pythonhosted.org/packages/aa/92/209e2a5e15a90b17ae71bf601a2d137d96656e7144552681b212c1ef5b75/marin_dupekit_native-0.1.4.dev30223685542-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:b15cf50e1ae166f1912fd8c1ffc7fae7a2a834d7a445db9be0ef38087db79fa1", size = 4723800, upload-time = "2026-07-26T23:25:28.134Z" },
 ]
 
 [[package]]
@@ -5458,14 +5457,14 @@ test = [
 
 [[package]]
 name = "marin-finelog-server"
-version = "0.2.12.dev202607250802"
+version = "0.2.13.dev30223685542"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/6c/98/1279131fd86d139b8b097de2d0a2a2caca991501de75036778e5492b7071/marin_finelog_server-0.2.12.dev202607250802.tar.gz", hash = "sha256:a13d792ec027aa73963cade6e1cf921328c30d6e5929f287c5b844770f0abed9", size = 275105, upload-time = "2026-07-25T08:34:02.834Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/39/38/40b58b3f8da5aef5cfe6f9500fe674f6c6f3d1f7dccc079e0fc59b77c758/marin_finelog_server-0.2.13.dev30223685542.tar.gz", hash = "sha256:759122a012e5d9b2179add3103aaf412e4e7a03f13604b7605ac50f6ea894e50", size = 275998, upload-time = "2026-07-26T23:25:32.603Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b8/1e/6d12735429f765c99e62a0d9c02de8007f109e342bfa1160d57c1d8d4bf7/marin_finelog_server-0.2.12.dev202607250802-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:b713bbee3f2b2dd4a0a7636b5cade5323c8544969ae3e5652d4bb20b5abdf198", size = 41106547, upload-time = "2026-07-25T08:33:44.631Z" },
-    { url = "https://files.pythonhosted.org/packages/04/c4/67d19385ff257cdfa9e040f52d1067449b6943479bbee1a2e4b522f119c4/marin_finelog_server-0.2.12.dev202607250802-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:7497da26cae906c6567c4ba05fac857daef3b8c311964e4df888366cd630889d", size = 38776271, upload-time = "2026-07-25T08:33:48.942Z" },
-    { url = "https://files.pythonhosted.org/packages/e8/43/21fcc0c4161ec31e50ec58bd84eac99290372a63a82f009c683d2d7d6122/marin_finelog_server-0.2.12.dev202607250802-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:52e492d99ad9e2403ddc02628f6634230bd76fb1a7bcdf4e48234f75f64a3fc0", size = 40120599, upload-time = "2026-07-25T08:33:53.419Z" },
-    { url = "https://files.pythonhosted.org/packages/d6/1d/b2817626060da72ee58dd84888716720786c4cb46af3f6c5636158c5d9aa/marin_finelog_server-0.2.12.dev202607250802-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:7ae9910f6f4bfd255ec510fdd6587d52208a4da4503046e33e47fbc50982f1f1", size = 42629332, upload-time = "2026-07-25T08:33:58.48Z" },
+    { url = "https://files.pythonhosted.org/packages/38/95/b7db04931fa34a136d08b190e84451d701de1c44d9b83b37abc35d41d9b5/marin_finelog_server-0.2.13.dev30223685542-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:68f97a08b86591917a2ea9a3f3173d9512f584238d38a9e670b46a0aeedbf7ac", size = 41106540, upload-time = "2026-07-26T23:25:20.628Z" },
+    { url = "https://files.pythonhosted.org/packages/60/a5/5d2f6fd2d5edc82d8d958ced54dd6934560ddd4b7a121528024a9a1c35c1/marin_finelog_server-0.2.13.dev30223685542-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:fd067cbc13ec0a0a58916f6440d2f9337e2f957b7052ac92767c81f897ebb8bf", size = 38776260, upload-time = "2026-07-26T23:25:23.391Z" },
+    { url = "https://files.pythonhosted.org/packages/83/79/c0869c2e0950558052c1203ae8fae3adf744be5c8e1571354a908c8f3251/marin_finelog_server-0.2.13.dev30223685542-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:58098da3e77f62e242481541d8b4dee5837e3b6799f5288dc244c1dd6a93feff", size = 40120589, upload-time = "2026-07-26T23:25:26.134Z" },
+    { url = "https://files.pythonhosted.org/packages/9a/86/9f91d526a0e3e63d1646a521cfaf6b71ec4418505d4133d7493259e53f33/marin_finelog_server-0.2.13.dev30223685542-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:9b2a8c50dfc2936172f3fde87c4b79a33c7c72b7dd575568983f039e36e26888", size = 42629326, upload-time = "2026-07-26T23:25:29.255Z" },
 ]
 
 [[package]]
@@ -5720,8 +5719,8 @@ requires-dist = [
     { name = "humanfriendly", specifier = ">=10.0" },
     { name = "kubernetes", marker = "extra == 'controller'", specifier = ">=31.0.0,<36" },
     { name = "marin-finelog", editable = "lib/finelog" },
-    { name = "marin-finelog-server", specifier = ">=0.2.12.dev202607250802" },
-    { name = "marin-iris-native", specifier = ">=0.1.3" },
+    { name = "marin-finelog-server", specifier = ">=0.2.13.dev30223685542" },
+    { name = "marin-iris-native", specifier = ">=0.1.5.dev30223685542" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "marin-rigging", extras = ["iap"], marker = "extra == 'iap'", editable = "lib/rigging" },
     { name = "marin-rigging", extras = ["secrets"], marker = "extra == 'controller'", editable = "lib/rigging" },
@@ -5772,13 +5771,14 @@ test = [
 
 [[package]]
 name = "marin-iris-native"
-version = "0.1.3"
+version = "0.1.5.dev30223685542"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/a9/13/760aa9f0e65001c097cbe3f74e9be7297d6021ee5c2ad84bdfcbaf5535e3/marin_iris_native-0.1.3.tar.gz", hash = "sha256:cac2402a529693c9fda6ea0e80fbbaa5b30f876eb2e705a56215a560bca1dd3e", size = 36314, upload-time = "2026-07-25T04:54:09.896Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e8/d6/4a01c73b0428bb5c967593cb05222bb0c546305486cce1171c0c7a7b7eb3/marin_iris_native-0.1.5.dev30223685542.tar.gz", hash = "sha256:8928edf09177971bdf175fdfc2efdb3c354e286616c27824d1908e232c38d941", size = 39050, upload-time = "2026-07-26T23:25:20.271Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/15/b6/0cefffd7933688569a5b8abf0c267030853b3997f4ba51af98059e3fd174/marin_iris_native-0.1.3-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:d8c9801596b237f2b4f8d8f7ac326612836f1d9e98ed726d52492a15f7b6aaa4", size = 3328346, upload-time = "2026-07-25T04:54:04.828Z" },
-    { url = "https://files.pythonhosted.org/packages/cb/4d/38552119f7d671bfd05f518073ff99f43354ada900d63f7254b90d3a433f/marin_iris_native-0.1.3-cp312-abi3-manylinux_2_34_aarch64.whl", hash = "sha256:d1579ed483a44e0bd6da60160c7857a8b93b7cc6e082399e919310cfcd231a96", size = 3511249, upload-time = "2026-07-25T04:54:06.836Z" },
-    { url = "https://files.pythonhosted.org/packages/f0/7d/d4fcfbc22c3555111b840d7aa3836c93374cf73652551f605180e36eebf2/marin_iris_native-0.1.3-cp312-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:d9c2101bff28a7219683ca178232368c23a07e799d07331eb28ca7a490e70310", size = 3667004, upload-time = "2026-07-25T04:54:08.442Z" },
+    { url = "https://files.pythonhosted.org/packages/d8/0e/2ffa0d7941a3eb8bf4b5003bff5c8798ce63f99e3af8bd5e24e4b190a321/marin_iris_native-0.1.5.dev30223685542-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:786d39a0a49625a531b3e3255275cdd15f01148aa96a1222a08f3f1a846fb666", size = 3551177, upload-time = "2026-07-26T23:25:13.398Z" },
+    { url = "https://files.pythonhosted.org/packages/d9/33/7a2fee0f825363a3493f24bdf6d17226840a23bb4e84358ecd0dab1dc69f/marin_iris_native-0.1.5.dev30223685542-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:bdbf964ff76a7066e035071bc9b5ae565a739387e95ce2cc4fdba0a3f82bd11c", size = 3348678, upload-time = "2026-07-26T23:25:14.95Z" },
+    { url = "https://files.pythonhosted.org/packages/6e/32/798194040a5d0bcbbb10c10cec9ca63c48326eb6becd100021882f4622bc/marin_iris_native-0.1.5.dev30223685542-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:2ef528df80e0605b144022a4506333ffc2e1ee2539c9381d64095c132dad084f", size = 3489655, upload-time = "2026-07-26T23:25:17.147Z" },
+    { url = "https://files.pythonhosted.org/packages/a6/77/c2f2994163fdd60e3007aa364800ac972a22c7bbed48e807892538808add/marin_iris_native-0.1.5.dev30223685542-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:b383d8aca62955de8cb064dc9a0294d8e5fc8fe01266ec573052f6f2dba69499", size = 3682223, upload-time = "2026-07-26T23:25:19.044Z" },
 ]
 
 [[package]]
@@ -5839,7 +5839,6 @@ gpu = [
     { name = "jax", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, extra = ["cuda13"], marker = "(extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-vllm') or (extra != 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-gpu') or (extra != 'extra-10-marin-core-tpu' and extra != 'extra-10-marin-core-vllm' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
     { name = "jax-triton", marker = "sys_platform == 'linux'" },
     { name = "nvidia-cublas", version = "13.4.1.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
-    { name = "nvidia-cufile", marker = "sys_platform == 'linux'" },
     { name = "nvidia-cutlass-dsl", extra = ["cu13"], marker = "(sys_platform == 'linux' and extra == 'extra-14-marin-levanter-gpu') or (sys_platform != 'linux' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (sys_platform != 'linux' and extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-vllm' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-vllm') or (extra != 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra != 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
     { name = "nvidia-nccl-cu13", marker = "sys_platform == 'linux'" },
     { name = "quack-kernels", marker = "sys_platform == 'linux'" },

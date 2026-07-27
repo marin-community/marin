@@ -11,6 +11,15 @@ EVAL_RUNTIME_ENV_KEYS: tuple[str, ...] = (
     "WANDB_ENTITY",
     "WANDB_PROJECT",
     "HF_TOKEN",
+    # RunAI object-store tuning. These are allowlisted so a prefix assignment on the evaluation
+    # launcher reaches the remote inference child.
+    "RUNAI_STREAMER_CHUNK_BYTESIZE",
+    "RUNAI_STREAMER_CONCURRENCY",
+    "RUNAI_STREAMER_LOG_LEVEL",
+    "RUNAI_STREAMER_LOG_TO_STDERR",
+    "RUNAI_STREAMER_S3_MAX_INFLIGHT_MIB",
+    "RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS",
+    "RUNAI_STREAMER_S3_TRACE",
 )
 
 # Forwarded verbatim from the launch environment into an eval job (present ones only).
