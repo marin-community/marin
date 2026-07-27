@@ -179,12 +179,13 @@ def test_triton_fp32_weight_gradient_preserves_forward_and_input_gradient_dtype(
     assert rhs_gradient.dtype == jnp.float32
 
 
-def test_triton_accumulating_weight_gradient_scales_only_prior_accumulator(monkeypatch):
+@pytest.mark.parametrize("scale", [0.0, 0.25, 1.0, 2.0])
+def test_triton_accumulating_weight_gradient_scales_only_prior_accumulator(monkeypatch, scale):
     lhs = jnp.arange(12, dtype=jnp.bfloat16).reshape(3, 4)
     rhs = jnp.arange(2 * 4 * 5, dtype=jnp.bfloat16).reshape(2, 4, 5)
     group_sizes = jnp.array([2, 1], dtype=jnp.int32)
     accumulator = jnp.arange(rhs.size, dtype=jnp.float32).reshape(rhs.shape) / 10
-    accumulation_scale = jnp.asarray(0.25, dtype=jnp.float32)
+    accumulation_scale = jnp.asarray(scale, dtype=jnp.float32)
 
     def fake_triton_pallas_call(
         lhs,
@@ -222,7 +223,7 @@ def test_triton_accumulating_weight_gradient_scales_only_prior_accumulator(monke
         fake_accumulating_pallas_call,
     )
 
-    def loss(lhs, rhs):
+    def loss(lhs, rhs, accumulator):
         output, token = ragged_dot_module._ragged_dot_triton_accumulating_weight_gradient_impl(
             lhs,
             rhs,
@@ -231,7 +232,11 @@ def test_triton_accumulating_weight_gradient_scales_only_prior_accumulator(monke
         )
         return jnp.sum(output.astype(jnp.float32)) + accumulation_scale * token
 
-    value, (lhs_gradient, rhs_gradient) = jax.value_and_grad(loss, argnums=(0, 1))(lhs, rhs)
+    value, (lhs_gradient, rhs_gradient, accumulator_gradient) = jax.value_and_grad(loss, argnums=(0, 1, 2))(
+        lhs,
+        rhs,
+        accumulator,
+    )
     expected_output = fake_triton_pallas_call(lhs, rhs, group_sizes)
     expected_rhs_gradient = fake_triton_pallas_call(
         lhs,
@@ -245,6 +250,7 @@ def test_triton_accumulating_weight_gradient_scales_only_prior_accumulator(monke
     assert lhs_gradient.dtype == jnp.bfloat16
     assert rhs_gradient.dtype == jnp.float32
     assert jnp.array_equal(rhs_gradient, expected_rhs_gradient + accumulation_scale * accumulator)
+    assert jnp.array_equal(accumulator_gradient, jnp.zeros_like(accumulator))
 
 
 # ---------------------------------------------------------------------------

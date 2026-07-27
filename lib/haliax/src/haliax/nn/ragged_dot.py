@@ -280,7 +280,7 @@ def _triton_ragged_contracting_dim_accumulating_pallas_call(
     accumulator: jax.Array,
     accumulation_scale: jax.Array,
 ) -> jax.Array:
-    """Compute an FP32 drhs and add it directly into an aliased accumulator."""
+    """Compute an FP32 drhs and request reuse of the accumulator buffer."""
     k, m = lhs.shape
     _, n = rhs.shape
     expected_shape = (group_sizes.shape[0], m, n)
@@ -626,12 +626,16 @@ def ragged_dot_accumulating_weight_gradient(
     group_sizes: jax.Array,
     accumulator: jax.Array,
 ) -> tuple[jax.Array, jax.Array]:
-    """Apply Triton ragged dot and accumulate its FP32 weight gradient in place.
+    """Apply Triton ragged dot and return an accumulated FP32 weight gradient.
 
-    The returned scalar token is numerically zero and must be added to the loss.
-    Its cotangent makes accumulator addition linear in the custom VJP. This
-    first-order reverse-mode operation requires one differentiable use of
-    ``rhs`` and a donated FP32 ``accumulator`` with the same shape.
+    The returned scalar token is numerically zero and must be added to the loss
+    with coefficient exactly one, after any loss normalization. Its cotangent
+    makes accumulator addition linear in the custom VJP. This first-order
+    reverse-mode operation requires one differentiable use of ``rhs`` and an
+    FP32 ``accumulator`` with the same shape.
+
+    JAX remains functionally pure: physical buffer reuse requires the enclosing
+    ``jit`` to donate the accumulator and avoid using its old value afterward.
     """
     original_rows = lhs.shape[0]
     if original_rows % 512:
