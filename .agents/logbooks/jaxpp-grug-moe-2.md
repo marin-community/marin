@@ -679,3 +679,19 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - Do not launch a JaxPP pipeline or L24 run from the current BF16-gradient path.
 - Next action:
   - Determine whether a BF16-forward/FP32-weight-gradient custom VJP can return FP32 cotangents legally without making replicated FP32 weights the differentiable primal. Quantify the extra per-microbatch bytes before implementing.
+
+### 2026-07-27 00:56 PDT - Launch FP32 weight-gradient accumulation gate
+- Hypothesis: retaining only W13/W2 cotangents in FP32 will bring EP2/data4 below the accepted `0.002` relative-L2 error while donated FP32 accumulation stays within the `0.839ms` per layer-microbatch headroom needed to compose above 20 MFU.
+- Commit Hash: `cc636b7f076f023942860256e2966b8f60af5c27`.
+- Command:
+  - `uv run iris --config lib/iris/config/cw-rno2a.yaml job run --no-wait --enable-extra-resources --gpu H100x8 --cpu 32 --memory 256GB --disk 128GB --timeout 1800 --max-retries 0 --priority interactive --extra gpu --sync-package marin-levanter --job-name ep-ring-data4-ep2-fp32acc-r18-20260727 -e XLA_PYTHON_CLIENT_MEM_FRACTION 0.70 -e TF_GPU_ALLOCATOR cuda_malloc_async -e HALIAX_RAGGED_DOT_TRITON_BLOCK_K 32 -e HALIAX_RAGGED_DOT_TRITON_NUM_WARPS 8 -- uv run --frozen --package marin-levanter --extra gpu python experiments/grug/moe/benchmark_ep_ring_data_axis.py --microbatch-size 32 --sequence-length 4096 --hidden-dim 2560 --intermediate-dim 1280 --num-experts 64 --top-k 4 --capacity-factor 1.0 --treatment-data-axis-size 4 --warmup 10 --iterations 50 --microbatches-per-step 256 --layers-per-stage 6 --baseline-mfu 18.2583 --baseline-step-seconds 81.037785 --interstage-speedup 1.0179 --promotion-mfu 20.0 --output both`
+- Config:
+  - The Triton grouped matmul keeps BF16 operands, forward output, and input cotangent. Only the W13/W2 cotangents use FP32 output buffers.
+  - The timed VAG includes donated FP32 accumulator reads and writes in both arms. Gradient reduce-scatter remains once per step in FP32; BF16 compute-weight materialization remains once per step.
+  - Job `/dlwh/ep-ring-data4-ep2-fp32acc-r18-20260727` runs on one H100x8 node in RNO2A with 10 warmups, 50 alternating samples, and no retries.
+- Promotion gate:
+  - Loss/output and every gradient leaf relative-L2 must be at most `0.002`; dropped routes/counts must match exactly.
+  - Local VAG must contain zero data-axis collectives. FP32 reduce-scatter and BF16 all-gather may occur only at the step boundary.
+  - The direct EP2/data4 projection composed with the separately measured `1.0179x` inter-stage FP8 gain must exceed `20.0` MFU.
+- Next action:
+  - If all gates pass, implement the same combination in a reduced JaxPP run before L24. Otherwise record the hard negative and stop this branch of optimization.
