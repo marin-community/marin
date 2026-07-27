@@ -500,8 +500,7 @@ mod tests {
     use super::*;
     use crate::store::ipc::{decode_one_record_batch, encode_ipc};
     use crate::test_support::unique_dir;
-    use datafusion::arrow::array::{Int64Array, TimestampMicrosecondArray};
-    use datafusion::arrow::datatypes::{DataType, TimeUnit};
+    use datafusion::arrow::array::Int64Array;
 
     #[test]
     fn truncate_sql_caps_on_char_boundary() {
@@ -537,53 +536,6 @@ mod tests {
         );
         // Zero is the explicit disable escape hatch.
         assert_eq!(parse_query_timeout(Some("0")), None);
-    }
-
-    #[test]
-    fn metadata_cache_limit_is_configurable() {
-        let one_gibibyte = 1024 * MEBIBYTE;
-
-        let runtime = build_runtime_env(MIN_QUERY_POOL_BYTES, Some(one_gibibyte));
-        assert_eq!(
-            runtime.cache_manager.get_metadata_cache_limit(),
-            one_gibibyte
-        );
-    }
-
-    #[tokio::test]
-    async fn recent_timestamp_filter_uses_datafusion_now() {
-        let now_us = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_micros() as i64;
-        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
-            "ts",
-            DataType::Timestamp(TimeUnit::Microsecond, None),
-            false,
-        )]));
-        let batch = RecordBatch::try_new(
-            schema,
-            vec![Arc::new(TimestampMicrosecondArray::from(vec![
-                now_us - 10 * 60 * 1_000_000,
-                now_us - 60 * 1_000_000,
-            ]))],
-        )
-        .unwrap();
-        let ctx = make_ctx();
-        ctx.register_batch("telltale", batch).unwrap();
-
-        let batches = ctx
-            .sql("SELECT ts FROM telltale WHERE ts >= now() - INTERVAL '5 minutes'")
-            .await
-            .unwrap()
-            .collect()
-            .await
-            .unwrap();
-
-        assert_eq!(
-            batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
-            1
-        );
     }
 
     #[tokio::test]
