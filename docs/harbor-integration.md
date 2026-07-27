@@ -38,6 +38,22 @@ uv run python -m experiments.evaluation.cli launch \
 
 Use `--limit N` to cap the number of trials and `--no-wait` to return after submission.
 
+## Runtime progress
+
+The Iris job log receives one line for each Harbor trial state transition. Long-running agent
+trials therefore remain visible without Harbor's interactive terminal display:
+
+```text
+Harbor trial terminal-bench-task__terminus-2__1: started
+Harbor trial terminal-bench-task__terminus-2__1: environment started
+Harbor trial terminal-bench-task__terminus-2__1: agent started
+Harbor trial terminal-bench-task__terminus-2__1: verification started
+Harbor trial terminal-bench-task__terminus-2__1: completed
+```
+
+Failed trials end with `failed (<exception type>)`. Harbor warnings and errors from the isolated
+driver use the same Iris job log.
+
 ## Credentials
 
 Daytona-backed definitions in `experiments/evaluation/evals.py` own their credential references.

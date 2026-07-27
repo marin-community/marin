@@ -1,8 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fsspec.implementations.memory import MemoryFileSystem
@@ -24,6 +26,7 @@ from marin.evaluation.harbor.runner import (
     _write_samples,
     run_harbor,
 )
+from marin.evaluation.harbor.trial_driver import _register_progress_callbacks
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError
 from marin.inference.types import OpenAIEndpoint, RunningModel
@@ -37,6 +40,50 @@ def _running_model() -> RunningModel:
             model="qwen3-0.6b",
         )
     )
+
+
+@pytest.mark.parametrize(
+    ("exception", "final_status"),
+    [
+        (None, "completed"),
+        (SimpleNamespace(exception_type="AgentError"), "failed (AgentError)"),
+    ],
+)
+def test_harbor_trial_driver_emits_line_oriented_progress(exception, final_status, capsys):
+    class FakeJob:
+        def __init__(self) -> None:
+            self.callbacks = []
+
+        def add_callback(self, callback):
+            self.callbacks.append(callback)
+            return self
+
+        on_trial_started = add_callback
+        on_environment_started = add_callback
+        on_agent_started = add_callback
+        on_verification_started = add_callback
+        on_trial_ended = add_callback
+
+    job = FakeJob()
+    _register_progress_callbacks(job)
+    event = SimpleNamespace(
+        trial_name="trial-one",
+        result=SimpleNamespace(exception_info=exception),
+    )
+
+    async def emit_progress() -> None:
+        for callback in job.callbacks:
+            await callback(event)
+
+    asyncio.run(emit_progress())
+
+    assert capsys.readouterr().out.splitlines() == [
+        "Harbor trial trial-one: started",
+        "Harbor trial trial-one: environment started",
+        "Harbor trial trial-one: agent started",
+        "Harbor trial trial-one: verification started",
+        f"Harbor trial trial-one: {final_status}",
+    ]
 
 
 def test_materialize_harbor_dataset_downloads_hf_revision_as_local_tasks(tmp_path, monkeypatch):
