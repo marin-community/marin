@@ -935,6 +935,28 @@ def test_batched_xla_h100_full_vocab_policy_selects_b_tiled_path(monkeypatch: py
     assert batched_xla._h100_full_vocab_b_tiled_block_size(x, w) is None
 
 
+def test_batched_xla_gb200_custom_backward_uses_wide_vocab_blocks(monkeypatch: pytest.MonkeyPatch):
+    x = jax.ShapeDtypeStruct((65536, 5120), jnp.bfloat16)
+    w = jax.ShapeDtypeStruct((5120, 128256), jnp.bfloat16)
+
+    monkeypatch.setattr(batched_xla, "_device_kind", lambda: "nvidia gb200")
+    assert batched_xla._gb200_custom_backward_v_block_size(x, w) == 16384
+    assert (
+        batched_xla._gb200_custom_backward_v_block_size(
+            jax.ShapeDtypeStruct((8191, 5120), jnp.bfloat16),
+            w,
+        )
+        is None
+    )
+    assert (
+        batched_xla._gb200_custom_backward_v_block_size(
+            x,
+            jax.ShapeDtypeStruct((5120, 65535), jnp.bfloat16),
+        )
+        is None
+    )
+
+
 def test_fused_cross_entropy_batched_xla_custom_backward_grad_matches_xla():
     if jax.default_backend() != "gpu":
         pytest.skip("requires GPU backend")

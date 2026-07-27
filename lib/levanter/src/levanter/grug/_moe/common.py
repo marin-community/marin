@@ -3,6 +3,7 @@
 
 """Shared types, routing helpers, and layout utilities for Grug MoE."""
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, TypeAlias, cast, get_args
@@ -26,6 +27,7 @@ MoeImplementation: TypeAlias = Literal[
     "deepep",  # Expert-parallel DeepEP intranode dispatch/combine backend.
     "scatter",  # Single-process grouped GMM with scatter-add combine.
     "sonic",  # Single-process raw Sonic Triton gather/combine backend.
+    "sonic_cute",  # Single-process QuACK SM100 (Blackwell/B200) grouped-GEMM backend.
 ]
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
 _EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all", "deepep")
@@ -34,6 +36,7 @@ _EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all", "deepep")
 _LOCAL_MOE_IMPLEMENTATIONS = (
     "scatter",
     "sonic",
+    "sonic_cute",
 )
 
 _CHECKPOINT_DISPATCH_INPUT = "grug_moe_dispatch_input"
@@ -68,6 +71,21 @@ class MoEExpertMlpPspecs:
     @property
     def w_down(self) -> P:
         return P(self.expert, self.intermediate, self.hidden)
+
+
+def default_moe_expert_pspecs() -> MoEExpertMlpPspecs:
+    """Resolve the FSDP expert-weight sharding.
+
+    Default (``expert``-axis size 1 under FSDP) shards the hidden dim over ``data``, so Muon's 4D
+    Newton-Schulz must reshard the experts to get whole matrices onto each chip. ``SCALE_MOE_EXPERT_ESHARD=1``
+    instead shards the **expert dim over ``data``** with hidden/intermediate full per device: each chip
+    owns whole experts, so NS runs local with no reshard. Storage is identical (2 experts' worth per chip
+    on a 64-way rack either way); the forward gathers the experts over ``data`` (single all-gather, so the
+    chunked-gather path is disabled for this layout).
+    """
+    if os.environ.get("SCALE_MOE_EXPERT_ESHARD") == "1":
+        return MoEExpertMlpPspecs(expert="data", hidden=None, intermediate=None)
+    return MoEExpertMlpPspecs()
 
 
 def resolve_moe_implementation(implementation: MoeImplementation | str | None) -> MoeImplementation:

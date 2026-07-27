@@ -18,7 +18,7 @@ from enum import StrEnum
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from rigging.filesystem import marin_prefix
-from rigging.timing import Deadline, Duration, ExponentialBackoff
+from rigging.timing import Deadline, Duration, ExponentialBackoff, Timer
 
 from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
@@ -49,29 +49,43 @@ _JAX_ENV_KEYS = (
     IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV,
     "JAX_COORDINATOR_ADDRESS",
     "JAX_COORDINATOR_BIND_ADDRESS",
+    "JAX_COORDINATOR_PORT",
 )
+
+
+def _startup_log(message: str, *args) -> None:
+    log = logger.warning if os.environ.get("JAX_DISTRIBUTED_DEBUG") == "1" else logger.info
+    log(message, *args)
 
 
 def _log_jax_bootstrap_inputs(job_info, *, port: int, endpoint_name: str) -> None:
     env_snapshot = {key: os.environ.get(key, "") for key in _JAX_ENV_KEYS if key in os.environ}
     if job_info is None:
-        logger.info(
-            "initialize_jax bootstrap inputs: job_info=None endpoint_name=%s port=%s env=%s",
+        _startup_log(
+            "initialize_jax bootstrap inputs: job_info=None endpoint_name=%s port=%s pid=%d ppid=%d pod=%s env=%s",
             endpoint_name,
             port,
+            os.getpid(),
+            os.getppid(),
+            os.environ.get("HOSTNAME", ""),
             env_snapshot or "none",
         )
         return
 
-    logger.info(
-        "initialize_jax bootstrap inputs: task_index=%s num_tasks=%s advertise_host=%s ports=%s endpoint_name=%s "
-        "requested_port=%s env=%s",
+    _startup_log(
+        "initialize_jax bootstrap inputs: job_id=%s attempt_id=%s task_index=%s num_tasks=%s "
+        "advertise_host=%s ports=%s endpoint_name=%s requested_port=%s pid=%d ppid=%d pod=%s env=%s",
+        job_info.job_id,
+        job_info.attempt_id,
         job_info.task_index,
         job_info.num_tasks,
         job_info.advertise_host,
         dict(job_info.ports),
         endpoint_name,
         port,
+        os.getpid(),
+        os.getppid(),
+        os.environ.get("HOSTNAME", ""),
         env_snapshot or "none",
     )
 
@@ -184,6 +198,14 @@ def _supervised_coordinator_role(proc_index: int, task_index: int, num_tasks: in
     return _CoordinatorRole.POLL
 
 
+def _coordinator_endpoint_name(endpoint_name: str, job_info) -> str:
+    """Scope a coordinator endpoint to one job attempt."""
+    if job_info is None:
+        return endpoint_name
+    job_token = job_info.job_id.to_safe_token()
+    return f"{endpoint_name}-{job_token}-attempt-{job_info.attempt_id}"
+
+
 def _initialize_supervised_jax(
     jax, job_info, *, port: int, endpoint_name: str, poll_timeout: float, poll_interval: float
 ) -> None:
@@ -209,9 +231,17 @@ def _initialize_supervised_jax(
     advertise_host = job_info.advertise_host if job_info else "127.0.0.1"
     bound_port = job_info.ports.get("jax", port) if job_info else port
     coordinator = f"{advertise_host}:{bound_port}"
+    endpoint_name = _coordinator_endpoint_name(endpoint_name, job_info)
 
     role = _supervised_coordinator_role(proc_index, task_index, num_tasks)
     if role is _CoordinatorRole.POLL:
+        _startup_log(
+            "initialize_jax coordinator poll: process_id=%d endpoint=%s pid=%d pod=%s",
+            proc_index,
+            endpoint_name,
+            os.getpid(),
+            os.environ.get("HOSTNAME", ""),
+        )
         ctx = iris_ctx()
         coordinator = _poll_for_coordinator(ctx.resolver, endpoint_name, poll_timeout, poll_interval)
     elif role is _CoordinatorRole.REGISTER:
@@ -219,19 +249,55 @@ def _initialize_supervised_jax(
         endpoint_id = ctx.registry.register(endpoint_name, coordinator)
         atexit.register(ctx.registry.unregister, endpoint_id)
 
-    logger.info(
-        "initialize_jax (supervised): process_id=%d/%d local_device_ids=%s coordinator=%s",
+    _startup_log(
+        "initialize_jax connect: process_id=%d/%d local_device_ids=%s coordinator=%s role=%s "
+        "endpoint=%s task_index=%d attempt_id=%s pid=%d ppid=%d pod=%s",
         proc_index,
         proc_count,
         device_ids,
         coordinator,
+        role,
+        endpoint_name,
+        task_index,
+        job_info.attempt_id if job_info else "",
+        os.getpid(),
+        os.getppid(),
+        os.environ.get("HOSTNAME", ""),
     )
-    jax.distributed.initialize(
-        coordinator,
-        proc_count,
+    timer = Timer()
+    try:
+        jax.distributed.initialize(
+            coordinator,
+            proc_count,
+            proc_index,
+            local_device_ids=device_ids,
+            initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
+        )
+    except Exception:
+        logger.exception(
+            "initialize_jax failed: process_id=%d/%d task_index=%d attempt_id=%s pid=%d pod=%s "
+            "coordinator=%s elapsed_ms=%d",
+            proc_index,
+            proc_count,
+            task_index,
+            job_info.attempt_id if job_info else "",
+            os.getpid(),
+            os.environ.get("HOSTNAME", ""),
+            coordinator,
+            timer.elapsed_ms(),
+        )
+        raise
+    _startup_log(
+        "initialize_jax connected: process_id=%d/%d task_index=%d attempt_id=%s pid=%d pod=%s "
+        "coordinator=%s elapsed_ms=%d",
         proc_index,
-        local_device_ids=device_ids,
-        initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
+        proc_count,
+        task_index,
+        job_info.attempt_id if job_info else "",
+        os.getpid(),
+        os.environ.get("HOSTNAME", ""),
+        coordinator,
+        timer.elapsed_ms(),
     )
 
 
@@ -255,7 +321,8 @@ def initialize_jax(
     multi-task jobs.
 
     Args:
-        port: Coordinator port. Overridden by IRIS_PORT_jax if allocated.
+        port: Coordinator port. Overridden by ``JAX_COORDINATOR_PORT`` and then
+            by ``IRIS_PORT_jax`` if allocated.
             An explicit port is required because JAX's gRPC coordinator binds
             internally and does not expose the actual bound port.
         endpoint_name: Name under which the coordinator registers.
@@ -266,6 +333,8 @@ def initialize_jax(
         poll_interval: Initial backoff delay for polling (seconds).
     """
     import jax  # noqa: PLC0415  # optional dep: jax (iris does not depend on jax)
+
+    port = int(os.environ.get("JAX_COORDINATOR_PORT", port))
 
     # Configure the compilation cache before any compile happens, on every
     # distributed-init path below (TPU, single-task, or the endpoint dance).
@@ -317,6 +386,7 @@ def initialize_jax(
 
     ctx = iris_ctx()
     task_index = job_info.task_index
+    endpoint_name = _coordinator_endpoint_name(endpoint_name, job_info)
 
     if task_index == 0:
         bound_port = job_info.ports.get("jax", port)

@@ -1,13 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import atexit
 import dataclasses
 import functools
 import logging
+import math
+import os
+import sysconfig
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import equinox as eqx
+import fsspec
 import jax
 import jax.numpy as jnp
 import jmp
@@ -17,6 +23,14 @@ import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
+from iris.client.client import iris_ctx
+from iris.cluster.client.job_info import get_job_info
+from iris.hooks.multigpu import (
+    IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV,
+    IRIS_MULTIGPU_PROCESS_COUNT_ENV,
+    IRIS_MULTIGPU_PROCESS_INDEX_ENV,
+)
+from iris.runtime.jax_init import _poll_for_coordinator
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
@@ -30,6 +44,7 @@ from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
 from levanter.grug.sharding import compact_grug_mesh
+from levanter.kernels.mnnvl.fabric_transport_ffi import ensure_mnnvl_runtime
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
@@ -98,6 +113,9 @@ class GrugRunConfig:
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.hooks.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
+    max_retries_failure: int = 3
+    max_retries_preemption: int = 100
+    max_task_failures: int = 10
 
 
 def build_train_dataset(
@@ -179,10 +197,10 @@ def build_tagged_evaluator(
             mask=batch.attn_mask,
             reduction="none",
             logsumexp_weight=None,
-        )
+        )[0]
         per_pos_loss = jax.sharding.reshard(per_pos_loss, eval_array_sharding)
         per_pos_weight = jax.sharding.reshard(batch.loss_weight, eval_array_sharding)
-        per_pos_token_id = jnp.roll(batch.tokens, -1, axis=-1)
+        per_pos_token_id = jnp.zeros_like(batch.tokens).at[:, :-1].set(batch.tokens[:, 1:])
         return per_pos_loss, per_pos_weight, per_pos_token_id
 
     return TaggedEvaluator(
@@ -200,6 +218,9 @@ def _compute_flops(
     *,
     model_config: GrugModelConfig,
 ) -> tuple[float, dict[str, float]]:
+    attention_seq_len = min(model_config.sliding_window, model_config.max_seq_len)
+    if attention_seq_len <= 0:
+        attention_seq_len = model_config.max_seq_len
     flops_per_token = lm_flops_per_token(
         hidden_dim=model_config.hidden_dim,
         intermediate_dim=model_config.intermediate_dim,
@@ -207,7 +228,7 @@ def _compute_flops(
         num_layers=model_config.num_layers,
         num_kv_heads=model_config.num_kv_heads,
         num_heads=model_config.num_heads,
-        seq_len=model_config.max_seq_len,
+        seq_len=attention_seq_len,
         vocab_size=model_config.vocab_size,
         glu=True,
         num_experts=model_config.num_experts,
@@ -251,22 +272,218 @@ class GrugTrainState:
     params: Transformer
     opt_state: optax.OptState
     ema_params: Transformer | None
-    pending_qb_betas: jax.Array
+    # Expert assignment counts from the previous step: [num_layers, num_experts]. All-zero (a no-op)
+    # unless loss-free balancing is on, so the model's forward is unchanged when it is off.
+    pending_expert_loads: jax.Array
 
 
-def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
-    """Set router biases from QB betas (computed on previous step)."""
-    new_blocks = list(model.blocks)
-    moe_idx = 0
-    for i, block in enumerate(model.blocks):
-        if block.mlp is None:
-            continue
-        new_bias = -qb_betas[moe_idx]
-        new_bias = new_bias - jnp.mean(new_bias)
-        new_mlp = eqx.tree_at(lambda m: m.router_bias, block.mlp, new_bias)
-        new_blocks[i] = eqx.tree_at(lambda b: b.mlp, block, new_mlp)
-        moe_idx += 1
-    return eqx.tree_at(lambda t: t.blocks, model, tuple(new_blocks))
+def _updated_router_bias(router_bias: jax.Array, expert_loads: jax.Array, update_rate: float) -> jax.Array:
+    """Apply one auxiliary-loss-free signed load-balancing update."""
+    mean_load = jnp.mean(expert_loads, axis=-1, keepdims=True)
+    load_error = mean_load - expert_loads
+    updated = router_bias + update_rate * jnp.sign(load_error)
+    return updated - jnp.mean(updated, axis=-1, keepdims=True)
+
+
+def _apply_loss_free_bias_update(
+    model: Transformer,
+    expert_loads: jax.Array,
+    update_rate: float,
+) -> Transformer:
+    """Update every layer's router bias from the previous batch's expert load."""
+    router_bias = model.stacked_blocks.stacked.mlp.router_bias
+    new_bias = _updated_router_bias(router_bias, expert_loads, update_rate)
+    return eqx.tree_at(lambda t: t.stacked_blocks.stacked.mlp.router_bias, model, new_bias)
+
+
+def _receiver_capacity_overflow_rate(
+    expert_loads: jax.Array,
+    *,
+    assignments_per_layer: int,
+    capacity_factor: float,
+    expert_axis_size: int,
+) -> jax.Array:
+    """Return per-layer overflow under the ragged receiver-pooled capacity rule."""
+    num_experts = expert_loads.shape[-1]
+    if num_experts % expert_axis_size != 0:
+        raise ValueError(f"num_experts={num_experts} must be divisible by expert_axis_size={expert_axis_size}")
+    local_experts = num_experts // expert_axis_size
+    receiver_capacity = max(
+        math.ceil(capacity_factor * assignments_per_layer / expert_axis_size),
+        local_experts,
+    )
+    receiver_loads = expert_loads.reshape(*expert_loads.shape[:-1], expert_axis_size, local_experts)
+    receiver_loads = jnp.sum(receiver_loads, axis=-1, dtype=jnp.int32)
+    dropped = jnp.sum(jnp.maximum(receiver_loads - receiver_capacity, 0), axis=-1, dtype=jnp.int32)
+    return dropped.astype(jnp.float32) / assignments_per_layer
+
+
+def _expert_capacity_overflow_rate(
+    expert_loads: jax.Array,
+    *,
+    assignments_per_layer: int,
+    capacity_factor: float,
+) -> jax.Array:
+    """Return per-layer overflow with one global capacity pool per expert."""
+    num_experts = expert_loads.shape[-1]
+    expert_capacity = max(
+        math.ceil(capacity_factor * assignments_per_layer / num_experts),
+        1,
+    )
+    dropped = jnp.sum(jnp.maximum(expert_loads - expert_capacity, 0), axis=-1, dtype=jnp.int32)
+    return dropped.astype(jnp.float32) / assignments_per_layer
+
+
+# SCALE_OFFLOAD_OPT_STATE=1 parks the optimizer state on pinned host memory between steps so it
+# is off-HBM during forward/backward (freeing HBM for the memory-aware scheduler to async the
+# backward re-gathers), streaming it back to device only for the optimizer update. Viable on GB200
+# via the ~900 GB/s NVLink-C2C Grace<->Blackwell link; ~50ms/direction hides under the ~15s step.
+_OFFLOAD_OPT_STATE = os.environ.get("SCALE_OFFLOAD_OPT_STATE") == "1"
+
+
+def _initialize_mnnvl_transport(config: GrugRunConfig) -> None:
+    if os.environ.get("SCALE_A2A_MNNVL_TRANSPORT") != "1":
+        return
+    same_expert_clones = os.environ.get("SCALE_A2A_SAME_EXPERT_CLONES") == "1"
+    receiver_clipping = os.environ.get("SCALE_A2A_RECEIVER_CLIP") == "1"
+    if same_expert_clones == receiver_clipping:
+        raise ValueError(
+            "SCALE_A2A_MNNVL_TRANSPORT=1 requires exactly one of "
+            "SCALE_A2A_SAME_EXPERT_CLONES=1 or SCALE_A2A_RECEIVER_CLIP=1"
+        )
+    if same_expert_clones and os.environ.get("SCALE_A2A_CLONE_POOLED") != "1":
+        raise ValueError("MNNVL same-expert clones require SCALE_A2A_CLONE_POOLED=1")
+
+    expert_shards = config.trainer.expert_axis_size
+    global_batch = config.trainer.trainer.batch_schedule.batch_size_at_step(0)
+    global_assignments = global_batch * config.model.max_seq_len * config.model.num_experts_per_token
+    if global_assignments % jax.device_count() != 0:
+        raise ValueError(
+            f"global MoE assignments={global_assignments} must be divisible by devices={jax.device_count()}"
+        )
+    assignments_per_shard = global_assignments // jax.device_count()
+    if same_expert_clones:
+        token_padding_experts = max(
+            int(os.environ.get("SCALE_A2A_CLONE_TOKEN_PADDING_EXPERTS", "1")),
+            0,
+        )
+        sender_destination_capacity = (
+            math.ceil(assignments_per_shard / expert_shards) + token_padding_experts * config.model.num_experts
+        )
+        buffer_rows = max(assignments_per_shard, expert_shards * sender_destination_capacity)
+    else:
+        receiver_capacity = max(
+            math.ceil(config.model.moe_capacity_factor * assignments_per_shard),
+            config.model.num_experts // expert_shards,
+        )
+        buffer_rows = max(assignments_per_shard, receiver_capacity)
+    ensure_mnnvl_runtime(
+        buffer_rows=buffer_rows,
+        row_bytes=config.model.hidden_dim * jnp.dtype(jnp.bfloat16).itemsize,
+    )
+
+
+def _initialize_hybridep_transport(config: GrugRunConfig) -> None:
+    if os.environ.get("SCALE_A2A_HYBRID_EP") != "1":
+        return
+    if os.environ.get("SCALE_A2A_ECHO_CLONES") != "1":
+        raise ValueError("SCALE_A2A_HYBRID_EP=1 requires SCALE_A2A_ECHO_CLONES=1")
+    if os.environ.get("SCALE_A2A_MNNVL_TRANSPORT") == "1":
+        raise ValueError("MNNVL and HybridEP token transports are mutually exclusive")
+
+    cuda_home = Path(sysconfig.get_paths()["purelib"]) / "nvidia" / "cu13"
+    if not (cuda_home / "bin" / "nvcc").is_file():
+        raise FileNotFoundError(f"HybridEP CUDA compiler is missing: {cuda_home / 'bin' / 'nvcc'}")
+    os.environ["CUDA_HOME"] = str(cuda_home)
+
+    # HybridEP's staged runtime is the only Grug path that depends on Torch.
+    import torch  # noqa: PLC0415
+    import torch.distributed as dist  # noqa: PLC0415
+    from levanter.kernels.hybridep import (  # noqa: PLC0415
+        ensure_hybridep_runtime,
+        shutdown_hybridep_runtime,
+    )
+
+    job_info = get_job_info()
+    if job_info is None:
+        raise RuntimeError("HybridEP training must run inside an Iris job")
+    device_ids = os.environ[IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV].split(",")
+    if len(device_ids) != 1:
+        raise ValueError(f"HybridEP expects one device per process, got {device_ids}")
+    rank = int(os.environ[IRIS_MULTIGPU_PROCESS_INDEX_ENV])
+    world_size = int(os.environ[IRIS_MULTIGPU_PROCESS_COUNT_ENV])
+    device_index = int(device_ids[0])
+
+    endpoint_name = f"hybridep-{job_info.job_id.to_safe_token()}-attempt-{job_info.attempt_id}"
+    address = f"{job_info.advertise_host}:{job_info.ports.get('jax', 8476) + 1}"
+    if rank == 0:
+        endpoint_id = iris_ctx().registry.register(endpoint_name, address)
+        atexit.register(iris_ctx().registry.unregister, endpoint_id)
+    else:
+        address = _poll_for_coordinator(
+            iris_ctx().resolver,
+            endpoint_name,
+            timeout=600,
+            poll_interval=1,
+        )
+    dist.init_process_group(
+        backend="nccl",
+        init_method=f"tcp://{address}",
+        world_size=world_size,
+        rank=rank,
+        device_id=torch.device(f"cuda:{device_index}"),
+    )
+    atexit.register(dist.destroy_process_group)
+
+    global_batch = config.trainer.trainer.batch_schedule.batch_size_at_step(0)
+    global_tokens = global_batch * config.model.max_seq_len
+    if global_tokens % world_size != 0:
+        raise ValueError(f"global tokens={global_tokens} must be divisible by HybridEP ranks={world_size}")
+    tokens_per_rank = global_tokens // world_size
+    os.environ["HYBRID_EP_MAX_LOCAL_EXPERT_TOKENS"] = str(tokens_per_rank * config.model.num_experts_per_token)
+    max_receiver_segments = max(
+        int(os.environ.get("SCALE_A2A_CLONE_MAX_RECEIVER_EXPERTS", "16")),
+        1,
+    )
+    ensure_hybridep_runtime(
+        dist.group.WORLD,
+        rank=rank,
+        world_size=world_size,
+        device_index=device_index,
+        source_root=Path(os.environ.get("SCALE_HYBRID_EP_SOURCE", "/tmp/DeepEP")),
+        hidden_dim=config.model.hidden_dim,
+        tokens_per_rank=tokens_per_rank,
+        local_experts=max_receiver_segments,
+    )
+    if rank == 0:
+        free_bytes, total_bytes = torch.cuda.mem_get_info(device_index)
+        logger.info(
+            "HybridEP initialized before XLA: torch_allocated=%d torch_reserved=%d cuda_free=%d cuda_total=%d",
+            torch.cuda.memory_allocated(device_index),
+            torch.cuda.memory_reserved(device_index),
+            free_bytes,
+            total_bytes,
+        )
+    atexit.register(shutdown_hybridep_runtime)
+
+
+def _opt_state_to_memory_kind(tree, kind: str):
+    """Move optimizer-state array leaves to ``kind`` (``pinned_host`` to offload, ``device`` to
+    bring back), preserving each leaf's PartitionSpec. Works both eagerly and inside jit
+    (explicit-sharding mode exposes the traced leaf's sharding via ``jax.typeof``)."""
+
+    def _move(leaf):
+        if not isinstance(leaf, jax.Array):
+            return leaf
+        sharding = jax.typeof(leaf).sharding
+        mesh = getattr(sharding, "mesh", None)
+        if mesh is None or len(getattr(mesh, "axis_names", ())) == 0:
+            # Scalars / replicated hyperparams (inject_hyperparams count, learning_rate) carry an
+            # empty abstract mesh; leave them on device (negligible HBM) to avoid a mesh mismatch.
+            return leaf
+        return jax.device_put(leaf, sharding.with_memory_kind(kind))
+
+    return jax.tree.map(_move, tree)
 
 
 def initial_state(
@@ -278,13 +495,19 @@ def initial_state(
     ema_beta: float | None,
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
-    num_moe_layers = sum(1 for b in params.blocks if b.mlp is not None)
+    opt_state = optimizer.init(params)
+    if _OFFLOAD_OPT_STATE:
+        opt_state = _opt_state_to_memory_kind(opt_state, "pinned_host")
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
-        opt_state=optimizer.init(params),
+        opt_state=opt_state,
         ema_params=params if ema_beta is not None else None,
-        pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
+        # Every grug layer is MoE, so this is [num_layers, num_experts]; zero is a no-op at step 0.
+        pending_expert_loads=jnp.zeros(
+            (model_config.num_layers, model_config.num_experts),
+            dtype=jnp.int32,
+        ),
     )
 
 
@@ -292,6 +515,8 @@ def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
     *,
+    model_config: GrugModelConfig,
+    expert_axis_size: int,
     z_loss_weight: float,
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
@@ -308,38 +533,83 @@ def _make_train_step(
 
     @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("compute_watch",))
     def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
-        # Apply pending QB betas to router biases inside JIT (avoids eager
-        # host-side TPU kernel launches that can cause SPMD sync issues).
-        qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
-        if ema_beta is not None:
-            qb_ema_params = _apply_qb_betas(state.ema_params, state.pending_qb_betas)
-        else:
-            qb_ema_params = None
+        # Update biases from the previous batch before the forward. The pending loads are all-zero
+        # when balancing is off, so balanced_params is numerically identical to state.params.
+        balanced_params = _apply_loss_free_bias_update(
+            state.params,
+            state.pending_expert_loads,
+            model_config.qb_bias_update_rate,
+        )
+        balanced_ema_params = (
+            _apply_loss_free_bias_update(
+                state.ema_params,
+                state.pending_expert_loads,
+                model_config.qb_bias_update_rate,
+            )
+            if ema_beta is not None
+            else None
+        )
 
         def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
-            return compute_params.next_token_loss(
+            loss, expert_load_per_layer, routing_diagnostics = compute_params.next_token_loss(
                 batch.tokens,
                 batch.loss_weight,
                 mask=batch.attn_mask,
                 reduction="mean",
                 logsumexp_weight=z_loss,
-                return_router_metrics=True,
             )
+            return loss, (expert_load_per_layer, routing_diagnostics)
 
-        (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
-        metrics = {"train/loss": loss, **summarized_metrics}
-        updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
-        params = optax.apply_updates(qb_params, updates)
+        (loss, (expert_load_per_layer, routing_diagnostics)), grads = jax.value_and_grad(
+            loss_fn,
+            has_aux=True,
+        )(balanced_params)
+        metrics = {"train/loss": loss}
+        if model_config.report_capacity_overflow:
+            assignments_per_layer = batch.tokens.size * model_config.num_experts_per_token
+            capacity_overflow_rate = routing_diagnostics.capacity_drops.astype(jnp.float32) / assignments_per_layer
+            metrics["train/router/capacity_overflow_rate_mean"] = jnp.mean(capacity_overflow_rate)
+            metrics["train/router/capacity_overflow_rate_max"] = jnp.max(capacity_overflow_rate)
+            replacement_rate = (
+                routing_diagnostics.capacity_refill_replacements.astype(jnp.float32) / assignments_per_layer
+            )
+            metrics["train/router/capacity_refill_replacement_rate_mean"] = jnp.mean(replacement_rate)
+            metrics["train/router/capacity_refill_replacement_rate_max"] = jnp.max(replacement_rate)
+            expert_overflow_rate = _expert_capacity_overflow_rate(
+                expert_load_per_layer,
+                assignments_per_layer=assignments_per_layer,
+                capacity_factor=model_config.moe_capacity_factor,
+            )
+            metrics["train/router/expert_capacity_overflow_rate_mean"] = jnp.mean(expert_overflow_rate)
+            metrics["train/router/expert_capacity_overflow_rate_max"] = jnp.max(expert_overflow_rate)
+            receiver_overflow_rate = _receiver_capacity_overflow_rate(
+                expert_load_per_layer,
+                assignments_per_layer=assignments_per_layer,
+                capacity_factor=model_config.moe_capacity_factor,
+                expert_axis_size=expert_axis_size,
+            )
+            metrics["train/router/receiver_capacity_overflow_rate_mean"] = jnp.mean(receiver_overflow_rate)
+            metrics["train/router/receiver_capacity_overflow_rate_max"] = jnp.max(receiver_overflow_rate)
+            for layer_index in range(model_config.num_layers):
+                metrics[f"train/router/layer_{layer_index}/capacity_overflow_rate"] = capacity_overflow_rate[layer_index]
+                metrics[f"train/router/layer_{layer_index}/capacity_refill_replacement_rate"] = replacement_rate[
+                    layer_index
+                ]
+        # Optimizer state is host-resident between steps when offloading; stream it to device
+        # only here (after backward) for the update, then send the new state back to host below.
+        opt_state_in = _opt_state_to_memory_kind(state.opt_state, "device") if _OFFLOAD_OPT_STATE else state.opt_state
+        updates, opt_state = optimizer.update(grads, opt_state_in, balanced_params)
+        params = optax.apply_updates(balanced_params, updates)
 
         if ema_beta is None:
             ema_params = None
         else:
-            if qb_ema_params is None:
+            if balanced_ema_params is None:
                 raise ValueError("ema_params must be initialized when ema_beta is set.")
             ema_params = jax.tree_util.tree_map(
                 lambda old, new: ema_beta * old + (1.0 - ema_beta) * new,
-                qb_ema_params,
+                balanced_ema_params,
                 params,
             )
 
@@ -351,12 +621,15 @@ def _make_train_step(
                 include_per_parameter_norms=watch_config.include_per_parameter_norms,
                 include_histogram=watch_config.include_histograms,
                 split_scan_layers=watch_config.split_scan_layers,
-                params=qb_params,
+                params=balanced_params,
                 grads=grads,
                 updates=updates,
-                opt_state=state.opt_state,
+                opt_state=opt_state_in,
                 model_tree_type=type(state.params),
             )
+
+        if _OFFLOAD_OPT_STATE:
+            opt_state = _opt_state_to_memory_kind(opt_state, "pinned_host")
 
         next_state = dataclasses.replace(
             state,
@@ -364,7 +637,7 @@ def _make_train_step(
             params=params,
             opt_state=opt_state,
             ema_params=ema_params,
-            pending_qb_betas=metrics["qb_beta_per_layer"],
+            pending_expert_loads=expert_load_per_layer,
         )
 
         return next_state, metrics, watch_stats
@@ -375,7 +648,11 @@ def _make_train_step(
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
     trainer = config.trainer.trainer
+    # HybridEP's fabric-backed buffers must be reserved before Trainer queries the
+    # JAX devices and triggers XLA's HBM preallocation.
+    _initialize_hybridep_transport(config)
     trainer.initialize()
+    _initialize_mnnvl_transport(config)
     levanter.tracker.log_configuration(config)
 
     run_id = trainer.id
@@ -387,6 +664,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     train_step = _make_train_step(
         optimizer,
         trainer.mp,
+        model_config=config.model,
+        expert_axis_size=config.trainer.expert_axis_size,
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
         watch_config=watch_config if watch_config.is_enabled else None,
@@ -431,7 +710,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         state = _init_state(model_key)
 
-        checkpointer = trainer.checkpointer.create(run_id)
+        # SCALE_DISABLE_CHECKPOINT=1 skips checkpoint creation entirely (including the forced final
+        # save), so short profiling/debug runs reach tracker.finish() — the sharded tensorstore save
+        # can crash at large scale and would otherwise block the profile upload.
+        if os.environ.get("SCALE_DISABLE_CHECKPOINT") == "1":
+            checkpointer = None
+        else:
+            checkpointer = trainer.checkpointer.create(run_id)
         state = restore_grug_state_from_checkpoint(
             state,
             checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
@@ -480,10 +765,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         )
         state_callbacks.add_hook(callbacks.pbar_logger(total=trainer.num_train_steps), every=log_every)
         state_callbacks.add_hook(callbacks.log_step_info(trainer.num_train_steps), every=log_every)
+        # jax.profiler cannot reliably write to object stores, so the trace goes to local disk and
+        # is uploaded to SCALE_PROFILER_UPLOAD (an fsspec URL) after training — fsspec handles s3,
+        # so the trace survives the ephemeral pod for offline ingestion.
+        prof_local_dir = f"/tmp/grug-profiler/{run_id}/profiler"
         if profiler_enabled:
             state_callbacks.add_hook(
                 profiler_cfg.build(
-                    str(trainer.log_dir / run_id / "profiler"),
+                    prof_local_dir,
                     run_id=run_id,
                     num_steps=profiler_num_steps,
                 ),
@@ -521,7 +810,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 state, metrics, watch_stats = train_step(state, batch, compute_watch=compute_watch)
                 step = int(state.step) - 1
 
-                jax.block_until_ready(metrics["train/loss"])
+                jax.block_until_ready(metrics)
 
                 if jnp.isnan(metrics["train/loss"]):
                     logger.error(f"NaN loss at step {int(state.step)}. Stopping training.")
@@ -534,17 +823,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     last_step_duration = duration
                     levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
                     levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
-                    router_metrics = {
-                        key: value
-                        for key, value in metrics.items()
-                        if (key.startswith("train/router/") or key.startswith("moe_bias/"))
-                        and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
-                    }
-                    if router_metrics:
-                        levanter.tracker.log(router_metrics, step=step)
-                    if "train/cross_entropy_loss" in metrics:
+                    if config.model.report_capacity_overflow:
                         levanter.tracker.log(
-                            {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
+                            {key: value for key, value in metrics.items() if key.startswith("train/router/")},
                             step=step,
                         )
 
@@ -565,6 +846,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 checkpointer.on_step(tree=state, step=int(state.step), force=True)
                 checkpointer.wait_until_finished()
 
+        prof_upload = os.environ.get("SCALE_PROFILER_UPLOAD")
+        if profiler_enabled and prof_upload and jax.process_index() == 0:
+            fs = fsspec.core.get_fs_token_paths(prof_upload, mode="wb")[0]
+            fs.put(os.path.join(prof_local_dir, "*"), prof_upload.rstrip("/"), recursive=True)
+            logger.info(f"Uploaded profiler trace to {prof_upload}")
+
     levanter.tracker.current_tracker().finish()
 
 
@@ -579,6 +866,9 @@ def run_grug(config: GrugRunConfig) -> None:
         config=config,
         local_entrypoint=_run_grug_local,
         resources=config.resources,
+        max_retries_failure=config.max_retries_failure,
+        max_retries_preemption=config.max_retries_preemption,
+        max_task_failures=config.max_task_failures,
         processes_per_task=config.processes_per_task,
     )
 

@@ -9,8 +9,16 @@ from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec, get_abstr
 # Convenience shorthand for batch sharding. Keep this aligned with Levanter's
 # default distributed batch mapping, which includes the cross-slice axis.
 Pbatch = P(("replica_dcn", "data"))
-Pembed_vocab = P("model", Pbatch[0])
-Plm_head = P(Pbatch[0], "model")
+# The embedding table is fully replicated so the token lookup is a replica-local shard_map gather
+# (see grug/moe model._embedding_gather) rather than an all-to-all. The old layout sharded the
+# table's hidden dim over ("replica_dcn", "data"), which forced the gather to assemble each token's
+# vector across all devices -- an all-to-all spanning racks whose NCCL first-call rendezvous wedges
+# at 8+ racks. The replicated table's gradient is a normal DDP all-reduce.
+Pembed_vocab = P(None, None)
+# Both axes are intra-rack in the compact Grug mesh. Including "expert" keeps
+# non-expert weights sharded when EP consumes the entire rack and "data" has size 1.
+Pfsdp = ("data", "expert")
+Plm_head = P(Pfsdp, "model")
 Plogits = P(Pbatch[0], None, "model")
 
 

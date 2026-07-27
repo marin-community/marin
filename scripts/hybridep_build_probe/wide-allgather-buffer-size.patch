@@ -1,0 +1,15 @@
+diff --git a/csrc/hybrid_ep/extension/allgather.cu b/csrc/hybrid_ep/extension/allgather.cu
+index 0a03404..2fead3f 100644
+--- a/csrc/hybrid_ep/extension/allgather.cu
++++ b/csrc/hybrid_ep/extension/allgather.cu
+@@ -144,3 +144,7 @@ void CustomAllgather::allocate_ag_buffer() {
+-    auto num_of_expert = num_of_experts_per_rank * num_of_ranks_per_node * num_of_nodes;
+-    auto gathered_elets = num_of_expert * num_of_tokens_per_rank * num_of_ranks_per_node * num_of_nodes;
+-    auto gathered_bytes = gathered_elets * sizeof(bool);
++    const int64_t num_of_expert =
++        static_cast<int64_t>(num_of_experts_per_rank) *
++        num_of_ranks_per_node * num_of_nodes;
++    const int64_t gathered_elets =
++        num_of_expert * num_of_tokens_per_rank *
++        num_of_ranks_per_node * num_of_nodes;
++    const size_t gathered_bytes = static_cast<size_t>(gathered_elets) * sizeof(bool);

@@ -23,6 +23,7 @@ from datetime import timedelta
 import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig, latest_checkpoint_path
 from levanter.data.text.datasets import LmDataConfig
 from levanter.optim.config import OptimizerConfig
@@ -95,6 +96,9 @@ class GrugMoeLaunchConfig:
     """GPU processes per task. > 1 fans each node into one JAX process per GPU
     (multi-controller) via the iris.hooks.multigpu_main supervisor; 1 keeps the
     single-process-per-node model."""
+    max_retries_failure: int = 3
+    max_retries_preemption: int = 100
+    max_task_failures: int = 10
     checkpointer: CheckpointerConfig | None = None
     """Override the checkpointer. None builds the default (periodic + final saves
     under output_path). Throughput experiments point this at node-local disk so a
@@ -158,6 +162,10 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         profiler=config.profiler,
         mp=jmp.get_policy(config.mp),
         tracker=_resolve_tracker(config.tracker, config.run_id),
+        # Per-parameter grad/param norms with split_scan_layers every `interval` steps run a separate,
+        # heavier compiled train_step (unstacks the scanned layers) -> a periodic step-time/MFU dip.
+        # SCALE_WATCH_INTERVAL=0 disables it (is_enabled requires interval > 0).
+        watch=WatchConfig(interval=env_int("SCALE_WATCH_INTERVAL", 10)),
         use_explicit_mesh_axes=True,
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
@@ -179,6 +187,9 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         trainer=grug_trainer,
         eval=config.eval,
         processes_per_task=config.processes_per_task,
+        max_retries_failure=config.max_retries_failure,
+        max_retries_preemption=config.max_retries_preemption,
+        max_task_failures=config.max_task_failures,
     )
     run_grug(run_config)
 

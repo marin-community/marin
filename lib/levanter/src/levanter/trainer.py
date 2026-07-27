@@ -598,7 +598,8 @@ class Trainer:
         self._checkpointer = checkpointer
 
         def checkpoint_hook(info, force=False):
-            checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force)
+            force_checkpoint = force and self.config.checkpointer.save_final_checkpoint
+            checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force_checkpoint)
 
         self.add_hook(checkpoint_hook, every=1)  # checkpointer manages its own frequency
 

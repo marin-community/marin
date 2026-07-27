@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from dataclasses import dataclass
 
 import jax
@@ -64,6 +65,18 @@ def _match_named_sharding_to_params(updates, params):
 
 
 def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate: float):
+    if os.environ.get("SCALE_NO_HYPERBALL") == "1":
+        # Plain scaled Muon step: drop the Frobenius norm-preserving projection (no
+        # ‖p‖/‖u‖/‖new_p‖ all-reduces, no early reshard-to-params). Just p += -lr*u; the
+        # trailing _match_named_update_sharding restores param layout for apply. Isolates the
+        # hyperball's added collectives from the unavoidable Newton-Schulz collect.
+        return jax.tree.map(
+            lambda p, u: None if u is None else -learning_rate * u,
+            params,
+            direction_updates,
+            is_leaf=lambda x: x is None,
+        )
+
     direction_updates = _match_named_sharding_to_params(direction_updates, params)
 
     def scale_invariant_update(param, update):
@@ -209,20 +222,22 @@ class GrugMoeAdamHConfig(OptimizerConfig):
 @OptimizerConfig.register_subclass("grug_moe_muonh_v1")
 @dataclass(frozen=True)
 class GrugMoeMuonHConfig(OptimizerConfig):
-    """May Recipe MuonH optimizer: 3 LR groups (muonh / adamh / adam).
+    """May Recipe MuonH optimizer: four LR groups.
 
-    Three LR groups:
+    Learning-rate groups:
     - ``muonh``: matrices (attn, MoE MLP, shared) **and** all GatedNorms.
       Newton-Schulz orthogonalisation + Frobenius hyperball scale-invariant step.
     - ``adamh``: ``lm_head`` / ``output_proj``.
-    - ``adam``: ``token_embed`` / ``router`` / ``router_bias`` / ``attn_gate``
-      / 1-D norm weights.
+    - ``router``: router projection weights.
+    - ``adam``: ``token_embed`` / ``router_bias`` / ``attn_gate`` / 1-D norm
+      weights.
 
     ``max_grad_norm`` defaults to ``None`` here (no clipping) for the 1pct-noclip
     schedule used by the May Recipe baseline.
     """
 
     adam_lr: float = 6e-4
+    router_lr: float | None = None
     momentum: float = 0.95
     nesterov: bool = True
     backend_steps: int = 5
@@ -236,8 +251,12 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+        router_lr = self.adam_lr if self.router_lr is None else self.router_lr
+        if router_lr < 0:
+            raise ValueError(f"router_lr must be non-negative, got {router_lr}")
+        router_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=router_lr)
 
-        def optimizer(learning_rate, adam_lr):
+        def optimizer(learning_rate, adam_lr, router_lr):
             def muonh_transform():
                 components = []
                 if self.max_grad_norm:
@@ -274,12 +293,14 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "muonh": muonh_transform(),
                 "adamh": adamh_transform_at(learning_rate),
                 "adam": adam_transform_at(adam_lr),
+                "router": adam_transform_at(router_lr),
             }
             return optax.multi_transform(transforms, self.create_mask)
 
         return optax.inject_hyperparams(optimizer)(
             learning_rate=learning_rate_schedule,
             adam_lr=adam_lr_schedule,
+            router_lr=router_lr_schedule,
         )
 
     def create_mask(self, params):
@@ -288,19 +309,25 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         def mask_fn(param, path):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             path_lower = path_str.lower()
-            if (
-                "token_embed" in path_lower
-                or "router_bias" in path_lower
-                or path_lower.endswith(".attn_gate")
-                or ".router" in path_lower
-            ):
+            if "token_embed" in path_lower or "router_bias" in path_lower or path_lower.endswith(".attn_gate"):
                 return "adam"
+            if ".router" in path_lower:
+                return "router"
             if "output_proj" in path_lower or "lm_head" in path_lower:
                 return "adamh"
             # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
             if "gated_norm" in path_lower:
                 return "muonh"
-            if hasattr(param, "ndim") and param.ndim in (2, 3):
+            # RMSNorm per-dimension gains are the only ``.weight`` leaves: 1-D scales that must
+            # never be orthogonalized. Under scan they stack to 2-D ``[L, d]`` and would otherwise
+            # hit the ndim fallback below and route to muonh; keep them on adam in both layouts.
+            if path_lower.endswith(".weight"):
+                return "adam"
+            # Matrices -> MuonH: attention (2D, or 3D stacked under scan), MoE experts and shared
+            # expert (3D unrolled, or 4D [L,E,D,I] stacked under scan). The 4D case reaches the
+            # stack-sharded distributed Newton-Schulz in grugmuon; without it, scanned experts fall
+            # through to adam and never get orthogonalized (and pay 2x optimizer state).
+            if hasattr(param, "ndim") and param.ndim in (2, 3, 4):
                 return "muonh"
             return "adam"
 

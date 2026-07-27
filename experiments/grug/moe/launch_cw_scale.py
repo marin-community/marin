@@ -25,31 +25,66 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_STEPS         training steps (default 50)
     SCALE_HIDDEN_DIM / SCALE_NUM_LAYERS / SCALE_NUM_EXPERTS / SCALE_TOP_K
                         model-shape overrides (e.g. a smaller FSDP smoke test)
+    SCALE_MOE_CAPACITY_FACTOR
+                        static sender/expert capacity relative to the mean assignments
+                        per sender/expert bucket (default 1.0)
+    SCALE_MOE_QB_BIAS_UPDATE_RATE
+                        signed per-step expert-bias update for loss-free balancing
+                        (default 1e-3)
+    SCALE_MOE_CAPACITY_BALANCED_ROUTING
+                        1 balances each sender's current routing scores before
+                        top-k, rerouting overload instead of dropping it
+    SCALE_MOE_CAPACITY_BALANCE_ITERATIONS / SCALE_MOE_CAPACITY_BALANCE_TEMPERATURE
+                        dual-balancing iterations (default 2) and entropy
+                        temperature on standardized logits (default 1.0)
+    SCALE_MOE_CAPACITY_BALANCE_HARD_ITERATIONS / SCALE_MOE_CAPACITY_BALANCE_HARD_UPDATE_RATE
+                        exact-top-k load refinements (default 2) and normalized
+                        dual update rate (default 0.2)
+    SCALE_MOE_CAPACITY_REFILL_ROUTING
+                        1 replaces overflowing top-k assignments with vacant
+                        expert slots, guaranteeing sender capacity
+    SCALE_REPORT_CAPACITY_OVERFLOW
+                        1 logs mean, max, and per-layer dropped-assignment rates
     SCALE_REMAT         recompute_all (default) | save_moe -- save_moe keeps the
                         tagged MoE dispatch tensors for backward so the EP
                         collectives are not re-run during recompute
+    SCALE_SCAN_LAYERS   1 stacks all blocks into one lax.scan body (one compiled
+                        layer subgraph instead of num_layers of them); default off
     SCALE_MP            jmp policy (default params=float32,compute=bfloat16,
                         output=bfloat16); params=bfloat16 halves FSDP gather bytes
     SCALE_TRACKER       wandb | json_logger (default json_logger)
     SCALE_PROFILER_STEPS  >0 enables a jax_profile capture window of N steps
                           (use SCALE_TRACKER=wandb so the artifact uploads)
     SCALE_PROFILER_START  profiler start step (default 8, past compile/warmup)
+    SCALE_PROFILER_PROCESS_INDEX  first JAX process to capture; unset captures
+                                  every process
+    SCALE_PROFILER_PROCESS_COUNT  number of consecutive JAX processes to
+                                  capture (default 1)
     SCALE_CHECKPOINTS   s3 (default) | local. local writes checkpoints to
                         node-local disk with no periodic saves -- for throughput
                         experiments where the checkpoint is disposable and a
                         slow S3 commit must not wedge the end-of-run barrier
+    SCALE_DATA          slimpajama (default) | datakit. slimpajama is the fast MFU/
+                        throughput dataset; datakit uses the two-phase datakit store
+                        mixture (marin_prefix-rooted, phase 1 at 80% of steps).
+    SCALE_OPTIMIZER     adam (default) | adamh | muonh. muonh runs Newton-Schulz on
+                        2D/3D/4D weight matrices; all use linear LR decay to 5% of
+                        peak with 1% warmup.
     RUN_ID              unique run identifier
 """
 
+import dataclasses
 import datetime
 import os
 from typing import cast
 
 from fray.cluster import ResourceConfig
-from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import BlockShuffleConfig
-from levanter.optim.config import AdamConfig
+from levanter.grug._moe.common import resolve_moe_implementation
+from levanter.grug.attention import GrugAttentionImplementation
+from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.build_context import resolve_version
@@ -59,8 +94,11 @@ from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 
+from experiments.grug.moe.heuristic import MoeHeuristic
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial, slimpajama_6b_dataset
+from experiments.grug.moe.launch_datakit_moe_mix import datakit_data_config
 from experiments.grug.moe.model import GrugModelConfig, RematMode
+from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
 from experiments.grug.moe.train import GrugTrainerConfig
 from experiments.llama import llama3_tokenizer_vocab_size
 
@@ -97,34 +135,56 @@ _SLIMPAJAMA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, p
 
 
 def build_scale_model() -> GrugModelConfig:
-    """~90B-total / ~5B-active sparse MoE (overridable via SCALE_* env vars)."""
+    """Model config from the May-Recipe heuristic, with explicit architecture + backend overrides.
+
+    The heuristic (``MoeHeuristic.build_model_config``) sizes hidden/layers/heads/intermediate and
+    sets ``initializer_std = 0.5 / sqrt(hidden_dim)``. We override the routed-expert count and top-k
+    (the heuristic leaves the ``GrugModelConfig`` default 256/4) plus the runtime/backend knobs the
+    heuristic does not set (attention/MoE impl, scan, remat, head_dim, sliding window).
+    """
     hidden_dim = env_int("SCALE_HIDDEN_DIM", 3072)
     if hidden_dim % HEAD_DIM != 0:
         raise ValueError(f"SCALE_HIDDEN_DIM={hidden_dim} must be a multiple of head_dim={HEAD_DIM}")
-    num_heads = hidden_dim // HEAD_DIM
-    # ~4:1 grouped-query attention; back off to the nearest divisor of num_heads.
-    num_kv_heads = max(1, num_heads // 4)
-    while num_heads % num_kv_heads != 0:
-        num_kv_heads -= 1
-    intermediate_dim = hidden_dim // 2  # expert FFN inner width (~d/2)
     seq_len = env_int("SCALE_SEQ_LEN", DEFAULT_SEQ_LEN)
     remat_mode = os.environ.get("SCALE_REMAT", "recompute_all")
     if remat_mode not in ("recompute_all", "save_moe"):
         raise ValueError(f"SCALE_REMAT={remat_mode!r} must be 'recompute_all' or 'save_moe'")
-    return GrugModelConfig(
+    # SCALE_MOE_IMPL selects the expert-GEMM backend (e.g. "sonic_cute" = QuACK SM100 on B200);
+    # None keeps the config default. SCALE_ATTN_IMPL likewise overrides the attention backend.
+    moe_impl_env = os.environ.get("SCALE_MOE_IMPL")
+    moe_implementation = resolve_moe_implementation(moe_impl_env) if moe_impl_env else None
+    attn_impl_env = os.environ.get("SCALE_ATTN_IMPL")
+    attention_implementation = cast("GrugAttentionImplementation | None", attn_impl_env or None)
+    base = MoeHeuristic().build_model_config(hidden_dim, seq_len=seq_len)
+    return dataclasses.replace(
+        base,
         vocab_size=VOCAB_SIZE,
-        hidden_dim=hidden_dim,
-        num_layers=env_int("SCALE_NUM_LAYERS", 48),
-        num_heads=num_heads,
-        num_kv_heads=num_kv_heads,
         head_dim=HEAD_DIM,
-        intermediate_dim=intermediate_dim,
-        shared_expert_intermediate_dim=intermediate_dim,
-        num_experts=env_int("SCALE_NUM_EXPERTS", 128),
+        num_layers=env_int("SCALE_NUM_LAYERS", 48),
+        num_experts=env_int("SCALE_NUM_EXPERTS", 64),
         num_experts_per_token=env_int("SCALE_TOP_K", 4),
-        max_seq_len=seq_len,
-        sliding_window=seq_len,
+        moe_capacity_factor=float(os.environ.get("SCALE_MOE_CAPACITY_FACTOR", "1.0")),
+        report_capacity_overflow=os.environ.get("SCALE_REPORT_CAPACITY_OVERFLOW") == "1",
+        # Routed-expert MLP width; default keeps the heuristic value (hidden/2 at hidden=5120).
+        intermediate_dim=env_int("SCALE_INTERMEDIATE", base.intermediate_dim),
+        shared_expert_intermediate_dim=env_int("SCALE_SHARED_INTERMEDIATE", hidden_dim),
+        num_shared_experts=env_int("SCALE_NUM_SHARED_EXPERTS", 1),
+        sliding_window=env_int("SCALE_SLIDING_WINDOW", 0),
+        gated_norm=os.environ.get("SCALE_GATED_NORM") == "1",
+        attn_gate=os.environ.get("SCALE_ATTN_GATE") == "1",
+        xsa=os.environ.get("SCALE_XSA") == "1",
+        qb_routing=os.environ.get("SCALE_MOE_QB") == "1",
+        qb_bias_update_rate=float(os.environ.get("SCALE_MOE_QB_BIAS_UPDATE_RATE", "1e-3")),
+        capacity_balanced_routing=os.environ.get("SCALE_MOE_CAPACITY_BALANCED_ROUTING") == "1",
+        capacity_balance_iterations=env_int("SCALE_MOE_CAPACITY_BALANCE_ITERATIONS", 2),
+        capacity_balance_temperature=float(os.environ.get("SCALE_MOE_CAPACITY_BALANCE_TEMPERATURE", "1.0")),
+        capacity_balance_hard_iterations=env_int("SCALE_MOE_CAPACITY_BALANCE_HARD_ITERATIONS", 2),
+        capacity_balance_hard_update_rate=float(os.environ.get("SCALE_MOE_CAPACITY_BALANCE_HARD_UPDATE_RATE", "0.2")),
+        capacity_refill_routing=os.environ.get("SCALE_MOE_CAPACITY_REFILL_ROUTING") == "1",
+        scan_unroll=env_int("SCALE_SCAN_UNROLL", 1),
         remat_mode=cast(RematMode, remat_mode),
+        moe_implementation=moe_implementation,
+        attention_implementation=attention_implementation,
     )
 
 
@@ -140,13 +200,33 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
     # 1 = one process per node (8 local GPUs). 8 = one JAX process per GPU
     # (multi-controller) via the iris.hooks.multigpu_main supervisor.
     processes_per_task = env_int("SCALE_PROCESSES_PER_TASK", 1)
+    max_retries_failure = env_int("SCALE_MAX_RETRIES_FAILURE", 3)
+    max_retries_preemption = env_int("SCALE_MAX_RETRIES_PREEMPTION", 100)
+    max_task_failures = env_int("SCALE_MAX_TASK_FAILURES", 10)
     # SCALE_PROFILER_STEPS > 0 captures a jax_profile window of that many steps
     # (uploaded via the tracker, so pair with SCALE_TRACKER=wandb to retrieve it).
     profiler_steps = env_int("SCALE_PROFILER_STEPS", 0)
+    profiler_process_index_raw = os.environ.get("SCALE_PROFILER_PROCESS_INDEX")
+    profiler_process_index = int(profiler_process_index_raw) if profiler_process_index_raw is not None else None
+    if profiler_process_index is not None and profiler_process_index < 0:
+        raise ValueError("SCALE_PROFILER_PROCESS_INDEX must be non-negative")
+    profiler_process_count = env_int("SCALE_PROFILER_PROCESS_COUNT", 1)
+    if profiler_process_count < 1:
+        raise ValueError("SCALE_PROFILER_PROCESS_COUNT must be positive")
+    # Host tracer preserves jax.named_scope regions (e.g. "moe_up_down") and enable_hlo_proto
+    # exports the xprof collective/kernel aggregate tables — both needed for a compute-vs-comm
+    # breakdown of the FSDP all-gather vs the expert GEMMs.
     profiler = ProfilerConfig(
         enabled=profiler_steps > 0,
         start_step=env_int("SCALE_PROFILER_START", 8),
         num_steps=profiler_steps,
+        process_index=profiler_process_index,
+        process_count=profiler_process_count,
+        profile_options=ProfileOptionsConfig(
+            host_tracer_level=1,
+            python_tracer_level=0,
+            enable_hlo_proto=True,
+        ),
     )
 
     checkpoint_mode = os.environ.get("SCALE_CHECKPOINTS", "s3").lower()
@@ -156,6 +236,7 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
             append_run_id_to_base_path=False,
             save_interval=None,
             keep=None,
+            save_final_checkpoint=False,
         )
     elif checkpoint_mode == "s3":
         checkpointer = None
@@ -166,14 +247,19 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
     if model.num_experts % expert_axis != 0:
         raise ValueError(f"num_experts={model.num_experts} must be divisible by SCALE_EXPERT_AXIS={expert_axis}")
 
+    # GPUs per node: 8 for the H100 nodes, 4 for a GB200 node (SCALE_GPUS_PER_NODE=4).
+    gpus_per_node = env_int("SCALE_GPUS_PER_NODE", GPUS_PER_NODE)
+    gpu_type = os.environ.get("SCALE_GPU_TYPE", "H100")
     # Batch is sharded over the (replica_dcn, data, expert) axes; data absorbs the
-    # rest of the 8*replicas devices. Require the global batch to cover every shard.
-    data_axis = (replicas * GPUS_PER_NODE) // (replica_axis * expert_axis)
+    # rest of the gpus_per_node*replicas devices. Require the global batch to cover every shard.
+    data_axis = (replicas * gpus_per_node) // (replica_axis * expert_axis)
     batch_shards = replica_axis * data_axis * expert_axis
     if batch_size % batch_shards != 0:
         raise ValueError(f"SCALE_BATCH={batch_size} must be divisible by batch shards={batch_shards}")
 
-    resources = ResourceConfig.with_gpu("H100", count=GPUS_PER_NODE, cpu=32, ram="256g", disk="256g", replicas=replicas)
+    resources = ResourceConfig.with_gpu(
+        gpu_type, count=gpus_per_node, cpu=32, ram="256g", disk="256g", replicas=replicas
+    )
 
     use_wandb = os.environ.get("SCALE_TRACKER", "json_logger").lower() == "wandb"
     json_logger_name = os.environ.get("SCALE_JSON_LOGGER", "grug_moe_scale.metrics")
@@ -187,8 +273,51 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
     )
 
     mp = os.environ.get("SCALE_MP", "params=float32,compute=bfloat16,output=bfloat16")
+
+    # LR from the May-Recipe heuristic: it scales the peak with (tokens x hidden_dim) and sets
+    # muonh_lr = 13/3 * adam_lr, linear decay to 5% of peak, 1% warmup. SCALE_OPTIMIZER picks the
+    # family ("muonh" uses the heuristic config directly; "adamh"/"adam" use its adam_lr). SCALE_LR
+    # overrides the peak. SCALE_MAX_LR caps the heuristic peak (heuristic default cap 0.05).
+    total_tokens = float(steps * batch_size * model.max_seq_len)
+    max_lr = float(os.environ.get("SCALE_MAX_LR", "0.05"))
+    heuristic = MoeHeuristic(min_lr_ratio=0.05, max_learning_rate=max_lr).build_optimizer_config(
+        batch_size=batch_size, tokens=total_tokens, hidden_dim=model.hidden_dim, seq_len=model.max_seq_len
+    )
+    schedule = dict(lr_schedule="linear", min_lr_ratio=0.05, warmup=0.01)
+    lr_override = os.environ.get("SCALE_LR")
+    router_lr_override = os.environ.get("SCALE_ROUTER_LR")
+    opt_name = os.environ.get("SCALE_OPTIMIZER", "muonh").lower()
+    optimizer: OptimizerConfig
+    if opt_name in ("muonh", "grug_moe_muonh"):
+        optimizer = (
+            dataclasses.replace(heuristic, learning_rate=float(lr_override), adam_lr=float(lr_override))
+            if lr_override
+            else heuristic
+        )
+        if router_lr_override is not None:
+            optimizer = dataclasses.replace(optimizer, router_lr=float(router_lr_override))
+    elif opt_name in ("adamh", "grug_moe_adamh"):
+        if router_lr_override is not None:
+            raise ValueError("SCALE_ROUTER_LR is only supported by the MuonH optimizer")
+        lr = float(lr_override) if lr_override else heuristic.adam_lr
+        optimizer = GrugMoeAdamHConfig(learning_rate=lr, adam_lr=lr, **schedule)
+    else:
+        if router_lr_override is not None:
+            raise ValueError("SCALE_ROUTER_LR is only supported by the MuonH optimizer")
+        lr = float(lr_override) if lr_override else heuristic.adam_lr
+        optimizer = dataclasses.replace(SCALE_OPTIMIZER, learning_rate=lr, **schedule)
+    print(
+        f"[scale] optimizer={opt_name} muonh_lr={heuristic.learning_rate:.5f} adam_lr={heuristic.adam_lr:.5f} "
+        f"router_lr={router_lr_override or 'adam_lr'}; "
+        f"(heuristic: {total_tokens / 1e9:.1f}B tokens, dim={model.hidden_dim}); "
+        f"peak override SCALE_LR={lr_override or 'none'}",
+        flush=True,
+    )
+
     name = f"grug-moe-cw-d{model.hidden_dim}-L{model.num_layers}-e{model.num_experts}-r{replicas}"
-    slim = slimpajama_6b_dataset()
+    # SCALE_DATA=datakit uses the two-phase datakit store mixture; default is SlimPajama.
+    use_datakit = os.environ.get("SCALE_DATA", "slimpajama").lower() == "datakit"
+    slim = None if use_datakit else slimpajama_6b_dataset()
 
     def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
         if use_wandb:
@@ -202,9 +331,22 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
             )
         else:
             tracker = JsonLoggerConfig(logger_name=json_logger_name)
+        if use_datakit:
+            # Two-phase datakit store mixture (phase 1 begins at 80% of steps). Bucket cache dirs
+            # are relative and rooted at marin_prefix() -> the local CoreWeave bucket, so there is
+            # no cross-region I/O and no hardcoded bucket names.
+            data = datakit_data_config(
+                total_steps=steps,
+                batch_size=batch_size,
+                max_seq_len=model.max_seq_len,
+                enable_simulated_epoching=False,
+                val_components={},
+            )
+        else:
+            data = mixture(ctx, {slim: 1.0}, shuffle=_SLIMPAJAMA_SHUFFLE)
         return GrugMoeLaunchConfig(
             model=model,
-            data=mixture(ctx, {slim: 1.0}, shuffle=_SLIMPAJAMA_SHUFFLE),
+            data=data,
             output_path=ctx.output_path,
             run_id=run_id,
             resources=ctx.runtime_arg("train_resources"),
@@ -213,9 +355,12 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
             seed=0,
             mp=mp,
             tracker=tracker,
-            optimizer=SCALE_OPTIMIZER,
+            optimizer=optimizer,
             grug_trainer=grug_trainer,
             processes_per_task=processes_per_task,
+            max_retries_failure=max_retries_failure,
+            max_retries_preemption=max_retries_preemption,
+            max_task_failures=max_task_failures,
             eval=None,
             profiler=profiler,
             checkpointer=checkpointer,
@@ -229,7 +374,7 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
         artifact_type=LevanterCheckpoint,
         run=run_grug_moe_trial,
         build_config=build_config,
-        deps=(slim,),
+        deps=() if use_datakit else (slim,),
         runtime_args={"train_resources": resources},
     )
 

@@ -19,6 +19,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import experiment_main
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem import marin_prefix, prefix_join
 
 from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
@@ -252,7 +253,9 @@ _TAIL_BUCKETS: tuple[str, ...] = (
 def _bucket_path(bucket: str) -> str:
     cluster = int(bucket[1:3])
     quality = int(bucket[-1])
-    return f"{_STORE_PREFIX}/cluster={cluster}/quality={quality}"
+    # Root the (relative) store path at marin_prefix() so it resolves to the region-local bucket
+    # (e.g. the CoreWeave S3 bucket on cw-us-east-*), never a hardcoded bucket or a cwd-local path.
+    return prefix_join(marin_prefix(), f"{_STORE_PREFIX}/cluster={cluster}/quality={quality}")
 
 
 def _bucket_component(bucket: str) -> DatasetComponent:
@@ -313,7 +316,7 @@ def _simulated_experiment_budget(*, total_steps: int, batch_size: int, max_seq_l
     return total_steps * batch_size * max_seq_len
 
 
-def _datakit_data_config(
+def datakit_data_config(
     *,
     total_steps: int,
     batch_size: int,
@@ -380,7 +383,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
             val_components = {v.name: _val_component(ctx.artifact_path(v)) for v in _VALIDATION}
         else:
             val_components = {v.name: ctx.resolved(v).as_component() for v in _VALIDATION}
-        data = _datakit_data_config(
+        data = datakit_data_config(
             total_steps=_steps,
             batch_size=_batch_size,
             max_seq_len=_model.max_seq_len,

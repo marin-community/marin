@@ -224,7 +224,7 @@ class Transformer(eqx.Module):
     ) -> jax.Array:
         """Compute next-token cross-entropy loss for a batch."""
         hidden = self(token_ids, mask=mask)
-        labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
+        labels = jnp.zeros_like(token_ids).at[:, :-1].set(token_ids[:, 1:]).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
         return fused_linear_softmax_cross_entropy_loss(
@@ -253,15 +253,16 @@ def debug_mesh_and_token_pspec(num_devices: int, model_axis_size: int = 1) -> tu
         raise ValueError(f"num_devices ({num_devices}) must be divisible by model_axis_size ({model_axis_size})")
     data_axis_size = num_devices // model_axis_size
     mesh = jax.sharding.AbstractMesh(
-        axis_sizes=(1, data_axis_size, model_axis_size),
-        axis_names=("replica_dcn", "data", "model"),
+        axis_sizes=(1, data_axis_size, 1, model_axis_size),
+        axis_names=("replica_dcn", "data", "expert", "model"),
         axis_types=(
+            jax.sharding.AxisType.Explicit,
             jax.sharding.AxisType.Explicit,
             jax.sharding.AxisType.Explicit,
             jax.sharding.AxisType.Explicit,
         ),
     )
-    return mesh, P(("replica_dcn", "data"), None)
+    return mesh, P(("replica_dcn", "data", "expert"), None)
 
 
 __all__ = [

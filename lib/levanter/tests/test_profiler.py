@@ -53,6 +53,36 @@ def test_profile_writes_trace_to_run_dir_and_ignores_duplicate_forced_stop(monke
     assert profile_dir.exists()
 
 
+@pytest.mark.parametrize(
+    ("process_index", "expected_trace"),
+    [
+        (3, True),
+        (4, False),
+    ],
+)
+def test_profile_process_range_captures_only_selected_processes(monkeypatch, tmp_path, process_index, expected_trace):
+    calls = []
+    monkeypatch.setattr(profiler_module.jax, "process_index", lambda: process_index)
+    monkeypatch.setattr(profiler_module.jax.profiler, "start_trace", lambda *_args, **_kwargs: calls.append("start"))
+    monkeypatch.setattr(profiler_module.jax.profiler, "stop_trace", lambda: calls.append("stop"))
+    monkeypatch.setattr(profiler_module, "barrier_sync", lambda: calls.append("barrier"))
+
+    callback = profile(
+        str(tmp_path / f"process-{process_index}"),
+        start_step=5,
+        num_steps=1,
+        create_perfetto_link=False,
+        process_index=0,
+        process_count=4,
+    )
+    callback(SimpleNamespace(step=4))
+    callback(SimpleNamespace(step=5))
+
+    assert ("start" in calls) is expected_trace
+    assert ("stop" in calls) is expected_trace
+    assert calls[-1] == "barrier"
+
+
 def test_profile_uploads_new_xplane_session_and_logs_viewer_link(monkeypatch, tmp_path, caplog):
     profile_dir = tmp_path / "run" / "profiler"
     upload_dir = tmp_path / "uploaded"

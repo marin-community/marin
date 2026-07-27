@@ -1,0 +1,10 @@
+--- pybind11.h
++++ pybind11.h
+@@ -2234,7 +2234,6 @@
+         constexpr bool is_convertible = std::is_convertible<Type, Underlying>::value;
+         m_base.init(is_arithmetic, is_convertible);
+
+-        def(init([](Scalar i) { return static_cast<Type>(i); }), arg("value"));
+         def_property_readonly("value", [](Type value) { return (Scalar) value; });
+         def("__int__", [](Type value) { return (Scalar) value; });
+         def("__index__", [](Type value) { return (Scalar) value; });

@@ -1,0 +1,155 @@
+diff --git a/csrc/hybrid_ep/hybrid_ep.cu b/csrc/hybrid_ep/hybrid_ep.cu
+index a1eef82..fcaeef0 100644
+--- a/csrc/hybrid_ep/hybrid_ep.cu
++++ b/csrc/hybrid_ep/hybrid_ep.cu
+@@ -272,7 +272,9 @@ HybridEPBuffer::dispatch_with_permute(
+           c10::optional<int64_t> pad_multiple,
+           bool fuse_permute_dispatch,
+           bool non_blocking,
+-          bool with_probs)
++          bool with_probs,
++          c10::optional<torch::Tensor> preallocated_output_token,
++          c10::optional<torch::Tensor> preallocated_output_prob)
+ {
+  auto config = handle.config;
+  // Check the input tensors
+@@ -309,11 +311,32 @@ HybridEPBuffer::dispatch_with_permute(
+  args.dense_chunk_layout = handle.dense_chunk_layout;
+  args.dense_to_expert_map = handle.dense_to_expert_map;
+  args.tokens_per_expert = handle.tokens_per_expert;
+- // Pre-allocate output tensors for both fuse and standalone permute paths
+- args.local_expert_output_token =
+-    torch::empty({handle.num_permuted_tokens, config.hidden_dim}, torch::dtype(hidden.dtype()).device(torch::kCUDA));
++ // Use caller-owned outputs when integrating with runtimes such as JAX, which
++ // already allocate FFI result buffers as part of executable buffer assignment.
++ if (preallocated_output_token.has_value()) {
++   assert(preallocated_output_token.value().device().is_cuda());
++   assert(preallocated_output_token.value().is_contiguous());
++   assert(preallocated_output_token.value().dtype() == hidden.dtype());
++   assert(preallocated_output_token.value().size(0) == handle.num_permuted_tokens);
++   assert(preallocated_output_token.value().size(1) == config.hidden_dim);
++   args.local_expert_output_token = preallocated_output_token.value();
++ } else {
++   args.local_expert_output_token =
++       torch::empty({handle.num_permuted_tokens, config.hidden_dim},
++                    torch::dtype(hidden.dtype()).device(torch::kCUDA));
++ }
+  if (with_probs) {
+-   args.local_expert_output_prob = torch::empty({handle.num_permuted_tokens}, torch::dtype(torch::kFloat32).device(torch::kCUDA));
++   if (preallocated_output_prob.has_value()) {
++     assert(preallocated_output_prob.value().device().is_cuda());
++     assert(preallocated_output_prob.value().is_contiguous());
++     assert(preallocated_output_prob.value().dtype() == torch::kFloat32);
++     assert(preallocated_output_prob.value().numel() == handle.num_permuted_tokens);
++     args.local_expert_output_prob = preallocated_output_prob.value();
++   } else {
++     args.local_expert_output_prob =
++         torch::empty({handle.num_permuted_tokens},
++                      torch::dtype(torch::kFloat32).device(torch::kCUDA));
++   }
+  }
+  if (config.token_data_type == APP_TOKEN_DATA_TYPE::UINT8) {
+    args.local_expert_output_scaling_factor = torch::empty({handle.num_permuted_tokens, config.hidden_dim / 128}, torch::dtype(torch::kFloat32).device(torch::kCUDA));
+@@ -341,7 +364,9 @@ HybridEPBuffer::combine_with_unpermute(
+         HandleImpl handle,
+         c10::optional<int64_t> pad_multiple,
+         bool fuse_unpermute_combine,
+-        bool with_probs)
++        bool with_probs,
++        c10::optional<torch::Tensor> preallocated_output_token,
++        c10::optional<torch::Tensor> preallocated_output_prob)
+ {
+   auto config = handle.config;
+   // Check the input tensors
+@@ -358,11 +383,37 @@ HybridEPBuffer::combine_with_unpermute(
+
+   // Construct the output tensors
+   torch::Tensor combined_tokens, combined_probs;
+-  combined_tokens =torch::empty({handle.num_of_tokens_per_rank, config.hidden_dim},
+-                   torch::dtype(hidden.dtype()).device(torch::kCUDA));
++  if (preallocated_output_token.has_value()) {
++    assert(preallocated_output_token.value().device().is_cuda());
++    assert(preallocated_output_token.value().is_contiguous());
++    assert(preallocated_output_token.value().dtype() == hidden.dtype());
++    assert(preallocated_output_token.value().size(0) == handle.num_of_tokens_per_rank);
++    assert(preallocated_output_token.value().size(1) == config.hidden_dim);
++    combined_tokens = preallocated_output_token.value();
++  } else {
++    combined_tokens = torch::empty(
++        {handle.num_of_tokens_per_rank, config.hidden_dim},
++        torch::dtype(hidden.dtype()).device(torch::kCUDA));
++  }
+   if (with_probs) {
+-    combined_probs =
+-        torch::empty({handle.num_of_tokens_per_rank, config.num_of_experts_per_rank *  config.num_of_ranks_per_node * config.num_of_nodes}, torch::dtype(torch::kFloat32).device(torch::kCUDA));
++    if (preallocated_output_prob.has_value()) {
++      assert(preallocated_output_prob.value().device().is_cuda());
++      assert(preallocated_output_prob.value().is_contiguous());
++      assert(preallocated_output_prob.value().dtype() == torch::kFloat32);
++      assert(
++          preallocated_output_prob.value().size(0) == handle.num_of_tokens_per_rank);
++      assert(
++          preallocated_output_prob.value().size(1) ==
++          config.num_of_experts_per_rank * config.num_of_ranks_per_node *
++              config.num_of_nodes);
++      combined_probs = preallocated_output_prob.value();
++    } else {
++      combined_probs = torch::empty(
++          {handle.num_of_tokens_per_rank,
++           config.num_of_experts_per_rank * config.num_of_ranks_per_node *
++               config.num_of_nodes},
++          torch::dtype(torch::kFloat32).device(torch::kCUDA));
++    }
+   }
+
+   // Prepare the parameters
+diff --git a/csrc/hybrid_ep/hybrid_ep.cuh b/csrc/hybrid_ep/hybrid_ep.cuh
+index 3b8da29..42ead01 100644
+--- a/csrc/hybrid_ep/hybrid_ep.cuh
++++ b/csrc/hybrid_ep/hybrid_ep.cuh
+@@ -56,7 +56,9 @@ public:
+             c10::optional<int64_t> pad_multiple,
+             bool fuse_permute_dispatch,
+             bool non_blocking,
+-            bool with_probs);
++            bool with_probs,
++            c10::optional<torch::Tensor> preallocated_output_token = c10::nullopt,
++            c10::optional<torch::Tensor> preallocated_output_prob = c10::nullopt);
+
+   std::tuple<torch::Tensor, torch::Tensor>
+   combine_with_unpermute(
+@@ -65,7 +67,9 @@ public:
+           HandleImpl handle,
+           c10::optional<int64_t> pad_multiple,
+           bool fuse_unpermute_combine,
+-          bool with_probs);
++          bool with_probs,
++          c10::optional<torch::Tensor> preallocated_output_token = c10::nullopt,
++          c10::optional<torch::Tensor> preallocated_output_prob = c10::nullopt);
+
+ private:
+   ExtendedMemoryAllocator remote_allocator;
+diff --git a/csrc/hybrid_ep/pybind_hybrid_ep.cu b/csrc/hybrid_ep/pybind_hybrid_ep.cu
+index 3a31868..7622e2a 100644
+--- a/csrc/hybrid_ep/pybind_hybrid_ep.cu
++++ b/csrc/hybrid_ep/pybind_hybrid_ep.cu
+@@ -210,13 +210,17 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+              py::arg("pad_multiple") = std::nullopt,
+              py::arg("fuse_permute_dispatch") = false,
+              py::arg("non_blocking") = false,
+-             py::arg("with_probs") = false)
++             py::arg("with_probs") = false,
++             py::arg("preallocated_output_token") = c10::nullopt,
++             py::arg("preallocated_output_prob") = c10::nullopt)
+         .def("combine_with_unpermute", &HybridEPBuffer::combine_with_unpermute, py::kw_only(),
+              py::arg("hidden"),
+              py::arg("probs") = c10::nullopt,
+              py::arg("handle"),
+              py::arg("pad_multiple") = std::nullopt,
+              py::arg("fuse_unpermute_combine") = false,
+-             py::arg("with_probs") = false);
++             py::arg("with_probs") = false,
++             py::arg("preallocated_output_token") = c10::nullopt,
++             py::arg("preallocated_output_prob") = c10::nullopt);
+
+   }

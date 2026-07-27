@@ -18,7 +18,7 @@ from iris.cluster.client.job_info import JobInfo, get_job_info
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.platforms.types import find_free_port
 from iris.cluster.types import Namespace
-from iris.hooks.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
+from iris.hooks.multigpu import IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV, IRIS_MULTIGPU_PROCESS_INDEX_ENV
 from iris.managed_thread import get_thread_container
 
 logger = logging.getLogger(__name__)
@@ -26,6 +26,19 @@ logger = logging.getLogger(__name__)
 ENDPOINT_PREFIX = "telltale"
 
 _started = False
+
+
+def _server_port() -> int:
+    """Choose a collision-resistant port for a supervised multi-GPU process."""
+    local_device_ids = os.environ.get(IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV)
+    if local_device_ids is None:
+        return find_free_port()
+
+    # Supervised ranks on one host start concurrently. Closing a kernel-selected
+    # ephemeral socket before uvicorn binds lets several ranks select the same
+    # port. Give each local-device partition a disjoint 1,000-port range instead.
+    first_local_device = int(local_device_ids.split(",", maxsplit=1)[0])
+    return find_free_port(start=40_000 + first_local_device * 1_000)
 
 
 def _identity(job_info: JobInfo) -> telltale.MetricIdentity:
@@ -102,7 +115,7 @@ def start() -> str | None:
     # Ephemeral rather than a named port: a named port is allocated per task, so
     # the processes sharing a multi-process host would collide on it, and a fixed
     # port gets taken by whatever co-tenant grabs it first.
-    port = find_free_port()
+    port = _server_port()
     address = f"http://{job_info.advertise_host}:{port}"
     logger.info("telltale: starting HTTP server at %s", address)
 

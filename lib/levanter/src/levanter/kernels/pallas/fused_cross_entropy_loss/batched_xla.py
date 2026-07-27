@@ -29,6 +29,8 @@ _GB10_XLA_STREAMING_V_BLOCK_BATCH_8K = 3072
 _LARGE_VOCAB_THRESHOLD = 65536
 _GB10_CUSTOM_BWD_V_BLOCK_BATCH_1K = 6144
 _GB10_CUSTOM_BWD_V_BLOCK_BATCH_2K_PLUS = 7168
+_GB200_CUSTOM_BWD_V_BLOCK = 16384
+_GB200_CUSTOM_BWD_MIN_BATCH = 8192
 _GPU_MIN_B_BLOCK_SIZE = 128
 _H100_FULL_VOCAB_B_TILED_BLOCK_SIZE = 8192
 _H100_FULL_VOCAB_B_TILED_MIN_BATCH = 8192
@@ -535,6 +537,21 @@ def _gb10_custom_backward_v_block_size(
     return None
 
 
+def _gb200_custom_backward_v_block_size(
+    x: Float[Array, "B H"],
+    w: Float[Array, "H V"],
+) -> int | None:
+    device_kind = _device_kind()
+    is_gb200_bf16 = "b200" in device_kind and x.dtype == jnp.bfloat16 and w.dtype == jnp.bfloat16
+    if not is_gb200_bf16:
+        return None
+    if x.shape[0] < _GB200_CUSTOM_BWD_MIN_BATCH:
+        return None
+    if w.shape[1] < _LARGE_VOCAB_THRESHOLD:
+        return None
+    return _GB200_CUSTOM_BWD_V_BLOCK
+
+
 def _custom_backward_v_block_size(
     x: Float[Array, "B H"],
     w: Float[Array, "H V"],
@@ -543,6 +560,9 @@ def _custom_backward_v_block_size(
     gb10_tuned = _gb10_custom_backward_v_block_size(x, w)
     if gb10_tuned is not None:
         return gb10_tuned
+    gb200_tuned = _gb200_custom_backward_v_block_size(x, w)
+    if gb200_tuned is not None:
+        return gb200_tuned
     if block_sizes is not None:
         return block_sizes.v_block_size
     return BlockSizes.get_default().v_block_size

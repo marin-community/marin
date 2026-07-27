@@ -1,0 +1,78 @@
+diff --git a/csrc/hybrid_ep/buffer/intranode.cu b/csrc/hybrid_ep/buffer/intranode.cu
+index 3da084a..c3d0c97 100644
+--- a/csrc/hybrid_ep/buffer/intranode.cu
++++ b/csrc/hybrid_ep/buffer/intranode.cu
+@@ -1,6 +1,10 @@
+ // SPDX-License-Identifier: MIT
+ // SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES.
+ // All rights reserved
++#include <cstdlib>
++#include <stdexcept>
++#include <string>
++
+ #include "intranode.cuh"
+
+ NVLCoordinator::~NVLCoordinator() {
+@@ -124,10 +128,32 @@ void NVLCoordinator::init(
+     this->process_group = process_group;
+     this->remote_allocator = remote_allocator;
+
+-    // Token number at the worst case, all tokens are routed to the same expert.
+-    this->max_num_of_tokens = buffer_config.max_num_of_tokens_per_rank *
+-                              buffer_config.num_of_ranks_per_node *
+-                              buffer_config.num_of_nodes;
++    const int64_t unconstrained_tokens =
++        static_cast<int64_t>(buffer_config.max_num_of_tokens_per_rank) *
++        buffer_config.num_of_ranks_per_node *
++        buffer_config.num_of_nodes;
++    const char* bounded_tokens = std::getenv("HYBRID_EP_MAX_LOCAL_EXPERT_TOKENS");
++    if (bounded_tokens != nullptr) {
++        size_t parsed_characters = 0;
++        try {
++            this->max_num_of_tokens_override = std::stoll(bounded_tokens, &parsed_characters);
++        } catch (const std::exception&) {
++            throw std::invalid_argument(
++                "HYBRID_EP_MAX_LOCAL_EXPERT_TOKENS must be a positive integer");
++        }
++        if (bounded_tokens[parsed_characters] != '\0' ||
++            this->max_num_of_tokens_override <= 0 ||
++            this->max_num_of_tokens_override % 4 != 0 ||
++            this->max_num_of_tokens_override > unconstrained_tokens) {
++            throw std::invalid_argument(
++                "HYBRID_EP_MAX_LOCAL_EXPERT_TOKENS must be a multiple of 4 no larger "
++                "than the unconstrained local expert-token capacity");
++        }
++    }
++    this->max_num_of_tokens =
++        this->max_num_of_tokens_override > 0
++            ? this->max_num_of_tokens_override
++            : unconstrained_tokens;
+     assert(this->max_num_of_tokens % 4 == 0);
+     // The expert-token buffer is vectorized in 4-token groups.
+ }
+@@ -163,7 +185,12 @@ void NVLCoordinator::update_config(BufferConfig config) {
+     this->buffer_config = config;
+-    this->max_num_of_tokens = config.max_num_of_tokens_per_rank *
+-                              config.num_of_ranks_per_node *
+-                              config.num_of_nodes;
++    const int64_t unconstrained_tokens =
++        static_cast<int64_t>(config.max_num_of_tokens_per_rank) *
++        config.num_of_ranks_per_node *
++        config.num_of_nodes;
++    this->max_num_of_tokens =
++        this->max_num_of_tokens_override > 0
++            ? this->max_num_of_tokens_override
++            : unconstrained_tokens;
+ }
+
+ void NVLCoordinator::allocate_buffers() {
+diff --git a/csrc/hybrid_ep/buffer/intranode.cuh b/csrc/hybrid_ep/buffer/intranode.cuh
+index e761445..160dc0f 100644
+--- a/csrc/hybrid_ep/buffer/intranode.cuh
++++ b/csrc/hybrid_ep/buffer/intranode.cuh
+@@ -66,5 +66,6 @@ public:
+     // Maximum number of tokens for experts (worst case: all tokens to one expert)
+     int64_t max_num_of_tokens = -1;
++    int64_t max_num_of_tokens_override = -1;
+     // On intra-node communication, dispatch/combine can share same buffers.
+     bool use_shared_buffer = false;
