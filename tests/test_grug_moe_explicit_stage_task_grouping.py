@@ -35,13 +35,16 @@ from experiments.grug.moe.check_jaxpp_group2_component_mpmd_parity import (
     paired_moe_per_checkpoint_value_and_grads,
     paired_pre_moe_checkpoint_boundary_forward,
     paired_pre_moe_checkpoint_boundary_value_and_grads,
+    single_full_block_allow_cse_boundary_value_and_grads,
     single_full_block_boundary_forward,
     single_full_block_boundary_value_and_grads,
     single_full_block_no_checkpoint_boundary_value_and_grads,
     single_moe_value_and_grads,
     single_pre_moe_barrier_checkpoint_boundary_forward,
+    single_pre_moe_barrier_checkpoint_boundary_primal_and_value_and_grads,
     single_pre_moe_barrier_checkpoint_boundary_value_and_grads,
     single_pre_moe_checkpoint_boundary_forward,
+    single_pre_moe_checkpoint_boundary_primal_and_value_and_grads,
     single_pre_moe_checkpoint_boundary_value_and_grads,
     validate_full_task_structure,
     validate_pure_moe_structure,
@@ -826,18 +829,24 @@ def test_paired_remat_scope_candidates_match_ordered_full_block_checkpoint(forwa
 
 
 @pytest.mark.parametrize(
-    ("pre_forward", "pre_value_and_grads"),
+    ("pre_forward", "pre_value_and_grads", "pre_primal_and_value_and_grads"),
     (
-        (single_pre_moe_checkpoint_boundary_forward, single_pre_moe_checkpoint_boundary_value_and_grads),
+        (
+            single_pre_moe_checkpoint_boundary_forward,
+            single_pre_moe_checkpoint_boundary_value_and_grads,
+            single_pre_moe_checkpoint_boundary_primal_and_value_and_grads,
+        ),
         (
             single_pre_moe_barrier_checkpoint_boundary_forward,
             single_pre_moe_barrier_checkpoint_boundary_value_and_grads,
+            single_pre_moe_barrier_checkpoint_boundary_primal_and_value_and_grads,
         ),
     ),
 )
 def test_split_executable_boundary_dataflow_matches_ordered_full_block_checkpoint(
     pre_forward,
     pre_value_and_grads,
+    pre_primal_and_value_and_grads,
 ) -> None:
     mesh, stage = _tiny_grouped_last_stage("save_moe", top_k=2)
     _, hiddens, output_cotangents = _tiny_boundary_inputs(mesh)
@@ -879,6 +888,10 @@ def test_split_executable_boundary_dataflow_matches_ordered_full_block_checkpoin
             jax.jit(pre_value_and_grads)(params, qb_beta, hidden, boundary_cotangent)
             for hidden, boundary_cotangent in zip(hiddens, boundary_cotangents, strict=True)
         )
+        pre_vjps_with_primals = tuple(
+            jax.jit(pre_primal_and_value_and_grads)(params, qb_beta, hidden, boundary_cotangent)
+            for hidden, boundary_cotangent in zip(hiddens, boundary_cotangents, strict=True)
+        )
 
     expected_forward = tuple(
         (ordered_forwards[0][index], ordered_forwards[1][index]) for index in range(len(ordered_forwards[0]))
@@ -918,8 +931,46 @@ def test_split_executable_boundary_dataflow_matches_ordered_full_block_checkpoin
     )
     _assert_tree_rel_l2(actual_forward, expected_forward)
     _assert_tree_rel_l2(actual_vjp, expected_vjp)
+    _assert_tree_rel_l2(
+        tuple(result[0] for result in pre_vjps_with_primals),
+        prepared,
+    )
+    _assert_tree_rel_l2(
+        tuple(result[1:] for result in pre_vjps_with_primals),
+        pre_vjps,
+    )
     for actual_routes, expected_routes in zip(actual_forward[3], expected_forward[3], strict=True):
         np.testing.assert_array_equal(actual_routes["selected_experts"], expected_routes["selected_experts"])
+
+
+def test_ordered_checkpoint_allow_cse_control_matches_default_and_no_checkpoint() -> None:
+    mesh, stage = _tiny_grouped_last_stage("save_moe", top_k=2)
+    _, hiddens, output_cotangents = _tiny_boundary_inputs(mesh)
+    params = stage.blocks[0]
+    qb_beta = jnp.asarray([0.2, -0.1, 0.05], dtype=jnp.float32)
+
+    with jax.set_mesh(mesh):
+        default = jax.jit(single_full_block_boundary_value_and_grads)(
+            params,
+            qb_beta,
+            hiddens[0],
+            output_cotangents[0],
+        )
+        allow_cse = jax.jit(single_full_block_allow_cse_boundary_value_and_grads)(
+            params,
+            qb_beta,
+            hiddens[0],
+            output_cotangents[0],
+        )
+        no_checkpoint = jax.jit(single_full_block_no_checkpoint_boundary_value_and_grads)(
+            params,
+            qb_beta,
+            hiddens[0],
+            output_cotangents[0],
+        )
+
+    _assert_tree_rel_l2(allow_cse, default)
+    _assert_tree_rel_l2(allow_cse, no_checkpoint)
 
 
 def _closed_jaxpr_name_stacks(closed_jaxpr: jax_core.ClosedJaxpr) -> tuple[str, ...]:

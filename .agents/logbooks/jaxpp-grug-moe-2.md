@@ -211,6 +211,6 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - Iris reached the intended strict assertion after `2m01s`; the parent and child are terminal with no retry or live allocation.
 - Interpretation:
   - The architecture-realistic forward decomposition is validated exactly at target shape. Separate executable contexts, not an optimization barrier, recover the ordered full-checkpoint forward identity.
-  - Transforming the split functions into fresh VJP executables changes their returned primals before gradient comparison. The remaining failure is therefore in reverse-mode compilation/recomputation context, not the split forward dataflow or joined-MoE forward.
+  - The gradient comparison is contaminated: its reference is the ordered VJP executable, whose auxiliary primal boundaries differ from the standalone ordered-forward executable, while the split gradient arm uses saved standalone-forward boundaries. The result isolates an AD compiler-context shift but does not evaluate split gradient assembly on matched primals.
 - Next action:
-  - Preserve outputs and residuals from the validated forward executables and compile transpose-only backward tasks that consume those saved residuals. Do not use a fresh `value_and_grad` wrapper that recomputes each task's primals, and do not launch L8 or L24 until every backward leaf passes relative-L2 `0.002`.
+  - Always run the barrier pre-task and compare standalone and VJP-exposed task primals against the ordered VJP auxiliary boundaries. Add an ordered `save_moe` VAG with `prevent_cse=False` to test whether remat's anti-CSE barrier causes the shift. Assemble gradients only when an arm has exact routes and every forward boundary passes relative-L2 `0.002`; do not launch L8 or L24.

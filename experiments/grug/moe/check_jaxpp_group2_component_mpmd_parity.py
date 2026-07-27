@@ -595,9 +595,14 @@ def _single_pre_moe_checkpoint_boundary_value_and_grads(
             ),
             start=jnp.asarray(0.0, dtype=jnp.float32),
         )
-        return loss
+        return loss, boundaries
 
-    return jax.value_and_grad(projected_pre_moe, argnums=(0, 1))(params, hidden)[1]
+    (_, boundaries), (parameter_gradient, input_gradient) = jax.value_and_grad(
+        projected_pre_moe,
+        argnums=(0, 1),
+        has_aux=True,
+    )(params, hidden)
+    return boundaries, parameter_gradient, input_gradient
 
 
 def single_pre_moe_checkpoint_boundary_value_and_grads(
@@ -607,6 +612,23 @@ def single_pre_moe_checkpoint_boundary_value_and_grads(
     boundary_cotangents: tuple[jax.Array, jax.Array, jax.Array],
 ):
     """Differentiate one independently compiled pre-MoE checkpoint."""
+    _, parameter_gradient, input_gradient = _single_pre_moe_checkpoint_boundary_value_and_grads(
+        single_pre_moe_checkpoint_boundary_forward,
+        params,
+        qb_beta,
+        hidden,
+        boundary_cotangents,
+    )
+    return parameter_gradient, input_gradient
+
+
+def single_pre_moe_checkpoint_boundary_primal_and_value_and_grads(
+    params: Block,
+    qb_beta: jax.Array,
+    hidden: jax.Array,
+    boundary_cotangents: tuple[jax.Array, jax.Array, jax.Array],
+):
+    """Expose pre-MoE VJP primals and gradients from one compiled task."""
     return _single_pre_moe_checkpoint_boundary_value_and_grads(
         single_pre_moe_checkpoint_boundary_forward,
         params,
@@ -623,6 +645,23 @@ def single_pre_moe_barrier_checkpoint_boundary_value_and_grads(
     boundary_cotangents: tuple[jax.Array, jax.Array, jax.Array],
 ):
     """Differentiate the independently compiled barrier pre-MoE checkpoint."""
+    _, parameter_gradient, input_gradient = _single_pre_moe_checkpoint_boundary_value_and_grads(
+        single_pre_moe_barrier_checkpoint_boundary_forward,
+        params,
+        qb_beta,
+        hidden,
+        boundary_cotangents,
+    )
+    return parameter_gradient, input_gradient
+
+
+def single_pre_moe_barrier_checkpoint_boundary_primal_and_value_and_grads(
+    params: Block,
+    qb_beta: jax.Array,
+    hidden: jax.Array,
+    boundary_cotangents: tuple[jax.Array, jax.Array, jax.Array],
+):
+    """Expose barrier pre-MoE VJP primals and gradients from one compiled task."""
     return _single_pre_moe_checkpoint_boundary_value_and_grads(
         single_pre_moe_barrier_checkpoint_boundary_forward,
         params,
@@ -761,6 +800,7 @@ def _single_full_block_boundary_value_and_grads(
     output_cotangent: jax.Array,
     *,
     checkpoint: bool,
+    prevent_cse: bool = True,
 ):
     """Run one full block while returning every forward boundary."""
     policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
@@ -768,7 +808,11 @@ def _single_full_block_boundary_value_and_grads(
     def projected_single(master_params: Block, current_hidden: jax.Array):
         block = grug_train._compute_block(master_params, qb_beta, _MIXED_PRECISION)
         if checkpoint:
-            output, boundaries = eqx.filter_checkpoint(_single_block_boundaries, policy=policy)(block, current_hidden)
+            output, boundaries = eqx.filter_checkpoint(
+                _single_block_boundaries,
+                policy=policy,
+                prevent_cse=prevent_cse,
+            )(block, current_hidden)
         else:
             output, boundaries = _single_block_boundaries(block, current_hidden)
         router_stats = boundaries[-1]
@@ -838,6 +882,23 @@ def single_full_block_no_checkpoint_boundary_value_and_grads(
         hidden,
         output_cotangent,
         checkpoint=False,
+    )
+
+
+def single_full_block_allow_cse_boundary_value_and_grads(
+    params: Block,
+    qb_beta: jax.Array,
+    hidden: jax.Array,
+    output_cotangent: jax.Array,
+):
+    """Run one ordered save-MoE VAG without the remat anti-CSE barrier."""
+    return _single_full_block_boundary_value_and_grads(
+        params,
+        qb_beta,
+        hidden,
+        output_cotangent,
+        checkpoint=True,
+        prevent_cse=False,
     )
 
 
@@ -1817,21 +1878,82 @@ def _run_split_executable_forward_arm(
 def _run_split_executable_vjp_arm(
     process_id: int,
     name: str,
-    pre_moe_value_and_grads,
+    pre_moe_primal_and_value_and_grads,
     params: Block,
     qb_beta: jax.Array,
     hiddens: tuple[jax.Array, jax.Array],
     cotangents: tuple[jax.Array, jax.Array],
     forward_result,
-    gradient_reference,
-) -> bool:
+    ordered_vjp_reference,
+    allow_cse_reference,
+    no_checkpoint_reference,
+) -> tuple[bool, bool]:
     post_attention, mlp_inputs, shared_outputs, pre_ring, _, _, _ = forward_result
     finish_arguments = (params, qb_beta, post_attention, mlp_inputs, shared_outputs, cotangents)
-    finish = _compile_and_run(
+    compiled_finish_vjp = _lower_and_compile(
         process_id,
         f"split_{name}_joined_finish_vjp_task",
         jax.jit(joined_moe_finish_boundary_value_and_grads),
         finish_arguments,
+    )
+    bootstrap_finish = _execute_compiled(
+        process_id,
+        f"split_{name}_joined_finish_vjp_task_bootstrap",
+        compiled_finish_vjp,
+        finish_arguments,
+    )
+    bootstrap_forward = (
+        post_attention,
+        mlp_inputs,
+        shared_outputs,
+        pre_ring,
+        bootstrap_finish[1],
+        bootstrap_finish[2],
+        bootstrap_finish[3],
+    )
+    _report_full_block_forward(
+        process_id,
+        f"{name}_finish_vjp_on_standalone_pre",
+        bootstrap_forward,
+        ordered_vjp_reference[1:8],
+    )
+    bootstrap_boundary_cotangents = tuple(
+        (bootstrap_finish[5][index], bootstrap_finish[6][index], bootstrap_finish[7][index]) for index in range(2)
+    )
+    pre_arguments = (params, qb_beta, hiddens[0], bootstrap_boundary_cotangents[0])
+    compiled_pre_vjp = _lower_and_compile(
+        process_id,
+        f"split_{name}_pre_task_vjp",
+        jax.jit(pre_moe_primal_and_value_and_grads),
+        pre_arguments,
+    )
+    exposed_pre_vjps = tuple(
+        _execute_compiled(
+            process_id,
+            f"split_{name}_pre_task_vjp_primal_{index}",
+            compiled_pre_vjp,
+            (params, qb_beta, hidden, boundary_cotangent),
+        )
+        for index, (hidden, boundary_cotangent) in enumerate(zip(hiddens, bootstrap_boundary_cotangents, strict=True))
+    )
+    exposed_pre = tuple(result[0] for result in exposed_pre_vjps)
+    vjp_post_attention = tuple(result[0] for result in exposed_pre)
+    vjp_mlp_inputs = tuple(result[1] for result in exposed_pre)
+    vjp_shared_outputs = tuple(result[2] for result in exposed_pre)
+    vjp_pre_ring = tuple(result[3] for result in exposed_pre)
+    vjp_finish_arguments = (
+        params,
+        qb_beta,
+        vjp_post_attention,
+        vjp_mlp_inputs,
+        vjp_shared_outputs,
+        cotangents,
+    )
+    finish = _execute_compiled(
+        process_id,
+        f"split_{name}_joined_finish_vjp_task_on_vjp_primals",
+        compiled_finish_vjp,
+        vjp_finish_arguments,
     )
     (
         losses,
@@ -1843,47 +1965,77 @@ def _run_split_executable_vjp_arm(
         mlp_input_gradients,
         shared_output_gradients,
     ) = finish
+    vjp_context_forward = (
+        vjp_post_attention,
+        vjp_mlp_inputs,
+        vjp_shared_outputs,
+        vjp_pre_ring,
+        routed_outputs,
+        outputs,
+        router_stats,
+    )
+    vjp_context_passed = _report_full_block_forward(
+        process_id,
+        f"{name}_vjp_context",
+        vjp_context_forward,
+        ordered_vjp_reference[1:8],
+    )
+    _report_full_block_forward(
+        process_id,
+        f"{name}_vjp_context_vs_allow_cse",
+        vjp_context_forward,
+        allow_cse_reference[1:8],
+    )
+    if not vjp_context_passed:
+        return False, False
+
     boundary_cotangents = tuple(
         (post_attention_gradients[index], mlp_input_gradients[index], shared_output_gradients[index])
         for index in range(2)
     )
-    pre_arguments = (params, qb_beta, hiddens[0], boundary_cotangents[0])
-    compiled_pre_vjp = _lower_and_compile(
-        process_id,
-        f"split_{name}_pre_task_vjp",
-        jax.jit(pre_moe_value_and_grads),
-        pre_arguments,
-    )
     pre_gradients = tuple(
         _execute_compiled(
             process_id,
-            f"split_{name}_pre_task_vjp_{index}",
+            f"split_{name}_pre_task_vjp_gradient_{index}",
             compiled_pre_vjp,
             (params, qb_beta, hidden, boundary_cotangent),
         )
         for index, (hidden, boundary_cotangent) in enumerate(zip(hiddens, boundary_cotangents, strict=True))
     )
     parameter_gradient = grug_train._sum_microbatch_group(
-        (finish_parameter_gradient, pre_gradients[0][0], pre_gradients[1][0])
+        (finish_parameter_gradient, pre_gradients[0][1], pre_gradients[1][1])
     )
     actual = (
         losses,
-        post_attention,
-        mlp_inputs,
-        shared_outputs,
-        pre_ring,
+        vjp_post_attention,
+        vjp_mlp_inputs,
+        vjp_shared_outputs,
+        vjp_pre_ring,
         routed_outputs,
         outputs,
         router_stats,
         parameter_gradient,
-        (pre_gradients[0][1], pre_gradients[1][1]),
+        (pre_gradients[0][2], pre_gradients[1][2]),
     )
-    return _report_full_block_boundaries(
+    ordered_passed = _report_full_block_boundaries(
         process_id,
         f"split_{name}_vjp_report",
         actual,
-        gradient_reference,
+        ordered_vjp_reference,
     )
+    _report_full_block_boundaries(
+        process_id,
+        f"split_{name}_vjp_vs_allow_cse_report",
+        actual,
+        allow_cse_reference,
+    )
+    _report_full_block_boundaries(
+        process_id,
+        f"split_{name}_vjp_vs_no_checkpoint_report",
+        actual,
+        no_checkpoint_reference,
+    )
+    return True, ordered_passed
 
 
 def _run_split_executable_boundary_diagnostic(
@@ -1893,6 +2045,47 @@ def _run_split_executable_boundary_diagnostic(
     hiddens: tuple[jax.Array, jax.Array],
     cotangents: tuple[jax.Array, jax.Array],
 ) -> bool:
+    ordered_vjp_arguments = (params, qb_beta, hiddens[0], cotangents[0])
+    ordered_vag_functions = (
+        ("default_checkpoint", single_full_block_boundary_value_and_grads),
+        ("allow_cse_checkpoint", single_full_block_allow_cse_boundary_value_and_grads),
+        ("no_checkpoint", single_full_block_no_checkpoint_boundary_value_and_grads),
+    )
+    ordered_vag_references = {}
+    for vag_name, vag_function in ordered_vag_functions:
+        compiled_vag = _lower_and_compile(
+            process_id,
+            f"split_ordered_{vag_name}_vjp",
+            jax.jit(vag_function),
+            ordered_vjp_arguments,
+        )
+        single_results = tuple(
+            _execute_compiled(
+                process_id,
+                f"split_ordered_{vag_name}_vjp_{index}",
+                compiled_vag,
+                (params, qb_beta, hidden, cotangent),
+            )
+            for index, (hidden, cotangent) in enumerate(zip(hiddens, cotangents, strict=True))
+        )
+        ordered_vag_references[vag_name] = _combine_single_full_block_results(*single_results)
+
+    ordered_vjp_reference = ordered_vag_references["default_checkpoint"]
+    allow_cse_reference = ordered_vag_references["allow_cse_checkpoint"]
+    no_checkpoint_reference = ordered_vag_references["no_checkpoint"]
+    allow_cse_vs_default = _report_full_block_boundaries(
+        process_id,
+        "ordered_allow_cse_vs_default_checkpoint_report",
+        allow_cse_reference,
+        ordered_vjp_reference,
+    )
+    allow_cse_vs_no_checkpoint = _report_full_block_boundaries(
+        process_id,
+        "ordered_allow_cse_vs_no_checkpoint_report",
+        allow_cse_reference,
+        no_checkpoint_reference,
+    )
+
     ordered_arguments = (params, qb_beta, hiddens[0])
     compiled_ordered = _lower_and_compile(
         process_id,
@@ -1914,72 +2107,57 @@ def _run_split_executable_boundary_diagnostic(
         (
             "independent_pre_task",
             single_pre_moe_checkpoint_boundary_forward,
-            single_pre_moe_checkpoint_boundary_value_and_grads,
+            single_pre_moe_checkpoint_boundary_primal_and_value_and_grads,
         ),
         (
             "independent_pre_task_barriers",
             single_pre_moe_barrier_checkpoint_boundary_forward,
-            single_pre_moe_barrier_checkpoint_boundary_value_and_grads,
+            single_pre_moe_barrier_checkpoint_boundary_primal_and_value_and_grads,
         ),
     )
     forward_results = {}
+    ordered_vjp_forward_results = {}
+    allow_cse_forward_results = {}
     forward_values = {}
-    name, pre_forward, _ = arm_specs[0]
-    forward_values[name], _, forward_results[name] = _run_split_executable_forward_arm(
-        process_id,
-        name,
-        pre_forward,
-        params,
-        qb_beta,
-        hiddens,
-        forward_reference,
-    )
-    if not forward_results[name]:
-        barrier_name, barrier_forward, _ = arm_specs[1]
-        forward_values[barrier_name], _, forward_results[barrier_name] = _run_split_executable_forward_arm(
+    for name, pre_forward, _ in arm_specs:
+        forward_values[name], _, forward_results[name] = _run_split_executable_forward_arm(
             process_id,
-            barrier_name,
-            barrier_forward,
+            name,
+            pre_forward,
             params,
             qb_beta,
             hiddens,
             forward_reference,
         )
-
-    passing_forward_arms = tuple(name for name, passed in forward_results.items() if passed)
-    gradient_results = {}
-    if passing_forward_arms:
-        ordered_vjp_arguments = (params, qb_beta, hiddens[0], cotangents[0])
-        compiled_ordered_vjp = _lower_and_compile(
+        ordered_vjp_forward_results[name] = _report_full_block_forward(
             process_id,
-            "split_ordered_vjp",
-            jax.jit(single_full_block_boundary_value_and_grads),
-            ordered_vjp_arguments,
+            f"{name}_standalone_vs_ordered_vjp",
+            forward_values[name],
+            ordered_vjp_reference[1:8],
         )
-        ordered_vjps = tuple(
-            _execute_compiled(
-                process_id,
-                f"split_ordered_vjp_{index}",
-                compiled_ordered_vjp,
-                (params, qb_beta, hidden, cotangent),
-            )
-            for index, (hidden, cotangent) in enumerate(zip(hiddens, cotangents, strict=True))
+        allow_cse_forward_results[name] = _report_full_block_forward(
+            process_id,
+            f"{name}_standalone_vs_allow_cse_vjp",
+            forward_values[name],
+            allow_cse_reference[1:8],
         )
-        gradient_reference = _combine_single_full_block_results(*ordered_vjps)
-        for name, _, pre_value_and_grads in arm_specs:
-            if name not in passing_forward_arms:
-                continue
-            gradient_results[name] = _run_split_executable_vjp_arm(
-                process_id,
-                name,
-                pre_value_and_grads,
-                params,
-                qb_beta,
-                hiddens,
-                cotangents,
-                forward_values[name],
-                gradient_reference,
-            )
+
+    vjp_context_results = {}
+    gradient_results = {}
+    for name, _, pre_primal_and_value_and_grads in arm_specs:
+        vjp_context_results[name], gradient_results[name] = _run_split_executable_vjp_arm(
+            process_id,
+            name,
+            pre_primal_and_value_and_grads,
+            params,
+            qb_beta,
+            hiddens,
+            cotangents,
+            forward_values[name],
+            ordered_vjp_reference,
+            allow_cse_reference,
+            no_checkpoint_reference,
+        )
 
     passed = any(gradient_results.values())
     if process_id == 0:
@@ -1987,10 +2165,14 @@ def _run_split_executable_boundary_diagnostic(
             process_id,
             "split_executable_boundary_summary",
             forward_results=forward_results,
-            passing_forward_arms=passing_forward_arms,
+            ordered_vjp_forward_results=ordered_vjp_forward_results,
+            allow_cse_forward_results=allow_cse_forward_results,
+            allow_cse_vs_default_checkpoint=allow_cse_vs_default,
+            allow_cse_vs_no_checkpoint=allow_cse_vs_no_checkpoint,
+            vjp_context_results=vjp_context_results,
             gradient_results=gradient_results,
-            barrier_arm_run="independent_pre_task_barriers" in forward_results,
-            gradients_skipped=not passing_forward_arms,
+            barrier_arm_run=True,
+            gradients_skipped=not any(vjp_context_results.values()),
             passed=passed,
         )
     return passed
