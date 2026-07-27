@@ -16,6 +16,14 @@ if [[ -z "$cutlass_package" ]]; then
     'from pathlib import Path; import cutlass; print(Path(cutlass.__file__).parent)')"
 fi
 private_marker="$cutlass_package/.marin_private_copy"
+arith="$cutlass_package/_mlir/dialects/arith.py"
+
+if [[ ! -f "$arith" ]] || ! grep -Fq "def _isa(" "$arith"; then
+  exit 0
+fi
+if grep -Fq "return isinstance(obj, cls)" "$arith"; then
+  exit 0
+fi
 
 if [[ ! -e "$private_marker" ]]; then
   private_package="${cutlass_package}.private.$$"
@@ -25,11 +33,6 @@ if [[ ! -e "$private_marker" ]]; then
   mv "$cutlass_package" "$shared_package"
   mv "$private_package" "$cutlass_package"
   touch "$private_marker"
-fi
-
-arith="$cutlass_package/_mlir/dialects/arith.py"
-if grep -Fq "return isinstance(obj, cls)" "$arith"; then
-  exit 0
 fi
 
 patch --batch --forward -p0 -d "$(dirname "$cutlass_package")" \
