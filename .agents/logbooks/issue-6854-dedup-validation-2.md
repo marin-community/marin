@@ -16,6 +16,69 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T14:09:40Z — 281,420 pairs verified; all 331 ambiguities covered
+
+- `/rav/rav-datakit-6854-reconcile-manual-1408-v1258` independently
+  reconciled 2,216 completed semantic checkpoints and all 331 unresolved model
+  outcomes. Every unresolved outcome has a consistent full-text decision;
+  none are missing. The snapshot covers 281,420 of 755,281 semantic
+  candidates (37.26%). Applying the 72 false-positive and 259 true-duplicate
+  manual decisions gives:
+
+  - baseline: 224,649 pairs, 142,554 false positives, and 82,095 true
+    duplicates;
+  - treatment: 56,771 pairs, 29,379 false positives, and 27,392 true
+    duplicates;
+  - combined: 171,933 false positives and 109,487 true duplicates.
+
+  The observed false-positive rates are 63.4563% for baseline and 51.7500%
+  for treatment, a treatment reduction of 11.7063 percentage points. The
+  immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-1408.json`
+  with SHA-256
+  `186140147c3d47b8be92de462bdf15f7a790361d4d48ca38c0c00bebb30e649a`.
+- Complete-text inspection resolves baseline row 5,529 as a false positive.
+  The records share generic standardized-testing, health-program, and
+  coursework boilerplate, but describe different schools, locations,
+  programs, employment guidance, and course offerings. Deleting either loses
+  distinct institution-specific content. The 1,161/827-character records
+  have character, line, and word-sequence similarities 0.478873, 0.333333,
+  and 0.363014. The member/canonical/inspection SHA-256 values are
+  `cc0efeab15895f8894e1d9cfd3c24e1d56f96b04f580622d09356de1e5a8e862`,
+  `4893ce3e5b496530e4b22e31e43f7505e575b1b5c377c62acb8ae20ccb5c1c4e`,
+  and
+  `96bd6e05af4aab6493044231be5c0e0dbeffc21e9fed1fddf65725ac64cee02a`.
+  `/rav/rav-datakit-6854-publish-row5529-1406-v1255` wrote the immutable
+  false-positive decision, and
+  `/rav/rav-datakit-6854-verify-row5529-1407-v1256` independently reread and
+  verified it. The semantic-outcome, semantic-judgments, manual-Parquet, and
+  marker SHA-256 values are
+  `1d25e687da5c6d50cd47748b9ce56f163fe1de1290c9e4323091456dc1b5fb41`,
+  `c0c50b370c06dae08d0132b121d0409f543f4060b04ead3821e61088b3a71f2a`,
+  `2ac2474216a92f34aa89803d926393ac6567e3a78a90cd8ab7789865030d0771`,
+  and
+  `d7b573fd2b9763b6919a1527d582831e20071496d94b2f48b716189a3aed5b71`.
+- Four independent audit waves re-read and hash-validated another 4,149
+  persisted pairs:
+
+  - `/rav/rav-datakit-6854-audit-next-checkpoints-1401-v1251` covered 1,536
+    pairs with three unresolved outcomes;
+  - `/rav/rav-datakit-6854-audit-next-checkpoints-1403-v1253` covered 1,664
+    pairs with one unresolved outcome;
+  - `/rav/rav-datakit-6854-audit-next-checkpoints-1407-v1257` covered 821
+    pairs with seven unresolved outcomes;
+  - `/rav/rav-datakit-6854-audit-next-checkpoints-1408-v1259` covered 128
+    pairs with no unresolved outcomes.
+
+  Every unresolved outcome in those waves has a consistent full-text
+  decision. The next independent-audit frontiers are p0 `(12, 0)`, p1
+  `(43, 3,840)`, p2 `(76, 0)`, and p3 `(108, 128)`.
+- The p0, p2, and p3 workers are processing unusually large 128-pair
+  checkpoints containing 154,670,556, 155,378,205, and 45,320,057 combined
+  characters, respectively. All four batch-priority 2-H100 jobs remain
+  running, and their 12 root, broker, and GPU pods remain Ready with zero
+  Kubernetes restarts.
+
 ### 2026-07-27T13:59:24Z — 280,524 pairs verified; all 330 ambiguities covered
 
 - `/rav/rav-datakit-6854-reconcile-manual-1358-v1249` independently
