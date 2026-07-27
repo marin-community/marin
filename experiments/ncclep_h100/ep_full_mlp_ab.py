@@ -532,30 +532,18 @@ def _value_and_grad_with_ring_token_gradient(
     w13: Any,
     w2: Any,
 ) -> tuple[Any, tuple[Any, ...]]:
-    """Use the ring loss VJP for tokens and the TE loss VJP for parameters."""
-
-    def te_parameter_loss(
-        differentiated_routing_weights: Any,
-        differentiated_w13: Any,
-        differentiated_w2: Any,
-    ) -> tuple[Any, tuple[Any, Any]]:
-        return _loss_with_aux(
-            te_forward,
-            tokens,
-            routes,
-            differentiated_routing_weights,
-            differentiated_w13,
-            differentiated_w2,
-        )
-
-    te_loss, te_parameter_pullback, te_aux = jax.vjp(
-        te_parameter_loss,
+    """Use the ring loss VJP for tokens and the complete TE VJP otherwise."""
+    (te_loss, te_aux), te_gradients = jax.value_and_grad(
+        partial(_loss_with_aux, te_forward),
+        argnums=(0, 2, 3, 4),
+        has_aux=True,
+    )(
+        tokens,
+        routes,
         routing_weights,
         w13,
         w2,
-        has_aux=True,
     )
-    routing_weight_gradient, w13_gradient, w2_gradient = te_parameter_pullback(jnp.ones_like(te_loss))
 
     def ring_token_loss(differentiated_tokens: Any) -> Any:
         return _loss_with_aux(
@@ -569,7 +557,7 @@ def _value_and_grad_with_ring_token_gradient(
 
     ring_loss, ring_token_pullback = jax.vjp(ring_token_loss, tokens)
     (token_gradient,) = ring_token_pullback(jnp.ones_like(ring_loss))
-    return (te_loss, te_aux), (token_gradient, routing_weight_gradient, w13_gradient, w2_gradient)
+    return (te_loss, te_aux), (token_gradient, *te_gradients[1:])
 
 
 def _finite_report(result: Any, jax: Any, jnp: Any) -> dict[str, bool]:

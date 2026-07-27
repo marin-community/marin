@@ -529,3 +529,18 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - Do not run a pipeline protocol override. Retain NCCL defaults for the valid exact-ring graph.
 - Next action:
   - Validate the bounded NCCL_EP-forward plus bulk-ring token-gradient control. It retains the previously exact FP32 NCCL_EP output and parameter gradients while replacing the sole failing dispatch-backward token reduction with the accepted ring VJP; require every relative-L2 metric at most `0.002` and measure the duplicate-backward cost before any pipeline integration.
+
+### 2026-07-26 23:17 PDT - ring token gradient is exact but parameter-only TE VJP is non-finite
+- Hypothesis: Differentiating TE only with respect to routing and expert parameters will let XLA remove TE's rejected token cotangent, while a separate bulk-ring token VJP supplies the exact input gradient.
+- Commit Hash: `df76429128`.
+- Command: One H100x8 RNO2A job `/dlwh/ncclep-h100-ring-token-gradient-r13-20260727` used bounded NCCL_EP, FP32 TE/ring combine, BF16 dispatch, balanced 65,536-assignment destination loads, receive capacity 81,920, and strict parity.
+- Results:
+  - The job succeeded in `9m03.23s`; all eight ranks exited `0`, no retry occurred, and no resource remains live.
+  - Loss, output, and token gradient were bitwise equal to the FP32 ring oracle. Routing-gradient relative-L2 was `8.1766e-5`.
+  - TE-supplied W13 and W2 gradients were non-finite, while every ring reference remained finite. The gate stopped before timing.
+  - The hybrid StableHLO contained 4 all-gathers, 4 all-reduces, 2 reduce-scatters, and 17 custom calls, versus ring's 4, 5, 3, and 6.
+- Interpretation:
+  - The bulk-ring token-gradient substitution fixes the sole prior numerical discrepancy exactly. The failure is introduced by differentiating the TE graph only with respect to its parameter arguments; the earlier complete TE VJP produced finite, exact FP32-reference parameter gradients.
+  - Restore the known-good complete TE VJP, discard only its token-gradient result, and substitute the ring token gradient. This retains extra TE token-gradient work, so the next direct gate must measure the cost rather than assuming DCE.
+- Next action:
+  - Run the same strict direct gate with the complete TE VJP plus ring token VJP. Require all metrics at most `0.002` and at least `1.12x` value-and-grad speedup before reduced pipeline integration.

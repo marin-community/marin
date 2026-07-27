@@ -266,7 +266,7 @@ def test_hybrid_dispatch_uses_combine_forward_token_gradient_and_dispatch_weight
     np.testing.assert_array_equal(weight_gradient, np.full((2, 1), 7.0, dtype=np.float32))
 
 
-def test_ring_token_gradient_uses_ring_token_vjp_and_te_parameter_vjp() -> None:
+def test_ring_token_gradient_uses_ring_token_vjp_and_complete_te_vjp() -> None:
     def te_forward(tokens, _routes, routing_weights, w13, w2):
         output = tokens * 3 + routing_weights * 5 + w13 * 7 + w2 * 11
         return output, jnp.zeros((), dtype=jnp.int32)
