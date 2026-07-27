@@ -3436,9 +3436,9 @@ def _make_explicit_mpmd_train_step(
             if implementation != "sonic" and not (fused_expert_accumulation and implementation == "ring"):
                 continue
             expert_mlp = block.mlp.expert_mlp
-            completion_token = completion_token + jnp.sum(expert_mlp.w_gate[:, 0, 0], dtype=jnp.float32)
-            completion_token = completion_token + jnp.sum(expert_mlp.w_up[:, 0, 0], dtype=jnp.float32)
-            completion_token = completion_token + jnp.sum(expert_mlp.w_down[:, 0, 0], dtype=jnp.float32)
+            completion_token = completion_token + jnp.sum(expert_mlp.w_gate[:, :, 0], dtype=jnp.float32)
+            completion_token = completion_token + jnp.sum(expert_mlp.w_up[:, :, 0], dtype=jnp.float32)
+            completion_token = completion_token + jnp.sum(expert_mlp.w_down[:, 0, :], dtype=jnp.float32)
         return completion_token
 
     def initialize_expert_gradient_accumulators(
