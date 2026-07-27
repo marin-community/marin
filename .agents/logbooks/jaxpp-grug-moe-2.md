@@ -1354,3 +1354,27 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - No numerical parity result was produced. The accepted policy remains relative-L2 `<=0.002` for floating outputs, loss, and every gradient leaf, with routing/counts/drops exact.
 - Decision:
   - Do not launch the exact L24 batch8192/m256 run from this outline. Minimize the six-layer thunk-initialization failure before another performance attempt.
+
+### 2026-07-27 08:38 PDT - Unequal split clears outlined L24 compile and execution
+- Snapshot:
+  - Parent `/dlwh/iris-run-job-20260727-152829` and child `/dlwh/iris-run-job-20260727-152829/grug-train-jaxpp-rno2a-ring-ep2d4-explicitbwd-fp8-l24-e64k4-b512-s4096-p4m16-outline-split7655-compile-r5-20260727` ran clean commit `ab0e941ef2`.
+  - Workers used JAX/JAXlib `0.11.0`, JaxPP `7091a9b5ce02`, NCCL `2.28.9`, and CUDA toolkit `12.8.1`. The L24/d2560/e64/top-k4/sequence4096 gate used batch512/m16, split `7,6,6,5`, expert2/data4, explicit `std_1f1b`, FP8 wire, fused FP32 data-local expert gradients, CuTe FA4, and Triton grouped GEMM.
+- Command:
+  - `GRUG_JAXPP_LOG_LOCAL_MEMORY_PLAN=false TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --cluster cw-rno2a --prefix s3://marin-us-east-02a/marin --run-id jaxpp-rno2a-ring-ep2d4-explicitbwd-fp8-l24-e64k4-b512-s4096-p4m16-outline-split7655-compile-r5-20260727 --schedule std_1f1b --implementation explicit_mpmd --explicit-mpmd-schedule-mode default --explicit-mpmd-pipeline-wire-format fp8 --explicit-mpmd-stage-task-microbatch-group-size 1 --expert-gradient-accumulation fused_fp32_data_local --physical-stages 4 --logical-stages 4 --stage-layer-counts 7,6,6,5 --microbatches 16 --nodes 4 --gpus-per-replica 8 --expert-axis 2 --layers 24 --experts 64 --top-k 4 --vocab-size 8192 --batch 512 --seq-len 4096 --moe-implementation ring --attention-implementation gpu_fa4_cute --ragged-dot-implementation triton --ragged-dot-block-k 32 --ragged-dot-num-warps 8 --loss-implementation xla --steps 3 --tracker wandb --xla-memory-fraction 0.70 --remat save_moe`.
+- Compile and execution:
+  - Rank 0's seven-layer forward compiled in about `30s`; its seven-layer backward took at most `58s`. Rank 1's six-layer forward/backward took about `25/48s`, rank 2's took about `25/49s`, and rank 3's five-layer loss/backward took about `51s`.
+  - Rank 3 emitted its backward wire and rank 0 subsequently completed the seven-layer backward. All 16 microbatches traversed all four stages, and every rank reached its fused expert update.
+  - The prior thunk-initialization failure neither recurred on rank 3 nor followed the seven-layer graph to rank 0.
+- Metrics:
+  - [W&B](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-ep2d4-explicitbwd-fp8-l24-e64k4-b512-s4096-p4m16-outline-split7655-compile-r5-20260727) is `finished` with three completed steps and two post-compile throughput samples.
+  - Mean/p50 MFU was `14.9736655`; both samples had the same reported MFU. Step duration was `6.210066s`, throughput was `337,702.04` tokens/s and `82.44679` examples/s, and final loss was `8.4956408`.
+  - The three-step run processed `6,291,456` tokens. Compile-dominated wall time was `5m58s`, so this small batch512/m16 gate is compile admission rather than the exact batch8192/m256 performance verdict.
+- Terminal state:
+  - Parent and child succeeded with exit `0`. All `4/4` rank tasks succeeded after `7m24.68s`; failures and preemptions were both zero.
+  - Coordination-service connection warnings appeared only after W&B finished and all steps completed. Iris still recorded all tasks as successful. No retry or live descendant remains.
+- Upstream freshness:
+  - JaxPP main remains `7091a9b5`. JAX nightly `0.11.1.dev20260727` with XLA `841f8d2` has no ragged implementation change after device-kernel commit `acb5aaf`; do not rerun the JAX ragged path.
+  - NCCL `2.30.7-1` adds experimental UB-X at `db0c814185a0415cc2e23dca387fecb9282de551` under `contrib/nccl_ubx`. It needs a one-node EP8 direct gate before any JAX wrapper experiment.
+- Interpretation:
+  - The outlined Ring program is executable at L24 when the last stage contains five layers. The deterministic `6,6,6,6` failure is sensitive to stage placement or the six-layer terminal loss/backward graph, not simply the largest local layer count.
+  - The exact batch8192/m256 run was not launched. Its expected split and the `14.9736655` compile-gate MFU need interpretation before spending another H100x32 compile.
