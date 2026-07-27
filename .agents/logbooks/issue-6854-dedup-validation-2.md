@@ -16,6 +16,49 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T06:12:00Z — 237,040 pairs verified
+
+- `/rav/rav-datakit-6854-audit-next-checkpoints-0323-v988` independently
+  revalidated p3 decision-file 106 semantic offset 896. Its 128 baseline pairs
+  initially contain 74 false positives, 53 true duplicates, and one unresolved
+  outcome. One pair used chunked review and 127 used direct review. All 281
+  judgments and request attempts were valid on their first attempt. The
+  outcome Parquet SHA-256 is
+  `32ae6f1244890751c89fb541951a9028a9a5634766d6e5d714fb1f2e83fdb6de`.
+- Complete-text inspection resolves row 1,627 as a true duplicate. The
+  3,062- and 3,085-character math documents contain the same puzzle ID,
+  scenario, question, hint, answer, algebraic method, alternative triples, and
+  conclusion. Their differences are Markdown layout and the rhetorical phrase
+  `I expect you can recognize` before the same final answer. Character, line,
+  and word-sequence similarities are 0.960143, 0.689655, and 0.982898.
+  Member, canonical, semantic-judgment, and inspection SHA-256 values are
+  `b44a786830ad9107ea3984a51f67112e6a943f31e83c8d56649d47e5ab0c4b0f`,
+  `9a162d474992ee15f8eb1860a3ebedea6dfab4d936c68381d4583004b4eca69d`,
+  `29bf57c2bb39cfe2b015f999936c6531acceb522b55a00f3f22983aed823ebd9`,
+  and
+  `159601043e78273c5960fe3dc2a5c49a87c7e1ac3d9e32c4aa6ef3e9aee69fa3`.
+- `/rav/rav-datakit-6854-inspect-row1627-0324-v989` persisted the complete
+  pair and diff. `/rav/rav-datakit-6854-publish-row1627-0325-v990` wrote the
+  immutable true-duplicate record with manual-Parquet SHA-256
+  `d16385d2d1b9f6754f33ffe7d8cd797527fd102a5c43df8afb4ff9ca1a40800c`
+  and marker SHA-256
+  `6f998ef587edf2a5a7de7b81d33d6e051415ceacd9ee0479bede940ccd55d572`.
+  `/rav/rav-datakit-6854-verify-row1627-0326-v991` independently reread and
+  verified every bound source and output artifact.
+- Replacing the unresolved outcome gives 74 false positives and 54 true
+  duplicates in the checkpoint. Across the stable 1,866-checkpoint snapshot,
+  all 283 unresolved model outcomes are covered by 219 true-duplicate and 64
+  false-positive manual records. The adjusted totals are:
+
+  - baseline: 189,359 pairs, 120,175 false positives, 69,184 true duplicates;
+  - treatment: 47,681 pairs, 24,641 false positives, 23,040 true duplicates;
+  - combined: 237,040 pairs, 144,816 false positives, 92,224 true duplicates.
+
+- The next audit frontiers are p0 `(10, 0)`, p1 `(42, 0)`, p2 `(74, 0)`,
+  and p3 `(106, 1,024)`. The next p3 checkpoint contains 580,936 combined
+  characters and no oversized pair. All four batch-priority 2-H100 workers
+  remain active with zero Kubernetes restarts.
+
 ### 2026-07-27T06:06:49Z — 236,912 pairs verified
 
 - `/rav/rav-datakit-6854-audit-next-checkpoints-0322-v987` independently
