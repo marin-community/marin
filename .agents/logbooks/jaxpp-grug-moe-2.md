@@ -1007,3 +1007,14 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - `cw-rno2a` configures `MARIN_PREFIX: s3://marin-us-east-02a/marin`, matching the cluster's object-store endpoint and credentials. Passing that prefix explicitly keeps the XProf TTL artifact on the same backend and region.
 - Next action:
   - Relaunch the unchanged profile as r2 with `--prefix s3://marin-us-east-02a/marin`. Require artifact upload before profile analysis.
+
+### 2026-07-27 04:21 PDT - Relaunch exact fused profile on the CoreWeave bucket
+- Snapshot: `2bb024260f` records the r1 upload failure and backend mismatch.
+- Command:
+  - The profile r1 command is unchanged except run ID `jaxpp-rno2a-ring-ep2d4-fusedacc-fp8-l24-e64k4-b512-s4096-p4m16-profile-r2-20260727` and `--prefix s3://marin-us-east-02a/marin`.
+- Jobs:
+  - Parent `/dlwh/iris-run-job-20260727-111534`.
+  - Babysitter `019fa349-bb81-7ff1-86d2-d4561bc92926` owns terminal monitoring, artifact download, and structured comparison.
+- Gate:
+  - Require profiler start/stop and a readable XPlane artifact under the CoreWeave TTL path.
+  - Compare the fused trace with the stored same-shape FA4 and GPipe summaries before selecting another optimization.
