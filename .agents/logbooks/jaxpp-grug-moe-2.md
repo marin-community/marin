@@ -1018,3 +1018,21 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
 - Gate:
   - Require profiler start/stop and a readable XPlane artifact under the CoreWeave TTL path.
   - Compare the fused trace with the stored same-shape FA4 and GPipe summaries before selecting another optimization.
+
+### 2026-07-27 04:47 PDT - Exact fused profile attributes the regression to collective fanout
+- Result:
+  - Parent `/dlwh/iris-run-job-20260727-111534`, child, and all four ranks succeeded with exit `0`, no retry, failure, preemption, or live resource. W&B [profile r2](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-ep2d4-fusedacc-fp8-l24-e64k4-b512-s4096-p4m16-profile-r2-20260727) is `finished` at step 11.
+  - Profiling covered steps 8-10 and uploaded to `s3://marin-us-east-02a/tmp/ttl=30d/xprof/jaxpp-rno2a-ring-ep2d4-fusedacc-fp8-l24-e64k4-b512-s4096-p4m16-profile-r2-20260727/plugins/profile/steps-8-to-10`.
+  - W&B [profiler artifact v0](https://wandb.ai/marin-community/marin_moe/artifacts/profiler/jaxpp-rno2a-ring-ep2d4-fusedacc-fp8-l24-e64k4-b512-s4096-p4m16-profile-r2-20260727-profiler/v0) is 179,036,534 bytes with digest `ba01a6e851cb8621724fe6ca6f0fbb0b`.
+  - Structured outputs are `scratch/jaxpp_rno2a_fusedacc_l24_profile_r2_summary.json`, `scratch/jaxpp_rno2a_fusedacc_l24_profile_r2_timeline_summary.json`, and `scratch/jaxpp_rno2a_fusedacc_l24_profile_r2_report.md`.
+- Attribution:
+  - Global timeline shares are `45.73%` compute, `46.66%` communication, and `7.61%` stall. The same-shape FA4 reference is `52.79/39.61/7.59%`; stall is unchanged while communication replaces useful compute.
+  - Each six-layer `backward_accumulating` contains twelve FP32 all-reduces. `AllReduce_Sum_f32_RING_LL` averages `3.114ms`, and aggregate all-reduce time per profiled step is `4.65x` the reference.
+  - `SendRecv` latency improved to `14.43ms` from `25.83ms`, but transfer count grew from 280 to 856 per step (`3.06x`). All-gathers grew from 5,120 to 12,448 (`2.43x`).
+  - Ragged-dot improved slightly to `1.825ms` from `1.852ms`; CuTe FA4 is unchanged at `1.525ms` versus `1.530ms`. SendRecv and all-gather pre-op gaps also improved per event.
+  - Excess communication occupancy is approximately `0.433s` per batch-512 step, or `6.92s` batch-8192-normalized, explaining about 55% of the measured `12.544s` regression. Remaining time overlaps pipeline/DIME dependency amplification.
+- Interpretation:
+  - The direct benchmark's local VAG runs inside a manual outer `shard_map` and emits explicit `P("data", "expert", ...)` accumulator buffers. The pipeline differentiates through the inner Ring `shard_map`; its transpose reconciles data-replicated expert weights with per-microbatch all-reduces.
+  - The highest-confidence fix is to carry genuinely data-sharded local cotangents across the JaxPP task boundary and synchronize only at optimizer update. Bundling FP8 DIME payloads is second; FA4, ragged-dot, and GPipe are closed by this trace.
+- Next action:
+  - Implement the smallest manual-data-axis gradient boundary and prove zero data-axis collectives in local backward plus one step-boundary sync per weight before another GPU run.
