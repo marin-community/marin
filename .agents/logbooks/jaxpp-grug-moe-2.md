@@ -695,3 +695,37 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - The direct EP2/data4 projection composed with the separately measured `1.0179x` inter-stage FP8 gain must exceed `20.0` MFU.
 - Next action:
   - If all gates pass, implement the same combination in a reduced JaxPP run before L24. Otherwise record the hard negative and stop this branch of optimization.
+
+### 2026-07-27 01:01 PDT - Fix traced operator leaf and relaunch
+- Commit Hash: `1940a7e866a6e664d237435c2b9cf28140d4e9bc`.
+- Result:
+  - `/dlwh/ep-ring-data4-ep2-fp32acc-r18-20260727` failed during JAX lowering after `22.39s` with `TypeError: Argument '<function _fp32_weight_gradient_ragged_dot ...>' of type '<class 'function'>' is not a valid JAX type`.
+  - `MoeRaggedDotOps` passed the plain function through the ring custom-VJP identity as a dynamic pytree leaf. No GPU compilation, timing, or numerical result occurred. The task is terminal and no resource remains live.
+- Fix:
+  - Replace the plain function with a stateless `eqx.Module` callable. Its pytree has no dynamic leaves, so stateful operator handling remains intact without tracing a Python function.
+  - Focused tests report `19 passed, 1 skipped`; changed-file pre-commit passes.
+- Relaunch:
+  - `/dlwh/ep-ring-data4-ep2-fp32acc-r19-20260727` uses the same resources, geometry, environment, warmups, samples, and promotion gates as r18, with no retries.
+- Next action:
+  - Capture the first compiled numerical and timing result. Do not promote on setup recovery alone.
+
+### 2026-07-27 01:04 PDT - FP32 gradients pass parity but compose to 19.885 MFU
+- Commit Hash: `1940a7e866a6e664d237435c2b9cf28140d4e9bc`.
+- Command: `/dlwh/ep-ring-data4-ep2-fp32acc-r19-20260727` used the exact command and gates recorded above.
+- Results:
+  - The task succeeded in `44.16s` with no retries or preemptions; no resource remains live.
+  - Loss was exactly `0.07439123839139938` in both arms and both dropped zero assignments.
+  - Relative-L2 was `3.27972e-6` for output, `3.03248e-5` for x-gradient, `0` for combine-weight-gradient, `0.00165884` for W13, and `0.00165597` for W2. Every metric passes the accepted `0.002` threshold.
+  - Forward median improved from `8.719ms` to `5.986ms`.
+  - VAG plus donated FP32 accumulation improved from `18.823ms` to `15.348ms`.
+  - FP32 gradient sync and BF16 weight materialization took `4.073ms` and `2.340ms`, or `0.025048ms` amortized per microbatch.
+  - StableHLO reports zero data-axis collectives in local VAG, two data-axis reduce-scatters in gradient sync, and two data-axis all-gathers in weight materialization.
+  - Compiler peak estimates were `3.482GiB` for EP8 local VAG, `4.299GiB` for EP2/data4 local VAG, `2.637GiB` for sync, and `1.221GiB` for materialization.
+  - The direct projection is `75.740070s`, `1.069946x`, and `19.535395` MFU.
+  - Composing the separately measured `1.0179x` inter-stage FP8 gain gives `74.408164s`, `1.089098x`, and `19.885079` MFU.
+- Interpretation:
+  - FP32 expert-weight cotangents solve the EP2/data4 numerical discrepancy under the accepted `0.2%` policy.
+  - The measured accumulator cost removes the available headroom. The composed projection misses 20 MFU by `0.114921` points, so `promotable=false`.
+  - Do not launch reduced JaxPP or L24 from this result. Stop replicated-expert topology narrowing unless a separate measured kernel change recovers at least `0.58%` end-to-end.
+- Next action:
+  - Seal this path as a numerical success and performance negative. Re-rank only independent optimizations with direct evidence at the exact geometry.
