@@ -16,6 +16,106 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T00:50:00Z — 201,836 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0039-v759` independently
+  revalidated ten baseline checkpoints: p0 decision-file 8 offsets 2,048
+  through 2,432, p1 decision-file 40 offset 128, and p2 decision-file 72
+  offsets 3,840 through 4,352. Their 1,280 pairs contain 801 model false
+  positives, 476 model true duplicates, and three unresolved outcomes.
+  Nineteen pairs were chunked and 1,261 were direct. There were 4,248 request
+  attempts: 4,239 valid and nine invalid JSON responses. Three judgments
+  required retries. The outcome Parquet SHA-256 values are:
+
+  - p0:
+    `a0a00cd98d5e3ab6164c4758754ac8cb1b72c725e0ea79b57c9305fb082b8d7c`,
+    `878be04df4abc93c49375336aa48e4c2a1cb4af1f2ef0188246bc8cb90aa6e6c`,
+    `7b44535bedf014c9c4bad5a8b9ac4ad0ac31478ca6ee81e05e86c9f8cca908f4`,
+    and
+    `9a025cb699d59bf7d2feecfb8ba7030b34302329ee931d7f9f4081777df8522d`;
+  - p1:
+    `3b44d527f62ee3a57fc38ebed9d60597f710f487262cbef8509f32e24d3c7878`;
+  - p2:
+    `1352e4da988e1e623e193a8d229b772f9706e0017455fa95a03a64e37c131156`,
+    `0fcf04fd60aaf53b332512b4b63f79b831c81a72ba0685baa81fc1c1ae7e479b`,
+    `777fc5e0fccbae080a789168622a0b828d8edd5fba2d034af14f746869359b6c`,
+    `abe15c8e24ab9cb947f5387250710a2bd377ebd4c654002aa8f1e240e16c1f37`,
+    and
+    `a1526da4370ee7c6986983a9a79c7815bac9d5cd2d5728364151c2a652890532`.
+
+- Complete-text inspection resolves baseline
+  `part-00072-of-00128.parquet:6735` as a false positive. The 21-line news
+  body and first question are shared, but the member's second training
+  example asks why Gervinho lacked consistent first-team play and answers
+  `Personality conflicts`. The canonical instead asks which club was not
+  named as an Osvaldo destination and answers `Napoli`. Character, line, and
+  word-sequence similarities are 0.935073, 0.714286, and 0.937163. The
+  1,606/1,536-character member and canonical SHA-256 values are
+  `0bbc0677737f8fb2732960840cc15f9801eb4b3a8c85ac3054d708152dab70c9`
+  and
+  `0b0585762e181e8aeebf69fdcd86b3890dd5b5f0f0e898e63e73168f38279cba`.
+  `/rav/datakit-6854-inspect-row6735-0042-v765` persisted the pair and diff
+  with inspection SHA-256
+  `d0e3dd79a5136bee4be9efe89cb7ffbe6de00057039917ea8f45691d4d08fec3`.
+  `/rav/datakit-6854-publish-row6735-0044-v766` wrote the immutable record,
+  and `/rav/datakit-6854-verify-row6735-0048-v771` independently verified it.
+  The semantic-evidence, manual-Parquet, and marker SHA-256 values are
+  `5683fddedf7812d0f0e0802ef5d5de3c7f9b6cec4e05bb90178be22cb654f8b3`,
+  `ffbb0a01a4416d810b02f43298ab696bc10598504fb0495c2631282470084882`,
+  and `b54eb36afb294e14bf52e611faf3e1e5c1ca633767824cc0655fa3a12c3f367f`.
+
+- Complete-text inspection resolves baseline rows 7,494 and 7,495 as true
+  duplicates. Row 7,494 has the same 66-line Berlin Conference question,
+  choices, historical reasoning, and conclusion; only `\boxed{C}` versus
+  `\boxed{\text{C}}` differs. Row 7,495 has the same 257-line depression
+  question, choices, diagnostic reasoning, and conclusion; only `\boxed{E}`
+  versus `\boxed{\text{E}}` differs.
+
+  - Row 7,494 has 4,343/4,350 characters; character, line, and word-sequence
+    similarities are 0.999195, 0.984848, and 0.999285. The member, canonical,
+    inspection, semantic-evidence, manual-Parquet, and marker SHA-256 values
+    are
+    `4a963e9b83434955ac88d9a1f3be2adc22b80a81f279be5b35ed62eabfc2e9bb`,
+    `3189181cc974899c77ce91c860e7f7d4b2177267f22b60ab018bde46266795e8`,
+    `8fc848a27b2d201049172a82c979422361d77fdee170b12b1f657d93414cfc9b`,
+    `a14336d0368eebf25debfc3fe14e5fa800adfddf83b170289807748412d9819a`,
+    `c996dc67f76314db3030a360adb93bd755c999d956da3f0bb1990c40a8750726`,
+    and
+    `88b111166f736bdc219588141828f34765a6089106287f662bbd214a80323149`.
+  - Row 7,495 has 9,867/9,874 characters; character, line, and word-sequence
+    similarities are 0.999645, 0.996109, and 0.999675. The corresponding six
+    SHA-256 values are
+    `b3cac9fa3c045eaf294db8a6274767356a2f3aebe34155d2c860e3df56f53a62`,
+    `d389e784f5eb8abe28489b172c2aebe05ce8dbc75e8f93381bec2eb9485a6d11`,
+    `891a22045b1054fd80ac894614ccbd7d9701fb59e6ffe57ce6b18e15e25c571c`,
+    `aea55d40e155f17ceb6faa8d37356cb847a9467c9793c0c63ae4c0d36689caf0`,
+    `949678b48013065222f30447dc4834de7c027aa534044c2d1cb727f77bf7cc63`,
+    and
+    `cddb1c96de6ba5f20395e7d35370750e5f41f90a1dc80a24e5a62aa69479f9cb`.
+
+- `/rav/datakit-6854-inspect-row7494-0042-v764` and
+  `/rav/datakit-6854-inspect-row7495-0042-v763` persisted the complete pairs
+  and diffs. `/rav/datakit-6854-publish-row7494-0045-v767` and
+  `/rav/datakit-6854-publish-row7495-0045-v768` wrote the immutable records.
+  `/rav/datakit-6854-verify-row7494-0047-v770` and
+  `/rav/datakit-6854-verify-row7495-0047-v769` independently reread and
+  verified all inputs and outputs. Initial inspector submissions v760-v762
+  retained decision-file index 8 and failed their read-only identity guards
+  before writing; the corrected v763-v765 submissions used index 72.
+
+- Across the stable 1,589-checkpoint snapshot, all 237 unresolved model
+  outcomes are covered by 183 true-duplicate and 54 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 162,587 pairs, 103,259 false positives, 59,328 true duplicates;
+  - treatment: 39,249 pairs, 20,316 false positives, 18,933 true duplicates;
+  - combined: 201,836 pairs, 123,575 false positives, 78,261 true duplicates.
+
+- The next audit frontiers are p0 `(8, 2,560)`, p1 `(40, 256)`, p2
+  `(72, 4,480)`, and p3 `(105, 0)`. Each partition has another pending
+  checkpoint; p3 remains on its 110-million-character code batch. All four
+  batch-priority 2-H100 workers remain active.
+
 ### 2026-07-27T00:38:00Z — 200,556 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0031-v752` independently
