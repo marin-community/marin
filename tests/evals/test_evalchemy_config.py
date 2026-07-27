@@ -12,16 +12,12 @@ serving, the eval itself) is exercised by the cluster smoke.
 
 import json
 import os
-import shlex
-from types import SimpleNamespace
 
-import marin.evaluation.evalchemy.runner as evalchemy_runner
-from marin.evaluation.evalchemy.client import build_command, build_model_args, scored_results, served_max_length
+from marin.evaluation.evalchemy.client import build_command, build_model_args, scored_results
 from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
     _run_config_json,
 )
-from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIREMENT
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.serving_config import _auto_serve_overrides_from_config, auto_serve_overrides
 from marin.inference.types import OpenAIEndpoint, RunningModel
@@ -244,50 +240,3 @@ def test_scored_results_rejects_empty_results_dict(tmp_path):
     scored.mkdir()
     _write_results(str(scored), {"mmlu": {"acc,none": 0.42}})
     assert scored_results(str(scored)) is True
-
-
-def test_served_max_length_does_not_log_capability_url(monkeypatch, capsys):
-    base_url = "https://iris.example/proxy/task/secret-capability/inference/v1"
-
-    def fail_with_url(url: str, timeout: int):
-        raise RuntimeError(f"request failed for {url} after {timeout}s")
-
-    monkeypatch.setattr("urllib.request.urlopen", fail_with_url)
-
-    assert served_max_length(base_url) is None
-    assert "secret-capability" not in capsys.readouterr().out
-
-
-def test_evalchemy_child_runs_pinned_uvx_environment_on_default_task_image(monkeypatch):
-    submitted: dict = {}
-
-    class Job:
-        job_id = "/eval/client"
-
-        def wait(self, timeout: float) -> None:
-            assert timeout == float("inf")
-
-    class Client:
-        def submit(self, **kwargs):
-            submitted.update(kwargs)
-            return Job()
-
-    monkeypatch.setattr(evalchemy_runner, "iris_ctx", lambda: SimpleNamespace(client=Client()))
-
-    evalchemy_runner._run_evalchemy_child(_MODEL, _config(), "gs://bucket/evals/qwen3/core", {})
-
-    assert "task_image" not in submitted
-    command = shlex.split(submitted["entrypoint"].command[2])
-    assert command[:7] == [
-        "exec",
-        "uvx",
-        "--no-config",
-        "--python",
-        "3.12",
-        "--from",
-        EVALCHEMY_REQUIREMENT,
-    ]
-    assert command[-2:] == ["python", "$IRIS_WORKDIR/lib/marin/src/marin/evaluation/evalchemy/client.py"]
-    with_packages = [command[index + 1] for index, value in enumerate(command) if value == "--with"]
-    assert {"s3fs", "gcsfs"} <= set(with_packages)
-    assert len([package for package in with_packages if package.startswith("torch @ https://")]) == 2

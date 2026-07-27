@@ -7,7 +7,7 @@ Evalchemy runs from an isolated uvx environment on the standard Iris task image.
 revision identifies the CLI, graders, and benchmark data without requiring a separate task image.
 """
 
-EVALCHEMY_COMMIT = "1a59e7c28d45f08b11ff64d3c9fe9ae48011eb34"
+EVALCHEMY_COMMIT = "adf37c2878906870f7c7d8845f72a25649513bed"
 EVALCHEMY_REQUIREMENT = f"git+https://github.com/marin-community/evalchemy.git@{EVALCHEMY_COMMIT}"
 
 # Evalchemy's current dependency graph has Python 3.12 wheels. Letting uvx select Python 3.13 makes

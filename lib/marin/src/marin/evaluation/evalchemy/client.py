@@ -64,8 +64,7 @@ def served_max_length(base_url: str) -> int | None:
         with urllib.request.urlopen(f"{base_url.rstrip('/')}/models", timeout=30) as resp:
             payload = json.load(resp)
     except Exception as exc:
-        # urllib exception text can repeat the capability-bearing request URL.
-        print(f"could not read served endpoint /models for max_model_len: {type(exc).__name__}", flush=True)
+        print(f"could not read {base_url}/models for max_model_len: {exc}", flush=True)
         return None
     for entry in payload.get("data", []):
         if entry.get("max_model_len"):
@@ -198,8 +197,7 @@ def main() -> None:
             # sys.executable is the uvx environment's interpreter, so ``-m eval.eval`` resolves the
             # fork + lm-eval installed there.
             cmd = build_command(config, task, local_out, sys.executable, max_length)
-            # The argv contains the endpoint's capability URL. Log only non-secret identifiers.
-            print(f"running evalchemy task={task['name']} model={config['model_id']}", flush=True)
+            print(f"running evalchemy: {' '.join(cmd)}", flush=True)
             # Upload whatever the task produced before reacting to its exit code, so one task's failure
             # does not discard another task's already-scored output.
             result = subprocess.run(cmd)
