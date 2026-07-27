@@ -15,6 +15,8 @@ experiment:
   # Six fixed exp117 configurations, each run from scratch and from its
   # corresponding exp117 checkpoint.
   logical_trial_count: 12
+  # Upper bound, not a quota. A trial races in min(this, its eligible regions);
+  # see Region Locality for why exp117-init trials are eligible in fewer.
   regional_race_width: 3
   single_job_command: >
     TRIAL={trial_id} TPU={tpu_slice} REGION={region}
@@ -26,11 +28,13 @@ experiment:
 
 execution:
   state_db: scratch/exp166-execution.sqlite
-  wall_time: 8 weeks
-  max_inflight_chips: 2048
+  wall_time: 2 weeks
+  # Soft ceiling to keep the job count manageable, not a hard resource quota.
+  # It is scoped to exp166 alone; concurrent experiments are accounted separately.
+  max_inflight_chips: 8192
   observation_interval: 15m
   recovery:
-    idle_reslice_timeout: 1h
+    idle_reslice_timeout: 3h
     startup_relocation_timeout: 1h
     same_target_restart_timeout: 6h
     same_region_relocation_timeout: 24h
@@ -45,9 +49,10 @@ by parsing run names.
 
 - A logical trial is one fixed configuration plus one initialization mode.
   `TRIAL` identifies it; region and TPU placement do not.
-- Each logical trial races in three distinct regions. Region is part of the W&B
-  run and checkpoint identity so regional attempts cannot co-write state. These
-  regional runs are execution replicas, not additional experimental trials.
+- Each logical trial races in as many distinct regions as it is eligible for, up
+  to `regional_race_width`. Region is part of the W&B run and checkpoint identity
+  so regional attempts cannot co-write state. These regional runs are execution
+  replicas, not additional experimental trials.
 - TPU family and slice are placement only. A same-region slice change retains
   the regional W&B run ID and checkpoint path.
 - An Iris job is one dispatch attempt. Its name is
@@ -66,13 +71,60 @@ by parsing run names.
   If completions are observed simultaneously, use the earliest verifiable
   completion timestamp as the winner and retain the other completed run as a
   duplicate execution artifact, not an independent trial result.
-- A scratch trial restarts from random initialization after a cross-region
-  move. An `exp117-init` trial stages its corresponding exp117 checkpoint
-  region-locally, then strictly loads only the model subtree into a fresh
-  optimizer and exp166 schedule at step 0. Exp166 intermediate checkpoints do
-  not move between regions.
 - At most one dispatch may be active for a given `(trial_id, region)`. Violating
   this invariant can make two jobs write the same regional checkpoint.
+
+## Region Locality
+
+**Bytes never cross a region boundary.** This is the reason the experiment races
+regional replicas instead of relocating one run: each region holds a complete,
+self-sufficient copy of everything its attempts need, so a region can be
+abandoned or restarted without moving data.
+
+- A regional run's checkpoints belong to that region and stay there. They are
+  never copied, moved, mirrored, or read from another region, in either
+  direction, for any reason — including recovery, debugging, and salvaging a
+  nearly finished run.
+- **Moving a trial to a new region means starting that region's run over from
+  step 0**, from the logical trial's declared initialization. A new region never
+  inherits progress. Losing the steps is the accepted cost of the rule, not a
+  problem to engineer around.
+- Region is part of the W&B run identity and the checkpoint path precisely so
+  two regions cannot co-write state, and so "resume" can only ever mean "resume
+  within the same region."
+- Data, tokenized cache, output, and checkpoint resolution all resolve
+  region-locally. A missing regional dependency is a staging problem to record
+  and fix inside that region; it never justifies a cross-region read.
+- A same-region slice or TPU-family change is *not* a move. It retains the
+  regional W&B run ID and checkpoint path, and resumes from the regional
+  checkpoint.
+
+Initialization inputs follow the same rule and constrain where a trial may run:
+
+- A `scratch` trial needs no prior weights, so it may race in any eligible
+  region and restarts from random initialization in each one.
+- An `exp117-init` trial needs a region-local exp117 seed. Seeds live under
+  `checkpoints/protein/exp166-init/<exp117 run id>/<EXP117_VERSION>/checkpoints/`.
+  The run id names the exact source run and its origin region, so a seed's
+  provenance is readable off its path, and the `exp166-init` namespace keeps that
+  name from colliding with the real exp117 run directory in its home region.
+- **An `exp117-init` trial may only be placed in a region that already holds its
+  seed.** A missing seed is a setup error for that region and fails the run; it
+  is never repaired by reading another region.
+
+Seeding is a **one-time setup step, not part of execution.** Each exp117 run
+wrote its final checkpoint to a single region, so before the experiment starts
+`scratch/exp166_seed_checkpoints.sh` copies **only the final checkpoint** of each
+point into every eligible region, producing byte-identical seeds everywhere. The
+exp117 run directories themselves are never modified and stay in their original
+regions. Once seeding is done, every eligible region is self-sufficient and no
+training job ever transfers weights again — `exp117_checkpoint()` resolves the
+seed against the execution region and only verifies that it is present and
+complete. The copy machinery has been removed from the sweep module so a
+cross-region transfer is structurally impossible rather than merely discouraged.
+
+Re-seeding is warranted only when the point set or `EXP117_VERSION` changes, and
+is an explicit operator action.
 
 ## Durable SQLite Ledger
 
@@ -125,23 +177,33 @@ tpu_grid:
     # v5p-N counts cores, or N/2 chips. v5p-64 is the 32-chip floor.
     cores: [64, 128, 256, 512, 1024, 2048]
     allow_larger_if_advertised: true
+    # Operator decision: excluded from placement pending a throughput
+    # measurement for this model. Re-enable by operator instruction only.
+    enabled: false
 ```
 
-Nothing smaller is allowed. All three families are peers: rank concrete
-region/slice targets using observed throughput and current availability, not a
-static family preference.
+Nothing smaller is allowed. Enabled families are peers: rank concrete
+region/slice targets using observed throughput and observed scheduling outcomes,
+not a static family preference.
 
 There is no static region allowlist. Discover every region currently advertised
 by the primary Marin cluster for an eligible slice and keep the full grid in the
-ledger. Each race must use three distinct regions. Diversify initial targets
-across regions and, when practical, TPU families so one capacity failure mode
-does not stall the entire race.
+ledger. Diversify initial targets across regions and, when practical, TPU
+families so one capacity failure mode does not stall the entire race. Race width
+is bounded by the eligible regions for that trial; see **Region Locality** for
+why `exp117-init` trials are placeable in fewer regions than `scratch` trials.
 
-Data, cache, output, and checkpoint resolution must be region-local. A missing
-regional dependency is an execution/staging problem to record and fix; it is
-not evidence that the region or TPU family should be permanently removed from
-the grid. A stale availability read is missing evidence, not proof of
-unavailability.
+### Capacity Cannot Be Queried
+
+**No command reports available TRC capacity.** `iris cluster status` shows only
+what is already in use; it cannot say what TRC would grant next. `ready=0` means
+nobody currently holds one, not that it is unobtainable.
+
+Submitting is the only measurement. Never call a target "available" or
+"unavailable" from a status read, and never drop one from the grid because a read
+looked empty — only repeated failed acquisitions justify deprioritizing it.
+Record what was attempted (`gang in N min`, `pending 6h`, `preempted`), and
+spread dispatches so scheduling outcomes do the ranking.
 
 Continuously re-rank targets using:
 
@@ -154,6 +216,13 @@ Continuously re-rank targets using:
 Use rolling medians for throughput comparisons and exclude compilation,
 checkpoint, and evaluation intervals. Preserve the raw observations in SQLite
 so placement decisions remain auditable.
+
+**Treat every throughput number as perishable.** TRC capacity shifts daily, so a
+slice size or region that looked optimal last week may be unavailable or slower
+today, and a historical measurement from a previous experiment is a prior, not a
+constant. Do not converge on one slice size and stop looking. Keep probing other
+eligible sizes and regions as availability moves, and prefer a target that is
+actually schedulable now over a nominally faster one that never acquires a gang.
 
 ## Submission and Regional Racing
 
@@ -176,11 +245,12 @@ resubmission.
 
 For each logical trial:
 
-1. Create three regional-run records and submit one unique dispatch in each
-   selected region, subject to the global chip cap.
-2. Keep all three regional executions racing until one satisfies the full
-   completion contract. Iris parent/child `running`, W&B `running`, a step lead,
-   and higher throughput are monitoring signals—not reasons to stop siblings.
+1. Create one regional-run record per eligible region, up to
+   `regional_race_width`, and submit one unique dispatch in each selected
+   region, subject to the global chip cap.
+2. Keep every regional execution racing until one satisfies the full completion
+   contract. Iris parent/child `running`, W&B `running`, a step lead, and higher
+   throughput are monitoring signals—not reasons to stop siblings.
 3. Recover failed or stalled regional executions independently while no winner
    exists. Healthy siblings continue unaffected.
 4. When the first regional run is done, transactionally mark the logical trial
@@ -253,8 +323,10 @@ Recovery changes dispatches, not logical trial identity.
   same region, preserving the regional run/checkpoint identity.
 - **Cross-region restart:** after `cross_region_restart_timeout`, or when the
   regional pool is demonstrably exhausted, replace or re-arm a competitor in a
-  different region. It receives that region's W&B/checkpoint identity and
-  starts from the logical trial's declared initialization.
+  different region that the trial is eligible for. It receives that region's
+  W&B/checkpoint identity and **starts over at step 0** from the logical trial's
+  declared initialization. It never inherits the old region's progress, and no
+  checkpoint is copied to make the move cheaper.
 - **Terminal failure:** retry immediately when the failure is transient and the
   next action is clear; timeout thresholds do not require waiting after a
   terminal state.
@@ -279,7 +351,10 @@ when a later attempt succeeds.
 - Do not submit production work until the command template and first assembled
   command have been reviewed.
 - Never mutate cluster infrastructure as part of trial recovery.
-- Never move or copy an exp166 checkpoint across regions.
+- **Never copy, move, or read a checkpoint across regions** — not an exp166
+  checkpoint, not an exp117 source checkpoint, in either direction, for any
+  reason. If a region lacks the weights a trial needs, that trial does not run
+  there. Relocating means starting over; see **Region Locality**.
 - Never let a replacement overlap its predecessor on the same regional run.
 - Never parse run IDs for metadata.
 - Never store secrets in SQLite, logs, commands committed to the repository, or
