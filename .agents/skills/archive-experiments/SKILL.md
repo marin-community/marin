@@ -60,4 +60,4 @@ Retire old experiment scripts without losing their history: put the code behind 
 - Spot-check a few URLs to verify they open the expected files inside the archive tag.
 
 ## See Also
-- `.agents/skills/organize-experiments/` for related curation workflows.
+- `.agents/skills/organize-experiments/SKILL.md` for related curation workflows.

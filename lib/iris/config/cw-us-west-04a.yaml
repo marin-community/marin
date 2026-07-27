@@ -5,6 +5,11 @@
 # This cluster's identity. Used for token minting and for authenticating to peers.
 name: cw-us-west-04a
 
+# Public ingress for federation traffic. Capability URLs minted here use marin-dev's
+# public origin and carry this cluster's name so marin-dev relays them back.
+dashboard_url: https://iris-cw-us-west-04a.oa.dev
+federation_public_parent: https://iris-dev.oa.dev
+
 # Infrastructure-as-code provisioning (see infra/pulumi). Iris carries this as an opaque
 # dict; iac.config owns the typed schema. NodePools derive from scale_groups,
 # namespace from kubernetes_provider.namespace, and the Kueue ClusterQueue (iris-cq)
@@ -44,6 +49,12 @@ auth:
     - env:IRIS_SIGNING_KEY
     - gcp-secret://projects/748532799086/secrets/iris-cw-us-west-04a-signing-key/versions/1
   trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
+  federation_peers:
+    marin-dev: |
+      -----BEGIN PUBLIC KEY-----
+      MCowBQYDK2VwAyEA42ziFTlGKgaA/fQ1wJCONKOml7rx5Y8UAQqVLTCtrCo=
+      -----END PUBLIC KEY-----
+  allowed_submitters: ["*@openathena.ai"]
 
 platform:
   label_prefix: iris-ci

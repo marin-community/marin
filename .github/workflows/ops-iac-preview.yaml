@@ -47,6 +47,7 @@ jobs:
           mkdir -p ~/.kube
           echo "${{ secrets.CW_KUBECONFIG }}" > ~/.kube/coreweave-iris
           chmod 600 ~/.kube/coreweave-iris
+          echo "KUBECONFIG=$HOME/.kube/coreweave-iris" >> "$GITHUB_ENV"
 
       # Required for TraefikAddon's Traefik/cert-manager Releases to resolve their charts
       # during `pulumi preview` — see infra/pulumi/README.md's Prerequisites.

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Evaluate broker-served Qwen3 with the brokered lm-eval suite.
+"""Evaluate served Qwen3 with the lm-eval suite.
 
 \b
 Examples:
@@ -25,14 +25,14 @@ from marin.inference.config import (
     BrokerConfig,
     InferenceProxyConfig,
     IrisConfig,
+    RemoteInferenceConfig,
     ServedModelConfig,
     VllmEngineConfig,
     VllmLauncherType,
 )
 from marin.training.run_environment import env_vars_for_dependency_groups
 
-from experiments.evals.brokered_eval_suite import brokered_eval_suite
-from experiments.evals.served_lm_eval import BrokeredEvalInference
+from experiments.evals.lm_eval_suite import lm_eval_suite
 
 QWEN3_EVAL_VERSION = "2026.07.17"
 _VLLM_TIMEOUT = 1800
@@ -55,10 +55,10 @@ def qwen3_inference_config(
     worker_resources: ResourceConfig,
     worker_extras: tuple[str, ...],
     worker_env_vars: tuple[tuple[str, str], ...],
-) -> BrokeredEvalInference:
+) -> RemoteInferenceConfig:
     """Compose Qwen3 model policy with an accelerator-specific serving backend."""
-    return BrokeredEvalInference(
-        model=ServedModelConfig(model="Qwen/Qwen3-0.6B-Base", tokenizer="Qwen/Qwen3-0.6B"),
+    return RemoteInferenceConfig(
+        model=ServedModelConfig(weights="Qwen/Qwen3-0.6B-Base", tokenizer="Qwen/Qwen3-0.6B"),
         engine=engine,
         broker=BrokerConfig(
             proxy=InferenceProxyConfig(
@@ -78,6 +78,8 @@ def qwen3_inference_config(
                 ),
             ),
         ),
+        instances=1,
+        capability_origin=None,
     )
 
 
@@ -92,7 +94,7 @@ QWEN3_TPU_INFERENCE = qwen3_inference_config(
     worker_env_vars=_TPU_VLLM_WORKER_ENV_VARS,
 )
 
-QWEN3_TPU_EVAL_RESULTS = brokered_eval_suite(
+QWEN3_TPU_EVAL_RESULTS = lm_eval_suite(
     QWEN3_TPU_INFERENCE,
     model_name="qwen3-0.6b",
     version=QWEN3_EVAL_VERSION,
@@ -115,7 +117,7 @@ QWEN3_GPU_INFERENCE = qwen3_inference_config(
     worker_env_vars=(),
 )
 
-QWEN3_GPU_EVAL_RESULTS = brokered_eval_suite(
+QWEN3_GPU_EVAL_RESULTS = lm_eval_suite(
     QWEN3_GPU_INFERENCE,
     model_name="qwen3-0.6b-gpu",
     version=QWEN3_EVAL_VERSION,

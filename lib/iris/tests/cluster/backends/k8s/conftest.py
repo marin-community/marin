@@ -122,6 +122,7 @@ KUEUE_UNADMITTED_MSG = (
     "couldn't assign flavors to pod set main: topology \"infiniband\" doesn't allow to "
     'fit any of 1 pod(s). Total nodes: 32; excluded: resource "cpu": 32'
 )
+SINGLETON_POD_UID = "pod-uid"
 
 
 def gated_pod(name: str = "iris-job-0-0", pod_group: str = "wl-abc") -> dict:
@@ -143,6 +144,17 @@ def gated_pod(name: str = "iris-job-0-0", pod_group: str = "wl-abc") -> dict:
     }
 
 
+def singleton_gated_pod(name: str = "iris-job-0-0", uid: str = SINGLETON_POD_UID) -> dict:
+    """A Kueue-managed singleton Pod, which has no pod-group label."""
+    pod = gated_pod(name=name)
+    pod["metadata"] = {
+        "name": name,
+        "uid": uid,
+        "labels": {"kueue.x-k8s.io/queue-name": "cw-use02a-lq"},
+    }
+    return pod
+
+
 def unadmitted_workload(name: str = "wl-abc", msg: str = KUEUE_UNADMITTED_MSG) -> dict:
     """A Workload Kueue has evaluated and declined: QuotaReserved=False with a reason."""
     return {
@@ -150,6 +162,22 @@ def unadmitted_workload(name: str = "wl-abc", msg: str = KUEUE_UNADMITTED_MSG) -
         "spec": {"queueName": "cw-use02a-lq"},
         "status": {"conditions": [{"type": "QuotaReserved", "status": "False", "reason": "Pending", "message": msg}]},
     }
+
+
+def singleton_unadmitted_workload(
+    pod_name: str = "iris-job-0-0",
+    pod_uid: str = SINGLETON_POD_UID,
+    msg: str = KUEUE_UNADMITTED_MSG,
+) -> dict:
+    """The auto-generated Workload owned by one Kueue-managed Pod."""
+    workload = unadmitted_workload(name=f"pod-{pod_name}-abcde", msg=msg)
+    workload["metadata"].update(
+        {
+            "labels": {"kueue.x-k8s.io/job-uid": pod_uid},
+            "ownerReferences": [{"apiVersion": "v1", "kind": "Pod", "name": pod_name, "uid": pod_uid}],
+        }
+    )
+    return workload
 
 
 def unevaluated_workload(name: str = "wl-abc") -> dict:

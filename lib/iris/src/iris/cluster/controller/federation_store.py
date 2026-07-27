@@ -273,10 +273,7 @@ class ControllerFederationStore:
                     logger.warning("peer %s reported job %s it was not handed; ignoring", peer_id, local_job_id)
                     continue
                 if delta.tombstone:
-                    # Drop the job's mirrored endpoints through the projection first;
-                    # delete_job CASCADEs the rows in SQL but would leave the in-memory
-                    # endpoint cache serving them (mirrors the pruner's ordering).
-                    cur.caches[EndpointsProjection].remove_by_job_ids(cur, [local_job_id])
+                    # delete_job drops the job's mirrored endpoints (cache + DB) too.
                     writes.delete_job(cur, local_job_id)
                     continue
                 self._mirror_delta(cur, peer_id, local_job_id, delta)

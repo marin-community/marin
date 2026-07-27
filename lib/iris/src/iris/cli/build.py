@@ -237,6 +237,9 @@ def build_image(
 
     cache_ref = f"ghcr.io/{ghcr_org}/iris-cache:{image_type}"
     cmd.extend(["--cache-from", f"type=registry,ref={cache_ref}"])
+    for target_platform in platform.split(","):
+        architecture = target_platform.rsplit("/", 1)[-1]
+        cmd.extend(["--cache-from", f"type=registry,ref={cache_ref}-{architecture}"])
 
     if push:
         # oci-mediatypes/image-manifest store the cache as a single OCI image,

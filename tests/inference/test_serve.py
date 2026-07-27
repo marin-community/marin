@@ -17,12 +17,15 @@ import click
 import pytest
 import requests
 from click.testing import CliRunner
-from fray.types import ANY_REGION
+from fray.types import ANY_REGION, ResourceConfig, create_environment
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
+from marin.inference.backend import ModelSpec
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
+    IrisConfig,
     LevanterEngineConfig,
+    ServedModelConfig,
     VllmEngineConfig,
     VllmLauncherType,
     VllmSource,
@@ -34,6 +37,7 @@ from marin.inference.dashboard_server import (
     build_dashboard_app,
     serve_app_background,
 )
+from marin.inference.iris import _resolved_model
 from marin.inference.iris_cli import (
     _checkout_free_setup_script,
     _mint_and_print_capability_url,
@@ -46,13 +50,10 @@ from marin.inference.levanter_backend import (
     levanter_max_seq_len,
     validate_levanter_dtype,
 )
-from marin.inference.model_preparation import (
-    resolve_model_path,
-    select_tensor_parallel_size,
-)
+from marin.inference.model_preparation import resolve_model_path, select_tensor_parallel_size
 from marin.inference.serve_cli import main as serve_main
 from marin.inference.tpu_vllm_pins import vllm_fork_ref
-from marin.inference.vllm_backend import vllm_launcher
+from marin.inference.vllm_backend import VllmBackend, vllm_launcher
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
     IsolatedTpuVllm,
@@ -98,6 +99,69 @@ def test_select_tensor_parallel_size(heads, chips, kv_heads, expected):
 def test_resolve_model_path_passthrough(model, ttl_days):
     # These paths must not touch the network or GCS; they return the input unchanged.
     assert resolve_model_path(model, ttl_days) == model
+
+
+def test_resolve_model_path_includes_revision_in_cache_key(monkeypatch):
+    observed: list[tuple[str, int, str]] = []
+
+    def resolve(model: str, *, cache_ttl_days: int, cache_prefix: str) -> str:
+        observed.append((model, cache_ttl_days, cache_prefix))
+        return "gs://cache/pinned-model"
+
+    monkeypatch.setattr("marin.inference.model_preparation.resolve_cached_model_path", resolve)
+
+    assert resolve_model_path("Qwen/Qwen3-0.6B", 14, "abc123") == "gs://cache/pinned-model"
+    assert observed == [("Qwen/Qwen3-0.6B@abc123", 14, "quick-serve-models")]
+
+
+def test_vllm_backend_serves_the_pinned_revision(monkeypatch):
+    observed: dict[str, object] = {}
+
+    @contextmanager
+    def environment(**kwargs):
+        observed.update(kwargs)
+        yield SimpleNamespace(model_id="public-model", server_url="http://127.0.0.1:8000/v1")
+
+    monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", environment)
+    monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda config: object())
+    spec = ModelSpec(
+        weights="org/model",
+        revision="abc123",
+        api_model="public-model",
+        num_chips=1,
+        tensor_parallel_size=1,
+        dtype="bfloat16",
+        max_model_len=1024,
+        chat_template_content=None,
+    )
+
+    with VllmBackend(VllmEngineConfig()).serve(spec):
+        pass
+
+    extra_args = observed["extra_args"]
+    assert isinstance(extra_args, list)
+    assert extra_args[extra_args.index("--revision") + 1] == "abc123"
+
+
+def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):
+    """Resolving weights to a cache path must not change the served id.
+
+    vLLM advertises `--served-model-name` from `model_id`; if resolution leaks the
+    cache path into it, clients addressing the model by the requested id get a 404.
+    """
+    monkeypatch.setattr(
+        "marin.inference.model_preparation.resolve_model_path",
+        lambda model, cache_ttl_days, revision=None: "gs://cache/quick-serve/qwen3-0.6b",
+    )
+    iris = IrisConfig(
+        worker_resources=ResourceConfig.with_tpu("v6e-4"),
+        worker_environment=create_environment(extras=["tpu", "vllm"]),
+    )
+
+    resolved, _num_chips = _resolved_model(ServedModelConfig(weights="Qwen/Qwen3-0.6B", tensor_parallel_size=1), iris)
+
+    assert resolved.weights == "gs://cache/quick-serve/qwen3-0.6b"
+    assert resolved.model_id == "Qwen/Qwen3-0.6B"
 
 
 def test_checkout_free_setup_script_pins_marin_core_with_extras():
@@ -304,7 +368,7 @@ def _mint_response(token: str, ttl_hours: float) -> controller_pb2.Controller.Mi
 def test_mint_and_print_capability_url_prints_off_cluster_url(capsys):
     """LINK serve prints the OpenAI base_url with the scoped token in the URL path."""
     client = MagicMock()
-    client._cluster_client.mint_endpoint_token.return_value = _mint_response("ep-token-xyz", 24.0)
+    client.mint_endpoint_token.return_value = _mint_response("ep-token-xyz", 24.0)
 
     _mint_and_print_capability_url(client, "/serve/foo", "https://iris.oa.dev", 24.0)
 
@@ -347,13 +411,12 @@ def _invoke_iris_serve(monkeypatch, *args: str):
     return result, client, services, mint
 
 
-def test_iris_serve_always_registers_link_access_and_mints_capability(monkeypatch):
-    result, _client, services, mint = _invoke_iris_serve(monkeypatch)
+def test_iris_serve_mints_capability(monkeypatch):
+    result, client, _services, mint = _invoke_iris_serve(monkeypatch)
 
     assert result.exit_code == 0, result.output
-    assert services[0].access == controller_pb2.Controller.ENDPOINT_ACCESS_LINK
     mint.assert_called_once_with(
-        _client,
+        client,
         "/serve/serve-test",
         "https://iris.oa.dev",
         24.0,
@@ -361,10 +424,9 @@ def test_iris_serve_always_registers_link_access_and_mints_capability(monkeypatc
 
 
 def test_iris_serve_no_wait_is_an_explicit_opt_out_of_minting(monkeypatch):
-    result, _client, services, mint = _invoke_iris_serve(monkeypatch, "--no-wait")
+    result, _client, _services, mint = _invoke_iris_serve(monkeypatch, "--no-wait")
 
     assert result.exit_code == 0, result.output
-    assert services[0].access == controller_pb2.Controller.ENDPOINT_ACCESS_LINK
     mint.assert_not_called()
     assert "Submitted" in result.output
 

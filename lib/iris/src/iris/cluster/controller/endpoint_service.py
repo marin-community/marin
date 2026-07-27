@@ -271,15 +271,20 @@ class EndpointServiceImpl:
 
         # Validation runs inside the writer transaction in
         # ``EndpointsProjection.add``: NOT_FOUND if the task row is missing,
-        # FAILED_PRECONDITION if the task is terminal.
+        # FAILED_PRECONDITION if the task is terminal or the attempt is stale.
         with self._db.transaction() as cur:
-            outcome = cur.caches[EndpointsProjection].add(cur, endpoint)
+            outcome = cur.caches[EndpointsProjection].add(cur, endpoint, attempt_id=request.attempt_id)
         if outcome is AddEndpointOutcome.NOT_FOUND:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
         if outcome is AddEndpointOutcome.TERMINAL:
             raise ConnectError(
                 Code.FAILED_PRECONDITION,
                 f"Task {request.task_id} is already terminal; endpoint not registered",
+            )
+        if outcome is AddEndpointOutcome.STALE_ATTEMPT:
+            raise ConnectError(
+                Code.FAILED_PRECONDITION,
+                f"Task {request.task_id} attempt {request.attempt_id} is no longer current",
             )
 
         return controller_pb2.Controller.RegisterEndpointResponse(

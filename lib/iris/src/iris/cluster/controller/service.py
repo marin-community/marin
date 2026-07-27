@@ -21,6 +21,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
+from rigging.connect import capability_path, federated_capability_path
 from rigging.server_auth import ANONYMOUS_ADMIN, VerifiedIdentity, get_verified_identity, require_identity
 from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
 from sqlalchemy import bindparam, case, func, select, text, tuple_
@@ -47,6 +48,7 @@ from iris.cluster.controller.budget import (
     compute_effective_band,
     compute_user_spend,
 )
+from iris.cluster.controller.checkpoint import CHECKPOINT_EPOCH_META_KEY
 from iris.cluster.controller.codec import (
     decode_attribute_value,
     reconstruct_launch_job_request,
@@ -62,9 +64,12 @@ from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
 from iris.cluster.controller.reconcile.task import TerminalKind
 from iris.cluster.controller.scheduling.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
+    federation_changelog_table,
+    federation_sync_state_table,
     job_config_table,
     jobs_table,
     local_tasks,
+    meta_table,
     task_attempts_table,
     tasks_table,
     user_budgets_table,
@@ -85,7 +90,13 @@ from iris.cluster.runtime.profile import (
     build_profile_row,
     profile_local_process,
 )
-from iris.cluster.stats.tables import PROFILE_NAMESPACE, IrisProfile
+from iris.cluster.stats.tables import (
+    PROFILE_NAMESPACE,
+    TASK_EVENT_NAMESPACE,
+    TASK_EVENT_STORAGE_POLICY,
+    IrisProfile,
+    TaskEventRow,
+)
 from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
     TERMINAL_JOB_STATES,
@@ -1025,6 +1036,28 @@ class PendingKick:
     reason: str
 
 
+@dataclass(frozen=True, slots=True)
+class CapabilityUrlConfig:
+    """Origins for fully-qualifying a minted endpoint's capability URL.
+
+    With ``parent_origin`` and ``cluster_name`` set (a child fronted by a public
+    parent), a minted URL is the cluster-tagged parent form the parent relays; with
+    only ``local_origin`` set, the plain local form; with neither, the response
+    carries no URL and the caller prints just the path.
+    """
+
+    cluster_name: str = ""
+    local_origin: str = ""
+    parent_origin: str = ""
+
+    def build(self, name: str, token: str) -> str:
+        if self.parent_origin and self.cluster_name:
+            return f"{self.parent_origin.rstrip('/')}{federated_capability_path(self.cluster_name, name, token)}"
+        if self.local_origin:
+            return f"{self.local_origin.rstrip('/')}{capability_path(name, token)}"
+        return ""
+
+
 class ControllerProtocol(Protocol):
     """Protocol for controller operations used by ControllerServiceImpl."""
 
@@ -1120,6 +1153,7 @@ class ControllerServiceImpl:
         endpoint_service: EndpointServiceImpl,
         auth: ControllerAuth | None = None,
         user_budget_defaults: UserBudgetDefaults | None = None,
+        capability_url_config: CapabilityUrlConfig | None = None,
     ):
         # Every cursor this DB mints carries the per-controller cache registry as
         # ``tx.caches``, so cache-touching reads/writes reach the derived-count memo
@@ -1134,13 +1168,32 @@ class ControllerServiceImpl:
         self._timer = Timer()
         self._auth = auth or ControllerAuth()
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
+        self._capability_url_config = capability_url_config or CapabilityUrlConfig()
         self._profile_table = self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
+        self._db.attach_task_event_table(
+            self._log_client.get_table(
+                TASK_EVENT_NAMESPACE,
+                TaskEventRow,
+                storage_policy=TASK_EVENT_STORAGE_POLICY,
+            )
+        )
 
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get(bundle_id)
 
     def blob_data(self, blob_id: str) -> bytes:
         return self._bundle_store.get(blob_id)
+
+    def probe_database(self) -> int | None:
+        """Return checkpoint ancestry after verifying controller state is readable."""
+        with self._db.read_snapshot() as tx:
+            checkpoint_epoch_ms = tx.execute(
+                select(meta_table.c.value).where(meta_table.c.key == CHECKPOINT_EPOCH_META_KEY)
+            ).scalar()
+            tx.execute(select(task_attempts_table.c.attempt_uid).limit(1)).first()
+            tx.execute(select(federation_changelog_table.c.seq).limit(1)).first()
+            tx.execute(select(federation_sync_state_table.c.peer_id).limit(1)).first()
+        return int(checkpoint_epoch_ms) if checkpoint_epoch_ms is not None else None
 
     def _get_autoscaler_pending_hints(self) -> dict[str, PendingHint]:
         """Build autoscaler-based pending hints keyed by job id, merged across
@@ -2407,11 +2460,12 @@ class ControllerServiceImpl:
             has_more=has_more,
         )
 
-    # --- Endpoint Management (compatibility surface) ---
+    # --- Endpoint registry (deprecated compatibility surface) ---
     #
-    # These RPCs forward to the leased EndpointService backend so clients that
-    # call the old surface keep working; clients that want to renew call
-    # EndpointService directly to learn their lease.
+    # EndpointService is the canonical home and all current clients call it. These
+    # forward there so a pre-migration worker or task (e.g. an already-running log
+    # shipper) that still calls the old ControllerService surface keeps working
+    # across a controller update. Remove once those old callers have drained.
 
     def register_endpoint(
         self,
@@ -2932,6 +2986,7 @@ class ControllerServiceImpl:
         return controller_pb2.Controller.MintEndpointTokenResponse(
             token=token,
             expires_at=timestamp_to_proto(expires_at),
+            capability_url=self._capability_url_config.build(row.name, token),
         )
 
     def get_current_user(

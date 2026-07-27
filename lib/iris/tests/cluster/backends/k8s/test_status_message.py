@@ -9,6 +9,7 @@ mirrored, on a federating hub."""
 
 from iris.cluster.backends.k8s.tasks import (
     _TASK_CONTAINER_NAME,
+    _build_pod_statuses,
     _pod_status_message,
     _task_update_from_pod,
 )
@@ -16,7 +17,13 @@ from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 
-from .conftest import gated_pod, imagepull_pod, unadmitted_workload
+from .conftest import (
+    gated_pod,
+    imagepull_pod,
+    singleton_gated_pod,
+    singleton_unadmitted_workload,
+    unadmitted_workload,
+)
 
 
 def test_status_message_surfaces_kueue_admission_verdict():
@@ -27,6 +34,15 @@ def test_status_message_surfaces_kueue_admission_verdict():
     assert "couldn't assign flavors" in msg
     assert 'excluded: resource "cpu"' in msg
     assert "cw-use02a-lq" in msg
+
+
+def test_pod_status_singleton_surfaces_kueue_admission_verdict():
+    """A singleton Pod resolves the auto-generated Workload through its Pod UID."""
+    statuses = _build_pod_statuses([singleton_gated_pod()], [singleton_unadmitted_workload()])
+
+    assert len(statuses) == 1
+    assert "couldn't assign flavors" in statuses[0].message
+    assert 'excluded: resource "cpu"' in statuses[0].message
 
 
 def test_status_message_when_workload_not_yet_created():

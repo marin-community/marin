@@ -22,6 +22,8 @@ from iris.cluster.platforms.k8s.rbac_manifests import (
 
 from iac.config import RbacSpec
 
+GRAFANA_OBSERVER_ROLE = "marin-grafana-node-reader"
+
 
 @dataclass(frozen=True)
 class IrisRbacArgs:
@@ -89,5 +91,78 @@ class IrisRbac(pulumi.ComponentResource):
             role_ref=binding_manifest["roleRef"],
             subjects=binding_manifest["subjects"],
             opts=child_opts(role_name, depends_on=[cluster_role, service_account]),
+        )
+        self.register_outputs({})
+
+
+@dataclass(frozen=True)
+class GrafanaObserverRbacArgs:
+    usernames: tuple[str, ...]
+    adopt: bool = False
+
+
+def grafana_observer_manifests(usernames: tuple[str, ...]) -> tuple[dict, dict]:
+    """Return the nodes-only read role and its token-specific binding."""
+    labels = {
+        "app.kubernetes.io/name": "marin-grafana",
+        "app.kubernetes.io/component": "k8s-observer",
+    }
+    role = {
+        "metadata": {"name": GRAFANA_OBSERVER_ROLE, "labels": labels},
+        "rules": [{"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "list", "watch"]}],
+    }
+    binding = {
+        "metadata": {"name": GRAFANA_OBSERVER_ROLE, "labels": labels},
+        "roleRef": {
+            "apiGroup": "rbac.authorization.k8s.io",
+            "kind": "ClusterRole",
+            "name": GRAFANA_OBSERVER_ROLE,
+        },
+        "subjects": [
+            {
+                "apiGroup": "rbac.authorization.k8s.io",
+                "kind": "User",
+                "name": username,
+            }
+            for username in usernames
+        ],
+    }
+    return role, binding
+
+
+class GrafanaObserverRbac(pulumi.ComponentResource):
+    """Nodes-only read access for Grafana's CoreWeave Managed Auth identity."""
+
+    def __init__(
+        self,
+        name: str,
+        args: GrafanaObserverRbacArgs,
+        *,
+        k8s_provider: pulumi.ProviderResource,
+        opts: pulumi.ResourceOptions | None = None,
+    ) -> None:
+        super().__init__("marin:coreweave:GrafanaObserverRbac", name, None, opts)
+        role_manifest, binding_manifest = grafana_observer_manifests(args.usernames)
+
+        def child_opts(depends_on: list | None = None) -> pulumi.ResourceOptions:
+            return pulumi.ResourceOptions(
+                parent=self,
+                provider=k8s_provider,
+                depends_on=depends_on,
+                import_=GRAFANA_OBSERVER_ROLE if args.adopt else None,
+            )
+
+        cluster_role = k8s.rbac.v1.ClusterRole(
+            "cluster-role",
+            metadata=role_manifest["metadata"],
+            rules=role_manifest["rules"],
+            opts=child_opts(),
+        )
+        k8s.rbac.v1.ClusterRoleBinding(
+            "cluster-role-binding",
+            metadata=binding_manifest["metadata"],
+            role_ref=binding_manifest["roleRef"],
+            subjects=binding_manifest["subjects"],
+            opts=child_opts(depends_on=[cluster_role]),
         )
         self.register_outputs({})

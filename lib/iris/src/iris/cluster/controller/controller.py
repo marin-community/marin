@@ -20,6 +20,8 @@ from pathlib import Path
 
 import uvicorn
 from finelog.client import RemoteLogHandler
+from finelog.telltale import FinelogMetricSink
+from rigging import telltale
 from rigging.filesystem import prefix_join
 from rigging.server_auth import IAP_ISSUER, IAP_PUBLIC_KEYS_URL, TokenVerifier
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
@@ -31,6 +33,7 @@ from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.auth import (
     CONTROL_PLANE_AUDIENCE,
+    DEFAULT_USER_ROLE,
     ENDPOINT_TOKEN_SCOPE,
     FEDERATION_AUDIENCE,
     NATIVE_PROXY_JWT_CACHE_CAPACITY,
@@ -41,6 +44,7 @@ from iris.cluster.controller.auth import (
     FederationTokenProvider,
     NativeProxyAuthConfig,
     NativeProxyAuthMode,
+    native_proxy_auth_policy,
     request_auth_policy,
 )
 from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_state
@@ -70,6 +74,11 @@ from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
 from iris.cluster.controller.federation_store import ControllerFederationStore, build_queued_candidates
 from iris.cluster.controller.log_stack import LogStack
 from iris.cluster.controller.native_proxy import NativeProxy, NativeProxyStats
+from iris.cluster.controller.native_proxy_metrics import (
+    NativeProxyMetricsCollector,
+    install_native_proxy_metrics,
+    uninstall_native_proxy_metrics,
+)
 from iris.cluster.controller.ops.task import (
     Assignment,
     finalize,
@@ -98,7 +107,7 @@ from iris.cluster.controller.scheduling.policy import (
 from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
 )
-from iris.cluster.controller.service import ControllerServiceImpl, PendingKick
+from iris.cluster.controller.service import CapabilityUrlConfig, ControllerServiceImpl, PendingKick
 from iris.cluster.controller.task_state_stats import TaskStateCollector
 from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.federation.availability import Promotion, QueuedCandidate
@@ -292,7 +301,18 @@ class ControllerConfig:
     """This cluster's real federation identity (from the cluster config ``name``).
 
     Sent as the ``requester_id`` on each ``FederationSync``. Required once this cluster
-    hands jobs off; unused otherwise."""
+    hands jobs off; unused otherwise. Also the tag a minted capability URL carries so a
+    federation parent can relay it back here."""
+
+    dashboard_url: str = ""
+    """This cluster's public origin (cluster config ``dashboard_url``); the local origin
+    a minted capability URL uses when no public parent is configured."""
+
+    federation_public_parent: str = ""
+    """Public origin of the federation parent that fronts this cluster (cluster config
+    ``federation_public_parent``). Set on a child whose own origin is not world-visible:
+    a minted capability URL is then tagged with ``cluster_id`` and points at the parent,
+    which relays it back here."""
 
     peers: dict[str, PeerConfig] = field(default_factory=dict)
     """Federation peers (peer id -> declaration). Empty leaves federation inert:
@@ -485,6 +505,11 @@ class Controller:
             endpoint_service=self._endpoint_service,
             auth=config.auth,
             user_budget_defaults=config.user_budget_defaults,
+            capability_url_config=CapabilityUrlConfig(
+                cluster_name=config.cluster_id,
+                local_origin=config.dashboard_url,
+                parent_origin=config.federation_public_parent,
+            ),
         )
         # Forwards a /proxy request for an endpoint that lives on a federated child
         # to that peer's controller, presenting this cluster's federation bearer.
@@ -499,16 +524,20 @@ class Controller:
             with self._db.read_snapshot() as q:
                 return reads.has_received_job_from_peer(q, peer_id, root_job)
 
-        self._auth_policy = request_auth_policy(config.auth)
+        external_auth_policy = request_auth_policy(config.auth)
+        proxy_decision_secret = secrets.token_urlsafe(32)
+        self._auth_policy = native_proxy_auth_policy(external_auth_policy)
+        self._external_auth_allows_anonymous = external_auth_policy.allows_anonymous
         self._dashboard = ControllerDashboard(
             self._service,
             endpoint_service=self._endpoint_service,
             auth_provider=config.auth_provider,
             auth_policy=self._auth_policy,
+            reported_auth_policy=external_auth_policy,
             jwt_manager=config.auth.jwt_manager if config.auth else None,
             federated_handoff=federated_handoff,
             federation_owner_check=_federation_owner_check,
-            proxy_decision_secret=secrets.token_urlsafe(32),
+            proxy_decision_secret=proxy_decision_secret,
         )
 
         # Wakes the control-tick driver. A submit triggers a schedule-only
@@ -528,6 +557,8 @@ class Controller:
         self._pending_kicks_lock = threading.Lock()
         self._server: uvicorn.Server | None = None
         self._native_proxy = None
+        self._native_proxy_metrics: NativeProxyMetricsCollector | None = None
+        self._telltale_forwarding = False
         self._endpoint_service.subscribe_proxy_updates(self._publish_native_proxy_update)
         self._control_thread: ManagedThread | None = None
         self._prune_thread: ManagedThread | None = None
@@ -730,6 +761,8 @@ class Controller:
             self._dashboard.proxy_decision_secret,
             json.dumps(asdict(self._native_proxy_auth_config())),
         )
+        self._native_proxy_metrics = install_native_proxy_metrics(self._native_proxy)
+        self._telltale_forwarding = telltale.start_forwarding(FinelogMetricSink(self._log_service_address))
         self._replace_native_proxy_registry()
 
     def _publish_native_proxy_update(self, update: ProxyMappingDelta | ProxyRegistryReset) -> None:
@@ -768,7 +801,7 @@ class Controller:
         auth = self._config.auth
         if auth is None or auth.provider is None:
             mode = NativeProxyAuthMode.PERMISSIVE
-        elif self._auth_policy.allows_anonymous:
+        elif self._external_auth_allows_anonymous:
             mode = NativeProxyAuthMode.OPTIONAL
         else:
             mode = NativeProxyAuthMode.ENFORCING
@@ -793,6 +826,10 @@ class Controller:
             iap_issuer=IAP_ISSUER,
             iap_audience=auth.iap_audience if auth is not None else None,
             federation_keys=auth.federation_keys if auth is not None else {},
+            admin_users=tuple(sorted(auth.role_policy.admins)) if auth is not None and auth.role_policy else (),
+            default_user_role=(
+                auth.role_policy.default_role if auth is not None and auth.role_policy else DEFAULT_USER_ROLE
+            ),
         )
 
     def stop(self) -> None:
@@ -826,6 +863,11 @@ class Controller:
             self._task_state_collector.close()
         self._federation.stop()
 
+        if self._telltale_forwarding:
+            telltale.stop_forwarding()
+        if self._native_proxy_metrics is not None and self._native_proxy is not None:
+            uninstall_native_proxy_metrics(self._native_proxy)
+            self._native_proxy_metrics = None
         if self._native_proxy is not None:
             self._native_proxy.stop()
         self._threads.stop()

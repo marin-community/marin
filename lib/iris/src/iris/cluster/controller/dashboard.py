@@ -43,13 +43,14 @@ from rigging.server_auth import (
     extract_bearer_token,
     public,
 )
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.types import ASGIApp
 
-from iris.cluster.controller.auth import JwtTokenManager
+from iris.cluster.controller.auth import VERIFIED_IDENTITY_HEADER, JwtTokenManager
 from iris.cluster.controller.backend import backend_descriptor
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
@@ -75,10 +76,7 @@ from iris.rpc.async_adapter import AsyncServiceAdapter
 from iris.rpc.auth import SESSION_COOKIE, authorize_method
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceASGIApplication, EndpointServiceASGIApplication
-from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS, RequestTimingInterceptor
-from iris.rpc.stats import RpcStatsCollector
-from iris.rpc.stats_connect import StatsServiceASGIApplication
-from iris.rpc.stats_service import RpcStatsService
+from iris.rpc.interceptors import RequestTimingInterceptor
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +94,10 @@ class _FederationDecision:
     task_id: str | None
     local_upstream: str | None
     timeout_seconds: float | None
+    # The capability token, carried only on a relay so the parent can rebuild the
+    # child-side /proxy/t/<token>/<name> path. Absent from a native that predates
+    # the relay, and None on inbound/outbound.
+    token: str | None = None
 
 
 def _request_is_authenticated(policy: RequestAuthPolicy, request: Request) -> bool:
@@ -174,6 +176,7 @@ class ControllerDashboard:
         endpoint_service: EndpointServiceImpl | None = None,
         auth_provider: str | None = None,
         auth_policy: RequestAuthPolicy = RequestAuthPolicy(),
+        reported_auth_policy: RequestAuthPolicy | None = None,
         jwt_manager: JwtTokenManager | None = None,
         federated_handoff: FederatedEndpointHandoff | None = None,
         federation_owner_check: FederationOwnerCheck | None = None,
@@ -185,6 +188,8 @@ class ControllerDashboard:
         self._endpoint_service = endpoint_service or service.endpoint_service
         self._auth_provider = auth_provider
         self._auth_policy = auth_policy
+        self._reports_native_identity = reported_auth_policy is not None
+        self._auth_optional = (reported_auth_policy or auth_policy).allows_anonymous
         # The signing authority, for serving public keys at /.well-known/jwks.json
         # (None when the controller has no auth configured, so no signer exists).
         self._jwt_manager = jwt_manager
@@ -195,10 +200,6 @@ class ControllerDashboard:
         # cluster that receives federation, None otherwise.
         self._federation_owner_check = federation_owner_check
         self._proxy_decision_secret = proxy_decision_secret
-        # In-process RPC statistics. Fed by RequestTimingInterceptor on the
-        # ControllerService chain only; LogService's chatty FetchLogs traffic
-        # would dominate the numbers if included.
-        self._stats_collector = RpcStatsCollector(slow_threshold_ms=SLOW_RPC_THRESHOLD_MS)
         self._app = self._create_app()
 
     @property
@@ -213,10 +214,8 @@ class ControllerDashboard:
         return self._proxy_decision_secret
 
     def _create_app(self) -> ASGIApp:
-        # Only the controller RPC chain feeds the stats collector. Finelog RPCs
-        # use the generic endpoint proxy and are measured by the log server.
         include_tb = bool(os.environ.get("IRIS_DEBUG"))
-        controller_timing = RequestTimingInterceptor(include_traceback=include_tb, collector=self._stats_collector)
+        controller_timing = RequestTimingInterceptor(include_traceback=include_tb)
         auth_interceptor = PolicyAuthInterceptor(
             self._auth_policy,
             cookie_name=SESSION_COOKIE,
@@ -239,15 +238,6 @@ class ControllerDashboard:
         endpoint_rpc_app = EndpointServiceASGIApplication(
             service=AsyncServiceAdapter(self._endpoint_service),
             interceptors=controller_interceptors,
-            compressions=IRIS_RPC_COMPRESSIONS,
-        )
-
-        # StatsService: reuses the auth interceptor (so non-admins can't read
-        # sampled request previews) but skips RequestTimingInterceptor so the
-        # stats endpoint itself doesn't pollute the numbers it reports.
-        stats_app = StatsServiceASGIApplication(
-            service=AsyncServiceAdapter(RpcStatsService(self._stats_collector)),
-            interceptors=[auth_interceptor],
             compressions=IRIS_RPC_COMPRESSIONS,
         )
 
@@ -280,6 +270,22 @@ class ControllerDashboard:
                 headers[UPSTREAM_URL_HEADER] = decision.local_upstream
                 return Response(status_code=204, headers=headers)
 
+            if decision.direction == "relay":
+                # A child-minted capability URL routed through this public parent.
+                # Forward it verbatim to the child's proxy with no credential: the
+                # child owns and validates the token. relay_base is None for an
+                # unconfigured peer, so the relay only reaches a declared peer.
+                if self._federated_handoff is None or decision.token is None:
+                    return JSONResponse({"error": "federation relay unavailable"}, status_code=502)
+                base = self._federated_handoff.relay_base(decision.peer_id)
+                if base is None:
+                    return JSONResponse({"error": f"Peer '{decision.peer_id}' unavailable"}, status_code=404)
+                upstream = f"{base.rstrip('/')}/proxy/t/{decision.token}/{decision.encoded_name}/{decision.sub_path}"
+                if decision.query:
+                    upstream = f"{upstream}?{decision.query}"
+                headers[UPSTREAM_URL_HEADER] = upstream
+                return Response(status_code=204, headers=headers)
+
             if decision.direction != "outbound" or self._federated_handoff is None:
                 return JSONResponse({"error": "federation proxy unavailable"}, status_code=502)
             target = self._federated_handoff.target(
@@ -309,7 +315,6 @@ class ControllerDashboard:
             Route(PROXY_DECISION_PATH, _federation_decision, methods=["POST"]),
             Mount(rpc_asgi_app.path, app=rpc_asgi_app),
             Mount(endpoint_rpc_app.path, app=endpoint_rpc_app),
-            Mount(stats_app.path, app=stats_app),
         ]
         routes.append(static_files_mount())
 
@@ -349,12 +354,15 @@ class ControllerDashboard:
         """Report whether auth is required and whether this request is authenticated.
 
         Public endpoint the frontend reads before rendering to decide whether to
-        show the login page. ``authenticated`` resolves the request through the
-        same policy the RPC surface enforces, so a request carrying any accepted
-        credential — a session cookie, a bearer token, or the signed IAP edge
-        header — is reported as authenticated.
+        show the login page. On the native listener, ``authenticated`` reflects
+        Rust's verified identity stamp. Standalone dashboards resolve the
+        request through the same policy as the RPC surface.
         """
-        authenticated = _request_is_authenticated(self._auth_policy, request)
+        authenticated = (
+            VERIFIED_IDENTITY_HEADER in request.headers
+            if self._reports_native_identity
+            else _request_is_authenticated(self._auth_policy, request)
+        )
         descriptors = {bid: backend_descriptor(b) for bid, b in self._service.backends.items()}
         union_capabilities = sorted({cap for d in descriptors.values() for cap in d.capabilities})
         representative = backend_descriptor(self._service.provider)
@@ -373,7 +381,7 @@ class ControllerDashboard:
                     "name": representative.name,
                     "capabilities": representative.capabilities,
                 },
-                "optional": self._auth_policy.allows_anonymous,
+                "optional": self._auth_optional,
             }
         )
 
@@ -409,7 +417,18 @@ class ControllerDashboard:
     @public
     def _health(self, _request: Request) -> JSONResponse:
         """Health check endpoint for controller availability."""
-        return JSONResponse({"status": "ok"})
+        try:
+            checkpoint_epoch_ms = self._service.probe_database()
+        except SQLAlchemyError:
+            logger.exception("Controller database health probe failed")
+            return JSONResponse({"status": "unhealthy", "database": "error"}, status_code=503)
+        return JSONResponse(
+            {
+                "status": "ok",
+                "database": "ok",
+                "checkpoint_epoch_ms": checkpoint_epoch_ms,
+            }
+        )
 
     @public
     def _bundle_download(self, request: Request) -> Response:

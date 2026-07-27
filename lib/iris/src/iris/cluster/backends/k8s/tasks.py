@@ -104,6 +104,7 @@ from iris.cluster.stats.tables import (
     IrisTaskStat,
     ProfileTrigger,
     TaskEventRow,
+    TaskEventSeverity,
     WorkerStatus,
     build_task_stat,
     stats_timestamp,
@@ -196,6 +197,12 @@ _REASON_SCHEDULING_GATED = "SchedulingGated"
 # cgroup limit gets no such condition, so it correctly stays an application
 # failure. GA since Kubernetes 1.26.
 _DISRUPTION_TARGET_CONDITION = "DisruptionTarget"
+# Kueue uses its own pod condition when it evicts an admitted Workload. The
+# reason identifies a controller-authored Workload eviction; other
+# TerminationTarget users must not turn application exits into infrastructure
+# failures accidentally.
+_KUEUE_TERMINATION_TARGET_CONDITION = "TerminationTarget"
+_KUEUE_WORKLOAD_EVICTION_REASON_PREFIX = "WorkloadEvicted"
 
 # ---------------------------------------------------------------------------
 # Kueue gang admission (coscheduled jobs only)
@@ -209,6 +216,7 @@ _DISRUPTION_TARGET_CONDITION = "DisruptionTarget"
 _KUEUE_POD_GROUP_NAME = "kueue.x-k8s.io/pod-group-name"
 _KUEUE_POD_GROUP_TOTAL = "kueue.x-k8s.io/pod-group-total-count"
 _KUEUE_QUEUE_NAME = "kueue.x-k8s.io/queue-name"
+_KUEUE_JOB_UID = "kueue.x-k8s.io/job-uid"
 _KUEUE_PRIORITY_CLASS = "kueue.x-k8s.io/priority-class"
 _KUEUE_REQUIRED_TOPOLOGY = "kueue.x-k8s.io/podset-required-topology"
 _KUEUE_PREFERRED_TOPOLOGY = "kueue.x-k8s.io/podset-preferred-topology"
@@ -1015,16 +1023,23 @@ def _task_container_status(pod: dict) -> dict | None:
     return statuses[0]
 
 
-def _has_disruption_target_condition(pod: dict) -> bool:
-    """True if the control plane marked this pod for infrastructure disruption.
+def _infrastructure_failure_condition(pod: dict) -> dict | None:
+    """Return the authoritative pod disruption condition, if present.
 
-    See :data:`_DISRUPTION_TARGET_CONDITION` — the authoritative preemption/
-    eviction/drain signal, independent of the container exit code.
+    Kubernetes stamps ``DisruptionTarget`` for native disruptions. Kueue stamps
+    ``TerminationTarget`` with a ``WorkloadEvicted*`` reason before deleting a
+    preempted Workload's pods.
     """
     for condition in pod.get("status", {}).get("conditions", []):
-        if condition.get("type") == _DISRUPTION_TARGET_CONDITION and condition.get("status") == "True":
-            return True
-    return False
+        if condition.get("status") != "True":
+            continue
+        if condition.get("type") == _DISRUPTION_TARGET_CONDITION:
+            return condition
+        if condition.get("type") == _KUEUE_TERMINATION_TARGET_CONDITION and str(condition.get("reason", "")).startswith(
+            _KUEUE_WORKLOAD_EVICTION_REASON_PREFIX
+        ):
+            return condition
+    return None
 
 
 def _is_infrastructure_failure(pod: dict) -> bool:
@@ -1040,7 +1055,7 @@ def _is_infrastructure_failure(pod: dict) -> bool:
     # exit 137 — which the terminated-reason whitelist below misses. A container
     # that OOMs on its own cgroup limit carries no such condition and correctly
     # falls through to an application failure.
-    if _has_disruption_target_condition(pod):
+    if _infrastructure_failure_condition(pod) is not None:
         return True
     status = _task_container_status(pod)
     if status is None:
@@ -1174,10 +1189,17 @@ def _init_container_failure(pod: dict) -> str | None:
 def _extract_terminal_reason(pod: dict) -> str | None:
     """A bounded terminal-cause string for a failed attempt.
 
-    Prefers an init-container failure — invisible to the task-container extractors —
-    over the task container's own terminal reason.
+    Prefers an authoritative controller disruption condition, then an
+    init-container failure invisible to the task-container extractors, over the
+    task container's own terminal reason.
     """
-    reason = _init_container_failure(pod) or _extract_error(pod)
+    condition = _infrastructure_failure_condition(pod)
+    condition_reason = None
+    if condition is not None:
+        short_reason = condition.get("reason", "") or condition.get("type", "")
+        message = condition.get("message", "")
+        condition_reason = f"{short_reason}: {message}" if message else short_reason
+    reason = condition_reason or _init_container_failure(pod) or _extract_error(pod)
     return reason[:_TERMINAL_REASON_MAX_CHARS] if reason is not None else None
 
 
@@ -1278,13 +1300,29 @@ def _is_preemptible_blocker(pod: dict) -> bool:
     return _pod_gpu_request(pod) > 0
 
 
-def _kueue_workloads_by_name(workloads: list[dict]) -> dict[str, dict]:
-    result = {}
+@dataclass(frozen=True)
+class _KueueWorkloadIndex:
+    by_name: dict[str, dict]
+    by_pod_uid: dict[str, dict]
+
+
+def _kueue_workload_index(workloads: list[dict]) -> _KueueWorkloadIndex:
+    by_name = {}
+    by_pod_uid = {}
     for workload in workloads:
-        name = workload.get("metadata", {}).get("name", "")
+        metadata = workload.get("metadata", {})
+        name = metadata.get("name", "")
         if name:
-            result[name] = workload
-    return result
+            by_name[name] = workload
+
+        job_uid = metadata.get("labels", {}).get(_KUEUE_JOB_UID, "")
+        if job_uid:
+            by_pod_uid[job_uid] = workload
+        for owner in metadata.get("ownerReferences", []):
+            owner_uid = owner.get("uid", "")
+            if owner.get("kind") == "Pod" and owner_uid:
+                by_pod_uid[owner_uid] = workload
+    return _KueueWorkloadIndex(by_name=by_name, by_pod_uid=by_pod_uid)
 
 
 def _format_kueue_condition(cond: dict) -> str:
@@ -1304,9 +1342,11 @@ def _format_kueue_condition(cond: dict) -> str:
 
 def _format_kueue_workload_status(pod: dict, workload: dict | None) -> str:
     """Return Kueue admission context for a gated pod."""
-    pod_group = pod.get("metadata", {}).get("labels", {}).get(_KUEUE_POD_GROUP_NAME, "")
+    metadata = pod.get("metadata", {})
+    pod_group = metadata.get("labels", {}).get(_KUEUE_POD_GROUP_NAME, "")
     if workload is None:
-        return f"Kueue workload {pod_group!r} not found yet; waiting for Kueue to create/admit the pod group"
+        target = pod_group or metadata.get("name", "")
+        return f"Kueue workload for {target!r} not found yet; waiting for Kueue to create or admit it"
 
     spec = workload.get("spec", {})
     status = workload.get("status", {})
@@ -1382,7 +1422,7 @@ def _pod_reason_message(pod: dict, workload: dict | None) -> _PodReason:
                     except (ValueError, AttributeError):
                         pass
                 break
-    if reason == _REASON_SCHEDULING_GATED and pod.get("metadata", {}).get("labels", {}).get(_KUEUE_POD_GROUP_NAME):
+    if reason == _REASON_SCHEDULING_GATED and _is_kueue_managed_pod(pod):
         kueue_status = _format_kueue_workload_status(pod, workload)
         message = f"{message}; {kueue_status}" if message else kueue_status
     return _PodReason(reason, message, last_ts)
@@ -1396,10 +1436,19 @@ def _pod_status_message(pod: dict, workload: dict | None) -> str:
     return pr.reason or pr.message
 
 
-def _workload_for_pod(pod: dict, workloads_by_name: dict[str, dict]) -> dict | None:
-    """Resolve the Kueue workload for a pod from its pod-group label, if any."""
-    pod_group = pod.get("metadata", {}).get("labels", {}).get(_KUEUE_POD_GROUP_NAME, "")
-    return workloads_by_name.get(pod_group) if pod_group else None
+def _is_kueue_managed_pod(pod: dict) -> bool:
+    labels = pod.get("metadata", {}).get("labels", {})
+    return bool(labels.get(_KUEUE_POD_GROUP_NAME) or labels.get(_KUEUE_QUEUE_NAME))
+
+
+def _workload_for_pod(pod: dict, workloads: _KueueWorkloadIndex) -> dict | None:
+    """Resolve a gang Workload by group name or a singleton Workload by Pod UID."""
+    metadata = pod.get("metadata", {})
+    pod_group = metadata.get("labels", {}).get(_KUEUE_POD_GROUP_NAME, "")
+    if pod_group:
+        return workloads.by_name.get(pod_group)
+    pod_uid = metadata.get("uid", "")
+    return workloads.by_pod_uid.get(pod_uid) if pod_uid else None
 
 
 # The layer that produced a task-event verdict, recorded as the event ``source``.
@@ -1431,7 +1480,7 @@ class _PodEvent:
     source: str
     reason: str
     message: str
-    severity: str
+    severity: TaskEventSeverity
 
 
 def _workload_admission_blocked(workload: dict | None) -> bool:
@@ -1451,14 +1500,23 @@ def _workload_admission_blocked(workload: dict | None) -> bool:
 
 
 def _pod_event(pod: dict, workload: dict | None) -> _PodEvent | None:
-    """The scheduling/admission event for a not-yet-running pod, or ``None`` when
-    the pod is running or otherwise has nothing to record.
+    """The current actionable backend event for a pod.
 
     ``source`` attributes the verdict to the layer that produced it (the task
     container, the Kueue gate, or the scheduler); ``severity`` is Warning for an
-    actionable failure (image pull, config error) or a Kueue-declined admission,
-    Normal for a transient wait.
+    actionable failure (image pull, config error, Kueue eviction) or a
+    Kueue-declined admission, Normal for a transient wait. Returns ``None`` for a
+    running or otherwise quiet pod.
     """
+    disruption = _infrastructure_failure_condition(pod)
+    if disruption is not None and disruption.get("type") == _KUEUE_TERMINATION_TARGET_CONDITION:
+        return _PodEvent(
+            source=_EVENT_SOURCE_KUEUE,
+            reason=disruption.get("reason", "") or _KUEUE_TERMINATION_TARGET_CONDITION,
+            message=disruption.get("message", ""),
+            severity=TaskEventSeverity.WARNING,
+        )
+
     pr = _pod_reason_message(pod, workload)
     if not pr.reason:
         return None
@@ -1466,7 +1524,7 @@ def _pod_event(pod: dict, workload: dict | None) -> _PodEvent | None:
     container_reason, _ = _container_state_reason(pod)
     if container_reason and container_reason == pr.reason:
         source = _EVENT_SOURCE_CONTAINER
-    elif pr.reason == _REASON_SCHEDULING_GATED and pod.get("metadata", {}).get("labels", {}).get(_KUEUE_POD_GROUP_NAME):
+    elif pr.reason == _REASON_SCHEDULING_GATED and _is_kueue_managed_pod(pod):
         source = _EVENT_SOURCE_KUEUE
     else:
         source = _EVENT_SOURCE_SCHEDULER
@@ -1474,7 +1532,8 @@ def _pod_event(pod: dict, workload: dict | None) -> _PodEvent | None:
     warning = pr.reason in _WARNING_EVENT_REASONS or (
         source == _EVENT_SOURCE_KUEUE and _workload_admission_blocked(workload)
     )
-    return _PodEvent(source=source, reason=pr.reason, message=pr.message, severity="Warning" if warning else "Normal")
+    severity = TaskEventSeverity.WARNING if warning else TaskEventSeverity.NORMAL
+    return _PodEvent(source=source, reason=pr.reason, message=pr.message, severity=severity)
 
 
 def _build_pod_statuses(
@@ -1482,7 +1541,7 @@ def _build_pod_statuses(
 ) -> list[controller_pb2.Controller.KubernetesPodStatus]:
     """Build pod status protos from raw kubectl pod objects."""
     statuses = []
-    workloads_by_name = _kueue_workloads_by_name(workloads or [])
+    workload_index = _kueue_workload_index(workloads or [])
     for pod in pods:
         meta = pod.get("metadata", {})
         pod_name = meta.get("name", "")
@@ -1490,7 +1549,7 @@ def _build_pod_statuses(
         task_id = labels.get(_LABEL_TASK_ID, "")
         node_name = pod.get("spec", {}).get("nodeName", "")
         phase = pod.get("status", {}).get("phase", "Unknown")
-        pr = _pod_reason_message(pod, _workload_for_pod(pod, workloads_by_name))
+        pr = _pod_reason_message(pod, _workload_for_pod(pod, workload_index))
 
         ps = controller_pb2.Controller.KubernetesPodStatus(
             pod_name=pod_name,
@@ -1967,7 +2026,7 @@ class PeriodicProfiler:
 
 
 class TaskEventLog:
-    """Appends scheduling/admission events to the ``iris.task_event`` namespace.
+    """Appends Kubernetes backend events to the ``iris.task_event`` namespace.
 
     Driven synchronously from the pod poll — no background thread, since the
     verdicts come from the pod/workload lists ``sync`` already fetches.
@@ -1983,20 +2042,20 @@ class TaskEventLog:
 
     def __init__(self, task_event_table: Table):
         self._table = task_event_table
-        # (task_id_wire, attempt_id) -> last written (source, reason, severity) verdict.
-        self._last_verdict: dict[tuple[str, int], tuple[str, str, str]] = {}
+        self._last_verdict: dict[RunningTaskEntry, tuple[str, str, TaskEventSeverity]] = {}
 
-    def observe(self, key: tuple[str, int], event: _PodEvent | None) -> None:
-        """Record ``event`` for the attempt ``key`` if its verdict has changed."""
+    def observe(self, attempt: RunningTaskEntry, event: _PodEvent | None) -> None:
+        """Record ``event`` for ``attempt`` if its verdict has changed."""
         if event is None:
             return
         verdict = (event.source, event.reason, event.severity)
-        if self._last_verdict.get(key) == verdict:
+        if self._last_verdict.get(attempt) == verdict:
             return
-        self._last_verdict[key] = verdict
+        self._last_verdict[attempt] = verdict
         row = TaskEventRow(
-            task_id=key[0],
-            attempt_id=key[1],
+            task_id=attempt.task_id.to_wire(),
+            attempt_id=attempt.attempt_id,
+            attempt_uid=attempt.attempt_uid,
             ts=stats_timestamp(),
             type=event.severity,
             reason=event.reason,
@@ -2009,7 +2068,7 @@ class TaskEventLog:
         except Exception:
             logger.debug("TaskEventLog: write to iris.task_event failed", exc_info=True)
 
-    def retain(self, active: set[tuple[str, int]]) -> None:
+    def retain(self, active: set[RunningTaskEntry]) -> None:
         """Forget verdicts for attempts not in ``active`` (terminal or gone)."""
         for key in list(self._last_verdict):
             if key not in active:
@@ -3034,7 +3093,7 @@ class K8sTaskProvider:
             return []
 
         pods_by_name: dict[str, dict] = {pod.get("metadata", {}).get("name", ""): pod for pod in cached_pods}
-        workloads_by_name = _kueue_workloads_by_name(workloads or [])
+        workload_index = _kueue_workload_index(workloads or [])
         updates: list[TaskUpdate] = []
 
         # Resolve running tasks whose pod has left the active list (completed or
@@ -3058,7 +3117,7 @@ class K8sTaskProvider:
         for entry in running:
             pod_name, pod = self._lookup_entry_pod(pods_by_name, entry)
             cursor_key = f"{entry.task_id.to_wire()}:{entry.attempt_id}"
-            event_key = (entry.task_id.to_wire(), entry.attempt_id)
+            task_key = (entry.task_id.to_wire(), entry.attempt_id)
 
             if pod is None:
                 count = self._pod_not_found_counts.get(cursor_key, 0) + 1
@@ -3091,19 +3150,19 @@ class K8sTaskProvider:
                 continue
 
             self._pod_not_found_counts.pop(cursor_key, None)
-            workload = _workload_for_pod(pod, workloads_by_name)
+            workload = _workload_for_pod(pod, workload_index)
             update = _task_update_from_pod(entry, pod, workload)
             phase = pod.get("status", {}).get("phase", "")
             if phase == "Running":
-                resource_pods[event_key] = pod_name
-                profile_targets[event_key] = _ProfileTarget(
+                resource_pods[task_key] = pod_name
+                profile_targets[task_key] = _ProfileTarget(
                     task_id=entry.task_id.to_wire(),
                     attempt_id=entry.attempt_id,
                     pod_name=pod_name,
                     node_name=pod.get("spec", {}).get("nodeName", "") or "",
                 )
             if event_log is not None:
-                event_log.observe(event_key, _pod_event(pod, workload))
+                event_log.observe(entry, _pod_event(pod, workload))
 
             updates.append(update)
 
@@ -3114,6 +3173,6 @@ class K8sTaskProvider:
         if periodic_profiler is not None:
             periodic_profiler.set_pods(profile_targets)
         if event_log is not None:
-            event_log.retain({(entry.task_id.to_wire(), entry.attempt_id) for entry in running})
+            event_log.retain(set(running))
 
         return updates

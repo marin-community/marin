@@ -11,7 +11,8 @@ same orchestration as the CLI (serve the model once, run evalchemy against the s
 artifact path: an identical (model, evals, limit, version) config is a cache hit, and downstream
 steps can depend on the records like any other artifact.
 
-The step process acts as the orchestrator, so the pipeline must run as an Iris job::
+The step submits an Iris orchestrator job and waits for its records, so the pipeline itself must run
+where it can reach Iris::
 
     uv run iris --cluster marin job run -- python -m experiments.evaluation.pipeline
 
@@ -22,14 +23,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from iris.client import iris_ctx
+from marin.evaluation.hardware import default_platform
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 
 from experiments.evaluation.evals import SUITES
-from experiments.evaluation.hardware import default_platform
-from experiments.evaluation.launch import LaunchSpec, run_inline
-from experiments.evaluation.models import MODELS
+from experiments.evaluation.launch import LaunchSpec, launch_group
+from experiments.evaluation.models import models
 
 
 @dataclass(frozen=True)
@@ -49,14 +51,15 @@ def run_eval_pipeline_step(config: EvalStepConfig) -> None:
     spec = LaunchSpec(
         model=config.model,
         evals=keys,
-        platform=default_platform(MODELS[config.model]),
+        platform=default_platform(models()[config.model]),
         accelerator=config.accelerator,
         limit=config.limit,
         records_prefix=config.records_prefix,
-        cluster="ambient",
+        cluster="marin",
         version=config.version,
     )
-    run_inline(spec)
+    submitted = launch_group(spec, iris_ctx().client)
+    submitted.job.wait(timeout=float("inf"))
 
 
 def eval_step(

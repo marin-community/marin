@@ -9,7 +9,6 @@ import jax
 import jaxtyping
 from haliax import NamedArray
 from haliax import haxtyping as ht
-from haliax.jax_utils import ensure_scalar
 from jax import numpy as jnp
 
 from levanter.inference.page_table import PageBatchInfo, PageTable
@@ -36,17 +35,6 @@ class PackedSequence(eqx.Module):
     slot_ids: ht.i32[NamedArray, "position"]  # local slot ids for each token
     pos_ids: ht.i32[NamedArray, "position"]  # position ids for each token
     num_tokens: jax.Array  # number of tokens in the packed sequence
-
-    def token_counts_per_slot(self, max_slots: int) -> ht.i32[NamedArray, "seq"]:  # type: ignore[name-defined]
-        """
-        Returns the number of tokens per slot in the packed sequence.
-        The result is a vector of size `max_slots`, where each entry corresponds to a slot ID.
-        """
-        raw_slot_ids = self.slot_ids.array
-        weights = jnp.where(jnp.arange(len(raw_slot_ids)) < self.num_tokens, 1, 0)
-        counts = jnp.bincount(raw_slot_ids, weights=weights, length=max_slots)
-
-        return hax.named(counts, axis=("seq",))
 
 
 class SeqDecodingParams(eqx.Module):
@@ -654,27 +642,6 @@ class DecodeState(eqx.Module):
     def kv_pages(self) -> ht.i32[NamedArray, "seq page"]:  # type: ignore[name-defined]
         """KV page assignments per sequence."""
         return self.sequences.kv_pages
-
-    @eqx.filter_jit(donate="all")
-    def invalidate_finished(self) -> "DecodeState":
-        """Invalidate metadata for sequences marked finished by ``finished_mask``.
-
-        - Sets ``seq_lens`` to INVALID for finished slots
-        - Resets ``clone_sources`` to INVALID
-        - Clears ``kv_pages`` rows for finished slots to INVALID
-        """
-        mask = self.finished
-        finished = hax.zeros_like(self.finished)
-        new_sequences = self.sequences.clear_slots(mask)
-        return dataclasses.replace(self, sequences=new_sequences, finished=finished)
-
-    def prng_key_for(self, slot_id: int, pos_id: int) -> jaxtyping.PRNGKeyArray:
-        """
-        Get the PRNG key for the given slot ID and position.
-        This is used to sample new tokens for the given slot ID and position.
-        """
-        per_pos_key = self.prng_keys[ensure_scalar(slot_id)]
-        return jax.random.fold_in(per_pos_key, ensure_scalar(pos_id))
 
     def reserve_slot(self, slot_id: int | jnp.ndarray | None = None) -> tuple["DecodeState", int]:
         sequences, slot = self.sequences.reserve_slot(slot_id)

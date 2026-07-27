@@ -507,9 +507,15 @@ endpoints_table = Table(
     metadata,
     Column("endpoint_id", String, primary_key=True),
     Column("name", String, nullable=False),
+    # job_id/task_id carry no FK to jobs/tasks. A local endpoint's ids reference a
+    # real job (cleaned up explicitly in delete_job, not by CASCADE); an endpoint
+    # absorbed from a federation child (peer_id set, mirrored by
+    # replace_remote_for_peer for a job the parent never received) has ids that name
+    # a job on the child with no row here — the mint path reads only the endpoint row
+    # and parses the owner from the task_id string. See migration 0048.
     Column("address", String, nullable=False),
-    Column("job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE"), nullable=False),
-    Column("task_id", JobNameType, ForeignKey("tasks.task_id", ondelete="CASCADE")),
+    Column("job_id", JobNameType, nullable=False),
+    Column("task_id", JobNameType),
     Column("metadata_json", JSONDict, nullable=False),
     Column("registered_at_ms", TimestampMsType, nullable=False),
     # Lease expiry. Registration grants a lease; re-registering renews it. A row

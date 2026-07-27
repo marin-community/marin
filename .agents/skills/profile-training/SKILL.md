@@ -99,7 +99,7 @@ annotations and make region-level summaries far more actionable.
 
 Reference:
 - `lib/levanter/docs/Performance-Guide.md`
-- `.agents/skills/add-pallas-kernel/`
+- `.agents/skills/add-pallas-kernel/SKILL.md`
 - JAX GPU performance tips:
   <https://docs.jax.dev/en/latest/gpu_performance_tips.html>
 

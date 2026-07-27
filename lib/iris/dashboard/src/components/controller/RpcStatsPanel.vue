@@ -1,59 +1,194 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useStatsRpc } from '@/composables/useRpc'
+import { useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
-import { formatRelativeTime, timestampMs } from '@/utils/formatting'
+import { formatRelativeTime, formatBytes } from '@/utils/formatting'
+import { decodeArrowIpc } from '@/utils/arrow'
 import InfoCard from '@/components/shared/InfoCard.vue'
-import type { GetRpcStatsResponse, RpcCallSample, RpcMethodStats } from '@/types/rpc'
 
-const { data, loading, error, refresh } = useStatsRpc<GetRpcStatsResponse>('GetRpcStats')
-useAutoRefresh(refresh, DEFAULT_REFRESH_MS)
-onMounted(refresh)
+interface TelltaleRow {
+  name?: string
+  value?: number
+  ts?: string
+  service?: string
+  method?: string
+  upstream?: string
+  status?: string
+  le?: string
+  scope?: string
+  endpoint?: string
+  route_kind?: string
+}
 
-type SortKey = 'method' | 'count' | 'errorCount' | 'p50' | 'p95' | 'p99' | 'max' | 'last'
+const METRIC_NAMES = {
+  requests: 'iris_rpc_requests_total',
+  responses: 'iris_rpc_responses_total',
+  inFlight: 'iris_rpc_in_flight',
+  durationBucket: 'iris_rpc_duration_seconds_bucket',
+  durationSum: 'iris_rpc_duration_seconds_sum',
+  durationCount: 'iris_rpc_duration_seconds_count',
+} as const
+
+const PROXY_METRIC_NAMES = {
+  requests: 'iris_proxy_requests_total',
+  responses: 'iris_proxy_responses_total',
+  inFlight: 'iris_proxy_in_flight',
+  durationBucket: 'iris_proxy_duration_seconds_bucket',
+  durationSum: 'iris_proxy_duration_seconds_sum',
+  durationCount: 'iris_proxy_duration_seconds_count',
+  requestBytes: 'iris_proxy_request_bytes_total',
+  responseBytes: 'iris_proxy_response_bytes_total',
+} as const
+
+// Trailing window: only series written in the last hour are shown, so a retired
+// method or a gone endpoint (its last row now older than the window) drops out
+// instead of lingering forever as the latest row for its label set. It also
+// bounds the scan.
+const WINDOW_MS = 60 * 60 * 1000
+
+// Scope to this cluster's own rows. A hub finelog also holds child rows stamped
+// with their origin cluster; local writes leave `cluster` empty/NULL, so this
+// filter shows only the cluster whose dashboard is open (no cross-cluster mixing).
+const LOCAL_CLUSTER_FILTER = "(cluster IS NULL OR cluster = '')"
+
+function windowStartMs(): number {
+  return Date.now() - WINDOW_MS
+}
+
+function statsSql(): string {
+  const names = Object.values(METRIC_NAMES).map((name) => `'${name}'`).join(', ')
+  return `
+SELECT name, value, ts,
+       json_get(labels, 'service') AS service,
+       json_get(labels, 'method') AS method,
+       json_get(labels, 'upstream') AS upstream,
+       json_get(labels, 'status') AS status,
+       json_get(labels, 'le') AS le
+FROM telltale
+WHERE source = 'iris' AND name IN (${names})
+  AND epoch_ms(ts) >= ${windowStartMs()}
+  AND ${LOCAL_CLUSTER_FILTER}
+QUALIFY row_number() OVER (
+  PARTITION BY name, json_get(labels, 'service'), json_get(labels, 'method'),
+               json_get(labels, 'upstream'), json_get(labels, 'status'), json_get(labels, 'le')
+  ORDER BY ts DESC
+) = 1`.trim()
+}
+
+function proxySql(): string {
+  const names = Object.values(PROXY_METRIC_NAMES).map((name) => `'${name}'`).join(', ')
+  return `
+SELECT name, value, ts,
+       json_get(labels, 'scope') AS scope,
+       json_get(labels, 'endpoint') AS endpoint,
+       json_get(labels, 'method') AS method,
+       json_get(labels, 'route_kind') AS route_kind,
+       json_get(labels, 'status') AS status,
+       json_get(labels, 'le') AS le
+FROM telltale
+WHERE source = 'iris' AND name IN (${names})
+  AND epoch_ms(ts) >= ${windowStartMs()}
+  AND ${LOCAL_CLUSTER_FILTER}
+QUALIFY row_number() OVER (
+  PARTITION BY name, json_get(labels, 'scope'), json_get(labels, 'endpoint'),
+               json_get(labels, 'method'), json_get(labels, 'route_kind'),
+               json_get(labels, 'status'), json_get(labels, 'le')
+  ORDER BY ts DESC
+) = 1`.trim()
+}
+
+const { data, loading, error, refresh } = useLogServerStatsRpc<{ arrowIpc?: string }>('Query', () => ({ sql: statsSql() }))
+const { data: proxyData, refresh: refreshProxy } = useLogServerStatsRpc<{ arrowIpc?: string }>('Query', () => ({ sql: proxySql() }))
+function refreshAll() {
+  refresh()
+  refreshProxy()
+}
+useAutoRefresh(refreshAll, DEFAULT_REFRESH_MS)
+onMounted(refreshAll)
+
+type SortKey = 'method' | 'count' | 'errorCount' | 'inFlight' | 'p50' | 'p95' | 'p99' | 'last'
 const sortKey = ref<SortKey>('p95')
 const sortDir = ref<'asc' | 'desc'>('desc')
 const expanded = ref<Set<string>>(new Set())
-const sampleTab = ref<Record<string, 'recent' | 'slow'>>({})
-
-function toNum(value: string | number | undefined): number {
-  if (typeof value === 'number') return value
-  if (typeof value === 'string') return parseInt(value, 10) || 0
-  return 0
-}
 
 interface MethodRow {
   method: string
   count: number
   errorCount: number
+  inFlight: number
   p50: number
   p95: number
   p99: number
-  max: number
   last: number
   buckets: number[]
   bounds: number[]
   totalDurationMs: number
+  durationCount: number
+  bucketSamples: Array<{ bound: number; cumulative: number }>
 }
 
-function toRow(m: RpcMethodStats): MethodRow {
-  return {
-    method: m.method,
-    count: toNum(m.count),
-    errorCount: toNum(m.errorCount),
-    p50: m.p50Ms ?? 0,
-    p95: m.p95Ms ?? 0,
-    p99: m.p99Ms ?? 0,
-    max: m.maxDurationMs ?? 0,
-    last: timestampMs(m.lastCall),
-    buckets: (m.bucketCounts ?? []).map(toNum),
-    bounds: (m.bucketUpperBoundsMs ?? []).map(toNum),
-    totalDurationMs: m.totalDurationMs ?? 0,
+// Proxy transport rows share the histogram machinery (finalizeHistogram, sparkBars)
+// and add endpoint/route-kind identity plus request/response byte volume.
+interface ProxyRow extends MethodRow {
+  endpoint: string
+  routeKind: string
+  requestBytes: number
+  responseBytes: number
+}
+
+function percentileBound(samples: MethodRow['bucketSamples'], count: number, quantile: number): number {
+  if (!count) return 0
+  const target = count * quantile
+  for (const sample of samples) {
+    if (sample.cumulative >= target) return sample.bound
   }
+  return samples.at(-1)?.bound ?? 0
+}
+
+function finalizeHistogram(row: MethodRow): void {
+  row.bucketSamples.sort((a, b) => {
+    if (!a.bound) return 1
+    if (!b.bound) return -1
+    return a.bound - b.bound
+  })
+  let previous = 0
+  for (const sample of row.bucketSamples) {
+    row.bounds.push(sample.bound)
+    row.buckets.push(Math.max(0, sample.cumulative - previous))
+    previous = sample.cumulative
+  }
+  row.p50 = percentileBound(row.bucketSamples, row.durationCount, 0.5)
+  row.p95 = percentileBound(row.bucketSamples, row.durationCount, 0.95)
+  row.p99 = percentileBound(row.bucketSamples, row.durationCount, 0.99)
 }
 
 const rows = computed<MethodRow[]>(() => {
-  const list = (data.value?.methods ?? []).map(toRow)
+  const metrics = decodeArrowIpc(data.value?.arrowIpc).rows as TelltaleRow[]
+  const byMethod = new Map<string, MethodRow>()
+  for (const metric of metrics) {
+    if (!metric.service || !metric.method || !metric.upstream) continue
+    const method = `${metric.service}/${metric.method} (${metric.upstream})`
+    const row = byMethod.get(method) ?? {
+      method, count: 0, errorCount: 0, inFlight: 0, p50: 0, p95: 0, p99: 0, last: 0,
+      buckets: [], bounds: [], totalDurationMs: 0, durationCount: 0, bucketSamples: [],
+    }
+    row.last = Math.max(row.last, new Date(metric.ts ?? 0).getTime())
+    const value = Number(metric.value ?? 0)
+    if (metric.name === METRIC_NAMES.requests) row.count = value
+    if (metric.name === METRIC_NAMES.responses && metric.status !== '200') row.errorCount += value
+    if (metric.name === METRIC_NAMES.inFlight) row.inFlight = value
+    if (metric.name === METRIC_NAMES.durationSum) row.totalDurationMs = value * 1000
+    if (metric.name === METRIC_NAMES.durationCount) row.durationCount = value
+    if (metric.name === METRIC_NAMES.durationBucket) {
+      row.bucketSamples.push({
+        bound: metric.le === '+Inf' ? 0 : Number(metric.le ?? 0) * 1000,
+        cumulative: value,
+      })
+    }
+    byMethod.set(method, row)
+  }
+  const list = [...byMethod.values()]
+  for (const row of list) finalizeHistogram(row)
   const dir = sortDir.value === 'asc' ? 1 : -1
   const key = sortKey.value
   return [...list].sort((a, b) => {
@@ -62,34 +197,74 @@ const rows = computed<MethodRow[]>(() => {
   })
 })
 
-const slowByMethod = computed<Record<string, RpcCallSample[]>>(() => {
-  const out: Record<string, RpcCallSample[]> = {}
-  for (const s of data.value?.slowSamples ?? []) {
-    (out[s.method] ||= []).push(s)
+const TOP_PROXY_ENDPOINTS = 5
+
+function emptyProxyRow(key: string, endpoint: string, routeKind: string): ProxyRow {
+  return {
+    method: key, endpoint, routeKind,
+    count: 0, errorCount: 0, inFlight: 0, p50: 0, p95: 0, p99: 0, last: 0,
+    buckets: [], bounds: [], totalDurationMs: 0, durationCount: 0, bucketSamples: [],
+    requestBytes: 0, responseBytes: 0,
   }
-  for (const k of Object.keys(out)) out[k].reverse()
-  return out
+}
+
+function applyProxySample(row: ProxyRow, metric: TelltaleRow): void {
+  row.last = Math.max(row.last, new Date(metric.ts ?? 0).getTime())
+  const value = Number(metric.value ?? 0)
+  if (metric.name === PROXY_METRIC_NAMES.requests) row.count = value
+  if (metric.name === PROXY_METRIC_NAMES.responses && metric.status !== '200') row.errorCount += value
+  if (metric.name === PROXY_METRIC_NAMES.inFlight) row.inFlight = value
+  if (metric.name === PROXY_METRIC_NAMES.durationSum) row.totalDurationMs = value * 1000
+  if (metric.name === PROXY_METRIC_NAMES.durationCount) row.durationCount = value
+  if (metric.name === PROXY_METRIC_NAMES.requestBytes) row.requestBytes = value
+  if (metric.name === PROXY_METRIC_NAMES.responseBytes) row.responseBytes = value
+  if (metric.name === PROXY_METRIC_NAMES.durationBucket) {
+    row.bucketSamples.push({
+      bound: metric.le === '+Inf' ? 0 : Number(metric.le ?? 0) * 1000,
+      cumulative: value,
+    })
+  }
+}
+
+// scope=total is the exact aggregate over all proxied traffic; scope=endpoint is
+// the bounded per-endpoint breakdown the native proxy emits.
+const proxyParsed = computed<{ total: ProxyRow | null; endpoints: ProxyRow[] }>(() => {
+  const metrics = decodeArrowIpc(proxyData.value?.arrowIpc).rows as TelltaleRow[]
+  let total: ProxyRow | null = null
+  const byEndpoint = new Map<string, ProxyRow>()
+  for (const metric of metrics) {
+    if (metric.scope === 'total') {
+      total = total ?? emptyProxyRow('total', '', '')
+      applyProxySample(total, metric)
+    } else if (metric.scope === 'endpoint' && metric.endpoint) {
+      const routeKind = metric.route_kind ?? ''
+      const key = `${metric.endpoint} ${metric.method ?? ''} ${routeKind}`
+      const row = byEndpoint.get(key) ?? emptyProxyRow(key, metric.endpoint, routeKind)
+      applyProxySample(row, metric)
+      byEndpoint.set(key, row)
+    }
+  }
+  const endpoints = [...byEndpoint.values()]
+  for (const row of endpoints) finalizeHistogram(row)
+  if (total) finalizeHistogram(total)
+  endpoints.sort((a, b) => b.count - a.count)
+  return { total, endpoints }
 })
 
-const discoveryByMethod = computed<Record<string, RpcCallSample[]>>(() => {
-  const out: Record<string, RpcCallSample[]> = {}
-  for (const s of data.value?.discoverySamples ?? []) {
-    (out[s.method] ||= []).push(s)
-  }
-  for (const k of Object.keys(out)) out[k].reverse()
-  return out
-})
+const proxyTotal = computed(() => proxyParsed.value.total)
+const proxyEndpoints = computed(() => proxyParsed.value.endpoints.slice(0, TOP_PROXY_ENDPOINTS))
+const proxyEndpointCount = computed(() => proxyParsed.value.endpoints.length)
 
 const totalCount = computed(() => rows.value.reduce((a, r) => a + r.count, 0))
 const totalErrors = computed(() => rows.value.reduce((a, r) => a + r.errorCount, 0))
-const collectorStartedAt = computed(() => timestampMs(data.value?.collectorStartedAt))
+const totalInFlight = computed(() => rows.value.reduce((a, r) => a + r.inFlight, 0))
+const lastUpdatedAt = computed(() => rows.value.reduce((latest, row) => Math.max(latest, row.last), 0))
 
 function toggleExpand(method: string) {
   const next = new Set(expanded.value)
   if (next.has(method)) next.delete(method)
   else next.add(method)
   expanded.value = next
-  if (!sampleTab.value[method]) sampleTab.value[method] = 'recent'
 }
 
 function setSort(key: SortKey) {
@@ -108,6 +283,11 @@ function fmtMs(value: number): string {
   return (value / 1000).toFixed(value < 10000 ? 2 : 1) + 's'
 }
 
+// Reuse the shared byte formatter; keep the table's em-dash for zero/absent.
+function fmtBytes(value: number): string {
+  return value ? formatBytes(value) : '—'
+}
+
 function fmtBound(ms: number): string {
   if (!ms) return '+∞'
   if (ms < 1000) return `${ms}ms`
@@ -117,15 +297,6 @@ function fmtBound(ms: number): string {
 function fmtSince(epochMs: number): string {
   if (!epochMs) return '—'
   return formatRelativeTime(epochMs)
-}
-
-function prettyPreview(raw: string | undefined): string {
-  if (!raw) return ''
-  try {
-    return JSON.stringify(JSON.parse(raw), null, 2)
-  } catch {
-    return raw
-  }
 }
 
 function methodLabel(method: string): string {
@@ -190,11 +361,7 @@ function errorRate(row: MethodRow): string {
 }
 
 function avgMs(row: MethodRow): number {
-  return row.count ? row.totalDurationMs / row.count : 0
-}
-
-function currentSamples(method: string, tab: 'recent' | 'slow'): RpcCallSample[] {
-  return tab === 'recent' ? (discoveryByMethod.value[method] ?? []) : (slowByMethod.value[method] ?? [])
+  return row.durationCount ? row.totalDurationMs / row.durationCount : 0
 }
 </script>
 
@@ -208,7 +375,7 @@ function currentSamples(method: string, tab: 'recent' | 'slow'): RpcCallSample[]
     </div>
 
     <!-- Summary strip -->
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-2">
       <div class="rounded-lg border border-surface-border bg-surface px-3 py-2">
         <div class="text-[10px] uppercase tracking-wider text-text-muted">Methods</div>
         <div class="font-mono text-lg text-text">{{ rows.length }}</div>
@@ -216,6 +383,10 @@ function currentSamples(method: string, tab: 'recent' | 'slow'): RpcCallSample[]
       <div class="rounded-lg border border-surface-border bg-surface px-3 py-2">
         <div class="text-[10px] uppercase tracking-wider text-text-muted">Calls</div>
         <div class="font-mono text-lg text-text">{{ totalCount.toLocaleString() }}</div>
+      </div>
+      <div class="rounded-lg border border-surface-border bg-surface px-3 py-2">
+        <div class="text-[10px] uppercase tracking-wider text-text-muted">In flight</div>
+        <div class="font-mono text-lg text-text">{{ totalInFlight.toLocaleString() }}</div>
       </div>
       <div class="rounded-lg border border-surface-border bg-surface px-3 py-2">
         <div class="text-[10px] uppercase tracking-wider text-text-muted">Errors</div>
@@ -227,31 +398,31 @@ function currentSamples(method: string, tab: 'recent' | 'slow'): RpcCallSample[]
         </div>
       </div>
       <div class="rounded-lg border border-surface-border bg-surface px-3 py-2">
-        <div class="text-[10px] uppercase tracking-wider text-text-muted">Since</div>
-        <div class="font-mono text-sm text-text pt-1">{{ fmtSince(collectorStartedAt) }}</div>
+        <div class="text-[10px] uppercase tracking-wider text-text-muted">Updated</div>
+        <div class="font-mono text-sm text-text pt-1">{{ fmtSince(lastUpdatedAt) }}</div>
       </div>
     </div>
 
     <InfoCard title="RPC Methods">
       <p class="text-xs text-text-muted mb-3">
-        Per-method counters, latency percentiles, and an inline histogram on a log scale
-        (3 buckets per octave, ≈1 ms → 60 s). Click a row to expand samples.
-        Request previews are redacted server-side for keys naming a secret, such as
-        <code class="font-mono">API_KEY</code>, <code class="font-mono">TOKEN</code>,
-        <code class="font-mono">SECRET</code>, <code class="font-mono">PASSWORD</code> or
-        <code class="font-mono">CREDENTIAL</code>.
+        Native-proxy counters, statuses, in-flight requests, and latency histograms,
+        queried from Telltale snapshots in the controller log server. Counters are
+        lifetime totals for the current native-proxy process and reset when it restarts.
       </p>
 
       <!-- Header -->
       <div
         class="grid items-center gap-x-3 px-2 py-1.5 text-[10px] uppercase tracking-wider text-text-muted border-b border-surface-border"
-        style="grid-template-columns: minmax(0,1fr) 72px 90px 64px 64px 64px 200px 72px"
+        style="grid-template-columns: minmax(0,1fr) 72px 64px 90px 64px 64px 64px 200px 72px"
       >
         <button class="text-left cursor-pointer hover:text-text" @click="setSort('method')">
           Method <span class="text-accent">{{ sortIndicator('method') }}</span>
         </button>
         <button class="text-right cursor-pointer hover:text-text" @click="setSort('count')">
           Count <span class="text-accent">{{ sortIndicator('count') }}</span>
+        </button>
+        <button class="text-right cursor-pointer hover:text-text" @click="setSort('inFlight')">
+          Live <span class="text-accent">{{ sortIndicator('inFlight') }}</span>
         </button>
         <button class="text-right cursor-pointer hover:text-text" @click="setSort('errorCount')">
           Err <span class="text-accent">{{ sortIndicator('errorCount') }}</span>
@@ -280,7 +451,7 @@ function currentSamples(method: string, tab: 'recent' | 'slow'): RpcCallSample[]
         <div v-for="row in rows" :key="row.method">
           <button
             class="w-full grid items-center gap-x-3 px-2 py-2 text-sm text-left hover:bg-surface-raised transition-colors cursor-pointer"
-            style="grid-template-columns: minmax(0,1fr) 72px 90px 64px 64px 64px 200px 72px"
+            style="grid-template-columns: minmax(0,1fr) 72px 64px 90px 64px 64px 64px 200px 72px"
             @click="toggleExpand(row.method)"
           >
             <div class="flex items-center gap-1.5 min-w-0">
@@ -297,6 +468,7 @@ function currentSamples(method: string, tab: 'recent' | 'slow'): RpcCallSample[]
               </div>
             </div>
             <div class="text-right font-mono text-text">{{ row.count.toLocaleString() }}</div>
+            <div class="text-right font-mono text-text-secondary">{{ row.inFlight.toLocaleString() }}</div>
             <div
               class="text-right font-mono"
               :class="row.errorCount > 0 ? 'text-status-danger' : 'text-text-muted'"
@@ -353,8 +525,8 @@ function currentSamples(method: string, tab: 'recent' | 'slow'): RpcCallSample[]
                 <div class="font-mono">{{ fmtMs(avgMs(row)) }}</div>
               </div>
               <div class="border border-surface-border-subtle rounded px-2 py-1.5 bg-surface">
-                <div class="text-[10px] uppercase text-text-muted tracking-wider">max</div>
-                <div class="font-mono">{{ fmtMs(row.max) }}</div>
+                <div class="text-[10px] uppercase text-text-muted tracking-wider">in flight</div>
+                <div class="font-mono">{{ row.inFlight.toLocaleString() }}</div>
               </div>
               <div class="border border-surface-border-subtle rounded px-2 py-1.5 bg-surface">
                 <div class="text-[10px] uppercase text-text-muted tracking-wider">total time</div>
@@ -403,75 +575,97 @@ function currentSamples(method: string, tab: 'recent' | 'slow'): RpcCallSample[]
               </div>
             </div>
 
-            <div>
-              <div class="flex items-center gap-1 mb-2 text-xs">
-                <button
-                  class="px-2 py-1 border-b-2 font-mono uppercase text-[10px] tracking-wider cursor-pointer"
-                  :class="(sampleTab[row.method] ?? 'recent') === 'recent'
-                    ? 'border-accent text-text'
-                    : 'border-transparent text-text-muted hover:text-text'"
-                  @click="sampleTab[row.method] = 'recent'"
-                >Recent · {{ (discoveryByMethod[row.method] ?? []).length }}</button>
-                <button
-                  class="px-2 py-1 border-b-2 font-mono uppercase text-[10px] tracking-wider cursor-pointer"
-                  :class="sampleTab[row.method] === 'slow'
-                    ? 'border-accent text-text'
-                    : 'border-transparent text-text-muted hover:text-text'"
-                  @click="sampleTab[row.method] = 'slow'"
-                >Slow &amp; errors · {{ (slowByMethod[row.method] ?? []).length }}</button>
-              </div>
-
-              <div
-                v-if="!currentSamples(row.method, sampleTab[row.method] ?? 'recent').length"
-                class="text-xs text-text-muted italic py-2"
-              >
-                {{ (sampleTab[row.method] ?? 'recent') === 'slow'
-                  ? 'No slow calls or errors captured for this method.'
-                  : 'No samples captured yet.' }}
-              </div>
-              <ul v-else class="space-y-1.5">
-                <li
-                  v-for="(s, i) in currentSamples(row.method, sampleTab[row.method] ?? 'recent')"
-                  :key="i"
-                  class="border border-surface-border-subtle rounded text-xs bg-surface"
-                >
-                  <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-2 py-1.5">
-                    <span
-                      class="font-mono"
-                      :class="s.errorCode
-                        ? 'text-status-danger'
-                        : ((s.durationMs ?? 0) > 1000 ? 'text-status-warning' : 'text-text')"
-                    >{{ fmtMs(s.durationMs ?? 0) }}</span>
-                    <span v-if="s.errorCode" class="font-mono text-status-danger text-[10px] uppercase">{{ s.errorCode }}</span>
-                    <span class="text-text-muted">{{ fmtSince(timestampMs(s.timestamp)) }}</span>
-                    <span v-if="s.caller" class="text-text-muted">
-                      <span class="text-[10px] uppercase tracking-wider">caller</span>
-                      <span class="font-mono ml-1">{{ s.caller }}</span>
-                    </span>
-                    <span v-if="s.peer" class="text-text-muted">
-                      <span class="text-[10px] uppercase tracking-wider">peer</span>
-                      <span class="font-mono ml-1">{{ s.peer }}</span>
-                    </span>
-                  </div>
-                  <div v-if="s.errorMessage" class="px-2 pb-1.5 font-mono text-status-danger break-all">
-                    {{ s.errorMessage }}
-                  </div>
-                  <details v-if="s.requestPreview" class="px-2 pb-1.5">
-                    <summary class="cursor-pointer text-text-muted text-[10px] uppercase tracking-wider hover:text-text">
-                      request · <span class="normal-case tracking-normal">redacted preview</span>
-                    </summary>
-                    <pre class="mt-1 font-mono text-[11px] whitespace-pre-wrap break-all bg-surface-sunken rounded p-2 border border-surface-border-subtle">{{ prettyPreview(s.requestPreview) }}</pre>
-                    <div v-if="s.userAgent" class="mt-1 text-[10px] text-text-muted">
-                      <span class="uppercase tracking-wider">ua</span>
-                      <span class="font-mono ml-1">{{ s.userAgent }}</span>
-                    </div>
-                  </details>
-                </li>
-              </ul>
-            </div>
           </div>
         </div>
       </div>
+    </InfoCard>
+
+    <InfoCard title="Proxy transport">
+      <p class="text-xs text-text-muted mb-3">
+        Every request the native proxy forwards upstream, not just Iris Connect RPCs.
+        A proxied Connect call is counted here and in RPC Methods above; the two panels
+        measure different things and must not be summed. Totals are exact; the per-endpoint
+        breakdown is bounded to the busiest endpoints in each refresh window.
+      </p>
+
+      <div v-if="!proxyTotal" class="text-sm text-text-muted py-4 text-center">
+        No proxied traffic in the last hour.
+      </div>
+
+      <template v-else>
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
+          <div class="rounded-lg border border-surface-border bg-surface px-3 py-2">
+            <div class="text-[10px] uppercase tracking-wider text-text-muted">Requests</div>
+            <div class="font-mono text-lg text-text">{{ proxyTotal.count.toLocaleString() }}</div>
+          </div>
+          <div class="rounded-lg border border-surface-border bg-surface px-3 py-2">
+            <div class="text-[10px] uppercase tracking-wider text-text-muted">In flight</div>
+            <div class="font-mono text-lg text-text">{{ proxyTotal.inFlight.toLocaleString() }}</div>
+          </div>
+          <div class="rounded-lg border border-surface-border bg-surface px-3 py-2">
+            <div class="text-[10px] uppercase tracking-wider text-text-muted">Req bytes</div>
+            <div class="font-mono text-lg text-text">{{ fmtBytes(proxyTotal.requestBytes) }}</div>
+          </div>
+          <div class="rounded-lg border border-surface-border bg-surface px-3 py-2">
+            <div class="text-[10px] uppercase tracking-wider text-text-muted">Resp bytes</div>
+            <div class="font-mono text-lg text-text">{{ fmtBytes(proxyTotal.responseBytes) }}</div>
+          </div>
+          <div class="rounded-lg border border-surface-border bg-surface px-3 py-2">
+            <div class="text-[10px] uppercase tracking-wider text-text-muted">p95</div>
+            <div class="font-mono text-lg text-text">{{ fmtMs(proxyTotal.p95) }}</div>
+          </div>
+        </div>
+
+        <div class="text-[10px] uppercase tracking-wider text-text-muted mb-1">
+          Top endpoints
+          <span v-if="proxyEndpointCount > proxyEndpoints.length" class="normal-case tracking-normal">
+            ({{ proxyEndpoints.length }} of {{ proxyEndpointCount }} by request count)
+          </span>
+        </div>
+
+        <div v-if="!proxyEndpoints.length" class="text-sm text-text-muted py-3 text-center">
+          No per-endpoint breakdown available.
+        </div>
+
+        <template v-else>
+          <div
+            class="grid items-center gap-x-3 px-2 py-1.5 text-[10px] uppercase tracking-wider text-text-muted border-b border-surface-border"
+            style="grid-template-columns: minmax(0,1fr) 88px 72px 56px 72px 72px 64px 72px"
+          >
+            <div>Endpoint</div>
+            <div class="text-right">Count</div>
+            <div class="text-right">Live</div>
+            <div class="text-right">Err</div>
+            <div class="text-right">Req</div>
+            <div class="text-right">Resp</div>
+            <div class="text-right">p95</div>
+            <div class="text-right">Last</div>
+          </div>
+          <div class="divide-y divide-surface-border">
+            <div
+              v-for="row in proxyEndpoints"
+              :key="row.method"
+              class="grid items-center gap-x-3 px-2 py-2 text-sm"
+              style="grid-template-columns: minmax(0,1fr) 88px 72px 56px 72px 72px 64px 72px"
+            >
+              <div class="min-w-0 truncate">
+                <span class="font-mono text-text">{{ row.endpoint }}</span>
+                <span v-if="row.routeKind" class="font-mono text-[10px] text-text-muted ml-1.5">{{ row.routeKind }}</span>
+              </div>
+              <div class="text-right font-mono text-text">{{ row.count.toLocaleString() }}</div>
+              <div class="text-right font-mono text-text-secondary">{{ row.inFlight.toLocaleString() }}</div>
+              <div
+                class="text-right font-mono"
+                :class="row.errorCount > 0 ? 'text-status-danger' : 'text-text-muted'"
+              >{{ row.errorCount > 0 ? row.errorCount : '—' }}</div>
+              <div class="text-right font-mono text-text-secondary">{{ fmtBytes(row.requestBytes) }}</div>
+              <div class="text-right font-mono text-text-secondary">{{ fmtBytes(row.responseBytes) }}</div>
+              <div class="text-right font-mono text-text">{{ fmtMs(row.p95) }}</div>
+              <div class="text-right font-mono text-text-muted text-xs">{{ fmtSince(row.last) }}</div>
+            </div>
+          </div>
+        </template>
+      </template>
     </InfoCard>
   </div>
 </template>

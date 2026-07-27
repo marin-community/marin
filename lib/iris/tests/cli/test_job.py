@@ -389,6 +389,19 @@ def test_render_job_summary_text_shows_peak_memory():
     assert "OOM" in text
 
 
+def test_render_job_summary_text_shows_active_backend_status():
+    job = _job_pb2.JobStatus(job_id="/u/j", state=_job_pb2.JOB_STATE_RUNNING, task_count=1)
+    task = _job_pb2.TaskStatus(
+        task_id="/u/j/0",
+        state=_job_pb2.TASK_STATE_BUILDING,
+        status_message='Kueue: excluded: resource "memory": 32',
+    )
+
+    text = _render_job_summary_text(build_job_summary(job, [task]))
+
+    assert 'Kueue: excluded: resource "memory": 32' in text
+
+
 # Bulk-action target collection (query→act bridge for kick/stop/kill)
 # ---------------------------------------------------------------------------
 

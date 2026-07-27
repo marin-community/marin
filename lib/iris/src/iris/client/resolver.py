@@ -10,7 +10,7 @@ from iris.client.client import get_iris_ctx
 from iris.cluster.types import Namespace
 from iris.rpc import controller_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
-from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.controller_connect import EndpointServiceClientSync
 
 
 def _rewrite_address_for_host(address: str) -> str:
@@ -53,7 +53,7 @@ class ClusterResolver:
         self._address = controller_address.rstrip("/")
         self._timeout = timeout
         self._explicit_namespace = namespace
-        self._client = ControllerServiceClientSync(
+        self._client = EndpointServiceClientSync(
             address=self._address,
             timeout_ms=int(timeout * 1000),
             accept_compression=IRIS_RPC_COMPRESSIONS,
