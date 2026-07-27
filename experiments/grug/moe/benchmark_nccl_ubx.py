@@ -398,6 +398,7 @@ def inspect_ubx_source(source: Path) -> dict[str, Any]:
         raise RuntimeError("pinned NCCL source does not report version 2.30.7-1")
 
     allocator_source = pinned_file("contrib/nccl_ubx/ubx/allocator.py")
+    nccl_backend_source = pinned_file("contrib/nccl_ubx/ubx/_nccl_backend.py")
     ops_source = pinned_file("contrib/nccl_ubx/ubx/ops.py")
     setup_source = pinned_file("contrib/nccl_ubx/setup.py")
     registry_source = pinned_file("contrib/nccl_ubx/ubx/_api_registry.py")
@@ -416,6 +417,10 @@ def inspect_ubx_source(source: Path) -> dict[str, Any]:
         raise RuntimeError("UB-X extension no longer declares its libnccl link")
     if "RECOMMENDED MoE combine" not in registry_source:
         raise RuntimeError("pinned UB-X source no longer marks combine_push3 as the recommended MoE combine")
+    if "import nccl.bindings as _nccl_bindings" not in nccl_backend_source:
+        raise RuntimeError("pinned UB-X source no longer has the audited nccl.bindings namespace import")
+    if "_nccl_bindings.mem_alloc" not in nccl_backend_source or "_nccl_bindings.mem_free" not in nccl_backend_source:
+        raise RuntimeError("pinned UB-X source no longer has the audited NCCL allocation calls")
 
     return {
         "repository": "https://github.com/NVIDIA/nccl",
@@ -424,6 +429,7 @@ def inspect_ubx_source(source: Path) -> dict[str, Any]:
         "ubx_path": "contrib/nccl_ubx",
         "nccl4py_path": "bindings/nccl4py",
         "required_api": list(required_api),
+        "runtime_adapter": "redirect ubx._nccl_backend._nccl_bindings to nccl.bindings.nccl",
     }
 
 
@@ -492,9 +498,22 @@ def _check_runtime_api(ubx: Any, source: Path) -> dict[str, Any]:
     nccl_linkage = [line.strip() for line in linkage.splitlines() if "libnccl.so" in line]
     if not nccl_linkage or expected_library_root not in nccl_linkage[0]:
         raise RuntimeError(f"UB-X extension must link libnccl from {expected_library_root}; ldd reported {nccl_linkage}")
+
+    # The audited NVIDIA source imports the empty nccl.bindings namespace,
+    # while mem_alloc/mem_free are generated in nccl.bindings.nccl.
+    nccl_backend = importlib.import_module("ubx._nccl_backend")
+    nccl_bindings = importlib.import_module("nccl.bindings.nccl")
+    required_nccl_bindings = ("mem_alloc", "mem_free")
+    missing_nccl_bindings = [name for name in required_nccl_bindings if not hasattr(nccl_bindings, name)]
+    if missing_nccl_bindings:
+        raise RuntimeError(f"installed nccl4py bindings are missing APIs: {missing_nccl_bindings}")
+    nccl_backend._nccl_bindings = nccl_bindings
+
     return {
         "module": required_module_api,
         "allocator": required_allocator_api,
+        "nccl_bindings": required_nccl_bindings,
+        "nccl_binding_adapter": "ubx._nccl_backend._nccl_bindings = nccl.bindings.nccl",
         "combine_signature": str(inspect.signature(ubx.SymmAllocator.combine_push3_bf16_bf16)),
         "package_path": str(package_path),
         "extension_path": str(extension_path),

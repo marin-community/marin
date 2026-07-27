@@ -93,6 +93,14 @@ The benchmark additionally calls `ncclGetVersion` from the loaded library and
 requires runtime version `23007` with exactly the source-built
 `build/lib/libnccl.so.2` mapped into every rank.
 
+The pinned UB-X backend imports the empty `nccl.bindings` namespace even though
+its `mem_alloc` and `mem_free` calls are generated in `nccl.bindings.nccl`.
+This remains unchanged on NVIDIA/nccl `master` and `dev` as of 2026-07-27. The
+gate audits that exact source shape, then redirects only the backend's private
+binding reference to `nccl.bindings.nccl` at runtime. The result JSON records
+this adapter, and the source audit fails if NVIDIA changes the affected import
+or allocation calls.
+
 ## CPU/static preflight
 
 These commands do not initialize CUDA or import PyTorch:
