@@ -16,6 +16,78 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T01:37:00Z — 206,316 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0132-v792` independently
+  revalidated 18 checkpoints containing 2,304 pairs. The model labeled 1,437
+  false positives and 866 true duplicates and left one outcome unresolved.
+  Three pairs used chunked review and 2,301 used direct review. All 4,861
+  judgments and request attempts were valid on their first attempt. The
+  checkpoints and outcome Parquet SHA-256 values are:
+
+  - p0 decision-file 8 offsets 3,328 through 3,968:
+    `081bc0df1e7529e171b529820fa22cc851d2b552abc4e785f3d7d615d91dc22b`,
+    `55de57249d5544a04d24e94e66aca5d68ca6c03c6e513cc80bd1beaacc64c9b9`,
+    `f0f829a4bc36ba32dc52cea64f73ca39ea10a22147333d452e47301e9870d6d2`,
+    `4cf534f1fc12db068f3a140951dd10e2d78fce05ad35d3bc1abb79129e77c470`,
+    `75b42c6efaee4a195e4c5fad9b2ebb20ebea09ac1b3d3c68a32985e42231e579`,
+    and
+    `6f51da04d2cc3b70b147f799e66937d04961274ec43cf329bb4441409de3b3e8`;
+  - p1 decision-file 40 offsets 896 through 1,536:
+    `aa97d14c6b04b1644169a2a8fa55a60c0fa29943f0e96d4d038cefc039613d5b`,
+    `bef6cdeff45756c2a7a2b5be791ae652760ebede46fdd464710ac2dcfd432c29`,
+    `7d4a0fae1919e19ca3e1964beb7408c0072d6b4a067eedbe5c6c14c463c2d5aa`,
+    `4cb695e88498e018d1ecd8cd010256bc05f9aface6a855b65b882f7f371461bd`,
+    `ba5a9b9d4a5936d7977a3efbf1acf841a0a47d1afa3163f90393165926b448b8`,
+    and
+    `c6b0870d130f07eef743075984246a1896d1556969c5719abc61b5567ac80bda`;
+  - p2 decision-file 72 offsets 5,120 through 5,760:
+    `80d95e68fee6d46925068734e3f6fd08b4a356448f66ab81a081e326c55fd7cb`,
+    `e418a6e682c82c3882a752edc4be147ee1a52c3ff4b321fd0213d63a94deaf6f`,
+    `e136b4ef9153ffb885180753dc28a89fabc70f3b096e141d579b8ea302038a44`,
+    `b5943e6958cf32964976d72cc6c2f1217e92f940714322054595494d83849df2`,
+    `0474fa0af8b7dda61695d6aa237d76173f82b5670817ee8e80368e75591e6058`,
+    and
+    `4e76d6db9abb2f80267aaa73e0a1be4987cb69a84fa29d3667fe4258e25ef81c`.
+
+- Complete-text inspection resolves p1 baseline row 1,581 as a false
+  positive. The 20/40-line texts share a spun symbol-copy SEO template, but
+  the member ends with a multiple-choice Unicode question and answer. The
+  canonical instead has two different questions and answers about platform
+  limits and storage. The audit contract treats different requests and
+  answers as distinct training examples despite shared boilerplate.
+  Character, line, and word-sequence similarities are 0.684996, 0.300000, and
+  0.662037. The 1,192/1,354-character member and canonical SHA-256 values are
+  `0b15b6465d2f21cee4dfc39be6df7971a52b7bfa96c46382b3474e20d1b014ce`
+  and
+  `e102ffc8f089cd4d466b0d4432ca5a530812e93ef035b96282fae25a232e0773`.
+  `/rav/datakit-6854-inspect-row1581-0135-v793` persisted the complete pair and
+  diff. `/rav/datakit-6854-publish-row1581-0137-v794` wrote the immutable
+  false-positive record, and `/rav/datakit-6854-verify-row1581-0138-v795`
+  independently reread and verified every input and output. The inspection,
+  semantic-evidence, manual-Parquet, and marker SHA-256 values are
+  `613582f14bfe91a11ceaa916db644454def1fe4f572dcf1890a71d21eea2b1a8`,
+  `1285b599ab476efa46ae8e8fb605d04de5a4f21217496146de9c5dc95582f186`,
+  `a9817bb9b0923136dc5564bd362513b49f1784f6ef70e695204aec8e0715672c`,
+  and
+  `6e16423a584d1c85acae9233268e32c83c59ed1b874edffbd496400f850a788a`.
+
+- Replacing the unresolved outcome with a false positive gives 1,438 false
+  positives and 866 true duplicates in the new batch. Across the stable
+  1,624-checkpoint snapshot, all 243 unresolved model outcomes are covered by
+  186 true-duplicate and 57 false-positive manual records. The adjusted totals
+  are:
+
+  - baseline: 165,998 pairs, 105,541 false positives, 60,457 true duplicates;
+  - treatment: 40,318 pairs, 20,864 false positives, 19,454 true duplicates;
+  - combined: 206,316 pairs, 126,405 false positives, 79,911 true duplicates.
+
+- The next audit frontiers are p0 `(8, 4,096)`, p1 `(40, 1,664)`, p2
+  `(72, 5,888)`, and p3 `(105, 128)`. The p3 checkpoint contains 67,232,439
+  combined characters, 16 oversized pairs, and 844 review units requiring at
+  least 1,688 model requests. All four batch-priority 2-H100 workers remain
+  active.
+
 ### 2026-07-27T01:29:00Z — 204,012 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0051-v772` independently
