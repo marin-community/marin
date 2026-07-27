@@ -2245,3 +2245,36 @@ bash experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit \
   - The allocator propagation gate passes. Launch the unchanged exact vector-copy run as parent
     `/dlwh/iris-run-job-20260727-232350`, requiring `10/10` steps and W&B steps 2-9.
   - Compare its mean MFU with scalar UB-X `19.8996`; only strict mean MFU `>20` completes the performance goal.
+
+### 2026-07-27 16:41 PDT - JAX PJRT selector replaces the ignored TensorFlow allocator knob
+- Exact failure:
+  - Parent `/dlwh/iris-run-job-20260727-232350` and child
+    `/dlwh/iris-run-job-20260727-232350/grug-train-jaxpp-rno2a-ubx-vectorcopy-l24-e64k4-b8192-s4096-p4m256-precompile-asyncpersist-r3-20260727`
+    ran clean commit `ead346bec0`.
+  - All four ranks logged `gpu_allocator=cuda_malloc_async`, initialized UB-X, precompiled
+    `1026/1025/1025/1025` tasks, crossed the barrier, and entered
+    `jit_grug_1f1b_mb0_stage3_loss_backward`.
+  - XLA nevertheless instantiated `GPU_0_bfc` through `GPU_7_bfc` on rank 3 and failed the same
+    `19.51 GiB` allocation before step 1. The W&B run has empty history and remains stale in `running` state.
+  - The babysitter stopped the parent when Iris attempted to rebuild the failed child. Parent and child are
+    terminal `killed`, all tasks are complete, and no resource remains live.
+- Diagnosis:
+  - JAX/JAXlib `0.11.0` constructs GPU PJRT options in `jaxlib.xla_client.generate_pjrt_gpu_plugin_options`.
+    Its supported primary-device selector is `XLA_PYTHON_CLIENT_ALLOCATOR`, with values including
+    `cuda_async`, `vmm`, and `address`.
+  - `TF_GPU_ALLOCATOR=cuda_malloc_async` was present but did not select the PJRT primary-device allocator.
+    Commit `2d272cc25c` forwards and persists `XLA_PYTHON_CLIENT_ALLOCATOR` and logs both allocator variables.
+  - Generated-script, shell-syntax, Python-compile, and outer-launch forwarding probes passed.
+    `./infra/pre-commit.py --changed-files --fix` passed, including Pyrefly.
+- One-H100 allocator gate:
+  - Job `/dlwh/jax-pjrt-cuda-async-allocator-gate-2d272cc2-20260727` ran with
+    `XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async` and memory fraction `0.70`.
+  - PJRT options reported allocator `cuda_async`; `GpuCudaMallocAsyncAllocator` initialized and reserved
+    `59,513,712,445` bytes on an H100 80 GB; a JAX GPU allocation and reduction completed.
+  - No `GPU_0_bfc` appeared. Separate backend, collective, and host pools retained their expected BFC
+    allocators and are not the primary-device pool implicated by the exact OOM.
+  - The job succeeded with exit `0`, no failure or preemption, and no live resource remains.
+- Decision:
+  - Launch one exact vector-copy rerun as parent `/dlwh/iris-run-job-20260727-234035` using the proven PJRT
+    `cuda_async` selector. Require no `GPU_[0-7]_bfc`, all ten steps, and W&B steps 2-9.
+  - Do not repeat the obsolete `TF_GPU_ALLOCATOR` exact command.
