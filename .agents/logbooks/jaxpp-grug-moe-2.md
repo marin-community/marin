@@ -1743,3 +1743,54 @@ torchrun --standalone --nproc-per-node=8 experiments/grug/moe/benchmark_nccl_ubx
   - Balanced routing is unchanged because its upstream expert strides already total `65536` rows.
   - Learned-skew receive storage fell from `524288` rows (`2.5GiB`) to `65536` rows (`320MiB`) per rank. Its UB-X p50 improved from R13's `2.295423985ms` to `1.912575960ms`, and speedup over Ring increased from `2.872630095x` to `3.453068684x`.
   - The compact map is now admitted for the raw JAX FFI gate. Expert compute, gradients, JaxPP scheduling, and end-to-end MFU remain unmeasured.
+
+### 2026-07-27 10:27 PDT - Raw JAX UB-X FFI passes reduced and target EP8 gates
+- Snapshot:
+  - Commit `0db548c68e` contains the one-process/eight-device JAX FFI wrapper and the NVCC pthread-forwarding fix.
+  - Job `/dlwh/jax-ubx-ffi-raw-ep8-r2-20260727` ran on one `H100x8` node in `cw-rno2a` with JAX/JAXlib `0.11.0`, CUDA compiler `13.2.78`, and source-built NCCL commit `db0c814185a0415cc2e23dca387fecb9282de551` (`2.30.7`).
+  - The setup replaced the JAX wheel's `libnccl.so.2` symlink and set `LD_PRELOAD` to the source-built library before importing JAX. JAX enumerated all eight local H100s.
+- Commands after the pinned NCCL build and runtime setup:
+
+```bash
+python experiments/grug/moe/benchmark_jax_ubx_ffi.py \
+  --source-root /tmp/nccl-ubx-db0c814 \
+  --cuda-home /app/.venv/lib/python3.12/site-packages/nvidia/cu13 \
+  --routing balanced \
+  --tokens-per-rank 1024 \
+  --hidden-dim 256 \
+  --warmup 1 \
+  --iterations 3
+
+python experiments/grug/moe/benchmark_jax_ubx_ffi.py \
+  --source-root /tmp/nccl-ubx-db0c814 \
+  --cuda-home /app/.venv/lib/python3.12/site-packages/nvidia/cu13 \
+  --routing balanced \
+  --warmup 2 \
+  --iterations 5
+
+python experiments/grug/moe/benchmark_jax_ubx_ffi.py \
+  --source-root /tmp/nccl-ubx-db0c814 \
+  --cuda-home /app/.venv/lib/python3.12/site-packages/nvidia/cu13 \
+  --routing learned_skew \
+  --warmup 2 \
+  --iterations 5
+```
+
+- Results:
+
+| Case | Local tokens / hidden | Accepted / dropped | Dispatch | Relative L2, cycles 0 / 1 | Two-cycle p50 |
+| --- | ---: | ---: | --- | ---: | ---: |
+| reduced balanced | `1024 / 256` | `32768 / 0` | bitwise exact | `0.0016556691 / 0.0016556691` | `0.557213ms` |
+| target balanced | `16384 / 2560` | `524288 / 0` | bitwise exact | `0.0016590385 / 0.0016590385` | `7.144761ms` |
+| target learned skew | `16384 / 2560` | `417371 / 106917` | bitwise exact | `0.0016589168 / 0.0016589168` | `7.060408ms` |
+
+- Correctness:
+  - All three gates passed the user-approved `0.002` relative-L2 ceiling for the FP32 identity reference on two consecutive dispatch/combine cycles. All outputs were finite.
+  - Learned-skew drops were `[0, 0, 84582, 0, 22335, 0, 0, 0]`, identical to the direct compact gate.
+  - Target symmetric memory was `320MiB` for each dispatch buffer, `320MiB` for each combine buffer, and `1,282MiB` total per GPU.
+- Interpretation:
+  - Raw JAX FFI integration is validated at the target EP8 transport shape. The timing includes two cycles plus the all-gather/FP32 correctness oracle, so it is not a standalone transport benchmark and should not be compared directly with R14's direct PyTorch timing.
+  - The next gate is the custom transport VJP with ordinary expert GMM autodiff. It must retain exact routes/counts/drops and keep floating output, loss, and every gradient leaf at relative L2 `<=0.002`.
+- Terminal state:
+  - Iris reports `succeeded`, exit `0`, one completed task, zero failures, and zero preemptions after `2m30.54s`.
+  - `iris job list --prefix /dlwh/jax-ubx-ffi-raw-ep8-r2-20260727` reports only the terminal job; no live resource remains.
