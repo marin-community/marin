@@ -968,3 +968,19 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
 - Gate:
   - Require all four ranks and 20 finite steps, then compute steps 2-19 mean/p50/p90 MFU and step time.
   - Success is sustained mean MFU strictly above `20.0`. Compare with the exact baseline `18.2583` MFU and `81.037785s`; do not promote a modeled projection.
+
+### 2026-07-27 04:02 PDT - Exact L24 fused path is a hard performance negative
+- Result:
+  - Parent `/dlwh/iris-run-job-20260727-104406`, child, and all four ranks succeeded with exit `0`. The run completed `20/20` iterations and `41,943,040` tokens with no retry, failure, preemption, or live resource.
+  - W&B [exact L24 fused](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-ep2d4-fusedacc-fp8-l24-e64k4-b512-s4096-p4m16-exact-r1-20260727) is `finished` at step 19. Loss declined from `8.410286` to `5.776348`; every retained loss was finite.
+  - Steps 2-19 had mean/p50/p90 MFU `15.9514/16.2516/16.3131`, mean/p50/p90 step time `5.848868/5.721756/6.078428s`, and mean/p50/p90 throughput `359,753/366,522/367,911 tokens/s`. No retained step reached 20 MFU.
+  - Maximum planned task memory was `27.5969/26.5450/26.5451/27.3905 GiB` across ranks 0-3. There was no OOM, compiler, NCCL, DIME, traceback, or watchdog failure.
+- Comparison:
+  - Mean MFU is `2.3069` points (`12.63%`) below the exact `18.2583` baseline and `4.0486` points (`20.24%`) below the target.
+  - Mean throughput is `54,306 tokens/s` (`13.12%`) below the `414,059.1 tokens/s` baseline.
+  - Normalized from batch 512 to the baseline batch 8192, mean step time is `93.581886s`, `12.544101s` (`15.48%`) slower than `81.037785s`.
+- Interpretation:
+  - The exact direct projection of `20.01429` MFU is falsified. It omitted pipeline-level materialization, synchronization, scheduling, or optimizer costs totaling approximately `12.5s` per batch-8192-equivalent step.
+  - Fused FP32 data-local accumulation is a numerical and lifecycle success but a hard end-to-end performance negative at the exact L24 target.
+- Next action:
+  - Profile the exact fused graph and attribute the regression to named stage tasks, collectives, and idle gaps before changing another kernel or topology. Do not tune the fused path without measured evidence.
