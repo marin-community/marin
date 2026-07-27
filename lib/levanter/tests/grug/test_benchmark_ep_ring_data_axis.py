@@ -3,14 +3,21 @@
 
 import pytest
 
+import jax
+
 from experiments.grug.moe.benchmark_ep_ring_data_axis import (
     _BASELINE_MFU,
     _BASELINE_STEP_SECONDS,
+    _FP32_WEIGHT_GRADIENT_OPS,
     _parser,
     _projection,
     _replica_groups,
     _validate_args,
 )
+
+
+def test_fp32_weight_gradient_ops_have_no_dynamic_function_leaves() -> None:
+    assert jax.tree.leaves(_FP32_WEIGHT_GRADIENT_OPS) == []
 
 
 def test_ep_ring_data_axis_defaults_match_target_geometry() -> None:

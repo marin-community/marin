@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -156,23 +157,25 @@ def _local_forward(
     return local_loss[None], output, dropped[None]
 
 
-def _fp32_weight_gradient_ragged_dot(
-    lhs: jax.Array,
-    rhs: jax.Array,
-    group_sizes: jax.Array,
-) -> jax.Array:
-    return ragged_dot(
-        lhs,
-        rhs,
-        group_sizes,
-        implementation="triton",
-        fp32_weight_gradient=True,
-    )
+class _Fp32WeightGradientRaggedDotOp(eqx.Module):
+    def __call__(
+        self,
+        lhs: jax.Array,
+        rhs: jax.Array,
+        group_sizes: jax.Array,
+    ) -> jax.Array:
+        return ragged_dot(
+            lhs,
+            rhs,
+            group_sizes,
+            implementation="triton",
+            fp32_weight_gradient=True,
+        )
 
 
 _FP32_WEIGHT_GRADIENT_OPS = MoeRaggedDotOps(
-    w13=_fp32_weight_gradient_ragged_dot,
-    w2=_fp32_weight_gradient_ragged_dot,
+    w13=_Fp32WeightGradientRaggedDotOp(),
+    w2=_Fp32WeightGradientRaggedDotOp(),
 )
 
 
