@@ -13,6 +13,13 @@ coordinator_port="$2"
 steps="${3:-20}"
 profile_steps="${PROFILE_STEPS:-0}"
 profile_start="${PROFILE_START:-8}"
+clone_sonic_weight_grad="${SCALE_A2A_CLONE_SONIC_WEIGHT_GRAD:-0}"
+clone_weight_grad_block="${SCALE_A2A_CLONE_WEIGHT_GRAD_BLOCK:-512}"
+
+if [[ "$clone_sonic_weight_grad" != "0" && "$clone_sonic_weight_grad" != "1" ]]; then
+  echo "SCALE_A2A_CLONE_SONIC_WEIGHT_GRAD must be 0 or 1" >&2
+  exit 2
+fi
 
 xla_flags=(
   "--xla_gpu_enable_latency_hiding_scheduler=true"
@@ -62,6 +69,8 @@ fi
   -e SCALE_A2A_CLONE_SONIC_SLOT_GATHER 1 \
   -e SCALE_A2A_SONIC_COMBINE 1 \
   -e SCALE_A2A_CLONE_SONIC_CUTE 1 \
+  -e SCALE_A2A_CLONE_SONIC_WEIGHT_GRAD "$clone_sonic_weight_grad" \
+  -e SCALE_A2A_CLONE_WEIGHT_GRAD_BLOCK "$clone_weight_grad_block" \
   -e SCALE_A2A_CLONE_PIPELINE_CHUNKS 2 \
   -e SCALE_QUACK_GROUPED_WGRAD 1 \
   -e SCALE_PROCESSES_PER_TASK 4 \
