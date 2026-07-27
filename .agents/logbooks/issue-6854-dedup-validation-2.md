@@ -16,6 +16,57 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T07:19:20Z — 239,856 pairs verified
+
+- `/rav/rav-datakit-6854-audit-next-checkpoints-0343-v1008`
+  independently revalidated six p3 decision-file 106 checkpoints spanning
+  semantic offsets 3,072 through 3,712. Their 768 baseline pairs contain 411
+  model false positives, 356 model true duplicates, and one unresolved
+  outcome. Four pairs used chunked review and 764 used direct review. All
+  1,850 judgments and request attempts were valid on their first attempt.
+- In checkpoint order, the outcome Parquet SHA-256 values are
+  `aee7a51e1ac6187e27756ecbc97afb134a2b0adf023354264e2b086d25109f67`,
+  `e750b2f84b763562571d808abe36b7b66f3ffeb151a2ffa5ca3a3a563ecb5c18`,
+  `dced2850db417fcb168b22813a62bd8cf2f425b6d3000529937f43026ac66284`,
+  `6bd03b7e0657167144b7c695b175015ee969630054cc4f5c45f61389a0d75441`,
+  `86cb5a1a94a20c21a110d6b2364f05fd4d227c68de272ac721569df67b757257`,
+  and
+  `62affdfd7856d51d75caf1f2be950cbfd20d1b1a5e17084e959d129d31f3c50f`.
+- Complete-text inspection resolves the ambiguity as a true duplicate.
+  `part-00106-of-00128.parquet:5148` compares two 9-line, incoherent
+  art-image SEO records. The title, art keywords, nonsensical count, and image
+  dimensions are substituted slots in the same low-value template; neither
+  record adds a distinct substantive training example. The 809/742-character
+  records have character, line, and word-sequence similarities 0.856222,
+  0.444444, and 0.840278. Member/canonical text SHA-256 values are
+  `59792aba3e7e5d3e1b0c5d48d41902c0f3ef818d353f8acb9c4252c26d99c19d`
+  and
+  `fb07ac98502a4dae67abfe05a5274de3b70b4515ea2b8557d7f4f3ed66b90119`.
+- `/rav/rav-datakit-6854-inspect-row5148-0344-v1009` persisted the complete
+  pair and diff with inspection SHA-256
+  `de89e62d0f08a71c6753c0d5cfb6bb973fb2439ac58ed752e0e6f147872abf96`.
+  `/rav/rav-datakit-6854-publish-row5148-0345-v1010` wrote the immutable
+  true-duplicate record, and
+  `/rav/rav-datakit-6854-verify-row5148-0346-v1011` independently reread the
+  source pair, semantic checkpoint, inspection, deterministic Parquet bytes,
+  and completion marker. The semantic-evidence, manual-Parquet, and marker
+  SHA-256 values are
+  `740de0327b9957b607c39f7e0f5f1454b60d7d210f5422bd425758c0bde4f976`,
+  `d2c04def08f189a76179792e1fce6e68aae2fbd20c7850d23b6f6b970729f202`,
+  and
+  `abcabd85d5b10eb1a55f54bf5604fe149d800e1df75d2c836f8d934b07eaf4aa`.
+- Across the stable 1,888-checkpoint snapshot, all 285 unresolved model
+  outcomes are covered by 220 true-duplicate and 65 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 192,175 pairs, 121,747 false positives, 70,428 true duplicates;
+  - treatment: 47,681 pairs, 24,641 false positives, 23,040 true duplicates;
+  - combined: 239,856 pairs, 146,388 false positives, 93,468 true duplicates.
+
+- The next audit frontiers are p0 `(10, 0)`, p1 `(42, 0)`, p2 `(74, 0)`,
+  and p3 `(106, 3,840)`. All four batch-priority 2-H100 workers remain active
+  with zero Kubernetes restarts.
+
 ### 2026-07-27T06:42:20Z — fixed stratified sample snapshot verified
 
 - A deterministic bottom-hash sample now separates inference from the
