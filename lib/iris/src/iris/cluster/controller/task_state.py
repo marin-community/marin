@@ -59,12 +59,12 @@ class RunningTaskEntry(NamedTuple):
 
 
 class StoppingTaskEntry(NamedTuple):
-    """Direct-provider attempt that must disappear before its task can retry.
+    """Direct-provider attempt that must stop before its task can retry.
 
     Producer transitions move the task out of the active set before Kubernetes
     has necessarily stopped its pod. The K8s backend uses this identity to
-    delete the old pod and reports the attempt stopped only after the pod is
-    absent from the cluster snapshot.
+    delete the old pod and reports the attempt stopped only after the pod
+    leaves the active phase.
     """
 
     task_id: JobName

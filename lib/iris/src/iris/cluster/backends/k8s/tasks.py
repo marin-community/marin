@@ -2482,7 +2482,7 @@ class K8sTaskProvider:
         managed pod whose ``(task_hash, attempt_id)`` is not in the desired
         set (``tasks_to_run`` union ``running_tasks``) is deleted on this tick.
         ``tasks_to_stop`` remains outside that set and is acknowledged only
-        after its pod is absent from the cluster snapshot.
+        after its pod leaves the active phase.
 
         New-pod application runs every tick so dispatch stays responsive; the
         cluster-wide kubectl scans (pod list, stray-pod GC, pod poll, node
@@ -2597,7 +2597,7 @@ class K8sTaskProvider:
         pods_by_name: dict[str, dict],
         entry: RunningTaskEntry | StoppingTaskEntry,
     ) -> tuple[str, dict | None]:
-        """Resolve an attempt entry to its pod, including pre-uid names when safe."""
+        """Resolve an attempt to its pod, allowing pre-uid names only when this process did not dispatch it."""
         return _lookup_pod(
             pods_by_name,
             entry.task_id,
@@ -3212,7 +3212,7 @@ class K8sTaskProvider:
         stopping: list[StoppingTaskEntry],
         cached_pods: list[dict],
     ) -> list[TaskUpdate]:
-        """Confirm controller-stopped attempts after their pods disappear."""
+        """Confirm controller-stopped attempts after their pods leave the active phase."""
         pods_by_name = {pod.get("metadata", {}).get("name", ""): pod for pod in cached_pods}
         updates: list[TaskUpdate] = []
         for entry in stopping:

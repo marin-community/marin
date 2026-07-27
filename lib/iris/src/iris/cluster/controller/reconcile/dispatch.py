@@ -47,7 +47,7 @@ class DispatchBatch:
     Rides on :class:`~iris.cluster.controller.reads.ControlSnapshot` as
     ``tasks_to_run`` / ``running_tasks`` / ``tasks_to_stop``: tasks the
     controller promoted to ASSIGNED this tick, the active null-worker roster
-    to poll, and old attempts that must disappear before a retry.
+    to poll, and old attempts that must stop before a retry.
     """
 
     tasks_to_run: list[job_pb2.RunTaskRequest] = field(default_factory=list)
@@ -267,7 +267,7 @@ def _select_within_cap(
 
 
 def _stopping_tasks(cur: Tx, backend_id: str | None) -> list[StoppingTaskEntry]:
-    """Return current direct-provider attempts waiting for confirmed pod removal."""
+    """Return current direct-provider attempts waiting for confirmed pod stop."""
     backend_pred = () if backend_id is None else (local_tasks.c.backend_id == backend_id,)
     stmt = (
         select(
@@ -325,8 +325,8 @@ def drain_for_dispatch(
 
     Producer transitions move ``tasks.state`` before the old pod has
     necessarily stopped. Those unfinished direct-provider attempts populate
-    ``tasks_to_stop``; retries remain PENDING until the provider confirms pod
-    absence and finalizes the attempt.
+    ``tasks_to_stop``; retries remain PENDING until the provider confirms that
+    the old pod has left the active phase and finalizes the attempt.
 
     Candidates are ranked by *effective* band — the ancestor-resolved requested
     band after :func:`compute_effective_band` demotes over-budget users to
