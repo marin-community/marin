@@ -883,3 +883,21 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - r5 passed the prior materialization and accumulator-sharding boundaries. The new failure is local gradient-tree plumbing, not a repeated sharding mismatch.
 - Next action:
   - Run L4 r6. L8 remains blocked.
+
+### 2026-07-27 03:21 PDT - L4 r6 deadlocks on the materialization transfer chain
+- Launch:
+  - Parent `/dlwh/iris-run-job-20260727-100240` used the unchanged L4 lifecycle configuration with run ID `jaxpp-rno2a-ring-ep2d4-fusedacc-fp8-l4-e64k4-b128-s4096-p4m4-r6-20260727`.
+  - Babysitter `019fa307-01d2-7090-b1fc-3d17ac061dd4` owned the run through terminal cleanup.
+- Result:
+  - All four ranks completed `explicit_mpmd_train_step.lower` and local task compilation. No rank completed the first `eval_local`; the run emitted zero of six training steps and no loss, step-time, or MFU metric.
+  - Two unchanged watchdog samples showed rank 0 in `enqueue_nccl_transfer_group`, rank 1 in `recv_done_impl`, and ranks 2-3 after compiling `apply_task`. GPU utilization was 100% on ranks 0, 2, and 3 and 0% on rank 1, with approximately 59GB allocated per GPU.
+  - No log advanced for more than ten minutes after DIME stream creation. The parent and child were killed, retries were suppressed, and no live resource remains.
+  - W&B [r6](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-ep2d4-fusedacc-fp8-l4-e64k4-b128-s4096-p4m4-r6-20260727) remained stale `running` with config metadata and zero history after forced shutdown.
+- Interpretation:
+  - r6 clears lowering, task compilation, weight materialization sharding, accumulator sharding, and gradient-tree reconstruction. The first execution deadlock is localized to the scalar DIME transfer chain that serializes stage materialization.
+  - That chain was added for Sonic's staged FSDP materialization. Fused Ring already has a local dependency from each stage's materialized parameters into its forward and backward tasks; it does not need a cross-stage scalar token.
+- Fix:
+  - Commit `83cb355895` gives every fused-accumulator stage the local step token and omits only fused Ring's cross-stage completion-token transfers. Sonic retains the serialized chain unchanged.
+  - The focused accumulator, explicit-stage, and pipeline-wire suite reports `58 passed`; changed-file pre-commit including Pyrefly passes.
+- Next action:
+  - Relaunch the unchanged L4 gate as r7. Require six finite steps before the matched L8 ordinary-versus-fused A/B.
