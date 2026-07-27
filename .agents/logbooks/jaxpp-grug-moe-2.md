@@ -729,3 +729,21 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - Do not launch reduced JaxPP or L24 from this result. Stop replicated-expert topology narrowing unless a separate measured kernel change recovers at least `0.58%` end-to-end.
 - Next action:
   - Seal this path as a numerical success and performance negative. Re-rank only independent optimizations with direct evidence at the exact geometry.
+
+### 2026-07-27 01:25 PDT - Launch fused FP32 accumulator gate
+- Hypothesis:
+  - The r19 treatment writes a 1.2GB FP32 W13/W2 gradient and then reads it again for a separate accumulator add on every layer-microbatch.
+  - Adding the prior accumulator inside the Triton weight-gradient epilogue removes approximately 2.4GB of avoidable write/read traffic per GPU. Recovering at least `0.283ms` from the `15.348ms` r19 treatment median is sufficient to compose above 20 MFU.
+- Commit Hash: `d5abcea1ab`.
+- Command:
+  - `uv run iris --config lib/iris/config/cw-rno2a.yaml job run --no-wait --enable-extra-resources --gpu H100x8 --cpu 32 --memory 256GB --disk 128GB --timeout 1800 --max-retries 0 --priority interactive --extra gpu --sync-package marin-levanter --job-name ep-ring-data4-ep2-fused-fp32acc-r20-20260727 -e XLA_PYTHON_CLIENT_MEM_FRACTION 0.70 -e TF_GPU_ALLOCATOR cuda_malloc_async -e HALIAX_RAGGED_DOT_TRITON_BLOCK_K 32 -e HALIAX_RAGGED_DOT_TRITON_NUM_WARPS 8 -- uv run --frozen --package marin-levanter --extra gpu python experiments/grug/moe/benchmark_ep_ring_data_axis.py --microbatch-size 32 --sequence-length 4096 --hidden-dim 2560 --intermediate-dim 1280 --num-experts 64 --top-k 4 --capacity-factor 1.0 --treatment-data-axis-size 4 --warmup 10 --iterations 50 --microbatches-per-step 256 --layers-per-stage 6 --baseline-mfu 18.2583 --baseline-step-seconds 81.037785 --interstage-speedup 1.0179 --promotion-mfu 20.0 --fuse-fp32-weight-gradient-accumulation --output both`
+- Implementation:
+  - The custom VJP returns the ordinary BF16 forward output plus a numerically zero FP32 token. The loss adds the token with coefficient exactly one after current-microbatch normalization.
+  - In backward, the token cotangent scales the prior FP32 accumulator, which the Triton W13/W2 gradient epilogues add to the new FP32 gradient. The enclosing JIT donates both accumulators, and Pallas requests input/output aliasing.
+  - Focused tests report `23 passed, 1 skipped`; changed-file pre-commit including Pyrefly passes. Token scales `0`, `0.25`, `1`, and `2` preserve VJP linearity in the CPU reference test.
+- Promotion gate:
+  - Loss/output and every gradient leaf relative-L2 must be at most `0.002`; drops remain exact.
+  - Local VAG must contain zero data-axis collectives. FP32 reduce-scatter and BF16 all-gather remain step-boundary operations.
+  - The measured direct projection composed with the independently validated `1.0179x` inter-stage FP8 gain must exceed `20.0` MFU before a reduced JaxPP run.
+- Next action:
+  - Babysitter `019fa2ad-61ec-7083-8940-8def207885fa` owns the run through terminal state. If the direct gate passes, test a reduced JaxPP integration before any exact L24 allocation.
