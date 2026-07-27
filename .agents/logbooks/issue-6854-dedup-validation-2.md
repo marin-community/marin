@@ -16,6 +16,93 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T10:31:30Z — 259,763 pairs verified; all 311 ambiguities covered
+
+- `/rav/rav-datakit-6854-reconcile-manual-1029-v1141` independently reread
+  2,045 completed semantic checkpoints, all outcome Parquets, 167 current
+  manual markers, and 313 manual Parquets representing 311 unique review
+  keys. All 311 unresolved model outcomes have one consistent manual label;
+  none are missing. The two extra Parquets remain the documented same-label
+  records for rows 9,034 and 9,204. The immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-1029.json`
+  with SHA-256
+  `65dd026eca318f209ac4cc1a51708769e82c0b341ef99fd34372410f2ba18ed2`.
+- The snapshot covers 259,763 of 755,281 semantic candidates (34.39%).
+  Applying all 311 full-text decisions gives:
+
+  - baseline: 206,683 pairs, 131,183 false positives, and 75,500 true
+    duplicates;
+  - treatment: 53,080 pairs, 27,447 false positives, and 25,633 true
+    duplicates;
+  - combined: 158,630 false positives and 101,133 true duplicates.
+
+- Nine new ambiguities since the 255,180-pair milestone were resolved from
+  complete persisted texts and exact diffs:
+
+  - treatment rows 9,047, 9,079, 9,080, 8,890, 8,917, and 9,205, plus
+    baseline row 7,749, contain the same complete SFT records as their
+    canonicals. Each pair's only changed line is final-answer LaTeX
+    formatting such as `\boxed{B}` versus `\boxed{\text{B}}`. All seven are
+    true duplicates. Their inspection SHA-256 values are
+    `6f26be11ac9198e0c7406464a92fcfe783a7f83ca69ed3138b7900d5f0be37fc`,
+    `03dbcc20c56d0d17de49956e552090c3933d4d77d3da7d8489760ff7cf594e90`,
+    `9019186ca82baf92a6cdb7fbfac38641a27a027d01e44e8d746dce88bc54e7a0`,
+    `503a29013d63f746d0e4787f4e5172c61b6457e514858d9a0b6b825d8e9be756`,
+    `813ae4cb1010a5c8b7864b925a7b05e0fd92a33e15ba2e80aa107573574194c2`,
+    `c73f1421e26f77b377008c55b325603286d1ec07115e20d306f34c155b1f0167`,
+    and
+    `04802be04c8f91332297a660b04171464a1bcca5a41501b139770fa8c5832523`.
+  - treatment row 8,114's two travel paragraphs are represented in the
+    canonical. Its only member-only token is the nonsubstantive label
+    `Foggy`; the canonical additionally contains questions and answers.
+    Deleting the member loses no substantive member content, so it is a true
+    duplicate. Member/canonical text SHA-256 values are
+    `57f122baff35922122c3108e15bee4bd193e66c9ba59709d2e579ce4f052fd3d`
+    and
+    `531a43095659d0c75571e5b4068e696767aa0d197304e9c5504e99260d249017`;
+    inspection SHA-256 is
+    `0b74b5ed765ef28dce17e8153fbbf0049c23cc77d4babd6fa13544e2c8b1a0aa`.
+  - treatment row 8,182 contains the same propositional-logic question,
+    derivations, examples, and conclusions as its canonical. Differences are
+    headings, LaTeX formatting, attribution, and prose consolidation; no
+    substantive member claim is lost. It is a true duplicate.
+    Member/canonical text SHA-256 values are
+    `7de4c695ef8cde593420f1dbd1d8dcb1d851ef59282ca2a015c907e9edbfac68`
+    and
+    `73dcbdb325c81906700444443df9c1c1ab7add8a1f41c4b09473f7c3261a89de`;
+    inspection SHA-256 is
+    `1c08d1f16d274d6a36a482d3ff2f27380bf5c269611868438f7d360a076d95e3`.
+
+- Each decision was written as an immutable, hash-bound Parquet and completion
+  marker, then independently reread from the source pair, semantic evidence,
+  inspection artifact, deterministic Parquet bytes, and marker. All verify-only
+  jobs succeeded. The first row 8,917 publish attempt
+  `/rav/rav-datakit-6854-publish-row8917-0951-v1117` failed closed because its
+  submitted judgment hash was malformed. The corrected exact-hash publish
+  `/rav/rav-datakit-6854-publish-row8917-0952-v1119` and independent verifier
+  `/rav/rav-datakit-6854-verify-row8917-0953-v1121` succeeded; no artifact was
+  written by the failed attempt.
+- The fixed 8,192-pair-per-arm sample was refreshed at the 09:43 checkpoint.
+  `/rav/rav-datakit-6854-verify-stratified-0951-v1118` independently
+  hash-verified the manifest, snapshot, summary, identities, stable fields,
+  and recomputed counts:
+
+  - baseline: 2,854 resolved, 5,338 pending, and zero unresolved; 1,823 false
+    positives and 1,031 true duplicates; observed false-positive fraction
+    0.638753 with Wilson 95% interval `[0.620954, 0.656179]`;
+  - treatment: 2,752 resolved, 5,440 pending, and zero unresolved; 1,397 false
+    positives and 1,355 true duplicates; observed fraction 0.507631 with
+    interval `[0.488955, 0.526286]`.
+
+  The observed baseline-minus-treatment gap is 13.112 percentage points.
+  This remains provisional because the pending fixed-sample rows are
+  source-ordered nonresponse. Snapshot and summary SHA-256 values are
+  `90ffc8992580097274f5e5f2787ebdc85a11c90ddcdcadcbf5b63dd2eea436ba`
+  and
+  `2753320c16025ec848eaa106d826b602238cce0b029b87b279c556c1b80674e2`.
+- The four batch-priority 2-H100 workers remain active. All 12 root, broker,
+  and GPU pods are Ready with zero Kubernetes restarts.
+
 ### 2026-07-27T09:30:05Z — 255,180 pairs verified; all 302 ambiguities covered
 
 - `/rav/rav-datakit-6854-reconcile-manual-0929-v1100` ran:
