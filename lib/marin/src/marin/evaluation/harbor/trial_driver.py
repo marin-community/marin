@@ -23,27 +23,57 @@ import json
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import Protocol
 
 from marin.evaluation.harbor.driver_config import HarborDriverConfig, native_job_config
 
-_ProgressCallback = Callable[[Any], Awaitable[None]]
+
+class _ProgressEvent(Protocol):
+    trial_name: str
+
+
+class _ExceptionInfo(Protocol):
+    exception_type: str
+
+
+class _TrialResult(Protocol):
+    exception_info: _ExceptionInfo | None
+
+
+class _TrialEndedEvent(_ProgressEvent, Protocol):
+    result: _TrialResult
+
+
+_ProgressCallback = Callable[[_ProgressEvent], Awaitable[None]]
+_TrialEndedCallback = Callable[[_TrialEndedEvent], Awaitable[None]]
+
+
+class _ProgressJob(Protocol):
+    def on_trial_started(self, callback: _ProgressCallback) -> object: ...
+
+    def on_environment_started(self, callback: _ProgressCallback) -> object: ...
+
+    def on_agent_started(self, callback: _ProgressCallback) -> object: ...
+
+    def on_verification_started(self, callback: _ProgressCallback) -> object: ...
+
+    def on_trial_ended(self, callback: _TrialEndedCallback) -> object: ...
 
 
 def _progress_callback(status: str) -> _ProgressCallback:
-    async def report(event: Any) -> None:
+    async def report(event: _ProgressEvent) -> None:
         print(f"Harbor trial {event.trial_name}: {status}", flush=True)
 
     return report
 
 
-async def _report_trial_ended(event: Any) -> None:
+async def _report_trial_ended(event: _TrialEndedEvent) -> None:
     exception = event.result.exception_info
     status = f"failed ({exception.exception_type})" if exception is not None else "completed"
     print(f"Harbor trial {event.trial_name}: {status}", flush=True)
 
 
-def _register_progress_callbacks(job: Any) -> None:
+def _register_progress_callbacks(job: _ProgressJob) -> None:
     job.on_trial_started(_progress_callback("started"))
     job.on_environment_started(_progress_callback("environment started"))
     job.on_agent_started(_progress_callback("agent started"))
