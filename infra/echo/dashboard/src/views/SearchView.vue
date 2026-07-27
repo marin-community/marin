@@ -1,15 +1,28 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { fetchJson, formatDate, type ActivityHit, type Result, type WikiHit } from '../types'
 
 type Scope = 'all' | 'activity' | 'wiki'
 type Source = 'all' | 'github' | 'discord'
 
 const PAGE_SIZE = 20
+const DEBOUNCE_MS = 250
+const SCOPES: Scope[] = ['all', 'activity', 'wiki']
+const SOURCES: Source[] = ['all', 'github', 'discord']
 
-const query = ref('')
-const scope = ref<Scope>('all')
-const source = ref<Source>('all')
+const route = useRoute()
+const router = useRouter()
+
+function oneOf<T extends string>(value: unknown, allowed: T[], fallback: T): T {
+  return typeof value === 'string' && (allowed as string[]).includes(value) ? (value as T) : fallback
+}
+
+// Seed from the URL so a shared link, a reload, or the Back button after visiting a result
+// restores the query and filters.
+const query = ref(typeof route.query.q === 'string' ? route.query.q : '')
+const scope = ref<Scope>(oneOf(route.query.scope, SCOPES, 'all'))
+const source = ref<Source>(oneOf(route.query.source, SOURCES, 'all'))
 const results = ref<Result[]>([])
 const loading = ref(false)
 const error = ref('')
@@ -83,6 +96,36 @@ async function search(): Promise<void> {
   }
 }
 
+// Reflect the query and filters in the URL with replace (not push), so incremental typing
+// does not spam history; the seed-on-mount above is what makes Back restore the search.
+function syncUrl(): void {
+  const params: Record<string, string> = {}
+  if (query.value.trim()) params.q = query.value.trim()
+  if (scope.value !== 'all') params.scope = scope.value
+  if (source.value !== 'all') params.source = source.value
+  router.replace({ query: params }).catch(() => {}) // ignore redundant-navigation rejections
+}
+
+function run(): void {
+  syncUrl()
+  search()
+}
+
+let debounceTimer: ReturnType<typeof setTimeout> | undefined
+function debouncedRun(): void {
+  clearTimeout(debounceTimer)
+  debounceTimer = setTimeout(run, DEBOUNCE_MS)
+}
+
+// Typing is debounced; a scope/source change or an explicit submit runs immediately.
+watch(query, debouncedRun)
+watch([scope, source], run)
+
+function submit(): void {
+  clearTimeout(debounceTimer)
+  run()
+}
+
 onMounted(search)
 </script>
 
@@ -98,7 +141,7 @@ onMounted(search)
     </p>
   </section>
 
-  <form class="mt-10 rounded-2xl border border-line bg-white/90 p-3 shadow-card" @submit.prevent="search">
+  <form class="mt-10 rounded-2xl border border-line bg-white/90 p-3 shadow-card" @submit.prevent="submit">
     <div class="flex flex-col gap-3 sm:flex-row">
       <label class="sr-only" for="echo-query">Search Echo</label>
       <input
@@ -125,7 +168,7 @@ onMounted(search)
           class="rounded-md px-3 py-1.5 text-sm capitalize transition"
           :class="scope === option ? 'bg-white font-semibold shadow-sm' : 'text-ink/55 hover:text-ink'"
           type="button"
-          @click="scope = option; search()"
+          @click="scope = option"
         >
           {{ option }}
         </button>
@@ -135,7 +178,6 @@ onMounted(search)
         class="rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink/70 disabled:opacity-40"
         :disabled="scope === 'wiki'"
         aria-label="Activity source"
-        @change="search"
       >
         <option value="all">GitHub + Discord</option>
         <option value="github">GitHub</option>
