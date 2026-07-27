@@ -42,6 +42,7 @@ from marin.execution.lazy import materialized_config
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.ferries import canary_ferry
+from experiments.grug.moe import launch as grug_moe_launch
 from experiments.grug.moe import launch_nested_experts
 from experiments.llama import llama3_tokenizer
 
@@ -312,6 +313,7 @@ def test_nested_moe_launcher_builds_power_ladder(monkeypatch, tmp_path):
     monkeypatch.setenv("NESTED_EVAL_INTERVAL", "2048")
     monkeypatch.setenv("NESTED_EVAL_OFFSETS", "4")
     monkeypatch.setenv("NESTED_SEED", "3")
+    monkeypatch.setenv("NESTED_RESUME_FROM", "s3://test/prior/checkpoints")
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
 
     step = launch_nested_experts.build(version="dev")
@@ -325,6 +327,15 @@ def test_nested_moe_launcher_builds_power_ladder(monkeypatch, tmp_path):
     assert config.eval.steps_per_eval == 2048
     assert config.eval.nested_eval_offsets == 4
     assert config.seed == 3
+    assert config.resume_from == "s3://test/prior/checkpoints"
+
+    dispatched = []
+    monkeypatch.setattr(grug_moe_launch, "run_grug", dispatched.append)
+    grug_moe_launch.run_grug_moe_trial(config)
+
+    trainer = dispatched[0].trainer.trainer
+    assert trainer.load_checkpoint is True
+    assert trainer.load_checkpoint_path == "s3://test/prior/checkpoints"
 
 
 def test_nested_moe_launcher_builds_fresh_optimizer_breakout(monkeypatch, tmp_path):

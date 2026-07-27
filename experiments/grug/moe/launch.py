@@ -103,6 +103,8 @@ class GrugMoeLaunchConfig:
     """Checkpoint base directory to initialize weights from (the latest checkpoint
     under it is loaded). None trains from scratch. Used to chain training phases —
     a midtrain/SFT/RL run points this at the prior phase's ``checkpoints`` directory."""
+    resume_from: str | None = None
+    """Checkpoint directory from a prior run whose full train state should be resumed."""
     nested_init_from: str | None = None
     """E256 checkpoint base directory for a fresh-optimizer nested-model breakout."""
     nested_init_source_model: GrugModelConfig | None = None
@@ -168,6 +170,8 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
         initialize_from=initialize_from,
+        load_checkpoint=True if config.resume_from is not None else None,
+        load_checkpoint_path=config.resume_from,
         checkpointer=config.checkpointer
         or resolve_checkpointer_output_path(
             CheckpointerConfig(save_interval=timedelta(minutes=10), keep=None),

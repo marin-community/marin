@@ -88,15 +88,20 @@ class TimingSummary:
     block_bootstrap_ci95_high: float
 
 
-def _history(run: wandb.apis.public.Run, metric: str) -> list[HistoryPoint]:
-    rows = []
-    for row in run.scan_history(keys=[GLOBAL_STEP_METRIC, metric]):
+def _histories(
+    run: wandb.apis.public.Run,
+    metrics: Mapping[str, str],
+) -> dict[str, list[HistoryPoint]]:
+    histories = {name: [] for name in metrics}
+    for row in run.scan_history():
         step = row.get(GLOBAL_STEP_METRIC)
-        value = row.get(metric)
-        if step is None or value is None:
+        if step is None:
             continue
-        rows.append(HistoryPoint(step=int(step), value=float(value)))
-    return rows
+        for name, metric in metrics.items():
+            value = row.get(metric)
+            if value is not None:
+                histories[name].append(HistoryPoint(step=int(step), value=float(value)))
+    return histories
 
 
 def _summary_number(run: wandb.apis.public.Run, metric: str) -> float:
@@ -386,17 +391,17 @@ def main() -> None:
     projections = {}
 
     for arm, run in runs.items():
-        histories[arm] = {
-            "train_loss": _history(run, TRAIN_LOSS_METRIC),
-            "duration": _history(run, STEP_DURATION_METRIC),
-            "throughput": _history(run, THROUGHPUT_METRIC),
-            "hook": _history(run, HOOK_TIME_METRIC),
-            "loading": _history(run, LOADING_TIME_METRIC),
-            "overflow": _history(run, OVERFLOW_METRIC),
-            "paloma": _history(run, PALOMA_MACRO_METRIC),
+        metric_names = {
+            "train_loss": TRAIN_LOSS_METRIC,
+            "duration": STEP_DURATION_METRIC,
+            "throughput": THROUGHPUT_METRIC,
+            "hook": HOOK_TIME_METRIC,
+            "loading": LOADING_TIME_METRIC,
+            "overflow": OVERFLOW_METRIC,
+            "paloma": PALOMA_MACRO_METRIC,
+            **{f"paloma_e{count}": metric for count, metric in NESTED_PALOMA_METRICS.items()},
         }
-        for count, metric in NESTED_PALOMA_METRICS.items():
-            histories[arm][f"paloma_e{count}"] = _history(run, metric)
+        histories[arm] = _histories(run, metric_names)
         timing = _timing_summary(histories[arm]["duration"])
         timings[arm] = timing
         runtime_models[arm] = _runtime_model(

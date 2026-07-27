@@ -699,3 +699,47 @@ author: Marin research
   offset-zero E128 has lost to standalone at the latest two, while E32, E8,
   and E1 continue to regress. This promotes ladder25 as a possible structured
   regularizer but not yet as evidence for stable breakout checkpoints.
+
+### 2026-07-27 16:50 - 4.295B-token gate and continuation preregistration
+
+- All four arms completed 8,192 updates, final evaluation, and checkpoint
+  commit with no retries or preemptions.
+- Final Paloma macro:
+  - E256 `5.480636`;
+  - E128 `5.455853`;
+  - ladder25 full `5.332881`, E128 `5.679830`, E32 `6.982411`, E8
+    `7.537161`, E1 `7.782655`;
+  - ladder50 full `5.451588`, E128 `5.534664`, E32 `6.745502`, E8
+    `7.631391`, E1 `7.843251`.
+- Ladder25 improved the full-model endpoint by `-0.147755` and lost to the
+  standalone E128 by `+0.223978`. Ladder50 improved the full endpoint by
+  `-0.029048` and lost to E128 by `+0.078812`.
+- Median post-warmup step overhead versus E256 was `+0.832%` for ladder25 and
+  `+0.275%` for ladder50. All terminal overflow rates were below `0.53%`.
+- Interim report:
+  `docs/reports/nested-model-training-interim.md`.
+
+The user requested another 10--20B tokens. The continuation is frozen before
+launch:
+
+- Resume the full model, optimizer, scheduler, and global step from each
+  step-8,192 checkpoint. Do not initialize weights into a fresh optimizer.
+- Continue E256, E128, ladder25, and ladder50 through global step 38,912:
+  30,720 new updates and 16.106B additional tokens per arm, 20.401B total.
+- Keep seed, data stream, batch, precision, capacity, hardware, and every
+  architecture setting unchanged. Use 64 GB200s per arm and 256 total.
+- Evaluate every 8,192 global steps and at termination. Ladder evaluation uses
+  all two E128 offsets plus four evenly spaced offsets at E32, E8, and E1.
+- Continuation gates:
+  - ladder25 median step overhead remains below 10%;
+  - terminal overflow remains below 1%;
+  - ladder25 full-mode Paloma remains no worse than E256 at the terminal
+    checkpoint;
+  - report the median and range across offsets at every small size. E128
+    breakout quality passes only if its median is within `+0.05` of standalone
+    E128.
+- The SlimPajama-6B stream restarts after exhaustion. The extension therefore
+  measures common-data long-horizon behavior and forgetting, not novel-token
+  sample efficiency.
+- Expected pure training time is 1.85 hours. Recompilation, multi-offset
+  evaluation, and checkpointing raise the wall estimate to 2.5--3.0 hours.

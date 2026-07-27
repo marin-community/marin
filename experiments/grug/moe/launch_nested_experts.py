@@ -27,6 +27,7 @@ Optional overrides:
     NESTED_MP           jmp policy (default: bf16 compute)
     NESTED_EVAL_EXPERTS  evaluate a fixed subset without restricting training
     NESTED_INIT_FROM    nested25 checkpoint root (required for breakout25)
+    NESTED_RESUME_FROM  prior checkpoint directory for full-state continuation
     NESTED_EVAL_INTERVAL  optimizer steps between evaluations (default: 100)
     NESTED_EVAL_OFFSETS   evenly spaced expert-subset offsets per ladder level (default: 1)
     NESTED_SEED          training and data seed (default: 0; cooldown: 1)
@@ -223,6 +224,9 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     eval_interval = env_int("NESTED_EVAL_INTERVAL", _PROXY_EVAL_INTERVAL)
     eval_offsets = env_int("NESTED_EVAL_OFFSETS", 1)
     seed = env_int("NESTED_SEED", 1 if phase is _NestedPhase.COOLDOWN else 0)
+    resume_from = os.environ.get("NESTED_RESUME_FROM")
+    if resume_from is not None and arm is NestedArm.BREAKOUT_25:
+        raise ValueError("NESTED_RESUME_FROM is incompatible with breakout25")
 
     total_devices = nodes * _GPUS_PER_NODE
     if total_devices % expert_axis != 0:
@@ -301,6 +305,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
                 nested_eval_offsets=eval_offsets,
             ),
             processes_per_task=1,
+            resume_from=resume_from,
             nested_init_from=nested_init_from,
             nested_init_source_model=nested_init_source_model,
         )
