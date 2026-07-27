@@ -66,6 +66,7 @@ GRUG_MOE_NCCL_EP_DROP_CAPACITY_FACTOR = 1.25
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
 _FP8_EXPERT_GEMM_ALIGNMENT = 128
+_EFFECTFUL_MOE_IMPLEMENTATIONS = ("deepep", "ubx")
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
@@ -1420,7 +1421,7 @@ class TransformerPipelineStage(eqx.Module):
             use_pko=is_long and not self.config.disable_pko,
             disable_rope=is_long and self.config.disable_long_rope,
             remat_mode=self.config.remat_mode,
-            effectful_moe=self.config.moe_implementation == "deepep",
+            effectful_moe=self.config.moe_implementation in _EFFECTFUL_MOE_IMPLEMENTATIONS,
         )
 
     @named_call
@@ -1765,7 +1766,7 @@ class Transformer(eqx.Module):
                 use_pko=use_pko,
                 disable_rope=disable_rope,
                 remat_mode=cfg.remat_mode,
-                effectful_moe=cfg.moe_implementation == "deepep",
+                effectful_moe=cfg.moe_implementation in _EFFECTFUL_MOE_IMPLEMENTATIONS,
             )
             if i in pipeline_stage_end_layers:
                 hidden = _mark_pipeline_stage_end(hidden, layer_index=i)

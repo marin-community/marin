@@ -451,6 +451,39 @@ def _tiny_grouped_last_stage(remat_mode: str, *, top_k: int = 1, moe_implementat
     return mesh, stages[1]
 
 
+@pytest.mark.parametrize(
+    ("moe_implementation", "expected_effectful"),
+    (("ring", False), ("deepep", True), ("ubx", True)),
+)
+def test_pipeline_stage_keeps_effectful_moe_outside_remat(
+    monkeypatch,
+    moe_implementation: str,
+    expected_effectful: bool,
+) -> None:
+    mesh, stage = _tiny_grouped_last_stage("save_moe", moe_implementation=moe_implementation)
+    observed_effectful = []
+
+    def fake_run_block_with_remat(
+        block,
+        hidden,
+        mask,
+        *,
+        use_pko,
+        disable_rope,
+        remat_mode,
+        effectful_moe,
+    ):
+        del block, mask, use_pko, disable_rope, remat_mode
+        observed_effectful.append(effectful_moe)
+        return hidden, {}
+
+    monkeypatch.setattr("experiments.grug.moe.model._run_block_with_remat", fake_run_block_with_remat)
+    with jax.set_mesh(mesh):
+        stage.run_block(0, jnp.zeros((1, 4, 8), dtype=jnp.bfloat16))
+
+    assert observed_effectful == [expected_effectful]
+
+
 def _shard_group_batch(batch: GrugLmExample, mesh: Mesh) -> GrugLmExample:
     token_sharding = NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None))
     return dataclasses.replace(
