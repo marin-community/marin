@@ -1285,3 +1285,22 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - L8 proves two-layer explicit backward compilation and execution. The new boundary is the six-layer local loss/backward graph, not runtime collectives or HBM.
 - Next action:
   - Reduce or outline the six-layer explicit pullback compile graph while preserving the accepted `0.002` floating-tensor policy and exact routing/drop behavior. Require a focused CPU graph/numerical regression before another H100x32 launch; do not rerun the identical command.
+
+### 2026-07-27 07:47 PDT - Late-outlined Ring weight cotangents shrink the six-block graph
+- Hypothesis:
+  - The L24 crash comes from inlining all six blocks' two FP32 expert-weight cotangent custom calls into each stage backward. Keeping only those weight cotangents as reusable late-inline compiler units should reduce the monolithic graph without changing the activation cotangent or broad model numerics.
+- Commit Hash:
+  - `bd153fd5ee` adds `_outlined_accumulating_weight_cotangent` with `jax.jit(..., inline=jax.Inline.XLA_LATE)`. The explicit Ring pullback still evaluates the ordinary backward for its activation cotangent, while each W13/W2 cotangent is emitted through the outlined helper. Dead-code elimination can discard the unused half of each backward call.
+- Local evidence:
+  - A six-block CPU StableHLO probe finds `12` late-inline call sites backed by two reusable private functions.
+  - Main-function StableHLO falls from `12,775` to `12,295` lines (`-3.8%`); whole-module text falls from `1,248,743` to `1,213,634` characters (`-2.8%`).
+  - `88/106` pullback leaves remain bitwise identical. The only changed leaves are the `18` expert-weight gradients across six blocks, and the worst relative-L2 is `0.00191157`, within the user-approved `0.002` ceiling.
+  - A broader whole-pullback outline was rejected locally because router or attention gradients exceeded `0.002`.
+  - `uv run pytest -q tests/test_grug_moe_accumulating_api.py` and `./infra/pre-commit.py --changed-files --fix` pass.
+- Setup-only failed launch:
+  - Parent `/dlwh/iris-run-job-20260727-144335` did not submit a GPU child. The launcher selected its default JaxPP environment with JAX `0.10.1`; import failed because that release has no `jax.Inline.XLA_LATE`.
+  - This is not compiler or numerical evidence about the outlined graph. No GPU allocation, W&B run, or live resource was created.
+- Interpretation:
+  - The narrow outline is locally numerically admissible and measurably reduces the six-block compiler unit. The first remote launch tested the wrong JAX runtime.
+- Next action:
+  - Rerun the three-step L24/b512/m16 compile gate from `bd153fd5ee` with explicit `--jax-nightly-version 0.11.1.dev20260725`. Only a successful four-rank compile/execute gate justifies the exact L24/b8192/m256 run with the same runtime.
