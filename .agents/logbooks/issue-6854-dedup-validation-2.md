@@ -16,6 +16,97 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T14:45:47Z — 283,638 pairs verified; all 335 ambiguities covered
+
+- `/rav/rav-datakit-6854-reconcile-manual-1444-v1289` independently
+  reconciled 2,234 completed semantic checkpoints and all 335 unresolved model
+  outcomes. Every unresolved outcome has a consistent full-text decision;
+  none are missing. The snapshot covers 283,638 of 755,281 semantic
+  candidates (37.55%). Applying the 72 false-positive and 263 true-duplicate
+  manual decisions gives:
+
+  - baseline: 225,607 pairs, 143,261 false positives, and 82,346 true
+    duplicates;
+  - treatment: 58,031 pairs, 30,063 false positives, and 27,968 true
+    duplicates;
+  - combined: 173,324 false positives and 110,314 true duplicates.
+
+  The observed false-positive rates are 63.5002% for baseline and 51.8051%
+  for treatment, a treatment reduction of 11.6952 percentage points. The
+  immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-1444.json`
+  with SHA-256
+  `b8a93cff69d0dc72ba56881780b3f1a4549872c41943862059323d60fc31b0ab`.
+- Complete-text inspection resolves treatment rows 9,302, 9,303, and 9,304
+  as true duplicates. In each pair, the question, options, reasoning,
+  examples, conclusion, and answer are identical. The only changed line is
+  mathematically equivalent LaTeX answer formatting: `\boxed{B}` versus
+  `\boxed{\text{B}}` for rows 9,302 and 9,304, and `\boxed{I}` versus
+  `\boxed{\text{I}}` for row 9,303.
+
+  - row 9,302: 7,844/7,837 characters and 114/114 lines; character, line,
+    and word-sequence similarities 0.999554, 0.991228, and 0.999587;
+  - row 9,303: 4,748/4,741 characters and 74/74 lines; similarities
+    0.999262, 0.986486, and 0.999361;
+  - row 9,304: 5,946/5,939 characters and 64/64 lines; similarities
+    0.999411, 0.984375, and 0.999473.
+
+  The member/canonical/inspection SHA-256 values are:
+
+  - row 9,302:
+    `99b589b3adf91ff7506c48192812fac345121ac1b6ff0c07d9fb4a2f02dbc8ac`,
+    `7b88d6bd8e157e7875d59048aa36977a52910e6a0f0f08f552649432637a79d6`,
+    and
+    `b3302bb4fa5886d37bc3fb8d4600f945fd6049ac378d621bedee731eaca21232`;
+  - row 9,303:
+    `f37a3100903a19457ab4c6f97ef09d0874afd753e5338fd45eabf4a1ec9b4db4`,
+    `77fb9ae283df51c91c8b008a40f4733e7424cf23939044f2c545a140d8f3b912`,
+    and
+    `6ab21c279f86a7a7b3a647c61729b5b6396e8d8eedec1d06b92d690d6e7db221`;
+  - row 9,304:
+    `cc4d04eedd9c344a57c36a70770dfe65fa28d5954561b41bbcdab77d8f6584d6`,
+    `3ec1bc2b87cd551d3eb51a6af90a4f2c13b32414a2879f5a7f7618d758f10925`,
+    and
+    `93f98e463491f0e21f4a1d209fbc2fceeafd526bdbaad593b8f99c101279f60b`.
+
+  `/rav/rav-datakit-6854-publish-row9302-1442-v1282` through
+  `/rav/rav-datakit-6854-publish-row9304-1442-v1284` wrote the immutable
+  decisions, and `/rav/rav-datakit-6854-verify-row9302-1443-v1285` through
+  `/rav/rav-datakit-6854-verify-row9304-1443-v1287` independently reread and
+  verified them. The semantic-outcome SHA-256 is
+  `182651dfb4e52c7ef56f456fb0a81dc7365638f8ffded1659cf3bd3bc5620e21`.
+  In row order, the semantic-judgments, manual-Parquet, and marker SHA-256
+  values are:
+
+  - `a127057897deca87580367e8341f32e7675ceb47e3f643ee9939acce0dcceacf`,
+    `3fcae746e40a1151084b8df1570c18a1af1d10758e82bd52cd4927ebac825829`,
+    and
+    `be9e43c966bd258d3e83049a9f2b19582c70ad25c03467023b9f631fe10dae4c`;
+  - `e0453fec18ea9a73b8be8c744300f3d2bc033ba60bbbd9e3f4f94221f34fa323`,
+    `5cc489db77956f1d29519fabeda7098401ae36567e94ddfc08a7e65d283589a7`,
+    and
+    `72b2d010a683b2f43b79cc4a983f4146a3e4d1dbb57f9b0ad2d9fbb8f0e3f32a`;
+  - `0515115262b73a9e867e04bcff84f105afc975ae8395deacce3a531655c6f878`,
+    `40e8082cc838d027b2a336bc459541bfb83176f508b338ce63dd557b35164c52`,
+    and
+    `df0af809872e2ec3f10923fdf0490eabc121533e64ed9bb83f7ea51145ae7349`.
+- Four independent audit waves re-read and hash-validated the 1,066 newly
+  reconciled pairs:
+
+  - `/rav/rav-datakit-6854-audit-next-checkpoints-1427-v1271` covered 256
+    treatment pairs with 242 model false positives and 14 true duplicates;
+  - `/rav/rav-datakit-6854-audit-next-checkpoints-1431-v1273` covered 384
+    treatment pairs with 113 false positives and 271 true duplicates;
+  - `/rav/rav-datakit-6854-audit-next-checkpoints-1435-v1276` covered 384
+    treatment pairs with 202 false positives and 182 true duplicates;
+  - `/rav/rav-datakit-6854-audit-next-checkpoints-1437-v1277` covered the
+    final 42 pairs in decision file 43, including the three ambiguities above.
+
+  The next independent-audit frontiers are p0 `(12, 0)`, p1 `(44, 0)`,
+  p2 `(76, 0)`, and p3 `(108, 128)`.
+- All four batch-priority 2-H100 jobs continue running, and their 12 root,
+  broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-27T14:26:53Z — 282,572 pairs verified; all 332 ambiguities covered
 
 - `/rav/rav-datakit-6854-reconcile-manual-1425-v1270` independently
