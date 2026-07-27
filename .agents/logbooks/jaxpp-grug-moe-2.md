@@ -1794,3 +1794,55 @@ python experiments/grug/moe/benchmark_jax_ubx_ffi.py \
 - Terminal state:
   - Iris reports `succeeded`, exit `0`, one completed task, zero failures, and zero preemptions after `2m30.54s`.
   - `iris job list --prefix /dlwh/jax-ubx-ffi-raw-ep8-r2-20260727` reports only the terminal job; no live resource remains.
+
+### 2026-07-27 11:36 PDT - Full UB-X MoE value/VJP passes the 0.2% gate
+- Hypothesis:
+  - Exact Ring routing, compact UB-X dispatch/combine, ordinary ragged expert GMM autodiff, and a higher-accuracy FP32 transport reference can retain exact discrete behavior and keep output, loss, and every floating gradient leaf at relative-L2 `<=0.002`.
+- Accepted implementation snapshot: `d1a3ae3d0a` (`[grug] Use FP32 dispatch gradient oracle for UB-X`).
+- Command:
+
+```bash
+uv run iris --config lib/iris/config/cw-rno2a.yaml job run --no-wait \
+  --enable-extra-resources --gpu H100x8 --cpu 64 --memory 256GB --disk 256GB \
+  --timeout 3600 --max-retries 0 --priority interactive \
+  --extra gpu --sync-package marin-levanter \
+  --job-name jax-ubx-moe-vjp-ep8-r9-20260727 -- \
+  bash experiments/grug/moe/run_jax_ubx_moe_gate.sh
+```
+
+- Gate:
+  - One H100x8 node; JAX/JAXlib `0.11.0`; source NCCL `2.30.7` at `db0c814185a0415cc2e23dca387fecb9282de551`.
+  - `256` tokens/rank, hidden `256`, intermediate `384`, `64` experts, top-k `4`, capacity factor `1.0`.
+  - The authoritative reference retains exact Ring routing and the same BF16 expert compute, but uses FP32 combine accumulation and FP32 accepted-route accumulation for the dispatch transpose before the required BF16 activation-cotangent cast.
+  - BF16 Ring versus the FP32 transport reference and UB-X versus BF16 Ring remain diagnostics. They do not determine admission.
+- R9 results:
+
+| Routing | Accepted / dropped | Output | Loss | `combine_weights` | `w13` | `w2` | `x` | Ring / UB-X p50 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| balanced | `8192 / 0` | `7.98684e-06` | `4.75936e-07` | `1.64868e-06` | `7.95831e-05` | `2.57101e-05` | `9.78458e-05` | `0.582724 / 0.769367ms` |
+| learned skew | `6530 / 1662` | `1.71839e-05` | `8.15190e-07` | `2.74031e-06` | `1.13438e-04` | `3.58522e-05` | `7.54258e-05` | `0.631256 / 0.725493ms` |
+
+- Correctness:
+  - Every R9 floating metric passed the fixed `0.002` ceiling. The worst candidate metric was learned-skew `w13` at `0.000113438`, or `0.01134%`.
+  - Balanced routing accepted exactly `8192/8192` assignments with zero drops.
+  - Learned skew accepted `6530/8192` assignments and dropped `1662`; accepted assignments by expert rank were `[623, 884, 1024, 967, 1024, 833, 671, 504]`, and drops were `[0, 0, 1307, 0, 355, 0, 0, 0]`.
+  - BF16 Ring diagnostics remained outside policy: output relative-L2 was `0.00387834` balanced and `0.00371897` learned-skew; gradient maxima were `0.00560889` and `0.00529529`. This is why candidate-versus-FP32 transport is authoritative.
+- Numerical-debug sequence:
+  - R1 failed before execution because the standalone gate omitted the CUDA runtime linker symlink. `d65ba04c35` matched the established launcher bootstrap.
+  - R2 compared UB-X directly with BF16 Ring. Output and gradients differed by `0.00321-0.00481`; this reproduced the already-observed BF16 accumulation disagreement and was not an authoritative candidate failure.
+  - R3 introduced the FP32-combine reference. Output, loss, and combine-weight gradients passed, while expert and activation gradients localized the remaining premature router-weight BF16 cast.
+  - `262c9197cd` multiplies expert-output cotangents by FP32 router weights before the required BF16 cotangent cast. R4 reduced `w13`/`w2` errors from approximately `0.4%` to at most `0.0113%`; only `x` remained above policy.
+  - R5 split PUSH3 into two partial reductions. It regressed `x` and is not retained.
+  - R6-R8 isolated the accepted-route activation-gradient reduction. Learned-skew could pass against BF16 Ring by accumulation-order coincidence, while balanced remained around `0.30%`.
+  - `d1a3ae3d0a` makes FP32 accepted-route accumulation explicit in both the candidate and authoritative reference. The `0.002` threshold was never weakened.
+- Performance:
+  - The reduced full-MoE VJP is latency-bound: UB-X was `32.0%` slower than Ring at balanced p50 and `14.9%` slower for learned skew.
+  - The direct target-shape transport gate remains `3.17-3.45x` faster than Ring. R9 therefore establishes correctness, not target-shape or end-to-end speed.
+- Validation and terminal state:
+  - `uv run pytest lib/levanter/tests/grug/test_ep_ubx.py lib/levanter/tests/grug/test_ep_ubx_maps.py lib/levanter/tests/kernels/ubx/test_transport_ffi.py`: `12 passed`.
+  - A one-device stand-in `shard_map` probe exercised both custom dispatch VJPs and produced identical activation gradients.
+  - `./infra/pre-commit.py --changed-files --fix`: passed.
+  - Iris reports `succeeded`, exit `0`, one completed task, zero failures, zero preemptions, and duration `2m22.9s`. No task remains live.
+- Decision:
+  - Admit the hybrid UB-X backend for the smallest explicit-MPMD JaxPP training gate.
+  - Do not claim a performance win from R9. Scale only after reduced JaxPP compilation, execution, finite loss, and gradient completion succeed.
