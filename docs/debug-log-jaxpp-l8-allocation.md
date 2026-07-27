@@ -60,12 +60,22 @@ JAX `CompiledMemoryStats` under the task name.
   `eval_local`. Separating compilation from execution is sufficient for r10 to
   avoid the prior first-execution OOM despite retaining the same large backward
   executable temporaries.
+- r11 parent `/dlwh/iris-run-job-20260727-053238` extended the same exact graph
+  to 20 steps. Parent, child, and all four ranks succeeded after compiling all
+  `68` tasks; no allocation failure, retry, pod, or workload remained.
+- r11 steps 2-19 measured MFU mean/p50/p90
+  `10.683126/11.088952/11.121371` and duration mean/p50/p90
+  `2.971911/2.845301/3.467565s`. Mean MFU is `33.71%` below the valid
+  group-size-one L8 control at `16.116235`.
+- Precompile/cache therefore resolves the first-execution allocation but does
+  not make this grouped explicit-routing graph a viable performance path.
+  Keep the memory-plan mode opt-in and do not promote the grouped graph to L24.
 - `uv run pytest tests/test_grug_moe_jaxpp_task_validation.py
   tests/test_grug_moe_explicit_stage_task_grouping.py` passes `48/48`.
 
 ## Future work
 
-- [ ] Run a 20-step L8 gate with task precompile/cache enabled and measure
+- [x] Run a 20-step L8 gate with task precompile/cache enabled and measure
       steady-state MFU.
-- [ ] Separate task precompile from verbose memory-plan logging after the
-      throughput gate confirms stable execution.
+- [x] Retain precompile with verbose memory-plan logging as an opt-in debugging
+      path; the throughput gate does not justify a production mode.

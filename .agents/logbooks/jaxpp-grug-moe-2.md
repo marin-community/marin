@@ -489,3 +489,19 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - The diagnostic precompiles and caches every task before `eval_local`; that separation is sufficient to execute the exact graph without changing routes, arithmetic, batch shape, or XLA fraction.
 - Next action:
   - Babysit 20-step parent `/dlwh/iris-run-job-20260727-053238` with the same precompile/cache path. Require finite steady-state MFU before extracting precompile into a non-verbose production mode or running the fixed `0.002` numerical gate.
+
+### 2026-07-26 22:49 PDT - precompile clears the OOM but grouped L8 regresses 33.7%
+- Hypothesis: Precompiling and caching all `68` local tasks will preserve r10's successful execution while recovering the old group-size-two steady-state throughput.
+- Commit Hash: `e96ac89d21`.
+- Command: Parent `/dlwh/iris-run-job-20260727-053238` launched child `/dlwh/iris-run-job-20260727-053238/grug-train-jaxpp-rno2a-ring-explicit-routing-componentgrads-g2-l8-e64k4-b512-s4096-p4m16-precompile-r11-20260727-0532` for 20 steps with the same exact L8/d2560/e64/top-k4/sequence-4096/b512/m16 group-size-two ring/CuTe FA4 graph and XLA fraction `0.70`.
+- Results:
+  - Parent, child, and all four rank tasks succeeded. All `68` tasks compiled, no allocation failure or retry occurred, and no pod or workload remains live.
+  - [W&B](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-explicit-routing-componentgrads-g2-l8-e64k4-b512-s4096-p4m16-precompile-r11-20260727-0532) recorded finite rows for steps 2-19. Loss declined from `8.529188` to `6.293761`.
+  - MFU mean/p50/p90 was `10.683126/11.088952/11.121371`. Step duration mean/p50/p90 was `2.971911/2.845301/3.467565s`.
+  - Mean MFU is `5.433109` points (`33.71%`) below the valid group-size-one L8 control at `16.116235`. It is also `5.053474` points (`32.11%`) below the old numerically invalid group-size-two result at `15.7366`.
+- Interpretation:
+  - Precompile/cache is a functional fix for the first-execution allocation, but the explicit-routing grouped architecture is a hard performance negative. The `11.09` median rules out a few startup or tail outliers as the explanation.
+  - Do not promote this graph to L24 and do not extract precompile as a production optimization. Retain the opt-in memory-plan path for executable attribution and debugging.
+  - The fixed `0.002` loss and per-gradient-leaf relative-L2 acceptance remains available, but a numerical gate cannot rescue a path that is already `33.71%` slower than the valid L8 control.
+- Next action:
+  - Return to the valid group-size-one L24 baseline at `18.2583` mean MFU. Use its existing profile to rank changes capable of closing the remaining `1.7417` MFU-point (`9.54%`) gap before launching another expensive run.
