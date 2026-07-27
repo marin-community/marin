@@ -28,6 +28,7 @@ Optional overrides:
     NESTED_EVAL_EXPERTS  evaluate a fixed subset without restricting training
     NESTED_INIT_FROM    nested25 checkpoint root (required for breakout25)
     NESTED_EVAL_INTERVAL  optimizer steps between evaluations (default: 100)
+    NESTED_EVAL_OFFSETS   evenly spaced expert-subset offsets per ladder level (default: 1)
     NESTED_SEED          training and data seed (default: 0; cooldown: 1)
 """
 
@@ -220,6 +221,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
         default_steps = full_steps
     steps = env_int("NESTED_STEPS", default_steps)
     eval_interval = env_int("NESTED_EVAL_INTERVAL", _PROXY_EVAL_INTERVAL)
+    eval_offsets = env_int("NESTED_EVAL_OFFSETS", 1)
     seed = env_int("NESTED_SEED", 1 if phase is _NestedPhase.COOLDOWN else 0)
 
     total_devices = nodes * _GPUS_PER_NODE
@@ -296,6 +298,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
                 max_eval_batches=1,
                 eval_current=True,
                 eval_ema=False,
+                nested_eval_offsets=eval_offsets,
             ),
             processes_per_task=1,
             nested_init_from=nested_init_from,

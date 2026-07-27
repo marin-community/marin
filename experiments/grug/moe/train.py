@@ -100,6 +100,7 @@ class GrugEvalConfig:
     eval_current: bool = True
     eval_ema: bool = True
     compute_bpb: bool = True
+    nested_eval_offsets: int = 1
 
 
 @dataclass(frozen=True)
@@ -228,6 +229,15 @@ def build_tagged_evaluator(
         axis_mapping=eval_axis_mapping,
         max_examples_per_dataset=max_examples_per_dataset,
     )
+
+
+def nested_evaluation_offsets(num_experts: int, nested_expert_count: int, requested_offsets: int) -> tuple[int, ...]:
+    """Return evenly spaced extractable-subset offsets, capped by the number available."""
+    if requested_offsets <= 0:
+        raise ValueError("nested_eval_offsets must be positive")
+    stride = num_experts // nested_expert_count
+    count = min(requested_offsets, stride)
+    return tuple(index * stride // count for index in range(count))
 
 
 def _compute_flops(
@@ -646,15 +656,23 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 if nested_evaluator is not None:
                     nested_evaluators.append((f"{eval_cfg.prefix}/nested", nested_evaluator))
             for nested_count in config.model.nested_expert_counts:
-                nested_evaluator = build_tagged_evaluator(
-                    data_config=config.data,
-                    max_seq_len=config.model.max_seq_len,
-                    mesh=mesh,
-                    eval_cfg=eval_cfg,
-                    nested_expert_count=nested_count,
+                offsets = nested_evaluation_offsets(
+                    config.model.num_experts,
+                    nested_count,
+                    eval_cfg.nested_eval_offsets,
                 )
-                if nested_evaluator is not None:
-                    nested_evaluators.append((f"{eval_cfg.prefix}/nested_e{nested_count}", nested_evaluator))
+                for offset in offsets:
+                    nested_evaluator = build_tagged_evaluator(
+                        data_config=config.data,
+                        max_seq_len=config.model.max_seq_len,
+                        mesh=mesh,
+                        eval_cfg=eval_cfg,
+                        nested_expert_count=nested_count,
+                        nested_expert_offset=offset,
+                    )
+                    if nested_evaluator is not None:
+                        suffix = "" if offset == 0 else f"_offset{offset}"
+                        nested_evaluators.append((f"{eval_cfg.prefix}/nested_e{nested_count}{suffix}", nested_evaluator))
 
         profiler_cfg = trainer.profiler
         profiler_num_steps = profiler_cfg.resolve_num_profile_steps(num_train_steps=trainer.num_train_steps)

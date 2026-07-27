@@ -310,6 +310,7 @@ def test_nested_moe_launcher_builds_power_ladder(monkeypatch, tmp_path):
     monkeypatch.setenv("NESTED_PHASE", "full")
     monkeypatch.setenv("NESTED_STEPS", "8192")
     monkeypatch.setenv("NESTED_EVAL_INTERVAL", "2048")
+    monkeypatch.setenv("NESTED_EVAL_OFFSETS", "4")
     monkeypatch.setenv("NESTED_SEED", "3")
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
 
@@ -322,6 +323,7 @@ def test_nested_moe_launcher_builds_power_ladder(monkeypatch, tmp_path):
     assert config.model.nested_batch_fraction == 0.25
     assert config.steps == 8192
     assert config.eval.steps_per_eval == 2048
+    assert config.eval.nested_eval_offsets == 4
     assert config.seed == 3
 
 
@@ -690,6 +692,15 @@ def test_grug_moe_power_ladder_rotates_levels_and_subsets():
     assert eligible_counts.tolist() == [4, 8, 2, 8, 1, 8, 4, 8, 2, 8, 1, 8]
     assert np.asarray(eligibility)[0].tolist() == [True, False, True, False, True, False, True, False]
     assert np.asarray(eligibility)[6].tolist() == [False, True, False, True, False, True, False, True]
+
+
+def test_grug_moe_nested_evaluation_samples_evenly_spaced_offsets():
+    train_module = importlib.import_module("experiments.grug.moe.train")
+
+    assert train_module.nested_evaluation_offsets(256, 128, 4) == (0, 1)
+    assert train_module.nested_evaluation_offsets(256, 32, 4) == (0, 2, 4, 6)
+    assert train_module.nested_evaluation_offsets(256, 8, 4) == (0, 8, 16, 24)
+    assert train_module.nested_evaluation_offsets(256, 1, 4) == (0, 64, 128, 192)
 
 
 def test_grug_moe_single_expert_eligibility_has_one_semantic_assignment():

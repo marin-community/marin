@@ -574,3 +574,128 @@ author: Marin research
   second seed of E256 plus the better ladder arm and/or a longer continuation,
   prioritizing replication of the cost ratio. Deadline for termination and
   wrap-up is 2026-07-28 03:31 UTC.
+
+### 2026-07-27 15:42 - Four-arm 4.295B-token wave submitted
+
+- Commit: `25c52f7dd83941a0e5bc851de96fb2081f8cfe6e`.
+- Validation: 12 focused launcher, nesting, extraction, schedule, E1 routing,
+  and lowered-train-step contracts passed. The required changed-file
+  pre-commit checks passed. All four materialized plans contain 8,192 steps,
+  eval interval 2,048, seed 0, full fp32, and the expected arm configuration.
+- Command template:
+  `uv run iris --config lib/iris/config/marin.yaml job run --no-wait
+  --priority batch --job-name <name> -e NESTED_ARM <arm> <common env> --
+  uv run python experiments/grug/moe/launch_nested_experts.py --version
+  2026.07.27 --run`.
+- Canonical coordinator jobs:
+  - `/power/nest-moe-cost-large-r25-coord`;
+  - `/power/nest-moe-cost-small-r25-coord`;
+  - `/power/nest-moe-cost-ladder25-r25-coord`;
+  - `/power/nest-moe-cost-ladder50-r25-coord`.
+- Monitoring state:
+  `scratch/20260727-1542_monitoring_state.json`.
+- Next action: verify federation to 16 four-GPU GB200 workers per arm, inspect
+  compilation and first finite steps, and recover job-level preemptions without
+  changing the preregistered run IDs.
+
+### 2026-07-27 15:49 - Correct regional prefix relaunch
+
+- Result: no GPU workers or W&B runs had started. The first E256 coordinator
+  inherited the main cluster's GCS prefix and began rebuilding the 14GB
+  SlimPajama cache from Hugging Face instead of reusing the existing
+  us-east S3 cache. The other coordinators were still installing dependencies.
+- Action: stopped the four exact `r25` coordinator roots, including the
+  tokenizer descendant, before training allocation. Relaunched the four arms
+  as `r26` coordinators with
+  `MARIN_PREFIX=s3://marin-us-east-02a/marin`. Model run IDs and every
+  preregistered scientific parameter remain unchanged (`cost-r25`).
+- Active coordinator roots:
+  - `/power/nest-moe-cost-large-r26-coord`;
+  - `/power/nest-moe-cost-small-r26-coord`;
+  - `/power/nest-moe-cost-ladder25-r26-coord`;
+  - `/power/nest-moe-cost-ladder50-r26-coord`.
+- Interpretation: this is a launch-boundary correction, not an experimental
+  rerun. No loss, timing, routing, or quality outcome existed to inspect.
+
+### 2026-07-27 15:54 - Explicit CoreWeave federation relaunch
+
+- Result: the `r26` coordinators ran on the main cluster and therefore lacked
+  an AWS credential chain. Ladder25 completed environment setup and failed on
+  `botocore.exceptions.NoCredentialsError` while resolving the S3 artifact
+  records. No accelerator descendants, W&B runs, or optimizer steps existed.
+- Action: stopped all four `r26` roots and relaunched as `r27` through the main
+  Marin controller with `--target-cluster cw-us-east-08a`. The S3 prefix,
+  model run IDs, commit, and scientific configuration are unchanged.
+- Active coordinator roots:
+  - `/power/nest-moe-cost-large-r27-coord`;
+  - `/power/nest-moe-cost-small-r27-coord`;
+  - `/power/nest-moe-cost-ladder25-r27-coord`;
+  - `/power/nest-moe-cost-ladder50-r27-coord`.
+
+### 2026-07-27 16:00 - Long-run training is active
+
+- All four `r27` children reached 16 running tasks with four GB200s per task:
+  64 GB200s per arm and 256 total. Iris reported zero failures and zero
+  preemptions.
+- The first finite W&B observations appeared between steps 119 and 190.
+  Instantaneous throughput was 2.36M--2.43M tokens/s, or 0.216--0.222 seconds
+  per 524,288-token update. At that rate, 8,192 updates require 28.9--30.3
+  minutes of pure optimizer-step time. The end-to-end estimate remains
+  40--55 minutes until the first periodic Paloma evaluation measures its
+  incremental cost.
+- Early capacity overflow ranged from 0.40% to 1.84% and was already declining;
+  this is a stability monitor, not a terminal result. The preregistered gate
+  uses terminal overflow below 1%.
+
+### 2026-07-27 16:10 - First 1.074B-token quality checkpoint
+
+- Paloma macro loss at the common step-2,048 checkpoint:
+  - E256 control: `5.622856`;
+  - E128 control: `5.747447`;
+  - ladder25 full: `5.530346` (`-0.092510` versus E256);
+  - ladder50 full: `5.677487` (`+0.054631` versus E256).
+- Representative ladder25 submodels were E128 `5.709478`, E32 `6.366071`,
+  E8 `7.031826`, and E1 `7.416303`. The E128 representative was `-0.037970`
+  better than the standalone E128 control at common tokens.
+- Representative ladder50 submodels were E128 `5.774388`, E32 `6.365642`,
+  E8 `7.016877`, and E1 `7.173573`.
+- Interpretation: this is the first of four validation checkpoints, not a
+  promotion decision. Ladder25 has the ideal early sign at matched step FLOPs:
+  better full-model validation and a better E128 submodel. Ladder50 again
+  violates the `+0.02` full-model margin.
+
+### 2026-07-27 16:22 - Second 2.147B-token quality checkpoint
+
+- Paloma macro loss at step 4,096:
+  - E256 control: `5.486187`;
+  - E128 control: `5.542410`;
+  - ladder25 full: `5.410714` (`-0.075473` versus E256);
+  - ladder50 full: `5.494916` (`+0.008729` versus E256).
+- Ladder25 representatives were E128 `5.613199`, E32 `6.513178`, E8
+  `7.403059`, and E1 `7.631603`. E128 is now `+0.070789` worse than the
+  standalone E128 control. E32, E8, and E1 all regressed from their step-2,048
+  evaluations despite more total training.
+- Ladder50 representatives were E128 `5.588541`, E32 `6.449406`, E8
+  `7.471175`, and E1 `7.666183`; E128 is `+0.046131` worse than standalone.
+- Interpretation: ladder25's full-model advantage has persisted for two
+  checkpoints, but the smaller representatives do not improve monotonically.
+  Rotating exposure balances the full expert bank while any one extractable
+  coset receives only intermittent small-mode updates and can be overwritten
+  by full-mode updates. Promotion must therefore distinguish structured
+  regularization from the original goal of stable breakout checkpoints.
+
+### 2026-07-27 16:33 - Third 3.221B-token quality checkpoint
+
+- Paloma macro loss at step 6,144:
+  - E256 control: `5.409805`;
+  - E128 control: `5.475025`;
+  - ladder25 full: `5.348059` (`-0.061746` versus E256);
+  - ladder50 full: `5.458055` (`+0.048250` versus E256).
+- Ladder25 representatives were E128 `5.574710` (`+0.099685` versus
+  standalone), E32 `6.672468`, E8 `7.572572`, and E1 `7.977216`.
+- Ladder50 representatives were E128 `5.539650` (`+0.064625` versus
+  standalone), E32 `6.565496`, E8 `7.629114`, and E1 `7.858928`.
+- Ladder25's full model has beaten E256 at all three checkpoints. Its fixed
+  offset-zero E128 has lost to standalone at the latest two, while E32, E8,
+  and E1 continue to regress. This promotes ladder25 as a possible structured
+  regularizer but not yet as evidence for stable breakout checkpoints.
