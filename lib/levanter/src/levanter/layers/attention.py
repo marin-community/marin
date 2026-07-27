@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import functools
+import importlib.util
 import inspect
 import logging
 import math
@@ -23,6 +24,12 @@ from levanter.kernels.pallas.splash_attention import (
     lower_splash_segment_ids,
     splash_attention_block_sizes,
     splash_partition_spec_shard_factor,
+)
+from levanter.grug.attention import (
+    causal_self_attention_lower_bounds,
+    cutlass_cute_available,
+    fa4_cute_attention_forward,
+    fa4_cute_kernel_config_for_gpu,
 )
 from levanter.inference.utils import is_valid
 
@@ -63,26 +70,32 @@ logger = logging.getLogger(__name__)
 
 class AttentionBackend(StrEnum):
     DEFAULT = "default"  # use the default attention type for the accelerator
+    FA4 = "fa4"  # FlashAttention-4 CuTe kernels on NVIDIA GPUs
     NVTE = "nvte"  # with Transformer Engine on NVIDIA GPUs
     SPLASH = "splash"  # on TPU.
     JAX_FLASH = "jax_flash"  # Use the JAX reference implementation
     VANILLA = "vanilla"  # regular dot product attention
 
 
-_SPLASH_FALLBACK_WARNINGS_EMITTED: set[str] = set()
+_FALLBACK_WARNINGS_EMITTED: set[str] = set()
 
 
-def _warn_splash_fallback_once(message: str) -> None:
-    if message in _SPLASH_FALLBACK_WARNINGS_EMITTED:
+def _warn_fallback_once(message: str) -> None:
+    if message in _FALLBACK_WARNINGS_EMITTED:
         return
-    _SPLASH_FALLBACK_WARNINGS_EMITTED.add(message)
+    _FALLBACK_WARNINGS_EMITTED.add(message)
     warnings.warn(message, stacklevel=3)
+
+
+@functools.cache
+def _fa4_installed() -> bool:
+    return importlib.util.find_spec("flash_attn") is not None and importlib.util.find_spec("cutlass") is not None
 
 
 def default_attention_type() -> AttentionBackend:
     accelerator_type = jax.local_devices()[0].platform
     if accelerator_type == "gpu":
-        return AttentionBackend.NVTE
+        return AttentionBackend.FA4
     elif accelerator_type == "tpu":
         return AttentionBackend.SPLASH
     else:
@@ -179,6 +192,27 @@ def dot_product_attention(
     attention_out = None
 
     match attn_backend:
+        case AttentionBackend.FA4:
+            attention_out = _try_fa4_attention(
+                QPos,
+                KPos,
+                Key,
+                query,
+                key,
+                value,
+                mask=mask,
+                bias=bias,
+                dropout=dropout,
+                inference=inference,
+                prng=prng,
+                attention_dtype=attention_dtype,
+                precision=precision,
+                force_fa4=not was_default,
+                scaling_factor=scaling_factor,
+                logits_soft_cap=logits_soft_cap,
+                attn_sink=attn_sink,
+            )
+
         case AttentionBackend.NVTE:
             attention_out = _try_te_attention(
                 QPos,
@@ -412,6 +446,265 @@ def simple_attention_with_dropout(
     return haliax.dot(out, value, axis=KPos)
 
 
+def _try_fa4_attention(
+    QPos: AxisSelector,
+    KPos: AxisSelection,
+    Key: AxisSelector,
+    query: NamedArray,
+    key: NamedArray,
+    value: NamedArray,
+    mask: Optional[Union[NamedArray, "AttentionMask"]] = None,
+    bias: Optional[NamedArray] = None,
+    dropout: float = 0.0,
+    inference: bool = False,
+    *,
+    prng: Optional[PRNGKeyArray] = None,
+    attention_dtype: Optional[jnp.dtype] = None,
+    precision: PrecisionLike = None,
+    force_fa4: bool,
+    scaling_factor: float,
+    logits_soft_cap: Optional[float] = None,
+    attn_sink: Optional[NamedArray] = None,
+):
+    """
+    Try FlashAttention-4/CuTe fused attention. If unsupported, either raise (when forced) or warn once and
+    return None so the caller falls back to the blocked JAX flash attention.
+    """
+    try:
+        return _fa4_attention(
+            QPos,
+            KPos,
+            Key,
+            query,
+            key,
+            value,
+            mask,
+            bias,
+            dropout,
+            inference,
+            prng=prng,
+            attention_dtype=attention_dtype,
+            precision=precision,
+            scaling_factor=scaling_factor,
+            logits_soft_cap=logits_soft_cap,
+            attn_sink=attn_sink,
+        )
+    except ImportError as e:
+        msg = (
+            "FlashAttention-4 attention requires flash-attn-4 and nvidia-cutlass-dsl,"
+            " which ship in the `gpu` extra."
+        )
+        if force_fa4:
+            raise ImportError(msg) from e
+        _warn_fallback_once(f"{msg} Falling back to the reference implementation.")
+        return None
+    except NotImplementedError as e:
+        message = f"Could not use FlashAttention-4 fused attention: {e}"
+        if force_fa4:
+            raise NotImplementedError(message) from e
+        _warn_fallback_once(f"{message} Falling back to the reference implementation.")
+        return None
+
+
+def _fa4_attention(
+    QPos: AxisSelector,
+    KPos: AxisSelection,
+    Key: AxisSelector,
+    query: NamedArray,
+    key: NamedArray,
+    value: NamedArray,
+    mask: Optional[Union[NamedArray, "AttentionMask"]],
+    bias: Optional[NamedArray],
+    dropout: float,
+    inference: bool,
+    *,
+    prng: Optional[PRNGKeyArray],
+    attention_dtype: Optional[jnp.dtype],
+    precision: PrecisionLike,
+    scaling_factor: float,
+    logits_soft_cap: Optional[float],
+    attn_sink: Optional[NamedArray],
+) -> NamedArray:
+    if jax.local_devices()[0].platform != "gpu":
+        raise NotImplementedError("FlashAttention-4 attention requires the JAX GPU backend.")
+    if not _fa4_installed() or not cutlass_cute_available():
+        raise ImportError(
+            "FlashAttention-4 attention requires flash-attn-4 and nvidia-cutlass-dsl (both ship in the `gpu` extra)."
+        )
+    if dropout != 0.0:
+        raise NotImplementedError("FlashAttention-4 attention does not support dropout.")
+    if bias is not None:
+        raise NotImplementedError("FlashAttention-4 attention does not support bias.")
+    if logits_soft_cap is not None:
+        raise NotImplementedError("FlashAttention-4 attention does not support logits_soft_cap.")
+    if attn_sink is not None:
+        raise NotImplementedError("FlashAttention-4 attention does not support attention sinks.")
+    if not isinstance(mask, AttentionMask):
+        raise NotImplementedError("FlashAttention-4 attention requires a causal AttentionMask.")
+    if not mask.is_causal:
+        raise NotImplementedError("FlashAttention-4 attention supports only causal masks.")
+    if mask.causal_offset is not None:
+        raise NotImplementedError("FlashAttention-4 attention does not support causal offsets.")
+    if mask.explicit_mask is not None:
+        raise NotImplementedError("FlashAttention-4 attention does not support explicit masks.")
+    if not isinstance(scaling_factor, (int, float)):
+        raise NotImplementedError("FlashAttention-4 attention requires a static scaling_factor.")
+
+    attention_dtype = attention_dtype or query.dtype
+    if attention_dtype not in (jnp.bfloat16, jnp.float16):
+        raise NotImplementedError(
+            f"FlashAttention-4 attention supports only bfloat16 and float16, got {attention_dtype}."
+        )
+
+    if precision is not None:
+        warnings.warn("precision is not supported for FlashAttention-4 attention. Ignoring.")
+
+    query = query.astype(attention_dtype)
+    key = key.astype(attention_dtype)
+    value = value.astype(attention_dtype)
+
+    q_class, k_class, v_class = _bin_and_group_axes_by_function(query, key, value, QPos, KPos, Key)
+    q_: jax.Array = _reshape_axes_for_bshd_bins(query, q_class).array
+    k_ = _reshape_axes_for_bshd_bins(key, k_class).array
+    v_ = _reshape_axes_for_bshd_bins(value, v_class).array
+
+    B, Sq, Hq, D = q_.shape
+    Bk, Sk, Hk, Dk = k_.shape
+
+    if k_.shape != v_.shape:
+        raise ValueError("k and v must have the same axes")
+    if B != Bk:
+        raise ValueError(f"Batch axes must be the same for q, k, and v: {q_class['B']} != {k_class['B']}")
+    if D != Dk:
+        raise ValueError(f"Embedding axes must be the same for q, k, and v: {q_class['D']} != {k_class['D']}")
+    if Sq != Sk:
+        raise NotImplementedError("FlashAttention-4 attention supports only self-attention (QPos size == KPos size).")
+    if Hq % Hk != 0:
+        raise NotImplementedError(f"FlashAttention-4 attention requires Hq divisible by Hkv, got {Hq} and {Hk}.")
+
+    QPos = query.resolve_axis(QPos)
+    KPos = key.resolve_axis(KPos)
+
+    segment_ids_arr = None
+    if mask.segment_ids is not None:
+        q_segment_ids, kv_segment_ids = mask.segment_ids
+        segment_ids_arr = _segment_ids_to_bs(q_segment_ids.astype(jnp.int32), q_class, QPos)
+        # FA4 is a packed *self*-attention kernel; distinct kv segment ids are only OK if they match.
+        if q_segment_ids is not kv_segment_ids:
+            if QPos.name not in kv_segment_ids.axes and KPos.name in kv_segment_ids.axes:
+                kv_segment_ids = kv_segment_ids.rename({KPos.name: QPos.name})
+            kv_segment_ids_arr = _segment_ids_to_bs(kv_segment_ids.astype(jnp.int32), q_class, QPos)
+            segment_ids_arr = eqx.error_if(
+                segment_ids_arr,
+                jnp.any(segment_ids_arr != kv_segment_ids_arr),
+                "FlashAttention-4 attention requires matching q/kv segment_ids.",
+            )
+        segment_ids_arr = _packed_segment_ids_or_error(segment_ids_arr)
+
+    lower_bounds, valid = causal_self_attention_lower_bounds(
+        segment_ids_arr,
+        batch_size=B,
+        seq_len=Sq,
+        sliding_window=mask.sliding_window,
+    )
+    kernel_config = fa4_cute_kernel_config_for_gpu(D)
+    sm_scale = float(scaling_factor)
+
+    mesh = hax.partitioning._get_mesh()
+    if mesh is None or mesh.empty:
+        attn_output = fa4_cute_attention_forward(
+            q_,
+            k_,
+            v_,
+            lower_bounds,
+            valid,
+            sm_scale=sm_scale,
+            kernel_config=kernel_config,
+        )
+    else:
+        physical_axes_q = _physical_pspec_for_bins(q_class, output_order=("B", "S", "H", "D"))
+        physical_axes_k = _physical_pspec_for_bins(k_class, output_order=("B", "S", "H", "D"))
+        physical_axes_v = _physical_pspec_for_bins(v_class, output_order=("B", "S", "H", "D"))
+        if physical_axes_q[1] is not None or physical_axes_k[1] is not None:
+            raise NotImplementedError("FlashAttention-4 attention does not support sharding the sequence dimension.")
+        metadata_spec = PartitionSpec(physical_axes_q[0], None)
+
+        @functools.partial(
+            shard_map,
+            mesh=mesh,
+            in_specs=(physical_axes_q, physical_axes_k, physical_axes_v, metadata_spec, metadata_spec),
+            out_specs=physical_axes_q,
+            check_rep=False,
+        )
+        def wrap_fa4_attention(q_local, k_local, v_local, lower_bounds_local, valid_local):
+            return fa4_cute_attention_forward(
+                q_local,
+                k_local,
+                v_local,
+                lower_bounds_local,
+                valid_local,
+                sm_scale=sm_scale,
+                kernel_config=kernel_config,
+            )
+
+        attn_output = wrap_fa4_attention(q_, k_, v_, lower_bounds, valid)
+
+    attn_output = haliax.named(attn_output, ("B", "S", "H", "D"))
+    attn_output = _unflatten_bshd(attn_output, q_class, v_class)
+
+    with haliax.axis_mapping({}):
+        reference_out_shape = eqx.filter_eval_shape(
+            simple_attention_with_dropout,
+            QPos,
+            KPos,
+            Key,
+            query,
+            key,
+            value,
+            mask,
+            bias,
+            inference,
+            dropout,
+            attention_dtype,
+            precision,
+            prng=prng,
+        )
+    attn_output = attn_output.rearrange(reference_out_shape.axes).astype(reference_out_shape.dtype)
+
+    return haliax.shard(attn_output)
+
+
+def _packed_segment_ids_or_error(segment_ids: jax.Array) -> jax.Array:
+    """Runtime-assert that each segment id forms a single contiguous run per row.
+
+    The FA4 lower-bound metadata can only express contiguous packed segments, while the
+    `AttentionMask` segment contract is plain id equality. A segment id repeated in
+    non-adjacent runs (e.g. ``[0, 1, 0]``) would silently change attention semantics,
+    so it must fail loudly instead.
+    """
+    previous = jnp.concatenate([segment_ids[:, :1] - 1, segment_ids[:, :-1]], axis=1)
+    num_runs = jnp.sum(segment_ids != previous, axis=1)
+    sorted_ids = jnp.sort(segment_ids, axis=1)
+    previous_sorted = jnp.concatenate([sorted_ids[:, :1] - 1, sorted_ids[:, :-1]], axis=1)
+    num_distinct = jnp.sum(sorted_ids != previous_sorted, axis=1)
+    return eqx.error_if(
+        segment_ids,
+        jnp.any(num_runs != num_distinct),
+        "FlashAttention-4 attention requires packed segment_ids (each id in one contiguous run). "
+        "Pass attn_backend=jax_flash for non-packed segment masks.",
+    )
+
+
+def _segment_ids_to_bs(segment_ids: NamedArray, q_class: dict, Pos: Axis) -> jax.Array:
+    """Broadcast segment ids over the mask's batch axes and flatten to a (B, S) array."""
+    batch_axes = tuple(q_class["B"])
+    for ax in batch_axes:
+        if ax.name not in segment_ids.axes:
+            segment_ids = segment_ids.broadcast_axis(ax)
+    segment_ids = _maybe_flatten(segment_ids, batch_axes, "B")
+    return segment_ids.rearrange(("B", Pos)).array
+
+
 def _try_te_attention(
     QPos: AxisSelector,
     KPos: AxisSelection,
@@ -590,18 +883,8 @@ def _te_flash_attention(
     segment_ids_for_te = None
     if isinstance(mask, AttentionMask) and mask.segment_ids is not None:
         q_segment_ids, kv_segment_ids = map(lambda x: x.astype(jnp.int32), mask.segment_ids)
-
-        batch_axes = tuple(q_class["B"])
-        for ax in batch_axes:
-            if ax.name not in q_segment_ids.axes:
-                q_segment_ids = q_segment_ids.broadcast_axis(ax)
-            if ax.name not in kv_segment_ids.axes:
-                kv_segment_ids = kv_segment_ids.broadcast_axis(ax)
-
-        q_seg_reshaped = _maybe_flatten(q_segment_ids, batch_axes, "B")
-        q_seg_reshaped = q_seg_reshaped.rearrange(("B", QPos)).array
-        kv_seg_reshaped = _maybe_flatten(kv_segment_ids, batch_axes, "B")
-        kv_seg_reshaped = kv_seg_reshaped.rearrange(("B", KPos)).array
+        q_seg_reshaped = _segment_ids_to_bs(q_segment_ids, q_class, QPos)
+        kv_seg_reshaped = _segment_ids_to_bs(kv_segment_ids, q_class, KPos)
         segment_ids_for_te = (q_seg_reshaped, kv_seg_reshaped)
 
     sequence_descriptor = SequenceDescriptor.from_seqlens((q_seqlens, kv_seqlens), segment_ids=segment_ids_for_te)
@@ -783,6 +1066,27 @@ def _reshape_axes_for_bshd_bins(q, q_class, output_order=("B", "S", "H", "D")):
     return q
 
 
+def _physical_pspec_for_bins(d, output_order: tuple[str, ...]) -> PartitionSpec:
+    """Map BSHD axis bins to a physical PartitionSpec via the ambient axis mapping."""
+
+    def flatten(axes):
+        if axes is None:
+            return axes
+        result = []
+        for ax in axes:
+            if isinstance(ax, tuple):
+                result += list(ax)
+            else:
+                result.append(ax)
+        return tuple(result)
+
+    outs = {
+        name: flatten(tuple(ax for ax in pspec_for_axis(d[name]) if ax is not None) or None)
+        for name in ("B", "S", "H", "D")
+    }
+    return PartitionSpec(*(outs[name] for name in output_order))
+
+
 def _prepare_sinks_for_splash(attn_sink: NamedArray, q_class, physical_axes_q: PartitionSpec):
     """Reshape and broadcast attention sinks to (B, H) for the splash kernel."""
 
@@ -856,13 +1160,13 @@ def _try_tpu_splash_attention(
     if dropout != 0.0:
         if force_flash:
             raise NotImplementedError("Splash attention does not support dropout.")
-        _warn_splash_fallback_once("Splash attention does not support dropout. Falling back to the reference.")
+        _warn_fallback_once("Splash attention does not support dropout. Falling back to the reference.")
         return None
 
     if bias is not None:
         if force_flash:
             raise NotImplementedError("Splash attention does not support bias.")
-        _warn_splash_fallback_once("Splash attention does not support bias. Falling back to the reference.")
+        _warn_fallback_once("Splash attention does not support bias. Falling back to the reference.")
         return None
 
     try:
@@ -890,7 +1194,7 @@ def _try_tpu_splash_attention(
             raise
         if force_flash:
             raise ImportError("Could not import splash attention. You need to update your JAX to at least 0.7.2.")
-        _warn_splash_fallback_once(
+        _warn_fallback_once(
             "Could not import splash attention. You need to update your JAX to at least 0.7.2. "
             "Falling back to the reference implementation.",
         )
@@ -900,7 +1204,7 @@ def _try_tpu_splash_attention(
         if force_flash:
             raise NotImplementedError(f"Could not use splash attention: {message}")
         logger.info("Could not use splash attention. Falling back to the reference implementation: %s", message)
-        _warn_splash_fallback_once("Could not use splash attention. Falling back to the reference implementation.")
+        _warn_fallback_once("Could not use splash attention. Falling back to the reference implementation.")
         return None
 
 
@@ -970,29 +1274,10 @@ def _tpu_splash_attention(
     if D != Dk:
         raise ValueError(f"Embedding axes must be the same for q, k, and v: {q_class['D']} != {k_class['D']}")
 
-    def _physical_axis_for_binning(d):
-        def flatten(axes):
-            if axes is None:
-                return axes
-            result = []
-            for ax in axes:
-                if isinstance(ax, tuple):
-                    result += list(ax)
-                else:
-                    result.append(ax)
-            return tuple(result)
-
-        b_out = flatten(tuple(ax for ax in pspec_for_axis(d["B"]) if ax is not None) or None)
-        h_out = flatten(tuple(ax for ax in pspec_for_axis(d["H"]) if ax is not None) or None)
-        s_out = flatten(tuple(ax for ax in pspec_for_axis(d["S"]) if ax is not None) or None)
-        d_out = flatten(tuple(ax for ax in pspec_for_axis(d["D"]) if ax is not None) or None)
-
-        return PartitionSpec(b_out, h_out, s_out, d_out)
-
     # BHSD
-    physical_axes_q = _physical_axis_for_binning(q_class)
-    physical_axes_k = _physical_axis_for_binning(k_class)
-    physical_axes_v = _physical_axis_for_binning(v_class)
+    physical_axes_q = _physical_pspec_for_bins(q_class, output_order=("B", "H", "S", "D"))
+    physical_axes_k = _physical_pspec_for_bins(k_class, output_order=("B", "H", "S", "D"))
+    physical_axes_v = _physical_pspec_for_bins(v_class, output_order=("B", "H", "S", "D"))
 
     if attn_sink is not None and not _SPLASH_KERNEL_SUPPORTS_SINKS:
         raise NotImplementedError(

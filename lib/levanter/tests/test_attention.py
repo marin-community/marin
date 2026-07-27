@@ -3,6 +3,7 @@
 
 import math
 from contextlib import ExitStack
+from typing import NamedTuple
 
 import equinox
 import equinox as eqx
@@ -30,6 +31,7 @@ from levanter.layers.attention import (
     _bin_and_group_axes_by_function,
     _te_flash_attention,
     _tpu_splash_attention,
+    default_attention_type,
     dot_product_attention,
 )
 from levanter.utils.mesh import create_mesh_from_axis_specs
@@ -519,6 +521,165 @@ def test_tpu_splash_attention_sliding_window():
         hax_out = hax.nn.attention.dot_product_attention(KPos, Key, q, k, v, mask=mask.materialize(QPos, KPos))
         assert hax_out.axes == flash_out.axes
         assert_trees_all_close(hax_out.array, flash_out.array, atol=1e-3, rtol=1e-3)
+
+
+def _skip_unless_fa4_gpu():
+    if jax.default_backend() != "gpu":
+        pytest.skip("FA4 attention requires a GPU backend.")
+    pytest.importorskip("cutlass.cute", reason="nvidia-cutlass-dsl with JAX support is required for FA4")
+    pytest.importorskip("flash_attn.cute.flash_bwd_preprocess", reason="flash-attn-4 is required for FA4 backward")
+
+
+class _Fa4TestData(NamedTuple):
+    B: Axis
+    QPos: Axis
+    KPos: Axis
+    D: Axis
+    q: hax.NamedArray
+    k: hax.NamedArray
+    v: hax.NamedArray
+    cotangent: hax.NamedArray
+
+
+def _fa4_test_qkv(q_heads_per_group: int, head_dim: int, seq_len: int = 256) -> _Fa4TestData:
+    B = hax.Axis("batch", 2)
+    QPos = hax.Axis("position", seq_len)
+    KPos = hax.Axis("key_position", seq_len)
+    Head = hax.Axis("kv_heads", 4)
+    QHead = hax.Axis("q_heads_per_group", q_heads_per_group)
+    D = hax.Axis("head_size", head_dim)
+
+    keys = jrandom.split(jrandom.PRNGKey(0), 4)
+    q_axes = (B, Head, QPos, D) if q_heads_per_group == 1 else (B, Head, QHead, QPos, D)
+    q = hax.random.normal(keys[0], q_axes).astype(jnp.bfloat16)
+    k = hax.random.normal(keys[1], (B, Head, KPos, D)).astype(jnp.bfloat16)
+    v = hax.random.normal(keys[2], (B, Head, KPos, D)).astype(jnp.bfloat16)
+    cotangent = hax.random.normal(keys[3], q_axes).astype(jnp.float32)
+    return _Fa4TestData(B, QPos, KPos, D, q, k, v, cotangent)
+
+
+def _assert_fa4_matches_reference(QPos, KPos, D, q, k, v, mask, cotangent, *, fa4_backend=AttentionBackend.FA4):
+    def output(backend, attention_dtype=None):
+        def f(qkv):
+            q_, k_, v_ = qkv
+            return dot_product_attention(
+                QPos, KPos, D, q_, k_, v_, mask=mask, attn_backend=backend, attention_dtype=attention_dtype
+            )
+
+        return f
+
+    fa4_fn = output(fa4_backend)
+    ref_fn = output(AttentionBackend.VANILLA, attention_dtype=jnp.float32)
+
+    fa4_out = eqx.filter_jit(fa4_fn)((q, k, v))
+    ref_out = eqx.filter_jit(ref_fn)((q, k, v))
+    assert fa4_out.axes == ref_out.axes
+    # tolerances match tests/grug/test_fa4_cute_attention.py (bf16 kernel vs fp32 reference)
+    output_abs_diff = jnp.abs(fa4_out.array.astype(jnp.float32) - ref_out.array.astype(jnp.float32))
+    assert float(jnp.max(output_abs_diff)) <= 0.25
+    assert float(jnp.mean(output_abs_diff)) <= 0.01
+    assert_trees_all_close(fa4_out.array, ref_out.array, atol=7e-2, rtol=7e-2)
+
+    def loss(fn):
+        def wrapped(qkv):
+            out = fn(qkv)
+            return hax.sum(out.astype(jnp.float32) * cotangent).scalar()
+
+        return wrapped
+
+    fa4_grads = eqx.filter_jit(eqx.filter_grad(loss(fa4_fn)))((q, k, v))
+    ref_grads = eqx.filter_jit(eqx.filter_grad(loss(ref_fn)))((q, k, v))
+    for fa4_grad, ref_grad in zip(jax.tree.leaves(fa4_grads), jax.tree.leaves(ref_grads), strict=True):
+        grad_abs_diff = jnp.abs(fa4_grad.astype(jnp.float32) - ref_grad.astype(jnp.float32))
+        assert float(jnp.max(grad_abs_diff)) <= 0.25
+        assert float(jnp.mean(grad_abs_diff)) <= 0.01
+        assert_trees_all_close(fa4_grad, ref_grad, atol=7e-2, rtol=7e-2)
+
+
+@pytest.mark.parametrize(
+    ("q_heads_per_group", "head_dim", "packed", "sliding_window"),
+    [
+        (1, 64, False, None),
+        (2, 64, True, None),
+        (4, 128, True, None),
+        (1, 128, False, 96),
+    ],
+)
+def test_fa4_dense_attention_matches_reference(q_heads_per_group, head_dim, packed, sliding_window):
+    _skip_unless_fa4_gpu()
+
+    data = _fa4_test_qkv(q_heads_per_group, head_dim)
+    mask = AttentionMask.causal(sliding_window=sliding_window)
+    if packed:
+        # 4 packed segments per row
+        segment_ids = jnp.repeat(jnp.arange(4, dtype=jnp.int32), data.QPos.size // 4)
+        segment_ids = jnp.broadcast_to(segment_ids[None, :], (data.B.size, data.QPos.size))
+        mask = mask.with_segment_ids(hax.named(segment_ids, (data.B, data.QPos)))
+
+    _assert_fa4_matches_reference(data.QPos, data.KPos, data.D, data.q, data.k, data.v, mask, data.cotangent)
+
+
+def test_fa4_is_gpu_default_and_matches_reference():
+    """The GPU default backend must be a fused kernel that is actually installed."""
+    _skip_unless_fa4_gpu()
+    assert default_attention_type() == AttentionBackend.FA4
+
+    data = _fa4_test_qkv(q_heads_per_group=2, head_dim=128)
+    mask = AttentionMask.causal()
+    _assert_fa4_matches_reference(
+        data.QPos,
+        data.KPos,
+        data.D,
+        data.q,
+        data.k,
+        data.v,
+        mask,
+        data.cotangent,
+        fa4_backend=AttentionBackend.DEFAULT,
+    )
+
+
+def test_fa4_dense_attention_under_mesh_matches_reference():
+    _skip_unless_fa4_gpu()
+
+    data = _fa4_test_qkv(q_heads_per_group=2, head_dim=64)
+    mask = AttentionMask.causal()
+    with use_test_mesh():
+        _assert_fa4_matches_reference(data.QPos, data.KPos, data.D, data.q, data.k, data.v, mask, data.cotangent)
+
+
+@pytest.mark.parametrize(
+    "unsupported_kwargs",
+    [
+        {"dropout": 0.5, "inference": False},
+        {"logits_soft_cap": 30.0},
+        {"mask": None},
+    ],
+)
+def test_fa4_forced_backend_raises_on_unsupported_config(unsupported_kwargs):
+    """Explicitly requesting attn_backend=fa4 must raise rather than silently fall back."""
+    _skip_unless_fa4_gpu()
+
+    data = _fa4_test_qkv(q_heads_per_group=1, head_dim=64)
+    kwargs = {"mask": AttentionMask.causal(), **unsupported_kwargs}
+    with pytest.raises(NotImplementedError):
+        dot_product_attention(
+            data.QPos, data.KPos, data.D, data.q, data.k, data.v, attn_backend=AttentionBackend.FA4, **kwargs
+        )
+
+
+def test_fa4_rejects_non_contiguous_segment_ids():
+    _skip_unless_fa4_gpu()
+
+    data = _fa4_test_qkv(q_heads_per_group=1, head_dim=64)
+    half = data.QPos.size // 2
+    ids = jnp.zeros((data.B.size, data.QPos.size), dtype=jnp.int32).at[:, half:].set(1).at[:, -1:].set(0)
+    mask = AttentionMask.causal().with_segment_ids(hax.named(ids, (data.B, data.QPos)))
+    with pytest.raises(Exception, match="packed segment_ids"):
+        out = dot_product_attention(
+            data.QPos, data.KPos, data.D, data.q, data.k, data.v, mask=mask, attn_backend=AttentionBackend.FA4
+        )
+        jax.block_until_ready(out.array)
 
 
 @pytest.mark.parametrize("impl", ["default", "jax_flash", "vanilla"])

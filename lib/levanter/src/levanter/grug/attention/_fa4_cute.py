@@ -155,18 +155,40 @@ def _self_attention_lower_bounds(
 ) -> tuple[Int[Array, "B S"], Bool[Array, "B S"]]:
     mask = _validate_causal_self_attention(q, k, mask, backend_name=backend_name)
     if mask.segment_ids is None:
-        return _simple_causal_lower_bounds(
-            batch_size=q.shape[0],
-            seq_len=q.shape[1],
-            sliding_window=mask.sliding_window,
-        )
-
-    q_segment_ids = _packed_self_attention_segment_ids(q, k, mask, backend_name=backend_name)
-    return _packed_segment_causal_lower_bounds(
+        q_segment_ids = None
+    else:
+        q_segment_ids = _packed_self_attention_segment_ids(q, k, mask, backend_name=backend_name)
+    return causal_self_attention_lower_bounds(
         q_segment_ids,
         batch_size=q.shape[0],
         seq_len=q.shape[1],
         sliding_window=mask.sliding_window,
+    )
+
+
+def causal_self_attention_lower_bounds(
+    segment_ids: Int[Array, "B S"] | None,
+    *,
+    batch_size: int,
+    seq_len: int,
+    sliding_window: int | None,
+) -> tuple[Int[Array, "B S"], Bool[Array, "B S"]]:
+    """Lower FA4/CuTe causal self-attention metadata from optional packed segment ids.
+
+    Returns per-token inclusive key lower bounds and a per-token query validity mask,
+    the metadata consumed by [fa4_cute_attention_forward][levanter.grug.attention._fa4_cute_backend.fa4_cute_attention_forward].
+    """
+    if segment_ids is None:
+        return _simple_causal_lower_bounds(
+            batch_size=batch_size,
+            seq_len=seq_len,
+            sliding_window=sliding_window,
+        )
+    return _packed_segment_causal_lower_bounds(
+        segment_ids,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        sliding_window=sliding_window,
     )
 
 
@@ -274,7 +296,8 @@ def _gpu_compute_arch() -> int:
     raise RuntimeError("Could not determine CUDA compute capability for FA4/CuTe attention.")
 
 
-def _segmented_kernel_config(head_dim: int):
+def fa4_cute_kernel_config_for_gpu(head_dim: int) -> Flash4CuteKernelConfig:
+    """Return the tuned FA4/CuTe kernel config for the local GPU architecture."""
     arch = _gpu_compute_arch()
     kernel_config = flash4_cute_kernel_config(head_dim, arch=arch)
 
@@ -305,7 +328,7 @@ def gpu_fa4_cute_attention(
         mask,
         backend_name="gpu_fa4_cute_attention",
     )
-    kernel_config = _segmented_kernel_config(q.shape[-1])
+    kernel_config = fa4_cute_kernel_config_for_gpu(q.shape[-1])
 
     return _fa4_cute_attention_forward_sharded(
         q,
@@ -319,5 +342,7 @@ def gpu_fa4_cute_attention(
 
 
 __all__ = [
+    "causal_self_attention_lower_bounds",
+    "fa4_cute_kernel_config_for_gpu",
     "gpu_fa4_cute_attention",
 ]
