@@ -5,7 +5,7 @@
 
 import math
 from collections.abc import Callable
-from functools import partial
+from functools import cache
 from typing import Literal, NamedTuple
 
 import jax
@@ -465,8 +465,7 @@ def _bulk_ring_from_routing_accumulating_weight_gradient(
     return output, accumulation_token
 
 
-@partial(jax.jit, inline=jax.Inline.XLA_LATE)
-def _outlined_accumulating_weight_cotangent(
+def _accumulating_weight_cotangent(
     lhs: jax.Array,
     rhs: jax.Array,
     group_sizes: jax.Array,
@@ -484,6 +483,30 @@ def _outlined_accumulating_weight_cotangent(
         accumulation_scale,
     )
     return weight_cotangent
+
+
+@cache
+def _outlined_accumulating_weight_cotangent_fn() -> Callable[..., jax.Array]:
+    # The Iris submission process imports this module before the worker upgrades JAX.
+    return jax.jit(_accumulating_weight_cotangent, inline=jax.Inline.XLA_LATE)
+
+
+def _outlined_accumulating_weight_cotangent(
+    lhs: jax.Array,
+    rhs: jax.Array,
+    group_sizes: jax.Array,
+    accumulator: jax.Array,
+    output_cotangent: jax.Array,
+    accumulation_scale: jax.Array,
+) -> jax.Array:
+    return _outlined_accumulating_weight_cotangent_fn()(
+        lhs,
+        rhs,
+        group_sizes,
+        accumulator,
+        output_cotangent,
+        accumulation_scale,
+    )
 
 
 def _bulk_ring_from_routing_accumulating_weight_gradient_backward(
