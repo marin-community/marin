@@ -821,3 +821,16 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - Parent `/dlwh/iris-run-job-20260727-091630`.
   - Babysitter `019fa2dc-c146-7c10-b182-7c1de68dc32b`.
 - Gate: unchanged six-step, four-rank lower/compile/execute requirement. L8 remains blocked until terminal success.
+
+### 2026-07-27 02:29 PDT - L4 r2 exposes data-sharded hidden slice
+- Result:
+  - Parent `/dlwh/iris-run-job-20260727-091630` and child are terminal killed with no live retries.
+  - All four ranks entered `explicit_mpmd_train_step.lower`; none reached compile or execute, and no training metric was emitted.
+  - Every rank failed with `ShardingTypeError: slicing on sharded dims where out dim (1) is not divisible by mesh axes (4) with spec (data)`.
+  - r1's fix preserved `expert` but `[:, 0, 0]` still collapsed the data-sharded hidden dimension.
+  - W&B [r2](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-ep2d4-fusedacc-fp8-l4-e64k4-b128-s4096-p4m4-r2-20260727) is finished with no metrics.
+- Fix:
+  - Commit `2349bae4452f9ae8e2ff3d40778ffaf5aad61518` uses `w_gate[:, :, 0]`, `w_up[:, :, 0]`, and `w_down[:, 0, :]`. The dependency probe now preserves both potentially sharded dimensions until reduction while reading only an `E x D` slice per weight.
+  - Focused tests report `57 passed`; changed-file precommit including Pyrefly passes.
+- Next action:
+  - Run the unchanged L4 gate as r3. L8 remains blocked.
