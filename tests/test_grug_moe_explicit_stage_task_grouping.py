@@ -31,6 +31,8 @@ from levanter.grug.grug_moe import (
 from experiments.grug.moe import launch_cw_jaxpp_may_d2560
 from experiments.grug.moe.check_jaxpp_group2_component_mpmd_parity import (
     component_structure,
+    explicit_component_task_structure,
+    joined_explicit_routing_finish_boundary_forward,
     joined_explicit_routing_finish_boundary_value_and_grads,
     joined_moe_finish_boundary_forward,
     joined_moe_finish_boundary_value_and_grads,
@@ -58,6 +60,10 @@ from experiments.grug.moe.check_jaxpp_group2_component_mpmd_parity import (
     single_pre_moe_checkpoint_boundary_forward,
     single_pre_moe_checkpoint_boundary_primal_and_value_and_grads,
     single_pre_moe_checkpoint_boundary_value_and_grads,
+    sum_explicit_routing_parameter_gradients,
+    validate_distinct_combine_weight_gradients,
+    validate_explicit_expert_task_structure,
+    validate_explicit_pre_task_structure,
     validate_full_task_structure,
     validate_pure_moe_structure,
 )
@@ -1126,6 +1132,15 @@ def test_explicit_routing_split_matches_ordered_full_block() -> None:
         mlp_inputs = tuple(boundaries[1] for boundaries in exposed_pre)
         shared_outputs = tuple(boundaries[2] for boundaries in exposed_pre)
         routing_states = tuple(boundaries[3] for boundaries in exposed_pre)
+        finish_forward = jax.jit(joined_explicit_routing_finish_boundary_forward)(
+            params,
+            qb_beta,
+            post_attention,
+            mlp_inputs,
+            shared_outputs,
+            routing_states,
+            output_cotangents,
+        )
         finish = jax.jit(joined_explicit_routing_finish_boundary_value_and_grads)(
             params,
             qb_beta,
@@ -1147,6 +1162,18 @@ def test_explicit_routing_split_matches_ordered_full_block() -> None:
             )
             for index in range(2)
         )
+        pre_structure_jaxpr, _, _ = eqx.filter_make_jaxpr(
+            single_explicit_router_pre_boundary_primal_and_value_and_grads
+        )(params, qb_beta, hiddens[0], zero_cotangents[0])
+        expert_structure_jaxpr, _, _ = eqx.filter_make_jaxpr(joined_explicit_routing_finish_boundary_forward)(
+            params,
+            qb_beta,
+            post_attention,
+            mlp_inputs,
+            shared_outputs,
+            routing_states,
+            output_cotangents,
+        )
 
     pre_ring = tuple(
         {
@@ -1157,17 +1184,16 @@ def test_explicit_routing_split_matches_ordered_full_block() -> None:
         }
         for state in routing_states
     )
-    losses = tuple(finish[0][index] + 0.1 * routing_states[index].router_stats["router_z_loss"] for index in range(2))
     actual = (
-        losses,
+        finish_forward[0],
         post_attention,
         mlp_inputs,
         shared_outputs,
         pre_ring,
-        finish[1],
-        finish[2],
-        finish[3],
-        _sum_microbatch_group((finish[4], pre_vjps[0][1], pre_vjps[1][1])),
+        finish_forward[1],
+        finish_forward[2],
+        finish_forward[3],
+        sum_explicit_routing_parameter_gradients(finish[4], pre_vjps[0][1], pre_vjps[1][1]),
         (pre_vjps[0][2], pre_vjps[1][2]),
     )
     expected = (
@@ -1182,7 +1208,11 @@ def test_explicit_routing_split_matches_ordered_full_block() -> None:
         _sum_microbatch_group((ordered[0][8], ordered[1][8])),
         (ordered[0][9], ordered[1][9]),
     )
+    _assert_tree_rel_l2(exposed_pre, standalone_pre)
     _assert_tree_rel_l2(actual, expected)
+    validate_distinct_combine_weight_gradients(routing_states, finish[8])
+    validate_explicit_pre_task_structure(explicit_component_task_structure(pre_structure_jaxpr))
+    validate_explicit_expert_task_structure(explicit_component_task_structure(expert_structure_jaxpr))
     for actual_routes, expected_routes in zip(pre_ring, expected[4], strict=True):
         np.testing.assert_array_equal(actual_routes["selected_experts"], expected_routes["selected_experts"])
 
