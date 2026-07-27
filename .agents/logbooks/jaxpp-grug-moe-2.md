@@ -928,3 +928,15 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - L4 MFU is a functional-gate metric and is not comparable to the exact L24 target. The decision-relevant next measurement is a matched L8 EP2/data4 A/B.
 - Next action:
   - Run 20-step ordinary and fused arms at L8, stage split `2,2,2,2`, batch 512, 16 microbatches, and sequence 4096. Promote only if fused materially improves steady-state MFU without a lifecycle regression.
+
+### 2026-07-27 03:34 PDT - Launch matched L8 ordinary-versus-fused A/B
+- Snapshot: `10cd21f5ae` records the passing L4 lifecycle gate. Both arms launch from the same clean workspace bundle.
+- Shared configuration:
+  - L8 d2560/i1280, e64/top-k4, physical/logical stages 4/4 with split `2,2,2,2`, batch 512, 16 microbatches, sequence 4096, 20 steps.
+  - Four H100x8 stage nodes per arm, expert axis 2 and data axis 4, Ring MoE, CuTe FA4 attention, Triton ragged dot with block K 32 and eight warps, FP8 inter-stage wire, `save_moe`, XLA memory fraction `0.70`.
+- Arms:
+  - Ordinary BF16 expert-gradient control: parent `/dlwh/iris-run-job-20260727-103109`, run `jaxpp-rno2a-ring-ep2d4-ordinary-fp8-l8-e64k4-b512-s4096-p4m16-ab-20260727`, babysitter `019fa321-4188-7530-a4b2-dffb51b3c7c0`.
+  - Fused FP32 data-local treatment: parent `/dlwh/iris-run-job-20260727-103121`, run `jaxpp-rno2a-ring-ep2d4-fusedacc-fp8-l8-e64k4-b512-s4096-p4m16-ab-20260727`, babysitter `019fa321-61b0-7081-b89a-f2ab8750365d`.
+- Interpretation:
+  - The ordinary EP2/data4 arm is a topology-matched throughput control only; direct evidence already rejects its BF16 expert-weight gradients under the fixed `0.002` relative-L2 policy.
+  - Compare steady-state steps 2-19 when telemetry permits. Exact L24 promotion requires the fused arm to complete cleanly and show enough measured gain to support a credible target above 20 MFU.
