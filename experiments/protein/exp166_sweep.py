@@ -10,9 +10,14 @@ exp117 checkpoint, for twelve logical trials total. Checkpoint trials strictly l
 exp117 model subtree into a fresh optimizer and exp166 schedule at step 0.
 
 ``TRIAL`` identifies a logical trial and excludes region. ``REGION`` is included in the
-W&B run and suggested Iris job identities so three regional executions can race without
+W&B run and suggested Iris job identities so several regional executions can race without
 changing trial identity. ``TPU`` is execution-only and must be a 64-256 chip v5e/v6e slice
-or a v5p slice with at least 32 chips (``v5p-64`` or larger).
+or a v5p slice with at least 32 chips (``v5p-64`` or larger); which of those the sweep may
+actually be placed on is an operator decision recorded in ``exp166_policy.md``.
+
+An ``exp117-init`` trial reads a region-local seed placed once by
+``scratch/exp166_seed_checkpoints.sh``. Weights never cross a region boundary; a region
+without its seed fails rather than reaching into another one.
 
 At training time, every packed example receives a fresh deterministic re-permutation of
 the two-token ``<pN> <AA>`` sequence statements (and the two terminus statements) in each
@@ -337,7 +342,6 @@ class SeededCheckpointConfig:
 
     checkpoint_root: str
     region: str
-    region_prefix: str
 
 
 def _checkpoint_objects(fs, checkpoint_path: str) -> dict[str, dict]:
@@ -353,10 +357,11 @@ def _verify_seeded_checkpoint(config: SeededCheckpointConfig) -> None:
     by `scratch/exp166_seed_checkpoints.sh`. A region missing its seed is a setup
     error for that region -- never something to repair by reading another region.
     """
-    if not config.checkpoint_root.startswith(config.region_prefix):
+    region_prefix = marin_prefix_for_region(config.region)
+    if not config.checkpoint_root.startswith(region_prefix):
         raise RuntimeError(
             f"exp117 seed root {config.checkpoint_root} is outside region {config.region} "
-            f"({config.region_prefix}); refusing to read weights across a region boundary"
+            f"({region_prefix}); refusing to read weights across a region boundary"
         )
 
     checkpoints = prefix_join(config.checkpoint_root, "checkpoints")
@@ -364,11 +369,6 @@ def _verify_seeded_checkpoint(config: SeededCheckpointConfig) -> None:
     if checkpoint is None:
         raise FileNotFoundError(
             f"no region-local exp117 seed under {checkpoints}; seed this region before running the trial"
-        )
-    if not checkpoint.startswith(config.region_prefix):
-        raise RuntimeError(
-            f"resolved exp117 seed {checkpoint} is outside region {config.region} "
-            f"({config.region_prefix}); refusing to read weights across a region boundary"
         )
 
     fs, path = fsspec.core.url_to_fs(checkpoint)
@@ -378,9 +378,8 @@ def _verify_seeded_checkpoint(config: SeededCheckpointConfig) -> None:
 
     total_bytes = sum(int(info.get("size", 0)) for info in objects.values())
     logging.info(
-        "EXP166 SEED region=%s prefix=%s path=%s objects=%d size=%.2fGiB region_local=True",
+        "EXP166 SEED region=%s path=%s objects=%d size=%.2fGiB",
         config.region,
-        config.region_prefix,
         checkpoint,
         len(objects),
         total_bytes / 1024**3,
@@ -397,17 +396,12 @@ def exp117_checkpoint(point: Point, region: str) -> ArtifactStep[LevanterCheckpo
     namespace keeps that name from colliding with the real exp117 run directory in
     its home region.
     """
-    region_prefix = marin_prefix_for_region(region)
     return ArtifactStep(
         name=f"{SEED_NAMESPACE}/{point.exp117_run}",
         version=EXP117_VERSION,
         artifact_type=LevanterCheckpoint,
         run=_verify_seeded_checkpoint,
-        build_config=lambda ctx: SeededCheckpointConfig(
-            checkpoint_root=ctx.output_path,
-            region=region,
-            region_prefix=region_prefix,
-        ),
+        build_config=lambda ctx: SeededCheckpointConfig(checkpoint_root=ctx.output_path, region=region),
     )
 
 
