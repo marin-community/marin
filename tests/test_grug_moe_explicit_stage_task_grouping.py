@@ -31,6 +31,7 @@ from levanter.grug.grug_moe import (
 from experiments.grug.moe import launch_cw_jaxpp_may_d2560
 from experiments.grug.moe.check_jaxpp_group2_component_mpmd_parity import (
     component_structure,
+    joined_explicit_routing_finish_boundary_value_and_grads,
     joined_moe_finish_boundary_forward,
     joined_moe_finish_boundary_value_and_grads,
     paired_complete_checkpoint_boundary_forward,
@@ -43,6 +44,8 @@ from experiments.grug.moe.check_jaxpp_group2_component_mpmd_parity import (
     paired_moe_per_checkpoint_value_and_grads,
     paired_pre_moe_checkpoint_boundary_forward,
     paired_pre_moe_checkpoint_boundary_value_and_grads,
+    single_explicit_router_pre_boundary_forward,
+    single_explicit_router_pre_boundary_primal_and_value_and_grads,
     single_full_block_allow_cse_boundary_value_and_grads,
     single_full_block_boundary_forward,
     single_full_block_boundary_value_and_grads,
@@ -1092,6 +1095,98 @@ def test_split_single_finish_vjps_match_joined_finish_and_ordered_full_block() -
         np.testing.assert_array_equal(actual_stats["routing_counts"], expected_stats["routing_counts"])
 
 
+def test_explicit_routing_split_matches_ordered_full_block() -> None:
+    mesh, stage = _tiny_grouped_last_stage("save_moe", top_k=2)
+    _, hiddens, output_cotangents = _tiny_boundary_inputs(mesh)
+    params = stage.blocks[0]
+    qb_beta = jnp.asarray([0.2, -0.1, 0.05], dtype=jnp.float32)
+
+    with jax.set_mesh(mesh):
+        ordered = tuple(
+            jax.jit(single_full_block_boundary_value_and_grads)(params, qb_beta, hidden, cotangent)
+            for hidden, cotangent in zip(hiddens, output_cotangents, strict=True)
+        )
+        standalone_pre = tuple(
+            jax.jit(single_explicit_router_pre_boundary_forward)(params, qb_beta, hidden) for hidden in hiddens
+        )
+        zero_cotangents = tuple(
+            tuple(jnp.zeros_like(value) for value in (*boundaries[:3], boundaries[3].combine_weights))
+            for boundaries in standalone_pre
+        )
+        exposed_pre = tuple(
+            jax.jit(single_explicit_router_pre_boundary_primal_and_value_and_grads)(
+                params,
+                qb_beta,
+                hidden,
+                boundary_cotangent,
+            )[0]
+            for hidden, boundary_cotangent in zip(hiddens, zero_cotangents, strict=True)
+        )
+        post_attention = tuple(boundaries[0] for boundaries in exposed_pre)
+        mlp_inputs = tuple(boundaries[1] for boundaries in exposed_pre)
+        shared_outputs = tuple(boundaries[2] for boundaries in exposed_pre)
+        routing_states = tuple(boundaries[3] for boundaries in exposed_pre)
+        finish = jax.jit(joined_explicit_routing_finish_boundary_value_and_grads)(
+            params,
+            qb_beta,
+            post_attention,
+            mlp_inputs,
+            shared_outputs,
+            routing_states,
+            output_cotangents,
+        )
+        boundary_cotangents = tuple(
+            (finish[5][index], finish[6][index], finish[7][index], finish[8][index]) for index in range(2)
+        )
+        pre_vjps = tuple(
+            jax.jit(single_explicit_router_pre_boundary_primal_and_value_and_grads)(
+                params,
+                qb_beta,
+                hiddens[index],
+                boundary_cotangents[index],
+            )
+            for index in range(2)
+        )
+
+    pre_ring = tuple(
+        {
+            "router_logits": state.router_logits,
+            "selected_experts": state.selected_experts,
+            "combine_weights": state.combine_weights,
+            "boundary_margin": state.boundary_margin,
+        }
+        for state in routing_states
+    )
+    losses = tuple(finish[0][index] + 0.1 * routing_states[index].router_stats["router_z_loss"] for index in range(2))
+    actual = (
+        losses,
+        post_attention,
+        mlp_inputs,
+        shared_outputs,
+        pre_ring,
+        finish[1],
+        finish[2],
+        finish[3],
+        _sum_microbatch_group((finish[4], pre_vjps[0][1], pre_vjps[1][1])),
+        (pre_vjps[0][2], pre_vjps[1][2]),
+    )
+    expected = (
+        (ordered[0][0], ordered[1][0]),
+        (ordered[0][1], ordered[1][1]),
+        (ordered[0][2], ordered[1][2]),
+        (ordered[0][3], ordered[1][3]),
+        (ordered[0][4], ordered[1][4]),
+        (ordered[0][5], ordered[1][5]),
+        (ordered[0][6], ordered[1][6]),
+        (ordered[0][7], ordered[1][7]),
+        _sum_microbatch_group((ordered[0][8], ordered[1][8])),
+        (ordered[0][9], ordered[1][9]),
+    )
+    _assert_tree_rel_l2(actual, expected)
+    for actual_routes, expected_routes in zip(pre_ring, expected[4], strict=True):
+        np.testing.assert_array_equal(actual_routes["selected_experts"], expected_routes["selected_experts"])
+
+
 def test_ordered_checkpoint_allow_cse_control_matches_default_and_no_checkpoint() -> None:
     mesh, stage = _tiny_grouped_last_stage("save_moe", top_k=2)
     _, hiddens, output_cotangents = _tiny_boundary_inputs(mesh)
@@ -1209,7 +1304,7 @@ def test_paired_moe_component_jaxpr_contains_two_router_calls_and_no_attention()
         )(block.mlp, mlp_inputs)
 
     name_stacks = _closed_jaxpr_name_stacks(closed_jaxpr)
-    router_calls = [name for name in name_stacks if name.endswith("_paired_moe_calls/MoEMLP/td,de->te")]
+    router_calls = [name for name in name_stacks if name.endswith("_paired_moe_calls/MoEMLP/MoEMLP.route/td,de->te")]
     assert len(router_calls) == 2
     assert not any("Attention" in name or "_BlockAttentionView" in name for name in name_stacks)
     structure = component_structure(closed_jaxpr)

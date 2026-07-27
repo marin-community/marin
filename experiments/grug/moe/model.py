@@ -715,11 +715,10 @@ class MoEMLP(eqx.Module):
         )
 
     @named_call
-    def __call__(
+    def route(
         self,
         x: Float[Array, "B S D"],
-    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        b, s, _ = x.shape
+    ) -> "MoERoutingState":
         x_flat = rearrange(x, "b s d -> (b s) d")
         # Keep every expert score visible on each token shard. In particular,
         # top-k indices must remain global expert IDs when the token axis is
@@ -781,19 +780,51 @@ class MoEMLP(eqx.Module):
             in_specs=(P(_BATCH_AXES, None),),
             out_specs=P(),
         )(s_minus_alpha)
-
-        routed_flat, dropped_assignments = self.expert_mlp(
-            x_flat,
-            selected_experts.astype(jnp.int32),
-            combine_weights,
-            mesh=get_abstract_mesh(),
-            report_capacity_overflow=True,
+        return MoERoutingState(
+            router_logits=router_logits,
+            selected_experts=selected_experts.astype(jnp.int32),
+            combine_weights=combine_weights,
+            boundary_margin=_topk_logits[:, self.cfg.num_experts_per_token - 1] - _topk_logits[:, -1],
+            router_stats=router_stats,
         )
-        router_stats["capacity_overflow"] = dropped_assignments.astype(jnp.float32)
 
-        routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
-        routed = reshard(routed, _batch_spec())
-        return routed, router_stats
+    @named_call
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        return apply_moe_routing(self.expert_mlp, x, self.route(x))
+
+
+class MoERoutingState(eqx.Module):
+    """Transient router output consumed by an explicit expert task."""
+
+    router_logits: jax.Array
+    selected_experts: jax.Array
+    combine_weights: jax.Array
+    boundary_margin: jax.Array
+    router_stats: dict[str, jax.Array]
+
+
+def apply_moe_routing(
+    expert_mlp: MoEExpertMlp,
+    x: Float[Array, "B S D"],
+    routing: MoERoutingState,
+) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+    """Run experts from explicit router state without recomputing routing."""
+    b, s, _ = x.shape
+    x_flat = rearrange(x, "b s d -> (b s) d")
+    routed_flat, dropped_assignments = expert_mlp(
+        x_flat,
+        routing.selected_experts,
+        routing.combine_weights,
+        mesh=get_abstract_mesh(),
+        report_capacity_overflow=True,
+    )
+    router_stats = dict(routing.router_stats)
+    router_stats["capacity_overflow"] = dropped_assignments.astype(jnp.float32)
+    routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
+    return reshard(routed, _batch_spec()), router_stats
 
 
 class Block(eqx.Module):
@@ -959,6 +990,40 @@ def paired_moe_component_forward(
     if remat_mode == "save_moe":
         remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
     return eqx.filter_checkpoint(_paired_moe_calls, policy=remat_policy)(mlp, mlp_inputs)
+
+
+@named_call
+def _paired_explicit_moe_calls(
+    expert_mlp: MoEExpertMlp,
+    mlp_inputs: tuple[jax.Array, jax.Array],
+    routing_states: tuple[MoERoutingState, MoERoutingState],
+) -> tuple[tuple[jax.Array, jax.Array], tuple[dict[str, jax.Array], dict[str, jax.Array]]]:
+    first_output, first_stats = apply_moe_routing(expert_mlp, mlp_inputs[0], routing_states[0])
+    second_output, second_stats = apply_moe_routing(expert_mlp, mlp_inputs[1], routing_states[1])
+    return (first_output, second_output), (first_stats, second_stats)
+
+
+def paired_explicit_moe_component_forward(
+    expert_mlp: MoEExpertMlp,
+    mlp_inputs: tuple[jax.Array, jax.Array],
+    routing_states: tuple[MoERoutingState, MoERoutingState],
+    *,
+    remat_mode: RematMode,
+) -> tuple[tuple[jax.Array, jax.Array], tuple[dict[str, jax.Array], dict[str, jax.Array]]]:
+    """Run two expert calls from explicit per-microbatch routing state."""
+    _require_component_pair(mlp_inputs, name="MoE inputs")
+    _require_component_pair(routing_states, name="MoE routing states")
+    if expert_mlp.implementation != "ring":
+        raise ValueError("paired explicit MoE components require the exact bulk-ring implementation")
+
+    remat_policy = None
+    if remat_mode == "save_moe":
+        remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+    return eqx.filter_checkpoint(_paired_explicit_moe_calls, policy=remat_policy)(
+        expert_mlp,
+        mlp_inputs,
+        routing_states,
+    )
 
 
 def _component_projection(output: jax.Array, cotangent: jax.Array) -> jax.Array:
@@ -1733,15 +1798,18 @@ __all__ = [
     "GrugModelConfig",
     "GrugMoeHfConfig",
     "MoEMLP",
+    "MoERoutingState",
     "MoeActivation",
     "RMSNorm",
     "ResearchFp8ExpertGemmConfig",
     "Transformer",
     "TransformerPipelineStage",
+    "apply_moe_routing",
     "debug_mesh_and_token_pspec",
     "grugmoe_inference_state_dict",
     "paired_block_forward",
     "paired_block_value_and_grads",
+    "paired_explicit_moe_component_forward",
     "paired_moe_component_forward",
     "paired_moe_component_value_and_grads",
 ]

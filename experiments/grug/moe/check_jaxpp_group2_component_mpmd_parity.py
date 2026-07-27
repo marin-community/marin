@@ -52,7 +52,9 @@ from experiments.grug.moe.model import (
     Block,
     GrugModelConfig,
     MoEMLP,
+    MoERoutingState,
     _run_block_with_remat,
+    paired_explicit_moe_component_forward,
     paired_moe_component_forward,
 )
 
@@ -90,6 +92,7 @@ _DIAGNOSTICS = (
     "split-single-finish-vjp",
     "reference-assembly-discontinuity",
     "router-remat-reference",
+    "explicit-routing",
 )
 
 
@@ -452,6 +455,25 @@ def _single_pre_moe_boundaries(
     return post_attention, mlp_input, shared_output, _pre_ring_router_values(block.mlp, mlp_input)
 
 
+def _single_explicit_router_pre_boundaries(
+    block: Block,
+    hidden: jax.Array,
+):
+    post_attention = block.attention_residual(
+        hidden,
+        AttentionMask.causal(),
+        use_pko=False,
+        disable_rope=False,
+    )
+    mlp_input = block.mlp_gated_norm(block.rms_mlp(post_attention))
+    shared_output = (
+        block.shared(mlp_input, activation=ActivationFunctionEnum.silu)
+        if block.shared is not None
+        else jnp.zeros_like(mlp_input)
+    )
+    return post_attention, mlp_input, shared_output, block.mlp.route(mlp_input)
+
+
 def _single_pre_moe_boundaries_with_barriers(
     block: Block,
     hidden: jax.Array,
@@ -492,6 +514,20 @@ def single_pre_moe_checkpoint_boundary_forward(
     """Run one independently compiled pre-MoE checkpoint."""
     return _single_pre_moe_checkpoint_boundary_forward(
         _single_pre_moe_boundaries,
+        params,
+        qb_beta,
+        hidden,
+    )
+
+
+def single_explicit_router_pre_boundary_forward(
+    params: Block,
+    qb_beta: jax.Array,
+    hidden: jax.Array,
+):
+    """Run attention, dense work, and routing in one independently compiled task."""
+    return _single_pre_moe_checkpoint_boundary_forward(
+        _single_explicit_router_pre_boundaries,
         params,
         qb_beta,
         hidden,
@@ -579,6 +615,76 @@ def joined_moe_finish_boundary_value_and_grads(
         post_attention_gradients,
         mlp_input_gradients,
         shared_output_gradients,
+    )
+
+
+def joined_explicit_routing_finish_boundary_value_and_grads(
+    params: Block,
+    qb_beta: jax.Array,
+    post_attention: tuple[jax.Array, jax.Array],
+    mlp_inputs: tuple[jax.Array, jax.Array],
+    shared_outputs: tuple[jax.Array, jax.Array],
+    routing_states: tuple[MoERoutingState, MoERoutingState],
+    output_cotangents: tuple[jax.Array, jax.Array],
+):
+    """Differentiate two expert calls while treating router state as an explicit boundary."""
+
+    def projected_finish(
+        master_params: Block,
+        current_post_attention: tuple[jax.Array, jax.Array],
+        current_mlp_inputs: tuple[jax.Array, jax.Array],
+        current_shared_outputs: tuple[jax.Array, jax.Array],
+        current_combine_weights: tuple[jax.Array, jax.Array],
+    ):
+        block = grug_train._compute_block(master_params, qb_beta, _MIXED_PRECISION)
+        current_routing_states = tuple(
+            eqx.tree_at(
+                lambda state: state.combine_weights,
+                state,
+                combine_weights,
+            )
+            for state, combine_weights in zip(routing_states, current_combine_weights, strict=True)
+        )
+        routed_outputs, router_stats = paired_explicit_moe_component_forward(
+            block.mlp.expert_mlp,
+            current_mlp_inputs,
+            current_routing_states,
+            remat_mode="save_moe",
+        )
+        updates = tuple(
+            routed + shared if block.shared is not None else routed
+            for routed, shared in zip(routed_outputs, current_shared_outputs, strict=True)
+        )
+        outputs = tuple(hidden + update for hidden, update in zip(current_post_attention, updates, strict=True))
+        losses = tuple(
+            _project_output(output, cotangent) for output, cotangent in zip(outputs, output_cotangents, strict=True)
+        )
+        return losses[0] + losses[1], (losses, routed_outputs, outputs, router_stats)
+
+    combine_weights = tuple(state.combine_weights for state in routing_states)
+    (_, auxiliary), gradients = jax.value_and_grad(
+        projected_finish,
+        argnums=(0, 1, 2, 3, 4),
+        has_aux=True,
+    )(params, post_attention, mlp_inputs, shared_outputs, combine_weights)
+    (
+        parameter_gradient,
+        post_attention_gradients,
+        mlp_input_gradients,
+        shared_output_gradients,
+        combine_weight_gradients,
+    ) = gradients
+    losses, routed_outputs, outputs, router_stats = auxiliary
+    return (
+        losses,
+        routed_outputs,
+        outputs,
+        router_stats,
+        parameter_gradient,
+        post_attention_gradients,
+        mlp_input_gradients,
+        shared_output_gradients,
+        combine_weight_gradients,
     )
 
 
@@ -684,6 +790,39 @@ def single_pre_moe_checkpoint_boundary_primal_and_value_and_grads(
         hidden,
         boundary_cotangents,
     )
+
+
+def single_explicit_router_pre_boundary_primal_and_value_and_grads(
+    params: Block,
+    qb_beta: jax.Array,
+    hidden: jax.Array,
+    boundary_cotangents: tuple[jax.Array, jax.Array, jax.Array, jax.Array],
+):
+    """Differentiate pre-task work and explicit combine weights in one VJP."""
+
+    def projected_pre_moe(master_params: Block, current_hidden: jax.Array):
+        boundaries = single_explicit_router_pre_boundary_forward(master_params, qb_beta, current_hidden)
+        post_attention, mlp_input, shared_output, routing_state = boundaries
+        loss = sum(
+            (
+                _project_output(boundary, cotangent)
+                for boundary, cotangent in zip(
+                    (post_attention, mlp_input, shared_output, routing_state.combine_weights),
+                    boundary_cotangents,
+                    strict=True,
+                )
+            ),
+            start=jnp.asarray(0.0, dtype=jnp.float32),
+        )
+        loss += ROUTER_Z_LOSS_SCALE * routing_state.router_stats["router_z_loss"]
+        return loss, boundaries
+
+    (_, boundaries), (parameter_gradient, input_gradient) = jax.value_and_grad(
+        projected_pre_moe,
+        argnums=(0, 1),
+        has_aux=True,
+    )(params, hidden)
+    return boundaries, parameter_gradient, input_gradient
 
 
 def single_pre_moe_barrier_checkpoint_boundary_value_and_grads(
@@ -1173,7 +1312,7 @@ def component_structure(closed_jaxpr: jax_core.ClosedJaxpr) -> dict[str, Any]:
         if equation.primitive.name == "shard_map"
         and str(equation.source_info.name_stack).endswith("_paired_moe_calls/MoEMLP/MoEExpertMlp/moe_mlp")
     ]
-    router_calls = [name for name in names if name.endswith("_paired_moe_calls/MoEMLP/td,de->te")]
+    router_calls = [name for name in names if name.endswith("_paired_moe_calls/MoEMLP/MoEMLP.route/td,de->te")]
     boundary_names = [name for name in names if "_paired_moe_calls" in name]
     attention_inside_boundary = [name for name in boundary_names if "Attention" in name or "_BlockAttentionView" in name]
     return {
@@ -2733,6 +2872,171 @@ def _run_router_remat_reference_diagnostic(
     return split_assembly_passed
 
 
+def _run_explicit_routing_diagnostic(
+    process_id: int,
+    params: Block,
+    qb_beta: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+    cotangents: tuple[jax.Array, jax.Array],
+) -> bool:
+    ordered_arguments = (params, qb_beta, hiddens[0], cotangents[0])
+    compiled_ordered = _lower_and_compile(
+        process_id,
+        "r14_ordered_full_block_vjp",
+        jax.jit(single_full_block_boundary_value_and_grads),
+        ordered_arguments,
+    )
+    ordered_results = tuple(
+        _execute_compiled(
+            process_id,
+            f"r14_ordered_full_block_vjp_{index}",
+            compiled_ordered,
+            (params, qb_beta, hidden, cotangent),
+        )
+        for index, (hidden, cotangent) in enumerate(zip(hiddens, cotangents, strict=True))
+    )
+    ordered_reference = _combine_single_full_block_results(*ordered_results)
+
+    compiled_pre_forward = _lower_and_compile(
+        process_id,
+        "r14_explicit_router_pre_forward",
+        jax.jit(single_explicit_router_pre_boundary_forward),
+        (params, qb_beta, hiddens[0]),
+    )
+    standalone_pre = tuple(
+        _execute_compiled(
+            process_id,
+            f"r14_explicit_router_pre_forward_{index}",
+            compiled_pre_forward,
+            (params, qb_beta, hidden),
+        )
+        for index, hidden in enumerate(hiddens)
+    )
+    bootstrap_cotangents = tuple(
+        (
+            jnp.zeros_like(boundaries[0]),
+            jnp.zeros_like(boundaries[1]),
+            jnp.zeros_like(boundaries[2]),
+            jnp.zeros_like(boundaries[3].combine_weights),
+        )
+        for boundaries in standalone_pre
+    )
+    compiled_pre_vjp = _lower_and_compile(
+        process_id,
+        "r14_explicit_router_pre_vjp",
+        jax.jit(single_explicit_router_pre_boundary_primal_and_value_and_grads),
+        (params, qb_beta, hiddens[0], bootstrap_cotangents[0]),
+    )
+    exposed_pre = tuple(
+        _execute_compiled(
+            process_id,
+            f"r14_explicit_router_pre_vjp_primal_{index}",
+            compiled_pre_vjp,
+            (params, qb_beta, hidden, boundary_cotangent),
+        )[0]
+        for index, (hidden, boundary_cotangent) in enumerate(zip(hiddens, bootstrap_cotangents, strict=True))
+    )
+    post_attention = tuple(boundaries[0] for boundaries in exposed_pre)
+    mlp_inputs = tuple(boundaries[1] for boundaries in exposed_pre)
+    shared_outputs = tuple(boundaries[2] for boundaries in exposed_pre)
+    routing_states = tuple(boundaries[3] for boundaries in exposed_pre)
+
+    finish_arguments = (
+        params,
+        qb_beta,
+        post_attention,
+        mlp_inputs,
+        shared_outputs,
+        routing_states,
+        cotangents,
+    )
+    compiled_finish = _lower_and_compile(
+        process_id,
+        "r14_explicit_routing_finish_vjp",
+        jax.jit(joined_explicit_routing_finish_boundary_value_and_grads),
+        finish_arguments,
+    )
+    finish = _execute_compiled(
+        process_id,
+        "r14_explicit_routing_finish_vjp",
+        compiled_finish,
+        finish_arguments,
+    )
+    pre_boundary_cotangents = tuple(
+        (
+            finish[5][index],
+            finish[6][index],
+            finish[7][index],
+            finish[8][index],
+        )
+        for index in range(2)
+    )
+    pre_vjps = tuple(
+        _execute_compiled(
+            process_id,
+            f"r14_explicit_router_pre_vjp_gradient_{index}",
+            compiled_pre_vjp,
+            (params, qb_beta, hiddens[index], pre_boundary_cotangents[index]),
+        )
+        for index in range(2)
+    )
+    parameter_gradient = grug_train._sum_microbatch_group(
+        (
+            finish[4],
+            pre_vjps[0][1],
+            pre_vjps[1][1],
+        )
+    )
+    pre_ring = tuple(
+        {
+            "router_logits": state.router_logits,
+            "selected_experts": state.selected_experts,
+            "combine_weights": state.combine_weights,
+            "boundary_margin": state.boundary_margin,
+        }
+        for state in routing_states
+    )
+    losses = tuple(
+        finish[0][index] + ROUTER_Z_LOSS_SCALE * routing_states[index].router_stats["router_z_loss"]
+        for index in range(2)
+    )
+    assembled = (
+        losses,
+        post_attention,
+        mlp_inputs,
+        shared_outputs,
+        pre_ring,
+        finish[1],
+        finish[2],
+        finish[3],
+        parameter_gradient,
+        (pre_vjps[0][2], pre_vjps[1][2]),
+    )
+    passed = _report_full_block_boundaries(
+        process_id,
+        "r14_explicit_routing_assembled_vs_ordered_report",
+        assembled,
+        ordered_reference,
+    )
+    router_gradients_passed = _report_pair_cross_match(
+        process_id,
+        "r14_explicit_router_per_microbatch_gradient_report",
+        tuple(result[1].mlp.router for result in pre_vjps),
+        tuple(result[8].mlp.router for result in ordered_results),
+        root="router_parameter_gradients",
+    )
+    if process_id == 0:
+        event(
+            process_id,
+            "explicit_routing_summary",
+            router_state_explicit=True,
+            router_gradients_passed=router_gradients_passed,
+            full_assembly_passed=passed,
+            passed=passed,
+        )
+    return passed
+
+
 def _run_worker(
     process_id: int,
     coordinator_address: str,
@@ -2858,6 +3162,15 @@ def _run_worker(
             multihost_utils.sync_global_devices("group2_component_router_remat_reference_complete")
             if not passed:
                 raise AssertionError("router-remat reference or split assembly exceeded the fixed per-leaf tolerance")
+            completed = True
+            return
+
+        if diagnostic == "explicit-routing":
+            with jax.set_mesh(stage_mesh):
+                passed = _run_explicit_routing_diagnostic(process_id, *arguments)
+            multihost_utils.sync_global_devices("group2_component_explicit_routing_complete")
+            if not passed:
+                raise AssertionError("explicit-routing assembly exceeded the fixed per-leaf tolerance")
             completed = True
             return
 
