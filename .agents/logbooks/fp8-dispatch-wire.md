@@ -450,8 +450,16 @@ Living queue; updated as hypotheses are proposed, blocked, falsified, or promote
   difference being bf16 combine accumulation order rather than anything in the wire: more
   shards means fewer duplicate-index accumulations per shard.
 
-  One draw. Repeats are queued; EP64 gang scheduling across 16 nodes is slow to admit, and
-  r2 sat pending. Do not quote 1.147 as settled until at least one repeat lands.
+  Two draws so far, agreeing to the fourth digit on the forward:
+
+  | draw | fwd | fwd+bwd | fwd ms (ctl -> wire) | fwd+bwd ms (ctl -> wire) |
+  |---|--:|--:|---|---|
+  | r1 | 1.2881 | 1.1467 | 38.35 -> 29.77 | 73.00 -> 63.66 |
+  | r2 | 1.2880 | 1.1433 | 38.46 -> 29.86 | 72.66 -> 63.56 |
+
+  **fwd 1.288, fwd+bwd 1.145.** A third draw is queued for consistency with the other
+  configurations; EP64 gang scheduling across 16 nodes is slow to admit, so r2 sat pending
+  for a while.
 
   Teardown noise: after the result prints, the run emits a burst of grpc
   `failed to connect to all addresses` lines as the 16 processes exit. The job still
