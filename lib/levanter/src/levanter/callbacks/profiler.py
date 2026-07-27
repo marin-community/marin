@@ -83,8 +83,13 @@ class ProfilerConfig:
     perfetto_link: bool = False
     create_perfetto_trace: bool = False
     process_index: int | None = None
+    process_count: int = 1
     profile_options: ProfileOptionsConfig = field(default_factory=ProfileOptionsConfig)
     upload: XprofUploadConfig = field(default_factory=XprofUploadConfig)
+
+    def __post_init__(self) -> None:
+        if self.process_count < 1:
+            raise ValueError("process_count must be positive")
 
     @property
     def is_enabled(self) -> bool:
@@ -123,6 +128,7 @@ class ProfilerConfig:
             create_perfetto_trace=self.create_perfetto_trace,
             profiler_options=self.build_jax_profile_options(),
             process_index=self.process_index,
+            process_count=self.process_count,
             upload_uri=upload_uri,
             xprof_service_url=service_url,
         )
@@ -146,6 +152,7 @@ def profile(
     create_perfetto_trace: bool = False,
     profiler_options: jax.profiler.ProfileOptions | None = None,
     process_index: int | None = None,
+    process_count: int = 1,
     upload_uri: str | None = None,
     xprof_service_url: str | None = None,
 ) -> Callable[[StepInfo], None]:
@@ -161,7 +168,7 @@ def profile(
     existing_sessions: set[Path] = set()
 
     def is_tracing_process() -> bool:
-        return process_index is None or jax.process_index() == process_index
+        return process_index is None or process_index <= jax.process_index() < process_index + process_count
 
     def profiler_callback_fn(step: StepInfo, *, force: bool = False):
         nonlocal existing_sessions, profile_window_started, trace_started

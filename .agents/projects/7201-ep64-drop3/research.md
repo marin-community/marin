@@ -1,5 +1,9 @@
 # EP64 HybridEP performance prior art
 
+> The current operating state, results after v137, exact submit command, profile
+> procedure, and takeover instructions are in [HANDOFF.md](HANDOFF.md). This
+> file remains the detailed prior-art and early-experiment ledger.
+
 ## Background Research Brief
 
 - Effort: high
@@ -9,7 +13,8 @@
 
 ### Current Target
 
-- Exceed 30% steady MFU on 64 GB200 GPUs.
+- Reach at least 25% steady BF16 MFU on 64 GB200 GPUs; continue toward 30% after
+  the first gate.
 - Keep the shared-expert intermediate width at the original 5,120.
 - Keep exact aggregate post-ECHO assignment drop at or below 3%.
 - Qualify throughput and drop after QB has settled; early-step MFU is not

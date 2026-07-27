@@ -56,8 +56,10 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_PROFILER_STEPS  >0 enables a jax_profile capture window of N steps
                           (use SCALE_TRACKER=wandb so the artifact uploads)
     SCALE_PROFILER_START  profiler start step (default 8, past compile/warmup)
-    SCALE_PROFILER_PROCESS_INDEX  capture one JAX process only; unset captures
-                          every process
+    SCALE_PROFILER_PROCESS_INDEX  first JAX process to capture; unset captures
+                                  every process
+    SCALE_PROFILER_PROCESS_COUNT  number of consecutive JAX processes to
+                                  capture (default 1)
     SCALE_CHECKPOINTS   s3 (default) | local. local writes checkpoints to
                         node-local disk with no periodic saves -- for throughput
                         experiments where the checkpoint is disposable and a
@@ -208,6 +210,9 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
     profiler_process_index = int(profiler_process_index_raw) if profiler_process_index_raw is not None else None
     if profiler_process_index is not None and profiler_process_index < 0:
         raise ValueError("SCALE_PROFILER_PROCESS_INDEX must be non-negative")
+    profiler_process_count = env_int("SCALE_PROFILER_PROCESS_COUNT", 1)
+    if profiler_process_count < 1:
+        raise ValueError("SCALE_PROFILER_PROCESS_COUNT must be positive")
     # Host tracer preserves jax.named_scope regions (e.g. "moe_up_down") and enable_hlo_proto
     # exports the xprof collective/kernel aggregate tables — both needed for a compute-vs-comm
     # breakdown of the FSDP all-gather vs the expert GEMMs.
@@ -216,6 +221,7 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
         start_step=env_int("SCALE_PROFILER_START", 8),
         num_steps=profiler_steps,
         process_index=profiler_process_index,
+        process_count=profiler_process_count,
         profile_options=ProfileOptionsConfig(
             host_tracer_level=1,
             python_tracer_level=0,
