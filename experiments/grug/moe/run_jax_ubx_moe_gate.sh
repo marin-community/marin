@@ -21,6 +21,7 @@ cuda_bin="$(find "$IRIS_VENV"/lib/python*/site-packages/nvidia/cu*/bin -name nvc
 test -n "$cuda_bin"
 CUDA_HOME="$(dirname "$(dirname "$cuda_bin")")"
 export CUDA_HOME
+ln -sf libcudart.so.13 "$CUDA_HOME/lib/libcudart.so"
 
 rm -rf "$SOURCE_ROOT"
 git clone --filter=blob:none --no-checkout https://github.com/NVIDIA/nccl.git "$SOURCE_ROOT"
