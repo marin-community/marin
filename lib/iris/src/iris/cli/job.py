@@ -60,6 +60,7 @@ from iris.cluster.types import (
     tpu_device,
 )
 from iris.rpc import job_pb2
+from iris.rpc.errors import format_connect_error
 from iris.rpc.proto_display import (
     CONTAINER_PROFILE_NAMES,
     PRIORITY_BAND_NAMES,
@@ -1431,6 +1432,26 @@ def summary(ctx, job_id: str) -> None:
     tasks = client.list_tasks(job_name)
     result = build_job_summary(job_status, tasks)
     click.echo(_render_job_summary_text(result))
+
+
+@job.command("wait")
+@click.argument("job_id")
+@click.pass_context
+def wait(ctx, job_id: str) -> None:
+    """Wait for an existing job to finish and print its terminal state."""
+    client = _remote_client(ctx)
+    job_name = JobName.from_wire(job_id)
+    try:
+        status = Job(client, job_name).wait(
+            timeout=float("inf"),
+            raise_on_failure=False,
+        )
+    except ConnectError as exc:
+        raise click.ClickException(format_connect_error(exc)) from exc
+
+    click.echo(job_state_friendly(status.state))
+    if status.state != job_pb2.JOB_STATE_SUCCEEDED:
+        raise SystemExit(1)
 
 
 @job.command("logs")

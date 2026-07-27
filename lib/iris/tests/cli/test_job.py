@@ -25,6 +25,7 @@ from iris.cli.job import (
     stop,
     validate_extra_resources,
     validate_region_zone,
+    wait,
 )
 from iris.client import IrisClient
 from iris.cluster.config import IrisClusterConfig, ScaleGroupConfig, WorkerSettings
@@ -255,6 +256,35 @@ def test_job_run_cli_accepts_task_image_override(monkeypatch):
     assert captured["task_image"] == "ghcr.io/marin-community/iris-task-cuda-devel:test"
     assert captured["controller_url"] == "http://controller.test"
     assert captured["entrypoint"].command == ["python", "train.py"]
+
+
+@pytest.mark.parametrize(
+    ("state", "expected_state", "expected_exit_code"),
+    [
+        (_job_pb2.JOB_STATE_SUCCEEDED, "succeeded", 0),
+        (_job_pb2.JOB_STATE_FAILED, "failed", 1),
+    ],
+)
+def test_job_wait_reports_terminal_state_and_exit_status(
+    monkeypatch,
+    state: _job_pb2.JobState,
+    expected_state: str,
+    expected_exit_code: int,
+) -> None:
+    class WaitClusterClient:
+        def wait_for_job(self, job_id, timeout, poll_interval):
+            return _job_pb2.JobStatus(job_id=job_id.to_wire(), state=state)
+
+    monkeypatch.setattr("iris.cli.job._remote_client", lambda _ctx: IrisClient(WaitClusterClient()))
+
+    result = CliRunner().invoke(
+        wait,
+        ["/alice/training-run"],
+        obj={"controller_url": "http://controller.test", "config": None, "credentials": None},
+    )
+
+    assert result.exit_code == expected_exit_code
+    assert result.output == f"{expected_state}\n"
 
 
 # --tpu multi-variant parsing

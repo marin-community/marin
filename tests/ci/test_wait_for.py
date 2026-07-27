@@ -1,34 +1,26 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from collections.abc import Iterator
+import threading
+import time
 
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from iris.rpc import controller_pb2, job_pb2
+from iris.cluster.types import JobName
+from iris.rpc import job_pb2
 
-from scripts.ci.wait_for import BackoffConfig, EventKind, EventSpec, IrisJobSource, select_loop
-
-
-class FakeIrisJobClient:
-    def __init__(self, states: Iterator[job_pb2.JobState | ConnectError]):
-        self._states = states
-
-    def get_job_state(
-        self, request: controller_pb2.Controller.GetJobStateRequest
-    ) -> controller_pb2.Controller.GetJobStateResponse:
-        state = next(self._states)
-        if isinstance(state, ConnectError):
-            raise state
-        return controller_pb2.Controller.GetJobStateResponse(states={request.job_ids[0]: state})
+from scripts.ci.wait_for import BackoffConfig, EventKind, EventSpec, IrisJobSource, PollSource, Source, select_loop
 
 
-class MissingIrisJobClient:
-    def get_job_state(
-        self, request: controller_pb2.Controller.GetJobStateRequest
-    ) -> controller_pb2.Controller.GetJobStateResponse:
-        return controller_pb2.Controller.GetJobStateResponse()
+class ReleaseSource(Source):
+    def __init__(self, release: threading.Event):
+        super().__init__(EventSpec(EventKind.POLL, "release", "poll release"))
+        self.release = release
+
+    def check(self) -> dict | None:
+        self.release.set()
+        return None
 
 
 @pytest.mark.parametrize(
@@ -42,43 +34,87 @@ def test_iris_job_source_fires_when_job_reaches_terminal_state(
     terminal_state: job_pb2.JobState, expected_state: str
 ) -> None:
     spec = EventSpec(EventKind.IRIS_JOB, "/alice/training-run", "iris.job /alice/training-run")
-    client = FakeIrisJobClient(iter([job_pb2.JOB_STATE_RUNNING, terminal_state]))
-    source = IrisJobSource(spec, client)
-
-    assert source.check() is None
-    assert source.check() == {"state": expected_state}
-
-
-def test_iris_job_source_retries_transient_rpc_error_on_selector_backoff() -> None:
-    spec = EventSpec(EventKind.IRIS_JOB, "/alice/training-run", "iris.job /alice/training-run")
-    client = FakeIrisJobClient(
-        iter(
-            [
-                ConnectError(Code.UNAVAILABLE, "controller unavailable"),
-                job_pb2.JOB_STATE_SUCCEEDED,
-            ]
-        )
+    source = IrisJobSource(
+        spec,
+        lambda job_id: job_pb2.JobStatus(job_id=job_id.to_wire(), state=terminal_state),
     )
-    source = IrisJobSource(spec, client)
 
     result = select_loop(
         [source],
-        deadline=None,
+        deadline=time.monotonic() + 1.0,
         backoff=BackoffConfig(initial=1e-9, maximum=1e-9, factor=2.0, jitter=0.0),
     )
 
+    assert result["result"] == {"state": expected_state}
+
+
+def test_iris_job_source_does_not_block_other_sources() -> None:
+    spec = EventSpec(EventKind.IRIS_JOB, "/alice/training-run", "iris.job /alice/training-run")
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_waiter(job_id: JobName) -> job_pb2.JobStatus:
+        started.set()
+        if not release.wait(timeout=5.0):
+            raise TimeoutError(f"Test did not release wait for {job_id}")
+        return job_pb2.JobStatus(job_id=job_id.to_wire(), state=job_pb2.JOB_STATE_SUCCEEDED)
+
+    iris_source = IrisJobSource(spec, blocking_waiter)
+    poll_source = PollSource(
+        EventSpec(EventKind.POLL, "true", "poll true"),
+        poll_timeout=1.0,
+    )
+
+    assert started.wait(timeout=1.0)
+    try:
+        result = select_loop(
+            [iris_source, poll_source],
+            deadline=time.monotonic() + 1.0,
+            backoff=BackoffConfig(initial=1e-9, maximum=1e-9, factor=2.0, jitter=0.0),
+        )
+    finally:
+        release.set()
+
+    assert result["event"] == EventKind.POLL
+
+
+def test_iris_job_source_completion_wakes_selector_before_backoff() -> None:
+    spec = EventSpec(EventKind.IRIS_JOB, "/alice/training-run", "iris.job /alice/training-run")
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_waiter(job_id: JobName) -> job_pb2.JobStatus:
+        started.set()
+        if not release.wait(timeout=5.0):
+            raise TimeoutError(f"Test did not release wait for {job_id}")
+        return job_pb2.JobStatus(job_id=job_id.to_wire(), state=job_pb2.JOB_STATE_SUCCEEDED)
+
+    iris_source = IrisJobSource(spec, blocking_waiter)
+
+    assert started.wait(timeout=1.0)
+    result = select_loop(
+        [iris_source, ReleaseSource(release)],
+        deadline=time.monotonic() + 1.0,
+        backoff=BackoffConfig(initial=60.0, maximum=60.0, factor=2.0, jitter=0.0),
+    )
+
+    assert result["event"] == EventKind.IRIS_JOB
     assert result["result"] == {"state": "succeeded"}
 
 
 def test_iris_job_source_fails_fast_when_job_is_missing() -> None:
     spec = EventSpec(EventKind.IRIS_JOB, "/alice/missing-run", "iris.job /alice/missing-run")
-    source = IrisJobSource(spec, MissingIrisJobClient())
+
+    def missing_waiter(job_id: JobName) -> job_pb2.JobStatus:
+        raise ConnectError(Code.NOT_FOUND, f"Job {job_id} not found")
+
+    source = IrisJobSource(spec, missing_waiter)
 
     with pytest.raises(ConnectError) as exc_info:
         select_loop(
             [source],
-            deadline=None,
-            backoff=BackoffConfig(initial=1.0, maximum=1.0, factor=2.0, jitter=0.0),
+            deadline=time.monotonic() + 1.0,
+            backoff=BackoffConfig(initial=1e-9, maximum=1e-9, factor=2.0, jitter=0.0),
         )
 
     assert exc_info.value.code is Code.NOT_FOUND
