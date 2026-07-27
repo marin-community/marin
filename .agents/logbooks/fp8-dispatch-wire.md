@@ -398,11 +398,28 @@ Living queue; updated as hypotheses are proposed, blocked, falsified, or promote
   (fwd 21.9 -> 13.8 ms), so both arms were mismeasured, not just one.
 - **Result, barriered:** fwd **1.209**, fwd+bwd **1.101**. Parity unchanged: `dw13`/`dw2`
   relfrob 0.0, `dx` 1.12e-4, forward 1.11e-4.
+- **Repeats (settled):** three barriered draws at EP16.
+
+  | draw | fwd | fwd+bwd | fwd ms (ctl -> wire) | fwd+bwd ms (ctl -> wire) |
+  |---|--:|--:|---|---|
+  | r3 | 1.2085 | 1.1009 | 13.77 -> 11.39 | 38.16 -> 34.66 |
+  | r4 | 1.2117 | 1.1013 | 13.81 -> 11.39 | 38.20 -> 34.68 |
+  | r5 | 1.2108 | 1.1015 | 13.80 -> 11.40 | 38.19 -> 34.67 |
+
+  **fwd 1.210x (+/-0.002), fwd+bwd 1.101x (+/-0.0003)**, absolute times stable to about
+  0.05%.
 - **Interpretation:** the effect is markedly larger at EP16 than EP4 (1.019 -> 1.101 on
   fwd+bwd at the same per-device token count), which is the predicted direction: more
   expert shards means more dispatch volume, and the saving tracks the collective's share.
-  This is the first measurement in the regime the production config actually uses.
-  Repeats are running; one draw is not enough to quote 1.101 as settled.
+  This is the first measurement in the regime the production config actually uses, and the
+  scaling across the three configurations measured so far is monotone in the collective's
+  share of the layer rather than in model size:
+
+  | config | EP | fwd | fwd+bwd |
+  |---|--:|--:|--:|
+  | d6144 4-of-256 | 4 | 1.044 | 1.005 |
+  | d5120 4-of-128 | 4 | 1.071 | 1.019 |
+  | d5120 4-of-128 | 16 | 1.210 | 1.101 |
 
   Process note worth carrying: any multi-process timing harness in this repo needs explicit
   global barriers. The unbarriered version did not merely add noise, it produced a
