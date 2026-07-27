@@ -660,3 +660,22 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
 - Next action:
   - Run one final direct topology point at `data=4, expert=2`. Linear traffic scaling predicts approximately another `1.55ms` local-VAG saving, enough to approach 20 MFU and exceed it only when composed with the already validated `1.79%` inter-stage FP8 transfer.
   - Treat EP2/data4 as exploratory and non-promotable unless it independently passes the `0.002` gate and projects at least `20.3` MFU. Stop topology narrowing if either gate fails.
+
+### 2026-07-27 00:40 PDT - EP2/data4 reaches 19.99 projected MFU but fails parity
+- Commit Hash: `cc43694bbe538a07f786e408321019b8c0ec884c`.
+- Command: `/dlwh/ep-ring-data4-ep2-r17-20260727` used the same exact gate with `data=4, expert=2`; 10 warmups, 50 alternating samples, and no retries.
+- Results:
+  - Iris reached the strict assertion in `34.56s`; the task exited `1`, and no resource remains live.
+  - Loss and drops were exact. Output, x-gradient, and combine-weight-gradient relative-L2 was `2.7625e-6`, `2.6255e-5`, and `1.2884e-5`, all within threshold.
+  - W13 and W2 gradient relative-L2 was `0.0025987/0.0023340`, above the accepted `0.002`.
+  - Forward median improved from `8.731ms` to `6.005ms`; local VAG improved from `18.583ms` to `13.987ms`.
+  - Gradient sync and weight materialization took `3.866ms` and `2.349ms`, or `0.02428ms` amortized per m256 layer-microbatch.
+  - The measured projection is `74.016s`, `1.09487x`, and `19.9905` MFU. This misses 20 by `0.0095` points and the `20.3` promotion margin by `0.3095` points.
+  - StableHLO confirms local VAG has no data-axis collective. Its `4` all-gathers, `1` all-reduce, and `3` reduce-scatters use the expert groups. Materialization has two data-axis all-gathers and sync has two data-axis reduce-scatters.
+  - Peak compiled memory was `3.424GB` for control VAG, `3.357GB` for treatment VAG, `2.045GB` for sync, and `1.311GB` for materialization.
+- Interpretation:
+  - Stop topology narrowing. EP2/data4 independently fails both the numerical and performance promotion gates.
+  - The speed is close enough that preserving FP32 data-local weight gradients before reduction is worth one code-level feasibility check. A direct H100 gate is justified only if the change avoids data collectives per microbatch and its added local memory traffic leaves enough headroom to exceed 20 after the separately measured `1.79%` inter-stage FP8 transfer.
+  - Do not launch a JaxPP pipeline or L24 run from the current BF16-gradient path.
+- Next action:
+  - Determine whether a BF16-forward/FP32-weight-gradient custom VJP can return FP32 cotangents legally without making replicated FP32 weights the differentiable primal. Quantify the extra per-microbatch bytes before implementing.

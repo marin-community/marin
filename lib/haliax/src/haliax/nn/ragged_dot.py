@@ -226,10 +226,14 @@ def _triton_ragged_contracting_dim_pallas_call(
     lhs: jax.Array,
     rhs: jax.Array,
     group_sizes: jax.Array,
+    *,
+    output_dtype=None,
 ) -> jax.Array:
     """Raw Pallas-Triton grouped matmul for drhs-style ragged contraction."""
     k, m = lhs.shape
     _, n = rhs.shape
+    if output_dtype is None:
+        output_dtype = lhs.dtype
 
     block_m = min(128, int(pl.next_power_of_2(m)))
     block_n = min(128, int(pl.next_power_of_2(n)))
@@ -248,7 +252,7 @@ def _triton_ragged_contracting_dim_pallas_call(
                 block_m=block_m,
                 block_k=block_k,
             ),
-            out_shape=jax.ShapeDtypeStruct((m, n), lhs.dtype),
+            out_shape=jax.ShapeDtypeStruct((m, n), output_dtype),
             in_specs=[
                 pl.BlockSpec((k, block_m), lambda i, j: (0, i)),
                 pl.BlockSpec((k, block_n), lambda i, j: (0, j)),
@@ -291,6 +295,8 @@ def _triton_pallas_call(
     rhs: jax.Array,
     group_sizes: jax.Array,
     ragged_dot_dimension_numbers: jax.lax.RaggedDotDimensionNumbers = _DEFAULT_DIM_NUMS,
+    *,
+    output_dtype=None,
 ) -> jax.Array:
     """Raw Pallas-Triton grouped matmul for supported ragged-dot layouts."""
     if ragged_dot_dimension_numbers == _DEFAULT_DIM_NUMS:
@@ -298,7 +304,7 @@ def _triton_pallas_call(
     if ragged_dot_dimension_numbers == _DLHS_DIM_NUMS:
         return _triton_default_pallas_call(lhs, rhs.mT, group_sizes)
     if ragged_dot_dimension_numbers == _DRHS_DIM_NUMS:
-        return _triton_ragged_contracting_dim_pallas_call(lhs, rhs, group_sizes)
+        return _triton_ragged_contracting_dim_pallas_call(lhs, rhs, group_sizes, output_dtype=output_dtype)
     raise NotImplementedError(f"Unsupported ragged dot dimension numbers for Triton: {ragged_dot_dimension_numbers}")
 
 
@@ -335,6 +341,36 @@ def _ragged_dot_triton_bwd(residuals, dout):
 _ragged_dot_triton_impl.defvjp(_ragged_dot_triton_fwd, _ragged_dot_triton_bwd)
 
 
+@functools.partial(jax.custom_vjp, nondiff_argnums=())
+def _ragged_dot_triton_fp32_weight_gradient_impl(
+    lhs: jax.Array,
+    rhs: jax.Array,
+    group_sizes: jax.Array,
+) -> jax.Array:
+    """Triton ragged dot whose weight cotangent remains in FP32."""
+    if not _has_pallas_triton:
+        raise NotImplementedError("Pallas Triton backend is not available")
+    return _triton_pallas_call(lhs, rhs, group_sizes)
+
+
+def _ragged_dot_triton_fp32_weight_gradient_fwd(lhs, rhs, group_sizes):
+    out = _triton_pallas_call(lhs, rhs, group_sizes)
+    return out, (lhs, rhs, group_sizes)
+
+
+def _ragged_dot_triton_fp32_weight_gradient_bwd(residuals, dout):
+    lhs, rhs, group_sizes = residuals
+    dlhs = _triton_pallas_call(dout, rhs, group_sizes, _DLHS_DIM_NUMS)
+    drhs = _triton_pallas_call(lhs, dout, group_sizes, _DRHS_DIM_NUMS, output_dtype=jnp.float32)
+    return dlhs, drhs, None
+
+
+_ragged_dot_triton_fp32_weight_gradient_impl.defvjp(
+    _ragged_dot_triton_fp32_weight_gradient_fwd,
+    _ragged_dot_triton_fp32_weight_gradient_bwd,
+)
+
+
 def _ragged_dot_xla_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
     return jax.lax.ragged_dot_general(
         lhs=lhs,
@@ -368,10 +404,21 @@ def _preferred_implementations(implementation: Implementation) -> tuple[Implemen
     return ("xla",)
 
 
-def _run_impl(name: Implementation, lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
+def _run_impl(
+    name: Implementation,
+    lhs: jax.Array,
+    rhs: jax.Array,
+    group_sizes: jax.Array,
+    *,
+    fp32_weight_gradient: bool,
+) -> jax.Array:
+    if fp32_weight_gradient and name != "triton":
+        raise ValueError("fp32_weight_gradient requires implementation='triton'")
     if name == "megablox":
         return _ragged_dot_megablox_impl(lhs, rhs, group_sizes)
     if name == "triton":
+        if fp32_weight_gradient:
+            return _ragged_dot_triton_fp32_weight_gradient_impl(lhs, rhs, group_sizes)
         return _ragged_dot_triton_impl(lhs, rhs, group_sizes)
     if name == "xla":
         return _ragged_dot_xla_impl(lhs, rhs, group_sizes)
@@ -385,6 +432,7 @@ def ragged_dot(
     ar: bool = False,
     implementation: Implementation = "auto",
     op: RaggedDotOp | None = None,
+    fp32_weight_gradient: bool = False,
 ) -> jax.Array:
     """Grouped matrix multiply with backend-dispatched ragged dot implementations.
 
@@ -405,15 +453,20 @@ def ragged_dot(
             dispatch below — including the 512-row padding, a Triton kernel
             requirement — is bypassed. Mutually exclusive with an explicit
             ``implementation``.
+        fp32_weight_gradient: Keep the Triton expert-weight cotangent in FP32
+            while preserving BF16 forward and input-gradient computation.
+            This requires ``implementation="triton"``.
 
     Returns:
         A [tokens, out] array.
     """
+    if fp32_weight_gradient and implementation != "triton":
+        raise ValueError("fp32_weight_gradient requires implementation='triton'")
     if op is not None:
-        if implementation != "auto":
+        if implementation != "auto" or fp32_weight_gradient:
             raise ValueError(
-                f"ragged_dot: op= and implementation={implementation!r} are mutually exclusive; "
-                "the op owns its kernel selection."
+                "ragged_dot: op= is mutually exclusive with explicit implementation "
+                "or fp32_weight_gradient; the op owns its kernel selection."
             )
         out = op(lhs_, rhs_, group_sizes_)
         if ar:
@@ -429,7 +482,13 @@ def ragged_dot(
 
     for impl in _preferred_implementations(implementation):
         try:
-            out = _run_impl(impl, lhs_, rhs_, group_sizes_)
+            out = _run_impl(
+                impl,
+                lhs_,
+                rhs_,
+                group_sizes_,
+                fp32_weight_gradient=fp32_weight_gradient,
+            )
             break
         except _AUTO_FALLBACK_EXCEPTIONS as exc:
             if implementation == "auto" and impl != "xla":

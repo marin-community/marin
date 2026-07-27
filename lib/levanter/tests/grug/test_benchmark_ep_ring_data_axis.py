@@ -27,6 +27,8 @@ def test_ep_ring_data_axis_defaults_match_target_geometry() -> None:
     assert args.microbatches_per_step == 256
     assert args.layers_per_stage == 6
     assert args.treatment_data_axis_size == 2
+    assert args.interstage_speedup == 1.0179
+    assert args.promotion_mfu == 20.0
 
 
 def test_ep_ring_data_axis_projection_amortizes_step_boundary_work() -> None:
@@ -39,12 +41,14 @@ def test_ep_ring_data_axis_projection_amortizes_step_boundary_work() -> None:
         layers_per_stage=6,
         baseline_step_seconds=_BASELINE_STEP_SECONDS,
         baseline_mfu=_BASELINE_MFU,
+        interstage_speedup=1.0179,
     )
 
     assert projection["amortized_step_boundary_overhead_ms"] == pytest.approx(5.0 / 256)
     expected_step_seconds = _BASELINE_STEP_SECONDS - 6 * 256 * (24.0 - 19.0 - 5.0 / 256) / 1000
     assert projection["projected_step_seconds"] == pytest.approx(expected_step_seconds)
     assert projection["projected_mfu"] == pytest.approx(_BASELINE_MFU * _BASELINE_STEP_SECONDS / expected_step_seconds)
+    assert projection["composed_mfu"] == pytest.approx(projection["projected_mfu"] * 1.0179)
 
 
 def test_ep_ring_data_axis_replica_groups_distinguish_data_and_expert_axes() -> None:

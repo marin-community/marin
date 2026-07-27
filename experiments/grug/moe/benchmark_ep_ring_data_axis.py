@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compare EP8 with EP4/data2 while amortizing expert-weight synchronization."""
+"""Compare EP8 with replicated-expert layouts and timed FP32 accumulation."""
 
 import argparse
 import json
@@ -16,8 +16,10 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 import numpy as np
+from haliax.nn import ragged_dot
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
+from levanter.grug._moe.common import MoeRaggedDotOps
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 
 from experiments.grug.moe.benchmark_ep_ring import _selected_experts
@@ -26,7 +28,8 @@ _DEVICE_COUNT = 8
 _PARITY_RELATIVE_L2 = 0.002
 _BASELINE_MFU = 18.2583
 _BASELINE_STEP_SECONDS = 81.037785
-_PROMOTION_MFU = 20.3
+_INTERSTAGE_FP8_SPEEDUP = 1.0179
+_PROMOTION_MFU = 20.0
 _LAYERS_PER_STAGE = 6
 _MICROBATCHES_PER_STEP = 256
 _COLLECTIVE_NAMES = ("all-gather", "all-reduce", "reduce-scatter", "collective-permute")
@@ -44,10 +47,12 @@ class _Arm:
     local_gradient_sharding: NamedSharding
     inputs: tuple[jax.Array, ...]
     storage_weights: tuple[jax.Array, jax.Array]
+    initialize_accumulators: jax.stages.Compiled
     forward: jax.stages.Compiled
     value_and_grad: jax.stages.Compiled
     sync_gradients: jax.stages.Compiled
     materialize_weights: jax.stages.Compiled
+    materialize_gradients: jax.stages.Compiled
     hlo: dict[str, Any]
 
 
@@ -68,6 +73,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--layers-per-stage", type=int, default=_LAYERS_PER_STAGE)
     parser.add_argument("--baseline-mfu", type=float, default=_BASELINE_MFU)
     parser.add_argument("--baseline-step-seconds", type=float, default=_BASELINE_STEP_SECONDS)
+    parser.add_argument("--interstage-speedup", type=float, default=_INTERSTAGE_FP8_SPEEDUP)
     parser.add_argument("--promotion-mfu", type=float, default=_PROMOTION_MFU)
     parser.add_argument("--lower-only", action="store_true")
     parser.add_argument("--output", choices=("human", "json", "both"), default="both")
@@ -87,6 +93,7 @@ def _validate_args(args: argparse.Namespace) -> None:
         "layers_per_stage": args.layers_per_stage,
         "baseline_mfu": args.baseline_mfu,
         "baseline_step_seconds": args.baseline_step_seconds,
+        "interstage_speedup": args.interstage_speedup,
         "promotion_mfu": args.promotion_mfu,
     }
     for name, value in positive.items():
@@ -149,16 +156,39 @@ def _local_forward(
     return local_loss[None], output, dropped[None]
 
 
+def _fp32_weight_gradient_ragged_dot(
+    lhs: jax.Array,
+    rhs: jax.Array,
+    group_sizes: jax.Array,
+) -> jax.Array:
+    return ragged_dot(
+        lhs,
+        rhs,
+        group_sizes,
+        implementation="triton",
+        fp32_weight_gradient=True,
+    )
+
+
+_FP32_WEIGHT_GRADIENT_OPS = MoeRaggedDotOps(
+    w13=_fp32_weight_gradient_ragged_dot,
+    w2=_fp32_weight_gradient_ragged_dot,
+)
+
+
 def _local_value_and_grad(
     x_local: jax.Array,
     selected_experts_local: jax.Array,
     combine_weights_local: jax.Array,
     w13_local: jax.Array,
     w2_local: jax.Array,
+    w13_accumulator: jax.Array,
+    w2_accumulator: jax.Array,
     *,
     num_experts: int,
     capacity_factor: float,
     output_elements: int,
+    ops: MoeRaggedDotOps | None,
 ) -> tuple[
     tuple[jax.Array, jax.Array, jax.Array],
     tuple[jax.Array, jax.Array, jax.Array, jax.Array],
@@ -178,6 +208,7 @@ def _local_value_and_grad(
             activation_fn=jax.nn.silu,
             num_experts=num_experts,
             capacity_factor=capacity_factor,
+            ops=ops,
         )
         local_loss = jnp.sum(jnp.square(output.astype(jnp.float32))) / output_elements
         return local_loss, (output, dropped)
@@ -188,9 +219,11 @@ def _local_value_and_grad(
         has_aux=True,
     )(x_local, combine_weights_local, w13_local, w2_local)
     x_gradient, combine_gradient, w13_gradient, w2_gradient = gradients
+    w13_accumulator = w13_accumulator + w13_gradient[None].astype(jnp.float32)
+    w2_accumulator = w2_accumulator + w2_gradient[None].astype(jnp.float32)
     return (
         (local_loss[None], output, dropped[None]),
-        (x_gradient, combine_gradient, w13_gradient[None], w2_gradient[None]),
+        (x_gradient, combine_gradient, w13_accumulator, w2_accumulator),
     )
 
 
@@ -200,17 +233,17 @@ def _sync_local_gradients(
 ) -> tuple[jax.Array, jax.Array]:
     return (
         jax.lax.psum_scatter(
-            w13_gradient[0].astype(jnp.float32),
+            w13_gradient[0],
             "data",
             scatter_dimension=1,
             tiled=True,
-        ).astype(w13_gradient.dtype),
+        ),
         jax.lax.psum_scatter(
-            w2_gradient[0].astype(jnp.float32),
+            w2_gradient[0],
             "data",
             scatter_dimension=1,
             tiled=True,
-        ).astype(w2_gradient.dtype),
+        ),
     )
 
 
@@ -256,6 +289,10 @@ def _build_arm(
         jax.device_put(w13, storage_sharding),
         jax.device_put(w2, storage_sharding),
     )
+    accumulator_shapes = (
+        (data_axis_size, num_experts, w13.shape[1], w13.shape[2]),
+        (data_axis_size, num_experts, w2.shape[1], w2.shape[2]),
+    )
 
     local_forward = partial(
         _local_forward,
@@ -268,8 +305,18 @@ def _build_arm(
         num_experts=num_experts,
         capacity_factor=capacity_factor,
         output_elements=output_elements,
+        ops=_FP32_WEIGHT_GRADIENT_OPS if data_axis_size > 1 else None,
     )
     with jax.set_mesh(mesh):
+        initialize_accumulators_lowered = jax.jit(
+            lambda: (
+                jnp.zeros(accumulator_shapes[0], dtype=jnp.float32),
+                jnp.zeros(accumulator_shapes[1], dtype=jnp.float32),
+            ),
+            out_shardings=(local_gradient_sharding, local_gradient_sharding),
+        ).lower()
+        initialize_accumulators = initialize_accumulators_lowered.compile()
+        accumulators = initialize_accumulators()
         mapped_forward = jax.shard_map(
             local_forward,
             mesh=mesh,
@@ -280,7 +327,15 @@ def _build_arm(
         mapped_value_and_grad = jax.shard_map(
             local_value_and_grad,
             mesh=mesh,
-            in_specs=(batch_spec, batch_spec, batch_spec, expert_spec, expert_spec),
+            in_specs=(
+                batch_spec,
+                batch_spec,
+                batch_spec,
+                expert_spec,
+                expert_spec,
+                local_gradient_spec,
+                local_gradient_spec,
+            ),
             out_specs=(
                 (rank_vector_spec, batch_spec, rank_vector_spec),
                 (batch_spec, batch_spec, local_gradient_spec, local_gradient_spec),
@@ -302,20 +357,35 @@ def _build_arm(
             check_vma=False,
         )
         forward_lowered = jax.jit(mapped_forward).lower(*inputs)
-        value_and_grad_lowered = jax.jit(mapped_value_and_grad).lower(*inputs)
+        value_and_grad_lowered = jax.jit(
+            mapped_value_and_grad,
+            donate_argnums=(5, 6),
+        ).lower(*inputs, *accumulators)
         sync_lowered = jax.jit(mapped_sync).lower(
             jax.ShapeDtypeStruct(
                 (data_axis_size, num_experts, w13.shape[1], w13.shape[2]),
-                w13.dtype,
+                jnp.float32,
                 sharding=local_gradient_sharding,
             ),
             jax.ShapeDtypeStruct(
                 (data_axis_size, num_experts, w2.shape[1], w2.shape[2]),
-                w2.dtype,
+                jnp.float32,
                 sharding=local_gradient_sharding,
             ),
         )
         materialize_lowered = jax.jit(mapped_materialize).lower(*storage_weights)
+        materialize_gradients_lowered = jax.jit(mapped_materialize).lower(
+            jax.ShapeDtypeStruct(
+                w13.shape,
+                jnp.float32,
+                sharding=storage_sharding,
+            ),
+            jax.ShapeDtypeStruct(
+                w2.shape,
+                jnp.float32,
+                sharding=storage_sharding,
+            ),
+        )
         hlo = {
             "local_vag": _collective_summary(
                 value_and_grad_lowered.as_text(),
@@ -337,6 +407,7 @@ def _build_arm(
         value_and_grad = value_and_grad_lowered.compile()
         sync_gradients = sync_lowered.compile()
         materialize_weights = materialize_lowered.compile()
+        materialize_gradients = materialize_gradients_lowered.compile()
 
     return _Arm(
         name=name,
@@ -349,10 +420,12 @@ def _build_arm(
         local_gradient_sharding=local_gradient_sharding,
         inputs=inputs,
         storage_weights=storage_weights,
+        initialize_accumulators=initialize_accumulators,
         forward=forward,
         value_and_grad=value_and_grad,
         sync_gradients=sync_gradients,
         materialize_weights=materialize_weights,
+        materialize_gradients=materialize_gradients,
         hlo=hlo,
     )
 
@@ -375,6 +448,45 @@ def _time_alternating(
             function, function_args = arms[name]
             start = time.perf_counter()
             jax.block_until_ready(function(*function_args))
+            durations[name].append(time.perf_counter() - start)
+    return {
+        name: {
+            "mean_ms": 1000.0 * statistics.fmean(samples),
+            "median_ms": 1000.0 * statistics.median(samples),
+            "min_ms": 1000.0 * min(samples),
+            "max_ms": 1000.0 * max(samples),
+        }
+        for name, samples in durations.items()
+    }
+
+
+def _time_alternating_accumulating(
+    control: _Arm,
+    treatment: _Arm,
+    *,
+    warmup: int,
+    iterations: int,
+) -> dict[str, dict[str, float]]:
+    arms = {"control": control, "treatment": treatment}
+    accumulators = {name: arm.initialize_accumulators() for name, arm in arms.items()}
+
+    def run(name: str) -> None:
+        arm = arms[name]
+        result = arm.value_and_grad(*arm.inputs, *accumulators[name])
+        jax.block_until_ready(result)
+        accumulators[name] = (result[1][2], result[1][3])
+
+    for _ in range(warmup):
+        for name in arms:
+            run(name)
+
+    accumulators = {name: arm.initialize_accumulators() for name, arm in arms.items()}
+    durations = {name: [] for name in arms}
+    for iteration in range(iterations):
+        order = tuple(arms) if iteration % 2 == 0 else tuple(reversed(arms))
+        for name in order:
+            start = time.perf_counter()
+            run(name)
             durations[name].append(time.perf_counter() - start)
     return {
         name: {
@@ -514,6 +626,7 @@ def _projection(
     layers_per_stage: int,
     baseline_step_seconds: float,
     baseline_mfu: float,
+    interstage_speedup: float,
 ) -> dict[str, float]:
     amortized_overhead_ms = (sync_ms + materialize_ms) / microbatches_per_step
     treatment_amortized_vag_ms = treatment_vag_ms + amortized_overhead_ms
@@ -522,6 +635,8 @@ def _projection(
         layers_per_stage * microbatches_per_step * saving_per_layer_microbatch_ms / 1000.0
     )
     projected_mfu = baseline_mfu * baseline_step_seconds / projected_step_seconds
+    composed_step_seconds = projected_step_seconds / interstage_speedup
+    composed_mfu = baseline_mfu * baseline_step_seconds / composed_step_seconds
     return {
         "amortized_step_boundary_overhead_ms": amortized_overhead_ms,
         "treatment_amortized_vag_ms": treatment_amortized_vag_ms,
@@ -529,6 +644,10 @@ def _projection(
         "projected_step_seconds": projected_step_seconds,
         "projected_mfu": projected_mfu,
         "projected_speedup": baseline_step_seconds / projected_step_seconds,
+        "interstage_speedup": interstage_speedup,
+        "composed_step_seconds": composed_step_seconds,
+        "composed_mfu": composed_mfu,
+        "composed_speedup": baseline_step_seconds / composed_step_seconds,
     }
 
 
@@ -546,6 +665,7 @@ def _print_result(result: dict[str, Any], output: str) -> None:
                 f"EP8 vs EP{result['treatment']['expert_axis_size']}/data{result['treatment']['data_axis_size']}: "
                 f"parity={result['parity']['passed']}, "
                 f"projected_mfu={result['projection']['projected_mfu']:.4f}, "
+                f"composed_mfu={result['projection']['composed_mfu']:.4f}, "
                 f"promotable={result['promotable']}"
             )
             print(
@@ -554,7 +674,7 @@ def _print_result(result: dict[str, Any], output: str) -> None:
                 f"treatment={result['timings']['forward']['treatment']['median_ms']:.3f} ms"
             )
             print(
-                "  local VAG median: "
+                "  local VAG + FP32 accumulation median: "
                 f"EP8={result['timings']['value_and_grad']['control']['median_ms']:.3f} ms, "
                 f"treatment={result['timings']['value_and_grad']['treatment']['median_ms']:.3f} ms"
             )
@@ -643,12 +763,16 @@ def main() -> None:
 
     control_forward = jax.block_until_ready(control.forward(*control.inputs))
     treatment_forward = jax.block_until_ready(treatment.forward(*treatment.inputs))
-    control_vag = jax.block_until_ready(control.value_and_grad(*control.inputs))
-    treatment_vag = jax.block_until_ready(treatment.value_and_grad(*treatment.inputs))
+    control_vag = jax.block_until_ready(control.value_and_grad(*control.inputs, *control.initialize_accumulators()))
+    treatment_vag = jax.block_until_ready(
+        treatment.value_and_grad(*treatment.inputs, *treatment.initialize_accumulators())
+    )
     treatment_synced_gradients = jax.block_until_ready(
         treatment.sync_gradients(treatment_vag[1][2], treatment_vag[1][3])
     )
-    treatment_materialized_gradients = jax.block_until_ready(treatment.materialize_weights(*treatment_synced_gradients))
+    treatment_materialized_gradients = jax.block_until_ready(
+        treatment.materialize_gradients(*treatment_synced_gradients)
+    )
 
     control_loss = float(jax.device_get(jnp.sum(control_forward[0])))
     treatment_loss = float(jax.device_get(jnp.sum(treatment_forward[0])))
@@ -692,9 +816,9 @@ def main() -> None:
         warmup=args.warmup,
         iterations=args.iterations,
     )
-    vag_timings = _time_alternating(
-        (control.value_and_grad, control.inputs),
-        (treatment.value_and_grad, treatment.inputs),
+    vag_timings = _time_alternating_accumulating(
+        control,
+        treatment,
         warmup=args.warmup,
         iterations=args.iterations,
     )
@@ -719,6 +843,7 @@ def main() -> None:
         layers_per_stage=args.layers_per_stage,
         baseline_step_seconds=args.baseline_step_seconds,
         baseline_mfu=args.baseline_mfu,
+        interstage_speedup=args.interstage_speedup,
     )
     no_data_collective_per_microbatch = hlo["treatment_local_vag"]["data_axis_collective_count"] == 0
     step_boundary_has_data_collectives = (
@@ -729,7 +854,7 @@ def main() -> None:
         parity_passed
         and no_data_collective_per_microbatch
         and step_boundary_has_data_collectives
-        and projection["projected_mfu"] >= args.promotion_mfu
+        and projection["composed_mfu"] >= args.promotion_mfu
     )
     result = {
         "backend": jax.default_backend(),

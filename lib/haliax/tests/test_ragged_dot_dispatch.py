@@ -142,6 +142,43 @@ def test_triton_custom_vjp_routes_backward_through_triton_layouts(monkeypatch):
     ]
 
 
+def test_triton_fp32_weight_gradient_preserves_forward_and_input_gradient_dtype(monkeypatch):
+    lhs = jnp.arange(12, dtype=jnp.bfloat16).reshape(3, 4)
+    rhs = jnp.arange(2 * 4 * 5, dtype=jnp.bfloat16).reshape(2, 4, 5)
+    group_sizes = jnp.array([2, 1], dtype=jnp.int32)
+
+    def fake_triton_pallas_call(
+        lhs,
+        rhs,
+        group_sizes,
+        ragged_dot_dimension_numbers=ragged_dot_module._DEFAULT_DIM_NUMS,
+        *,
+        output_dtype=None,
+    ):
+        output = jax.lax.ragged_dot_general(
+            lhs=lhs,
+            rhs=rhs,
+            group_sizes=group_sizes,
+            ragged_dot_dimension_numbers=ragged_dot_dimension_numbers,
+        )
+        if output_dtype is not None:
+            output = output.astype(output_dtype)
+        return output
+
+    monkeypatch.setattr(ragged_dot_module, "_has_pallas_triton", True)
+    monkeypatch.setattr(ragged_dot_module, "_triton_pallas_call", fake_triton_pallas_call)
+
+    def loss(lhs, rhs):
+        output = ragged_dot_module._ragged_dot_triton_fp32_weight_gradient_impl(lhs, rhs, group_sizes)
+        return jnp.sum(output.astype(jnp.float32))
+
+    value, (lhs_gradient, rhs_gradient) = jax.value_and_grad(loss, argnums=(0, 1))(lhs, rhs)
+
+    assert value.dtype == jnp.float32
+    assert lhs_gradient.dtype == jnp.bfloat16
+    assert rhs_gradient.dtype == jnp.float32
+
+
 # ---------------------------------------------------------------------------
 # FP8 op dispatch tests (op=/implementation= routing, init contract)
 # ---------------------------------------------------------------------------
@@ -162,6 +199,13 @@ def test_op_with_explicit_implementation_raises():
     op = Fp8RaggedDotOp.init(rev_dtype=jnp.float8_e4m3fn)
     with pytest.raises(ValueError, match="mutually exclusive"):
         ragged_dot(lhs, rhs, gs, implementation="xla", op=op)
+
+
+def test_fp32_weight_gradient_requires_explicit_triton():
+    lhs, rhs, group_sizes = _fp8_inputs()
+
+    with pytest.raises(ValueError, match="requires implementation='triton'"):
+        ragged_dot(lhs, rhs, group_sizes, fp32_weight_gradient=True)
 
 
 @pytest.mark.skipif(_jax_supports_mixed_fp8_wgmma(), reason="guard only fires on jax < 0.11.0")
