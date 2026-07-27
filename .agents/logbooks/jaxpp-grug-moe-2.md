@@ -764,3 +764,22 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - The fused epilogue saved the required memory traffic without changing the accepted numerical result. The next risk is lifecycle integration: JaxPP must keep replicated BF16 expert compute weights and donated FP32 data-local accumulators across microbatches, then reduce-scatter/materialize once per optimizer step.
 - Next action:
   - Design and run the smallest reduced JaxPP gate. Require numerical sanity, correct per-stage sharding and accumulator lifecycle, and measured throughput improvement before any exact L24 run.
+
+### 2026-07-27 02:06 PDT - Reduced JaxPP integration checkpoint
+- Commit Hash: `5ef99566394b9e343f7d17af57d767218886d7b8`.
+- Implementation:
+  - Explicit-MPMD `std_1f1b` tasks materialize Ring expert compute weights once per stage and step with `P("expert", None, None)`.
+  - Each backward task carries ordinary-shaped, FP32 W13/W2 accumulators with the same sharding. Their physical values may diverge across `data`; JaxPP passes the buffers directly between same-stage tasks.
+  - The fused Triton VJP adds each new expert-weight gradient into the prior accumulator. Ordinary gradient leaves continue through the existing tree sum.
+  - The optimizer-boundary task performs one explicit `psum_scatter` over `data`, using W13 scatter dimension 1 and W2 scatter dimension 2, averages over microbatches, restores the expert leaves, and applies the existing optimizer.
+  - Configuration rejects non-Ring MoE, `replica_axis_size != 1`, missing expert/data parallelism, grouped stage tasks, alternate explicit schedules, and research FP8 expert GEMMs.
+- Validation:
+  - Targeted model, Ring, explicit-stage, pipeline-wire, config, and launcher tests report `79 passed, 21 skipped`.
+  - Follow-up topology/config tests report `8 passed`.
+  - `./infra/pre-commit.py --changed-files --fix` passes, including Pyrefly.
+  - A context-isolated review found no pre-sync reshard/host read, microbatch-scaling error, dropped gradient leaf, optimizer-tree mismatch, or explicit-MPMD lifecycle error for the accepted topology.
+- Reduced gate:
+  - L4, one layer on each of four physical stages, d2560/i1280, e64/top-k4, global batch 128, four microbatches, sequence 4096, H100x8 per stage, expert 2/data 4, FP8 inter-stage wire, CuTe FA4, Ring MoE, and fused FP32 data-local expert gradients.
+  - The gate is for compilation, lifecycle, sharding, and numerical sanity. It is not a throughput claim for L24.
+- Next action:
+  - Submit the L4 gate on `cw-rno2a` from `5ef9956639` with a dedicated babysitter. Run a matched L8 control/treatment only after L4 reaches training metrics without compiler, donation, VMA, or optimizer-tree failure.
