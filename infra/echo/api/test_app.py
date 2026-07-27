@@ -119,7 +119,7 @@ def test_iap_caller_strips_provider_prefix():
 def test_work_log_list_omits_body(client_with):
     row = make_row(id=1, at=datetime(2026, 7, 23, tzinfo=UTC), author="a", project="p", title="t", body="secret body")
     harness = client_with([row])
-    entries = harness.client.get("/work_log").json()
+    entries = harness.client.get("/api/work_log").json()
     assert entries == [{"id": 1, "at": "2026-07-23T00:00:00Z", "author": "a", "project": "p", "title": "t"}]
     assert "body" not in entries[0]
 
@@ -127,7 +127,7 @@ def test_work_log_list_omits_body(client_with):
 def test_work_log_detail_includes_body(client_with):
     row = make_row(id=1, at=datetime(2026, 7, 23, tzinfo=UTC), author="a", project="p", title="t", body="the body")
     harness = client_with([row])
-    assert harness.client.get("/work_log/1").json()["body"] == "the body"
+    assert harness.client.get("/api/work_log/1").json()["body"] == "the body"
 
 
 def test_add_work_log_attributes_to_iap_caller_not_client(client_with):
@@ -136,7 +136,7 @@ def test_add_work_log_attributes_to_iap_caller_not_client(client_with):
     )
     harness = client_with([row])
     resp = harness.client.post(
-        "/work_log",
+        "/api/work_log",
         json={"project": "p", "title": "t", "author": "somebody-else"},
         headers={"X-Goog-Authenticated-User-Email": "accounts.google.com:bob@openathena.ai"},
     )
@@ -146,7 +146,7 @@ def test_add_work_log_attributes_to_iap_caller_not_client(client_with):
 
 def test_missing_chunk_is_404(client_with):
     harness = client_with([])
-    assert harness.client.get("/chunks/999").status_code == 404
+    assert harness.client.get("/api/chunks/999").status_code == 404
 
 
 def test_activity_search_uses_query_encoder(client_with):
@@ -164,7 +164,7 @@ def test_activity_search_uses_query_encoder(client_with):
         lexical_score=0.5,
     )
     harness = client_with([row])
-    response = harness.client.get("/search", params={"q": "grafana"})
+    response = harness.client.get("/api/search", params={"q": "grafana"})
     assert response.status_code == 200
     assert response.json()[0]["title"] == "Grafana dashboards"
     assert harness.model.queries == ["grafana"]
@@ -173,7 +173,7 @@ def test_activity_search_uses_query_encoder(client_with):
 
 def test_activity_search_rejects_whitespace_without_embedding(client_with):
     harness = client_with([])
-    response = harness.client.get("/search", params={"q": "   "})
+    response = harness.client.get("/api/search", params={"q": "   "})
     assert response.status_code == 422
     assert harness.model.queries == []
 
@@ -194,7 +194,7 @@ def test_add_wiki_embeds_applicability_hint_and_body_as_passage(client_with):
     )
     harness = client_with([row])
     response = harness.client.post(
-        "/wiki",
+        "/api/wiki",
         json={
             "title": "  Grafana access  ",
             "use_when": "  Use this when you need to inspect training dashboards.  ",
@@ -214,7 +214,7 @@ def test_add_wiki_embeds_applicability_hint_and_body_as_passage(client_with):
 
 def test_add_wiki_requires_applicability_hint(client_with):
     harness = client_with([])
-    response = harness.client.post("/wiki", json={"title": "Grafana access", "body": "Use the IAP route."})
+    response = harness.client.post("/api/wiki", json={"title": "Grafana access", "body": "Use the IAP route."})
     assert response.status_code == 422
     assert harness.model.passages == []
 
@@ -235,7 +235,7 @@ def test_update_wiki_re_embeds_and_keeps_author(client_with):
     )
     harness = client_with([row])
     response = harness.client.put(
-        "/wiki/12",
+        "/api/wiki/12",
         json={
             "title": "  Grafana access  ",
             "use_when": "  Use this when inspecting dashboards.  ",
@@ -255,18 +255,18 @@ def test_update_wiki_re_embeds_and_keeps_author(client_with):
 
 def test_update_missing_wiki_is_404(client_with):
     harness = client_with([])
-    response = harness.client.put("/wiki/999", json={"title": "t", "use_when": "when", "body": "b"})
+    response = harness.client.put("/api/wiki/999", json={"title": "t", "use_when": "when", "body": "b"})
     assert response.status_code == 404
 
 
 def test_update_wiki_rejects_blank_field(client_with):
     harness = client_with([])
-    response = harness.client.put("/wiki/1", json={"title": "t", "use_when": "   ", "body": "b"})
+    response = harness.client.put("/api/wiki/1", json={"title": "t", "use_when": "   ", "body": "b"})
     assert response.status_code == 422
     assert harness.model.passages == []
 
 
 def test_missing_wiki_entry_is_404(client_with):
     harness = client_with([])
-    assert harness.client.get("/wiki/999").status_code == 404
-    assert harness.client.post("/wiki/999/references").status_code == 404
+    assert harness.client.get("/api/wiki/999").status_code == 404
+    assert harness.client.post("/api/wiki/999/references").status_code == 404

@@ -20,11 +20,7 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/search': DEV_API_ORIGIN,
-      '/grep': DEV_API_ORIGIN,
-      '/chunks': DEV_API_ORIGIN,
-      '/wiki': DEV_API_ORIGIN,
-      '/work_log': DEV_API_ORIGIN,
+      '/api': DEV_API_ORIGIN,
     },
   },
 })

@@ -38,34 +38,47 @@ uv run infra/echo/cli.py wiki search "hnsw index unused"
 
 ## Shape of an Entry
 
-Three fields, mirroring a memory's frontmatter and body:
+A wiki note is an Open Knowledge Format (OKF) document — one markdown file with a
+YAML frontmatter block, the same shape as a memory's frontmatter and body:
 
-- **title** — the specific thing, named concretely (`chunks.text needs a pg_trgm
-  index for grep`, not `Database performance`).
+```markdown
+---
+type: wiki-note
+title: chunks.text needs a pg_trgm index for grep
+use_when: when grep or ILIKE substring queries over the Echo corpus are slow
+---
+
+The `grep` endpoint runs `text ILIKE '%pattern%'`, which no full-text or btree
+index serves, so it sequentially scanned the corpus. A pg_trgm GIN index on
+`chunks.text` (migration m0006) makes the substring match an index scan.
+```
+
+- **title** — the specific thing, named concretely, not `Database performance`.
 - **use_when** — one sentence naming the situation in which an agent should load
-  this entry. This is what semantic search matches against, so describe the
-  *trigger*, not the content (`when grep or ILIKE queries over the corpus are
-  slow`).
-- **body** — concise markdown: what is true, why, and the concrete commands or
-  code. Link evidence inline (issue, PR, file path, query). State caveats.
+  this entry. Semantic search matches against this, so describe the *trigger*,
+  not the content.
+- **body** — the markdown below the frontmatter: what is true, why, and the
+  concrete commands or code. Link evidence inline (issue, PR, file path, query).
 
 Write it so it stands alone without this conversation.
 
 ## Write It
 
+Author the OKF file, then create the note from it:
+
 ```bash
-uv run infra/echo/cli.py wiki add \
-  --title "chunks.text needs a pg_trgm index for grep" \
-  --use-when "when grep or ILIKE substring queries over the Echo corpus are slow" \
-  --body body.md          # inline text, a file path, or - for stdin
+uv run infra/echo/cli.py wiki add --file note.md
 ```
 
 The server embeds and attributes the note to your authenticated identity, and
 the command prints the entry's URL. **Return that URL** so the reader can open
-it. To revise an entry you found while searching, edit it in place:
+it. To revise an entry you found while searching, export it, edit, and write it
+back:
 
 ```bash
-uv run infra/echo/cli.py wiki edit <id> --title ... --use-when ... --body -
+uv run infra/echo/cli.py wiki show <id> > note.md   # exports the OKF document
+# edit note.md
+uv run infra/echo/cli.py wiki edit <id> --file note.md
 ```
 
 Authentication reuses the shared Marin login (`iris login`); see

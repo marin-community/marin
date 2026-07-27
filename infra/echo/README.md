@@ -21,8 +21,9 @@ uv run infra/echo/cli.py search "expert parallel MoE MFU on B200" --limit 10
 uv run infra/echo/cli.py grep ragged_all_to_all --source discord
 uv run infra/echo/cli.py show <id>
 uv run infra/echo/cli.py wiki search "grafana access"
-uv run infra/echo/cli.py wiki add --title "Grafana access" --use-when "inspecting dashboards" --body note.md
-uv run infra/echo/cli.py wiki edit <id> --title "Grafana access" --use-when "inspecting dashboards" --body -
+uv run infra/echo/cli.py wiki add --file note.md          # OKF markdown document
+uv run infra/echo/cli.py wiki show <id> > note.md         # export as OKF, edit, then:
+uv run infra/echo/cli.py wiki edit <id> --file note.md
 ```
 
 Authentication reuses Marin's shared IAP login: run `iris login` once and the CLI mints
@@ -38,8 +39,22 @@ higher scores are better. Exact identifiers and names receive a strong lexical s
 paraphrases can enter through the semantic candidates. `grep` is a case-insensitive literal
 substring scan, newest first. Discord results contain one message, so open the result URL
 when the surrounding thread matters. Wiki writes go through the API so it can embed and
-attribute each note; `wiki add`/`edit` read `--body` inline, from a file path, or from stdin
-(`-`).
+attribute each note.
+
+Wiki notes are authored as [Open Knowledge Format](https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing)
+(OKF) documents — a markdown file with a YAML frontmatter block. `wiki add --file` and
+`wiki edit --file` read one, `wiki show` prints one, so an entry round-trips through a `.md`
+file (the `--title`/`--use-when`/`--body` flags remain as an alternative to `--file`):
+
+```markdown
+---
+type: wiki-note
+title: chunks.text needs a pg_trgm index for grep
+use_when: when grep or ILIKE substring queries over the corpus are slow
+---
+
+A pg_trgm GIN index on chunks.text makes the substring match an index scan.
+```
 
 Direct SQL access remains available for raw queries through Cloud SQL IAM group
 authentication. Members of `eng-all@openathena.ai` inherit `roles/cloudsql.instanceUser`,
@@ -51,22 +66,28 @@ shared. Group membership and IAM changes can take about 15 minutes to propagate.
 
 OpenAthena accounts can open the IAP-gated `echo-api` Cloud Run service to search both
 the activity corpus and wiki notes. The same service exposes OpenAPI documentation at
-`/docs` and the following endpoints:
+`/docs` and the following endpoints, all under `/api`:
 
-- `GET /search`
-- `GET /grep`
-- `GET /chunks/{id}`
-- `GET /wiki/search`
-- `GET /wiki/{id}`
-- `POST /wiki`
-- `PUT /wiki/{id}`
-- `POST /wiki/{id}/references`
-- `GET /work_log`
-- `GET /work_log/{id}`
-- `POST /work_log`
+- `GET /api/search`
+- `GET /api/grep`
+- `GET /api/chunks/{id}`
+- `GET /api/wiki/search`
+- `GET /api/wiki/{id}`
+- `POST /api/wiki`
+- `PUT /api/wiki/{id}`
+- `POST /api/wiki/{id}/references`
+- `GET /api/work_log`
+- `GET /api/work_log/{id}`
+- `POST /api/work_log`
 
 The API connects to PostgreSQL as `echo-api@hai-gcp-models.iam`; callers do not need
 direct database access.
+
+The dashboard is a Vue single-page app served from the same origin, with client-side
+routes at `/` (search), `/wiki` (recently updated notes), `/wiki/<id>` (a note), and
+`/chunk/<id>` (an activity chunk). The API's catch-all route serves `index.html` for
+any path that isn't `/api/...`, `/healthz`, `/static/...`, `/docs`, or `/openapi.json`,
+so vue-router's history-mode navigation and reloads resolve correctly.
 
 For local dashboard development:
 
@@ -75,7 +96,7 @@ npm --prefix infra/echo/dashboard install
 npm --prefix infra/echo/dashboard run dev
 ```
 
-Rsbuild's development server proxies Echo API requests to `http://127.0.0.1:8000`.
+Rsbuild's development server proxies `/api/...` requests to `http://127.0.0.1:8000`.
 Production builds are compiled into the API image and served from the same origin.
 
 ## Infrastructure

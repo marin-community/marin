@@ -18,8 +18,9 @@ ambient service-account credentials with no login. See ``infra/echo/README.md``.
     uv run infra/echo/cli.py grep ragged_all_to_all --source discord
     uv run infra/echo/cli.py show 12345
     uv run infra/echo/cli.py wiki search "grafana access"
-    uv run infra/echo/cli.py wiki add --title "Grafana access" --use-when "inspecting dashboards" --body note.md
-    uv run infra/echo/cli.py wiki edit 12 --title "Grafana access" --use-when "inspecting dashboards" --body -
+    uv run infra/echo/cli.py wiki add --file note.md          # OKF: frontmatter title/use_when + body
+    uv run infra/echo/cli.py wiki show 12 > note.md           # export as OKF, edit, then:
+    uv run infra/echo/cli.py wiki edit 12 --file note.md
 """
 
 import argparse
@@ -28,6 +29,7 @@ import os
 import sys
 from pathlib import Path
 
+import okf
 import requests
 from rigging.auth import (
     MARIN_DESKTOP_OAUTH_CLIENT,
@@ -42,6 +44,8 @@ from rigging.credentials import iap_edge_provider
 # echo.oa.dev maps to the echo-api Cloud Run service; the IAP token audience is the shared
 # Marin desktop OAuth client, which echo-api's IAP settings admit as a programmatic client.
 API_URL = os.environ.get("ECHO_API_URL", "https://echo.oa.dev").rstrip("/")
+# Data endpoints live under /api on the service; the dashboard SPA owns the bare paths.
+API_BASE = f"{API_URL}/api"
 AUDIENCE = MARIN_DESKTOP_OAUTH_CLIENT.client_id
 # The rigging cluster whose cached login to prefer; every Marin login shares the desktop
 # client, so any cached record works and `iris login` alone is enough.
@@ -79,7 +83,7 @@ def request(method: str, path: str, *, params: dict | None = None, body: dict | 
     """Call echo-api and return the decoded JSON, or exit with a message on any HTTP error."""
     response = requests.request(
         method,
-        f"{API_URL}{path}",
+        f"{API_BASE}{path}",
         params={k: v for k, v in (params or {}).items() if v is not None},
         json=body,
         headers={"Authorization": f"Bearer {bearer_token()}"},
@@ -158,27 +162,40 @@ def cmd_wiki_search(args: argparse.Namespace) -> None:
 
 
 def cmd_wiki_show(args: argparse.Namespace) -> None:
+    # Emit the entry as an OKF document so it round-trips through a file: `wiki show > note.md`,
+    # edit, `wiki edit --file note.md`.
     entry = request("GET", f"/wiki/{args.id}")
-    print(f"#{entry['id']} {entry['title']} (refs={entry['reference_count']}, by {entry['author']})")
-    print(f"use when: {entry['use_when']}\n")
-    print(entry["body"])
+    print(okf.wiki_to_okf(entry, resource=wiki_link(args.id)), end="")
 
 
 def wiki_link(entry_id: int) -> str:
-    """Browseable URL for a wiki entry — the dashboard deep-links off ?wiki=<id>."""
-    return f"{API_URL}/?wiki={entry_id}"
+    """Browseable URL for a wiki entry — the dashboard's client-side route, not the API path."""
+    return f"{API_URL}/wiki/{entry_id}"
+
+
+def wiki_write_body(args: argparse.Namespace) -> dict[str, str]:
+    """The title/use_when/body for a wiki write, from an OKF ``--file`` or the individual flags."""
+    if args.file:
+        text = sys.stdin.read() if args.file == "-" else Path(args.file).read_text()
+        try:
+            fields = okf.parse_wiki(text)
+        except ValueError as error:
+            raise SystemExit(f"{args.file}: {error}") from error
+        return {"title": fields.title, "use_when": fields.use_when, "body": fields.body}
+    missing = [name for name in ("title", "use_when", "body") if not getattr(args, name)]
+    if missing:
+        raise SystemExit(f"provide --file (OKF) or all of --title/--use-when/--body (missing: {', '.join(missing)})")
+    return {"title": args.title, "use_when": args.use_when, "body": read_body(args.body)}
 
 
 def cmd_wiki_add(args: argparse.Namespace) -> None:
-    entry = request("POST", "/wiki", body={"title": args.title, "use_when": args.use_when, "body": read_body(args.body)})
+    entry = request("POST", "/wiki", body=wiki_write_body(args))
     print(f"created wiki #{entry['id']}: {entry['title']}")
     print(wiki_link(entry["id"]))
 
 
 def cmd_wiki_edit(args: argparse.Namespace) -> None:
-    entry = request(
-        "PUT", f"/wiki/{args.id}", body={"title": args.title, "use_when": args.use_when, "body": read_body(args.body)}
-    )
+    entry = request("PUT", f"/wiki/{args.id}", body=wiki_write_body(args))
     print(f"updated wiki #{entry['id']}: {entry['title']}")
     print(wiki_link(entry["id"]))
 
@@ -202,15 +219,16 @@ def nonblank(value: str) -> str:
 
 
 def add_wiki_write_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--title", type=nonblank, required=True)
+    # Either an OKF document (--file) or the three fields as flags.
+    parser.add_argument("--file", help="OKF markdown file (frontmatter title/use_when + body), or - for stdin")
+    parser.add_argument("--title", type=nonblank)
     parser.add_argument(
         "--use-when",
         dest="use_when",
         type=nonblank,
-        required=True,
         help="one sentence: when an agent should load this note",
     )
-    parser.add_argument("--body", required=True, help="text inline, a file path, or - for stdin")
+    parser.add_argument("--body", help="text inline, a file path, or - for stdin")
 
 
 def build_parser() -> argparse.ArgumentParser:
