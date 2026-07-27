@@ -16,6 +16,29 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T03:45:28Z — 220,903 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0237-v902` independently
+  revalidated p2 decision-file 73 offset 2,560, containing 128 baseline pairs.
+  All 364 judgments and request attempts were valid on their first attempt.
+  The model labeled 62 false positives and 66 true duplicates, leaving no
+  unresolved outcomes. One pair used chunked review and 127 used direct
+  review. The outcome Parquet SHA-256 is
+  `ff889a76864eb5376e788a16dade684ef3dfb48463565268cbaa5c87232713a2`.
+
+- Across the stable 1,739-checkpoint snapshot, all 268 unresolved model
+  outcomes remain covered by 207 true-duplicate and 61 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 176,911 pairs, 112,357 false positives, 64,554 true duplicates;
+  - treatment: 43,992 pairs, 22,744 false positives, 21,248 true duplicates;
+  - combined: 220,903 pairs, 135,101 false positives, 85,802 true duplicates.
+
+- The next audit frontiers are p0 `(9, 128)`, p1 `(41, 0)`, p2 `(73, 2,688)`,
+  and p3 `(106, 0)`. The pending checkpoints contain 67,004,177,
+  154,078,816, 1,773,250, and 135,218,482 characters, respectively. All four
+  batch-priority 2-H100 workers remain active.
+
 ### 2026-07-27T03:43:48Z — 220,775 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0236-v901` independently
