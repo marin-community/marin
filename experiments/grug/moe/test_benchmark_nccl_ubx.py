@@ -12,13 +12,14 @@ from experiments.grug.moe.benchmark_nccl_ubx import (
 )
 
 
-def _small_config(routing: str) -> BenchmarkConfig:
+def _small_config(routing: str, slot_layout: str = "expert_stride") -> BenchmarkConfig:
     return BenchmarkConfig(
         tokens_per_rank=8,
         hidden_dim=32,
         num_experts=16,
         top_k=4,
         routing=routing,
+        slot_layout=slot_layout,
         warmup=0,
         iterations=2,
     )
@@ -60,6 +61,26 @@ def test_reference_maps_and_ring_indices_cover_the_same_accepted_routes() -> Non
         assert int(valid.sum()) == accepted_on_rank
         selected = plan.selected_experts.reshape(-1)[assignment_indices[valid]]
         assert np.all((selected >= expert_slice.start) & (selected < expert_slice.stop))
+
+
+def test_compact_reference_maps_use_contiguous_ring_capacity() -> None:
+    config = _small_config("learned_skew", slot_layout="compact")
+    plan = build_route_plan(config)
+
+    for rank in range(8):
+        maps = reference_maps(plan, config, rank)
+        expert_slice = slice(rank * config.experts_per_rank, (rank + 1) * config.experts_per_rank)
+        accepted_on_rank = int(plan.accepted_counts[expert_slice].sum())
+        valid_dispatch = maps.dispatch_topk_expert >= 0
+
+        assert maps.max_tokens_per_rank == config.capacity_per_expert_rank
+        assert int(maps.inverse_map[:, 3].sum()) == accepted_on_rank
+        assert np.array_equal(valid_dispatch, maps.dispatch_topk_slot >= 0)
+        assert np.array_equal(
+            np.sort(maps.valid_slots),
+            np.arange(accepted_on_rank, dtype=np.int64),
+        )
+        assert np.all(maps.dispatch_topk_slot[valid_dispatch] < maps.max_tokens_per_rank)
 
 
 def test_admission_requires_exactness_relative_l2_and_speedup() -> None:

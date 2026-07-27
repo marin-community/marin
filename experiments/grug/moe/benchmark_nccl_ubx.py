@@ -45,6 +45,8 @@ DEFAULT_HIDDEN_DIM = 2_560
 DEFAULT_SKEW_ALPHA = 1.2
 DEFAULT_RELATIVE_L2_LIMIT = 0.002
 DEFAULT_REQUIRED_SPEEDUP = 1.10
+DEFAULT_SLOT_LAYOUT = "expert_stride"
+SLOT_LAYOUTS = ("expert_stride", "compact")
 EXPECTED_NCCL_RUNTIME_VERSION = 23_007
 _POOL_ALIGNMENT = 2 * 1024 * 1024
 _POOL_HEADROOM = 256 * 1024 * 1024
@@ -58,6 +60,7 @@ class BenchmarkConfig:
     top_k: int = DEFAULT_TOP_K
     capacity_factor: float = 1.0
     routing: str = "balanced"
+    slot_layout: str = DEFAULT_SLOT_LAYOUT
     skew_alpha: float = DEFAULT_SKEW_ALPHA
     seed: int = 0
     warmup: int = 5
@@ -139,6 +142,8 @@ def _validate_config(config: BenchmarkConfig) -> None:
         raise ValueError(f"skew_alpha must be positive, got {config.skew_alpha}")
     if config.routing not in {"balanced", "learned_skew"}:
         raise ValueError(f"unknown routing mode {config.routing!r}")
+    if config.slot_layout not in SLOT_LAYOUTS:
+        raise ValueError(f"unknown slot layout {config.slot_layout!r}")
     if config.relative_l2_limit <= 0:
         raise ValueError("relative_l2_limit must be positive")
     if config.required_speedup <= 0:
@@ -273,8 +278,15 @@ def reference_maps(plan: RoutePlan, config: BenchmarkConfig, rank: int) -> Refer
     """Build an independent oracle for UB-X dispatch and PUSH-combine maps."""
     routing = plan.routing.astype(np.bool_)
     counts = routing.sum(axis=0, dtype=np.int64)
-    max_slots = int(counts.max(initial=0))
-    max_tokens_per_rank = config.experts_per_rank * max_slots
+    if config.slot_layout == "expert_stride":
+        max_slots = int(counts.max(initial=0))
+        expert_bases = (np.arange(config.experts_per_rank, dtype=np.int64) * max_slots)[None, :].repeat(EP_SIZE, axis=0)
+        max_tokens_per_rank = config.experts_per_rank * max_slots
+    else:
+        counts_by_rank = counts.reshape(EP_SIZE, config.experts_per_rank)
+        expert_bases = np.zeros_like(counts_by_rank)
+        expert_bases[:, 1:] = np.cumsum(counts_by_rank[:, :-1], axis=1, dtype=np.int64)
+        max_tokens_per_rank = config.capacity_per_expert_rank
     prefix = np.cumsum(routing, axis=0, dtype=np.int64) - routing
 
     local_start = rank * config.tokens_per_rank
@@ -283,7 +295,8 @@ def reference_maps(plan: RoutePlan, config: BenchmarkConfig, rank: int) -> Refer
     for local_token, global_token in enumerate(range(local_start, local_stop)):
         for expert in np.flatnonzero(routing[global_token]):
             token_offsets[local_token, expert] = int(
-                (expert % config.experts_per_rank) * max_slots + prefix[global_token, expert]
+                expert_bases[expert // config.experts_per_rank, expert % config.experts_per_rank]
+                + prefix[global_token, expert]
             )
 
     topk_max = int(routing.sum(axis=1).max(initial=0))
@@ -306,7 +319,7 @@ def reference_maps(plan: RoutePlan, config: BenchmarkConfig, rank: int) -> Refer
         for k_index, expert in enumerate(accepted_experts):
             if not expert_start <= expert < expert_start + config.experts_per_rank:
                 continue
-            slot = int((expert % config.experts_per_rank) * max_slots + prefix[global_token, expert])
+            slot = int(expert_bases[rank, expert % config.experts_per_rank] + prefix[global_token, expert])
             inverse_map[slot] = (
                 global_token // config.tokens_per_rank,
                 global_token % config.tokens_per_rank,
@@ -621,39 +634,75 @@ def _run_gpu(config: BenchmarkConfig, source: Path) -> tuple[dict[str, Any], boo
     )
     dist.all_gather_into_tensor(global_tokens, tokens)
 
-    token_offsets, max_tokens_per_rank, tokens_per_expert, _ = ubx.compute_token_offsets(
-        routing,
-        config.experts_per_rank,
-        rank,
-        world_size,
-    )
-    dispatch_topk_expert, dispatch_topk_slot, _ = ubx.compute_dispatch_topk_map(
-        routing,
-        token_offsets,
-        config.experts_per_rank,
-        rank,
-        world_size,
-    )
-    inverse_map, topk_idx, combine_max_tokens = ubx.compute_combine_push_map(
-        routing,
-        config.experts_per_rank,
-        rank,
-        world_size,
-    )
-
-    map_checks = {
-        "token_offsets": np.array_equal(token_offsets.cpu().numpy(), maps.token_offsets),
-        "dispatch_topk_expert": np.array_equal(
-            dispatch_topk_expert.cpu().numpy(),
+    if config.slot_layout == "expert_stride":
+        token_offsets, max_tokens_per_rank, tokens_per_expert, _ = ubx.compute_token_offsets(
+            routing,
+            config.experts_per_rank,
+            rank,
+            world_size,
+        )
+        dispatch_topk_expert, dispatch_topk_slot, _ = ubx.compute_dispatch_topk_map(
+            routing,
+            token_offsets,
+            config.experts_per_rank,
+            rank,
+            world_size,
+        )
+        inverse_map, topk_idx, combine_max_tokens = ubx.compute_combine_push_map(
+            routing,
+            config.experts_per_rank,
+            rank,
+            world_size,
+        )
+        map_checks = {
+            "token_offsets": np.array_equal(token_offsets.cpu().numpy(), maps.token_offsets),
+            "dispatch_topk_expert": np.array_equal(
+                dispatch_topk_expert.cpu().numpy(),
+                maps.dispatch_topk_expert,
+            ),
+            "dispatch_topk_slot": np.array_equal(
+                dispatch_topk_slot.cpu().numpy(),
+                maps.dispatch_topk_slot,
+            ),
+            "inverse_map": np.array_equal(inverse_map.cpu().numpy(), maps.inverse_map),
+            "topk_idx": np.array_equal(topk_idx.cpu().numpy(), maps.topk_idx),
+            "tokens_per_expert": np.array_equal(tokens_per_expert.cpu().numpy(), plan.accepted_counts),
+            "max_tokens_per_rank": int(max_tokens_per_rank) == maps.max_tokens_per_rank,
+            "combine_max_tokens_per_rank": int(combine_max_tokens) == maps.max_tokens_per_rank,
+        }
+    else:
+        token_offsets = torch.as_tensor(maps.token_offsets, dtype=torch.int32, device=device)
+        dispatch_topk_expert = torch.as_tensor(
             maps.dispatch_topk_expert,
-        ),
-        "dispatch_topk_slot": np.array_equal(dispatch_topk_slot.cpu().numpy(), maps.dispatch_topk_slot),
-        "inverse_map": np.array_equal(inverse_map.cpu().numpy(), maps.inverse_map),
-        "topk_idx": np.array_equal(topk_idx.cpu().numpy(), maps.topk_idx),
-        "tokens_per_expert": np.array_equal(tokens_per_expert.cpu().numpy(), plan.accepted_counts),
-        "max_tokens_per_rank": int(max_tokens_per_rank) == maps.max_tokens_per_rank,
-        "combine_max_tokens_per_rank": int(combine_max_tokens) == maps.max_tokens_per_rank,
-    }
+            dtype=torch.int32,
+            device=device,
+        )
+        dispatch_topk_slot = torch.as_tensor(
+            maps.dispatch_topk_slot,
+            dtype=torch.int32,
+            device=device,
+        )
+        inverse_map = torch.as_tensor(maps.inverse_map, dtype=torch.int32, device=device)
+        topk_idx = torch.as_tensor(maps.topk_idx, dtype=torch.int32, device=device)
+        accepted_on_rank = int(
+            plan.accepted_counts[rank * config.experts_per_rank : (rank + 1) * config.experts_per_rank].sum()
+        )
+        valid_dispatch = maps.dispatch_topk_expert >= 0
+        map_checks = {
+            "dispatch_expert_slot_validity": np.array_equal(
+                valid_dispatch,
+                maps.dispatch_topk_slot >= 0,
+            ),
+            "dispatch_slots_in_bounds": bool(np.all(maps.dispatch_topk_slot[valid_dispatch] < maps.max_tokens_per_rank)),
+            "inverse_map_accepted_count": int(maps.inverse_map[:, 3].sum()) == accepted_on_rank,
+            "valid_slot_count": maps.valid_slots.size == accepted_on_rank,
+            "valid_slots_contiguous": np.array_equal(
+                np.sort(maps.valid_slots),
+                np.arange(accepted_on_rank, dtype=np.int64),
+            ),
+            "fixed_ring_capacity": maps.max_tokens_per_rank == config.capacity_per_expert_rank,
+            "accepted_within_capacity": accepted_on_rank <= maps.max_tokens_per_rank,
+        }
     maps_exact = all(map_checks.values())
 
     dispatch_bytes = maps.max_tokens_per_rank * config.hidden_dim * 2
@@ -854,6 +903,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--num-experts", type=int, default=DEFAULT_NUM_EXPERTS)
     parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
     parser.add_argument("--capacity-factor", type=float, default=1.0)
+    parser.add_argument("--slot-layout", choices=SLOT_LAYOUTS, default=DEFAULT_SLOT_LAYOUT)
     parser.add_argument("--skew-alpha", type=float, default=DEFAULT_SKEW_ALPHA)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--warmup", type=int, default=5)
@@ -874,6 +924,7 @@ def main() -> None:
         top_k=args.top_k,
         capacity_factor=args.capacity_factor,
         routing=args.routing,
+        slot_layout=args.slot_layout,
         skew_alpha=args.skew_alpha,
         seed=args.seed,
         warmup=args.warmup,

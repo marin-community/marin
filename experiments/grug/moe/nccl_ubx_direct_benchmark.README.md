@@ -23,6 +23,16 @@ Every timing sample uses CUDA events. The reported sample is the maximum rank
 duration for that iteration; the headline is p50 over those slowest-rank
 samples. Routing-map construction and correctness checks are outside timing.
 
+The default `expert_stride` slot layout uses NVIDIA's upstream map helpers and
+allocates one maximum-count stride per local expert. `--slot-layout compact`
+instead assigns each destination rank's accepted routes to contiguous
+expert-major segments inside Marin's fixed Ring capacity. UB-X dispatch treats
+the destination slot as an arbitrary row, and PUSH3 scans valid inverse-map
+rows, so this removes the otherwise 8x dispatch-buffer inflation without
+changing route order or transport semantics. Compact mode constructs the maps
+independently and admits them only when every accepted slot is unique,
+contiguous, in bounds, and represented by an inverse-map entry.
+
 ## Admission
 
 Each routing case fails the process unless all conditions hold:
@@ -136,6 +146,12 @@ export UBX_GRAPH_POOL_SHARE=0.1
 export NCCL_UBX_OUTPUT_DIR="${PWD}/nccl-ubx-direct-results"
 
 experiments/grug/moe/run_nccl_ubx_direct_gate.sh
+```
+
+To validate the compact layout used by the JAX integration:
+
+```bash
+experiments/grug/moe/run_nccl_ubx_direct_gate.sh --slot-layout compact
 ```
 
 For initial hang localization only, rebuild the UB-X extension with
