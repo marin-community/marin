@@ -16,6 +16,57 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T05:02:56Z — 228,408 pairs verified
+
+- `/rav/rav-datakit-6854-audit-next-checkpoints-0284-v949` independently
+  revalidated p0 decision-file 9 offset 2,048 and p1 decision-file 41 offsets
+  1,792 and 1,920. Their 384 baseline pairs contain 174 model false positives,
+  209 model true duplicates, and one unresolved outcome. One pair used
+  chunked review and 383 used direct review. All 886 judgments and request
+  attempts were valid on their first attempt. The checkpoint outcome Parquet
+  SHA-256 values are
+  `369605dcd0c121785d98a8390b97e7adc87f1132c7eb21578a52a038c5139055`,
+  `3b0d3510b02538ff505f4c9ca9d091dfb256e7e8ccb64915a93783fc8e8fe3d8`,
+  and
+  `4a7f818618c829bc4d72570442a3f81422af6c0f5cb684dfc1207f4c1cace579`.
+- Complete-text inspection resolves p1 row 2,835 as a true duplicate under the
+  pinned low-value-template boundary. Both three-line records contain the same
+  fertility definition, rate definition, dependency factors, male-infertility
+  description, and optimization claim. The member adds the generic title
+  `Optimizing fertility` and substitutes the institution slot `ARC` for
+  `Ponni Hospital`; the canonical adds a Q&A restatement. Deleting the member
+  therefore loses no substantive payload under the calibrated policy. The
+  731- and 845-character texts have character, line, and word-sequence
+  similarities 0.890863, 0.333333, and 0.895397. Member and canonical SHA-256
+  values are
+  `1bc905fcd180fda63245480e0fbd52e4718186ea37a8f9a50f80249bfd1081d1`
+  and
+  `4f1538f6141b792ca59db01b4d1c731a79dba24462433f31d926baf1eada21c3`.
+- `/rav/rav-datakit-6854-inspect-row2835-0285-v950` persisted the complete
+  texts and diff with inspection SHA-256
+  `1f06c7941a89fb1a170b97e68a8a78a1624b7714f5671d6ddc8b297481dcdcf8`.
+  `/rav/rav-datakit-6854-publish-row2835-0286-v951` wrote the immutable manual
+  record, and `/rav/rav-datakit-6854-verify-row2835-0287-v952` independently
+  reread every bound source and output artifact. The semantic-judgment,
+  manual-Parquet, and marker SHA-256 values are
+  `c78a10e0a9f258b56646f7872da631aecbad0e96901ee5c7aff8b29bc5720d43`,
+  `eba62d5b5ca632a5c67aca6546b1ed1ed102bbc7d83f344fb41e4f782742e2c6`,
+  and
+  `1b8db17fb69e410150746f4834510c587ea6f95fa6a23dc2dfc66722eecc8c50`.
+- Replacing the unresolved outcome with a true duplicate gives 174 false
+  positives and 210 true duplicates in the block. Across the stable
+  1,798-checkpoint snapshot, all 277 unresolved model outcomes are covered by
+  216 true-duplicate and 61 false-positive manual records. The adjusted totals
+  are:
+
+  - baseline: 183,175 pairs, 116,490 false positives, 66,685 true duplicates;
+  - treatment: 45,233 pairs, 23,368 false positives, 21,865 true duplicates;
+  - combined: 228,408 pairs, 139,858 false positives, 88,550 true duplicates.
+
+- The next audit frontiers are p0 `(9, 2,176)`, p1 `(41, 2,048)`,
+  p2 `(74, 0)`, and p3 `(106, 128)`. All four batch-priority 2-H100 workers
+  remain active with zero Kubernetes restarts.
+
 ### 2026-07-27T04:56:45Z — 228,024 pairs verified
 
 - `/rav/rav-datakit-6854-audit-next-checkpoints-0283-v948` independently
