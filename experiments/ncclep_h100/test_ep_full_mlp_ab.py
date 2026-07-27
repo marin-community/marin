@@ -20,6 +20,7 @@ from experiments.ncclep_h100.ep_full_mlp_ab import (
     RELATIVE_L2_PROMOTION_TENSORS,
     TimingSummary,
     _dispatch_with_token_gradient,
+    _value_and_grad_with_ring_token_gradient,
     balanced_route_table,
     build_summary,
     count_stablehlo_operations,
@@ -128,13 +129,30 @@ def test_launcher_has_valid_bash_and_dry_run_contract() -> None:
         text=True,
         env={**os.environ, "NCCLEP_TOKEN_GRADIENT_IMPLEMENTATION": "hybrid_combine_forward"},
     )
+    ring_token_gradient_dry_run = subprocess.run(
+        ["bash", _SCRIPT, "--dry-run"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "NCCLEP_TOKEN_GRADIENT_IMPLEMENTATION": "ring_token_gradient"},
+    )
+    invalid_token_gradient = subprocess.run(
+        ["bash", _SCRIPT],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "NCCLEP_TOKEN_GRADIENT_IMPLEMENTATION": "invalid"},
+    )
 
     assert syntax.returncode == 0, syntax.stderr
     assert dry_run.returncode == 0, dry_run.stderr
     assert hybrid_dry_run.returncode == 0, hybrid_dry_run.stderr
+    assert ring_token_gradient_dry_run.returncode == 0, ring_token_gradient_dry_run.stderr
+    assert invalid_token_gradient.returncode == 64
     assert "8 processes x 1 GPU" in dry_run.stdout
     assert "token gradient implementation: native" in dry_run.stdout
     assert "token gradient implementation: hybrid_combine_forward" in hybrid_dry_run.stdout
+    assert "token gradient implementation: ring_token_gradient" in ring_token_gradient_dry_run.stdout
     assert "TE value_and_grad p50 >= 1.12x ring" in dry_run.stdout
 
 
@@ -157,11 +175,15 @@ def test_combine_dtype_is_explicit() -> None:
     assert parse_args(["--dispatch-dtype", "fp32"]).dispatch_dtype == "fp32"
 
 
-def test_token_gradient_implementation_defaults_to_native_and_accepts_hybrid() -> None:
+def test_token_gradient_implementation_accepts_explicit_modes() -> None:
     assert parse_args([]).token_gradient_implementation == "native"
     assert (
         parse_args(["--token-gradient-implementation", "hybrid_combine_forward"]).token_gradient_implementation
         == "hybrid_combine_forward"
+    )
+    assert (
+        parse_args(["--token-gradient-implementation", "ring_token_gradient"]).token_gradient_implementation
+        == "ring_token_gradient"
     )
 
 
@@ -242,3 +264,39 @@ def test_hybrid_dispatch_uses_combine_forward_token_gradient_and_dispatch_weight
 
     np.testing.assert_array_equal(token_gradient, np.full((2, 2), 11.0, dtype=np.float32))
     np.testing.assert_array_equal(weight_gradient, np.full((2, 1), 7.0, dtype=np.float32))
+
+
+def test_ring_token_gradient_uses_ring_token_vjp_and_te_parameter_vjp() -> None:
+    def te_forward(tokens, _routes, routing_weights, w13, w2):
+        output = tokens * 3 + routing_weights * 5 + w13 * 7 + w2 * 11
+        return output, jnp.zeros((), dtype=jnp.int32)
+
+    def ring_forward(tokens, _routes, routing_weights, w13, w2):
+        output = tokens * 13 + routing_weights * 17 + w13 * 19 + w2 * 23
+        return output, jnp.zeros((), dtype=jnp.int32)
+
+    tokens = jnp.asarray([[2.0]], dtype=jnp.float32)
+    routes = jnp.zeros((1, 1), dtype=jnp.int32)
+    routing_weights = jnp.asarray([[3.0]], dtype=jnp.float32)
+    w13 = jnp.asarray([[5.0]], dtype=jnp.float32)
+    w2 = jnp.asarray([[7.0]], dtype=jnp.float32)
+
+    (loss, (output, dropped)), gradients = jax.jit(
+        lambda *inputs: _value_and_grad_with_ring_token_gradient(
+            jax,
+            jnp,
+            te_forward,
+            ring_forward,
+            *inputs,
+        )
+    )(tokens, routes, routing_weights, w13, w2)
+
+    te_output = 2.0 * 3 + 3.0 * 5 + 5.0 * 7 + 7.0 * 11
+    ring_output = 2.0 * 13 + 3.0 * 17 + 5.0 * 19 + 7.0 * 23
+    assert float(loss) == pytest.approx(te_output**2)
+    np.testing.assert_array_equal(output, np.asarray([[te_output]], dtype=np.float32))
+    assert int(dropped) == 0
+    np.testing.assert_array_equal(gradients[0], np.asarray([[2 * ring_output * 13]], dtype=np.float32))
+    np.testing.assert_array_equal(gradients[1], np.asarray([[2 * te_output * 5]], dtype=np.float32))
+    np.testing.assert_array_equal(gradients[2], np.asarray([[2 * te_output * 7]], dtype=np.float32))
+    np.testing.assert_array_equal(gradients[3], np.asarray([[2 * te_output * 11]], dtype=np.float32))

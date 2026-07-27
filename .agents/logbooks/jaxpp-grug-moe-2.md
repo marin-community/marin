@@ -505,3 +505,27 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - The fixed `0.002` loss and per-gradient-leaf relative-L2 acceptance remains available, but a numerical gate cannot rescue a path that is already `33.71%` slower than the valid L8 control.
 - Next action:
   - Return to the valid group-size-one L24 baseline at `18.2583` mean MFU. Use its existing profile to rank changes capable of closing the remaining `1.7417` MFU-point (`9.54%`) gap before launching another expensive run.
+
+### 2026-07-26 23:00 PDT - profile selects exact-ring NCCL protocol tuning
+- Hypothesis: The exact bulk-ring all-gather and reduce-scatter payloads are large enough that NCCL's observed `RING_LL` selection leaves material bandwidth unused; selecting `Simple` or NVLS only for those collectives can accelerate the valid group-size-one graph without changing arithmetic.
+- Profile evidence:
+  - Communication is `39.61%` of the global exclusive timeline. A `28.2%` communication speedup projects the `18.2583` L24 result to `20.00` MFU.
+  - Six MoE all-gather/reduce-scatter paths account for `59.8862%` of stage-0 XProf operation self-time. The trace records `20,480` all-gathers at `0.986ms` average and `11,776` reduce-scatters at `1.500ms` average, all identified as `RING_LL`.
+  - The profile has no step markers, so operation self-time is supporting evidence rather than a direct step-time decomposition. Its b512/m16 graph retains the target's microbatch shape and six-layer stage depth.
+  - NVIDIA NCCL 2.30 supports per-function `NCCL_PROTO` and `NCCL_ALGO` selection. Protocol forcing remains an experiment and requires measured confirmation.
+- Command:
+  - One H100x8 RNO2A job `/dlwh/ep-ring-nccl-protocol-ab-r12-20260727` runs the exact d2560/i1280/e64/top-k4/microbatch32/sequence-4096/capacity-1.25 ring value and value-and-grad benchmark for 10 warmups and 50 samples per arm.
+  - Arms are NCCL defaults, `NCCL_PROTO=allgather:simple;reducescatter:simple`, and `NCCL_ALGO=allgather:nvls;reducescatter:nvls`. NCCL INFO logging records the actual algorithm and protocol.
+- Promotion gate:
+  - Require exact value/VJP behavior and either `1.282x` improvement in the dominant collective aggregate or `1.10x` direct value-and-grad improvement before an L8 group-size-one pipeline run.
+- Results:
+  - The job succeeded in `2m17.54s`; its single task exited `0` with no retry or live resource. Every arm passed strict value and VJP parity.
+  - Default forward/value-and-grad medians were `10.512845/23.054087ms`.
+  - Selective Simple medians were `10.566797/23.126030ms`; value-and-grad regressed `0.31%`.
+  - Selective NVLS medians were `11.213155/23.780595ms`; value-and-grad regressed `3.15%`.
+  - NCCL INFO corrected the profile-level inference: the 80 MiB all-gather/reduce-scatter operations already use `RING/SIMPLE` by default. The 256 KiB operations primarily use `RING/LL`. Selective Simple changes only the smaller operations, while selective NVLS moves both sizes to `NVLS/SIMPLE`.
+- Interpretation:
+  - Both overrides are hard negatives and neither clears the direct promotion gate. The profile's anonymous `RING_LL` kernels did not establish that the large MoE payload used LL.
+  - Do not run a pipeline protocol override. Retain NCCL defaults for the valid exact-ring graph.
+- Next action:
+  - Validate the bounded NCCL_EP-forward plus bulk-ring token-gradient control. It retains the previously exact FP32 NCCL_EP output and parameter gradients while replacing the sole failing dispatch-backward token reduction with the accepted ring VJP; require every relative-L2 metric at most `0.002` and measure the duplicate-backward cost before any pipeline integration.

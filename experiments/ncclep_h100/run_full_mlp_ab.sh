@@ -32,7 +32,7 @@ Environment overrides:
   NCCLEP_COMBINE_DTYPE      bf16 or fp32 (bf16)
   NCCLEP_DISPATCH_DTYPE     bf16 or fp32 (bf16)
   NCCLEP_TOKEN_GRADIENT_IMPLEMENTATION
-                           native or hybrid_combine_forward (native)
+                           native, hybrid_combine_forward, or ring_token_gradient (native)
   RING_COMBINE_DTYPE        bf16 or fp32 (bf16)
   XLA_PREALLOC_FRACTION    XLA allocation fraction, must be <= 0.70 (0.65)
   NCCL_DEBUG               NCCL log level (WARN)
@@ -102,8 +102,10 @@ if [[ "$NCCLEP_DISPATCH_DTYPE" != "bf16" && "$NCCLEP_DISPATCH_DTYPE" != "fp32" ]
   exit 64
 fi
 if [[ "$NCCLEP_TOKEN_GRADIENT_IMPLEMENTATION" != "native" \
-  && "$NCCLEP_TOKEN_GRADIENT_IMPLEMENTATION" != "hybrid_combine_forward" ]]; then
-  echo "FATAL: NCCLEP_TOKEN_GRADIENT_IMPLEMENTATION must be native or hybrid_combine_forward," \
+  && "$NCCLEP_TOKEN_GRADIENT_IMPLEMENTATION" != "hybrid_combine_forward" \
+  && "$NCCLEP_TOKEN_GRADIENT_IMPLEMENTATION" != "ring_token_gradient" ]]; then
+  echo "FATAL: NCCLEP_TOKEN_GRADIENT_IMPLEMENTATION must be native, hybrid_combine_forward," \
+    "or ring_token_gradient;" \
     "got '$NCCLEP_TOKEN_GRADIENT_IMPLEMENTATION'" >&2
   exit 64
 fi

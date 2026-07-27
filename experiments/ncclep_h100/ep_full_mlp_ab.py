@@ -38,7 +38,7 @@ DEFAULT_ITERATIONS = 20
 OVERFLOW_POLICIES = ("trap", "drop")
 COMBINE_DTYPES = ("bf16", "fp32")
 DISPATCH_DTYPES = ("bf16", "fp32")
-TOKEN_GRADIENT_IMPLEMENTATIONS = ("native", "hybrid_combine_forward")
+TOKEN_GRADIENT_IMPLEMENTATIONS = ("native", "hybrid_combine_forward", "ring_token_gradient")
 RELATIVE_L2_PROMOTION_LIMIT = 0.002
 RELATIVE_L2_PROMOTION_TENSORS = (
     "loss",
@@ -240,7 +240,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--token-gradient-implementation",
         choices=TOKEN_GRADIENT_IMPLEMENTATIONS,
         default="native",
-        help="native TE dispatch backward, or TE combine-forward for token gradients",
+        help="native TE backward, TE combine-forward token gradients, or full-MLP Marin ring token gradients",
     )
     args = parser.parse_args(argv)
     if args.warmup < 1:
@@ -521,6 +521,57 @@ def _loss_with_aux(forward: Callable[..., Any], *inputs: Any) -> tuple[Any, tupl
     return loss, (output, dropped)
 
 
+def _value_and_grad_with_ring_token_gradient(
+    jax: Any,
+    jnp: Any,
+    te_forward: Callable[..., Any],
+    ring_forward: Callable[..., Any],
+    tokens: Any,
+    routes: Any,
+    routing_weights: Any,
+    w13: Any,
+    w2: Any,
+) -> tuple[Any, tuple[Any, ...]]:
+    """Use the ring loss VJP for tokens and the TE loss VJP for parameters."""
+
+    def te_parameter_loss(
+        differentiated_routing_weights: Any,
+        differentiated_w13: Any,
+        differentiated_w2: Any,
+    ) -> tuple[Any, tuple[Any, Any]]:
+        return _loss_with_aux(
+            te_forward,
+            tokens,
+            routes,
+            differentiated_routing_weights,
+            differentiated_w13,
+            differentiated_w2,
+        )
+
+    te_loss, te_parameter_pullback, te_aux = jax.vjp(
+        te_parameter_loss,
+        routing_weights,
+        w13,
+        w2,
+        has_aux=True,
+    )
+    routing_weight_gradient, w13_gradient, w2_gradient = te_parameter_pullback(jnp.ones_like(te_loss))
+
+    def ring_token_loss(differentiated_tokens: Any) -> Any:
+        return _loss_with_aux(
+            ring_forward,
+            differentiated_tokens,
+            routes,
+            routing_weights,
+            w13,
+            w2,
+        )[0]
+
+    ring_loss, ring_token_pullback = jax.vjp(ring_token_loss, tokens)
+    (token_gradient,) = ring_token_pullback(jnp.ones_like(ring_loss))
+    return (te_loss, te_aux), (token_gradient, routing_weight_gradient, w13_gradient, w2_gradient)
+
+
 def _finite_report(result: Any, jax: Any, jnp: Any) -> dict[str, bool]:
     (loss, (output, _dropped)), gradients = result
 
@@ -714,7 +765,11 @@ def run_ab(args: argparse.Namespace) -> int:
             te_ep,
             te_cpp_ep,
             te_sharding,
-            args.token_gradient_implementation,
+            (
+                "native"
+                if args.token_gradient_implementation == "ring_token_gradient"
+                else args.token_gradient_implementation
+            ),
         )
         te_forward = _compiled_te_forward(
             jax,
@@ -727,11 +782,26 @@ def run_ab(args: argparse.Namespace) -> int:
             combine_dtype=args.combine_dtype,
             dispatch_dtype=args.dispatch_dtype,
         )
+        ring_value_and_grad = jax.jit(
+            jax.value_and_grad(partial(_loss_with_aux, ring_forward), argnums=(0, 2, 3, 4), has_aux=True)
+        )
+        if args.token_gradient_implementation == "ring_token_gradient":
+            te_value_and_grad = jax.jit(
+                partial(
+                    _value_and_grad_with_ring_token_gradient,
+                    jax,
+                    jnp,
+                    te_forward,
+                    ring_forward,
+                )
+            )
+        else:
+            te_value_and_grad = jax.jit(
+                jax.value_and_grad(partial(_loss_with_aux, te_forward), argnums=(0, 2, 3, 4), has_aux=True)
+            )
         value_and_grads = {
-            ARM_RING: jax.jit(
-                jax.value_and_grad(partial(_loss_with_aux, ring_forward), argnums=(0, 2, 3, 4), has_aux=True)
-            ),
-            ARM_TE: jax.jit(jax.value_and_grad(partial(_loss_with_aux, te_forward), argnums=(0, 2, 3, 4), has_aux=True)),
+            ARM_RING: ring_value_and_grad,
+            ARM_TE: te_value_and_grad,
         }
         lowered = {arm: fn.lower(*inputs) for arm, fn in value_and_grads.items()}
         stablehlo = {
@@ -768,6 +838,9 @@ def run_ab(args: argparse.Namespace) -> int:
             "token_gradient_implementation": args.token_gradient_implementation,
             "hybrid_token_gradient_combine_dtype": (
                 "fp32" if args.token_gradient_implementation == "hybrid_combine_forward" else None
+            ),
+            "token_gradient_oracle": (
+                "marin_bulk_ring_full_mlp_loss" if args.token_gradient_implementation == "ring_token_gradient" else None
             ),
             "loss_reduction": "mean_tokens_sum_hidden",
         }
