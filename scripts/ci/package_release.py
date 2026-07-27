@@ -584,7 +584,7 @@ def bump_native_requirement(
     requirement_path = repo_root / build.requirement_path
     lock_path = repo_root / "uv.lock"
     original_requirement = requirement_path.read_text()
-    updated_requirement, changed = update_native_requirement(
+    _, changed = update_native_requirement(
         original_requirement,
         build.requirement_distribution,
         version,
@@ -593,18 +593,20 @@ def bump_native_requirement(
         return
 
     original_lock = lock_path.read_text()
-    requirement_path.write_text(updated_requirement)
     command = [
         "uv",
-        "lock",
+        "add",
+        "--package",
+        build.requirement_owner,
+        f"{build.requirement_distribution}>={version}",
         "--upgrade-package",
         f"{build.requirement_distribution}=={version}",
-        "--refresh-package",
-        build.requirement_distribution,
+        "--no-sync",
     ]
     for attempt, delay in enumerate(LOCK_RETRY_DELAYS, start=1):
         if delay:
             time.sleep(delay)
+        requirement_path.write_text(original_requirement)
         lock_path.write_text(original_lock)
         result = subprocess.run(command, cwd=repo_root)
         if result.returncode != 0:
@@ -626,6 +628,13 @@ def bump_native_requirement(
             requirement_path.write_text(original_requirement)
             lock_path.write_text(original_lock)
             raise
+        check = subprocess.run(["uv", "lock", "--check"], cwd=repo_root)
+        if check.returncode != 0:
+            if attempt < len(LOCK_RETRY_DELAYS):
+                continue
+            requirement_path.write_text(original_requirement)
+            lock_path.write_text(original_lock)
+            raise RuntimeError(f"`uv lock --check` failed after {attempt} attempts")
         return
     raise AssertionError("Unreachable lock retry loop")
 
