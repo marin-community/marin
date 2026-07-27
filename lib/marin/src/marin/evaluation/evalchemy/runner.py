@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shlex
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -18,7 +19,11 @@ from rigging.filesystem import StoragePath, prefix_join
 
 from marin.evaluation.evalchemy.client import CONFIG_ENV_KEY
 from marin.evaluation.evalchemy.result import EvalchemyResult
-from marin.evaluation.evalchemy.runtime import EVALCHEMY_IMAGE, EVALCHEMY_PYTHON
+from marin.evaluation.evalchemy.runtime import (
+    EVALCHEMY_EXTRA_PACKAGES,
+    EVALCHEMY_PYTHON_VERSION,
+    EVALCHEMY_REQUIREMENT,
+)
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
@@ -77,7 +82,10 @@ def _child_env(env_vars: Mapping[str, str], **extra: str) -> dict[str, str]:
 class EvalchemyRuntimeConfig:
     """Execution policy for the Evalchemy HTTP-client child."""
 
-    image: str = EVALCHEMY_IMAGE
+    requirement: str = EVALCHEMY_REQUIREMENT
+    python_version: str = EVALCHEMY_PYTHON_VERSION
+    extra_packages: tuple[str, ...] = EVALCHEMY_EXTRA_PACKAGES
+    image: str | None = None
     cpu: float = 8.0
     memory: str = "32g"
     disk: str = "50g"
@@ -151,6 +159,21 @@ def _verify_durable_artifacts(output_dir: str) -> None:
         raise RuntimeError(f"no Evalchemy results_*.json landed under {output_dir!r}")
 
 
+def _evalchemy_client_command(runtime: EvalchemyRuntimeConfig) -> tuple[str, ...]:
+    command = [
+        "uvx",
+        "--no-config",
+        "--python",
+        runtime.python_version,
+        "--from",
+        runtime.requirement,
+    ]
+    for package in runtime.extra_packages:
+        command.extend(("--with", package))
+    command.append("python")
+    return tuple(command)
+
+
 def _run_evalchemy_child(
     model: RunningModel,
     config: EvalchemyRunConfig,
@@ -159,7 +182,8 @@ def _run_evalchemy_child(
 ) -> str:
     client = iris_ctx().client
     child_id = uuid.uuid4().hex[:8]
-    command = f'exec {EVALCHEMY_PYTHON} "$IRIS_WORKDIR/{_EVAL_CLIENT_SCRIPT}"'
+    uvx_command = shlex.join(_evalchemy_client_command(config.runtime))
+    command = f'exec {uvx_command} "$IRIS_WORKDIR/{_EVAL_CLIENT_SCRIPT}"'
     eval_job = client.submit(
         entrypoint=Entrypoint.from_command("bash", "-c", command),
         name=f"eval-{config.name.replace('.', '-')}-{child_id}",

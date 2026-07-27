@@ -98,10 +98,10 @@ class HardwareRef(BaseModel):
 
 
 class Provenance(BaseModel):
-    """Where the run came from: launch-time git SHA, eval container digest, and launch host.
+    """Where the run came from: launch-time git SHA, eval runtime, and launch host.
 
-    ``eval_image`` is the eval mechanism's container: the evalchemy client image for an evalchemy run,
-    the Harbor sandbox image for a Harbor run.
+    ``eval_image`` is the mechanism runtime descriptor retained in the persisted record schema:
+    Evalchemy's commit-pinned package requirement or Harbor's sandbox image.
     """
 
     model_config = ConfigDict(frozen=True)

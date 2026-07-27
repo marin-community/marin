@@ -438,7 +438,7 @@ Other GPU-served models (DeepSeek-V2-Lite, Qwen3-30B-A3B, …) need no extra fla
 - `resource_hint`: optional CPU, memory, and disk overrides for the inference worker.
 - `accelerator`: the exact TPU or GPU slice used for inference.
 - `tokenizer`: HF tokenizer id the eval client loads; defaults to the served checkpoint. Set it to a
-  base-model HF id when serving a `gs://` path the eval image cannot load a tokenizer from.
+  base-model HF id when serving a `gs://` path the Evalchemy client cannot load a tokenizer from.
 - `discover_latest_checkpoint`: whether to resolve the latest HF checkpoint under the model path.
 
 #### `eval_report`

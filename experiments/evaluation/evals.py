@@ -10,7 +10,8 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Protocol
 
-from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig
+from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig, EvalchemyRuntimeConfig
+from marin.evaluation.evalchemy.runtime import evalchemy_requirement
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import (
     HarborAgentConfig,
@@ -145,11 +146,13 @@ def _gen_eval(name: str, task: str, shots: int, max_gen_toks: int) -> EvalchemyD
 
 
 def _chat_eval(name: str, task: str, max_gen_toks: int, *, unsafe_code: bool = False) -> EvalchemyDefinition:
+    benchmark_extra = task.lower().replace("_", "-")
     return EvalchemyDefinition(
         EvalchemyRunConfig(
             name=name,
             tasks=(EvalTaskConfig(task, 0, task_alias=name, generation=True, unsafe_code=unsafe_code),),
             max_gen_toks=max_gen_toks,
+            runtime=EvalchemyRuntimeConfig(requirement=evalchemy_requirement((benchmark_extra,))),
         )
     )
 
@@ -243,13 +246,7 @@ EVALS: dict[str, EvaluationDefinition] = {
     # Evalchemy's chat-native MATH500 benchmark (boxed-answer extraction over the HuggingFaceH4
     # MATH-500 split). A messages-based task: it runs through the chat route, so every model needs
     # a server-side chat template (snowball serves one via its vLLM args).
-    "math500": EvalchemyDefinition(
-        EvalchemyRunConfig(
-            name="math500",
-            tasks=(EvalTaskConfig("MATH500", 0, task_alias="math500", generation=True),),
-            max_gen_toks=8192,
-        )
-    ),
+    "math500": _chat_eval("math500", "MATH500", max_gen_toks=8192),
     "humaneval": EvalchemyDefinition(
         EvalchemyRunConfig(
             name="humaneval",
@@ -284,8 +281,6 @@ EVALS: dict[str, EvaluationDefinition] = {
     # capable thinking model needs longer chains.
     "aime24": _chat_eval("aime24", "AIME24", max_gen_toks=8192),
     "olympiadbench": _chat_eval("olympiadbench", "OlympiadBench", max_gen_toks=8192),
-    # humanevalplus/mbppplus need the code extras (fire + human_eval_plus) the pinned image omits, so
-    # their import fails on it; kept defined for when the image carries those deps.
     "humanevalplus": _chat_eval("humanevalplus", "HumanEvalPlus", max_gen_toks=1024, unsafe_code=True),
     "mbppplus": _chat_eval("mbppplus", "MBPPPlus", max_gen_toks=1024, unsafe_code=True),
     "mmlu-smoke": EvalchemyDefinition(
@@ -381,15 +376,12 @@ NLP_EVALS: tuple[str, ...] = (
     "gsm8k-0shot",
 )
 
-# The evalchemy chat benchmarks that run greedily on the pinned image. Chat-template models only.
-# humanevalplus/mbppplus are omitted here because the pinned image lacks their code extras (fire +
-# human_eval_plus); GPQADiamond because its sampled requests carry a seed the TPU vLLM backend
-# rejects. MMLU-Pro, CruxEval, MRCR, IFBench, and FinanceBench have no working task on the pinned
-# image/fork.
+# The Evalchemy chat benchmarks that run greedily in the lean uvx runtime. Chat-template models only.
+# GPQADiamond is omitted because its sampled requests carry a seed the TPU vLLM backend rejects.
+# MMLU-Pro, CruxEval, MRCR, IFBench, and FinanceBench have no working task on the pinned fork.
 CHAT_EVALS: tuple[str, ...] = ("math500", "aime24", "olympiadbench")
 
-# Report-row groupings, for the Math / code report layouts. CODE_EVALS is unavailable on the pinned
-# image (see above).
+# Report-row groupings for the Math / code report layouts.
 MATH_EVALS: tuple[str, ...] = ("math500", "aime24", "gsm8k-0shot")
 CODE_EVALS: tuple[str, ...] = ("humanevalplus", "mbppplus")
 

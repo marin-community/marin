@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.client import IrisClient
 from iris.cluster.config import load_config
-from marin.evaluation.evalchemy.runtime import EVALCHEMY_IMAGE
+from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIREMENT
 from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.records import (
@@ -155,7 +155,7 @@ def launch_group(spec: LaunchSpec, client: IrisClient) -> SubmittedEvaluationBat
     """Submit one CPU orchestrator for a resolved batch."""
     provenance = Provenance(
         git_sha=_git_sha(),
-        eval_image=EVALCHEMY_IMAGE,
+        eval_image=EVALCHEMY_REQUIREMENT,
         launch_host=socket.gethostname(),
     )
     batch = build_evaluation_batch(spec, provenance, _launch_user())
