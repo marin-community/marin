@@ -16,6 +16,51 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T11:51:19Z — 264,115 pairs verified; SEO ambiguity resolved
+
+- `/rav/rav-datakit-6854-reconcile-manual-1150-v1158` independently
+  reconciled 2,079 semantic checkpoints and all 312 manual review keys. None
+  are missing. The snapshot covers 264,115 of 755,281 semantic candidates
+  (34.97%). Applying every full-text decision gives:
+
+  - baseline: 211,035 pairs, 133,975 false positives, and 77,060 true
+    duplicates;
+  - treatment: 53,080 pairs, 27,447 false positives, and 25,633 true
+    duplicates;
+  - combined: 161,422 false positives and 102,693 true duplicates.
+
+  The immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-1150.json`
+  with SHA-256
+  `dce1dbf8993e7d8453128eb0644a48ad430afb8ce3397b4b71f066d8a963603a`.
+- Complete-text inspection resolves baseline decision-file 107 row 3,960 as a
+  true duplicate under the pinned low-value-template boundary. The
+  563-character member and 827-character canonical are incoherent
+  college-and-career SEO spam using the same admissions-test, elective,
+  biomedicine, and correction scaffold. The member changes only institution
+  and program slots such as `Florida Gulf Coast kit reports` and `University
+  of Michigan professional studies`; those slots are non-substantive under the
+  evaluation contract. The canonical additionally contains a job-board
+  paragraph, so deleting the member loses no distinct training content.
+  Character, line, and word-sequence similarities are 0.706475, 0, and
+  0.650485.
+- `/rav/rav-datakit-6854-inspect-row3960-1147-v1155` persisted both complete
+  texts, the complete diff, and all three model judgments.
+  `/rav/rav-datakit-6854-publish-row3960-1148-v1156` wrote the immutable
+  manual record, and `/rav/rav-datakit-6854-verify-row3960-1149-v1157`
+  independently reread the source pair, semantic evidence, inspection,
+  deterministic Parquet bytes, and completion marker. The member, canonical,
+  inspection, semantic-judgment, manual-Parquet, and marker SHA-256 values are
+  `965cec8ccacaa969215af59a8e1c87bb3c856ea6830eb8255c576b41fb0dbddf`,
+  `4893ce3e5b496530e4b22e31e43f7505e575b1b5c377c62acb8ae20ccb5c1c4e`,
+  `f4cddc9fc4b904f598a94fe7ad561614feeec89e9d50c2ecc571981f9a43688d`,
+  `8c19261dc871aa19d58bb3826a92d3d53424d972ac5fd14a5cc45d7558d52904`,
+  `65c8d32adbd37c2fb5e9255a3d152fcfb12d1db71e1ffc92db2b961547d07b0e`,
+  and
+  `4a1a389e1be0638a6d45e9863445d49822db92b8ce1c58c52cd3e2ce85af9f9a`.
+- The four batch-priority 2-H100 workers remain active. All 12 root, broker,
+  and GPU pods are Ready with zero Kubernetes restarts.
+
 ### 2026-07-27T11:32:03Z — 261,939 pairs verified; fixed sample refreshed
 
 - `/rav/rav-datakit-6854-reconcile-manual-1131-v1151` independently reread
