@@ -72,8 +72,10 @@ TORCH_CUDA_ARCH_LIST=9.0a \
 ```
 
 The environment must already provide PyTorch, the build requirements declared
-by both upstream packages, and the CUDA bindings required by `nccl4py`. Verify
-that all three layers resolve the pinned library before running:
+by both upstream packages, and the CUDA bindings required by `nccl4py`.
+`torch.cuda.nccl.version()` reports the NCCL version PyTorch was compiled
+against, not necessarily the dynamically loaded runtime version. Verify the
+UB-X extension binding before running:
 
 ```bash
 git -C "${NCCL_UBX_SOURCE}" rev-parse HEAD
@@ -86,6 +88,10 @@ Expected source commit:
 ```text
 db0c814185a0415cc2e23dca387fecb9282de551
 ```
+
+The benchmark additionally calls `ncclGetVersion` from the loaded library and
+requires runtime version `23007` with exactly the source-built
+`build/lib/libnccl.so.2` mapped into every rank.
 
 ## CPU/static preflight
 

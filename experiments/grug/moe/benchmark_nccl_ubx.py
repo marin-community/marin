@@ -20,6 +20,13 @@ from typing import Any
 
 import numpy as np
 
+from experiments.grug.moe.nccl_runtime import (
+    NCCL_LIBRARY_PATH_ENV,
+    NCCL_RUNTIME_VERSION_ENV,
+    nccl_runtime,
+    validate_nccl_runtime,
+)
+
 try:
     import torch
     import torch.distributed as dist
@@ -38,6 +45,7 @@ DEFAULT_HIDDEN_DIM = 2_560
 DEFAULT_SKEW_ALPHA = 1.2
 DEFAULT_RELATIVE_L2_LIMIT = 0.002
 DEFAULT_REQUIRED_SPEEDUP = 1.10
+EXPECTED_NCCL_RUNTIME_VERSION = 23_007
 _POOL_ALIGNMENT = 2 * 1024 * 1024
 _POOL_HEADROOM = 256 * 1024 * 1024
 
@@ -548,14 +556,14 @@ def _run_gpu(config: BenchmarkConfig, source: Path) -> tuple[dict[str, Any], boo
     device = torch.device(f"cuda:{local_rank}")
     if torch.cuda.get_device_capability(device)[0] != 9:
         raise RuntimeError(f"UB-X H100 gate requires SM90, found {torch.cuda.get_device_capability(device)}")
-    torch_nccl_version = torch.cuda.nccl.version()
-    torch_nccl_components = (
-        tuple(torch_nccl_version[:3])
-        if isinstance(torch_nccl_version, tuple)
-        else (torch_nccl_version // 10_000, (torch_nccl_version // 100) % 100, torch_nccl_version % 100)
+    loaded_nccl = nccl_runtime()
+    validate_nccl_runtime(
+        loaded_nccl,
+        {
+            NCCL_RUNTIME_VERSION_ENV: str(EXPECTED_NCCL_RUNTIME_VERSION),
+            NCCL_LIBRARY_PATH_ENV: str(source / "build/lib/libnccl.so.2"),
+        },
     )
-    if torch_nccl_components != (2, 30, 7):
-        raise RuntimeError(f"PyTorch must resolve NCCL 2.30.7, found {torch_nccl_version}")
     dist.init_process_group(backend="nccl", init_method="env://", world_size=world_size, rank=rank)
 
     plan = build_route_plan(config)
@@ -767,7 +775,11 @@ def _run_gpu(config: BenchmarkConfig, source: Path) -> tuple[dict[str, Any], boo
         "runtime_api": runtime_api,
         "runtime": {
             "torch": torch.__version__,
-            "torch_nccl": torch_nccl_version,
+            "torch_compiled_nccl": torch.cuda.nccl.version(),
+            "loaded_nccl": {
+                "version": loaded_nccl.version,
+                "mapped_libraries": [str(path) for path in loaded_nccl.mapped_libraries],
+            },
             "ubx": ubx.get_version(),
             "device": torch.cuda.get_device_name(device),
             "compute_capability": torch.cuda.get_device_capability(device),
