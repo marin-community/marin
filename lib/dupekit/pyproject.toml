@@ -17,7 +17,7 @@ requires-python = ">=3.12"
 # opts uv into development wheels; `scripts/rust_mode.py dev` swaps the
 # [tool.uv.sources] entry below to the local rust/ tree so it builds from source.
 dependencies = [
-    "marin-dupekit-native >= 0.1.2.dev0",
+    "marin-dupekit-native>=0.1.4.dev30223685542",
 ]
 
 [project.urls]

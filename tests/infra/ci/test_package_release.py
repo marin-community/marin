@@ -4,7 +4,6 @@
 """Behavioral contracts for Marin-owned package releases."""
 
 import hashlib
-import tomllib
 from pathlib import Path
 
 import pytest
@@ -15,7 +14,6 @@ from scripts.ci.package_release import (
     artifact_manifest,
     cargo_compatible_version,
     latest_supported_version,
-    merge_targeted_lock_change,
     next_development_version,
     packages_for_changes,
     python_compatible_version,
@@ -326,78 +324,6 @@ source = { registry = "https://pypi.org/simple" }
     validate_targeted_lock_change(before, targeted, "marin-iris-native", "0.1.4.dev30194118926")
     with pytest.raises(ValueError, match="typing-extensions"):
         validate_targeted_lock_change(before, unrelated, "marin-iris-native", "0.1.4.dev30194118926")
-
-
-def test_merge_targeted_lock_change_preserves_unrelated_resolution() -> None:
-    before = """\
-version = 1
-revision = 3
-
-[[package]]
-name = "marin-iris"
-version = "0.1.0"
-source = { virtual = "lib/iris" }
-dependencies = [
-    { name = "marin-iris-native" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "marin-iris-native", specifier = ">=0.1.3" }]
-
-[[package]]
-name = "marin-iris-native"
-version = "0.1.3"
-source = { registry = "https://pypi.org/simple" }
-
-[[package]]
-name = "typing-extensions"
-version = "4.16.0"
-source = { registry = "https://pypi.org/simple" }
-"""
-    resolved = (
-        before.replace(
-            'specifier = ">=0.1.3"',
-            'specifier = ">=0.1.4.dev30194118926"',
-        )
-        .replace(
-            'version = "0.1.3"',
-            'version = "0.1.4.dev30194118926"',
-        )
-        .replace(
-            'version = "4.16.0"',
-            'version = "4.17.0"',
-        )
-    )
-
-    merged = merge_targeted_lock_change(before, resolved, ("marin-iris", "marin-iris-native"))
-
-    packages = {package["name"]: package for package in tomllib.loads(merged)["package"]}
-    assert packages["marin-iris"]["metadata"]["requires-dist"] == [
-        {"name": "marin-iris-native", "specifier": ">=0.1.4.dev30194118926"}
-    ]
-    assert packages["marin-iris-native"]["version"] == "0.1.4.dev30194118926"
-    assert packages["typing-extensions"]["version"] == "4.16.0"
-    validate_targeted_lock_change(
-        before,
-        merged,
-        "marin-iris-native",
-        "0.1.4.dev30194118926",
-        allowed_packages=("marin-iris",),
-    )
-
-
-def test_merge_targeted_lock_change_requires_unique_target() -> None:
-    lock = """\
-version = 1
-
-[[package]]
-name = "marin-iris"
-version = "0.1.0"
-source = { virtual = "lib/iris" }
-"""
-
-    with pytest.raises(ValueError):
-        merge_targeted_lock_change(lock, lock, ("marin-iris-native",))
 
 
 def test_release_workflow_publishes_only_trusted_package_releases() -> None:

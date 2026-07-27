@@ -31,7 +31,6 @@ PYPI_VERSION_JSON_URL = "https://pypi.org/pypi/{distribution}/{version}/json"
 LOCK_RETRY_DELAYS = (0, 5, 15, 30, 60, 120)
 PYTHON_LIBS_FAMILY = "python-libs"
 _VERSION_RE = re.compile(r"^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)(?:[.-]dev\.?(?P<dev>\d+))?$")
-_LOCK_PACKAGE_BLOCK_RE = re.compile(r"(?ms)^\[\[package\]\]\n.*?(?=^\[\[package\]\]\n|\Z)")
 
 
 @dataclass(frozen=True)
@@ -563,43 +562,6 @@ def validate_targeted_lock_change(
         raise ValueError(f"Expected {distribution}=={expected} to resolve from a registry")
 
 
-def merge_targeted_lock_change(before: str, resolved: str, packages: Iterable[str]) -> str:
-    """Copy selected resolved package blocks into an otherwise unchanged lockfile."""
-    requested = set(packages)
-    before_matches = list(_LOCK_PACKAGE_BLOCK_RE.finditer(before))
-    resolved_matches = list(_LOCK_PACKAGE_BLOCK_RE.finditer(resolved))
-    if not before_matches or not resolved_matches:
-        raise ValueError("Expected uv.lock package entries")
-
-    resolved_blocks: dict[str, list[str]] = {}
-    for match in resolved_matches:
-        package = tomllib.loads(match.group(0))["package"][0]
-        resolved_blocks.setdefault(package["name"], []).append(match.group(0))
-
-    replacements: dict[str, str] = {}
-    for name in requested:
-        blocks = resolved_blocks.get(name, [])
-        if len(blocks) != 1:
-            raise ValueError(f"Expected one resolved uv.lock entry for {name}, found {len(blocks)}")
-        replacements[name] = blocks[0]
-
-    merged_blocks = []
-    found: dict[str, int] = {name: 0 for name in requested}
-    for match in before_matches:
-        block = match.group(0)
-        package = tomllib.loads(block)["package"][0]
-        name = package["name"]
-        if name in replacements:
-            block = replacements[name]
-            found[name] += 1
-        merged_blocks.append(block)
-
-    invalid = {name: count for name, count in found.items() if count != 1}
-    if invalid:
-        raise ValueError(f"Expected one existing uv.lock entry for each targeted package, found {invalid}")
-    return before[: before_matches[0].start()] + "".join(merged_blocks)
-
-
 def _emit_github_output(path: Path | None, **values: str) -> None:
     if path is None:
         return
@@ -622,7 +584,7 @@ def bump_native_requirement(
     requirement_path = repo_root / build.requirement_path
     lock_path = repo_root / "uv.lock"
     original_requirement = requirement_path.read_text()
-    updated_requirement, changed = update_native_requirement(
+    _, changed = update_native_requirement(
         original_requirement,
         build.requirement_distribution,
         version,
@@ -631,18 +593,20 @@ def bump_native_requirement(
         return
 
     original_lock = lock_path.read_text()
-    requirement_path.write_text(updated_requirement)
     command = [
         "uv",
-        "lock",
+        "add",
+        "--package",
+        build.requirement_owner,
+        f"{build.requirement_distribution}>={version}",
         "--upgrade-package",
         f"{build.requirement_distribution}=={version}",
-        "--refresh-package",
-        build.requirement_distribution,
+        "--no-sync",
     ]
     for attempt, delay in enumerate(LOCK_RETRY_DELAYS, start=1):
         if delay:
             time.sleep(delay)
+        requirement_path.write_text(original_requirement)
         lock_path.write_text(original_lock)
         result = subprocess.run(command, cwd=repo_root)
         if result.returncode != 0:
@@ -651,14 +615,8 @@ def bump_native_requirement(
             requirement_path.write_text(original_requirement)
             lock_path.write_text(original_lock)
             raise RuntimeError(f"`{' '.join(command)}` failed after {attempt} attempts")
-        resolved_lock = lock_path.read_text()
+        updated_lock = lock_path.read_text()
         try:
-            updated_lock = merge_targeted_lock_change(
-                original_lock,
-                resolved_lock,
-                (build.requirement_distribution, build.requirement_owner),
-            )
-            lock_path.write_text(updated_lock)
             validate_targeted_lock_change(
                 original_lock,
                 updated_lock,
