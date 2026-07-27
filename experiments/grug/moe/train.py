@@ -5359,13 +5359,15 @@ def _bootstrap_ubx(config: GrugRunConfig, mesh: Mesh) -> None:
         cuda_home=Path(cuda_home),
     )
     logger.info(
-        "UB-X bootstrapped: groups=%d ep=%d local_tokens=%d capacity=%d hidden=%d gpu_allocator=%s",
+        "UB-X bootstrapped: groups=%d ep=%d local_tokens=%d capacity=%d hidden=%d "
+        "tf_gpu_allocator=%s xla_client_allocator=%s",
         pipeline_groups,
         expert_size,
         local_tokens,
         capacity,
         config.model.hidden_dim,
         os.environ.get("TF_GPU_ALLOCATOR", ""),
+        os.environ.get("XLA_PYTHON_CLIENT_ALLOCATOR", ""),
     )
 
 

@@ -197,7 +197,9 @@ def nccl_ep_setup_scripts(*, overflow_policy: Literal["trap", "drop"]) -> tuple[
     )
 
 
-def ubx_setup_scripts(*, source_root: str, revision: str, gpu_allocator: str | None) -> tuple[str, ...]:
+def ubx_setup_scripts(
+    *, source_root: str, revision: str, tf_gpu_allocator: str | None, xla_client_allocator: str | None
+) -> tuple[str, ...]:
     """Build pinned NCCL UB-X and persist the exact runtime before JAX starts."""
     activation_exports = [
         "  printf 'export CUDA_HOME=%q\\n' \"$cuda_root\"",
@@ -208,8 +210,10 @@ def ubx_setup_scripts(*, source_root: str, revision: str, gpu_allocator: str | N
         f"  printf 'export LD_LIBRARY_PATH=%q/build/lib:%q/lib:${{LD_LIBRARY_PATH:-}}\\n' "
         f'{source_root!r} "$cuda_root"',
     ]
-    if gpu_allocator is not None:
-        activation_exports.append(f"  printf 'export TF_GPU_ALLOCATOR=%q\\n' {gpu_allocator!r}")
+    if tf_gpu_allocator is not None:
+        activation_exports.append(f"  printf 'export TF_GPU_ALLOCATOR=%q\\n' {tf_gpu_allocator!r}")
+    if xla_client_allocator is not None:
+        activation_exports.append(f"  printf 'export XLA_PYTHON_CLIENT_ALLOCATOR=%q\\n' {xla_client_allocator!r}")
 
     return (
         "\n".join(
@@ -494,7 +498,8 @@ def build_jaxpp_may_checkpoint(*, version: str = "dev") -> ArtifactStep[Levanter
         post_setup_scripts += ubx_setup_scripts(
             source_root=os.environ.get("NCCL_UBX_SOURCE_ROOT", DEFAULT_NCCL_UBX_SOURCE_ROOT),
             revision=os.environ.get("NCCL_UBX_REVISION", DEFAULT_NCCL_UBX_REVISION),
-            gpu_allocator=os.environ.get("TF_GPU_ALLOCATOR"),
+            tf_gpu_allocator=os.environ.get("TF_GPU_ALLOCATOR"),
+            xla_client_allocator=os.environ.get("XLA_PYTHON_CLIENT_ALLOCATOR"),
         )
 
     mpmd_dim = 1 if pipeline is None else pipeline.mpmd_dim or pipeline.stages
