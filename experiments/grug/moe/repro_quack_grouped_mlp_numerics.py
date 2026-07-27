@@ -46,6 +46,7 @@ ARM_REFERENCE = "pallas_scatter"
 ARMS = (ARM_QUACK, ARM_REFERENCE)
 REQUIRED_TENSORS = (
     "loss",
+    "output",
     "gradient.tokens",
     "gradient.routing_weights",
     "gradient.w13",
@@ -173,8 +174,8 @@ def tensor_metrics(actual: jax.Array, reference: jax.Array) -> dict[str, float |
 
 
 def admission_report(tensors: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    """Apply the strict relative-L2 criterion to loss and every gradient leaf."""
-    missing = [name for name in (*REQUIRED_TENSORS, "output") if name not in tensors]
+    """Apply the relative-L2 criterion to every required floating tensor."""
+    missing = [name for name in REQUIRED_TENSORS if name not in tensors]
     if missing:
         raise ValueError(f"missing parity tensors: {missing}")
     failures = []
@@ -189,7 +190,6 @@ def admission_report(tensors: dict[str, dict[str, Any]]) -> dict[str, Any]:
     return {
         "maximum_relative_l2_error": RELATIVE_L2_LIMIT,
         "required_tensors": list(REQUIRED_TENSORS),
-        "output_is_diagnostic_only": True,
         "observed": observed,
         "failures": failures,
         "passed": not failures,
@@ -229,7 +229,19 @@ def _quack_forward(
     w13: jax.Array,
     w2: jax.Array,
 ) -> jax.Array:
-    output, dropped = _moe_mlp_local_sonic(
+    output, dropped = _quack_forward_with_drops(tokens, routes, routing_weights, w13, w2)
+    del dropped
+    return output
+
+
+def _quack_forward_with_drops(
+    tokens: jax.Array,
+    routes: jax.Array,
+    routing_weights: jax.Array,
+    w13: jax.Array,
+    w2: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    return _moe_mlp_local_sonic(
         tokens,
         routes,
         routing_weights,
@@ -238,8 +250,21 @@ def _quack_forward(
         activation_fn=jax.nn.silu,
         num_experts=NUM_EXPERTS,
     )
-    del dropped
-    return output
+
+
+def drop_report(dropped: jax.Array) -> dict[str, Any]:
+    """Validate the no-drop contract returned by the local Sonic path."""
+    dropped_host = np.asarray(jax.device_get(dropped))
+    if dropped_host.shape != ():
+        raise ValueError(f"dropped assignment count must be scalar, got {dropped_host.shape}")
+    if not np.issubdtype(dropped_host.dtype, np.integer):
+        raise TypeError(f"dropped assignment count must be integer, got {dropped_host.dtype}")
+    count = int(dropped_host)
+    return {
+        "count": count,
+        "expected": 0,
+        "preserved_exactly": count == 0,
+    }
 
 
 def _loss_with_aux(forward: Callable[..., jax.Array], *inputs: jax.Array) -> tuple[jax.Array, jax.Array]:
@@ -355,16 +380,24 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
         for arm, forward in forwards.items()
     }
     compiled_forwards = {arm: forward.lower(*inputs).compile() for arm, forward in forwards.items()}
+    compiled_quack_forward_with_drops = jax.jit(_quack_forward_with_drops).lower(*inputs).compile()
     compiled_value_and_grads = {
         arm: value_and_grad.lower(*inputs).compile() for arm, value_and_grad in value_and_grads.items()
     }
 
+    _, quack_dropped = jax.block_until_ready(compiled_quack_forward_with_drops(*inputs))
+    drops = drop_report(quack_dropped)
     validation_results = {
         arm: jax.block_until_ready(compiled_value_and_grad(*inputs))
         for arm, compiled_value_and_grad in compiled_value_and_grads.items()
     }
     parity = _parity_report(validation_results[ARM_QUACK], validation_results[ARM_REFERENCE])
-    passed = bool(parity["admission_criterion"]["passed"])
+    passed = bool(parity["admission_criterion"]["passed"]) and bool(drops["preserved_exactly"])
+    stop_reason = None
+    if parity["admission_criterion"]["failures"]:
+        stop_reason = "required_relative_l2_failed"
+    elif not drops["preserved_exactly"]:
+        stop_reason = "drop_contract_failed"
     timings = None
     if passed:
         timings = {
@@ -386,7 +419,7 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
         "event": "sonic_quack_no_ep_numerical_admission",
         "schema_version": 1,
         "status": "promote" if passed else "stop",
-        "stop_reason": None if passed else "required_relative_l2_failed",
+        "stop_reason": stop_reason,
         "shape": {
             "tokens": TOKENS,
             "assignments": ASSIGNMENTS,
@@ -399,6 +432,7 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
             "routing_weight_dtype": "float32",
         },
         "routing": routing,
+        "drops": drops,
         "runtime": runtime,
         "loss_contract": "mean_tokens(sum_hidden(square(output.astype(float32))))",
         "reference": "Pallas Triton ragged_dot expert MLP plus JAX scatter-add combine",
@@ -407,7 +441,7 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
         "promotion_criterion": {
             "maximum_required_relative_l2_error": RELATIVE_L2_LIMIT,
             "required_tensors": list(REQUIRED_TENSORS),
-            "output_is_diagnostic_only": True,
+            "require_exact_zero_drops": True,
             "timing_is_promotional": False,
             "passed": passed,
         },
