@@ -43,19 +43,23 @@ def test_tensor_metrics_reports_norm_cosine_finiteness_and_max_abs():
     assert metrics["max_abs_error"] == 1.0
 
 
-def test_admission_report_requires_each_loss_and_gradient_leaf_but_not_output():
-    tensors = {name: _metrics() for name in (*gate.REQUIRED_TENSORS, "output")}
+def test_admission_report_requires_output_loss_and_each_gradient_leaf():
+    tensors = {name: _metrics() for name in gate.REQUIRED_TENSORS}
     tensors["loss"] = _metrics(gate.RELATIVE_L2_LIMIT)
-    tensors["output"] = _metrics(0.5)
+    tensors["output"] = _metrics(gate.RELATIVE_L2_LIMIT)
 
     passing = gate.admission_report(tensors)
-    tensors["gradient.routing_weights"] = _metrics(gate.RELATIVE_L2_LIMIT + 1e-6)
+    tensors["output"] = _metrics(gate.RELATIVE_L2_LIMIT + 1e-6)
     failing = gate.admission_report(tensors)
 
     assert passing["passed"]
-    assert passing["output_is_diagnostic_only"]
     assert not failing["passed"]
-    assert failing["failures"] == ["gradient.routing_weights"]
+    assert failing["failures"] == ["output"]
+
+
+def test_drop_report_requires_exact_zero_integer_scalar():
+    assert gate.drop_report(jnp.asarray(0, dtype=jnp.int32))["preserved_exactly"]
+    assert not gate.drop_report(jnp.asarray(1, dtype=jnp.int32))["preserved_exactly"]
 
 
 def test_timing_summary_reports_reference_over_quack_speedup():

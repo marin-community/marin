@@ -215,45 +215,6 @@ if cute is not None:
                 stream,
             )
 
-    class _GroupedVarlenWeightGradConcatFfi:
-        def __init__(self) -> None:
-            self.gemm = GemmDefaultSm90(
-                Float32,
-                BFloat16,
-                _TILE_SHAPE,
-                _CLUSTER_SHAPE,
-                pingpong=True,
-                is_persistent=True,
-                concat_layout=("out",),
-            )
-            self.max_active_clusters = get_max_active_clusters(_CLUSTER_SHAPE[0] * _CLUSTER_SHAPE[1])
-
-        @cute.jit
-        def __call__(
-            self,
-            x: cute.Tensor,
-            dout: cute.Tensor,
-            offsets: cute.Tensor,
-            dweights: cute.Tensor,
-            stream: cuda.CUstream,
-        ) -> None:
-            epilogue = GemmDefaultEpiMixin.EpilogueArguments()
-            scheduler = TileSchedulerOptions(
-                max_active_clusters=Int32(self.max_active_clusters),
-                max_swizzle_size=Int32(8),
-            )
-            varlen = VarlenArguments(mCuSeqlensK=offsets)
-            self.gemm(
-                _transposed_matrix_view(x),
-                _transposed_matrix_view(dout),
-                _weight_grad_view(dweights),
-                None,
-                epilogue,
-                scheduler,
-                varlen,
-                stream,
-            )
-
     class _GroupedVarlenDGatedFfi:
         def __init__(self) -> None:
             self.gemm = GemmDGatedSm90(
@@ -418,31 +379,6 @@ if cute is not None:
             options="--enable-tvm-ffi",
         )
 
-    def _compile_grouped_varlen_weight_grad_concat() -> Any:
-        total_tokens = cute.sym_int()
-        input_dim = cute.sym_int()
-        output_dim = cute.sym_int()
-        num_experts = cute.sym_int()
-        num_offsets = cute.sym_int()
-        x = make_fake_tensor(BFloat16, (total_tokens, input_dim), leading_dim=1, divisibility=_ALIGNMENT)
-        dout = make_fake_tensor(BFloat16, (total_tokens, output_dim), leading_dim=1, divisibility=_ALIGNMENT)
-        offsets = make_fake_tensor(Int32, (num_offsets,), leading_dim=0, divisibility=4)
-        dweights = make_fake_tensor(
-            BFloat16,
-            (num_experts, input_dim, output_dim),
-            leading_dim=2,
-            divisibility=_ALIGNMENT,
-        )
-        return cute.compile(
-            _GroupedVarlenWeightGradConcatFfi(),
-            x,
-            dout,
-            offsets,
-            dweights,
-            cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True),
-            options="--enable-tvm-ffi",
-        )
-
     def _compile_grouped_varlen_dgated() -> Any:
         total_tokens = cute.sym_int()
         hidden_dim = cute.sym_int()
@@ -508,11 +444,6 @@ if cute is not None:
         _compile_grouped_varlen_weight_grad,
         allow_cuda_graph=True,
     )
-    _GROUPED_VARLEN_WEIGHT_GRAD_CONCAT = TvmFfiKernel(
-        "levanter_sonic_quack_grouped_varlen_weight_grad_concat",
-        _compile_grouped_varlen_weight_grad_concat,
-        allow_cuda_graph=True,
-    )
     _GROUPED_VARLEN_DGATED = TvmFfiKernel(
         "levanter_sonic_quack_grouped_varlen_dgated",
         _compile_grouped_varlen_dgated,
@@ -523,7 +454,6 @@ else:
     _GROUPED_VARLEN = None
     _GROUPED_VARLEN_CONCAT = None
     _GROUPED_VARLEN_WEIGHT_GRAD = None
-    _GROUPED_VARLEN_WEIGHT_GRAD_CONCAT = None
     _GROUPED_VARLEN_DGATED = None
 
 
@@ -533,7 +463,6 @@ def _require_quack() -> None:
         or _GROUPED_VARLEN is None
         or _GROUPED_VARLEN_CONCAT is None
         or _GROUPED_VARLEN_WEIGHT_GRAD is None
-        or _GROUPED_VARLEN_WEIGHT_GRAD_CONCAT is None
         or _GROUPED_VARLEN_DGATED is None
     ):
         raise ImportError(
@@ -626,25 +555,6 @@ def _quack_grouped_weight_grad_impl(
     )
 
 
-def _quack_grouped_weight_grad_concat_impl(
-    x: Float[Array, "M I"],
-    dout: Float[Array, "M O"],
-    group_sizes: Int[Array, "E"],
-) -> Float[Array, "E I O"]:
-    _require_quack()
-    assert _GROUPED_VARLEN_WEIGHT_GRAD_CONCAT is not None
-    if x.dtype != jnp.bfloat16 or dout.dtype != jnp.bfloat16:
-        raise TypeError("SonicMoE QuACK kernels require bfloat16 activations and weights")
-    output_shape = jax.ShapeDtypeStruct((group_sizes.shape[0], x.shape[1], dout.shape[1]), x.dtype)
-    return _GROUPED_VARLEN_WEIGHT_GRAD_CONCAT(
-        x,
-        dout,
-        _expert_offsets(group_sizes),
-        key=(),
-        output_shape_dtype=output_shape,
-    )
-
-
 def _quack_grouped_dswiglu_impl(
     dout: Float[Array, "M H"],
     weights: Float[Array, "E I H"],
@@ -669,6 +579,12 @@ def _quack_grouped_dswiglu_impl(
     )
 
 
+def _interleaved_gated_to_concatenated(values: Float[Array, "M I2"]) -> Float[Array, "M I2"]:
+    if values.shape[-1] % 2 != 0:
+        raise ValueError("interleaved gated dimension must be even")
+    return jnp.concatenate((values[..., 0::2], values[..., 1::2]), axis=-1)
+
+
 @jax.custom_vjp
 def quack_mlp_varlen(
     x: Float[Array, "M H"],
@@ -690,9 +606,10 @@ def _quack_mlp_fwd(x: jax.Array, up_weights: jax.Array, down_weights: jax.Array,
 def _quack_mlp_bwd(residuals: tuple[jax.Array, jax.Array, jax.Array, jax.Array], doutput: jax.Array):
     x, up_weights, down_weights, group_sizes = residuals
     preact = _quack_grouped_concat_impl(x, up_weights, group_sizes)
-    dpreact, hidden = _quack_grouped_dswiglu_impl(doutput, down_weights, preact, group_sizes)
-    dx = _quack_grouped_concat_impl(dpreact, jnp.swapaxes(up_weights, 1, 2), group_sizes)
-    dup_weights = _quack_grouped_weight_grad_concat_impl(x, dpreact, group_sizes)
+    dpreact_interleaved, hidden = _quack_grouped_dswiglu_impl(doutput, down_weights, preact, group_sizes)
+    dpreact = _interleaved_gated_to_concatenated(dpreact_interleaved)
+    dx = _quack_grouped_impl(dpreact, jnp.swapaxes(up_weights, 1, 2), group_sizes)
+    dup_weights = _quack_grouped_weight_grad_impl(x, dpreact, group_sizes)
     ddown_weights = _quack_grouped_weight_grad_impl(hidden, doutput, group_sizes)
     return dx, dup_weights, ddown_weights, None
 
