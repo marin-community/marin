@@ -901,3 +901,16 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - The focused accumulator, explicit-stage, and pipeline-wire suite reports `58 passed`; changed-file pre-commit including Pyrefly passes.
 - Next action:
   - Relaunch the unchanged L4 gate as r7. Require six finite steps before the matched L8 ordinary-versus-fused A/B.
+
+### 2026-07-27 03:23 PDT - Launch L4 lifecycle gate r7 without the scalar chain
+- Code:
+  - Functional fix `83cb355895` removes fused Ring's cross-stage materialization token transfers.
+  - Launch snapshot `bbdddbea64` records the r6 failure and preserves Sonic's serialized materialization behavior.
+- Command:
+  - The L4 command is unchanged from r1-r6 except run ID `jaxpp-rno2a-ring-ep2d4-fusedacc-fp8-l4-e64k4-b128-s4096-p4m4-r7-20260727`.
+- Jobs:
+  - Parent `/dlwh/iris-run-job-20260727-102233` on `cw-rno2a`.
+  - Babysitter `019fa319-4896-7593-9a17-db9b1e214fdd` owns the run through terminal state.
+- Gate:
+  - Require all four ranks to complete lower, compile, first execution, and six finite training steps.
+  - A pass promotes only to a matched L8 EP2/data4 ordinary-versus-fused throughput A/B. Exact L24 remains blocked.
