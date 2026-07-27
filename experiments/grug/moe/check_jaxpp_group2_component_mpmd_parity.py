@@ -2355,6 +2355,8 @@ def _run_split_single_finish_vjp_diagnostic(
     qb_beta: jax.Array,
     hiddens: tuple[jax.Array, jax.Array],
     cotangents: tuple[jax.Array, jax.Array],
+    *,
+    require_ordered_reference: bool = False,
 ) -> bool:
     ordered_arguments = (params, qb_beta, hiddens[0], cotangents[0])
     compiled_ordered = _lower_and_compile(
@@ -2641,7 +2643,10 @@ def _run_split_single_finish_vjp_diagnostic(
         assembled,
         no_checkpoint_reference,
     )
-    passed = saved_forward_passed and (full_assembly_passed or split_vs_no_checkpoint_gradients_passed)
+    if require_ordered_reference:
+        passed = saved_forward_passed and full_assembly_passed
+    else:
+        passed = saved_forward_passed and (full_assembly_passed or split_vs_no_checkpoint_gradients_passed)
     if process_id == 0:
         event(
             process_id,
@@ -2655,6 +2660,7 @@ def _run_split_single_finish_vjp_diagnostic(
             default_vs_no_checkpoint_gradients_passed=default_vs_no_checkpoint_gradients_passed,
             full_assembly_passed=full_assembly_passed,
             split_vs_no_checkpoint_gradients_passed=split_vs_no_checkpoint_gradients_passed,
+            required_reference="ordered_default_remat" if require_ordered_reference else "ordered_or_no_checkpoint",
             passed=passed,
         )
     return passed
@@ -2707,29 +2713,19 @@ def _run_router_remat_reference_diagnostic(
         checkpoint_reference,
         no_checkpoint_reference,
     )
-    if not reference_stabilized:
-        if process_id == 0:
-            event(
-                process_id,
-                "router_remat_reference_summary",
-                reference_stabilized=False,
-                split_assembly_skipped=True,
-                passed=False,
-            )
-        return False
-
     split_assembly_passed = _run_split_single_finish_vjp_diagnostic(
         process_id,
         params,
         qb_beta,
         hiddens,
         cotangents,
+        require_ordered_reference=True,
     )
     if process_id == 0:
         event(
             process_id,
             "router_remat_reference_summary",
-            reference_stabilized=True,
+            no_checkpoint_diagnostic_passed=reference_stabilized,
             split_assembly_skipped=False,
             split_assembly_passed=split_assembly_passed,
             passed=split_assembly_passed,

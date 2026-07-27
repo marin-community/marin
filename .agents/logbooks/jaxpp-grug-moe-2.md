@@ -265,3 +265,18 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - Neither default whole-block checkpoint nor no checkpoint is a canonical reference for the saved default-context forward. Their routes differ, while the split derivative is evaluated at the default-context saved primals. The ordered default checkpoint's MoE gradients matching neither exact saved-primal finish derivative is consistent with backward recomputation using unsaved routing state.
 - Next action:
   - Add checkpoint names for selected experts and the `T×K` continuous routing intermediates required by the router VJP, avoiding retention of `T×E` logits. First require default whole-block checkpoint versus no checkpoint to pass every gradient leaf at relative-L2 `0.002` with exact routes; only then rerun split assembly against the stabilized reference. Do not launch L8 or L24.
+
+### 2026-07-26 18:22 PDT - compact router saves improve gradients but do not align forward contexts
+- Hypothesis: Saving selected experts and the compact `T×K` router VJP intermediates across `save_moe` remat will stabilize the whole-block default-remat gradient without retaining `T×E` logits.
+- Commit Hash: `5d86a0722b` adds the production remat names and a target H100 gate that initially required default-remat versus no-checkpoint parity before split assembly.
+- Command: Parent `/dlwh/jaxpp-group2-router-remat-r13-5d86a072-20260726-1820` ran `--diagnostic router-remat-reference` from clean commit `5d86a0722baf11f6d2a488d15208b8d6f02e5c6f`; child `/dlwh/jaxpp-group2-router-remat-r13-5d86a072-20260726-1820/0`.
+- Results:
+  - Default-remat versus no-checkpoint parameter-gradient relative-L2 fell from r12's `1.39361` to `0.0568697`; input-gradient relative-L2 fell from `0.673786` to `0.0247935`.
+  - Forward compiler contexts remained distinct, as expected: shared outputs were the first failing boundary at `0.00400094`; routes differed on `2,698/2,732` assignments across `1,647/1,663` tokens, and routing counts differed in `59/61` entries.
+  - The largest parameter-gradient error was `mlp.router` at `0.0568697`; expert gradients were `0.0476692-0.0477292`. Attention leaves were approximately `0.02065-0.02506`, dense normalization/gating leaves approximately `0.03007-0.03181`, and shared-expert leaves `0.00526-0.00574`.
+  - The initial gate incorrectly skipped split assembly because it treated forward identity with the no-checkpoint compiler context as a prerequisite. Iris reached that intended assertion after `1m53.87s`; the job is terminal with no live allocation.
+- Interpretation:
+  - Compact router residuals are a strong partial improvement, but no-checkpoint remains a different forward program and is not the canonical gate.
+  - The actual correctness test is split assembly against the ordered default-remat derivative using the same saved VJP primals and routes. No-checkpoint should remain diagnostic-only.
+- Next action:
+  - Always run split single-finish assembly and require its saved default-context forward plus every assembled gradient leaf to match ordered default remat at relative-L2 `0.002`. Use the resulting exact failing leaves to rank any additional compact saved boundaries; do not add large activation residuals or launch L8.
