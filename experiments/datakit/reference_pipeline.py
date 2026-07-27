@@ -87,6 +87,7 @@ from fray.types import ResourceConfig
 from levanter.tokenizers import TokenizerBackend
 from marin.datakit.decon import (
     DeconAttributes,
+    DropSetSource,
     all_source_drop_sets_step,
     build_eval_bloom_step,
     decon_step,
@@ -544,10 +545,13 @@ def reference_datakit_steps(
     decon_drop_sets = all_source_drop_sets_step(
         name="datakit/decon_drop/_combined",
         sources=[
-            (source_name, f"{normalize_step.output_path.rstrip('/')}/outputs/main")
+            DropSetSource(
+                name=source_name,
+                data_path=f"{normalize_step.output_path.rstrip('/')}/outputs/main",
+                dependency=normalize_step,
+            )
             for source_name, normalize_step in sources.items()
         ],
-        source_dependencies=sources,
         prebuilt_bloom=decon_bloom_step,
         ngram_length=NGRAM_LENGTH,
         sample_docs=SOURCE_DF_SAMPLE_DOCS,

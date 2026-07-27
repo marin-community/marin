@@ -28,7 +28,7 @@ import logging
 import os
 
 from fray.types import ResourceConfig
-from marin.datakit.decon import all_source_drop_sets_step, build_eval_bloom_step, decon_step
+from marin.datakit.decon import DropSetSource, all_source_drop_sets_step, build_eval_bloom_step, decon_step
 from marin.datakit.sources import all_sources
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
@@ -126,8 +126,10 @@ def build_testbed_decon_steps(
     # cross-source drop sets for every decon mark.
     drop_sets = all_source_drop_sets_step(
         name="datakit/decon_drop/_combined",
-        sources=[(name, f"{marin_prefix()}/{SAMPLE_1T_ROOT}/{name}/outputs/main") for name in sampled],
-        source_dependencies={},
+        sources=[
+            DropSetSource(name=name, data_path=f"{marin_prefix()}/{SAMPLE_1T_ROOT}/{name}/outputs/main")
+            for name in sampled
+        ],
         prebuilt_bloom=bloom,
         ngram_length=NGRAM_LENGTH,
         paragraph_delimiter=PARAGRAPH_DELIMITER,

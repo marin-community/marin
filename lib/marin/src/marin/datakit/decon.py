@@ -976,6 +976,19 @@ class AllSourceDropSets(BaseModel):
     counters: dict[str, int | float]
 
 
+@dataclass(frozen=True)
+class DropSetSource:
+    """A normalized source sampled by :func:`all_source_drop_sets_step`.
+
+    Set *dependency* when *data_path* is produced by another step. Omit it for
+    a pre-materialized path.
+    """
+
+    name: str
+    data_path: str
+    dependency: StepSpec | None = None
+
+
 def _global_drop_row(
     hash_value: int,
     items: Iterator[dict[str, int]],
@@ -1124,8 +1137,7 @@ def build_all_source_drop_sets(
 def all_source_drop_sets_step(
     *,
     name: str,
-    sources: list[tuple[str, str]],
-    source_dependencies: dict[str, StepSpec],
+    sources: list[DropSetSource],
     prebuilt_bloom: StepSpec,
     text_field: str = "text",
     ngram_length: int | None = 13,
@@ -1143,11 +1155,9 @@ def all_source_drop_sets_step(
 ) -> StepSpec:
     """StepSpec for corpus-side common-ngram filters.
 
-    *sources* is a list of ``(source_name, df_sample_dir)``; each ``df_sample_dir``
-    is a directory of normalized parquet used to estimate DF. Include any steps
-    that produce those directories in *source_dependencies*, keyed by source
-    name. ``sample_docs`` controls the source-local estimate;
-    ``global_sample_docs`` controls the larger cross-source estimate.
+    Each source names a normalized parquet directory used to estimate DF and
+    optionally its producer step. ``sample_docs`` controls the source-local
+    estimate; ``global_sample_docs`` controls the larger cross-source estimate.
     ``ngram_length`` / ``paragraph_delimiter`` MUST match the consuming
     :func:`decon_step`.
     """
@@ -1156,20 +1166,23 @@ def all_source_drop_sets_step(
         if ngram_length is not None
         else None
     )
-    unknown_dependencies = sorted(set(source_dependencies) - {source_name for source_name, _ in sources})
-    if unknown_dependencies:
-        raise ValueError(f"source_dependencies contains unknown sources: {unknown_dependencies}")
     raw_sources: list[tuple[str, str]] = []
     dependent_sources: list[tuple[str, str, str]] = []
-    for source_name, source_path in sources:
-        dependency = source_dependencies.get(source_name)
+    source_dependencies: list[StepSpec] = []
+    runtime_sources: list[tuple[str, str]] = []
+    for source in sources:
+        runtime_sources.append((source.name, source.data_path))
+        dependency = source.dependency
         if dependency is None:
-            raw_sources.append((source_name, source_path))
+            raw_sources.append((source.name, source.data_path))
             continue
+        source_dependencies.append(dependency)
         dependency_path = dependency.output_path.rstrip("/")
-        if source_path != dependency_path and not source_path.startswith(f"{dependency_path}/"):
-            raise ValueError(f"{source_name} path {source_path} is outside dependency output {dependency_path}")
-        dependent_sources.append((source_name, dependency.name_with_hash, source_path.removeprefix(dependency_path)))
+        if source.data_path != dependency_path and not source.data_path.startswith(f"{dependency_path}/"):
+            raise ValueError(f"{source.name} path {source.data_path} is outside dependency output {dependency_path}")
+        dependent_sources.append(
+            (source.name, dependency.name_with_hash, source.data_path.removeprefix(dependency_path))
+        )
 
     hash_attrs: dict[str, Any] = {
         "raw_sources": tuple(sorted(raw_sources)),
@@ -1188,7 +1201,7 @@ def all_source_drop_sets_step(
     return StepSpec(
         name=name,
         fn=lambda output_path: build_all_source_drop_sets(
-            sources=sources,
+            sources=runtime_sources,
             prebuilt_bloom_dir=prebuilt_bloom.output_path,
             output_path=output_path,
             text_field=text_field,
@@ -1202,7 +1215,7 @@ def all_source_drop_sets_step(
             worker_resources=worker_resources,
             max_workers=max_workers,
         ),
-        deps=[prebuilt_bloom, *source_dependencies.values()],
+        deps=[prebuilt_bloom, *source_dependencies],
         hash_attrs=hash_attrs,
         output_path_prefix=output_path_prefix,
         override_output_path=override_output_path,
