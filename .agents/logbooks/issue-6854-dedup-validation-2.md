@@ -16,6 +16,120 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T01:53:00Z — 208,099 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0141-v796` independently
+  revalidated 14 checkpoints containing 1,783 pairs. The model labeled 1,044
+  false positives and 734 true duplicates and left five outcomes unresolved.
+  Eighteen pairs used chunked review and 1,765 used direct review. The audit
+  counted 5,278 request attempts: 5,237 valid and 41 invalid JSON responses.
+  Sixteen judgments required retries. The checkpoints and outcome Parquet
+  SHA-256 values are:
+
+  - p0 decision-file 8 offsets 4,096 through 4,736:
+    `247a4c5acdba370cd2f49b6f53857f8fd5e462851f8f45a9b18363dbc42bcee0`,
+    `b47285647d6f9ee09dec6de009de995d108eb16370898e694afab925064a14d5`,
+    `df631fbb0adcf4b268d1bfad87d99ca30df642fa9297e2623e6cc7637674d7fd`,
+    `6bad71bb8df30237fd2310073d76d390f82af4020e0e10aa7a0446e79a9758a8`,
+    `5ff4982f82fc2ec13a747deb556e6efc507b86efd56cc31c03598239f53e67ea`,
+    and
+    `3ff5f87b2f80ac15d86f926a74e694f1e9e2152f133530189d52423bf09a6dc8`;
+  - p1 decision-file 40 offsets 1,664 through 2,304:
+    `00b5288f96768a2e4769da7901a6ac4bc9200a0791e77907afb212583d15e846`,
+    `acc42ccbc8ca152ebb4314a38c8c854b54032f0d194f26b55b6aaee8013f357f`,
+    `350012124b0cbb2b28ca316bd3de099df9f31cfb1697c461272711823f55f8d3`,
+    `c61da0d0625a41658862819d47f36e63fa3353e4a0344d6d6b14ff6304b35be2`,
+    `938d82a6f5ffe11be8832cb898a38187cb31907d39194a1784d32c7263563b00`,
+    and
+    `0694a9d073f76a6dd2a39c020ec466df4de2c0405d5820bdd68f0c1d2bf18145`;
+  - p2 decision-file 72 offset 5,888:
+    `6936092b9e992d134489ceb11322324a38aa3cb3eed3cf4798af830156d5b6fb`;
+  - p3 decision-file 105 offset 128:
+    `7f3ad9fb5a36a4686f270053b05ec9c3089f7157216a2d8bfa33193bf91a9d53`.
+
+- Complete-text inspection resolves all five ambiguous SFT pairs as true
+  duplicates. Each pair has the same question, choices, reasoning,
+  explanation, and answer. Every exact diff contains one changed line:
+  `\boxed{X}` versus `\boxed{\text{X}}`.
+
+  - Baseline row 7,661 is the 84-line network-organization example. Its
+    6,098/6,091-character texts have character, line, and word-sequence
+    similarities of 0.999426, 0.988095, and 0.999457.
+    `/rav/datakit-6854-inspect-row7661-0143-v797`,
+    `/rav/datakit-6854-publish-row7661-0149-v806`, and
+    `/rav/datakit-6854-verify-row7661-0151-v807` persisted and independently
+    verified the record. The inspection, semantic-evidence, manual-Parquet,
+    and marker SHA-256 values are
+    `77b464741a24eed38197f39f3a68501eac0cefc1364f85a4b1d5f1207df3ac2c`,
+    `ac784ed993d30a06875906a0419077b357debaf0f27cffe01ca88aa3b8699d42`,
+    `334111704068db9f009de21b6b61d58e2fd2d7e136a3b11604a149327ac2a40e`,
+    and
+    `f569fb75517ad393d784970b8e59b8c3629be4a6bdc157a745338a99c046841a`.
+  - Baseline row 7,670 is the 96-line finite-element-method example. Its
+    6,455/6,448-character texts have similarities of 0.999457, 0.989583, and
+    0.999496. All nine model attempts produced invalid JSON because the model
+    emitted unescaped LaTeX control sequences, but the hash-bound complete-text
+    diff establishes that the boxed-answer spelling is the only difference.
+    `/rav/datakit-6854-inspect-row7670-0143-v798`,
+    `/rav/datakit-6854-publish-row7670-0149-v805`, and
+    `/rav/datakit-6854-verify-row7670-0151-v808` persisted and independently
+    verified the record. The corresponding four SHA-256 values are
+    `2acad7b013356054d48fa7e6e15d5f068a9de63967a3dfe0644ccd4dc3809696`,
+    `5313ee48c82716e2ec27a1de5a3a87278a0a8c4251630c7c81a568fc68532035`,
+    `5f5f26ec562d13e25dc9d2220683f661b85f9346fe883376c459ae6befd8e2a8`,
+    and
+    `f89a448ec198254338fa9ff49b7904dd44d8b1652e25d57937bbbce27aa2b99f`.
+  - Baseline row 7,672 is the 114-line intramembranous-ossification example.
+    Its 7,844/7,837-character texts have similarities of 0.999554, 0.991228,
+    and 0.999587. `/rav/datakit-6854-inspect-row7672-0144-v799`,
+    `/rav/datakit-6854-publish-row7672-0148-v804`, and
+    `/rav/datakit-6854-verify-row7672-0152-v809` persisted and independently
+    verified the record. The corresponding four SHA-256 values are
+    `f4cf25dccb6840cfb0a816b5c1f5d737b135032576bacca04b6ce36d1952438d`,
+    `caa97bbe4539cd040343a92baa1c261e3391e05122842b09b86707ce1a768269`,
+    `f33c66b03330b7073b1ad2b7eef61eeb76323be42dc2f66c1979776e057d47ed`,
+    and
+    `181cf534486b02468e5be54cdd8242a98878ec2bc4e9c7bd2afc267e6ede74b4`.
+  - Treatment row 9,171 is the 252-line Kant practical-reason example. Its
+    14,351/14,358-character texts have similarities of 0.999756, 0.996032,
+    and 0.999777. `/rav/datakit-6854-inspect-row9171-0144-v800`,
+    `/rav/datakit-6854-publish-row9171-0147-v803`, and
+    `/rav/datakit-6854-verify-row9171-0152-v810` persisted and independently
+    verified the record. The corresponding four SHA-256 values are
+    `67c977881d690dc7e1950b2721156498630375b0bb9506168e16c575adbfe976`,
+    `bbd01608493c1f91191d79ec3d650d70321e8a813c8591138a72643a2d745dc8`,
+    `53eec993a9aeb8aea4b53dc986ceb107e3088fb45f84f9d4cc4458df4c9cffac`,
+    and
+    `c664fcdba9f523a375a47f0a561790099e8f4e20c8207da9f84a8a7962108114`.
+  - Treatment row 9,193 is the 71-line inclusive-fitness example. Its
+    5,954/5,947-character texts have similarities of 0.999412, 0.985915, and
+    0.999458. `/rav/datakit-6854-inspect-row9193-0145-v801`,
+    `/rav/datakit-6854-publish-row9193-0147-v802`, and
+    `/rav/datakit-6854-verify-row9193-0153-v811` persisted and independently
+    verified the record. The corresponding four SHA-256 values are
+    `b25c5b38c76ada1121257e1d05ac00e98665af906ac434d2828fa4dd94d94314`,
+    `8990a4eeeb1a81847c2645500e61e9a83d0e95cff899bd8a2f65a4eb0f1c9c3a`,
+    `78e59684f4aa9d88a06386f6df53116cc34a9f3cf4ee88a7f0c56f3fc045eb5c`,
+    and
+    `3c2d75f6f85c54df4ddccac6d3f7dd5e99dcbb99ee2f522c7e8e7b11aa853016`.
+
+- Replacing the five unresolved outcomes with true duplicates gives 1,044
+  false positives and 739 true duplicates in the new batch. Across the stable
+  1,638-checkpoint snapshot, all 248 unresolved model outcomes are covered by
+  191 true-duplicate and 57 false-positive manual records. The adjusted totals
+  are:
+
+  - baseline: 167,450 pairs, 106,381 false positives, 61,069 true duplicates;
+  - treatment: 40,649 pairs, 21,068 false positives, 19,581 true duplicates;
+  - combined: 208,099 pairs, 127,449 false positives, 80,650 true duplicates.
+
+- The next audit frontiers are p0 `(8, 4,864)`, p1 `(40, 2,432)`, p2
+  `(73, 0)`, and p3 `(105, 256)`. The pending p2 checkpoint contains
+  107,659,309 combined characters, 24 oversized pairs, and 846 review units.
+  The pending p3 checkpoint contains 23,371,201 combined characters, 17
+  oversized pairs, and 767 review units. All four batch-priority 2-H100
+  workers remain active.
+
 ### 2026-07-27T01:37:00Z — 206,316 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0132-v792` independently
