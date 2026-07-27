@@ -179,3 +179,62 @@ the Qwen experiment disables the hook for hard-label cells. The
 - Failure boundary: step 10,000
 - Affected arms: `QD-C0` and `QD-C2`, both seeds
 - Unaffected arms: `QD-C1`, `QD-C3`, and `QD-002`, both seeds
+
+All four retries subsequently reached terminal step 109,863. Logs confirm that
+each terminal native checkpoint committed to the regional artifact path. Iris
+marked the `QD-C2` seed-1 child failed after training because its pod
+disappeared during controller reconciliation, despite process exit zero,
+successful checkpoint serialization, final evaluation, and clean W&B
+shutdown. The adopted-checkpoint evaluation path does not depend on the parent
+step's success marker; restoring this checkpoint is the remaining durability
+check.
+
+## Extended W&B uploader failure
+
+At step 80,221, W&B marked `QD-C3` seed 0 crashed after its uploader reported a
+fatal network error. The training process did not fail: Iris continued to
+report the child running with zero failures and zero preemptions, training logs
+advanced beyond step 81,000, and temporary checkpoint 80,843 committed.
+
+This cell is monitored from Iris logs and checkpoint commits for the remainder
+of training. Any held-out evaluations missing from W&B are recoverable from
+durable finelog, and the terminal zero-shot evaluation is a separate run. Do
+not restart this cell solely to repair experiment tracking.
+
+The same uploader-only failure occurred for `QD-002` seed 0 near step 107,500.
+Iris continued to report the child running with zero failures and
+preemptions, and checkpoint 107,921 committed after W&B changed the run state
+to `crashed`. Apply the same recovery: keep training and use Iris for terminal
+NLL and checkpoint verification.
+
+Both affected Iris children subsequently succeeded. `QD-C3` seed 0 committed
+step 109,863 with terminal NLL `2.57177`; `QD-002` seed 0 committed step
+109,863 with terminal NLL `2.6542`.
+
+## Extended parent cleanup failure
+
+After every online child reached terminal checkpoint commit, the aggregate
+`/power/qwen-distill-extended-1db30a` job changed to `failed`. Its reported
+errors are post-exit XLA coordination and pod-reconciliation failures during
+cleanup, including a controller message that a pod no longer existed. The
+individual online training children used for the missing W&B records are
+`succeeded`, and all ten experiment cells have terminal checkpoint commit
+records.
+
+This is an orchestration cleanup incident, not a model-training retry
+condition. The terminal evaluation runs as a separate Marin stage that adopts
+the checkpoint paths directly. Do not restart Iris or repeat the 1.8
+billion-token cells. Treat successful restoration of all ten checkpoints as
+the artifact integrity check.
+
+The adopted evaluation job
+`/power/qwen-distill-extended-eval-dc9a89` restored all ten terminal
+checkpoints successfully. Every evaluation child reached `succeeded`,
+including `QD-C2` seed 1. The artifact-integrity check therefore passes.
+
+Several evaluation workers logged a `MailboxClosedError` while uploading the
+optional W&B results artifact during shutdown. The background tracker dropped
+only that artifact update; task metrics had already been logged and mirrored
+to finelog. One W&B run remained in a stale `running` state, and its four raw
+accuracies were recovered from the durable task log. No evaluation retry is
+needed.

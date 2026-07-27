@@ -257,6 +257,26 @@ Levanter has native Qwen3 configuration and Hugging Face checkpoint conversion i
 - Interpretation: both failures were evaluation boundary errors discovered before the 18-checkpoint fan-out; neither changes training results.
 - Next action: keep greedily packed evaluation examples on the host until the batch loader shards them for computation, and require the version `2026.07.26.16` smoke to write `results.json` before evaluating all terminal screen checkpoints.
 
+### 2026-07-27 15:26 - Extended training completes
+
+- Hypothesis: the factorized initialization advantage observed at 100 million tokens persists to a fixed 1.8 billion-token endpoint.
+- Commits: `1db30ae713` for the extension launch and `dc9a89de63` for the hard-label export recovery.
+- Jobs: `/power/qwen-distill-extended-1db30a` and `/power/qwen-distill-extended-ce-retry-dc9a89`.
+- Result: all ten cells committed step 109,863. All four hard-label retries crossed the former step-10,000 export boundary and completed. Mean terminal NLL was `2.9796` for QD-C0, `2.6541` for QD-C1, `2.8739` for QD-C2, `2.5579` for QD-C3, and `2.6644` for QD-002.
+- Interpretation: factorized initialization ended 0.39% worse than scratch KL, with both seeds worse, despite leading at the early evaluations. Official Base plus KL ended 3.63% better than scratch KL and remains the recommended arm.
+- Operational note: two W&B uploaders failed without stopping their Iris children. The original parent later failed during post-exit orchestration cleanup, after every terminal artifact committed. The immutable checkpoint paths remain usable.
+- Next action: evaluate all ten adopted terminal checkpoints on the frozen four-task suite and use restoration success to verify checkpoint durability.
+
+### 2026-07-27 15:33 - Terminal evaluation completes
+
+- Hypothesis: all ten terminal artifacts remain restorable despite post-exit parent failures and late W&B uploader failures.
+- Commit: `dc9a89de63`.
+- Job: `/power/qwen-distill-extended-eval-dc9a89`.
+- Result: all ten evaluation children succeeded. Mean zero-shot macro accuracy was `0.3856` for QD-C0, `0.3905` for QD-C1, `0.3884` for QD-C2, `0.3934` for QD-C3, and `0.3891` for QD-002.
+- Interpretation: checkpoint durability passes for every cell, including QD-C2 seed 1. The zero-shot suite agrees with the NLL ordering: QD-C3 is strongest and QD-002 does not beat scratch KL.
+- Operational note: optional W&B results-artifact uploads failed during shutdown on several workers. Metrics were already mirrored to finelog; the one stale W&B summary was recovered from the durable task log.
+- Next action: finalize the report, run the pre-PR checks, and publish the results in issue #7656.
+
 ### 2026-07-26 19:19 - Checkpoint evaluation passes
 
 - Hypothesis: host-resident greedy packing removes the mesh mismatch without changing evaluation examples.
@@ -305,3 +325,77 @@ Levanter has native Qwen3 configuration and Hugging Face checkpoint conversion i
 - Result: `QD-C0` and `QD-C2`, both seeds, saved native checkpoints at step 10,000 and then failed during Hugging Face export. The export hook tried to reconstruct a tokenizer from the regional `s3://` model directory, which Transformers interpreted as an invalid repository ID. All six online-KD runs continued with finite loss.
 - Interpretation: disable unneeded intermediate Hugging Face export for hard-label cells. Preserve the native checkpoints and resume the four cells at the same artifact paths; training data order and the fixed token endpoint remain unchanged.
 - Next action: launch `extended-ce-retry` from the immutable fix and verify each run resumes above step 10,000.
+
+### 2026-07-26 23:35 - Extended matrix clears the recovery boundary
+
+- Hypothesis: disabling intermediate Hugging Face export lets the hard-label cells resume without changing their optimization trajectory or endpoint.
+- Commit hash: `dc9a89de63`.
+- Jobs: `/power/qwen-distill-extended-1db30a` and `/power/qwen-distill-extended-ce-retry-dc9a89`.
+- Result: all four hard-label cells resumed from native checkpoints between steps 8,955 and 9,325, crossed step 10,000, and continued beyond step 70,000 with finite loss. The six online-distillation cells remained healthy beyond step 22,000. Neither Iris job reported a task failure or preemption after recovery.
+- Interpretation: the former step-10,000 boundary was isolated to the optional export hook. Native checkpoint continuation preserved the ten-cell matrix and the shared 1.8B-token stopping condition.
+- Next action: monitor all cells to their terminal checkpoints and launch the frozen extended evaluation only after all ten training artifacts are complete.
+
+### 2026-07-26 23:35 - First extended evaluation preserves the screen ordering
+
+- Hypothesis: the factorized initialization advantage over scratch forward KL persists beyond the 100M-token screen.
+- Result: at step 13,733, approximately 225M tokens, scratch forward-KL validation NLL was `3.1719` and `3.1439`; factorized initialization was `3.1224` and `3.1223`. The paired improvements were `1.56%` and `0.69%`, for a mean improvement of `1.13%`. Official 0.6B Base initialization plus forward KL remained strongest at `2.7981` and `2.8326`.
+- Interpretation: factorized initialization retained a directionally consistent advantage in both seeds at the first extended checkpoint, while initializing from the official student checkpoint remained substantially better than either scratch-derived initialization.
+- Next action: compare terminal NLL, trailing evaluation stability, zero-shot accuracy, throughput, and accelerator time at the fixed 1.8B-token endpoint.
+
+### 2026-07-27 00:32 - Factorized gain persists at 450M tokens
+
+- Hypothesis: the paired factorized-initialization advantage survives the next doubling of observed training tokens.
+- Result: at step 27,466, scratch forward-KL NLL was `3.0465` and `2.9722`; factorized initialization was `2.9870` and `2.9431`. Mean NLL improved from `3.0094` to `2.9651`, or `1.47%`, with both paired seeds directional. Official 0.6B Base plus forward KL remained strongest at mean NLL `2.7744`.
+- Interpretation: the screen ordering has now replicated at two extended checkpoints. The factorized advantage has not decayed by 450M tokens.
+- Next action: keep the token-matched endpoint unchanged and monitor the remaining six evaluations.
+
+### 2026-07-27 01:45 - Hard-label recovery reaches the endpoint
+
+- Hypothesis: the resumed hard-label runs can complete the fixed endpoint and commit native checkpoints despite the disabled Hugging Face export.
+- Job: `/power/qwen-distill-extended-ce-retry-dc9a89`.
+- Result: all four runs reached terminal step 109,863. Mean terminal NLL was `2.9796` for scratch CE and `2.8739` for official 0.6B Base plus CE. Each terminal checkpoint committed to its regional artifact path. Iris subsequently marked the `QD-C2` seed-1 child failed because its pod disappeared during controller reconciliation after checkpointing, final evaluation, and W&B shutdown.
+- Interpretation: model training and checkpoint durability cleared the original failure boundary. The remaining Iris state is a post-exit orchestration fault, not a model failure; extended evaluation will verify restore from the affected checkpoint.
+- Next action: continue monitoring the six online cells, then restore all ten terminal checkpoints in the frozen evaluation stage.
+
+### 2026-07-27 03:00 - Paired factorized direction becomes inconsistent
+
+- Hypothesis: the factorized advantage remains directionally consistent as both scratch-derived trajectories converge.
+- Result: at step 41,199, approximately 675M tokens, scratch forward-KL NLL was `2.9616` and `2.9320`; factorized initialization was `2.9119` and `2.9358`. The factorized mean remained `0.78%` better, but seed 1 was `0.0038` NLL worse than its paired control. Official 0.6B Base plus forward KL remained strongest at mean NLL `2.7431`.
+- Interpretation: the mean advantage persists, but the paired result no longer supports a uniformly better trajectory. The difference is smaller than the observed validation variability, so no stopping or promotion rule changes.
+- Next action: preserve the fixed endpoint and use all eight evaluation points plus terminal zero-shot results in the final comparison.
+
+### 2026-07-27 05:28 - Factorized gain narrows below the screen threshold
+
+- Hypothesis: the factorized initializer provides a durable advantage rather than only an early optimization offset.
+- Result: at step 54,932, approximately 900M tokens, scratch forward-KL NLL was `2.8996` and `2.8781`; factorized initialization was `2.8785` and `2.8740`. Both paired seeds favored factorization, but the mean improvement narrowed to `0.44%`, below the original `0.5%` screen threshold. Official 0.6B Base plus forward KL remained strongest at mean NLL `2.7238`.
+- Interpretation: factorization increasingly looks like an early optimization benefit that scratch KL can recover with more tokens. The result remains too close to call before the fixed endpoint.
+- Next action: retain the last four evaluation points and quantify time-to-loss as well as terminal loss.
+
+### 2026-07-27 07:56 - Factorized and scratch KL converge
+
+- Hypothesis: a factorized initialization advantage remains measurable after 1B training tokens.
+- Result: at step 68,665, approximately 1.125B tokens, scratch forward-KL NLL was `2.8914` and `2.8729`; factorized initialization was `2.8727` and `2.8900`. Mean NLL differed by `0.0008`, or `0.03%`, in favor of factorization. Seed 0 favored factorization by `0.0187`; seed 1 favored scratch by `0.0171`.
+- Interpretation: the early factorized advantage has washed out at the resolution of the 16-batch validation estimate. Factorization still reduces time to early loss thresholds, but it no longer improves the token-matched trajectory reliably.
+- Next action: complete the remaining three evaluation points and distinguish time-to-loss from endpoint quality in the report.
+
+### 2026-07-27 09:55 - QD-C3 tracking fails while training continues
+
+- Hypothesis: the W&B `crashed` state reflects a tracker failure rather than a model or pod failure.
+- Job: `/power/qwen-distill-extended-1db30a/run_levanter_distill_lm-a844b926`.
+- Result: W&B reported a fatal upload error for `QD-C3` seed 0 at step 80,221. Iris continued to report the child running with zero failures and preemptions; training advanced beyond step 81,000 and committed temporary checkpoint 80,843.
+- Interpretation: do not restart a healthy model for a tracking-only failure. Iris logs and checkpoint commits provide health and held-out NLL; the terminal zero-shot evaluation uses a separate W&B run.
+- Next action: monitor `QD-C3` seed 0 through Iris and the other five online cells through W&B, then backfill missing NLL points from finelog.
+
+### 2026-07-27 10:26 - Factorized lead returns amid validation noise
+
+- Hypothesis: the near-tie at 1.125B tokens reflects convergence rather than validation variance.
+- Result: at step 82,398, approximately 1.35B tokens, scratch forward-KL NLL was `2.8767` and `2.8583`; factorized initialization was `2.8191` and `2.8545`. Mean factorized NLL was `1.07%` better and both paired seeds were directional. Base plus forward KL was approximately `2.755` from the exact seed-1 W&B value and rounded seed-0 finelog value.
+- Interpretation: the factorized-vs-scratch difference oscillates at the scale of the 16-batch validation estimate. Neither the 1.125B near-tie nor the 1.35B lead should replace the fixed terminal result.
+- Next action: use terminal NLL as primary and report a trailing-three mean to expose this variability.
+
+### 2026-07-27 12:54 - Penultimate evaluation swings against factorization
+
+- Hypothesis: the factorized lead at 1.35B tokens remains at the final pre-terminal evaluation.
+- Result: at step 96,131, approximately 1.575B tokens, scratch forward-KL NLL was `2.8528` and `2.8734`; factorized initialization was `2.8630` and `2.9385`. Mean factorized NLL was `1.32%` worse and both paired seeds favored scratch. Base plus forward KL was approximately `2.778`.
+- Interpretation: the reversal from a `1.07%` factorized lead at the preceding point confirms material validation noise. Terminal evaluation after the schedule cooldown is the only remaining primary comparison; the trailing-three mean must be reported alongside it.
+- Next action: monitor all six online cells through terminal step 109,863 and checkpoint commit.
