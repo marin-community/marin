@@ -583,3 +583,69 @@ are recorded in the previous volumes.
   total is 308,028 pairs. The next frontiers are p0 `(13, 0)`, p1 `(44, 3968)`,
   p2 `(77, 0)`, and p3 `(109, 2944)`. All four semantic-review parents,
   brokers, and 2-H100 workers remain healthy at batch priority.
+
+## 2026-07-27 19:34 UTC — three formatting-only duplicates
+
+- Audits `/rav/rav-datakit-6854-audit-fast-1918-v1440`,
+  `/rav/rav-datakit-6854-audit-fast-1927-v1448`, and
+  `/rav/rav-datakit-6854-audit-fast-1933-v1453` independently reread 22 new
+  completion markers containing 2,816 pairs. After the three manual
+  adjudications below, they contain 1,822 false positives and 994 true
+  duplicates. The audits reproduced every persisted outcome and accepted
+  8,748 valid model attempts; 19 invalid JSON attempts were excluded before
+  persistence, and no resolved outcome depends on them.
+- The three unresolved baseline outcomes were true duplicates. Full-text
+  inspection found identical questions, options, reasoning traces,
+  conclusions, and answers; only the final LaTeX answer wrapper differed:
+
+  - decision-file 44, semantic offset 4,096, pair row 7,322 has 160 lines and
+    differs only by `\boxed{C}` versus `\boxed{\text{C}}`. Its inspection,
+    manual Parquet, and marker SHA-256 values are
+    `3a02062662f02e530b900ce6db3bbaffe3e259809693eb1badfdc124f77fb177`,
+    `9c10b040e1e8c108b2d71d852a9e3494fb21170086bbbbc0c80c49a39ae6762a`,
+    and
+    `adcddd6c6474432af33c0e6469ae5753104ced5fecbf581cd1858e4cf26084e1`.
+  - decision-file 44, semantic offset 4,096, pair row 7,355 has 318 lines and
+    differs only by `\boxed{H}` versus `\boxed{\text{H}}`. Its corresponding
+    SHA-256 values are
+    `1b8fbeff2ab35c980fe64775cab471a357d4cafbb2b1b13b16ff0af234d60997`,
+    `598a6f6f2fec6b97407e4fb49f3a5bf3f0b3a939986342eb24e5bb28e2a2dfd4`,
+    and
+    `d77560b89227e3c09713fac3800550004c40f45dae031be20c908f7f7e6e508a`.
+  - decision-file 44, semantic offset 4,352, pair row 7,598 has 258 lines and
+    differs only by `\boxed{G}` versus `\boxed{\text{G}}`. Its corresponding
+    SHA-256 values are
+    `eef6da2d296ddc7ab8f4932e118007418b4464594e1bc8f1713ed7b0bb192d7a`,
+    `49e1b14610d8b4cab158ca1da9bfb8ce66c3415132f6ddead10ed216c87a738f`,
+    and
+    `30aa220990434c92443b4268b4aef1fb39b781d70e3a2feb64d7089fcc620bec`.
+
+  Separate publish and verify-only jobs wrote and then reproduced each complete
+  source, inspection, manual Parquet, marker, and evidence payload.
+- `/rav/rav-datakit-6854-reconcile-manual-1931-v1452` verified 2,444
+  checkpoints and complete manual coverage for all 367 unresolved outcomes.
+  Applying 77 false-positive and 290 true-duplicate manual decisions gives:
+
+  | Arm | Pairs | False positives | True duplicates | False-positive rate |
+  | --- | ---: | ---: | ---: | ---: |
+  | baseline | 248,198 | 157,607 | 90,591 | 63.5005% |
+  | treatment | 62,134 | 32,305 | 29,829 | 51.9925% |
+  | combined | 310,332 | 189,912 | 120,420 | 61.1964% |
+
+  The baseline-minus-treatment gap is 11.5080 percentage points. This snapshot
+  covers 41.0883% of the 755,281 semantic candidates. Its immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-1931.json`
+  with SHA-256
+  `558de428a30f4c09bbbebf7ff81beedfc6e3932b071a3e98969928a193db8e6e`.
+  The semantic, manual-marker, and manual-Parquet path-manifest SHA-256 values
+  are
+  `f8796c38d74285e26105317b63ae3f7fe08b7d3cd0fbffe6a3569ca958e3b8ba`,
+  `bf3e1be04da0556e2d1f4d7b6e7d41424ad697268b2e5bfd4cfa650c4a459607`,
+  and
+  `4179bb0abd9ce3effeffc57d338c6913cdf3a0c4e883baf083216821e02ae92f`.
+  No manual outcome is missing. Historical shadow-record anomaly counts remain
+  unchanged and marker-bound records remain internally consistent.
+- The independently audited total is 310,844 pairs. The next frontiers are p0
+  `(13, 128)`, p1 `(44, 5376)`, p2 `(77, 0)`, and p3 `(109, 4224)`. All four
+  semantic-review parents, brokers, and 2-H100 workers remain healthy at batch
+  priority.
