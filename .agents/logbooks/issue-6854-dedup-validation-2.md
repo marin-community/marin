@@ -16,6 +16,44 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T05:26:25Z — 232,504 pairs verified
+
+- `/rav/rav-datakit-6854-audit-next-checkpoints-0300-v965` independently
+  revalidated ten baseline checkpoints: p0 decision-file 9 offsets 3,456
+  through 3,968 and p1 decision-file 41 offsets 3,584 through 4,096. Their
+  1,280 pairs contain 941 false positives, 339 true duplicates, and no
+  unresolved outcomes. Four pairs used chunked review and 1,276 used direct
+  review. All 2,850 judgments and request attempts were valid on their first
+  attempt.
+- In checkpoint order, the outcome Parquet SHA-256 values are:
+
+  - p0:
+    `8b84f3e5853dd8c4fff845c9c3cf0920f5bcfc5bdc2c362182251649005c54e0`,
+    `0aaafbbdf511ad72d116eaf7d7b7ba10fa0a797c0d2b46d07c0f6194676f669e`,
+    `bf3d5c10a3b00a4b88068791886db299b2f6e6b2d0508ec64df735b9c00829d2`,
+    `bea692df805faf3ed971ccb069a9fa774a716724d5f6d090138087d713f8944e`,
+    and
+    `cc3d509b49c0f98c8dcd5f4384c52105bbdc0575a9ae8c3bff6cabe743fca916`;
+  - p1:
+    `3036e2689a3c383f28e06f4c8d76ab2b8e26d0b5c5162863c8e487b23a79db90`,
+    `f8d3a573e80dd2d57a8ce1efc4e71fd3dcc28733cefc78fb1eb83d2d187a7b3c`,
+    `3eb72cad0019c2603b764e423e186e507cf18129701717ef4372348c3622ece8`,
+    `1ef6df5126d7af907e8057351e8617de4a7a57ce6a41fdff0843ede6adb86daf`,
+    and
+    `aef192f3aa430b2f31f0775f74f36bcd3b83e9c032a77fc1f20766d532c984d2`.
+
+- Across the stable 1,830-checkpoint snapshot, all 279 unresolved model
+  outcomes remain covered by 216 true-duplicate and 63 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 187,271 pairs, 118,711 false positives, 68,560 true duplicates;
+  - treatment: 45,233 pairs, 23,368 false positives, 21,865 true duplicates;
+  - combined: 232,504 pairs, 142,079 false positives, 90,425 true duplicates.
+
+- The next audit frontiers are p0 `(9, 4,096)`, p1 `(41, 4,224)`,
+  p2 `(74, 0)`, and p3 `(106, 128)`. All four batch-priority 2-H100 workers
+  remain active with zero Kubernetes restarts.
+
 ### 2026-07-27T05:24:09Z — 231,224 pairs verified
 
 - `/rav/rav-datakit-6854-audit-next-checkpoints-0293-v958` independently
