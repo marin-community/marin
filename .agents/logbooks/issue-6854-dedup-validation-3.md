@@ -707,3 +707,50 @@ are recorded in the previous volumes.
   `(13, 1664)`, p1 `(45, 0)`, p2 `(77, 128)`, and p3 `(110, 0)`. All four
   semantic-review parents, brokers, and 2-H100 workers remain healthy at batch
   priority.
+
+## 2026-07-27 20:35 UTC — hosting-template adjudication
+
+- Five checkpoint audits independently reread another 1,408 pairs and 3,719
+  valid model judgments without an invalid attempt. One baseline outcome
+  required full-text adjudication: decision-file 13, semantic offset 2,176,
+  pair row 3,684 is a true duplicate. The 3,781-character member and
+  3,737-character canonical are the same spun web-hosting template and
+  preserve the same meaning. Their differences are paraphrases and broken
+  offer/provider slots such as zero TLDs, a zero price, a nameserver domain,
+  and a blank vendor, rather than distinct coherent content. The inspection,
+  manual Parquet, and marker SHA-256 values are
+  `3093b0eb6bc1bcb13aeade217b6647d49f4608672419213d03486cf45728cf14`,
+  `1afb7ae8b688334d821af3685cc6c21e5f072fc58c7c1883f8b7c0dcf99a1c05`,
+  and
+  `e8702d3a8b7e74610d091b184c22ed0166afe0ffd528456caf9676a4c57b3cb4`.
+  Publish job `/rav/rav-datakit-6854-publish-row3684-v1473` wrote the
+  hash-bound decision, and verify-only job
+  `/rav/rav-datakit-6854-verify-row3684-v1474` reproduced every input and
+  output hash.
+- `/rav/rav-datakit-6854-reconcile-manual-2029-v1475` verified 2,487
+  checkpoints and complete manual coverage for all 370 unresolved outcomes.
+  Applying 77 false-positive and 293 true-duplicate manual decisions gives:
+
+  | Arm | Pairs | False positives | True duplicates | False-positive rate |
+  | --- | ---: | ---: | ---: | ---: |
+  | baseline | 251,738 | 159,955 | 91,783 | 63.5403% |
+  | treatment | 64,077 | 33,260 | 30,817 | 51.9063% |
+  | combined | 315,815 | 193,215 | 122,600 | 61.1798% |
+
+  The baseline-minus-treatment gap is 11.6340 percentage points. This snapshot
+  covers 41.8142% of the 755,281 semantic candidates. Its immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-2029.json`
+  with SHA-256
+  `b4bddfaead3d21f44c4f2cff438e78ea5af2472d90b32a719e1a9035eb79dd5a`.
+  The semantic, manual-marker, and manual-Parquet path-manifest SHA-256 values
+  are
+  `a50def16a20ad74c62fa6e1d7b63b84af93c84279f7dbd9170aa2dc7813342b2`,
+  `ce4010fd1c9349609838c87aa29ed6b5b318cb5120e057cf66b5a30b5d57799a`,
+  and
+  `380a01cae4f6dfc2271f33a7286594141b32e3ac531d16da19c62464a3957b8d`.
+  No manual outcome is missing. Historical shadow-record anomaly counts remain
+  unchanged and marker-bound records remain internally consistent.
+- The independently audited total is 316,071 pairs. The next frontiers are p0
+  `(13, 2944)`, p1 `(45, 0)`, p2 `(77, 256)`, and p3 `(110, 0)`. All four
+  semantic-review parents, brokers, and 2-H100 workers remain healthy at batch
+  priority.
