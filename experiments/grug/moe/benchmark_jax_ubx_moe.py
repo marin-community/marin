@@ -9,6 +9,7 @@ import argparse
 import json
 import statistics
 import time
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,13 @@ import jax.numpy as jnp
 import numpy as np
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
-from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
+from levanter.grug._moe.ep_ring import (
+    _bulk_ring_combine,
+    _bulk_ring_dispatch_from_routing,
+    _bulk_ring_expert_compute,
+    _moe_mlp_ep_ring_local,
+    _ring_routing_prepass,
+)
 from levanter.grug._moe.ep_ubx import _moe_mlp_ep_ubx_local
 from levanter.kernels.ubx import UbxRuntimeConfig, ensure_local_runtime, shutdown_local_runtime
 
@@ -26,6 +33,117 @@ from experiments.grug.moe.benchmark_nccl_ubx import BenchmarkConfig, build_route
 
 EP_SIZE = 8
 RELATIVE_L2_LIMIT = 0.002
+
+
+def _fp32_reference_dispatch_impl(
+    x_local: jax.Array,
+    assignment_indices: jax.Array,
+    assignment_valid: jax.Array,
+    topk: int,
+) -> jax.Array:
+    x_global = jax.lax.all_gather(x_local, "expert", tiled=True)
+    token_global = jnp.floor_divide(assignment_indices, topk)
+    x_take = jnp.take(x_global, token_global, axis=0)
+    return jnp.where(assignment_valid[:, None], x_take, jnp.zeros_like(x_take))
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(3, 4))
+def _fp32_reference_dispatch(
+    x_local: jax.Array,
+    assignment_indices: jax.Array,
+    assignment_valid: jax.Array,
+    topk: int,
+    tokens_per_rank: int,
+) -> jax.Array:
+    del tokens_per_rank
+    return _fp32_reference_dispatch_impl(x_local, assignment_indices, assignment_valid, topk)
+
+
+def _fp32_reference_dispatch_fwd(
+    x_local: jax.Array,
+    assignment_indices: jax.Array,
+    assignment_valid: jax.Array,
+    topk: int,
+    tokens_per_rank: int,
+) -> tuple[jax.Array, tuple[jax.Array, jax.Array]]:
+    del tokens_per_rank
+    output = _fp32_reference_dispatch_impl(x_local, assignment_indices, assignment_valid, topk)
+    return output, (assignment_indices, assignment_valid)
+
+
+def _fp32_reference_dispatch_bwd(
+    topk: int,
+    tokens_per_rank: int,
+    residuals: tuple[jax.Array, jax.Array],
+    output_cotangent: jax.Array,
+) -> tuple[jax.Array, None, None]:
+    assignment_indices, assignment_valid = residuals
+    token_global = jnp.floor_divide(assignment_indices, topk)
+    expert_axis_size = jax.sharding.get_abstract_mesh().shape["expert"]
+    global_tokens = tokens_per_rank * expert_axis_size
+    values = jnp.where(assignment_valid[:, None], output_cotangent.astype(jnp.float32), 0)
+    x_cotangent_global = (
+        jnp.zeros((global_tokens, output_cotangent.shape[1]), dtype=jnp.float32)
+        .at[token_global]
+        .add(values, mode="drop")
+    )
+    x_cotangent = jax.lax.psum_scatter(
+        x_cotangent_global,
+        "expert",
+        scatter_dimension=0,
+        tiled=True,
+    ).astype(output_cotangent.dtype)
+    return x_cotangent, None, None
+
+
+_fp32_reference_dispatch.defvjp(_fp32_reference_dispatch_fwd, _fp32_reference_dispatch_bwd)
+
+
+def _moe_mlp_ep_fp32_transport_reference_local(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[jax.Array, jax.Array]:
+    routing = _ring_routing_prepass(
+        selected_experts_local,
+        local_experts=moe_w13_local.shape[0],
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+    )
+    dispatch = _bulk_ring_dispatch_from_routing(
+        x_local,
+        combine_weights_local,
+        routing,
+        combine_dtype="fp32",
+    )
+    x_dispatch = _fp32_reference_dispatch(
+        x_local,
+        routing.assignment_indices,
+        routing.valid,
+        routing.topk,
+        routing.tokens_per_shard,
+    )
+    dispatch = dispatch._replace(x_dispatch=x_dispatch)
+    expert = _bulk_ring_expert_compute(
+        dispatch,
+        moe_w13_local,
+        moe_w2_local,
+        activation_fn=activation_fn,
+    )
+    output = _bulk_ring_combine(
+        dispatch,
+        expert,
+        tokens_per_shard=routing.tokens_per_shard,
+        expert_axis_size=routing.expert_axis_size,
+        combine_dtype="fp32",
+    )
+    return output, jax.lax.psum(routing.dropped_local, "expert")
 
 
 def _relative_l2(actual: np.ndarray, reference: np.ndarray) -> dict[str, Any]:
@@ -143,7 +261,7 @@ def run(
         )
 
     ring = runner(_moe_mlp_ep_ring_local)
-    ring_fp32_combine = runner(partial(_moe_mlp_ep_ring_local, combine_dtype="fp32"))
+    fp32_transport_reference = runner(_moe_mlp_ep_fp32_transport_reference_local)
     ubx = runner(_moe_mlp_ep_ubx_local)
 
     def value_and_grad(implementation, x, combine_weights, w13, w2):
@@ -161,7 +279,9 @@ def run(
         )
 
     ring_compiled = jax.jit(partial(value_and_grad, ring)).lower(x, combine_weights, w13, w2).compile()
-    reference_compiled = jax.jit(partial(value_and_grad, ring_fp32_combine)).lower(x, combine_weights, w13, w2).compile()
+    reference_compiled = (
+        jax.jit(partial(value_and_grad, fp32_transport_reference)).lower(x, combine_weights, w13, w2).compile()
+    )
     ubx_compiled = jax.jit(partial(value_and_grad, ubx)).lower(x, combine_weights, w13, w2).compile()
 
     def execute_ring():
@@ -224,7 +344,7 @@ def run(
         },
         "route_plan": route_plan_summary(plan, config),
         "correctness": {
-            "acceptance_reference": "ring_fp32_combine",
+            "acceptance_reference": "ring_fp32_transport",
             "relative_l2_limit": RELATIVE_L2_LIMIT,
             "drops_exact": drops_exact,
             "expected_dropped": expected_dropped,

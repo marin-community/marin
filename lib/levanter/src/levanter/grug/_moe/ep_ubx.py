@@ -199,17 +199,20 @@ def _ubx_dispatch_bwd(
 ) -> tuple[jax.Array, None, None, None, None, None]:
     assignment_indices, assignment_valid = residuals
     token_global = jnp.floor_divide(assignment_indices, topk)
-
-    def ring_dispatch(value: jax.Array) -> jax.Array:
-        value_global = jax.lax.all_gather(value, "expert", tiled=True)
-        value_take = jnp.take(value_global, token_global, axis=0)
-        return jnp.where(assignment_valid[:, None], value_take, jnp.zeros_like(value_take))
-
-    _, pullback = jax.vjp(
-        ring_dispatch,
-        jnp.zeros((tokens_per_rank, output_cotangent.shape[1]), dtype=output_cotangent.dtype),
+    expert_axis_size = jax.sharding.get_abstract_mesh().shape["expert"]
+    global_tokens = tokens_per_rank * expert_axis_size
+    values = jnp.where(assignment_valid[:, None], output_cotangent.astype(jnp.float32), 0)
+    x_cotangent_global = (
+        jnp.zeros((global_tokens, output_cotangent.shape[1]), dtype=jnp.float32)
+        .at[token_global]
+        .add(values, mode="drop")
     )
-    (x_cotangent,) = pullback(output_cotangent)
+    x_cotangent = jax.lax.psum_scatter(
+        x_cotangent_global,
+        "expert",
+        scatter_dimension=0,
+        tiled=True,
+    ).astype(output_cotangent.dtype)
     return x_cotangent, None, None, None, None, None
 
 
