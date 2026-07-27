@@ -1245,3 +1245,26 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
 - Interpretation:
   - The adapter permutation was a real correctness bug and is fixed. The corrected QuACK BF16 path still fails the accepted full numerical policy, so proper Sonic remains closed as a performance candidate.
   - Do not relax the ceiling or launch a Sonic L8 run. The independent Ring explicit-backward profile remains the active target path.
+
+### 2026-07-27 07:03 PDT - L8 explicit Ring pullback passes and removes the all-reduce bottleneck
+- Snapshot:
+  - Parent `/dlwh/iris-run-job-20260727-134811` and child `/dlwh/iris-run-job-20260727-134811/grug-train-jaxpp-rno2a-ring-ep2d4-explicitbwd-fp8-l8-e64k4-b512-s4096-p4m16-profile-r4-20260727` launched from clean commit `b7352a8c335f`.
+- Command:
+  - `GRUG_JAXPP_LOG_LOCAL_MEMORY_PLAN=false TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --cluster cw-rno2a --prefix s3://marin-us-east-02a/marin --run-id jaxpp-rno2a-ring-ep2d4-explicitbwd-fp8-l8-e64k4-b512-s4096-p4m16-profile-r4-20260727 --schedule std_1f1b --implementation explicit_mpmd --explicit-mpmd-schedule-mode default --explicit-mpmd-pipeline-wire-format fp8 --explicit-mpmd-stage-task-microbatch-group-size 1 --expert-gradient-accumulation fused_fp32_data_local --physical-stages 4 --logical-stages 4 --stage-layer-counts 2,2,2,2 --microbatches 16 --nodes 4 --gpus-per-replica 8 --expert-axis 2 --layers 8 --experts 64 --top-k 4 --vocab-size 8192 --batch 512 --seq-len 4096 --moe-implementation ring --attention-implementation gpu_fa4_cute --ragged-dot-implementation triton --ragged-dot-block-k 32 --ragged-dot-num-warps 8 --loss-implementation xla --steps 20 --tracker wandb --profiler-steps 2 --xla-memory-fraction 0.70 --remat save_moe`.
+- Lifecycle:
+  - All four ranks imported the corrected QuACK/CUTLASS runtime, compiled their two-layer forward/backward tasks, and completed `20/20` steps. Parent and child succeeded with exit `0`, zero failures, and zero preemptions.
+  - W&B [r4](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-ep2d4-explicitbwd-fp8-l8-e64k4-b512-s4096-p4m16-profile-r4-20260727) retained 18 finite rows for steps 2-19; loss declined `8.53050 -> 6.29976`.
+- Performance:
+  - Non-profiled steps 11-19 had mean/p50 MFU `16.54746/16.54596`, range `16.44345-16.61353`, and mean step time `1.90674s`.
+  - Mean MFU improves by `0.40706` points (`2.522%`) over the old L8 fused `16.1404` result.
+- Profile:
+  - Profiler artifact `marin-community/marin_moe/jaxpp-rno2a-ring-ep2d4-explicitbwd-fp8-l8-e64k4-b512-s4096-p4m16-profile-r4-20260727-profiler:v0` is readable at 102,002,917 bytes with digest `54373646bf68cc9e1a7a9b52c66f173f`.
+  - [XProf](https://iris.oa.dev/proxy/xprof/open?uri=s3%3A%2F%2Fmarin-us-east-02a%2Ftmp%2Fttl%3D30d%2Fxprof%2Fjaxpp-rno2a-ring-ep2d4-explicitbwd-fp8-l8-e64k4-b512-s4096-p4m16-profile-r4-20260727) contains 1,874,454 events.
+  - Aggregate kernel duration is `65.28%` compute and `34.72%` communication. Timeline attribution is `44.07%` compute, `35.85%` communication, and `20.08%` stall.
+  - FP32 all-reduce has 928 calls and `117.80ms` aggregate. Layer-normalized against the old fused L24 profile, count falls `9.38%` and time falls `96.31%`; it is no longer the dominant regression.
+  - SendRecv has 944 calls and `8,133.69ms`, accounting for `68.2%` of collective time. All-gather has 9,152 calls and `2,452.25ms`; reduce-scatter has 2,368 calls and `1,017.30ms`.
+- Interpretation:
+  - The explicit pullback achieves its intended system effect: per-microbatch FP32 all-reduce occupancy is effectively removed, and L8 throughput improves.
+  - SendRecv/waiting and pipeline stall now dominate. The `2.522%` L8 gain alone projects below 20 MFU from the `18.2583` best exact baseline, but the all-reduce fix scales with microbatch count. The decisive remaining measurement is the exact L24 batch8192/m256 combination before closing this path.
+- Cleanup:
+  - No matching pod, workload, Kubernetes job, failed allocation, or stale profiler process remains live.
