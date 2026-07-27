@@ -363,3 +363,30 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - This run is too short and too shallow to compare throughput with the established L8 group-size-one control. It establishes only production lowering, task compilation, finite execution, and clean teardown.
 - Next action:
   - Stop at L4 as requested. The next separate decision is whether to run the matched L8 group-size-two throughput gate against the `16.116235` MFU control.
+
+### 2026-07-26 20:26 PDT - production grouped L8 compiles but first execution exhausts HBM
+- Hypothesis: The correctness-preserving explicit-router production graph will fit and execute at the matched L8/d2560/e64/top-k4/sequence-4096/b512/m16 shape.
+- Command: Parent `/dlwh/iris-run-job-20260727-030719` launched four H100x8 stages with two layers per stage, exact ring EP8, CuTe FA4, Pallas-Triton block-k 32/eight warps, BF16 wire, `save_moe`, group size two, 16 original microbatches, XLA memory fraction `0.70`, and 20 steps. Child: `/dlwh/iris-run-job-20260727-030719/grug-train-jaxpp-rno2a-ring-explicit-routing-prod-g2-l8-e64k4-b512-s4096-p4m16-20260726-2008`.
+- Results:
+  - Every pre-forward, joined-expert forward/backward, pre-backward, reduction, update, and keep-step task compiled. Task compilation ran from approximately `03:10:37Z` through `03:23:20Z`.
+  - Initial execution created the stage-3-to-stage-0 DIME streams and communicators, then exhausted the XLA BFC pool. Stage 1 and stage 2 requested another `5.62 GiB` per GPU; stage 3 requested `6.14 GiB` per GPU.
+  - Rank 2 and rank 3 segfaulted after the allocator failure. Rank 0's thunk-initialization rendezvous timeout and rank 1's clique/coordination abort were secondary distributed failure propagation.
+  - No training step, loss, duration, throughput, or MFU row was produced. Iris began an unchanged retry, so the parent and child were stopped. Both are terminal killed and no live resource remains.
+- Interpretation:
+  - This is a real first-execution HBM failure after successful lowering and compilation, not a communication deadlock. Lowering the XLA preallocation fraction would reduce the BFC ceiling and is not a correction for this failure.
+  - The graph constructed fresh bound phase callables for every microbatch pair and block. Explicit `MpmdFun.lower()` does not apply JaxPP's automatic task-jaxpr deduplication, so the L8 run compiled and retained many equivalent executables before first execution.
+- Next action:
+  - Reuse stable phase callables per stage/block and prove that unique phase call-jaxpr identity count is independent of microbatch count. Retry L8 at the unchanged `0.70` fraction first; increase the fraction only if the deduplicated graph still has a measured BFC-limit failure.
+
+### 2026-07-26 20:30 PDT - stable phase callables remove microbatch-scaled compile identities
+- Hypothesis: Binding each explicit-router phase once per stage/block will let JAX and JaxPP reuse equivalent phase jaxprs without changing task boundaries, routes, values, or reduction order.
+- Commit Hash: `3f06cc8505` prebuilds stable pre-forward, joined-expert forward, joined-expert backward, and pre-backward callable tables indexed by stage/block.
+- Results:
+  - The lowering regression emits 12 heavy phase calls for m4 and 24 for m8, while both retain exactly four unique phase call-jaxpr identities.
+  - The production L24/m256 shape has 128 microbatch-pair slots. The previous fresh-partial construction implied approximately 12,288 distinct heavy phase jaxprs; stable stage/block/phase identities reduce the nominal heavy compile keys to 96.
+  - The full grouped-stage suite passes `41/41`. Changed-files precommit, including Pyrefly, and `git diff --check` pass.
+- Interpretation:
+  - This is a compile-identity and likely executable-residency correction, not a steady-state dispatch reduction. The runtime graph still contains the same task calls and exact numerical ordering.
+  - Full-stage gradient assembly/accumulation and tuple-wise DIME transfers remain separate runtime optimization candidates, but they should not be changed until the stable-callable L8 gate executes.
+- Next action:
+  - Launch one fresh matched L8 run from `3f06cc8505` at XLA fraction `0.70`. Require finite steps, exact W&B metrics, and unique compile counts that no longer scale with all eight microbatch pairs before any L24 promotion.
