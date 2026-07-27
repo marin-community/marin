@@ -349,3 +349,17 @@ Living queue; updated as hypotheses are proposed, blocked, falsified, or promote
   0.2-0.4pp from the ledger, and nothing here contradicts that.
 - **Next action:** repeat at `d6144 · 4-of-256` (#7201's other candidate), then multi-node
   EP16/EP64, then inside the real step with remat on.
+
+### 2026-07-27 15:50 - FP8W-010: type-check gap closed
+
+- **Result:** `pre-commit.py` run from a git worktree reports ~1,465 repo-wide
+  missing-import errors, because pyrefly has no interpreter to resolve third-party packages
+  from. Symlinking the primary checkout's venv into the worktree
+  (`ln -sfn /home/marin/projects/marin/.venv .venv`) drops that to 9. All 9 are in files
+  this branch does not touch: 8 in `lib/levanter/src/levanter/grug/_moe/quack_symmetric_cute.py`
+  (the optional GPU-only `quack` dependency, absent from this venv) and 1 in
+  `lib/iris/src/iris/cluster/controller/finelog_relay.py`.
+- **Interpretation:** pyrefly is clean on every file this branch changes. First-party
+  imports still resolve from the worktree via the pyproject search path, so the symlink
+  does not silently type-check the wrong tree; only site-packages comes from the shared
+  venv. Worth knowing for any worktree-based work in this repo.
