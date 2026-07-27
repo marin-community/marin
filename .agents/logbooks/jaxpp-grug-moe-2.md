@@ -1945,3 +1945,44 @@ bash experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit \
 - Next action:
   - Launch four six-layer stages with explicit `std_1f1b`, ordinary expert gradients, BF16 pipeline wire, CuTe FA4, Triton block-k 32/eight warps, `save_moe`, and XLA fraction `0.70`.
   - Compare sustained mean MFU with the exact Ring baseline `18.2583`; profile UB-X only if the exact run is stable and the result is close enough to the target to justify tuning.
+
+### 2026-07-27 13:03 PDT - Exact L24 UB-X reproduces the six-layer thunk rendezvous failure
+- Snapshot:
+  - Parent `/dlwh/iris-run-job-20260727-192805` and child
+    `/dlwh/iris-run-job-20260727-192805/grug-train-jaxpp-rno2a-ubx-ordinary-bf16-l24-e64k4-b8192-s4096-p4m256-exact-r1-20260727`
+    ran clean commit `a1827c280f`.
+  - The exact configuration was L24/d2560/e64/top-k4/sequence4096, batch8192/m256, split `6,6,6,6`,
+    EP8, explicit `std_1f1b`, ordinary expert gradients, BF16 pipeline wire, UB-X MoE, CuTe FA4,
+    Triton block-k 32/eight warps, `save_moe`, XLA loss, and XLA fraction `0.70`.
+- Result:
+  - All four ranks built source NCCL `2.30.7`, initialized UB-X with `16384` local tokens and capacity
+    `65536`, created the DIME communicators, lowered the graph, and entered six-layer task compilation.
+  - The first causal failure was rank 2 after stage-2 backward compilation, during JaxPP `eval_local`
+    executable initialization. XLA's `thunk initialization completion` rendezvous received only `1/8`
+    expected local-device threads, warned after `10s`, and aborted after `30s` with exit `139`.
+  - Three fresh task executions reproduced the same failure. A later retry was coordination-invalid and
+    stopped at JAX bootstrap with `Unexpected task registered with task=1`.
+  - No training step completed. [W&B](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ubx-ordinary-bf16-l24-e64k4-b8192-s4096-p4m256-exact-r1-20260727)
+    has zero history rows and remains stale `running`; no loss, MFU, duration, throughput, or peak-memory
+    measurement exists.
+  - The parent and child are terminal `killed`. All four child tasks are complete, no live or queued resource
+    remains, and no cluster mutation occurred.
+- Interpretation:
+  - This matches the earlier deterministic `6,6,6,6` L24 failure under both stable and nightly JAX and
+    NCCL `2.28.9`/`2.30.7`. It is not a UB-X transport, HBM, numerical, or retry-coordinator result.
+  - The existing local-precompile experiment established that rank-skewed lazy task compilation and receive
+    allocation can deadlock JaxPP execution. The failed exact run had both
+    `GRUG_JAXPP_LOG_LOCAL_MEMORY_PLAN=false` and local precompile disabled.
+  - The numerical policy remains unchanged: exact routes/counts/drops and relative-L2 `<=0.002` for output,
+    loss, and every floating gradient leaf.
+- Fix and validation:
+  - Production explicit MPMD now honors the existing research control
+    `GRUG_JAXPP_PRECOMPILE_LOCAL=1`: compile/cache every local task, allocate the receive-buffer prologue,
+    synchronize all four ranks, then execute through `eval_local_precompiled`.
+  - The launcher forwards the opt-in variable. Twelve focused launcher and JaxPP parity tests pass; changed-file
+    pre-commit including Pyrefly passes. The broader grouped-stage test file still has the two pre-existing
+    explicit-sharding failures in `hidden_next_token_loss`.
+- Next action:
+  - Run an L24 `6,6,6,6` UB-X batch512/m16 discriminator with local precompile. Its microbatch and UB-X
+    transport shapes match the exact target while limiting the failed-run cost.
+  - Only a clean compile and at least three finite executions admit a fresh exact batch8192/m256 run.
