@@ -754,3 +754,49 @@ are recorded in the previous volumes.
   `(13, 2944)`, p1 `(45, 0)`, p2 `(77, 256)`, and p3 `(110, 0)`. All four
   semantic-review parents, brokers, and 2-H100 workers remain healthy at batch
   priority.
+
+## 2026-07-27 20:46 UTC — college-template adjudication
+
+- Checkpoint audits independently reread another 1,408 pairs and 2,912 valid
+  model judgments without an invalid attempt. One baseline outcome required
+  full-text adjudication: decision-file 13, semantic offset 3,200, pair row
+  5,613 is a true duplicate. Both texts use the same incoherent college and
+  career SEO scaffold. Their differences are institution, program, term, and
+  internship slot substitutions plus generic career boilerplate, which the
+  predeclared audit boundary treats as one low-value template. The inspection,
+  manual Parquet, and marker SHA-256 values are
+  `d1b3da07133d74b19ebd467c1f80b1e6b320b7f4c8f8fee8ef64a9aea0d394ef`,
+  `15bf992351a3c489ac1e7d5406e297c4a8461ca80ed8a6e5aa1cdc4a4d3650a6`,
+  and
+  `1b80c1c70db4e5bb2e131982539719902cab8b009846c534a8a61dc944edb0fb`.
+  Publish job `/rav/rav-datakit-6854-publish-row5613-v1481` wrote the
+  hash-bound decision, and verify-only job
+  `/rav/rav-datakit-6854-verify-row5613-v1482` reproduced every input and
+  output hash.
+- `/rav/rav-datakit-6854-reconcile-manual-2044-v1483` verified 2,500
+  checkpoints and complete manual coverage for all 371 unresolved outcomes.
+  Applying 77 false-positive and 294 true-duplicate manual decisions gives:
+
+  | Arm | Pairs | False positives | True duplicates | False-positive rate |
+  | --- | ---: | ---: | ---: | ---: |
+  | baseline | 253,402 | 160,944 | 92,458 | 63.5133% |
+  | treatment | 64,077 | 33,260 | 30,817 | 51.9063% |
+  | combined | 317,479 | 194,204 | 123,275 | 61.1707% |
+
+  The baseline-minus-treatment gap is 11.6070 percentage points. This snapshot
+  covers 42.0346% of the 755,281 semantic candidates. Its immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-2044.json`
+  with SHA-256
+  `4f950e6853fd33f961ae75fd4175d0e628cb2166ef8c636dcaeefd376786a074`.
+  The semantic, manual-marker, and manual-Parquet path-manifest SHA-256 values
+  are
+  `e28140815f5a2933f2d03e5c743e9ba84fe2cc739a613ae29da65ebf7b28e25b`,
+  `a87f2194f3fb80699d3ced048980bb5f53e6c8fe984bd7c88b45dbe00302220f`,
+  and
+  `87854573997deb60aae919f3288fd51cd57145c3f4212dbfd43b0976c83a8095`.
+  No manual outcome is missing. Historical shadow-record anomaly counts remain
+  unchanged and marker-bound records remain internally consistent.
+- The independently audited total is 317,479 pairs. The next frontiers are p0
+  `(13, 3712)`, p1 `(45, 0)`, p2 `(77, 896)`, and p3 `(110, 0)`. All four
+  semantic-review parents, brokers, and 2-H100 workers remain healthy at batch
+  priority.
