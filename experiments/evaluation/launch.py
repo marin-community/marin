@@ -96,6 +96,14 @@ def records_prefix_for(accel: AcceleratorChoice, spec: LaunchSpec) -> str:
     return DEFAULT_RECORDS_PREFIX
 
 
+def _dataset_placement_prefix(accelerator: AcceleratorChoice) -> str:
+    if accelerator.region:
+        return f"gs://marin-{accelerator.region}"
+    if accelerator.target_cluster and accelerator.target_cluster.startswith("cw-"):
+        return f"s3://marin-{accelerator.target_cluster.removeprefix('cw-')}"
+    raise ValueError(f"cannot resolve regional dataset storage for accelerator placement {accelerator}")
+
+
 def build_evaluation_batch(
     spec: LaunchSpec,
     provenance: Provenance,
@@ -110,6 +118,7 @@ def build_evaluation_batch(
     model = models()[spec.model]
     accelerator = MARIN_EVAL_HARDWARE.select(model, spec.platform, spec.accelerator)
     records_prefix = records_prefix_for(accelerator, spec)
+    dataset_placement_prefix = _dataset_placement_prefix(accelerator)
     created_at = datetime.now(UTC).isoformat()
     evaluations: list[Evaluation] = []
     secret_env: dict[str, SecretSpec] = {}
@@ -127,9 +136,9 @@ def build_evaluation_batch(
                     run_id=run_id,
                     created_at=created_at,
                     output_dir=output_dir,
-                    eval_ref=definition.record_ref,
+                    eval_ref=definition.record_ref_for(dataset_placement_prefix),
                 ),
-                executor=definition.executor_for(model, spec.limit),
+                executor=definition.executor_for(model, spec.limit, dataset_placement_prefix),
                 secret_env_keys=tuple(definition.secret_env),
             )
         )

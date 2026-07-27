@@ -12,6 +12,7 @@ Focused submodules with one-directional imports:
 - ``cross_region`` — the :class:`TransferBudget` and :class:`CrossRegionGuardedFS`.
 - ``factory`` — the guarded ``url_to_fs`` / ``open_url`` / ``filesystem`` entry
   points, ``atomic_rename``, and ``fetch_file_atomic``.
+- ``transfer`` — resumable tree copies between arbitrary fsspec filesystems.
 - ``mirror`` — the ``mirror://`` :class:`MirrorFileSystem`.
 - ``distributed_lock`` — lease-based distributed locks (used by ``mirror``).
 
@@ -74,6 +75,7 @@ from rigging.filesystem.storage_path import (
     rebase_file_path,
     split_gcs_path,
 )
+from rigging.filesystem.transfer import TreeTransferMode, TreeTransferResult, copy_tree
 
 # Register mirror:// by class path so fsspec imports rigging.filesystem.mirror
 # (and the botocore its lock backend pulls in) only on first use, not on import.

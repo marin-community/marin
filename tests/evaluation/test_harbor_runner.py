@@ -3,8 +3,10 @@
 
 import json
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
+import rigging.filesystem.factory as filesystem_factory
 from fsspec.implementations.memory import MemoryFileSystem
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
 from marin.evaluation.harbor.driver_config import (
@@ -39,39 +41,47 @@ def _running_model() -> RunningModel:
     )
 
 
-def test_materialize_harbor_dataset_downloads_hf_revision_as_local_tasks(tmp_path, monkeypatch):
-    monkeypatch.delenv("HF_TOKEN", raising=False)
-    snapshot = tmp_path / "snapshot"
-    snapshot.mkdir()
-    (snapshot / ".gitattributes").write_text("*.gz filter=lfs")
-    (snapshot / "task-one").mkdir()
-    calls: list[dict] = []
+@pytest.mark.parametrize("protocol", ["gs", "s3"])
+def test_materialize_harbor_dataset_stages_only_selected_remote_tasks(protocol, tmp_path, monkeypatch):
+    class RemoteMemoryFileSystem(MemoryFileSystem):
+        store: ClassVar[dict] = {}
+        pseudo_dirs: ClassVar[list[str]] = [""]
 
-    def download(**kwargs):
-        calls.append(kwargs)
-        return str(snapshot)
+    RemoteMemoryFileSystem.protocol = protocol
+    remote_fs = RemoteMemoryFileSystem()
+    original_url_to_fs = filesystem_factory.url_to_fs
 
-    monkeypatch.setattr("marin.evaluation.harbor.dataset.snapshot_download", download)
+    def remote_url_to_fs(url: str, **kwargs):
+        path = StoragePath(url)
+        if path.scheme != protocol:
+            return original_url_to_fs(url, **kwargs)
+        return remote_fs, "/".join(part for part in (path.netloc, path.key) if part)
 
-    path = materialize_harbor_dataset(
-        "hf://DCAgent2/terminal_bench_2",
-        "main",
-        tmp_path / "workdir",
-        hf_token=None,
-    )
+    monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", remote_url_to_fs)
+    remote = StoragePath(f"{protocol}://regional-cache/benchmark")
+    for task_name in ("task-b", "task-a"):
+        root = f"regional-cache/benchmark/{task_name}"
+        remote_fs.makedirs(f"{root}/environment", exist_ok=True)
+        remote_fs.makedirs(f"{root}/tests", exist_ok=True)
+        remote_fs.pipe(f"{root}/task.toml", b"version = '1.0'")
+        remote_fs.pipe(f"{root}/environment/Dockerfile", b"FROM scratch")
+        remote_fs.pipe(f"{root}/tests/test.sh", b"true")
+    remote_fs.pipe("regional-cache/benchmark/README.md", b"metadata, not a task")
+    remote_fs.pipe("regional-cache/benchmark/incomplete/task.toml", b"version = '1.0'")
 
-    assert path == Path(snapshot)
-    assert calls == [
-        {
-            "repo_id": "DCAgent2/terminal_bench_2",
-            "repo_type": "dataset",
-            "revision": "main",
-            "local_dir": str(tmp_path / "workdir" / "hf_dataset"),
-            "cache_dir": str(tmp_path / "workdir" / "hf_cache"),
-            "token": False,
-        }
-    ]
-    assert not (snapshot / ".gitattributes").exists()
+    path = materialize_harbor_dataset(str(remote), tmp_path / "workdir", task_limit=1)
+
+    assert path == tmp_path / "workdir" / "harbor_dataset"
+    assert (path / "task-a" / "environment" / "Dockerfile").read_text() == "FROM scratch"
+    assert (path / "task-a" / "tests" / "test.sh").read_text() == "true"
+    assert not (path / "task-b").exists()
+    assert not (path / "incomplete").exists()
+    assert not (path / "README.md").exists()
+
+
+def test_materialize_harbor_dataset_rejects_direct_hugging_face_reads(tmp_path):
+    with pytest.raises(ValueError, match="regional artifact"):
+        materialize_harbor_dataset("hf://DCAgent2/terminal_bench_2", tmp_path, task_limit=None)
 
 
 def test_write_samples_uses_a_path_safe_name_for_hf_dataset(tmp_path):
@@ -90,10 +100,12 @@ def test_harbor_trials_round_trip_through_remote_storage(protocol, tmp_path, mon
 
     RemoteMemoryFileSystem.protocol = protocol
     remote_fs = RemoteMemoryFileSystem()
+    original_url_to_fs = filesystem_factory.url_to_fs
 
-    def remote_url_to_fs(url: str, **_kwargs):
+    def remote_url_to_fs(url: str, **kwargs):
         path = StoragePath(url)
-        assert path.scheme == protocol
+        if path.scheme != protocol:
+            return original_url_to_fs(url, **kwargs)
         return remote_fs, "/".join(part for part in (path.netloc, path.key) if part)
 
     monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", remote_url_to_fs)
@@ -207,7 +219,6 @@ def test_run_harbor_normalizes_a_completed_external_trial(tmp_path, monkeypatch)
             environment=HarborEnvironmentConfig(environment_type="daytona"),
         ),
         str(tmp_path),
-        hf_token=None,
         driver_env={"DAYTONA_API_KEY": "daytona-key"},
     )
 

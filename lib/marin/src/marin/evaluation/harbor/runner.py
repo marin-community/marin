@@ -23,7 +23,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from rigging.filesystem import StoragePath, is_remote_path, prefix_join, url_to_fs
+from rigging.filesystem import StoragePath, TreeTransferMode, copy_tree, is_remote_path, prefix_join, url_to_fs
 
 from marin.evaluation.eval_env import env_vars_from_keys
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
@@ -34,6 +34,8 @@ from marin.evaluation.harbor.driver_config import (
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.evaluation.samples import EvalSample, Grading, SampleKind, write_sample_parquet
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import ArtifactStep, resolve
 from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
@@ -133,7 +135,7 @@ def _restore_completed_trials(out_path: str, job_dir: Path) -> int:
         local = job_dir / trial_dir.name
         if (local / "result.json").exists():
             continue
-        trial_dir.download_to(str(local), recursive=True)
+        copy_tree(trial_dir, StoragePath(str(local)), mode=TreeTransferMode.RESUME)
         restored += 1
     return restored
 
@@ -246,7 +248,7 @@ def _upload_trials(job_dir: Path, out_path: str) -> None:
     for trial_dir in (d for d in job_dir.iterdir() if d.is_dir()):
         if (trial_dir / "result.json").exists():
             target = StoragePath(prefix_join(out_path, f"harbor_trials/{trial_dir.name}"))
-            target.upload_from(str(trial_dir), recursive=True)
+            copy_tree(StoragePath(str(trial_dir)), target, mode=TreeTransferMode.OVERWRITE)
 
 
 def run_harbor(
@@ -254,8 +256,8 @@ def run_harbor(
     config: HarborRunConfig,
     output_dir: str,
     *,
-    hf_token: str | None,
     driver_env: Mapping[str, str],
+    dataset_source: str | None = None,
 ) -> HarborRunResult:
     """Run ``config``'s Harbor dataset against the served model and write the normalized outputs.
 
@@ -269,10 +271,9 @@ def run_harbor(
     results_dir.mkdir(parents=True, exist_ok=True)
     job_dir = results_dir / job_name
     dataset_path = materialize_harbor_dataset(
-        config.dataset,
-        config.revision,
+        dataset_source or config.dataset,
         workdir,
-        hf_token=hf_token,
+        task_limit=config.task_limit,
     )
 
     if is_remote_path(output_dir):
@@ -335,6 +336,7 @@ class HarborExecutor:
 
     config: HarborRunConfig
     secret_env_keys: tuple[str, ...] = ()
+    dataset_artifact: ArtifactStep[Artifact] | None = None
 
     def __call__(
         self,
@@ -343,12 +345,13 @@ class HarborExecutor:
         env_vars: Mapping[str, str],
     ) -> EvaluationOutcome:
         try:
+            dataset_source = resolve(self.dataset_artifact).path if self.dataset_artifact is not None else None
             result = run_harbor(
                 model,
                 self.config,
                 output_dir,
-                hf_token=env_vars.get("HF_TOKEN"),
                 driver_env={key: env_vars[key] for key in self.secret_env_keys},
+                dataset_source=dataset_source,
             )
         except Exception as exc:
             raise EvaluationError(str(exc), status=RunStatus.FAILED) from exc

@@ -62,7 +62,7 @@ class EvalTaskRef(BaseModel):
 
 
 class HarborRef(BaseModel):
-    """The Harbor dataset a run evaluated: registry name, version, agent, and sandbox environment."""
+    """The Harbor dataset identity, execution config, and resolved regional source."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -70,6 +70,9 @@ class HarborRef(BaseModel):
     version: str
     agent: str
     env: str
+    repository: str | None = None
+    commit: str | None = None
+    mirror_uri: str | None = None
 
 
 class EvalRef(BaseModel):
