@@ -800,3 +800,59 @@ are recorded in the previous volumes.
   `(13, 3712)`, p1 `(45, 0)`, p2 `(77, 896)`, and p3 `(110, 0)`. All four
   semantic-review parents, brokers, and 2-H100 workers remain healthy at batch
   priority.
+
+## 2026-07-27 20:59 UTC — math-format adjudications
+
+- Checkpoint audits independently reread another 1,920 pairs. Nine malformed
+  model responses were rejected and retried; no invalid response contributed
+  to an outcome. Two baseline outcomes required full-text adjudication:
+  - decision-file 13, semantic offset 4,224, pair row 7,481 is a true
+    duplicate. Both documents contain the same inscribed-square geometry
+    problem, derivation, and final area. The radius variable, headings,
+    phrasing, and equation layout differ, but no mathematical fact or training
+    signal does. Its inspection, manual Parquet, and marker SHA-256 values are
+    `4850bd2def59e56c4f00a9781192c9472abf731c8ac021c8ce468d732441f572`,
+    `84be51e8e1fd61062655f8611575de9fbcad9ae1d60a51698f50f1da6526fe80`,
+    and
+    `83c6382cc07226ce5cd6e2d011eae735a23ce97276b4145dc29cf812fd8eacb7`.
+  - decision-file 13, semantic offset 4,352, pair row 7,603 is a true
+    duplicate. The 5,073-character member and 5,066-character canonical have
+    the same resilience question, reasoning, and answer. Their only difference
+    is `\boxed{\text{G}}` versus `\boxed{G}`. Its inspection, manual Parquet,
+    and marker SHA-256 values are
+    `68762b89d100de1f419273cf72b44ab62e125c19351c62bf4ce9a97fd88b9498`,
+    `bf2dff83d26825bfb5b4dba8b8c61628d93f71daf3fd5e5dc1bb0fd91bc0ce9d`,
+    and
+    `87bf1b1f5d8962f59cad89930ad52076fbd67be9faea3365f61eb4337c6172f9`.
+  Publish jobs `/rav/rav-datakit-6854-publish-row7481-v1491` and
+  `/rav/rav-datakit-6854-publish-row7603-v1492` wrote the hash-bound records.
+  Verify-only jobs `/rav/rav-datakit-6854-verify-row7481-v1493` and
+  `/rav/rav-datakit-6854-verify-row7603-v1494` reproduced their source,
+  inspection, manual, marker, and evidence bytes.
+- `/rav/rav-datakit-6854-reconcile-manual-2057-v1495` verified 2,515
+  checkpoints and complete manual coverage for all 373 unresolved outcomes.
+  Applying 77 false-positive and 296 true-duplicate manual decisions gives:
+
+  | Arm | Pairs | False positives | True duplicates | False-positive rate |
+  | --- | ---: | ---: | ---: | ---: |
+  | baseline | 255,322 | 162,287 | 93,035 | 63.5617% |
+  | treatment | 64,077 | 33,260 | 30,817 | 51.9063% |
+  | combined | 319,399 | 195,547 | 123,852 | 61.2234% |
+
+  The baseline-minus-treatment gap is 11.6554 percentage points. This snapshot
+  covers 42.2888% of the 755,281 semantic candidates. Its immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-2057.json`
+  with SHA-256
+  `bc14870d936e158378e288661e2e15b2f526eec5c208b07e6e3d9f5b749d8fae`.
+  The semantic, manual-marker, and manual-Parquet path-manifest SHA-256 values
+  are
+  `509103018a17e04a8cbe8b7a6e5e4a7827cc04dade252aca2ca2990c7e4d3f23`,
+  `ed8cd0f69e5be81f10bff3ec002f69984da15fb5b5fd2cae75932afab36f40b2`,
+  and
+  `c9d1bb1cee619433bf5feba3fae095eb657abf0829e8ec26f353535dabc54f13`.
+  No manual outcome is missing. Historical shadow-record anomaly counts remain
+  unchanged and marker-bound records remain internally consistent.
+- The independently audited total is 319,399 pairs. The next frontiers are p0
+  `(13, 4608)`, p1 `(45, 0)`, p2 `(77, 1920)`, and p3 `(110, 0)`. Partitions
+  p1 and p3 are processing 117–133 million-character code checkpoints; all
+  four workers remain active and healthy at batch priority.
