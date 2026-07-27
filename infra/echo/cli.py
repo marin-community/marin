@@ -76,6 +76,7 @@ def bearer_token() -> str:
 
 
 def request(method: str, path: str, *, params: dict | None = None, body: dict | None = None) -> object:
+    """Call echo-api and return the decoded JSON, or exit with a message on any HTTP error."""
     response = requests.request(
         method,
         f"{API_URL}{path}",
@@ -226,8 +227,6 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--kind", choices=KINDS)
         if name == "search":
             p.add_argument("--since", type=iso_date, help="YYYY-MM-DD lower bound on chunk date")
-        else:
-            p.set_defaults(since=None)
         p.add_argument("--limit", type=bounded_limit, default=default_limit)
         p.set_defaults(func=func)
 

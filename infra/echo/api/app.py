@@ -364,6 +364,19 @@ def get_wiki_entry(entry_id: int, engine: Engine) -> WikiEntry:
     return wiki_entry(row)
 
 
+def wiki_write_values(entry: WikiCreate, model: TextEmbedding) -> dict[str, Any]:
+    """Validated, re-embedded column values shared by wiki create and update."""
+    title, use_when, body = entry.title.strip(), entry.use_when.strip(), entry.body.strip()
+    if not title or not use_when or not body:
+        raise HTTPException(422, "title, use_when, and body must not be blank")
+    return {
+        "title": title,
+        "use_when": use_when,
+        "body": body,
+        "embedding": passage_embedding(model, title, use_when, body),
+    }
+
+
 @app.post("/wiki", response_model=WikiEntry, status_code=201)
 def add_wiki_entry(
     entry: WikiCreate,
@@ -371,24 +384,10 @@ def add_wiki_entry(
     model: Model,
     x_goog_authenticated_user_email: str | None = Header(None),
 ) -> WikiEntry:
-    title = entry.title.strip()
-    use_when = entry.use_when.strip()
-    body = entry.body.strip()
-    if not title or not use_when or not body:
-        raise HTTPException(422, "title, use_when, and body must not be blank")
     statement = (
         schema.wiki_entries.insert()
-        .values(
-            author=iap_caller(x_goog_authenticated_user_email),
-            title=title,
-            use_when=use_when,
-            body=body,
-            embedding=passage_embedding(model, title, use_when, body),
-        )
-        .returning(
-            schema.wiki_entries,
-            *wiki_score_columns(),
-        )
+        .values(author=iap_caller(x_goog_authenticated_user_email), **wiki_write_values(entry, model))
+        .returning(schema.wiki_entries, *wiki_score_columns())
     )
     with engine.begin() as conn:
         row = conn.execute(statement).first()
@@ -398,19 +397,10 @@ def add_wiki_entry(
 @app.put("/wiki/{entry_id}", response_model=WikiEntry)
 def update_wiki_entry(entry_id: int, entry: WikiCreate, engine: Engine, model: Model) -> WikiEntry:
     """Replace an entry's text and re-embed it. The original author and creation time stand."""
-    title, use_when, body = entry.title.strip(), entry.use_when.strip(), entry.body.strip()
-    if not title or not use_when or not body:
-        raise HTTPException(422, "title, use_when, and body must not be blank")
     statement = (
         schema.wiki_entries.update()
         .where(schema.wiki_entries.c.id == entry_id)
-        .values(
-            title=title,
-            use_when=use_when,
-            body=body,
-            embedding=passage_embedding(model, title, use_when, body),
-            updated_at=sqlalchemy.func.now(),
-        )
+        .values(updated_at=sqlalchemy.func.now(), **wiki_write_values(entry, model))
         .returning(schema.wiki_entries, *wiki_score_columns())
     )
     with engine.begin() as conn:

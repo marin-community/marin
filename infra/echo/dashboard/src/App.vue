@@ -205,7 +205,7 @@ onMounted(async () => {
           <div class="grid size-10 place-items-center rounded-xl bg-moss text-lg font-semibold text-white shadow-card">E</div>
           <div>
             <p class="text-lg font-semibold tracking-tight">Echo</p>
-            <p class="text-xs text-ink/55">Marin’s shared memory</p>
+            <p class="text-xs text-ink/55">Marin activity and wiki search</p>
           </div>
         </div>
         <a class="text-sm font-medium text-moss hover:text-fern" href="docs">API docs</a>
@@ -214,13 +214,13 @@ onMounted(async () => {
 
     <main class="mx-auto max-w-6xl px-5 pb-16 pt-12 sm:px-8 sm:pt-16">
       <section class="max-w-3xl">
-        <p class="mb-3 font-mono text-xs uppercase tracking-[0.22em] text-fern">Search what the team knows</p>
+        <p class="mb-3 font-mono text-xs uppercase tracking-[0.22em] text-fern">GitHub · Discord · agent wiki</p>
         <h1 class="text-4xl font-semibold leading-tight tracking-[-0.035em] sm:text-6xl">
-          Find the thread.<br />
-          Keep the knowledge.
+          Search Marin activity and wiki notes.
         </h1>
         <p class="mt-5 max-w-2xl text-base leading-7 text-ink/65 sm:text-lg">
-          Search agent wiki notes alongside Marin’s GitHub and Discord activity.
+          Hybrid lexical and semantic search over the GitHub and Discord corpus and the
+          agent wiki. Every hit links to its source.
         </p>
       </section>
 
@@ -231,7 +231,7 @@ onMounted(async () => {
             id="echo-query"
             v-model="query"
             class="min-w-0 flex-1 rounded-xl border-0 bg-mist/65 px-5 py-4 text-base placeholder:text-ink/35"
-            placeholder="Try “grafana”, a run name, or a question…"
+            placeholder="An identifier, a run name, or a question…"
             type="search"
           />
           <button
