@@ -40,13 +40,15 @@ workspace consumers. `uv lock --check` had accepted the old lock because it
 reuses locked Git metadata until that package is refreshed or another project
 change requires a new resolution.
 
-The previous targeted native-floor update in #7634 briefly generated and then
-reverted a full lock refresh before committing only the native lock entries.
-That preserved the stale VLLM metadata.
+The previous targeted native-floor update in
+[Keep federated capability URLs under `/proxy/t`](https://github.com/marin-community/marin/pull/7634)
+briefly generated and then reverted a full lock refresh before committing only
+the native lock entries. That preserved the stale VLLM metadata.
 
 ## Changes to make
 
-Generate the pending dependency resolution once with uv and review it in #7666.
+Generate the pending dependency resolution once with uv and review it in
+[Use uv for native dependency floors](https://github.com/marin-community/marin/pull/7666).
 Carry the three already-published native floors in the same PR. Release-tooling
 changes and dependency-floor changes are excluded from the release workflow's
 `push.paths`, so merging this recovery does not publish another package set.
@@ -72,7 +74,8 @@ package pair:
 - Iris: `marin-iris`, `marin-iris-native`
 
 `uv lock --check` accepted the final 610-package lock. The hand-written lock
-block merger was removed from #7666.
+block merger was removed from
+[Use uv for native dependency floors](https://github.com/marin-community/marin/pull/7666).
 
 ## Future work
 
