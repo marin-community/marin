@@ -23,7 +23,7 @@ def materialize_harbor_dataset(
     if dataset.startswith("hf://"):
         raise ValueError(
             "Harbor datasets may not be read directly from Hugging Face; "
-            "resolve the immutable repository revision as a regional artifact first"
+            "resolve the immutable repository revision as an evaluator artifact first"
         )
 
     dataset_path = Path(dataset).expanduser()

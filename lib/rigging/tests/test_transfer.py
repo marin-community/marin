@@ -5,7 +5,6 @@
 import pytest
 import rigging.filesystem.factory as filesystem_factory
 from rigging.filesystem import StoragePath, TreeTransferMode, copy_tree
-from rigging.filesystem.transfer import _relative_path
 from rigging.testing import memory_filesystem_for_scheme
 
 
@@ -88,5 +87,25 @@ def test_copy_tree_rejects_a_destination_inside_the_source(tmp_path):
         copy_tree(source, source / "nested", mode=TreeTransferMode.RESUME)
 
 
-def test_relative_path_normalizes_doubled_separators_without_escaping_root():
-    assert _relative_path("bucket/source//nested", "bucket/source") == "nested"
+def test_copy_tree_normalizes_doubled_walk_separators_without_escaping_destination(monkeypatch):
+    remote_fs, resolve = memory_filesystem_for_scheme("s3", filesystem_factory.url_to_fs)
+    monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", resolve)
+    remote_fs.makedirs("regional-cache/source/nested")
+    walk_entries = list(remote_fs.walk("regional-cache/source"))
+
+    def walk_with_doubled_separator(_path):
+        for directory, subdirectories, files in walk_entries:
+            if directory.endswith("/nested"):
+                directory = directory.replace("/nested", "//nested")
+            yield directory, subdirectories, files
+
+    monkeypatch.setattr(remote_fs, "walk", walk_with_doubled_separator)
+
+    copy_tree(
+        StoragePath("s3://regional-cache/source"),
+        StoragePath("s3://regional-cache/destination"),
+        mode=TreeTransferMode.RESUME,
+    )
+
+    assert remote_fs.isdir("regional-cache/destination/nested")
+    assert not remote_fs.isdir("nested")

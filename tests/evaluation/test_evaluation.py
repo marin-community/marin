@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig, ResourceHint
-from marin.evaluation.records import EvalRef, Provenance, RunStatus, read_record
+from marin.evaluation.records import EvalRef, HarborRef, Provenance, RunStatus, read_record
 from marin.evaluation.runner import (
     Evaluation,
     EvaluationBatch,
@@ -50,6 +50,17 @@ def _failed_evaluation(
         status=RunStatus.FAILED,
         jobs={"eval": "/eval/failure"},
         log_tails={"eval": ("failure detail",)},
+        eval_ref=EvalRef(
+            name="failure",
+            mechanism="harbor",
+            harbor=HarborRef(
+                dataset="benchmark",
+                version="commit",
+                agent="agent",
+                env="sandbox",
+                mirror_uri="s3://regional/artifact",
+            ),
+        ),
     )
 
 
@@ -108,6 +119,8 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
     assert failed.status is RunStatus.FAILED
     assert failed.jobs == {"orchestrator": "/orchestrator", "eval": "/eval/failure"}
     assert failed.log_tails == {"eval": ("failure detail",)}
+    assert failed.evaluation.harbor is not None
+    assert failed.evaluation.harbor.mirror_uri == "s3://regional/artifact"
     assert succeeded.status is RunStatus.SUCCEEDED
     assert succeeded.metrics == {"task": {"accuracy": 0.75}}
     assert (tmp_path / "success" / "endpoint.txt").read_text() == endpoint
@@ -123,6 +136,7 @@ def test_submit_evaluation_batch_resolves_declared_secrets_outside_the_pickled_b
             return SimpleNamespace(job_id="/eval/job")
 
     monkeypatch.setenv("MARIN_TEST_EVAL_SECRET", resolved_value)
+    monkeypatch.setenv("MARIN_PREFIX", "gs://launcher-region")
     evaluation = Evaluation(
         identity=EvaluationIdentity(
             run_id="run-secret",
@@ -155,6 +169,7 @@ def test_submit_evaluation_batch_resolves_declared_secrets_outside_the_pickled_b
     submit_evaluation_batch(batch, Client())
 
     assert captured["environment"].env_vars["DAYTONA_API_KEY"] == resolved_value
+    assert "MARIN_PREFIX" not in captured["environment"].env_vars
     assert resolved_value.encode() not in captured["entrypoint"].workdir_files["_callable.pkl"]
 
 
@@ -210,35 +225,15 @@ def test_build_evaluation_batch_rejects_conflicting_secret_specs(monkeypatch):
         )
 
 
-@pytest.mark.parametrize(
-    ("platform", "records_prefix", "mirror_prefix"),
-    [
-        (
-            Platform.TPU,
-            "gs://marin-eval-metadata/runs",
-            "gs://marin-us-west4/tmp/ttl=7d/evaluation/harbor-datasets",
-        ),
-        (
-            Platform.GPU,
-            "s3://marin-us-east-02a/marin/eval-metadata/runs",
-            "s3://marin-us-east-02a/tmp/ttl=7d/evaluation/harbor-datasets",
-        ),
-    ],
-)
-def test_agentic_evaluation_uses_a_revision_pinned_regional_dataset_artifact(
-    platform,
-    records_prefix,
-    mirror_prefix,
-    monkeypatch,
-):
+def test_agentic_evaluation_uses_a_revision_pinned_dataset_artifact(monkeypatch):
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     spec = LaunchSpec(
         model="qwen3-8b",
         evals=("tb2-lite",),
-        platform=platform,
-        accelerator=None,
+        platform=Platform.GPU,
+        accelerator="H100x1",
         limit=None,
-        records_prefix=records_prefix,
+        records_prefix="s3://marin-us-east-02a/marin/eval-metadata/runs",
         cluster="marin",
     )
 
@@ -253,6 +248,13 @@ def test_agentic_evaluation_uses_a_revision_pinned_regional_dataset_artifact(
     assert harbor is not None
     assert harbor.repository == evaluation.executor.config.dataset
     assert harbor.commit == evaluation.executor.config.revision
-    assert harbor.mirror_uri.startswith(mirror_prefix)
-    assert harbor.mirror_uri.endswith(f"DCAgent2--terminal_bench_2/{harbor.commit}")
-    assert evaluation.executor.dataset_artifact.path() == harbor.mirror_uri
+    assert harbor.mirror_uri is None
+    artifact = evaluation.executor.dataset_artifact
+    assert artifact is not None
+    assert artifact.override_path is None
+    assert artifact.path("gs://marin-us-west4") == (
+        "gs://marin-us-west4/evaluation/harbor-datasets/DCAgent2--terminal_bench_2/2026.07.27"
+    )
+    assert artifact.path("s3://marin-us-east-02a/marin") == (
+        "s3://marin-us-east-02a/marin/evaluation/harbor-datasets/DCAgent2--terminal_bench_2/2026.07.27"
+    )

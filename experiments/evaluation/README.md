@@ -88,15 +88,15 @@ runtime arg, so changing it does not change the artifact identity.
 
 The `agentic` suite (`tb2`, `swebench`, `gaia`, `bfcl`, `aider`, `medagentbench`, `financeagent`) runs
 in-sandbox agentic benchmarks through the same launcher. Each preset pins its Hugging Face repository
-to a full commit and declares a lazy regional artifact. The artifact mirrors once into GCS in the
-evaluator's GCP region or the evaluator's CoreWeave S3 bucket. On a cache hit the evaluator does not
-contact Hugging Face; it stages only the selected complete task directories into local `/tmp` before
-calling Harbor. The launcher serves the model once and mints a capability URL for the served endpoint,
-and an in-sandbox terminal agent (Daytona) reaches the model through that URL. Harbor's verifier scores
-each trial, which normalizes into one agentic `EvalSample` (reward ->
+to a full commit and declares a lazy artifact under the evaluator's normal artifact prefix (GCS on GCP,
+S3 on CoreWeave). On a cache hit the evaluator does not contact Hugging Face; it stages only the
+selected complete task directories into local `/tmp` before calling Harbor. The launcher serves the
+model once and mints a capability URL for the served endpoint, and an in-sandbox terminal agent
+(Daytona) reaches the model through that URL. Harbor's verifier scores each trial, which normalizes
+into one agentic `EvalSample` (reward ->
 `Grading(method="harbor:verifier")`, trajectory -> `trajectory_uri`) plus a record, so agentic runs
 land in evaldash like every other eval. The record includes the Hugging Face repository, immutable
-commit, and resolved regional mirror URI.
+commit, and resolved artifact URI.
 
 ```bash
 # A capped agentic validation run (2 tasks).
@@ -118,7 +118,7 @@ uv run python -m experiments.evaluation.cli launch \
   --model grug-agentic-s3-step1903 --evals grug-opencode-id --limit 1
 ```
 
-The profile reuses the same regional artifact contract for the pinned `DCAgent/dev_set_v2` commit.
+The profile reuses the same artifact contract for the pinned `DCAgent/dev_set_v2` commit.
 
 Mechanism code lives under `marin.evaluation.evalchemy` and `marin.evaluation.harbor`; the common
 runner depends only on the callable executor protocol and the shared record types.

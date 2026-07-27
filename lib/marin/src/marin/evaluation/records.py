@@ -62,7 +62,7 @@ class EvalTaskRef(BaseModel):
 
 
 class HarborRef(BaseModel):
-    """The Harbor dataset identity, execution config, and resolved regional source."""
+    """The Harbor dataset identity, execution config, and resolved artifact source."""
 
     model_config = ConfigDict(frozen=True)
 

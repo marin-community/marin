@@ -88,36 +88,23 @@ definition = HarborDefinition(
 )
 ```
 
-Every Hugging Face source uses a full commit hash. The launcher creates a lazy `download_hf`
-artifact at a path returned by `marin_temp_bucket`: GCS in the evaluator's GCP region or the
-evaluator's configured CoreWeave S3 bucket. A successful artifact is reused by later model sweeps,
-so a cache hit does not contact Hugging Face. The evaluation record stores the repository, commit,
-and resolved mirror URI.
+Every Hugging Face source uses a full commit hash. The evaluator resolves a lazy `download_hf`
+artifact under its normal artifact prefix: GCS on GCP or S3 on CoreWeave. A successful artifact is
+reused by later model sweeps, so a cache hit does not contact Hugging Face. The evaluation record
+stores the repository, commit, and resolved artifact URI.
 
 At the Harbor boundary, Marin lists valid task directories in the mirror and stages only the
 selected directories under evaluator-local `/tmp`. `--limit 2`, for example, copies two complete
 task trees rather than the full repository. A registry dataset does not need an artifact; it uses
 its Harbor name, such as `aime` with version `1.0`.
 
+The commits in `experiments/evaluation/evals.py` come from
+`HfApi().dataset_info(repository).sha`. Refresh a dataset only as an intentional benchmark version
+change: update its commit and bump `_CATALOG_VERSION` in `harbor_datasets.py`. Normal evaluation
+runs never follow the mutable `main` revision.
+
 Add project-specific presets to `experiments/evaluation/evals.py`; keep Harbor execution and result
 normalization in `lib/marin/src/marin/evaluation/harbor`.
-
-## Why task inputs remain local
-
-The nine agentic repositories in the current catalog contain 17,406 files across 1,614 tasks and
-total about 161 MiB. About 90% of the files are smaller than 16 KiB. Environment files account for
-about 47% of the bytes, tests for 41%, and solutions for 9%.
-
-Remote discovery and `task.toml` parsing could use `UPath` or fsspec, but that would not remove the
-important staging boundary. Harbor computes task and environment directory checksums from local
-paths. Docker, Daytona, Apple Container, and Apptainer consume local Dockerfiles or build contexts.
-Sandbox setup then uploads local environment, test, solution, and artifact directories. Reading
-the task tree one object at a time would also make the many small files latency-bound.
-
-Marin therefore keeps repository caching and provenance outside Harbor, then stages each selected
-task in full. Trial restore and upload use the same fsspec tree-transfer API for local, GCS, and S3
-paths. Resume mode skips equal-sized files; overwrite mode replaces every source file. Neither mode
-deletes destination-only files.
 
 ## Results
 

@@ -91,9 +91,9 @@ class EvaluationDefinition(Protocol):
 
     secret_env: Mapping[str, SecretSpec]
 
-    def record_ref_for(self, placement_prefix: str) -> EvalRef: ...
+    def record_ref(self) -> EvalRef: ...
 
-    def executor_for(self, model: ModelConfig, limit: int | None, placement_prefix: str) -> EvalExecutor: ...
+    def executor_for(self, model: ModelConfig, limit: int | None) -> EvalExecutor: ...
 
 
 @dataclass(frozen=True)
@@ -101,14 +101,14 @@ class EvalchemyDefinition:
     config: EvalchemyRunConfig
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
 
-    def record_ref_for(self, _placement_prefix: str) -> EvalRef:
+    def record_ref(self) -> EvalRef:
         return EvalRef(
             name=self.config.name,
             mechanism="evalchemy",
             tasks=tuple(EvalTaskRef(name=task.name, num_fewshot=task.num_fewshot) for task in self.config.tasks),
         )
 
-    def executor_for(self, model: ModelConfig, limit: int | None, _placement_prefix: str) -> EvalExecutor:
+    def executor_for(self, model: ModelConfig, limit: int | None) -> EvalExecutor:
         effective_limit = self.config.max_eval_instances if limit is None else limit
         config = replace(
             self.config,
@@ -133,8 +133,7 @@ class HarborDefinition:
     max_eval_instances: int | None = None
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
 
-    def record_ref_for(self, placement_prefix: str) -> EvalRef:
-        mirror_uri = self.dataset_artifact.mirror_uri(placement_prefix) if self.dataset_artifact is not None else None
+    def record_ref(self) -> EvalRef:
         return EvalRef(
             name=self.name,
             mechanism="harbor",
@@ -145,11 +144,10 @@ class HarborDefinition:
                 env=self.config.environment.environment_type,
                 repository=self.dataset_artifact.repository if self.dataset_artifact is not None else None,
                 commit=self.dataset_artifact.commit if self.dataset_artifact is not None else None,
-                mirror_uri=mirror_uri,
             ),
         )
 
-    def executor_for(self, model: ModelConfig, limit: int | None, placement_prefix: str) -> EvalExecutor:
+    def executor_for(self, model: ModelConfig, limit: int | None) -> EvalExecutor:
         effective_limit = self.max_eval_instances if limit is None else limit
         config = replace(
             self.config,
@@ -159,13 +157,12 @@ class HarborDefinition:
                 kwargs={**model.agent.agent_kwargs, **self.config.agent.kwargs},
             ),
         )
-        dataset_artifact = (
-            self.dataset_artifact.artifact_for(placement_prefix) if self.dataset_artifact is not None else None
-        )
+        dataset_artifact = self.dataset_artifact.artifact() if self.dataset_artifact is not None else None
         return HarborExecutor(
             config=config,
             secret_env_keys=tuple(self.secret_env),
             dataset_artifact=dataset_artifact,
+            record_ref=self.record_ref(),
         )
 
 

@@ -31,7 +31,7 @@ from marin.evaluation.harbor.driver_config import (
     HarborDriverConfig,
     HarborRunConfig,
 )
-from marin.evaluation.records import RunStatus
+from marin.evaluation.records import EvalRef, RunStatus
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.evaluation.samples import EvalSample, Grading, SampleKind, write_sample_parquet
 from marin.execution.artifact import Artifact
@@ -337,6 +337,15 @@ class HarborExecutor:
     config: HarborRunConfig
     secret_env_keys: tuple[str, ...] = ()
     dataset_artifact: ArtifactStep[Artifact] | None = None
+    record_ref: EvalRef | None = None
+
+    def _resolved_record_ref(self, dataset_source: str | None) -> EvalRef | None:
+        if self.record_ref is None or dataset_source is None:
+            return self.record_ref
+        if self.record_ref.harbor is None:
+            raise ValueError("HarborExecutor record_ref must carry Harbor metadata")
+        harbor = self.record_ref.harbor.model_copy(update={"mirror_uri": dataset_source})
+        return self.record_ref.model_copy(update={"harbor": harbor})
 
     def __call__(
         self,
@@ -344,8 +353,10 @@ class HarborExecutor:
         output_dir: str,
         env_vars: Mapping[str, str],
     ) -> EvaluationOutcome:
+        resolved_ref = self.record_ref
         try:
             dataset_source = resolve(self.dataset_artifact).path if self.dataset_artifact is not None else None
+            resolved_ref = self._resolved_record_ref(dataset_source)
             result = run_harbor(
                 model,
                 self.config,
@@ -354,16 +365,18 @@ class HarborExecutor:
                 dataset_source=dataset_source,
             )
         except Exception as exc:
-            raise EvaluationError(str(exc), status=RunStatus.FAILED) from exc
+            raise EvaluationError(str(exc), status=RunStatus.FAILED, eval_ref=resolved_ref) from exc
         if not result.total_trials:
             raise EvaluationError(
                 f"Harbor eval finished with no trials under {output_dir!r}",
                 status=RunStatus.FAILED,
+                eval_ref=resolved_ref,
             )
         if result.failed_trials:
             raise EvaluationError(
                 f"Harbor eval finished with {result.failed_trials} of {result.total_trials} failed trials "
                 f"under {output_dir!r}",
                 status=RunStatus.FAILED,
+                eval_ref=resolved_ref,
             )
-        return EvaluationOutcome(metrics=result.task_metrics())
+        return EvaluationOutcome(metrics=result.task_metrics(), eval_ref=resolved_ref)

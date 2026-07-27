@@ -5,7 +5,7 @@
 
 import logging
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from fray.client import JobHandle
@@ -47,6 +47,7 @@ _REPORT_TAIL_LINES = 15
 class EvaluationOutcome:
     metrics: dict[str, dict[str, float]]
     jobs: dict[str, str] = field(default_factory=dict)
+    eval_ref: EvalRef | None = None
 
 
 class EvaluationError(RuntimeError):
@@ -57,11 +58,13 @@ class EvaluationError(RuntimeError):
         status: RunStatus,
         jobs: dict[str, str] | None = None,
         log_tails: dict[str, tuple[str, ...]] | None = None,
+        eval_ref: EvalRef | None = None,
     ):
         super().__init__(message)
         self.status = status
         self.jobs = jobs or {}
         self.log_tails = log_tails or {}
+        self.eval_ref = eval_ref
 
 
 class EvalExecutor(Protocol):
@@ -230,6 +233,7 @@ def _run_one_evaluation(
     orchestrator_job_id: str,
     env_vars: Mapping[str, str],
 ) -> _EvaluationExecution:
+    identity = evaluation.identity
     jobs = {_ORCHESTRATOR_ROLE: orchestrator_job_id}
     jobs.update(_inference_job_ids(session))
     tails: dict[str, tuple[str, ...]] = {}
@@ -244,11 +248,15 @@ def _run_one_evaluation(
         outcome = evaluation.executor(session.model, evaluation.identity.output_dir, evaluation_env)
         metrics = outcome.metrics
         jobs |= outcome.jobs
+        if outcome.eval_ref is not None:
+            identity = replace(identity, eval_ref=outcome.eval_ref)
     except Exception as exc:
         if isinstance(exc, EvaluationError):
             status = exc.status
             jobs |= exc.jobs
             tails = exc.log_tails
+            if exc.eval_ref is not None:
+                identity = replace(identity, eval_ref=exc.eval_ref)
         else:
             logger.exception("unexpected failure in evaluation %s", evaluation.identity.eval_ref.name)
             status = RunStatus.FAILED
@@ -261,8 +269,8 @@ def _run_one_evaluation(
             tails |= _session_tail(session)
             inference_failure = serve_exc
 
-    path = _record(batch, evaluation.identity, status, error, metrics, jobs, tails)
-    failure = f"{evaluation.identity.eval_ref.name} ({status.value})" if error is not None else None
+    path = _record(batch, identity, status, error, metrics, jobs, tails)
+    failure = f"{identity.eval_ref.name} ({status.value})" if error is not None else None
     return _EvaluationExecution(
         record_path=path,
         failure=failure,
