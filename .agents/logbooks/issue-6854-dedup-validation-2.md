@@ -16,6 +16,62 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T15:36:53Z — 286,326 pairs verified; all 336 ambiguities covered
+
+- `/rav/rav-datakit-6854-reconcile-manual-1536-v1310` independently
+  reconciled 2,255 completed semantic checkpoints and all 336 unresolved model
+  outcomes. Every unresolved outcome has a consistent full-text decision;
+  none are missing. The snapshot covers 286,326 of 755,281 semantic
+  candidates (37.91%). Applying the 72 false-positive and 264 true-duplicate
+  manual decisions gives:
+
+  - baseline: 228,295 pairs, 145,032 false positives, and 83,263 true
+    duplicates;
+  - treatment: 58,031 pairs, 30,063 false positives, and 27,968 true
+    duplicates;
+  - combined: 175,095 false positives and 111,231 true duplicates.
+
+  The observed false-positive rates are 63.5283% for baseline and 51.8051%
+  for treatment, a treatment reduction of 11.7233 percentage points. The
+  immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-1536.json`
+  with SHA-256
+  `bc973ccb709bbb0b50bc28722fe4a4b5b034329db6c45c2c05e928bdfd4ab359`.
+- Three independent audit waves re-read and hash-validated the eight newly
+  reconciled baseline checkpoints. Their 1,024 pairs contain 607 model false
+  positives and 417 true duplicates, with no unresolved outcomes. All 8,581
+  judgments were valid on their first attempt; 65 pairs were chunked and 959
+  were direct.
+
+  - p0 decision-file 12 offset 0:
+    `5bb993f9bbfa04c3a6c82528cb54c8d0d4c623233d5c1dadb937f29403a657d6`;
+  - p2 decision-file 76 offset 0:
+    `b213d1d1dc59684eee19847d9f163851b40b70c7f22eb168c58a06c0db10dbc7`;
+  - p3 decision-file 108 offsets 1,792, 1,920, and 2,048:
+    `b046fd41fa3f3830665d2ad013849c4c89a67b46f689641e5fa9bfa92742f541`,
+    `de8bb8febd62f215e0aca9052b677f412d9fb62dc0498554a3b031d6f82a0d8d`,
+    and
+    `9148c99bb469356816385399b4c79cf7e6fc30d1ae9c5dfc5b3fa209361ab2b6`;
+  - p3 offsets 2,176, 2,304, and 2,432:
+    `af6a9ade3b9b54ab395ffb2822add85f8f93df5ae1ba7200518a55ddb983930e`,
+    `2afc551ee7ca53b1cae132f9e227e2d97f80a350b25809d8f9c99f4c3ed72505`,
+    and
+    `a5e56ece8add43a718161c052cde4eb92a837410dbd14d46a499ff11f9cd3c53`.
+- The two unusually large completed checkpoints were independently
+  reconstructed and audited in full:
+
+  - p0: 154,670,556 input characters, 31 chunked pairs, 3,777 valid
+    judgments, 112 false positives, and 16 true duplicates;
+  - p2: 155,378,205 input characters, 33 chunked pairs, 3,137 valid
+    judgments, 118 false positives, and 10 true duplicates.
+
+  Neither checkpoint contains an unresolved outcome. Their workers advanced
+  immediately to 24,004,132- and 21,249,569-character batches.
+- The next independent-audit frontiers are p0 `(12, 128)`, p1 `(44, 0)`,
+  p2 `(76, 128)`, and p3 `(108, 2,560)`. All four batch-priority 2-H100 jobs
+  continue running, and their 12 root, broker, and GPU pods remain Ready with
+  zero Kubernetes restarts.
+
 ### 2026-07-27T15:26:37Z — 285,302 pairs verified; all 336 ambiguities covered
 
 - `/rav/rav-datakit-6854-reconcile-manual-1526-v1306` independently
