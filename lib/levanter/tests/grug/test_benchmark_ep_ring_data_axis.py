@@ -34,6 +34,7 @@ def test_ep_ring_data_axis_defaults_match_target_geometry() -> None:
     assert args.microbatches_per_step == 256
     assert args.layers_per_stage == 6
     assert args.treatment_data_axis_size == 2
+    assert not args.fuse_fp32_weight_gradient_accumulation
     assert args.interstage_speedup == 1.0179
     assert args.promotion_mfu == 20.0
 

@@ -12,7 +12,7 @@ import jax.numpy as jnp
 from haliax.jax_utils import tree_checkpoint_name
 from jaxtyping import Array, Bool, Float, Int
 
-from haliax.nn.ragged_dot import ragged_dot
+from haliax.nn.ragged_dot import ragged_dot, ragged_dot_accumulating_weight_gradient
 from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_DISPATCH_OUTPUT,
@@ -257,6 +257,35 @@ def _bulk_ring_expert_compute(
     return _BulkRingExpertState(out_dispatch=out_dispatch)
 
 
+def _bulk_ring_expert_compute_accumulating_weight_gradient(
+    dispatch: _BulkRingDispatchState,
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    w13_accumulator_local: Float[Array, "Elocal H I2"],
+    w2_accumulator_local: Float[Array, "Elocal I H"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+) -> tuple[_BulkRingExpertState, Float[Array, ""]]:
+    with jax.named_scope("moe_up_down"):
+        w13_out, w13_token = ragged_dot_accumulating_weight_gradient(
+            dispatch.x_dispatch,
+            moe_w13_local,
+            dispatch.group_sizes,
+            w13_accumulator_local,
+        )
+        w13_out = tree_checkpoint_name(w13_out, _CHECKPOINT_EXPERT_HIDDEN)
+        moe_dim = moe_w2_local.shape[1]
+        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+        out_dispatch, w2_token = ragged_dot_accumulating_weight_gradient(
+            activation_fn(gate) * up,
+            moe_w2_local,
+            dispatch.group_sizes,
+            w2_accumulator_local,
+        )
+        out_dispatch = tree_checkpoint_name(out_dispatch, _CHECKPOINT_DISPATCH_OUTPUT)
+    return _BulkRingExpertState(out_dispatch=out_dispatch), w13_token + w2_token
+
+
 def _bulk_ring_combine(
     dispatch: _BulkRingDispatchState,
     expert: _BulkRingExpertState,
@@ -353,6 +382,39 @@ def _bulk_ring_from_routing(
         expert_axis_size=routing.expert_axis_size,
         combine_dtype=combine_dtype,
     )
+
+
+def _bulk_ring_from_routing_accumulating_weight_gradient(
+    x_local: Float[Array, "Tlocal H"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    w13_accumulator_local: Float[Array, "Elocal H I2"],
+    w2_accumulator_local: Float[Array, "Elocal I H"],
+    routing: _RingRouting,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+) -> tuple[Float[Array, "Tlocal H"], Float[Array, ""]]:
+    dispatch = _bulk_ring_dispatch_from_routing(
+        x_local,
+        combine_weights_local,
+        routing,
+    )
+    expert, accumulation_token = _bulk_ring_expert_compute_accumulating_weight_gradient(
+        dispatch,
+        moe_w13_local,
+        moe_w2_local,
+        w13_accumulator_local,
+        w2_accumulator_local,
+        activation_fn=activation_fn,
+    )
+    output = _bulk_ring_combine(
+        dispatch,
+        expert,
+        tokens_per_shard=routing.tokens_per_shard,
+        expert_axis_size=routing.expert_axis_size,
+    )
+    return output, accumulation_token
 
 
 def _bulk_ring_fp8_wire_from_routing(
@@ -670,6 +732,40 @@ def _moe_mlp_ep_ring_local(
     )
     dropped_total = jax.lax.psum(routing.dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
     return out_local, dropped_total
+
+
+def _moe_mlp_ep_ring_local_accumulating_weight_gradient(
+    x_local: Float[Array, "Tlocal H"],
+    selected_experts_local: Int[Array, "Tlocal K"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    w13_accumulator_local: Float[Array, "Elocal H I2"],
+    w2_accumulator_local: Float[Array, "Elocal I H"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""], Float[Array, ""]]:
+    """Benchmark-only Ring path that aliases FP32 expert-gradient accumulators."""
+    routing = _ring_routing_prepass(
+        selected_experts_local,
+        local_experts=moe_w13_local.shape[0],
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+    )
+    out_local, accumulation_token = _bulk_ring_from_routing_accumulating_weight_gradient(
+        x_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        w13_accumulator_local,
+        w2_accumulator_local,
+        routing,
+        activation_fn=activation_fn,
+    )
+    dropped_total = jax.lax.psum(routing.dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
+    return out_local, dropped_total, accumulation_token
 
 
 def _moe_mlp_ep_ring_fp8_wire_approx_local(

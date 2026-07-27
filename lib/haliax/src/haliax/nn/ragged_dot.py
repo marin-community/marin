@@ -197,6 +197,8 @@ def _triton_ragged_contracting_dim_dot_kernel(
     *,
     block_m: int,
     block_k: int,
+    accumulator_ref=None,
+    accumulation_scale_ref=None,
 ):
     """Pallas-Triton ragged dot where the ragged dimension is also contracting."""
     lo = lo_ref[()]
@@ -219,6 +221,10 @@ def _triton_ragged_contracting_dim_dot_kernel(
     acc = jnp.zeros((block_m, out_ref.shape[1]), dtype=jnp.float32)
     acc = jax.lax.fori_loop(0, num_k_blocks - 1, body, acc)
     acc = body(num_k_blocks - 1, acc, mask_k=True)
+    if accumulator_ref is not None:
+        assert accumulation_scale_ref is not None
+        prior = plgpu.load(accumulator_ref)
+        acc += accumulation_scale_ref[()].astype(jnp.float32) * prior.astype(jnp.float32)
     plgpu.store(out_ref, acc.astype(out_ref.dtype))
 
 
@@ -265,6 +271,67 @@ def _triton_ragged_contracting_dim_pallas_call(
         )(lhs, rhs, lo, hi)
 
     return jax.vmap(one_group, in_axes=(None, None, 0, 0))(lhs, rhs, cum_rows[:-1], cum_rows[1:])
+
+
+def _triton_ragged_contracting_dim_accumulating_pallas_call(
+    lhs: jax.Array,
+    rhs: jax.Array,
+    group_sizes: jax.Array,
+    accumulator: jax.Array,
+    accumulation_scale: jax.Array,
+) -> jax.Array:
+    """Compute an FP32 drhs and add it directly into an aliased accumulator."""
+    k, m = lhs.shape
+    _, n = rhs.shape
+    expected_shape = (group_sizes.shape[0], m, n)
+    if accumulator.shape != expected_shape:
+        raise ValueError(f"expected accumulator shape {expected_shape}, got {accumulator.shape}")
+    if accumulator.dtype != jnp.float32:
+        raise TypeError(f"expected FP32 accumulator, got {accumulator.dtype}")
+
+    block_m = min(128, int(pl.next_power_of_2(m)))
+    block_n = min(128, int(pl.next_power_of_2(n)))
+    block_k = _triton_block_k(k)
+    cum_rows = jnp.cumulative_sum(group_sizes, include_initial=True)
+
+    def one_group(lhs, rhs, lo, hi, accumulator, accumulation_scale):
+        return pl.pallas_call(
+            lambda a, b, lo, hi, accumulator, accumulation_scale, out: (
+                _triton_ragged_contracting_dim_dot_kernel(
+                    a,
+                    b,
+                    lo,
+                    hi,
+                    out,
+                    block_m=block_m,
+                    block_k=block_k,
+                    accumulator_ref=accumulator,
+                    accumulation_scale_ref=accumulation_scale,
+                )
+            ),
+            out_shape=jax.ShapeDtypeStruct((m, n), jnp.float32),
+            in_specs=[
+                pl.BlockSpec((k, block_m), lambda i, j: (0, i)),
+                pl.BlockSpec((k, block_n), lambda i, j: (0, j)),
+                pl.no_block_spec,
+                pl.no_block_spec,
+                pl.BlockSpec((block_m, block_n), lambda i, j: (i, j)),
+                pl.no_block_spec,
+            ],
+            out_specs=pl.BlockSpec((block_m, block_n), lambda i, j: (i, j)),
+            grid=(pl.cdiv(m, block_m), pl.cdiv(n, block_n)),
+            input_output_aliases={4: 0},
+            compiler_params=plgpu.CompilerParams(num_warps=_triton_num_warps(), num_stages=4),
+        )(lhs, rhs, lo, hi, accumulator, accumulation_scale)
+
+    return jax.vmap(one_group, in_axes=(None, None, 0, 0, 0, None))(
+        lhs,
+        rhs,
+        cum_rows[:-1],
+        cum_rows[1:],
+        accumulator,
+        accumulation_scale,
+    )
 
 
 _DEFAULT_DIM_NUMS = jax.lax.RaggedDotDimensionNumbers(
@@ -368,6 +435,45 @@ def _ragged_dot_triton_fp32_weight_gradient_bwd(residuals, dout):
 _ragged_dot_triton_fp32_weight_gradient_impl.defvjp(
     _ragged_dot_triton_fp32_weight_gradient_fwd,
     _ragged_dot_triton_fp32_weight_gradient_bwd,
+)
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=())
+def _ragged_dot_triton_accumulating_weight_gradient_impl(
+    lhs: jax.Array,
+    rhs: jax.Array,
+    group_sizes: jax.Array,
+    accumulator: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    """Triton ragged dot that aliases an FP32 accumulator in its weight VJP."""
+    if not _has_pallas_triton:
+        raise NotImplementedError("Pallas Triton backend is not available")
+    return _triton_pallas_call(lhs, rhs, group_sizes), jnp.zeros((), dtype=jnp.float32)
+
+
+def _ragged_dot_triton_accumulating_weight_gradient_fwd(lhs, rhs, group_sizes, accumulator):
+    out = _triton_pallas_call(lhs, rhs, group_sizes)
+    token = jnp.zeros((), dtype=jnp.float32)
+    return (out, token), (lhs, rhs, group_sizes, accumulator)
+
+
+def _ragged_dot_triton_accumulating_weight_gradient_bwd(residuals, cotangents):
+    lhs, rhs, group_sizes, accumulator = residuals
+    dout, accumulation_scale = cotangents
+    dlhs = _triton_pallas_call(dout, rhs, group_sizes, _DLHS_DIM_NUMS)
+    drhs = _triton_ragged_contracting_dim_accumulating_pallas_call(
+        lhs,
+        dout,
+        group_sizes,
+        accumulator,
+        accumulation_scale,
+    )
+    return dlhs, drhs, None, None
+
+
+_ragged_dot_triton_accumulating_weight_gradient_impl.defvjp(
+    _ragged_dot_triton_accumulating_weight_gradient_fwd,
+    _ragged_dot_triton_accumulating_weight_gradient_bwd,
 )
 
 
@@ -514,4 +620,27 @@ def ragged_dot(
     return out
 
 
-__all__ = ["Implementation", "ragged_dot"]
+def ragged_dot_accumulating_weight_gradient(
+    lhs: jax.Array,
+    rhs: jax.Array,
+    group_sizes: jax.Array,
+    accumulator: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    """Apply Triton ragged dot and accumulate its FP32 weight gradient in place.
+
+    The returned scalar token is numerically zero and must be added to the loss.
+    Its cotangent makes accumulator addition linear in the custom VJP. This
+    first-order reverse-mode operation requires one differentiable use of
+    ``rhs`` and a donated FP32 ``accumulator`` with the same shape.
+    """
+    original_rows = lhs.shape[0]
+    if original_rows % 512:
+        pad_length = 512 - original_rows % 512
+        lhs = jax.lax.pad(lhs, jnp.zeros((), dtype=lhs.dtype), [(0, pad_length, 0), (0, 0, 0)])
+    out, token = _ragged_dot_triton_accumulating_weight_gradient_impl(lhs, rhs, group_sizes, accumulator)
+    if original_rows % 512:
+        out = out[:original_rows]
+    return out, token
+
+
+__all__ = ["Implementation", "ragged_dot", "ragged_dot_accumulating_weight_gradient"]

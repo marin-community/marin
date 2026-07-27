@@ -21,7 +21,10 @@ from haliax.nn import ragged_dot
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from levanter.grug._moe.common import MoeRaggedDotOps
-from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
+from levanter.grug._moe.ep_ring import (
+    _moe_mlp_ep_ring_local,
+    _moe_mlp_ep_ring_local_accumulating_weight_gradient,
+)
 
 from experiments.grug.moe.benchmark_ep_ring import _selected_experts
 
@@ -76,6 +79,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--baseline-step-seconds", type=float, default=_BASELINE_STEP_SECONDS)
     parser.add_argument("--interstage-speedup", type=float, default=_INTERSTAGE_FP8_SPEEDUP)
     parser.add_argument("--promotion-mfu", type=float, default=_PROMOTION_MFU)
+    parser.add_argument("--fuse-fp32-weight-gradient-accumulation", action="store_true")
     parser.add_argument("--lower-only", action="store_true")
     parser.add_argument("--output", choices=("human", "json", "both"), default="both")
     return parser
@@ -192,6 +196,7 @@ def _local_value_and_grad(
     capacity_factor: float,
     output_elements: int,
     ops: MoeRaggedDotOps | None,
+    fuse_weight_gradient_accumulation: bool,
 ) -> tuple[
     tuple[jax.Array, jax.Array, jax.Array],
     tuple[jax.Array, jax.Array, jax.Array, jax.Array],
@@ -202,18 +207,33 @@ def _local_value_and_grad(
         w13: jax.Array,
         w2: jax.Array,
     ) -> tuple[jax.Array, tuple[jax.Array, jax.Array]]:
-        output, dropped = _moe_mlp_ep_ring_local(
-            x,
-            selected_experts_local,
-            combine_weights,
-            w13,
-            w2,
-            activation_fn=jax.nn.silu,
-            num_experts=num_experts,
-            capacity_factor=capacity_factor,
-            ops=ops,
-        )
-        local_loss = jnp.sum(jnp.square(output.astype(jnp.float32))) / output_elements
+        if fuse_weight_gradient_accumulation:
+            output, dropped, accumulation_token = _moe_mlp_ep_ring_local_accumulating_weight_gradient(
+                x,
+                selected_experts_local,
+                combine_weights,
+                w13,
+                w2,
+                w13_accumulator[0],
+                w2_accumulator[0],
+                activation_fn=jax.nn.silu,
+                num_experts=num_experts,
+                capacity_factor=capacity_factor,
+            )
+        else:
+            output, dropped = _moe_mlp_ep_ring_local(
+                x,
+                selected_experts_local,
+                combine_weights,
+                w13,
+                w2,
+                activation_fn=jax.nn.silu,
+                num_experts=num_experts,
+                capacity_factor=capacity_factor,
+                ops=ops,
+            )
+            accumulation_token = jnp.zeros((), dtype=jnp.float32)
+        local_loss = jnp.sum(jnp.square(output.astype(jnp.float32))) / output_elements + accumulation_token
         return local_loss, (output, dropped)
 
     (local_loss, (output, dropped)), gradients = jax.value_and_grad(
@@ -222,8 +242,12 @@ def _local_value_and_grad(
         has_aux=True,
     )(x_local, combine_weights_local, w13_local, w2_local)
     x_gradient, combine_gradient, w13_gradient, w2_gradient = gradients
-    w13_accumulator = w13_accumulator + w13_gradient[None].astype(jnp.float32)
-    w2_accumulator = w2_accumulator + w2_gradient[None].astype(jnp.float32)
+    if fuse_weight_gradient_accumulation:
+        w13_accumulator = w13_gradient[None]
+        w2_accumulator = w2_gradient[None]
+    else:
+        w13_accumulator = w13_accumulator + w13_gradient[None].astype(jnp.float32)
+        w2_accumulator = w2_accumulator + w2_gradient[None].astype(jnp.float32)
     return (
         (local_loss[None], output, dropped[None]),
         (x_gradient, combine_gradient, w13_accumulator, w2_accumulator),
@@ -268,6 +292,7 @@ def _build_arm(
     num_experts: int,
     capacity_factor: float,
     output_elements: int,
+    fuse_weight_gradient_accumulation: bool,
 ) -> _Arm:
     mesh = _mesh(data_axis_size)
     expert_axis_size = _DEVICE_COUNT // data_axis_size
@@ -308,7 +333,8 @@ def _build_arm(
         num_experts=num_experts,
         capacity_factor=capacity_factor,
         output_elements=output_elements,
-        ops=_FP32_WEIGHT_GRADIENT_OPS if data_axis_size > 1 else None,
+        ops=_FP32_WEIGHT_GRADIENT_OPS if data_axis_size > 1 and not fuse_weight_gradient_accumulation else None,
+        fuse_weight_gradient_accumulation=fuse_weight_gradient_accumulation,
     )
     with jax.set_mesh(mesh):
         initialize_accumulators_lowered = jax.jit(
@@ -731,6 +757,7 @@ def main() -> None:
         num_experts=args.num_experts,
         capacity_factor=args.capacity_factor,
         output_elements=output_elements,
+        fuse_weight_gradient_accumulation=False,
     )
     treatment = _build_arm(
         name="treatment",
@@ -739,6 +766,7 @@ def main() -> None:
         num_experts=args.num_experts,
         capacity_factor=args.capacity_factor,
         output_elements=output_elements,
+        fuse_weight_gradient_accumulation=args.fuse_fp32_weight_gradient_accumulation,
     )
 
     hlo = {
@@ -874,6 +902,7 @@ def main() -> None:
         "treatment": {
             "data_axis_size": treatment.data_axis_size,
             "expert_axis_size": treatment.expert_axis_size,
+            "fused_fp32_weight_gradient_accumulation": args.fuse_fp32_weight_gradient_accumulation,
         },
         "parity": parity,
         "hlo": hlo,

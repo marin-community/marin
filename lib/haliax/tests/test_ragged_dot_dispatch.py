@@ -179,6 +179,74 @@ def test_triton_fp32_weight_gradient_preserves_forward_and_input_gradient_dtype(
     assert rhs_gradient.dtype == jnp.float32
 
 
+def test_triton_accumulating_weight_gradient_scales_only_prior_accumulator(monkeypatch):
+    lhs = jnp.arange(12, dtype=jnp.bfloat16).reshape(3, 4)
+    rhs = jnp.arange(2 * 4 * 5, dtype=jnp.bfloat16).reshape(2, 4, 5)
+    group_sizes = jnp.array([2, 1], dtype=jnp.int32)
+    accumulator = jnp.arange(rhs.size, dtype=jnp.float32).reshape(rhs.shape) / 10
+    accumulation_scale = jnp.asarray(0.25, dtype=jnp.float32)
+
+    def fake_triton_pallas_call(
+        lhs,
+        rhs,
+        group_sizes,
+        ragged_dot_dimension_numbers=ragged_dot_module._DEFAULT_DIM_NUMS,
+        *,
+        output_dtype=None,
+    ):
+        output = jax.lax.ragged_dot_general(
+            lhs=lhs,
+            rhs=rhs,
+            group_sizes=group_sizes,
+            ragged_dot_dimension_numbers=ragged_dot_dimension_numbers,
+        )
+        if output_dtype is not None:
+            output = output.astype(output_dtype)
+        return output
+
+    def fake_accumulating_pallas_call(lhs, rhs, group_sizes, accumulator, accumulation_scale):
+        gradient = fake_triton_pallas_call(
+            lhs,
+            rhs,
+            group_sizes,
+            ragged_dot_module._DRHS_DIM_NUMS,
+            output_dtype=jnp.float32,
+        )
+        return gradient + accumulation_scale * accumulator
+
+    monkeypatch.setattr(ragged_dot_module, "_has_pallas_triton", True)
+    monkeypatch.setattr(ragged_dot_module, "_triton_pallas_call", fake_triton_pallas_call)
+    monkeypatch.setattr(
+        ragged_dot_module,
+        "_triton_ragged_contracting_dim_accumulating_pallas_call",
+        fake_accumulating_pallas_call,
+    )
+
+    def loss(lhs, rhs):
+        output, token = ragged_dot_module._ragged_dot_triton_accumulating_weight_gradient_impl(
+            lhs,
+            rhs,
+            group_sizes,
+            accumulator,
+        )
+        return jnp.sum(output.astype(jnp.float32)) + accumulation_scale * token
+
+    value, (lhs_gradient, rhs_gradient) = jax.value_and_grad(loss, argnums=(0, 1))(lhs, rhs)
+    expected_output = fake_triton_pallas_call(lhs, rhs, group_sizes)
+    expected_rhs_gradient = fake_triton_pallas_call(
+        lhs,
+        jnp.ones_like(expected_output),
+        group_sizes,
+        ragged_dot_module._DRHS_DIM_NUMS,
+        output_dtype=jnp.float32,
+    )
+
+    assert value == jnp.sum(expected_output.astype(jnp.float32))
+    assert lhs_gradient.dtype == jnp.bfloat16
+    assert rhs_gradient.dtype == jnp.float32
+    assert jnp.array_equal(rhs_gradient, expected_rhs_gradient + accumulation_scale * accumulator)
+
+
 # ---------------------------------------------------------------------------
 # FP8 op dispatch tests (op=/implementation= routing, init contract)
 # ---------------------------------------------------------------------------
