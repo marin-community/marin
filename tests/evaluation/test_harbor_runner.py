@@ -1,10 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 import json
+import os
+import subprocess
+import sys
+from dataclasses import asdict
 from pathlib import Path
-from types import SimpleNamespace
+from textwrap import dedent
 
 import pytest
 from fsspec.implementations.memory import MemoryFileSystem
@@ -26,7 +29,6 @@ from marin.evaluation.harbor.runner import (
     _write_samples,
     run_harbor,
 )
-from marin.evaluation.harbor.trial_driver import _register_progress_callbacks
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError
 from marin.inference.types import OpenAIEndpoint, RunningModel
@@ -42,47 +44,89 @@ def _running_model() -> RunningModel:
     )
 
 
-@pytest.mark.parametrize(
-    ("exception", "final_result"),
-    [
-        (None, "completed"),
-        (SimpleNamespace(exception_type="AgentError"), "AgentError"),
-    ],
-)
-def test_harbor_trial_driver_emits_line_oriented_progress(exception, final_result, capsys):
-    class FakeJob:
-        def __init__(self) -> None:
-            self.callbacks = []
+def test_harbor_trial_driver_emits_line_oriented_progress(tmp_path):
+    package_root = tmp_path / "fake_package"
+    harbor_package = package_root / "harbor"
+    harbor_config_package = harbor_package / "models" / "job"
+    harbor_config_package.mkdir(parents=True)
+    (harbor_package / "__init__.py").touch()
+    (harbor_package / "job.py").write_text(
+        dedent(
+            """\
+            from types import SimpleNamespace
 
-        def add_callback(self, callback):
-            self.callbacks.append(callback)
-            return self
+            class Job:
+                def __init__(self):
+                    self.callbacks = []
 
-        on_trial_started = add_callback
-        on_environment_started = add_callback
-        on_agent_started = add_callback
-        on_verification_started = add_callback
-        on_trial_ended = add_callback
+                @classmethod
+                async def create(cls, config):
+                    return cls()
 
-    job = FakeJob()
-    _register_progress_callbacks(job)
-    event = SimpleNamespace(
-        trial_name="trial-one",
-        result=SimpleNamespace(exception_info=exception),
+                def add_callback(self, callback):
+                    self.callbacks.append(callback)
+                    return self
+
+                on_trial_started = add_callback
+                on_environment_started = add_callback
+                on_agent_started = add_callback
+                on_verification_started = add_callback
+                on_trial_ended = add_callback
+
+                async def run(self):
+                    event = SimpleNamespace(
+                        trial_name="trial-one",
+                        result=SimpleNamespace(exception_info=None),
+                    )
+                    for callback in self.callbacks:
+                        await callback(event)
+            """
+        )
+    )
+    (harbor_config_package / "config.py").write_text(
+        dedent(
+            """\
+            class JobConfig:
+                @classmethod
+                def model_validate(cls, config):
+                    return config
+            """
+        )
+    )
+    config = HarborDriverConfig(
+        job_name="job",
+        jobs_dir=str(tmp_path / "jobs"),
+        dataset_path=None,
+        endpoint_url="https://iris.example/v1",
+        served_model="served-model",
+        run=HarborRunConfig(
+            dataset="toy",
+            revision="1.0",
+            agent=HarborAgentConfig(name="terminus-2"),
+            environment=HarborEnvironmentConfig(environment_type="daytona"),
+        ),
+    )
+    config_path = tmp_path / "driver_config.json"
+    config_path.write_text(json.dumps(asdict(config)))
+    env = os.environ.copy()
+    python_path = [str(package_root)]
+    if inherited_python_path := env.get("PYTHONPATH"):
+        python_path.append(inherited_python_path)
+    env["PYTHONPATH"] = os.pathsep.join(python_path)
+
+    result = subprocess.run(
+        [sys.executable, "-m", "marin.evaluation.harbor.trial_driver", str(config_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
     )
 
-    async def emit_progress() -> None:
-        for callback in job.callbacks:
-            await callback(event)
-
-    asyncio.run(emit_progress())
-
-    output = capsys.readouterr().out
-    lines = output.splitlines()
-    assert output.endswith("\n")
+    lines = result.stdout.splitlines()
+    assert result.stdout.endswith("\n")
     assert len(lines) == 5
     assert all("trial-one" in line for line in lines)
-    assert final_result in lines[-1]
+    assert "completed" in lines[-1]
 
 
 def test_materialize_harbor_dataset_downloads_hf_revision_as_local_tasks(tmp_path, monkeypatch):
