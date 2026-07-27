@@ -168,6 +168,15 @@ def test_k8s_deployment_reserves_burst_capacity_by_default() -> None:
     }
 
 
+def test_k8s_deployment_sets_the_query_metadata_cache_limit() -> None:
+    cfg = replace(_forwarding_cfg(), query_metadata_cache_mb=1024)
+    deployment = yaml.safe_load(_render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", cfg))
+    container = deployment["spec"]["template"]["spec"]["containers"][0]
+    env = {entry["name"]: entry["value"] for entry in container["env"]}
+
+    assert env["FINELOG_QUERY_METADATA_CACHE_MB"] == "1024"
+
+
 def test_probe_transition_replaces_complete_probe() -> None:
     live = {
         "spec": {

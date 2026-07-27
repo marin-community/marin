@@ -122,6 +122,7 @@ def render_bootstrap_for(cfg: FinelogConfig, image: str) -> str:
         # access, and every layer is inline-safe: a jwt layer carries only Ed25519
         # public keys, a cidr layer only network prefixes.
         auth_policy=auth_policy_json(cfg.auth) if cfg.auth else "",
+        query_metadata_cache_mb=cfg.query_metadata_cache_mb,
     )
 
 

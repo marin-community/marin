@@ -47,6 +47,8 @@ const MIN_QUERY_POOL_BYTES: usize = 256 * 1024 * 1024;
 /// tokio/allocator overhead).
 const QUERY_POOL_FRACTION: f64 = 0.7;
 
+const MEBIBYTE: usize = 1024 * 1024;
+
 /// Best-effort detect the process memory ceiling: the cgroup v2 limit
 /// (`memory.max`, i.e. the container's `--memory`) if set, else `/proc/meminfo`
 /// `MemTotal`. `None` when neither is readable/finite.
@@ -92,6 +94,36 @@ fn query_pool_bytes() -> usize {
     }
 }
 
+fn parse_metadata_cache_bytes(raw: Option<&str>) -> Option<usize> {
+    raw.and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|mb| *mb > 0)
+        .map(|mb| mb.saturating_mul(MEBIBYTE))
+}
+
+fn query_metadata_cache_bytes() -> Option<usize> {
+    let raw = std::env::var("FINELOG_QUERY_METADATA_CACHE_MB").ok();
+    let bytes = parse_metadata_cache_bytes(raw.as_deref());
+    if raw.is_some() && bytes.is_none() {
+        tracing::warn!(
+            value = raw.as_deref().unwrap_or_default(),
+            "ignoring invalid FINELOG_QUERY_METADATA_CACHE_MB; using DataFusion default"
+        );
+    }
+    bytes
+}
+
+fn build_runtime_env(
+    memory_pool_bytes: usize,
+    metadata_cache_bytes: Option<usize>,
+) -> Arc<RuntimeEnv> {
+    let mut builder = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::new(GreedyMemoryPool::new(memory_pool_bytes)));
+    if let Some(bytes) = metadata_cache_bytes {
+        builder = builder.with_metadata_cache_limit(bytes);
+    }
+    builder.build_arc().expect("build query RuntimeEnv")
+}
+
 /// A process-wide `RuntimeEnv` whose `GreedyMemoryPool` bounds total query
 /// memory. Shared across every `make_ctx` so concurrent queries compete for one
 /// budget (bounding the SERVER, not each query independently): a runaway query
@@ -103,15 +135,14 @@ fn query_pool_bytes() -> usize {
 fn shared_runtime_env() -> Arc<RuntimeEnv> {
     static RT: OnceLock<Arc<RuntimeEnv>> = OnceLock::new();
     RT.get_or_init(|| {
-        let bytes = query_pool_bytes();
+        let memory_pool_bytes = query_pool_bytes();
+        let runtime = build_runtime_env(memory_pool_bytes, query_metadata_cache_bytes());
         tracing::info!(
-            limit_mb = bytes / (1024 * 1024),
-            "query engine: bounded memory pool (GreedyMemoryPool)"
+            memory_pool_limit_mb = memory_pool_bytes / MEBIBYTE,
+            metadata_cache_limit_mb = runtime.cache_manager.get_metadata_cache_limit() / MEBIBYTE,
+            "query engine configured"
         );
-        RuntimeEnvBuilder::new()
-            .with_memory_pool(Arc::new(GreedyMemoryPool::new(bytes)))
-            .build_arc()
-            .expect("build query RuntimeEnv")
+        runtime
     })
     .clone()
 }
@@ -262,17 +293,36 @@ pub(crate) fn truncate_sql_for_log(sql: &str) -> String {
 /// threshold. `rows` is the result row count on success, `None` when the query
 /// errored — a slow *failed* query (e.g. `ResourcesExhausted` after a long scan)
 /// is exactly the case worth seeing.
-fn log_slow_query(elapsed: Duration, kind: &str, sql: &str, rows: Option<usize>) {
+fn log_slow_query(
+    ctx: &SessionContext,
+    elapsed: Duration,
+    kind: &str,
+    sql: &str,
+    rows: Option<usize>,
+) {
     let elapsed_ms = elapsed.as_millis();
     if elapsed_ms < slow_query_log_ms() {
         return;
     }
     let preview = truncate_sql_for_log(sql);
     let rows_str = rows.map_or_else(|| "ERR".to_string(), |n| n.to_string());
+    let runtime = ctx.runtime_env();
+    let cache_manager = &runtime.cache_manager;
+    let entries = cache_manager.get_file_metadata_cache().list_entries();
+    let metadata_cache_size_bytes = entries.values().fold(0_usize, |total, entry| {
+        total.saturating_add(entry.size_bytes)
+    });
+    let metadata_cache_hits = entries
+        .values()
+        .fold(0_usize, |total, entry| total.saturating_add(entry.hits));
     tracing::warn!(
         kind,
         elapsed_ms = elapsed_ms as u64,
         rows = %rows_str,
+        metadata_cache_limit_bytes = cache_manager.get_metadata_cache_limit(),
+        metadata_cache_size_bytes,
+        metadata_cache_entries = entries.len(),
+        metadata_cache_hits,
         sql = %preview,
         "slow {kind}: {elapsed_ms}ms rows={rows_str} sql={preview}",
     );
@@ -341,7 +391,7 @@ pub async fn run_query_over(
         .as_ref()
         .ok()
         .map(|r| r.batches.iter().map(|b| b.num_rows()).sum());
-    log_slow_query(elapsed, "Query", sql, rows);
+    log_slow_query(ctx, elapsed, "Query", sql, rows);
     result
 }
 
@@ -400,7 +450,7 @@ pub async fn fetch_log_rows(
         .as_ref()
         .ok()
         .map(|b| b.iter().map(|x| x.num_rows()).sum());
-    log_slow_query(elapsed, "FetchLogs", &sql, rows);
+    log_slow_query(ctx, elapsed, "FetchLogs", &sql, rows);
     let batches = collected?;
 
     let mut rows = Vec::new();
@@ -452,7 +502,8 @@ mod tests {
     use super::*;
     use crate::store::ipc::{decode_one_record_batch, encode_ipc};
     use crate::test_support::unique_dir;
-    use datafusion::arrow::array::Int64Array;
+    use datafusion::arrow::array::{Int64Array, TimestampMicrosecondArray};
+    use datafusion::arrow::datatypes::{DataType, TimeUnit};
 
     #[test]
     fn truncate_sql_caps_on_char_boundary() {
@@ -488,6 +539,59 @@ mod tests {
         );
         // Zero is the explicit disable escape hatch.
         assert_eq!(parse_query_timeout(Some("0")), None);
+    }
+
+    #[test]
+    fn metadata_cache_limit_is_configurable() {
+        let one_gibibyte = 1024 * MEBIBYTE;
+        assert_eq!(
+            parse_metadata_cache_bytes(Some(" 1024 ")),
+            Some(one_gibibyte)
+        );
+        assert_eq!(parse_metadata_cache_bytes(Some("0")), None);
+        assert_eq!(parse_metadata_cache_bytes(Some("invalid")), None);
+
+        let runtime = build_runtime_env(MIN_QUERY_POOL_BYTES, Some(one_gibibyte));
+        assert_eq!(
+            runtime.cache_manager.get_metadata_cache_limit(),
+            one_gibibyte
+        );
+    }
+
+    #[tokio::test]
+    async fn recent_timestamp_filter_uses_datafusion_now() {
+        let now_us = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros() as i64;
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(TimestampMicrosecondArray::from(vec![
+                now_us - 10 * 60 * 1_000_000,
+                now_us - 60 * 1_000_000,
+            ]))],
+        )
+        .unwrap();
+        let ctx = make_ctx();
+        ctx.register_batch("telltale", batch).unwrap();
+
+        let batches = ctx
+            .sql("SELECT ts FROM telltale WHERE ts >= now() - INTERVAL '5 minutes'")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        assert_eq!(
+            batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+            1
+        );
     }
 
     #[tokio::test]

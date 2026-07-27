@@ -62,6 +62,7 @@ def test_load_config_from_repo_marin() -> None:
     assert cfg.deployment.gcp is not None
     assert cfg.deployment.gcp.project == "hai-gcp-models"
     assert cfg.deployment.gcp.zone == "us-central1-a"
+    assert cfg.query_metadata_cache_mb == 1024
 
 
 def test_load_config_missing_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
