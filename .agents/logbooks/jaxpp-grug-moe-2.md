@@ -1036,3 +1036,20 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - The highest-confidence fix is to carry genuinely data-sharded local cotangents across the JaxPP task boundary and synchronize only at optimizer update. Bundling FP8 DIME payloads is second; FA4, ragged-dot, and GPipe are closed by this trace.
 - Next action:
   - Implement the smallest manual-data-axis gradient boundary and prove zero data-axis collectives in local backward plus one step-boundary sync per weight before another GPU run.
+
+### 2026-07-27 05:00 PDT - Move fused Ring VJP inside the manual shard map
+- Commit Hash: `6593a34edc`.
+- Implementation:
+  - `moe_mlp_accumulating_weight_gradient` now has a global custom VJP whose backward executes the local Ring pullback inside `shard_map`.
+  - Expert-weight cotangents remain intentionally non-VMA across `data` until the existing optimizer-boundary synchronization. This bypasses the automatic transpose of the inner Ring `shard_map`, which inserted one data-axis all-reduce per W13/W2 layer and microbatch.
+  - The optimizer-boundary synchronization is unchanged and exposed as a testable helper.
+- Validation:
+  - Four-device CPU HLO for local backward contains zero all-reduces and zero reduce-scatters. Step-boundary HLO contains exactly two data-axis reduce-scatters and zero all-reduces.
+  - Synchronized W13/W2 gradients match ordinary Ring at relative-L2 `0.00175065/0.00155534`; outputs and dropped-route counts are exact.
+  - Expanded changed-path tests report `71 passed`; focused post-cleanup tests report `10 passed`. Changed-file pre-commit including Pyrefly passes.
+  - `tests/test_grug_moe_jaxpp_input_placement.py` remains independently stale because it imports removed helper `_localize_automatic_jaxpp_input_shardings`; it was not selected.
+- GPU gate:
+  - Parent `/dlwh/iris-run-job-20260727-115941` runs the unchanged L4 lifecycle shape with run ID `jaxpp-rno2a-ring-ep2d4-manualvjp-fp8-l4-e64k4-b128-s4096-p4m4-r8-20260727`.
+  - Babysitter `019fa372-2131-74a3-afd2-cde99d9c10f8` owns terminal state and cleanup.
+- Next action:
+  - Require six finite L4 steps and no custom-VJP/JaxPP compile or execution failure. A pass promotes to an L8 performance/profile gate.
