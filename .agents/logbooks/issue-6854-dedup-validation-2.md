@@ -16,6 +16,91 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T07:31:20Z — 241,392 pairs verified
+
+- `/rav/rav-datakit-6854-audit-next-checkpoints-0347-v1012` and
+  `/rav/rav-datakit-6854-audit-next-checkpoints-0729-v1021`
+  independently revalidated 12 p3 decision-file 106 checkpoints spanning
+  semantic offsets 3,840 through 5,248. Their 1,536 pairs contain 1,076 model
+  false positives, 457 model true duplicates, and three unresolved outcomes.
+  Six pairs used chunked review and 1,530 used direct review. The first block
+  had 25 invalid attempts across nine retried judgments; the second had one
+  invalid attempt on one retried judgment.
+- In checkpoint order, the outcome Parquet SHA-256 values are:
+
+  - offsets 3,840–4,480:
+    `4e0071ba6641efb0b52afe2f34c4c999e90578858610d619458c25dd4caef616`,
+    `be9fd1afa7a4bcbd1b98aa7b94aa50b9672706b76894fedfc53435f0ebedd691`,
+    `35290553276da3317b7724b413df239645a168c96ed9a02f79e4261e320becec`,
+    `1536db6fe195987347e6cd273a5f2809958b79c2291999b82262c69546de0cca`,
+    `94a50e8b707aed7e3ab5aad270c6bdef7b63d74c49915fca0556c147fc52354c`,
+    and
+    `3c513176834498539b6fcdea95d81f78ec18c476520cd674c8c0e20bae1be3cf`;
+  - offsets 4,608–5,248:
+    `5ac68af132c630131dd2e42b0878772d82a8f27808cebd18cd577b3dd767915f`,
+    `0909af6c1b4722b63e0c8645cae978f58caab5172c328d8136bacc931f55e012`,
+    `7ff4d48e7b67faaed3409da40c3691b7cad034c33bbf991020662c4cf7f75081`,
+    `e3e7bb1fbb811ee089f779b1f23fbbb090aeb869cbaccd3656a9fc18cd6aff99`,
+    `fc235ab55094ea821db40eb463d99094cdb6100980c9430f544ae0dce3ada373`,
+    and
+    `7ed0a8c2cf23a61fca1f656bbc14f8df874fc4ee7ccd688afb6ba294d201c22a`.
+
+- Complete-text inspection resolves all three ambiguities as true duplicates:
+
+  - row 7,453 has the same 294-line fitness-app question, choices, reasoning,
+    conclusion, and answer. Its only changed line is `\boxed{H}` versus
+    `\boxed{\text{H}}`. The 13,604/13,611-character records have character,
+    line, and word-sequence similarities 0.999743, 0.996599, and 0.999764.
+    Inspection, semantic-evidence, manual-Parquet, and marker SHA-256 values
+    are
+    `e9adf7a47bd4d5494021fbcd7dd2904cef9bead24a733473e29428ec0fb73f31`,
+    `ab6d37f64249118ad30c0cba1b3cd66707f4aa3ff87ccad3648b01128d439a8c`,
+    `76de42fa5da97d93ac7ff8253446e274d8acef798ef165ab6c70f0d51b923070`,
+    and
+    `6d03d13c1a847c92c2e80bff926ed387bdd57a7d420d14a1b75611781503734e`.
+  - row 7,503 asks the same right-triangle altitude problem and gives the same
+    derivation and answer. The opening wording and equivalent triangle
+    notation differ; 21 of 23 lines are identical. The
+    1,332/1,325-character records have similarities 0.964998, 0.913043, and
+    0.968288. The corresponding four SHA-256 values are
+    `2ed0ad782843ac5d038ba37823959a3d9aae19877910be458842cb7aa782fca7`,
+    `b95b1154f62d3b8863cb50f06d742df22b9b37ab5521c8bfc892406fe2691867`,
+    `3c7cbef7723bb4f81a0017ccbbb67810c45087f23e5caca6d0725b639c21fdc8`,
+    and
+    `9d082cb71d0f0778bc27bcd712c0fdbed5af4383639952a728296142ae5f1886`.
+  - row 7,683 has the same 272-line Industrial Revolution question, choices,
+    historical reasoning, conclusion, and answer. Its only changed line is
+    `\boxed{A}` versus `\boxed{\text{A}}`. The
+    11,093/11,086-character records have similarities 0.999684, 0.996324,
+    and 0.999720. The corresponding four SHA-256 values are
+    `ab1e376b5569e67f0b4b16f8e132c70c3efa0590add4556c345a42cb1cda58a5`,
+    `1653941e59ca48574a0fee0bec8ef1e0c9aca7b4d248faf02e3a1d67715fa0c2`,
+    `57d5258fee9abb56295d4536aa3b2745a05d6330a717e2388a6c33cb31c87ef8`,
+    and
+    `3d27f067f7c9078192b8f4869f8559408adbfcd71380f9be3d08c9aa2397d0b3`.
+
+- The inspection/publish/independent-verification jobs were
+  `/rav/rav-datakit-6854-inspect-row7453-0722-v1013`,
+  `/rav/rav-datakit-6854-publish-row7453-0725-v1014`,
+  `/rav/rav-datakit-6854-verify-row7453-0727-v1017`,
+  `/rav/rav-datakit-6854-inspect-row7503-0725-v1015`,
+  `/rav/rav-datakit-6854-publish-row7503-0726-v1016`,
+  `/rav/rav-datakit-6854-verify-row7503-0729-v1020`,
+  `/rav/rav-datakit-6854-inspect-row7683-0727-v1018`,
+  `/rav/rav-datakit-6854-publish-row7683-0729-v1019`, and
+  `/rav/rav-datakit-6854-verify-row7683-0730-v1022`.
+- Across the stable 1,900-checkpoint snapshot, all 288 unresolved model
+  outcomes are covered by 223 true-duplicate and 65 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 193,117 pairs, 122,454 false positives, 70,663 true duplicates;
+  - treatment: 48,275 pairs, 25,010 false positives, 23,265 true duplicates;
+  - combined: 241,392 pairs, 147,464 false positives, 93,928 true duplicates.
+
+- The next audit frontiers are p0 `(10, 0)`, p1 `(42, 0)`, p2 `(74, 0)`,
+  and p3 `(106, 5,376)`. All four batch-priority 2-H100 workers remain active
+  with zero Kubernetes restarts.
+
 ### 2026-07-27T07:19:20Z — 239,856 pairs verified
 
 - `/rav/rav-datakit-6854-audit-next-checkpoints-0343-v1008`
