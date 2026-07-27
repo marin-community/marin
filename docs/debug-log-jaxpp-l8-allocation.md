@@ -42,18 +42,30 @@ JAX `CompiledMemoryStats` under the task name.
 - The fatal DIME stack is secondary evidence only: task execution is
   asynchronous, and the main thread reaches DLPack materialization while the
   preceding device executable reports its allocator failure.
-- The current evidence points first to
-  `grug_1f1b_stage{1,2,3}_update_grouped_components`, but compile order alone
-  does not identify the failing executable. It also does not prove whether the
-  single BFC request is an XLA temporary allocation or a concurrently
-  materialized receive pool. The new diagnostic reports both categories before
-  `eval_local` and will settle that distinction by exact byte equality.
+- r10 parent `/dlwh/iris-run-job-20260727-052358` ran the unchanged exact L8
+  graph with memory-plan logging from `e96ac89d21`. Parent, child, and all four
+  tasks succeeded; one training step completed with loss `9.04`.
+- The prior failed allocations match `joined_expert_backward` temporary
+  allocations after 256-byte alignment:
+  - `6,039,815,424 = 6,039,815,272 + 152` bytes on stage 1/2 block 1.
+  - `6,040,339,456 = 6,040,339,304 + 152` bytes on stage 0 block 1.
+  - `6,543,655,424 = 6,543,655,288 + 136` bytes on stage 1/2 block 0 and
+    stage 3 blocks 0/1.
+- Receive pools were only `167,772,164`, `838,860,800`, `671,088,640`, and
+  `335,544,320` bytes on stages 0-3. They do not match the failed requests.
+- `update_grouped_components` temporary allocations were `52,506,648`,
+  `138,488,344`, `138,488,344`, and `52,507,168` bytes on stages 0-3. The
+  initial optimizer-update attribution was wrong.
+- The memory-plan path precompiles and caches every local task before
+  `eval_local`. Separating compilation from execution is sufficient for r10 to
+  avoid the prior first-execution OOM despite retaining the same large backward
+  executable temporaries.
 - `uv run pytest tests/test_grug_moe_jaxpp_task_validation.py
   tests/test_grug_moe_explicit_stage_task_grouping.py` passes `48/48`.
-- No cluster run was launched.
 
 ## Future work
 
-- [ ] Run one compile-only or smallest L8 gate with the diagnostic enabled.
-- [ ] Match the failed byte count against exactly one receive or task-temp
-      record before changing memory behavior.
+- [ ] Run a 20-step L8 gate with task precompile/cache enabled and measure
+      steady-state MFU.
+- [ ] Separate task precompile from verbose memory-plan logging after the
+      throughput gate confirms stable execution.

@@ -471,3 +471,21 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - Focused grouped-stage and task-validation tests pass `48/48`; changed-files precommit including Pyrefly passes.
 - Next action:
   - Commit the diagnostic, then launch one unchanged matched L8 group-size-two run on `cw-rno2a` with memory-plan logging enabled. Match the exact failed request against a task or receive record before changing buffer lifetimes.
+
+### 2026-07-26 22:42 PDT - task precompile executes L8 and attributes the failed buffers
+- Hypothesis: Precompiling every named local task before `eval_local` will identify the previous allocation and may prevent compilation/execution overlap from exhausting HBM.
+- Commit Hash: `e96ac89d21`.
+- Command: Parent `/dlwh/iris-run-job-20260727-052358` launched the unchanged exact L8/d2560/e64/top-k4/sequence-4096/b512/m16 group-size-two ring/CuTe FA4 graph at XLA fraction `0.70`, with one step and `GRUG_JAXPP_LOG_LOCAL_MEMORY_PLAN=true`.
+- Results:
+  - Parent, child, and all four tasks succeeded. All `68` JaxPP tasks compiled, one training step completed with loss `9.04`, and no retry or live resource remains.
+  - The previous BFC requests exactly match 256-byte-aligned `joined_expert_backward` temporary buffers:
+    - `6,039,815,424 = 6,039,815,272 + 152` bytes on stage 1/2 block 1.
+    - `6,040,339,456 = 6,040,339,304 + 152` bytes on stage 0 block 1.
+    - `6,543,655,424 = 6,543,655,288 + 136` bytes on stage 1/2 block 0 and stage 3 blocks 0/1.
+  - Receive pools were only `167,772,164`, `838,860,800`, `671,088,640`, and `335,544,320` bytes on stages 0-3.
+  - `update_grouped_components` temporary allocations were only `52,506,648`, `138,488,344`, `138,488,344`, and `52,507,168` bytes. The compile-order attribution to optimizer update was false.
+- Interpretation:
+  - The OOM is not a DIME receive allocation. It is the large joined-expert-backward executable temporary becoming unsatisfiable during lazy compile/dispatch.
+  - The diagnostic precompiles and caches every task before `eval_local`; that separation is sufficient to execute the exact graph without changing routes, arithmetic, batch shape, or XLA fraction.
+- Next action:
+  - Babysit 20-step parent `/dlwh/iris-run-job-20260727-053238` with the same precompile/cache path. Require finite steady-state MFU before extracting precompile into a non-verbose production mode or running the fixed `0.002` numerical gate.
