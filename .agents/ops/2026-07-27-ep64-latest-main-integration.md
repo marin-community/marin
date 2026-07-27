@@ -39,7 +39,7 @@ receiver-ECHO kernels.
 
 - [x] Pass the targeted compatibility suite.
 - [x] Run the exact four-GB200 Sonic clone-gradient parity probe.
-- [ ] Reproduce the 64-GPU v153 control before interpreting treatment MFU.
+- [x] Reproduce a locked 64-GPU control before interpreting treatment MFU.
 
 ## First rack control failure
 
@@ -60,5 +60,10 @@ barrier path explicitly:
 --xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false
 ```
 
-The flag parses under the local JAX 0.11.0 runtime. A rack retry is still
-required to prove that it avoids the communicator crash.
+The flag parses under the local JAX 0.11.0 runtime. The retry
+`ep30-cx-main-control-ncclbarrier-off-20260727-0552` completed all 20 steps:
+all 16 Iris tasks succeeded with zero failures, preemptions, or retries. Steps
+5-19 measured 21.815% median MFU, 10.046-second median duration, 417,517 median
+tokens/second, 2.900% mean exact aggregate drop, and finite final loss of 7.936.
+Use this latest-main result, rather than the faster JAX 0.10.1 v165 run, as the
+matched comparator for subsequent screens.

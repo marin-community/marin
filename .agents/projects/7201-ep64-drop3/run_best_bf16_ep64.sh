@@ -13,6 +13,11 @@ coordinator_port="$2"
 steps="${3:-20}"
 profile_steps="${PROFILE_STEPS:-0}"
 profile_start="${PROFILE_START:-8}"
+jax_enable_pgle="${JAX_ENABLE_PGLE:-true}"
+prefetch_dispatch="${SCALE_A2A_CLONE_PREFETCH_DISPATCH:-0}"
+two_buffer_combine="${SCALE_A2A_CLONE_TWO_BUFFER_COMBINE:-0}"
+muon_pad_nonexpert="${SCALE_MUON_PAD_NONEXPERT:-0}"
+fused_qkv="${SCALE_ATTN_FUSED_QKV:-0}"
 
 xla_flags=(
   "--xla_gpu_enable_latency_hiding_scheduler=true"
@@ -64,6 +69,8 @@ fi
   -e SCALE_A2A_SONIC_COMBINE 1 \
   -e SCALE_A2A_CLONE_SONIC_CUTE 1 \
   -e SCALE_A2A_CLONE_PIPELINE_CHUNKS 2 \
+  -e SCALE_A2A_CLONE_PREFETCH_DISPATCH "$prefetch_dispatch" \
+  -e SCALE_A2A_CLONE_TWO_BUFFER_COMBINE "$two_buffer_combine" \
   -e SCALE_QUACK_GROUPED_WGRAD 1 \
   -e SCALE_PROCESSES_PER_TASK 4 \
   -e SCALE_GPUS_PER_NODE 4 \
@@ -84,13 +91,15 @@ fi
   -e SCALE_MOE_IMPL ragged_all_to_all \
   -e SCALE_OPTIMIZER muonh \
   -e SCALE_MUON_SYRK 1 \
+  -e SCALE_MUON_PAD_NONEXPERT "$muon_pad_nonexpert" \
+  -e SCALE_ATTN_FUSED_QKV "$fused_qkv" \
   -e SCALE_SCAN_LAYERS 1 \
   -e SCALE_SCAN_UNROLL 1 \
   -e SCALE_REMAT recompute_all \
   -e SCALE_REPORT_CAPACITY_OVERFLOW 1 \
   -e SCALE_MOE_QB 1 \
   -e JAX_PJRT_CLIENT_CREATE_OPTIONS allocator:cuda_async \
-  -e JAX_ENABLE_PGLE true \
+  -e JAX_ENABLE_PGLE "$jax_enable_pgle" \
   -e JAX_PGLE_PROFILING_RUNS 3 \
   -e JAX_PGLE_AGGREGATION_PERCENTILE 85 \
   -e JAX_COORDINATOR_PORT "$coordinator_port" \
