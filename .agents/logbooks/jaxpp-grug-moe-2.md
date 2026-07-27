@@ -1133,3 +1133,21 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - Package inspection confirms that CUTLASS DSL `4.6.0` has no `_isa` implementation to patch. The setup helper must treat the missing helper as an obsolete-patch no-op before the unchanged L8 gate can run.
 - Next action:
   - Make the CUTLASS patch helper version-aware, validate it against `4.6.0`, then relaunch the same L8 profile gate under a fresh run ID and dedicated babysitter.
+
+### 2026-07-27 06:03 PDT - L8 explicit-backward r3 exposes a QuACK/CUTLASS import mismatch
+- Snapshot: `b56235ebc9`.
+- Command:
+  - `GRUG_JAXPP_LOG_LOCAL_MEMORY_PLAN=false TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --cluster cw-rno2a --prefix s3://marin-us-east-02a/marin --run-id jaxpp-rno2a-ring-ep2d4-explicitbwd-fp8-l8-e64k4-b512-s4096-p4m16-profile-r3-20260727 --schedule std_1f1b --implementation explicit_mpmd --explicit-mpmd-schedule-mode default --explicit-mpmd-pipeline-wire-format fp8 --explicit-mpmd-stage-task-microbatch-group-size 1 --expert-gradient-accumulation fused_fp32_data_local --physical-stages 4 --logical-stages 4 --stage-layer-counts 2,2,2,2 --microbatches 16 --nodes 4 --gpus-per-replica 8 --expert-axis 2 --layers 8 --experts 64 --top-k 4 --vocab-size 8192 --batch 512 --seq-len 4096 --moe-implementation ring --attention-implementation gpu_fa4_cute --ragged-dot-implementation triton --ragged-dot-block-k 32 --ragged-dot-num-warps 8 --loss-implementation xla --steps 20 --tracker wandb --profiler-steps 2 --xla-memory-fraction 0.70 --remat save_moe`.
+- Jobs:
+  - Parent `/dlwh/iris-run-job-20260727-125851`.
+  - Child `/dlwh/iris-run-job-20260727-125851/grug-train-jaxpp-rno2a-ring-ep2d4-explicitbwd-fp8-l8-e64k4-b512-s4096-p4m16-profile-r3-20260727`.
+- Result:
+  - All four H100x8 ranks installed CUTLASS DSL `4.6.0` and ran `patch_cutlass_dsl_mlir_type_guard.sh`. The helper returned successfully without applying the obsolete `_isa` patch, and setup advanced to step 4.
+  - At `13:02:05Z` the ranks began deserializing the training callable. Rank 0 failed at `13:02:10Z` while importing QuACK `0.5.0`: `quack/layout_utils.py:281` evaluates the annotation `cute.core.ThrMma`, which CUTLASS DSL `4.6.0` no longer exports. The other three ranks emitted the same traceback before Iris completed coscheduled cancellation.
+  - The parent is terminal `failed` with one failed task. The child is terminal `worker_failed`: rank 0 exited `1` after `28.18s`; ranks 1-3 are `cosched_failed`; failures=`4`, preemptions=`0`. No retry or live allocation remains.
+  - JAX distributed setup, lowering, `grug_1f1b_mb0_stage3_loss_backward_accumulating`, training, W&B, and profiling never started. There is no W&B run or profiler artifact. No watchdog stack was taken because the failure was an immediate Python import exception rather than a stall.
+- Interpretation:
+  - `b56235ebc9` fixed the prior setup failure as intended. The run then exposed a separate package incompatibility between the branch pins `quack-kernels==0.5.0` and `nvidia-cutlass-dsl==4.6.0`.
+  - This attempt provides no evidence about explicit-backward compile time, steady MFU, FP32 all-reduces, SendRecv, all-gathers, or compute/communication/stall shares. Old L8 fused `16.1404` MFU remains the comparison point.
+- Next action:
+  - Reconcile the QuACK and CUTLASS DSL pins or avoid importing QuACK on the Ring-only path, validate a clean callable import, then rerun the unchanged L8 profile gate under a fresh ID.
