@@ -16,6 +16,81 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T05:24:09Z — 231,224 pairs verified
+
+- `/rav/rav-datakit-6854-audit-next-checkpoints-0293-v958` independently
+  revalidated p0 decision-file 9 offsets 3,200 and 3,328 and p1 decision-file
+  41 offsets 3,328 and 3,456. Their 512 baseline pairs contain 249 model false
+  positives, 261 model true duplicates, and two unresolved outcomes. All
+  pairs used direct review. All 1,089 judgments and request attempts were
+  valid on their first attempt.
+- In checkpoint order, the outcome Parquet SHA-256 values are:
+
+  - p0:
+    `d2c9b659c0fa66dc990f710af3c1e107693a97ecbd3b3440218398911edf64d0`
+    and
+    `9cca8d4917d3d79ccc4a3cd3137bc17bfd99a6d5c1f96fbd5c6c30ce2ca70055`;
+  - p1:
+    `8caf11fa1f3e8a2ebda9de325d445537932b2f3d31dc8c064440553975025053`
+    and
+    `48024c55f57fa3084af0236b2c7d87310ad59464db254d898949f91c08317906`.
+
+- Complete-text inspection resolves both p0 ambiguities as false positives
+  under the pinned directional deletion policy. Both members share the same
+  827-character college-SEO canonical and contain many template-slot
+  substitutions, but each also contains member-only substantive clauses:
+
+  - row 5,387 uniquely states medical-engineering degree requirements,
+    surgical-technology and nursing electives, certificate and adult-education
+    coursework, and a business-internship benefit;
+  - row 5,615 uniquely states that biomedicine is competitive, mentions
+    certificate programs and adult education, and adds a corporate-internship
+    claim about career prospects and work experience.
+
+  The 922/827-character first pair has character, line, and word-sequence
+  similarities 0.457404, 0.333333, and 0.370656. The 654/827-character second
+  pair has similarities 0.437542, 0.000000, and 0.343891. Member SHA-256 values
+  are
+  `0cd2bd4b2d794bd1c64277a707c03074fc36ff6185e2e81b7e3165f871ffbd2d`
+  and
+  `f4af1b743b76157685d5e3a65ca6286dc20f0b100d6c4197517604fa0e471d0e`;
+  the shared canonical SHA-256 is
+  `4893ce3e5b496530e4b22e31e43f7505e575b1b5c377c62acb8ae20ccb5c1c4e`.
+- `/rav/rav-datakit-6854-inspect-row5387-0294-v959` persisted the first
+  complete pair and diff; `/rav/rav-datakit-6854-publish-row5387-0295-v960`
+  published its false-positive record; and
+  `/rav/rav-datakit-6854-verify-row5387-0296-v961` independently verified it.
+  Its inspection, semantic-judgment, manual-Parquet, and marker SHA-256 values
+  are
+  `1bd67a4d1c17d77ec7f86dca44043f25baa7cc027d925541af0e1942e0c9fdcd`,
+  `e54b8e247b3e4c2a74a425fdc0e70d73a2b6d84732d82a3e634549a3f16be155`,
+  `e431497d01022884ff7c08f0ca36d802b5700432f08b4a4bed3795afd8f0cdeb`,
+  and
+  `7209d5d3083b8e1d846f3d009bdd27d1b3a4bda202c0fbd591fbb4a5f6b61600`.
+- `/rav/rav-datakit-6854-inspect-row5615-0297-v962` persisted the second
+  complete pair and diff; `/rav/rav-datakit-6854-publish-row5615-0298-v963`
+  published its false-positive record; and
+  `/rav/rav-datakit-6854-verify-row5615-0299-v964` independently verified it.
+  Its inspection, semantic-judgment, manual-Parquet, and marker SHA-256 values
+  are
+  `aab0ed3243ad4ef1f3da7b9e76428e2486e687c197a4be2ebf1e535cd13385bc`,
+  `b00892d20ab3f1803a5f0901e9b5630b3240821e097799338cf4ef6f7427333a`,
+  `3ccf073e5f8657df9ae64759c2add60c9b3e8b7b0196fb2e13ec4bcb4e70fec9`,
+  and
+  `b81b1284133b6396a229e592d01922b2ef6366af4034fe96c30c975128551e5f`.
+- Replacing both unresolved outcomes gives 251 false positives and 261 true
+  duplicates in the block. Across the stable 1,820-checkpoint snapshot, all
+  279 unresolved model outcomes are covered by 216 true-duplicate and 63
+  false-positive manual records. The adjusted totals are:
+
+  - baseline: 185,991 pairs, 117,770 false positives, 68,221 true duplicates;
+  - treatment: 45,233 pairs, 23,368 false positives, 21,865 true duplicates;
+  - combined: 231,224 pairs, 141,138 false positives, 90,086 true duplicates.
+
+- The next audit frontiers are p0 `(9, 3,456)`, p1 `(41, 3,584)`,
+  p2 `(74, 0)`, and p3 `(106, 128)`. All four batch-priority 2-H100 workers
+  remain active with zero Kubernetes restarts.
+
 ### 2026-07-27T05:15:21Z — 230,712 pairs verified
 
 - `/rav/rav-datakit-6854-audit-next-checkpoints-0292-v957` independently
