@@ -47,7 +47,6 @@ Smoke-test the same path under an isolated identity. ``SMOKE_STEPS`` defaults to
 """
 
 import logging
-import math
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass, fields, replace
@@ -75,6 +74,7 @@ from marin.rl.placement import marin_prefix_for_region, singleton_region_list
 from marin.training.training import LevanterCheckpoint
 
 from experiments.coral.batch_calibration import (
+    TpuBatchConfig,
     adam_optimizer_bytes,
     batch_memory_bytes,
     dense_transformer_bytes,
@@ -90,7 +90,7 @@ RUN_PREFIX: str = "prot-exp166-cv1-aaaug"
 WANDB_GROUP: str = "exp166-contacts-v1-aa-augmentation"
 SMOKE_RUN_PREFIX: str = "prot-exp166-aaaug-smoke"
 SMOKE_WANDB_GROUP: str = "exp166-aaaug-smoke"
-SMOKE_VERSION: str = "v3"
+SMOKE_VERSION: str = "v4"
 SMOKE_STEPS_DEFAULT: int = 2
 SMOKE_MAX_EVAL_BATCHES: int = 1
 
@@ -317,16 +317,6 @@ def initial_checkpoint(trial: Trial) -> ArtifactStep[LevanterCheckpoint] | None:
     return exp117_checkpoint(trial.point)
 
 
-# --- Placement ---------------------------------------------------------------
-
-
-def placement_axes(tpu: str, batch_size: int) -> tuple[int, int]:
-    """Return ``(data_axis_size, tensor_parallel_size)`` for the selected slice."""
-    chip_count = get_tpu_topology(tpu).chip_count
-    data_axis_size = math.gcd(chip_count, batch_size)
-    return data_axis_size, chip_count // data_axis_size
-
-
 def _batch_bytes(batch_size: int, correction_factor: float) -> int:
     params = MODEL_CONFIG.total_trainable_params(VOCAB_SIZE)
     param_bytes, activation_bytes = dense_transformer_bytes(
@@ -345,15 +335,14 @@ def _batch_bytes(batch_size: int, correction_factor: float) -> int:
     )
 
 
-def batch_fit(tpu: str, batch_size: int) -> tuple[int, int]:
+def batch_fit(tpu: str, batch_size: int) -> TpuBatchConfig:
+    """Derive DP, TP, per-device parallelism, and accumulation using the current calibrator."""
     family = tpu_family(tpu)
     correction_factor = CORRECTION_FACTORS[family]
-    data_axis_size, _ = placement_axes(tpu, batch_size)
     return tpu_batch_config(
         tpu,
         batch_size,
         _batch_bytes(batch_size, correction_factor),
-        data_axis_size=data_axis_size,
     )
 
 
@@ -640,14 +629,11 @@ def _apply_recipe_overrides(
         data = replace(data, shuffle=SHUFFLE, components=components)
         data = augment_amino_acids(data)
         if not ctx.is_fingerprint:
-            per_device_parallelism = batch_fit(tpu, pod.train_config.trainer.train_batch_size)[0]
-            eval_parallelism = (
-                trainer.per_device_eval_parallelism if per_device_parallelism == -1 else per_device_parallelism
-            )
+            batch_config = batch_fit(tpu, pod.train_config.trainer.train_batch_size)
             trainer = replace(
                 trainer,
-                per_device_parallelism=per_device_parallelism,
-                per_device_eval_parallelism=eval_parallelism,
+                per_device_parallelism=batch_config.per_device_parallelism,
+                per_device_eval_parallelism=batch_config.per_device_parallelism,
             )
         train_config = replace(pod.train_config, trainer=trainer, data=data, data_seed=DATA_SEED)
         return replace(pod, train_config=train_config)
@@ -658,6 +644,7 @@ def _apply_recipe_overrides(
 def build_run(trial: Trial, shape: RunShape, tpu: str, region: str) -> ArtifactStep[LevanterCheckpoint]:
     point = trial.point
     name = shape.run_id
+    batch_config = batch_fit(tpu, point.batch_size)
     train_cache = _tokenize_cache(COMPONENT_TRAIN, TRAIN_DOCS, validation=False)
     val_cache = _tokenize_cache(COMPONENT_VAL, VAL_DOCS, validation=True)
     step = train_lm(
@@ -679,7 +666,7 @@ def build_run(trial: Trial, shape: RunShape, tpu: str, region: str) -> ArtifactS
         resources=ResourceConfig.with_tpu(tpu, regions=singleton_region_list(region)),
         version=VERSION,
         init_from=initial_checkpoint(trial),
-        tensor_parallel_size=placement_axes(tpu, point.batch_size)[1],
+        tensor_parallel_size=batch_config.tensor_parallelism,
         steps_per_eval=shape.steps_per_eval,
         wandb_project=os.environ.get("WANDB_PROJECT", "marin"),
         wandb_group=shape.wandb_group,
@@ -692,8 +679,7 @@ def build_run(trial: Trial, shape: RunShape, tpu: str, region: str) -> ArtifactS
 
 def _print_preview(trial: Trial, shape: RunShape, tpu: str, region: str) -> None:
     point = trial.point
-    per_device_parallelism, grad_accum = batch_fit(tpu, point.batch_size)
-    data_axis_size, tensor_parallel_size = placement_axes(tpu, point.batch_size)
+    batch_config = batch_fit(tpu, point.batch_size)
     init = initial_checkpoint(trial)
     checkpoint = init.adopt_source if init is not None else "random initialization"
     print(
@@ -707,8 +693,10 @@ def _print_preview(trial: Trial, shape: RunShape, tpu: str, region: str) -> None
         f"checkpoint_keep={shape.checkpoint_keep}\n"
         f"  initialization={checkpoint}\n"
         f"  tpu={tpu} region={region} prefix={marin_prefix_for_region(region)}\n"
-        f"  per_device_parallelism={per_device_parallelism} grad_accum={grad_accum}\n"
-        f"  data_axis_size={data_axis_size} tensor_parallel_size={tensor_parallel_size}\n"
+        f"  per_device_parallelism={batch_config.per_device_parallelism} "
+        f"grad_accum={batch_config.gradient_accumulation}\n"
+        f"  data_parallelism={batch_config.data_parallelism} "
+        f"tensor_parallelism={batch_config.tensor_parallelism}\n"
         "  amino_acid_augmentation=per-training-occurrence sequence-statement permutation",
         flush=True,
     )

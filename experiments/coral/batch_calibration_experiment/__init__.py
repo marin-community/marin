@@ -150,12 +150,12 @@ def estimate_case(
     )
     optimizer_bytes = adam_optimizer_bytes(parameter_count)
     total_bytes = batch_memory_bytes(
-        param_bytes=param_bytes,
+        parameter_bytes=param_bytes,
         optimizer_bytes=optimizer_bytes,
         activation_bytes=activation_bytes,
         correction_factor=correction_factor,
     )
-    per_device_parallelism, gradient_accumulation = tpu_batch_config(
+    batch_config = tpu_batch_config(
         case.tpu,
         case.batch_size,
         total_bytes,
@@ -167,8 +167,8 @@ def estimate_case(
         activation_bytes=activation_bytes,
         total_bytes=total_bytes,
         hbm_capacity_bytes=tpu_hbm_capacity_bytes(case.tpu),
-        per_device_parallelism=per_device_parallelism,
-        gradient_accumulation=gradient_accumulation,
+        per_device_parallelism=batch_config.per_device_parallelism,
+        gradient_accumulation=batch_config.gradient_accumulation,
     )
 
 

@@ -5,6 +5,7 @@ import pytest
 
 from experiments.coral.batch_calibration import (
     BYTES_PER_GIB,
+    TpuBatchConfig,
     adam_optimizer_bytes,
     batch_memory_bytes,
     dense_transformer_bytes,
@@ -40,7 +41,12 @@ def test_example_usage():
     assert optimizer_bytes == 800_000_000
     assert activation_bytes == 43_486_543_872
     assert batch_bytes == 44_686_543_872
-    assert batch_config == (-1, 1)
+    assert batch_config == TpuBatchConfig(
+        data_parallelism=4,
+        tensor_parallelism=1,
+        per_device_parallelism=32,
+        gradient_accumulation=1,
+    )
 
 
 def test_adam_optimizer_bytes():
@@ -87,12 +93,12 @@ def test_batch_memory_bytes():
 @pytest.mark.parametrize(
     ("batch_bytes", "expected_config"),
     [
-        (64 * BYTES_PER_GIB, (-1, 1)),
-        (128 * BYTES_PER_GIB, (16, 2)),
-        (160 * BYTES_PER_GIB, (8, 4)),
+        (64 * BYTES_PER_GIB, TpuBatchConfig(4, 1, 32, 1)),
+        (128 * BYTES_PER_GIB, TpuBatchConfig(4, 1, 16, 2)),
+        (160 * BYTES_PER_GIB, TpuBatchConfig(4, 1, 8, 4)),
     ],
 )
-def test_tpu_batch_config(batch_bytes, expected_config):
+def test_batch_config_for_memory(batch_bytes, expected_config):
     assert (
         tpu_batch_config(
             "v5litepod-4",
@@ -103,35 +109,68 @@ def test_tpu_batch_config(batch_bytes, expected_config):
     )
 
 
-def test_data_axis_size():
-    batch_config = tpu_batch_config(
-        "v5litepod-4",
-        batch_size=128,
-        batch_bytes=128 * BYTES_PER_GIB,
-        data_axis_size=2,
+@pytest.mark.parametrize(
+    ("tpu", "batch_size", "context_parallelism", "slice_count", "expected"),
+    [
+        ("v5litepod-8", 4, 1, 1, TpuBatchConfig(4, 2, 1, 1)),
+        ("v5litepod-8", 6, 1, 1, TpuBatchConfig(2, 4, 3, 1)),
+        ("v5p-32", 6, 1, 1, TpuBatchConfig(2, 8, 3, 1)),
+        ("v5litepod-8", 4, 2, 1, TpuBatchConfig(4, 1, 1, 1)),
+        ("v5litepod-8", 12, 1, 2, TpuBatchConfig(4, 4, 3, 1)),
+        ("v5litepod-8", 16, 2, 2, TpuBatchConfig(8, 1, 2, 1)),
+    ],
+)
+def test_batch_config_parallelism(
+    tpu,
+    batch_size,
+    context_parallelism,
+    slice_count,
+    expected,
+):
+    assert (
+        tpu_batch_config(
+            tpu,
+            batch_size=batch_size,
+            batch_bytes=1,
+            context_parallelism=context_parallelism,
+            slice_count=slice_count,
+        )
+        == expected
     )
 
-    assert batch_config == (32, 2)
+
+def test_multislice_accumulation():
+    assert tpu_batch_config(
+        "v5litepod-4",
+        batch_size=128,
+        batch_bytes=256 * BYTES_PER_GIB,
+        slice_count=2,
+    ) == TpuBatchConfig(
+        data_parallelism=8,
+        tensor_parallelism=1,
+        per_device_parallelism=8,
+        gradient_accumulation=2,
+    )
 
 
-def test_nondivisible_batch():
-    with pytest.raises(
-        ValueError,
-        match=r"batch_size \(130\) must be divisible by data_axis_size \(4\)",
-    ):
-        tpu_batch_config(
-            "v5litepod-4",
-            batch_size=130,
-            batch_bytes=1,
-            data_axis_size=4,
-        )
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"batch_size": 0},
+        {"context_parallelism": 0},
+        {"context_parallelism": 3},
+        {"slice_count": 0},
+        {"batch_size": 5, "slice_count": 2},
+    ],
+)
+def test_incompatible_parallelism(kwargs):
+    args = {"batch_size": 4, "batch_bytes": 1, **kwargs}
+    with pytest.raises(ValueError):
+        tpu_batch_config("v5litepod-4", **args)
 
 
-def test_minimum_microbatch_too_large():
-    with pytest.raises(
-        ValueError,
-        match=r"Batch does not fit on v5litepod-4: even per_device_parallelism=1",
-    ):
+def test_minimum_microbatch_does_not_fit():
+    with pytest.raises(ValueError):
         tpu_batch_config(
             "v5litepod-4",
             batch_size=4,
