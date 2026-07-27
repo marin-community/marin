@@ -29,6 +29,7 @@ from pathlib import Path
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax.experimental import multihost_utils
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 
@@ -50,8 +51,15 @@ def init_distributed():
         initialize_iris_jax()
 
 
+def to_host(a):
+    """Global arrays span non-addressable devices; gather before comparing."""
+    if jax.process_count() > 1:
+        a = multihost_utils.process_allgather(a, tiled=True)
+    return np.asarray(a, np.float32)
+
+
 def relfrob(a, b):
-    a, b = np.asarray(a, np.float32), np.asarray(b, np.float32)
+    a, b = to_host(a), to_host(b)
     return float(np.linalg.norm(a - b) / max(np.linalg.norm(b), 1e-30))
 
 
@@ -63,14 +71,16 @@ def build_mesh():
 
 
 def run_arm(mesh, tensors, *, mxfp8_dispatch, producer):
+    """Every array is a jit argument: under multi-process JAX a traced function
+    may not close over an array that spans non-addressable devices."""
     x, sel, cw, w13, w2, cot = tensors
     op = MxFp8MoeMlpOp(producer=producer)
 
-    def forward(x_, w13_, w2_):
+    def forward(x_, w13_, w2_, sel_, cw_):
         return moe_mlp(
             x_,
-            sel,
-            cw,
+            sel_,
+            cw_,
             w13_,
             w2_,
             implementation="ring",
@@ -79,15 +89,17 @@ def run_arm(mesh, tensors, *, mxfp8_dispatch, producer):
             mxfp8_dispatch=mxfp8_dispatch,
         )
 
-    def loss(x_, w13_, w2_):
-        return jnp.sum(forward(x_, w13_, w2_) * cot)
+    def loss(x_, w13_, w2_, sel_, cw_, cot_):
+        return jnp.sum(forward(x_, w13_, w2_, sel_, cw_) * cot_)
 
     fwd = jax.jit(forward)
     grad = jax.jit(jax.grad(loss, argnums=(0, 1, 2)))
-    out = fwd(x, w13, w2)
-    grads = grad(x, w13, w2)
+    fwd_args = (x, w13, w2, sel, cw)
+    grad_args = (x, w13, w2, sel, cw, cot)
+    out = fwd(*fwd_args)
+    grads = grad(*grad_args)
     jax.block_until_ready((out, grads))
-    return out, grads, fwd, grad
+    return out, grads, (fwd, fwd_args), (grad, grad_args)
 
 
 def time_fn(fn, args, *, iters=20, warmup=5):
@@ -199,6 +211,7 @@ def main():
 
         out_ctl, grad_ctl, fwd_ctl, gfn_ctl = run_arm(mesh, tensors, mxfp8_dispatch=False, producer=args.producer)
         out_wire, grad_wire, fwd_wire, gfn_wire = run_arm(mesh, tensors, mxfp8_dispatch=True, producer=args.producer)
+        dx_nonzero = bool(np.any(np.asarray(grad_wire[0].addressable_shards[0].data, np.float32) != 0))
 
         results = {
             "config": vars(args) | {"devices": len(jax.devices())},
@@ -206,18 +219,20 @@ def main():
             "dx_relfrob": relfrob(grad_wire[0], grad_ctl[0]),
             "dw13_relfrob": relfrob(grad_wire[1], grad_ctl[1]),
             "dw2_relfrob": relfrob(grad_wire[2], grad_ctl[2]),
-            "dx_nonzero": bool(np.any(np.asarray(grad_wire[0], np.float32) != 0)),
+            "dx_nonzero": dx_nonzero,
             "dispatch_bytes_ratio": 33.0 / 64.0,
         }
 
-        results["fwd_ms_control"] = time_fn(fwd_ctl, (x, w13, w2), iters=args.iters)
-        results["fwd_ms_wire"] = time_fn(fwd_wire, (x, w13, w2), iters=args.iters)
-        results["grad_ms_control"] = time_fn(gfn_ctl, (x, w13, w2), iters=args.iters)
-        results["grad_ms_wire"] = time_fn(gfn_wire, (x, w13, w2), iters=args.iters)
+        results["fwd_ms_control"] = time_fn(*fwd_ctl, iters=args.iters)
+        results["fwd_ms_wire"] = time_fn(*fwd_wire, iters=args.iters)
+        results["grad_ms_control"] = time_fn(*gfn_ctl, iters=args.iters)
+        results["grad_ms_wire"] = time_fn(*gfn_wire, iters=args.iters)
 
     results["fwd_speedup"] = results["fwd_ms_control"] / results["fwd_ms_wire"]
     results["grad_speedup"] = results["grad_ms_control"] / results["grad_ms_wire"]
 
+    if jax.process_index() != 0:
+        return
     print("\nFP8W-006 RESULTS")
     print(json.dumps(results, indent=2, sort_keys=True), flush=True)
 
