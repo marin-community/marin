@@ -19,6 +19,14 @@ from jax.sharding import PartitionSpec as P
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import AttentionMask
+from levanter.grug.grug_moe import (
+    CHECKPOINT_ROUTER_COMBINE_WEIGHTS,
+    CHECKPOINT_ROUTER_SELECTED_EXPERTS,
+    CHECKPOINT_ROUTER_SIGMOID_WEIGHTS,
+    CHECKPOINT_ROUTER_UNBIASED_TOPK,
+    CHECKPOINT_ROUTER_WEIGHT_DENOMINATOR,
+    MOE_REMAT_SAVE_NAMES,
+)
 
 from experiments.grug.moe import launch_cw_jaxpp_may_d2560
 from experiments.grug.moe.check_jaxpp_group2_component_mpmd_parity import (
@@ -1136,6 +1144,55 @@ def _closed_jaxpr_name_stacks(closed_jaxpr: jax_core.ClosedJaxpr) -> tuple[str, 
 
     walk_jaxpr(closed_jaxpr.jaxpr)
     return tuple(names)
+
+
+def _closed_jaxpr_checkpoint_shapes(closed_jaxpr: jax_core.ClosedJaxpr) -> dict[str, tuple[int, ...]]:
+    checkpoint_shapes = {}
+
+    def walk_value(value) -> None:
+        if isinstance(value, jax_core.ClosedJaxpr):
+            walk_jaxpr(value.jaxpr)
+        elif isinstance(value, jax_core.Jaxpr):
+            walk_jaxpr(value)
+        elif isinstance(value, (tuple, list)):
+            for item in value:
+                walk_value(item)
+        elif isinstance(value, dict):
+            for item in value.values():
+                walk_value(item)
+
+    def walk_jaxpr(jaxpr: jax_core.Jaxpr) -> None:
+        for equation in jaxpr.eqns:
+            if equation.primitive.name == "name":
+                checkpoint_shapes[equation.params["name"]] = equation.outvars[0].aval.shape
+            walk_value(equation.params)
+
+    walk_jaxpr(closed_jaxpr.jaxpr)
+    return checkpoint_shapes
+
+
+def test_save_moe_policy_retains_compact_router_vjp_state() -> None:
+    mesh, stage = _tiny_grouped_last_stage("save_moe", top_k=2)
+    _, hiddens, _ = _tiny_boundary_inputs(mesh)
+    mp = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
+    qb_beta = jnp.asarray([0.2, -0.1, 0.05], dtype=jnp.float32)
+    policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+
+    with jax.set_mesh(mesh):
+        block = _compute_block(stage.blocks[0], qb_beta, mp)
+        checkpointed_mlp = eqx.filter_checkpoint(lambda mlp, hidden: mlp(hidden), policy=policy)
+        closed_jaxpr, _, _ = eqx.filter_make_jaxpr(checkpointed_mlp)(block.mlp, hiddens[0])
+
+    checkpoint_shapes = _closed_jaxpr_checkpoint_shapes(closed_jaxpr)
+    expected_router_shapes = {
+        CHECKPOINT_ROUTER_SELECTED_EXPERTS: (4, 2),
+        CHECKPOINT_ROUTER_UNBIASED_TOPK: (4, 2),
+        CHECKPOINT_ROUTER_SIGMOID_WEIGHTS: (4, 2),
+        CHECKPOINT_ROUTER_WEIGHT_DENOMINATOR: (4, 1),
+        CHECKPOINT_ROUTER_COMBINE_WEIGHTS: (4, 2),
+    }
+    assert {name: checkpoint_shapes[name] for name in expected_router_shapes} == expected_router_shapes
+    assert all(shape != (4, 3) for name, shape in checkpoint_shapes.items() if "router" in name)
 
 
 def test_paired_moe_component_jaxpr_contains_two_router_calls_and_no_attention() -> None:

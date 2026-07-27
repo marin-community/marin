@@ -58,6 +58,11 @@ _CHECKPOINT_DISPATCH_INPUT = "grug_moe_dispatch_input"
 _CHECKPOINT_EXPERT_HIDDEN = "grug_moe_expert_hidden"
 _CHECKPOINT_DISPATCH_OUTPUT = "grug_moe_dispatch_output"
 _CHECKPOINT_MOE_OUTPUT = "grug_moe_output"
+CHECKPOINT_ROUTER_SELECTED_EXPERTS = "grug_moe_router_selected_experts"
+CHECKPOINT_ROUTER_UNBIASED_TOPK = "grug_moe_router_unbiased_topk"
+CHECKPOINT_ROUTER_SIGMOID_WEIGHTS = "grug_moe_router_sigmoid_weights"
+CHECKPOINT_ROUTER_WEIGHT_DENOMINATOR = "grug_moe_router_weight_denominator"
+CHECKPOINT_ROUTER_COMBINE_WEIGHTS = "grug_moe_router_combine_weights"
 
 # Checkpoint names every MoE backend tags on its dispatch tensors. A remat
 # policy of jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
@@ -68,6 +73,11 @@ MOE_REMAT_SAVE_NAMES = (
     _CHECKPOINT_EXPERT_HIDDEN,
     _CHECKPOINT_DISPATCH_OUTPUT,
     _CHECKPOINT_MOE_OUTPUT,
+    CHECKPOINT_ROUTER_SELECTED_EXPERTS,
+    CHECKPOINT_ROUTER_UNBIASED_TOPK,
+    CHECKPOINT_ROUTER_SIGMOID_WEIGHTS,
+    CHECKPOINT_ROUTER_WEIGHT_DENOMINATOR,
+    CHECKPOINT_ROUTER_COMBINE_WEIGHTS,
 )
 
 

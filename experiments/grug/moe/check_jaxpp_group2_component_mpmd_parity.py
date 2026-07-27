@@ -89,6 +89,7 @@ _DIAGNOSTICS = (
     "split-executable-boundaries",
     "split-single-finish-vjp",
     "reference-assembly-discontinuity",
+    "router-remat-reference",
 )
 
 
@@ -2659,6 +2660,83 @@ def _run_split_single_finish_vjp_diagnostic(
     return passed
 
 
+def _run_router_remat_reference_diagnostic(
+    process_id: int,
+    params: Block,
+    qb_beta: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+    cotangents: tuple[jax.Array, jax.Array],
+) -> bool:
+    ordered_arguments = (params, qb_beta, hiddens[0], cotangents[0])
+    compiled_checkpoint = _lower_and_compile(
+        process_id,
+        "r13_router_saved_checkpoint_vjp",
+        jax.jit(single_full_block_boundary_value_and_grads),
+        ordered_arguments,
+    )
+    checkpoint_results = tuple(
+        _execute_compiled(
+            process_id,
+            f"r13_router_saved_checkpoint_vjp_{index}",
+            compiled_checkpoint,
+            (params, qb_beta, hidden, cotangent),
+        )
+        for index, (hidden, cotangent) in enumerate(zip(hiddens, cotangents, strict=True))
+    )
+    checkpoint_reference = _combine_single_full_block_results(*checkpoint_results)
+
+    compiled_no_checkpoint = _lower_and_compile(
+        process_id,
+        "r13_no_checkpoint_vjp",
+        jax.jit(single_full_block_no_checkpoint_boundary_value_and_grads),
+        ordered_arguments,
+    )
+    no_checkpoint_results = tuple(
+        _execute_compiled(
+            process_id,
+            f"r13_no_checkpoint_vjp_{index}",
+            compiled_no_checkpoint,
+            (params, qb_beta, hidden, cotangent),
+        )
+        for index, (hidden, cotangent) in enumerate(zip(hiddens, cotangents, strict=True))
+    )
+    no_checkpoint_reference = _combine_single_full_block_results(*no_checkpoint_results)
+    reference_stabilized = _report_full_block_boundaries(
+        process_id,
+        "r13_router_saved_checkpoint_vs_no_checkpoint_report",
+        checkpoint_reference,
+        no_checkpoint_reference,
+    )
+    if not reference_stabilized:
+        if process_id == 0:
+            event(
+                process_id,
+                "router_remat_reference_summary",
+                reference_stabilized=False,
+                split_assembly_skipped=True,
+                passed=False,
+            )
+        return False
+
+    split_assembly_passed = _run_split_single_finish_vjp_diagnostic(
+        process_id,
+        params,
+        qb_beta,
+        hiddens,
+        cotangents,
+    )
+    if process_id == 0:
+        event(
+            process_id,
+            "router_remat_reference_summary",
+            reference_stabilized=True,
+            split_assembly_skipped=False,
+            split_assembly_passed=split_assembly_passed,
+            passed=split_assembly_passed,
+        )
+    return split_assembly_passed
+
+
 def _run_worker(
     process_id: int,
     coordinator_address: str,
@@ -2775,6 +2853,15 @@ def _run_worker(
             multihost_utils.sync_global_devices("group2_component_reference_assembly_discontinuity_complete")
             if not passed:
                 raise AssertionError("reference/assembly discontinuity exceeded the fixed per-leaf tolerance")
+            completed = True
+            return
+
+        if diagnostic == "router-remat-reference":
+            with jax.set_mesh(stage_mesh):
+                passed = _run_router_remat_reference_diagnostic(process_id, *arguments)
+            multihost_utils.sync_global_devices("group2_component_router_remat_reference_complete")
+            if not passed:
+                raise AssertionError("router-remat reference or split assembly exceeded the fixed per-leaf tolerance")
             completed = True
             return
 

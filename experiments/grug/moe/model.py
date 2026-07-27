@@ -17,7 +17,7 @@ import jax.numpy as jnp
 import jax.scipy as jsp
 from einops import rearrange
 from haliax import Axis
-from haliax.jax_utils import named_call
+from haliax.jax_utils import named_call, tree_checkpoint_name
 from haliax.quantization import Fp8RaggedDotOp
 from jax import core, random
 from jax.sharding import NamedSharding, get_abstract_mesh, reshard
@@ -38,6 +38,11 @@ from levanter.grug.attention import (
     attention,
 )
 from levanter.grug.grug_moe import (
+    CHECKPOINT_ROUTER_COMBINE_WEIGHTS,
+    CHECKPOINT_ROUTER_SELECTED_EXPERTS,
+    CHECKPOINT_ROUTER_SIGMOID_WEIGHTS,
+    CHECKPOINT_ROUTER_UNBIASED_TOPK,
+    CHECKPOINT_ROUTER_WEIGHT_DENOMINATOR,
     MOE_REMAT_SAVE_NAMES,
     MoeActivation,
     MoEExpertMlp,
@@ -726,13 +731,28 @@ class MoEMLP(eqx.Module):
         # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
         _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
         qb_alpha = _topk_logits[:, -1:]
-        selected_experts = reshard(selected_experts[:, :-1], P(_BATCH_AXES, None))
+        selected_experts = tree_checkpoint_name(
+            reshard(selected_experts[:, :-1], P(_BATCH_AXES, None)),
+            CHECKPOINT_ROUTER_SELECTED_EXPERTS,
+        )
         # Sigmoid combine weights on unbiased logits for selected experts.
-        unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-        combine_weights_f = jax.nn.sigmoid(unbiased_topk)
+        unbiased_topk = tree_checkpoint_name(
+            jnp.take_along_axis(router_logits, selected_experts, axis=-1),
+            CHECKPOINT_ROUTER_UNBIASED_TOPK,
+        )
+        sigmoid_weights = tree_checkpoint_name(
+            jax.nn.sigmoid(unbiased_topk),
+            CHECKPOINT_ROUTER_SIGMOID_WEIGHTS,
+        )
         # Renormalize K combine weights to sum to ``_ROUTING_RENORM_SUM`` (baked in).
-        denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
-        combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
+        denom = tree_checkpoint_name(
+            jnp.sum(sigmoid_weights, axis=-1, keepdims=True),
+            CHECKPOINT_ROUTER_WEIGHT_DENOMINATOR,
+        )
+        combine_weights_f = tree_checkpoint_name(
+            sigmoid_weights * (_ROUTING_RENORM_SUM / (denom + 1e-9)),
+            CHECKPOINT_ROUTER_COMBINE_WEIGHTS,
+        )
         combine_weights = reshard(combine_weights_f.astype(x.dtype), P(_BATCH_AXES, None))
         router_stats = _routing_stats(
             selected_experts,
