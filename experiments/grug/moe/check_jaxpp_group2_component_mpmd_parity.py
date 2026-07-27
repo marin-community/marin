@@ -88,6 +88,7 @@ _DIAGNOSTICS = (
     "full-block-remat-scope",
     "split-executable-boundaries",
     "split-single-finish-vjp",
+    "reference-assembly-discontinuity",
 )
 
 
@@ -1422,6 +1423,70 @@ def _report_finish_vjp_comparison(
     return passed
 
 
+def _report_gradient_comparison(
+    process_id: int,
+    event_name: str,
+    actual,
+    reference,
+) -> bool:
+    reports = {
+        "parameter_gradients": _tree_parity(actual[8], reference[8], root="parameter_gradients"),
+        "input_gradients": _tree_parity(actual[9], reference[9], root="input_gradients"),
+    }
+    passed = all(report["passed"] for report in reports.values())
+    if process_id == 0:
+        event(
+            process_id,
+            event_name,
+            tolerance=DEFAULT_TOLERANCE,
+            reports=reports,
+            passed=passed,
+        )
+    return passed
+
+
+def _report_pair_cross_match(
+    process_id: int,
+    event_name: str,
+    actual: tuple[Any, Any],
+    reference: tuple[Any, Any],
+    *,
+    root: str,
+) -> bool:
+    reports = {
+        f"actual_{actual_index}_reference_{reference_index}": _tree_parity(
+            actual_value,
+            reference[reference_index],
+            root=f"{root}[{actual_index}]_vs_reference[{reference_index}]",
+        )
+        for actual_index, actual_value in enumerate(actual)
+        for reference_index in range(2)
+    }
+    same_index_passed = reports["actual_0_reference_0"]["passed"] and reports["actual_1_reference_1"]["passed"]
+    cross_index_passed = reports["actual_0_reference_1"]["passed"] and reports["actual_1_reference_0"]["passed"]
+    if process_id == 0:
+        event(
+            process_id,
+            event_name,
+            tolerance=DEFAULT_TOLERANCE,
+            reports=reports,
+            same_index_passed=same_index_passed,
+            cross_index_passed=cross_index_passed,
+        )
+    return same_index_passed
+
+
+def _pre_task_parameter_gradient_view(gradient: Block):
+    return {
+        "rms_attn": gradient.rms_attn,
+        "attn_gated_norm": gradient.attn_gated_norm,
+        "attn": gradient.attn,
+        "rms_mlp": gradient.rms_mlp,
+        "mlp_gated_norm": gradient.mlp_gated_norm,
+        "shared": gradient.shared,
+    }
+
+
 def _report_full_block_forward(
     process_id: int,
     arm: str,
@@ -2307,6 +2372,41 @@ def _run_split_single_finish_vjp_diagnostic(
         for index, (hidden, cotangent) in enumerate(zip(hiddens, cotangents, strict=True))
     )
     ordered_reference = _combine_single_full_block_results(*ordered_results)
+    compiled_no_checkpoint = _lower_and_compile(
+        process_id,
+        "r12_ordered_no_checkpoint_vjp",
+        jax.jit(single_full_block_no_checkpoint_boundary_value_and_grads),
+        ordered_arguments,
+    )
+    no_checkpoint_results = tuple(
+        _execute_compiled(
+            process_id,
+            f"r12_ordered_no_checkpoint_vjp_{index}",
+            compiled_no_checkpoint,
+            (params, qb_beta, hidden, cotangent),
+        )
+        for index, (hidden, cotangent) in enumerate(zip(hiddens, cotangents, strict=True))
+    )
+    no_checkpoint_reference = _combine_single_full_block_results(*no_checkpoint_results)
+    default_vs_no_checkpoint_passed = _report_full_block_boundaries(
+        process_id,
+        "r12_default_checkpoint_vs_no_checkpoint_report",
+        ordered_reference,
+        no_checkpoint_reference,
+    )
+    default_vs_no_checkpoint_gradients_passed = _report_gradient_comparison(
+        process_id,
+        "r12_default_checkpoint_vs_no_checkpoint_gradient_report",
+        ordered_reference,
+        no_checkpoint_reference,
+    )
+    _report_pair_cross_match(
+        process_id,
+        "r12_default_checkpoint_vs_no_checkpoint_per_microbatch_gradient_report",
+        tuple((result[8], result[9]) for result in ordered_results),
+        tuple((result[8], result[9]) for result in no_checkpoint_results),
+        root="full_block_gradients",
+    )
 
     compiled_pre_forward = _lower_and_compile(
         process_id,
@@ -2442,7 +2542,9 @@ def _run_split_single_finish_vjp_diagnostic(
         joined_finish,
         combined_single_finish,
     )
-
+    joined_boundary_cotangents = tuple(
+        (joined_finish[5][index], joined_finish[6][index], joined_finish[7][index]) for index in range(2)
+    )
     single_boundary_cotangents = tuple(
         (
             single_finish_results[index][5],
@@ -2451,6 +2553,34 @@ def _run_split_single_finish_vjp_diagnostic(
         )
         for index in range(2)
     )
+    boundary_cotangents_same_index_passed = _report_pair_cross_match(
+        process_id,
+        "r12_joined_vs_ordered_cut_boundary_cotangent_report",
+        joined_boundary_cotangents,
+        single_boundary_cotangents,
+        root="finish_boundary_cotangents",
+    )
+    finish_vs_ordered_same_index_passed = _report_pair_cross_match(
+        process_id,
+        "r12_single_finish_vs_ordered_moe_gradient_report",
+        tuple(result[4].mlp for result in single_finish_results),
+        tuple(result[8].mlp for result in ordered_results),
+        root="moe_parameter_gradients",
+    )
+    joined_vs_ordered_moe_gradient_report = _tree_parity(
+        joined_finish[4].mlp,
+        grug_train._sum_microbatch_group(tuple(result[8].mlp for result in ordered_results)),
+        root="joined_vs_ordered_moe_parameter_gradients",
+    )
+    if process_id == 0:
+        event(
+            process_id,
+            "r12_joined_finish_vs_ordered_moe_gradient_report",
+            tolerance=DEFAULT_TOLERANCE,
+            report=joined_vs_ordered_moe_gradient_report,
+            passed=joined_vs_ordered_moe_gradient_report["passed"],
+        )
+
     pre_gradients = tuple(
         _execute_compiled(
             process_id,
@@ -2459,6 +2589,25 @@ def _run_split_single_finish_vjp_diagnostic(
             (params, qb_beta, hiddens[index], single_boundary_cotangents[index]),
         )
         for index in range(2)
+    )
+    pre_task_same_index_passed = _report_pair_cross_match(
+        process_id,
+        "r12_pre_task_vs_ordered_per_microbatch_gradient_report",
+        tuple(
+            (
+                _pre_task_parameter_gradient_view(result[1]),
+                result[2],
+            )
+            for result in pre_gradients
+        ),
+        tuple(
+            (
+                _pre_task_parameter_gradient_view(result[8]),
+                result[9],
+            )
+            for result in ordered_results
+        ),
+        root="pre_task_gradients",
     )
     parameter_gradient = grug_train._sum_microbatch_group(
         (
@@ -2485,14 +2634,26 @@ def _run_split_single_finish_vjp_diagnostic(
         assembled,
         ordered_reference,
     )
-    passed = saved_forward_passed and full_assembly_passed
+    split_vs_no_checkpoint_gradients_passed = _report_gradient_comparison(
+        process_id,
+        "r12_single_finish_assembled_vs_no_checkpoint_gradient_report",
+        assembled,
+        no_checkpoint_reference,
+    )
+    passed = saved_forward_passed and (full_assembly_passed or split_vs_no_checkpoint_gradients_passed)
     if process_id == 0:
         event(
             process_id,
             "split_single_finish_vjp_summary",
             saved_forward_passed=saved_forward_passed,
             joined_vs_single_finish_passed=joined_vs_single_finish_passed,
+            boundary_cotangents_same_index_passed=boundary_cotangents_same_index_passed,
+            finish_vs_ordered_same_index_passed=finish_vs_ordered_same_index_passed,
+            pre_task_same_index_passed=pre_task_same_index_passed,
+            default_vs_no_checkpoint_passed=default_vs_no_checkpoint_passed,
+            default_vs_no_checkpoint_gradients_passed=default_vs_no_checkpoint_gradients_passed,
             full_assembly_passed=full_assembly_passed,
+            split_vs_no_checkpoint_gradients_passed=split_vs_no_checkpoint_gradients_passed,
             passed=passed,
         )
     return passed
@@ -2605,6 +2766,15 @@ def _run_worker(
             multihost_utils.sync_global_devices("group2_component_split_single_finish_vjp_complete")
             if not passed:
                 raise AssertionError("single-finish VJP assembly exceeded the fixed per-leaf tolerance")
+            completed = True
+            return
+
+        if diagnostic == "reference-assembly-discontinuity":
+            with jax.set_mesh(stage_mesh):
+                passed = _run_split_single_finish_vjp_diagnostic(process_id, *arguments)
+            multihost_utils.sync_global_devices("group2_component_reference_assembly_discontinuity_complete")
+            if not passed:
+                raise AssertionError("reference/assembly discontinuity exceeded the fixed per-leaf tolerance")
             completed = True
             return
 

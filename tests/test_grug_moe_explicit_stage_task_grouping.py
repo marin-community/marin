@@ -955,6 +955,15 @@ def test_split_single_finish_vjps_match_joined_finish_and_ordered_full_block() -
             jax.jit(single_full_block_boundary_value_and_grads)(params, qb_beta, hidden, cotangent)
             for hidden, cotangent in zip(hiddens, output_cotangents, strict=True)
         )
+        no_checkpoint_vjps = tuple(
+            jax.jit(single_full_block_no_checkpoint_boundary_value_and_grads)(
+                params,
+                qb_beta,
+                hidden,
+                cotangent,
+            )
+            for hidden, cotangent in zip(hiddens, output_cotangents, strict=True)
+        )
         standalone_prepared = tuple(
             jax.jit(single_pre_moe_checkpoint_boundary_forward)(params, qb_beta, hidden) for hidden in hiddens
         )
@@ -1040,6 +1049,18 @@ def test_split_single_finish_vjps_match_joined_finish_and_ordered_full_block() -
         _sum_microbatch_group((ordered_vjps[0][8], ordered_vjps[1][8])),
         (ordered_vjps[0][9], ordered_vjps[1][9]),
     )
+    expected_no_checkpoint = (
+        (no_checkpoint_vjps[0][0], no_checkpoint_vjps[1][0]),
+        (no_checkpoint_vjps[0][1], no_checkpoint_vjps[1][1]),
+        (no_checkpoint_vjps[0][2], no_checkpoint_vjps[1][2]),
+        (no_checkpoint_vjps[0][3], no_checkpoint_vjps[1][3]),
+        (no_checkpoint_vjps[0][4], no_checkpoint_vjps[1][4]),
+        (no_checkpoint_vjps[0][5], no_checkpoint_vjps[1][5]),
+        (no_checkpoint_vjps[0][6], no_checkpoint_vjps[1][6]),
+        (no_checkpoint_vjps[0][7], no_checkpoint_vjps[1][7]),
+        _sum_microbatch_group((no_checkpoint_vjps[0][8], no_checkpoint_vjps[1][8])),
+        (no_checkpoint_vjps[0][9], no_checkpoint_vjps[1][9]),
+    )
     actual = (
         combined_single_finish[0],
         post_attention,
@@ -1054,6 +1075,9 @@ def test_split_single_finish_vjps_match_joined_finish_and_ordered_full_block() -
     )
     _assert_tree_rel_l2(combined_single_finish, joined_finish)
     _assert_tree_rel_l2(actual, expected)
+    _assert_tree_rel_l2(actual[8:], expected_no_checkpoint[8:])
+    for actual_finish, expected_vjp in zip(single_finish, ordered_vjps, strict=True):
+        _assert_tree_rel_l2(actual_finish[4].mlp, expected_vjp[8].mlp)
     for actual_routes, expected_routes in zip(pre_ring, expected[4], strict=True):
         np.testing.assert_array_equal(actual_routes["selected_experts"], expected_routes["selected_experts"])
     for actual_stats, expected_stats in zip(combined_single_finish[3], expected[7], strict=True):
