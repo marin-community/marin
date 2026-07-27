@@ -15,7 +15,10 @@ issue: https://github.com/marin-community/marin/issues/6503
 - Teardown now ignores zombie/dead group members after killing vLLM, allowing the managed-cache lock to close before the retry.
 - The Grug entry now uses distributed streaming, RunAI 0.16.1 bounds in-flight object-store reads,
   and the CUDA launcher gives the S3 low-speed check 10 seconds.
-- A clean resubmission reached `vLLM environment ready`; the zombie regression and existing retry suite passed locally.
+- A one-instance acceptance run streamed 15.6 GiB per rank in 14.63–14.75
+  seconds, reached `vLLM environment ready`, and returned HTTP 200 to its
+  first Harbor requests. The zombie regression and existing retry suite passed
+  locally.
 
 ## Original problem report
 
@@ -107,11 +110,13 @@ Negative results:
 - `AWS_RETRY_MODE=standard` can reduce the retry budget.
 - RunAI memory limits address host-memory pressure, not this S3 read fault.
 
-The minimum live experiment is one
-`grug-agentic-s3-step1903` / `grug-opencode-id --limit 1` launch. Success
-requires distributed per-rank byte counts in the logs, a ready vLLM endpoint,
-and one Harbor request. If S3 faults persist, the next bounded experiment is
-`RUNAI_STREAMER_CONCURRENCY=4` against the same command.
+The minimum live experiment launched
+`grug-agentic-s3-step1903` / `grug-opencode-id --limit 1`. All eight ranks used
+distributed streaming and read 15.6 GiB in 14.63–14.75 seconds, instead of
+each reading 124.9 GiB in 57–229 seconds. vLLM registered its endpoint and
+Harbor received HTTP 200 responses from `/v1/chat/completions`. If S3 faults
+persist, the next bounded experiment is `RUNAI_STREAMER_CONCURRENCY=4` against
+the same command.
 
 ## How OPS.md could have shortened this
 
@@ -126,4 +131,6 @@ investigation.
 - Iris root job: `/loom/eval-20260727-174623-grug-agentic-s3-step1903-ca26`
 - Failed inference child: `/loom/eval-20260727-174623-grug-agentic-s3-step1903-ca26/inference-e7ae7ec6fdb54d79a8309476560bda4a`
 - Successful replacement inference child: `/loom/eval-20260727-175503-grug-agentic-s3-step1903-3be6/inference-6e6c82a0a2b94a2fabfbeb7c1d786293`
+- Streamer acceptance root: `/loom/eval-20260727-184149-grug-agentic-s3-step1903-5fdf`
+- Streamer acceptance inference child: `/loom/eval-20260727-184149-grug-agentic-s3-step1903-5fdf/inference-7334c6cc15e54f018bd6d5bfc4030320`
 - Monitoring state: `scratch/20260727-1743_monitoring_state.json`
