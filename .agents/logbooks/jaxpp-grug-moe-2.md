@@ -300,3 +300,20 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - Further broad activation retention is not justified. The next remat experiment should rank compact normalization/attention residuals that can affect only these three dense leaves, with retained-byte accounting.
 - Next action:
   - Inspect RMS/gated-normalization and CuTe attention backward residuals. Add only compact named intermediates with a plausible dependency path to the three dense failures, and keep the distinct-MLP/master-precision router-gradient arm separate. Do not launch L8 or retain full token-by-hidden activations without another explicit decision.
+
+### 2026-07-26 18:56 PDT - explicit router state passes the full direct block gate
+- Hypothesis: Computing router state in each independent pre-task, passing selected experts and combine weights to an expert-only joined finish, and returning combine-weight cotangents to the same pre/router VJP will remove r13b's router and dense compiler-context errors.
+- Commit Hash: `5c411170fa` adds the transient explicit router state, expert-only paired production helper, direct one-block diagnostic, and focused JIT parity coverage.
+- Command: Parent `/dlwh/jaxpp-group2-explicit-routing-r14-5c411170-20260726-1854` ran `--diagnostic explicit-routing` from clean commit `5c411170fab4e2ecec05e185c01fa8dc15b36612`; child `/dlwh/jaxpp-group2-explicit-routing-r14-5c411170-20260726-1854/0`. The target remained d2560/e64/top-k4/sequence 4096/global microbatch 32/local 4, H100x8, BF16 CuTe FA4, exact ring EP8, `save_moe`, Triton block-k 32/eight warps, JAX `0.11.1.dev20260725`, NCCL `2.30.7`, and patched JaxPP `7091a9b5`.
+- Results:
+  - The gate passed. Losses, post-attention residuals, MLP inputs, shared outputs, routed outputs, final block outputs, router statistics, and routing counts were exact. Selected-route assignment and token mismatches were `[0, 0]`; routing-count mismatches were `[0, 0]`.
+  - Per-microbatch router gradients were exact at relative-L2 `0.0`; crossed controls remained negative. The assembled `mlp.router` gradient was exact.
+  - All 19 parameter leaves passed relative-L2 `0.002`. The maximum was `mlp.expert_mlp.w_up=0.00180177` with absolute-L2 `1.19796`, reference norm `664.879`, cosine `0.999998335`, and maximum absolute error `0.0009765625`. The other expert leaves were `0.00180156` and `0.00180155`.
+  - The previous dense failures passed: `attn_gated_norm.w_down=0.000781367`, `attn_gated_norm.w_up=0.000390953`, and `attn.w_k=0.0000439788`. Input-gradient relative-L2 was `0.0000315612/0.0000304466`.
+  - The pre-task emitted explicit logits, selected experts, combine weights, boundary margins, and router metrics. Router logits and boundary margins were exact; combine-weight relative-L2 was at most `0.0000149426`.
+  - Ordered VJP lower/compile took `10.91/4.57s`; pre-task forward `5.78/1.33s`; pre-task VJP `9.66/1.02s`; expert-only joined finish VJP `0.32/0.61s`. Iris succeeded with exit `0` after `1m58.75s`, with zero failures or preemptions and no live allocation.
+- Interpretation:
+  - Explicit router state is the correct direct component boundary. It removes r13b's router-only BF16 accumulation error and also restores the three dense leaves without changing the dense remat policy.
+  - The joined finish now differentiates only expert execution and returns per-microbatch combine-weight cotangents. Each pre/router VJP owns its original attention, dense, routing, and auxiliary-loss derivative before master-precision gradient summation.
+- Next action:
+  - Stop at this direct milestone. The next separate gate is JaxPP task integration of the same pre/router and expert-only finish boundaries; do not launch L8 or L24 before that component task graph passes the same per-leaf `0.002` and exact-route checks.
