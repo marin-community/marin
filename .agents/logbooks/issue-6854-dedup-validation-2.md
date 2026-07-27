@@ -16,6 +16,45 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T14:16:42Z — 281,932 pairs verified; all 331 ambiguities covered
+
+- `/rav/rav-datakit-6854-reconcile-manual-1415-v1263` independently
+  reconciled 2,220 completed semantic checkpoints and all 331 unresolved model
+  outcomes. Every unresolved outcome has a consistent full-text decision;
+  none are missing. The snapshot covers 281,932 of 755,281 semantic
+  candidates (37.33%). Applying the 72 false-positive and 259 true-duplicate
+  manual decisions gives:
+
+  - baseline: 225,161 pairs, 142,932 false positives, and 82,229 true
+    duplicates;
+  - treatment: 56,771 pairs, 29,379 false positives, and 27,392 true
+    duplicates;
+  - combined: 172,311 false positives and 109,621 true duplicates.
+
+  The observed false-positive rates are 63.4799% for baseline and 51.7500%
+  for treatment, a treatment reduction of 11.7299 percentage points. The
+  immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-1415.json`
+  with SHA-256
+  `28a3dc30f0b44b4421c13656d8fdc84ce98edceb82ca9812915f0bf7f774944c`.
+- Three independent audit waves re-read and hash-validated the 512 newly
+  completed pairs:
+
+  - `/rav/rav-datakit-6854-audit-next-checkpoints-1411-v1260` covered 256
+    pairs: 195 model false positives and 61 true duplicates;
+  - `/rav/rav-datakit-6854-audit-next-checkpoints-1414-v1261` covered 128
+    pairs: 97 model false positives and 31 true duplicates;
+  - `/rav/rav-datakit-6854-audit-next-checkpoints-1415-v1262` covered 128
+    pairs: 86 model false positives and 42 true duplicates.
+
+  All 1,060 model judgments were valid, and none of the 512 pairs was
+  unresolved. The next independent-audit frontiers are p0 `(12, 0)`, p1
+  `(43, 4,352)`, p2 `(76, 0)`, and p3 `(108, 128)`.
+- The p0, p2, and p3 workers remain on the same unusually large 128-pair
+  checkpoints. All four batch-priority 2-H100 jobs continue running, and
+  their 12 root, broker, and GPU pods remain Ready with zero Kubernetes
+  restarts.
+
 ### 2026-07-27T14:09:40Z — 281,420 pairs verified; all 331 ambiguities covered
 
 - `/rav/rav-datakit-6854-reconcile-manual-1408-v1258` independently
