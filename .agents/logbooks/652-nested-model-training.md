@@ -743,3 +743,46 @@ launch:
   sample efficiency.
 - Expected pure training time is 1.85 hours. Recompilation, multi-offset
   evaluation, and checkpointing raise the wall estimate to 2.5--3.0 hours.
+
+### 2026-07-27 17:01 - 16.106B-token continuation launched
+
+- Submitted four batch-priority coordinator jobs through the main `marin`
+  controller, federated to `cw-us-east-08a`:
+  - `/power/nest-moe-extend-large-r28-coord`;
+  - `/power/nest-moe-extend-small-r28-coord`;
+  - `/power/nest-moe-extend-ladder25-r28-coord`;
+  - `/power/nest-moe-extend-ladder50-r28-coord`.
+- Each coordinator created a 16-node, 64-GB200 training child in a new
+  `extend16b-r28` output directory. The original 4.295B-token checkpoints
+  remain immutable.
+- The first submission attempt was rejected by the local Iris CLI because the
+  mixed-precision environment value was quoted as part of its key. No job was
+  created and no cluster time was consumed. The corrected submissions
+  separated the environment key and value.
+- Environment setup is in progress. Scientific validation remains pending
+  until the training logs confirm both the expected source checkpoint and a
+  restored global step of 8,192.
+
+### 2026-07-27 17:05 - Invalid continuation stopped; LR restart amended
+
+- All four `r28` arms loaded the intended immutable step-8,192 checkpoints.
+- E256 became NaN at step 8,197 and E128 at step 8,194. The `r28` wave was
+  stopped and will not be used as experimental evidence.
+- Cause: rebuilding the linear decay schedule with a 38,912-step horizon
+  changed the learning rate at the restored step:
+  - MuonH jumped from `0.00019696` to `0.00315176`;
+  - Adam jumped from `0.00004545` to `0.00072733`.
+  The approximately 16x discontinuity is common to every arm and independent
+  of nested routing.
+- Continuation amendment, frozen before replacement launch:
+  - preserve the original schedule exactly through step 8,192;
+  - begin a second optimizer cycle at step 8,192;
+  - linearly rewarm from the old 5% floor to the original peak over 512
+    updates, then linearly decay to the 5% floor at step 38,912;
+  - resume model, optimizer moments, and global step from the original `r25`
+    checkpoints, never the NaN-tainted `r28` outputs;
+  - keep every paired architecture, data, evaluation, and hardware setting
+    unchanged.
+- The 512-step rewarmup is 0.268B tokens. Replacement jobs must remain finite
+  through both the first resumed updates and the peak at step 8,704 before the
+  incident is considered resolved.

@@ -309,11 +309,13 @@ def test_nested_moe_launcher_evaluates_untreated_control_subset(monkeypatch, tmp
 def test_nested_moe_launcher_builds_power_ladder(monkeypatch, tmp_path):
     monkeypatch.setenv("NESTED_ARM", "ladder25")
     monkeypatch.setenv("NESTED_PHASE", "full")
-    monkeypatch.setenv("NESTED_STEPS", "8192")
+    monkeypatch.setenv("NESTED_STEPS", "38912")
     monkeypatch.setenv("NESTED_EVAL_INTERVAL", "2048")
     monkeypatch.setenv("NESTED_EVAL_OFFSETS", "4")
     monkeypatch.setenv("NESTED_SEED", "3")
     monkeypatch.setenv("NESTED_RESUME_FROM", "s3://test/prior/checkpoints")
+    monkeypatch.setenv("NESTED_RESUME_STEP", "8192")
+    monkeypatch.setenv("NESTED_REWARMUP_STEPS", "512")
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
 
     step = launch_nested_experts.build(version="dev")
@@ -323,11 +325,20 @@ def test_nested_moe_launcher_builds_power_ladder(monkeypatch, tmp_path):
     assert config.model.num_experts == 256
     assert config.model.nested_expert_counts == (128, 32, 8, 1)
     assert config.model.nested_batch_fraction == 0.25
-    assert config.steps == 8192
+    assert config.steps == 38912
     assert config.eval.steps_per_eval == 2048
     assert config.eval.nested_eval_offsets == 4
     assert config.seed == 3
     assert config.resume_from == "s3://test/prior/checkpoints"
+    assert config.optimizer.cycles == [8192]
+    assert config.optimizer.rewarmup == 512
+
+    original_optimizer = dataclasses.replace(config.optimizer, cycles=None, rewarmup=0)
+    original_schedule = original_optimizer.lr_scheduler(8192)
+    resumed_schedule = config.optimizer.lr_scheduler(config.steps)
+    np.testing.assert_allclose(resumed_schedule(8192), original_schedule(8192), rtol=1e-6)
+    assert resumed_schedule(8193) > resumed_schedule(8192)
+    assert resumed_schedule(8193) < config.optimizer.learning_rate
 
     dispatched = []
     monkeypatch.setattr(grug_moe_launch, "run_grug", dispatched.append)

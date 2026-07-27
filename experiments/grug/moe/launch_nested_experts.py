@@ -28,6 +28,8 @@ Optional overrides:
     NESTED_EVAL_EXPERTS  evaluate a fixed subset without restricting training
     NESTED_INIT_FROM    nested25 checkpoint root (required for breakout25)
     NESTED_RESUME_FROM  prior checkpoint directory for full-state continuation
+    NESTED_RESUME_STEP  global step stored in NESTED_RESUME_FROM
+    NESTED_REWARMUP_STEPS  resumed-cycle linear rewarmup length
     NESTED_EVAL_INTERVAL  optimizer steps between evaluations (default: 100)
     NESTED_EVAL_OFFSETS   evenly spaced expert-subset offsets per ladder level (default: 1)
     NESTED_SEED          training and data seed (default: 0; cooldown: 1)
@@ -227,6 +229,18 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     resume_from = os.environ.get("NESTED_RESUME_FROM")
     if resume_from is not None and arm is NestedArm.BREAKOUT_25:
         raise ValueError("NESTED_RESUME_FROM is incompatible with breakout25")
+    if resume_from is not None:
+        resume_step = int(_required_env("NESTED_RESUME_STEP"))
+        rewarmup_steps = int(_required_env("NESTED_REWARMUP_STEPS"))
+        if resume_step <= 0 or resume_step >= steps:
+            raise ValueError("NESTED_RESUME_STEP must be positive and smaller than NESTED_STEPS")
+        if rewarmup_steps <= 0 or rewarmup_steps > steps - resume_step:
+            raise ValueError("NESTED_REWARMUP_STEPS must fit within the resumed training cycle")
+        optimizer = dataclasses.replace(
+            optimizer,
+            cycles=[resume_step],
+            rewarmup=rewarmup_steps,
+        )
 
     total_devices = nodes * _GPUS_PER_NODE
     if total_devices % expert_axis != 0:
