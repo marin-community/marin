@@ -519,3 +519,67 @@ are recorded in the previous volumes.
   default memory during the manifest scan before writing output. The successful
   retry used four CPUs and 16 GB. The four semantic-review parents, brokers, and
   2-H100 workers remain healthy at batch priority.
+
+## 2026-07-27 19:16 UTC — two new manual adjudications
+
+- `/rav/rav-datakit-6854-audit-fast-1906-v1431` found two unresolved baseline
+  outcomes among 512 pairs. Both source documents, semantic judgments, and
+  hashes were independently reread before labeling:
+
+  - decision-file 44, semantic offset 3,200, pair row 5,687 is a true
+    duplicate. The 1,239-character member and 827-character canonical have
+    0.5712 character and 0.5033 word-sequence similarity. Both are the same
+    incoherent college-advice SEO template; the member's institution, location,
+    and program phrases are slot substitutions rather than coherent distinct
+    facts. The inspection, manual Parquet, and marker SHA-256 values are
+    `e1e38b977608c4d462e00ae4636151eea0a133eed4b19cb43d24a3c65582b884`,
+    `17afe007f60772c0d399ea8abdcc0641d8f4bef93cd60fa7a24a10a3d6fd2dca`,
+    and
+    `efdf2254efdfe774abf1683ed01cbfd0159f7abf07963ce74da98168de9bc807`.
+  - decision-file 109, semantic offset 2,048, pair row 3,356 is a false
+    positive. The 3,089-character member and 3,917-character canonical share
+    the same Cambridge cocaine-addiction article, but the member uniquely adds
+    a coherent claim that a licorice ingredient may counter cocaine toxicity
+    and overdose, attributed to researchers in Korea and Pennsylvania. Its
+    citation is truncated, but the factual claim is absent from the canonical.
+    Character and word-sequence similarities are 0.8379 and 0.8311. The
+    inspection, manual Parquet, and marker SHA-256 values are
+    `ae358d38d56186b9a951840c89b5b4aae319b2d82879dd79918e33b1d474f6a2`,
+    `d0c67e2e1e974403eec5d36af7d8dae6d539e60ff43e882a99bf7df7beeaaa26`,
+    and
+    `2cc0cafa1e6a7ab03aaaab99840e91b93c51217d7b5270389da1db9acc21ffac`.
+
+  Publish jobs `/rav/rav-datakit-6854-publish-row5687-v1434` and
+  `/rav/rav-datakit-6854-publish-row3356-v1435` wrote the hash-bound records.
+  Verify-only jobs `/rav/rav-datakit-6854-verify-row5687-v1436` and
+  `/rav/rav-datakit-6854-verify-row3356-v1437` reproduced their complete source,
+  inspection, Parquet, marker, and evidence bytes.
+- `/rav/rav-datakit-6854-reconcile-manual-1912-v1438` then verified 2,423
+  checkpoints and complete manual coverage for all 364 unresolved outcomes.
+  Applying 77 false-positive and 287 true-duplicate manual decisions gives:
+
+  | Arm | Pairs | False positives | True duplicates | False-positive rate |
+  | --- | ---: | ---: | ---: | ---: |
+  | baseline | 246,041 | 156,170 | 89,871 | 63.4732% |
+  | treatment | 61,603 | 31,950 | 29,653 | 51.8644% |
+  | combined | 307,644 | 188,120 | 119,524 | 61.1486% |
+
+  The baseline-minus-treatment gap is 11.6088 percentage points. The snapshot
+  covers 40.7324% of the 755,281 semantic candidates. Its immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-1912.json`
+  with SHA-256
+  `4e2eee51e76c43e584f8a55a5a17e36d18d10d1c137a5727a933f90ecfa8b65a`.
+  The semantic, manual-marker, and manual-Parquet path-manifest SHA-256 values
+  are
+  `e6b3d814bf96199327234e0b32f81309d74dcaa0c6da2a8d954003fe9b6af7b7`,
+  `11b86decfa9231291f7b722cdde1ed3b1cdc0d150b99b2341d84791b4eaec928`,
+  and
+  `d984206d211b578d5cb6729c2dea19a8f93e011c3454d236de68d8980dc020f5`.
+  No manual outcome is missing. Historical shadow-record anomaly counts remain
+  unchanged and marker-bound records remain internally consistent.
+- `/rav/rav-datakit-6854-audit-fast-1915-v1439` independently verified another
+  10 checkpoints containing 1,280 pairs: 744 false positives and 536 true
+  duplicates, with no unresolved outcomes or invalid judgments. The audited
+  total is 308,028 pairs. The next frontiers are p0 `(13, 0)`, p1 `(44, 3968)`,
+  p2 `(77, 0)`, and p3 `(109, 2944)`. All four semantic-review parents,
+  brokers, and 2-H100 workers remain healthy at batch priority.
