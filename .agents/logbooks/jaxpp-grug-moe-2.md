@@ -390,3 +390,21 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - Full-stage gradient assembly/accumulation and tuple-wise DIME transfers remain separate runtime optimization candidates, but they should not be changed until the stable-callable L8 gate executes.
 - Next action:
   - Launch one fresh matched L8 run from `3f06cc8505` at XLA fraction `0.70`. Require finite steps, exact W&B metrics, and unique compile counts that no longer scale with all eight microbatch pairs before any L24 promotion.
+
+### 2026-07-26 20:54 PDT - stable callables reduce compilation but L8 still exhausts HBM at 0.70 and 0.80
+- Hypothesis: Stable phase-callable identities will reduce executable residency enough for the matched L8 group-size-two graph to execute; if `0.70` remains narrowly short, increasing only the XLA memory fraction to `0.80` will provide sufficient bounded headroom.
+- Commit Hash: `3f06cc8505` is the tested code; `82fa0a92cd` records the preceding L8 memory evidence.
+- Commands:
+  - r5 parent `/dlwh/iris-run-job-20260727-033624`, child `/dlwh/iris-run-job-20260727-033624/grug-train-jaxpp-rno2a-ring-explicit-routing-stablecalls-g2-l8-e64k4-b512-s4096-p4m16-r5-20260726-2032`, used XLA fraction `0.70`.
+  - r6 parent `/dlwh/iris-run-job-20260727-034419`, child `/dlwh/iris-run-job-20260727-034419/grug-train-jaxpp-rno2a-ring-explicit-routing-stablecalls-g2-l8-e64k4-b512-s4096-p4m16-xla080-r6-20260726-2044`, changed only the XLA fraction to `0.80`.
+- Results:
+  - Compile reuse is real. The pre-stable r4 graph emitted `298` compile lines with `298` unique names, including `256` heavy pre-forward/joined-expert-forward/joined-expert-backward/pre-backward names across eight microbatch-pair prefixes. Both r5 and r6 emitted `74` compile lines with `74` unique names, including `32` heavy names under only the `mb0_1` prefix.
+  - r5 nevertheless reproduced the first-execution BFC failure at `0.70`: stages 1 and 2 requested `5.62 GiB` per GPU and stage 3 requested `6.14 GiB` per GPU. No W&B history row was produced; the run is `crashed`. Iris began an unchanged retry, so the parent prefix was stopped. Parent and child are terminal killed with no live allocation.
+  - r6 reproduced the same first-execution failure at `0.80` at `03:50:37Z`. Every GPU on stages 1 and 2 failed a `5.62 GiB` allocation (`6039812864` bytes); every GPU on stage 3 failed a `6.14 GiB` allocation (`6595557376` bytes). Rank 1, rank 2, and rank 3 then segfaulted in the DIME transfer path; the other coscheduled rank failures were secondary.
+  - r6 produced no loss, duration, throughput, or MFU row. Iris started a second attempt; only `/dlwh/iris-run-job-20260727-034419` and its child were stopped. Both are terminal killed, the child records one failed attempt followed by the stopped retry, and no live allocation remains.
+- Interpretation:
+  - Stable phase callables remove microbatch-scaled compilation but do not materially lower first-execution peak buffer residency.
+  - Raising the XLA fraction from `0.70` to `0.80` is a hard negative: it leaves the failed allocation sizes and stage pattern unchanged. A further fraction-only retry is not justified.
+  - The next memory experiment must reduce live task/transfer buffers or activation residency. It should measure retained transfer and task output buffers before changing schedule capacity, rematerialization, or batch shape.
+- Next action:
+  - Stop before L24. Inspect explicit-MPMD task and DIME buffer lifetimes, prioritizing grouped forward/backward outputs and transfer reuse. Require a quantified memory reduction before another matched L8 run.
