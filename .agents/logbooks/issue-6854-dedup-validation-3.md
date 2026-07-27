@@ -478,3 +478,44 @@ are recorded in the previous volumes.
   workers remain running at batch priority. The durable code/logbook commit
   before this entry is
   `9e1b676311a903f1f297629bf1b02a20e643bd11`.
+
+## 2026-07-27 18:52 UTC — 304,060-pair reconciliation
+
+- Audit jobs
+  `/rav/rav-datakit-6854-audit-fast-1832-v1419` through
+  `/rav/rav-datakit-6854-audit-fast-1851-v1426` independently reread 23 new
+  completion markers containing 2,944 baseline pairs. They reproduce 1,984
+  false positives and 960 true duplicates, with no unresolved outcomes and no
+  invalid judgments. The audited total is 304,316 pairs. The next frontiers are
+  p0 `(13, 0)`, p1 `(44, 2176)`, p2 `(77, 0)`, and p3 `(109, 1024)`.
+- `/rav/rav-datakit-6854-reconcile-manual-1849-v1425` scanned the stable prefix
+  available at 18:50 UTC: 2,395 checkpoints and 304,060 pairs. All 362
+  unresolved model outcomes have exact manual coverage. Applying 76
+  false-positive and 286 true-duplicate manual decisions gives:
+
+  | Arm | Pairs | False positives | True duplicates | False-positive rate |
+  | --- | ---: | ---: | ---: | ---: |
+  | baseline | 242,457 | 154,144 | 88,313 | 63.5758% |
+  | treatment | 61,603 | 31,950 | 29,653 | 51.8644% |
+  | combined | 304,060 | 186,094 | 117,966 | 61.2031% |
+
+  The baseline-minus-treatment gap is 11.7115 percentage points. This snapshot
+  covers 40.2579% of the 755,281 semantic candidates. Its immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-1848.json`
+  with SHA-256
+  `9f1c89984ba0433f50e6780d3e22bf0f2018e2193fa8d9414a8d903fbe5f1243`.
+  The semantic, manual-marker, and manual-Parquet path-manifest SHA-256 values
+  are
+  `450360157136893a0d24cc53f0928d2784f083e4030185b9f7d319f3f5036c6e`,
+  `082eec344c6b1d66e57e117059a57aee16566fbf3223aaeb7b8bf5480d3491b8`,
+  and
+  `20e2b3bd822e12d7b0f7f134a200c66f77a51a9bedacb9ea5b6badcc2795c8fe`.
+  There are no missing manual outcomes. Historical shadow-record counts remain
+  unchanged: two same-label duplicate manual Parquet keys, three obsolete
+  outcome-hash bindings, and 146 orphan manual Parquets; marker-bound records
+  remain internally consistent.
+- The first reconciliation attempt,
+  `/rav/rav-datakit-6854-reconcile-manual-1848-v1424`, exhausted the 1 GB
+  default memory during the manifest scan before writing output. The successful
+  retry used four CPUs and 16 GB. The four semantic-review parents, brokers, and
+  2-H100 workers remain healthy at batch priority.
