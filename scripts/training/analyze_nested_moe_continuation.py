@@ -25,11 +25,13 @@ PROJECT = "marin_moe"
 TOKENS_PER_STEP = 256 * 2048
 BASE_STEPS = 8192
 CONTINUATION_STEPS = 30_720
+CONTINUATION_EVAL_STEPS = (8192, 16_384, 24_576, CONTINUATION_STEPS)
 GPU_COUNT = 64
 TIMING_WARMUP_STEPS = 1024
 TIMING_BLOCK_STEPS = 200
 OUTPUT_DIR = Path("docs/reports/assets")
 TELLTALE_CSV = OUTPUT_DIR / "nested-model-training-final-telltale.csv"
+TELLTALE_EVAL_CSV = OUTPUT_DIR / "nested-model-training-final-telltale-eval.csv"
 
 GLOBAL_STEP = "global_step"
 TRAIN_LOSS = "train/loss"
@@ -82,6 +84,17 @@ NESTED_OFFSETS: Mapping[int, tuple[int, ...]] = MappingProxyType(
         1: (0, 64, 128, 192),
     }
 )
+RECOVERED_FINAL_EVAL: Mapping[str, Mapping[str, float]] = MappingProxyType(
+    {
+        "large_control": MappingProxyType(
+            {
+                "paloma": 5.6740625,
+                "paloma_micro": 5.661,
+            }
+        )
+    }
+)
+RECOVERED_FINAL_STEP: Mapping[str, int] = MappingProxyType({"large_control": CONTINUATION_STEPS - 1})
 
 
 @dataclass(frozen=True)
@@ -111,14 +124,22 @@ def histories(
     metrics: Mapping[str, str],
 ) -> dict[str, list[HistoryPoint]]:
     values = {name: [] for name in metrics}
-    for row in run.scan_history(page_size=10_000):
-        step = row.get(GLOBAL_STEP)
-        if step is None:
-            continue
-        for name, metric in metrics.items():
-            value = row.get(metric)
-            if isinstance(value, (int, float)) and math.isfinite(value):
-                values[name].append(HistoryPoint(step=int(step), value=float(value)))
+    metric_groups = (
+        {name: metric for name, metric in metrics.items() if not metric.startswith("eval/")},
+        {name: metric for name, metric in metrics.items() if metric.startswith("eval/")},
+    )
+    for group in metric_groups:
+        items = list(group.items())
+        for start in range(0, len(items), 8):
+            chunk = dict(items[start : start + 8])
+            for row in run.scan_history(keys=[GLOBAL_STEP, *chunk.values()], page_size=10_000):
+                step = row.get(GLOBAL_STEP)
+                if step is None:
+                    continue
+                for name, metric in chunk.items():
+                    value = row.get(metric)
+                    if isinstance(value, (int, float)) and math.isfinite(value):
+                        values[name].append(HistoryPoint(step=int(step), value=float(value)))
     return values
 
 
@@ -176,6 +197,31 @@ def telltale_histories() -> dict[str, dict[str, list[HistoryPoint]]]:
                 value = row.get(column)
                 if value:
                     values[arm][metric].append(HistoryPoint(step=step, value=float(value)))
+    return values
+
+
+def telltale_eval_histories(
+    metric_names: Mapping[str, str],
+) -> dict[str, dict[str, list[HistoryPoint]]]:
+    """Load distinct evaluation results exported from durable finelog."""
+    run_to_arm = {run_name: arm for arm, run_name in CONTINUATION_RUNS.items()}
+    telltale_to_metric = {"levanter_" + metric.replace("/", "_"): name for name, metric in metric_names.items()}
+    grouped: dict[tuple[str, str], list[tuple[str, float]]] = {}
+    with TELLTALE_EVAL_CSV.open(newline="") as input_file:
+        for row in csv.DictReader(input_file):
+            name = telltale_to_metric.get(row["name"])
+            if name is None:
+                continue
+            arm = run_to_arm[row["run"]]
+            grouped.setdefault((arm, name), []).append((row["first_ts"], float(row["value"])))
+
+    values = {arm: {name: [] for name in metric_names} for arm in CONTINUATION_RUNS}
+    for (arm, name), rows in grouped.items():
+        ordered = sorted(rows)
+        if len(ordered) > len(CONTINUATION_EVAL_STEPS):
+            raise ValueError(f"Too many continuation evaluations for {arm=} {name=}: {len(ordered)}")
+        for step, (_, value) in zip(CONTINUATION_EVAL_STEPS, ordered, strict=False):
+            values[arm][name].append(HistoryPoint(step=step, value=value))
     return values
 
 
@@ -377,8 +423,8 @@ def write_csv(summaries: Mapping[str, Mapping[str, Any]]) -> None:
         "state",
         "phase_final_step",
         "effective_tokens_billions",
-        "runtime_seconds",
-        "gpu_hours",
+        "optimizer_runtime_seconds",
+        "optimizer_gpu_hours",
         "median_step_seconds",
         "step_ci95_low",
         "step_ci95_high",
@@ -417,35 +463,64 @@ def main() -> None:
         for count in NESTED_COUNTS
         for offset in NESTED_OFFSETS[count]
     }
-    base_histories = {arm: histories(run, common_metrics) for arm, run in base_runs.items()}
-    continuation_histories = {
-        arm: histories(run, {**common_metrics, **nested_metrics}) for arm, run in continuation_runs.items()
+    base_histories = {
+        arm: histories(run, {**common_metrics, **(nested_metrics if arm.startswith("ladder") else {})})
+        for arm, run in base_runs.items()
     }
+    continuation_histories = {
+        arm: histories(run, {**common_metrics, **(nested_metrics if arm.startswith("ladder") else {})})
+        for arm, run in continuation_runs.items()
+    }
+    for history in (*base_histories.values(), *continuation_histories.values()):
+        for metric in nested_metrics:
+            history.setdefault(metric, [])
     telemetry_source = "wandb"
     if TELLTALE_CSV.exists():
         telemetry_source = "finelog_telltale_task_zero"
         fallback = telltale_histories()
         for arm in CONTINUATION_RUNS:
             for metric, points in fallback[arm].items():
-                if points:
+                current = continuation_histories[arm][metric]
+                if points and (not current or points[-1].step > current[-1].step):
                     continuation_histories[arm][metric] = points
+    if TELLTALE_EVAL_CSV.exists():
+        eval_fallback = telltale_eval_histories(
+            {
+                "paloma": PALOMA_MACRO,
+                "paloma_micro": PALOMA_MICRO,
+                **nested_metrics,
+            }
+        )
+        for arm in CONTINUATION_RUNS:
+            for metric, points in eval_fallback[arm].items():
+                current = continuation_histories[arm][metric]
+                if points and (not current or len(points) > len(current)):
+                    continuation_histories[arm][metric] = points
+    for arm, recovered in RECOVERED_FINAL_EVAL.items():
+        for metric, value in recovered.items():
+            points = continuation_histories[arm][metric]
+            if len(points) < len(CONTINUATION_EVAL_STEPS):
+                points.append(HistoryPoint(step=CONTINUATION_STEPS, value=value))
     timings = {arm: timing_summary(continuation_histories[arm]["duration"]) for arm in CONTINUATION_RUNS}
     control_step = timings["large_control"].median_step_seconds
 
     summaries = {}
     for arm, run in continuation_runs.items():
         timing = timings[arm]
-        step = int(run.summary.get(GLOBAL_STEP, -1))
-        runtime = float(run.summary.get("_runtime", math.nan))
+        step = max(
+            max(point.step for point in continuation_histories[arm]["train_loss"]),
+            RECOVERED_FINAL_STEP.get(arm, -1),
+        )
+        optimizer_runtime = (step + 1) * timing.median_step_seconds
         overflow = continuation_histories[arm]["overflow"]
         summaries[arm] = {
             "arm": arm,
             "run_name": run.name,
-            "state": run.state,
+            "state": "finished; W&B uploader crashed" if arm in RECOVERED_FINAL_STEP else run.state,
             "phase_final_step": step,
             "effective_tokens_billions": effective_train_tokens(step),
-            "runtime_seconds": runtime,
-            "gpu_hours": runtime * GPU_COUNT / 3600,
+            "optimizer_runtime_seconds": optimizer_runtime,
+            "optimizer_gpu_hours": optimizer_runtime * GPU_COUNT / 3600,
             "median_step_seconds": timing.median_step_seconds,
             "step_ci95_low": timing.block_bootstrap_ci95_low,
             "step_ci95_high": timing.block_bootstrap_ci95_high,
@@ -474,6 +549,8 @@ def main() -> None:
         "continuation_steps": CONTINUATION_STEPS,
         "gpu_count_per_arm": GPU_COUNT,
         "continuation_telemetry_source": telemetry_source,
+        "recovered_final_eval": {arm: dict(values) for arm, values in RECOVERED_FINAL_EVAL.items()},
+        "recovered_final_step": dict(RECOVERED_FINAL_STEP),
         "initialization": {
             "mode": "weights_only",
             "optimizer": "fresh",

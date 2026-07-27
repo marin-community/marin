@@ -866,3 +866,478 @@ launch:
 - This is a reporting-path incident, not an architecture or training failure.
   Finelog is sufficient for the continuous cost series even if W&B repair
   fails.
+
+### 2026-07-27 18:12 - Fixed E16 ⊂ E128 ⊂ E256 amendment launched
+
+- User correction: the intended breakout architecture is a true fixed nested
+  chain, not rotation across every expert coset. The rotating run remains
+  useful for testing structured regularization but is not expected to produce
+  well-trained individual miniature checkpoints.
+- Frozen treatment before observing any fixed-chain metrics:
+  - logical E16 is always the same subset of logical E128, which is always the
+    same subset of E256;
+  - physical E16 uses expert indices `{0,16,...,240}` and physical E128 uses
+    even indices, keeping both subsets balanced across the 64-way expert axis;
+  - extraction compacts these physical sets into conventional logical
+    `0..15` and `0..127` checkpoints;
+  - restricted rows alternate E128 and E16; unrestricted rows use E256;
+  - fixed25 restricts 25% of rows and fixed50 restricts 50%;
+  - both treatments initialize from the E256 control's immutable `r25`
+    step-8,192 weights, then use the same fresh optimizer, 512-step warmup,
+    0.1x peak learning rate, data seed, batch, hardware, capacity, and
+    30,720-update budget as the concurrent E256 continuation control;
+  - Paloma evaluates full E256, fixed E128, and fixed E16 at phase steps
+    8,192, 16,384, 24,576, and 30,720.
+- Hypothesis: fixed-chain training will improve each extractable subset
+  materially relative to the rotating offset-zero checkpoint, at the cost of
+  a smaller full-model regularization benefit. Promote only if the fixed full
+  model remains competitive with E256, routing overflow remains below 1% at
+  the evaluation endpoints, and steady-state step overhead remains below 10%.
+- Implementation commit: `1aa735b277`. Focused fixed-chain eligibility and
+  launcher tests passed, along with changed-file lint and Pyrefly.
+- Submitted through `marin` at batch priority to `cw-us-east-08a`:
+  - `/power/nest-moe-fixed25-r32-coord`;
+  - `/power/nest-moe-fixed50-r32-coord`.
+
+### 2026-07-27 18:25 - Continuation Paloma diagnosis and fixed25 retry
+
+- The first continuation gate increased absolute Paloma macro loss from
+  `5.480636` to `5.597265` for E256 and from `5.455853` to `5.494336` for
+  standalone E128. The increase is therefore not specific to nested routing.
+- E128 worsened on 11 of 16 fixed Paloma domains. The paired domain delta had
+  mean `+0.03848` and median `+0.03259`; wikitext, manosphere, and the Dolma
+  subreddit slice had the largest increases. This is broader than a single
+  macro-average outlier.
+- The continuation is not a schedule-continuous training curve. It resets
+  MuonH and Adam moments, restarts the SlimPajama stream, and uses a new
+  30,720-step linear schedule. At phase step 8,192, MuonH LR was
+  `0.000298781`, 1.52x the original step-8,192 endpoint LR `0.000196961`.
+- The original full proxy also overrode the heuristic's intended 1% warmup
+  with five steps. Batch accounting is correct at 524,288 tokens per update,
+  and the MuonH parameter groups and fitted peak rates match the launcher
+  configuration, but the absolute continuation should not be used for a
+  scaling-law quality projection.
+- Paired architecture deltas remain interpretable because all continuation
+  controls and treatments share optimizer reset, data replay, batch,
+  precision, and LR schedule. The fixed-chain arms remain matched to the E256
+  continuation for that reason.
+- Fixed50 initialized and passed its 512-step warmup. Fixed25 failed before
+  model initialization when one worker inferred `num_slices=3` for 64
+  devices. The terminal attempt had no W&B run, checkpoint, or optimizer
+  update. It was resubmitted without scientific changes as
+  `/power/nest-moe-fixed25-r33-coord`, retaining the canonical
+  `fixed16b-r32` run and output identity.
+
+### 2026-07-27 18:27 - Fixed-chain routing-capacity amendment
+
+- Fixed50 reached 8.7% assignment overflow by step 1,840. The run was stopped
+  before its first quality gate. The fixed25 topology retry was also stopped
+  before model initialization completed.
+- Cause: EP=64 stores four consecutive experts per rank. E128 is evenly
+  represented across all ranks, but fixed E16 occupies only 16 of the 64
+  expert ranks. With half the rows restricted and restricted rows alternating
+  E128/E16, an E16-bearing rank receives about 1.75x average rank traffic.
+  Capacity factor 1.25 necessarily clips those assignments. This is a
+  topology/capacity property of true fixed nesting, not random router
+  imbalance.
+- Amendment frozen before replacement metrics:
+  - use expert axis 16 on the same 64 GPUs, leaving four-way data parallelism;
+  - each EP rank then owns one E16 expert, eight E128 experts, and sixteen E256
+    experts, making every routing mode rank-balanced;
+  - run a matched E256, fixed25, and fixed50 pilot for 600 updates from the
+    immutable E256 step-8,192 weights;
+  - keep capacity factor 1.25, batch 256, sequence length 2,048, fresh
+    optimizer, 0.1x peak LR, 512-step warmup, full fp32, and seed 0;
+  - promote only if all arms remain finite through the warmup peak, endpoint
+    overflow is below 1%, and treatment median step overhead versus the EP=16
+    E256 control is below 10%.
+- The pilot is a topology and throughput gate, not a quality result. Promoted
+  long arms restart from the common source weights.
+
+The promoted fixed-chain experiment will instead restart from scratch to avoid
+carrying the weights-only continuation confound into the primary architecture
+result:
+
+- E256, fixed25, and fixed50 use identical scratch initialization and data
+  seed, EP=16, batch 256, sequence length 2,048, capacity factor 1.25, and
+  full fp32;
+- train for 8,192 updates, or 4.295B tokens, which stays within the nominal 6B
+  corpus before replay;
+- use the heuristic MuonH and Adam peak rates with 82 warmup updates, the
+  rounded 1% warmup documented by the May recipe;
+- evaluate at steps 2,048, 4,096, 6,144, and 8,192; fixed arms evaluate full
+  E256, fixed E128, and fixed E16;
+- compare treatment quality and step cost only against the concurrent EP=16
+  E256 control. The rotating 20.4B continuation remains a separate
+  long-horizon paired sensitivity analysis.
+
+### 2026-07-27 18:36 - EP=16 topology gate passed
+
+- All three 600-step pilots remained finite through the 512-step warmup peak.
+- Median step duration after step 100:
+  - E256 `156.715 ms`;
+  - fixed25 `158.379 ms`, `+1.061%`;
+  - fixed50 `157.059 ms`, `+0.219%`.
+- Median capacity overflow after step 512 was `0.0050%`, `0.0252%`, and
+  `0.0938%`; the largest observed values were `0.128%`, `0.162%`, and
+  `0.229%`.
+- EP=16 therefore passes the less-than-1% overflow and less-than-10% treatment
+  overhead gates. The three promoted scratch arms may launch with the frozen
+  8,192-step configuration.
+
+### 2026-07-27 18:43 - Fixed50 scratch optimizer gate
+
+- The first clean scratch wave used the heuristic peak LR and an 82-step
+  warmup. E256 and fixed25 remained finite past steps 200 and 180. Fixed50
+  logged finite losses through step 2, then the training loop detected a NaN
+  on the next update and stopped. Iris marked the child successful because
+  the loop handles NaN as a clean early return; the run is scientifically
+  failed.
+- Fixed50 overflow was zero at the finite updates. This is not recurrence of
+  the EP=64 capacity problem.
+- E256 and fixed25 were stopped before their first Paloma evaluation so the
+  primary comparison does not mix schedules.
+- Amendment frozen before retry metrics: run a 600-step fixed50 scratch gate
+  at the same full peak LR with a 512-step warmup. If it remains finite through
+  the peak, restart all three long arms with that schedule. If it fails,
+  fixed50 fails the optimization gate and only a matched E256/fixed25 pair
+  advances.
+
+### 2026-07-27 18:52 - Fixed50 optimizer gate passed
+
+- The 512-step warmup pilot reached the full MuonH peak learning rate
+  `0.0039392302` at step 512 with finite loss `5.8143`.
+- Routing overflow was `0.278%` at the peak. The earlier scratch NaN was
+  therefore an optimization-ramp failure, not recurrence of the EP=64 routing
+  hotspot.
+- Promoted three matched scratch arms with 8,192 updates, 4.295B tokens,
+  expert axis 16, capacity factor 1.25, batch 256, sequence length 2,048, full
+  fp32, reference attention, seed 0, heuristic peak rates, a 512-step warmup,
+  and Paloma every 2,048 updates:
+  - `/power/nest-moe-fixedep16-large-w512-cost-r37-coord`;
+  - `/power/nest-moe-fixedep16-fixed25-w512-cost-r37-coord`;
+  - `/power/nest-moe-fixedep16-fixed50-w512-cost-r37-coord`.
+
+### 2026-07-27 19:04 - Fixed-chain QB correction
+
+- The first promoted wave was stopped before evaluation. At roughly matched
+  early steps, fixed50's median router-bias norm reached `469`, versus `37`
+  for E256 and `36` for fixed25. The earlier 600-step fixed50 scratch pilot
+  had reached roughly `1,803`.
+- Cause: QB used one uniform target count,
+  `local_tokens * top_k / 256`, for every expert. True nested eligibility
+  requires different legitimate assignment totals. An E16 core expert is
+  eligible on full, E128, and E16 rows, while an outer E256 expert is eligible
+  only on full rows. The impossible uniform target continually increased
+  biases for ineligible experts and distorted subsequent full-row routing.
+- Corrected QB computes the target for expert `e` as the sum, over tokens where
+  `e` is eligible, of `active_top_k / eligible_expert_count`. The local
+  quantile now uses that per-expert target. A deterministic fixed-chain test
+  produces exact counts `[16, 4, 8, 4, 16, 4, 8, 4]`, which sum to the number
+  of assignments.
+- Launched a new 600-step fixed50 scratch gate:
+  `/power/nest-moe-fixedep16-qbfix-w512-pilot-r38-coord`. Promotion additionally
+  requires router-bias norms to remain comparable in order of magnitude to the
+  untreated control.
+
+### 2026-07-27 19:05 - Second rotating-ladder continuation gate
+
+- At 12.885B effective tokens, full-mode Paloma macro loss was:
+  - E256 `5.59614`;
+  - E128 `5.53563`;
+  - ladder25 `5.43270`, or `-0.16344` versus E256;
+  - ladder50 `5.58540`, or `-0.01074` versus E256.
+- The E256 control was nearly unchanged from its first continuation gate
+  (`-0.00112`). E128 rose another `+0.04130`; 9 of 16 domains worsened, but
+  the median domain delta was only `+0.00560`.
+- Ladder25 retains a material full-model advantage at the second gate.
+  Ladder50's advantage has narrowed substantially. All are still
+  weights-only continuations with reset optimizer and data streams, so only
+  the paired differences are used.
+
+### 2026-07-27 19:21 - Matched no-QB fixed-chain gate launched
+
+- The eligibility-weighted QB pilot failed before its first optimizer update
+  on four consecutive attempts. Rank 0 exited with code 1 during first-step
+  compilation/runtime; the persisted diagnostic contained only the secondary
+  XLA coordination-service cancellation. No loss, LR, overflow, or parameter
+  update was emitted. This is a systems failure of that QB implementation, not
+  architecture-quality evidence.
+- Decision: use an explicit `router_balance_mode=none` for the discovery
+  experiment. QB remains the default for existing Grug arms. With balancing
+  disabled, every layer emits zero pending QB beta and router biases remain
+  zero. A compact fixed-eligibility forward test verifies this behavior.
+- The matched scratch arms use the same no-QB mode, EP=16, capacity factor
+  1.25, heuristic MuonH/Adam peak rates, 512-step warmup, batch 256, sequence
+  length 2,048, full fp32, reference attention, seed 0, 8,192 updates, and
+  Paloma every 2,048 updates:
+  - `/power/nest-moe-fixedep16-large-noqb-w512-cost-r39-coord`;
+  - `/power/nest-moe-fixedep16-fixed25-noqb-w512-cost-r39-coord`;
+  - `/power/nest-moe-fixedep16-fixed50-noqb-w512-cost-r39-coord`.
+- Gate: all three must remain finite through the warmup peak, endpoint
+  overflow must stay below 1%, and treatment median step overhead versus the
+  concurrent E256 control must remain below 10%. Quality comparisons are
+  matched within r39; r39 is not compared absolutely to the earlier QB runs.
+
+### 2026-07-27 19:30 - No-QB gate failed; conditioned auxiliary gate launched
+
+- The r39 no-QB gate was stopped before update 600. Capacity overflow reached
+  `50.14%` for E256 at update 571, `16.77%` for fixed25 at update 499, and
+  `1.91%` for fixed50 at update 344. Router-bias norms remained exactly zero,
+  confirming uncontrolled router collapse rather than recurrence of the QB
+  target mismatch.
+- Added an eligibility-conditioned auxiliary load-balance loss. It computes
+  the standard assignment-frequency/probability loss separately for full E256,
+  fixed E128, and fixed E16 rows, then averages those losses by token count.
+  This asks each routing mode to balance only across experts that are eligible
+  in that mode.
+- A numerical regression has balanced E256 and E2 groups each contribute their
+  independent optimum of `1.0`. A nested train step lowers with coefficient
+  `0.01`; focused tests and changed-file lint/type checks pass.
+- Launched matched 600-update r40 gates with coefficient `0.01`, otherwise
+  preserving the r39 optimizer, topology, data, and capacity configuration:
+  - `/power/nest-moe-fixedep16-large-eaux01-w512-pilot-r40-coord`;
+  - `/power/nest-moe-fixedep16-fixed25-eaux01-w512-pilot-r40-coord`;
+  - `/power/nest-moe-fixedep16-fixed50-eaux01-w512-pilot-r40-coord`.
+
+### 2026-07-27 19:45 - Conditioned-router coefficient bracket
+
+- The coefficient `0.01` r40 gate remained finite through update 599 and
+  controlled the no-QB collapse, but missed the frozen endpoint-overflow gate:
+  fixed25 ended at `1.235%` and fixed50 at `0.940%`. The E256 arm encountered
+  a retry/W&B lifecycle fault before yielding a clean matched endpoint.
+- A matched coefficient `0.02` r42 diagnostic improved endpoint overflow to
+  `0.132%` for E256 and `0.037%` for fixed50. Fixed25 instead became
+  non-finite at update 3, so r42 failed the optimization gate.
+- Launched one final bottleneck-arm bracket at coefficient `0.015`, preserving
+  the r42 topology, optimizer, data, seed, warmup, precision, and capacity:
+  `/power/nest-moe-fixedep16-fixed25-eaux015-w512-pilot-r43-coord`.
+- If r43 remains finite and ends below `1%` overflow, promote all three
+  matched arms at coefficient `0.015`. Otherwise stop controller tuning and
+  report fixed nesting as blocked on a narrow or absent routing-control window
+  in this proxy configuration.
+
+### 2026-07-27 19:53 - Fixed-chain quality experiment promoted
+
+- The coefficient `0.015` fixed25 r43 pilot passed. It reached update 599 with
+  finite loss `5.6194`, cross-entropy `5.5601`, auxiliary contribution
+  `0.05929`, and endpoint capacity overflow `0.0717%`. It remained finite
+  through the full Muon peak at update 512.
+- Promoted three matched scratch arms for 8,192 updates, or 4.295B tokens,
+  using coefficient `0.015`, expert axis 16, capacity factor 1.25, batch 256,
+  sequence length 2,048, full fp32, reference attention, seed 0, 512 warmup
+  updates, and Paloma every 2,048 updates:
+  - `/power/nest-moe-fixedep16-large-eaux015-w512-cost-r44-coord`;
+  - `/power/nest-moe-fixedep16-fixed25-eaux015-w512-cost-r44-coord`;
+  - `/power/nest-moe-fixedep16-fixed50-eaux015-w512-cost-r44-coord`.
+- Fixed arms evaluate full E256 plus extractable fixed E128 and E16 modes. All
+  quality and throughput comparisons use the concurrent r44 E256 control.
+
+### 2026-07-27 20:03 - Long auxiliary-controller gate failed
+
+- The promoted r44 arms crossed the 512-step peak with finite loss, then
+  assignment overflow rose to `14.50%` for E256, `14.39%` for fixed25, and
+  `14.19%` for fixed50 by updates 1,189--1,219.
+- The 600-step coefficient pilots had cooled from peak immediately after
+  update 512. They did not exercise the sustained high-LR interval in the
+  8,192-step schedule. The promotion gate was therefore too short for the
+  schedule it was intended to validate.
+- All three arms were stopped before the first Paloma evaluation. This is a
+  common eligibility-aux controller failure, not evidence about fixed nesting
+  quality.
+- Do not continue coefficient sweeps. The only bounded follow-up considered is
+  separate QB bias state for E256, E128, and E16 modes, which directly removes
+  the shared-target conflict. If that cannot be implemented and gated cleanly
+  in the remaining window, report fixed nesting as router-controller blocked.
+
+### 2026-07-27 20:12 - Eligibility-specific QB launched
+
+- Added an `eligibility_qb` controller with separate QB bias rows for E256,
+  E128, and E16. Each row computes a uniform assignment quantile only from
+  tokens in that routing mode. The full model applies the E256 row;
+  extraction compacts the matching E128 or E16 row with its expert subset.
+- Ordinary QB retains its existing one-dimensional bias state. The focused
+  contracts verify finite group betas, zero beta for ineligible experts,
+  correct extraction, and train-step lowering. Six focused tests pass. The
+  complete variant-contract file has 35 passes, two skips, and one unrelated
+  dense-base CPU explicit-sharding failure.
+- Launched matched 8,192-step scratch arms:
+  - `/power/nest-moe-fixedep16-large-eqb-w512-cost-r45-coord`;
+  - `/power/nest-moe-fixedep16-fixed25-eqb-w512-cost-r45-coord`;
+  - `/power/nest-moe-fixedep16-fixed50-eqb-w512-cost-r45-coord`.
+- Updates 0--1,600 are the controller gate. The arms continue in place only
+  if all are finite, remain below 1% overflow through the sustained high-LR
+  interval, and stay below 10% treatment step overhead.
+
+### 2026-07-27 20:18 - Eligibility-QB sharding repair and clean relaunch
+
+- The first r45 attempt failed before update 0. Building each group beta by
+  taking `router_logits[0]` produced a length-one slice from a tensor sharded
+  over the 64-device data/expert mesh. Explicit sharding correctly rejected
+  that output shape.
+- This failure produced no loss, routing, or architecture-quality observation.
+  The stale retries were stopped.
+- Replaced the sharded slice with a directly allocated 256-expert vector before
+  scattering the compact group beta. Changed-file lint and the focused
+  eligibility-QB contract pass.
+- Relaunched the same three matched 8,192-update schedules under fresh r46 run
+  identities:
+  - `/power/nest-moe-fixedep16-large-eqb-w512-cost-r46-coord`;
+  - `/power/nest-moe-fixedep16-fixed25-eqb-w512-cost-r46-coord`;
+  - `/power/nest-moe-fixedep16-fixed50-eqb-w512-cost-r46-coord`.
+- The preregistered sustained-peak controller gate remains updates 0--1,600.
+  No data, initialization, optimizer, LR, topology, capacity, or evaluation
+  setting changed.
+
+### 2026-07-27 20:22 - Eligibility-QB token gather repair
+
+- r46 reached the compiled train step but failed before update 0. Selecting a
+  routing-mode bias row for every token left the gather output sharding
+  ambiguous to JAX. No optimizer or routing observation was produced.
+- Declared the token-by-expert gather output as sharded over the batch mesh
+  axes and replicated over experts. Lint and the focused eligibility-QB
+  lowering test pass.
+- Stopped all r46 retries and launched the unchanged arms as r47. This is the
+  final controller-lowering retry in this investigation; another
+  controller-specific lowering failure ends the fixed-chain arm as blocked.
+
+### 2026-07-27 20:28 - First valid eligibility-QB optimization
+
+- r47 compiled and entered training. E256, fixed25, and fixed50 reached updates
+  492, 441, and 447 with finite loss. Instantaneous overflow was zero,
+  `0.0016%`, and `0.0018%`.
+- Through roughly update 700, post-warmup median step time was 160.16 ms for
+  E256, 159.70 ms for fixed25, and 162.61 ms for fixed50. These preliminary
+  deltas are `-0.29%` and `+1.53%`; the frozen cost decision waits for update
+  1,600.
+- E256 briefly reached `1.063%` overflow at update 293 before returning to
+  zero. Fixed25 and fixed50 maxima were `0.529%` and `0.336%`. The strict
+  below-1% threshold is therefore technically missed by the untreated control,
+  but there is no sustained collapse and no treatment-specific failure. Keep
+  running for the discovery objective and report the transient explicitly.
+
+### 2026-07-27 20:28 - Paloma rise diagnosis
+
+- In the rotating E256 continuation, SlimPajama validation improved
+  `4.69321 -> 4.66644 -> 4.64010` across the 8.59B, 12.89B, and 17.18B gates.
+  Paloma macro moved `5.59726 -> 5.59614 -> 5.64185`; micro moved
+  `5.57194 -> 5.57506 -> 5.62366`.
+- The model continues to improve on its training distribution while degrading
+  out of distribution. This rules out generic optimizer divergence as the
+  primary explanation and points to the weights-only optimizer/data restart,
+  finite-corpus replay, and narrow fixed Paloma slices.
+- The original proxy used a five-update warmup and is not an optimizer-quality
+  reference. r47 uses the heuristic MuonH/Adam peak rates and a matched
+  512-update warmup in every scratch arm.
+
+### 2026-07-27 20:33 - Eligibility-QB sustained-peak gate passed
+
+- All r47 arms passed update 1,600 with finite loss and gradients.
+- Over updates 512--1,600, median step time and maximum overflow were:
+  - E256: `159.94 ms`, `0.0480%`;
+  - fixed25: `159.80 ms`, `0.0367%`;
+  - fixed50: `162.50 ms`, `0.0489%`.
+- The fixed25 and fixed50 step deltas are `-0.084%` and `+1.60%`. Continue all
+  arms to the first Paloma gate at update 2,048 and the 4.295B-token endpoint.
+- The earlier one-step E256-control excursion to `1.063%` remains a disclosed
+  formal threshold miss. It was not sustained and did not occur in either
+  fixed-chain treatment, so it does not block the discovery objective.
+
+### 2026-07-27 20:36 - First fixed-chain quality gate
+
+- At 1.074B tokens, full-mode Paloma was `5.45031` for E256, `5.47354` for
+  fixed25, and `5.72693` for fixed50. Treatment deltas are `+0.02323` and
+  `+0.27662`.
+- Fixed25 extracted E128 and E16 were `5.54035` and `5.77017`; fixed50 were
+  `5.59894` and `5.75990`.
+- Fixed25 is the leading branch: no measurable step cost, viable fixed
+  submodels, and only a small early full-model penalty. Fixed50 gains only
+  `0.01026` on E16 while giving up `0.27662` on the full model.
+- The corrected E256 control is `0.17255` better than the original r25 E256 at
+  the same token count. This is not a pure warmup ablation because EP topology
+  and QB implementation also changed, but it confirms that the original
+  five-update-warmup absolute curve is not an optimizer-quality reference.
+
+### 2026-07-27 20:38 - Rotating continuation endpoint
+
+- All four r31 arms completed 30,720 continuation updates, or 20.401B
+  effective tokens.
+- Final full-mode Paloma was approximately `5.674` for E256, `5.70816` for
+  E128, `5.45195` for ladder25, and `5.56803` for ladder50. The E256 final
+  evaluator log also reports micro `5.661` and SlimPajama validation `4.602`;
+  its crashed W&B uploader did not preserve exact final scalars.
+- Domain breadth rejects a general-quality interpretation:
+  - E128 improved on 9/16, median `-0.00461`;
+  - ladder25 improved on 7/16, median `+0.01741`;
+  - ladder50 improved on 6/16, median `+0.16814`.
+- Ladder macro gains remain concentrated in programming languages, gab, and
+  TwitterAAE. Rotating miniatures worsened: ladder25 E128 offset 0 reached
+  `6.13170`, ladder50 `5.68603`; final E32/E8/E1 values were above `7.27`.
+
+### 2026-07-27 20:45 - Second fixed-chain quality gate
+
+- At 2.147B tokens, full-mode Paloma was `5.30234` for E256, `5.28739` for
+  fixed25, and `6.02401` for fixed50.
+- fixed25 now improves the full model by `0.01496`; its E128 and E16 improve to
+  `5.37677` and `5.49938`.
+- fixed50 falls `0.72167` behind the control; its E128 and E16 are `5.90928`
+  and `5.68742`. Overflow remains zero, so this is not a routing-capacity
+  failure.
+- Promote fixed25 as the only scale-up candidate. Continue fixed50 only to
+  complete the preregistered curve.
+
+### 2026-07-27 20:54 - Third fixed-chain quality gate
+
+- At 3.221B tokens, full-mode Paloma was `5.21788` for E256, `5.18625` for
+  fixed25, and `6.13546` for fixed50.
+- Fixed25 improves full mode by `0.03163`; its fixed E128 and E16 checkpoints
+  improve to `5.23026` and `5.35568`.
+- Fixed50 is `0.91759` behind E256. Its E128 and E16 checkpoints are `6.06548`
+  and `5.72020`.
+- SlimPajama validation tells the same story: E256 `4.73528`, fixed25
+  `4.71905`, fixed50 `5.55067`. The fixed50 reversal is therefore not a
+  Paloma-only distribution artifact.
+- All three arms remain finite with zero instantaneous overflow. The common
+  optimizer is healthy in E256 and fixed25; fixed50's failure is specific to
+  the 50%-restriction objective under this recipe.
+
+### 2026-07-27 21:05 - Fixed-chain endpoint
+
+- All three r47 arms completed 8,192 updates, or 4.295B tokens, without
+  preemption.
+- Full-mode Paloma was `5.17725` for E256, `5.13033` for fixed25, and
+  `6.08237` for fixed50. Fixed25's delta is `-0.04692`; fixed50's is
+  `+0.90512`.
+- Fixed25 extracted E128 and E16 reached `5.18978` and `5.28666`. Fixed50
+  reached `6.01412` and `5.68469`.
+- Fixed25 improved on 12/16 Paloma domains with median delta `-0.04158`.
+  Fixed50 lost on all 16 with median `+0.72534`.
+- SlimPajama validation was `4.64909`, `4.60884`, and `5.45717`, confirming
+  that fixed25's gain and fixed50's failure are not Paloma-only artifacts.
+- Post-update-1,024 median step time was `161.23 ms` for E256, `161.50 ms`
+  for fixed25, and `163.26 ms` for fixed50. Surcharges are `+0.17%` and
+  `+1.26%`.
+- Promote fixed25 to a longer, multi-seed, no-replay proxy with the production
+  expert layout and a direct E128 cooldown. Do not promote fixed50 without
+  separate optimizer tuning.
+
+### 2026-07-27 20:00 - Third rotating-ladder continuation gate
+
+- At 17.180B effective tokens, full-mode Paloma macro loss was:
+  - E256 `5.64185`;
+  - E128 `5.60826`, or `-0.03359` versus E256;
+  - ladder25 `5.44328`, or `-0.19857` versus E256;
+  - ladder50 `5.58798`, or `-0.05386` versus E256.
+- Ladder25's full-model advantage persisted and widened again after narrowing
+  from `-0.19652` at 8.59B to `-0.16344` at 12.89B. Ladder50 likewise
+  recovered from `-0.01074` to `-0.05386`.
+- Absolute checkpoint-to-checkpoint macro movement remains noisy on the fixed
+  one-batch-per-domain Paloma slice. Paired arm deltas at the same checkpoint
+  are the primary signal; domain-level medians are checked before attribution.
+- The domain check materially narrows the macro interpretation:
+  - E128 improved on 10/16 domains with median delta `-0.01635`;
+  - ladder25 improved on 8/16 with median delta `+0.01882`;
+  - ladder50 improved on 5/16 with median delta `+0.20203`.
+- Ladder25's macro advantage is concentrated in programming languages
+  (`-1.921`), gab (`-0.946`), and TwitterAAE (`-0.781`) versus E256. This is a
+  specialization shift, not a broad full-model quality improvement.

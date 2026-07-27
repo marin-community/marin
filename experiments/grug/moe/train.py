@@ -307,7 +307,7 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
         if block.mlp is None:
             continue
         new_bias = -qb_betas[moe_idx]
-        new_bias = new_bias - jnp.mean(new_bias)
+        new_bias = new_bias - jnp.mean(new_bias, axis=-1, keepdims=True)
         new_mlp = eqx.tree_at(lambda m: m.router_bias, block.mlp, new_bias)
         new_blocks[i] = eqx.tree_at(lambda b: b.mlp, block, new_mlp)
         moe_idx += 1
@@ -324,12 +324,13 @@ def initial_state(
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
     num_moe_layers = sum(1 for b in params.blocks if b.mlp is not None)
+    router_bias_shape = next(block.mlp.router_bias.shape for block in params.blocks if block.mlp is not None)
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
         opt_state=optimizer.init(params),
         ema_params=params if ema_beta is not None else None,
-        pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
+        pending_qb_betas=jnp.zeros((num_moe_layers, *router_bias_shape)),
     )
 
 
@@ -371,7 +372,10 @@ def init_nested_weights_from_checkpoint(
         raise ValueError("nested breakout source model must configure nested_expert_count")
 
     num_moe_layers = sum(1 for block in source_model.blocks if block.mlp is not None)
-    source_pending_qb_betas = jnp.zeros((num_moe_layers, source_model.config.num_experts))
+    source_router_bias_shape = next(
+        block.mlp.router_bias.shape for block in source_model.blocks if block.mlp is not None
+    )
+    source_pending_qb_betas = jnp.zeros((num_moe_layers, *source_router_bias_shape))
     exemplar: dict[str, object] = {
         "params": source_model,
         "pending_qb_betas": source_pending_qb_betas,
@@ -388,7 +392,10 @@ def init_nested_weights_from_checkpoint(
     )
     nested_indices = jnp.nonzero(nested_experts, size=source_nested_count)[0]
     loaded_pending_qb_betas = cast(jax.Array, loaded["pending_qb_betas"])
-    extracted_pending_qb_betas = loaded_pending_qb_betas[:, nested_indices]
+    if loaded_pending_qb_betas.ndim == 3:
+        extracted_pending_qb_betas = loaded_pending_qb_betas[:, 1, nested_indices]
+    else:
+        extracted_pending_qb_betas = loaded_pending_qb_betas[:, nested_indices]
 
     updates: dict[str, object] = {
         "params": extracted_model,
@@ -750,9 +757,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
                 jax.block_until_ready(metrics["train/loss"])
 
-                if jnp.isnan(metrics["train/loss"]):
-                    logger.error(f"NaN loss at step {int(state.step)}. Stopping training.")
-                    break
+                if not bool(jnp.isfinite(metrics["train/loss"])):
+                    raise FloatingPointError(f"Non-finite loss at step {int(state.step)}")
                 duration = time.perf_counter() - step_start
                 hook_start = time.perf_counter()
                 with jax.profiler.TraceAnnotation("callbacks"):

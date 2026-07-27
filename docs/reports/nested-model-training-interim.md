@@ -234,7 +234,29 @@ median post-warmup step times of 213.36 ms for E256, 217.61 ms for E128,
 E256, the nested arms were -0.51% and -0.59%; this is evidence of no measurable
 surcharge, not evidence that masking makes the matrix multiply faster.
 
-![Full-mode Paloma through the 4.3B-token phase boundary. This is the
+At the first continuation gate, 8.59B effective tokens, full-mode Paloma was
+5.59726 for E256, 5.49434 for E128, 5.40074 for ladder25, and 5.54477 for
+ladder50. The ladder deltas versus E256 are -0.19652 and -0.05249. The
+full-model regularization signal therefore persists after the optimizer reset.
+
+The absolute continuation values should not be read as a normal scaling curve.
+E256 increased from 5.48064 and E128 increased from 5.45585; E128 worsened on
+11 of 16 fixed Paloma domains, with median delta +0.03259. The continuation
+resets optimizer moments, restarts the finite SlimPajama stream, and creates a
+new LR cycle whose step-8,192 MuonH rate is 1.52x the original terminal rate.
+These common-mode changes do not invalidate paired architecture deltas, but
+they do invalidate an absolute loss-vs-token projection from the spliced
+curve.
+
+The rotating ladder is also not the requested final breakout architecture.
+A separate fixed E16 ⊂ E128 ⊂ E256 experiment uses the same subset at every
+restricted update. Its first EP=64 attempt exposed persistent 8.7% overflow
+because E16 occupied only 16 of 64 expert ranks. The corrected run uses EP=16
+with a matched E256 control, so every nested level is balanced across expert
+ranks. The promoted quality comparison starts all three arms from scratch for
+4.295B tokens with the documented 1% MuonH warmup.
+
+![Full-mode Paloma through the first 8.59B-token continuation gate. This is the
 standardized cross-arm quality comparison; lower is
 better.](assets/nested-model-training-final-paloma.png)
 

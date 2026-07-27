@@ -364,6 +364,17 @@ def test_nested_moe_launcher_builds_fixed_chain(monkeypatch, tmp_path):
     assert config.model.nested_expert_counts == (128, 16)
     assert config.model.nested_subset_schedule is model_module.NestedSubsetSchedule.FIXED
     assert config.model.nested_batch_fraction == 0.25
+    assert config.grug_trainer.expert_axis_size == 16
+
+
+def test_nested_moe_launcher_rejects_unbalanced_fixed_chain_expert_axis(monkeypatch, tmp_path):
+    monkeypatch.setenv("NESTED_ARM", "fixed25")
+    monkeypatch.setenv("NESTED_PHASE", "full")
+    monkeypatch.setenv("NESTED_EXPERT_AXIS", "64")
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+
+    with pytest.raises(ValueError, match="must divide the smallest fixed nested expert count"):
+        launch_nested_experts.build(version="dev")
 
 
 def test_nested_moe_launcher_builds_fresh_optimizer_breakout(monkeypatch, tmp_path):
@@ -691,6 +702,126 @@ def test_grug_moe_extracted_nested_model_matches_restricted_forward():
     assert extracted_model.config.nested_expert_count is None
 
 
+@pytest.mark.parametrize("nested_expert_count", [4, 2])
+def test_grug_moe_fixed_chain_extraction_matches_restricted_forward(nested_expert_count):
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    config = dataclasses.replace(
+        _nested_grug_model_config(model_module),
+        num_experts_per_token=1,
+        nested_expert_count=None,
+        nested_expert_counts=(4, 2),
+        nested_subset_schedule=model_module.NestedSubsetSchedule.FIXED,
+    )
+    tokens = jnp.arange(16, dtype=jnp.int32).reshape(2, 8) % config.vocab_size
+    expert_eligibility = jnp.broadcast_to(
+        model_module.nested_expert_eligibility(config.num_experts, nested_expert_count)[None, :],
+        (tokens.shape[0], config.num_experts),
+    )
+
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
+        model = model_module.Transformer.init(config, key=jax.random.PRNGKey(0))
+        restricted_logits = model.logits(tokens, expert_eligibility=expert_eligibility)
+        extracted_model = model_module.extract_nested_expert_model(model, nested_expert_count)
+        extracted_logits = extracted_model.logits(tokens)
+
+    np.testing.assert_allclose(restricted_logits, extracted_logits, atol=1e-5, rtol=1e-5)
+    assert extracted_model.config.num_experts == nested_expert_count
+    assert extracted_model.config.nested_expert_counts == ()
+
+
+def test_grug_moe_disabled_router_balance_emits_zero_bias_updates():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    config = dataclasses.replace(
+        _nested_grug_model_config(model_module),
+        router_balance_mode=model_module.RouterBalanceMode.NONE,
+    )
+    x = jax.random.normal(jax.random.PRNGKey(1), (2, 4, config.hidden_dim))
+    nested_experts = model_module.nested_expert_eligibility(config.num_experts, config.nested_expert_count)
+    expert_eligibility = jnp.broadcast_to(
+        nested_experts[None, :],
+        (x.shape[0], config.num_experts),
+    )
+
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
+        mlp = model_module.MoEMLP.init(config, key=jax.random.PRNGKey(2))
+        _, stats = mlp(x, expert_eligibility=expert_eligibility)
+
+    np.testing.assert_array_equal(stats["qb_beta"], np.zeros(config.num_experts))
+
+
+def test_grug_moe_eligibility_qb_keeps_separate_fixed_group_biases():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    config = dataclasses.replace(
+        _nested_grug_model_config(model_module),
+        num_experts_per_token=1,
+        nested_expert_count=None,
+        nested_expert_counts=(4, 2),
+        nested_subset_schedule=model_module.NestedSubsetSchedule.FIXED,
+        router_balance_mode=model_module.RouterBalanceMode.ELIGIBILITY_QB,
+    )
+    x = jax.random.normal(jax.random.PRNGKey(1), (6, 4, config.hidden_dim))
+    full = jnp.ones((config.num_experts,), dtype=jnp.bool_)
+    e4 = model_module.nested_expert_eligibility(config.num_experts, 4)
+    e2 = model_module.nested_expert_eligibility(config.num_experts, 2)
+    expert_eligibility = jnp.stack((full, e4, e2, full, e4, e2))
+
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
+        mlp = model_module.MoEMLP.init(config, key=jax.random.PRNGKey(2))
+        _, stats = mlp(x, expert_eligibility=expert_eligibility)
+        model = model_module.Transformer.init(config, key=jax.random.PRNGKey(3))
+        state = train_module.initial_state(
+            config,
+            optimizer=optax.adam(1e-2),
+            mp=jmp.get_policy("f32"),
+            key=jax.random.PRNGKey(4),
+            ema_beta=None,
+        )
+        qb_betas = jnp.arange(
+            config.num_layers * 3 * config.num_experts,
+            dtype=jnp.float32,
+        ).reshape(config.num_layers, 3, config.num_experts)
+        updated = train_module._apply_qb_betas(model, qb_betas)
+        extracted = model_module.extract_nested_expert_model(updated, 2)
+
+    assert mlp.router_bias.shape == (3, config.num_experts)
+    assert state.pending_qb_betas.shape == (config.num_layers, 3, config.num_experts)
+    assert stats["qb_beta"].shape == (3, config.num_experts)
+    assert np.all(np.isfinite(np.asarray(stats["qb_beta"])))
+    np.testing.assert_array_equal(np.asarray(stats["qb_beta"])[1, ~np.asarray(e4)], 0)
+    np.testing.assert_array_equal(np.asarray(stats["qb_beta"])[2, ~np.asarray(e2)], 0)
+    expected_e2_bias = np.asarray(updated.blocks[0].mlp.router_bias)[2, np.asarray(e2)]
+    np.testing.assert_allclose(extracted.blocks[0].mlp.router_bias, expected_e2_bias)
+    assert extracted.config.router_balance_mode is model_module.RouterBalanceMode.QB
+
+
+def test_grug_moe_load_balance_loss_conditions_on_fixed_eligibility():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    selected_experts = jnp.asarray([[0], [1], [0], [2]], dtype=jnp.int32)
+    router_probs = jnp.asarray(
+        [
+            [0.25, 0.25, 0.25, 0.25],
+            [0.25, 0.25, 0.25, 0.25],
+            [0.5, 0.0, 0.5, 0.0],
+            [0.5, 0.0, 0.5, 0.0],
+        ],
+        dtype=jnp.float32,
+    )
+    expert_eligibility = router_probs > 0
+
+    stats = model_module._routing_stats(
+        selected_experts,
+        router_probs,
+        jnp.log(jnp.maximum(router_probs, 1e-9)),
+        num_experts=4,
+        num_experts_per_token=1,
+        expert_eligibility=expert_eligibility,
+        eligibility_group_counts=(4, 2),
+    )
+
+    np.testing.assert_allclose(stats["load_balancing_loss"], 1.0)
+
+
 def test_grug_moe_full_rows_preserve_router_and_reach_both_expert_banks():
     model_module = importlib.import_module("experiments.grug.moe.model")
     config = _nested_grug_model_config(model_module)
@@ -822,7 +953,11 @@ def test_grug_moe_single_expert_eligibility_has_one_semantic_assignment():
 def test_grug_moe_nested_train_step_lowers():
     model_module = importlib.import_module("experiments.grug.moe.model")
     train_module = importlib.import_module("experiments.grug.moe.train")
-    config = _nested_grug_model_config(model_module)
+    config = dataclasses.replace(
+        _nested_grug_model_config(model_module),
+        router_balance_mode=model_module.RouterBalanceMode.ELIGIBILITY_AUX,
+        router_load_balancing_loss_coef=0.01,
+    )
     optimizer = optax.adam(1e-2)
     mp = jmp.get_policy("f32")
     train_step = train_module._make_train_step(optimizer, mp, z_loss_weight=0.0, ema_beta=None)

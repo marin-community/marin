@@ -58,8 +58,25 @@ present. The jobs were stopped after the logs reported scratch
 initialization. The launcher now derives the runtime initialization mode from
 the documented `init_from` field, with a dispatch-level regression test.
 
+At the first valid weights-only continuation gate, absolute Paloma loss
+increased for both untreated controls. E256 moved from `5.480636` to
+`5.597265`; E128 moved from `5.455853` to `5.494336`, with 11 of 16 domains
+worse and a median domain delta of `+0.03259`. The continuation also restarts
+the finite SlimPajama stream and uses a fresh 30,720-step schedule. Its
+step-8,192 MuonH rate is `0.000298781`, 1.52x the original terminal rate.
+These facts make the absolute curve unsuitable as a seamless-pretraining or
+scaling-law curve. Comparisons between paired control and treatment arms
+remain valid because they share the reset and replay.
+
+The proxy launcher also replaced the heuristic's 1% warmup with five steps in
+the original 8,192-step phase. The run was finite, but this is not the
+documented May-recipe warmup and must be corrected before treating this proxy
+as an optimizer-quality reference.
+
 ## Future work
 
 - [ ] Isolate which restored optimizer-state leaf first becomes non-finite.
 - [ ] Confirm all four weights-only continuations survive their 512-step
   warmup and peak.
+- [ ] Restore the heuristic warmup default for non-smoke proxy runs and rerun
+  an optimizer-quality control before using absolute loss projections.

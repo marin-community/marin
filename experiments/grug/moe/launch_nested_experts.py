@@ -37,6 +37,9 @@ Optional overrides:
     NESTED_EVAL_INTERVAL  optimizer steps between evaluations (default: 100)
     NESTED_EVAL_OFFSETS   evenly spaced expert-subset offsets per ladder level (default: 1)
     NESTED_SEED          training and data seed (default: 0; cooldown: 1)
+    NESTED_ROUTER_BALANCE  router balancing: qb | none | eligibility_aux |
+                           eligibility_qb (default: qb)
+    NESTED_ROUTER_AUX_COEF  eligibility_aux loss coefficient (default: 0.01)
 """
 
 import dataclasses
@@ -64,7 +67,7 @@ from experiments.grug.moe.launch import (
     run_grug_moe_trial,
     slimpajama_6b_dataset,
 )
-from experiments.grug.moe.model import GrugModelConfig, NestedSubsetSchedule
+from experiments.grug.moe.model import GrugModelConfig, NestedSubsetSchedule, RouterBalanceMode
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 from experiments.llama import llama3_tokenizer
 
@@ -198,6 +201,12 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     hidden_dim = env_int("NESTED_HIDDEN_DIM", _DEFAULT_HIDDEN_DIM)
     sequence_length = env_int("NESTED_SEQUENCE_LENGTH", _DEFAULT_SEQUENCE_LENGTH)
     capacity_factor = float(os.environ.get("NESTED_CAPACITY_FACTOR", "1.0"))
+    router_balance_mode = RouterBalanceMode(os.environ.get("NESTED_ROUTER_BALANCE", RouterBalanceMode.QB))
+    router_aux_coef = (
+        float(os.environ.get("NESTED_ROUTER_AUX_COEF", "0.01"))
+        if router_balance_mode is RouterBalanceMode.ELIGIBILITY_AUX
+        else 0.0
+    )
     heuristic = MoeHeuristic()
     base_model, _, _, _ = build_from_heuristic(
         budget=_BUDGET,
@@ -207,7 +216,12 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
         seq_len=sequence_length,
     )
     model = _arm_model(
-        dataclasses.replace(base_model, capacity_factor=capacity_factor),
+        dataclasses.replace(
+            base_model,
+            capacity_factor=capacity_factor,
+            router_balance_mode=router_balance_mode,
+            router_load_balancing_loss_coef=router_aux_coef,
+        ),
         arm,
         attention_implementation,
     )
@@ -224,7 +238,14 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
             nested_batch_fraction=0.0,
         )
     nodes = env_int("NESTED_NODES", _DEFAULT_NODES)
-    expert_axis = env_int("NESTED_EXPERT_AXIS", _DEFAULT_EXPERT_AXIS)
+    default_expert_axis = (
+        min(model.nested_expert_counts)
+        if model.nested_subset_schedule is NestedSubsetSchedule.FIXED
+        else _DEFAULT_EXPERT_AXIS
+    )
+    expert_axis = env_int("NESTED_EXPERT_AXIS", default_expert_axis)
+    if model.nested_subset_schedule is NestedSubsetSchedule.FIXED and min(model.nested_expert_counts) % expert_axis != 0:
+        raise ValueError("NESTED_EXPERT_AXIS must divide the smallest fixed nested expert count")
     batch_size = env_int("NESTED_BATCH", _DEFAULT_BATCH)
     compute_optimal_tokens = _BUDGET / (3 * compute_flops_per_token(base_model))
     optimizer = heuristic.build_optimizer_config(
