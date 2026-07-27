@@ -16,6 +16,118 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T13:09:42Z — 276,388 pairs verified; all 327 ambiguities covered
+
+- `/rav/rav-datakit-6854-reconcile-manual-1309-v1220` independently
+  reconciled 2,176 completed semantic checkpoints and all 327 unresolved model
+  outcomes. Every unresolved outcome has one consistent full-text decision;
+  none are missing. The snapshot covers 276,388 of 755,281 semantic
+  candidates (36.59%). Applying the 70 false-positive and 257 true-duplicate
+  manual decisions gives:
+
+  - baseline: 220,857 pairs, 140,163 false positives, and 80,694 true
+    duplicates;
+  - treatment: 55,531 pairs, 28,756 false positives, and 26,775 true
+    duplicates;
+  - combined: 168,919 false positives and 107,469 true duplicates.
+
+  The immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-1309.json`
+  with SHA-256
+  `bd788885d9fe8f847d8d18e5a4ed4889ff77b6e49b4cca368fe1fd0cbf8836a5`.
+- Seven new ambiguities were resolved as true duplicates from complete
+  persisted texts and exact full-file diffs. In every case, the question,
+  choices, reasoning, conclusion, and answer letter are identical. Only the
+  final answer's LaTeX wrapper differs between `\boxed{X}` and
+  `\boxed{\text{X}}`:
+
+  - treatment row 8,981: 220 lines, answer B, member/canonical/inspection
+    SHA-256 values
+    `3da6842c13b6207ada1e1a479eeadf222836fd214add1d8d0790d40bf95eb68b`,
+    `64d7d6f9810a9a9a08aaa6cb568cf7d84ea7779a857ddd474d7a2550f9a6bc9c`,
+    and
+    `326bf527143edd2f55e816a9ca976adc839e78a49cba89c51f456bfdeba90509`;
+  - treatment row 8,994: 332 lines, answer C, member/canonical/inspection
+    SHA-256 values
+    `ef7b40f621668f57b795c2994aad3c1e20cdac2f6fd4e31a53e6a3121b8b8d3a`,
+    `3a4659343099e47f6f40772bd924808fd8bd9f61844d2a491c56dd0c7e7cd671`,
+    and
+    `d3d3f8044f347296d15f926333f146e5110750d2de9415d7332111921e5e7163`;
+  - treatment row 9,019: 96 lines, answer F, member/canonical/inspection
+    SHA-256 values
+    `55a3a61974e5eb366e4bd9ae60aff790cc75c6f947ced4fee1c9fcde5649e5b7`,
+    `6e9ec1d5f0bbd91f759a05574ef402cb90545832a9a96beed45edb44f563f730`,
+    and
+    `5da4bfc75b12884469a72bcae33cf5d352284f61bade3ec2e5f8915c3df68bd2`;
+  - treatment row 9,020: 266 lines, answer C, member/canonical/inspection
+    SHA-256 values
+    `422c74b26d1a1c1b6835a7a189bd70ae1a962dbd39286fcb93aad1e498b5e056`,
+    `741014b7ced23453d0d03594486b1f61430f16f74700ec34b3d7f071bbe3e61e`,
+    and
+    `8291f0c04e588caff62f5e6cfed0db67bc9e3b192255e8ade2e5b943f86a21b3`;
+  - treatment row 9,021: 226 lines, answer J, member/canonical/inspection
+    SHA-256 values
+    `db7e2e978cfcff0fa7bcdce8c0fc17a066a09024c792cd0632b188c85ed374e9`,
+    `569649d617e6fd8698a868e60971e8222e33a174afd508107dab30e7084be983`,
+    and
+    `e0f6001961fb349355b6226eb5859db2bfc2a0ed255ca3784813f1c19cbc1da2`;
+  - treatment row 9,022: 116 lines, answer I, member/canonical/inspection
+    SHA-256 values
+    `362faf00cbd4e9df92d017ad97015f1f0a5f354e48f418458a7ce92e967b1ac7`,
+    `244275213f8482b29b9166e64b7f3060b522325c8b6e00aa0aacf82d833920ab`,
+    and
+    `e6514a1fc07a0efa17f375879abd4edf67355b37571b10682498dda19a254cc6`;
+  - baseline row 7,322: 281 lines, answer B, member/canonical/inspection
+    SHA-256 values
+    `5b7a95a71b2015bb3879bafb3f3b8e1e129efd6e807b347357c70e6a6b8edb7f`,
+    `5f4177281dbad69d61701b32321dae19f4dae616d14342412f566b2249366156`,
+    and
+    `31118fa1578f47115d67434c2a50dba3270d27c4c3178f107fae1b11dc3ea833`.
+
+- Seven separate publish jobs wrote immutable, evidence-bound decisions.
+  Seven verify-only jobs independently reread the source pairs, semantic
+  evidence, inspections, deterministic Parquet bytes, and completion markers.
+  Their manual-Parquet/marker SHA-256 pairs, in row order, are:
+
+  - row 8,981:
+    `ffebf7783c4a6b37f7cccd776811f224a18bc45eded63785f54e663bf4fec37b`
+    /
+    `112c1a18f90c4541fb2070f289ee32c5ed984f14d8dd323fef0d466c3ae44949`;
+  - row 8,994:
+    `e68fbb16798f0b94c481533d6fc242cacb375c73efa5efd574d097da00ad8b5e`
+    /
+    `7ad29c0c94b491df41710f012c1d5154489759a86c308e88992888755df2fdaa`;
+  - row 9,019:
+    `133b0fa4aa8aa1c079cda0ad18304565daaea9e4c585c563dec1198b2007353b`
+    /
+    `f5a1a98ef36b1e0e11efc827e2cdd742abba9653e8c31bd46f95159878ad7755`;
+  - row 9,020:
+    `74691fd43b34c5918ea1ee377e531d91e88ecf1da724f855261e22f7ad0bdc80`
+    /
+    `a72acf2948208c30f09f09a0f3cce933ef3f6f70f4e39952572df90a8e870f61`;
+  - row 9,021:
+    `babfe0b52114c07f0431f3faaff19ff747fc36a175a80e5755b798b655df4e7d`
+    /
+    `a0908098924d5a36aa228e382048a8c0f9bb600a6c6ece2dd6bb2d7a201e692b`;
+  - row 9,022:
+    `2392d1d8bdb96e0c3056b758cd498ef146d163d5f976b26bfaf9a3ed60dbeaa9`
+    /
+    `009a63b636ebad8ed3fd1cbdf08986e9d7ee810f03ae007ff75aba2e8d558f56`;
+  - row 7,322:
+    `8aaa90866e599762555cc0ecea0c077fcf42fc8fcc7c0c11500c2158ff270a35`
+    /
+    `e59def23038a17c968269afa3986d0b0f8c2c8d836c13cbef72beaf6afb684f5`.
+
+- `/rav/rav-datakit-6854-audit-next-checkpoints-1307-v1219`
+  independently revalidated another 3,072 checkpoint pairs, including 3,058
+  direct and 14 chunked pairs. All 7,199 persisted judgment attempts were
+  valid and the audit found no unresolved outcomes in this wave. The next
+  audit frontiers are p0 `(10, 2,432)`, p1 `(42, 2,432)`,
+  p2 `(74, 2,304)`, and p3 `(107, 2,304)`.
+- The four batch-priority 2-H100 workers remain active and are returning HTTP
+  200 responses. All 12 root, broker, and GPU pods are Ready with zero
+  Kubernetes restarts.
+
 ### 2026-07-27T12:39:00Z — 273,303 pairs verified; all 320 ambiguities covered
 
 - `/rav/rav-datakit-6854-reconcile-manual-1239-v1192` independently
