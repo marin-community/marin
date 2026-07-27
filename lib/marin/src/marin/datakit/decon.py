@@ -105,7 +105,7 @@ class NGramConfig:
             (instruction-tuning / synthetic sources) and those cross-source FPs.
             Leave ``None`` unless paired with a cross-source boilerplate filter, or
             you accept that added flag volume. ``None`` = pure fraction overlap (the
-            precision-favoring default). See :func:`_make_marker`.
+            precision-favoring default).
     """
 
     ngram_length: int = 13

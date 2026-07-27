@@ -26,9 +26,11 @@ Doc families (each labeled contaminated or clean):
   false-positive families catalogued in marin#6852; the benchmark measures how
   often the algorithm mistakes them for contamination.
 
-Reports headline P/R/F1 at the 0.5 overlap threshold, a per-mechanism breakdown
-(recall per positive form, false-positive rate per hard-negative family), and a
-PR curve over overlap thresholds (from each doc's ``max_overlap``).
+Reports headline P/R/F1 from decon's actual ``contaminated`` decision (fraction
+>= threshold OR the absolute-count path, so abs-count flags below 0.5 count), a
+per-mechanism breakdown (recall per positive form, false-positive rate per
+hard-negative family), and a fraction-only PR curve over overlap thresholds
+(swept from each doc's ``max_overlap``, so it does not reflect the abs-count path).
 
     uv run iris --cluster=cw-rno2a job run --cpu 2 --memory 4GB --enable-extra-resources \\
         -e MARIN_PREFIX s3://marin-us-east-02a/marin \\
@@ -326,8 +328,8 @@ def main() -> None:
         "--min-abs-hits",
         type=int,
         default=NGramConfig.min_abs_hits,
-        help="absolute-count recall path threshold (marin#6852); pass -1 to disable it and "
-        f"reproduce the fraction-only baseline. Default is the production {NGramConfig.min_abs_hits}.",
+        help="absolute-count recall path threshold (marin#6852); pass e.g. 8 to enable it, "
+        f"or -1 to force-disable. Default {NGramConfig.min_abs_hits} = off (the fraction-only baseline).",
     )
     args = ap.parse_args()
     delimiter = args.delimiter.encode().decode("unicode_escape") if args.delimiter else PARAGRAPH_DELIMITER

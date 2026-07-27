@@ -201,8 +201,8 @@ def main() -> None:
         "--min-abs-hits",
         type=int,
         default=MIN_ABS_HITS,
-        help="absolute-count recall path threshold (marin#6852); pass -1 to disable "
-        "it and reproduce the pre-fix fraction-only baseline for a before/after compare",
+        help="absolute-count recall path threshold (marin#6852); pass e.g. 8 to enable it "
+        "(default None = the fraction-only baseline), or -1 to force-disable",
     )
     args = ap.parse_args()
     min_abs_hits = None if args.min_abs_hits is not None and args.min_abs_hits < 0 else args.min_abs_hits
