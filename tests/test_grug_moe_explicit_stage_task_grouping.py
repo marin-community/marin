@@ -23,6 +23,8 @@ from levanter.grug.attention import AttentionMask
 from experiments.grug.moe import launch_cw_jaxpp_may_d2560
 from experiments.grug.moe.check_jaxpp_group2_component_mpmd_parity import (
     component_structure,
+    joined_moe_finish_boundary_forward,
+    joined_moe_finish_boundary_value_and_grads,
     paired_complete_checkpoint_boundary_forward,
     paired_complete_checkpoint_boundary_value_and_grads,
     paired_distinct_mlp_master_router_gradients,
@@ -37,6 +39,10 @@ from experiments.grug.moe.check_jaxpp_group2_component_mpmd_parity import (
     single_full_block_boundary_value_and_grads,
     single_full_block_no_checkpoint_boundary_value_and_grads,
     single_moe_value_and_grads,
+    single_pre_moe_barrier_checkpoint_boundary_forward,
+    single_pre_moe_barrier_checkpoint_boundary_value_and_grads,
+    single_pre_moe_checkpoint_boundary_forward,
+    single_pre_moe_checkpoint_boundary_value_and_grads,
     validate_full_task_structure,
     validate_pure_moe_structure,
 )
@@ -812,6 +818,103 @@ def test_paired_remat_scope_candidates_match_ordered_full_block_checkpoint(forwa
         (ordered_vjps[0][7], ordered_vjps[1][7]),
         _sum_microbatch_group((ordered_vjps[0][8], ordered_vjps[1][8])),
         (ordered_vjps[0][9], ordered_vjps[1][9]),
+    )
+    _assert_tree_rel_l2(actual_forward, expected_forward)
+    _assert_tree_rel_l2(actual_vjp, expected_vjp)
+    for actual_routes, expected_routes in zip(actual_forward[3], expected_forward[3], strict=True):
+        np.testing.assert_array_equal(actual_routes["selected_experts"], expected_routes["selected_experts"])
+
+
+@pytest.mark.parametrize(
+    ("pre_forward", "pre_value_and_grads"),
+    (
+        (single_pre_moe_checkpoint_boundary_forward, single_pre_moe_checkpoint_boundary_value_and_grads),
+        (
+            single_pre_moe_barrier_checkpoint_boundary_forward,
+            single_pre_moe_barrier_checkpoint_boundary_value_and_grads,
+        ),
+    ),
+)
+def test_split_executable_boundary_dataflow_matches_ordered_full_block_checkpoint(
+    pre_forward,
+    pre_value_and_grads,
+) -> None:
+    mesh, stage = _tiny_grouped_last_stage("save_moe", top_k=2)
+    _, hiddens, output_cotangents = _tiny_boundary_inputs(mesh)
+    params = stage.blocks[0]
+    qb_beta = jnp.asarray([0.2, -0.1, 0.05], dtype=jnp.float32)
+
+    with jax.set_mesh(mesh):
+        ordered_forwards = tuple(
+            jax.jit(single_full_block_boundary_forward)(params, qb_beta, hidden) for hidden in hiddens
+        )
+        ordered_vjps = tuple(
+            jax.jit(single_full_block_boundary_value_and_grads)(params, qb_beta, hidden, cotangent)
+            for hidden, cotangent in zip(hiddens, output_cotangents, strict=True)
+        )
+        prepared = tuple(jax.jit(pre_forward)(params, qb_beta, hidden) for hidden in hiddens)
+        post_attention = tuple(result[0] for result in prepared)
+        mlp_inputs = tuple(result[1] for result in prepared)
+        shared_outputs = tuple(result[2] for result in prepared)
+        pre_ring = tuple(result[3] for result in prepared)
+        routed_outputs, outputs, router_stats = jax.jit(joined_moe_finish_boundary_forward)(
+            params,
+            qb_beta,
+            post_attention,
+            mlp_inputs,
+            shared_outputs,
+        )
+        finish_vjp = jax.jit(joined_moe_finish_boundary_value_and_grads)(
+            params,
+            qb_beta,
+            post_attention,
+            mlp_inputs,
+            shared_outputs,
+            output_cotangents,
+        )
+        boundary_cotangents = tuple(
+            (finish_vjp[5][index], finish_vjp[6][index], finish_vjp[7][index]) for index in range(2)
+        )
+        pre_vjps = tuple(
+            jax.jit(pre_value_and_grads)(params, qb_beta, hidden, boundary_cotangent)
+            for hidden, boundary_cotangent in zip(hiddens, boundary_cotangents, strict=True)
+        )
+
+    expected_forward = tuple(
+        (ordered_forwards[0][index], ordered_forwards[1][index]) for index in range(len(ordered_forwards[0]))
+    )
+    actual_forward = (
+        post_attention,
+        mlp_inputs,
+        shared_outputs,
+        pre_ring,
+        routed_outputs,
+        outputs,
+        router_stats,
+    )
+    expected_vjp = (
+        (ordered_vjps[0][0], ordered_vjps[1][0]),
+        (ordered_vjps[0][1], ordered_vjps[1][1]),
+        (ordered_vjps[0][2], ordered_vjps[1][2]),
+        (ordered_vjps[0][3], ordered_vjps[1][3]),
+        (ordered_vjps[0][4], ordered_vjps[1][4]),
+        (ordered_vjps[0][5], ordered_vjps[1][5]),
+        (ordered_vjps[0][6], ordered_vjps[1][6]),
+        (ordered_vjps[0][7], ordered_vjps[1][7]),
+        _sum_microbatch_group((ordered_vjps[0][8], ordered_vjps[1][8])),
+        (ordered_vjps[0][9], ordered_vjps[1][9]),
+    )
+    actual_vjp = (
+        finish_vjp[0],
+        post_attention,
+        mlp_inputs,
+        shared_outputs,
+        pre_ring,
+        finish_vjp[1],
+        finish_vjp[2],
+        finish_vjp[3],
+        _sum_microbatch_group((finish_vjp[4], pre_vjps[0][0], pre_vjps[1][0])),
+        (pre_vjps[0][1], pre_vjps[1][1]),
     )
     _assert_tree_rel_l2(actual_forward, expected_forward)
     _assert_tree_rel_l2(actual_vjp, expected_vjp)

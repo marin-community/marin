@@ -81,7 +81,13 @@ _REQUIRED_KERNEL_ENVIRONMENT = {
     "HALIAX_RAGGED_DOT_TRITON_BLOCK_K": "32",
     "HALIAX_RAGGED_DOT_TRITON_NUM_WARPS": "8",
 }
-_DIAGNOSTICS = ("gate", "moe-call-order", "full-block-boundaries", "full-block-remat-scope")
+_DIAGNOSTICS = (
+    "gate",
+    "moe-call-order",
+    "full-block-boundaries",
+    "full-block-remat-scope",
+    "split-executable-boundaries",
+)
 
 
 def event(process_id: int | None, name: str, **fields: Any) -> None:
@@ -441,6 +447,189 @@ def _single_pre_moe_boundaries(
         else jnp.zeros_like(mlp_input)
     )
     return post_attention, mlp_input, shared_output, _pre_ring_router_values(block.mlp, mlp_input)
+
+
+def _single_pre_moe_boundaries_with_barriers(
+    block: Block,
+    hidden: jax.Array,
+):
+    post_attention = block.attention_residual(
+        hidden,
+        AttentionMask.causal(),
+        use_pko=False,
+        disable_rope=False,
+    )
+    post_attention = jax.lax.optimization_barrier(post_attention)
+    mlp_input = block.mlp_gated_norm(block.rms_mlp(post_attention))
+    mlp_input = jax.lax.optimization_barrier(mlp_input)
+    shared_output = (
+        block.shared(mlp_input, activation=ActivationFunctionEnum.silu)
+        if block.shared is not None
+        else jnp.zeros_like(mlp_input)
+    )
+    return post_attention, mlp_input, shared_output, _pre_ring_router_values(block.mlp, mlp_input)
+
+
+def _single_pre_moe_checkpoint_boundary_forward(
+    pre_moe,
+    params: Block,
+    qb_beta: jax.Array,
+    hidden: jax.Array,
+):
+    block = grug_train._compute_block(params, qb_beta, _MIXED_PRECISION)
+    policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+    return eqx.filter_checkpoint(pre_moe, policy=policy)(block, hidden)
+
+
+def single_pre_moe_checkpoint_boundary_forward(
+    params: Block,
+    qb_beta: jax.Array,
+    hidden: jax.Array,
+):
+    """Run one independently compiled pre-MoE checkpoint."""
+    return _single_pre_moe_checkpoint_boundary_forward(
+        _single_pre_moe_boundaries,
+        params,
+        qb_beta,
+        hidden,
+    )
+
+
+def single_pre_moe_barrier_checkpoint_boundary_forward(
+    params: Block,
+    qb_beta: jax.Array,
+    hidden: jax.Array,
+):
+    """Run one pre-MoE checkpoint with barriers after attention and MLP input."""
+    return _single_pre_moe_checkpoint_boundary_forward(
+        _single_pre_moe_boundaries_with_barriers,
+        params,
+        qb_beta,
+        hidden,
+    )
+
+
+def joined_moe_finish_boundary_forward(
+    params: Block,
+    qb_beta: jax.Array,
+    post_attention: tuple[jax.Array, jax.Array],
+    mlp_inputs: tuple[jax.Array, jax.Array],
+    shared_outputs: tuple[jax.Array, jax.Array],
+):
+    """Run the separately compiled joined-MoE and residual finish task."""
+    block = grug_train._compute_block(params, qb_beta, _MIXED_PRECISION)
+    routed_outputs, router_stats = paired_moe_component_forward(
+        block.mlp,
+        mlp_inputs,
+        remat_mode="save_moe",
+    )
+    updates = tuple(
+        routed + shared if block.shared is not None else routed
+        for routed, shared in zip(routed_outputs, shared_outputs, strict=True)
+    )
+    outputs = tuple(hidden + update for hidden, update in zip(post_attention, updates, strict=True))
+    return routed_outputs, outputs, router_stats
+
+
+def joined_moe_finish_boundary_value_and_grads(
+    params: Block,
+    qb_beta: jax.Array,
+    post_attention: tuple[jax.Array, jax.Array],
+    mlp_inputs: tuple[jax.Array, jax.Array],
+    shared_outputs: tuple[jax.Array, jax.Array],
+    output_cotangents: tuple[jax.Array, jax.Array],
+):
+    """Differentiate the separately compiled joined-MoE and finish task."""
+
+    def projected_finish(
+        master_params: Block,
+        current_post_attention: tuple[jax.Array, jax.Array],
+        current_mlp_inputs: tuple[jax.Array, jax.Array],
+        current_shared_outputs: tuple[jax.Array, jax.Array],
+    ):
+        routed_outputs, outputs, router_stats = joined_moe_finish_boundary_forward(
+            master_params,
+            qb_beta,
+            current_post_attention,
+            current_mlp_inputs,
+            current_shared_outputs,
+        )
+        losses = tuple(
+            _project_output(output, cotangent) + ROUTER_Z_LOSS_SCALE * stats["router_z_loss"]
+            for output, cotangent, stats in zip(outputs, output_cotangents, router_stats, strict=True)
+        )
+        return losses[0] + losses[1], (losses, routed_outputs, outputs, router_stats)
+
+    (_, auxiliary), gradients = jax.value_and_grad(
+        projected_finish,
+        argnums=(0, 1, 2, 3),
+        has_aux=True,
+    )(params, post_attention, mlp_inputs, shared_outputs)
+    parameter_gradient, post_attention_gradients, mlp_input_gradients, shared_output_gradients = gradients
+    losses, routed_outputs, outputs, router_stats = auxiliary
+    return (
+        losses,
+        routed_outputs,
+        outputs,
+        router_stats,
+        parameter_gradient,
+        post_attention_gradients,
+        mlp_input_gradients,
+        shared_output_gradients,
+    )
+
+
+def _single_pre_moe_checkpoint_boundary_value_and_grads(
+    pre_moe_forward,
+    params: Block,
+    qb_beta: jax.Array,
+    hidden: jax.Array,
+    boundary_cotangents: tuple[jax.Array, jax.Array, jax.Array],
+):
+    def projected_pre_moe(master_params: Block, current_hidden: jax.Array):
+        boundaries = pre_moe_forward(master_params, qb_beta, current_hidden)
+        loss = sum(
+            (
+                _project_output(boundary, cotangent)
+                for boundary, cotangent in zip(boundaries[:3], boundary_cotangents, strict=True)
+            ),
+            start=jnp.asarray(0.0, dtype=jnp.float32),
+        )
+        return loss
+
+    return jax.value_and_grad(projected_pre_moe, argnums=(0, 1))(params, hidden)[1]
+
+
+def single_pre_moe_checkpoint_boundary_value_and_grads(
+    params: Block,
+    qb_beta: jax.Array,
+    hidden: jax.Array,
+    boundary_cotangents: tuple[jax.Array, jax.Array, jax.Array],
+):
+    """Differentiate one independently compiled pre-MoE checkpoint."""
+    return _single_pre_moe_checkpoint_boundary_value_and_grads(
+        single_pre_moe_checkpoint_boundary_forward,
+        params,
+        qb_beta,
+        hidden,
+        boundary_cotangents,
+    )
+
+
+def single_pre_moe_barrier_checkpoint_boundary_value_and_grads(
+    params: Block,
+    qb_beta: jax.Array,
+    hidden: jax.Array,
+    boundary_cotangents: tuple[jax.Array, jax.Array, jax.Array],
+):
+    """Differentiate the independently compiled barrier pre-MoE checkpoint."""
+    return _single_pre_moe_checkpoint_boundary_value_and_grads(
+        single_pre_moe_barrier_checkpoint_boundary_forward,
+        params,
+        qb_beta,
+        hidden,
+        boundary_cotangents,
+    )
 
 
 def _finish_paired_full_block_boundaries(
@@ -815,7 +1004,7 @@ def paired_distinct_mlp_master_router_gradients(
     )
 
 
-def _compile_and_run(process_id: int, name: str, function, arguments):
+def _lower_and_compile(process_id: int, name: str, function, arguments):
     lower_start = time.monotonic()
     event(process_id, f"{name}_lower_start")
     lowered = function.lower(*arguments)
@@ -824,12 +1013,21 @@ def _compile_and_run(process_id: int, name: str, function, arguments):
     event(process_id, f"{name}_compile_start")
     compiled = lowered.compile()
     event(process_id, f"{name}_compile_done", elapsed_seconds=time.monotonic() - compile_start)
+    return compiled
+
+
+def _execute_compiled(process_id: int, name: str, compiled, arguments):
     execute_start = time.monotonic()
     event(process_id, f"{name}_execute_start")
     result = compiled(*arguments)
     _block_until_ready(result)
     event(process_id, f"{name}_execute_done", elapsed_seconds=time.monotonic() - execute_start)
     return result
+
+
+def _compile_and_run(process_id: int, name: str, function, arguments):
+    compiled = _lower_and_compile(process_id, name, function, arguments)
+    return _execute_compiled(process_id, name, compiled, arguments)
 
 
 def _walk_jaxpr_equations(closed_jaxpr: jax_core.ClosedJaxpr):
@@ -1566,6 +1764,238 @@ def _run_full_block_remat_scope_diagnostic(
     return passed
 
 
+def _run_split_executable_forward_arm(
+    process_id: int,
+    name: str,
+    pre_moe_forward,
+    params: Block,
+    qb_beta: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+    forward_reference,
+):
+    pre_arguments = (params, qb_beta, hiddens[0])
+    compiled_pre = _lower_and_compile(
+        process_id,
+        f"split_{name}_pre_task",
+        jax.jit(pre_moe_forward),
+        pre_arguments,
+    )
+    prepared = tuple(
+        _execute_compiled(
+            process_id,
+            f"split_{name}_pre_task_{index}",
+            compiled_pre,
+            (params, qb_beta, hidden),
+        )
+        for index, hidden in enumerate(hiddens)
+    )
+    post_attention = tuple(result[0] for result in prepared)
+    mlp_inputs = tuple(result[1] for result in prepared)
+    shared_outputs = tuple(result[2] for result in prepared)
+    pre_ring = tuple(result[3] for result in prepared)
+    finish_arguments = (params, qb_beta, post_attention, mlp_inputs, shared_outputs)
+    finish = _compile_and_run(
+        process_id,
+        f"split_{name}_joined_finish_task",
+        jax.jit(joined_moe_finish_boundary_forward),
+        finish_arguments,
+    )
+    routed_outputs, outputs, router_stats = finish
+    actual = (
+        post_attention,
+        mlp_inputs,
+        shared_outputs,
+        pre_ring,
+        routed_outputs,
+        outputs,
+        router_stats,
+    )
+    passed = _report_full_block_forward(process_id, name, actual, forward_reference)
+    return actual, prepared, passed
+
+
+def _run_split_executable_vjp_arm(
+    process_id: int,
+    name: str,
+    pre_moe_value_and_grads,
+    params: Block,
+    qb_beta: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+    cotangents: tuple[jax.Array, jax.Array],
+    forward_result,
+    gradient_reference,
+) -> bool:
+    post_attention, mlp_inputs, shared_outputs, pre_ring, _, _, _ = forward_result
+    finish_arguments = (params, qb_beta, post_attention, mlp_inputs, shared_outputs, cotangents)
+    finish = _compile_and_run(
+        process_id,
+        f"split_{name}_joined_finish_vjp_task",
+        jax.jit(joined_moe_finish_boundary_value_and_grads),
+        finish_arguments,
+    )
+    (
+        losses,
+        routed_outputs,
+        outputs,
+        router_stats,
+        finish_parameter_gradient,
+        post_attention_gradients,
+        mlp_input_gradients,
+        shared_output_gradients,
+    ) = finish
+    boundary_cotangents = tuple(
+        (post_attention_gradients[index], mlp_input_gradients[index], shared_output_gradients[index])
+        for index in range(2)
+    )
+    pre_arguments = (params, qb_beta, hiddens[0], boundary_cotangents[0])
+    compiled_pre_vjp = _lower_and_compile(
+        process_id,
+        f"split_{name}_pre_task_vjp",
+        jax.jit(pre_moe_value_and_grads),
+        pre_arguments,
+    )
+    pre_gradients = tuple(
+        _execute_compiled(
+            process_id,
+            f"split_{name}_pre_task_vjp_{index}",
+            compiled_pre_vjp,
+            (params, qb_beta, hidden, boundary_cotangent),
+        )
+        for index, (hidden, boundary_cotangent) in enumerate(zip(hiddens, boundary_cotangents, strict=True))
+    )
+    parameter_gradient = grug_train._sum_microbatch_group(
+        (finish_parameter_gradient, pre_gradients[0][0], pre_gradients[1][0])
+    )
+    actual = (
+        losses,
+        post_attention,
+        mlp_inputs,
+        shared_outputs,
+        pre_ring,
+        routed_outputs,
+        outputs,
+        router_stats,
+        parameter_gradient,
+        (pre_gradients[0][1], pre_gradients[1][1]),
+    )
+    return _report_full_block_boundaries(
+        process_id,
+        f"split_{name}_vjp_report",
+        actual,
+        gradient_reference,
+    )
+
+
+def _run_split_executable_boundary_diagnostic(
+    process_id: int,
+    params: Block,
+    qb_beta: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+    cotangents: tuple[jax.Array, jax.Array],
+) -> bool:
+    ordered_arguments = (params, qb_beta, hiddens[0])
+    compiled_ordered = _lower_and_compile(
+        process_id,
+        "split_ordered_forward",
+        jax.jit(single_full_block_boundary_forward),
+        ordered_arguments,
+    )
+    ordered_forwards = tuple(
+        _execute_compiled(
+            process_id,
+            f"split_ordered_forward_{index}",
+            compiled_ordered,
+            (params, qb_beta, hidden),
+        )
+        for index, hidden in enumerate(hiddens)
+    )
+    forward_reference = _combine_single_full_block_forwards(*ordered_forwards)
+    arm_specs = (
+        (
+            "independent_pre_task",
+            single_pre_moe_checkpoint_boundary_forward,
+            single_pre_moe_checkpoint_boundary_value_and_grads,
+        ),
+        (
+            "independent_pre_task_barriers",
+            single_pre_moe_barrier_checkpoint_boundary_forward,
+            single_pre_moe_barrier_checkpoint_boundary_value_and_grads,
+        ),
+    )
+    forward_results = {}
+    forward_values = {}
+    name, pre_forward, _ = arm_specs[0]
+    forward_values[name], _, forward_results[name] = _run_split_executable_forward_arm(
+        process_id,
+        name,
+        pre_forward,
+        params,
+        qb_beta,
+        hiddens,
+        forward_reference,
+    )
+    if not forward_results[name]:
+        barrier_name, barrier_forward, _ = arm_specs[1]
+        forward_values[barrier_name], _, forward_results[barrier_name] = _run_split_executable_forward_arm(
+            process_id,
+            barrier_name,
+            barrier_forward,
+            params,
+            qb_beta,
+            hiddens,
+            forward_reference,
+        )
+
+    passing_forward_arms = tuple(name for name, passed in forward_results.items() if passed)
+    gradient_results = {}
+    if passing_forward_arms:
+        ordered_vjp_arguments = (params, qb_beta, hiddens[0], cotangents[0])
+        compiled_ordered_vjp = _lower_and_compile(
+            process_id,
+            "split_ordered_vjp",
+            jax.jit(single_full_block_boundary_value_and_grads),
+            ordered_vjp_arguments,
+        )
+        ordered_vjps = tuple(
+            _execute_compiled(
+                process_id,
+                f"split_ordered_vjp_{index}",
+                compiled_ordered_vjp,
+                (params, qb_beta, hidden, cotangent),
+            )
+            for index, (hidden, cotangent) in enumerate(zip(hiddens, cotangents, strict=True))
+        )
+        gradient_reference = _combine_single_full_block_results(*ordered_vjps)
+        for name, _, pre_value_and_grads in arm_specs:
+            if name not in passing_forward_arms:
+                continue
+            gradient_results[name] = _run_split_executable_vjp_arm(
+                process_id,
+                name,
+                pre_value_and_grads,
+                params,
+                qb_beta,
+                hiddens,
+                cotangents,
+                forward_values[name],
+                gradient_reference,
+            )
+
+    passed = any(gradient_results.values())
+    if process_id == 0:
+        event(
+            process_id,
+            "split_executable_boundary_summary",
+            forward_results=forward_results,
+            passing_forward_arms=passing_forward_arms,
+            gradient_results=gradient_results,
+            barrier_arm_run="independent_pre_task_barriers" in forward_results,
+            gradients_skipped=not passing_forward_arms,
+            passed=passed,
+        )
+    return passed
+
+
 def _run_worker(
     process_id: int,
     coordinator_address: str,
@@ -1655,6 +2085,15 @@ def _run_worker(
             multihost_utils.sync_global_devices("group2_component_full_block_remat_scope_complete")
             if not passed:
                 raise AssertionError("no remat-scope arm passed the fixed per-leaf tolerance")
+            completed = True
+            return
+
+        if diagnostic == "split-executable-boundaries":
+            with jax.set_mesh(stage_mesh):
+                passed = _run_split_executable_boundary_diagnostic(process_id, *arguments)
+            multihost_utils.sync_global_devices("group2_component_split_executable_boundaries_complete")
+            if not passed:
+                raise AssertionError("no split-executable arm passed the fixed per-leaf tolerance")
             completed = True
             return
 

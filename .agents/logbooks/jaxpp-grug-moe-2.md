@@ -182,3 +182,18 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - The first threshold violation is shared-expert output, but it is downstream of small checkpoint-context changes in CuTe attention and MLP inputs. Those passing perturbations are sufficient to flip thousands of near-tied routes.
 - Next action:
   - Compare the ordered checkpoint oracle with a complete paired checkpoint and with one pre-MoE checkpoint per microbatch followed by the joined MoE checkpoint. Gate gradients on exact routes and all forward boundaries passing `0.002`; do not launch L8 or L24.
+
+### 2026-07-26 17:06 PDT - remat scopes inside one executable do not recover the oracle
+- Hypothesis: Either one complete paired `save_moe` checkpoint or one pre-MoE checkpoint per microbatch followed by the joined-MoE checkpoint will reproduce the ordered full-checkpoint forward identity.
+- Commit Hash: `b7d82f591f` adds both forward-first candidates and skips candidate gradients unless every forward boundary passes relative-L2 `0.002` with exact routes.
+- Command: Parent `/dlwh/jaxpp-group2-remat-scope-r8-b7d82f59-20260726-1712` ran `--diagnostic full-block-remat-scope` from clean commit `b7d82f591ff6c0511fba2d8e083bd8e0eec1bfed`; child `/dlwh/jaxpp-group2-remat-scope-r8-b7d82f59-20260726-1712/0`.
+- Results:
+  - The complete-paired-checkpoint and per-microbatch-pre-MoE-checkpoint arms were numerically identical and both failed forward parity.
+  - Post-attention passed at approximately `0.001933`. MLP inputs were the first failures at approximately `0.002160`; shared outputs reached approximately `0.005296`.
+  - Selected routes differed on `5,137/5,305` assignments across `3,144/3,249` tokens. Final block outputs reached approximately `0.02879/0.02924`.
+  - The forward gate correctly skipped both candidate VAGs. No gradient result is attributed to either arm.
+  - Iris reached the intended strict assertion after `1m44s`; the parent and child are terminal with no live allocation.
+- Interpretation:
+  - Changing remat scopes while both microbatch calls remain in one executable does not reproduce the ordered full-checkpoint compiler identity. The two arms being identical indicates that the relevant distinction is executable/task compilation context, not merely the placement of remat primitives in one Jaxpr.
+- Next action:
+  - Compile one single-microbatch pre-MoE executable, reuse it for both inputs, and pass both prepared results to a separately compiled joined-MoE/finish executable. Compare forward boundaries and exact routes before adding VJPs. If the pre-task still misses, test an optimization barrier after attention and MLP-input formation.
