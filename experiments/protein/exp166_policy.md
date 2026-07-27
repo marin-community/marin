@@ -304,6 +304,10 @@ Also report logical trials complete/running/pending, regional races unresolved,
 median tokens/second by active target, attempts awaiting recovery, and the next
 recovery deadline. Never label all Iris-running parents as active training.
 
+`scratch/exp166_heartbeat.py` renders exactly this set and persists the
+observations; use it rather than assembling the report ad hoc, which drops
+fields.
+
 ## Failure Recovery and Resubmission
 
 TRC/TPU capacity is preemptible and long no-progress periods are expected.
