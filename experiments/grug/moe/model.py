@@ -273,6 +273,34 @@ def _qkv_projection_pipelined(
     )(reshard(x, x_spec), w_q, w_k, w_v)
 
 
+def _qkv_projection_fused(
+    x: Float[Array, "B S D"],
+    w_q: Float[Array, "D NH"],
+    w_k: Float[Array, "D MH"],
+    w_v: Float[Array, "D MH"],
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Gather and project QKV together to reduce collective and GEMM launch overhead."""
+    mesh = get_abstract_mesh()
+    x_spec = _batch_spec()
+    out_spec = P(_BATCH_AXES, None, "model")
+
+    def local(x_l, wq_l, wk_l, wv_l):
+        q_dim = wq_l.shape[1]
+        k_dim = wk_l.shape[1]
+        local_weight = jnp.concatenate((wq_l, wk_l, wv_l), axis=1)
+        full_weight = jax.lax.all_gather(local_weight, Pfsdp, axis=0, tiled=True)
+        qkv = jnp.einsum("bsh,hd->bsd", x_l, full_weight)
+        return tuple(jnp.split(qkv, (q_dim, q_dim + k_dim), axis=-1))
+
+    return shard_map(
+        local,
+        mesh=mesh,
+        in_specs=(x_spec, _QKV_SPEC, _QKV_SPEC, _QKV_SPEC),
+        out_specs=(out_spec, out_spec, out_spec),
+        check_vma=False,
+    )(reshard(x, x_spec), w_q, w_k, w_v)
+
+
 class CausalSelfAttention(eqx.Module):
     w_q: Float[Array, "D NH"]
     w_k: Float[Array, "D MH"]
@@ -304,7 +332,9 @@ class CausalSelfAttention(eqx.Module):
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
 
-        if os.environ.get("SCALE_ATTN_PIPELINE") == "1":
+        if os.environ.get("SCALE_ATTN_FUSED_QKV") == "1":
+            q_flat, k_flat, v_flat = _qkv_projection_fused(x, self.w_q, self.w_k, self.w_v)
+        elif os.environ.get("SCALE_ATTN_PIPELINE") == "1":
             q_flat, k_flat, v_flat = _qkv_projection_pipelined(x, self.w_q, self.w_k, self.w_v)
         else:
             q_flat = jnp.einsum("bsh,hd->bsd", x, self.w_q)

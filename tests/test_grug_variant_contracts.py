@@ -24,14 +24,15 @@ import optax
 import pytest
 from fray.cluster import ResourceConfig
 from jax._src import config as jax_config
-from jax.sharding import use_abstract_mesh
+from jax.sharding import PartitionSpec as P
+from jax.sharding import reshard, use_abstract_mesh
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import DatasetComponent, DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
-from levanter.grug.sharding import _compact_grug_mesh_shape
+from levanter.grug.sharding import _compact_grug_mesh_shape, compact_grug_mesh
 from levanter.schedule import BatchSchedule
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
@@ -172,6 +173,96 @@ def test_grug_moe_attention_forward_lowers_with_gpu_fa4_thd_gqa_sharding():
         out_shape = eqx.filter_eval_shape(forward)
 
     assert out_shape.shape == (8, 16, cfg.hidden_dim)
+
+
+def test_grug_moe_fused_qkv_attention_lowers_over_data_expert_and_model(monkeypatch):
+    monkeypatch.setenv("SCALE_ATTN_FUSED_QKV", "1")
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    mesh = jax.sharding.AbstractMesh(
+        axis_sizes=(1, 1, 2, 2),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(jax.sharding.AxisType.Explicit,) * 4,
+    )
+    cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=128, seq_len=4)
+
+    def forward():
+        attn = model_module.CausalSelfAttention.init(cfg, key=jax.random.PRNGKey(0))
+        x = reshard(
+            jnp.zeros((8, 4, cfg.hidden_dim), dtype=jnp.bfloat16),
+            P(("replica_dcn", "data", "expert"), None, None),
+        )
+        return attn(x, GrugAttentionMask.causal())
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        out_shape = eqx.filter_eval_shape(forward)
+
+    assert out_shape.shape == (8, 4, cfg.hidden_dim)
+
+
+@pytest.mark.parametrize(("expert_axis_size", "model_axis_size"), [(1, 1), (2, 2)])
+def test_grug_moe_fused_qkv_projection_matches_values_and_all_gradients(
+    expert_axis_size: int,
+    model_axis_size: int,
+):
+    required_devices = expert_axis_size * model_axis_size
+    if jax.device_count() < required_devices:
+        pytest.skip(f"requires {required_devices} devices")
+
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    mesh = compact_grug_mesh(
+        expert_axis_size=expert_axis_size,
+        replica_axis_size=1,
+        model_axis_size=model_axis_size,
+    )
+    keys = jax.random.split(jax.random.PRNGKey(0), 7)
+    x = jax.random.normal(keys[0], (4, 2, 8), dtype=jnp.bfloat16)
+    weights = (
+        0.02 * jax.random.normal(keys[1], (8, 8), dtype=jnp.bfloat16),
+        0.02 * jax.random.normal(keys[2], (8, 4), dtype=jnp.bfloat16),
+        0.02 * jax.random.normal(keys[3], (8, 4), dtype=jnp.bfloat16),
+    )
+    cotangents = (
+        1e-4 * jax.random.normal(keys[4], (4, 2, 8), dtype=jnp.bfloat16),
+        1e-4 * jax.random.normal(keys[5], (4, 2, 4), dtype=jnp.bfloat16),
+        1e-4 * jax.random.normal(keys[6], (4, 2, 4), dtype=jnp.bfloat16),
+    )
+
+    def separate_projection(x, w_q, w_k, w_v):
+        return tuple(jnp.einsum("bsh,hd->bsd", x, weight) for weight in (w_q, w_k, w_v))
+
+    def projection_loss(projection, x, w_q, w_k, w_v):
+        outputs = projection(x, w_q, w_k, w_v)
+        loss = sum(
+            jnp.sum(output.astype(jnp.float32) * cotangent.astype(jnp.float32))
+            for output, cotangent in zip(outputs, cotangents, strict=True)
+        )
+        return loss, outputs
+
+    with jax.set_mesh(mesh):
+        x = reshard(x, P(("replica_dcn", "data", "expert"), None, None))
+        weights = tuple(reshard(weight, P(("data", "expert"), "model")) for weight in weights)
+        (fused_value, fused_outputs), fused_grads = jax.value_and_grad(
+            lambda *args: projection_loss(model_module._qkv_projection_fused, *args),
+            argnums=(0, 1, 2, 3),
+            has_aux=True,
+        )(x, *weights)
+        (reference_value, reference_outputs), reference_grads = jax.value_and_grad(
+            lambda *args: projection_loss(separate_projection, *args),
+            argnums=(0, 1, 2, 3),
+            has_aux=True,
+        )(x, *weights)
+
+    assert jnp.array_equal(fused_value, reference_value)
+    assert all(
+        bool(jnp.array_equal(fused, reference))
+        for fused, reference in zip(fused_outputs, reference_outputs, strict=True)
+    )
+    assert all(
+        bool(jnp.array_equal(fused, reference))
+        for fused, reference in zip(fused_grads[1:], reference_grads[1:], strict=True)
+    )
+    input_grad_max_abs = jnp.max(jnp.abs(fused_grads[0].astype(jnp.float32) - reference_grads[0].astype(jnp.float32)))
+    assert float(input_grad_max_abs) <= 1e-6
 
 
 def _seed_cache_records(step, prefix: str) -> None:
