@@ -1378,3 +1378,132 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
 - Interpretation:
   - The outlined Ring program is executable at L24 when the last stage contains five layers. The deterministic `6,6,6,6` failure is sensitive to stage placement or the six-layer terminal loss/backward graph, not simply the largest local layer count.
   - The exact batch8192/m256 run was not launched. Its expected split and the `14.9736655` compile-gate MFU need interpretation before spending another H100x32 compile.
+
+### 2026-07-27 08:54 PDT - NCCL UB-X direct gate stops in setup three times
+- Snapshot:
+  - Jobs `/dlwh/nccl-ubx-direct-ep8-r1-20260727`, `/dlwh/nccl-ubx-direct-ep8-r2-20260727`, and `/dlwh/nccl-ubx-direct-ep8-r3-20260727` used clean commit `5c09dc0e98` on one `H100x8` node in `cw-rno2a`.
+  - The intended gate is EP8, d2560, 64 experts, top-k 4, 16,384 tokens and 65,536 assignments per source rank, with balanced and deterministic learned-skew routes. Admission requires exact route/count/drop maps, bitwise dispatch, floating output relative-L2 `<=0.002`, and UB-X at least `1.10x` faster than Ring by slowest-rank p50.
+- R1 command:
+
+```bash
+uv run iris --cluster cw-rno2a job run --no-wait \
+  --enable-extra-resources --gpu H100x8 --cpu 64 --memory 256GB --disk 256GB \
+  --timeout 3600 --max-retries 0 --priority interactive \
+  --extra gpu --sync-package marin-levanter \
+  --job-name nccl-ubx-direct-ep8-r1-20260727 -- \
+  bash -lc 'set -euxo pipefail
+cd "$IRIS_WORKDIR"
+SOURCE=/tmp/nccl-ubx-db0c814
+rm -rf "$SOURCE"
+git clone --filter=blob:none --no-checkout https://github.com/NVIDIA/nccl.git "$SOURCE"
+git -C "$SOURCE" fetch --depth 1 origin db0c814185a0415cc2e23dca387fecb9282de551
+git -C "$SOURCE" checkout --detach FETCH_HEAD
+CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
+test -x "$CUDA_HOME/bin/nvcc"
+"$CUDA_HOME/bin/nvcc" --version
+make -C "$SOURCE" -j32 src.build CUDA_HOME="$CUDA_HOME" NVCC_GENCODE="-gencode=arch=compute_90,code=sm_90"
+export NCCL_HOME="$SOURCE/build"
+export NCCL_INCLUDE_DIR="$SOURCE/build/include"
+export NCCL_LIBRARY_DIR="$SOURCE/build/lib"
+export LD_LIBRARY_PATH="$NCCL_LIBRARY_DIR:${LD_LIBRARY_PATH:-}"
+uv pip install --python "$IRIS_VENV/bin/python" --no-deps -e "$SOURCE/bindings/nccl4py"
+TORCH_CUDA_ARCH_LIST=9.0a uv pip install --python "$IRIS_VENV/bin/python" --no-build-isolation --no-deps -e "$SOURCE/contrib/nccl_ubx"
+export NCCL_UBX_SOURCE="$SOURCE"
+export NCCL_UBX_OUTPUT_DIR=/tmp/nccl-ubx-direct-results
+export UBX_GRAPH_POOL_SHARE=0.1
+python -c "import torch, ubx; print(\"UBX runtime\", torch.__version__, torch.cuda.nccl.version(), ubx.get_version())"
+ldd "$(python -c "import ubx._C; print(ubx._C.__file__)")" | grep libnccl
+experiments/grug/moe/run_nccl_ubx_direct_gate.sh'
+```
+
+- R1 result:
+  - Iris setup completed and the pinned NVIDIA/nccl commit `db0c814185a0415cc2e23dca387fecb9282de551` checked out. The command then evaluated `test -x /usr/local/cuda/bin/nvcc`, which returned exit `1`.
+  - The single task failed after `11.39s`. NCCL and UB-X were not built, no GPU process started, and no JSON result exists.
+- R2 command:
+
+```bash
+uv run iris --cluster cw-rno2a job run --no-wait \
+  --enable-extra-resources --gpu H100x8 --cpu 64 --memory 256GB --disk 256GB \
+  --timeout 3600 --max-retries 0 --priority interactive \
+  --extra gpu --sync-package marin-levanter \
+  --job-name nccl-ubx-direct-ep8-r2-20260727 -- \
+  bash -lc 'set -euxo pipefail
+cd "$IRIS_WORKDIR"
+uv pip install --python "$IRIS_VENV/bin/python" --no-deps --reinstall --index-url https://download.pytorch.org/whl/cu130 "torch==2.11.0+cu130"
+cuda_bin="$(find "$IRIS_VENV"/lib/python*/site-packages/nvidia/cu*/bin -name nvcc -print -quit)"
+test -n "$cuda_bin"
+CUDA_HOME="$(dirname "$(dirname "$cuda_bin")")"
+export CUDA_HOME
+"$CUDA_HOME/bin/nvcc" --version
+python -c "import torch; print(\"Torch CUDA\", torch.__version__, torch.version.cuda)"
+SOURCE=/tmp/nccl-ubx-db0c814
+rm -rf "$SOURCE"
+git clone --filter=blob:none --no-checkout https://github.com/NVIDIA/nccl.git "$SOURCE"
+git -C "$SOURCE" fetch --depth 1 origin db0c814185a0415cc2e23dca387fecb9282de551
+git -C "$SOURCE" checkout --detach FETCH_HEAD
+make -C "$SOURCE" -j32 src.build CUDA_HOME="$CUDA_HOME" NVCC_GENCODE="-gencode=arch=compute_90,code=sm_90"
+export NCCL_HOME="$SOURCE/build"
+export NCCL_INCLUDE_DIR="$SOURCE/build/include"
+export NCCL_LIBRARY_DIR="$SOURCE/build/lib"
+export LD_LIBRARY_PATH="$NCCL_LIBRARY_DIR:$CUDA_HOME/lib:${LD_LIBRARY_PATH:-}"
+uv pip install --python "$IRIS_VENV/bin/python" --no-deps -e "$SOURCE/bindings/nccl4py"
+TORCH_CUDA_ARCH_LIST=9.0a uv pip install --python "$IRIS_VENV/bin/python" --no-build-isolation --no-deps -e "$SOURCE/contrib/nccl_ubx"
+export NCCL_UBX_SOURCE="$SOURCE"
+export NCCL_UBX_OUTPUT_DIR=/tmp/nccl-ubx-direct-results
+export UBX_GRAPH_POOL_SHARE=0.1
+python -c "import torch, ubx; print(\"UBX runtime\", torch.__version__, torch.cuda.nccl.version(), ubx.get_version())"
+ldd "$(python -c "import ubx._C; print(ubx._C.__file__)")" | grep libnccl
+experiments/grug/moe/run_nccl_ubx_direct_gate.sh'
+```
+
+- R2 result:
+  - Torch changed from `2.11.0+cu128` to `2.11.0+cu130` inside `/app/.venv`. The command found `/app/.venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc`, and `nvcc --version` reported CUDA `13.2`, build `V13.2.78`.
+  - The next unqualified `python -c "import torch"` resolved outside `/app/.venv` and failed with `ModuleNotFoundError: No module named 'torch'`. The single task failed after `6.09s`; NCCL and UB-X were not built, no GPU process started, and no JSON result exists.
+- R3 command:
+
+```bash
+uv run iris --cluster cw-rno2a job run --no-wait \
+  --enable-extra-resources --gpu H100x8 --cpu 64 --memory 256GB --disk 256GB \
+  --timeout 3600 --max-retries 0 --priority interactive \
+  --extra gpu --sync-package marin-levanter \
+  --job-name nccl-ubx-direct-ep8-r3-20260727 -- \
+  bash -lc 'set -euxo pipefail
+source "$IRIS_VENV/bin/activate"
+cd "$IRIS_WORKDIR"
+uv pip install --no-deps --reinstall --index-url https://download.pytorch.org/whl/cu130 "torch==2.11.0+cu130"
+cuda_bin="$(find "$IRIS_VENV"/lib/python*/site-packages/nvidia/cu*/bin -name nvcc -print -quit)"
+test -n "$cuda_bin"
+CUDA_HOME="$(dirname "$(dirname "$cuda_bin")")"
+export CUDA_HOME
+"$CUDA_HOME/bin/nvcc" --version
+python -c "import torch; print(\"Torch CUDA\", torch.__version__, torch.version.cuda)"
+SOURCE=/tmp/nccl-ubx-db0c814
+rm -rf "$SOURCE"
+git clone --filter=blob:none --no-checkout https://github.com/NVIDIA/nccl.git "$SOURCE"
+git -C "$SOURCE" fetch --depth 1 origin db0c814185a0415cc2e23dca387fecb9282de551
+git -C "$SOURCE" checkout --detach FETCH_HEAD
+make -C "$SOURCE" -j32 src.build CUDA_HOME="$CUDA_HOME" NVCC_GENCODE="-gencode=arch=compute_90,code=sm_90"
+export NCCL_HOME="$SOURCE/build"
+export NCCL_INCLUDE_DIR="$SOURCE/build/include"
+export NCCL_LIBRARY_DIR="$SOURCE/build/lib"
+export LD_LIBRARY_PATH="$NCCL_LIBRARY_DIR:$CUDA_HOME/lib:${LD_LIBRARY_PATH:-}"
+uv pip install --no-deps -e "$SOURCE/bindings/nccl4py"
+TORCH_CUDA_ARCH_LIST=9.0a uv pip install --no-build-isolation --no-deps -e "$SOURCE/contrib/nccl_ubx"
+export NCCL_UBX_SOURCE="$SOURCE"
+export NCCL_UBX_OUTPUT_DIR=/tmp/nccl-ubx-direct-results
+export UBX_GRAPH_POOL_SHARE=0.1
+python -c "import torch, ubx; print(\"UBX runtime\", torch.__version__, torch.cuda.nccl.version(), ubx.get_version())"
+ldd "$(python -c "import ubx._C; print(ubx._C.__file__)")" | grep libnccl
+experiments/grug/moe/run_nccl_ubx_direct_gate.sh'
+```
+
+- R3 result:
+  - Venv activation fixed R2's interpreter error. Torch imported as `2.11.0+cu130`, CUDA runtime `13.0`, and NCCL source compilation began with CUDA compiler `13.2.78`.
+  - Every affected device translation unit then failed in `cuda_fp16.h:4492` with `fatal error: nv/target: No such file or directory`. `make src.build` exited `2` because the synthesized CUDA root lacked the matching `nvidia-cuda-cccl` headers.
+  - The single task failed after `17.13s`. The NCCL build did not complete, the UB-X extension and benchmark did not run, and no JSON result exists.
+- Interpretation:
+  - All three failures are launcher or CUDA-toolchain setup errors. They provide no numerical or speed evidence for UB-X.
+  - A corrected retry must retain venv activation and install the CUDA 13 `nvidia-cuda-cccl` package before the NCCL build so `${CUDA_HOME}/include/nv/target` exists. The benchmark and admission thresholds do not need to change.
+  - Even a passing retry would be an optimistic transport-only result with precomputed maps and identity expert compute. It would not prove JAX integration, autograd correctness, routing cost, expert GEMM performance, or end-to-end pipeline MFU.
+- Terminal state:
+  - R1, R2, and R3 are terminal `failed` with one failed task each, zero retries, and no live resource.
