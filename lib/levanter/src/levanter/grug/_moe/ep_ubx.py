@@ -17,6 +17,7 @@ from levanter.grug._moe.common import (
 )
 from levanter.grug._moe.ep_ring import (
     _BulkRingDispatchState,
+    _RingRouting,
     _bulk_ring_expert_compute,
     _ring_routing_prepass,
 )
@@ -148,29 +149,6 @@ def _scatter_slot_values_to_global_topk(
     )
 
 
-def _reduce_slot_cotangents_to_sources(
-    slot_cotangents_local: Float[Array, "C H"],
-    inverse_map_local: Int[Array, "C 4"],
-    *,
-    tokens_per_rank: int,
-    expert_axis_size: int,
-) -> Float[Array, "T H"]:
-    """Transpose dispatch with an exact source-token scatter and reduce."""
-    global_tokens = tokens_per_rank * expert_axis_size
-    source_token = inverse_map_local[:, 0] * tokens_per_rank + inverse_map_local[:, 1]
-    valid = inverse_map_local[:, 3].astype(jnp.bool_)
-    safe_source_token = jnp.where(valid, source_token, global_tokens)
-    values = jnp.where(valid[:, None], slot_cotangents_local.astype(jnp.float32), 0)
-    cotangents_global = (
-        jnp.zeros((global_tokens + 1, slot_cotangents_local.shape[1]), dtype=jnp.float32)
-        .at[safe_source_token]
-        .add(values)[:global_tokens]
-    )
-    return jax.lax.psum_scatter(cotangents_global, "expert", scatter_dimension=0, tiled=True).astype(
-        slot_cotangents_local.dtype
-    )
-
-
 def _unsort_topk_values(
     sorted_values_local: Float[Array, "T K"],
     topk_idx_local: Int[Array, "T K"],
@@ -183,17 +161,18 @@ def _unsort_topk_values(
     return jnp.where(accepted_local, values, 0)
 
 
-@partial(jax.custom_vjp, nondiff_argnums=(6,))
+@partial(jax.custom_vjp, nondiff_argnums=(6, 7))
 def _ubx_dispatch(
     x_local: Float[Array, "T H"],
     dispatch_topk_expert: Int[Array, "T K"],
     dispatch_topk_slot: Int[Array, "T K"],
     dispatch_valid: Bool[Array, "C"],
-    inverse_map: Int[Array, "C 4"],
-    topk_idx: Int[Array, "T K"],
-    num_experts: int,
+    assignment_indices: Int[Array, "C"],
+    assignment_valid: Bool[Array, "C"],
+    topk: int,
+    tokens_per_rank: int,
 ) -> Float[Array, "C H"]:
-    del inverse_map, topk_idx, num_experts
+    del assignment_indices, assignment_valid, topk, tokens_per_rank
     return dispatch_topk_bf16(x_local, dispatch_topk_expert, dispatch_topk_slot, dispatch_valid)
 
 
@@ -202,30 +181,35 @@ def _ubx_dispatch_fwd(
     dispatch_topk_expert: jax.Array,
     dispatch_topk_slot: jax.Array,
     dispatch_valid: jax.Array,
-    inverse_map: jax.Array,
-    topk_idx: jax.Array,
-    num_experts: int,
+    assignment_indices: jax.Array,
+    assignment_valid: jax.Array,
+    topk: int,
+    tokens_per_rank: int,
 ) -> tuple[jax.Array, tuple[jax.Array, jax.Array]]:
-    del num_experts
+    del topk, tokens_per_rank
     output = dispatch_topk_bf16(x_local, dispatch_topk_expert, dispatch_topk_slot, dispatch_valid)
-    return output, (inverse_map, topk_idx)
+    return output, (assignment_indices, assignment_valid)
 
 
 def _ubx_dispatch_bwd(
-    num_experts: int,
+    topk: int,
+    tokens_per_rank: int,
     residuals: tuple[jax.Array, jax.Array],
     output_cotangent: jax.Array,
 ) -> tuple[jax.Array, None, None, None, None, None]:
-    inverse_map, topk_idx = residuals
-    del num_experts
-    tokens_per_rank = topk_idx.shape[0]
-    expert_axis_size = jax.sharding.get_abstract_mesh().shape["expert"]
-    x_cotangent = _reduce_slot_cotangents_to_sources(
-        output_cotangent,
-        inverse_map,
-        tokens_per_rank=tokens_per_rank,
-        expert_axis_size=expert_axis_size,
+    assignment_indices, assignment_valid = residuals
+    token_global = jnp.floor_divide(assignment_indices, topk)
+
+    def ring_dispatch(value: jax.Array) -> jax.Array:
+        value_global = jax.lax.all_gather(value, "expert", tiled=True)
+        value_take = jnp.take(value_global, token_global, axis=0)
+        return jnp.where(assignment_valid[:, None], value_take, jnp.zeros_like(value_take))
+
+    _, pullback = jax.vjp(
+        ring_dispatch,
+        jnp.zeros((tokens_per_rank, output_cotangent.shape[1]), dtype=output_cotangent.dtype),
     )
+    (x_cotangent,) = pullback(output_cotangent)
     return x_cotangent, None, None, None, None, None
 
 
@@ -374,7 +358,7 @@ def _routing_maps(
     local_experts: int,
     num_experts: int,
     capacity_factor: float,
-) -> tuple[UbXRoutingMaps, Int[Array, ""]]:
+) -> tuple[UbXRoutingMaps, _RingRouting]:
     routing = _ring_routing_prepass(
         selected_experts_local,
         local_experts=local_experts,
@@ -391,7 +375,7 @@ def _routing_maps(
         rank=jax.lax.axis_index("expert"),
         local_experts=local_experts,
     )
-    return maps, routing.dropped_local
+    return maps, routing
 
 
 def _moe_mlp_ep_ubx_local(
@@ -415,7 +399,7 @@ def _moe_mlp_ep_ubx_local(
         num_experts=num_experts,
         capacity_factor=capacity_factor,
     )
-    maps, dropped_local = _routing_maps(
+    maps, routing = _routing_maps(
         selected_experts_local,
         local_experts=moe_w13_local.shape[0],
         num_experts=num_experts,
@@ -426,9 +410,10 @@ def _moe_mlp_ep_ubx_local(
         maps.dispatch_topk_expert,
         maps.dispatch_topk_slot,
         maps.dispatch_valid,
-        maps.inverse_map,
-        maps.topk_idx,
-        num_experts,
+        routing.assignment_indices,
+        routing.valid,
+        routing.topk,
+        routing.tokens_per_shard,
     )
     x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
     dispatch = _BulkRingDispatchState(
@@ -436,7 +421,7 @@ def _moe_mlp_ep_ubx_local(
         weight_dispatch=jnp.zeros((x_dispatch.shape[0],), dtype=jnp.float32),
         token_global=jnp.zeros((x_dispatch.shape[0],), dtype=jnp.int32),
         group_sizes=maps.group_sizes,
-        dropped_local=dropped_local[None],
+        dropped_local=routing.dropped_local[None],
     )
     expert = _bulk_ring_expert_compute(
         dispatch,
@@ -457,5 +442,5 @@ def _moe_mlp_ep_ubx_local(
         num_experts,
     )
     output = tree_checkpoint_name(output, _CHECKPOINT_MOE_OUTPUT)
-    dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
+    dropped_total = jax.lax.psum(routing.dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
     return output, dropped_total
