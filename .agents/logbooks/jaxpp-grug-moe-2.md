@@ -458,3 +458,16 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - The allocator failure was not reached, so this run provides no evidence that donation would reduce the `5.62 GiB` stage-1/2 allocation after task-liveness is corrected.
 - Next action:
   - Revert whole-state donation. Before another matched L8 run, identify the executable and buffer category responsible for the large first-execution request or prove a narrower donation scheme preserves every stage-state consumer.
+
+### 2026-07-26 22:34 PDT - add named executable and receive-pool memory attribution
+- Hypothesis: The stage-1/2 `5.62 GiB` and stage-3 `6.09 GiB` requests can be attributed before execution by comparing the lowered receive-buffer plan with `CompiledMemoryStats` for every named JaxPP task.
+- Changes:
+  - `GRUG_JAXPP_LOG_LOCAL_MEMORY_PLAN` precompiles each local task without executing it and emits argument, output, alias, temporary, peak, and code bytes under the exact task name.
+  - The same diagnostic reports the hoisted receive-pool size and each transfer's destination bytes, allocation mode, and adjacent producer/consumer tasks.
+  - The launcher forwards the flag only when explicitly set. Normal execution is unchanged.
+- Evidence:
+  - The last rank-local executables compiled before r7's failures were `grug_1f1b_stage{1,2,3}_update_grouped_components`. Stage 3's failed request exceeds stage 2 by exactly `503,315,968` bytes, equal to `24 * (8192 * 2560) - 512`, so the grouped optimizer update is the leading attribution. Compile order alone is not proof.
+  - NVIDIA/JaxPP `main` remains the pinned `7091a9b5` revision. Current JAX main includes the July 24 XLA device-initiated ragged all-to-all change already exercised by the device-ragged negative controls; no later ragged runtime change is available.
+  - Focused grouped-stage and task-validation tests pass `48/48`; changed-files precommit including Pyrefly passes.
+- Next action:
+  - Commit the diagnostic, then launch one unchanged matched L8 group-size-two run on `cw-rno2a` with memory-plan logging enabled. Match the exact failed request against a task or receive record before changing buffer lifetimes.

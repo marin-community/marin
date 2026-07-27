@@ -292,6 +292,7 @@ def test_may_shell_launcher_forwards_grouped_stage_task_size_in_dry_run(tmp_path
         '-e PP_EXPLICIT_MPMD_STAGE_TASK_MICROBATCH_GROUP_SIZE "$EXPLICIT_MPMD_STAGE_TASK_MICROBATCH_GROUP_SIZE"'
         in _RUN_SCRIPT.read_text()
     )
+    assert "GRUG_JAXPP_LOG_LOCAL_MEMORY_PLAN" in _RUN_SCRIPT.read_text()
 
 
 @pytest.mark.parametrize(

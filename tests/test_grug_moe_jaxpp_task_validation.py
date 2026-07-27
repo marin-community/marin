@@ -27,6 +27,22 @@ class _AutomaticJaxPPCompiled:
     in_info: _AutomaticJaxPPInfo
 
 
+@dataclass(frozen=True)
+class _CompiledMemory:
+    argument_size_in_bytes: int = 11
+    output_size_in_bytes: int = 13
+    alias_size_in_bytes: int = 17
+    temp_size_in_bytes: int = 19
+    peak_memory_in_bytes: int = 23
+    generated_code_size_in_bytes: int = 29
+
+
+@dataclass(frozen=True)
+class _CompiledTask:
+    def memory_analysis(self):
+        return _CompiledMemory()
+
+
 def test_jaxpp_task_call_jaxpr_validation_accepts_closed_task():
     call_jaxpr = jax.make_jaxpr(lambda value: value + 1)(jnp.array(0, dtype=jnp.int32))
 
@@ -164,3 +180,115 @@ def test_automatic_jaxpp_output_shardings_preserve_expert_axis():
     assert metric_shardings["train/loss"].spec == P()
     assert metric_shardings["qb_beta_per_layer"] is None
     assert watch_shardings is None
+
+
+def test_jaxpp_local_memory_plan_attributes_receive_buffers_and_task_executables(monkeypatch):
+    mesh = Mesh(np.asarray(jax.devices()), ("device",))
+    sharding = NamedSharding(mesh, P())
+    array_aval = jax.make_jaxpr(lambda value: value)(jnp.zeros((8,), dtype=jnp.float32)).in_avals[0]
+    token_aval = jax_core.AbstractToken()
+    task_primitive = jax_core.Primitive("task")
+    zeros_primitive = jax_core.Primitive("zeros")
+    transfer_start_primitive = jax_core.Primitive("transfer_start")
+    recv_done_primitive = jax_core.Primitive("recv_done")
+
+    task_input = jax_core.Var(array_aval)
+    send_value = jax_core.Var(array_aval)
+    pooled_buffer = jax_core.Var(array_aval)
+    pooled_token = jax_core.Var(token_aval)
+    pooled_raw_value = jax_core.Var(array_aval)
+    pooled_value = jax_core.Var(array_aval)
+    logical_token = jax_core.Var(token_aval)
+    logical_raw_value = jax_core.Var(array_aval)
+    logical_value = jax_core.Var(array_aval)
+    task_output = jax_core.Var(array_aval)
+    effects = frozenset()
+
+    producer = jax_core.new_jaxpr_eqn(
+        [task_input],
+        [send_value],
+        task_primitive,
+        {"task_name": "producer"},
+        effects,
+    )
+    zeros = jax_core.new_jaxpr_eqn(
+        [],
+        [pooled_buffer],
+        zeros_primitive,
+        {"shardings": (sharding,)},
+        effects,
+    )
+    pooled_transfer = jax_core.new_jaxpr_eqn(
+        [send_value, pooled_buffer],
+        [pooled_token, pooled_raw_value],
+        transfer_start_primitive,
+        {
+            "send_local_shardings": (sharding,),
+            "recv_local_shardings": (sharding,),
+        },
+        effects,
+    )
+    pooled_done = jax_core.new_jaxpr_eqn(
+        [pooled_token, pooled_raw_value],
+        [pooled_value],
+        recv_done_primitive,
+        {},
+        effects,
+    )
+    logical_transfer = jax_core.new_jaxpr_eqn(
+        [send_value],
+        [logical_token, logical_raw_value],
+        transfer_start_primitive,
+        {
+            "send_local_shardings": (sharding,),
+            "recv_local_shardings": (sharding,),
+        },
+        effects,
+    )
+    logical_done = jax_core.new_jaxpr_eqn(
+        [logical_token, logical_raw_value],
+        [logical_value],
+        recv_done_primitive,
+        {},
+        effects,
+    )
+    consumer = jax_core.new_jaxpr_eqn(
+        [pooled_value, logical_value],
+        [task_output],
+        task_primitive,
+        {"task_name": "consumer"},
+        effects,
+    )
+    local_jaxpr = SimpleNamespace(
+        closed_jaxpr=SimpleNamespace(
+            eqns=(
+                producer,
+                zeros,
+                pooled_transfer,
+                pooled_done,
+                logical_transfer,
+                logical_done,
+                consumer,
+            )
+        )
+    )
+    monkeypatch.setattr(
+        grug_train,
+        "jaxpp_jax_primitives",
+        SimpleNamespace(precompile_task=lambda **_params: _CompiledTask()),
+    )
+
+    plan = grug_train._jaxpp_local_memory_plan(local_jaxpr)
+
+    recv_pool = next(record for record in plan if record["category"] == "recv_pool")
+    recv_destinations = [record for record in plan if record["category"] == "recv_destination"]
+    producer_memory = next(
+        record for record in plan if record["category"] == "task_executable" and record["task_name"] == "producer"
+    )
+    assert recv_pool["bytes_per_device"] == 32
+    assert [record["allocation_mode"] for record in recv_destinations] == ["pooled", "per_transfer"]
+    assert all(record["bytes_per_device"] == 32 for record in recv_destinations)
+    assert all(record["producer_tasks"] == ["producer"] for record in recv_destinations)
+    assert all(record["consumer_tasks"] == ["consumer"] for record in recv_destinations)
+    assert producer_memory["temp_size_in_bytes"] == 19
+    assert producer_memory["peak_memory_in_bytes"] == 23

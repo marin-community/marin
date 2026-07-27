@@ -5,6 +5,7 @@ import contextlib
 import dataclasses
 import functools
 import importlib
+import json
 import logging
 import math
 import os
@@ -79,11 +80,13 @@ try:
     import jaxpp.api as jaxpp
     import jaxpp.core as jaxpp_core
     import jaxpp.dime2 as jaxpp_dime2
+    import jaxpp.jax_primitives as jaxpp_jax_primitives
     from jaxpp.experimental import mpmd as jaxpp_explicit_mpmd
 except ModuleNotFoundError:
     jaxpp = None
     jaxpp_core = None
     jaxpp_dime2 = None
+    jaxpp_jax_primitives = None
     jaxpp_explicit_mpmd = None
 
 logger = logging.getLogger(__name__)
@@ -1651,6 +1654,112 @@ def _localize_stage_optimizer_state(mpmd_mesh, stage_index: int, opt_state: opta
     return jax.tree.map(localize_leaf, opt_state)
 
 
+_logged_jaxpp_local_memory_plans: set[int] = set()
+
+
+def _jaxpp_shard_bytes(aval, sharding: NamedSharding) -> int:
+    shard_shape = sharding.shard_shape(aval.shape)
+    return int(np.prod(shard_shape, dtype=np.int64)) * np.dtype(aval.dtype).itemsize
+
+
+def _jaxpp_local_memory_plan(local_jaxpr) -> tuple[dict[str, Any], ...]:
+    if jaxpp_jax_primitives is None:
+        raise ModuleNotFoundError("jaxpp.jax_primitives is required for explicit MPMD memory diagnostics")
+
+    equations = local_jaxpr.closed_jaxpr.eqns
+    producer_task_by_var = {}
+    consumer_tasks_by_var = {}
+    recv_done_by_token = {}
+    for equation in equations:
+        if equation.primitive.name == "task":
+            task_name = equation.params["task_name"]
+            producer_task_by_var.update((outvar, task_name) for outvar in equation.outvars)
+            for invar in equation.invars:
+                consumer_tasks_by_var.setdefault(invar, []).append(task_name)
+        elif equation.primitive.name == "recv_done":
+            recv_done_by_token[equation.invars[0]] = equation
+
+    records: list[dict[str, Any]] = []
+    for equation_index, equation in enumerate(equations):
+        if equation.primitive.name == "zeros":
+            buffer_bytes = [
+                _jaxpp_shard_bytes(outvar.aval, sharding)
+                for outvar, sharding in zip(equation.outvars, equation.params["shardings"], strict=True)
+            ]
+            records.append(
+                {
+                    "category": "recv_pool",
+                    "equation_index": equation_index,
+                    "buffer_count": len(buffer_bytes),
+                    "bytes_per_device": sum(buffer_bytes),
+                    "buffer_bytes_per_device": buffer_bytes,
+                }
+            )
+            continue
+
+        if equation.primitive.name == "transfer_start":
+            send_count = len(equation.params["send_local_shardings"])
+            recv_shardings = equation.params["recv_local_shardings"]
+            recv_outvars = equation.outvars[1:]
+            recv_bytes = [
+                _jaxpp_shard_bytes(outvar.aval, sharding)
+                for outvar, sharding in zip(recv_outvars, recv_shardings, strict=True)
+            ]
+            recv_done = recv_done_by_token.get(equation.outvars[0])
+            consumer_vars = recv_done.outvars if recv_done is not None else recv_outvars
+            records.append(
+                {
+                    "category": "recv_destination",
+                    "equation_index": equation_index,
+                    "allocation_mode": "pooled" if len(equation.invars) > send_count else "per_transfer",
+                    "bytes_per_device": sum(recv_bytes),
+                    "buffer_bytes_per_device": recv_bytes,
+                    "producer_tasks": sorted(
+                        {
+                            producer_task_by_var[invar]
+                            for invar in equation.invars[:send_count]
+                            if invar in producer_task_by_var
+                        }
+                    ),
+                    "consumer_tasks": sorted(
+                        {task_name for var in consumer_vars for task_name in consumer_tasks_by_var.get(var, ())}
+                    ),
+                }
+            )
+            continue
+
+        if equation.primitive.name != "task":
+            continue
+
+        compiled = jaxpp_jax_primitives.precompile_task(**equation.primitive.get_bind_params(equation.params))
+        memory = compiled.memory_analysis()
+        records.append(
+            {
+                "category": "task_executable",
+                "equation_index": equation_index,
+                "task_name": equation.params["task_name"],
+                "argument_size_in_bytes": memory.argument_size_in_bytes,
+                "output_size_in_bytes": memory.output_size_in_bytes,
+                "alias_size_in_bytes": memory.alias_size_in_bytes,
+                "temp_size_in_bytes": memory.temp_size_in_bytes,
+                "peak_memory_in_bytes": memory.peak_memory_in_bytes,
+                "generated_code_size_in_bytes": memory.generated_code_size_in_bytes,
+            }
+        )
+    return tuple(records)
+
+
+def _log_jaxpp_local_memory_plan_once(local_jaxpr) -> None:
+    if os.environ.get("GRUG_JAXPP_LOG_LOCAL_MEMORY_PLAN", "false").lower() not in ("1", "true", "yes", "on"):
+        return
+    plan_key = id(local_jaxpr.closed_jaxpr.jaxpr)
+    if plan_key in _logged_jaxpp_local_memory_plans:
+        return
+    for record in _jaxpp_local_memory_plan(local_jaxpr):
+        logger.info("GRUG_JAXPP_LOCAL_MEMORY_PLAN %s", json.dumps(record, sort_keys=True))
+    _logged_jaxpp_local_memory_plans.add(plan_key)
+
+
 @dataclass(frozen=True)
 class _LocalLoweredExplicitMpmdStep:
     lowered: Any
@@ -1666,6 +1775,8 @@ class _LocalLoweredExplicitMpmdStep:
             raise ValueError("lowered explicit MPMD train step received an unexpected input tree")
 
         local_jaxpr = self.lowered._local_jaxpr
+        with self.lowered.mpmd_mesh:
+            _log_jaxpp_local_memory_plan_once(local_jaxpr)
         local_outs = self.lowered.eval_local(*(flat_args[idx] for idx in local_jaxpr.global_invar_indices))
         local_outs_by_idx = dict(zip(local_jaxpr.global_outvar_indices, local_outs, strict=True))
 
