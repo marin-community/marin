@@ -16,6 +16,49 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T13:59:24Z — 280,524 pairs verified; all 330 ambiguities covered
+
+- `/rav/rav-datakit-6854-reconcile-manual-1358-v1249` independently
+  reconciled 2,209 completed semantic checkpoints and all 330 unresolved model
+  outcomes. Every unresolved outcome has a consistent full-text decision;
+  none are missing. The snapshot covers 280,524 of 755,281 semantic
+  candidates (37.14%). Applying the 71 false-positive and 259 true-duplicate
+  manual decisions gives:
+
+  - baseline: 223,753 pairs, 142,026 false positives, and 81,727 true
+    duplicates;
+  - treatment: 56,771 pairs, 29,379 false positives, and 27,392 true
+    duplicates;
+  - combined: 171,405 false positives and 109,119 true duplicates.
+
+  The observed false-positive rates are 63.4745% for baseline and 51.7500%
+  for treatment, a treatment reduction of 11.7244 percentage points. The
+  immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-1358.json`
+  with SHA-256
+  `7ae7c8cdf133a6553753eba8723737ef25cfa54e2ed626b29757d5d00ce6dbbb`.
+- Five independent audit waves re-read and hash-validated another 10,624
+  persisted pairs:
+
+  - `/rav/rav-datakit-6854-audit-next-checkpoints-1349-v1243` covered 2,304
+    pairs with no unresolved outcomes;
+  - `/rav/rav-datakit-6854-audit-next-checkpoints-1351-v1244` covered 2,304
+    pairs with two unresolved outcomes;
+  - `/rav/rav-datakit-6854-audit-next-checkpoints-1354-v1246` covered 2,304
+    pairs with two unresolved outcomes;
+  - `/rav/rav-datakit-6854-audit-next-checkpoints-1356-v1248` covered 1,792
+    pairs with three unresolved outcomes;
+  - `/rav/rav-datakit-6854-audit-next-checkpoints-1400-v1250` covered 1,920
+    pairs with no unresolved outcomes.
+
+  Every unresolved outcome in those waves already has a consistent full-text
+  decision. The next independent-audit frontiers are p0 `(11, 4,224)`, p1
+  `(43, 3,200)`, p2 `(75, 4,096)`, and p3 `(108, 128)`. The p3 worker is
+  processing an unusually large 128-pair checkpoint containing 45,320,057
+  combined characters; its largest pair contains 10,247,709 characters.
+- All four batch-priority 2-H100 semantic-review jobs remain running. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-27T13:47:41Z — 279,756 pairs verified; all 330 ambiguities covered
 
 - `/rav/rav-datakit-6854-reconcile-manual-1347-v1242` independently
