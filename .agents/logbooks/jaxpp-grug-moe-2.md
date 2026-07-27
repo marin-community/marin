@@ -1268,3 +1268,20 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - SendRecv/waiting and pipeline stall now dominate. The `2.522%` L8 gain alone projects below 20 MFU from the `18.2583` best exact baseline, but the all-reduce fix scales with microbatch count. The decisive remaining measurement is the exact L24 batch8192/m256 combination before closing this path.
 - Cleanup:
   - No matching pod, workload, Kubernetes job, failed allocation, or stale profiler process remains live.
+
+### 2026-07-27 07:18 PDT - Exact L24/m256 explicit pullback hits a six-layer compiler crash
+- Snapshot:
+  - Parent `/dlwh/iris-run-job-20260727-140249` and child `/dlwh/iris-run-job-20260727-140249/grug-train-jaxpp-rno2a-ring-ep2d4-explicitbwd-fp8-l24-e64k4-b8192-s4096-p4m256-exact-r1-20260727` launched from `3e852277ad`.
+- Command:
+  - `GRUG_JAXPP_LOG_LOCAL_MEMORY_PLAN=false TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --cluster cw-rno2a --prefix s3://marin-us-east-02a/marin --run-id jaxpp-rno2a-ring-ep2d4-explicitbwd-fp8-l24-e64k4-b8192-s4096-p4m256-exact-r1-20260727 --schedule std_1f1b --implementation explicit_mpmd --explicit-mpmd-schedule-mode default --explicit-mpmd-pipeline-wire-format fp8 --explicit-mpmd-stage-task-microbatch-group-size 1 --expert-gradient-accumulation fused_fp32_data_local --physical-stages 4 --logical-stages 4 --stage-layer-counts 6,6,6,6 --microbatches 256 --nodes 4 --gpus-per-replica 8 --expert-axis 2 --layers 24 --experts 64 --top-k 4 --vocab-size 8192 --batch 8192 --seq-len 4096 --moe-implementation ring --attention-implementation gpu_fa4_cute --ragged-dot-implementation triton --ragged-dot-block-k 32 --ragged-dot-num-warps 8 --loss-implementation xla --steps 12 --tracker wandb --xla-memory-fraction 0.70 --remat save_moe`.
+- Result:
+  - Both attempts imported and initialized all four six-layer ranks. Rank 3 failed twice during local backward compilation before step 0.
+  - Attempt 0 exited `139` while compiling `stage3_loss_backward_accumulating`. Attempt 1 passed that task, then emitted `Fatal Python error: Aborted` while downstream backward stages compiled and was recorded as exit `139`.
+  - Ranks 0-2 were atomically bounced on each rank-3 failure. There is no OOM, preemption, setup, import, NCCL, DIME-execution, or training evidence.
+  - Iris began a third deterministic retry because this launch path did not expose a zero-retry setting. The parent was stopped immediately. Parent and child are terminal `killed`; the child summary records failures=`2`, preemptions=`4`, and rank 3 exit `139`. Direct Kubernetes inspection reports zero matching pods, jobs, or workloads.
+  - W&B [exact r1](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-ep2d4-explicitbwd-fp8-l24-e64k4-b8192-s4096-p4m256-exact-r1-20260727) is stale `running` with zero metric rows.
+- Interpretation:
+  - The run provides no exact MFU verdict. The best exact baseline remains `18.2583` mean MFU and the target remains strictly above 20.
+  - L8 proves two-layer explicit backward compilation and execution. The new boundary is the six-layer local loss/backward graph, not runtime collectives or HBM.
+- Next action:
+  - Reduce or outline the six-layer explicit pullback compile graph while preserving the accepted `0.002` floating-tensor policy and exact routing/drop behavior. Require a focused CPU graph/numerical regression before another H100x32 launch; do not rerun the identical command.
