@@ -450,19 +450,27 @@ class RuntimeManager {
   std::vector<std::unique_ptr<DeviceRuntime>> runtimes_;
 };
 
-__global__ void CopyAndMaskDispatchKernel(
-    const __nv_bfloat16* source,
+__global__ void CopyAndMaskDispatchRowsKernel(
+    const uint4* source,
     const bool* valid,
-    __nv_bfloat16* destination,
+    uint4* destination,
     int rows,
-    int hidden) {
-  const size_t index = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  const size_t count = static_cast<size_t>(rows) * hidden;
-  if (index >= count) {
+    int vectors_per_row) {
+  const int row = static_cast<int>(blockIdx.x);
+  if (row >= rows) {
     return;
   }
-  const int row = static_cast<int>(index / hidden);
-  destination[index] = valid[row] ? source[index] : __float2bfloat16(0.0f);
+  const size_t row_offset = static_cast<size_t>(row) * vectors_per_row;
+  if (valid[row]) {
+    for (int column = threadIdx.x; column < vectors_per_row; column += blockDim.x) {
+      destination[row_offset + column] = source[row_offset + column];
+    }
+  } else {
+    const uint4 zero{0, 0, 0, 0};
+    for (int column = threadIdx.x; column < vectors_per_row; column += blockDim.x) {
+      destination[row_offset + column] = zero;
+    }
+  }
 }
 
 ffi::Error DispatchTopkBf16(
@@ -512,17 +520,17 @@ ffi::Error DispatchTopkBf16(
         stream);
 
     constexpr int kThreads = 256;
-    const size_t count = static_cast<size_t>(config.max_tokens_per_rank) * config.hidden_size;
-    const int blocks = static_cast<int>((count + kThreads - 1) / kThreads);
-    const auto* dispatch_source = reinterpret_cast<const __nv_bfloat16*>(
+    constexpr int kBf16PerVector = sizeof(uint4) / sizeof(__nv_bfloat16);
+    const int vectors_per_row = config.hidden_size / kBf16PerVector;
+    const auto* dispatch_source = reinterpret_cast<const uint4*>(
         static_cast<const uint8_t*>(runtime.pool) + dispatch_offset);
-    CopyAndMaskDispatchKernel<<<blocks, kThreads, 0, stream>>>(
+    CopyAndMaskDispatchRowsKernel<<<config.max_tokens_per_rank, kThreads, 0, stream>>>(
         dispatch_source,
         dispatch_valid.typed_data(),
-        reinterpret_cast<__nv_bfloat16*>(dispatch_output->typed_data()),
+        reinterpret_cast<uint4*>(dispatch_output->typed_data()),
         config.max_tokens_per_rank,
-        config.hidden_size);
-    ThrowOnCuda(cudaGetLastError(), "CopyAndMaskDispatchKernel");
+        vectors_per_row);
+    ThrowOnCuda(cudaGetLastError(), "CopyAndMaskDispatchRowsKernel");
     return ffi::Error::Success();
   } catch (const std::exception& error) {
     return ffi::Error::Internal(error.what());
