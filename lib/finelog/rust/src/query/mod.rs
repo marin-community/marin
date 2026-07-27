@@ -94,24 +94,6 @@ fn query_pool_bytes() -> usize {
     }
 }
 
-fn parse_metadata_cache_bytes(raw: Option<&str>) -> Option<usize> {
-    raw.and_then(|value| value.trim().parse::<usize>().ok())
-        .filter(|mb| *mb > 0)
-        .map(|mb| mb.saturating_mul(MEBIBYTE))
-}
-
-fn query_metadata_cache_bytes() -> Option<usize> {
-    let raw = std::env::var("FINELOG_QUERY_METADATA_CACHE_MB").ok();
-    let bytes = parse_metadata_cache_bytes(raw.as_deref());
-    if raw.is_some() && bytes.is_none() {
-        tracing::warn!(
-            value = raw.as_deref().unwrap_or_default(),
-            "ignoring invalid FINELOG_QUERY_METADATA_CACHE_MB; using DataFusion default"
-        );
-    }
-    bytes
-}
-
 fn build_runtime_env(
     memory_pool_bytes: usize,
     metadata_cache_bytes: Option<usize>,
@@ -124,6 +106,31 @@ fn build_runtime_env(
     builder.build_arc().expect("build query RuntimeEnv")
 }
 
+static SHARED_RUNTIME_ENV: OnceLock<Arc<RuntimeEnv>> = OnceLock::new();
+
+fn configured_runtime_env(metadata_cache_mb: Option<usize>) -> Arc<RuntimeEnv> {
+    let memory_pool_bytes = query_pool_bytes();
+    let metadata_cache_bytes = metadata_cache_mb.map(|mb| mb.saturating_mul(MEBIBYTE));
+    let runtime = build_runtime_env(memory_pool_bytes, metadata_cache_bytes);
+    tracing::info!(
+        memory_pool_limit_mb = memory_pool_bytes / MEBIBYTE,
+        metadata_cache_limit_mb = runtime.cache_manager.get_metadata_cache_limit() / MEBIBYTE,
+        "query engine configured"
+    );
+    runtime
+}
+
+/// Initialize the process-wide DataFusion runtime before serving requests.
+///
+/// `metadata_cache_mb = None` preserves DataFusion's default. The deployment
+/// entry point calls this once with its parsed CLI configuration; library users
+/// that only call [`make_ctx`] receive the default.
+pub fn configure_query_runtime(metadata_cache_mb: Option<usize>) -> Result<(), &'static str> {
+    SHARED_RUNTIME_ENV
+        .set(configured_runtime_env(metadata_cache_mb))
+        .map_err(|_| "query runtime is already initialized")
+}
+
 /// A process-wide `RuntimeEnv` whose `GreedyMemoryPool` bounds total query
 /// memory. Shared across every `make_ctx` so concurrent queries compete for one
 /// budget (bounding the SERVER, not each query independently): a runaway query
@@ -133,18 +140,9 @@ fn build_runtime_env(
 /// OOM-killing the process (which surfaces to clients as a dropped connection /
 /// 502).
 fn shared_runtime_env() -> Arc<RuntimeEnv> {
-    static RT: OnceLock<Arc<RuntimeEnv>> = OnceLock::new();
-    RT.get_or_init(|| {
-        let memory_pool_bytes = query_pool_bytes();
-        let runtime = build_runtime_env(memory_pool_bytes, query_metadata_cache_bytes());
-        tracing::info!(
-            memory_pool_limit_mb = memory_pool_bytes / MEBIBYTE,
-            metadata_cache_limit_mb = runtime.cache_manager.get_metadata_cache_limit() / MEBIBYTE,
-            "query engine configured"
-        );
-        runtime
-    })
-    .clone()
+    SHARED_RUNTIME_ENV
+        .get_or_init(|| configured_runtime_env(None))
+        .clone()
 }
 
 /// Build a read-only `SessionContext` matching DuckDB's externally-observable
@@ -544,12 +542,6 @@ mod tests {
     #[test]
     fn metadata_cache_limit_is_configurable() {
         let one_gibibyte = 1024 * MEBIBYTE;
-        assert_eq!(
-            parse_metadata_cache_bytes(Some(" 1024 ")),
-            Some(one_gibibyte)
-        );
-        assert_eq!(parse_metadata_cache_bytes(Some("0")), None);
-        assert_eq!(parse_metadata_cache_bytes(Some("invalid")), None);
 
         let runtime = build_runtime_env(MIN_QUERY_POOL_BYTES, Some(one_gibibyte));
         assert_eq!(

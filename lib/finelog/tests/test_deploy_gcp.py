@@ -33,18 +33,3 @@ def test_render_bootstrap_refuses_a_forwarding_config() -> None:
     )
     with pytest.raises(click.ClickException, match="forwarding is not supported on the gcp backend"):
         render_bootstrap_for(cfg, "ghcr.io/example/finelog@sha256:abc")
-
-
-def test_render_bootstrap_sets_the_query_metadata_cache_limit() -> None:
-    cfg = FinelogConfig(
-        name="finelog-marin",
-        port=10001,
-        image="ghcr.io/example/finelog:latest",
-        remote_log_dir="gs://bucket/finelog/marin",
-        deployment=Deployment(gcp=GcpDeployment(project="proj", zone="us-central1-a")),
-        query_metadata_cache_mb=1024,
-    )
-
-    script = render_bootstrap_for(cfg, "ghcr.io/example/finelog@sha256:abc")
-
-    assert "-e FINELOG_QUERY_METADATA_CACHE_MB=1024" in script
