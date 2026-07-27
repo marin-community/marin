@@ -18,6 +18,7 @@ prefetch_dispatch="${SCALE_A2A_CLONE_PREFETCH_DISPATCH:-0}"
 two_buffer_combine="${SCALE_A2A_CLONE_TWO_BUFFER_COMBINE:-0}"
 muon_pad_nonexpert="${SCALE_MUON_PAD_NONEXPERT:-0}"
 fused_qkv="${SCALE_ATTN_FUSED_QKV:-0}"
+nccl_cuda13="${SCALE_NCCL_CUDA13:-0}"
 
 xla_flags=(
   "--xla_gpu_enable_latency_hiding_scheduler=true"
@@ -93,6 +94,7 @@ fi
   -e SCALE_MUON_SYRK 1 \
   -e SCALE_MUON_PAD_NONEXPERT "$muon_pad_nonexpert" \
   -e SCALE_ATTN_FUSED_QKV "$fused_qkv" \
+  -e SCALE_NCCL_CUDA13 "$nccl_cuda13" \
   -e SCALE_SCAN_LAYERS 1 \
   -e SCALE_SCAN_UNROLL 1 \
   -e SCALE_REMAT recompute_all \
