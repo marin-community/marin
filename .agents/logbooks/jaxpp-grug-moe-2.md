@@ -1187,3 +1187,32 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - The focused Iris suite reports `10 passed`; changed-file pre-commit including Pyrefly passes.
 - Next action:
   - Commit and push the generalized loader setup, then rerun the full `d9bb05952e` numerical policy under a fresh one-H100 job.
+
+### 2026-07-27 06:46 PDT - QuACK 0.6.1 executes but fails the full numerical gate
+- Job:
+  - `/dlwh/quack061-numerical-gate-r5-20260727-133924` ran from `8cc00c6f6252e663d54b09ba05acf0d8329b20dd` on one `cw-rno2a` H100.
+  - Command: `CUDA_VISIBLE_DEVICES=0 TF_GPU_ALLOCATOR=cuda_malloc_async XLA_PYTHON_CLIENT_MEM_FRACTION=.70 uv run python experiments/grug/moe/repro_quack_grouped_mlp_numerics.py --warmup 2 --iterations 4`.
+- Runtime:
+  - Imports passed with JAX `0.11.0`, PyTorch `2.11.0+cu128`, QuACK `0.6.1`, CUTLASS DSL `4.6.0`, cuFile `1.13.1.3`, and cuSPARSELt `0.7.1` on an H100 80 GB.
+  - This validates the complete PyTorch CUDA dependency closure and generalized NVIDIA-wheel loader path.
+- Numerical result:
+
+  | Tensor | Relative L2 | Cosine similarity | Accepted at `0.002` |
+  | --- | ---: | ---: | --- |
+  | loss | `0.000210469` | `0.999999980` | yes |
+  | output | `0.00606944` | `0.999981726` | no |
+  | gradient.tokens | `1.28293727` | `0.02049198` | no |
+  | gradient.routing_weights | `0.00295452` | `0.999995699` | no |
+  | gradient.w13 | `1.41239541` | `0.00258660` | no |
+  | gradient.w2 | `0.00697065` | `0.999975816` | no |
+
+  - Every tensor was finite. Near-zero cosine for token and W13 gradients makes this a backward-path correctness failure, not acceptable BF16 accumulation drift.
+  - The fixed route table was exact with `65,536` assignments, 64 experts, and min/max `1,024` assignments per expert. Dropped assignments were exactly zero.
+  - Timing is intentionally absent because the harness benchmarks only after numerical admission.
+- Terminal state:
+  - The gate returned exit `1`, so Iris records one failed task after `29.41s`; retries were disabled. Cleanup verified zero pods, workloads, and jobs.
+- Interpretation:
+  - Proper Sonic/QuACK remains closed as a performance candidate under the user-approved `0.002` policy. The import/runtime upgrade is successful, but the current JAX custom-VJP adapter is not numerically admissible with QuACK `0.6.1`.
+  - Do not launch the L8 JaxPP profile from this result and do not weaken tolerances.
+- Next action:
+  - Audit the QuACK 0.6.1 grouped-GEMM backward contract against `sonic_quack.py`, focusing on layout/transposition semantics that could independently corrupt token and W13 gradients. Run only a smallest discriminating gate after identifying a concrete adapter hypothesis.
