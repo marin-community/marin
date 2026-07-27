@@ -87,6 +87,7 @@ _DIAGNOSTICS = (
     "full-block-boundaries",
     "full-block-remat-scope",
     "split-executable-boundaries",
+    "split-single-finish-vjp",
 )
 
 
@@ -576,6 +577,51 @@ def joined_moe_finish_boundary_value_and_grads(
         post_attention_gradients,
         mlp_input_gradients,
         shared_output_gradients,
+    )
+
+
+def single_moe_finish_boundary_value_and_grads(
+    params: Block,
+    qb_beta: jax.Array,
+    post_attention: jax.Array,
+    mlp_input: jax.Array,
+    shared_output: jax.Array,
+    output_cotangent: jax.Array,
+):
+    """Differentiate one independently compiled MoE and residual finish task."""
+    policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+    remat_moe = eqx.filter_checkpoint(MoEMLP.__call__, policy=policy)
+
+    def projected_finish(
+        master_params: Block,
+        current_post_attention: jax.Array,
+        current_mlp_input: jax.Array,
+        current_shared_output: jax.Array,
+    ):
+        block = grug_train._compute_block(master_params, qb_beta, _MIXED_PRECISION)
+        routed_output, router_stats = remat_moe(block.mlp, current_mlp_input)
+        update = routed_output + current_shared_output if block.shared is not None else routed_output
+        output = current_post_attention + update
+        loss = _project_output(output, output_cotangent)
+        loss += ROUTER_Z_LOSS_SCALE * router_stats["router_z_loss"]
+        return loss, (routed_output, output, router_stats)
+
+    (loss, auxiliary), gradients = jax.value_and_grad(
+        projected_finish,
+        argnums=(0, 1, 2, 3),
+        has_aux=True,
+    )(params, post_attention, mlp_input, shared_output)
+    routed_output, output, router_stats = auxiliary
+    parameter_gradient, post_attention_gradient, mlp_input_gradient, shared_output_gradient = gradients
+    return (
+        loss,
+        routed_output,
+        output,
+        router_stats,
+        parameter_gradient,
+        post_attention_gradient,
+        mlp_input_gradient,
+        shared_output_gradient,
     )
 
 
@@ -1218,6 +1264,19 @@ def _combine_single_full_block_forwards(first, second):
     return tuple((first[index], second[index]) for index in range(len(first)))
 
 
+def _combine_single_finish_results(first, second):
+    return (
+        (first[0], second[0]),
+        (first[1], second[1]),
+        (first[2], second[2]),
+        (first[3], second[3]),
+        grug_train._sum_microbatch_group((first[4], second[4])),
+        (first[5], second[5]),
+        (first[6], second[6]),
+        (first[7], second[7]),
+    )
+
+
 def _tree_parity(actual, reference, *, root: str) -> dict[str, Any]:
     zero = jnp.asarray(0.0, dtype=jnp.float32)
     return build_parity_report(
@@ -1312,6 +1371,52 @@ def _report_full_block_boundaries(
             route_mismatches=route_mismatches,
             routing_count_mismatches=routing_count_mismatches,
             first_divergent_boundary=first_divergent_boundary,
+            passed=passed,
+        )
+    return passed
+
+
+def _report_finish_vjp_comparison(
+    process_id: int,
+    event_name: str,
+    actual,
+    reference,
+) -> bool:
+    loss_report = tuple(
+        build_value_parity(actual_loss, reference_loss, tolerance=DEFAULT_TOLERANCE)
+        for actual_loss, reference_loss in zip(actual[0], reference[0], strict=True)
+    )
+    reports = {
+        "moe_outputs": _tree_parity(actual[1], reference[1], root="moe_outputs"),
+        "block_outputs": _tree_parity(actual[2], reference[2], root="block_outputs"),
+        "router_stats": _tree_parity(actual[3], reference[3], root="router_stats"),
+        "parameter_gradients": _tree_parity(actual[4], reference[4], root="parameter_gradients"),
+        "post_attention_gradients": _tree_parity(
+            actual[5],
+            reference[5],
+            root="post_attention_gradients",
+        ),
+        "mlp_input_gradients": _tree_parity(actual[6], reference[6], root="mlp_input_gradients"),
+        "shared_output_gradients": _tree_parity(
+            actual[7],
+            reference[7],
+            root="shared_output_gradients",
+        ),
+    }
+    routing_count_mismatches = _routing_count_mismatches(actual[3], reference[3])
+    passed = (
+        all(loss.passed for loss in loss_report)
+        and all(report["passed"] for report in reports.values())
+        and not any(routing_count_mismatches)
+    )
+    if process_id == 0:
+        event(
+            process_id,
+            event_name,
+            tolerance=DEFAULT_TOLERANCE,
+            loss=[dataclasses.asdict(loss) for loss in loss_report],
+            reports=reports,
+            routing_count_mismatches=routing_count_mismatches,
             passed=passed,
         )
     return passed
@@ -2178,6 +2283,221 @@ def _run_split_executable_boundary_diagnostic(
     return passed
 
 
+def _run_split_single_finish_vjp_diagnostic(
+    process_id: int,
+    params: Block,
+    qb_beta: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+    cotangents: tuple[jax.Array, jax.Array],
+) -> bool:
+    ordered_arguments = (params, qb_beta, hiddens[0], cotangents[0])
+    compiled_ordered = _lower_and_compile(
+        process_id,
+        "r11_ordered_full_block_vjp",
+        jax.jit(single_full_block_boundary_value_and_grads),
+        ordered_arguments,
+    )
+    ordered_results = tuple(
+        _execute_compiled(
+            process_id,
+            f"r11_ordered_full_block_vjp_{index}",
+            compiled_ordered,
+            (params, qb_beta, hidden, cotangent),
+        )
+        for index, (hidden, cotangent) in enumerate(zip(hiddens, cotangents, strict=True))
+    )
+    ordered_reference = _combine_single_full_block_results(*ordered_results)
+
+    compiled_pre_forward = _lower_and_compile(
+        process_id,
+        "r11_pre_task_forward",
+        jax.jit(single_pre_moe_checkpoint_boundary_forward),
+        (params, qb_beta, hiddens[0]),
+    )
+    standalone_prepared = tuple(
+        _execute_compiled(
+            process_id,
+            f"r11_pre_task_forward_{index}",
+            compiled_pre_forward,
+            (params, qb_beta, hidden),
+        )
+        for index, hidden in enumerate(hiddens)
+    )
+    standalone_post_attention = tuple(result[0] for result in standalone_prepared)
+    standalone_mlp_inputs = tuple(result[1] for result in standalone_prepared)
+    standalone_shared_outputs = tuple(result[2] for result in standalone_prepared)
+    compiled_joined_finish = _lower_and_compile(
+        process_id,
+        "r11_joined_finish_vjp",
+        jax.jit(joined_moe_finish_boundary_value_and_grads),
+        (
+            params,
+            qb_beta,
+            standalone_post_attention,
+            standalone_mlp_inputs,
+            standalone_shared_outputs,
+            cotangents,
+        ),
+    )
+    bootstrap_finish = _execute_compiled(
+        process_id,
+        "r11_joined_finish_vjp_bootstrap",
+        compiled_joined_finish,
+        (
+            params,
+            qb_beta,
+            standalone_post_attention,
+            standalone_mlp_inputs,
+            standalone_shared_outputs,
+            cotangents,
+        ),
+    )
+    bootstrap_boundary_cotangents = tuple(
+        (bootstrap_finish[5][index], bootstrap_finish[6][index], bootstrap_finish[7][index]) for index in range(2)
+    )
+    compiled_pre_vjp = _lower_and_compile(
+        process_id,
+        "r11_pre_task_vjp",
+        jax.jit(single_pre_moe_checkpoint_boundary_primal_and_value_and_grads),
+        (params, qb_beta, hiddens[0], bootstrap_boundary_cotangents[0]),
+    )
+    exposed_pre_vjps = tuple(
+        _execute_compiled(
+            process_id,
+            f"r11_pre_task_vjp_primal_{index}",
+            compiled_pre_vjp,
+            (params, qb_beta, hidden, boundary_cotangent),
+        )
+        for index, (hidden, boundary_cotangent) in enumerate(zip(hiddens, bootstrap_boundary_cotangents, strict=True))
+    )
+    exposed_pre = tuple(result[0] for result in exposed_pre_vjps)
+    post_attention = tuple(result[0] for result in exposed_pre)
+    mlp_inputs = tuple(result[1] for result in exposed_pre)
+    shared_outputs = tuple(result[2] for result in exposed_pre)
+    pre_ring = tuple(result[3] for result in exposed_pre)
+
+    joined_finish_arguments = (
+        params,
+        qb_beta,
+        post_attention,
+        mlp_inputs,
+        shared_outputs,
+        cotangents,
+    )
+    joined_finish = _execute_compiled(
+        process_id,
+        "r11_joined_finish_vjp_on_saved_primals",
+        compiled_joined_finish,
+        joined_finish_arguments,
+    )
+    joined_forward = (
+        post_attention,
+        mlp_inputs,
+        shared_outputs,
+        pre_ring,
+        joined_finish[1],
+        joined_finish[2],
+        joined_finish[3],
+    )
+    saved_forward_passed = _report_full_block_forward(
+        process_id,
+        "r11_saved_vjp_primals_vs_ordered",
+        joined_forward,
+        ordered_reference[1:8],
+    )
+
+    compiled_single_finish = _lower_and_compile(
+        process_id,
+        "r11_single_finish_vjp",
+        jax.jit(single_moe_finish_boundary_value_and_grads),
+        (
+            params,
+            qb_beta,
+            post_attention[0],
+            mlp_inputs[0],
+            shared_outputs[0],
+            cotangents[0],
+        ),
+    )
+    single_finish_results = tuple(
+        _execute_compiled(
+            process_id,
+            f"r11_single_finish_vjp_{index}",
+            compiled_single_finish,
+            (
+                params,
+                qb_beta,
+                post_attention[index],
+                mlp_inputs[index],
+                shared_outputs[index],
+                cotangents[index],
+            ),
+        )
+        for index in range(2)
+    )
+    combined_single_finish = _combine_single_finish_results(*single_finish_results)
+    joined_vs_single_finish_passed = _report_finish_vjp_comparison(
+        process_id,
+        "r11_joined_finish_vs_two_single_finish_report",
+        joined_finish,
+        combined_single_finish,
+    )
+
+    single_boundary_cotangents = tuple(
+        (
+            single_finish_results[index][5],
+            single_finish_results[index][6],
+            single_finish_results[index][7],
+        )
+        for index in range(2)
+    )
+    pre_gradients = tuple(
+        _execute_compiled(
+            process_id,
+            f"r11_pre_task_vjp_gradient_{index}",
+            compiled_pre_vjp,
+            (params, qb_beta, hiddens[index], single_boundary_cotangents[index]),
+        )
+        for index in range(2)
+    )
+    parameter_gradient = grug_train._sum_microbatch_group(
+        (
+            combined_single_finish[4],
+            pre_gradients[0][1],
+            pre_gradients[1][1],
+        )
+    )
+    assembled = (
+        combined_single_finish[0],
+        post_attention,
+        mlp_inputs,
+        shared_outputs,
+        pre_ring,
+        combined_single_finish[1],
+        combined_single_finish[2],
+        combined_single_finish[3],
+        parameter_gradient,
+        (pre_gradients[0][2], pre_gradients[1][2]),
+    )
+    full_assembly_passed = _report_full_block_boundaries(
+        process_id,
+        "r11_single_finish_assembled_vs_ordered_report",
+        assembled,
+        ordered_reference,
+    )
+    passed = saved_forward_passed and full_assembly_passed
+    if process_id == 0:
+        event(
+            process_id,
+            "split_single_finish_vjp_summary",
+            saved_forward_passed=saved_forward_passed,
+            joined_vs_single_finish_passed=joined_vs_single_finish_passed,
+            full_assembly_passed=full_assembly_passed,
+            passed=passed,
+        )
+    return passed
+
+
 def _run_worker(
     process_id: int,
     coordinator_address: str,
@@ -2276,6 +2596,15 @@ def _run_worker(
             multihost_utils.sync_global_devices("group2_component_split_executable_boundaries_complete")
             if not passed:
                 raise AssertionError("no split-executable arm passed the fixed per-leaf tolerance")
+            completed = True
+            return
+
+        if diagnostic == "split-single-finish-vjp":
+            with jax.set_mesh(stage_mesh):
+                passed = _run_split_single_finish_vjp_diagnostic(process_id, *arguments)
+            multihost_utils.sync_global_devices("group2_component_split_single_finish_vjp_complete")
+            if not passed:
+                raise AssertionError("single-finish VJP assembly exceeded the fixed per-leaf tolerance")
             completed = True
             return
 

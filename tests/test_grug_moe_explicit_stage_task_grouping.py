@@ -39,6 +39,7 @@ from experiments.grug.moe.check_jaxpp_group2_component_mpmd_parity import (
     single_full_block_boundary_forward,
     single_full_block_boundary_value_and_grads,
     single_full_block_no_checkpoint_boundary_value_and_grads,
+    single_moe_finish_boundary_value_and_grads,
     single_moe_value_and_grads,
     single_pre_moe_barrier_checkpoint_boundary_forward,
     single_pre_moe_barrier_checkpoint_boundary_primal_and_value_and_grads,
@@ -941,6 +942,122 @@ def test_split_executable_boundary_dataflow_matches_ordered_full_block_checkpoin
     )
     for actual_routes, expected_routes in zip(actual_forward[3], expected_forward[3], strict=True):
         np.testing.assert_array_equal(actual_routes["selected_experts"], expected_routes["selected_experts"])
+
+
+def test_split_single_finish_vjps_match_joined_finish_and_ordered_full_block() -> None:
+    mesh, stage = _tiny_grouped_last_stage("save_moe", top_k=2)
+    _, hiddens, output_cotangents = _tiny_boundary_inputs(mesh)
+    params = stage.blocks[0]
+    qb_beta = jnp.asarray([0.2, -0.1, 0.05], dtype=jnp.float32)
+
+    with jax.set_mesh(mesh):
+        ordered_vjps = tuple(
+            jax.jit(single_full_block_boundary_value_and_grads)(params, qb_beta, hidden, cotangent)
+            for hidden, cotangent in zip(hiddens, output_cotangents, strict=True)
+        )
+        standalone_prepared = tuple(
+            jax.jit(single_pre_moe_checkpoint_boundary_forward)(params, qb_beta, hidden) for hidden in hiddens
+        )
+        standalone_post_attention = tuple(result[0] for result in standalone_prepared)
+        standalone_mlp_inputs = tuple(result[1] for result in standalone_prepared)
+        standalone_shared_outputs = tuple(result[2] for result in standalone_prepared)
+        bootstrap_finish = jax.jit(joined_moe_finish_boundary_value_and_grads)(
+            params,
+            qb_beta,
+            standalone_post_attention,
+            standalone_mlp_inputs,
+            standalone_shared_outputs,
+            output_cotangents,
+        )
+        bootstrap_cotangents = tuple(
+            (bootstrap_finish[5][index], bootstrap_finish[6][index], bootstrap_finish[7][index]) for index in range(2)
+        )
+        exposed_pre = tuple(
+            jax.jit(single_pre_moe_checkpoint_boundary_primal_and_value_and_grads)(
+                params,
+                qb_beta,
+                hidden,
+                boundary_cotangent,
+            )
+            for hidden, boundary_cotangent in zip(hiddens, bootstrap_cotangents, strict=True)
+        )
+        exposed_boundaries = tuple(result[0] for result in exposed_pre)
+        post_attention = tuple(result[0] for result in exposed_boundaries)
+        mlp_inputs = tuple(result[1] for result in exposed_boundaries)
+        shared_outputs = tuple(result[2] for result in exposed_boundaries)
+        pre_ring = tuple(result[3] for result in exposed_boundaries)
+        joined_finish = jax.jit(joined_moe_finish_boundary_value_and_grads)(
+            params,
+            qb_beta,
+            post_attention,
+            mlp_inputs,
+            shared_outputs,
+            output_cotangents,
+        )
+        single_finish = tuple(
+            jax.jit(single_moe_finish_boundary_value_and_grads)(
+                params,
+                qb_beta,
+                post_attention[index],
+                mlp_inputs[index],
+                shared_outputs[index],
+                output_cotangents[index],
+            )
+            for index in range(2)
+        )
+        single_boundary_cotangents = tuple(
+            (single_finish[index][5], single_finish[index][6], single_finish[index][7]) for index in range(2)
+        )
+        pre_vjps = tuple(
+            jax.jit(single_pre_moe_checkpoint_boundary_primal_and_value_and_grads)(
+                params,
+                qb_beta,
+                hiddens[index],
+                single_boundary_cotangents[index],
+            )
+            for index in range(2)
+        )
+
+    combined_single_finish = (
+        (single_finish[0][0], single_finish[1][0]),
+        (single_finish[0][1], single_finish[1][1]),
+        (single_finish[0][2], single_finish[1][2]),
+        (single_finish[0][3], single_finish[1][3]),
+        _sum_microbatch_group((single_finish[0][4], single_finish[1][4])),
+        (single_finish[0][5], single_finish[1][5]),
+        (single_finish[0][6], single_finish[1][6]),
+        (single_finish[0][7], single_finish[1][7]),
+    )
+    expected = (
+        (ordered_vjps[0][0], ordered_vjps[1][0]),
+        (ordered_vjps[0][1], ordered_vjps[1][1]),
+        (ordered_vjps[0][2], ordered_vjps[1][2]),
+        (ordered_vjps[0][3], ordered_vjps[1][3]),
+        (ordered_vjps[0][4], ordered_vjps[1][4]),
+        (ordered_vjps[0][5], ordered_vjps[1][5]),
+        (ordered_vjps[0][6], ordered_vjps[1][6]),
+        (ordered_vjps[0][7], ordered_vjps[1][7]),
+        _sum_microbatch_group((ordered_vjps[0][8], ordered_vjps[1][8])),
+        (ordered_vjps[0][9], ordered_vjps[1][9]),
+    )
+    actual = (
+        combined_single_finish[0],
+        post_attention,
+        mlp_inputs,
+        shared_outputs,
+        pre_ring,
+        combined_single_finish[1],
+        combined_single_finish[2],
+        combined_single_finish[3],
+        _sum_microbatch_group((combined_single_finish[4], pre_vjps[0][1], pre_vjps[1][1])),
+        (pre_vjps[0][2], pre_vjps[1][2]),
+    )
+    _assert_tree_rel_l2(combined_single_finish, joined_finish)
+    _assert_tree_rel_l2(actual, expected)
+    for actual_routes, expected_routes in zip(pre_ring, expected[4], strict=True):
+        np.testing.assert_array_equal(actual_routes["selected_experts"], expected_routes["selected_experts"])
+    for actual_stats, expected_stats in zip(combined_single_finish[3], expected[7], strict=True):
+        np.testing.assert_array_equal(actual_stats["routing_counts"], expected_stats["routing_counts"])
 
 
 def test_ordered_checkpoint_allow_cse_control_matches_default_and_no_checkpoint() -> None:
