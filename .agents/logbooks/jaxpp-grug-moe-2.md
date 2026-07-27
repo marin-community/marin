@@ -2017,3 +2017,38 @@ bash experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit \
 - Next action:
   - Commit the task-only precompile correction and rerun the same L24 batch512/m16 discriminator under a fresh
     identity. A repeated `1/8` failure promotes the command-buffer-disabled A/B; a pass admits one exact retry.
+
+### 2026-07-27 13:24 PDT - Task-only precompile makes the six-layer UB-X graph executable
+- Snapshot:
+  - Parent `/dlwh/iris-run-job-20260727-201556` and child
+    `/dlwh/iris-run-job-20260727-201556/grug-train-jaxpp-rno2a-ubx-ordinary-bf16-l24-e64k4-b512-s4096-p4m16-precompile-r2-20260727`
+    ran clean commit `29a2bb34ae`.
+  - The L24/d2560/e64/top-k4/sequence4096 batch512/m16 graph used split `6,6,6,6`, EP8, explicit
+    `std_1f1b`, ordinary gradients, BF16 pipeline wire, UB-X, CuTe FA4, Triton block-k 32/eight warps,
+    `save_moe`, XLA loss, XLA fraction `0.70`, and `GRUG_JAXPP_PRECOMPILE_LOCAL=1`.
+- Result:
+  - All ranks initialized UB-X at `16384` local tokens and capacity `65536`. Stage 0 precompiled `66` tasks;
+    stages 1-3 precompiled `65` each. Every rank crossed the barrier and then used ordinary `eval_local`.
+  - The run completed `4/4` steps without the XLA `1/8` thunk rendezvous, deleted arrays, DIME errors, OOM,
+    traceback, retry, failure, or preemption.
+  - [W&B](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ubx-ordinary-bf16-l24-e64k4-b512-s4096-p4m16-precompile-r2-20260727)
+    is `finished`. The two retained throughput rows were:
+
+| Step | Loss | Duration | MFU | Tokens/s |
+| ---: | ---: | ---: | ---: | ---: |
+| 2 | `8.4691696` | `5.1969138s` | `17.8928218` | `403,537.96` |
+| 3 | `8.3005924` | `5.2023686s` | `17.8740608` | `403,114.84` |
+
+  - W&B summary mean/p50/p90 MFU was `17.8803144/17.8740608/17.9040784`.
+  - Parent and child succeeded. All four ranks exited `0`; failures, preemptions, and retries were zero.
+    Child duration was `4m53.98s`, parent duration was `6m30.89s`, and no live resource remains.
+- Interpretation:
+  - Coordinated local task compilation, not receive-buffer reuse, is sufficient to execute the deterministic
+    six-layer graph. This confirms rank-skewed lazy executable initialization as the prior failure mechanism.
+  - Batch512/m16 is a functional admission gate. Its `17.88` MFU is not comparable to the exact batch8192/m256
+    objective because pipeline occupancy differs by `16x`.
+  - The fixed numerical policy remains exact routes/counts/drops and relative-L2 `<=0.002` for output, loss,
+    and every floating gradient leaf.
+- Decision:
+  - Admit one fresh exact batch8192/m256 run with task-only precompile enabled. Require all ten steps and compare
+    steps 2-9 against the exact Ring baseline `18.2583` MFU and the strict `>20` target.
