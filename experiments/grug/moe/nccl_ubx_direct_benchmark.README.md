@@ -145,13 +145,13 @@ export LD_LIBRARY_PATH="${NCCL_UBX_SOURCE}/build/lib:${LD_LIBRARY_PATH:-}"
 export UBX_GRAPH_POOL_SHARE=0.1
 export NCCL_UBX_OUTPUT_DIR="${PWD}/nccl-ubx-direct-results"
 
-experiments/grug/moe/run_nccl_ubx_direct_gate.sh
+bash experiments/grug/moe/run_nccl_ubx_direct_gate.sh
 ```
 
 To validate the compact layout used by the JAX integration:
 
 ```bash
-experiments/grug/moe/run_nccl_ubx_direct_gate.sh --slot-layout compact
+bash experiments/grug/moe/run_nccl_ubx_direct_gate.sh --slot-layout compact
 ```
 
 For initial hang localization only, rebuild the UB-X extension with

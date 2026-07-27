@@ -1720,3 +1720,26 @@ torchrun --standalone --nproc-per-node=8 experiments/grug/moe/benchmark_nccl_ubx
 - Interpretation:
   - The compact layout removes the planned sparse gather/scatter and reduces the learned-skew dispatch buffer by `8x` without changing accepted routes or drops.
   - GPU transport correctness and timing for this compact slot layout remain unmeasured. The next gate must validate it through the JAX FFI wrapper before any MoE or JaxPP run.
+
+### 2026-07-27 10:15 PDT - Compact UB-X slot layout passes the direct EP8 gate
+- Snapshot:
+  - Commit `9bb89438dc` adds `--slot-layout compact` to the direct gate.
+  - R14 `/dlwh/nccl-ubx-direct-ep8-r14-compact-20260727` ran both routing cases on one `H100x8` node in `cw-rno2a`.
+  - The first task incarnation exited `126` before setup because the synced launcher was not executable. The babysitter resubmitted the same job with `bash experiments/grug/moe/run_nccl_ubx_direct_gate.sh --slot-layout compact`; the replacement task succeeded with no failures or preemptions, and no task remains live.
+  - The remaining setup and pinned NVIDIA/nccl build command were identical to R13.
+- Results:
+
+| Routing | Accepted / dropped | UB-X vs FP32 rel. L2 | Ring p50 | UB-X p50 | Speedup | Dispatch bytes/rank |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| balanced | `524288 / 0` | `0.001662022872` | `6.500688076ms` | `2.048016071ms` | `3.174139191x` | `335544320` |
+| learned skew | `417371 / 106917` | `0.001660577729` | `6.604256153ms` | `1.912575960ms` | `3.453068684x` | `335544320` |
+
+- Correctness:
+  - Both cases passed exact route, map, count, and drop checks across all ranks. Dispatch was bitwise exact.
+  - Learned-skew drops remained `[0, 0, 84582, 0, 22335, 0, 0, 0]`, matching R13.
+  - Both candidate errors passed the user-approved `0.002` relative-L2 ceiling.
+  - Runtime validation found NCCL version `23007`, exactly one mapped `/tmp/nccl-ubx-db0c814/build/lib/libnccl.so.2.30.7`, and UB-X `0.01`.
+- Interpretation:
+  - Balanced routing is unchanged because its upstream expert strides already total `65536` rows.
+  - Learned-skew receive storage fell from `524288` rows (`2.5GiB`) to `65536` rows (`320MiB`) per rank. Its UB-X p50 improved from R13's `2.295423985ms` to `1.912575960ms`, and speedup over Ring increased from `2.872630095x` to `3.453068684x`.
+  - The compact map is now admitted for the raw JAX FFI gate. Expert compute, gradients, JaxPP scheduling, and end-to-end MFU remain unmeasured.
