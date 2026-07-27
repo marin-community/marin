@@ -937,35 +937,41 @@ def _oe_rowwise_lookup_local(
     return unsorted.reshape(*ids_local.shape, table_local.shape[1])
 
 
-def _oe_rowwise_lookup(table: Float[Array, "V D"], ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
-    """Look up a row-sharded OE table without ever materializing it replicated. The ragged_all_to_all
-    runs over ``_BATCH_AXES``; at 1 rack that is the ``data`` axis == the NVLink domain, so it stays
-    intra-rack (no cross-rack kAllToAll wedge). Multi-rack keeps this intra-rack iff the mesh places
-    ``data`` within a rack and ``replica_dcn`` across racks."""
+def _oe_rowwise_lookup(flat_table: Float[Array, "TV D"], ids: Int[Array, "T B S"]) -> Float[Array, "T B S D"]:
+    """One row-sharded lookup for ALL n-gram tables stacked into a single ``[num_tables*rows, slice]``
+    table (``ids`` pre-offset by ``table_index*physical_rows``). A single ragged_all_to_all pair routes
+    every table's ids together -- vs one pair per table -- which is the dominant cost of the sharded
+    route. Runs over ``_BATCH_AXES``; at 1 rack that is the ``data`` axis == the NVLink domain, so it is
+    intra-rack (no cross-rack kAllToAll wedge). Multi-rack stays intra-rack iff the mesh keeps ``data``
+    within a rack and ``replica_dcn`` across racks."""
     mesh = get_abstract_mesh()
     dp_size = math.prod(_mesh_axis_size(mesh, axis_name) for axis_name in _BATCH_AXES)
     if dp_size == 1:
-        return table.at[ids].get(out_sharding=P(_BATCH_AXES, None, None))
-    if table.shape[0] % dp_size != 0:
-        raise ValueError(f"OE table rows ({table.shape[0]}) must be divisible by DP size ({dp_size})")
-    table = reshard(table, P(_BATCH_AXES, None))
-    ids = reshard(ids, P(_BATCH_AXES, None))
+        return flat_table.at[ids].get(out_sharding=P(None, _BATCH_AXES, None, None))
+    if flat_table.shape[0] % dp_size != 0:
+        raise ValueError(f"OE stacked rows ({flat_table.shape[0]}) must be divisible by DP size ({dp_size})")
+    flat_table = reshard(flat_table, P(_BATCH_AXES, None))
+    ids = reshard(ids, P(None, _BATCH_AXES, None))
     return shard_map(
         lambda t, i: _oe_rowwise_lookup_local(t, i, dp_size=dp_size),
         mesh=mesh,
-        in_specs=(P(_BATCH_AXES, None), P(_BATCH_AXES, None)),
-        out_specs=P(_BATCH_AXES, None, None),
-    )(table, ids)
+        in_specs=(P(_BATCH_AXES, None), P(None, _BATCH_AXES, None)),
+        out_specs=P(None, _BATCH_AXES, None, None),
+    )(flat_table, ids)
 
 
 class OverEncoding(eqx.Module):
     """Hierarchical input-only n-gram embedding tables (orders 2..num_grams, ``splits`` hashes each)."""
 
-    tables: jax.Array  # [num_tables, physical_rows, slice_dim]; replicated, or rows-sharded if ``sharded``
+    # replicated: [num_tables, physical_rows, slice_dim]. sharded: [num_tables*physical_rows, slice_dim]
+    # row-sharded over the batch axes (table t occupies contiguous rows [t*physical_rows, ...)).
+    tables: jax.Array
     projections: tuple[jax.Array, ...]  # each [slice_dim, hidden], replicated
     logical_vocab_sizes: tuple[int, ...] = eqx.field(static=True)
     splits: int = eqx.field(static=True)
     num_grams: int = eqx.field(static=True)
+    num_tables: int = eqx.field(static=True)
+    physical_rows: int = eqx.field(static=True)
     base_vocab_size: int = eqx.field(static=True)
     sharded: bool = eqx.field(static=True)
 
@@ -986,10 +992,14 @@ class OverEncoding(eqx.Module):
                 for index in range(num_tables)
             )
         )
-        # Sharded: row-shard over the batch axes (intra-rack at 1 rack) so a large vocab fits. Replicated:
-        # keep the (small) table on every device and reuse the wedge-safe _embedding_gather.
-        table_spec = P(None, _BATCH_AXES, None) if cfg.over_encoding_sharded else P(None, None, None)
-        tables = reshard(table_values, table_spec)
+        # Sharded: stack into one [num_tables*rows, slice] table, row-sharded over the batch axes (intra-
+        # rack at 1 rack) so a large vocab fits AND one all_to_all serves all tables. Reshape before
+        # resharding so table t stays contiguous. Replicated: keep the (small) [T, rows, slice] table on
+        # every device and reuse the wedge-safe _embedding_gather per table.
+        if cfg.over_encoding_sharded:
+            tables = reshard(table_values.reshape(num_tables * physical_rows, slice_dim), P(_BATCH_AXES, None))
+        else:
+            tables = reshard(table_values, P(None, None, None))
         projection_std = 1.0 / (slice_dim**0.5)
         projections = tuple(
             reshard(
@@ -1004,31 +1014,40 @@ class OverEncoding(eqx.Module):
             logical_vocab_sizes=logical_vocab_sizes,
             splits=cfg.over_encoding_splits,
             num_grams=cfg.over_encoding_num_grams,
+            num_tables=num_tables,
+            physical_rows=physical_rows,
             base_vocab_size=cfg.vocab_size,
             sharded=cfg.over_encoding_sharded,
         )
 
     @named_call
     def __call__(self, token_ids: Int[Array, "B S"], segment_ids: jax.Array | None) -> Float[Array, "B S D"]:
+        ngram_ids = [
+            _causal_ngram_ids(
+                token_ids,
+                order=order,
+                modulus=self.logical_vocab_sizes[(order - 2) * self.splits + split_index],
+                base_vocab_size=self.base_vocab_size,
+                segment_ids=segment_ids,
+            )
+            for order in range(2, self.num_grams + 1)
+            for split_index in range(self.splits)
+        ]
+        if self.sharded:
+            # Offset each table's ids into the stacked [T*rows] row space, then one routed lookup for all
+            # tables at once; project each slice up to hidden and sum.
+            offset_ids = jnp.stack([ids + t * self.physical_rows for t, ids in enumerate(ngram_ids)])
+            slices = _oe_rowwise_lookup(self.tables, offset_ids)  # [T, B, S, slice]
+            projections = jnp.stack(self.projections)  # [T, slice, hidden]
+            return jnp.einsum("tbsd,tdh->bsh", slices, projections, out_sharding=_batch_spec())
+        # Replicated: per-table wedge-safe gather, project, sum.
         added: jax.Array | None = None
-        for order in range(2, self.num_grams + 1):
-            for split_index in range(self.splits):
-                table_index = (order - 2) * self.splits + split_index
-                ids = _causal_ngram_ids(
-                    token_ids,
-                    order=order,
-                    modulus=self.logical_vocab_sizes[table_index],
-                    base_vocab_size=self.base_vocab_size,
-                    segment_ids=segment_ids,
-                )
-                # Row-sharded (intra-rack all-to-all) or replicated (wedge-safe gather) per-table
-                # lookup, then project the slice up to full hidden.
-                table = self.tables[table_index]
-                embedding_slice = _oe_rowwise_lookup(table, ids) if self.sharded else _embedding_gather(table, ids)
-                projected = jnp.einsum(
-                    "bsd,dh->bsh", embedding_slice, self.projections[table_index], out_sharding=_batch_spec()
-                )
-                added = projected if added is None else added + projected
+        for table_index, ids in enumerate(ngram_ids):
+            embedding_slice = _embedding_gather(self.tables[table_index], ids)
+            projected = jnp.einsum(
+                "bsd,dh->bsh", embedding_slice, self.projections[table_index], out_sharding=_batch_spec()
+            )
+            added = projected if added is None else added + projected
         assert added is not None, "OverEncoding must contain at least one table"
         return added
 
