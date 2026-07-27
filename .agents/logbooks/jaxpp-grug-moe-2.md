@@ -408,3 +408,25 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - The next memory experiment must reduce live task/transfer buffers or activation residency. It should measure retained transfer and task output buffers before changing schedule capacity, rematerialization, or batch shape.
 - Next action:
   - Stop before L24. Inspect explicit-MPMD task and DIME buffer lifetimes, prioritizing grouped forward/backward outputs and transfer reuse. Require a quantified memory reduction before another matched L8 run.
+
+### 2026-07-26 21:24 PDT - component gradients do not remove the L8 transfer allocation
+- Hypothesis: Keeping embedding, block, and head gradients componentized until the stage update will avoid materializing another full stage-gradient tree across a JaxPP task boundary and make the matched L8 group-size-two graph fit at XLA fraction `0.70`.
+- Commit Hash: `4e0e01329cbece93aef21d51ad933e45a2477566`.
+- Command: Parent `/dlwh/iris-run-job-20260727-041239` launched child `/dlwh/iris-run-job-20260727-041239/grug-train-jaxpp-rno2a-ring-explicit-routing-componentgrads-g2-l8-e64k4-b512-s4096-p4m16-r7-20260726-2112` with:
+
+  ```bash
+  TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --cluster cw-rno2a --run-id jaxpp-rno2a-ring-explicit-routing-componentgrads-g2-l8-e64k4-b512-s4096-p4m16-r7-20260726-2112 --schedule std_1f1b --implementation explicit_mpmd --explicit-mpmd-stage-task-microbatch-group-size 2 --physical-stages 4 --logical-stages 4 --microbatches 16 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 8 --experts 64 --top-k 4 --vocab-size 8192 --batch 512 --seq-len 4096 --moe-implementation ring --attention-implementation gpu_fa4_cute --ragged-dot-implementation triton --ragged-dot-block-k 32 --ragged-dot-num-warps 8 --loss-implementation xla --steps 20 --tracker wandb --jax-nightly-version 0.11.1.dev20260725 --xla-memory-fraction 0.70 --remat save_moe
+  ```
+
+- Results:
+  - Setup completed on all four H100x8 ranks. The first attempt emitted `68` compile events, covering the first grouped pair's embedding, per-block pre/router and joined-expert forward/backward tasks, master-gradient reductions, component accumulations, stage averages, grouped-component updates, and `keep_step`.
+  - First execution failed at `04:18:54-04:18:55Z`. Stage 1 requested `5.62 GiB` (`6039815424` bytes) per GPU. Stage 2 requested `5.62 GiB` (`6040339456` bytes) per GPU. Stage 3 requested `6.09 GiB` (`6543655424` bytes) per GPU.
+  - Ranks 2 and 3 then exited `139`. Their fatal stacks were in `jax._src.dlpack._to_dlpack` through JaxPP `dime2.get_shard_ops_and_capsules`, `enqueue_nccl_transfer_group`, and `start_transfer`, called from `experimental._mpmd.eval_local`. The segfaults followed the BFC failures while JaxPP was starting transfer capsules.
+  - Iris started attempt `:1` and repeated dependency setup at `04:19:17Z`. The retry was stopped before model compilation. The parent is terminal `killed` with one preemption. The child is terminal `killed` with one failed attempt and four stopped retry tasks; task 2 records exit `139`. No live allocation remains.
+  - [W&B](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-explicit-routing-componentgrads-g2-l8-e64k4-b512-s4096-p4m16-r7-20260726-2112) has zero history rows and no loss, duration, throughput, or MFU. Its API state remained `running` after the abrupt process failure.
+- Interpretation:
+  - Componentizing embedding and head gradients reduced the stage-3 failed request from r5/r6's `6.14 GiB` to `6.09 GiB`, but stages 1 and 2 retained the same `5.62 GiB` request. The change does not make the matched L8 graph fit.
+  - The failure remains at the first JaxPP transfer/execution boundary after all tasks compile. Another XLA-fraction retry or L24 promotion is not justified.
+  - No valid throughput comparison exists against the group-size-one L8 control (`16.116235` mean MFU) or the old numerically invalid group-size-two result (`15.7366` mean MFU).
+- Next action:
+  - Inspect the exact transfer payload and live producer/consumer buffers for the `5.62 GiB` stage-1/2 and `6.09 GiB` stage-3 requests. Require a measured removal or reuse of that allocation before another matched L8 run.
