@@ -37,9 +37,17 @@ for _p in (str(_REPO), str(Path(__file__).resolve().parent)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+from iris.cluster.client.job_info import get_job_info  # noqa: E402
+from iris.runtime.jax_init import initialize_jax as initialize_iris_jax  # noqa: E402
 from levanter.grug.grug_moe import moe_mlp  # noqa: E402
 
 from experiments.grug.moe.mxfp8 import MxFp8MoeMlpOp  # noqa: E402
+
+
+def init_distributed():
+    """Multi-process init under Iris; a no-op for a single-node run."""
+    if get_job_info() is not None:
+        initialize_iris_jax()
 
 
 def relfrob(a, b):
@@ -154,10 +162,11 @@ def main():
     ap.add_argument("--check-operands", action="store_true", help="diff the two forward pipelines' operands")
     args = ap.parse_args()
 
+    init_distributed()
     dev = jax.devices()[0]
     print(
         f"device: {dev.device_kind} (cc {getattr(dev, 'compute_capability', '?')}), "
-        f"jax {jax.__version__}, {len(jax.devices())} devices",
+        f"jax {jax.__version__}, {len(jax.devices())} devices, {jax.process_count()} processes",
         flush=True,
     )
 
@@ -171,12 +180,21 @@ def main():
 
     with jax.set_mesh(mesh):
         shard = NamedSharding(mesh, P("expert"))
-        x = jax.device_put(jax.random.normal(keys[0], (t, d), jnp.bfloat16), shard)
-        cot = jax.device_put(jax.random.normal(keys[1], (t, d), jnp.bfloat16), shard)
-        sel = jax.device_put(jax.random.randint(keys[2], (t, k), 0, e), shard)
-        cw = jax.device_put(jax.random.uniform(keys[3], (t, k), dtype=jnp.bfloat16), shard)
-        w13 = jax.random.normal(keys[4], (e, d, 2 * i), jnp.bfloat16) * 0.02
-        w2 = jax.random.normal(keys[5], (e, i, d), jnp.bfloat16) * 0.02
+        replicated = NamedSharding(mesh, P())
+
+        def make(fn, sharding):
+            # Created inside jit rather than device_put on a host array: under
+            # multi-process Iris every process must contribute its own shard of
+            # the same global array, and device_put of a process-local array
+            # cannot express that.
+            return jax.jit(fn, out_shardings=sharding)()
+
+        x = make(lambda: jax.random.normal(keys[0], (t, d), jnp.bfloat16), shard)
+        cot = make(lambda: jax.random.normal(keys[1], (t, d), jnp.bfloat16), shard)
+        sel = make(lambda: jax.random.randint(keys[2], (t, k), 0, e), shard)
+        cw = make(lambda: jax.random.uniform(keys[3], (t, k), dtype=jnp.bfloat16), shard)
+        w13 = make(lambda: jax.random.normal(keys[4], (e, d, 2 * i), jnp.bfloat16) * 0.02, replicated)
+        w2 = make(lambda: jax.random.normal(keys[5], (e, i, d), jnp.bfloat16) * 0.02, replicated)
         tensors = (x, sel, cw, w13, w2, cot)
 
         out_ctl, grad_ctl, fwd_ctl, gfn_ctl = run_arm(mesh, tensors, mxfp8_dispatch=False, producer=args.producer)
