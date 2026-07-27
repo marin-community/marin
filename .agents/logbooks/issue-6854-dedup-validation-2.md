@@ -16,6 +16,102 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T02:24:00Z — 213,198 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0166-v826` independently
+  revalidated 11 checkpoints containing 1,408 pairs, including p2's
+  107,659,309-character code batch. The model labeled 975 false positives and
+  430 true duplicates and left three outcomes unresolved. Twenty-nine pairs
+  used chunked review and 1,379 used direct review. The audit reread 4,854
+  judgments and 4,867 request attempts: 4,848 attempts were valid, 19 were
+  invalid, and seven judgments required retries. The checkpoints and outcome
+  Parquet SHA-256 values are:
+
+  - p1 decision-file 40 offsets 3,968 through 4,608:
+    `0185de1a4846a1248369ab931622c1fb9d60237ade62293f753a6f0549f4a1e7`,
+    `655ba51ccc7ab7e9c9166bf6577121cbd0ed12aef93952e4afefa766f3072e03`,
+    `054ad084058b4be9af4d2cca7dfa14897e716319c02c047f629c0133698359ac`,
+    `f2214078db0a5fda60f86479d2bcec992107128efba19e45c16a675ec638722f`,
+    `282ec92f2f5245efdde208702999626fc42bfdc9888f172e0e9437f685eb0a2d`,
+    and
+    `2d430725d1996009380168bf2757a7e1f41e4c04167ca5b8967fd41f584de963`;
+  - p2 decision-file 73 offset 0:
+    `730d51b3ec308af4010e36b18e1f879520442495dcb7334a562435492e37e627`;
+  - p3 decision-file 105 offsets 1,408 through 1,792:
+    `045df69827a8b075e6e9395e86bd535697b96092508cab7c8dec15ad15deb56b`,
+    `ccfb371bb0d65fb9384e285f9ca839c45eeac7fa186c701379acd8fb8e6daf11`,
+    `c34cf992045c100a1d88e314d41b2d86ceed89f040aedd67d88ef106aedb2559`,
+    and
+    `28d408f830b4a12f252d269d47f4bbf6bad7cb8b3ee3bf71ea1df6f1f33255e0`.
+
+- Complete-text inspection resolves baseline row 7,437 as a false positive.
+  The member asks for the right-hand limit as x approaches zero from above;
+  the canonical asks for the two-sided limit. Although this smooth function
+  gives the same value and both solutions use L'Hopital's rule, the direction
+  is part of the mathematical request. The audit contract treats different
+  requests as distinct training examples. The 1,596/1,627-character,
+  48/47-line texts have character, line, and word-sequence similarities of
+  0.794912, 0.589474, and 0.810893.
+  `/rav/datakit-6854-inspect-row7437-0167-v827`,
+  `/rav/datakit-6854-publish-row7437-0171-v832`, and
+  `/rav/datakit-6854-verify-row7437-0172-v833` persisted and independently
+  verified the decision. The inspection, semantic-judgment, manual-Parquet,
+  and marker SHA-256 values are
+  `018b043787b66f93490cd4a186d5fe17e724397941a8748525e0e41604c9bacf`,
+  `4b268edc950f99632a748f85f9211dab45e3389bd5d065bc81c2b8683111e8ec`,
+  `4923b2a60559924c4316b373b21a21a5587154ae4e958f5495ca829176b7cf8b`,
+  and
+  `d8e0128e9b4e33341bac41058f3e6a1b4d7fdb5c410d153216edf5b548e2167a`.
+
+- Complete-text inspection resolves baseline row 7,491 as a true duplicate.
+  Both texts pose the same cosine-sum problem and derive the same condition
+  with the same arithmetic-sequence formula, substitutions, double-angle
+  identity, and conclusion. Their differences are phrasing and presentation,
+  with no distinct request, reasoning step, or answer. The
+  1,952/2,140-character, 26/30-line texts have similarities of 0.770772,
+  0.607143, and 0.732167.
+  `/rav/datakit-6854-inspect-row7491-0167-v828`,
+  `/rav/datakit-6854-publish-row7491-0170-v831`, and
+  `/rav/datakit-6854-verify-row7491-0172-v834` persisted and independently
+  verified the decision. The corresponding four SHA-256 values are
+  `014d9a549978e79d436ada9844c3be8071df155de9d12367f078897eb1bc1ff2`,
+  `3f2135ef94714e12dc1550ef34f89c7e85be680474a9a8f50e6e833a6361a2ba`,
+  `ee6466432dbc0e060931a1eb07185a6ec0edd2aa49e2398ea1801bdf6381cd92`,
+  and
+  `6a0eb354d7ee150883eab27f2d80205d88f5ca89494d83cae136a592e4a45c56`.
+
+- Complete-text inspection resolves baseline row 7,615 as a true duplicate.
+  Both 88-line SFT texts contain the same cybersecurity question, choices,
+  reasoning, explanations, and answer E. Their only changed line is the final
+  answer's LaTeX spelling: `\boxed{\text{E}}` versus `\boxed{E}`. The
+  4,784/4,777-character texts have similarities of 0.999268, 0.988636, and
+  0.999292. `/rav/datakit-6854-inspect-row7615-0168-v829`,
+  `/rav/datakit-6854-publish-row7615-0170-v830`, and
+  `/rav/datakit-6854-verify-row7615-0173-v835` persisted and independently
+  verified the decision. The corresponding four SHA-256 values are
+  `a37f1a1dc499ac807b0b182d86c65e22feb0ea7bf4c72f8b63c231fef4310a3f`,
+  `90dd2def6c6aea80794ea61ed46e2f2d2f3c71e1d3ceec026abe1a7c810fe3ee`,
+  `98ae20e57f1a4eb041924a2b82cb91c4ac6e2163334637e1f8db6d27e4a54834`,
+  and
+  `c1963dc255d5e7841f6976bd7361940ed82594086974563699e9d01d6bc5ba11`.
+
+- Replacing the three unresolved outcomes with one false positive and two true
+  duplicates gives 976 false positives and 432 true duplicates in the new
+  batch. Across the stable 1,678-checkpoint snapshot, all 255 unresolved model
+  outcomes are covered by 195 true-duplicate and 60 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 171,471 pairs, 109,067 false positives, 62,404 true duplicates;
+  - treatment: 41,727 pairs, 21,605 false positives, 20,122 true duplicates;
+  - combined: 213,198 pairs, 130,672 false positives, 82,526 true duplicates.
+
+- The next audit frontiers are p0 `(9, 0)`, p1 `(40, 4,736)`, p2 `(73, 128)`,
+  and p3 `(105, 1,920)`. The pending p0 checkpoint remains the
+  136,594,323-character code batch with 28 oversized pairs and 1,414 review
+  units. The pending p2 checkpoint contains 35,083,358 characters, 14
+  oversized pairs, and 959 review units. All four batch-priority 2-H100
+  workers remain active.
+
 ### 2026-07-27T02:12:00Z — 211,790 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0162-v822` independently
