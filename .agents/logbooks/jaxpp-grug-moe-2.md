@@ -957,3 +957,14 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - The independent exact six-layer-stage projection remains `20.01429` MFU, only `0.01429` points above the target. The L8 result neither validates nor decisively falsifies that projection because fixed task overhead and two-layer stages differ from L24.
 - Next action:
   - Run one exact L24 d2560/e64/top-k4/b512/m16/s4096 fused measurement as the decisive gate. Require sustained mean MFU above 20; otherwise record the path as a performance negative.
+
+### 2026-07-27 03:45 PDT - Launch exact L24 fused performance gate
+- Snapshot: `f923322aa8` records the L8 result and the missing matched denominator.
+- Command:
+  - `GRUG_JAXPP_LOG_LOCAL_MEMORY_PLAN=true TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --cluster cw-rno2a --run-id jaxpp-rno2a-ring-ep2d4-fusedacc-fp8-l24-e64k4-b512-s4096-p4m16-exact-r1-20260727 --schedule std_1f1b --implementation explicit_mpmd --explicit-mpmd-schedule-mode default --explicit-mpmd-pipeline-wire-format fp8 --explicit-mpmd-stage-task-microbatch-group-size 1 --expert-gradient-accumulation fused_fp32_data_local --physical-stages 4 --logical-stages 4 --stage-layer-counts 6,6,6,6 --microbatches 16 --nodes 4 --gpus-per-replica 8 --expert-axis 2 --layers 24 --experts 64 --top-k 4 --vocab-size 8192 --batch 512 --seq-len 4096 --moe-implementation ring --attention-implementation gpu_fa4_cute --ragged-dot-implementation triton --ragged-dot-block-k 32 --ragged-dot-num-warps 8 --loss-implementation xla --steps 20 --tracker wandb --xla-memory-fraction 0.70 --remat save_moe`.
+- Jobs:
+  - Parent `/dlwh/iris-run-job-20260727-104406` on `cw-rno2a`.
+  - Babysitter `019fa32c-eb14-7800-b742-f529989b0e23` owns the run through terminal state.
+- Gate:
+  - Require all four ranks and 20 finite steps, then compute steps 2-19 mean/p50/p90 MFU and step time.
+  - Success is sustained mean MFU strictly above `20.0`. Compare with the exact baseline `18.2583` MFU and `81.037785s`; do not promote a modeled projection.
