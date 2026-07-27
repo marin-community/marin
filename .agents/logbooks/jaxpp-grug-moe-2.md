@@ -1053,3 +1053,28 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - Babysitter `019fa372-2131-74a3-afd2-cde99d9c10f8` owns terminal state and cleanup.
 - Next action:
   - Require six finite L4 steps and no custom-VJP/JaxPP compile or execution failure. A pass promotes to an L8 performance/profile gate.
+
+### 2026-07-27 05:07 PDT - Manual-VJP L4 lifecycle gate passes
+- Result:
+  - Parent `/dlwh/iris-run-job-20260727-115941`, its child, and all four rank tasks succeeded with exit `0`. Training completed `6/6` iterations with no retry, preemption, failure, or live resource.
+  - W&B [L4 r8](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-ep2d4-manualvjp-fp8-l4-e64k4-b128-s4096-p4m4-r8-20260727) is finished. Step 2 was a startup outlier at `3.9003` MFU and `1.037892s`; steady steps 3-5 were `14.0139/14.0273/14.0999` MFU.
+  - Steady steps 3-5 averaged `14.0470` MFU and `0.288184s`, or approximately `1.819M tokens/s`. This is `0.5492` MFU points (`4.07%`) above the old L4 fused steps 3-5 average of `13.4978`.
+  - All ranks completed lower, compile, first execution, and repeated state execution. There was no custom-VJP, compiler, OOM, NCCL, DIME, traceback, or watchdog failure.
+- Numerical policy:
+  - User explicitly accepts floating output, loss, and every gradient leaf at relative-L2 `<=0.002` under these circumstances. Routing, counts, and dropped-route values remain exact.
+  - The local synchronized W13/W2 errors of `0.00175065/0.00155534` therefore pass the accepted gate.
+- Interpretation:
+  - The manual-VJP formulation is a lifecycle pass and an exploratory reduced-shape performance improvement. The L4 result does not prove the exact L24 target or prove runtime collective removal.
+- Next action:
+  - Profile a 20-step L8 run and compare non-profiled throughput with the old L8 fused `16.1404` MFU result. Require profile evidence that per-microbatch data-axis FP32 all-reduces disappeared before promoting to exact L24.
+
+### 2026-07-27 05:08 PDT - Launch L8 manual-VJP performance and profile gate
+- Snapshot: `6d22a1eaf4` records the implementation and L4 launch; functional implementation commit is `6593a34edc`.
+- Command:
+  - `GRUG_JAXPP_LOG_LOCAL_MEMORY_PLAN=false TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --cluster cw-rno2a --prefix s3://marin-us-east-02a/marin --run-id jaxpp-rno2a-ring-ep2d4-manualvjp-fp8-l8-e64k4-b512-s4096-p4m16-profile-r1-20260727 --schedule std_1f1b --implementation explicit_mpmd --explicit-mpmd-schedule-mode default --explicit-mpmd-pipeline-wire-format fp8 --explicit-mpmd-stage-task-microbatch-group-size 1 --expert-gradient-accumulation fused_fp32_data_local --physical-stages 4 --logical-stages 4 --stage-layer-counts 2,2,2,2 --microbatches 16 --nodes 4 --gpus-per-replica 8 --expert-axis 2 --layers 8 --experts 64 --top-k 4 --vocab-size 8192 --batch 512 --seq-len 4096 --moe-implementation ring --attention-implementation gpu_fa4_cute --ragged-dot-implementation triton --ragged-dot-block-k 32 --ragged-dot-num-warps 8 --loss-implementation xla --steps 20 --tracker wandb --profiler-steps 2 --xla-memory-fraction 0.70 --remat save_moe`.
+- Jobs:
+  - Parent `/dlwh/iris-run-job-20260727-120800` on `cw-rno2a`.
+  - Babysitter `019fa37a-b09a-7610-9b58-8b4d3a122eff` owns all-rank terminal monitoring, profile artifact download, structured summary generation, and cleanup.
+- Gate:
+  - Compare non-profiled steps, preferably steps 2-7 and 11-19, against old L8 fused mean `16.1404` MFU.
+  - Verify from the trace that the twelve per-stage FP32 all-reduces observed in each old six-layer `backward_accumulating` are removed or materially reduced. Record communication share, all-reduce, SendRecv, and all-gather counts before deciding whether to launch exact L24.
