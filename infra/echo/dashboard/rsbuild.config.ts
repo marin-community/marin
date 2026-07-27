@@ -1,6 +1,8 @@
 import { defineConfig } from '@rsbuild/core'
 import { pluginVue } from '@rsbuild/plugin-vue'
 
+const DEV_API_ORIGIN = 'http://127.0.0.1:8000'
+
 export default defineConfig({
   plugins: [pluginVue()],
   source: {
@@ -18,11 +20,11 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/search': 'http://127.0.0.1:8000',
-      '/grep': 'http://127.0.0.1:8000',
-      '/chunks': 'http://127.0.0.1:8000',
-      '/wiki': 'http://127.0.0.1:8000',
-      '/work_log': 'http://127.0.0.1:8000',
+      '/search': DEV_API_ORIGIN,
+      '/grep': DEV_API_ORIGIN,
+      '/chunks': DEV_API_ORIGIN,
+      '/wiki': DEV_API_ORIGIN,
+      '/work_log': DEV_API_ORIGIN,
     },
   },
 })

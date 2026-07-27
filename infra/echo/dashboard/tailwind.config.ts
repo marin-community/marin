@@ -13,7 +13,7 @@ export default {
         moss: '#315c43',
         fern: '#477d5a',
         mist: '#edf2ec',
-        cream: '#f8f6ef',
+        cream: 'var(--color-cream)',
         line: '#d8ded6',
       },
       boxShadow: {

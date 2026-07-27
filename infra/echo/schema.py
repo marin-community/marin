@@ -11,6 +11,7 @@ corpus-build watermark.
 """
 
 from pgvector.sqlalchemy import Vector
+from search_config import TEXT_SEARCH_CONFIG
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -53,8 +54,8 @@ chunks = Table(
         "search_document",
         postgresql.TSVECTOR,
         Computed(
-            "setweight(to_tsvector('english'::regconfig, coalesce(title, '')), 'A') || "
-            "setweight(to_tsvector('english'::regconfig, coalesce(text, '')), 'B')",
+            f"setweight(to_tsvector('{TEXT_SEARCH_CONFIG}'::regconfig, coalesce(title, '')), 'A') || "
+            f"setweight(to_tsvector('{TEXT_SEARCH_CONFIG}'::regconfig, coalesce(text, '')), 'B')",
             persisted=True,
         ),
     ),
@@ -113,8 +114,8 @@ wiki_entries = Table(
         "search_document",
         postgresql.TSVECTOR,
         Computed(
-            "setweight(to_tsvector('english'::regconfig, title), 'A') || "
-            "setweight(to_tsvector('english'::regconfig, body), 'B')",
+            f"setweight(to_tsvector('{TEXT_SEARCH_CONFIG}'::regconfig, title), 'A') || "
+            f"setweight(to_tsvector('{TEXT_SEARCH_CONFIG}'::regconfig, body), 'B')",
             persisted=True,
         ),
     ),

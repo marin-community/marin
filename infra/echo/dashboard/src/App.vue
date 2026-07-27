@@ -32,6 +32,8 @@ interface WikiHit {
 
 type Result = ActivityHit | WikiHit
 
+const PAGE_SIZE = 20
+
 const query = ref('')
 const scope = ref<Scope>('all')
 const source = ref<Source>('all')
@@ -56,13 +58,13 @@ function formatDate(value: string | null): string {
 }
 
 function activityUrl(): string {
-  const params = new URLSearchParams({ q: query.value.trim(), limit: '20' })
+  const params = new URLSearchParams({ q: query.value.trim(), limit: String(PAGE_SIZE) })
   if (source.value !== 'all') params.set('source', source.value)
   return `search?${params}`
 }
 
 function wikiUrl(): string {
-  return `wiki/search?${new URLSearchParams({ q: query.value.trim(), limit: '20' })}`
+  return `wiki/search?${new URLSearchParams({ q: query.value.trim(), limit: String(PAGE_SIZE) })}`
 }
 
 async function fetchJson<T>(url: string, signal: AbortSignal): Promise<T> {

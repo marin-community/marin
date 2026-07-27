@@ -18,7 +18,9 @@ RUN pip install --no-cache-dir \
 WORKDIR /app
 COPY schema.py .
 COPY hybrid_search.py .
+COPY search_config.py .
 COPY api/app.py .
+COPY api/dashboard.py .
 COPY --from=dashboard /build/dist /app/dist
 
 # Bake the query embedding model into the image so the first request is not a cold download.

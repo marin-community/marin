@@ -10,15 +10,13 @@ import os
 from collections.abc import Iterable
 from contextlib import asynccontextmanager
 from datetime import datetime
-from pathlib import Path
 from typing import Annotated
 
+import dashboard as echo_dashboard
 import hybrid_search
 import schema
 import sqlalchemy
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
 from fastembed import TextEmbedding
 from google.cloud.sql.connector import Connector
 from pydantic import BaseModel, Field
@@ -218,7 +216,7 @@ def search(
     }
     statement = hybrid_search.chunk_search_statement(chunk_filter_clauses(source, kind, since))
     with engine.connect() as conn:
-        conn.execute(sqlalchemy.text("SET hnsw.iterative_scan = relaxed_order"))
+        conn.execute(hybrid_search.HNSW_ITERATIVE_SCAN)
         return [hit(row) for row in conn.execute(statement, params)]
 
 
@@ -330,7 +328,7 @@ def search_wiki(
                 .limit(limit)
             )
             return [wiki_summary(row) for row in conn.execute(statement)]
-        conn.execute(sqlalchemy.text("SET hnsw.iterative_scan = relaxed_order"))
+        conn.execute(hybrid_search.HNSW_ITERATIVE_SCAN)
         params = {
             "q": query,
             "embedding": str(query_embedding(model, query)),
@@ -406,25 +404,4 @@ def reference_wiki_entry(entry_id: int, engine: Engine) -> WikiEntry:
     return wiki_entry(row)
 
 
-def dashboard_dist() -> Path:
-    override = os.environ.get("ECHO_DASHBOARD_DIST")
-    if override:
-        return Path(override)
-    here = Path(__file__).resolve()
-    candidates = (here.parent / "dist", here.parents[1] / "dashboard" / "dist")
-    return next((candidate for candidate in candidates if candidate.is_dir()), candidates[0])
-
-
-_DASHBOARD_DIST = dashboard_dist()
-app.mount("/static", StaticFiles(directory=_DASHBOARD_DIST / "static", check_dir=False), name="static")
-
-
-@app.get("/{full_path:path}", include_in_schema=False, response_model=None)
-def dashboard(full_path: str) -> FileResponse | HTMLResponse:
-    index = _DASHBOARD_DIST / "index.html"
-    if not index.is_file():
-        return HTMLResponse(
-            "<h1>Echo</h1><p>Dashboard not built. Run npm --prefix infra/echo/dashboard run build.</p>",
-            status_code=503,
-        )
-    return FileResponse(index)
+echo_dashboard.install_dashboard(app, echo_dashboard.dashboard_dist())

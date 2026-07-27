@@ -18,6 +18,7 @@ author: user
 - Production baseline supplied by the user: `grafana` returns unrelated MoE comments at cosine distances 0.421–0.435.
 - Root cause: vector-only ranking plus use of the generic document encoder for queries.
 - Decision: BGE query encoding plus PostgreSQL full-text candidates fused with vector candidates through RRF.
+- Local pgvector result: exact `grafana` ranks first at 0.04918 versus 0.01613 for the unrelated semantic candidate.
 
 ## Entry Log
 
@@ -48,3 +49,13 @@ author: user
 
 - Interpretation: The migration chain, generated full-text columns, pgvector queries, and RRF statements execute together. Exact lexical matches receive roughly 3x the semantic-only top score; a no-exact-match paraphrase remains semantically ranked.
 - Next action: Tighten tests/docs, build the complete API image, run lint/type checks, then deploy if credentials allow.
+
+### 2026-07-27 18:10 UTC - Advisory review and validation
+
+- Hypothesis: Centralizing retrieval and UI settings will prevent the activity and wiki search paths from drifting.
+- Commit Hash: `93cd5a732` before review follow-ups.
+- Commands: `./infra/pre-commit.py --review --agent-command='codex exec'`; API pytest; Pyrefly over changed Echo modules; `npm run build:check`; `npm audit --audit-level=high`; API Docker build and static-asset smoke; temporary pgvector ranking probe.
+- Config: RRF `k=60`, lexical weight `2`, BGE small English v1.5, Vue 3, Rsbuild 1.7.6, Tailwind 4.
+- Result: The advisory review reported 11 findings. Search configuration, HNSW setup, RRF SQL generation, development proxy origin, page size, colors, and SPA serving were centralized. Activity, work-log, and wiki routes remain in one direct FastAPI module because they share the database/model/IAP boundary and do not have separate lifecycle state. Ten API tests, strict Vue type/build checks, Pyrefly, npm audit, the container build, the SPA smoke, and the refactored pgvector probe pass.
+- Interpretation: The review follow-ups reduced drift without introducing router and dependency layers for small route groups. The exact and paraphrase rankings are unchanged after the SQL refactor.
+- Next action: Commit the follow-ups, push, open the PR, and run the production migration/deploy when credentials permit.

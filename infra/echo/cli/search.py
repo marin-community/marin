@@ -107,7 +107,7 @@ def cmd_search(conn: sqlalchemy.Connection, args: argparse.Namespace) -> None:
     query_vector = "[" + ",".join(repr(float(v)) for v in next(iter(model.query_embed([args.query])))) + "]"
     # Without iterative scans, HNSW returns ef_search candidates before WHERE applies —
     # a selective filter (e.g. --source discord) can discard all of them and return nothing.
-    conn.execute(sqlalchemy.text("SET hnsw.iterative_scan = relaxed_order"))
+    conn.execute(hybrid_search.HNSW_ITERATIVE_SCAN)
     predicates, params = chunk_filters(args)
     params.update(
         q=args.query,

@@ -4,8 +4,9 @@
 @config '../tailwind.config.ts';
 
 :root {
+  --color-cream: #f8f6ef;
   color: #17211b;
-  background: #f8f6ef;
+  background: var(--color-cream);
   font-synthesis: none;
 }
 
@@ -16,7 +17,7 @@ body {
   background:
     radial-gradient(circle at 85% 5%, rgb(218 232 218 / 65%), transparent 28rem),
     radial-gradient(circle at 5% 45%, rgb(236 222 193 / 55%), transparent 25rem),
-    #f8f6ef;
+    var(--color-cream);
 }
 
 button,
