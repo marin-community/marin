@@ -2061,14 +2061,19 @@ def explicit_stage0_embedding_value_and_grad(
     batch: GrugLmExample,
     output_cotangent: jax.Array,
     mp: jmp.Policy,
-) -> TransformerPipelineStage:
+) -> tuple[Any, Any, Any]:
     """Differentiate one microbatch's embedding path."""
 
     def projection(master_params: TransformerPipelineStage):
         hidden = explicit_stage0_embedding_forward(master_params, batch, mp)
         return jnp.sum(hidden.astype(jnp.float32) * output_cotangent.astype(jnp.float32))
 
-    return jax.grad(projection)(params)
+    parameter_gradient = jax.grad(projection)(params)
+    return (
+        parameter_gradient.token_embed,
+        parameter_gradient.embed_norm,
+        parameter_gradient.embed_gated_norm,
+    )
 
 
 def explicit_last_stage_head_loss_and_grads(
@@ -2079,7 +2084,7 @@ def explicit_last_stage_head_loss_and_grads(
     mp: jmp.Policy,
     *,
     logsumexp_weight: float | None,
-) -> tuple[jax.Array, jax.Array, TransformerPipelineStage, jax.Array]:
+) -> tuple[jax.Array, jax.Array, tuple[Any, Any, Any], jax.Array]:
     """Differentiate one microbatch's weighted final head loss."""
 
     def loss_fn(master_params: TransformerPipelineStage, current_hidden: jax.Array):
@@ -2101,18 +2106,41 @@ def explicit_last_stage_head_loss_and_grads(
         argnums=(0, 1),
         has_aux=True,
     )(params, hidden)
-    return loss, qb_betas_next, parameter_gradient, input_gradient
+    head_gradient = (
+        parameter_gradient.output_proj,
+        parameter_gradient.final_norm,
+        parameter_gradient.final_gated_norm,
+    )
+    return loss, qb_betas_next, head_gradient, input_gradient
 
 
-def explicit_stage_gradient_from_blocks(
+def explicit_stage_gradient_from_components(
     params: TransformerPipelineStage,
     block_gradients: tuple[Block, ...],
+    embedding_gradient: tuple[Any, ...] = (),
+    head_gradient: tuple[Any, ...] = (),
 ) -> TransformerPipelineStage:
-    """Place ordered block gradients into a stage-shaped gradient tree."""
+    """Assemble component gradients immediately before the optimizer update."""
     if len(block_gradients) != len(params.blocks):
         raise ValueError(f"expected {len(params.blocks)} block gradients, got {len(block_gradients)}")
-    zero_gradient = jax.tree.map(jnp.zeros_like, params)
-    return eqx.tree_at(lambda stage: stage.blocks, zero_gradient, block_gradients)
+    gradient = eqx.tree_at(
+        lambda stage: stage.blocks,
+        jax.tree.map(jnp.zeros_like, params),
+        block_gradients,
+    )
+    if embedding_gradient:
+        if len(embedding_gradient) != 3:
+            raise ValueError(f"expected three embedding gradient components, got {len(embedding_gradient)}")
+        gradient = eqx.tree_at(lambda stage: stage.token_embed, gradient, embedding_gradient[0])
+        gradient = eqx.tree_at(lambda stage: stage.embed_norm, gradient, embedding_gradient[1])
+        gradient = eqx.tree_at(lambda stage: stage.embed_gated_norm, gradient, embedding_gradient[2])
+    if head_gradient:
+        if len(head_gradient) != 3:
+            raise ValueError(f"expected three head gradient components, got {len(head_gradient)}")
+        gradient = eqx.tree_at(lambda stage: stage.output_proj, gradient, head_gradient[0])
+        gradient = eqx.tree_at(lambda stage: stage.final_norm, gradient, head_gradient[1])
+        gradient = eqx.tree_at(lambda stage: stage.final_gated_norm, gradient, head_gradient[2])
+    return gradient
 
 
 def paired_compute_block_forward(
@@ -2629,6 +2657,17 @@ def _make_explicit_mpmd_train_step(
         _tree_named_shardings_on_stage(mpmd_mesh, mpmd_index, params)
         for mpmd_index, params in zip(stage_mpmd_indices, sample_state.params, strict=True)
     )
+    block_gradient_shardings = tuple(tuple(stage.blocks) for stage in param_shardings)
+    stage0_embedding_gradient_shardings = (
+        param_shardings[0].token_embed,
+        param_shardings[0].embed_norm,
+        param_shardings[0].embed_gated_norm,
+    )
+    last_stage_head_gradient_shardings = (
+        param_shardings[-1].output_proj,
+        param_shardings[-1].final_norm,
+        param_shardings[-1].final_gated_norm,
+    )
     opt_state_shardings = tuple(
         _tree_named_shardings_on_stage(mpmd_mesh, mpmd_index, opt_state)
         for mpmd_index, opt_state in zip(stage_mpmd_indices, sample_state.opt_state, strict=True)
@@ -3009,9 +3048,6 @@ def _make_explicit_mpmd_train_step(
     def explicit_group2_qb_betas(router_metrics):
         return _combine_grouped_router_metrics(router_metrics)["qb_beta_per_layer"]
 
-    def explicit_stage_block_gradients(params, block_gradients):
-        return explicit_stage_gradient_from_blocks(params, block_gradients)
-
     explicit_group2_phase_callables = _bind_explicit_group2_phase_callables(
         pre_forward=explicit_group2_pre_bootstrap,
         finish_forward=explicit_group2_finish_forward,
@@ -3058,6 +3094,28 @@ def _make_explicit_mpmd_train_step(
         updates, opt_state = optimizer.update(ordinary_grads, opt_state, ordinary_params)
         updated_params = apply_stage_updates(ordinary_params, updates)
         return eqx.combine(overwrites, updated_params, is_leaf=_is_overwrite), opt_state
+
+    def update_grouped_stage(
+        params: TransformerPipelineStage,
+        opt_state: optax.OptState,
+        block_gradient_sums,
+        embedding_gradient_sum,
+        head_gradient_sum,
+    ):
+        block_gradients = tuple(
+            _average_microbatch_tree(block_gradient, pipeline.microbatches) for block_gradient in block_gradient_sums
+        )
+        embedding_gradient = (
+            _average_microbatch_tree(embedding_gradient_sum, pipeline.microbatches) if embedding_gradient_sum else ()
+        )
+        head_gradient = _average_microbatch_tree(head_gradient_sum, pipeline.microbatches) if head_gradient_sum else ()
+        grads = explicit_stage_gradient_from_components(
+            params,
+            block_gradients,
+            embedding_gradient,
+            head_gradient,
+        )
+        return update_stage(params, opt_state, grads)
 
     def keep_step(step: jax.Array):
         return step
@@ -3539,6 +3597,9 @@ def _make_explicit_mpmd_train_step(
         qb_betas = state.pending_qb_betas
         qb_betas_next = [None] * num_stages
         grads = [None] * num_stages
+        grouped_block_grads = [[None] * len(stage.blocks) for stage in params]
+        grouped_embedding_grads = [None] * num_stages
+        grouped_head_grads = [None] * num_stages
         loss_sum = None
         stage_inputs = {}
         forward_futures = {}
@@ -3649,6 +3710,21 @@ def _make_explicit_mpmd_train_step(
             batches = tuple(batches_by_microbatch[index] for index in indices)
             name = "_".join(str(index) for index in indices)
             return indices, batches, name
+
+        def accumulate_grouped_block_gradients(stage_index: int, block_gradients, microbatch_name: str):
+            if len(block_gradients) != len(grouped_block_grads[stage_index]):
+                raise ValueError(
+                    f"expected {len(grouped_block_grads[stage_index])} block gradients, got {len(block_gradients)}"
+                )
+            for block_index, block_gradient in enumerate(block_gradients):
+                grouped_block_grads[stage_index][block_index] = accumulate_or_set(
+                    grouped_block_grads[stage_index][block_index],
+                    block_gradient,
+                    name=(
+                        f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_" f"block{block_index}_accumulate_gradients"
+                    ),
+                    out_shardings=block_gradient_shardings[stage_index][block_index],
+                )
 
         def explicit_group2_stage_forward(
             stage_index: int,
@@ -3788,12 +3864,7 @@ def _make_explicit_mpmd_train_step(
                 )(finish_backward[4], pre_backwards[0][1], pre_backwards[1][1])
                 arriving_cotangents = (pre_backwards[0][2], pre_backwards[1][2])
 
-            stage_gradient = mpmd.task(
-                explicit_stage_block_gradients,
-                name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_assemble_block_gradients",
-                out_shardings=param_shardings[stage_index],
-            )(stage_params, tuple(block_gradients))
-            return stage_gradient, arriving_cotangents
+            return tuple(block_gradients), arriving_cotangents
 
         def ensure_forward(stage_index: int, microbatch_key: int | tuple[int, ...]):
             key = (stage_index, microbatch_key)
@@ -3945,7 +4016,7 @@ def _make_explicit_mpmd_train_step(
                             out_shardings=(
                                 last_loss_sharding,
                                 qb_shardings[stage_index],
-                                param_shardings[stage_index],
+                                last_stage_head_gradient_shardings,
                                 activation_shardings[stage_index],
                             ),
                         )(
@@ -3969,9 +4040,9 @@ def _make_explicit_mpmd_train_step(
                     head_gradient = mpmd.task(
                         add_trees,
                         name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_sum_head_gradients",
-                        out_shardings=param_shardings[stage_index],
+                        out_shardings=last_stage_head_gradient_shardings,
                     )(head_results[0][2], head_results[1][2])
-                    block_gradient, d_hidden = explicit_group2_stage_backward(
+                    block_gradients, d_hidden = explicit_group2_stage_backward(
                         stage_index,
                         cast(tuple[int, ...], microbatch_key),
                         stage_params,
@@ -3980,11 +4051,13 @@ def _make_explicit_mpmd_train_step(
                         (head_results[0][3], head_results[1][3]),
                         microbatch_name,
                     )
-                    stage_grads = mpmd.task(
-                        add_trees,
-                        name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_sum_stage_gradients",
-                        out_shardings=param_shardings[stage_index],
-                    )(head_gradient, block_gradient)
+                    accumulate_grouped_block_gradients(stage_index, block_gradients, microbatch_name)
+                    grouped_head_grads[stage_index] = accumulate_or_set(
+                        grouped_head_grads[stage_index],
+                        head_gradient,
+                        name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_accumulate_head_gradients",
+                        out_shardings=last_stage_head_gradient_shardings,
+                    )
                 else:
                     loss, stage_qb_betas, stage_grads, d_hidden = mpmd.task(
                         last_stage_loss_and_grads,
@@ -4016,12 +4089,13 @@ def _make_explicit_mpmd_train_step(
                     name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_accumulate_qb",
                     out_shardings=qb_shardings[stage_index],
                 )
-                grads[stage_index] = accumulate_or_set(
-                    grads[stage_index],
-                    stage_grads,
-                    name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_accumulate_grads",
-                    out_shardings=param_shardings[stage_index],
-                )
+                if not grouped:
+                    grads[stage_index] = accumulate_or_set(
+                        grads[stage_index],
+                        stage_grads,
+                        name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_accumulate_grads",
+                        out_shardings=param_shardings[stage_index],
+                    )
                 if not prioritize_transfers:
                     d_hidden_futures[(stage_index - 1, microbatch_key)] = send_pipeline_wire_value(
                         d_hidden,
@@ -4043,7 +4117,7 @@ def _make_explicit_mpmd_train_step(
             )
             if stage_index == 0:
                 if grouped:
-                    block_gradient, embedding_cotangents = explicit_group2_stage_backward(
+                    block_gradients, embedding_cotangents = explicit_group2_stage_backward(
                         0,
                         cast(tuple[int, ...], microbatch_key),
                         stage_params,
@@ -4056,7 +4130,7 @@ def _make_explicit_mpmd_train_step(
                         mpmd.task(
                             stage0_embedding_backward,
                             name=(f"grug_1f1b_mb{microbatch_name}_stage0_" f"embedding_backward_mb{microbatch_offset}"),
-                            out_shardings=param_shardings[0],
+                            out_shardings=stage0_embedding_gradient_shardings,
                         )(
                             stage_params,
                             stage_batches[microbatch_offset],
@@ -4067,31 +4141,33 @@ def _make_explicit_mpmd_train_step(
                     embedding_gradient = mpmd.task(
                         add_trees,
                         name=f"grug_1f1b_mb{microbatch_name}_stage0_sum_embedding_gradients",
-                        out_shardings=param_shardings[0],
+                        out_shardings=stage0_embedding_gradient_shardings,
                     )(embedding_gradients[0], embedding_gradients[1])
-                    stage_grads = mpmd.task(
-                        add_trees,
-                        name=f"grug_1f1b_mb{microbatch_name}_stage0_sum_stage_gradients",
-                        out_shardings=param_shardings[0],
-                    )(embedding_gradient, block_gradient)
+                    accumulate_grouped_block_gradients(0, block_gradients, microbatch_name)
+                    grouped_embedding_grads[0] = accumulate_or_set(
+                        grouped_embedding_grads[0],
+                        embedding_gradient,
+                        name=f"grug_1f1b_mb{microbatch_name}_stage0_accumulate_embedding_gradients",
+                        out_shardings=stage0_embedding_gradient_shardings,
+                    )
                 else:
                     stage_grads = mpmd.task(
                         stage0_backward,
                         name=f"grug_1f1b_mb{microbatch_name}_stage0_backward",
                         out_shardings=param_shardings[0],
                     )(stage_params, qb_betas[0], stage_batches[0], d_hidden)
-                grads[0] = accumulate_or_set(
-                    grads[0],
-                    stage_grads,
-                    name=f"grug_1f1b_mb{microbatch_name}_stage0_accumulate_grads",
-                    out_shardings=param_shardings[0],
-                )
+                    grads[0] = accumulate_or_set(
+                        grads[0],
+                        stage_grads,
+                        name=f"grug_1f1b_mb{microbatch_name}_stage0_accumulate_grads",
+                        out_shardings=param_shardings[0],
+                    )
                 backward_done.add(key)
                 return
 
             ensure_forward(stage_index, microbatch_key)
             if grouped:
-                stage_grads, d_hidden = explicit_group2_stage_backward(
+                block_gradients, d_hidden = explicit_group2_stage_backward(
                     stage_index,
                     cast(tuple[int, ...], microbatch_key),
                     stage_params,
@@ -4100,6 +4176,7 @@ def _make_explicit_mpmd_train_step(
                     d_hidden,
                     microbatch_name,
                 )
+                accumulate_grouped_block_gradients(stage_index, block_gradients, microbatch_name)
             else:
                 stage_grads, d_hidden = mpmd.task(
                     stage_backward,
@@ -4114,12 +4191,13 @@ def _make_explicit_mpmd_train_step(
                     fp8_dtype="e5m2",
                     name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_backward_wire",
                 )
-            grads[stage_index] = accumulate_or_set(
-                grads[stage_index],
-                stage_grads,
-                name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_accumulate_grads",
-                out_shardings=param_shardings[stage_index],
-            )
+            if not grouped:
+                grads[stage_index] = accumulate_or_set(
+                    grads[stage_index],
+                    stage_grads,
+                    name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_accumulate_grads",
+                    out_shardings=param_shardings[stage_index],
+                )
             if not prioritize_transfers:
                 d_hidden_futures[(stage_index - 1, microbatch_key)] = send_pipeline_wire_value(
                     d_hidden,
@@ -4316,21 +4394,38 @@ def _make_explicit_mpmd_train_step(
             )(stage_qb_betas)
             for stage_index, stage_qb_betas in enumerate(qb_betas_next)
         ]
-        grads = [
-            mpmd.task(
-                average_tree,
-                name=f"grug_1f1b_stage{stage_index}_average_grads",
-                out_shardings=param_shardings[stage_index],
-            )(stage_grads)
-            for stage_index, stage_grads in enumerate(grads)
-        ]
-
-        for stage_index in range(num_stages):
-            params[stage_index], opt_state[stage_index] = mpmd.task(
-                update_stage,
-                name=f"grug_1f1b_stage{stage_index}_update",
-                out_shardings=(param_shardings[stage_index], opt_state_shardings[stage_index]),
-            )(params[stage_index], opt_state[stage_index], grads[stage_index])
+        if pipeline.explicit_mpmd_stage_task_microbatch_group_size == 1:
+            grads = [
+                mpmd.task(
+                    average_tree,
+                    name=f"grug_1f1b_stage{stage_index}_average_grads",
+                    out_shardings=param_shardings[stage_index],
+                )(stage_grads)
+                for stage_index, stage_grads in enumerate(grads)
+            ]
+            for stage_index in range(num_stages):
+                params[stage_index], opt_state[stage_index] = mpmd.task(
+                    update_stage,
+                    name=f"grug_1f1b_stage{stage_index}_update",
+                    out_shardings=(param_shardings[stage_index], opt_state_shardings[stage_index]),
+                )(params[stage_index], opt_state[stage_index], grads[stage_index])
+        else:
+            for stage_index in range(num_stages):
+                if any(block_gradient is None for block_gradient in grouped_block_grads[stage_index]):
+                    raise ValueError(f"grouped 1F1B did not accumulate every block gradient for stage {stage_index}")
+                embedding_gradient = grouped_embedding_grads[stage_index]
+                head_gradient = grouped_head_grads[stage_index]
+                params[stage_index], opt_state[stage_index] = mpmd.task(
+                    update_grouped_stage,
+                    name=f"grug_1f1b_stage{stage_index}_update_grouped_components",
+                    out_shardings=(param_shardings[stage_index], opt_state_shardings[stage_index]),
+                )(
+                    params[stage_index],
+                    opt_state[stage_index],
+                    tuple(grouped_block_grads[stage_index]),
+                    () if embedding_gradient is None else embedding_gradient,
+                    () if head_gradient is None else head_gradient,
+                )
         step = mpmd.task(
             keep_step,
             name="grug_1f1b_keep_step",

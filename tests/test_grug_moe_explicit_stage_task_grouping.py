@@ -103,7 +103,7 @@ from experiments.grug.moe.train import (
     explicit_router_pre_boundary_bootstrap,
     explicit_router_pre_boundary_forward,
     explicit_router_pre_boundary_primal_and_value_and_grads,
-    explicit_stage_gradient_from_blocks,
+    explicit_stage_gradient_from_components,
     explicit_std_1f1b_stage_schedule,
     pack_fp8_pipeline_wire,
     paired_compute_block_forward,
@@ -416,7 +416,7 @@ def _assert_tree_rel_l2(actual, expected, *, tolerance: float = 0.002) -> None:
         assert relative_l2 <= tolerance
 
 
-def _tiny_grouped_last_stage(remat_mode: str, *, top_k: int = 1):
+def _tiny_grouped_stages(remat_mode: str, *, top_k: int = 1):
     config = GrugModelConfig(
         vocab_size=16,
         hidden_dim=8,
@@ -442,7 +442,12 @@ def _tiny_grouped_last_stage(remat_mode: str, *, top_k: int = 1):
     )
     with jax.set_mesh(mesh):
         model = Transformer.init(config, key=jax.random.PRNGKey(0))
-    return mesh, model.split_for_pipeline(2)[1]
+    return mesh, model.split_for_pipeline(2)
+
+
+def _tiny_grouped_last_stage(remat_mode: str, *, top_k: int = 1):
+    mesh, stages = _tiny_grouped_stages(remat_mode, top_k=top_k)
+    return mesh, stages[1]
 
 
 def _shard_group_batch(batch: GrugLmExample, mesh: Mesh) -> GrugLmExample:
@@ -1365,23 +1370,26 @@ def test_production_explicit_router_bootstrap_matches_zero_cotangent_vjp() -> No
     validate_explicit_pre_task_structure(explicit_component_task_structure(bootstrap_jaxpr))
 
 
-def test_explicit_stage_gradient_from_blocks_preserves_stage_tree() -> None:
-    _, stage = _tiny_grouped_last_stage("save_moe", top_k=2)
-    block_gradient = jax.tree.map(jnp.ones_like, stage.blocks[0])
-    expected = eqx.tree_at(
-        lambda value: value.blocks,
-        jax.tree.map(jnp.zeros_like, stage),
-        (block_gradient,),
+def test_explicit_stage_gradient_from_components_matches_full_stage_gradient() -> None:
+    _, (first_stage, last_stage) = _tiny_grouped_stages("save_moe", top_k=2)
+    expected_first = jax.tree.map(jnp.ones_like, first_stage)
+    expected_last = jax.tree.map(jnp.ones_like, last_stage)
+
+    actual_first = jax.jit(explicit_stage_gradient_from_components)(
+        first_stage,
+        expected_first.blocks,
+        (expected_first.token_embed, expected_first.embed_norm, expected_first.embed_gated_norm),
+        (),
+    )
+    actual_last = jax.jit(explicit_stage_gradient_from_components)(
+        last_stage,
+        expected_last.blocks,
+        (),
+        (expected_last.output_proj, expected_last.final_norm, expected_last.final_gated_norm),
     )
 
-    actual = jax.jit(explicit_stage_gradient_from_blocks)(stage, (block_gradient,))
-
-    for actual_leaf, expected_leaf in zip(
-        jax.tree.leaves(actual),
-        jax.tree.leaves(expected),
-        strict=True,
-    ):
-        np.testing.assert_array_equal(actual_leaf, expected_leaf)
+    _assert_tree_rel_l2(actual_first, expected_first)
+    _assert_tree_rel_l2(actual_last, expected_last)
 
 
 def test_ordered_checkpoint_allow_cse_control_matches_default_and_no_checkpoint() -> None:
