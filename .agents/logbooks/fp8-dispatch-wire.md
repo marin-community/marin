@@ -363,3 +363,47 @@ Living queue; updated as hypotheses are proposed, blocked, falsified, or promote
   imports still resolve from the worktree via the pyproject search path, so the symlink
   does not silently type-check the wrong tree; only site-packages comes from the shared
   venv. Worth knowing for any worktree-based work in this repo.
+
+### 2026-07-27 16:20 - FP8W-009: d6144 4-of-256 is a smaller effect
+
+- **Hypothesis:** H5 at #7201's other candidate architecture.
+- **Command:** as FP8W-008 with `--hidden 6144 --intermediate 3072 --experts 256`.
+- **Result** (3 draws, 1x GB200x4, EP4, 65,536 gathered tokens):
+
+  | draw | fwd | fwd+bwd |
+  |---|--:|--:|
+  | r1 | 1.0443 | 1.0058 |
+  | r2 | 1.0437 | 1.0048 |
+  | r3 | 1.0443 | 1.0036 |
+
+  Parity: `dw13`/`dw2` relfrob 0.0, `dx` 1.51e-4, forward 1.49e-4.
+- **Interpretation:** smaller than d5120 4-of-128 (1.071 / 1.019) and consistently so. This
+  is what the byte thesis predicts: d6144/i3072 does roughly 1.44x the FLOPs per token
+  while dispatch bytes scale only with the hidden dim (1.2x), so the collective's share of
+  the layer falls and the saving is diluted. The gain tracks the collective's share, not
+  the architecture's size.
+
+### 2026-07-27 16:35 - FP8W-011: EP16 multi-node, and a timing bug that produced an impossible number
+
+- **Hypothesis:** the effect grows with EP degree, since dispatch volume does.
+- **Command:** as FP8W-008 with `--replicas 4 --tokens 262144` (16 GPUs, 4 processes,
+  16,384 tokens per device, same as the EP4 runs).
+- **Result, first attempt (unbarriered):** fwd 0.883, fwd+bwd **2.774**. Rejected as an
+  artifact, not recorded as a result. The wire arm's 34.6 ms was *less* than the EP4 run
+  took for a quarter of the tokens, which is impossible.
+- **Root cause:** `jax.block_until_ready` waits only on process-local shards. Without a
+  global barrier the processes drift, and a later arm appears to absorb an earlier arm's
+  queued work. Fixed by barriering each timing region with
+  `multihost_utils.sync_global_devices`. The correction moved the *control* arm too
+  (fwd 21.9 -> 13.8 ms), so both arms were mismeasured, not just one.
+- **Result, barriered:** fwd **1.209**, fwd+bwd **1.101**. Parity unchanged: `dw13`/`dw2`
+  relfrob 0.0, `dx` 1.12e-4, forward 1.11e-4.
+- **Interpretation:** the effect is markedly larger at EP16 than EP4 (1.019 -> 1.101 on
+  fwd+bwd at the same per-device token count), which is the predicted direction: more
+  expert shards means more dispatch volume, and the saving tracks the collective's share.
+  This is the first measurement in the regime the production config actually uses.
+  Repeats are running; one draw is not enough to quote 1.101 as settled.
+
+  Process note worth carrying: any multi-process timing harness in this repo needs explicit
+  global barriers. The unbarriered version did not merely add noise, it produced a
+  confidently wrong 2.77x that would have been an attractive number to believe.
