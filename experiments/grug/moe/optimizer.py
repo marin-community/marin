@@ -241,6 +241,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """
 
     adam_lr: float = 6e-4
+    # Over-Encoding tables train on plain Adam at this multiple of adam_lr (OE reference uses 0.5).
+    over_encoding_lr_multiplier: float = 1.0
     momentum: float = 0.95
     nesterov: bool = True
     backend_steps: int = 5
@@ -254,8 +256,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+        over_encoding_lr_schedule = self.lr_scheduler(
+            num_train_steps, override_lr=self.adam_lr * self.over_encoding_lr_multiplier
+        )
 
-        def optimizer(learning_rate, adam_lr):
+        def optimizer(learning_rate, adam_lr, over_encoding_lr):
             def muonh_transform():
                 components = []
                 if self.max_grad_norm:
@@ -292,12 +297,14 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "muonh": muonh_transform(),
                 "adamh": adamh_transform_at(learning_rate),
                 "adam": adam_transform_at(adam_lr),
+                "over_encoding_adam": adam_transform_at(over_encoding_lr),
             }
             return optax.multi_transform(transforms, self.create_mask)
 
         return optax.inject_hyperparams(optimizer)(
             learning_rate=learning_rate_schedule,
             adam_lr=adam_lr_schedule,
+            over_encoding_lr=over_encoding_lr_schedule,
         )
 
     def create_mask(self, params):
@@ -306,6 +313,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         def mask_fn(param, path):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             path_lower = path_str.lower()
+            # OE tables: plain Adam at the OE LR. Checked first -- the stacked table is 3-D and would
+            # otherwise fall through to muonh and be wrongly orthogonalized. Projections (2-D) stay muonh.
+            if "over_encoding.tables" in path_lower:
+                return "over_encoding_adam"
             if (
                 "token_embed" in path_lower
                 or "router_bias" in path_lower

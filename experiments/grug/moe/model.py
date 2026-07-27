@@ -168,6 +168,12 @@ class GrugModelConfig:
     # MTP head attends the full document (global bounds + NoPE). False = local sliding window + RoPE
     # (much lighter attention, higher batch ceiling).
     mtp_head_global: bool = True
+    # Over-Encoding: input-only n-gram embedding enrichment (see OverEncoding). 0 (default) = off.
+    # vocab is the per-table n-gram modulus; splits*(num_grams-1) tables of orders 2..num_grams. On
+    # GPU the table is replicated, so keep the vocab capped small (fits alongside the memory-bound trunk).
+    over_encoding_vocab_size: int = 0
+    over_encoding_splits: int = 4
+    over_encoding_num_grams: int = 3
     # Apply a learnable GatedNorm after each RMSNorm (attn + mlp inputs). Off in the barebones default.
     gated_norm: bool = False
     # Per-head sigmoid attention gate: gate = 2*sigmoid(x @ attn_gate), a scalar per (token, head)
@@ -829,9 +835,128 @@ class DenseBlock(eqx.Module):
         return x, None
 
 
+# Over-Encoding (arXiv:2501.16975): enrich the input embedding with causal n-gram lookups into a
+# larger vocab, combined with the base token embedding by "normsum" (independent RMSNorm of each
+# stream, summed, /sqrt(2)) then a gate. Input-only -- the output/lm_head is untouched. Ported from
+# the TPU SparseCore reference to GPU by capping the table small enough to REPLICATE it (like
+# token_embed) and reusing the wedge-safe ``_embedding_gather`` -- no row-sharding / ragged_all_to_all.
+_NORMALIZED_INPUT_STREAM_SCALE = 2.0**0.5
+_OVER_ENCODING_TABLE_ROW_ALIGNMENT = 256
+
+
+def _over_encoding_table_rows(logical_rows: int) -> int:
+    """Round the logical n-gram vocab up to a multiple of the row alignment."""
+    align = _OVER_ENCODING_TABLE_ROW_ALIGNMENT
+    return ((logical_rows + align - 1) // align) * align
+
+
+def _causal_ngram_ids(
+    token_ids: Int[Array, "B S"],
+    *,
+    order: int,
+    modulus: int,
+    base_vocab_size: int,
+    segment_ids: jax.Array | None,
+) -> Int[Array, "B S"]:
+    """Hash a causal n-gram id per position without crossing packed-document boundaries."""
+    if order < 2:
+        raise ValueError(f"n-gram order must be at least 2, got {order}")
+    if modulus <= 0:
+        raise ValueError(f"modulus must be positive, got {modulus}")
+    seq_len = token_ids.shape[-1]
+    token_ids_u32 = token_ids.astype(jnp.uint32)
+    ngram_hash = token_ids_u32
+    multiplier = jnp.uint32(base_vocab_size)
+    valid_prefix = jnp.ones(token_ids.shape, dtype=jnp.bool_)
+    current_segments = segment_ids
+    if current_segments is not None and current_segments.ndim == 1:
+        current_segments = jnp.broadcast_to(current_segments[None, :], token_ids.shape)
+    for lag in range(1, order):
+        shifted_tokens = jnp.pad(token_ids_u32, ((0, 0), (lag, 0)))[:, :seq_len]
+        valid_lag = jnp.arange(seq_len) >= lag
+        if current_segments is not None:
+            shifted_segments = jnp.pad(current_segments, ((0, 0), (lag, 0)), constant_values=-1)[:, :seq_len]
+            valid_lag = valid_lag[None, :] & (current_segments >= 0) & (current_segments == shifted_segments)
+        valid_prefix = valid_prefix & valid_lag
+        ngram_hash = ngram_hash + jnp.where(valid_prefix, shifted_tokens, jnp.uint32(0)) * multiplier
+        multiplier = multiplier * jnp.uint32(base_vocab_size)
+    return (ngram_hash % jnp.uint32(modulus)).astype(jnp.int32)
+
+
+class OverEncoding(eqx.Module):
+    """Hierarchical input-only n-gram embedding tables (orders 2..num_grams, ``splits`` hashes each)."""
+
+    tables: jax.Array  # [num_tables, physical_rows, slice_dim], replicated
+    projections: tuple[jax.Array, ...]  # each [slice_dim, hidden], replicated
+    logical_vocab_sizes: tuple[int, ...] = eqx.field(static=True)
+    splits: int = eqx.field(static=True)
+    num_grams: int = eqx.field(static=True)
+    base_vocab_size: int = eqx.field(static=True)
+
+    @staticmethod
+    def init(cfg: "GrugModelConfig", *, key: PRNGKeyArray) -> "OverEncoding":
+        if cfg.over_encoding_vocab_size <= 0:
+            raise ValueError("OverEncoding requires a positive over_encoding_vocab_size")
+        num_tables = cfg.over_encoding_splits * (cfg.over_encoding_num_grams - 1)
+        if cfg.hidden_dim % num_tables != 0:
+            raise ValueError(f"hidden_dim={cfg.hidden_dim} must be divisible by num OE tables={num_tables}")
+        slice_dim = cfg.hidden_dim // num_tables
+        table_keys = random.split(key, num_tables * 2)
+        logical_vocab_sizes = tuple(cfg.over_encoding_vocab_size + 2 * index for index in range(num_tables))
+        physical_rows = max(_over_encoding_table_rows(rows) for rows in logical_vocab_sizes)
+        table_values = jnp.stack(
+            tuple(
+                _init_weight(table_keys[index], (physical_rows, slice_dim), cfg.initializer_std)
+                for index in range(num_tables)
+            )
+        )
+        # Capped OE: fully replicate the (small) stacked tables so the lookup reuses _embedding_gather.
+        tables = reshard(table_values, P(None, None, None))
+        projection_std = 1.0 / (slice_dim**0.5)
+        projections = tuple(
+            reshard(
+                _init_weight(table_keys[num_tables + index], (slice_dim, cfg.hidden_dim), projection_std),
+                P(None, None),
+            )
+            for index in range(num_tables)
+        )
+        return OverEncoding(
+            tables=tables,
+            projections=projections,
+            logical_vocab_sizes=logical_vocab_sizes,
+            splits=cfg.over_encoding_splits,
+            num_grams=cfg.over_encoding_num_grams,
+            base_vocab_size=cfg.vocab_size,
+        )
+
+    @named_call
+    def __call__(self, token_ids: Int[Array, "B S"], segment_ids: jax.Array | None) -> Float[Array, "B S D"]:
+        added: jax.Array | None = None
+        for order in range(2, self.num_grams + 1):
+            for split_index in range(self.splits):
+                table_index = (order - 2) * self.splits + split_index
+                ids = _causal_ngram_ids(
+                    token_ids,
+                    order=order,
+                    modulus=self.logical_vocab_sizes[table_index],
+                    base_vocab_size=self.base_vocab_size,
+                    segment_ids=segment_ids,
+                )
+                # Replicated per-table gather (wedge-safe), then project the slice up to full hidden.
+                embedding_slice = _embedding_gather(self.tables[table_index], ids)
+                projected = jnp.einsum(
+                    "bsd,dh->bsh", embedding_slice, self.projections[table_index], out_sharding=_batch_spec()
+                )
+                added = projected if added is None else added + projected
+        assert added is not None, "OverEncoding must contain at least one table"
+        return added
+
+
 class Transformer(eqx.Module):
     token_embed: jax.Array
+    over_encoding: OverEncoding | None
     embed_norm: RMSNorm
+    embed_gated_norm: GatedNorm | None
     output_proj: jax.Array
     stacked_blocks: ArrayStacked[Block]
     final_norm: RMSNorm
@@ -868,6 +993,12 @@ class Transformer(eqx.Module):
         token_embed = reshard(
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
+        # Over-Encoding (folded key keeps the base RNG stream unchanged when OE is off). The gate
+        # ("gate 2") is only added on the OE path, so the no-OE baseline stays byte-identical.
+        over_encoding = embed_gated_norm = None
+        if cfg.over_encoding_vocab_size > 0:
+            over_encoding = OverEncoding.init(cfg, key=random.fold_in(key, 0x4F45))
+            embed_gated_norm = GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=random.fold_in(key, 0x4F46))
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
         stacked_blocks = ArrayStacked.init(cfg.num_layers, Block)(cfg, key=jnp.stack(block_keys))
 
@@ -919,7 +1050,9 @@ class Transformer(eqx.Module):
 
         return Transformer(
             token_embed=token_embed,
+            over_encoding=over_encoding,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            embed_gated_norm=embed_gated_norm,
             output_proj=output_proj,
             stacked_blocks=stacked_blocks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
@@ -936,6 +1069,19 @@ class Transformer(eqx.Module):
         return Axis("vocab", self.config.vocab_size)
 
     @named_call
+    def input_embedding(self, token_ids: Int[Array, "B S"], segment_ids: jax.Array | None) -> Float[Array, "B S D"]:
+        """Base token embedding, optionally normsum-combined with the Over-Encoding streams."""
+        token_embedding = _embedding_gather(self.token_embed, token_ids)
+        if self.over_encoding is None:
+            return self.embed_norm(token_embedding)
+        # normsum: RMSNorm each stream independently, sum, rescale to unit variance, then gate.
+        over_encoding_embedding = self.over_encoding(token_ids, segment_ids)
+        hidden = (
+            self.embed_norm(token_embedding) + self.embed_norm(over_encoding_embedding)
+        ) / _NORMALIZED_INPUT_STREAM_SCALE
+        assert self.embed_gated_norm is not None
+        return self.embed_gated_norm(hidden)
+
     def __call__(
         self,
         token_ids: Int[Array, "B S"],
@@ -945,11 +1091,12 @@ class Transformer(eqx.Module):
             mask = AttentionMask.causal()
 
         cfg = self.config
-        hidden = _embedding_gather(self.token_embed, token_ids)
-        hidden = self.embed_norm(hidden)
+        # AttentionMask.segment_ids is a (q, kv) tuple; the q ids are the per-token [B, S] stream that
+        # drives the OE n-gram boundaries (the same tuple feeds the FA4 mask below after resharding).
+        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        hidden = self.input_embedding(token_ids, segment_ids[0] if segment_ids is not None else None)
 
         # Every layer is identical full-causal MoE, so the mask is a scan constant.
-        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
         if segment_ids is not None:
             # Pin the per-token [B, S] segment ids batch-sharded before they enter the layer scan.
             # Otherwise they reach the FA4 callback as {maximal device=0} and the compiler falls back

@@ -163,6 +163,9 @@ def build_scale_model() -> GrugModelConfig:
         mtp_loss_weight=env_float("SCALE_MTP_WEIGHT", 0.3),
         mtp_num_experts=env_int("SCALE_MTP_NUM_EXPERTS", 0),
         mtp_intermediate_dim=env_int("SCALE_MTP_INTERMEDIATE", 0),
+        over_encoding_vocab_size=env_int("SCALE_OE_VOCAB", 0),
+        over_encoding_splits=env_int("SCALE_OE_SPLITS", 4),
+        over_encoding_num_grams=env_int("SCALE_OE_GRAMS", 3),
         mtp_head_only=os.environ.get("SCALE_MTP_HEAD_ONLY") == "1",
         mtp_head_global=os.environ.get("SCALE_MTP_LOCAL") != "1",
         mtp_dense=os.environ.get("SCALE_MTP_DENSE") == "1",
@@ -274,6 +277,8 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
             if lr_override
             else heuristic
         )
+        # Over-Encoding tables train at this fraction of adam_lr (reference: 0.5); no-op when OE is off.
+        optimizer = dataclasses.replace(optimizer, over_encoding_lr_multiplier=env_float("SCALE_OE_LR_MULT", 0.5))
     elif opt_name in ("adamh", "grug_moe_adamh"):
         lr = float(lr_override) if lr_override else heuristic.adam_lr
         optimizer = GrugMoeAdamHConfig(learning_rate=lr, adam_lr=lr, **schedule)
