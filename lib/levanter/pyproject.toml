@@ -92,9 +92,9 @@ gpu = [
   # SonicMoE grouped GEMMs and their JAX TVM-FFI bridge.
   "quack-kernels==0.6.1; sys_platform == 'linux'",
   "jax-tvm-ffi==0.1.3; sys_platform == 'linux'",
-  # QuACK imports the cu128 PyTorch runtime, whose cuFile library is not
-  # installed transitively in every workspace lock split.
-  "nvidia-cufile-cu12==1.13.1.3; sys_platform == 'linux'",
+  # Pin QuACK's PyTorch dependency to the CUDA wheel source below so uv
+  # includes its complete CUDA runtime dependency set in this extra.
+  "torch==2.11.0; sys_platform == 'linux'",
   # Optional raw Sonic MoE gather/combine backend. Keep jax-triton exact:
   # 0.3.0 is missing the CUDA backend API needed by our current stack.
   "jax-triton==0.3.1; sys_platform == 'linux'",
@@ -187,6 +187,17 @@ conflicts = [
     { extra = "tpu" },
   ],
 ]  # Never solve for both GPU and TPU at once
+
+[tool.uv.sources]
+torch = [
+  # PyTorch cu130 pins an older cuBLAS than the B200 guard above allows.
+  { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
 
 [tool.ruff]
 line-length = 119
