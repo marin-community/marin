@@ -16,6 +16,81 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T04:05:11Z — 221,927 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0243-v908` independently
+  revalidated p2 decision-file 73 offsets 3,328 and 3,456. Their 256 baseline
+  pairs contain 143 model false positives, 111 model true duplicates, and two
+  unresolved outcomes. One pair used chunked review and 255 used direct
+  review. All 595 judgments and request attempts were valid on their first
+  attempt. The outcome Parquet SHA-256 values are
+  `31b0c7feb3a71dc8c8250db1f9b523761acb0152f81b1a298c00409100eecf64`
+  and
+  `e635f6c601a0701ad9470c4cca8a5dbc13060607ad9fe19743dc0dfac6f17178`.
+
+- Complete-text inspection resolves both ambiguous pairs as true duplicates
+  under the pinned directional deletion policy:
+
+  - Row 5,698 compares 1,095- and 827-character, three-line college and career
+    SEO fragments. Both use the same admissions-test, elective,
+    biomedical-career, and contact-correction sentence scaffold. Their changed
+    institutions, locations, and programs are the entity slots that the audit
+    contract explicitly treats as non-substantive in incoherent low-value
+    templates. Character, line, and word-sequence similarities are 0.465140,
+    0.333333, and 0.381625. Member and canonical SHA-256 values are
+    `6a76dbc0721d79039169c9467d5fa6468e88a8280798de5bb978151050b19414`
+    and
+    `4893ce3e5b496530e4b22e31e43f7505e575b1b5c377c62acb8ae20ccb5c1c4e`.
+    `/rav/datakit-6854-inspect-row5698-0244-v909` persisted the complete texts
+    and diff with inspection SHA-256
+    `d8cd68a3b725a9067584ffb7081460fb289e1f36223187a484965bcdbdd25866`.
+    `/rav/datakit-6854-publish-row5698-0247-v912` wrote the immutable manual
+    record, and `/rav/datakit-6854-verify-row5698-0248-v913` independently
+    reread the source pair, semantic checkpoint, inspection, deterministic
+    Parquet bytes, and completion marker. The semantic-judgment,
+    manual-Parquet, and marker SHA-256 values are
+    `393b30f7675a3582aa1549f166de36f3a8613d56af00c809b13609e83f0a9d7c`,
+    `f93ac3f8221eb926a080d153b66058cc582c336c43f068e7276a7c5d1414c834`,
+    and
+    `85bf024086ab0d81c7e628a9b3dd9fd5790727600a8a1b3c1b8361f931af9ebf`;
+  - Row 6,111 compares 1,663- and 1,799-character children's-crafts
+    articles. Both cover the same four paragraphs: coloring projects,
+    recycling crafts, chemical safety, and classes or camps. The member's
+    unrelated `Bridal Shower Crafts` title and superficial paraphrasing add no
+    substantive training example; the canonical's extra two-line Minecraft
+    preface is allowed by the directional contract. Character, line, and
+    word-sequence similarities are 0.786251, 0.400000, and 0.690778. Member
+    and canonical SHA-256 values are
+    `9a501090cb42c9061d07d38ac9cce671bbc0d5fa32dae6d3d4ece036594bc725`
+    and
+    `63a12d67ee59e670edaf2275aea7f1ecbba6bb10a8419a8b26023f1525edaa77`.
+    `/rav/datakit-6854-inspect-row6111-0245-v910` persisted the complete texts
+    and diff with inspection SHA-256
+    `d486d0db0bd5ee93f498f4531f0d9a0172af5dcbc5900333c50ae50f76c62f5d`.
+    `/rav/datakit-6854-publish-row6111-0246-v911` wrote the immutable manual
+    record, and `/rav/datakit-6854-verify-row6111-0249-v914` independently
+    reread every input and output artifact. The semantic-judgment,
+    manual-Parquet, and marker SHA-256 values are
+    `c5e3dfdeb6bf48c6acc6bfb4085a4bbc87304e6bfe6a42acc9b754e14474e192`,
+    `58976244ac7cdc9ea8c0676aae2bee74c5cd8e069f7d166f3b8fe06a2be74584`,
+    and
+    `3f5d213c65b012754a7c5e38dae91d45325ff76f3e5fc07b566a1c1b84be8a92`.
+
+- Replacing the two unresolved outcomes with true duplicates gives 143 false
+  positives and 113 true duplicates in the new p2 batch. Across the stable
+  1,747-checkpoint snapshot, all 270 unresolved model outcomes are covered by
+  209 true-duplicate and 61 false-positive manual records. The adjusted totals
+  are:
+
+  - baseline: 177,935 pairs, 112,925 false positives, 65,010 true duplicates;
+  - treatment: 43,992 pairs, 22,744 false positives, 21,248 true duplicates;
+  - combined: 221,927 pairs, 135,669 false positives, 86,258 true duplicates.
+
+- The next audit frontiers are p0 `(9, 128)`, p1 `(41, 128)`,
+  p2 `(73, 3,584)`, and p3 `(106, 0)`. P2's pending checkpoint contains
+  1,626,252 characters, one oversized pair, 162 review units, and at least 324
+  model requests. All four batch-priority 2-H100 workers remain active.
+
 ### 2026-07-27T03:57:22Z — 221,671 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0243-v908` independently
