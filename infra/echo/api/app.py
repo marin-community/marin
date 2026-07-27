@@ -395,6 +395,31 @@ def add_wiki_entry(
     return wiki_entry(row)
 
 
+@app.put("/wiki/{entry_id}", response_model=WikiEntry)
+def update_wiki_entry(entry_id: int, entry: WikiCreate, engine: Engine, model: Model) -> WikiEntry:
+    """Replace an entry's text and re-embed it. The original author and creation time stand."""
+    title, use_when, body = entry.title.strip(), entry.use_when.strip(), entry.body.strip()
+    if not title or not use_when or not body:
+        raise HTTPException(422, "title, use_when, and body must not be blank")
+    statement = (
+        schema.wiki_entries.update()
+        .where(schema.wiki_entries.c.id == entry_id)
+        .values(
+            title=title,
+            use_when=use_when,
+            body=body,
+            embedding=passage_embedding(model, title, use_when, body),
+            updated_at=sqlalchemy.func.now(),
+        )
+        .returning(schema.wiki_entries, *wiki_score_columns())
+    )
+    with engine.begin() as conn:
+        row = conn.execute(statement).first()
+    if row is None:
+        raise HTTPException(404, f"no wiki entry {entry_id}")
+    return wiki_entry(row)
+
+
 @app.post("/wiki/{entry_id}/references", response_model=WikiEntry)
 def reference_wiki_entry(entry_id: int, engine: Engine) -> WikiEntry:
     statement = (

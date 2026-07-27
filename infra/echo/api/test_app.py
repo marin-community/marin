@@ -219,6 +219,53 @@ def test_add_wiki_requires_applicability_hint(client_with):
     assert harness.model.passages == []
 
 
+def test_update_wiki_re_embeds_and_keeps_author(client_with):
+    row = make_row(
+        id=12,
+        created_at=datetime(2026, 7, 27, tzinfo=UTC),
+        updated_at=datetime(2026, 7, 28, tzinfo=UTC),
+        author="original@openathena.ai",
+        title="Grafana access",
+        use_when="Use this when inspecting dashboards.",
+        body="Use the IAP route via grafana.oa.dev.",
+        reference_count=3,
+        score=0.0,
+        distance=None,
+        lexical_score=None,
+    )
+    harness = client_with([row])
+    response = harness.client.put(
+        "/wiki/12",
+        json={
+            "title": "  Grafana access  ",
+            "use_when": "  Use this when inspecting dashboards.  ",
+            "body": "  Use the IAP route via grafana.oa.dev.  ",
+        },
+        headers={"X-Goog-Authenticated-User-Email": "accounts.google.com:editor@openathena.ai"},
+    )
+    assert response.status_code == 200
+    update_params = harness.engine.executions[-1].compile().params
+    # A PUT re-embeds the passage and never rewrites the original author.
+    assert "author" not in update_params
+    assert update_params["body"] == "Use the IAP route via grafana.oa.dev."
+    assert harness.model.passages == [
+        "Grafana access\n\nUse when: Use this when inspecting dashboards.\n\nUse the IAP route via grafana.oa.dev."
+    ]
+
+
+def test_update_missing_wiki_is_404(client_with):
+    harness = client_with([])
+    response = harness.client.put("/wiki/999", json={"title": "t", "use_when": "when", "body": "b"})
+    assert response.status_code == 404
+
+
+def test_update_wiki_rejects_blank_field(client_with):
+    harness = client_with([])
+    response = harness.client.put("/wiki/1", json={"title": "t", "use_when": "   ", "body": "b"})
+    assert response.status_code == 422
+    assert harness.model.passages == []
+
+
 def test_missing_wiki_entry_is_404(client_with):
     harness = client_with([])
     assert harness.client.get("/wiki/999").status_code == 404

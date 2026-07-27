@@ -31,6 +31,13 @@ interface WikiHit {
   body?: string
 }
 
+// The full chunk behind an activity hit: GET /chunks/{id} adds the untruncated text.
+interface ActivityDetail extends ActivityHit {
+  text: string | null
+  ref: string | null
+  parent: string | null
+}
+
 type Result = ActivityHit | WikiHit
 
 const PAGE_SIZE = 20
@@ -42,7 +49,25 @@ const results = ref<Result[]>([])
 const loading = ref(false)
 const error = ref('')
 const selectedWiki = ref<WikiHit | null>(null)
+const selectedChunk = ref<ActivityDetail | null>(null)
 let request: AbortController | null = null
+
+// Deep link the open entry into the URL (?wiki=<id> or ?chunk=<id>) so it is shareable and
+// survives a reload. The dashboard is served at the root path while the API owns /wiki/{id}
+// etc., so a query parameter is the only collision-free deep link.
+function setDeepLink(kind: 'wiki' | 'chunk' | null, id?: number): void {
+  const url = new URL(window.location.href)
+  url.searchParams.delete('wiki')
+  url.searchParams.delete('chunk')
+  if (kind && id !== undefined) url.searchParams.set(kind, String(id))
+  window.history.replaceState({}, '', url)
+}
+
+function closeDetail(): void {
+  selectedWiki.value = null
+  selectedChunk.value = null
+  setDeepLink(null)
+}
 
 const resultLabel = computed(() => {
   if (loading.value) return 'Searching…'
@@ -83,6 +108,7 @@ async function search(): Promise<void> {
   loading.value = true
   error.value = ''
   selectedWiki.value = null
+  selectedChunk.value = null
   const text = query.value.trim()
 
   try {
@@ -119,14 +145,37 @@ function resultTime(result: Result): number {
   return value ? new Date(value).getTime() : 0
 }
 
-async function openWiki(hit: WikiHit): Promise<void> {
+async function openWiki(hit: Pick<WikiHit, 'id'>): Promise<void> {
   error.value = ''
   try {
     const detail = await fetchJson<Omit<WikiHit, 'type'>>(`wiki/${hit.id}`, new AbortController().signal)
+    selectedChunk.value = null
     selectedWiki.value = { ...detail, type: 'wiki' }
+    setDeepLink('wiki', hit.id)
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : 'Could not open note'
   }
+}
+
+async function openActivity(hit: Pick<ActivityHit, 'id'>): Promise<void> {
+  error.value = ''
+  try {
+    const detail = await fetchJson<Omit<ActivityDetail, 'type'>>(`chunks/${hit.id}`, new AbortController().signal)
+    selectedWiki.value = null
+    selectedChunk.value = { ...detail, type: 'activity' }
+    setDeepLink('chunk', hit.id)
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'Could not open result'
+  }
+}
+
+// Open the entry named by ?wiki=<id> or ?chunk=<id> on load, so a shared link lands on it.
+async function openFromUrl(): Promise<void> {
+  const params = new URLSearchParams(window.location.search)
+  const wiki = params.get('wiki')
+  const chunk = params.get('chunk')
+  if (wiki) await openWiki({ id: Number(wiki) })
+  else if (chunk) await openActivity({ id: Number(chunk) })
 }
 
 async function markReferenced(): Promise<void> {
@@ -142,7 +191,10 @@ async function markReferenced(): Promise<void> {
   if (index >= 0) results.value[index] = { ...updated, type: 'wiki' }
 }
 
-onMounted(search)
+onMounted(async () => {
+  await search()
+  await openFromUrl()
+})
 </script>
 
 <template>
@@ -245,15 +297,14 @@ onMounted(search)
                   <span v-if="result.type === 'activity'">{{ result.source }} · {{ result.kind }}</span>
                   <span>{{ formatDate(result.type === 'wiki' ? result.updated_at : result.date) }}</span>
                 </div>
-                <a
+                <button
                   v-if="result.type === 'activity'"
                   class="text-left text-lg font-semibold leading-snug text-ink group-hover:text-moss"
-                  :href="result.url"
-                  target="_blank"
-                  rel="noreferrer"
+                  type="button"
+                  @click="openActivity(result)"
                 >
                   {{ result.title || result.snippet }}
-                </a>
+                </button>
                 <button
                   v-else
                   class="text-left text-lg font-semibold leading-snug text-ink group-hover:text-moss"
@@ -283,7 +334,7 @@ onMounted(search)
       role="dialog"
       aria-modal="true"
       :aria-label="selectedWiki.title"
-      @click.self="selectedWiki = null"
+      @click.self="closeDetail"
     >
       <article class="max-h-[92vh] w-full overflow-y-auto rounded-t-3xl bg-cream p-6 shadow-2xl sm:max-w-3xl sm:rounded-3xl sm:p-9">
         <div class="flex items-start justify-between gap-4">
@@ -291,7 +342,7 @@ onMounted(search)
             <p class="font-mono text-xs uppercase tracking-widest text-fern">Wiki note</p>
             <h2 class="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">{{ selectedWiki.title }}</h2>
           </div>
-          <button class="rounded-lg px-3 py-2 text-2xl leading-none text-ink/45 hover:bg-mist" @click="selectedWiki = null">
+          <button class="rounded-lg px-3 py-2 text-2xl leading-none text-ink/45 hover:bg-mist" @click="closeDetail">
             ×
           </button>
         </div>
@@ -307,6 +358,41 @@ onMounted(search)
           <button class="rounded-lg border border-moss/25 bg-white px-4 py-2 text-sm font-semibold text-moss hover:bg-mist" @click="markReferenced">
             Mark referenced
           </button>
+        </div>
+      </article>
+    </div>
+
+    <div
+      v-if="selectedChunk"
+      class="fixed inset-0 z-20 grid place-items-end bg-ink/35 p-0 backdrop-blur-sm sm:place-items-center sm:p-6"
+      role="dialog"
+      aria-modal="true"
+      :aria-label="selectedChunk.title || 'Activity detail'"
+      @click.self="closeDetail"
+    >
+      <article class="max-h-[92vh] w-full overflow-y-auto rounded-t-3xl bg-cream p-6 shadow-2xl sm:max-w-3xl sm:rounded-3xl sm:p-9">
+        <div class="flex items-start justify-between gap-4">
+          <div class="min-w-0">
+            <p class="font-mono text-xs uppercase tracking-widest text-fern">{{ selectedChunk.source }} · {{ selectedChunk.kind }}</p>
+            <h2 class="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">{{ selectedChunk.title || 'Untitled' }}</h2>
+          </div>
+          <button class="rounded-lg px-3 py-2 text-2xl leading-none text-ink/45 hover:bg-mist" @click="closeDetail">
+            ×
+          </button>
+        </div>
+        <p class="mt-3 text-sm text-ink/45">
+          {{ selectedChunk.author || 'unknown' }} · {{ formatDate(selectedChunk.date) }}
+        </p>
+        <div class="mt-7 whitespace-pre-wrap text-[15px] leading-7 text-ink/80">{{ selectedChunk.text || selectedChunk.snippet }}</div>
+        <div class="mt-8 flex items-center justify-end border-t border-line pt-5">
+          <a
+            class="rounded-lg border border-moss/25 bg-white px-4 py-2 text-sm font-semibold text-moss hover:bg-mist"
+            :href="selectedChunk.url"
+            target="_blank"
+            rel="noreferrer"
+          >
+            View original ↗
+          </a>
         </div>
       </article>
     </div>

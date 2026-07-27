@@ -34,19 +34,21 @@ def _search_statement(
     return sqlalchemy.text(
         f"""
         WITH input AS (
-            SELECT
-                CAST(:embedding AS vector) AS embedding,
-                websearch_to_tsquery('{TEXT_SEARCH_CONFIG}', :q) AS query
+            SELECT websearch_to_tsquery('{TEXT_SEARCH_CONFIG}', :q) AS query
         ),
         semantic AS (
-            SELECT
-                {alias}.id,
-                row_number() OVER (ORDER BY {alias}.embedding <=> input.embedding) AS rank,
-                {alias}.embedding <=> input.embedding AS distance
-            FROM {table} AS {alias} CROSS JOIN input
-            {semantic_filter}
-            ORDER BY {alias}.embedding <=> input.embedding
-            LIMIT :candidate_limit
+            -- Rank the nearest neighbours the HNSW index returns. The distance must compare
+            -- the indexed column against the bind parameter directly, and the LIMIT must sit
+            -- below the window: an `ORDER BY col <=> value` sourced from a joined CTE, or a
+            -- row_number() over the whole table, both defeat the index and force a full scan.
+            SELECT id, row_number() OVER (ORDER BY distance) AS rank, distance
+            FROM (
+                SELECT {alias}.id, {alias}.embedding <=> CAST(:embedding AS vector) AS distance
+                FROM {table} AS {alias}
+                {semantic_filter}
+                ORDER BY {alias}.embedding <=> CAST(:embedding AS vector)
+                LIMIT :candidate_limit
+            ) AS nearest
         ),
         lexical AS (
             SELECT
