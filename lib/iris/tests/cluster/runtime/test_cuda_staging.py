@@ -35,11 +35,11 @@ def _add_cuda_toolchain(site_packages: Path, *, cuda_major: str, with_ptxas: boo
         (libdevice / "libdevice.10.bc").write_bytes(b"BC\xc0\xde")
 
 
-def _add_cufile_library(site_packages: Path) -> Path:
-    cufile = site_packages / "nvidia" / "cufile" / "lib"
-    cufile.mkdir(parents=True)
-    (cufile / "libcufile.so.0").write_bytes(b"cufile")
-    return cufile
+def _add_nvidia_library(site_packages: Path, package: str, library: str) -> Path:
+    library_dir = site_packages / "nvidia" / package / "lib"
+    library_dir.mkdir(parents=True)
+    (library_dir / library).write_bytes(package.encode())
+    return library_dir
 
 
 def _make_venv(tmp_path: Path, *, cuda_major: str, with_ptxas: bool, with_libdevice: bool) -> Path:
@@ -137,9 +137,11 @@ def test_noop_when_toolchain_absent(tmp_path):
     assert not (workdir / "cuda_sdk_lib").exists()
 
 
-def test_exposes_cufile_library_to_gpu_command(tmp_path):
+def test_exposes_nvidia_libraries_to_gpu_command(tmp_path):
     venv = _make_venv(tmp_path, cuda_major="cu13", with_ptxas=True, with_libdevice=True)
-    cufile = _add_cufile_library(_site_packages(venv))
+    site_packages = _site_packages(venv)
+    cufile = _add_nvidia_library(site_packages, "cufile", "libcufile.so.0")
+    cusparselt = _add_nvidia_library(site_packages, "cusparselt", "libcusparseLt.so.0")
     workdir = tmp_path / "work"
     workdir.mkdir()
 
@@ -152,7 +154,7 @@ def test_exposes_cufile_library_to_gpu_command(tmp_path):
         check=True,
     )
 
-    assert result.stdout.split(":") == [str(cufile), "/existing"]
+    assert result.stdout.split(":") == [str(cufile), str(cusparselt), "/existing"]
 
 
 def test_noop_when_ptxas_missing(tmp_path):

@@ -1151,3 +1151,39 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - This attempt provides no evidence about explicit-backward compile time, steady MFU, FP32 all-reduces, SendRecv, all-gathers, or compute/communication/stall shares. Old L8 fused `16.1404` MFU remains the comparison point.
 - Next action:
   - Reconcile the QuACK and CUTLASS DSL pins or avoid importing QuACK on the Ring-only path, validate a clean callable import, then rerun the unchanged L8 profile gate under a fresh ID.
+
+### 2026-07-27 06:35 PDT - QuACK 0.6.1 import gates expose an incomplete PyTorch CUDA lock split
+- Package audit:
+  - Commit `814d891706` updates the active GPU extras to `quack-kernels==0.6.1`, matching CUTLASS DSL `4.6.0`. QuACK 0.6.1 replaces the failing `cute.core.ThrMma` annotation with `cute.ThrMma`; the Sonic adapter's TVM-FFI, grouped-GEMM, scheduler, varlen, and epilogue APIs remain available.
+  - The historical standalone NVIDIA/JaxPP reproducer remains pinned to QuACK `0.5.0` so its published environment is unchanged.
+- Command:
+  - Each one-H100 job ran `CUDA_VISIBLE_DEVICES=0 TF_GPU_ALLOCATOR=cuda_malloc_async XLA_PYTHON_CLIENT_MEM_FRACTION=.70 uv run python experiments/grug/moe/repro_quack_grouped_mlp_numerics.py --warmup 2 --iterations 4`.
+  - The configured gate has `16,384` tokens, `65,536` assignments, 64 experts, top-k 4, and an exact balanced count of `1,024` assignments per expert.
+- Failed setup gates:
+  - `/dlwh/quack061-numerical-gate-20260727-131131` from `814d891706` exited `1` after `6.49s`: QuACK's eager PyTorch import failed to load `libcufile.so.0`.
+  - `/dlwh/quack061-numerical-gate-r2-20260727-132008` from `348cd68c10` exited `1` after `6.32s`: Iris could expose a cuFile library directory when installed, but the pure Levanter GPU lock split had not installed `nvidia-cufile-cu12`.
+  - `/dlwh/quack061-numerical-gate-r3-20260727-132457` from `2faaf1348d` installed cuFile and advanced to the next eager PyTorch dependency, then exited `1` after `8.70s` on missing `libcusparseLt.so.0`. It reported JAX `0.11.0`, QuACK `0.6.1`, CUTLASS DSL `4.6.0`, cuFile `1.13.1.3`, and PyTorch `2.11.0`.
+  - All three jobs are terminal with no retry or live resource. None reached QuACK lowering, numerical comparison, timing, or drop reporting.
+- Root cause and fix:
+  - Adding individual NVIDIA runtime wheels would repeat the failure for each omitted PyTorch CUDA dependency. The pure `marin-levanter[gpu]` workspace split selected PyTorch's CUDA wheel through QuACK without a Levanter-local source mapping, so uv did not attach the wheel's complete CUDA runtime closure to that extra.
+  - Commit `ce84c8868d` directly pins PyTorch `2.11.0` in the Levanter GPU extra and maps it to the cu128 index. `uv export --package marin-levanter --extra gpu --locked` now includes PyTorch `2.11.0+cu128`, cuFile `1.13.1.3`, cuSPARSELt `0.7.1`, cuDNN `9.19.0.56`, NCCL `2.28.9`, and NVSHMEM `3.4.5`.
+  - `uv lock --check`, the ten Iris CUDA-staging tests, and changed-file pre-commit pass.
+- Numerical policy:
+  - Commit `d9bb05952e` makes the user-approved `0.002` relative-L2 ceiling mandatory for floating output, loss, and every gradient leaf. Routing and per-expert counts remain exact, and the gate now explicitly requires and reports exactly zero dropped assignments.
+- Next action:
+  - Run the one-H100 gate from `d9bb05952e`. Only a full numerical and exact-routing/drop pass promotes to the unchanged L8 explicit-backward profile gate.
+
+### 2026-07-27 06:39 PDT - QuACK r4 confirms the full runtime set but exposes a narrow loader path
+- Job:
+  - `/dlwh/quack061-numerical-gate-r4-20260727-133307` ran from `ce84c8868d` on one `cw-rno2a` H100 with zero retries.
+- Result:
+  - Setup installed JAX `0.11.0`, PyTorch `2.11.0+cu128`, QuACK `0.6.1`, CUTLASS DSL `4.6.0`, cuFile `1.13.1.3`, and cuSPARSELt `0.7.1`.
+  - The cuFile loader probe passed. A subsequent bare `ctypes.CDLL("libcusparseLt.so.0")` probe failed because `site-packages/nvidia/cusparselt/lib` was not on `LD_LIBRARY_PATH`.
+  - The task exited `1` after `5.04s`; it never launched the numerical script, so there are no parity, timing, route-count, or drop results. The job is terminal and cleanup reports zero pods, workloads, and jobs.
+- Interpretation:
+  - The uv lock now contains the required libraries. The remaining setup fault is Iris's cuFile-specific loader-path activation, which exposes one NVIDIA wheel directory instead of the complete installed NVIDIA runtime set.
+- Fix:
+  - The current workspace generalizes GPU activation to append every installed `site-packages/nvidia/*/lib` directory to `LD_LIBRARY_PATH`. The behavior test covers both cuFile and cuSPARSELt while preserving an existing loader path.
+  - The focused Iris suite reports `10 passed`; changed-file pre-commit including Pyrefly passes.
+- Next action:
+  - Commit and push the generalized loader setup, then rerun the full `d9bb05952e` numerical policy under a fresh one-H100 job.
