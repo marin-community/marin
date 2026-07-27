@@ -442,7 +442,7 @@ Living queue; updated as hypotheses are proposed, blocked, falsified, or promote
   | d6144 4-of-256 | 4 | 4 | 1.044 | 1.005 |
   | d5120 4-of-128 | 4 | 4 | 1.071 | 1.019 |
   | d5120 4-of-128 | 16 | 16 | 1.210 | 1.101 |
-  | d5120 4-of-128 | 64 | 64 | 1.288 | 1.147 |
+  | d5120 4-of-128 | 64 | 64 | 1.286 | 1.144 |
 
   The saving tracks the collective's share of the layer, and that share grows with EP
   degree because dispatch volume does. Note the relfrob against the control also *falls*
@@ -450,16 +450,17 @@ Living queue; updated as hypotheses are proposed, blocked, falsified, or promote
   difference being bf16 combine accumulation order rather than anything in the wire: more
   shards means fewer duplicate-index accumulations per shard.
 
-  Two draws so far, agreeing to the fourth digit on the forward:
+  Three draws:
 
   | draw | fwd | fwd+bwd | fwd ms (ctl -> wire) | fwd+bwd ms (ctl -> wire) |
   |---|--:|--:|---|---|
   | r1 | 1.2881 | 1.1467 | 38.35 -> 29.77 | 73.00 -> 63.66 |
   | r2 | 1.2880 | 1.1433 | 38.46 -> 29.86 | 72.66 -> 63.56 |
+  | r3 | 1.2811 | 1.1406 | 38.38 -> 29.96 | 72.71 -> 63.75 |
 
-  **fwd 1.288, fwd+bwd 1.145.** A third draw is queued for consistency with the other
-  configurations; EP64 gang scheduling across 16 nodes is slow to admit, so r2 sat pending
-  for a while.
+  **fwd 1.286, fwd+bwd 1.144**, spread about 0.003 -- wider than the EP4 and EP16 bands
+  (0.0003 to 0.002), as expected for a 16-node gang. EP64 scheduling is slow to admit; r2
+  sat pending for a while.
 
   Teardown noise: after the result prints, the run emits a burst of grpc
   `failed to connect to all addresses` lines as the 16 processes exit. The job still
