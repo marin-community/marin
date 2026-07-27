@@ -157,7 +157,7 @@ def _dataframe_to_items(df: pl.DataFrame) -> Iterator[Any]:
 def _columns_to_dataframe(
     payloads: list[bytes],
     shards: list[int],
-    keys: list[Any],
+    key_bytes: list[bytes],
     sort_values: list[Any],
 ) -> pl.DataFrame:
     """Build the scatter DataFrame from pre-computed flat columns.
@@ -166,13 +166,17 @@ def _columns_to_dataframe(
     Python dicts: series construction from homogeneous lists is the native
     fast path, and ``pl.struct`` over existing columns is cheap. Field order
     (key first) drives the (key, sort_value) sort order.
+
+    ``key_bytes`` must be pre-encoded via ``msgspec.msgpack.encode`` so that
+    ``_KEY_TMP_COL`` is always ``Binary`` — preventing struct schema mismatches
+    when different mapper shards produce keys of different Python types.
     """
     try:
         return pl.DataFrame(
             {
                 _PAYLOAD_COL: pl.Series(payloads, dtype=pl.Binary),
                 _SHARD_COL: pl.Series(shards, dtype=pl.Int32),
-                _KEY_TMP_COL: keys,
+                _KEY_TMP_COL: pl.Series(key_bytes, dtype=pl.Binary),
                 _SORT_VALUE_TMP_COL: sort_values,
             }
         ).select(
@@ -184,10 +188,13 @@ def _columns_to_dataframe(
             ).alias(_SORT_KEY_COL),
         )
     except (TypeError, pl.exceptions.InvalidOperationError) as err:
-        # Non-serializable keys surface as TypeError from Series construction
+        # Non-serializable sort_values surface as TypeError from Series construction
         # or InvalidOperationError ("nested objects are not allowed") when the
-        # key column lands as Object dtype and pl.struct rejects it.
-        raise ValueError("key_fn must return an Arrow-serializable object.") from err
+        # sort_value column lands as Object dtype and pl.struct rejects it.
+        raise ValueError("sort_fn must return an Arrow-serializable object.") from err
+
+
+_msgpack_encoder = msgspec.msgpack.Encoder()
 
 
 def _items_to_dataframe(
@@ -205,15 +212,20 @@ def _items_to_dataframe(
     directly.
     """
     shards: list[int] = []
-    keys: list[Any] = []
+    key_bytes: list[bytes] = []
     sort_values: list[Any] = []
     for item in items:
         key = key_fn(item)
-        shards.append(deterministic_hash(key) % num_output_shards if num_output_shards > 0 else 0)
-        keys.append(key)
+        try:
+            kb = _msgpack_encoder.encode(key)
+        except TypeError as err:
+            raise ValueError(f"key_fn must return a msgpack-serializable object; got {type(key).__name__!r}.") from err
+        key_hash = deterministic_hash(key)
+        shards.append(key_hash % num_output_shards if num_output_shards > 0 else 0)
+        key_bytes.append(kb)
         sort_values.append(sort_fn(item) if sort_fn is not None else None)
     payloads = [cloudpickle.dumps(item) for item in items]
-    return _columns_to_dataframe(payloads, shards, keys, sort_values)
+    return _columns_to_dataframe(payloads, shards, key_bytes, sort_values)
 
 
 # ---------------------------------------------------------------------------

@@ -9,7 +9,6 @@ without spinning up a full coordinator.
 
 import itertools
 import os
-import re
 from collections import OrderedDict
 from collections.abc import Iterator
 from unittest.mock import patch
@@ -233,20 +232,20 @@ def test_scatter_empty_input(tmp_path):
 
 
 def test_scatter_key_fn_must_be_serializable(tmp_path):
-    """key_fn must be serializable to the Polars sort-key column."""
-    items = [
-        {"tags": {1, 2}, "v": 0},
-        {"tags": {3}, "v": 1},
-    ]
+    """key_fn must return a msgpack-serializable value."""
 
+    class _Unserializable:
+        pass
+
+    items = [{"v": 0}, {"v": 1}]
     data_path = str(tmp_path / "shard-0000.shuffle")
-    with pytest.raises(ValueError, match=re.escape("key_fn must return an Arrow-serializable object.")):
+    with pytest.raises(ValueError, match="key_fn must return a msgpack-serializable object"):
         list(
             _write_scatter(
                 iter(items),
                 source_shard=0,
                 data_path=data_path,
-                key_fn=lambda item: frozenset(item["tags"]),
+                key_fn=lambda item: _Unserializable(),
                 num_output_shards=2,
             )
         )
