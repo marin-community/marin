@@ -16,6 +16,52 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T13:25:57Z — 277,540 pairs verified; all 328 ambiguities covered
+
+- `/rav/rav-datakit-6854-reconcile-manual-1325-v1228` independently
+  reconciled 2,185 completed semantic checkpoints and all 328 unresolved model
+  outcomes. Every unresolved outcome has one consistent full-text decision;
+  none are missing. The snapshot covers 277,540 of 755,281 semantic
+  candidates (36.75%). Applying the 71 false-positive and 257 true-duplicate
+  manual decisions gives:
+
+  - baseline: 221,193 pairs, 140,430 false positives, and 80,763 true
+    duplicates;
+  - treatment: 56,347 pairs, 29,169 false positives, and 27,178 true
+    duplicates;
+  - combined: 169,599 false positives and 107,941 true duplicates.
+
+  The observed false-positive rates are 63.4875% for baseline and 51.7667%
+  for treatment, a treatment reduction of 11.7208 percentage points. The
+  immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-1325.json`
+  with SHA-256
+  `afb7acfa36af138e83c848240046b8457ca721bbcc7ca7838ff683f5c1c879f7`.
+- Complete-text inspection resolves the new baseline ambiguity as a false
+  positive. `part-00075-of-00128.parquet:7835` compares two independently
+  generated coding trajectories for the same prompt. The 1,130-line member
+  and 1,059-line canonical diverge across reasoning, commands, observations,
+  and attempted fixes; the member has a distinct failed `sed`-based
+  modification path absent from the canonical. Deleting it loses a separate
+  rollout even though both attempts are flawed. Character, line, and
+  word-sequence similarities are 0.735690, 0.756510, and 0.696881. The
+  member/canonical/inspection SHA-256 values are
+  `5e99e1ac486d414e3f9d68a9accf96408b24946a9660d31cb614cb332c035fd7`,
+  `7c8f3ee03b294dcfc574780972f2d2b5c0d05f10e1adeab0be14f037a908e015`,
+  and
+  `678f81438b4c15bab7b144c72de44adcbc554df949a1d868b56581c79d42ac8c`.
+- `/rav/rav-datakit-6854-publish-row7835-1323-v1226` wrote the immutable
+  false-positive decision. `/rav/rav-datakit-6854-verify-row7835-1324-v1227`
+  independently reread the source pair, semantic checkpoint, inspection,
+  deterministic Parquet bytes, and completion marker. The semantic-outcome,
+  semantic-judgments, manual-Parquet, and marker SHA-256 values are
+  `3abec72c68495deb3cf37aed2bc85bc28895044888e27ddfd8fb804a7a0c0c15`,
+  `d9d67c5a302a7b7f8cd0fce6b4b9bfc2b718cd3bbb824a95367b407f79145af2`,
+  `a64a85e8797c5999475233e8c3b36ae6f504650945e258e873731b7c314de621`,
+  and
+  `6d4af0f59e874bb595812803ace77d6cacbffbd85a073f53d71c063256e34f09`.
+- All four batch-priority 2-H100 semantic-review jobs remain running.
+
 ### 2026-07-27T13:09:42Z — 276,388 pairs verified; all 327 ambiguities covered
 
 - `/rav/rav-datakit-6854-reconcile-manual-1309-v1220` independently
