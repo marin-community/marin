@@ -40,20 +40,17 @@ const PROXY_METRIC_NAMES = {
   responseBytes: 'iris_proxy_response_bytes_total',
 } as const
 
-// Trailing window: only series written in the last hour are shown, so a retired
+// Trailing window: only series written in the last five minutes are shown, so a retired
 // method or a gone endpoint (its last row now older than the window) drops out
-// instead of lingering forever as the latest row for its label set. It also
-// bounds the scan.
-const WINDOW_MS = 60 * 60 * 1000
+// instead of lingering forever as the latest row for its label set. DataFusion
+// folds now() to a timestamp literal, which exposes the direct ts predicate to
+// Parquet row-group pruning.
+const RECENT_STATS_FILTER = "ts >= now() - INTERVAL '5 minutes'"
 
 // Scope to this cluster's own rows. A hub finelog also holds child rows stamped
 // with their origin cluster; local writes leave `cluster` empty/NULL, so this
 // filter shows only the cluster whose dashboard is open (no cross-cluster mixing).
 const LOCAL_CLUSTER_FILTER = "(cluster IS NULL OR cluster = '')"
-
-function windowStartMs(): number {
-  return Date.now() - WINDOW_MS
-}
 
 function statsSql(): string {
   const names = Object.values(METRIC_NAMES).map((name) => `'${name}'`).join(', ')
@@ -66,7 +63,7 @@ SELECT name, value, ts,
        json_get(labels, 'le') AS le
 FROM telltale
 WHERE source = 'iris' AND name IN (${names})
-  AND epoch_ms(ts) >= ${windowStartMs()}
+  AND ${RECENT_STATS_FILTER}
   AND ${LOCAL_CLUSTER_FILTER}
 QUALIFY row_number() OVER (
   PARTITION BY name, json_get(labels, 'service'), json_get(labels, 'method'),
@@ -87,7 +84,7 @@ SELECT name, value, ts,
        json_get(labels, 'le') AS le
 FROM telltale
 WHERE source = 'iris' AND name IN (${names})
-  AND epoch_ms(ts) >= ${windowStartMs()}
+  AND ${RECENT_STATS_FILTER}
   AND ${LOCAL_CLUSTER_FILTER}
 QUALIFY row_number() OVER (
   PARTITION BY name, json_get(labels, 'scope'), json_get(labels, 'endpoint'),
