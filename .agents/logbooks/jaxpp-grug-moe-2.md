@@ -834,3 +834,19 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - Focused tests report `57 passed`; changed-file precommit including Pyrefly passes.
 - Next action:
   - Run the unchanged L4 gate as r3. L8 remains blocked.
+
+### 2026-07-27 02:40 PDT - L4 r3 reaches accumulator sharding contract
+- Launch:
+  - Parent `/dlwh/iris-run-job-20260727-092646`, unchanged L4 configuration with run ID suffix `r3`.
+- Result:
+  - All four ranks entered explicit-MPMD lowering, then failed before compile with `in_specs P('expert', None, None) does not match input P(None, None, None)` for the FP32 W13 accumulator.
+  - The MPMD initialization task advertised expert sharding, but its `jnp.zeros` result remained physically replicated when consumed by the accumulating Ring `shard_map`.
+  - Parent, child, and retry are terminal killed; no resource remains live. No loss, MFU, or step-time metric was emitted.
+  - W&B [r3](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-ep2d4-fusedacc-fp8-l4-e64k4-b128-s4096-p4m4-r3-20260727) contains config metadata only and remained stale `running` after forced shutdown.
+- Fix:
+  - Commit `10a5f44f9672e1475eb3542208e4afcd07733c35` explicitly reshards only the newly constructed all-zero accumulators to `P("expert", None, None)`.
+  - An eight-device explicit-mesh CPU probe confirms the result has expert sharding and local expert dimension 32. `with_sharding_constraint` is invalid for this explicit-axis conversion, while `jax.sharding.reshard` succeeds.
+  - No generic reshard was added after accumulators diverge across `data`.
+  - Focused tests report `57 passed`; changed-file precommit including Pyrefly passes.
+- Next action:
+  - Run L4 r4. L8 remains blocked until six finite steps.
