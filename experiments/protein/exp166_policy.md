@@ -56,11 +56,16 @@ by parsing run names.
   step, logs the final objective, and finishes its required checkpoint/output
   work. W&B `finished` alone is insufficient if the final step or objective is
   missing.
-- Once a regional winner is healthy and making progress, stop sibling
-  dispatches that have not begun training. If multiple regions become
-  W&B-running in the same observation window, select one primary using furthest
-  step first and sustained throughput second, record the decision, and stop the
-  others. Do not silently treat duplicate completions as independent results.
+- The race continues until one regional run is **done** by the success
+  definition above. Queued, starting, and actively training sibling dispatches
+  remain in the race; health, startup order, step lead, or throughput never
+  promotes an early winner.
+- Once one regional run is done, mark it as the winner and stop every other
+  nonterminal regional dispatch for that logical trial, including siblings
+  already training. Record these cancellations as race losses, not failures.
+  If completions are observed simultaneously, use the earliest verifiable
+  completion timestamp as the winner and retain the other completed run as a
+  duplicate execution artifact, not an independent trial result.
 - A scratch trial restarts from random initialization after a cross-region
   move. An `exp117-init` trial restarts from its corresponding mirrored exp117
   checkpoint. Exp166 intermediate checkpoints do not move between regions.
@@ -78,7 +83,7 @@ At minimum, retain:
 - `logical_trials`: structured trial metadata, initialization mode, target final
   step, overall status, winning region, and final objective.
 - `regional_runs`: trial ID, region, opaque W&B run ID, checkpoint/output
-  identity, latest W&B state and step, final objective, and primary/loser status.
+  identity, latest W&B state and step, final objective, and winner/race status.
 - `dispatches`: unique Iris job ID, regional run, TPU family/slice, submission
   command, attempt number, timestamps, Iris states, stop reason, exit status,
   and whether the dispatch ever reached W&B `running`.
@@ -171,15 +176,17 @@ For each logical trial:
 
 1. Create three regional-run records and submit one unique dispatch in each
    selected region, subject to the global chip cap.
-2. Treat the race as unresolved until W&B shows actual training. Iris
-   submission or parent/child `running` is not a win.
-3. Promote the first healthy, progressing regional run to primary. Stop queued
-   siblings and record their cancellation as `race_lost`, not failure.
-4. If more than one sibling is already training, apply the deterministic
-   step/throughput rule under **Identity and Completion**.
-5. If the primary becomes terminal or loses liveness, recover it according to
-   the thresholds below. Re-arm regional competitors when necessary rather
-   than waiting indefinitely on one capacity pool.
+2. Keep all three regional executions racing until one satisfies the full
+   completion contract. Iris parent/child `running`, W&B `running`, a step lead,
+   and higher throughput are monitoring signals—not reasons to stop siblings.
+3. Recover failed or stalled regional executions independently while no winner
+   exists. Healthy siblings continue unaffected.
+4. When the first regional run is done, transactionally mark the logical trial
+   complete and that regional run the winner, then stop every other nonterminal
+   sibling and record each cancellation as `race_lost`.
+5. Retain all observations and artifacts from losing or duplicate regional
+   executions, but use only the winning run's final objective as the logical
+   trial result.
 
 Submitted, running, and retrying dispatches all count toward
 `max_inflight_chips`. Do not exceed the cap while replacing a job: stop and
@@ -212,8 +219,8 @@ At every observation interval:
 - refresh W&B state, latest step, objective values, throughput, and timestamp;
 - refresh Iris parent/child status for every nonterminal dispatch;
 - verify the one-dispatch-per-`(trial_id, region)` invariant;
-- identify completed trials, race losers to stop, recovery deadlines, and chip
-  budget;
+- identify newly completed trials, siblings to stop only after a winner,
+  recovery deadlines, and chip budget;
 - transactionally persist observations before submitting or stopping work.
 
 Heartbeats must report two placement spans:
