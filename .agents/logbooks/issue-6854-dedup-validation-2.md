@@ -16,6 +16,83 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T03:15:00Z — 218,215 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0209-v874` independently
+  revalidated the 104-pair terminal p3 decision-file 105 checkpoint at offset
+  5,760. The model labeled 51 false positives and 49 true duplicates and left
+  four outcomes unresolved. All pairs used direct review. The audit reread 216
+  judgments and 232 request attempts: 210 attempts were valid, 22 were
+  invalid, and nine judgments required retries. The outcome Parquet SHA-256 is
+  `2c8f806ec1f67a9549ad3e9126290863179313e8b89ba891b0cbb796445b7a34`.
+
+- Complete-text inspection resolves all four ambiguous treatment SFT pairs as
+  true duplicates. Each pair has identical questions, choices, reasoning,
+  explanations, and answers; the sole changed line adds or removes `\text{}`
+  inside the final `\boxed{}` answer. The cases are:
+
+  - row 8,991, diabetes-prevention answer C: 9,461/9,468 characters and
+    196/196 lines, with character, line, and word-sequence similarities of
+    0.999630, 0.994898, and 0.999665.
+    `/rav/datakit-6854-inspect-row8991-0210-v875`,
+    `/rav/datakit-6854-publish-row8991-0214-v879`, and
+    `/rav/datakit-6854-verify-row8991-0221-v886` persisted and verified the
+    decision. The inspection, semantic-judgment, manual-Parquet, and marker
+    SHA-256 values are
+    `69055689069aeb6b67750d59fbe87337e8130a803e7313e1b279626027d3c1fc`,
+    `fa3c353980fddf55ae448728a34a162f98105245ae04575e620133abd6be3c26`,
+    `ef299dceae9d614d3c39159c76f6992fdbf5d99ec680f1feab48e09d5e861e26`,
+    and
+    `5aef25f3da5dd7659bfdd82edc528961532e1b4baaa44130c63cc042e43708a7`;
+  - row 8,993, invasive-species answer H: 12,192/12,199 characters and
+    312/312 lines, with similarities of 0.999713, 0.996795, and 0.999765.
+    `/rav/datakit-6854-inspect-row8993-0211-v876`,
+    `/rav/datakit-6854-publish-row8993-0215-v880`, and
+    `/rav/datakit-6854-verify-row8993-0220-v885` persisted and verified the
+    decision. The corresponding hashes are
+    `730149823af83e75bd9188971d09de67234d309db3254b77ef0ee26393113197`,
+    `89ff1629030afe7841fb4dbc8f3066985713ed6108c68189cdb4bdcceb08c669`,
+    `321fabfc51f923f4ea4f98a8e8f625daf76bfb87dfe0e170c7c5b19d6024cd6a`,
+    and
+    `011def421a5d0a6425a870f91c34219255c0b33aa9d9967a281138e12187306d`;
+  - row 9,017, customer-service answer G: 9,777/9,770 characters and 124/124
+    lines, with similarities of 0.999642, 0.991935, and 0.999661.
+    `/rav/datakit-6854-inspect-row9017-0212-v877`,
+    `/rav/datakit-6854-publish-row9017-0216-v881`, and
+    `/rav/datakit-6854-verify-row9017-0219-v884` persisted and verified the
+    decision. The corresponding hashes are
+    `7c2ed9857643d4593959797547a81004cb224eaf496d1a5ea2d956c129da8c52`,
+    `4b7ed8d36fde5b08d41dc125d60d3113a8e2426232e50de91353a5b342a3cfa9`,
+    `9ff6bdf184cab477094b427621eddef38a2a4ca8ae7cc6e445604fa9808561f2`,
+    and
+    `9cb6d0dc9613f09e2bcea8dc0efe7b11375eade927731aa316f2b5c3f24b3cd3`;
+  - row 9,018, scientific-method answer B: 12,416/12,409 characters and
+    256/256 lines, with similarities of 0.999718, 0.996094, and 0.999745.
+    `/rav/datakit-6854-inspect-row9018-0213-v878`,
+    `/rav/datakit-6854-publish-row9018-0217-v882`, and
+    `/rav/datakit-6854-verify-row9018-0218-v883` persisted and verified the
+    decision. The corresponding hashes are
+    `a700d2fcfa39a03739f6df5705af2e4c9d74fbf69e6540477e16de6859144ba2`,
+    `24b4fc9a1aa7c0867fc62c8b65600b73b38c0074eec7c537e2397bdd9f154225`,
+    `0ef7c18242ddf096982c41c3dfca2c7766d3aa4b128facc3c57fd693b71afb8e`,
+    and
+    `aa9ebdafc4dd54c14ff3a74d990a9232c560de2df970f2663e7c10cc242591ee`.
+
+- Replacing the four unresolved outcomes with true duplicates gives 51 false
+  positives and 53 true duplicates in the new batch. Across the stable
+  1,718-checkpoint snapshot, all 268 unresolved model outcomes are covered by
+  207 true-duplicate and 61 false-positive manual records. The adjusted totals
+  are:
+
+  - baseline: 174,223 pairs, 110,684 false positives, 63,539 true duplicates;
+  - treatment: 43,992 pairs, 22,744 false positives, 21,248 true duplicates;
+  - combined: 218,215 pairs, 133,428 false positives, 84,787 true duplicates.
+
+- The next audit frontiers are p0 `(9, 0)`, p1 `(41, 0)`, p2 `(73, 128)`, and
+  p3 `(106, 0)`. The pending p3 checkpoint is a 135,218,482-character
+  code-heavy batch with 32 oversized pairs and 1,471 review units. All four
+  batch-priority 2-H100 workers remain active.
+
 ### 2026-07-27T03:06:00Z — 218,111 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0208-v873` independently
