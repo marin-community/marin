@@ -3423,8 +3423,30 @@ def _make_explicit_mpmd_train_step(
     def keep_step(step: jax.Array):
         return step
 
-    def materialize_compute_params(params: TransformerPipelineStage):
-        return params
+    def materialize_compute_params(params: TransformerPipelineStage) -> TransformerPipelineStage:
+        mesh = jax.sharding.get_abstract_mesh()
+        blocks = []
+        for block in params.blocks:
+            implementation = block.mlp.expert_mlp.implementation
+            if implementation == "sonic":
+                expert_sharding = NamedSharding(mesh, P())
+            elif fused_expert_accumulation and implementation == "ring":
+                expert_sharding = NamedSharding(mesh, P("expert", None, None))
+            else:
+                blocks.append(block)
+                continue
+            expert_mlp = block.mlp.expert_mlp
+            expert_mlp = eqx.tree_at(
+                lambda module: (module.w_gate, module.w_up, module.w_down),
+                expert_mlp,
+                tuple(
+                    jax.sharding.reshard(weight, expert_sharding)
+                    for weight in (expert_mlp.w_gate, expert_mlp.w_up, expert_mlp.w_down)
+                ),
+            )
+            mlp = eqx.tree_at(lambda module: module.expert_mlp, block.mlp, expert_mlp)
+            blocks.append(eqx.tree_at(lambda module: module.mlp, block, mlp))
+        return eqx.tree_at(lambda module: module.blocks, params, tuple(blocks))
 
     def expert_materialization_completion_token(
         params: TransformerPipelineStage,
