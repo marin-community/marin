@@ -1224,3 +1224,34 @@ are recorded in the previous volumes.
   `(110, 1920)`. The latest two p3 checkpoints resolved all 256 pairs with 583
   valid judgments, no invalid attempts, and no ambiguity. The eight H100s
   remain healthy at batch priority.
+
+## 2026-07-27 23:35 UTC — 137-million-character checkpoint completes
+
+- The first p0 decision-file 14 checkpoint completed after processing
+  137,317,362 characters. Its 128 baseline pairs required 2,817 valid
+  judgments across 98 direct and 30 chunked reviews. Independent rereading
+  found 113 false positives, 15 true duplicates, no invalid attempts, and no
+  unresolved outcomes. The outcome SHA-256 is
+  `1bb5f4ac6bd9e331578737242044c940e21c327fe2602b2e12a5de7f727668f9`.
+- `/rav/datakit-6854-reconcile-manual-v1598` verified 2,623 checkpoints and
+  complete manual coverage for all 386 unresolved outcomes. Applying 80
+  false-positive and 306 true-duplicate manual decisions gives:
+
+  | Arm | Pairs | False positives | True duplicates | False-positive rate |
+  | --- | ---: | ---: | ---: | ---: |
+  | baseline | 265,265 | 168,535 | 96,730 | 63.5346% |
+  | treatment | 67,718 | 35,160 | 32,558 | 51.9212% |
+  | combined | 332,983 | 203,695 | 129,288 | 61.1728% |
+
+  The baseline-minus-treatment gap is 11.6134 percentage points. This snapshot
+  covers 44.0873% of the 755,281 semantic candidates. Its immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-2331.json`
+  with SHA-256
+  `9d721c41e84acf6c6c10d542ed896fc7da76718235f9ee3f4eeca08ea18134a3`.
+  Its semantic path-manifest SHA-256 is
+  `d20f028959326d484dfe8104764990951e12119b52b681e7e4cc9d9f86f2f2f3`;
+  manual manifests are unchanged. Independent checkpoint rereads exactly
+  match all 332,983 reconciled pairs.
+- The next frontiers are p0 `(14, 128)`, p1 `(46, 0)`, p2 `(78, 0)`, and p3
+  `(110, 2560)`. The next p0 checkpoint contains 87.3 million characters.
+  The eight H100s remain healthy at batch priority.
