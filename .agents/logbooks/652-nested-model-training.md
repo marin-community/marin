@@ -521,3 +521,56 @@ author: Marin research
   had 49 passes, two skips, and one unrelated failure in the Grug base CPU
   metric smoke: JAX explicit sharding rejected concatenation of
   `P(('replica_dcn', 'data'), None)` with `P(None, None)`.
+
+### 2026-07-27 15:40 - Cost and power-ladder extension preregistration
+
+- Status: `preregistered`; no extension runs have been launched or inspected.
+- Hypotheses:
+  - `NEST-MOE-COST`: once compilation, evaluation, and checkpoint time are
+    separated, restricting router eligibility without adding a second forward
+    pass costs at most 10% steady-state time per optimizer step versus the
+    matched E256 control. An overhead above 25% rejects the implementation as a
+    scale candidate.
+  - `NEST-MOE-LADDER`: a rotating eligibility ladder over E128, E32, E8, and
+    E1 subsets can expose useful miniature models while retaining full-model
+    Paloma within `+0.02` at 25% restricted rows. The 50% arm is exploratory
+    and is rejected if its full-model penalty exceeds `+0.02`.
+- Common configuration: d768, eight layers, sequence length 2,048, global
+  batch 256, 8,192 optimizer updates (4.295B tokens), seed 0, full-fp32
+  compute, reference attention, 256 total experts, top-4 routing, capacity
+  factor 1.25, 64 GB200s per arm on `cw-us-east-08a`, batch priority. Paloma
+  runs every 2,048 updates and at termination.
+- Four concurrent arms:
+  - E256 control;
+  - standalone E128 control;
+  - rotating E128/E32/E8/E1 ladder on 25% of batch rows;
+  - the same ladder on 50% of batch rows.
+- Schedule: restricted rows cycle through the four eligible-bank sizes. Within
+  a size, the eligible coset rotates across the E256 bank: two E128 cosets,
+  eight E32 cosets, 32 E8 cosets, and 256 E1 cosets. This makes each
+  down-sampling event use a different subset and avoids concentrating the E1
+  traffic on one expert rank. Evaluation uses offset-zero representatives for
+  E128, E32, E8, and E1; these are exchangeable representatives of the
+  balanced rotation, not a claim that one fixed E1 expert received every
+  restricted E1 example.
+- E1 routing rule: top-4 is reduced semantically to top-1. The three inactive
+  dispatch slots carry zero combine weight and are assigned uniformly across
+  experts so dispatch shape and expert FLOPs remain matched. They do not count
+  in semantic routing statistics. This tests model nesting at equal training
+  FLOPs; it is not a claim that an extracted E1 model should retain top-4
+  inference compute.
+- Cost estimand: median post-warmup step duration derived from
+  `tokens_per_step / throughput/tokens_per_second`, plus 1,000-step block
+  medians and a contiguous-block bootstrap confidence interval. End-to-end
+  runtime is modeled as
+  `startup + steps * steady_step + evaluations * eval_time + checkpoint_time`.
+  Report both steady-state overhead and charged GPU-hours; do not use the
+  latter alone because the 500-step jobs were dominated by fixed work.
+- Quality estimand: full-model and representative-submodel Paloma curves
+  against tokens. Fit late-run power-law and log-linear sensitivity models,
+  report held-out residuals, and extrapolate only over a stated token range.
+- Gate: all arms must reach 8,192 finite updates with terminal overflow below
+  1%. If both ladder arms pass, use the remaining GPU window for a matched
+  second seed of E256 plus the better ladder arm and/or a longer continuation,
+  prioritizing replication of the cost ratio. Deadline for termination and
+  wrap-up is 2026-07-28 03:31 UTC.

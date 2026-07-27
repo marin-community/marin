@@ -124,8 +124,10 @@ class GrugModelConfig:
     nested_expert_count: int | None = None
     """Fixed extractable expert subset size. Experts are interleaved across the
     full bank so the subset remains balanced over expert-parallel ranks."""
+    nested_expert_counts: tuple[int, ...] = ()
+    """Rotating expert-subset sizes used by hierarchical nesting experiments."""
     nested_batch_fraction: float = 0.0
-    """Fraction of training rows restricted to ``nested_expert_count``."""
+    """Fraction of training rows restricted to a configured nested subset."""
     num_layers: int = 6
     num_heads: int = 4
     num_kv_heads: int = 1
@@ -170,16 +172,26 @@ class GrugModelConfig:
             raise ValueError("capacity_factor must be positive")
         if not 0.0 <= self.nested_batch_fraction <= 1.0:
             raise ValueError("nested_batch_fraction must be between 0 and 1")
-        if self.nested_expert_count is None:
+        if self.nested_expert_count is not None and self.nested_expert_counts:
+            raise ValueError("configure either nested_expert_count or nested_expert_counts, not both")
+        if self.nested_expert_count is None and not self.nested_expert_counts:
             if self.nested_batch_fraction != 0.0:
-                raise ValueError("nested_batch_fraction requires nested_expert_count")
+                raise ValueError("nested_batch_fraction requires a nested expert configuration")
         else:
-            if self.nested_expert_count < self.num_experts_per_token + 1:
+            nested_counts = (
+                (self.nested_expert_count,) if self.nested_expert_count is not None else self.nested_expert_counts
+            )
+            if len(set(nested_counts)) != len(nested_counts):
+                raise ValueError("nested expert counts must be unique")
+            if tuple(sorted(nested_counts, reverse=True)) != nested_counts:
+                raise ValueError("nested expert counts must be in descending order")
+            for nested_count in nested_counts:
+                if nested_count <= 0 or nested_count >= self.num_experts:
+                    raise ValueError("nested expert counts must be positive and smaller than num_experts")
+                if self.num_experts % nested_count != 0:
+                    raise ValueError("num_experts must be divisible by every nested expert count")
+            if self.nested_expert_count is not None and self.nested_expert_count < self.num_experts_per_token + 1:
                 raise ValueError("nested_expert_count must exceed num_experts_per_token for QB top-k")
-            if self.nested_expert_count >= self.num_experts:
-                raise ValueError("nested_expert_count must be smaller than num_experts")
-            if self.num_experts % self.nested_expert_count != 0:
-                raise ValueError("num_experts must be divisible by nested_expert_count")
             if self.nested_batch_fraction not in (0.0, 1.0):
                 period = round(1.0 / self.nested_batch_fraction)
                 if not math.isclose(self.nested_batch_fraction, 1.0 / period):
@@ -241,6 +253,7 @@ class GrugModelConfig:
             num_experts_per_token=int(_hf_config_attr(hf_config, ("num_experts_per_token", "num_experts_per_tok"), 2)),
             capacity_factor=float(_hf_config_attr(hf_config, ("capacity_factor",), 1.0)),
             nested_expert_count=_hf_config_attr(hf_config, ("nested_expert_count",)),
+            nested_expert_counts=tuple(_hf_config_attr(hf_config, ("nested_expert_counts",), ())),
             nested_batch_fraction=float(_hf_config_attr(hf_config, ("nested_batch_fraction",), 0.0)),
             num_layers=int(_hf_config_attr(hf_config, ("num_layers", "num_hidden_layers"), 24)),
             num_heads=int(_hf_config_attr(hf_config, ("num_heads", "num_attention_heads"), 16)),
@@ -278,6 +291,7 @@ class GrugModelConfig:
             "num_experts_per_tok": self.num_experts_per_token,
             "capacity_factor": self.capacity_factor,
             "nested_expert_count": self.nested_expert_count,
+            "nested_expert_counts": self.nested_expert_counts,
             "nested_batch_fraction": self.nested_batch_fraction,
             "moe_intermediate_size": self.intermediate_dim,
             "shared_expert_intermediate_size": self.shared_expert_intermediate_dim,
@@ -487,10 +501,19 @@ def _routing_stats(
     *,
     num_experts: int,
     num_experts_per_token: int,
+    active_assignments: jax.Array | None = None,
 ) -> dict[str, jax.Array]:
     router_probs_f = router_probs.astype(jnp.float32)
     router_logits_f = router_logits.astype(jnp.float32)
-    expert_counts = jnp.sum(jax.nn.one_hot(selected_experts, num_experts, dtype=jnp.float32), axis=(0, 1))
+    assignment_weights = (
+        jnp.ones_like(selected_experts, dtype=jnp.float32)
+        if active_assignments is None
+        else active_assignments.astype(jnp.float32)
+    )
+    expert_counts = jnp.sum(
+        jax.nn.one_hot(selected_experts, num_experts, dtype=jnp.float32) * assignment_weights[..., None],
+        axis=(0, 1),
+    )
     total_assignments = jnp.maximum(jnp.sum(expert_counts), 1.0)
     assignment_fraction = expert_counts / total_assignments
     routing_entropy = -jnp.sum(assignment_fraction * jnp.log(assignment_fraction + 1e-6))
@@ -610,31 +633,42 @@ class MoEMLP(eqx.Module):
     def __call__(
         self,
         x: Float[Array, "B S D"],
-        nested_rows: jax.Array | None = None,
+        expert_eligibility: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         # Keep the router path in fp32 before top-k, softmax, and QB statistics.
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
-        eligible_router_logits = router_logits
-        if nested_rows is not None:
-            if self.cfg.nested_expert_count is None:
-                raise ValueError("nested_rows requires nested_expert_count")
-            if nested_rows.shape != (b,):
-                raise ValueError(f"nested_rows must have shape {(b,)}, got {nested_rows.shape}")
-            nested_tokens = jnp.repeat(nested_rows.astype(jnp.bool_), s)
-            nested_experts = nested_expert_eligibility(self.cfg.num_experts, self.cfg.nested_expert_count)
-            ineligible = nested_tokens[:, None] & ~nested_experts[None, :]
-            eligible_router_logits = jnp.where(ineligible, _INELIGIBLE_ROUTER_LOGIT, router_logits)
+        if expert_eligibility is None:
+            token_eligibility = jnp.ones_like(router_logits, dtype=jnp.bool_)
+        else:
+            if expert_eligibility.shape != (b, self.cfg.num_experts):
+                raise ValueError(
+                    f"expert_eligibility must have shape {(b, self.cfg.num_experts)}, " f"got {expert_eligibility.shape}"
+                )
+            token_eligibility = jnp.repeat(expert_eligibility.astype(jnp.bool_), s, axis=0)
+        eligible_router_logits = jnp.where(token_eligibility, router_logits, _INELIGIBLE_ROUTER_LOGIT)
         biased_logits = eligible_router_logits + jax.lax.stop_gradient(self.router_bias)
         router_probs = jax.nn.softmax(eligible_router_logits, axis=-1)
         # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
         _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
         qb_alpha = _topk_logits[:, -1:]
         selected_experts = selected_experts[:, :-1]
+        eligible_counts = jnp.sum(token_eligibility, axis=-1)
+        active_assignments = jnp.arange(self.cfg.num_experts_per_token)[None, :] < jnp.minimum(
+            eligible_counts[:, None],
+            self.cfg.num_experts_per_token,
+        )
+        token_ids = jnp.arange(selected_experts.shape[0], dtype=selected_experts.dtype)[:, None]
+        dispatch_slots = jnp.arange(self.cfg.num_experts_per_token, dtype=selected_experts.dtype)[None, :]
+        balanced_padding_experts = (token_ids * self.cfg.num_experts_per_token + dispatch_slots) % self.cfg.num_experts
+        selected_experts = reshard(selected_experts, P(None, None))
+        active_assignments = reshard(active_assignments, P(None, None))
+        balanced_padding_experts = reshard(balanced_padding_experts, P(None, None))
+        selected_experts = jnp.where(active_assignments, selected_experts, balanced_padding_experts)
         # Sigmoid combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-        combine_weights_f = jax.nn.sigmoid(unbiased_topk)
+        combine_weights_f = jnp.where(active_assignments, jax.nn.sigmoid(unbiased_topk), 0.0)
         # Renormalize K combine weights to sum to ``_ROUTING_RENORM_SUM`` (baked in).
         denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
         combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
@@ -645,10 +679,15 @@ class MoEMLP(eqx.Module):
             eligible_router_logits,
             num_experts=self.cfg.num_experts,
             num_experts_per_token=self.cfg.num_experts_per_token,
+            active_assignments=active_assignments,
         )
         # Sharded QB: compute beta locally per device, then average.
         mesh = get_abstract_mesh()
-        s_minus_alpha = reshard(eligible_router_logits - qb_alpha, P(_BATCH_AXES, None))
+        qb_observation = token_eligibility & (eligible_counts > self.cfg.num_experts_per_token)[:, None]
+        s_minus_alpha = reshard(
+            jnp.where(qb_observation, eligible_router_logits - qb_alpha, _INELIGIBLE_ROUTER_LOGIT),
+            P(_BATCH_AXES, None),
+        )
         num_devices = 1
         for a in _BATCH_AXES:
             num_devices *= mesh.shape[a]
@@ -719,12 +758,12 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
         use_pko: bool = False,
         disable_rope: bool = False,
-        nested_rows: jax.Array | None = None,
+        expert_eligibility: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         x = x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out, router_stats = self.mlp(mlp_in, nested_rows=nested_rows)
+        mlp_out, router_stats = self.mlp(mlp_in, expert_eligibility=expert_eligibility)
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         x = x + mlp_out
@@ -787,7 +826,7 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
-        nested_rows: jax.Array | None = None,
+        expert_eligibility: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         if mask is None:
             mask = AttentionMask.causal()
@@ -816,7 +855,7 @@ class Transformer(eqx.Module):
             use_pko = is_long and not cfg.disable_pko
             disable_rope = is_long and cfg.disable_long_rope
             hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
-                hidden, layer_mask, use_pko, disable_rope, nested_rows
+                hidden, layer_mask, use_pko, disable_rope, expert_eligibility
             )
             moe_router_stats.append(router_stats)
 
@@ -836,10 +875,10 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
-        nested_rows: jax.Array | None = None,
+        expert_eligibility: jax.Array | None = None,
     ) -> Float[Array, "B S V"]:
         batch_spec = _batch_spec()
-        hidden, _ = self(token_ids, mask=mask, nested_rows=nested_rows)
+        hidden, _ = self(token_ids, mask=mask, expert_eligibility=expert_eligibility)
         return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
 
     def to_state_dict(self, prefix: str | None = None) -> dict[str, jax.Array]:
@@ -855,9 +894,9 @@ class Transformer(eqx.Module):
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
         return_router_metrics: bool = False,
-        nested_rows: jax.Array | None = None,
+        expert_eligibility: jax.Array | None = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
-        hidden, router_metrics = self(token_ids, mask=mask, nested_rows=nested_rows)
+        hidden, router_metrics = self(token_ids, mask=mask, expert_eligibility=expert_eligibility)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 

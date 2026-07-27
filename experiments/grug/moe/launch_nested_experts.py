@@ -9,7 +9,7 @@ extractable, interleaved E128 subset.
 
 Required environment:
 
-    NESTED_ARM    large | small | nested25 | nested50 | breakout25
+    NESTED_ARM    large | small | nested25 | nested50 | ladder25 | ladder50 | breakout25
     NESTED_PHASE  smoke | full | cooldown
 
 Optional overrides:
@@ -27,6 +27,8 @@ Optional overrides:
     NESTED_MP           jmp policy (default: bf16 compute)
     NESTED_EVAL_EXPERTS  evaluate a fixed subset without restricting training
     NESTED_INIT_FROM    nested25 checkpoint root (required for breakout25)
+    NESTED_EVAL_INTERVAL  optimizer steps between evaluations (default: 100)
+    NESTED_SEED          training and data seed (default: 0; cooldown: 1)
 """
 
 import dataclasses
@@ -62,6 +64,7 @@ _BUDGET = 3.46e19
 _TARGET_STEPS = 8192
 _LARGE_EXPERTS = 256
 _SMALL_EXPERTS = 128
+_NESTED_LADDER = (128, 32, 8, 1)
 _GPUS_PER_NODE = 4
 _DEFAULT_NODES = 16
 _DEFAULT_EXPERT_AXIS = 64
@@ -84,6 +87,8 @@ class NestedArm(StrEnum):
     SMALL = "small"
     NESTED_25 = "nested25"
     NESTED_50 = "nested50"
+    LADDER_25 = "ladder25"
+    LADDER_50 = "ladder50"
     BREAKOUT_25 = "breakout25"
 
     @property
@@ -94,6 +99,8 @@ class NestedArm(StrEnum):
             NestedArm.NESTED_25: "NEST-MOE-003",
             NestedArm.NESTED_50: "NEST-MOE-004",
             NestedArm.BREAKOUT_25: "NEST-MOE-005",
+            NestedArm.LADDER_25: "NEST-MOE-006",
+            NestedArm.LADDER_50: "NEST-MOE-007",
         }[self]
 
 
@@ -139,11 +146,20 @@ def _arm_model(
             nested_batch_fraction=0.25,
             **common,
         )
+    if arm is NestedArm.NESTED_50:
+        return dataclasses.replace(
+            base_model,
+            num_experts=_LARGE_EXPERTS,
+            nested_expert_count=_SMALL_EXPERTS,
+            nested_batch_fraction=0.5,
+            **common,
+        )
+    fraction = 0.25 if arm is NestedArm.LADDER_25 else 0.5
     return dataclasses.replace(
         base_model,
         num_experts=_LARGE_EXPERTS,
-        nested_expert_count=_SMALL_EXPERTS,
-        nested_batch_fraction=0.5,
+        nested_expert_counts=_NESTED_LADDER,
+        nested_batch_fraction=fraction,
         **common,
     )
 
@@ -203,6 +219,8 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     else:
         default_steps = full_steps
     steps = env_int("NESTED_STEPS", default_steps)
+    eval_interval = env_int("NESTED_EVAL_INTERVAL", _PROXY_EVAL_INTERVAL)
+    seed = env_int("NESTED_SEED", 1 if phase is _NestedPhase.COOLDOWN else 0)
 
     total_devices = nodes * _GPUS_PER_NODE
     if total_devices % expert_axis != 0:
@@ -251,7 +269,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
             resources=ctx.runtime_arg("train_resources"),
             steps=steps,
             batch_size=batch_size,
-            seed=1 if phase is _NestedPhase.COOLDOWN else 0,
+            seed=seed,
             mp=os.environ.get("NESTED_MP", _DEFAULT_MP),
             tracker=WandbConfig(
                 project="marin_moe",
@@ -273,7 +291,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
                 steps_per_eval=(
                     steps
                     if phase is _NestedPhase.SMOKE
-                    else _COOLDOWN_EVAL_INTERVAL if phase is _NestedPhase.COOLDOWN else _PROXY_EVAL_INTERVAL
+                    else _COOLDOWN_EVAL_INTERVAL if phase is _NestedPhase.COOLDOWN else eval_interval
                 ),
                 max_eval_batches=1,
                 eval_current=True,

@@ -305,6 +305,26 @@ def test_nested_moe_launcher_evaluates_untreated_control_subset(monkeypatch, tmp
     assert config.model.nested_batch_fraction == 0.0
 
 
+def test_nested_moe_launcher_builds_power_ladder(monkeypatch, tmp_path):
+    monkeypatch.setenv("NESTED_ARM", "ladder25")
+    monkeypatch.setenv("NESTED_PHASE", "full")
+    monkeypatch.setenv("NESTED_STEPS", "8192")
+    monkeypatch.setenv("NESTED_EVAL_INTERVAL", "2048")
+    monkeypatch.setenv("NESTED_SEED", "3")
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+
+    step = launch_nested_experts.build(version="dev")
+    _seed_cache_records(step, str(tmp_path))
+    config = materialized_config(step, str(tmp_path))
+
+    assert config.model.num_experts == 256
+    assert config.model.nested_expert_counts == (128, 32, 8, 1)
+    assert config.model.nested_batch_fraction == 0.25
+    assert config.steps == 8192
+    assert config.eval.steps_per_eval == 2048
+    assert config.seed == 3
+
+
 def test_nested_moe_launcher_builds_fresh_optimizer_breakout(monkeypatch, tmp_path):
     checkpoint_root = "s3://test/nested25/checkpoints"
     monkeypatch.setenv("NESTED_ARM", "breakout25")
@@ -577,11 +597,14 @@ def test_grug_moe_extracted_nested_model_matches_restricted_forward():
     model_module = importlib.import_module("experiments.grug.moe.model")
     config = _nested_grug_model_config(model_module)
     tokens = jnp.arange(16, dtype=jnp.int32).reshape(2, 8) % config.vocab_size
-    nested_rows = jnp.ones((tokens.shape[0],), dtype=jnp.bool_)
+    expert_eligibility = jnp.broadcast_to(
+        model_module.nested_expert_eligibility(config.num_experts, config.nested_expert_count)[None, :],
+        (tokens.shape[0], config.num_experts),
+    )
 
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
         model = model_module.Transformer.init(config, key=jax.random.PRNGKey(0))
-        restricted_logits = model.logits(tokens, nested_rows=nested_rows)
+        restricted_logits = model.logits(tokens, expert_eligibility=expert_eligibility)
         extracted_model = model_module.extract_nested_expert_model(model)
         extracted_logits = extracted_model.logits(tokens)
 
@@ -601,8 +624,9 @@ def test_grug_moe_full_rows_preserve_router_and_reach_both_expert_banks():
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
         mlp = model_module.MoEMLP.init(config, key=jax.random.PRNGKey(2))
         original_out, original_stats = mlp(x)
-        full_out, full_stats = mlp(x, nested_rows=full_rows)
-        grads = jax.grad(lambda candidate: jnp.sum(candidate(x, nested_rows=full_rows)[0]))(mlp)
+        full_eligibility = jnp.where(full_rows[:, None], nested_experts[None, :], True)
+        full_out, full_stats = mlp(x, expert_eligibility=full_eligibility)
+        grads = jax.grad(lambda candidate: jnp.sum(candidate(x, expert_eligibility=full_eligibility)[0]))(mlp)
 
     np.testing.assert_array_equal(original_out, full_out)
     np.testing.assert_array_equal(original_stats["routing_counts"], full_stats["routing_counts"])
@@ -617,12 +641,12 @@ def test_grug_moe_nested_forward_has_no_outer_expert_gradients():
     config = _nested_grug_model_config(model_module)
     assert config.nested_expert_count is not None
     x = jax.random.normal(jax.random.PRNGKey(1), (2, 4, config.hidden_dim))
-    nested_rows = jnp.ones((x.shape[0],), dtype=jnp.bool_)
     nested_experts = np.asarray(model_module.nested_expert_eligibility(config.num_experts, config.nested_expert_count))
+    expert_eligibility = jnp.broadcast_to(jnp.asarray(nested_experts)[None, :], (x.shape[0], config.num_experts))
 
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
         mlp = model_module.MoEMLP.init(config, key=jax.random.PRNGKey(2))
-        grads = jax.grad(lambda candidate: jnp.sum(candidate(x, nested_rows=nested_rows)[0]))(mlp)
+        grads = jax.grad(lambda candidate: jnp.sum(candidate(x, expert_eligibility=expert_eligibility)[0]))(mlp)
 
     assert all(np.all(np.isfinite(np.asarray(leaf))) for leaf in jax.tree.leaves(grads))
     assert np.any(np.asarray(grads.expert_mlp.w_gate)[nested_experts] != 0)
@@ -636,13 +660,54 @@ def test_grug_moe_nested_row_schedule_is_fixed_and_step_balanced():
     train_module = importlib.import_module("experiments.grug.moe.train")
     config = _nested_grug_model_config(model_module)
 
-    step_zero = train_module._training_nested_rows(config, batch_size=8, step=jnp.array(0))
-    step_one = train_module._training_nested_rows(config, batch_size=8, step=jnp.array(1))
+    step_zero = train_module._training_expert_eligibility(config, batch_size=8, step=jnp.array(0))
+    step_one = train_module._training_expert_eligibility(config, batch_size=8, step=jnp.array(1))
 
     assert step_zero is not None
     assert step_one is not None
-    assert step_zero.tolist() == [True, False, True, False, True, False, True, False]
-    assert step_one.tolist() == [False, True, False, True, False, True, False, True]
+    nested_experts = np.asarray(model_module.nested_expert_eligibility(config.num_experts, config.nested_expert_count))
+    assert step_zero is not None
+    assert step_one is not None
+    np.testing.assert_array_equal(np.asarray(step_zero)[::2], np.broadcast_to(nested_experts, (4, 8)))
+    np.testing.assert_array_equal(np.asarray(step_zero)[1::2], np.ones((4, 8), dtype=bool))
+    np.testing.assert_array_equal(np.asarray(step_one)[::2], np.ones((4, 8), dtype=bool))
+    np.testing.assert_array_equal(np.asarray(step_one)[1::2], np.broadcast_to(nested_experts, (4, 8)))
+
+
+def test_grug_moe_power_ladder_rotates_levels_and_subsets():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    config = dataclasses.replace(
+        _nested_grug_model_config(model_module),
+        nested_expert_count=None,
+        nested_expert_counts=(4, 2, 1),
+    )
+
+    eligibility = train_module._training_expert_eligibility(config, batch_size=12, step=jnp.array(0))
+
+    assert eligibility is not None
+    eligible_counts = np.asarray(eligibility).sum(axis=-1)
+    assert eligible_counts.tolist() == [4, 8, 2, 8, 1, 8, 4, 8, 2, 8, 1, 8]
+    assert np.asarray(eligibility)[0].tolist() == [True, False, True, False, True, False, True, False]
+    assert np.asarray(eligibility)[6].tolist() == [False, True, False, True, False, True, False, True]
+
+
+def test_grug_moe_single_expert_eligibility_has_one_semantic_assignment():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    config = dataclasses.replace(
+        _nested_grug_model_config(model_module),
+        nested_expert_count=None,
+        nested_expert_counts=(4, 2, 1),
+    )
+    x = jax.random.normal(jax.random.PRNGKey(1), (2, 4, config.hidden_dim))
+    expert_eligibility = jnp.zeros((2, config.num_experts), dtype=jnp.bool_).at[:, 3].set(True)
+
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
+        mlp = model_module.MoEMLP.init(config, key=jax.random.PRNGKey(2))
+        _, stats = mlp(x, expert_eligibility=expert_eligibility)
+
+    assert np.asarray(stats["routing_counts"]).sum() == x.shape[0] * x.shape[1]
+    assert np.asarray(stats["routing_counts"])[3] == x.shape[0] * x.shape[1]
 
 
 def test_grug_moe_nested_train_step_lowers():
