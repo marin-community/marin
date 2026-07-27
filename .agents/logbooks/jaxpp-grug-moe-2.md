@@ -1507,3 +1507,117 @@ experiments/grug/moe/run_nccl_ubx_direct_gate.sh'
   - Even a passing retry would be an optimistic transport-only result with precomputed maps and identity expert compute. It would not prove JAX integration, autograd correctness, routing cost, expert GEMM performance, or end-to-end pipeline MFU.
 - Terminal state:
   - R1, R2, and R3 are terminal `failed` with one failed task each, zero retries, and no live resource.
+
+### 2026-07-27 09:00 PDT - NCCL UB-X R4 exposes mixed CUDA component versions
+- Snapshot:
+  - Job `/dlwh/nccl-ubx-direct-ep8-r4-20260727` used clean commit `9f4eb7a3b4` on one `H100x8` node in `cw-rno2a`.
+  - It retained venv activation and added `nvidia-cuda-cccl==13.3.3.4.1` to supply the `nv/target` header missing in R3. The EP8 d2560/e64/top-k4 gate and all admission thresholds were unchanged.
+- Command:
+
+```bash
+uv run iris --cluster cw-rno2a job run --no-wait \
+  --enable-extra-resources --gpu H100x8 --cpu 64 --memory 256GB --disk 256GB \
+  --timeout 3600 --max-retries 0 --priority interactive \
+  --extra gpu --sync-package marin-levanter \
+  --job-name nccl-ubx-direct-ep8-r4-20260727 -- \
+  bash -lc 'set -euxo pipefail
+source "$IRIS_VENV/bin/activate"
+cd "$IRIS_WORKDIR"
+uv pip install --no-deps --reinstall --index-url https://download.pytorch.org/whl/cu130 "torch==2.11.0+cu130"
+uv pip install --link-mode symlink "nvidia-cuda-cccl==13.3.3.4.1"
+cuda_bin="$(find "$IRIS_VENV"/lib/python*/site-packages/nvidia/cu*/bin -name nvcc -print -quit)"
+test -n "$cuda_bin"
+CUDA_HOME="$(dirname "$(dirname "$cuda_bin")")"
+export CUDA_HOME
+cccl_target="$(find "$CUDA_HOME/include/cccl" -path "*/nv/target" -print -quit)"
+test -n "$cccl_target"
+"$CUDA_HOME/bin/nvcc" --version
+python -c "import torch; print(\"Torch CUDA\", torch.__version__, torch.version.cuda)"
+SOURCE=/tmp/nccl-ubx-db0c814
+rm -rf "$SOURCE"
+git clone --filter=blob:none --no-checkout https://github.com/NVIDIA/nccl.git "$SOURCE"
+git -C "$SOURCE" fetch --depth 1 origin db0c814185a0415cc2e23dca387fecb9282de551
+git -C "$SOURCE" checkout --detach FETCH_HEAD
+make -C "$SOURCE" -j32 src.build CUDA_HOME="$CUDA_HOME" NVCC_GENCODE="-gencode=arch=compute_90,code=sm_90"
+export NCCL_HOME="$SOURCE/build"
+export NCCL_INCLUDE_DIR="$SOURCE/build/include"
+export NCCL_LIBRARY_DIR="$SOURCE/build/lib"
+export LD_LIBRARY_PATH="$NCCL_LIBRARY_DIR:$CUDA_HOME/lib:${LD_LIBRARY_PATH:-}"
+uv pip install --no-deps -e "$SOURCE/bindings/nccl4py"
+TORCH_CUDA_ARCH_LIST=9.0a uv pip install --no-build-isolation --no-deps -e "$SOURCE/contrib/nccl_ubx"
+export NCCL_UBX_SOURCE="$SOURCE"
+export NCCL_UBX_OUTPUT_DIR=/tmp/nccl-ubx-direct-results
+export UBX_GRAPH_POOL_SHARE=0.1
+python -c "import torch, ubx; print(\"UBX runtime\", torch.__version__, torch.cuda.nccl.version(), ubx.get_version())"
+ldd "$(python -c "import ubx._C; print(ubx._C.__file__)")" | grep libnccl
+experiments/grug/moe/run_nccl_ubx_direct_gate.sh'
+```
+
+- Result:
+  - The `nv/target` preflight passed and pinned NCCL compilation began. Device compilation then failed in CCCL `cuda_toolkit.h:41` with `CUDA compiler and CUDA toolkit headers are incompatible`.
+  - The environment combined CUDA compiler `13.2.78`, CUDA runtime headers `13.0.96`, and CCCL from the CUDA `13.3` package line. The CCCL compatibility check compares compiler and runtime-header major/minor versions, so supplying only the missing header cannot make this mixed toolchain valid.
+  - The single task exited `2` after `16.23s`. NCCL did not finish building, the UB-X extension and benchmark did not run, and no JSON, numerical, or timing result exists.
+- Next action:
+  - Install one coherent CUDA component set before deriving `CUDA_HOME`. PyPI publishes version `13.2.86` for `nvidia-cuda-nvcc`, `nvidia-cuda-runtime`, `nvidia-cuda-crt`, `nvidia-nvvm`, and `nvidia-cuda-cccl`.
+  - Verify `nvcc --version`, `CUDART_VERSION`, `libdevice.10.bc`, and `${CUDA_HOME}/include/cccl/nv/target` before compiling NCCL. Keep the direct-gate benchmark and its exact map, bitwise dispatch, relative-L2 `<=0.002`, and `>=1.10x` speedup requirements unchanged.
+- Terminal state:
+  - R4 is terminal `failed` with one failed task, zero retries, and no live resource.
+  - This remains an unexecuted optimistic precomputed-map identity transport gate, not evidence for JAX integration, autograd, expert GEMMs, or end-to-end MFU.
+
+### 2026-07-27 09:08 PDT - Exact unequal-split Ring run regresses and exhausts rank-0 memory
+- Snapshot:
+  - Parent `/dlwh/iris-run-job-20260727-154333` and child `/dlwh/iris-run-job-20260727-154333/grug-train-jaxpp-rno2a-ring-ep2d4-explicitbwd-fp8-l24-e64k4-b8192-s4096-p4m256-outline-split7655-exact-r2-20260727` used clean commit `55be7f18ce`.
+  - The exact target shape was L24/d2560/e64/top-k4/sequence4096, batch8192/m256, four physical and logical stages split `7,6,6,5`, explicit `std_1f1b`, FP8 pipeline wires, fused FP32 data-local expert-gradient accumulation, Ring MoE, CuTe FA4, and JAX/JAXlib `0.11.0`.
+- Command:
+
+```bash
+GRUG_JAXPP_LOG_LOCAL_MEMORY_PLAN=false \
+TF_GPU_ALLOCATOR=cuda_malloc_async \
+experiments/grug/moe/run_cw_jaxpp_may_d2560.sh \
+  --submit \
+  --cluster cw-rno2a \
+  --prefix s3://marin-us-east-02a/marin \
+  --run-id jaxpp-rno2a-ring-ep2d4-explicitbwd-fp8-l24-e64k4-b8192-s4096-p4m256-outline-split7655-exact-r2-20260727 \
+  --schedule std_1f1b \
+  --implementation explicit_mpmd \
+  --explicit-mpmd-schedule-mode default \
+  --explicit-mpmd-pipeline-wire-format fp8 \
+  --explicit-mpmd-stage-task-microbatch-group-size 1 \
+  --expert-gradient-accumulation fused_fp32_data_local \
+  --physical-stages 4 \
+  --logical-stages 4 \
+  --stage-layer-counts 7,6,6,5 \
+  --microbatches 256 \
+  --nodes 4 \
+  --gpus-per-replica 8 \
+  --expert-axis 2 \
+  --layers 24 \
+  --experts 64 \
+  --top-k 4 \
+  --vocab-size 8192 \
+  --batch 8192 \
+  --seq-len 4096 \
+  --moe-implementation ring \
+  --attention-implementation gpu_fa4_cute \
+  --ragged-dot-implementation triton \
+  --ragged-dot-block-k 32 \
+  --ragged-dot-num-warps 8 \
+  --loss-implementation xla \
+  --steps 12 \
+  --tracker wandb \
+  --xla-memory-fraction 0.70 \
+  --remat save_moe
+```
+
+- Result:
+  - The first attempt compiled and reached step `5/12`. [W&B](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-ep2d4-explicitbwd-fp8-l24-e64k4-b8192-s4096-p4m256-outline-split7655-exact-r2-20260727) retained two throughput samples with mean/p50 MFU `16.515528197633373`, latest MFU `16.353105260469082`, latest duration `90.97961631510407s`, `368812.63473112084` tokens/s, `90.04214715115255` examples/s, and loss `6.690955638885498` at global step `2`.
+  - Mean MFU is `1.7427718023666259` points (`9.5451%`) below the exact ordinary-Ring baseline `18.2583` and `3.4844718023666275` points below the strict `>20` target. The `7,6,6,5` split is a measured performance regression at the exact shape.
+  - At `15:59:58Z`, all eight rank-0 GPUs warned that a `15.34 GiB` allocation had failed. Step 5 completed, then rank 0 segfaulted at `16:01:15Z`. Iris retains rank 0 attempt 0 as `failed`, exit `139 (SIGSEGV)`; ranks 1-3 are `cosched_failed` after rank 0 bounced.
+  - Iris automatically started a second four-rank setup attempt. The parent was stopped at `16:02:49Z` because the first attempt had already produced the performance verdict. W&B remains stale `running` at global step 2 because rank 0 did not finalize it.
+- Terminal state:
+  - Parent and child are terminal `killed`. All four child tasks are complete, the retry is stopped, and `iris job list --prefix /dlwh/iris-run-job-20260727-154333` reports no live descendant.
+  - Preserve the relative-L2 `<=0.002` acceptance ceiling for floating output, loss, and every gradient leaf, with exact routing, counts, and drops. This throughput run did not change the numerical policy.
+- UB-X sidecar:
+  - Commit `5c09dc0e98` contains the reviewed optimistic EP8 direct transport gate. Local tests and pre-commit passed; no UB-X GPU benchmark result exists yet.
+- Decision:
+  - Do not promote or retry the exact `7,6,6,5` Ring configuration. It is slower than the `18.2583` baseline and exceeds rank-0 memory before completing 12 steps.
