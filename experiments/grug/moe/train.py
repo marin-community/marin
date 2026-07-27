@@ -5,7 +5,10 @@ import dataclasses
 import functools
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import cast
 
 import equinox as eqx
 import jax
@@ -23,6 +26,7 @@ from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
+from levanter.checkpoint import load_checkpoint
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
@@ -40,7 +44,13 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.moe.model import GrugModelConfig, Transformer
+from experiments.grug.moe.model import (
+    GrugModelConfig,
+    NestedSubsetSchedule,
+    Transformer,
+    extract_nested_expert_model,
+    nested_expert_eligibility,
+)
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -48,6 +58,13 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 # `.agents/skills/change-grug/`.
 
 logger = logging.getLogger(__name__)
+
+
+class InitializationMode(StrEnum):
+    """Checkpoint initialization behavior after own-run resume is attempted."""
+
+    FULL_STATE = "full_state"
+    WEIGHTS_ONLY = "weights_only"
 
 
 @dataclass(frozen=True)
@@ -70,6 +87,7 @@ class GrugTrainerConfig:
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
     sharding_dump_path: str | None = None
+    initialization_mode: InitializationMode = InitializationMode.FULL_STATE
 
 
 @dataclass(frozen=True)
@@ -83,6 +101,7 @@ class GrugEvalConfig:
     eval_current: bool = True
     eval_ema: bool = True
     compute_bpb: bool = True
+    nested_eval_offsets: int = 1
 
 
 @dataclass(frozen=True)
@@ -98,6 +117,10 @@ class GrugRunConfig:
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.hooks.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
+    nested_init_from: str | None = None
+    """Concrete E256 checkpoint used for a fresh-optimizer nested-model breakout."""
+    nested_init_source_model: GrugModelConfig | None = None
+    """Source architecture for ``nested_init_from``; both fields must be set together."""
 
 
 def build_train_dataset(
@@ -152,6 +175,8 @@ def build_tagged_evaluator(
     max_seq_len: int,
     mesh: Mesh,
     eval_cfg: GrugEvalConfig,
+    nested_expert_count: int | None = None,
+    nested_expert_offset: int = 0,
 ) -> TaggedEvaluator[LmExample | GrugLmExample, Transformer] | None:
     pos = Axis("position", max_seq_len)
     tagged_eval_sets = data_config.tagged_eval_sets(pos)
@@ -173,12 +198,23 @@ def build_tagged_evaluator(
     def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
         if isinstance(batch, LmExample):
             batch = grug_lm_example_from_named(batch)
+        expert_eligibility = None
+        if nested_expert_count is not None:
+            stride = model.config.num_experts // nested_expert_count
+            if not 0 <= nested_expert_offset < stride:
+                raise ValueError(f"nested_expert_offset must be in [0, {stride})")
+            eligible = jnp.arange(model.config.num_experts) % stride == nested_expert_offset
+            expert_eligibility = jnp.broadcast_to(
+                eligible[None, :],
+                (batch.tokens.shape[0], model.config.num_experts),
+            )
         per_pos_loss = model.next_token_loss(
             batch.tokens,
             batch.loss_weight,
             mask=batch.attn_mask,
             reduction="none",
             logsumexp_weight=None,
+            expert_eligibility=expert_eligibility,
         )
         per_pos_loss = jax.sharding.reshard(per_pos_loss, eval_array_sharding)
         per_pos_weight = jax.sharding.reshard(batch.loss_weight, eval_array_sharding)
@@ -194,6 +230,15 @@ def build_tagged_evaluator(
         axis_mapping=eval_axis_mapping,
         max_examples_per_dataset=max_examples_per_dataset,
     )
+
+
+def nested_evaluation_offsets(num_experts: int, nested_expert_count: int, requested_offsets: int) -> tuple[int, ...]:
+    """Return evenly spaced extractable-subset offsets, capped by the number available."""
+    if requested_offsets <= 0:
+        raise ValueError("nested_eval_offsets must be positive")
+    stride = num_experts // nested_expert_count
+    count = min(requested_offsets, stride)
+    return tuple(index * stride // count for index in range(count))
 
 
 def _compute_flops(
@@ -262,7 +307,7 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
         if block.mlp is None:
             continue
         new_bias = -qb_betas[moe_idx]
-        new_bias = new_bias - jnp.mean(new_bias)
+        new_bias = new_bias - jnp.mean(new_bias, axis=-1, keepdims=True)
         new_mlp = eqx.tree_at(lambda m: m.router_bias, block.mlp, new_bias)
         new_blocks[i] = eqx.tree_at(lambda b: b.mlp, block, new_mlp)
         moe_idx += 1
@@ -279,13 +324,86 @@ def initial_state(
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
     num_moe_layers = sum(1 for b in params.blocks if b.mlp is not None)
+    router_bias_shape = next(block.mlp.router_bias.shape for block in params.blocks if block.mlp is not None)
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
         opt_state=optimizer.init(params),
         ema_params=params if ema_beta is not None else None,
-        pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
+        pending_qb_betas=jnp.zeros((num_moe_layers, *router_bias_shape)),
     )
+
+
+def init_weights_only_from_checkpoint(
+    state: GrugTrainState,
+    checkpoint_path: str,
+    *,
+    mesh: Mesh | None,
+    load_ema: bool,
+    _load_fn: Callable[..., object] = load_checkpoint,
+) -> GrugTrainState:
+    """Load model and router-bias state while retaining a fresh optimizer and step."""
+    exemplar: dict[str, object] = {
+        "params": state.params,
+        "pending_qb_betas": state.pending_qb_betas,
+    }
+    loaded = cast("dict[str, object]", _load_fn(exemplar, checkpoint_path, mesh=mesh, allow_partial=True))
+    updates: dict[str, object] = {
+        "params": loaded["params"],
+        "pending_qb_betas": loaded["pending_qb_betas"],
+    }
+    if load_ema and state.ema_params is not None:
+        updates["ema_params"] = loaded["params"]
+    return dataclasses.replace(state, **updates)
+
+
+def init_nested_weights_from_checkpoint(
+    state: GrugTrainState,
+    source_model: Transformer,
+    checkpoint_path: str,
+    *,
+    mesh: Mesh | None,
+    load_ema: bool,
+    _load_fn: Callable[..., object] = load_checkpoint,
+) -> GrugTrainState:
+    """Extract nested weights from an external checkpoint into a fresh train state."""
+    source_nested_count = source_model.config.nested_expert_count
+    if source_nested_count is None:
+        raise ValueError("nested breakout source model must configure nested_expert_count")
+
+    num_moe_layers = sum(1 for block in source_model.blocks if block.mlp is not None)
+    source_router_bias_shape = next(
+        block.mlp.router_bias.shape for block in source_model.blocks if block.mlp is not None
+    )
+    source_pending_qb_betas = jnp.zeros((num_moe_layers, *source_router_bias_shape))
+    exemplar: dict[str, object] = {
+        "params": source_model,
+        "pending_qb_betas": source_pending_qb_betas,
+    }
+    loaded = cast("dict[str, object]", _load_fn(exemplar, checkpoint_path, mesh=mesh, allow_partial=True))
+    loaded_source_model = cast(Transformer, loaded["params"])
+    extracted_model = extract_nested_expert_model(loaded_source_model)
+    if extracted_model.config != state.params.config:
+        raise ValueError("nested breakout target config does not match the extracted source config")
+
+    nested_experts = nested_expert_eligibility(
+        source_model.config.num_experts,
+        source_nested_count,
+    )
+    nested_indices = jnp.nonzero(nested_experts, size=source_nested_count)[0]
+    loaded_pending_qb_betas = cast(jax.Array, loaded["pending_qb_betas"])
+    if loaded_pending_qb_betas.ndim == 3:
+        extracted_pending_qb_betas = loaded_pending_qb_betas[:, 1, nested_indices]
+    else:
+        extracted_pending_qb_betas = loaded_pending_qb_betas[:, nested_indices]
+
+    updates: dict[str, object] = {
+        "params": extracted_model,
+        "pending_qb_betas": extracted_pending_qb_betas,
+    }
+    if load_ema and state.ema_params is not None:
+        updates["ema_params"] = extracted_model
+    return dataclasses.replace(state, **updates)
 
 
 def _make_train_step(
@@ -316,6 +434,12 @@ def _make_train_step(
         else:
             qb_ema_params = None
 
+        expert_eligibility = _training_expert_eligibility(
+            qb_params.config,
+            batch_size=batch.tokens.shape[0],
+            step=state.step,
+        )
+
         def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
             return compute_params.next_token_loss(
@@ -325,10 +449,20 @@ def _make_train_step(
                 reduction="mean",
                 logsumexp_weight=z_loss,
                 return_router_metrics=True,
+                expert_eligibility=expert_eligibility,
             )
 
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
         metrics = {"train/loss": loss, **summarized_metrics}
+        if expert_eligibility is not None:
+            eligible_counts = jnp.sum(expert_eligibility, axis=-1)
+            metrics["train/nested/sequence_fraction"] = jnp.mean(
+                (eligible_counts < qb_params.config.num_experts).astype(jnp.float32)
+            )
+            for nested_count in qb_params.config.nested_expert_counts:
+                metrics[f"train/nested/e{nested_count}_sequence_fraction"] = jnp.mean(
+                    (eligible_counts == nested_count).astype(jnp.float32)
+                )
         updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
         params = optax.apply_updates(qb_params, updates)
 
@@ -370,6 +504,39 @@ def _make_train_step(
         return next_state, metrics, watch_stats
 
     return train_step
+
+
+def _training_expert_eligibility(
+    model_config: GrugModelConfig,
+    *,
+    batch_size: int,
+    step: jax.Array,
+) -> jax.Array | None:
+    fraction = model_config.nested_batch_fraction
+    if fraction == 0.0:
+        return None
+    period = 1 if fraction == 1.0 else round(1.0 / fraction)
+    row_ids = jnp.arange(batch_size, dtype=jnp.int32)
+    schedule_ids = row_ids + step
+    restricted_rows = schedule_ids % period == 0
+    expert_ids = jnp.arange(model_config.num_experts, dtype=jnp.int32)
+
+    if model_config.nested_expert_count is not None:
+        nested = nested_expert_eligibility(model_config.num_experts, model_config.nested_expert_count)
+        return jnp.where(restricted_rows[:, None], nested[None, :], True)
+
+    nested_counts = jnp.asarray(model_config.nested_expert_counts, dtype=jnp.int32)
+    event_ids = schedule_ids // period
+    level_ids = event_ids % len(model_config.nested_expert_counts)
+    eligible_counts = nested_counts[level_ids]
+    strides = model_config.num_experts // eligible_counts
+    if model_config.nested_subset_schedule is NestedSubsetSchedule.FIXED:
+        offsets = jnp.zeros_like(strides)
+    else:
+        subset_cycles = event_ids // len(model_config.nested_expert_counts)
+        offsets = subset_cycles % strides
+    nested = expert_ids[None, :] % strides[:, None] == offsets[:, None]
+    return jnp.where(restricted_rows[:, None], nested, True)
 
 
 def _run_grug_local(config: GrugRunConfig) -> None:
@@ -439,6 +606,34 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
         )
+        if config.trainer.initialization_mode is InitializationMode.WEIGHTS_ONLY:
+            if int(state.step) == 0 and trainer.initialize_from is not None:
+                state = init_weights_only_from_checkpoint(
+                    state,
+                    trainer.initialize_from,
+                    mesh=mesh,
+                    load_ema=config.trainer.ema_beta is not None,
+                )
+        nested_init_fields = (config.nested_init_from, config.nested_init_source_model)
+        if (nested_init_fields[0] is None) != (nested_init_fields[1] is None):
+            raise ValueError("nested_init_from and nested_init_source_model must be set together")
+        if int(state.step) == 0 and config.nested_init_from is not None:
+            if config.nested_init_source_model is None:
+                raise AssertionError("validated nested source model is missing")
+
+            @jax.jit
+            def _init_source_model(model_rng):
+                return trainer.mp.cast_to_param(Transformer.init(config.nested_init_source_model, key=model_rng))
+
+            source_model = _init_source_model(model_key)
+            state = init_nested_weights_from_checkpoint(
+                state,
+                source_model,
+                config.nested_init_from,
+                mesh=mesh,
+                load_ema=config.trainer.ema_beta is not None,
+            )
+            logger.info("Initialized nested breakout weights from %s", config.nested_init_from)
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,
@@ -453,6 +648,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         eval_cfg = config.eval
         evaluator = None
+        nested_evaluators = []
         if eval_cfg is not None:
             evaluator = build_tagged_evaluator(
                 data_config=config.data,
@@ -460,6 +656,34 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 mesh=mesh,
                 eval_cfg=eval_cfg,
             )
+            if config.model.nested_expert_count is not None:
+                nested_evaluator = build_tagged_evaluator(
+                    data_config=config.data,
+                    max_seq_len=config.model.max_seq_len,
+                    mesh=mesh,
+                    eval_cfg=eval_cfg,
+                    nested_expert_count=config.model.nested_expert_count,
+                )
+                if nested_evaluator is not None:
+                    nested_evaluators.append((f"{eval_cfg.prefix}/nested", nested_evaluator))
+            for nested_count in config.model.nested_expert_counts:
+                offsets = nested_evaluation_offsets(
+                    config.model.num_experts,
+                    nested_count,
+                    eval_cfg.nested_eval_offsets,
+                )
+                for offset in offsets:
+                    nested_evaluator = build_tagged_evaluator(
+                        data_config=config.data,
+                        max_seq_len=config.model.max_seq_len,
+                        mesh=mesh,
+                        eval_cfg=eval_cfg,
+                        nested_expert_count=nested_count,
+                        nested_expert_offset=offset,
+                    )
+                    if nested_evaluator is not None:
+                        suffix = "" if offset == 0 else f"_offset{offset}"
+                        nested_evaluators.append((f"{eval_cfg.prefix}/nested_e{nested_count}{suffix}", nested_evaluator))
 
         profiler_cfg = trainer.profiler
         profiler_num_steps = profiler_cfg.resolve_num_profile_steps(num_train_steps=trainer.num_train_steps)
@@ -503,6 +727,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     ),
                     every=interval,
                 )
+                for nested_prefix, nested_evaluator in nested_evaluators:
+                    state_callbacks.add_hook(
+                        cb_tagged_evaluate(
+                            nested_evaluator,
+                            prefix=nested_prefix,
+                            eval_current=eval_cfg.eval_current,
+                            eval_ema=eval_ema,
+                        ),
+                        every=interval,
+                    )
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
@@ -523,9 +757,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
                 jax.block_until_ready(metrics["train/loss"])
 
-                if jnp.isnan(metrics["train/loss"]):
-                    logger.error(f"NaN loss at step {int(state.step)}. Stopping training.")
-                    break
+                if not bool(jnp.isfinite(metrics["train/loss"])):
+                    raise FloatingPointError(f"Non-finite loss at step {int(state.step)}")
                 duration = time.perf_counter() - step_start
                 hook_start = time.perf_counter()
                 with jax.profiler.TraceAnnotation("callbacks"):
@@ -588,6 +821,8 @@ __all__ = [
     "GrugRunConfig",
     "GrugTrainState",
     "GrugTrainerConfig",
+    "init_nested_weights_from_checkpoint",
+    "init_weights_only_from_checkpoint",
     "initial_state",
     "run_grug",
 ]

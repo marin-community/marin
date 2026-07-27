@@ -1,0 +1,192 @@
+{
+  "full_mode_domain_comparisons": {
+    "fixed25": {
+      "deltas": {
+        "4chan-llama3": -0.12021112442016602,
+        "c4_100_domains-llama3": -0.04217052459716797,
+        "c4_en-llama3": -0.017611980438232422,
+        "dolma-v1_5-llama3": -0.040991783142089844,
+        "dolma_100_programing_languages-llama3": 0.1210784912109375,
+        "dolma_100_subreddits-llama3": 0.034516334533691406,
+        "falcon-refinedweb-llama3": -0.03217124938964844,
+        "gab-llama3": 0.012569427490234375,
+        "m2d2_s2orc_unsplit-llama3": -0.08306598663330078,
+        "m2d2_wikipedia_unsplit-llama3": -0.058045387268066406,
+        "manosphere_meta_sep-llama3": 0.01864480972290039,
+        "mc4-llama3": -0.0891575813293457,
+        "ptb-llama3": -0.23401403427124023,
+        "redpajama-llama3": -0.07644319534301758,
+        "twitterAAE_HELM_fixed-llama3": -0.008740425109863281,
+        "wikitext_103-llama3": -0.1348557472229004
+      },
+      "domains": 16,
+      "max_delta": 0.1210784912109375,
+      "mean_delta": -0.04691687226295471,
+      "median_delta": -0.041581153869628906,
+      "min_delta": -0.23401403427124023,
+      "treatment_better": 12
+    },
+    "fixed50": {
+      "deltas": {
+        "4chan-llama3": 1.9270176887512207,
+        "c4_100_domains-llama3": 0.69512939453125,
+        "c4_en-llama3": 0.6177701950073242,
+        "dolma-v1_5-llama3": 0.7175145149230957,
+        "dolma_100_programing_languages-llama3": 1.5933318138122559,
+        "dolma_100_subreddits-llama3": 0.44803667068481445,
+        "falcon-refinedweb-llama3": 0.6728768348693848,
+        "gab-llama3": 0.5135350227355957,
+        "m2d2_s2orc_unsplit-llama3": 0.7331571578979492,
+        "m2d2_wikipedia_unsplit-llama3": 0.8076620101928711,
+        "manosphere_meta_sep-llama3": 0.5410995483398438,
+        "mc4-llama3": 1.349665641784668,
+        "ptb-llama3": 1.540529727935791,
+        "redpajama-llama3": 0.9897627830505371,
+        "twitterAAE_HELM_fixed-llama3": 0.30599355697631836,
+        "wikitext_103-llama3": 1.0287880897521973
+      },
+      "domains": 16,
+      "max_delta": 1.9270176887512207,
+      "mean_delta": 0.9051169157028198,
+      "median_delta": 0.7253358364105225,
+      "min_delta": 0.30599355697631836,
+      "treatment_better": 0
+    }
+  },
+  "gpu_count": 64,
+  "schema_version": 1,
+  "summaries": {
+    "fixed25": {
+      "e128_paloma_macro": 5.189779281616211,
+      "e16_paloma_macro": 5.28666353225708,
+      "final_cross_entropy_loss": 4.464476585388184,
+      "final_router_aux_loss": 0.0,
+      "final_step": 8191,
+      "full_paloma_macro": 5.130334377288818,
+      "full_paloma_micro": 5.092453956604004,
+      "gpu_hours_per_billion_tokens": 5.47617202744593,
+      "median_step_seconds": 0.1614988844958134,
+      "run_name": "nest-moe-008-full-d768-s2048-e256-fixedep16-eqb-w512-cost-r47",
+      "runtime_forecasts": {
+        "10.0": {
+          "gpu_hours": 54.76172027445929,
+          "optimizer_hours": 0.8556518792884265,
+          "steps": 19073
+        },
+        "100.0": {
+          "gpu_hours": 547.617202744593,
+          "optimizer_hours": 8.556518792884265,
+          "steps": 190735
+        },
+        "1000.0": {
+          "gpu_hours": 5476.172027445929,
+          "optimizer_hours": 85.56518792884265,
+          "steps": 1907349
+        }
+      },
+      "slimpajama_loss": 4.608841896057129,
+      "state": "finished",
+      "step_overhead_vs_e256": 0.0016629676378028257,
+      "terminal_overflow": 0.00043076276779174805,
+      "tokens_billions": 4.294967296,
+      "url": "https://wandb.ai/marin-community/marin_moe/runs/nest-moe-008-full-d768-s2048-e256-fixedep16-eqb-w512-cost-r47"
+    },
+    "fixed50": {
+      "e128_paloma_macro": 6.0141191482543945,
+      "e16_paloma_macro": 5.684687614440918,
+      "final_cross_entropy_loss": 5.194451332092285,
+      "final_router_aux_loss": 0.0,
+      "final_step": 8191,
+      "full_paloma_macro": 6.08236837387085,
+      "full_paloma_micro": 5.989887714385986,
+      "gpu_hours_per_billion_tokens": 5.535792269029116,
+      "median_step_seconds": 0.16325715696439147,
+      "run_name": "nest-moe-009-full-d768-s2048-e256-fixedep16-eqb-w512-cost-r47",
+      "runtime_forecasts": {
+        "10.0": {
+          "gpu_hours": 55.35792269029116,
+          "optimizer_hours": 0.8649675420357994,
+          "steps": 19073
+        },
+        "100.0": {
+          "gpu_hours": 553.5792269029116,
+          "optimizer_hours": 8.649675420357994,
+          "steps": 190735
+        },
+        "1000.0": {
+          "gpu_hours": 5535.792269029116,
+          "optimizer_hours": 86.49675420357994,
+          "steps": 1907349
+        }
+      },
+      "slimpajama_loss": 5.4571661949157715,
+      "state": "finished",
+      "step_overhead_vs_e256": 0.01256828394565268,
+      "terminal_overflow": 2.491474151611328e-05,
+      "tokens_billions": 4.294967296,
+      "url": "https://wandb.ai/marin-community/marin_moe/runs/nest-moe-009-full-d768-s2048-e256-fixedep16-eqb-w512-cost-r47"
+    },
+    "large_control": {
+      "e128_paloma_macro": null,
+      "e16_paloma_macro": null,
+      "final_cross_entropy_loss": 4.463659286499023,
+      "final_router_aux_loss": 0.0,
+      "final_step": 8191,
+      "full_paloma_macro": 5.177250862121582,
+      "full_paloma_micro": 5.12551736831665,
+      "gpu_hours_per_billion_tokens": 5.467080449585006,
+      "median_step_seconds": 0.16123076295480132,
+      "run_name": "nest-moe-001-full-d768-s2048-e256-fixedep16-eqb-w512-cost-r47",
+      "runtime_forecasts": {
+        "10.0": {
+          "gpu_hours": 54.67080449585006,
+          "optimizer_hours": 0.8542313202476571,
+          "steps": 19073
+        },
+        "100.0": {
+          "gpu_hours": 546.7080449585006,
+          "optimizer_hours": 8.542313202476572,
+          "steps": 190735
+        },
+        "1000.0": {
+          "gpu_hours": 5467.080449585006,
+          "optimizer_hours": 85.42313202476572,
+          "steps": 1907349
+        }
+      },
+      "slimpajama_loss": 4.6490912437438965,
+      "state": "finished",
+      "step_overhead_vs_e256": 0.0,
+      "terminal_overflow": 0.0009165406227111816,
+      "tokens_billions": 4.294967296,
+      "url": "https://wandb.ai/marin-community/marin_moe/runs/nest-moe-001-full-d768-s2048-e256-fixedep16-eqb-w512-cost-r47"
+    }
+  },
+  "timing": {
+    "fixed25": {
+      "block_bootstrap_ci95_high": 0.16188800247618929,
+      "block_bootstrap_ci95_low": 0.16108825703850016,
+      "median_step_seconds": 0.1614988844958134,
+      "p10_step_seconds": 0.159715567168314,
+      "p90_step_seconds": 0.16555006157141178,
+      "samples": 7168
+    },
+    "fixed50": {
+      "block_bootstrap_ci95_high": 0.16349043702939525,
+      "block_bootstrap_ci95_low": 0.16308807203313336,
+      "median_step_seconds": 0.16325715696439147,
+      "p10_step_seconds": 0.1617697990266606,
+      "p90_step_seconds": 0.16767953534144908,
+      "samples": 7168
+    },
+    "large_control": {
+      "block_bootstrap_ci95_high": 0.1614746319828555,
+      "block_bootstrap_ci95_low": 0.16113154648337513,
+      "median_step_seconds": 0.16123076295480132,
+      "p10_step_seconds": 0.15957707312190905,
+      "p90_step_seconds": 0.16619028402492403,
+      "samples": 7168
+    }
+  },
+  "tokens_per_step": 524288
+}

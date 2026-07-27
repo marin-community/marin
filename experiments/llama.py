@@ -94,7 +94,8 @@ llama3_instruct_trainable_chat_template = """{{- bos_token }}
 {%- endif %}
 
 {%- for message in messages %}
-    {%- if not (message.role == 'ipython' or message.role == 'tool' or 'tool_calls' in message) %}
+    {%- set has_tool_calls = message.tool_calls is defined and message.tool_calls %}
+    {%- if not (message.role == 'ipython' or message.role == 'tool' or has_tool_calls) %}
         {%- if message.role == "assistant" %}
             {{- "<|start_header_id|>assistant<|end_header_id|>\\n\\n" }}
             {%- generation %}
@@ -104,7 +105,7 @@ llama3_instruct_trainable_chat_template = """{{- bos_token }}
         {%- else %}
             {{- "<|start_header_id|>" + message['role'] + "<|end_header_id|>\\n\\n" + message['content'] | trim + "<|eot_id|>" }}
         {%- endif %}
-    {%- elif 'tool_calls' in message %}
+    {%- elif has_tool_calls %}
         {%- if not message.tool_calls|length == 1 %}
             {{- raise_exception("This model only supports single tool-calls at once!") }}
         {%- endif %}

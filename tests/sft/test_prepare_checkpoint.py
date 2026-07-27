@@ -11,6 +11,8 @@ real base tokenizer.
 """
 from __future__ import annotations
 
+import dataclasses
+
 import numpy as np
 import pytest
 from fray.types import ResourceConfig
@@ -93,6 +95,28 @@ def test_hf_model_separate_tokenizer_path():
     train_config = materialized_config(step, _PREFIX).train_config
     assert train_config.initialize_from_hf == "org/model"
     assert train_config.data.tokenizer == "org/tokenizer"
+
+
+def test_step_count_chat_cache_is_isolated_by_recipe():
+    base = _spec(HFModel("org/model", tokenizer_path="org/tokenizer-a"))
+    changed_tokenizer = dataclasses.replace(
+        base,
+        model=HFModel("org/model", tokenizer_path="org/tokenizer-b"),
+    )
+    changed_template = dataclasses.replace(
+        base,
+        chat_template="{% generation %}different{% endgeneration %}",
+    )
+
+    def cache_dir(spec: SFTSpec) -> str:
+        step = sft_step(spec, ResourceConfig.with_cpu())
+        data = materialized_config(step, _PREFIX).train_config.data
+        return data.components["ds"].cache_dir
+
+    base_cache = cache_dir(base)
+    assert base_cache == cache_dir(base)
+    assert base_cache != cache_dir(changed_tokenizer)
+    assert base_cache != cache_dir(changed_template)
 
 
 def test_prepare_config_carries_preparation_inputs():

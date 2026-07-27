@@ -44,7 +44,13 @@ from experiments.datasets.starcoder import starcoder_dataset
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.model import GrugModelConfig
-from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
+from experiments.grug.moe.train import (
+    GrugEvalConfig,
+    GrugRunConfig,
+    GrugTrainerConfig,
+    InitializationMode,
+    run_grug,
+)
 from experiments.llama import llama3_tokenizer
 
 # SlimPajama-6B tokenization OOMs at the default 10g worker resources.
@@ -103,6 +109,12 @@ class GrugMoeLaunchConfig:
     """Checkpoint base directory to initialize weights from (the latest checkpoint
     under it is loaded). None trains from scratch. Used to chain training phases —
     a midtrain/SFT/RL run points this at the prior phase's ``checkpoints`` directory."""
+    resume_from: str | None = None
+    """Checkpoint directory from a prior run whose full train state should be resumed."""
+    nested_init_from: str | None = None
+    """E256 checkpoint base directory for a fresh-optimizer nested-model breakout."""
+    nested_init_source_model: GrugModelConfig | None = None
+    """Source architecture for ``nested_init_from``; both fields must be set together."""
 
 
 def env_int(key: str, default: int) -> int:
@@ -137,7 +149,8 @@ def _resolve_run_id(default_run_id: str) -> str:
     return run_id
 
 
-def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
+def resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
+    """Apply the dispatched run identity to trackers that support naming."""
     if isinstance(tracker, WandbConfig):
         return dataclasses.replace(tracker, name=run_id)
     return tracker
@@ -150,6 +163,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
     blocks until it completes.
     """
     initialize_from = latest_checkpoint_path(config.init_from) if config.init_from is not None else None
+    nested_init_from = latest_checkpoint_path(config.nested_init_from) if config.nested_init_from is not None else None
     trainer = TrainerConfig(
         id=config.run_id,
         seed=config.seed,
@@ -157,11 +171,13 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         num_train_steps=config.steps,
         profiler=config.profiler,
         mp=jmp.get_policy(config.mp),
-        tracker=_resolve_tracker(config.tracker, config.run_id),
+        tracker=resolve_tracker(config.tracker, config.run_id),
         use_explicit_mesh_axes=True,
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
         initialize_from=initialize_from,
+        load_checkpoint=True if config.resume_from is not None else None,
+        load_checkpoint_path=config.resume_from,
         checkpointer=config.checkpointer
         or resolve_checkpointer_output_path(
             CheckpointerConfig(save_interval=timedelta(minutes=10), keep=None),
@@ -169,7 +185,14 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         ),
     )
 
-    grug_trainer = dataclasses.replace(config.grug_trainer, trainer=trainer)
+    initialization_mode = (
+        InitializationMode.WEIGHTS_ONLY if config.init_from is not None else config.grug_trainer.initialization_mode
+    )
+    grug_trainer = dataclasses.replace(
+        config.grug_trainer,
+        trainer=trainer,
+        initialization_mode=initialization_mode,
+    )
 
     run_config = GrugRunConfig(
         model=config.model,
@@ -179,6 +202,8 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         trainer=grug_trainer,
         eval=config.eval,
         processes_per_task=config.processes_per_task,
+        nested_init_from=nested_init_from,
+        nested_init_source_model=config.nested_init_source_model,
     )
     run_grug(run_config)
 

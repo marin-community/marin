@@ -161,6 +161,13 @@ def _parse_local_device_ids(raw: str | None) -> list[int] | None:
     return [int(part) for part in raw.split(",") if part]
 
 
+def _attempt_scoped_endpoint_name(endpoint_name: str, job_info) -> str:
+    """Keep a retried gang from resolving the previous attempt's coordinator."""
+    if job_info is None or job_info.attempt_id == 0:
+        return endpoint_name
+    return f"{endpoint_name}/attempt-{job_info.attempt_id}"
+
+
 class _CoordinatorRole(StrEnum):
     """How a supervised rank obtains the JAX coordinator address."""
 
@@ -258,7 +265,8 @@ def initialize_jax(
         port: Coordinator port. Overridden by IRIS_PORT_jax if allocated.
             An explicit port is required because JAX's gRPC coordinator binds
             internally and does not expose the actual bound port.
-        endpoint_name: Name under which the coordinator registers.
+        endpoint_name: Base coordinator registration name. Retried gangs append
+            their attempt number so workers cannot discover a stale attempt.
         poll_timeout: Maximum seconds for non-coordinator tasks to wait for the
             coordinator endpoint to register. Defaults to ``_JAX_DIST_INIT_TIMEOUT``
             so a slow coordinator host on a large-gang cold restart does not abort
@@ -288,6 +296,7 @@ def initialize_jax(
         return
 
     job_info = get_job_info()
+    endpoint_name = _attempt_scoped_endpoint_name(endpoint_name, job_info)
     _log_jax_bootstrap_inputs(job_info, port=port, endpoint_name=endpoint_name)
 
     # Supervised (multi-process-per-task) mode short-circuits the task-derived
