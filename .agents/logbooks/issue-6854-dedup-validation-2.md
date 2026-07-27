@@ -16,6 +16,85 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T02:32:00Z — 214,734 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0174-v836` independently
+  revalidated 12 checkpoints containing 1,536 pairs. The model labeled 714
+  false positives and 820 true duplicates and left two outcomes unresolved.
+  Three pairs used chunked review and 1,533 used direct review. All 3,289
+  judgments and request attempts were valid on their first attempt. The
+  checkpoints and outcome Parquet SHA-256 values are:
+
+  - p1 decision-file 40 offsets 4,736 through 5,376:
+    `3c83b31f0a257d7cea2455553a1ec0c9c37c36196c3ef89de4c650cba1348864`,
+    `13d10a514c528975ca2f4b0fcd8903d7b356e3d596a6dae5322e27a59a02521e`,
+    `310352a894a096aed16b67d7b455aae3aed383a05919707b8a6e11b774088801`,
+    `c85bda6be1ff2d19d81b20328dc6f30d2a82c98f1fb4d5cfff4eff8c6ad02e38`,
+    `2627969b36709d32ef74ca681f3bd8e16bc06f0d3f73891319c0968037a73c22`,
+    and
+    `9f71fe42a119a4d1d32d9b4b58f1de9a9e6c391518e38bd5d8339e7ba61c8d6b`;
+  - p3 decision-file 105 offsets 1,920 through 2,560:
+    `410e6ddf68cb495888805ca420def7faf7bb844dc1fb5f59068d2be995144984`,
+    `2a9a81880c2d46c7e12ab43d96b671a150dc98487f878c759678266c15241d84`,
+    `3ddcd938518e9029f0ed1210783d90cf0f9c862b42ab31f7100441b4a5aa2ddf`,
+    `654b39e89a91552a272ecb278e7563c69f7a08676fe42ea0424a2b26936ffbc2`,
+    `aa0eaee176a500b8d419352b5ce911b4e7c5ec216df1ab7f74905181d55ae615`,
+    and
+    `9efc72a3a3dfebc0e4591a92ea5f56432a1602a08a40c5f8352b200db0e0611e`.
+
+- Complete-text inspection resolves baseline row 3,372 as a true duplicate.
+  Both documents are the same empty-record genealogy SEO template. Their
+  country, ethnicity, meaning, spelling, and famous-person sections differ
+  only in surname and occupation-example slots, minor sentence spinning, and
+  truncation; the longer canonical represents every substantive template
+  field. The 2,107/3,711-character, 28/56-line texts have character, line, and
+  word-sequence similarities of 0.502922, 0.309524, and 0.415642.
+  `/rav/datakit-6854-inspect-row3372-0175-v837`,
+  `/rav/datakit-6854-publish-row3372-0177-v840`, and
+  `/rav/datakit-6854-verify-row3372-0178-v841` persisted and independently
+  verified the decision. The inspection, semantic-judgment, manual-Parquet,
+  and marker SHA-256 values are
+  `27ffe0314b3be4ef75af0a72f2c16f0107a3a3716cd84545edfaea6760193109`,
+  `f7fabc495f58d9919da64cf34b0f3616e8797057fbb86e5649899ed454fdd718`,
+  `0dce9ae0c96a38ee31b3613fb98b53c84de24a6d78b04211ede40cb4316170c9`,
+  and
+  `0eeeef4cb199c7b14696963279bd25c4732a1eff5dc18c69624e2c87b6c2c16d`.
+
+- Complete-text inspection resolves baseline row 3,802 as a false positive.
+  The pages share a sentence-spun keto-guide scaffold and substitute a
+  recipe-title keyword, but the member also contains whole guidance sections
+  absent from the canonical, including carb counting, weight loss, exercise
+  and endurance, snacking, fasting, and intake tracking. These are substantive
+  health claims and instructions beyond an entity slot. The
+  13,113/11,059-character, 115/102-line texts have similarities of 0.646533,
+  0.470046, and 0.575706.
+  `/rav/datakit-6854-inspect-row3802-0175-v838`,
+  `/rav/datakit-6854-publish-row3802-0177-v839`, and
+  `/rav/datakit-6854-verify-row3802-0178-v842` persisted and independently
+  verified the decision. The corresponding four SHA-256 values are
+  `4893f933a0b8b3f7808d96e908afe9b3182558571e78a37d4f04e18407052131`,
+  `bb3389e5c35fcd2c968cdd731635879975ef68fbf9ec63ec8818bf5700fe2150`,
+  `49379c97cac2e1b8442b417cea1d3eb62eecadee33ce97f126e5d0f87f10051c`,
+  and
+  `7fd17f3f08b3a725880c33cdf499a8c7d9d6c2da0c87108d768140c90d966c9a`.
+
+- Replacing the two unresolved outcomes with one true duplicate and one false
+  positive gives 715 false positives and 821 true duplicates in the new batch.
+  Across the stable 1,690-checkpoint snapshot, all 257 unresolved model
+  outcomes are covered by 196 true-duplicate and 61 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 172,239 pairs, 109,407 false positives, 62,832 true duplicates;
+  - treatment: 42,495 pairs, 21,980 false positives, 20,515 true duplicates;
+  - combined: 214,734 pairs, 131,387 false positives, 83,347 true duplicates.
+
+- The next audit frontiers are p0 `(9, 0)`, p1 `(40, 5,504)`, p2 `(73, 128)`,
+  and p3 `(105, 2,688)`. The pending p0 checkpoint remains the
+  136,594,323-character code batch with 28 oversized pairs and 1,414 review
+  units. The pending p2 checkpoint contains 35,083,358 characters, 14
+  oversized pairs, and 959 review units. All four batch-priority 2-H100
+  workers remain active.
+
 ### 2026-07-27T02:24:00Z — 213,198 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0166-v826` independently
