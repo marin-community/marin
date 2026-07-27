@@ -16,6 +16,81 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T08:49:00Z — 246,348 pairs verified; manual evidence reconciled
+
+- `/rav/rav-datakit-6854-reconcile-manual-0844-v1049` snapshotted and
+  hash-verified all 1,939 completed semantic checkpoints, their outcome
+  Parquets, and every manual-decision Parquet. The snapshot covers 246,348 of
+  755,281 semantic candidates (32.62%). All 289 unresolved model outcomes
+  match one unique manual review key, exact pair identity, and current
+  `judgments_json` SHA-256; none are missing or extra. The reconciliation
+  report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-0844.json`
+  with SHA-256
+  `1a1860c99413bee783e83bd76ad2468c9d621e5e087a136dddefcded7090ef79`.
+- The fixed-sample snapshot's two apparent treatment ambiguities were a reader
+  error, not missing reviews. The reader consumed only newer manual markers
+  and skipped the legacy hash-named Parquet records. Complete-text
+  reinspection independently reproduced the earlier true-duplicate decisions:
+
+  - treatment row 9,034 contains the same 279-line psychology SFT record; its
+    sole changed line is `\boxed{\text{B}}` versus `\boxed{B}`. The
+    15,672/15,665-character texts have character, line, and word-sequence
+    similarities 0.999777, 0.996416, and 0.999812. Inspection SHA-256:
+    `af499e067e3d78f76c0fa28920ef40dee82f8914b6edea219c94c9b496371836`.
+  - treatment row 9,204 contains the same 123-line cooking SFT record; its
+    sole changed line is `\boxed{\text{B}}` versus `\boxed{B}`. The
+    5,801/5,794-character texts have similarities 0.999396, 0.991870, and
+    0.999489. Inspection SHA-256:
+    `7d386c81b602d7da62d415047467d3af9640b25f333c67149a4a7960edd39510`.
+
+- The attempted repair wrote redundant modern records for those two already
+  reviewed keys. Reconciliation detected exactly those two duplicates; their
+  labels and semantic-evidence hashes agree. No source object was deleted.
+  `/rav/rav-datakit-6854-promote-manual-0847-v1051` instead produced a clean
+  289-record, 289-key canonical snapshot, normalized to the current semantic
+  outcome hashes. `/rav/rav-datakit-6854-verify-manual-canonical-0849-v1052`
+  independently reread its manifest, reconciliation report, 289 canonical
+  Parquets, 289 markers, and 289 source manual records. The manifest is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-manual-canonical-100b-20260727-v1/snapshots/20260727-0844/manifest.json`
+  with SHA-256
+  `5a31ed216a613f04a0dd8f8c79ed83ecf75c353d1b06a2167d81d97188ad21d7`.
+  Its labels are 224 true duplicates and 65 false positives: baseline
+  140/60 and treatment 84/5.
+- Three legacy baseline records bind stale batch-level outcome hashes, while
+  their exact review keys, identities, labels, and current per-pair semantic
+  judgment hashes match. The reconciliation report records both hashes. The
+  canonical snapshot replaces the stale batch binding with the current
+  outcome hash without changing any label, basis, or pair evidence.
+- Adjusted totals at the immutable 1,939-checkpoint snapshot are:
+
+  - baseline: 196,841 pairs, 125,085 false positives, 71,756 true duplicates;
+  - treatment: 49,507 pairs, 25,630 false positives, 23,877 true duplicates;
+  - combined: 246,348 pairs, 150,715 false positives, 95,633 true duplicates.
+
+- The corrected fixed-sample reader now consumes every one-row manual Parquet,
+  verifies exact identity and semantic-evidence hashes, and detects duplicate
+  disagreements. `/rav/rav-datakit-6854-stratified-refresh-0843-v1048`
+  produced snapshot `20260727-0843`; independent verifier
+  `/rav/rav-datakit-6854-verify-stratified-0846-v1050` found no unresolved
+  sampled pairs and reproduced all counts:
+
+  - baseline: 2,731 resolved and 5,461 pending; 1,743 false positives and 988
+    true duplicates; observed false-positive fraction 0.638228 with Wilson 95%
+    interval `[0.620024, 0.656044]`;
+  - treatment: 2,614 resolved and 5,578 pending; 1,326 false positives and
+    1,288 true duplicates; observed fraction 0.507269 with interval
+    `[0.488106, 0.526409]`.
+
+  The observed baseline-minus-treatment difference is 13.096 percentage
+  points. It remains provisional because the still-pending fixed-sample rows
+  are source-ordered nonresponse. Snapshot and summary SHA-256 values are
+  `e8925660a317901aad5100c85b3dabd85c905d4edc38eb1c4e237a20e4266b38`
+  and
+  `80572de653b940e9a2b940888ff75b98a1f8d33dab23ea2b803f461673b656af`.
+- All four batch-priority 2-H100 semantic workers remain active. Their 12
+  root, broker, and GPU pods are Ready with zero Kubernetes restarts.
+
 ### 2026-07-27T07:41:25Z — 242,252 pairs verified
 
 - `/rav/rav-datakit-6854-audit-next-checkpoints-0735-v1024`
