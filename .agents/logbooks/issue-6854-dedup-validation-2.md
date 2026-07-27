@@ -16,6 +16,84 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T00:38:00Z — 200,556 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0031-v752` independently
+  revalidated eight baseline checkpoints: p0 decision-file 8 offsets 1,536
+  through 1,920 and p2 decision-file 72 offsets 3,328 through 3,712. Their
+  1,024 pairs contain 550 model false positives, 472 model true duplicates,
+  and two unresolved outcomes. Two pairs were chunked and 1,022 were direct.
+  All 2,213 judgments and request attempts were valid on their first attempt.
+  The outcome Parquet SHA-256 values are:
+
+  - p0:
+    `760281140a14ae8999d7687b64f38b35da82777467dcbb669b92f63cfc20f9e0`,
+    `e44b8aa0ab2ba129cea21e8140cd35008bf2827681ad0c64d01f8af828deedf9`,
+    `dd9a9ad9b8be334777145250bfd8e35e98fb63789ff207a63729dfd5f731071e`,
+    and
+    `a8a0d80584a5ea06915e358d126e670c62f081a9e12fa6e20da795eccb4503d2`;
+  - p2:
+    `5e0ee06ac199a0350a7879c5d1f21a740fc63b2ef7dcf1a91474d0340376aee5`,
+    `0718acae5bfbab6e41f02a8e8c9393c6bc4f9ad05ba39fcaf2b12aee7c2001c4`,
+    `989a760ac552ab23e9e6e5e35708ce55be13f97f0d5700c488106878f10a7283`,
+    and
+    `1a7c10c05fa4334d916f6ccd9f6554630f19113804c8d434d8d241f972678074`.
+
+- Complete-text inspection resolves baseline
+  `part-00008-of-00128.parquet:2428` as a false positive. The texts share the
+  core language-learning study, but the 13-line member uniquely includes a
+  related-story finding that prenatal testosterone exposure makes male
+  language-development delays twice as likely as female delays. The
+  seven-line canonical has no equivalent of that scientific claim. Character,
+  line, and word-sequence similarities are 0.876611, 0.200000, and 0.852679.
+  The 1,389/1,326-character member and canonical SHA-256 values are
+  `57d4f7ec3892dc4ecee64ecbfae57d457c35144a399231f8d7f50e5f938e1b83`
+  and
+  `3484ad500de92350a1a17fe7f0ec1cfbcb752ba708b1f33265cf876d25ac044c`.
+  `/rav/datakit-6854-inspect-row2428-0033-v753` persisted the pair and diff
+  with inspection SHA-256
+  `aab68612ea72da5061e6b74c9e6e1517cbbd3ffbf8328524350c5c047fd57fd0`.
+  `/rav/datakit-6854-publish-row2428-0035-v755` wrote the immutable record,
+  and `/rav/datakit-6854-verify-row2428-0036-v758` independently verified it.
+  The semantic-evidence, manual-Parquet, and marker SHA-256 values are
+  `07a625799fa670133a0f2a0bce948bab79b15192d6da63d428210ff3c139caa0`,
+  `1d5ee12fe86ac2cbe3676c373b2ff641e7583040288f84712db5b1d73c25b5e5`,
+  and `da5ebee37601854819cca3792bf92bc4c26f1b20258d26e3ed1d861dde09067a`.
+
+- Complete-text inspection resolves baseline
+  `part-00072-of-00128.parquet:5608` as a true duplicate. Both texts are the
+  same geo-targeted rotational-molding SEO template with Dover substituted
+  for Clayton. They share the phone number, historical anecdotes, process
+  description, and four manufacturing steps; other differences are location
+  slots, synonyms, and broken text fragments. Character, line, and
+  word-sequence similarities are 0.785859, 0.400000, and 0.703030. The
+  3,048/2,892-character member and canonical SHA-256 values are
+  `92ee154ca10cc8fda51ac14b0d92f6b0a52839bd956bb0abd5bdaf6751ca371f`
+  and
+  `bcd52a6bd90a701bcc1860cf7b9a2e6fdbb2fadded894774ac54fbb1f2a7bff1`.
+  `/rav/datakit-6854-inspect-row5608-0033-v754` persisted the pair and diff
+  with inspection SHA-256
+  `74393adabf0b611bd257b1a08cff764465b3ff1b87fb2da8a52aa768cf5528f5`.
+  `/rav/datakit-6854-publish-row5608-0035-v756` wrote the immutable record,
+  and `/rav/datakit-6854-verify-row5608-0036-v757` independently verified it.
+  The semantic-evidence, manual-Parquet, and marker SHA-256 values are
+  `e88c34f359727f5a9a8a858dabddc8580c4d493ceee9eb55dab5ac7b329c0ccd`,
+  `177ebab29188a3edb83c6e00f8a1b501bc9409c889ed58ed7570cc4adaee91d9`,
+  and `9fa5d5240824231ff519ceeb5f34902e777f3c50d4cb75639ed69f130cb3b575`.
+
+- Across the stable 1,579-checkpoint snapshot, all 234 unresolved model
+  outcomes are covered by 181 true-duplicate and 53 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 161,307 pairs, 102,457 false positives, 58,850 true duplicates;
+  - treatment: 39,249 pairs, 20,316 false positives, 18,933 true duplicates;
+  - combined: 200,556 pairs, 122,773 false positives, 77,783 true duplicates.
+
+- The next audit frontiers are p0 `(8, 2,048)`, p1 `(40, 128)`, p2
+  `(72, 3,840)`, and p3 `(105, 0)`. P0 and p2 each have another pending
+  128-pair checkpoint. P1 and p3 continue processing unusually large code
+  documents. All four batch-priority 2-H100 workers remain active.
+
 ### 2026-07-27T00:30:00Z — 199,532 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0025-v748` independently
