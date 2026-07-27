@@ -91,13 +91,6 @@ flowchart TD
     STORE -.-> RS
 ```
 
-`datakit/decon_drop/_combined` scans up to 5,000 documents per source for
-source-local boilerplate and up to 1,000,000 for the cross-source estimate.
-The global set contains eval n-grams found in at least 50 sampled documents
-across at least three sources. Every decontamination mark loads its local set
-and the shared global set. The thresholds live in
-[`decontam/config.py`](decontam/config.py).
-
 ## Testbed samples
 
 Pre-built testbed samples live under `s3://marin-us-east-02a/marin/datakit/`
