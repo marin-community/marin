@@ -16,6 +16,49 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T06:22:40Z — 237,680 pairs verified
+
+- `/rav/rav-datakit-6854-audit-next-checkpoints-0329-v994` independently
+  revalidated p3 decision-file 106 semantic offset 1,536. Its 128 baseline
+  pairs initially contain 57 false positives, 70 true duplicates, and one
+  unresolved outcome. All pairs used direct review, and all 272 judgments and
+  request attempts were valid on their first attempt. The outcome Parquet
+  SHA-256 is
+  `f749c423d9d2136e3f458e895aac388adae517131f4e490b9738bd1690ec5697`.
+- Complete-text inspection resolves row 2,310 as a false positive. The two
+  census records share prose but every household, age, income, sex, and poverty
+  statistic differs; the canonical also contains geography, population,
+  housing, and race facts absent from the member. Deleting the member loses its
+  distinct county facts. The 1,179- and 1,837-character texts have character,
+  line, and word-sequence similarities 0.702918, 0.250000, and 0.591640.
+  Member, canonical, semantic-judgment, and inspection SHA-256 values are
+  `513a29e399fa8eabe2749318ec986e29935c3ab4def5ba07f0770167b7c768b9`,
+  `d518ccfe1a8f436ed6bf9694dc23c1e1911205059efa89fd43ea7ebdbb324535`,
+  `9ef2ee4788a3b91e189db8c2e788d8983ea584698f1c7b2f40fbbf9aa75cb567`,
+  and
+  `c5a1565f83ad088eed5a5edf1b0a060fb5c27b322d60beaa23f01c52f4ed0304`.
+- `/rav/rav-datakit-6854-inspect-row2310-0330-v995` persisted the complete
+  pair and diff. `/rav/rav-datakit-6854-publish-row2310-0331-v996` wrote the
+  immutable false-positive record with manual-Parquet SHA-256
+  `7059ff0988e9c6e3bde449fc54aeea8c02ec1a7d5bd37a286794b33a6dcc0259`
+  and marker SHA-256
+  `c8ef8cc328f082e84b3bab321793ccb223de6fe29b4e6296ebcd05a87f3ceacb`.
+  `/rav/rav-datakit-6854-verify-row2310-0332-v997` independently reread and
+  verified every bound source and output artifact.
+- Replacing the unresolved outcome gives 58 false positives and 70 true
+  duplicates in the checkpoint. Across the stable 1,871-checkpoint snapshot,
+  all 284 unresolved model outcomes are covered by 219 true-duplicate and 65
+  false-positive manual records. The adjusted totals are:
+
+  - baseline: 189,999 pairs, 120,685 false positives, 69,314 true duplicates;
+  - treatment: 47,681 pairs, 24,641 false positives, 23,040 true duplicates;
+  - combined: 237,680 pairs, 145,326 false positives, 92,354 true duplicates.
+
+- The next audit frontiers are p0 `(10, 0)`, p1 `(42, 0)`, p2 `(74, 0)`,
+  and p3 `(106, 1,664)`. The next p3 checkpoint contains 448,499 combined
+  characters and no oversized pair. All four batch-priority 2-H100 workers
+  remain active with zero Kubernetes restarts.
+
 ### 2026-07-27T06:14:36Z — 237,552 pairs verified
 
 - `/rav/rav-datakit-6854-audit-next-checkpoints-0327-v992` independently
