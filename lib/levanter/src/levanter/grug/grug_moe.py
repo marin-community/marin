@@ -61,6 +61,7 @@ from levanter.grug._moe.ep_ring import (
 from levanter.grug._moe.ep_ring_fused import _moe_mlp_ep_ring_fused_local
 from levanter.grug._moe.ep_ring_local_combine import _moe_mlp_ep_ring_local_combine_local
 from levanter.grug._moe.ep_ring_ppermute import _moe_mlp_ep_ring_ppermute_local
+from levanter.grug._moe.ep_ubx import _moe_mlp_ep_ubx_local
 from levanter.grug._moe.local import _moe_mlp_local
 from levanter.grug.sharding import (
     _batch_spec_from_x,
@@ -280,6 +281,8 @@ def moe_mlp(
             shard_local_fn = _moe_mlp_ep_ragged_a2a_local
         elif resolved_implementation == "deepep":
             shard_local_fn = _moe_mlp_ep_deepep_local
+        elif resolved_implementation == "ubx":
+            shard_local_fn = _moe_mlp_ep_ubx_local
         elif resolved_implementation in ("nccl_ep", "nccl_ep_drop"):
             shard_local_fn = None
         else:

@@ -54,12 +54,15 @@ DEFAULT_TOTAL_TOKENS = 1.0e13
 DEFAULT_JAXPP_REVISION = "7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
 DEFAULT_DEEPEP_REVISION = "7febc6e25660af0f54d95dd781ecdcd62265ecca"
 DEFAULT_NCCL_EP_TE_REVISION = "4adad4c218c115cd9af235fb3d4e13ef4cec55a8"
+DEFAULT_NCCL_UBX_REVISION = "db0c814185a0415cc2e23dca387fecb9282de551"
+DEFAULT_NCCL_UBX_SOURCE_ROOT = "/tmp/nccl-ubx-db0c814"
 NCCL_EP_RUNTIME_VERSION = "2.30.7"
 DEEPEP_CUDA_TOOLCHAIN_VERSION = "13.2.78"
 DEEPEP_CUDA_CCCL_VERSION = "13.3.3.4.1"
 DEEPEP_CUDA_RUNTIME_VERSION = "13.2.75"
 JAX_NIGHTLY_INDEX = "https://us-python.pkg.dev/ml-oss-artifacts-published/jax/simple/"
 _NCCL_EP_IMPLEMENTATIONS = ("nccl_ep", "nccl_ep_drop")
+_UBX_IMPLEMENTATIONS = ("ubx",)
 _JAX_NIGHTLY_VERSION_PATTERN = re.compile(r"\d+\.\d+\.\d+\.dev\d{8}")
 
 
@@ -187,6 +190,51 @@ def nccl_ep_setup_scripts(*, overflow_policy: Literal["trap", "drop"]) -> tuple[
                 "  printf 'export NCCL_NVLS_ENABLE=1\\n'",
                 "  printf 'export NVTE_EP_HANDLE_CACHE_SIZE=-1\\n'",
                 "  printf 'export XLA_FLAGS=\"${XLA_FLAGS:-} --xla_gpu_enable_command_buffer=\"\\n'",
+                '} >> "$IRIS_VENV/bin/activate"',
+            ]
+        )
+        + "\n",
+    )
+
+
+def ubx_setup_scripts(*, source_root: str, revision: str) -> tuple[str, ...]:
+    """Build pinned NCCL UB-X and persist the exact runtime before JAX starts."""
+    return (
+        "\n".join(
+            [
+                "set -euxo pipefail",
+                'source "$IRIS_VENV/bin/activate"',
+                'cd "$IRIS_WORKDIR"',
+                "echo 'building NCCL UB-X runtime'",
+                "uv pip install --link-mode copy --reinstall "
+                f"nvidia-cuda-nvcc=={DEEPEP_CUDA_TOOLCHAIN_VERSION} "
+                f"nvidia-nvvm=={DEEPEP_CUDA_TOOLCHAIN_VERSION} "
+                f"nvidia-cuda-cccl=={DEEPEP_CUDA_CCCL_VERSION} "
+                f"nvidia-cuda-runtime=={DEEPEP_CUDA_RUNTIME_VERSION} "
+                f"nvidia-nccl-cu13=={NCCL_EP_RUNTIME_VERSION}",
+                'cuda_bin="$(find "$IRIS_VENV"/lib/python*/site-packages/nvidia/cu*/bin ' '-name nvcc -print -quit)"',
+                'test -n "$cuda_bin" || { echo "nvcc not found after CUDA toolchain install" >&2; exit 1; }',
+                'cuda_root="$(dirname "$(dirname "$cuda_bin")")"',
+                f"rm -rf {source_root!r}",
+                f"git clone --filter=blob:none --no-checkout https://github.com/NVIDIA/nccl.git {source_root!r}",
+                f"git -C {source_root!r} fetch --depth 1 origin {revision!r}",
+                f"git -C {source_root!r} checkout --detach FETCH_HEAD",
+                f"make -C {source_root!r} -j32 src.build "
+                'CUDA_HOME="$cuda_root" CUDA_LIB="$cuda_root/lib" CUDARTLIB=cudart '
+                "NVCC_GENCODE='-gencode=arch=compute_90,code=sm_90'",
+                'wheel_nccl="$(find "$IRIS_VENV"/lib/python*/site-packages/nvidia/nccl/lib '
+                '-name libnccl.so.2 -print -quit)"',
+                'test -n "$wheel_nccl" || { echo "wheel libnccl.so.2 not found" >&2; exit 1; }',
+                'rm -f "$wheel_nccl"',
+                f'ln -s {source_root!r}/build/lib/libnccl.so.2 "$wheel_nccl"',
+                "{",
+                "  printf 'export CUDA_HOME=%q\\n' \"$cuda_root\"",
+                "  printf 'export CUDA_PATH=%q\\n' \"$cuda_root\"",
+                "  printf 'export PATH=%q/bin:$PATH\\n' \"$cuda_root\"",
+                f"  printf 'export NCCL_UBX_SOURCE=%q\\n' {source_root!r}",
+                f"  printf 'export LD_PRELOAD=%q\\n' {source_root!r}/build/lib/libnccl.so.2",
+                f"  printf 'export LD_LIBRARY_PATH=%q/build/lib:%q/lib:${{LD_LIBRARY_PATH:-}}\\n' "
+                f'{source_root!r} "$cuda_root"',
                 '} >> "$IRIS_VENV/bin/activate"',
             ]
         )
@@ -400,6 +448,15 @@ def build_jaxpp_may_checkpoint(*, version: str = "dev") -> ArtifactStep[Levanter
                 f"got MAY_EXPERT_AXIS={expert_axis}, MAY_PROCESSES_PER_TASK={processes_per_task}, "
                 f"MAY_GPUS_PER_REPLICA={gpus_per_replica}"
             )
+    if model.moe_implementation in _UBX_IMPLEMENTATIONS:
+        if pipeline is None or pipeline.implementation != "explicit_mpmd":
+            raise ValueError("UB-X requires PP_IMPLEMENTATION=explicit_mpmd")
+        if expert_axis != GPUS_PER_NODE or gpus_per_replica != GPUS_PER_NODE or processes_per_task != 1:
+            raise ValueError(
+                "UB-X requires one process owning one local H100x8 expert group; "
+                f"got MAY_EXPERT_AXIS={expert_axis}, MAY_GPUS_PER_REPLICA={gpus_per_replica}, "
+                f"MAY_PROCESSES_PER_TASK={processes_per_task}"
+            )
     if (
         pipeline is not None
         and pipeline.stage_layer_counts is not None
@@ -426,6 +483,11 @@ def build_jaxpp_may_checkpoint(*, version: str = "dev") -> ArtifactStep[Levanter
     if model.moe_implementation in _NCCL_EP_IMPLEMENTATIONS:
         overflow_policy = "drop" if model.moe_implementation == "nccl_ep_drop" else "trap"
         post_setup_scripts += nccl_ep_setup_scripts(overflow_policy=overflow_policy)
+    if model.moe_implementation in _UBX_IMPLEMENTATIONS:
+        post_setup_scripts += ubx_setup_scripts(
+            source_root=os.environ.get("NCCL_UBX_SOURCE_ROOT", DEFAULT_NCCL_UBX_SOURCE_ROOT),
+            revision=os.environ.get("NCCL_UBX_REVISION", DEFAULT_NCCL_UBX_REVISION),
+        )
 
     mpmd_dim = 1 if pipeline is None else pipeline.mpmd_dim or pipeline.stages
     global_devices = replicas * gpus_per_replica

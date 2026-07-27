@@ -106,7 +106,7 @@ Options:
   --batch N                 MAY_BATCH (default: 256).
   --seq-len N               MAY_SEQ_LEN (default: 4096).
   --moe-implementation NAME ring, ring_quack_approx, ring_fused, ring_local_combine, ring_ppermute,
-                            ragged_all_to_all, deepep, nccl_ep, nccl_ep_drop, scatter, or sonic
+                            ragged_all_to_all, deepep, nccl_ep, nccl_ep_drop, ubx, scatter, or sonic
                             (default: ring).
   --research-fp8-expert-gemm
                             Use research-only FP8 routed expert GEMMs (default: disabled).
@@ -293,7 +293,7 @@ if [ "$EXPLICIT_MPMD_SCHEDULE_MODE" = input_gradient_first ]; then
 fi
 
 case "$MOE_IMPLEMENTATION" in
-    ring|ring_quack_approx|ring_fused|ring_local_combine|ring_ppermute|ragged_all_to_all|deepep|nccl_ep|nccl_ep_drop|scatter|sonic) ;;
+    ring|ring_quack_approx|ring_fused|ring_local_combine|ring_ppermute|ragged_all_to_all|deepep|nccl_ep|nccl_ep_drop|ubx|scatter|sonic) ;;
     *)
         echo "ERROR: unsupported MoE implementation: $MOE_IMPLEMENTATION" >&2
         exit 1

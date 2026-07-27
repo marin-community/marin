@@ -12,6 +12,7 @@ import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal, cast
 
 import equinox as eqx
@@ -59,6 +60,7 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.model import (
+    GRUG_MOE_EP_CAPACITY_FACTOR,
     GRUG_MOE_NCCL_EP_DROP_CAPACITY_FACTOR,
     Block,
     GrugModelConfig,
@@ -109,6 +111,7 @@ SonicFsdpMaterialization = Literal["per_task", "staged_per_step"]
 ExpertGradientAccumulation = Literal["ordinary", "fused_fp32_data_local"]
 _RESEARCH_FP8_EXPERT_GEMM_SCHEDULES = ("gpipe", "interleaved_gpipe", "std_1f1b")
 _NCCL_EP_IMPLEMENTATIONS = ("nccl_ep", "nccl_ep_drop")
+_UBX_IMPLEMENTATIONS = ("ubx",)
 
 
 def _fp8_pipeline_wire_dtype(dtype: Fp8PipelineWireDtype) -> jnp.dtype:
@@ -360,6 +363,13 @@ class GrugRunConfig:
                 )
             if self.processes_per_task <= 1:
                 raise ValueError("NCCL_EP requires more than one process per task")
+        if self.model.moe_implementation in _UBX_IMPLEMENTATIONS:
+            if pipeline is None or pipeline.implementation != "explicit_mpmd":
+                raise ValueError("UB-X requires the explicit MPMD JaxPP pipeline")
+            if self.processes_per_task != 1:
+                raise ValueError(f"UB-X requires one process per task, got {self.processes_per_task}")
+            if self.trainer.expert_axis_size != 8:
+                raise ValueError(f"UB-X requires one local eight-GPU expert group, got {self.trainer.expert_axis_size}")
         if self.model.research_fp8_expert_gemm is None:
             return
         if pipeline is None or pipeline.implementation != "explicit_mpmd":
@@ -5269,6 +5279,75 @@ def _bootstrap_nccl_ep(config: GrugRunConfig, mesh: Mesh, ep: Any) -> None:
     )
 
 
+def _bootstrap_ubx(config: GrugRunConfig, mesh: Mesh) -> None:
+    pipeline = config.trainer.pipeline
+    if pipeline is None:
+        raise ValueError("UB-X bootstrap requires a pipeline configuration")
+    expert_size = int(mesh.shape["expert"])
+    if expert_size != 8 or jax.local_device_count() != expert_size:
+        raise ValueError(
+            "UB-X requires one process owning eight local expert devices; "
+            f"got expert_size={expert_size} and local_device_count={jax.local_device_count()}"
+        )
+    pipeline_groups = int(mesh.shape[pipeline.stage_axis_name])
+    if jax.process_count() != pipeline_groups:
+        raise ValueError(
+            f"UB-X requires one process per pipeline group, got {jax.process_count()} and {pipeline_groups}"
+        )
+    for axis in ("replica_dcn", "data", "model"):
+        if int(mesh.shape[axis]) != 1:
+            raise ValueError(f"UB-X currently requires mesh axis {axis!r} to have size 1, got {mesh.shape[axis]}")
+    if config.model.num_experts % expert_size:
+        raise ValueError(
+            f"UB-X requires num_experts divisible by expert size, got {config.model.num_experts} and {expert_size}"
+        )
+
+    max_batch_size = max(config.trainer.trainer.batch_schedule.unique_batch_sizes())
+    if max_batch_size % pipeline.microbatches:
+        raise ValueError(
+            f"UB-X max batch size={max_batch_size} must be divisible by microbatches={pipeline.microbatches}"
+        )
+    global_microbatch_tokens = max_batch_size // pipeline.microbatches * config.model.max_seq_len
+    if global_microbatch_tokens % expert_size:
+        raise ValueError(
+            f"UB-X microbatch tokens={global_microbatch_tokens} must be divisible by expert size={expert_size}"
+        )
+    local_tokens = global_microbatch_tokens // expert_size
+    local_experts = config.model.num_experts // expert_size
+    capacity = max(
+        local_experts,
+        math.ceil(
+            GRUG_MOE_EP_CAPACITY_FACTOR * global_microbatch_tokens * config.model.num_experts_per_token / expert_size
+        ),
+    )
+    source_root = os.environ.get("NCCL_UBX_SOURCE")
+    cuda_home = os.environ.get("CUDA_HOME")
+    if not source_root or not cuda_home:
+        raise ValueError("UB-X requires NCCL_UBX_SOURCE and CUDA_HOME from the pinned setup script")
+
+    ubx = importlib.import_module("levanter.kernels.ubx")
+    ubx.ensure_local_runtime(
+        ubx.UbxRuntimeConfig(
+            num_ranks=expert_size,
+            max_tokens_per_rank=capacity,
+            max_local_tokens=local_tokens,
+            hidden_size=config.model.hidden_dim,
+            top_k=config.model.num_experts_per_token,
+            experts_per_rank=local_experts,
+        ),
+        source_root=Path(source_root),
+        cuda_home=Path(cuda_home),
+    )
+    logger.info(
+        "UB-X bootstrapped: groups=%d ep=%d local_tokens=%d capacity=%d hidden=%d",
+        pipeline_groups,
+        expert_size,
+        local_tokens,
+        capacity,
+        config.model.hidden_dim,
+    )
+
+
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
     nccl_ep_modules = _load_nccl_ep_modules() if config.model.moe_implementation in _NCCL_EP_IMPLEMENTATIONS else None
@@ -5299,6 +5378,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             _install_jaxpp_bind_meshes_patch()
             if os.environ.get("GRUG_JAXPP_PATCH_CONST_SHARDINGS", "false").lower() in ("1", "true", "yes", "on"):
                 _install_jaxpp_const_sharding_patch()
+    if config.model.moe_implementation in _UBX_IMPLEMENTATIONS:
+        _bootstrap_ubx(config, mesh)
 
     explicit_mpmd = config.trainer.pipeline is not None and config.trainer.pipeline.implementation == "explicit_mpmd"
     automatic_mpmd = config.trainer.pipeline is not None and config.trainer.pipeline.implementation == "auto"

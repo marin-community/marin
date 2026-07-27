@@ -30,6 +30,7 @@ MoeImplementation: TypeAlias = Literal[
     "ring_ppermute",  # Expert-parallel streamed collective-permute backend.
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
     "deepep",  # Expert-parallel DeepEP intranode dispatch/combine backend.
+    "ubx",  # Expert-parallel NCCL UB-X intranode dispatch/combine backend.
     "nccl_ep",  # Expert-parallel Transformer Engine NCCL_EP dispatch/combine backend.
     "nccl_ep_drop",  # Approximate NCCL_EP backend that drops routes beyond bounded receive capacity.
     "scatter",  # Single-process grouped GMM with scatter-add combine.
@@ -44,6 +45,7 @@ _EP_MOE_IMPLEMENTATIONS = (
     "ring_ppermute",
     "ragged_all_to_all",
     "deepep",
+    "ubx",
     "nccl_ep",
     "nccl_ep_drop",
 )
