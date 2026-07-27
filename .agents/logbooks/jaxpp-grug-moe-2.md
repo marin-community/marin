@@ -914,3 +914,17 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
 - Gate:
   - Require all four ranks to complete lower, compile, first execution, and six finite training steps.
   - A pass promotes only to a matched L8 EP2/data4 ordinary-versus-fused throughput A/B. Exact L24 remains blocked.
+
+### 2026-07-27 03:33 PDT - L4 r7 passes the fused accumulator lifecycle gate
+- Result:
+  - Parent `/dlwh/iris-run-job-20260727-102233`, its child, and all four rank tasks succeeded with exit `0`. Each rank completed in `2m40.94s`; no retry, preemption, failed task, or live resource remains.
+  - Every rank completed lowering, local task compilation, DIME initialization, FP8 inter-stage transfers, fused expert-gradient accumulation, fused expert update, and execution.
+  - Training completed `6/6` batches and `3,145,728` tokens. W&B [r7](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-ep2d4-fusedacc-fp8-l4-e64k4-b128-s4096-p4m4-r7-20260727) is `finished` at `_step=5` and `global_step=5`.
+  - W&B retained finite loss and performance rows for steps 2-5: loss declined `8.816470 -> 8.622681`; step time was `0.297718/0.305104/0.297947/0.296806s`; MFU was `13.5971/13.2679/13.5867/13.6389`.
+  - Mean and p50 MFU were `13.5459` and `13.5971`; final throughput was `1,766,435 tokens/s`. Steps 0-1 completed but W&B retained hook/loading rows instead of loss rows.
+  - There was no OOM, compiler, NCCL, DIME, traceback, or watchdog failure. CUDA VMM fabric-handle fallback and PJRT shutdown messages occurred after successful execution.
+- Interpretation:
+  - The fused FP32 data-local accumulator now has a complete reduced JaxPP lifecycle: once-per-step expert materialization, microbatch-local accumulation, step-boundary synchronization, optimizer update, and repeated state execution all complete.
+  - L4 MFU is a functional-gate metric and is not comparable to the exact L24 target. The decision-relevant next measurement is a matched L8 EP2/data4 A/B.
+- Next action:
+  - Run 20-step ordinary and fused arms at L8, stage split `2,2,2,2`, batch 512, 16 microbatches, and sequence 4096. Promote only if fused materially improves steady-state MFU without a lifecycle regression.
