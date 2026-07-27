@@ -148,6 +148,27 @@ def _scatter_slot_values_to_global_topk(
     )
 
 
+def _reduce_slot_cotangents_to_sources(
+    slot_cotangents_local: Float[Array, "C H"],
+    inverse_map_local: Int[Array, "C 4"],
+    *,
+    tokens_per_rank: int,
+    expert_axis_size: int,
+) -> Float[Array, "T H"]:
+    """Transpose dispatch with an exact source-token scatter and reduce."""
+    global_tokens = tokens_per_rank * expert_axis_size
+    source_token = inverse_map_local[:, 0] * tokens_per_rank + inverse_map_local[:, 1]
+    valid = inverse_map_local[:, 3].astype(jnp.bool_)
+    safe_source_token = jnp.where(valid, source_token, global_tokens)
+    values = jnp.where(valid[:, None], slot_cotangents_local, 0)
+    cotangents_global = (
+        jnp.zeros((global_tokens + 1, slot_cotangents_local.shape[1]), dtype=slot_cotangents_local.dtype)
+        .at[safe_source_token]
+        .add(values)[:global_tokens]
+    )
+    return jax.lax.psum_scatter(cotangents_global, "expert", scatter_dimension=0, tiled=True)
+
+
 def _unsort_topk_values(
     sorted_values_local: Float[Array, "T K"],
     topk_idx_local: Int[Array, "T K"],
@@ -194,25 +215,14 @@ def _ubx_dispatch_bwd(
     output_cotangent: jax.Array,
 ) -> tuple[jax.Array, None, None, None, None, None]:
     inverse_map, topk_idx = residuals
-    even_gates = _accepted_unit_gates(topk_idx[:, ::2], num_experts=num_experts)
-    even_cotangent = combine_push3_bf16(
-        output_cotangent.astype(jnp.bfloat16),
+    del num_experts
+    tokens_per_rank = topk_idx.shape[0]
+    expert_axis_size = jax.sharding.get_abstract_mesh().shape["expert"]
+    x_cotangent = _reduce_slot_cotangents_to_sources(
+        output_cotangent,
         inverse_map,
-        topk_idx,
-        even_gates,
-    )
-    if topk_idx.shape[1] == 1:
-        return even_cotangent, None, None, None, None, None
-
-    odd_gates = _accepted_unit_gates(topk_idx[:, 1::2], num_experts=num_experts)
-    odd_cotangent = combine_push3_bf16(
-        output_cotangent.astype(jnp.bfloat16),
-        inverse_map,
-        topk_idx,
-        odd_gates,
-    )
-    x_cotangent = (even_cotangent.astype(jnp.float32) + odd_cotangent.astype(jnp.float32)).astype(
-        output_cotangent.dtype
+        tokens_per_rank=tokens_per_rank,
+        expert_axis_size=expert_axis_size,
     )
     return x_cotangent, None, None, None, None, None
 
