@@ -87,6 +87,8 @@ from fray.types import ResourceConfig
 from levanter.tokenizers import TokenizerBackend
 from marin.datakit.decon import (
     DeconAttributes,
+    DropSetSource,
+    all_source_drop_sets_step,
     build_eval_bloom_step,
     decon_step,
 )
@@ -119,6 +121,14 @@ from experiments.datakit.cluster.domain.v0.sample import sample_centroid_inputs
 from experiments.datakit.cluster.domain.v0.train import train_centroids
 from experiments.datakit.cluster.quality.fast_transformer.artifact import QualityScores
 from experiments.datakit.cluster.quality.fast_transformer.score import score_normalized
+from experiments.datakit.decontam.config import (
+    GLOBAL_DF_COMMON_MIN_ABS,
+    GLOBAL_DF_COMMON_MIN_SOURCES,
+    GLOBAL_DF_SAMPLE_DOCS,
+    SOURCE_DF_COMMON_FRAC,
+    SOURCE_DF_COMMON_MIN_ABS,
+    SOURCE_DF_SAMPLE_DOCS,
+)
 from experiments.datakit.decontam.prepare_eval_corpus import DECON_EXCLUDED_EVAL_TASKS
 from experiments.datakit.embeddings.luxical.pipeline import (
     LUXICAL_REPO,
@@ -530,6 +540,29 @@ def reference_datakit_steps(
         false_positive_rate=FALSE_POSITIVE_RATE,
         exclude_eval_dirs=DECON_EXCLUDED_EVAL_TASKS,
     )
+    # Count eval-ngram document frequency across normalized sources before
+    # marking. Each decon consumes its source-local set and the global set.
+    decon_drop_sets = all_source_drop_sets_step(
+        name="datakit/decon_drop/_combined",
+        sources=[
+            DropSetSource(
+                name=source_name,
+                data_path=f"{normalize_step.output_path.rstrip('/')}/outputs/main",
+                dependency=normalize_step,
+            )
+            for source_name, normalize_step in sources.items()
+        ],
+        prebuilt_bloom=decon_bloom_step,
+        ngram_length=NGRAM_LENGTH,
+        sample_docs=SOURCE_DF_SAMPLE_DOCS,
+        common_frac=SOURCE_DF_COMMON_FRAC,
+        common_min_abs=SOURCE_DF_COMMON_MIN_ABS,
+        global_sample_docs=GLOBAL_DF_SAMPLE_DOCS,
+        global_common_min_abs=GLOBAL_DF_COMMON_MIN_ABS,
+        global_common_min_sources=GLOBAL_DF_COMMON_MIN_SOURCES,
+        worker_resources=scale.pool.worker,
+        max_workers=scale.pool.n_workers,
+    )
 
     # ---- Per-source steps ------------------------------------------------------
     per_source: dict[str, dict[str, StepSpec]] = {}
@@ -597,6 +630,8 @@ def reference_datakit_steps(
             name=f"datakit/decontam/{name}",
             normalized=normalize_step,
             prebuilt_bloom=decon_bloom_step,
+            drop_sets=decon_drop_sets,
+            drop_set_source=name,
             ngram_length=NGRAM_LENGTH,
             overlap_threshold=OVERLAP_THRESHOLD,
             estimated_doc_count=ESTIMATED_DOC_COUNT,
@@ -754,7 +789,7 @@ def reference_datakit_steps(
         ),
     ]
 
-    all_steps: list[StepSpec] = [decon_bloom_step]
+    all_steps: list[StepSpec] = [decon_bloom_step, decon_drop_sets]
     if isinstance(domain_centroids, StepSpec):
         all_steps.append(domain_centroids)
     for s in per_source.values():
