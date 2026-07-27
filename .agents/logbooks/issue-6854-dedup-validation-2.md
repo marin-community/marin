@@ -16,6 +16,48 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T06:42:20Z — fixed stratified sample snapshot verified
+
+- A deterministic bottom-hash sample now separates inference from the
+  source-ordered rolling frontier. Seed `issue6854-semantic-stratified-v1`
+  selects 8,192 semantic candidates independently from each variant. A
+  coverage supplement selects one bottom-hash candidate from each
+  variant/source/cross-source/evidence/word-Jaccard/length/truncation stratum.
+  The immutable manifest has 25,333 unique rows: 16,384 primary selections,
+  12,271 coverage selections, and 3,322 rows selected by both rules. It spans
+  5,547 semantic checkpoints.
+- `/rav/rav-datakit-6854-stratified-audit-0313-v978` scanned all 1,162,846
+  dropped candidates and wrote the manifest before a too-broad manual-marker
+  glob failed. The corrected
+  `/rav/rav-datakit-6854-stratified-audit-retry-0328-v993` reused the immutable
+  manifest and hash-verified every available semantic outcome and applicable
+  manual override. It persisted snapshot `20260727-0554` with:
+
+  - baseline: 2,638 resolved, 5,554 pending, no unresolved; 1,684 false
+    positives and 954 true duplicates; observed false-positive fraction
+    0.638362 with Wilson 95% interval `[0.619838, 0.656484]`;
+  - treatment: 2,547 resolved, 5,643 pending, two unresolved; 1,294 false
+    positives and 1,253 true duplicates; observed false-positive fraction
+    0.508049 with Wilson 95% interval `[0.488636, 0.527437]`.
+
+- The currently observed intervals do not overlap, with baseline 13.03
+  percentage points worse. This is provisional evidence, not a final
+  population estimate: the completed portion is subject to source-ordered
+  nonresponse until all fixed-sample outcomes finish. The sample covers 73
+  baseline sources and 2,015 strata, and 52 treatment sources and 1,307
+  strata. Baseline occurrence categories are 6,234 baseline-only and 1,958
+  shared; treatment categories are 616 treatment-only and 7,576 shared.
+- `/rav/rav-datakit-6854-verify-stratified-0342-v1007` independently reread
+  all three artifacts, recomputed manifest/snapshot identities and stable
+  fields, and reproduced every count and fraction. Manifest, snapshot, and
+  summary SHA-256 values are
+  `9a5a6b0b96daa00a3ee16efea2cb998064e516ce096738133d1ffcc1327fc4e1`,
+  `a3c5965aaac54e8a71ed533a6c00fd74c49751f511aa598dc9de1dbc4e8d7b4b`,
+  and
+  `2f19dac9d60ff96a2f3e80d24be38dc75798405c6cd5412d4e5357147a01c296`.
+  The artifacts are under
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-stratified-audit-100b-20260727-v1`.
+
 ### 2026-07-27T06:37:00Z — 239,088 pairs verified
 
 - `/rav/rav-datakit-6854-audit-next-checkpoints-0340-v1005` independently
