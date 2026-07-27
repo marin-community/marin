@@ -1304,3 +1304,34 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - The narrow outline is locally numerically admissible and measurably reduces the six-block compiler unit. The first remote launch tested the wrong JAX runtime.
 - Next action:
   - Rerun the three-step L24/b512/m16 compile gate from `bd153fd5ee` with explicit `--jax-nightly-version 0.11.1.dev20260725`. Only a successful four-rank compile/execute gate justifies the exact L24/b8192/m256 run with the same runtime.
+
+### 2026-07-27 07:56 PDT - Defer outline construction across the host/worker JAX boundary
+- Failed launch:
+  - Parent `/dlwh/iris-run-job-20260727-144755` received `--jax-nightly-version 0.11.1.dev20260725` but failed before submitting a GPU child. The nightly setup applies only inside the eventual worker; the Iris host imports the launcher and model under locked JAX `0.10.1`.
+  - The host therefore reproduced `AttributeError: module 'jax' has no attribute 'Inline'` at the module-level decorator. It produced no ranks, compiler phase, W&B run, step, or metric. Iris reports exit `1` after `30.93s`, and cleanup finds no child, pod, Kubernetes job, or workload.
+- Fix:
+  - Commit `87917d0469` keeps the raw weight-cotangent function at module scope and caches the `jax.jit(..., inline=jax.Inline.XLA_LATE)` wrapper only when the worker first traces it.
+  - An isolated import using cached JAX/JAXlib `0.10.1` succeeds and reports zero cache hits or misses, proving that the host does not resolve `jax.Inline`.
+  - A JAX `0.11.0` lowering probe with 12 calls reports 12 `call` sites to one private function, each carrying `inlineable = "xla_late"`. Deferred construction therefore preserves the compiler boundary.
+  - `uv run pytest -q tests/test_grug_moe_accumulating_api.py` reports `2 passed`; changed-file pre-commit including Pyrefly passes.
+- Interpretation:
+  - Both failed parents were launcher-version mismatches before allocation, not evidence about the six-layer GPU compiler. The host and worker have intentionally different JAX versions, so worker-only compiler APIs must not be resolved at launcher import time.
+- Next action:
+  - Run a fresh three-step L24/b512/m16 gate from `87917d0469` with worker JAX `0.11.1.dev20260725`. Require all four ranks to reach compile and execution before the exact b8192/m256 launch.
+
+### 2026-07-27 08:12 PDT - Nightly outline gate reaches six-layer compilation but exits in thunk initialization
+- Snapshot:
+  - Parent `/dlwh/iris-run-job-20260727-145536` and its four-rank child ran from clean commit `87917d0469` with worker JAX/JAXlib `0.11.1.dev20260725`, JaxPP `7091a9b5ce02`, and NCCL `2.30.7`.
+  - Config was L24/d2560/e64/top-k4/sequence4096, batch512/m16, split `6,6,6,6`, expert2/data4, explicit `std_1f1b`, FP8 wire, fused FP32 data-local expert gradients, CuTe FA4, and Triton grouped GEMM.
+- Result:
+  - The deferred wrapper cleared host import. All four ranks installed the intended nightly and initialized the distributed job.
+  - Attempt 0 reached real six-layer compilation. Ranks 0/1 compiled stage 0/1 forward tasks. Rank 2 reached `stage2_backward_accumulating`. Rank 3 compiled `stage3_loss_backward_accumulating` in about `54s`, compiled its backward-wire pack, and began later reusable tasks.
+  - Rank 3 then reported a device rendezvous stuck at `thunk initialization completion for device ordinal 0` and exited `139`. There was no Python exception, OOM, or training step.
+  - Attempt 1 was not a valid retry: rank 1 reused the attempt-0 coordinator `10.168.192.17:8476`, while ranks 0/2/3 used `10.168.196.113:8476`. All four stacks remained in `jax.distributed.initialize()`.
+  - The parent was stopped. Parent and child are terminal `killed`; rank 3 records exit `139`, failures=`1`, and preemptions=`4`. No live descendant remains.
+  - [W&B](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-ep2d4-explicitbwd-fp8-l24-e64k4-b512-s4096-p4m16-outline-compile-r3-20260727) has zero rows and remains stale `running`.
+- Interpretation:
+  - The outline reaches farther than the old rank-3 crash because the stage-3 loss backward completes. This run does not prove that worker code is executable: it fails around DIME/device thunk initialization under the JAX nightly and NCCL `2.30.7`.
+  - The nightly was needed only to work around the original module-level `jax.Inline` reference. Commit `87917d0469` removes that host constraint, and locked worker JAX `0.11.0` already supports `XLA_LATE`.
+- Next action:
+  - Run one stable-worker control from `87917d0469`, omitting the nightly flag so workers retain JAX/JAXlib `0.11.0` and NCCL `2.28.9`. Only stable four-rank execution justifies the exact b8192/m256 run.
