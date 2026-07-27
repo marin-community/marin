@@ -35,10 +35,18 @@ def _add_cuda_toolchain(site_packages: Path, *, cuda_major: str, with_ptxas: boo
         (libdevice / "libdevice.10.bc").write_bytes(b"BC\xc0\xde")
 
 
+def _add_cufile_library(site_packages: Path) -> Path:
+    cufile = site_packages / "nvidia" / "cufile" / "lib"
+    cufile.mkdir(parents=True)
+    (cufile / "libcufile.so.0").write_bytes(b"cufile")
+    return cufile
+
+
 def _make_venv(tmp_path: Path, *, cuda_major: str, with_ptxas: bool, with_libdevice: bool) -> Path:
     """Create a fake venv tree mirroring what jax[cuda*] installs."""
     venv = tmp_path / "venv"
     (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "activate").write_text("")
     site_packages = venv / "lib" / "python3.12" / "site-packages"
     _add_cuda_toolchain(
         site_packages,
@@ -127,6 +135,24 @@ def test_noop_when_toolchain_absent(tmp_path):
     assert not (venv / "bin" / "ptxas").exists()
     assert not (workdir / "libdevice.10.bc").exists()
     assert not (workdir / "cuda_sdk_lib").exists()
+
+
+def test_exposes_cufile_library_to_gpu_command(tmp_path):
+    venv = _make_venv(tmp_path, cuda_major="cu13", with_ptxas=True, with_libdevice=True)
+    cufile = _add_cufile_library(_site_packages(venv))
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+
+    _run_setup(venv, workdir)
+    result = subprocess.run(
+        ["bash", "-c", f'source "{venv}/bin/activate"; printf %s "$LD_LIBRARY_PATH"'],
+        env={"LD_LIBRARY_PATH": "/existing", "PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.stdout.split(":") == [str(cufile), "/existing"]
 
 
 def test_noop_when_ptxas_missing(tmp_path):

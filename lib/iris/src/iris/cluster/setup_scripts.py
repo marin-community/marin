@@ -136,11 +136,18 @@ def cuda_toolchain_setup_script() -> str:
     Appended to a GPU job's setup so Mosaic GPU kernels compile and JAX sees the
     CUDA 13 cuDNN wheel after mixed CUDA package installs. It puts the
     ``jax[cuda13]`` toolchain (``ptxas``/``nvlink``) on ``PATH``, stages
-    ``libdevice.10.bc`` where XLA looks, and restores CUDA 13 cuDNN library
-    precedence when that package is installed. A no-op when the venv carries no
-    CUDA toolchain.
+    ``libdevice.10.bc`` where XLA looks, exposes the PyTorch cuFile runtime, and
+    restores CUDA 13 cuDNN library precedence when that package is installed.
     """
     return rf"""set -e
+_cufile_lib=""
+for _d in "$IRIS_VENV"/lib/python*/site-packages/nvidia/cufile/lib; do
+  if [ -f "$_d/libcufile.so.0" ]; then _cufile_lib="$_d"; break; fi
+done
+if [ -n "$_cufile_lib" ]; then
+  echo 'exposing cuFile runtime'
+  printf 'export LD_LIBRARY_PATH=%q:${{LD_LIBRARY_PATH:-}}\n' "$_cufile_lib" >> "$IRIS_VENV/bin/activate"
+fi
 cuda_bin=""
 for _d in "$IRIS_VENV"/lib/python*/site-packages/nvidia/cu*/bin; do
   if [ -x "$_d/ptxas" ]; then cuda_bin="$_d"; break; fi
