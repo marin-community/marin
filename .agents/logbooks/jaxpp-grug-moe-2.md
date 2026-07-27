@@ -2052,3 +2052,46 @@ bash experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit \
 - Decision:
   - Admit one fresh exact batch8192/m256 run with task-only precompile enabled. Require all ten steps and compare
     steps 2-9 against the exact Ring baseline `18.2583` MFU and the strict `>20` target.
+
+### 2026-07-27 13:48 PDT - Exact UB-X improves Ring by 9% and narrowly misses 20 MFU
+- Snapshot:
+  - Parent `/dlwh/iris-run-job-20260727-202545` and child
+    `/dlwh/iris-run-job-20260727-202545/grug-train-jaxpp-rno2a-ubx-ordinary-bf16-l24-e64k4-b8192-s4096-p4m256-exact-precompile-r2-20260727`
+    ran clean commit `4469a7830d`.
+  - The exact target was L24/d2560/e64/top-k4/sequence4096, batch8192/m256, split `6,6,6,6`, EP8,
+    explicit `std_1f1b`, ordinary expert gradients, BF16 pipeline wire, UB-X, CuTe FA4, Triton block-k
+    32/eight warps, `save_moe`, XLA loss, XLA fraction `0.70`, and task-only local precompile.
+- Result:
+  - Stage 0 precompiled `1026` tasks; stages 1-3 precompiled `1025` each. All ranks crossed the barrier and
+    completed `10/10` steps without the XLA `1/8` rendezvous, deleted arrays, DIME errors, OOM, traceback,
+    retry, failure, or preemption.
+  - [W&B](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ubx-ordinary-bf16-l24-e64k4-b8192-s4096-p4m256-exact-precompile-r2-20260727)
+    is `finished`. Steps 2-9 had:
+
+| Metric | Mean | P50 | P90 |
+| --- | ---: | ---: | ---: |
+| MFU | `19.8996` | `19.8312` | `20.2171` |
+| Duration | `74.7799s` | `75.0232s` | `75.8008s` |
+| Throughput | `448,797.5 tok/s` | `447,254.1 tok/s` | `455,957.1 tok/s` |
+
+  - All eight durable losses were finite and declined from `6.7062` to `3.1967`. The first two warmup losses
+    were not retained by logs or W&B.
+  - Parent, child, and all four ranks succeeded with exit `0`; failures, preemptions, and retries were zero.
+    Iris did not retain peak-memory telemetry, and no live resource remains.
+- Comparison:
+  - Versus the exact ordinary-Ring baseline, mean MFU improved `8.99%` from `18.2583`, mean duration improved
+    `7.72%` from `81.037785s`, and mean throughput improved `8.39%` from `414,059.1 tok/s`.
+  - The mean misses the strict `>20` objective by `0.1004` MFU, or `0.50%`. P90 exceeds 20, but the mean is
+    the fixed success metric and this run does not satisfy it.
+- Interpretation:
+  - UB-X is a validated end-to-end performance improvement at the target shape, not merely a transport
+    microbenchmark result.
+  - The remaining gap is small enough that an exact-shape profile is decision-relevant. Blindly increasing
+    batch or changing schedule before attributing the remaining `0.50%` would not be justified.
+  - The numerical policy remains exact routes/counts/drops and relative-L2 `<=0.002` for output, loss, and
+    every floating gradient leaf.
+- Next action:
+  - Capture a two-step exact-shape XPlane profile after warmup, upload the profiler artifact, and compare its
+    compute/communication/stall breakdown with the existing Ring profile.
+  - Promote only a low-risk change whose projected improvement exceeds the remaining `0.50%`; then rerun the
+    exact throughput gate.
