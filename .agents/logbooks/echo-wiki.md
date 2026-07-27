@@ -59,3 +59,13 @@ author: user
 - Result: The advisory review reported 11 findings. Search configuration, HNSW setup, RRF SQL generation, development proxy origin, page size, colors, and SPA serving were centralized. Activity, work-log, and wiki routes remain in one direct FastAPI module because they share the database/model/IAP boundary and do not have separate lifecycle state. Ten API tests, strict Vue type/build checks, Pyrefly, npm audit, the container build, the SPA smoke, and the refactored pgvector probe pass.
 - Interpretation: The review follow-ups reduced drift without introducing router and dependency layers for small route groups. The exact and paraphrase rankings are unchanged after the SQL refactor.
 - Next action: Commit the follow-ups, push, open the PR, and run the production migration/deploy when credentials permit.
+
+### 2026-07-27 18:14 UTC - Production preview access check
+
+- Hypothesis: The session identity may be able to preview and deploy the existing `marin-echo` Pulumi stack.
+- Commit Hash: `999a9cf45`.
+- Command: Pulumi CLI 3.247.0 from a temporary directory; `pulumi login gs://marin-iac-state`; `pulumi stack select marin-echo --non-interactive`.
+- Config: Production `marin-echo` stack with the GCP KMS secrets provider declared in `Pulumi.marin-echo.yaml`.
+- Result: GCS backend login succeeded. Stack selection failed because `loom-vm` lacks `cloudkms.cryptoKeyVersions.useToDecrypt` on `projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key`. No preview or update ran, and no production resource changed.
+- Interpretation: Production migration, API restart, and live-corpus ranking probes require an operator identity with the existing Echo deploy permissions.
+- Next action: Open the PR with the local pgvector evidence and production-access caveat.
