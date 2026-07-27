@@ -1901,3 +1901,25 @@ bash experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit \
   - L24 remains blocked until the unchanged reduced graph compiles, executes eight finite steps, and reports W&B throughput.
 - Next action:
   - Relaunch the exact reduced gate from `8114f47cc1` with a fresh R3 run identity and dedicated babysitter.
+
+### 2026-07-27 12:17 PDT - R3 initializes UB-X and localizes effectful remat failure
+- Snapshot:
+  - Parent `/dlwh/iris-run-job-20260727-190801` ran the unchanged reduced gate from `dce93ea0dd`.
+  - Fix snapshot `f6dd2108f5` (`[grug] Exclude UB-X FFI from block remat`).
+- Result:
+  - All four ranks built NCCL `2.30.7`, initialized JAX, and initialized the UB-X runtime with CUDA `13.2`.
+  - The FP32 combine-weight contract passed. R3 advanced beyond R2 and failed during JaxPP lowering at the enclosing block checkpoint:
+    `NotImplementedError: Effects not supported in partial-eval of checkpoint/remat: [FfiEffect()]`.
+  - The failing boundary was `eqx.filter_checkpoint(block, ...)` in `_run_block_with_remat`. XLA compile and execution never started.
+  - [R3 W&B](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ubx-vjp-l8-e64k4-b32-s4096-p4m4-r3-20260727) finished with zero history rows. No loss, step, or MFU was produced.
+  - The child is terminal `killed`, the parent is terminal `failed`, and no live resource remains.
+- Fix and validation:
+  - The model already excludes DeepEP's effectful FFI MoE from whole-block remat: it checkpoints only attention and executes MoE outside the remat boundary.
+  - UB-X now shares that policy at both `TransformerPipelineStage.run_block` and `Transformer.block_range`; ordinary Ring remains on whole-block remat.
+  - The parameterized wiring regression covers Ring, DeepEP, and UB-X. Together with the FP32 route/bootstrap regression, `5 passed`.
+  - `./infra/pre-commit.py --changed-files --fix` passed, including Pyrefly.
+- Interpretation:
+  - R3 is an integration failure in JAX remat effect handling, not a UB-X runtime, numerical, compiler, or memory result.
+  - L24 remains blocked until the exact reduced graph reaches compile and eight finite executions.
+- Next action:
+  - Relaunch the exact reduced gate from `f6dd2108f5` with fresh R4 identity and a dedicated babysitter.
