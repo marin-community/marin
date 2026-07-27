@@ -616,6 +616,4 @@ Fixed-chain W&B runs:
 Machine-readable results:
 
 - [final result JSON](assets/nested-model-training-final-results.json)
-- [final timing CSV](assets/nested-model-training-final-summary.csv)
 - [fixed-chain result JSON](assets/nested-model-training-fixed-results.json)
-- [fixed-chain timing CSV](assets/nested-model-training-fixed-summary.csv)
