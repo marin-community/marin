@@ -795,3 +795,19 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - Require all four ranks to complete setup, lower, compile, and six finite training steps.
   - Reject compiler, VMA, donation, accumulator synchronization, optimizer-tree, OOM, or cross-rank lifecycle failure.
   - Do not infer target throughput from L4. A pass promotes only to a matched L8 EP2/data4 ordinary-versus-fused A/B.
+
+### 2026-07-27 02:17 PDT - L4 r1 rejects expert-axis scalar slice
+- Result:
+  - Parent `/dlwh/iris-run-job-20260727-090740` and its child are terminal killed with no live resource.
+  - All four ranks completed setup and entered `explicit_mpmd_train_step.lower`; none reached compile or execute.
+  - Every rank failed in `expert_materialization_completion_token` with `ShardingTypeError: slicing on sharded dims where out dim (1) is not divisible by mesh axes (2) with spec (expert)`.
+  - The token indexed expert `0` from W13/W2 before reduction. This collapsed the size-2 expert-sharded dimension to size 1.
+  - Iris started an automatic retry. The babysitter stopped only this parent and child; later connection errors are shutdown noise.
+  - W&B [jaxpp-rno2a-ring-ep2d4-fusedacc-fp8-l4-e64k4-b128-s4096-p4m4-r1-20260727](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-ep2d4-fusedacc-fp8-l4-e64k4-b128-s4096-p4m4-r1-20260727) is finished with config metadata and no training metrics.
+- Fix:
+  - Commit `b881d9035273c4bc456a318be72bd0115e70883e` changes each dependency-token slice from expert index `0` to `[:, 0, 0]`, preserving the expert dimension until `jnp.sum`.
+  - Focused explicit-stage/config/wire tests report `57 passed`; changed-file precommit including Pyrefly passes.
+- Interpretation:
+  - This is a deterministic sharding-contract bug in the new materialization dependency token. There is no evidence yet about compilation, VMA, donation, synchronization, optimizer state, memory, or throughput.
+- Next action:
+  - Relaunch the unchanged L4 gate as r2 from `b881d90352`. Require terminal six-step success before L8.
