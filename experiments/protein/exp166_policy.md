@@ -33,12 +33,12 @@ execution:
   # It is scoped to exp166 alone; concurrent experiments are accounted separately.
   max_inflight_chips: 8192
   observation_interval: 15m
+  # One clock: hours since a regional run's step last advanced in W&B. A run that
+  # has never produced a step is stalled since its dispatch was submitted.
   recovery:
-    idle_reslice_timeout: 3h
-    startup_relocation_timeout: 1h
-    same_target_restart_timeout: 6h
-    same_region_relocation_timeout: 24h
-    cross_region_restart_timeout: 96h
+    restart_after: 3h    # same region, same slice; resumes from the regional checkpoint
+    reslice_after: 12h   # same region, different slice
+    relocate_after: 4d   # different region, restarts at step 0
 ```
 
 The `TRIALS` mapping in the sweep module is the source of truth for the twelve
@@ -265,90 +265,60 @@ Submitted, running, and retrying dispatches all count toward
 observe the old dispatch as terminal before counting the replacement as
 available capacity.
 
-## Monitoring and Liveness
+## Monitoring
 
-**W&B run state is the favored liveness signal.** `state=running` means the
-regional run is training and is the only default basis for calling it active.
-`crashed`, `failed`, and `finished` are not active states. Investigate and
-recover `crashed` or `failed`; do not relabel a crash as a transient flap
-without evidence.
+Two signals, each used for exactly one thing.
 
-Iris parent and child `running` states are scheduling gates, not proof that
-training started. Only the child job's individual tasks running as a complete
-coscheduled gang provide meaningful Iris-side startup evidence. Use
-`iris job summary` to drill from parent to child to tasks when a specific run
-needs deeper debugging. Favor W&B over routinely substituting this lower-level
-view.
+**Iris is a gate, nothing more.** A dispatch is either `running` — training
+*could* be happening — or terminal, meaning it is not and never will be.
+Terminal dispatches get replaced. Nothing else about Iris is actionable: not
+preemption counts, not task ages, not parent/child detail. Iris `running` is
+never evidence that training is happening, and no Iris state ever justifies
+leaving a stalled run alone. Never reason about whether Iris "will eventually"
+reschedule something. That is not observable from outside, and it is sometimes
+false forever.
 
-If W&B is temporarily unreachable, record liveness as `unknown`; do not infer
-training solely from Iris. If W&B says `running` but step and throughput have
-not advanced, investigate logs, gang task state, and checkpoint/evaluation
-activity before acting. Never apply an idle-startup timeout automatically to a
-run that W&B still reports as training.
+**W&B is the truth.** A regional run is training if and only if its W&B state is
+`running` *and* its step is advancing. Anything else is stalled, including a
+`running` run whose step is frozen.
 
-At every observation interval:
+At every observation interval record, for every regional run, W&B state, step,
+objective and throughput, plus the Iris gate state of every nonterminal
+dispatch. Heartbeats report both placement spans (chips/regions/slices submitted
+to Iris, and chips/regions/slices W&B-running), trials complete/running/pending,
+races unresolved, median tokens/second by active target, and every stall with
+its escalation. `scratch/exp166_heartbeat.py` renders exactly this set; use it
+rather than assembling the report by hand.
 
-- refresh W&B state, latest step, objective values, throughput, and timestamp;
-- refresh Iris parent/child status for every nonterminal dispatch;
-- verify the one-dispatch-per-`(trial_id, region)` invariant;
-- identify newly completed trials, siblings to stop only after a winner,
-  recovery deadlines, and chip budget;
-- transactionally persist observations before submitting or stopping work.
+## Stall Escalation
 
-Heartbeats must report two placement spans:
+One clock governs all recovery: **hours since a regional run's step last
+advanced.** A run that has never produced a step is stalled since its dispatch
+was submitted, so the same clock covers a job that died and one that never
+started.
 
-1. chips, regions, and slices **submitted to Iris in any nonterminal state**;
-2. chips, regions, and slices **running per W&B** (`state=running`).
+Cause is irrelevant. Preemption, an Iris hang, and absent capacity are
+indistinguishable from outside and escalate identically. Do not diagnose, and do
+not wait on a theory about which one it is.
 
-Also report logical trials complete/running/pending, regional races unresolved,
-median tokens/second by active target, attempts awaiting recovery, and the next
-recovery deadline. Never label all Iris-running parents as active training.
+| stall exceeds | action |
+|---|---|
+| `restart_after` | resubmit on the same slice and region |
+| `reslice_after` | resubmit in the same region on a different slice |
+| `relocate_after` | abandon the region; re-arm the trial in a different one |
 
-`scratch/exp166_heartbeat.py` renders exactly this set and persists the
-observations; use it rather than assembling the report ad hoc, which drops
-fields.
+Every replacement stops the old Iris job and submits a new uniquely-named one;
+there is no in-place resubmit. Same-region replacements resume from the regional
+checkpoint, so a restart costs at most one `save_interval`. A relocation starts
+over at step 0 from the trial's declared initialization and never copies a
+checkpoint — region outages run hours to days but rarely longer, which is why
+`relocate_after` is measured in days.
 
-## Failure Recovery and Resubmission
-
-TRC/TPU capacity is preemptible and long no-progress periods are expected.
-Recovery changes dispatches, not logical trial identity.
-
-- **Idle reslice:** if a dispatch has been submitted but W&B is not `running`
-  for more than `idle_reslice_timeout`, stop it and submit a uniquely named
-  replacement on a different eligible slice/region. Never idle-reslice a run
-  actively training according to W&B.
-- **Startup relocation:** if Iris acquired a gang but training did not reach
-  W&B `running` within `startup_relocation_timeout`, inspect startup logs and
-  relocate unless a concrete, bounded initialization step is progressing.
-- **Same-target restart:** a stall-based retry on the same slice/region uses a
-  new Iris job name and follows `same_target_restart_timeout`.
-- **Same-region relocation:** after `same_region_relocation_timeout` without
-  material progress, stop the old job and try another eligible slice in the
-  same region, preserving the regional run/checkpoint identity.
-- **Cross-region restart:** after `cross_region_restart_timeout`, or when the
-  regional pool is demonstrably exhausted, replace or re-arm a competitor in a
-  different region that the trial is eligible for. It receives that region's
-  W&B/checkpoint identity and **starts over at step 0** from the logical trial's
-  declared initialization. It never inherits the old region's progress, and no
-  checkpoint is copied to make the move cheaper.
-- **Terminal failure:** retry immediately when the failure is transient and the
-  next action is clear; timeout thresholds do not require waiting after a
-  terminal state.
-
-There is no in-place Iris resubmit. Every restart or relocation stops the old
-Iris job and submits a new uniquely named job. Same-region attempts resume from
-the regional checkpoint. Cross-region attempts do not inherit exp166 progress.
-
-A SIGSEGV on a multi-host slice is treated as a preempted gang cosibling:
-retry in place rather than diagnosing it as a code fault, absent a specific
-reason. Escalate instead of blindly retrying when the crash is reproducible at
-the same step, appears on a single-host job, carries a deterministic application
-stack, or is accompanied by evidence of a data/configuration fault.
-
-Do not classify OOMs, tokenizer/data-contract errors, invalid topology errors,
-or deterministic Python/JAX exceptions as capacity failures. Diagnose them
-before resubmission. Repeated failures must remain visible in the ledger even
-when a later attempt succeeds.
+A terminal Iris dispatch is replaced immediately rather than waiting out the
+clock. The one case that is not capacity: a dispatch failing the same way on its
+first attempt in more than one region is a code or data fault — stop and
+diagnose instead of escalating. Record every action in `events` with the stall
+that triggered it, and never delete superseded attempts.
 
 ## Operator Guardrails
 
