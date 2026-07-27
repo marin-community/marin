@@ -811,3 +811,13 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - This is a deterministic sharding-contract bug in the new materialization dependency token. There is no evidence yet about compilation, VMA, donation, synchronization, optimizer state, memory, or throughput.
 - Next action:
   - Relaunch the unchanged L4 gate as r2 from `b881d90352`. Require terminal six-step success before L8.
+
+### 2026-07-27 02:18 PDT - Launch L4 lifecycle gate r2
+- Command: unchanged from r1 except run ID `jaxpp-rno2a-ring-ep2d4-fusedacc-fp8-l4-e64k4-b128-s4096-p4m4-r2-20260727`.
+- Code:
+  - Functional fix `b881d9035273c4bc456a318be72bd0115e70883e`.
+  - Launch snapshot `72724c139e3cf560e2cff3b8c50038db590c7052`.
+- Jobs:
+  - Parent `/dlwh/iris-run-job-20260727-091630`.
+  - Babysitter `019fa2dc-c146-7c10-b182-7c1de68dc32b`.
+- Gate: unchanged six-step, four-rank lower/compile/execute requirement. L8 remains blocked until terminal success.
