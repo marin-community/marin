@@ -16,6 +16,152 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T01:29:00Z — 204,012 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0051-v772` independently
+  revalidated 17 checkpoints containing 2,176 pairs. The model labeled 1,390
+  false positives and 781 true duplicates and left five outcomes unresolved.
+  Thirty-seven pairs used chunked review and 2,139 used direct review. The
+  audit counted 7,172 request attempts: 7,163 valid and nine invalid JSON
+  responses. Three judgments required retries. The checkpoints and outcome
+  Parquet SHA-256 values are:
+
+  - p0 decision-file 8 offsets 2,560 through 3,200:
+    `9e84abe4f60bcbaa5fc5f04a7eb0067c28f968cb350188f359753fd41d2b0ef3`,
+    `e44233384cf098e8277498292c4d89a1dc519b67829bbc78a172ae118d23bb2d`,
+    `e063ac91b8393a893cfbf3a3957d78f230e48718a58141ff8bfeac09bfc3094d`,
+    `753c82a112312040694ffa13a339621a090c36a7e4c76336f1070d70797be946`,
+    `3a2bc4f791cfe12df1b0e7c05ae7b4553071d6932e62489da3cb9982cde760da`,
+    and
+    `766da31a4fa6ad8dac0233eded1cc7d1f86845021931e30b439397ceead6d849`;
+  - p1 decision-file 40 offsets 256 through 768:
+    `063e722d619c4f043cffc813a84d0465a3ceed8c0ea41c78e893f659821dee99`,
+    `7887ff462f4b93129868480ddab586738b532c0b6eee5c577e3d9c3e7165bdc6`,
+    `c8422d6d0f01020ffdc6e4e35ec41d5128a7c5fd424764cd3381540e0375c9ea`,
+    `c8b93ae2779f6326ef2d6ac1bc978634d0d4d472de9620173fa049dc12b93507`,
+    and
+    `58a434bd1abb0f94976a15df29d18273c3c86c82fd7744c53dfb848c0969a865`;
+  - p2 decision-file 72 offsets 4,480 through 4,992:
+    `4a61388104c265a61238200f6b2574a6cb75a749b9abe2bc825d56341bf26d5e`,
+    `6374af50ae671d9dcf9afdaca753507de3d9ba6c3e36b31332a063b924c8a36d`,
+    `2932783cd1eb7719f60408538362c537c5e3933513c41471e508cb81c9425cb6`,
+    `0c65812ce121230d76b1f4a1905c6b6868aea602349c6acb161c735379eb3d01`,
+    and
+    `5b51b394c9d3bc182e98b92d7fbe7c9c032b4b39de4301972f67b65a89bb148b`;
+  - p3 decision-file 105 offset 0:
+    `26d34aae87d269d4c62893473b4eedbea51a8334cd26b60d00cb0a10fa7e05e2`.
+
+- Complete-text inspection resolves p0 baseline row 5,397 as a true
+  duplicate. Both 13-line texts contain the same six-paragraph spun SEO
+  article about detecting online infidelity. Synonym substitutions, text
+  corruption, and `hbrides.com` versus `hbrides` do not create a distinct
+  training example. `/rav/datakit-6854-inspect-row5397-0053-v773`,
+  `/rav/datakit-6854-publish-row5397-0058-v778`, and
+  `/rav/datakit-6854-verify-row5397-0104-v785` produced and independently
+  verified the record. The inspection, semantic-evidence, manual-Parquet, and
+  marker SHA-256 values are
+  `082492daca9860b08f8bba554a48334502a1b00051d98b6744645dd4e5e5f36e`,
+  `38bb591fcaf89b521ebcbe82219ce445587d44f7106c90bdc526276265c198d8`,
+  `545dd651058877f45bac174ca601d5de6ff81bcf88c2a247b1e4a80837cc97b9`,
+  and
+  `6afe154837667ac06f432b0993ff8f1a41761af1e26a72949008267f941f71dc`.
+
+- Complete-text inspection resolves p1 baseline row 1,317 as a true
+  duplicate. The 63/64-line texts are the same PHP bug-report form and
+  guidance. Their CAPTCHA arithmetic, dates, defaults, and style differ, but
+  the training content is the same. `/rav/datakit-6854-inspect-row1317-0053-v774`,
+  `/rav/datakit-6854-publish-row1317-0058-v779`, and
+  `/rav/datakit-6854-verify-row1317-0103-v784` produced and independently
+  verified the record. The corresponding four SHA-256 values are
+  `2f4a98d08d21c1dd1bfcd3e6b834e6542945fe92a5d41cbec3413d7a6523ebd5`,
+  `d1b57748bc84dde033fe36b4c11e79863d5eeb220d00ea9ca0a9992bede5836b`,
+  `c9157d57af0798d8ebf4a16431208d6e56e2c710b38832723cad07603b11d95d`,
+  and
+  `e862cdc5383f3b6aa73b5c1b931305a82ac7eda34f272c77532687d8ebefa21e`.
+
+- Complete-text inspection resolves p2 baseline row 7,595 as a false
+  positive. The 57/49-line texts share the problem and first part, but their
+  second-part derivations and answers differ: the member uses an approximation
+  and obtains `M=2`; the canonical uses an exact method and obtains `M=1`.
+  `/rav/datakit-6854-inspect-row7595-0053-v775`,
+  `/rav/datakit-6854-publish-row7595-0058-v780`, and
+  `/rav/datakit-6854-verify-row7595-0102-v783` produced and independently
+  verified the record. The corresponding four SHA-256 values are
+  `6b13cbc5c4fb35a6d5ae74b151c79f264685181434ba67911f74117b747f9a23`,
+  `75e33f7afbca24057756a8d802020e43827c84d97b0878f3efd0f21fa22b654f`,
+  `d72d671b0b7fe56cab2fd15e1213a5e4f63c1cdbac073ff2c999b99658043ae1`,
+  and
+  `fae81e403a7d2e3152e800557ff54fc6b642cc01ea586c99609314b1727c118d`.
+
+- Complete-text inspection resolves p2 baseline row 7,766 as a true
+  duplicate. The 78-line liberalism-versus-communitarianism question and
+  answer are identical except for `\boxed{\text{A}}` versus `\boxed{A}`.
+  `/rav/datakit-6854-inspect-row7766-0053-v776`,
+  `/rav/datakit-6854-publish-row7766-0058-v781`, and
+  `/rav/datakit-6854-verify-row7766-0101-v782` produced and independently
+  verified the record. The corresponding four SHA-256 values are
+  `46a8df3cbb896f74e4ebc52a7a93acb3d0abaacbf36b9f47e234676891ac4b6e`,
+  `5e6cd0610552467b57d1fc63a4f08c3ed3e2002651d4291756cf1726efa64fdd`,
+  `5efd21909fea61a2bc358c60b141a02cf0cc3358b80b501b1937cb1c0a906a2d`,
+  and
+  `c905e31ef4e722d0bef0c532e12881fdacfdb0733216ea636bd59082cb7adb60`.
+
+- Complete-text and all-line inspection resolves p3 baseline row 183 as a
+  false positive. The 510,129-character member is a three-zone assignment
+  file. It partitions all 46,369 node identifiers into disjoint groups of
+  32,803, 8,058, and 5,508 nodes. The 4,240,283-character canonical is a
+  54,787-row climate-model CSV with an identifier and eleven numerical
+  columns. It contains every member identifier but no zone column, so the
+  member's categorical assignment cannot be recovered from the canonical.
+
+  - The initial exact inspector
+    `/rav/datakit-6854-inspect-row183-0055-v777` spent 11 minutes in
+    character-level `SequenceMatcher` and was stopped before writing. The
+    linear inspector `/rav/datakit-6854-inspect-row183-linear-0107-v786`
+    instead persisted both complete texts and a 59,441-line exact GNU diff.
+    The source texts have zero shared exact line occurrences. The inspection
+    and semantic-evidence SHA-256 values are
+    `b029b019388ba33ff3ca75e40848ae4f24aa0014d69588c8613c1a58fd7632fb`
+    and
+    `c087acaeb719ded7ca99e3001c4362e93c7bf5c204265107c0deb721c2a26b6d`.
+  - `/rav/datakit-6854-analyze-row183-zones-0121-v788` parsed every member
+    identifier and persisted the complete assignment. It verified declared
+    counts, uniqueness, coverage of identifiers 1 through 46,369, zero
+    pairwise overlap, all 54,787 canonical rows, a uniform 12-column schema,
+    and the absence of a zone field. The analysis and assignment SHA-256
+    values are
+    `dce82805fec81a36eb680d2561a2f1b28c1b833ed93c6468f0ff5f98ed6a2722`
+    and
+    `fb2fd5b107e37e4c039187985871cd553f3d94761241dd69cb4bd8fecd3054e4`.
+    `/rav/datakit-6854-verify-row183-zones-0124-v789` independently reproduced
+    the same bytes and counts.
+  - The chunked semantic pass covered all 23 member units with 50 judgments:
+    48 true-duplicate and two false-positive votes. The majority treated the
+    identifiers as context-free keys and missed that their grouping is the
+    payload. The deterministic file-level parser resolves that chunking
+    failure.
+  - `/rav/datakit-6854-publish-row183-0127-v790` wrote the immutable
+    false-positive record, and `/rav/datakit-6854-verify-row183-0129-v791`
+    independently reread and verified every bound input and output. The
+    manual-Parquet and marker SHA-256 values are
+    `1f41dc73da9165230c77736897909a4d2022d3eb8dc5d31a1cb16c623fca0095`
+    and
+    `1f1ce9e06f957467916b12d14054ca58a309c421ac2bda0430e83c4457f5b2c5`.
+
+- Replacing the five unresolved outcomes with two false positives and three
+  true duplicates gives 1,392 false positives and 784 true duplicates in the
+  new batch. Across the stable 1,606-checkpoint snapshot, all 242 unresolved
+  model outcomes are covered by 186 true-duplicate and 56 false-positive
+  manual records. The adjusted totals are:
+
+  - baseline: 164,462 pairs, 104,436 false positives, 60,026 true duplicates;
+  - treatment: 39,550 pairs, 20,531 false positives, 19,019 true duplicates;
+  - combined: 204,012 pairs, 124,967 false positives, 79,045 true duplicates.
+
+- The next audit frontiers are p0 `(8, 3,328)`, p1 `(40, 896)`, p2
+  `(72, 5,120)`, and p3 `(105, 128)`. All four batch-priority 2-H100 workers
+  remain active.
+
 ### 2026-07-27T00:50:00Z — 201,836 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0039-v759` independently
