@@ -1081,6 +1081,7 @@ def _stage_with_expert_gradients(
             lambda module: (module.w_gate, module.w_up, module.w_down),
             block.mlp.expert_mlp,
             (w_gate, w_up, expert_gradients.w2[block_index]),
+            is_leaf=lambda value: value is None,
         )
         mlp = eqx.tree_at(lambda module: module.expert_mlp, block.mlp, expert_mlp)
         blocks.append(eqx.tree_at(lambda module: module.mlp, block, mlp))

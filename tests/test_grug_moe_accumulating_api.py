@@ -11,6 +11,11 @@ from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 
 from experiments.grug.moe.model import GrugModelConfig, Transformer
+from experiments.grug.moe.train import (
+    _stage_expert_gradient_accumulators,
+    _stage_with_expert_gradients,
+    _stage_without_expert_gradients,
+)
 
 
 def _fake_triton_ragged_dot(monkeypatch) -> None:
@@ -166,3 +171,13 @@ def test_pipeline_stage_accumulating_weight_gradient_threads_every_block_token(m
             rtol=1e-5,
             atol=1e-5,
         )
+
+    ordinary_gradient = _stage_without_expert_gradients(prior_gradient)
+    expert_gradient = _stage_expert_gradient_accumulators(prior_gradient)
+    restored_gradient = _stage_with_expert_gradients(ordinary_gradient, expert_gradient)
+    for expected_block, restored_block in zip(prior_gradient.blocks, restored_gradient.blocks, strict=True):
+        expected_expert = expected_block.mlp.expert_mlp
+        restored_expert = restored_block.mlp.expert_mlp
+        np.testing.assert_array_equal(np.asarray(restored_expert.w_gate), np.asarray(expected_expert.w_gate))
+        np.testing.assert_array_equal(np.asarray(restored_expert.w_up), np.asarray(expected_expert.w_up))
+        np.testing.assert_array_equal(np.asarray(restored_expert.w_down), np.asarray(expected_expert.w_down))
