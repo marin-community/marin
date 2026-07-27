@@ -215,6 +215,7 @@ def ubx_setup_scripts(*, source_root: str, revision: str) -> tuple[str, ...]:
                 'cuda_bin="$(find "$IRIS_VENV"/lib/python*/site-packages/nvidia/cu*/bin ' '-name nvcc -print -quit)"',
                 'test -n "$cuda_bin" || { echo "nvcc not found after CUDA toolchain install" >&2; exit 1; }',
                 'cuda_root="$(dirname "$(dirname "$cuda_bin")")"',
+                'ln -sf libcudart.so.13 "$cuda_root/lib/libcudart.so"',
                 f"rm -rf {source_root!r}",
                 f"git clone --filter=blob:none --no-checkout https://github.com/NVIDIA/nccl.git {source_root!r}",
                 f"git -C {source_root!r} fetch --depth 1 origin {revision!r}",
