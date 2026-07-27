@@ -43,8 +43,9 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.70}"
 
 python -c 'import jax, jaxlib; print("JAX runtime", jax.__version__, jaxlib.__version__, jax.local_devices())'
 
+status=0
 for routing in balanced learned_skew; do
-  python experiments/grug/moe/benchmark_jax_ubx_moe.py \
+  if ! python experiments/grug/moe/benchmark_jax_ubx_moe.py \
     --source-root "$SOURCE_ROOT" \
     --cuda-home "$CUDA_HOME" \
     --routing "$routing" \
@@ -52,5 +53,8 @@ for routing in balanced learned_skew; do
     --hidden-dim "${UBX_MOE_HIDDEN_DIM:-256}" \
     --intermediate-dim "${UBX_MOE_INTERMEDIATE_DIM:-384}" \
     --warmup "${UBX_MOE_WARMUP:-2}" \
-    --iterations "${UBX_MOE_ITERATIONS:-5}"
+    --iterations "${UBX_MOE_ITERATIONS:-5}"; then
+    status=1
+  fi
 done
+exit "$status"

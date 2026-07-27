@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compare the full UB-X MoE value and VJP against exact Ring on one H100x8 node."""
+"""Compare the full UB-X MoE value and VJP against FP32-combine Ring on one H100x8 node."""
 
 from __future__ import annotations
 
@@ -143,6 +143,7 @@ def run(
         )
 
     ring = runner(_moe_mlp_ep_ring_local)
+    ring_fp32_combine = runner(partial(_moe_mlp_ep_ring_local, combine_dtype="fp32"))
     ubx = runner(_moe_mlp_ep_ubx_local)
 
     def value_and_grad(implementation, x, combine_weights, w13, w2):
@@ -160,28 +161,50 @@ def run(
         )
 
     ring_compiled = jax.jit(partial(value_and_grad, ring)).lower(x, combine_weights, w13, w2).compile()
+    reference_compiled = jax.jit(partial(value_and_grad, ring_fp32_combine)).lower(x, combine_weights, w13, w2).compile()
     ubx_compiled = jax.jit(partial(value_and_grad, ubx)).lower(x, combine_weights, w13, w2).compile()
 
     def execute_ring():
         return ring_compiled(x, combine_weights, w13, w2)
 
+    def execute_reference():
+        return reference_compiled(x, combine_weights, w13, w2)
+
     def execute_ubx():
         return ubx_compiled(x, combine_weights, w13, w2)
 
     ring_result = jax.block_until_ready(execute_ring())
+    reference_result = jax.block_until_ready(execute_reference())
     ubx_result = jax.block_until_ready(execute_ubx())
     (ring_loss, (ring_output, ring_dropped)), ring_gradients = ring_result
+    (reference_loss, (reference_output, reference_dropped)), reference_gradients = reference_result
     (ubx_loss, (ubx_output, ubx_dropped)), ubx_gradients = ubx_result
 
-    output_parity = _relative_l2(np.asarray(ubx_output), np.asarray(ring_output))
-    loss_parity = _relative_l2(np.asarray(ubx_loss), np.asarray(ring_loss))
     gradient_names = ("x", "combine_weights", "w13", "w2")
+    output_parity = _relative_l2(np.asarray(ubx_output), np.asarray(reference_output))
+    loss_parity = _relative_l2(np.asarray(ubx_loss), np.asarray(reference_loss))
     gradient_parity = {
         name: _relative_l2(np.asarray(actual), np.asarray(reference))
-        for name, actual, reference in zip(gradient_names, ubx_gradients, ring_gradients, strict=True)
+        for name, actual, reference in zip(gradient_names, ubx_gradients, reference_gradients, strict=True)
+    }
+    ring_diagnostics = {
+        "output": _relative_l2(np.asarray(ring_output), np.asarray(reference_output)),
+        "loss": _relative_l2(np.asarray(ring_loss), np.asarray(reference_loss)),
+        "gradients": {
+            name: _relative_l2(np.asarray(actual), np.asarray(reference))
+            for name, actual, reference in zip(gradient_names, ring_gradients, reference_gradients, strict=True)
+        },
+    }
+    ubx_ring_diagnostics = {
+        "output": _relative_l2(np.asarray(ubx_output), np.asarray(ring_output)),
+        "loss": _relative_l2(np.asarray(ubx_loss), np.asarray(ring_loss)),
+        "gradients": {
+            name: _relative_l2(np.asarray(actual), np.asarray(reference))
+            for name, actual, reference in zip(gradient_names, ubx_gradients, ring_gradients, strict=True)
+        },
     }
     expected_dropped = int(plan.drops_by_expert_rank.sum())
-    drops_exact = int(ubx_dropped) == int(ring_dropped) == expected_dropped
+    drops_exact = int(ubx_dropped) == int(ring_dropped) == int(reference_dropped) == expected_dropped
     passed = (
         drops_exact
         and output_parity["passed"]
@@ -201,14 +224,18 @@ def run(
         },
         "route_plan": route_plan_summary(plan, config),
         "correctness": {
+            "acceptance_reference": "ring_fp32_combine",
             "relative_l2_limit": RELATIVE_L2_LIMIT,
             "drops_exact": drops_exact,
             "expected_dropped": expected_dropped,
             "ring_dropped": int(ring_dropped),
+            "reference_dropped": int(reference_dropped),
             "ubx_dropped": int(ubx_dropped),
             "output": output_parity,
             "loss": loss_parity,
             "gradients": gradient_parity,
+            "ring_bf16_vs_reference": ring_diagnostics,
+            "ubx_vs_ring_bf16": ubx_ring_diagnostics,
         },
         "timing": {
             "ring": _timed(execute_ring, warmup=warmup, iterations=iterations),
