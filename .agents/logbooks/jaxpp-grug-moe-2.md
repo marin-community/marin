@@ -2189,3 +2189,35 @@ bash experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit \
 - Decision:
   - Promote `5517380c52` to one exact L24/d2560/e64/top-k4/sequence4096 batch8192/m256 throughput rerun.
     Require all ten steps and compare steps 2-9 with `19.8996` mean MFU from the scalar UB-X gate.
+
+### 2026-07-27 16:11 PDT - Exact vector-copy reruns expose allocator fragmentation
+- Snapshots and jobs:
+  - Parent `/dlwh/iris-run-job-20260727-223653` and child
+    `/dlwh/iris-run-job-20260727-223653/grug-train-jaxpp-rno2a-ubx-vectorcopy-l24-e64k4-b8192-s4096-p4m256-precompile-r1-20260727`
+    ran clean commit `ad5b6164d3`, which includes vector-copy commit `5517380c52`.
+  - Parent `/dlwh/iris-run-job-20260727-225046` and child
+    `/dlwh/iris-run-job-20260727-225046/grug-train-jaxpp-rno2a-ubx-vectorcopy-l24-e64k4-b8192-s4096-p4m256-precompile-async-r2-20260727`
+    repeated the same run with `TF_GPU_ALLOCATOR=cuda_malloc_async` passed to the outer launcher.
+- Result:
+  - Both runs initialized UB-X on all ranks, precompiled `1026/1025/1025/1025` local tasks, and crossed the
+    four-rank precompile barrier.
+  - Both failed before step 1 when rank 3 requested a `19.51 GiB` buffer for
+    `jit_grug_1f1b_mb0_stage3_loss_backward`. All eight local GPUs reported BFC allocator exhaustion.
+  - The second run still logged `GPU_*_bfc`; `cuda_malloc_async` therefore did not reach the final worker
+    process. It does not test whether the async allocator resolves the fragmentation.
+  - No train metric was produced. Both parent/child pairs are terminal, and no failed resource remains live.
+    Their W&B records remain stale in `running` state with no useful history.
+- Diagnosis and fix:
+  - The outer Iris environment survives the CPU launcher but not the generated UB-X worker activation path,
+    which already persists CUDA, NCCL, and library variables before JAX starts.
+  - Commit `74284d7c3b` persists an explicitly requested `TF_GPU_ALLOCATOR` in the same activation script and
+    logs its value at UB-X bootstrap.
+  - Generated-script probes cover allocator-present and allocator-absent cases, Python compilation passed,
+    and `./infra/pre-commit.py --changed-files --fix` passed including Pyrefly.
+  - The broad variant-contract suite reported `24 passed`, one skipped, and the pre-existing explicit-sharding
+    label-concatenation failure unrelated to this change.
+- Decision:
+  - Require a reduced L8/d2560/e64/top-k4/sequence4096 batch32/m4 run to show
+    `gpu_allocator=cuda_malloc_async` on every worker and no BFC initialization.
+  - Only after that gate succeeds, rerun the unchanged exact vector-copy L24 batch8192/m256 configuration.
+    The numerical admission policy remains exact routes/counts/drops and relative-L2 `<=0.002`.
