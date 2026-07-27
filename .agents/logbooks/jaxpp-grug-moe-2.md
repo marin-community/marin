@@ -984,3 +984,14 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - Fused FP32 data-local accumulation is a numerical and lifecycle success but a hard end-to-end performance negative at the exact L24 target.
 - Next action:
   - Profile the exact fused graph and attribute the regression to named stage tasks, collectives, and idle gaps before changing another kernel or topology. Do not tune the fused path without measured evidence.
+
+### 2026-07-27 04:03 PDT - Launch exact L24 fused profile
+- Snapshot: `598fbcabdb` records the exact performance negative.
+- Command:
+  - The exact L24 fused command is unchanged except run ID `jaxpp-rno2a-ring-ep2d4-fusedacc-fp8-l24-e64k4-b512-s4096-p4m16-profile-r1-20260727`, 12 steps, `--profiler-steps 2`, and memory-plan logging disabled. The profiler starts at step 8.
+- Jobs:
+  - Parent `/dlwh/iris-run-job-20260727-105805` on `cw-rno2a`.
+  - Babysitter `019fa339-c357-72a0-89b0-916b15597a36` owns terminal monitoring, profile download, and structured summary generation.
+- Gate:
+  - Require successful profiler start, stop, upload, and terminal training state.
+  - Attribute the exact regression to named stage tasks, compute/communication/stall shares, collectives, and idle gaps. Compare with `scratch/jaxpp_profile_b96_gpipe_artifact_summary.json` or the best available exact baseline profile before selecting another optimization.
