@@ -26,6 +26,7 @@ def test_ep_ring_data_axis_defaults_match_target_geometry() -> None:
     assert args.top_k == 4
     assert args.microbatches_per_step == 256
     assert args.layers_per_stage == 6
+    assert args.treatment_data_axis_size == 2
 
 
 def test_ep_ring_data_axis_projection_amortizes_step_boundary_work() -> None:

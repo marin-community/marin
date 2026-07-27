@@ -48,6 +48,7 @@ class _Arm:
     value_and_grad: jax.stages.Compiled
     sync_gradients: jax.stages.Compiled
     materialize_weights: jax.stages.Compiled
+    hlo: dict[str, Any]
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -62,6 +63,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--iterations", type=int, default=50)
+    parser.add_argument("--treatment-data-axis-size", type=int, choices=(2, 4), default=2)
     parser.add_argument("--microbatches-per-step", type=int, default=_MICROBATCHES_PER_STEP)
     parser.add_argument("--layers-per-stage", type=int, default=_LAYERS_PER_STAGE)
     parser.add_argument("--baseline-mfu", type=float, default=_BASELINE_MFU)
@@ -99,7 +101,8 @@ def _validate_args(args: argparse.Namespace) -> None:
     tokens = args.microbatch_size * args.sequence_length
     if tokens % _DEVICE_COUNT:
         raise ValueError(f"microbatch tokens={tokens} must be divisible by {_DEVICE_COUNT}")
-    for expert_axis_size in (8, 4):
+    treatment_expert_axis_size = _DEVICE_COUNT // args.treatment_data_axis_size
+    for expert_axis_size in (8, treatment_expert_axis_size):
         if args.num_experts % expert_axis_size:
             raise ValueError(f"num_experts={args.num_experts} must be divisible by expert axis size={expert_axis_size}")
     if tokens * args.top_k % args.num_experts:
@@ -298,25 +301,42 @@ def _build_arm(
             out_specs=(expert_spec, expert_spec),
             check_vma=False,
         )
-        forward = jax.jit(mapped_forward).lower(*inputs).compile()
-        value_and_grad = jax.jit(mapped_value_and_grad).lower(*inputs).compile()
-        sync_gradients = (
-            jax.jit(mapped_sync)
-            .lower(
-                jax.ShapeDtypeStruct(
-                    (data_axis_size, num_experts, w13.shape[1], w13.shape[2]),
-                    w13.dtype,
-                    sharding=local_gradient_sharding,
-                ),
-                jax.ShapeDtypeStruct(
-                    (data_axis_size, num_experts, w2.shape[1], w2.shape[2]),
-                    w2.dtype,
-                    sharding=local_gradient_sharding,
-                ),
-            )
-            .compile()
+        forward_lowered = jax.jit(mapped_forward).lower(*inputs)
+        value_and_grad_lowered = jax.jit(mapped_value_and_grad).lower(*inputs)
+        sync_lowered = jax.jit(mapped_sync).lower(
+            jax.ShapeDtypeStruct(
+                (data_axis_size, num_experts, w13.shape[1], w13.shape[2]),
+                w13.dtype,
+                sharding=local_gradient_sharding,
+            ),
+            jax.ShapeDtypeStruct(
+                (data_axis_size, num_experts, w2.shape[1], w2.shape[2]),
+                w2.dtype,
+                sharding=local_gradient_sharding,
+            ),
         )
-        materialize_weights = jax.jit(mapped_materialize).lower(*storage_weights).compile()
+        materialize_lowered = jax.jit(mapped_materialize).lower(*storage_weights)
+        hlo = {
+            "local_vag": _collective_summary(
+                value_and_grad_lowered.as_text(),
+                data_axis_size=data_axis_size,
+                expert_axis_size=expert_axis_size,
+            ),
+            "sync": _collective_summary(
+                sync_lowered.as_text(),
+                data_axis_size=data_axis_size,
+                expert_axis_size=expert_axis_size,
+            ),
+            "materialize": _collective_summary(
+                materialize_lowered.as_text(),
+                data_axis_size=data_axis_size,
+                expert_axis_size=expert_axis_size,
+            ),
+        }
+        forward = forward_lowered.compile()
+        value_and_grad = value_and_grad_lowered.compile()
+        sync_gradients = sync_lowered.compile()
+        materialize_weights = materialize_lowered.compile()
 
     return _Arm(
         name=name,
@@ -333,6 +353,7 @@ def _build_arm(
         value_and_grad=value_and_grad,
         sync_gradients=sync_gradients,
         materialize_weights=materialize_weights,
+        hlo=hlo,
     )
 
 
@@ -343,7 +364,7 @@ def _time_alternating(
     warmup: int,
     iterations: int,
 ) -> dict[str, dict[str, float]]:
-    arms = {"control_ep8": control, "treatment_ep4_data2": treatment}
+    arms = {"control": control, "treatment": treatment}
     for _ in range(warmup):
         for function, function_args in arms.values():
             jax.block_until_ready(function(*function_args))
@@ -440,17 +461,32 @@ def _replica_groups(data_axis_size: int, expert_axis_size: int, *, axis: str) ->
     return "{" + ",".join("{" + ",".join(str(rank) for rank in group) + "}" for group in groups) + "}"
 
 
-def _collective_summary(compiled: jax.stages.Compiled, *, data_axis_size: int, expert_axis_size: int) -> dict[str, Any]:
+def _replica_groups_bracketed(data_axis_size: int, expert_axis_size: int, *, axis: str) -> str:
+    return _replica_groups(data_axis_size, expert_axis_size, axis=axis).replace("{", "[").replace("}", "]")
+
+
+def _collective_summary(hlo_text: str, *, data_axis_size: int, expert_axis_size: int) -> dict[str, Any]:
     lines = []
-    for line in compiled.as_text().splitlines():
-        if any(re.search(rf"\b{name}\(", line) for name in _COLLECTIVE_NAMES):
-            lines.append(re.sub(r"\s+", "", line))
+    for line in hlo_text.splitlines():
+        normalized = re.sub(r"\s+", "", line).replace("-", "_")
+        if any(name.replace("-", "_") in normalized for name in _COLLECTIVE_NAMES):
+            lines.append(normalized)
     data_replica_groups = _replica_groups(data_axis_size, expert_axis_size, axis="data")
     expert_replica_groups = _replica_groups(data_axis_size, expert_axis_size, axis="expert")
+    data_replica_groups_bracketed = _replica_groups_bracketed(data_axis_size, expert_axis_size, axis="data")
+    expert_replica_groups_bracketed = _replica_groups_bracketed(data_axis_size, expert_axis_size, axis="expert")
+
+    def uses_groups(line: str, curly: str, bracketed: str) -> bool:
+        return f"replica_groups={curly}" in line or bracketed in line
+
     return {
-        "counts": {name: sum(bool(re.search(rf"\b{name}\(", line)) for line in lines) for name in _COLLECTIVE_NAMES},
-        "data_axis_collective_count": sum(f"replica_groups={data_replica_groups}" in line for line in lines),
-        "expert_axis_collective_count": sum(f"replica_groups={expert_replica_groups}" in line for line in lines),
+        "counts": {name: sum(name.replace("-", "_") in line for line in lines) for name in _COLLECTIVE_NAMES},
+        "data_axis_collective_count": sum(
+            uses_groups(line, data_replica_groups, data_replica_groups_bracketed) for line in lines
+        ),
+        "expert_axis_collective_count": sum(
+            uses_groups(line, expert_replica_groups, expert_replica_groups_bracketed) for line in lines
+        ),
         "data_replica_groups": data_replica_groups,
         "expert_replica_groups": expert_replica_groups,
     }
@@ -500,27 +536,27 @@ def _print_result(result: dict[str, Any], output: str) -> None:
     if output in ("human", "both"):
         if result.get("lower_only"):
             print(
-                "EP4/data2 lowering: "
+                "Data-axis ring lowering: "
                 f"local_vag_data_collectives={result['hlo']['treatment_local_vag']['data_axis_collective_count']}, "
                 f"sync_data_collectives={result['hlo']['treatment_sync']['data_axis_collective_count']}, "
                 f"materialize_data_collectives={result['hlo']['treatment_materialize']['data_axis_collective_count']}"
             )
         else:
             print(
-                "EP8 vs EP4/data2: "
+                f"EP8 vs EP{result['treatment']['expert_axis_size']}/data{result['treatment']['data_axis_size']}: "
                 f"parity={result['parity']['passed']}, "
                 f"projected_mfu={result['projection']['projected_mfu']:.4f}, "
                 f"promotable={result['promotable']}"
             )
             print(
                 "  forward median: "
-                f"EP8={result['timings']['forward']['control_ep8']['median_ms']:.3f} ms, "
-                f"EP4/data2={result['timings']['forward']['treatment_ep4_data2']['median_ms']:.3f} ms"
+                f"EP8={result['timings']['forward']['control']['median_ms']:.3f} ms, "
+                f"treatment={result['timings']['forward']['treatment']['median_ms']:.3f} ms"
             )
             print(
                 "  local VAG median: "
-                f"EP8={result['timings']['value_and_grad']['control_ep8']['median_ms']:.3f} ms, "
-                f"EP4/data2={result['timings']['value_and_grad']['treatment_ep4_data2']['median_ms']:.3f} ms"
+                f"EP8={result['timings']['value_and_grad']['control']['median_ms']:.3f} ms, "
+                f"treatment={result['timings']['value_and_grad']['treatment']['median_ms']:.3f} ms"
             )
             print(
                 "  step boundary: "
@@ -574,8 +610,8 @@ def main() -> None:
         output_elements=output_elements,
     )
     treatment = _build_arm(
-        name="treatment_ep4_data2",
-        data_axis_size=2,
+        name="treatment",
+        data_axis_size=args.treatment_data_axis_size,
         source_inputs=source_inputs,
         num_experts=args.num_experts,
         capacity_factor=args.capacity_factor,
@@ -583,26 +619,10 @@ def main() -> None:
     )
 
     hlo = {
-        "control_local_vag": _collective_summary(
-            control.value_and_grad,
-            data_axis_size=control.data_axis_size,
-            expert_axis_size=control.expert_axis_size,
-        ),
-        "treatment_local_vag": _collective_summary(
-            treatment.value_and_grad,
-            data_axis_size=treatment.data_axis_size,
-            expert_axis_size=treatment.expert_axis_size,
-        ),
-        "treatment_sync": _collective_summary(
-            treatment.sync_gradients,
-            data_axis_size=treatment.data_axis_size,
-            expert_axis_size=treatment.expert_axis_size,
-        ),
-        "treatment_materialize": _collective_summary(
-            treatment.materialize_weights,
-            data_axis_size=treatment.data_axis_size,
-            expert_axis_size=treatment.expert_axis_size,
-        ),
+        "control_local_vag": control.hlo["local_vag"],
+        "treatment_local_vag": treatment.hlo["local_vag"],
+        "treatment_sync": treatment.hlo["sync"],
+        "treatment_materialize": treatment.hlo["materialize"],
     }
     memory = {
         "control_local_vag": _memory_summary(control.value_and_grad),
@@ -691,8 +711,8 @@ def main() -> None:
         iterations=args.iterations,
     )
     projection = _projection(
-        control_vag_ms=vag_timings["control_ep8"]["median_ms"],
-        treatment_vag_ms=vag_timings["treatment_ep4_data2"]["median_ms"],
+        control_vag_ms=vag_timings["control"]["median_ms"],
+        treatment_vag_ms=vag_timings["treatment"]["median_ms"],
         sync_ms=sync_timing["median_ms"],
         materialize_ms=materialize_timing["median_ms"],
         microbatches_per_step=args.microbatches_per_step,
@@ -723,7 +743,10 @@ def main() -> None:
         "top_k": args.top_k,
         "capacity_factor": args.capacity_factor,
         "control": {"data_axis_size": 1, "expert_axis_size": 8},
-        "treatment": {"data_axis_size": 2, "expert_axis_size": 4},
+        "treatment": {
+            "data_axis_size": treatment.data_axis_size,
+            "expert_axis_size": treatment.expert_axis_size,
+        },
         "parity": parity,
         "hlo": hlo,
         "memory": memory,

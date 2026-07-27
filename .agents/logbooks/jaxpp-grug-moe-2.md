@@ -614,3 +614,49 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - Stop NCCL environment tuning. The exact bulk-ring path remains the valid implementation, but protocol, algorithm, and channel overrides have not produced a useful speedup.
 - Next action:
   - Rank structural changes that reduce the number of exact MoE collectives or overlap them with expert compute. Require a direct value-and-grad projection capable of closing the remaining `9.54%` relative L24 gap before another pipeline allocation.
+
+### 2026-07-27 00:28 PDT - EP4/data2 step-amortized ring gate launched
+- Upstream freshness:
+  - SonicMoE `main` remains the tested `0349404acd7952592f73d180ff0c1510f6d112c2`.
+  - QuACK `0.6.1` and current `main` do not identify an SM90 gated-GEMM numerical or backward fix for the strict target-shape failures.
+  - JAX `0.11.1.dev20260726` advances ten XLA commits beyond the tested nightly, but none changes GPU, NCCL, or ragged all-to-all. The July 24 device-kernel change was already in the failed control.
+  - Do not repeat Sonic/QuACK or ragged all-to-all until an upstream change names the observed failure mode.
+- Hypothesis:
+  - Mapping one H100x8 node as `data=2, expert=4` reduces each exact ring from seven remote chunks to three while preserving complete replicated BF16 compute weights in each data group.
+  - Data-local expert gradients are reduce-scattered and sharded BF16 weights are materialized once per optimizer step. At m256, these boundaries should be negligible compared with the per-microbatch ring saving.
+- Projection:
+  - The L24 baseline needs an `8.71%` step-time reduction, from `81.037785s` to `73.9806s`.
+  - Six critical-stage layers and 256 microbatches require at least `4.5945ms` saved per layer-microbatch to reach 20 MFU.
+  - A traffic-based 50% reduction in the profiled MoE collectives projects approximately `20.41` MFU. The direct gate requires at least `20.3` projected MFU to retain margin.
+- Commit Hash: `253e81a2e7a93cd32b6739f593243cfa5d677092`.
+- Changes:
+  - `benchmark_ep_ring_data_axis.py` compares EP8 with EP4/data2 at the exact d2560/i1280/e64/top-k4/microbatch32/sequence-4096 geometry.
+  - Replicated compute weights return data-local W13/W2 gradients. Separate once-per-step functions use FP32-accumulating reduce-scatter for gradients and all-gather for BF16 compute-weight materialization.
+  - The gate checks loss, output, x/combine/W13/W2 gradients at relative-L2 `<=0.002`, exact drops, optimized-HLO collective placement, compiled memory, alternating forward/VAG timings, and the measured L24 projection.
+- Validation:
+  - Focused tests pass `15/15`; changed-file precommit including Pyrefly passes.
+  - An eight-device CPU lowering reports zero data-axis collectives in the treatment local VAG, two data-axis reduce-scatters in gradient sync, and two data-axis all-gathers in weight materialization.
+  - A tiny eight-device execution is bitwise exact for loss, output, x, and combine-weight gradients. Its W13/W2 relative-L2 is `0.002876/0.002540`, so the exact target-shape H100 gate remains numerically decisive; the threshold is unchanged.
+- Command:
+  - One H100x8 RNO2A job `/dlwh/ep-ring-data2-ep4-r16-20260727` runs 10 warmups and 50 alternating samples at capacity factor `1.0`, block-k 32, eight warps, XLA fraction `0.70`, and no retries.
+- Promotion gate:
+  - Require exact drops, every relative-L2 metric at most `0.002`, zero data-axis collective in local VAG, explicit data-axis collectives only at the step boundary, and projected L24 MFU at least `20.3`.
+
+### 2026-07-27 00:32 PDT - EP4/data2 is faster but remains below target
+- Results:
+  - `/dlwh/ep-ring-data2-ep4-r16-20260727` reached the intended assertion in `59.68s`; the task exited `1`, no retry occurred, and no resource remains live.
+  - Loss, output, x gradient, combine-weight gradient, and drops were bitwise exact. W13 and W2 gradient relative-L2 was `0.00282516/0.00273174`, above the accepted `0.002` threshold.
+  - Forward median improved from `8.69998ms` to `6.71259ms` (`1.2961x`). Local VAG improved from `18.59005ms` to `15.47777ms` (`1.2011x`).
+  - Once-per-step gradient synchronization and weight materialization took `2.01913ms` and `1.20992ms`. Amortized over m256, the boundary adds `0.01261ms` per layer-microbatch.
+  - The measured saving is `3.09967ms` per layer-microbatch. The six-layer critical-stage projection is `76.27669s`, `1.06242x`, and `19.39796` MFU, below both 20 and the `20.3` promotion margin.
+  - Compiled peak memory was `3,423,748,224` bytes for EP8 local VAG and `3,065,266,368` bytes for EP4/data2. Sync and materialization peaks were `1,101,004,816` and `786,432,016` bytes.
+- HLO instrumentation:
+  - GPU optimized HLO reports NCCL operations as custom calls, so the first collector incorrectly returned zero operations for every arm. The prior CPU StableHLO structurally verified the intended placement.
+  - Commit the collector fix that inspects pre-compile StableHLO. Do not reinterpret the GPU zero counts as missing communication; measured sync/materialization time proves the operations execute.
+- Interpretation:
+  - EP4/data2 is a direct transport and VAG improvement, but it is independently non-promotable on numerics and projected target performance.
+  - The tiny CPU and exact H100 gates show nearly the same W13/W2 error, approximately `0.25-0.29%`. Splitting BF16 weight-gradient accumulation across data groups is the numerical source; FP32 synchronization after each partial gradient is already rounded cannot recover EP8's one-pass result.
+  - Do not integrate or pipeline EP4/data2.
+- Next action:
+  - Run one final direct topology point at `data=4, expert=2`. Linear traffic scaling predicts approximately another `1.55ms` local-VAG saving, enough to approach 20 MFU and exceed it only when composed with the already validated `1.79%` inter-stage FP8 transfer.
+  - Treat EP2/data4 as exploratory and non-promotable unless it independently passes the `0.002` gate and projects at least `20.3` MFU. Stop topology narrowing if either gate fails.
