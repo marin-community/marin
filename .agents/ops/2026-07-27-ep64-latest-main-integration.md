@@ -38,5 +38,27 @@ receiver-ECHO kernels.
 ## Future work
 
 - [x] Pass the targeted compatibility suite.
-- [ ] Run the exact four-GB200 Sonic clone-gradient parity probe.
+- [x] Run the exact four-GB200 Sonic clone-gradient parity probe.
 - [ ] Reproduce the 64-GPU v153 control before interpreting treatment MFU.
+
+## First rack control failure
+
+The first latest-main control,
+`ep30-cx-main-control-20260727-0534`, initialized 64 processes and compiled the
+train step, then failed before step 0. The first crashing rank segfaulted in
+NCCL `ncclDevCommCreate` through XLA `NcclDeviceCommunicator`; the remaining
+ranks were terminated by the coordinated failure. Iris recorded zero retries,
+and W&B recorded no history rows.
+
+The successful v165 control used JAX and JAXlib 0.10.1. Latest main resolves
+GPU jobs to 0.11.0, whose experimental ragged-all-to-all NCCL barrier path is
+enabled by default and requests the device communicator seen in the stack.
+Keep native ragged-all-to-all semantics while disabling that experimental
+barrier path explicitly:
+
+```text
+--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false
+```
+
+The flag parses under the local JAX 0.11.0 runtime. A rack retry is still
+required to prove that it avoids the communicator crash.

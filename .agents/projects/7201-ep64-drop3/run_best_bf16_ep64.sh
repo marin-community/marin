@@ -17,6 +17,7 @@ profile_start="${PROFILE_START:-8}"
 xla_flags=(
   "--xla_gpu_enable_latency_hiding_scheduler=true"
   "--xla_gpu_experimental_parallel_collective_overlap_limit=4"
+  "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false"
 )
 profile_args=()
 if (( profile_steps > 0 )); then
