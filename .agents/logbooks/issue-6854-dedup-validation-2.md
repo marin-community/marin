@@ -16,6 +16,97 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T02:47:00Z — 215,679 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0180-v843` independently
+  revalidated eight checkpoints containing 945 pairs. The model labeled 487
+  false positives and 455 true duplicates and left three outcomes unresolved.
+  Three pairs used chunked review and 942 used direct review. The audit reread
+  2,173 request attempts: 2,166 were valid, seven were invalid, and three
+  judgments required retries. The checkpoints and outcome Parquet SHA-256
+  values are:
+
+  - p1 decision-file 40 offsets 5,504, 5,632, and the 49-pair terminal
+    checkpoint at 5,760:
+    `d6cfa0833f6d05988de615df12bb62186659a8a8a18061e765d1bc941a8a9054`,
+    `70d83df70609ec99f7d148f05142eb1aab18604ddd3c4a48f0e604b6543a1d3f`,
+    and
+    `fe9caa006bfb181e3dc7fc19de1633e9cadb603347bbe8fb48e61d8aad939c31`;
+  - p3 decision-file 105 offsets 2,688 through 3,200:
+    `5898656d4f886a5036ef26d8dfe2927dfea24bc1f93cdc1afc8f30481744f788`,
+    `73391b478eca93ed8c0de9acf8208f43103bca30c6f551a9c0f910bc3fc1bc9b`,
+    `c00fe8913664ce7d4bab57af4e88f3389da689afafd69a74726f603943bf581f`,
+    `8ba5c3d67b64305c07fc65315332a4b4a079336a78b28cb2f5c2c9b0775f7bad`,
+    and
+    `351c42a7c769eb38d05806178fe257aec3808048de599d9b28d08b86c4b41f00`.
+
+- Complete-text inspection resolves treatment row 8,730 as a true duplicate.
+  Both pages make the same Samsung-profit claims. Their differences are site
+  title, article heading, tag-archive label, and post-navigation wrappers, not
+  distinct article content. The 443/362-character, 9/5-line texts have
+  character, line, and word-sequence similarities of 0.869565, 0.428571, and
+  0.869565. `/rav/datakit-6854-inspect-row8730-0181-v844`,
+  `/rav/datakit-6854-publish-row8730-0185-v849`, and
+  `/rav/datakit-6854-verify-row8730-0186-v850` persisted and independently
+  verified the decision. The inspection, semantic-judgment, manual-Parquet,
+  and marker SHA-256 values are
+  `761ee06cbf8cb3ddc26da68537ab00c2d3cd8dca4daee0f81e59ec61e2799342`,
+  `88c54da820f99e62f1c2437091423ae92d1180a8a3f080501162196cfd679994`,
+  `91c4fce677be6dca5c78d97fb5308dd1cec82c4365ff83c6411bed54a7ffc877`,
+  and
+  `a1d3b1f99bf4c4844c9879fe4a6c98e127c18463d145d092251ed85a4f46b4a1`.
+
+- Complete-text inspection resolves treatment row 8,964 as a true duplicate.
+  The 13,370/13,377-character, 226/226-line SFT examples contain the same
+  manufacturing question, choices, reasoning, explanations, and answer. Their
+  only changed line spells the final answer as `\boxed{G}` rather than
+  `\boxed{\text{G}}`; character, line, and word-sequence similarities are
+  0.999738, 0.995575, and 0.999764.
+  `/rav/datakit-6854-inspect-row8964-0181-v845`,
+  `/rav/datakit-6854-publish-row8964-0184-v848`, and
+  `/rav/datakit-6854-verify-row8964-0186-v851` persisted and independently
+  verified the decision. The corresponding four SHA-256 values are
+  `f3985d6ecb882565734f74a486c36b2708fabb8e04e1faa0cc9936b3a3396f0e`,
+  `9ae41368bb7d4e5f8d1893aeab67d019fb46337d3be4a2b4a0110c9cbf30c63c`,
+  `238e1c1209d030543f66720257563c1960bc26e28ad4fa6eb95480f6511da8d2`,
+  and
+  `527f5e33754fcad930ffdf5d16f168dcc11b209c4e4262ef1f071985399b561e`.
+
+- Complete-text inspection resolves baseline row 4,970 as a true duplicate.
+  Both documents are incoherent college-and-career SEO spam built from the
+  same admissions, job-board, elective, and biomedicine scaffold. Their
+  differences substitute institutions, locations, majors, and programs plus
+  generic filler, which the review contract explicitly treats as
+  non-substantive slots. The 831/827-character, 1/3-line texts have
+  similarities of 0.589867, 0, and 0.485830.
+  `/rav/datakit-6854-inspect-row4970-0182-v846`,
+  `/rav/datakit-6854-publish-row4970-0184-v847`, and
+  `/rav/datakit-6854-verify-row4970-0191-v856` persisted and independently
+  verified the decision. The corresponding four SHA-256 values are
+  `2ee7c793c22db10ac098f9cd91629479b26ec562770d41a4044ad4c5c6030414`,
+  `98c5da03d7e677f854e69705204617ebf3cd34a9321d158c39e61021531ef588`,
+  `238ec9fa5a7cba1472740c79c656652407948c3a84d826c721255c0b678061c9`,
+  and
+  `9a22edcd962472ad004422c0fb7eb9676c1c84b054c0b3390d3bc7059130c337`.
+  An earlier verification attempt correctly rejected a paraphrased local
+  rationale; the successful verifier reconstructed the exact persisted basis
+  before comparing the hash-bound Parquet bytes.
+
+- Replacing all three unresolved outcomes with true duplicates gives 487 false
+  positives and 458 true duplicates in the new batch. Across the stable
+  1,698-checkpoint snapshot, all 260 unresolved model outcomes are covered by
+  199 true-duplicate and 61 false-positive manual records. The adjusted totals
+  are:
+
+  - baseline: 172,879 pairs, 109,722 false positives, 63,157 true duplicates;
+  - treatment: 42,800 pairs, 22,152 false positives, 20,648 true duplicates;
+  - combined: 215,679 pairs, 131,874 false positives, 83,805 true duplicates.
+
+- The next audit frontiers are p0 `(9, 0)`, p1 `(41, 0)`, p2 `(73, 128)`, and
+  p3 `(105, 3,328)`. At audit time their pending checkpoints contained
+  136,594,323, 154,078,816, 35,083,358, and 646,552 characters, respectively.
+  All four batch-priority 2-H100 workers remain active.
+
 ### 2026-07-27T02:32:00Z — 214,734 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0174-v836` independently
