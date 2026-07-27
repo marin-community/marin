@@ -16,6 +16,92 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T12:24:30Z — 270,515 pairs verified; all 316 ambiguities covered
+
+- `/rav/rav-datakit-6854-reconcile-manual-1222-v1177` independently
+  reconciled 2,129 completed semantic checkpoints, every outcome Parquet, 172
+  current manual markers, and 318 manual Parquets representing 316 unique
+  review keys. All 316 unresolved model outcomes have one consistent
+  full-text decision; none are missing. The snapshot covers 270,515 of
+  755,281 semantic candidates (35.82%). Applying the manual decisions gives:
+
+  - baseline: 216,709 pairs, 137,582 false positives, and 79,127 true
+    duplicates;
+  - treatment: 53,806 pairs, 27,863 false positives, and 25,943 true
+    duplicates;
+  - combined: 165,445 false positives and 105,070 true duplicates.
+
+  The immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-1222.json`
+  with SHA-256
+  `23de3e23887bd3f88a6a11300e186b969889822e1c913c8332c201f4b4dcf1fd`.
+- Four new baseline ambiguities were resolved from complete persisted texts,
+  all model judgments, exact diffs, and exact similarity statistics:
+
+  - row 3,987 is a true duplicate. Both 11,000-character documents are
+    incoherent keto SEO text generated from the same sentence-template
+    scaffold. Their changed headings, buzzword phrases, and bullet labels
+    convey no coherent facts or requests under the pinned low-value-template
+    boundary. Member, canonical, and inspection SHA-256 values are
+    `d5c0a56a40fd3ee23885e5f6ef9cdb328fd9b489bca034613cb0731ef99132d4`,
+    `a0f310bde0bb9910134f9ced733460e92fc2a3130dabc8f5ad9fc39d24f3153a`,
+    and
+    `9292e298c8c2cb37e1be41154da55c124df60349f3e7a214d2a7b7e20ac4db20`.
+  - row 4,479 is a true duplicate. The complete pair contains the same
+    online-gambling article, section order, advice, and examples. Differences
+    are OCR-style wording changes and low-value spam keyword slots, including
+    canonical `situs olxtoto` and member `mejahoki`; neither adds a distinct
+    coherent fact or request. Member, canonical, and inspection SHA-256
+    values are
+    `086708bf15e297a9ea5a61a1660a03f8573a753ff520690c75f88e0aab01fd9f`,
+    `b0c022c24927b6e921f813aa5636ff46d07263ab1730321226ade501c37c4ebe`,
+    and
+    `6b6e7cfbead727a9de61a46462b11148c66f59fb322c3cf0ea23cd6cd7c9710c`.
+  - row 5,063 is a true duplicate. Both complete documents are incoherent
+    game-and-dating SEO spam assembled from the same phrase inventory. The
+    changed title, keyword, username, date, and comment fragment are template
+    slots rather than coherent member-only content. Member, canonical, and
+    inspection SHA-256 values are
+    `07904e4bbb16c4740d7b0f2d3cbec18dec9d93c32f26e7b68594d7bb21cb39dc`,
+    `773038fda2d77d7c12d77f86dcdee1906439a7602b2005a9512923779e065d2b`,
+    and
+    `3058bb304671f02ce1ac27650b7d6132ac6bf8202b74c3a64859975f510dd5c3`.
+  - row 5,154 is a false positive. Its core steroid article and keyword
+    substitutions are shared, but the member uniquely asks whether `Robo` is
+    a good or superior testosterone replacement. The canonical does not
+    contain that distinct question. Member, canonical, and inspection
+    SHA-256 values are
+    `54dd354e9179bb684738f3fedf9fa73b10a89588a2763a7601053c3cd0f5fda2`,
+    `47fbf1b84ba5088e8ea30545e789567d0f3350eebf942be0ed43070117bd9734`,
+    and
+    `c9528449b1e17c1d58aa27e84f6e91788523eff55299ecb3911d322c163f7cc7`.
+
+- The four publish jobs wrote immutable, hash-bound decisions and the four
+  separate verify-only jobs independently reread their source pairs, semantic
+  evidence, inspections, deterministic Parquet bytes, and completion markers.
+  Their manual-Parquet/marker SHA-256 pairs, in row order, are:
+
+  - row 3,987:
+    `b2e4d1205a68376f002c2a3895eb1945c6261b6b2ca0174a3fe59c64c2f5eb40`
+    /
+    `39bb6abf7b32e371ed6055fb1aa8f1f00c3874909d3b127c5648ce3fe6be872a`;
+  - row 4,479:
+    `4cd5470f729dab211de72f1a66688eb7d9802e03459eb83ed6660b1cf10d2196`
+    /
+    `7cae714be41e3df415bd61a73aa9f80967a5f12e7cd0fd103ace8524887f28b7`;
+  - row 5,063:
+    `6fcbcc1eb6d2b5f9d7c16eb1473db80268bd9902b5295cf995ed14404717d7ec`
+    /
+    `e34438f605ebd8f4212cd69636ec08728938b638efe029ab5004a3d8ddffd474`;
+  - row 5,154:
+    `97057d210b7954e7233bbcd8d15bca0c1678efe17331c1f65c39fb89ecaad189`
+    /
+    `9870625c058388493108cac5c90246b2f7632d4d37c5d5e9b0423ab9fc9e6b46`.
+
+- The four batch-priority 2-H100 workers remain active and are returning HTTP
+  200 responses. All 12 root, broker, and GPU pods are Ready with zero
+  Kubernetes restarts.
+
 ### 2026-07-27T11:51:19Z — 264,115 pairs verified; SEO ambiguity resolved
 
 - `/rav/rav-datakit-6854-reconcile-manual-1150-v1158` independently
