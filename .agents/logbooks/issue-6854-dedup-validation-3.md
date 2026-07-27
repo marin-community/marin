@@ -1051,3 +1051,57 @@ are recorded in the previous volumes.
 - The independently audited total is 325,385 pairs. The next frontiers are p0
   `(14, 0)`, p1 `(45, 896)`, p2 `(78, 0)`, and p3 `(110, 0)`. The eight
   H100s continue returning successful responses at batch priority.
+
+## 2026-07-27 22:40 UTC — college-template adjudications reach 43.42%
+
+- Checkpoint audits independently reread another 2,688 pairs. Two baseline
+  outcomes required full-text adjudication:
+  - decision-file 45, semantic offset 2,560, pair row 4,180 is a false
+    positive. Institution and program names are low-value slots in both
+    college SEO templates, but the member additionally discusses the time
+    required to earn an advanced degree, certificate and adult-education
+    programs, and the career and experience benefits of an internship. Those
+    propositions are absent from the canonical. Its inspection, manual
+    Parquet, and marker SHA-256 values are
+    `eed5cf6c25df38254edd7b3af86801fd04ac932d9825a4f781daa93bdaa205ca`,
+    `ae99f4d8398019b557e1781e43099f0e066459514975c6e16eee9179fe4bcb77`,
+    and
+    `a35d050573efbaf68287c521c96e660dc2f7a29acdd35efb64a94013cc972ecc`.
+  - decision-file 45, semantic offset 2,944, pair row 4,897 is a false
+    positive. Beyond replaceable institution and program names, the member
+    asks which degrees lead to successful careers, discusses admissions
+    registration and elective lectures, and states a degree requirement for
+    medical engineers. Deleting it loses those distinct propositions. Its
+    inspection, manual Parquet, and marker SHA-256 values are
+    `cacfafef112bf69519bf4e440f10ba89e779bcd1f42f279265ef88e15a4c9d06`,
+    `11d8fa71d358f8ef3ec494f3ddb223338f440d546a29636795b0762bf0009bdc`,
+    and
+    `966a50404f9bcd334afb25d5684ce5a8280e2443b38f401f1c7f77352f3e54f6`.
+  Publish jobs `/rav/rav-datakit-6854-publish-row4180-v1545` and
+  `/rav/rav-datakit-6854-publish-row4897-v1550` wrote the hash-bound records.
+  Separate verify-only jobs reproduced their complete input and output bytes.
+- `/rav/rav-datakit-6854-reconcile-manual-2238-v1552` verified 2,583
+  checkpoints and complete manual coverage for all 381 unresolved outcomes.
+  Applying 80 false-positive and 301 true-duplicate manual decisions gives:
+
+  | Arm | Pairs | False positives | True duplicates | False-positive rate |
+  | --- | ---: | ---: | ---: | ---: |
+  | baseline | 261,490 | 166,011 | 95,479 | 63.4866% |
+  | treatment | 66,455 | 34,488 | 31,967 | 51.8968% |
+  | combined | 327,945 | 200,499 | 127,446 | 61.1380% |
+
+  The baseline-minus-treatment gap is 11.5898 percentage points. This snapshot
+  covers 43.4203% of the 755,281 semantic candidates. Its immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-2238.json`
+  with SHA-256
+  `758568caec59899160369ccff4ed412604ac230db91fd91a8a48e899144bfbd8`.
+  The semantic, manual-marker, and manual-Parquet path-manifest SHA-256 values
+  are
+  `dccc75a4b56942364aeb378189d0ab7d51de9a89262cfa8ddc8ade0079332449`,
+  `2fee48ecb1318f09d6c75185c5b3696083db7e884c77aa3d25ebd854448acf4c`,
+  and
+  `481892fca394d1878dd9a27870a0dee1ac24b778f45b2f39b58f4d17f17b8f1d`.
+  No manual outcome is missing.
+- The independently audited and reconciled total is 327,945 pairs. The next
+  frontiers are p0 `(14, 0)`, p1 `(45, 3456)`, p2 `(78, 0)`, and p3
+  `(110, 128)`. The eight H100s remain healthy at batch priority.
