@@ -850,3 +850,19 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - Focused tests report `57 passed`; changed-file precommit including Pyrefly passes.
 - Next action:
   - Run L4 r4. L8 remains blocked until six finite steps.
+
+### 2026-07-27 02:51 PDT - L4 r4 identifies missing in-task weight materialization
+- Launch:
+  - Parent `/dlwh/iris-run-job-20260727-093433`, unchanged L4 configuration with run ID suffix `r4`.
+- Result:
+  - All four ranks entered explicit-MPMD lowering, then failed before compile with accumulator input sharding `P("expert", "data", "model")` instead of required `P("expert", None, None)`.
+  - The initial explicit zero reshard changed the first observed failure, but the accumulator returned through the expert-weight cotangent inherited canonical parameter sharding.
+  - Parent, child, and retry are terminal killed; no resource remains live. No loss, MFU, or step metric was emitted.
+  - W&B [r4](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-ep2d4-fusedacc-fp8-l4-e64k4-b128-s4096-p4m4-r4-20260727) is finished with config metadata only.
+- Root cause and fix:
+  - `materialize_compute_params` was an identity function that relied on the MPMD task's declared output sharding. Explicit-axis lowering did not perform the intended expert-weight reshard inside the task, as also shown by r1/r2's token seeing canonical data sharding.
+  - Commit `f506b057f1d7e7c45e4513e02985da313c9b397c` explicitly reshards Ring expert weights to `P("expert", None, None)` inside the once-per-step materialization task. Sonic retains its existing fully replicated `P()` target.
+  - This is the intended once-per-step compute-weight all-gather. It should keep the custom VJP's expert-weight cotangent data-local instead of mapping it back to canonical parameter sharding.
+  - Focused tests report `57 passed`; changed-file precommit including Pyrefly passes.
+- Next action:
+  - Run L4 r5. L8 remains blocked.
