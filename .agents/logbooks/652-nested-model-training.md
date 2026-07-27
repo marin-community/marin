@@ -848,3 +848,21 @@ launch:
   At this early point the nested arms are within measurement noise of E256
   (`-0.55%` and `-0.60%`), while E128 is `+2.11%`. Final cost estimates will
   use the full steady-state histories.
+
+### 2026-07-27 17:46 - E256 W&B tail has durable fallbacks
+
+- The E256 W&B uploader reported a fatal network upload error after phase step
+  1,906. Training continued normally past step 3,000; the other three W&B
+  uploaders remained current.
+- Levanter's telltale tracker continued mirroring the same scalar metrics into
+  durable finelog. A four-arm query recovered global step, loss, step duration,
+  tokens/s, and routing overflow from task index zero. Finelog's early sampled
+  medians after step 1,024 were `0.2130 s`, `0.2176 s`, `0.2123 s`, and
+  `0.2124 s` for E256, E128, ladder25, and ladder50.
+- The E256 task-zero pod also retains its append-only local W&B run file under
+  `/app/wandb`; it was 204 MiB while training at roughly step 3,500. Copy it
+  with `kubectl cp` near the end of training and sync it after completion if
+  the uploader does not recover.
+- This is a reporting-path incident, not an architecture or training failure.
+  Finelog is sufficient for the continuous cost series even if W&B repair
+  fails.

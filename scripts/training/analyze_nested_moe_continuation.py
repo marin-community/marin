@@ -29,6 +29,7 @@ GPU_COUNT = 64
 TIMING_WARMUP_STEPS = 1024
 TIMING_BLOCK_STEPS = 200
 OUTPUT_DIR = Path("docs/reports/assets")
+TELLTALE_CSV = OUTPUT_DIR / "nested-model-training-final-telltale.csv"
 
 GLOBAL_STEP = "global_step"
 TRAIN_LOSS = "train/loss"
@@ -122,10 +123,11 @@ def histories(
 
 
 def block_bootstrap_ci(values: list[HistoryPoint]) -> tuple[float, float]:
+    block_steps = TIMING_BLOCK_STEPS if len(values) >= 1000 else 10
     blocks = [
-        [point.value for point in values[index : index + TIMING_BLOCK_STEPS]]
-        for index in range(0, len(values), TIMING_BLOCK_STEPS)
-        if len(values[index : index + TIMING_BLOCK_STEPS]) == TIMING_BLOCK_STEPS
+        [point.value for point in values[index : index + block_steps]]
+        for index in range(0, len(values), block_steps)
+        if len(values[index : index + block_steps]) == block_steps
     ]
     if len(blocks) < 2:
         return math.nan, math.nan
@@ -152,6 +154,29 @@ def timing_summary(duration: list[HistoryPoint]) -> TimingSummary:
         block_bootstrap_ci95_low=ci_low,
         block_bootstrap_ci95_high=ci_high,
     )
+
+
+def telltale_histories() -> dict[str, dict[str, list[HistoryPoint]]]:
+    """Load task-zero scalar snapshots exported from durable finelog."""
+    run_to_arm = {run_name: arm for arm, run_name in CONTINUATION_RUNS.items()}
+    metric_columns = {
+        "train_loss": "loss",
+        "duration": "duration",
+        "tokens_per_second": "tokens_per_second",
+        "hook": "hook",
+        "loading": "loading",
+        "overflow": "overflow",
+    }
+    values = {arm: {metric: [] for metric in metric_columns} for arm in CONTINUATION_RUNS}
+    with TELLTALE_CSV.open(newline="") as input_file:
+        for row in csv.DictReader(input_file):
+            arm = run_to_arm[row["run"]]
+            step = int(float(row["step"]))
+            for metric, column in metric_columns.items():
+                value = row.get(column)
+                if value:
+                    values[arm][metric].append(HistoryPoint(step=step, value=float(value)))
+    return values
 
 
 def rolling_median(points: list[HistoryPoint], window: int) -> tuple[list[int], list[float]]:
@@ -189,7 +214,10 @@ def plot_loss(
     fig, axis = plt.subplots(figsize=(9, 5.2))
     for arm in BASE_RUNS:
         base_steps, base_values = rolling_median(base_histories[arm]["train_loss"], 200)
-        continuation_steps, continuation_values = rolling_median(continuation_histories[arm]["train_loss"], 200)
+        continuation_window = 200 if len(continuation_histories[arm]["train_loss"]) >= 5000 else 10
+        continuation_steps, continuation_values = rolling_median(
+            continuation_histories[arm]["train_loss"], continuation_window
+        )
         axis.plot(
             [(step + 1) * TOKENS_PER_STEP / 1e9 for step in base_steps],
             base_values,
@@ -207,8 +235,16 @@ def plot_loss(
     axis.axvline(boundary, color="#8c959f", linestyle="--", linewidth=1)
     axis.text(boundary + 0.15, axis.get_ylim()[1] - 0.05, "optimizer reset", color="#57606a")
     axis.set_xlabel("Effective training tokens (billions)")
-    axis.set_ylabel("Training cross-entropy loss")
-    axis.set_title("Nested-MoE training loss across both phases")
+    axis.set_ylabel("Logged mixed-objective cross-entropy loss")
+    axis.set_title("Training stability; objectives differ across arms")
+    axis.text(
+        0.01,
+        0.02,
+        "Ladder loss includes harder restricted-submodel rows; use full-mode Paloma for quality.",
+        transform=axis.transAxes,
+        color="#57606a",
+        fontsize=9,
+    )
     axis.grid(alpha=0.2)
     axis.legend(frameon=False)
     fig.tight_layout()
@@ -220,7 +256,8 @@ def plot_timing(continuation_histories: Mapping[str, Mapping[str, list[HistoryPo
     fig, axis = plt.subplots(figsize=(9, 5.2))
     for arm in CONTINUATION_RUNS:
         points = [point for point in continuation_histories[arm]["duration"] if point.step >= TIMING_WARMUP_STEPS]
-        steps, values = rolling_median(points, 200)
+        window = 200 if len(points) >= 5000 else 10
+        steps, values = rolling_median(points, window)
         axis.plot(steps, values, color=COLORS[arm], label=LABELS[arm])
     axis.set_xlabel("Continuation optimizer step")
     axis.set_ylabel("Step compute time (seconds)")
@@ -306,7 +343,7 @@ def runtime_forecasts(median_step: float) -> dict[str, dict[str, float | int]]:
 
 
 def training_loss_projection(points: list[HistoryPoint]) -> dict[str, Any]:
-    block_size = 200
+    block_size = 200 if len(points) >= 5000 else 20
     blocks = [
         points[index : index + block_size]
         for index in range(0, len(points), block_size)
@@ -384,6 +421,14 @@ def main() -> None:
     continuation_histories = {
         arm: histories(run, {**common_metrics, **nested_metrics}) for arm, run in continuation_runs.items()
     }
+    telemetry_source = "wandb"
+    if TELLTALE_CSV.exists():
+        telemetry_source = "finelog_telltale_task_zero"
+        fallback = telltale_histories()
+        for arm in CONTINUATION_RUNS:
+            for metric, points in fallback[arm].items():
+                if points:
+                    continuation_histories[arm][metric] = points
     timings = {arm: timing_summary(continuation_histories[arm]["duration"]) for arm in CONTINUATION_RUNS}
     control_step = timings["large_control"].median_step_seconds
 
@@ -428,6 +473,7 @@ def main() -> None:
         "base_steps": BASE_STEPS,
         "continuation_steps": CONTINUATION_STEPS,
         "gpu_count_per_arm": GPU_COUNT,
+        "continuation_telemetry_source": telemetry_source,
         "initialization": {
             "mode": "weights_only",
             "optimizer": "fresh",

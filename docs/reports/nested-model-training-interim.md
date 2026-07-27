@@ -234,7 +234,13 @@ median post-warmup step times of 213.36 ms for E256, 217.61 ms for E128,
 E256, the nested arms were -0.51% and -0.59%; this is evidence of no measurable
 surcharge, not evidence that masking makes the matrix multiply faster.
 
-![Live training loss across the original and weights-only continuation phases.](assets/nested-model-training-final-loss.png)
+![Full-mode Paloma through the 4.3B-token phase boundary. This is the
+standardized cross-arm quality comparison; lower is
+better.](assets/nested-model-training-final-paloma.png)
+
+![Mixed-objective training loss across the original and weights-only
+continuation phases. Ladder heights are not comparable to the controls because
+they include restricted-submodel rows.](assets/nested-model-training-final-loss.png)
 
 The live W&B runs are
 [E256 control](https://wandb.ai/marin-community/marin_moe/runs/nest-moe-001-full-d768-s2048-e256-extend16b-r31),
