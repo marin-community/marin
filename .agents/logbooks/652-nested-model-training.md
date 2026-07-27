@@ -811,3 +811,17 @@ launch:
 - Final analysis will add the 8,192-step offset when splicing phase-local
   histories. It will report this optimizer reset prominently and will not call
   the result a seamless full-state continuation.
+
+### 2026-07-27 17:21 - Weights-only launcher bug caught
+
+- `r30` coordinators resolved the correct source checkpoints, but their
+  training children reported scratch initialization.
+- Cause: `GrugMoeLaunchConfig.init_from` was passed into `TrainerConfig` but
+  the custom Grug training loop only executes that path when
+  `GrugTrainerConfig.initialization_mode` is explicitly `WEIGHTS_ONLY`.
+- All four jobs were stopped. No `r30` metrics are evidence for the
+  continuation.
+- The generic launcher now derives `WEIGHTS_ONLY` from its documented
+  `init_from` field. Replacement jobs must log
+  `Initialized weights from .../step-8192` and begin with losses near the
+  4.295B-token endpoints before they pass initialization validation.

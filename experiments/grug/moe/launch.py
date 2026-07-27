@@ -44,7 +44,13 @@ from experiments.datasets.starcoder import starcoder_dataset
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.model import GrugModelConfig
-from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
+from experiments.grug.moe.train import (
+    GrugEvalConfig,
+    GrugRunConfig,
+    GrugTrainerConfig,
+    InitializationMode,
+    run_grug,
+)
 from experiments.llama import llama3_tokenizer
 
 # SlimPajama-6B tokenization OOMs at the default 10g worker resources.
@@ -179,7 +185,14 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         ),
     )
 
-    grug_trainer = dataclasses.replace(config.grug_trainer, trainer=trainer)
+    initialization_mode = (
+        InitializationMode.WEIGHTS_ONLY if config.init_from is not None else config.grug_trainer.initialization_mode
+    )
+    grug_trainer = dataclasses.replace(
+        config.grug_trainer,
+        trainer=trainer,
+        initialization_mode=initialization_mode,
+    )
 
     run_config = GrugRunConfig(
         model=config.model,

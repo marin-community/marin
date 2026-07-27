@@ -341,6 +341,7 @@ def test_nested_moe_launcher_builds_power_ladder(monkeypatch, tmp_path):
     assert resumed_schedule(8193) < config.optimizer.learning_rate
 
     dispatched = []
+    monkeypatch.setattr(grug_moe_launch, "latest_checkpoint_path", lambda path: path + "/step-8192")
     monkeypatch.setattr(grug_moe_launch, "run_grug", dispatched.append)
     grug_moe_launch.run_grug_moe_trial(config)
 
@@ -397,6 +398,14 @@ def test_nested_moe_launcher_builds_weights_only_continuation(monkeypatch, tmp_p
     )
     np.testing.assert_allclose(config.optimizer.learning_rate, default_optimizer.learning_rate * 0.1)
     np.testing.assert_allclose(config.optimizer.adam_lr, default_optimizer.adam_lr * 0.1)
+
+    dispatched = []
+    monkeypatch.setattr(grug_moe_launch, "latest_checkpoint_path", lambda path: path + "/step-8192")
+    monkeypatch.setattr(grug_moe_launch, "run_grug", dispatched.append)
+    grug_moe_launch.run_grug_moe_trial(config)
+
+    assert dispatched[0].trainer.initialization_mode is grug_moe_launch.InitializationMode.WEIGHTS_ONLY
+    assert dispatched[0].trainer.trainer.initialize_from == checkpoint_root + "/step-8192"
 
 
 def test_grug_moe_nested_checkpoint_init_extracts_weights_and_qb_state():

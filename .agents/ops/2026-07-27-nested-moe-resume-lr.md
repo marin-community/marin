@@ -51,6 +51,13 @@ pretraining peak learning rates with a 512-step warmup, then linear decay. This
 changes the continuation question from seamless training-state resume to
 paired continued pretraining from identical 4.295B-token endpoints.
 
+The first weights-only launch (`r30`) resolved the source checkpoint but did
+not load it because the generic Grug launcher failed to set
+`InitializationMode.WEIGHTS_ONLY` when `GrugMoeLaunchConfig.init_from` was
+present. The jobs were stopped after the logs reported scratch
+initialization. The launcher now derives the runtime initialization mode from
+the documented `init_from` field, with a dispatch-level regression test.
+
 ## Future work
 
 - [ ] Isolate which restored optimizer-state leaf first becomes non-finite.
