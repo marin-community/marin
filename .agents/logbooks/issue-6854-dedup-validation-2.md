@@ -16,6 +16,73 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T04:44:15Z — 225,336 pairs verified
+
+- `/rav/rav-datakit-6854-audit-next-checkpoints-0275-v940` independently
+  revalidated five baseline checkpoints: p0 decision-file 9 offsets 384, 512,
+  and 640, plus p1 decision-file 41 offsets 256 and 384. Their 640 pairs
+  contain 432 model false positives, 207 model true duplicates, and one
+  unresolved outcome. Eleven pairs used chunked review and 629 used direct
+  review. All 2,090 judgments and request attempts were valid on their first
+  attempt.
+- In checkpoint order, the outcome Parquet SHA-256 values are:
+
+  - p0:
+    `dde0df8ca1f7f80aeacc12c94579ad5dd7ee3de68bd52bced2629641753ded49`,
+    `bd5f89325c568c509a7da72515d9918c177d01516bff0067f0db3e4e1a5507c4`,
+    and
+    `066c01704d98e8ca7e5714dfa87bc872fdd4a13b63455c1f253d882f3136d1fd`;
+  - p1:
+    `9ec76422d87146c62d0c49d669c98a7d15aed26f2bb971b9422191992345316d`
+    and
+    `2cfee98afec35a6dc440f2ea5715e31c8c3bfc2766062c5c039409d073d5e6d4`.
+
+- Complete-text inspection resolves the p0 ambiguity as a true duplicate
+  under the pinned directional deletion policy. Row 966 compares two layouts
+  of the same R600 Gallium3D forum thread. Both contain the same article
+  summary, ten posts, technical claims, `glxinfo` output, Piglit count, kernel
+  and Cayman limitations, and external links. The member's quote blocks repeat
+  comments already present in the canonical; changed post counts and status
+  labels, Markdown layout, punctuation, and `LOL` add no substantive payload.
+  The 3,322- and 2,902-character records have character, line, and
+  word-sequence similarities 0.800450, 0.256410, and 0.819767. Member and
+  canonical SHA-256 values are
+  `67ac49f1b3c3078bb1f83e5bd72544d954703a53599681ed84515d489c1f1561`
+  and
+  `ef1369b869ec7ced323a46807062e5e079a576b76b93e7fafd15ee33abb71e46`.
+  The high-confidence duplication pass correctly found every substantive item
+  represented. The loss pass incorrectly claimed the IRC timeline was absent
+  even though the canonical contains it verbatim; the low-confidence tiebreak
+  cited content absent from the member, which cannot establish loss when
+  deleting the member.
+
+- `/rav/rav-datakit-6854-inspect-row966-0276-v941` persisted the complete
+  texts and diff with inspection SHA-256
+  `70614306f525988cd9c0ebfbfbaad3257ffc05fe55638734db92c60c0017a54e`.
+  `/rav/rav-datakit-6854-publish-row966-0277-v942` wrote the immutable manual
+  record, and `/rav/rav-datakit-6854-verify-row966-0278-v943` independently
+  reread every bound source and output artifact. The semantic-judgment,
+  manual-Parquet, and marker SHA-256 values are
+  `56897dbfb57d40594fcaab10d8fe733cd14dbf40e40a2e64049876f86957b42b`,
+  `4e4673418f29bc4f33cf9898abe8646c94939d4e38fac371f5451784e3eff405`,
+  and
+  `4b380f48d966a3a0dfdf0aa4a8103bbfd2a189f2fa51bc3456051ddd7b941677`.
+
+- Replacing the unresolved outcome with a true duplicate gives 432 false
+  positives and 208 true duplicates in the new block. Across the stable
+  1,774-checkpoint snapshot, all 276 unresolved model outcomes are covered by
+  215 true-duplicate and 61 false-positive manual records. The adjusted totals
+  are:
+
+  - baseline: 180,103 pairs, 114,454 false positives, 65,649 true duplicates;
+  - treatment: 45,233 pairs, 23,368 false positives, 21,865 true duplicates;
+  - combined: 225,336 pairs, 137,822 false positives, 87,514 true duplicates.
+
+- The next audit frontiers are p0 `(9, 768)`, p1 `(41, 512)`, p2 `(74, 0)`,
+  and p3 `(106, 0)`. The p0 and p1 pending checkpoints contain 2,639,828 and
+  3,833,661 characters, respectively. All four batch-priority 2-H100 workers
+  remain active.
+
 ### 2026-07-27T04:38:15Z — 224,696 pairs verified
 
 - `/rav/rav-datakit-6854-audit-next-checkpoints-0268-v933` independently
