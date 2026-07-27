@@ -847,6 +847,14 @@ class DenseBlock(eqx.Module):
 # token_embed) and reusing the wedge-safe ``_embedding_gather`` -- no row-sharding / ragged_all_to_all.
 _NORMALIZED_INPUT_STREAM_SCALE = 2.0**0.5
 _OVER_ENCODING_TABLE_ROW_ALIGNMENT = 256
+# ragged_all_to_all receive-buffer size = per-device sends * this factor. SCALE_OE_A2A_FACTOR=0 (default)
+# uses dp_size -- the safe worst case (all ids to one shard), which fits b1024 but makes the backward
+# reduce ~dp_size padding rows (the measured OE throughput hit: isolated lookup fwd+bwd 1273ms at
+# dp_size=64, 67ms at 4x). A smaller factor cuts that padding but (a) must exceed the max rows any shard
+# receives or the a2a ABORTS -- n-gram frequencies are Zipfian, so 4x overflowed real data -- and (b)
+# perturbs XLA's memory schedule into an OOM on the maxed b1024 stack unless paired with master-param
+# offload or capacity-drop.
+_OE_A2A_CAPACITY_FACTOR = int(os.environ.get("SCALE_OE_A2A_FACTOR", "0"))
 
 
 def _over_encoding_table_rows(logical_rows: int) -> int:
@@ -912,7 +920,10 @@ def _oe_rowwise_lookup_local(
     send_counts = jnp.bincount(owners, length=dp_size).astype(jnp.int32)
     all_shard_counts = jax.lax.all_gather(send_counts, axis_name)
     input_offsets, send_sizes, output_offsets, recv_sizes = _oe_shard_a2a_params(all_shard_counts, shard_id)
-    capacity = flat_ids.shape[0] * dp_size
+    # Per-device receive is ~flat_ids (uniform n-gram hashing spreads ids evenly over row owners), not
+    # the global worst case flat_ids*dp_size -- over-provisioning that made the backward reduce ~dp_size
+    # too many (padding) rows, costing ~1s. Size to flat_ids * a safety factor for load imbalance.
+    capacity = flat_ids.shape[0] * (_OE_A2A_CAPACITY_FACTOR or dp_size)
     dispatched_ids = jax.lax.ragged_all_to_all(
         sorted_local_ids,
         jnp.zeros((capacity,), dtype=jnp.int32),
