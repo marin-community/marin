@@ -371,6 +371,14 @@ if [ "$EXPERT_GRADIENT_ACCUMULATION" = fused_fp32_data_local ]; then
         echo "ERROR: fused_fp32_data_local requires --moe-implementation ring" >&2
         exit 1
     fi
+    if [ "$REPLICA_AXIS" -ne 1 ]; then
+        echo "ERROR: fused_fp32_data_local requires --replica-axis 1" >&2
+        exit 1
+    fi
+    if [ "$RESEARCH_FP8_EXPERT_GEMM" = true ]; then
+        echo "ERROR: fused_fp32_data_local does not support --research-fp8-expert-gemm" >&2
+        exit 1
+    fi
     if [ "$EXPERT_AXIS" -le 1 ] || [ "$EXPERT_AXIS" -ge "$GPUS_PER_REPLICA" ]; then
         echo "ERROR: fused_fp32_data_local requires both expert and data parallelism" >&2
         exit 1

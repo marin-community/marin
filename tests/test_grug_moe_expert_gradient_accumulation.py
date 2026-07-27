@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import os
 import subprocess
 from pathlib import Path
@@ -11,7 +12,7 @@ from fray.cluster import ResourceConfig
 from levanter.data.text.datasets import LmDataConfig
 
 from experiments.grug.moe import launch_cw_jaxpp_may_d2560
-from experiments.grug.moe.model import GrugModelConfig
+from experiments.grug.moe.model import GrugModelConfig, ResearchFp8ExpertGemmConfig
 from experiments.grug.moe.train import GrugJaxPPConfig, GrugRunConfig, GrugTrainerConfig
 
 _RUN_SCRIPT = Path(__file__).parents[1] / "experiments/grug/moe/run_cw_jaxpp_may_d2560.sh"
@@ -75,6 +76,25 @@ def test_fused_expert_gradient_accumulation_requires_ring_and_expert_parallelism
             data=data,
             resources=resources,
             trainer=GrugTrainerConfig(expert_axis_size=1, pipeline=_pipeline_config()),
+        )
+    with pytest.raises(ValueError, match="replica_axis_size=1"):
+        GrugRunConfig(
+            model=_model_config(),
+            data=data,
+            resources=resources,
+            trainer=GrugTrainerConfig(expert_axis_size=2, replica_axis_size=2, pipeline=_pipeline_config()),
+        )
+    with pytest.raises(ValueError, match="do not support research FP8"):
+        GrugRunConfig(
+            model=dataclasses.replace(
+                _model_config(),
+                hidden_dim=128,
+                intermediate_dim=128,
+                research_fp8_expert_gemm=ResearchFp8ExpertGemmConfig(),
+            ),
+            data=data,
+            resources=resources,
+            trainer=GrugTrainerConfig(expert_axis_size=2, replica_axis_size=1, pipeline=_pipeline_config()),
         )
 
 

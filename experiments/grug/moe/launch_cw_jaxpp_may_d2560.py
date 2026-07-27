@@ -382,6 +382,10 @@ def build_jaxpp_may_checkpoint(*, version: str = "dev") -> ArtifactStep[Levanter
     if pipeline is not None and pipeline.expert_gradient_accumulation == "fused_fp32_data_local":
         if model.moe_implementation != "ring":
             raise ValueError("fused_fp32_data_local expert gradients require MAY_MOE_IMPLEMENTATION=ring")
+        if replica_axis != 1:
+            raise ValueError("fused_fp32_data_local expert gradients require MAY_REPLICA_AXIS=1")
+        if model.research_fp8_expert_gemm is not None:
+            raise ValueError("fused_fp32_data_local expert gradients do not support research FP8 expert GEMMs")
         if expert_axis <= 1 or expert_axis >= gpus_per_replica:
             raise ValueError(
                 "fused_fp32_data_local expert gradients require both expert and data parallelism; "

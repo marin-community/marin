@@ -345,6 +345,10 @@ class GrugRunConfig:
                 raise ValueError("fused FP32 data-local expert gradients require the exact bulk-ring MoE implementation")
             if self.trainer.expert_axis_size <= 1:
                 raise ValueError("fused FP32 data-local expert gradients require expert_axis_size greater than 1")
+            if self.trainer.replica_axis_size != 1:
+                raise ValueError("fused FP32 data-local expert gradients require replica_axis_size=1")
+            if self.model.research_fp8_expert_gemm is not None:
+                raise ValueError("fused FP32 data-local expert gradients do not support research FP8 expert GEMMs")
         if self.model.moe_implementation in _NCCL_EP_IMPLEMENTATIONS:
             if pipeline is None or pipeline.implementation != "explicit_mpmd":
                 raise ValueError("NCCL_EP requires the explicit MPMD JaxPP pipeline")
