@@ -783,3 +783,15 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - The gate is for compilation, lifecycle, sharding, and numerical sanity. It is not a throughput claim for L24.
 - Next action:
   - Submit the L4 gate on `cw-rno2a` from `5ef9956639` with a dedicated babysitter. Run a matched L8 control/treatment only after L4 reaches training metrics without compiler, donation, VMA, or optimizer-tree failure.
+
+### 2026-07-27 02:08 PDT - Launch L4 fused-accumulator lifecycle gate
+- Commit Hash: `73c33a5f7d34ae3f0542236a21add581b932a9cc`.
+- Command:
+  - `GRUG_JAXPP_LOG_LOCAL_MEMORY_PLAN=true TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --cluster cw-rno2a --run-id jaxpp-rno2a-ring-ep2d4-fusedacc-fp8-l4-e64k4-b128-s4096-p4m4-r1-20260727 --schedule std_1f1b --implementation explicit_mpmd --explicit-mpmd-schedule-mode default --explicit-mpmd-pipeline-wire-format fp8 --explicit-mpmd-stage-task-microbatch-group-size 1 --expert-gradient-accumulation fused_fp32_data_local --physical-stages 4 --logical-stages 4 --stage-layer-counts 1,1,1,1 --microbatches 4 --nodes 4 --gpus-per-replica 8 --expert-axis 2 --layers 4 --experts 64 --top-k 4 --vocab-size 8192 --batch 128 --seq-len 4096 --moe-implementation ring --attention-implementation gpu_fa4_cute --ragged-dot-implementation triton --ragged-dot-block-k 32 --ragged-dot-num-warps 8 --loss-implementation xla --steps 6 --tracker wandb --xla-memory-fraction 0.70 --remat save_moe`.
+- Jobs:
+  - Parent `/dlwh/iris-run-job-20260727-090740` on `cw-rno2a`.
+  - Babysitter `019fa2d4-b845-7561-a8f3-0fff42a00c62` owns the parent and generated child through terminal state.
+- Gate:
+  - Require all four ranks to complete setup, lower, compile, and six finite training steps.
+  - Reject compiler, VMA, donation, accumulator synchronization, optimizer-tree, OOM, or cross-rank lifecycle failure.
+  - Do not infer target throughput from L4. A pass promotes only to a matched L8 EP2/data4 ordinary-versus-fused A/B.
