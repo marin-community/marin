@@ -11,6 +11,7 @@ from levanter.optim.grugmuon import (
     VMAP_REPLICATED,
     _grug_scale_with_muon,
     _newtonschulz_4d_distributed,
+    _newtonschulz_padded_stack_sharded,
     _zeropower_via_newtonschulz_batched_stack_sharded,
     _zeropower_via_newtonschulz_replicated,
 )
@@ -114,4 +115,39 @@ def test_distributed_4d_ns_preserves_expert_sharding_through_layer_expert_merge(
         if eqn.primitive.name == "reshape" and eqn.params.get("sharding") is not None
     ]
     assert reshape_specs == [P("expert", None, None), P("expert", None, None, None)]
+    assert output.sharding == input_sharding
+
+
+def test_padded_stack_ns_returns_directly_to_parameter_sharding():
+    mesh = AbstractMesh(
+        axis_sizes=(1, 1, 64, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+    input_sharding = NamedSharding(mesh, P(None, "expert", None))
+    x = jax.ShapeDtypeStruct((48, 64, 4), jnp.float32, sharding=input_sharding)
+
+    def apply_ns(y):
+        return _newtonschulz_padded_stack_sharded(
+            y,
+            steps=0,
+            eps=1e-8,
+            coefficient_type="quintic",
+            target_sharding=input_sharding,
+        )
+
+    with use_abstract_mesh(mesh):
+        closed_jaxpr = jax.make_jaxpr(apply_ns)(x)
+        output = jax.eval_shape(apply_ns, x)
+
+    padded_shape = (64, 64, 4)
+    replicated_padded_reshards = [
+        eqn
+        for eqn in closed_jaxpr.jaxpr.eqns
+        if eqn.primitive.name == "device_put"
+        and eqn.invars[0].aval.shape == padded_shape
+        and eqn.params["devices"][0].spec == P(None, None, None)
+    ]
+    assert not replicated_padded_reshards
+    assert output.shape == x.shape
     assert output.sharding == input_sharding
