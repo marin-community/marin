@@ -106,6 +106,34 @@ account already exists in the production Grafana stack. In a new environment,
 deploy Grafana once with `marin-grafana:loom_alerts` set to `false`, deploy Loom
 to bind the new service account, then enable Loom alerts and redeploy Grafana.
 
+## VM permissions
+
+The Loom VM service account runs interactive agent sessions. Keep its ambient GCP
+permissions in `Pulumi.marin-loom.yaml` instead of adding one-off project bindings:
+
+- `vmProjectRoles` grants named predefined or project-custom IAM roles on the
+  configured GCP project.
+- `vmPulumiKmsKeys` grants encrypt/decrypt access only on the listed crypto keys. This
+  lets the VM read and update Pulumi stacks that use those keys as secrets providers.
+
+These lists are additive and reviewed as code. They do not register Cloud SQL database
+users or grant PostgreSQL table privileges; the owning service stack must do both.
+Echo owns the `loom-vm` Cloud SQL principal, login roles, and table grants in
+`infra/echo`.
+
+The production declaration includes the shared Marin Pulumi key. An identity that
+already has access must apply this change once because a stack cannot bootstrap access
+to its own secrets-provider key.
+
+The VM currently has enough access to read Echo and the shared Pulumi state. An Echo
+preview additionally needs the KMS grant above. A future Echo deploy should add
+mutating permissions only after reviewing its preview; the resource graph currently
+requires Cloud Run, Cloud Scheduler, Cloud SQL, Artifact Registry, service-account,
+project-IAM, Secret Manager IAM, and IAP IAM administration, plus access to
+`cloudsql-pulumi-admin-password`. Prefer the existing project custom IAP IAM role and
+secret-level access over project-wide `roles/iap.admin` or
+`roles/secretmanager.admin`.
+
 ## Restart and rollback
 
 Each Loom session supervisor runs in a separately labeled Docker container.

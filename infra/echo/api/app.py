@@ -106,6 +106,7 @@ class WikiSummary(BaseModel):
     updated_at: datetime
     author: str
     title: str
+    use_when: str = Field(description="One-sentence hint describing when an agent should load this entry.")
     snippet: str
     reference_count: int
     score: float = 0.0
@@ -119,6 +120,11 @@ class WikiEntry(WikiSummary):
 
 class WikiCreate(BaseModel):
     title: str = Field(min_length=1, max_length=300)
+    use_when: str = Field(
+        min_length=1,
+        max_length=300,
+        description="One sentence describing when this entry is useful.",
+    )
     body: str = Field(min_length=1)
 
 
@@ -152,8 +158,8 @@ def query_embedding(model: TextEmbedding, query: str) -> list[float]:
     return vector(next(iter(model.query_embed([query]))))
 
 
-def passage_embedding(model: TextEmbedding, title: str, body: str) -> list[float]:
-    return vector(next(iter(model.passage_embed([f"{title}\n\n{body}"]))))
+def passage_embedding(model: TextEmbedding, title: str, use_when: str, body: str) -> list[float]:
+    return vector(next(iter(model.passage_embed([f"{title}\n\nUse when: {use_when}\n\n{body}"]))))
 
 
 def escape_like(pattern: str) -> str:
@@ -361,16 +367,18 @@ def add_wiki_entry(
     x_goog_authenticated_user_email: str | None = Header(None),
 ) -> WikiEntry:
     title = entry.title.strip()
+    use_when = entry.use_when.strip()
     body = entry.body.strip()
-    if not title or not body:
-        raise HTTPException(422, "title and body must not be blank")
+    if not title or not use_when or not body:
+        raise HTTPException(422, "title, use_when, and body must not be blank")
     statement = (
         schema.wiki_entries.insert()
         .values(
             author=iap_caller(x_goog_authenticated_user_email),
             title=title,
+            use_when=use_when,
             body=body,
-            embedding=passage_embedding(model, title, body),
+            embedding=passage_embedding(model, title, use_when, body),
         )
         .returning(
             schema.wiki_entries,

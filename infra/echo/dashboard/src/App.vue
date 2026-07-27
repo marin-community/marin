@@ -24,6 +24,7 @@ interface WikiHit {
   updated_at: string
   author: string
   title: string
+  use_when: string
   snippet: string
   reference_count: number
   score: number
@@ -261,6 +262,9 @@ onMounted(search)
                 >
                   {{ result.title }}
                 </button>
+                <p v-if="result.type === 'wiki'" class="mt-2 text-sm font-medium leading-6 text-moss">
+                  Use when: {{ result.use_when }}
+                </p>
                 <p class="mt-2 line-clamp-2 text-sm leading-6 text-ink/60">{{ result.snippet }}</p>
               </div>
               <span v-if="result.type === 'wiki'" class="shrink-0 text-xs text-ink/40">
@@ -293,6 +297,9 @@ onMounted(search)
         </div>
         <p class="mt-3 text-sm text-ink/45">
           {{ selectedWiki.author }} · {{ formatDate(selectedWiki.updated_at) }}
+        </p>
+        <p class="mt-6 rounded-xl border border-fern/20 bg-white/70 px-4 py-3 text-sm font-medium leading-6 text-moss">
+          Use when: {{ selectedWiki.use_when }}
         </p>
         <div class="mt-7 whitespace-pre-wrap text-[15px] leading-7 text-ink/80">{{ selectedWiki.body }}</div>
         <div class="mt-8 flex items-center justify-between border-t border-line pt-5">

@@ -8,6 +8,9 @@ config:
   marin-loom:network: default
   marin-loom:instanceName: loom
   marin-loom:vmServiceAccountName: loom-vm
+  marin-loom:vmProjectRoles: []
+  marin-loom:vmPulumiKmsKeys:
+    - projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
   marin-loom:machineType: e2-highmem-4
   marin-loom:bootDiskGb: "100"
   marin-loom:dataDiskGb: "500"

@@ -19,11 +19,13 @@ CREATE TABLE wiki_entries (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
     author TEXT NOT NULL,
     title TEXT NOT NULL,
+    use_when TEXT NOT NULL,
     body TEXT NOT NULL,
     reference_count BIGINT DEFAULT 0 NOT NULL,
     embedding VECTOR(384) NOT NULL,
     search_document TSVECTOR GENERATED ALWAYS AS (
         setweight(to_tsvector('english'::regconfig, title), 'A') ||
+        setweight(to_tsvector('english'::regconfig, use_when), 'A') ||
         setweight(to_tsvector('english'::regconfig, body), 'B')
     ) STORED,
     PRIMARY KEY (id),
@@ -34,6 +36,7 @@ CREATE INDEX idx_wiki_entries_embedding ON wiki_entries USING hnsw (embedding ve
 CREATE INDEX idx_wiki_entries_search_document ON wiki_entries USING gin (search_document);
 
 GRANT SELECT ON wiki_entries TO "eng-all@openathena.ai";
+GRANT SELECT ON wiki_entries TO "loom-vm@hai-gcp-models.iam";
 GRANT SELECT, INSERT, UPDATE ON wiki_entries TO "echo-api@hai-gcp-models.iam";
 GRANT USAGE, SELECT ON SEQUENCE wiki_entries_id_seq TO "echo-api@hai-gcp-models.iam";
 """

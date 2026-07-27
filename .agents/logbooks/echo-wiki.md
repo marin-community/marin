@@ -69,3 +69,13 @@ author: user
 - Result: GCS backend login succeeded. Stack selection failed because `loom-vm` lacks `cloudkms.cryptoKeyVersions.useToDecrypt` on `projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key`. No preview or update ran, and no production resource changed.
 - Interpretation: Production migration, API restart, and live-corpus ranking probes require an operator identity with the existing Echo deploy permissions.
 - Next action: Open the PR with the local pgvector evidence and production-access caveat.
+
+### 2026-07-27 18:26 UTC - Skill-like wiki selection contract
+
+- Hypothesis: A concise applicability hint lets agents search cheap summaries before loading a full wiki entry.
+- Commit Hash: Uncommitted follow-up on the rebased branch.
+- Command: Rebase onto `origin/main`; live Cloud SQL `grep`; schema/API/UI review.
+- Config: Required `use_when` text up to 300 characters, indexed at PostgreSQL weight `A` and included in BGE passage embeddings.
+- Result: Wiki search summaries and detail responses expose `use_when`; creation requires it; the dashboard displays it separately from the body excerpt. Main's new `loom-vm` Cloud SQL principal and grants are retained, and live read authentication succeeds.
+- Interpretation: Wiki rows now resemble external skills: search returns the name, selection hint, attribution, and usage count before the agent fetches full instructions.
+- Next action: Validate the migration chain and finish the Loom VM permission configuration.

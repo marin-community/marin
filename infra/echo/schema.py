@@ -107,6 +107,7 @@ wiki_entries = Table(
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("author", Text, nullable=False),
     Column("title", Text, nullable=False),
+    Column("use_when", Text, nullable=False),
     Column("body", Text, nullable=False),
     Column("reference_count", BigInteger, nullable=False, server_default=text("0")),
     Column("embedding", Vector(EMBED_DIM), nullable=False),
@@ -115,6 +116,7 @@ wiki_entries = Table(
         postgresql.TSVECTOR,
         Computed(
             f"setweight(to_tsvector('{TEXT_SEARCH_CONFIG}'::regconfig, title), 'A') || "
+            f"setweight(to_tsvector('{TEXT_SEARCH_CONFIG}'::regconfig, use_when), 'A') || "
             f"setweight(to_tsvector('{TEXT_SEARCH_CONFIG}'::regconfig, body), 'B')",
             persisted=True,
         ),

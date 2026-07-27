@@ -13,11 +13,11 @@ The current API and CLI use `TextEmbedding.embed()` for queries. FastEmbed expos
 for a query instruction in short-query-to-passage retrieval. This is a query-side
 bug; the existing passage embeddings do not need to be regenerated to correct it.
 
-This session cannot query the production database: its VM service account can
-describe `echo-api`, but lacks both `cloudsql.instances.connect` and IAP access.
-The supplied `grafana` output is therefore the production baseline. Search-quality
-iteration will use checked-in behavior fixtures plus local PostgreSQL when
-available, followed by a post-deploy probe from an authorized identity.
+After the initial implementation, main registered the Loom VM as a Cloud SQL IAM
+principal and granted corpus read access. A live literal query now succeeds. Production
+does not yet have this branch's wiki/full-text migration, so the hybrid query stops on
+the expected missing `chunks.search_document` column. The supplied `grafana` output
+remains the vector-only production baseline until deployment.
 
 ## Decision
 
@@ -78,14 +78,17 @@ wiki_entries = Table(
     Column("updated_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
     Column("author", Text, nullable=False),
     Column("title", Text, nullable=False),
+    Column("use_when", Text, nullable=False),
     Column("body", Text, nullable=False),
     Column("reference_count", BigInteger, server_default=text("0"), nullable=False),
     Column("embedding", Vector(EMBED_DIM), nullable=False),
 )
 ```
 
-A stored, weighted `tsvector` and GIN index provide lexical lookup; an HNSW cosine
-index provides semantic lookup. The API surface is:
+A stored, weighted `tsvector` and GIN index provide lexical lookup over title,
+`use_when`, and body; an HNSW cosine index embeds the same selection contract and
+content. `use_when` is a required one-sentence hint returned in list results, allowing
+an agent to choose whether the full entry is worth loading. The API surface is:
 
 - `GET /search` — hybrid activity search over existing chunks.
 - `GET /wiki/search` — hybrid wiki search, or recent entries for a blank query.
@@ -111,6 +114,14 @@ runtime copies `dist`. FastAPI serves its existing API routes, `/docs`, and
 `/healthz`, mounts static assets, and falls back to `index.html` for browser
 routes. Keeping one IAP-gated Cloud Run service avoids CORS and a second deployment
 surface.
+
+Loom VM permissions become explicit stack configuration: reviewed project roles can
+be listed in `vmProjectRoles`, while `vmPulumiKmsKeys` grants encrypt/decrypt only on
+named keys. Echo continues to own its Cloud SQL IAM user, login roles, and PostgreSQL
+grants. The shared KMS key is declared for Loom, but an existing authorized operator
+must apply that grant once because Loom cannot decrypt and update its own stack before
+the bootstrap permission exists. Echo deployment administrator roles remain
+deliberately undeclared pending review of a successful preview.
 
 ```mermaid
 flowchart LR

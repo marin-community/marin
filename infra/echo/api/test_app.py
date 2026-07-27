@@ -169,13 +169,14 @@ def test_activity_search_rejects_whitespace_without_embedding(client_with):
     assert model.queries == []
 
 
-def test_add_wiki_embeds_title_and_body_as_passage(client_with):
+def test_add_wiki_embeds_applicability_hint_and_body_as_passage(client_with):
     row = make_row(
         id=12,
         created_at=datetime(2026, 7, 27, tzinfo=UTC),
         updated_at=datetime(2026, 7, 27, tzinfo=UTC),
         author="agent@openathena.ai",
         title="Grafana access",
+        use_when="Use this when you need to inspect training dashboards.",
         body="Use the IAP route.",
         reference_count=0,
         score=0.0,
@@ -185,13 +186,27 @@ def test_add_wiki_embeds_title_and_body_as_passage(client_with):
     client, _, model = client_with([row])
     response = client.post(
         "/wiki",
-        json={"title": "  Grafana access  ", "body": "  Use the IAP route.  "},
+        json={
+            "title": "  Grafana access  ",
+            "use_when": "  Use this when you need to inspect training dashboards.  ",
+            "body": "  Use the IAP route.  ",
+        },
         headers={"X-Goog-Authenticated-User-Email": "accounts.google.com:agent@openathena.ai"},
     )
     assert response.status_code == 201
     assert response.json()["author"] == "agent@openathena.ai"
-    assert model.passages == ["Grafana access\n\nUse the IAP route."]
+    assert response.json()["use_when"] == "Use this when you need to inspect training dashboards."
+    assert model.passages == [
+        "Grafana access\n\nUse when: Use this when you need to inspect training dashboards.\n\nUse the IAP route."
+    ]
     assert model.queries == []
+
+
+def test_add_wiki_requires_applicability_hint(client_with):
+    client, _, model = client_with([])
+    response = client.post("/wiki", json={"title": "Grafana access", "body": "Use the IAP route."})
+    assert response.status_code == 422
+    assert model.passages == []
 
 
 def test_missing_wiki_entry_is_404(client_with):

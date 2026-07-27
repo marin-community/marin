@@ -33,6 +33,7 @@ LOOM_PORT = 7878
 DATA_DISK_DEVICE_NAME = "loom-data"
 SECRET_ACCESSOR_ROLE = "roles/secretmanager.secretAccessor"
 LOG_WRITER_ROLE = "roles/logging.logWriter"
+KMS_ENCRYPTER_DECRYPTER_ROLE = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
 SERVICE_ACCOUNT_MEMBER = "serviceAccount:{}"
 WEB_FIREWALL_TAG = "loom-web"
 SSH_FIREWALL_TAG = "loom-ssh"
@@ -44,6 +45,10 @@ MCP_ACCESS_NONE = "none"
 MCP_ACCESS_ALL = "all"
 MCP_ACCESS_GROUPS = "groups"
 MCP_ACCESS_MODES = frozenset({MCP_ACCESS_NONE, MCP_ACCESS_ALL, MCP_ACCESS_GROUPS})
+IAM_ROLE = re.compile(r"^(?:roles/[A-Za-z0-9_.]+|projects/[a-z][a-z0-9-]+/roles/[A-Za-z][A-Za-z0-9_.]+)$")
+KMS_CRYPTO_KEY = re.compile(
+    r"^projects/[a-z][a-z0-9-]+/locations/[a-z0-9-]+/" r"keyRings/[A-Za-z0-9_-]+/cryptoKeys/[A-Za-z0-9_-]+$"
+)
 
 
 def _positive_config_int(value: int, name: str) -> int:
@@ -137,6 +142,14 @@ def _optional_int(value: object, field: str, profile: str) -> int | None:
     if not isinstance(value, int):
         raise ValueError(f"profile {profile!r} {field} must be an integer")
     return value
+
+
+def _validated_string_tuple(value: object, field: str, pattern: re.Pattern[str]) -> tuple[str, ...]:
+    if not isinstance(value, list) or not all(isinstance(item, str) and pattern.fullmatch(item) for item in value):
+        raise ValueError(f"{field} must be a list of canonical resource names")
+    if len(value) != len(set(value)):
+        raise ValueError(f"{field} must not contain duplicates")
+    return tuple(value)
 
 
 @dataclass(frozen=True)
@@ -338,6 +351,8 @@ class DeploymentConfig:
     profiles: tuple[ProfileConfig, ...] = ()
     workloads: tuple[WorkloadIdentityConfig, ...] = ()
     github_federations: tuple[GitHubFederationConfig, ...] = ()
+    vm_project_roles: tuple[str, ...] = ()
+    vm_pulumi_kms_keys: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.domain != self.domain.strip().rstrip(".") or "://" in self.domain or "/" in self.domain:
@@ -349,6 +364,8 @@ class DeploymentConfig:
             ("dotenvSecretVersion", self.dotenv_secret_version),
         ):
             _positive_config_int(value, name)
+        _validated_string_tuple(list(self.vm_project_roles), "vmProjectRoles", IAM_ROLE)
+        _validated_string_tuple(list(self.vm_pulumi_kms_keys), "vmPulumiKmsKeys", KMS_CRYPTO_KEY)
         profile_names = {profile.name for profile in self.profiles}
         workload_names: set[str] = set()
         for workload in self.workloads:
@@ -387,6 +404,10 @@ class DeploymentConfig:
         raw_github_federations = config.get_object("githubFederations") or []
         if not isinstance(raw_github_federations, list):
             raise ValueError("githubFederations must be a list")
+        vm_project_roles = _validated_string_tuple(config.get_object("vmProjectRoles") or [], "vmProjectRoles", IAM_ROLE)
+        vm_pulumi_kms_keys = _validated_string_tuple(
+            config.get_object("vmPulumiKmsKeys") or [], "vmPulumiKmsKeys", KMS_CRYPTO_KEY
+        )
         profiles = []
         for name, value in raw_profiles.items():
             if not isinstance(value, dict):
@@ -422,6 +443,8 @@ class DeploymentConfig:
             workloads=tuple(workloads),
             github_federations=tuple(github_federations),
             snapshot_retention_days=config.require_int("snapshotRetentionDays"),
+            vm_project_roles=vm_project_roles,
+            vm_pulumi_kms_keys=vm_pulumi_kms_keys,
         )
 
 
@@ -762,6 +785,7 @@ def _create_instance(
     image: ImageResources,
     secrets: SecretResources,
     runtime_policy: RuntimePolicyResources,
+    vm_permissions: list[pulumi.Resource],
 ) -> InstanceResources:
     metadata: dict[str, pulumi.Input[str]] = {
         "loom-domain": config.domain,
@@ -785,6 +809,7 @@ def _create_instance(
         secrets.vm_reader,
         image.vm_reader,
         vm_log_writer,
+        *vm_permissions,
         *secrets.profile_readers,
     ]
     instance = gcp.compute.Instance(
@@ -854,6 +879,38 @@ def _create_activation(
     )
 
 
+def _create_vm_permissions(
+    config: DeploymentConfig,
+    vm_account: gcp.serviceaccount.Account,
+    api_options: pulumi.ResourceOptions,
+) -> list[pulumi.Resource]:
+    member = pulumi.Output.format(SERVICE_ACCOUNT_MEMBER, vm_account.email)
+    grants: list[pulumi.Resource] = []
+    for role in sorted(config.vm_project_roles):
+        suffix = hashlib.sha256(role.encode()).hexdigest()[:10]
+        grants.append(
+            gcp.projects.IAMMember(
+                f"loom-vm-project-role-{suffix}",
+                project=config.project,
+                role=role,
+                member=member,
+                opts=api_options,
+            )
+        )
+    for crypto_key in sorted(config.vm_pulumi_kms_keys):
+        suffix = hashlib.sha256(crypto_key.encode()).hexdigest()[:10]
+        grants.append(
+            gcp.kms.CryptoKeyIAMMember(
+                f"loom-vm-pulumi-kms-{suffix}",
+                crypto_key_id=crypto_key,
+                role=KMS_ENCRYPTER_DECRYPTER_ROLE,
+                member=member,
+                opts=api_options,
+            )
+        )
+    return grants
+
+
 def _export_outputs(
     config: DeploymentConfig,
     instance: gcp.compute.Instance,
@@ -894,12 +951,23 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         member=pulumi.Output.format(SERVICE_ACCOUNT_MEMBER, vm_account.email),
         opts=api_options,
     )
+    vm_permissions = _create_vm_permissions(config, vm_account, api_options)
     runtime_policy = _create_runtime_policy(config, api_options)
     image = _create_image(config, apis, vm_account)
     network = _create_network(config, apis)
     data = _create_data_disk(config, apis)
     secrets = _create_secrets(config, apis, api_options, vm_account, runtime_policy.profile_secret_refs)
-    instance = _create_instance(config, vm_account, vm_log_writer, network, data, image, secrets, runtime_policy)
+    instance = _create_instance(
+        config,
+        vm_account,
+        vm_log_writer,
+        network,
+        data,
+        image,
+        secrets,
+        runtime_policy,
+        vm_permissions,
+    )
     activation = _create_activation(config, instance, network.dns_record)
     _export_outputs(config, instance.instance, network, image, runtime_policy)
     return Infrastructure(instance.instance, activation)
