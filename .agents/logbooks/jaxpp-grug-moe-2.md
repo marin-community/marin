@@ -2144,3 +2144,48 @@ bash experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit \
     The user reconfirmed this `0.2%` numerical bound.
   - Validate numerical parity and dispatch timing on the smallest H100 gate before rerunning exact L24.
     The exact throughput rerun remains the only success gate for mean MFU `>20`.
+
+### 2026-07-27 15:36 PDT - Vectorized dispatch copy passes the H100 gate
+- Snapshot:
+  - Commit `5517380c52` replaces the scalar BF16 dispatch copy with one block per row and 128-bit
+    loads/stores. It removes the per-element 64-bit row division and reduces row-validity checks by `10x`
+    at hidden size `2560`.
+  - Local validation reported `18 passed` across the UB-X transport, routing-map, full-MoE, and benchmark
+    tests. `./infra/pre-commit.py --changed-files --fix` passed, including Pyrefly.
+- Jobs:
+  - `/dlwh/jax-ubx-vector-copy-gate-5517380c-20260727-145318` was setup-invalid. The Iris sync bundle
+    intentionally has no `.git`, so `git rev-parse HEAD` exited `128` after `6.08s`, before setup or any
+    benchmark. The task is terminal with no live allocation.
+  - Replacement `/dlwh/jax-ubx-vector-copy-gate-r2-5517380c-20260727-1516` recorded the source commit
+    explicitly and ran on one H100x8 node in `cw-rno2a`. It succeeded with exit `0`, one completed task,
+    zero failures, zero preemptions, and duration `3m13.73s`; no resource remains live.
+- Exact-shape raw FFI results:
+
+| Routing | Previous p50 | Vectorized p50 | Improvement | Dispatch | Relative-L2 cycles 0 / 1 |
+| --- | ---: | ---: | ---: | --- | ---: |
+| balanced | `7.144761ms` | `6.679457ms` | `6.51%` | bitwise exact | `0.0016590385 / 0.0016590385` |
+| learned skew | `7.060408ms` | `6.594025ms` | `6.61%` | bitwise exact | `0.0016589168 / 0.0016589168` |
+
+  - Each timing covers two consecutive dispatch/combine cycles plus the existing correctness oracle at
+    `16,384` tokens/rank, hidden `2560`, 64 experts, top-k 4, and capacity `65,536` rows/rank.
+  - Balanced routing retained `524,288/524,288` accepted assignments and zero drops.
+  - Learned skew retained `417,371/524,288` accepted assignments and drops
+    `[0, 0, 84582, 0, 22335, 0, 0, 0]`. Route digests and per-rank counts match the scalar gate.
+  - The measured `1.070x` speedup is below the raw benchmark's aspirational `1.10x` field, but the
+    profile showed the copy consuming `4.5%` of exclusive device time and the end-to-end objective is only
+    `0.50%` short. An exact throughput rerun is justified.
+- Reduced full-MoE value/VJP results:
+
+| Routing | Accepted / dropped | Output | Loss | Worst accepted gradient | Ring / UB-X p50 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| balanced | `8192 / 0` | `2.39333e-06` | `4.75936e-07` | `5.50555e-05` (`x`) | `0.598940 / 0.737155ms` |
+| learned skew | `6530 / 1662` | `1.71839e-05` | `8.15190e-07` | `1.13438e-04` (`w13`) | `0.612342 / 0.723429ms` |
+
+  - Both authoritative comparisons against the FP32 Ring-transport oracle passed the user-approved
+    relative-L2 `0.002` bound for output, loss, and every floating gradient leaf. Drops were exact.
+  - The separately reported BF16 Ring diagnostics remain at relative-L2 `0.0032-0.0056`. Those values are
+    the known BF16 accumulation-order disagreement that motivated the FP32 transport oracle; they do not
+    determine UB-X admission and are unchanged in kind by this copy-only patch.
+- Decision:
+  - Promote `5517380c52` to one exact L24/d2560/e64/top-k4/sequence4096 batch8192/m256 throughput rerun.
+    Require all ten steps and compare steps 2-9 with `19.8996` mean MFU from the scalar UB-X gate.
