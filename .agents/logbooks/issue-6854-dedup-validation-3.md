@@ -1018,3 +1018,36 @@ are recorded in the previous volumes.
   `(110, 0)`. Partitions p0, p1, and p3 are processing 32–137
   million-character code checkpoints; all four semantic-review parents,
   brokers, and 2-H100 workers remain healthy at batch priority.
+
+## 2026-07-27 22:06 UTC — code-batch audit reaches 43.06%
+
+- Checkpoint audits independently reread another 1,810 pairs: 768 baseline
+  and 1,042 treatment. They contain 1,061 false positives and 749 true
+  duplicates. Every persisted judgment is valid, and none of these outcomes
+  requires manual adjudication.
+- `/rav/rav-datakit-6854-reconcile-manual-2202-v1532` verified 2,562
+  checkpoints and complete manual coverage for all 379 unresolved outcomes.
+  Applying 78 false-positive and 301 true-duplicate manual decisions gives:
+
+  | Arm | Pairs | False positives | True duplicates | False-positive rate |
+  | --- | ---: | ---: | ---: | ---: |
+  | baseline | 258,802 | 164,419 | 94,383 | 63.5308% |
+  | treatment | 66,455 | 34,488 | 31,967 | 51.8968% |
+  | combined | 325,257 | 198,907 | 126,350 | 61.1538% |
+
+  The baseline-minus-treatment gap is 11.6340 percentage points. This snapshot
+  covers 43.0644% of the 755,281 semantic candidates. Its immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-2202.json`
+  with SHA-256
+  `1925b99ec3c99c2a0f7bb5671b11bfd0b2b1295de4657fe58ad19f4d6e44d700`.
+  The semantic, manual-marker, and manual-Parquet path-manifest SHA-256 values
+  are
+  `d76640109a43edc3b328414d88304431b28668b0a8dd2a175b64866daf1ec1b9`,
+  `116cc13895bd1503bbabd8a641ad3ee22e9cfe1f8d79dabfdac35a903915be1e`,
+  and
+  `498daa7b26231655d624949ed239456159c7356afeb30a963cbd66847f3707a9`.
+  No manual outcome is missing. Historical shadow-record anomaly counts remain
+  unchanged and marker-bound records remain internally consistent.
+- The independently audited total is 325,385 pairs. The next frontiers are p0
+  `(14, 0)`, p1 `(45, 896)`, p2 `(78, 0)`, and p3 `(110, 0)`. The eight
+  H100s continue returning successful responses at batch priority.
