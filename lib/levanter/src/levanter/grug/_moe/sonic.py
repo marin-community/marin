@@ -155,6 +155,126 @@ if triton is not None and tl is not None:
         tl.store(dw_ptr + assignment, dw)
 
     @triton.jit
+    def _sonic_token_gather_sum_two_buffers_kernel(
+        x0_ptr,  # (M0, H)
+        x1_ptr,  # (M1, H)
+        w_ptr,  # (T * K,)
+        m_perm_ptr,  # (T * K,) int32, indexing the logical concatenation of x0 and x1
+        out_ptr,  # (T, H)
+        m0: tl.constexpr,
+        m1: tl.constexpr,
+        h: tl.constexpr,
+        max_k: tl.constexpr,
+        stride_xm: tl.constexpr,
+        stride_xh: tl.constexpr,
+        stride_outt: tl.constexpr,
+        stride_outh: tl.constexpr,
+        block_h: tl.constexpr,
+        block_k: tl.constexpr,
+    ):
+        pid_t = tl.program_id(axis=0)
+        t_idx = pid_t.to(tl.int64)
+        ms = max_k * t_idx
+
+        for h_tile in tl.static_range(triton.cdiv(h, block_h)):
+            h_idx = (h_tile * block_h + tl.arange(0, block_h)).to(tl.int64)
+            h_mask = h_idx < h
+            acc = tl.zeros([block_h], dtype=tl.float32)
+
+            for k_tile in tl.range(tl.cdiv(max_k, block_k)):
+                k_offset = k_tile * block_k
+                k_idx = (k_offset + tl.arange(0, block_k)).to(tl.int64)
+                k_mask = k_idx < max_k
+                assignment = ms + k_idx
+                position = tl.load(m_perm_ptr + assignment, mask=k_mask, other=m0 + m1).to(tl.int64)
+                in_first = position < m0
+                in_second = (position >= m0) & (position < m0 + m1)
+                first_position = tl.where(in_first, position, 0)
+                second_position = tl.where(in_second, position - m0, 0)
+
+                x0_ptrs = x0_ptr + first_position[:, None] * stride_xm + h_idx[None, :] * stride_xh
+                x1_ptrs = x1_ptr + second_position[:, None] * stride_xm + h_idx[None, :] * stride_xh
+                x0 = tl.load(
+                    x0_ptrs,
+                    mask=k_mask[:, None] & in_first[:, None] & h_mask[None, :],
+                    other=0.0,
+                ).to(tl.float32)
+                x1 = tl.load(
+                    x1_ptrs,
+                    mask=k_mask[:, None] & in_second[:, None] & h_mask[None, :],
+                    other=0.0,
+                ).to(tl.float32)
+                x = tl.where(in_first[:, None], x0, x1)
+                weight = tl.load(w_ptr + assignment, mask=k_mask, other=0.0).to(tl.float32)
+                acc += tl.sum(x * weight[:, None], axis=0)
+
+            out_ptrs = out_ptr + t_idx * stride_outt + h_idx * stride_outh
+            tl.store(out_ptrs, acc, mask=h_mask)
+
+    @triton.jit
+    def _sonic_token_gather_sum_two_buffers_bwd_kernel(
+        dout_ptr,  # (T, H)
+        x0_ptr,  # (M0, H)
+        x1_ptr,  # (M1, H)
+        w_ptr,  # (T * K,)
+        m_perm_ptr,  # (T * K,) int32, indexing the logical concatenation of x0 and x1
+        dx0_ptr,  # (M0, H)
+        dx1_ptr,  # (M1, H)
+        dw_ptr,  # (T * K,)
+        m0: tl.constexpr,
+        m1: tl.constexpr,
+        h: tl.constexpr,
+        max_k: tl.constexpr,
+        stride_doutt: tl.constexpr,
+        stride_douth: tl.constexpr,
+        stride_xm: tl.constexpr,
+        stride_xh: tl.constexpr,
+        block_h: tl.constexpr,
+    ):
+        assignment = tl.program_id(axis=0)
+        token = assignment // max_k
+        position = tl.load(m_perm_ptr + assignment).to(tl.int64)
+        in_first = position < m0
+        in_second = (position >= m0) & (position < m0 + m1)
+        first_position = tl.where(in_first, position, 0)
+        second_position = tl.where(in_second, position - m0, 0)
+        weight = tl.load(w_ptr + assignment).to(tl.float32)
+
+        dw = 0.0
+        for h_tile in tl.static_range(triton.cdiv(h, block_h)):
+            h_idx = (h_tile * block_h + tl.arange(0, block_h)).to(tl.int64)
+            h_mask = h_idx < h
+            dout = tl.load(
+                dout_ptr + token * stride_doutt + h_idx * stride_douth,
+                mask=h_mask,
+                other=0.0,
+            ).to(tl.float32)
+            x0 = tl.load(
+                x0_ptr + first_position * stride_xm + h_idx * stride_xh,
+                mask=in_first & h_mask,
+                other=0.0,
+            ).to(tl.float32)
+            x1 = tl.load(
+                x1_ptr + second_position * stride_xm + h_idx * stride_xh,
+                mask=in_second & h_mask,
+                other=0.0,
+            ).to(tl.float32)
+            x = tl.where(in_first, x0, x1)
+
+            tl.store(
+                dx0_ptr + first_position * stride_xm + h_idx * stride_xh,
+                dout * weight,
+                mask=in_first & h_mask,
+            )
+            tl.store(
+                dx1_ptr + second_position * stride_xm + h_idx * stride_xh,
+                dout * weight,
+                mask=in_second & h_mask,
+            )
+            dw += tl.sum(dout * x, axis=0)
+        tl.store(dw_ptr + assignment, dw)
+
+    @triton.jit
     def _sonic_dispatch_gather_kernel(
         x_ptr,  # (T, H)
         token_sources_ptr,  # (M,) int32; T denotes an empty slot
@@ -381,6 +501,8 @@ if triton is not None and tl is not None:
 else:
     _sonic_token_gather_sum_kernel = None
     _sonic_token_gather_sum_bwd_kernel = None
+    _sonic_token_gather_sum_two_buffers_kernel = None
+    _sonic_token_gather_sum_two_buffers_bwd_kernel = None
     _sonic_dispatch_gather_kernel = None
     _sonic_unique_row_scatter_kernel = None
     _sonic_slot_weighted_grad_kernel = None
@@ -397,6 +519,8 @@ def _require_sonic_deps() -> None:
         jt is None
         or _sonic_token_gather_sum_kernel is None
         or _sonic_token_gather_sum_bwd_kernel is None
+        or _sonic_token_gather_sum_two_buffers_kernel is None
+        or _sonic_token_gather_sum_two_buffers_bwd_kernel is None
         or _sonic_dispatch_gather_kernel is None
         or _sonic_unique_row_scatter_kernel is None
         or _sonic_slot_weighted_grad_kernel is None
@@ -879,6 +1003,197 @@ def _sonic_gather_sum_bwd(
 
 
 sonic_gather_sum.defvjp(_sonic_gather_sum_fwd, _sonic_gather_sum_bwd)
+
+
+def _sonic_gather_sum_two_buffers_impl(
+    first_dispatch_output: Float[Array, "M0 H"],
+    second_dispatch_output: Float[Array, "M1 H"],
+    weights_flat: Float[Array, "M"],
+    positions_flat: Int[Array, "M"],
+    *,
+    tokens: int,
+    topk: int,
+) -> Float[Array, "T H"]:
+    _require_sonic_deps()
+    first_rows, hidden_dim = first_dispatch_output.shape
+    second_rows = second_dispatch_output.shape[0]
+    block_h, block_k, num_warps = _sonic_kernel_config(hidden_dim)
+    out_shape = jax.ShapeDtypeStruct((tokens, hidden_dim), first_dispatch_output.dtype)
+    return jt.triton_call(
+        first_dispatch_output,
+        second_dispatch_output,
+        weights_flat,
+        positions_flat,
+        kernel=_sonic_token_gather_sum_two_buffers_kernel,
+        out_shape=out_shape,
+        grid=(tokens,),
+        num_warps=num_warps,
+        num_stages=4,
+        m0=first_rows,
+        m1=second_rows,
+        h=hidden_dim,
+        max_k=topk,
+        stride_xm=hidden_dim,
+        stride_xh=1,
+        stride_outt=hidden_dim,
+        stride_outh=1,
+        block_h=block_h,
+        block_k=block_k,
+    )
+
+
+def _sonic_gather_sum_two_buffers_bwd_impl(
+    dout: Float[Array, "T H"],
+    first_dispatch_output: Float[Array, "M0 H"],
+    second_dispatch_output: Float[Array, "M1 H"],
+    weights_flat: Float[Array, "M"],
+    positions_flat: Int[Array, "M"],
+    *,
+    tokens: int,
+    topk: int,
+) -> tuple[Float[Array, "M0 H"], Float[Array, "M1 H"], Float[Array, "M"]]:
+    _require_sonic_deps()
+    first_rows, hidden_dim = first_dispatch_output.shape
+    second_rows = second_dispatch_output.shape[0]
+    block_h, _block_k, num_warps = _sonic_kernel_config(hidden_dim)
+    first_grad_shape = jax.ShapeDtypeStruct(first_dispatch_output.shape, first_dispatch_output.dtype)
+    second_grad_shape = jax.ShapeDtypeStruct(second_dispatch_output.shape, second_dispatch_output.dtype)
+    weights_grad_shape = jax.ShapeDtypeStruct(weights_flat.shape, jnp.float32)
+    return jt.triton_call(
+        dout,
+        first_dispatch_output,
+        second_dispatch_output,
+        weights_flat,
+        positions_flat,
+        kernel=_sonic_token_gather_sum_two_buffers_bwd_kernel,
+        out_shape=(first_grad_shape, second_grad_shape, weights_grad_shape),
+        zeroed_outputs=(0, 1),
+        grid=(tokens * topk,),
+        num_warps=num_warps,
+        num_stages=4,
+        m0=first_rows,
+        m1=second_rows,
+        h=hidden_dim,
+        max_k=topk,
+        stride_doutt=hidden_dim,
+        stride_douth=1,
+        stride_xm=hidden_dim,
+        stride_xh=1,
+        block_h=block_h,
+    )
+
+
+def _validate_two_buffer_gather_sum_inputs(
+    first_dispatch_output: Float[Array, "M0 H"],
+    second_dispatch_output: Float[Array, "M1 H"],
+    dispatch_positions: Int[Array, "T K"],
+    combine_weights: Float[Array, "T K"],
+) -> tuple[int, int]:
+    if first_dispatch_output.ndim != 2 or second_dispatch_output.ndim != 2:
+        raise ValueError("dispatch outputs must be two-dimensional")
+    if first_dispatch_output.shape[1] != second_dispatch_output.shape[1]:
+        raise ValueError(
+            "dispatch outputs must have the same hidden dimension, got "
+            f"{first_dispatch_output.shape[1]} and {second_dispatch_output.shape[1]}"
+        )
+    if first_dispatch_output.dtype != second_dispatch_output.dtype:
+        raise ValueError(
+            "dispatch outputs must have the same dtype, got "
+            f"{first_dispatch_output.dtype} and {second_dispatch_output.dtype}"
+        )
+    if dispatch_positions.shape != combine_weights.shape:
+        raise ValueError(
+            f"dispatch_positions shape {dispatch_positions.shape} must match combine_weights shape {combine_weights.shape}"
+        )
+    if dispatch_positions.ndim != 2:
+        raise ValueError(f"dispatch_positions must be two-dimensional, got shape {dispatch_positions.shape}")
+    return combine_weights.shape[0], combine_weights.shape[1]
+
+
+@jax.custom_vjp
+def sonic_gather_sum_two_buffers(
+    first_dispatch_output: Float[Array, "M0 H"],
+    second_dispatch_output: Float[Array, "M1 H"],
+    dispatch_positions: Int[Array, "T K"],
+    combine_weights: Float[Array, "T K"],
+) -> Float[Array, "T H"]:
+    """Gather from two logical-concatenated buffers without materializing the concatenation."""
+    tokens, topk = _validate_two_buffer_gather_sum_inputs(
+        first_dispatch_output,
+        second_dispatch_output,
+        dispatch_positions,
+        combine_weights,
+    )
+    weights_flat = combine_weights.reshape(tokens * topk).astype(jnp.float32)
+    positions_flat = dispatch_positions.reshape(tokens * topk).astype(jnp.int32)
+    return _sonic_gather_sum_two_buffers_impl(
+        first_dispatch_output,
+        second_dispatch_output,
+        weights_flat,
+        positions_flat,
+        tokens=tokens,
+        topk=topk,
+    )
+
+
+def _sonic_gather_sum_two_buffers_fwd(
+    first_dispatch_output: Float[Array, "M0 H"],
+    second_dispatch_output: Float[Array, "M1 H"],
+    dispatch_positions: Int[Array, "T K"],
+    combine_weights: Float[Array, "T K"],
+) -> tuple[
+    Float[Array, "T H"],
+    tuple[Float[Array, "M0 H"], Float[Array, "M1 H"], Int[Array, "T K"], Float[Array, "T K"]],
+]:
+    tokens, topk = _validate_two_buffer_gather_sum_inputs(
+        first_dispatch_output,
+        second_dispatch_output,
+        dispatch_positions,
+        combine_weights,
+    )
+    weights_flat = combine_weights.reshape(tokens * topk).astype(jnp.float32)
+    positions_flat = dispatch_positions.reshape(tokens * topk).astype(jnp.int32)
+    out = _sonic_gather_sum_two_buffers_impl(
+        first_dispatch_output,
+        second_dispatch_output,
+        weights_flat,
+        positions_flat,
+        tokens=tokens,
+        topk=topk,
+    )
+    return out, (first_dispatch_output, second_dispatch_output, dispatch_positions, combine_weights)
+
+
+def _sonic_gather_sum_two_buffers_bwd(
+    residuals: tuple[
+        Float[Array, "M0 H"],
+        Float[Array, "M1 H"],
+        Int[Array, "T K"],
+        Float[Array, "T K"],
+    ],
+    dout: Float[Array, "T H"],
+) -> tuple[Float[Array, "M0 H"], Float[Array, "M1 H"], None, Float[Array, "T K"]]:
+    first_dispatch_output, second_dispatch_output, dispatch_positions, combine_weights = residuals
+    tokens, topk = combine_weights.shape
+    weights_flat = combine_weights.reshape(tokens * topk).astype(jnp.float32)
+    positions_flat = dispatch_positions.reshape(tokens * topk).astype(jnp.int32)
+    first_grad, second_grad, weights_grad_flat = _sonic_gather_sum_two_buffers_bwd_impl(
+        dout,
+        first_dispatch_output,
+        second_dispatch_output,
+        weights_flat,
+        positions_flat,
+        tokens=tokens,
+        topk=topk,
+    )
+    weights_grad = weights_grad_flat.reshape(combine_weights.shape).astype(combine_weights.dtype)
+    return first_grad, second_grad, None, weights_grad
+
+
+sonic_gather_sum_two_buffers.defvjp(
+    _sonic_gather_sum_two_buffers_fwd,
+    _sonic_gather_sum_two_buffers_bwd,
+)
 
 
 def _moe_mlp_local_sonic(

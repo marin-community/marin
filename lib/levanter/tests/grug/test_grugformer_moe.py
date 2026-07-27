@@ -10,6 +10,7 @@ import pytest
 import jax
 import jax.numpy as jnp
 from jax._src import config as jax_config
+from jax.extend import core as jax_core
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec as P, use_abstract_mesh
 from haliax.nn.ragged_dot import ragged_dot
 
@@ -45,6 +46,7 @@ from levanter.grug._moe.sonic import (
     sonic_clone_weight_reduce,
     sonic_expert_local_rank,
     sonic_gather_sum,
+    sonic_gather_sum_two_buffers,
     sonic_slot_weighted_grad,
     sonic_unique_row_scatter,
     sonic_unpermute_i32,
@@ -290,6 +292,31 @@ def _gather_sum_reference(
     for topk_index in range(dispatch_positions.shape[1]):
         out = out + dispatch_output[dispatch_positions[:, topk_index]] * weights[:, topk_index, None]
     return out
+
+
+def _all_to_all_name_stacks(closed_jaxpr: jax_core.ClosedJaxpr) -> list[str]:
+    name_stacks = []
+
+    def visit(value: object) -> None:
+        if isinstance(value, dict):
+            for child in value.values():
+                visit(child)
+            return
+        if isinstance(value, (tuple, list)):
+            for child in value:
+                visit(child)
+            return
+        if not isinstance(value, jax_core.Jaxpr):
+            return
+
+        jaxpr = getattr(value, "jaxpr", value)
+        for equation in jaxpr.eqns:
+            if equation.primitive.name == "all_to_all":
+                name_stacks.append(str(equation.source_info.name_stack))
+            visit(equation.params)
+
+    visit(closed_jaxpr)
+    return name_stacks
 
 
 def _skip_without_sonic_gpu_runtime() -> None:
@@ -1015,6 +1042,74 @@ def test_sonic_gather_sum_h5120_value_and_gradients_match_reference_on_gpu():
     assert float(np.mean(dispatch_grad_diff)) == 0.0
     assert float(np.max(weights_grad_diff)) <= 1e-3
     assert float(np.mean(weights_grad_diff)) <= 1e-4
+
+
+def test_sonic_gather_sum_two_buffers_matches_single_buffer_value_and_gradients_on_gpu():
+    _skip_without_sonic_gpu_runtime()
+    tokens = 16
+    topk = 8
+    hidden_dim = 5120
+    total_rows = tokens * topk
+    first_rows = total_rows // 2
+    flat_positions = (jnp.arange(total_rows, dtype=jnp.int32) * 31) % total_rows
+    dispatch_positions = flat_positions.reshape(tokens, topk)
+    dispatch_positions = dispatch_positions.at[-1, -2:].set(total_rows)
+    keep = dispatch_positions < total_rows
+
+    output_rows = jnp.arange(total_rows, dtype=jnp.int32) % 127
+    output_columns = jnp.arange(hidden_dim, dtype=jnp.int32) % 31
+    dispatch_output = (
+        output_rows[:, None].astype(jnp.bfloat16) + output_columns[None, :].astype(jnp.bfloat16)
+    ) / jnp.asarray(127, dtype=jnp.bfloat16)
+    first_dispatch_output = dispatch_output[:first_rows]
+    second_dispatch_output = dispatch_output[first_rows:]
+    raw_weights = (jnp.arange(total_rows, dtype=jnp.float32) % topk + 1).reshape(tokens, topk)
+    combine_weights = jnp.where(keep, raw_weights / jnp.sum(raw_weights, axis=-1, keepdims=True), 0)
+    cotangent_rows = jnp.arange(tokens, dtype=jnp.int32) % 61
+    output_cotangent = (
+        cotangent_rows[:, None].astype(jnp.bfloat16) + output_columns[None, :].astype(jnp.bfloat16)
+    ) / jnp.asarray(61, dtype=jnp.bfloat16)
+
+    def evaluate(combine, first_output, second_output, weights):
+        output, pullback = jax.vjp(combine, first_output, second_output, weights)
+        first_grad, second_grad, weights_grad = pullback(output_cotangent)
+        return output, first_grad, second_grad, weights_grad
+
+    two_buffer_result = jax.jit(
+        lambda first_output, second_output, weights: evaluate(
+            lambda first_arg, second_arg, weights_arg: sonic_gather_sum_two_buffers(
+                first_arg,
+                second_arg,
+                dispatch_positions,
+                weights_arg,
+            ),
+            first_output,
+            second_output,
+            weights,
+        )
+    )(first_dispatch_output, second_dispatch_output, combine_weights)
+    single_buffer_result = jax.jit(
+        lambda first_output, second_output, weights: evaluate(
+            lambda first_arg, second_arg, weights_arg: sonic_gather_sum(
+                jnp.concatenate((first_arg, second_arg), axis=0),
+                dispatch_positions,
+                weights_arg,
+            ),
+            first_output,
+            second_output,
+            weights,
+        )
+    )(first_dispatch_output, second_dispatch_output, combine_weights)
+    jax.block_until_ready((two_buffer_result, single_buffer_result))
+
+    jax.tree.map(
+        lambda two_buffer, single_buffer: np.testing.assert_array_equal(
+            np.asarray(two_buffer),
+            np.asarray(single_buffer),
+        ),
+        two_buffer_result,
+        single_buffer_result,
+    )
 
 
 def test_moe_mlp_sonic_matches_jax_gather_reference_on_gpu():
@@ -2319,6 +2414,101 @@ def test_sparse_clone_weight_metadata_matches_sender_receiver_segments():
 
 
 @pytest.mark.parametrize(
+    ("prefetch_dispatch", "expected_name_stacks"),
+    [
+        (
+            False,
+            [
+                "dispatch_chunk_0",
+                "dispatch_chunk_0",
+                "combine_chunk_0",
+                "dispatch_chunk_1",
+                "dispatch_chunk_1",
+                "combine_chunk_1",
+            ],
+        ),
+        (
+            True,
+            [
+                "dispatch_chunk_0",
+                "dispatch_chunk_0",
+                "dispatch_chunk_1",
+                "dispatch_chunk_1",
+                "combine_chunk_0",
+                "combine_chunk_1",
+            ],
+        ),
+    ],
+)
+def test_same_expert_clone_pipeline_dispatch_prefetch_changes_all_to_all_emission_order(
+    monkeypatch: pytest.MonkeyPatch,
+    prefetch_dispatch: bool,
+    expected_name_stacks: list[str],
+):
+    mesh = _make_ep_mesh_or_none()
+    if mesh is None:
+        pytest.skip("requires an even number of >=2 devices")
+    if not any(device.platform == "gpu" for device in jax.devices()):
+        monkeypatch.setattr(
+            ep_ragged_a2a,
+            "_sparse_clone_weight_exchange",
+            _reference_sparse_clone_weight_exchange,
+        )
+
+    monkeypatch.setenv("SCALE_A2A_FIXED", "1")
+    monkeypatch.setenv("SCALE_A2A_SAME_EXPERT_CLONES", "1")
+    monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
+    monkeypatch.setenv("SCALE_A2A_CLONE_POOLED", "1")
+    monkeypatch.setenv("SCALE_A2A_CLONE_SPARSE_WEIGHTS", "1")
+    monkeypatch.setenv("SCALE_A2A_ECHO_CLONES", "1")
+    monkeypatch.setenv("SCALE_A2A_CLONE_PIPELINE_CHUNKS", "2")
+    monkeypatch.setenv("SCALE_A2A_CLONE_TOKEN_PADDING_EXPERTS", "2")
+    if prefetch_dispatch:
+        monkeypatch.setenv("SCALE_A2A_CLONE_PREFETCH_DISPATCH", "1")
+
+    tokens = len(jax.devices()) * 4
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(63),
+        tokens=tokens,
+        hidden_dim=4,
+        intermediate_dim=6,
+        num_experts=4,
+        topk=2,
+    )
+
+    with jax.set_mesh(mesh):
+        batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
+        expert_sharding = NamedSharding(mesh, P("expert", None, None))
+        sharded_x = jax.sharding.reshard(x, batch_sharding)
+        sharded_selected_experts = jax.sharding.reshard(selected_experts, batch_sharding)
+        sharded_combine_weights = jax.sharding.reshard(combine_weights, batch_sharding)
+        sharded_w13 = jax.sharding.reshard(w_up_gate, expert_sharding)
+        sharded_w2 = jax.sharding.reshard(w_down, expert_sharding)
+
+        def cloned_output(x, combine_weights, w_up_gate, w_down):
+            return moe_mlp(
+                x,
+                sharded_selected_experts,
+                combine_weights,
+                w_up_gate,
+                w_down,
+                implementation="ragged_all_to_all",
+                mesh=None,
+                report_capacity_overflow=True,
+                capacity_factor=1.0,
+            )[0]
+
+        closed_jaxpr = jax.make_jaxpr(cloned_output)(
+            sharded_x,
+            sharded_combine_weights,
+            sharded_w13,
+            sharded_w2,
+        )
+
+    assert _all_to_all_name_stacks(closed_jaxpr) == expected_name_stacks
+
+
+@pytest.mark.parametrize(
     (
         "pooled_dispatch",
         "sparse_weights",
@@ -2327,16 +2517,21 @@ def test_sparse_clone_weight_metadata_matches_sender_receiver_segments():
         "echo_dispatch",
         "embedded_slot_metadata",
         "pipeline_chunks",
+        "prefetch_dispatch",
+        "two_buffer_combine",
     ),
     [
-        (False, False, False, False, False, False, 1),
-        (True, False, False, False, False, False, 1),
-        (True, True, False, False, False, False, 1),
-        (True, True, False, False, True, False, 1),
-        (True, True, False, False, True, False, 2),
-        (True, True, False, False, True, True, 1),
-        (True, True, True, False, True, False, 1),
-        (True, True, False, True, True, False, 1),
+        (False, False, False, False, False, False, 1, False, False),
+        (True, False, False, False, False, False, 1, False, False),
+        (True, True, False, False, False, False, 1, False, False),
+        (True, True, False, False, True, False, 1, False, False),
+        (True, True, False, False, True, False, 2, False, False),
+        (True, True, False, False, True, False, 2, True, False),
+        (True, True, False, False, True, False, 2, False, True),
+        (True, True, False, False, True, False, 2, True, True),
+        (True, True, False, False, True, True, 1, False, False),
+        (True, True, True, False, True, False, 1, False, False),
+        (True, True, False, True, True, False, 1, False, False),
     ],
 )
 def test_same_expert_cloned_fixed_a2a_matches_dense_value_and_grad(
@@ -2348,10 +2543,14 @@ def test_same_expert_cloned_fixed_a2a_matches_dense_value_and_grad(
     echo_dispatch: bool,
     embedded_slot_metadata: bool,
     pipeline_chunks: int,
+    prefetch_dispatch: bool,
+    two_buffer_combine: bool,
 ):
     mesh = _make_ep_mesh_or_none()
     if mesh is None:
         pytest.skip("requires an even number of >=2 devices")
+    if two_buffer_combine:
+        _skip_without_sonic_gpu_runtime()
     if sparse_weights and not mnnvl_transport and not any(device.platform == "gpu" for device in jax.devices()):
         monkeypatch.setattr(
             ep_ragged_a2a,
@@ -2391,6 +2590,11 @@ def test_same_expert_cloned_fixed_a2a_matches_dense_value_and_grad(
     if pipeline_chunks > 1:
         monkeypatch.setenv("SCALE_A2A_CLONE_PIPELINE_CHUNKS", str(pipeline_chunks))
         monkeypatch.setenv("SCALE_A2A_CLONE_TOKEN_PADDING_EXPERTS", "2")
+    if prefetch_dispatch:
+        monkeypatch.setenv("SCALE_A2A_CLONE_PREFETCH_DISPATCH", "1")
+    if two_buffer_combine:
+        monkeypatch.setenv("SCALE_A2A_SONIC_COMBINE", "1")
+        monkeypatch.setenv("SCALE_A2A_CLONE_TWO_BUFFER_COMBINE", "1")
     tokens = len(jax.devices()) * 8
     hidden_dim = 8
     intermediate_dim = 12

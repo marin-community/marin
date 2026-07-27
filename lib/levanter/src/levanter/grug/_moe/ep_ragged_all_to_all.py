@@ -33,6 +33,7 @@ from levanter.grug._moe.sonic import (
     sonic_expert_local_rank,
     sonic_gather_sum,
     sonic_gather_sum_bf16_accum,
+    sonic_gather_sum_two_buffers,
     sonic_slot_weighted_grad,
     sonic_unique_row_scatter,
     sonic_unpermute_i32,
@@ -1498,6 +1499,62 @@ def _same_expert_cloned_fixed_a2a_core(
     return out_local, overflow_total
 
 
+def _same_expert_pipeline_dispatch_exchange(
+    x_local: Float[Array, "Tlocal H"],
+    transport_position: Int[Array, "M"],
+    dispatch_positions: Int[Array, "Tlocal K"],
+    keep_by_token: jax.Array,
+    chunk_receiver_slot: Int[Array, "M"],
+    *,
+    expert_shards: int,
+    chunk_sender_destination_capacity: int,
+    chunk_receiver_capacity: int,
+    send_size: int,
+) -> tuple[Float[Array, "M H"], Int[Array, "M"]]:
+    hidden_dim = x_local.shape[1]
+    send_receiver_slot = (
+        jnp.full((send_size,), chunk_receiver_capacity, dtype=jnp.int32)
+        .at[transport_position]
+        .set(chunk_receiver_slot, mode="drop")
+        .reshape(expert_shards, chunk_sender_destination_capacity)
+    )
+    if os.environ.get("SCALE_A2A_SONIC_DISPATCH") == "1":
+        send_x = _fixed_dispatch_gather_sonic(
+            x_local,
+            dispatch_positions,
+            keep_by_token,
+            send_size,
+        )
+    elif os.environ.get("SCALE_A2A_SONIC_DISPATCH_GRAD") == "1":
+        send_x = _fixed_dispatch_gather_sonic_grad(
+            x_local,
+            dispatch_positions,
+            keep_by_token,
+            send_size,
+        )
+    else:
+        send_x = _fixed_dispatch_gather_reference(
+            x_local,
+            dispatch_positions,
+            send_size=send_size,
+        )
+    received_payload = jax.lax.all_to_all(
+        send_x.reshape(expert_shards, chunk_sender_destination_capacity, hidden_dim),
+        "expert",
+        split_axis=0,
+        concat_axis=0,
+        tiled=True,
+    )
+    received_slot = jax.lax.all_to_all(
+        send_receiver_slot,
+        "expert",
+        split_axis=0,
+        concat_axis=0,
+        tiled=True,
+    )
+    return received_payload, received_slot
+
+
 def _same_expert_pipelined_fixed_a2a_core(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
@@ -1529,6 +1586,14 @@ def _same_expert_pipelined_fixed_a2a_core(
         raise ValueError("pipelined clones do not support HybridEP transport")
     if os.environ.get("SCALE_A2A_ECHO_RAGGED_TRANSPORT") == "1":
         raise ValueError("pipelined clones require fixed all-to-all transport")
+    prefetch_dispatch = os.environ.get("SCALE_A2A_CLONE_PREFETCH_DISPATCH") == "1"
+    if prefetch_dispatch and pipeline_chunks != 2:
+        raise ValueError("SCALE_A2A_CLONE_PREFETCH_DISPATCH=1 requires SCALE_A2A_CLONE_PIPELINE_CHUNKS=2")
+    two_buffer_combine = os.environ.get("SCALE_A2A_CLONE_TWO_BUFFER_COMBINE") == "1"
+    if two_buffer_combine and pipeline_chunks != 2:
+        raise ValueError("SCALE_A2A_CLONE_TWO_BUFFER_COMBINE=1 requires SCALE_A2A_CLONE_PIPELINE_CHUNKS=2")
+    if two_buffer_combine and os.environ.get("SCALE_A2A_SONIC_COMBINE") != "1":
+        raise ValueError("SCALE_A2A_CLONE_TWO_BUFFER_COMBINE=1 requires SCALE_A2A_SONIC_COMBINE=1")
 
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -1632,9 +1697,7 @@ def _same_expert_pipelined_fixed_a2a_core(
 
         interleaved_w13 = _interleave_gate_up(global_w13, moe_dim)
 
-    returned_chunks = []
-    position_chunks = []
-    keep_chunks = []
+    chunk_metadata = []
     for chunk_index in range(pipeline_chunks):
         keep = jnp.logical_and(
             pipeline_keep,
@@ -1647,48 +1710,45 @@ def _same_expert_pipelined_fixed_a2a_core(
         )
         dispatch_positions = transport_position.reshape(tokens_per_shard, topk)
         keep_by_token = keep.reshape(tokens_per_shard, topk)
+        chunk_metadata.append((transport_position, dispatch_positions, keep_by_token))
 
+    prefetched_dispatches = []
+    if prefetch_dispatch:
+        for chunk_index, (transport_position, dispatch_positions, keep_by_token) in enumerate(chunk_metadata):
+            with jax.named_scope(f"dispatch_chunk_{chunk_index}"):
+                prefetched_dispatches.append(
+                    _same_expert_pipeline_dispatch_exchange(
+                        x_local,
+                        transport_position,
+                        dispatch_positions,
+                        keep_by_token,
+                        chunk_receiver_slot,
+                        expert_shards=expert_shards,
+                        chunk_sender_destination_capacity=chunk_sender_destination_capacity,
+                        chunk_receiver_capacity=chunk_receiver_capacity,
+                        send_size=send_size,
+                    )
+                )
+
+    returned_chunks = []
+    position_chunks = []
+    keep_chunks = []
+    for chunk_index, (transport_position, dispatch_positions, keep_by_token) in enumerate(chunk_metadata):
         with jax.named_scope(f"dispatch_chunk_{chunk_index}"):
-            send_receiver_slot = (
-                jnp.full((send_size,), chunk_receiver_capacity, dtype=jnp.int32)
-                .at[transport_position]
-                .set(chunk_receiver_slot, mode="drop")
-                .reshape(expert_shards, chunk_sender_destination_capacity)
-            )
-            if os.environ.get("SCALE_A2A_SONIC_DISPATCH") == "1":
-                send_x = _fixed_dispatch_gather_sonic(
-                    x_local,
-                    dispatch_positions,
-                    keep_by_token,
-                    send_size,
-                )
-            elif os.environ.get("SCALE_A2A_SONIC_DISPATCH_GRAD") == "1":
-                send_x = _fixed_dispatch_gather_sonic_grad(
-                    x_local,
-                    dispatch_positions,
-                    keep_by_token,
-                    send_size,
-                )
+            if prefetch_dispatch:
+                received_payload, received_slot = prefetched_dispatches[chunk_index]
             else:
-                send_x = _fixed_dispatch_gather_reference(
+                received_payload, received_slot = _same_expert_pipeline_dispatch_exchange(
                     x_local,
+                    transport_position,
                     dispatch_positions,
+                    keep_by_token,
+                    chunk_receiver_slot,
+                    expert_shards=expert_shards,
+                    chunk_sender_destination_capacity=chunk_sender_destination_capacity,
+                    chunk_receiver_capacity=chunk_receiver_capacity,
                     send_size=send_size,
                 )
-            received_payload = jax.lax.all_to_all(
-                send_x.reshape(expert_shards, chunk_sender_destination_capacity, hidden_dim),
-                "expert",
-                split_axis=0,
-                concat_axis=0,
-                tiled=True,
-            )
-            received_slot = jax.lax.all_to_all(
-                send_receiver_slot,
-                "expert",
-                split_axis=0,
-                concat_axis=0,
-                tiled=True,
-            )
             received_slot_flat = received_slot.reshape(send_size)
             receiver_sources = (
                 jnp.full((chunk_receiver_capacity,), send_size, dtype=jnp.int32)
@@ -1787,7 +1847,6 @@ def _same_expert_pipelined_fixed_a2a_core(
             keep_chunks.append(keep_by_token)
 
     with jax.named_scope("combine"):
-        returned_x = jnp.concatenate(returned_chunks, axis=0)
         combined_positions = jnp.full_like(
             position_chunks[0],
             pipeline_chunks * send_size,
@@ -1803,12 +1862,22 @@ def _same_expert_pipelined_fixed_a2a_core(
                 combine_weights_local,
                 0,
             )
-            out_local = sonic_gather_sum(
-                returned_x,
-                combined_positions,
-                masked_combine_weights,
-            ).astype(x_local.dtype)
+            if two_buffer_combine:
+                out_local = sonic_gather_sum_two_buffers(
+                    returned_chunks[0],
+                    returned_chunks[1],
+                    combined_positions,
+                    masked_combine_weights,
+                ).astype(x_local.dtype)
+            else:
+                returned_x = jnp.concatenate(returned_chunks, axis=0)
+                out_local = sonic_gather_sum(
+                    returned_x,
+                    combined_positions,
+                    masked_combine_weights,
+                ).astype(x_local.dtype)
         else:
+            returned_x = jnp.concatenate(returned_chunks, axis=0)
             gathered = returned_x[jnp.minimum(combined_positions, returned_x.shape[0] - 1)]
             gathered = jnp.where(combined_keep[:, :, None], gathered, 0)
             out_local = jnp.einsum(
