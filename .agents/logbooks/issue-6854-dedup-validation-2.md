@@ -16,6 +16,48 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T15:14:46Z — 284,278 pairs verified; all 335 ambiguities covered
+
+- `/rav/rav-datakit-6854-reconcile-manual-1513-v1297` independently
+  reconciled 2,239 completed semantic checkpoints and all 335 unresolved model
+  outcomes. Every unresolved outcome has a consistent full-text decision;
+  none are missing. The snapshot covers 284,278 of 755,281 semantic
+  candidates (37.64%). Applying the 72 false-positive and 263 true-duplicate
+  manual decisions gives:
+
+  - baseline: 226,247 pairs, 143,722 false positives, and 82,525 true
+    duplicates;
+  - treatment: 58,031 pairs, 30,063 false positives, and 27,968 true
+    duplicates;
+  - combined: 173,785 false positives and 110,493 true duplicates.
+
+  The observed false-positive rates are 63.5244% for baseline and 51.8051%
+  for treatment, a treatment reduction of 11.7193 percentage points. The
+  immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-1513.json`
+  with SHA-256
+  `3fa16874ddbf48cce1bcb6a627b7cffac7bc4cdf22fe91f8ac2500d67936179f`.
+- Four independent audit waves re-read and hash-validated the 640 newly
+  reconciled baseline pairs at decision-file 108 offsets 128 through 640.
+  They contain 461 model false positives and 179 true duplicates, with no
+  unresolved outcomes. The checkpoint outcome SHA-256 values are:
+
+  - offset 128:
+    `2c02e309a58d87f07ec8cb3b34549955f738ab389a7bcf40f1d9923e7628ebf6`;
+  - offset 256:
+    `9dd15f37cb571767877d4271cb09ecd47609f05d6fe66c69b89fb0d13a25d1bf`;
+  - offset 384:
+    `90d80e20e5da6d37d0548e42caf048632317a1afdd0c817b22072ed1b040aff4`;
+  - offset 512:
+    `184ff14c6eae73d370b6d8a5094dce44f902602137d09009b0a716f76ae320cb`;
+  - offset 640:
+    `09c5e0280fcd3d2796458200ea8c53cb22905da023680118be17878a322fa66d`.
+
+  The next independent-audit frontiers are p0 `(12, 0)`, p1 `(44, 0)`,
+  p2 `(76, 0)`, and p3 `(108, 768)`.
+- All four batch-priority 2-H100 jobs continue running, and their 12 root,
+  broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-27T14:45:47Z — 283,638 pairs verified; all 335 ambiguities covered
 
 - `/rav/rav-datakit-6854-reconcile-manual-1444-v1289` independently
