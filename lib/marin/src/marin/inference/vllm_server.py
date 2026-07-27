@@ -42,6 +42,14 @@ _FLASHINFER_SAMPLER_ENV_VAR = "VLLM_USE_FLASHINFER_SAMPLER"
 _AWS_CONFIG_FILE_ENV_VAR = "AWS_CONFIG_FILE"
 # libstreamer's read-fault text: startup is retried on this, and permanently failed on anything else.
 _RUNAI_STREAMER_READ_MARKER = "could not receive runai_response"
+_LINUX_PROC_ROOT = "/proc"
+_LINUX_DEAD_PROCESS_STATES = frozenset({"X", "Z"})
+
+
+class _ProcessGroupStatus(StrEnum):
+    HAS_LIVE_PROCESSES = "has_live_processes"
+    NO_LIVE_PROCESSES = "no_live_processes"
+    UNKNOWN = "unknown"
 
 
 class TransientStartupError(RuntimeError):
@@ -304,11 +312,11 @@ class VllmServerHandle:
             self._signal(signal.SIGKILL)
             self.process.wait(timeout=timeout_seconds)
 
-        if self._process_group_exists():
+        if self._process_group_has_live_processes():
             # The API parent can exit before EngineCore does, so check the group after wait().
             self._signal(signal.SIGKILL)
             deadline = time.monotonic() + timeout_seconds
-            while self._process_group_exists() and time.monotonic() < deadline:
+            while self._process_group_has_live_processes() and time.monotonic() < deadline:
                 time.sleep(0.05)
 
         # Child and group are gone, so the pipes are at EOF; join the readers (bounded, so a
@@ -316,9 +324,9 @@ class VllmServerHandle:
         if self.log_pump is not None:
             self.log_pump.join(timeout=timeout_seconds)
             self.log_pump.close()
-        if self._process_group_exists():
+        if self._process_group_has_live_processes():
             logger.warning(
-                "Keeping vLLM compilation cache because process group %s still exists",
+                "Keeping vLLM compilation cache because process group %s still has live processes",
                 self.process_group_id,
             )
         else:
@@ -340,14 +348,51 @@ class VllmServerHandle:
             )
             self.process.send_signal(sig)
 
-    def _process_group_exists(self) -> bool:
+    def _process_group_has_live_processes(self) -> bool:
         if self.process_group_id is None:
             return False
+        linux_status = _linux_process_group_status(self.process_group_id)
+        if linux_status is not _ProcessGroupStatus.UNKNOWN:
+            return linux_status is _ProcessGroupStatus.HAS_LIVE_PROCESSES
         try:
             os.killpg(self.process_group_id, 0)
             return True
         except ProcessLookupError:
             return False
+
+
+def _linux_process_group_status(process_group_id: int) -> _ProcessGroupStatus:
+    """Return the observable liveness state for a Linux process group."""
+    if sys.platform != "linux":
+        return _ProcessGroupStatus.UNKNOWN
+    try:
+        entries = os.scandir(_LINUX_PROC_ROOT)
+    except OSError:
+        return _ProcessGroupStatus.UNKNOWN
+
+    with entries:
+        for entry in entries:
+            if not entry.name.isdigit():
+                continue
+            try:
+                with open(os.path.join(entry.path, "stat")) as stat_file:
+                    stat_text = stat_file.read()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return _ProcessGroupStatus.UNKNOWN
+
+            _, separator, stat_fields = stat_text.rpartition(")")
+            fields = stat_fields.split()
+            if not separator or len(fields) < 3:
+                return _ProcessGroupStatus.UNKNOWN
+            try:
+                entry_process_group_id = int(fields[2])
+            except ValueError:
+                return _ProcessGroupStatus.UNKNOWN
+            if entry_process_group_id == process_group_id and fields[0] not in _LINUX_DEAD_PROCESS_STATES:
+                return _ProcessGroupStatus.HAS_LIVE_PROCESSES
+    return _ProcessGroupStatus.NO_LIVE_PROCESSES
 
 
 def resolve_model_name_or_path(model: InferenceModelConfig) -> tuple[str, InferenceModelConfig]:

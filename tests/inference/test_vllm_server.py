@@ -155,6 +155,60 @@ def test_handle_stop_terminates_drains_and_is_idempotent(tmp_path, monkeypatch):
     handle.stop(timeout_seconds=5)  # second call must not raise
 
 
+@pytest.mark.skipif(
+    not hasattr(os, "waitid") or not Path("/proc").is_dir(),
+    reason="requires Linux procfs process state",
+)
+def test_handle_stop_releases_cache_for_zombie_only_process_group(tmp_path, monkeypatch):
+    leader = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        process_group=0,
+    )
+    process_group_id = os.getpgid(leader.pid)
+    zombie = subprocess.Popen(
+        [sys.executable, "-c", "pass"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        process_group=process_group_id,
+    )
+    os.waitid(os.P_PID, zombie.pid, os.WEXITED | os.WNOWAIT)
+    assert Path(f"/proc/{zombie.pid}/stat").read_text().rpartition(")")[2].split()[0] == "Z"
+
+    pump = _LogPump(leader, str(tmp_path / "stdout.log"), str(tmp_path / "stderr.log"))
+    pump.start()
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "marin"))
+    compilation_cache = VllmCompilationCache.prepare(
+        launcher_identity="test-zombie",
+        compile_identity=VllmCompileIdentity(model_name_or_path="test/zombie", extra_cli_args=()),
+        environment={},
+        mode=VllmCompilationCacheMode.MANAGED,
+    )
+    compilation_cache_root = Path(compilation_cache.environment()["JAX_COMPILATION_CACHE_DIR"]).parent
+    handle = VllmServerHandle(
+        server_url="http://127.0.0.1:0/v1",
+        port=0,
+        process=leader,
+        process_group_id=process_group_id,
+        log_dir=str(tmp_path),
+        log_pump=pump,
+        compilation_cache=compilation_cache,
+    )
+
+    try:
+        handle.stop(timeout_seconds=0.1)
+        assert not compilation_cache_root.exists()
+    finally:
+        zombie.wait(timeout=5)
+        if leader.poll() is None:
+            leader.kill()
+            leader.wait(timeout=5)
+        handle.stop(timeout_seconds=1)
+
+
 # --- bounded retry around a transient Run:ai streamer read fault during startup ---
 
 _FAKE_VLLM_SERVER = str(Path(__file__).parent / "fake_vllm_server.py")
