@@ -16,6 +16,148 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T04:22:15Z — 223,207 pairs verified
+
+- `/rav/rav-datakit-6854-audit-next-checkpoints-0257-v922` independently
+  revalidated four checkpoints: p0 decision-file 9 offset 128 and p2
+  decision-file 73 offsets 4,352, 4,480, and 4,608. Their 512 pairs contain
+  374 model false positives, 137 model true duplicates, and one unresolved
+  outcome. Twenty pairs used chunked review and 492 used direct review. The
+  audit reread all 2,632 judgments and 2,637 request attempts: 2,630 attempts
+  were valid, seven were invalid, and three judgments required retries.
+
+- In checkpoint order, the outcome Parquet SHA-256 values are:
+
+  - p0:
+    `a94c88c9da25df2339a0ada46d71b40aa7cb71fd758820a585e9133d996acf7a`;
+  - p2:
+    `6c135f5b9c62645e92e6e45b17f4c61a130af0bd0e627f33be571f1f414d5260`,
+    `4112fb01a328631f4fc1b8ed1d8887ef8cc16e40a3b28774d08c10d7267491ee`,
+    and
+    `8eaac23ba1e1b2e4e506e21856920cb4bb64c5f5649e6ca91b456f8e93861708`.
+
+- Complete-text inspection resolves the p2 ambiguity as a true duplicate.
+  Row 7,679 compares the same induction proof of
+  `$(2n)! \geq 2^n \cdot n!$`. Both records contain the same base case,
+  hypothesis, factorial expansion, substitution, cancellation, conclusion,
+  and boxed result. The only differences are `all` versus `any`, Markdown
+  headings, spacing, and local explanatory phrasing. The 1,904- and
+  1,787-character records have character, line, and word-sequence
+  similarities 0.904904, 0.647059, and 0.900699. Member and canonical SHA-256
+  values are
+  `e1b368427062c7b43b7b1579945c14104bc8ac6e6bffc290235b8ab239c975c9`
+  and
+  `d839f9f80f295310208ff4a0ed800039e1fa81c8c7839d63abd4ad2c739fb044`.
+  The loss and tiebreak passes independently labeled it a high-confidence
+  true duplicate; the duplication pass exhausted its retries on malformed
+  JSON control characters.
+
+- `/rav/rav-datakit-6854-inspect-row7679-0258-v923` persisted the complete
+  texts and diff with inspection SHA-256
+  `0cf24958ff5e83d7f57756c9ba90fa2d1677a526e2da30c3fe4f851a464e807e`.
+  `/rav/rav-datakit-6854-publish-row7679-0259-v924` wrote the immutable manual
+  record, and `/rav/rav-datakit-6854-verify-row7679-0260-v925` independently
+  reread every bound source and output artifact. The semantic-judgment,
+  manual-Parquet, and marker SHA-256 values are
+  `de0525e618760974c69d04c15df8c02858262660fb9fa27225878f2763b2e81a`,
+  `bfc907cf110bbd83dc35599ed2289316bc7c3409fcaab898ff658a67f61750f9`,
+  and
+  `a32a677d4bec8c91f6a8538d739d44b9a5a1e2d8b9dd0a320ae78e90b5f3a921`.
+
+- Replacing the unresolved outcome with a true duplicate gives 374 false
+  positives and 138 true duplicates in the new block. Across the stable
+  1,757-checkpoint snapshot, all 273 unresolved model outcomes are covered by
+  212 true-duplicate and 61 false-positive manual records. The adjusted totals
+  are:
+
+  - baseline: 179,207 pairs, 113,849 false positives, 65,358 true duplicates;
+  - treatment: 44,000 pairs, 22,750 false positives, 21,250 true duplicates;
+  - combined: 223,207 pairs, 136,599 false positives, 86,608 true duplicates.
+
+- The next audit frontiers are p0 `(9, 256)`, p1 `(41, 128)`,
+  p2 `(73, 4,736)`, and p3 `(106, 0)`. The p0 and p2 pending checkpoints
+  contain 22,452,521 and 6,880,273 characters, respectively. All four
+  batch-priority 2-H100 workers remain active with zero Kubernetes restarts.
+
+### 2026-07-27T04:18:00Z — 222,695 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0250-v915` independently
+  revalidated six p2 decision-file 73 checkpoints spanning semantic offsets
+  3,584 through 4,224. Their 768 baseline pairs contain 556 model false
+  positives, 210 model true duplicates, and two unresolved outcomes. Two
+  pairs used chunked review and 766 used direct review. The audit reread all
+  1,718 judgments and 1,724 request attempts: 1,715 attempts were valid, nine
+  were invalid, and three judgments required retries.
+
+- In checkpoint order, the outcome Parquet SHA-256 values are
+  `deb35a7ce8f0f42cb3213f07e345f68e18ae796890f0e063b92ff3fd3ddfceee`,
+  `0529f45ffaf9057d55549f69616198efd707593dd018215afbf0a0d9a011a728`,
+  `46c20f55c374e28db36dd890ded45104226dfbe712cd02c008355e60b7586f04`,
+  `00ef27676f7535bd3b7500b1268a3bb47f1b5bc79df47854741c5a81f16cafd5`,
+  `fd4c4b514fab215331d80db69e4d59bfe1c31b7c35a3e703ab91b1b4a53946d5`,
+  and
+  `5a31cece092d86249f56a1e0147ebb42741bd8ae4a19b72db587a0cd2f1ee52a`.
+
+- Complete-text inspection resolves both ambiguous pairs as true duplicates
+  under the pinned directional deletion policy:
+
+  - Row 6,395 compares 6,995- and 6,961-character recycled-concrete SEO
+    articles. Every section and argument has a one-to-one paraphrase. The
+    member adds a date and author line plus a pea-gravel keyword sentence;
+    neither adds a substantive example under the pinned low-value
+    template-slot policy. Character, line, and word-sequence similarities are
+    0.893379, 0.522727, and 0.845329. Member and canonical SHA-256 values are
+    `6b9c1d3ae8d4a4fc81d2eb81447a6ac9a2d8103653693051a743d810692077b7`
+    and
+    `10a7df2f135400b1419cb7bcaa50199bad8301432e71084d3d6dcdc00fd32ba5`.
+    `/rav/datakit-6854-inspect-row6395-0251-v916` persisted the complete texts
+    and diff with inspection SHA-256
+    `526499b1f52d3cbe80ed0ff08b5e5b85546bbac594609ea3b26cd1c64c561021`.
+    `/rav/rav-datakit-6854-publish-row6395-0254-v919` wrote the immutable
+    manual record, and
+    `/rav/rav-datakit-6854-verify-row6395-0256-v921` independently reread
+    every bound source and output artifact. The semantic-judgment,
+    manual-Parquet, and marker SHA-256 values are
+    `a78f03bf96ab196e56a95a2b7ba60efe6426f81999c807ce5d0e650237b82340`,
+    `3ba822aca8e54ba1f90f2c2a8db2d7edcffb49394d9193390f62e21be79ea9fc`,
+    and
+    `a7b7ff087fab2ed721aa1e8c090a7a1e14793528c5a25d71c2a4ec98a30f329b`;
+  - Row 7,479 compares 237-line SFT records with identical questions,
+    reasoning, and answers. The sole changed line is `\boxed{C}` versus
+    `\boxed{\text{C}}`, a formatting-only difference. The 14,538- and
+    14,545-character records have character, line, and word-sequence
+    similarities 0.999759, 0.995781, and 0.999789. Member and canonical
+    SHA-256 values are
+    `f874381c0738872c01cf307731a5e2533689db6bc7366d5f13f9816489e405f9`
+    and
+    `256f93d9e38c1b3ff865d1fee3d105f1608b16566228b25e566fb6bb0ab83e50`.
+    `/rav/datakit-6854-inspect-row7479-0252-v917` persisted the complete texts
+    and diff with inspection SHA-256
+    `dcd4d7c31e45eba13c4a5ab97584bdf4d700e96069d4ccefd0478cb54bb7a52a`.
+    `/rav/rav-datakit-6854-publish-row7479-0253-v918` wrote the immutable
+    manual record, and
+    `/rav/rav-datakit-6854-verify-row7479-0255-v920` independently reread
+    every bound source and output artifact. The semantic-judgment,
+    manual-Parquet, and marker SHA-256 values are
+    `b7ab47ac71fa7cedd1d892d5aca38262e2e2af68a4072744333bcbd5e6422360`,
+    `932a5947ff5d5e92bbcf167d85dbee312019ae20cb6707e11e26672097f58805`,
+    and
+    `9a8e4d9fa08578385e6a1dcef4216098913255c7c652d2cfaaefa105ed3ffcdf`.
+
+- Replacing the two unresolved outcomes with true duplicates gives 556 false
+  positives and 212 true duplicates in the new p2 block. Across the stable
+  1,753-checkpoint snapshot, all 272 unresolved model outcomes are covered by
+  211 true-duplicate and 61 false-positive manual records. The adjusted totals
+  are:
+
+  - baseline: 178,703 pairs, 113,481 false positives, 65,222 true duplicates;
+  - treatment: 43,992 pairs, 22,744 false positives, 21,248 true duplicates;
+  - combined: 222,695 pairs, 136,225 false positives, 86,470 true duplicates.
+
+- The next audit frontiers are p0 `(9, 128)`, p1 `(41, 128)`,
+  p2 `(73, 4,352)`, and p3 `(106, 0)`. All four batch-priority 2-H100 workers
+  remain active with zero Kubernetes restarts.
+
 ### 2026-07-27T04:05:11Z — 221,927 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0243-v908` independently
