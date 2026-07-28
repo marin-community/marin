@@ -1,0 +1,210 @@
+{
+  "evaluation_history": {
+    "e256": {
+      "paloma_e128": [],
+      "paloma_e16": [],
+      "paloma_macro": [
+        {
+          "step": 2500,
+          "value": 6.557286262512207
+        }
+      ],
+      "paloma_micro": [
+        {
+          "step": 2500,
+          "value": 6.252114295959473
+        }
+      ]
+    },
+    "fixed25": {
+      "paloma_e128": [
+        {
+          "step": 2500,
+          "value": 6.088614463806152
+        }
+      ],
+      "paloma_e16": [
+        {
+          "step": 2500,
+          "value": 6.212316513061523
+        }
+      ],
+      "paloma_macro": [
+        {
+          "step": 2500,
+          "value": 6.065558433532715
+        }
+      ],
+      "paloma_micro": [
+        {
+          "step": 2500,
+          "value": 5.7398810386657715
+        }
+      ]
+    }
+  },
+  "full_mode_delta_log_linear_fit": null,
+  "full_mode_domain_comparison": {
+    "deltas": {
+      "4chan-llama3": -0.3056478500366211,
+      "c4_100_domains-llama3": -0.6514110565185547,
+      "c4_en-llama3": -0.541450023651123,
+      "dolma-v1_5-llama3": -0.5402193069458008,
+      "dolma_100_programing_languages-llama3": -0.6559047698974609,
+      "dolma_100_subreddits-llama3": -0.3861989974975586,
+      "falcon-refinedweb-llama3": -0.5515427589416504,
+      "gab-llama3": -0.7874274253845215,
+      "m2d2_s2orc_unsplit-llama3": -0.3026103973388672,
+      "m2d2_wikipedia_unsplit-llama3": -0.7768754959106445,
+      "manosphere_meta_sep-llama3": -0.306276798248291,
+      "mc4-llama3": -0.5735244750976562,
+      "ptb-llama3": 0.07649755477905273,
+      "redpajama-llama3": -0.7116456031799316,
+      "twitterAAE_HELM_fixed-llama3": -0.4182162284851074,
+      "wikitext_103-llama3": -0.4351811408996582
+    },
+    "domains": 16,
+    "max_delta": 0.07649755477905273,
+    "mean_delta": -0.49172717332839966,
+    "median_delta": -0.5408346652984619,
+    "min_delta": -0.7874274253845215,
+    "through_step": 2500,
+    "treatment_better": 15
+  },
+  "full_mode_paired_delta_summary": {
+    "deltas": {
+      "2500": -0.4917278289794922
+    },
+    "max_delta": -0.4917278289794922,
+    "mean_delta": -0.4917278289794922,
+    "median_delta": -0.4917278289794922,
+    "min_delta": -0.4917278289794922,
+    "points": 1,
+    "through_step": 2500,
+    "treatment_better": 1
+  },
+  "gpu_count": 64,
+  "quality_log_linear_fits": {
+    "e256": null,
+    "fixed25": null
+  },
+  "schema_version": 1,
+  "summaries": {
+    "e256": {
+      "e128_paloma_macro": null,
+      "e16_paloma_macro": null,
+      "elapsed_gpu_hours": 43.994634025155555,
+      "elapsed_run_seconds": 2474.698163915,
+      "evaluation_hook_count": 1,
+      "final_cross_entropy_loss": 5.215149879455566,
+      "final_step": 2919,
+      "full_paloma_macro": 6.557286262512207,
+      "full_paloma_micro": 6.252114295959473,
+      "gpu_hours_per_billion_tokens": 6.475691824745253,
+      "loading_stall_count_10s": 0,
+      "median_evaluation_hook_seconds": 26.144135123118758,
+      "median_loading_seconds": 1.88478734344244e-05,
+      "median_step_seconds": 0.3819518454838544,
+      "p90_loading_seconds": 3.235205076634884e-05,
+      "p99_loading_seconds": 4.405406303703785e-05,
+      "run_name": "nest-burn-002-e256-d768-s8192-e256-c4p14e18-100b-b128-r5",
+      "runtime_forecasts": {
+        "10.0": {
+          "gpu_hours": 64.75866222896924,
+          "optimizer_hours": 1.0118540973276444,
+          "steps": 9537
+        },
+        "100.0": {
+          "gpu_hours": 647.5662515245999,
+          "optimizer_hours": 10.118222680071874,
+          "steps": 95367
+        },
+        "1000.0": {
+          "gpu_hours": 6475.689676266122,
+          "optimizer_hours": 101.18265119165815,
+          "steps": 953674
+        },
+        "20.0": {
+          "gpu_hours": 129.51053420290765,
+          "optimizer_hours": 2.023602096920432,
+          "steps": 19073
+        }
+      },
+      "state": "running",
+      "step_overhead_vs_e256": 0.0,
+      "terminal_overflow": 0.0,
+      "tokens_billions": 3.06184192,
+      "total_logged_hook_seconds": 44.534578864928335,
+      "total_logged_loading_seconds": 0.03205766505561769,
+      "url": "https://wandb.ai/marin-community/marin/runs/nest-burn-002-e256-d768-s8192-e256-c4p14e18-100b-b128-r5"
+    },
+    "fixed25": {
+      "e128_paloma_macro": 6.088614463806152,
+      "e16_paloma_macro": 6.212316513061523,
+      "elapsed_gpu_hours": 72.19555555555556,
+      "elapsed_run_seconds": 4061.0,
+      "evaluation_hook_count": 1,
+      "final_cross_entropy_loss": 4.864993095397949,
+      "final_step": 2501,
+      "full_paloma_macro": 6.065558433532715,
+      "full_paloma_micro": 5.7398810386657715,
+      "gpu_hours_per_billion_tokens": 6.935538752688647,
+      "loading_stall_count_10s": 0,
+      "median_evaluation_hook_seconds": 77.41979398811236,
+      "median_loading_seconds": 2.4911947548389435e-05,
+      "median_step_seconds": 0.4090747209265828,
+      "p90_loading_seconds": 3.592325374484062e-05,
+      "p99_loading_seconds": 4.8024444840848456e-05,
+      "run_name": "nest-burn-002-fixed25-d768-s8192-e256-c4p14e18-100b-b128-r4",
+      "runtime_forecasts": {
+        "10.0": {
+          "gpu_hours": 69.35725535069902,
+          "optimizer_hours": 1.0837071148546722,
+          "steps": 9537
+        },
+        "100.0": {
+          "gpu_hours": 693.5507361885409,
+          "optimizer_hours": 10.836730252945951,
+          "steps": 95367
+        },
+        "1000.0": {
+          "gpu_hours": 6935.536451643341,
+          "optimizer_hours": 108.3677570569272,
+          "steps": 953674
+        },
+        "20.0": {
+          "gpu_hours": 138.7072382619149,
+          "optimizer_hours": 2.1673005978424205,
+          "steps": 19073
+        }
+      },
+      "state": "finished",
+      "step_overhead_vs_e256": 0.07101124333715236,
+      "terminal_overflow": 0.0,
+      "tokens_billions": 2.623537152,
+      "total_logged_hook_seconds": 93.59009958803654,
+      "total_logged_loading_seconds": 0.03732668817974627,
+      "url": "https://wandb.ai/marin-community/marin/runs/nest-burn-002-fixed25-d768-s8192-e256-c4p14e18-100b-b128-r4"
+    }
+  },
+  "timing": {
+    "e256": {
+      "block_bootstrap_ci95_high": 0.3830534319858998,
+      "block_bootstrap_ci95_low": 0.3790851020021364,
+      "median_step_seconds": 0.3819518454838544,
+      "p10_step_seconds": 0.373211666662246,
+      "p90_step_seconds": 0.39759972114115955,
+      "samples": 1478
+    },
+    "fixed25": {
+      "block_bootstrap_ci95_high": 0.41158675390761346,
+      "block_bootstrap_ci95_low": 0.40497961244545877,
+      "median_step_seconds": 0.4090747209265828,
+      "p10_step_seconds": 0.4007842277409509,
+      "p90_step_seconds": 0.4262078483821824,
+      "samples": 1478
+    }
+  },
+  "timing_through_step": 2501,
+  "tokens_per_step": 1048576
+}

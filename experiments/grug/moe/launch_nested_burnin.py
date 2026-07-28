@@ -31,6 +31,10 @@ Optional overrides:
                          expert-parallel devices (default: 1)
     BURNIN_EVAL_INTERVAL
                          optimizer steps between evaluations (default: 1,000)
+    BURNIN_PROFILE_STEPS
+                         XPlane profile length; zero disables profiling (default: 0)
+    BURNIN_PROFILE_START_STEP
+                         first profiled update (default: 128)
     BURNIN_RUN_SUFFIX  append a retry suffix to the run and artifact names
     BURNIN_MP          JMP policy (default: fp32 params, bf16 compute/output)
     BURNIN_ATTENTION   reference | cudnn | gpu_fa4_cute | gpu_fa4_thd
@@ -42,6 +46,7 @@ from enum import StrEnum
 from typing import cast
 
 from fray.cluster import ResourceConfig
+from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.data.text.datasets import ConcatDatasetComponent, DatasetComponent
 from levanter.grug.attention import GrugAttentionImplementation
 from levanter.tracker.wandb import WandbConfig
@@ -157,6 +162,23 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     eval_interval = env_int("BURNIN_EVAL_INTERVAL", _EVAL_INTERVAL)
     if eval_interval <= 0:
         raise ValueError("BURNIN_EVAL_INTERVAL must be positive")
+    profile_steps = env_int("BURNIN_PROFILE_STEPS", 0)
+    profile_start_step = env_int("BURNIN_PROFILE_START_STEP", 128)
+    if profile_steps < 0:
+        raise ValueError("BURNIN_PROFILE_STEPS must be non-negative")
+    if profile_start_step < 0:
+        raise ValueError("BURNIN_PROFILE_START_STEP must be non-negative")
+    profiler = ProfilerConfig(
+        enabled=profile_steps > 0,
+        start_step=profile_start_step,
+        num_steps=profile_steps,
+        process_index=0,
+        profile_options=ProfileOptionsConfig(
+            host_tracer_level=1,
+            python_tracer_level=0,
+            enable_hlo_proto=True,
+        ),
+    )
 
     base_model = dataclasses.replace(
         base_model,
@@ -233,6 +255,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
             batch_size=batch_size,
             seed=0,
             mp=os.environ.get("BURNIN_MP", _DEFAULT_MP),
+            profiler=profiler,
             tracker=WandbConfig(
                 project="marin",
                 tags=[

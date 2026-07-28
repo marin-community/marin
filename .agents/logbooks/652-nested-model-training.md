@@ -2096,3 +2096,33 @@ result:
   step 1,550 and resumed training. This is a recoverable infrastructure
   interruption; replayed elapsed time will be separated from optimizer-step
   cost.
+
+### 2026-07-28 16:31 - Fixed25 fails the first long-horizon stability gate
+
+- E256 r5 completed its step-2,500 evaluation and remained finite through
+  step 2,575. fixed25 r4 instead produced a non-finite loss at state step
+  2,503 after returning from the repeated full/E128/E16 evaluation. The
+  control's survival past the identical step makes this treatment-path
+  specific under the 64-GB200, batch-128 topology.
+- The fixed25 child accumulated three failed attempts: two XLA coordination
+  service connection failures followed by the explicit non-finite loss. Iris
+  restored the temporary checkpoint and reproduced the same boundary. The
+  fixed25 retry loop was stopped after the numerical failure so it would not
+  repeatedly replay 1B tokens.
+- At matched update 2,500, full-mode Paloma macro loss is `6.557286` for E256
+  and `6.065558` for fixed25, a `-0.491728` treatment delta. fixed25 is better
+  on 15 of 16 Paloma domains, while its E128 and E16 losses are `6.088614` and
+  `6.212317`. This unusually large one-gate improvement is paired with an
+  unstable optimizer trajectory and is not promotion evidence.
+- Across 1,478 matched compiled updates through step 2,501, median step time
+  is `381.952 ms` for E256 and `409.075 ms` for fixed25, a `+7.10%`
+  surcharge. The single full-mode control evaluation took `26.14 s`; the
+  three-mode fixed25 evaluation took `77.42 s`. The evaluation premium is
+  measurement cost, not co-training cost.
+- Launched
+  `/power/nest-burn-002-fixed25-100b-b128-r6-noeval2500-coord` from scratch
+  with the same model, seed, optimizer, data, batch, and 100B horizon, changing
+  only the first evaluation boundary from step 2,500 to step 10,000. If r6
+  passes step 2,503, the triple nested evaluation or its interaction with
+  restore is implicated. If it fails at the same update, the nested training
+  trajectory itself is unstable in this cell.

@@ -6,11 +6,12 @@
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import statistics
 from collections.abc import Mapping
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +56,44 @@ COLORS = {
 }
 
 
+@dataclass(frozen=True)
+class AnalysisConfig:
+    control_run: str
+    treatment_run: str
+    tokens_per_step: int
+    gpu_count: int
+    output_prefix: str
+    quality_fit_end_step: int
+    figure_title: str
+
+
+def _parse_args() -> AnalysisConfig:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--control-run", default=RUNS[CONTROL])
+    parser.add_argument("--treatment-run", default=RUNS[TREATMENT])
+    parser.add_argument("--tokens-per-step", type=int, default=TOKENS_PER_STEP)
+    parser.add_argument("--gpu-count", type=int, default=GPU_COUNT)
+    parser.add_argument("--output-prefix", default=OUTPUT_PREFIX)
+    parser.add_argument("--quality-fit-end-step", type=int, default=COOLDOWN_START_STEP)
+    parser.add_argument("--figure-title", default="Compute-optimal d768 fixed-chain burn-in")
+    args = parser.parse_args()
+    if args.tokens_per_step <= 0:
+        raise ValueError("tokens-per-step must be positive")
+    if args.gpu_count <= 0:
+        raise ValueError("gpu-count must be positive")
+    if args.quality_fit_end_step <= 0:
+        raise ValueError("quality-fit-end-step must be positive")
+    return AnalysisConfig(
+        control_run=args.control_run,
+        treatment_run=args.treatment_run,
+        tokens_per_step=args.tokens_per_step,
+        gpu_count=args.gpu_count,
+        output_prefix=args.output_prefix,
+        quality_fit_end_step=args.quality_fit_end_step,
+        figure_title=args.figure_title,
+    )
+
+
 def _common_horizon(all_history: Mapping[str, Mapping[str, list[HistoryPoint]]], metric: str) -> int:
     endpoints = [max(point.step for point in history[metric]) for history in all_history.values() if history[metric]]
     if len(endpoints) != len(all_history):
@@ -62,13 +101,16 @@ def _common_horizon(all_history: Mapping[str, Mapping[str, list[HistoryPoint]]],
     return min(endpoints)
 
 
-def _plot_paloma(all_history: Mapping[str, Mapping[str, list[HistoryPoint]]]) -> None:
+def _plot_paloma(
+    all_history: Mapping[str, Mapping[str, list[HistoryPoint]]],
+    config: AnalysisConfig,
+) -> None:
     figure, axes = plt.subplots(1, 2, figsize=(12, 4.6))
     common_horizon = _common_horizon(all_history, "paloma_macro")
     for arm, history in all_history.items():
         points = [point for point in history["paloma_macro"] if point.step <= common_horizon]
         axes[0].plot(
-            [point.step * TOKENS_PER_STEP / 1e9 for point in points],
+            [point.step * config.tokens_per_step / 1e9 for point in points],
             [point.value for point in points],
             marker="o",
             color=COLORS[arm],
@@ -84,7 +126,7 @@ def _plot_paloma(all_history: Mapping[str, Mapping[str, list[HistoryPoint]]]) ->
     for count, linestyle in ((128, "-"), (16, "--")):
         points = [point for point in treatment[f"paloma_e{count}"] if point.step <= common_horizon]
         axes[1].plot(
-            [point.step * TOKENS_PER_STEP / 1e9 for point in points],
+            [point.step * config.tokens_per_step / 1e9 for point in points],
             [point.value for point in points],
             marker="o",
             linestyle=linestyle,
@@ -96,9 +138,9 @@ def _plot_paloma(all_history: Mapping[str, Mapping[str, list[HistoryPoint]]]) ->
     axes[1].set_ylabel("Paloma macro loss (lower is better)")
     axes[1].grid(alpha=0.2)
     axes[1].legend()
-    figure.suptitle("Compute-optimal d768 fixed-chain burn-in")
+    figure.suptitle(config.figure_title)
     figure.tight_layout()
-    figure.savefig(OUTPUT_DIR / f"{OUTPUT_PREFIX}-paloma.png", dpi=180)
+    figure.savefig(OUTPUT_DIR / f"{config.output_prefix}-paloma.png", dpi=180)
     plt.close(figure)
 
 
@@ -109,6 +151,7 @@ def _plot_series(
     title: str,
     ylabel: str,
     output_suffix: str,
+    config: AnalysisConfig,
     scale: float = 1.0,
 ) -> None:
     figure, axis = plt.subplots(figsize=(9, 4.8))
@@ -116,32 +159,36 @@ def _plot_series(
     for arm, history in all_history.items():
         points = [point for point in history[metric] if point.step <= common_horizon]
         x, y = binned_medians(points)
-        axis.plot(x * TOKENS_PER_STEP / 1e9, y * scale, color=COLORS[arm], label=LABELS[arm])
+        axis.plot(x * config.tokens_per_step / 1e9, y * scale, color=COLORS[arm], label=LABELS[arm])
     axis.set_title(title)
     axis.set_xlabel("Training tokens (billions)")
     axis.set_ylabel(ylabel)
     axis.grid(alpha=0.2)
     axis.legend()
     figure.tight_layout()
-    figure.savefig(OUTPUT_DIR / f"{OUTPUT_PREFIX}-{output_suffix}.png", dpi=180)
+    figure.savefig(OUTPUT_DIR / f"{config.output_prefix}-{output_suffix}.png", dpi=180)
     plt.close(figure)
 
 
-def _runtime_forecast(step_seconds: float, tokens_billions: float) -> dict[str, float | int]:
-    steps = round(tokens_billions * 1e9 / TOKENS_PER_STEP)
+def _runtime_forecast(
+    step_seconds: float,
+    tokens_billions: float,
+    config: AnalysisConfig,
+) -> dict[str, float | int]:
+    steps = round(tokens_billions * 1e9 / config.tokens_per_step)
     optimizer_hours = steps * step_seconds / 3600
     return {
         "steps": steps,
         "optimizer_hours": optimizer_hours,
-        "gpu_hours": optimizer_hours * GPU_COUNT,
+        "gpu_hours": optimizer_hours * config.gpu_count,
     }
 
 
-def _log_linear_fit(points: list[HistoryPoint]) -> dict[str, Any] | None:
-    phase_zero = [point for point in points if 0 < point.step <= COOLDOWN_START_STEP]
+def _log_linear_fit(points: list[HistoryPoint], config: AnalysisConfig) -> dict[str, Any] | None:
+    phase_zero = [point for point in points if 0 < point.step <= config.quality_fit_end_step]
     if len(phase_zero) < 3:
         return None
-    tokens_billions = np.asarray([point.step * TOKENS_PER_STEP / 1e9 for point in phase_zero])
+    tokens_billions = np.asarray([point.step * config.tokens_per_step / 1e9 for point in phase_zero])
     losses = np.asarray([point.value for point in phase_zero])
     slope, intercept = np.polyfit(np.log(tokens_billions), losses, deg=1)
     fitted = intercept + slope * np.log(tokens_billions)
@@ -159,14 +206,18 @@ def _log_linear_fit(points: list[HistoryPoint]) -> dict[str, Any] | None:
     }
 
 
-def _paired_delta_fit(control: list[HistoryPoint], treatment: list[HistoryPoint]) -> dict[str, Any] | None:
+def _paired_delta_fit(
+    control: list[HistoryPoint],
+    treatment: list[HistoryPoint],
+    config: AnalysisConfig,
+) -> dict[str, Any] | None:
     control_by_step = {point.step: point.value for point in control}
     paired = [
         HistoryPoint(point.step, point.value - control_by_step[point.step])
         for point in treatment
         if point.step in control_by_step
     ]
-    return _log_linear_fit(paired)
+    return _log_linear_fit(paired, config)
 
 
 def _paired_delta_summary(control: list[HistoryPoint], treatment: list[HistoryPoint]) -> dict[str, Any]:
@@ -229,10 +280,14 @@ def _latest_aligned_domains(
     return {"through_step": step, **paired_domains(treatment[step], control[step])}
 
 
-def main() -> None:
+def main(config: AnalysisConfig) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     api = wandb.Api(timeout=60)
-    runs = {arm: api.run(f"{ENTITY}/{PROJECT}/{run_id}") for arm, run_id in RUNS.items()}
+    run_ids = {
+        CONTROL: config.control_run,
+        TREATMENT: config.treatment_run,
+    }
+    runs = {arm: api.run(f"{ENTITY}/{PROJECT}/{run_id}") for arm, run_id in run_ids.items()}
     all_history = {arm: histories(run, include_nested=arm == TREATMENT) for arm, run in runs.items()}
     timing_horizon = _common_horizon(all_history, "step_duration")
     timing = {
@@ -254,11 +309,11 @@ def main() -> None:
         run_runtime = run.summary.get("_runtime")
         elapsed_seconds = float(run_runtime) if isinstance(run_runtime, (int, float)) else None
         summaries[arm] = {
-            "run_name": RUNS[arm],
+            "run_name": run_ids[arm],
             "url": run.url,
             "state": run.state,
             "final_step": last_step,
-            "tokens_billions": (last_step + 1) * TOKENS_PER_STEP / 1e9,
+            "tokens_billions": (last_step + 1) * config.tokens_per_step / 1e9,
             "full_paloma_macro": final_value(history["paloma_macro"]),
             "full_paloma_micro": final_value(history["paloma_micro"]),
             "e128_paloma_macro": final_value(history["paloma_e128"]),
@@ -267,7 +322,7 @@ def main() -> None:
             "terminal_overflow": final_value(history["overflow"]),
             "median_step_seconds": median_step,
             "step_overhead_vs_e256": median_step / baseline_step - 1.0,
-            "gpu_hours_per_billion_tokens": 1e9 / TOKENS_PER_STEP * median_step * GPU_COUNT / 3600,
+            "gpu_hours_per_billion_tokens": 1e9 / config.tokens_per_step * median_step * config.gpu_count / 3600,
             "evaluation_hook_count": len(evaluation_hooks),
             "median_evaluation_hook_seconds": statistics.median(evaluation_hooks) if evaluation_hooks else None,
             "total_logged_hook_seconds": sum(hook_seconds),
@@ -277,17 +332,17 @@ def main() -> None:
             "loading_stall_count_10s": sum(value >= 10.0 for value in loading_seconds),
             "total_logged_loading_seconds": sum(loading_seconds),
             "elapsed_run_seconds": elapsed_seconds,
-            "elapsed_gpu_hours": elapsed_seconds * GPU_COUNT / 3600 if elapsed_seconds is not None else None,
+            "elapsed_gpu_hours": elapsed_seconds * config.gpu_count / 3600 if elapsed_seconds is not None else None,
             "runtime_forecasts": {
-                str(tokens_billions): _runtime_forecast(median_step, tokens_billions)
+                str(tokens_billions): _runtime_forecast(median_step, tokens_billions, config)
                 for tokens_billions in FORECAST_TOKENS_BILLIONS
             },
         }
 
     result = {
         "schema_version": 1,
-        "tokens_per_step": TOKENS_PER_STEP,
-        "gpu_count": GPU_COUNT,
+        "tokens_per_step": config.tokens_per_step,
+        "gpu_count": config.gpu_count,
         "timing_through_step": timing_horizon,
         "summaries": summaries,
         "timing": {arm: asdict(value) for arm, value in timing.items()},
@@ -299,11 +354,12 @@ def main() -> None:
             for arm, history in all_history.items()
         },
         "quality_log_linear_fits": {
-            arm: _log_linear_fit(history["paloma_macro"]) for arm, history in all_history.items()
+            arm: _log_linear_fit(history["paloma_macro"], config) for arm, history in all_history.items()
         },
         "full_mode_delta_log_linear_fit": _paired_delta_fit(
             all_history[CONTROL]["paloma_macro"],
             all_history[TREATMENT]["paloma_macro"],
+            config,
         ),
         "full_mode_paired_delta_summary": _paired_delta_summary(
             all_history[CONTROL]["paloma_macro"],
@@ -311,22 +367,23 @@ def main() -> None:
         ),
         "full_mode_domain_comparison": _latest_aligned_domains(runs[CONTROL], runs[TREATMENT]),
     }
-    (OUTPUT_DIR / f"{OUTPUT_PREFIX}-results.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    (OUTPUT_DIR / f"{config.output_prefix}-results.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
 
-    with (OUTPUT_DIR / f"{OUTPUT_PREFIX}-summary.csv").open("w", newline="") as file:
+    with (OUTPUT_DIR / f"{config.output_prefix}-summary.csv").open("w", newline="") as file:
         fieldnames = list(next(iter(summaries.values())).keys())
         writer = csv.DictWriter(file, fieldnames=["arm", *fieldnames])
         writer.writeheader()
         for arm, summary in summaries.items():
             writer.writerow({"arm": arm, **summary})
 
-    _plot_paloma(all_history)
+    _plot_paloma(all_history, config)
     _plot_series(
         all_history,
         metric="cross_entropy_loss",
         title="Training cross-entropy (100-step medians; fixed25 mixes E256, E128, and E16 rows)",
         ylabel="Cross-entropy loss",
         output_suffix="loss",
+        config=config,
     )
     _plot_series(
         all_history,
@@ -334,9 +391,10 @@ def main() -> None:
         title="Compiled optimizer-step time (100-step medians)",
         ylabel="Step time (ms)",
         output_suffix="step-time",
+        config=config,
         scale=1_000.0,
     )
 
 
 if __name__ == "__main__":
-    main()
+    main(_parse_args())

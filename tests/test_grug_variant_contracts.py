@@ -379,6 +379,8 @@ def test_nested_burnin_launcher_builds_100b_replica_cell(monkeypatch, tmp_path):
     monkeypatch.setenv("BURNIN_REPLICA_AXIS_SIZE", "4")
     monkeypatch.setenv("BURNIN_EXPERT_AXIS_SIZE", "1")
     monkeypatch.setenv("BURNIN_EVAL_INTERVAL", "2500")
+    monkeypatch.setenv("BURNIN_PROFILE_STEPS", "10")
+    monkeypatch.setenv("BURNIN_PROFILE_START_STEP", "128")
     monkeypatch.setenv("BURNIN_ATTENTION", "reference")
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
 
@@ -395,6 +397,11 @@ def test_nested_burnin_launcher_builds_100b_replica_cell(monkeypatch, tmp_path):
     assert config.steps == 95_367
     assert config.batch_size == 128
     assert config.eval.steps_per_eval == 2_500
+    assert config.profiler.enabled
+    assert config.profiler.start_step == 128
+    assert config.profiler.num_steps == 10
+    assert config.profiler.process_index == 0
+    assert config.profiler.profile_options.enable_hlo_proto
     assert config.grug_trainer.replica_axis_size == 4
     assert config.grug_trainer.expert_axis_size == 1
     assert config.model.attention_implementation == "reference"
