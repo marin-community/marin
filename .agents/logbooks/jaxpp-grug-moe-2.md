@@ -2316,3 +2316,49 @@ bash experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit \
   - Launch one default-BFC exact rerun at fraction `0.75` as parent `/dlwh/iris-run-job-20260728-000843`.
     Require all ten steps and compare W&B steps 2-9 with scalar UB-X `19.8996`.
   - Do not attribute the IB failure to JaxPP or allocator selection, and do not restart the cluster.
+
+### 2026-07-27 17:46 PDT - BFC 0.75 clears OOM under degraded RNO2A fabric
+- Snapshot:
+  - Parent `/dlwh/iris-run-job-20260728-000843` and child
+    `/dlwh/iris-run-job-20260728-000843/grug-train-jaxpp-rno2a-ubx-vectorcopy-l24-e64k4-b8192-s4096-p4m256-precompile-bfc075-r5-20260727`
+    ran clean commit `c2e1ebcb28`.
+- Result:
+  - UB-X initialized on all ranks, `1026/1025/1025/1025` tasks precompiled, the barrier completed, and
+    training finished `10/10`.
+  - Default BFC at fraction `0.75` produced no allocation failure. This clears the prior `19.51 GiB`
+    stage-3 loss/backward OOM.
+  - Parent, child, and all four workers succeeded with exit `0`; failures and preemptions were zero.
+    [W&B](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ubx-vectorcopy-l24-e64k4-b8192-s4096-p4m256-precompile-bfc075-r5-20260727)
+    finished and synced. No resource remains live.
+- Steps 2-9:
+
+| Step | Loss | Duration | MFU | Tokens/s |
+| ---: | ---: | ---: | ---: | ---: |
+| 2 | `9.870306` | `180.160239s` | `9.342949` | `186,247.710` |
+| 3 | `9.103477` | `164.490975s` | `10.232950` | `203,989.502` |
+| 4 | `8.457621` | `150.869485s` | `11.156848` | `222,407.017` |
+| 5 | `7.922069` | `176.512757s` | `9.536012` | `190,096.357` |
+| 6 | `7.486253` | `140.260216s` | `12.000750` | `239,229.861` |
+| 7 | `7.141079` | `187.243096s` | `8.989532` | `179,202.506` |
+| 8 | `6.879194` | `140.187731s` | `12.006956` | `239,353.557` |
+| 9 | `6.695072` | `173.857971s` | `9.681626` | `192,999.100` |
+
+| Metric | Mean | P50 | P90 |
+| --- | ---: | ---: | ---: |
+| Duration | `164.197809s` | `169.174473s` | `182.285096s` |
+| MFU | `10.368453` | `9.957288` | `12.002612` |
+| Throughput | `206,690.701 tok/s` | `198,494.301 tok/s` | `239,266.970 tok/s` |
+
+- Fabric attribution:
+  - Ranks 0-2 repeatedly reported nonfatal IB `client reregistration(17)` events. The complete job contained
+    21 matching port/re-registration/retry events; the successful scalar exact baseline contained zero.
+  - The immediately preceding PJRT-async run and this BFC run used different primary-device allocators but
+    both delivered approximately half the scalar throughput during the same RNO2A IB-degradation window.
+  - Mean MFU is `9.5311` points, or `47.90%`, below scalar UB-X `19.8996`. This fails the performance gate,
+    but the cross-allocator agreement plus fabric events make it infrastructure-contaminated rather than
+    evidence of a vector-copy regression.
+- Cluster decision:
+  - `cw-us-east-02a` reports a healthy controller, is currently running distributed H100 work, and its recent
+    distributed H100 logs contain zero matching IB port/re-registration/retry events.
+  - Launch the unchanged BFC-0.75 exact gate there as parent `/dlwh/iris-run-job-20260728-004552`.
+    If capacity is gated, wait; do not alter either cluster.
