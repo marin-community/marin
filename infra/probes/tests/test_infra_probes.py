@@ -4,11 +4,14 @@
 """Federated scheduling checks through the public Marin controller."""
 
 import json
+from threading import Event
 
+import infra_probes
 from infra_probes import collect_federated_scheduling
 from iris.cluster.constraints import Constraint, cluster_directive
 from iris.rpc import controller_pb2, job_pb2
 from runner import METRIC_UP
+from sample import Sample
 
 
 class FakePeerClient:
@@ -98,6 +101,37 @@ def test_federated_scheduling_preserves_each_peer_result_when_one_fails():
         iris,
         FakePeerClient(["cw-rno2a", "cw-us-east-02a"]),
     )
+
+    assert _health_by_cluster(samples) == {
+        "cw-rno2a": 0.0,
+        "cw-us-east-02a": 1.0,
+    }
+
+
+def test_federated_scheduling_preserves_completed_samples_when_one_peer_hangs(monkeypatch):
+    blocked_probe_finished = Event()
+
+    def scheduling_sample(_iris, peer_id):
+        if peer_id == "cw-rno2a":
+            blocked_probe_finished.wait(timeout=0.5)
+        return Sample.of(
+            METRIC_UP,
+            1.0,
+            probe=f"iris-job-submit/cluster/{peer_id}",
+            cluster=peer_id,
+            route="federation",
+        )
+
+    monkeypatch.setattr(infra_probes, "_federated_scheduling_sample", scheduling_sample)
+    monkeypatch.setattr(infra_probes, "CANARY_PEER_TIMEOUT", 0.05)
+
+    try:
+        samples = collect_federated_scheduling(
+            FakeIris(),
+            FakePeerClient(["cw-rno2a", "cw-us-east-02a"]),
+        )
+    finally:
+        blocked_probe_finished.set()
 
     assert _health_by_cluster(samples) == {
         "cw-rno2a": 0.0,

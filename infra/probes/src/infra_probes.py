@@ -12,7 +12,7 @@ by Cloud Logging on COS) and fanned to the sinks.
 import logging
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 
 import click
@@ -55,6 +55,7 @@ CANARY_MEMORY = "128m"
 CANARY_SCHEDULING_TIMEOUT = 60.0
 CANARY_RUNTIME_TIMEOUT = 60.0
 CANARY_WAIT_TIMEOUT = 100.0
+CANARY_PEER_TIMEOUT = 120.0
 CANARY_COLLECTOR_TIMEOUT = 240.0
 CANARY_CADENCE = 300.0
 
@@ -127,8 +128,18 @@ def iris_job_succeeds(
     return status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
-def _federated_scheduling_sample(iris: RemoteClusterClient, peer_id: str) -> Sample:
+def _federated_scheduling_health_sample(peer_id: str, succeeded: bool) -> Sample:
     probe_name = f"iris-job-submit/cluster/{peer_id}"
+    return Sample.of(
+        METRIC_UP,
+        1.0 if succeeded else 0.0,
+        probe=probe_name,
+        cluster=peer_id,
+        route="federation",
+    )
+
+
+def _federated_scheduling_sample(iris: RemoteClusterClient, peer_id: str) -> Sample:
     constraint = Constraint.create(
         key=CLUSTER_CONSTRAINT_KEY,
         op=ConstraintOp.EQ,
@@ -143,13 +154,7 @@ def _federated_scheduling_sample(iris: RemoteClusterClient, peer_id: str) -> Sam
     except Exception:
         logger.exception("federated scheduling probe failed for %s", peer_id)
         succeeded = False
-    return Sample.of(
-        METRIC_UP,
-        1.0 if succeeded else 0.0,
-        probe=probe_name,
-        cluster=peer_id,
-        route="federation",
-    )
+    return _federated_scheduling_health_sample(peer_id, succeeded)
 
 
 def collect_federated_scheduling(
@@ -164,12 +169,24 @@ def collect_federated_scheduling(
     if not peer_ids:
         raise RuntimeError("the Marin controller reports no federation peers")
 
-    with ThreadPoolExecutor(
+    executor = ThreadPoolExecutor(
         max_workers=len(peer_ids),
         thread_name_prefix="federated-scheduling-probe",
-    ) as executor:
-        futures = [executor.submit(_federated_scheduling_sample, iris, peer_id) for peer_id in peer_ids]
-        return [future.result() for future in futures]
+    )
+    try:
+        futures = {executor.submit(_federated_scheduling_sample, iris, peer_id): peer_id for peer_id in peer_ids}
+        completed, pending = wait(futures, timeout=CANARY_PEER_TIMEOUT)
+        samples = [
+            future.result() if future in completed else _federated_scheduling_health_sample(peer_id, False)
+            for future, peer_id in futures.items()
+        ]
+        for future in pending:
+            peer_id = futures[future]
+            logger.error("federated scheduling probe timed out for %s", peer_id)
+        return samples
+    finally:
+        # Waiting here would discard completed samples when one peer call is stuck.
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def probe_finelog_write(finelog: LogClient) -> bool:
