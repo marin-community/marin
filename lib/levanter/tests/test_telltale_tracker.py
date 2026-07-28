@@ -9,7 +9,7 @@ from prometheus_client import REGISTRY, generate_latest
 from rigging import telltale
 
 from levanter.tracker.histogram import SummaryStats
-from levanter.tracker.telltale import TelltaleConfig, TelltaleTracker
+from levanter.tracker.telltale import TelltaleConfig, TelltaleTracker, TrainingPhase
 
 
 def _series(text: str, name: str) -> dict[str, float]:
@@ -41,6 +41,18 @@ def test_log_publishes_jax_scalars(exposition):
     assert samples["levanter_train_loss"] == 1.25
     assert samples["levanter_throughput"] == 7.0
     assert samples["levanter_step"] == 3.0
+
+
+def test_training_progress_marks_completed_optimizer_step(exposition, monkeypatch):
+    tracker, render = exposition
+    monkeypatch.setattr("levanter.tracker.telltale.time", lambda: 1234.5)
+
+    tracker.log({"train/loss": 1.25}, step=3)
+    tracker.finish()
+
+    samples = _series(render(), "levanter_")
+    assert samples["levanter_progress_time_seconds"] == 1234.5
+    assert samples["levanter_phase"] == TrainingPhase.FINISHED
 
 
 def test_log_skips_values_that_are_not_real_scalars(exposition):

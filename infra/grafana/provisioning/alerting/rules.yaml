@@ -304,6 +304,54 @@ groups:
               conditions:
                 - evaluator: { type: gt, params: [0] }
 
+  # Warning-only stalled-training detection. A fresh running task-state row is
+  # the liveness gate; absent Telltale is evidence after the initialization
+  # grace period, so this rule does not require task-to-node GPU attribution.
+  - orgId: 1
+    name: training-progress
+    folder: Alerts
+    interval: 1m
+    rules:
+      - uid: training-progress-stalled
+        title: TrainingProgressStalled
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.job }} has {{ $labels.reason }}"
+          runbook_url: https://github.com/marin-community/marin/blob/main/docs/ops/training-stall-alert-contract.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/training_stalls
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: job, text: job, type: string }
+                - { selector: phase, text: phase, type: string }
+                - { selector: reason, text: reason, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
   # The GCE controllers are not in K8S_CLUSTERS; their liveness comes from the
   # existing per-cluster iris datasources. The health row always exists (the
   # bridge answers reachable=false rather than erroring), and `up` is its 0/1

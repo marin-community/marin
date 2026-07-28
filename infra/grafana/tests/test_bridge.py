@@ -18,6 +18,7 @@ from k8s_source import K8sFleet
 from loom_alerts import LoomAlertClient, LoomAlertDeliveryError
 from server import create_app, workload_overview
 from starlette.testclient import TestClient
+from training_stalls import training_stall_alert_rows
 from wandb_source import WandbSource
 
 # 2026-07-17T03:00:00Z and +1h, as Grafana sends them.
@@ -191,6 +192,80 @@ def test_unparseable_labels_cell_keeps_the_row():
 
 def test_health_lists_configured_clusters():
     assert _client(FakeSource()).get("/health").json() == {"status": "ok", "clusters": ["marin"]}
+
+
+def test_training_stall_alerts_distinguish_stale_missing_and_healthy_progress():
+    now = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
+    task_states = finelog_result(
+        cluster=["cw-a", "cw-a", "cw-b", "cw-b", "cw-b"],
+        job=["/u/stale", "/u/initializing", "/u/healthy", "/u/starting", "/u/not-levanter"],
+        state_at=[now] * 5,
+        running_since=[
+            datetime(2026, 7, 28, 11, 0, tzinfo=UTC),
+            datetime(2026, 7, 28, 11, 0, tzinfo=UTC),
+            datetime(2026, 7, 28, 11, 0, tzinfo=UTC),
+            datetime(2026, 7, 28, 11, 30, tzinfo=UTC),
+            datetime(2026, 7, 28, 11, 0, tzinfo=UTC),
+        ],
+    )
+    telltale_metrics = finelog_result(
+        cluster=["cw-a", "cw-a", "cw-a", "cw-b", "cw-b", "cw-b"],
+        job=["/u/stale", "/u/stale", "/u/initializing", "/u/healthy", "/u/healthy", "/u/starting"],
+        name=[
+            "levanter_phase",
+            "levanter_progress_time_seconds",
+            "levanter_phase",
+            "levanter_phase",
+            "levanter_progress_time_seconds",
+            "levanter_phase",
+        ],
+        value=[
+            1.0,
+            datetime(2026, 7, 28, 11, 30, tzinfo=UTC).timestamp(),
+            0.0,
+            1.0,
+            datetime(2026, 7, 28, 11, 59, tzinfo=UTC).timestamp(),
+            0.0,
+        ],
+        ts=[now] * 6,
+    )
+
+    assert training_stall_alert_rows(task_states, telltale_metrics, now) == [
+        {
+            "cluster": "cw-a",
+            "job": "/u/stale",
+            "phase": "training",
+            "reason": "optimizer_progress_stale",
+            "value": 1,
+        },
+        {
+            "cluster": "cw-a",
+            "job": "/u/initializing",
+            "phase": "initializing",
+            "reason": "initializing_stale",
+            "value": 1,
+        },
+        {
+            "cluster": "cw-b",
+            "job": "/u/healthy",
+            "phase": "training",
+            "reason": "healthy",
+            "value": 0,
+        },
+        {
+            "cluster": "cw-b",
+            "job": "/u/starting",
+            "phase": "initializing",
+            "reason": "initializing",
+            "value": 0,
+        },
+    ]
+
+
+def test_training_stall_alert_returns_explicit_zero_without_running_jobs():
+    assert training_stall_alert_rows(pa.table({}), pa.table({}), datetime(2026, 7, 28, tzinfo=UTC)) == [
+        {"cluster": "fleet", "job": "", "phase": "idle", "reason": "healthy", "value": 0}
+    ]
 
 
 class FakeLoomAlerts(LoomAlertClient):
