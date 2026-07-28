@@ -4,8 +4,12 @@
 import json
 import os
 import socket
+import subprocess
+import sys
 import threading
+from pathlib import Path
 
+from iris.cluster.runtime import distributed_diagnostic_probe_v1
 from iris.cluster.runtime.distributed_diagnostic_probe_v1 import (
     MAX_BUNDLE_BYTES,
     collect_diagnostic,
@@ -17,6 +21,21 @@ def _closed_port() -> tuple[socket.socket, int]:
     guard = socket.socket()
     guard.bind(("127.0.0.1", 0))
     return guard, guard.getsockname()[1]
+
+
+def test_probe_starts_when_strenum_is_unavailable(tmp_path):
+    (tmp_path / "sitecustomize.py").write_text("import enum\ndel enum.StrEnum\n")
+    environment = os.environ | {"PYTHONPATH": str(tmp_path)}
+
+    result = subprocess.run(
+        [sys.executable, str(Path(distributed_diagnostic_probe_v1.__file__)), "--help"],
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Standalone, bounded distributed GPU diagnostic probe" in result.stdout
 
 
 def test_collect_diagnostic_unavailable_tools_preserves_process_evidence():

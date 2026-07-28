@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from iris.cluster.runtime.process import ProcessRuntime, _remap_container_path, _resolve_mount_map
+from iris.cluster.runtime.profile import LocalProfileDispatch
 from iris.cluster.runtime.types import ContainerConfig, MountKind, MountSpec, ProfileCaptureRequest
 from iris.rpc import job_pb2
 
@@ -22,6 +23,19 @@ def _make_config(mounts: list[MountSpec], workdir_host_path: Path | None = None)
         workdir_host_path=workdir_host_path,
         task_id="test-task",
     )
+
+
+def test_local_diagnostic_probe_runs_outside_source_package(tmp_path):
+    source_dir = tmp_path / "runtime"
+    source_dir.mkdir()
+    (source_dir / "argparse.py").write_text("raise RuntimeError('shadowed argparse')\n")
+    probe_path = source_dir / "distributed_diagnostic_probe_v1.py"
+    probe_path.write_text("import argparse\nprint('probe started')\n")
+
+    result = LocalProfileDispatch().run_diagnostic_probe(probe_path, [], timeout=1)
+
+    assert result.returncode == 0
+    assert result.stdout == b"probe started\n"
 
 
 def test_tmpfs_mount_creates_unique_dirs(tmp_path):

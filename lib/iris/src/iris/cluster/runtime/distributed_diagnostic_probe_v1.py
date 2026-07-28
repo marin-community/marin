@@ -21,7 +21,7 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -86,7 +86,7 @@ _GPU_FIELDS = (
 )
 
 
-class CollectorStatus(StrEnum):
+class CollectorStatus(str, Enum):
     OK = "ok"
     PARTIAL = "partial"
     UNAVAILABLE = "unavailable"

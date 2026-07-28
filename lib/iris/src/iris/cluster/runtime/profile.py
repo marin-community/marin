@@ -361,7 +361,10 @@ class LocalProfileDispatch:
         *,
         timeout: int,
     ) -> ExecResult:
-        return self.exec([sys.executable, str(probe_path), *arguments], timeout=timeout)
+        with tempfile.TemporaryDirectory(prefix="iris-distributed-diagnostic-") as directory:
+            copied_path = Path(directory) / probe_path.name
+            shutil.copyfile(probe_path, copied_path)
+            return self.exec([sys.executable, str(copied_path), *arguments], timeout=timeout)
 
     def _resume(self) -> None:
         if self.resume_pid is None or sys.platform != "linux":
