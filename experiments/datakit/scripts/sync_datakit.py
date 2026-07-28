@@ -337,8 +337,8 @@ def _open_kwargs_for(path: str) -> dict:
 # This is what lets a single process copy R2 -> CoreWeave: the CW side uses the
 # ambient S3 config (the cluster default, e.g. cwlota) and the R2 side is pinned
 # to its own client via constructor kwargs, so the two never clobber each other
-# (fsspec caches filesystems by their kwargs). Set ``R2_ACCESS_KEY_ID``,
-# ``R2_SECRET_ACCESS_KEY``, ``R2_ENDPOINT_URL`` in the job env.
+# (fsspec caches filesystems by their kwargs). Set ``R2_KEY_ID``,
+# ``R2_KEY_SECRET``, ``R2_S3_ENDPOINT`` in the job env.
 _R2_BUCKETS = frozenset({"marin-na"})
 
 
@@ -352,7 +352,7 @@ def _s3_creds_kwargs(path: str) -> dict:
     if not path.startswith("s3://"):
         return {}
     bucket = path[len("s3://") :].split("/", 1)[0]
-    if bucket in _R2_BUCKETS and os.environ.get("R2_ENDPOINT_URL"):
+    if bucket in _R2_BUCKETS and os.environ.get("R2_S3_ENDPOINT"):
         # ``endpoint_url`` must be a *top-level* s3fs kwarg, not inside
         # ``client_kwargs``: fsspec shallow-merges the ambient ``FSSPEC_S3`` config
         # (which carries the cluster's top-level ``endpoint_url``, e.g. cwlota) with
@@ -360,9 +360,9 @@ def _s3_creds_kwargs(path: str) -> dict:
         # leaves the ambient top-level endpoint in place and s3fs then passes
         # ``endpoint_url`` to ``create_client`` twice.
         return {
-            "key": os.environ["R2_ACCESS_KEY_ID"],
-            "secret": os.environ["R2_SECRET_ACCESS_KEY"],
-            "endpoint_url": os.environ["R2_ENDPOINT_URL"],
+            "key": os.environ["R2_KEY_ID"],
+            "secret": os.environ["R2_KEY_SECRET"],
+            "endpoint_url": os.environ["R2_S3_ENDPOINT"],
             "client_kwargs": {"region_name": "auto"},
         }
     return {}

@@ -225,3 +225,37 @@ def test_coreweave_bucket_requires_signing_region(tmp_path, monkeypatch):
     reset_data_config_cache()
     with pytest.raises(ValueError, match="must specify a 'signing_region'"):
         load_cluster_config("cw")
+
+
+def test_store_configs_aggregate_across_clusters(tmp_path, monkeypatch):
+    """Reaching a CoreWeave bucket from a GCS cluster needs the CoreWeave backend's settings."""
+    cluster_dir = tmp_path / "clusters"
+    cluster_dir.mkdir()
+    (cluster_dir / "gcs.yaml").write_text("data:\n  scheme: gs\n  region_buckets: {e: {bucket: b-gcs, store: gcs}}\n")
+    (cluster_dir / "s3.yaml").write_text(
+        "data:\n"
+        "  scheme: s3\n"
+        "  region_buckets: {e: {bucket: b-cw, store: coreweave, signing_region: US-EAST-02A}}\n"
+        "  stores:\n"
+        "    coreweave:\n"
+        "      endpoint: https://cw.example\n"
+        "      endpoint_env: CW_S3_ENDPOINT\n"
+        "      key_id_env: CW_KEY_ID\n"
+        "      key_secret_env: CW_KEY_SECRET\n"
+    )
+    monkeypatch.setattr(fs, "MARIN_CLUSTER_CONFIG_DIRS", (str(cluster_dir),))
+    reset_data_config_cache()
+
+    assert fs.store_config(StoreType.COREWEAVE).endpoint == "https://cw.example"
+    assert set(fs.data_buckets()) == {"b-gcs", "b-cw"}
+
+
+def test_store_entry_requires_every_field(tmp_path, monkeypatch):
+    """A backend missing its endpoint or key variables must fail at load, not at first request."""
+    cluster_dir = tmp_path / "clusters"
+    cluster_dir.mkdir()
+    (cluster_dir / "partial.yaml").write_text("data:\n  scheme: s3\n  stores: {r2: {endpoint: https://r2.example}}\n")
+    monkeypatch.setattr(fs, "MARIN_CLUSTER_CONFIG_DIRS", (str(cluster_dir),))
+    reset_data_config_cache()
+    with pytest.raises(ValueError, match=r"stores\.r2"):
+        load_cluster_config("partial")

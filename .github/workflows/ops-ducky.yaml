@@ -56,8 +56,8 @@ jobs:
         env:
           DUCKY_GCS_HMAC_KEY_ID: ${{ secrets.DUCKY_GCS_HMAC_KEY_ID }}
           DUCKY_GCS_HMAC_SECRET: ${{ secrets.DUCKY_GCS_HMAC_SECRET }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_KEY_SECRET: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           DUCKY_CW_SECRET_KEY: ${{ secrets.DUCKY_CW_SECRET_KEY }}
         with:
           stack: ducky-marin

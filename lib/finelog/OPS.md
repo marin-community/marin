@@ -119,7 +119,7 @@ runs it needs `roles/secretmanager.secretAccessor` on that secret.
 
 ```bash
 uv run finelog deploy restart marin              # hub: gcp backend, in-place
-export R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=...
+export R2_KEY_ID=... R2_KEY_SECRET=...
 uv run finelog deploy up "$CLUSTER" --no-build   # sender: k8s, applies Secret + env
 ```
 
