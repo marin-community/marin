@@ -34,10 +34,6 @@ logger = logging.getLogger(__name__)
 # Target sentinel for profiling the local worker/controller process itself.
 SYSTEM_PROCESS_TARGET = "/system/process"
 UV_RUN_SCRIPT = ("uv", "run", "--script")
-# Reusing one path lets uv reuse its inline-script environment. The script is
-# refreshed before every capture and left in place in case an exec client times
-# out while uv's child interpreter is still starting.
-DISTRIBUTED_DIAGNOSTIC_PROBE_PATH = "/tmp/iris-distributed-diagnostic.py"
 
 
 CPU_FORMAT_MAP: dict[int, tuple[str, str]] = {
@@ -365,9 +361,10 @@ class LocalProfileDispatch:
         *,
         timeout: int,
     ) -> ExecResult:
-        copied_path = Path(DISTRIBUTED_DIAGNOSTIC_PROBE_PATH)
-        shutil.copyfile(probe_path, copied_path)
-        return self.exec([*UV_RUN_SCRIPT, str(copied_path), *arguments], timeout=timeout)
+        with tempfile.TemporaryDirectory(prefix="iris-distributed-diagnostic-") as directory:
+            copied_path = Path(directory) / probe_path.name
+            shutil.copyfile(probe_path, copied_path)
+            return self.exec([*UV_RUN_SCRIPT, str(copied_path), *arguments], timeout=timeout)
 
     def _resume(self) -> None:
         if self.resume_pid is None or sys.platform != "linux":

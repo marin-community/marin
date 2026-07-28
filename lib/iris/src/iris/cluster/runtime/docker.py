@@ -37,7 +37,6 @@ from iris.cluster.runtime.distributed_diagnostic import (
 )
 from iris.cluster.runtime.env import VENV_PATH, cache_host_dirname, render_setup_steps, write_workdir_files
 from iris.cluster.runtime.profile import (
-    DISTRIBUTED_DIAGNOSTIC_PROBE_PATH,
     PROFILER_WATCHDOG_GRACE_SECONDS,
     UV_RUN_SCRIPT,
     ExecResult,
@@ -154,15 +153,38 @@ class _DockerProfileDispatch:
         *,
         timeout: int,
     ) -> ExecResult:
+        remote_path = f"/tmp/{probe_path.stem}-{uuid.uuid4().hex[:8]}.py"
+        probe_bytes = probe_path.read_bytes()
+        # docker cp reports success without populating the task's /tmp tmpfs.
+        # Stream through docker exec so the write occurs in the mount namespace.
         copied = subprocess.run(
-            ["docker", "cp", str(probe_path), f"{self.container_id}:{DISTRIBUTED_DIAGNOSTIC_PROBE_PATH}"],
+            [
+                "docker",
+                "exec",
+                "-i",
+                self.container_id,
+                "dd",
+                f"of={remote_path}",
+                f"bs={len(probe_bytes)}",
+                "count=1",
+                "iflag=fullblock",
+                "status=none",
+            ],
+            input=probe_bytes,
             capture_output=True,
-            text=True,
             timeout=10,
         )
         if copied.returncode != 0:
-            return ExecResult(copied.returncode, b"", copied.stderr or "docker cp failed")
-        return self.exec([*UV_RUN_SCRIPT, DISTRIBUTED_DIAGNOSTIC_PROBE_PATH, *arguments], timeout=timeout)
+            stderr = copied.stderr.decode("utf-8", "replace")
+            return ExecResult(copied.returncode, b"", stderr or "probe copy failed")
+        try:
+            return self.exec([*UV_RUN_SCRIPT, remote_path, *arguments], timeout=timeout)
+        finally:
+            subprocess.run(
+                ["docker", "exec", self.container_id, "rm", "-f", remote_path],
+                capture_output=True,
+                timeout=10,
+            )
 
     def _sigcont_sweep(self) -> None:
         try:
