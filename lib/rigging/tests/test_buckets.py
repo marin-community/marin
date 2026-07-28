@@ -7,6 +7,7 @@ config-declared endpoint and credentials it is built with."""
 import pytest
 import rigging.filesystem.cluster_config as cluster_config
 import s3fs
+from fsspec.implementations.local import LocalFileSystem
 from rigging.filesystem.buckets import MissingCredentials, filesystem_for
 from rigging.filesystem.cluster_config import BucketSpec, StoreType, load_cluster_config, use_data_config
 from rigging.filesystem.s3_compat import credentials_hint, s3_credentials, s3_endpoint
@@ -119,14 +120,21 @@ def test_generic_aws_credentials_serve_a_single_backend(config, monkeypatch):
     assert s3_credentials(StoreType.COREWEAVE) == ("generic-key", "generic-secret")
 
 
-def test_gcs_and_unregistered_buckets_use_the_guarded_factory(config, keys):
-    """Anything not routed to a declared S3 backend keeps its existing behavior."""
-    gcs_fs, gcs_path = filesystem_for("gs://marin-us-east5/x")
-    unknown_fs, _ = filesystem_for("s3://not-a-marin-bucket/x")
+def test_unregistered_and_local_paths_use_the_guarded_factory(config, keys, tmp_path):
+    """Anything not routed to a declared S3 backend keeps its existing behavior.
 
-    assert gcs_path == "marin-us-east5/x"
-    assert not isinstance(gcs_fs, s3fs.S3FileSystem)  # wrapped in the cross-region guard
-    assert isinstance(unknown_fs, s3fs.S3FileSystem)  # ambient env, not a routed backend
+    A bucket no config declares gets the ambient environment, not a backend's endpoint,
+    so it must not inherit CoreWeave's. Routing for GCS URLs is the same fall-through;
+    it is left to the cross-region tests, which do not need credentials to run.
+    """
+    unknown_fs, unknown_path = filesystem_for("s3://not-a-marin-bucket/x")
+    local_fs, local_path = filesystem_for(str(tmp_path / "x"))
+
+    assert unknown_path == "not-a-marin-bucket/x"
+    assert isinstance(unknown_fs, s3fs.S3FileSystem)
+    assert unknown_fs.endpoint_url != "https://cwobject.example"
+    assert isinstance(local_fs, LocalFileSystem)
+    assert local_path == str(tmp_path / "x")
 
 
 def test_gcs_has_no_s3_connection_settings(config):
