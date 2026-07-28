@@ -10,7 +10,7 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.data import hf_download
 
-_CATALOG_VERSION = "2026.07.27"
+_MIRROR_FORMAT_VERSION = "2026.07.27"
 _HARBOR_DATASET_NAMESPACE = "evaluation/harbor-datasets"
 _COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
@@ -35,8 +35,8 @@ class HuggingFaceHarborDataset:
     def artifact(self) -> ArtifactStep[Artifact]:
         """Return the lazy Hugging Face download at the evaluator's artifact prefix."""
         return hf_download(
-            name=f"{_HARBOR_DATASET_NAMESPACE}/{self.slug}",
+            name=f"{_HARBOR_DATASET_NAMESPACE}/{self.slug}/{self.commit}",
             hf_id=self.repository,
             revision=self.commit,
-            version=_CATALOG_VERSION,
+            version=_MIRROR_FORMAT_VERSION,
         )

@@ -89,9 +89,10 @@ definition = HarborDefinition(
 ```
 
 Every Hugging Face source uses a full commit hash. The evaluator resolves a lazy `download_hf`
-artifact under its normal artifact prefix: GCS on GCP or S3 on CoreWeave. A successful artifact is
-reused by later model sweeps, so a cache hit does not contact Hugging Face. The evaluation record
-stores the repository, commit, and resolved artifact URI.
+artifact under its normal artifact prefix: GCS on GCP or S3 on CoreWeave. The commit is part of the
+artifact address, so changing the pin selects a new regional mirror while later model sweeps over
+the same commit reuse it without contacting Hugging Face. The evaluation record stores the
+repository, commit, and resolved artifact URI.
 
 At the Harbor boundary, Marin lists valid task directories in the mirror and stages only the
 selected directories under evaluator-local `/tmp`. `--limit 2`, for example, copies two complete
@@ -100,8 +101,8 @@ its Harbor name, such as `aime` with version `1.0`.
 
 The commits in `experiments/evaluation/evals.py` come from
 `HfApi().dataset_info(repository).sha`. Refresh a dataset only as an intentional benchmark version
-change: update its commit and bump `_CATALOG_VERSION` in `harbor_datasets.py`. Normal evaluation
-runs never follow the mutable `main` revision.
+change by updating its commit. `_MIRROR_FORMAT_VERSION` changes only when the mirrored tree
+representation changes. Normal evaluation runs never follow the mutable `main` revision.
 
 Add project-specific presets to `experiments/evaluation/evals.py`; keep Harbor execution and result
 normalization in `lib/marin/src/marin/evaluation/harbor`.

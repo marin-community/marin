@@ -89,9 +89,10 @@ runtime arg, so changing it does not change the artifact identity.
 The `agentic` suite (`tb2`, `swebench`, `gaia`, `bfcl`, `aider`, `medagentbench`, `financeagent`) runs
 in-sandbox agentic benchmarks through the same launcher. Each preset pins its Hugging Face repository
 to a full commit and declares a lazy artifact under the evaluator's normal artifact prefix (GCS on GCP,
-S3 on CoreWeave). On a cache hit the evaluator does not contact Hugging Face; it stages only the
-selected complete task directories into local `/tmp` before calling Harbor. The launcher serves the
-model once and mints a capability URL for the served endpoint, and an in-sandbox terminal agent
+S3 on CoreWeave). The commit is part of the artifact address. On a cache hit the evaluator does not
+contact Hugging Face; it stages only the selected complete task directories into local `/tmp` before
+calling Harbor. The launcher serves the model once and mints a capability URL for the served endpoint,
+and an in-sandbox terminal agent
 (Daytona) reaches the model through that URL. Harbor's verifier scores each trial, which normalizes
 into one agentic `EvalSample` (reward ->
 `Grading(method="harbor:verifier")`, trajectory -> `trajectory_uri`) plus a record, so agentic runs

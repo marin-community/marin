@@ -26,6 +26,7 @@ from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem import StoragePath
 
 from experiments.evaluation.evals import EVALS
+from experiments.evaluation.harbor_datasets import HuggingFaceHarborDataset
 from experiments.evaluation.launch import LaunchSpec, build_evaluation_batch
 
 
@@ -253,8 +254,17 @@ def test_agentic_evaluation_uses_a_revision_pinned_dataset_artifact(monkeypatch)
     assert artifact is not None
     assert artifact.override_path is None
     assert artifact.path("gs://marin-us-west4") == (
-        "gs://marin-us-west4/evaluation/harbor-datasets/DCAgent2--terminal_bench_2/2026.07.27"
+        "gs://marin-us-west4/evaluation/harbor-datasets/DCAgent2--terminal_bench_2/"
+        "693231ec029249e7c91ed2e414bcc9c45d7cd879/2026.07.27"
     )
     assert artifact.path("s3://marin-us-east-02a/marin") == (
-        "s3://marin-us-east-02a/marin/evaluation/harbor-datasets/DCAgent2--terminal_bench_2/2026.07.27"
+        "s3://marin-us-east-02a/marin/evaluation/harbor-datasets/DCAgent2--terminal_bench_2/"
+        "693231ec029249e7c91ed2e414bcc9c45d7cd879/2026.07.27"
     )
+
+
+def test_harbor_dataset_commit_selects_a_distinct_artifact_address():
+    first = HuggingFaceHarborDataset("org/tasks", "a" * 40).artifact()
+    second = HuggingFaceHarborDataset("org/tasks", "b" * 40).artifact()
+
+    assert first.path("memory://regional") != second.path("memory://regional")
