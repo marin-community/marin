@@ -172,6 +172,7 @@ def test_scatter_sort_fn_null_batch_then_concrete(tmp_path):
     values produces Int64.  pl.concat in _flush must use vertical_relaxed, or it
     raises a SchemaError on the struct field type mismatch.
     """
+
     def sort_fn(x):
         return x.get("priority")  # returns None when key absent
 
@@ -203,6 +204,7 @@ def test_merge_sorted_chunks_cross_shard_null_sort_value(tmp_path):
     reducer calls merge_sorted_chunks across both files, pl.merge_sorted sees
     incompatible struct schemas and raises SchemaError.
     """
+
     def sort_fn(x):
         return x.get("priority")
 
