@@ -23,10 +23,11 @@ from experiments.rollout_data.glm52_vllm import (
     MODEL,
     MODEL_CACHE_TTL_DAYS,
     MODEL_REVISION,
+    Glm52LaunchConfig,
     ServerConfig,
     prepare_model_cache,
     submit_glm52,
-    wait_for_endpoint,
+    wait_for_endpoint_url,
 )
 
 logger = logging.getLogger(__name__)
@@ -471,9 +472,9 @@ def run(
     endpoint_suffix = f"{collection.run_id}-s{collection.shard_index}"
     vllm_endpoint = f"{VLLM_ENDPOINT}-{endpoint_suffix}"
     ray_endpoint = f"{RAY_ENDPOINT}-{endpoint_suffix}"
-    vllm_job = submit_glm52(ctx, vllm_endpoint, ray_endpoint, server)
+    vllm_job = submit_glm52(ctx, Glm52LaunchConfig(vllm_endpoint, ray_endpoint, server))
     try:
-        vllm_url = wait_for_endpoint(vllm_endpoint, vllm_job)
+        vllm_url = wait_for_endpoint_url(vllm_endpoint, vllm_job)
         logger.info("GLM-5.2 ready; writing responses to %s", collection.output_path)
         _run_collection(vllm_url, collection, server, sampling)
     finally:
