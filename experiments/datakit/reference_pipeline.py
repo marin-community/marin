@@ -144,7 +144,12 @@ from experiments.datakit.reports.normalize import normalize_report
 from experiments.datakit.reports.quality import quality_report
 from experiments.datakit.reports.store import store_report
 from experiments.datakit.reports.tokenize import tokenize_report
-from experiments.datakit.store.datakit_store import ClusteredStoreData, build_clustered_store
+from experiments.datakit.store.datakit_store import (
+    DEFAULT_SUBSHARDS,
+    DEFAULT_TARGET_TOKENS_PER_SUBSHARD,
+    ClusteredStoreData,
+    build_clustered_store,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -245,17 +250,30 @@ class MinhashConfig:
 
 
 @dataclass(frozen=True)
+class StoreConfig:
+    """Shuffle and output-sharding knobs for the final clustered store."""
+
+    shards_per_task: int = 1
+    reduce_shards: int = 2048
+    target_tokens_per_subshard: int = DEFAULT_TARGET_TOKENS_PER_SUBSHARD
+    max_subshards: int = 128
+    default_subshards: int = DEFAULT_SUBSHARDS
+
+
+@dataclass(frozen=True)
 class PipelineScale:
     """Non-resource sizing for :func:`reference_datakit_steps`.
 
     Worker CPU/RAM lives in one :class:`PoolConfig` (:attr:`pool`); the rest is
-    content-shaping (cluster K, batch sizes, dedup fan-out). ``DEFAULT_SCALE`` is
-    production K=5000; ``SMOKE_SCALE`` is K=64 for a quick end-to-end run.
+    content-shaping (cluster K, batch sizes, dedup fan-out, store subsharding).
+    ``DEFAULT_SCALE`` is production K=5000; ``SMOKE_SCALE`` is K=64 for a quick
+    end-to-end run.
     """
 
     cluster: ClusterConfig = field(default_factory=ClusterConfig)
     pool: PoolConfig = field(default_factory=PoolConfig)
     minhash: MinhashConfig = field(default_factory=MinhashConfig)
+    store: StoreConfig = field(default_factory=StoreConfig)
     embed_batch_size: int = 4096
     assign_batch_size: int = 4096
     # Inline domain training: ~100 sources x 100k = ~10M-row centroid sample.
@@ -264,7 +282,6 @@ class PipelineScale:
     # stage's coordinator; kept modest so it isn't overwhelmed.
     sample_parallel_sources: int = 4
     dedup_max_parallelism: int = 4096
-    store_shards_per_task: int = 1
     # Centroid training is single-process FAISS K-means, not a pool stage.
     train_centroids_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig.with_cpu(cpu=32, ram="64g"))
 
@@ -275,6 +292,7 @@ DEFAULT_SCALE = PipelineScale()
 SMOKE_SCALE = PipelineScale(
     cluster=ClusterConfig(k_train=64, k_views=(8, 16), cluster_view=8),
     pool=PoolConfig(n_workers=16, worker=ResourceConfig(cpu=2, ram="8g", disk="8g")),
+    store=StoreConfig(reduce_shards=64, default_subshards=1),
     n_per_source_for_sample=20_000,
     dedup_max_parallelism=64,
     train_centroids_resources=ResourceConfig.with_cpu(cpu=4, ram="8g"),
@@ -705,7 +723,11 @@ def reference_datakit_steps(
             split=SPLIT,
             worker_resources=scale.pool.worker,
             max_workers=scale.pool.n_workers,
-            shards_per_task=scale.store_shards_per_task,
+            shards_per_task=scale.store.shards_per_task,
+            reduce_shards=scale.store.reduce_shards,
+            target_tokens_per_subshard=scale.store.target_tokens_per_subshard,
+            max_subshards=scale.store.max_subshards,
+            default_subshards=scale.store.default_subshards,
         )
 
     store_deps: list[StepSpec] = []
@@ -713,18 +735,21 @@ def reference_datakit_steps(
         store_deps += [s["tokenize"], s["decontam"], s["assign"], s["quality"]]
     store_deps.append(dedup)
 
-    # ``cluster_view`` / ``split`` are read directly by the store fn and are NOT
-    # captured by any dep (the assign step materializes every ``cluster_<K>`` column
-    # regardless of view), so they must be hashed here. The tokenizer is captured via
-    # the tokenize deps, and the quality bucket edges via the quality deps, so both
-    # are intentionally absent.
+    # Hash output-shaping values read directly by the store. ``shards_per_task``
+    # and ``reduce_shards`` only schedule the shuffle, so they intentionally do
+    # not re-key identical final caches. Tokenizer and quality bucket edges are
+    # already captured through dependencies. If the reference pipeline gains a
+    # bucket-token hint, its stable identity must be included here too.
     store = StepSpec(
         name="datakit/store",
         deps=store_deps,
         hash_attrs={
-            "shards_per_task": scale.store_shards_per_task,
             "cluster_view": cluster.cluster_view,
             "split": SPLIT,
+            "target_tokens_per_subshard": scale.store.target_tokens_per_subshard,
+            "max_subshards": scale.store.max_subshards,
+            "default_subshards": scale.store.default_subshards,
+            "v": 2,
         },
         fn=_store_fn,
     )

@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Behavioral smoke for the shuffle-based datakit clustered store build.
+"""Behavioral smoke for the Datakit clustered store.
 
 Builds tiny synthetic co-partitioned inputs (tokenize / decon / cluster /
-quality / dedup) on the local filesystem, runs ``build_clustered_store_shuffle``
+quality / dedup) on the local filesystem, runs ``build_clustered_store``
 through a local Zephyr context, and checks the externally observable contract:
 the right docs survive filtering, land in the right ``(cluster, quality)``
 bucket, round-trip out of the materialized caches, and hot-bucket subsharding
@@ -26,8 +26,7 @@ from zephyr.shard_keys import deterministic_hash
 
 from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
 from experiments.datakit.cluster.quality.fast_transformer.artifact import QualityScores
-from experiments.datakit.store.datakit_store import ClusteredStoreData
-from experiments.datakit.store.datakit_store_shuffle import build_clustered_store_shuffle
+from experiments.datakit.store.datakit_store import ClusteredStoreData, build_clustered_store
 
 CLUSTER_VIEW = 2  # cluster column "cluster_2", clusters {0, 1}
 SPLIT = "train"
@@ -175,11 +174,11 @@ def _read_bucket_tokens(bucket_root: str) -> list[np.ndarray]:
     return docs
 
 
-def test_shuffle_store_filters_routes_and_roundtrips(tmp_path):
+def test_store_filters_routes_and_roundtrips(tmp_path):
     tokenize, decontam, cluster_assign, quality, dedup = _build_inputs(tmp_path)
     output_path = str(tmp_path / "store")
 
-    artifact = build_clustered_store_shuffle(
+    artifact = build_clustered_store(
         tokenize=tokenize,
         decontam=decontam,
         cluster_assign=cluster_assign,
@@ -189,6 +188,7 @@ def test_shuffle_store_filters_routes_and_roundtrips(tmp_path):
         cluster_view=CLUSTER_VIEW,
         split=SPLIT,
         reduce_shards=4,
+        default_subshards=1,
     )
 
     assert isinstance(artifact, ClusteredStoreData)
@@ -211,9 +211,16 @@ def test_shuffle_store_filters_routes_and_roundtrips(tmp_path):
             all_tokens.extend(arr.tolist())
 
     assert DROPPED_TOKEN_VALUES.isdisjoint(all_tokens), "contaminated + non-canonical docs must be absent"
+    assert artifact.counters["datakit_store/records_in"] == len(SHARD0) + len(SHARD1)
+    assert artifact.counters["datakit_store/contaminated_dropped"] == 1
+    assert artifact.counters["datakit_store/dedup_noncanonical_dropped"] == 1
+    assert artifact.counters["datakit_store/records_out"] == sum(len(docs) for docs in EXPECTED.values())
+    assert artifact.counters["datakit_store/tokens_out"] == sum(
+        length for docs in EXPECTED.values() for length in docs.values()
+    )
 
 
-def test_shuffle_store_subshards_hot_bucket_without_data_loss(tmp_path):
+def test_store_subshards_hot_bucket_without_data_loss(tmp_path):
     tokenize, decontam, cluster_assign, quality, dedup = _build_inputs(tmp_path)
     output_path = str(tmp_path / "store_split")
 
@@ -224,7 +231,7 @@ def test_shuffle_store_subshards_hot_bucket_without_data_loss(tmp_path):
     expected_subs = {deterministic_hash(doc_id) % subshards for doc_id in ("d1", "d7")}
     assert len(expected_subs) >= 2, "pick doc ids that hash to different subshards so the split is exercised"
 
-    artifact = build_clustered_store_shuffle(
+    artifact = build_clustered_store(
         tokenize=tokenize,
         decontam=decontam,
         cluster_assign=cluster_assign,
@@ -237,6 +244,7 @@ def test_shuffle_store_subshards_hot_bucket_without_data_loss(tmp_path):
         bucket_token_hint=hint,
         target_tokens_per_subshard=1_000_000,
         max_subshards=subshards,
+        default_subshards=1,
     )
 
     by_key = {(b.cluster_id, b.quality_bucket): b for b in artifact.buckets}
