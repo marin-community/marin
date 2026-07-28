@@ -5,6 +5,7 @@ import json
 import socket
 import threading
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from iris.cluster.runtime.nccl_ras import (
     CollectiveCountSkew,
@@ -16,7 +17,14 @@ from iris.cluster.runtime.nccl_ras import (
 )
 
 
-def _serve_responses(responses: Sequence[bytes]) -> tuple[int, list[bytes], threading.Thread]:
+@dataclass(frozen=True)
+class RasTestServer:
+    port: int
+    requests: list[bytes]
+    thread: threading.Thread
+
+
+def _serve_responses(responses: Sequence[bytes]) -> RasTestServer:
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     listener.listen()
@@ -35,22 +43,22 @@ def _serve_responses(responses: Sequence[bytes]) -> tuple[int, list[bytes], thre
 
     thread = threading.Thread(target=serve)
     thread.start()
-    return listener.getsockname()[1], requests, thread
+    return RasTestServer(port=listener.getsockname()[1], requests=requests, thread=thread)
 
 
 def test_query_nccl_ras_sends_verbose_status_with_timeout_and_format() -> None:
-    port, requests, server = _serve_responses([b"OK\nstatus"])
+    server = _serve_responses([b"OK\nstatus"])
 
     response = query_nccl_ras(
         host="127.0.0.1",
-        port=port,
+        port=server.port,
         timeout=1.2,
         response_format=NcclRasFormat.JSON,
     )
-    server.join()
+    server.thread.join()
 
     assert response == b"OK\nstatus"
-    assert requests == [b"TIMEOUT 2\nSET FORMAT json\nVERBOSE STATUS\n"]
+    assert server.requests == [b"TIMEOUT 2\nSET FORMAT json\nVERBOSE STATUS\n"]
 
 
 def test_parse_json_response_skips_command_acknowledgements() -> None:
@@ -60,15 +68,15 @@ def test_parse_json_response_skips_command_acknowledgements() -> None:
 
 
 def test_capture_nccl_ras_falls_back_to_text_when_json_is_unavailable() -> None:
-    port, requests, server = _serve_responses([b"ERROR unknown format\n", b"OK\nJob summary\n"])
+    server = _serve_responses([b"ERROR unknown format\n", b"OK\nJob summary\n"])
 
-    snapshot = capture_nccl_ras(host="127.0.0.1", port=port, timeout=1)
-    server.join()
+    snapshot = capture_nccl_ras(host="127.0.0.1", port=server.port, timeout=1)
+    server.thread.join()
 
     assert snapshot.response_format is NcclRasFormat.TEXT
     assert snapshot.report is None
     assert snapshot.raw_response == "OK\nJob summary\n"
-    assert requests == [
+    assert server.requests == [
         b"TIMEOUT 1\nSET FORMAT json\nVERBOSE STATUS\n",
         b"TIMEOUT 1\nSET FORMAT text\nVERBOSE STATUS\n",
     ]
