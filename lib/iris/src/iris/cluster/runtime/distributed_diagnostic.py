@@ -14,12 +14,20 @@ from iris.cluster.runtime.profile import ExecResult, ProfileDispatch, capture_th
 MAX_DIAGNOSTIC_BYTES = 4 * 1024 * 1024
 _SECTION_LIMIT = 256 * 1024
 _ERROR_LIMIT = 2048
-_PROCESS_WAITS_SCRIPT = r"""for p in /proc/"$1"/task/*; do
-  t=${p##*/}
-  printf '%s ' "$t"
-  cat "$p/wchan"
-  grep '^State:' "$p/status"
-done"""
+_PROCESS_WAITS_SCRIPT = r"""from pathlib import Path
+import sys
+for task in sorted(Path(f"/proc/{sys.argv[1]}/task").iterdir(), key=lambda path: int(path.name)):
+    wait = (task / "wchan").read_text(errors="replace").strip()
+    state = next(line.strip() for line in (task / "status").read_text(errors="replace").splitlines()
+                 if line.startswith("State:"))
+    print(task.name, wait)
+    print(state)
+"""
+_ENVIRONMENT_SCRIPT = r"""import os
+for name, value in sorted(os.environ.items()):
+    if name.startswith(("NCCL_", "CUDA_")) or name == "XLA_FLAGS":
+        print(f"{name}={value}")
+"""
 _RAS_SCRIPT = r"""import socket, sys
 s = socket.create_connection(("127.0.0.1", 28028), timeout=float(sys.argv[2]))
 s.settimeout(float(sys.argv[2]))
@@ -61,13 +69,7 @@ def capture_distributed_diagnostic(
     bundle["threads"] = _capture_threads(dispatch, pid, errors)
     bundle["process_waits"] = _capture_command(
         dispatch,
-        [
-            "sh",
-            "-c",
-            _PROCESS_WAITS_SCRIPT,
-            "sh",
-            pid,
-        ],
+        ["python", "-c", _PROCESS_WAITS_SCRIPT, pid],
         timeout,
         "process_waits",
         errors,
@@ -85,7 +87,7 @@ def capture_distributed_diagnostic(
     )
     bundle["environment"] = _capture_command(
         dispatch,
-        ["sh", "-c", "env | LC_ALL=C sort | grep -E '^(NCCL_|XLA_FLAGS=|CUDA_)' || true"],
+        ["python", "-c", _ENVIRONMENT_SCRIPT],
         timeout,
         "environment",
         errors,
