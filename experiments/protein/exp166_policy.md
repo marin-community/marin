@@ -194,9 +194,7 @@ a whole race. Race width is bounded by the eligible regions for that trial; see
 
 **No command reports available TRC capacity.** `iris cluster status` shows only
 what is already in use; `ready=0` means nobody holds one, not that it is
-unobtainable. Submitting is the only measurement — never call a target available
-or unavailable from a status read, and never drop one from the grid because a
-read looked empty.
+unobtainable. Submitting is the only measurement.
 
 **The escalation ladder is a safety net, not a strategy.** It reacts to a single
 stalled dispatch and knows nothing about where capacity actually is. Maximizing
@@ -204,11 +202,12 @@ throughput is a standing, active job, performed every heartbeat by reading what
 was *granted* — not what was requested — and moving the fleet accordingly:
 
 - **Follow the grants.** Shift placement toward region/slice pairs that recently
-  produced steps and away from those that have not, without permanently
-  abandoning any target.
-- **Keep probing.** Always hold some dispatches on combinations not tried
-  recently, including ones that failed before. Availability swings within hours;
-  yesterday's dead target is not today's.
+  produced steps and away from those that have not.
+- **Probe floor: never fewer than two live dispatches in each eligible region.**
+  A quiet region is in a lull, not broken — every region here has been
+  productive before, and "no grants" is only ever a claim about the last few
+  hours. Rebalancing away from a quiet region is expected; emptying it is a bug,
+  and so is any negative capacity claim stated without its time window.
 - **Refuse to ossify.** Placement unchanged across several passes while
   chips-training stays flat is a signal to change something, never evidence that
   the current placement is right.
