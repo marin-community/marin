@@ -2024,3 +2024,35 @@ result:
   launcher descriptions, duplicate assertions, an unused synchronous cache
   method, checkpoint-loader typing, nested-size normalization, and a breakout
   source-model router-state mismatch.
+
+### 2026-07-28 15:19 - NEST-BURN-002 100B-token extension starts
+
+- Preregistered a fresh 99,999,547,392-token comparison in
+  `.agents/projects/662-nested-moe-24h-burnin.md`. Each arm runs 95,367
+  updates at sequence length 8,192 and global batch 128 on 64 GB200s. A
+  four-way replica axis preserves the prior two sequences per device. The
+  100B-derived MuonH/AdamH LR is `0.00488646`, plain-Adam LR is `0.00112764`,
+  beta2 is `0.992028`, and epsilon is `2.98810e-15`.
+- Started from scratch instead of resuming the 4.414B-token checkpoints.
+  Resuming while changing batch 32 to 128 would cross an optimizer-schedule
+  discontinuity. This d768 run is about 23 times beyond its compute-optimal
+  token count and tests long-horizon treatment behavior, not compute-optimal
+  scaling quality.
+- r1 used an invalid descriptive version label and r2 lacked S3 credentials
+  on the main-cluster coordinator. Neither attempt allocated a GPU or
+  initialized W&B. r3 correctly pinned the complete root job to 08a, but the
+  main controller reported `cw-us-east-08a` unreachable with a capacity
+  heartbeat stale by about 50 minutes. Both r3 roots remained in
+  `QUEUED_HANDOFF` and were terminated before delivery.
+- Commit `3e09affbf75af0c19055190064903e2b2fecfb4b` removes the invalid
+  child-level cluster pin. Iris federates complete root job trees, so GPU
+  children must stay local to a federated coordinator.
+- Submitted r4 directly to `cw-us-east-08a` at batch priority:
+  - `/power/nest-burn-002-e256-100b-b128-r4-coord`;
+  - `/power/nest-burn-002-fixed25-100b-b128-r4-coord`.
+- Both child gangs have 16/16 workers running, with zero failures and
+  preemptions. Every worker is loading the regional Datakit cache from
+  `s3://marin-us-east-02a/marin/datakit/store_8ac06c74`. The next gate is
+  successful compilation and finite matched updates.
+- Consolidated the prior Weaver reports and charts with the r4 launch links in
+  <https://github.com/marin-community/marin/pull/7667#issuecomment-5105929440>.
