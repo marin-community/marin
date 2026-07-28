@@ -40,7 +40,7 @@ HARBOR = ExternalDependency(
     config_name="harbor",
     distribution="harbor",
     repository="https://github.com/marin-community/harbor.git",
-    commit="575d7fcb30d5a2392efc3a9c68bc4f43ae687c1f",
+    commit="725fc069555013da7ae7f895dd3658a2c2452d55",
     runtime_requirements=("daytona==0.200.2",),
 )
 

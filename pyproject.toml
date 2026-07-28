@@ -171,7 +171,7 @@ nvidia-cutlass-dsl = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
 # Managed by config/update-external.py from config/external/harbor/uv.lock.
-harbor = { git = "https://github.com/marin-community/harbor.git", rev = "575d7fcb30d5a2392efc3a9c68bc4f43ae687c1f" }
+harbor = { git = "https://github.com/marin-community/harbor.git", rev = "725fc069555013da7ae7f895dd3658a2c2452d55" }
 # Changes to TPU-vLLM fork SHAs must follow one of these protocols: if this is a
 # release/LKG refresh, then follow .agents/skills/refresh-tpu-vllm-forks/SKILL.md;
 # if this is a fixed-base overlay PR, then follow
