@@ -681,7 +681,7 @@ class MoEMLP(eqx.Module):
         x: Float[Array, "B S D"],
         w13_pre0: jax.Array | None = None,
         w2_pre0: jax.Array | None = None,
-    ) -> tuple[Float[Array, "B S D"], jax.Array]:
+    ) -> tuple[Float[Array, "B S D"], jax.Array, jax.Array]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         # Keep the router path in fp32 before top-k and the sigmoid combine.
@@ -706,17 +706,25 @@ class MoEMLP(eqx.Module):
         combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
         combine_weights = combine_weights_f.astype(x.dtype)
 
-        routed_flat = self.expert_mlp(
+        # SCALE_REPORT_DROPS surfaces the capacity-overflow (dropped-assignment) count for the
+        # fidelity bar. Only the overflow computation is gated; the count itself is threaded up
+        # unconditionally as a scalar int32 through the scan, so the default path is unchanged in cost.
+        report_drops = os.environ.get("SCALE_REPORT_DROPS") == "1"
+        moe_out = self.expert_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
             combine_weights,
             mesh=get_abstract_mesh(),
-            report_capacity_overflow=False,
+            report_capacity_overflow=report_drops,
             w13_pre0=w13_pre0,
             w2_pre0=w2_pre0,
         )
+        if report_drops:
+            routed_flat, dropped = moe_out
+        else:
+            routed_flat, dropped = moe_out, jnp.zeros((), jnp.int32)
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
-        return reshard(routed, _batch_spec()), qb_beta
+        return reshard(routed, _batch_spec()), qb_beta, dropped
 
 
 class Block(eqx.Module):
@@ -764,7 +772,7 @@ class Block(eqx.Module):
     @named_call
     def __call__(
         self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array, is_global: jax.Array | None = None
-    ) -> tuple[Float[Array, "B S D"], jax.Array]:
+    ) -> tuple[Float[Array, "B S D"], jax.Array, jax.Array]:
         # Name the per-layer input residual so offload_residual's remat policy can offload it to pinned
         # host. Inert under every other remat_mode (the name is simply never referenced).
         x = checkpoint_name(x, _CHECKPOINT_LAYER_INPUT)
@@ -799,17 +807,17 @@ class Block(eqx.Module):
         if os.environ.get("SCALE_ATTN_ONLY") == "1":
             # Isolation probe: attention block only, no MoE/MLP. Loss is meaningless; used to profile
             # the attention weight-gather behavior with the MoE (memory hog + competing gathers) removed.
-            return x, jnp.zeros((self.mlp.cfg.num_experts,), jnp.float32)
+            return x, jnp.zeros((self.mlp.cfg.num_experts,), jnp.float32), jnp.zeros((), jnp.int32)
         mlp_in = self.rms_mlp(x)
         if self.mlp_gated_norm is not None:
             mlp_in = self.mlp_gated_norm(mlp_in)
-        mlp_out, qb_beta = self.mlp(mlp_in, w13_pre0, w2_pre0)
+        mlp_out, qb_beta, dropped = self.mlp(mlp_in, w13_pre0, w2_pre0)
         if self.shared is not None:
             for shared_expert in self.shared:
                 mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
         if self.sconv_mlp is not None:
             mlp_out = self.sconv_mlp(mlp_out, sconv_segment_ids)
-        return x + mlp_out, qb_beta
+        return x + mlp_out, qb_beta, dropped
 
 
 class DenseBlock(eqx.Module):
@@ -1258,32 +1266,31 @@ class Transformer(eqx.Module):
             is_global = ((jnp.arange(cfg.num_layers) + 1) % cfg.global_every) == 0
             is_global = is_global.at[-1].set(True)
 
-            def _scan_layer(
-                carry_hidden: Float[Array, "B S D"], layer_and_flag: tuple[Block, jax.Array]
-            ) -> tuple[Float[Array, "B S D"], jax.Array]:
+            def _scan_layer(carry_hidden: Float[Array, "B S D"], layer_and_flag: tuple[Block, jax.Array]):
                 layer, layer_is_global = layer_and_flag
                 lower_bounds = jnp.where(layer_is_global, global_lb, sliding_lb)
                 layer_mask = causal_mask.with_fa4_bounds(lower_bounds, sliding_valid)
                 # Pass the per-layer global flag; the block derives NoPE / heterogeneous-KV behaviour.
-                new_hidden, qb_beta = eqx.filter_checkpoint(layer, policy=remat_policy)(
+                new_hidden, qb_beta, dropped = eqx.filter_checkpoint(layer, policy=remat_policy)(
                     carry_hidden, layer_mask, layer_is_global
                 )
-                return new_hidden, qb_beta
+                return new_hidden, (qb_beta, dropped)
 
-            hidden, qb_beta_per_layer = jax.lax.scan(
+            hidden, (qb_beta_per_layer, dropped_per_layer) = jax.lax.scan(
                 _scan_layer, hidden, xs=(self.stacked_blocks.stacked, is_global), unroll=cfg.scan_unroll
             )
         else:
             layer_mask = causal_mask.with_fa4_bounds(sliding_lb, sliding_valid)
 
-            def _scan_layer(
-                carry_hidden: Float[Array, "B S D"], layer: Block
-            ) -> tuple[Float[Array, "B S D"], jax.Array]:
-                # Carry the hidden state; OUTPUT the per-layer qb_beta so scan stacks it to [L, E].
-                new_hidden, qb_beta = eqx.filter_checkpoint(layer, policy=remat_policy)(carry_hidden, layer_mask)
-                return new_hidden, qb_beta
+            def _scan_layer(carry_hidden: Float[Array, "B S D"], layer: Block):
+                # Carry the hidden state; OUTPUT the per-layer qb_beta (scan stacks it to [L, E]) and
+                # the per-layer dropped-assignment count (stacks to [L]).
+                new_hidden, qb_beta, dropped = eqx.filter_checkpoint(layer, policy=remat_policy)(
+                    carry_hidden, layer_mask
+                )
+                return new_hidden, (qb_beta, dropped)
 
-            hidden, qb_beta_per_layer = jax.lax.scan(
+            hidden, (qb_beta_per_layer, dropped_per_layer) = jax.lax.scan(
                 _scan_layer, hidden, xs=self.stacked_blocks.stacked, unroll=cfg.scan_unroll
             )
 
@@ -1329,7 +1336,10 @@ class Transformer(eqx.Module):
                 self.mtp_embed_norm,
                 self.mtp_final_norm,
             )
-        return out, qb_beta_per_layer, mtp_hidden
+        # The MTP head's own MoE drops (if any) are deliberately excluded: the drop fraction is
+        # normalised by the trunk's B*S*topk*L assignment count, so counting the head would mix
+        # denominators.
+        return out, qb_beta_per_layer, mtp_hidden, jnp.sum(dropped_per_layer)
 
     @named_call
     def logits(
@@ -1337,7 +1347,7 @@ class Transformer(eqx.Module):
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
     ) -> Float[Array, "B S V"]:
-        hidden, _, _ = self(token_ids, mask=mask)
+        hidden, _, _, _ = self(token_ids, mask=mask)
         return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=_batch_spec())
 
     def next_token_loss(
@@ -1349,8 +1359,8 @@ class Transformer(eqx.Module):
         reduction: str = "mean",
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
-    ) -> tuple[jax.Array, Float[Array, "L E"]]:
-        hidden, qb_beta_per_layer, mtp_hidden = self(token_ids, mask=mask)
+    ) -> tuple[jax.Array, tuple[Float[Array, "L E"], jax.Array]]:
+        hidden, qb_beta_per_layer, mtp_hidden, dropped_total = self(token_ids, mask=mask)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
@@ -1376,7 +1386,7 @@ class Transformer(eqx.Module):
             mtp_den = jnp.sum(mtp_weight)
             loss_main = jnp.where(main_den != 0, jnp.sum(per_token[:b]) / main_den, 0.0)
             loss_mtp = jnp.where(mtp_den != 0, jnp.sum(per_token[b:]) / mtp_den, 0.0)
-            return loss_main + self.config.mtp_loss_weight * loss_mtp, qb_beta_per_layer
+            return loss_main + self.config.mtp_loss_weight * loss_mtp, (qb_beta_per_layer, dropped_total)
 
         loss = fused_linear_softmax_cross_entropy_loss(
             hidden,
@@ -1401,7 +1411,7 @@ class Transformer(eqx.Module):
                 dtype=loss_dtype,
             )
             loss = loss + self.config.mtp_loss_weight * mtp_loss
-        return loss, qb_beta_per_layer
+        return loss, (qb_beta_per_layer, dropped_total)
 
 
 def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractMesh, P]:

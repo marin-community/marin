@@ -13,7 +13,11 @@ from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionS
 from haliax.nn.ragged_dot import ragged_dot
 
 import levanter.grug.grug_moe as grug_moe
-from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispatch_indices_with_assignment_ids
+from levanter.grug._moe.common import (
+    _chunk_capacity_drops,
+    _prepare_moe_dispatch,
+    _prepare_moe_dispatch_indices_with_assignment_ids,
+)
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
@@ -839,3 +843,63 @@ def test_ragged_a2a_receiver_clipping_respects_capacity():
         ),
     )
     assert int(jnp.sum(clipped)) < int(jnp.sum(group_sizes))
+
+
+def _sonic_cute_chunk_layout(group_sizes: np.ndarray, chunk_sizes: tuple[int, ...]) -> tuple[list[int], list[int]]:
+    """The expert bounds and static per-chunk capacities `_moe_mlp_local_sonic_cute_chunked` derives."""
+    num_experts = int(group_sizes.shape[0])
+    total_assignments = int(group_sizes.sum())
+    bounds = [0]
+    for size in chunk_sizes:
+        bounds.append(bounds[-1] + size)
+    caps = [total_assignments * size // num_experts for size in chunk_sizes]
+    return bounds, caps
+
+
+def _processed_assignment_count(group_sizes: np.ndarray, chunk_sizes: tuple[int, ...]) -> int:
+    """Count assignments the chunked kernel actually processes, by walking the sorted buffer.
+
+    Deliberately independent of the closed form under test: chunk c reads rows
+    ``[cu[lo], cu[lo] + cap)`` and weight-masks all but the first ``min(count, cap)``, and no later
+    chunk revisits rows below its own ``cu[lo]``.
+    """
+    cu = np.concatenate([[0], np.cumsum(group_sizes)]).astype(np.int64)
+    bounds, caps = _sonic_cute_chunk_layout(group_sizes, chunk_sizes)
+    processed: set[int] = set()
+    for c, cap in enumerate(caps):
+        start = int(cu[bounds[c]])
+        count = int(cu[bounds[c + 1]]) - start
+        processed.update(range(start, start + min(count, cap)))
+    return len(processed)
+
+
+@pytest.mark.parametrize(
+    "group_sizes,chunk_sizes",
+    [
+        # Balanced: every chunk's load equals its capacity, so nothing is dropped.
+        (np.array([4, 4, 4, 4], dtype=np.int32), (2, 2)),
+        # Chunk 0 overloaded, chunk 1 idle. Capacity is static, so the excess cannot spill forward.
+        (np.array([9, 5, 1, 1], dtype=np.int32), (2, 2)),
+        # Uneven chunk_sizes: capacity scales with expert count, not with load.
+        (np.array([1, 1, 1, 13], dtype=np.int32), (3, 1)),
+        # Every assignment on one expert in the last chunk.
+        (np.array([0, 0, 0, 16], dtype=np.int32), (2, 2)),
+    ],
+)
+def test_sonic_cute_chunked_drop_count_matches_unprocessed_assignments(group_sizes, chunk_sizes):
+    cu = jnp.concatenate([jnp.zeros((1,), jnp.int32), jnp.cumsum(jnp.asarray(group_sizes)).astype(jnp.int32)])
+    bounds, caps = _sonic_cute_chunk_layout(group_sizes, chunk_sizes)
+
+    dropped = int(_chunk_capacity_drops(cu, bounds, caps))
+    expected = int(group_sizes.sum()) - _processed_assignment_count(group_sizes, chunk_sizes)
+
+    assert dropped == expected
+
+
+def test_sonic_cute_chunked_drops_are_not_reported_as_zero():
+    """Regression: the chunked backend returned a literal zero while that path does drop."""
+    group_sizes = np.array([9, 5, 1, 1], dtype=np.int32)
+    cu = jnp.concatenate([jnp.zeros((1,), jnp.int32), jnp.cumsum(jnp.asarray(group_sizes)).astype(jnp.int32)])
+    bounds, caps = _sonic_cute_chunk_layout(group_sizes, (2, 2))
+
+    assert int(_chunk_capacity_drops(cu, bounds, caps)) > 0

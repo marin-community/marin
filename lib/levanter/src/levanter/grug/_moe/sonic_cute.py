@@ -23,6 +23,7 @@ from jaxtyping import Array, Float, Int
 from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_DISPATCH_OUTPUT,
+    _chunk_capacity_drops,
     _prepare_moe_dispatch,
     _zero_dropped_assignments,
 )
@@ -140,6 +141,12 @@ def _moe_mlp_local_sonic_cute_chunked(
     Rows past the chunk's real assignments are folded into the last expert group (so the kernel never
     leaves ungrouped garbage rows) but weight-masked to zero, so they contribute nothing to the
     forward output and route a zero cotangent back to the router in the combine backward.
+
+    Because each chunk's capacity is static while its real load is not, a chunk whose experts draw
+    more than ``capacity`` assignments **drops** the excess: the mask keeps only the first ``capacity``
+    rows and the next chunk's window starts at ``cu[hi]``, past the overflow, so no later chunk picks
+    it up. The returned count is that overflow summed over chunks, and it is a real fidelity metric —
+    unlike the unchunked and intermediate-chunked variants, which have no capacity and cannot drop.
     """
     if sum(chunk_sizes) != num_experts:
         raise ValueError(f"chunk_sizes={chunk_sizes} must sum to num_experts={num_experts}")
@@ -207,7 +214,7 @@ def _moe_mlp_local_sonic_cute_chunked(
             )
         with jax.named_scope("scatter_chunk"):
             out = out.at[token_seg].add(out_dispatch * w_seg[:, None], mode="drop")
-    return out, _zero_dropped_assignments()
+    return out, _chunk_capacity_drops(cu, bounds, caps)
 
 
 def _moe_mlp_local_sonic_cute_intermediate_chunked(

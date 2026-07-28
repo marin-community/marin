@@ -366,7 +366,7 @@ def _make_train_step(
             # its HBM. Re-stream the fp32 for the update below. dL/dbf16 == dL/dfp32 (cast grad is id).
             qb_params_cast = _apply_qb_betas(_opt_state_to_memory_kind(state.params, "device"), state.pending_qb_betas)
             bf16_params = mp.cast_to_compute(qb_params_cast)
-            (loss, qb_beta_per_layer), grads = jax.value_and_grad(
+            (loss, (qb_beta_per_layer, dropped_total)), grads = jax.value_and_grad(
                 lambda bp: bp.next_token_loss(
                     batch.tokens, batch.loss_weight, mask=batch.attn_mask, reduction="mean", logsumexp_weight=z_loss
                 ),
@@ -376,8 +376,15 @@ def _make_train_step(
             qb_params = _apply_qb_betas(_opt_state_to_memory_kind(state.params, "device"), state.pending_qb_betas)
         else:
             qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
-            (loss, qb_beta_per_layer), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
+            (loss, (qb_beta_per_layer, dropped_total)), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
         metrics = {"train/loss": loss}
+        if os.environ.get("SCALE_REPORT_DROPS") == "1":
+            cfg = qb_params.config
+            total_assignments = (
+                batch.tokens.shape[0] * batch.tokens.shape[1] * cfg.num_experts_per_token * cfg.num_layers
+            )
+            metrics["moe/dropped_assignments"] = dropped_total
+            metrics["moe/drop_fraction"] = dropped_total.astype(jnp.float32) / total_assignments
         # Optimizer state is host-resident between steps when offloading; stream it to device
         # only here (after backward) for the update, then send the new state back to host below.
         opt_state_in = _opt_state_to_memory_kind(state.opt_state, "device") if _OFFLOAD_OPT_STATE else state.opt_state
@@ -602,6 +609,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     last_step_duration = duration
                     levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
                     levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
+                    # The returned `metrics` dict is not otherwise logged (train/loss goes through the
+                    # callbacks), so surface the MoE drop counters explicitly when enabled.
+                    if "moe/drop_fraction" in metrics:
+                        levanter.tracker.log(
+                            {
+                                "moe/dropped_assignments": int(metrics["moe/dropped_assignments"]),
+                                "moe/drop_fraction": float(metrics["moe/drop_fraction"]),
+                            },
+                            step=step,
+                        )
 
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)

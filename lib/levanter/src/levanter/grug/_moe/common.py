@@ -4,7 +4,7 @@
 """Shared types, routing helpers, and layout utilities for Grug MoE."""
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal, TypeAlias, cast, get_args
 
@@ -173,3 +173,17 @@ def _prepare_moe_dispatch_indices_with_assignment_ids(
 
 def _zero_dropped_assignments() -> Int[Array, ""]:
     return jnp.array(0, dtype=jnp.int32)
+
+
+def _chunk_capacity_drops(cu: Int[Array, "E1"], bounds: Sequence[int], caps: Sequence[int]) -> Int[Array, ""]:
+    """Assignments lost to the per-chunk static capacity in the expert-dim chunker.
+
+    Chunk ``c`` covers experts ``[bounds[c], bounds[c+1])``, whose real assignments occupy sorted-buffer
+    rows ``[cu[lo], cu[hi])``. Only the first ``caps[c]`` of those rows are processed, and the next
+    chunk's window starts at ``cu[hi]`` — past the excess — so overflow is dropped, never deferred.
+    """
+    total = jnp.zeros((), jnp.int32)
+    for c, cap in enumerate(caps):
+        count = cu[bounds[c + 1]] - cu[bounds[c]]
+        total = total + jnp.maximum(count - cap, 0).astype(jnp.int32)
+    return total
