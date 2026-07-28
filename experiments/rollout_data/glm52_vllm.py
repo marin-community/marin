@@ -31,12 +31,21 @@ TENSOR_PARALLEL_SIZE = GPUS_PER_NODE * VLLM_REPLICAS
 GPU_MEMORY_UTILIZATION = 0.9
 ENDPOINT_TIMEOUT = 3 * 3600
 RUN_TIMEOUT_HOURS = 30 * 24
+RAY_PORT = "ray"
+HTTP_PORT = "http"
 
 
 @dataclass(frozen=True)
 class ServerConfig:
     max_model_len: int
     max_num_seqs: int
+
+
+@dataclass(frozen=True)
+class Glm52LaunchConfig:
+    vllm_endpoint: str
+    ray_endpoint: str
+    server: ServerConfig
 
 
 def _ray_worker_port_args(*excluded_ports: int) -> list[str]:
@@ -54,7 +63,8 @@ def _network_interface(host: str) -> str:
     raise RuntimeError(f"No network interface owns advertised host IP {host}")
 
 
-def wait_for_endpoint(name: str, job=None, timeout: float = ENDPOINT_TIMEOUT) -> str:
+def wait_for_endpoint_url(name: str, job=None, timeout: float = ENDPOINT_TIMEOUT) -> str:
+    """Return the first resolved URL for an Iris endpoint."""
     ctx = iris_ctx()
     assert ctx is not None
     deadline = time.monotonic() + timeout
@@ -118,11 +128,10 @@ def _run_vllm(
     host: str,
     http_port: int,
     ray_address: str,
-    vllm_endpoint: str,
     vllm_command: list[str],
     environment: dict[str, str],
     weights: str,
-    config: ServerConfig,
+    launch: Glm52LaunchConfig,
 ) -> None:
     process = subprocess.Popen(
         [
@@ -141,9 +150,9 @@ def _run_vllm(
             "ray",
             "--enable-expert-parallel",
             "--max-model-len",
-            str(config.max_model_len),
+            str(launch.server.max_model_len),
             "--max-num-seqs",
-            str(config.max_num_seqs),
+            str(launch.server.max_num_seqs),
             "--gpu-memory-utilization",
             str(GPU_MEMORY_UTILIZATION),
             "--trust-remote-code",
@@ -157,7 +166,7 @@ def _run_vllm(
             timeout_seconds=ENDPOINT_TIMEOUT,
             check_alive=lambda: _check_process_alive(process),
         )
-        with ctx.registry.registered(vllm_endpoint, base_url):
+        with ctx.registry.registered(launch.vllm_endpoint, base_url):
             return_code = process.wait()
             raise RuntimeError(f"vLLM exited with code {return_code}")
     finally:
@@ -172,16 +181,14 @@ def _run_vllm(
 def _serve_ray_head(
     ctx,
     host: str,
-    vllm_endpoint: str,
-    ray_endpoint: str,
     vllm_command: list[str],
     ray_command: list[str],
     environment: dict[str, str],
-    config: ServerConfig,
+    launch: Glm52LaunchConfig,
 ) -> None:
     weights = prepare_model_cache()
-    ray_port = _reserve_port(host, ctx.get_port("ray"))
-    http_port = _reserve_port(host, ctx.get_port("http"))
+    ray_port = _reserve_port(host, ctx.get_port(RAY_PORT))
+    http_port = _reserve_port(host, ctx.get_port(HTTP_PORT))
     ray_address = f"{host}:{ray_port}"
     subprocess.run(
         [
@@ -197,7 +204,7 @@ def _serve_ray_head(
         check=True,
         env=environment,
     )
-    with ctx.registry.registered(ray_endpoint, ray_address):
+    with ctx.registry.registered(launch.ray_endpoint, ray_address):
         try:
             deadline = time.monotonic() + 900
             while time.monotonic() < deadline:
@@ -212,13 +219,13 @@ def _serve_ray_head(
                 time.sleep(10)
             else:
                 raise TimeoutError(f"Ray cluster did not register all {TENSOR_PARALLEL_SIZE} GB200 GPUs")
-            _run_vllm(ctx, host, http_port, ray_address, vllm_endpoint, vllm_command, environment, weights, config)
+            _run_vllm(ctx, host, http_port, ray_address, vllm_command, environment, weights, launch)
         finally:
             subprocess.run([*ray_command, "stop", "--force"], env=environment, check=False)
 
 
-def _serve_ray_worker(host: str, ray_endpoint: str, ray_command: list[str], environment: dict[str, str]) -> None:
-    ray_address = wait_for_endpoint(ray_endpoint, timeout=ENDPOINT_TIMEOUT)
+def _serve_ray_worker(host: str, launch: Glm52LaunchConfig, ray_command: list[str], environment: dict[str, str]) -> None:
+    ray_address = wait_for_endpoint_url(launch.ray_endpoint, timeout=ENDPOINT_TIMEOUT)
     subprocess.run(
         [
             *ray_command,
@@ -235,7 +242,7 @@ def _serve_ray_worker(host: str, ray_endpoint: str, ray_command: list[str], envi
     )
 
 
-def _serve_glm52(vllm_endpoint: str, ray_endpoint: str, config: ServerConfig) -> None:
+def _serve_glm52(launch: Glm52LaunchConfig) -> None:
     info = get_job_info()
     ctx = iris_ctx()
     if info is None or ctx is None:
@@ -248,14 +255,14 @@ def _serve_glm52(vllm_endpoint: str, ray_endpoint: str, config: ServerConfig) ->
     environment["VLLM_HOST_IP"] = host
     environment["GLOO_SOCKET_IFNAME"] = _network_interface(host)
     if info.task_index == 0:
-        _serve_ray_head(ctx, host, vllm_endpoint, ray_endpoint, vllm_command, ray_command, environment, config)
+        _serve_ray_head(ctx, host, vllm_command, ray_command, environment, launch)
         return
-    _serve_ray_worker(host, ray_endpoint, ray_command, environment)
+    _serve_ray_worker(host, launch, ray_command, environment)
 
 
-def submit_glm52(ctx, vllm_endpoint: str, ray_endpoint: str, config: ServerConfig):
+def submit_glm52(ctx, launch: Glm52LaunchConfig):
     return ctx.client.submit(
-        entrypoint=Entrypoint.from_callable(_serve_glm52, vllm_endpoint, ray_endpoint, config),
+        entrypoint=Entrypoint.from_callable(_serve_glm52, launch),
         name="vllm",
         resources=ResourceSpec(
             cpu=120,
@@ -267,7 +274,7 @@ def submit_glm52(ctx, vllm_endpoint: str, ray_endpoint: str, config: ServerConfi
             setup_scripts=[default_setup_script(packages=["marin-core"])],
             env_vars={"VLLM_USE_FLASHINFER_SAMPLER": "0"},
         ),
-        ports=["ray", "http"],
+        ports=[RAY_PORT, HTTP_PORT],
         coscheduling=CoschedulingConfig(group_by="nvlink.domain"),
         replicas=VLLM_REPLICAS,
         timeout=Duration.from_hours(RUN_TIMEOUT_HOURS),
