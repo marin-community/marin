@@ -43,7 +43,7 @@ _RECORD = EvalRunRecord(
     metrics={"gsm8k": {"exact_match,none": 0.62, "exact_match_stderr,none": 0.01}},
     jobs={"orchestrator": "job/123", "serve": "job/124", "eval": "job/125"},
     log_tails={},
-    provenance=Provenance(git_sha="abc123", eval_image="evalchemy:latest", launch_host="dev-box"),
+    provenance=Provenance(git_sha="abc123", eval_runtime="evalchemy:latest", launch_host="dev-box"),
 )
 
 
@@ -98,7 +98,7 @@ def test_read_record_parses_a_previously_written_record_json(tmp_path):
         "metrics": {},
         "jobs": {"orchestrator": "job/1"},
         "log_tails": {"serve": ["boot failed", "OOM"]},
-        "provenance": {"git_sha": "deadbeef", "eval_image": "evalchemy:old", "launch_host": "ci-runner"},
+        "provenance": {"git_sha": "deadbeef", "eval_runtime": "evalchemy:old", "launch_host": "ci-runner"},
     }
     path = tmp_path / "record.json"
     path.write_text(json.dumps(legacy))

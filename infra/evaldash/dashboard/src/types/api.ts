@@ -119,7 +119,7 @@ export interface EvalRecord {
   metrics: Record<string, Record<string, number>>
   jobs: Record<string, string>
   log_tails: Record<string, string[]>
-  provenance: { git_sha: string; eval_image: string; launch_host: string }
+  provenance: { git_sha: string; eval_runtime: string; launch_host: string }
 }
 
 // --- Live Iris/finelog protobuf JSON (cluster.py) ---

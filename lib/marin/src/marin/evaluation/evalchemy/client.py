@@ -1,14 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Evalchemy OpenAI-client entrypoint, run inside the ``:evalchemy-tpu`` container.
-
-The eval child runs this as a plain command under the image's own interpreter
-(``/opt/openthoughts/.venv/bin/python``) -- the only interpreter in that image with ``eval``,
-``lm_eval`` and ``fsspec`` (plus the ``s3fs``/``gcsfs`` backends) installed. It is a command
-entrypoint, not an Iris ``from_callable`` one: the image's default/synced interpreter is a bare
-python with no cloudpickle, so a cloudpickled callable cannot be deserialized there (issue #7267).
-Keeping this script to the standard library plus ``fsspec`` lets that interpreter run it directly.
+"""Evaluate configured tasks through an OpenAI-compatible endpoint.
 
 Config arrives as JSON in ``$EVALCHEMY_CLIENT_CONFIG`` (the parent builds it in
 :mod:`marin.evaluation.evalchemy.runner`), so nothing else in Marin needs to import here.
@@ -185,7 +178,7 @@ def main() -> None:
         raise SystemExit("run_evalchemy_client requires at least one task")
 
     out_path = config["out_path"].rstrip("/")
-    # Raw fsspec, not rigging's StoragePath: the eval image carries fsspec + s3fs/gcsfs, not rigging.
+    # Raw fsspec, not rigging's StoragePath: the uvx environment carries fsspec + s3fs/gcsfs, not rigging.
     # For an s3:// destination the pod's injected FSSPEC_S3 (endpoint + virtual-host addressing) is
     # applied by fsspec, so url_to_fs needs no extra config. out_path is region-local (the eval child
     # is pinned to the serve region), so no cross-region copy.
@@ -197,8 +190,8 @@ def main() -> None:
     for task in tasks:
         dest = f"{out_path}/{task['dir']}"
         with tempfile.TemporaryDirectory() as local_out:
-            # sys.executable is the evalchemy image's interpreter, so ``-m eval.eval`` resolves the
-            # fork + lm-eval baked into its venv.
+            # sys.executable is the uvx environment's interpreter, so ``-m eval.eval`` resolves the
+            # fork + lm-eval installed there.
             cmd = build_command(config, task, local_out, sys.executable, max_length)
             print(f"running evalchemy: {' '.join(cmd)}", flush=True)
             # Upload whatever the task produced before reacting to its exit code, so one task's failure

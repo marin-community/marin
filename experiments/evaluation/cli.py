@@ -13,8 +13,8 @@ from __future__ import annotations
 import click
 from iris.cli.connect import open_iris_client
 from marin.evaluation.hardware import Platform, default_platform
-from marin.evaluation.records import CW_RECORDS_PREFIX, DEFAULT_RECORDS_PREFIX, Provenance, list_records
-from marin.evaluation.runner import wait_and_report
+from marin.evaluation.records import CW_RECORDS_PREFIX, DEFAULT_RECORDS_PREFIX, list_records
+from marin.evaluation.runner import LaunchProvenance, wait_and_report
 from marin.evaluation.samples import export_lm_eval_samples
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -39,9 +39,8 @@ def _resolve_eval_keys(evals_arg: str) -> tuple[str, ...]:
 def _print_plan(spec: LaunchSpec) -> None:
     batch = build_evaluation_batch(
         spec,
-        Provenance(
+        LaunchProvenance(
             git_sha=_DRY_RUN_IDENTITY,
-            eval_image=_DRY_RUN_IDENTITY,
             launch_host=_DRY_RUN_IDENTITY,
         ),
         _DRY_RUN_IDENTITY,
