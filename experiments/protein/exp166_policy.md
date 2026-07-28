@@ -208,6 +208,9 @@ was *granted* — not what was requested — and moving the fleet accordingly:
   productive before, and "no grants" is only ever a claim about the last few
   hours. Rebalancing away from a quiet region is expected; emptying it is a bug,
   and so is any negative capacity claim stated without its time window.
+- **Race floor: every incomplete trial holds `regional_race_width` live
+  dispatches.** Top up whenever the live count falls below that; a race silently
+  running narrow is the most expensive failure here.
 - **Refuse to ossify.** Placement unchanged across several passes while
   chips-training stays flat is a signal to change something, never evidence that
   the current placement is right.
@@ -373,3 +376,5 @@ that triggered it, and never delete superseded attempts.
 - Never store secrets in SQLite, logs, commands committed to the repository, or
   W&B config.
 - Record every manual override and the evidence that justified it.
+- Recovery and rebalancing within the current chip scale need no approval;
+  raising or lowering `max_inflight_chips` is an operator decision.
