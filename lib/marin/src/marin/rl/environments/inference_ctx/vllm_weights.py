@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
-from typing import Any
 
 import jax
 import jax.numpy as jnp
+from jax.typing import ArrayLike
+
+_VLLM_ATTENTION_HEAD_DIM_MULTIPLE = 128
 
 
 @dataclass(frozen=True)
@@ -40,7 +42,9 @@ def _vllm_weight_path(parts: tuple[str, ...]) -> tuple[str, ...]:
 
 def _pad_head_dim_to_multiple_of_128(value: jax.Array, axis: int) -> jax.Array:
     head_size = value.shape[axis]
-    padded_head_size = ((head_size + 127) // 128) * 128
+    padded_head_size = (
+        (head_size + _VLLM_ATTENTION_HEAD_DIM_MULTIPLE - 1) // _VLLM_ATTENTION_HEAD_DIM_MULTIPLE
+    ) * _VLLM_ATTENTION_HEAD_DIM_MULTIPLE
     if head_size == padded_head_size:
         return value
 
@@ -68,7 +72,7 @@ def _reshape_and_pad_attention_weight(value: jax.Array, parts: tuple[str, ...], 
     return value
 
 
-def levanter_state_dict_to_vllm_weights_on_cpu(state_dict: dict[str, Any]) -> VLLMWeightState:
+def levanter_state_dict_to_vllm_weights_on_cpu(state_dict: dict[str, ArrayLike]) -> VLLMWeightState:
     """Prepare a Levanter state dict for TPU-inference's weight-sync API."""
     with jax.default_device(jax.devices("cpu")[0]):
         weights = []
