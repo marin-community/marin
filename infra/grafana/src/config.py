@@ -28,6 +28,10 @@ FINELOG_SLOW_THRESHOLD_MS = 5_000
 GITHUB_API_BASE = "https://api.github.com"
 # The GitHub repository the ferry and build panels read.
 GITHUB_REPO = "marin-community/marin"
+# GitHub rejects any REST/GraphQL request without a User-Agent (403 "Request
+# forbidden by administrative rules"); the REST client and the App-auth flow both
+# stamp this one.
+GITHUB_USER_AGENT = "marin-grafana-bridge"
 
 
 @dataclasses.dataclass(frozen=True)
