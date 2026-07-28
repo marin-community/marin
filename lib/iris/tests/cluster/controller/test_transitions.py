@@ -4002,9 +4002,9 @@ def _count_pending(state: ControllerTestState) -> int:
 
 def test_drain_redrives_assigned_until_executing(state):
     """ASSIGNED+null-worker rows are redriven each cycle so a missed pod-apply
-    is recovered, and they are also in running_tasks so the same-cycle poll
+    is recovered, and they are also in task_attempts so the same-cycle poll
     transitions them out of ASSIGNED. Once the task reaches BUILDING/RUNNING,
-    it leaves tasks_to_run but stays in running_tasks."""
+    it leaves tasks_to_run but stays in task_attempts."""
     task_ids = _submit_job_direct(state, "/user/job1")
     task_id = task_ids[0]
 
@@ -4012,7 +4012,7 @@ def test_drain_redrives_assigned_until_executing(state):
     with state._db.transaction() as cur:
         batch1 = dispatch.drain_for_dispatch(cur)
     assert len(batch1.tasks_to_run) == 1
-    assert [(e.task_id, e.attempt_id) for e in batch1.running_tasks] == [(task_id, 0)]
+    assert [(e.task_id, e.attempt_id) for e in batch1.task_attempts] == [(task_id, 0)]
 
     # Second drain (e.g. previous _apply_pod failed or controller crashed):
     # row is still ASSIGNED, redriven in tasks_to_run with same attempt_id.
@@ -4021,9 +4021,9 @@ def test_drain_redrives_assigned_until_executing(state):
     assert len(batch2.tasks_to_run) == 1
     assert batch2.tasks_to_run[0].task_id == task_id.to_wire()
     assert batch2.tasks_to_run[0].attempt_id == 0
-    assert [(e.task_id, e.attempt_id) for e in batch2.running_tasks] == [(task_id, 0)]
+    assert [(e.task_id, e.attempt_id) for e in batch2.task_attempts] == [(task_id, 0)]
 
-    # Once the task reaches RUNNING it leaves tasks_to_run; running_tasks still
+    # Once the task reaches RUNNING it leaves tasks_to_run; task_attempts still
     # contains it so the next poll observes terminal transitions.
     with state._db.transaction() as cur:
         commit_dispatch_updates(
@@ -4034,8 +4034,8 @@ def test_drain_redrives_assigned_until_executing(state):
     with state._db.transaction() as cur:
         batch3 = dispatch.drain_for_dispatch(cur)
     assert len(batch3.tasks_to_run) == 0
-    assert len(batch3.running_tasks) == 1
-    assert batch3.running_tasks[0].task_id == task_id
+    assert len(batch3.task_attempts) == 1
+    assert batch3.task_attempts[0].task_id == task_id
 
 
 def test_drain_caps_promotions_per_cycle(state):

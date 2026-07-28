@@ -13,7 +13,7 @@ from iris.cluster.backends.k8s.tasks import (
     _pod_status_message,
     _task_update_from_pod,
 )
-from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.controller.task_state import TaskAttemptEntry
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 
@@ -69,7 +69,7 @@ def test_status_message_empty_for_healthy_running_pod():
 
 
 def test_task_update_carries_status_message_while_building():
-    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    entry = TaskAttemptEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0, task_state=job_pb2.TASK_STATE_RUNNING)
     update = _task_update_from_pod(entry, gated_pod(), unadmitted_workload())
     assert update.new_state == job_pb2.TASK_STATE_BUILDING
     assert update.status_message is not None
@@ -79,7 +79,7 @@ def test_task_update_carries_status_message_while_building():
 def test_task_update_clears_status_message_on_running_and_terminal():
     """Running/terminal updates set status_message to "" so a stale BUILDING reason
     does not linger on a task that has moved on."""
-    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    entry = TaskAttemptEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0, task_state=job_pb2.TASK_STATE_RUNNING)
     running = {
         "metadata": {"name": "iris-job-0-0"},
         "status": {"phase": "Running", "containerStatuses": [{"name": _TASK_CONTAINER_NAME, "state": {"running": {}}}]},

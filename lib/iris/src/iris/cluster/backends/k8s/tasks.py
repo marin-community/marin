@@ -50,7 +50,7 @@ from iris.cluster.controller.backend import (
 from iris.cluster.controller.ops.task import apply_dispatch_updates
 from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.task_state import RunningTaskEntry, StoppingTaskEntry
+from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, TaskAttemptEntry
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
 from iris.cluster.platforms.k8s.coreweave_topology import (
@@ -1066,7 +1066,7 @@ def _is_infrastructure_failure(pod: dict) -> bool:
     return terminated.get("reason", "") in _INFRASTRUCTURE_FAILURE_REASONS
 
 
-def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | None = None) -> TaskUpdate:
+def _task_update_from_pod(entry: TaskAttemptEntry, pod: dict, workload: dict | None = None) -> TaskUpdate:
     """Build a TaskUpdate from a Kubernetes Pod dict.
 
     Infrastructure failures (eviction, preemption) are reported as WORKER_FAILED
@@ -2065,16 +2065,17 @@ class TaskEventLog:
 
     def __init__(self, task_event_table: Table):
         self._table = task_event_table
-        self._last_verdict: dict[RunningTaskEntry, tuple[str, str, TaskEventSeverity]] = {}
+        self._last_verdict: dict[tuple[JobName, int, str], tuple[str, str, TaskEventSeverity]] = {}
 
-    def observe(self, attempt: RunningTaskEntry, event: _PodEvent | None) -> None:
+    def observe(self, attempt: TaskAttemptEntry, event: _PodEvent | None) -> None:
         """Record ``event`` for ``attempt`` if its verdict has changed."""
         if event is None:
             return
+        attempt_key = (attempt.task_id, attempt.attempt_id, attempt.attempt_uid)
         verdict = (event.source, event.reason, event.severity)
-        if self._last_verdict.get(attempt) == verdict:
+        if self._last_verdict.get(attempt_key) == verdict:
             return
-        self._last_verdict[attempt] = verdict
+        self._last_verdict[attempt_key] = verdict
         row = TaskEventRow(
             task_id=attempt.task_id.to_wire(),
             attempt_id=attempt.attempt_id,
@@ -2091,10 +2092,11 @@ class TaskEventLog:
         except Exception:
             logger.debug("TaskEventLog: write to iris.task_event failed", exc_info=True)
 
-    def retain(self, active: set[RunningTaskEntry]) -> None:
+    def retain(self, active: set[TaskAttemptEntry]) -> None:
         """Forget verdicts for attempts not in ``active`` (terminal or gone)."""
+        active_keys = {(attempt.task_id, attempt.attempt_id, attempt.attempt_uid) for attempt in active}
         for key in list(self._last_verdict):
-            if key not in active:
+            if key not in active_keys:
                 del self._last_verdict[key]
 
 
@@ -2277,7 +2279,7 @@ class K8sTaskProvider:
 
     A cluster :class:`~iris.cluster.controller.backend.TaskBackend`: Kueue owns
     placement, so ``schedule`` and ``autoscale`` are no-ops; ``reconcile``
-    consumes the dispatch drain (``tasks_to_run`` + ``running_tasks``) carried on
+    consumes the dispatch drain (``tasks_to_run`` + ``task_attempts``) carried on
     the :class:`ReconcileRequest` and returns neutral task ``updates``. K8s pods
     are launched and monitored directly via kubectl rather than through a worker
     gRPC daemon.
@@ -2357,7 +2359,7 @@ class K8sTaskProvider:
     # from, passed by the composer at construction (a cluster backend has no
     # worker store, so it reads its dispatch drain through this).
     transition_reader: TransitionReader | None = field(default=None, repr=False)
-    _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+    _pod_not_found_counts: dict[tuple[JobName, int], int] = field(default_factory=dict, init=False, repr=False)
     # (task_id_wire, attempt_id) this process has dispatched a pod for. Those pods
     # were created under the current name, so their lookups must never consider the
     # pre-uid name — see _pod_name_candidates.
@@ -2478,10 +2480,9 @@ class K8sTaskProvider:
     def sync(self, request: ReconcileRequest) -> list[TaskUpdate]:
         """Sync task state: apply new pods, delete strays, poll running pods.
 
-        Kill targets are derived here, not buffered in the controller: any
-        managed pod whose ``(task_hash, attempt_id)`` is not in the desired
-        set (``tasks_to_run`` union ``running_tasks``) is deleted on this tick.
-        ``tasks_to_stop`` remains outside that set and is acknowledged only
+        The controller supplies every unfinished direct-provider attempt. Any
+        managed pod outside the active subset is deleted on this tick; an
+        inactive attempt remains in the snapshot and is acknowledged only
         after its pod leaves the active phase.
 
         New-pod application runs every tick so dispatch stays responsive; the
@@ -2550,10 +2551,13 @@ class K8sTaskProvider:
         if self.preempt_namespaces and _has_gated_gpu_pods(managed_pods):
             self._evict_preemptible_blockers(reason="GPU pods held SchedulingGated awaiting Kueue admission")
 
+        active_attempts = [entry for entry in request.task_attempts if entry.task_state in ACTIVE_TASK_STATES]
+        inactive_attempts = [entry for entry in request.task_attempts if entry.task_state not in ACTIVE_TASK_STATES]
+
         desired_keys: set[tuple[str, int]] = set()
         for run_req in request.tasks_to_run:
             desired_keys.add((_task_hash(run_req.task_id), int(run_req.attempt_id)))
-        for entry in request.running_tasks:
+        for entry in active_attempts:
             desired_keys.add((_task_hash(entry.task_id.to_wire()), int(entry.attempt_id)))
         self._delete_stray_pods(managed_pods, desired_keys)
 
@@ -2568,8 +2572,8 @@ class K8sTaskProvider:
 
         updates = (
             apply_failures
-            + self._poll_pods(request.running_tasks, managed_pods, workloads)
-            + self._poll_stopping_tasks(request.tasks_to_stop, managed_pods)
+            + self._poll_pods(active_attempts, managed_pods, workloads)
+            + self._poll_inactive_attempts(inactive_attempts, managed_pods)
         )
 
         try:
@@ -2595,7 +2599,7 @@ class K8sTaskProvider:
     def _lookup_entry_pod(
         self,
         pods_by_name: dict[str, dict],
-        entry: RunningTaskEntry | StoppingTaskEntry,
+        entry: TaskAttemptEntry,
     ) -> tuple[str, dict | None]:
         """Resolve an attempt to its pod, allowing pre-uid names only when this process did not dispatch it."""
         return _lookup_pod(
@@ -3096,7 +3100,7 @@ class K8sTaskProvider:
         return pods
 
     def _poll_pods(
-        self, running: list[RunningTaskEntry], cached_pods: list[dict], workloads: list[dict] | None = None
+        self, running: list[TaskAttemptEntry], cached_pods: list[dict], workloads: list[dict] | None = None
     ) -> list[TaskUpdate]:
         """Poll pod phases for all running tasks.
 
@@ -3146,7 +3150,7 @@ class K8sTaskProvider:
 
         for entry in running:
             pod_name, pod = self._lookup_entry_pod(pods_by_name, entry)
-            cursor_key = f"{entry.task_id.to_wire()}:{entry.attempt_id}"
+            cursor_key = (entry.task_id, entry.attempt_id)
             task_key = (entry.task_id.to_wire(), entry.attempt_id)
 
             if pod is None:
@@ -3207,9 +3211,9 @@ class K8sTaskProvider:
 
         return updates
 
-    def _poll_stopping_tasks(
+    def _poll_inactive_attempts(
         self,
-        stopping: list[StoppingTaskEntry],
+        inactive: list[TaskAttemptEntry],
         cached_pods: list[dict],
     ) -> list[TaskUpdate]:
         """Finalize stopped attempts once absent from the active-pod snapshot.
@@ -3219,11 +3223,11 @@ class K8sTaskProvider:
         """
         pods_by_name = {pod.get("metadata", {}).get("name", ""): pod for pod in cached_pods}
         updates: list[TaskUpdate] = []
-        for entry in stopping:
+        for entry in inactive:
             _, pod = self._lookup_entry_pod(pods_by_name, entry)
             if pod is not None:
                 continue
-            self._pod_not_found_counts.pop(f"{entry.task_id.to_wire()}:{entry.attempt_id}", None)
+            self._pod_not_found_counts.pop((entry.task_id, entry.attempt_id), None)
             # Requeue already made the attempt terminal; this update only stamps
             # finished_at_ms so the next dispatch cycle can promote its retry.
             updates.append(

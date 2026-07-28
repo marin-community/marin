@@ -84,7 +84,7 @@ def test_federated_pending_task_is_not_routed_or_dispatched(state):
     assert local_task.to_wire() in dispatched
     assert dispatched.isdisjoint({t.to_wire() for t in fed_tasks})
     # The RUNNING federated task must not enter the poll/redrive set either.
-    running_ids = {e.task_id for e in batch.running_tasks}
+    running_ids = {e.task_id for e in batch.task_attempts}
     assert running_ids.isdisjoint(fed_tasks)
 
     # The promotion only touched the local task; the federated rows are untouched.

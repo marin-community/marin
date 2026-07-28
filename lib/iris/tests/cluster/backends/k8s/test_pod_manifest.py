@@ -35,7 +35,7 @@ from iris.cluster.backends.k8s.tasks import (
     _task_hash,
     _task_update_from_pod,
 )
-from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.controller.task_state import TaskAttemptEntry
 from iris.cluster.platforms.k8s.coreweave_topology import (
     NVL72_GPUS_PER_NODE,
     RACK_SIZE,
@@ -251,14 +251,14 @@ def test_task_hash_distinct_for_sanitization_collisions():
     ],
 )
 def test_task_update_from_pod_phases(phase, expected_state):
-    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    entry = TaskAttemptEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0, task_state=job_pb2.TASK_STATE_RUNNING)
     pod = make_pod("iris-job-0-0", phase, exit_code=1 if phase == "Failed" else None)
     update = _task_update_from_pod(entry, pod)
     assert update.new_state == expected_state
 
 
 def test_task_update_failed_has_exit_code():
-    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    entry = TaskAttemptEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0, task_state=job_pb2.TASK_STATE_RUNNING)
     pod = make_pod("iris-job-0-0", "Failed", exit_code=42, reason="Error")
     update = _task_update_from_pod(entry, pod)
     assert update.exit_code == 42
@@ -268,7 +268,7 @@ def test_task_update_failed_has_exit_code():
 @pytest.mark.parametrize("reason", sorted(_INFRASTRUCTURE_FAILURE_REASONS))
 def test_task_update_infrastructure_failure_is_worker_failed(reason):
     """Evicted, Preempting, etc. should be WORKER_FAILED, not FAILED."""
-    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    entry = TaskAttemptEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0, task_state=job_pb2.TASK_STATE_RUNNING)
     pod = make_pod("iris-job-0-0", "Failed", exit_code=137, reason=reason)
     update = _task_update_from_pod(entry, pod)
     assert update.new_state == job_pb2.TASK_STATE_WORKER_FAILED
@@ -277,7 +277,7 @@ def test_task_update_infrastructure_failure_is_worker_failed(reason):
 
 def test_task_update_oom_killed_is_application_failure():
     """OOMKilled is a misconfiguration, not infrastructure — should be FAILED."""
-    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    entry = TaskAttemptEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0, task_state=job_pb2.TASK_STATE_RUNNING)
     pod = make_pod("iris-job-0-0", "Failed", exit_code=137, reason="OOMKilled")
     update = _task_update_from_pod(entry, pod)
     assert update.new_state == job_pb2.TASK_STATE_FAILED
@@ -286,7 +286,7 @@ def test_task_update_oom_killed_is_application_failure():
 
 def test_task_update_application_error_is_failed():
     """Non-zero exit with reason 'Error' is an application failure, not infrastructure."""
-    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    entry = TaskAttemptEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0, task_state=job_pb2.TASK_STATE_RUNNING)
     pod = make_pod("iris-job-0-0", "Failed", exit_code=1, reason="Error")
     update = _task_update_from_pod(entry, pod)
     assert update.new_state == job_pb2.TASK_STATE_FAILED
@@ -299,7 +299,7 @@ def test_task_update_error_prefers_termination_message_over_bare_reason():
     the real payoff of that manifest field: _extract_error already prefers a
     non-empty message over the generic "Error" reason, so the actual crash
     (traceback, fatal-error banner, ...) reaches the task/job error instead."""
-    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    entry = TaskAttemptEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0, task_state=job_pb2.TASK_STATE_RUNNING)
     pod = make_pod(
         "iris-job-0-0",
         "Failed",
@@ -330,7 +330,7 @@ def test_task_update_disruption_target_is_worker_failed(reason):
     """A preemption SIGKILLed after grace surfaces as reason='Error' exit 137 — not in
     the reason whitelist — but the control plane's DisruptionTarget condition marks it
     as infrastructure, so it must be WORKER_FAILED (preemption budget), not FAILED."""
-    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    entry = TaskAttemptEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0, task_state=job_pb2.TASK_STATE_RUNNING)
     pod = make_pod("iris-job-0-0", "Failed", exit_code=137, reason="Error")
     _add_condition(pod, "DisruptionTarget", "True", reason)
     update = _task_update_from_pod(entry, pod)
@@ -342,7 +342,7 @@ def test_task_update_kueue_termination_target_is_worker_failed():
     """Kueue preemption uses TerminationTarget rather than Kubernetes'
     DisruptionTarget; preserve that authoritative cause instead of charging a
     SIGKILL-shaped exit as an application failure."""
-    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    entry = TaskAttemptEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0, task_state=job_pb2.TASK_STATE_RUNNING)
     pod = make_pod("iris-job-0-0", "Failed", exit_code=137, reason="Error")
     message = "Preempted to accommodate an interactive workload due to ClusterQueue prioritization"
     _add_condition(pod, "TerminationTarget", "True", "WorkloadEvictedDueToPreempted")
@@ -360,7 +360,7 @@ def test_task_update_oom_killed_without_disruption_target_stays_application_fail
     """A self-inflicted cgroup OOM carries no DisruptionTarget condition, so it stays a
     FAILED (misconfigured job) even though it also exits 137 — the condition, not the
     exit code, is what distinguishes preemption from OOM guilt."""
-    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    entry = TaskAttemptEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0, task_state=job_pb2.TASK_STATE_RUNNING)
     pod = make_pod("iris-job-0-0", "Failed", exit_code=137, reason="OOMKilled")
     update = _task_update_from_pod(entry, pod)
     assert update.new_state == job_pb2.TASK_STATE_FAILED

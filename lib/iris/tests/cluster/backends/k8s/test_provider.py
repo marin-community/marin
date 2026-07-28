@@ -31,7 +31,7 @@ from iris.cluster.backends.k8s.tasks import (
     _task_hash,
 )
 from iris.cluster.controller.backend import ProviderError, TaskTarget
-from iris.cluster.controller.task_state import RunningTaskEntry, StoppingTaskEntry
+from iris.cluster.controller.task_state import TaskAttemptEntry
 from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE
 from iris.cluster.platforms.k8s.types import ExecResult, K8sResource, KubectlError, PodResourceUsage
 from iris.cluster.stats.tables import IrisTaskStat, ProfileTrigger
@@ -68,16 +68,26 @@ def test_sync_stop_waits_for_pod_absence(provider, k8s):
     pod_name = _pod_name(task_id, 0, attempt_uid)
     k8s.transition_pod(pod_name, "Running")
 
-    stopping = StoppingTaskEntry(task_id=task_id, attempt_id=0, attempt_uid=attempt_uid)
-    first = provider.sync(make_batch(tasks_to_stop=[stopping]))
+    stopping = TaskAttemptEntry(
+        task_id=task_id,
+        attempt_id=0,
+        task_state=job_pb2.TASK_STATE_PENDING,
+        attempt_uid=attempt_uid,
+    )
+    first = provider.sync(make_batch(task_attempts=[stopping]))
 
     assert first == []
     assert k8s.get_json(K8sResource.PODS, pod_name) is None
 
-    [confirmed] = provider.sync(make_batch(tasks_to_stop=[stopping]))
+    [confirmed] = provider.sync(make_batch(task_attempts=[stopping]))
     assert confirmed.task_id == task_id
     assert confirmed.attempt_id == 0
     assert confirmed.new_state == job_pb2.TASK_STATE_KILLED
+
+    # A dropped response leaves the controller snapshot unchanged. Repeating
+    # that snapshot must repeat the acknowledgement rather than lose it.
+    [retried] = provider.sync(make_batch(task_attempts=[stopping]))
+    assert retried == confirmed
 
 
 def test_sync_propagates_non_kubectl_failure(provider, k8s):
@@ -212,7 +222,7 @@ def test_redrive_keeps_own_fast_finished_pod(provider, k8s):
 
 
 def test_sync_deletes_pods_not_in_desired_set(provider, k8s):
-    """A managed pod whose (task_hash, attempt_id) is not in tasks_to_run|running_tasks
+    """A managed pod whose (task_hash, attempt_id) is not in tasks_to_run|task_attempts
     is considered a stray and gets deleted."""
     task_id = "/test-job/0"
     populate_pod(
@@ -247,7 +257,9 @@ def test_sync_keeps_pods_in_desired_running_set(provider, k8s):
             _LABEL_ATTEMPT_ID: "0",
         },
     )
-    batch = make_batch(running_tasks=[RunningTaskEntry(task_id=task_id, attempt_id=0)])
+    batch = make_batch(
+        task_attempts=[TaskAttemptEntry(task_id=task_id, attempt_id=0, task_state=job_pb2.TASK_STATE_RUNNING)]
+    )
 
     provider.sync(batch)
 
@@ -268,7 +280,9 @@ def test_sync_deletes_pod_for_stale_attempt(provider, k8s):
         },
     )
     # Desired = attempt 1 (task was preempted and re-promoted).
-    batch = make_batch(running_tasks=[RunningTaskEntry(task_id=task_id, attempt_id=1)])
+    batch = make_batch(
+        task_attempts=[TaskAttemptEntry(task_id=task_id, attempt_id=1, task_state=job_pb2.TASK_STATE_RUNNING)]
+    )
 
     provider.sync(batch)
 
@@ -276,7 +290,7 @@ def test_sync_deletes_pod_for_stale_attempt(provider, k8s):
 
 
 # ---------------------------------------------------------------------------
-# sync(): running_tasks polling
+# sync(): active task-attempt polling
 # ---------------------------------------------------------------------------
 
 
@@ -284,11 +298,11 @@ def test_sync_running_task_returns_running_state(provider, k8s):
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
     pod_name = _pod_name(task_id, attempt_id)
-    entry = RunningTaskEntry(task_id=task_id, attempt_id=attempt_id)
+    entry = TaskAttemptEntry(task_id=task_id, attempt_id=attempt_id, task_state=job_pb2.TASK_STATE_RUNNING)
 
     populate_pod(k8s, pod_name, "Running")
 
-    batch = make_batch(running_tasks=[entry])
+    batch = make_batch(task_attempts=[entry])
     result = provider.sync(batch)
 
     assert len(result) == 1
@@ -298,9 +312,9 @@ def test_sync_running_task_returns_running_state(provider, k8s):
 def test_sync_pod_not_found_marks_failed(provider, k8s):
     """Pod must be missing for _POD_NOT_FOUND_GRACE_CYCLES consecutive syncs before FAILED."""
     task_id = JobName.from_wire("/job/0")
-    entry = RunningTaskEntry(task_id=task_id, attempt_id=0)
+    entry = TaskAttemptEntry(task_id=task_id, attempt_id=0, task_state=job_pb2.TASK_STATE_RUNNING)
 
-    batch = make_batch(running_tasks=[entry])
+    batch = make_batch(task_attempts=[entry])
 
     for _ in range(_POD_NOT_FOUND_GRACE_CYCLES - 1):
         result = provider.sync(batch)
@@ -321,11 +335,16 @@ def test_sync_finds_pod_dispatched_before_pod_names_embedded_uid(provider, k8s):
     first controller restart after the upgrade.
     """
     task_id = JobName.from_wire("/job/preexisting")
-    entry = RunningTaskEntry(task_id=task_id, attempt_id=0, attempt_uid="a1b2c3d4e5f60718")
+    entry = TaskAttemptEntry(
+        task_id=task_id,
+        attempt_id=0,
+        task_state=job_pb2.TASK_STATE_RUNNING,
+        attempt_uid="a1b2c3d4e5f60718",
+    )
 
     populate_pod(k8s, _pod_name(task_id, 0), "Running")
 
-    batch = make_batch(running_tasks=[entry])
+    batch = make_batch(task_attempts=[entry])
     for _ in range(_POD_NOT_FOUND_GRACE_CYCLES + 1):
         result = provider.sync(batch)
         assert len(result) == 1
@@ -365,8 +384,13 @@ def test_sync_ignores_legacy_pod_for_an_attempt_this_process_dispatched(provider
     provider.sync(make_batch(tasks_to_run=[make_run_req(task_id.to_wire(), attempt_id=0, attempt_uid=uid)]))
     k8s.delete(K8sResource.PODS, _pod_name(task_id, 0, uid))  # this attempt's pod goes away
 
-    entry = RunningTaskEntry(task_id=task_id, attempt_id=0, attempt_uid=uid)
-    batch = make_batch(running_tasks=[entry])
+    entry = TaskAttemptEntry(
+        task_id=task_id,
+        attempt_id=0,
+        task_state=job_pb2.TASK_STATE_RUNNING,
+        attempt_uid=uid,
+    )
+    batch = make_batch(task_attempts=[entry])
     for _ in range(_POD_NOT_FOUND_GRACE_CYCLES - 1):
         assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_RUNNING
 
@@ -379,8 +403,13 @@ def test_sync_coscheduled_pod_not_found_is_worker_failed(provider, k8s):
     """A vanished pod for a coscheduled task is billed as WORKER_FAILED (gang preemption),
     not FAILED — Kueue deletes every pod in a preempted group, leaving only the absence."""
     task_id = JobName.from_wire("/gang/task/0")
-    entry = RunningTaskEntry(task_id=task_id, attempt_id=0, coscheduled=True)
-    batch = make_batch(running_tasks=[entry])
+    entry = TaskAttemptEntry(
+        task_id=task_id,
+        attempt_id=0,
+        task_state=job_pb2.TASK_STATE_RUNNING,
+        coscheduled=True,
+    )
+    batch = make_batch(task_attempts=[entry])
 
     for _ in range(_POD_NOT_FOUND_GRACE_CYCLES - 1):
         result = provider.sync(batch)
@@ -393,9 +422,9 @@ def test_sync_coscheduled_pod_not_found_is_worker_failed(provider, k8s):
 def test_pod_not_found_grace_period(provider, k8s):
     """A single missing-pod sync returns RUNNING, not FAILED."""
     task_id = JobName.from_wire("/job/grace")
-    entry = RunningTaskEntry(task_id=task_id, attempt_id=0)
+    entry = TaskAttemptEntry(task_id=task_id, attempt_id=0, task_state=job_pb2.TASK_STATE_RUNNING)
 
-    result = provider.sync(make_batch(running_tasks=[entry]))
+    result = provider.sync(make_batch(task_attempts=[entry]))
     assert len(result) == 1
     assert result[0].new_state == job_pb2.TASK_STATE_RUNNING
 
@@ -405,8 +434,8 @@ def test_pod_not_found_grace_resets_when_pod_reappears(provider, k8s):
     task_id = JobName.from_wire("/job/reset")
     attempt_id = 0
     pod_name = _pod_name(task_id, attempt_id)
-    entry = RunningTaskEntry(task_id=task_id, attempt_id=attempt_id)
-    batch = make_batch(running_tasks=[entry])
+    entry = TaskAttemptEntry(task_id=task_id, attempt_id=attempt_id, task_state=job_pb2.TASK_STATE_RUNNING)
+    batch = make_batch(task_attempts=[entry])
 
     # Miss for (grace - 1) cycles.
     for _ in range(_POD_NOT_FOUND_GRACE_CYCLES - 1):
@@ -582,8 +611,16 @@ def test_sync_survives_node_list_failure(provider, k8s):
 def test_resource_stats_only_for_running_tasks(provider, k8s, task_stats_table):
     """reconcile registers running pods (not terminal ones) so the background
     collector emits IrisTaskStat rows only for running tasks."""
-    running = RunningTaskEntry(task_id=JobName.from_wire("/job/run"), attempt_id=0)
-    terminal = RunningTaskEntry(task_id=JobName.from_wire("/job/done"), attempt_id=0)
+    running = TaskAttemptEntry(
+        task_id=JobName.from_wire("/job/run"),
+        attempt_id=0,
+        task_state=job_pb2.TASK_STATE_RUNNING,
+    )
+    terminal = TaskAttemptEntry(
+        task_id=JobName.from_wire("/job/done"),
+        attempt_id=0,
+        task_state=job_pb2.TASK_STATE_RUNNING,
+    )
     running_pod = _pod_name(running.task_id, running.attempt_id)
     terminal_pod = _pod_name(terminal.task_id, terminal.attempt_id)
 
@@ -592,7 +629,7 @@ def test_resource_stats_only_for_running_tasks(provider, k8s, task_stats_table):
     k8s.set_top_pod(running_pod, PodResourceUsage(cpu_millicores=500, memory_bytes=1024 * 1024 * 1024))
     k8s.set_top_pod(terminal_pod, PodResourceUsage(cpu_millicores=999, memory_bytes=1024))
 
-    provider.sync(make_batch(running_tasks=[running, terminal]))
+    provider.sync(make_batch(task_attempts=[running, terminal]))
     # The collector samples all tracked pods in one pass, so once the running
     # pod's row lands a full cycle has run — the terminal pod's absence is real.
     wait_for_condition(lambda: bool(task_stats_table.writes), timeout=Duration.from_seconds(5.0))
@@ -916,15 +953,23 @@ def test_reconcile_dumps_only_running_pods_via_periodic_profiler(k8s):
         cluster_scan_interval=0.0,
     )
     try:
-        running = RunningTaskEntry(task_id=JobName.from_wire("/job/run"), attempt_id=0)
-        terminal = RunningTaskEntry(task_id=JobName.from_wire("/job/done"), attempt_id=0)
+        running = TaskAttemptEntry(
+            task_id=JobName.from_wire("/job/run"),
+            attempt_id=0,
+            task_state=job_pb2.TASK_STATE_RUNNING,
+        )
+        terminal = TaskAttemptEntry(
+            task_id=JobName.from_wire("/job/done"),
+            attempt_id=0,
+            task_state=job_pb2.TASK_STATE_RUNNING,
+        )
         running_pod = _pod_name(running.task_id, running.attempt_id)
         terminal_pod = _pod_name(terminal.task_id, terminal.attempt_id)
         populate_pod(k8s, running_pod, "Running")
         populate_pod(k8s, terminal_pod, "Succeeded")
         k8s.set_exec_response(running_pod, _success_cp(stdout="Thread 0x1\n  train.py:1"))
 
-        provider.sync(make_batch(running_tasks=[running, terminal]))
+        provider.sync(make_batch(task_attempts=[running, terminal]))
         # The loop samples every registered pod each cycle, so once a row lands a
         # full cycle has run — the terminal pod's absence is real, not a race.
         wait_for_condition(lambda: bool(profile_table.writes), timeout=Duration.from_seconds(5.0))
@@ -1577,9 +1622,15 @@ def test_reconcile_evicts_blockers_while_gang_gated(preempt_provider, k8s):
     loop while the gang's pods remain SchedulingGated, and the sweep is
     debounced so back-to-back reconciles don't re-list the namespace."""
     entries = [
-        RunningTaskEntry(task_id=JobName.from_wire(f"/gang/task/{i}"), attempt_id=0, coscheduled=True) for i in range(2)
+        TaskAttemptEntry(
+            task_id=JobName.from_wire(f"/gang/task/{i}"),
+            attempt_id=0,
+            task_state=job_pb2.TASK_STATE_RUNNING,
+            coscheduled=True,
+        )
+        for i in range(2)
     ]
-    preempt_provider.sync(make_batch(tasks_to_run=_gang_reqs(), running_tasks=entries))
+    preempt_provider.sync(make_batch(tasks_to_run=_gang_reqs(), task_attempts=entries))
 
     # Kueue's webhook gates gang pods until the pod-group Workload is admitted.
     for pod in k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS):
@@ -1589,12 +1640,12 @@ def test_reconcile_evicts_blockers_while_gang_gated(preempt_provider, k8s):
     # Health-check pod lands after submission, on capacity the gang needs.
     _seed_blocker_pod(k8s, _PREEMPT_NS, "late-blocker")
     preempt_provider._last_preempt_time = 0.0  # clear the submit-time debounce
-    preempt_provider.sync(make_batch(running_tasks=entries))
+    preempt_provider.sync(make_batch(task_attempts=entries))
     assert k8s.list_pods_in_namespace(_PREEMPT_NS) == []
 
     # Debounce: a blocker appearing immediately after survives this cycle.
     _seed_blocker_pod(k8s, _PREEMPT_NS, "back-to-back-blocker")
-    preempt_provider.sync(make_batch(running_tasks=entries))
+    preempt_provider.sync(make_batch(task_attempts=entries))
     assert [p["metadata"]["name"] for p in k8s.list_pods_in_namespace(_PREEMPT_NS)] == ["back-to-back-blocker"]
 
 

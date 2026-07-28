@@ -38,8 +38,14 @@ DISPATCHED_TASK_STATES: frozenset[int] = frozenset(
 )
 
 
-class RunningTaskEntry(NamedTuple):
-    """Task ID and attempt ID pair captured at snapshot time.
+class TaskAttemptEntry(NamedTuple):
+    """Unfinished direct-provider attempt captured at snapshot time.
+
+    ``task_state`` lets the backend distinguish attempts whose pods remain
+    desired from attempts whose task has already left the active set. Keeping
+    both in one complete snapshot makes reconciliation level-triggered: the
+    backend can delete an old pod and keep reporting its absence until the
+    controller records the attempt as finished.
 
     ``coscheduled`` lets the direct (K8s) provider classify a vanished pod as
     a gang preemption (WORKER_FAILED) rather than an application failure: when
@@ -54,21 +60,8 @@ class RunningTaskEntry(NamedTuple):
 
     task_id: JobName
     attempt_id: int
+    task_state: int
     coscheduled: bool = False
-    attempt_uid: str = ""
-
-
-class StoppingTaskEntry(NamedTuple):
-    """Direct-provider attempt that must stop before its task can retry.
-
-    Producer transitions move the task out of the active set before Kubernetes
-    has necessarily stopped its pod. The K8s backend uses this identity to
-    delete the old pod and reports the attempt stopped only after the pod
-    leaves the active phase.
-    """
-
-    task_id: JobName
-    attempt_id: int
     attempt_uid: str = ""
 
 

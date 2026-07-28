@@ -245,7 +245,7 @@ class ServiceTestHarness:
             reconcile_rows=[],
             timeout_rows=[],
             tasks_to_run=batch.tasks_to_run,
-            running_tasks=batch.running_tasks,
+            task_attempts=batch.task_attempts,
         )
         # The backend now authors its dispatch effects; the controller (here, the
         # harness) just commits them.

@@ -103,16 +103,14 @@ def make_kueue_provider(k8s, *, local_queue: str = "iris-lq", **kwargs) -> K8sTa
 
 def make_batch(
     tasks_to_run=None,
-    running_tasks=None,
-    tasks_to_stop=None,
+    task_attempts=None,
 ) -> ControlSnapshot:
     return ControlSnapshot(
         worker_addresses={},
         reconcile_rows=[],
         timeout_rows=[],
-        running_tasks=running_tasks or [],
         tasks_to_run=tasks_to_run or [],
-        tasks_to_stop=tasks_to_stop or [],
+        task_attempts=task_attempts or [],
     )
 
 
