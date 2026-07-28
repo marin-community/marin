@@ -29,7 +29,7 @@ from iris.cluster.types import CoschedulingConfig, Entrypoint, EnvironmentSpec, 
 from marin.inference.config import DEFAULT_CUDA_VLLM_VERSION
 from marin.inference.model_preparation import resolve_model_path
 from marin.inference.proxy import _reserve_port
-from marin.inference.vllm_server import IsolatedCudaVllm
+from marin.inference.vllm_server import IsolatedCudaVllm, _poll_until_ready
 from rigging.filesystem import StoragePath
 from rigging.timing import Duration
 
@@ -236,19 +236,10 @@ def _network_interface(host: str) -> str:
     raise RuntimeError(f"No network interface owns advertised host IP {host}")
 
 
-def _wait_for_http(url: str, process: subprocess.Popen[bytes], timeout: float) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if process.poll() is not None:
-            raise RuntimeError(f"Process exited with code {process.returncode} before {url} became ready")
-        try:
-            response = requests.get(url, timeout=10)
-            if response.ok:
-                return
-        except requests.RequestException:
-            pass
-        time.sleep(5)
-    raise TimeoutError(f"Timed out waiting for {url}")
+def _check_process_alive(process: subprocess.Popen[bytes]) -> None:
+    return_code = process.poll()
+    if return_code is not None:
+        raise RuntimeError(f"vLLM exited with code {return_code} before becoming ready")
 
 
 def _wait_for_endpoint(name: str, job=None, timeout: float = ENDPOINT_TIMEOUT) -> str:
@@ -343,7 +334,11 @@ def _run_vllm(
     )
     try:
         base_url = f"http://{host}:{http_port}"
-        _wait_for_http(f"{base_url}/health", process, ENDPOINT_TIMEOUT)
+        _poll_until_ready(
+            f"{base_url}/v1",
+            timeout_seconds=ENDPOINT_TIMEOUT,
+            check_alive=lambda: _check_process_alive(process),
+        )
         endpoint_id = ctx.registry.register(vllm_endpoint, base_url)
         try:
             return_code = process.wait()
