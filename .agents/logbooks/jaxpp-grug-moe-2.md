@@ -2278,3 +2278,41 @@ bash experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit \
   - Launch one exact vector-copy rerun as parent `/dlwh/iris-run-job-20260727-234035` using the proven PJRT
     `cuda_async` selector. Require no `GPU_[0-7]_bfc`, all ten steps, and W&B steps 2-9.
   - Do not repeat the obsolete `TF_GPU_ALLOCATOR` exact command.
+
+### 2026-07-27 17:09 PDT - PJRT CUDA async clears OOM but is slow and hits an IB failure
+- Snapshot:
+  - Parent `/dlwh/iris-run-job-20260727-234035` and child
+    `/dlwh/iris-run-job-20260727-234035/grug-train-jaxpp-rno2a-ubx-vectorcopy-l24-e64k4-b8192-s4096-p4m256-precompile-pjrtasync-r4-20260727`
+    ran clean commit `8297f9798c`.
+- Allocator and execution:
+  - All ranks logged `xla_client_allocator=cuda_async`; no `GPU_[0-7]_bfc` appeared.
+  - UB-X initialized, `1026/1025/1025/1025` tasks precompiled, the barrier completed, and the run reached
+    step 5. This proves the async primary-device allocator clears the prior `19.51 GiB` BFC failure.
+  - The two retained [W&B](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ubx-vectorcopy-l24-e64k4-b8192-s4096-p4m256-precompile-pjrtasync-r4-20260727)
+    rows were:
+
+| Step | Loss | Duration | MFU | Tokens/s |
+| ---: | ---: | ---: | ---: | ---: |
+| 2 | `9.870304` | `138.787798s` | `12.128068` | `241,767.88` |
+| 3 | `9.103482` | `138.895172s` | `12.118692` | `241,580.98` |
+
+  - Partial mean MFU was `12.12338`, `39.08%` below scalar UB-X `19.8996`. The sample is incomplete, but
+    it is too slow to promote this allocator without a separate explanation.
+- Infrastructure failure:
+  - Rank 1 reported an IB port error at `00:00:47 UTC`; rank 0 reported client re-registration at
+    `00:01:37`; rank 1 then received two `IBV_WC_RETRY_EXC_ERR` send completions involving different peers
+    at `00:01:44`.
+  - All ranks stopped advancing inside `jaxpp.apply_task -> eval_local`, while all 32 GPUs remained at
+    100% utilization. The babysitter classified the distributed work as irrecoverably wedged and stopped
+    only this parent/child.
+  - Parent and child are terminal `killed`; all child tasks completed with exit `0`, zero failures, four stop
+    preemptions, and no live resource remains. W&B remains stale in `running` state.
+- BFC follow-up:
+  - The prior `0.70` BFC occupancy map had substantial free space split across regions, with its largest
+    contiguous span just below the requested `19.51 GiB`.
+  - Lowering a fixed BFC fraction would shrink the constrained pool. Raising it to `0.75` adds approximately
+    `4 GiB` per H100 while leaving approximately `20 GiB` outside JAX for UB-X/NCCL.
+- Decision:
+  - Launch one default-BFC exact rerun at fraction `0.75` as parent `/dlwh/iris-run-job-20260728-000843`.
+    Require all ten steps and compare W&B steps 2-9 with scalar UB-X `19.8996`.
+  - Do not attribute the IB failure to JaxPP or allocator selection, and do not restart the cluster.
