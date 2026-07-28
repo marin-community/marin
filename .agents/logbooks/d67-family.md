@@ -207,3 +207,11 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
 - Health: No training metrics have appeared because no rank has been allocated. A full-log error scan found no traceback, OOM, accelerator, dead-node, or federation-peer signal.
 - Interpretation: Healthy gang-admission wait, 13 minutes after child submission. Do not resubmit.
 - Next action: Continue on the 15-minute cadence. Notify the DRI if the capacity wait exceeds 30 minutes, but do not mutate the cluster or another user's jobs.
+
+### 2026-07-28 16:53 PDT - D67-CTL-01 automatic gang retry
+
+- Child job ID: `/mwittmann/d67-control-m3-draw1-r3-0728-1630/grug-train-d67-control-m3-draw1-r3-0728-1630`
+- Result: Kueue admitted attempt 0 around 16:50 PDT and the ranks began their three setup steps. Task 10 then failed before training with `Init:Error stage-workdir`; Iris marked its 15 siblings `cosched_failed` and atomically returned the gang to Kueue.
+- Retry state: All 16 tasks are in attempt 1 under Kueue workload `iris-pg-b7f0be39b51da146-1`, waiting in `cw-use08a-lq`. The child remains active with failures=1 and preemptions=0.
+- Interpretation: No model initialization or training step ran, so attempt 0 is not an experimental placement draw. `stage-workdir` is a pre-training infrastructure failure; allow the built-in single gang retry to proceed. Do not submit another job.
+- Next action: Monitor attempt 1 through admission. Escalate instead of retrying blindly if the same `stage-workdir` failure repeats.
