@@ -2146,3 +2146,46 @@ result:
   This cross-rack communication variance overwhelms the architecture signal,
   so the profiles are retained for debugging and excluded from cost
   attribution.
+
+### 2026-07-28 18:18 - Clean fixed25 passes the three-mode evaluation gate
+
+- fixed25 r6 completed full/E128/E16 evaluation at update 10,000 and remained
+  finite through update 10,268 with zero overflow, failures, or preemptions.
+  The clean gate therefore rules out both the uninterrupted treatment
+  trajectory and the evaluation callback alone. The r4 non-finite boundary
+  requires its prior coordination failures, restored state, or their
+  interaction.
+- Matched update-10,000 Paloma macro loss is `6.281861` for E256 and
+  `5.817962` for fixed25 full, a `-0.463899` treatment delta. fixed25 is better
+  on all 16 domains. Its E128 and E16 modes are `5.796685` and `6.028710`.
+  This is one clean paired gate, not promotion evidence.
+- Across 9,291 matched post-warmup updates, median compiled step time is
+  `384.600 ms` for E256 and `397.876 ms` for fixed25, a `+3.45%` surcharge.
+  The corresponding 100B optimizer forecast is `10.188 h` versus `10.540 h`,
+  or 22.51 additional GB200-hours.
+- Control Paloma is non-monotonic: `6.557286`, `5.627037`, `5.967525`,
+  `6.281861`, and `5.978082` at updates 2,500 through 12,500. Median training
+  loss over the preceding 200 updates moves in the same direction, so this is
+  a model-trajectory signal rather than an evaluator-only artifact. Router
+  entropy and z-loss do not move monotonically with Paloma, so routing is not
+  identified as the cause.
+- Updated the committed interim report and added clean-run training-loss,
+  Paloma, step-time, and machine-readable result assets.
+
+### 2026-07-28 18:26 - Nested evaluation perturbs treatment; resume pre-eval
+
+- Visual inspection of the clean-run loss curve revealed a treatment-specific
+  jump immediately after the update-10,000 nested evaluation. fixed25 median
+  loss is `4.69196` over updates 9,900--9,999, then `7.53152`, `7.30613`, and
+  `6.94942` over the next three 100-update windows. E256 falls from `5.49351`
+  to `5.25149` across its one-mode evaluation.
+- The clean callback did not reproduce r4's immediate NaN, but it did perturb
+  the treatment materially. The exact severity depends on prior gang or
+  optimizer state. The update-10,000 Paloma result remains valid because
+  evaluation computes it before the post-callback training updates.
+- The temporary checkpoint root still contained `step-9936`, before nested
+  evaluation. Stopped fixed25 r6 before the next ten-minute checkpoint could
+  replace it, then resubmitted the same run identity and artifact version with
+  `BURNIN_EVAL_INTERVAL=1000000`. It will restore update 9,936 and continue
+  without periodic evaluation; the forced terminal evaluation occurs only
+  after the final optimizer update.

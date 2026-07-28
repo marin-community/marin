@@ -376,6 +376,8 @@ def test_nested_burnin_launcher_builds_100b_replica_cell(monkeypatch, tmp_path):
     monkeypatch.setenv("BURNIN_BATCH_SIZE", "128")
     monkeypatch.setenv("BURNIN_OPTIMIZER_TOKENS", str(optimizer_tokens))
     monkeypatch.setenv("BURNIN_NODES", "16")
+    monkeypatch.setenv("BURNIN_NODE_CPU", "16")
+    monkeypatch.setenv("BURNIN_NODE_RAM", "128g")
     monkeypatch.setenv("BURNIN_REPLICA_AXIS_SIZE", "4")
     monkeypatch.setenv("BURNIN_EXPERT_AXIS_SIZE", "1")
     monkeypatch.setenv("BURNIN_EVAL_INTERVAL", "2500")
@@ -404,6 +406,8 @@ def test_nested_burnin_launcher_builds_100b_replica_cell(monkeypatch, tmp_path):
     assert config.profiler.profile_options.enable_hlo_proto
     assert config.grug_trainer.replica_axis_size == 4
     assert config.grug_trainer.expert_axis_size == 1
+    assert config.resources.cpu == 16
+    assert config.resources.ram == "128g"
     assert config.model.attention_implementation == "reference"
     assert config.tracker.group == "NEST-BURN-002"
     np.testing.assert_allclose(config.optimizer.learning_rate, expected_optimizer.learning_rate)

@@ -25,6 +25,8 @@ Optional overrides:
     BURNIN_OPTIMIZER_TOKENS
                          token horizon used to derive the optimizer hyperparameters
     BURNIN_NODES       four-GPU GB200 nodes (default: 8)
+    BURNIN_NODE_CPU    CPU cores reserved per GB200 node (default: 64)
+    BURNIN_NODE_RAM    RAM reserved per GB200 node (default: 512g)
     BURNIN_REPLICA_AXIS_SIZE
                          replicated process groups (default: 1; use BURNIN_NODES for node-local FSDP)
     BURNIN_EXPERT_AXIS_SIZE
@@ -82,6 +84,8 @@ _CAPACITY_FACTOR = 1.25
 _EXPERT_AXIS = 1
 _GPUS_PER_NODE = 4
 _DEFAULT_NODES = 8
+_DEFAULT_NODE_CPU = 64
+_DEFAULT_NODE_RAM = "512g"
 _EVAL_INTERVAL = 1_000
 _DEFAULT_MP = "params=float32,compute=bfloat16,output=bfloat16"
 _ATTENTION_IMPLEMENTATIONS = ("reference", "cudnn", "gpu_fa4_cute", "gpu_fa4_thd")
@@ -121,6 +125,12 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     nodes = env_int("BURNIN_NODES", _DEFAULT_NODES)
     if nodes <= 0:
         raise ValueError("BURNIN_NODES must be positive")
+    node_cpu = env_int("BURNIN_NODE_CPU", _DEFAULT_NODE_CPU)
+    if node_cpu <= 0:
+        raise ValueError("BURNIN_NODE_CPU must be positive")
+    node_ram = os.environ.get("BURNIN_NODE_RAM", _DEFAULT_NODE_RAM)
+    if not node_ram:
+        raise ValueError("BURNIN_NODE_RAM must be non-empty")
     replica_axis_size = env_int("BURNIN_REPLICA_AXIS_SIZE", 1)
     if replica_axis_size <= 0:
         raise ValueError("BURNIN_REPLICA_AXIS_SIZE must be positive")
@@ -224,8 +234,8 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     resources = ResourceConfig.with_gpu(
         "GB200",
         count=_GPUS_PER_NODE,
-        cpu=64,
-        ram="512g",
+        cpu=node_cpu,
+        ram=node_ram,
         disk="512g",
         replicas=nodes,
     )

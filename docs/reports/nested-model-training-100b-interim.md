@@ -1,18 +1,24 @@
-# Nested MoE 100B-token burn-in: first gate
+# Nested MoE 100B-token burn-in: interim gates
 
 ## TL;DR
 
-The fixed25 nested-expert treatment adds `7.10%` to compiled optimizer-step
-time in the 64-GB200, batch-128 cell. The first full-mode Paloma evaluation is
-`0.49173` nats better than the E256 control, but fixed25 becomes non-finite
-three updates later. That isolated quality point does not support promotion.
+The clean fixed25 replacement adds `3.45%` to compiled optimizer-step time
+through 10.8B tokens in the 64-GB200, batch-128 cell. At the first clean
+matched gate, 10.49B tokens, its full-mode Paloma loss is `0.46390` nats
+better than E256. E128 is `0.02128` nats better than fixed25 full mode and E16
+is `0.21075` worse.
 
-A replacement fixed25 run keeps the model, optimizer, seed, data order, batch,
-and 100B-token horizon fixed while deferring the first full/E128/E16
-evaluation from update 2,500 to update 10,000. It passed update 2,503 with
-finite loss and zero overflow. The original failure therefore depends on the
-multi-mode evaluation boundary, restored state, or their interaction rather
-than the uninterrupted nested training trajectory.
+The replacement passed the original update-2,503 failure point and completed
+full/E128/E16 evaluation at update 10,000 without a NaN. Its median training
+loss then jumped from `4.69` over updates 9,900--9,999 to `7.53` over
+10,001--10,100. The nested callback is therefore implicated even though the
+clean gang did not fail outright. Training was stopped before its clean
+update-9,936 temporary checkpoint could be overwritten, then resumed from
+that checkpoint with periodic evaluation disabled.
+
+This is still an interim result. Control Paloma and training loss oscillate
+over multi-billion-token intervals, and fixed25 has only one clean matched
+Paloma gate. Both arms continue toward 100B tokens.
 
 ## Setup
 
@@ -67,21 +73,43 @@ regularization from a transient oscillation.
 
 ![Full and nested Paloma at the first common gate.](assets/nested-model-training-100b-paloma.png)
 
+## Clean 10.49B-token gate
+
+| Metric at update 10,000 | E256 | fixed25 | Delta |
+|---|---:|---:|---:|
+| Full-mode Paloma macro loss | 6.281861 | 5.817962 | -0.463899 |
+| Full-mode Paloma micro loss | 5.994786 | 5.459576 | -0.535210 |
+| E128 Paloma macro loss | — | 5.796685 | -0.021277 vs fixed25 full |
+| E16 Paloma macro loss | — | 6.028710 | +0.210749 vs fixed25 full |
+| Median compiled step | 384.600 ms | 397.876 ms | +3.45% |
+| Evaluation hook | 15.54 s | 62.87 s | +47.34 s |
+| Routing overflow | 0% | 0% | 0 pp |
+
+fixed25 is better on all 16 Paloma domains. The mean domain delta is
+`-0.46390` nats and the median is `-0.46068`. This is a clean, preregistered
+comparison, but it is only one paired gate. The control's 10,000-update value
+is also near a local loss maximum. The evaluation itself occurs after these
+metrics are computed, so the gate remains a valid pre-perturbation comparison.
+
+![Training cross-entropy through the clean gate.](assets/nested-model-training-100b-r6-loss.png)
+
+![Full and nested Paloma through the clean gate.](assets/nested-model-training-100b-r6-paloma.png)
+
 ## Runtime model
 
-The timing estimate uses 1,478 matched compiled updates and excludes
+The current timing estimate uses 9,291 matched post-warmup updates and excludes
 evaluation callbacks, loading stalls, checkpoint pauses, compilation, and
 failed-attempt replay.
 
 | 100B-token projection | E256 | fixed25 | Increment |
 |---|---:|---:|---:|
-| Optimizer time | 10.118 h | 10.837 h | 0.719 h |
-| GB200-hours | 647.57 | 693.55 | 45.98 |
-| GB200-hours / 1B tokens | 6.476 | 6.936 | 0.460 |
+| Optimizer time | 10.188 h | 10.540 h | 0.352 h |
+| GB200-hours | 652.06 | 674.56 | 22.51 |
+| GB200-hours / 1B tokens | 6.521 | 6.746 | 0.225 |
 
 The fixed25 surcharge is below the preregistered 10% promotion threshold and
-well below the 50% cost of approaching a second training run. The estimate is
-conditional on numerical stability.
+well below the 50% cost of approaching a second training run. The estimate
+will be recomputed at the 100B endpoint.
 
 The expert matmuls do not explain the surcharge. Both arms activate four
 experts of the same width for every token. fixed25 additionally constructs a
@@ -89,27 +117,60 @@ per-sequence eligibility mask and computes QB routing thresholds for three
 eligibility groups (E256, E128, and E16) in every MoE layer; the control
 computes one E256 group. Each group includes a top-k threshold calculation and
 a reduction over the batch mesh. The two extra group reductions per layer are
-the leading candidate for the 27.1 ms absolute gap on 64 devices; this run was
-not kernel-profiled. A larger model may amortize that fixed router cost against
-larger expert matmuls, but a larger data-parallel mesh can make the reductions
-more expensive. The current measurement does not resolve that scaling
-balance.
+a candidate for the gap on 64 devices. A matched ten-update XPlane capture
+could not test that mechanism: the two profiling gangs landed on different
+leafgroups and control all-gather time was about eight times treatment
+all-gather time. That placement variance overwhelmed the architecture signal,
+so the profiles are retained for debugging and excluded from cost
+attribution. A larger model may amortize fixed router work against larger
+expert matmuls, but a larger data-parallel mesh can also make reductions more
+expensive. The current measurement does not resolve that scaling balance.
 
 The preceding 16-device, batch-32 burn-in measured a `0.75%` fixed25
-surcharge, compared with `7.10%` here. Its absolute gap was 2.76 ms per update;
-the current gap is 27.12 ms. Model shape, sequence length, and active experts
-are unchanged. The device count, batch, replica axis, and optimizer horizon
-changed together, so this comparison identifies a topology sensitivity
-without assigning it to one variable. A 300B--700B cost forecast needs at
-least one production-like expert/data-parallel topology gate.
+surcharge. The clean 64-device estimate is currently `3.45%`: an absolute gap
+of 13.28 ms per update, compared with 2.76 ms on 16 devices. Model shape,
+sequence length, and active experts are unchanged. The device count, batch,
+replica axis, and optimizer horizon changed together, so this comparison
+identifies topology sensitivity without assigning it to one variable. A
+300B--700B cost forecast needs at least one production-like
+expert/data-parallel topology gate.
 
-The evaluation hook measures three modes for fixed25 and one for E256. At the
-original 2,500-update cadence, 38 gates project to 0.276 hours of control
-evaluation and 0.817 hours of treatment evaluation. This adds 0.541 wall
-hours, or 34.6 GB200-hours, to the treatment. Evaluating all nested modes every
-10,000 updates reduces this research-only cost without changing co-training.
+The evaluation hook measures three modes for fixed25 and one for E256. The
+current median costs are 62.87 seconds and 15.54 seconds. At their respective
+10,000- and 2,500-update cadences, the 100B run projects to about 0.157 and
+0.164 hours of evaluation. This research-only instrumentation is excluded from
+compiled-step cost.
 
-![Matched compiled optimizer-step duration.](assets/nested-model-training-100b-step-time.png)
+![Matched compiled optimizer-step duration through the clean gate.](assets/nested-model-training-100b-r6-step-time.png)
+
+## Baseline loss behavior
+
+The E256 Paloma curve is not monotonic:
+
+| Update | Tokens | Paloma macro | Median training loss over prior 200 updates |
+|---:|---:|---:|---:|
+| 2,500 | 2.62B | 6.557286 | 4.811574 |
+| 5,000 | 5.24B | 5.627037 | 4.518203 |
+| 7,500 | 7.86B | 5.967525 | 5.013913 |
+| 10,000 | 10.49B | 6.281861 | 5.542285 |
+| 12,500 | 13.11B | 5.978082 | 4.929281 |
+
+Paloma rises and falls with the surrounding training loss, so this is not
+just a stale or inverted evaluator series. The 100B-derived MuonH and AdamH
+learning rates, beta values, warmup, and linear schedule match the configured
+heuristic. This schedule is nevertheless a long overtraining experiment, not
+the original 4.42B-token compute-optimal cooldown: at update 10,000 its MuonH
+rate is still about `0.0044`.
+
+Routing is concentrated and router z-loss is large, but the router metrics do
+not track the Paloma regression monotonically. Mean routing entropy is `2.51`
+at update 5,000, `2.50` at 7,500, `3.30` at 10,000, and `3.32` at 12,500.
+The corresponding maximum for 256 experts is about `5.55`. Router auxiliary
+losses are diagnostic-only in this configuration because dynamic router bias
+handles load balancing. These observations make optimizer/data-order
+nonstationarity and routing health both useful follow-ups, but they do not
+identify one as the cause. Architecture conclusions remain paired against the
+live E256 control rather than against an expected absolute Paloma target.
 
 ## Failure and recovery
 
@@ -125,11 +186,20 @@ the failed arm with a maximum absolute difference of `0.00076` nats, and it is
 finite at update 2,537. This rules out the uninterrupted trajectory as the
 cause of the step-2,503 failure.
 
-The next diagnostic boundary is the replacement's update-10,000 full/E128/E16
-evaluation. Failure immediately afterward implicates the multi-mode callback.
-Survival implicates checkpoint recovery or prior gang state. The replacement
-continues toward the 100B-token endpoint in either case unless it becomes
-non-finite.
+The replacement completed its update-10,000 full/E128/E16 evaluation without
+an immediate NaN, but the following 100-update median loss rose from `4.69` to
+`7.53`; the next two medians were `7.31` and `6.95`. Control loss declined
+across its own one-mode evaluation. Together with r4's step-2,503 NaN, this
+implicates the treatment's nested evaluation path even though the exact
+failure severity depends on prior gang or optimizer state.
+
+The last temporary checkpoint before evaluation is update 9,936. The
+treatment was stopped before the next checkpoint and resubmitted under the
+same run identity and artifact version with the evaluation interval beyond
+the training horizon. It will restore update 9,936 and overwrite the
+contaminated W&B step range with a clean continuation. A forced terminal
+evaluation still runs after the final optimizer update, when it can no longer
+affect training.
 
 ## Runs
 
