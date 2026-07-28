@@ -3212,7 +3212,11 @@ class K8sTaskProvider:
         stopping: list[StoppingTaskEntry],
         cached_pods: list[dict],
     ) -> list[TaskUpdate]:
-        """Confirm controller-stopped attempts after their pods leave the active phase."""
+        """Finalize stopped attempts once absent from the active-pod snapshot.
+
+        Unlike normal pod polling, absence is the shutdown acknowledgement;
+        failures to list pods raise before this method is called.
+        """
         pods_by_name = {pod.get("metadata", {}).get("name", ""): pod for pod in cached_pods}
         updates: list[TaskUpdate] = []
         for entry in stopping:
@@ -3220,12 +3224,13 @@ class K8sTaskProvider:
             if pod is not None:
                 continue
             self._pod_not_found_counts.pop(f"{entry.task_id.to_wire()}:{entry.attempt_id}", None)
+            # Requeue already made the attempt terminal; this update only stamps
+            # finished_at_ms so the next dispatch cycle can promote its retry.
             updates.append(
                 TaskUpdate(
                     task_id=entry.task_id,
                     attempt_id=entry.attempt_id,
                     new_state=job_pb2.TASK_STATE_KILLED,
-                    status_message="",
                 )
             )
         return updates
