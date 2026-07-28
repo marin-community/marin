@@ -20,6 +20,18 @@ author: will-held
 
 ## Launched Instances
 
+### 2026-07-27 23:48 PDT - `/held/hero-run-4-code-glm52-cache-20260727`
+
+- Command: `uv run iris --controller-url http://127.0.0.1:18100 job run --no-wait --job-name hero-run-4-code-glm52-cache-20260727 --priority batch --enable-extra-resources --cpu 8 --memory 64GB --disk 100GB --extra marin-core:cpu --timeout 259200 -- python -m experiments.rollout_data.collect_hero_run_4_code_glm52 prepare --output-path s3://marin-us-east-02a/marin/rollouts/glm-5.2/hero-run-4-code-20260727`
+- Git SHA: `5f4f66c4a27f4e2c5ac1fec56dbeb76bd82f01f0`
+- Dirty tree: no
+- Source bundle/container: Iris workspace bundle from the Git SHA above; default Iris CPU task image.
+- Hardware/topology: 8 CPU, 64 GB memory, 100 GB disk; Iris batch priority.
+- `initialize_from`: not applicable
+- Final step: regional cache `.cache_complete` plus `model-cache.json` at the output root.
+- Checkpoint policy: not applicable; the pinned model mirror has a 30-day regional cache TTL.
+- Babysitter/check cadence: 2-minute startup check, then 15 minutes.
+
 ## Event Log
 
 ### 2026-07-27 23:00 PDT - Run contract
