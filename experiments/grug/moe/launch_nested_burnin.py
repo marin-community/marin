@@ -17,15 +17,23 @@ Required environment:
 
 Optional overrides:
 
+    BURNIN_EXPERIMENT_ID
+                         W&B group and run prefix (default: NEST-BURN-001)
     BURNIN_STEPS       training steps (default: heuristic-derived 16,840)
     BURNIN_DATA_STEPS  Datakit planning horizon (default: heuristic-derived 16,840)
+    BURNIN_BATCH_SIZE  global sequence batch; an override requires BURNIN_OPTIMIZER_TOKENS
+    BURNIN_OPTIMIZER_TOKENS
+                         token horizon used to derive the optimizer hyperparameters
     BURNIN_NODES       four-GPU GB200 nodes (default: 8)
     BURNIN_REPLICA_AXIS_SIZE
                          replicated process groups (default: 1; use BURNIN_NODES for node-local FSDP)
     BURNIN_EXPERT_AXIS_SIZE
                          expert-parallel devices (default: 1)
+    BURNIN_EVAL_INTERVAL
+                         optimizer steps between evaluations (default: 1,000)
     BURNIN_RUN_SUFFIX  append a retry suffix to the run and artifact names
     BURNIN_MP          JMP policy (default: fp32 params, bf16 compute/output)
+    BURNIN_ATTENTION   reference | cudnn | gpu_fa4_cute | gpu_fa4_thd
 """
 
 import dataclasses
@@ -46,7 +54,7 @@ from marin.training.training import LevanterCheckpoint
 
 from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
-from experiments.grug.moe.heuristic import build_from_heuristic
+from experiments.grug.moe.heuristic import MoeHeuristic, build_from_heuristic
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial
 from experiments.grug.moe.launch_datakit_moe_mix import (
     _datakit_data_config,
@@ -103,6 +111,7 @@ def _validation_components(
 
 def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     """Build one matched burn-in arm."""
+    experiment_id = os.environ.get("BURNIN_EXPERIMENT_ID", _EXPERIMENT_ID)
     arm = BurninArm(_required_env("BURNIN_ARM"))
     nodes = env_int("BURNIN_NODES", _DEFAULT_NODES)
     if nodes <= 0:
@@ -114,18 +123,40 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     if expert_axis_size <= 0:
         raise ValueError("BURNIN_EXPERT_AXIS_SIZE must be positive")
 
-    base_model, optimizer, batch_size, heuristic_steps = build_from_heuristic(
+    heuristic = MoeHeuristic()
+    base_model, optimizer, heuristic_batch_size, heuristic_steps = build_from_heuristic(
         budget=_COMPUTE_BUDGET,
         hidden_dim=_HIDDEN_DIM,
+        heuristic=heuristic,
         target_steps=_HEURISTIC_TARGET_STEPS,
         seq_len=_SEQUENCE_LENGTH,
     )
+    batch_size = env_int("BURNIN_BATCH_SIZE", heuristic_batch_size)
+    if batch_size <= 0:
+        raise ValueError("BURNIN_BATCH_SIZE must be positive")
+    optimizer_tokens_value = os.environ.get("BURNIN_OPTIMIZER_TOKENS")
+    if optimizer_tokens_value is None:
+        if batch_size != heuristic_batch_size:
+            raise ValueError("BURNIN_OPTIMIZER_TOKENS is required when overriding BURNIN_BATCH_SIZE")
+    else:
+        optimizer_tokens = int(optimizer_tokens_value)
+        if optimizer_tokens <= 0:
+            raise ValueError("BURNIN_OPTIMIZER_TOKENS must be positive")
+        optimizer = heuristic.build_optimizer_config(
+            batch_size,
+            optimizer_tokens,
+            _HIDDEN_DIM,
+            seq_len=_SEQUENCE_LENGTH,
+        )
     steps = env_int("BURNIN_STEPS", heuristic_steps)
     if steps <= 0:
         raise ValueError("BURNIN_STEPS must be positive")
     data_steps = env_int("BURNIN_DATA_STEPS", heuristic_steps)
     if data_steps < steps:
         raise ValueError("BURNIN_DATA_STEPS must be at least BURNIN_STEPS")
+    eval_interval = env_int("BURNIN_EVAL_INTERVAL", _EVAL_INTERVAL)
+    if eval_interval <= 0:
+        raise ValueError("BURNIN_EVAL_INTERVAL must be positive")
 
     base_model = dataclasses.replace(
         base_model,
@@ -157,7 +188,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     if batch_size % total_devices != 0:
         raise ValueError(f"batch size {batch_size} must be divisible by {total_devices=}")
 
-    run_id = f"{_EXPERIMENT_ID.lower()}-{arm.value}-d{_HIDDEN_DIM}-s{_SEQUENCE_LENGTH}-e256-c4p14e18"
+    run_id = f"{experiment_id.lower()}-{arm.value}-d{_HIDDEN_DIM}-s{_SEQUENCE_LENGTH}-e256-c4p14e18"
     run_suffix = os.environ.get("BURNIN_RUN_SUFFIX")
     if run_suffix:
         run_id = f"{run_id}-{run_suffix}"
@@ -211,9 +242,9 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
                     "datakit",
                     "gb200",
                     arm.value,
-                    _EXPERIMENT_ID,
+                    experiment_id,
                 ],
-                group=_EXPERIMENT_ID,
+                group=experiment_id,
                 name=None,
                 replicate_path=ctx.output_path,
             ),
@@ -227,7 +258,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
             ),
             eval=GrugEvalConfig(
                 eval_batch_size=256,
-                steps_per_eval=_EVAL_INTERVAL,
+                steps_per_eval=eval_interval,
                 max_eval_batches=4,
                 eval_current=True,
                 eval_ema=False,

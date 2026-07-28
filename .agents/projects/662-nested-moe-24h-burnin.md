@@ -74,3 +74,42 @@ outcome.
 The 4.414B-token target is expected to fit well inside the pretraining window.
 The schedule tolerates periodic preemption through 10-minute checkpoints and
 Iris retries; exit 137 is treated as preemption unless logs show otherwise.
+
+## NEST-BURN-002: 100B-token long-horizon gate
+
+The compute-optimal cell completed too quickly to measure whether the fixed25
+effect persists through a production-length optimizer trajectory. NEST-BURN-002
+starts both arms from scratch and holds the architecture, data order, seed,
+precision, capacity factor, and reference attention implementation fixed. It
+changes the global batch from 32 to 128 and derives a fresh optimizer for the
+99,999,547,392-token horizon. Resuming NEST-BURN-001 would cross a batch-size
+and learning-rate-schedule discontinuity.
+
+Each arm runs 95,367 updates at sequence length 8,192 and global batch 128 on
+64 GB200s. The mesh has a four-way replica axis and a 16-way data axis, so each
+device still processes two sequences per update. The E256 control routes every
+row across all experts. The fixed25 treatment restricts 25% of rows,
+alternating the fixed E128 and E16 prefixes. Evaluations run every 2,500
+updates in full-E256 mode for both arms and in E128/E16 mode for fixed25.
+
+The 100B-token heuristic gives MuonH/AdamH LR 0.00488646, plain-Adam LR
+0.00112764, beta1 0.9062, beta2 0.992028, epsilon 2.98810e-15, 1% warmup,
+linear decay to 5% of peak LR, and no gradient clipping. This run is about
+23 times beyond the d768 cell's compute-optimal token count. It tests
+long-horizon treatment behavior and cost, not compute-optimal scaling quality.
+
+Promote the arm through the long-horizon gate if both runs remain finite,
+fixed25 full-mode Paloma stays within 0.05 nats of E256 at two consecutive
+evaluations, and fixed25 median steady-state update time remains within 10% of
+E256. Stop fixed25 for a treatment-specific regression above 0.10 nats at two
+consecutive evaluations, sustained routing overflow above 5%, or update-time
+overhead above 25%. A single kernel, node, data-loader, or collective failure
+does not count as a quality observation; retry both arms from their latest
+checkpoints on the same code snapshot.
+
+The NEST-BURN-001 medians project 9.76 optimizer hours for E256 and 9.83 hours
+for fixed25 before compilation, evaluation, and checkpoint overhead. The pair
+uses about 1,254 optimizer GPU-hours. Checkpoint both arms every ten minutes,
+treat exit 137 as preemption unless logs identify another cause, and post
+matched-token loss, routing, and timing updates to PR #7667 at least every six
+hours.

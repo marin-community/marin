@@ -43,7 +43,7 @@ from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.ferries import canary_ferry
 from experiments.grug.moe import launch as grug_moe_launch
-from experiments.grug.moe import launch_nested_experts
+from experiments.grug.moe import launch_nested_burnin, launch_nested_experts
 from experiments.llama import llama3_tokenizer
 
 _TOKENIZED_CACHE = f"{TokenizedCache.__module__}.{TokenizedCache.__qualname__}"
@@ -365,6 +365,52 @@ def test_nested_moe_launcher_builds_fixed_chain(monkeypatch, tmp_path):
     assert config.model.nested_subset_schedule is model_module.NestedSubsetSchedule.FIXED
     assert config.model.nested_batch_fraction == 0.25
     assert config.grug_trainer.expert_axis_size == 16
+
+
+def test_nested_burnin_launcher_builds_100b_replica_cell(monkeypatch, tmp_path):
+    optimizer_tokens = 99_999_547_392
+    monkeypatch.setenv("BURNIN_EXPERIMENT_ID", "NEST-BURN-002")
+    monkeypatch.setenv("BURNIN_ARM", "fixed25")
+    monkeypatch.setenv("BURNIN_STEPS", "95367")
+    monkeypatch.setenv("BURNIN_DATA_STEPS", "95367")
+    monkeypatch.setenv("BURNIN_BATCH_SIZE", "128")
+    monkeypatch.setenv("BURNIN_OPTIMIZER_TOKENS", str(optimizer_tokens))
+    monkeypatch.setenv("BURNIN_NODES", "16")
+    monkeypatch.setenv("BURNIN_REPLICA_AXIS_SIZE", "4")
+    monkeypatch.setenv("BURNIN_EXPERT_AXIS_SIZE", "1")
+    monkeypatch.setenv("BURNIN_EVAL_INTERVAL", "2500")
+    monkeypatch.setenv("BURNIN_ATTENTION", "reference")
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+
+    step = launch_nested_burnin.build(version="dev")
+    _seed_cache_records(step, str(tmp_path))
+    config = materialized_config(step, str(tmp_path))
+    expected_optimizer = launch_nested_burnin.MoeHeuristic().build_optimizer_config(
+        128,
+        optimizer_tokens,
+        launch_nested_burnin._HIDDEN_DIM,
+        seq_len=launch_nested_burnin._SEQUENCE_LENGTH,
+    )
+
+    assert config.steps == 95_367
+    assert config.batch_size == 128
+    assert config.eval.steps_per_eval == 2_500
+    assert config.grug_trainer.replica_axis_size == 4
+    assert config.grug_trainer.expert_axis_size == 1
+    assert config.model.attention_implementation == "reference"
+    assert config.tracker.group == "NEST-BURN-002"
+    np.testing.assert_allclose(config.optimizer.learning_rate, expected_optimizer.learning_rate)
+    np.testing.assert_allclose(config.optimizer.adam_lr, expected_optimizer.adam_lr)
+    np.testing.assert_allclose(config.optimizer.beta2, expected_optimizer.beta2)
+    np.testing.assert_allclose(config.optimizer.epsilon, expected_optimizer.epsilon)
+
+
+def test_nested_burnin_launcher_requires_optimizer_horizon_for_batch_override(monkeypatch):
+    monkeypatch.setenv("BURNIN_ARM", "e256")
+    monkeypatch.setenv("BURNIN_BATCH_SIZE", "128")
+
+    with pytest.raises(ValueError, match="BURNIN_OPTIMIZER_TOKENS is required"):
+        launch_nested_burnin.build(version="dev")
 
 
 def test_nested_moe_launcher_rejects_unbalanced_fixed_chain_expert_axis(monkeypatch, tmp_path):
