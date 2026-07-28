@@ -204,8 +204,10 @@ def _stream_hf_snapshot(fs: fsspec.AbstractFileSystem, dest: str, model_id: str,
     logger.info("streaming %d files from HF repo %s into %s", len(filenames), model_id, dest)
     with tempfile.TemporaryDirectory(prefix="hf_stream_") as scratch:
         for filename in filenames:
-            local_path = hf_hub_download(model_id, filename, revision=revision, local_dir=scratch)
             remote_path = f"{dest}/{filename}"
+            if fs.exists(remote_path):
+                continue
+            local_path = hf_hub_download(model_id, filename, revision=revision, local_dir=scratch)
             # Local/posix-backed fsspec filesystems don't auto-create parents; object
             # stores treat this as a no-op since they have no real directories.
             fs.makedirs(remote_path.rsplit("/", 1)[0], exist_ok=True)
