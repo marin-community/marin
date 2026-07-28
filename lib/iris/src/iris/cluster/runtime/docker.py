@@ -31,7 +31,6 @@ from rigging.timing import Timestamp
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.log_keys import STDERR_SOURCE, STDOUT_SOURCE
-from iris.cluster.runtime.distributed_diagnostic import capture_distributed_diagnostic
 from iris.cluster.runtime.env import VENV_PATH, cache_host_dirname, render_setup_steps, write_workdir_files
 from iris.cluster.runtime.profile import (
     PROFILER_WATCHDOG_GRACE_SECONDS,
@@ -610,15 +609,8 @@ exec {quoted_cmd}
                     return int(shutil.disk_usage(path).used / (1024 * 1024))
         return 0
 
-    def profile(
-        self,
-        duration_seconds: int,
-        profile_type: "job_pb2.ProfileType",
-        *,
-        source: str = "",
-        attempt_id: int | None = None,
-    ) -> bytes:
-        """Profile the running process or capture bounded distributed diagnostics."""
+    def profile(self, duration_seconds: int, profile_type: "job_pb2.ProfileType") -> bytes:
+        """Profile the running process using py-spy (CPU), memray (memory), or thread dump."""
         container_id = self._run_container_id
         if not container_id:
             raise RuntimeError("Cannot profile: no running container")
@@ -630,17 +622,12 @@ exec {quoted_cmd}
         )
         if profile_type.HasField("threads"):
             return capture_threads(dispatch, pid="1", include_locals=profile_type.threads.locals)
-        elif profile_type.HasField("distributed"):
-            timeout = profile_type.distributed.collector_timeout_seconds or 5
-            return capture_distributed_diagnostic(
-                dispatch, pid="1", source=source, attempt_id=attempt_id, timeout=timeout
-            )
         elif profile_type.HasField("cpu"):
             return capture_cpu(dispatch, profile_type.cpu, duration_seconds, pid="1")
         elif profile_type.HasField("memory"):
             return capture_memory_attach(dispatch, profile_type.memory, duration_seconds, pid="1")
         else:
-            raise RuntimeError("ProfileType must specify cpu, memory, threads, or distributed profiling")
+            raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
 
     def cleanup(self) -> None:
         """Remove the run container and clean up resources."""

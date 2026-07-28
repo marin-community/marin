@@ -383,7 +383,7 @@ def profile_local_process(duration_seconds: int, profile_type: job_pb2.ProfileTy
         _check_tool("memray")
         return _run_memray_profile(pid, duration_seconds, profile_type.memory)
     else:
-        raise RuntimeError("ProfileType must specify a local cpu, memory, or threads profiler")
+        raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
 
 
 def _run_memray_profile(pid: str, duration_seconds: int, memory_config: job_pb2.MemoryProfile) -> bytes:
@@ -515,18 +515,6 @@ def build_profile_row(
             format=ProfileFormat.RAW.value,
             trigger=trigger.value,
             locals_dump=bool(profile_type.threads.locals),
-            profile_data=profile_data,
-        )
-    if which == "distributed":
-        return IrisProfile(
-            source=source,
-            attempt_id=attempt_id,
-            vm_id=vm_id,
-            captured_at=captured_at,
-            duration_seconds=0,
-            type=ProfileType.DISTRIBUTED.value,
-            format=ProfileFormat.JSON.value,
-            trigger=trigger.value,
             profile_data=profile_data,
         )
     raise ValueError(f"ProfileType has no profiler set: {profile_type!r}")

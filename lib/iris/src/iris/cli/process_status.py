@@ -129,7 +129,7 @@ def logs(ctx, target: str | None, level: str, follow: bool, max_lines: int, subs
     default=None,
     help="RPC target path, e.g. /system/worker/<id> or /alice/job/0 (default: controller)",
 )
-@click.argument("profiler", type=click.Choice(["threads", "cpu", "mem", "distributed"]))
+@click.argument("profiler", type=click.Choice(["threads", "cpu", "mem"]))
 @click.option("--duration", "-d", default=10, help="Profiling duration in seconds")
 @click.option("--output", "-o", default=None, help="Output file path")
 @click.option("--locals", "include_locals", is_flag=True, help="Include local variables in thread dump")
@@ -157,8 +157,6 @@ def profile(
         profile_type = job_pb2.ProfileType(cpu=job_pb2.CpuProfile(format=job_pb2.CpuProfile.SPEEDSCOPE))
     elif profiler == "mem":
         profile_type = job_pb2.ProfileType(memory=job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.FLAMEGRAPH))
-    elif profiler == "distributed":
-        profile_type = job_pb2.ProfileType(distributed=job_pb2.DistributedProfile(collector_timeout_seconds=duration))
     else:
         raise click.ClickException(f"Unknown profiler type: {profiler}")
 
@@ -179,7 +177,7 @@ def profile(
         with open(output, "wb") as f:
             f.write(resp.profile_data)
         click.echo(f"Profile written to {output}")
-    elif profiler in ("threads", "distributed"):
+    elif profiler == "threads":
         click.echo(resp.profile_data.decode("utf-8"))
     else:
         ext = {"cpu": ".speedscope.json", "mem": ".html"}[profiler]

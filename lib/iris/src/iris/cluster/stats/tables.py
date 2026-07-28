@@ -215,7 +215,6 @@ class ProfileType(StrEnum):
     CPU = "cpu"
     MEMORY = "memory"
     THREAD = "thread"
-    DISTRIBUTED = "distributed"
 
 
 class ProfileFormat(StrEnum):
@@ -227,7 +226,6 @@ class ProfileFormat(StrEnum):
     HTML = "html"
     TABLE = "table"
     STATS = "stats"
-    JSON = "json"
 
 
 class ProfileTrigger(StrEnum):

@@ -10,7 +10,8 @@ import pyarrow as pa
 _TASK_STATE_FRESHNESS = timedelta(seconds=90)
 _TRAINING_STALL_AGE = timedelta(minutes=15)
 _INITIALIZING_STALL_AGE = timedelta(minutes=45)
-_QUERY_LOOKBACK = timedelta(hours=1)
+_TASK_STATE_LOOKBACK = timedelta(hours=1)
+_TELLTALE_LOOKBACK = timedelta(days=1)
 
 _STEP_METRIC = "levanter_step"
 _PROGRESS_TIME_METRIC = "levanter_progress_time_seconds"
@@ -27,7 +28,7 @@ def _sql_timestamp(at: datetime) -> str:
 
 def task_state_query(now: datetime) -> str:
     """Return the bounded query for recently running root jobs."""
-    start = _sql_timestamp(now - _QUERY_LOOKBACK)
+    start = _sql_timestamp(now - _TASK_STATE_LOOKBACK)
     fresh = _sql_timestamp(now - _TASK_STATE_FRESHNESS)
     return (
         "WITH history AS ("
@@ -49,7 +50,7 @@ def task_state_query(now: datetime) -> str:
 
 def telltale_query(now: datetime) -> str:
     """Return the bounded query for the latest progress metrics per root job."""
-    start = _sql_timestamp(now - _QUERY_LOOKBACK)
+    start = _sql_timestamp(now - _TELLTALE_LOOKBACK)
     names = f"'{_STEP_METRIC}', '{_PROGRESS_TIME_METRIC}', '{_PHASE_METRIC}'"
     return (
         "WITH recent AS ("
@@ -100,6 +101,8 @@ def training_stall_alert_rows(task_states: pa.Table, telltale_metrics: pa.Table,
         job = str(state["job"])
         running_age = now - _as_utc(state["running_since"])
         metrics = metrics_by_job.get((cluster, job), {})
+        if not metrics:
+            continue
 
         raw_phase = metrics.get(_PHASE_METRIC)
         phase = int(raw_phase) if raw_phase is not None else None
@@ -120,7 +123,7 @@ def training_stall_alert_rows(task_states: pa.Table, telltale_metrics: pa.Table,
             reason = "optimizer_progress_missing"
             value = 1
         elif running_age >= _INITIALIZING_STALL_AGE:
-            reason = "initializing_stale" if metrics else "telltale_missing"
+            reason = "initializing_stale"
             value = 1
         else:
             reason = "training" if is_training else "initializing"

@@ -117,15 +117,7 @@ class FakeContainerHandle:
     def disk_usage_mb(self) -> int:
         return 0
 
-    def profile(
-        self,
-        duration_seconds: int,
-        profile_type: job_pb2.ProfileType,
-        *,
-        source: str = "",
-        attempt_id: int | None = None,
-    ) -> bytes:
-        del duration_seconds, profile_type, source, attempt_id
+    def profile(self, duration_seconds: int, profile_type: job_pb2.ProfileType) -> bytes:
         raise RuntimeError("profiling not supported in FakeContainerHandle")
 
     def cleanup(self) -> None:

@@ -197,32 +197,37 @@ def test_health_lists_configured_clusters():
 def test_training_stall_alerts_distinguish_stale_missing_and_healthy_progress():
     now = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
     task_states = finelog_result(
-        cluster=["cw-a", "cw-a", "cw-b", "cw-b"],
-        job=["/u/stale", "/u/missing", "/u/healthy", "/u/starting"],
-        state_at=[now] * 4,
+        cluster=["cw-a", "cw-a", "cw-b", "cw-b", "cw-b"],
+        job=["/u/stale", "/u/initializing", "/u/healthy", "/u/starting", "/u/not-levanter"],
+        state_at=[now] * 5,
         running_since=[
             datetime(2026, 7, 28, 11, 0, tzinfo=UTC),
             datetime(2026, 7, 28, 11, 0, tzinfo=UTC),
             datetime(2026, 7, 28, 11, 0, tzinfo=UTC),
             datetime(2026, 7, 28, 11, 30, tzinfo=UTC),
+            datetime(2026, 7, 28, 11, 0, tzinfo=UTC),
         ],
     )
     telltale_metrics = finelog_result(
-        cluster=["cw-a", "cw-a", "cw-b", "cw-b"],
-        job=["/u/stale", "/u/stale", "/u/healthy", "/u/healthy"],
+        cluster=["cw-a", "cw-a", "cw-a", "cw-b", "cw-b", "cw-b"],
+        job=["/u/stale", "/u/stale", "/u/initializing", "/u/healthy", "/u/healthy", "/u/starting"],
         name=[
             "levanter_phase",
             "levanter_progress_time_seconds",
             "levanter_phase",
+            "levanter_phase",
             "levanter_progress_time_seconds",
+            "levanter_phase",
         ],
         value=[
             1.0,
             datetime(2026, 7, 28, 11, 30, tzinfo=UTC).timestamp(),
+            0.0,
             1.0,
             datetime(2026, 7, 28, 11, 59, tzinfo=UTC).timestamp(),
+            0.0,
         ],
-        ts=[now] * 4,
+        ts=[now] * 6,
     )
 
     assert training_stall_alert_rows(task_states, telltale_metrics, now) == [
@@ -235,9 +240,9 @@ def test_training_stall_alerts_distinguish_stale_missing_and_healthy_progress():
         },
         {
             "cluster": "cw-a",
-            "job": "/u/missing",
-            "phase": "unknown",
-            "reason": "telltale_missing",
+            "job": "/u/initializing",
+            "phase": "initializing",
+            "reason": "initializing_stale",
             "value": 1,
         },
         {
@@ -250,7 +255,7 @@ def test_training_stall_alerts_distinguish_stale_missing_and_healthy_progress():
         {
             "cluster": "cw-b",
             "job": "/u/starting",
-            "phase": "unknown",
+            "phase": "initializing",
             "reason": "initializing",
             "value": 0,
         },

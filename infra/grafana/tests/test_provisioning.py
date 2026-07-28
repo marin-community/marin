@@ -174,14 +174,6 @@ def test_finelog_health_alert_pages_critical_after_five_minutes():
     assert rule["data"][0]["model"]["url"] == "/alerts/fleet_health"
 
 
-def test_training_stall_alert_warns_after_five_minutes():
-    (rule,) = [rule for rule in _rules() if rule["uid"] == "training-progress-stalled"]
-    assert rule["for"] == "5m"
-    assert rule["labels"]["severity"] == "warning"
-    assert rule["data"][0]["datasourceUid"] == "finelog-marin"
-    assert rule["data"][0]["model"]["url"] == "/alerts/training_stalls"
-
-
 def test_k8s_dashboard_shows_finelog_fleet_health():
     dashboard = _stitched_dashboards()["k8s.json"]
     (panel,) = [

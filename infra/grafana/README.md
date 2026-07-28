@@ -206,9 +206,10 @@ nonterminal without finalizers for five minutes after the bridge's two-minute
 overdue threshold, and a GB200 rack with fewer than 16 trays Ready for five
 minutes (the NVL72 rack spec is 18; a floor rather than an outright outage —
 see `gpu_racks` above). A warning-only training rule joins fresh running
-`iris.task_state` rows to Telltale progress: it waits 15 minutes for training
-progress or 45 minutes for initialization/missing Telltale, then remains pending
-for five minutes. It does not require task-to-node GPU attribution. The stuck-pod
+`iris.task_state` rows to root jobs with Levanter Telltale metrics in the prior
+24 hours: it waits 15 minutes for training progress or 45 minutes for
+initialization, then remains pending for five minutes. It does not require
+task-to-node GPU attribution. The stuck-pod
 rule groups by node and links the cordon-first
 recovery skill; terminal, unbound, and finalizer-held pods stay dashboard-only.
 Other workload-tier signals (gated pods, Kueue backlog, workload crashloops) are

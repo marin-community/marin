@@ -451,12 +451,7 @@ class TaskAttempt:
         """
         if not self._container_handle:
             raise ValueError(f"Task {self.task_id} has no container handle")
-        return self._container_handle.profile(
-            duration_seconds,
-            profile_type,
-            source=self.task_id.to_wire(),
-            attempt_id=self.attempt_id,
-        )
+        return self._container_handle.profile(duration_seconds, profile_type)
 
     def exec_in_container(
         self, command: list[str], timeout_seconds: int = 60

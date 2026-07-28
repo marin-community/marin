@@ -210,23 +210,15 @@ class ThreadsProfile(_message.Message):
     locals: bool
     def __init__(self, locals: _Optional[bool] = ...) -> None: ...
 
-class DistributedProfile(_message.Message):
-    __slots__ = ("collector_timeout_seconds",)
-    COLLECTOR_TIMEOUT_SECONDS_FIELD_NUMBER: _ClassVar[int]
-    collector_timeout_seconds: int
-    def __init__(self, collector_timeout_seconds: _Optional[int] = ...) -> None: ...
-
 class ProfileType(_message.Message):
-    __slots__ = ("cpu", "memory", "threads", "distributed")
+    __slots__ = ("cpu", "memory", "threads")
     CPU_FIELD_NUMBER: _ClassVar[int]
     MEMORY_FIELD_NUMBER: _ClassVar[int]
     THREADS_FIELD_NUMBER: _ClassVar[int]
-    DISTRIBUTED_FIELD_NUMBER: _ClassVar[int]
     cpu: CpuProfile
     memory: MemoryProfile
     threads: ThreadsProfile
-    distributed: DistributedProfile
-    def __init__(self, cpu: _Optional[_Union[CpuProfile, _Mapping]] = ..., memory: _Optional[_Union[MemoryProfile, _Mapping]] = ..., threads: _Optional[_Union[ThreadsProfile, _Mapping]] = ..., distributed: _Optional[_Union[DistributedProfile, _Mapping]] = ...) -> None: ...
+    def __init__(self, cpu: _Optional[_Union[CpuProfile, _Mapping]] = ..., memory: _Optional[_Union[MemoryProfile, _Mapping]] = ..., threads: _Optional[_Union[ThreadsProfile, _Mapping]] = ...) -> None: ...
 
 class ProfileTaskRequest(_message.Message):
     __slots__ = ("target", "duration_seconds", "profile_type")

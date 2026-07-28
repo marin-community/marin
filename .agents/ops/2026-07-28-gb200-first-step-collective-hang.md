@@ -13,7 +13,7 @@ issue: https://github.com/marin-community/marin/issues/7691
 - GPUs remained at 100 percent utilization but drew about 190-235 W against a 1200 W limit; InfiniBand carried only keepalives.
 - NCCL RAS initially reported healthy communicators, then stopped answering live status queries.
 - Mixed `nvidia-nccl-cu12` and `nvidia-nccl-cu13` installs shared one path, allowing different CUDA-major NCCL libraries to win by install order.
-- Iris now restores CUDA 13 cuDNN and NCCL after GPU dependency synchronization and retains bounded diagnostic evidence before an operator takes action.
+- Iris now restores CUDA 13 cuDNN and NCCL after GPU dependency synchronization, publishes power-limit and training-progress metrics, and warns on stale optimizer progress.
 
 ## Original problem report
 
@@ -29,8 +29,8 @@ Two 8-node x 4-GPU JAX gangs wedged before optimizer update zero. Python main th
 ## User course corrections
 
 - The request required a standalone Iris/Marin change from main, not the nested-model experiment branch, preserving the diagnostic work as independent infrastructure.
-- The request prohibited a public Telltale callback and required the authenticated `ProfileTask` path with durable `iris.profile` persistence.
 - The request prohibited automatic kicks or restarts, preserving the live evidence for operators.
+- Review found the first `ProfileTask` collector too coupled to worker-side embedded scripts. It moved to a separate Loom session for a child-side module design.
 
 ## Root cause
 
@@ -38,14 +38,19 @@ The task environment synchronized `nvidia-nccl-cu12==2.28.9` and `nvidia-nccl-cu
 
 ## Fix
 
-`lib/iris/src/iris/cluster/setup_scripts.py` reinstalls the resolved CUDA 13 cuDNN and NCCL wheels last when present. `iris process profile distributed` records a bounded, partial-result NCCL/CUDA bundle through the existing authenticated profile path.
+`lib/iris/src/iris/cluster/setup_scripts.py` reinstalls the resolved CUDA 13 cuDNN and NCCL wheels last when present. GPU jobs enable NCCL RAS and targeted INFO subsystems at process startup. Levanter progress and Iris GPU power-limit metrics feed a warning-only Grafana stalled-training rule.
+
+## Follow-up
+
+The [child-side distributed diagnostic session](https://loom.rjp.io/s/m07nj02f) owns the authenticated on-demand capture design. It must avoid embedded worker-side scripts and prove the task-namespace execution path before opening a separate PR.
 
 ## How OPS.md could have shortened this
 
-- Add the bounded distributed profile command to the Process Inspection & Profiling examples, with the instruction to capture it before restarting a stalled gang.
+- Add a bounded distributed profile command after the child-side collector has a tested task-namespace execution contract.
 - Document high GPU utilization with a low power-limit ratio as a collective-spin clue, not proof of a collective fault.
 
 ## Artifacts
 
 - `lib/iris/OPS.md`
 - `docs/ops/training-stall-alert-contract.md`
+- [Loom follow-up session](https://loom.rjp.io/s/m07nj02f)
