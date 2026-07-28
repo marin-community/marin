@@ -164,34 +164,31 @@ allowed slice is eligible for every exp166 batch size. Do not reject a target
 because the slice is larger than the global batch; excess chips are assigned to
 tensor parallelism.
 
-Eligible hardware is deliberately restricted:
+The eligible grid is fixed and stated here rather than discovered at runtime.
+These region/family pairings are stable; treat a change to them as an operator
+decision, not something to infer from a cluster read.
 
-```yaml
-tpu_grid:
-  v6e:
-    chips: [64, 128, 256]
-  v5litepod:
-    # v5e Iris topology names count chips.
-    chips: [64, 128, 256]
-  v5p:
-    # v5p-N counts cores, or N/2 chips. v5p-64 is the 32-chip floor.
-    cores: [64, 128, 256, 512, 1024, 2048]
-    allow_larger_if_advertised: true
-    # Operator decision: excluded from placement pending a throughput
-    # measurement for this model. Re-enable by operator instruction only.
-    enabled: false
-```
+| family | slices (chips) | regions |
+|---|---|---|
+| `v6e` | 32, 64, 128, 256 | europe-west4, us-east1, us-east5 |
+| `v5litepod` (v5e) | 32, 64, 128, 256 | europe-west4, us-west4 |
+| `v5p` | *disabled* | us-central1, us-east5 |
 
-Nothing smaller is allowed. Enabled families are peers: rank concrete
-region/slice targets using observed throughput and observed scheduling outcomes,
-not a static family preference.
+`v5litepod-N` counts chips; `v5p-N` counts cores, so `v5p-64` is 32 chips. v5p
+is excluded from placement by operator decision pending a throughput measurement
+for this model — re-enable only on operator instruction.
 
-There is no static region allowlist. Discover every region currently advertised
-by the primary Marin cluster for an eligible slice and keep the full grid in the
-ledger. Diversify initial targets across regions and, when practical, TPU
-families so one capacity failure mode does not stall the entire race. Race width
-is bounded by the eligible regions for that trial; see **Region Locality** for
-why `exp117-init` trials are placeable in fewer regions than `scratch` trials.
+**32 chips is the floor.** Below it a bs128 trial needs per-device parallelism
+above 4 and the calibrator starts trading throughput for gradient accumulation.
+256 is the ceiling.
+
+So four regions are placeable: **europe-west4** serves both families,
+**us-east1** and **us-east5** serve v6e only, **us-west4** serves v5e only.
+Enabled families are peers — rank targets by observed throughput and scheduling
+outcomes, never by a static family preference. Diversify initial targets across
+regions and, when practical, families, so one capacity failure mode cannot stall
+a whole race. Race width is bounded by the eligible regions for that trial; see
+**Region Locality** for why `exp117-init` trials may be placeable in fewer.
 
 ### Capacity Cannot Be Queried
 
@@ -316,7 +313,7 @@ those are plumbing. Say what happened, not how it was invoked.
 **Trials** 0 complete · 1 training · 11 pending · 12/12 races unresolved
 
 ### Placement
-| region | v6e-64 | v6e-128 | v6e-256 | v5e-64 | v5e-128 | chips |
+| region | v6e-32 | v6e-64 | v6e-128 | v6e-256 | v5e-32 | v5e-64 | v5e-128 | v5e-256 | chips |
 
 ### Training now
 | trial | region · slice | progress | eval | tok/s |

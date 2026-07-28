@@ -11,7 +11,7 @@ exp117 model subtree into a fresh optimizer and exp166 schedule at step 0.
 
 ``TRIAL`` identifies a logical trial and excludes region. ``REGION`` is included in the
 W&B run and suggested Iris job identities so several regional executions can race without
-changing trial identity. ``TPU`` is execution-only and must be a 64-256 chip v5e/v6e slice
+changing trial identity. ``TPU`` is execution-only and must be a 32-256 chip v5e/v6e slice
 or a v5p slice with at least 32 chips (``v5p-64`` or larger); which of those the sweep may
 actually be placed on is an operator decision recorded in ``exp166_policy.md``.
 
@@ -304,17 +304,22 @@ def smoke_steps() -> int:
 
 
 def validate_tpu(tpu: str, *, allow_smaller: bool = False) -> None:
-    """Enforce the large-slice floor while allowing every region."""
+    """Enforce the slice-size floor while allowing every region.
+
+    The floor is 32 chips across all families. Below that a bs128 trial needs
+    per-device parallelism above 4 and the calibrator starts spending memory on
+    gradient accumulation instead of throughput.
+    """
     family = tpu_family(tpu)
     chips = get_tpu_topology(tpu).chip_count
     if allow_smaller and family in CORRECTION_FACTORS:
         return
-    if family in {"v5e", "v6e"} and 64 <= chips <= 256:
+    if family in {"v5e", "v6e"} and 32 <= chips <= 256:
         return
     if family == "v5p" and chips >= 32:
         return
     message = f"unsupported TPU {tpu!r} ({family=}, {chips=}): "
-    message += "use 64-256 chip v5e/v6e or v5p-64+ (at least 32 chips)"
+    message += "use 32-256 chip v5e/v6e or v5p-64+ (at least 32 chips)"
     raise SystemExit(message)
 
 
