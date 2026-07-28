@@ -27,8 +27,8 @@ from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, Float, Int
 
 from levanter.grug._moe.common import (
+    DEFAULT_EP_CAPACITY_FACTOR as DEFAULT_EP_CAPACITY_FACTOR,
     default_moe_expert_pspecs,
-    _DEFAULT_EP_CAPACITY_FACTOR,
     _EP_MOE_IMPLEMENTATIONS,
     _init_weight,
     MOE_REMAT_SAVE_NAMES as MOE_REMAT_SAVE_NAMES,
@@ -86,7 +86,7 @@ class MoEExpertMlp(eqx.Module):
         key: jax.Array,
         implementation: MoeImplementation | str | None = None,
         activation: MoeActivation = ActivationFunctionEnum.silu,
-        capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
+        capacity_factor: float = DEFAULT_EP_CAPACITY_FACTOR,
         pspecs: MoEExpertMlpPspecs | None = None,
     ) -> "MoEExpertMlp":
         if pspecs is None:
@@ -174,7 +174,7 @@ def moe_mlp(
     activation: MoeActivation = ActivationFunctionEnum.silu,
     implementation: MoeImplementation | str | None = None,
     mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh | None = None,
-    capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
+    capacity_factor: float = DEFAULT_EP_CAPACITY_FACTOR,
     report_capacity_overflow: bool = False,
     w13_pre0: Float[Array, "per D I2"] | None = None,
     w2_pre0: Float[Array, "per I D"] | None = None,
@@ -473,6 +473,7 @@ def _moe_mlp_chunked_no_ep(
 
 
 __all__ = [
+    "DEFAULT_EP_CAPACITY_FACTOR",
     "MoeActivation",
     "MoEExpertMlp",
     "MoEExpertMlpPspecs",

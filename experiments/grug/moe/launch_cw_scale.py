@@ -60,6 +60,7 @@ from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import BlockShuffleConfig
 from levanter.grug._moe.common import resolve_moe_implementation
 from levanter.grug.attention import GrugAttentionImplementation
+from levanter.grug.grug_moe import DEFAULT_EP_CAPACITY_FACTOR
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
@@ -150,7 +151,7 @@ def build_scale_model() -> GrugModelConfig:
         shared_expert_intermediate_dim=env_int("SCALE_SHARED_INTERMEDIATE", hidden_dim),
         num_shared_experts=env_int("SCALE_NUM_SHARED_EXPERTS", 1),
         sliding_window=env_int("SCALE_SLIDING_WINDOW", 0),
-        capacity_factor=env_float("SCALE_CAPACITY_FACTOR", 1.0),
+        capacity_factor=env_float("SCALE_CAPACITY_FACTOR", DEFAULT_EP_CAPACITY_FACTOR),
         gated_norm=os.environ.get("SCALE_GATED_NORM") == "1",
         attn_gate=os.environ.get("SCALE_ATTN_GATE") == "1",
         xsa=os.environ.get("SCALE_XSA") == "1",

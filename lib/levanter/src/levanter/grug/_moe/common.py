@@ -16,8 +16,8 @@ from jaxtyping import Array, Float, Int, Key
 
 from levanter.utils.activation import ActivationFunctionEnum
 
-_DEFAULT_EP_CAPACITY_FACTOR = 1.25
-# #2710 used 1.25 as the practical EP ring default to avoid over/under-packing.
+DEFAULT_EP_CAPACITY_FACTOR = 1.0
+# Capacity equal to the mean assignment load is the canonical Grug MoE default.
 
 PspecAxis: TypeAlias = str | tuple[str, ...] | None
 MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Array]

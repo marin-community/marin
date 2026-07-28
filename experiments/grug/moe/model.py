@@ -35,6 +35,7 @@ from levanter.grug.attention import (
     fa4_cute_segment_bounds,
 )
 from levanter.grug.grug_moe import (
+    DEFAULT_EP_CAPACITY_FACTOR,
     MOE_REMAT_SAVE_NAMES,
     MoeActivation,
     MoEExpertMlp,
@@ -45,7 +46,6 @@ from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pembed_vocab, Pfsdp, Plm_head, unshard
 from levanter.utils.activation import ActivationFunctionEnum
 
-_DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _ROUTING_RENORM_SUM = 2.5
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -140,7 +140,7 @@ class GrugModelConfig:
     scan_unroll: int = 1
     # Expert-parallel capacity factor: per-(sender, expert) bucket size is
     # capacity_factor * assignments_per_shard / num_experts. 1.0 sets capacity to the mean load.
-    capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR
+    capacity_factor: float = DEFAULT_EP_CAPACITY_FACTOR
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.3
