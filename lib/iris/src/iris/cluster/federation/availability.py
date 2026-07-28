@@ -53,6 +53,16 @@ from iris.cluster.types import JobName
 
 logger = logging.getLogger(__name__)
 
+# Semantics version of the capacity metric a peer reports on
+# ``BackendSummary.availability``. Bump when the meaning of the amounts (units,
+# tokens, aggregation) changes; a parent reading a NEWER version than it knows treats
+# the backend as supplying no metric rather than misreading it.
+#
+# v1: free amounts only, computed from every non-terminal pod.
+# v2: free amounts count only capacity admitted work holds (queued, unadmitted work
+#     no longer subtracts), plus the ``held_by_band`` split of the held remainder.
+AVAILABILITY_METRIC_VERSION = 2
+
 
 @dataclass(frozen=True)
 class BackendAvailability:

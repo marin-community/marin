@@ -31,12 +31,16 @@ def _pod(
     phase: str = "Running",
     node: str = "n1",
     priority_class: str = IRIS_PRIORITY_CLASS_INTERACTIVE,
+    gated: bool = False,
 ) -> dict:
+    """A managed pod. ``gated`` models one Kueue has not admitted (queued, holds nothing)."""
     spec: dict = {"containers": [{"resources": {"requests": {_GPU: str(gpus)}}}]}
     if node:
         spec["nodeName"] = node
     if priority_class:
         spec["priorityClassName"] = priority_class
+    if gated:
+        spec["schedulingGates"] = [{"name": "kueue.x-k8s.io/admission"}]
     return {"metadata": {"name": name}, "status": {"phase": phase}, "spec": spec}
 
 
@@ -46,7 +50,7 @@ def _state(nodes: list[dict], pods: list[dict]) -> ClusterState:
     return state
 
 
-def test_gpu_capacity_is_allocatable_minus_bound_requests():
+def test_gpu_capacity_is_allocatable_minus_admitted_requests():
     state = _state([_node("n1", 8), _node("n2", 8)], [_pod("a", 8), _pod("b", 2, node="n2")])
     capacity = state.gpu_capacity(_PRIORITY_CLASSES)
     assert (capacity.free, capacity.total) == (6, 16)  # 16 allocatable - 10 held
@@ -62,13 +66,22 @@ def test_gpu_capacity_ignores_terminal_pods():
     assert (capacity.free, capacity.total) == (6, 8)
 
 
-def test_gpu_capacity_ignores_unbound_pods():
-    # A queued (Kueue-gated) pod holds no GPU: it must not suppress the free count,
-    # which is what kept federated jobs out of a peer whose queue was long.
-    state = _state([_node("n1", 8)], [_pod("queued", 8, phase="Pending", node=""), _pod("live", 2)])
+def test_gpu_capacity_ignores_pods_kueue_has_not_admitted():
+    # A gated pod is still in the peer's queue and holds no GPU: it must not suppress
+    # the free count, which is what kept federated jobs out of a peer with a long queue.
+    state = _state([_node("n1", 8)], [_pod("queued", 8, phase="Pending", node="", gated=True), _pod("live", 2)])
     capacity = state.gpu_capacity(_PRIORITY_CLASSES)
     assert (capacity.free, capacity.total) == (6, 8)
     assert capacity.held_by_band == {job_pb2.PRIORITY_BAND_INTERACTIVE: 2}
+
+
+def test_gpu_capacity_counts_admitted_pods_before_they_bind():
+    # Kueue released the gate, so its quota is reserved even while the pod waits for a
+    # node. Reporting those GPUs free would attract handoffs the peer cannot admit.
+    state = _state([_node("n1", 8)], [_pod("admitted", 8, phase="Pending", node="")])
+    capacity = state.gpu_capacity(_PRIORITY_CLASSES)
+    assert (capacity.free, capacity.total) == (0, 8)
+    assert capacity.held_by_band == {job_pb2.PRIORITY_BAND_INTERACTIVE: 8}
 
 
 def test_gpu_capacity_splits_held_gpus_by_priority_band():
@@ -90,7 +103,7 @@ def test_gpu_capacity_splits_held_gpus_by_priority_band():
 
 
 def test_gpu_capacity_never_negative_when_oversubscribed():
-    # Bound requests can exceed allocatable transiently; the free hint floors at 0
+    # Admitted requests can exceed allocatable transiently; the free hint floors at 0
     # while the total still reports allocatable.
     state = _state([_node("n1", 8)], [_pod("a", 8), _pod("b", 8)])
     assert state.gpu_capacity(_PRIORITY_CLASSES).free == 0

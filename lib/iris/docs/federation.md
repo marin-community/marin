@@ -61,8 +61,9 @@ Three properties keep placement honest without pretending to be exact:
 - **Never summed across backends.** A job pins to one backend, so 6 free on one backend plus 4
   on another does not host an 8-GPU job. Availability is evaluated per backend.
 - **Queued work at the peer does not suppress its numbers.** The free count subtracts only what
-  bound (scheduled) work holds. A pod waiting in the peer's queue holds no chips, so a long
-  queue there never makes the peer look full to the parent.
+  *admitted* work holds — on Kubernetes, work whose Kueue scheduling gate is released, bound to
+  a node or not. A pod still waiting in the peer's queue holds no chips, so a long queue there
+  never makes the peer look full to the parent.
 - **A reservation ledger bounds cross-tick over-assignment.** The tick runs on every submit
   wake — far more often than the 30s heartbeat — so a naive per-tick read would re-spend the
   same advertised number every tick. The ledger records capacity already promoted against a

@@ -40,7 +40,7 @@ from iris.cluster.controller.scheduling.scheduler import (
     worker_snapshot_from_row,
 )
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
-from iris.cluster.controller.service import AVAILABILITY_METRIC_VERSION, ControllerServiceImpl
+from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId, WorkerUsability
@@ -1973,7 +1973,7 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
     # UNSET (absent) for one that returns None.
     assert summaries["gcp"]["availability"]["amounts"] == {"v6e-16": "32"}  # int64 JSON-encodes as a string
     assert summaries["gcp"]["availability"]["totalAmounts"] == {"v6e-16": "64"}
-    assert summaries["gcp"]["availability"]["version"] == AVAILABILITY_METRIC_VERSION
+    assert summaries["gcp"]["availability"]["version"] == 2  # wire contract; not the constant
     # Held capacity is reported per priority band so a parent can see what a
     # higher-priority job would reclaim there.
     assert summaries["gcp"]["availability"]["heldByBand"] == [

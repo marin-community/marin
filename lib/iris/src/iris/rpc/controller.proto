@@ -724,11 +724,11 @@ message Controller {
   }
 
   message ResourceAvailability {
-    // Metric-semantics version. A parent that does not recognize the version treats
+    // Metric-semantics version. A parent reading a version newer than it knows treats
     // the availability as unknown rather than trusting the amounts.
     //
-    // v2: `amounts` counts only capacity admitted work actually holds (a queued,
-    // unplaced workload no longer subtracts from it) and `held_by_band` splits the
+    // v2: `amounts` counts only capacity admitted work actually holds (work still
+    // queued for admission no longer subtracts from it) and `held_by_band` splits the
     // held remainder by priority band.
     uint32 version = 1;
     // When the serving peer computed these amounts, ms since epoch. The parent's

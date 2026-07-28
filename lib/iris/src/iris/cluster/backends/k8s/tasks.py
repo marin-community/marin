@@ -1787,15 +1787,17 @@ class ClusterState:
 
         Best-effort federation availability hint inferred from the last periodic
         kubectl sync (no extra kubectl call): total ``nvidia.com/gpu`` allocatable
-        across nodes, with the free count subtracting what *bound* pods request.
+        across nodes, with the free count subtracting what *admitted* pods request.
         Counts GPUs on all nodes (GPU nodes are commonly tainted, and a taint a GPU
-        pod tolerates does not make the GPU unavailable). A pod with no
-        ``spec.nodeName`` is queued (Kueue-gated or unschedulable) and holds no GPU,
-        so it neither reduces the free count nor appears in the band split — the
-        federation gate would otherwise read a cluster full of queued work as having
-        nothing free.
+        pod tolerates does not make the GPU unavailable).
 
-        ``held_by_band`` attributes each bound pod's request to the ``PriorityBand``
+        Admitted means Kueue released the pod's scheduling gate — it has reserved the
+        quota, whether or not the pod is bound to a node yet. A still-gated pod is
+        waiting in the peer's queue and holds nothing, so it neither reduces the free
+        count nor appears in the band split; counting it made a cluster with a long
+        queue advertise nothing free and kept federated work out of it.
+
+        ``held_by_band`` attributes each admitted pod's request to the ``PriorityBand``
         whose configured PriorityClass it carries, so a parent can see which of the
         held GPUs a higher-priority job would reclaim. A pod carrying no known class
         is dropped from the split (still counted as held) — it cannot be preempted on
@@ -1817,7 +1819,7 @@ class ClusterState:
         for pod in pods:
             if pod.get("status", {}).get("phase", "") in ("Succeeded", "Failed"):
                 continue
-            if not pod.get("spec", {}).get("nodeName"):
+            if pod.get("spec", {}).get("schedulingGates"):  # not admitted: holds no capacity
                 continue
             request = _pod_gpu_request(pod)
             if request <= 0:

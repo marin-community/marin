@@ -78,6 +78,7 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerLiveness
+from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.router import RoutingRequest, SubmitDisposition, SubmitPlan
@@ -172,13 +173,6 @@ _MERGED_AUTOSCALER_ACTIONS = 100
 
 # Max unroutable job sample entries returned by ListBackends.
 _UNROUTABLE_SAMPLE_SIZE = 10
-
-# Semantics version of BackendSummary.availability (free-capacity metric). A peer
-# reading an unrecognized version treats the amounts as unknown. Bump when the
-# meaning of the amounts (units, tokens, aggregation) changes. v2 counts only
-# capacity admitted work holds (queued, unplaced work no longer subtracts from the
-# free amount) and splits the held remainder by priority band.
-AVAILABILITY_METRIC_VERSION = 2
 
 # Shown when a local_admin (CIDR/loopback) caller tries to federate a job — a federated
 # job must carry an accountable authenticated user.

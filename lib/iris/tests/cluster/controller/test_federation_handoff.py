@@ -28,11 +28,11 @@ from iris.cluster.controller.federation_store import ControllerFederationStore
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.service import (
-    AVAILABILITY_METRIC_VERSION,
     WORKDIR_FILE_OFFLOAD_THRESHOLD,
     ControllerServiceImpl,
     _peer_status,
 )
+from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec, HandoffState
@@ -821,12 +821,12 @@ def test_a_job_the_peer_has_no_room_for_waits_in_the_queue_unassigned(tmp_path, 
 
 
 def test_an_interactive_job_is_delegated_to_a_peer_whose_gpus_are_held_by_batch_work(tmp_path, log_client):
-    """A peer with zero free chips still hosts work it can preempt for.
+    """A peer with zero free chips still receives work it outranks.
 
-    The peer reports 0 free and 8 held at PRIORITY_BAND_BATCH. An interactive job
-    outranks that band, so the pass places it and the handoff is delivered — the peer's
-    own scheduler then evicts the batch work. Without the band split this job would
-    queue at the parent forever.
+    The peer reports 0 free and 8 held at PRIORITY_BAND_BATCH, so the pass places an
+    interactive job and the handoff is delivered; without the band split it would queue
+    at the parent forever. Delivery is the boundary this test owns — whether the peer's
+    Kueue then evicts the batch work is the peer's decision, not the parent's.
     """
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
