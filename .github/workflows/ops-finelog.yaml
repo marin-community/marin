@@ -83,5 +83,5 @@ jobs:
           gcp-project-id: ${{ env.GCP_PROJECT }}
           uv-sync-args: "--all-packages --extra deploy --frozen"
           config-map: >-
-            ${{ format('{"finelog:deploy_generation": {"value": "{0}"}}',
+            ${{ format('{{"finelog:deploy_generation": {{"value": "{0}"}}}}',
             inputs.deploy_generation || github.run_id) }}

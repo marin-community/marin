@@ -146,4 +146,7 @@ deployment:
     result = CliRunner().invoke(cli, ["deploy", "up", "--no-build", str(config_path)])
 
     assert result.exit_code == 1
-    assert result.output.startswith("Error:")
+    assert (
+        result.output == "Error: Kubernetes workload resources are managed by the infra/finelog Pulumi project; "
+        "use `pulumi preview` and `pulumi up` from that directory\n"
+    )
