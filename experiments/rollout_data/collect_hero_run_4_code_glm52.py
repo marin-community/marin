@@ -97,6 +97,8 @@ VLLM_ENDPOINT = "glm52-openai"
 RAY_ENDPOINT = "glm52-ray"
 DEFAULT_MAX_MODEL_LEN = 64 * 1024
 DEFAULT_MAX_NUM_SEQS = 12
+DEFAULT_KV_CACHE_DTYPE = "auto"
+DEFAULT_DECODE_CONTEXT_PARALLEL_SIZE = 1
 DEFAULT_MAX_TOKENS = 16 * 1024
 DEFAULT_TEMPERATURE = 1.0
 DEFAULT_TOP_P = 0.95
@@ -213,6 +215,8 @@ class RunConfig:
     concurrency: int
     max_model_len: int
     max_num_seqs: int
+    kv_cache_dtype: str
+    decode_context_parallel_size: int
     gpu_memory_utilization: float
     temperature: float
     top_p: float
@@ -385,6 +389,8 @@ def _run_config(
         concurrency=collection.concurrency,
         max_model_len=server.max_model_len,
         max_num_seqs=server.max_num_seqs,
+        kv_cache_dtype=server.kv_cache_dtype,
+        decode_context_parallel_size=server.decode_context_parallel_size,
         gpu_memory_utilization=GPU_MEMORY_UTILIZATION,
         temperature=sampling.temperature,
         top_p=sampling.top_p,
@@ -585,6 +591,12 @@ def main() -> None:
     run_parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
     run_parser.add_argument("--max-model-len", type=int, default=DEFAULT_MAX_MODEL_LEN)
     run_parser.add_argument("--max-num-seqs", type=int, default=DEFAULT_MAX_NUM_SEQS)
+    run_parser.add_argument("--kv-cache-dtype", default=DEFAULT_KV_CACHE_DTYPE)
+    run_parser.add_argument(
+        "--decode-context-parallel-size",
+        type=int,
+        default=DEFAULT_DECODE_CONTEXT_PARALLEL_SIZE,
+    )
     run_parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
     run_parser.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE)
     run_parser.add_argument("--top-p", type=float, default=DEFAULT_TOP_P)
@@ -594,7 +606,15 @@ def main() -> None:
         prepare_model(StoragePath(args.output_path))
         return
 
-    for name in ("num_shards", "chunk_size", "concurrency", "max_model_len", "max_num_seqs", "max_tokens"):
+    for name in (
+        "num_shards",
+        "chunk_size",
+        "concurrency",
+        "max_model_len",
+        "max_num_seqs",
+        "decode_context_parallel_size",
+        "max_tokens",
+    ):
         _validate_positive(parser, f"--{name.replace('_', '-')}", getattr(args, name))
     if args.max_records is not None:
         _validate_positive(parser, "--max-records", args.max_records)
@@ -615,7 +635,12 @@ def main() -> None:
             chunk_size=args.chunk_size,
             concurrency=args.concurrency,
         ),
-        ServerConfig(max_model_len=args.max_model_len, max_num_seqs=args.max_num_seqs),
+        ServerConfig(
+            max_model_len=args.max_model_len,
+            max_num_seqs=args.max_num_seqs,
+            kv_cache_dtype=args.kv_cache_dtype,
+            decode_context_parallel_size=args.decode_context_parallel_size,
+        ),
         SamplingConfig(temperature=args.temperature, top_p=args.top_p, max_tokens=args.max_tokens),
     )
 

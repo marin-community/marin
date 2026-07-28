@@ -38,6 +38,8 @@ HTTP_PORT = "http"
 class ServerConfig:
     max_model_len: int
     max_num_seqs: int
+    kv_cache_dtype: str = "auto"
+    decode_context_parallel_size: int = 1
 
 
 @dataclass(frozen=True)
@@ -160,6 +162,10 @@ def _run_vllm(
             str(launch.server.max_model_len),
             "--max-num-seqs",
             str(launch.server.max_num_seqs),
+            "--kv-cache-dtype",
+            launch.server.kv_cache_dtype,
+            "--decode-context-parallel-size",
+            str(launch.server.decode_context_parallel_size),
             "--gpu-memory-utilization",
             str(GPU_MEMORY_UTILIZATION),
             "--trust-remote-code",
