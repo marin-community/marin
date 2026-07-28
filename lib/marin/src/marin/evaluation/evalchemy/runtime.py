@@ -7,8 +7,9 @@ Evalchemy runs from an isolated uvx environment on the standard Iris task image.
 revision identifies the CLI, graders, and benchmark data without requiring a separate task image.
 """
 
-EVALCHEMY_COMMIT = "adf37c2878906870f7c7d8845f72a25649513bed"
-EVALCHEMY_REQUIREMENT = f"git+https://github.com/marin-community/evalchemy.git@{EVALCHEMY_COMMIT}"
+from marin.external_dependencies import EVALCHEMY
+
+EVALCHEMY_REQUIREMENT = EVALCHEMY.requirement()
 
 # Evalchemy's current dependency graph has Python 3.12 wheels. Letting uvx select Python 3.13 makes
 # pandas 2.2.2 build from source during a cold start.
@@ -37,6 +38,4 @@ EVALCHEMY_EXTRA_PACKAGES = ("s3fs", "gcsfs", _CPU_TORCH_X86_64, _CPU_TORCH_AARCH
 
 def evalchemy_requirement(extras: tuple[str, ...] = ()) -> str:
     """Pin benchmark extras to the same immutable Evalchemy revision as the endpoint core."""
-    if not extras:
-        return EVALCHEMY_REQUIREMENT
-    return f"evalchemy[{','.join(extras)}] @ {EVALCHEMY_REQUIREMENT}"
+    return EVALCHEMY.requirement(extras)

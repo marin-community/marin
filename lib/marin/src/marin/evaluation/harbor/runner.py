@@ -34,13 +34,14 @@ from marin.evaluation.harbor.driver_config import (
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.evaluation.samples import EvalSample, Grading, SampleKind, write_sample_parquet
+from marin.external_dependencies import HARBOR
 from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
 
 # Harbor is run as an external tool in an isolated uv environment (its Daytona SDK carries pre-release
 # pins that do not fit the marin lock). These specs pin what that ephemeral env installs.
-_HARBOR_SPEC = "harbor==0.20.1.dev202607240136"
+_HARBOR_SPEC = HARBOR.requirement()
 _DAYTONA_SPEC = "daytona==0.200.2"
 HARBOR_RUNTIME = f"{_HARBOR_SPEC}; {_DAYTONA_SPEC}"
 _DRIVER = str(Path(__file__).with_name("trial_driver.py"))
