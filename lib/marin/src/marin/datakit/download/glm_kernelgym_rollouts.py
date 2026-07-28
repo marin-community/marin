@@ -19,11 +19,12 @@ keep an assistant message only when it appears there.
 
 Reasoning is inline in assistant content with a closing ``</think>`` and no opener, because
 the opener comes from the GLM chat template and was never echoed back. Like
-``superior_reasoning`` and ``synthetic1`` — the other sources whose reasoning arrives inline
-in a text field — we drop the tag and leave the reasoning inline rather than introduce
-markup the plain-text tokenizer would not read. A turn missing the tag entirely is one that
-spent its token budget mid-reasoning: 3,711 of 3,724 untruncated turns close exactly once,
-while 2,181 of 2,459 truncated turns never close.
+``superior_reasoning`` and ``synthetic1``, the other sources whose reasoning arrives inline
+in a text field, we leave the reasoning inline rather than introduce markup the plain-text
+tokenizer would not read; the tag itself becomes a paragraph break (see
+:func:`join_reasoning_and_answer`). A turn missing the tag entirely is one that spent its
+token budget mid-reasoning: 3,711 of 3,724 untruncated turns close exactly once, while
+2,181 of 2,459 truncated turns never close.
 """
 
 from enum import StrEnum
