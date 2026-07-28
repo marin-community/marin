@@ -304,6 +304,38 @@ races unresolved, median tokens/second by active target, and every stall with
 its escalation. `scratch/exp166_heartbeat.py` renders exactly this set; use it
 rather than assembling the report by hand.
 
+### Heartbeat Format
+
+Report to the operator in this shape. Never name scripts, flags, or job IDs —
+those are plumbing. Say what happened, not how it was invoked.
+
+```markdown
+## exp166 · <UTC time>
+
+**Fleet**  36 dispatches · 4,480 chips submitted → 128 training (1 run)
+**Trials** 0 complete · 1 training · 11 pending · 12/12 races unresolved
+
+### Placement
+| region | v6e-64 | v6e-128 | v6e-256 | v5e-64 | v5e-128 | chips |
+
+### Training now
+| trial | region · slice | progress | eval | tok/s |
+
+### Recovery
+| action | trial | region · slice | stall | now |
+
+### Standing bests
+| trial | progress | eval | vs exp117 |
+
+### Notes
+One or two lines: what changed, anything worth flagging.
+```
+
+The two placement spans live in the **Fleet** line as `submitted → training`, so
+the gap between chips requested and chips working is unmissable. Omit an empty
+section rather than printing a placeholder, except Fleet and Trials which always
+appear. Extra detail below Notes is welcome when it earns its place.
+
 ## Stall Escalation
 
 One clock governs all recovery: **hours since a regional run's step last
