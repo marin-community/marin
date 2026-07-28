@@ -265,6 +265,20 @@ Submitted, running, and retrying dispatches all count toward
 observe the old dispatch as terminal before counting the replacement as
 available capacity.
 
+### Client Revision Floor
+
+The controller rejects submissions from clients older than a rolling floor:
+`marin-iris client is too old (build X; minimum Y)`. In an editable install
+`iris.version.client_revision_date()` falls back to the last commit date
+touching `lib/iris`, so a branch drifts under the floor without any local
+change. Every submission then fails while the stall clock keeps retiring
+dispatches, draining the fleet to zero.
+
+Fix by setting `BUILD_DATE` in `lib/iris/src/iris/_build_info.py` to today. The
+floor is advisory, so stamping it is legitimate; the alternative is merging a
+newer `lib/iris`. Watch for it in the ledger as `submit_failed` dispatches with
+the error in `stop_reason`, and re-stamp when the floor next advances past it.
+
 ## Monitoring
 
 Two signals, each used for exactly one thing.
