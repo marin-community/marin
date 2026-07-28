@@ -9,9 +9,10 @@ three updates later. That isolated quality point does not support promotion.
 
 A replacement fixed25 run keeps the model, optimizer, seed, data order, batch,
 and 100B-token horizon fixed while deferring the first full/E128/E16
-evaluation from update 2,500 to update 10,000. Survival past update 2,503 will
-separate an evaluation-boundary failure from an unstable nested training
-trajectory.
+evaluation from update 2,500 to update 10,000. It passed update 2,503 with
+finite loss and zero overflow. The original failure therefore depends on the
+multi-mode evaluation boundary, restored state, or their interaction rather
+than the uninterrupted nested training trajectory.
 
 ## Setup
 
@@ -119,15 +120,16 @@ remained finite past update 3,300.
 
 The failed fixed25 retry loop was stopped. The replacement uses a fresh run
 identity and moves the first nested evaluation to update 10,000. It preserves
-the original optimizer and 100B-token schedule:
+the original optimizer and 100B-token schedule. Its first 290 losses reproduce
+the failed arm with a maximum absolute difference of `0.00076` nats, and it is
+finite at update 2,537. This rules out the uninterrupted trajectory as the
+cause of the step-2,503 failure.
 
-- If it fails at update 2,503 without evaluation, fixed25 fails the
-  long-horizon stability gate in this cell.
-- If it passes update 2,503 and later fails immediately after update 10,000
-  evaluation, the multi-mode callback boundary is implicated.
-- If it passes both boundaries, the first failure depended on checkpoint
-  recovery or infrastructure state. The replacement can continue to 100B
-  tokens.
+The next diagnostic boundary is the replacement's update-10,000 full/E128/E16
+evaluation. Failure immediately afterward implicates the multi-mode callback.
+Survival implicates checkpoint recovery or prior gang state. The replacement
+continues toward the 100B-token endpoint in either case unless it becomes
+non-finite.
 
 ## Runs
 

@@ -2126,3 +2126,23 @@ result:
   passes step 2,503, the triple nested evaluation or its interaction with
   restore is implicated. If it fails at the same update, the nested training
   trajectory itself is unstable in this cell.
+
+### 2026-07-28 17:00 - Deferred-evaluation fixed25 passes step 2,503
+
+- fixed25 r6 reached step 2,537 with finite loss, finite gradient norm, zero
+  routing overflow, and no failed task attempt. Its first 290 matched losses
+  reproduce r4 within `0.00076` nats.
+- Deferring the full/E128/E16 callback is the only configuration change. The
+  uninterrupted nested trajectory therefore does not deterministically fail
+  at step 2,503. The remaining causes are the multi-mode evaluation callback,
+  restored train state, or their interaction.
+- r6 continues to its first three-mode evaluation at step 10,000. An immediate
+  post-evaluation failure will implicate the callback; survival will implicate
+  r4's restored or gang state.
+- A matched ten-step XPlane pair was captured at steps 128--138 and the two
+  64-GB200 profiling gangs were stopped after upload. The control and treatment
+  landed on different leafgroups. Control all-gather time was about eight
+  times treatment all-gather time, while treatment reduce-scatter was slower.
+  This cross-rack communication variance overwhelms the architecture signal,
+  so the profiles are retained for debugging and excluded from cost
+  attribution.
