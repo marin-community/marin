@@ -262,6 +262,22 @@ def test_training_stall_alerts_distinguish_stale_missing_and_healthy_progress():
     ]
 
 
+def test_training_stall_alert_does_not_warn_on_a_producer_that_predates_phase():
+    now = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
+    task_states = finelog_result(
+        cluster=["cw-a"],
+        job=["/u/legacy"],
+        running_since=[datetime(2026, 7, 28, 10, 0, tzinfo=UTC)],
+    )
+    telltale_metrics = finelog_result(
+        cluster=["cw-a"], job=["/u/legacy"], name=["levanter_step"], value=[5669.0], ts=[now]
+    )
+
+    assert training_stall_alert_rows(task_states, telltale_metrics, now) == [
+        {"cluster": "cw-a", "job": "/u/legacy", "phase": "unknown", "reason": "producer_missing", "value": 0}
+    ]
+
+
 def test_training_stall_alert_returns_explicit_zero_without_running_jobs():
     assert training_stall_alert_rows(pa.table({}), pa.table({}), datetime(2026, 7, 28, tzinfo=UTC)) == [
         {"cluster": "fleet", "job": "", "phase": "idle", "reason": "healthy", "value": 0}

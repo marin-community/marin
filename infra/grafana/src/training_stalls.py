@@ -83,11 +83,19 @@ def _phase_name(phase: int | None) -> str:
     }.get(phase, "unknown")
 
 
+def _row(cluster: str, job: str, phase: str, reason: str, value: int) -> dict:
+    return {"cluster": cluster, "job": job, "phase": phase, "reason": reason, "value": value}
+
+
 def training_stall_alert_rows(task_states: pa.Table, telltale_metrics: pa.Table, now: datetime) -> list[dict]:
     """Project active jobs and progress metrics into Grafana warning rows.
 
-    Each row has string labels and exactly one numeric value. Missing Telltale
-    data is itself evidence after the initialization grace period.
+    Each row has string labels and exactly one numeric value. A job enrolls on
+    the phase metric, which `TelltaleTracker` publishes as it is constructed, so
+    enrollment tracks the producer rather than any Levanter metric: a job whose
+    producer predates phase reports `producer_missing` instead of a stall. Once
+    a job is enrolled, absent progress is itself evidence after the grace
+    period.
     """
     metrics_by_job: dict[tuple[str, str], dict[str, float]] = {}
     for row in telltale_metrics.to_pylist():
@@ -105,7 +113,14 @@ def training_stall_alert_rows(task_states: pa.Table, telltale_metrics: pa.Table,
             continue
 
         raw_phase = metrics.get(_PHASE_METRIC)
-        phase = int(raw_phase) if raw_phase is not None else None
+        if raw_phase is None:
+            # A producer old enough to predate the phase and progress metrics
+            # still emits levanter_step. Judging it against progress it cannot
+            # report would call every healthy job stalled, so report the gap.
+            rows.append(_row(cluster, job, _phase_name(None), "producer_missing", 0))
+            continue
+
+        phase = int(raw_phase)
         step = metrics.get(_STEP_METRIC, 0.0)
         progress_time = metrics.get(_PROGRESS_TIME_METRIC, 0.0)
 
@@ -128,16 +143,8 @@ def training_stall_alert_rows(task_states: pa.Table, telltale_metrics: pa.Table,
         else:
             reason = "training" if is_training else "initializing"
 
-        rows.append(
-            {
-                "cluster": cluster,
-                "job": job,
-                "phase": _phase_name(phase),
-                "reason": reason,
-                "value": value,
-            }
-        )
+        rows.append(_row(cluster, job, _phase_name(phase), reason, value))
 
     if rows:
         return rows
-    return [{"cluster": "fleet", "job": "", "phase": "idle", "reason": "healthy", "value": 0}]
+    return [_row("fleet", "", "idle", "healthy", 0)]
