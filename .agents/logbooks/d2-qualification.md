@@ -137,3 +137,16 @@ author: Matt Wittmann
   completed all six difference metrics. Repository lint passed for the probe.
 - Next action: commit the harness fix for a new reproducible bundle, then rerun
   the same numerical qualification. No later qualification step may start first.
+
+### 2026-07-28 16:32 PDT - Bad task image repeated
+
+- Commit Hash: `fcbf431b0ddbc3ec0ef2f4b59d49e452bf95c838`
+- Job: `/mwittmann/d2-muon-num-syrk1-r2-0728-1631`.
+- Result: the corrected bundle was assigned to `s4bk6j84` and again failed in
+  `stage-workdir` with the wrong cached digest
+  `sha256:cfe4e8dd08f6d43076ade21a2a018ef7c1616356e46960f0a1ebc66434bb3425`.
+- Interpretation: this repeats the 16:27 infrastructure condition. Iris exposes
+  `--task-image`, so the next launch will pin the known-working ARM64 digest
+  already running on `sdxsxs64`; it will not rely on the mutable `latest` cache.
+- Next action: submit the corrected bundle with
+  `ghcr.io/marin-community/iris-task@sha256:29ec7e8d4702faa36b0006ee34fd084e3e634a541e0736475446051bba091524`.
