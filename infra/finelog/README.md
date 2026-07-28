@@ -68,7 +68,6 @@ stack in `infra/pulumi` remains its canonical owner.
 
 After adoption, use the manual `Ops - Finelog` GitHub workflow to update a
 sender. The workflow refreshes the out-of-band Secret, builds and pushes the
-image, and sets a new deployment generation. It remains manual so a merge cannot
-race a stack's one-time import. Apply the `infra/permissions` stack once before
-the first dispatch so its deployment identity can read the three Finelog signing
-keys.
+image, and sets a new deployment generation. Apply the `infra/permissions` stack
+before the first dispatch so its deployment identity can read the three Finelog
+signing keys.

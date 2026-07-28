@@ -1,12 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Kubernetes operational helpers for Pulumi-managed Finelog servers.
-
-Pulumi owns the workload resources. This module keeps the out-of-band environment
-Secret and read-only status/log commands, using ``kubectl`` so Finelog does not need
-the Kubernetes Python client.
-"""
+"""Manage the environment Secret and observe Pulumi-managed Finelog servers."""
 
 import base64
 import json
@@ -18,20 +13,11 @@ from urllib.parse import urlparse
 import click
 from rigging.secrets import resolve_secret_spec
 
-from finelog.deploy.config import FinelogConfig
-
-# Suffix for the finelog-owned Secret that carries the pod's secret environment:
-# S3 credentials and the forwarding signing key. Distinct from iris's own task-env
-# Secret so finelog manages its own lifecycle.
-_ENV_SECRET_SUFFIX = "-env"
+from finelog.deploy.config import FinelogConfig, k8s_env_secret_name
 
 # S3-compatible endpoints that accept only virtual-hosted-style requests
 # (bucket as a host subdomain).
 _VIRTUAL_HOST_ONLY_S3_DOMAINS = ("cwobject.com", "cwlota.com")
-
-
-def _env_secret_name(cfg: FinelogConfig) -> str:
-    return f"{cfg.name}{_ENV_SECRET_SUFFIX}"
 
 
 def _s3_env(cfg: FinelogConfig) -> dict[str, str]:
@@ -112,7 +98,7 @@ def _build_env_secret_manifest(cfg: FinelogConfig) -> str | None:
     manifest = {
         "apiVersion": "v1",
         "kind": "Secret",
-        "metadata": {"name": _env_secret_name(cfg), "namespace": cfg.deployment.k8s.namespace},
+        "metadata": {"name": k8s_env_secret_name(cfg), "namespace": cfg.deployment.k8s.namespace},
         "type": "Opaque",
         "data": {k: base64.b64encode(v.encode()).decode() for k, v in env.items()},
     }
@@ -160,7 +146,7 @@ def k8s_sync_secret(cfg: FinelogConfig) -> None:
     manifest = _build_env_secret_manifest(cfg)
     if manifest is None:
         raise click.ClickException(f"finelog config {cfg.name!r} does not require an environment Secret")
-    click.echo(f"Applying Secret {_env_secret_name(cfg)}...")
+    click.echo(f"Applying Secret {k8s_env_secret_name(cfg)}...")
     _kubectl_apply(cfg, manifest)
 
 

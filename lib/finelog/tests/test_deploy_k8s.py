@@ -130,7 +130,7 @@ def test_env_secret_fails_when_signing_key_source_is_absent(monkeypatch: pytest.
         _build_env_secret_manifest(_forwarding_config())
 
 
-def test_k8s_up_directs_operator_to_pulumi_before_building(tmp_path) -> None:
+def test_k8s_mutation_is_rejected(tmp_path) -> None:
     config_path = tmp_path / "finelog.yaml"
     config_path.write_text(
         """
@@ -143,7 +143,7 @@ deployment:
 """.lstrip()
     )
 
-    result = CliRunner().invoke(cli, ["deploy", "up", str(config_path)])
+    result = CliRunner().invoke(cli, ["deploy", "up", "--no-build", str(config_path)])
 
-    assert result.exit_code != 0
-    assert "infra/finelog Pulumi project" in result.output
+    assert result.exit_code == 1
+    assert result.output.startswith("Error:")

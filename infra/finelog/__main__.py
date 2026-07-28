@@ -8,13 +8,12 @@ from pathlib import Path
 
 import pulumi
 import pulumi_kubernetes as k8s
-from finelog.deploy.config import load_finelog_config
+from finelog.deploy.config import k8s_env_secret_name, load_finelog_config
 from iac.kubernetes.finelog import FinelogServer, FinelogServerArgs
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DOCKERFILE = "lib/finelog/deploy/Dockerfile"
 CACHE_IMAGE = "ghcr.io/marin-community/finelog-cache:latest"
-ENV_SECRET_SUFFIX = "-env"
 
 
 def main() -> None:
@@ -30,13 +29,12 @@ def main() -> None:
         )
 
     deployment = config.deployment.k8s
+    adopt = stack_config.get_bool("import") or False
     # Keep credentials and machine-local paths out of state. The provider reads
     # KUBECONFIG from the environment and binds it to the committed context.
-    # Patch force transfers legacy kubectl-managed fields during the import pass.
     provider = k8s.Provider(
         "k8s",
         context=deployment.kube_context or None,
-        enable_patch_force=True,
     )
     needs_env_secret = config.remote_log_dir.startswith("s3://") or config.forwarding is not None
     server = FinelogServer(
@@ -47,9 +45,9 @@ def main() -> None:
             dockerfile=DOCKERFILE,
             cargo_profile="release",
             cache_image=CACHE_IMAGE,
-            env_secret_name=f"{config.name}{ENV_SECRET_SUFFIX}" if needs_env_secret else None,
+            env_secret_name=k8s_env_secret_name(config) if needs_env_secret else None,
             deploy_generation=stack_config.get_int("deploy_generation") or 0,
-            adopt=stack_config.get_bool("import") or False,
+            adopt=adopt,
         ),
         k8s_provider=provider,
     )

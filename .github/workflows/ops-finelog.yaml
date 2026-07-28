@@ -1,7 +1,6 @@
 name: "Ops - Finelog"
 
-# Finelog stacks must be adopted before their first update. Keep deployment
-# manual so merging the Pulumi program cannot race that one-time import.
+# Updates one operator-selected Finelog stack.
 on:
   workflow_dispatch:
     inputs:
@@ -19,6 +18,11 @@ on:
 
 permissions:
   contents: read
+
+env:
+  GCP_PROJECT: hai-gcp-models
+  GCP_SERVICE_ACCOUNT: iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
+  GCP_WORKLOAD_IDENTITY_PROVIDER: projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc
 
 concurrency:
   group: finelog-${{ inputs.cluster }}
@@ -47,9 +51,9 @@ jobs:
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
         with:
-          project_id: hai-gcp-models
-          workload_identity_provider: projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc
-          service_account: iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_SERVICE_ACCOUNT }}
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
@@ -75,8 +79,8 @@ jobs:
         with:
           stack: ${{ inputs.cluster }}
           work-dir: infra/finelog
-          service-account: iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
-          gcp-project-id: hai-gcp-models
+          service-account: ${{ env.GCP_SERVICE_ACCOUNT }}
+          gcp-project-id: ${{ env.GCP_PROJECT }}
           uv-sync-args: "--all-packages --extra deploy --frozen"
           config-map: >-
             ${{ format('{"finelog:deploy_generation": {"value": "{0}"}}',

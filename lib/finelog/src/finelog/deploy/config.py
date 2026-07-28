@@ -26,6 +26,7 @@ from rigging.secrets import SecretSpec, as_secret_spec
 from rigging.tunnel import GcpSshForwardTarget, K8sPortForwardTarget, TunnelTarget
 
 USER_CONFIG_DIR = Path.home() / ".config" / "marin" / "finelog"
+K8S_ENV_SECRET_SUFFIX = "-env"
 
 
 def _bundled_config_dir() -> Path:
@@ -230,6 +231,11 @@ class FinelogConfig:
     def __post_init__(self) -> None:
         if self.query_metadata_cache_mb is not None and self.query_metadata_cache_mb <= 0:
             raise ValueError("query_metadata_cache_mb must be > 0")
+
+
+def k8s_env_secret_name(config: FinelogConfig) -> str:
+    """Return the Kubernetes Secret name projected into a Finelog pod."""
+    return f"{config.name}{K8S_ENV_SECRET_SUFFIX}"
 
 
 def _config_search_paths(name_or_path: str) -> list[Path]:
