@@ -25,6 +25,8 @@ Optional overrides:
     BURNIN_OPTIMIZER_TOKENS
                          token horizon used to derive the optimizer hyperparameters
     BURNIN_NODES       four-GPU GB200 nodes (default: 8)
+    BURNIN_TARGET_CLUSTER
+                         Iris peer cluster for GB200 workers (default: cw-us-east-08a)
     BURNIN_REPLICA_AXIS_SIZE
                          replicated process groups (default: 1; use BURNIN_NODES for node-local FSDP)
     BURNIN_EXPERT_AXIS_SIZE
@@ -77,6 +79,7 @@ _CAPACITY_FACTOR = 1.25
 _EXPERT_AXIS = 1
 _GPUS_PER_NODE = 4
 _DEFAULT_NODES = 8
+_DEFAULT_TARGET_CLUSTER = "cw-us-east-08a"
 _EVAL_INTERVAL = 1_000
 _DEFAULT_MP = "params=float32,compute=bfloat16,output=bfloat16"
 _ATTENTION_IMPLEMENTATIONS = ("reference", "cudnn", "gpu_fa4_cute", "gpu_fa4_thd")
@@ -113,6 +116,9 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     """Build one matched burn-in arm."""
     experiment_id = os.environ.get("BURNIN_EXPERIMENT_ID", _EXPERIMENT_ID)
     arm = BurninArm(_required_env("BURNIN_ARM"))
+    target_cluster = os.environ.get("BURNIN_TARGET_CLUSTER", _DEFAULT_TARGET_CLUSTER)
+    if not target_cluster:
+        raise ValueError("BURNIN_TARGET_CLUSTER must not be empty")
     nodes = env_int("BURNIN_NODES", _DEFAULT_NODES)
     if nodes <= 0:
         raise ValueError("BURNIN_NODES must be positive")
@@ -205,6 +211,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
         cpu=64,
         ram="512g",
         disk="512g",
+        target_cluster=target_cluster,
         replicas=nodes,
     )
 

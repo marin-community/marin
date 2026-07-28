@@ -399,6 +399,7 @@ def test_nested_burnin_launcher_builds_100b_replica_cell(monkeypatch, tmp_path):
     assert config.grug_trainer.expert_axis_size == 1
     assert config.model.attention_implementation == "reference"
     assert config.tracker.group == "NEST-BURN-002"
+    assert config.resources.target_cluster == "cw-us-east-08a"
     np.testing.assert_allclose(config.optimizer.learning_rate, expected_optimizer.learning_rate)
     np.testing.assert_allclose(config.optimizer.adam_lr, expected_optimizer.adam_lr)
     np.testing.assert_allclose(config.optimizer.beta2, expected_optimizer.beta2)
