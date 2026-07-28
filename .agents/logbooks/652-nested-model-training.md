@@ -2189,3 +2189,20 @@ result:
   `BURNIN_EVAL_INTERVAL=1000000`. It will restore update 9,936 and continue
   without periodic evaluation; the forced terminal evaluation occurs only
   after the final optimizer update.
+
+### 2026-07-28 19:25 - No-eval counterfactual isolates callback perturbation
+
+- The 64-GPU replacement could not reacquire its gang. At the original
+  64-CPU/512-GiB worker request Kueue could fit 2/16 workers. A live control
+  worker used 1.86 CPU cores and 57.84 GiB RSS, so the launcher now accepts
+  explicit per-node CPU and RAM reservations. At 16 CPU/80 GiB, memory no
+  longer excluded nodes, but 199/202 GB200 nodes were occupied.
+- Used the two available nodes for a bounded 8-GPU counterfactual. It restored
+  the clean update-9,936 checkpoint, crossed update 10,000 with periodic
+  evaluation disabled, and held loss near `4.86`--`5.08` through update
+  10,100. The contaminated run was `6.95`--`7.53` over the corresponding
+  windows. The treatment trajectory does not jump without nested evaluation.
+- The diagnostic saved clean temporary checkpoint `step-10114` and was
+  stopped. Queued a 64-GPU continuation from that checkpoint with periodic
+  evaluation disabled. The 178 updates computed on an 8-GPU reduction
+  topology are excluded from cost estimates and remain a quality caveat.

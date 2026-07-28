@@ -14,7 +14,10 @@ loss then jumped from `4.69` over updates 9,900--9,999 to `7.53` over
 10,001--10,100. The nested callback is therefore implicated even though the
 clean gang did not fail outright. Training was stopped before its clean
 update-9,936 temporary checkpoint could be overwritten, then resumed from
-that checkpoint with periodic evaluation disabled.
+that checkpoint with periodic evaluation disabled. An 8-GPU capacity fallback
+crossed update 10,000 at losses near `4.9` rather than `7.5`, isolating the
+callback as the cause. It saved a clean update-10,114 checkpoint; the 64-GPU
+continuation is queued from there.
 
 This is still an interim result. Control Paloma and training loss oscillate
 over multi-billion-token intervals, and fixed25 has only one clean matched
@@ -193,13 +196,20 @@ across its own one-mode evaluation. Together with r4's step-2,503 NaN, this
 implicates the treatment's nested evaluation path even though the exact
 failure severity depends on prior gang or optimizer state.
 
-The last temporary checkpoint before evaluation is update 9,936. The
+The last temporary checkpoint before evaluation was update 9,936. The
 treatment was stopped before the next checkpoint and resubmitted under the
 same run identity and artifact version with the evaluation interval beyond
-the training horizon. It will restore update 9,936 and overwrite the
-contaminated W&B step range with a clean continuation. A forced terminal
-evaluation still runs after the final optimizer update, when it can no longer
-affect training.
+the training horizon. Cluster fragmentation left only two GB200 nodes free,
+so a bounded 8-GPU diagnostic restored update 9,936 and crossed the suspect
+boundary. Loss stayed between about `4.86` and `5.08` through update 10,100;
+the contaminated run was between `6.95` and `7.53`. This counterfactual
+isolates nested evaluation as the perturbation.
+
+The diagnostic saved a clean update-10,114 checkpoint and was stopped. A
+64-GPU continuation is queued from that checkpoint. Its 178 updates on a
+different reduction topology will be excluded from cost measurement and
+reported as a quality caveat. A forced terminal evaluation still runs after
+the final optimizer update, when it can no longer affect training.
 
 ## Runs
 
