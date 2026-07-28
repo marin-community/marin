@@ -308,6 +308,27 @@ def _read_sidecar_slices_parallel(scatter_paths: list[str], target_shard: int) -
     return [s for s in ordered if s is not None]
 
 
+def _unify_frame_schemas(frames: list[pl.LazyFrame]) -> list[pl.LazyFrame]:
+    """Cast frames to a common supertype schema so pl.merge_sorted doesn't fail.
+
+    Different source shards may write the same column with different dtypes when
+    Polars infers from Python values — most commonly a sort_value field that is
+    Null on an all-None batch from one shard and Int64 from another.  This also
+    handles arbitrary user-column dtype drift when DataFrames are written directly.
+
+    collect_schema() reads only parquet file-footer metadata (no row data).
+    The limit(0) concat derives the supertype schema without any I/O.  Casting
+    is applied as a lazy expression, so no data is scanned here.
+    """
+    if len(frames) <= 1:
+        return frames
+    schemas = [f.collect_schema() for f in frames]
+    if all(s == schemas[0] for s in schemas[1:]):
+        return frames
+    unified = pl.concat([f.limit(0) for f in frames], how="diagonal_relaxed").collect_schema()
+    return [f.cast(dict(unified)) for f in frames]
+
+
 # ---------------------------------------------------------------------------
 # ScatterReader: built from manifest, fed to Reduce
 # ---------------------------------------------------------------------------
@@ -379,11 +400,12 @@ class ScatterReader:
         )
 
     def get_frames(self) -> list[pl.LazyFrame]:
-        return [
+        frames = [
             pl.scan_parquet(path).filter(pl.col(_SHARD_COL) == self._target_shard).drop(_SHARD_COL)
             for _, chunk_paths in self._files
             for path in chunk_paths
         ]
+        return _unify_frame_schemas(frames)
 
     @property
     def total_chunks(self) -> int:
@@ -543,7 +565,7 @@ class ScatterWriter:
         if not self._frames:
             return
 
-        buffer = pl.concat(self._frames, rechunk=False)
+        buffer = pl.concat(self._frames, how="vertical_relaxed", rechunk=False)
         self._frames = []
 
         if self._combiner_fn is not None:
@@ -557,7 +579,7 @@ class ScatterWriter:
                 frames.append(df.with_columns(pl.lit(shard_val, dtype=pl.Int32).alias(_SHARD_COL)))
             if not frames:
                 return
-            buffer = pl.concat(frames, rechunk=True)
+            buffer = pl.concat(frames, how="vertical_relaxed", rechunk=True)
 
         buffer_sorted = buffer.sort([_SHARD_COL, _SORT_KEY_COL])
         del buffer

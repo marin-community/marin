@@ -64,7 +64,6 @@ def external_sort_merge(
     logger.info("[shard %d] External sort: pass-1 fan_in=%d", shard, fan_in)
 
     spill_files: list[str] = []
-    spill_paths: list[str] = []
 
     # TODO: When we upgrade to Python 3.12, use itertools.batched
     batches = [input_frames[i : i + fan_in] for i in range(0, len(input_frames), fan_in)]
@@ -75,7 +74,6 @@ def external_sort_merge(
         merged.sink_parquet(spill_file, compression="zstd")
 
         spill_files.append(spill_file)
-        spill_paths.append(f"{spill_dir}/run-{idx:04d}.spill")
         logger.info("[shard %d] External sort: wrote run %d to %s", shard, idx, spill_file)
 
     logger.info("[shard %d] External sort: pass-2 merging %d run files", shard, len(spill_files))
@@ -85,7 +83,7 @@ def external_sort_merge(
         yield from merged.collect_batches()
     finally:
         try:
-            spill_fs.rm(spill_paths)
+            spill_fs.rm([f"{spill_dir}/run-{i:04d}.spill" for i in range(len(spill_files))])
         except Exception:
             # Spill files live under a per-shard temp dir that the worker
             # eventually wipes; log so leaked files are at least traceable.

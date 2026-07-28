@@ -164,6 +164,64 @@ def test_merge_sorted_chunks_secondary_sort(tmp_path):
     assert [item["v"] for item in merged] == [2, 1]  # ts=5 comes before ts=10
 
 
+def test_scatter_sort_fn_null_batch_then_concrete(tmp_path):
+    """Flush must handle a batch with all-None sort_values followed by one with ints.
+
+    When sort_fn returns None for every item in one batch, Polars infers Null dtype
+    for the sort_value field of _SORT_KEY_COL.  The next batch with concrete int
+    values produces Int64.  pl.concat in _flush must use vertical_relaxed, or it
+    raises a SchemaError on the struct field type mismatch.
+    """
+    sort_fn = lambda x: x.get("priority")  # returns None when key absent
+    data_path = str(tmp_path / "shard-0000/scatter/")
+    writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=0, sort_fn=sort_fn)
+
+    # All-None sort values → _SORT_KEY_COL.sort_value: Null
+    frame_null = _items_to_dataframe([{"k": "a", "v": 0}, {"k": "a", "v": 1}], _key, sort_fn, 1)
+    # Concrete int sort values → _SORT_KEY_COL.sort_value: Int64
+    frame_concrete = _items_to_dataframe(
+        [{"k": "a", "v": 2, "priority": 5}, {"k": "a", "v": 3, "priority": 3}], _key, sort_fn, 1
+    )
+
+    writer.write(frame_null)
+    writer.write(frame_concrete)
+    scatter_paths = list(writer.close())
+
+    shard = ScatterReader.from_sidecars(scatter_paths, 0)
+    recovered = _read_shard(shard)
+    assert sorted(x["v"] for x in recovered) == [0, 1, 2, 3]
+
+
+def test_merge_sorted_chunks_cross_shard_null_sort_value(tmp_path):
+    """merge_sorted_chunks must handle source shards with differing sort_value dtypes.
+
+    Source shard 0 writes items where sort_fn returns None for every item, so its
+    parquet file stores _SORT_KEY_COL.sort_value as Null dtype.  Source shard 1
+    writes items where sort_fn returns ints, so its file stores Int64.  When the
+    reducer calls merge_sorted_chunks across both files, pl.merge_sorted sees
+    incompatible struct schemas and raises SchemaError.
+    """
+    sort_fn = lambda x: x.get("priority")
+
+    data_path_0 = str(tmp_path / "shard-0000/scatter/")
+    writer_0 = ScatterWriter(data_path=data_path_0, key_fn=_key, source_shard=0, sort_fn=sort_fn)
+    writer_0.write(_items_to_dataframe([{"k": "a", "v": 0}, {"k": "a", "v": 1}], _key, sort_fn, 1))
+    paths_0 = list(writer_0.close())
+
+    data_path_1 = str(tmp_path / "shard-0001/scatter/")
+    writer_1 = ScatterWriter(data_path=data_path_1, key_fn=_key, source_shard=1, sort_fn=sort_fn)
+    writer_1.write(
+        _items_to_dataframe([{"k": "a", "v": 2, "priority": 5}, {"k": "a", "v": 3, "priority": 3}], _key, sort_fn, 1)
+    )
+    paths_1 = list(writer_1.close())
+
+    shard = ScatterReader.from_sidecars(paths_0 + paths_1, target_shard=0)
+    # Currently raises SchemaError: struct field sort_value is Null in shard 0's
+    # file but Int64 in shard 1's file; pl.merge_sorted requires identical schemas.
+    merged = list(shard.merge_sorted_chunks(external_sort_dir=str(tmp_path / "sort")))
+    assert sorted(x["v"] for x in merged) == [0, 1, 2, 3]
+
+
 def test_scatter_with_combiner(tmp_path):
     """ScatterWriter applies combiner_fn during flushes."""
     items = [
