@@ -104,6 +104,8 @@ class _FakeFinelog:
         )
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
+        if '"infra.canary.metrics"' in sql:
+            return pa.table({"probe": ["controller-ping"], "target": ["marin"], "value": [1]})
         return pa.table({})
 
 
@@ -148,10 +150,27 @@ def test_alert_queries_select_exactly_one_numeric_column():
 
 def test_policies_reference_provisioned_contact_points():
     contact_points = {point["name"] for point in _load(ALERTING / "contact-points.yaml")["contactPoints"]}
+    mute_timings = {timing["name"] for timing in _load(ALERTING / "mute-timings.yaml")["muteTimes"]}
     for policy in _load(ALERTING / "policies.yaml")["policies"]:
         assert policy["receiver"] in contact_points
         for route in policy.get("routes", []):
             assert route["receiver"] in contact_points
+            assert set(route.get("mute_time_intervals", ())) <= mute_timings
+
+
+def test_warning_alerts_remain_visible_without_notifications():
+    (policy,) = _load(ALERTING / "policies.yaml")["policies"]
+    routes_by_severity = {route["object_matchers"][0][2]: route for route in policy["routes"]}
+
+    assert routes_by_severity["critical"].get("mute_time_intervals") is None
+    assert routes_by_severity["warning"]["mute_time_intervals"] == ["dashboard-only"]
+    (dashboard_only,) = _load(ALERTING / "mute-timings.yaml")["muteTimes"]
+    assert dashboard_only["time_intervals"] == [
+        {
+            "times": [{"start_time": "00:00", "end_time": "24:00"}],
+            "location": "UTC",
+        }
+    ]
 
 
 def test_critical_contact_point_reaches_email_slack_and_loom():

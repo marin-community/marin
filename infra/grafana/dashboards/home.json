@@ -111,7 +111,7 @@
       "id": 1,
       "type": "alertlist",
       "title": "Firing / pending alerts",
-      "description": "Every Grafana alert rule currently Alerting or Pending, across every rule group. Empty means nothing is currently paging.",
+      "description": "Every Grafana alert rule currently Alerting or Pending. Critical alerts notify operators; warnings remain on this dashboard without notifications.",
       "gridPos": {
         "h": 8,
         "w": 24,

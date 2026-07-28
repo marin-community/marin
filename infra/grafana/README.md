@@ -198,9 +198,11 @@ File provisioning owns that tree: UI edits to provisioned alerting resources are
 rejected by Grafana and would be overwritten by the files anyway. Change the YAML and
 redeploy.
 
-Rules page only on actionable incidents: an unreachable cluster, a
+Critical rules notify operators immediately: an unreachable cluster, a
 crash-looping watched component, an admission webhook with no ready endpoints, a
-degraded component, a dead Iris controller, an unhealthy finelog hub or mirror, a GPU
+dead production Iris controller, or an unhealthy finelog hub or mirror.
+Warning rules remain in Grafana's home alert list without sending email, Slack,
+or Loom notifications: a degraded component, a failed infra probe, a GPU
 pod that stays node-bound and
 nonterminal without finalizers for five minutes after the bridge's two-minute
 overdue threshold, and a GB200 rack with fewer than 16 trays Ready for five
@@ -213,12 +215,14 @@ task-to-node GPU attribution. The stuck-pod
 rule groups by node and links the cordon-first
 recovery skill; terminal, unbound, and finalizer-held pods stay dashboard-only.
 Other workload-tier signals (gated pods, Kueue backlog, workload crashloops) are
-dashboard-only because they have expected benign causes. `severity=critical` routes to `ops-critical` (email ops@openathena.ai,
-Slack, and a Loom triage session); `severity=warning` routes to `ops-slack`
-(Slack only). Every rule sets
+dashboard panels rather than alert rules because they have expected benign
+causes. `severity=critical` routes to `ops-critical` (email
+ops@openathena.ai, Slack, and a Loom triage session). `severity=warning`
+matches the always-active `dashboard-only` mute timing: Grafana continues
+evaluating and displaying the alert, but creates no notification. Every rule sets
 `noDataState: Alerting` and `execErrState: Alerting`, and the alert endpoints return
-explicit zeros when healthy, so silence anywhere in the pipeline pages rather than
-resolving.
+explicit zeros when healthy, so monitoring-path failures use the same
+critical or warning handling as the rule.
 
 Alert state — pending (`for`) timers, notification dedup, silences — lives in the
 shared `marin-metadata` Postgres with the rest of Grafana's state (see Deploy), so it

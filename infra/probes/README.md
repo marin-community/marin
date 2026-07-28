@@ -48,6 +48,9 @@ written to the `infra.canary.metrics` finelog namespace (query it with
 `finelog query <cluster> 'SELECT ... FROM "infra.canary.metrics"'`, slicing
 labels with DuckDB `json_extract`), and appended to a daily JSONL that rolls up
 to `gs://<us-central1 data bucket>/infra/probes/dt=<date>/` at UTC rollover.
+Grafana evaluates the newest `probe_up` row from the last two scheduling
+cadences. A failed probe or an empty result becomes a warning in Grafana's home
+alert list; warning rules do not send notifications.
 
 Standalone package (own `pyproject.toml`/`uv.lock`): pulls `marin-iris`,
 `marin-finelog`, `marin-rigging` from PyPI as `0.2.x.dev` nightlies
