@@ -29,8 +29,9 @@ probes = "infra_probes:main"
 dev = ["pytest >= 8.4"]
 
 [tool.uv]
-# Only the direct marin-* requirements opt into development releases. Global
-# "allow" dragged in httpx 1.0.dev3, which broke aiobotocore at import.
+# The direct marin-* requirements and the two constraints below opt into
+# development releases. Global "allow" dragged in unrelated prereleases such
+# as httpx 1.0.dev3, which broke aiobotocore at import.
 prerelease = "explicit"
 constraint-dependencies = [
     # Iris pulls these pre-release-only builds transitively. Declaring the

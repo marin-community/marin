@@ -17,6 +17,7 @@ venv), or ``python deploy/deploy.py <command>`` if click is on the path.
 
 import logging
 import subprocess
+import sys
 from pathlib import Path
 
 import click
@@ -27,7 +28,6 @@ logger = logging.getLogger("deploy")
 _MARIN_CONFIG = load_cluster_config("marin")
 
 IMAGE_NAME = "infra-probes"
-IRIS_IAP_BACKEND_SERVICE = "iris-marin-be"
 # The probes daemon writes its JSONL roll-ups under this bucket+prefix (see
 # infra_probes.py). Rolling a day up overwrites a deterministic per-day object
 # when a stranded local file is re-uploaded after a restart, so the SA needs
@@ -38,6 +38,7 @@ RESULTS_GCS_PREFIX = "infra/probes"
 RESULTS_HOST_PATH = "/var/lib/probes"
 # Build context / git repo root for `build`: this script lives in deploy/.
 PROBES_DIR = Path(__file__).resolve().parent.parent
+IAP_GCLB = PROBES_DIR.parent.parent / "lib" / "iris" / "scripts" / "iap_gclb.py"
 
 
 def _run(cmd: list[str], *, capture_output: bool = False) -> subprocess.CompletedProcess[str]:
@@ -58,15 +59,12 @@ def _grant_iap_access(project: str, service_account: str) -> None:
     logger.info("Granting Marin Iris IAP access to %s", service_account)
     _run(
         [
-            "gcloud",
-            "iap",
-            "web",
-            "add-iam-policy-binding",
-            "--resource-type=backend-services",
-            f"--service={IRIS_IAP_BACKEND_SERVICE}",
+            sys.executable,
+            str(IAP_GCLB),
+            "grant",
+            "marin",
             f"--project={project}",
             f"--member={member}",
-            "--role=roles/iap.httpsResourceAccessor",
         ]
     )
 
