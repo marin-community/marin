@@ -13,7 +13,10 @@ requires-python = ">=3.12,<3.14"
 # old GH `*-latest` rolling releases are abandoned/frozen.)
 dependencies = [
     "marin-iris    >= 0.2.0",
-    "marin-finelog >= 0.2.0",
+    # 0.2.10 is the newest stable release but predates the auth/config API used
+    # by current Iris nightlies. Keep this floor above stable so uv's
+    # prerelease=if-necessary policy selects a compatible finelog dev wheel.
+    "marin-finelog >= 0.2.11",
     "marin-rigging >= 0.2.0",
     "click >= 8.0",
     # marin-iris pulls s3fs -> aiobotocore, which breaks at import under the

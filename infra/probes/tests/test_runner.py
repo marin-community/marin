@@ -104,6 +104,26 @@ def test_gauge_collector_records_all_samples_stamped(caplog):
     assert all(s.collected_at is not None for s in sink.samples)
 
 
+def test_multi_target_health_logs_fail_when_any_target_is_down(caplog):
+    sink = RecordingSink()
+    runner = CollectorRunner(sinks=[sink])
+    runner.add(
+        Collector(
+            "multi",
+            lambda: [
+                Sample.of(METRIC_UP, 1.0, probe="multi/a"),
+                Sample.of(METRIC_UP, 0.0, probe="multi/b"),
+            ],
+            timeout=1.0,
+            cadence=0.05,
+        )
+    )
+    with caplog.at_level(logging.INFO, logger="runner"):
+        _run_briefly(runner)
+    assert any(m.startswith("probe multi: fail [") for m in _messages(caplog))
+    assert {0.0, 1.0}.issubset(_values(sink, METRIC_UP))
+
+
 def test_run_with_no_collectors_raises():
     with pytest.raises(ValueError, match="no collectors registered"):
         CollectorRunner().run()

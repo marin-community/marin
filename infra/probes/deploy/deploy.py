@@ -26,6 +26,7 @@ logger = logging.getLogger("deploy")
 _MARIN_CONFIG = load_cluster_config("marin")
 
 IMAGE_NAME = "infra-probes"
+IRIS_IAP_BACKEND_SERVICE = "iris-marin-be"
 # The probes daemon writes its JSONL roll-ups under this bucket+prefix (see
 # infra_probes.py). Rolling a day up overwrites a deterministic per-day object
 # when a stranded local file is re-uploaded after a restart, so the SA needs
@@ -49,6 +50,24 @@ def _artifact_registry(region: str, project: str, repo: str) -> str:
 
 def _service_account(project: str) -> str:
     return f"{IMAGE_NAME}@{project}.iam.gserviceaccount.com"
+
+
+def _grant_iap_access(project: str, service_account: str) -> None:
+    member = f"serviceAccount:{service_account}"
+    logger.info("Granting Marin Iris IAP access to %s", service_account)
+    _run(
+        [
+            "gcloud",
+            "iap",
+            "web",
+            "add-iam-policy-binding",
+            "--resource-type=backend-services",
+            f"--service={IRIS_IAP_BACKEND_SERVICE}",
+            f"--project={project}",
+            f"--member={member}",
+            "--role=roles/iap.httpsResourceAccessor",
+        ]
+    )
 
 
 @click.group()
@@ -160,6 +179,14 @@ def status(cfg: dict[str, str]) -> None:
     )
 
 
+@cli.command("grant-iap")
+@click.pass_obj
+def grant_iap(cfg: dict[str, str]) -> None:
+    """Allow the probe VM's service account through the Marin Iris IAP edge."""
+    project = cfg["project"]
+    _grant_iap_access(project, _service_account(project))
+
+
 @cli.command()
 @click.option(
     "--iris-endpoint",
@@ -231,6 +258,7 @@ def create(cfg: dict[str, str], iris_endpoint: str, machine_type: str) -> None:
             f"--condition={prefix_condition}",
         ]
     )
+    _grant_iap_access(project, sa)
 
     # The host mount persists the JSONL across container restarts; the
     # startup-script makes it writable by the uid-1000 container.
