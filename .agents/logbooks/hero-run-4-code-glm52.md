@@ -49,3 +49,12 @@ author: will-held
 - Config: Model `zai-org/GLM-5.2-FP8` at revision `ba978f7d347eaf65d22f1a86833408afdb953541`; regional model cache TTL 30 days.
 - Decision: Populate the distributed regional model cache before reserving GPUs.
 - Next: Submit the cache job, verify `model-cache.json`, then launch an 8-GPU smoke.
+
+### 2026-07-28 06:45 PDT - Partial cache recovery
+
+- Status: blocked on the original cache lease
+- Evidence: The first cache attempt uploaded 97 of 141 weight shards but did not write `.cache_complete` or `model-cache.json`. No production or smoke output exists. The original east-08 worker still refreshes its distributed lease while the object count remains unchanged.
+- Command: `uv run iris --controller-url http://127.0.0.1:18100 job run --no-wait --job-name hero-run-4-code-glm52-cache-resume-20260728 --priority batch --enable-extra-resources --cpu 8 --memory 64GB --disk 100GB --extra marin-core:cpu --timeout 259200 -- python -m experiments.rollout_data.collect_hero_run_4_code_glm52 prepare --output-path s3://marin-us-east-02a/marin/rollouts/glm-5.2/hero-run-4-code-20260727`
+- Config: Source commit `c62eda3fb`; preserve existing cache files and download only missing files; batch priority; no GPUs.
+- Decision: Keep the active lease intact. The resume job and automatic 8-GPU smoke launcher remain queued.
+- Next: Terminate the stalled original cache task through the east-08 control plane, then let the retry fetch the remaining 44 weight shards.
