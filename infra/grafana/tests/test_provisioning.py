@@ -85,6 +85,17 @@ class _FakeIris:
     def health(self) -> list[dict]:
         return [{"reachable": True, "up": 1, "latency_ms": 3}]
 
+    def peers(self) -> list[dict]:
+        return [
+            {
+                "peer": "cw-a",
+                "controller_address": "https://iris-cw-a.example",
+                "state": "reachable",
+                "last_contact_age_seconds": 3,
+                "value": 0,
+            }
+        ]
+
 
 class _FakeFinelog:
     def __init__(self, name: str) -> None:

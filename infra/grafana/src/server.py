@@ -18,6 +18,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /iris/{cluster}/jobs                     root-job counts by state (in-flight + 24h terminal)
     GET /iris/{cluster}/workers                  healthy worker counts + resource totals per region
     GET /iris/{cluster}/health                   controller reachability + latency
+    GET /iris/{cluster}/peers                    federation reachability from the controller heartbeat
     GET /iris/{cluster}/query?sql=               ad-hoc SELECT via ExecuteRawQuery (admin/null-auth)
     GET /github/ferries                          recent ferry runs per tier, with success rate
     GET /github/builds                           recent main commits with CI rollup state
@@ -379,6 +380,9 @@ def create_app(
     def iris_health(request: Request) -> JSONResponse:
         return iris_endpoint(request, "health", lambda s: s.health())
 
+    def iris_peers(request: Request) -> JSONResponse:
+        return iris_endpoint(request, "peers", lambda s: s.peers())
+
     def iris_query(request: Request) -> JSONResponse:
         # Ad-hoc SELECT: not cached (arbitrary SQL) and not used by any committed panel.
         try:
@@ -527,6 +531,7 @@ def create_app(
             Route("/iris/{cluster}/jobs", iris_jobs),
             Route("/iris/{cluster}/workers", iris_workers),
             Route("/iris/{cluster}/health", iris_health),
+            Route("/iris/{cluster}/peers", iris_peers),
             Route("/iris/{cluster}/query", iris_query),
             Route("/k8s/control_plane", k8s_control_plane),
             Route("/k8s/crashloops", k8s_crashloops),
