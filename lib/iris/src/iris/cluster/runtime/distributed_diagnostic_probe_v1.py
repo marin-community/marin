@@ -21,12 +21,19 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 SCHEMA_VERSION = 1
 COLLECTOR_VERSION = "iris-distributed-diagnostic-v1"
 MAX_BUNDLE_BYTES = 4 * 1024 * 1024 - 64 * 1024
+DEFAULT_COLLECTOR_TIMEOUT_SECONDS = 10
+MIN_COLLECTOR_TIMEOUT_SECONDS = 1
+MAX_COLLECTOR_TIMEOUT_SECONDS = 30
+DEFAULT_PY_SPY = "py-spy"
+DEFAULT_NCCL_RAS_HOST = "127.0.0.1"
+DEFAULT_NCCL_RAS_PORT = 28028
 
 _MAX_ERROR_CHARS = 2048
 _MAX_ERRORS = 32
@@ -79,6 +86,12 @@ _GPU_FIELDS = (
 )
 
 
+class CollectorStatus(StrEnum):
+    OK = "ok"
+    PARTIAL = "partial"
+    UNAVAILABLE = "unavailable"
+
+
 @dataclass(frozen=True)
 class _CommandResult:
     returncode: int
@@ -87,6 +100,21 @@ class _CommandResult:
     stdout_truncated: bool
     stderr_truncated: bool
     timed_out: bool = False
+
+
+@dataclass(frozen=True)
+class _RasQueryResult:
+    raw: bytes
+    complete: bool
+    truncated: bool
+    error: str | None
+
+
+@dataclass(frozen=True)
+class _StringLocation:
+    parent: Any
+    key: str | int
+    value: str
 
 
 def _bounded_read(file, limit: int) -> tuple[bytes, bool]:
@@ -153,16 +181,19 @@ def _query_nccl_ras(
     port: int,
     response_format: str,
     deadline: float,
-) -> tuple[bytes, bool, bool, str | None]:
-    """Return raw RAS bytes, completion, truncation, and an optional error."""
+) -> _RasQueryResult:
+    """Return one bounded NCCL RAS response."""
     remaining = _remaining(deadline)
     if remaining <= 0:
-        return b"", False, False, "collector deadline expired"
+        return _RasQueryResult(b"", False, False, "collector deadline expired")
 
-    request = (
-        f"TIMEOUT {max(1, math.ceil(remaining))}\n"
-        f"SET FORMAT {response_format}\n"
-        "VERBOSE STATUS\n"
+    request = "\n".join(
+        (
+            f"TIMEOUT {max(1, math.ceil(remaining))}",
+            f"SET FORMAT {response_format}",
+            "VERBOSE STATUS",
+            "",
+        )
     ).encode()
     chunks: list[bytes] = []
     size = 0
@@ -198,7 +229,7 @@ def _query_nccl_ras(
     except OSError as exc:
         error = str(exc)
 
-    return b"".join(chunks), complete, truncated, error
+    return _RasQueryResult(b"".join(chunks), complete, truncated, error)
 
 
 def _parse_ras_json(raw: bytes) -> dict[str, Any]:
@@ -243,21 +274,21 @@ def _collect_nccl_ras(
 ) -> dict[str, Any]:
     remaining = _remaining(deadline)
     json_deadline = time.monotonic() + remaining * 0.65
-    raw_json, json_complete, json_truncated, json_error = _query_nccl_ras(
+    json_result = _query_nccl_ras(
         host=host,
         port=port,
         response_format="json",
         deadline=json_deadline,
     )
     json_response = _ras_response(
-        raw_json,
-        complete=json_complete,
-        truncated=json_truncated,
-        error=json_error,
+        json_result.raw,
+        complete=json_result.complete,
+        truncated=json_result.truncated,
+        error=json_result.error,
     )
 
     try:
-        report = _parse_ras_json(raw_json)
+        report = _parse_ras_json(json_result.raw)
     except ValueError as exc:
         report = None
         json_response["parse_error"] = str(exc)
@@ -265,57 +296,75 @@ def _collect_nccl_ras(
         bounded_report, report_truncated = _bounded_report(report)
         json_response["report"] = bounded_report
         json_response["report_truncated"] = report_truncated
-        if json_error:
-            _add_error(errors, "nccl_ras_json", json_error)
+        if json_result.error:
+            _add_error(errors, "nccl_ras_json", json_result.error)
         return {
-            "status": "partial" if json_error or json_truncated or report_truncated else "ok",
+            "status": (
+                CollectorStatus.PARTIAL
+                if json_result.error or json_result.truncated or report_truncated
+                else CollectorStatus.OK
+            ),
             "response_format": "json",
             "json": json_response,
             "text": None,
         }
 
-    raw_text, text_complete, text_truncated, text_error = _query_nccl_ras(
+    text_result = _query_nccl_ras(
         host=host,
         port=port,
         response_format="text",
         deadline=deadline,
     )
     text_response = _ras_response(
-        raw_text,
-        complete=text_complete,
-        truncated=text_truncated,
-        error=text_error,
+        text_result.raw,
+        complete=text_result.complete,
+        truncated=text_result.truncated,
+        error=text_result.error,
     )
-    if json_error:
-        _add_error(errors, "nccl_ras_json", json_error)
-    if text_error:
-        _add_error(errors, "nccl_ras_text", text_error)
+    if json_result.error:
+        _add_error(errors, "nccl_ras_json", json_result.error)
+    if text_result.error:
+        _add_error(errors, "nccl_ras_text", text_result.error)
 
-    has_evidence = bool(raw_json or raw_text)
+    has_evidence = bool(json_result.raw or text_result.raw)
     return {
-        "status": "partial" if has_evidence else "unavailable",
-        "response_format": "text" if raw_text else None,
+        "status": CollectorStatus.PARTIAL if has_evidence else CollectorStatus.UNAVAILABLE,
+        "response_format": "text" if text_result.raw else None,
         "json": json_response,
         "text": text_response,
     }
 
 
-def _resume_after_pyspy(pid: int, *, isolated_pid_namespace: bool) -> None:
+def _resume_after_pyspy(
+    pid: int,
+    *,
+    isolated_pid_namespace: bool,
+    errors: list[dict[str, str]],
+) -> None:
     """Clear a group-stop left by a failed ptrace attachment."""
     if sys.platform != "linux":
         return
     if not isolated_pid_namespace:
         try:
             os.killpg(os.getpgid(pid), signal.SIGCONT)
-        except (PermissionError, ProcessLookupError):
+        except PermissionError as exc:
+            _add_error(errors, "threads_resume", exc)
+        except ProcessLookupError:
             pass
         return
-    for entry in Path("/proc").iterdir():
+    try:
+        entries = list(Path("/proc").iterdir())
+    except OSError as exc:
+        _add_error(errors, "threads_resume", exc)
+        return
+    for entry in entries:
         if not entry.name.isdigit():
             continue
         try:
             os.kill(int(entry.name), signal.SIGCONT)
-        except (PermissionError, ProcessLookupError):
+        except PermissionError as exc:
+            _add_error(errors, "threads_resume", f"pid {entry.name}: {exc}")
+        except ProcessLookupError:
             pass
 
 
@@ -334,20 +383,20 @@ def _collect_threads(
             stdout_limit=_THREAD_STDOUT_LIMIT,
         )
     finally:
-        _resume_after_pyspy(pid, isolated_pid_namespace=isolated_pid_namespace)
+        _resume_after_pyspy(pid, isolated_pid_namespace=isolated_pid_namespace, errors=errors)
 
     stderr = _text(result.stderr)
     partial_non_python_child = bool(result.stdout) and "Failed to find python version from target process" in stderr
     if result.returncode == 0:
-        status = "partial" if result.stdout_truncated or result.stderr_truncated else "ok"
+        status = CollectorStatus.PARTIAL if result.stdout_truncated or result.stderr_truncated else CollectorStatus.OK
     elif partial_non_python_child:
-        status = "partial"
+        status = CollectorStatus.PARTIAL
         _add_error(errors, "threads", stderr)
     else:
-        status = "unavailable"
+        status = CollectorStatus.UNAVAILABLE
         _add_error(errors, "threads", stderr or f"py-spy exited {result.returncode}")
     if result.timed_out:
-        status = "partial" if result.stdout else "unavailable"
+        status = CollectorStatus.PARTIAL if result.stdout else CollectorStatus.UNAVAILABLE
         _add_error(errors, "threads", "py-spy exceeded its collector deadline")
 
     return {
@@ -370,7 +419,7 @@ def _read_path(path: Path, limit: int) -> tuple[bytes, bool]:
 def _collect_process(pid: int, errors: list[dict[str, str]]) -> dict[str, Any]:
     proc = Path("/proc") / str(pid)
     result: dict[str, Any] = {
-        "status": "ok",
+        "status": CollectorStatus.OK,
         "pid": pid,
         "status_text": "",
         "command": "",
@@ -385,7 +434,7 @@ def _collect_process(pid: int, errors: list[dict[str, str]]) -> dict[str, Any]:
         result["truncated"] = truncated
         consumed += len(status)
     except OSError as exc:
-        result["status"] = "partial"
+        result["status"] = CollectorStatus.PARTIAL
         _add_error(errors, "process_status", exc)
 
     try:
@@ -394,13 +443,13 @@ def _collect_process(pid: int, errors: list[dict[str, str]]) -> dict[str, Any]:
         result["truncated"] = result["truncated"] or truncated
         consumed += len(command)
     except OSError as exc:
-        result["status"] = "partial"
+        result["status"] = CollectorStatus.PARTIAL
         _add_error(errors, "process_command", exc)
 
     try:
         task_paths = sorted((proc / "task").iterdir(), key=lambda path: int(path.name))
     except OSError as exc:
-        result["status"] = "partial"
+        result["status"] = CollectorStatus.PARTIAL
         _add_error(errors, "process_threads", exc)
         return result
 
@@ -417,7 +466,7 @@ def _collect_process(pid: int, errors: list[dict[str, str]]) -> dict[str, Any]:
             )
         except OSError as exc:
             _add_error(errors, "process_threads", f"tid {task_path.name}: {exc}")
-            result["status"] = "partial"
+            result["status"] = CollectorStatus.PARTIAL
             continue
         consumed += len(wchan) + len(thread_status)
         result["threads"].append(
@@ -430,8 +479,8 @@ def _collect_process(pid: int, errors: list[dict[str, str]]) -> dict[str, Any]:
         result["truncated"] = result["truncated"] or wchan_truncated or status_truncated
 
     result["included_thread_count"] = len(result["threads"])
-    if result["truncated"] and result["status"] == "ok":
-        result["status"] = "partial"
+    if result["truncated"] and result["status"] == CollectorStatus.OK:
+        result["status"] = CollectorStatus.PARTIAL
     return result
 
 
@@ -452,13 +501,13 @@ def _collect_environment(pid: int, errors: list[dict[str, str]]) -> dict[str, An
     try:
         variables, truncated = _read_process_environment(pid)
         return {
-            "status": "partial" if truncated else "ok",
+            "status": CollectorStatus.PARTIAL if truncated else CollectorStatus.OK,
             "variables": variables,
             "truncated": truncated,
         }
     except OSError as exc:
         _add_error(errors, "environment", exc)
-        return {"status": "unavailable", "variables": {}, "truncated": False}
+        return {"status": CollectorStatus.UNAVAILABLE, "variables": {}, "truncated": False}
 
 
 def _is_runtime_package(name: str) -> bool:
@@ -544,7 +593,7 @@ def _installed_runtime_packages() -> tuple[list[dict[str, Any]], bool]:
 
 def _collect_runtime(pid: int, errors: list[dict[str, str]]) -> dict[str, Any]:
     result: dict[str, Any] = {
-        "status": "ok",
+        "status": CollectorStatus.OK,
         "probe_python": {
             "executable": sys.executable,
             "version": sys.version,
@@ -559,7 +608,7 @@ def _collect_runtime(pid: int, errors: list[dict[str, str]]) -> dict[str, Any]:
         target_executable = Path(os.readlink(Path("/proc") / str(pid) / "exe"))
         result["target_executable"] = _file_identity(target_executable)
     except OSError as exc:
-        result["status"] = "partial"
+        result["status"] = CollectorStatus.PARTIAL
         _add_error(errors, "runtime_executable", exc)
 
     try:
@@ -567,7 +616,7 @@ def _collect_runtime(pid: int, errors: list[dict[str, str]]) -> dict[str, Any]:
         result["loaded_libraries"] = libraries
         result["truncated"] = truncated
     except OSError as exc:
-        result["status"] = "partial"
+        result["status"] = CollectorStatus.PARTIAL
         _add_error(errors, "runtime_libraries", exc)
 
     try:
@@ -575,11 +624,11 @@ def _collect_runtime(pid: int, errors: list[dict[str, str]]) -> dict[str, Any]:
         result["packages"] = packages
         result["truncated"] = result["truncated"] or truncated
     except (OSError, importlib.metadata.PackageNotFoundError) as exc:
-        result["status"] = "partial"
+        result["status"] = CollectorStatus.PARTIAL
         _add_error(errors, "runtime_packages", exc)
 
-    if result["truncated"] and result["status"] == "ok":
-        result["status"] = "partial"
+    if result["truncated"] and result["status"] == CollectorStatus.OK:
+        result["status"] = CollectorStatus.PARTIAL
     return result
 
 
@@ -598,9 +647,9 @@ def _collect_gpus(deadline: float, errors: list[dict[str, str]]) -> dict[str, An
         if row
     ]
     if result.returncode == 0:
-        status = "partial" if result.stdout_truncated or result.stderr_truncated else "ok"
+        status = CollectorStatus.PARTIAL if result.stdout_truncated or result.stderr_truncated else CollectorStatus.OK
     else:
-        status = "partial" if stdout else "unavailable"
+        status = CollectorStatus.PARTIAL if stdout else CollectorStatus.UNAVAILABLE
         _add_error(errors, "gpus", stderr or f"nvidia-smi exited {result.returncode}")
     if result.timed_out:
         _add_error(errors, "gpus", "nvidia-smi exceeded its collector deadline")
@@ -623,14 +672,17 @@ def collect_diagnostic(
     attempt_id: int | None,
     captured_at: str,
     timeout: int,
-    py_spy: str = "py-spy",
-    ras_host: str = "127.0.0.1",
-    ras_port: int = 28028,
+    py_spy: str = DEFAULT_PY_SPY,
+    ras_host: str = DEFAULT_NCCL_RAS_HOST,
+    ras_port: int = DEFAULT_NCCL_RAS_PORT,
     isolated_pid_namespace: bool = False,
 ) -> dict[str, Any]:
     """Collect one partial-result diagnostic bundle for a running task process."""
-    if not 1 <= timeout <= 30:
-        raise ValueError("collector timeout must be between 1 and 30 seconds")
+    if not MIN_COLLECTOR_TIMEOUT_SECONDS <= timeout <= MAX_COLLECTOR_TIMEOUT_SECONDS:
+        raise ValueError(
+            f"collector timeout must be between {MIN_COLLECTOR_TIMEOUT_SECONDS} "
+            f"and {MAX_COLLECTOR_TIMEOUT_SECONDS} seconds"
+        )
 
     started = time.monotonic()
     collector_deadline = started + timeout
@@ -653,7 +705,7 @@ def collect_diagnostic(
             bundle[name] = collector()
         except Exception as exc:
             _add_error(errors, name, exc)
-            bundle[name] = {"status": "unavailable"}
+            bundle[name] = {"status": CollectorStatus.UNAVAILABLE}
 
     remaining = _remaining(collector_deadline)
     ras_deadline = time.monotonic() + remaining * 0.45
@@ -684,7 +736,7 @@ def collect_diagnostic(
             bundle[name] = collector()
         except Exception as exc:
             _add_error(errors, name, exc)
-            bundle[name] = {"status": "unavailable"}
+            bundle[name] = {"status": CollectorStatus.UNAVAILABLE}
 
     return bundle
 
@@ -696,18 +748,18 @@ def _truncate_utf8(text: str, byte_limit: int) -> str:
     return prefix + _TRUNCATION_MARKER
 
 
-def _string_locations(value: Any) -> list[tuple[Any, str | int, str]]:
-    locations: list[tuple[Any, str | int, str]] = []
+def _string_locations(value: Any) -> list[_StringLocation]:
+    locations: list[_StringLocation] = []
     if isinstance(value, dict):
         for key, child in value.items():
             if isinstance(child, str):
-                locations.append((value, key, child))
+                locations.append(_StringLocation(value, key, child))
             else:
                 locations.extend(_string_locations(child))
     elif isinstance(value, list):
         for index, child in enumerate(value):
             if isinstance(child, str):
-                locations.append((value, index, child))
+                locations.append(_StringLocation(value, index, child))
             else:
                 locations.extend(_string_locations(child))
     return locations
@@ -739,12 +791,15 @@ def encode_bundle(bundle: dict[str, Any]) -> bytes:
         strings = _string_locations(bundle)
         if not strings:
             raise ValueError("diagnostic bundle contains no trimmable text")
-        parent, key, value = max(strings, key=lambda location: len(location[2].encode("utf-8")))
-        value_size = len(value.encode("utf-8"))
+        location = max(strings, key=lambda item: len(item.value.encode("utf-8")))
+        value_size = len(location.value.encode("utf-8"))
         if value_size == 0:
             raise ValueError("diagnostic bundle could not be capped")
         overage = len(data) - MAX_BUNDLE_BYTES
-        parent[key] = _truncate_utf8(value, max(0, value_size - overage - 1024))
+        location.parent[location.key] = _truncate_utf8(
+            location.value,
+            max(0, value_size - overage - 1024),
+        )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -754,9 +809,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--attempt-id", type=int)
     parser.add_argument("--captured-at", required=True)
     parser.add_argument("--timeout", type=int, required=True)
-    parser.add_argument("--py-spy", default="py-spy")
-    parser.add_argument("--ras-host", default="127.0.0.1")
-    parser.add_argument("--ras-port", type=int, default=28028)
+    parser.add_argument("--py-spy", default=DEFAULT_PY_SPY)
+    parser.add_argument("--ras-host", default=DEFAULT_NCCL_RAS_HOST)
+    parser.add_argument("--ras-port", type=int, default=DEFAULT_NCCL_RAS_PORT)
     parser.add_argument("--isolated-pid-namespace", action="store_true")
     return parser
 
@@ -782,12 +837,12 @@ def main(argv: list[str] | None = None) -> int:
             "captured_at": args.captured_at,
             "source": args.source,
             "attempt_id": args.attempt_id,
-            "process": {"status": "unavailable"},
-            "environment": {"status": "unavailable"},
-            "runtime": {"status": "unavailable"},
-            "nccl_ras": {"status": "unavailable"},
-            "threads": {"status": "unavailable"},
-            "gpus": {"status": "unavailable"},
+            "process": {"status": CollectorStatus.UNAVAILABLE},
+            "environment": {"status": CollectorStatus.UNAVAILABLE},
+            "runtime": {"status": CollectorStatus.UNAVAILABLE},
+            "nccl_ras": {"status": CollectorStatus.UNAVAILABLE},
+            "threads": {"status": CollectorStatus.UNAVAILABLE},
+            "gpus": {"status": CollectorStatus.UNAVAILABLE},
             "errors": [{"collector": "probe", "message": str(exc)[:_MAX_ERROR_CHARS]}],
         }
     sys.stdout.buffer.write(encode_bundle(bundle))

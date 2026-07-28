@@ -11,7 +11,7 @@ from unittest.mock import Mock
 import pytest
 from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.docker import DockerRuntime
-from iris.cluster.runtime.types import ContainerPhase, ContainerStats, ContainerStatus
+from iris.cluster.runtime.types import ContainerPhase, ContainerStats, ContainerStatus, ProfileCaptureRequest
 from iris.cluster.types import Entrypoint, JobName
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
@@ -117,14 +117,7 @@ class FakeContainerHandle:
     def disk_usage_mb(self) -> int:
         return 0
 
-    def profile(
-        self,
-        duration_seconds: int,
-        profile_type: job_pb2.ProfileType,
-        *,
-        source: str,
-        attempt_id: int,
-    ) -> bytes:
+    def profile(self, request: ProfileCaptureRequest) -> bytes:
         raise RuntimeError("profiling not supported in FakeContainerHandle")
 
     def cleanup(self) -> None:

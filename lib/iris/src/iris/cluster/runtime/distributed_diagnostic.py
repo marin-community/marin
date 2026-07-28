@@ -12,9 +12,9 @@ from rigging.timing import Timestamp
 from iris.cluster.runtime import distributed_diagnostic_probe_v1
 from iris.cluster.runtime.profile import ExecResult
 
-DEFAULT_COLLECTOR_TIMEOUT_SECONDS = 10
-MIN_COLLECTOR_TIMEOUT_SECONDS = 1
-MAX_COLLECTOR_TIMEOUT_SECONDS = 30
+DEFAULT_COLLECTOR_TIMEOUT_SECONDS = distributed_diagnostic_probe_v1.DEFAULT_COLLECTOR_TIMEOUT_SECONDS
+MIN_COLLECTOR_TIMEOUT_SECONDS = distributed_diagnostic_probe_v1.MIN_COLLECTOR_TIMEOUT_SECONDS
+MAX_COLLECTOR_TIMEOUT_SECONDS = distributed_diagnostic_probe_v1.MAX_COLLECTOR_TIMEOUT_SECONDS
 PROBE_EXIT_HEADROOM_SECONDS = 10
 
 _PROBE_PATH = Path(distributed_diagnostic_probe_v1.__file__)

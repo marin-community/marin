@@ -50,6 +50,7 @@ from iris.cluster.runtime.types import (
     ContainerStatus,
     DiscoveredContainer,
     MountKind,
+    ProfileCaptureRequest,
     RuntimeLogReader,
 )
 from iris.cluster.worker.worker_types import LogLine
@@ -515,14 +516,7 @@ class ProcessContainerHandle:
             return int(shutil.disk_usage(self.config.workdir_host_path).used / (1024 * 1024))
         return 0
 
-    def profile(
-        self,
-        duration_seconds: int,
-        profile_type: job_pb2.ProfileType,
-        *,
-        source: str,
-        attempt_id: int,
-    ) -> bytes:
+    def profile(self, request: ProfileCaptureRequest) -> bytes:
         """Profile the running process or capture distributed GPU diagnostics.
 
         Runs profilers as host subprocesses sharing this worker's PID namespace.
@@ -537,21 +531,31 @@ class ProcessContainerHandle:
         pid = self._container._process.pid
         dispatch = LocalProfileDispatch(resume_pid=pid)
 
-        if profile_type.HasField("threads"):
-            return capture_threads(dispatch, pid=str(pid), include_locals=profile_type.threads.locals)
-        elif profile_type.HasField("distributed"):
-            timeout = profile_type.distributed.collector_timeout_seconds or DEFAULT_COLLECTOR_TIMEOUT_SECONDS
+        if request.profile_type.HasField("threads"):
+            return capture_threads(dispatch, pid=str(pid), include_locals=request.profile_type.threads.locals)
+        elif request.profile_type.HasField("distributed"):
+            timeout = request.profile_type.distributed.collector_timeout_seconds or DEFAULT_COLLECTOR_TIMEOUT_SECONDS
             return capture_distributed_diagnostic(
                 dispatch,
                 pid=str(pid),
-                source=source,
-                attempt_id=attempt_id,
+                source=request.source,
+                attempt_id=request.attempt_id,
                 timeout=timeout,
             )
-        elif profile_type.HasField("cpu"):
-            return self._profile_cpu(dispatch, pid, duration_seconds, profile_type.cpu)
-        elif profile_type.HasField("memory"):
-            return self._profile_memory(dispatch, pid, duration_seconds, profile_type.memory)
+        elif request.profile_type.HasField("cpu"):
+            return self._profile_cpu(
+                dispatch,
+                pid,
+                request.duration_seconds,
+                request.profile_type.cpu,
+            )
+        elif request.profile_type.HasField("memory"):
+            return self._profile_memory(
+                dispatch,
+                pid,
+                request.duration_seconds,
+                request.profile_type.memory,
+            )
         else:
             raise RuntimeError("ProfileType must specify cpu, memory, threads, or distributed profiling")
 

@@ -478,13 +478,16 @@ def _parse_worker_target(target: str) -> str | None:
     return None
 
 
+_PROFILE_RPC_HEADROOM_SECONDS = 30
+
+
 def _profile_task_timeout_milliseconds(request: job_pb2.ProfileTaskRequest) -> int:
     if request.profile_type.HasField("distributed"):
         collector_timeout = (
             request.profile_type.distributed.collector_timeout_seconds or DEFAULT_COLLECTOR_TIMEOUT_SECONDS
         )
-        return (collector_timeout + PROBE_EXIT_HEADROOM_SECONDS + 30) * 1000
-    return ((request.duration_seconds or 10) + 30) * 1000
+        return (collector_timeout + PROBE_EXIT_HEADROOM_SECONDS + _PROFILE_RPC_HEADROOM_SECONDS) * 1000
+    return ((request.duration_seconds or 10) + _PROFILE_RPC_HEADROOM_SECONDS) * 1000
 
 
 def _active_job_count(job_state_counts: dict[int, int]) -> int:

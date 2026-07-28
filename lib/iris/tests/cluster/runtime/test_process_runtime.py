@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from iris.cluster.runtime.process import ProcessRuntime, _remap_container_path, _resolve_mount_map
-from iris.cluster.runtime.types import ContainerConfig, MountKind, MountSpec
+from iris.cluster.runtime.types import ContainerConfig, MountKind, MountSpec, ProfileCaptureRequest
 from iris.rpc import job_pb2
 
 
@@ -120,12 +120,14 @@ def test_process_handle_distributed_profile_captures_live_child(tmp_path):
     handle.run()
     try:
         profile = handle.profile(
-            0,
-            job_pb2.ProfileType(
-                distributed=job_pb2.DistributedProfile(collector_timeout_seconds=1),
+            ProfileCaptureRequest(
+                duration_seconds=0,
+                profile_type=job_pb2.ProfileType(
+                    distributed=job_pb2.DistributedProfile(collector_timeout_seconds=1),
+                ),
+                source="/local/job/0",
+                attempt_id=4,
             ),
-            source="/local/job/0",
-            attempt_id=4,
         )
     finally:
         handle.cleanup()

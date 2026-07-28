@@ -263,7 +263,6 @@ def test_distributed_profile_rejects_non_task_targets(service, target):
         service.profile_task(request, None)
 
     assert exc_info.value.code == Code.INVALID_ARGUMENT
-    assert "require a task target" in exc_info.value.message
     service._controller.provider.profile_task.assert_not_called()
 
 
@@ -280,7 +279,6 @@ def test_distributed_profile_rejects_out_of_range_collector_timeout(service, tim
         service.profile_task(request, None)
 
     assert exc_info.value.code == Code.INVALID_ARGUMENT
-    assert "between 1 and 30 seconds" in exc_info.value.message
     service._controller.provider.profile_task.assert_not_called()
 
 

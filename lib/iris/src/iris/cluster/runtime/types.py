@@ -141,6 +141,16 @@ class ContainerStatus:
     oom_killed: bool = False
 
 
+@dataclass(frozen=True)
+class ProfileCaptureRequest:
+    """Resolved request for profiling one task container."""
+
+    duration_seconds: int
+    profile_type: job_pb2.ProfileType
+    source: str
+    attempt_id: int
+
+
 class RuntimeLogReader(Protocol):
     """Opaque incremental log reader created by a ContainerHandle.
 
@@ -243,21 +253,11 @@ class ContainerHandle(Protocol):
         """
         ...
 
-    def profile(
-        self,
-        duration_seconds: int,
-        profile_type: job_pb2.ProfileType,
-        *,
-        source: str,
-        attempt_id: int,
-    ) -> bytes:
+    def profile(self, request: ProfileCaptureRequest) -> bytes:
         """Profile the running process or capture a distributed diagnostic.
 
         Args:
-            duration_seconds: How long to sample (ignored for threads and distributed diagnostics)
-            profile_type: ProfileType message selecting one profiler
-            source: Canonical task source included in distributed bundles
-            attempt_id: Attempt included in distributed bundles
+            request: Resolved profiler configuration and task identity.
 
         Returns:
             Raw profile output (SVG/HTML/JSON/text depending on profiler and format)

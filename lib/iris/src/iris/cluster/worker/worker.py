@@ -25,7 +25,7 @@ from iris.cluster.runtime.profile import (
     build_profile_row,
     profile_local_process,
 )
-from iris.cluster.runtime.types import ContainerRuntime, ExecutionStage
+from iris.cluster.runtime.types import ContainerRuntime, ExecutionStage, ProfileCaptureRequest
 from iris.cluster.stats.tables import (
     PROFILE_NAMESPACE,
     TASK_STATS_NAMESPACE,
@@ -1104,10 +1104,12 @@ class Worker:
             if attempt is None or attempt.status != job_pb2.TASK_STATE_RUNNING:
                 raise RuntimeError("attempt no longer running")
             data = attempt.profile(
-                duration,
-                request.profile_type,
-                source=task_id_wire,
-                attempt_id=resolved_attempt_id,
+                ProfileCaptureRequest(
+                    duration_seconds=duration,
+                    profile_type=request.profile_type,
+                    source=task_id_wire,
+                    attempt_id=resolved_attempt_id,
+                )
             )
             row_source = task_id_wire
             row_attempt_id = resolved_attempt_id
