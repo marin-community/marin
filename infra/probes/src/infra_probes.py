@@ -57,7 +57,7 @@ CANARY_RUNTIME_TIMEOUT = 60.0
 CANARY_WAIT_TIMEOUT = 100.0
 CANARY_PEER_TIMEOUT = 120.0
 CANARY_COLLECTOR_TIMEOUT = 240.0
-CANARY_CADENCE = 300.0
+CANARY_CADENCE = 1800.0
 
 # Provisioning gauge: a trailing window over the controller's iris.provisioning
 # namespace, re-emitted each cadence. A 3h window smooths the bursty per-minute

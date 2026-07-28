@@ -323,7 +323,7 @@ groups:
           runbook_url: https://github.com/marin-community/marin/blob/main/infra/probes/README.md
         data:
           - refId: A
-            relativeTimeRange: { from: 600, to: 0 }
+            relativeTimeRange: { from: 3600, to: 0 }
             datasourceUid: finelog-marin
             model:
               refId: A
@@ -343,7 +343,7 @@ groups:
                                ROW_NUMBER() OVER (PARTITION BY labels ORDER BY collected_at DESC) AS row_num
                         FROM "infra.canary.metrics"
                         WHERE metric = 'probe_up'
-                          AND collected_at >= CURRENT_TIMESTAMP - INTERVAL '10 minutes'
+                          AND collected_at >= CURRENT_TIMESTAMP - INTERVAL '60 minutes'
                       )
                       SELECT json_get(labels, 'probe') AS probe,
                              COALESCE(json_get(labels, 'cluster'), json_get(labels, 'zone'), 'global') AS target,

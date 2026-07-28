@@ -9,17 +9,21 @@ Health checks (emit a `probe_up` 1/0 sample; the runner adds `probe_latency_ms`)
 
 - `controller-ping` — `list_workers()` on the Iris controller (cadence 60s).
 - `finelog-write` — write a nonce and read it back (60s).
-- `iris-job-submit/<zone>` — submit a tiny job per zone, wait for SUCCEEDED (300s).
+- `iris-job-submit/<zone>` — submit a tiny job per zone, wait for SUCCEEDED
+  (cadence 30 min).
 - `iris-job-submit/federation` — discover every peer configured on the Marin
   controller and concurrently submit a tiny, cluster-pinned job to each one
-  through `https://iris.oa.dev` (300s). This emits one `probe_up` sample per
-  target, labelled with `route=federation` and `cluster=<peer>`. Marin's
-  production peers are the CoreWeave Kubernetes clusters, so this exercises
-  IAP authentication, federation handoff, Kueue, and pod scheduling end to end.
+  through `https://iris.oa.dev` (cadence 30 min). This emits one `probe_up`
+  sample per target, labelled with `route=federation` and `cluster=<peer>`.
+  Marin's production peers are the CoreWeave Kubernetes clusters, so this
+  exercises IAP authentication, federation handoff, Kueue, and pod scheduling
+  end to end.
 
 Scheduling canaries request 100 millicores and 128 MiB, run a one-second Python
 sleep, and set `setup_scripts=[]`. They use the task image as-is: there is no
-workspace upload or dependency build to obscure the scheduling result.
+workspace upload or dependency build to obscure the scheduling result. They run
+every 30 minutes as a fallback for the lower-level cluster and federation
+eventers.
 
 Gauges:
 
