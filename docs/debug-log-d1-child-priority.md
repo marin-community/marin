@@ -24,9 +24,10 @@ unspecified so existing launches do not change.
 
 ## Results
 
-Pending a direct-cluster submission with `GRUG_JOB_PRIORITY=production`. The
-pass criterion is `priority_band=1` on all 16 persisted child tasks before any
-training metric is accepted.
+The direct-cluster resubmissions set `GRUG_JOB_PRIORITY=production`. The
+controller persisted all 16 tasks in each child gang with `priority_band=1`.
+Kueue then reported active workload preemption rather than the previous
+interactive-band capacity wait.
 
 ## Future work
 

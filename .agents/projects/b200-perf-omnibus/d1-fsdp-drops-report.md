@@ -1,7 +1,7 @@
 # D-1: FSDP baseline token-drop rates
 
-Status: child-priority propagation fixed; corrected resubmission pending; no
-D-1 metrics inspected.
+Status: both corrected production-band child gangs are queued on
+`cw-us-east-08a`; no D-1 metrics inspected.
 
 The first submission attempt used the federated `marin` route and
 `interactive` priority. Both jobs remained outside the target cluster's
@@ -28,6 +28,8 @@ remained Kueue-gated with zero assigned workers. Both roots and children were
 stopped before training. The dispatcher now accepts an explicit
 `GRUG_JOB_PRIORITY=production`; its child rows must show `priority_band=1`
 before either job is accepted as a measurement.
+
+The priority fix and drop metric run from source commit `fc5532108`.
 
 ## TL;DR
 
@@ -88,21 +90,23 @@ model and implementation.
 
 ## D-1a: d6144, 4-of-128, chunk-2
 
-Job ID: `/mwittmann/d1a-fsdp-drops-350-r4-20260728-2330`
+Job ID: `/mwittmann/d1a-fsdp-drops-350-r5-20260728-2348`
 
-Submission state at 2026-07-28 23:46 UTC: stopped. All 16 child tasks had
-interactive `priority_band=2` and zero assigned workers.
+Submission state at 2026-07-28 23:48 UTC: all 16 child tasks had production
+`priority_band=1` and zero assigned workers. Kueue reported that 8 of 16 nodes
+fit and it was preempting four workloads to admit the gang.
 
 Training gang:
-`/mwittmann/d1a-fsdp-drops-350-r4-20260728-2330/grug-train-d1a-fsdp-drops-350-r4-20260728-2330`
+`/mwittmann/d1a-fsdp-drops-350-r5-20260728-2348/grug-train-d1a-fsdp-drops-350-r5-20260728-2348`
 
 Exact command:
 
 ```bash
 IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run \
   --no-wait --user mwittmann --priority production --memory 2GB \
-  --job-name d1a-fsdp-drops-350-r4-20260728-2330 \
-  -e RUN_ID d1a-fsdp-drops-350-r4-20260728-2330 \
+  --job-name d1a-fsdp-drops-350-r5-20260728-2348 \
+  -e RUN_ID d1a-fsdp-drops-350-r5-20260728-2348 \
+  -e GRUG_JOB_PRIORITY production \
   -e SCALE_GPUS_PER_NODE 4 -e SCALE_GPU_TYPE GB200 \
   -e SCALE_GPU_REPLICAS 16 -e SCALE_EXPERT_AXIS 1 -e SCALE_REPLICA_AXIS 1 \
   -e SCALE_HIDDEN_DIM 6144 -e SCALE_NUM_LAYERS 48 \
@@ -121,11 +125,11 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run \
   -e CE_IMPL liger -e CE_LIGER_CHUNK 8192 \
   -e SCALE_REMAT recompute_all -e SCALE_MOE_EXPERT_CHUNKS 2 \
   -e SCALE_REPORT_DROPS 1 -e SCALE_TRACKER json_logger \
-  -e SCALE_JSON_LOGGER d1a-fsdp-drops-350-r4-20260728-2330.metrics \
+  -e SCALE_JSON_LOGGER d1a-fsdp-drops-350-r5-20260728-2348.metrics \
   -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async \
   -e XLA_FLAGS "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false --xla_gpu_experimental_parallel_collective_overlap_limit=4" \
   -- python -m experiments.grug.moe.launch_cw_scale \
-  --version d1-fsdp-drops-cefc6d47b --run
+  --version d1-fsdp-drops-fc5532108 --run
 ```
 
 This reproduces the recorded one-rack 23.1% configuration: d6144, 48 layers,
@@ -141,21 +145,23 @@ Results: pending
 
 ## D-1b: d5120, 8-of-256, unchunked
 
-Job ID: `/mwittmann/d1b-fsdp-drops-120-r3-20260728-2328`
+Job ID: `/mwittmann/d1b-fsdp-drops-120-r4-20260728-2349`
 
-Submission state at 2026-07-28 23:46 UTC: stopped. All 16 child tasks had
-interactive `priority_band=2` and zero assigned workers.
+Submission state at 2026-07-28 23:49 UTC: all 16 child tasks had production
+`priority_band=1` and zero assigned workers. Kueue reported that no node yet
+fit and it was preempting one workload to admit the gang.
 
 Training gang:
-`/mwittmann/d1b-fsdp-drops-120-r3-20260728-2328/grug-train-d1b-fsdp-drops-120-r3-20260728-2328`
+`/mwittmann/d1b-fsdp-drops-120-r4-20260728-2349/grug-train-d1b-fsdp-drops-120-r4-20260728-2349`
 
 Exact command:
 
 ```bash
 IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run \
   --no-wait --user mwittmann --priority production --memory 2GB \
-  --job-name d1b-fsdp-drops-120-r3-20260728-2328 \
-  -e RUN_ID d1b-fsdp-drops-120-r3-20260728-2328 \
+  --job-name d1b-fsdp-drops-120-r4-20260728-2349 \
+  -e RUN_ID d1b-fsdp-drops-120-r4-20260728-2349 \
+  -e GRUG_JOB_PRIORITY production \
   -e SCALE_GPUS_PER_NODE 4 -e SCALE_GPU_TYPE GB200 \
   -e SCALE_GPU_REPLICAS 16 -e SCALE_EXPERT_AXIS 1 -e SCALE_REPLICA_AXIS 1 \
   -e SCALE_HIDDEN_DIM 5120 -e SCALE_NUM_LAYERS 48 \
@@ -170,11 +176,11 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run \
   -e SCALE_REMAT recompute_all -e SCALE_MOE_EXPERT_CHUNKS 1 \
   -e SCALE_DISABLE_CHECKPOINT 1 -e SCALE_REPORT_DROPS 1 \
   -e SCALE_TRACKER json_logger \
-  -e SCALE_JSON_LOGGER d1b-fsdp-drops-120-r3-20260728-2328.metrics \
+  -e SCALE_JSON_LOGGER d1b-fsdp-drops-120-r4-20260728-2349.metrics \
   -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async \
   -e XLA_FLAGS "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false --xla_gpu_experimental_parallel_collective_overlap_limit=4" \
   -- python -m experiments.grug.moe.launch_cw_scale \
-  --version d1-fsdp-drops-cefc6d47b --run
+  --version d1-fsdp-drops-fc5532108 --run
 ```
 
 This keeps the recorded d5120 architecture and per-device batch: 48 layers,
