@@ -344,12 +344,15 @@ def main() -> None:
     eval_root = f"{marin_prefix()}/{_EVALS_RELATIVE}"
     eval_files = list(_discover_eval_files([eval_root], DECON_EXCLUDED_EVAL_TASKS))
 
-    bloom_dir = f"{args.work.rstrip('/')}/bloom"
+    # Key the bloom dir on the feature policy that actually changes its contents
+    # (ngram length + paragraph delimiter), NOT on min_abs_hits (a mark-time knob
+    # that leaves the bloom identical). So a re-run reuses the bloom across
+    # min_abs_hits settings — skipping the ~minutes-long single-process build — but
+    # a different --delimiter or ngram length builds its own bloom instead of
+    # silently reusing an incompatible one.
+    delim_slug = delimiter.encode("unicode_escape").decode().replace("\\", "")
+    bloom_dir = f"{args.work.rstrip('/')}/bloom_n{NGRAM_LENGTH}_d{delim_slug}"
     bloom_path, _ = bloom_paths(bloom_dir)
-    # The bloom depends only on the eval corpus + feature policy (ngram length /
-    # delimiter / letter filter), NOT on min_abs_hits — so an existing bloom in the
-    # work dir is reused across min_abs_hits settings, skipping the ~minutes-long
-    # single-process build on re-runs.
     if StoragePath(bloom_path).exists():
         logger.info("reusing existing bloom at %s", bloom_path)
     else:

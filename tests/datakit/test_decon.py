@@ -706,6 +706,13 @@ def test_decon_abs_count_disabled_reverts_to_fraction_only(tmp_path: Path):
     assert rows["doc_embedded"]["max_overlap"] < 0.5
 
 
+@pytest.mark.parametrize("bad", [0, -1])
+def test_ngram_config_rejects_nonpositive_min_abs_hits(bad):
+    """min_abs_hits < 1 would flag every paragraph, so construction rejects it (None disables)."""
+    with pytest.raises(ValueError, match="min_abs_hits"):
+        NGramConfig(min_abs_hits=bad)
+
+
 def test_decon_abs_count_gated_below_min_hits(tmp_path: Path):
     """A short embedded fragment (few matched ngrams) is NOT flagged by the abs-count path.
 

@@ -114,6 +114,12 @@ class NGramConfig:
     paragraph_delimiter: str = "\n\n"
     min_abs_hits: int | None = None
 
+    def __post_init__(self) -> None:
+        # min_abs_hits < 1 would flag every paragraph (even zero-hit ones), so
+        # reject it — callers disable the path with None, not 0.
+        if self.min_abs_hits is not None and self.min_abs_hits < 1:
+            raise ValueError(f"min_abs_hits must be >= 1 or None, got {self.min_abs_hits}")
+
 
 class DeconAttributes(BaseModel):
     """Outcome of :func:`decon_to_parquet`: a co-partitioned attributes dataset.

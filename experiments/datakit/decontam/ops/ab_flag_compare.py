@@ -60,11 +60,13 @@ def _overlapping_ngrams(text: str, matched: set[int], limit: int = 8) -> list[st
 
 
 def _count_file(fs, f: str, threshold: float) -> tuple[int, int, int]:
-    # Project only the two scalar subfields (skip the matched_hashes list column).
+    # Read the attributes struct and pull the two scalar subfields via .field()
+    # (matched_hashes is a mostly-empty list, so loading it is cheap). Extracting
+    # by field name is robust to how a given pyarrow version projects nested columns.
     with fs.open(f, "rb") as fh:
-        tbl = pq.read_table(fh, columns=["attributes.contaminated", "attributes.max_overlap"])
-    contaminated = tbl.column(0).combine_chunks()
-    max_overlap = tbl.column(1).combine_chunks()
+        attrs = pq.read_table(fh, columns=["attributes"]).column("attributes").combine_chunks()
+    contaminated = attrs.field("contaminated")
+    max_overlap = attrs.field("max_overlap")
     fixed = pc.sum(contaminated).as_py() or 0
     base = pc.sum(pc.greater_equal(max_overlap, threshold)).as_py() or 0
     return len(contaminated), base, fixed
