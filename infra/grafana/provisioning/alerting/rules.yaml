@@ -305,8 +305,9 @@ groups:
                 - evaluator: { type: gt, params: [0] }
 
   # Warning-only stalled-training detection. A fresh running task-state row is
-  # the liveness gate; absent Telltale is evidence after the initialization
-  # grace period, so this rule does not require task-to-node GPU attribution.
+  # the liveness gate and levanter_phase enrolls the job; only progress absent
+  # after enrollment is evidence, so this rule does not require task-to-node
+  # GPU attribution.
   - orgId: 1
     name: training-progress
     folder: Alerts
