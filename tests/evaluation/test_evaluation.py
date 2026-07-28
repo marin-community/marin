@@ -9,7 +9,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from marin.evaluation.evalchemy.runtime import evalchemy_requirement
 from marin.evaluation.harbor.runner import HARBOR_RUNTIME
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig, ResourceHint
@@ -24,6 +23,7 @@ from marin.evaluation.runner import (
     evaluate_batch,
     submit_evaluation_batch,
 )
+from marin.external_dependencies import EVALCHEMY
 from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem import StoragePath
@@ -114,7 +114,7 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
     assert failed.log_tails == {"eval": ("failure detail",)}
     assert succeeded.status is RunStatus.SUCCEEDED
     assert succeeded.metrics == {"task": {"accuracy": 0.75}}
-    assert succeeded.provenance.eval_image == "test-runtime"
+    assert succeeded.provenance.eval_runtime == "test-runtime"
     assert (tmp_path / "success" / "endpoint.txt").read_text() == endpoint
 
 
@@ -209,7 +209,7 @@ def test_build_evaluation_batch_records_evalchemy_benchmark_extras(monkeypatch):
         "tester",
     )
 
-    assert batch.evaluations[0].identity.eval_runtime == evalchemy_requirement(("math500",))
+    assert batch.evaluations[0].identity.eval_runtime == EVALCHEMY.requirement(("math500",))
 
 
 def test_build_evaluation_batch_rejects_conflicting_secret_specs(monkeypatch):

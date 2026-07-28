@@ -34,8 +34,3 @@ _CPU_TORCH_AARCH64 = (
     " ; sys_platform == 'linux' and platform_machine == 'aarch64'"
 )
 EVALCHEMY_EXTRA_PACKAGES = ("s3fs", "gcsfs", _CPU_TORCH_X86_64, _CPU_TORCH_AARCH64)
-
-
-def evalchemy_requirement(extras: tuple[str, ...] = ()) -> str:
-    """Pin benchmark extras to the same immutable Evalchemy revision as the endpoint core."""
-    return EVALCHEMY.requirement(extras)

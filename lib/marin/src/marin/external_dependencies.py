@@ -18,6 +18,7 @@ class ExternalDependency:
     distribution: str
     repository: str
     commit: str
+    runtime_requirements: tuple[str, ...]
 
     def requirement(self, extras: tuple[str, ...] = ()) -> str:
         """Return a PEP 508 requirement for this revision."""
@@ -32,6 +33,7 @@ EVALCHEMY = ExternalDependency(
     distribution="evalchemy",
     repository="https://github.com/marin-community/evalchemy.git",
     commit="adf37c2878906870f7c7d8845f72a25649513bed",
+    runtime_requirements=(),
 )
 
 HARBOR = ExternalDependency(
@@ -39,6 +41,7 @@ HARBOR = ExternalDependency(
     distribution="harbor",
     repository="https://github.com/marin-community/harbor.git",
     commit="575d7fcb30d5a2392efc3a9c68bc4f43ae687c1f",
+    runtime_requirements=("daytona==0.200.2",),
 )
 
 MARIN_SKYRL = ExternalDependency(
@@ -46,6 +49,11 @@ MARIN_SKYRL = ExternalDependency(
     distribution="skyrl",
     repository="https://github.com/marin-community/MarinSkyRL.git",
     commit="49fbef2dc2d83d626875801018f6f690992d5a1f",
+    runtime_requirements=(),
 )
 
-EXTERNAL_DEPENDENCIES = (EVALCHEMY, HARBOR, MARIN_SKYRL,)
+EXTERNAL_DEPENDENCIES = (
+    EVALCHEMY,
+    HARBOR,
+    MARIN_SKYRL,
+)

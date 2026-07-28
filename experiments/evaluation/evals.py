@@ -11,7 +11,6 @@ from types import MappingProxyType
 from typing import Protocol
 
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig, EvalchemyRuntimeConfig
-from marin.evaluation.evalchemy.runtime import evalchemy_requirement
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import (
     HarborAgentConfig,
@@ -24,6 +23,7 @@ from marin.evaluation.harbor.runner import HARBOR_RUNTIME, HarborExecutor
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import EvalRef, EvalTaskRef, HarborRef
 from marin.evaluation.runner import EvalExecutor
+from marin.external_dependencies import EVALCHEMY
 from rigging.secrets import SecretSpec
 
 _TERMINAL_BENCH_DATASET = "DCAgent2/terminal_bench_2"
@@ -163,7 +163,7 @@ def _chat_eval(name: str, task: str, max_gen_toks: int, *, unsafe_code: bool = F
             name=name,
             tasks=(EvalTaskConfig(task, 0, task_alias=name, generation=True, unsafe_code=unsafe_code),),
             max_gen_toks=max_gen_toks,
-            runtime=EvalchemyRuntimeConfig(requirement=evalchemy_requirement((benchmark_extra,))),
+            runtime=EvalchemyRuntimeConfig(requirement=EVALCHEMY.requirement((benchmark_extra,))),
         )
     )
 
@@ -392,7 +392,6 @@ NLP_EVALS: tuple[str, ...] = (
 # MMLU-Pro, CruxEval, MRCR, IFBench, and FinanceBench have no working task on the pinned fork.
 CHAT_EVALS: tuple[str, ...] = ("math500", "aime24", "olympiadbench")
 
-# Named suite groupings for math and code evaluations.
 MATH_EVALS: tuple[str, ...] = ("math500", "aime24", "gsm8k-0shot")
 CODE_EVALS: tuple[str, ...] = ("humanevalplus", "mbppplus")
 

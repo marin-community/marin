@@ -30,6 +30,7 @@ class ExternalProject:
     config_name: str
     distribution: str
     constant_name: str
+    runtime_distributions: tuple[str, ...] = ()
 
     @property
     def directory(self) -> Path:
@@ -41,41 +42,70 @@ class LockedDependency:
     project: ExternalProject
     repository: str
     commit: str
+    runtime_requirements: tuple[str, ...]
 
 
 EXTERNAL_PROJECTS = (
     ExternalProject("evalchemy", "evalchemy", "EVALCHEMY"),
-    ExternalProject("harbor", "harbor", "HARBOR"),
+    ExternalProject("harbor", "harbor", "HARBOR", runtime_distributions=("daytona",)),
     ExternalProject("MarinSkyRL", "skyrl", "MARIN_SKYRL"),
 )
-PROJECTS_BY_NAME = {project.config_name: project for project in EXTERNAL_PROJECTS}
 
 
-def locked_dependency(project: ExternalProject) -> LockedDependency:
-    """Read an external package's immutable Git source from its uv lockfile."""
-    lock_path = project.directory / "uv.lock"
+def locked_package(lock_path: Path, distribution: str) -> dict:
+    """Read one distribution record from a uv lockfile."""
     lock = tomllib.loads(lock_path.read_text())
-    package = next(package for package in lock["package"] if package["name"] == project.distribution)
+    packages = [package for package in lock["package"] if package["name"] == distribution]
+    if len(packages) != 1:
+        raise ValueError(f"{lock_path}: expected one {distribution!r} package, found {len(packages)}")
+    return packages[0]
+
+
+def locked_git_source(lock_path: Path, distribution: str) -> tuple[str, str]:
+    """Read and validate one distribution's immutable Git source."""
+    package = locked_package(lock_path, distribution)
     source = package["source"]["git"]
     repository_with_query, separator, commit = source.partition("#")
     if not separator or not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise ValueError(f"{lock_path}: expected a Git source ending in a full commit, found {source!r}")
     repository, _, _ = repository_with_query.partition("?")
-    return LockedDependency(project=project, repository=repository, commit=commit)
+    return repository, commit
+
+
+def locked_dependency(project: ExternalProject) -> LockedDependency:
+    """Read an external package and its runtime requirements from its uv lockfile."""
+    lock_path = project.directory / "uv.lock"
+    repository, commit = locked_git_source(lock_path, project.distribution)
+    requirements = tuple(
+        f"{distribution}=={locked_package(lock_path, distribution)['version']}"
+        for distribution in project.runtime_distributions
+    )
+    return LockedDependency(
+        project=project,
+        repository=repository,
+        commit=commit,
+        runtime_requirements=requirements,
+    )
 
 
 def render_pins(dependencies: tuple[LockedDependency, ...]) -> str:
     """Render the packaged pin table consumed by isolated Marin runtimes."""
+
+    def tuple_literal(values: tuple[str, ...]) -> str:
+        quoted = ", ".join(f'"{value}"' for value in values)
+        return f"({quoted},)" if values else "()"
+
     entries = "\n\n".join(
         f"{dependency.project.constant_name} = ExternalDependency(\n"
         f'    config_name="{dependency.project.config_name}",\n'
         f'    distribution="{dependency.project.distribution}",\n'
         f'    repository="{dependency.repository}",\n'
         f'    commit="{dependency.commit}",\n'
+        f"    runtime_requirements={tuple_literal(dependency.runtime_requirements)},\n"
         f")"
         for dependency in dependencies
     )
-    constants = ", ".join(dependency.project.constant_name for dependency in dependencies)
+    constants = "\n".join(f"    {dependency.project.constant_name}," for dependency in dependencies)
     return f'''# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
@@ -96,6 +126,7 @@ class ExternalDependency:
     distribution: str
     repository: str
     commit: str
+    runtime_requirements: tuple[str, ...]
 
     def requirement(self, extras: tuple[str, ...] = ()) -> str:
         """Return a PEP 508 requirement for this revision."""
@@ -107,7 +138,9 @@ class ExternalDependency:
 
 {entries}
 
-EXTERNAL_DEPENDENCIES = ({constants},)
+EXTERNAL_DEPENDENCIES = (
+{constants}
+)
 '''
 
 
@@ -131,12 +164,13 @@ def synchronize_file(path: Path, expected: str, *, check: bool) -> bool:
 
 def root_lock_matches(harbor: LockedDependency) -> bool:
     """Return whether the root workspace lock uses the external Harbor revision."""
-    lock = tomllib.loads((ROOT / "uv.lock").read_text())
-    package = next(package for package in lock["package"] if package["name"] == harbor.project.distribution)
-    source = package["source"]["git"]
-    repository_with_query, separator, commit = source.partition("#")
-    repository, _, _ = repository_with_query.partition("?")
-    return bool(separator) and repository == harbor.repository and commit == harbor.commit
+    repository, commit = locked_git_source(ROOT / "uv.lock", harbor.project.distribution)
+    return repository == harbor.repository and commit == harbor.commit
+
+
+def project_by_name(name: str) -> ExternalProject:
+    """Return the configured external project named by the CLI."""
+    return next(project for project in EXTERNAL_PROJECTS if project.config_name == name)
 
 
 def parse_args() -> argparse.Namespace:
@@ -146,7 +180,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "projects",
         nargs="*",
-        choices=tuple(PROJECTS_BY_NAME),
+        choices=tuple(project.config_name for project in EXTERNAL_PROJECTS),
         metavar="PROJECT",
         help="projects to advance (default: all)",
     )
@@ -160,7 +194,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    selected = tuple(PROJECTS_BY_NAME[name] for name in args.projects) or EXTERNAL_PROJECTS
+    selected = tuple(project_by_name(name) for name in args.projects) or EXTERNAL_PROJECTS
     if not args.check:
         for project in selected:
             subprocess.run(
@@ -177,7 +211,7 @@ def main() -> None:
 
     dependencies = tuple(locked_dependency(project) for project in EXTERNAL_PROJECTS)
     pins_match = synchronize_file(GENERATED_PINS, render_pins(dependencies), check=args.check)
-    harbor = next(dependency for dependency in dependencies if dependency.project is PROJECTS_BY_NAME["harbor"])
+    harbor = next(dependency for dependency in dependencies if dependency.project.config_name == "harbor")
     root_matches = synchronize_file(
         ROOT_PYPROJECT,
         synchronized_root_pyproject(harbor),

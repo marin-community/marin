@@ -161,7 +161,7 @@ def _record(
         metrics=metrics,
         provenance=Provenance(
             git_sha=batch.provenance.git_sha,
-            eval_image=identity.eval_runtime,
+            eval_runtime=identity.eval_runtime,
             launch_host=batch.provenance.launch_host,
         ),
         jobs=jobs,

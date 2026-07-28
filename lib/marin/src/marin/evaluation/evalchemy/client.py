@@ -1,11 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Evalchemy OpenAI-client entrypoint, run in a commit-pinned uvx environment.
-
-The eval child runs this as a plain command under the isolated environment's interpreter, which
-contains Evalchemy, lm-eval, fsspec, and the s3fs/gcsfs backends. It is a command entrypoint rather
-than an Iris ``from_callable`` one so Evalchemy stays isolated from Marin's project environment.
+"""Evaluate configured tasks through an OpenAI-compatible endpoint.
 
 Config arrives as JSON in ``$EVALCHEMY_CLIENT_CONFIG`` (the parent builds it in
 :mod:`marin.evaluation.evalchemy.runner`), so nothing else in Marin needs to import here.
