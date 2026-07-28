@@ -10,9 +10,17 @@ the built-in kinds cover common PR and Iris waits without shell parsing:
 
     poll <shell command>    fires when the command exits 0
     github.ci <PR>          fires the moment any check fails, else when all checks pass
+    github.pr <PR>          fires on terminal, conflicted, review, or ready-for-review state
     github.pr_comment <PR>  fires on a new comment that raises a real code concern
     github.review <PR>      fires on a decisive review, or one whose body raises a concern
     iris.job <job-id>       fires when an Iris job reaches a terminal state (in-task only)
+
+``github.pr`` snapshots the PR's state, mergeability, review decision, and draft
+status. It fires when the PR merges or closes, becomes conflicted, its review
+decision changes, or a draft becomes ready for review. The payload names every
+reason that fired and includes the complete before/after snapshots. A PR first
+observed as terminal or conflicted fires immediately, so arming the selector
+after the state change does not lose an actionable condition.
 
 ``iris.job`` runs the Iris client's blocking ``Job.wait`` in a daemon worker. Its
 state polling and controller retries use the Iris client policy; the selector
@@ -24,22 +32,24 @@ the mundane shapes that bot emits: the in-progress placeholder it posts the mome
 opens and edits in place once done, its "no issues found" verdict, and the
 automated-review wrapper whose findings arrive as separate inline comments. Only the
 automation a rule names is ever suppressed, so a comment from a human — or from a bot the
-catalog does not cover — always fires. Comments are keyed on content, so a placeholder a
-bot later edits into a real finding re-surfaces as new activity. Pass
+catalog does not cover — always fires. The catalog also suppresses Loom's exact
+``Working on this in loom: <session URL>`` acknowledgement, only when the Loom bot
+authored it. Comments are keyed on content, so a placeholder a bot later edits into a
+real finding re-surfaces as new activity. Pass
 ``--comment-filter all`` to fire on every new comment instead.
 
 `poll` is the escape hatch for anything without a built-in: compose the predicate
-with the shell (``| grep -q``, ``| jq -e``, ``test``). For example, wait for the
-PR to close with ``poll 'test "$(gh pr view 1234 --json state --jq .state)" != OPEN'``.
-Specs come from argv (one quoted token each) or stdin (one per line; ``#`` comments):
+with the shell (``| grep -q``, ``| jq -e``, ``test``). Specs come from argv (one
+quoted token each) or stdin (one per line; ``#`` comments):
 
     uv run scripts/ci/wait_for.py --timeout 12h \\
       'poll loom session poll weaver/foo --quiet | grep -q done' \\
-      'github.ci 1234' 'github.pr_comment 1234'
+      'github.ci 1234' 'github.pr 1234' 'github.pr_comment 1234'
 
     uv run scripts/ci/wait_for.py --timeout 12h <<'HERE'
     poll loom session poll weaver/foo --quiet | grep -q done
     github.ci 1234
+    github.pr 1234
     github.pr_comment 1234
     HERE
 
@@ -96,6 +106,7 @@ class GhError(RuntimeError):
 
 class EventKind(StrEnum):
     GITHUB_CI = "github.ci"
+    GITHUB_PR = "github.pr"
     GITHUB_PR_COMMENT = "github.pr_comment"
     GITHUB_REVIEW = "github.review"
     IRIS_JOB = "iris.job"
@@ -169,6 +180,40 @@ def gh_pr_checks(pr: str, repo: str) -> list[dict]:
         return json.loads(out)
     except json.JSONDecodeError as exc:
         raise GhError(f"`gh pr checks {pr}` returned unparseable JSON: {exc}") from exc
+
+
+@dataclass(frozen=True)
+class PrSnapshot:
+    """The GitHub PR state used by the lifecycle selector."""
+
+    state: str
+    mergeable: str
+    review_decision: str | None
+    is_draft: bool
+    url: str
+
+    def payload(self) -> dict:
+        return {
+            "state": self.state,
+            "mergeable": self.mergeable,
+            "review_decision": self.review_decision,
+            "is_draft": self.is_draft,
+            "url": self.url,
+        }
+
+
+def gh_pr_snapshot(pr: str, repo: str) -> PrSnapshot:
+    """Read the fields observed by ``github.pr``."""
+    data: dict = gh_json(
+        ["pr", "view", pr, "--repo", repo, "--json", "state,mergeable,reviewDecision,isDraft,url"]
+    )  # pyrefly: ignore  # gh JSON shape
+    return PrSnapshot(
+        state=data["state"],
+        mergeable=data["mergeable"],
+        review_decision=data["reviewDecision"] or None,
+        is_draft=data["isDraft"],
+        url=data["url"],
+    )
 
 
 @dataclass(frozen=True)
@@ -291,6 +336,7 @@ class CommentFilter(StrEnum):
 # unlike the GraphQL login, which does not).
 CLAUDE_BOT = "claude[bot]"
 CODEX_BOT = "chatgpt-codex-connector[bot]"
+LOOM_BOT = "loom-oa-dev[bot]"
 
 # --- body shapes -------------------------------------------------------------------
 #
@@ -346,6 +392,7 @@ _FINDING_RE = re.compile(
 _WRAPPER_RE = re.compile(
     r"automated review suggestions|<summary>[^<]*About Codex|#+\s*💡?\s*Codex Review", re.IGNORECASE
 )
+_LOOM_PLACEHOLDER_RE = re.compile(r"^Working on this in loom: https://loom\.oa\.dev/s/[A-Za-z0-9_-]+/?$")
 
 
 def _placeholder_residue(body: str) -> str:
@@ -377,6 +424,10 @@ def is_review_wrapper(body: str) -> bool:
     return bool(_WRAPPER_RE.search(body))
 
 
+def is_loom_placeholder(body: str) -> bool:
+    return bool(_LOOM_PLACEHOLDER_RE.fullmatch(body))
+
+
 @dataclass(frozen=True)
 class CommentRule:
     """One entry in the noise catalog: whose comments it judges, and which shape it suppresses."""
@@ -394,6 +445,7 @@ COMMENT_RULES: tuple[CommentRule, ...] = (
     CommentRule(CLAUDE_BOT, is_progress_placeholder, Significance.PROGRESS),
     CommentRule(CLAUDE_BOT, is_clean_verdict, Significance.CLEAN),
     CommentRule(CODEX_BOT, is_review_wrapper, Significance.WRAPPER),
+    CommentRule(LOOM_BOT, is_loom_placeholder, Significance.PROGRESS),
 )
 
 
@@ -415,6 +467,33 @@ def classify_significance(body: str, author: str) -> Significance:
 
 # Reviews that decide the merge always fire, regardless of body — the state is the signal.
 _DECISIVE_REVIEW_STATES = {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}
+
+
+class PrEventReason(StrEnum):
+    """Why a ``github.pr`` source fired."""
+
+    MERGED = "merged"
+    CLOSED = "closed"
+    CONFLICTED = "conflicted"
+    READY_FOR_REVIEW = "ready_for_review"
+    REVIEW_DECISION = "review_decision"
+
+
+def pr_event_reasons(before: PrSnapshot | None, after: PrSnapshot) -> tuple[PrEventReason, ...]:
+    """Return every actionable PR lifecycle change between two snapshots."""
+    reasons: list[PrEventReason] = []
+    if after.state == "MERGED" and (before is None or before.state != after.state):
+        reasons.append(PrEventReason.MERGED)
+    elif after.state == "CLOSED" and (before is None or before.state != after.state):
+        reasons.append(PrEventReason.CLOSED)
+    if after.mergeable == "CONFLICTING" and (before is None or before.mergeable != after.mergeable):
+        reasons.append(PrEventReason.CONFLICTED)
+    if before is not None:
+        if before.is_draft and not after.is_draft:
+            reasons.append(PrEventReason.READY_FOR_REVIEW)
+        if before.review_decision != after.review_decision:
+            reasons.append(PrEventReason.REVIEW_DECISION)
+    return tuple(reasons)
 
 
 # ----------------------------------------------------------------------- sources
@@ -469,6 +548,34 @@ class CiSource(Source):
             "pending": list(outcome.pending),
             "observed_checks": outcome.observed,
             "checks": list(outcome.checks),
+        }
+
+
+class PrSource(Source):
+    """Fires on actionable PR lifecycle and review-state changes."""
+
+    def __init__(self, spec: EventSpec, repo: str):
+        super().__init__(spec)
+        self.repo = repo
+        self.pr = _parse_pr(spec.arg)
+        self.previous: PrSnapshot | None = None
+
+    def check(self) -> dict | None:
+        before = self.previous
+        after = gh_pr_snapshot(self.pr, self.repo)
+        self.previous = after
+        reasons = pr_event_reasons(before, after)
+        review_decision = after.review_decision or "NONE"
+        self.last_status = (
+            f"state={after.state}, mergeable={after.mergeable}, "
+            f"review_decision={review_decision}, is_draft={after.is_draft}"
+        )
+        if not reasons:
+            return None
+        return {
+            "reasons": [reason.value for reason in reasons],
+            "before": before.payload() if before is not None else None,
+            "after": after.payload(),
         }
 
 
@@ -639,6 +746,8 @@ def build_source(
 ) -> Source:
     if spec.kind is EventKind.GITHUB_CI:
         return CiSource(spec, repo)
+    if spec.kind is EventKind.GITHUB_PR:
+        return PrSource(spec, repo)
     if spec.kind is EventKind.GITHUB_PR_COMMENT:
         return CommentSource(spec, repo, ignore_authors, comment_filter)
     if spec.kind is EventKind.GITHUB_REVIEW:
@@ -789,7 +898,8 @@ def _iris_job_waiter_from_job_info() -> Callable[[JobName], job_pb2.JobStatus]:
     type=click.Choice([f.value for f in CommentFilter]),
     default=CommentFilter.SIGNIFICANT.value,
     help="Which new comments fire github.pr_comment/github.review: 'significant' skips the review bots' "
-    "in-progress placeholders, clean verdicts, and review wrappers; 'all' fires on every new comment.",
+    "in-progress placeholders, clean verdicts, review wrappers, and Loom's session acknowledgement; "
+    "'all' fires on every new comment.",
 )
 @click.option("--quiet", is_flag=True, help="Print only the fired event kind, not the JSON payload.")
 def main(
@@ -809,7 +919,7 @@ def main(
 ) -> None:
     """Block until the first armed event fires; print which one as JSON."""
     parsed = read_specs(specs, use_stdin=use_stdin)
-    github_kinds = (EventKind.GITHUB_CI, EventKind.GITHUB_PR_COMMENT, EventKind.GITHUB_REVIEW)
+    github_kinds = (EventKind.GITHUB_CI, EventKind.GITHUB_PR, EventKind.GITHUB_PR_COMMENT, EventKind.GITHUB_REVIEW)
     needs_github = any(s.kind in github_kinds for s in parsed)
     needs_authors = any(s.kind in (EventKind.GITHUB_PR_COMMENT, EventKind.GITHUB_REVIEW) for s in parsed)
     needs_iris = any(s.kind is EventKind.IRIS_JOB for s in parsed)
