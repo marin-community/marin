@@ -15,7 +15,6 @@ import re
 import shlex
 import threading
 import time
-import uuid
 from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -93,6 +92,7 @@ from iris.cluster.runtime.env import (
     render_setup_steps,
 )
 from iris.cluster.runtime.profile import (
+    DISTRIBUTED_DIAGNOSTIC_PROBE_PATH,
     PROFILER_WATCHDOG_GRACE_SECONDS,
     UV_RUN_SCRIPT,
     ExecResult,
@@ -2134,13 +2134,12 @@ class _K8sProfileDispatch:
         *,
         timeout: int,
     ) -> ExecResult:
-        remote_path = f"/tmp/{probe_path.stem}-{uuid.uuid4().hex[:8]}.py"
         probe_text = probe_path.read_text()
         copied = self.kubectl.exec(
             self.pod_name,
             [
                 "dd",
-                f"of={remote_path}",
+                f"of={DISTRIBUTED_DIAGNOSTIC_PROBE_PATH}",
                 f"bs={len(probe_text.encode())}",
                 "count=1",
                 "iflag=fullblock",
@@ -2152,10 +2151,7 @@ class _K8sProfileDispatch:
         )
         if copied.returncode != 0:
             return ExecResult(copied.returncode, b"", copied.stderr or "probe copy failed")
-        try:
-            return self._venv_exec([*UV_RUN_SCRIPT, remote_path, *arguments], timeout=timeout)
-        finally:
-            self.kubectl.rm_files(self.pod_name, [remote_path], container="task")
+        return self._venv_exec([*UV_RUN_SCRIPT, DISTRIBUTED_DIAGNOSTIC_PROBE_PATH, *arguments], timeout=timeout)
 
     def _venv_exec(self, cmd: list[str], *, timeout: int) -> ExecResult:
         shell_cmd = ["bash", "-lc", f"source {VENV_PATH}/bin/activate 2>/dev/null; {shlex.join(cmd)}"]

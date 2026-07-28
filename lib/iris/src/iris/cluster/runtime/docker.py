@@ -37,6 +37,7 @@ from iris.cluster.runtime.distributed_diagnostic import (
 )
 from iris.cluster.runtime.env import VENV_PATH, cache_host_dirname, render_setup_steps, write_workdir_files
 from iris.cluster.runtime.profile import (
+    DISTRIBUTED_DIAGNOSTIC_PROBE_PATH,
     PROFILER_WATCHDOG_GRACE_SECONDS,
     UV_RUN_SCRIPT,
     ExecResult,
@@ -153,23 +154,15 @@ class _DockerProfileDispatch:
         *,
         timeout: int,
     ) -> ExecResult:
-        remote_path = f"/tmp/{probe_path.stem}-{uuid.uuid4().hex[:8]}.py"
         copied = subprocess.run(
-            ["docker", "cp", str(probe_path), f"{self.container_id}:{remote_path}"],
+            ["docker", "cp", str(probe_path), f"{self.container_id}:{DISTRIBUTED_DIAGNOSTIC_PROBE_PATH}"],
             capture_output=True,
             text=True,
             timeout=10,
         )
         if copied.returncode != 0:
             return ExecResult(copied.returncode, b"", copied.stderr or "docker cp failed")
-        try:
-            return self.exec([*UV_RUN_SCRIPT, remote_path, *arguments], timeout=timeout)
-        finally:
-            subprocess.run(
-                ["docker", "exec", self.container_id, "rm", "-f", remote_path],
-                capture_output=True,
-                timeout=10,
-            )
+        return self.exec([*UV_RUN_SCRIPT, DISTRIBUTED_DIAGNOSTIC_PROBE_PATH, *arguments], timeout=timeout)
 
     def _sigcont_sweep(self) -> None:
         try:

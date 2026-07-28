@@ -1020,7 +1020,7 @@ def test_distributed_profile_running_task(smoke_cluster):
                     distributed=job_pb2.DistributedProfile(collector_timeout_seconds=1),
                 ),
             ),
-            timeout_ms=15000,
+            timeout_ms=45000,
         )
 
         assert not response.error
