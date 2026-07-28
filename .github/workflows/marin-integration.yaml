@@ -38,6 +38,22 @@ jobs:
         with:
           enable-cache: true
 
+      # Integration tests exercise workspace Python packages in worker
+      # subprocesses. Build their companion native packages from the same
+      # checkout so a coordinated Python/Rust API change cannot load an older
+      # published wheel.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          workspaces: |
+            lib/dupekit/rust
+            lib/finelog/rust
+            lib/iris/rust
+      - name: Switch native packages to source build
+        run: python3 scripts/rust_mode.py dev
+
       - name: Install dependencies
         # `--no-default-groups` keeps uv from also installing every workspace package's
         # dev/docs/test groups (e.g. `levanter[docs,test,dev]`), which saves multiple
