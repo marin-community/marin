@@ -2406,3 +2406,59 @@ bash experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit \
     `ubx_transport_ffi.cu` is only scalar versus vector copy/mask.
   - Run the exact scalar-copy control on USE2A with the matched BFC-0.75 configuration as parent
     `/dlwh/iris-run-job-20260728-013607`. Compare against vector R6 `11.8550`, not only the historical run.
+
+### 2026-07-27 19:11 PDT - Matched scalar control makes vector copy performance-neutral
+- Snapshot:
+  - Parent `/dlwh/iris-run-job-20260728-013607` and child
+    `/dlwh/iris-run-job-20260728-013607/grug-train-jaxpp-use2a-ubx-scalarcontrol-l24-e64k4-b8192-s4096-p4m256-precompile-bfc075-r7-20260727`
+    ran detached pre-vector commit `45095e4c5b`.
+  - The exact L24/d2560/e64/top-k4/sequence4096 batch8192/m256 configuration matched vector R6:
+    four H100x8 nodes, split `6,6,6,6`, EP8 UB-X, explicit `std_1f1b`, ordinary expert gradients,
+    BF16 wire, CuTe FA4, Triton block-k 32/eight warps, `save_moe`, BFC fraction `0.75`, and local
+    task precompile.
+- Result:
+  - UB-X initialized on all ranks. They precompiled `1026/1025/1025/1025` local tasks, crossed the
+    barrier, and completed `10/10` steps.
+  - Parent, child, and all four workers succeeded with exit `0`; failures and preemptions were zero.
+    [W&B](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-use2a-ubx-scalarcontrol-l24-e64k4-b8192-s4096-p4m256-precompile-bfc075-r7-20260727)
+    finished and synced. No resource remains live.
+  - The complete log contains zero OOM, `IBV_WC_RETRY_EXC_ERR`, client re-registration, traceback,
+    or task-retry events. Coordination-service connection warnings began only after W&B finished
+    during successful distributed teardown.
+- Steps 2-9:
+
+| Step | Loss | Duration | MFU | Tokens/s |
+| ---: | ---: | ---: | ---: | ---: |
+| 2 | `9.870304` | `141.366615s` | `11.906827` | `237,357.540` |
+| 3 | `9.103486` | `143.099234s` | `11.762662` | `234,483.660` |
+| 4 | `8.457620` | `141.932655s` | `11.859342` | `236,410.937` |
+| 5 | `7.922071` | `141.602341s` | `11.887006` | `236,962.411` |
+| 6 | `7.486259` | `143.035534s` | `11.767900` | `234,588.085` |
+| 7 | `7.141078` | `143.121959s` | `11.760794` | `234,446.427` |
+| 8 | `6.879197` | `141.517061s` | `11.894169` | `237,105.207` |
+| 9 | `6.695067` | `142.539044s` | `11.808890` | `235,405.199` |
+
+| Metric | Mean | P50 | P90 |
+| --- | ---: | ---: | ---: |
+| Duration | `142.276805s` | `142.235849s` | `143.106051s` |
+| MFU | `11.830949` | `11.834116` | `11.897966` |
+| Throughput | `235,844.933 tok/s` | `235,908.068 tok/s` | `237,180.907 tok/s` |
+
+- Matched A/B:
+
+| Kernel | Mean duration | Mean MFU | Mean throughput |
+| --- | ---: | ---: | ---: |
+| scalar copy, R7 | `142.276805s` | `11.830949` | `235,844.933 tok/s` |
+| vector rows, R6 | `142.010839s` | `11.854980` | `236,323.990 tok/s` |
+| vector delta | `-0.1869%` | `+0.2031%` | `+0.2031%` |
+
+  - The maximum absolute loss difference across steps 2-9 is `1.04904e-05`.
+  - The matched vector advantage is `0.02403` MFU, or `0.2031%`, which is too small to distinguish
+    from run noise in one A/B pair. The 128-bit copy patch is performance-neutral at this full shape.
+  - Scalar R7 is `40.55%` below the historical scalar BFC-0.70 result at `19.8996` mean MFU. The
+    scalar-copy implementation does not explain the current approximately `142s` step time.
+- Decision:
+  - Keep the vector copy because it passed the numerical gate and improved the raw dispatch microbenchmark
+    by approximately `6.5%`, but do not count it as a full-training throughput gain.
+  - Investigate the remaining environment/runtime difference from the historical `19.8996` MFU run;
+    another copy-kernel variant is not justified by this A/B.
