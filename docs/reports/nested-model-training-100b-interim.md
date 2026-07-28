@@ -16,8 +16,12 @@ clean gang did not fail outright. Training was stopped before its clean
 update-9,936 temporary checkpoint could be overwritten, then resumed from
 that checkpoint with periodic evaluation disabled. An 8-GPU capacity fallback
 crossed update 10,000 at losses near `4.9` rather than `7.5`, isolating the
-callback as the cause. It saved a clean update-10,114 checkpoint; the 64-GPU
-continuation is queued from there.
+callback as the cause. It saved a clean update-10,114 checkpoint. Two
+same-checkpoint, same-8-GPU continuations then supplied the exact
+counterfactual: the arm that evaluated full/E128/E16 became non-finite at
+state step 10,123, while the arm without evaluation remained finite through
+global step 10,137. The 64-GPU continuation is queued from the clean
+checkpoint with periodic evaluation disabled.
 
 This is still an interim result. Control Paloma and training loss oscillate
 over multi-billion-token intervals, and fixed25 has only one clean matched
@@ -211,8 +215,36 @@ different reduction topology will be excluded from cost measurement and
 reported as a quality caveat. A forced terminal evaluation still runs after
 the final optimizer update, when it can no longer affect training.
 
+To remove the remaining topology confound, the clean state-step-10,114
+checkpoint was copied into two new run identities on identical two-node,
+8-GB200 meshes. The arms used the same global batch, optimizer state, data
+offset, model, and CUDA/JAX stack. Their losses through global steps
+10,114--10,119 matched within `0.00866` nats maximum absolute error.
+
+| Global step | With nested evaluation | Without evaluation |
+|---:|---:|---:|
+| 10,119 | 5.051605 | 5.042948 |
+| 10,120 | 5.121791 | 5.107379 |
+| 10,121 | 5.530506 | 5.522368 |
+| 10,122 | non-finite before logging | 5.054758 |
+| 10,123 | — | 4.832399 |
+| 10,137 | — | 5.135144 |
+
+The evaluation arm ran full/E128/E16 evaluation after global step 10,119 and
+raised `FloatingPointError: Non-finite loss at step 10123` on the third
+subsequent optimizer update. The no-evaluation arm crossed the same data and
+optimizer steps without a loss excursion. This establishes the callback, or
+state left by the callback, as the cause rather than the nested-training
+trajectory or reduction topology. Router z-loss reached `10,668.9` on the
+first post-callback row versus `3,595.1` without evaluation, but the
+no-evaluation arm later reached `10,937.4` and remained finite. That scalar is
+therefore not a sufficient mechanism.
+
 ## Runs
 
 - [E256 control](https://wandb.ai/marin-community/marin/runs/nest-burn-002-e256-d768-s8192-e256-c4p14e18-100b-b128-r5)
 - [fixed25 failed arm](https://wandb.ai/marin-community/marin/runs/nest-burn-002-fixed25-d768-s8192-e256-c4p14e18-100b-b128-r4)
 - [fixed25 deferred-evaluation diagnostic](https://wandb.ai/marin-community/marin/runs/nest-burn-002-fixed25-d768-s8192-e256-c4p14e18-100b-b128-r6-noeval2500)
+- [same-topology evaluation arm](https://wandb.ai/marin-community/marin/runs/nest-burn-002-fixed25-d768-s8192-e256-c4p14e18-100b-b128-r7-evaldiag8g)
+- [same-topology no-evaluation arm](https://wandb.ai/marin-community/marin/runs/nest-burn-002-fixed25-d768-s8192-e256-c4p14e18-100b-b128-r8-noevaldiag8g)
+- [nested-evaluation bug](https://github.com/marin-community/marin/issues/7712)

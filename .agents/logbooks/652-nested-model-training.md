@@ -2206,3 +2206,24 @@ result:
   stopped. Queued a 64-GPU continuation from that checkpoint with periodic
   evaluation disabled. The 178 updates computed on an 8-GPU reduction
   topology are excluded from cost estimates and remain a quality caveat.
+
+### 2026-07-28 20:02 - Same-topology pair confirms nested-evaluation failure
+
+- Copied the clean state-step-10,114 checkpoint into two new run identities
+  on identical two-node, 8-GB200 meshes. The arms shared global batch 128,
+  optimizer state, data offset, model, and CUDA/JAX stack. Losses over global
+  steps 10,114--10,119 matched within `0.00866` nats maximum absolute error.
+- The treatment ran full/E128/E16 evaluation after global step 10,119. It
+  logged losses `5.12179` and `5.53051` on the next two updates, then raised
+  `FloatingPointError: Non-finite loss at step 10123` before logging global
+  step 10,122.
+- The no-evaluation arm logged finite losses `5.10738`, `5.52237`, `5.05476`,
+  and `4.83240` over global steps 10,120--10,123 and remained finite through
+  global step 10,137. The callback, or state it leaves behind, is causal; the
+  reduction topology and natural nested-training trajectory are ruled out.
+- Router z-loss was `10,668.9` on the first post-callback row versus `3,595.1`
+  in the counterfactual. The counterfactual later reached `10,937.4` without
+  failing, so router z-loss alone does not explain the failure.
+- Stopped both bounded diagnostic roots after collecting the result and
+  updated issue #7712. The production continuation remains queued from the
+  clean checkpoint with periodic evaluation disabled.
