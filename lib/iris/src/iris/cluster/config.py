@@ -51,6 +51,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_SSH_PORT = 22
 DEFAULT_SSH_CONNECT_TIMEOUT = Duration.from_seconds(30)
 DEFAULT_PRIORITY = 100
+DOCKER_WORKER_RUNTIME = "docker"
+KUBERNETES_WORKER_RUNTIME = "kubernetes"
 
 _COREWEAVE_TOPOLOGY_LABEL_PREFIXES = (
     "backend.coreweave.cloud/",
@@ -775,6 +777,12 @@ class IrisClusterConfig(_OneofConfig):
     finelog: ClusterFinelogConfig = Field(default_factory=ClusterFinelogConfig)
     # Public dashboard origin (e.g. "https://iris.oa.dev"); enables clickable job URLs.
     dashboard_url: str = ""
+    # Public origin of the federation parent that fronts this cluster (e.g.
+    # "https://iris.oa.dev"). Set on a child whose own origin is not world-visible:
+    # a minted capability URL is then tagged with this cluster's name and routed
+    # through the parent, which relays it here. Empty keeps minted URLs on the local
+    # origin. The parent recognizes the tag from its own ``peers`` map.
+    federation_public_parent: str = ""
     # Infrastructure-as-code provisioning section (see infra/pulumi). Carried as an
     # opaque dict so `provisioning:` can live in the cluster config file without
     # Iris depending on the IaC schema; iac.config owns the typed validation.
@@ -837,8 +845,7 @@ def validate_scale_group_resources(scale_groups: dict[str, ScaleGroupConfig]) ->
             raise ValueError(f"Scale group '{name}' has invalid device_count={res.device_count}.")
         if res.capacity_type is None:
             raise ValueError(
-                f"Scale group '{name}': resources.capacity_type is required "
-                "(one of: preemptible, on-demand, reserved)."
+                f"Scale group '{name}': resources.capacity_type is required (one of: preemptible, on-demand, reserved)."
             )
 
 
@@ -950,8 +957,11 @@ def _validate_worker_defaults(config: IrisClusterConfig) -> None:
         raise ValueError("defaults.worker.docker_image is required for non-local platforms (gcp/manual/coreweave).")
 
     runtime = config.defaults.worker.runtime.strip()
-    if runtime and runtime not in ("docker", "kubernetes"):
-        raise ValueError(f"defaults.worker.runtime must be 'docker' or 'kubernetes', got {runtime!r}.")
+    if runtime and runtime not in (DOCKER_WORKER_RUNTIME, KUBERNETES_WORKER_RUNTIME):
+        raise ValueError(
+            f"defaults.worker.runtime must be {DOCKER_WORKER_RUNTIME!r} or {KUBERNETES_WORKER_RUNTIME!r}, "
+            f"got {runtime!r}."
+        )
 
 
 def _validate_gcp_service_accounts(config: IrisClusterConfig) -> None:

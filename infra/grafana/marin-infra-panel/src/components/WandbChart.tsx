@@ -3,6 +3,7 @@ import { css } from '@emotion/css';
 import { DataFrame } from '@grafana/data';
 import { useTheme2 } from '@grafana/ui';
 import { frameWithField, wandbPoints } from '../data';
+import { PanelMessage } from './PanelMessage';
 import { SERIES_COLORS } from './palette';
 
 interface Props { frames: DataFrame[]; width: number; height: number }
@@ -16,9 +17,10 @@ function compact(value: number): string {
 
 export function WandbChart({ frames, width, height }: Props) {
   const theme = useTheme2();
-  const points = wandbPoints(frameWithField(frames, 'tokens'));
-  if (points.length === 0) {throw new Error('No W&B points returned');}
+  const frame = frameWithField(frames, 'tokens');
+  const points = useMemo(() => (frame ? wandbPoints(frame) : []), [frame]);
   const { paths, xMin, xMax, yMin, yMax } = useMemo(() => {
+    if (points.length === 0) {return { paths: [] as Array<[string, typeof points]>, xMin: 0, xMax: 1, yMin: 0, yMax: 1 };}
     const groups = new Map<string, typeof points>();
     for (const point of points) {groups.set(point.run, [...(groups.get(point.run) ?? []), point]);}
     for (const values of groups.values()) {values.sort((a, b) => a.tokens - b.tokens);}
@@ -28,6 +30,7 @@ export function WandbChart({ frames, width, height }: Props) {
     const high = ys[Math.min(ys.length - 1, Math.floor(ys.length * 0.98))] ?? 1;
     return { paths: [...groups.entries()], xMin: Math.min(...xs), xMax: Math.max(...xs), yMin: low, yMax: high === low ? low + 1 : high };
   }, [points]);
+  if (points.length === 0) {return <PanelMessage width={width} height={height}>No W&B data</PanelMessage>;}
   const pad = { left: 45, right: 10, top: 28, bottom: 28 };
   const chartWidth = Math.max(1, width - pad.left - pad.right);
   const chartHeight = Math.max(1, height - pad.top - pad.bottom);

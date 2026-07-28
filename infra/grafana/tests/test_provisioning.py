@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import pyarrow as pa
 import yaml
 from config import ClusterTarget
 from conftest import bridge_config, healthy_k8s_routes, k8s_api, make_k8s_source
@@ -102,6 +103,9 @@ class _FakeFinelog:
             error="",
         )
 
+    def query(self, sql: str, *, max_rows: int) -> pa.Table:
+        return pa.table({})
+
 
 def test_every_rule_query_url_answers_on_the_bridge():
     """Join each rule's datasource base path with its query URL and GET it for real."""
@@ -113,7 +117,7 @@ def test_every_rule_query_url_answers_on_the_bridge():
             bridge_config(),
             finelog_sources,
             iris_sources,
-            GithubSource(token=None, timeout=5.0),
+            GithubSource(auth=None, timeout=5.0),
             fleet,
             WandbSource(timeout=5.0),
         )
@@ -150,14 +154,16 @@ def test_policies_reference_provisioned_contact_points():
             assert route["receiver"] in contact_points
 
 
-def test_critical_contact_point_reaches_email_and_slack():
+def test_critical_contact_point_reaches_email_slack_and_loom():
     points = {point["name"]: point for point in _load(ALERTING / "contact-points.yaml")["contactPoints"]}
     critical_types = {receiver["type"] for receiver in points["ops-critical"]["receivers"]}
-    assert critical_types == {"email", "slack"}
+    assert critical_types == {"email", "slack", "webhook"}
     for point in points.values():
         for receiver in point["receivers"]:
             if receiver["type"] == "slack":
                 assert receiver["settings"]["url"] == "$SLACK_ALERTS_WEBHOOK"
+    (loom,) = [receiver for receiver in points["ops-critical"]["receivers"] if receiver["type"] == "webhook"]
+    assert loom["settings"] == {"url": "http://127.0.0.1:8081/alerts/loom", "httpMethod": "POST"}
 
 
 def test_finelog_health_alert_pages_critical_after_five_minutes():

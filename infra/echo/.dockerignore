@@ -1,0 +1,16 @@
+**/__pycache__
+**/*.pyc
+**/test_*.py
+dashboard/dist
+dashboard/node_modules
+# The image builds copy only schema.py, hybrid_search.py, search_config.py, api/, sync/, and
+# dashboard/ (see api/Dockerfile and sync/Dockerfile). Exclude the rest so editing the CLI,
+# docs, migrations, or the Pulumi program does not change the build context and rebuild the image.
+cli.py
+okf.py
+migrate.py
+__main__.py
+migrations
+README.md
+Pulumi.yaml
+Pulumi.marin-echo.yaml

@@ -24,3 +24,8 @@ test('frameWithField rejects ambiguous multiple frames', () => {
   const value = frame([CELL]);
   expect(() => frameWithField([value, value], 'lane_id')).toThrow('received 2');
 });
+
+test('frameWithField returns undefined when no frame carries the field', () => {
+  expect(frameWithField([frame([CELL])], 'short_oid')).toBeUndefined();
+  expect(frameWithField([], 'lane_id')).toBeUndefined();
+});

@@ -227,8 +227,8 @@ class Backend:
         """IAP-free backend service (token-proxy stage) on the same NEG.
 
         Fronts only the ``/proxy/t/*`` capability path, routed here by a URL-map
-        path rule; the controller verifies the path-carried token via
-        ``_authorize_proxy`` before forwarding.
+        path rule; the controller's native listener verifies the path-carried
+        token before forwarding.
         """
         return f"{self.prefix}-proxy-be"
 

@@ -6,6 +6,8 @@ Lazy dataset processing library. Start with the shared instructions in `/AGENTS.
 
 - `README.md` — overview, API reference, quick start
 - `OPS.md` — debugging pipelines: dashboard, observability, profiling, diagnostic patterns (also used by skills: `debug`, `babysit-zephyr`)
+- `.agents/ops/YYYY-MM-DD-<slug>.md` — durable incident and debugging records;
+  use `write-ops-log` after an infrastructure investigation
 - Archived: `.agents/projects/20260130_fray_lite_design.md` — Fray backend design (implemented; read `lib/fray/src/fray/` instead)
 
 ## Source Layout

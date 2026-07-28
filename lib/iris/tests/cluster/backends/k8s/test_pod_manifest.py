@@ -338,6 +338,24 @@ def test_task_update_disruption_target_is_worker_failed(reason):
     assert update.exit_code == 137
 
 
+def test_task_update_kueue_termination_target_is_worker_failed():
+    """Kueue preemption uses TerminationTarget rather than Kubernetes'
+    DisruptionTarget; preserve that authoritative cause instead of charging a
+    SIGKILL-shaped exit as an application failure."""
+    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    pod = make_pod("iris-job-0-0", "Failed", exit_code=137, reason="Error")
+    message = "Preempted to accommodate an interactive workload due to ClusterQueue prioritization"
+    _add_condition(pod, "TerminationTarget", "True", "WorkloadEvictedDueToPreempted")
+    pod["status"]["conditions"][-1]["message"] = message
+
+    update = _task_update_from_pod(entry, pod)
+
+    assert update.new_state == job_pb2.TASK_STATE_WORKER_FAILED
+    assert update.exit_code == 137
+    assert update.terminal_reason is not None
+    assert "WorkloadEvictedDueToPreempted" in update.terminal_reason
+
+
 def test_task_update_oom_killed_without_disruption_target_stays_application_failure():
     """A self-inflicted cgroup OOM carries no DisruptionTarget condition, so it stays a
     FAILED (misconfigured job) even though it also exits 137 — the condition, not the

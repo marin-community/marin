@@ -1,53 +1,47 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Datakit -> per-(cluster, quality) Levanter store: single map-side Zephyr pass.
+"""Datakit -> per-(cluster, quality) Levanter store via a shuffle.
 
-Shape mirrors :mod:`marin.processing.classification.consolidate`, specialized
-for the datakit attribute datasets that the global pipelines produce:
+The store routes each surviving doc through a Zephyr ``group_by`` keyed by
+``(cluster, quality, sub)``, so a single reducer streams all of one bucket-shard's
+documents into one materialized Levanter cache. No per-input-shard leaves are
+created. The only intermediate is the scatter spill (~84K files for the full
+store), and the final store is bounded by the configured number of subshards per
+bucket. A measured 1%-stride benchmark put the full shuffle at ~17 TB compressed
+scatter / ~2 h wall at ~2k workers, all in-region (no egress), with the cost
+dominated by token I/O.
 
-    tokenize        per-source ``{id, input_ids}``, dense, sorted by id
-    decontam        per-source ``{id, attributes: {contaminated, ...}}``, dense
-    cluster_assign  per-source ``{id, cluster_<K>, ...}``, dense
-    quality         per-source ``{id, score, quality_bucket}``, dense, flat schema
-                    (fast-transformer output; ``quality_bucket`` is already the
-                    calibrated fixed-cutpoint bucket, consumed as-is)
-    dedup           per-source ``{id, attributes: {is_cluster_canonical, ...}}``,
-                    SPARSE -- singletons omitted by ``compute_fuzzy_dups_attrs``
+Pipeline:
 
-All five are co-partitioned with the source ``NormalizedData`` by basename, so
-a single map-side pass joins them per shard with no shuffle. The pass:
+1. **map** (per input shard): a 5-way positional join over tokenization,
+   decontamination, domain assignment, quality, and dedup attributes, emitting
+   ``{cluster, quality, sub, input_ids}`` per surviving doc. ``sub`` is a stable
+   hash of the doc id mod that bucket's subshard count, so a hot bucket is split
+   evenly across many reducers instead of one.
+2. **group_by** ``(cluster, quality, sub)`` -> **reduce**: each reducer streams
+   its group into one materialized cache at
+   ``<output>/cluster=<C>/quality=<Q>/sub=<S>`` via ``SerialCacheWriter``.
+3. **driver merge**: group reducer stats by ``(cluster, quality)`` and write the
+   small per-bucket ``shard_ledger.json`` over the bucket's ``sub=*`` caches.
 
-1. Reads decon, cluster_assign, and quality fully (small columns; one shard's worth).
-2. Reads dedup into ``{id -> is_canonical}`` if present.
-3. Streams tokenize via ``ParquetFile.iter_batches`` in positional lockstep
-   with the three dense attribute tables (sanity-asserts id alignment).
-4. Drops contaminated rows; drops dedup-cluster non-canonicals (rows missing
-   from dedup are singletons -> kept).
-5. Routes each surviving doc by ``(cluster_<view>, quality_bucket)`` directly into one
-   of up to ``K_clusters * K_quality`` lazily-opened ``SerialCacheWriter``
-   instances under ``<output>/cluster=<C>/quality=<Q>/part-NNNNN-of-MMMMM``.
-   Memory peak stays at ``N_open_writers * _BATCH_FLUSH * avg-doc-size``
-   (~hundreds of MB worst case at 200 buckets) -- independent of input-shard size.
-6. After ``ExitStack`` closes the writers (committing per-shard ledgers),
-   loads each just-written ledger (``SerialCacheWriter`` already populates
-   ``field_counts``) and yields it back to the driver.
+Without a prior store artifact, each bucket uses ``default_subshards`` (32 in
+the production reference pipeline, one in smoke mode). Direct callers may pass
+``bucket_token_hint`` from :func:`bucket_token_hint_from_artifact` to size each
+bucket independently.
 
-After the Zephyr execute, the driver groups results by
-``(cluster_id, quality_bucket)`` in a plain Python dict (no Zephyr group_by,
-no shuffle) and calls ``_merge_sharded_ledgers`` per bucket -- each call only
-writes the small ``<output>/cluster=<C>/quality=<Q>/shard_ledger.json``. No
-second Zephyr context.
+Zephyr retries individual map and reduce tasks, but the driver-side ledger merge
+is not separately checkpointed. If the store driver dies after the shuffle
+finishes and before the artifact is written, rerunning the store repeats the
+shuffle.
 """
 
-import contextlib
 import dataclasses
-import json
 import logging
+import math
 import os
 from collections import defaultdict
 from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pyarrow as pa
@@ -61,14 +55,15 @@ from levanter.store.cache import (
     _merge_sharded_ledgers,
 )
 from marin.datakit.decon import DeconAttributes
-from marin.execution.artifact import write_artifact
+from marin.execution.artifact import read_artifact, write_artifact
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
 from marin.processing.tokenize.attributes import TokenizedAttrData
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath
 from zephyr import counters
-from zephyr.dataset import Dataset, ShardInfo, format_shard_path
+from zephyr.dataset import Dataset, ShardInfo
 from zephyr.execution import ZephyrContext
+from zephyr.shard_keys import deterministic_hash
 from zephyr.writers import atomic_rename
 
 from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
@@ -89,24 +84,10 @@ class BucketCacheStats(BaseModel):
 
 
 class ClusteredStoreData(BaseModel):
-    """Outcome of :func:`build_clustered_store`: one Levanter cache per (cluster, quality) bucket.
+    """One Levanter cache per populated (cluster, quality) bucket.
 
     Persisted as ``<output_path>/artifact.json``. Load via
     ``read_artifact(output_path, ClusteredStoreData)``.
-
-    Attributes:
-        cache_path: Root directory. Each bucket's cache lives at
-            ``cache_path/cluster=<C>/quality=<Q>/``.
-        cluster_view: Cluster-K used to partition the store
-            (column name ``cluster_<view>`` read from the assignment shards).
-        bucket_edges: Score cutpoints behind the ``quality_bucket`` column,
-            copied from the (single) quality model's :class:`QualityScores`.
-        split: Tokenize split fed into the store (e.g. ``"train"``).
-        buckets: List of per-(cluster, quality) stats. Buckets that
-            received zero records across every input shard are omitted.
-        source_names: Registry names of the sources that contributed.
-        tokenizer: Tokenizer name copied from the first tokenize source.
-        counters: Aggregated zephyr counters across the join pass.
     """
 
     version: str = "v3"
@@ -120,11 +101,6 @@ class ClusteredStoreData(BaseModel):
     counters: dict[str, int | float]
 
 
-# ---------------------------------------------------------------------------
-# Shard input spec (per-source-shard 4-tuple of paths + global indexing).
-# ---------------------------------------------------------------------------
-
-
 def _per_source_shard_tuples(
     *,
     source_name: str,
@@ -135,13 +111,7 @@ def _per_source_shard_tuples(
     dedup_attr_dir: str,
     split: str,
 ) -> list[dict[str, str]]:
-    """Align the five datasets' parquet shards for one source by basename.
-
-    Returns a list of
-    ``{tokenize, decontam, cluster, quality, dedup, source_name, basename}``
-    dicts -- one per source shard. ``dedup`` may be absent for source shards
-    with zero non-singletons; worker handles that case.
-    """
+    """Align one source's co-partitioned attribute shards by basename."""
     tok_dir = tokenize.output_dirs.get(split)
     if tok_dir is None:
         raise FileNotFoundError(f"{source_name}: tokenize has no split={split!r}")
@@ -149,10 +119,6 @@ def _per_source_shard_tuples(
     if not tok_shards:
         raise FileNotFoundError(f"{source_name}: no tokenize shards under {tok_dir}")
 
-    # We trust the datakit co-partitioning invariant: tokenize / decon /
-    # cluster_assign / quality / dedup all mirror the source NormalizedData
-    # basenames. Workers fail loud if a per-shard file is missing -- cheaper
-    # than O(N_shards) serial GCS HEAD requests up front.
     decon_dir = decontam.main_output_dir.rstrip("/")
     cluster_dir = cluster_assign.output_dir.rstrip("/")
     quality_dir = quality.main_output_dir.rstrip("/")
@@ -163,8 +129,6 @@ def _per_source_shard_tuples(
             "decontam": f"{decon_dir}/{os.path.basename(tok_path)}",
             "cluster": f"{cluster_dir}/{os.path.basename(tok_path)}",
             "quality": f"{quality_dir}/{os.path.basename(tok_path)}",
-            # ``dedup`` may legitimately be absent for shards with zero
-            # non-singletons. Worker checks existence before opening.
             "dedup": f"{dedup_dir}/{os.path.basename(tok_path)}",
             "source_name": source_name,
             "basename": os.path.basename(tok_path),
@@ -173,29 +137,13 @@ def _per_source_shard_tuples(
     ]
 
 
-# ---------------------------------------------------------------------------
-# Per-shard map: join + filter + bucket-by-cluster + write Levanter shards.
-# ---------------------------------------------------------------------------
-
-
-# IDs are kept as ``pa.Array`` (compact: a single string buffer + offsets,
-# ~10-20 bytes/row) and only used for a one-shot vectorized alignment check
-# at start of the shard; the dedup/filter loop never sees them as Python
-# objects. Values come back as numpy arrays (1 byte/bool, 4 byte/int32, 8
-# byte/float) -- crucial on big nemotron shards where Python-list boxing
-# of the full id+value columns was OOM'ing 8g workers (50 bytes/Python str
-# x ~5M rows x 3 id cols = ~750 MB just on strings).
-
-
 def _read_columns(path: str, columns: list[str]) -> pa.Table:
-    """Read a parquet via an fsspec handle rather than a path: pyarrow's native
-    S3 filesystem issues HeadObject probes the CW object store rejects with 400."""
+    """Read Parquet through fsspec for compatibility with CoreWeave object storage."""
     with StoragePath(path).open("rb") as fh:
         return pq.read_table(fh, columns=columns)
 
 
 def _load_decon_table(path: str) -> tuple[pa.Array, np.ndarray]:
-    """Return ``(ids, contaminated)`` for one decon shard. ids is pyarrow, contam is bool numpy."""
     table = _read_columns(path, ["id", "attributes"])
     ids = table.column("id").combine_chunks()
     contaminated = np.asarray(
@@ -206,313 +154,37 @@ def _load_decon_table(path: str) -> tuple[pa.Array, np.ndarray]:
 
 
 def _load_cluster_table(path: str, cluster_col: str) -> tuple[pa.Array, np.ndarray]:
-    """Return ``(ids, cluster)`` for one cluster-assign shard. ids is pyarrow, cluster is int32 numpy."""
     table = _read_columns(path, ["id", cluster_col])
-    ids = table.column("id").combine_chunks()
-    cluster = np.asarray(table.column(cluster_col), dtype=np.int32)
-    return ids, cluster
+    return table.column("id").combine_chunks(), np.asarray(table.column(cluster_col), dtype=np.int32)
 
 
 def _load_quality_table(path: str) -> tuple[pa.Array, np.ndarray]:
-    """Return ``(ids, quality_bucket)`` for one quality shard. ids is pyarrow, buckets int32 numpy.
-
-    Quality parquets have a flat ``{id, score, quality_bucket}`` schema; the
-    bucket is already calibrated + quantized by the scorer, so the store
-    consumes it as-is.
-    """
     table = _read_columns(path, ["id", "quality_bucket"])
-    ids = table.column("id").combine_chunks()
-    bucket = np.asarray(table.column("quality_bucket"), dtype=np.int32)
-    return ids, bucket
+    return table.column("id").combine_chunks(), np.asarray(table.column("quality_bucket"), dtype=np.int32)
 
 
 def _load_dedup_canonical(path: str) -> dict[str, bool]:
-    """Return ``{id -> is_cluster_canonical}`` for one dedup shard, or ``{}`` if absent.
-
-    Dedup is sparse: ids missing from this dict are singletons (kept). Ids
-    present are non-singleton cluster members; only the canonical one survives.
-    """
+    """Return sparse canonical flags; missing IDs are singleton documents."""
     if not StoragePath(path).exists():
         return {}
     with StoragePath(path).open("rb") as fh:
-        pf = pq.ParquetFile(fh)
-        # Sources with zero non-singletons get an empty parquet stub from the
-        # dedup writer -- num_rows=0, zero data columns. Treat that as "no
-        # non-singletons" rather than letting the column projection raise
-        # ArrowInvalid because the columns don't exist in the empty schema.
-        if pf.metadata.num_rows == 0:
+        parquet = pq.ParquetFile(fh)
+        if parquet.metadata.num_rows == 0:
             return {}
-        table = pf.read(columns=["id", "attributes"])
+        table = parquet.read(columns=["id", "attributes"])
     ids = table.column("id").to_pylist()
     canonical = table.column("attributes").combine_chunks().field("is_cluster_canonical").to_pylist()
     return dict(zip(ids, canonical, strict=True))
 
 
-@dataclasses.dataclass(frozen=True)
-class _WrittenShard:
-    """Slim summary of one per-(input_shard, cluster, quality) Levanter shard cache.
-
-    Persisted to a per-input-shard sidecar in GCS (see ``_sidecar_path``);
-    the driver scans those sidecars at end-of-pipeline rather than reading
-    millions of these records back via zephyr's ``outcome.results`` (which
-    OOMs the 1 GB-default zephyr coord at full-fleet scale: ~98K shards x
-    ~50 non-empty buckets each ≈ 5M records).
-    """
-
-    cluster_id: int
-    quality_bucket: int
-    path: str
-    total_num_rows: int
-    field_counts: dict[str, int]
-
-
-def _sidecar_path(output_path: str, shard_idx: int, total: int) -> str:
-    """Return the per-input-shard sidecar path."""
-    return f"{output_path.rstrip('/')}/_done/shard-{shard_idx:05d}-of-{total:05d}.json"
-
-
-def _write_shard_sidecar(path: str, records: list[_WrittenShard]) -> None:
-    """Persist per-shard sidecar atomically (write tmp, rename).
-
-    Holding the full list of ``_WrittenShard`` records for one shard --
-    at most ~200 buckets * ~250 bytes = ~50 KB -- on the worker is cheap.
-    The driver reads these back via :func:`_load_shard_sidecar`.
-    """
-    payload = json.dumps([dataclasses.asdict(r) for r in records])
-    tmp_path = f"{path}.tmp"
-    StoragePath(tmp_path).write_text(payload)
-    StoragePath(tmp_path).rename(path)
-
-
-def _load_shard_sidecar(path: str) -> list[_WrittenShard] | None:
-    """Load a per-shard sidecar if present; return ``None`` if missing.
-
-    A missing sidecar means the shard has not been processed (or only
-    partially processed and crashed before writing the sidecar); the worker
-    re-runs it. ``atomic_rename`` on the Levanter caches makes the re-run
-    safe: bucket dirs that already exist get overwritten.
-    """
-    if not StoragePath(path).exists():
-        return None
-    data = json.loads(StoragePath(path).read_text())
-    return [_WrittenShard(**d) for d in data]
-
-
-# Per-bucket pending-buffer flush threshold inside one map_shard task.
-# Pending-memory bound = N_open_buckets * _BATCH_FLUSH * avg-doc-bytes.
-# With ``input_ids`` stored as numpy int32 (4 bytes/token) and nemotron-
-# style docs averaging ~few thousand tokens, ~200 buckets * 256 docs *
-# 20 KB/doc ≈ 1 GB worst case. Larger _BATCH_FLUSH (e.g. 1024) blew the
-# 8g worker on big nemotron shards.
-_BATCH_FLUSH = 256
-
-# Bound the per-batch pyarrow buffer when streaming tokenize. Default
-# iter_batches batch_size is row-group sized (~64K), which on long-doc
-# sources can pull a multi-GB chunk into memory at once.
-_TOKENIZE_BATCH_SIZE = 8192
-
-
-def _join_filter_stream_shard(
-    items: Iterator[list[dict[str, str]]],
-    shard_info: ShardInfo,
-    *,
-    cluster_col: str,
-    output_path: str,
-) -> Iterator[dict[str, int]]:
-    """One TASK (batch of N input shards) -> up to K_clusters x K_quality Levanter shard caches.
-
-    Streams records to lazily-opened :class:`SerialCacheWriter` instances --
-    one per ``(cluster_id, quality_bucket)`` that actually receives rows --
-    SHARED across all input shards in the batch. Each writer produces ONE
-    ``part-NNNNN-of-MMMMM`` file in its bucket, where NNNNN is the batch
-    (task) index. Output-file count is therefore total_buckets_touched per
-    task, not per input shard, giving the caller a knob (``shards_per_task``)
-    to reduce the total file count by N x.
-
-    Memory bounded by ``N_open_buckets * _BATCH_FLUSH * avg_doc_size``
-    regardless of batch size -- pending buffers stay scoped to one bucket
-    each, independent of how many input shards a task aggregates.
-
-    Writes one per-task sidecar JSON to ``<output>/_done/shard-NNNNN.json``
-    listing every cluster=K/quality=Q cache the batch produced; resume on
-    retry skips the whole batch if the sidecar is already present.
-
-    Yields one ``{shard_idx, n_buckets}`` confirmation per task.
-    """
-    batch_specs = next(iter(items))
-    if not batch_specs:
-        # Empty batch shouldn't happen but be defensive.
-        yield {"shard_idx": shard_info.shard_idx, "n_buckets": 0}
-        return
-
-    sidecar = _sidecar_path(output_path, shard_info.shard_idx, shard_info.total_shards)
-    cached = _load_shard_sidecar(sidecar)
-    if cached is not None:
-        counters.pipeline.update_counter("datakit_store/shards_resumed", 1)
-        yield {"shard_idx": shard_info.shard_idx, "n_buckets": len(cached)}
-        return
-
-    written: dict[tuple[int, int], str] = {}
-    base_path = output_path.rstrip("/")
-
-    def _shard_dir(cluster_id: int, quality_id: int) -> str:
-        return format_shard_path(
-            f"{base_path}/cluster={cluster_id}/quality={quality_id}/part-{{shard:05d}}-of-{{total:05d}}",
-            shard_info.shard_idx,
-            shard_info.total_shards,
-        )
-
-    n_in_total = 0
-    n_contaminated_total = 0
-    n_dedup_dropped_total = 0
-    n_out_total = 0
-
-    with contextlib.ExitStack() as stack:
-        # Writers + pending are shared across every spec in the batch so all
-        # input shards routing to the same (cluster, quality) bucket merge
-        # into one output part file.
-        writers: dict[tuple[int, int], SerialCacheWriter] = {}
-        pending: dict[tuple[int, int], list[dict[str, list[int]]]] = defaultdict(list)
-
-        def get_writer(key: tuple[int, int], exemplar: dict[str, list[int]]) -> SerialCacheWriter:
-            if key not in writers:
-                cache_dir = _shard_dir(*key)
-                written[key] = cache_dir
-                tmp_path = stack.enter_context(atomic_rename(cache_dir))
-                writers[key] = stack.enter_context(
-                    SerialCacheWriter(
-                        tmp_path,
-                        exemplar,
-                        shard_name=cache_dir,
-                        metadata=CacheMetadata.empty(),
-                    )
-                )
-            return writers[key]
-
-        def flush(key: tuple[int, int]) -> None:
-            buf = pending[key]
-            if not buf:
-                return
-            get_writer(key, buf[0]).write_batch(buf)
-            pending[key] = []
-
-        for spec in batch_specs:
-            source_name = spec["source_name"]
-            tok_path = spec["tokenize"]
-            decon_path = spec["decontam"]
-            cluster_path = spec["cluster"]
-            quality_path = spec["quality"]
-            dedup_path = spec["dedup"]
-
-            decon_ids, contaminated = _load_decon_table(decon_path)
-            cluster_ids, cluster_vals = _load_cluster_table(cluster_path, cluster_col)
-            quality_ids, quality_buckets = _load_quality_table(quality_path)
-            n_decon, n_cluster, n_quality = len(decon_ids), len(cluster_ids), len(quality_ids)
-            if not (n_decon == n_cluster == n_quality):
-                raise RuntimeError(
-                    f"{source_name}/{spec['basename']}: dense-table row count mismatch "
-                    f"(decon={n_decon}, cluster={n_cluster}, quality={n_quality}) -- co-partitioning broken"
-                )
-            # One-shot vectorized id alignment across decon/cluster/quality. If it
-            # passes we can drop the id arrays for the rest of the shard (the inner
-            # row loop only needs the tokenize id for the dedup lookup).
-            if not pc.all(pc.equal(decon_ids, cluster_ids)).as_py():
-                raise RuntimeError(
-                    f"{source_name}/{spec['basename']}: decon/cluster id mismatch -- co-partitioning broken"
-                )
-            if not pc.all(pc.equal(decon_ids, quality_ids)).as_py():
-                raise RuntimeError(
-                    f"{source_name}/{spec['basename']}: decon/quality id mismatch -- co-partitioning broken"
-                )
-            del decon_ids, cluster_ids, quality_ids
-            dedup_canonical = _load_dedup_canonical(dedup_path)
-
-            with StoragePath(tok_path).open("rb") as fh:
-                pf = pq.ParquetFile(fh)
-                row_idx = 0
-                for batch in pf.iter_batches(batch_size=_TOKENIZE_BATCH_SIZE, columns=["id", "input_ids"]):
-                    tok_ids = batch.column("id").to_pylist()
-                    # Keep input_ids in pyarrow; per-survivor conversion to numpy
-                    # int32 happens row-by-row below. ``to_pylist()`` here would
-                    # materialize ~28 bytes per token as Python int boxes, blowing
-                    # the worker on long-doc shards.
-                    tok_input_ids_arr = batch.column("input_ids")
-                    batch_len = len(tok_ids)
-                    # Numpy slices -- O(0) views, not copies.
-                    decon_slice = contaminated[row_idx : row_idx + batch_len]
-                    cluster_slice = cluster_vals[row_idx : row_idx + batch_len]
-                    quality_slice = quality_buckets[row_idx : row_idx + batch_len]
-                    row_idx += batch_len
-
-                    for i, doc_id in enumerate(tok_ids):
-                        n_in_total += 1
-                        if decon_slice[i]:
-                            n_contaminated_total += 1
-                            continue
-                        if dedup_canonical.get(doc_id) is False:
-                            n_dedup_dropped_total += 1
-                            continue
-                        # canonical True OR id missing from dedup (singleton) -> keep
-                        key = (int(cluster_slice[i]), int(quality_slice[i]))
-                        # ``.values.to_numpy()`` copies just this row's tokens
-                        # into a fresh int32 buffer (~4 bytes/token vs ~28 for
-                        # boxed Python ints), so the pyarrow batch can be GC'd
-                        # after the loop.
-                        pending[key].append({"input_ids": tok_input_ids_arr[i].values.to_numpy()})
-                        n_out_total += 1
-                        if len(pending[key]) >= _BATCH_FLUSH:
-                            flush(key)
-
-                if row_idx != n_decon:
-                    raise RuntimeError(
-                        f"{source_name}/{spec['basename']}: tokenize rows ({row_idx}) != "
-                        f"decon rows ({n_decon}) -- co-partitioning broken"
-                    )
-
-        # Flush remaining buffers before ExitStack closes the writers.
-        for key in list(pending):
-            flush(key)
-
-    # ExitStack done: SerialCacheWriter.__exit__ wrote each per-shard ledger;
-    # atomic_rename.__exit__ renamed tmp_path -> cache_dir. Load each ledger
-    # once so the driver can run _merge_sharded_ledgers without re-reading.
-    counters.pipeline.update_counter("datakit_store/records_in", n_in_total)
-    counters.pipeline.update_counter("datakit_store/contaminated_dropped", n_contaminated_total)
-    counters.pipeline.update_counter("datakit_store/dedup_noncanonical_dropped", n_dedup_dropped_total)
-    counters.pipeline.update_counter("datakit_store/records_out", n_out_total)
-
-    metadata = CacheMetadata.empty()
-    records: list[_WrittenShard] = []
-    for (cluster_id, quality_id), cache_dir in written.items():
-        ledger = CacheLedger.load(cache_dir, metadata)
-        records.append(
-            _WrittenShard(
-                cluster_id=cluster_id,
-                quality_bucket=quality_id,
-                path=cache_dir,
-                total_num_rows=ledger.total_num_rows,
-                field_counts=dict(ledger.field_counts),
-            )
-        )
-    # Sidecar is written LAST -- atomic-rename of the per-bucket caches
-    # already happened in the ExitStack exit. So sidecar presence implies
-    # every cache referenced inside is finalized.
-    _write_shard_sidecar(sidecar, records)
-    yield {"shard_idx": shard_info.shard_idx, "n_buckets": len(records)}
-
-
-# ---------------------------------------------------------------------------
-# Driver entry point.
-# ---------------------------------------------------------------------------
-
-
 def _validate_cluster_view(cluster_assign: dict[str, AssignmentAttrData], cluster_view: int) -> str:
-    """Check ``cluster_view`` is materialized by every assignment artifact; return its column name."""
-    for name, asg in cluster_assign.items():
-        valid_views = {asg.k_train, *asg.k_views}
+    """Check that every assignment artifact materialized the selected view."""
+    for name, assignment in cluster_assign.items():
+        valid_views = {assignment.k_train, *assignment.k_views}
         if cluster_view not in valid_views:
             raise ValueError(
-                f"cluster_view={cluster_view} not in {name}'s views (k_train={asg.k_train}, " f"k_views={asg.k_views})"
+                f"cluster_view={cluster_view} not in {name}'s views "
+                f"(k_train={assignment.k_train}, k_views={assignment.k_views})"
             )
     return f"cluster_{cluster_view}"
 
@@ -532,51 +204,265 @@ def _resolve_dedup_attr_dir(
     return entry.attr_dir
 
 
+# Records flushed to the SerialCacheWriter at a time on the reduce side. Bounds
+# reducer memory at ~_WRITE_FLUSH * avg-doc-bytes regardless of group size, so
+# even the hottest bucket-shard (~10B tokens with adequate subshards) streams
+# in constant memory.
+_WRITE_FLUSH = 1024
+
+# Default skew-splitting target: aim for this many tokens per reduce cache.
+# ~20B keeps the hottest reducer to a few hundred GB of token I/O.
+DEFAULT_TARGET_TOKENS_PER_SUBSHARD = 20_000_000_000
+
+# Without a prior store artifact to size buckets from, split every bucket enough
+# to keep the known ~651B-token hot bucket from becoming one multi-hour reducer.
+DEFAULT_SUBSHARDS = 32
+
+# Rows read from a tokenized shard at once during the positional join.
+_TOKENIZE_BATCH_SIZE = 8192
+
+
+@dataclasses.dataclass(frozen=True)
+class _SubshardStat:
+    """One reducer's materialized ``(cluster, quality, sub)`` cache summary, returned to the driver."""
+
+    cluster: int
+    quality: int
+    sub: int
+    path: str
+    rows: int
+    tokens: int
+
+
+# ---------------------------------------------------------------------------
+# Map side: join + filter -> per-doc shuffle records.
+# ---------------------------------------------------------------------------
+
+
+def _iter_surviving_docs(spec: dict[str, str], cluster_col: str) -> Iterator[tuple[int, int, str, np.ndarray]]:
+    """Join one shard's five datasets; yield ``(cluster, quality_bucket, doc_id, input_ids)`` per surviving doc.
+
+    Reads decon/cluster/quality densely, dedup sparsely, streams tokenize in
+    positional lockstep, and drops contaminated rows and dedup-cluster
+    non-canonicals. Fails loud on missing or misaligned inputs.
+    """
+    decon_ids, contaminated = _load_decon_table(spec["decontam"])
+    cluster_ids, cluster_vals = _load_cluster_table(spec["cluster"], cluster_col)
+    # Quality parquets carry a precomputed, calibrated ``quality_bucket`` column
+    # (fast-transformer scorer), consumed as-is -- no score->bucket mapping here.
+    quality_ids, quality_buckets = _load_quality_table(spec["quality"])
+    n_decon, n_cluster, n_quality = len(decon_ids), len(cluster_ids), len(quality_ids)
+    if not (n_decon == n_cluster == n_quality):
+        raise RuntimeError(
+            f"{spec['source_name']}/{spec['basename']}: dense-table row count mismatch "
+            f"(decon={n_decon}, cluster={n_cluster}, quality={n_quality}) -- co-partitioning broken"
+        )
+    # Equal row counts don't imply equal ID order. Verify the dense tables align
+    # before routing positionally, then drop their ID arrays; the loop only needs
+    # tokenization IDs for the dedup lookup.
+    where = f"{spec['source_name']}/{spec['basename']}"
+    if not pc.all(pc.equal(decon_ids, cluster_ids)).as_py():
+        raise RuntimeError(f"{where}: decon/cluster id mismatch -- co-partitioning broken")
+    if not pc.all(pc.equal(decon_ids, quality_ids)).as_py():
+        raise RuntimeError(f"{where}: decon/quality id mismatch -- co-partitioning broken")
+    del decon_ids, cluster_ids, quality_ids
+    dedup_canonical = _load_dedup_canonical(spec["dedup"])
+
+    n_in = 0
+    n_contaminated = 0
+    n_dedup_dropped = 0
+    n_out = 0
+    with StoragePath(spec["tokenize"]).open("rb") as fh:
+        pf = pq.ParquetFile(fh)
+        row_idx = 0
+        for batch in pf.iter_batches(batch_size=_TOKENIZE_BATCH_SIZE, columns=["id", "input_ids"]):
+            tok_ids = batch.column("id").to_pylist()
+            tok_input_ids = batch.column("input_ids")
+            batch_len = len(tok_ids)
+            contam_slice = contaminated[row_idx : row_idx + batch_len]
+            cluster_slice = cluster_vals[row_idx : row_idx + batch_len]
+            bucket_slice = quality_buckets[row_idx : row_idx + batch_len]
+            row_idx += batch_len
+            for i, doc_id in enumerate(tok_ids):
+                n_in += 1
+                if contam_slice[i]:
+                    n_contaminated += 1
+                    continue
+                if dedup_canonical.get(doc_id) is False:
+                    n_dedup_dropped += 1
+                    continue
+                ids = tok_input_ids[i].values.to_numpy()
+                n_out += 1
+                yield int(cluster_slice[i]), int(bucket_slice[i]), doc_id, ids
+        if row_idx != n_decon:
+            raise RuntimeError(
+                f"{spec['source_name']}/{spec['basename']}: tokenize rows ({row_idx}) != "
+                f"decon rows ({n_decon}) -- co-partitioning broken"
+            )
+    counters.pipeline.update_counter("datakit_store/records_in", n_in)
+    counters.pipeline.update_counter("datakit_store/contaminated_dropped", n_contaminated)
+    counters.pipeline.update_counter("datakit_store/dedup_noncanonical_dropped", n_dedup_dropped)
+    counters.pipeline.update_counter("datakit_store/records_out", n_out)
+
+
+def _emit_for_shuffle(
+    items: Iterator[list[dict[str, str]]],
+    _shard_info: ShardInfo,
+    *,
+    cluster_col: str,
+    subshards_for_bucket: dict[tuple[int, int], int],
+    default_subshards: int,
+) -> Iterator[dict[str, object]]:
+    """Map one task (a batch of source shards) to per-doc shuffle records.
+
+    Yields ``{cluster, quality, sub, input_ids}``. ``sub`` is a stable hash of
+    the doc id mod that bucket's subshard count (``subshards_for_bucket`` for
+    hinted buckets, else ``default_subshards``), so a bucket's docs spread evenly
+    across that many reducers regardless of how the docs are partitioned across
+    map tasks (a per-task counter would pile every task's first doc onto ``sub=0``).
+    """
+    batch_specs = next(iter(items))
+    n_tokens = 0
+    for spec in batch_specs:
+        for cluster, quality, doc_id, ids in _iter_surviving_docs(spec, cluster_col):
+            k = subshards_for_bucket.get((cluster, quality), default_subshards)
+            sub = deterministic_hash(doc_id) % k if k > 1 else 0
+            n_tokens += len(ids)
+            yield {"cluster": cluster, "quality": quality, "sub": sub, "input_ids": ids}
+    counters.pipeline.update_counter("datakit_store/tokens_out", n_tokens)
+
+
+# ---------------------------------------------------------------------------
+# Reduce side: one group -> one materialized Levanter cache.
+# ---------------------------------------------------------------------------
+
+
+def _write_subshard_cache(
+    key: tuple[int, int, int],
+    group: Iterator[dict[str, object]],
+    *,
+    output_path: str,
+) -> _SubshardStat:
+    """Stream one ``(cluster, quality, sub)`` group into a materialized Levanter cache.
+
+    Writes to ``<output>/cluster=<C>/quality=<Q>/sub=<S>`` via ``SerialCacheWriter``
+    in ``_WRITE_FLUSH``-record batches (constant memory). Returns the slim stat
+    the driver needs to build the per-bucket sharded ledger.
+    """
+    cluster, quality, sub = key
+    cache_dir = f"{output_path.rstrip('/')}/cluster={cluster}/quality={quality}/sub={sub}"
+
+    # group_by invokes reducers only for keys that received at least one record.
+    it = iter(group)
+    first = next(it)
+    exemplar = {"input_ids": first["input_ids"]}
+
+    with atomic_rename(cache_dir) as tmp_path:
+        with SerialCacheWriter(tmp_path, exemplar, shard_name=cache_dir, metadata=CacheMetadata.empty()) as writer:
+            buf: list[dict[str, object]] = [exemplar]
+            for rec in it:
+                buf.append({"input_ids": rec["input_ids"]})
+                if len(buf) >= _WRITE_FLUSH:
+                    writer.write_batch(buf)
+                    buf = []
+            if buf:
+                writer.write_batch(buf)
+
+    # SerialCacheWriter committed the ledger on clean exit; load it back so the
+    # driver can merge without re-reading the tensorstore.
+    ledger = CacheLedger.load(cache_dir, CacheMetadata.empty())
+    counters.pipeline.update_counter("datakit_store/reduce_rows", ledger.total_num_rows)
+    return _SubshardStat(
+        cluster=cluster,
+        quality=quality,
+        sub=sub,
+        path=cache_dir,
+        rows=ledger.total_num_rows,
+        tokens=ledger.field_counts.get("input_ids", 0),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Subshard planning + driver-side per-bucket ledger merge.
+# ---------------------------------------------------------------------------
+
+
+def bucket_token_hint_from_artifact(artifact_path: str) -> dict[tuple[int, int], int]:
+    """Load a prior :class:`ClusteredStoreData` and return ``{(cluster, quality): total_tokens}``.
+
+    Use as ``bucket_token_hint`` for :func:`build_clustered_store` so the
+    next build splits hot buckets proportionally to last build's token mass.
+    """
+    prior = read_artifact(artifact_path, ClusteredStoreData)
+    return {(b.cluster_id, b.quality_bucket): b.total_tokens for b in prior.buckets}
+
+
+def _plan_subshards(
+    *,
+    bucket_token_hint: dict[tuple[int, int], int] | None,
+    target_tokens_per_subshard: int,
+    max_subshards: int,
+    default_subshards: int,
+) -> dict[tuple[int, int], int]:
+    """Map each bucket to a subshard count from its hinted token mass.
+
+    ``ceil(tokens / target)`` clamped to ``[1, max_subshards]``. Buckets without
+    a hint use ``default_subshards``; without any hint, every bucket uses that
+    uniform count.
+    """
+    if not bucket_token_hint:
+        logger.warning(
+            "build_clustered_store: no bucket_token_hint; every bucket uses default_subshards=%d. "
+            "Pass bucket_token_hint_from_artifact(<prior store>) to split hot buckets.",
+            default_subshards,
+        )
+        return {}
+    plan = {}
+    for key, tokens in bucket_token_hint.items():
+        plan[key] = max(1, min(max_subshards, math.ceil(tokens / target_tokens_per_subshard)))
+    logger.info(
+        "build_clustered_store: subshard plan over %d buckets, max=%d, total reduce caches=%d",
+        len(plan),
+        max(plan.values(), default=0),
+        sum(plan.values()),
+    )
+    return plan
+
+
 def _merge_per_bucket_ledgers(
     *,
-    map_shard_results: list[_WrittenShard],
+    subshard_stats: list[_SubshardStat],
     output_path: str,
 ) -> list[BucketCacheStats]:
-    """Merge per-(input_shard, cluster, quality) ledgers into one ledger per ``(cluster, quality)`` bucket.
+    """Write one per-bucket ``shard_ledger.json`` over each bucket's ``sub=*`` caches.
 
-    Pure driver-side work: ``map_shard_results`` already carries each
-    written shard's ``total_num_rows`` + ``field_counts`` (loaded by the
-    worker right after ``write_levanter_cache`` and projected to the slim
-    :class:`_WrittenShard`). We group by ``(cluster_id, quality_bucket)``
-    in a Python dict (no Zephyr group_by, no shuffle), synthesize minimal
-    ``CacheLedger`` stubs since ``_merge_sharded_ledgers`` only reads
-    ``total_num_rows``, and call it -- which writes the small
-    ``cluster=<C>/quality=<Q>/shard_ledger.json`` per bucket.
+    Pure driver-side work: each stat already carries its cache's row + token
+    counts, so we synthesize the minimal ``CacheLedger`` stubs ``_merge_sharded_ledgers``
+    needs (it only reads ``total_num_rows``) and call it per bucket.
     """
-    by_bucket: dict[tuple[int, int], list[_WrittenShard]] = defaultdict(list)
-    for r in map_shard_results:
-        by_bucket[(r.cluster_id, r.quality_bucket)].append(r)
+    by_bucket: dict[tuple[int, int], list[_SubshardStat]] = defaultdict(list)
+    for s in subshard_stats:
+        by_bucket[(s.cluster, s.quality)].append(s)
 
     metadata = CacheMetadata.empty()
-    buckets: list[BucketCacheStats] = []
     base_path = output_path.rstrip("/")
+    buckets: list[BucketCacheStats] = []
     for key in sorted(by_bucket):
-        cluster_id, quality_id = key
-        bucket_root = f"{base_path}/cluster={cluster_id}/quality={quality_id}"
-        entries = sorted(by_bucket[key], key=lambda e: e.path)
-        shard_paths = [e.path for e in entries]
+        cluster, quality = key
+        bucket_root = f"{base_path}/cluster={cluster}/quality={quality}"
+        subs = sorted(by_bucket[key], key=lambda s: s.sub)
+        shard_paths = [s.path for s in subs]
         shard_ledgers = [
-            CacheLedger(
-                total_num_rows=e.total_num_rows,
-                shard_rows={},
-                finished_shards=[],
-                field_counts={},
-                metadata=metadata,
-            )
-            for e in entries
+            CacheLedger(total_num_rows=s.rows, shard_rows={}, finished_shards=[], field_counts={}, metadata=metadata)
+            for s in subs
         ]
-        per_shard_field_counts = [e.field_counts for e in entries]
+        per_shard_field_counts = [{"input_ids": s.tokens} for s in subs]
         ledger = _merge_sharded_ledgers(bucket_root, shard_paths, shard_ledgers, per_shard_field_counts, metadata)
         total_tokens = ledger.field_counts.get("input_ids", 0)
         buckets.append(
             BucketCacheStats(
-                cluster_id=cluster_id,
-                quality_bucket=quality_id,
+                cluster_id=cluster,
+                quality_bucket=quality,
                 path=bucket_root,
                 total_elements=ledger.total_num_rows,
                 total_tokens=total_tokens,
@@ -584,15 +470,20 @@ def _merge_per_bucket_ledgers(
             )
         )
         logger.info(
-            "cluster=%d quality=%d: docs=%d tokens=%d shards=%d -> %s",
-            cluster_id,
-            quality_id,
+            "cluster=%d quality=%d: docs=%d tokens=%d subshards=%d -> %s",
+            cluster,
+            quality,
             ledger.total_num_rows,
             total_tokens,
             len(shard_paths),
             bucket_root,
         )
     return buckets
+
+
+# ---------------------------------------------------------------------------
+# Driver entry point.
+# ---------------------------------------------------------------------------
 
 
 def build_clustered_store(
@@ -607,21 +498,27 @@ def build_clustered_store(
     split: str = "train",
     worker_resources: ResourceConfig | None = None,
     max_workers: int = 4096,
-    aggregate_only: bool = False,
     shards_per_task: int = 1,
+    reduce_shards: int = 2048,
+    bucket_token_hint: dict[tuple[int, int], int] | None = None,
+    target_tokens_per_subshard: int = DEFAULT_TARGET_TOKENS_PER_SUBSHARD,
+    max_subshards: int = 128,
+    default_subshards: int = DEFAULT_SUBSHARDS,
 ) -> ClusteredStoreData:
-    """Single map-side Zephyr pass: 5-way join + filter + per-(cluster, quality) Levanter caches.
+    """Shuffle 5-way join + filter into one materialized cache per ``(cluster, quality, sub)``.
 
-    See module docstring for the per-shard logic.
+    The store is born compact: reducers create the final materialized caches
+    directly rather than producing per-input-shard leaf caches.
 
-    Every source name must appear in ``tokenize``, ``decontam``,
-    ``cluster_assign``, and ``quality``; every included source's
-    ``TokenizedAttrData.source_main_dirs[split]`` must appear as a key in
-    ``dedup.sources`` (so the caller is responsible for dropping sources
-    excluded from dedup, e.g. ``safety_pt/*`` / ``climblab-ja``).
-
-    Returns a :class:`ClusteredStoreData` describing the per-bucket caches
-    and saves the artifact at ``<output_path>/artifact.json``.
+    Args:
+        shards_per_task: Source shards per map task (batches reduce the map task
+            count; does not affect the shuffle output).
+        reduce_shards: ``num_output_shards`` for the ``group_by`` -- the number of
+            reduce tasks the ~``sum(subshards)`` groups are spread across.
+        bucket_token_hint: ``{(cluster, quality): tokens}`` used to size each
+            bucket's subshard count (see :func:`bucket_token_hint_from_artifact`).
+        target_tokens_per_subshard / max_subshards / default_subshards: subshard
+            sizing knobs (see :func:`_plan_subshards`).
     """
     if not tokenize:
         raise ValueError("build_clustered_store: tokenize is empty")
@@ -630,135 +527,103 @@ def build_clustered_store(
             missing = sorted(set(tokenize) - set(d))
             extra = sorted(set(d) - set(tokenize))
             raise ValueError(f"{label} source set must equal tokenize: missing={missing!r}, extra={extra!r}")
+    if shards_per_task < 1:
+        raise ValueError(f"shards_per_task must be >= 1, got {shards_per_task}")
+    if reduce_shards < 1:
+        raise ValueError(f"reduce_shards must be >= 1, got {reduce_shards}")
+    if target_tokens_per_subshard < 1:
+        raise ValueError(f"target_tokens_per_subshard must be >= 1, got {target_tokens_per_subshard}")
+    if max_subshards < 1:
+        raise ValueError(f"max_subshards must be >= 1, got {max_subshards}")
+    if default_subshards < 1:
+        raise ValueError(f"default_subshards must be >= 1, got {default_subshards}")
 
-    cluster_col = _validate_cluster_view(cluster_assign, cluster_view)
-    # quality_bucket values are only comparable across sources when every source
-    # was scored by the same calibrated model -- mixed models would silently join
-    # incomparable bucket ids.
+    # Every source must share one quality model so bucket IDs are comparable.
     models = {(q.model_dir, q.calib_file, tuple(q.bucket_edges)) for q in quality.values()}
     if len(models) != 1:
-        raise ValueError(f"quality artifacts disagree on model/calibration: {sorted(models)}")
-    bucket_edges = list(models.pop()[2])
-    counters: dict[str, int | float] = {}
+        raise ValueError(f"build_clustered_store: sources span multiple quality models: {sorted(models)}")
+    bucket_edges = next(iter(quality.values())).bucket_edges
 
-    if aggregate_only:
-        # Skip the zephyr pass entirely and pick up from the durable sidecars
-        # already on GCS. Used to recover when a prior run finished the
-        # map-side work but died before producing the per-bucket ledgers +
-        # artifact.json (sequential sidecar load + driver-side merge).
-        logger.info(
-            "build_clustered_store: aggregate_only=True, skipping zephyr; sources=%d split=%s -> %s",
-            len(tokenize),
-            split,
-            output_path,
-        )
-    else:
-        if worker_resources is None:
-            worker_resources = ResourceConfig(cpu=2, ram="16g", disk="10g")
+    cluster_col = _validate_cluster_view(cluster_assign, cluster_view)
+    subshards_for_bucket = _plan_subshards(
+        bucket_token_hint=bucket_token_hint,
+        target_tokens_per_subshard=target_tokens_per_subshard,
+        max_subshards=max_subshards,
+        default_subshards=default_subshards,
+    )
 
-        logger.info(
-            "build_clustered_store: %d sources, cluster_view=%d (column=%s), bucket_edges=%s, split=%s -> %s",
-            len(tokenize),
-            cluster_view,
-            cluster_col,
-            bucket_edges,
-            split,
-            output_path,
-        )
-
-        shard_specs: list[dict[str, str]] = []
-        for source_name in sorted(tokenize):
-            tok = tokenize[source_name]
-            decon = decontam[source_name]
-            cluster_asg = cluster_assign[source_name]
-            qual = quality[source_name]
-            main_dir = tok.source_main_dirs.get(split)
-            if main_dir is None:
-                raise ValueError(f"{source_name}: tokenize has no source_main_dir for split={split!r}")
-            if cluster_asg.source_main_dir != main_dir:
-                raise ValueError(
-                    f"{source_name}: cluster_assign.source_main_dir={cluster_asg.source_main_dir!r} "
-                    f"!= tokenize.source_main_dirs[{split!r}]={main_dir!r}"
-                )
-            dedup_attr_dir = _resolve_dedup_attr_dir(source_name=source_name, main_output_dir=main_dir, dedup=dedup)
-            shard_specs.extend(
-                _per_source_shard_tuples(
-                    source_name=source_name,
-                    tokenize=tok,
-                    decontam=decon,
-                    cluster_assign=cluster_asg,
-                    quality=qual,
-                    dedup_attr_dir=dedup_attr_dir,
-                    split=split,
-                )
+    # Resolve the flat per-source-shard spec list.
+    shard_specs: list[dict[str, str]] = []
+    for source_name in sorted(tokenize):
+        tok = tokenize[source_name]
+        main_dir = tok.source_main_dirs.get(split)
+        if main_dir is None:
+            raise ValueError(f"{source_name}: tokenize has no source_main_dir for split={split!r}")
+        cluster_asg = cluster_assign[source_name]
+        if cluster_asg.source_main_dir != main_dir:
+            raise ValueError(
+                f"{source_name}: cluster_assign.source_main_dir={cluster_asg.source_main_dir!r} "
+                f"!= tokenize.source_main_dirs[{split!r}]={main_dir!r}"
             )
-
-        if not shard_specs:
-            raise ValueError("No input shards resolved -- nothing to do")
-        if shards_per_task < 1:
-            raise ValueError(f"shards_per_task must be >= 1, got {shards_per_task}")
-        # Group flat per-source-shard specs into per-task batches. Each task
-        # sees one inner list and writes ONE output part file per (cluster,
-        # quality) it touches -- so total output files scale with len(batched_specs),
-        # not len(shard_specs).
-        batched_specs: list[list[dict[str, str]]] = [
-            shard_specs[i : i + shards_per_task] for i in range(0, len(shard_specs), shards_per_task)
-        ]
-        logger.info(
-            "build_clustered_store: %d input shards across %d sources, batched into %d tasks (%d per task)",
-            len(shard_specs),
-            len(tokenize),
-            len(batched_specs),
-            shards_per_task,
-        )
-
-        # Zephyr coordinator needs more than the iris 1GB default: it tracks
-        # the worker pool + retry state + per-shard confirmations. Workers yield
-        # only tiny ``{shard_idx, n_buckets}`` records now (sidecar in GCS holds
-        # the full _WrittenShard list), so 3g is enough headroom for ~2k workers.
-        # preemptible=False because coord death = whole-job restart.
-        ctx = ZephyrContext(
-            resources=worker_resources,
-            coordinator_resources=ResourceConfig(cpu=1, ram="3g", preemptible=False),
-            max_workers=min(max_workers, len(batched_specs)),
-            name="datakit-clustered-store",
-        )
-        ds = Dataset.from_list(batched_specs).map_shard(
-            lambda items, shard, cc=cluster_col, op=output_path: _join_filter_stream_shard(
-                items, shard, cluster_col=cc, output_path=op
+        dedup_attr_dir = _resolve_dedup_attr_dir(source_name=source_name, main_output_dir=main_dir, dedup=dedup)
+        shard_specs.extend(
+            _per_source_shard_tuples(
+                source_name=source_name,
+                tokenize=tok,
+                decontam=decontam[source_name],
+                cluster_assign=cluster_asg,
+                quality=quality[source_name],
+                dedup_attr_dir=dedup_attr_dir,
+                split=split,
             )
         )
-        outcome = ctx.execute(ds, verbose=True)
-        logger.info(
-            "build_clustered_store: zephyr pass produced %d shard confirmations (resumed=%d)",
-            len(outcome.results),
-            outcome.counters.get("datakit_store/shards_resumed", 0),
+    if not shard_specs:
+        raise ValueError("No input shards resolved -- nothing to do")
+
+    batched_specs = [shard_specs[i : i + shards_per_task] for i in range(0, len(shard_specs), shards_per_task)]
+    logger.info(
+        "build_clustered_store: %d sources, %d input shards -> %d map tasks, reduce_shards=%d -> %s",
+        len(tokenize),
+        len(shard_specs),
+        len(batched_specs),
+        reduce_shards,
+        output_path,
+    )
+
+    if worker_resources is None:
+        # 16g: the reduce side streams big groups through a tensorstore write
+        # buffer (~512 MB write-chunk) and the map holds numpy token payloads.
+        worker_resources = ResourceConfig(cpu=2, ram="16g", disk="16g")
+
+    ctx = ZephyrContext(
+        resources=worker_resources,
+        coordinator_resources=ResourceConfig(cpu=1, ram="3g", preemptible=False),
+        max_workers=min(max_workers, len(batched_specs)),
+        name="datakit-clustered-store",
+    )
+    ds = (
+        Dataset.from_list(batched_specs)
+        .map_shard(
+            lambda items, shard, cc=cluster_col, sfb=subshards_for_bucket, ds=default_subshards: _emit_for_shuffle(
+                items, shard, cluster_col=cc, subshards_for_bucket=sfb, default_subshards=ds
+            )
         )
-        counters = dict(outcome.counters)
+        .group_by(
+            key=lambda r: (r["cluster"], r["quality"], r["sub"]),
+            reducer=lambda key, group, op=output_path: _write_subshard_cache(key, group, output_path=op),
+            num_output_shards=reduce_shards,
+        )
+    )
+    outcome = ctx.execute(ds, verbose=True)
+    subshard_stats = [r for r in outcome.results if r is not None]
+    logger.info(
+        "build_clustered_store: wrote %d subshard caches (records_out=%d, tokens_out=%d)",
+        len(subshard_stats),
+        outcome.counters.get("datakit_store/records_out", 0),
+        outcome.counters.get("datakit_store/tokens_out", 0),
+    )
 
-    # Aggregation: scan per-shard sidecars in object storage rather than carrying
-    # the full _WrittenShard records through coord.outcome.results.
-    sidecar_glob = f"{output_path.rstrip('/')}/_done/shard-*.json"
-    sidecar_paths = sorted(str(m) for m in StoragePath(sidecar_glob).glob())
-    logger.info("build_clustered_store: loading %d shard sidecars (parallel)", len(sidecar_paths))
-
-    # GCS globs come back scheme-less while s3 globs keep their scheme; re-attach
-    # the output path's scheme where missing.
-    scheme = output_path.split("://", 1)[0]
-
-    def _load_one(sp: str) -> list[_WrittenShard]:
-        return _load_shard_sidecar(sp if "://" in sp else f"{scheme}://{sp}") or []
-
-    # Sequential ``_load_shard_sidecar`` over O(100K) sidecars at ~50-100ms
-    # per GCS GET runs into hours of wall-clock. The fetches are independent
-    # JSON reads, so a bounded threadpool collapses it to minutes.
-    all_written: list[_WrittenShard] = []
-    with ThreadPoolExecutor(max_workers=64) as pool:
-        for recs in pool.map(_load_one, sidecar_paths):
-            all_written.extend(recs)
-    logger.info("build_clustered_store: %d per-bucket records across %d shards", len(all_written), len(sidecar_paths))
-
-    buckets = _merge_per_bucket_ledgers(map_shard_results=all_written, output_path=output_path)
+    buckets = _merge_per_bucket_ledgers(subshard_stats=subshard_stats, output_path=output_path)
 
     tokenizer = next(iter(tokenize.values())).tokenizer
     artifact = ClusteredStoreData(
@@ -769,7 +634,7 @@ def build_clustered_store(
         buckets=buckets,
         source_names=sorted(tokenize),
         tokenizer=tokenizer,
-        counters=counters,
+        counters=dict(outcome.counters),
     )
     write_artifact(artifact, output_path)
     return artifact

@@ -73,9 +73,13 @@
       "error": "evicted-by-prod",
       "exit_code": null,
       "finished_at_ms": null,
+      "node_name": "",
+      "pod_name": "",
+      "pod_uid": "",
       "started_at_ms": 1704067200001,
       "state": 10,
       "task_id": "/test-user/cosched-preempt-term/0",
+      "terminal_reason": "",
       "worker_id": "w-cosched-pt-a"
     },
     {
@@ -86,9 +90,13 @@
       "error": "Coscheduled sibling /test-user/cosched-preempt-term/0 failed",
       "exit_code": null,
       "finished_at_ms": null,
+      "node_name": "",
+      "pod_name": "",
+      "pod_uid": "",
       "started_at_ms": 1704067200002,
       "state": 11,
       "task_id": "/test-user/cosched-preempt-term/1",
+      "terminal_reason": "",
       "worker_id": "w-cosched-pt-b"
     }
   ],

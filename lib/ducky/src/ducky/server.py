@@ -7,8 +7,8 @@ Queries run **asynchronously**: ``POST /query`` returns a ``query_id`` immediate
 and the SQL runs in a background thread pool (up to ``max_concurrent_queries``, each on
 its own DuckDB cursor); the page polls ``GET /result/{query_id}`` until it is done. This
 decouples a long query from the Iris controller proxy's 30 s request timeout
-(``endpoint_proxy.PROXY_TIMEOUT_SECONDS``) — each HTTP call returns in well under
-30 s while the query itself may run for minutes.
+— each HTTP call returns in well under 30 s while the query itself may run for
+minutes.
 
 The page talks plain JSON over relative URLs (so it works behind the controller's
 ``/proxy/ducky/`` prefix). ``main()`` wires the app to an Iris named port and

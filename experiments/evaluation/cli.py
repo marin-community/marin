@@ -12,15 +12,18 @@ from __future__ import annotations
 
 import click
 from iris.cli.connect import open_iris_client
+from marin.evaluation.hardware import Platform, default_platform
 from marin.evaluation.records import CW_RECORDS_PREFIX, DEFAULT_RECORDS_PREFIX, list_records
+from marin.evaluation.runner import LaunchProvenance, wait_and_report
 from marin.evaluation.samples import export_lm_eval_samples
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.evaluation.evals import EVALS, SUITES
-from experiments.evaluation.hardware import Platform, default_platform
-from experiments.evaluation.launch import LaunchSpec, launch_group, plan_runs, records_prefix_for, wait_and_report
-from experiments.evaluation.models import MODELS
+from experiments.evaluation.launch import LaunchSpec, build_evaluation_batch, launch_group
+from experiments.evaluation.models import models
+
+_DRY_RUN_IDENTITY = "dry-run"
 
 
 def _resolve_eval_keys(evals_arg: str) -> tuple[str, ...]:
@@ -34,14 +37,23 @@ def _resolve_eval_keys(evals_arg: str) -> tuple[str, ...]:
 
 
 def _print_plan(spec: LaunchSpec) -> None:
+    batch = build_evaluation_batch(
+        spec,
+        LaunchProvenance(
+            git_sha=_DRY_RUN_IDENTITY,
+            launch_host=_DRY_RUN_IDENTITY,
+        ),
+        _DRY_RUN_IDENTITY,
+    )
     click.echo(f"model: {spec.model}  platform: {spec.platform.value}  cluster: {spec.cluster}")
-    for plan in plan_runs(spec):
-        target = plan.accel.target_cluster or plan.accel.region or spec.cluster
+    for evaluation in batch.evaluations:
+        tasks = [task.name for task in evaluation.identity.eval_ref.tasks]
         click.echo(
-            f"  eval={plan.eval_key}  location={plan.model.location}  backend={plan.model.backend.value}  "
-            f"accel={plan.accel.label}  region_or_cluster={target}  limit={plan.limit}  "
-            f"chat_template={plan.model.apply_chat_template}  tasks={[t.name for t in plan.suite.tasks]}  "
-            f"records={records_prefix_for(plan.accel, spec)}"
+            f"  eval={evaluation.identity.eval_ref.name}  location={batch.model.location}  "
+            f"backend={batch.model.serve.backend.value}  accel={batch.accelerator.label}  "
+            f"region_or_cluster={batch.accelerator.target_cluster or batch.accelerator.region}  "
+            f"tasks={tasks}  "
+            f"records={batch.records_prefix}"
         )
 
 
@@ -51,7 +63,7 @@ def cli() -> None:
 
 
 @cli.command()
-@click.option("--model", required=True, help="Model registry key (see experiments.evaluation.models.MODELS).")
+@click.option("--model", required=True, help="Model registry key.")
 @click.option("--evals", "evals_arg", default="smoke", help="Suite name (e.g. 'smoke') or comma-separated eval keys.")
 @click.option(
     "--platform",
@@ -90,9 +102,10 @@ def launch(
     cluster: str,
 ) -> None:
     """Submit one serve group for MODEL: serve once, run every selected eval, record each one."""
-    if model not in MODELS:
-        raise click.BadParameter(f"unknown model {model!r}; known: {sorted(MODELS)}")
-    model_config = MODELS[model]
+    catalog = models()
+    if model not in catalog:
+        raise click.BadParameter(f"unknown model {model!r}; known: {sorted(catalog)}")
+    model_config = catalog[model]
     resolved_platform = Platform(platform) if platform else default_platform(model_config)
     spec = LaunchSpec(
         model=model,
@@ -110,9 +123,11 @@ def launch(
         return
     with open_iris_client(cluster_name=cluster, workspace=find_project_root()) as client:
         group = launch_group(spec, client)
-        click.echo(f"submitted group {group.group_id} ({len(group.runs)} evals, one serve) to cluster {cluster!r}")
-        for ref in group.runs:
-            click.echo(f"  {ref.run_id}  ({group.model_key} / {ref.eval_key})")
+        click.echo(
+            f"submitted group {group.group_id} ({len(group.evaluations)} evals, one serve) to cluster {cluster!r}"
+        )
+        for evaluation in group.evaluations:
+            click.echo(f"  {evaluation.run_id}  ({group.model_name} / {evaluation.eval_name})")
         if no_wait:
             return
         wait_and_report([group])

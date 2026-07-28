@@ -66,6 +66,11 @@ class LocalJobHandle:
                 raise
         return self.status()
 
+    def logs(self, max_lines: int = 0) -> tuple[str, ...]:
+        """Return no lines because the local backend does not retain a log store."""
+        del max_lines
+        return ()
+
     def terminate(self) -> None:
         self._terminated.set()
         self._future.cancel()

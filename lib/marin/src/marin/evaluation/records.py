@@ -61,14 +61,30 @@ class EvalTaskRef(BaseModel):
     num_fewshot: int
 
 
+class HarborRef(BaseModel):
+    """The Harbor dataset a run evaluated: registry name, version, agent, and sandbox environment."""
+
+    model_config = ConfigDict(frozen=True)
+
+    dataset: str
+    version: str
+    agent: str
+    env: str
+
+
 class EvalRef(BaseModel):
-    """The eval suite that was run: its name, mechanism, and constituent tasks."""
+    """The eval that was run: its name, mechanism, and mechanism-specific detail.
+
+    ``tasks`` carries the lm-eval task list for the ``evalchemy`` mechanism; ``harbor`` carries the
+    dataset descriptor for the ``harbor`` mechanism. Exactly one is populated per record.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     name: str
     mechanism: str
-    tasks: tuple[EvalTaskRef, ...]
+    tasks: tuple[EvalTaskRef, ...] = ()
+    harbor: HarborRef | None = None
 
 
 class HardwareRef(BaseModel):
@@ -82,12 +98,16 @@ class HardwareRef(BaseModel):
 
 
 class Provenance(BaseModel):
-    """Where the run came from: launch-time git SHA, eval container digest, and launch host."""
+    """Where the run came from: launch-time git SHA, eval runtime, and launch host.
+
+    ``eval_runtime`` is Evalchemy's commit-pinned package requirement or Harbor's pinned package
+    requirements.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     git_sha: str
-    evalchemy_image: str
+    eval_runtime: str
     launch_host: str
 
 
@@ -95,7 +115,7 @@ class EvalRunRecord(BaseModel):
     """The full account of one eval run, serialized to ``record.json``.
 
     ``metrics`` is ``{task: {metric: value}}`` as produced by
-    :meth:`~marin.evaluation.eval_result.EvalchemyResult.task_metrics`; it is empty when the run did
+    :meth:`~marin.evaluation.evalchemy.result.EvalchemyResult.task_metrics`; it is empty when the run did
     not reach the metric-reading stage (an infra failure). The ``evaluation`` field serializes as
     ``eval`` (a reserved-looking but unambiguous JSON key); use ``model_dump(mode="json",
     by_alias=True)`` or ``model_dump_json(by_alias=True)`` to produce it.
@@ -126,7 +146,7 @@ class EvalRunRecord(BaseModel):
     results_path: str
     metrics: dict[str, dict[str, float]]
     jobs: dict[str, str]
-    """Pipeline role (``orchestrator``/``serve``/``eval``) to iris job path, for every job the run
+    """Pipeline role (``orchestrator``/``inference``/``eval``) to Iris job path, for every job the run
     submitted before finishing; a failure before a role's submission simply omits that role."""
     log_tails: dict[str, tuple[str, ...]]
     """For failed runs, the last log lines of the child job(s) behind the failure, keyed like

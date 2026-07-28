@@ -682,17 +682,31 @@ def test_worker_extension_uses_public_sync_weights():
             calls["transpose_keys"] = transpose_keys
             calls["reshard_fn"] = reshard_fn
 
+    q_proj = np.arange(2 * 64 * 3, dtype=np.float32).reshape(1, 2, 64, 3)
     serialized_state = {
         "model.layers.0.input_layernorm.weight": (
             np.zeros((2,), dtype=np.float32).tobytes(),
             "float32",
             (2,),
         ),
+        "model.layers.0.self_attn.q_proj.weight": (
+            q_proj.tobytes(),
+            "float32",
+            q_proj.shape,
+        ),
     }
 
     WorkerExtension.update_weight(_FakeWorker(), serialized_state, "meta-llama/Llama-3.1-8B-Instruct")
 
-    assert hasattr(calls["new_state"], "flat_state")
+    synced_weights = dict(calls["new_state"].flat_state())
+    np.testing.assert_array_equal(
+        synced_weights[("model", "layers", "0", "input_layernorm")].get_value(),
+        np.zeros((2,), dtype=np.float32),
+    )
+    synced_q_proj = synced_weights[("model", "layers", "0", "self_attn", "q_proj")].get_value()
+    assert synced_q_proj.shape == (2, 128, 3)
+    np.testing.assert_array_equal(synced_q_proj[:, :64, :], q_proj.reshape(2, 64, 3))
+    np.testing.assert_array_equal(synced_q_proj[:, 64:, :], np.zeros((2, 64, 3), dtype=np.float32))
     assert calls["mappings"] == MODEL_MAPPINGS["meta-llama/Llama-3.1-8B-Instruct"]
     assert calls["transpose_keys"] == MODEL_TRANSPOSE_KEYS["meta-llama/Llama-3.1-8B-Instruct"]
     assert calls["reshard_fn"] is None

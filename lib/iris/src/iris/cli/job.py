@@ -60,6 +60,7 @@ from iris.cluster.types import (
     tpu_device,
 )
 from iris.rpc import job_pb2
+from iris.rpc.errors import format_connect_error
 from iris.rpc.proto_display import (
     CONTAINER_PROFILE_NAMES,
     PRIORITY_BAND_NAMES,
@@ -1332,11 +1333,10 @@ def build_job_summary(
     job_status: job_pb2.JobStatus,
     tasks: list[job_pb2.TaskStatus],
 ) -> dict:
-    """Build a structured job/task summary (CLI + test entry point).
+    """Build a structured job/task summary for CLI rendering.
 
-    Returns a dict with job-level fields and a per-task list including
-    peak memory, final state, exit code, and duration. Pure function over
-    protos — no RPC calls — so it can be unit-tested without a cluster.
+    Returns job-level fields and per-task peak memory, final state, exit code,
+    duration, and backend diagnostic.
     """
     task_summaries = []
 
@@ -1364,6 +1364,7 @@ def build_job_summary(
                 "cpu_millicores": int(usage.cpu_millicores) if usage.cpu_millicores else 0,
                 "disk_mb": int(usage.disk_mb) if usage.disk_mb else 0,
                 "worker_id": t.worker_id,
+                "status_message": t.status_message,
                 "error": t.error,
             }
         )
@@ -1397,6 +1398,9 @@ def _render_job_summary_text(summary: dict) -> str:
 
     rows = []
     for t in summary["tasks"]:
+        diagnostic = t["status_message"] or t["error"] or ""
+        if len(diagnostic) > 120:
+            diagnostic = diagnostic[:117] + "..."
         rows.append(
             [
                 t["index"],
@@ -1405,10 +1409,10 @@ def _render_job_summary_text(summary: dict) -> str:
                 _format_duration_ms(t["duration_ms"]),
                 _format_memory_mb(t["memory_peak_mb"]),
                 _format_memory_mb(t["memory_mb"]),
-                (t["error"] or "")[:50] + ("..." if len(t["error"] or "") > 50 else ""),
+                diagnostic,
             ]
         )
-    headers = ["TASK", "STATE", "EXIT", "DURATION", "PEAK MEM", "CUR MEM", "ERROR"]
+    headers = ["TASK", "STATE", "EXIT", "DURATION", "PEAK MEM", "CUR MEM", "DIAGNOSTIC"]
     lines.append(tabulate(rows, headers=headers, tablefmt="plain"))
     return "\n".join(lines)
 
@@ -1417,7 +1421,7 @@ def _render_job_summary_text(summary: dict) -> str:
 @click.argument("job_id")
 @click.pass_context
 def summary(ctx, job_id: str) -> None:
-    """Print a per-task summary (peak memory, state, exit, duration) for a job.
+    """Print per-task state, resource, exit, duration, and diagnostic details.
 
     Works for both running and completed jobs. Data is read from the controller's
     existing ``GetJobStatus`` / ``ListTasks`` RPCs (no checkpoint scraping).
@@ -1428,6 +1432,26 @@ def summary(ctx, job_id: str) -> None:
     tasks = client.list_tasks(job_name)
     result = build_job_summary(job_status, tasks)
     click.echo(_render_job_summary_text(result))
+
+
+@job.command("wait")
+@click.argument("job_id")
+@click.pass_context
+def wait(ctx, job_id: str) -> None:
+    """Wait for an existing job to finish and print its terminal state."""
+    client = _remote_client(ctx)
+    job_name = JobName.from_wire(job_id)
+    try:
+        status = Job(client, job_name).wait(
+            timeout=float("inf"),
+            raise_on_failure=False,
+        )
+    except ConnectError as exc:
+        raise click.ClickException(format_connect_error(exc)) from exc
+
+    click.echo(job_state_friendly(status.state))
+    if status.state != job_pb2.JOB_STATE_SUCCEEDED:
+        raise SystemExit(1)
 
 
 @job.command("logs")

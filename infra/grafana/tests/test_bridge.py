@@ -15,8 +15,10 @@ from finelog.errors import QueryResultTooLargeError
 from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
 from k8s_source import K8sFleet
+from loom_alerts import LoomAlertClient, LoomAlertDeliveryError
 from server import create_app, workload_overview
 from starlette.testclient import TestClient
+from training_stalls import training_stall_alert_rows
 from wandb_source import WandbSource
 
 # 2026-07-17T03:00:00Z and +1h, as Grafana sends them.
@@ -73,8 +75,13 @@ class FakeSource:
         return self._health
 
 
-def _client(source: FakeSource, cache_ttl: float = 20.0, k8s_fleet: K8sFleet | None = None) -> TestClient:
-    github = GithubSource(token=None, timeout=5.0)
+def _client(
+    source: FakeSource,
+    cache_ttl: float = 20.0,
+    k8s_fleet: K8sFleet | None = None,
+    loom_alerts: LoomAlertClient | None = None,
+) -> TestClient:
+    github = GithubSource(auth=None, timeout=5.0)
     return TestClient(
         create_app(
             bridge_config(cache_ttl),
@@ -83,6 +90,7 @@ def _client(source: FakeSource, cache_ttl: float = 20.0, k8s_fleet: K8sFleet | N
             github,
             k8s_fleet or K8sFleet(()),
             WandbSource(timeout=5.0),
+            loom_alerts,
         )
     )
 
@@ -184,6 +192,124 @@ def test_unparseable_labels_cell_keeps_the_row():
 
 def test_health_lists_configured_clusters():
     assert _client(FakeSource()).get("/health").json() == {"status": "ok", "clusters": ["marin"]}
+
+
+def test_training_stall_alerts_distinguish_stale_missing_and_healthy_progress():
+    now = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
+    task_states = finelog_result(
+        cluster=["cw-a", "cw-a", "cw-b", "cw-b", "cw-b"],
+        job=["/u/stale", "/u/initializing", "/u/healthy", "/u/starting", "/u/not-levanter"],
+        state_at=[now] * 5,
+        running_since=[
+            datetime(2026, 7, 28, 11, 0, tzinfo=UTC),
+            datetime(2026, 7, 28, 11, 0, tzinfo=UTC),
+            datetime(2026, 7, 28, 11, 0, tzinfo=UTC),
+            datetime(2026, 7, 28, 11, 30, tzinfo=UTC),
+            datetime(2026, 7, 28, 11, 0, tzinfo=UTC),
+        ],
+    )
+    telltale_metrics = finelog_result(
+        cluster=["cw-a", "cw-a", "cw-a", "cw-b", "cw-b", "cw-b"],
+        job=["/u/stale", "/u/stale", "/u/initializing", "/u/healthy", "/u/healthy", "/u/starting"],
+        name=[
+            "levanter_phase",
+            "levanter_progress_time_seconds",
+            "levanter_phase",
+            "levanter_phase",
+            "levanter_progress_time_seconds",
+            "levanter_phase",
+        ],
+        value=[
+            1.0,
+            datetime(2026, 7, 28, 11, 30, tzinfo=UTC).timestamp(),
+            0.0,
+            1.0,
+            datetime(2026, 7, 28, 11, 59, tzinfo=UTC).timestamp(),
+            0.0,
+        ],
+        ts=[now] * 6,
+    )
+
+    assert training_stall_alert_rows(task_states, telltale_metrics, now) == [
+        {
+            "cluster": "cw-a",
+            "job": "/u/stale",
+            "phase": "training",
+            "reason": "optimizer_progress_stale",
+            "value": 1,
+        },
+        {
+            "cluster": "cw-a",
+            "job": "/u/initializing",
+            "phase": "initializing",
+            "reason": "initializing_stale",
+            "value": 1,
+        },
+        {
+            "cluster": "cw-b",
+            "job": "/u/healthy",
+            "phase": "training",
+            "reason": "healthy",
+            "value": 0,
+        },
+        {
+            "cluster": "cw-b",
+            "job": "/u/starting",
+            "phase": "initializing",
+            "reason": "initializing",
+            "value": 0,
+        },
+    ]
+
+
+def test_training_stall_alert_does_not_warn_on_a_producer_that_predates_phase():
+    now = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
+    task_states = finelog_result(
+        cluster=["cw-a"],
+        job=["/u/legacy"],
+        running_since=[datetime(2026, 7, 28, 10, 0, tzinfo=UTC)],
+    )
+    telltale_metrics = finelog_result(
+        cluster=["cw-a"], job=["/u/legacy"], name=["levanter_step"], value=[5669.0], ts=[now]
+    )
+
+    assert training_stall_alert_rows(task_states, telltale_metrics, now) == [
+        {"cluster": "cw-a", "job": "/u/legacy", "phase": "unknown", "reason": "producer_missing", "value": 0}
+    ]
+
+
+def test_training_stall_alert_returns_explicit_zero_without_running_jobs():
+    assert training_stall_alert_rows(pa.table({}), pa.table({}), datetime(2026, 7, 28, tzinfo=UTC)) == [
+        {"cluster": "fleet", "job": "", "phase": "idle", "reason": "healthy", "value": 0}
+    ]
+
+
+class FakeLoomAlerts(LoomAlertClient):
+    def __init__(self, result: dict | None = None, error: LoomAlertDeliveryError | None = None) -> None:
+        self.result = result
+        self.error = error
+
+    async def submit(self, payload: object) -> dict | None:
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+def test_loom_alert_route_returns_an_accepted_run():
+    resp = _client(FakeSource(), loom_alerts=FakeLoomAlerts({"id": "run-1"})).post(
+        "/alerts/loom", json={"alerts": [{"status": "firing"}]}
+    )
+    assert resp.status_code == 202
+    assert resp.json() == {"accepted": True, "run": {"id": "run-1"}}
+
+
+def test_loom_alert_route_returns_retryable_failure_for_delivery_errors():
+    resp = _client(
+        FakeSource(),
+        loom_alerts=FakeLoomAlerts(error=LoomAlertDeliveryError("loom.example returned HTTP 503")),
+    ).post("/alerts/loom", json={"alerts": [{"status": "firing"}]})
+    assert resp.status_code == 502
+    assert resp.json() == {"error": "loom.example returned HTTP 503"}
 
 
 def test_finelog_fleet_health_combines_the_main_hub_and_k8s_mirrors():

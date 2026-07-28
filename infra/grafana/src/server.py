@@ -14,6 +14,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /finelog/{cluster}/query?sql=&from=&to=  finelog SQL (window macros, cached per bucket)
     GET /finelog/marin/fleet_health              hub query health + k8s mirror readiness
     GET /finelog/marin/alerts/fleet_health       alert rows: server labels + value(0|1)
+    GET /finelog/marin/alerts/training_stalls    active jobs + stalled-progress value(0|1)
     GET /iris/{cluster}/jobs                     root-job counts by state (in-flight + 24h terminal)
     GET /iris/{cluster}/workers                  healthy worker counts + resource totals per region
     GET /iris/{cluster}/health                   controller reachability + latency
@@ -39,6 +40,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /k8s/alerts/degraded                     alert rows: cluster, component, value(desired-ready)
     GET /k8s/alerts/stuck_gpu_pods                alert rows: cluster, node, value(count)
     GET /k8s/alerts/gpu_rack_trays                alert rows: cluster, rack_name, value(trays_ready)
+    POST /alerts/loom                             firing Grafana groups become Loom automation runs
     GET /health                                  bridge liveness
 
 A dead controller or GitHub returns 5xx (not empty rows), and the failure is not
@@ -46,7 +48,8 @@ cached. The k8s routes aggregate every CW cluster into one response, so a dead
 cluster becomes labeled error rows while the rest render; the alert routes always
 return at least one row per cluster (explicit zeros when healthy) so Grafana
 rules never hit NoData. Handlers are sync defs; Starlette runs them in a
-threadpool.
+threadpool. The Loom webhook is async because it exchanges tokens and creates a
+run over HTTP.
 """
 
 import json
@@ -58,18 +61,30 @@ from datetime import UTC, datetime
 import pyarrow as pa
 import uvicorn
 from cache import TtlCache
-from config import BRIDGE_PORT, CLUSTERS, FINELOG_SLOW_THRESHOLD_MS, K8S_CLUSTERS, BridgeConfig, ClusterTarget
+from config import (
+    BRIDGE_PORT,
+    CLUSTERS,
+    FINELOG_SLOW_THRESHOLD_MS,
+    GITHUB_REPO,
+    K8S_CLUSTERS,
+    BridgeConfig,
+    ClusterTarget,
+)
 from errors import UpstreamError
 from finelog.errors import QueryResultTooLargeError
 from finelog_health import FinelogHealth
 from finelog_source import FinelogSource, MetricSource
+from github_app import GithubAppAuth
 from github_source import GithubSource
 from iris_source import IrisSource
 from k8s_source import K8sFleet, K8sSource
+from loom_alerts import LoomAlertClient, LoomAlertDeliveryError, LoomAlertPayloadError
+from nightly_config import NIGHTLY_LANES
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
+from training_stalls import task_state_query, telltale_query, training_stall_alert_rows
 from wandb_source import WandbSource
 
 logger = logging.getLogger(__name__)
@@ -291,8 +306,9 @@ def create_app(
     github_source: GithubSource,
     k8s_fleet: K8sFleet,
     wandb_source: WandbSource,
+    loom_alerts: LoomAlertClient | None = None,
 ) -> Starlette:
-    """Build the ASGI app serving finelog, Iris, GitHub, W&B, and k8s sources."""
+    """Build the ASGI app serving Grafana's data sources and Loom webhook."""
     finelog_cache: TtlCache = TtlCache(config.cache_ttl)
     finelog_health_cache: TtlCache = TtlCache(config.k8s_cache_ttl)
     iris_cache: TtlCache = TtlCache(config.iris_cache_ttl)
@@ -326,6 +342,24 @@ def create_app(
             return JSONResponse(finelog_alert_rows(fleet_health_rows()))
         except _BadRequest as err:
             return JSONResponse({"error": str(err)}, status_code=400)
+
+    def finelog_alerts_training_stalls(_: Request) -> JSONResponse:
+        try:
+            target = _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
+            now = datetime.now(UTC)
+
+            def run() -> list[dict]:
+                source = finelog_sources[target.name]
+                task_states = source.query(task_state_query(now), max_rows=config.max_rows)
+                telltale_metrics = source.query(telltale_query(now), max_rows=config.max_rows)
+                return training_stall_alert_rows(task_states, telltale_metrics, now)
+
+            key = ("training_stalls", _bucket(now, config.cache_ttl))
+            return JSONResponse(finelog_cache.get_or_compute(key, run))
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        except QueryResultTooLargeError as err:
+            return JSONResponse({"error": f"{err}; reduce the alert query lookback"}, status_code=400)
 
     def iris_endpoint(request: Request, endpoint: str, run) -> JSONResponse:
         try:
@@ -462,9 +496,26 @@ def create_app(
     def health(_: Request) -> JSONResponse:
         return JSONResponse({"status": "ok", "clusters": sorted(finelog_sources)})
 
+    async def loom_alert(request: Request) -> JSONResponse:
+        if loom_alerts is None:
+            return JSONResponse({"error": "Loom alert delivery is not configured"}, status_code=503)
+        try:
+            payload = await request.json()
+            result = await loom_alerts.submit(payload)
+        except (json.JSONDecodeError, LoomAlertPayloadError) as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        except LoomAlertDeliveryError as err:
+            logger.warning("Loom alert delivery failed: %s", err)
+            return JSONResponse({"error": str(err)}, status_code=502)
+        if result is None:
+            return JSONResponse({"accepted": False, "reason": "no firing alerts"}, status_code=202)
+        logger.info("Grafana alert accepted by Loom: run=%s", result.get("id", "unknown"))
+        return JSONResponse({"accepted": True, "run": result}, status_code=202)
+
     return Starlette(
         routes=[
             Route("/health", health),
+            Route("/alerts/loom", loom_alert, methods=["POST"]),
             Route("/github/ferries", github_ferries),
             Route("/github/builds", github_builds),
             Route("/github/nightlies", github_nightlies),
@@ -472,6 +523,7 @@ def create_app(
             Route("/finelog/{cluster}/query", query),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/fleet_health", finelog_fleet_health),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/fleet_health", finelog_alerts_fleet_health),
+            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_stalls", finelog_alerts_training_stalls),
             Route("/iris/{cluster}/jobs", iris_jobs),
             Route("/iris/{cluster}/workers", iris_workers),
             Route("/iris/{cluster}/health", iris_health),
@@ -502,13 +554,20 @@ def main() -> None:
     config = BridgeConfig.from_environment()
     finelog_sources = {c.name: FinelogSource(c, timeout_ms=config.query_timeout_ms) for c in CLUSTERS}
     iris_sources = {c.name: IrisSource(c, timeout=config.http_timeout) for c in CLUSTERS}
-    github_source = GithubSource(token=config.github_token, timeout=config.http_timeout)
+    if config.github_app_credentials is None:
+        logger.warning("no GitHub App credentials; GitHub panels run unauthenticated and the build panel shows no data")
+    # The shared GitHub client reads the main repo (ferries/builds) and every nightly
+    # lane repo, so the installation token must be scoped to all of them.
+    github_repos = {GITHUB_REPO, *(lane.repository for lane in NIGHTLY_LANES)}
+    github_auth = GithubAppAuth(config.github_app_credentials, github_repos) if config.github_app_credentials else None
+    github_source = GithubSource(auth=github_auth, timeout=config.http_timeout)
     k8s_fleet = K8sFleet([K8sSource(c, token=config.cw_read_token, timeout=config.http_timeout) for c in K8S_CLUSTERS])
     wandb_source = WandbSource(timeout=config.http_timeout)
+    loom_alerts = LoomAlertClient(config.loom_alerts) if config.loom_alerts is not None else None
     logger.info("grafana bridge serving %s on :%d", sorted(finelog_sources), BRIDGE_PORT)
     # Loopback only: Grafana fetches from the same container.
     uvicorn.run(
-        create_app(config, finelog_sources, iris_sources, github_source, k8s_fleet, wandb_source),
+        create_app(config, finelog_sources, iris_sources, github_source, k8s_fleet, wandb_source, loom_alerts),
         host="127.0.0.1",
         port=BRIDGE_PORT,
         access_log=False,

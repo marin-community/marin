@@ -44,7 +44,7 @@ Layer domain skills on top for task-specific constraints.
 
 ## Research Logbook
 
-Use the term **logbook** consistently. Follow `.agents/skills/task-logbook` for
+Use the term **logbook** consistently. Follow `.agents/skills/task-logbook/SKILL.md` for
 formatting and issue-update rules.
 
 ## Branches
@@ -146,7 +146,7 @@ Before closing the issue:
 
 ## See Also
 
-- `.agents/skills/organize-experiments/`
-- `.agents/skills/add-pallas-kernel/`
-- `.agents/skills/task-logbook/`
-- `.agents/skills/update-docs/`
+- `.agents/skills/organize-experiments/SKILL.md`
+- `.agents/skills/add-pallas-kernel/SKILL.md`
+- `.agents/skills/task-logbook/SKILL.md`
+- `.agents/skills/update-docs/SKILL.md`

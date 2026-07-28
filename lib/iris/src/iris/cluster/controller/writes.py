@@ -31,6 +31,7 @@ from iris.cluster.controller.caches import CacheRegistry
 from iris.cluster.controller.codec import proto_to_json
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
+from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.schema import (
@@ -163,6 +164,15 @@ def meta_sequence_bump(tx: Tx, key: str) -> int:
     value = int(row[0]) + 1
     tx.execute(update(meta_table).where(meta_table.c.key == key).values(value=value))
     return value
+
+
+@writes_to(meta_table)
+def meta_value_set(tx: Tx, key: str, value: int) -> None:
+    tx.execute(
+        sqlite_insert(meta_table)
+        .values(key=key, value=value)
+        .on_conflict_do_update(index_elements=[meta_table.c.key], set_={"value": value})
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -302,8 +312,10 @@ def insert_job_config(
 def delete_job(tx: Tx, job_id: JobName, *, record_tombstone: bool = True) -> None:
     """Delete a job row and drop the per-job memos its cascade would strand.
 
-    ``ON DELETE CASCADE`` removes the job's tasks, attempts, endpoints, config, and
-    workdir files.
+    ``ON DELETE CASCADE`` removes the job's tasks, attempts, config, and workdir
+    files. Endpoints carry no FK to jobs (see migration 0048), so this removes them
+    explicitly through the projection, which keeps the in-memory endpoint cache in
+    sync as well as the row.
 
     ``record_tombstone=False`` is for a deletion that immediately re-creates the
     job id for the same requester (a federated resubmission replacing a finished
@@ -316,6 +328,7 @@ def delete_job(tx: Tx, job_id: JobName, *, record_tombstone: bool = True) -> Non
     # root was received via handoff).
     if record_tombstone:
         record_federation_change(tx, job_id, tombstone=True)
+    tx.caches[EndpointsProjection].remove_by_job_ids(tx, [job_id])
     tx.execute(delete(jobs_table).where(jobs_table.c.job_id == job_id))
     # The attempt-counts and run-template memos are keyed by job id and derived from
     # the cascaded rows. Drop them at this chokepoint — every job-row deletion flows

@@ -83,9 +83,6 @@ override-dependencies = [
     "multipart>=1.3.1",
     "nltk>=3.9.4",
     "notebook>=7.5.6",
-    # Work around https://github.com/NVIDIA/cutlass/issues/3259, fixed in
-    # CUTLASS DSL 4.6.0; remove this override when upgrading to >=4.6.0.
-    "nvidia-cutlass-dsl-libs-base==4.5.2 ; sys_platform == 'never'",
     "orjson>=3.11.9",
     "pillow>=12.2.0",
     "pyasn1>=0.6.3",
@@ -140,13 +137,14 @@ members = [
     "lib/zephyr",
     "infra/pulumi",
 ]
-# The native (maturin) companions are NOT members: their extensions are consumed
-# as pre-built wheels by default and only built from source under
-# `scripts/rust_mode.py dev`. Exclude them so workspace discovery doesn't pull
-# the nested packages into the workspace.
+# Native maturin packages are excluded from uv workspace discovery because each
+# owns its own build backend and package metadata. The path sources below build
+# them from this checkout for development; published packages resolve their
+# companion wheels from PyPI.
 #   - lib/finelog/rust  -> marin-finelog-server (module `finelog_server`)
-#   - lib/dupekit/rust   -> marin-dupekit-native  (module `dupekit_native`)
-exclude = ["lib/finelog/rust", "lib/dupekit/rust"]
+#   - lib/dupekit/rust  -> marin-dupekit-native  (module `dupekit_native`)
+#   - lib/iris/rust     -> marin-iris-native     (module `iris_native`)
+exclude = ["lib/finelog/rust", "lib/dupekit/rust", "lib/iris/rust", "config/external/*"]
 
 [tool.uv.extra-build-variables]
 vllm = { VLLM_TARGET_DEVICE = "tpu" }
@@ -172,9 +170,8 @@ marin-zephyr = { workspace = true }
 nvidia-cutlass-dsl = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
-# NOTE: harbor is a pinned git dependency (not a workspace member).
-# harbor lives in marin-community/harbor as a pinned git dependency.
-harbor = { git = "https://github.com/marin-community/harbor.git", rev = "0d0dbe8904ed984137a0dfa764583f1508cf3274" }
+# Managed by config/update-external.py from config/external/harbor/uv.lock.
+harbor = { git = "https://github.com/marin-community/harbor.git", rev = "725fc069555013da7ae7f895dd3658a2c2452d55" }
 # Changes to TPU-vLLM fork SHAs must follow one of these protocols: if this is a
 # release/LKG refresh, then follow .agents/skills/refresh-tpu-vllm-forks/SKILL.md;
 # if this is a fixed-base overlay PR, then follow
@@ -374,7 +371,6 @@ ignore-missing-imports = [
 # Exclude non-production code from type checking
 project-excludes = [
     "experiments/**",
-    "scripts/datakit/**",
     "scripts/debug/**",
     "scripts/ferries/**",
     "scripts/gpu_eval/**",

@@ -21,7 +21,7 @@ federation-egress static IPs (`GcpStaticAddresses`, the GCP arm's first slice).
 Beyond cluster prerequisites, the `iac` package also carries the reusable *service* components
 other `infra/<service>/` Pulumi projects build on: `iac.gcp.cloud_run` (IAP-gated Cloud Run,
 used by `infra/grafana`) and `iac.iris` (always-on Iris service jobs via a `local.Command`
-around the `iac.iris.deploy` CLI, used by `infra/ducky`).
+around the `iac.iris.deploy` CLI, used by `infra/ducky` and `infra/xprof`).
 
 GitHub organization and repository resources live in the independent
 [`github`](github/README.md) Pulumi project. Its stack YAML declares existing Actions secrets
@@ -39,6 +39,12 @@ Everything comes from the per-cluster Iris config (`lib/iris/config/<cluster>.ya
   `provisioning:` as an opaque dict;
   `iac.config` owns the typed schema. (The package is `infra/pulumi/src/iac/`, imported as
   `iac` — a `src/<pkg>` layout mirroring `lib/*/src/<pkg>`.)
+- Grafana's CoreWeave Managed Auth usernames from
+  `provisioning.coreweave.grafana_observer_rbac`. The stack binds those identities to `get`,
+  `list`, and `watch` on Nodes; the standard CoreWeave `read` group omits Nodes. Retain both
+  identities during a token rotation.
+- Kueue's controller-manager memory request and limit default to `2Gi`.
+  `manager_memory_limit` accepts larger per-cluster values and rejects values below `2Gi`.
 
 ## Operations
 
@@ -66,21 +72,25 @@ Everything comes from the per-cluster Iris config (`lib/iris/config/<cluster>.ya
   per-machine and per-CI-runner (runners are ephemeral).
 - **GCP credentials**: `gcloud auth application-default login`. Decrypting stack secrets is
   authorized by your own GCP credentials against the shared KMS key — see "Backend" below for
-  getting the IAM role granted.
-- **Cloudflare credential**: stacks with `provisioning.coreweave.federation_dns` read
-  `CLOUDFLARE_API_TOKEN`. Load the DNS-only token without copying it into stack config:
-  ```bash
-  export CLOUDFLARE_API_TOKEN="$(gcloud secrets versions access latest \
-    --secret=cloudflare-oa-dns-token --project=hai-gcp-models)"
-  ```
+  getting the IAM role granted. Also run `gcloud auth application-default set-quota-project
+  hai-gcp-models` once — without it, every `gcp-secret://` resolution (the Cloudflare token
+  below) prints google-auth's ADC quota-project warning on `preview`/`up`. Skip this for CI:
+  its service-account credentials never trigger the warning, and forcing a quota project onto
+  an impersonated credential needs its own IAM grant that isn't provisioned.
+- **Cloudflare credential**: stacks with `provisioning.coreweave.federation_dns` read the
+  DNS-only Cloudflare token straight from Secret Manager (`cloudflare-oa-dns-token` in
+  `hai-gcp-models`, the same one `infra/grafana` uses) under your GCP credentials above — no
+  separate export needed, just `roles/secretmanager.secretAccessor` on that secret.
 - **Backend login**: `pulumi login gs://marin-iac-state`.
-- **Cluster access** (for the k8s dry-run): the CoreWeave kubeconfig at the path in the
-  cluster's `platform.coreweave.kubeconfig_path` (typically `~/.kube/coreweave-iris`).
+- **Cluster access** (for the k8s dry-run): export `KUBECONFIG` with the CoreWeave kubeconfig
+  path (typically `~/.kube/coreweave-iris`). The provider keeps this execution credential out
+  of Pulumi configuration and state.
 
 ### Making a change
 
 ```bash
 cd infra/pulumi
+export KUBECONFIG=~/.kube/coreweave-iris
 pulumi stack select <cluster>
 pulumi preview
 ```
@@ -90,9 +100,9 @@ or `delete` on a NodePool is not** — it deprovisions a reserved bare-metal fle
 reconcile the program to match reality; never `pulumi up` through a destructive NodePool diff.
 Once the preview is clean, `pulumi up`.
 
-No `KUBECONFIG` export needed anywhere in this flow: `__main__.py` builds the k8s provider with
-an explicit `kubeconfig=`/`context=` read from the cluster's own
-`platform.coreweave.kubeconfig_path`/`kube_context`, never from the env var or your shell's
+`__main__.py` requires `KUBECONFIG` but does not pass it as a provider input, so Pulumi state
+contains neither the machine-local path nor the credential contents. The provider still uses
+the cluster's declared `platform.coreweave.kube_context`; it never relies on the kubeconfig's
 current context.
 
 ### Adopting a new cluster
@@ -131,6 +141,11 @@ pulumi config rm marin-iac:import
 pulumi up       # normal run, adopt=false now — creates the remaining components fresh
 ```
 
+A CoreWeave token rotation creates a new Managed Auth username (`cwtoken-…`). Append it to
+`grafana_observer_rbac.usernames` in all three cluster configs and run a normal preview/up for
+each stack before switching Grafana to the new token. Remove the old username and update the
+stacks again only after the new Grafana revision passes its bridge checks.
+
 ### Backend
 
 The shared backend is a GCS bucket + a GCP KMS secrets provider, both in `hai-gcp-models`,
@@ -149,6 +164,16 @@ already provisioned:
     --member="user:<operator email>" \
     --role="roles/cloudkms.cryptoKeyEncrypterDecrypter"
   ```
+
+## CI preview
+
+`.github/workflows/ops-iac-preview.yaml` posts `pulumi preview` for every stack as a PR comment.
+**CI never runs `pulumi up`** — see `spec.md §9`. It authenticates as
+`pulumi-ci@hai-gcp-models.iam.gserviceaccount.com`, granted preview-only (decrypt/read, never
+write) access in [`infra/permissions`](../permissions/README.md).
+
+Adapting this to another Pulumi project means a new thin workflow that triggers on that
+project's paths and calls `./.github/actions/pulumi-preview` with its own `stack`/`work-dir`.
 
 ## Unsupported
 

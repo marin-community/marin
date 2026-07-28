@@ -3,6 +3,7 @@ import { css } from '@emotion/css';
 import { DataFrame } from '@grafana/data';
 import { useTheme2 } from '@grafana/ui';
 import { commits, frameWithField } from '../data';
+import { PanelMessage } from './PanelMessage';
 import { STATUS_COLORS } from './palette';
 
 interface Props { frames: DataFrame[]; width: number; height: number }
@@ -16,8 +17,9 @@ function relativeTime(epoch: number): string {
 
 export function CommitStrip({ frames, width, height }: Props) {
   const theme = useTheme2();
-  const values = commits(frameWithField(frames, 'short_oid')).sort((a, b) => b.committedAt - a.committedAt);
-  if (values.length === 0) {throw new Error('No commits returned');}
+  const frame = frameWithField(frames, 'short_oid');
+  const values = frame ? commits(frame).sort((a, b) => b.committedAt - a.committedAt) : [];
+  if (values.length === 0) {return <PanelMessage width={width} height={height}>No commit data</PanelMessage>;}
   const latest = values[0];
   const finalized = values.filter((row) => ['SUCCESS', 'FAILURE', 'ERROR'].includes(row.state)).length;
   const rate = latest.successRate === undefined ? '—' : `${Math.round(latest.successRate * 100)}%`;

@@ -136,6 +136,30 @@ There is no cross-cloud identity. A job on CoreWeave cannot read `gs://`, and a 
 `marin` cannot read `s3://marin-us-east-02a` unless it is handed AWS credentials explicitly.
 Every artifact a federated job touches must live in the peer's object store.
 
+## Reaching a child's serving endpoint through the parent
+
+A CoreWeave cluster's origin is not world-visible, so a capability URL minted against
+`iris-cw-rno2a.oa.dev` cannot be used from outside. A serving endpoint on a child is
+reached through the public parent (`iris.oa.dev`) instead, by a blind relay:
+
+- The child mints the capability token itself. When the child has a
+  `federation_public_parent` configured, the minted URL is
+  `https://<parent>/proxy/t/cluster=<cluster>/<token>/<name>/…`, tagging the child
+  cluster beneath the existing capability route and using the parent origin.
+- The parent's proxy recognizes the `cluster=<cluster>` discriminator, looks `<cluster>` up in its
+  `peers`, and forwards `/proxy/t/<token>/<name>/…` to that child's proxy. It does not
+  read or verify the token, and mints no bearer of its own.
+- The child validates its own token exactly as for a direct call and serves.
+
+The child is the only auth boundary; the parent is a router. The relay form remains
+beneath `/proxy/t/*`, so an edge that already exposes capability URLs needs no
+federation-specific rule. The explicit `cluster=` segment cannot be confused with a
+minted JWT and never exposes the child's other auth modes. The parent relays only to a
+configured peer (an unknown tag is a 404). A root-relative redirect from the served app
+will not round-trip today, because the child rewrites `Location` against its own
+`/proxy/t/<token>/<name>` prefix without the cluster tag; direct-API endpoints (an
+OpenAI-style `/v1/*` server) are unaffected.
+
 ## Observing federation
 
 There is no `iris peers` command. Reachability, advertised shapes, and free capacity come

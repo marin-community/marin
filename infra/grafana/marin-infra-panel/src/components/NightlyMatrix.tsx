@@ -3,6 +3,7 @@ import { css, cx } from '@emotion/css';
 import { DataFrame } from '@grafana/data';
 import { useTheme2 } from '@grafana/ui';
 import { frameWithField, nightlyCells } from '../data';
+import { PanelMessage } from './PanelMessage';
 import { NightlyCell } from '../types';
 
 interface Props { frames: DataFrame[]; width: number; height: number }
@@ -43,8 +44,9 @@ function spans<T>(items: T[], key: (item: T) => string): Array<{ key: string; sp
 
 export function NightlyMatrix({ frames, width, height }: Props) {
   const theme = useTheme2();
-  const cells = nightlyCells(frameWithField(frames, 'lane_id'));
-  if (cells.length === 0) {throw new Error('No nightly cells returned');}
+  const frame = frameWithField(frames, 'lane_id');
+  const cells = frame ? nightlyCells(frame) : [];
+  if (cells.length === 0) {return <PanelMessage width={width} height={height}>No nightly data</PanelMessage>;}
   const laneById = new Map<string, NightlyCell>();
   for (const cell of cells) {laneById.set(cell.laneId, cell);}
   const lanes = [...laneById.values()].sort((a, b) => a.laneOrder - b.laneOrder);

@@ -36,11 +36,17 @@ class SecretEnv:
     in the service's project; ``version`` is the version to mount ("latest" or a number). The
     component grants the runtime service account roles/secretmanager.secretAccessor on the
     secret — it references the secret, and never creates it or holds its value.
+
+    When the same stack creates the secret (or its version), pass those resources in
+    ``wait_for``: the string id carries no dependency edge, so without it the accessor
+    grant and the service/job that mounts the secret can race its creation on a fresh
+    deploy (Cloud Run validates secret access and version existence at deploy time).
     """
 
     name: str
     secret: str
     version: str = "latest"
+    wait_for: tuple[pulumi.Resource, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -95,6 +101,11 @@ class CloudRunServiceArgs:
     # Each grant is its own resource, so re-running with a changed list updates only the
     # added/removed grants — never the service.
     iap_members: tuple[str, ...] = ()
+    # OAuth client IDs IAP accepts as a programmatic-token audience, so a CLI or agent can
+    # reach the service with a Google-signed ID token (browser desktop-login or a
+    # service-account-minted token) instead of the interactive browser session. Empty leaves
+    # the service browser-only. Each id must be an OAuth client that already exists.
+    iap_programmatic_clients: tuple[str, ...] = ()
     # Cloud SQL connection names (project:region:instance) to attach. When non-empty the
     # service mounts the connector socket at /cloudsql and the runtime service account gets
     # roles/cloudsql.client on the project.
@@ -127,9 +138,110 @@ def _role_slug(role: str) -> str:
     return role.removeprefix("roles/").replace(".", "-").replace("/", "-")
 
 
-def _member_slug(member: str) -> str:
-    """Stable resource-name-safe slug for an IAM member, so each grant is its own resource."""
-    return re.sub(r"[^a-z0-9]+", "-", member.lower()).strip("-")
+def resource_slug(identifier: str) -> str:
+    """Stable resource-name-safe slug for an identifier (IAM member, secret id), so each
+    grant is its own resource."""
+    return re.sub(r"[^a-z0-9]+", "-", identifier.lower()).strip("-")
+
+
+def runtime_service_account(
+    *,
+    account_id: str,
+    display_name: str,
+    project: str,
+    roles: tuple[str, ...],
+    secrets: tuple[SecretEnv, ...],
+    cloudsql_instances: tuple[str, ...],
+    opts: pulumi.ResourceOptions,
+) -> tuple[gcp.serviceaccount.Account, list[pulumi.Resource]]:
+    """Runtime service account with its project roles, cloudsql.client, and secret accessor grants.
+
+    Returns the account and its IAM grant resources: Cloud Run validates secret access at
+    deploy time, so the service/job resource must depends_on the grants or a fresh deploy
+    can race them. Shared between the Cloud Run service and job components; child resource
+    names ("sa", "sa-<role>", "sa-cloudsql-client", "secret-<slug>") are part of existing
+    stacks' state, so they must stay stable.
+    """
+    service_account = gcp.serviceaccount.Account(
+        "sa",
+        account_id=account_id,
+        project=project,
+        display_name=display_name,
+        opts=opts,
+    )
+    member = service_account.email.apply(lambda email: f"serviceAccount:{email}")
+    grants: list[pulumi.Resource] = []
+    for role in roles:
+        grants.append(
+            gcp.projects.IAMMember(
+                f"sa-{_role_slug(role)}",
+                project=project,
+                role=role,
+                member=member,
+                opts=opts,
+            )
+        )
+    if cloudsql_instances:
+        grants.append(
+            gcp.projects.IAMMember(
+                "sa-cloudsql-client",
+                project=project,
+                role="roles/cloudsql.client",
+                member=member,
+                opts=opts,
+            )
+        )
+    for secret_env in secrets:
+        grants.append(
+            gcp.secretmanager.SecretIamMember(
+                f"secret-{resource_slug(secret_env.secret)}",
+                project=project,
+                secret_id=secret_env.secret,
+                role="roles/secretmanager.secretAccessor",
+                member=member,
+                opts=pulumi.ResourceOptions.merge(opts, pulumi.ResourceOptions(depends_on=list(secret_env.wait_for))),
+            )
+        )
+    return service_account, grants
+
+
+def dockerfile_image(
+    *,
+    image_name: str,
+    description: str,
+    project: str,
+    region: str,
+    build_context: str,
+    dockerfile: str,
+    parent: pulumi.ComponentResource,
+    gcp_provider: pulumi.ProviderResource,
+) -> docker_build.Image:
+    """Per-deployable Artifact Registry repo + digest-pinned linux/amd64 image from a Dockerfile."""
+    repo = gcp.artifactregistry.Repository(
+        "repo",
+        project=project,
+        location=region,
+        repository_id=image_name,
+        format="DOCKER",
+        description=description,
+        opts=pulumi.ResourceOptions(parent=parent, provider=gcp_provider),
+    )
+    image_tag = repo.repository_id.apply(
+        lambda repo_id: f"{region}-docker.pkg.dev/{project}/{repo_id}/{image_name}:latest"
+    )
+    return docker_build.Image(
+        "image",
+        context=docker_build.BuildContextArgs(location=build_context),
+        dockerfile=docker_build.DockerfileArgs(location=f"{build_context}/{dockerfile}"),
+        # Cloud Run is linux/amd64; pin it so a build from an arm64 workstation still
+        # produces a runnable image.
+        platforms=[docker_build.Platform.LINUX_AMD64],
+        tags=[image_tag],
+        push=True,
+        # Preview plans the graph without invoking buildx; the build + push happen on up.
+        build_on_preview=False,
+        opts=pulumi.ResourceOptions(parent=parent, provider=gcp_provider, depends_on=[repo]),
+    )
 
 
 class CloudRunService(pulumi.ComponentResource):
@@ -153,64 +265,24 @@ class CloudRunService(pulumi.ComponentResource):
         super().__init__("marin:gcp:CloudRunService", name, None, opts)
         child = pulumi.ResourceOptions(parent=self, provider=gcp_provider)
 
-        service_account = gcp.serviceaccount.Account(
-            "sa",
+        service_account, sa_grants = runtime_service_account(
             account_id=args.service_account_id or args.service_name,
-            project=args.project,
             display_name=f"{args.service_name} (Cloud Run)",
-            opts=child,
-        )
-        member = service_account.email.apply(lambda email: f"serviceAccount:{email}")
-        for role in args.service_account_roles:
-            gcp.projects.IAMMember(
-                f"sa-{_role_slug(role)}",
-                project=args.project,
-                role=role,
-                member=member,
-                opts=child,
-            )
-        if args.cloudsql_instances:
-            gcp.projects.IAMMember(
-                "sa-cloudsql-client",
-                project=args.project,
-                role="roles/cloudsql.client",
-                member=member,
-                opts=child,
-            )
-        for secret_env in args.secrets:
-            gcp.secretmanager.SecretIamMember(
-                f"secret-{_member_slug(secret_env.secret)}",
-                project=args.project,
-                secret_id=secret_env.secret,
-                role="roles/secretmanager.secretAccessor",
-                member=member,
-                opts=child,
-            )
-
-        repo = gcp.artifactregistry.Repository(
-            "repo",
             project=args.project,
-            location=args.region,
-            repository_id=args.service_name,
-            format="DOCKER",
-            description=f"Images for the {args.service_name} Cloud Run service.",
+            roles=args.service_account_roles,
+            secrets=args.secrets,
+            cloudsql_instances=args.cloudsql_instances,
             opts=child,
         )
-        image_tag = repo.repository_id.apply(
-            lambda repo_id: f"{args.region}-docker.pkg.dev/{args.project}/{repo_id}/{args.service_name}:latest"
-        )
-        image = docker_build.Image(
-            "image",
-            context=docker_build.BuildContextArgs(location=args.build_context),
-            dockerfile=docker_build.DockerfileArgs(location=f"{args.build_context}/{args.dockerfile}"),
-            # Cloud Run is linux/amd64; pin it so a build from an arm64 workstation still
-            # produces a runnable image.
-            platforms=[docker_build.Platform.LINUX_AMD64],
-            tags=[image_tag],
-            push=True,
-            # Preview plans the graph without invoking buildx; the build + push happen on up.
-            build_on_preview=False,
-            opts=pulumi.ResourceOptions(parent=self, provider=gcp_provider, depends_on=[repo]),
+        image = dockerfile_image(
+            image_name=args.service_name,
+            description=f"Images for the {args.service_name} Cloud Run service.",
+            project=args.project,
+            region=args.region,
+            build_context=args.build_context,
+            dockerfile=args.dockerfile,
+            parent=self,
+            gcp_provider=gcp_provider,
         )
 
         # Cloud SQL connector: a "cloudsql" volume exposes the auth-proxy sockets under
@@ -287,7 +359,12 @@ class CloudRunService(pulumi.ComponentResource):
                     )
                 ],
             ),
-            opts=child,
+            # Cloud Run validates secret access and version existence at deploy, so the
+            # grants and any stack-created secrets must exist before the service.
+            opts=pulumi.ResourceOptions.merge(
+                child,
+                pulumi.ResourceOptions(depends_on=sa_grants + [r for s in args.secrets for r in s.wait_for]),
+            ),
         )
 
         # IAP invokes the service as its own service agent; only that agent gets run.invoker.
@@ -308,12 +385,29 @@ class CloudRunService(pulumi.ComponentResource):
         for raw_member in args.iap_members:
             member = normalize_iap_member(raw_member)
             gcp.iap.WebCloudRunServiceIamMember(
-                f"iap-access-{_member_slug(member)}",
+                f"iap-access-{resource_slug(member)}",
                 project=args.project,
                 location=args.region,
                 cloud_run_service_name=service.name,
                 role="roles/iap.httpsResourceAccessor",
                 member=member,
+                opts=child,
+            )
+
+        # Register programmatic-token audiences on the service's IAP resource. IAP then admits
+        # an ID token whose `aud` is one of these client ids and attributes the caller by its
+        # email claim — the path a CLI or agent uses instead of the interactive browser sign-in.
+        if args.iap_programmatic_clients:
+            gcp.iap.Settings(
+                "iap-settings",
+                name=service.name.apply(
+                    lambda name: f"projects/{project_number}/iap_web/cloud_run-{args.region}/services/{name}"
+                ),
+                access_settings=gcp.iap.SettingsAccessSettingsArgs(
+                    oauth_settings=gcp.iap.SettingsAccessSettingsOauthSettingsArgs(
+                        programmatic_clients=list(args.iap_programmatic_clients),
+                    ),
+                ),
                 opts=child,
             )
 

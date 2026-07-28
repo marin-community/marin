@@ -163,6 +163,18 @@ def test_missing_token_is_an_auth_error_without_a_network_call():
     assert excinfo.value.error_class == K8sErrorClass.AUTH
 
 
+def test_transport_error_does_not_expose_authorization_header():
+    def rejected_header(_request: httpx.Request) -> httpx.Response:
+        raise httpx.LocalProtocolError("Illegal header value b'Bearer secret\\n'")
+
+    with pytest.raises(K8sError) as excinfo:
+        make_k8s_source(rejected_header, token="secret\n").probe()
+
+    assert excinfo.value.error_class == K8sErrorClass.NETWORK
+    assert "LocalProtocolError" in str(excinfo.value)
+    assert "secret" not in str(excinfo.value)
+
+
 def test_crashloop_scope_separates_watched_components_from_workloads():
     routes = {
         "/api/v1/namespaces": [_namespace("iris")],
@@ -618,7 +630,7 @@ def test_crashloop_alert_counts_by_scope():
 
 def _client(fleet: K8sFleet) -> TestClient:
     return TestClient(
-        create_app(bridge_config(), {}, {}, GithubSource(token=None, timeout=5.0), fleet, WandbSource(timeout=5.0))
+        create_app(bridge_config(), {}, {}, GithubSource(auth=None, timeout=5.0), fleet, WandbSource(timeout=5.0))
     )
 
 

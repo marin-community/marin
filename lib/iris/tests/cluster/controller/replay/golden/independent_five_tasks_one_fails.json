@@ -73,9 +73,13 @@
       "error": null,
       "exit_code": 0,
       "finished_at_ms": 1704067200006,
+      "node_name": "",
+      "pod_name": "",
+      "pod_uid": "",
       "started_at_ms": 1704067200001,
       "state": 4,
       "task_id": "/test-user/indep5-job/0",
+      "terminal_reason": "",
       "worker_id": "w-indep5-0"
     },
     {
@@ -86,9 +90,13 @@
       "error": null,
       "exit_code": 0,
       "finished_at_ms": 1704067200007,
+      "node_name": "",
+      "pod_name": "",
+      "pod_uid": "",
       "started_at_ms": 1704067200002,
       "state": 4,
       "task_id": "/test-user/indep5-job/1",
+      "terminal_reason": "",
       "worker_id": "w-indep5-1"
     },
     {
@@ -99,9 +107,13 @@
       "error": "boom",
       "exit_code": null,
       "finished_at_ms": 1704067200010,
+      "node_name": "",
+      "pod_name": "",
+      "pod_uid": "",
       "started_at_ms": 1704067200003,
       "state": 5,
       "task_id": "/test-user/indep5-job/2",
+      "terminal_reason": "",
       "worker_id": "w-indep5-2"
     },
     {
@@ -112,9 +124,13 @@
       "error": null,
       "exit_code": 0,
       "finished_at_ms": 1704067200008,
+      "node_name": "",
+      "pod_name": "",
+      "pod_uid": "",
       "started_at_ms": 1704067200004,
       "state": 4,
       "task_id": "/test-user/indep5-job/3",
+      "terminal_reason": "",
       "worker_id": "w-indep5-3"
     },
     {
@@ -125,9 +141,13 @@
       "error": null,
       "exit_code": 0,
       "finished_at_ms": 1704067200009,
+      "node_name": "",
+      "pod_name": "",
+      "pod_uid": "",
       "started_at_ms": 1704067200005,
       "state": 4,
       "task_id": "/test-user/indep5-job/4",
+      "terminal_reason": "",
       "worker_id": "w-indep5-4"
     }
   ],

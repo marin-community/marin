@@ -97,9 +97,15 @@ export function wandbPoints(frame: DataFrame): WandbPoint[] {
   }));
 }
 
-export function frameWithField(frames: DataFrame[], fieldName: string): DataFrame {
+/**
+ * The single query frame carrying `fieldName`, or `undefined` when the query
+ * returned nothing yet (empty, still loading, or upstream error). Callers render
+ * an empty state for `undefined`; only a genuinely ambiguous result — more than
+ * one frame with the field — is a misconfiguration worth failing loudly on.
+ */
+export function frameWithField(frames: DataFrame[], fieldName: string): DataFrame | undefined {
   const matching = frames.filter((frame) => frame.fields.some((field: Field) => field.name === fieldName));
-  if (matching.length !== 1) {
+  if (matching.length > 1) {
     throw new Error(`Expected one data frame containing ${fieldName}; received ${matching.length}`);
   }
   return matching[0];

@@ -35,10 +35,10 @@ from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.dashboard import (
     _UNAUTHENTICATED_RPCS,
     ControllerDashboard,
-    _SubdomainProxyMiddleware,
 )
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import DEFAULT_BACKEND_ID
 from iris.rpc import job_pb2
@@ -82,6 +82,7 @@ def _jwt_manager() -> JwtTokenManager:
 
 def _make_service(db, log_client, auth=None):
     """A ControllerServiceImpl with minimal deps for login / auth-setup tests."""
+    EndpointsProjection(db)
     controller_mock = Mock()
     controller_mock.wake = Mock()
     controller_mock.get_job_scheduling_diagnostics = Mock(return_value="")
@@ -618,7 +619,7 @@ def _dashboard_with_protected_route(service, policy: RequestAuthPolicy) -> Contr
     # Walk down to the Starlette router so the new route participates in route
     # matching.
     app = dashboard.app
-    while isinstance(app, _SubdomainProxyMiddleware | RouteAuthMiddleware):
+    while isinstance(app, RouteAuthMiddleware):
         app = app._app
     app.router.routes.insert(0, Route("/test-protected", _protected))
     return dashboard

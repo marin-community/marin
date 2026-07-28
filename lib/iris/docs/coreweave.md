@@ -311,6 +311,47 @@ Free, fully-managed Grafana included with every CKS cluster. Pre-configured
 dashboards for CKS (control plane, Pods), Fleet (node/resource trends),
 and Network (traffic, latency). No setup required.
 
+Kubernetes Events and deleted Pod objects are short-lived. For actor-level
+history, use CoreWeave's
+[Kubernetes Audit Logs dashboard](https://docs.coreweave.com/observability/managed-grafana/cks/kubernetes-audit-logs)
+or the regional Loki API. CKS audit logs have dedicated regional data sources;
+CoreWeave documents that some log types expire after two weeks. Use the regional
+source for detailed incident queries:
+
+```bash
+KUBE_CONFIG=~/.kube/coreweave-iris
+KUBE_CONTEXT=marin-rn02a_RNO2A
+CW_CLUSTER=marin-rn02a
+AUDIT_HOST=https://observe-audit.us-west.coreweave.com
+POD_NAME=iris-example-0
+START=2026-07-25T21:20:00Z
+END=2026-07-25T21:35:00Z
+
+CW_OBSERVE_TOKEN=$(kubectl --kubeconfig "$KUBE_CONFIG" --context "$KUBE_CONTEXT" \
+  config view --raw --minify -o jsonpath='{.users[0].user.token}')
+curl -sS -G "$AUDIT_HOST/loki/api/v1/query_range" \
+  -H "Authorization: Bearer $CW_OBSERVE_TOKEN" \
+  --data-urlencode \
+  "query={logging_component=\"unicaster\", app=\"kube-apiserver\", stream=\"\", cluster=\"$CW_CLUSTER\"} |= \"$POD_NAME\" | json | apiVersion=\"audit.k8s.io/v1\"" \
+  --data-urlencode "start=$START" \
+  --data-urlencode "end=$END" \
+  --data-urlencode "limit=1000"
+unset CW_OBSERVE_TOKEN
+```
+
+Use `observe-audit.us-east.coreweave.com` for US-EAST and
+`observe-audit.us-west.coreweave.com` for RNO2A/US-WEST. Filter the results by
+`objectRef.name`, `verb`, and `user.username` to distinguish Iris cleanup from
+Kueue, kubelet, or an operator. The kubeconfig token is also the CoreWeave API
+access token; never print it or save the response with request headers.
+
+CoreWeave's audit store is the actor-level record of Kubernetes API operations.
+[Telemetry Relay](https://docs.coreweave.com/observability/telemetry-forwarding/relay)
+can forward those logs to customer-controlled storage. `iris.task_event` is a
+different view: a retained, task-scoped interpretation of backend verdicts and
+controller decisions. The Kubernetes Grafana dashboard shows recent
+`iris.task_event` rows beside the API server's shorter-lived Warning events.
+
 ## 4. Operator Setup Guide
 
 §0 is the quickstart for the `marin-gpu` cluster. This section is the generic
@@ -351,7 +392,9 @@ style, and credentials (see "Storage defaults" in §0). The rest of this
 section is for access from *outside* CoreWeave (laptop, GCP). The bucket is
 browsable in the
 [CoreWeave console](https://console.coreweave.com/object-storage/buckets/marin-us-east-02a).
-Follow CoreWeave's
+`uv run fsutil` browses these buckets alongside the GCS ones and needs only the
+credentials below; see the [fsutil reference](../../../docs/references/fsutil.md).
+For direct S3 tooling, follow CoreWeave's
 [endpoint](https://docs.coreweave.com/products/storage/object-storage/using-object-storage/configure-endpoints)
 and
 [object-management](https://docs.coreweave.com/products/storage/object-storage/using-object-storage/manage-objects)
@@ -359,8 +402,7 @@ docs; Marin-specific settings are:
 
 - Credentials: create an Object Storage access key in the
   [CoreWeave console](https://console.coreweave.com/object-storage/access-keys);
-  use the Key ID as `CW_ACCESS_KEY_ID` and the Key secret as
-  `CW_SECRET_ACCESS_KEY`.
+  use the Key ID as `CW_KEY_ID` and the Key secret as `CW_KEY_SECRET`.
 - Endpoint: `https://cwobject.com` outside CoreWeave, `http://cwlota.com`
   inside CoreWeave.
 - Region: `US-EAST-02A`.
@@ -370,8 +412,8 @@ docs; Marin-specific settings are:
 One-off AWS CLI check, without persistent AWS config:
 
 ```bash
-export CW_ACCESS_KEY_ID=<your-coreweave-object-storage-key-id>
-export CW_SECRET_ACCESS_KEY=<your-coreweave-object-storage-key-secret>
+export CW_KEY_ID=<your-coreweave-object-storage-key-id>
+export CW_KEY_SECRET=<your-coreweave-object-storage-key-secret>
 
 tmp_config="$(mktemp)"
 trap 'rm -f "$tmp_config"' EXIT
@@ -383,8 +425,8 @@ s3 =
 EOF
 
 AWS_CONFIG_FILE="$tmp_config" \
-AWS_ACCESS_KEY_ID="$CW_ACCESS_KEY_ID" \
-AWS_SECRET_ACCESS_KEY="$CW_SECRET_ACCESS_KEY" \
+AWS_ACCESS_KEY_ID="$CW_KEY_ID" \
+AWS_SECRET_ACCESS_KEY="$CW_KEY_SECRET" \
 AWS_REGION=US-EAST-02A \
 AWS_ENDPOINT_URL_S3=https://cwobject.com \
 AWS_PAGER="" \
@@ -617,7 +659,7 @@ shred -u /tmp/<cluster>.pem
   `uv run finelog deploy up <cluster> --no-build` (the default `--build`
   recompiles the Rust image first). finelog archives to **Cloudflare R2**
   (`s3://marin-na/finelog/<cluster>`, the R2 `object_storage_endpoint`),
-  authenticated by `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` in the deploy
+  authenticated by `R2_KEY_ID` / `R2_KEY_SECRET` in the deploy
   shell — *not* the CoreWeave `CW_KEY_*` keys iris uses for its own
   `marin-us-east-*` state and task storage. Pointing `remote_log_dir` at a
   CoreWeave bucket with R2 keys (or vice-versa) fails the archive with
@@ -787,18 +829,16 @@ kci delete nodepool -l iris-<label_prefix>-managed=true
 - **`NCCL_SOCKET_IFNAME` is per-region.** The same GPU SKU exposes different PCI
   interface names in different regions; verify on a live node (see "Bringing up
   a new cluster").
-- **A controller restart can CrashLoop on a stale node-local state DB.** The
-  controller keeps its SQLite state on node-local NVMe (`storage.local_state_dir`,
-  a hostPath), and `cluster controller restart` may reschedule the new pod onto a
-  different CPU node. If that node holds a corrupt leftover state DB from an earlier
-  stint whose mtime is at least as fresh as the latest remote checkpoint, startup
-  trusts it (skips the checkpoint restore) and crashes with `database disk image is
-  malformed`. The deploy's post-restart health check catches the CrashLoopBackOff
-  and **auto-rolls-back** to the previous image + pre-deploy checkpoint, so the
-  cluster stays healthy. Recovery: just re-run the restart — a fresher pre-deploy
-  checkpoint makes a stale node restore the clean checkpoint, and landing back on
-  the current controller node reuses its good DB. A persistently bad node needs its
-  `local_state_dir/db` wiped so startup falls back to the checkpoint.
+- **Controller state is node-local.** The controller keeps SQLite state on
+  node-local NVMe (`storage.local_state_dir`, a hostPath), and
+  `cluster controller restart` may reschedule the replacement onto another CPU
+  node. Startup runs `PRAGMA quick_check` on both local databases and only reuses
+  them when their `last_checkpoint_epoch_ms` marker matches the selected remote
+  checkpoint. Otherwise it stages and validates a clean checkpoint directory
+  before replacing the local directory, which also discards stale WAL/SHM files.
+  A corrupt local directory is retained as `db.corrupt-<epoch_ms>` for diagnosis.
+  The readiness endpoint also reads the task-attempt and federation tables, so a
+  static HTTP response cannot mask a broken database.
 
 Cold-start timings:
 
@@ -1018,8 +1058,6 @@ The platform detects fatal errors before the full timeout expires:
 | `KUBECONFIG` | Overrides the config's `kubeconfig_path` (file only — the config's `kube_context` still binds the context) |
 | `CW_KEY_ID` | S3/CoreWeave Object Storage access key (required if storage uses `s3://`) |
 | `CW_KEY_SECRET` | S3/CoreWeave Object Storage secret key |
-| `CW_ACCESS_KEY_ID` | CoreWeave Object Storage key ID |
-| `CW_SECRET_ACCESS_KEY` | CoreWeave Object Storage secret key |
 
 ### Auto-injected into worker and task Pods
 
@@ -1034,7 +1072,9 @@ The platform detects fatal errors before the full timeout expires:
 | `AWS_SECRET_ACCESS_KEY` | `envFrom` | From the `iris-task-env` Secret |
 | `AWS_ENDPOINT_URL` | `envFrom` | From `iris-task-env`; derived from `object_storage_endpoint` |
 | `AWS_REGION` / `AWS_DEFAULT_REGION` | `envFrom` | From `iris-task-env`; `auto` for CoreWeave Object Storage endpoints |
-| `FSSPEC_S3` | `envFrom` | From `iris-task-env`; JSON-encoded fsspec S3 config (endpoint + addressing style) |
+| `FSSPEC_S3` | `envFrom` | From `iris-task-env`; JSON-encoded endpoint, addressing, timeout, and retry config |
+| `CW_KEY_ID` / `CW_KEY_SECRET` | `envFrom` | From `iris-task-env`; the CoreWeave store's own credential variables, read by bucket-routed filesystems |
+| `CW_S3_ENDPOINT` | `envFrom` | From `iris-task-env`; the pod's `object_storage_endpoint` (LOTA), so a bucket-routed filesystem uses the node-local cache |
 | `MARIN_PREFIX` | `defaults.task_env` (cluster config) | Preset to `s3://marin-us-east-02a/marin` on both CoreWeave clusters |
 
 ## 11. Timeouts
@@ -1225,12 +1265,29 @@ If `Valid` is `False`, the instance type or configuration is rejected.
 ### Pod stuck in Pending
 
 ```bash
-kubectl describe pod <name> -n iris      # Check Events section
-kubectl get events -n iris --sort-by='.lastTimestamp'
+iris --cluster=<cluster> task describe <task-id>
+kubectl get pod <name> -n iris \
+  -o jsonpath='{range .status.conditions[?(@.status=="False")]}{.reason}{": "}{.message}{"\n"}{end}'
+kubectl get workload -n iris
+kubectl get workload <workload-name> -n iris \
+  -o jsonpath='{range .status.conditions[?(@.type=="QuotaReserved")]}{.status}{"\t"}{.reason}{"\t"}{.message}{"\n"}{end}'
 ```
 
-Common causes: node not yet provisioned (wait for autoscaler), resource limits
-exceeded, or missing tolerations.
+`SchedulingGated` means Kueue has not admitted the Workload. The
+`QuotaReserved` message reports quota or topology fit failures such as
+`excluded: resource "memory"`. Iris copies that verdict into the task's backend
+status, including for singleton Pods whose generated Workload is linked by Pod
+UID.
+
+Common causes are node capacity fragmented across running Pods, resource limits
+exceeded, missing tolerations, or a node still provisioning. Kueue preempts only
+the priorities allowed by the ClusterQueue policy; equal-priority work remains
+in place.
+
+Avoid `kubectl describe pod` when a task carries credentials in literal
+environment variables. It prints those values. Use the JSONPath commands above
+for scheduling state, and rotate any credential printed into a terminal or
+transcript.
 
 ### Image pull errors
 

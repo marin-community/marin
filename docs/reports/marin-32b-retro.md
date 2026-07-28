@@ -54,7 +54,7 @@ This report covers the following experiments/phases:
 - Phase 2b \- Optimizer Swap (Muon): [#1380](https://github.com/marin-community/marin/issues/1380) [`exp1380_muon32b`](https://github.com/marin-community/marin/blob/fe373c233ee7288cbf8e7600765c3fc6fb6fa3ac/experiments/tootsie/exp1380_muon32b.py) [Data Browser Link](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp1380_muon32b-898f42.json)
 - Phase 3 \- QK\-Norm Switch: [#1395](https://github.com/marin-community/marin/issues/1395) [`exp1395_qwen3_32b`](https://github.com/marin-community/marin/blob/fe373c233ee7288cbf8e7600765c3fc6fb6fa3ac/experiments/tootsie/exp1395_qwen3_32b.py) [Data Browser Link](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp1395_qwen3_32b-de6f47.json)
 - Phase 4a \- Bison Cooldown: [#1529](https://github.com/marin-community/marin/issues/1529) [`exp1529_32b_bison_cooldown`](https://github.com/marin-community/marin/blob/ee163702c5bc71c9bbba3238db84b6ee86e826a7/experiments/tootsie/exp1529_32b_bison_cooldown.py) [Data Browser Link](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp1529_32b_bison_cooldown-48ddfe.json)
-- Phase 4b \- Mantis Cooldown: [#1581](https://github.com/marin-community/marin/issues/1681) [`exp1529_32b_mantis_cooldown`](https://github.com/marin-community/marin/blob/ee163702c5bc71c9bbba3238db84b6ee86e826a7/experiments/tootsie/exp1529_32b_mantis_cooldown.py) [Data Browser Link](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp1529_32b_mantis_cooldown-c6f4b0.json)
+- Phase 4b \- Mantis Cooldown: [#1681](https://github.com/marin-community/marin/issues/1681) [`exp1529_32b_mantis_cooldown`](https://github.com/marin-community/marin/blob/ee163702c5bc71c9bbba3238db84b6ee86e826a7/experiments/tootsie/exp1529_32b_mantis_cooldown.py) [Data Browser Link](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp1529_32b_mantis_cooldown-c6f4b0.json)
 
 Total tokens trained in final artifact: ≈6.437T
 
@@ -375,7 +375,7 @@ This has historically mitigated the risk of poor shuffles, but in this case it s
 
 #### Attempt 2 — Mantis Cooldown
 
-- Issue: [#1581](https://github.com/marin-community/marin/issues/1681)
+- Issue: [#1681](https://github.com/marin-community/marin/issues/1681)
 - Experiment: [`exp1529_32b_mantis_cooldown`](https://github.com/marin-community/marin/blob/ee163702c5bc71c9bbba3238db84b6ee86e826a7/experiments/tootsie/exp1529_32b_mantis_cooldown.py)
 - [Data Browser Link](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp1529_32b_mantis_cooldown-c6f4b0.json)
 
@@ -512,7 +512,7 @@ While we believe Marin 32B is a strong open source base model, it has some limit
 - It has not undergone long context extension training, which may limit its performance on long context tasks.
 - As stated, our model is only trained on English text (as well as programming languages), limiting its performance on other languages.
 
-We welcome community contributions ([Github](https:/github.com/marin-community/marin/issues), [Discord](https://discord.gg/J9CTk7pqcM)) to address these and other limitations!
+We welcome community contributions ([Github](https://github.com/marin-community/marin/issues), [Discord](https://discord.gg/J9CTk7pqcM)) to address these and other limitations!
 
 ## Lessons Learned
 

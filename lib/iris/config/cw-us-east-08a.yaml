@@ -43,6 +43,7 @@ finelog:
 # Public host of this controller. The whole surface is IP-locked to the marin
 # egress (scripts/install_cw_network.py); there is no off-cluster user surface.
 dashboard_url: https://iris-cw-us-east-08a.oa.dev
+federation_public_parent: https://iris.oa.dev
 
 # Infrastructure-as-code provisioning (see infra/pulumi). Opaque to Iris.
 provisioning:
@@ -60,6 +61,8 @@ provisioning:
       hostname: iris-cw-us-east-08a.oa.dev
       target: iris-cw-us-east-08a.208261-marin-us-east-08a.coreweave.app
     rbac: { service_account: iris-controller }
+    grafana_observer_rbac:
+      usernames: [cwtoken-uhBSRqWXRtyV7WWciRtYr-readonly-ops-token]
 
 platform:
   label_prefix: cw-use08a

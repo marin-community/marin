@@ -7,10 +7,13 @@ endpoint in order, and writes one durable `record.json` per eval as it finishes 
 in progressively, each eval independently inspectable (own record, own eval-child job and logs, own
 parquet), all sharing a `group_id`. Evaldash scans those records into its Postgres query index.
 
-The engine is `experiments/evals/evalchemy/serve_and_eval.py` (`run_eval_units`): one marin-serve
-child exposes an OpenAI-compatible endpoint (vLLM on TPU or GPU), and one evalchemy child per eval
-hits it. One eval failing doesn't stop the rest; if the served endpoint itself dies, the remaining
-evals are recorded as serve failures without running.
+`marin.evaluation.runner` opens one `remote_inference` session and passes its Iris endpoint URL to
+each executor. An evaluation failure is recorded and later evaluations continue. If inference fails,
+the current and remaining evaluations are recorded as infrastructure failures. This directory holds
+the model and suite catalogs, Marin fleet policy, and CLI choices.
+
+The user-facing [evaluation guide](../../docs/tutorials/run-lm-evals.md) contains model-specific
+commands, suite constraints, launch controls, and result locations.
 
 ## Commands
 
@@ -59,7 +62,7 @@ uv run python -m experiments.evaluation.cli backfill-samples --prefix gs://marin
 Every eval writes `{records_prefix}/{run_id}/record.json` (`marin.evaluation.records`). That record
 is the source of truth: model, hardware, status (`succeeded` / `failed` / `infra_failed`), the
 per-task metrics, provenance, the `group_id` shared by every eval from the same serve, and the iris
-job paths of every job behind the run (`jobs`: orchestrator, the shared serve child, this eval's
+job paths of every job behind the run (`jobs`: orchestrator, the shared inference child, this eval's
 child). The orchestrator writes it on success and on failure, so a failed run is still accounted
 for -- and a failure carries the failed child's last 100 log lines (`log_tails`), so most failures
 are diagnosable straight from the record (or the dashboard) without cluster access.
@@ -77,26 +80,77 @@ object-store prefix and upserts the `eval_runs` and `eval_metrics` tables implem
 ## Evals in pipelines
 
 `pipeline.py` exposes the same run as an `ArtifactStep`: `eval_step("qwen3-1.7b", "smoke",
-version="2026.07.19")` is a lazy, versioned handle whose records land at the step's artifact path —
-compose it into any `StepRunner` pipeline (e.g. right after a checkpoint-export step, or fanned out
-over a model sweep) and an identical config re-run is a cache hit. The step process acts as the
-orchestrator, so the pipeline must itself run as an Iris job. The slice override is a runtime arg:
-changing it never forks the artifact's identity.
+version="2026.07.19")` is a lazy, versioned handle whose records land at the step's artifact path.
+The step submits the same CPU orchestrator used by the CLI and waits for it. The slice override is a
+runtime arg, so changing it does not change the artifact identity.
+
+## Agentic benchmarks (Harbor)
+
+The `agentic` suite (`tb2`, `swebench`, `gaia`, `bfcl`, `aider`, `medagentbench`, `financeagent`) runs
+in-sandbox agentic benchmarks through the same launcher. Each preset names an `hf://` repository whose
+root contains Harbor task directories. The runner materializes that repository at its configured
+revision, the launcher serves the model once and mints a capability URL for the served endpoint, and
+an in-sandbox terminal agent (Daytona) reaches the model through that URL. Harbor's verifier scores
+each trial, which normalizes into one agentic `EvalSample` (reward ->
+`Grading(method="harbor:verifier")`, trajectory -> `trajectory_uri`) plus a record, so agentic runs
+land in evaldash like every other eval.
+
+```bash
+# A capped agentic validation run (2 tasks).
+uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals tb2-lite
+```
+
+Daytona-backed definitions declare one experiment-owned credential specification. A launch first
+uses `DAYTONA_API_KEY` from its environment, then falls back to the `DAYTONA_EVAL_API_KEY` secret in
+the `hai-gcp-models` Google Secret Manager project. `DAYTONA_API_KEY` is the only supported
+environment override; the old `DAYTONA_EVAL_API_KEY` environment alias is not read. The generic
+launcher resolves the declaration immediately before Iris submission, and the isolated Harbor
+subprocess receives that key without inheriting the orchestrator's other credentials.
+
+The Grug OpenCode profile keeps its model and Harbor policy on the unified path:
+
+```bash
+# One OpenCode trial with the step-1903 Grug SFT on H100x8.
+uv run python -m experiments.evaluation.cli launch \
+  --model grug-agentic-s3-step1903 --evals grug-opencode-id --limit 1
+```
+
+The profile materializes `DCAgent/dev_set_v2` from a pinned Hugging Face commit before passing its
+task directories to Harbor.
+
+Mechanism code lives under `marin.evaluation.evalchemy` and `marin.evaluation.harbor`; the common
+runner depends only on the callable executor protocol and the shared record types.
 
 ## Adding a model or eval
 
-Add a model by adding an `EvalModelConfig` to `MODELS` in `models.py`. Set `hbm_gb` honestly (bf16
-weights are `params_billions * 2 GB`, times roughly 1.3 for runtime overhead); the sizing heuristic
-picks the smallest slice that fits. Set `tokenizer` when `location` is an object-store export (the eval
-client loads its tokenizer through HF and cannot read a `gs://`/`s3://` path). Use `fixed_gpu` and
-`target_cluster` to pin an exact GPU shape and CoreWeave peer. Set `serve_memory` for large
-object-store exports: weight streaming stages shards through host buffers, so the serve pod's memory
-limit must cover the full weight volume or the kernel OOM-kills the server mid-load.
+A model is a `ModelConfig` (`marin.evaluation.model_config`): its `location` (HF id or `gs://`/`s3://`
+export), a `resource_hint: ResourceHint` (placement compatibility), a `serve: ServeConfig` (server
+behavior), a `generation: GenerationConfig`
+(`--gen_kwargs`), and an `agent: AgentConfig` (Harbor agent kwargs). Two population paths feed the one
+cached `models()` registry in `models.py`:
 
-Add an eval by adding an `EvalSuiteConfig` to `EVALS` in `evals.py` (its `tasks` are `EvalTaskConfig`
-entries, the same task menu the in-loop suites use). Add it to a group in `SUITES` to make it selectable
-by name. Task flags that matter for served evals: `generation` routes the task through the chat API for
-chat-template models (MCQ tasks always use completions, which alone can echo prompt logprobs);
-`unsafe_code` passes lm-eval's `--confirm_run_unsafe_code` for code-execution scoring; and
-`completion_only` pins a generation task to the completions API for every model (humaneval's infill
-prompt breaks under chat formatting -- chat models reply with prose and markdown fences).
+- **YAML catalog** under `serve/models/<org>/<model>.yaml` -- one file per model, decoded by draccus
+  against `ModelConfig` (an unknown or mistyped field fails at load). This is the bulk catalog; see
+  `serve/models/README.md` for the schema. Just add a file.
+- **Python factory** in `models.py` for the parametric entries whose serve options are computed
+  (`_snowball`, `_base_hf`) or the curated hand-tuned ones.
+
+Set `resource_hint.hbm_gb` to a portable serving footprint, or set
+`resource_hint.gpu` to an accepted exact GPU shape such as `{"H100": 8}`. The experiment fleet maps
+that requirement to a cluster. Set `resource_hint.memory` when serving needs more than the default
+host memory. Set `tokenizer` when `location` is an object-store export because the eval client loads
+its tokenizer through Hugging Face. vLLM streams object-store weights through the RunAI loader.
+Every explicit `serve` value wins over what `auto_serve_overrides` derives from the model's
+`config.json`; `generation.extra_gen_kwargs` (e.g. `skip_special_tokens=false` for a thinking model)
+rides on `--gen_kwargs`.
+
+Add an `EvalchemyDefinition` or `HarborDefinition` to `EVALS` in `evals.py`, then add its key to
+`SUITES` when it belongs in a named group. Task flags that matter for served evals:
+`generation` routes the task through the chat API for chat-template models (MCQ tasks always use
+completions, which alone can echo prompt logprobs); `unsafe_code` passes lm-eval's
+`--confirm_run_unsafe_code`; and `completion_only` pins a generation task to the completions API.
+
+Use `_chat_eval` for a benchmark under Evalchemy's `eval/chat_benchmarks` tree. It normalizes the
+task directory into the matching Evalchemy extra, so adding a benchmark installs its endpoint and
+grading dependencies without rebuilding an image. The isolated client also installs CPU-only
+PyTorch as a compatibility floor; inference remains in the separately served model process.

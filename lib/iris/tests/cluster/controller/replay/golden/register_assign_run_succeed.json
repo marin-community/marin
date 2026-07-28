@@ -73,9 +73,13 @@
       "error": null,
       "exit_code": 0,
       "finished_at_ms": 1704067200002,
+      "node_name": "",
+      "pod_name": "",
+      "pod_uid": "",
       "started_at_ms": 1704067200001,
       "state": 4,
       "task_id": "/test-user/happy-job/0",
+      "terminal_reason": "",
       "worker_id": "w-happy"
     }
   ],

@@ -18,7 +18,8 @@ import time
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
 
-from rigging.filesystem.s3_compat import configure_fsspec_s3, fsspec_s3_conf
+from rigging.filesystem.cluster_config import StoreType, store_config
+from rigging.filesystem.s3_compat import configure_fsspec_s3, fsspec_s3_conf, s3_credentials
 from rigging.secrets import ENV_SCHEME, as_secret_spec, resolve_secret_spec
 from rigging.timing import Deadline
 
@@ -70,6 +71,8 @@ _KUBECTL_TIMEOUT = 1800.0
 # cores during reconcile spikes. Memory is capped to protect the node.
 _CONTROLLER_CPU_REQUEST = "16"
 _CONTROLLER_MEMORY_REQUEST = "64Gi"
+_KUBERNETES_ARCH_LABEL = "kubernetes.io/arch"
+_CONTROLLER_ARCH = "amd64"
 # Relax the liveness/readiness deadline off the k8s defaults (1s / 3): a
 # busy-but-alive controller must not be SIGKILLed just because a /health request
 # queued behind a reconcile tick under heavy load.
@@ -89,10 +92,10 @@ _CONTROLLER_STATE_PVC_SIZE = "50Gi"
 
 
 def configure_client_s3(config: IrisClusterConfig) -> None:
-    """Configure S3 env vars for fsspec access on CoreWeave (CW_KEY_* → AWS mapping).
+    """Configure S3 env vars for fsspec access on CoreWeave (CoreWeave keys → AWS mapping).
 
-    Maps CW_KEY_ID/CW_KEY_SECRET to their AWS equivalents and sets FSSPEC_S3
-    with the correct endpoint and addressing style. No-op if the config has no
+    Maps the CoreWeave store's credential variables to their AWS equivalents and sets
+    FSSPEC_S3 with the correct endpoint and addressing style. No-op if the config has no
     CoreWeave object storage endpoint.
 
     This configures the operator's own process, which runs outside the cluster, so it
@@ -105,7 +108,9 @@ def configure_client_s3(config: IrisClusterConfig) -> None:
     endpoint = coreweave.external_object_storage_endpoint or coreweave.object_storage_endpoint
     if not endpoint:
         return
-    configure_fsspec_s3(endpoint, key=os.environ.get("CW_KEY_ID"), secret=os.environ.get("CW_KEY_SECRET"))
+    credentials = s3_credentials(StoreType.COREWEAVE)
+    key, secret = credentials if credentials else (None, None)
+    configure_fsspec_s3(endpoint, key=key, secret=secret)
 
 
 # ============================================================================
@@ -351,6 +356,8 @@ class K8sControllerProvider:
         self._poll_interval = poll_interval
         self._shutdown_event = threading.Event()
         self._s3_enabled = False
+        self.signing_key_spec: tuple[str, ...] = ()
+        self._prepared_controller_env: dict[str, str] | None = None
 
     @property
     def kubectl(self) -> K8sService:
@@ -375,6 +382,11 @@ class K8sControllerProvider:
         service_name = cw.service_name or "iris-controller-svc"
         port = cw.port or 10000
         return f"{service_name}.{self._namespace}.svc.cluster.local:{port}"
+
+    def preflight_controller(self, config: IrisClusterConfig) -> None:
+        """Resolve controller-only secrets without changing Kubernetes resources."""
+        self.signing_key_spec = tuple(as_secret_spec(config.auth.signing_key)) if config.auth else ()
+        self._prepared_controller_env = _controller_env(config)
 
     def start_controller(self, config: IrisClusterConfig, *, fresh: bool = False) -> str:
         """Start the controller, reconciling all resources. Returns address (host:port).
@@ -413,9 +425,12 @@ class K8sControllerProvider:
         if default_env:
             self.ensure_task_env_secret(default_env)
 
-        controller_env = _controller_env(config)
-        if controller_env:
-            self.ensure_controller_env_secret(controller_env)
+        signing_key_spec = tuple(as_secret_spec(config.auth.signing_key)) if config.auth else ()
+        if self._prepared_controller_env is None or self.signing_key_spec != signing_key_spec:
+            self.preflight_controller(config)
+        assert self._prepared_controller_env is not None
+        if self._prepared_controller_env:
+            self.ensure_controller_env_secret(self._prepared_controller_env)
 
         config_json = self._config_json_for_configmap(config)
         configmap_manifest = {
@@ -447,7 +462,10 @@ class K8sControllerProvider:
             namespace=self._namespace,
             image=config.controller.image,
             port=port,
-            node_selector={self._iris_labels.iris_scale_group: cw.scale_group},
+            node_selector={
+                _KUBERNETES_ARCH_LABEL: _CONTROLLER_ARCH,
+                self._iris_labels.iris_scale_group: cw.scale_group,
+            },
             env_from_secrets=env_from_secrets,
             state_mount_path=state_mount_path,
             local_state_hostpath=local_state_hostpath,
@@ -745,19 +763,29 @@ class K8sControllerProvider:
         Secret so the controller and every task authenticate to s3:// without
         per-call-site configuration.
         """
-        key_id = os.environ.get("CW_KEY_ID")
-        key_secret = os.environ.get("CW_KEY_SECRET")
+        store = store_config(StoreType.COREWEAVE)
+        key_id = os.environ.get(store.key_id_env)
+        key_secret = os.environ.get(store.key_secret_env)
         if not key_id or not key_secret:
             raise InfraError(
-                "CW_KEY_ID and CW_KEY_SECRET environment variables are required for S3-compatible object storage"
+                f"{store.key_id_env} and {store.key_secret_env} environment variables are required "
+                "for S3-compatible object storage"
             )
-        env = {"AWS_ACCESS_KEY_ID": key_id, "AWS_SECRET_ACCESS_KEY": key_secret}
+        env = {
+            "AWS_ACCESS_KEY_ID": key_id,
+            "AWS_SECRET_ACCESS_KEY": key_secret,
+            store.key_id_env: key_id,
+            store.key_secret_env: key_secret,
+        }
         endpoint = self._config.object_storage_endpoint
         if endpoint:
             env["AWS_ENDPOINT_URL"] = endpoint
             env["AWS_REGION"] = "auto"
             env["AWS_DEFAULT_REGION"] = "auto"
             env["FSSPEC_S3"] = json.dumps(fsspec_s3_conf(endpoint))
+            # The pod's node-local endpoint, under the name the CoreWeave store config reads,
+            # so a bucket-routed filesystem in a task uses LOTA rather than the public VIP.
+            env[store.endpoint_env] = endpoint
         return env
 
     def ensure_task_env_secret(self, env: dict[str, str]) -> None:

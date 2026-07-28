@@ -4,6 +4,7 @@
 """Behavioral tests for live finelog, Iris, GitHub, and W&B bridge sources."""
 
 import json
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pyarrow as pa
@@ -31,8 +32,8 @@ def _iris(handler) -> IrisSource:
     return source
 
 
-def _github(handler, token: str | None = None) -> GithubSource:
-    source = GithubSource(token=token, timeout=5.0)
+def _github(handler) -> GithubSource:
+    source = GithubSource(auth=None, timeout=5.0)
     source._client = httpx.Client(transport=httpx.MockTransport(handler), headers=source._client.headers)
     return source
 
@@ -322,7 +323,7 @@ class _FakeIris:
 
 
 def _app(iris_source, github_source: GithubSource | None = None) -> TestClient:
-    github = github_source or GithubSource(token=None, timeout=5.0)
+    github = github_source or GithubSource(auth=None, timeout=5.0)
     return TestClient(
         create_app(bridge_config(), {}, {"marin": iris_source}, github, K8sFleet(()), WandbSource(timeout=5.0))
     )
@@ -345,6 +346,8 @@ def test_unknown_cluster_on_iris_route_is_400():
 
 
 def test_nightlies_endpoint_returns_linked_long_cells():
+    run_day = (datetime.now(UTC) - timedelta(days=1)).replace(hour=6, minute=5, second=0, microsecond=0)
+
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -355,9 +358,9 @@ def test_nightlies_endpoint_returns_linked_long_cells():
                         "status": "completed",
                         "conclusion": "success",
                         "head_sha": "abcdef1234567890",
-                        "created_at": "2026-07-17T06:05:00Z",
-                        "run_started_at": "2026-07-17T06:05:00Z",
-                        "updated_at": "2026-07-17T07:30:00Z",
+                        "created_at": run_day.isoformat(),
+                        "run_started_at": run_day.isoformat(),
+                        "updated_at": run_day.replace(hour=7, minute=30).isoformat(),
                         "html_url": "https://x",
                         "event": "schedule",
                     }

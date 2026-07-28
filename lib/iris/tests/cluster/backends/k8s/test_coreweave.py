@@ -17,6 +17,7 @@ import time
 
 import pytest
 from iris.cluster.config import (
+    AuthConfig,
     ControllerVmConfig,
     CoreweaveControllerConfig,
     CoreweavePlatformConfig,
@@ -238,12 +239,15 @@ def test_start_controller_creates_controller_resources():
     assert "AWS_ACCESS_KEY_ID" in secret["data"]
     assert "AWS_SECRET_ACCESS_KEY" in secret["data"]
 
-    # Verify Deployment nodeSelector targets the configured scale group
+    # Verify the controller targets the configured scale group's amd64 nodes.
     iris_labels = Labels("iris")
     dep = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")
     deploy_spec = dep["spec"]
     node_selector = deploy_spec["template"]["spec"]["nodeSelector"]
-    assert node_selector == {iris_labels.iris_scale_group: "cpu-erapids"}
+    assert node_selector == {
+        "kubernetes.io/arch": "amd64",
+        iris_labels.iris_scale_group: "cpu-erapids",
+    }
 
     # Controller is stamped with the control-plane PriorityClass, and that class
     # is provisioned so the reference resolves at admission.
@@ -324,6 +328,32 @@ def test_start_controller_injects_operator_env(monkeypatch):
 
     container = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")["spec"]["template"]["spec"]["containers"][0]
     assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env", "optional": True}}]
+
+    t.join(timeout=5)
+    provider.shutdown()
+
+
+def test_preflight_controller_caches_signing_key_without_mutating_kubernetes(monkeypatch):
+    """The key validated before a rollout is the key projected after the image build."""
+    monkeypatch.delenv("IRIS_SIGNING_KEY", raising=False)
+    monkeypatch.setenv("TEST_OPERATOR_SIGNING_KEY", "key-before-build")
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+    cluster_config.auth = AuthConfig(
+        signing_key=["env:IRIS_SIGNING_KEY", "env:TEST_OPERATOR_SIGNING_KEY"],
+    )
+    _seed_prerequisites(k8s, cluster_config)
+
+    provider.preflight_controller(cluster_config)
+
+    assert k8s.get_json(K8sResource.SECRETS, "iris-controller-env") is None
+    monkeypatch.setenv("TEST_OPERATOR_SIGNING_KEY", "key-after-build")
+    t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
+    t.start()
+    provider.start_controller(cluster_config)
+
+    secret = k8s.get_json(K8sResource.SECRETS, "iris-controller-env")
+    assert base64.b64decode(secret["data"]["IRIS_SIGNING_KEY"]).decode() == "key-before-build"
 
     t.join(timeout=5)
     provider.shutdown()

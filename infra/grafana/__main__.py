@@ -18,6 +18,7 @@ import pulumi
 import pulumi_cloudflare as cloudflare
 import pulumi_gcp as gcp
 from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv
+from stack_outputs import workload_client
 
 # Cloud Run serves every custom domain from this fixed Google frontend; the mapping resource
 # routes the host to the service, and the DNS CNAME points the host at the frontend.
@@ -28,6 +29,9 @@ CLOUD_RUN_FRONTEND = "ghs.googlehosted.com"
 PROJECT = "hai-gcp-models"
 REGION = "us-central1"
 SERVICE = "marin-grafana"
+LOOM_STACK = "organization/marin-loom/marin-loom"
+LOOM_WORKLOAD = "grafana-alerts"
+LOOM_ALERT_REPOSITORY = "marin-community/marin"
 
 # The cloudsql stack (infra/cloudsql) publishes the marin-metadata connection name that backs
 # Grafana's state. On the self-managed GCS backend a stack reference is
@@ -44,14 +48,21 @@ BUILD_CONTEXT = os.path.dirname(os.path.abspath(__file__))
 # Slack only.
 SMTP_SECRET = "marin-grafana-smtp-credentials"
 
+# Secret Manager secret holding the "Marin Ops Agent" GitHub App private key. The
+# bridge mints short-lived installation tokens from it (github_app.py), so nothing
+# long-lived expires under the GitHub panels. Hand-placed like the other runtime
+# secrets — the Cloud Run deploy account is fail-closed on secret creation — and
+# allowlisted for IAM binding in infra/permissions.
+GITHUB_APP_PRIVATE_KEY_SECRET = "marin-grafana-github-app-private-key"
 
-def smtp_secret_exists(provider: gcp.Provider) -> bool:
+
+def secret_exists(provider: gcp.Provider, secret_id: str) -> bool:
     found = gcp.secretmanager.get_secrets(
         project=PROJECT,
-        filter=f"name:{SMTP_SECRET}",
+        filter=f"name:{secret_id}",
         opts=pulumi.InvokeOptions(provider=provider),
     )
-    return any(secret.secret_id == SMTP_SECRET for secret in found.secrets)
+    return any(secret.secret_id == secret_id for secret in found.secrets)
 
 
 def main() -> None:
@@ -59,6 +70,7 @@ def main() -> None:
     # Grafana uses this URL in alert notifications. Without it, its server defaults
     # to the container listener and links point to localhost:8080.
     custom_domain = config.get("custom_domain")
+    loom_alerts_enabled = config.get_bool("loom_alerts") or False
     # IAM members admitted through IAP, e.g. group:marin@…; set with
     #   pulumi config set --path 'viewers[0]' group:someone@example.com
     viewers = config.get_object("viewers") or []
@@ -73,13 +85,13 @@ def main() -> None:
     connection_name = cloudsql.get_output("connection_name")
     database_socket_dir = connection_name.apply(lambda name: f"/cloudsql/{name}")
 
-    # Values stay in Secret Manager; the component only grants the runtime service
-    # account access. GITHUB_TOKEN feeds the ferry/build panels; CW_READ_TOKEN is the
-    # CoreWeave read-role token behind the k8s source; GF_DATABASE_PASSWORD is the
-    # grafana Postgres user's password; SLACK_ALERTS_WEBHOOK and GF_SMTP_PASSWORD feed
-    # the provisioned alerting contact points.
+    # Secret values stay hand-placed in Secret Manager; the component only grants the
+    # runtime service account access. CW_READ_TOKEN is the CoreWeave read-role token
+    # behind the k8s source; GF_DATABASE_PASSWORD is the grafana Postgres user's
+    # password; SLACK_ALERTS_WEBHOOK and GF_SMTP_PASSWORD feed the provisioned
+    # alerting contact points. GF_SMTP_PASSWORD and the GitHub App key are appended
+    # below only when present.
     secrets = [
-        SecretEnv(name="GITHUB_TOKEN", secret="marin-status-page-github-token"),
         SecretEnv(name="GF_DATABASE_PASSWORD", secret="cloudsql-grafana-password"),
         SecretEnv(name="CW_READ_TOKEN", secret="marin-grafana-cw-read-token"),
         SecretEnv(name="SLACK_ALERTS_WEBHOOK", secret="marin-grafana-slack-webhook"),
@@ -89,11 +101,39 @@ def main() -> None:
         "GF_DATABASE_NAME": "grafana",
         "GF_DATABASE_USER": "grafana",
     }
+    if loom_alerts_enabled:
+        loom = pulumi.StackReference(LOOM_STACK)
+        loom_client = loom.require_output("workloadClients").apply(
+            lambda clients: workload_client(clients, LOOM_WORKLOAD)
+        )
+        # The loopback alert bridge uses the Cloud Run service account to mint a
+        # Google ID token for this exact audience. The Loom stack binds that
+        # identity to the dedicated profile; no long-lived Loom token is stored.
+        env["LOOM_ALERT_URL"] = loom_client.apply(lambda client: client["loomUrl"])
+        env["LOOM_ALERT_PROFILE"] = loom_client.apply(lambda client: client["profile"])
+        env["LOOM_ALERT_REPOSITORY"] = LOOM_ALERT_REPOSITORY
     if custom_domain:
         env["GF_SERVER_ROOT_URL"] = f"https://{custom_domain}"
-    if smtp_secret_exists(provider):
+    if secret_exists(provider, SMTP_SECRET):
         secrets.append(SecretEnv(name="GF_SMTP_PASSWORD", secret=SMTP_SECRET))
         env["GF_SMTP_ENABLED"] = "true"
+
+    # The bridge authenticates to GitHub as the "Marin Ops Agent" App, minting
+    # read-only installation tokens at runtime (github_app.py). The private key is a
+    # hand-placed secret (the deploy account cannot create secrets); the client id is
+    # not secret and rides stack config. Optional like SMTP: unset, the panels deploy
+    # unauthenticated (build panel shows no data), so the merge deploy never blocks.
+    #   gcloud secrets create marin-grafana-github-app-private-key \
+    #     --project=hai-gcp-models --data-file=key.pem   # (then allowlist in infra/permissions)
+    #   pulumi config set marin-grafana:github_app_client_id <client-id>
+    github_app_client_id = config.get("github_app_client_id")
+    if github_app_client_id and secret_exists(provider, GITHUB_APP_PRIVATE_KEY_SECRET):
+        secrets.append(SecretEnv(name="GITHUB_APP_PRIVATE_KEY", secret=GITHUB_APP_PRIVATE_KEY_SECRET))
+        env["GITHUB_APP_CLIENT_ID"] = github_app_client_id
+    else:
+        pulumi.log.warn(
+            "GitHub App auth not configured; GitHub panels deploy unauthenticated (build panel shows no data)"
+        )
 
     service = CloudRunService(
         "grafana",
