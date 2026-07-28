@@ -25,8 +25,44 @@ from marin.evaluation.records import EvalRef, EvalTaskRef, HarborRef
 from marin.evaluation.runner import EvalExecutor
 from rigging.secrets import SecretSpec
 
-_TERMINAL_BENCH_DATASET = "DCAgent2/terminal_bench_2"
-_SWEBENCH_RANDOM_100_DATASET = "DCAgent2/swebench-verified-random-100-folders"
+from experiments.evaluation.harbor_datasets import HuggingFaceHarborDataset
+
+_TERMINAL_BENCH_DATASET = HuggingFaceHarborDataset(
+    "DCAgent2/terminal_bench_2",
+    "693231ec029249e7c91ed2e414bcc9c45d7cd879",
+)
+_SWEBENCH_RANDOM_100_DATASET = HuggingFaceHarborDataset(
+    "DCAgent2/swebench-verified-random-100-folders",
+    "0c553bd6d05d451907afb8db31dba84759ccc993",
+)
+_SWEBENCH_FULL_DATASET = HuggingFaceHarborDataset(
+    "DCAgent/swebench-verified",
+    "0e4345c345395a3371f0b79d891a59fdbf74e9a8",
+)
+_GAIA_DATASET = HuggingFaceHarborDataset(
+    "DCAgent/gaia_127",
+    "55a2fa83dfaaba08f95e6a8f07fb2edfa4353856",
+)
+_BFCL_DATASET = HuggingFaceHarborDataset(
+    "DCAgent2/bfcl-parity",
+    "c43075f07c969fa30658d28f7f48c3bc9f2b02b2",
+)
+_AIDER_DATASET = HuggingFaceHarborDataset(
+    "DCAgent2/aider_polyglot",
+    "6d5c1dcdc69752027347bc25b524b70b771404c7",
+)
+_MEDAGENTBENCH_DATASET = HuggingFaceHarborDataset(
+    "DCAgent/medagentbench",
+    "d25e5bd284ebdd812c21a6430598e9d7a73589ec",
+)
+_FINANCEAGENT_DATASET = HuggingFaceHarborDataset(
+    "DCAgent/financeagent_terminal",
+    "86f788bc2fe544de818f26a71e7f91c247dd39e9",
+)
+_GRUG_DATASET = HuggingFaceHarborDataset(
+    "DCAgent/dev_set_v2",
+    "377118ff3031c934f5a647ae2c425eb74eef3b21",
+)
 _AGENTIC_CONCURRENCY = 32
 _DAYTONA_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType(
     {
@@ -55,7 +91,6 @@ class EvaluationDefinition(Protocol):
 
     secret_env: Mapping[str, SecretSpec]
 
-    @property
     def record_ref(self) -> EvalRef: ...
 
     def executor_for(self, model: ModelConfig, limit: int | None) -> EvalExecutor: ...
@@ -66,7 +101,6 @@ class EvalchemyDefinition:
     config: EvalchemyRunConfig
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
 
-    @property
     def record_ref(self) -> EvalRef:
         return EvalRef(
             name=self.config.name,
@@ -95,10 +129,10 @@ class EvalchemyDefinition:
 class HarborDefinition:
     name: str
     config: HarborRunConfig
+    dataset_artifact: HuggingFaceHarborDataset | None = None
     max_eval_instances: int | None = None
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
 
-    @property
     def record_ref(self) -> EvalRef:
         return EvalRef(
             name=self.name,
@@ -108,6 +142,8 @@ class HarborDefinition:
                 version=self.config.revision,
                 agent=self.config.agent.name,
                 env=self.config.environment.environment_type,
+                repository=self.dataset_artifact.repository if self.dataset_artifact is not None else None,
+                commit=self.dataset_artifact.commit if self.dataset_artifact is not None else None,
             ),
         )
 
@@ -121,7 +157,13 @@ class HarborDefinition:
                 kwargs={**model.agent.agent_kwargs, **self.config.agent.kwargs},
             ),
         )
-        return HarborExecutor(config=config, secret_env_keys=tuple(self.secret_env))
+        dataset_artifact = self.dataset_artifact.artifact() if self.dataset_artifact is not None else None
+        return HarborExecutor(
+            config=config,
+            secret_env_keys=tuple(self.secret_env),
+            dataset_artifact=dataset_artifact,
+            record_ref=self.record_ref(),
+        )
 
 
 def _mcq_eval(name: str, task: str, shots: int) -> EvalchemyDefinition:
@@ -156,7 +198,7 @@ def _chat_eval(name: str, task: str, max_gen_toks: int, *, unsafe_code: bool = F
 
 def _agentic_eval(
     name: str,
-    hugging_face_dataset: str,
+    dataset: HuggingFaceHarborDataset,
     *,
     agent: str = "terminus-2",
     n_concurrent: int = 8,
@@ -165,12 +207,13 @@ def _agentic_eval(
     return HarborDefinition(
         name=name,
         config=HarborRunConfig(
-            dataset=f"hf://{hugging_face_dataset}",
-            revision="main",
+            dataset=dataset.repository,
+            revision=dataset.commit,
             agent=HarborAgentConfig(name=agent),
             environment=HarborEnvironmentConfig(environment_type="daytona"),
             n_concurrent=n_concurrent,
         ),
+        dataset_artifact=dataset,
         max_eval_instances=max_instances,
         secret_env=_DAYTONA_SECRET_ENV,
     )
@@ -179,8 +222,8 @@ def _agentic_eval(
 GRUG_OPENCODE_EVAL = HarborDefinition(
     name="grug-opencode-id",
     config=HarborRunConfig(
-        dataset="hf://DCAgent/dev_set_v2",
-        revision="377118ff3031c934f5a647ae2c425eb74eef3b21",
+        dataset=_GRUG_DATASET.repository,
+        revision=_GRUG_DATASET.commit,
         agent=HarborAgentConfig(
             name="opencode",
             max_output_tokens=16384,
@@ -217,6 +260,7 @@ GRUG_OPENCODE_EVAL = HarborDefinition(
         ),
         verifier=HarborVerifierConfig(max_timeout=14400),
     ),
+    dataset_artifact=_GRUG_DATASET,
     secret_env=_DAYTONA_SECRET_ENV,
 )
 
@@ -334,12 +378,12 @@ EVALS: dict[str, EvaluationDefinition] = {
     "tb2-lite": _agentic_eval("tb2-lite", _TERMINAL_BENCH_DATASET, n_concurrent=4, max_instances=2),
     "swebench": _agentic_eval("swebench", _SWEBENCH_RANDOM_100_DATASET, n_concurrent=_AGENTIC_CONCURRENCY),
     "swebench-lite": _agentic_eval("swebench-lite", _SWEBENCH_RANDOM_100_DATASET, n_concurrent=4, max_instances=2),
-    "swebench-full": _agentic_eval("swebench-full", "DCAgent/swebench-verified", n_concurrent=_AGENTIC_CONCURRENCY),
-    "gaia": _agentic_eval("gaia", "DCAgent/gaia_127", n_concurrent=_AGENTIC_CONCURRENCY),
-    "bfcl": _agentic_eval("bfcl", "DCAgent2/bfcl-parity", n_concurrent=_AGENTIC_CONCURRENCY),
-    "aider": _agentic_eval("aider", "DCAgent2/aider_polyglot", n_concurrent=_AGENTIC_CONCURRENCY),
-    "medagentbench": _agentic_eval("medagentbench", "DCAgent/medagentbench", n_concurrent=_AGENTIC_CONCURRENCY),
-    "financeagent": _agentic_eval("financeagent", "DCAgent/financeagent_terminal", n_concurrent=16),
+    "swebench-full": _agentic_eval("swebench-full", _SWEBENCH_FULL_DATASET, n_concurrent=_AGENTIC_CONCURRENCY),
+    "gaia": _agentic_eval("gaia", _GAIA_DATASET, n_concurrent=_AGENTIC_CONCURRENCY),
+    "bfcl": _agentic_eval("bfcl", _BFCL_DATASET, n_concurrent=_AGENTIC_CONCURRENCY),
+    "aider": _agentic_eval("aider", _AIDER_DATASET, n_concurrent=_AGENTIC_CONCURRENCY),
+    "medagentbench": _agentic_eval("medagentbench", _MEDAGENTBENCH_DATASET, n_concurrent=_AGENTIC_CONCURRENCY),
+    "financeagent": _agentic_eval("financeagent", _FINANCEAGENT_DATASET, n_concurrent=16),
     "grug-opencode-id": GRUG_OPENCODE_EVAL,
 }
 

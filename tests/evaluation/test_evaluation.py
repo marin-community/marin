@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig, ResourceHint
-from marin.evaluation.records import EvalRef, Provenance, RunStatus, read_record
+from marin.evaluation.records import EvalRef, HarborRef, Provenance, RunStatus, read_record
 from marin.evaluation.runner import (
     Evaluation,
     EvaluationBatch,
@@ -26,6 +26,7 @@ from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem import StoragePath
 
 from experiments.evaluation.evals import EVALS
+from experiments.evaluation.harbor_datasets import HuggingFaceHarborDataset
 from experiments.evaluation.launch import LaunchSpec, build_evaluation_batch
 
 
@@ -50,6 +51,17 @@ def _failed_evaluation(
         status=RunStatus.FAILED,
         jobs={"eval": "/eval/failure"},
         log_tails={"eval": ("failure detail",)},
+        eval_ref=EvalRef(
+            name="failure",
+            mechanism="harbor",
+            harbor=HarborRef(
+                dataset="benchmark",
+                version="commit",
+                agent="agent",
+                env="sandbox",
+                mirror_uri="s3://regional/artifact",
+            ),
+        ),
     )
 
 
@@ -108,6 +120,8 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
     assert failed.status is RunStatus.FAILED
     assert failed.jobs == {"orchestrator": "/orchestrator", "eval": "/eval/failure"}
     assert failed.log_tails == {"eval": ("failure detail",)}
+    assert failed.evaluation.harbor is not None
+    assert failed.evaluation.harbor.mirror_uri == "s3://regional/artifact"
     assert succeeded.status is RunStatus.SUCCEEDED
     assert succeeded.metrics == {"task": {"accuracy": 0.75}}
     assert (tmp_path / "success" / "endpoint.txt").read_text() == endpoint
@@ -123,6 +137,7 @@ def test_submit_evaluation_batch_resolves_declared_secrets_outside_the_pickled_b
             return SimpleNamespace(job_id="/eval/job")
 
     monkeypatch.setenv("MARIN_TEST_EVAL_SECRET", resolved_value)
+    monkeypatch.setenv("MARIN_PREFIX", "gs://launcher-region")
     evaluation = Evaluation(
         identity=EvaluationIdentity(
             run_id="run-secret",
@@ -155,6 +170,7 @@ def test_submit_evaluation_batch_resolves_declared_secrets_outside_the_pickled_b
     submit_evaluation_batch(batch, Client())
 
     assert captured["environment"].env_vars["DAYTONA_API_KEY"] == resolved_value
+    assert "MARIN_PREFIX" not in captured["environment"].env_vars
     assert resolved_value.encode() not in captured["entrypoint"].workdir_files["_callable.pkl"]
 
 
@@ -208,3 +224,11 @@ def test_build_evaluation_batch_rejects_conflicting_secret_specs(monkeypatch):
             Provenance(git_sha="abc", eval_image="image", launch_host="host"),
             "tester",
         )
+
+
+@pytest.mark.parametrize("prefix", ["gs://marin-us-west4", "s3://marin-us-east-02a/marin"])
+def test_harbor_dataset_commit_selects_a_distinct_artifact_address(prefix):
+    first = HuggingFaceHarborDataset("org/tasks", "a" * 40).artifact()
+    second = HuggingFaceHarborDataset("org/tasks", "b" * 40).artifact()
+
+    assert first.path(prefix) != second.path(prefix)

@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
-from fsspec.implementations.memory import MemoryFileSystem
+import rigging.filesystem.factory as filesystem_factory
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
 from marin.evaluation.harbor.driver_config import (
     HarborAgentConfig,
@@ -24,10 +24,13 @@ from marin.evaluation.harbor.runner import (
     _write_samples,
     run_harbor,
 )
-from marin.evaluation.records import RunStatus
+from marin.evaluation.records import EvalRef, HarborRef, RunStatus
 from marin.evaluation.runner import EvaluationError
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import ArtifactStep
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem import StoragePath
+from rigging.testing import memory_filesystem_and_resolver
 
 
 def _running_model() -> RunningModel:
@@ -39,39 +42,34 @@ def _running_model() -> RunningModel:
     )
 
 
-def test_materialize_harbor_dataset_downloads_hf_revision_as_local_tasks(tmp_path, monkeypatch):
-    monkeypatch.delenv("HF_TOKEN", raising=False)
-    snapshot = tmp_path / "snapshot"
-    snapshot.mkdir()
-    (snapshot / ".gitattributes").write_text("*.gz filter=lfs")
-    (snapshot / "task-one").mkdir()
-    calls: list[dict] = []
+@pytest.mark.parametrize("protocol", ["gs", "s3"])
+def test_materialize_harbor_dataset_stages_only_selected_remote_tasks(protocol, tmp_path, monkeypatch):
+    remote_fs, resolve = memory_filesystem_and_resolver(protocol, filesystem_factory.url_to_fs)
+    monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", resolve)
+    remote = StoragePath(f"{protocol}://regional-cache/benchmark")
+    for task_name in ("task-b", "task-a"):
+        root = f"regional-cache/benchmark/{task_name}"
+        remote_fs.makedirs(f"{root}/environment", exist_ok=True)
+        remote_fs.makedirs(f"{root}/tests", exist_ok=True)
+        remote_fs.pipe(f"{root}/task.toml", b"version = '1.0'")
+        remote_fs.pipe(f"{root}/environment/Dockerfile", b"FROM scratch")
+        remote_fs.pipe(f"{root}/tests/test.sh", b"true")
+    remote_fs.pipe("regional-cache/benchmark/README.md", b"metadata, not a task")
+    remote_fs.pipe("regional-cache/benchmark/incomplete/task.toml", b"version = '1.0'")
 
-    def download(**kwargs):
-        calls.append(kwargs)
-        return str(snapshot)
+    path = materialize_harbor_dataset(str(remote), tmp_path / "workdir", task_limit=1)
 
-    monkeypatch.setattr("marin.evaluation.harbor.dataset.snapshot_download", download)
+    assert path == tmp_path / "workdir" / "harbor_dataset"
+    assert (path / "task-a" / "environment" / "Dockerfile").read_text() == "FROM scratch"
+    assert (path / "task-a" / "tests" / "test.sh").read_text() == "true"
+    assert not (path / "task-b").exists()
+    assert not (path / "incomplete").exists()
+    assert not (path / "README.md").exists()
 
-    path = materialize_harbor_dataset(
-        "hf://DCAgent2/terminal_bench_2",
-        "main",
-        tmp_path / "workdir",
-        hf_token=None,
-    )
 
-    assert path == Path(snapshot)
-    assert calls == [
-        {
-            "repo_id": "DCAgent2/terminal_bench_2",
-            "repo_type": "dataset",
-            "revision": "main",
-            "local_dir": str(tmp_path / "workdir" / "hf_dataset"),
-            "cache_dir": str(tmp_path / "workdir" / "hf_cache"),
-            "token": False,
-        }
-    ]
-    assert not (snapshot / ".gitattributes").exists()
+def test_materialize_harbor_dataset_rejects_direct_hugging_face_reads(tmp_path):
+    with pytest.raises(ValueError):
+        materialize_harbor_dataset("hf://DCAgent2/terminal_bench_2", tmp_path, task_limit=None)
 
 
 def test_write_samples_uses_a_path_safe_name_for_hf_dataset(tmp_path):
@@ -85,18 +83,8 @@ def test_write_samples_uses_a_path_safe_name_for_hf_dataset(tmp_path):
 
 @pytest.mark.parametrize("protocol", ["gs", "s3"])
 def test_harbor_trials_round_trip_through_remote_storage(protocol, tmp_path, monkeypatch):
-    class RemoteMemoryFileSystem(MemoryFileSystem):
-        pass
-
-    RemoteMemoryFileSystem.protocol = protocol
-    remote_fs = RemoteMemoryFileSystem()
-
-    def remote_url_to_fs(url: str, **_kwargs):
-        path = StoragePath(url)
-        assert path.scheme == protocol
-        return remote_fs, "/".join(part for part in (path.netloc, path.key) if part)
-
-    monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", remote_url_to_fs)
+    _remote_fs, resolve = memory_filesystem_and_resolver(protocol, filesystem_factory.url_to_fs)
+    monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", resolve)
 
     trial_dir = tmp_path / "source" / "trial-one"
     (trial_dir / "agent").mkdir(parents=True)
@@ -207,7 +195,6 @@ def test_run_harbor_normalizes_a_completed_external_trial(tmp_path, monkeypatch)
             environment=HarborEnvironmentConfig(environment_type="daytona"),
         ),
         str(tmp_path),
-        hf_token=None,
         driver_env={"DAYTONA_API_KEY": "daytona-key"},
     )
 
@@ -286,3 +273,69 @@ def test_harbor_executor_accepts_zero_reward_without_exception_info(tmp_path, mo
     assert outcome.metrics[executor.config.dataset]["accuracy"] == 0.0
     result = json.loads((tmp_path / "harbor_result.json").read_text())
     assert result["failed_trials"] == 0
+
+
+def test_harbor_executor_reports_the_resolved_dataset_artifact(tmp_path, monkeypatch):
+    mirror_uri = "s3://regional/artifacts/terminal-bench/immutable-commit/2026.07.27"
+    remote_fs, resolve_path = memory_filesystem_and_resolver("s3", filesystem_factory.url_to_fs)
+    monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", resolve_path)
+    task_root = "regional/artifacts/terminal-bench/immutable-commit/2026.07.27/task-one"
+    remote_fs.makedirs(f"{task_root}/environment", exist_ok=True)
+    remote_fs.makedirs(f"{task_root}/tests", exist_ok=True)
+    remote_fs.pipe(f"{task_root}/task.toml", b"version = '1.0'")
+    remote_fs.pipe(f"{task_root}/environment/Dockerfile", b"FROM scratch")
+    remote_fs.pipe(f"{task_root}/tests/test.sh", b"true")
+
+    def run_driver(command, *, check, env) -> None:
+        assert check and isinstance(env, dict)
+        driver_config = HarborDriverConfig.from_dict(json.loads(Path(command[-1]).read_text()))
+        dataset_path = Path(driver_config.dataset_path)
+        assert (dataset_path / "task-one" / "environment" / "Dockerfile").read_text() == "FROM scratch"
+        trial_dir = Path(driver_config.jobs_dir) / driver_config.job_name / "trial-one"
+        trial_dir.mkdir(parents=True, exist_ok=True)
+        (trial_dir / "result.json").write_text(
+            json.dumps(
+                {
+                    "task_name": "trial-one",
+                    "verifier_result": {"rewards": {"reward": 1.0}},
+                }
+            )
+        )
+
+    dataset_artifact = ArtifactStep(
+        name="evaluation/harbor-datasets/terminal-bench/immutable-commit",
+        version="2026.07.27",
+        artifact_type=Artifact,
+        run=lambda _config: None,
+        build_config=lambda _ctx: {},
+    )
+    monkeypatch.setattr("marin.evaluation.harbor.runner.resolve", lambda _artifact: Artifact(path=mirror_uri))
+    monkeypatch.setattr("marin.evaluation.harbor.runner.subprocess.run", run_driver)
+    config = HarborRunConfig(
+        dataset="DCAgent2/terminal_bench_2",
+        revision="immutable-commit",
+        agent=HarborAgentConfig(name="terminus-2"),
+        environment=HarborEnvironmentConfig(environment_type="daytona"),
+    )
+    executor = HarborExecutor(
+        config=config,
+        dataset_artifact=dataset_artifact,
+        record_ref=EvalRef(
+            name="tb2-lite",
+            mechanism="harbor",
+            harbor=HarborRef(
+                dataset=config.dataset,
+                version=config.revision,
+                agent=config.agent.name,
+                env=config.environment.environment_type,
+                repository=config.dataset,
+                commit=config.revision,
+            ),
+        ),
+    )
+
+    outcome = executor(_running_model(), str(tmp_path), {})
+
+    assert outcome.eval_ref is not None
+    assert outcome.eval_ref.harbor is not None
+    assert outcome.eval_ref.harbor.mirror_uri == mirror_uri

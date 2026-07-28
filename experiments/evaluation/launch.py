@@ -127,7 +127,7 @@ def build_evaluation_batch(
                     run_id=run_id,
                     created_at=created_at,
                     output_dir=output_dir,
-                    eval_ref=definition.record_ref,
+                    eval_ref=definition.record_ref(),
                 ),
                 executor=definition.executor_for(model, spec.limit),
                 secret_env_keys=tuple(definition.secret_env),

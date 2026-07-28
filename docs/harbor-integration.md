@@ -62,27 +62,47 @@ registrations, and a retried task attempt atomically replaces its own same-name 
 A `HarborExecutor` contains a `HarborRunConfig`:
 
 ```python
+from experiments.evaluation.evals import HarborDefinition
+from experiments.evaluation.harbor_datasets import HuggingFaceHarborDataset
 from marin.evaluation.harbor.driver_config import (
     HarborAgentConfig,
     HarborEnvironmentConfig,
     HarborRunConfig,
 )
-from marin.evaluation.harbor.runner import HarborExecutor
 
-executor = HarborExecutor(
+dataset = HuggingFaceHarborDataset(
+    repository="DCAgent2/terminal_bench_2",
+    commit="693231ec029249e7c91ed2e414bcc9c45d7cd879",
+)
+definition = HarborDefinition(
+    name="tb2-lite",
     config=HarborRunConfig(
-        dataset="hf://DCAgent2/terminal_bench_2",
-        revision="main",
+        dataset=dataset.repository,
+        revision=dataset.commit,
         agent=HarborAgentConfig(name="terminus-2"),
         environment=HarborEnvironmentConfig(environment_type="daytona"),
         n_concurrent=4,
-        task_limit=2,
     ),
+    dataset_artifact=dataset,
+    max_eval_instances=2,
 )
 ```
 
-`hf://org/repository` identifies a Hugging Face dataset repository whose root contains Harbor task
-directories. A registry dataset uses its Harbor name, such as `aime` with version `1.0`.
+Every Hugging Face source uses a full commit hash. The evaluator resolves a lazy `download_hf`
+artifact under its normal artifact prefix: GCS on GCP or S3 on CoreWeave. The commit is part of the
+artifact address, so changing the pin selects a new regional mirror while later model sweeps over
+the same commit reuse it without contacting Hugging Face. The evaluation record stores the
+repository, commit, and resolved artifact URI.
+
+At the Harbor boundary, Marin lists valid task directories in the mirror and stages only the
+selected directories under evaluator-local `/tmp`. `--limit 2`, for example, copies two complete
+task trees rather than the full repository. A registry dataset does not need an artifact; it uses
+its Harbor name, such as `aime` with version `1.0`.
+
+The commits in `experiments/evaluation/evals.py` come from
+`HfApi().dataset_info(repository).sha`. Refresh a dataset only as an intentional benchmark version
+change by updating its commit. `_MIRROR_FORMAT_VERSION` changes only when the mirrored tree
+representation changes. Normal evaluation runs never follow the mutable `main` revision.
 
 Add project-specific presets to `experiments/evaluation/evals.py`; keep Harbor execution and result
 normalization in `lib/marin/src/marin/evaluation/harbor`.
