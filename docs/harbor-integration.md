@@ -38,23 +38,6 @@ uv run python -m experiments.evaluation.cli launch \
 
 Use `--limit N` to cap the number of trials and `--no-wait` to return after submission.
 
-## Runtime progress
-
-Harbor writes an INFO record to stderr for each trial state transition when no interactive terminal
-is available. The isolated driver inherits stdout and stderr from its Iris task, so long-running
-agent trials remain visible in the task log:
-
-```text
-Trial terminal-bench-task__terminus-2__1: started
-Trial terminal-bench-task__terminus-2__1: environment started
-Trial terminal-bench-task__terminus-2__1: agent started
-Trial terminal-bench-task__terminus-2__1: verification started
-Trial terminal-bench-task__terminus-2__1: completed
-```
-
-Failed trials end with `failed (<exception type>)`. Interactive runs retain Harbor's Rich progress
-display, and `quiet` jobs suppress per-trial updates.
-
 ## Credentials
 
 Daytona-backed definitions in `experiments/evaluation/evals.py` own their credential references.
