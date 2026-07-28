@@ -190,36 +190,33 @@ regions and, when practical, families, so one capacity failure mode cannot stall
 a whole race. Race width is bounded by the eligible regions for that trial; see
 **Region Locality** for why `exp117-init` trials may be placeable in fewer.
 
-### Capacity Cannot Be Queried
+### Capacity Is Unknowable, So Placement Is Active
 
 **No command reports available TRC capacity.** `iris cluster status` shows only
-what is already in use; it cannot say what TRC would grant next. `ready=0` means
-nobody currently holds one, not that it is unobtainable.
+what is already in use; `ready=0` means nobody holds one, not that it is
+unobtainable. Submitting is the only measurement — never call a target available
+or unavailable from a status read, and never drop one from the grid because a
+read looked empty.
 
-Submitting is the only measurement. Never call a target "available" or
-"unavailable" from a status read, and never drop one from the grid because a read
-looked empty — only repeated failed acquisitions justify deprioritizing it.
-Record what was attempted (`gang in N min`, `pending 6h`, `preempted`), and
-spread dispatches so scheduling outcomes do the ranking.
+**The escalation ladder is a safety net, not a strategy.** It reacts to a single
+stalled dispatch and knows nothing about where capacity actually is. Maximizing
+throughput is a standing, active job, performed every heartbeat by reading what
+was *granted* — not what was requested — and moving the fleet accordingly:
 
-Continuously re-rank targets using:
+- **Follow the grants.** Shift placement toward region/slice pairs that recently
+  produced steps and away from those that have not, without permanently
+  abandoning any target.
+- **Keep probing.** Always hold some dispatches on combinations not tried
+  recently, including ones that failed before. Availability swings within hours;
+  yesterday's dead target is not today's.
+- **Refuse to ossify.** Placement unchanged across several passes while
+  chips-training stays flat is a signal to change something, never evidence that
+  the current placement is right.
 
-1. sustained post-compilation tokens/second for the same batch size;
-2. recent successful gang acquisition and startup latency;
-3. recent preemption/failure history; and
-4. the need to avoid saturating one region while other regions remain
-   unexplored.
-
-Use rolling medians for throughput comparisons and exclude compilation,
-checkpoint, and evaluation intervals. Preserve the raw observations in SQLite
-so placement decisions remain auditable.
-
-**Treat every throughput number as perishable.** TRC capacity shifts daily, so a
-slice size or region that looked optimal last week may be unavailable or slower
-today, and a historical measurement from a previous experiment is a prior, not a
-constant. Do not converge on one slice size and stop looking. Keep probing other
-eligible sizes and regions as availability moves, and prefer a target that is
-actually schedulable now over a nominally faster one that never acquires a gang.
+Rank on ledger evidence: sustained post-compilation tokens/second at the same
+batch size, time-to-gang, and recent preemption history. Use rolling medians,
+excluding compilation, checkpoint and eval intervals. Every throughput figure is
+perishable — a prior, never a constant.
 
 ## Submission and Regional Racing
 
