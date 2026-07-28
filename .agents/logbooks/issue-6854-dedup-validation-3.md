@@ -1353,3 +1353,66 @@ are recorded in the previous volumes.
   prefix is now manually resolved. The next frontiers are p0 `(15, 5632)`, p1
   `(47, 4864)`, p2 `(79, 4864)`, and p3 `(112, 3584)`. The eight H100s remain
   healthy at batch priority.
+
+## 2026-07-28 09:26 UTC — fixed-sample and exact-pair consistency checks
+
+- The independent checkpoint sweep now covers 383,433 pairs, 99.97% of the
+  383,561-pair reconciliation snapshot. The remaining 128-pair difference is
+  the most recent completed checkpoint; the next batch in every partition is
+  still running. All five unresolved outcomes observed in the preceding sweep
+  and the one in the final 648-pair increment are covered by the existing
+  hash-bound manual decisions. In particular, treatment row 8,805 differs only
+  in final-answer LaTeX markup (`\text{H}` versus `H`) and is independently
+  verified as a true duplicate. Its inspection, manual Parquet, and marker
+  SHA-256 values are
+  `6b5df8eef6fce1063dc779c5d890d5e17b9536c50d9289b9f22b1a239db49a64`,
+  `cd4b0ed0e14e4c34908818b94ad12a7830b16d8fcb2f6a279bdde0105bd347ec`,
+  and
+  `14e5c29fc2eb69db00fbfd8c49008547ed30311ae2587a365f7fab694b3c611f`.
+- `/rav/datakit-6854-stratified-refresh-0905-v1659` refreshed the deterministic
+  8,192-pair-per-arm bottom-hash sample, and
+  `/rav/datakit-6854-verify-stratified-0908-v1662` independently reproduced all
+  25,333 snapshot rows, 5,547 checkpoint bindings, identities, labels, and
+  counts:
+
+  | Arm | Resolved | Pending | False positives | True duplicates | Observed FPR |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | baseline | 4,199 | 3,993 | 2,650 | 1,549 | 63.1103% |
+  | treatment | 4,172 | 4,020 | 2,123 | 2,049 | 50.8869% |
+
+  The observed gap is 12.2234 percentage points. The baseline and treatment
+  Wilson 95% intervals are `[61.6395%, 64.5571%]` and
+  `[49.3698%, 52.4023%]`. The immutable snapshot and summary SHA-256 values are
+  `d2b8bcc3ad8974606af253eb74f746796a7a4f55212779f192d0839898d0ba37`
+  and
+  `3438a12df1b01205019751e50423901959e61065d2f4746242ad9613eac40f15`.
+- A composition check over completed fixed-sample rows keeps the treatment
+  advantage after restricting both arms to shared groups. Source-overlap
+  standardization gives 60.5794% baseline versus 50.4065% treatment, a
+  10.1729-point gap; baseline is worse in 15 of 17 sources with at least 20
+  completed rows per arm. The corresponding gaps are 12.5480 points across
+  cross-source status, 11.4351 across length bins, 11.7726 across truncation
+  status, and 2.8440 across Jaccard bins. The immutable detailed artifact is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-stratified-audit-100b-20260727-v1/stability/20260728-0905-v2.json`
+  with SHA-256
+  `b51ac58cc7bcf3d73b67bad83137ee5b2e7402a33c758a898d2a3ada9e5a51d6`.
+  This remains a composition check rather than a population estimate because
+  the uncompleted half of the fixed sample is source-ordered nonresponse.
+- `/rav/datakit-6854-cross-variant-consistency-0918-v1670` hash-verified all
+  3,023 completed semantic checkpoints and applied every manual override.
+  Among 34,113 exact document/canonical pairs independently reviewed in both
+  variants, 1,018 labels disagree (2.9842%). Direction is nearly symmetric:
+  517 are baseline false-positive / treatment true-duplicate and 501 are the
+  reverse. Thus evaluator noise contributes only 16 net labels, or 0.0469
+  percentage points, on the exact shared-pair subset; it cannot explain the
+  11–12-point aggregate gap. The immutable consistency artifact is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/cross-variant/20260728-0918.json`
+  with SHA-256
+  `004853eda6dfa7248dc4a7f5ad8886144823ca1bc8c4e09738f846cd47a3454c`.
+- Exact diffs, complete texts, and both sets of semantic evidence are being
+  persisted and manually read for all 1,018 cross-variant disagreements. The
+  first ten are complete: five false positives and five true duplicates. The
+  decisions include distinct missing recipe ingredients, distinct source-code
+  syntax, three distinct Q&A or article payloads, and five cases containing
+  only formatting, metadata, scrape artifacts, or truncated copies. No
+  sampling is being used for this adjudication.
