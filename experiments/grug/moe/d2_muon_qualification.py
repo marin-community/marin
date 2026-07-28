@@ -222,14 +222,15 @@ def _difference_metrics(actual: jax.Array, expected: jax.Array) -> dict[str, jax
     actual_f32 = actual.astype(jnp.float32)
     expected_f32 = expected.astype(jnp.float32)
     diff = actual_f32 - expected_f32
-    actual_norm = jnp.linalg.norm(actual_f32)
-    expected_norm = jnp.linalg.norm(expected_f32)
+    actual_norm = jnp.sqrt(jnp.sum(jnp.square(actual_f32)))
+    expected_norm = jnp.sqrt(jnp.sum(jnp.square(expected_f32)))
+    diff_norm = jnp.sqrt(jnp.sum(jnp.square(diff)))
     return {
         "max_abs": jnp.max(jnp.abs(diff)),
         "mean_abs": jnp.mean(jnp.abs(diff)),
-        "relative_l2": jnp.linalg.norm(diff) / jnp.maximum(expected_norm, jnp.finfo(jnp.float32).tiny),
+        "relative_l2": diff_norm / jnp.maximum(expected_norm, jnp.finfo(jnp.float32).tiny),
         "cosine": (
-            jnp.vdot(actual_f32, expected_f32)
+            jnp.sum(actual_f32 * expected_f32)
             / jnp.maximum(
                 actual_norm * expected_norm,
                 jnp.finfo(jnp.float32).tiny,

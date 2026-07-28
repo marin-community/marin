@@ -69,3 +69,71 @@ author: Matt Wittmann
   BF16 Newton-Schulz internals; realistic 5120/1280 matrix dimensions; SYRK on.
 - Result: pending.
 - Next action: monitor to terminal and apply the pre-registered numerical gate.
+
+### 2026-07-28 16:26 PDT - Numerical qualification resubmitted directly
+
+- Hypothesis: unchanged from the 16:01 entry. The numerical criteria and D-2
+  performance prediction were committed before any GPU result was seen.
+- Commit Hash: `2665ab73266472f3d6434c8e3dd0034c6542f3b1`
+- Command:
+
+  ```bash
+  IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
+    --priority production --job-name d2-muon-num-syrk1-0728-1626 \
+    --enable-extra-resources --gpu GB200x4 --cpu 32 --memory 256GB --disk 256GB \
+    --extra gpu --max-retries 0 --timeout 7200 \
+    -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async \
+    -e XLA_FLAGS "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false --xla_gpu_experimental_parallel_collective_overlap_limit=4" \
+    -- python -m experiments.grug.moe.d2_muon_qualification --mode numerical --syrk 1
+  ```
+
+- Config: four GB200 GPUs; direct `cw-us-east-08a` route; production priority;
+  explicit `data=2, expert=2` mesh; FP32 arrays with BF16 Newton-Schulz
+  internals; realistic 5120/1280 matrix dimensions; SYRK on.
+- Job: `/mwittmann/d2-muon-num-syrk1-0728-1626`.
+- Result: queued on the peer with `Pending scheduler feedback`; the reason does
+  not contain the broken federation message.
+- Interpretation: the 16:01 federated interactive job was cancelled before
+  producing a result. This direct production job is the first valid numerical
+  qualification attempt.
+- Next action: monitor to terminal and apply the pre-registered numerical gate.
+
+### 2026-07-28 16:27 PDT - Numerical qualification infrastructure failure
+
+- Job: `/mwittmann/d2-muon-num-syrk1-0728-1626`.
+- Result: failed before the task container started. The `stage-workdir` init
+  container exited 255 with `exec /usr/local/bin/python: exec format error` on
+  ARM64 GB200 node `s4bk6j84`.
+- Evidence: the failed pod used cached `iris-task:latest` digest
+  `sha256:cfe4e8dd08f6d43076ade21a2a018ef7c1616356e46960f0a1ebc66434bb3425`.
+  The concurrently running D-5 job on ARM64 GB200 node `sdxsxs64` used digest
+  `sha256:29ec7e8d4702faa36b0006ee34fd084e3e634a541e0736475446051bba091524`.
+- Interpretation: no numerical code executed and no result was observed. This
+  is a transient node/image-cache failure, so one direct resubmission is allowed.
+- Next action: resubmit once with the same immutable command and criteria.
+
+### 2026-07-28 16:28 PDT - Numerical qualification retry running
+
+- Commit Hash: `2665ab73266472f3d6434c8e3dd0034c6542f3b1`
+- Command: the 16:26 direct production command with job name
+  `d2-muon-num-syrk1-r1-0728-1628`; all other arguments are unchanged.
+- Job: `/mwittmann/d2-muon-num-syrk1-r1-0728-1628`.
+- Result: entered `running` on the peer at 16:28 PDT.
+- Next action: monitor to terminal. A second infrastructure failure will stop
+  numerical qualification rather than trigger another retry.
+
+### 2026-07-28 16:30 PDT - Explicit-sharding metric failure fixed
+
+- Job: `/mwittmann/d2-muon-num-syrk1-r1-0728-1628`.
+- Result: the task reached four GB200s and printed `D2_ENV`, then the
+  qualification harness failed before its first comparison. `jnp.vdot`
+  attempted to flatten an explicitly sharded 4D array without an output
+  sharding and raised `ShardingTypeError`.
+- Interpretation: this is a qualification-harness bug. No Muon comparison
+  result was produced, so the numerical gate remains unevaluated.
+- Change: replace flattening norm/dot operations with shape-preserving
+  elementwise products followed by reductions.
+- Validation: a four-device explicit CPU mesh reproduced the expert sharding and
+  completed all six difference metrics. Repository lint passed for the probe.
+- Next action: commit the harness fix for a new reproducible bundle, then rerun
+  the same numerical qualification. No later qualification step may start first.
