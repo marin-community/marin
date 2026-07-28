@@ -87,11 +87,13 @@ produced a step. **This is not a pending win — it is an open disagreement**, a
 until it resolves, 25.39% should not appear in any planning document as an
 achievable number.
 
-**What.** Run rav's implementation (the one behind 25.39%) with QB on, matched
-against its own control, ≥2 draws. If it also regresses, close the direction. If it
-does not, diff the two implementations.
+**What.** *First recover the code.* The patch behind the 25.39% run was never
+committed, so the only inspectable leg-batching implementation is the
+reconstruction that regresses. Recovering it is step one; a rack A/B is step three,
+behind an EP64 runtime and memory gate that G=4 already failed.
 
-**Cost.** Two runs, plus a code diff.
+**Cost.** A code recovery, then two runs — not the clean two-run experiment this
+looked like.
 
 ### D-4. Multi-rack EP64
 
@@ -206,6 +208,14 @@ dispatch cost without the memory relief). This experiment is worth running for t
 
 ## P2 — conditional, and only if the precision decision is taken.
 
+**Precondition for everything in this tier.** The expert-only MXFP8 port already
+measured **−2.582pp p50** in a matched, QB-on, drop-reported 120-step A/B at the
+EP64 operating point, and **−0.313pp** at d6144/i3072 (`24d411b38`,
+`fac261215e`). The recorded verdict is "do not adopt at this operating point", and
+the recorded condition for reopening is *a new matched all-QB-on end-to-end pair*
+on a **materially different mechanism** — not a re-run of the same one. Do not
+spend rack time here unless something in that list changes.
+
 ### D-9. FP8 dispatch wire in the real step
 
 **Why.** [#7665](https://github.com/marin-community/marin/issues/7665) measures
@@ -215,22 +225,29 @@ collective-volume-bound and reducing collective bytes is the only remaining leve
 in that family. But every number is one layer in isolation: no scan, no remat, no
 optimizer, no competing collectives.
 
-**Blocked on.** MXFP8 expert GEMMs do not exist on the EP64 fixed-a2a stack —
-expert GEMMs there are bf16 `jnp.einsum`. The port is a prerequisite, and it is
-substantial.
+**Blocked on more than a port.** The wire needs a quantized consumer downstream,
+and the consumer available today is the expert-GEMM port that measured −2.582pp at
+this exact shape. The wire's +1.144pp fwd+bwd at EP64 is a layer-level number that
+would have to survive the real step *and* more than cover that loss. Sequence this
+only behind a mechanism that changes the consumer's sign.
 
 **Success criterion** (already pre-registered on the issue): a positive layer-level
 A/B **inside the real step with rematerialization on**.
 
-### D-10. The MFU-versus-EP-degree curve for MXFP8 expert GEMMs
+### D-10. The MFU-versus-EP-degree curve for the *hybrid* MXFP8 recipe
 
-**Why.** The same hybrid recipe measured 1.308× (d5120, EP8), +7.22% (d2560, EP8,
-66B tokens) and 0.749× (d6144, **EP1**). These are unreconciled. The plausible but
+**Why.** The hybrid recipe measured 1.308× (d5120, EP8), +7.22% (d2560, EP8, 66B
+tokens) and 0.749× (d6144, **EP1**), and these are unreconciled. The plausible but
 unmeasured explanation is that the expert-GEMM share of the step varies with model
-size and EP degree. Without this curve the production sign of MXFP8 is unknown.
+size and EP degree.
 
-**What.** One configuration, EP1 → EP8 → EP16 → EP64, bf16 against MXFP8, matched
-arms, ≥2 draws at each point.
+**Scope this narrowly.** The *expert-only* port's sign at EP64 is already settled
+and negative (see the precondition above), so this experiment is only worth running
+for the hybrid grouped-plus-dense recipe, and only if something else revives the
+direction. It is not on the critical path.
+
+**What.** One configuration, EP1 → EP8 → EP16 → EP64, bf16 against hybrid MXFP8,
+matched arms, ≥2 draws at each point.
 
 ### D-11. Root-cause the hybrid `w_down` NaN
 

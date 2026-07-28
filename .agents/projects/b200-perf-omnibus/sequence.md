@@ -14,12 +14,12 @@ functional diff against `main`, excluding vendored code and research scaffolding
 ```
 main@696eb370d
   └─ origin/grug/embedding-gather-shard-map (23 commits)      ← THE SHARED BASE
-       ├─ +13 ─► origin/chunk-moe-fsdp        (c241f31d7)
-       │    └─ +21 ─► origin/b200-minimal     (8823246ef; snapshot cff962d730)
+       ├─ +17 ─► origin/chunk-moe-fsdp        (c241f31d7)
+       │    └─ +19 ─► origin/b200-minimal     (8823246ef; snapshot cff962d730)
        │          └─ ...  ─► origin/b200-300B-tune (fd3e9bc5b)  ← FSDP line
        ├─ +5  ─► origin/b200_mla              (de1cd14db)
        ├─ +1  ─► origin/rav-grug-moe-ep64     (54bbe3d23)
-       └─ +1  ─► origin/codex/per-layer-kv-heads-static-fa4 (46fbff3173)
+       └─ +2  ─► origin/codex/per-layer-kv-heads-static-fa4 (46fbff3173)
 
 main@51964171c
   └─ replay of the b200-minimal stack + 1 ─► origin/rav/ep-2 (fe21ea495)
@@ -95,10 +95,13 @@ auto-PGLE must not be enabled (it crashes multi-host).
 
 | # | Commit | From | Size |
 |--:|---|---|--:|
-| B1 | Add the `sonic_cute` QuACK SM100 grouped-GEMM backend and `SCALE_MOE_IMPL`/`SCALE_ATTN_IMPL` | `5cf76b64a` | +309 |
-| B2 | Add the `quack-kernels[cu13]` dependency and cutlass/quack mypy ignores | `538381606` (extract) | ~+10 |
+| B1 | Add the `quack-kernels[cu13]` dependency and cutlass/quack mypy ignores | `538381606` (extract) | ~+10 |
+| B2 | Add the `sonic_cute` QuACK SM100 grouped-GEMM backend and `SCALE_MOE_IMPL`/`SCALE_ATTN_IMPL` | `5cf76b64a` | +309 |
 | B3 | Replica-local embedding gather | `bdf61d7ed` | +32 / −6 |
 | B4 | Precompute FA4 per-layer segment bounds outside the scan | `a33e16ced` | +156 / −30 |
+
+The dependency commit comes first: `5cf76b64a` adds `quack_moe_cute.py` and the
+backend, which import QuACK, while `538381606` is what supplies the package.
 
 B1 is purely additive and lazily imported, so CPU and H100 paths are unaffected.
 **Drop** `538381606`'s `nvidia-cutlass-dsl>=4.6.0,<4.7` hunk — `main` pins `==4.6.0`
@@ -175,25 +178,37 @@ Budget real time for E1; it is small in effect and awkward in mechanics.
 throughput work without the fidelity work reproduces exactly the situation the
 record spent a week correcting.
 
-### Phase F — FSDP-line levers, small and cheap.
+### Phase F — FSDP-line levers.
 
 | # | Commit | From | Size | Measured (FSDP, 1 rack) |
 |--:|---|---|--:|---|
-| F1 | Split the shared expert into two half-width experts | `b200-300B-tune` | small | +0.29pp |
-| F2 | Group same-shape non-expert Newton–Schulz leaves into one call | `b200-300B-tune` | small | +0.09pp |
-| F3 | Offload MuonH optimizer state to pinned host memory | `cff962d730` (extract) | ~+45 / −6 | +0.4pp (bundled) |
+| F1 | Offload MuonH optimizer state to pinned host memory | `cff962d730` (extract) | ~+45 / −6 | +0.4pp (bundled with four other features) |
 
-F2 overlaps D4's code; sequence F2 after D4. F3 shares the extraction problem with
-E1 — do them together.
+F1 shares the extraction problem with E1 — do them together.
+
+**Two levers deliberately held back.** Splitting the shared expert (+0.29pp) and
+Muon shape-grouping (+0.09pp) come from a single stacked progression with no
+replication; the source reports replication only for PGLE. Both are far below the
+~2pp threshold this project's own protocol sets for repeated placement draws, and
+splitting the shared expert is separately memory-blocked at EP64 (89.49 GiB before
+step 0). Establish their sign on FSDP with repeated matched A/Bs, and their
+transfer under EP, before adding commits for them. Shape-grouping also overlaps
+D4's code, so sequence it after D4 whenever it does land.
 
 ### Explicitly out of scope
 
 - **Receiver-ECHO** (`24ee86090`, +725 in one file, plus HybridEP and a 680-line
-  MNNVL CUDA FFI). Best compliant number on record, largest cost by far, and its
-  headline is a 20-step screen. Separate project.
-- **MXFP8 / FP8** (evidence Group G). Speed/quality trade with a measured price and
-  an unresolved sign at the production shape; the fused kernels are 20,587 vendored
-  lines. Separate, explicitly-priced decision.
+  MNNVL CUDA FFI). Largest cost by far, and **no on/off delta exists** — the
+  24.153% headline is the treatment arm of the padded-Muon A/B, where both arms ran
+  ECHO. Its one matched isolation is a fidelity trade (drops 1.32% → 0.02% for
+  about 1pp of MFU). Separate project, and it depends on Phase B.
+- **MXFP8 / FP8** (evidence Group G). Not merely unpriced — the expert-only port
+  **measured −2.582pp p50 in a matched, QB-on, drop-reported 120-step A/B at the
+  operating point** (`24d411b38`), and stayed negative at the fatter d6144/i3072
+  shape (−0.313pp). The recorded verdict is "do not adopt at this operating point".
+  Reopening requires a materially different mechanism (fused quantization
+  epilogues, or the hybrid recipe at an untested shape) plus a new matched
+  all-QB-on end-to-end pair.
 - **`SCALE_MOE_EXPERT_CHUNKS`** — does not apply under EP, and its branch history is
   four revert pairs. If it lands for the FSDP line, take the squashed end state.
 - **Slim Sonic residuals** (`59e5fe25f`) — conflicts with chunking; both edit

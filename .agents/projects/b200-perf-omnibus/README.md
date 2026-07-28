@@ -128,12 +128,18 @@ not a single measurement of the pair.
 |--:|---|---|--:|---|
 | 11 | **QB routing on** (C1) | takes drops from router collapse to ~6–7% steady; costs **at most −1.44pp** | pre-existing feature, wiring only | 4 |
 | 12 | **Same-step spill, m = 3** (C2) | **halves drops for −0.213pp** — 7.10% → 3.66% at cf1.0. With cf1.0625: **20.708% at 1.44%** | **+147** | 7, 11 |
-| 13 | **Receiver-ECHO** with same-expert clones (C3) | best compliant EP64 point on record: **24.15% at 2.77%** (20-step) / **22.30% at 1.71%** (120-step) | **+725 in one file**, plus HybridEP and a 680-line MNNVL CUDA FFI on the same branch | 7, 11 |
+| 13 | **Receiver-ECHO** with same-expert clones (C3) | **no on/off delta exists.** The one matched isolation (#7670) takes drops 1.32% → **0.02%** for about **−1pp** MFU | **+725 in one file**, plus HybridEP and a 680-line MNNVL CUDA FFI on the same branch | 7, 11, **14** |
 
 Item 12 is cheap, well-qualified (350-step legs, true tail windows) and should
-land. **Item 13 is the highest-complexity item in the ledger and the least
-qualified relative to its cost** — it posts the best number from a 20-step screen.
-Treat it as a separate project, not part of this consolidation.
+land.
+
+**Item 13 cannot be ranked on the 24.15% figure.** That number is the *treatment
+arm of the padded-Muon A/B* — both arms already ran receiver-ECHO — so it measures
+item 10, not item 13. On its own measured merits ECHO is a fidelity trade costing
+about 1pp of MFU, bought with the highest complexity in the ledger. It is a
+separate project, not part of this consolidation, and it also depends on the
+`sonic_cute`/QuACK substrate (item 14) because its kernel path uses the SM100
+grouped expert GEMMs.
 
 ### Tier 3 — Shared substrate. Needed by both the EP and FSDP lines.
 
@@ -152,16 +158,23 @@ optimizations are specific to the MoE)?"*
 
 | # | Change | Benefit on FSDP | Status under EP |
 |--:|---|---|---|
-| 17 | Two shared experts, split (D2) | +0.29pp | **memory-blocked**, not merely untested — the one attempt (two 8192-wide) failed before step 0 at 89.49 GiB; splitting the shared width does not reduce the FSDP gather peak |
-| 18 | Muon shape-grouping for non-expert NS (D3) | +0.09pp | **unmeasured**; overlaps item 10's code |
+| 17 | Two shared experts, split (D2) | +0.29pp, **unreplicated single screen** | **memory-blocked**, not merely untested — the one attempt (two 8192-wide) failed before step 0 at 89.49 GiB; splitting the shared width does not reduce the FSDP gather peak |
+| 18 | Muon shape-grouping for non-expert NS (D3) | +0.09pp, **unreplicated single screen** | **unmeasured**; overlaps item 10's code |
 | 19 | Host offload of optimizer state (D4) | +0.4pp (bundled) | **split by model size** — in use on the d6144 EP64 legs, but *rejected* at d5120 (needed a 135 GiB pinned-host arena, landed at 19.694%) |
 | 20 | Chunked expert FSDP all-gather (D5) | +0.9pp 1 rack, +0.5pt 2 racks | **N/A** — overlaps an all-gather EP does not perform |
 | 21 | Slim Sonic residuals + `all_but_moe` remat (D7) | +0.51pp at d2560 | unmeasured; **conflicts with item 20's code** (§4) |
 | 22 | GatedNorm + attention gate + XSA | part of the 25.2% stack | **absent from the EP runner entirely** — and an explicit caveat on the EP-vs-FSDP claim |
 
 Item 18 and item 22 are the genuinely open ones; together with the rest they are
-roughly **+1.5pp of measured FSDP gain that EP64 has not collected**, and they are
+roughly **+1.5pp of reported FSDP gain that EP64 has not collected**, and they are
 architecture-level rather than MoE-specific.
+
+**Do not sequence items 17 and 18 into the commit series yet.** Their +0.29pp and
++0.09pp come from a single stacked progression; the source explicitly reports
+replication only for PGLE (*"Reproduced across two runs (24.99%, 24.77%)"*), not
+for these. Both sit far below the ~2pp threshold that this document's own protocol
+says needs repeated placement draws. They are unreplicated screens, and their sign
+is not established.
 
 **PGLE (item 2) is the one that would matter most, and it does not transfer
 cleanly.** It was +1.1pp on FSDP but only +0.47pp under EP combined with the
@@ -172,14 +185,26 @@ preemption certain.
 
 ### Tier 5 — Conditional. Precision. Do not sequence this into the consolidation.
 
-MXFP8 is a **speed/quality trade with a measured price**, not a free win, and its
-sign at the production operating point is unresolved. See
+**The expert-only MXFP8 port has been tested at the EP64 operating point and it
+lost.** Matched 120-step A/B, d5120/i1280 8-of-256 EP64, QB on, cf1.0, drops
+reported and essentially matched (0.0885 against 0.0847, so not a drop artifact):
+BF16 22.345% p50 against MXFP8 19.763% — **−2.582pp p50, −2.832pp mean, −12.46%
+relative**. A fatter-shape check at d6144/i3072 stayed negative (−0.313pp, bands
+non-overlapping). The recorded verdict is *"do not adopt MXFP8 expert GEMMs at this
+operating point"* (`24d411b38`, local-only). See
 [`evidence.md` Group G](evidence.md).
 
-- Three end-to-end measurements of the same hybrid recipe: **1.308×** (d5120,
+That closes the question for the current mechanism. What remains open is narrower:
+a *materially different* mechanism — fused quantization epilogues, or the full
+hybrid grouped-plus-dense recipe at a shape not yet tested — plus a new matched
+all-QB-on end-to-end pair.
+
+The rest of the precision record, for context:
+
+- Three end-to-end measurements of the same **hybrid** recipe: **1.308×** (d5120,
   EP8, 1 run/arm), **+7.22%** (d2560, EP8, 66B tokens/arm — the strongest evidence
-  in the workstream), and **0.749×** (d6144, **EP1**, 1 run/arm). The
-  MFU-versus-EP-degree curve has never been measured.
+  in the workstream), and **0.749×** (d6144, **EP1**, 1 run/arm). The hybrid recipe
+  still has no EP-degree curve.
 - The preregistered quality gate answered **in the negative**: +0.056% aggregate
   eval, +0.110% Paloma, +0.209% uncheatable loss, with BF16 favoured at **32 of 32**
   paired evaluations. MXFP8 never reaches BF16's terminal held-out targets within
@@ -188,12 +213,13 @@ sign at the production operating point is unresolved. See
   relevant to EP capacity walls.
 - The FP8 dispatch wire (#7665) is **the only lever whose gain grows with EP
   degree** — 1.286× fwd / 1.144× fwd+bwd at EP64, weight gradients bit-exact. But
-  it is one layer in isolation, and it depends on MXFP8 expert GEMMs, **which do
-  not exist on the EP64 stack at all** (expert GEMMs there are bf16 `jnp.einsum`).
+  it is one layer in isolation, and it only pays when a quantized consumer exists
+  downstream — and that consumer is the expert-GEMM port that just measured
+  −2.582pp. The wire would have to more than cover that loss.
 - A hybrid `w_down` NaN is masked by a guard whose root cause was never found.
 
-**Recommendation: keep BF16 for the consolidation and treat MXFP8 as a separate,
-explicitly-priced decision.**
+**Recommendation: keep BF16 for the consolidation.** MXFP8 is not an unpriced
+option awaiting a decision; at this operating point it is a measured loss.
 
 ---
 
@@ -301,7 +327,9 @@ twelve all-to-all ops on the compute stream" lead is explained —
 no-ops, and a schedule census shows MoE SYNC all-to-all going 10 → 0 as
 `overlap_limit` goes 1 → 4. Likewise the router-controller family is exhausted:
 over-relaxed, damped, DeepSeek-integral, **and sender-local** bias are all measured
-at or below `g=1`, and the sender-local null overturned the hotspot hypothesis. The
+at or below `g=1` — with the damped arm *unavailable* rather than measured, since
+its one clean leg lost its metrics to a log-shipping outage — and the sender-local
+null overturned the hotspot hypothesis. The
 revised reading is that the ~6% residual is batch-stochastic within-batch
 burstiness — routing is 7–9× more clustered than independent-uniform.
 

@@ -408,12 +408,17 @@ and −3.66pp.** Do not treat it as a pending win.
   ([#7279 comment 5080435482](https://github.com/marin-community/marin/issues/7279#issuecomment-5080435482) §1, §5).
 - **Negative, QB-on and matched drops:** an independent reconstruction
   (`SCALE_A2A_BATCH_EXPERTS` / `SCALE_A2A_BATCH_GROUP=2`, commits `65e3ca50d`,
-  `0789a8482`) measured control 22.66% p50 at 0.088 drops against batched G=2
-  **19.00% p50 at 0.092 drops — −3.66pp, bands non-overlapping.** The batched path
-  is bit-exact against the loop at `expert_axis=2` (max abs diff 0.0), so this is a
-  performance regression, not a correctness bug. **Full batching at G=4 never
-  produced a step** — two gang aborts. The implementing agent dropped confidence
-  from 6/10 to 2/10.
+  `0789a8482`; result recorded in `081450952f`) measured control 22.66% p50 at
+  0.088 drops and loss 5.614, against batched G=2 **19.00% p50 at 0.092 drops and
+  loss 5.643 — −3.66pp, bands non-overlapping.** The batched path is bit-exact
+  against the loop at `expert_axis=2` (max abs diff 0.0), so this is a performance
+  regression, not a correctness bug. **Full batching at G=4 never produced a
+  step** — two gang aborts. The implementing agent dropped confidence 6/10 → 2/10.
+
+**The original implementation is not committed.** The patch that produced 25.39% is
+uncommitted, so it cannot be inspected or re-run. The only leg-batching code that
+exists is the reconstruction, and it regresses. Any follow-up starts with
+recovering the original patch, not with booking rack time.
 
 The ECHO line has its own `SCALE_A2A_BATCH_EXPERT_GEMMS=1` (hard-requiring
 `SCALE_A2A_PACK_DISPATCH=1` and `SCALE_A2A_PACK_COMBINE=1`) with parity tests, but
@@ -697,9 +702,9 @@ or below `g=1`:**
 | variant | knob / commit | result |
 |---|---|---|
 | Over-relaxed, g=2 | `SCALE_QB_GAIN`, `58c9a19eb` | p50 23.386% but drops pinned **0.675–0.793 for all 350 steps** (overshoot limit cycle), loss **+0.091 worse**. Categorical negative. |
-| Damped, g<1 | same knob | **Cannot beat g=1 by construction** — `pending ← g·beta + (1−g)·pending` has the same fixed point; gain sets only the approach rate. The one g=0.5 rack leg ran 350/350 clean but its metrics were permanently lost to a concurrent GB200 log-shipping outage. |
-| DeepSeek-style integral | `SCALE_QB_INTEGRAL`, `3f10dcc6a` | **Clean negative at both gammas**: γ=0.001 plateaus at ~0.60, γ=0.01 at ~0.46, against g=1's 0.073; losses 3.452 / 3.472 against 3.335. The first-5-step collapse (peak 0.89–0.91 in *every* draw) outruns any fixed rate — DeepSeek's rule works over 100k+ steps by *preventing* drift and cannot *reverse* an established collapse in 350. |
-| **Sender-local bias** | `SCALE_QB_SENDER`, `50748b995` / `5bf934717` | **Null.** A closed-loop CPU simulation was decisive (global QB stuck at 0.773 over 12 iterations; sender QB 0.758 → 0.016), but the live 350-step leg gave tail-100 **0.0856 against global's 0.0732 — statistically identical**, at parity MFU and loss. |
+| Damped, g<1 | same knob | **Not measured, and cannot beat g=1 by construction** — `pending ← g·beta + (1−g)·pending` has the same fixed point; gain sets only the approach rate. The one g=0.5 rack leg ran 350/350 clean but its metrics were permanently lost to a concurrent GB200 log-shipping outage, so treat this arm as *unavailable*, not as a measured null. |
+| DeepSeek-style integral | `SCALE_QB_INTEGRAL`, `3f10dcc6a`; result `a48a8a9e3` | **Clean negative at both gammas**: γ=0.001 plateaus at ~0.606, γ=0.01 at ~0.461, against g=1's tail-100 0.073; losses 3.452 / 3.472 against 3.335. The first-5-step collapse (peak 0.89–0.91 in *every* draw) outruns any fixed rate — DeepSeek's rule works over 100k+ steps by *preventing* drift and cannot *reverse* an established collapse in 350. |
+| **Sender-local bias** | `SCALE_QB_SENDER`, `50748b995` / `5bf934717`; result `6ac4bbeee` | **Null.** A closed-loop CPU simulation was decisive (global QB stuck at 0.773 over 12 iterations; sender QB 0.758 → 0.016), but the live 350-step leg gave tail-100 **0.0856 against global's 0.0732 — "statistically IDENTICAL"** in the record, at parity MFU and loss. |
 
 **The sender-local result overturns the leading hypothesis.** Sender-local bucket
 hotspots were the standing explanation for the ~6% residual, and the mechanism
@@ -759,6 +764,10 @@ spill with a small capacity bump beats buying capacity alone on both axes —
 `agent/ep25-d1-adjoint` / `agent/ep25-d5-d6144`. **2 files, +147/−12.**
 
 **Dependency.** Fixed-capacity a2a (B2); composes with the custom adjoint (B4).
+Required **zero adjoint changes** — both VJPs are generic in `linear_indices` and
+`keep`. Verified against autodiff at 1e-5 (gradient differences 2.3e-10…4.7e-10,
+drop counts identical at 61/40/20); 20/20 kernel tests pass. Loss is *better* at
+every m (−0.0154 at m=3 over 350 steps).
 
 ### C3 — Receiver-ECHO with same-expert clones
 
@@ -776,15 +785,31 @@ collective-overlap limit 4, CUDA command buffers on:
 post-ECHO assignment drop, final loss 7.945**
 ([#7201 comment 5088824573](https://github.com/marin-community/marin/issues/7201#issuecomment-5088824573)).
 
+**There is no ECHO on/off delta anywhere in the record.** The 24.153% and 22.299%
+figures are **absolute stack points**, not a measurement of what ECHO buys. The
+24.153% specifically is the *treatment arm of the padded-Muon A/B* — that A/B
+"changed only `SCALE_MUON_PAD_NONEXPERT=0` to `1`", and **both arms already ran
+receiver-ECHO**. So that number measures B7, not C3. Do not rank a 725-line change
+by it.
+
+**The one matched ECHO transport isolation is #7670**, and it is a fidelity trade
+rather than a speed win — see the table below: ECHO-ragged takes drops from 1.32%
+to **0.02%** for about 1pp of MFU. *That* is the actionable ECHO result.
+(Reconcile the source's own rows before quoting them: it reports 19.98% and 18.99%
+MFU while rounding both arms to 279K tok/s, which cannot both be right.)
+
 **Longer, better-qualified sibling.** A stable BF16 **120-step** reference on the
 8-of-256 variant (v143) reached **22.299% tail-30 MFU at 1.711% tail-30 drop**,
-loss → 5.995. That is the strongest ECHO evidence, and it beats C2's 350-step
-compliant point (20.708% @ 1.44%) on MFU at a comparable drop rate.
+loss → 5.995. Throughput was **not recorded** for that leg — any tok/s figure for
+it is derived by proportion, not measured.
 
-**This is the best measured EP64 point at a compliant drop rate.** The 24.153%
-figure is also the least qualified of the headline numbers: a 20-step performance
-screen, not a stability or drop-rate qualification, and the 2.765% is an exact
-aggregate *assignment* drop, not a whole-token drop rate.
+**As an absolute point, 24.153% at 2.765% is the highest compliant EP64 reading on
+record.** It is also the least qualified: a 20-step performance screen, not a
+stability or drop-rate qualification, and the 2.765% is an exact aggregate
+*assignment* drop, not a whole-token drop rate. QB settles over 80–150 steps and
+drops fall monotonically for hundreds of steps, so a step-19 reading is an early
+one — it will fall further, but it has not been shown to hold on a settled tail
+with this stack.
 
 **State.** Branch-only. Commits `24ee86090` (+`073ae3b35`, `53cd5fd30`) on
 `research/rav/7201-ep64-drop3` / `7201-ep64-muon-pad`.
@@ -1001,8 +1026,38 @@ Sources: [#7282 c5017713906](https://github.com/marin-community/marin/issues/728
 1.308× vs 1.072× at different model sizes; the plausible but unmeasured
 explanation is that the expert-GEMM share of the step is much larger at
 d5120/L48 than d2560/L26. The EP1 arm is a different regime entirely — 128 local
-experts per device, a grouped-GEMM shape the kernels were never tuned for. **The
-MFU-versus-EP-degree curve for MXFP8 expert GEMMs has never been measured.**
+experts per device, a grouped-GEMM shape the kernels were never tuned for. The
+full **hybrid** recipe still has no EP-degree curve.
+
+### G1b — The expert-only MXFP8 port was tested at EP64 and lost
+
+**This is the decisive measurement for the operating point, and it is a clean
+one.** A matched 120-step A/B at d5120 / i1280 / 8-of-256 / 48L / EP64, **QB on**,
+cf 1.0, gather dispatch, custom adjoint, drops reported:
+
+| arm | p10 | p50 | p90 | mean | loss @119 | drop @119 |
+|---|--:|--:|--:|--:|--:|--:|
+| BF16 control | 21.909 | **22.345** | 24.358 | 22.716 | 5.6982 | 0.0885 |
+| MXFP8 treatment | 19.612 | **19.763** | 20.462 | 19.884 | 5.6303 | 0.0847 |
+| treatment − control | −2.297 | **−2.582** | −3.897 | **−2.832** | −0.0679 | −0.0038 |
+
+**−2.582pp p50, −2.832pp mean (−12.46% relative), with drops essentially matched
+and moving slightly in the treatment's favour** — so this is not a drop-regime
+artifact. Applying the observed ratio to the 20.848% strict-drop reference projects
+about **18.25%**. Verdict on the record: *"do not adopt MXFP8 expert GEMMs at this
+operating point."* A fatter-shape check at d6144 / i3072 stayed negative:
+bf16 9.067% against MXFP8 8.754%, **−0.313pp**, bands non-overlapping.
+
+**Source.** Local-only commit `24d411b38` on `agent/ep25-d2-bakeoff` (fatter shape:
+`fac261215e`). Not pushed to any remote.
+
+**Consequence.** The correct statement is not "MXFP8 does not exist on the EP64
+stack" — a working prototype behind `SCALE_MOE_MXFP8` does, and it measured
+negative in a matched, QB-on, drop-reported A/B at the operating point. What
+remains genuinely open is only a **materially different mechanism**: fused
+quantization epilogues, or the full hybrid grouped-plus-dense recipe at shapes
+other than those already tested. The stated condition for reopening is *"a new
+matched all-QB-on end-to-end pair"*.
 
 **Retracted, do not cite:** the `1.278×`/`1.251×`/`+34.8%` headlines. Their arms
 differed on EP topology (EP4 vs EP8) *and* had Newton–Schulz disabled. NS alone
@@ -1120,9 +1175,14 @@ unrunnable by construction until #7665.
 `experiments/grug/moe/mxfp8.py` +127). Branch
 `research/mcwitt/7279-fp8-dispatch-wire` @ `224a0081`. No PR.
 
-**Dependency that currently blocks it.** It requires G3, and **MXFP8 does not
-exist on the EP64 fixed-a2a stack at all** — expert GEMMs there are bf16
-`jnp.einsum`. A production home requires porting G3 to that stack first.
+**Dependency that currently blocks it, and it is worse than a porting problem.**
+The wire only pays when a quantized consumer exists downstream, so it requires G3.
+The shipping EP64 fixed-a2a stack runs bf16 `jnp.einsum` expert GEMMs — but a
+prototype port does exist behind `SCALE_MOE_MXFP8`, and **G1b measured it at
+−2.582pp in a matched QB-on A/B at the operating point.** So the consumer this
+wire needs is currently a net loss on its own. The wire's +1.144pp fwd+bwd at EP64
+would have to more than cover that before the pair is worth anything, and neither
+has been measured inside the real step.
 
 **Everything above is one layer in isolation** — no scan, no remat, no optimizer,
 no competing collectives. The in-step measurement has not been run, and #7279's
@@ -1176,6 +1236,7 @@ FP8. Quality of uniform MXFP8 is completely unmeasured
 | E1 | **MXFP8 at EP1, d6144 production config** | **0.749× BF16 (−25.15%)**, same commit, same config, only `SCALE_FP8=mxfp8` changed, FP8 wire disabled. Median rank-0 over steps 2–29. | [#7201 c5037417823](https://github.com/marin-community/marin/issues/7201#issuecomment-5037417823) |
 | E1b | MXFP8 quality gate | Preregistered claim "quality-neutral" answered **in the negative**: +7.22% throughput but +0.056% aggregate eval, +0.110% Paloma, +0.209% uncheatable loss, with aggregate eval favouring BF16 at all 32 paired evaluations. 31,474 steps / 66.006B tokens per arm. | [#7271](https://github.com/marin-community/marin/issues/7271) |
 | E1c | Earlier "+34.8% / 1.251× MXFP8" headlines | **Retracted.** Confounded on EP topology (EP4 vs EP8) and on Newton–Schulz being disabled in the control. | [#7201 c5015174520](https://github.com/marin-community/marin/issues/7201#issuecomment-5015174520), [c5017713989](https://github.com/marin-community/marin/issues/7201#issuecomment-5017713989) |
+| E1d | **MXFP8 expert GEMMs at the EP64 operating point** | **−2.582pp p50 / −2.832pp mean** in a matched, QB-on, drop-reported 120-step A/B (22.345% → 19.763%, drops 0.0885 → 0.0847); **−0.313pp** at d6144/i3072. Verdict on record: do not adopt. Full detail in G1b. | local commits `24d411b38`, `fac261215e` |
 | E2 | **NVFP4** | Ruled out on risk grounds; [#7403](https://github.com/marin-community/marin/issues/7403) closed. | week of 2026-07-20 summary |
 | E3 | Rotation `ppermute` decomposition of the fixed a2a | **−9.46pp** | [#7279 c5080435482](https://github.com/marin-community/marin/issues/7279#issuecomment-5080435482) §3 |
 | E4 | Token-chunk pipelining of dispatch/FFN | **−1.96pp** | same |
@@ -1243,15 +1304,23 @@ incumbent for bf16; NCCL_EP is preserved as a derisked fallback.
 
 ## Architecture-selection inputs that fall out of the perf work
 
-- **4-of-256 at EP64 does not fit one rack.** Measured on all 16 tasks: 92.02 GiB
-  resident plus a single 106.63 GiB temp arena against 184.3 GiB physical, so no
-  memory fraction closes it. The resident set decomposes exactly into expert
-  parameters, MuonH momentum and the replicated embedding trio — nothing is
-  mis-sharded. The 707B 4-of-256 candidate already assumes two racks plus offload.
-  ([#7201 c5084895357](https://github.com/marin-community/marin/issues/7201#issuecomment-5084895357))
+- **The d6144 / i3072 4-of-256 candidate (~707B) does not fit one rack at EP64.**
+  Measured on all 16 tasks: 92.02 GiB resident plus a single 106.63 GiB temp arena
+  against 184.3 GiB physical, so no memory fraction closes it. The resident set
+  decomposes exactly into expert parameters, MuonH momentum and the replicated
+  embedding trio — nothing is mis-sharded. That candidate already assumes two racks
+  plus offload.
+  ([#7201 c5084895357](https://github.com/marin-community/marin/issues/7201#issuecomment-5084895357); shape confirmed in local commit `fac261215e`)
+  **This is not a general 4-of-256 statement** — the d5120 / i2048 4-of-256 arm
+  completed 20/20 steps on one rack at EP64 (C3).
 - **Drop recovery is bounded by routing granularity** — see C2's constraint 1.
   Neither top-4 candidate reaches a 3% bar by spill alone at cf1.0; they need
-  capacity headroom on top, at roughly −0.58pp per +0.05 of capacity factor.
+  capacity headroom on top. **Price that headroom from the measured points, not
+  from a slope:** cf1.0 → cf1.05 costs **1.179pp** and cf1.05 → cf1.0625 costs
+  **+0.038pp** (noise). The penalty is paid once on leaving cf1.0 and is
+  approximately flat thereafter; the mechanism is unknown and the natural
+  tile-alignment explanation was falsified. Use 20.670% at cf1.05 and 20.708% at
+  cf1.0625 directly.
 - **8k context is nearly free; 65k costs −35% tok/s.** At constant ~4.19M
   tokens/step on the final d6144 stack: 4k → 246K tok/s, 8k → 241.6K (−1.8%),
   65k → 160.7K (−35%, true MFU 17.0%). Sliding window 512 means the 40 local
