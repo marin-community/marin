@@ -2462,3 +2462,92 @@ bash experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit \
     by approximately `6.5%`, but do not count it as a full-training throughput gain.
   - Investigate the remaining environment/runtime difference from the historical `19.8996` MFU run;
     another copy-kernel variant is not justified by this A/B.
+
+### 2026-07-27 19:43 PDT - Corrected exact UB-X run exceeds 20 mean MFU
+- Config-diff root cause:
+  - The historical `19.8996`-MFU scalar run used `vocab_size=8192`. Vector R6 and scalar R7 omitted
+    `--vocab-size`, so the launcher silently inherited the May model default `vocab_size=128256`.
+  - Those run IDs encoded batch `b8192`, not vocabulary size. The approximately `142s` matched-control
+    steps therefore included a `15.66x` larger embedding and output head than the intended exact target.
+  - R8 explicitly restores `--vocab-size 8192` and the historical BFC fraction `0.70`; it retains the
+    vectorized UB-X copy kernel and every other target setting.
+- Snapshot:
+  - Clean commit `03d8f2836a` ran parent `/dlwh/iris-run-job-20260728-021321` and child
+    `/dlwh/iris-run-job-20260728-021321/grug-train-jaxpp-use2a-ubx-vectorcopy-l24-e64k4-v8192-b8192-s4096-p4m256-precompile-bfc070-r8-20260727`
+    on `cw-us-east-02a`.
+  - The exact configuration was L24/d2560/e64/top-k4/vocab8192/sequence4096, batch8192/m256,
+    four H100x8 nodes, split `6,6,6,6`, EP8 UB-X, explicit `std_1f1b`, ordinary expert gradients,
+    BF16 wire, CuTe FA4, Triton block-k 32/eight warps, XLA loss, `save_moe`, and BFC fraction `0.70`.
+- Command:
+  ```bash
+  GRUG_JAXPP_PRECOMPILE_LOCAL=1 \
+  GRUG_JAXPP_LOG_LOCAL_MEMORY_PLAN=false \
+  TF_GPU_ALLOCATOR=cuda_malloc_async \
+  experiments/grug/moe/run_cw_jaxpp_may_d2560.sh \
+    --submit \
+    --cluster cw-us-east-02a \
+    --prefix s3://marin-us-east-02a/marin \
+    --run-id jaxpp-use2a-ubx-vectorcopy-l24-e64k4-v8192-b8192-s4096-p4m256-precompile-bfc070-r8-20260727 \
+    --schedule std_1f1b \
+    --implementation explicit_mpmd \
+    --explicit-mpmd-schedule-mode default \
+    --explicit-mpmd-pipeline-wire-format bf16 \
+    --explicit-mpmd-stage-task-microbatch-group-size 1 \
+    --expert-gradient-accumulation ordinary \
+    --physical-stages 4 \
+    --logical-stages 4 \
+    --stage-layer-counts 6,6,6,6 \
+    --microbatches 256 \
+    --nodes 4 \
+    --gpus-per-replica 8 \
+    --expert-axis 8 \
+    --layers 24 \
+    --experts 64 \
+    --top-k 4 \
+    --vocab-size 8192 \
+    --batch 8192 \
+    --seq-len 4096 \
+    --moe-implementation ubx \
+    --attention-implementation gpu_fa4_cute \
+    --ragged-dot-implementation triton \
+    --ragged-dot-block-k 32 \
+    --ragged-dot-num-warps 8 \
+    --loss-implementation xla \
+    --steps 10 \
+    --tracker wandb \
+    --xla-memory-fraction 0.70 \
+    --remat save_moe
+  ```
+- Result:
+  - UB-X initialized on all ranks. They precompiled `1026/1025/1025/1025` local tasks, crossed the
+    barrier, and completed `10/10` steps.
+  - [W&B](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-use2a-ubx-vectorcopy-l24-e64k4-v8192-b8192-s4096-p4m256-precompile-bfc070-r8-20260727)
+    finished and synced.
+
+| Step | Loss | Duration | MFU | Tokens/s |
+| ---: | ---: | ---: | ---: | ---: |
+| 2 | `6.70622014999` | `74.9432597486s` | `19.8523422540` | `447,731.151708` |
+| 3 | `5.81952571869` | `71.7036924893s` | `20.7492695356` | `467,959.610379` |
+| 4 | `5.09153842926` | `71.7030996485s` | `20.7494410904` | `467,963.479466` |
+| 5 | `4.50042676926` | `71.7033277433s` | `20.7493750846` | `467,961.990831` |
+| 6 | `4.02879190445` | `75.5279866597s` | `19.6986482489` | `444,264.880927` |
+| 7 | `3.66178417206` | `74.7345715053s` | `19.9077777820` | `448,981.392736` |
+| 8 | `3.38738226891` | `71.6098494325s` | `20.7764609750` | `468,572.860660` |
+| 9 | `3.19668865204` | `71.6310757818s` | `20.7703043116` | `468,434.009036` |
+
+| Metric | Mean | P50 | P90 |
+| --- | ---: | ---: | ---: |
+| Duration | `72.9446078761s` | `71.7035101163s` | `75.1186778219s` |
+| MFU | `20.4067024103` | `20.7493223101` | `20.7721513106` |
+| Throughput | `460,233.671968 tok/s` | `467,960.800605 tok/s` | `468,475.664523 tok/s` |
+
+- Terminal cleanup:
+  - Parent and child succeeded with exit `0`; all four child workers completed with zero failures and
+    zero preemptions. No OOM, IB retry, client re-registration, traceback, or task retry occurred.
+  - Coordination-service connection warnings began only after W&B finished during successful distributed
+    teardown. Parent and child are terminal, and no live resource remains.
+- Conclusion:
+  - The corrected R8 mean is `0.507102` MFU points, or `2.5483%`, above scalar UB-X `19.8996`.
+    It is `72.1361%` above the misconfigured vector R6 mean, while mean duration is `48.6345%` lower.
+  - Exact L24/d2560/e64/top-k4/vocab8192/sequence4096 JaxPP pipeline parallelism has now sustained
+    `20.4067` mean MFU across steps 2-9. The strict `>20` goal is achieved.
