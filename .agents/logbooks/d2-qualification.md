@@ -150,3 +150,19 @@ author: Matt Wittmann
   already running on `sdxsxs64`; it will not rely on the mutable `latest` cache.
 - Next action: submit the corrected bundle with
   `ghcr.io/marin-community/iris-task@sha256:29ec7e8d4702faa36b0006ee34fd084e3e634a541e0736475446051bba091524`.
+
+### 2026-07-28 16:34 PDT - Init image ignores task-image override
+
+- Commit Hash: `e9e96d45931043c97e55529bbe5aef3c3b4ebf86`
+- Job: `/mwittmann/d2-muon-num-syrk1-r3-0728-1633`.
+- Result: failed before bundle fetch on `s4bk6j84`. The main-container
+  `--task-image` override did not apply to the `stage-workdir` init container,
+  which still used cached `iris-task:latest` digest
+  `sha256:cfe4e8dd08f6d43076ade21a2a018ef7c1616356e46960f0a1ebc66434bb3425`.
+- Interpretation: image pinning alone cannot recover this Iris path. Zone `136`
+  contains ARM64 GB200 node `sf2xxs64`, whose running init containers use the
+  known-working digest `sha256:29ec7e8d4702faa36b0006ee34fd084e3e634a541e0736475446051bba091524`.
+  Iris exposes `--zone`, so placement can avoid the bad node without mutating
+  cluster or job state.
+- Next action: resubmit the corrected bundle with `--zone 136`. Keep the main
+  task image pinned and leave every numerical/configuration argument unchanged.
