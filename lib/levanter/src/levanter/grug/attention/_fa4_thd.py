@@ -272,9 +272,7 @@ def _window_size_arguments(sliding_window: int | None) -> tuple[int | None, int 
     """Return FA4's ``(window_size_left, window_size_right)`` for a Marin sliding window.
 
     ``sliding_window=W`` keeps the last ``W`` tokens including the query, so FA4 sees ``W - 1``
-    tokens to the left and none to the right; full causal attention is ``(None, None)``. Callers
-    must resolve this outside the ``@cute.jit`` launchers, because the CuTe DSL rewrites a plain
-    ``if`` into an ``scf.if`` and traces both regions.
+    tokens to the left and none to the right; full causal attention is ``(None, None)``.
     """
     if sliding_window is None:
         return None, None
