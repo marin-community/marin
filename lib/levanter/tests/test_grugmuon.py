@@ -92,7 +92,7 @@ def test_grug_scale_with_muon_stack_batch_sharded_handles_stacked_expert_tensor(
     assert not jnp.array_equal(new_updates["moe_tensor"], updates["moe_tensor"])
 
 
-def test_distributed_4d_ns_preserves_expert_sharding_through_layer_expert_merge():
+def test_distributed_4d_ns_keeps_expert_axis_unmerged():
     mesh = AbstractMesh(
         axis_sizes=(1, 1, 64, 1),
         axis_names=("replica_dcn", "data", "expert", "model"),
@@ -109,13 +109,14 @@ def test_distributed_4d_ns_preserves_expert_sharding_through_layer_expert_merge(
         closed_jaxpr = jax.make_jaxpr(apply_ns)(x)
         output = jax.eval_shape(apply_ns, x)
 
-    reshape_specs = [
-        eqn.params["sharding"].spec
+    merged_shape = (48 * 256, 8, 4)
+    merged_reshapes = [
+        eqn
         for eqn in closed_jaxpr.jaxpr.eqns
-        if eqn.primitive.name == "reshape" and eqn.params.get("sharding") is not None
+        if eqn.primitive.name == "reshape" and eqn.outvars[0].aval.shape == merged_shape
     ]
-    assert reshape_specs == [P("expert", None, None), P("expert", None, None, None)]
-    assert output.sharding == input_sharding
+    assert not merged_reshapes
+    assert output.sharding == NamedSharding(mesh, P(None, "expert", "data", "model"))
 
 
 def test_padded_stack_ns_returns_directly_to_parameter_sharding():
@@ -144,10 +145,43 @@ def test_padded_stack_ns_returns_directly_to_parameter_sharding():
     replicated_padded_reshards = [
         eqn
         for eqn in closed_jaxpr.jaxpr.eqns
-        if eqn.primitive.name == "device_put"
+        if eqn.primitive.name == "reshard"
         and eqn.invars[0].aval.shape == padded_shape
-        and eqn.params["devices"][0].spec == P(None, None, None)
+        and eqn.params["dst_sharding"].spec == P(None, None, None)
     ]
     assert not replicated_padded_reshards
     assert output.shape == x.shape
     assert output.sharding == input_sharding
+
+
+def test_padded_stack_ns_uses_two_hop_inbound_reshard():
+    mesh = AbstractMesh(
+        axis_sizes=(2, 1, 4, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+    input_sharding = NamedSharding(mesh, P(None, "expert", None))
+    x = jax.ShapeDtypeStruct((6, 8, 4), jnp.float32, sharding=input_sharding)
+
+    def apply_ns(y):
+        return _newtonschulz_padded_stack_sharded(
+            y,
+            steps=0,
+            eps=1e-8,
+            coefficient_type="quintic",
+            target_sharding=input_sharding,
+        )
+
+    with use_abstract_mesh(mesh):
+        closed_jaxpr = jax.make_jaxpr(apply_ns)(x)
+
+    padded_shape = (8, 8, 4)
+    padded_reshard_specs = [
+        eqn.params["dst_sharding"].spec
+        for eqn in closed_jaxpr.jaxpr.eqns
+        if eqn.primitive.name == "reshard" and eqn.invars[0].aval.shape == padded_shape
+    ]
+    assert padded_reshard_specs[:2] == [
+        P("replica_dcn", None, None),
+        P(("replica_dcn", "expert"), None, None),
+    ]

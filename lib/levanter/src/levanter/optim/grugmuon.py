@@ -392,6 +392,10 @@ def _newtonschulz_4d_distributed(
     all-to-all reshard to move ``LE`` onto the batch axis (each chip ends up owning
     ``LE / shards`` *full* matrices), local NS, then reverse. Splitting the axis merge from
     the cross-axis migration lets XLA do each cheaply instead of materializing the full stack.
+
+    Under expert parallelism, leave E sharded on the expert axis and distribute only L over
+    non-expert axes. Merging ``(L, E)`` otherwise drops the expert axis or requires a multi-axis
+    leading-dimension reshard, both of which can trigger stack-sized involuntary rematerialization.
     """
     if os.environ.get("SCALE_MOE_EXPERT_ESHARD") == "1":
         # Experts are stored sharded E-over-data (leaf P(None, "data", None, None)) with D/I full per
@@ -438,15 +442,68 @@ def _newtonschulz_4d_distributed(
     layers, expert_count, d, last = x.shape
     merged = layers * expert_count
 
+    is_w_down = any(getattr(entry, "name", None) == "w_down" for entry in path)
+    trailing = ("model", "data") if is_w_down else ("data", "model")
+    orig_4d_spec = PartitionSpec(None, "expert", *trailing)
+    local_ns = lambda matrix: _zeropower_via_newtonschulz_local(matrix, steps, eps, coefficient_type)
+
+    expert_axis_size = int(mesh.shape.get("expert", 1))
+    if expert_axis_size > 1:
+        # Keep E sharded on "expert". Distribute L over the largest non-expert axis subset that
+        # divides it; an empty subset leaves L replicated across those axes.
+        candidate_axes = [(name, size) for name, size in mesh_shape_items if name != "expert"]
+        best_axes: tuple[str, ...] = ()
+        best_shards = 1
+        for mask in range(1, 1 << len(candidate_axes)):
+            subset = [candidate_axes[i] for i in range(len(candidate_axes)) if mask & (1 << i)]
+            prod = math.prod(size for _, size in subset)
+            if layers % prod == 0 and prod > best_shards:
+                best_axes = tuple(name for name, _ in subset)
+                best_shards = prod
+
+        x_bf16 = x.astype(jnp.bfloat16)
+        if not best_axes:
+            distributed_4d_spec = PartitionSpec(None, "expert", None, None)
+            x_distributed = reshard(x_bf16, distributed_4d_spec)
+        else:
+            # Migrate L onto one axis first, then extend the tuple by local slicing. A direct
+            # multi-axis leading-dimension reshard can replicate the full expert stack.
+            distributed_4d_spec = (
+                PartitionSpec(best_axes[0], "expert", None, None)
+                if len(best_axes) == 1
+                else PartitionSpec(best_axes, "expert", None, None)
+            )
+            x_distributed = reshard(x_bf16, PartitionSpec(best_axes[0], "expert", None, None))
+            if len(best_axes) > 1:
+                x_distributed = reshard(x_distributed, distributed_4d_spec)
+
+        if os.environ.get("SCALE_MUON_SYRK") == "1":
+
+            def local_syrk(stack):
+                local_layers, local_experts, local_d, local_last = stack.shape
+                flat = jax.lax.reshape(stack, (local_layers * local_experts, local_d, local_last))
+                updated = _newtonschulz_batched_syrk(flat, steps, eps, coefficient_type)
+                return jax.lax.reshape(updated, stack.shape)
+
+            updated_distributed = shard_map(
+                local_syrk,
+                mesh=mesh,
+                in_specs=distributed_4d_spec,
+                out_specs=distributed_4d_spec,
+                check_vma=False,
+            )(x_distributed)
+        else:
+            updated_distributed = jax.vmap(jax.vmap(local_ns))(x_distributed)
+        updated_bf16 = reshard(updated_distributed, orig_4d_spec)
+        return updated_bf16.astype(x.dtype)
+
     # Largest subset of batch mesh axes whose product divides ``merged``; NS replicates
     # across any axes that don't divide it rather than silently skipping orthogonalization.
-    best_axes: tuple[str, ...] = ()
+    best_axes = ()
     best_shards = 0
     for mask in range(1, 1 << len(mesh_shape_items)):
         subset = [mesh_shape_items[i] for i in range(len(mesh_shape_items)) if mask & (1 << i)]
-        prod = 1
-        for _, size in subset:
-            prod *= size
+        prod = math.prod(size for _, size in subset)
         if merged % prod == 0 and prod > best_shards:
             best_axes = tuple(name for name, _ in subset)
             best_shards = prod
@@ -457,35 +514,17 @@ def _newtonschulz_4d_distributed(
             f"{jax.tree_util.keystr(path)}."
         )
 
-    is_w_down = any(getattr(entry, "name", None) == "w_down" for entry in path)
-    if is_w_down:
-        intermediate_3d_spec = PartitionSpec(None, "model", "data")
-        orig_4d_spec = PartitionSpec(None, "expert", "model", "data")
-    else:
-        intermediate_3d_spec = PartitionSpec(None, "data", "model")
-        orig_4d_spec = PartitionSpec(None, "expert", "data", "model")
+    intermediate_3d_spec = PartitionSpec(None, *trailing)
     target_3d_spec = (
         PartitionSpec(best_axes[0], None, None) if len(best_axes) == 1 else PartitionSpec(best_axes, None, None)
     )
 
     x_bf16 = x.astype(jnp.bfloat16)
-    # At EP>1 the stacked expert leaf is sharded only on its expert dimension. Reshaping
-    # directly through intermediate_3d_spec would omit that axis and materialize the full
-    # [L*E, D, I] stack on every device before the following reshard. Move E ahead of L so
-    # the merged dimension preserves expert sharding throughout the redistribution.
-    expert_axis_size = int(mesh.shape.get("expert", 1))
-    expert_spec_3d = PartitionSpec("expert", None, None)
-    use_expert_merge = expert_axis_size > 1 and "expert" in best_axes and merged % expert_axis_size == 0
-    if use_expert_merge:
-        x_swapped = jnp.swapaxes(x_bf16, 0, 1)
-        x_expert = jax.lax.reshape(x_swapped, (merged, d, last), out_sharding=expert_spec_3d)
-        x_distributed = x_expert if target_3d_spec == expert_spec_3d else reshard(x_expert, target_3d_spec)
-    else:
-        x_flat = jax.lax.reshape(x_bf16, (merged, d, last), out_sharding=intermediate_3d_spec)
-        x_distributed = reshard(x_flat, target_3d_spec)
+    x_flat = jax.lax.reshape(x_bf16, (merged, d, last), out_sharding=intermediate_3d_spec)
+    x_distributed = reshard(x_flat, target_3d_spec)
     if os.environ.get("SCALE_MUON_SYRK") == "1":
         # Run the batched NS with QuACK's in-kernel-mirror symmetric GEMM per device shard.
-        updated_distributed = jax.shard_map(
+        updated_distributed = shard_map(
             lambda stack: _newtonschulz_batched_syrk(stack, steps, eps, coefficient_type),
             mesh=mesh,
             in_specs=target_3d_spec,
@@ -493,20 +532,9 @@ def _newtonschulz_4d_distributed(
             check_vma=False,
         )(x_distributed)
     else:
-        local_ns = lambda matrix: _zeropower_via_newtonschulz_local(matrix, steps, eps, coefficient_type)
         updated_distributed = jax.vmap(local_ns)(x_distributed)
-    if use_expert_merge:
-        swapped_4d_spec = PartitionSpec("expert", None, None, None)
-        updated_expert = (
-            updated_distributed if target_3d_spec == expert_spec_3d else reshard(updated_distributed, expert_spec_3d)
-        )
-        updated_swapped = jax.lax.reshape(
-            updated_expert, (expert_count, layers, d, last), out_sharding=swapped_4d_spec
-        )
-        updated_bf16 = jnp.swapaxes(updated_swapped, 0, 1)
-    else:
-        updated_flat = reshard(updated_distributed, intermediate_3d_spec)
-        updated_bf16 = jax.lax.reshape(updated_flat, (layers, expert_count, d, last), out_sharding=orig_4d_spec)
+    updated_flat = reshard(updated_distributed, intermediate_3d_spec)
+    updated_bf16 = jax.lax.reshape(updated_flat, (layers, expert_count, d, last), out_sharding=orig_4d_spec)
     return updated_bf16.astype(x.dtype)
 
 
@@ -637,8 +665,11 @@ def _newtonschulz_padded_stack_sharded(
     pad = (-layers) % batch_shards
 
     Xp = jnp.pad(X, ((0, pad), (0, 0), (0, 0))) if pad else X
-    target = P(batch_axis[0], None, None) if len(batch_axis) == 1 else P(batch_axis, None, None)
-    Xd = reshard(Xp, target)
+    # Migrate onto one axis first, then extend the tuple by local slicing. A direct multi-axis
+    # leading-dimension reshard can involuntarily rematerialize the full padded stack.
+    Xd = reshard(Xp, P(batch_axis[0], None, None))
+    if len(batch_axis) > 1:
+        Xd = reshard(Xd, P(batch_axis, None, None))
     updated = jax.vmap(local)(Xd)
     if target_sharding is not None:
         target_spec = getattr(target_sharding, "spec", None)
