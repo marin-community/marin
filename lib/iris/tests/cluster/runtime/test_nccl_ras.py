@@ -7,6 +7,7 @@ import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+import pytest
 from iris.cluster.runtime.nccl_ras import (
     CollectiveCountSkew,
     NcclRasFormat,
@@ -22,6 +23,33 @@ class RasTestServer:
     port: int
     requests: list[bytes]
     thread: threading.Thread
+
+
+class PartialTimeoutConnection:
+    def __init__(self) -> None:
+        self.responses: list[bytes | BaseException] = [b"OK\n", TimeoutError()]
+        self.sent = b""
+
+    def __enter__(self) -> "PartialTimeoutConnection":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        pass
+
+    def sendall(self, request: bytes) -> None:
+        self.sent += request
+
+    def shutdown(self, _how: int) -> None:
+        pass
+
+    def settimeout(self, _timeout: float) -> None:
+        pass
+
+    def recv(self, _size: int) -> bytes:
+        response = self.responses.pop(0)
+        if isinstance(response, BaseException):
+            raise response
+        return response
 
 
 def _serve_responses(responses: Sequence[bytes]) -> RasTestServer:
@@ -59,6 +87,21 @@ def test_query_nccl_ras_sends_verbose_status_with_timeout_and_format() -> None:
 
     assert response == b"OK\nstatus"
     assert server.requests == [b"TIMEOUT 2\nSET FORMAT json\nVERBOSE STATUS\n"]
+
+
+def test_query_nccl_ras_propagates_timeout_after_partial_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = PartialTimeoutConnection()
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: connection)
+
+    with pytest.raises(TimeoutError):
+        query_nccl_ras(
+            host="127.0.0.1",
+            port=28028,
+            timeout=1,
+            response_format=NcclRasFormat.JSON,
+        )
+
+    assert connection.sent == b"TIMEOUT 1\nSET FORMAT json\nVERBOSE STATUS\n"
 
 
 def test_parse_json_response_skips_command_acknowledgements() -> None:

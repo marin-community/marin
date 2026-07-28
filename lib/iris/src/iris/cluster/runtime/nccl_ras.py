@@ -80,12 +80,7 @@ def query_nccl_ras(
         connection.shutdown(socket.SHUT_WR)
         while not deadline.expired():
             connection.settimeout(deadline.remaining_seconds())
-            try:
-                chunk = connection.recv(_READ_SIZE)
-            except TimeoutError:
-                if chunks:
-                    break
-                raise
+            chunk = connection.recv(_READ_SIZE)
             if not chunk:
                 break
             chunks.append(chunk)
