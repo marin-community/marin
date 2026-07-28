@@ -94,6 +94,7 @@ nav:
       - Training Configuration: references/train-config.md
       - HBM Optimization: references/hbm-optimization.md
       - Perplexity Gap Analysis: references/perplexity-gap-analysis.md
+      - Browsing Buckets with fsutil: references/fsutil.md
 
 markdown_extensions:
   - markdown.extensions.footnotes

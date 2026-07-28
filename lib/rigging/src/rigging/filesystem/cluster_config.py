@@ -114,12 +114,37 @@ class BucketSpec:
 
 
 @dataclasses.dataclass(frozen=True)
+class StoreConfig:
+    """How to reach one S3-compatible backend: its endpoint and the variables holding its keys.
+
+    Declared under ``data.stores`` in a cluster config so the connection details live
+    beside the buckets they serve rather than as constants in code. Each environment
+    variable named here, when set, overrides the config value — that is how a pod picks
+    up its node-local endpoint, and how an operator points at a staging account.
+
+    Attributes:
+        endpoint: Default endpoint URL for the backend.
+        endpoint_env: Variable overriding ``endpoint``.
+        key_id_env: Variable holding the access key ID.
+        key_secret_env: Variable holding the secret access key.
+    """
+
+    endpoint: str
+    endpoint_env: str
+    key_id_env: str
+    key_secret_env: str
+
+
+@dataclasses.dataclass(frozen=True)
 class DataConfig:
     """Where a cluster's data lives — the single source for storage layout.
 
     Attributes:
         region_buckets: Region name -> :class:`BucketSpec` for the cross-region
             mirror set.
+        stores: Backend -> :class:`StoreConfig` for the S3-compatible backends this
+            config's buckets are served by. GCS needs no entry: it authenticates with
+            application default credentials and has one endpoint.
         scheme: URL scheme for the cluster's storage (e.g. ``"gs"`` or ``"s3"``).
         temp_path: Path segment for TTL-managed scratch data.
         ttl_days: Allowed TTL-day values for temp lifecycle rules.
@@ -128,6 +153,7 @@ class DataConfig:
     """
 
     region_buckets: Mapping[str, BucketSpec]
+    stores: Mapping[StoreType, StoreConfig] = dataclasses.field(default_factory=dict)
     scheme: str = "gs"
     temp_path: str = "tmp"
     ttl_days: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 14, 30)
@@ -247,6 +273,18 @@ def _parse_bucket_spec(value: object) -> BucketSpec:
     return BucketSpec(name=str(value["bucket"]), store=store, signing_region=signing_region)
 
 
+def _parse_store_config(name: object, value: object) -> StoreConfig:
+    """Normalize one ``data.stores`` YAML entry into a :class:`StoreConfig`.
+
+    Every field is required: a backend whose endpoint or credential variables were
+    optional would fail at the first request instead of at config load.
+    """
+    required = ("endpoint", "endpoint_env", "key_id_env", "key_secret_env")
+    if not isinstance(value, Mapping) or any(field not in value for field in required):
+        raise ValueError(f"stores.{name} must be a mapping setting {', '.join(required)}: {value!r}")
+    return StoreConfig(**{field: str(value[field]) for field in required})
+
+
 def _parse_data_config(data: Mapping[str, object]) -> DataConfig:
     """Build a :class:`DataConfig` from a parsed ``data:`` config block.
 
@@ -259,8 +297,11 @@ def _parse_data_config(data: Mapping[str, object]) -> DataConfig:
     scheme = str(data.get("scheme") or DataConfig.scheme)
     raw_buckets = data.get("region_buckets") or {}
     region_buckets = {region: _parse_bucket_spec(value) for region, value in raw_buckets.items()}
+    raw_stores = data.get("stores") or {}
+    stores = {StoreType(str(name)): _parse_store_config(name, value) for name, value in raw_stores.items()}
     return DataConfig(
         region_buckets=region_buckets,
+        stores=stores,
         scheme=scheme,
         temp_path=str(temp.get("path") or DataConfig.temp_path),
         ttl_days=tuple(raw_ttl) if raw_ttl is not None else DataConfig.ttl_days,
@@ -269,9 +310,11 @@ def _parse_data_config(data: Mapping[str, object]) -> DataConfig:
 
 
 def reset_data_config_cache() -> None:
-    """Clear the cluster-config and S3-bucket-registry caches. For tests."""
+    """Clear the cluster-config and bucket-registry caches. For tests."""
     _load_cluster_config_cached.cache_clear()
+    data_buckets.cache_clear()
     s3_data_buckets.cache_clear()
+    store_configs.cache_clear()
 
 
 # ---------------------------------------------------------------------------
@@ -322,25 +365,65 @@ def marin_prefix() -> str:
 
 
 @functools.cache
+def data_buckets() -> Mapping[str, BucketSpec]:
+    """Every declared data bucket (name -> :class:`BucketSpec`) across all cluster configs.
+
+    Recognition must be cross-cluster — a launcher on a GCS cluster may target an
+    R2/CoreWeave output prefix (see :func:`marin_temp_bucket`'s ``source_prefix``),
+    and a browser shows every backend at once — so this aggregates across all
+    cluster configs rather than only the active one. The first config declaring a
+    bucket name wins; a name declared twice with conflicting backends is a config
+    error this does not police. Cached; :func:`reset_data_config_cache` clears it.
+    """
+    registry: dict[str, BucketSpec] = {}
+    for cluster in list_cluster_configs(MARIN_CLUSTER_CONFIG_DIRS):
+        for spec in load_cluster_config(cluster).region_buckets.values():
+            registry.setdefault(spec.name, spec)
+    return MappingProxyType(registry)
+
+
+@functools.cache
+def store_configs() -> Mapping[StoreType, StoreConfig]:
+    """Every declared :class:`StoreConfig` across all cluster configs.
+
+    Aggregated cross-cluster for the same reason as :func:`data_buckets`: reaching a
+    CoreWeave bucket from a GCS cluster needs the CoreWeave backend's settings whether
+    or not the active config declares them. The first config declaring a backend wins.
+    Cached; :func:`reset_data_config_cache` clears it.
+    """
+    registry: dict[StoreType, StoreConfig] = {}
+    for cluster in list_cluster_configs(MARIN_CLUSTER_CONFIG_DIRS):
+        for store, config in load_cluster_config(cluster).stores.items():
+            registry.setdefault(store, config)
+    return MappingProxyType(registry)
+
+
+def store_config(store: StoreType) -> StoreConfig:
+    """The :class:`StoreConfig` for *store*.
+
+    Raises:
+        ValueError: if no cluster config declares *store* — including for
+            ``StoreType.GCS``, which is reached through application default
+            credentials and has no S3 connection settings.
+    """
+    config = store_configs().get(store)
+    if config is None:
+        raise ValueError(f"no cluster config declares a 'stores' entry for {store}")
+    return config
+
+
+@functools.cache
 def s3_data_buckets() -> Mapping[str, BucketSpec]:
-    """R2/CoreWeave data buckets (name -> :class:`BucketSpec`) across all configs.
+    """The R2/CoreWeave subset of :func:`data_buckets`.
 
     These S3-compatible buckets carry ``tmp/ttl=Nd/`` lifecycle rules; used to
     route temp paths (:func:`marin_temp_bucket`) and to drive
     ``infra/configure_buckets.py``. The set is defined in ``config/*.yaml`` via
     each bucket's ``store`` type (``r2``/``coreweave``).
-
-    Recognition must be cross-cluster — a launcher on a GCS cluster may target an
-    R2/CoreWeave output prefix (see :func:`marin_temp_bucket`'s ``source_prefix``)
-    — so this aggregates across all cluster configs rather than only the active
-    one. Cached; :func:`reset_data_config_cache` clears it.
     """
-    registry: dict[str, BucketSpec] = {}
-    for cluster in list_cluster_configs(MARIN_CLUSTER_CONFIG_DIRS):
-        for spec in load_cluster_config(cluster).region_buckets.values():
-            if spec.store in (StoreType.R2, StoreType.COREWEAVE):
-                registry.setdefault(spec.name, spec)
-    return MappingProxyType(registry)
+    return MappingProxyType(
+        {name: spec for name, spec in data_buckets().items() if spec.store in (StoreType.R2, StoreType.COREWEAVE)}
+    )
 
 
 # ---------------------------------------------------------------------------

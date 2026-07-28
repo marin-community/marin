@@ -1,18 +1,31 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""fsspec/boto environment setup for S3-compatible object stores.
+"""fsspec/boto setup for S3-compatible object stores: credentials, endpoints, and
+request bounds.
 
 CoreWeave AI Object Storage (and R2) speak the S3 protocol but need three things plain AWS
 environment variables cannot fully express together: a custom endpoint, virtual-hosted
 addressing, and region-less signing. Their connections also need finite request bounds so a
-wedged object-store call can fail into the task retry path. This module owns that setup: it
-writes the standard ``AWS_*`` variables plus the ``FSSPEC_S3`` config block that
-:mod:`rigging.filesystem.factory` and every plain ``fsspec`` caller read, then flushes fsspec's
-caches so the settings take.
+wedged object-store call can fail into the task retry path.
 
-Processes inside a cluster usually arrive with ``FSSPEC_S3`` already exported by the runtime;
-every function here is a no-op in that case.
+Two ways to apply that setup, for two different callers:
+
+* :func:`configure_fsspec_s3` / :func:`configure_coreweave_s3` write the process-wide
+  ``AWS_*`` variables and the ``FSSPEC_S3`` config block that :mod:`rigging.filesystem.factory`
+  and every plain ``fsspec`` caller read. One endpoint per process — right for a task pinned to
+  one cluster. Processes inside a cluster usually arrive with ``FSSPEC_S3`` already exported by
+  the runtime, in which case these are no-ops.
+* :func:`s3_credentials` and :func:`s3_endpoint` resolve one backend's settings without touching
+  the environment, so a single process can hold connections to several backends at once. This is
+  what :mod:`rigging.filesystem.buckets` builds per-bucket filesystems from.
+
+Endpoints and credential variables are not hardcoded here: each backend declares them under
+``data.stores`` in its cluster config (``config/*.yaml``), read through
+:func:`rigging.filesystem.store_config`. For Marin that means ``CW_KEY_ID`` / ``CW_KEY_SECRET``
+for CoreWeave and ``R2_KEY_ID`` / ``R2_KEY_SECRET`` for R2, each falling back to the generic
+``AWS_ACCESS_KEY_ID`` / ``AWS_SECRET_ACCESS_KEY`` pair. A process talking to both backends at
+once must use the namespaced pairs, since the two have distinct keys.
 """
 
 from __future__ import annotations
@@ -25,9 +38,7 @@ from urllib.parse import urlparse
 import fsspec
 import s3fs
 
-# CoreWeave AI Object Storage, as seen from outside the cluster. Pods inside CoreWeave use the
-# LOTA endpoint from their cluster config instead and never need this default.
-CW_ENDPOINT_URL = "https://cwobject.com"
+from rigging.filesystem.cluster_config import StoreType, store_config
 
 # Endpoint domains that reject path-style requests outright.
 VIRTUAL_HOST_ONLY_S3_DOMAINS = ("cwobject.com", "cwlota.com")
@@ -105,7 +116,44 @@ def configure_coreweave_s3() -> None:
     buckets. No-op when the keys are absent or an ``FSSPEC_S3`` block is already exported (a CW
     pod's runtime config wins).
     """
-    key, secret = os.environ.get("CW_KEY_ID"), os.environ.get("CW_KEY_SECRET")
-    if not key or not secret:
+    credentials = s3_credentials(StoreType.COREWEAVE)
+    if credentials is None:
         return
-    configure_fsspec_s3(os.environ.get("CW_S3_ENDPOINT", CW_ENDPOINT_URL), key=key, secret=secret)
+    key, secret = credentials
+    configure_fsspec_s3(s3_endpoint(StoreType.COREWEAVE), key=key, secret=secret)
+
+
+def s3_credentials(store: StoreType) -> tuple[str, str] | None:
+    """The ``(key_id, secret)`` pair for *store*, or ``None`` when neither pair is complete.
+
+    Reads the variables the backend's :class:`~rigging.filesystem.StoreConfig` names, then
+    the generic ``AWS_ACCESS_KEY_ID`` / ``AWS_SECRET_ACCESS_KEY``. Callers that cannot
+    proceed without credentials raise their own error, so a browser can list the buckets it
+    *can* reach instead of failing on the first unconfigured backend.
+
+    Raises:
+        ValueError: if no cluster config declares *store* as an S3-compatible backend.
+    """
+    config = store_config(store)
+    key = os.environ.get(config.key_id_env) or os.environ.get("AWS_ACCESS_KEY_ID")
+    secret = os.environ.get(config.key_secret_env) or os.environ.get("AWS_SECRET_ACCESS_KEY")
+    if not key or not secret:
+        return None
+    return key, secret
+
+
+def s3_endpoint(store: StoreType) -> str:
+    """The endpoint URL for *store*: its config's override variable if set, else the configured
+    default.
+
+    Raises:
+        ValueError: if no cluster config declares *store* as an S3-compatible backend.
+    """
+    config = store_config(store)
+    return os.environ.get(config.endpoint_env) or config.endpoint
+
+
+def credentials_hint(store: StoreType) -> str:
+    """A one-line "set these variables" hint naming *store*'s credential environment pair."""
+    config = store_config(store)
+    return f"set {config.key_id_env} and {config.key_secret_env} (or the generic AWS_* pair)"
