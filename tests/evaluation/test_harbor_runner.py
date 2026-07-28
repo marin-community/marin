@@ -18,7 +18,6 @@ from marin.evaluation.harbor.driver_config import (
 )
 from marin.evaluation.harbor.runner import (
     HarborExecutor,
-    HarborRunResult,
     HarborTrial,
     _restore_completed_trials,
     _upload_trials,
@@ -31,7 +30,7 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem import StoragePath
-from rigging.testing import memory_filesystem_for_scheme
+from rigging.testing import memory_filesystem_and_resolver
 
 
 def _running_model() -> RunningModel:
@@ -45,7 +44,7 @@ def _running_model() -> RunningModel:
 
 @pytest.mark.parametrize("protocol", ["gs", "s3"])
 def test_materialize_harbor_dataset_stages_only_selected_remote_tasks(protocol, tmp_path, monkeypatch):
-    remote_fs, resolve = memory_filesystem_for_scheme(protocol, filesystem_factory.url_to_fs)
+    remote_fs, resolve = memory_filesystem_and_resolver(protocol, filesystem_factory.url_to_fs)
     monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", resolve)
     remote = StoragePath(f"{protocol}://regional-cache/benchmark")
     for task_name in ("task-b", "task-a"):
@@ -84,7 +83,7 @@ def test_write_samples_uses_a_path_safe_name_for_hf_dataset(tmp_path):
 
 @pytest.mark.parametrize("protocol", ["gs", "s3"])
 def test_harbor_trials_round_trip_through_remote_storage(protocol, tmp_path, monkeypatch):
-    _remote_fs, resolve = memory_filesystem_for_scheme(protocol, filesystem_factory.url_to_fs)
+    _remote_fs, resolve = memory_filesystem_and_resolver(protocol, filesystem_factory.url_to_fs)
     monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", resolve)
 
     trial_dir = tmp_path / "source" / "trial-one"
@@ -277,31 +276,41 @@ def test_harbor_executor_accepts_zero_reward_without_exception_info(tmp_path, mo
 
 
 def test_harbor_executor_reports_the_resolved_dataset_artifact(tmp_path, monkeypatch):
-    mirror_uri = "s3://regional/artifacts/terminal-bench/2026.07.27"
-    captured: dict[str, str | None] = {}
+    mirror_uri = "s3://regional/artifacts/terminal-bench/immutable-commit/2026.07.27"
+    remote_fs, resolve_path = memory_filesystem_and_resolver("s3", filesystem_factory.url_to_fs)
+    monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", resolve_path)
+    task_root = "regional/artifacts/terminal-bench/immutable-commit/2026.07.27/task-one"
+    remote_fs.makedirs(f"{task_root}/environment", exist_ok=True)
+    remote_fs.makedirs(f"{task_root}/tests", exist_ok=True)
+    remote_fs.pipe(f"{task_root}/task.toml", b"version = '1.0'")
+    remote_fs.pipe(f"{task_root}/environment/Dockerfile", b"FROM scratch")
+    remote_fs.pipe(f"{task_root}/tests/test.sh", b"true")
 
-    def fake_run_harbor(_model, config, _output_dir, *, driver_env, dataset_source):
-        assert driver_env == {}
-        captured["dataset_source"] = dataset_source
-        return HarborRunResult(
-            dataset=config.dataset,
-            total_trials=1,
-            solved_trials=1,
-            failed_trials=0,
-            mean_reward=1.0,
-            accuracy=1.0,
-            samples_path=None,
+    def run_driver(command, *, check, env) -> None:
+        assert check and isinstance(env, dict)
+        driver_config = HarborDriverConfig.from_dict(json.loads(Path(command[-1]).read_text()))
+        dataset_path = Path(driver_config.dataset_path)
+        assert (dataset_path / "task-one" / "environment" / "Dockerfile").read_text() == "FROM scratch"
+        trial_dir = Path(driver_config.jobs_dir) / driver_config.job_name / "trial-one"
+        trial_dir.mkdir(parents=True, exist_ok=True)
+        (trial_dir / "result.json").write_text(
+            json.dumps(
+                {
+                    "task_name": "trial-one",
+                    "verifier_result": {"rewards": {"reward": 1.0}},
+                }
+            )
         )
 
     dataset_artifact = ArtifactStep(
-        name="evaluation/harbor-datasets/terminal-bench",
+        name="evaluation/harbor-datasets/terminal-bench/immutable-commit",
         version="2026.07.27",
         artifact_type=Artifact,
         run=lambda _config: None,
         build_config=lambda _ctx: {},
     )
     monkeypatch.setattr("marin.evaluation.harbor.runner.resolve", lambda _artifact: Artifact(path=mirror_uri))
-    monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor", fake_run_harbor)
+    monkeypatch.setattr("marin.evaluation.harbor.runner.subprocess.run", run_driver)
     config = HarborRunConfig(
         dataset="DCAgent2/terminal_bench_2",
         revision="immutable-commit",
@@ -327,7 +336,6 @@ def test_harbor_executor_reports_the_resolved_dataset_artifact(tmp_path, monkeyp
 
     outcome = executor(_running_model(), str(tmp_path), {})
 
-    assert captured["dataset_source"] == mirror_uri
     assert outcome.eval_ref is not None
     assert outcome.eval_ref.harbor is not None
     assert outcome.eval_ref.harbor.mirror_uri == mirror_uri

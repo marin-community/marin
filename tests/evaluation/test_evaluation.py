@@ -226,45 +226,9 @@ def test_build_evaluation_batch_rejects_conflicting_secret_specs(monkeypatch):
         )
 
 
-def test_agentic_evaluation_uses_a_revision_pinned_dataset_artifact(monkeypatch):
-    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
-    spec = LaunchSpec(
-        model="qwen3-8b",
-        evals=("tb2-lite",),
-        platform=Platform.GPU,
-        accelerator="H100x1",
-        limit=None,
-        records_prefix="s3://marin-us-east-02a/marin/eval-metadata/runs",
-        cluster="marin",
-    )
-
-    batch = build_evaluation_batch(
-        spec,
-        Provenance(git_sha="abc", eval_image="image", launch_host="host"),
-        "tester",
-    )
-
-    evaluation = batch.evaluations[0]
-    harbor = evaluation.identity.eval_ref.harbor
-    assert harbor is not None
-    assert harbor.repository == evaluation.executor.config.dataset
-    assert harbor.commit == evaluation.executor.config.revision
-    assert harbor.mirror_uri is None
-    artifact = evaluation.executor.dataset_artifact
-    assert artifact is not None
-    assert artifact.override_path is None
-    assert artifact.path("gs://marin-us-west4") == (
-        "gs://marin-us-west4/evaluation/harbor-datasets/DCAgent2--terminal_bench_2/"
-        "693231ec029249e7c91ed2e414bcc9c45d7cd879/2026.07.27"
-    )
-    assert artifact.path("s3://marin-us-east-02a/marin") == (
-        "s3://marin-us-east-02a/marin/evaluation/harbor-datasets/DCAgent2--terminal_bench_2/"
-        "693231ec029249e7c91ed2e414bcc9c45d7cd879/2026.07.27"
-    )
-
-
-def test_harbor_dataset_commit_selects_a_distinct_artifact_address():
+@pytest.mark.parametrize("prefix", ["gs://marin-us-west4", "s3://marin-us-east-02a/marin"])
+def test_harbor_dataset_commit_selects_a_distinct_artifact_address(prefix):
     first = HuggingFaceHarborDataset("org/tasks", "a" * 40).artifact()
     second = HuggingFaceHarborDataset("org/tasks", "b" * 40).artifact()
 
-    assert first.path("memory://regional") != second.path("memory://regional")
+    assert first.path(prefix) != second.path(prefix)

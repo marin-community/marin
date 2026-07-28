@@ -5,7 +5,7 @@
 import pytest
 import rigging.filesystem.factory as filesystem_factory
 from rigging.filesystem import StoragePath, TreeTransferMode, copy_tree
-from rigging.testing import memory_filesystem_for_scheme
+from rigging.testing import memory_filesystem_and_resolver
 
 
 def test_copy_tree_preserves_nested_files_and_empty_directories(tmp_path):
@@ -30,7 +30,7 @@ def test_copy_tree_preserves_nested_files_and_empty_directories(tmp_path):
 
 @pytest.mark.parametrize("protocol", ["gs", "s3"])
 def test_copy_tree_uses_the_filesystem_from_each_uri(protocol, tmp_path, monkeypatch):
-    _remote_fs, resolve = memory_filesystem_for_scheme(protocol, filesystem_factory.url_to_fs)
+    _remote_fs, resolve = memory_filesystem_and_resolver(protocol, filesystem_factory.url_to_fs)
     monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", resolve)
 
     source = tmp_path / "source"
@@ -81,14 +81,16 @@ def test_copy_tree_resume_and_overwrite_are_explicit(tmp_path):
 
 
 def test_copy_tree_rejects_a_destination_inside_the_source(tmp_path):
-    source = StoragePath(str(tmp_path / "source"))
+    source_path = tmp_path / "source"
+    source_path.mkdir()
+    source = StoragePath(str(source_path))
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="inside source"):
         copy_tree(source, source / "nested", mode=TreeTransferMode.RESUME)
 
 
 def test_copy_tree_normalizes_doubled_walk_separators_without_escaping_destination(monkeypatch):
-    remote_fs, resolve = memory_filesystem_for_scheme("s3", filesystem_factory.url_to_fs)
+    remote_fs, resolve = memory_filesystem_and_resolver("s3", filesystem_factory.url_to_fs)
     monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", resolve)
     remote_fs.makedirs("regional-cache/source/nested")
     walk_entries = list(remote_fs.walk("regional-cache/source"))

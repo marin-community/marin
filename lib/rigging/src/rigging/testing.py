@@ -20,7 +20,7 @@ from rigging.server_auth import VerifiedIdentity
 type FileSystemResolver = Callable[..., tuple[AbstractFileSystem, str]]
 
 
-def memory_filesystem_for_scheme(
+def memory_filesystem_and_resolver(
     protocol: str,
     fallback: FileSystemResolver,
 ) -> tuple[MemoryFileSystem, FileSystemResolver]:

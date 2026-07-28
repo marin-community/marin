@@ -40,14 +40,12 @@ def _path_join(root: str, relative: str) -> str:
     return posixpath.join(root, relative)
 
 
-def _relative_path(path: str, root: str) -> str:
-    normalized_path = posixpath.normpath(f"/{path.lstrip('/')}")
-    normalized_root = posixpath.normpath(f"/{root.lstrip('/')}")
-    if normalized_path == normalized_root:
-        return ""
-    if posixpath.commonpath((normalized_path, normalized_root)) != normalized_root:
-        raise ValueError(f"filesystem walk returned {path!r} outside source root {root!r}")
-    return posixpath.relpath(normalized_path, normalized_root)
+def _safe_walk_relative_path(path: str, root: str) -> str:
+    rooted_path = f"/{path.lstrip('/')}" if root.startswith("/") else path.lstrip("/")
+    relative = StoragePath(rooted_path).relative_to(StoragePath(root))
+    if any(part in {".", ".."} for part in relative.split("/")):
+        raise ValueError(f"filesystem walk returned unsafe path {path!r} under source root {root!r}")
+    return relative
 
 
 def _reject_recursive_copy(source: StoragePath, destination: StoragePath) -> None:
@@ -101,12 +99,13 @@ def copy_tree(
     copied_bytes = 0
 
     for directory, _subdirectories, files in source_fs.walk(source_root):
-        relative_directory = _relative_path(directory, source_root)
+        relative_directory = _safe_walk_relative_path(directory, source_root)
         destination_directory = _path_join(destination_root, relative_directory)
         destination_fs.makedirs(destination_directory, exist_ok=True)
         for filename in files:
             source_file = posixpath.join(directory, filename)
-            destination_file = posixpath.join(destination_directory, filename)
+            relative_file = _safe_walk_relative_path(source_file, source_root)
+            destination_file = _path_join(destination_root, relative_file)
             source_size = source_fs.size(source_file)
             if (
                 mode is TreeTransferMode.RESUME
