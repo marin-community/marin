@@ -28,11 +28,29 @@ one GB200 rack (64 GPUs), all on the 2.5 PFLOP/s GB200 bf16-dense denominator.
 
 | MFU | configuration | routed-assignment drops | evidence quality |
 |--:|---|--:|---|
-| **25.39%** | d5120 8-of-256, custom adjoint + leg-batched expert GEMMs, **QB off** | ~85% early | bench only — not shippable |
+| **25.39%** | d5120 8-of-256, custom adjoint + leg-batched expert GEMMs, **QB off** | ~85% early | bench only, **and the mechanism is disputed** — see below |
 | **24.84% / 24.59%** | d6144 4-of-128, QB on cf1.0, custom adjoint + host offload | **8.9–13%** | 120-step, above the 6% bar |
 | **24.15%** | d5120 4-of-256, receiver-ECHO + padded stack-sharded Muon | **2.77%** | 20-step screen only |
-| **22.30%** | d5120 8-of-256, receiver-ECHO (v143) | **1.71%** | 120-step, tail-30 |
+| **22.30%** | d5120 8-of-256, receiver-ECHO (v143) | **1.71%** | 120-step, tail-30 (tok/s not recorded) |
 | **20.71%** | d5120 8-of-256, QB + same-step spill m=3 at cf1.0625 | **1.44%** | 350-step, true tail-100 |
+
+Three things must be read alongside that table.
+
+**All of these are reported MFU, which is inflated ×1.08** at seq 4096 with sliding
+window 512, because `lm_flops_per_token` counts full O(seq²) attention on all 48
+layers when 40 are windowed. A reported 24.153% is ≈ **22.4% true**. The factor is
+uniform, so A/B deltas hold and absolute levels do not.
+
+**The rows come from two different arms.** The receiver-ECHO line runs **top-4** of
+256 at routed i2048; the spill/adjoint line runs **top-8** of 256 at i1280. Their
+drop metrics are also different quantities (post-ECHO aggregate assignment drop
+against sender-local bucket drop), and top-k moves the statistical floor — 0.88% at
+top-8, 1.24% at top-4.
+
+**The 25.39% row should not be planned against.** Besides the QB-off caveat, the
+leg-batching that produces it is contradicted: an independent reconstruction with QB
+on and matched drops measured **−3.66pp** (22.66% → 19.00%, non-overlapping bands,
+bit-exact against the loop), and full batching at G=4 never produced a step.
 
 **The headline 25.39% is a bench artifact.** Those runs route with quantile
 balancing off — `qb_routing` defaults to `False` in `launch_cw_scale.py` and no
@@ -97,9 +115,12 @@ excluding vendored code, tests and research scaffolding.
 | 9 | **Custom scatter-add adjoint** for both gathers (B4) | **+3.43pp / +16.6%** (20.61% → 24.04%), matched 120-step A/B, 544 backward scatter ops → 0 | +234 (117 of them tests) | 8 |
 | 10 | **Padded, stack-sharded non-expert Muon** (B7) | **+1.78pp** (22.37% → 24.15%), matched 20-step A/B, and drops improve 2.92% → 2.77% | **+54 (36 tests)** | 6 |
 
-Items 8 and 9 together are **+6.4pp for ~250 lines in one file**. They are the
+Items 8 and 9 together are **+6.4pp for ~134 lines of implementation** — both land
+in `_moe/ep_ragged_all_to_all.py`, with a further ~117 lines of tests. They are the
 single best trade in the document and everything else should be sequenced around
-landing them.
+landing them. Note the two deltas were measured against different baselines
+(17.55% and 20.61%), so +6.4pp is the sum of two matched A/Bs on the same lineage,
+not a single measurement of the pair.
 
 ### Tier 2 — Fidelity. Without these the Tier-1 numbers are not shippable.
 
@@ -131,16 +152,23 @@ optimizations are specific to the MoE)?"*
 
 | # | Change | Benefit on FSDP | Status under EP |
 |--:|---|---|---|
-| 17 | Two shared experts, split (D2) | +0.29pp | unmeasured |
-| 18 | Muon shape-grouping for non-expert NS (D3) | +0.09pp | unmeasured; overlaps item 10's code |
-| 19 | Host offload of optimizer state (D4) | +0.4pp (bundled) | **already in use** on the d6144 EP64 legs |
+| 17 | Two shared experts, split (D2) | +0.29pp | **memory-blocked**, not merely untested — the one attempt (two 8192-wide) failed before step 0 at 89.49 GiB; splitting the shared width does not reduce the FSDP gather peak |
+| 18 | Muon shape-grouping for non-expert NS (D3) | +0.09pp | **unmeasured**; overlaps item 10's code |
+| 19 | Host offload of optimizer state (D4) | +0.4pp (bundled) | **split by model size** — in use on the d6144 EP64 legs, but *rejected* at d5120 (needed a 135 GiB pinned-host arena, landed at 19.694%) |
 | 20 | Chunked expert FSDP all-gather (D5) | +0.9pp 1 rack, +0.5pt 2 racks | **N/A** — overlaps an all-gather EP does not perform |
 | 21 | Slim Sonic residuals + `all_but_moe` remat (D7) | +0.51pp at d2560 | unmeasured; **conflicts with item 20's code** (§4) |
+| 22 | GatedNorm + attention gate + XSA | part of the 25.2% stack | **absent from the EP runner entirely** — and an explicit caveat on the EP-vs-FSDP claim |
 
-Items 17 and 18 are small and worth folding in. Item 20 does not apply to EP.
-**PGLE (item 2) is the one that matters and it already appears in Tier 0** — but
-note it was worth +1.1pp on FSDP and only +0.47pp (with the overlap limit) under
-EP, and the ECHO screen ran with PGLE off entirely.
+Item 18 and item 22 are the genuinely open ones; together with the rest they are
+roughly **+1.5pp of measured FSDP gain that EP64 has not collected**, and they are
+architecture-level rather than MoE-specific.
+
+**PGLE (item 2) is the one that would matter most, and it does not transfer
+cleanly.** It was +1.1pp on FSDP but only +0.47pp under EP combined with the
+overlap limit; manual PGLE was *rejected* on the ECHO line (it matched 217 of 535
+instructions and came in 0.235pp below the AutoPGLE leg); and the headline
+padded-Muon A/B ran with PGLE **off**, because the ~16-minute compile made
+preemption certain.
 
 ### Tier 5 — Conditional. Precision. Do not sequence this into the consolidation.
 
@@ -261,11 +289,21 @@ The ordered commit plan is in [`sequence.md`](sequence.md).
 
 | Lead | Why |
 |---|---|
-| **Three of twelve all-to-all ops run on the compute stream at 0.0% overlap** | 1,266 ms per 3 steps = **422 ms of every 15.3 s step**, **31% of all exposed collective time**, consistent across all four GPUs. Larger than latent MoE's entire best case, needs no architecture change, and is **unexplained**. The best unclaimed lead in the record. |
-| **Multi-rack EP** | EP64 has **no multi-rack measurement at all** behind its ~65–75-day 20T projections. |
-| **FSDP-line levers under EP** | Tier 4. Unmeasured, and Larry asked for it directly. |
-| **Sender-local router balancing** | The only unprobed direction aimed at the *hypothesised cause* of the ~6% QB-on drop residual (sender-local bucket hotspots). Global-bias gain tuning is falsified. |
-| **Leg-batched expert GEMMs composed with QB-on** | Both measured alone (B5 posts 25.39%), never stacked. |
+| **Multi-rack EP** | EP64 has **no multi-rack measurement at all** behind its ~65–75-day 20T projections, and the measured 1→2-rack drop on the FSDP line was ~19%, not the 7% the projections assume. The largest unquantified schedule risk. |
+| **A clean 120-step run of the best ECHO recipe** | The 24.15% headline is a 20-step screen; the settled 120-step figure (22.30%) predates both padded Muon and `overlap_limit=4`. Nobody has run the current best recipe long enough to qualify it. |
+| **FSDP-line levers under EP** | Tier 4, and mostly *not* ported. Muon shape-grouping and the GatedNorm/attn-gate/XSA trio are absent from the EP runner entirely — roughly **+1.5pp of measured FSDP gain EP64 has not collected**. |
+| **Resolving the leg-batching contradiction** | +1.35pp in one implementation, **−3.66pp** in another with matched drops. Not a pending win; an open disagreement. |
+| **The capacity-factor cliff** | cf 1.00 → 1.05 costs 1.179pp for +0.05, while 1.05 → 1.15 costs 0.254pp for +0.10. The tile-alignment hypothesis was falsified. **Cause unknown**, and it prices every fidelity decision. |
+
+**Closed since the earlier framing, so that effort is not re-spent:** the "three of
+twelve all-to-all ops on the compute stream" lead is explained —
+`GpuConvertAsyncCollectivesToSync` tags async-starts whose done is separated only by
+no-ops, and a schedule census shows MoE SYNC all-to-all going 10 → 0 as
+`overlap_limit` goes 1 → 4. Likewise the router-controller family is exhausted:
+over-relaxed, damped, DeepSeek-integral, **and sender-local** bias are all measured
+at or below `g=1`, and the sender-local null overturned the hotspot hypothesis. The
+revised reading is that the ~6% residual is batch-stochastic within-batch
+burstiness — routing is 7–9× more clustered than independent-uniform.
 
 ---
 

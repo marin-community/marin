@@ -29,10 +29,15 @@ main@a51da194d
 ```
 
 `rav/ep-2` is a **rewritten replay**, so its SHAs do not match `b200-minimal`'s even
-where content is identical. Two of the EP-line branches carrying the largest wins
-(`agent/ep25-d1-adjoint`, `agent/ep25-d5-d6144`) are **local only and have never
-been pushed** — that is a durability risk independent of this plan, and pushing them
-should happen before anything else.
+where content is identical.
+
+**Push the local-only branches before doing anything else.** All four
+`agent/ep25-*` branches exist only in this clone and are 92–147 commits ahead of
+`origin/main`. If this clone is lost, so are the custom adjoint (+3.43pp), same-step
+spill — the only ≤3% mechanism with a true tail-100 qualification — and the
+drop-metric fix that makes every fidelity claim in this project checkable. Their
+logbooks live at `AGENT_LOG.md` in the repo root rather than under `.agents/`, so a
+naive `.agents/`-scoped copy would miss them.
 
 ## Prerequisite decisions
 
@@ -58,8 +63,26 @@ changes what the series contains.
 | # | Commit | From | Size |
 |--:|---|---|--:|
 | A1 | Log the MoE capacity-overflow metric through the tracker | `2d4a87395`, `4fbc89152` | ~+30 |
-| A2 | Expose `SCALE_CAPACITY_FACTOR` on the EP launcher | `54bbe3d23` (extract) | ~+8 |
-| A3 | Document the manual-PGLE + collective-overlap-limit flag set | new | docs only |
+| A2 | Expose `SCALE_CAPACITY_FACTOR` on the EP launcher and reconcile the default | `54bbe3d23` (extract) | ~+8 |
+| A3 | Document the required XLA flag set | new | docs only |
+
+A2 carries two hazards. `SCALE_CAPACITY_FACTOR` was implemented **twice
+independently under the same environment-variable name** (`595958b83` and
+`3e149490f`) — reconcile, do not double-apply. And the default is inconsistent
+between layers: 1.0 in `experiments/grug/moe/model.py:51` against **1.25** in
+`lib/levanter/src/levanter/grug/_moe/common.py:19`, with receiver envelope factors
+at 1.125. Pick one canonical value; a silent 1.25 would misprice every drop
+measurement taken against it.
+
+A3 must document that
+`--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false` is
+**mandatory on JAX 0.11** — without it a 64-process run initialises, compiles, and
+then segfaults in NCCL `ncclDevCommCreate` before step 0. It should also record
+that `overlap_limit` is **not monotone** (2 measured worse than 1; use 4), that
+`xla_gpu_enable_custom_fusions` and `xla_gpu_enable_address_computation_fusion`
+kill the process before distributed init on this build, and that the JAX 0.11
+baseline sits **1.217pp below** the 0.10.1-era baseline, so pre-0.11 numbers cannot
+be borrowed as controls.
 
 A1 first, always. It is one line of the fix plus the metric, and it is what makes
 every subsequent measurement interpretable — including settling the unmeasured drop
@@ -114,11 +137,22 @@ C2 closes [#7512](https://github.com/marin-community/marin/issues/7512), C3 clos
 | D2 | Build the dispatch send buffer by index scatter and activation gather | `45ce02d20` | **+17 / −2** | **+3.01pp**, matched 120-step A/B |
 | D3 | Structured `custom_vjp` for the dispatch and combine gathers | `c9e30f848` | +117 code, +117 tests | **+3.43pp**, matched 120-step A/B |
 | D4 | Shard the non-expert Newton–Schulz batch by zero-padding to the expert-mesh width | `497423bc6` | **+18 / −1**, +36 tests | **+1.78pp**, matched 20-step A/B |
+| D5 | Route expert weight-gradient GEMMs through the QuACK grouped kernel at 256×256 tiles | `SCALE_QUACK_GROUPED_WGRAD` on the ECHO branch | flag + kernel path | **+0.861pp** (ECHO leg v134) |
 
 D1 must be extracted, not cherry-picked: `fe21ea495` also carries C2, C3, a cutlass
 revert and dispatch env forwarding.
 
-D4 touches the same file as C2 — land C2 first and reconcile.
+D4 touches the same file as C2 — land C2 first and reconcile. **Take `497423bc6`,
+not the flag:** `_newtonschulz_padded_stack_sharded` and `SCALE_MUON_PAD_NONEXPERT`
+already exist on the shared base and on all seven `agent/ep25-*` branches, but
+without `497423bc6`'s `target_sharding=` argument the padded result reshards to
+fully replicated `P(None, None, None)` before slicing — which is precisely the cost
+the mechanism removes. The +1.78pp belongs to the fixed variant only.
+
+D5 sits at +0.861pp for a flag, but note the tension with the `sonic_cute` varlen-k
+wgrad shim measured at +0.06–0.08pp at the d2560 row-13 scale. Different kernels,
+different shapes, no matched control between them — verify at the EP64 shape before
+counting it.
 
 Default `SCALE_A2A_CHUNKS` to 1; chunks=2 measured worse.
 

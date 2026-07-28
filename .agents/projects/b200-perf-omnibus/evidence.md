@@ -15,6 +15,25 @@ that they distort:
   reads *higher* MFU for less real work, so MFU is only comparable within a
   matched drop regime
   ([#7279 comment 5080435482](https://github.com/marin-community/marin/issues/7279#issuecomment-5080435482)).
+  **Calibrated from two 350-step legs: ≈ +0.30pp MFU per +0.10 of drop fraction.**
+  The canonical illustration is the QB gain g=2 probe, which posted 23.386% while
+  dropping 69%.
+- **Reported MFU is inflated ×1.08 at seq 4096 with sliding window 512**, because
+  `lm_flops_per_token` counts full O(seq²) attention on all 48 layers when 40 are
+  windowed. Every EP64 figure in this document inherits that factor — a *reported*
+  24.153% is ≈ **22.4% true**. It is applied uniformly, so A/B deltas hold and
+  absolute levels do not. Do not carry these numbers into an external comparison
+  without the correction.
+- **Two disjoint experiment lines share this issue number but not an arm.** The
+  ECHO line (`research/rav/7201-ep64-*`) runs d5120 / L48 / **top-4** of 256 /
+  routed i2048 / one shared i5120 / SW512. The ep25 line (`agent/ep25-*`) runs
+  d5120 / L48 / **top-8** of 256 / **i1280**. Both are EP64 on 16 × 4 GB200 off the
+  same base `rav/ep-2` @ `fe21ea495`. **Their drop metrics are not the same
+  quantity**: ECHO reports post-ECHO exact aggregate assignment drop, ep25 reports
+  the sender-local fixed-bucket drop fraction. Top-k also moves the statistical
+  floor — 0.88% at top-8 with mean-2048 buckets, 1.24–1.25% at top-4 with
+  mean-1024. **Do not compare a number from one line against a number from the
+  other without saying so.**
 - **Schedule-position drop comparisons.** The LR schedule is defined over
   `num_train_steps`, so step 119 of a 120-step run is annealed while step 119 of
   a 350-step run is at ~68% of peak LR. Drop fractions are comparable only at the
@@ -133,7 +152,27 @@ originating result
 dropped tail is a much smaller fraction; an earlier "65–68%" reading was this
 confusion
 ([#7279 comment 5080435482](https://github.com/marin-community/marin/issues/7279#issuecomment-5080435482) §2).
-Ship C5 (the exact drop counter) alongside this, not instead of it.
+Ship C4 (the exact drop counter) alongside this, not instead of it.
+
+**Two merge hazards.**
+
+1. **`SCALE_CAPACITY_FACTOR` was implemented twice, independently, under the same
+   environment-variable name** — `595958b83` and `3e149490f`. Reconcile before
+   landing either; do not double-apply.
+2. **The default is inconsistent between layers.** `_DEFAULT_EP_CAPACITY_FACTOR`
+   is 1.0 in `experiments/grug/moe/model.py:51` while the library default in
+   `lib/levanter/src/levanter/grug/_moe/common.py:19` is **1.25**. Receiver
+   envelope factors default to 1.125
+   (`_moe/ep_ragged_all_to_all.py:45`). Resolve to one canonical value — this is
+   exactly the "centralize defaults in one location" rule in `AGENTS.md`, and a
+   silent 1.25 would misprice every drop measurement taken against it.
+
+**The capacity-factor price is a cliff, not a slope.** cf 1.00 → 1.05 costs
+**1.179pp** for +0.05; cf 1.05 → 1.15 costs **0.254pp** for +0.10. The natural
+tile-alignment hypothesis (capacity 2048 = 16 × 128, 2151 not) was **falsified** —
+`SCALE_CAPACITY_TILE=128` at cf1.05, byte-identical to cf1.0625, moved MFU
++0.038pp, which is noise (commits `58ee2cdd0`, `b08d5c5ca`; the knob is left
+default-0 and marked unvalidated). **Cause unknown.**
 
 **State.** Branch-only.
 
@@ -358,14 +397,31 @@ the drop metric needs a PR from this branch."*
 the per-local-expert `all_to_all` loop is four collectives per layer per direction
 and is a candidate for the same treatment.
 
-**Measured.** 25.39% p50 on a separate 120-step run, against B4's 24.04% — so
-**≈ +1.35pp**, but this is **not a matched A/B**; it is two runs on the same
-lineage. The adjoint and leg-batching are described as independent and stacking
-([#7279 comment 5080435482](https://github.com/marin-community/marin/issues/7279#issuecomment-5080435482) §1, §5).
-Job `rav/ep64-batched-expert-stability-120-v1-20260724-2353`.
+**This is the workstream's clearest contradiction: the same idea measured +1.35pp
+and −3.66pp.** Do not treat it as a pending win.
 
-**Not composed with QB.** Leg-batching and QB are each measured alone and never
-stacked — explicitly listed as an open follow-up (§5 of the same comment).
+- **Positive, QB-off:** 25.39% p50 on a 120-step run
+  (`rav/ep64-batched-expert-stability-120-v1-20260724-2353`), against B4's 24.04%.
+  **Not a matched A/B** — two runs on the same lineage — and taken at ~85% early
+  drops, so per the drop-inflation calibration above a large part of that gap is
+  the drop regime, not the kernel
+  ([#7279 comment 5080435482](https://github.com/marin-community/marin/issues/7279#issuecomment-5080435482) §1, §5).
+- **Negative, QB-on and matched drops:** an independent reconstruction
+  (`SCALE_A2A_BATCH_EXPERTS` / `SCALE_A2A_BATCH_GROUP=2`, commits `65e3ca50d`,
+  `0789a8482`) measured control 22.66% p50 at 0.088 drops against batched G=2
+  **19.00% p50 at 0.092 drops — −3.66pp, bands non-overlapping.** The batched path
+  is bit-exact against the loop at `expert_axis=2` (max abs diff 0.0), so this is a
+  performance regression, not a correctness bug. **Full batching at G=4 never
+  produced a step** — two gang aborts. The implementing agent dropped confidence
+  from 6/10 to 2/10.
+
+The ECHO line has its own `SCALE_A2A_BATCH_EXPERT_GEMMS=1` (hard-requiring
+`SCALE_A2A_PACK_DISPATCH=1` and `SCALE_A2A_PACK_COMBINE=1`) with parity tests, but
+**no rack MFU number exists for it and it is not set in the production runner.**
+
+**Status: unresolved, two incompatible implementations, neither pushed.** The
+25.39% and the −3.66pp are different code. Nobody has run leg-batching with QB on
+in the implementation that produced the 25.39%.
 
 **State.** Branch-only.
 
@@ -393,7 +449,53 @@ reproduced at the d6144 hero shape: span 42,198 ms per 3 steps, compute busy
 38,700 ms (91.7%), compute idle 3,498 ms, exposed collective 4,126 ms
 ([#7279 comment 5095217108](https://github.com/marin-community/marin/issues/7279#issuecomment-5095217108)).
 
-**State.** Config-only. Adoption recommended in the source comment.
+**Root cause of the inline collectives, and a free diagnostic.**
+`GpuCompiler::RunPostSchedulingPipelines` runs `GpuConvertAsyncCollectivesToSync`,
+which tags any async-start whose matching done is separated only by no-ops as
+`is_sync=true`. A schedule-dump harness
+(`experiments/grug/moe/schedule_report.py`) reproduces the census in about three
+minutes on one node:
+
+| overlap limit | MoE SYNC a2a | reshard SYNC |
+|--:|--:|--:|
+| 1 (default) | **10** | 6 |
+| 2 | 3 | 14 |
+| **4** | **0** | 14 |
+| 8 | 1 | 14 |
+
+**This is the same phenomenon as the "three of twelve all-to-all ops on the compute
+stream" lead** recorded independently at the d6144 shape (F1) — and
+`overlap_limit=4` is the fix for that class. Note `overlap_limit=2` measured
+*worse* than 1 on the ECHO line (21.910%), so the setting is not monotone; use 4.
+
+**Measured separately on the two lines.** ep25 (120-step, drop-corrected):
+PGLE + LHS +0.34pp raw / +0.32pp corrected, `overlap_limit=4` a further +0.12pp,
+**+0.47pp combined**; two control legs 33 minutes apart agreed to 0.000pp, so
+allocation noise is ≤0.05pp. ECHO: LHS **+0.599pp**, then `overlap_limit=4`
+**+0.427pp** — but **manual PGLE was rejected there** (it matched only 217 of 535
+instructions and came in 0.235pp *below* the AutoPGLE leg), and AutoPGLE's CUPTI
+profiles came back empty on some attempts. **PGLE is not a reliable win on the EP
+stack the way it is on the FSDP stack.**
+
+**A hard requirement on JAX 0.11.**
+`--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false` is
+mandatory: without it a 64-process run initialises, compiles the train step, and
+then **segfaults in NCCL `ncclDevCommCreate` through XLA's
+`NcclDeviceCommunicator` before step 0** (fix commit `cbd960569`). Separately,
+**the JAX 0.11 baseline is 1.217pp below the 0.10.1-era baseline** (21.815%
+against 23.032%) — do not borrow pre-0.11 baselines into a post-0.11 comparison.
+
+**Two flags that break this build:** `xla_gpu_enable_custom_fusions` and
+`xla_gpu_enable_address_computation_fusion` kill the process before distributed
+init. `xla_gpu_experimental_collective_start_as_early_as_possible` does not exist
+on jaxlib 0.10.1.
+
+**The ceiling this implies.** ECHO's own arithmetic: perfectly hiding *all*
+remaining exposed communication moves 23.286% to only **~25.7%**, and 30% would
+need ~7.41 s/step against the 9.545 s measured.
+
+**State.** Config-only, usable today on any branch — the highest-leverage
+already-available item. Not in `main`'s default submit path.
 
 ### B7 — Padded, stack-sharded non-expert Muon (`SCALE_MUON_PAD_NONEXPERT=1`)
 
@@ -430,6 +532,19 @@ on `research/rav/7201-ep64-muon-pad`; snapshot `1a88e1f3b`.
 **Complexity: 2 files, +54/−1** (`optim/grugmuon.py` +19,
 `tests/test_grugmuon.py` +36). **The best measured-gain-per-line item after B3.**
 
+**Provenance nuance that matters for the cherry-pick.** The flag and the function
+`_newtonschulz_padded_stack_sharded` **already exist** on the shared base
+`rav/ep-2` and on all seven `agent/ep25-*` branches. What `497423bc6` adds is the
+`target_sharding=` argument — without it the padded result reshards to fully
+replicated `P(None, None, None)` before slicing, which is exactly the cost the
+mechanism is meant to remove. **The +1.78pp belongs to the fixed variant only**,
+and the ep25 fan-out never measured the flag at all. Take `497423bc6`, not the
+flag.
+
+**Guards in the shipped code.** The new test asserts no replicated-padded reshard
+appears in the jaxpr, and the code raises `ValueError` if the parameter layer axis
+is not replicated.
+
 **Dependency.** Needs an expert axis at least as wide as the number of non-expert
 parameter stacks, and MuonH. It also overlaps A2's code — land A2 first and
 resolve them together.
@@ -459,6 +574,40 @@ both the FSDP and EP lines.
 **Note.** `sonic_cute` is the *local/FSDP* expert backend. At EP64 it supplies the
 grouped GEMM that runs on the received buckets; `SCALE_MOE_EXPERT_CHUNKS` (D5) is
 the FSDP-only overlap layered on top and does not apply under EP.
+
+### B9 — QuACK grouped weight-gradient GEMM at 256×256 tiles
+
+**Mechanism.** `SCALE_QUACK_GROUPED_WGRAD=1` — route the expert weight-gradient
+GEMMs through the QuACK grouped kernel with the autotuned 256×256 tile.
+
+**Measured. +0.861pp** on the ECHO line (leg v134).
+
+**State.** Branch-only, `research/rav/7201-ep64-drop3`.
+
+**Note the tension with E22**, which records the `sonic_cute` varlen-k wgrad shim
+at only +0.06–0.08pp at the d2560 row-13 scale. These are different kernels at
+different shapes; the EP64 figure is the relevant one for this operating point,
+but neither has a matched control against the other.
+
+### B10 — Sonic slot gather (the ECHO line's equivalent of B3 + B4)
+
+**Mechanism.** `SCALE_A2A_SONIC_DISPATCH`, `SCALE_A2A_CLONE_SONIC_SLOT_GATHER`,
+`SCALE_A2A_SONIC_COMBINE`, `SCALE_A2A_CLONE_SONIC_CUTE` — replaces the same generic
+gather adjoints that B4 targets, by a different route.
+
+**Measured. 18.82% → 20.67% (+1.85pp)** with no routing or clipping change;
+30-step qualification 20.51% p50 at 1.28% mean / 1.94% max drop.
+
+**State.** Branch-only, ECHO line.
+
+**Do not stack this with B4 without measuring.** They address the same cost by
+different mechanisms and the record contains no arm with both.
+
+**Rejected sibling.** The Sonic *clone-weight reduction* adjoint
+(`SCALE_A2A_CLONE_SONIC_WEIGHT_GRAD`) microbenchmarked **3.24× (W2) / 4.63× (W13)**
+at zero error, and the matched 20-step rack A/B **regressed −0.167pp** (23.032%
+against 22.865%). Microbenchmark-overstates-e2e, again — see the pattern note in
+[`README.md`](README.md).
 
 ---
 
@@ -542,17 +691,30 @@ the costs are upper bounds
 0.885 @5, 0.271 @60, 0.175 @119, 0.089 @250, 0.064 @349, tail-100 mean **7.3%**.
 cf1.0 with QB alone levels toward ~6–7% and does **not** cross a 3% bar.
 
-**Refuted sub-direction.** Doubling the controller gain (`SCALE_QB_GAIN=2`, commit
-`58c9a19eb`) is categorically negative: drops sit at 0.67–0.72 for all 350 steps
-(an overshoot limit cycle) and loss ends +0.091 worse. Global-bias gain tuning is
-falsified.
+**The whole controller family is now closed. Four variants, all measured, all at
+or below `g=1`:**
 
-**Leading hypothesis for the ~6% residual.** Sender-local bucket hotspots: at 64
-senders × 256 experts the per-bucket capacity is enforced sender-locally, and a
-global router bias cannot see or fix one sender overloading one expert. Also
-explains why cf1.15 roughly halves drops.
+| variant | knob / commit | result |
+|---|---|---|
+| Over-relaxed, g=2 | `SCALE_QB_GAIN`, `58c9a19eb` | p50 23.386% but drops pinned **0.675–0.793 for all 350 steps** (overshoot limit cycle), loss **+0.091 worse**. Categorical negative. |
+| Damped, g<1 | same knob | **Cannot beat g=1 by construction** — `pending ← g·beta + (1−g)·pending` has the same fixed point; gain sets only the approach rate. The one g=0.5 rack leg ran 350/350 clean but its metrics were permanently lost to a concurrent GB200 log-shipping outage. |
+| DeepSeek-style integral | `SCALE_QB_INTEGRAL`, `3f10dcc6a` | **Clean negative at both gammas**: γ=0.001 plateaus at ~0.60, γ=0.01 at ~0.46, against g=1's 0.073; losses 3.452 / 3.472 against 3.335. The first-5-step collapse (peak 0.89–0.91 in *every* draw) outruns any fixed rate — DeepSeek's rule works over 100k+ steps by *preventing* drift and cannot *reverse* an established collapse in 350. |
+| **Sender-local bias** | `SCALE_QB_SENDER`, `50748b995` / `5bf934717` | **Null.** A closed-loop CPU simulation was decisive (global QB stuck at 0.773 over 12 iterations; sender QB 0.758 → 0.016), but the live 350-step leg gave tail-100 **0.0856 against global's 0.0732 — statistically identical**, at parity MFU and loss. |
 
-**State.** Branch-only.
+**The sender-local result overturns the leading hypothesis.** Sender-local bucket
+hotspots were the standing explanation for the ~6% residual, and the mechanism
+aimed directly at that cause did not move it. The revised conclusion on the record
+is that **the residual is batch-stochastic within-batch burstiness, invisible to
+any one-step-delayed bias controller** of either kind.
+
+**Statistical floor for context.** At bucket mean 2048, uniform routing floors at
+0.91% simulated / 0.88% analytic. Observed 6–8% implies σ 329–411 against a Poisson
+45.3 — **routing is 7–9× more clustered than independent-uniform.** The gap is not
+controller error.
+
+**State.** `SCALE_MOE_QB` is on the shared `rav/ep-2` base and used in production
+submits on both lines. The gain, integral and sender probes are branch-only on
+`agent/ep25-d4-pipelined` / `agent/ep25-d3-qbprobes` and were never pushed.
 
 ### C2 — Same-step spill (`m = 3`)
 
@@ -637,7 +799,35 @@ files / +4,749. Related transport A/B:
 [#7670](https://github.com/marin-community/marin/issues/7670) (closed).
 
 **Blockers.** No long-run drop qualification; the available profile predates the
-B7 Muon-pad change.
+B7 Muon-pad change. **A clean 120-step run of the best recipe — let alone with
+padded Muon and `overlap_limit=4` — remains unrun. That is the single
+highest-value missing measurement in the workstream.**
+
+**Two sub-knobs are the real drop dials, and both are cliff-shaped.**
+
+- `SCALE_A2A_CLONE_MAX_RECEIVER_EXPERTS` (production **10**): 16 → 10 takes
+  20.99% → 21.23% (+0.24pp) at 1.88% mean / 2.60% max drop. **8 segments → 3.50%
+  max drop, rejected.** **6 segments → `CUDA_ERROR_ILLEGAL_ADDRESS` on first
+  execution** — the envelope math has no proven lower bound.
+- `SCALE_A2A_CLONE_TOKEN_PADDING_EXPERTS` (production **2**): padding 1 gains only
+  +0.049pp and takes drops to **3.49%**, rejected under the 3% gate.
+
+**Why ECHO exists at all.** The alternative — buying the same drop reduction with
+capacity factor — measured at roughly **3.4pp of MFU** (350-step sweep, cf ≈ 1.15).
+ECHO buys it without that tax. That is the case for the complexity.
+
+**Transport A/B at top-8, PGLE off, pipeline chunks = 1**
+([#7670](https://github.com/marin-community/marin/issues/7670)):
+
+| transport | MFU | tok/s | exposed comm | drop |
+|---|--:|--:|--:|--:|
+| NCCL static a2a | **19.98%** | 279K | 31.4% | 1.32% |
+| ECHO-ragged (`SCALE_A2A_ECHO_RAGGED_TRANSPORT=1`) | 18.99% | 279K | 30.9% | **0.02%** |
+| HybridEP (DeepEP FFI, `SCALE_A2A_HYBRID_EP=1`) | ~4–6% est | — | ~85% | — |
+
+**ECHO-ragged buys near-zero drop for about 1pp of MFU** — a genuine option if the
+drop bar tightens. HybridEP trained correctly at top-8 for the first time but is
+not competitive and died at step ~2 on all seven attempts.
 
 ### C4 — Exact drop metric plus tracker logging
 

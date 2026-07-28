@@ -77,17 +77,21 @@ across architectures. State the number, then measure.
 **Falsifies.** Whether the Phase D gains compose. Several of them are described as
 independent and stacking, and none of that has been tested.
 
-### D-3. Compose leg-batched expert GEMMs with QB-on
+### D-3. Resolve the leg-batching contradiction
 
-**Why.** B5 posts 25.39% and is the only remaining item that could bridge to 25% at
-honest fidelity, but it was measured QB-off on a separate run — not a matched A/B
-— and it has never been stacked with QB. This is listed as an open follow-up in the
-25% ledger itself.
+**Why.** The same idea has measured **+1.35pp and −3.66pp**. The 25.39% figure is
+QB-off on an unmatched run; an independent reconstruction with QB on and matched
+drops measured control 22.66% against batched G=2 **19.00%**, bands
+non-overlapping, with the batched path bit-exact against the loop. G=4 never
+produced a step. **This is not a pending win — it is an open disagreement**, and
+until it resolves, 25.39% should not appear in any planning document as an
+achievable number.
 
-**What.** Matched A/B, leg-batching on/off, both arms QB-on cf1.0625 with spill,
-350 steps, ≥2 draws.
+**What.** Run rav's implementation (the one behind 25.39%) with QB on, matched
+against its own control, ≥2 draws. If it also regresses, close the direction. If it
+does not, diff the two implementations.
 
-**Cost.** Two runs.
+**Cost.** Two runs, plus a code diff.
 
 ### D-4. Multi-rack EP64
 
@@ -107,42 +111,83 @@ weak-scaling, not an assumed penalty.
 
 ## P1 — high value, independent of the merge plan.
 
-### D-5. Why do three of twelve all-to-all ops run on the compute stream?
+### D-5. Confirm `overlap_limit=4` clears the inline all-to-all ops at the hero shape
 
-**Why.** 422 ms of every 15.3 s step, **31% of all exposed collective time**,
-consistent across all four GPUs, unexplained, and larger than latent MoE's entire
-best case. It needs no architecture change.
+**Largely already answered — verify, do not re-investigate.** The mechanism is
+identified: `GpuCompiler::RunPostSchedulingPipelines` runs
+`GpuConvertAsyncCollectivesToSync`, which tags an async-start whose done is
+separated only by no-ops as `is_sync=true`. A schedule-dump census shows MoE SYNC
+all-to-all going 10 (at the default limit of 1) → 3 → **0 at limit 4** → 1 at 8.
+That is the same class as the "three of twelve at 0.0% overlap, 422 ms of every
+15.3 s step" observation at the d6144 shape.
 
-**What.** Dump the HLO for the operating-point graph and name the three ops and
-their scheduling annotations, rather than inferring from profile names — that
-inference was wrong three times in the FP8 investigation, one rack leg each.
+**What.** Run `experiments/grug/moe/schedule_report.py` at the d6144 operating
+point (about three minutes on one node, no rack time) and confirm the count goes to
+zero at limit 4. Note the setting is **not monotone** — limit 2 measured worse than
+1 on the ECHO line.
 
-**Cost.** One profile plus HLO analysis. No new runs.
+**Cost.** One single-node dump. This replaces what was previously scoped as an
+open profiling investigation.
 
 ### D-6. Do the FSDP-line levers transfer to EP?
 
-**Why.** Larry asked directly. PGLE was +1.1pp on FSDP and only +0.47pp (with the
-overlap limit) under EP; the ECHO screen ran with PGLE off entirely. Two shared
-experts (+0.29pp) and Muon shape-grouping (+0.09pp) are unmeasured under EP.
+**Why.** Larry asked directly, and the answer so far is mostly no — of the FSDP
+levers, EP64 has ported one cleanly (padded Muon, on an unmerged branch), has PGLE
+in a degraded form, and has never tested the rest.
 
-**What.** Three single-variable A/Bs on the D-2 stack: PGLE on/off; 1 vs 2 shared
-experts; Muon shape-grouping on/off. Each ≥2 draws given the sub-2pp margins.
+**What is already known, so do not re-derive it:**
 
-### D-7. Sender-local router balancing
+- **PGLE is not a reliable EP win.** +1.1pp on FSDP; on EP it is +0.47pp combined
+  with the overlap limit, manual PGLE was *rejected* on the ECHO line (matched 217
+  of 535 instructions, 0.235pp below the AutoPGLE leg), and the headline padded-Muon
+  A/B ran with PGLE **off** because the ~16-minute compile made preemption certain.
+- **Two shared experts is memory-blocked at EP64**, not merely untested: the one
+  attempt (two 8192-wide) failed before step 0 at 89.49 GiB. Splitting the shared
+  width does not reduce the FSDP gather peak.
+- **Host offload is split by model size** — used on the d6144 EP64 leg, but
+  *rejected* at d5120, where it needed a 135 GiB pinned-host arena and landed at
+  19.694%.
 
-**Why.** QB-on at cf1.0 plateaus at ~6–7% drops and does not improve past ~150
-steps. Gain tuning is falsified (g=2 diverges into an overshoot limit cycle with
-loss +0.091 worse), so the residual is not global-bias under-correction. The
-leading hypothesis is sender-local bucket hotspots: capacity is enforced
-sender-locally at 64 senders × 256 experts and a global router bias cannot see one
-sender overloading one expert. cf1.15 roughly halving drops is consistent with it.
+**What is genuinely open.** Muon shape-grouping (+0.09pp on FSDP) and the
+GatedNorm / attention-gate / XSA trio, none of which appear in
+`run_best_bf16_ep64.sh` at all. The unported items sum to roughly **+1.5pp of
+measured FSDP gain that EP64 has not collected**, and they are architecture-level
+rather than MoE-specific — which is exactly the point being made.
 
-**What.** Cheapest first: DeepSeek-style integral accumulation, and a damped gain
-(g < 1) — both are configuration-scale. Only then the kernel-level per-sender bias,
-which is the one aimed at the hypothesised cause.
+**What.** Single-variable A/Bs on the D-2 stack for shape-grouping and for the
+GatedNorm/attn-gate/XSA trio. Each ≥2 draws given the sub-2pp margins.
 
-**Payoff.** Closing the ~3.2pp gap between the throughput frontier and strict
-fidelity is worth more than any remaining scheduling work.
+### D-7. Attack the drop residual somewhere other than the router controller
+
+**The controller family is closed. Do not re-run it.** All four variants are
+measured: g=2 pins drops at 0.675–0.793 for 350 steps with loss +0.091 worse;
+g<1 cannot beat g=1 by construction (same fixed point, different approach rate);
+DeepSeek-style integral plateaus at ~0.60 (γ=0.001) and ~0.46 (γ=0.01) against
+g=1's 0.073; and **sender-local bias — the mechanism aimed at the standing
+hypothesis — came in at tail-100 0.0856 against global's 0.0732, statistically
+identical.**
+
+That last result matters most: it **overturned** the sender-local-hotspot
+explanation for the ~6% residual. The revised reading on the record is that the
+residual is **batch-stochastic within-batch burstiness**, invisible to any
+one-step-delayed bias controller of either kind. Supporting arithmetic: at bucket
+mean 2048 uniform routing floors at 0.88–0.91%, and observed 6–8% implies σ
+329–411 against a Poisson 45.3 — **routing is 7–9× more clustered than
+independent-uniform.**
+
+**What is left.** Same-step spill (already landed as E2 in the plan) works
+*because* it acts within the step rather than across steps, which is consistent
+with the burstiness reading. Directions that remain open, none probed:
+
+- Raising spill's ceiling — it is capped at `top_k − 1`, so 8-of-256 keeps
+  improving through m=7 while 4-of-256 is flat from m=3. **This is an
+  architecture-selection input, not a kernel knob.**
+- Anything that reduces within-batch burstiness at the source (token ordering,
+  batch composition), which nobody has looked at.
+- Accepting ~1.4% with spill + cf1.0625 and spending the effort elsewhere.
+
+**Payoff.** The ~3.2pp gap between the throughput frontier and strict fidelity is
+still the largest single prize, but the cheap routes to it are now exhausted.
 
 ### D-8. Does the EP-aware NS fix also unblock EP32?
 
