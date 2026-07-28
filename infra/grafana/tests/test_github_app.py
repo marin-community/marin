@@ -13,7 +13,7 @@ import time
 import httpx
 import jwt
 import pytest
-from config import GithubAppCredentials, _github_app_credentials
+from config import GITHUB_USER_AGENT, GithubAppCredentials, _github_app_credentials
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.serialization import (
     Encoding,
@@ -55,10 +55,13 @@ def test_mints_a_scoped_readonly_token_and_sends_it(monkeypatch):
                 options={"verify_exp": False},  # exp is stamped from the mocked clock
             )
             seen["issuer"] = claims["iss"]
+            # GitHub 403s any request without a User-Agent, so the auth flow must stamp one.
+            seen["lookup_user_agent"] = request.headers.get("user-agent")
             return httpx.Response(200, json={"id": 42})
         if request.url.path.endswith("/access_tokens"):
             assert request.url.path == "/app/installations/42/access_tokens"
             seen["token_body"] = json.loads(request.content)
+            seen["mint_user_agent"] = request.headers.get("user-agent")
             return httpx.Response(201, json={"token": "ghs_minted", "expires_at": "2026-07-23T20:00:00Z"})
         seen["sent_auth"] = request.headers.get("authorization")
         return httpx.Response(200, json={})
@@ -67,9 +70,11 @@ def test_mints_a_scoped_readonly_token_and_sends_it(monkeypatch):
 
     assert seen["issuer"] == "cid"
     assert seen["token_body"]["repositories"] == ["marin", "vllm"]
-    assert seen["token_body"]["permissions"] == {
-        k: "read" for k in ("metadata", "contents", "checks", "statuses", "actions")
-    }
+    # Only permissions the installation actually holds may be requested: naming an
+    # ungranted one 422s the whole mint and blanks every GitHub panel.
+    assert seen["token_body"]["permissions"] == {k: "read" for k in ("metadata", "contents", "actions")}
+    assert seen["lookup_user_agent"] == GITHUB_USER_AGENT
+    assert seen["mint_user_agent"] == GITHUB_USER_AGENT
     assert seen["sent_auth"] == "Bearer ghs_minted"
 
 
