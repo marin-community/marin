@@ -243,7 +243,10 @@ def test_real_gpu_fa4_thd_attention_matches_reference_value_and_gradients(slidin
     pytest.importorskip("cutlass")
     pytest.importorskip("cutlass.cute")
     pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
-    if sliding_window is not None and fa4_thd._gpu_compute_arch() // 10 == fa4_thd._HOPPER_ARCH_FAMILY:
+    arch_family = fa4_thd._gpu_compute_arch() // 10
+    if arch_family not in fa4_thd._SUPPORTED_ARCH_FAMILIES:
+        pytest.skip("gpu_fa4_thd_attention supports only SM90/SM100/SM110.")
+    if sliding_window is not None and arch_family == fa4_thd._HOPPER_ARCH_FAMILY:
         pytest.skip("FA4 THD sliding-window attention is not wired for SM90.")
 
     q_key, k_key, v_key, cotangent_key = jax.random.split(jax.random.PRNGKey(0), 4)
