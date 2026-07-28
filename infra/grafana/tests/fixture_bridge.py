@@ -223,6 +223,21 @@ def _rows(path: str, query: str) -> list[dict] | dict:
         ]
     if path == "/iris/marin/health":
         return [{"reachable": True, "up": 1, "latency_ms": 18}]
+    if path == "/iris/marin/peers":
+        return [
+            {
+                "peer": peer,
+                "controller_address": f"https://iris-{peer}.oa.dev",
+                "state": state,
+                "last_contact_age_seconds": age,
+                "value": int(state == "unreachable"),
+            }
+            for peer, state, age in (
+                ("cw-us-east-02a", "reachable", 12),
+                ("cw-us-east-08a", "unreachable", 10_800),
+                ("cw-rno2a", "reachable", 8),
+            )
+        ]
     if path == "/iris/marin/workers":
         return [
             {

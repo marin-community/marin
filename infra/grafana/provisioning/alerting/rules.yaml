@@ -364,6 +364,46 @@ groups:
     folder: Alerts
     interval: 1m
     rules:
+      - uid: iris-federation-peer-unreachable
+        title: IrisFederationPeerUnreachable
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+          cluster: marin
+        annotations:
+          summary: "marin federation cannot reach {{ $labels.peer }} through {{ $labels.controller_address }}"
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: iris-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: iris-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /peers
+              url_options: { method: GET }
+              columns:
+                - { selector: peer, text: peer, type: string }
+                - { selector: controller_address, text: controller_address, type: string }
+                - { selector: state, text: state, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
       - uid: iris-controller-down-marin
         title: IrisControllerDown
         condition: C

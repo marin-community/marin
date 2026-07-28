@@ -135,7 +135,7 @@ is the exception — it returns `reachable=false` so the panel can render the ou
 ```
 src/server.py          the bridge routes (Starlette): finelog SQL, Iris, GitHub, k8s
 src/finelog_source.py  finelog query over its internal IP (LogClient)
-src/iris_source.py     live controller RPCs: jobs, workers, health, ad-hoc query
+src/iris_source.py     live controller RPCs: jobs, workers, health, federation peers, ad-hoc query
 src/github_source.py   ferry runs and CI build rollup, precomputed
 src/wandb_source.py    public W&B report runset and token-axis samples
 src/k8s_source.py      CW k8s API reads + the per-cluster fan-out and alert rows
@@ -198,7 +198,7 @@ File provisioning owns that tree: UI edits to provisioned alerting resources are
 rejected by Grafana and would be overwritten by the files anyway. Change the YAML and
 redeploy.
 
-Rules page only on actionable incidents: an unreachable cluster, a
+Rules page only on actionable incidents: an unreachable cluster or federation peer, a
 crash-looping watched component, an admission webhook with no ready endpoints, a
 degraded component, a dead Iris controller, an unhealthy finelog hub or mirror, a GPU
 pod that stays node-bound and
@@ -219,6 +219,12 @@ Slack, and a Loom triage session); `severity=warning` routes to `ops-slack`
 `noDataState: Alerting` and `execErrState: Alerting`, and the alert endpoints return
 explicit zeros when healthy, so silence anywhere in the pipeline pages rather than
 resolving.
+
+Federation peer reachability comes from `ListPeers` on the Marin controller.
+The controller heartbeat traverses production DNS, TLS, Traefik, the source-IP
+allowlist, and the Iris RPC path from Marin's static egress address. Grafana
+reads the resulting state over its existing VPC path to Marin, so Grafana's
+Cloud Run egress does not need admission to the CoreWeave federation ingress.
 
 Alert state — pending (`for`) timers, notification dedup, silences — lives in the
 shared `marin-metadata` Postgres with the rest of Grafana's state (see Deploy), so it

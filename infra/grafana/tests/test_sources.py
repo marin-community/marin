@@ -169,6 +169,37 @@ def test_health_reports_unreachable_without_raising():
     assert _iris(handler).health() == [{"reachable": False, "up": 0, "latency_ms": None, "error": "down"}]
 
 
+def test_peers_reports_controller_heartbeat_reachability():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/ListPeers")
+        return httpx.Response(
+            200,
+            json={
+                "peers": [
+                    {
+                        "peerId": "cw-a",
+                        "controllerAddress": "https://iris-cw-a.example",
+                        "reachable": True,
+                        "lastContactMs": "1",
+                    },
+                    {
+                        "peerId": "cw-b",
+                        "controllerAddress": "https://iris-cw-b.example",
+                        "reachable": False,
+                        "lastContactMs": "1",
+                    },
+                ]
+            },
+        )
+
+    rows = _iris(handler).peers()
+    assert [(row["peer"], row["state"], row["value"]) for row in rows] == [
+        ("cw-a", "reachable", 0),
+        ("cw-b", "unreachable", 1),
+    ]
+    assert all(row["last_contact_age_seconds"] > 0 for row in rows)
+
+
 def test_controller_non_200_raises_upstream_error():
     with pytest.raises(UpstreamError) as excinfo:
         _iris(lambda request: httpx.Response(503)).jobs()
@@ -321,6 +352,11 @@ class _FakeIris:
             raise self._raises
         return self._rows
 
+    def peers(self):
+        if self._raises:
+            raise self._raises
+        return self._rows
+
 
 def _app(iris_source, github_source: GithubSource | None = None) -> TestClient:
     github = github_source or GithubSource(auth=None, timeout=5.0)
@@ -332,6 +368,11 @@ def _app(iris_source, github_source: GithubSource | None = None) -> TestClient:
 def test_iris_endpoint_returns_rows():
     client = _app(_FakeIris(TARGET, rows=[{"bucket": "inflight", "state": "running", "count": 3}]))
     assert client.get("/iris/marin/jobs").json() == [{"bucket": "inflight", "state": "running", "count": 3}]
+
+
+def test_iris_peers_endpoint_returns_heartbeat_rows():
+    rows = [{"peer": "cw-a", "state": "unreachable", "value": 1}]
+    assert _app(_FakeIris(TARGET, rows=rows)).get("/iris/marin/peers").json() == rows
 
 
 def test_dead_controller_fails_loud_not_empty():
