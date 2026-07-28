@@ -1,31 +1,24 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Kubernetes deployment backend for finelog.
+"""Kubernetes operational helpers for Pulumi-managed Finelog servers.
 
-Templates `lib/finelog/deploy/k8s/*.yaml` against a `FinelogConfig` and
-shells out to `kubectl`. No kubernetes-client Python dep — the manifest
-list is small enough that subprocess is the right tool.
+Pulumi owns the workload resources. This module keeps the out-of-band environment
+Secret and read-only status/log commands, using ``kubectl`` so Finelog does not need
+the Kubernetes Python client.
 """
 
 import base64
 import json
 import os
-import re
 import subprocess
-from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlparse
 
 import click
-import yaml
 from rigging.secrets import resolve_secret_spec
 
-from finelog.deploy.bootstrap import render_template
-from finelog.deploy.config import FinelogConfig, auth_policy_json
-from finelog.deploy.image import resolve_image_digest
-
-_TEMPLATE_VAR_RE = re.compile(r"\{\{ (\w+) \}\}")
+from finelog.deploy.config import FinelogConfig
 
 # Suffix for the finelog-owned Secret that carries the pod's secret environment:
 # S3 credentials and the forwarding signing key. Distinct from iris's own task-env
@@ -35,81 +28,6 @@ _ENV_SECRET_SUFFIX = "-env"
 # S3-compatible endpoints that accept only virtual-hosted-style requests
 # (bucket as a host subdomain).
 _VIRTUAL_HOST_ONLY_S3_DOMAINS = ("cwobject.com", "cwlota.com")
-
-# Manifests live at `lib/finelog/deploy/k8s/*.yaml` in the repo. We resolve
-# this once at import time; the directory is part of the source tree, not
-# the wheel, but k8s deployments are operator-driven and run from a checkout.
-_K8S_MANIFEST_DIR = Path(__file__).resolve().parents[3] / "deploy" / "k8s"
-
-_MANIFESTS = ("01-pvc.yaml.tmpl", "02-deployment.yaml.tmpl", "03-service.yaml.tmpl")
-_PROBE_FIELDS = ("startupProbe", "livenessProbe", "readinessProbe")
-_PROBE_HANDLERS = frozenset(("exec", "grpc", "httpGet", "tcpSocket"))
-
-
-def _env_entry(name: str, value: str) -> str:
-    """Render one single-quoted container-env entry at the template's indentation."""
-    if "'" in value:
-        raise ValueError(f"{name} must not contain a single quote")
-    return f"            - name: {name}\n              value: '{value}'"
-
-
-def _inline_env_block(cfg: FinelogConfig) -> str:
-    """Render the non-secret container-env entries the templates splice in, or "".
-
-    The query cache limit, `FINELOG_AUTH_POLICY` (network prefixes and Ed25519
-    public keys), and `FINELOG_FORWARDING` (a URL and cluster name) are
-    inline-safe. The forwarding private key travels in the `<name>-env` Secret.
-    """
-    entries = []
-    if cfg.query_metadata_cache_mb is not None:
-        entries.append(_env_entry("FINELOG_QUERY_METADATA_CACHE_MB", str(cfg.query_metadata_cache_mb)))
-    if cfg.auth:
-        entries.append(_env_entry("FINELOG_AUTH_POLICY", auth_policy_json(cfg.auth)))
-    if cfg.forwarding:
-        entries.append(_env_entry("FINELOG_FORWARDING", cfg.forwarding.to_env_json()))
-    return "\n".join(entries)
-
-
-def _priority_class_block(cfg: FinelogConfig) -> str:
-    """Render the pod-spec `priorityClassName` line, or "" when none is configured."""
-    assert cfg.deployment.k8s is not None
-    name = cfg.deployment.k8s.priority_class_name
-    if not name:
-        return ""
-    return f"      priorityClassName: {name}"
-
-
-def _render_manifest(template_path: Path, cfg: FinelogConfig) -> str:
-    """Render a single k8s manifest template against `cfg`.
-
-    `render_template` raises on unused variables, and the three manifests use
-    disjoint subsets of the available config fields (PVC needs storage_*;
-    Deployment needs image/port/remote_log_dir; Service needs port). We pass
-    only the variables the template actually references.
-    """
-    assert cfg.deployment.k8s is not None
-    k8s = cfg.deployment.k8s
-    storage_class_block = (
-        f"storageClassName: {k8s.storage_class}" if k8s.storage_class else "# storageClassName: <cluster default>"
-    )
-    template = template_path.read_text()
-    all_vars: dict[str, str | int] = {
-        "name": cfg.name,
-        "namespace": k8s.namespace,
-        "image": cfg.image,
-        "port": cfg.port,
-        "remote_log_dir": cfg.remote_log_dir,
-        "storage_class_block": storage_class_block,
-        "storage_gb": k8s.storage_gb,
-        "cpu_request": k8s.cpu_request,
-        "cpu_limit": k8s.cpu_limit,
-        "memory_request": k8s.memory_request,
-        "memory_limit": k8s.memory_limit,
-        "inline_env_block": _inline_env_block(cfg),
-        "priority_class_block": _priority_class_block(cfg),
-    }
-    referenced = set(_TEMPLATE_VAR_RE.findall(template))
-    return render_template(template, **{k: v for k, v in all_vars.items() if k in referenced})
 
 
 def _env_secret_name(cfg: FinelogConfig) -> str:
@@ -237,171 +155,13 @@ def _kubectl_apply(cfg: FinelogConfig, manifest: str) -> None:
     _kubectl(cfg, "apply", "-f", "-", stdin=manifest)
 
 
-def _probe_transition_patch(live: dict, desired: dict) -> list[dict]:
-    """Return patches that replace probes whose handler type changed."""
-    live_containers = live["spec"]["template"]["spec"]["containers"]
-    desired_containers = desired["spec"]["template"]["spec"]["containers"]
-    desired_by_name = {container["name"]: container for container in desired_containers}
-    patch = []
-    for index, live_container in enumerate(live_containers):
-        desired_container = desired_by_name.get(live_container["name"])
-        if desired_container is None:
-            continue
-        for probe_field in _PROBE_FIELDS:
-            live_probe = live_container.get(probe_field)
-            desired_probe = desired_container.get(probe_field)
-            if live_probe is None or desired_probe is None:
-                continue
-            live_handlers = _PROBE_HANDLERS.intersection(live_probe)
-            desired_handlers = _PROBE_HANDLERS.intersection(desired_probe)
-            if live_handlers == desired_handlers:
-                continue
-            patch.append(
-                {
-                    "op": "replace",
-                    "path": f"/spec/template/spec/containers/{index}/{probe_field}",
-                    "value": desired_probe,
-                }
-            )
-    return patch
-
-
-def _reconcile_probe_handlers(cfg: FinelogConfig, manifest: str) -> None:
-    desired = yaml.safe_load(manifest)
-    if desired.get("kind") != "Deployment":
-        return
-    assert cfg.deployment.k8s is not None
-    result = _kubectl(
-        cfg,
-        "get",
-        f"deployment/{cfg.name}",
-        "-n",
-        cfg.deployment.k8s.namespace,
-        "--ignore-not-found",
-        "-o",
-        "json",
-        capture_output=True,
-    )
-    if not result.stdout.strip():
-        return
-    patch = _probe_transition_patch(json.loads(result.stdout), desired)
-    if not patch:
-        return
-    click.echo(f"Reconciling {len(patch)} probe handler transition(s)...")
-    _kubectl(
-        cfg,
-        "patch",
-        f"deployment/{cfg.name}",
-        "-n",
-        cfg.deployment.k8s.namespace,
-        "--type=json",
-        f"-p={json.dumps(patch, separators=(',', ':'))}",
-    )
-
-
-def _ensure_priority_class(cfg: FinelogConfig) -> None:
-    """Create the configured PriorityClass (idempotently) before the Deployment.
-
-    A pod referencing a missing PriorityClass is rejected at admission, and on a
-    fresh cluster finelog is brought up before Iris creates the iris-* bands. So
-    finelog provisions its own scheduling dependency rather than depending on
-    ordering. `kubectl apply` is a no-op when the class already exists with the
-    same immutable value/preemptionPolicy (e.g. Iris created it first), and fails
-    loudly on a real mismatch. PreemptLowerPriority matches the iris-system band:
-    the control plane may evict a lower-priority pod to stay scheduled.
-    """
-    assert cfg.deployment.k8s is not None
-    k8s = cfg.deployment.k8s
-    if k8s.priority_class_name is None:
-        return
-    manifest = {
-        "apiVersion": "scheduling.k8s.io/v1",
-        "kind": "PriorityClass",
-        "metadata": {"name": k8s.priority_class_name},
-        "value": k8s.priority_class_value,
-        "preemptionPolicy": "PreemptLowerPriority",
-        "globalDefault": False,
-    }
-    click.echo(f"Ensuring PriorityClass {k8s.priority_class_name} (value {k8s.priority_class_value})...")
-    _kubectl_apply(cfg, json.dumps(manifest))
-
-
-def k8s_up(cfg: FinelogConfig) -> None:
-    """Render manifests and apply them; wait for the deployment to roll out.
-
-    ``cfg.image`` is pinned to its content digest before rendering, so the
-    Deployment references an immutable image and a redeploy lands exactly what
-    the tag points to now (with ``imagePullPolicy: IfNotPresent``, cache-safe).
-    """
-    assert cfg.deployment.k8s is not None
-    cfg = replace(cfg, image=resolve_image_digest(cfg.image))
-    k8s = cfg.deployment.k8s
-    _ensure_priority_class(cfg)
-    secret_manifest = _build_env_secret_manifest(cfg)
-    if secret_manifest is not None:
-        click.echo(f"Applying Secret {_env_secret_name(cfg)}...")
-        _kubectl_apply(cfg, secret_manifest)
-    for manifest_name in _MANIFESTS:
-        rendered = _render_manifest(_K8S_MANIFEST_DIR / manifest_name, cfg)
-        click.echo(f"Applying {manifest_name}...")
-        _reconcile_probe_handlers(cfg, rendered)
-        _kubectl_apply(cfg, rendered)
-    click.echo(f"Waiting for deployment/{cfg.name} to become Ready...")
-    _kubectl(cfg, "rollout", "status", f"deployment/{cfg.name}", "-n", k8s.namespace)
-    click.echo("finelog is healthy.")
-
-
-def k8s_down(cfg: FinelogConfig, *, yes: bool) -> None:
-    """Delete deployment, service, and the env Secret. Delete the PVC only when `yes=True`.
-
-    The Secret goes with them: it holds the archive credentials and the forwarding
-    signing key, and a torn-down deployment has no use for either. `deploy up` mints it
-    again from the operator's environment and the config's secret references.
-    """
-    assert cfg.deployment.k8s is not None
-    k8s = cfg.deployment.k8s
-    _kubectl(
-        cfg,
-        "delete",
-        f"deployment/{cfg.name}",
-        f"service/{cfg.name}",
-        f"secret/{_env_secret_name(cfg)}",
-        "-n",
-        k8s.namespace,
-        "--ignore-not-found",
-    )
-    if yes:
-        _kubectl(
-            cfg,
-            "delete",
-            f"pvc/{cfg.name}-cache",
-            "-n",
-            k8s.namespace,
-            "--ignore-not-found",
-        )
-        click.echo(f"Deleted {cfg.name} (deployment, service, secret, pvc).")
-    else:
-        click.echo(
-            f"Deleted {cfg.name} (deployment, service, secret). "
-            f"PVC {cfg.name}-cache retained — pass -y to delete it as well."
-        )
-
-
-def k8s_restart(cfg: FinelogConfig) -> None:
-    """Roll the deployment by re-setting its image, then wait for rollout."""
-    assert cfg.deployment.k8s is not None
-    k8s = cfg.deployment.k8s
-    _kubectl(
-        cfg,
-        "set",
-        "image",
-        f"deployment/{cfg.name}",
-        f"finelog={resolve_image_digest(cfg.image)}",
-        "-n",
-        k8s.namespace,
-    )
-    _kubectl(cfg, "rollout", "status", f"deployment/{cfg.name}", "-n", k8s.namespace)
-    click.echo("finelog is healthy.")
+def k8s_sync_secret(cfg: FinelogConfig) -> None:
+    """Create or update the out-of-band environment Secret referenced by Pulumi."""
+    manifest = _build_env_secret_manifest(cfg)
+    if manifest is None:
+        raise click.ClickException(f"finelog config {cfg.name!r} does not require an environment Secret")
+    click.echo(f"Applying Secret {_env_secret_name(cfg)}...")
+    _kubectl_apply(cfg, manifest)
 
 
 def k8s_status(cfg: FinelogConfig) -> None:

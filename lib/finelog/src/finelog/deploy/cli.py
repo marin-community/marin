@@ -1,14 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""finelog deploy CLI — config-driven deployment management.
+"""Finelog deployment and operational commands.
 
-Each subcommand takes a logical config name (or path), loads it via
-`load_finelog_config`, and dispatches to either the GCE or Kubernetes
-backend based on which `deployment.*` block the config sets. The CLI
-itself is platform-agnostic; finelog owns the platform decision via its
-config schema, mirroring how `iris cluster start` decides backend from
-cluster yaml.
+The CLI provisions GCE servers and manages out-of-band Kubernetes secrets. Pulumi
+owns Kubernetes workload resources under ``infra/finelog``.
 """
 
 import csv
@@ -68,25 +64,12 @@ def _log_client(cfg: FinelogConfig, name: str, tunnel_timeout: float) -> Generat
                 client.close()
 
 
-def _dispatch_up(cfg: FinelogConfig) -> None:
-    if cfg.deployment.gcp is not None:
-        _gcp.gcp_up(cfg)
-    else:
-        _k8s.k8s_up(cfg)
-
-
-def _dispatch_down(cfg: FinelogConfig, *, yes: bool) -> None:
-    if cfg.deployment.gcp is not None:
-        _gcp.gcp_down(cfg, yes=yes)
-    else:
-        _k8s.k8s_down(cfg, yes=yes)
-
-
-def _dispatch_restart(cfg: FinelogConfig) -> None:
-    if cfg.deployment.gcp is not None:
-        _gcp.gcp_restart(cfg)
-    else:
-        _k8s.k8s_restart(cfg)
+def _require_gcp_mutation(cfg: FinelogConfig) -> None:
+    if cfg.deployment.gcp is None:
+        raise click.ClickException(
+            "Kubernetes workload resources are managed by the infra/finelog Pulumi project; "
+            "use `pulumi preview` and `pulumi up` from that directory"
+        )
 
 
 def _dispatch_status(cfg: FinelogConfig) -> None:
@@ -150,20 +133,22 @@ def deploy() -> None:
     help="Build with the Rust `fast` profile (no LTO, parallel codegen) for a quicker build.",
 )
 def up_cmd(name: str, build: bool, fast: bool) -> None:
-    """Provision the finelog deployment described by `<name>` (idempotent)."""
+    """Provision the GCE deployment described by `<name>` (idempotent)."""
     cfg = load_finelog_config(name)
+    _require_gcp_mutation(cfg)
     if build:
         build_finelog_image(image=cfg.image, cargo_profile="fast" if fast else "release")
-    _dispatch_up(cfg)
+    _gcp.gcp_up(cfg)
 
 
 @deploy.command("down")
 @click.argument("name")
-@click.option("-y", "--yes", is_flag=True, help="Skip confirmation; for k8s also deletes the PVC.")
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation.")
 def down_cmd(name: str, yes: bool) -> None:
-    """Tear down the finelog deployment described by `<name>`."""
+    """Tear down the GCE deployment described by `<name>`."""
     cfg = load_finelog_config(name)
-    _dispatch_down(cfg, yes=yes)
+    _require_gcp_mutation(cfg)
+    _gcp.gcp_down(cfg, yes=yes)
 
 
 @deploy.command("restart")
@@ -182,11 +167,22 @@ def down_cmd(name: str, yes: bool) -> None:
     help="Build with the Rust `fast` profile (no LTO, parallel codegen) for a quicker build.",
 )
 def restart_cmd(name: str, build: bool, fast: bool) -> None:
-    """Restart the finelog deployment in place (refresh the container/image)."""
+    """Restart a GCE deployment in place (refresh the container/image)."""
     cfg = load_finelog_config(name)
+    _require_gcp_mutation(cfg)
     if build:
         build_finelog_image(image=cfg.image, cargo_profile="fast" if fast else "release")
-    _dispatch_restart(cfg)
+    _gcp.gcp_restart(cfg)
+
+
+@deploy.command("sync-secret")
+@click.argument("name")
+def sync_secret_cmd(name: str) -> None:
+    """Create or rotate a Kubernetes deployment's environment Secret."""
+    cfg = load_finelog_config(name)
+    if cfg.deployment.k8s is None:
+        raise click.ClickException("sync-secret requires a Kubernetes deployment config")
+    _k8s.k8s_sync_secret(cfg)
 
 
 @deploy.command("status")

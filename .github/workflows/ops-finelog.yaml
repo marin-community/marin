@@ -1,0 +1,83 @@
+name: "Ops - Finelog"
+
+# Finelog stacks must be adopted before their first update. Keep deployment
+# manual so merging the Pulumi program cannot race that one-time import.
+on:
+  workflow_dispatch:
+    inputs:
+      cluster:
+        description: "Kubernetes Finelog stack to update"
+        required: true
+        type: choice
+        options:
+          - cw-rno2a
+          - cw-us-east-02a
+          - cw-us-east-08a
+      deploy_generation:
+        description: "Optional pod restart generation (defaults to this workflow run)"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: finelog-${{ inputs.cluster }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Write kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          printf '%s\n' "${{ secrets.CW_KUBECONFIG }}" > ~/.kube/coreweave-iris
+          chmod 600 ~/.kube/coreweave-iris
+          echo "KUBECONFIG=$HOME/.kube/coreweave-iris" >> "$GITHUB_ENV"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: hai-gcp-models
+          workload_identity_provider: projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc
+          service_account: iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Sync the deployment environment
+        run: uv sync --all-packages --extra deploy --frozen
+
+      - name: Update the environment Secret
+        env:
+          R2_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_KEY_SECRET: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: uv run --no-sync finelog deploy sync-secret "${{ inputs.cluster }}"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Update Finelog
+        uses: ./.github/actions/pulumi-deploy
+        with:
+          stack: ${{ inputs.cluster }}
+          work-dir: infra/finelog
+          service-account: iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
+          gcp-project-id: hai-gcp-models
+          uv-sync-args: "--all-packages --extra deploy --frozen"
+          config-map: >-
+            ${{ format('{"finelog:deploy_generation": {"value": "{0}"}}',
+            inputs.deploy_generation || github.run_id) }}

@@ -5580,6 +5580,7 @@ name = "marin-iac"
 version = "0.0.0"
 source = { editable = "infra/pulumi" }
 dependencies = [
+    { name = "marin-finelog" },
     { name = "marin-iris", extra = ["controller"] },
     { name = "marin-rigging" },
     { name = "pyyaml" },
@@ -5598,6 +5599,7 @@ deploy = [
 
 [package.metadata]
 requires-dist = [
+    { name = "marin-finelog", editable = "lib/finelog" },
     { name = "marin-iris", extras = ["controller"], editable = "lib/iris" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "pulumi", marker = "extra == 'deploy'", specifier = ">=3.140,<4" },

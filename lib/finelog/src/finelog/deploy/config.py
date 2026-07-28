@@ -74,24 +74,15 @@ class K8sDeployment:
     memory_request: str = "16Gi"
     memory_limit: str = "32Gi"
     # S3-compatible endpoint (e.g. Cloudflare R2) for an `s3://` remote_log_dir.
-    # Required there: `finelog deploy up` mints a Secret holding this endpoint
+    # Required there: `finelog deploy sync-secret` mints a Secret holding this endpoint
     # plus the operator's R2 creds, projected into the pod via envFrom so the
     # server can authenticate. Unused for `gs://` (GCS uses workload identity).
     object_storage_endpoint: str | None = None
-    # PriorityClass stamped on the finelog pod. When finelog is the log backend
+    # PriorityClass stamped on the Finelog pod. When Finelog is the log backend
     # for an Iris control plane, set this to `iris-system` so a user job cannot
-    # preempt it off the shared control node. `deploy up` creates the class
-    # (idempotently) from name+value before applying the Deployment, so finelog
-    # can still be brought up first on a fresh cluster. Iris is the canonical
-    # owner of the iris-* bands (see IRIS_PRIORITY_CLASSES); keep priority_class_value
-    # in sync with it — value/preemptionPolicy are immutable, so a mismatch makes
-    # one side's apply fail loudly rather than silently disagree.
+    # preempt it off the shared control node. The cluster substrate owns that
+    # PriorityClass; the Finelog stack only references it.
     priority_class_name: str | None = None
-    priority_class_value: int | None = None
-
-    def __post_init__(self) -> None:
-        if (self.priority_class_name is None) != (self.priority_class_value is None):
-            raise ValueError("priority_class_name and priority_class_value must be set together")
 
 
 @dataclass(frozen=True)
@@ -302,7 +293,6 @@ def _build_forwarding(raw: dict, path: Path) -> ForwardingConfig:
 
 def _build_k8s(raw: dict) -> K8sDeployment:
     defaults = K8sDeployment(namespace=raw["namespace"])
-    priority_class_value = raw.get("priority_class_value")
     return K8sDeployment(
         namespace=raw["namespace"],
         kubeconfig=raw.get("kubeconfig"),
@@ -315,7 +305,6 @@ def _build_k8s(raw: dict) -> K8sDeployment:
         memory_limit=str(raw.get("memory_limit", defaults.memory_limit)),
         object_storage_endpoint=raw.get("object_storage_endpoint"),
         priority_class_name=raw.get("priority_class_name"),
-        priority_class_value=None if priority_class_value is None else int(priority_class_value),
     )
 
 
