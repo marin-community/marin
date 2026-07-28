@@ -8,21 +8,36 @@ advertised device variant in ``K8sTaskProvider.resource_capacity``."""
 from iris.cluster.backends.k8s.tasks import ClusterState, K8sTaskProvider
 from iris.cluster.controller.backend import DeviceCapacity
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
+from iris.cluster.platforms.k8s.types import IRIS_PRIORITY_CLASS_BATCH, IRIS_PRIORITY_CLASS_INTERACTIVE
 from iris.cluster.types import WellKnownAttribute
+from iris.rpc import job_pb2
 
 _GPU = "nvidia.com/gpu"
+
+_PRIORITY_CLASSES = {
+    job_pb2.PRIORITY_BAND_INTERACTIVE: IRIS_PRIORITY_CLASS_INTERACTIVE,
+    job_pb2.PRIORITY_BAND_BATCH: IRIS_PRIORITY_CLASS_BATCH,
+}
 
 
 def _node(name: str, gpus: int) -> dict:
     return {"metadata": {"name": name}, "status": {"allocatable": {_GPU: str(gpus)}}}
 
 
-def _pod(name: str, gpus: int, *, phase: str = "Running") -> dict:
-    return {
-        "metadata": {"name": name},
-        "status": {"phase": phase},
-        "spec": {"containers": [{"resources": {"requests": {_GPU: str(gpus)}}}]},
-    }
+def _pod(
+    name: str,
+    gpus: int,
+    *,
+    phase: str = "Running",
+    node: str = "n1",
+    priority_class: str = IRIS_PRIORITY_CLASS_INTERACTIVE,
+) -> dict:
+    spec: dict = {"containers": [{"resources": {"requests": {_GPU: str(gpus)}}}]}
+    if node:
+        spec["nodeName"] = node
+    if priority_class:
+        spec["priorityClassName"] = priority_class
+    return {"metadata": {"name": name}, "status": {"phase": phase}, "spec": spec}
 
 
 def _state(nodes: list[dict], pods: list[dict]) -> ClusterState:
@@ -31,9 +46,10 @@ def _state(nodes: list[dict], pods: list[dict]) -> ClusterState:
     return state
 
 
-def test_gpu_capacity_is_allocatable_minus_running_requests():
-    state = _state([_node("n1", 8), _node("n2", 8)], [_pod("a", 8), _pod("b", 2)])
-    assert state.gpu_capacity() == DeviceCapacity(free=6, total=16)  # 16 allocatable - 10 requested
+def test_gpu_capacity_is_allocatable_minus_bound_requests():
+    state = _state([_node("n1", 8), _node("n2", 8)], [_pod("a", 8), _pod("b", 2, node="n2")])
+    capacity = state.gpu_capacity(_PRIORITY_CLASSES)
+    assert (capacity.free, capacity.total) == (6, 16)  # 16 allocatable - 10 held
 
 
 def test_gpu_capacity_ignores_terminal_pods():
@@ -42,19 +58,47 @@ def test_gpu_capacity_ignores_terminal_pods():
         [_node("n1", 8)],
         [_pod("done", 8, phase="Succeeded"), _pod("dead", 4, phase="Failed"), _pod("live", 2)],
     )
-    assert state.gpu_capacity() == DeviceCapacity(free=6, total=8)
+    capacity = state.gpu_capacity(_PRIORITY_CLASSES)
+    assert (capacity.free, capacity.total) == (6, 8)
+
+
+def test_gpu_capacity_ignores_unbound_pods():
+    # A queued (Kueue-gated) pod holds no GPU: it must not suppress the free count,
+    # which is what kept federated jobs out of a peer whose queue was long.
+    state = _state([_node("n1", 8)], [_pod("queued", 8, phase="Pending", node=""), _pod("live", 2)])
+    capacity = state.gpu_capacity(_PRIORITY_CLASSES)
+    assert (capacity.free, capacity.total) == (6, 8)
+    assert capacity.held_by_band == {job_pb2.PRIORITY_BAND_INTERACTIVE: 2}
+
+
+def test_gpu_capacity_splits_held_gpus_by_priority_band():
+    state = _state(
+        [_node("n1", 8), _node("n2", 8)],
+        [
+            _pod("batch", 6, priority_class=IRIS_PRIORITY_CLASS_BATCH),
+            _pod("interactive", 8, node="n2"),
+            _pod("unknown-class", 2, priority_class="third-party"),
+        ],
+    )
+    capacity = state.gpu_capacity(_PRIORITY_CLASSES)
+    # All 16 GPUs are held; the pod on a class Iris does not own is held but unattributed.
+    assert (capacity.free, capacity.total) == (0, 16)
+    assert capacity.held_by_band == {
+        job_pb2.PRIORITY_BAND_BATCH: 6,
+        job_pb2.PRIORITY_BAND_INTERACTIVE: 8,
+    }
 
 
 def test_gpu_capacity_never_negative_when_oversubscribed():
-    # Requests can exceed allocatable transiently (pending pods); the free hint
-    # floors at 0 while the total still reports allocatable.
+    # Bound requests can exceed allocatable transiently; the free hint floors at 0
+    # while the total still reports allocatable.
     state = _state([_node("n1", 8)], [_pod("a", 8), _pod("b", 8)])
-    assert state.gpu_capacity() == DeviceCapacity(free=0, total=8)
+    assert state.gpu_capacity(_PRIORITY_CLASSES).free == 0
 
 
 def test_gpu_capacity_zero_without_gpu_nodes():
     state = _state([{"metadata": {"name": "cpu"}, "status": {"allocatable": {"cpu": "16"}}}], [])
-    assert state.gpu_capacity() == DeviceCapacity(free=0, total=0)
+    assert state.gpu_capacity(_PRIORITY_CLASSES) == DeviceCapacity(free=0, total=0)
 
 
 def _provider(advertised: dict[str, set[str]]) -> K8sTaskProvider:
@@ -70,7 +114,9 @@ def _provider(advertised: dict[str, set[str]]) -> K8sTaskProvider:
 
 def test_resource_capacity_attributes_gpus_to_the_sole_variant():
     provider = _provider({WellKnownAttribute.DEVICE_VARIANT: {"H100"}})
-    assert provider.resource_capacity() == {"h100": DeviceCapacity(free=6, total=8)}  # lowercased, 8 - 2
+    assert provider.resource_capacity() == {  # lowercased, 8 - 2
+        "h100": DeviceCapacity(free=6, total=8, held_by_band={job_pb2.PRIORITY_BAND_INTERACTIVE: 2})
+    }
 
 
 def test_resource_capacity_is_unset_when_the_variant_is_ambiguous():

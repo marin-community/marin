@@ -194,7 +194,10 @@ class FederationManager:
 
         Read off the latest capability heartbeat. A backend that set the availability
         wrapper supplies a free-capacity metric (``supplies_metric``); a legacy backend
-        that did not is matched on shape alone.
+        that did not is matched on shape alone. ``held_by_band`` is what admitted work
+        holds there, per priority band, which the assignment pass reads as capacity a
+        higher-priority candidate could reclaim; a band of UNSPECIFIED carries no
+        preemption order and is dropped.
         """
         result: list[PeerAvailability] = []
         for peer_id, peer in sorted(self._peers.items()):
@@ -205,6 +208,9 @@ class FederationManager:
                     supplies_metric=backend.HasField("availability"),
                     generation=backend.availability.observation_epoch_ms,
                     amounts=dict(backend.availability.amounts),
+                    held_by_band={
+                        held.band: dict(held.amounts) for held in backend.availability.held_by_band if held.band
+                    },
                     advertised_shape={key: list(values.values) for key, values in backend.advertised_attributes.items()},
                 )
                 for backend in heartbeat.backends

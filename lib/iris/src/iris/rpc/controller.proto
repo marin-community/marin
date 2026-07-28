@@ -715,9 +715,21 @@ message Controller {
   // an omitted map from an empty one, but it CAN tell an unset message from a set
   // one. UNSET => legacy peer, the parent falls back to shape-only federation for
   // that backend; SET with empty amounts => authoritative "nothing free".
+  // Capacity held by admitted work at one priority band, per resource token.
+  message BandCapacity {
+    iris.job.PriorityBand band = 1;
+    // Held amount per resource token, same keys and units as
+    // ResourceAvailability.amounts (accelerator variant -> chips, e.g. {"h100": 8}).
+    map<string, int64> amounts = 2;
+  }
+
   message ResourceAvailability {
     // Metric-semantics version. A parent that does not recognize the version treats
     // the availability as unknown rather than trusting the amounts.
+    //
+    // v2: `amounts` counts only capacity admitted work actually holds (a queued,
+    // unplaced workload no longer subtracts from it) and `held_by_band` splits the
+    // held remainder by priority band.
     uint32 version = 1;
     // When the serving peer computed these amounts, ms since epoch. The parent's
     // reservation ledger keys on this as the observation GENERATION: reservations
@@ -731,6 +743,13 @@ message Controller {
     // keys as `amounts`; a token's free amount never exceeds its total. Display
     // only — the federation availability gate reads `amounts` alone.
     map<string, int64> total_amounts = 4;
+    // What admitted work holds, split by the priority band holding it. A parent
+    // whose queued job outranks a band knows that band's amount is reclaimable by
+    // preemption on this peer, so a peer with no free capacity is still a valid
+    // placement for higher-priority work. Empty when the serving backend cannot
+    // attribute held capacity to a band — the parent then reclaims nothing and
+    // gates on `amounts` alone.
+    repeated BandCapacity held_by_band = 5;
   }
 
   message BackendSummary {

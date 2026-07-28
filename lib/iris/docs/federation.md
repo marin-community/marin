@@ -45,10 +45,24 @@ advertised free capacity meets the gate. This mirrors the `availability:<variant
 constraints the scheduler already uses for reservations, but the `available:<token>` metric is
 *numeric* (a count), not a boolean.
 
-Two properties keep placement honest without pretending to be exact:
+A peer reports more than a free count: alongside `amounts` it reports `held_by_band`, what its
+*admitted* work holds at each priority band. A candidate's effective capacity on a backend is
+that backend's free amount plus everything held **below** its own band (a numerically higher
+band is lower priority), because the peer's scheduler will preempt that work to admit the job.
+So an `interactive` job reaches a peer whose GPUs are entirely held by `batch` work, while a
+`batch` job — which outranks nothing — waits for something to actually free up. Placement
+spends idle capacity first and reclaims from the lowest-priority band upward, and prefers a
+peer that needs no preemption at all, so work only lands where preemption is warranted. A peer
+that reports no band split (a worker-daemon backend, or one predating the field) reclaims
+nothing and is gated on its free amount alone.
+
+Three properties keep placement honest without pretending to be exact:
 
 - **Never summed across backends.** A job pins to one backend, so 6 free on one backend plus 4
   on another does not host an 8-GPU job. Availability is evaluated per backend.
+- **Queued work at the peer does not suppress its numbers.** The free count subtracts only what
+  bound (scheduled) work holds. A pod waiting in the peer's queue holds no chips, so a long
+  queue there never makes the peer look full to the parent.
 - **A reservation ledger bounds cross-tick over-assignment.** The tick runs on every submit
   wake — far more often than the 30s heartbeat — so a naive per-tick read would re-spend the
   same advertised number every tick. The ledger records capacity already promoted against a
@@ -175,11 +189,13 @@ uv run iris --cluster=marin query \
 ```
 
 Each backend in the `list-peers` output carries an `availability` block — the capacity metric
-the queue gates on (`{"version": 1, "observation_epoch_ms": …, "amounts": {"h100": 504},
-"total_amounts": {"h100": 512}}`). `amounts` is the free count the gate evaluates;
-`total_amounts` is the matching denominator, shown on the dashboard's Backends page as
-free/total meters per device variant. A backend with **no** `availability` block supplies no
-metric and is matched on shape alone, so jobs route to it without a capacity check.
+the queue gates on (`{"version": 2, "observation_epoch_ms": …, "amounts": {"h100": 4},
+"total_amounts": {"h100": 512}, "held_by_band": [{"band": "PRIORITY_BAND_BATCH", "amounts":
+{"h100": 360}}]}`). `amounts` is the free count; `total_amounts` is the matching denominator,
+shown on the dashboard's Backends page as free/total meters per device variant; `held_by_band`
+is what admitted work holds, per band, which a higher-priority job can reclaim. A backend with
+**no** `availability` block supplies no metric and is matched on shape alone, so jobs route to
+it without a capacity check.
 
 A queued job and a delivered one are both `pending` on the parent, but they are waiting on
 different things, and `job list` says which:
@@ -192,7 +208,8 @@ different things, and `job list` says which:
 | `Handed off to peer X; awaiting first status report` | Admitted; the first sync has not landed |
 
 A job that sits on the first two lines is waiting for capacity, not stuck: compare its device
-request against the peer's advertised `amounts`. A job cancelled while queued never reaches the
+request against the peer's advertised `amounts` plus the `held_by_band` entries below the job's
+own band — those together are what it can reach. A job cancelled while queued never reaches the
 peer and terminates as `Cancelled before handoff`.
 
 A federated job's tasks live on the peer and are mirrored back, so `iris job summary` reports

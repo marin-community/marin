@@ -142,6 +142,19 @@ class _FullGpuPeerConnection(_InProcessPeerConnection):
         return [summary]
 
 
+class _BatchOccupiedGpuPeerConnection(_FullGpuPeerConnection):
+    """A peer with no free chips whose H100s are all held by preemptible batch work.
+
+    The reclaim case: nothing is idle, but the held capacity sits below an interactive
+    candidate's band, so the parent delegates and lets the peer's scheduler preempt.
+    """
+
+    def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
+        summaries = super().list_backends()
+        summaries[0].availability.held_by_band.add(band=job_pb2.PRIORITY_BAND_BATCH, amounts={"h100": 8})
+        return summaries
+
+
 class _RefusingPeerConnection(_InProcessPeerConnection):
     """A connection whose LaunchJob answers with ``code`` (mutable between attempts).
 
@@ -805,6 +818,55 @@ def test_a_job_the_peer_has_no_room_for_waits_in_the_queue_unassigned(tmp_path, 
             controller_pb2.Controller.GetJobStatusRequest(job_id=response.job_id), None
         ).job
         assert status.pending_reason == "Queued for a federation peer to report free capacity"
+
+
+def test_an_interactive_job_is_delegated_to_a_peer_whose_gpus_are_held_by_batch_work(tmp_path, log_client):
+    """A peer with zero free chips still hosts work it can preempt for.
+
+    The peer reports 0 free and 8 held at PRIORITY_BAND_BATCH. An interactive job
+    outranks that band, so the pass places it and the handoff is delivered — the peer's
+    own scheduler then evicts the batch work. Without the band split this job would
+    queue at the parent forever.
+    """
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
+        connection = _BatchOccupiedGpuPeerConnection(peer_service)
+        manager = _attach_federation(parent_service, connection)
+        parent_service._controller.provider.autoscaler = Mock(job_feasibility=Mock(return_value="no local GPU backend"))
+
+        request = make_direct_job_request("preempts-batch", replicas=1)
+        request.priority_band = job_pb2.PRIORITY_BAND_INTERACTIVE
+        request.resources.device.CopyFrom(job_pb2.DeviceConfig(gpu=job_pb2.GpuDevice(variant="h100", count=8)))
+        response = parent_service.launch_job(request, None)
+
+        promote_queued_federation(manager, parent_state)
+
+        handle = _handle(parent_state, JobName.from_wire(response.job_id))
+        assert handle.handoff_state == int(HandoffState.HANDED_OFF)
+        assert handle.peer_id == "cw"
+        assert connection.launch_calls == 1
+
+
+def test_a_batch_job_does_not_reclaim_a_peers_batch_capacity(tmp_path, log_client):
+    """The same peer, a batch candidate: it outranks nothing, so it stays queued."""
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
+        connection = _BatchOccupiedGpuPeerConnection(peer_service)
+        manager = _attach_federation(parent_service, connection)
+        parent_service._controller.provider.autoscaler = Mock(job_feasibility=Mock(return_value="no local GPU backend"))
+
+        request = make_direct_job_request("stays-queued", replicas=1)
+        request.priority_band = job_pb2.PRIORITY_BAND_BATCH
+        request.resources.device.CopyFrom(job_pb2.DeviceConfig(gpu=job_pb2.GpuDevice(variant="h100", count=8)))
+        response = parent_service.launch_job(request, None)
+
+        promote_queued_federation(manager, parent_state)
+
+        handle = _handle(parent_state, JobName.from_wire(response.job_id))
+        assert handle.handoff_state == int(HandoffState.QUEUED_HANDOFF)
+        assert connection.launch_calls == 0
 
 
 @pytest.mark.parametrize(
