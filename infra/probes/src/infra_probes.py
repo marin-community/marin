@@ -156,13 +156,9 @@ def collect_federated_scheduling(
     iris: RemoteClusterClient,
     peer_client: ControllerServiceClientSync,
 ) -> list[Sample]:
-    """Submit one tiny cluster-pinned job to every configured federation peer.
-
-    The Marin production peers are Kubernetes clusters. Discover them through
-    ``ListPeers`` on each cycle instead of hard-coding IDs, and do not filter on
-    the latest heartbeat's backend kind: an unreachable peer has no live backend
-    summary and is exactly the target that must emit a failing sample.
-    """
+    """Return one scheduling-health sample for every Marin federation peer."""
+    # Do not filter on the latest heartbeat's backend kind: an unreachable peer
+    # has no live backend summary and is exactly the target that must report down.
     response = peer_client.list_peers(controller_pb2.Controller.ListPeersRequest())
     peer_ids = sorted(peer.peer_id for peer in response.peers)
     if not peer_ids:

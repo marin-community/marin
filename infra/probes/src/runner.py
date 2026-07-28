@@ -64,12 +64,7 @@ def health_collector(name: str, check: Callable[[], bool], *, timeout: float, ca
 
 
 def _up_value(samples: Sequence[Sample]) -> bool:
-    """The cycle's headline ok/fail for the log line.
-
-    Multi-target collectors emit one ``METRIC_UP`` per target and are healthy
-    only when every target is up. A gauge collector that emits no health samples
-    is healthy when it ran successfully.
-    """
+    """Return whether every health sample is up, or a gauge collection ran."""
     health = [sample.value == 1.0 for sample in samples if sample.metric == METRIC_UP]
     return all(health) if health else True
 

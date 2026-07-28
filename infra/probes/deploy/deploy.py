@@ -8,6 +8,7 @@ Subcommands:
     build    docker build, tag with git sha + "latest", push to Artifact Registry.
     apply    roll the prod VM to the "latest" image.
     status   show VM state + tail container logs.
+    grant-iap grant the probe service account access to the Marin Iris IAP edge.
     create   one-time: service account, IAM bindings, and the COS VM itself.
 
 Run with ``uv run deploy/deploy.py <command>`` (click resolves from the project

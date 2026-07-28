@@ -17,7 +17,7 @@ class FakePeerClient:
             peers=[controller_pb2.Controller.PeerSummary(peer_id=peer_id) for peer_id in peer_ids]
         )
 
-    def list_peers(self, request):
+    def list_peers(self, _request):
         return self._response
 
 
@@ -34,6 +34,8 @@ class FakeIris:
         return kwargs["job_id"]
 
     def wait_for_job(self, job_id, timeout):
+        if timeout <= 0:
+            raise TimeoutError
         state = (
             job_pb2.JOB_STATE_FAILED
             if any(cluster in str(job_id) for cluster in self._failing_clusters)
