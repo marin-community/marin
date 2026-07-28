@@ -166,3 +166,27 @@ author: Matt Wittmann
   cluster or job state.
 - Next action: resubmit the corrected bundle with `--zone 136`. Keep the main
   task image pinned and leave every numerical/configuration argument unchanged.
+
+### 2026-07-28 16:38 PDT - Numerical qualification blocked; stop
+
+- Commit Hash: `e8d9d76e9b28c995fba9ac5804a6566821530cf4`
+- Jobs:
+  - `/mwittmann/d2-muon-num-syrk1-r4-0728-1635`
+  - `/mwittmann/d2-muon-num-syrk1-r5-0728-1638`
+- Result:
+  - R4 carried `--zone 136`, but the Kubernetes backend still placed it on
+    zone-128 node `s4bk6j84`; `stage-workdir` failed on the bad ARM64 `latest`
+    image before bundle fetch.
+  - A CPU-only forced-pull helper on `s4bk6j84` also resolved current
+    `iris-task:latest` to the bad digest and exited with `exec format error`.
+    The helper pod was deleted after inspection.
+  - R5 used a watcher to replace only its pending `stage-workdir` image with the
+    known-working ARM64 digest. Kueue rejected the mutation because the pod no
+    longer matched its admitted Workload template and deleted the pod. The
+    stranded Iris job was stopped and is terminal with `Pod not found`.
+- Interpretation: the current ARM64 `iris-task:latest` manifest is invalid, the
+  K8s stage-workdir builder ignores `--task-image`, the backend ignores the
+  requested zone, and Kueue prevents an in-place pod-only repair. Further
+  recovery requires a corrected registry tag or controller/backend change.
+- Decision: numerical qualification produced no comparison result. Stop at this
+  gate. Do not run the compile smokes, PGLE capture, or any D-2 rack draw.
