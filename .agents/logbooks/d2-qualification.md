@@ -45,3 +45,27 @@ author: Matt Wittmann
   is running. `/mwittmann/deri-d8-ep32-c2-120-0728-1532` is also running.
 - Interpretation: proceed only with the requested 4-GPU qualification work.
 - Next action: build and snapshot the numerical/HLO probe.
+
+### 2026-07-28 16:01 PDT - Numerical qualification submitted
+
+- Hypothesis: the no-merge and pre-reconciliation layouts differ only by
+  floating-point reduction order at D-2 matrix dimensions.
+- Commit Hash: pending documentation-only command snapshot on top of
+  `0e9bfb9f1df5c79bd0d3b13f49319af59c203b39`.
+- Command:
+
+  ```bash
+  IRIS_USER=mwittmann .venv/bin/iris --cluster=marin job run --no-wait \
+    --target-cluster cw-us-east-08a --priority interactive \
+    --job-name d2-muon-num-syrk1-0728-1601 \
+    --enable-extra-resources --gpu GB200x4 --cpu 32 --memory 256GB --disk 256GB \
+    --extra gpu --max-retries 0 --timeout 7200 \
+    -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async \
+    -e XLA_FLAGS "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false --xla_gpu_experimental_parallel_collective_overlap_limit=4" \
+    -- python -m experiments.grug.moe.d2_muon_qualification --mode numerical --syrk 1
+  ```
+
+- Config: four GB200 GPUs; explicit `data=2, expert=2` mesh; FP32 arrays with
+  BF16 Newton-Schulz internals; realistic 5120/1280 matrix dimensions; SYRK on.
+- Result: pending.
+- Next action: monitor to terminal and apply the pre-registered numerical gate.
