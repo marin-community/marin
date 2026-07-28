@@ -31,6 +31,10 @@ from rigging.timing import Timestamp
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.log_keys import STDERR_SOURCE, STDOUT_SOURCE
+from iris.cluster.runtime.distributed_diagnostic import (
+    DEFAULT_COLLECTOR_TIMEOUT_SECONDS,
+    capture_distributed_diagnostic,
+)
 from iris.cluster.runtime.env import VENV_PATH, cache_host_dirname, render_setup_steps, write_workdir_files
 from iris.cluster.runtime.profile import (
     PROFILER_WATCHDOG_GRACE_SECONDS,
@@ -112,6 +116,8 @@ class _DockerProfileDispatch:
     container_id: str
     pyspy_bin: str = f"{VENV_PATH}/bin/py-spy"
     memray_bin: str = f"{VENV_PATH}/bin/memray"
+    python_bin: str = f"{VENV_PATH}/bin/python"
+    isolated_pid_namespace: bool = True
 
     @contextmanager
     def scratch(self, *suffixes: str) -> Iterator[tuple[str, ...]]:
@@ -140,6 +146,31 @@ class _DockerProfileDispatch:
             raise RuntimeError(f"Failed to read {path}: {result.stderr.decode('utf-8', 'replace')}")
         return result.stdout
 
+    def run_diagnostic_probe(
+        self,
+        probe_path: Path,
+        arguments: list[str],
+        *,
+        timeout: int,
+    ) -> ExecResult:
+        remote_path = f"/tmp/{probe_path.stem}-{uuid.uuid4().hex[:8]}.py"
+        copied = subprocess.run(
+            ["docker", "cp", str(probe_path), f"{self.container_id}:{remote_path}"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if copied.returncode != 0:
+            return ExecResult(copied.returncode, b"", copied.stderr or "docker cp failed")
+        try:
+            return self.exec([self.python_bin, remote_path, *arguments], timeout=timeout)
+        finally:
+            subprocess.run(
+                ["docker", "exec", self.container_id, "rm", "-f", remote_path],
+                capture_output=True,
+                timeout=10,
+            )
+
     def _sigcont_sweep(self) -> None:
         try:
             subprocess.run(
@@ -152,8 +183,8 @@ class _DockerProfileDispatch:
             logger.warning("SIGCONT sweep failed for container %s: %s", self.container_id, e)
 
 
-def _resolve_profiler_bin(container_id: str, venv_bin: str, fallback: str) -> str:
-    """Prefer the venv-installed profiler, falling back to PATH for BYO images.
+def _resolve_container_bin(container_id: str, venv_bin: str, fallback: str) -> str:
+    """Prefer a venv-installed binary, falling back to PATH for BYO images.
 
     iris installs py-spy/memray into ``$IRIS_VENV``, but a bring-your-own image
     with no venv may carry them on PATH instead.
@@ -609,25 +640,42 @@ exec {quoted_cmd}
                     return int(shutil.disk_usage(path).used / (1024 * 1024))
         return 0
 
-    def profile(self, duration_seconds: int, profile_type: "job_pb2.ProfileType") -> bytes:
-        """Profile the running process using py-spy (CPU), memray (memory), or thread dump."""
+    def profile(
+        self,
+        duration_seconds: int,
+        profile_type: "job_pb2.ProfileType",
+        *,
+        source: str,
+        attempt_id: int,
+    ) -> bytes:
+        """Profile the running process or capture distributed GPU diagnostics."""
         container_id = self._run_container_id
         if not container_id:
             raise RuntimeError("Cannot profile: no running container")
 
         dispatch = _DockerProfileDispatch(
             container_id,
-            pyspy_bin=_resolve_profiler_bin(container_id, f"{VENV_PATH}/bin/py-spy", "py-spy"),
-            memray_bin=_resolve_profiler_bin(container_id, f"{VENV_PATH}/bin/memray", "memray"),
+            pyspy_bin=_resolve_container_bin(container_id, f"{VENV_PATH}/bin/py-spy", "py-spy"),
+            memray_bin=_resolve_container_bin(container_id, f"{VENV_PATH}/bin/memray", "memray"),
+            python_bin=_resolve_container_bin(container_id, f"{VENV_PATH}/bin/python", "python"),
         )
         if profile_type.HasField("threads"):
             return capture_threads(dispatch, pid="1", include_locals=profile_type.threads.locals)
+        elif profile_type.HasField("distributed"):
+            timeout = profile_type.distributed.collector_timeout_seconds or DEFAULT_COLLECTOR_TIMEOUT_SECONDS
+            return capture_distributed_diagnostic(
+                dispatch,
+                pid="1",
+                source=source,
+                attempt_id=attempt_id,
+                timeout=timeout,
+            )
         elif profile_type.HasField("cpu"):
             return capture_cpu(dispatch, profile_type.cpu, duration_seconds, pid="1")
         elif profile_type.HasField("memory"):
             return capture_memory_attach(dispatch, profile_type.memory, duration_seconds, pid="1")
         else:
-            raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
+            raise RuntimeError("ProfileType must specify cpu, memory, threads, or distributed profiling")
 
     def cleanup(self) -> None:
         """Remove the run container and clean up resources."""

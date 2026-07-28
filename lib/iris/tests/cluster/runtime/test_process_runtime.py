@@ -3,6 +3,8 @@
 
 """Tests for ProcessRuntime mount resolution and TMPFS cleanup."""
 
+import json
+import sys
 from pathlib import Path
 
 from iris.cluster.runtime.process import ProcessRuntime, _remap_container_path, _resolve_mount_map
@@ -98,3 +100,38 @@ def test_remap_prefers_the_longest_matching_mount():
 
     assert _remap_container_path("/app/data/x", mount_map) == "/host/data/x"
     assert _remap_container_path("/app/other", mount_map) == "/host/app/other"
+
+
+def test_process_handle_distributed_profile_captures_live_child(tmp_path):
+    runtime = ProcessRuntime(cache_dir=tmp_path)
+    entrypoint = job_pb2.RuntimeEntrypoint(
+        run_command=job_pb2.CommandEntrypoint(
+            argv=[sys.executable, "-c", "import threading; threading.Event().wait()"],
+        )
+    )
+    handle = runtime.create_container(
+        ContainerConfig(
+            image="unused",
+            entrypoint=entrypoint,
+            env={},
+            task_id="/local/job/0",
+        )
+    )
+    handle.run()
+    try:
+        profile = handle.profile(
+            0,
+            job_pb2.ProfileType(
+                distributed=job_pb2.DistributedProfile(collector_timeout_seconds=1),
+            ),
+            source="/local/job/0",
+            attempt_id=4,
+        )
+    finally:
+        handle.cleanup()
+
+    bundle = json.loads(profile)
+    assert bundle["source"] == "/local/job/0"
+    assert bundle["attempt_id"] == 4
+    assert bundle["process"]["status"] == "ok"
+    assert bundle["runtime"]["target_executable"]["path"]

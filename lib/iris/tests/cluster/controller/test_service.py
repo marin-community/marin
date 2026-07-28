@@ -247,6 +247,43 @@ def test_profile_worker_routes_to_worker_backend(service, state):
     service._controller.provider.profile_task.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "target",
+    ["/system/controller", "/system/process", "/system/worker/worker-0"],
+)
+def test_distributed_profile_rejects_non_task_targets(service, target):
+    request = job_pb2.ProfileTaskRequest(
+        target=target,
+        profile_type=job_pb2.ProfileType(
+            distributed=job_pb2.DistributedProfile(collector_timeout_seconds=10),
+        ),
+    )
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.profile_task(request, None)
+
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+    assert "require a task target" in exc_info.value.message
+    service._controller.provider.profile_task.assert_not_called()
+
+
+@pytest.mark.parametrize("timeout", [-1, 31])
+def test_distributed_profile_rejects_out_of_range_collector_timeout(service, timeout):
+    request = job_pb2.ProfileTaskRequest(
+        target="/test-user/job/0",
+        profile_type=job_pb2.ProfileType(
+            distributed=job_pb2.DistributedProfile(collector_timeout_seconds=timeout),
+        ),
+    )
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.profile_task(request, None)
+
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+    assert "between 1 and 30 seconds" in exc_info.value.message
+    service._controller.provider.profile_task.assert_not_called()
+
+
 def test_get_job_status_reports_parent_job_id(service):
     """get_job_status surfaces parent_job_id for child jobs (empty for roots).
 

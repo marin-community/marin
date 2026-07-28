@@ -436,7 +436,14 @@ class TaskAttempt:
         """Whether this attempt has an active container handle."""
         return self._container_handle is not None
 
-    def profile(self, duration_seconds: int, profile_type: job_pb2.ProfileType) -> bytes:
+    def profile(
+        self,
+        duration_seconds: int,
+        profile_type: job_pb2.ProfileType,
+        *,
+        source: str,
+        attempt_id: int,
+    ) -> bytes:
         """Profile the running container process.
 
         Args:
@@ -451,7 +458,12 @@ class TaskAttempt:
         """
         if not self._container_handle:
             raise ValueError(f"Task {self.task_id} has no container handle")
-        return self._container_handle.profile(duration_seconds, profile_type)
+        return self._container_handle.profile(
+            duration_seconds,
+            profile_type,
+            source=source,
+            attempt_id=attempt_id,
+        )
 
     def exec_in_container(
         self, command: list[str], timeout_seconds: int = 60

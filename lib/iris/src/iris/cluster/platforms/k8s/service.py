@@ -124,6 +124,7 @@ class K8sService(Protocol):
         *,
         container: str | None = None,
         timeout: float | None = None,
+        stdin: str | None = None,
     ) -> ExecResult: ...
 
     def set_image(self, resource: K8sResource, name: str, container: str, image: str) -> None: ...
@@ -671,6 +672,7 @@ class CloudK8sService:
         *,
         container: str | None = None,
         timeout: float | None = None,
+        stdin: str | None = None,
     ) -> ExecResult:
         """Run a command inside a Pod container."""
         effective_timeout = timeout if timeout is not None else self.timeout
@@ -683,7 +685,7 @@ class CloudK8sService:
                     "command": cmd,
                     "stdout": True,
                     "stderr": True,
-                    "stdin": False,
+                    "stdin": stdin is not None,
                     "tty": False,
                     "_request_timeout": effective_timeout,
                 }
@@ -693,8 +695,22 @@ class CloudK8sService:
                 with self.create_api_client() as exec_api_client:
                     resp = kubernetes.stream.stream(
                         kubernetes.client.CoreV1Api(exec_api_client).connect_get_namespaced_pod_exec,
+                        _preload_content=stdin is None,
                         **kwargs,
                     )
+                if stdin is not None:
+                    try:
+                        resp.write_stdin(stdin)
+                        resp.run_forever(timeout=effective_timeout)
+                        if resp.is_open():
+                            return ExecResult(returncode=124, stdout=resp.read_stdout(), stderr="exec timed out")
+                        return ExecResult(
+                            returncode=resp.returncode or 0,
+                            stdout=resp.read_stdout(),
+                            stderr=resp.read_stderr(),
+                        )
+                    finally:
+                        resp.close()
                 return ExecResult(returncode=0, stdout=resp, stderr="")
             except ApiException as e:
                 return ExecResult(returncode=1, stdout="", stderr=str(e))

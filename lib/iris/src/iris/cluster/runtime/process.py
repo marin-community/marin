@@ -32,6 +32,10 @@ from pathlib import Path
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.log_keys import STDERR_SOURCE, STDOUT_SOURCE
+from iris.cluster.runtime.distributed_diagnostic import (
+    DEFAULT_COLLECTOR_TIMEOUT_SECONDS,
+    capture_distributed_diagnostic,
+)
 from iris.cluster.runtime.env import cache_host_dirname, write_workdir_files
 from iris.cluster.runtime.profile import (
     LocalProfileDispatch,
@@ -511,8 +515,15 @@ class ProcessContainerHandle:
             return int(shutil.disk_usage(self.config.workdir_host_path).used / (1024 * 1024))
         return 0
 
-    def profile(self, duration_seconds: int, profile_type: job_pb2.ProfileType) -> bytes:
-        """Profile the running process using py-spy (CPU), memray (memory), or thread dump.
+    def profile(
+        self,
+        duration_seconds: int,
+        profile_type: job_pb2.ProfileType,
+        *,
+        source: str,
+        attempt_id: int,
+    ) -> bytes:
+        """Profile the running process or capture distributed GPU diagnostics.
 
         Runs profilers as host subprocesses sharing this worker's PID namespace.
         Python's own subprocess timeout reaps a hung profiler, and the profiled
@@ -528,12 +539,21 @@ class ProcessContainerHandle:
 
         if profile_type.HasField("threads"):
             return capture_threads(dispatch, pid=str(pid), include_locals=profile_type.threads.locals)
+        elif profile_type.HasField("distributed"):
+            timeout = profile_type.distributed.collector_timeout_seconds or DEFAULT_COLLECTOR_TIMEOUT_SECONDS
+            return capture_distributed_diagnostic(
+                dispatch,
+                pid=str(pid),
+                source=source,
+                attempt_id=attempt_id,
+                timeout=timeout,
+            )
         elif profile_type.HasField("cpu"):
             return self._profile_cpu(dispatch, pid, duration_seconds, profile_type.cpu)
         elif profile_type.HasField("memory"):
             return self._profile_memory(dispatch, pid, duration_seconds, profile_type.memory)
         else:
-            raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
+            raise RuntimeError("ProfileType must specify cpu, memory, threads, or distributed profiling")
 
     def _profile_cpu(
         self, dispatch: LocalProfileDispatch, pid: int, duration_seconds: int, cpu_config: job_pb2.CpuProfile

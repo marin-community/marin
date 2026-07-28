@@ -15,6 +15,7 @@ import re
 import shlex
 import threading
 import time
+import uuid
 from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -77,6 +78,10 @@ from iris.cluster.platforms.k8s.types import (
     parse_k8s_cpu,
     parse_k8s_quantity,
     parse_k8s_timestamp,
+)
+from iris.cluster.runtime.distributed_diagnostic import (
+    DEFAULT_COLLECTOR_TIMEOUT_SECONDS,
+    capture_distributed_diagnostic,
 )
 from iris.cluster.runtime.env import (
     STANDARD_MOUNTS,
@@ -2099,6 +2104,7 @@ class _K8sProfileDispatch:
     pod_name: str
     pyspy_bin: str = "py-spy"
     memray_bin: str = "memray"
+    isolated_pid_namespace: bool = True
 
     @contextmanager
     def scratch(self, *suffixes: str) -> Iterator[tuple[str, ...]]:
@@ -2120,6 +2126,36 @@ class _K8sProfileDispatch:
 
     def read_file(self, path: str) -> bytes:
         return self.kubectl.read_file(self.pod_name, path, container="task")
+
+    def run_diagnostic_probe(
+        self,
+        probe_path: Path,
+        arguments: list[str],
+        *,
+        timeout: int,
+    ) -> ExecResult:
+        remote_path = f"/tmp/{probe_path.stem}-{uuid.uuid4().hex[:8]}.py"
+        probe_text = probe_path.read_text()
+        copied = self.kubectl.exec(
+            self.pod_name,
+            [
+                "dd",
+                f"of={remote_path}",
+                f"bs={len(probe_text.encode())}",
+                "count=1",
+                "iflag=fullblock",
+                "status=none",
+            ],
+            container="task",
+            timeout=10,
+            stdin=probe_text,
+        )
+        if copied.returncode != 0:
+            return ExecResult(copied.returncode, b"", copied.stderr or "probe copy failed")
+        try:
+            return self._venv_exec(["python", remote_path, *arguments], timeout=timeout)
+        finally:
+            self.kubectl.rm_files(self.pod_name, [remote_path], container="task")
 
     def _venv_exec(self, cmd: list[str], *, timeout: int) -> ExecResult:
         shell_cmd = ["bash", "-lc", f"source {VENV_PATH}/bin/activate 2>/dev/null; {shlex.join(cmd)}"]
@@ -2616,6 +2652,15 @@ class K8sTaskProvider:
         try:
             if profile_type.HasField("threads"):
                 data = capture_threads(dispatch, pid="1", include_locals=profile_type.threads.locals)
+            elif profile_type.HasField("distributed"):
+                timeout = profile_type.distributed.collector_timeout_seconds or DEFAULT_COLLECTOR_TIMEOUT_SECONDS
+                data = capture_distributed_diagnostic(
+                    dispatch,
+                    pid="1",
+                    source=request.target,
+                    attempt_id=attempt_id,
+                    timeout=timeout,
+                )
             elif profile_type.HasField("cpu"):
                 data = capture_cpu(dispatch, profile_type.cpu, duration, pid="1")
             elif profile_type.HasField("memory"):

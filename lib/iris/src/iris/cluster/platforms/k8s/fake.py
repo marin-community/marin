@@ -828,8 +828,15 @@ class InMemoryK8sService:
         *,
         container: str | None = None,
         timeout: float | None = None,
+        stdin: str | None = None,
     ) -> ExecResult:
         self._check_failure("exec")
+        if stdin is not None and cmd and cmd[0] == "dd":
+            output_arg = next((arg for arg in cmd if arg.startswith("of=")), "")
+            if not output_arg:
+                return ExecResult(returncode=1, stdout="", stderr="dd output path is required")
+            self._file_contents[(pod_name, output_arg.removeprefix("of="))] = stdin.encode()
+            return ExecResult(returncode=0, stdout="", stderr="")
         # The profiler SIGCONT-recovery sweep is side-channel plumbing, not a
         # profiler invocation, so it must not consume a queued profiler response.
         if any("kill -CONT" in arg for arg in cmd):

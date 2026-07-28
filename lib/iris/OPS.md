@@ -250,9 +250,28 @@ iris process profile threads                # thread dump (prints to stdout)
 iris process profile cpu -d 10              # 10s CPU profile (writes .speedscope.json)
 iris process profile mem                    # memory flamegraph (writes .html)
 iris process profile cpu -t /user/job/0     # profile a running task container
+iris process profile distributed -t /user/job/0 -d 10 -o rank-0.json
 ```
 
 **Prefer `iris process profile` over SSH** for profiling — it uses the `/system/process` RPC and avoids direct VM access. SSH is a fallback only when the RPC doesn't cover your needs.
+
+Use `profile distributed` when a multi-host GPU task appears stuck. Invoke it
+once for each task rank that needs inspection. It copies a versioned,
+standard-library-only probe into the task container and returns one bounded
+JSON bundle containing:
+
+- partial NCCL RAS JSON or text;
+- a `py-spy` thread dump and `/proc` thread status/wchan data;
+- GPU utilization, memory, and power draw/limit from `nvidia-smi`;
+- filtered `NCCL_*`, `XLA_*`, and `CUDA_*` environment values; and
+- the Python executable, relevant packages, and loaded GPU library paths.
+
+The duration must be 1–30 seconds and covers the whole collection. Each
+section records its own status or error so a missing tool or timed-out
+collector does not discard other evidence. The bundle remains below 4 MiB;
+large fields are marked as truncated. Distributed capture requires a task
+target and does not stop, restart, kick, or otherwise change Iris task state.
+`py-spy` does attach to the target process briefly during the thread dump.
 
 ## Scheduler & Autoscaler
 
@@ -419,7 +438,7 @@ Namespaces:
   ```
 - `iris.task_state` — controller-emitted (every 30s) task counts by state per root job, plus `oldest_pending_age_ms` / `oldest_building_age_ms` wait ages, keyed by `root_job_id`. The `root_job_id=""` row is the per-cluster rollup, written even when idle — its absence means the controller is down. Feeds fleet-wide stuck-BUILDING alerting and queue-depth history.
 - `iris.admission_probe` — on Kubernetes clusters, the outcome (every 60s) of a `dryRun=All` canary pod apply that traverses the full admission chain, keyed by `outcome` (`ok`/`failed` with `error_class`, latency, truncated message). `failed` rows (or silence) detect fail-closed admission webhooks before any task pod exists.
-- `iris.profile` — per-capture profile blobs (cpu/memory/thread, periodic or on-demand), keyed by `source` so the dashboard's per-source list query prunes via parquet row-group min/max. Filter on `source` (a task path like `/user/job/.../<index>`, `/system/worker/<id>`, or `/system/controller`) and `type` (`cpu`/`memory`/`thread`). `format` is the blob encoding — the GCE/TPU worker's periodic CPU captures are py-spy **speedscope** JSON; the k8s backend's periodic captures are py-spy **thread dumps** (`type=thread`), since a hung collective samples no CPU but a thread dump pinpoints where every rank is blocked. `vm_id` is the writer VM (worker id, `controller-self`, or `k8s/<node-or-pod>`). To find a hang, read the last periodic `thread` capture per `source` before the freeze.
+- `iris.profile` — per-capture profile blobs (cpu/memory/thread/distributed, periodic or on-demand), keyed by `source` so the dashboard's per-source list query prunes via parquet row-group min/max. Filter on `source` (a task path like `/user/job/.../<index>`, `/system/worker/<id>`, or `/system/controller`) and `type` (`cpu`/`memory`/`thread`/`distributed`). `format` is the blob encoding — distributed captures use bounded partial JSON; the GCE/TPU worker's periodic CPU captures are py-spy **speedscope** JSON; the k8s backend's periodic captures are py-spy **thread dumps** (`type=thread`), since a hung collective samples no CPU but a thread dump pinpoints where every rank is blocked. `vm_id` is the writer VM (worker id, `controller-self`, or `k8s/<node-or-pod>`). To find a hang, read the last periodic `thread` capture per `source` before the freeze, then take an on-demand `distributed` capture from each affected rank.
 
 Retention is finelog segment-based. Target for `iris.profile` is 7 days.
 

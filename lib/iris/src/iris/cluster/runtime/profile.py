@@ -327,6 +327,7 @@ class LocalProfileDispatch:
     pyspy_bin: str = "py-spy"
     memray_bin: str = "memray"
     resume_pid: int | None = None
+    isolated_pid_namespace: bool = False
 
     @contextmanager
     def scratch(self, *suffixes: str) -> Iterator[tuple[str, ...]]:
@@ -352,6 +353,15 @@ class LocalProfileDispatch:
 
     def read_file(self, path: str) -> bytes:
         return Path(path).read_bytes()
+
+    def run_diagnostic_probe(
+        self,
+        probe_path: Path,
+        arguments: list[str],
+        *,
+        timeout: int,
+    ) -> ExecResult:
+        return self.exec([sys.executable, str(probe_path), *arguments], timeout=timeout)
 
     def _resume(self) -> None:
         if self.resume_pid is None or sys.platform != "linux":
@@ -515,6 +525,18 @@ def build_profile_row(
             format=ProfileFormat.RAW.value,
             trigger=trigger.value,
             locals_dump=bool(profile_type.threads.locals),
+            profile_data=profile_data,
+        )
+    if which == "distributed":
+        return IrisProfile(
+            source=source,
+            attempt_id=attempt_id,
+            vm_id=vm_id,
+            captured_at=captured_at,
+            duration_seconds=0,
+            type=ProfileType.DISTRIBUTED.value,
+            format=ProfileFormat.JSON.value,
+            trigger=trigger.value,
             profile_data=profile_data,
         )
     raise ValueError(f"ProfileType has no profiler set: {profile_type!r}")

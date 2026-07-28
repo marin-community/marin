@@ -243,12 +243,21 @@ class ContainerHandle(Protocol):
         """
         ...
 
-    def profile(self, duration_seconds: int, profile_type: job_pb2.ProfileType) -> bytes:
-        """Profile the running process using py-spy (CPU), memray (memory), or thread dump.
+    def profile(
+        self,
+        duration_seconds: int,
+        profile_type: job_pb2.ProfileType,
+        *,
+        source: str,
+        attempt_id: int,
+    ) -> bytes:
+        """Profile the running process or capture a distributed diagnostic.
 
         Args:
-            duration_seconds: How long to sample (ignored for threads)
-            profile_type: ProfileType message with oneof cpu/memory/threads profiler config
+            duration_seconds: How long to sample (ignored for threads and distributed diagnostics)
+            profile_type: ProfileType message selecting one profiler
+            source: Canonical task source included in distributed bundles
+            attempt_id: Attempt included in distributed bundles
 
         Returns:
             Raw profile output (SVG/HTML/JSON/text depending on profiler and format)

@@ -21,6 +21,11 @@ from rigging.connect import proxy_path
 
 from iris.cli.connect import require_controller_url, rpc_client_for_ctx
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
+from iris.cluster.runtime.distributed_diagnostic import (
+    DEFAULT_COLLECTOR_TIMEOUT_SECONDS,
+    MAX_COLLECTOR_TIMEOUT_SECONDS,
+    MIN_COLLECTOR_TIMEOUT_SECONDS,
+)
 from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
 from iris.rpc import job_pb2
 
@@ -129,8 +134,8 @@ def logs(ctx, target: str | None, level: str, follow: bool, max_lines: int, subs
     default=None,
     help="RPC target path, e.g. /system/worker/<id> or /alice/job/0 (default: controller)",
 )
-@click.argument("profiler", type=click.Choice(["threads", "cpu", "mem"]))
-@click.option("--duration", "-d", default=10, help="Profiling duration in seconds")
+@click.argument("profiler", type=click.Choice(["threads", "cpu", "mem", "distributed"]))
+@click.option("--duration", "-d", default=DEFAULT_COLLECTOR_TIMEOUT_SECONDS, help="Profiling duration in seconds")
 @click.option("--output", "-o", default=None, help="Output file path")
 @click.option("--locals", "include_locals", is_flag=True, help="Include local variables in thread dump")
 @click.pass_context
@@ -142,10 +147,11 @@ def profile(
     output: str | None,
     include_locals: bool,
 ):
-    """Profile the process (threads, cpu, or mem).
+    """Profile a process or capture distributed GPU diagnostics.
 
     By default profiles the controller. Use --target with the full RPC path:
     /system/worker/<id> for a worker, /alice/job/0 for a task container.
+    Distributed diagnostics require a task target.
     """
     url = require_controller_url(ctx)
     rpc_target = target or SYSTEM_PROCESS_TARGET
@@ -157,6 +163,15 @@ def profile(
         profile_type = job_pb2.ProfileType(cpu=job_pb2.CpuProfile(format=job_pb2.CpuProfile.SPEEDSCOPE))
     elif profiler == "mem":
         profile_type = job_pb2.ProfileType(memory=job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.FLAMEGRAPH))
+    elif profiler == "distributed":
+        if target is None:
+            raise click.UsageError("distributed diagnostics require --target with a task path")
+        if not MIN_COLLECTOR_TIMEOUT_SECONDS <= duration <= MAX_COLLECTOR_TIMEOUT_SECONDS:
+            raise click.UsageError(
+                "distributed diagnostic duration must be between "
+                f"{MIN_COLLECTOR_TIMEOUT_SECONDS} and {MAX_COLLECTOR_TIMEOUT_SECONDS} seconds"
+            )
+        profile_type = job_pb2.ProfileType(distributed=job_pb2.DistributedProfile(collector_timeout_seconds=duration))
     else:
         raise click.ClickException(f"Unknown profiler type: {profiler}")
 
@@ -180,7 +195,7 @@ def profile(
     elif profiler == "threads":
         click.echo(resp.profile_data.decode("utf-8"))
     else:
-        ext = {"cpu": ".speedscope.json", "mem": ".html"}[profiler]
+        ext = {"cpu": ".speedscope.json", "mem": ".html", "distributed": ".json"}[profiler]
         safe_label = label.lower().replace(" ", "-").replace("/", "-").strip("-")
         default_name = f"profile-{profiler}-{safe_label}{ext}"
         with open(default_name, "wb") as f:

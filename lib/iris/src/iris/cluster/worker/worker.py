@@ -1103,7 +1103,12 @@ class Worker:
             attempt = self.task_by_attempt(task_id_wire, resolved_attempt_id)
             if attempt is None or attempt.status != job_pb2.TASK_STATE_RUNNING:
                 raise RuntimeError("attempt no longer running")
-            data = attempt.profile(duration, request.profile_type)
+            data = attempt.profile(
+                duration,
+                request.profile_type,
+                source=task_id_wire,
+                attempt_id=resolved_attempt_id,
+            )
             row_source = task_id_wire
             row_attempt_id = resolved_attempt_id
 

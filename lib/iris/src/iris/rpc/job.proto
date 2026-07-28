@@ -70,12 +70,18 @@ message ThreadsProfile {
   bool locals = 1;  // Include local variables in the dump (--locals flag)
 }
 
+// Bounded distributed GPU diagnostic configuration
+message DistributedProfile {
+  int32 collector_timeout_seconds = 1;  // Total child-side collector deadline; 0 uses 10 seconds
+}
+
 // Profile type selector
 message ProfileType {
   oneof profiler {
     CpuProfile cpu = 1;
     MemoryProfile memory = 2;
     ThreadsProfile threads = 3;
+    DistributedProfile distributed = 4;
   }
 }
 

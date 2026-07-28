@@ -86,6 +86,12 @@ from iris.cluster.log_highlights import extract_failure_highlights
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.process_status import get_process_status
 from iris.cluster.redaction import redact_request_env_vars
+from iris.cluster.runtime.distributed_diagnostic import (
+    DEFAULT_COLLECTOR_TIMEOUT_SECONDS,
+    MAX_COLLECTOR_TIMEOUT_SECONDS,
+    MIN_COLLECTOR_TIMEOUT_SECONDS,
+    PROBE_EXIT_HEADROOM_SECONDS,
+)
 from iris.cluster.runtime.profile import (
     build_profile_row,
     profile_local_process,
@@ -470,6 +476,15 @@ def _parse_worker_target(target: str) -> str | None:
         if worker_id:
             return worker_id
     return None
+
+
+def _profile_task_timeout_milliseconds(request: job_pb2.ProfileTaskRequest) -> int:
+    if request.profile_type.HasField("distributed"):
+        collector_timeout = (
+            request.profile_type.distributed.collector_timeout_seconds or DEFAULT_COLLECTOR_TIMEOUT_SECONDS
+        )
+        return (collector_timeout + PROBE_EXIT_HEADROOM_SECONDS + 30) * 1000
+    return ((request.duration_seconds or 10) + 30) * 1000
 
 
 def _active_job_count(job_state_counts: dict[int, int]) -> int:
@@ -2693,6 +2708,18 @@ class ControllerServiceImpl:
         """
         if not request.HasField("profile_type"):
             raise ConnectError(Code.INVALID_ARGUMENT, "profile_type is required")
+        if request.profile_type.HasField("distributed"):
+            collector_timeout = request.profile_type.distributed.collector_timeout_seconds
+            if collector_timeout and not (
+                MIN_COLLECTOR_TIMEOUT_SECONDS <= collector_timeout <= MAX_COLLECTOR_TIMEOUT_SECONDS
+            ):
+                raise ConnectError(
+                    Code.INVALID_ARGUMENT,
+                    "distributed collector timeout must be between "
+                    f"{MIN_COLLECTOR_TIMEOUT_SECONDS} and {MAX_COLLECTOR_TIMEOUT_SECONDS} seconds",
+                )
+            if request.target in ("/system/controller", "/system/process") or _parse_worker_target(request.target):
+                raise ConnectError(Code.INVALID_ARGUMENT, "distributed diagnostics require a task target")
 
         # /system/controller (or its alias /system/process from the CLI): capture
         # this controller process itself.
@@ -2730,7 +2757,7 @@ class ControllerServiceImpl:
                 duration_seconds=request.duration_seconds,
                 profile_type=request.profile_type,
             )
-            timeout_ms = (request.duration_seconds or 10) * 1000 + 30000
+            timeout_ms = _profile_task_timeout_milliseconds(request)
             worker_target = TaskTarget(
                 task_id="",
                 attempt_id=0,
@@ -2768,7 +2795,7 @@ class ControllerServiceImpl:
         attempt_id = target.attempt_id if target.attempt_id is not None else task.current_attempt_id
         task_target = self._resolve_task_target(task, attempt_id, wire_name=request.target)
 
-        timeout_ms = (request.duration_seconds or 10) * 1000 + 30000
+        timeout_ms = _profile_task_timeout_milliseconds(request)
         resp = self._backend_for_id(str(task.backend_id or "")).profile_task(task_target, request, timeout_ms)
         return job_pb2.ProfileTaskResponse(
             profile_data=resp.profile_data,
