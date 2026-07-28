@@ -10,6 +10,7 @@ from typing import TypeVar
 from fray.cluster import ResourceConfig
 from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, create_environment
+from iris.rpc import job_pb2
 from marin.training.run_environment import extras_for_resources
 from marin.training.training import resolve_training_env
 
@@ -29,6 +30,12 @@ ConfigT = TypeVar("ConfigT")
 # levanter.optim.grugmuon.
 _FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "CE_", "SCALE_MUON_")
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
+_GRUG_JOB_PRIORITY = "GRUG_JOB_PRIORITY"
+_IRIS_PRIORITY_BANDS = {
+    "production": job_pb2.PRIORITY_BAND_PRODUCTION,
+    "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE,
+    "batch": job_pb2.PRIORITY_BAND_BATCH,
+}
 
 
 def _forwarded_env_vars() -> dict[str, str]:
@@ -40,6 +47,16 @@ def _forwarded_env_vars() -> dict[str, str]:
 def _safe_job_suffix(run_id: str) -> str:
     """Sanitize run IDs into Fray/Iris-safe job-name suffixes."""
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", run_id)
+
+
+def _job_priority() -> int:
+    priority = os.environ.get(_GRUG_JOB_PRIORITY)
+    if priority is None:
+        return job_pb2.PRIORITY_BAND_UNSPECIFIED
+    try:
+        return _IRIS_PRIORITY_BANDS[priority]
+    except KeyError as e:
+        raise ValueError(f"{_GRUG_JOB_PRIORITY} must be one of {sorted(_IRIS_PRIORITY_BANDS)}, got {priority!r}") from e
 
 
 def dispatch_grug_training_run(
@@ -70,6 +87,7 @@ def dispatch_grug_training_run(
         environment=create_environment(env_vars=env_vars, extras=extras_for_resources(resources)),
         max_retries_failure=max_retries_failure,
         processes_per_task=processes_per_task,
+        priority=_job_priority(),
     )
     logger.info("Dispatching grug training via Fray: %s", request.name)
     job = current_client().submit(request)

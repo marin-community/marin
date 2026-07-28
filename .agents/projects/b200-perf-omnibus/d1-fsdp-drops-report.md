@@ -1,7 +1,7 @@
 # D-1: FSDP baseline token-drop rates
 
-Status: both corrected direct-cluster training gangs are building; no D-1
-metrics inspected.
+Status: child-priority propagation fixed; corrected resubmission pending; no
+D-1 metrics inspected.
 
 The first submission attempt used the federated `marin` route and
 `interactive` priority. Both jobs remained outside the target cluster's
@@ -19,6 +19,15 @@ CPython 3.12 client but landed under `/marin` because that client ignored
 unassigned task failure with no worker, backend, logs, or error and succeeded in
 spawning its gang on the single transient retry. None of these parent failures
 produced model metrics.
+
+The first correctly attributed parents exposed another launch-layer defect:
+their own tasks had production `priority_band=1`, but
+`dispatch_grug_training_run` left the Fray child priority unspecified. Iris
+persisted both 16-node children at interactive `priority_band=2`, where they
+remained Kueue-gated with zero assigned workers. Both roots and children were
+stopped before training. The dispatcher now accepts an explicit
+`GRUG_JOB_PRIORITY=production`; its child rows must show `priority_band=1`
+before either job is accepted as a measurement.
 
 ## TL;DR
 
@@ -81,8 +90,8 @@ model and implementation.
 
 Job ID: `/mwittmann/d1a-fsdp-drops-350-r4-20260728-2330`
 
-Submission state at 2026-07-28 23:31 UTC: `running`; 16 of 16 training
-tasks were building with no failures or preemptions.
+Submission state at 2026-07-28 23:46 UTC: stopped. All 16 child tasks had
+interactive `priority_band=2` and zero assigned workers.
 
 Training gang:
 `/mwittmann/d1a-fsdp-drops-350-r4-20260728-2330/grug-train-d1a-fsdp-drops-350-r4-20260728-2330`
@@ -134,8 +143,8 @@ Results: pending
 
 Job ID: `/mwittmann/d1b-fsdp-drops-120-r3-20260728-2328`
 
-Submission state at 2026-07-28 23:31 UTC: `running`; 16 of 16 training
-tasks were building with no failures or preemptions.
+Submission state at 2026-07-28 23:46 UTC: stopped. All 16 child tasks had
+interactive `priority_band=2` and zero assigned workers.
 
 Training gang:
 `/mwittmann/d1b-fsdp-drops-120-r3-20260728-2328/grug-train-d1b-fsdp-drops-120-r3-20260728-2328`
