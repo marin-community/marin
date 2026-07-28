@@ -199,3 +199,11 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
 - Output root: `s3://marin-us-east-02a/marin/users/marin/experiments/grug-moe-cw/grug-moe-cw-d5120-L48-e256-r16-d67-control-m3-draw1-r3-0728-1630/d67-family-dev`.
 - Interpretation: The corrected direct route reached the peer scheduler. This is a real production-band gang-admission wait, not a failed draw; do not resubmit.
 - Next action: Check on a 15-minute cadence for allocation, training progress, errors, and numerical health. Submit no other arm.
+
+### 2026-07-28 16:42 PDT - D67-CTL-01 admission cadence
+
+- Child job ID: `/mwittmann/d67-control-m3-draw1-r3-0728-1630/grug-train-d67-control-m3-draw1-r3-0728-1630`
+- Result: 16/16 tasks remain in `building`, waiting for Kueue workload `iris-pg-b7f0be39b51da146-0` to be admitted from `cw-use08a-lq`. Failures=0 and preemptions=0.
+- Health: No training metrics have appeared because no rank has been allocated. A full-log error scan found no traceback, OOM, accelerator, dead-node, or federation-peer signal.
+- Interpretation: Healthy gang-admission wait, 13 minutes after child submission. Do not resubmit.
+- Next action: Continue on the 15-minute cadence. Notify the DRI if the capacity wait exceeds 30 minutes, but do not mutate the cluster or another user's jobs.
