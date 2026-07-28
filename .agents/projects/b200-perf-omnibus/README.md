@@ -62,9 +62,12 @@ the router collapses, dropping 85–89% of assignments early and oscillating 17�
 over a full run, invisibly, because the always-on shared expert keeps loss
 descending
 ([#7201 c5080459722](https://github.com/marin-community/marin/issues/7201#issuecomment-5080459722)).
-Row 2 is doubly weak: the leg-batching behind it is contradicted by an independent
-reconstruction that measured **−3.66pp** with QB on and matched drops, and the
-implementation that produced 25.39% was never committed.
+Row 2 is doubly weak, though not for the reason earlier drafts gave. The
+implementation *was* committed (`98737aecf`, tag
+`ep64-27pct-sender-clipped-baseline-20260725`, on
+`origin/research/rav/7201-ep64-drop3`), and the −3.66pp reconstruction is a
+**different change** — it also moves the collective schedule, which the original
+never did. What disqualifies row 2 is fidelity: QB-off at ~85% early drops.
 
 **Row 1 is real, well-qualified, and still not an optimization.** It is a 200-step
 QB-on run at 2.02% drops — the best-qualified figure in the table — but it buys its
@@ -330,7 +333,7 @@ The ordered commit plan is in [`sequence.md`](sequence.md).
 | **Multi-rack EP** | EP64 has **no multi-rack measurement at all** behind its ~65–75-day 20T projections, and the measured 1→2-rack drop on the FSDP line was ~19%, not the 7% the projections assume. The largest unquantified schedule risk. |
 | **A clean 120-step run of the best ECHO recipe** | The 24.15% headline is a 20-step screen; the settled 120-step figure (22.30%) predates both padded Muon and `overlap_limit=4`. Nobody has run the current best recipe long enough to qualify it. |
 | **FSDP-line levers under EP** | Tier 4, and mostly *not* ported. Muon shape-grouping and the GatedNorm/attn-gate/XSA trio are absent from the EP runner entirely — roughly **+1.5pp of measured FSDP gain EP64 has not collected**. |
-| **Resolving the leg-batching contradiction** | +1.35pp in one implementation, **−3.66pp** in another with matched drops. Not a pending win; an open disagreement. |
+| **A cross-branch MFU denominator mismatch** | rav's stack computes `attention_seq_len = min(sliding_window, seq_len)`; the ep25 stack passes full `seq_len`. At sw2048/seq4096 that is a **1.056× denominator gap**, so the entire 24.04 → 22.60 → 20.85 QB ladder is inflated ~5.6% relative to rav's figures. Every cross-branch comparison in this document inherits it. |
 | **The capacity-factor cliff** | cf 1.00 → 1.05 costs 1.179pp for +0.05, while 1.05 → 1.15 costs 0.254pp for +0.10. The tile-alignment hypothesis was falsified. **Cause unknown**, and it prices every fidelity decision. |
 
 **Closed since the earlier framing, so that effort is not re-spent:** the "three of

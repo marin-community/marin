@@ -414,10 +414,33 @@ and −3.66pp.** Do not treat it as a pending win.
   regression, not a correctness bug. **Full batching at G=4 never produced a
   step** — two gang aborts. The implementing agent dropped confidence 6/10 → 2/10.
 
-**The original implementation is not committed.** The patch that produced 25.39% is
-uncommitted, so it cannot be inspected or re-run. The only leg-batching code that
-exists is the reconstruction, and it regresses. Any follow-up starts with
-recovering the original patch, not with booking rack time.
+**Correction (2026-07-28): the original was committed, and the two arms are not the
+same change.** The patch is `98737aecf` "[grug] Snapshot 27% EP64 research path",
+tag `ep64-27pct-sender-clipped-baseline-20260725`, on
+`origin/research/rav/7201-ep64-drop3`, carrying `SCALE_A2A_BATCH_EXPERT_GEMMS`.
+
+In the original, the collective restructuring is a **precondition**, not part of the
+patch: the knob hard-requires `SCALE_A2A_PACK_DISPATCH`/`PACK_COMBINE`, which
+already collapse four per-local-expert `all_to_all` calls into one dispatch and one
+combine. Turning it on changes **only compute** — wire traffic and a2a shapes are
+bit-identical to its control. The reconstruction fuses both concerns on a baseline
+with no packing at all, moving `split_axis`/`concat_axis` 0 → 1 *and* batching the
+GEMM; `SCALE_A2A_BATCH_GROUP=2` then runs a **third** collective schedule present in
+neither the original nor its own control. **The −3.66pp prices a collective-schedule
+change the 25.39% path never made.** The direction is sealed, not disputed.
+
+**Two further corrections.** The +1.35pp gap is invalid arithmetic — see the
+denominator note below. And "the adjoint and leg-batching stack" describes a
+configuration nobody ran: the 25.39% job's environment does **not** set
+`SCALE_A2A_CUSTOM_ADJOINT`, and `SCALE_MOE_QB` is unset.
+
+**Denominator mismatch.** rav's stack computes
+`attention_seq_len = min(sliding_window, max_seq_len)`; the ep25 stack passes full
+`seq_len`. Both ran sw2048/seq4096, so analytic `lm_flops_per_token` is 3.8205e10
+against 3.6180e10 — a **1.056× ratio**. 25.39% under ep25 accounting is 26.81%;
+equivalently the adjoint legs' 20.61/24.04 under honest sliding-window accounting
+are 19.52/22.77. This is the window-blind MFU defect appearing as a *cross-branch*
+mismatch, and the whole QB ladder inherits it.
 
 The ECHO line has its own `SCALE_A2A_BATCH_EXPERT_GEMMS=1` (hard-requiring
 `SCALE_A2A_PACK_DISPATCH=1` and `SCALE_A2A_PACK_COMBINE=1`) with parity tests, but

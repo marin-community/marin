@@ -49,11 +49,18 @@ an ancestor of `origin/research/mcwitt/7282-mxfp8-blackwell` (which is at
 Resolve these before writing commit 1. They are not implementation details; each
 changes what the series contains.
 
-1. **Which MuonH 4D Newton–Schulz fix.** `75c517148` (skip the merge; also fixes
-   `_newtonschulz_padded_stack_sharded` with a two-hop reshard; CPU-validated
-   bit-exact) or the rav transpose (`54bbe3d23` grugmuon hunk; carries the 17.8%
-   64-GPU measurement). They conflict textually. Recommendation: take `75c517148`
-   for the design and re-run the 64-GPU probe against it.
+1. **RESOLVED — take `75c517148`, and drop the re-run.** The framing that the rav
+   variant "has the measurement" was backwards. The isolated 64-GPU A/B
+   (20.22% → 22.02%, 208 SPMD warnings → 0,
+   [#7279 c5012284704](https://github.com/marin-community/marin/issues/7279#issuecomment-5012284704))
+   names `75c517148` explicitly; the 17.8% figure attributed to the rav variant is a
+   bundle reproduction with no isolation. `75c517148` also restores `orig_4d_spec` on
+   exit, has no guard that can silently fall back to the ~300 GiB path, and fixes the
+   padded-stack inbound reshard. **It is complementary to `497423bc6`, not competing**
+   — one fixes the reshard before `vmap`, the other after; the lines do not overlap.
+   They have never run together. Porting hazard: `75c517148`'s EP path has no
+   `SCALE_MUON_SYRK` branch (the flag does not exist on that lineage), so a naive
+   conflict resolution silently bypasses SYRK. C2's size is **+54/−11**.
 2. **Whether Receiver-ECHO (#13 in the brief) is in scope.** It posts the best
    compliant EP64 number and it is an order of magnitude more code than everything
    else combined. Recommendation: out of scope here; separate project.
