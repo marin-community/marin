@@ -108,7 +108,9 @@ export for tenant `208261`, cluster `marin-us-east-08a`, region
 Grafana now monitors `ListPeers` from the Marin controller and pages after a
 peer remains unreachable for five minutes. This reuses the production
 federation heartbeat, so no Grafana egress address was added to the CoreWeave
-allowlist.
+allowlist. Production revision `marin-grafana-00045-svl` began evaluating the
+rule on 2026-07-28 at 17:36 UTC; the first live `ListPeers` request returned
+`200`.
 
 ## How OPS.md could have shortened this
 
