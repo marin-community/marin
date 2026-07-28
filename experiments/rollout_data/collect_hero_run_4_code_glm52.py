@@ -97,8 +97,6 @@ VLLM_ENDPOINT = "glm52-openai"
 RAY_ENDPOINT = "glm52-ray"
 DEFAULT_MAX_MODEL_LEN = 64 * 1024
 DEFAULT_MAX_NUM_SEQS = 12
-DEFAULT_KV_CACHE_DTYPE = "auto"
-DEFAULT_DECODE_CONTEXT_PARALLEL_SIZE = 1
 DEFAULT_MAX_TOKENS = 16 * 1024
 DEFAULT_TEMPERATURE = 1.0
 DEFAULT_TOP_P = 0.95
@@ -591,11 +589,11 @@ def main() -> None:
     run_parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
     run_parser.add_argument("--max-model-len", type=int, default=DEFAULT_MAX_MODEL_LEN)
     run_parser.add_argument("--max-num-seqs", type=int, default=DEFAULT_MAX_NUM_SEQS)
-    run_parser.add_argument("--kv-cache-dtype", default=DEFAULT_KV_CACHE_DTYPE)
+    run_parser.add_argument("--kv-cache-dtype", default=ServerConfig.kv_cache_dtype)
     run_parser.add_argument(
         "--decode-context-parallel-size",
         type=int,
-        default=DEFAULT_DECODE_CONTEXT_PARALLEL_SIZE,
+        default=ServerConfig.decode_context_parallel_size,
     )
     run_parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
     run_parser.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE)
