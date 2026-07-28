@@ -1,12 +1,13 @@
 # D-1: FSDP baseline token-drop rates
 
-Status: corrected direct-cluster resubmission prepared; no D-1 metrics inspected.
+Status: corrected direct-cluster jobs submitted; no D-1 metrics inspected.
 
 The first submission attempt used the federated `marin` route and
 `interactive` priority. Both jobs remained outside the target cluster's
-scheduler and were cancelled without producing a result. Their commands and
-IDs remain below as a record of the failed launch; they are not measurements.
-The pre-registration predates both that attempt and the corrected resubmission.
+scheduler and were cancelled without producing a result:
+`/marin/d1a-fsdp-drops-350-20260728-224739` and
+`/marin/d1b-fsdp-drops-120-20260728-224739`. They are not measurements. The
+pre-registration predates both that attempt and the corrected resubmission.
 
 ## TL;DR
 
@@ -67,18 +68,21 @@ model and implementation.
 
 ## D-1a: d6144, 4-of-128, chunk-2
 
-Job ID: `/marin/d1a-fsdp-drops-350-20260728-224739`
+Job ID: `/mwittmann/d1a-fsdp-drops-350-20260728-232156`
+
+Submission state at 2026-07-28 23:23 UTC: `pending`, reason
+`Pending scheduler feedback` on `cw-us-east-08a`.
 
 Training gang:
-`/marin/d1a-fsdp-drops-350-20260728-224739/grug-train-d1a-fsdp-drops-350-20260728-224739`
+pending launcher execution
 
 Exact command:
 
 ```bash
-IRIS_USER=mwittmann .venv/bin/iris --cluster=marin job run --no-wait \
-  --target-cluster cw-us-east-08a --priority interactive \
-  --job-name d1a-fsdp-drops-350-20260728-224739 \
-  -e RUN_ID d1a-fsdp-drops-350-20260728-224739 \
+IRIS_USER=mwittmann /etc/profiles/per-user/marin/bin/iris \
+  --cluster=cw-us-east-08a job run --no-wait --priority production \
+  --job-name d1a-fsdp-drops-350-20260728-232156 \
+  -e RUN_ID d1a-fsdp-drops-350-20260728-232156 \
   -e SCALE_GPUS_PER_NODE 4 -e SCALE_GPU_TYPE GB200 \
   -e SCALE_GPU_REPLICAS 16 -e SCALE_EXPERT_AXIS 1 -e SCALE_REPLICA_AXIS 1 \
   -e SCALE_HIDDEN_DIM 6144 -e SCALE_NUM_LAYERS 48 \
@@ -97,7 +101,7 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=marin job run --no-wait \
   -e CE_IMPL liger -e CE_LIGER_CHUNK 8192 \
   -e SCALE_REMAT recompute_all -e SCALE_MOE_EXPERT_CHUNKS 2 \
   -e SCALE_REPORT_DROPS 1 -e SCALE_TRACKER json_logger \
-  -e SCALE_JSON_LOGGER d1a-fsdp-drops-350-20260728-224739.metrics \
+  -e SCALE_JSON_LOGGER d1a-fsdp-drops-350-20260728-232156.metrics \
   -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async \
   -e XLA_FLAGS "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false --xla_gpu_experimental_parallel_collective_overlap_limit=4" \
   -- python -m experiments.grug.moe.launch_cw_scale \
@@ -117,18 +121,21 @@ Results: pending
 
 ## D-1b: d5120, 8-of-256, unchunked
 
-Job ID: `/marin/d1b-fsdp-drops-120-20260728-224739`
+Job ID: `/mwittmann/d1b-fsdp-drops-120-20260728-232156`
+
+Submission state at 2026-07-28 23:23 UTC: `pending`, reason
+`Pending scheduler feedback` on `cw-us-east-08a`.
 
 Training gang:
-`/marin/d1b-fsdp-drops-120-20260728-224739/grug-train-d1b-fsdp-drops-120-20260728-224739`
+pending launcher execution
 
 Exact command:
 
 ```bash
-IRIS_USER=mwittmann .venv/bin/iris --cluster=marin job run --no-wait \
-  --target-cluster cw-us-east-08a --priority interactive \
-  --job-name d1b-fsdp-drops-120-20260728-224739 \
-  -e RUN_ID d1b-fsdp-drops-120-20260728-224739 \
+IRIS_USER=mwittmann /etc/profiles/per-user/marin/bin/iris \
+  --cluster=cw-us-east-08a job run --no-wait --priority production \
+  --job-name d1b-fsdp-drops-120-20260728-232156 \
+  -e RUN_ID d1b-fsdp-drops-120-20260728-232156 \
   -e SCALE_GPUS_PER_NODE 4 -e SCALE_GPU_TYPE GB200 \
   -e SCALE_GPU_REPLICAS 16 -e SCALE_EXPERT_AXIS 1 -e SCALE_REPLICA_AXIS 1 \
   -e SCALE_HIDDEN_DIM 5120 -e SCALE_NUM_LAYERS 48 \
@@ -143,7 +150,7 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=marin job run --no-wait \
   -e SCALE_REMAT recompute_all -e SCALE_MOE_EXPERT_CHUNKS 1 \
   -e SCALE_DISABLE_CHECKPOINT 1 -e SCALE_REPORT_DROPS 1 \
   -e SCALE_TRACKER json_logger \
-  -e SCALE_JSON_LOGGER d1b-fsdp-drops-120-20260728-224739.metrics \
+  -e SCALE_JSON_LOGGER d1b-fsdp-drops-120-20260728-232156.metrics \
   -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async \
   -e XLA_FLAGS "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false --xla_gpu_experimental_parallel_collective_overlap_limit=4" \
   -- python -m experiments.grug.moe.launch_cw_scale \
