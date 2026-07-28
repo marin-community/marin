@@ -188,3 +188,14 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
 - Output and retention: local JSON metrics named `d67-control-m3-draw1-r3-0728-1630.metrics`; checkpoints are disabled for this bounded benchmark.
 - Monitoring: one owner, 15-minute steady-state cadence after the initial two-minute failure check.
 - Next action: Commit this pre-launch record, submit this job only, verify it is in the direct peer queue with a real Kueue scheduling reason, and monitor it to terminal before draw 2.
+
+### 2026-07-28 16:32 PDT - D67-CTL-01 direct production submission verified
+
+- Job ID: `/mwittmann/d67-control-m3-draw1-r3-0728-1630`
+- Child job ID: `/mwittmann/d67-control-m3-draw1-r3-0728-1630/grug-train-d67-control-m3-draw1-r3-0728-1630`
+- Submitted: 2026-07-28 16:28 PDT from logbook commit `3abb84a739efef35dcd7a3d0f7acda10be9952ad`.
+- Result: Parent setup completed with the requested 2 CPUs and 3 GB memory and dispatched the 16-node child. At the two-minute check, the child has 16/16 tasks in `building`, failures=0, and preemptions=0.
+- Queue verification: task 0 reports `SchedulingGated` for Kueue workload `iris-pg-b7f0be39b51da146-0` in `cw-use08a-lq`, waiting for Kueue admission. There is no `Queued for peer ...` federation reason.
+- Output root: `s3://marin-us-east-02a/marin/users/marin/experiments/grug-moe-cw/grug-moe-cw-d5120-L48-e256-r16-d67-control-m3-draw1-r3-0728-1630/d67-family-dev`.
+- Interpretation: The corrected direct route reached the peer scheduler. This is a real production-band gang-admission wait, not a failed draw; do not resubmit.
+- Next action: Check on a 15-minute cadence for allocation, training progress, errors, and numerical health. Submit no other arm.
