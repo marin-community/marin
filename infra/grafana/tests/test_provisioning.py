@@ -252,6 +252,26 @@ def test_dashboard_datasource_uids_are_provisioned():
             assert uid in uids, f"{name} panel {panel.get('id')}: unknown datasource {uid!r}"
 
 
+def test_provisioning_success_ratio_shows_fleet_and_region_stats():
+    dashboard = _stitched_dashboards()["infra.json"]
+    (panel,) = [panel for panel in dashboard["panels"] if panel.get("title") == "Provisioning success ratio"]
+    (target,) = panel["targets"]
+
+    columns = {column["selector"]: column for column in target["columns"]}
+    assert columns["series"] == {"selector": "series", "text": "region", "type": "string"}
+    assert columns["value"]["type"] == "number"
+
+    sql = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "sql")
+    assert "metric = 'provision_success_ratio'" in sql
+    assert "metric IN ('provision_ready', 'provision_outcomes')" in sql
+    assert "regexp_replace(json_get(labels, 'zone'), '-[^-]+$', '') AS series" in sql
+    assert "ready / NULLIF(outcomes, 0)" in sql
+
+    legend = panel["options"]["legend"]
+    assert legend["displayMode"] == "table"
+    assert legend["calcs"] == ["lastNotNull", "min", "max"]
+
+
 def test_stat_panels_use_grafana_reduce_options_schema():
     for name, dashboard in _stitched_dashboards().items():
         for panel in dashboard["panels"]:

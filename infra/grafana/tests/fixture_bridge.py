@@ -134,7 +134,19 @@ def _finelog(query: str) -> list[dict]:
         ]
     if "provision_success_ratio" in sql:
         return [
-            {"t": round((_NOW - timedelta(minutes=10 * index)).timestamp() * 1000), "value": 0.96 + (index % 4) * 0.008}
+            {
+                "t": round((_NOW - timedelta(minutes=10 * index)).timestamp() * 1000),
+                "series": series,
+                "value": base + (index % 4) * 0.008,
+            }
+            for series, base in (
+                ("fleet", 0.81),
+                ("europe-west4", 0.72),
+                ("us-central1", 0.94),
+                ("us-east1", 0.78),
+                ("us-east5", 0.86),
+                ("us-west4", 0.75),
+            )
             for index in range(24)
         ]
     return []
