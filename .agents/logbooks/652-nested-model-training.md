@@ -2056,3 +2056,43 @@ result:
   successful compilation and finite matched updates.
 - Consolidated the prior Weaver reports and charts with the r4 launch links in
   <https://github.com/marin-community/marin/pull/7667#issuecomment-5105929440>.
+
+### 2026-07-28 15:51 - Replace wedged E256 startup
+
+- fixed25 cleared compilation and reached step 1,121 with finite loss and zero
+  routing overflow. Across steps 100-884, median throughput is 2.536M
+  tokens/s, or 413.6ms per 1,048,576-token update. That projects to 10.96
+  optimizer-hours for 100B tokens before evaluation and checkpoint overhead.
+- fixed25 also recorded an 82.6s data-loader stall at step 641, then resumed.
+  Steady-state compiled-step cost and end-to-end elapsed cost will therefore
+  be reported separately.
+- Every sampled E256 r4 rank remained in JAX
+  `backend_compile_and_load` for `threefry_split` after more than 27 minutes.
+  Three ranks had identical stacks, each node reported 0% GPU utilization,
+  and rank 0 accumulated only 0.8 CPU-seconds over 128 wall-seconds. This was
+  a wedged startup compilation, not a training collective or an architecture
+  result.
+- Submitted the identical E256 control as r5. Once its 16-node gang was
+  running, terminated r4 and released its 64 GB200s. r5 cleared the RNG-key
+  stage in under two minutes and entered train-step compilation on all ranks.
+  The treatment arm was not interrupted.
+- The independent stale-federation fault is tracked in
+  <https://github.com/marin-community/marin/issues/7705> and
+  `.agents/ops/2026-07-28-iris-08a-federation-heartbeat-stale.md`.
+
+### 2026-07-28 16:08 - Both arms train; fixed25 recovers one failed gang
+
+- E256 r5 reached step 510 with finite loss, zero overflow, and median
+  post-step-100 throughput of 2.575M tokens/s across the first 137 steady
+  samples. fixed25's corresponding median through step 2,501 is 2.558M
+  tokens/s. The preliminary compiled-step surcharge is 0.66%.
+- The fixed25 step-2,500 evaluation reported Paloma macro loss `6.065558` in
+  full mode, `6.088614` for E128, and `6.212317` for E16. The 77.42s logged
+  hook includes all three modes.
+- The fixed25 gang then lost XLA coordination at 16:04 UTC:
+  `WatchTasksAsync ... 10.186.213.145:8476: Connection refused`. Iris
+  recorded one failed task-0 attempt and cascaded all 16 ranks into attempt 1.
+  The replacement gang restored from its latest temporary checkpoint near
+  step 1,550 and resumed training. This is a recoverable infrastructure
+  interruption; replayed elapsed time will be separated from optimizer-step
+  cost.
