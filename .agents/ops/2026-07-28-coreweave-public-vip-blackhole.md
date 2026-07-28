@@ -3,7 +3,7 @@ date: 2026-07-28
 system: coreweave
 severity: degraded
 resolution: investigating
-pr: none
+pr: https://github.com/marin-community/marin/pull/7707
 issue: none
 ---
 
@@ -104,6 +104,11 @@ Traefik replica did not bypass the CoreWeave edge failure and were removed.
 CoreWeave must restore external routing for `166.19.14.7/32` and inspect route
 export for tenant `208261`, cluster `marin-us-east-08a`, region
 `US-EAST-08A`.
+
+Grafana now monitors `ListPeers` from the Marin controller and pages after a
+peer remains unreachable for five minutes. This reuses the production
+federation heartbeat, so no Grafana egress address was added to the CoreWeave
+allowlist.
 
 ## How OPS.md could have shortened this
 
