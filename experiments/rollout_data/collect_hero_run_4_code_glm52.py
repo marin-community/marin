@@ -11,6 +11,7 @@ import socket
 import subprocess
 import tempfile
 import time
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import asdict, dataclass
@@ -18,7 +19,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import fsspec
 import psutil
 import pyarrow.parquet as pq
 import requests
@@ -173,6 +173,14 @@ class PromptRecord:
     instruction_seed: str
 
 
+@dataclass(frozen=True)
+class CollectionDelta:
+    complete_records: int
+    generated_records: int
+    skipped_records: int
+    output_path: StoragePath | None
+
+
 def partition_specs() -> list[PartitionSpec]:
     partitions = []
     row_start = 0
@@ -296,100 +304,111 @@ print(nvcc.parent.parent)
     return _cuda_overlay(cuda_root)
 
 
-def _serve_glm52(vllm_endpoint: str, ray_endpoint: str, config: ServerConfig) -> None:
-    info = get_job_info()
-    ctx = iris_ctx()
-    if info is None or ctx is None:
-        raise RuntimeError("GLM-5.2 serving must run inside an Iris task")
-
-    vllm_command, environment = _vllm_process_command()
-    ray_command = [*vllm_command[:-1], "ray"]
-    host = info.advertise_host
-    environment["CUDA_HOME"] = _cuda_home(vllm_command, environment)
-    environment["VLLM_HOST_IP"] = host
-    environment["GLOO_SOCKET_IFNAME"] = _network_interface(host)
-    if info.task_index == 0:
-        weights = resolve_model_path(MODEL, MODEL_CACHE_TTL_DAYS, MODEL_REVISION)
-        ray_port = _reserve_port(host, ctx.get_port("ray"))
-        http_port = _reserve_port(host, ctx.get_port("http"))
-        ray_address = f"{host}:{ray_port}"
-        subprocess.run(
-            [
-                *ray_command,
-                "start",
-                "--head",
-                f"--node-ip-address={host}",
-                f"--port={ray_port}",
-                *_ray_worker_port_args(ray_port, http_port),
-                f"--num-gpus={GPUS_PER_NODE}",
-                "--disable-usage-stats",
-            ],
-            check=True,
-            env=environment,
-        )
-        ray_endpoint_id = ctx.registry.register(ray_endpoint, ray_address)
+def _run_vllm(
+    ctx,
+    host: str,
+    http_port: int,
+    ray_address: str,
+    vllm_endpoint: str,
+    vllm_command: list[str],
+    environment: dict[str, str],
+    weights: str,
+    config: ServerConfig,
+) -> None:
+    process = subprocess.Popen(
+        [
+            *vllm_command,
+            "serve",
+            weights,
+            "--served-model-name",
+            MODEL,
+            "--host",
+            host,
+            "--port",
+            str(http_port),
+            "--tensor-parallel-size",
+            str(TENSOR_PARALLEL_SIZE),
+            "--distributed-executor-backend",
+            "ray",
+            "--enable-expert-parallel",
+            "--max-model-len",
+            str(config.max_model_len),
+            "--max-num-seqs",
+            str(config.max_num_seqs),
+            "--gpu-memory-utilization",
+            str(GPU_MEMORY_UTILIZATION),
+            "--trust-remote-code",
+        ],
+        env={**environment, "RAY_ADDRESS": ray_address},
+    )
+    try:
+        base_url = f"http://{host}:{http_port}"
+        _wait_for_http(f"{base_url}/health", process, ENDPOINT_TIMEOUT)
+        endpoint_id = ctx.registry.register(vllm_endpoint, base_url)
         try:
-            deadline = time.monotonic() + 900
-            while time.monotonic() < deadline:
-                status = subprocess.run(
-                    [*ray_command, "status", f"--address={ray_address}"],
-                    env=environment,
-                    text=True,
-                    capture_output=True,
-                )
-                if status.returncode == 0 and f"/{TENSOR_PARALLEL_SIZE}.0 GPU" in status.stdout:
-                    break
-                time.sleep(10)
-            else:
-                raise TimeoutError(f"Ray cluster did not register all {TENSOR_PARALLEL_SIZE} GB200 GPUs")
-
-            process = subprocess.Popen(
-                [
-                    *vllm_command,
-                    "serve",
-                    weights,
-                    "--served-model-name",
-                    MODEL,
-                    "--host",
-                    host,
-                    "--port",
-                    str(http_port),
-                    "--tensor-parallel-size",
-                    str(TENSOR_PARALLEL_SIZE),
-                    "--distributed-executor-backend",
-                    "ray",
-                    "--enable-expert-parallel",
-                    "--max-model-len",
-                    str(config.max_model_len),
-                    "--max-num-seqs",
-                    str(config.max_num_seqs),
-                    "--gpu-memory-utilization",
-                    str(GPU_MEMORY_UTILIZATION),
-                    "--trust-remote-code",
-                ],
-                env={**environment, "RAY_ADDRESS": ray_address},
-            )
-            try:
-                base_url = f"http://{host}:{http_port}"
-                _wait_for_http(f"{base_url}/health", process, ENDPOINT_TIMEOUT)
-                endpoint_id = ctx.registry.register(vllm_endpoint, base_url)
-                try:
-                    return_code = process.wait()
-                    raise RuntimeError(f"vLLM exited with code {return_code}")
-                finally:
-                    ctx.registry.unregister(endpoint_id)
-            finally:
-                if process.poll() is None:
-                    process.terminate()
-                    with suppress(subprocess.TimeoutExpired):
-                        process.wait(timeout=30)
-                if process.poll() is None:
-                    process.kill()
+            return_code = process.wait()
+            raise RuntimeError(f"vLLM exited with code {return_code}")
         finally:
-            ctx.registry.unregister(ray_endpoint_id)
-            subprocess.run([*ray_command, "stop", "--force"], env=environment, check=False)
-        return
+            ctx.registry.unregister(endpoint_id)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            with suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=30)
+        if process.poll() is None:
+            process.kill()
 
+
+def _serve_ray_head(
+    ctx,
+    host: str,
+    vllm_endpoint: str,
+    ray_endpoint: str,
+    vllm_command: list[str],
+    ray_command: list[str],
+    environment: dict[str, str],
+    config: ServerConfig,
+) -> None:
+    weights = resolve_model_path(MODEL, MODEL_CACHE_TTL_DAYS, MODEL_REVISION)
+    ray_port = _reserve_port(host, ctx.get_port("ray"))
+    http_port = _reserve_port(host, ctx.get_port("http"))
+    ray_address = f"{host}:{ray_port}"
+    subprocess.run(
+        [
+            *ray_command,
+            "start",
+            "--head",
+            f"--node-ip-address={host}",
+            f"--port={ray_port}",
+            *_ray_worker_port_args(ray_port, http_port),
+            f"--num-gpus={GPUS_PER_NODE}",
+            "--disable-usage-stats",
+        ],
+        check=True,
+        env=environment,
+    )
+    ray_endpoint_id = ctx.registry.register(ray_endpoint, ray_address)
+    try:
+        deadline = time.monotonic() + 900
+        while time.monotonic() < deadline:
+            status = subprocess.run(
+                [*ray_command, "status", f"--address={ray_address}"],
+                env=environment,
+                text=True,
+                capture_output=True,
+            )
+            if status.returncode == 0 and f"/{TENSOR_PARALLEL_SIZE}.0 GPU" in status.stdout:
+                break
+            time.sleep(10)
+        else:
+            raise TimeoutError(f"Ray cluster did not register all {TENSOR_PARALLEL_SIZE} GB200 GPUs")
+        _run_vllm(ctx, host, http_port, ray_address, vllm_endpoint, vllm_command, environment, weights, config)
+    finally:
+        ctx.registry.unregister(ray_endpoint_id)
+        subprocess.run([*ray_command, "stop", "--force"], env=environment, check=False)
+
+
+def _serve_ray_worker(host: str, ray_endpoint: str, ray_command: list[str], environment: dict[str, str]) -> None:
     ray_address = _wait_for_endpoint(ray_endpoint, timeout=ENDPOINT_TIMEOUT)
     subprocess.run(
         [
@@ -405,6 +424,24 @@ def _serve_glm52(vllm_endpoint: str, ray_endpoint: str, config: ServerConfig) ->
         check=True,
         env=environment,
     )
+
+
+def _serve_glm52(vllm_endpoint: str, ray_endpoint: str, config: ServerConfig) -> None:
+    info = get_job_info()
+    ctx = iris_ctx()
+    if info is None or ctx is None:
+        raise RuntimeError("GLM-5.2 serving must run inside an Iris task")
+
+    vllm_command, environment = _vllm_process_command()
+    ray_command = [*vllm_command[:-1], "ray"]
+    host = info.advertise_host
+    environment["CUDA_HOME"] = _cuda_home(vllm_command, environment)
+    environment["VLLM_HOST_IP"] = host
+    environment["GLOO_SOCKET_IFNAME"] = _network_interface(host)
+    if info.task_index == 0:
+        _serve_ray_head(ctx, host, vllm_endpoint, ray_endpoint, vllm_command, ray_command, environment, config)
+        return
+    _serve_ray_worker(host, ray_endpoint, ray_command, environment)
 
 
 def _submit_vllm(ctx, vllm_endpoint: str, ray_endpoint: str, config: ServerConfig):
@@ -431,7 +468,7 @@ def _submit_vllm(ctx, vllm_endpoint: str, ray_endpoint: str, config: ServerConfi
 
 def _read_partition(partition_slice: PartitionSlice) -> list[PromptRecord]:
     partition = partition_slice.partition
-    with fsspec.open(partition.url, "rb") as handle:
+    with StoragePath(partition.url).open("rb") as handle:
         table = pq.ParquetFile(handle).read_row_group(partition.row_group_index, columns=list(INPUT_COLUMNS))
     rows = table.slice(0, partition_slice.num_rows).to_pylist()
     records = []
@@ -575,6 +612,39 @@ def _write_progress(
     )
 
 
+def _collect_partition(
+    executor: ThreadPoolExecutor,
+    vllm_url: str,
+    collection: CollectionConfig,
+    sampling: SamplingConfig,
+    partition_slice: PartitionSlice,
+) -> Iterator[CollectionDelta]:
+    partition = partition_slice.partition
+    pending_chunks = []
+    skipped_records = 0
+    for row_start in range(0, partition_slice.num_rows, collection.chunk_size):
+        row_end = min(partition_slice.num_rows, row_start + collection.chunk_size)
+        path = _chunk_path(collection.output_path, partition, row_start, row_end)
+        if path.exists():
+            skipped_records += row_end - row_start
+            continue
+        pending_chunks.append((row_start, row_end, path))
+    if skipped_records:
+        yield CollectionDelta(skipped_records, 0, skipped_records, None)
+    if not pending_chunks:
+        return
+
+    records = _read_partition(partition_slice)
+    for row_start, row_end, path in pending_chunks:
+        chunk = records[row_start:row_end]
+        outputs = list(executor.map(lambda prompt: _completion(vllm_url, prompt, sampling), chunk))
+        path.write_text(
+            "".join(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n" for record in outputs),
+            compression="gzip",
+        )
+        yield CollectionDelta(len(outputs), len(outputs), 0, path)
+
+
 def _run_collection(
     vllm_url: str,
     collection: CollectionConfig,
@@ -606,29 +676,10 @@ def _run_collection(
 
     with ThreadPoolExecutor(max_workers=collection.concurrency) as executor:
         for partition_slice in slices:
-            partition = partition_slice.partition
-            pending_chunks = []
-            for row_start in range(0, partition_slice.num_rows, collection.chunk_size):
-                row_end = min(partition_slice.num_rows, row_start + collection.chunk_size)
-                path = _chunk_path(collection.output_path, partition, row_start, row_end)
-                if path.exists():
-                    complete_records += row_end - row_start
-                    skipped_records += row_end - row_start
-                    continue
-                pending_chunks.append((row_start, row_end, path))
-            if not pending_chunks:
-                continue
-
-            records = _read_partition(partition_slice)
-            for row_start, row_end, path in pending_chunks:
-                chunk = records[row_start:row_end]
-                outputs = list(executor.map(lambda prompt: _completion(vllm_url, prompt, sampling), chunk))
-                path.write_text(
-                    "".join(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n" for record in outputs),
-                    compression="gzip",
-                )
-                complete_records += len(outputs)
-                generated_records += len(outputs)
+            for delta in _collect_partition(executor, vllm_url, collection, sampling, partition_slice):
+                complete_records += delta.complete_records
+                generated_records += delta.generated_records
+                skipped_records += delta.skipped_records
                 _write_progress(
                     collection,
                     "running",
@@ -638,13 +689,14 @@ def _run_collection(
                     skipped_records,
                     started,
                 )
-                logger.info(
-                    "Shard %d saved %d/%d records to %s",
-                    collection.shard_index,
-                    complete_records,
-                    expected_records,
-                    path,
-                )
+                if delta.output_path is not None:
+                    logger.info(
+                        "Shard %d saved %d/%d records to %s",
+                        collection.shard_index,
+                        complete_records,
+                        expected_records,
+                        delta.output_path,
+                    )
 
     _write_progress(
         collection,
@@ -695,7 +747,7 @@ def run(
             logger.warning("Failed to terminate vLLM child job %s during collector cleanup", vllm_job, exc_info=True)
 
 
-def _positive(parser: argparse.ArgumentParser, name: str, value: int) -> None:
+def _validate_positive(parser: argparse.ArgumentParser, name: str, value: int) -> None:
     if value < 1:
         parser.error(f"{name} must be positive")
 
@@ -725,9 +777,9 @@ def main() -> None:
         return
 
     for name in ("num_shards", "chunk_size", "concurrency", "max_model_len", "max_num_seqs", "max_tokens"):
-        _positive(parser, f"--{name.replace('_', '-')}", getattr(args, name))
+        _validate_positive(parser, f"--{name.replace('_', '-')}", getattr(args, name))
     if args.max_records is not None:
-        _positive(parser, "--max-records", args.max_records)
+        _validate_positive(parser, "--max-records", args.max_records)
     if not 0 <= args.shard_index < args.num_shards:
         parser.error("--shard-index must be in [0, --num-shards)")
     if args.temperature < 0:
