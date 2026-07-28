@@ -6,37 +6,31 @@
 import argparse
 import json
 import logging
-import os
-import socket
-import subprocess
-import tempfile
 import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import suppress
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
-import psutil
 import pyarrow.parquet as pq
 import requests
 from iris.client import iris_ctx
-from iris.cluster.client.job_info import get_job_info
-from iris.cluster.setup_scripts import default_setup_script
-from iris.cluster.types import CoschedulingConfig, Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device, is_job_finished
-from marin.inference.config import DEFAULT_CUDA_VLLM_VERSION
-from marin.inference.model_preparation import resolve_model_path
-from marin.inference.proxy import _reserve_port
-from marin.inference.vllm_server import IsolatedCudaVllm, _poll_until_ready
 from rigging.filesystem import StoragePath
-from rigging.timing import Duration
+
+from experiments.rollout_data.glm52_vllm import (
+    GPU_MEMORY_UTILIZATION,
+    MODEL,
+    MODEL_CACHE_TTL_DAYS,
+    MODEL_REVISION,
+    ServerConfig,
+    prepare_model_cache,
+    submit_glm52,
+    wait_for_endpoint,
+)
 
 logger = logging.getLogger(__name__)
 
-MODEL = "zai-org/GLM-5.2-FP8"
-MODEL_REVISION = "ba978f7d347eaf65d22f1a86833408afdb953541"
 DATASET = "mlfoundations-dev/hero_run_4_code"
 DATASET_SPLIT = "train"
 DATASET_REVISION = "18bef55db16de0a0f7416c200697a201e82e6ff5"
@@ -100,11 +94,6 @@ PARQUET_URL = (
 )
 VLLM_ENDPOINT = "glm52-openai"
 RAY_ENDPOINT = "glm52-ray"
-CUDA_COMPILER_REQUIREMENT = "cuda-toolkit[cccl,crt,cudart,nvcc,nvvm]==13.0.2"
-MODEL_CACHE_TTL_DAYS = 30
-GPUS_PER_NODE = 4
-VLLM_REPLICAS = 2
-TENSOR_PARALLEL_SIZE = GPUS_PER_NODE * VLLM_REPLICAS
 DEFAULT_MAX_MODEL_LEN = 64 * 1024
 DEFAULT_MAX_NUM_SEQS = 12
 DEFAULT_MAX_TOKENS = 16 * 1024
@@ -112,11 +101,9 @@ DEFAULT_TEMPERATURE = 1.0
 DEFAULT_TOP_P = 0.95
 DEFAULT_CONCURRENCY = 16
 DEFAULT_CHUNK_SIZE = 32
-GPU_MEMORY_UTILIZATION = 0.9
-ENDPOINT_TIMEOUT = 3 * 3600
 REQUEST_TIMEOUT = 3 * 3600
-RUN_TIMEOUT_HOURS = 30 * 24
 INPUT_COLUMNS = ("id", "instruction_seed", "__original_row_idx")
+PROGRESS_RUNNING = "running"
 
 
 @dataclass(frozen=True)
@@ -124,12 +111,6 @@ class SamplingConfig:
     temperature: float
     top_p: float
     max_tokens: int
-
-
-@dataclass(frozen=True)
-class ServerConfig:
-    max_model_len: int
-    max_num_seqs: int
 
 
 @dataclass(frozen=True)
@@ -219,246 +200,6 @@ def partition_slices(
         slices.append(PartitionSlice(partition, num_rows))
         remaining -= num_rows
     return slices
-
-
-def _ray_worker_port_args(*excluded_ports: int) -> list[str]:
-    for minimum in (20000, 30000, 40000, 50000):
-        maximum = minimum + 9999
-        if not any(minimum <= port <= maximum for port in excluded_ports):
-            return [f"--min-worker-port={minimum}", f"--max-worker-port={maximum}"]
-    raise ValueError(f"Could not select Ray worker ports excluding {excluded_ports}")
-
-
-def _network_interface(host: str) -> str:
-    for name, addresses in psutil.net_if_addrs().items():
-        if any(address.family == socket.AF_INET and address.address == host for address in addresses):
-            return name
-    raise RuntimeError(f"No network interface owns advertised host IP {host}")
-
-
-def _check_process_alive(process: subprocess.Popen[bytes]) -> None:
-    return_code = process.poll()
-    if return_code is not None:
-        raise RuntimeError(f"vLLM exited with code {return_code} before becoming ready")
-
-
-def _wait_for_endpoint(name: str, job=None, timeout: float = ENDPOINT_TIMEOUT) -> str:
-    ctx = iris_ctx()
-    assert ctx is not None
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        result = ctx.resolver.resolve(name)
-        if not result.is_empty:
-            return result.first().url
-        if job is not None and is_job_finished(job.state):
-            raise RuntimeError(f"Job {job} finished before registering endpoint {name!r}")
-        time.sleep(15)
-    raise TimeoutError(f"Timed out waiting for endpoint {name!r}")
-
-
-def _vllm_process_command() -> tuple[list[str], dict[str, str]]:
-    launcher = IsolatedCudaVllm(version=DEFAULT_CUDA_VLLM_VERSION)
-    command = launcher.command()
-    python_index = command.index("--python")
-    command[python_index:python_index] = [
-        "--with",
-        "ray[cgraph]>=2.55.1",
-        "--with",
-        CUDA_COMPILER_REQUIREMENT,
-    ]
-    return command, {**os.environ, **launcher.env()}
-
-
-def _cuda_overlay(cuda_root: Path) -> str:
-    cuda_home = Path(tempfile.mkdtemp(prefix="cuda-home-"))
-    for directory in ("bin", "include", "nvvm"):
-        (cuda_home / directory).symlink_to(cuda_root / directory, target_is_directory=True)
-    lib64 = cuda_home / "lib64"
-    lib64.mkdir()
-    for library in (cuda_root / "lib").iterdir():
-        (lib64 / library.name).symlink_to(library, target_is_directory=library.is_dir())
-    cudart = next((cuda_root / "lib").glob("libcudart.so.*"))
-    (lib64 / "libcudart.so").symlink_to(cudart)
-    return str(cuda_home)
-
-
-def _cuda_home(vllm_command: list[str], environment: dict[str, str]) -> str:
-    script = """\
-from pathlib import Path
-import sys
-
-nvcc = next(path for entry in sys.path for path in Path(entry).glob("nvidia/**/bin/nvcc"))
-print(nvcc.parent.parent)
-"""
-    command = [*vllm_command[:-1], "python", "-c", script]
-    cuda_root = Path(subprocess.check_output(command, env=environment, text=True).strip())
-    return _cuda_overlay(cuda_root)
-
-
-def _run_vllm(
-    ctx,
-    host: str,
-    http_port: int,
-    ray_address: str,
-    vllm_endpoint: str,
-    vllm_command: list[str],
-    environment: dict[str, str],
-    weights: str,
-    config: ServerConfig,
-) -> None:
-    process = subprocess.Popen(
-        [
-            *vllm_command,
-            "serve",
-            weights,
-            "--served-model-name",
-            MODEL,
-            "--host",
-            host,
-            "--port",
-            str(http_port),
-            "--tensor-parallel-size",
-            str(TENSOR_PARALLEL_SIZE),
-            "--distributed-executor-backend",
-            "ray",
-            "--enable-expert-parallel",
-            "--max-model-len",
-            str(config.max_model_len),
-            "--max-num-seqs",
-            str(config.max_num_seqs),
-            "--gpu-memory-utilization",
-            str(GPU_MEMORY_UTILIZATION),
-            "--trust-remote-code",
-        ],
-        env={**environment, "RAY_ADDRESS": ray_address},
-    )
-    try:
-        base_url = f"http://{host}:{http_port}"
-        _poll_until_ready(
-            f"{base_url}/v1",
-            timeout_seconds=ENDPOINT_TIMEOUT,
-            check_alive=lambda: _check_process_alive(process),
-        )
-        endpoint_id = ctx.registry.register(vllm_endpoint, base_url)
-        try:
-            return_code = process.wait()
-            raise RuntimeError(f"vLLM exited with code {return_code}")
-        finally:
-            ctx.registry.unregister(endpoint_id)
-    finally:
-        if process.poll() is None:
-            process.terminate()
-            with suppress(subprocess.TimeoutExpired):
-                process.wait(timeout=30)
-        if process.poll() is None:
-            process.kill()
-
-
-def _serve_ray_head(
-    ctx,
-    host: str,
-    vllm_endpoint: str,
-    ray_endpoint: str,
-    vllm_command: list[str],
-    ray_command: list[str],
-    environment: dict[str, str],
-    config: ServerConfig,
-) -> None:
-    weights = resolve_model_path(MODEL, MODEL_CACHE_TTL_DAYS, MODEL_REVISION)
-    ray_port = _reserve_port(host, ctx.get_port("ray"))
-    http_port = _reserve_port(host, ctx.get_port("http"))
-    ray_address = f"{host}:{ray_port}"
-    subprocess.run(
-        [
-            *ray_command,
-            "start",
-            "--head",
-            f"--node-ip-address={host}",
-            f"--port={ray_port}",
-            *_ray_worker_port_args(ray_port, http_port),
-            f"--num-gpus={GPUS_PER_NODE}",
-            "--disable-usage-stats",
-        ],
-        check=True,
-        env=environment,
-    )
-    ray_endpoint_id = ctx.registry.register(ray_endpoint, ray_address)
-    try:
-        deadline = time.monotonic() + 900
-        while time.monotonic() < deadline:
-            status = subprocess.run(
-                [*ray_command, "status", f"--address={ray_address}"],
-                env=environment,
-                text=True,
-                capture_output=True,
-            )
-            if status.returncode == 0 and f"/{TENSOR_PARALLEL_SIZE}.0 GPU" in status.stdout:
-                break
-            time.sleep(10)
-        else:
-            raise TimeoutError(f"Ray cluster did not register all {TENSOR_PARALLEL_SIZE} GB200 GPUs")
-        _run_vllm(ctx, host, http_port, ray_address, vllm_endpoint, vllm_command, environment, weights, config)
-    finally:
-        ctx.registry.unregister(ray_endpoint_id)
-        subprocess.run([*ray_command, "stop", "--force"], env=environment, check=False)
-
-
-def _serve_ray_worker(host: str, ray_endpoint: str, ray_command: list[str], environment: dict[str, str]) -> None:
-    ray_address = _wait_for_endpoint(ray_endpoint, timeout=ENDPOINT_TIMEOUT)
-    subprocess.run(
-        [
-            *ray_command,
-            "start",
-            f"--address={ray_address}",
-            f"--node-ip-address={host}",
-            *_ray_worker_port_args(),
-            f"--num-gpus={GPUS_PER_NODE}",
-            "--disable-usage-stats",
-            "--block",
-        ],
-        check=True,
-        env=environment,
-    )
-
-
-def _serve_glm52(vllm_endpoint: str, ray_endpoint: str, config: ServerConfig) -> None:
-    info = get_job_info()
-    ctx = iris_ctx()
-    if info is None or ctx is None:
-        raise RuntimeError("GLM-5.2 serving must run inside an Iris task")
-
-    vllm_command, environment = _vllm_process_command()
-    ray_command = [*vllm_command[:-1], "ray"]
-    host = info.advertise_host
-    environment["CUDA_HOME"] = _cuda_home(vllm_command, environment)
-    environment["VLLM_HOST_IP"] = host
-    environment["GLOO_SOCKET_IFNAME"] = _network_interface(host)
-    if info.task_index == 0:
-        _serve_ray_head(ctx, host, vllm_endpoint, ray_endpoint, vllm_command, ray_command, environment, config)
-        return
-    _serve_ray_worker(host, ray_endpoint, ray_command, environment)
-
-
-def _submit_vllm(ctx, vllm_endpoint: str, ray_endpoint: str, config: ServerConfig):
-    return ctx.client.submit(
-        entrypoint=Entrypoint.from_callable(_serve_glm52, vllm_endpoint, ray_endpoint, config),
-        name="vllm",
-        resources=ResourceSpec(
-            cpu=120,
-            memory="850g",
-            disk="1000g",
-            device=gpu_device("GB200", GPUS_PER_NODE),
-        ),
-        environment=EnvironmentSpec(
-            setup_scripts=[default_setup_script(packages=["marin-core"])],
-            env_vars={"VLLM_USE_FLASHINFER_SAMPLER": "0"},
-        ),
-        ports=["ray", "http"],
-        coscheduling=CoschedulingConfig(group_by="nvlink.domain"),
-        replicas=VLLM_REPLICAS,
-        timeout=Duration.from_hours(RUN_TIMEOUT_HOURS),
-        max_retries_failure=0,
-    )
 
 
 def _read_partition(partition_slice: PartitionSlice) -> list[PromptRecord]:
@@ -661,7 +402,7 @@ def _run_collection(
     started = time.time()
     _write_progress(
         collection,
-        "running",
+        PROGRESS_RUNNING,
         expected_records,
         complete_records,
         generated_records,
@@ -677,7 +418,7 @@ def _run_collection(
                 skipped_records += delta.skipped_records
                 _write_progress(
                     collection,
-                    "running",
+                    PROGRESS_RUNNING,
                     expected_records,
                     complete_records,
                     generated_records,
@@ -707,7 +448,7 @@ def _run_collection(
 
 
 def prepare_model(output_path: StoragePath) -> None:
-    weights = resolve_model_path(MODEL, MODEL_CACHE_TTL_DAYS, MODEL_REVISION)
+    weights = prepare_model_cache()
     manifest = {
         "model": MODEL,
         "model_revision": MODEL_REVISION,
@@ -730,9 +471,9 @@ def run(
     endpoint_suffix = f"{collection.run_id}-s{collection.shard_index}"
     vllm_endpoint = f"{VLLM_ENDPOINT}-{endpoint_suffix}"
     ray_endpoint = f"{RAY_ENDPOINT}-{endpoint_suffix}"
-    vllm_job = _submit_vllm(ctx, vllm_endpoint, ray_endpoint, server)
+    vllm_job = submit_glm52(ctx, vllm_endpoint, ray_endpoint, server)
     try:
-        vllm_url = _wait_for_endpoint(vllm_endpoint, vllm_job)
+        vllm_url = wait_for_endpoint(vllm_endpoint, vllm_job)
         logger.info("GLM-5.2 ready; writing responses to %s", collection.output_path)
         _run_collection(vllm_url, collection, server, sampling)
     finally:
