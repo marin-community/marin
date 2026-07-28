@@ -91,11 +91,9 @@ def training_stall_alert_rows(task_states: pa.Table, telltale_metrics: pa.Table,
     """Project active jobs and progress metrics into Grafana warning rows.
 
     Each row has string labels and exactly one numeric value. A job enrolls on
-    the phase metric, which `TelltaleTracker` publishes as it is constructed, so
-    enrollment tracks the producer rather than any Levanter metric: a job whose
-    producer predates phase reports `producer_missing` instead of a stall. Once
-    a job is enrolled, absent progress is itself evidence after the grace
-    period.
+    `levanter_phase`; without it the row reports `producer_missing` at zero
+    rather than a stall. Absent progress is itself evidence once a job is
+    enrolled.
     """
     metrics_by_job: dict[tuple[str, str], dict[str, float]] = {}
     for row in telltale_metrics.to_pylist():
