@@ -420,6 +420,7 @@ class NodeStatsScraper:
                 metrics.gpu_util_pct = gpu.util_pct
                 metrics.gpu_temp_c = gpu.temp_c
                 metrics.gpu_power_w = gpu.power_w
+                metrics.gpu_power_limit_w = gpu.power_limit_w
             out[target.name] = metrics
         return out
 

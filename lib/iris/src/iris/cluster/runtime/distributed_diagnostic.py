@@ -4,8 +4,9 @@
 """Bounded, read-only evidence capture for a running distributed task."""
 
 import json
-from datetime import UTC, datetime
 from typing import Any
+
+from rigging.timing import Timestamp
 
 from iris.cluster.runtime.nccl_ras import NcclRasFormat, collective_count_skews, parse_json_response
 from iris.cluster.runtime.profile import ExecResult, ProfileDispatch, capture_threads
@@ -51,7 +52,7 @@ def capture_distributed_diagnostic(
     errors: list[dict[str, str]] = []
     bundle: dict[str, Any] = {
         "schema_version": 1,
-        "captured_at": datetime.now(UTC).isoformat(),
+        "captured_at": Timestamp.now().as_naive_utc().isoformat(),
         "source": source,
         "attempt_id": attempt_id,
         "errors": errors,

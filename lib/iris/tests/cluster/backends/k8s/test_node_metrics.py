@@ -165,6 +165,7 @@ def test_scraper_discovers_dcgm_pods_and_merges_gpu_readings():
     assert metrics.gpu_count == 2
     assert metrics.hbm_used_bytes == (200 + 400) * _MIB
     assert metrics.gpu_temp_c == pytest.approx(30.0)
+    assert metrics.gpu_power_limit_w == pytest.approx(1400.0)
     assert metrics.mem_total_bytes == 2162529861632
 
 

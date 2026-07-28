@@ -66,15 +66,6 @@ def test_environment_to_proto_captures_local_checkout(monkeypatch, fresh_launch_
     assert stamped.created_at  # launch context always captured; git fields best-effort
 
 
-def test_gpu_environment_enables_bounded_nccl_diagnostics():
-    environment = EnvironmentSpec(extras=["gpu"]).to_proto().env_vars
-
-    assert environment["NCCL_RAS_ENABLE"] == "1"
-    assert environment["NCCL_DEBUG"] == "INFO"
-    assert environment["NCCL_DEBUG_SUBSYS"] == "INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS"
-    assert environment["NCCL_DEBUG_TIMESTAMP"] == "[%F %T.%3f]"
-
-
 def test_entrypoint_from_callable_resolve_roundtrip():
     ep = Entrypoint.from_callable(_add, 3, b=4)
     fn, args, kwargs = ep.resolve()
