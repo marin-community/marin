@@ -117,8 +117,6 @@ class _DockerProfileDispatch:
     container_id: str
     pyspy_bin: str = f"{VENV_PATH}/bin/py-spy"
     memray_bin: str = f"{VENV_PATH}/bin/memray"
-    python_bin: str = f"{VENV_PATH}/bin/python"
-    isolated_pid_namespace: bool = True
 
     @contextmanager
     def scratch(self, *suffixes: str) -> Iterator[tuple[str, ...]]:
@@ -164,7 +162,7 @@ class _DockerProfileDispatch:
         if copied.returncode != 0:
             return ExecResult(copied.returncode, b"", copied.stderr or "docker cp failed")
         try:
-            return self.exec([self.python_bin, remote_path, *arguments], timeout=timeout)
+            return self.exec(["uv", "run", "--script", remote_path, *arguments], timeout=timeout)
         finally:
             subprocess.run(
                 ["docker", "exec", self.container_id, "rm", "-f", remote_path],
@@ -651,7 +649,6 @@ exec {quoted_cmd}
             container_id,
             pyspy_bin=_resolve_container_bin(container_id, f"{VENV_PATH}/bin/py-spy", "py-spy"),
             memray_bin=_resolve_container_bin(container_id, f"{VENV_PATH}/bin/memray", "memray"),
-            python_bin=_resolve_container_bin(container_id, f"{VENV_PATH}/bin/python", "python"),
         )
         if request.profile_type.HasField("threads"):
             return capture_threads(dispatch, pid="1", include_locals=request.profile_type.threads.locals)

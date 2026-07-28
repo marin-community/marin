@@ -255,23 +255,7 @@ iris process profile distributed -t /user/job/0 -d 10 -o rank-0.json
 
 **Prefer `iris process profile` over SSH** for profiling — it uses the `/system/process` RPC and avoids direct VM access. SSH is a fallback only when the RPC doesn't cover your needs.
 
-Use `profile distributed` when a multi-host GPU task appears stuck. Invoke it
-once for each task rank that needs inspection. It copies a versioned,
-standard-library-only probe into the task container and returns one bounded
-JSON bundle containing:
-
-- partial NCCL RAS JSON or text;
-- a `py-spy` thread dump and `/proc` thread status/wchan data;
-- GPU utilization, memory, and power draw/limit from `nvidia-smi`;
-- filtered `NCCL_*`, `XLA_*`, and `CUDA_*` environment values; and
-- the Python executable, relevant packages, and loaded GPU library paths.
-
-The duration must be 1–30 seconds and covers the whole collection. Each
-section records its own status or error so a missing tool or timed-out
-collector does not discard other evidence. The bundle remains below 4 MiB;
-large fields are marked as truncated. Distributed capture requires a task
-target and does not stop, restart, kick, or otherwise change Iris task state.
-`py-spy` does attach to the target process briefly during the thread dump.
+Use `profile distributed` once per rank when a multi-host GPU task appears stuck. Iris copies one `uv` script into the Process, Docker, or Kubernetes task and stores its bounded JSON result through the normal `iris.profile` path. The script reads process state, filtered accelerator environment, GPU telemetry, and runtime provenance; runs `ncclras` and nonblocking `py-spy`; and records unavailable or truncated sections without discarding other evidence. Capture does not stop, restart, kick, or otherwise change Iris task state.
 
 GPU environments set `NCCL_RAS_ENABLE=1`, `NCCL_DEBUG=INFO`, and `NCCL_DEBUG_SUBSYS=INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS`. The default timestamp is `[%F %T.%3f]`. Short debug-smoke jobs may additionally select `COLL,PROXY,NVLS,REG`; do not use `TRACE` or `CALL` for normal runs.
 

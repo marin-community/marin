@@ -2104,7 +2104,6 @@ class _K8sProfileDispatch:
     pod_name: str
     pyspy_bin: str = "py-spy"
     memray_bin: str = "memray"
-    isolated_pid_namespace: bool = True
 
     @contextmanager
     def scratch(self, *suffixes: str) -> Iterator[tuple[str, ...]]:
@@ -2153,7 +2152,7 @@ class _K8sProfileDispatch:
         if copied.returncode != 0:
             return ExecResult(copied.returncode, b"", copied.stderr or "probe copy failed")
         try:
-            return self._venv_exec(["python", remote_path, *arguments], timeout=timeout)
+            return self._venv_exec(["uv", "run", "--script", remote_path, *arguments], timeout=timeout)
         finally:
             self.kubectl.rm_files(self.pod_name, [remote_path], container="task")
 

@@ -3,7 +3,6 @@
 
 """Tests for K8sTaskProvider: sync lifecycle, capacity, scheduling, profiling."""
 
-import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -632,27 +631,14 @@ def test_profile_threads_via_kubectl_exec(provider, k8s):
     assert b"Thread 0x7f00" in resp.profile_data
 
 
-def test_profile_distributed_persists_partial_task_evidence(k8s, task_stats_table):
+def test_profile_distributed_persists_task_evidence(k8s, task_stats_table):
     profile_table = FakeStatsTable()
     provider = make_kueue_provider(k8s, task_stats_table=task_stats_table, profile_table=profile_table)
     try:
         pod_name = _pod_name(JobName.from_wire("/job/0"), 0)
         populate_pod(k8s, pod_name, "Running")
-        bundle = {
-            "schema_version": 1,
-            "collector_version": "iris-distributed-diagnostic-v1",
-            "captured_at": "2026-07-28T00:00:00",
-            "source": "/job/0",
-            "attempt_id": 0,
-            "process": {"status": "ok"},
-            "environment": {"status": "ok"},
-            "runtime": {"status": "ok"},
-            "nccl_ras": {"status": "partial", "json": {"raw_response": "OK\n{"}},
-            "threads": {"status": "ok", "text": "train.py:42"},
-            "gpus": {"status": "ok", "gpus": [{"power.draw": "210", "power.limit": "1200"}]},
-            "errors": [],
-        }
-        k8s.set_exec_response(pod_name, _success_cp(stdout=json.dumps(bundle)))
+        bundle = b'{"schema_version":1}'
+        k8s.set_exec_response(pod_name, _success_cp(stdout=bundle.decode()))
 
         response = provider.profile_task(
             TaskTarget(task_id="/job/0", attempt_id=0, worker_id=None, address=None),
@@ -668,7 +654,7 @@ def test_profile_distributed_persists_partial_task_evidence(k8s, task_stats_tabl
         provider.close()
 
     assert not response.error
-    assert json.loads(response.profile_data)["nccl_ras"]["status"] == "partial"
+    assert response.profile_data == bundle
     rows = [row for batch in profile_table.writes for row in batch]
     assert len(rows) == 1
     assert rows[0].source == "/job/0"

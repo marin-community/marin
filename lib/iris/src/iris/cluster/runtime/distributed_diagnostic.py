@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Launch the versioned distributed diagnostic probe in a running task."""
+"""Launch the distributed diagnostic probe in a running task."""
 
 import json
 from pathlib import Path
@@ -9,20 +9,19 @@ from typing import Protocol
 
 from rigging.timing import Timestamp
 
-from iris.cluster.runtime import distributed_diagnostic_probe_v1
+from iris.cluster.runtime import distributed_diagnostic_probe
 from iris.cluster.runtime.profile import ExecResult
 
-DEFAULT_COLLECTOR_TIMEOUT_SECONDS = distributed_diagnostic_probe_v1.DEFAULT_COLLECTOR_TIMEOUT_SECONDS
-MIN_COLLECTOR_TIMEOUT_SECONDS = distributed_diagnostic_probe_v1.MIN_COLLECTOR_TIMEOUT_SECONDS
-MAX_COLLECTOR_TIMEOUT_SECONDS = distributed_diagnostic_probe_v1.MAX_COLLECTOR_TIMEOUT_SECONDS
+DEFAULT_COLLECTOR_TIMEOUT_SECONDS = distributed_diagnostic_probe.DEFAULT_COLLECTOR_TIMEOUT_SECONDS
+MIN_COLLECTOR_TIMEOUT_SECONDS = distributed_diagnostic_probe.MIN_COLLECTOR_TIMEOUT_SECONDS
+MAX_COLLECTOR_TIMEOUT_SECONDS = distributed_diagnostic_probe.MAX_COLLECTOR_TIMEOUT_SECONDS
 PROBE_EXIT_HEADROOM_SECONDS = 10
 
-_PROBE_PATH = Path(distributed_diagnostic_probe_v1.__file__)
+_PROBE_PATH = Path(distributed_diagnostic_probe.__file__)
 
 
 class DistributedDiagnosticDispatch(Protocol):
     pyspy_bin: str
-    isolated_pid_namespace: bool
 
     def run_diagnostic_probe(
         self,
@@ -64,9 +63,6 @@ def capture_distributed_diagnostic(
     ]
     if attempt_id is not None:
         arguments.extend(["--attempt-id", str(attempt_id)])
-    if dispatch.isolated_pid_namespace:
-        arguments.append("--isolated-pid-namespace")
-
     result = dispatch.run_diagnostic_probe(
         _PROBE_PATH,
         arguments,
@@ -74,12 +70,12 @@ def capture_distributed_diagnostic(
     )
     if result.returncode != 0:
         raise RuntimeError(f"distributed diagnostic probe failed (exit {result.returncode}): {result.stderr}")
-    if len(result.stdout) > distributed_diagnostic_probe_v1.MAX_BUNDLE_BYTES:
+    if len(result.stdout) > distributed_diagnostic_probe.MAX_BUNDLE_BYTES:
         raise RuntimeError("distributed diagnostic probe exceeded the profile transport limit")
     try:
         bundle = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"distributed diagnostic probe returned invalid JSON: {exc}") from exc
-    if bundle.get("schema_version") != distributed_diagnostic_probe_v1.SCHEMA_VERSION:
+    if bundle.get("schema_version") != distributed_diagnostic_probe.SCHEMA_VERSION:
         raise RuntimeError(f"unsupported distributed diagnostic schema: {bundle.get('schema_version')!r}")
     return result.stdout

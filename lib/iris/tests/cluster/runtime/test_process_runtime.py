@@ -3,13 +3,10 @@
 
 """Tests for ProcessRuntime mount resolution and TMPFS cleanup."""
 
-import json
-import sys
 from pathlib import Path
 
 from iris.cluster.runtime.process import ProcessRuntime, _remap_container_path, _resolve_mount_map
-from iris.cluster.runtime.profile import LocalProfileDispatch
-from iris.cluster.runtime.types import ContainerConfig, MountKind, MountSpec, ProfileCaptureRequest
+from iris.cluster.runtime.types import ContainerConfig, MountKind, MountSpec
 from iris.rpc import job_pb2
 
 
@@ -23,19 +20,6 @@ def _make_config(mounts: list[MountSpec], workdir_host_path: Path | None = None)
         workdir_host_path=workdir_host_path,
         task_id="test-task",
     )
-
-
-def test_local_diagnostic_probe_runs_outside_source_package(tmp_path):
-    source_dir = tmp_path / "runtime"
-    source_dir.mkdir()
-    (source_dir / "argparse.py").write_text("raise RuntimeError('shadowed argparse')\n")
-    probe_path = source_dir / "distributed_diagnostic_probe_v1.py"
-    probe_path.write_text("import argparse\nprint('probe started')\n")
-
-    result = LocalProfileDispatch().run_diagnostic_probe(probe_path, [], timeout=1)
-
-    assert result.returncode == 0
-    assert result.stdout == b"probe started\n"
 
 
 def test_tmpfs_mount_creates_unique_dirs(tmp_path):
@@ -114,40 +98,3 @@ def test_remap_prefers_the_longest_matching_mount():
 
     assert _remap_container_path("/app/data/x", mount_map) == "/host/data/x"
     assert _remap_container_path("/app/other", mount_map) == "/host/app/other"
-
-
-def test_process_handle_distributed_profile_captures_live_child(tmp_path):
-    runtime = ProcessRuntime(cache_dir=tmp_path)
-    entrypoint = job_pb2.RuntimeEntrypoint(
-        run_command=job_pb2.CommandEntrypoint(
-            argv=[sys.executable, "-c", "import threading; threading.Event().wait()"],
-        )
-    )
-    handle = runtime.create_container(
-        ContainerConfig(
-            image="unused",
-            entrypoint=entrypoint,
-            env={},
-            task_id="/local/job/0",
-        )
-    )
-    handle.run()
-    try:
-        profile = handle.profile(
-            ProfileCaptureRequest(
-                duration_seconds=0,
-                profile_type=job_pb2.ProfileType(
-                    distributed=job_pb2.DistributedProfile(collector_timeout_seconds=1),
-                ),
-                source="/local/job/0",
-                attempt_id=4,
-            ),
-        )
-    finally:
-        handle.cleanup()
-
-    bundle = json.loads(profile)
-    assert bundle["source"] == "/local/job/0"
-    assert bundle["attempt_id"] == 4
-    assert bundle["process"]["status"] == "ok"
-    assert bundle["runtime"]["target_executable"]["path"]

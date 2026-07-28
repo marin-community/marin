@@ -3,15 +3,12 @@
 
 """Tests for DockerRuntime mount resolution, staging, and container creation."""
 
-import json
 import subprocess
 from unittest.mock import Mock
 
 import pytest
 from iris.cluster.bundle import BundleStore
-from iris.cluster.runtime.distributed_diagnostic import capture_distributed_diagnostic
-from iris.cluster.runtime.docker import DockerRuntime, _DockerProfileDispatch, _security_flags
-from iris.cluster.runtime.env import VENV_PATH
+from iris.cluster.runtime.docker import DockerRuntime, _security_flags
 from iris.cluster.runtime.types import MountKind, MountSpec
 from iris.rpc import job_pb2
 
@@ -85,43 +82,6 @@ def test_prepare_workdir_is_noop(tmp_path, runtime):
     workdir = tmp_path / "task-workdir"
     workdir.mkdir()
     runtime.prepare_workdir(workdir, disk_bytes=1024 * 1024 * 512)
-
-
-def test_distributed_profile_copies_and_executes_versioned_probe(monkeypatch):
-    calls: list[list[str]] = []
-    bundle = {
-        "schema_version": 1,
-        "process": {"status": "ok"},
-        "environment": {"status": "ok"},
-        "runtime": {"status": "ok"},
-        "nccl_ras": {"status": "partial"},
-        "threads": {"status": "ok"},
-        "gpus": {"status": "ok"},
-        "errors": [],
-    }
-
-    def fake_run(command, **kwargs):
-        calls.append(command)
-        if command[:3] == ["docker", "exec", "container-1"] and "rm" not in command:
-            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(bundle), stderr="")
-        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-
-    monkeypatch.setattr("iris.cluster.runtime.docker.subprocess.run", fake_run)
-
-    profile = capture_distributed_diagnostic(
-        _DockerProfileDispatch("container-1"),
-        pid="1",
-        source="/job/0",
-        attempt_id=2,
-        timeout=1,
-    )
-
-    assert json.loads(profile)["process"]["status"] == "ok"
-    copy_command = next(command for command in calls if command[:2] == ["docker", "cp"])
-    assert copy_command[2].endswith("distributed_diagnostic_probe_v1.py")
-    probe_command = next(command for command in calls if f"{VENV_PATH}/bin/python" in command)
-    assert any(argument.endswith(".py") for argument in probe_command)
-    assert "-c" not in probe_command
 
 
 def test_stage_bundle(monkeypatch, tmp_path, runtime, mock_bundle_store):

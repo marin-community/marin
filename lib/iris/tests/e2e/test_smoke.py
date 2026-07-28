@@ -993,6 +993,39 @@ def test_profile_running_task(smoke_cluster):
     smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
 
 
+@pytest.mark.timeout(300)
+def test_distributed_profile_running_task(smoke_cluster):
+    """Capture distributed diagnostics through the public task profile RPC."""
+    with smoke_cluster.launched_job(TestJobs.sleep, "smoke-distributed-profile", 120) as job:
+        smoke_cluster.wait_for_state(job, job_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
+        last_state = "unknown"
+
+        def _is_running():
+            nonlocal last_state
+            task = smoke_cluster.task_status(job, task_index=0)
+            last_state = task.state
+            return last_state == job_pb2.TASK_STATE_RUNNING
+
+        ExponentialBackoff(initial=0.1, maximum=2.0).wait_until_or_raise(
+            _is_running,
+            timeout=Duration.from_seconds(smoke_cluster.job_timeout),
+            error_message=f"Task did not reach RUNNING within {smoke_cluster.job_timeout}s, last state: {last_state}",
+        )
+        task_id = smoke_cluster.task_status(job, task_index=0).task_id
+        response = smoke_cluster.controller_client.profile_task(
+            job_pb2.ProfileTaskRequest(
+                target=task_id,
+                profile_type=job_pb2.ProfileType(
+                    distributed=job_pb2.DistributedProfile(collector_timeout_seconds=1),
+                ),
+            ),
+            timeout_ms=15000,
+        )
+
+        assert response.profile_data
+        assert not response.error
+
+
 # ============================================================================
 # Exec in container
 # ============================================================================
