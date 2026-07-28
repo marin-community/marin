@@ -8,6 +8,7 @@ submits its own jobs and is independently runnable. In local mode the cluster
 has workers across CPU, TPU coscheduling, and multi-region scale groups.
 """
 
+import json
 import logging
 import os
 import time
@@ -1022,8 +1023,11 @@ def test_distributed_profile_running_task(smoke_cluster):
             timeout_ms=15000,
         )
 
-        assert response.profile_data
         assert not response.error
+        bundle = json.loads(response.profile_data)
+        assert bundle["schema_version"] == 1
+        assert bundle["process"]["pid"] > 0
+        assert bundle["process"]["process_status"]
 
 
 # ============================================================================

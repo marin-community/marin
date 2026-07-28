@@ -2700,7 +2700,8 @@ class ControllerServiceImpl:
           /system/worker/<id>
             - Forward as /system/process to the named worker via
               WorkerService.ProfileTask. Worker writes the row with
-              source='/system/worker/<id>'.
+              source='/system/worker/<id>'. Distributed diagnostics are
+              rejected because they require a task target.
           /job/.../task/N[:attempt_id]
             - Resolve task and worker; delegate to provider.profile_task.
               Worker-based: forwards to worker; worker writes IrisProfile

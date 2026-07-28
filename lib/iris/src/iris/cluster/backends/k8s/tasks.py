@@ -94,6 +94,7 @@ from iris.cluster.runtime.env import (
 )
 from iris.cluster.runtime.profile import (
     PROFILER_WATCHDOG_GRACE_SECONDS,
+    UV_RUN_SCRIPT,
     ExecResult,
     build_profile_row,
     capture_cpu,
@@ -2152,7 +2153,7 @@ class _K8sProfileDispatch:
         if copied.returncode != 0:
             return ExecResult(copied.returncode, b"", copied.stderr or "probe copy failed")
         try:
-            return self._venv_exec(["uv", "run", "--script", remote_path, *arguments], timeout=timeout)
+            return self._venv_exec([*UV_RUN_SCRIPT, remote_path, *arguments], timeout=timeout)
         finally:
             self.kubectl.rm_files(self.pod_name, [remote_path], container="task")
 

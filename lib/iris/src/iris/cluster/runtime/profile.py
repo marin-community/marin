@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 # Target sentinel for profiling the local worker/controller process itself.
 SYSTEM_PROCESS_TARGET = "/system/process"
+UV_RUN_SCRIPT = ("uv", "run", "--script")
 
 
 CPU_FORMAT_MAP: dict[int, tuple[str, str]] = {
@@ -363,7 +364,7 @@ class LocalProfileDispatch:
         with tempfile.TemporaryDirectory(prefix="iris-distributed-diagnostic-") as directory:
             copied_path = Path(directory) / probe_path.name
             shutil.copyfile(probe_path, copied_path)
-            return self.exec(["uv", "run", "--script", str(copied_path), *arguments], timeout=timeout)
+            return self.exec([*UV_RUN_SCRIPT, str(copied_path), *arguments], timeout=timeout)
 
     def _resume(self) -> None:
         if self.resume_pid is None or sys.platform != "linux":

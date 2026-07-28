@@ -38,6 +38,7 @@ from iris.cluster.runtime.distributed_diagnostic import (
 from iris.cluster.runtime.env import VENV_PATH, cache_host_dirname, render_setup_steps, write_workdir_files
 from iris.cluster.runtime.profile import (
     PROFILER_WATCHDOG_GRACE_SECONDS,
+    UV_RUN_SCRIPT,
     ExecResult,
     capture_cpu,
     capture_memory_attach,
@@ -162,7 +163,7 @@ class _DockerProfileDispatch:
         if copied.returncode != 0:
             return ExecResult(copied.returncode, b"", copied.stderr or "docker cp failed")
         try:
-            return self.exec(["uv", "run", "--script", remote_path, *arguments], timeout=timeout)
+            return self.exec([*UV_RUN_SCRIPT, remote_path, *arguments], timeout=timeout)
         finally:
             subprocess.run(
                 ["docker", "exec", self.container_id, "rm", "-f", remote_path],

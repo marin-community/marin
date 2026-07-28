@@ -117,7 +117,7 @@ class FakeContainerHandle:
     def disk_usage_mb(self) -> int:
         return 0
 
-    def profile(self, request: ProfileCaptureRequest) -> bytes:
+    def profile(self, _request: ProfileCaptureRequest) -> bytes:
         raise RuntimeError("profiling not supported in FakeContainerHandle")
 
     def cleanup(self) -> None:

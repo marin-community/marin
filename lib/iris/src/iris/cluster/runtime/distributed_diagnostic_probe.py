@@ -18,11 +18,9 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
-from typing import TypeVar
 
 SCHEMA_VERSION = 1
 MAX_BUNDLE_BYTES = 4 * 1024 * 1024 - 64 * 1024
@@ -226,7 +224,11 @@ class _ProcessEnvironment:
     truncated: bool
 
 
-_Evidence = TypeVar("_Evidence")
+@dataclass(frozen=True)
+class _PackageCollection:
+    packages: list[PackageIdentity]
+    truncated: bool
+    error: str | None
 
 
 def _remaining(deadline: float) -> float:
@@ -299,18 +301,6 @@ def _add_error(errors: list[CollectorError], collector: str, message: object) ->
     if len(errors) < _MAX_ERRORS:
         errors.append(CollectorError(collector, text))
     return text
-
-
-def _capture(
-    collector: str,
-    errors: list[CollectorError],
-    collect: Callable[[], _Evidence],
-    unavailable: Callable[[str], _Evidence],
-) -> _Evidence:
-    try:
-        return collect()
-    except Exception as exc:
-        return unavailable(_add_error(errors, collector, exc))
 
 
 def _read_path(path: Path, limit: int) -> tuple[str, bool]:
@@ -453,9 +443,7 @@ def _is_runtime_package(name: str) -> bool:
 
 def _target_python(pid: int, environment: _ProcessEnvironment) -> Path:
     if environment.virtual_env:
-        virtual_env_python = (
-            Path("/proc") / str(pid) / "root" / environment.virtual_env.lstrip("/") / "bin" / "python"
-        )
+        virtual_env_python = Path("/proc") / str(pid) / "root" / environment.virtual_env.lstrip("/") / "bin" / "python"
         if virtual_env_python.exists():
             return virtual_env_python
     return Path("/proc") / str(pid) / "exe"
@@ -465,18 +453,22 @@ def _installed_runtime_packages(
     pid: int,
     environment: _ProcessEnvironment,
     deadline: float,
-) -> tuple[list[PackageIdentity], bool, str | None]:
+) -> _PackageCollection:
     result = _run_command(
         ["uv", "pip", "list", "--python", str(_target_python(pid, environment)), "--format", "json"],
         deadline=deadline,
         stdout_limit=_PACKAGE_BYTES,
     )
     if result.returncode != 0:
-        return [], result.stdout_truncated or result.stderr_truncated, _error_text(result)
+        return _PackageCollection(
+            [],
+            result.stdout_truncated or result.stderr_truncated,
+            _error_text(result),
+        )
     try:
         records = json.loads(result.stdout)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        return [], True, f"uv pip list returned invalid JSON: {exc}"
+        return _PackageCollection([], True, f"uv pip list returned invalid JSON: {exc}")
 
     packages = [
         PackageIdentity(str(record["name"]), str(record["version"]))
@@ -486,7 +478,11 @@ def _installed_runtime_packages(
         and "version" in record
         and _is_runtime_package(str(record["name"]))
     ]
-    return packages, result.stdout_truncated or result.stderr_truncated, None
+    return _PackageCollection(
+        packages,
+        result.stdout_truncated or result.stderr_truncated,
+        None,
+    )
 
 
 def _loaded_runtime_libraries(pid: int) -> tuple[list[FileIdentity], bool]:
@@ -517,9 +513,9 @@ def _collect_runtime(
         target_executable = None
         section_errors.append(_add_error(errors, "runtime_executable", exc))
 
-    packages, packages_truncated, package_error = _installed_runtime_packages(pid, environment, deadline)
-    if package_error:
-        section_errors.append(_add_error(errors, "runtime_packages", package_error))
+    packages = _installed_runtime_packages(pid, environment, deadline)
+    if packages.error:
+        section_errors.append(_add_error(errors, "runtime_packages", packages.error))
 
     try:
         loaded_libraries, libraries_truncated = _loaded_runtime_libraries(pid)
@@ -527,12 +523,12 @@ def _collect_runtime(
         loaded_libraries = []
         libraries_truncated = False
         section_errors.append(_add_error(errors, "runtime_libraries", exc))
-    truncated = packages_truncated or libraries_truncated
+    truncated = packages.truncated or libraries_truncated
     status = CollectorStatus.PARTIAL if section_errors or truncated else CollectorStatus.OK
     return RuntimeEvidence(
         status,
         target_executable,
-        packages,
+        packages.packages,
         loaded_libraries,
         truncated,
         "; ".join(section_errors) or None,
@@ -672,50 +668,35 @@ def collect_diagnostic(
     started = time.monotonic()
     deadline = started + timeout
     errors: list[CollectorError] = []
-    process = _capture(
-        "process",
-        errors,
-        lambda: _collect_process(pid, errors),
-        lambda error: ProcessEvidence(CollectorStatus.UNAVAILABLE, pid, "", "", [], 0, False, error),
-    )
+    process = _collect_process(pid, errors)
     try:
         environment_data = _read_process_environment(pid)
-    except Exception as exc:
+    except OSError as exc:
         environment_error = _add_error(errors, "environment", exc)
         environment_data = _ProcessEnvironment({}, None, False)
         environment = EnvironmentEvidence(CollectorStatus.UNAVAILABLE, {}, False, environment_error)
     else:
         environment = _collect_environment(environment_data)
-    runtime = _capture(
-        "runtime",
+    runtime = _collect_runtime(
+        pid,
+        environment_data,
+        min(deadline, started + timeout * 0.25),
         errors,
-        lambda: _collect_runtime(pid, environment_data, min(deadline, started + timeout * 0.25), errors),
-        lambda error: RuntimeEvidence(CollectorStatus.UNAVAILABLE, None, [], [], False, error),
     )
-    nccl_ras_evidence = _capture(
-        "nccl_ras",
+    nccl_ras_evidence = _collect_nccl_ras(
+        nccl_ras,
+        ras_host,
+        ras_port,
+        min(deadline, started + timeout * 0.55),
         errors,
-        lambda: _collect_nccl_ras(
-            nccl_ras,
-            ras_host,
-            ras_port,
-            min(deadline, started + timeout * 0.55),
-            errors,
-        ),
-        lambda error: NcclRasEvidence(CollectorStatus.UNAVAILABLE, None, None, None, False, error),
     )
-    threads = _capture(
-        "threads",
+    threads = _collect_threads(
+        pid,
+        py_spy,
+        min(deadline, started + timeout * 0.85),
         errors,
-        lambda: _collect_threads(pid, py_spy, min(deadline, started + timeout * 0.85), errors),
-        lambda _error: ThreadEvidence(CollectorStatus.UNAVAILABLE, "", "", 1, False, False),
     )
-    gpus = _capture(
-        "gpus",
-        errors,
-        lambda: _collect_gpus(deadline, errors),
-        lambda _error: GpuEvidence(CollectorStatus.UNAVAILABLE, [], "", 1, False, False),
-    )
+    gpus = _collect_gpus(deadline, errors)
     return DiagnosticBundle(
         SCHEMA_VERSION,
         captured_at,
@@ -755,37 +736,18 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    try:
-        bundle = collect_diagnostic(
-            pid=args.pid,
-            source=args.source,
-            attempt_id=args.attempt_id,
-            captured_at=args.captured_at,
-            timeout=args.timeout,
-            py_spy=args.py_spy,
-            nccl_ras=args.nccl_ras,
-            ras_host=args.ras_host,
-            ras_port=args.ras_port,
-        )
-        data = encode_bundle(bundle)
-    except Exception as exc:
-        error, _ = _truncate_text(str(exc), _MAX_ERROR_BYTES)
-        data = encode_bundle(
-            DiagnosticBundle(
-                SCHEMA_VERSION,
-                args.captured_at,
-                args.source,
-                args.attempt_id,
-                ProcessEvidence(CollectorStatus.UNAVAILABLE, args.pid, "", "", [], 0, False, error),
-                EnvironmentEvidence(CollectorStatus.UNAVAILABLE, {}, False, error),
-                RuntimeEvidence(CollectorStatus.UNAVAILABLE, None, [], [], False, error),
-                NcclRasEvidence(CollectorStatus.UNAVAILABLE, None, None, None, False, error),
-                ThreadEvidence(CollectorStatus.UNAVAILABLE, "", "", 1, False, False),
-                GpuEvidence(CollectorStatus.UNAVAILABLE, [], "", 1, False, False),
-                [CollectorError("probe", error)],
-            )
-        )
-    sys.stdout.buffer.write(data)
+    bundle = collect_diagnostic(
+        pid=args.pid,
+        source=args.source,
+        attempt_id=args.attempt_id,
+        captured_at=args.captured_at,
+        timeout=args.timeout,
+        py_spy=args.py_spy,
+        nccl_ras=args.nccl_ras,
+        ras_host=args.ras_host,
+        ras_port=args.ras_port,
+    )
+    sys.stdout.buffer.write(encode_bundle(bundle))
     return 0
 
 
