@@ -324,7 +324,7 @@ those are plumbing. Say what happened, not how it was invoked.
 ### Recovery
 | action | trial | region · slice | stall | now |
 
-### Standing bests   (top 3 by eval only)
+### Leading runs   (top 3 by eval only)
 | trial | progress | eval | vs exp117 |
 
 ### Notes
