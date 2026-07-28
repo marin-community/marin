@@ -17,7 +17,7 @@ import hybrid_search
 import schema
 import search_config
 import sqlalchemy
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastembed import TextEmbedding
 from google.cloud.sql.connector import Connector
 from pydantic import BaseModel, Field
@@ -61,6 +61,10 @@ def get_model(request: Request) -> TextEmbedding:
 
 Engine = Annotated[sqlalchemy.Engine, Depends(get_engine)]
 Model = Annotated[TextEmbedding, Depends(get_model)]
+
+# Data endpoints live under /api so they don't collide with the dashboard SPA's client-side
+# routes (e.g. /wiki/123), which fall through to index.html at the root.
+api = APIRouter(prefix="/api")
 
 
 class Hit(BaseModel):
@@ -206,7 +210,7 @@ def healthz(engine: Engine) -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/search", response_model=list[Hit])
+@api.get("/search", response_model=list[Hit])
 def search(
     engine: Engine,
     model: Model,
@@ -235,7 +239,7 @@ def search(
         return [hit(row) for row in conn.execute(statement, params)]
 
 
-@app.get("/grep", response_model=list[Hit])
+@api.get("/grep", response_model=list[Hit])
 def grep(
     engine: Engine,
     pattern: str = Query(description="Exact substring (SQL wildcards are escaped)."),
@@ -260,7 +264,7 @@ def grep(
         return [hit(r) for r in conn.execute(query)]
 
 
-@app.get("/chunks/{chunk_id}", response_model=Chunk)
+@api.get("/chunks/{chunk_id}", response_model=Chunk)
 def chunk(chunk_id: int, engine: Engine) -> Chunk:
     with engine.connect() as conn:
         row = conn.execute(sqlalchemy.select(schema.chunks).where(schema.chunks.c.id == chunk_id)).first()
@@ -274,7 +278,7 @@ def chunk(chunk_id: int, engine: Engine) -> Chunk:
     return Chunk(score=0.0, distance=None, lexical_score=None, snippet=snippet(row), **fields)
 
 
-@app.get("/work_log", response_model=list[LogSummary])
+@api.get("/work_log", response_model=list[LogSummary])
 def work_log(
     engine: Engine,
     days: int = Query(7, ge=1, description="Look back this many days."),
@@ -296,7 +300,7 @@ def work_log(
         ]
 
 
-@app.get("/work_log/{entry_id}", response_model=LogEntry)
+@api.get("/work_log/{entry_id}", response_model=LogEntry)
 def work_log_entry(entry_id: int, engine: Engine) -> LogEntry:
     with engine.connect() as conn:
         row = conn.execute(sqlalchemy.select(schema.work_log).where(schema.work_log.c.id == entry_id)).first()
@@ -305,7 +309,7 @@ def work_log_entry(entry_id: int, engine: Engine) -> LogEntry:
     return LogEntry(**{c: getattr(row, c) for c in LogEntry.model_fields})
 
 
-@app.post("/work_log", response_model=LogEntry, status_code=201)
+@api.post("/work_log", response_model=LogEntry, status_code=201)
 def add_work_log(
     entry: LogCreate, engine: Engine, x_goog_authenticated_user_email: str | None = Header(None)
 ) -> LogEntry:
@@ -322,7 +326,7 @@ def add_work_log(
     return LogEntry(**{c: getattr(row, c) for c in LogEntry.model_fields})
 
 
-@app.get("/wiki/search", response_model=list[WikiSummary])
+@api.get("/wiki/search", response_model=list[WikiSummary])
 def search_wiki(
     engine: Engine,
     model: Model,
@@ -351,7 +355,7 @@ def search_wiki(
         return [wiki_summary(row) for row in conn.execute(hybrid_search.wiki_search_statement(), params)]
 
 
-@app.get("/wiki/{entry_id}", response_model=WikiEntry)
+@api.get("/wiki/{entry_id}", response_model=WikiEntry)
 def get_wiki_entry(entry_id: int, engine: Engine) -> WikiEntry:
     statement = sqlalchemy.select(
         schema.wiki_entries,
@@ -364,38 +368,53 @@ def get_wiki_entry(entry_id: int, engine: Engine) -> WikiEntry:
     return wiki_entry(row)
 
 
-@app.post("/wiki", response_model=WikiEntry, status_code=201)
+def wiki_write_values(entry: WikiCreate, model: TextEmbedding) -> dict[str, Any]:
+    """Validated, re-embedded column values shared by wiki create and update."""
+    title, use_when, body = entry.title.strip(), entry.use_when.strip(), entry.body.strip()
+    if not title or not use_when or not body:
+        raise HTTPException(422, "title, use_when, and body must not be blank")
+    return {
+        "title": title,
+        "use_when": use_when,
+        "body": body,
+        "embedding": passage_embedding(model, title, use_when, body),
+    }
+
+
+@api.post("/wiki", response_model=WikiEntry, status_code=201)
 def add_wiki_entry(
     entry: WikiCreate,
     engine: Engine,
     model: Model,
     x_goog_authenticated_user_email: str | None = Header(None),
 ) -> WikiEntry:
-    title = entry.title.strip()
-    use_when = entry.use_when.strip()
-    body = entry.body.strip()
-    if not title or not use_when or not body:
-        raise HTTPException(422, "title, use_when, and body must not be blank")
     statement = (
         schema.wiki_entries.insert()
-        .values(
-            author=iap_caller(x_goog_authenticated_user_email),
-            title=title,
-            use_when=use_when,
-            body=body,
-            embedding=passage_embedding(model, title, use_when, body),
-        )
-        .returning(
-            schema.wiki_entries,
-            *wiki_score_columns(),
-        )
+        .values(author=iap_caller(x_goog_authenticated_user_email), **wiki_write_values(entry, model))
+        .returning(schema.wiki_entries, *wiki_score_columns())
     )
     with engine.begin() as conn:
         row = conn.execute(statement).first()
     return wiki_entry(row)
 
 
-@app.post("/wiki/{entry_id}/references", response_model=WikiEntry)
+@api.put("/wiki/{entry_id}", response_model=WikiEntry)
+def update_wiki_entry(entry_id: int, entry: WikiCreate, engine: Engine, model: Model) -> WikiEntry:
+    """Replace an entry's text and re-embed it. The original author and creation time stand."""
+    statement = (
+        schema.wiki_entries.update()
+        .where(schema.wiki_entries.c.id == entry_id)
+        .values(updated_at=sqlalchemy.func.now(), **wiki_write_values(entry, model))
+        .returning(schema.wiki_entries, *wiki_score_columns())
+    )
+    with engine.begin() as conn:
+        row = conn.execute(statement).first()
+    if row is None:
+        raise HTTPException(404, f"no wiki entry {entry_id}")
+    return wiki_entry(row)
+
+
+@api.post("/wiki/{entry_id}/references", response_model=WikiEntry)
 def reference_wiki_entry(entry_id: int, engine: Engine) -> WikiEntry:
     statement = (
         schema.wiki_entries.update()
@@ -413,4 +432,5 @@ def reference_wiki_entry(entry_id: int, engine: Engine) -> WikiEntry:
     return wiki_entry(row)
 
 
+app.include_router(api)
 echo_dashboard.install_dashboard(app, echo_dashboard.dashboard_dist())

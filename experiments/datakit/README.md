@@ -52,7 +52,7 @@ flowchart TD
     BLOOM["eval bloom (shared)<br/>datakit/bloom/_combined_fixed"]
     DF["eval n-gram DF (cross-source)<br/>datakit/decon_drop/_combined"]
     DEDUP["fuzzy dedup (cross-source)<br/>datakit/dedup"]
-    STORE["store: 5-way join, drop contaminated + non-canonical,<br/>route by (cluster_&lt;view&gt;, quality_bucket)<br/>datakit/store → cluster=C/quality=Q Levanter caches"]
+    STORE["store: shuffle 5-way join, drop contaminated + non-canonical,<br/>group by (cluster_&lt;view&gt;, quality_bucket, subshard)<br/>datakit/store → cluster=C/quality=Q Levanter caches"]
 
     SRC --> TOK
     SRC --> EMB
@@ -91,13 +91,6 @@ flowchart TD
     STORE -.-> RS
 ```
 
-`datakit/decon_drop/_combined` scans up to 5,000 documents per source for
-source-local boilerplate and up to 1,000,000 for the cross-source estimate.
-The global set contains eval n-grams found in at least 50 sampled documents
-across at least three sources. Every decontamination mark loads its local set
-and the shared global set. The thresholds live in
-[`decontam/config.py`](decontam/config.py).
-
 ## Testbed samples
 
 Pre-built testbed samples live under `s3://marin-us-east-02a/marin/datakit/`
@@ -128,7 +121,7 @@ aws s3 ls s3://marin-us-east-02a/marin/datakit/ | grep sample
 | `cluster/domain/v0/` | Domain clustering: centroid sampling/training + per-source assignment |
 | `embeddings/luxical/` | Luxical-one document embeddings feeding the domain stage |
 | `decontam/` | Eval-corpus preparation (the decon step itself lives in `marin.datakit.decon`) |
-| `store/datakit_store.py` | 5-way join → per-(cluster, quality) Levanter caches |
+| `store/datakit_store.py` | Shuffle 5-way join → compact per-(cluster, quality) Levanter caches |
 | `reports/` | Per-stage single-page HTML reports (`common.py` + one module/template per stage) |
 | `scripts/` | Manual source triggering and synchronization, tier-2 dataset reproduction, and tier-1 output validation |
 | `testbed/` | Sampled-corpus testbed used by the smoke and decon experiments |

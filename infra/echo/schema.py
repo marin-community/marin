@@ -72,6 +72,8 @@ chunks = Table(
         postgresql_ops={"embedding": "vector_cosine_ops"},
     ),
     Index("idx_chunks_search_document", "search_document", postgresql_using="gin"),
+    # Trigram index so `grep` (text ILIKE '%pattern%') is an index scan, not a seq scan.
+    Index("idx_chunks_text_trgm", "text", postgresql_using="gin", postgresql_ops={"text": "gin_trgm_ops"}),
 )
 
 sync_state = Table(

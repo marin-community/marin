@@ -52,8 +52,8 @@ def test_k8s_deployment_rejects_priority_class_name_without_value() -> None:
 
 
 def test_env_secret_minted_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("R2_ACCESS_KEY_ID", "AKID")
-    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "SEKRIT")
+    monkeypatch.setenv("R2_KEY_ID", "AKID")
+    monkeypatch.setenv("R2_KEY_SECRET", "SEKRIT")
     cfg = _s3_cfg()
     manifest = json.loads(_build_env_secret_manifest(cfg))
     data = {k: base64.b64decode(v).decode() for k, v in manifest["data"].items()}
@@ -69,8 +69,8 @@ def test_env_secret_minted_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_no_secret_for_non_s3_archive(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("R2_ACCESS_KEY_ID", "AKID")
-    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "SEKRIT")
+    monkeypatch.setenv("R2_KEY_ID", "AKID")
+    monkeypatch.setenv("R2_KEY_SECRET", "SEKRIT")
     cfg = FinelogConfig(
         name="finelog",
         port=10001,
@@ -82,16 +82,16 @@ def test_no_secret_for_non_s3_archive(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_env_secret_requires_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("R2_ACCESS_KEY_ID", "AKID")
-    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "SEKRIT")
+    monkeypatch.setenv("R2_KEY_ID", "AKID")
+    monkeypatch.setenv("R2_KEY_SECRET", "SEKRIT")
     with pytest.raises(click.ClickException, match="object_storage_endpoint"):
         _build_env_secret_manifest(_s3_cfg(object_storage_endpoint=None))
 
 
 def test_env_secret_requires_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("R2_ACCESS_KEY_ID", raising=False)
-    monkeypatch.delenv("R2_SECRET_ACCESS_KEY", raising=False)
-    with pytest.raises(click.ClickException, match="R2_ACCESS_KEY_ID"):
+    monkeypatch.delenv("R2_KEY_ID", raising=False)
+    monkeypatch.delenv("R2_KEY_SECRET", raising=False)
+    with pytest.raises(click.ClickException, match="R2_KEY_ID"):
         _build_env_secret_manifest(_s3_cfg())
 
 
@@ -202,8 +202,8 @@ def test_probe_transition_replaces_complete_probe() -> None:
 
 def test_env_secret_carries_both_s3_credentials_and_signing_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """A forwarding server with an s3:// archive needs both, in the one Secret."""
-    monkeypatch.setenv("R2_ACCESS_KEY_ID", "AKID")
-    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "R2SEKRIT")
+    monkeypatch.setenv("R2_KEY_ID", "AKID")
+    monkeypatch.setenv("R2_KEY_SECRET", "R2SEKRIT")
     monkeypatch.setenv("TEST_FINELOG_SIGNING_KEY", "PRIVKEY")
     cfg = replace(_s3_cfg(), forwarding=_FORWARDING)
     manifest = json.loads(_build_env_secret_manifest(cfg))

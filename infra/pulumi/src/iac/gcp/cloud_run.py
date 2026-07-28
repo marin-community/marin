@@ -101,6 +101,11 @@ class CloudRunServiceArgs:
     # Each grant is its own resource, so re-running with a changed list updates only the
     # added/removed grants — never the service.
     iap_members: tuple[str, ...] = ()
+    # OAuth client IDs IAP accepts as a programmatic-token audience, so a CLI or agent can
+    # reach the service with a Google-signed ID token (browser desktop-login or a
+    # service-account-minted token) instead of the interactive browser session. Empty leaves
+    # the service browser-only. Each id must be an OAuth client that already exists.
+    iap_programmatic_clients: tuple[str, ...] = ()
     # Cloud SQL connection names (project:region:instance) to attach. When non-empty the
     # service mounts the connector socket at /cloudsql and the runtime service account gets
     # roles/cloudsql.client on the project.
@@ -386,6 +391,23 @@ class CloudRunService(pulumi.ComponentResource):
                 cloud_run_service_name=service.name,
                 role="roles/iap.httpsResourceAccessor",
                 member=member,
+                opts=child,
+            )
+
+        # Register programmatic-token audiences on the service's IAP resource. IAP then admits
+        # an ID token whose `aud` is one of these client ids and attributes the caller by its
+        # email claim — the path a CLI or agent uses instead of the interactive browser sign-in.
+        if args.iap_programmatic_clients:
+            gcp.iap.Settings(
+                "iap-settings",
+                name=service.name.apply(
+                    lambda name: f"projects/{project_number}/iap_web/cloud_run-{args.region}/services/{name}"
+                ),
+                access_settings=gcp.iap.SettingsAccessSettingsArgs(
+                    oauth_settings=gcp.iap.SettingsAccessSettingsOauthSettingsArgs(
+                        programmatic_clients=list(args.iap_programmatic_clients),
+                    ),
+                ),
                 opts=child,
             )
 

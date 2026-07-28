@@ -32,6 +32,7 @@ fetch server-side, so nothing outside the container reaches it.
 GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
 GET /finelog/marin/fleet_health                  main query probe + k8s mirror readiness
 GET /finelog/marin/alerts/fleet_health           alert rows: server labels + value(0|1)
+GET /finelog/marin/alerts/training_stalls        active jobs + stalled-progress value(0|1)
 GET /iris/{cluster}/jobs | workers | health      live controller RPCs
 GET /iris/{cluster}/query?sql=                    ad-hoc SELECT (admin/null-auth)
 GET /github/ferries | builds | nightlies          GitHub REST / GraphQL
@@ -197,14 +198,19 @@ File provisioning owns that tree: UI edits to provisioned alerting resources are
 rejected by Grafana and would be overwritten by the files anyway. Change the YAML and
 redeploy.
 
-Rules page only on near-certain incidents: an unreachable cluster, a
+Rules page only on actionable incidents: an unreachable cluster, a
 crash-looping watched component, an admission webhook with no ready endpoints, a
 degraded component, a dead Iris controller, an unhealthy finelog hub or mirror, a GPU
 pod that stays node-bound and
 nonterminal without finalizers for five minutes after the bridge's two-minute
 overdue threshold, and a GB200 rack with fewer than 16 trays Ready for five
 minutes (the NVL72 rack spec is 18; a floor rather than an outright outage —
-see `gpu_racks` above). The stuck-pod rule groups by node and links the cordon-first
+see `gpu_racks` above). A warning-only training rule joins fresh running
+`iris.task_state` rows to root jobs with Levanter Telltale metrics in the prior
+24 hours: it waits 15 minutes for training progress or 45 minutes for
+initialization, then remains pending for five minutes. It does not require
+task-to-node GPU attribution. The stuck-pod
+rule groups by node and links the cordon-first
 recovery skill; terminal, unbound, and finalizer-held pods stay dashboard-only.
 Other workload-tier signals (gated pods, Kueue backlog, workload crashloops) are
 dashboard-only because they have expected benign causes. `severity=critical` routes to `ops-critical` (email ops@openathena.ai,

@@ -144,7 +144,7 @@ members = [
 #   - lib/finelog/rust  -> marin-finelog-server (module `finelog_server`)
 #   - lib/dupekit/rust  -> marin-dupekit-native  (module `dupekit_native`)
 #   - lib/iris/rust     -> marin-iris-native     (module `iris_native`)
-exclude = ["lib/finelog/rust", "lib/dupekit/rust", "lib/iris/rust"]
+exclude = ["lib/finelog/rust", "lib/dupekit/rust", "lib/iris/rust", "config/external/*"]
 
 [tool.uv.extra-build-variables]
 vllm = { VLLM_TARGET_DEVICE = "tpu" }
@@ -170,9 +170,8 @@ marin-zephyr = { workspace = true }
 nvidia-cutlass-dsl = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
-# NOTE: harbor is a pinned git dependency (not a workspace member).
-# harbor lives in marin-community/harbor as a pinned git dependency.
-harbor = { git = "https://github.com/marin-community/harbor.git", rev = "0d0dbe8904ed984137a0dfa764583f1508cf3274" }
+# Managed by config/update-external.py from config/external/harbor/uv.lock.
+harbor = { git = "https://github.com/marin-community/harbor.git", rev = "725fc069555013da7ae7f895dd3658a2c2452d55" }
 # Changes to TPU-vLLM fork SHAs must follow one of these protocols: if this is a
 # release/LKG refresh, then follow .agents/skills/refresh-tpu-vllm-forks/SKILL.md;
 # if this is a fixed-base overlay PR, then follow

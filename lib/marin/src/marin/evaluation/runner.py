@@ -81,6 +81,13 @@ class EvaluationIdentity:
     created_at: str
     output_dir: str
     eval_ref: EvalRef
+    eval_runtime: str
+
+
+@dataclass(frozen=True)
+class LaunchProvenance:
+    git_sha: str
+    launch_host: str
 
 
 @dataclass(frozen=True)
@@ -102,7 +109,7 @@ class EvaluationBatch:
     capability_origin: str
     api_model: str | None
     evaluations: tuple[Evaluation, ...]
-    provenance: Provenance
+    provenance: LaunchProvenance
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
 
 
@@ -152,7 +159,11 @@ def _record(
         error=error,
         results_path=identity.output_dir,
         metrics=metrics,
-        provenance=batch.provenance,
+        provenance=Provenance(
+            git_sha=batch.provenance.git_sha,
+            eval_runtime=identity.eval_runtime,
+            launch_host=batch.provenance.launch_host,
+        ),
         jobs=jobs,
         log_tails=log_tails,
     )

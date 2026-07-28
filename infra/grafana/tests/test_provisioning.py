@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import pyarrow as pa
 import yaml
 from config import ClusterTarget
 from conftest import bridge_config, healthy_k8s_routes, k8s_api, make_k8s_source
@@ -101,6 +102,9 @@ class _FakeFinelog:
             error_class="",
             error="",
         )
+
+    def query(self, sql: str, *, max_rows: int) -> pa.Table:
+        return pa.table({})
 
 
 def test_every_rule_query_url_answers_on_the_bridge():
