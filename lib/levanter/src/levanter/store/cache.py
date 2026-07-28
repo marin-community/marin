@@ -789,6 +789,10 @@ class _ShardedJaggedArrayStore:
     def data_size(self) -> int:
         return self._cache.flat_field_length(self._field)
 
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[np.ndarray]:
+        rows = await self._cache.get_batch(indices)
+        return [_tree_field(row, self._field) for row in rows]
+
 
 @dataclass_json
 @dataclass(frozen=True)

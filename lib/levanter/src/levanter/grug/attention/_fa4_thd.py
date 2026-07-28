@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
-import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jax.sharding import NamedSharding
@@ -211,11 +210,9 @@ def _thd_cu_seqlens_from_segment_lengths(
         if sharding is not None:
             keep = reshard(keep, sharding)
         lengths = jnp.where(keep, segment_lengths.astype(jnp.int32), jnp.zeros_like(segment_lengths, dtype=jnp.int32))
-    lengths = eqx.error_if(
-        lengths,
-        jnp.any((lengths <= 0) & keep),
-        "THD segment metadata contains a non-positive active segment length.",
-    )
+    # ThdSegmentMetadata is constructed from validated packed segment IDs. A
+    # compiled error_if here pins the [B, M] value to device zero before it is
+    # replicated for the global prefix sum, forcing a serialized scatter.
     lengths = _replicate_for_global_prefix_sum(lengths)
     cu_seqlens = jnp.concatenate(
         [
@@ -223,11 +220,6 @@ def _thd_cu_seqlens_from_segment_lengths(
             jnp.cumsum(jnp.reshape(lengths, (-1,)), dtype=jnp.int32),
         ],
         axis=0,
-    )
-    cu_seqlens = eqx.error_if(
-        cu_seqlens,
-        cu_seqlens[-1] != total_tokens,
-        "THD segment metadata does not cover the q/k/v token count.",
     )
     return cu_seqlens
 

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Four-arm nested expert-bank experiment on cw-us-east-08a GB200s.
+"""Nested expert-bank experiment on cw-us-east-08a GB200s.
 
 The launcher keeps the current d1280 compute-optimal recipe fixed while varying
 only total expert count and the fraction of batch rows restricted to an
@@ -215,16 +215,13 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
         target_steps=_TARGET_STEPS,
         seq_len=sequence_length,
     )
-    model = _arm_model(
-        dataclasses.replace(
-            base_model,
-            capacity_factor=capacity_factor,
-            router_balance_mode=router_balance_mode,
-            router_load_balancing_loss_coef=router_aux_coef,
-        ),
-        arm,
-        attention_implementation,
+    configured_base_model = dataclasses.replace(
+        base_model,
+        capacity_factor=capacity_factor,
+        router_balance_mode=router_balance_mode,
+        router_load_balancing_loss_coef=router_aux_coef,
     )
+    model = _arm_model(configured_base_model, arm, attention_implementation)
     eval_expert_count = os.environ.get("NESTED_EVAL_EXPERTS")
     if eval_expert_count is not None:
         if arm is not NestedArm.LARGE:
@@ -327,7 +324,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
         if arm is NestedArm.BREAKOUT_25:
             nested_init_from = _required_env("NESTED_INIT_FROM")
             nested_init_source_model = _arm_model(
-                dataclasses.replace(base_model, capacity_factor=capacity_factor),
+                configured_base_model,
                 NestedArm.NESTED_25,
                 attention_implementation,
             )
@@ -369,7 +366,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
                 max_eval_batches=1,
                 eval_current=True,
                 eval_ema=False,
-                nested_eval_offsets=eval_offsets,
+                nested_eval_offset_count=eval_offsets,
             ),
             processes_per_task=1,
             init_from=weights_from,

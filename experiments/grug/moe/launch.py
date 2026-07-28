@@ -112,7 +112,7 @@ class GrugMoeLaunchConfig:
     resume_from: str | None = None
     """Checkpoint directory from a prior run whose full train state should be resumed."""
     nested_init_from: str | None = None
-    """E256 checkpoint base directory for a fresh-optimizer nested-model breakout."""
+    """Checkpoint base directory for a fresh-optimizer nested-model breakout."""
     nested_init_source_model: GrugModelConfig | None = None
     """Source architecture for ``nested_init_from``; both fields must be set together."""
 

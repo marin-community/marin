@@ -2,7 +2,32 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from marin.processing.tokenize.data_configs import _are_tokenizers_equivalent
+from levanter.data.text.datasets import ConcatDatasetComponent, DatasetComponent, LmDataConfig
+from marin.processing.tokenize.data_configs import _are_tokenizers_equivalent, with_pack
+
+
+def test_with_pack_updates_concat_children():
+    data = LmDataConfig(
+        components={
+            "direct": DatasetComponent(cache_dir="memory://direct"),
+            "concat": ConcatDatasetComponent(
+                children={
+                    "first": DatasetComponent(cache_dir="memory://first"),
+                    "second": DatasetComponent(cache_dir="memory://second"),
+                }
+            ),
+        }
+    )
+
+    packed = with_pack(data, 1)
+
+    assert isinstance(packed.components["direct"], DatasetComponent)
+    assert packed.components["direct"].pack == 1
+    assert isinstance(packed.components["concat"], ConcatDatasetComponent)
+    assert {name: child.pack for name, child in packed.components["concat"].children.items()} == {
+        "first": 1,
+        "second": 1,
+    }
 
 
 def test_are_tokenizers_equivalent():

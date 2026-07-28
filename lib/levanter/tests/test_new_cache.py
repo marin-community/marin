@@ -263,6 +263,39 @@ def test_sharded_jagged_array_tree_flattens_list_valued_field(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_sharded_jagged_array_store_reads_selected_rows(monkeypatch):
+    ledger = CacheLedger(
+        total_num_rows=3,
+        shard_rows={"shard_0": 3},
+        is_finished=True,
+        finished_shards=["shard_0"],
+        field_counts={"input_ids": 6},
+        field_counts_by_shard={"shard_0": {"input_ids": 6}},
+        layout=CACHE_LAYOUT_SHARDED,
+    )
+    cache = TreeCache("/unused", {"input_ids": [0, 0]}, ledger)
+    rows = [
+        {"input_ids": np.array([10], dtype=np.int64)},
+        {"input_ids": np.array([20, 21], dtype=np.int64)},
+        {"input_ids": np.array([30, 31, 32], dtype=np.int64)},
+    ]
+    requested_indices = []
+
+    async def get_batch(indices):
+        requested_indices.extend(indices)
+        return [rows[index] for index in indices]
+
+    monkeypatch.setattr(cache, "get_batch", get_batch)
+
+    store = cache.jagged_array_tree()["input_ids"]
+    selected = await store.get_batch([2, 0])
+
+    assert requested_indices == [2, 0]
+    np.testing.assert_array_equal(selected[0], rows[2]["input_ids"])
+    np.testing.assert_array_equal(selected[1], rows[0]["input_ids"])
+
+
+@pytest.mark.asyncio
 async def test_sharded_flat_field_offsets_share_in_flight_build(monkeypatch):
     shard_names = ["shard_0", "shard_1", "shard_2"]
     ledger = CacheLedger(

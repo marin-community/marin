@@ -19,6 +19,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import experiment_main
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem import prefix_join
 
 from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
@@ -249,16 +250,16 @@ _TAIL_BUCKETS: tuple[str, ...] = (
 )
 
 
-def _bucket_path(bucket: str) -> str:
+def _bucket_path(bucket: str, store_prefix: str = _STORE_PREFIX) -> str:
     cluster = int(bucket[1:3])
     quality = int(bucket[-1])
-    return f"{_STORE_PREFIX}/cluster={cluster}/quality={quality}"
+    return prefix_join(store_prefix, f"cluster={cluster}/quality={quality}")
 
 
-def _bucket_component(bucket: str) -> DatasetComponent:
+def _bucket_component(bucket: str, store_prefix: str = _STORE_PREFIX) -> DatasetComponent:
     return DatasetComponent(
         source=None,
-        cache_dir=_bucket_path(bucket),
+        cache_dir=_bucket_path(bucket, store_prefix),
         format=TextLmDatasetFormat(),
         tags=[bucket],
         flat_cache=True,
@@ -298,12 +299,14 @@ def _phase_1_start_step(total_steps: int, batch_size: int) -> int:
     return max(step_multiple, (requested // step_multiple) * step_multiple)
 
 
-def _datakit_components() -> dict[str, DatasetComponent | ConcatDatasetComponent]:
-    direct = {bucket: _bucket_component(bucket) for bucket, _, _ in _BUCKET_PHASE_WEIGHTS if bucket != "tail"}
+def _datakit_components(store_prefix: str = _STORE_PREFIX) -> dict[str, DatasetComponent | ConcatDatasetComponent]:
+    direct = {
+        bucket: _bucket_component(bucket, store_prefix) for bucket, _, _ in _BUCKET_PHASE_WEIGHTS if bucket != "tail"
+    }
     return {
         **direct,
         "tail": ConcatDatasetComponent(
-            children={bucket: _bucket_component(bucket) for bucket in _TAIL_BUCKETS},
+            children={bucket: _bucket_component(bucket, store_prefix) for bucket in _TAIL_BUCKETS},
             tags=["tail"],
         ),
     }
@@ -320,6 +323,7 @@ def _datakit_data_config(
     max_seq_len: int,
     enable_simulated_epoching: bool,
     val_components: dict[str, DatasetComponent | ConcatDatasetComponent],
+    store_prefix: str = _STORE_PREFIX,
 ) -> LmDataConfig:
     phase_1_start = _phase_1_start_step(total_steps, batch_size)
     budget_kwargs: dict = {}
@@ -336,7 +340,7 @@ def _datakit_data_config(
             "experiment_budget": experiment_budget,
         }
 
-    all_components = {**_datakit_components(), **val_components}
+    all_components = {**_datakit_components(store_prefix), **val_components}
     val_zero_weights = {name: 0.0 for name in val_components}
 
     return LmDataConfig(

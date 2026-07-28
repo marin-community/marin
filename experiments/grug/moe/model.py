@@ -38,6 +38,7 @@ from levanter.grug.attention import (
     align_kv_heads,
     apply_rotary_embedding,
     attention,
+    fa4_cute_segment_bounds,
 )
 from levanter.grug.grug_moe import (
     MOE_REMAT_SAVE_NAMES,
@@ -47,7 +48,7 @@ from levanter.grug.grug_moe import (
     resolve_moe_implementation,
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
-from levanter.grug.sharding import Pembed_vocab, Plm_head, unshard
+from levanter.grug.sharding import unshard
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
@@ -55,6 +56,8 @@ from transformers import PretrainedConfig as HfConfig
 _INELIGIBLE_ROUTER_LOGIT = -1e9
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
+_TOKEN_EMBED_SHARDING = P(None, None)
+_LM_HEAD_SHARDING = P("data", "model")
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
@@ -65,7 +68,13 @@ class NestedSubsetSchedule(StrEnum):
     """How multi-size nested expert subsets are selected during training."""
 
     FIXED = "fixed"
+    PREFIX = "prefix"
     ROTATING = "rotating"
+
+    @property
+    def is_stable(self) -> bool:
+        """Whether each nested size reuses one extractable expert subset."""
+        return self is not NestedSubsetSchedule.ROTATING
 
 
 class RouterBalanceMode(StrEnum):
@@ -99,6 +108,21 @@ def _batch_spec() -> P:
 
 def _batch_reshard(x: jax.Array) -> jax.Array:
     return reshard(x, _batch_spec())
+
+
+def _embedding_gather(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
+    """Look up embeddings locally from a replicated table."""
+
+    def _local(table: jax.Array, ids: jax.Array) -> jax.Array:
+        return table[ids]
+
+    token_ids = reshard(token_ids, P(_BATCH_AXES, None))
+    return shard_map(
+        _local,
+        mesh=get_abstract_mesh(),
+        in_specs=(P(None, None), P(_BATCH_AXES, None)),
+        out_specs=P(_BATCH_AXES, None, None),
+    )(token_embed, token_ids)
 
 
 def _partition_spec_of(x: jax.Array) -> P | None:
@@ -145,7 +169,7 @@ class GrugModelConfig:
     requires the expert-parallel axis to divide the smallest fixed subset.
     """
     nested_expert_counts: tuple[int, ...] = ()
-    """Rotating expert-subset sizes used by hierarchical nesting experiments."""
+    """Expert-subset sizes used by multi-level nesting experiments."""
     nested_subset_schedule: NestedSubsetSchedule = NestedSubsetSchedule.ROTATING
     """Whether each nested size uses one fixed subset or rotates across cosets."""
     nested_batch_fraction: float = 0.0
@@ -203,12 +227,12 @@ class GrugModelConfig:
         if self.router_balance_mode is RouterBalanceMode.ELIGIBILITY_AUX:
             if self.router_load_balancing_loss_coef == 0.0:
                 raise ValueError("eligibility_aux router balancing requires a positive loss coefficient")
-            if self.nested_expert_counts and self.nested_subset_schedule is not NestedSubsetSchedule.FIXED:
+            if self.nested_expert_counts and not self.nested_subset_schedule.is_stable:
                 raise ValueError("eligibility_aux router balancing requires fixed multi-level expert subsets")
         elif self.router_balance_mode is RouterBalanceMode.ELIGIBILITY_QB:
             if self.router_load_balancing_loss_coef != 0.0:
                 raise ValueError("router_load_balancing_loss_coef requires eligibility_aux router balancing")
-            if self.nested_expert_counts and self.nested_subset_schedule is not NestedSubsetSchedule.FIXED:
+            if self.nested_expert_counts and not self.nested_subset_schedule.is_stable:
                 raise ValueError("eligibility_qb router balancing requires fixed multi-level expert subsets")
         elif self.router_load_balancing_loss_coef != 0.0:
             raise ValueError("router_load_balancing_loss_coef requires eligibility_aux router balancing")
@@ -218,9 +242,7 @@ class GrugModelConfig:
             if self.nested_batch_fraction != 0.0:
                 raise ValueError("nested_batch_fraction requires a nested expert configuration")
         else:
-            nested_counts = (
-                (self.nested_expert_count,) if self.nested_expert_count is not None else self.nested_expert_counts
-            )
+            nested_counts = self.nested_expert_sizes
             if len(set(nested_counts)) != len(nested_counts):
                 raise ValueError("nested expert counts must be unique")
             if tuple(sorted(nested_counts, reverse=True)) != nested_counts:
@@ -263,10 +285,14 @@ class GrugModelConfig:
         """Expert counts whose routing biases are balanced independently."""
         if self.router_balance_mode is not RouterBalanceMode.ELIGIBILITY_QB:
             return (self.num_experts,)
-        nested_counts = (
-            (self.nested_expert_count,) if self.nested_expert_count is not None else self.nested_expert_counts
-        )
-        return (self.num_experts, *nested_counts)
+        return (self.num_experts, *self.nested_expert_sizes)
+
+    @property
+    def nested_expert_sizes(self) -> tuple[int, ...]:
+        """Configured nested expert counts in descending order."""
+        if self.nested_expert_count is not None:
+            return (self.nested_expert_count,)
+        return self.nested_expert_counts
 
     def build(self, Vocab: Axis, *, key: PRNGKeyArray) -> "Transformer":
         cfg = self if Vocab.size == self.vocab_size else dataclasses.replace(self, vocab_size=Vocab.size)
@@ -616,12 +642,18 @@ def _routing_stats(
     }
 
 
-def nested_expert_eligibility(num_experts: int, nested_expert_count: int) -> jax.Array:
-    """Return the eligibility mask for an evenly interleaved expert subset."""
+def nested_expert_eligibility(
+    num_experts: int,
+    nested_expert_count: int,
+    subset_schedule: NestedSubsetSchedule = NestedSubsetSchedule.FIXED,
+) -> jax.Array:
+    """Return the offset-zero eligibility mask for one nested expert subset."""
     if nested_expert_count <= 0:
         raise ValueError("nested_expert_count must be positive")
     if num_experts % nested_expert_count != 0:
         raise ValueError("num_experts must be divisible by nested_expert_count")
+    if subset_schedule is NestedSubsetSchedule.PREFIX:
+        return jnp.arange(num_experts) < nested_expert_count
     stride = num_experts // nested_expert_count
     return jnp.arange(num_experts) % stride == 0
 
@@ -782,14 +814,7 @@ class MoEMLP(eqx.Module):
                 if self.cfg.router_balance_mode in (RouterBalanceMode.ELIGIBILITY_AUX, RouterBalanceMode.ELIGIBILITY_QB)
                 else None
             ),
-            eligibility_group_counts=(
-                (self.cfg.num_experts,)
-                + (
-                    (self.cfg.nested_expert_count,)
-                    if self.cfg.nested_expert_count is not None
-                    else self.cfg.nested_expert_counts
-                )
-            ),
+            eligibility_group_counts=(self.cfg.num_experts, *self.cfg.nested_expert_sizes),
         )
         if self.cfg.router_balance_mode is RouterBalanceMode.QB:
             # Sharded QB: compute beta locally per device, then average.
@@ -823,7 +848,11 @@ class MoEMLP(eqx.Module):
             local_tokens = eligible_router_logits.shape[0] // num_devices
             group_betas = []
             for group_count in self.cfg.router_balance_group_counts:
-                group_experts = nested_expert_eligibility(self.cfg.num_experts, group_count)
+                group_experts = nested_expert_eligibility(
+                    self.cfg.num_experts,
+                    group_count,
+                    self.cfg.nested_subset_schedule,
+                )
                 group_indices = jnp.nonzero(group_experts, size=group_count)[0]
                 group_observation = eligible_counts == group_count
                 group_scores = reshard(
@@ -961,9 +990,11 @@ class Transformer(eqx.Module):
 
         embed_key, out_key, embed_gn_key, final_gn_key, *block_keys = random.split(key, cfg.num_layers + 4)
         token_embed = reshard(
-            _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
+            _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), _TOKEN_EMBED_SHARDING
         )
-        output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
+        output_proj = reshard(
+            _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), _LM_HEAD_SHARDING
+        )
         blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
         return Transformer(
             token_embed=token_embed,
@@ -990,15 +1021,31 @@ class Transformer(eqx.Module):
         if mask is None:
             mask = AttentionMask.causal()
 
-        batch_spec = _batch_spec()
         cfg = self.config
-        hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
+        hidden = _embedding_gather(self.token_embed, token_ids)
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
         # Short layers: sliding window. Long layers (every 4th + last): full causal.
         if not isinstance(mask, AttentionMask):
             raise NotImplementedError("Grug MoE requires a structured attention mask.")
         short_mask, long_mask = _layer_attention_masks(mask, sliding_window=cfg.sliding_window)
+        if cfg.attention_implementation == "gpu_fa4_cute":
+            batch_size, seq_len = hidden.shape[:2]
+            long_lower_bounds, valid = fa4_cute_segment_bounds(
+                long_mask,
+                batch_size=batch_size,
+                seq_len=seq_len,
+                sliding_window=None,
+            )
+            short_lower_bounds, _ = fa4_cute_segment_bounds(
+                short_mask,
+                batch_size=batch_size,
+                seq_len=seq_len,
+                sliding_window=cfg.sliding_window,
+            )
+            valid = _batch_reshard(valid)
+            long_mask = long_mask.with_fa4_bounds(_batch_reshard(long_lower_bounds), valid)
+            short_mask = short_mask.with_fa4_bounds(_batch_reshard(short_lower_bounds), valid)
 
         if cfg.remat_mode == "save_moe":
             remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
@@ -1056,7 +1103,7 @@ class Transformer(eqx.Module):
         expert_eligibility: jax.Array | None = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         hidden, router_metrics = self(token_ids, mask=mask, expert_eligibility=expert_eligibility)
-        labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
+        labels = jnp.zeros_like(token_ids).at[:, :-1].set(token_ids[:, 1:]).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
         cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
@@ -1081,6 +1128,7 @@ class Transformer(eqx.Module):
                 nested_experts = nested_expert_eligibility(
                     self.config.num_experts,
                     self.config.nested_expert_count,
+                    self.config.nested_subset_schedule,
                 )
                 routing_counts = router_metrics["routing_counts_per_layer"].astype(jnp.float32)
                 core_counts = jnp.sum(routing_counts * nested_experts[None, :], axis=-1)
@@ -1115,11 +1163,7 @@ def extract_nested_expert_model(model: Transformer, nested_expert_count: int | N
         nested_expert_count: Nested size to extract. This is required for a
             multi-level chain and inferred for a single configured subset.
     """
-    configured_counts = (
-        (model.config.nested_expert_count,)
-        if model.config.nested_expert_count is not None
-        else model.config.nested_expert_counts
-    )
+    configured_counts = model.config.nested_expert_sizes
     if nested_expert_count is None and len(configured_counts) == 1:
         nested_expert_count = configured_counts[0]
     if nested_expert_count is None:
@@ -1127,7 +1171,11 @@ def extract_nested_expert_model(model: Transformer, nested_expert_count: int | N
     if nested_expert_count not in configured_counts:
         raise ValueError("nested_expert_count must be one of the model's configured nested sizes")
 
-    nested_experts = nested_expert_eligibility(model.config.num_experts, nested_expert_count)
+    nested_experts = nested_expert_eligibility(
+        model.config.num_experts,
+        nested_expert_count,
+        model.config.nested_subset_schedule,
+    )
     nested_indices = jnp.nonzero(nested_experts, size=nested_expert_count)[0]
     extracted_config = dataclasses.replace(
         model.config,

@@ -224,7 +224,7 @@ class Transformer(eqx.Module):
     ) -> jax.Array:
         """Compute next-token cross-entropy loss for a batch."""
         hidden = self(token_ids, mask=mask)
-        labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
+        labels = jnp.zeros_like(token_ids).at[:, :-1].set(token_ids[:, 1:]).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
         return fused_linear_softmax_cross_entropy_loss(

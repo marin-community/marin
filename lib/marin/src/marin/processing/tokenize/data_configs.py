@@ -8,7 +8,9 @@ from functools import lru_cache
 from levanter.data.text.datasets import (
     DEFAULT_LM_DATA_SHUFFLE,
     BlockShuffleConfig,
+    ConcatDatasetComponent,
     DatasetComponent,
+    DatasetComponentBase,
     LmDataConfig,
     LmDatasetSourceConfigBase,
 )
@@ -50,14 +52,22 @@ def with_pack(data: LmDataConfig, pack: bool | int) -> LmDataConfig:
     """Override the packing strategy on every cache-backed component of a mixture.
 
     Packing is a load-time view over the tokenized cache, so this re-tokenizes nothing.
-    Components without a ``pack`` field (concat/direct) are returned unchanged.
+    Direct components are returned unchanged.
     """
+
+    def component_with_pack(component: DatasetComponentBase) -> DatasetComponentBase:
+        if isinstance(component, DatasetComponent):
+            return replace(component, pack=pack)
+        if isinstance(component, ConcatDatasetComponent):
+            return replace(
+                component,
+                children={name: replace(child, pack=pack) for name, child in component.children.items()},
+            )
+        return component
+
     return replace(
         data,
-        components={
-            name: replace(component, pack=pack) if isinstance(component, DatasetComponent) else component
-            for name, component in data.components.items()
-        },
+        components={name: component_with_pack(component) for name, component in data.components.items()},
     )
 
 

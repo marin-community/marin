@@ -327,7 +327,7 @@ def test_nested_moe_launcher_builds_power_ladder(monkeypatch, tmp_path):
     assert config.model.nested_batch_fraction == 0.25
     assert config.steps == 38912
     assert config.eval.steps_per_eval == 2048
-    assert config.eval.nested_eval_offsets == 4
+    assert config.eval.nested_eval_offset_count == 4
     assert config.seed == 3
     assert config.resume_from == "s3://test/prior/checkpoints"
     assert config.optimizer.cycles == [8192]
@@ -875,8 +875,6 @@ def test_grug_moe_nested_row_schedule_is_fixed_and_step_balanced():
     assert step_zero is not None
     assert step_one is not None
     nested_experts = np.asarray(model_module.nested_expert_eligibility(config.num_experts, config.nested_expert_count))
-    assert step_zero is not None
-    assert step_one is not None
     np.testing.assert_array_equal(np.asarray(step_zero)[::2], np.broadcast_to(nested_experts, (4, 8)))
     np.testing.assert_array_equal(np.asarray(step_zero)[1::2], np.ones((4, 8), dtype=bool))
     np.testing.assert_array_equal(np.asarray(step_one)[::2], np.ones((4, 8), dtype=bool))
@@ -921,6 +919,57 @@ def test_grug_moe_fixed_ladder_reuses_one_nested_chain():
     np.testing.assert_array_equal(np.asarray(eligibility)[4], np.asarray(eligibility)[10])
     assert np.all(np.asarray(eligibility)[4] <= np.asarray(eligibility)[2])
     assert np.all(np.asarray(eligibility)[2] <= np.asarray(eligibility)[0])
+
+
+def test_grug_moe_prefix_ladder_uses_contiguous_nested_experts():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    config = dataclasses.replace(
+        _nested_grug_model_config(model_module),
+        nested_expert_count=None,
+        nested_expert_counts=(4, 2, 1),
+        nested_subset_schedule=model_module.NestedSubsetSchedule.PREFIX,
+    )
+
+    eligibility = train_module._training_expert_eligibility(config, batch_size=12, step=jnp.array(0))
+
+    assert eligibility is not None
+    expected = [
+        [True, True, True, True, False, False, False, False],
+        [True] * 8,
+        [True, True, False, False, False, False, False, False],
+        [True] * 8,
+        [True, False, False, False, False, False, False, False],
+        [True] * 8,
+    ]
+    assert np.asarray(eligibility).tolist() == expected * 2
+
+
+@pytest.mark.parametrize("nested_expert_count", [4, 2])
+def test_grug_moe_prefix_chain_extraction_matches_restricted_forward(nested_expert_count):
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    config = dataclasses.replace(
+        _nested_grug_model_config(model_module),
+        num_experts_per_token=1,
+        nested_expert_count=None,
+        nested_expert_counts=(4, 2),
+        nested_subset_schedule=model_module.NestedSubsetSchedule.PREFIX,
+    )
+    tokens = jnp.arange(16, dtype=jnp.int32).reshape(2, 8) % config.vocab_size
+    eligible = model_module.nested_expert_eligibility(
+        config.num_experts,
+        nested_expert_count,
+        config.nested_subset_schedule,
+    )
+    expert_eligibility = jnp.broadcast_to(eligible[None, :], (tokens.shape[0], config.num_experts))
+
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
+        model = model_module.Transformer.init(config, key=jax.random.PRNGKey(0))
+        restricted_logits = model.logits(tokens, expert_eligibility=expert_eligibility)
+        extracted_model = model_module.extract_nested_expert_model(model, nested_expert_count)
+        extracted_logits = extracted_model.logits(tokens)
+
+    np.testing.assert_allclose(restricted_logits, extracted_logits, atol=1e-5, rtol=1e-5)
 
 
 def test_grug_moe_nested_evaluation_samples_evenly_spaced_offsets():

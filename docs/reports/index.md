@@ -88,6 +88,7 @@ One-off analysis pages published to durable public hosting (see
 - Nested expert-bank training [![#652](https://img.shields.io/github/issues/detail/state/marin-community/marin/652)](https://github.com/marin-community/marin/issues/652)
     - [GitHub Issue #652](https://github.com/marin-community/marin/issues/652)
     - [Experiment report](./nested-model-training.md)
+    - [d768 compute-optimal fixed-chain burn](./nested-model-training-burnin.md)
 
 ## Training and Performance
 

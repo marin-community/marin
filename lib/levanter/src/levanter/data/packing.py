@@ -13,7 +13,7 @@ This achieves about a 90% "real token" rate, compared to like 10% without packin
 import asyncio
 import time
 from dataclasses import dataclass
-from typing import Iterable, Iterator, Literal, Sequence, TypeVar
+from typing import Iterable, Iterator, Literal, Sequence, TypeVar, overload
 
 import haliax as hax
 import jax
@@ -33,6 +33,26 @@ from levanter.utils.jax_utils import leaf_key_paths, local_cpu_mesh, tree_broadc
 # todo should we use something like this: https://arxiv.org/pdf/2107.02027?
 
 T = TypeVar("T", bound=PyTree)
+
+
+@dataclass(frozen=True)
+class _SingleDocumentPackIndices(Sequence[range]):
+    num_documents: int
+
+    def __len__(self) -> int:
+        return self.num_documents
+
+    @overload
+    def __getitem__(self, index: int) -> range: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> Sequence[range]: ...
+
+    def __getitem__(self, index: int | slice) -> range | Sequence[range]:
+        document_indices = range(self.num_documents)[index]
+        if isinstance(document_indices, range):
+            return tuple(range(document_index, document_index + 1) for document_index in document_indices)
+        return range(document_indices, document_indices + 1)
 
 
 class SequencePacker:
@@ -467,9 +487,23 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
         self.max_segments_per_example = max_segments_per_example
         self.pad_with_zeros = pad_with_zeros
         self.slice_strategy = slice_strategy
+        self._offsets: T | None
+        self._lengths: T | None
+        self._pack_indices: Sequence[range]
 
-        _offsets = jax.tree.map(lambda store: store.offsets[0 : store.num_rows + 1].read(), self.dataset)
-        self._offsets = jax.tree.map(lambda fut: fut.result(), _offsets)
+        if max_segments_per_example == 1 and slice_strategy in ("left", "right"):
+            row_counts = [store.num_rows for store in jax.tree.leaves(self.dataset)]
+            if not row_counts:
+                raise ValueError("Could not determine the number of documents from dataset.")
+            if any(row_count != row_counts[0] for row_count in row_counts[1:]):
+                raise ValueError("All leaves must have the same number of documents.")
+            self._offsets = None
+            self._lengths = None
+            self._pack_indices = _SingleDocumentPackIndices(row_counts[0])
+            return
+
+        offsets = jax.tree.map(lambda store: store.offsets[0 : store.num_rows + 1].read(), self.dataset)
+        self._offsets = jax.tree.map(lambda future: future.result(), offsets)
 
         def diff_offsets(offsets: np.ndarray):
             # fine to mutate since we have a copy
@@ -507,6 +541,27 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
         """
 
         pack_doc_ranges = [self._pack_indices[i] for i in indices]
+
+        async def get_single_document_data(store, allowed: int) -> tuple[list[np.ndarray], list[np.ndarray]]:
+            document_indices = [doc_range.start for doc_range in pack_doc_ranges]
+            out_data = list(await store.get_batch(document_indices))
+            out_segment_ids = []
+            for batch_index, (document_index, data) in enumerate(zip(document_indices, out_data, strict=True)):
+                if data.shape[0] > allowed:
+                    if self.slice_strategy == "right":
+                        data = data[data.shape[0] - allowed :]
+                    else:
+                        data = data[:allowed]
+                    out_data[batch_index] = data
+                out_segment_ids.append(np.full(data.shape[0], document_index))
+
+            if self.pad_with_zeros:
+                out_data = [np.pad(data, (0, allowed - data.shape[0])) for data in out_data]
+                out_segment_ids = [
+                    np.pad(segment_ids, (0, allowed - segment_ids.shape[0]), constant_values=-1)
+                    for segment_ids in out_segment_ids
+                ]
+            return out_data, out_segment_ids
 
         async def get_data_for_leaf(store, offsets, allowed: int) -> tuple[list[np.ndarray], list[np.ndarray]]:
             out_data = []
@@ -568,8 +623,11 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
         # We extract the list of doc_range PyTrees for each requested pack:
         # Use tree.map to combine the leaves from: dataset, max_length and, for each pack, its doc_range.
         # Note: jax.tree.map will map over each pack in parallel across the leaves.
-        max_length_tree = tree_broadcast_to(self.max_length, self._offsets)
-        leaf_batch_futures = jax.tree.map(get_data_for_leaf, self.dataset, self._offsets, max_length_tree)
+        max_length_tree = tree_broadcast_to(self.max_length, self.dataset)
+        if self._offsets is None:
+            leaf_batch_futures = jax.tree.map(get_single_document_data, self.dataset, max_length_tree)
+        else:
+            leaf_batch_futures = jax.tree.map(get_data_for_leaf, self.dataset, self._offsets, max_length_tree)
 
         # Flatten the resulting PyTree: each leaf is now an Awaitable returning a tuple of lists of np.ndarray—one per requested pack.
         leaves, treedef = jax.tree.flatten(leaf_batch_futures)

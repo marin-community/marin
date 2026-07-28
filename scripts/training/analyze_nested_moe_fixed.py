@@ -33,6 +33,8 @@ TRAIN_LOSS = "train/loss"
 CROSS_ENTROPY_LOSS = "train/cross_entropy_loss"
 ROUTER_AUX_LOSS = "train/router/aux_loss_weighted"
 STEP_DURATION = "throughput/duration"
+HOOK_DURATION = "throughput/hook_time"
+LOADING_TIME = "throughput/loading_time"
 OVERFLOW = "train/router/capacity_overflow_rate_mean"
 PALOMA_MACRO = "eval/paloma/macro_loss"
 PALOMA_MICRO = "eval/paloma/micro_loss"
@@ -88,6 +90,8 @@ def histories(run: wandb.apis.public.Run, *, include_nested: bool) -> dict[str, 
         "cross_entropy_loss": CROSS_ENTROPY_LOSS,
         "router_aux_loss": ROUTER_AUX_LOSS,
         "step_duration": STEP_DURATION,
+        "hook_duration": HOOK_DURATION,
+        "loading_time": LOADING_TIME,
         "overflow": OVERFLOW,
         "paloma_macro": PALOMA_MACRO,
         "paloma_micro": PALOMA_MICRO,
@@ -102,13 +106,16 @@ def histories(run: wandb.apis.public.Run, *, include_nested: bool) -> dict[str, 
         )
     values = {name: [] for name in metrics}
     metric_groups = (
-        {name: metric for name, metric in metrics.items() if not metric.startswith("eval/")},
-        {name: metric for name, metric in metrics.items() if metric.startswith("eval/")},
+        ({name: metric for name, metric in metrics.items() if not metric.startswith("eval/")}, 8),
+        # W&B explicit-key scans return only rows containing every requested
+        # key. Eval suites and nested modes are not guaranteed to log in the
+        # same row, so scan them independently.
+        ({name: metric for name, metric in metrics.items() if metric.startswith("eval/")}, 1),
     )
-    for group in metric_groups:
+    for group, chunk_size in metric_groups:
         items = list(group.items())
-        for start in range(0, len(items), 8):
-            chunk = dict(items[start : start + 8])
+        for start in range(0, len(items), chunk_size):
+            chunk = dict(items[start : start + chunk_size])
             for row in run.scan_history(keys=[GLOBAL_STEP, *chunk.values()], page_size=10_000):
                 step = row.get(GLOBAL_STEP)
                 if not isinstance(step, (int, float)):
@@ -119,6 +126,9 @@ def histories(run: wandb.apis.public.Run, *, include_nested: bool) -> dict[str, 
                         values[name].append(HistoryPoint(int(step), float(value)))
     values.setdefault("paloma_e128", [])
     values.setdefault("paloma_e16", [])
+    for name, points in values.items():
+        by_step = {point.step: point for point in points}
+        values[name] = [by_step[step] for step in sorted(by_step)]
     return values
 
 

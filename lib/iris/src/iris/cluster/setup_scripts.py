@@ -127,19 +127,20 @@ def wants_gpu_extra(extras: Sequence[str]) -> bool:
 _LIBDEVICE_FILE = "libdevice.10.bc"
 # XLA's built-in default --xla_gpu_cuda_data_dir, resolved relative to the workdir.
 _XLA_CUDA_DATA_DIR = "cuda_sdk_lib"
-CUDNN_CU13_PACKAGE = "nvidia-cudnn-cu13"
+CUDA_13_LIBRARY_PACKAGES = ("nvidia-cudnn-cu13", "nvidia-nccl-cu13")
 
 
 def cuda_toolchain_setup_script() -> str:
     """Return a setup script that exposes the venv's CUDA toolchain to JAX/Pallas.
 
     Appended to a GPU job's setup so Mosaic GPU kernels compile and JAX sees the
-    CUDA 13 cuDNN wheel after mixed CUDA package installs. It puts the
+    CUDA 13 shared libraries after mixed CUDA package installs. It puts the
     ``jax[cuda13]`` toolchain (``ptxas``/``nvlink``) on ``PATH``, stages
-    ``libdevice.10.bc`` where XLA looks, and restores CUDA 13 cuDNN library
-    precedence when that package is installed. A no-op when the venv carries no
-    CUDA toolchain.
+    ``libdevice.10.bc`` where XLA looks, and restores CUDA 13 cuDNN and NCCL
+    library precedence when those packages are installed. A no-op when the venv
+    carries no CUDA toolchain.
     """
+    cuda_13_library_packages = " ".join(CUDA_13_LIBRARY_PACKAGES)
     return rf"""set -e
 cuda_bin=""
 for _d in "$IRIS_VENV"/lib/python*/site-packages/nvidia/cu*/bin; do
@@ -154,11 +155,11 @@ if [ -f "$_libdevice" ]; then
   cp -f "$_libdevice" "$IRIS_WORKDIR/{_XLA_CUDA_DATA_DIR}/nvvm/libdevice/{_LIBDEVICE_FILE}"
   cp -f "$_libdevice" "$IRIS_WORKDIR/{_LIBDEVICE_FILE}"
 fi
-_cudnn_cu13_package="{CUDNN_CU13_PACKAGE}"
-_cudnn_cu13_version=""
-if [ -x "$IRIS_VENV/bin/python" ]; then
-  _cudnn_cu13_version="$(
-    "$IRIS_VENV/bin/python" - "$_cudnn_cu13_package" <<'PY'
+for _cuda13_package in {cuda_13_library_packages}; do
+  _cuda13_version=""
+  if [ -x "$IRIS_VENV/bin/python" ]; then
+    _cuda13_version="$(
+      "$IRIS_VENV/bin/python" - "$_cuda13_package" <<'PY'
 import importlib.metadata as md
 import sys
 
@@ -167,15 +168,16 @@ try:
 except md.PackageNotFoundError:
     pass
 PY
-  )"
-fi
-if [ -n "$_cudnn_cu13_version" ]; then
-  echo 'restoring CUDA 13 cuDNN library precedence'
-  uv pip install --python "$IRIS_VENV/bin/python" \
-    --link-mode symlink \
-    --reinstall-package "$_cudnn_cu13_package" \
-    "$_cudnn_cu13_package==$_cudnn_cu13_version"
-fi
+    )"
+  fi
+  if [ -n "$_cuda13_version" ]; then
+    echo "restoring CUDA 13 library precedence for $_cuda13_package"
+    uv pip install --python "$IRIS_VENV/bin/python" \
+      --link-mode symlink \
+      --reinstall-package "$_cuda13_package" \
+      "$_cuda13_package==$_cuda13_version"
+  fi
+done
 """
 
 

@@ -19,6 +19,13 @@ from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig, fla
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 
 
+def _replicate_constant(x: jax.Array) -> jax.Array:
+    mesh = get_abstract_mesh()
+    if mesh is None or mesh.empty:
+        return x
+    return reshard(x, P(*((None,) * x.ndim)))
+
+
 def _batched_segment_ids(segment_ids: jax.Array, *, batch_size: int, seq_len: int) -> jax.Array:
     if segment_ids.ndim == 1:
         if segment_ids.shape[0] != seq_len:
@@ -50,7 +57,7 @@ def _packed_segment_start_positions(
     segment_ids = _batched_segment_ids(segment_ids, batch_size=batch_size, seq_len=seq_len)
     valid = segment_ids >= 0
     starts = _segment_starts(segment_ids)
-    positions = jnp.arange(seq_len, dtype=jnp.int32)[None, :]
+    positions = _replicate_constant(jnp.arange(seq_len, dtype=jnp.int32)[None, :])
     start_positions = jnp.where(starts, positions, 0)
     current_start: jax.Array = jax.lax.associative_scan(jnp.maximum, start_positions, axis=1)
     return jnp.where(valid, current_start, seq_len)
@@ -75,7 +82,7 @@ def _packed_segment_causal_lower_bounds(
         seq_len=seq_len,
     )
     if sliding_window is not None:
-        positions = jnp.arange(seq_len, dtype=jnp.int32)[None, :]
+        positions = _replicate_constant(jnp.arange(seq_len, dtype=jnp.int32)[None, :])
         window_lower_bounds = positions - (sliding_window - 1)
         lower_bounds = jnp.maximum(lower_bounds, window_lower_bounds)
     return jnp.where(valid, lower_bounds, seq_len), valid
@@ -90,13 +97,13 @@ def _simple_causal_lower_bounds(
     if sliding_window is not None and sliding_window <= 0:
         raise ValueError(f"sliding_window must be positive, got {sliding_window}")
 
-    positions = jnp.arange(seq_len, dtype=jnp.int32)[None, :]
+    positions = _replicate_constant(jnp.arange(seq_len, dtype=jnp.int32)[None, :])
     if sliding_window is None:
-        lower_bounds = jnp.zeros((1, seq_len), dtype=jnp.int32)
+        lower_bounds = _replicate_constant(jnp.zeros((1, seq_len), dtype=jnp.int32))
     else:
         lower_bounds = jnp.maximum(positions - (sliding_window - 1), 0)
-    lower_bounds = jnp.broadcast_to(lower_bounds, (batch_size, seq_len))
-    valid = jnp.ones((batch_size, seq_len), dtype=jnp.bool_)
+    lower_bounds = _replicate_constant(jnp.broadcast_to(lower_bounds, (batch_size, seq_len)))
+    valid = _replicate_constant(jnp.ones((batch_size, seq_len), dtype=jnp.bool_))
     return lower_bounds, valid
 
 
@@ -299,12 +306,15 @@ def gpu_fa4_cute_attention(
         raise RuntimeError("gpu_fa4_cute_attention requires the JAX GPU backend.")
 
     _validate_head_layout(q, k, backend_name="gpu_fa4_cute_attention")
-    lower_bounds, valid = _self_attention_lower_bounds(
-        q,
-        k,
-        mask,
-        backend_name="gpu_fa4_cute_attention",
-    )
+    if isinstance(mask, AttentionMask) and mask.fa4_bounds is not None:
+        lower_bounds, valid = mask.fa4_bounds
+    else:
+        lower_bounds, valid = _self_attention_lower_bounds(
+            q,
+            k,
+            mask,
+            backend_name="gpu_fa4_cute_attention",
+        )
     kernel_config = _segmented_kernel_config(q.shape[-1])
 
     return _fa4_cute_attention_forward_sharded(
@@ -318,6 +328,33 @@ def gpu_fa4_cute_attention(
     )
 
 
+def fa4_cute_segment_bounds(
+    mask: AttentionMask,
+    *,
+    batch_size: int,
+    seq_len: int,
+    sliding_window: int | None,
+) -> tuple[Int[Array, "B S"], Bool[Array, "B S"]]:
+    """Compute per-token FA4/CuTe bounds outside an attention call."""
+    if not mask.is_causal:
+        raise NotImplementedError("fa4_cute_segment_bounds supports only causal self-attention.")
+    if mask.segment_ids is None:
+        return _simple_causal_lower_bounds(
+            batch_size=batch_size,
+            seq_len=seq_len,
+            sliding_window=sliding_window,
+        )
+    q_segment_ids, _ = mask.segment_ids
+    q_segment_ids = _batched_segment_ids(q_segment_ids, batch_size=batch_size, seq_len=seq_len)
+    return _packed_segment_causal_lower_bounds(
+        q_segment_ids,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        sliding_window=sliding_window,
+    )
+
+
 __all__ = [
+    "fa4_cute_segment_bounds",
     "gpu_fa4_cute_attention",
 ]

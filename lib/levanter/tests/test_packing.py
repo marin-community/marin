@@ -24,6 +24,41 @@ from levanter.models.lm_model import LmExample
 from levanter.store.jagged_array import JaggedArrayStore
 
 
+class _SingleDocumentStore:
+    def __init__(self, documents: list[np.ndarray]):
+        self._documents = documents
+
+    @property
+    def num_rows(self) -> int:
+        return len(self._documents)
+
+    @property
+    def offsets(self):
+        raise AssertionError("single-document packing must not preload the full offsets array")
+
+    async def get_batch(self, indices):
+        return [self._documents[index] for index in indices]
+
+
+@pytest.mark.asyncio
+async def test_single_document_pack_reads_only_requested_documents():
+    documents = [np.arange(3), np.arange(10, 16), np.arange(20, 22)]
+    dataset = GreedyPrepackedDataset(
+        {"tokens": _SingleDocumentStore(documents)},
+        {"tokens": 4},
+        max_segments_per_example=1,
+        pad_with_zeros=True,
+        slice_strategy="left",
+    )
+
+    examples = await dataset.get_batch([0, 1])
+
+    np.testing.assert_array_equal(examples[0][0]["tokens"], np.array([0, 1, 2, 0]))
+    np.testing.assert_array_equal(examples[0][1]["tokens"], np.array([0, 0, 0, -1]))
+    np.testing.assert_array_equal(examples[1][0]["tokens"], np.array([10, 11, 12, 13]))
+    np.testing.assert_array_equal(examples[1][1]["tokens"], np.array([1, 1, 1, 1]))
+
+
 def test_per_segment_loss():
     Pos = hax.Axis("pos", size=10)
     packer = SequencePacker(Pos=Pos, max_pack_size=10, pad_token=0)

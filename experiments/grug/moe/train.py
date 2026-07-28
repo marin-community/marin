@@ -3,12 +3,14 @@
 
 import dataclasses
 import functools
+import json
 import logging
+import os
+import tempfile
 import time
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import cast
+from typing import Protocol, cast
 
 import equinox as eqx
 import jax
@@ -60,6 +62,40 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 logger = logging.getLogger(__name__)
 
 
+class CheckpointLoader(Protocol):
+    """Load a checkpoint matching a dictionary exemplar."""
+
+    def __call__(
+        self,
+        tree: dict[str, object],
+        checkpoint_path: str,
+        *,
+        mesh: Mesh | None,
+        allow_partial: bool,
+    ) -> dict[str, object]: ...
+
+
+def _materialize_tensorstore_gcs_credentials() -> None:
+    """Expose fsspec's structured GCS token to TensorStore's ADC lookup."""
+    if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") is not None:
+        return
+
+    fsspec_gcs = os.environ.get("FSSPEC_GS")
+    if fsspec_gcs is None:
+        return
+
+    token = json.loads(fsspec_gcs).get("token")
+    if not isinstance(token, dict):
+        return
+
+    file_descriptor, credentials_path = tempfile.mkstemp(prefix="gcs-adc-", suffix=".json")
+    os.fchmod(file_descriptor, 0o600)
+    with os.fdopen(file_descriptor, "w") as credentials_file:
+        json.dump(token, credentials_file)
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
+    logger.info("Materialized TensorStore GCS credentials at an ephemeral task-local path")
+
+
 class InitializationMode(StrEnum):
     """Checkpoint initialization behavior after own-run resume is attempted."""
 
@@ -101,7 +137,7 @@ class GrugEvalConfig:
     eval_current: bool = True
     eval_ema: bool = True
     compute_bpb: bool = True
-    nested_eval_offsets: int = 1
+    nested_eval_offset_count: int = 1
 
 
 @dataclass(frozen=True)
@@ -203,7 +239,16 @@ def build_tagged_evaluator(
             stride = model.config.num_experts // nested_expert_count
             if not 0 <= nested_expert_offset < stride:
                 raise ValueError(f"nested_expert_offset must be in [0, {stride})")
-            eligible = jnp.arange(model.config.num_experts) % stride == nested_expert_offset
+            if model.config.nested_subset_schedule is NestedSubsetSchedule.PREFIX:
+                if nested_expert_offset != 0:
+                    raise ValueError("prefix nested subsets only support offset zero")
+                eligible = nested_expert_eligibility(
+                    model.config.num_experts,
+                    nested_expert_count,
+                    model.config.nested_subset_schedule,
+                )
+            else:
+                eligible = jnp.arange(model.config.num_experts) % stride == nested_expert_offset
             expert_eligibility = jnp.broadcast_to(
                 eligible[None, :],
                 (batch.tokens.shape[0], model.config.num_experts),
@@ -218,7 +263,7 @@ def build_tagged_evaluator(
         )
         per_pos_loss = jax.sharding.reshard(per_pos_loss, eval_array_sharding)
         per_pos_weight = jax.sharding.reshard(batch.loss_weight, eval_array_sharding)
-        per_pos_token_id = jnp.roll(batch.tokens, -1, axis=-1)
+        per_pos_token_id = jnp.zeros_like(batch.tokens).at[:, :-1].set(batch.tokens[:, 1:])
         return per_pos_loss, per_pos_weight, per_pos_token_id
 
     return TaggedEvaluator(
@@ -235,7 +280,7 @@ def build_tagged_evaluator(
 def nested_evaluation_offsets(num_experts: int, nested_expert_count: int, requested_offsets: int) -> tuple[int, ...]:
     """Return evenly spaced extractable-subset offsets, capped by the number available."""
     if requested_offsets <= 0:
-        raise ValueError("nested_eval_offsets must be positive")
+        raise ValueError("nested_eval_offset_count must be positive")
     stride = num_experts // nested_expert_count
     count = min(requested_offsets, stride)
     return tuple(index * stride // count for index in range(count))
@@ -340,14 +385,14 @@ def init_weights_only_from_checkpoint(
     *,
     mesh: Mesh | None,
     load_ema: bool,
-    _load_fn: Callable[..., object] = load_checkpoint,
+    _load_fn: CheckpointLoader = load_checkpoint,
 ) -> GrugTrainState:
     """Load model and router-bias state while retaining a fresh optimizer and step."""
     exemplar: dict[str, object] = {
         "params": state.params,
         "pending_qb_betas": state.pending_qb_betas,
     }
-    loaded = cast("dict[str, object]", _load_fn(exemplar, checkpoint_path, mesh=mesh, allow_partial=True))
+    loaded = _load_fn(exemplar, checkpoint_path, mesh=mesh, allow_partial=True)
     updates: dict[str, object] = {
         "params": loaded["params"],
         "pending_qb_betas": loaded["pending_qb_betas"],
@@ -364,7 +409,7 @@ def init_nested_weights_from_checkpoint(
     *,
     mesh: Mesh | None,
     load_ema: bool,
-    _load_fn: Callable[..., object] = load_checkpoint,
+    _load_fn: CheckpointLoader = load_checkpoint,
 ) -> GrugTrainState:
     """Extract nested weights from an external checkpoint into a fresh train state."""
     source_nested_count = source_model.config.nested_expert_count
@@ -380,7 +425,7 @@ def init_nested_weights_from_checkpoint(
         "params": source_model,
         "pending_qb_betas": source_pending_qb_betas,
     }
-    loaded = cast("dict[str, object]", _load_fn(exemplar, checkpoint_path, mesh=mesh, allow_partial=True))
+    loaded = _load_fn(exemplar, checkpoint_path, mesh=mesh, allow_partial=True)
     loaded_source_model = cast(Transformer, loaded["params"])
     extracted_model = extract_nested_expert_model(loaded_source_model)
     if extracted_model.config != state.params.config:
@@ -389,6 +434,7 @@ def init_nested_weights_from_checkpoint(
     nested_experts = nested_expert_eligibility(
         source_model.config.num_experts,
         source_nested_count,
+        source_model.config.nested_subset_schedule,
     )
     nested_indices = jnp.nonzero(nested_experts, size=source_nested_count)[0]
     loaded_pending_qb_betas = cast(jax.Array, loaded["pending_qb_betas"])
@@ -459,7 +505,7 @@ def _make_train_step(
             metrics["train/nested/sequence_fraction"] = jnp.mean(
                 (eligible_counts < qb_params.config.num_experts).astype(jnp.float32)
             )
-            for nested_count in qb_params.config.nested_expert_counts:
+            for nested_count in qb_params.config.nested_expert_sizes:
                 metrics[f"train/nested/e{nested_count}_sequence_fraction"] = jnp.mean(
                     (eligible_counts == nested_count).astype(jnp.float32)
                 )
@@ -522,7 +568,11 @@ def _training_expert_eligibility(
     expert_ids = jnp.arange(model_config.num_experts, dtype=jnp.int32)
 
     if model_config.nested_expert_count is not None:
-        nested = nested_expert_eligibility(model_config.num_experts, model_config.nested_expert_count)
+        nested = nested_expert_eligibility(
+            model_config.num_experts,
+            model_config.nested_expert_count,
+            model_config.nested_subset_schedule,
+        )
         return jnp.where(restricted_rows[:, None], nested[None, :], True)
 
     nested_counts = jnp.asarray(model_config.nested_expert_counts, dtype=jnp.int32)
@@ -530,17 +580,21 @@ def _training_expert_eligibility(
     level_ids = event_ids % len(model_config.nested_expert_counts)
     eligible_counts = nested_counts[level_ids]
     strides = model_config.num_experts // eligible_counts
-    if model_config.nested_subset_schedule is NestedSubsetSchedule.FIXED:
+    if model_config.nested_subset_schedule is NestedSubsetSchedule.PREFIX:
+        nested = expert_ids[None, :] < eligible_counts[:, None]
+    elif model_config.nested_subset_schedule is NestedSubsetSchedule.FIXED:
         offsets = jnp.zeros_like(strides)
+        nested = expert_ids[None, :] % strides[:, None] == offsets[:, None]
     else:
         subset_cycles = event_ids // len(model_config.nested_expert_counts)
         offsets = subset_cycles % strides
-    nested = expert_ids[None, :] % strides[:, None] == offsets[:, None]
+        nested = expert_ids[None, :] % strides[:, None] == offsets[:, None]
     return jnp.where(restricted_rows[:, None], nested, True)
 
 
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
+    _materialize_tensorstore_gcs_credentials()
     trainer = config.trainer.trainer
     trainer.initialize()
     levanter.tracker.log_configuration(config)
@@ -667,11 +721,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 if nested_evaluator is not None:
                     nested_evaluators.append((f"{eval_cfg.prefix}/nested", nested_evaluator))
             for nested_count in config.model.nested_expert_counts:
-                offsets = nested_evaluation_offsets(
-                    config.model.num_experts,
-                    nested_count,
-                    eval_cfg.nested_eval_offsets,
-                )
+                if config.model.nested_subset_schedule is NestedSubsetSchedule.PREFIX:
+                    offsets = (0,)
+                else:
+                    offsets = nested_evaluation_offsets(
+                        config.model.num_experts,
+                        nested_count,
+                        eval_cfg.nested_eval_offset_count,
+                    )
                 for offset in offsets:
                     nested_evaluator = build_tagged_evaluator(
                         data_config=config.data,

@@ -1,0 +1,96 @@
+{
+  "thinking": {
+    "comparison": {
+      "final_cross_entropy_delta": -0.12678766250610352,
+      "gpu_hours_delta": -0.7551509622133317,
+      "last_100_mean_cross_entropy_delta": -0.10617624282836857,
+      "median_step_overhead_fraction": -0.014542086737016624,
+      "paired_mean_cross_entropy_delta_post_warmup": -0.11943797906530051,
+      "paired_median_cross_entropy_delta_post_warmup": -0.111907958984375,
+      "paired_steps_post_warmup": 4929,
+      "paired_treatment_win_fraction_post_warmup": 0.9997971190910935,
+      "paired_treatment_wins_post_warmup": 4928,
+      "post_warmup_mean_cross_entropy_delta": -0.1194379790653004,
+      "runtime_delta_seconds": -169.9089664979997
+    },
+    "e256": {
+      "completed_steps": 5029,
+      "final_cross_entropy_loss": 4.562824249267578,
+      "final_total_loss": 4.562824249267578,
+      "gpu_hours": 12.616251257044443,
+      "mean_cross_entropy_loss_last_100": 4.53161518573761,
+      "mean_cross_entropy_loss_post_warmup": 4.86471591215391,
+      "median_step_seconds": 0.3218495440087281,
+      "optimizer_gpu_hours": 7.193694919199528,
+      "run_name": "nest-burn-001-sft-e256-thinking-d768-s8192-final-r1",
+      "runtime_seconds": 2838.656532835,
+      "stage_tokens": 1318244179,
+      "state": "finished",
+      "terminal_overflow": 0.0,
+      "url": "https://wandb.ai/marin-community/marin_moe_sft/runs/nest-burn-001-sft-e256-thinking-d768-s8192-final-r1"
+    },
+    "fixed25": {
+      "completed_steps": 5029,
+      "final_cross_entropy_loss": 4.436036586761475,
+      "final_total_loss": 4.436036586761475,
+      "gpu_hours": 11.861100294831111,
+      "mean_cross_entropy_loss_last_100": 4.425438942909241,
+      "mean_cross_entropy_loss_post_warmup": 4.74527793308861,
+      "median_step_seconds": 0.31716918002348393,
+      "optimizer_gpu_hours": 7.089083583724892,
+      "run_name": "nest-burn-001-sft-fixed25-thinking-d768-s8192-final-r1",
+      "runtime_seconds": 2668.747566337,
+      "stage_tokens": 1318244179,
+      "state": "finished",
+      "terminal_overflow": 0.0,
+      "url": "https://wandb.ai/marin-community/marin_moe_sft/runs/nest-burn-001-sft-fixed25-thinking-d768-s8192-final-r1"
+    }
+  },
+  "wildchat": {
+    "comparison": {
+      "final_cross_entropy_delta": -0.3805570602416992,
+      "gpu_hours_delta": -0.04431398319999946,
+      "last_100_mean_cross_entropy_delta": -0.44875814914703316,
+      "median_step_overhead_fraction": -0.0007024122949270684,
+      "paired_mean_cross_entropy_delta_post_warmup": -0.36009210785005963,
+      "paired_median_cross_entropy_delta_post_warmup": -0.416168212890625,
+      "paired_steps_post_warmup": 1951,
+      "paired_treatment_win_fraction_post_warmup": 0.9010763710917479,
+      "paired_treatment_wins_post_warmup": 1758,
+      "post_warmup_mean_cross_entropy_delta": -0.3600921078500603,
+      "runtime_delta_seconds": -9.970646219999935
+    },
+    "e256": {
+      "completed_steps": 2051,
+      "final_cross_entropy_loss": 6.085972785949707,
+      "final_total_loss": 6.085972785949707,
+      "gpu_hours": 6.655338689031111,
+      "mean_cross_entropy_loss_last_100": 6.48840754032135,
+      "mean_cross_entropy_loss_post_warmup": 7.020263969806572,
+      "median_step_seconds": 0.31968266202602535,
+      "optimizer_gpu_hours": 2.9140850658461246,
+      "run_name": "nest-burn-001-sft-e256-wildchat-d768-s8192-final-r1",
+      "runtime_seconds": 1497.451205032,
+      "stage_tokens": 537585868,
+      "state": "finished",
+      "terminal_overflow": 0.0,
+      "url": "https://wandb.ai/marin-community/marin_moe_sft/runs/nest-burn-001-sft-e256-wildchat-d768-s8192-final-r1"
+    },
+    "fixed25": {
+      "completed_steps": 2051,
+      "final_cross_entropy_loss": 5.705415725708008,
+      "final_total_loss": 5.705415725708008,
+      "gpu_hours": 6.611024705831111,
+      "mean_cross_entropy_loss_last_100": 6.039649391174317,
+      "mean_cross_entropy_loss_post_warmup": 6.660171861956512,
+      "median_step_seconds": 0.31945811299374327,
+      "optimizer_gpu_hours": 2.912038176667411,
+      "run_name": "nest-burn-001-sft-fixed25-wildchat-d768-s8192-final-r1",
+      "runtime_seconds": 1487.480558812,
+      "stage_tokens": 537585868,
+      "state": "finished",
+      "terminal_overflow": 0.0,
+      "url": "https://wandb.ai/marin-community/marin_moe_sft/runs/nest-burn-001-sft-fixed25-wildchat-d768-s8192-final-r1"
+    }
+  }
+}

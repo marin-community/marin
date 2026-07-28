@@ -1341,3 +1341,686 @@ result:
 - Ladder25's macro advantage is concentrated in programming languages
   (`-1.921`), gab (`-0.946`), and TwitterAAE (`-0.781`) versus E256. This is a
   specialization shift, not a broad full-model quality improvement.
+
+### 2026-07-27 22:31 - Compute-optimal fixed25 burn-in amendment
+
+- Opened Weaver issue `#662` for the matched longer run. No job from the
+  superseded d640/50B draft was submitted.
+- The operator supplied the production comparison point: compute budget
+  `4.14e18`, hidden dimension `768`, sequence length `8192`, and heuristic
+  target steps `2^15`.
+- The current `MoeHeuristic` derives:
+  - L8, six query heads, one KV head, E256 top-4, expert intermediate 384;
+  - `4,414,492,433` target tokens, global batch 32, and 16,840 updates;
+  - MuonH/AdamH-group LR `0.0083798354`, plain-Adam LR `0.0019338082`;
+  - beta1 `0.9062`, beta2 `0.998001`, epsilon `1.2556433e-15`;
+  - linear schedule, 1% warmup, minimum LR ratio `0.05`, and no clipping.
+- The quoted epsilon estimate was `1.03e-15`; the run uses the heuristic's
+  computed `1.2556433e-15`, following the instruction to derive the recipe
+  from base inputs rather than override individual outputs.
+- Compare only E256 and fixed25. Both use the canonical two-phase datakit mix,
+  seed 0, capacity factor 1.25, and identical evaluation cadence. Fixed25
+  restricts 25% of rows, alternating the fixed E128 and E16 subsets.
+- Use full FSDP over 32 GB200s per arm with expert axis 1. This removes expert
+  parallelism from the comparison; both arms use the same topology.
+- Expected control Paloma macro loss is approximately `3.22`. Treat this as a
+  calibration check, not an outcome threshold for the treatment comparison.
+
+### 2026-07-27 23:13 - Burn-in launch
+
+- The r1 jobs reached the canonical Datakit cache but failed before model
+  initialization and step 0. fsspec consumed the injected renewable ADC, while
+  TensorStore's native GCS driver attempted anonymous Zarr reads and returned
+  HTTP 401. Both arms failed identically, so r1 contains no experimental data.
+- Stopped the exact r1 coordinator trees after confirming the deterministic
+  failure. Recorded the incident in
+  `.agents/ops/2026-07-27-coreweave-tensorstore-gcs-auth.md`.
+- Added process-start credential materialization: structured fsspec GCS ADC is
+  written to a mode-0600 task-local file and exposed through
+  `GOOGLE_APPLICATION_CREDENTIALS`. Credential contents are not logged.
+- A CPU preflight on `cw-us-east-08a` opened the exact private Zarr offsets
+  array through TensorStore with OAuth2. Job:
+  `/power/nest-burn-001-tensorstore-adc-probe-r2`.
+- Submitted the matched r2 pair at batch priority:
+  `/power/nest-burn-001-e256-c4p14e18-r2-coord` and
+  `/power/nest-burn-001-fixed25-c4p14e18-r2-coord`.
+
+### 2026-07-27 23:31 - Lazy single-document packing and r3 launch
+
+- The r2 pair passed native TensorStore authentication, allocated all 32
+  devices per arm, and initialized W&B. It did not reach model initialization:
+  `pack=1` eagerly read every document offset and length in the 10.37T-token
+  Datakit store and materialized one Python `range` per document. Worker RSS
+  passed 61 GB while still growing.
+- Stopped both r2 coordinator trees before host OOM. Neither arm produced a
+  training step, so r2 contains no scientific observation.
+- Added an exact lazy path for single-document packing. It reads only the
+  selected documents at batch time and preserves the existing left/right
+  truncation, padding, and segment-ID semantics. Also made `with_pack`
+  propagate into concatenated tail components.
+- Regression tests pass: 29 tests across
+  `tests/test_data_configs.py` and `lib/levanter/tests/test_packing.py`.
+  Pre-commit and Pyrefly pass on the modified data-path files.
+- The complete 168-component training mix instantiated in a 16 GB CPU
+  preflight:
+  `/power/nest-burn-001-datakit-pack1-probe-r3`.
+- Submitted the fresh matched pair:
+  `/power/nest-burn-001-e256-c4p14e18-r3-coord` and
+  `/power/nest-burn-001-fixed25-c4p14e18-r3-coord`.
+
+### 2026-07-27 23:42 - Production sharded-read coverage and r4 launch
+
+- r3 reached its first actual dataset sample, where both arms failed before
+  model initialization because the production `_ShardedJaggedArrayStore` did
+  not expose the `get_batch` interface available on a materialized
+  `JaggedArrayStore`. Iris began matched retries; both coordinator trees were
+  stopped after one failure. No update was computed.
+- Added batch reads to the sharded jagged-array view through its owning
+  `TreeCache` and added production-shaped regression coverage. The focused
+  suite now passes 30 tests; pre-commit and Pyrefly pass.
+- A second 16 GB CPU preflight authenticated native GCS, instantiated all 168
+  components, fetched a real sharded row, and emitted the expected packed
+  8,192-token leaves:
+  `/power/nest-burn-001-datakit-sample-probe-r4b`.
+- Submitted the matched r4 pair:
+  `/power/nest-burn-001-e256-c4p14e18-r4-coord` and
+  `/power/nest-burn-001-fixed25-c4p14e18-r4-coord`.
+
+### 2026-07-28 00:08 - CoreWeave-local Datakit relaunch
+
+- The operator stopped r4 before update 0 after confirming that its absolute
+  source pin read the canonical GCS store directly. Neither arm produced
+  scientific data.
+- An in-cluster S3 inventory confirmed the complete Datakit store at
+  `s3://marin-us-east-02a/marin/datakit/store_8ac06c74`, including artifact
+  metadata and the expected cluster partitions. No corpus copy is required.
+- Replaced the GCS source pin with the CoreWeave-local S3 path and submitted
+  the matched r5 pair at batch priority:
+  `/power/nest-burn-001-e256-c4p14e18-r5-coord` and
+  `/power/nest-burn-001-fixed25-c4p14e18-r5-coord`.
+- Both coordinators use `MARIN_PREFIX=s3://marin-us-east-02a/marin`; training
+  data, evaluations, checkpoints, and W&B replicas remain on CoreWeave S3.
+
+### 2026-07-28 01:22 - First-step distributed hang
+
+- Both r5 arms compiled and entered their first PJRT training dispatch but
+  produced no update 0. All 16 task main threads have the same
+  `pxla -> pjit -> train.py:780` stack, while their data-loader queues are now
+  full.
+- All 64 GPUs hold approximately 157.7 GiB and report 100% utilization at only
+  190--235 W. Three-second InfiniBand samples show only a few identical
+  keep-alive packets and no bulk traffic. NVLink fabric and NVML error status
+  are healthy.
+- NCCL RAS initially saw every rank and communicator `RUNNING/OK`. Subsequent
+  global status collection accepts the local socket connection but times out,
+  so the per-rank JSON collective counters are unavailable in the wedged
+  state.
+- Both environments contain the CUDA 12 and CUDA 13 NCCL wheels. E256 loaded
+  the CUDA 13 build, while fixed25 loaded the CUDA 12.9 build despite identical
+  package metadata. This makes the matched runtime nondeterministic and must be
+  removed before the scientific run, but it cannot alone explain E256's
+  CUDA-13 hang.
+- The input stall on E256 task 1 preceded the hang but is not the continuing
+  mechanism: all ranks eventually entered the executable and every prefetch
+  thread is blocked on a full queue.
+- No job has been kicked while live evidence is captured. The incident record
+  is `.agents/ops/2026-07-28-gb200-first-step-collective-hang.md`.
+
+### 2026-07-28 01:37 - Instrumented first-step reproduction
+
+- Stopped the exact r5 coordinator trees after collecting stacks, RAS state,
+  GPU/NIC telemetry, runtime mappings, and durable logs. Neither arm completed
+  an optimizer update.
+- Added deterministic CUDA 13 library precedence to the Iris GPU setup:
+  reinstall both the installed cuDNN and NCCL CUDA-13 wheels after mixed CUDA
+  packages are synced. The focused behavior tests cover both shared-library
+  paths and pass.
+- The first eight-step smoke, diagnostic r6, failed before its first dispatch
+  because using eight steps for the Datakit simulated-epoch plan made a finite
+  component empty. It was stopped before retry.
+- `BURNIN_DATA_STEPS` now separates the Datakit planning horizon from the
+  requested smoke length. Diagnostic r7 trains for eight steps against the
+  full 16,840-step mix plan.
+- r7 has loaded NCCL 2.28.9 with CUDA runtime 13.0 on all ranks. During FA4
+  forward/backward compilation, RAS JSON reports four eight-rank
+  communicators, identical `AllReduce=1` counts on every rank, no missing
+  ranks, and a 1 ms collection with no timeout. GPUs are at 0% utilization
+  while the Python main thread lowers FA4, distinguishing compilation from the
+  r5 steady state of 100% GPU utilization inside the returned PJRT dispatch.
+
+### 2026-07-28 01:52 - Collective transport isolation
+
+- r7 reproduced the first-dispatch hang under deterministic CUDA 13 and NCCL
+  2.28.9. Every rank remained at exactly `AllGather=147` and `AllReduce=6` on
+  the 32-rank communicator across four RAS samples, with no missing rank,
+  error, or count skew. GPUs were 100% busy at 202--236 W and no update or
+  loss was emitted.
+- NCCL INFO shows the executable selected NVLS SIMPLE for small collectives and
+  RING LL128/SIMPLE over the P2P/MNNVL topology for large all-gathers. The
+  evidence now points to a common GPU collective or transport path, rather
+  than compilation, Datakit starvation, or one host entering a different
+  collective.
+- The reproductions span physical racks 392, 393, and 394. The resolved rack
+  137 tray alert is unrelated.
+- Stopped r7 after capturing its stable state. Launched two matched two-step
+  isolates: r8 `nvls0` disables NVLS on rack 393, while r8 `mnnvl0` disables
+  MNNVL on rack 392. Both retain the full 16,840-step Datakit planning horizon.
+- Both r8 arms reproduced the same first-dispatch stall. Every rank again
+  stopped at `AllGather=147`, `AllReduce=6` with no skew, missing rank, or
+  error. Disabling either NVLS or MNNVL independently changes the selected
+  algorithms but is insufficient.
+- Stopped both r8 coordinator trees after capture. Submitted r9
+  `/power/nest-burn-001-e256-c4p14e18-diag-transport0-r9-coord` with both
+  `NCCL_NVLS_ENABLE=0` and `NCCL_MNNVL_ENABLE=0` for two optimizer updates.
+- r9 reproduced the exact stationary `AllGather=147`, `AllReduce=6` state with
+  both transport features disabled. It was stopped before retry.
+- Submitted r10 with both features disabled plus `NCCL_ALGO=Ring` and
+  `NCCL_PROTO=Simple`. Submitted r11 with default algorithms plus
+  `NCCL_LAUNCH_ORDER_IMPLICIT=1` and `NCCL_LAUNCH_RACE_FATAL=1`; the loaded
+  NCCL 2.28.9 library exposes both launch-order controls.
+- r10 reproduced the same zero-update `147/6` state under Ring+Simple. Stopped
+  it after capture. Protocol and algorithm selection are not sufficient to
+  explain the failure; r11 is the active diagnostic.
+- r11 reproduced the same state with implicit NCCL launch ordering enabled;
+  launch-race fatal diagnostics remained silent. Stopped it after capture.
+- Added `BURNIN_REPLICA_AXIS_SIZE` to make the burn mesh explicit. r12 uses
+  Grug's standard small-model layout: eight data replicas with four-GPU
+  node-local FSDP. This is mathematically matched to the original global FSDP
+  arms but removes the 147 cross-node parameter all-gathers from each update.
+- A one-node, four-GPU FSDP control reproduced the stall at
+  `AllGather=147`, `AllReduce=3`, proving that multi-node transport is not
+  required. The common trigger is the FSDP parameter-all-gather sequence.
+- Stopped r12 and the single-node control after capture. r14 uses 32-way fully
+  replicated data parallelism, retaining one sequence per GPU and the same
+  global batch while eliminating parameter all-gathers.
+
+### 2026-07-28 02:54 - FSDP issue filed and EP=16 recovery launched
+
+- The nominally replicated r15 single-node diagnostic still retained sharded
+  Grug parameters and reproduced the first-dispatch hang at
+  `AllGather=66`, `ReduceScatter=1`, and `AllReduce=5`. r14 and r15 were
+  stopped after the result made further replicated-mesh compilation redundant.
+- Filed [#7694](https://github.com/marin-community/marin/issues/7694) with the
+  deterministic CUDA 13 reproduction, single-node control, collective
+  counters, transport-isolation matrix, rack evidence, and known-good EP
+  comparison. This is distinct from the nondeterministic mid-training wedge in
+  #7344.
+- The original ladder gate used EP=64 across all 64 GPUs. True fixed E16
+  nesting cannot use EP=64 without concentrating E16 traffic on one quarter of
+  the expert ranks; the successful fixed-chain topology was EP=16/data=4 on
+  64 GPUs. It completed 8,192 updates and 4.295B tokens.
+- Added an explicit burn expert-axis override and validated both arm plans.
+  The matched two-update recovery smokes use EP=16/data=2 on 32 GPUs per arm,
+  the largest device count permitted by the fixed global batch of 32:
+  `/power/nest-burn-001-e256-c4p14e18-diag-ep16-r16-coord` and
+  `/power/nest-burn-001-fixed25-c4p14e18-diag-ep16-r16-coord`.
+- Both child gangs allocated all eight four-GPU nodes with zero failures or
+  preemptions. Promotion waits for finite updates from both arms.
+
+### 2026-07-28 03:09 - Size-two FSDP reproduction and pure-EP retry
+
+- Both r16 EP=16/data=2 arms compiled, initialized all communicators, and then
+  reproduced the shallow first-dispatch hang before update 0. GPUs stayed at
+  100% utilization and roughly 188--234 W.
+- RAS returned in milliseconds with no missing rank, async error, or count
+  skew. Every size-two data communicator stopped at 83 all-gathers. E256's
+  32-rank communicator stopped at 64 all-gathers and six all-reduces;
+  fixed25 stopped at 55 and five. Both expert groups reached 28 all-gathers
+  and ten reduce-scatters.
+- This localizes the remaining trigger to the size-two FSDP parameter shard,
+  not expert parallelism. The evidence is published on
+  [#7694](https://github.com/marin-community/marin/issues/7694#issuecomment-5099473868).
+- Stopped both r16 trees without an optimizer update. Launched matched
+  two-update r17 smokes on four nodes per arm with pure EP=16:
+  `(replica=1, data=1, expert=16, model=1)`. This removes every FSDP parameter
+  shard while preserving the model, global batch, data, optimizer, and
+  architecture comparison.
+- Active coordinators:
+  `/power/nest-burn-001-e256-c4p14e18-diag-eponly-r17-coord` and
+  `/power/nest-burn-001-fixed25-c4p14e18-diag-eponly-r17-coord`.
+
+### 2026-07-28 03:33 - Pure EP reproduces; embedding-gather fix applied
+
+- Both r17 EP=16/data=1 arms compiled and then reproduced the first-dispatch
+  hang before update 0. The E256 16-rank communicator was aligned at 92
+  all-gathers, ten reduce-scatters, and eight all-reduces. Four auxiliary
+  size-four communicators were aligned at one all-reduce. RAS reported no
+  missing rank or async error. Fixed25 had the same shallow PJRT stack and
+  100% low-power GPU state.
+- This disproves the narrower FSDP-only diagnosis. EP and data-axis changes
+  alter the stalled collective sequence but do not restore progress.
+- The `grug/embedding-gather-shard-map` branch contains a production-validated
+  fix for a first-step rendezvous: replicate the token embedding and perform
+  the lookup inside a batch-sharded `shard_map`. It also keeps the LM-head
+  contraction shard on the data axis. Applied those layouts specifically to
+  the MoE model; the shared Grug constants remain unchanged because the
+  current tree's base model also consumes them.
+- The nested MoE train-step lowering test and changed-file lint pass. The
+  unrelated base-model runtime test still fails in its existing explicit
+  sharding label concatenation path; the shared sharding module has no diff.
+- Stopped r17 and submitted the identical matched two-update pure-EP smokes
+  with the embedding fix:
+  `/power/nest-burn-001-e256-c4p14e18-diag-embedfix-r18-coord` and
+  `/power/nest-burn-001-fixed25-c4p14e18-diag-embedfix-r18-coord`.
+
+### 2026-07-28 03:52 - Embedding fix ruled out; CuTe attention isolate
+
+- E256 r18 compiled and reproduced the exact r17 stationary communicator
+  counts: the 16-rank communicator reached 92 all-gathers, ten
+  reduce-scatters, and eight all-reduces, while four size-four communicators
+  each reached one all-reduce. The production embedding-gather change is
+  valuable independently but does not clear this burn's hang. Stopped both
+  r18 trees.
+- The remaining compiler warning rematerializes `s32[32,2]` on device zero.
+  That shape matches FA4-THD's Datakit packed-sequence metadata
+  `[global_batch, max_segments]`, which is globally replicated before the THD
+  custom call. The CuTe FA4 path instead encloses batch-sharded activations and
+  bounds in a batch-axis `shard_map`.
+- Ported the branch's replicated CuTe bound constants with a no-mesh guard.
+  Focused attention and nested-MoE lowering tests pass (6 passed, 5
+  hardware-dependent skips), as do changed-file lint and type checks.
+- Submitted matched two-update r19 smokes on the pure EP=16 topology with only
+  the attention implementation changed to `gpu_fa4_cute`:
+  `/power/nest-burn-001-e256-c4p14e18-diag-cute-r19-coord` and
+  `/power/nest-burn-001-fixed25-c4p14e18-diag-cute-r19-coord`.
+- r19 failed before executable dispatch while compiling the CuTe backward
+  kernel: CUTLASS DSL 4.6 removed `cute.make_fragment`, but the checked-in
+  segmented backward kernel still called it. Stopped the retrying trees; this
+  result is a source/dependency incompatibility, not an attention or
+  collective result.
+- Ported commit `5833e329ea99` from the supplied branch, replacing the four
+  accumulator allocations with CUTLASS 4.6's `cute.make_rmem_tensor`. Focused
+  tests and checks still pass. Submitted a single E256 two-update on-hardware
+  API smoke:
+  `/power/nest-burn-001-e256-c4p14e18-diag-cuteapi-r20-coord`.
+- r20 passed CuTe kernel compilation, then exposed eight per-layer SPMD
+  warnings for device-zero `s32[32,8192]` conditional outputs being scattered
+  across the expert axis. A live thread dump showed
+  `backend_compile_and_load`, not PJRT dispatch, so it was compiling rather
+  than wedged. Stopped it once the warning was captured.
+- Ported the supplied branch's precomputed FA4 bounds interface into the
+  unrolled eight-layer MoE: compute long and sliding-window packed bounds once,
+  explicitly batch-shard them, and attach the selected bounds to each layer's
+  attention mask. Focused tests and checks pass.
+- Submitted the replacement E256 two-update smoke:
+  `/power/nest-burn-001-e256-c4p14e18-diag-cutebounds-r21-coord`.
+- r21 cleared the collective failure and executed both train-step variants.
+  Step 0 reported finite cross-entropy 11.7966, but the CuTe backward returned
+  NaN/Inf gradients throughout the attention stack before the optimizer
+  update. The next step therefore saw a non-finite loss and stopped at state
+  step 2. This is a CuTe segmented-backward correctness failure, not
+  learning-rate divergence.
+- Returned to the THD backend used by the prior finite experiments. Its two
+  compiled metadata validations wrap `[B,M]` segment lengths and prefix sums in
+  `eqx.error_if`; the first is the exact `s32[32,2]` conditional output that
+  XLA pins to device zero before scattering. Removed those redundant compiled
+  checks because `ThdSegmentMetadata` is derived from validated packed segment
+  IDs. The attention and nested-lowering test set passes (18 passed, 5 GPU
+  skips), along with lint and type checks.
+- Submitted the E256 two-update THD recovery:
+  `/power/nest-burn-001-e256-c4p14e18-diag-thdvalidate-r22-coord`.
+
+### 2026-07-28 04:40 - THD localization and literal-prefix correction
+
+- r22 completed CUTLASS and XLA compilation, then reproduced the first
+  executable-dispatch freeze. All four process stacks were parked in the same
+  PJRT call.
+- Two live NCCL RAS snapshots 20 seconds apart were identical. The 16-rank
+  communicator had 134 all-gathers, 16 reduce-scatters, and nine all-reduces
+  on every rank; four size-four communicators each had one all-reduce. There
+  were no missing ranks, count skews, async errors, or RAS timeouts.
+- The successful r47 run used the same JAX 0.11, CUDA 13, NCCL 2.28.9, and
+  CUTLASS 4.6 runtime at sequence length 2,048. The failures in this burn all
+  use sequence length 8,192. This rules out a runtime-version regression as
+  the leading explanation and localizes the remaining failure to the
+  sequence-8,192 THD executable.
+- The prior fixed-chain implementation reused deterministic nested sets, but
+  they were evenly interleaved across expert ranks. The requested treatment is
+  literal prefix nesting: E16 uses experts 0--15 and E128 uses 0--127. Added a
+  prefix schedule and made training, eligibility-QB, evaluation, and model
+  extraction use the same prefix.
+- Literal prefixes are incompatible with balanced EP=16 dispatch: contiguous
+  E16 weights occupy one expert rank and exceed the ring's per-rank capacity.
+  The prefix burn therefore requires `expert=1` and uses full FSDP over 16
+  devices. Prefix eligibility and extraction behavior tests pass, as do
+  changed-file lint and type checks.
+- Ported the supplied branch's cuDNN fused-attention fallback. Because the burn
+  uses pack=1, disabling the redundant cross-document attention mask preserves
+  valid-token semantics while allowing the O(sequence) cuDNN path; padding
+  remains excluded from the loss.
+- Stopped r22 and submitted a matched two-update, sequence-8,192,
+  full-FSDP smoke:
+  - `/power/nest-burn-001-e256-c4p14e18-diag-cudnnprefix-r23-coord`;
+  - `/power/nest-burn-001-fixed25-c4p14e18-diag-cudnnprefix-r23-coord`.
+
+### 2026-07-28 05:06 - r23 control compiler wedge
+
+- The fixed25 r23 arm continued through first-step tracing. The E256 arm
+  remained in initial-state `backend_compile_and_load` on all four ranks for
+  more than 20 minutes and produced no optimizer step.
+- A 20-second `/proc/1/stat` sample on E256 rank 0 accumulated seven CPU ticks,
+  approximately 0.35 cores, while the same sample on fixed25 accumulated 2,446
+  ticks, approximately 122 cores. The E256 processes were sleeping in
+  `futex_do_wait`; this was a wedged compiler future, not merely a slower
+  compile.
+- An Iris gang kick was accepted but had not applied after two controller
+  ticks. Stopped only the E256 r23 coordinator and resubmitted the identical
+  two-update control as
+  `/power/nest-burn-001-e256-c4p14e18-diag-cudnnprefix-r24-coord`.
+  Fixed25 r23 continues unchanged. Neither arm has produced a quality
+  observation.
+
+### 2026-07-28 05:13 - cuDNN rejection and reference fallback
+
+- Fixed25 r23 reached executable creation after 5:14 of first-step work and
+  failed on every rank with
+  `cudnn_frontend: No valid execution plans built`. The subsequent
+  coordinator-connection failures were gang teardown. Retries are
+  deterministic and produced no optimizer update.
+- Stopped fixed25 r23 and E256 r24. Added the existing `reference` backend to
+  the burn launcher and submitted a matched two-update sequence-8,192 smoke:
+  - `/power/nest-burn-001-e256-c4p14e18-diag-reference-r25-coord`;
+  - `/power/nest-burn-001-fixed25-c4p14e18-diag-reference-r25-coord`.
+- This fallback changes only the attention implementation. If reference
+  attention cannot fit or execute at sequence 8,192, fall back to the
+  sequence-2,048 cell already demonstrated by r47 rather than add another
+  unvalidated kernel.
+
+### 2026-07-28 05:34 - Sequence-8,192 smoke passed and r26 promoted
+
+- Both reference-attention r25 arms completed two optimizer updates with
+  finite losses and gradients:
+  - E256: step-1 CE `11.744956`, gradient norm `0.949056`;
+  - fixed25: step-1 CE `11.745689`, gradient norm `0.950185`.
+- Both arms reported zero mean capacity overflow. The step-1 loss delta is
+  `+0.000733` nats for fixed25; two scratch updates are a numerical sanity
+  check, not a quality result.
+- Submitted the full 16,840-update, 4.414B-token matched pair:
+  - `/power/nest-burn-001-e256-c4p14e18-reference-r26-coord`;
+  - `/power/nest-burn-001-fixed25-c4p14e18-reference-r26-coord`.
+- Posted the gate result and W&B links to PR 7667:
+  <https://github.com/marin-community/marin/pull/7667#issuecomment-5100361541>.
+- Reference attention preserves the exact scientific comparison but may not be
+  operationally viable. Use repeated r26 updates after compilation to forecast
+  completion time and retain backend startup overhead separately from matched
+  optimizer-step overhead.
+
+### 2026-07-28 05:51 - r26 steady-state forecast
+
+- Both full burns passed 100 updates with finite loss and gradients and zero
+  mean capacity overflow.
+- Over matched updates 20--100:
+  - E256 median step time `382.754 ms`, p90 `396.351 ms`, median throughput
+    `684,888 tokens/s`;
+  - fixed25 median step time `378.146 ms`, p90 `392.710 ms`, median throughput
+    `693,235 tokens/s`.
+- Fixed25 is `1.20%` faster by median step time in this early window; the
+  measured co-training surcharge is therefore zero within run noise.
+- At update 100, full-mode train CE was `9.561832` for E256 and `9.565185` for
+  fixed25, a treatment delta of `+0.003352` nats.
+- Excluding compile, checkpoint, and evaluation overhead, the measured medians
+  project to `1.790` optimizer hours / `28.65` GPU-hours for E256 and `1.769`
+  optimizer hours / `28.30` GPU-hours for fixed25 across all 16,840 updates.
+  Keep the operational ETA separate until the first update-1,000 Paloma
+  evaluation completes.
+
+### 2026-07-28 06:01 - Gate 1 passed
+
+- At matched update 1,000:
+  - E256 full Paloma `6.752973`, uncheatable `6.463064`;
+  - fixed25 full Paloma `6.795202`, uncheatable `6.502627`;
+  - fixed25 E128 Paloma `6.818607`, uncheatable `6.555846`;
+  - fixed25 E16 Paloma `6.929915`, uncheatable `6.711246`.
+- Fixed25's full-mode Paloma delta is `+0.042229` nats, below the
+  preregistered `+0.10` stop threshold. E128 is `+0.023406` behind the
+  treatment full mode; E16 is `+0.134714` behind.
+- Over matched updates 100--900, E256 median/p90 step time was
+  `361.991/373.602 ms` at `724,173 tokens/s`; fixed25 was
+  `357.296/374.399 ms` at `733,689 tokens/s`. Fixed25's median delta is
+  `-1.30%`; both maximum mean capacity-overflow rates were zero.
+- The update-1,000 evaluation hook took `81.90 s` for control and `244.59 s`
+  for fixed25 because the treatment evaluates three modes. This is measurement
+  overhead, not intrinsic co-training cost. Use later checkpoints to separate
+  one-time eval compilation from repeated evaluation.
+- Posted the Gate 1 result to PR 7667:
+  <https://github.com/marin-community/marin/pull/7667#issuecomment-5100541325>.
+
+### 2026-07-28 06:16 - Update 2,000 remains inside the quality gate
+
+- At matched update 2,000:
+  - E256 full Paloma `6.516537`, uncheatable `6.165142`;
+  - fixed25 full Paloma `6.575028`, uncheatable `6.250004`;
+  - fixed25 E128 Paloma `6.586526`, uncheatable `6.270319`;
+  - fixed25 E16 Paloma `6.644937`, uncheatable `6.334846`.
+- Fixed25's full-mode Paloma delta is `+0.058492` nats. This is the second
+  checkpoint below the preregistered `+0.10` boundary. E128 is only
+  `+0.011497` behind the treatment full mode; E16 is `+0.069909` behind.
+- Repeated evaluation took `75.36 s` for E256 and `233.24 s` for fixed25.
+  The approximately threefold treatment evaluation time tracks its three
+  separately measured modes. It must not be counted as intrinsic co-training
+  cost.
+- Both arms remained finite with zero mean capacity overflow. The control
+  reached update 3,000 before the treatment because the experimental
+  evaluation suite intentionally measures two additional treatment modes.
+  Compare quality only at aligned updates.
+
+### 2026-07-28 06:26 - Fixed25 leads at update 3,000
+
+- At matched update 3,000:
+  - E256 full Paloma `6.693682`, uncheatable `6.332820`;
+  - fixed25 full Paloma `6.500750`, uncheatable `6.143626`;
+  - fixed25 E128 Paloma `6.576565`, uncheatable `6.217495`;
+  - fixed25 E16 Paloma `6.584426`, uncheatable `6.250178`.
+- Fixed25's full mode is now `0.192932` nats better than control. This resolves
+  the unmatched update-3,000 control point: the control's held-out regression
+  is not caused by the evaluator advancing to a new sample, because
+  `TaggedEvaluator` reconstructs an iterator over the same deterministic,
+  bounded dataset on each call.
+- The result is consistent with a treatment-specific regularization or
+  optimization-stability benefit, but one checkpoint is not enough to assign
+  mechanism. Both arms remain finite and their router z-loss rises; fixed25's
+  update-3,000 router z-loss (`2,833`) is not lower than control (`2,488`).
+  Continue through later aligned evaluations before claiming stabilization.
+
+### 2026-07-28 06:38 - Update 4,000 confirms a small fixed25 lead
+
+- At matched update 4,000:
+  - E256 full Paloma `6.438949`, uncheatable `6.084310`;
+  - fixed25 full Paloma `6.426967`, uncheatable `6.040575`;
+  - fixed25 E128 Paloma `6.464280`, uncheatable `6.084595`;
+  - fixed25 E16 Paloma `6.511320`, uncheatable `6.127030`.
+- Fixed25's full mode is `0.011982` nats better than control. The large
+  update-3,000 advantage narrowed after control recovered, but the ordering
+  persists. Fixed25 Paloma has decreased at every checkpoint; control's
+  update-3,000 increase was a transient optimization oscillation at this
+  high-LR point, not a persistent loss trend.
+- Submitted matched two-update WildChat SFT smokes against temporary
+  update-3,001 checkpoints. E256 referenced a checkpoint already pruned by the
+  running checkpointer. Fixed25 discovered its checkpoint before building the
+  missing Marin-template WildChat cache, but the pretraining checkpointer
+  pruned it before the delayed weight load. Neither arm loaded weights. The
+  fixed25 attempt did finish the shared in-region chat cache, so endpoint SFT
+  can start from a permanent final checkpoint without the same data delay.
+  This is an operational preflight, not a post-training result.
+### 2026-07-28 06:55 - Aligned 5k and historical d768 comparison
+
+- The matched r26 burns remain healthy on four four-GPU GB200 nodes per arm
+  with deterministic CUDA 13, NCCL 2.28.9, reference attention, and full
+  FSDP. Neither arm has failed, retried, overflowed, or produced a non-finite
+  update.
+- At 1.311B aligned tokens, fixed25 full-mode Paloma is `6.369439` versus
+  `6.358023` for E256, a `+0.011416` treatment regression. The fixed25 E128
+  and E16 modes are `6.403664` and `6.446313`. The transient full-mode
+  advantage at step 3000 therefore did not persist through step 5000.
+- The historical `moe_may_compute_opt_d768_ep1` run does report final Paloma
+  macro loss `3.227273` at 4.424B tokens. It is not a matched control: it used
+  `meta-llama/Meta-Llama-3.1-8B` tokenization, a different training mix,
+  sequence length 4096, global batch 64, and the older Grug model/runtime
+  contract. The current pair uses the Marin tokenizer, Datakit mix, sequence
+  length 8192, and global batch 32. Its value remains a useful historical
+  quality reference but is not an acceptance threshold for the treatment
+  delta.
+- The current worktree already contains the production branch's substantive
+  embedding fix: replicated token embeddings and a replica-local
+  `shard_map` gather. The pure-EP r18 diagnostic still froze after that
+  change. THD then froze at sequence length 8192, CuTe produced non-finite
+  backward gradients, and cuDNN found no execution plan; reference attention
+  completed the matched smoke and sustained burn. This localizes the
+  recovered failure to fused-attention execution at this shape more strongly
+  than to CUDA family, NCCL transport, embedding gather, or FSDP topology.
+
+### 2026-07-28 07:04 - SFT caches and independent diagnostics PR
+
+- The fixed25 cache preflight materialized the canonical-thinking chat cache
+  at
+  `s3://marin-us-east-02a/marin/documents/nemotron_science_think-bae881d-a0f2bb/_chat_cache/2defa2/train`.
+  It then reached the expected missing temporary-checkpoint error because
+  step 4001 had been pruned. The cache-only coordinator was stopped before a
+  redundant retry. WildChat and canonical-thinking inputs are now both
+  prebuilt in-region for endpoint SFT.
+- Published the NCCL RAS client and distributed-diagnostics design separately
+  in [PR #7699](https://github.com/marin-community/marin/pull/7699). The
+  research worktree no longer carries those files. The PR deliberately leaves
+  the ProfileTask RPC bundle and Grafana stall alert as follow-up slices.
+- At aligned update 6000, fixed25 full-mode Paloma is `6.316322` versus
+  `6.270247` for E256, a `+0.046074` regression. Fixed25 E128 and E16 are
+  `6.350322` and `6.398504`. This remains below the preregistered `+0.10`
+  threshold and does not count toward the two-consecutive-evaluation stop
+  condition.
+
+### 2026-07-28 07:15 - First quality strike at update 7000
+
+- At aligned update 7000, fixed25 full-mode Paloma is `6.398132` versus
+  `6.224376` for E256, a `+0.173756` regression. This is the first
+  preregistered quality strike. The stop rule requires two consecutive aligned
+  regressions above `0.10`, so both healthy arms continue to update 8000.
+- Fixed25 E128 and E16 are `6.348491` and `6.400418`. E128 is `0.049641`
+  better than the treatment's full mode at this checkpoint, while E16 is
+  effectively tied. The full-mode regression therefore is not a uniform
+  degradation across the fixed hierarchy.
+- Decoded cache row zero directly inside the live E256 coordinator with the
+  configured `marin-community/marin-tokenizer`. The row contains 838 valid
+  tokens, starts with `<|begin_of_text|>`, and decodes to coherent English
+  accessibility documentation. The cache has 588,032,775 rows and token IDs
+  stay inside the 128,256-token vocabulary. The cache metadata also names the
+  Marin tokenizer. This rules out obvious tokenizer/cache corruption as the
+  explanation for the poor absolute Paloma curve, but not a data-mixture or
+  current model/evaluator-contract difference.
+
+### 2026-07-28 07:31 - Update 8000 recovers and continuation remains open
+
+- At aligned update 8000, fixed25 full-mode Paloma is `6.235766` versus
+  `6.186363` for E256, a `+0.049403` regression. This breaks the consecutive
+  strike sequence, so the preregistered stop rule does not fire.
+- Fixed25 E128 and E16 are `6.254466` and `6.332193`. Uncheatable macro loss is
+  `5.779078` for E256, `5.818924` for fixed25 full, `5.829023` for E128, and
+  `5.903736` for E16.
+- On the 16 aligned Paloma domains, fixed25 is better only on Wikitext. Mean
+  delta is `+0.049403`, median `+0.037570`, and the largest regressions are PTB
+  (`+0.178120`) and Twitter AAE (`+0.106899`).
+- Through the common update-8307 timing horizon, both arms contribute 7,284
+  post-warmup samples. Median compiled-step time is `366.695 ms` for E256 and
+  `370.473 ms` for fixed25, a `+1.03%` surcharge. Block-bootstrap intervals
+  overlap narrowly. Overflow remains zero.
+- Updated Weaver report and chart artifacts to revision 3 and posted the
+  aligned milestone to PR 7667:
+  <https://github.com/marin-community/marin/pull/7667#issuecomment-5101235418>.
+
+### 2026-07-28 07:39 - Update 9000 spike and SFT epoch sizing
+
+- At aligned update 9000, fixed25 full-mode Paloma is `6.196991` versus
+  `6.508448` for E256, a `-0.311457` treatment delta. Fixed25 E128 and E16
+  are `6.226601` and `6.282750`. The apparent treatment win is dominated by
+  a transient control spike: E256 is `6.186363` at update 8000,
+  `6.097732` at update 10000, and `6.052866` at update 11000. It is evidence
+  against a sustained treatment regression, not evidence for a stable
+  0.31-nat gain.
+- Through the common update-9134 timing horizon, median compiled-step time is
+  `365.798 ms` for E256 and `370.991 ms` for fixed25, a `+1.42%`
+  surcharge. Both arms remain finite with zero overflow, task failures,
+  retries, or preemptions.
+- Read the already-built CoreWeave S3 chat-cache ledgers from a live task pod.
+  WildChat contains `537,585,868` tokens (`385,700` rows), resolving one
+  packed epoch to 2,051 updates at batch 32 and sequence length 8192.
+  Canonical thinking contains `1,318,244,179` tokens (`708,920` rows),
+  resolving one epoch to 5,029 updates. At the measured pretraining step
+  rate, the optimizer portions are approximately 13 and 31 minutes per arm,
+  respectively, before compilation and checkpoint overhead.
+
+### 2026-07-28 07:52 - Update 10000 returns to the paired trend
+
+- Fixed25 full-mode Paloma is `6.162987` versus `6.097732` for E256, a
+  `+0.065255` treatment regression. Fixed25 E128 and E16 are `6.192197` and
+  `6.216753`. This remains below the stop boundary and follows a treatment
+  win at update 9000, so no consecutive strike exists.
+- Across the ten aligned gates, fixed25 wins three. The mean delta is
+  `-0.006975`, dominated by the update-3000 and update-9000 control spikes;
+  the paired median is a `+0.044152` treatment tax.
+- Through the common update-10161 timing horizon, median compiled-step time is
+  `364.547 ms` for E256 and `371.553 ms` for fixed25, a `+1.92%`
+  surcharge. Published revision 4 of the Weaver interim report and all three
+  chart artifacts.
+
+### 2026-07-28 09:15 - Pretraining endpoint and post-training handoff
+
+- Both matched pretraining arms completed 16,840 updates and 4.4145B tokens
+  without a task failure, retry, preemption, non-finite update, or routing
+  overflow. E256 took 2h57m of charged child time; fixed25 took 3h38m because
+  every treatment gate evaluated full, E128, and E16 modes.
+- Endpoint Paloma macro loss is `5.841133` for E256, `5.818610` for fixed25
+  full mode, `5.860195` for E128, and `5.901186` for E16. Endpoint
+  uncheatable macro loss is `5.329` for E256, `5.307` for fixed25 full,
+  `5.357` for E128, and `5.381` for E16. The treatment full model therefore
+  finishes `0.022523` better on Paloma, while E128 and E16 finish `0.019062`
+  and `0.060053` behind the control.
+- Across all 17 aligned Paloma gates, the treatment wins four. Mean paired
+  delta is `+0.004950` and median delta is `+0.037985`; the endpoint win does
+  not justify a regularization claim with one seed and oscillatory
+  intermediate gates. At the endpoint, fixed25 is better on 10 of 16 Paloma
+  domains, with mean delta `-0.022523` and median delta `-0.008501`.
+- Across the full common post-warmup horizon, median compiled-step time is
+  `368.296 ms` for E256 and `371.060 ms` for fixed25, a `+0.750%` surcharge.
+  The bootstrap intervals overlap. This projects to `62.44` versus `62.91`
+  GPU-hours per 10B tokens, or `0.47` extra GPU-hours for fixed nesting. The
+  W&B charged runtimes are `47.01` and `58.02` GPU-hours; almost all of that
+  11.01-GPU-hour difference is the deliberately tripled treatment evaluation
+  suite (`3,835` versus `1,338` logged hook seconds).
+- E256 WildChat SFT completed 2,051 updates from the permanent pretraining
+  checkpoint in 25m38s with a permanent final checkpoint and console loss
+  `6.09`. E256 thinking SFT loaded that exact WildChat step-2051 checkpoint,
+  cleared its three-update liveness gate after the expected 10m54s compile,
+  and is training. fixed25 WildChat SFT started from its permanent pretraining
+  endpoint; its thinking stage is success-gated behind WildChat.
+
+### 2026-07-28 10:28 - Matched SFT completes
+
+- All four SFT jobs completed without failure, retry, preemption, non-finite
+  loss, or routing overflow. Both thinking stages committed permanent
+  step-5029 checkpoints and finished their W&B sync.
+- On WildChat, fixed25 post-warmup completion-masked training
+  cross-entropy averages `6.660172` versus `7.020264` for E256, a
+  `-0.360092` paired delta. fixed25 is lower on 1,758 of 1,951 paired
+  post-warmup batches (90.1%). Last-100 mean loss is `6.039649` versus
+  `6.488408`.
+- On the thinking stage, fixed25 averages `4.745278` versus `4.864716`, a
+  `-0.119438` paired delta. fixed25 is lower on 4,928 of 4,929 paired
+  post-warmup batches (99.98%). Last-100 mean loss is `4.425439` versus
+  `4.531615`.
+- WildChat median optimizer steps are `319.683 ms` for E256 and `319.458 ms`
+  for fixed25. Thinking medians are `321.850 ms` and `317.169 ms`.
+  Restricted routing is disabled during SFT, so these small negative
+  differences are hardware variation, not a treatment speedup. Combined
+  optimizer estimates are 10.108 and 10.001 GPU-hours.
+- The SFT result tests transfer of the full E256 checkpoint after nested
+  pretraining. It does not test post-training of extracted E128/E16
+  checkpoints or held-out agentic behavior. The final report states this
+  boundary explicitly.
+- Published the final burn report and SFT chart as Weaver artifacts:
+  <https://loom.rjp.io/s/wk4wnbee/artifacts/burnin-final> and
+  <https://loom.rjp.io/s/wk4wnbee/artifacts/burnin-sft>.
+- The branch-wide pre-commit pass and Pyrefly complete without error. The
+  combined Grug/data/cache regression suite reports 97 passed and 2 skipped.
+  Lint review identified and prompted fixes for a URL-prefix join, stale
+  launcher descriptions, duplicate assertions, an unused synchronous cache
+  method, checkpoint-loader typing, nested-size normalization, and a breakout
+  source-model router-state mismatch.
