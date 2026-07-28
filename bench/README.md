@@ -18,6 +18,7 @@ model.
 | `policy_transfer_bench.py` | The benchmark. One process per local GPU; `p2p`, `broadcast`, and `striped` modes. |
 | `run_matrix.sh` | One side of the screen. Both Iris jobs run it with the same `ROUND`; only `ROLE` differs. |
 | `diagnostics/gpu_netcheck.py` | GPU-node reachability probe: dumps interfaces and routes, then listens and dials a peer node. |
+| `diagnostics/GPU_ENDPOINT_RUNBOOK.md` | Exact allocation, placement, copy, probe, and release steps for the GPU-node reachability test. |
 | `diagnostics/netprobe.py` | Same idea for CPU `hostNetwork` pods, with the pod manifests below. |
 | `diagnostics/netinfo.py` | Dumps routes, interfaces, IB devices, and HTTP/TCP egress probes from a node. |
 | `diagnostics/netprobe-*.yaml` | Pod manifests, one per cluster, for the CPU reachability sweep. |
@@ -40,4 +41,5 @@ source and destination label sets are disjoint before any bytes move. Two
 independently submitted GB200 gangs land in the same NVLink domain by default,
 and a same-rack pair reports a rate about 25x higher than a cross-rack pair.
 
-Exact per-round commands are in the issue.
+Exact measurement commands are in the issue. The GPU endpoint diagnostic has a
+separate [replay runbook](diagnostics/GPU_ENDPOINT_RUNBOOK.md).
