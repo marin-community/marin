@@ -631,6 +631,40 @@ def test_profile_threads_via_kubectl_exec(provider, k8s):
     assert b"Thread 0x7f00" in resp.profile_data
 
 
+def test_profile_distributed_persists_partial_task_evidence(k8s, task_stats_table):
+    profile_table = FakeStatsTable()
+    provider = make_kueue_provider(k8s, task_stats_table=task_stats_table, profile_table=profile_table)
+    try:
+        pod_name = _pod_name(JobName.from_wire("/job/0"), 0)
+        populate_pod(k8s, pod_name, "Running")
+        k8s.set_exec_response(
+            pod_name,
+            _success_cp(
+                stdout=(
+                    'OK\n{"communicators": [{"hash": "a", "ranks": '
+                    '[{"rank": 0, "collective_counts": {"AllReduce": 1}}]}]}'
+                )
+            ),
+        )
+
+        response = provider.profile_task(
+            TaskTarget(task_id="/job/0", attempt_id=0, worker_id=None, address=None),
+            job_pb2.ProfileTaskRequest(
+                target="/job/0",
+                profile_type=job_pb2.ProfileType(distributed=job_pb2.DistributedProfile(collector_timeout_seconds=1)),
+            ),
+            timeout_ms=30000,
+        )
+
+        assert not response.error
+        rows = [row for batch in profile_table.writes for row in batch]
+        assert len(rows) == 1
+        assert rows[0].type == "distributed"
+        assert rows[0].profile_data == response.profile_data
+    finally:
+        provider.close()
+
+
 def test_get_process_status_reads_pod_proc_via_kubectl_exec(provider, k8s):
     """get_process_status execs the /proc reader into the task pod and parses vitals."""
     pod_name = _pod_name(JobName.from_wire("/job/0"), 0)

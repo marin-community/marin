@@ -250,9 +250,12 @@ iris process profile threads                # thread dump (prints to stdout)
 iris process profile cpu -d 10              # 10s CPU profile (writes .speedscope.json)
 iris process profile mem                    # memory flamegraph (writes .html)
 iris process profile cpu -t /user/job/0     # profile a running task container
+iris process profile distributed -t /user/job/0 -d 5  # bounded NCCL/CUDA evidence bundle
 ```
 
 **Prefer `iris process profile` over SSH** for profiling — it uses the `/system/process` RPC and avoids direct VM access. SSH is a fallback only when the RPC doesn't cover your needs.
+
+GPU environments set `NCCL_RAS_ENABLE=1`, `NCCL_DEBUG=INFO`, and `NCCL_DEBUG_SUBSYS=INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS`. The default timestamp is `[%F %T.%3f]`. Short debug-smoke jobs may additionally select `COLL,PROXY,NVLS,REG`; do not use `TRACE` or `CALL` for normal runs.
 
 ## Scheduler & Autoscaler
 
@@ -419,7 +422,7 @@ Namespaces:
   ```
 - `iris.task_state` — controller-emitted (every 30s) task counts by state per root job, plus `oldest_pending_age_ms` / `oldest_building_age_ms` wait ages, keyed by `root_job_id`. The `root_job_id=""` row is the per-cluster rollup, written even when idle — its absence means the controller is down. Feeds fleet-wide stuck-BUILDING alerting and queue-depth history.
 - `iris.admission_probe` — on Kubernetes clusters, the outcome (every 60s) of a `dryRun=All` canary pod apply that traverses the full admission chain, keyed by `outcome` (`ok`/`failed` with `error_class`, latency, truncated message). `failed` rows (or silence) detect fail-closed admission webhooks before any task pod exists.
-- `iris.profile` — per-capture profile blobs (cpu/memory/thread, periodic or on-demand), keyed by `source` so the dashboard's per-source list query prunes via parquet row-group min/max. Filter on `source` (a task path like `/user/job/.../<index>`, `/system/worker/<id>`, or `/system/controller`) and `type` (`cpu`/`memory`/`thread`). `format` is the blob encoding — the GCE/TPU worker's periodic CPU captures are py-spy **speedscope** JSON; the k8s backend's periodic captures are py-spy **thread dumps** (`type=thread`), since a hung collective samples no CPU but a thread dump pinpoints where every rank is blocked. `vm_id` is the writer VM (worker id, `controller-self`, or `k8s/<node-or-pod>`). To find a hang, read the last periodic `thread` capture per `source` before the freeze.
+- `iris.profile` — per-capture profile blobs (cpu/memory/thread/distributed, periodic or on-demand), keyed by `source` so the dashboard's per-source list query prunes via parquet row-group min/max. Filter on `source` (a task path like `/user/job/.../<index>`, `/system/worker/<id>`, or `/system/controller`) and `type` (`cpu`/`memory`/`thread`/`distributed`). `format` is the blob encoding — the GCE/TPU worker's periodic CPU captures are py-spy **speedscope** JSON; the k8s backend's periodic captures are py-spy **thread dumps** (`type=thread`), since a hung collective samples no CPU but a thread dump pinpoints where every rank is blocked. A `distributed` row is capped JSON with the raw NCCL RAS reply, parsed collective-count skew, a py-spy dump, `/proc` wait state, GPU utilization/power/limit/memory, selected NCCL/XLA/CUDA variables, and runtime package versions. A failed probe is recorded as a partial section; the capture never mutates a task. `vm_id` is the writer VM (worker id, `controller-self`, or `k8s/<node-or-pod>`). To investigate a suspected collective stall, capture every affected rank before any operator action.
 
 Retention is finelog segment-based. Target for `iris.profile` is 7 days.
 

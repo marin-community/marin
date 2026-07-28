@@ -221,6 +221,7 @@ class GpuSample:
     util_pct: float
     temp_c: float
     power_w: float
+    power_limit_w: float
 
 
 def parse_node_exporter(text: str, *, disk_mounts: tuple[str, ...] = _PREFERRED_DISK_MOUNTS) -> HostSample:
@@ -275,6 +276,7 @@ def parse_dcgm(text: str) -> dict[str, GpuSample]:
     util: dict[str, dict[str, float]] = defaultdict(dict)
     temp: dict[str, dict[str, float]] = defaultdict(dict)
     power: dict[str, dict[str, float]] = defaultdict(dict)
+    power_limit: dict[str, dict[str, float]] = defaultdict(dict)
     model: dict[str, str] = {}
     gpus: dict[str, set[str]] = defaultdict(set)
 
@@ -296,6 +298,8 @@ def parse_dcgm(text: str) -> dict[str, GpuSample]:
             temp[host][gpu] = value
         elif name == "DCGM_FI_DEV_POWER_USAGE":
             power[host][gpu] = value
+        elif name == "DCGM_FI_DEV_POWER_MGMT_LIMIT":
+            power_limit[host][gpu] = value
 
     samples: dict[str, GpuSample] = {}
     for host, gpu_ids in gpus.items():
@@ -309,6 +313,7 @@ def parse_dcgm(text: str) -> dict[str, GpuSample]:
             util_pct=sum(utils) / len(utils) if utils else 0.0,
             temp_c=max(temps) if temps else 0.0,
             power_w=sum(power[host].values()),
+            power_limit_w=sum(power_limit[host].values()),
         )
     return samples
 
@@ -356,6 +361,7 @@ class NodeMetrics:
     gpu_util_pct: float | None = None
     gpu_temp_c: float | None = None
     gpu_power_w: float | None = None
+    gpu_power_limit_w: float | None = None
 
 
 class NodeStatsScraper:
@@ -511,6 +517,7 @@ def build_node_stat(target: NodeTarget, metrics: NodeMetrics | None) -> IrisWork
         gpu_util_pct=m.gpu_util_pct,
         gpu_temp_c=m.gpu_temp_c,
         gpu_power_w=m.gpu_power_w,
+        gpu_power_limit_w=m.gpu_power_limit_w,
     )
 
 

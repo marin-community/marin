@@ -140,6 +140,7 @@ class IrisWorkerStat:
     gpu_util_pct: float | None = None
     gpu_temp_c: float | None = None
     gpu_power_w: float | None = None
+    gpu_power_limit_w: float | None = None
 
 
 @dataclass
@@ -214,6 +215,7 @@ class ProfileType(StrEnum):
     CPU = "cpu"
     MEMORY = "memory"
     THREAD = "thread"
+    DISTRIBUTED = "distributed"
 
 
 class ProfileFormat(StrEnum):
@@ -225,6 +227,7 @@ class ProfileFormat(StrEnum):
     HTML = "html"
     TABLE = "table"
     STATS = "stats"
+    JSON = "json"
 
 
 class ProfileTrigger(StrEnum):

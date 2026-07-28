@@ -54,11 +54,13 @@ DCGM_FI_DEV_FB_TOTAL{gpu="0",modelName="NVIDIA H100 80GB HBM3",hostname="g83d142
 DCGM_FI_DEV_GPU_TEMP{gpu="0",hostname="g83d142"} 26
 DCGM_FI_DEV_GPU_UTIL{gpu="0",hostname="g83d142"} 40
 DCGM_FI_DEV_POWER_USAGE{gpu="0",hostname="g83d142"} 300
+DCGM_FI_DEV_POWER_MGMT_LIMIT{gpu="0",hostname="g83d142"} 700
 DCGM_FI_DEV_FB_USED{gpu="1",modelName="NVIDIA H100 80GB HBM3",hostname="g83d142"} 400
 DCGM_FI_DEV_FB_TOTAL{gpu="1",modelName="NVIDIA H100 80GB HBM3",hostname="g83d142"} 81281
 DCGM_FI_DEV_GPU_TEMP{gpu="1",hostname="g83d142"} 30
 DCGM_FI_DEV_GPU_UTIL{gpu="1",hostname="g83d142"} 60
 DCGM_FI_DEV_POWER_USAGE{gpu="1",hostname="g83d142"} 350
+DCGM_FI_DEV_POWER_MGMT_LIMIT{gpu="1",hostname="g83d142"} 700
 """
 
 _MIB = 1024 * 1024
@@ -105,6 +107,7 @@ def test_parse_dcgm_aggregates_across_gpus_by_host():
     assert s.util_pct == pytest.approx(50.0)  # mean
     assert s.temp_c == pytest.approx(30.0)  # hottest GPU
     assert s.power_w == pytest.approx(650.0)  # summed
+    assert s.power_limit_w == pytest.approx(1400.0)  # summed
 
 
 def _fetch_from(mapping: dict[str, str]):

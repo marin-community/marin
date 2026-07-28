@@ -78,6 +78,7 @@ from iris.cluster.platforms.k8s.types import (
     parse_k8s_quantity,
     parse_k8s_timestamp,
 )
+from iris.cluster.runtime.distributed_diagnostic import capture_distributed_diagnostic
 from iris.cluster.runtime.env import (
     STANDARD_MOUNTS,
     VENV_PATH,
@@ -2616,6 +2617,15 @@ class K8sTaskProvider:
         try:
             if profile_type.HasField("threads"):
                 data = capture_threads(dispatch, pid="1", include_locals=profile_type.threads.locals)
+            elif profile_type.HasField("distributed"):
+                timeout = profile_type.distributed.collector_timeout_seconds or 5
+                data = capture_distributed_diagnostic(
+                    dispatch,
+                    pid="1",
+                    source=request.target,
+                    attempt_id=attempt_id,
+                    timeout=timeout,
+                )
             elif profile_type.HasField("cpu"):
                 data = capture_cpu(dispatch, profile_type.cpu, duration, pid="1")
             elif profile_type.HasField("memory"):

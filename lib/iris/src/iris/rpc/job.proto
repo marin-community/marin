@@ -70,12 +70,17 @@ message ThreadsProfile {
   bool locals = 1;  // Include local variables in the dump (--locals flag)
 }
 
+message DistributedProfile {
+  int32 collector_timeout_seconds = 1;  // 0 uses the five-second default
+}
+
 // Profile type selector
 message ProfileType {
   oneof profiler {
     CpuProfile cpu = 1;
     MemoryProfile memory = 2;
     ThreadsProfile threads = 3;
+    DistributedProfile distributed = 4;
   }
 }
 
