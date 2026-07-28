@@ -99,7 +99,7 @@ matching NS-disabled speed with loss parity to real NS
   `jax.vmap(jax.vmap(local_ns))`. Also fixes `_newtonschulz_padded_stack_sharded`
   with a two-hop reshard, and refactors `is_w_down`/`trailing`/`orig_4d_spec` out
   of the branch. CPU-validated bit-exact, zero involuntary-remat warnings.
-- `54bbe3d23` / `fe21ea495` on the rav lineage (grugmuon hunk +33/−4):
+- `54bbe3d23` / `fe21ea495` on the rav lineage (grugmuon hunk +37/−4; `fe21ea495` is +26/−4):
   `jnp.swapaxes(x, 0, 1)` to put E first, reshape into `P("expert", None, None)`,
   reshard, swap back.
 
@@ -107,7 +107,7 @@ They will conflict textually. `75c517148` is the better-argued design and carrie
 the extra padded-stack fix; the rav variant is the one with a 17.8% MFU 64-GPU
 measurement behind it. **Resolve this before writing the commit.**
 
-**Foundation commit.** `b0c7a1b56` (+222/−20) adds `_newtonschulz_4d_distributed`
+**Foundation commit.** `b0c7a1b56` (+232/−20 across 3 files, of which grugmuon.py is +205/−17) adds `_newtonschulz_4d_distributed`
 and routes ndim-4 leaves to MuonH at all. Without it, 4D expert stacks silently
 fell through to Adam. Must land first.
 
@@ -198,8 +198,8 @@ and the `cutlass`/`quack` mypy `ignore-missing-imports` entries still need takin
 and (via the `cu13` extra) `-libs-cu13`, and the two wheels ship **99 overlapping
 files** with different CUDA-12/CUDA-13 builds of the DSL frontend and MLIR
 compiler. Whichever won the install silently decided whether any CuTe kernel
-compiled, re-rolled on every env sync — which is why it presented for weeks as
-random per-node GB200 heterogeneity. Multi-pod compile surveys went from
+compiled, re-rolled on every env sync — which is why it presented as random per-node GB200
+heterogeneity (first documented 2026-07-17, root-caused 2026-07-19). Multi-pod compile surveys went from
 coin-flip-per-pod to 100% green on the fixed lock
 ([#7282 comment 5016674287](https://github.com/marin-community/marin/issues/7282#issuecomment-5016674287)).
 
@@ -285,7 +285,7 @@ additive alongside the ragged path, but the carrying commit *also* bundles the
 `chunks = max(int(os.environ.get("SCALE_A2A_CHUNKS", "1")), 1)`; `:101`
 `capacity = ceil(capacity_factor * assignments_per_shard / num_experts)`;
 `:137`/`:151` `jax.lax.all_to_all` where `main` has `jax.lax.ragged_all_to_all` at
-`:241`/`:269`.
+`:77`/`:105` of a 124-line file.
 
 **Do not cherry-pick from `research/rav/7201-ep64-drop3{,-handoff}` or
 `7201-ep64-muon-pad`** — they carry the same knobs but are entangled with ~14–16k
@@ -304,8 +304,7 @@ MFU)**, corroborated by openxla/xla#33386 (~2% of NVLink bandwidth one-shot vs
 ~100% wire utilisation on NCCL)
 ([#7012 comment 4995418725](https://github.com/marin-community/marin/issues/7012#issuecomment-4995418725)).
 **But it only matters single-host** — multi-host `ragged_all_to_all` always takes
-the NCCL path automatically, confirmed in the 512-expert EP64 profile
-(`ncclDevKernel_SendRecv`, not `RaggedAllToAllKernelImpl`). At rack scale this is
+the NCCL path automatically. At rack scale this is
 a guard against a footgun, not a speedup.
 
 ### B3 — Gather dispatch (int32 assignment scatter + activation gather)
@@ -564,9 +563,11 @@ gradient parity. PoC
 [`a3b19c5ff`](https://github.com/marin-community/marin/commit/a3b19c5ff0351a2b6d59f2a130a67be50d99d488);
 validation [#7012 comment 4919640071](https://github.com/marin-community/marin/issues/7012#issuecomment-4919640071);
 independent reproduction [#7012 comment 4960848663](https://github.com/marin-community/marin/issues/7012#issuecomment-4960848663).
-Under the ring EP backend: `107476c8d`, validated in
-[#7012 comment 4994519151](https://github.com/marin-community/marin/issues/7012#issuecomment-4994519151) and
-[#7279 comment 5028967210](https://github.com/marin-community/marin/issues/7279#issuecomment-5028967210).
+Under the ring EP backend: `107476c8d`. The ring → `ring_cute` pair (+0.38pp)
+is in [#7012 comment 4994519151](https://github.com/marin-community/marin/issues/7012#issuecomment-4994519151),
+which reports the numbers but does not name the commit; the commit→result link
+comes from PR [#7490](https://github.com/marin-community/marin/pull/7490)'s
+inventory. No #7279 comment mentions `107476c8d`.
 
 **State.** Branch-only; extraction marker
 [#7488](https://github.com/marin-community/marin/pull/7488) (draft, branch
@@ -580,19 +581,24 @@ both the FSDP and EP lines.
 grouped GEMM that runs on the received buckets; `SCALE_MOE_EXPERT_CHUNKS` (D5) is
 the FSDP-only overlap layered on top and does not apply under EP.
 
-### B9 — QuACK grouped weight-gradient GEMM at 256×256 tiles
+### B9 — QuACK 256×256 tiles on the EP64 expert GEMMs
 
-**Mechanism.** `SCALE_QUACK_GROUPED_WGRAD=1` — route the expert weight-gradient
-GEMMs through the QuACK grouped kernel with the autotuned 256×256 tile.
+**Mechanism.** The tile size for the QuACK SM100 expert GEMMs and grouped weight
+gradients, moved to 256×256. Grouped weight gradients are already part of the ECHO
+base stack; this leg changes only the tile.
 
-**Measured. +0.861pp** on the ECHO line (leg v134).
+**Measured. 20.932% → 21.794% p50 = +0.861pp**, single draw, ECHO line at EP64
+(control v132, treatment v134 `…-qb-quack256-v134-…`). Kept in the v143 recipe.
 
 **State.** Branch-only, `research/rav/7201-ep64-drop3`.
 
-**Note the tension with E22**, which records the `sonic_cute` varlen-k wgrad shim
-at only +0.06–0.08pp at the d2560 row-13 scale. These are different kernels at
-different shapes; the EP64 figure is the relevant one for this operating point,
-but neither has a matched control against the other.
+**This contradicts E22 and the contradiction is unresolved.** The same tile change
+measured **+0.14pp** end-to-end on the standalone/FSDP line at d2560 row-13 (after
+a stale-import correction), against +0.861pp here. Different stacks, different
+shapes, single draws on both sides. Neither number is decision-grade, and sealing a
+~1pp-class item on the other stack's measurement is the failure mode the derisking
+protocol exists to catch. If the tile setting matters at the production shape, it
+needs its own repeated-draw A/B there.
 
 ### B10 — Sonic slot gather (the ECHO line's equivalent of B3 + B4)
 
@@ -651,8 +657,13 @@ a 2.4× jump end to end
 That inverts the E64 result where FSDP beats EP. The practical read: **EP is the
 right parallelism for the 256-expert and 512-expert candidates and the wrong one
 for 64 experts.** Adding unscaled e4m3 on the wire and into QuACK takes E512/EP64
-to 18.2% / 417K tok/s, but that FP8 arm is MFU-measured only and **not numerically
-validated** (~8% relative GEMM error against bf16's 0.5%).
+to **18.2% / ~417K tok/s**, but that FP8 arm is MFU-measured only and **not
+numerically validated**: a pod microbenchmark puts the e4m3 GEMM at ~8% relative
+error against bf16's ~0.5% — fp8-class and comparable to #7282's MXFP8 ~6.6%, but
+uncalibrated. It needs a training-loss gate or a swap to the MXFP8 path first.
+(Both figures are in the [#7332](https://github.com/marin-community/marin/issues/7332)
+issue body, not in the comment; the EP ladder above is comment 5007041962, which is
+bf16-only.)
 
 **Placement variance is a first-class confound.** Same binary, different gang
 draw: ring EP4 moved −10% step time; a2a EP8 flipped from wedge to a clean 19.51%;
@@ -798,10 +809,24 @@ to **0.02%** for about 1pp of MFU. *That* is the actionable ECHO result.
 (Reconcile the source's own rows before quoting them: it reports 19.98% and 18.99%
 MFU while rounding both arms to 279K tok/s, which cannot both be right.)
 
-**Longer, better-qualified sibling.** A stable BF16 **120-step** reference on the
-8-of-256 variant (v143) reached **22.299% tail-30 MFU at 1.711% tail-30 drop**,
-loss → 5.995. Throughput was **not recorded** for that leg — any tok/s figure for
-it is derived by proportion, not measured.
+**Longer, better-qualified siblings, all on the same top-4 arm.**
+
+| leg | steps | MFU | drop | note |
+|---|--:|--:|--:|---|
+| v143 (`sh5120-pad2-qb-pipe2-bf16-120`) | 120 | **22.299%** tail-30 | **1.711%** tail-30 | loss → 5.995; throughput **not recorded** |
+| v128 (`sh5120-pad2-qb200`) | 200 | 21.050% | 1.784% tail-50 | the sh5120 QB baseline |
+| v119 (`sh21504-pad2-qb200`) | 200 | **25.501%** tail-100 | **2.024%** tail-50 | shared intermediate widened to 21,504; loss 4.960; commit `e6124dac2` |
+
+The v119 leg is the highest compliant EP64 reading anywhere in the record and the
+best-qualified of the three, but it is **not a kernel result** — its own logbook
+entry seals it as *"reproducible capacity option, not a matched-shape EP-kernel
+improvement."* Widening the dense shared expert more than fourfold changes the
+model, so its MFU is not comparable to the sh5120 rows.
+
+**Do not compare any of these against C2's 20.708%.** That is an 8-of-256
+fixed-a2a-plus-spill run; these are 4-of-256 receiver-ECHO. Different top-k,
+different dispatch mechanism, and different drop metric — the granularity
+conclusion is exactly the one E17 warns reverses under EP.
 
 **As an absolute point, 24.153% at 2.765% is the highest compliant EP64 reading on
 record.** It is also the least qualified: a 20-step performance screen, not a
@@ -816,8 +841,8 @@ with this stack.
 
 **Complexity: the largest item in the ledger by a wide margin.** `24ee86090`
 alone is +725/−39 in `ep_ragged_all_to_all.py` plus +79 of tests. The branch as a
-whole is +11,598/−788 across `lib` and `experiments`: `ep_ragged_all_to_all.py`
-reaches +3,175 lines, and it carries
+whole is +10,785/−785 against its merge-base `51964171c`, of which
+`ep_ragged_all_to_all.py` is +3,106 lines, and it carries
 `lib/levanter/src/levanter/kernels/hybridep.py` (+315) and a 680-line MNNVL
 fabric-transport CUDA FFI. The related HybridEP probe commit `2eac7cc45` is 34
 files / +4,749. Related transport A/B:
@@ -1072,7 +1097,7 @@ data order, schedule, optimizer and 32-GB200 topology, checkpoint-audited:
 | metric | BF16 | MXFP8 | Δ |
 |---|---:|---:|---:|
 | Aggregate eval loss | 2.314181 | 2.315482 | **+0.056%** |
-| Paloma macro | 2.611326 | 2.614211 | **+0.111%** |
+| Paloma macro | 2.611326 | 2.614211 | **+0.110%** |
 | Uncheatable macro | 2.052934 | 2.057221 | **+0.209%** |
 | Mean tok/s | 788,954 | 845,920 | **+7.220%** |
 
@@ -1206,7 +1231,7 @@ full-step throughput, **missing the 99% gate in both replications**. TE 2.16's
 fused-projection control projects to 99.39–99.48%, so it is physically possible —
 but uniform MXFP8 at EP2 and EP4 **dies with a deterministic XLA GPU backend
 abort before execution** (`AllReduceThunk::CheckImplementable(): reduction_kind.has_value()`,
-exit 134, uncatchable from Python). Decision: keep dense on delayed per-tensor
+uncatchable from Python). Decision: keep dense on delayed per-tensor
 FP8. Quality of uniform MXFP8 is completely unmeasured
 ([#7282 c5028942402](https://github.com/marin-community/marin/issues/7282#issuecomment-5028942402)).
 
@@ -1242,7 +1267,7 @@ FP8. Quality of uniform MXFP8 is completely unmeasured
 | E4 | Token-chunk pipelining of dispatch/FFN | **−1.96pp** | same |
 | E5 | FP8 permutation-leg wire (QDQ decomposition) | **−2.02pp** (also reported as −1.6 to −2.3pp). Recovers 936 ms/step of exposure exactly as the byte thesis predicts, but quantization compute costs more than the bytes save. Delayed scaling, pre-registered to cut added compute 2239 → ~127 ms/step against a 920 ms/step break-even, measured **2182 ms/step** — both falsification clauses fired at 17× the threshold. | same §3; [c5084892846](https://github.com/marin-community/marin/issues/7279#issuecomment-5084892846) |
 | E6 | Weight-prefetch overlap | Null, scheduler-gated (LHS/auto-PGLE inert on this workload) | same §3 |
-| E7 | TransformerEngine NCCL_EP | NVIDIA's recommended full fused MoE block **ties** Marin's own seam: 16.94% vs 17.15%, both ~1.1–1.3pp behind the incumbent `a2a_cute`. TE-at-tip: #3231's collective-stream pin crashes 64-GPU first execution; shimmed out, the tip wheel is functionally the old wheel (~17% vs 18.05%). Every remaining knob — scoped command-buffer capture, the collective-overlap flag, an SM-budget sweep — was a wash or a loss. | [#7331 c5073227834](https://github.com/marin-community/marin/issues/7331#issuecomment-5073227834); [#7279 c5080435482](https://github.com/marin-community/marin/issues/7279#issuecomment-5080435482) §3 |
+| E7 | TransformerEngine NCCL_EP | NVIDIA's recommended full fused MoE block **ties** Marin's own seam: 16.94% vs 17.15%, both ~1.1–1.3pp behind the incumbent `a2a_cute`. TE main tip `ea41e08` is a regression here: both integrations die deterministically at first 64-GPU execution at data8×expert8 (`ncclCommSplit … remote process exited`, 2/2 attempts × 4 arms across two allocations), while 2-node and 4-node topologies pass. **A shim stripping #3231's `compute_on("gpu_stream:collective")` pin does *not* fix it**, which exonerates the stream annotation as sole cause and points at the NCCL_EP relocation into the `3rdparty/nccl-extensions` submodule. Pin `68493d2`. Every remaining knob — scoped command-buffer capture, the collective-overlap flag, an SM-budget sweep — was a wash or a loss. | [#7331 c5073227834](https://github.com/marin-community/marin/issues/7331#issuecomment-5073227834), [c5076118699](https://github.com/marin-community/marin/issues/7331#issuecomment-5076118699); [#7279 c5080435482](https://github.com/marin-community/marin/issues/7279#issuecomment-5080435482) §3 |
 | E8 | fa4-lse as a primal output | **+0.18pp**, below the 0.5pp bar. Control 20.465% (3 draws) vs 20.648% (2 draws). On-device variant dead on memory (+32.7 GiB saved activations do not fit); host offload over Grace C2C is the only viable form, saving ~70 ms of a 13.2 s step. The d2560-derived ~1pp estimate does not transfer to d5120 EP64 where attention is a small slice. | same §3 |
 | E9 | `ring_cute` at e256 / EP64 | **DNF** — OOM at 141.79 GiB in `jit_train_step`. Its EP4/EP8 backend-ladder wins (20.83% at 64 GPUs) do not transfer; fitting it would be a memory-engineering project of its own. | same §4 |
 | E10 | Ragged a2a with the one-shot kernel off, at EP64 | **12.38% mean** — roughly half of fixed+adjoint — and still drops 43% under the same QB-off collapse, so it is not a fidelity refuge either. | same §4 |
@@ -1252,13 +1277,13 @@ FP8. Quality of uniform MXFP8 is completely unmeasured
 | E14 | MLA | Neutral at matched head dims (+0.8% at qk128·1×), negative otherwise (−4.4% qk192·1×, −16.0% qk128·2×, −22.9% qk192·2×, −87.0% at head dim 256). The full-width 72-head + full-causal + learned-rel-pos variant is ~15.6% true MFU, ~120 days for 20T. Quality gain measured at only ~8% for 2× heads. | [#7201 c5011863858](https://github.com/marin-community/marin/issues/7201#issuecomment-5011863858), [c5060285897](https://github.com/marin-community/marin/issues/7201#issuecomment-5060285897) |
 | E15 | Source-push, NVSHMEM/CuTe transport, SM comm/compute partitioning, auto-PGLE/LHS | Sealed on this stack. | [#7333](https://github.com/marin-community/marin/issues/7333), [#7114](https://github.com/marin-community/marin/issues/7114), [#7012 c4997270478](https://github.com/marin-community/marin/issues/7012#issuecomment-4997270478) |
 | E16 | JAX-Toolbox container | 25.60% against 25.83% / 25.71% controls — a 0.505% time-adjusted regression. Passes a 2% adoption gate but gives no performance reason to switch. | [#7519](https://github.com/marin-community/marin/issues/7519) / [#7524](https://github.com/marin-community/marin/issues/7524) |
-| E17 | Fine expert granularity (8-of-256, i1280) at fixed active params | 19.17% vs a 20.36% 4-of-128 baseline at 2 racks — finer granularity costs throughput on the FSDP line. Note this reverses under EP: 8-of-256 gives spill more headroom (C2). | [#7201 c5010023475](https://github.com/marin-community/marin/issues/7201#issuecomment-5010023475) |
+| E17 | Fine expert granularity (8-of-256, i1280) at fixed active params | 19.17% vs a 20.36% 4-of-128 baseline at 2 racks — finer granularity costs throughput on the FSDP line. Note this reverses under EP: 8-of-256 gives spill more headroom (C2). | 19.17% arm [#7201 c5010023475](https://github.com/marin-community/marin/issues/7201#issuecomment-5010023475); 20.36% baseline [c5010023345](https://github.com/marin-community/marin/issues/7201#issuecomment-5010023345) |
 | E18 | **SM comm/compute partitioning** (`max_num_sms`, NCCL CTA pin) | **Falsified three separate times**: EP1 −0.20/−1.00pp; ring EP8 −1.22/−3.19pp; TE `max_num_sms` 32→16 monotone negative. | [#7012 c4985697941](https://github.com/marin-community/marin/issues/7012#issuecomment-4985697941), [c4987885345](https://github.com/marin-community/marin/issues/7012#issuecomment-4987885345), [#7331 c5076118699](https://github.com/marin-community/marin/issues/7331#issuecomment-5076118699) |
-| E19 | Auto-PGLE (as opposed to the manual FDO flow) | +0.06pp single-node and **crashes multi-host** — per-host recompilation desynchronizes processes. The manual dump-profile → shared-FDO → replay flow is required. | [#7012 c4984144891](https://github.com/marin-community/marin/issues/7012#issuecomment-4984144891) |
+| E19 | Auto-PGLE (as opposed to the manual FDO flow) | +0.06pp single-node and **crashes multi-host** — per-host recompilation desynchronizes processes. The manual dump-profile → shared-FDO → replay flow is required. | [#7012 c4997270478](https://github.com/marin-community/marin/issues/7012#issuecomment-4997270478) (multi-host crash); single-node +0.06pp in [c4984144891](https://github.com/marin-community/marin/issues/7012#issuecomment-4984144891) |
 | E20 | Sonic exact clone-weight-gradient adjoint | Microbench 3.24×/4.63× on W2/W13, rack A/B **−0.167pp**. Another isolated win that did not survive end to end. | `7201-ep64-mfu.md` logbook, 2026-07-27 05:27 |
 | E21 | Two-chunk dispatch prefetch regroup | **−0.228pp** | same logbook, 2026-07-27 07:11 |
-| E22 | Sonic `sonic_cute` varlen-k wgrad shim | **+0.06–0.08pp only** — the weight-gradient GEMM is not a bottleneck. Tile autotune (256,256) is ×1.08–1.28 in isolation but **+0.14pp** end to end. | [#7012 c4919640071](https://github.com/marin-community/marin/issues/7012#issuecomment-4919640071) |
-| E23 | Native dense MXFP8 (`jax.nn.scaled_dot_general`) | **0.82–1.00× fwd, 0.64–0.81× fwd+bwd vs bf16** — slower than bf16. GEMM-only is 1.33×, but XLA's block-quantize kernel costs 0.26–0.36 ms per operand and the cotangent is quantized twice in backward. Shelved 2026-07-16. | [#7282 c4997628535](https://github.com/marin-community/marin/issues/7282#issuecomment-4997628535) |
+| E22 | Sonic `sonic_cute` varlen-k wgrad shim | **+0.06–0.08pp only** — the weight-gradient GEMM is not a bottleneck. Tile autotune (256,256) is ×1.08–1.28 in isolation but **+0.14pp** end to end **on the standalone/FSDP line**. On the EP64 ECHO line the same 256×256 tile change measured **+0.861pp** (v132 20.932% → v134 21.794% p50) and was kept in the v143 recipe. Single draws on both sides, so neither is decision-grade — but do not treat +0.14pp as the final word across stacks. | [#7012 c4974548162](https://github.com/marin-community/marin/issues/7012#issuecomment-4974548162) (shim, tile isolation); [c4984144891](https://github.com/marin-community/marin/issues/7012#issuecomment-4984144891) (+0.14pp post-correction) |
+| E23 | Native dense MXFP8 (`jax.nn.scaled_dot_general`) | **0.82–1.00× fwd, 0.64–0.81× fwd+bwd vs bf16** — slower than bf16. GEMM-only is 1.33×, but XLA's block-quantize kernel costs 0.26–0.36 ms per operand and the cotangent is quantized twice in backward. Shelved 2026-07-16. | [#7282 c4997598747](https://github.com/marin-community/marin/issues/7282#issuecomment-4997598747) |
 
 **One thing E7 did buy, and it is worth keeping.** TE's MoE-layer chunking plus
 chunk remat (`C=8192`) removed the no-drop capacity wall: **EP-side memory becomes

@@ -25,7 +25,7 @@ main@51964171c
   └─ replay of the b200-minimal stack + 1 ─► origin/rav/ep-2 (fe21ea495)
        └─ (local) agent/ep25-d1-adjoint, ep25-d4/d5/d6           ← EP line
 main@a51da194d
-  └─ 25 commits ─► origin/mcwitt/moe-standalone-ep (75c517148)   ← independent
+  └─ 26 commits ─► origin/mcwitt/moe-standalone-ep (75c517148)   ← independent
 ```
 
 `rav/ep-2` is a **rewritten replay**, so its SHAs do not match `b200-minimal`'s even
@@ -38,6 +38,11 @@ spill — the only ≤3% mechanism with a true tail-100 qualification — and th
 drop-metric fix that makes every fidelity claim in this project checkable. Their
 logbooks live at `AGENT_LOG.md` in the repo root rather than under `.agents/`, so a
 naive `.agents/`-scoped copy would miss them.
+
+**The FP8-line refs are local-only too.** `research/mcwitt/7279-fp8-dispatch-wire`
+@ `224a0081` is on no origin branch, and the cited MXFP8 snapshot `0a37854` is not
+an ancestor of `origin/research/mcwitt/7282-mxfp8-blackwell` (which is at
+`c3cb334f8`). They are out of scope for this series, but they are equally at risk.
 
 ## Prerequisite decisions
 
@@ -96,12 +101,23 @@ auto-PGLE must not be enabled (it crashes multi-host).
 | # | Commit | From | Size |
 |--:|---|---|--:|
 | B1 | Add the `quack-kernels[cu13]` dependency and cutlass/quack mypy ignores | `538381606` (extract) | ~+10 |
-| B2 | Add the `sonic_cute` QuACK SM100 grouped-GEMM backend and `SCALE_MOE_IMPL`/`SCALE_ATTN_IMPL` | `5cf76b64a` | +309 |
+| B2 | Add the `sonic_cute` QuACK SM100 grouped-GEMM backend and `SCALE_MOE_IMPL`/`SCALE_ATTN_IMPL` | branch-tip file set, **not** `5cf76b64a` — see below | ~+560 |
 | B3 | Replica-local embedding gather | `bdf61d7ed` | +32 / −6 |
 | B4 | Precompute FA4 per-layer segment bounds outside the scan | `a33e16ced` | +156 / −30 |
 
-The dependency commit comes first: `5cf76b64a` adds `quack_moe_cute.py` and the
-backend, which import QuACK, while `538381606` is what supplies the package.
+The dependency commit comes first: the backend imports QuACK, and `538381606` is
+what supplies the pinned package.
+
+**Do not cherry-pick `5cf76b64a` for B2 — it is the stale proof-of-concept.** That
+commit carries `sonic_cute.py` at **105 lines** (blob `c747e6d2ce`) and **no
+`quack_symmetric_cute.py` at all**; the symmetric-GEMM file first appears in
+`b0d484ddb`. The version that is byte-identical between the FSDP line
+(`origin/b200-300B-tune`) and the EP line (`agent/ep25-d1-adjoint`) — the identity
+that the shared-substrate argument in [`README.md`](README.md) §4 rests on — is the
+later **272-line** file (blob `4d53627060`), together with `quack_moe_cute.py`
+(172) and `quack_symmetric_cute.py` (117, blob `628f77fdb2`). That is ~560 lines,
+not 309. Extract the branch-tip file set, or decompose B2 into `5cf76b64a` plus the
+follow-up commits that produced the validated version.
 
 B1 is purely additive and lazily imported, so CPU and H100 paths are unaffected.
 **Drop** `538381606`'s `nvidia-cutlass-dsl>=4.6.0,<4.7` hunk — `main` pins `==4.6.0`

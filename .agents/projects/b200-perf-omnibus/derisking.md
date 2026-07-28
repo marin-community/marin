@@ -37,6 +37,12 @@ and the ledger caveats in
    raises on NaN, so Iris has reported a NaN run as *succeeded* while writing a
    poisoned checkpoint. Check the loss trajectory and the drop metric, not the exit
    status.
+9. **Fix the config baseline before comparing anything.** Every arm should carry
+   `XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async` (the record flags the default allocator
+   as a silent-deadlock and OOM source at 64×GB200; the fixed arm measured 23.32% /
+   362K tok/s), `--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false`
+   on JAX 0.11, and `--xla_gpu_experimental_parallel_collective_overlap_limit=4`.
+   Note `TF_GPU_ALLOCATOR` is *not* read by JAX — setting it does nothing.
 
 ---
 
@@ -139,10 +145,15 @@ in a degraded form, and has never tested the rest.
 
 **What is already known, so do not re-derive it:**
 
-- **PGLE is not a reliable EP win.** +1.1pp on FSDP; on EP it is +0.47pp combined
-  with the overlap limit, manual PGLE was *rejected* on the ECHO line (matched 217
-  of 535 instructions, 0.235pp below the AutoPGLE leg), and the headline padded-Muon
-  A/B ran with PGLE **off** because the ~16-minute compile made preemption certain.
+- **PGLE is not a reliable EP win, and it is not unmeasured either.** +1.1pp on
+  FSDP; on EP it is +0.47pp combined with the overlap limit. The ECHO line *has*
+  measured it: v152 auto-PGLE reached 22.801% p50, and v153 (v152 plus
+  `overlap_limit=4`) reached 23.286% over steps 5–19, **+0.427pp**. Manual PGLE was
+  *rejected* there — it matched only 217 of 535 instructions and came in 0.235pp
+  below the AutoPGLE leg. The headline padded-Muon A/B ran with PGLE **off**
+  because the ~16-minute compile made preemption certain. So the question is
+  narrowed, not open: PGLE helps on EP, by roughly a third of what it gives FSDP,
+  and the auto/manual choice inverts between the two stacks.
 - **Two shared experts is memory-blocked at EP64**, not merely untested: the one
   attempt (two 8192-wide) failed before step 0 at 89.49 GiB. Splitting the shared
   width does not reduce the FSDP gather peak.

@@ -26,49 +26,56 @@ The request cited a ~25% EP64 figure from
 numbers in that thread get called ~25%, and they are not interchangeable. All are
 one GB200 rack (64 GPUs), all on the 2.5 PFLOP/s GB200 bf16-dense denominator.
 
-| MFU | configuration | routed-assignment drops | evidence quality |
+| MFU | configuration | drops | evidence quality |
 |--:|---|--:|---|
-| **25.39%** | d5120 8-of-256, custom adjoint + leg-batched expert GEMMs, **QB off** | ~85% early | bench only, **and the mechanism is disputed** — see below |
-| **24.84% / 24.59%** | d6144 4-of-128, QB on cf1.0, custom adjoint + host offload | **8.9–13%** | 120-step, above the 6% bar |
-| **24.15%** | d5120 4-of-256, receiver-ECHO + padded stack-sharded Muon | **2.77%** | 20-step screen only |
-| **22.30%** | d5120 8-of-256, receiver-ECHO (v143) | **1.71%** | 120-step, tail-30 (tok/s not recorded) |
-| **20.71%** | d5120 8-of-256, QB + same-step spill m=3 at cf1.0625 | **1.44%** | 350-step, true tail-100 |
+| **25.50%** | d5120 4-of-256, ECHO, **shared intermediate widened 5,120 → 21,504** | **2.02%** | 200-step tail-100 — best-qualified row, but a *capacity* change, not a kernel result |
+| **25.39%** | d5120 8-of-256, custom adjoint + leg-batched GEMMs, **QB off** | ~85% early | bench only, and the mechanism is **disputed** |
+| **24.84 / 24.59%** | d6144 4-of-128, QB on cf1.0, custom adjoint + host offload | **8.9–13%** | 120-step, above the 6% bar |
+| **24.15%** | d5120 4-of-256, ECHO + padded stack-sharded Muon | **2.77%** | 20-step screen only |
+| **22.30%** | d5120 4-of-256, ECHO (v143) | **1.71%** | 120-step tail-30 (tok/s not recorded) |
+| **21.05%** | d5120 4-of-256, ECHO, sh5120 QB baseline (v128) | **1.78%** | 200-step tail-50 |
+| **20.71%** | d5120 **8**-of-256, QB + same-step spill m=3 at cf1.0625 | **1.44%** | 350-step true tail-100 |
 
-Three things must be read alongside that table.
+Four things have to be read alongside that table.
 
-**All of these are reported MFU, which is inflated ×1.08** at seq 4096 with sliding
-window 512, because `lm_flops_per_token` counts full O(seq²) attention on all 48
-layers when 40 are windowed. A reported 24.153% is ≈ **22.4% true**. The factor is
-uniform, so A/B deltas hold and absolute levels do not.
+**These are reported MFU, inflated ×1.08** at seq 4096 with sliding window 512,
+because `lm_flops_per_token` counts full O(seq²) attention on all 48 layers when 40
+are windowed. A reported 24.153% is ≈ **22.4% true**. The factor is uniform, so A/B
+deltas hold and absolute levels do not.
 
-**The rows come from two different arms.** The receiver-ECHO line runs **top-4** of
-256 at routed i2048; the spill/adjoint line runs **top-8** of 256 at i1280. Their
-drop metrics are also different quantities (post-ECHO aggregate assignment drop
-against sender-local bucket drop), and top-k moves the statistical floor — 0.88% at
-top-8, 1.24% at top-4.
+**Drop rate inflates MFU.** Expert GEMMs run on fixed capacity-sized buffers and a
+dropped assignment gathers a zero pad row, so a configuration that drops more reads
+*higher* MFU for less real work. Every cross-drop-regime gap in the record is an
+upper bound, including the "QB costs 1.44pp" figure.
 
-**The 25.39% row should not be planned against.** Besides the QB-off caveat, the
-leg-batching that produces it is contradicted: an independent reconstruction with QB
-on and matched drops measured **−3.66pp** (22.66% → 19.00%, non-overlapping bands,
-bit-exact against the loop), and full batching at G=4 never produced a step.
+**Rows 1 and 4–6 are one arm; row 7 is another. Do not rank across them.** The
+receiver-ECHO legs run **top-4** of 256 at routed i2048; the spill/adjoint leg runs
+**top-8** of 256 at i1280. Their drop metrics are different quantities — post-ECHO
+aggregate assignment drop against sender-local bucket drop — and top-k moves the
+statistical floor (0.88% at top-8, 1.24% at top-4). Comparing them confounds top-k,
+dispatch mechanism and drop metric at once.
 
-**The headline 25.39% is a bench artifact.** Those runs route with quantile
-balancing off — `qb_routing` defaults to `False` in `launch_cw_scale.py` and no
-recorded EP64 submit command set `SCALE_MOE_QB`. The router collapses: 85–89% of
-routed assignments dropped early in training, oscillating 17–79% over a full run.
-It is invisible in loss curves because the always-on shared expert keeps loss
+**Rows 2 and 3 are not shippable configurations.** The 25.39% and the d6144 legs
+route with quantile balancing off — `qb_routing` defaults to `False` in
+`launch_cw_scale.py` and no recorded EP64 submit command set `SCALE_MOE_QB` — so
+the router collapses, dropping 85–89% of assignments early and oscillating 17–79%
+over a full run, invisibly, because the always-on shared expert keeps loss
 descending
 ([#7201 c5080459722](https://github.com/marin-community/marin/issues/7201#issuecomment-5080459722)).
+Row 2 is doubly weak: the leg-batching behind it is contradicted by an independent
+reconstruction that measured **−3.66pp** with QB on and matched drops, and the
+implementation that produced 25.39% was never committed.
 
-**And drop rate inflates MFU.** Expert GEMMs run on fixed capacity-sized buffers,
-and a dropped assignment gathers a zero pad row — so a configuration that drops
-more reads *higher* MFU for less real work. Every cross-drop-regime MFU gap in the
-record is an upper bound, including the "QB costs 1.44pp" figure.
+**Row 1 is real, well-qualified, and still not an optimization.** It is a 200-step
+QB-on run at 2.02% drops — the best-qualified figure in the table — but it buys its
+MFU by widening the dense shared expert more than fourfold, which changes the model.
+Its own logbook entry seals it as *"reproducible capacity option, not a
+matched-shape EP-kernel improvement."* It belongs to an architecture decision, not
+to this ledger; it appears here so nobody reads the band below as a hard ceiling.
 
-**What is honestly achievable at EP64 today, at a compliant drop rate, is 22–24%
-on one rack** — and the two configurations at the top of that band rest on a
-20-step screen and a 120-step run respectively. Nothing at EP64 has been measured
-beyond one rack at all.
+**At the production-candidate architectures, what is honestly achievable at EP64
+today at a compliant drop rate is 21–24% on one rack**, and the top of that band
+rests on a 20-step screen. Nothing at EP64 has been measured beyond one rack.
 
 For comparison, the FSDP line (EP1) reaches **25.2%** on one rack at d6144
 4-of-128 with PGLE, two shared experts, Muon shape-grouping, gated-norm, attention
@@ -145,7 +152,7 @@ grouped expert GEMMs.
 
 | # | Change | Benefit | LOC | Notes |
 |--:|---|---|--:|---|
-| 14 | **QuACK SM100 grouped expert GEMM** (`sonic_cute`) (B8) | `sonic` → `sonic_cute` 12.5% → 14.9% at d2560, 16.2% → 17.8% at d5120 (8×B200 single node); ring EP8 +0.38pp; a2a EP4 +1.34pp | +309 additive, lazily imported | Byte-identical on the FSDP and EP branches. Five divergent `sonic_cute.py` blobs exist — see §4 |
+| 14 | **QuACK SM100 grouped expert GEMM** (`sonic_cute`) (B8) | `sonic` → `sonic_cute` 12.5% → 14.9% at d2560, 16.2% → 17.8% at d5120 (8×B200 single node); ring EP8 +0.38pp; a2a EP4 +1.34pp | **~+560** additive, lazily imported | The **branch-tip** file set is byte-identical on the FSDP and EP branches; the 105-line PoC in `5cf76b64a` is *not* that version. Five divergent `sonic_cute.py` blobs exist — see §4 |
 | 15 | **FA4 per-layer bounds precomputed outside the scan** (B1) | fixes the 8-rack device-0 remat wedge | +156 / −30 | The FA4 kernel itself is already on `main` |
 | 16 | **Replica-local embedding gather** (D6) | fixes the 8-rack NCCL rendezvous wedge | **+32 / −6** | `bdf61d7ed`, validated at 512 GPU. Cleanest cherry-pick in the set |
 
@@ -259,10 +266,12 @@ layer-level-or-better A/B **inside the real step with remat on**.
 **Almost nothing is merged.** `origin/main` has the grug MoE skeleton, the EP
 `ring`/`ragged_all_to_all`/`deepep` backends, the FA4 CuTe kernel, capacity-factor
 plumbing, CUTLASS DSL 4.6.0 (#7587) and JAX 0.11.0 with the OpenXLA CUBIN
-discriminator fix (#7436). It has **none** of `sonic_cute`, the QuACK dependency,
-`SCALE_MOE_IMPL`, `Pfsdp`, `_embedding_gather`, `_newtonschulz_4d_distributed`,
-`SCALE_MOE_EXPERT_CHUNKS`, `SCALE_OFFLOAD_OPT_STATE`, `SCALE_MUON_SYRK`, or
-`SCALE_A2A_CHUNKS`. `main`'s `launch_cw_scale.py` is a 238-line skeleton with about
+discriminator fix (#7436). It has **none** of `sonic_cute`, `SCALE_MOE_IMPL`, `Pfsdp`,
+`_embedding_gather`, `_newtonschulz_4d_distributed`, `SCALE_MOE_EXPERT_CHUNKS`,
+`SCALE_OFFLOAD_OPT_STATE`, `SCALE_MUON_SYRK`, or `SCALE_A2A_CHUNKS`. It does carry
+`quack-kernels` 0.5.0 transitively (via `flash-attn-4` in `uv.lock`, imported by
+`grug/attention/_fa4_cute_segmented_bwd.py`); what is missing is the direct pinned
+`quack-kernels[cu13]==0.6.1` the MoE backend needs. `main`'s `launch_cw_scale.py` is a 238-line skeleton with about
 20 knobs; the research branches carry 60+.
 
 **But there is one shared base, which makes this tractable.**
@@ -272,11 +281,14 @@ and `codex/per-layer-kv-heads-static-fa4`. `rav/ep-2` is a rewritten replay of t
 `b200-minimal` stack onto a newer main; its SHAs do not match even where content
 does. `mcwitt/moe-standalone-ep` is an independent lineage.
 
-Verified directly: `sonic_cute.py`, `quack_moe_cute.py`, `loss.py` and
-`_fa4_cute.py` are **byte-identical** between the FSDP-tuning branch
-(`b200-300B-tune`) and the EP branch (`agent/ep25-d1-adjoint`). `sharding.py`
-differs by exactly four lines — the `Pfsdp` change. The two production lines share
-a real substrate; Tier 3 is that substrate.
+Verified directly by blob hash: `sonic_cute.py` (272 lines, `4d53627060`),
+`quack_moe_cute.py`, `quack_symmetric_cute.py` (`628f77fdb2`), `loss.py` and
+`_fa4_cute.py` are **byte-identical at the branch tips** between the FSDP-tuning
+branch (`b200-300B-tune`) and the EP branch (`agent/ep25-d1-adjoint`).
+`sharding.py` differs by exactly four lines — the `Pfsdp` change. The two
+production lines share a real substrate; Tier 3 is that substrate. **The identity
+holds at the tips, not at the PoC commit** — `5cf76b64a` carries a 105-line
+`sonic_cute.py` and no symmetric-GEMM file at all.
 
 **Four conflicts to resolve before writing commits.**
 
