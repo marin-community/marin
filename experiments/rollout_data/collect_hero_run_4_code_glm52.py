@@ -28,6 +28,7 @@ from iris.cluster.setup_scripts import default_setup_script
 from iris.cluster.types import CoschedulingConfig, Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device, is_job_finished
 from marin.inference.config import DEFAULT_CUDA_VLLM_VERSION
 from marin.inference.model_preparation import resolve_model_path
+from marin.inference.proxy import _reserve_port
 from marin.inference.vllm_server import IsolatedCudaVllm
 from rigging.filesystem import StoragePath
 from rigging.timing import Duration
@@ -101,6 +102,9 @@ VLLM_ENDPOINT = "glm52-openai"
 RAY_ENDPOINT = "glm52-ray"
 CUDA_COMPILER_REQUIREMENT = "cuda-toolkit[cccl,crt,cudart,nvcc,nvvm]==13.0.2"
 MODEL_CACHE_TTL_DAYS = 30
+GPUS_PER_NODE = 4
+VLLM_REPLICAS = 2
+TENSOR_PARALLEL_SIZE = GPUS_PER_NODE * VLLM_REPLICAS
 DEFAULT_MAX_MODEL_LEN = 64 * 1024
 DEFAULT_MAX_NUM_SEQS = 12
 DEFAULT_MAX_TOKENS = 16 * 1024
@@ -131,7 +135,7 @@ class ServerConfig:
 @dataclass(frozen=True)
 class CollectionConfig:
     run_id: str
-    output_path: str
+    output_path: StoragePath
     shard_index: int
     num_shards: int
     max_records: int | None
@@ -209,14 +213,6 @@ def partition_slices(
     return slices
 
 
-def _available_port(requested: int, host: str) -> int:
-    if requested:
-        return requested
-    with socket.socket() as sock:
-        sock.bind((host, 0))
-        return sock.getsockname()[1]
-
-
 def _ray_worker_port_args(*excluded_ports: int) -> list[str]:
     for minimum in (20000, 30000, 40000, 50000):
         maximum = minimum + 9999
@@ -232,7 +228,7 @@ def _network_interface(host: str) -> str:
     raise RuntimeError(f"No network interface owns advertised host IP {host}")
 
 
-def _wait_for_http(url: str, process: subprocess.Popen[Any], timeout: float) -> None:
+def _wait_for_http(url: str, process: subprocess.Popen[bytes], timeout: float) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if process.poll() is not None:
@@ -314,8 +310,8 @@ def _serve_glm52(vllm_endpoint: str, ray_endpoint: str, config: ServerConfig) ->
     environment["GLOO_SOCKET_IFNAME"] = _network_interface(host)
     if info.task_index == 0:
         weights = resolve_model_path(MODEL, MODEL_CACHE_TTL_DAYS, MODEL_REVISION)
-        ray_port = _available_port(ctx.get_port("ray"), host)
-        http_port = _available_port(ctx.get_port("http"), host)
+        ray_port = _reserve_port(host, ctx.get_port("ray"))
+        http_port = _reserve_port(host, ctx.get_port("http"))
         ray_address = f"{host}:{ray_port}"
         subprocess.run(
             [
@@ -325,7 +321,7 @@ def _serve_glm52(vllm_endpoint: str, ray_endpoint: str, config: ServerConfig) ->
                 f"--node-ip-address={host}",
                 f"--port={ray_port}",
                 *_ray_worker_port_args(ray_port, http_port),
-                "--num-gpus=4",
+                f"--num-gpus={GPUS_PER_NODE}",
                 "--disable-usage-stats",
             ],
             check=True,
@@ -341,11 +337,11 @@ def _serve_glm52(vllm_endpoint: str, ray_endpoint: str, config: ServerConfig) ->
                     text=True,
                     capture_output=True,
                 )
-                if status.returncode == 0 and "/8.0 GPU" in status.stdout:
+                if status.returncode == 0 and f"/{TENSOR_PARALLEL_SIZE}.0 GPU" in status.stdout:
                     break
                 time.sleep(10)
             else:
-                raise TimeoutError("Ray cluster did not register all 8 GB200 GPUs")
+                raise TimeoutError(f"Ray cluster did not register all {TENSOR_PARALLEL_SIZE} GB200 GPUs")
 
             process = subprocess.Popen(
                 [
@@ -359,7 +355,7 @@ def _serve_glm52(vllm_endpoint: str, ray_endpoint: str, config: ServerConfig) ->
                     "--port",
                     str(http_port),
                     "--tensor-parallel-size",
-                    "8",
+                    str(TENSOR_PARALLEL_SIZE),
                     "--distributed-executor-backend",
                     "ray",
                     "--enable-expert-parallel",
@@ -402,7 +398,7 @@ def _serve_glm52(vllm_endpoint: str, ray_endpoint: str, config: ServerConfig) ->
             f"--address={ray_address}",
             f"--node-ip-address={host}",
             *_ray_worker_port_args(),
-            "--num-gpus=4",
+            f"--num-gpus={GPUS_PER_NODE}",
             "--disable-usage-stats",
             "--block",
         ],
@@ -415,14 +411,19 @@ def _submit_vllm(ctx, vllm_endpoint: str, ray_endpoint: str, config: ServerConfi
     return ctx.client.submit(
         entrypoint=Entrypoint.from_callable(_serve_glm52, vllm_endpoint, ray_endpoint, config),
         name="vllm",
-        resources=ResourceSpec(cpu=120, memory="850g", disk="1000g", device=gpu_device("GB200", 4)),
+        resources=ResourceSpec(
+            cpu=120,
+            memory="850g",
+            disk="1000g",
+            device=gpu_device("GB200", GPUS_PER_NODE),
+        ),
         environment=EnvironmentSpec(
             setup_scripts=[default_setup_script(packages=["marin-core"])],
             env_vars={"VLLM_USE_FLASHINFER_SAMPLER": "0"},
         ),
         ports=["ray", "http"],
         coscheduling=CoschedulingConfig(group_by="nvlink.domain"),
-        replicas=2,
+        replicas=VLLM_REPLICAS,
         timeout=Duration.from_hours(RUN_TIMEOUT_HOURS),
         max_retries_failure=0,
     )
@@ -499,10 +500,13 @@ def _completion(vllm_url: str, prompt: PromptRecord, sampling: SamplingConfig) -
     }
 
 
-def _chunk_path(output_path: str, partition: PartitionSpec, row_start: int, row_end: int) -> StoragePath:
-    return StoragePath(
-        f"{output_path}/responses/file-{partition.file_index:04d}/"
-        f"row-group-{partition.row_group_index:02d}/rows-{row_start:04d}-{row_end - 1:04d}.jsonl.gz"
+def _chunk_path(output_path: StoragePath, partition: PartitionSpec, row_start: int, row_end: int) -> StoragePath:
+    return (
+        output_path
+        / "responses"
+        / f"file-{partition.file_index:04d}"
+        / f"row-group-{partition.row_group_index:02d}"
+        / f"rows-{row_start:04d}-{row_end - 1:04d}.jsonl.gz"
     )
 
 
@@ -513,7 +517,7 @@ def _run_config(
 ) -> dict[str, Any]:
     return {
         "run_id": collection.run_id,
-        "output_path": collection.output_path,
+        "output_path": str(collection.output_path),
         "dataset": DATASET,
         "dataset_split": DATASET_SPLIT,
         "dataset_revision": DATASET_REVISION,
@@ -535,8 +539,8 @@ def _run_config(
     }
 
 
-def _ensure_run_config(config: dict[str, Any]) -> None:
-    path = StoragePath(f"{config['output_path']}/run-config.json")
+def _ensure_run_config(output_path: StoragePath, config: dict[str, Any]) -> None:
+    path = output_path / "run-config.json"
     if path.exists():
         existing = json.loads(path.read_text())
         if existing != config:
@@ -566,7 +570,7 @@ def _write_progress(
         "elapsed_seconds": time.time() - started,
         "updated_at": datetime.now(UTC).isoformat(),
     }
-    StoragePath(f"{collection.output_path}/progress/shard-{collection.shard_index:03d}.json").write_text(
+    (collection.output_path / "progress" / f"shard-{collection.shard_index:03d}.json").write_text(
         json.dumps(progress, indent=2, sort_keys=True)
     )
 
@@ -578,7 +582,7 @@ def _run_collection(
     sampling: SamplingConfig,
 ) -> None:
     config = _run_config(collection, server, sampling)
-    _ensure_run_config(config)
+    _ensure_run_config(collection.output_path, config)
     slices = partition_slices(
         partition_specs(),
         collection.shard_index,
@@ -655,7 +659,7 @@ def _run_collection(
         raise RuntimeError(f"Shard completed {complete_records} of {expected_records} expected records")
 
 
-def prepare_model(output_path: str) -> None:
+def prepare_model(output_path: StoragePath) -> None:
     weights = resolve_model_path(MODEL, MODEL_CACHE_TTL_DAYS, MODEL_REVISION)
     manifest = {
         "model": MODEL,
@@ -664,7 +668,7 @@ def prepare_model(output_path: str) -> None:
         "cache_ttl_days": MODEL_CACHE_TTL_DAYS,
         "prepared_at": datetime.now(UTC).isoformat(),
     }
-    StoragePath(f"{output_path}/model-cache.json").write_text(json.dumps(manifest, indent=2, sort_keys=True))
+    (output_path / "model-cache.json").write_text(json.dumps(manifest, indent=2, sort_keys=True))
     logger.info("Prepared model cache at %s", weights)
 
 
@@ -685,8 +689,10 @@ def run(
         logger.info("GLM-5.2 ready; writing responses to %s", collection.output_path)
         _run_collection(vllm_url, collection, server, sampling)
     finally:
-        with suppress(Exception):
+        try:
             vllm_job.terminate()
+        except Exception:
+            logger.warning("Failed to terminate vLLM child job %s during collector cleanup", vllm_job, exc_info=True)
 
 
 def _positive(parser: argparse.ArgumentParser, name: str, value: int) -> None:
@@ -715,7 +721,7 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     if args.command == "prepare":
-        prepare_model(args.output_path)
+        prepare_model(StoragePath(args.output_path))
         return
 
     for name in ("num_shards", "chunk_size", "concurrency", "max_model_len", "max_num_seqs", "max_tokens"):
@@ -732,7 +738,7 @@ def main() -> None:
     run(
         CollectionConfig(
             run_id=args.run_id,
-            output_path=args.output_path.rstrip("/"),
+            output_path=StoragePath(args.output_path),
             shard_index=args.shard_index,
             num_shards=args.num_shards,
             max_records=args.max_records,

@@ -8,6 +8,7 @@ import json
 import pyarrow as pa
 import pyarrow.parquet as pq
 import requests
+from rigging.filesystem import StoragePath
 
 from experiments.rollout_data import collect_hero_run_4_code_glm52 as collect
 
@@ -72,7 +73,7 @@ def test_run_collection_writes_chunks_and_resumes(tmp_path, monkeypatch):
         )
 
     monkeypatch.setattr(requests, "post", post)
-    output_path = str(tmp_path / "output")
+    output_path = StoragePath(str(tmp_path / "output"))
     collection = collect.CollectionConfig("test", output_path, 0, 1, None, 2, 2)
     server = collect.ServerConfig(65536, 12)
     sampling = collect.SamplingConfig(1.0, 0.95, 16384)
