@@ -125,6 +125,7 @@ class FakeContainerHandle:
         source: str = "",
         attempt_id: int | None = None,
     ) -> bytes:
+        del duration_seconds, profile_type, source, attempt_id
         raise RuntimeError("profiling not supported in FakeContainerHandle")
 
     def cleanup(self) -> None:

@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import pyarrow as pa
 import yaml
 from config import ClusterTarget
 from conftest import bridge_config, healthy_k8s_routes, k8s_api, make_k8s_source
@@ -102,6 +103,9 @@ class _FakeFinelog:
             error="",
         )
 
+    def query(self, sql: str, *, max_rows: int) -> pa.Table:
+        return pa.table({})
+
 
 def test_every_rule_query_url_answers_on_the_bridge():
     """Join each rule's datasource base path with its query URL and GET it for real."""
@@ -168,6 +172,14 @@ def test_finelog_health_alert_pages_critical_after_five_minutes():
     assert rule["labels"]["severity"] == "critical"
     assert rule["data"][0]["datasourceUid"] == "finelog-marin"
     assert rule["data"][0]["model"]["url"] == "/alerts/fleet_health"
+
+
+def test_training_stall_alert_warns_after_five_minutes():
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "training-progress-stalled"]
+    assert rule["for"] == "5m"
+    assert rule["labels"]["severity"] == "warning"
+    assert rule["data"][0]["datasourceUid"] == "finelog-marin"
+    assert rule["data"][0]["model"]["url"] == "/alerts/training_stalls"
 
 
 def test_k8s_dashboard_shows_finelog_fleet_health():

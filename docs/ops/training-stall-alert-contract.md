@@ -1,37 +1,18 @@
-# Training stall alert contract
+# Training stall warning
 
-The stalled-training alert is warning-only. It must not kick, restart, or profile a job. Its operator action is to capture `iris process profile distributed` for each affected task before deciding whether to intervene.
+`TrainingProgressStalled` is a passive, warning-only Grafana rule. It does not kick, restart, or profile a job. Capture `iris process profile distributed` for the affected tasks before deciding whether to intervene.
 
-The proposed Grafana rule evaluates once a minute and is pending for five minutes. It emits one row per running root job only when all conditions hold:
+The rule evaluates once a minute and waits five minutes before notifying. A root job is eligible only while its latest `iris.task_state` row is at most 90 seconds old and reports at least one running task. It then warns when either condition holds:
 
-- Telltale is fresh within 90 seconds.
-- `levanter_step` has not advanced for 15 minutes after a positive step, or a job in `initializing` has stayed at step zero for 45 minutes.
-- `iris.task_state` reports the root job running.
-- At least 75 percent of its GPU nodes have mean `iris.worker.gpu_util_pct >= 90` over five minutes.
+- Training has started and `levanter_progress_time_seconds` is at least 15 minutes old. An explicit training phase or a positive `levanter_step` identifies training.
+- The job has remained running for at least 45 minutes without entering training. Missing Telltale rows count as absent progress rather than suppressing the warning.
 
-The row label `classification=collective_like` when the median `gpu_power_w / gpu_power_limit_w` is below 0.35. Power is evidence only, not an alert gate.
+The first case is labeled `optimizer_progress_stale` or `optimizer_progress_missing`; the second is `initializing_stale` or `telltale_missing`. Finished and progressing jobs emit zero-valued rows so Grafana can resolve their warning state. An idle fleet also emits an explicit zero.
 
-Required metric producers are `levanter_step`, `levanter_progress_time_seconds`, and numeric `levanter_phase` (`initializing=0`, `training=1`, `finished=2`) in Telltale, plus `iris.worker.gpu_util_pct`, `gpu_power_w`, and `gpu_power_limit_w`. The Iris DCGM producer emits the hardware metrics. `TelltaleTracker` initializes phase/progress, records the wall time after its completed-step `train/loss` callback, and marks a finished run.
+The bridge joins the durable streams by `(cluster, root job ID)`: `iris.task_state.root_job_id` equals Telltale `job_id`, and the finelog forwarder stamps both with their origin `cluster`. Each query scans the trailing hour and selects the latest relevant rows. An older running job still has an inferred running age of at least one hour, which is sufficient for both thresholds. No task-to-node mapping or GPU-utilization condition is required.
 
-The Grafana projection groups by the canonical run label `COALESCE(run, job_id)`. Its query must emit `run`, `classification`, and one numeric `value` column. The metric contract is:
+The required Telltale producers are `levanter_step`, `levanter_progress_time_seconds`, and numeric `levanter_phase` (`initializing=0`, `training=1`, `finished=2`). `TelltaleTracker` initializes phase and progress, records wall time after its completed-step `train/loss` callback, and marks a finished run.
 
-```sql
-WITH recent AS (
-  SELECT COALESCE(run, job_id) AS run, name, MAX(ts) AS latest_ts, MAX(value) AS latest_value
-  FROM "telltale"
-  WHERE name IN ('levanter_step', 'levanter_progress_time_seconds', 'levanter_phase')
-    AND ts >= now() - INTERVAL '45 minutes'
-  GROUP BY 1, 2
-)
-SELECT run,
-  CASE WHEN median_power_ratio < 0.35 THEN 'collective_like' ELSE 'stalled' END AS classification,
-  1 AS value
-FROM training_stall_candidates
-WHERE telltale_age_seconds <= 90
-  AND task_state = 'running'
-  AND high_util_node_fraction >= 0.75
-  AND ((phase = 0 AND step = 0 AND progress_age_seconds >= 2700)
-       OR (phase = 1 AND step > 0 AND progress_age_seconds >= 900));
-```
+GPU utilization, power, and power-limit metrics remain diagnostic evidence available in finelog and the capture bundle; they do not gate or classify this warning. This avoids hiding a stalled job when node attribution is unavailable.
 
-`training_stall_candidates` is the required join of the three Telltale values, `iris.task_state`, and five-minute `iris.worker` GPU aggregates by running job. The dashboard and alert provisioning still need this projection wired through the Grafana bridge.
+The rule currently covers CoreWeave controllers whose active root-job state is forwarded into the `marin` finelog hub. GCE controllers do not emit `iris.task_state`, so their jobs are not evaluated by this rule.
