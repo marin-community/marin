@@ -5,7 +5,6 @@ import os
 import socket
 import subprocess
 import tempfile
-import time
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,7 +18,7 @@ from marin.inference.config import DEFAULT_CUDA_VLLM_VERSION
 from marin.inference.model_preparation import resolve_model_path
 from marin.inference.proxy import _reserve_port
 from marin.inference.vllm_server import IsolatedCudaVllm, _poll_until_ready
-from rigging.timing import Duration
+from rigging.timing import Duration, ExponentialBackoff
 
 MODEL = "zai-org/GLM-5.2-FP8"
 MODEL_REVISION = "ba978f7d347eaf65d22f1a86833408afdb953541"
@@ -67,15 +66,23 @@ def wait_for_endpoint_url(name: str, job=None, timeout: float = ENDPOINT_TIMEOUT
     """Return the first resolved URL for an Iris endpoint."""
     ctx = iris_ctx()
     assert ctx is not None
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    resolved: list[str] = []
+
+    def endpoint_ready() -> bool:
         result = ctx.resolver.resolve(name)
         if not result.is_empty:
-            return result.first().url
+            resolved.append(result.first().url)
+            return True
         if job is not None and is_job_finished(job.state):
             raise RuntimeError(f"Job {job} finished before registering endpoint {name!r}")
-        time.sleep(15)
-    raise TimeoutError(f"Timed out waiting for endpoint {name!r}")
+        return False
+
+    ExponentialBackoff(initial=15, maximum=15, jitter=0).wait_until_or_raise(
+        endpoint_ready,
+        timeout=Duration.from_seconds(timeout),
+        error_message=f"Timed out waiting for endpoint {name!r}",
+    )
+    return resolved[0]
 
 
 def _vllm_launch_context() -> tuple[list[str], dict[str, str]]:
@@ -206,19 +213,21 @@ def _serve_ray_head(
     )
     with ctx.registry.registered(launch.ray_endpoint, ray_address):
         try:
-            deadline = time.monotonic() + 900
-            while time.monotonic() < deadline:
+
+            def ray_ready() -> bool:
                 status = subprocess.run(
                     [*ray_command, "status", f"--address={ray_address}"],
                     env=environment,
                     text=True,
                     capture_output=True,
                 )
-                if status.returncode == 0 and f"/{TENSOR_PARALLEL_SIZE}.0 GPU" in status.stdout:
-                    break
-                time.sleep(10)
-            else:
-                raise TimeoutError(f"Ray cluster did not register all {TENSOR_PARALLEL_SIZE} GB200 GPUs")
+                return status.returncode == 0 and f"/{TENSOR_PARALLEL_SIZE}.0 GPU" in status.stdout
+
+            ExponentialBackoff(initial=10, maximum=10, jitter=0).wait_until_or_raise(
+                ray_ready,
+                timeout=Duration.from_seconds(900),
+                error_message=f"Ray cluster did not register all {TENSOR_PARALLEL_SIZE} GB200 GPUs",
+            )
             _run_vllm(ctx, host, http_port, ray_address, vllm_command, environment, weights, launch)
         finally:
             subprocess.run([*ray_command, "stop", "--force"], env=environment, check=False)

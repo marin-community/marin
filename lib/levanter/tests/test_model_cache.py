@@ -124,9 +124,14 @@ def test_cache_hf_model_resumes_partial_snapshot(tmp_path, monkeypatch):
     repo_files = ["config.json", "model.safetensors", "tokenizer.json"]
     downloaded: list[str] = []
 
-    monkeypatch.setattr(model_cache, "list_repo_files", lambda model_id, revision=None: repo_files)
+    def fake_list_repo_files(model_id, revision=None):
+        del model_id, revision
+        return repo_files
+
+    monkeypatch.setattr(model_cache, "list_repo_files", fake_list_repo_files)
 
     def fake_hf_hub_download(model_id, filename, revision=None, local_dir=None):
+        del model_id, revision
         downloaded.append(filename)
         local_path = Path(local_dir, filename)
         local_path.write_text(f"contents of {filename}")

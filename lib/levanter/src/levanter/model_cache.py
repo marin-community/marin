@@ -194,11 +194,11 @@ def _cache_slug(model: str) -> str:
 
 
 def _stream_hf_snapshot(fs: fsspec.AbstractFileSystem, dest: str, model_id: str, revision: str | None) -> None:
-    """Copy every file of HF repo *model_id* into *dest*, one file at a time.
+    """Copy missing files of HF repo *model_id* into *dest*, one file at a time.
 
-    Each file is downloaded to a scratch dir, uploaded to ``dest``, then deleted
-    before the next download, so peak local disk is one file rather than the full
-    repo.
+    Files already present at ``dest`` are preserved. Each missing file is downloaded
+    to a scratch dir, uploaded to ``dest``, then deleted before the next download,
+    so peak local disk is one file rather than the full repo.
     """
     filenames = list_repo_files(model_id, revision=revision)
     logger.info("streaming %d files from HF repo %s into %s", len(filenames), model_id, dest)
