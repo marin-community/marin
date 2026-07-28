@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Pod
+metadata: {name: netinfo-08a, namespace: iris}
+spec:
+  restartPolicy: Never
+  hostNetwork: true
+  nodeName: g8faade
+  containers:
+    - name: probe
+      image: ghcr.io/marin-community/iris-task:latest
+      command: ["python3", "/probe/netinfo.py"]
+      env:
+        - {name: NETINFO_HTTP, value: "https://iris-cw-us-east-02a.oa.dev,https://api.github.com"}
+        - {name: NETINFO_TCP, value: "166.19.9.80:443,192.112.169.151:443,10.184.195.193:29700"}
+      volumeMounts: [{name: probe, mountPath: /probe}]
+      resources:
+        requests: {cpu: "1", memory: 1Gi}
+        limits: {cpu: "2", memory: 2Gi}
+  volumes:
+    - name: probe
+      configMap: {name: netinfo-src}

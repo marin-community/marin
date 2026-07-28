@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: netprobe-02a
+  namespace: iris
+  labels: {app: netprobe}
+spec:
+  restartPolicy: Never
+  hostNetwork: true
+  nodeName: g530e1c
+  containers:
+    - name: probe
+      image: ghcr.io/marin-community/iris-task:latest
+      command: ["python3", "/probe/netprobe.py"]
+      env:
+        - {name: PROBE_SELF, value: "cw-us-east-02a/g530e1c"}
+        - {name: PROBE_TARGETS, value: "10.186.204.33:29700,10.168.219.199:29700"}
+      volumeMounts:
+        - {name: probe, mountPath: /probe}
+      resources:
+        requests: {cpu: "1", memory: 1Gi}
+        limits: {cpu: "2", memory: 2Gi}
+  volumes:
+    - name: probe
+      configMap: {name: netprobe-src}
