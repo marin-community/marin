@@ -2362,3 +2362,47 @@ bash experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit \
     distributed H100 logs contain zero matching IB port/re-registration/retry events.
   - Launch the unchanged BFC-0.75 exact gate there as parent `/dlwh/iris-run-job-20260728-004552`.
     If capacity is gated, wait; do not alter either cluster.
+
+### 2026-07-27 18:36 PDT - USE2A reproduces vector-copy slowdown without IB errors
+- Snapshot:
+  - Parent `/dlwh/iris-run-job-20260728-004552` and child
+    `/dlwh/iris-run-job-20260728-004552/grug-train-jaxpp-use2a-ubx-vectorcopy-l24-e64k4-b8192-s4096-p4m256-precompile-bfc075-r6-20260727`
+    ran clean commit `948922af73`.
+- Result:
+  - UB-X initialized, all ranks actively compiled, `1026/1025/1025/1025` tasks precompiled, the barrier
+    completed, and training finished `10/10`.
+  - The long quiet startup was slow lowering and compilation, not a stuck rank.
+  - No OOM, IB port/retry/client-re-registration event, traceback, task retry, failure, or preemption occurred.
+  - Parent, child, and all four workers succeeded with exit `0`; no resource remains live.
+    [W&B](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-use2a-ubx-vectorcopy-l24-e64k4-b8192-s4096-p4m256-precompile-bfc075-r6-20260727)
+    finished and synced.
+- Steps 2-9:
+
+| Step | Loss | Duration | MFU | Tokens/s |
+| ---: | ---: | ---: | ---: | ---: |
+| 2 | `9.870308` | `144.797s` | `11.6247` | `231,734` |
+| 3 | `9.103478` | `140.803s` | `11.9545` | `238,308` |
+| 4 | `8.457609` | `140.800s` | `11.9547` | `238,313` |
+| 5 | `7.922070` | `140.778s` | `11.9566` | `238,349` |
+| 6 | `7.486253` | `141.263s` | `11.9156` | `237,532` |
+| 7 | `7.141072` | `145.845s` | `11.5412` | `230,069` |
+| 8 | `6.879206` | `140.763s` | `11.9579` | `238,375` |
+| 9 | `6.695065` | `141.037s` | `11.9347` | `237,913` |
+
+| Metric | Mean | P50 | P90 |
+| --- | ---: | ---: | ---: |
+| Duration | `142.011s` | `140.920s` | `145.112s` |
+| MFU | `11.8550` | `11.9446` | `11.9570` |
+| Throughput | `236,324 tok/s` | `238,111 tok/s` | `238,357 tok/s` |
+
+- Interpretation:
+  - USE2A improves mean MFU by `14.34%` over degraded RNO2A BFC-0.75, confirming the RNO2A fabric
+    contamination. It remains `40.43%` below scalar UB-X `19.8996`.
+  - Reproducing approximately `141s` steady steps without IB events falsifies fabric failure as the complete
+    explanation. The remaining controlled differences from the historical scalar result are the vector-copy
+    kernel, BFC fraction `0.75` versus `0.70`, cluster/time, and intervening code.
+- Decision:
+  - Create a detached worktree at pre-vector commit `45095e4c5b`; its source diff through `5517380c52` in
+    `ubx_transport_ffi.cu` is only scalar versus vector copy/mask.
+  - Run the exact scalar-copy control on USE2A with the matched BFC-0.75 configuration as parent
+    `/dlwh/iris-run-job-20260728-013607`. Compare against vector R6 `11.8550`, not only the historical run.
