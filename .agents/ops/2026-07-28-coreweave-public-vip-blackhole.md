@@ -110,7 +110,9 @@ peer remains unreachable for five minutes. This reuses the production
 federation heartbeat, so no Grafana egress address was added to the CoreWeave
 allowlist. Production revision `marin-grafana-00045-svl` began evaluating the
 rule on 2026-07-28 at 17:36 UTC; the first live `ListPeers` request returned
-`200`.
+`200`. The alert fired after its five-minute hold at 17:41 UTC, and Loom
+accepted triage run `ynhzf7xm`. Email delivery remained disabled because the
+optional Grafana SMTP secret was not configured.
 
 ## How OPS.md could have shortened this
 
