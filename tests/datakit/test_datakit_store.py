@@ -20,7 +20,8 @@ import pyarrow.parquet as pq
 from levanter.store.cache import TreeCache
 from marin.datakit.decon import DeconAttributes
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData, FuzzyDupsPerSource
-from marin.processing.classification.deduplication.fuzzy_minhash import MinHashParams
+from marin.processing.classification.deduplication.fuzzy_minhash import MinHashParams, NgramKind
+from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.tokenize.attributes import TokenizedAttrData
 from zephyr.shard_keys import deterministic_hash
 
@@ -32,10 +33,10 @@ CLUSTER_VIEW = 2  # cluster column "cluster_2", clusters {0, 1}
 SPLIT = "train"
 EXEMPLAR = {"input_ids": np.array([0], dtype=np.int32)}
 
-# One doc = (id, cluster, quality_bucket, contaminated, dedup-canonical, token value, length).
+# One doc = (id, cluster, quality_bucket, contaminated, verified duplicate, token value, length).
 # ``quality_bucket`` is the precomputed calibrated bucket the scorer writes as a
 # column (consumed as-is by the store -- no score->bucket mapping).
-# ``canonical``: None -> singleton (absent from dedup, kept); True -> kept; False -> dropped.
+# ``duplicate``: None -> absent from dedup and kept; True -> dropped.
 # Each surviving doc's tokens are a run of its unique ``token`` value so we can
 # recover identity from the cache and confirm dropped docs never appear.
 _Doc = tuple[str, int, int, bool, bool | None, int, int]
@@ -44,11 +45,11 @@ SHARD0: list[_Doc] = [
     ("d0", 0, 0, False, None, 100, 3),  # -> (0, 0)
     ("d1", 0, 4, False, None, 101, 5),  # -> (0, 4)
     ("d2", 1, 2, True, None, 902, 9),  # contaminated -> dropped
-    ("d3", 1, 2, False, True, 103, 2),  # canonical -> (1, 2)
+    ("d3", 1, 2, False, None, 103, 2),  # -> (1, 2)
 ]
 SHARD1: list[_Doc] = [
     ("d4", 0, 0, False, None, 104, 4),  # -> (0, 0)
-    ("d5", 1, 2, False, False, 905, 8),  # non-canonical -> dropped
+    ("d5", 1, 2, False, True, 905, 8),  # verified duplicate -> dropped
     ("d6", 1, 4, False, None, 106, 6),  # -> (1, 4)
     ("d7", 0, 4, False, None, 107, 7),  # -> (0, 4)
 ]
@@ -94,15 +95,15 @@ def _write_shard(dirs: dict[str, str], basename: str, docs: list[_Doc]) -> None:
             }
         ),
     )
-    # Dedup is sparse: only non-singleton docs (canonical True/False) appear.
-    marked = [(d[0], d[4]) for d in docs if d[4] is not None]
+    # Dedup is sparse: only verified duplicate documents appear.
+    marked = [d[0] for d in docs if d[4]]
     if marked:
         _write_parquet(
             f"{dirs['dedup']}/{basename}",
             pa.table(
                 {
-                    "id": [m[0] for m in marked],
-                    "attributes": pa.array([{"is_cluster_canonical": m[1]} for m in marked]),
+                    "id": marked,
+                    "attributes": pa.array([{"dup_doc": True} for _ in marked]),
                 }
             ),
         )
@@ -158,7 +159,15 @@ def _build_inputs(tmp_path):
         )
     }
     dedup = FuzzyDupsAttrData(
-        params=MinHashParams(num_perms=8, num_bands=4, ngram_size=5, seed=0),
+        params=MinHashParams(
+            num_perms=8,
+            num_bands=4,
+            ngram_size=5,
+            ngram_kind=NgramKind.WORD,
+            seed=0,
+        ),
+        verification=FuzzyVerificationParams(),
+        decisions_dir=str(tmp_path / "decisions"),
         sources={main_dir: FuzzyDupsPerSource(attr_dir=dirs["dedup"])},
         counters={},
     )
@@ -210,10 +219,10 @@ def test_store_filters_routes_and_roundtrips(tmp_path):
             assert len(set(arr.tolist())) == 1  # each doc is a run of its unique token value
             all_tokens.extend(arr.tolist())
 
-    assert DROPPED_TOKEN_VALUES.isdisjoint(all_tokens), "contaminated + non-canonical docs must be absent"
+    assert DROPPED_TOKEN_VALUES.isdisjoint(all_tokens), "contaminated + verified duplicate docs must be absent"
     assert artifact.counters["datakit_store/records_in"] == len(SHARD0) + len(SHARD1)
     assert artifact.counters["datakit_store/contaminated_dropped"] == 1
-    assert artifact.counters["datakit_store/dedup_noncanonical_dropped"] == 1
+    assert artifact.counters["datakit_store/dedup_verified_dropped"] == 1
     assert artifact.counters["datakit_store/records_out"] == sum(len(docs) for docs in EXPECTED.values())
     assert artifact.counters["datakit_store/tokens_out"] == sum(
         length for docs in EXPECTED.values() for length in docs.values()

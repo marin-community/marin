@@ -35,7 +35,7 @@ def store_report(output_path: str, store: ClusteredStoreData) -> StageReport:
         "n_sources": len(store.source_names),
         "records_in": store.counters.get("datakit_store/records_in", 0),
         "contaminated_dropped": store.counters.get("datakit_store/contaminated_dropped", 0),
-        "dedup_noncanonical_dropped": store.counters.get("datakit_store/dedup_noncanonical_dropped", 0),
+        "dedup_verified_dropped": store.counters.get("datakit_store/dedup_verified_dropped", 0),
         "records_out": store.counters.get("datakit_store/records_out", 0),
     }
     data = {

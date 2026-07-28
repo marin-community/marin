@@ -42,15 +42,19 @@ td.heat{font-family:var(--mono);font-variant-numeric:tabular-nums}
   <header>
     <h1>__TITLE__</h1>
     <div class="sub" id="meta"></div>
-    <div class="sub" id="sampling"></div>
+    <div class="sub" id="evidence"></div>
   </header>
   <div class="cards" id="cards"></div>
-  <h2>minhash params</h2>
+  <h2>candidate and verifier parameters</h2>
   <div class="panel mono" id="params" style="font-size:12px"></div>
-  <h2>per-source samples</h2>
+  <h2>LSH candidate collision curve</h2>
+  <div class="tablewrap"><table id="lsh"></table></div>
+  <h2>candidate rejection reasons</h2>
+  <div class="tablewrap"><table id="rejections"></table></div>
+  <h2>per-source exact decisions</h2>
   <div class="tablewrap"><table id="sources"></table></div>
-  <h2>cluster size distribution (sampled)</h2>
-  <div class="tablewrap"><table id="hist"></table></div>
+  <h2>exact-score histograms</h2>
+  <div class="tablewrap"><table id="histograms"></table></div>
 </div>
 <script>
 const D = __DATA__;
@@ -59,32 +63,49 @@ const fmt = n => n >= 1e12 ? (n/1e12).toFixed(2)+"T" : n >= 1e9 ? (n/1e9).toFixe
 const pct = x => (100*x).toFixed(2)+"%";
 const S = D.stats;
 document.getElementById("meta").textContent =
-  `${S.n_sources} sources · sampled ≤${D.sample_limit} cluster members/source`;
-document.getElementById("sampling").textContent = D.sampling;
+  `${S.n_sources} sources · ${fmt(S.candidates)} direct-canonical candidates`;
+document.getElementById("evidence").textContent = `candidate evidence: ${D.decisions_dir}`;
 const cards = [
-  ["cluster members", fmt(S.cluster_members), "non-singleton docs"],
-  ["clusters", fmt(S.clusters), "one canonical each"],
-  ["duplicates to drop", fmt(S.duplicates_to_drop), "members − canonicals"],
-  ["singletons skipped", fmt(S.singletons_skipped), "no duplicate found"],
-  ["dup rate", pct(S.dup_rate), "drop / all docs"],
+  ["LSH candidates", fmt(S.candidates), "direct canonical neighbors"],
+  ["verified drops", fmt(S.verified_duplicates), "exact rule passed"],
+  ["candidates kept", fmt(S.rejected_candidates), "exact rule rejected"],
+  ["acceptance rate", pct(S.acceptance_rate), "verified / candidate"],
+  ["transitive kept", fmt(S.transitive_members_kept), "never sent to verifier"],
 ];
 document.getElementById("cards").innerHTML = cards.map(([k,v,d]) =>
   `<div class="card"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("");
 document.getElementById("params").textContent =
-  Object.entries(D.params).map(([k,v]) => `${k}=${v === null ? "none" : v}`).join("  ·  ");
-let srows = `<tr><th>source</th><th>sampled members</th><th>distinct clusters</th></tr>`;
+  "candidate: " + Object.entries(D.params).map(([k,v]) => `${k}=${v === null ? "none" : v}`).join(" · ") +
+  "\nverifier: " + Object.entries(D.verification).map(([k,v]) => `${k}=${v === null ? "none" : v}`).join(" · ");
+const L = D.lsh_collision_curve;
+let lrows = `<tr><th>exact shingle Jaccard</th><th>P(any LSH collision)</th></tr>`;
+for (const point of L.points) {
+  lrows += `<tr><td class="num">${point.similarity.toFixed(2)}</td>` +
+    `<td class="num">${pct(point.collision_probability)}</td></tr>`;
+}
+lrows += `<tr><td>50% collision midpoint</td><td class="num">${L.midpoint.toFixed(4)}</td></tr>`;
+document.getElementById("lsh").innerHTML = lrows;
+let rrows = `<tr><th>reason</th><th>pairs</th><th>candidate share</th></tr>`;
+for (const row of D.rejections) {
+  rrows += `<tr><td>${row.reason}</td><td class="num">${row.pairs.toLocaleString()}</td>` +
+    `<td class="num">${pct(row.pairs / Math.max(1, S.candidates))}</td></tr>`;
+}
+document.getElementById("rejections").innerHTML = rrows;
+let srows = `<tr><th>source</th><th>candidates</th><th>verified</th><th>rejected</th><th>acceptance</th></tr>`;
 for (const s of D.sources) {
   srows += `<tr><td title="${s.source_main_dir}">${s.label}</td>` +
-    `<td class="num">${s.sampled_members.toLocaleString()}</td>` +
-    `<td class="num">${s.sampled_clusters.toLocaleString()}</td></tr>`;
+    `<td class="num">${s.candidates.toLocaleString()}</td>` +
+    `<td class="num">${s.verified.toLocaleString()}</td>` +
+    `<td class="num">${s.rejected.toLocaleString()}</td>` +
+    `<td class="num">${pct(s.acceptance_rate)}</td></tr>`;
 }
 document.getElementById("sources").innerHTML = srows;
-const maxClusters = Math.max(1, ...D.cluster_size_hist.map(h => h.clusters));
-let hrows = `<tr><th>cluster size</th><th>clusters</th><th style="text-align:left">share</th></tr>`;
-for (const h of D.cluster_size_hist) {
-  const w = Math.max(2, Math.round(100 * h.clusters / maxClusters));
-  hrows += `<tr><td class="num">${h.size}</td><td class="num">${h.clusters.toLocaleString()}</td>` +
-    `<td style="text-align:left;min-width:220px"><div style="height:10px;width:${w}%;background:var(--accent);border-radius:3px"></div></td></tr>`;
+let hrows = `<tr><th>metric</th><th>bin</th><th>pairs</th></tr>`;
+for (const [metric, bins] of Object.entries(D.histograms)) {
+  for (const bin of bins) {
+    hrows += `<tr><td>${metric}</td><td class="num">${bin.bin}</td>` +
+      `<td class="num">${bin.pairs.toLocaleString()}</td></tr>`;
+  }
 }
-document.getElementById("hist").innerHTML = hrows;
+document.getElementById("histograms").innerHTML = hrows;
 </script>

@@ -1,41 +1,22 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compute fuzzy duplicate markers from one or more ``MinHashAttrData`` inputs.
+"""Compute verified fuzzy-duplicate markers from MinHash candidates.
 
-Loads MinHash bucket attrs from each input, runs LSH-graph connected
-components globally across all inputs, and writes per-source attribute trees
-annotating every non-singleton cluster member. Each source's attr tree is
-co-partitioned with its underlying ``NormalizedData``, so
-:mod:`marin.processing.classification.consolidate` can join them directly.
-
-Per-document attr rows have schema::
-
-    {
-      id: str,
-      attributes: {
-        dup_cluster_id: str,         # CC component id — shared by all cluster members
-        is_cluster_canonical: bool,  # True for exactly one member per cluster
-      }
-    }
-
-Rows are emitted for every member of a non-singleton cluster (canonical +
-non-canonicals). Singletons get no row, preserving the
-``consolidate(..., keep_if_missing=True)`` pattern. This shape lets the
-canonical-selection policy live in consolidate (e.g. the default
-``keep is_cluster_canonical=True``, or any custom per-cluster reducer) rather
-than being baked in here.
-
-Combining multiple ``MinHashAttrData`` inputs is the foundation for iterative
-global dedup: re-running this job over the union of all per-dataset MinHash
-artifacts produces fresh markers without re-reading any source text.
+MinHash LSH only retrieves candidates. A document is marked ``dup_doc=True``
+after an exact, full-text comparison to the connected component's canonical,
+and only when it shared an LSH bucket directly with that retained canonical.
+Rejected candidates and their exact scores are persisted for audit.
 """
 
 import logging
 import os
+from collections import Counter, defaultdict
 from collections.abc import Iterator
 from typing import Any
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath
@@ -50,8 +31,18 @@ from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.connected_components import connected_components
 from marin.processing.classification.deduplication.dedup_commons import _load_batches
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, MinHashParams
+from marin.processing.classification.deduplication.fuzzy_verification import (
+    FuzzyVerificationParams,
+    VerificationResult,
+    verify_candidate,
+)
 
 logger = logging.getLogger(__name__)
+
+FUZZY_DUPS_CANDIDATE_SCOPE = "direct_canonical_exact_v1"
+_VERIFICATION_COUNTER = "dedup/fuzzy/verification"
+_SCORE_HISTOGRAM_MAX_PERCENT = 100
+_UNIQUE_NGRAM_HISTOGRAM_OVERFLOW_BIN = 33
 
 
 class FuzzyDupsPerSource(BaseModel):
@@ -67,7 +58,7 @@ class FuzzyDupsPerSource(BaseModel):
 
 
 class FuzzyDupsAttrData(BaseModel):
-    """Co-partitioned fuzzy-duplicate marker attrs for one or more sources.
+    """Co-partitioned verified-duplicate markers for one or more sources.
 
     Persisted as the step's ``.artifact``. Load via
     ``Artifact.from_path(step, FuzzyDupsAttrData)``.
@@ -75,13 +66,17 @@ class FuzzyDupsAttrData(BaseModel):
     Attributes:
         version: Schema version of this artifact.
         params: MinHash params; equal to every input's params.
+        verification: Exact verification thresholds.
+        decisions_dir: Parquet evidence for accepted and rejected candidates.
         sources: Mapping from each input's ``MinHashAttrData.source_main_dir``
             to its per-source attr output entry.
         counters: Aggregated zephyr counters across all sources.
     """
 
-    version: str = "v1"
+    version: str = "v2"
     params: MinHashParams
+    verification: FuzzyVerificationParams
+    decisions_dir: str
     sources: dict[str, FuzzyDupsPerSource]
     counters: dict[str, int | float]
 
@@ -134,13 +129,15 @@ def _build_shard_index(inputs: list[MinHashAttrData]) -> tuple[list[dict[str, An
         if not attr_shards:
             raise FileNotFoundError(f"No attr parquet shards under {m.attr_dir}")
         for attr_path in attr_shards:
+            basename = os.path.basename(attr_path)
             entries.append(
                 {
                     "file_idx": len(entries),
                     "attr_path": attr_path,
+                    "source_path": f"{m.source_main_dir.rstrip('/')}/{basename}",
                     "source_main_dir": m.source_main_dir,
                     "source_tag": source_tag[m.source_main_dir],
-                    "basename": os.path.basename(attr_path),
+                    "basename": basename,
                 }
             )
     return entries, source_tag
@@ -193,61 +190,270 @@ def _emit_bucket_records(entries: list[dict[str, Any]]) -> Iterator[dict]:
 _SHARED_ENTRIES_KEY = "fuzzy_dups_entries"
 
 
-def _make_per_shard_writer(output_path: str, counter_prefix: str):
-    """Return a group_by reducer that writes per-shard cluster-annotation parquet files.
+def _candidate_node(record: dict[str, Any]) -> dict[str, Any]:
+    """Reduce one CC node to the fields required for direct-canonical matching."""
+    id_norm = record["id_norm"]
+    component_id = record["component_id"]
+    adjacency = record["adjacency_list"]
+    is_canonical = component_id == id_norm
+    is_singleton = len(adjacency) == 1 and adjacency[0] == id_norm
+    is_direct_candidate = is_canonical or component_id in adjacency
+    if is_singleton:
+        counters.pipeline.update_counter("dedup/fuzzy/document/singletons_skipped", 1)
+    elif not is_direct_candidate:
+        counters.pipeline.update_counter("dedup/fuzzy/document/transitive_members_kept", 1)
+    return {
+        "doc_id": _strip_cc_prefix(record["record_id"]),
+        "id_norm": id_norm,
+        "component_id": component_id,
+        "file_idx": record["file_idx"],
+        "is_canonical": is_canonical,
+        "canonical_order": 0 if is_canonical else 1,
+        "emit": not is_singleton and is_direct_candidate,
+    }
 
-    Skips singletons entirely. For every non-singleton cluster member, writes
-    ``{id, attributes: {dup_cluster_id, is_cluster_canonical}}``. Rows are
-    already sorted by ``id`` thanks to the upstream ``group_by(sort_by=id)``.
 
-    The ``entries`` list is loaded via ``zephyr_worker_ctx().get_shared`` so it
-    is shipped to workers once (via Zephyr shared-data) rather than captured
-    in this closure and re-pickled per ``pull_task`` RPC.
-    """
-
-    def aggregate(file_idx: int, records: Iterator[dict]) -> dict:
-        entries = zephyr_worker_ctx().get_shared(_SHARED_ENTRIES_KEY)
-        entry = entries[file_idx]
-        out_path = f"{output_path}/outputs/{entry['source_tag']}/{entry['basename']}"
-
-        cluster_members = 0
-        canonicals = 0
-
-        def cluster_member_rows():
-            nonlocal cluster_members, canonicals
-            for record in records:
-                if record["is_singleton"]:
-                    counters.pipeline.update_counter(f"{counter_prefix}/singletons_skipped", 1)
-                    continue
-                cluster_members += 1
-                counters.pipeline.update_counter(f"{counter_prefix}/cluster_members", 1)
-                if record["is_canonical"]:
-                    canonicals += 1
-                    counters.pipeline.update_counter(f"{counter_prefix}/canonicals", 1)
-                yield {
-                    "id": record["id"],
-                    "attributes": {
-                        "dup_cluster_id": record["component_id"],
-                        "is_cluster_canonical": record["is_canonical"],
-                    },
-                }
-
-        result = write_parquet_file(cluster_member_rows(), out_path)
-        return {
-            **result,
-            "file_idx": file_idx,
-            "source_tag": entry["source_tag"],
-            "cluster_members": cluster_members,
-            "canonicals": canonicals,
+def _candidate_pairs(component_id: str, records: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+    """Pair every direct member with the component canonical."""
+    canonical = next(records)
+    if not canonical["is_canonical"] or canonical["id_norm"] != component_id:
+        raise AssertionError(f"Component {component_id} did not start with its canonical")
+    for member in records:
+        if member["is_canonical"]:
+            raise AssertionError(f"Component {component_id} has multiple canonicals")
+        yield {
+            "pair_id": member["id_norm"],
+            "component_id": component_id,
+            "member_id": member["doc_id"],
+            "member_file_idx": member["file_idx"],
+            "canonical_id": canonical["doc_id"],
+            "canonical_file_idx": canonical["file_idx"],
         }
 
+
+def _candidate_text_requests(pair: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    for role, role_order in (("canonical", 0), ("member", 1)):
+        yield {
+            **pair,
+            "role": role,
+            "role_order": role_order,
+            "file_idx": pair[f"{role}_file_idx"],
+            "document_id": pair[f"{role}_id"],
+        }
+
+
+def _rows(path: str, columns: list[str]) -> Iterator[dict[str, Any]]:
+    for batch in _load_batches(path, columns=columns):
+        yield from batch.to_pylist()
+
+
+def _requested_texts(file_idx: int, requests: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+    """Resolve requests against the MinHash shard's order-preserving source subsequence."""
+    entry = zephyr_worker_ctx().get_shared(_SHARED_ENTRIES_KEY)[file_idx]
+    requests_by_id: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for request in requests:
+        requests_by_id[request["document_id"]].append(request)
+
+    minhash_rows = iter(_rows(entry["attr_path"], ["id", "buckets"]))
+    minhash_row = next(minhash_rows, None)
+    for source_row in _rows(entry["source_path"], ["id", "text"]):
+        if minhash_row is None or source_row["id"] != minhash_row["id"]:
+            if source_row["id"] in requests_by_id:
+                raise AssertionError(f"Missing MinHash buckets for {source_row['id']} in {entry['attr_path']}")
+            continue
+
+        matching_requests = requests_by_id.pop(source_row["id"], ())
+        for request in matching_requests:
+            counters.pipeline.update_counter(f"{_VERIFICATION_COUNTER}/text_reads", 1)
+            counters.pipeline.update_counter(f"{_VERIFICATION_COUNTER}/text_chars", len(source_row["text"]))
+            yield {
+                **request,
+                "text": source_row["text"],
+                "buckets": minhash_row["buckets"],
+            }
+        minhash_row = next(minhash_rows, None)
+
+    if minhash_row is not None:
+        raise AssertionError(f"MinHash row {minhash_row['id']} is absent from {entry['source_path']}")
+
+    if requests_by_id:
+        missing_id = min(requests_by_id)
+        raise AssertionError(f"Missing source text and MinHash buckets for {missing_id} in {entry['source_path']}")
+
+
+def _result_fields(result: VerificationResult) -> dict[str, Any]:
+    return {
+        "accepted": result.accepted,
+        "rejection": result.rejection.value if result.rejection is not None else None,
+        "member_chars": result.member_chars,
+        "canonical_chars": result.canonical_chars,
+        "member_tokens": result.member_tokens,
+        "canonical_tokens": result.canonical_tokens,
+        "member_ngrams": result.member_ngrams,
+        "canonical_ngrams": result.canonical_ngrams,
+        "shared_ngrams": result.shared_ngrams,
+        "member_unique_ngrams": result.member_unique_ngrams,
+        "member_containment": result.member_containment,
+        "jaccard": result.jaccard,
+        "under_tokenized": result.under_tokenized,
+        "char_jaccard": result.char_jaccard,
+    }
+
+
+def _score_bin(score: float) -> str:
+    return f"{min(int(score * 100), _SCORE_HISTOGRAM_MAX_PERCENT):03d}"
+
+
+def _make_candidate_verifier(params: FuzzyVerificationParams):
+    def verify(pair_id: str, pieces: Iterator[dict[str, Any]]) -> dict[str, Any]:
+        canonical = next(pieces)
+        member = next(pieces)
+        if canonical["role"] != "canonical" or member["role"] != "member":
+            raise AssertionError(f"Candidate {pair_id} text pieces are out of order")
+        if next(pieces, None) is not None:
+            raise AssertionError(f"Candidate {pair_id} has more than two text pieces")
+
+        result = verify_candidate(member["text"], canonical["text"], params)
+        shared_buckets = len(set(member["buckets"]) & set(canonical["buckets"]))
+        if not shared_buckets:
+            raise AssertionError(f"Direct candidate {pair_id} has no shared LSH bucket")
+
+        entries = zephyr_worker_ctx().get_shared(_SHARED_ENTRIES_KEY)
+        member_entry = entries[member["member_file_idx"]]
+        canonical_entry = entries[canonical["canonical_file_idx"]]
+        rejection = result.rejection.value if result.rejection is not None else "accepted"
+        counters.pipeline.update_counter(f"{_VERIFICATION_COUNTER}/candidates", 1)
+        counters.pipeline.update_counter(f"{_VERIFICATION_COUNTER}/decision/{rejection}", 1)
+        counters.pipeline.update_counter(
+            f"{_VERIFICATION_COUNTER}/source/{member_entry['source_tag']}/decision/{rejection}",
+            1,
+        )
+        counters.pipeline.update_counter(
+            f"{_VERIFICATION_COUNTER}/histogram/member_containment/{_score_bin(result.member_containment)}",
+            1,
+        )
+        counters.pipeline.update_counter(
+            f"{_VERIFICATION_COUNTER}/histogram/jaccard/{_score_bin(result.jaccard)}",
+            1,
+        )
+        counters.pipeline.update_counter(
+            f"{_VERIFICATION_COUNTER}/histogram/member_unique/"
+            f"{min(result.member_unique_ngrams, _UNIQUE_NGRAM_HISTOGRAM_OVERFLOW_BIN)}",
+            1,
+        )
+        counters.pipeline.update_counter(
+            f"{_VERIFICATION_COUNTER}/histogram/shared_buckets/{shared_buckets}",
+            1,
+        )
+        return {
+            "pair_id": pair_id,
+            "component_id": member["component_id"],
+            "member_id": member["member_id"],
+            "member_file_idx": member["member_file_idx"],
+            "member_source_main_dir": member_entry["source_main_dir"],
+            "canonical_id": canonical["canonical_id"],
+            "canonical_file_idx": canonical["canonical_file_idx"],
+            "canonical_source_main_dir": canonical_entry["source_main_dir"],
+            "shared_buckets": shared_buckets,
+            "verification_rule": params.rule_version,
+            **_result_fields(result),
+        }
+
+    return verify
+
+
+def _marker_records(decision: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    yield {
+        "marker_id": decision["member_id"],
+        "marker_file_idx": decision["member_file_idx"],
+        "attributes": {
+            "dup_doc": True,
+            "dup_cluster_id": decision["component_id"],
+            "dup_representative_id": decision["canonical_id"],
+            "dup_verifier_version": decision["verification_rule"],
+            "dup_shared_buckets": decision["shared_buckets"],
+            "dup_member_containment": decision["member_containment"],
+            "dup_jaccard": decision["jaccard"],
+            "dup_member_unique_ngrams": decision["member_unique_ngrams"],
+            "dup_under_tokenized": decision["under_tokenized"],
+            "dup_char_jaccard": decision["char_jaccard"],
+        },
+    }
+
+
+def _make_marker_writer(output_path: str):
+    def aggregate(file_idx: int, markers: Iterator[dict[str, Any]]) -> dict[str, Any]:
+        entry = zephyr_worker_ctx().get_shared(_SHARED_ENTRIES_KEY)[file_idx]
+        out_path = f"{output_path}/outputs/{entry['source_tag']}/{entry['basename']}"
+        count = 0
+
+        def marker_rows() -> Iterator[dict[str, Any]]:
+            nonlocal count
+            previous_id = None
+            previous_attributes = None
+            for marker in markers:
+                if marker["marker_id"] == previous_id:
+                    if marker["attributes"] != previous_attributes:
+                        raise AssertionError(f"Conflicting verified markers for {previous_id}")
+                    continue
+                previous_id = marker["marker_id"]
+                previous_attributes = marker["attributes"]
+                if marker["attributes"]["dup_doc"]:
+                    count += 1
+                    counters.pipeline.update_counter("dedup/fuzzy/document/verified_duplicates", 1)
+                yield {"id": marker["marker_id"], "attributes": marker["attributes"]}
+
+        result = write_parquet_file(marker_rows(), out_path)
+        return {**result, "file_idx": file_idx, "verified_duplicates": count}
+
     return aggregate
+
+
+_MARKER_SCHEMA = pa.schema(
+    [
+        pa.field("id", pa.string()),
+        pa.field(
+            "attributes",
+            pa.struct(
+                [
+                    pa.field("dup_doc", pa.bool_()),
+                    pa.field("dup_cluster_id", pa.string()),
+                    pa.field("dup_representative_id", pa.string()),
+                    pa.field("dup_verifier_version", pa.string()),
+                    pa.field("dup_shared_buckets", pa.int64()),
+                    pa.field("dup_member_containment", pa.float64()),
+                    pa.field("dup_jaccard", pa.float64()),
+                    pa.field("dup_member_unique_ngrams", pa.int64()),
+                    pa.field("dup_under_tokenized", pa.bool_()),
+                    pa.field("dup_char_jaccard", pa.float64()),
+                ]
+            ),
+        ),
+    ]
+)
+
+
+def _make_empty_marker_writer(output_path: str):
+    def ensure_outputs(entries: list[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+        for entry in entries:
+            out_path = f"{output_path}/outputs/{entry['source_tag']}/{entry['basename']}"
+            if StoragePath(out_path).exists():
+                yield {"file_idx": entry["file_idx"], "created": False}
+                continue
+            StoragePath(os.path.dirname(out_path)).mkdirs(exist_ok=True)
+            with StoragePath(out_path).open("wb") as stream:
+                pq.write_table(pa.Table.from_pylist([], schema=_MARKER_SCHEMA), stream)
+            counters.pipeline.update_counter("dedup/fuzzy/document/empty_attr_files", 1)
+            yield {"file_idx": entry["file_idx"], "created": True}
+
+    return ensure_outputs
 
 
 def compute_fuzzy_dups_attrs(
     *,
     inputs: list[MinHashAttrData],
     output_path: str,
+    verification_params: FuzzyVerificationParams | None = None,
     cc_max_iterations: int = 10,
     cc_resume: bool = False,
     max_parallelism: int = MAX_WORKERS_PER_JOB,
@@ -256,25 +462,20 @@ def compute_fuzzy_dups_attrs(
     map_task_resources: ResourceConfig | None = None,
     reduce_task_resources: ResourceConfig | None = None,
 ) -> FuzzyDupsAttrData:
-    """Mark fuzzy-duplicate cluster membership across one or more ``MinHashAttrData`` inputs.
+    """Mark only direct candidates that pass exact full-text verification.
 
-    All inputs must share identical :class:`MinHashParams`. The job builds a
-    global LSH bucket graph across every input shard, runs connected
-    components, and emits a per-source attribute tree under
-    ``<output_path>/outputs/source_NNN/`` with one parquet file per source
-    shard (filenames preserved from the source). Each row annotates one
-    cluster member with ``{id: str, attributes: {dup_cluster_id: str,
-    is_cluster_canonical: bool}}``; singletons are omitted.
-
-    Exactly one member per cluster has ``is_cluster_canonical=True`` — the
-    one CC's Hash-to-Min picked as the natural canonical (min ``id_norm``).
-    Consolidate may honor that flag (default policy) or ignore it and apply
-    a custom per-``dup_cluster_id`` policy.
+    Connected components identify a deterministic retained canonical, but
+    transitive members are never deleted. Each direct canonical neighbor is
+    joined back to full normalized text and scored exactly. Accepted members
+    receive a sparse ``dup_doc=True`` marker with the representative ID and
+    scores; rejected decisions are retained under ``metadata/decisions``.
 
     Args:
         inputs: ``MinHashAttrData`` artifacts to fuzzy-dedup together.
         output_path: Output root. Per-source attr trees land under
             ``<output_path>/outputs/source_NNN/``.
+        verification_params: Exact verifier thresholds. Defaults to the
+            precision-first exact token-subset rule.
         cc_max_iterations: Max iterations for connected components.
         max_parallelism: Worker count for the ZephyrContext.
         worker_resources: Per-worker resource request. Required when
@@ -284,22 +485,12 @@ def compute_fuzzy_dups_attrs(
         reduce_task_resources: ResourceConfig for reduce-stage tasks (e.g.
             the per-shard ``group_by`` writer).
 
-    Returns:
-        :class:`FuzzyDupsAttrData` describing per-source attr directories,
-        the shared MinHash params, and aggregated counters.
-
-    Canonical selection is deterministic (the min content-hash per component) and
-    reproducible across executor counts: ``connected_components`` sorts each LSH
-    bucket by ``id_norm`` so the graph topology does not depend on shuffle order.
-    If CC does not converge within ``cc_max_iterations`` the result is still
-    deterministic but *incomplete* (some near-dup clusters stay split); a warning
-    is logged and the caller can raise ``cc_max_iterations`` for complete dedup.
-
     Raises:
         ValueError: If inputs is empty or input params disagree.
         FileNotFoundError: If any input ``attr_dir`` is missing parquet shards.
     """
     params = _validate_inputs(inputs)
+    verification = verification_params or FuzzyVerificationParams()
     entries, source_tag = _build_shard_index(inputs)
 
     logger.info(
@@ -355,52 +546,71 @@ def compute_fuzzy_dups_attrs(
         )
 
     ctx.put(_SHARED_ENTRIES_KEY, entries)
-    aggregator = _make_per_shard_writer(output_path, counter_prefix="dedup/fuzzy/document")
-
-    # CC's Hash-to-Min guarantees component_id == min(id_norm) across a cluster,
-    # so `component_id == id_norm` cheaply identifies the natural canonical.
-    # `preserve_singletons=True` wires singletons as self-links, so a node is a
-    # singleton iff its adjacency_list is exactly [id_norm] — no cluster peers.
-    shard_pipeline = (
+    decisions_dir = f"{output_path}/metadata/decisions"
+    verification_pipeline = (
         Dataset.from_list(cc_files)
         .load_parquet()
-        .map(
-            lambda r: {
-                "id": _strip_cc_prefix(r["record_id"]),
-                "component_id": r["component_id"],
-                "is_canonical": r["component_id"] == r["id_norm"],
-                "is_singleton": len(r["adjacency_list"]) == 1 and r["adjacency_list"][0] == r["id_norm"],
-                "file_idx": r["file_idx"],
-            }
+        .map(_candidate_node)
+        .filter(lambda record: record["emit"])
+        .group_by(
+            lambda record: record["component_id"],
+            sort_by=lambda record: (record["canonical_order"], record["id_norm"]),
+            reducer=_candidate_pairs,
+        )
+        .flat_map(_candidate_text_requests)
+        .group_by(
+            lambda request: request["file_idx"],
+            sort_by=lambda request: (request["document_id"], request["pair_id"], request["role_order"]),
+            reducer=_requested_texts,
         )
         .group_by(
-            lambda r: r["file_idx"],
-            sort_by=lambda r: r["id"],
-            reducer=aggregator,
+            lambda piece: piece["pair_id"],
+            sort_by=lambda piece: piece["role_order"],
+            reducer=_make_candidate_verifier(verification),
+        )
+        .write_parquet(f"{decisions_dir}/part-{{shard:05d}}-of-{{total:05d}}.parquet")
+    )
+    verification_outcome = ctx.execute(verification_pipeline, verbose=True)
+    decision_files = sorted(str(path) for path in StoragePath(f"{decisions_dir}/*.parquet").glob())
+
+    marker_pipeline = (
+        Dataset.from_list(decision_files)
+        .load_parquet()
+        .filter(lambda decision: decision["accepted"])
+        .flat_map(_marker_records)
+        .group_by(
+            lambda marker: marker["marker_file_idx"],
+            sort_by=lambda marker: marker["marker_id"],
+            reducer=_make_marker_writer(output_path),
         )
     )
+    marker_outcome = ctx.execute(marker_pipeline, verbose=True)
+    empty_outcome = ctx.execute(
+        Dataset.from_list(entry_groups).flat_map(_make_empty_marker_writer(output_path)),
+        verbose=True,
+    )
 
-    outcome = ctx.execute(shard_pipeline, verbose=True)
-    shard_results = outcome.results
-
-    # Aggregate per-source counters across shards for the final artifact.
     sources: dict[str, FuzzyDupsPerSource] = {
         src_dir: FuzzyDupsPerSource(attr_dir=f"{output_path}/outputs/{tag}") for src_dir, tag in source_tag.items()
     }
-
-    cluster_members = sum(r["cluster_members"] for r in shard_results)
-    clusters = sum(r["canonicals"] for r in shard_results)  # one canonical per cluster
+    combined_counters: Counter[str] = Counter()
+    for outcome in (verification_outcome, marker_outcome, empty_outcome):
+        combined_counters.update(outcome.counters)
+    candidates = int(combined_counters[f"{_VERIFICATION_COUNTER}/candidates"])
+    verified = int(combined_counters[f"{_VERIFICATION_COUNTER}/decision/accepted"])
     logger.info(
-        "Fuzzy dups: %d cluster members across %d clusters (non-canonicals to drop by default: %d)",
-        cluster_members,
-        clusters,
-        cluster_members - clusters,
+        "Fuzzy dups: verified %d/%d direct-canonical candidates; retained %d rejected candidates",
+        verified,
+        candidates,
+        candidates - verified,
     )
 
     return FuzzyDupsAttrData(
         params=params,
+        verification=verification,
+        decisions_dir=decisions_dir,
         sources=sources,
-        counters=dict(outcome.counters),
+        counters=dict(combined_counters),
     )
 
 
@@ -408,6 +618,7 @@ def compute_fuzzy_dups_attrs_step(
     *,
     name: str,
     minhash_steps: list[StepSpec],
+    verification_params: FuzzyVerificationParams | None = None,
     cc_max_iterations: int = 10,
     max_parallelism: int,
     worker_resources: ResourceConfig | None = None,
@@ -415,17 +626,23 @@ def compute_fuzzy_dups_attrs_step(
     override_output_path: str | None = None,
 ) -> StepSpec:
     """Create a StepSpec that computes fuzzy duplicate attrs from ``MinHashAttrData`` step outputs."""
+    verification = verification_params or FuzzyVerificationParams()
     return StepSpec(
         name=name,
         deps=list(minhash_steps),
         fn=lambda output_path: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(s.output_path, MinHashAttrData) for s in minhash_steps],
             output_path=output_path,
+            verification_params=verification,
             cc_max_iterations=cc_max_iterations,
             max_parallelism=max_parallelism,
             worker_resources=worker_resources,
             coordinator_resources=coordinator_resources,
         ),
-        hash_attrs={"cc_max_iterations": cc_max_iterations},
+        hash_attrs={
+            "candidate_scope": FUZZY_DUPS_CANDIDATE_SCOPE,
+            "cc_max_iterations": cc_max_iterations,
+            "verification": verification.model_dump(),
+        },
         override_output_path=override_output_path,
     )

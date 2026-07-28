@@ -27,6 +27,7 @@ from marin.processing.classification.consolidate import (
     consolidate,
 )
 from marin.processing.classification.deduplication.fuzzy_dups import (
+    FUZZY_DUPS_CANDIDATE_SCOPE,
     FuzzyDupsAttrData,
     compute_fuzzy_dups_attrs,
 )
@@ -34,6 +35,7 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashAttrData,
     compute_minhash_attrs,
 )
+from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 from rigging.filesystem import (
     StoragePath,
@@ -115,13 +117,19 @@ def build_steps(run_id: str) -> list[StepSpec]:
         override_output_path=f"{base}/minhash",
     )  # ~1,380 output shards
 
+    verification = FuzzyVerificationParams()
     deduped = StepSpec(
         name="datakit-nemotron-smoke/fuzzy_dups",
         deps=[minhash],
-        hash_attrs={"cc_max_iterations": 3},
+        hash_attrs={
+            "candidate_scope": FUZZY_DUPS_CANDIDATE_SCOPE,
+            "verification": verification.model_dump(),
+            "cc_max_iterations": 3,
+        },
         fn=lambda output_path: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(minhash.output_path, MinHashAttrData)],
             output_path=output_path,
+            verification_params=verification,
             cc_max_iterations=3,
             worker_resources=(resources := ResourceConfig(cpu=16, ram="160g", disk="32g")),
             map_task_resources=resources.scale(1 / 16),
@@ -139,11 +147,11 @@ def build_steps(run_id: str) -> list[StepSpec]:
             filetype="parquet",
             filters=[
                 FilterConfig(
-                    type=FilterType.KEEP_DOC,
+                    type=FilterType.REMOVE_DOC,
                     attribute_path=read_artifact(deduped.output_path, FuzzyDupsAttrData)
                     .sources[read_artifact(normalized.output_path, NormalizedData).main_output_dir]
                     .attr_dir,
-                    name="is_cluster_canonical",
+                    name="dup_doc",
                     attribute_filetype="parquet",
                     keep_if_missing=True,
                 ),

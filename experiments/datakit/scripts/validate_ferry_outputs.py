@@ -10,8 +10,8 @@ Run after the iris job for the datakit smoke ferry has completed.
 Checks the persisted output invariants:
   download (14 files, ~9.7M rows)
   → normalize (106 files under outputs/main, ~9.3M rows)
-  → fuzzy_dups (106 cluster-member attr files per source)
-  → consolidate (106 files, normalize - non_canonical rows)
+  → fuzzy_dups (106 verified-marker attr files per source)
+  → consolidate (106 files, normalize - verified duplicate rows)
   → tokenize (cache ledger rows == consolidate rows)
 
 Successful ferry completion covers the minhash step, which has no additional
@@ -42,14 +42,16 @@ NORMALIZE_EXPECTED_FILES = 106
 NORMALIZE_MIN_ROWS = 8_000_000  # observed: 9,268,156
 NORMALIZE_REQUIRED_COLUMNS = {"id", "text", "url", "source_id", "token_count"}
 
-# --- Fuzzy dups: one cluster-member attr file per normalize shard per source ---
+# --- Fuzzy dups: one sparse verified-marker attr file per normalize shard per source ---
 # The smoke ferry runs fuzzy dedup over a single source (fineweb-edu sample/10BT).
 FUZZY_DUPS_EXPECTED_SOURCES = 1
 FUZZY_DUPS_EXPECTED_FILES_PER_SOURCE = 106
 FUZZY_DUPS_REQUIRED_COLUMNS = {"id", "attributes"}
-# Non-canonicals are the rows consolidate will drop. Should be a non-trivial
-# but bounded fraction. Reference (old exact-dedup pipeline): 286,263 / 9,268,156 = 3.1%.
-FUZZY_DUPS_DROP_MIN_FRACTION = 0.005  # at least 0.5% dropped
+FUZZY_DUPS_CANDIDATE_COUNTER = "dedup/fuzzy/verification/candidates"
+FUZZY_DUPS_ACCEPTED_COUNTER = "dedup/fuzzy/verification/decision/accepted"
+# Verified duplicates are the rows consolidate will drop. Exact verification is
+# intentionally conservative, so require activity without prescribing a rate.
+FUZZY_DUPS_DROP_MIN_COUNT = 1
 FUZZY_DUPS_DROP_MAX_FRACTION = 0.50  # at most 50% dropped
 
 # --- Consolidate: same file count, strictly fewer rows than normalize ---
@@ -123,27 +125,25 @@ def _validate_normalize(base: str, download_rows: int) -> int:
     return rows
 
 
-def _count_canonicals(files: list[str]) -> int:
-    """Sum is_cluster_canonical=True rows across fuzzy-dups attr files."""
+def _count_verified_duplicates(files: list[str]) -> int:
+    """Sum dup_doc=True rows across fuzzy-duplicate attribute files."""
     total = 0
     for path in files:
         with StoragePath(path).open("rb") as f:
             tbl = pq.ParquetFile(f).read(columns=["attributes"])
         if tbl.num_rows == 0:
             continue
-        canonical = tbl.column("attributes").combine_chunks().field("is_cluster_canonical")
-        total += int(pc.sum(canonical).as_py() or 0)
+        duplicate = tbl.column("attributes").combine_chunks().field("dup_doc")
+        total += int(pc.sum(duplicate).as_py() or 0)
     return total
 
 
 def _validate_fuzzy_dups(base: str, normalize_rows: int) -> int:
     """Validate the fuzzy-dups step and return the number of rows consolidate will drop.
 
-    Fuzzy dedup writes one cluster-member parquet per normalize shard, per source,
-    under ``<attr_dir>/*.parquet`` with schema ``{id, attributes: {dup_cluster_id,
-    is_cluster_canonical}}``. Singletons are omitted, and exactly one cluster
-    member is flagged ``is_cluster_canonical=True``. Consolidate's default policy
-    keeps canonicals and singletons, so non-canonicals == rows dropped.
+    Fuzzy dedup writes one sparse marker parquet per normalize shard and source.
+    ``dup_doc=True`` means the row passed direct full-text verification and is
+    the exact set consolidate removes.
     """
     dedup = read_artifact(f"{base}/fuzzy_dups", FuzzyDupsAttrData)
     if len(dedup.sources) != FUZZY_DUPS_EXPECTED_SOURCES:
@@ -155,32 +155,30 @@ def _validate_fuzzy_dups(base: str, normalize_rows: int) -> int:
 
     _check_schema(files[0], FUZZY_DUPS_REQUIRED_COLUMNS)
 
-    cluster_members = _count_parquet_rows(files)
-    canonicals = _count_canonicals(files)
-    if canonicals > cluster_members:
-        raise SystemExit(
-            f"Fuzzy dups: {canonicals} canonicals > {cluster_members} cluster members — "
-            "at most one canonical per cluster must hold"
-        )
-    dropped = cluster_members - canonicals
+    marker_rows = _count_parquet_rows(files)
+    dropped = _count_verified_duplicates(files)
+    candidates = int(dedup.counters.get(FUZZY_DUPS_CANDIDATE_COUNTER, 0))
+    accepted = int(dedup.counters.get(FUZZY_DUPS_ACCEPTED_COUNTER, 0))
+    if marker_rows != dropped:
+        raise SystemExit(f"Fuzzy dups: {marker_rows} marker rows != {dropped} dup_doc=True rows")
+    if dropped != accepted:
+        raise SystemExit(f"Fuzzy dups: {dropped} persisted verified duplicates != {accepted} accepted decisions")
+    if candidates < accepted:
+        raise SystemExit(f"Fuzzy dups: {accepted} accepted decisions > {candidates} candidates")
     fraction = dropped / normalize_rows if normalize_rows > 0 else 0
 
-    if fraction < FUZZY_DUPS_DROP_MIN_FRACTION:
-        raise SystemExit(
-            f"Fuzzy dups: only {dropped} non-canonicals ({fraction:.1%} of {normalize_rows}) — "
-            f"expected >= {FUZZY_DUPS_DROP_MIN_FRACTION:.1%}"
-        )
+    if dropped < FUZZY_DUPS_DROP_MIN_COUNT:
+        raise SystemExit(f"Fuzzy dups: no verified duplicates among {normalize_rows} normalized rows")
     if fraction > FUZZY_DUPS_DROP_MAX_FRACTION:
         raise SystemExit(
-            f"Fuzzy dups: {dropped} non-canonicals ({fraction:.1%} of {normalize_rows}) — "
+            f"Fuzzy dups: {dropped} verified duplicates ({fraction:.1%} of {normalize_rows}) — "
             f"expected <= {FUZZY_DUPS_DROP_MAX_FRACTION:.0%}, something is wrong"
         )
 
     logger.info(
-        "Fuzzy dups OK: %d files, %d cluster members, %d canonicals → %d non-canonicals (%.1f%% of %d docs)",
+        "Fuzzy dups OK: %d files, %d candidates, %d verified duplicates (%.1f%% of %d docs)",
         len(files),
-        cluster_members,
-        canonicals,
+        candidates,
         dropped,
         100 * fraction,
         normalize_rows,
@@ -201,8 +199,7 @@ def _validate_consolidate(base: str, normalize_rows: int, dropped_rows: int) -> 
             f"Consolidate: {rows} rows >= normalize {normalize_rows} rows — dedup removal did not reduce row count"
         )
 
-    # Exact expected count: consolidate drops non-canonical cluster members; all
-    # other normalize rows (canonicals + singletons) pass through.
+    # Exact expected count: consolidate drops only verified marker rows.
     expected = normalize_rows - dropped_rows
     if rows != expected:
         raise SystemExit(

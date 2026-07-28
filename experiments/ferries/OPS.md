@@ -48,4 +48,9 @@ SMOKE_RUN_ID=$SMOKE_RUN_ID \
   uv run python experiments/datakit/scripts/validate_ferry_outputs.py
 ```
 
-Confirms row counts and dedup fraction across stages.
+Confirms row counts across stages and checks that fuzzy dedup's sparse
+`dup_doc=True` markers exactly match its accepted-verification counter and the
+rows removed by consolidation. Candidate counts, rejection reasons, exact-score
+histograms, per-source acceptance rates, and the LSH collision curve are in the
+dedup stage report; the full accepted/rejected evidence is under
+`$MARIN_PREFIX/datakit-smoke/$SMOKE_RUN_ID/fuzzy_dups/metadata/decisions/`.

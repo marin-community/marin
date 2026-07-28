@@ -23,6 +23,7 @@ from marin.processing.classification.consolidate import (
     consolidate,
 )
 from marin.processing.classification.deduplication.fuzzy_dups import (
+    FUZZY_DUPS_CANDIDATE_SCOPE,
     FuzzyDupsAttrData,
     compute_fuzzy_dups_attrs,
 )
@@ -30,6 +31,7 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashAttrData,
     compute_minhash_attrs,
 )
+from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 from rigging.filesystem import StoragePath, marin_temp_bucket
 from rigging.log_setup import configure_logging
@@ -75,15 +77,22 @@ def build_steps(run_id: str) -> list[StepSpec]:
         override_output_path=f"{base}/minhash",
     )
 
-    # Fuzzy dups: connected components over the MinHash bucket graph.
+    # Fuzzy dups: connected components retrieve direct candidates; exact
+    # full-text verification decides which rows consolidation removes.
     # max_parallelism=128 mirrors the old dedup tuning for 10BT (~106 shards).
+    verification = FuzzyVerificationParams()
     deduped = StepSpec(
         name="datakit-smoke/fuzzy_dups",
         deps=[minhash],
-        hash_attrs={"cc_max_iterations": 3},
+        hash_attrs={
+            "candidate_scope": FUZZY_DUPS_CANDIDATE_SCOPE,
+            "verification": verification.model_dump(),
+            "cc_max_iterations": 3,
+        },
         fn=lambda output_path: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(minhash.output_path, MinHashAttrData)],
             output_path=output_path,
+            verification_params=verification,
             max_parallelism=128,
             cc_max_iterations=3,
             worker_resources=ResourceConfig(cpu=1, ram="16g", disk="30g"),
@@ -99,15 +108,13 @@ def build_steps(run_id: str) -> list[StepSpec]:
             output_path=output_path,
             filetype="parquet",
             filters=[
-                # Default fuzzy-dedup policy: keep the CC-picked canonical of each
-                # cluster, drop the rest. Singletons have no attr row, so
-                # keep_if_missing=True passes them through.
+                # Fuzzy dedup marks only candidates that pass exact verification.
                 FilterConfig(
-                    type=FilterType.KEEP_DOC,
+                    type=FilterType.REMOVE_DOC,
                     attribute_path=read_artifact(deduped.output_path, FuzzyDupsAttrData)
                     .sources[read_artifact(normalized.output_path, NormalizedData).main_output_dir]
                     .attr_dir,
-                    name="is_cluster_canonical",
+                    name="dup_doc",
                     attribute_filetype="parquet",
                     keep_if_missing=True,
                 ),

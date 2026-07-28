@@ -106,6 +106,12 @@ class HashAlgorithm(Enum):
 
 DEFAULT_HASH_ALGORITHM: HashAlgorithm
 
+class NgramKind(Enum):
+    """Unit used to form MinHash shingles."""
+
+    Char = ...
+    Word = ...
+
 @final
 class Transformation:
     """Transformation steps for the deduplication pipeline.
@@ -138,14 +144,22 @@ class Transformation:
         ...
 
     @staticmethod
-    def MinHash(input_col: str, output_col: str, num_perms: int, ngram_size: int, seed: int) -> "Transformation":
+    def MinHash(
+        input_col: str,
+        output_col: str,
+        num_perms: int,
+        ngram_size: int,
+        ngram_kind: NgramKind,
+        seed: int,
+    ) -> "Transformation":
         """Computes MinHash signatures for the input text using fused shingling/hashing.
 
         Args:
             input_col: Column containing text.
             output_col: Column to store signature (List[uint64]).
             num_perms: Number of permutation functions (length of signature).
-            ngram_size: Size of char-ngrams for shingling.
+            ngram_size: Size of each n-gram window.
+            ngram_kind: Whether windows contain characters or words.
             seed: Random seed for permutation coefficients.
         """
         ...

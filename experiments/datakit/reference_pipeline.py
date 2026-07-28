@@ -99,13 +99,16 @@ from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.fuzzy_dups import (
+    FUZZY_DUPS_CANDIDATE_SCOPE,
     FuzzyDupsAttrData,
     compute_fuzzy_dups_attrs,
 )
 from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashAttrData,
+    NgramKind,
     compute_minhash_attrs,
 )
+from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.tokenize.attributes import (
     TokenizedAttrData,
     tokenize_attributes_step,
@@ -235,16 +238,17 @@ class PoolConfig:
 
 @dataclass(frozen=True)
 class MinhashConfig:
-    """Content-determining MinHash / LSH knobs for the fuzzy-dedup stage.
+    """Content-determining MinHash / LSH candidate-retrieval knobs.
 
     Not scale-sensitive (a smoke and a full run must agree), but every field shapes
-    the emitted signatures and buckets, so all are hashed into the minhash step -- and
-    thereby, via the minhash deps, into dedup and the store.
+    the emitted signatures and buckets. All are hashed into the MinHash step and
+    thereby, through its dependencies, into exact verification and the store.
     """
 
     num_perms: int = 286
     num_bands: int = 26
     ngram_size: int = 5
+    ngram_kind: NgramKind = NgramKind.WORD
     text_cap_chars: int | None = 500_000
     seed: int = 42
 
@@ -665,6 +669,7 @@ def reference_datakit_steps(
                 "num_perms": mh.num_perms,
                 "num_bands": mh.num_bands,
                 "ngram_size": mh.ngram_size,
+                "ngram_kind": str(mh.ngram_kind),
                 "text_cap_chars": mh.text_cap_chars,
                 "seed": mh.seed,
                 "v": 1,
@@ -675,6 +680,7 @@ def reference_datakit_steps(
                 num_perms=mh.num_perms,
                 num_bands=mh.num_bands,
                 ngram_size=mh.ngram_size,
+                ngram_kind=mh.ngram_kind,
                 text_cap_chars=mh.text_cap_chars,
                 seed=mh.seed,
                 worker_resources=scale.pool.worker,
@@ -692,16 +698,21 @@ def reference_datakit_steps(
         }
 
     # ---- Cross-source dedup ----------------------------------------------------
-    # No content params of its own -- the MinHash params live in the minhash deps
-    # (so a param change re-keys minhash, then dedup via dep names); connected
-    # components is deterministic given those inputs. ``v`` is a manual salt.
+    verification = FuzzyVerificationParams()
+    # Candidate scope and exact-verifier thresholds determine which normalized
+    # rows survive, so both must rekey the persisted step.
     dedup = StepSpec(
         name="datakit/dedup",
         deps=minhash_steps,
-        hash_attrs={"v": 1},
+        hash_attrs={
+            "candidate_scope": FUZZY_DUPS_CANDIDATE_SCOPE,
+            "verification": verification.model_dump(),
+            "v": 2,
+        },
         fn=lambda op: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(s.output_path, MinHashAttrData) for s in minhash_steps],
             output_path=op,
+            verification_params=verification,
             max_parallelism=scale.dedup_max_parallelism,
             cc_resume=True,
             worker_resources=scale.pool.worker,

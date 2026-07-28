@@ -163,18 +163,18 @@ def _load_quality_table(path: str) -> tuple[pa.Array, np.ndarray]:
     return table.column("id").combine_chunks(), np.asarray(table.column("quality_bucket"), dtype=np.int32)
 
 
-def _load_dedup_canonical(path: str) -> dict[str, bool]:
-    """Return sparse canonical flags; missing IDs are singleton documents."""
+def _load_dedup_drops(path: str) -> set[str]:
+    """Return IDs that passed exact fuzzy-duplicate verification."""
     if not StoragePath(path).exists():
-        return {}
+        return set()
     with StoragePath(path).open("rb") as fh:
         parquet = pq.ParquetFile(fh)
         if parquet.metadata.num_rows == 0:
-            return {}
+            return set()
         table = parquet.read(columns=["id", "attributes"])
     ids = table.column("id").to_pylist()
-    canonical = table.column("attributes").combine_chunks().field("is_cluster_canonical").to_pylist()
-    return dict(zip(ids, canonical, strict=True))
+    duplicate = table.column("attributes").combine_chunks().field("dup_doc").to_pylist()
+    return {doc_id for doc_id, drop in zip(ids, duplicate, strict=True) if drop}
 
 
 def _validate_cluster_view(cluster_assign: dict[str, AssignmentAttrData], cluster_view: int) -> str:
@@ -243,8 +243,8 @@ def _iter_surviving_docs(spec: dict[str, str], cluster_col: str) -> Iterator[tup
     """Join one shard's five datasets; yield ``(cluster, quality_bucket, doc_id, input_ids)`` per surviving doc.
 
     Reads decon/cluster/quality densely, dedup sparsely, streams tokenize in
-    positional lockstep, and drops contaminated rows and dedup-cluster
-    non-canonicals. Fails loud on missing or misaligned inputs.
+    positional lockstep, and drops contaminated rows and exactly verified
+    fuzzy duplicates. Fails loud on missing or misaligned inputs.
     """
     decon_ids, contaminated = _load_decon_table(spec["decontam"])
     cluster_ids, cluster_vals = _load_cluster_table(spec["cluster"], cluster_col)
@@ -266,7 +266,7 @@ def _iter_surviving_docs(spec: dict[str, str], cluster_col: str) -> Iterator[tup
     if not pc.all(pc.equal(decon_ids, quality_ids)).as_py():
         raise RuntimeError(f"{where}: decon/quality id mismatch -- co-partitioning broken")
     del decon_ids, cluster_ids, quality_ids
-    dedup_canonical = _load_dedup_canonical(spec["dedup"])
+    dedup_drops = _load_dedup_drops(spec["dedup"])
 
     n_in = 0
     n_contaminated = 0
@@ -288,7 +288,7 @@ def _iter_surviving_docs(spec: dict[str, str], cluster_col: str) -> Iterator[tup
                 if contam_slice[i]:
                     n_contaminated += 1
                     continue
-                if dedup_canonical.get(doc_id) is False:
+                if doc_id in dedup_drops:
                     n_dedup_dropped += 1
                     continue
                 ids = tok_input_ids[i].values.to_numpy()
@@ -301,7 +301,7 @@ def _iter_surviving_docs(spec: dict[str, str], cluster_col: str) -> Iterator[tup
             )
     counters.pipeline.update_counter("datakit_store/records_in", n_in)
     counters.pipeline.update_counter("datakit_store/contaminated_dropped", n_contaminated)
-    counters.pipeline.update_counter("datakit_store/dedup_noncanonical_dropped", n_dedup_dropped)
+    counters.pipeline.update_counter("datakit_store/dedup_verified_dropped", n_dedup_dropped)
     counters.pipeline.update_counter("datakit_store/records_out", n_out)
 
 

@@ -14,9 +14,12 @@ deduplication.fuzzy_dups.compute_fuzzy_dups_attrs` consumes one or more of
 these artifacts to produce duplicate markers.
 """
 
+from __future__ import annotations
+
 import logging
 import os
 from collections.abc import Iterator
+from enum import StrEnum
 
 import dupekit
 import pyarrow as pa
@@ -35,13 +38,29 @@ from marin.processing.classification.deduplication.dedup_commons import _load_ba
 logger = logging.getLogger(__name__)
 
 
+class NgramKind(StrEnum):
+    """Unit used to form MinHash candidate shingles."""
+
+    CHAR = "char"
+    WORD = "word"
+
+
+def _native_ngram_kind(kind: NgramKind) -> dupekit.NgramKind:
+    return {
+        NgramKind.CHAR: dupekit.NgramKind.Char,
+        NgramKind.WORD: dupekit.NgramKind.Word,
+    }[kind]
+
+
 class MinHashParams(BaseModel):
     """MinHash + LSH parameters that downstream fuzzy-dup consumers must agree on.
 
     Two ``MinHashAttrData`` artifacts can only be combined in
     :func:`compute_fuzzy_dups_attrs` if their params are equal.
 
-    ``text_cap_chars`` (added v2) caps each document's character length
+    ``ngram_kind`` selects character or whitespace-delimited word shingles.
+
+    ``text_cap_chars`` caps each document's character length
     before shingling/MinHash. Documents with O(10M+) shingles produce
     saturated MinHash signatures that band-collide with arbitrary other
     documents, creating large CC false-positive clusters. Capping bounds
@@ -52,6 +71,7 @@ class MinHashParams(BaseModel):
     num_perms: int
     num_bands: int
     ngram_size: int
+    ngram_kind: NgramKind
     seed: int
     text_cap_chars: int | None = None
 
@@ -73,7 +93,7 @@ class MinHashAttrData(BaseModel):
         counters: Aggregated zephyr counters.
     """
 
-    version: str = "v2"
+    version: str = "v3"
     params: MinHashParams
     source_main_dir: str
     attr_dir: str
@@ -84,8 +104,8 @@ def _attr_records(batch: pa.RecordBatch, params: MinHashParams) -> list[dict]:
     """Run the dupekit MinHash+LSH pipeline on *batch* and yield attr records.
 
     Yields one ``{id, buckets}`` record per input document with at least one
-    bucket. Documents whose signature column is null (empty/whitespace text
-    after cleaning) are dropped and counted via ``minhash/empty_signatures``.
+    bucket. Documents whose signature column is null are dropped and counted
+    via ``minhash/empty_signatures``.
     """
     if params.text_cap_chars is not None:
         # Truncate the text column to cap shingle count per doc. Mega-docs
@@ -122,6 +142,7 @@ def _attr_records(batch: pa.RecordBatch, params: MinHashParams) -> list[dict]:
             output_col="signature",
             num_perms=params.num_perms,
             ngram_size=params.ngram_size,
+            ngram_kind=_native_ngram_kind(params.ngram_kind),
             seed=params.seed,
         ),
         dupekit.Transformation.MinHashLSH(input_col="signature", output_col="buckets", num_bands=params.num_bands),
@@ -156,6 +177,7 @@ def compute_minhash_attrs(
     num_perms: int = 286,
     num_bands: int = 26,
     ngram_size: int = 5,
+    ngram_kind: NgramKind = NgramKind.WORD,
     text_cap_chars: int | None = 500_000,
     seed: int = 42,
     worker_resources: ResourceConfig | None = None,
@@ -176,9 +198,9 @@ def compute_minhash_attrs(
         num_perms: Number of MinHash permutations. Must be divisible by
             ``num_bands``.
         num_bands: Number of LSH bands.
-        ngram_size: Character n-gram size for shingling. Applied to text
-            after dupekit's CleanText (lowercase, strip punctuation,
-            collapse whitespace).
+        ngram_size: Size of the n-gram window.
+        ngram_kind: Unit used in the candidate n-gram window. Word shingles
+            avoid character-vocabulary saturation in long prose and code.
         text_cap_chars: If set, truncate each document to this many chars
             before MinHash so mega-docs cannot saturate the signature
             space and cause LSH false-positive blobs. Default 500,000
@@ -203,6 +225,7 @@ def compute_minhash_attrs(
         num_perms=num_perms,
         num_bands=num_bands,
         ngram_size=ngram_size,
+        ngram_kind=ngram_kind,
         seed=seed,
         text_cap_chars=text_cap_chars,
     )
@@ -260,6 +283,7 @@ def compute_minhash_attrs_step(
     num_perms: int = 286,
     num_bands: int = 26,
     ngram_size: int = 5,
+    ngram_kind: NgramKind = NgramKind.WORD,
     text_cap_chars: int | None = 500_000,
     seed: int = 42,
     worker_resources: ResourceConfig | None = None,
@@ -276,6 +300,7 @@ def compute_minhash_attrs_step(
             num_perms=num_perms,
             num_bands=num_bands,
             ngram_size=ngram_size,
+            ngram_kind=ngram_kind,
             text_cap_chars=text_cap_chars,
             seed=seed,
             worker_resources=worker_resources,
@@ -285,6 +310,7 @@ def compute_minhash_attrs_step(
             "num_perms": num_perms,
             "num_bands": num_bands,
             "ngram_size": ngram_size,
+            "ngram_kind": str(ngram_kind),
             "text_cap_chars": text_cap_chars,
             "seed": seed,
         },

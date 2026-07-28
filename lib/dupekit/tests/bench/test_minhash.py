@@ -5,7 +5,7 @@ from typing import Any
 
 import dupekit
 import pyarrow as pa
-from dupekit import Transformation
+from dupekit import NgramKind, Transformation
 
 # Python is slow, can't use too many rows
 BENCHMARK_ROWS = 1000
@@ -14,7 +14,14 @@ BENCHMARK_ROWS = 1000
 def rust_minhash_pipeline(batch: pa.RecordBatch) -> int:
     pipeline = [
         Transformation.CleanText(input_col="text", output_col="clean"),
-        Transformation.MinHash(input_col="clean", output_col="sig", num_perms=286, ngram_size=5, seed=42),
+        Transformation.MinHash(
+            input_col="clean",
+            output_col="sig",
+            num_perms=286,
+            ngram_size=5,
+            ngram_kind=NgramKind.Word,
+            seed=42,
+        ),
         Transformation.MinHashLSH(input_col="sig", output_col="buckets", num_bands=26),
     ]
     res = dupekit.transform(batch, pipeline)

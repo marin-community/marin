@@ -63,7 +63,7 @@ const cards = [
   ["buckets", S.n_buckets, `${S.n_clusters} clusters × ${S.n_quality_buckets} quality`],
   ["sources", S.n_sources, M.tokenizer],
   ["contaminated", fmt(S.contaminated_dropped), `of ${fmt(S.records_in)} in`],
-  ["dedup dropped", fmt(S.dedup_noncanonical_dropped), "non-canonical members"],
+  ["dedup dropped", fmt(S.dedup_verified_dropped), "exactly verified members"],
 ];
 document.getElementById("cards").innerHTML = cards.map(([k,v,d]) =>
   `<div class="card"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("");

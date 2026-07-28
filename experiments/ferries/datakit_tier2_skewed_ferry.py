@@ -33,6 +33,7 @@ from marin.processing.classification.consolidate import (
     consolidate,
 )
 from marin.processing.classification.deduplication.fuzzy_dups import (
+    FUZZY_DUPS_CANDIDATE_SCOPE,
     FuzzyDupsAttrData,
     compute_fuzzy_dups_attrs,
 )
@@ -40,6 +41,7 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashAttrData,
     compute_minhash_attrs,
 )
+from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 from rigging.filesystem import StoragePath, marin_prefix, marin_temp_bucket
 from rigging.log_setup import configure_logging
@@ -86,13 +88,19 @@ def build_steps(run_id: str) -> list[StepSpec]:
     )
 
     # ~98 source shards / ~46 GiB; modest fan-out for fuzzy_dups CC.
+    verification = FuzzyVerificationParams()
     deduped = StepSpec(
         name="datakit-tier2-skewed-smoke/fuzzy_dups",
         deps=[minhash],
-        hash_attrs={"cc_max_iterations": 3},
+        hash_attrs={
+            "candidate_scope": FUZZY_DUPS_CANDIDATE_SCOPE,
+            "verification": verification.model_dump(),
+            "cc_max_iterations": 3,
+        },
         fn=lambda output_path: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(minhash.output_path, MinHashAttrData)],
             output_path=output_path,
+            verification_params=verification,
             max_parallelism=64,
             cc_max_iterations=3,
         ),
@@ -108,11 +116,11 @@ def build_steps(run_id: str) -> list[StepSpec]:
             filetype="parquet",
             filters=[
                 FilterConfig(
-                    type=FilterType.KEEP_DOC,
+                    type=FilterType.REMOVE_DOC,
                     attribute_path=read_artifact(deduped.output_path, FuzzyDupsAttrData)
                     .sources[read_artifact(normalized.output_path, NormalizedData).main_output_dir]
                     .attr_dir,
-                    name="is_cluster_canonical",
+                    name="dup_doc",
                     attribute_filetype="parquet",
                     keep_if_missing=True,
                 ),

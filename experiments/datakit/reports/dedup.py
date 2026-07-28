@@ -1,73 +1,101 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stage report for the cross-source fuzzy dedup step.
+"""Stage report for verified cross-source fuzzy deduplication."""
 
-Headline numbers come from the artifact's aggregated counters. The per-source
-table and the cluster-size histogram come from a bounded sample of each
-source's dup-marker parquet, which is sparse: only non-singleton cluster
-members get a row, and sources with zero non-singletons have empty shards.
-"""
-
-from collections import Counter
+from pathlib import PurePosixPath
 
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
 
-from experiments.datakit.reports.common import StageReport, render_template, sample_rows, write_report
+from experiments.datakit.reports.common import StageReport, render_template, write_report
 
-SAMPLE_LIMIT = 1000
-COUNTER_PREFIX = "dedup/fuzzy/document"
+VERIFICATION_COUNTER = "dedup/fuzzy/verification"
 
 
 def _source_label(source_main_dir: str) -> str:
     return "/".join(source_main_dir.rstrip("/").split("/")[-3:])
 
 
-def dedup_report(output_path: str, dedup: FuzzyDupsAttrData) -> StageReport:
-    """Render the fuzzy-dedup stage report and return its path plus headline stats."""
-    cluster_members = int(dedup.counters.get(f"{COUNTER_PREFIX}/cluster_members", 0))
-    clusters = int(dedup.counters.get(f"{COUNTER_PREFIX}/canonicals", 0))
-    singletons_skipped = int(dedup.counters.get(f"{COUNTER_PREFIX}/singletons_skipped", 0))
-    duplicates_to_drop = cluster_members - clusters
-    total_docs = cluster_members + singletons_skipped
+def _counter_suffix(dedup: FuzzyDupsAttrData, prefix: str) -> dict[str, int]:
+    start = f"{prefix}/"
+    return {key[len(start) :]: int(value) for key, value in dedup.counters.items() if key.startswith(start)}
 
-    # dup_cluster_id is global across sources, so pooling the per-source
-    # samples yields cross-source cluster sizes (within the sample).
-    sampled_cluster_sizes: Counter[str] = Counter()
+
+def _histogram(dedup: FuzzyDupsAttrData, metric: str) -> list[dict[str, int | str]]:
+    counts = _counter_suffix(dedup, f"{VERIFICATION_COUNTER}/histogram/{metric}")
+    return [{"bin": key, "pairs": value} for key, value in sorted(counts.items(), key=lambda item: int(item[0]))]
+
+
+def _lsh_collision_curve(dedup: FuzzyDupsAttrData) -> dict:
+    bands = dedup.params.num_bands
+    rows_per_band = dedup.params.num_perms // bands
+
+    def collision_probability(similarity: float) -> float:
+        return 1 - (1 - similarity**rows_per_band) ** bands
+
+    return {
+        "bands": bands,
+        "rows_per_band": rows_per_band,
+        "midpoint": (1 - 0.5 ** (1 / bands)) ** (1 / rows_per_band),
+        "points": [
+            {
+                "similarity": similarity,
+                "collision_probability": collision_probability(similarity),
+            }
+            for similarity in (0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99)
+        ],
+    }
+
+
+def dedup_report(output_path: str, dedup: FuzzyDupsAttrData) -> StageReport:
+    """Render exact candidate, rejection, and score evidence."""
+    candidates = int(dedup.counters.get(f"{VERIFICATION_COUNTER}/candidates", 0))
+    verified = int(dedup.counters.get(f"{VERIFICATION_COUNTER}/decision/accepted", 0))
+    rejection_counts = _counter_suffix(dedup, f"{VERIFICATION_COUNTER}/decision")
+    rejection_counts.pop("accepted", None)
+    rejected = candidates - verified
+    transitive_kept = int(dedup.counters.get("dedup/fuzzy/document/transitive_members_kept", 0))
+
     per_source = []
     for source_main_dir, entry in dedup.sources.items():
-        rows = sample_rows(entry.attr_dir, ["id", "attributes"], SAMPLE_LIMIT)
-        source_clusters = {r["attributes"]["dup_cluster_id"] for r in rows}
-        sampled_cluster_sizes.update(r["attributes"]["dup_cluster_id"] for r in rows)
+        source_tag = PurePosixPath(entry.attr_dir).name
+        decisions = _counter_suffix(dedup, f"{VERIFICATION_COUNTER}/source/{source_tag}/decision")
+        source_candidates = sum(decisions.values())
+        source_verified = decisions.get("accepted", 0)
         per_source.append(
             {
                 "label": _source_label(source_main_dir),
                 "source_main_dir": source_main_dir,
-                "sampled_members": len(rows),
-                "sampled_clusters": len(source_clusters),
+                "candidates": source_candidates,
+                "verified": source_verified,
+                "rejected": source_candidates - source_verified,
+                "acceptance_rate": source_verified / source_candidates if source_candidates else 0.0,
             }
         )
 
     stats = {
-        "cluster_members": cluster_members,
-        "clusters": clusters,
-        "duplicates_to_drop": duplicates_to_drop,
-        "singletons_skipped": singletons_skipped,
-        "dup_rate": duplicates_to_drop / total_docs if total_docs else 0.0,
+        "candidates": candidates,
+        "verified_duplicates": verified,
+        "rejected_candidates": rejected,
+        "acceptance_rate": verified / candidates if candidates else 0.0,
+        "transitive_members_kept": transitive_kept,
         "n_sources": len(dedup.sources),
     }
     data = {
         "params": dedup.params.model_dump(),
+        "verification": dedup.verification.model_dump(),
+        "decisions_dir": dedup.decisions_dir,
+        "lsh_collision_curve": _lsh_collision_curve(dedup),
         "stats": stats,
-        "sources": per_source,
-        "cluster_size_hist": [
-            {"size": size, "clusters": count} for size, count in sorted(Counter(sampled_cluster_sizes.values()).items())
+        "rejections": [
+            {"reason": reason, "pairs": pairs}
+            for reason, pairs in sorted(rejection_counts.items(), key=lambda item: (-item[1], item[0]))
         ],
-        "sample_limit": SAMPLE_LIMIT,
-        "sampling": (
-            f"headline numbers from dedup counters (exact); per-source table + cluster-size histogram "
-            f"from the first {SAMPLE_LIMIT} non-singleton rows per source (file order)"
-        ),
+        "sources": sorted(per_source, key=lambda row: (-row["candidates"], row["label"])),
+        "histograms": {
+            metric: _histogram(dedup, metric)
+            for metric in ("member_containment", "jaccard", "member_unique", "shared_buckets")
+        },
     }
     page = render_template("dedup.html", title="Datakit dedup", data=data)
     return StageReport(html_path=write_report(output_path, page), stats=stats)
