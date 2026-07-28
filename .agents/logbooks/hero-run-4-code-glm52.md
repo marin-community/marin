@@ -32,6 +32,18 @@ author: will-held
 - Checkpoint policy: not applicable; the pinned model mirror has a 30-day regional cache TTL.
 - Babysitter/check cadence: 2-minute startup check, then 15 minutes.
 
+### 2026-07-28 11:20 PDT - `/held/hero-run-4-code-glm52-prod-20260728-s000` through `s127`
+
+- Command: `uv run iris --controller-url http://127.0.0.1:18108 job run --no-wait --job-name hero-run-4-code-glm52-prod-20260728-s<NNN> --priority batch --preemptible --enable-extra-resources --cpu 1 --memory 4GB --disk 10GB --extra marin-core:cpu --max-retries 100 --timeout 2592000 -- python -m experiments.rollout_data.collect_hero_run_4_code_glm52 run --run-id hero-run-4-code-20260728 --output-path s3://marin-us-east-02a/marin/rollouts/glm-5.2/hero-run-4-code-20260727 --shard-index <N> --num-shards 128 --chunk-size 64 --concurrency 64 --max-model-len 524288 --max-num-seqs 64 --kv-cache-dtype fp8 --decode-context-parallel-size 1 --max-tokens 256000 --temperature 1.0 --top-p 0.95`
+- Git SHA: `cad890b46ca02e8d82392bf10bd40dfc1112d451`
+- Dirty tree: no
+- Source bundle/container: 9.2 MB Iris workspace bundle from the Git SHA above; default Iris CPU task image and the pinned CUDA vLLM runtime.
+- Hardware/topology: 128 independently scheduled TP8/EP8 servers, each formed from two 4xGB200 tasks in one NVLink domain; up to 1,024 requested B200s at Iris batch priority.
+- `initialize_from`: not applicable; each shard resumes immutable completed output chunks under the pinned output root.
+- Final step: 959,216 complete response records across 128 deterministic shards.
+- Checkpoint policy: Compressed JSONL chunks are retained permanently; retries skip complete chunks.
+- Babysitter/check cadence: 15 minutes in `tmux:hero-run-4-code-prod-monitor`, using `tmux:glm52-iris-east08` for the controller tunnel.
+
 ## Event Log
 
 ### 2026-07-27 23:00 PDT - Run contract
@@ -58,3 +70,10 @@ author: will-held
 - Config: Source commit `c62eda3fb`; preserve existing cache files and download only missing files; batch priority; no GPUs.
 - Decision: Keep the active lease intact. The resume job and automatic 8-GPU smoke launcher remain queued.
 - Next: Terminate the stalled original cache task through the east-08 control plane, then let the retry fetch the remaining 44 weight shards.
+
+### 2026-07-28 11:32 PDT - Production queue launched
+
+- Status: ramping
+- Evidence: All 128 parent collectors were accepted. The first task-level snapshot showed 176 running and 2 assigned vLLM tasks, representing 88 complete TP8 servers on 704 B200s plus one assigned server; the remaining servers were building or pending. Three transient coscheduling failures were retried by their parent collectors. Shard 0 loaded GLM-5.2 with `FLASHINFER_MLA_SPARSE`, standard FP8 KV cache, TP8, EP8, and DCP1 and entered compilation.
+- Decision: Keep all 128 independent shards queued at batch priority so Iris consumes available B200 capacity without requiring one fleet-wide gang allocation.
+- Next: Verify the first endpoint begins writing response chunks, then track aggregate completed records and sustained fleet throughput.
