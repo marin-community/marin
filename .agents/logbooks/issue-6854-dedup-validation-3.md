@@ -1296,3 +1296,60 @@ are recorded in the previous volumes.
   Independent checkpoint rereads exactly match all 334,007 reconciled pairs.
 - The next frontiers are p0 `(14, 128)`, p1 `(46, 0)`, p2 `(78, 0)`, and p3
   `(110, 3584)`. The eight H100s remain healthy at batch priority.
+
+## 2026-07-28 08:58 UTC — exhaustive ambiguity review reaches 50.78%
+
+- Reconciliation at 383,433 pairs exposed 47 unresolved outcomes that lacked
+  manual decisions. Complete, hash-verified texts and diffs were persisted and
+  read for all 47:
+  - 26 are identical SFT examples except for final-answer LaTeX formatting;
+  - 10 are the same low-value SEO or content-farm scaffold with entity, domain,
+    icon, topic, or feature slots changed;
+  - six are the same article or page with headings, navigation, advertisements,
+    scrape artifacts, date slots, footer metadata, or minor paraphrasing;
+  - three are the same math request and solution with notation or wording
+    changes;
+  - two are false positives. Baseline row 7,345 pairs two different math
+    problems: multiplying 54 by 46 and finding a polynomial's constant term.
+    Baseline row 7,760 pairs two different wgpu tasks: nullable bind groups and
+    the distinct `Into<Option<&BindGroup>>` ergonomic API change.
+- `/rav/datakit-6854-publish-missing-v1651` wrote 45 true-duplicate and two
+  false-positive decisions. `/rav/datakit-6854-verify-missing-v1654`
+  independently reread every source pair, inspection, Parquet, and marker and
+  reproduced all labels and hashes. The source reconciliation snapshot
+  SHA-256 is
+  `f2880891c4a015901273af6a9be74701baa53c19fbf0d75a62b4c8437d44984b`.
+  The two false-positive manual Parquet and marker SHA-256 pairs are
+  `1596ae89b0440858859b43be7c534db9185b24ef8d1de83dcb9f93458142726d` /
+  `784d7e023fd447d43660b231fee4616a61c7879a72a0e09e56041113b0796a0d`
+  and
+  `6514b9e921cc7b8db8db47d92d75a36df483452f2dd9280465b0554f03abce11` /
+  `cb839ba2170630ad69ce51344a50716d4f304605ae561255f678e8d3fa542604`.
+- `/rav/datakit-6854-reconcile-manual-v1655` verified 3,023 checkpoints and
+  complete manual coverage for all 441 unresolved outcomes. Applying 85
+  false-positive and 356 true-duplicate manual decisions gives:
+
+  | Arm | Pairs | False positives | True duplicates | False-positive rate |
+  | --- | ---: | ---: | ---: | ---: |
+  | baseline | 304,892 | 193,775 | 111,117 | 63.5553% |
+  | treatment | 78,669 | 40,822 | 37,847 | 51.8908% |
+  | combined | 383,561 | 234,597 | 148,964 | 61.1629% |
+
+  The baseline-minus-treatment gap is 11.6645 percentage points. This snapshot
+  covers 50.7839% of the 755,281 semantic candidates. Its immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260728-0855.json`
+  with SHA-256
+  `3c5c267c7ac45cbd3b34c8386f764e18a020fb20914be9c185b12ca418c44dfd`.
+  The semantic, manual-marker, and manual-Parquet path-manifest SHA-256 values
+  are
+  `e72a4de168df23110d335b9faf2cdae9432bc03d85ff9c7fd852eea7fc7a5e12`,
+  `65018db60cb9b074cb162645e763b851c149159f1e5630b5ccce8f8b43512a3e`,
+  and
+  `8054e6f0c13c8ae2cf439a109cdd8cd13d4912d0b589f5b693bc07ab65317b15`.
+  No outcome or Parquet decision is missing. The only reconciliation anomalies
+  are unchanged historical shadow records: two duplicate Parquet keys, three
+  obsolete hash mismatches, and 146 orphan Parquet records.
+- Independent checkpoint rereads cover 378,831 pairs. Every ambiguity in that
+  prefix is now manually resolved. The next frontiers are p0 `(15, 5632)`, p1
+  `(47, 4864)`, p2 `(79, 4864)`, and p3 `(112, 3584)`. The eight H100s remain
+  healthy at batch priority.
