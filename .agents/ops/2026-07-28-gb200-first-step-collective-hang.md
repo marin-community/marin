@@ -3,7 +3,7 @@ date: 2026-07-28
 system: iris
 severity: degraded
 resolution: mitigated
-pr: none
+pr: https://github.com/marin-community/marin/pull/7692
 issue: https://github.com/marin-community/marin/issues/7691
 ---
 
