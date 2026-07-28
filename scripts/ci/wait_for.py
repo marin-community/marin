@@ -425,7 +425,6 @@ def is_review_wrapper(body: str) -> bool:
 
 
 def is_loom_placeholder(body: str) -> bool:
-    """Whether a body is Loom's exact session acknowledgement."""
     return bool(_LOOM_PLACEHOLDER_RE.fullmatch(body))
 
 

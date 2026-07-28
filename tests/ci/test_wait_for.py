@@ -7,7 +7,6 @@ import pytest
 
 from scripts.ci import wait_for
 
-
 PR_URL = "https://github.com/marin-community/marin/pull/123"
 
 
@@ -32,62 +31,42 @@ def _pr_source(monkeypatch: pytest.MonkeyPatch, snapshots: Iterator[wait_for.PrS
     return wait_for.PrSource(wait_for.parse_spec("github.pr 123"), "marin-community/marin")
 
 
-@pytest.mark.parametrize(("terminal_state", "reason"), [("MERGED", "merged"), ("CLOSED", "closed")])
-def test_pr_source_terminal_transition_returns_before_and_after(
-    monkeypatch: pytest.MonkeyPatch, terminal_state: str, reason: str
-) -> None:
-    before = _pr_snapshot()
-    after = _pr_snapshot(state=terminal_state)
-    source = _pr_source(monkeypatch, iter((before, after)))
-
-    assert source.check() is None
-    assert source.check() == {
-        "reasons": [reason],
-        "before": before.payload(),
-        "after": after.payload(),
-    }
-
-
-def test_pr_source_conflict_transition_returns_before_and_after(monkeypatch: pytest.MonkeyPatch) -> None:
-    before = _pr_snapshot(mergeable="UNKNOWN")
-    after = _pr_snapshot(mergeable="CONFLICTING")
-    source = _pr_source(monkeypatch, iter((before, after)))
-
-    assert source.check() is None
-    assert source.check() == {
-        "reasons": ["conflicted"],
-        "before": before.payload(),
-        "after": after.payload(),
-    }
-
-
 @pytest.mark.parametrize(
-    ("before", "after", "reason"),
+    ("before", "after", "reasons"),
     [
-        (_pr_snapshot(is_draft=True), _pr_snapshot(is_draft=False), "ready_for_review"),
+        (_pr_snapshot(), _pr_snapshot(state="MERGED"), ["merged"]),
+        (_pr_snapshot(), _pr_snapshot(state="CLOSED"), ["closed"]),
+        (_pr_snapshot(mergeable="UNKNOWN"), _pr_snapshot(mergeable="CONFLICTING"), ["conflicted"]),
+        (_pr_snapshot(is_draft=True), _pr_snapshot(is_draft=False), ["ready_for_review"]),
         (
             _pr_snapshot(review_decision="REVIEW_REQUIRED"),
             _pr_snapshot(review_decision="APPROVED"),
-            "review_decision",
+            ["review_decision"],
         ),
         (
             _pr_snapshot(review_decision="APPROVED"),
             _pr_snapshot(review_decision="CHANGES_REQUESTED"),
-            "review_decision",
+            ["review_decision"],
+        ),
+        (
+            _pr_snapshot(mergeable="UNKNOWN", review_decision="REVIEW_REQUIRED", is_draft=True),
+            _pr_snapshot(mergeable="CONFLICTING", review_decision="APPROVED", is_draft=False),
+            ["conflicted", "ready_for_review", "review_decision"],
         ),
     ],
+    ids=["merged", "closed", "conflicted", "ready-for-review", "approved", "changes-requested", "simultaneous"],
 )
-def test_pr_source_review_state_transition_returns_before_and_after(
+def test_pr_source_actionable_transition_returns_before_and_after(
     monkeypatch: pytest.MonkeyPatch,
     before: wait_for.PrSnapshot,
     after: wait_for.PrSnapshot,
-    reason: str,
+    reasons: list[str],
 ) -> None:
     source = _pr_source(monkeypatch, iter((before, after)))
 
     assert source.check() is None
     assert source.check() == {
-        "reasons": [reason],
+        "reasons": reasons,
         "before": before.payload(),
         "after": after.payload(),
     }
@@ -106,19 +85,6 @@ def test_pr_source_non_actionable_mergeability_change_does_not_fire(monkeypatch:
 
     assert source.check() is None
     assert source.check() is None
-
-
-def test_pr_source_reports_every_simultaneous_actionable_change(monkeypatch: pytest.MonkeyPatch) -> None:
-    before = _pr_snapshot(mergeable="UNKNOWN", review_decision="REVIEW_REQUIRED", is_draft=True)
-    after = _pr_snapshot(mergeable="CONFLICTING", review_decision="APPROVED", is_draft=False)
-    source = _pr_source(monkeypatch, iter((before, after)))
-
-    assert source.check() is None
-    assert source.check() == {
-        "reasons": ["conflicted", "ready_for_review", "review_decision"],
-        "before": before.payload(),
-        "after": after.payload(),
-    }
 
 
 @pytest.mark.parametrize(
