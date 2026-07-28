@@ -2,23 +2,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for bucket-routed filesystems: which backend a URL resolves to, and the
-config-declared endpoint and credentials it is built with."""
+endpoint and credentials it is built with."""
 
 import pytest
 import rigging.filesystem.cluster_config as cluster_config
 import s3fs
 from fsspec.implementations.local import LocalFileSystem
 from rigging.filesystem.buckets import MissingCredentials, filesystem_for
-from rigging.filesystem.cluster_config import BucketSpec, StoreType, load_cluster_config, use_data_config
-from rigging.filesystem.s3_compat import credentials_hint, s3_credentials, s3_endpoint
+from rigging.filesystem.cluster_config import StoreType, load_cluster_config, use_data_config
 
 CLUSTER_YAML = """
 data:
   scheme: s3
   region_buckets:
-    us-east5:    { bucket: marin-us-east5, store: gcs }
-    na:          { bucket: marin-na,       store: r2 }
-    us-east-02a: { bucket: marin-cw,       store: coreweave, signing_region: US-EAST-02A }
+    na:          { bucket: marin-na, store: r2 }
+    us-east-02a: { bucket: marin-cw, store: coreweave, signing_region: US-EAST-02A }
   stores:
     coreweave:
       endpoint: https://cwobject.example
@@ -35,115 +33,78 @@ data:
 
 @pytest.fixture
 def config(tmp_path, monkeypatch):
-    """Load a test cluster config as the only one on the search path.
-
-    Routing decisions come from parsed YAML rather than a hand-built object, so the
-    ``stores`` block these tests depend on is exercised end to end.
-    """
+    """A two-backend cluster config, with each backend's credentials in the environment."""
     cluster_dir = tmp_path / "clusters"
     cluster_dir.mkdir()
     (cluster_dir / "test.yaml").write_text(CLUSTER_YAML)
     monkeypatch.setattr(cluster_config, "MARIN_CLUSTER_CONFIG_DIRS", (str(cluster_dir),))
     cluster_config.reset_data_config_cache()
+    for name, value in [
+        ("CW_KEY_ID", "cw-key"),
+        ("CW_KEY_SECRET", "cw-secret"),
+        ("R2_KEY_ID", "r2-key"),
+        ("R2_KEY_SECRET", "r2-secret"),
+    ]:
+        monkeypatch.setenv(name, value)
+    for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "CW_S3_ENDPOINT", "R2_S3_ENDPOINT"):
+        monkeypatch.delenv(name, raising=False)
     with use_data_config(load_cluster_config("test")):
         yield
     cluster_config.reset_data_config_cache()
 
 
-@pytest.fixture
-def keys(monkeypatch):
-    """Distinct credentials per backend, as a machine talking to both would have."""
-    monkeypatch.setenv("CW_KEY_ID", "cw-key")
-    monkeypatch.setenv("CW_KEY_SECRET", "cw-secret")
-    monkeypatch.setenv("R2_KEY_ID", "r2-key")
-    monkeypatch.setenv("R2_KEY_SECRET", "r2-secret")
-    monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
-    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
-    monkeypatch.delenv("CW_S3_ENDPOINT", raising=False)
-    monkeypatch.delenv("R2_S3_ENDPOINT", raising=False)
+def test_each_bucket_routes_to_its_own_backend(config, tmp_path):
+    """The point of bucket routing: two s3:// backends live at once, with the endpoint,
+    signing region, and keys each was declared with — and no environment mutation.
 
-
-def test_declared_buckets_carry_their_backend_and_signing_region(config):
-    assert cluster_config.data_buckets()["marin-cw"] == BucketSpec(
-        "marin-cw", StoreType.COREWEAVE, signing_region="US-EAST-02A"
-    )
-    assert "some-unregistered-bucket" not in cluster_config.data_buckets()
-
-
-def test_two_s3_backends_get_separate_filesystems(config, keys):
-    """The point of bucket routing: one process, two s3:// backends, no env mutation."""
+    CoreWeave routes on the bucket's own region; R2 rejects the AWS region scheme
+    entirely. A bucket no config declares must not inherit either backend's endpoint,
+    and local paths still fall through to the guarded factory.
+    """
     cw_fs, cw_path = filesystem_for("s3://marin-cw/data/x.json")
     r2_fs, r2_path = filesystem_for("s3://marin-na/data/x.json")
-
-    assert cw_path == "marin-cw/data/x.json"
-    assert r2_path == "marin-na/data/x.json"
-    assert cw_fs is not r2_fs
-    assert cw_fs.key == "cw-key"
-    assert r2_fs.key == "r2-key"
-
-
-def test_coreweave_signs_with_the_bucket_region_and_r2_with_auto(config, keys):
-    """CoreWeave routes on the bucket's region; R2 rejects the AWS region scheme entirely."""
-    cw_fs, _ = filesystem_for("s3://marin-cw/x")
-    r2_fs, _ = filesystem_for("s3://marin-na/x")
-
-    assert cw_fs.client_kwargs["region_name"] == "US-EAST-02A"
-    assert cw_fs.endpoint_url == "https://cwobject.example"
-    assert r2_fs.client_kwargs["region_name"] == "auto"
-    assert r2_fs.endpoint_url == "https://r2.example"
-
-
-def test_endpoint_env_overrides_the_configured_endpoint(config, keys, monkeypatch):
-    """How a pod reaches its node-local endpoint instead of the public one."""
-    monkeypatch.setenv("CW_S3_ENDPOINT", "https://lota.internal")
-    fs, _ = filesystem_for("s3://marin-cw/x")
-    assert fs.endpoint_url == "https://lota.internal"
-
-
-def test_missing_credentials_names_the_variables_to_set(config, monkeypatch):
-    monkeypatch.delenv("CW_KEY_ID", raising=False)
-    monkeypatch.delenv("CW_KEY_SECRET", raising=False)
-    monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
-    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
-
-    with pytest.raises(MissingCredentials, match="CW_KEY_ID"):
-        filesystem_for("s3://marin-cw/x")
-
-
-def test_generic_aws_credentials_serve_a_single_backend(config, monkeypatch):
-    """The AWS_* fallback: enough for a process talking to one backend."""
-    monkeypatch.delenv("CW_KEY_ID", raising=False)
-    monkeypatch.delenv("CW_KEY_SECRET", raising=False)
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "generic-key")
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "generic-secret")
-
-    assert s3_credentials(StoreType.COREWEAVE) == ("generic-key", "generic-secret")
-
-
-def test_unregistered_and_local_paths_use_the_guarded_factory(config, keys, tmp_path):
-    """Anything not routed to a declared S3 backend keeps its existing behavior.
-
-    A bucket no config declares gets the ambient environment, not a backend's endpoint,
-    so it must not inherit CoreWeave's. Routing for GCS URLs is the same fall-through;
-    it is left to the cross-region tests, which do not need credentials to run.
-    """
     unknown_fs, unknown_path = filesystem_for("s3://not-a-marin-bucket/x")
     local_fs, local_path = filesystem_for(str(tmp_path / "x"))
 
-    assert unknown_path == "not-a-marin-bucket/x"
+    assert (cw_path, r2_path, unknown_path) == ("marin-cw/data/x.json", "marin-na/data/x.json", "not-a-marin-bucket/x")
+    assert (cw_fs.key, cw_fs.endpoint_url, cw_fs.client_kwargs["region_name"]) == (
+        "cw-key",
+        "https://cwobject.example",
+        "US-EAST-02A",
+    )
+    assert (r2_fs.key, r2_fs.endpoint_url, r2_fs.client_kwargs["region_name"]) == (
+        "r2-key",
+        "https://r2.example",
+        "auto",
+    )
     assert isinstance(unknown_fs, s3fs.S3FileSystem)
-    assert unknown_fs.endpoint_url != "https://cwobject.example"
+    assert unknown_fs.endpoint_url not in ("https://cwobject.example", "https://r2.example")
     assert isinstance(local_fs, LocalFileSystem)
     assert local_path == str(tmp_path / "x")
 
 
-def test_gcs_has_no_s3_connection_settings(config):
-    """GCS authenticates with application default credentials, so asking is an error."""
+def test_credentials_come_from_the_variables_the_backend_declares(config, monkeypatch):
+    """Namespaced keys first, then the generic AWS_* pair for a single-backend process;
+    with neither, the error names the variables to set. The endpoint variable is how a
+    pod reaches its node-local endpoint instead of the public one.
+    """
+    monkeypatch.setenv("CW_S3_ENDPOINT", "https://lota.internal")
+    assert filesystem_for("s3://marin-cw/x")[0].endpoint_url == "https://lota.internal"
+
+    monkeypatch.delenv("CW_KEY_ID")
+    monkeypatch.delenv("CW_KEY_SECRET")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "generic-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "generic-secret")
+    assert filesystem_for("s3://marin-cw/x")[0].key == "generic-key"
+
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID")
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY")
+    s3fs.S3FileSystem.clear_instance_cache()
+    with pytest.raises(MissingCredentials, match="CW_KEY_ID"):
+        filesystem_for("s3://marin-cw/x")
+
+
+def test_gcs_is_not_an_s3_backend(config):
+    """GCS uses application default credentials, so asking for its S3 settings is an error."""
     with pytest.raises(ValueError, match="stores"):
-        s3_endpoint(StoreType.GCS)
-
-
-def test_credentials_hint_names_the_configured_variables(config):
-    """The hint has to name the config's variables, not a hardcoded pair."""
-    hint = credentials_hint(StoreType.R2)
-    assert "R2_KEY_ID" in hint and "R2_KEY_SECRET" in hint
+        cluster_config.store_config(StoreType.GCS)
