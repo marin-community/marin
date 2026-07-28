@@ -1291,14 +1291,31 @@ incumbent for bf16; NCCL_EP is preserved as a derisked fallback.
 
 | # | Lead | Why it is on the list |
 |---|---|---|
-| F1 | **Three of twelve all-to-all ops run on the compute stream at 0.0% overlap** | 1,266 ms per 3 steps = **422 ms of every 15.3 s step**, 31% of all exposed collective time, consistent across all four GPUs. Larger than latent MoE's entire best case, needs no architecture change, and is unexplained. ([#7279 c5095217108](https://github.com/marin-community/marin/issues/7279#issuecomment-5095217108)) |
-| F2 | Sender-local router balancing | The only unprobed direction aimed at the *hypothesized cause* of the ~6% QB-on drop residual. Kernel-level. Global-bias gain tuning is falsified (E12). |
-| F3 | Leg-batching (B5) composed with QB-on | Both measured alone, never stacked. |
-| F4 | **FSDP-line levers on the EP stack** | D1–D4 are unmeasured under EP; Larry asked for exactly this. PGLE was worth +1.1pp on FSDP but only +0.47pp (with overlap-limit) under EP, and the ECHO screen ran PGLE-off. |
-| F5 | **Multi-rack EP** | EP64 has **no multi-rack measurement** behind its ~65–75-day 20T projections. Under the current mesh (`replica_dcn, data, expert, model`, `expert` innermost) holding EP64 while adding racks keeps the MoE all-to-all inside a rack and grows data-axis traffic instead. |
-| F6 | FP8 forward-dispatch wire feeding MXFP8 expert GEMMs | [#7665](https://github.com/marin-community/marin/issues/7665) — reconciles E1 against E5: each thread disabled exactly the half the other tested. Quantizing is pure overhead when nothing downstream consumes the FP8, and may pay when an MXFP8 grouped GEMM does. Preregistered; success criterion is a positive layer-level A/B inside the real step with remat on. |
-| F7 | DeepSeek-style integral or damped (g<1) QB | Cheaper than F2, unprobed. |
-| F8 | Fused FP8 epilogues | Listed as a follow-up in the 25% ledger; unstarted. |
+| F1 | **Multi-rack EP** | EP64 has **no multi-rack measurement** behind its ~65–75-day 20T projections, and the measured 1→2-rack drop on the FSDP line was ~19%, not the 7% the projections assume. Under the current mesh (`replica_dcn, data, expert, model`, `expert` innermost) holding EP64 while adding racks keeps the MoE all-to-all inside a rack and grows data-axis traffic instead. **The largest unquantified risk in the document.** |
+| F2 | **A settled long run of the best ECHO recipe** | The 24.153% headline is a 20-step screen; the 120-step figure (22.299%) predates both padded Muon and `overlap_limit=4`. No clean 120-step run of the current best recipe exists. |
+| F3 | **FSDP-line levers still unported to EP** | Muon shape-grouping and the GatedNorm/attention-gate/XSA trio are absent from the EP runner entirely — roughly +1.5pp of reported FSDP gain uncollected. Note two of the family are *not* open: splitting the shared expert is memory-blocked at EP64 (89.49 GiB before step 0), and host offload was rejected at d5120. |
+| F4 | Raising spill's ceiling | Spill is capped at `top_k − 1`, so 8-of-256 keeps improving through m=7 while 4-of-256 is flat from m=3. This is an **architecture-selection** lever, not a kernel knob. |
+| F5 | The capacity-factor cliff | cf1.0 → 1.05 costs 1.179pp while 1.05 → 1.15 costs 0.254pp. Tile alignment was falsified. **Cause unknown**, and it prices every fidelity decision. |
+| F6 | Fused FP8 epilogues | The one precision mechanism materially different from the expert-GEMM port that measured −2.582pp at EP64 (G1b). Listed as a follow-up in the 25% ledger; unstarted. |
+| F7 | Reducing within-batch routing burstiness at the source | The revised diagnosis for the ~6% QB-on residual, after sender-local bias measured null. Routing is 7–9× more clustered than independent-uniform. Nobody has looked at token ordering or batch composition. |
+
+**Closed since earlier drafts of this document — do not re-open:**
+
+- *Three of twelve all-to-all ops on the compute stream.* Explained:
+  `GpuConvertAsyncCollectivesToSync` tags async-starts whose done is separated only
+  by no-ops. A schedule census shows MoE sync all-to-all going 10 → 0 as
+  `overlap_limit` goes 1 → 4 (B6). Verify with
+  `experiments/grug/moe/schedule_report.py`; do not re-investigate.
+- *Sender-local router balancing.* Measured null and it **overturned** the
+  hypothesis it was built on (C1).
+- *DeepSeek integral and damped QB.* Integral measured clean-negative at both
+  gammas; damped cannot beat `g=1` by construction (C1).
+- *Leg-batching composed with QB-on.* Measured **−3.66pp** in the only committed
+  implementation; the implementation behind the positive result was never committed
+  (B5).
+- *FP8 dispatch wire feeding MXFP8 expert GEMMs.* Its downstream consumer measured
+  −2.582pp at this operating point (G1b), so the wire's +1.144pp fwd+bwd would have
+  to cover that first (G5).
 
 ---
 
