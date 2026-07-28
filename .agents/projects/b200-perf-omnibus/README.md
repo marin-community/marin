@@ -14,6 +14,7 @@ Three companion files:
   risk. **Every number in this file is sourced there.**
 - [`sequence.md`](sequence.md) — the ordered commit plan, with the branch topology
   and the known merge conflicts.
+- [`derisking-plan.md`](derisking-plan.md) — the triage of that queue against the code that exists: what is runnable, blocked, or sealed, and the costed run plan.
 - [`derisking.md`](derisking.md) — the experiment queue. Nothing in this brief
   was measured by this work; the queue is what would make it safe to act on.
 
@@ -29,7 +30,7 @@ one GB200 rack (64 GPUs), all on the 2.5 PFLOP/s GB200 bf16-dense denominator.
 | MFU | configuration | drops | evidence quality |
 |--:|---|--:|---|
 | **25.50%** | d5120 4-of-256, ECHO, **shared intermediate widened 5,120 → 21,504** | **2.02%** | 200-step tail-100 — best-qualified row, but a *capacity* change, not a kernel result |
-| **25.39%** | d5120 8-of-256, custom adjoint + leg-batched GEMMs, **QB off** | ~85% early | bench only, and the mechanism is **disputed** |
+| **25.39%** | d5120 8-of-256, custom adjoint + leg-batched GEMMs, **QB off** | ~85% early | bench only — QB-off; the mechanism is now sealed, not disputed |
 | **24.84 / 24.59%** | d6144 4-of-128, QB on cf1.0, custom adjoint + host offload | **8.9–13%** | 120-step, above the 6% bar |
 | **24.15%** | d5120 4-of-256, ECHO + padded stack-sharded Muon | **2.77%** | 20-step screen only |
 | **22.30%** | d5120 4-of-256, ECHO (v143) | **1.71%** | 120-step tail-30 (tok/s not recorded) |
@@ -85,7 +86,11 @@ For comparison, the FSDP line (EP1) reaches **25.2%** on one rack at d6144
 gate and XSA — but its drop rate is **unmeasured**
 ([#7201 c5093392733](https://github.com/marin-community/marin/issues/7201#issuecomment-5093392733)).
 So the EP-versus-FSDP comparison is currently one-sided on fidelity in EP's
-disfavour, and closing that is a one-line change (item 1 below).
+disfavour. Closing it is **not** the one-line change earlier drafts assumed: the
+drop metric does not exist on the FSDP line at all, and the chunked `sonic_cute`
+backend that the 23.1% baseline ran on returns a literal zero dropped-assignment
+count while that path genuinely drops. See
+[`derisking-plan.md`](derisking-plan.md) §2.1.
 
 ### EP32 is not an operating point
 
