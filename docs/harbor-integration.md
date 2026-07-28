@@ -40,19 +40,20 @@ Use `--limit N` to cap the number of trials and `--no-wait` to return after subm
 
 ## Runtime progress
 
-The Iris job log receives one line for each Harbor trial state transition. Long-running agent
-trials therefore remain visible without Harbor's interactive terminal display:
+Harbor writes an INFO record to stderr for each trial state transition when no interactive terminal
+is available. The isolated driver inherits stdout and stderr from its Iris task, so long-running
+agent trials remain visible in the task log:
 
 ```text
-Harbor trial terminal-bench-task__terminus-2__1: started
-Harbor trial terminal-bench-task__terminus-2__1: environment started
-Harbor trial terminal-bench-task__terminus-2__1: agent started
-Harbor trial terminal-bench-task__terminus-2__1: verification started
-Harbor trial terminal-bench-task__terminus-2__1: completed
+Trial terminal-bench-task__terminus-2__1: started
+Trial terminal-bench-task__terminus-2__1: environment started
+Trial terminal-bench-task__terminus-2__1: agent started
+Trial terminal-bench-task__terminus-2__1: verification started
+Trial terminal-bench-task__terminus-2__1: completed
 ```
 
-Failed trials end with `failed (<exception type>)`. Harbor warnings and errors from the isolated
-driver use the same Iris job log.
+Failed trials end with `failed (<exception type>)`. Interactive runs retain Harbor's Rich progress
+display, and `quiet` jobs suppress per-trial updates.
 
 ## Credentials
 

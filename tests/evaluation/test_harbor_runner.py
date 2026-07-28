@@ -2,12 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import os
-import subprocess
-import sys
-from dataclasses import asdict
 from pathlib import Path
-from textwrap import dedent
 
 import pytest
 from fsspec.implementations.memory import MemoryFileSystem
@@ -42,91 +37,6 @@ def _running_model() -> RunningModel:
             model="qwen3-0.6b",
         )
     )
-
-
-def test_harbor_trial_driver_emits_line_oriented_progress(tmp_path):
-    package_root = tmp_path / "fake_package"
-    harbor_package = package_root / "harbor"
-    harbor_config_package = harbor_package / "models" / "job"
-    harbor_config_package.mkdir(parents=True)
-    (harbor_package / "__init__.py").touch()
-    (harbor_package / "job.py").write_text(
-        dedent(
-            """\
-            from types import SimpleNamespace
-
-            class Job:
-                def __init__(self):
-                    self.callbacks = []
-
-                @classmethod
-                async def create(cls, config):
-                    return cls()
-
-                def add_callback(self, callback):
-                    self.callbacks.append(callback)
-                    return self
-
-                on_trial_started = add_callback
-                on_environment_started = add_callback
-                on_agent_started = add_callback
-                on_verification_started = add_callback
-                on_trial_ended = add_callback
-
-                async def run(self):
-                    event = SimpleNamespace(
-                        trial_name="trial-one",
-                        result=SimpleNamespace(exception_info=None),
-                    )
-                    for callback in self.callbacks:
-                        await callback(event)
-            """
-        )
-    )
-    (harbor_config_package / "config.py").write_text(
-        dedent(
-            """\
-            class JobConfig:
-                @classmethod
-                def model_validate(cls, config):
-                    return config
-            """
-        )
-    )
-    config = HarborDriverConfig(
-        job_name="job",
-        jobs_dir=str(tmp_path / "jobs"),
-        dataset_path=None,
-        endpoint_url="https://iris.example/v1",
-        served_model="served-model",
-        run=HarborRunConfig(
-            dataset="toy",
-            revision="1.0",
-            agent=HarborAgentConfig(name="terminus-2"),
-            environment=HarborEnvironmentConfig(environment_type="daytona"),
-        ),
-    )
-    config_path = tmp_path / "driver_config.json"
-    config_path.write_text(json.dumps(asdict(config)))
-    env = os.environ.copy()
-    python_path = [str(package_root)]
-    if inherited_python_path := env.get("PYTHONPATH"):
-        python_path.append(inherited_python_path)
-    env["PYTHONPATH"] = os.pathsep.join(python_path)
-
-    result = subprocess.run(
-        [sys.executable, "-m", "marin.evaluation.harbor.trial_driver", str(config_path)],
-        check=True,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
-
-    lines = result.stdout.splitlines()
-    assert result.stdout.endswith("\n")
-    assert len(lines) == 5
-    assert all("trial-one" in line for line in lines)
-    assert "completed" in lines[-1]
 
 
 def test_materialize_harbor_dataset_downloads_hf_revision_as_local_tasks(tmp_path, monkeypatch):
