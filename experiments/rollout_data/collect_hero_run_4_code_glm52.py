@@ -163,6 +163,86 @@ class CollectionDelta:
     output_path: StoragePath | None
 
 
+@dataclass(frozen=True)
+class ResponseMessage:
+    role: str
+    content: str | None
+    reasoning_content: str | None
+
+
+@dataclass(frozen=True)
+class CompletionRecord:
+    dataset_index: int
+    source_file_index: int
+    source_row_group: int
+    source_row_offset: int
+    id: str | None
+    original_row_index: int
+    instruction_seed: str
+    dataset: str
+    dataset_split: str
+    dataset_revision: str
+    parquet_revision: str
+    model: str
+    model_revision: str
+    temperature: float
+    top_p: float
+    max_tokens: int
+    seed: int
+    response: ResponseMessage
+    finish_reason: str | None
+    usage: dict[str, Any]
+    response_id: str | None
+    elapsed_seconds: float
+
+
+@dataclass(frozen=True)
+class RunConfig:
+    run_id: str
+    output_path: str
+    dataset: str
+    dataset_split: str
+    dataset_revision: str
+    parquet_revision: str
+    dataset_rows: int
+    model: str
+    model_revision: str
+    num_shards: int
+    max_records_per_shard: int | None
+    chunk_size: int
+    concurrency: int
+    max_model_len: int
+    max_num_seqs: int
+    gpu_memory_utilization: float
+    temperature: float
+    top_p: float
+    max_tokens: int
+    enable_thinking: bool
+
+
+@dataclass(frozen=True)
+class ProgressRecord:
+    run_id: str
+    state: str
+    shard_index: int
+    num_shards: int
+    expected_records: int
+    complete_records: int
+    generated_records_this_attempt: int
+    skipped_records_this_attempt: int
+    elapsed_seconds: float
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class ModelCacheManifest:
+    model: str
+    model_revision: str
+    weights: str
+    cache_ttl_days: int
+    prepared_at: str
+
+
 def partition_specs() -> list[PartitionSpec]:
     partitions = []
     row_start = 0
@@ -230,7 +310,7 @@ def _read_partition(partition_slice: PartitionSlice) -> list[PromptRecord]:
     return records
 
 
-def _completion(vllm_url: str, prompt: PromptRecord, sampling: SamplingConfig) -> dict[str, Any]:
+def _completion(vllm_url: str, prompt: PromptRecord, sampling: SamplingConfig) -> CompletionRecord:
     started = time.time()
     response = requests.post(
         f"{vllm_url}/v1/chat/completions",
@@ -250,28 +330,28 @@ def _completion(vllm_url: str, prompt: PromptRecord, sampling: SamplingConfig) -
     payload = response.json()
     choice = payload["choices"][0]
     message = choice["message"]
-    return {
+    return CompletionRecord(
         **asdict(prompt),
-        "dataset": DATASET,
-        "dataset_split": DATASET_SPLIT,
-        "dataset_revision": DATASET_REVISION,
-        "parquet_revision": PARQUET_REVISION,
-        "model": MODEL,
-        "model_revision": MODEL_REVISION,
-        "temperature": sampling.temperature,
-        "top_p": sampling.top_p,
-        "max_tokens": sampling.max_tokens,
-        "seed": prompt.dataset_index,
-        "response": {
-            "role": message.get("role", "assistant"),
-            "content": message.get("content"),
-            "reasoning_content": message.get("reasoning_content"),
-        },
-        "finish_reason": choice.get("finish_reason"),
-        "usage": payload.get("usage", {}),
-        "response_id": payload.get("id"),
-        "elapsed_seconds": time.time() - started,
-    }
+        dataset=DATASET,
+        dataset_split=DATASET_SPLIT,
+        dataset_revision=DATASET_REVISION,
+        parquet_revision=PARQUET_REVISION,
+        model=MODEL,
+        model_revision=MODEL_REVISION,
+        temperature=sampling.temperature,
+        top_p=sampling.top_p,
+        max_tokens=sampling.max_tokens,
+        seed=prompt.dataset_index,
+        response=ResponseMessage(
+            role=message.get("role", "assistant"),
+            content=message.get("content"),
+            reasoning_content=message.get("reasoning_content"),
+        ),
+        finish_reason=choice.get("finish_reason"),
+        usage=payload.get("usage", {}),
+        response_id=payload.get("id"),
+        elapsed_seconds=time.time() - started,
+    )
 
 
 def _chunk_path(output_path: StoragePath, partition: PartitionSpec, row_start: int, row_end: int) -> StoragePath:
@@ -288,39 +368,40 @@ def _run_config(
     collection: CollectionConfig,
     server: ServerConfig,
     sampling: SamplingConfig,
-) -> dict[str, Any]:
-    return {
-        "run_id": collection.run_id,
-        "output_path": str(collection.output_path),
-        "dataset": DATASET,
-        "dataset_split": DATASET_SPLIT,
-        "dataset_revision": DATASET_REVISION,
-        "parquet_revision": PARQUET_REVISION,
-        "dataset_rows": sum(PARQUET_FILE_ROWS),
-        "model": MODEL,
-        "model_revision": MODEL_REVISION,
-        "num_shards": collection.num_shards,
-        "max_records_per_shard": collection.max_records,
-        "chunk_size": collection.chunk_size,
-        "concurrency": collection.concurrency,
-        "max_model_len": server.max_model_len,
-        "max_num_seqs": server.max_num_seqs,
-        "gpu_memory_utilization": GPU_MEMORY_UTILIZATION,
-        "temperature": sampling.temperature,
-        "top_p": sampling.top_p,
-        "max_tokens": sampling.max_tokens,
-        "enable_thinking": True,
-    }
+) -> RunConfig:
+    return RunConfig(
+        run_id=collection.run_id,
+        output_path=str(collection.output_path),
+        dataset=DATASET,
+        dataset_split=DATASET_SPLIT,
+        dataset_revision=DATASET_REVISION,
+        parquet_revision=PARQUET_REVISION,
+        dataset_rows=sum(PARQUET_FILE_ROWS),
+        model=MODEL,
+        model_revision=MODEL_REVISION,
+        num_shards=collection.num_shards,
+        max_records_per_shard=collection.max_records,
+        chunk_size=collection.chunk_size,
+        concurrency=collection.concurrency,
+        max_model_len=server.max_model_len,
+        max_num_seqs=server.max_num_seqs,
+        gpu_memory_utilization=GPU_MEMORY_UTILIZATION,
+        temperature=sampling.temperature,
+        top_p=sampling.top_p,
+        max_tokens=sampling.max_tokens,
+        enable_thinking=True,
+    )
 
 
-def _ensure_run_config(output_path: StoragePath, config: dict[str, Any]) -> None:
+def _ensure_run_config(output_path: StoragePath, config: RunConfig) -> None:
     path = output_path / "run-config.json"
+    expected = asdict(config)
     if path.exists():
         existing = json.loads(path.read_text())
-        if existing != config:
+        if existing != expected:
             raise ValueError(f"Output root contains a different run config: {path}")
         return
-    path.write_text(json.dumps(config, indent=2, sort_keys=True))
+    path.write_text(json.dumps(expected, indent=2, sort_keys=True))
 
 
 def _write_progress(
@@ -332,20 +413,20 @@ def _write_progress(
     skipped_records: int,
     started: float,
 ) -> None:
-    progress = {
-        "run_id": collection.run_id,
-        "state": state,
-        "shard_index": collection.shard_index,
-        "num_shards": collection.num_shards,
-        "expected_records": expected_records,
-        "complete_records": complete_records,
-        "generated_records_this_attempt": generated_records,
-        "skipped_records_this_attempt": skipped_records,
-        "elapsed_seconds": time.time() - started,
-        "updated_at": datetime.now(UTC).isoformat(),
-    }
+    progress = ProgressRecord(
+        run_id=collection.run_id,
+        state=state,
+        shard_index=collection.shard_index,
+        num_shards=collection.num_shards,
+        expected_records=expected_records,
+        complete_records=complete_records,
+        generated_records_this_attempt=generated_records,
+        skipped_records_this_attempt=skipped_records,
+        elapsed_seconds=time.time() - started,
+        updated_at=datetime.now(UTC).isoformat(),
+    )
     (collection.output_path / "progress" / f"shard-{collection.shard_index:03d}.json").write_text(
-        json.dumps(progress, indent=2, sort_keys=True)
+        json.dumps(asdict(progress), indent=2, sort_keys=True)
     )
 
 
@@ -376,7 +457,7 @@ def _collect_partition(
         chunk = records[row_start:row_end]
         outputs = list(executor.map(lambda prompt: _completion(vllm_url, prompt, sampling), chunk))
         path.write_text(
-            "".join(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n" for record in outputs),
+            "".join(json.dumps(asdict(record), ensure_ascii=False, sort_keys=True) + "\n" for record in outputs),
             compression="gzip",
         )
         yield CollectionDelta(len(outputs), len(outputs), 0, path)
@@ -450,14 +531,14 @@ def _run_collection(
 
 def prepare_model(output_path: StoragePath) -> None:
     weights = prepare_model_cache()
-    manifest = {
-        "model": MODEL,
-        "model_revision": MODEL_REVISION,
-        "weights": weights,
-        "cache_ttl_days": MODEL_CACHE_TTL_DAYS,
-        "prepared_at": datetime.now(UTC).isoformat(),
-    }
-    (output_path / "model-cache.json").write_text(json.dumps(manifest, indent=2, sort_keys=True))
+    manifest = ModelCacheManifest(
+        model=MODEL,
+        model_revision=MODEL_REVISION,
+        weights=weights,
+        cache_ttl_days=MODEL_CACHE_TTL_DAYS,
+        prepared_at=datetime.now(UTC).isoformat(),
+    )
+    (output_path / "model-cache.json").write_text(json.dumps(asdict(manifest), indent=2, sort_keys=True))
     logger.info("Prepared model cache at %s", weights)
 
 
