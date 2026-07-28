@@ -273,6 +273,8 @@ large fields are marked as truncated. Distributed capture requires a task
 target and does not stop, restart, kick, or otherwise change Iris task state.
 `py-spy` does attach to the target process briefly during the thread dump.
 
+GPU environments set `NCCL_RAS_ENABLE=1`, `NCCL_DEBUG=INFO`, and `NCCL_DEBUG_SUBSYS=INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS`. The default timestamp is `[%F %T.%3f]`. Short debug-smoke jobs may additionally select `COLL,PROXY,NVLS,REG`; do not use `TRACE` or `CALL` for normal runs.
+
 ## Scheduler & Autoscaler
 
 ```bash

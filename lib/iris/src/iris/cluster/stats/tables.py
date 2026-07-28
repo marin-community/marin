@@ -140,6 +140,7 @@ class IrisWorkerStat:
     gpu_util_pct: float | None = None
     gpu_temp_c: float | None = None
     gpu_power_w: float | None = None
+    gpu_power_limit_w: float | None = None
 
 
 @dataclass
