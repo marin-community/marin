@@ -116,7 +116,7 @@ def _finelog(query: str) -> list[dict]:
         ]
     if "probe_up" in sql and "metric IN" not in sql:
         return [{"value": 1}, {"value": 1}, {"value": 1}]
-    if "metric IN" in sql:
+    if "metric IN" in sql and "provision_success_ratio" not in sql:
         return [
             {"probe": probe, "metric": metric, "value": value}
             for probe in ("iris", "finelog", "kueue")

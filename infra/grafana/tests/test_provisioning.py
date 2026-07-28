@@ -8,7 +8,7 @@ Grafana, which is the most expensive place to find out."""
 
 import re
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 import pyarrow as pa
 import yaml
@@ -16,6 +16,7 @@ from config import ClusterTarget
 from conftest import bridge_config, healthy_k8s_routes, k8s_api, make_k8s_source
 from dashboard_stitch import stitch_all
 from finelog_health import FinelogHealth, FinelogRole
+from fixture_bridge import _finelog
 from github_source import GithubSource
 from k8s_source import K8sFleet
 from server import create_app
@@ -270,6 +271,26 @@ def test_provisioning_success_ratio_shows_fleet_and_region_stats():
     legend = panel["options"]["legend"]
     assert legend["displayMode"] == "table"
     assert legend["calcs"] == ["lastNotNull", "min", "max"]
+
+
+def test_provisioning_render_fixture_routes_metric_query_to_region_series():
+    dashboard = _stitched_dashboards()["infra.json"]
+    (panel,) = [panel for panel in dashboard["panels"] if panel.get("title") == "Provisioning success ratio"]
+    (target,) = panel["targets"]
+    sql = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "sql")
+
+    rows = _finelog(urlencode({"sql": sql}))
+
+    assert rows
+    assert {row["series"] for row in rows} == {
+        "fleet",
+        "europe-west4",
+        "us-central1",
+        "us-east1",
+        "us-east5",
+        "us-west4",
+    }
+    assert all({"t", "series", "value"} <= row.keys() for row in rows)
 
 
 def test_stat_panels_use_grafana_reduce_options_schema():
