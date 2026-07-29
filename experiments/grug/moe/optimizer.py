@@ -300,7 +300,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
             if "gated_norm" in path_lower:
                 return "muonh"
-            if hasattr(param, "ndim") and param.ndim in (2, 3):
+            # Scanning prepends a layer axis, so normalization gains become 2D while expert
+            # matrices become 4D. Keep the gains on Adam and route matrix-shaped leaves to MuonH.
+            if path_lower.endswith(".weight"):
+                return "adam"
+            if hasattr(param, "ndim") and param.ndim in (2, 3, 4):
                 return "muonh"
             return "adam"
 

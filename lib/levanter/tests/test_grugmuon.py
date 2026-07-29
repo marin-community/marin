@@ -40,10 +40,11 @@ def test_grug_muon_mask_routes_stacked_expert_weights_to_muon():
     params = {
         "embed": jnp.ones((16, 8), dtype=jnp.float32),
         "router": jnp.ones((8, 4), dtype=jnp.float32),
+        "norm": jnp.ones((2, 8), dtype=jnp.float32),
         "moe": {
-            "w_up_gate": jnp.ones((4, 8, 16), dtype=jnp.float32),
-            "w_gate_up": jnp.ones((4, 8, 16), dtype=jnp.float32),
-            "w_down": jnp.ones((4, 16, 8), dtype=jnp.float32),
+            "w_up_gate": jnp.ones((2, 4, 8, 16), dtype=jnp.float32),
+            "w_gate_up": jnp.ones((2, 4, 8, 16), dtype=jnp.float32),
+            "w_down": jnp.ones((2, 4, 16, 8), dtype=jnp.float32),
         },
         "vector": jnp.ones((8,), dtype=jnp.float32),
     }
@@ -51,7 +52,8 @@ def test_grug_muon_mask_routes_stacked_expert_weights_to_muon():
     mask = GrugMuonConfig().create_mask(params)
 
     assert mask["embed"] == "adamw"
-    assert mask["router"] == "muon"
+    assert mask["router"] == "adamw"
+    assert mask["norm"] == "adamw"
     assert mask["moe"]["w_up_gate"] == "muon"
     assert mask["moe"]["w_gate_up"] == "muon"
     assert mask["moe"]["w_down"] == "muon"
