@@ -232,3 +232,8 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
 - Queue reason: Kueue workload `iris-pg-b7f0be39b51da146-2` reports `QuotaReserved (Pending)` because topology `multinode-nvlink-ib` cannot fit all 16 pods: 186 nodes excluded on CPU, 17 on `nvidia.com/gpu`, and one on memory.
 - Interpretation: This is a concrete rack-fit capacity wait, not a third `stage-workdir` failure. Preserve queue position and do not resubmit.
 - Next action: Continue on the 15-minute cadence. Apply the recorded stop criterion only if attempt 2 admits and repeats the init failure.
+### 2026-07-28 17:27 PDT - D67-CTL-01 topology fit improves
+
+- Attempt 2 remains active with all 16 tasks building, two recorded task failures from the earlier attempts, and no preemptions.
+- No new setup or training lines appeared. The workload now reports that the requested topology can fit 2 of 16 pods, up from 0 of 16 at 17:16 PDT; excluded-node counts moved from 186 CPU / 17 GPU / 1 memory to 184 CPU / 17 GPU / 1 memory.
+- This is still a whole-rack capacity wait, not a third `stage-workdir` failure. Continue monitoring this attempt and submit no later family leg.
