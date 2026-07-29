@@ -2475,3 +2475,30 @@ result:
   [E128 layerwise](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e128-layer25-10b-r1),
   and
   [E16 layerwise](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e16-layer25-10b-r1).
+
+### 2026-07-29 18:44 - NEST-MOE-003 Gate 1 passes at 1.049B tokens
+
+- All five arms remain finite and the four treatments retain their exact
+  routing targets. Naive arms log `0.25` nested sequence and layer-sequence
+  fractions; layerwise arms log `0.25` sequence and `0.0625` layer-sequence
+  fractions.
+- At update 4,000, control full Paloma is `3.772742`. Full-mode treatment
+  deltas are `+0.009955` E128 naive, `+0.032944` E16 naive, `+0.003407` E128
+  layerwise, and `+0.000511` E16 layerwise. The corresponding uncheatable
+  deltas are `+0.013886`, `+0.038707`, `+0.002849`, and `+0.003660`.
+- Against the same control checkpoint's untrained prefix, Paloma gains are
+  `-0.208415` E128 naive, `-0.793201` E16 naive, `-0.112081` E128 layerwise,
+  and `-0.357386` E16 layerwise. Every treatment improves its intended prefix
+  at every one of the first four gates.
+- Through common update 4,289, median compiled-step overhead is `+0.50%`,
+  `+0.38%`, `+0.44%`, and `+0.53%` in the same arm order. All are below the
+  preregistered 5% Gate 1 bound.
+- An anchored log-linear local slope model estimates time-to-equivalent full
+  Paloma penalties of `+2.87%`, `+8.46%`, `+1.26%`, and `+0.65%`. This is an
+  interim four-point estimate, not a final extrapolation.
+- Decision: Gate 1 passes for all arms. Continue to the 4.4145B comparison
+  gate. The current Pareto arms are E128 naive for stronger E128 extraction
+  and both layerwise arms for minimal full-mode loss.
+- Commit `9e9a44a4fb` extends the validated weights-only SFT launcher to all
+  four single-prefix model-state shapes. The post-training selection remains
+  capped at two treatments plus control.

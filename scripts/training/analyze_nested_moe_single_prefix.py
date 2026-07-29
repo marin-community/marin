@@ -39,6 +39,7 @@ ENTITY = "marin-community"
 PROJECT = "marin_moe"
 TOKENS_PER_STEP = 32 * 8192
 GPU_COUNT = 8
+DATAKIT_PHASE_STEP = 29_184
 OUTPUT_DIR = Path("docs/reports/assets")
 OUTPUT_PREFIX = "nested-model-training-single-prefix-10b"
 
@@ -74,6 +75,12 @@ LINESTYLES = {
 PREFIX_ARMS = {
     128: (CONTROL, "e128_naive", "e128_layerwise"),
     16: (CONTROL, "e16_naive", "e16_layerwise"),
+}
+PREFIX_COUNT = {
+    "e128_naive": 128,
+    "e16_naive": 16,
+    "e128_layerwise": 128,
+    "e16_layerwise": 16,
 }
 EVALUATION_METRICS = (
     "paloma_macro",
@@ -130,6 +137,13 @@ def _plot_series(
     axis.set_title(title)
     axis.set_xlabel("Training tokens (billions)")
     axis.set_ylabel(ylabel)
+    if horizon >= DATAKIT_PHASE_STEP:
+        axis.axvline(
+            DATAKIT_PHASE_STEP * TOKENS_PER_STEP / 1e9,
+            color="#6e7781",
+            linestyle=":",
+            label="Datakit phase change",
+        )
     axis.grid(alpha=0.2)
     axis.legend(ncol=2)
     figure.tight_layout()
@@ -161,6 +175,13 @@ def _plot_evaluations(
             )
         axis.set_title(title)
         axis.set_xlabel("Training tokens (billions)")
+        if horizon >= DATAKIT_PHASE_STEP:
+            axis.axvline(
+                DATAKIT_PHASE_STEP * TOKENS_PER_STEP / 1e9,
+                color="#6e7781",
+                linestyle=":",
+                label="Datakit phase change",
+            )
         axis.grid(alpha=0.2)
         axis.legend()
     axes[0].set_ylabel("Paloma macro loss (lower is better)")
@@ -170,8 +191,10 @@ def _plot_evaluations(
     plt.close(figure)
 
 
-def _log_linear_fit(points: list[HistoryPoint]) -> dict[str, Any] | None:
+def _log_linear_fit(points: list[HistoryPoint], *, tail_points: int | None = None) -> dict[str, Any] | None:
     usable = [point for point in points if point.step > 0]
+    if tail_points is not None:
+        usable = usable[-tail_points:]
     if len(usable) < 3:
         return None
     tokens = np.asarray([point.step * TOKENS_PER_STEP / 1e9 for point in usable])
@@ -196,8 +219,8 @@ def _time_to_equivalent(
     control_step_seconds: float,
     treatment_step_seconds: float,
 ) -> dict[str, float] | None:
-    control_fit = _log_linear_fit(control_points)
-    treatment_fit = _log_linear_fit(treatment_points)
+    control_fit = _log_linear_fit(control_points, tail_points=10)
+    treatment_fit = _log_linear_fit(treatment_points, tail_points=10)
     if control_fit is None or treatment_fit is None:
         return None
     horizon = min(
@@ -205,16 +228,16 @@ def _time_to_equivalent(
         max(point.step for point in treatment_points),
     )
     control_loss = next(point.value for point in reversed(control_points) if point.step <= horizon)
+    treatment_loss = next(point.value for point in reversed(treatment_points) if point.step <= horizon)
     slope = treatment_fit["slope_per_log_token"]
     if not isinstance(slope, float) or slope >= 0:
         return None
-    intercept = treatment_fit["intercept"]
-    assert isinstance(intercept, float)
-    equivalent_tokens = math.exp((control_loss - intercept) / slope)
     horizon_tokens = horizon * TOKENS_PER_STEP / 1e9
-    token_ratio = equivalent_tokens / horizon_tokens
+    token_ratio = math.exp((control_loss - treatment_loss) / slope)
+    equivalent_tokens = horizon_tokens * token_ratio
     return {
         "control_loss": control_loss,
+        "treatment_loss": treatment_loss,
         "comparison_step": horizon,
         "comparison_tokens_billions": horizon_tokens,
         "treatment_tokens_to_control_loss_billions": equivalent_tokens,
@@ -223,6 +246,38 @@ def _time_to_equivalent(
         "time_ratio": token_ratio * treatment_step_seconds / control_step_seconds,
         "extra_time_fraction": token_ratio * treatment_step_seconds / control_step_seconds - 1.0,
     }
+
+
+def _runtime_forecast(step_seconds: float, tokens_billions: float) -> dict[str, float | int]:
+    steps = round(tokens_billions * 1e9 / TOKENS_PER_STEP)
+    optimizer_hours = steps * step_seconds / 3600
+    return {
+        "steps": steps,
+        "optimizer_hours": optimizer_hours,
+        "gpu_hours": optimizer_hours * GPU_COUNT,
+    }
+
+
+def _rolling_time_to_equivalent(
+    control_points: list[HistoryPoint],
+    treatment_points: list[HistoryPoint],
+    control_step_seconds: float,
+    treatment_step_seconds: float,
+) -> list[HistoryPoint]:
+    treatment_by_step = {point.step: point for point in treatment_points}
+    common_steps = [point.step for point in control_points if point.step in treatment_by_step]
+    result = []
+    for end_index in range(3, len(common_steps) + 1):
+        end_step = common_steps[end_index - 1]
+        estimate = _time_to_equivalent(
+            [point for point in control_points if point.step <= end_step],
+            [point for point in treatment_points if point.step <= end_step],
+            control_step_seconds,
+            treatment_step_seconds,
+        )
+        if estimate is not None:
+            result.append(HistoryPoint(end_step, estimate["extra_time_fraction"]))
+    return result
 
 
 def _timing_summary(points: list[HistoryPoint]) -> TimingSummary:
@@ -252,6 +307,13 @@ def main() -> None:
         all_history[arm]["uncheatable_macro"] = _metric_history(run, "eval/uncheatable_eval/macro_loss")
         all_history[arm]["uncheatable_e128"] = _metric_history(run, "eval/nested_e128/uncheatable_eval/macro_loss")
         all_history[arm]["uncheatable_e16"] = _metric_history(run, "eval/nested_e16/uncheatable_eval/macro_loss")
+        prefix_count = PREFIX_COUNT.get(arm)
+        all_history[arm]["nested_sequence_fraction"] = (
+            _metric_history(run, f"train/nested/e{prefix_count}_sequence_fraction") if prefix_count else []
+        )
+        all_history[arm]["nested_layer_sequence_fraction"] = (
+            _metric_history(run, f"train/nested/e{prefix_count}_layer_sequence_fraction") if prefix_count else []
+        )
 
     timing_horizon = _common_horizon(all_history, "step_duration")
     timing = {
@@ -261,10 +323,15 @@ def main() -> None:
     control_step_seconds = timing[CONTROL].median_step_seconds
     summaries: dict[str, dict[str, Any]] = {}
     comparisons: dict[str, dict[str, Any]] = {}
+    time_to_equivalent_history: dict[str, list[HistoryPoint]] = {}
     for arm, run in runs.items():
         history = all_history[arm]
         last_step = max((point.step for point in history["train_loss"]), default=-1)
         step_seconds = timing[arm].median_step_seconds
+        hook_seconds = [point.value for point in history["hook_duration"]]
+        evaluation_hooks = [value for value in hook_seconds if value >= 10.0]
+        run_runtime = run.summary.get("_runtime")
+        elapsed_seconds = float(run_runtime) if isinstance(run_runtime, (int, float)) else None
         summaries[arm] = {
             "run_name": RUNS[arm],
             "url": run.url,
@@ -277,12 +344,26 @@ def main() -> None:
             "full_uncheatable_macro": final_value(history["uncheatable_macro"]),
             "e128_uncheatable_macro": final_value(history["uncheatable_e128"]),
             "e16_uncheatable_macro": final_value(history["uncheatable_e16"]),
+            "nested_sequence_fraction": final_value(history["nested_sequence_fraction"]),
+            "nested_layer_sequence_fraction": final_value(history["nested_layer_sequence_fraction"]),
             "median_step_seconds": step_seconds,
             "step_overhead_vs_e256": step_seconds / control_step_seconds - 1.0,
             "gpu_hours_per_billion_tokens": 1e9 / TOKENS_PER_STEP * step_seconds * GPU_COUNT / 3600,
+            "optimizer_runtime_10b": _runtime_forecast(step_seconds, 10.0),
+            "evaluation_hook_count": len(evaluation_hooks),
+            "median_evaluation_hook_seconds": statistics.median(evaluation_hooks) if evaluation_hooks else None,
+            "total_logged_hook_seconds": sum(hook_seconds),
+            "elapsed_run_seconds": elapsed_seconds,
+            "elapsed_gpu_hours": elapsed_seconds * GPU_COUNT / 3600 if elapsed_seconds is not None else None,
         }
         if arm == CONTROL:
             continue
+        time_to_equivalent_history[arm] = _rolling_time_to_equivalent(
+            all_history[CONTROL]["paloma_macro"],
+            history["paloma_macro"],
+            control_step_seconds,
+            step_seconds,
+        )
         comparisons[arm] = {
             "full_paloma": _paired_delta_summary(all_history[CONTROL]["paloma_macro"], history["paloma_macro"]),
             "full_uncheatable": _paired_delta_summary(
@@ -296,6 +377,14 @@ def main() -> None:
                 control_step_seconds,
                 step_seconds,
             ),
+            "trained_prefix_paloma": _paired_delta_summary(
+                all_history[CONTROL][f"paloma_e{PREFIX_COUNT[arm]}"],
+                history[f"paloma_e{PREFIX_COUNT[arm]}"],
+            ),
+            "trained_prefix_uncheatable": _paired_delta_summary(
+                all_history[CONTROL][f"uncheatable_e{PREFIX_COUNT[arm]}"],
+                history[f"uncheatable_e{PREFIX_COUNT[arm]}"],
+            ),
         }
 
     result = {
@@ -306,8 +395,30 @@ def main() -> None:
         "summaries": summaries,
         "timing": {arm: asdict(value) for arm, value in timing.items()},
         "comparisons_vs_e256": comparisons,
+        "time_to_equivalent_history": {
+            arm: [asdict(point) for point in points] for arm, points in time_to_equivalent_history.items()
+        },
+        "layerwise_vs_naive": {
+            f"e{count}": {
+                "full_paloma": _paired_delta_summary(
+                    all_history[naive]["paloma_macro"],
+                    all_history[layerwise]["paloma_macro"],
+                ),
+                "prefix_paloma": _paired_delta_summary(
+                    all_history[naive][f"paloma_e{count}"],
+                    all_history[layerwise][f"paloma_e{count}"],
+                ),
+            }
+            for count, naive, layerwise in (
+                (128, "e128_naive", "e128_layerwise"),
+                (16, "e16_naive", "e16_layerwise"),
+            )
+        },
         "quality_log_linear_fits": {
             arm: _log_linear_fit(history["paloma_macro"]) for arm, history in all_history.items()
+        },
+        "quality_tail_log_linear_fits": {
+            arm: _log_linear_fit(history["paloma_macro"], tail_points=10) for arm, history in all_history.items()
         },
         "evaluation_history": {
             arm: {metric: [asdict(point) for point in history[metric]] for metric in EVALUATION_METRICS}
@@ -340,6 +451,34 @@ def main() -> None:
         path=args.output_dir / f"{args.output_prefix}-step-time.png",
         scale=1_000.0,
     )
+    figure, axis = plt.subplots(figsize=(10, 5.2))
+    for arm, points in time_to_equivalent_history.items():
+        axis.plot(
+            [point.step * TOKENS_PER_STEP / 1e9 for point in points],
+            [point.value * 100 for point in points],
+            marker="o",
+            color=COLORS[arm],
+            linestyle=LINESTYLES[arm],
+            label=LABELS[arm],
+        )
+    axis.axhline(10.0, color="#cf222e", linestyle=":", label="10% viability threshold")
+    if max((point.step for points in time_to_equivalent_history.values() for point in points), default=-1) >= (
+        DATAKIT_PHASE_STEP
+    ):
+        axis.axvline(
+            DATAKIT_PHASE_STEP * TOKENS_PER_STEP / 1e9,
+            color="#6e7781",
+            linestyle=":",
+            label="Datakit phase change",
+        )
+    axis.set_title("Full-mode time to equivalent Paloma loss")
+    axis.set_xlabel("Training tokens (billions)")
+    axis.set_ylabel("Extra optimizer wall time vs E256 (%)")
+    axis.grid(alpha=0.2)
+    axis.legend(ncol=2)
+    figure.tight_layout()
+    figure.savefig(args.output_dir / f"{args.output_prefix}-time-to-equivalent.png", dpi=180)
+    plt.close(figure)
 
 
 if __name__ == "__main__":
