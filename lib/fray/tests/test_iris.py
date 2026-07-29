@@ -21,7 +21,6 @@ from fray.iris_backend import (
 )
 from fray.types import (
     ANY_REGION,
-    CpuConfig,
     Entrypoint,
     GpuConfig,
     JobRequest,
@@ -362,7 +361,8 @@ class TestWithTpuFlexible:
     ],
 )
 def test_resolve_coscheduling_gpu_multinode_uses_variant_topology(variant, count, replicas, group_by):
-    cosched = resolve_coscheduling(GpuConfig(variant=variant, count=count), replicas=replicas)
+    resources = ResourceConfig(device=GpuConfig(variant=variant, count=count))
+    cosched = resolve_coscheduling(resources, replicas=replicas)
     assert cosched is not None
     assert cosched.group_by == group_by
 
@@ -375,19 +375,43 @@ def test_resolve_coscheduling_gpu_multinode_uses_variant_topology(variant, count
     ],
 )
 def test_resolve_coscheduling_gpu_multirack_rejects_unplaceable_gang(count, replicas):
+    resources = ResourceConfig(device=GpuConfig(variant="GB200", count=count))
     with pytest.raises(ValueError):
-        resolve_coscheduling(GpuConfig(variant="GB200", count=count), replicas=replicas)
+        resolve_coscheduling(resources, replicas=replicas)
+
+
+def test_resolve_coscheduling_gpu_allows_compatible_alternative_topologies():
+    resources = ResourceConfig(
+        device=GpuConfig(variant="GB200", count=4),
+        device_alternatives=["GB300"],
+    )
+
+    cosched = resolve_coscheduling(resources, replicas=32)
+
+    assert cosched is not None
+    assert cosched.group_by == "nvlink.domain.sliced"
+
+
+def test_resolve_coscheduling_gpu_rejects_incompatible_alternative_topologies():
+    resources = ResourceConfig(
+        device=GpuConfig(variant="GB200", count=4),
+        device_alternatives=["H100"],
+    )
+
+    with pytest.raises(ValueError, match=r"GB200=nvlink\.domain\.sliced, H100=leafgroup"):
+        resolve_coscheduling(resources, replicas=32)
 
 
 def test_resolve_coscheduling_tpu_multinode_uses_tpu_name():
-    cosched = resolve_coscheduling(TpuConfig(variant="v5litepod-16"), replicas=4)
+    resources = ResourceConfig(device=TpuConfig(variant="v5litepod-16"))
+    cosched = resolve_coscheduling(resources, replicas=4)
     assert cosched is not None
     assert cosched.group_by == "tpu-name"
 
 
 def test_resolve_coscheduling_single_replica_is_none():
-    assert resolve_coscheduling(GpuConfig(variant="H100", count=8), replicas=1) is None
-    assert resolve_coscheduling(CpuConfig(), replicas=4) is None
+    assert resolve_coscheduling(ResourceConfig(device=GpuConfig(variant="H100", count=8)), replicas=1) is None
+    assert resolve_coscheduling(ResourceConfig(), replicas=4) is None
 
 
 def _gpu_resources(count: int) -> ResourceSpec:
