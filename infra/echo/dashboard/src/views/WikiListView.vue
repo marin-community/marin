@@ -27,8 +27,8 @@ onMounted(load)
 
 <template>
   <section class="max-w-3xl">
-    <p class="mb-3 font-mono text-xs uppercase tracking-[0.22em] text-fern">Agent wiki</p>
-    <h1 class="text-4xl font-semibold leading-tight tracking-[-0.035em] sm:text-6xl">Recently updated notes.</h1>
+    <p class="font-mono text-xs uppercase tracking-[0.18em] text-fern">Agent wiki</p>
+    <h1 class="mt-2 text-3xl font-semibold tracking-[-0.03em] sm:text-5xl">Recently updated notes.</h1>
   </section>
 
   <section class="mt-8" aria-live="polite">
@@ -40,16 +40,16 @@ onMounted(load)
       <div v-for="index in 3" :key="index" class="h-32 animate-pulse rounded-2xl border border-line bg-white/60" />
     </div>
 
-    <div v-else class="grid gap-3">
+    <div v-else class="divide-y divide-line border-t border-line">
       <article
         v-for="entry in entries"
         :key="entry.id"
-        class="group rounded-2xl border border-line bg-white/85 p-5 transition hover:-translate-y-0.5 hover:border-fern/40 hover:shadow-card sm:p-6"
+        class="group py-5"
       >
         <div class="flex items-start justify-between gap-4">
           <div class="min-w-0">
             <div class="mb-2 flex flex-wrap items-center gap-2 font-mono text-[11px] uppercase tracking-wide text-ink/45">
-              <span class="rounded-md bg-mist px-2 py-1 text-moss">wiki</span>
+              <span class="text-moss">wiki</span>
               <span>{{ formatDate(entry.updated_at) }}</span>
             </div>
             <router-link
@@ -64,7 +64,7 @@ onMounted(load)
           </div>
           <span class="shrink-0 text-xs text-ink/40">{{ entry.reference_count }} refs</span>
         </div>
-        <p class="mt-4 text-xs text-ink/40">by {{ entry.author || 'unknown' }}</p>
+        <p class="mt-3 text-xs text-ink/40">by {{ entry.author || 'unknown' }}</p>
       </article>
     </div>
   </section>

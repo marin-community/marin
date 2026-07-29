@@ -29,14 +29,37 @@ export interface WikiHit {
   body?: string
 }
 
+export type SearchDomain = 'wiki' | 'file' | 'discord' | 'pr' | 'issue'
+
+export interface FederatedResult {
+  id: string
+  domain: SearchDomain
+  title: string
+  subtitle: string
+  url: string
+  snippet: string
+  score: number
+  distance: number | null
+  lexical_score: number | null
+}
+
+export interface RepositoryIndexStatus {
+  repository: string
+  branch: string
+  status: 'empty' | 'building' | 'ready'
+  commit_sha: string | null
+  completed_files: number | null
+  total_files: number | null
+  started_at: string | null
+  indexed_at: string | null
+}
+
 // The full chunk behind an activity hit: GET /api/chunks/{id} adds the untruncated text.
 export interface ActivityDetail extends ActivityHit {
   text: string | null
   ref: string | null
   parent: string | null
 }
-
-export type Result = ActivityHit | WikiHit
 
 export async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(url, { signal })

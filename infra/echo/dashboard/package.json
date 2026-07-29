@@ -12,6 +12,8 @@
     "@fontsource-variable/noto-sans": "^5.2.10",
     "@fontsource-variable/noto-sans-mono": "^5.2.10",
     "@tailwindcss/postcss": "^4.3.0",
+    "dompurify": "^3.4.12",
+    "marked": "^18.0.7",
     "vue": "^3.5.35",
     "vue-router": "^5.2.0"
   },

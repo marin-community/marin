@@ -63,10 +63,14 @@ activity, newest first.
 The scheduled sync checks GitHub at most once per hour. An unchanged head only advances
 the check time. A new head uses GitHub's compare API to delete, fetch, and re-embed
 changed paths; the first build, a divergent history, or a comparison of at least 300
-files falls back to one repository archive. Embeddings are prepared before the database
-transaction, then the changed paths and `repository_index_state` watermark are published
-atomically. Searches continue to use the previous complete index while a refresh runs.
-The job reuses the existing `marinmirror-token` GitHub PAT for authenticated REST calls.
+files falls back to one repository archive. Builds embed and commit ten files at a time,
+print cumulative file progress, and record a durable build watermark in Postgres. A
+retry fetches the same immutable GitHub snapshot and skips paths already committed.
+Partial generations are searchable: a full build starts empty and fills in by batch,
+while an incremental build keeps unchanged files and replaces changed paths as their
+batches finish. Results and index status name the target commit so this temporary
+incompleteness is visible. The job reuses the existing `marinmirror-token` GitHub PAT for
+authenticated REST calls.
 
 The file index accepts source, configuration, and prose files up to 256 KiB. It rejects
 binary/non-UTF-8 content, lock files, generated/minified files, build and cache
@@ -114,6 +118,7 @@ the activity corpus and wiki notes. The same service exposes OpenAPI documentati
 
 - `GET /api/search`
 - `GET /api/federated-search`
+- `GET /api/repository-index`
 - `GET /api/grep`
 - `GET /api/chunks/{id}`
 - `GET /api/wiki/search`
@@ -131,13 +136,19 @@ direct database access.
 `GET /api/search` preserves the activity-only response used by existing clients.
 `GET /api/federated-search` accepts repeated
 `domain=wiki|file|discord|pr|issue` parameters and returns the common ranked result
-shape.
+shape. `GET /api/repository-index` reports the indexed GitHub commit and freshness, or
+the completed and total file counts for an active build. The dashboard displays this
+state on its landing page.
 
 The dashboard is a Vue single-page app served from the same origin, with client-side
 routes at `/` (search), `/wiki` (recently updated notes), `/wiki/<id>` (a note), and
 `/chunk/<id>` (an activity chunk). The API's catch-all route serves `index.html` for
 any path that isn't `/api/...`, `/healthz`, `/static/...`, `/docs`, or `/openapi.json`,
 so vue-router's history-mode navigation and reloads resolve correctly.
+
+Dashboard search uses the federated endpoint and exposes checkboxes for files, wiki,
+Discord, pull requests, and issues. Header tabs provide common domain presets. Wiki note
+bodies render sanitized Markdown.
 
 For local dashboard development:
 
@@ -174,5 +185,8 @@ pulumi up
 with access to `cloudsql-pulumi-admin-password`. When a release adds tables queried by
 new API or sync images, run `infra/echo/migrate.py` before `pulumi up` to avoid a
 missing-table window. The first repository build fetches a GitHub archive and embeds
-all eligible files; later hourly runs normally process only changed paths. Review
-database grant changes before deploying them.
+all eligible files in resumable ten-file batches; later hourly runs normally process
+only changed paths. `repository_index_builds` is required by both the sync job and the
+API progress endpoint, so apply migration `m0009_repository_index_progress` before
+deploying images that contain the incremental builder. Review database grant changes
+before deploying them.

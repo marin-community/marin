@@ -1,110 +1,118 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { fetchJson, formatDate, type ActivityHit, type Result, type WikiHit } from '../types'
-import WikiTags from '../WikiTags.vue'
+import {
+  fetchJson,
+  formatDate,
+  type FederatedResult,
+  type RepositoryIndexStatus,
+  type SearchDomain,
+} from '../types'
 
-type Scope = 'all' | 'activity' | 'wiki'
-type Source = 'all' | 'github' | 'discord'
-
-const PAGE_SIZE = 20
+const PAGE_SIZE = 30
 const DEBOUNCE_MS = 250
-const SCOPES: Scope[] = ['all', 'activity', 'wiki']
-const SOURCES: Source[] = ['all', 'github', 'discord']
+const DISPLAY_SHA_CHARACTERS = 12
+const DOMAINS: { value: SearchDomain; label: string }[] = [
+  { value: 'file', label: 'Files' },
+  { value: 'wiki', label: 'Wiki' },
+  { value: 'pr', label: 'Pull requests' },
+  { value: 'issue', label: 'Issues' },
+  { value: 'discord', label: 'Discord' },
+]
 
 const route = useRoute()
 const router = useRouter()
-
-function oneOf<T extends string>(value: unknown, allowed: T[], fallback: T): T {
-  return typeof value === 'string' && (allowed as string[]).includes(value) ? (value as T) : fallback
-}
-
-// Seed from the URL so a shared link, a reload, or the Back button after visiting a result
-// restores the query and filters.
 const query = ref(typeof route.query.q === 'string' ? route.query.q : '')
-const scope = ref<Scope>(oneOf(route.query.scope, SCOPES, 'all'))
-const source = ref<Source>(oneOf(route.query.source, SOURCES, 'all'))
-const results = ref<Result[]>([])
+const selectedDomains = ref<SearchDomain[]>(domainsFromQuery(route.query.domain))
+const results = ref<FederatedResult[]>([])
+const index = ref<RepositoryIndexStatus | null>(null)
+const indexError = ref('')
 const loading = ref(false)
 const error = ref('')
 let request: AbortController | null = null
 
+function domainsFromQuery(value: unknown): SearchDomain[] {
+  const requested = Array.isArray(value) ? value : typeof value === 'string' ? [value] : []
+  const valid = requested.filter((domain): domain is SearchDomain =>
+    DOMAINS.some((candidate) => candidate.value === domain),
+  )
+  return valid.length ? [...new Set(valid)] : DOMAINS.map((domain) => domain.value)
+}
+
+const indexPercent = computed(() => {
+  if (index.value?.status !== 'building' || !index.value.total_files) return 0
+  return Math.round(((index.value.completed_files || 0) / index.value.total_files) * 100)
+})
+
 const resultLabel = computed(() => {
   if (loading.value) return 'Searching…'
-  if (!results.value.length) {
-    if (query.value.trim()) return 'No matches'
-    return scope.value === 'activity' ? 'Enter a query to search activity' : 'Recently updated wiki notes'
-  }
+  if (!query.value.trim()) return 'Search files, knowledge, and conversations'
+  if (!results.value.length) return 'No matches'
   return `${results.value.length} ${results.value.length === 1 ? 'result' : 'results'}`
 })
 
-function activityUrl(): string {
-  const params = new URLSearchParams({ q: query.value.trim(), limit: String(PAGE_SIZE) })
-  if (source.value !== 'all') params.set('source', source.value)
-  return `/api/search?${params}`
+function toggleDomain(domain: SearchDomain): void {
+  selectedDomains.value = selectedDomains.value.includes(domain)
+    ? selectedDomains.value.filter((candidate) => candidate !== domain)
+    : [...selectedDomains.value, domain]
 }
 
-function wikiUrl(): string {
-  return `/api/wiki/search?${new URLSearchParams({ q: query.value.trim(), limit: String(PAGE_SIZE) })}`
+function wikiPath(result: FederatedResult): string {
+  return new URL(result.url).pathname
 }
 
-function resultTime(result: Result): number {
-  const value = result.type === 'wiki' ? result.updated_at : result.date
-  return value ? new Date(value).getTime() : 0
+function indexLabel(): string {
+  if (!index.value || index.value.status === 'empty') return 'The repository index has not started.'
+  if (index.value.status === 'building') {
+    return `Indexing ${index.value.completed_files || 0} of ${index.value.total_files || 0} files from ${
+      index.value.branch
+    }@${index.value.commit_sha?.slice(0, DISPLAY_SHA_CHARACTERS)}. Partial results are available.`
+  }
+  return `Files reflect ${index.value.branch}@${index.value.commit_sha?.slice(
+    0,
+    DISPLAY_SHA_CHARACTERS,
+  )}, indexed ${formatDate(index.value.indexed_at)}.`
 }
 
-function resultLink(result: Result): string {
-  return result.type === 'wiki' ? `/wiki/${result.id}` : `/chunk/${result.id}`
-}
-
-function resultTitle(result: Result): string {
-  return result.type === 'wiki' ? result.title : result.title || result.snippet
+async function loadIndex(): Promise<void> {
+  indexError.value = ''
+  try {
+    index.value = await fetchJson<RepositoryIndexStatus>('/api/repository-index')
+  } catch (reason) {
+    index.value = null
+    indexError.value = reason instanceof Error ? reason.message : 'Index status unavailable'
+  }
 }
 
 async function search(): Promise<void> {
   request?.abort()
+  results.value = []
+  const text = query.value.trim()
+  if (!text || !selectedDomains.value.length) {
+    loading.value = false
+    return
+  }
+
   request = new AbortController()
   loading.value = true
   error.value = ''
-  const text = query.value.trim()
-
+  const params = new URLSearchParams({ q: text, limit: String(PAGE_SIZE) })
+  for (const domain of selectedDomains.value) params.append('domain', domain)
   try {
-    const jobs: Promise<Result[]>[] = []
-    if (text && scope.value !== 'wiki') {
-      jobs.push(
-        fetchJson<Omit<ActivityHit, 'type'>[]>(activityUrl(), request.signal).then((hits) =>
-          hits.map((hit) => ({ ...hit, type: 'activity' as const })),
-        ),
-      )
-    }
-    if (scope.value !== 'activity') {
-      jobs.push(
-        fetchJson<Omit<WikiHit, 'type'>[]>(wikiUrl(), request.signal).then((hits) =>
-          hits.map((hit) => ({ ...hit, type: 'wiki' as const })),
-        ),
-      )
-    }
-    const groups = await Promise.all(jobs)
-    results.value = groups
-      .flat()
-      .sort((left, right) => right.score - left.score || resultTime(right) - resultTime(left))
+    results.value = await fetchJson<FederatedResult[]>(`/api/federated-search?${params}`, request.signal)
   } catch (reason) {
     if (reason instanceof DOMException && reason.name === 'AbortError') return
     error.value = reason instanceof Error ? reason.message : 'Search failed'
-    results.value = []
   } finally {
     loading.value = false
   }
 }
 
-// Reflect the query and filters in the URL with replace (not push), so incremental typing
-// does not spam history; the seed-on-mount above is what makes Back restore the search.
 function syncUrl(): void {
-  const params: Record<string, string> = {}
+  const params: Record<string, string | string[]> = {}
   if (query.value.trim()) params.q = query.value.trim()
-  if (scope.value !== 'all') params.scope = scope.value
-  if (source.value !== 'all') params.source = source.value
-  router.replace({ query: params }).catch(() => {}) // ignore redundant-navigation rejections
+  if (selectedDomains.value.length !== DOMAINS.length) params.domain = selectedDomains.value
+  router.replace({ query: params }).catch(() => {})
 }
 
 function run(): void {
@@ -118,119 +126,117 @@ function debouncedRun(): void {
   debounceTimer = setTimeout(run, DEBOUNCE_MS)
 }
 
-// Typing is debounced; a scope/source change or an explicit submit runs immediately.
 watch(query, debouncedRun)
-watch([scope, source], run)
+watch(selectedDomains, run, { deep: true })
 
 function submit(): void {
   clearTimeout(debounceTimer)
   run()
 }
 
-onMounted(search)
+onMounted(() => {
+  loadIndex()
+  search()
+})
 </script>
 
 <template>
-  <section class="max-w-3xl">
-    <p class="mb-3 font-mono text-xs uppercase tracking-[0.22em] text-fern">GitHub · Discord · agent wiki</p>
-    <h1 class="text-4xl font-semibold leading-tight tracking-[-0.035em] sm:text-6xl">
-      Search Marin activity and wiki notes.
-    </h1>
-    <p class="mt-5 max-w-2xl text-base leading-7 text-ink/65 sm:text-lg">
-      Hybrid lexical and semantic search over the GitHub and Discord corpus and the
-      agent wiki. Every hit links to its source.
+  <section class="max-w-4xl">
+    <p class="font-mono text-xs uppercase tracking-[0.18em] text-fern">Wiki · code · GitHub · Discord</p>
+    <h1 class="mt-2 text-3xl font-semibold tracking-[-0.03em] sm:text-5xl">Search across Marin.</h1>
+
+    <div v-if="index" class="mt-6 border-l-2 border-fern/40 pl-4 text-sm text-ink/60">
+      <div class="flex items-center justify-between gap-4">
+        <p>{{ indexLabel() }}</p>
+        <span v-if="index.status === 'building'" class="font-mono text-xs">{{ indexPercent }}%</span>
+      </div>
+      <div v-if="index.status === 'building'" class="mt-2 h-1.5 overflow-hidden rounded bg-line/60">
+        <div class="h-full bg-fern transition-all" :style="{ width: `${indexPercent}%` }" />
+      </div>
+    </div>
+    <p v-else-if="indexError" class="mt-6 border-l-2 border-amber-500 pl-4 text-sm text-ink/60">
+      Repository index status unavailable: {{ indexError }}
     </p>
   </section>
 
-  <form class="mt-10 rounded-2xl border border-line bg-white/90 p-3 shadow-card" @submit.prevent="submit">
-    <div class="flex flex-col gap-3 sm:flex-row">
+  <form class="mt-8 max-w-4xl border-y border-line py-4" @submit.prevent="submit">
+    <div class="flex flex-col gap-2 sm:flex-row">
       <label class="sr-only" for="echo-query">Search Echo</label>
       <input
         id="echo-query"
         v-model="query"
-        class="min-w-0 flex-1 rounded-xl border-0 bg-mist/65 px-5 py-4 text-base placeholder:text-ink/35"
-        placeholder="An identifier, a run name, or a question…"
+        class="min-w-0 flex-1 rounded-lg border border-line bg-white px-4 py-3 placeholder:text-ink/35"
+        placeholder="Identifier, incident, question, or phrase…"
         type="search"
       />
       <button
-        class="rounded-xl bg-moss px-7 py-4 font-semibold text-white transition hover:bg-fern disabled:cursor-wait disabled:opacity-60"
-        :disabled="loading"
+        class="rounded-lg bg-moss px-6 py-3 font-semibold text-white hover:bg-fern disabled:cursor-wait disabled:opacity-60"
+        :disabled="loading || !selectedDomains.length"
         type="submit"
       >
         {{ loading ? 'Searching' : 'Search' }}
       </button>
     </div>
 
-    <div class="mt-3 flex flex-wrap items-center gap-2 px-1 pb-1">
-      <div class="flex rounded-lg bg-mist p-1" aria-label="Search scope">
-        <button
-          v-for="option in (['all', 'activity', 'wiki'] as Scope[])"
-          :key="option"
-          class="rounded-md px-3 py-1.5 text-sm capitalize transition"
-          :class="scope === option ? 'bg-white font-semibold shadow-sm' : 'text-ink/55 hover:text-ink'"
-          type="button"
-          @click="scope = option"
-        >
-          {{ option }}
-        </button>
-      </div>
-      <select
-        v-model="source"
-        class="rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink/70 disabled:opacity-40"
-        :disabled="scope === 'wiki'"
-        aria-label="Activity source"
+    <fieldset class="mt-3 flex flex-wrap gap-x-4 gap-y-2">
+      <legend class="sr-only">Search domains</legend>
+      <label
+        v-for="domain in DOMAINS"
+        :key="domain.value"
+        class="flex cursor-pointer items-center gap-2 text-sm text-ink/65"
       >
-        <option value="all">GitHub + Discord</option>
-        <option value="github">GitHub</option>
-        <option value="discord">Discord</option>
-      </select>
-    </div>
+        <input
+          class="size-4 accent-fern"
+          type="checkbox"
+          :checked="selectedDomains.includes(domain.value)"
+          @change="toggleDomain(domain.value)"
+        />
+        {{ domain.label }}
+      </label>
+    </fieldset>
   </form>
 
-  <section class="mt-8" aria-live="polite">
-    <div class="mb-4 flex items-center justify-between">
-      <h2 class="text-sm font-semibold text-ink/60">{{ resultLabel }}</h2>
-      <span v-if="query.trim()" class="font-mono text-xs text-ink/40">hybrid · lexical + semantic</span>
+  <section class="mt-7 max-w-4xl" aria-live="polite">
+    <div class="mb-2 flex items-center justify-between">
+      <h2 class="text-sm font-semibold text-ink/55">{{ resultLabel }}</h2>
+      <span v-if="query.trim()" class="font-mono text-xs text-ink/35">hybrid ranked</span>
     </div>
 
-    <div v-if="error" class="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+    <div v-if="error" class="my-4 border-l-2 border-red-500 bg-red-50 px-4 py-3 text-sm text-red-800">
       {{ error }}
     </div>
 
-    <div v-if="loading" class="grid gap-3">
-      <div v-for="index in 3" :key="index" class="h-32 animate-pulse rounded-2xl border border-line bg-white/60" />
+    <div v-if="loading" class="divide-y divide-line border-t border-line">
+      <div v-for="item in 4" :key="item" class="h-28 animate-pulse bg-white/35" />
     </div>
 
-    <div v-else class="grid gap-3">
-      <article
-        v-for="result in results"
-        :key="`${result.type}-${result.id}`"
-        class="group rounded-2xl border border-line bg-white/85 p-5 transition hover:-translate-y-0.5 hover:border-fern/40 hover:shadow-card sm:p-6"
-      >
-        <div class="flex items-start justify-between gap-4">
-          <div class="min-w-0">
-            <div class="mb-2 flex flex-wrap items-center gap-2 font-mono text-[11px] uppercase tracking-wide text-ink/45">
-              <span class="rounded-md bg-mist px-2 py-1 text-moss">{{ result.type }}</span>
-              <span v-if="result.type === 'activity'">{{ result.source }} · {{ result.kind }}</span>
-              <span>{{ formatDate(result.type === 'wiki' ? result.updated_at : result.date) }}</span>
-            </div>
-            <router-link
-              class="text-left text-lg font-semibold leading-snug text-ink group-hover:text-moss"
-              :to="resultLink(result)"
-            >
-              {{ resultTitle(result) }}
-            </router-link>
-            <p v-if="result.type === 'wiki'" class="mt-2 text-sm font-medium leading-6 text-moss">
-              Use when: {{ result.use_when }}
-            </p>
-            <WikiTags v-if="result.type === 'wiki'" :tags="result.tags" class="mt-2" />
-            <p class="mt-2 line-clamp-2 text-sm leading-6 text-ink/60">{{ result.snippet }}</p>
-          </div>
-          <span v-if="result.type === 'wiki'" class="shrink-0 text-xs text-ink/40">
-            {{ result.reference_count }} refs
+    <div v-else class="divide-y divide-line border-t border-line">
+      <article v-for="result in results" :key="result.id" class="group py-4">
+        <div class="flex items-start gap-3">
+          <span class="mt-0.5 w-14 shrink-0 font-mono text-[11px] uppercase tracking-wide text-moss">
+            {{ result.domain }}
           </span>
+          <div class="min-w-0">
+            <router-link
+              v-if="result.domain === 'wiki'"
+              class="font-semibold leading-snug group-hover:text-moss"
+              :to="wikiPath(result)"
+            >
+              {{ result.title }}
+            </router-link>
+            <a
+              v-else
+              class="font-semibold leading-snug group-hover:text-moss"
+              :href="result.url"
+              rel="noreferrer"
+              target="_blank"
+            >
+              {{ result.title }}
+            </a>
+            <p class="mt-1 break-words text-xs text-ink/45">{{ result.subtitle }}</p>
+            <p class="mt-2 line-clamp-3 text-sm leading-6 text-ink/65">{{ result.snippet }}</p>
+          </div>
         </div>
-        <p class="mt-4 text-xs text-ink/40">by {{ result.author || 'unknown' }}</p>
       </article>
     </div>
   </section>

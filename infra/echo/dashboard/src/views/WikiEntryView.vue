@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
 import { fetchJson, formatDate, type WikiHit } from '../types'
+import MarkdownBody from '../MarkdownBody.vue'
 import WikiTags from '../WikiTags.vue'
 
 const props = defineProps<{ id: string }>()
@@ -45,19 +46,19 @@ watch(() => props.id, load)
     {{ error }}
   </div>
 
-  <article v-else-if="entry" class="max-w-3xl rounded-3xl border border-line bg-white/90 p-6 shadow-card sm:p-9">
+  <article v-else-if="entry" class="max-w-3xl">
     <p class="font-mono text-xs uppercase tracking-widest text-fern">Wiki note</p>
     <h1 class="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">{{ entry.title }}</h1>
     <p class="mt-3 text-sm text-ink/45">{{ entry.author }} · {{ formatDate(entry.updated_at) }}</p>
-    <p class="mt-6 rounded-xl border border-fern/20 bg-white/70 px-4 py-3 text-sm font-medium leading-6 text-moss">
+    <p class="mt-6 border-l-2 border-fern/40 pl-4 text-sm font-medium leading-6 text-moss">
       Use when: {{ entry.use_when }}
     </p>
     <WikiTags :tags="entry.tags" class="mt-4" />
-    <div class="mt-7 whitespace-pre-wrap text-[15px] leading-7 text-ink/80">{{ entry.body }}</div>
+    <MarkdownBody class="mt-8" :source="entry.body || ''" />
     <div class="mt-8 flex items-center justify-between border-t border-line pt-5">
       <span class="text-sm text-ink/45">{{ entry.reference_count }} references</span>
       <button
-        class="rounded-lg border border-moss/25 bg-white px-4 py-2 text-sm font-semibold text-moss hover:bg-mist"
+        class="rounded border border-moss/25 bg-white px-4 py-2 text-sm font-semibold text-moss hover:bg-mist"
         @click="markReferenced"
       >
         Mark referenced
