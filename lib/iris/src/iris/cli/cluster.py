@@ -29,6 +29,7 @@ from rigging.token_authority import SigningKey, generate_ed25519_keypair, signin
 from iris.cli.build import (
     CARGO_PROFILES,
     DEFAULT_CARGO_PROFILE,
+    _versioned_tag,
     build_image,
     find_marin_root,
     get_git_sha,
@@ -249,27 +250,30 @@ def _build_cluster_images(
     return built
 
 
-def _pin_latest_images(config, git_sha: str) -> dict[str, str]:
+def _pin_latest_images(config, git_sha: str, task_platforms: str | None = None) -> dict[str, str]:
     """Pin :latest image tags to the current git SHA in memory only."""
 
-    def _pin_tag(tag: str | None, git_sha: str) -> str | None:
+    kubernetes = config.defaults.worker.runtime == KUBERNETES_WORKER_RUNTIME
+    controller_platforms = KUBERNETES_IMAGE_PLATFORMS if kubernetes else AMD64_IMAGE_PLATFORM
+    resolved_task_platforms = task_platforms or (KUBERNETES_IMAGE_PLATFORMS if kubernetes else AMD64_IMAGE_PLATFORM)
+
+    def _pin_tag(tag: str | None, platform: str) -> str | None:
         if not tag:
             return tag
         if tag.endswith(":latest"):
-            return f"{tag.removesuffix(':latest')}:{git_sha}"
+            return _versioned_tag(tag.removesuffix(":latest"), git_sha, platform)
         return tag
 
     tags = {
-        "controller": config.controller.image,
-        "worker": config.defaults.worker.docker_image,
-        "task": config.defaults.worker.default_task_image,
+        "controller": (config.controller.image, controller_platforms),
+        "worker": (config.defaults.worker.docker_image, AMD64_IMAGE_PLATFORM),
+        "task": (config.defaults.worker.default_task_image, resolved_task_platforms),
     }
-    needs_pin = any(tag.endswith(":latest") for tag in tags.values() if tag)
+    needs_pin = any(tag.endswith(":latest") for tag, _platform in tags.values() if tag)
     if not needs_pin:
-        return {k: v for k, v in tags.items() if v}
+        return {name: tag for name, (tag, _platform) in tags.items() if tag}
 
-    pinned = {name: _pin_tag(tag, git_sha) for name, tag in tags.items()}
-
+    pinned = {name: _pin_tag(tag, platform) for name, (tag, platform) in tags.items()}
     if pinned["controller"]:
         config.controller.image = pinned["controller"]
     if pinned["worker"]:
@@ -294,7 +298,7 @@ def _build_and_pin_deploy_images(
 ) -> None:
     """Pin :latest tags to the working-tree hash, build + push the images, echo them."""
     git_sha = get_git_sha()
-    _pin_latest_images(config, git_sha)
+    _pin_latest_images(config, git_sha, task_platforms)
     verbose = ctx.obj.get("verbose", False)
     built = _build_cluster_images(
         config,
@@ -562,7 +566,7 @@ def cluster_start(ctx, local: bool, fresh: bool, task_image_platforms: str | Non
     is_local = config.controller.controller_kind() == "local"
     if not is_local:
         git_sha = get_git_sha()
-        _pin_latest_images(config, git_sha)
+        _pin_latest_images(config, git_sha, task_image_platforms)
         verbose = ctx.obj.get("verbose", False)
         built = _build_cluster_images(
             config,
@@ -649,7 +653,7 @@ def cluster_start_smoke(
     config.storage.remote_state_dir = marin_temp_bucket(ttl_days=7, prefix=f"iris/state/{label_prefix}")
 
     git_sha = get_git_sha()
-    _pin_latest_images(config, git_sha)
+    _pin_latest_images(config, git_sha, task_image_platforms)
     verbose = ctx.obj.get("verbose", False)
     _build_cluster_images(
         config,

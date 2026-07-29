@@ -74,7 +74,6 @@ storage:
 
 kubernetes_provider:
   namespace: iris-ci
-  default_image: ghcr.io/marin-community/iris-task:latest
   host_network: true
   cache_dir: /mnt/local/iris-cache
   controller_address: http://iris-ci-controller-svc.iris-ci.svc.cluster.local:10000
