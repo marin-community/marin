@@ -134,6 +134,19 @@ repository_index_state = Table(
     Column("indexed_at", DateTime(timezone=True), nullable=False),
 )
 
+repository_index_builds = Table(
+    "repository_index_builds",
+    metadata,
+    Column("repository", Text, primary_key=True),
+    Column("branch", Text, primary_key=True),
+    Column("commit_sha", Text, nullable=False),
+    Column("base_sha", Text),
+    Column("mode", Text, nullable=False),
+    Column("total_files", Integer, nullable=False),
+    Column("completed_files", Integer, nullable=False, server_default=text("0")),
+    Column("started_at", DateTime(timezone=True), nullable=False),
+)
+
 sync_state = Table(
     "sync_state",
     metadata,

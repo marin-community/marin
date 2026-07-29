@@ -218,6 +218,9 @@ def test_federated_file_result_names_exact_indexed_head(client_with):
     state = make_row(
         commit_sha="abcdef1234567890",
         indexed_at=datetime(2026, 7, 29, 20, tzinfo=UTC),
+        completed_files=None,
+        total_files=None,
+        started_at=None,
     )
     file = make_row(
         id=9,
@@ -252,6 +255,31 @@ def test_federated_file_result_names_exact_indexed_head(client_with):
             "lexical_score": 4.0,
         }
     ]
+
+
+def test_repository_index_reports_searchable_partial_build(client_with):
+    state = make_row(
+        commit_sha="fedcba9876543210",
+        indexed_at=datetime(2026, 7, 28, 20, tzinfo=UTC),
+        completed_files=70,
+        total_files=180,
+        started_at=datetime(2026, 7, 29, 20, tzinfo=UTC),
+    )
+    harness = client_with([], responses=[[state]])
+
+    response = harness.client.get("/api/repository-index")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "repository": "marin-community/marin",
+        "branch": "main",
+        "status": "building",
+        "commit_sha": "fedcba9876543210",
+        "completed_files": 70,
+        "total_files": 180,
+        "started_at": "2026-07-29T20:00:00Z",
+        "indexed_at": "2026-07-28T20:00:00Z",
+    }
 
 
 def test_add_wiki_embeds_applicability_hint_and_body_as_passage(client_with):

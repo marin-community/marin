@@ -132,6 +132,17 @@ class SearchResult(BaseModel):
     lexical_score: float | None = Field(None, description="PostgreSQL full-text rank; higher is better.")
 
 
+class RepositoryIndexStatus(BaseModel):
+    repository: str
+    branch: str
+    status: Literal["empty", "building", "ready"]
+    commit_sha: str | None
+    completed_files: int | None
+    total_files: int | None
+    started_at: datetime | None
+    indexed_at: datetime | None
+
+
 class LogSummary(BaseModel):
     id: int
     at: datetime
@@ -188,7 +199,14 @@ class WikiCreate(BaseModel):
 @dataclass(frozen=True)
 class RepositoryIndexState:
     commit_sha: str
-    indexed_at: datetime
+    completed_files: int | None
+    total_files: int | None
+    started_at: datetime | None
+    indexed_at: datetime | None
+
+    @property
+    def building(self) -> bool:
+        return self.started_at is not None
 
 
 def normalize_wiki_tags(tags: Iterable[str]) -> list[str]:
@@ -334,18 +352,41 @@ def repository_index_state(
     conn: sqlalchemy.Connection,
     config: EchoConfig,
 ) -> RepositoryIndexState | None:
+    join_condition = sqlalchemy.and_(
+        schema.repository_index_state.c.repository == schema.repository_index_builds.c.repository,
+        schema.repository_index_state.c.branch == schema.repository_index_builds.c.branch,
+    )
+    repository = sqlalchemy.func.coalesce(
+        schema.repository_index_builds.c.repository,
+        schema.repository_index_state.c.repository,
+    )
+    branch = sqlalchemy.func.coalesce(
+        schema.repository_index_builds.c.branch,
+        schema.repository_index_state.c.branch,
+    )
     row = conn.execute(
         sqlalchemy.select(
-            schema.repository_index_state.c.commit_sha,
+            sqlalchemy.func.coalesce(
+                schema.repository_index_builds.c.commit_sha,
+                schema.repository_index_state.c.commit_sha,
+            ).label("commit_sha"),
+            schema.repository_index_builds.c.completed_files,
+            schema.repository_index_builds.c.total_files,
+            schema.repository_index_builds.c.started_at,
             schema.repository_index_state.c.indexed_at,
-        ).where(
-            schema.repository_index_state.c.repository == config.github_repository,
-            schema.repository_index_state.c.branch == config.github_branch,
         )
+        .select_from(schema.repository_index_state.outerjoin(schema.repository_index_builds, join_condition, full=True))
+        .where(repository == config.github_repository, branch == config.github_branch)
     ).first()
     if row is None:
         return None
-    return RepositoryIndexState(row.commit_sha, row.indexed_at)
+    return RepositoryIndexState(
+        row.commit_sha,
+        row.completed_files,
+        row.total_files,
+        row.started_at,
+        row.indexed_at,
+    )
 
 
 def representative_file_line(text: str, query: str, start_line: int) -> tuple[int, str]:
@@ -368,13 +409,18 @@ def repository_file_search_result(
 ) -> SearchResult:
     line, matching_line = representative_file_line(row.text, query, row.start_line)
     path = quote(row.path, safe="/")
+    if state.building:
+        freshness = f"building {state.completed_files}/{state.total_files} since {state.started_at.isoformat()}"
+    else:
+        assert state.indexed_at is not None
+        freshness = f"indexed {state.indexed_at.isoformat()}"
     return SearchResult(
         id=f"file:{row.path}",
         domain="file",
         title=row.title,
         subtitle=(
-            f"{row.path}:{line} · {config.github_branch}@{state.commit_sha[:12]} · "
-            f"indexed {state.indexed_at.isoformat()}"
+            f"{row.path}:{line} · "
+            f"{config.github_branch}@{state.commit_sha[: search_config.DISPLAY_SHA_CHARACTERS]} · {freshness}"
         ),
         url=f"https://github.com/{config.github_repository}/blob/{state.commit_sha}/{path}#L{line}",
         snippet=matching_line[:240],
@@ -393,6 +439,34 @@ def healthz(engine: Engine) -> dict[str, str]:
     with engine.connect() as conn:
         conn.execute(sqlalchemy.text("SELECT 1"))
     return {"status": "ok"}
+
+
+@api.get("/repository-index", response_model=RepositoryIndexStatus)
+def repository_index(engine: Engine, config: Config) -> RepositoryIndexStatus:
+    """Return repository index freshness and current build progress."""
+    with engine.connect() as conn:
+        state = repository_index_state(conn, config)
+    if state is None:
+        return RepositoryIndexStatus(
+            repository=config.github_repository,
+            branch=config.github_branch,
+            status="empty",
+            commit_sha=None,
+            completed_files=None,
+            total_files=None,
+            started_at=None,
+            indexed_at=None,
+        )
+    return RepositoryIndexStatus(
+        repository=config.github_repository,
+        branch=config.github_branch,
+        status="building" if state.building else "ready",
+        commit_sha=state.commit_sha,
+        completed_files=state.completed_files,
+        total_files=state.total_files,
+        started_at=state.started_at,
+        indexed_at=state.indexed_at,
+    )
 
 
 @api.get("/search", response_model=list[Hit])

@@ -6,6 +6,7 @@
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 INDEXED_REPOSITORY = "marin-community/marin"
 INDEXED_BRANCH = "main"
+DISPLAY_SHA_CHARACTERS = 12
 SEARCH_DOMAINS = ("wiki", "file", "discord", "pr", "issue")
 TEXT_SEARCH_CONFIG = "english"
 TS_RANK_NORMALIZATION = 32

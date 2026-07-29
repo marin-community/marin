@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build and atomically publish Echo's rolling GitHub repository index."""
+"""Build Echo's visible, resumable rolling GitHub repository index."""
 
 import base64
 import json
@@ -11,7 +11,8 @@ import urllib.request
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from pathlib import PurePosixPath
 from urllib.parse import quote
 
@@ -22,10 +23,12 @@ import sqlalchemy
 from fastembed import TextEmbedding
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-REPOSITORY_BATCH = 100
+REPOSITORY_FILE_BATCH = 10
+DATABASE_INSERT_BATCH = 100
 REPOSITORY_CHECK_INTERVAL = timedelta(hours=1)
 MAX_COMPARE_FILES = 300
 REPOSITORY_SYNC_LOCK_KEY = 0x65636872  # "echr"
+GITHUB_JSON_MEDIA_TYPE = "application/vnd.github+json"
 
 
 @dataclass(frozen=True)
@@ -40,13 +43,28 @@ class RepositoryState:
     checked_at: datetime
 
 
+class RepositoryBuildMode(StrEnum):
+    FULL = "full"
+    INCREMENTAL = "incremental"
+
+
+@dataclass(frozen=True)
+class RepositoryBuild:
+    commit_sha: str
+    base_sha: str | None
+    mode: RepositoryBuildMode
+    total_files: int
+    completed_files: int
+    started_at: datetime
+
+
 @dataclass(frozen=True)
 class RepositoryChangeSet:
     replaced_paths: frozenset[str]
     files: tuple[repository_files.IndexedFile, ...]
 
 
-def github_open(path: str, token: str, accept: str = "application/vnd.github+json"):
+def github_open(path: str, token: str, accept: str = GITHUB_JSON_MEDIA_TYPE):
     request = urllib.request.Request(
         f"https://api.github.com/repos/{path}",
         headers={
@@ -87,7 +105,7 @@ def incremental_repository_files(
     comparison: dict[str, object],
     load_blob: Callable[[str], bytes],
 ) -> RepositoryChangeSet | None:
-    """Translate a GitHub compare response into changed indexed files."""
+    """Translate a GitHub comparison, or return None when a full rebuild is required."""
     raw_files = comparison.get("files")
     if comparison.get("status") != "ahead" or not isinstance(raw_files, list) or len(raw_files) >= MAX_COMPARE_FILES:
         return None
@@ -126,7 +144,7 @@ def incremental_repository_files(
 
 
 def archive_repository_files(response) -> tuple[repository_files.IndexedFile, ...]:
-    """Read eligible files from a GitHub tarball without extracting it."""
+    """Return eligible repository files from a streamed GitHub archive."""
     files: list[repository_files.IndexedFile] = []
     with tarfile.open(fileobj=response, mode="r|gz") as archive:
         for member in archive:
@@ -156,7 +174,6 @@ def github_archive_files(
     with github_open(
         f"{target.repository}/tarball/{quote(commit_sha, safe='')}",
         token,
-        accept="application/vnd.github+json",
     ) as response:
         return archive_repository_files(response)
 
@@ -174,6 +191,32 @@ def repository_state(conn: sqlalchemy.Connection, target: RepositoryTarget) -> R
     if row is None:
         return None
     return RepositoryState(row.commit_sha, row.checked_at)
+
+
+def repository_build(conn: sqlalchemy.Connection, target: RepositoryTarget) -> RepositoryBuild | None:
+    row = conn.execute(
+        sqlalchemy.select(
+            schema.repository_index_builds.c.commit_sha,
+            schema.repository_index_builds.c.base_sha,
+            schema.repository_index_builds.c.mode,
+            schema.repository_index_builds.c.total_files,
+            schema.repository_index_builds.c.completed_files,
+            schema.repository_index_builds.c.started_at,
+        ).where(
+            schema.repository_index_builds.c.repository == target.repository,
+            schema.repository_index_builds.c.branch == target.branch,
+        )
+    ).first()
+    if row is None:
+        return None
+    return RepositoryBuild(
+        commit_sha=row.commit_sha,
+        base_sha=row.base_sha,
+        mode=RepositoryBuildMode(row.mode),
+        total_files=row.total_files,
+        completed_files=row.completed_files,
+        started_at=row.started_at,
+    )
 
 
 def repository_check_due(state: RepositoryState | None, now: datetime) -> bool:
@@ -206,36 +249,101 @@ def repository_scope(target: RepositoryTarget) -> tuple[sqlalchemy.ColumnElement
     )
 
 
-def publish_repository_update(
+def start_repository_build(
     engine: sqlalchemy.Engine,
     target: RepositoryTarget,
-    expected_sha: str | None,
-    commit_sha: str,
-    checked_at: datetime,
-    chunks: list[repository_files.EmbeddedChunk],
+    build: RepositoryBuild,
     delete_statement: sqlalchemy.Delete | None,
-) -> bool:
-    """Publish prepared chunks, returning False when another run advanced the index."""
+) -> None:
+    """Start a visible, resumable repository generation."""
     with engine.begin() as conn:
-        current = repository_state(conn, target)
-        current_sha = current.commit_sha if current is not None else None
-        if current_sha != expected_sha:
-            print(f"repository index advanced from {expected_sha or 'empty'} to {current_sha}; discarding stale update")
-            return False
-
         if delete_statement is not None:
             conn.execute(delete_statement)
+        conn.execute(
+            pg_insert(schema.repository_index_builds).values(
+                repository=target.repository,
+                branch=target.branch,
+                commit_sha=build.commit_sha,
+                base_sha=build.base_sha,
+                mode=build.mode.value,
+                total_files=build.total_files,
+                completed_files=0,
+                started_at=build.started_at,
+            )
+        )
 
-        records = [repository_chunk_record(target, chunk) for chunk in chunks]
-        for start in range(0, len(records), REPOSITORY_BATCH):
-            conn.execute(pg_insert(schema.repository_file_chunks).values(records[start : start + REPOSITORY_BATCH]))
 
+def completed_repository_paths(
+    conn: sqlalchemy.Connection,
+    target: RepositoryTarget,
+    paths: tuple[str, ...],
+) -> frozenset[str]:
+    if not paths:
+        return frozenset()
+    rows = conn.execute(
+        sqlalchemy.select(schema.repository_file_chunks.c.path)
+        .where(*repository_scope(target), schema.repository_file_chunks.c.path.in_(paths))
+        .distinct()
+    )
+    return frozenset(row.path for row in rows)
+
+
+def remaining_repository_files(
+    files: tuple[repository_files.IndexedFile, ...],
+    completed_paths: frozenset[str],
+) -> tuple[repository_files.IndexedFile, ...]:
+    return tuple(file for file in files if file.path not in completed_paths)
+
+
+def publish_repository_batch(
+    engine: sqlalchemy.Engine,
+    target: RepositoryTarget,
+    commit_sha: str,
+    files: tuple[repository_files.IndexedFile, ...],
+    chunks: list[repository_files.EmbeddedChunk],
+) -> int:
+    """Publish one file batch and return the durable completed-file count."""
+    records = [repository_chunk_record(target, chunk) for chunk in chunks]
+    with engine.begin() as conn:
+        for start in range(0, len(records), DATABASE_INSERT_BATCH):
+            conn.execute(pg_insert(schema.repository_file_chunks).values(records[start : start + DATABASE_INSERT_BATCH]))
+        row = conn.execute(
+            sqlalchemy.update(schema.repository_index_builds)
+            .where(
+                schema.repository_index_builds.c.repository == target.repository,
+                schema.repository_index_builds.c.branch == target.branch,
+                schema.repository_index_builds.c.commit_sha == commit_sha,
+            )
+            .values(completed_files=schema.repository_index_builds.c.completed_files + len(files))
+            .returning(schema.repository_index_builds.c.completed_files)
+        ).first()
+        if row is None:
+            raise RuntimeError(f"repository build {commit_sha} disappeared while publishing")
+    return row.completed_files
+
+
+def finish_repository_build(
+    engine: sqlalchemy.Engine,
+    target: RepositoryTarget,
+    build: RepositoryBuild,
+    completed_at: datetime,
+) -> bool:
+    """Mark a complete generation ready, or return False if its build disappeared."""
+    with engine.begin() as conn:
+        current = repository_build(conn, target)
+        if current is None or current.commit_sha != build.commit_sha:
+            return False
+        if current.completed_files != current.total_files:
+            raise RuntimeError(
+                f"repository build {build.commit_sha} has "
+                f"{current.completed_files}/{current.total_files} completed files"
+            )
         statement = pg_insert(schema.repository_index_state).values(
             repository=target.repository,
             branch=target.branch,
-            commit_sha=commit_sha,
-            checked_at=checked_at,
-            indexed_at=checked_at,
+            commit_sha=build.commit_sha,
+            checked_at=completed_at,
+            indexed_at=completed_at,
         )
         conn.execute(
             statement.on_conflict_do_update(
@@ -244,43 +352,20 @@ def publish_repository_update(
                     schema.repository_index_state.c.branch,
                 ],
                 set_={
-                    "commit_sha": commit_sha,
-                    "checked_at": checked_at,
-                    "indexed_at": checked_at,
+                    "commit_sha": build.commit_sha,
+                    "checked_at": completed_at,
+                    "indexed_at": completed_at,
                 },
             )
         )
-    return True
-
-
-def publish_full_repository(
-    engine: sqlalchemy.Engine,
-    target: RepositoryTarget,
-    expected_sha: str | None,
-    commit_sha: str,
-    checked_at: datetime,
-    chunks: list[repository_files.EmbeddedChunk],
-) -> bool:
-    deletion = sqlalchemy.delete(schema.repository_file_chunks).where(*repository_scope(target))
-    return publish_repository_update(engine, target, expected_sha, commit_sha, checked_at, chunks, deletion)
-
-
-def publish_changed_repository(
-    engine: sqlalchemy.Engine,
-    target: RepositoryTarget,
-    expected_sha: str,
-    commit_sha: str,
-    checked_at: datetime,
-    changes: RepositoryChangeSet,
-    chunks: list[repository_files.EmbeddedChunk],
-) -> bool:
-    deletion = None
-    if changes.replaced_paths:
-        deletion = sqlalchemy.delete(schema.repository_file_chunks).where(
-            *repository_scope(target),
-            schema.repository_file_chunks.c.path.in_(changes.replaced_paths),
+        conn.execute(
+            sqlalchemy.delete(schema.repository_index_builds).where(
+                schema.repository_index_builds.c.repository == target.repository,
+                schema.repository_index_builds.c.branch == target.branch,
+                schema.repository_index_builds.c.commit_sha == build.commit_sha,
+            )
         )
-    return publish_repository_update(engine, target, expected_sha, commit_sha, checked_at, chunks, deletion)
+    return True
 
 
 @contextmanager
@@ -330,6 +415,125 @@ def sync_repository(
         sync_repository_locked(engine, target, token, now)
 
 
+def load_repository_changes(
+    target: RepositoryTarget,
+    token: str,
+    commit_sha: str,
+    base_sha: str | None,
+    mode: RepositoryBuildMode,
+) -> tuple[RepositoryBuildMode, str | None, RepositoryChangeSet]:
+    if mode is RepositoryBuildMode.FULL:
+        changes = RepositoryChangeSet(frozenset(), github_archive_files(target, commit_sha, token))
+    else:
+        assert base_sha is not None
+        comparison = github_json(
+            f"{target.repository}/compare/{quote(f'{base_sha}...{commit_sha}', safe='.')}",
+            token,
+        )
+        incremental = incremental_repository_files(
+            comparison,
+            lambda sha: github_blob(target.repository, sha, token),
+        )
+        if incremental is None:
+            mode = RepositoryBuildMode.FULL
+            base_sha = None
+            changes = RepositoryChangeSet(frozenset(), github_archive_files(target, commit_sha, token))
+        else:
+            changes = incremental
+    if mode is RepositoryBuildMode.FULL and not changes.files:
+        raise RuntimeError(f"GitHub archive for {target.repository}@{commit_sha} contained no eligible files")
+    return mode, base_sha, changes
+
+
+def initialize_repository_build(
+    engine: sqlalchemy.Engine,
+    target: RepositoryTarget,
+    commit_sha: str,
+    base_sha: str | None,
+    mode: RepositoryBuildMode,
+    changes: RepositoryChangeSet,
+    now: datetime,
+) -> RepositoryBuild:
+    build = RepositoryBuild(
+        commit_sha=commit_sha,
+        base_sha=base_sha,
+        mode=mode,
+        total_files=len(changes.files),
+        completed_files=0,
+        started_at=now,
+    )
+    if mode is RepositoryBuildMode.FULL:
+        deletion = sqlalchemy.delete(schema.repository_file_chunks).where(*repository_scope(target))
+    elif changes.replaced_paths:
+        deletion = sqlalchemy.delete(schema.repository_file_chunks).where(
+            *repository_scope(target),
+            schema.repository_file_chunks.c.path.in_(changes.replaced_paths),
+        )
+    else:
+        deletion = None
+    start_repository_build(engine, target, build, deletion)
+    print(
+        f"repository {build.mode} build {commit_sha[: search_config.DISPLAY_SHA_CHARACTERS]}: "
+        f"0/{build.total_files} files (partial results are searchable)",
+        flush=True,
+    )
+    return build
+
+
+def validate_resumed_build(
+    build: RepositoryBuild,
+    mode: RepositoryBuildMode,
+    changes: RepositoryChangeSet,
+) -> None:
+    if build.total_files != len(changes.files) or build.mode is not mode:
+        raise RuntimeError(
+            f"repository build {build.commit_sha} changed shape while resuming: "
+            f"{build.mode} {build.total_files} files became {mode} {len(changes.files)} files"
+        )
+
+
+def run_repository_build(
+    engine: sqlalchemy.Engine,
+    target: RepositoryTarget,
+    build: RepositoryBuild,
+    changes: RepositoryChangeSet,
+) -> None:
+    paths = tuple(file.path for file in changes.files)
+    with engine.connect() as conn:
+        completed_paths = completed_repository_paths(conn, target, paths)
+    remaining = remaining_repository_files(changes.files, completed_paths)
+    display_sha = build.commit_sha[: search_config.DISPLAY_SHA_CHARACTERS]
+    if build.completed_files:
+        print(
+            f"repository {build.mode} build {display_sha}: "
+            f"resuming at {build.completed_files}/{build.total_files} files",
+            flush=True,
+        )
+
+    run_started = time.time()
+    total_chunks = 0
+    if remaining:
+        model = TextEmbedding(search_config.EMBED_MODEL)
+        for start in range(0, len(remaining), REPOSITORY_FILE_BATCH):
+            batch = remaining[start : start + REPOSITORY_FILE_BATCH]
+            chunks = repository_files.embed_files(batch, model.passage_embed)
+            total_chunks += len(chunks)
+            completed = publish_repository_batch(engine, target, build.commit_sha, batch, chunks)
+            print(
+                f"repository {build.mode} build {display_sha}: "
+                f"{completed}/{build.total_files} files, {total_chunks} chunks this run, "
+                f"{time.time() - run_started:.0f}s",
+                flush=True,
+            )
+
+    if finish_repository_build(engine, target, build, datetime.now(UTC)):
+        print(
+            f"repository {build.mode} sync {display_sha} complete: "
+            f"{build.total_files} files, {time.time() - run_started:.0f}s this run",
+            flush=True,
+        )
+
+
 def sync_repository_locked(
     engine: sqlalchemy.Engine,
     target: RepositoryTarget,
@@ -338,52 +542,36 @@ def sync_repository_locked(
 ) -> None:
     with engine.connect() as conn:
         state = repository_state(conn, target)
-    if not repository_check_due(state, now):
+        build = repository_build(conn, target)
+    if build is None and not repository_check_due(state, now):
         return
 
-    head_sha = github_head(target, token)
-    if state is not None and state.commit_sha == head_sha:
-        record_unchanged_repository(engine, target, head_sha, now)
-        print(f"repository up to date: {target.repository}@{target.branch} {head_sha[:12]}")
-        return
-
-    full_rebuild = state is None
-    if state is None:
-        files = github_archive_files(target, head_sha, token)
-        changes = RepositoryChangeSet(frozenset(), files)
+    if build is None:
+        head_sha = github_head(target, token)
+        if state is not None and state.commit_sha == head_sha:
+            record_unchanged_repository(engine, target, head_sha, now)
+            print(
+                f"repository up to date: {target.repository}@{target.branch} "
+                f"{head_sha[: search_config.DISPLAY_SHA_CHARACTERS]}",
+                flush=True,
+            )
+            return
+        base_sha = state.commit_sha if state is not None else None
+        build_mode = RepositoryBuildMode.FULL if state is None else RepositoryBuildMode.INCREMENTAL
     else:
-        comparison = github_json(
-            f"{target.repository}/compare/{quote(f'{state.commit_sha}...{head_sha}', safe='.')}",
-            token,
-        )
-        incremental = incremental_repository_files(
-            comparison,
-            lambda sha: github_blob(target.repository, sha, token),
-        )
-        if incremental is None:
-            full_rebuild = True
-            files = github_archive_files(target, head_sha, token)
-            changes = RepositoryChangeSet(frozenset(), files)
-        else:
-            changes = incremental
+        head_sha = build.commit_sha
+        base_sha = build.base_sha
+        build_mode = build.mode
 
-    if full_rebuild and not changes.files:
-        raise RuntimeError(f"GitHub archive for {target.repository}@{head_sha} contained no eligible files")
-
-    started = time.time()
-    chunks: list[repository_files.EmbeddedChunk] = []
-    if changes.files:
-        model = TextEmbedding(search_config.EMBED_MODEL)
-        chunks = repository_files.embed_files(changes.files, model.passage_embed)
-    expected_sha = state.commit_sha if state is not None else None
-    if full_rebuild:
-        published = publish_full_repository(engine, target, expected_sha, head_sha, now, chunks)
+    build_mode, base_sha, changes = load_repository_changes(
+        target,
+        token,
+        head_sha,
+        base_sha,
+        build_mode,
+    )
+    if build is None:
+        build = initialize_repository_build(engine, target, head_sha, base_sha, build_mode, changes, now)
     else:
-        assert expected_sha is not None
-        published = publish_changed_repository(engine, target, expected_sha, head_sha, now, changes, chunks)
-    if published:
-        mode = "full" if full_rebuild else "incremental"
-        print(
-            f"repository {mode} sync {head_sha[:12]}: "
-            f"{len(changes.files)} files, {len(chunks)} chunks, {time.time() - started:.0f}s"
-        )
+        validate_resumed_build(build, build_mode, changes)
+    run_repository_build(engine, target, build, changes)

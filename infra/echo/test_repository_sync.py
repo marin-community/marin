@@ -8,7 +8,9 @@ import io
 import sqlite3
 import tarfile
 from datetime import UTC, datetime, timedelta
+from pathlib import PurePosixPath
 
+import repository_files
 from sync import github_repository as echo_sync
 from sync import main as activity_sync
 
@@ -177,3 +179,15 @@ def test_repository_check_is_due_once_per_hour():
         echo_sync.RepositoryState("abc", now - timedelta(hours=1)),
         now,
     )
+
+
+def test_repository_resume_keeps_only_files_missing_from_durable_checkpoint():
+    files = []
+    for path in ("docs/a.md", "docs/b.md", "docs/c.md"):
+        file = repository_files.indexed_file(PurePosixPath(path), f"# {path}\n".encode())
+        assert file is not None
+        files.append(file)
+
+    remaining = echo_sync.remaining_repository_files(tuple(files), frozenset({"docs/a.md", "docs/c.md"}))
+
+    assert [file.path for file in remaining] == ["docs/b.md"]
