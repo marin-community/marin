@@ -344,3 +344,9 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
 - Kueue admitted attempt 0 and all 16 ranks entered `running`. Environment setup and distributed JAX initialization completed across 64 GB200 devices.
 - Trainer emitted the intended control hparams: top-8/256, EP64, QB on, spill m=3, capacity factor 1.0625, trio off, batch 1024, sequence length 4096, and 350 steps.
 - The prior `num_devices (64) must be divisible by num_slices (7)` failure is absent. The run is compiling and autotuning the first real step; no loss, throughput, MFU, or drop metric has been emitted yet.
+
+### 2026-07-28 18:41 PDT - D67-CTL-01 r5 first-step computation remains active
+
+- Attempt 0 remains `running` with no retry or task failure. The retained logs have not yet emitted a `json_logger` `event: log` metric.
+- A read-only `nvidia-smi` check inside child task 0 found all four local GB200s at 100% GPU utilization with approximately 145 GiB allocated per device. The gang is actively computing the compiled first step rather than idling in the scheduler or a dead rendezvous.
+- Preserve this placement draw and continue monitoring. Do not submit the next family leg.
