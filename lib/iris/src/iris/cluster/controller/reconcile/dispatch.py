@@ -14,6 +14,7 @@ output on the reconcile ``ControlSnapshot``.
 
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
+from typing import NamedTuple
 
 from rigging.timing import Timestamp
 from sqlalchemy import select
@@ -113,6 +114,20 @@ def _dispatch_query(cur: Tx, *predicates) -> list[PendingDispatchRow]:
     return [pending_dispatch_row(r) for r in cur.execute(stmt).all()]
 
 
+class _PriorityKey(NamedTuple):
+    """Within-band ordering key, mirroring the worker-daemon sort (``reads._PENDING_TASKS_STMT``).
+
+    Compared field-by-field in this declared order, ascending — the earliest
+    ancestor and submission win. A ``NamedTuple`` so ``min``/``sorted`` treat it
+    as the plain tuple the comparison needs while each field stays named.
+    """
+
+    neg_depth: int
+    root_submitted_ms: int
+    submitted_ms: int
+    insertion: int
+
+
 @dataclass(frozen=True, slots=True)
 class _RankRow:
     """Promotion-candidate fields needed only to order and cap the drain.
@@ -126,7 +141,7 @@ class _RankRow:
     job_id: JobName
     num_tasks: int
     has_coscheduling: bool
-    sort_key: tuple[int, int, int, int]
+    sort_key: _PriorityKey
 
 
 _RANK_COLS = (
@@ -142,11 +157,7 @@ _RANK_COLS = (
 
 
 def _ranking_rows(cur: Tx, *predicates) -> list[_RankRow]:
-    """Fetch lightweight :class:`_RankRow`s (no runtime blobs) for the given predicates.
-
-    ``sort_key`` mirrors the worker-daemon sort (``reads._PENDING_TASKS_STMT``):
-    parent depth, root submission, own submission, insertion.
-    """
+    """Fetch lightweight :class:`_RankRow`s (no runtime blobs) for the given predicates."""
     rank_join = local_tasks.join(jobs_table, jobs_table.c.job_id == local_tasks.c.job_id).join(
         job_config_table, job_config_table.c.job_id == jobs_table.c.job_id
     )
@@ -157,11 +168,11 @@ def _ranking_rows(cur: Tx, *predicates) -> list[_RankRow]:
             job_id=r.job_id,
             num_tasks=int(r.num_tasks),
             has_coscheduling=bool(r.has_coscheduling),
-            sort_key=(
-                int(r.priority_neg_depth),
-                int(r.priority_root_submitted_ms),
-                int(r.submitted_at_ms.epoch_ms()),
-                int(r.priority_insertion),
+            sort_key=_PriorityKey(
+                neg_depth=int(r.priority_neg_depth),
+                root_submitted_ms=int(r.priority_root_submitted_ms),
+                submitted_ms=int(r.submitted_at_ms.epoch_ms()),
+                insertion=int(r.priority_insertion),
             ),
         )
         for r in cur.execute(stmt).all()
