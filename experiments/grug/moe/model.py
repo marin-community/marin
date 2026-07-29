@@ -29,6 +29,7 @@ except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.grug._moe.common import _zero_dropped_assignments
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
@@ -139,6 +140,7 @@ class GrugModelConfig:
     still apply half-RoPE. Set to False to keep RoPE on long layers."""
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
+    report_capacity_overflow: bool = False
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
@@ -482,24 +484,22 @@ def _routing_stats(
     }
 
 
-def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | SummaryStats]:
+def _summarize_router_metrics(
+    router_metrics: dict[str, jax.Array],
+    *,
+    report_capacity_overflow: bool = False,
+) -> dict[str, jax.Array | SummaryStats]:
     routing_entropy = router_metrics["routing_entropy_per_layer"]
     routing_counts = router_metrics["routing_counts_per_layer"]
     load_balancing_loss = router_metrics["load_balancing_loss_per_layer"]
     router_z_loss = router_metrics["router_z_loss_per_layer"]
-    capacity_overflow = router_metrics["capacity_overflow_per_layer"]
     num_layers = int(routing_entropy.shape[0])
-
-    # Per-layer total assignments = sum of routing_counts over experts (= tokens * k).
-    assignments_per_layer = jnp.sum(routing_counts.astype(jnp.float32), axis=-1)
-    capacity_overflow_rate = capacity_overflow.astype(jnp.float32) / jnp.maximum(assignments_per_layer, 1.0)
 
     out: dict[str, jax.Array | SummaryStats] = {
         "train/router/routing_entropy_mean": jnp.mean(routing_entropy),
         "train/router/load_balancing_loss": jnp.mean(load_balancing_loss),
         "train/router/router_z_loss": jnp.mean(router_z_loss),
         "train/router/routing_counts_per_layer": routing_counts,
-        "train/router/capacity_overflow_rate_mean": jnp.mean(capacity_overflow_rate),
         "qb_beta_per_layer": router_metrics.get("qb_beta_per_layer"),
     }
     for i in range(num_layers):
@@ -507,7 +507,14 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
         out[f"train/router/layer_{i}/load_balancing_loss"] = load_balancing_loss[i]
         out[f"train/router/layer_{i}/router_z_loss"] = router_z_loss[i]
         out[f"train/router/layer_{i}/routing_hist"] = _histogram_from_expert_counts(routing_counts[i])
-        out[f"train/router/layer_{i}/capacity_overflow_rate"] = capacity_overflow_rate[i]
+
+    if report_capacity_overflow:
+        capacity_overflow = router_metrics["capacity_overflow_per_layer"]
+        assignments_per_layer = jnp.sum(routing_counts.astype(jnp.float32), axis=-1)
+        capacity_overflow_rate = capacity_overflow.astype(jnp.float32) / jnp.maximum(assignments_per_layer, 1.0)
+        out["train/router/capacity_overflow_rate_mean"] = jnp.mean(capacity_overflow_rate)
+        for i in range(num_layers):
+            out[f"train/router/layer_{i}/capacity_overflow_rate"] = capacity_overflow_rate[i]
     return out
 
 
@@ -620,13 +627,18 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
-        routed_flat, dropped_assignments = self.expert_mlp(
+        moe_out = self.expert_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
             combine_weights,
             mesh=get_abstract_mesh(),
-            report_capacity_overflow=True,
+            report_capacity_overflow=self.cfg.report_capacity_overflow,
         )
+        if self.cfg.report_capacity_overflow:
+            routed_flat, dropped_assignments = moe_out
+        else:
+            routed_flat = moe_out
+            dropped_assignments = _zero_dropped_assignments()
         router_stats["capacity_overflow"] = dropped_assignments.astype(jnp.float32)
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
@@ -873,7 +885,10 @@ class Transformer(eqx.Module):
         aux_loss = self.config.router_z_loss_coef * rzl
         loss = cross_entropy_loss + aux_loss if reduction != "none" else cross_entropy_loss
         if return_router_metrics:
-            summarized_metrics = _summarize_router_metrics(router_metrics)
+            summarized_metrics = _summarize_router_metrics(
+                router_metrics,
+                report_capacity_overflow=self.config.report_capacity_overflow,
+            )
             summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
             summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
             return loss, summarized_metrics

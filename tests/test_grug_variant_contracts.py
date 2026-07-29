@@ -12,6 +12,10 @@ import dataclasses
 import importlib
 import json
 import logging
+import os
+import subprocess
+import sys
+import textwrap
 import uuid
 from io import StringIO
 from pathlib import Path
@@ -159,6 +163,88 @@ def test_grug_moe_layer_masks_preserve_thd_segment_metadata():
     assert long_mask.thd_segment_metadata is mask.thd_segment_metadata
     assert short_mask.segment_ids is mask.segment_ids
     assert long_mask.segment_ids is mask.segment_ids
+
+
+def test_grug_moe_router_metrics_omit_unmeasured_capacity_rates():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    router_metrics = {
+        "routing_entropy_per_layer": jnp.zeros((2,), dtype=jnp.float32),
+        "routing_counts_per_layer": jnp.full((2, 4), 8, dtype=jnp.float32),
+        "load_balancing_loss_per_layer": jnp.zeros((2,), dtype=jnp.float32),
+        "router_z_loss_per_layer": jnp.zeros((2,), dtype=jnp.float32),
+        "capacity_overflow_per_layer": jnp.zeros((2,), dtype=jnp.int32),
+    }
+
+    unreported = model_module._summarize_router_metrics(router_metrics)
+    reported = model_module._summarize_router_metrics(router_metrics, report_capacity_overflow=True)
+    unreported_rate_keys = {key for key in unreported if "capacity_overflow_rate" in key}
+    reported_rate_keys = {key for key in reported if "capacity_overflow_rate" in key}
+
+    assert unreported_rate_keys == set()
+    assert reported_rate_keys == {
+        "train/router/capacity_overflow_rate_mean",
+        "train/router/layer_0/capacity_overflow_rate",
+        "train/router/layer_1/capacity_overflow_rate",
+    }
+
+
+def test_scale_report_drops_controls_real_ring_drop_count():
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
+    script = """
+        import os
+
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh
+
+        from experiments.grug.moe import launch_cw_scale
+        from experiments.grug.moe import model as model_module
+
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape((1, 1, 8, 1)),
+            ("replica_dcn", "data", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 4,
+        )
+        os.environ.update(
+            SCALE_HIDDEN_DIM="128",
+            SCALE_NUM_LAYERS="1",
+            SCALE_NUM_EXPERTS="8",
+            SCALE_TOP_K="2",
+            SCALE_SEQ_LEN="8",
+        )
+
+        def capacity_overflow(*, report_drops: bool):
+            if report_drops:
+                os.environ["SCALE_REPORT_DROPS"] = "1"
+            else:
+                os.environ.pop("SCALE_REPORT_DROPS", None)
+            config = launch_cw_scale.build_scale_model()
+            with jax.set_mesh(mesh):
+                moe = model_module.MoEMLP.init(config, key=jax.random.key(0))
+                # Equal logits route every token to the same two experts, exceeding
+                # ring's capacity while leaving the backend to compute the count.
+                x = jnp.zeros((8, 1, config.hidden_dim), dtype=jnp.float32)
+                _, router_stats = moe(x)
+            return router_stats["capacity_overflow"]
+
+        unreported = capacity_overflow(report_drops=False)
+        reported = capacity_overflow(report_drops=True)
+        assert int(unreported) == 0, unreported
+        assert int(reported) == 12, reported
+    """
+
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_grug_moe_xsa_forward_lowers_with_gpu_fa4_thd_gqa_sharding():
