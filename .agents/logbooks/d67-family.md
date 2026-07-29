@@ -849,3 +849,46 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
 ```
 
 - Acceptance gate: production band 1, trio hparams all true, equal device counts per physical domain, and finite metrics. Do not submit draw 2 until terminal.
+
+### 2026-07-29 05:44 PDT - D6A-TRIO-01 draw 1 complete
+
+- Submitted parent `/mwittmann/d6a-trio-draw1-r1-0729-0105` at 01:00 PDT from commit `3568ee98c` using the exact command above. Placement and staging retries did not produce metrics. The accepted child attempt used one physical NVLink domain with 64 devices and had all three treatment hparams enabled.
+- The accepted child completed all 350 steps (0–349). The parent retry launcher was stopped immediately after child success, before it could create a duplicate draw.
+- Registered tail window, steps 250–349, 100 observations per metric: 317,919.3 tok/s, 20.5237% reported MFU, 2.0447% drop fraction, and 2.99451 mean loss.
+- Tail ranges: 315,072.1–320,396.0 tok/s, 20.3399–20.6836% reported MFU, 1.6914–2.6661% drop fraction, and 2.89345–3.12309 loss.
+- Final step 349: 318,236.5 tok/s, 20.5441% reported MFU, 1.9419% drop fraction, and 2.91868 loss.
+- Draw 1 tok/s is 1.17% below the 321,670.0 tok/s control mean and below both control draws. This is an interim single-draw comparison, not the D-6a verdict. MFU remains confounded and is not used to rank the arm.
+
+### 2026-07-29 05:44 PDT - D6A-TRIO-02 draw 2 pre-registration
+
+- Prediction carried forward verbatim from 15:35 PDT, before any family result: enabling GatedNorm, the attention gate, and XSA together will improve tok/s by 1–2% versus the shared control, approximately 324–328K tok/s at the registered 321K center. The trio transfers only if its two-draw tok/s band is at least 1.0% above control with non-overlapping bands.
+- MFU is reported but not used to rank this model-changing arm because XSA and the attention gate add FLOPs absent from `lm_flops_per_token`. No single-variable follow-up will be submitted without user approval.
+- Planned parent job ID: `/mwittmann/d6a-trio-draw2-r1-0729-0545`
+- Planned child job ID: `/mwittmann/d6a-trio-draw2-r1-0729-0545/grug-train-d6a-trio-draw2-r1-0729-0545`
+- Exact command:
+
+```bash
+IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
+  --cpu 2 --memory 3GB --extra cpu --priority production --max-retries 50 \
+  --job-name d6a-trio-draw2-r1-0729-0545 -e RUN_ID d6a-trio-draw2-r1-0729-0545 \
+  -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async \
+  -e XLA_FLAGS "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false --xla_gpu_experimental_parallel_collective_overlap_limit=4" \
+  -e SCALE_ATTN_IMPL gpu_fa4_cute -e SCALE_WATCH_INTERVAL 0 -e SCALE_CHECKPOINTS local \
+  -e SCALE_A2A_FIXED 1 -e SCALE_A2A_CHUNKS 1 -e SCALE_A2A_NO_BARRIER 1 \
+  -e SCALE_A2A_GATHER_DISPATCH 1 -e SCALE_A2A_CUSTOM_ADJOINT 1 \
+  -e SCALE_MOE_QB 1 -e SCALE_REPORT_DROPS 1 -e SCALE_A2A_SPILL 3 \
+  -e SCALE_CAPACITY_FACTOR 1.0625 -e SCALE_JOB_PRIORITY 1 \
+  -e SCALE_GATED_NORM 1 -e SCALE_ATTN_GATE 1 -e SCALE_XSA 1 \
+  -e SCALE_GPUS_PER_NODE 4 -e SCALE_GPU_TYPE GB200 -e SCALE_GPU_REPLICAS 16 \
+  -e SCALE_EXPERT_AXIS 64 -e SCALE_NUM_EXPERTS 256 -e SCALE_TOP_K 8 \
+  -e SCALE_HIDDEN_DIM 5120 -e SCALE_NUM_LAYERS 48 -e SCALE_INTERMEDIATE 1280 \
+  -e SCALE_SHARED_INTERMEDIATE 5120 -e SCALE_SEQ_LEN 4096 -e SCALE_BATCH 1024 \
+  -e SCALE_SLIDING_WINDOW 2048 -e SCALE_STEPS 350 \
+  -e SCALE_MOE_IMPL ragged_all_to_all -e SCALE_OPTIMIZER muonh -e SCALE_MUON_SYRK 1 \
+  -e SCALE_SCAN_LAYERS 1 -e SCALE_REMAT recompute_all \
+  -e SCALE_TRACKER json_logger -e SCALE_JSON_LOGGER d6a-trio-draw2-r1-0729-0545.metrics \
+  -e SCALE_DISABLE_CHECKPOINT 1 \
+  -- python -m experiments.grug.moe.launch_cw_scale --version d67-family-dev --run
+```
+
+- Acceptance gate unchanged. Do not advance to the spill sweep until this draw completes.
