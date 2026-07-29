@@ -36,6 +36,7 @@ from marin.experiment.data import tokenized
 from marin.experiment.train import train_lm
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.rl.placement import marin_prefix_for_region
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from marin.training.training import LevanterCheckpoint
 
 # --- Recipe, copied verbatim from exp166 so the TPU side is the known-good one ----------
@@ -58,7 +59,11 @@ LR_SCHEDULE = "cosine"
 # forked copy: exp153 ran lr 1e-3 / wd 0.8, exp146's winner ran lr 3.1623e-3 / wd 0.2.
 LEARNING_RATE = float(os.environ.get("LR", 1e-3))
 WEIGHT_DECAY = float(os.environ.get("WD", 0.2))
-BATCH_SIZE = 32  # divides 4 (v6e-4, GB200x1) and 8 (H100x8) so dp is the full mesh everywhere
+# Must divide 4 (v6e-4, GB200x4) and 8 (H100x8) so dp is the full mesh everywhere.
+# Overridable for C4: exp146 reached 2.7025 at bs 256 but 2.7952 at bs 128 on identical
+# lr/wd, so batch size is a lever in its own right. Vary it against a matched *token*
+# budget -- halving the batch means doubling STEPS, not reusing the same step count.
+BATCH_SIZE = int(os.environ.get("BATCH_SIZE", 32))
 
 TOKENIZER = "timodonnell/contacts-v1-tokenizer@5d68a24a899f"
 TEXT_KEY = "document"
@@ -276,6 +281,11 @@ def main() -> None:
 
     if "/tmp/ttl=" not in output_path(plat, name):
         raise SystemExit("REFUSING: checkpoints would not go to TTL'd temp storage")
+    if plat.cloud == "s3":
+        # Submitting from this dev box reads the bucket to resolve the cache and output
+        # prefix. CoreWeave's endpoint rejects the default path-style addressing, so plain
+        # AWS_* credentials alone get a Forbidden. Task pods carry this already.
+        configure_coreweave_s3()
     StepRunner().run([lower(build(plat, steps, eval_every, eval_batches))])
 
 
