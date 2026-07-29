@@ -25,6 +25,10 @@ from levanter.optim.grugmuon import (
 )
 
 AXIS_NAMES = ("replica_dcn", "data", "expert", "model")
+MESH_SHAPES = {
+    "data1-expert4": (1, 1, 4, 1),
+    "data2-expert2": (1, 2, 2, 1),
+}
 NS_STEPS = (0, 2, 5)
 EPSILON = 1e-8
 COEFFICIENT_TYPE = "quintic"
@@ -410,7 +414,8 @@ def _structure_audit(mesh: Mesh) -> StructureAudit:
         equation.primitive.name == "reshape" and equation.outvars[0].aval.shape == merged_shape
         for equation in expert_jaxpr.jaxpr.eqns
     )
-    padded_layers = math.ceil(padded_case.shape[0] / 4) * 4
+    batch_shards = math.prod(size for size in mesh.shape.values() if size > 1)
+    padded_layers = math.ceil(padded_case.shape[0] / batch_shards) * batch_shards
     padded_shape = (padded_layers, *padded_case.shape[1:])
     padded_specs = [
         repr(equation.params["dst_sharding"].spec)
@@ -430,11 +435,12 @@ def _run_compile_smoke(mesh: Mesh) -> None:
     audit = _structure_audit(mesh)
     if audit["expert_merge_count"] != 0:
         raise AssertionError(f"4D expert path merged L and E: {audit}")
-    if audit["padded_reshard_specs"][:2] != [
-        repr(P("data", None, None)),
-        repr(P(("data", "expert"), None, None)),
-    ]:
-        raise AssertionError(f"Padded inbound path did not use the expected two hops: {audit}")
+    batch_axes = tuple(name for name, size in mesh.shape.items() if size > 1)
+    expected_inbound = [repr(P(batch_axes[0], None, None))]
+    if len(batch_axes) > 1:
+        expected_inbound.append(repr(P(batch_axes, None, None)))
+    if audit["padded_reshard_specs"][: len(expected_inbound)] != expected_inbound:
+        raise AssertionError(f"Padded inbound path did not use the expected reshard sequence: {audit}")
     if audit["replicated_padded_outbound_count"] != 0:
         raise AssertionError(f"Padded outbound path replicated the full padded stack: {audit}")
 
@@ -465,6 +471,7 @@ def _run_compile_smoke(mesh: Mesh) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("numerical", "compile"), required=True)
+    parser.add_argument("--mesh", choices=tuple(MESH_SHAPES), required=True)
     parser.add_argument("--syrk", choices=("0", "1"), required=True)
     args = parser.parse_args()
     os.environ["SCALE_MUON_SYRK"] = args.syrk
@@ -476,7 +483,7 @@ def main() -> None:
         raise ValueError(f"D-2 qualification requires GPUs, got {devices}")
 
     mesh = Mesh(
-        np.asarray(devices).reshape((1, 2, 2, 1)),
+        np.asarray(devices).reshape(MESH_SHAPES[args.mesh]),
         AXIS_NAMES,
         axis_types=(AxisType.Explicit,) * len(AXIS_NAMES),
     )

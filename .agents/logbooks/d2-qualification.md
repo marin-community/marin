@@ -364,3 +364,67 @@ author: Matt Wittmann
 - Decision: stop. Do not capture PGLE or submit any D-2 rack draw. Record the
   numerical pass, compile failure, and unanswered composition question in the
   qualification report.
+
+### 2026-07-28 21:17 PDT - Production-mesh discriminator pre-registration
+
+- Hypothesis: the one-warning regression is specific to a mesh that shards the
+  non-expert parameter matrix dimensions. With a leading-axis-only
+  `data=1, expert=4` mesh, the padded outbound transition becomes a plain
+  leading-axis all-gather and emits zero
+  `spmd_partitioner.cc:668` involuntary-full-rematerialization warnings.
+- Falsification threshold: any nonzero warning count in either
+  `SCALE_MUON_SYRK=0` or `1` on `data=1, expert=4` refutes the hypothesis.
+- Positive control: the same harness, cases, flags, and four GB200s must still
+  emit one warning at `data=2, expert=2` for both SYRK settings in this session.
+  A zero in the discriminator arm is uninterpretable without that control.
+- One-variable rule: the four jobs differ only in the explicit mesh selector
+  and `SCALE_MUON_SYRK`. All use the composed branch, the `nonexpert_tall` and
+  expert compile cases, four GB200s, JAX from the same Iris environment,
+  `cuda_async`, and the same two XLA flags.
+- Planned commands:
+
+  ```bash
+  IRIS_USER=mwittmann .venv/bin/iris --cluster=marin job run --no-wait \
+    --target-cluster cw-us-east-08a --user mwittmann \
+    --job-name d2-muon-mesh-d1e4-syrk0-0728-2120 \
+    --enable-extra-resources --gpu GB200x4 --cpu 32 --memory 256GB --disk 256GB \
+    --extra gpu --max-retries 0 --timeout 7200 \
+    -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async \
+    -e XLA_FLAGS "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false --xla_gpu_experimental_parallel_collective_overlap_limit=4" \
+    -- python -m experiments.grug.moe.d2_muon_qualification \
+      --mode compile --mesh data1-expert4 --syrk 0
+
+  IRIS_USER=mwittmann .venv/bin/iris --cluster=marin job run --no-wait \
+    --target-cluster cw-us-east-08a --user mwittmann \
+    --job-name d2-muon-mesh-d1e4-syrk1-0728-2120 \
+    --enable-extra-resources --gpu GB200x4 --cpu 32 --memory 256GB --disk 256GB \
+    --extra gpu --max-retries 0 --timeout 7200 \
+    -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async \
+    -e XLA_FLAGS "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false --xla_gpu_experimental_parallel_collective_overlap_limit=4" \
+    -- python -m experiments.grug.moe.d2_muon_qualification \
+      --mode compile --mesh data1-expert4 --syrk 1
+
+  IRIS_USER=mwittmann .venv/bin/iris --cluster=marin job run --no-wait \
+    --target-cluster cw-us-east-08a --user mwittmann \
+    --job-name d2-muon-mesh-d2e2-syrk0-0728-2120 \
+    --enable-extra-resources --gpu GB200x4 --cpu 32 --memory 256GB --disk 256GB \
+    --extra gpu --max-retries 0 --timeout 7200 \
+    -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async \
+    -e XLA_FLAGS "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false --xla_gpu_experimental_parallel_collective_overlap_limit=4" \
+    -- python -m experiments.grug.moe.d2_muon_qualification \
+      --mode compile --mesh data2-expert2 --syrk 0
+
+  IRIS_USER=mwittmann .venv/bin/iris --cluster=marin job run --no-wait \
+    --target-cluster cw-us-east-08a --user mwittmann \
+    --job-name d2-muon-mesh-d2e2-syrk1-0728-2120 \
+    --enable-extra-resources --gpu GB200x4 --cpu 32 --memory 256GB --disk 256GB \
+    --extra gpu --max-retries 0 --timeout 7200 \
+    -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async \
+    -e XLA_FLAGS "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false --xla_gpu_experimental_parallel_collective_overlap_limit=4" \
+    -- python -m experiments.grug.moe.d2_muon_qualification \
+      --mode compile --mesh data2-expert2 --syrk 1
+  ```
+- Submission route: default federated `marin` route to `cw-us-east-08a` at
+  default interactive priority. No cluster or node mutation is permitted.
+- Next action: commit this pre-registration and mesh selector, then submit the
+  four jobs in order and inspect complete, untruncated logs.
