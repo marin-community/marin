@@ -12,7 +12,7 @@ lives controller-side, not in the DB-less backend; the controller rides its
 output on the reconcile ``ControlSnapshot``.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from rigging.timing import Timestamp
 from sqlalchemy import select
@@ -144,6 +144,7 @@ def drain_for_dispatch(
     """
     now_ms = Timestamp.now().epoch_ms()
     tasks_to_run: list[job_pb2.RunTaskRequest] = []
+    rows_to_promote: list[PendingDispatchRow] = []
 
     # In a multi-backend cluster, scope the drain to this backend's tasks; a
     # single backend (``backend_id is None``) drains every pending task.
@@ -158,11 +159,6 @@ def drain_for_dispatch(
         local_tasks.c.current_worker_id.is_(None),
         *backend_pred,
     )
-
-    def _promote(row: PendingDispatchRow) -> None:
-        attempt_id = row.current_attempt_id + 1
-        writes.promote_for_dispatch(cur, row.task_id, attempt_id, now_ms)
-        tasks_to_run.append(build_run_request(cur, row, attempt_id))
 
     promoted_count = 0
     if max_promotions > 0:
@@ -200,8 +196,7 @@ def drain_for_dispatch(
                 # gangs, larger than the cap itself, fall through and are
                 # promoted whole to avoid a permanent deadlock.)
                 continue
-            for row in gang:
-                _promote(row)
+            rows_to_promote.extend(gang)
             promoted_count += len(gang)
 
         # Non-coscheduled first-fit, bounded by the remaining budget.
@@ -214,8 +209,14 @@ def drain_for_dispatch(
                 *backend_pred,
                 limit=remaining,
             )
-            for row in noncosched_pending:
-                _promote(row)
+            rows_to_promote.extend(noncosched_pending)
+
+    resolved_bands = reads.get_priority_bands(cur, {row.job_id for row in rows_to_promote})
+    for row in rows_to_promote:
+        row = replace(row, priority_band=resolved_bands[row.job_id])
+        attempt_id = row.current_attempt_id + 1
+        writes.promote_for_dispatch(cur, row.task_id, attempt_id, now_ms, priority_band=row.priority_band)
+        tasks_to_run.append(build_run_request(cur, row, attempt_id))
 
     # Redrive: pods for these rows may not exist yet (crash between
     # assign-commit and apply, or apply errored last cycle). `kubectl

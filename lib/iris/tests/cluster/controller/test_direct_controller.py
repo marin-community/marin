@@ -5,6 +5,7 @@
 
 import threading
 
+import pytest
 from finelog.rpc import logging_pb2
 from iris.cluster.controller import ops
 from iris.cluster.controller.backend import (
@@ -170,6 +171,53 @@ def test_drain_default_task_image_is_empty(state):
 
     assert len(batch.tasks_to_run) == 1
     assert batch.tasks_to_run[0].task_image == ""
+
+
+@pytest.mark.parametrize(
+    ("parent_band", "child_band", "expected_band"),
+    [
+        (
+            job_pb2.PRIORITY_BAND_PRODUCTION,
+            job_pb2.PRIORITY_BAND_UNSPECIFIED,
+            job_pb2.PRIORITY_BAND_PRODUCTION,
+        ),
+        (
+            job_pb2.PRIORITY_BAND_BATCH,
+            job_pb2.PRIORITY_BAND_UNSPECIFIED,
+            job_pb2.PRIORITY_BAND_BATCH,
+        ),
+        (
+            job_pb2.PRIORITY_BAND_PRODUCTION,
+            job_pb2.PRIORITY_BAND_BATCH,
+            job_pb2.PRIORITY_BAND_BATCH,
+        ),
+        (
+            job_pb2.PRIORITY_BAND_UNSPECIFIED,
+            job_pb2.PRIORITY_BAND_UNSPECIFIED,
+            job_pb2.PRIORITY_BAND_INTERACTIVE,
+        ),
+    ],
+)
+def test_drain_child_priority_uses_explicit_or_inherited_band(state, parent_band, child_band, expected_band):
+    """K8s dispatch uses the child's explicit band or its nearest explicit ancestor."""
+    parent_id = JobName.root("test-user", "priority-parent")
+    child_id = parent_id.child("priority-child")
+    parent_req = make_direct_job_request(parent_id.name, priority_band=parent_band)
+    child_req = make_direct_job_request(child_id.name, priority_band=child_band)
+    # The shared helper constructs root names; this request represents a child.
+    child_req.name = child_id.to_wire()
+
+    with state._db.transaction() as cur:
+        ops.job.submit(cur, job_id=parent_id, request=parent_req, ts=Timestamp.now())
+        ops.job.submit(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
+
+    with state._db.transaction() as cur:
+        batch = dispatch.drain_for_dispatch(cur)
+
+    child_task_id = child_id.task(0)
+    [child_run_request] = [request for request in batch.tasks_to_run if request.task_id == child_task_id.to_wire()]
+    assert child_run_request.priority == expected_band
+    assert query_task(state, child_task_id).priority_band == expected_band
 
 
 def test_drain_includes_workdir_files(state):
