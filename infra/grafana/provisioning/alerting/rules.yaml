@@ -263,10 +263,11 @@ groups:
         annotations:
           summary: "{{ $labels.cluster }}: containers from {{ $labels.image }} died instantly on {{ $labels.node }}"
           description: >-
-            Containers exited 255 in under a second, which is how an image built for the
-            wrong CPU architecture fails. Kubernetes exposes no termination message for it,
-            so this signature is indirect: confirm the tag's manifest and the node's cached
-            copy before acting. The runbook has the commands.
+            Containers died the way an image built for the wrong CPU architecture dies.
+            Check the evidence column on /k8s/arch_mismatch: "message" means the kubelet
+            recorded the runtime's "exec format error" and the mismatch is confirmed,
+            while "signature" means only exit 255 in under a second, which an unrelated
+            instant failure also produces. The runbook has the confirmation commands.
           runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md#image-architecture-mismatch
         data:
           - refId: A

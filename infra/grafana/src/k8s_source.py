@@ -85,21 +85,29 @@ _GB200_INSTANCE_TYPE_SUBSTRING = "gb200"
 BACKOFF_REASONS = ("CrashLoopBackOff", "ImagePullBackOff")
 
 # An image built for the wrong CPU architecture fails at exec, not at pull, and the
-# kubelet records no distinct reason for it: the runtime's "exec format error" reaches
-# the pod log but not the API. terminationMessagePolicy is File by default, so the
-# termination record carries no message either — 28 of 4834 terminated records on
-# cw-us-east-08a had one, and the record from the 2026-07-29 incident did not.
+# kubelet records no distinct reason for it. The runtime's "exec format error" goes to
+# the container log, which reaches the termination record only under
+# terminationMessagePolicy: FallbackToLogsOnError. Verified on cw-us-east-08a by running
+# an amd64 image on an arm64 node under both policies: File left message empty, the
+# fallback policy recorded "exec /bin/echo: exec format error".
 #
-# The scan therefore matches the runtime's observable signature: exit 255, reason
-# Error, and a sub-second runtime. This is indirect. Any program that exits 255
-# immediately matches too, so a row means "a container died the way an arch mismatch
-# dies", not "the image is provably the wrong architecture". Measured against
-# cw-us-east-08a the signature matched 0 of 11182 container statuses across all 208
-# nodes, and it matches the incident record. lib/iris/OPS.md carries the procedure
-# for confirming an actual mismatch.
+# So the scan takes the message when it is there (EVIDENCE_MESSAGE — unambiguous) and
+# otherwise falls back to the runtime signature of exit 255, reason Error, and a
+# sub-second runtime (EVIDENCE_SIGNATURE). The fallback is indirect: any program exiting
+# 255 immediately matches, so such a row means "a container died the way an arch mismatch
+# dies", not proof about the image. Measured against cw-us-east-08a the signature matched
+# 0 of 11182 container statuses across all 208 nodes, and it matches the 2026-07-29
+# incident record. Iris sets the fallback policy on stage-workdir and task, so new
+# failures there carry the message; other workloads keep the default and the signature.
 EXEC_FORMAT_EXIT_CODE = 255
 EXEC_FORMAT_MAX_RUNTIME_SECONDS = 1
 _EXEC_FORMAT_REASON = "Error"
+_EXEC_FORMAT_MESSAGE = "exec format error"
+
+# Which of the two tests matched, reported per row so an operator can tell a proven
+# mismatch from a lookalike without re-deriving it.
+EVIDENCE_MESSAGE = "message"
+EVIDENCE_SIGNATURE = "signature"
 
 # How far back a terminated container still counts as evidence. Failed pods linger
 # until garbage collection, so without a window one morning's bad image would keep
@@ -584,9 +592,10 @@ class K8sSource:
             if not node_arch:
                 continue
             for status in _container_statuses(pod):
-                terminated = _exec_format_termination(status)
-                if terminated is None:
+                match = _exec_format_termination(status)
+                if match is None:
                     continue
+                terminated, evidence = match
                 age = _age_seconds_or_none(terminated.get("finishedAt"))
                 if age is None or age > ARCH_MISMATCH_LOOKBACK_SECONDS:
                     continue
@@ -599,6 +608,7 @@ class K8sSource:
                         "node_arch": node_arch,
                         "image": status.get("image") or "",
                         "image_id": status.get("imageID") or "",
+                        "evidence": evidence,
                         "exit_code": terminated.get("exitCode"),
                         "finished_at": _epoch_ms(terminated.get("finishedAt")),
                         "age_seconds": age,
@@ -782,10 +792,14 @@ def _terminated_runtime_seconds(terminated: dict) -> float | None:
         return None
 
 
-def _exec_format_termination(status: dict) -> dict | None:
-    """Return the termination record matching the exec-format signature, if either state does."""
+def _exec_format_termination(status: dict) -> tuple[dict, str] | None:
+    """Return the matching termination record and which evidence matched, else None."""
     for state_key in ("state", "lastState"):
         terminated = (status.get(state_key) or {}).get("terminated") or {}
+        if not terminated:
+            continue
+        if _EXEC_FORMAT_MESSAGE in (terminated.get("message") or "").lower():
+            return terminated, EVIDENCE_MESSAGE
         if terminated.get("exitCode") != EXEC_FORMAT_EXIT_CODE:
             continue
         if terminated.get("reason") != _EXEC_FORMAT_REASON:
@@ -793,7 +807,7 @@ def _exec_format_termination(status: dict) -> dict | None:
         runtime = _terminated_runtime_seconds(terminated)
         if runtime is None or runtime > EXEC_FORMAT_MAX_RUNTIME_SECONDS:
             continue
-        return terminated
+        return terminated, EVIDENCE_SIGNATURE
     return None
 
 

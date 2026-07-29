@@ -621,6 +621,7 @@ def _exec_format_pod(
     runtime_seconds: float = 0.0,
     finished_ago_seconds: int = 60,
     state_key: str = "state",
+    message: str | None = None,
 ) -> dict:
     finished = datetime.now(UTC) - timedelta(seconds=finished_ago_seconds)
     started = finished - timedelta(seconds=runtime_seconds)
@@ -630,6 +631,8 @@ def _exec_format_pod(
         "startedAt": started.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "finishedAt": finished.strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
+    if message is not None:
+        terminated["message"] = message
     return {
         "metadata": {"namespace": "iris", "name": name},
         "spec": {"nodeName": node_name},
@@ -706,12 +709,31 @@ def test_arch_mismatch_matches_the_recorded_incident_termination():
 
 
 def test_arch_mismatch_also_matches_an_unrelated_instant_exit_255():
-    # Known limit of the signature, not a bug: the API exposes no message to
-    # distinguish these, so an unrelated instant 255 reads the same. The alert text
-    # and lib/iris/OPS.md both say a row is evidence to confirm, not a proof.
+    # Known limit of the signature fallback, not a bug: without a message these are
+    # indistinguishable. The row says so via evidence=signature.
     routes = _arch_routes([_exec_format_pod("unrelated", image="ghcr.io/example/other:v1")])
     (row,) = make_k8s_source(k8s_api(routes)).arch_mismatch_containers()
-    assert row["image"] == "ghcr.io/example/other:v1"
+    assert row["evidence"] == "signature"
+
+
+def test_arch_mismatch_prefers_the_runtime_message_when_the_kubelet_records_one():
+    # Verbatim shape produced under terminationMessagePolicy: FallbackToLogsOnError.
+    routes = _arch_routes([_exec_format_pod("task-0", message="exec /usr/local/bin/python: exec format error\n")])
+    (row,) = make_k8s_source(k8s_api(routes)).arch_mismatch_containers()
+    assert row["evidence"] == "message"
+
+
+def test_arch_mismatch_message_evidence_does_not_need_the_signature():
+    # A message is conclusive on its own, so an exec-format failure still reports
+    # when the exit code or runtime falls outside the fallback signature.
+    routes = _arch_routes([_exec_format_pod("task-0", exit_code=1, runtime_seconds=600, message="exec format error")])
+    (row,) = make_k8s_source(k8s_api(routes)).arch_mismatch_containers()
+    assert row["evidence"] == "message"
+
+
+def test_arch_mismatch_ignores_an_unrelated_message_on_a_normal_failure():
+    routes = _arch_routes([_exec_format_pod("task-0", exit_code=1, message="Traceback: ValueError")])
+    assert make_k8s_source(k8s_api(routes)).arch_mismatch_containers() == []
 
 
 @pytest.mark.parametrize(

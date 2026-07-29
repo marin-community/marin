@@ -524,8 +524,13 @@ subpath and does not reach the controller's finelog server.
 
 An image built for the wrong CPU architecture fails at exec. The pod log shows
 `exec /usr/local/bin/python: exec format error` and the container exits 255 in under a
-second. The `ArchMismatchImageExecuted` alert matches that signature, which is indirect:
-any program exiting 255 immediately looks the same, so confirm before acting.
+second. The `ArchMismatchImageExecuted` alert reports an `evidence` column on
+`/k8s/arch_mismatch`: `message` means the kubelet captured that text and the mismatch is
+confirmed, `signature` means only the exit-255-in-under-a-second pattern matched, which an
+unrelated instant failure also produces. Confirm a `signature` row before acting.
+
+Only containers set to `terminationMessagePolicy: FallbackToLogsOnError` yield `message`
+evidence — Iris sets it on `task` and `stage-workdir`. Everything else reports `signature`.
 
 Confirm the tag really lost the architecture. A multi-arch tag is an index listing every
 platform:
