@@ -12,12 +12,19 @@ lives controller-side, not in the DB-less backend; the controller rides its
 output on the reconcile ``ControlSnapshot``.
 """
 
+from collections import defaultdict
 from dataclasses import dataclass, field, replace
 
 from rigging.timing import Timestamp
 from sqlalchemy import select
 
 from iris.cluster.controller import reads, writes
+from iris.cluster.controller.budget import (
+    UserTask,
+    compute_effective_band,
+    compute_user_spend,
+    interleave_by_user,
+)
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.projections.run_templates import build_run_request_fields
 from iris.cluster.controller.reads import (
@@ -28,7 +35,7 @@ from iris.cluster.controller.reads import (
 )
 from iris.cluster.controller.schema import job_config_table, jobs_table, local_tasks
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, RunningTaskEntry
-from iris.cluster.types import JobName
+from iris.cluster.types import JobName, UserBudgetDefaults
 from iris.rpc import job_pb2
 
 
@@ -92,27 +99,79 @@ def build_run_request(
     return run_req
 
 
-def _dispatch_query(
-    cur: Tx,
-    *predicates,
-    order_by_job_id: bool = False,
-    limit: int | None = None,
-) -> list[PendingDispatchRow]:
+def _dispatch_query(cur: Tx, *predicates) -> list[PendingDispatchRow]:
     """Fetch :class:`PendingDispatchRow`s for the direct-provider drain.
 
-    All drain queries select ``PENDING_DISPATCH_COLS`` over the
-    tasks⋈jobs⋈job_config join; callers supply the distinct state /
-    coscheduling predicates plus optional ordering and limit.
+    Both drain queries (PENDING promotion, ASSIGNED redrive) select
+    ``PENDING_DISPATCH_COLS`` over the tasks⋈jobs⋈job_config join and supply
+    their distinct state predicate; ordering and the rate cap are applied in
+    Python by :func:`_rank_promotion_units` and the drain loop.
     """
     dispatch_join = local_tasks.join(jobs_table, jobs_table.c.job_id == local_tasks.c.job_id).join(
         job_config_table, job_config_table.c.job_id == jobs_table.c.job_id
     )
     stmt = select(*PENDING_DISPATCH_COLS).select_from(dispatch_join).where(*predicates)
-    if order_by_job_id:
-        stmt = stmt.order_by(local_tasks.c.job_id)
-    if limit is not None:
-        stmt = stmt.limit(limit)
     return [pending_dispatch_row(r) for r in cur.execute(stmt).all()]
+
+
+def _unit_sort_key(unit: list[PendingDispatchRow]) -> tuple[int, int, int, int]:
+    """Hierarchy/submission ordering key for a promotion unit.
+
+    Mirrors the worker-daemon sort (``reads._PENDING_TASKS_STMT``): parent depth,
+    then root submission, then own submission, then insertion. A coscheduled gang
+    shares one job, so its members' keys agree except on insertion; the minimum
+    anchors the whole gang at its earliest sibling.
+    """
+    return min(
+        (row.priority_neg_depth, row.priority_root_submitted_ms, row.priority_submitted_ms, row.priority_insertion)
+        for row in unit
+    )
+
+
+def _build_promotion_units(pending: list[PendingDispatchRow]) -> list[list[PendingDispatchRow]]:
+    """Group PENDING dispatch rows into atomic promotion units.
+
+    Non-coscheduled tasks are singleton units. Coscheduled tasks are grouped by
+    job into gangs; a gang becomes a unit only once every sibling is PENDING
+    together (``len == num_tasks``), keeping siblings on one attempt_id so Kueue
+    never waits on pods Iris deferred. A partially-assembled gang is dropped this
+    cycle and reconsidered next.
+    """
+    units: list[list[PendingDispatchRow]] = []
+    gangs: dict[JobName, list[PendingDispatchRow]] = {}
+    for row in pending:
+        if row.has_coscheduling:
+            gangs.setdefault(row.job_id, []).append(row)
+        else:
+            units.append([row])
+    for gang in gangs.values():
+        if len(gang) == gang[0].num_tasks:
+            units.append(gang)
+    return units
+
+
+def _rank_promotion_units(
+    units: list[list[PendingDispatchRow]],
+    effective_bands: dict[JobName, int],
+    user_spend: dict[str, int],
+) -> list[list[PendingDispatchRow]]:
+    """Order promotion units by effective band, then worker-daemon fairness.
+
+    Units are bucketed by their job's effective band and emitted in ascending
+    band order (PRODUCTION first). Within a band they are sorted by the
+    hierarchy/submission key, then round-robined across users by ascending spend
+    — matching ``scheduling.policy.compute_scheduling_order`` so the direct and
+    worker-daemon paths agree on ordering.
+    """
+    by_band: dict[int, list[list[PendingDispatchRow]]] = defaultdict(list)
+    for unit in units:
+        by_band[effective_bands[unit[0].job_id]].append(unit)
+    ranked: list[list[PendingDispatchRow]] = []
+    for band in sorted(by_band):
+        band_units = sorted(by_band[band], key=_unit_sort_key)
+        user_units = [UserTask(user_id=unit[0].task_id.user, task=unit) for unit in band_units]
+        ranked.extend(interleave_by_user(user_units, user_spend))
+    return ranked
 
 
 def drain_for_dispatch(
@@ -120,6 +179,7 @@ def drain_for_dispatch(
     *,
     max_promotions: int = DISPATCH_PROMOTION_RATE,
     backend_id: str | None = None,
+    defaults: UserBudgetDefaults | None = None,
 ) -> DispatchBatch:
     """Drain pending tasks and snapshot running tasks for a direct provider sync cycle.
 
@@ -141,10 +201,18 @@ def drain_for_dispatch(
     ``tasks.state`` directly to terminal, and the K8s provider's pod
     diff against the desired set deletes the corresponding pod on the
     next sync.
+
+    Candidates are ranked by *effective* band — the ancestor-resolved requested
+    band after :func:`compute_effective_band` demotes over-budget users to
+    BATCH — before the ``max_promotions`` rate cap applies, so a capped cycle
+    never exposes a lower-band pod ahead of a higher-band one. The effective
+    band is stamped on ``tasks.priority_band`` and drives the Kueue
+    WorkloadPriorityClass; a redrive reuses that fixed band even if spend or
+    budget configuration later changes.
     """
+    defaults = defaults or UserBudgetDefaults()
     now_ms = Timestamp.now().epoch_ms()
     tasks_to_run: list[job_pb2.RunTaskRequest] = []
-    rows_to_promote: list[PendingDispatchRow] = []
 
     # In a multi-backend cluster, scope the drain to this backend's tasks; a
     # single backend (``backend_id is None``) drains every pending task.
@@ -160,62 +228,52 @@ def drain_for_dispatch(
         *backend_pred,
     )
 
-    promoted_count = 0
+    effective_bands: dict[JobName, int] = {}
+    rows_to_promote: list[PendingDispatchRow] = []
     if max_promotions > 0:
-        # Coscheduled gangs are promoted all-or-none in a single cycle.
-        # Kueue only admits a pod group once it has observed every
-        # ``pod-group-total-count`` pod, so a gang split across drain
-        # cycles — or one larger than the per-cycle cap — would deadlock
-        # waiting for pods Iris never created. Fetch the full coscheduled
-        # PENDING set (no SQL limit) and promote each gang only once all
-        # its tasks are PENDING together; this also keeps every sibling on
-        # the same attempt_id, which is the pod-group generation key (see
-        # _pod_group_name). Non-coscheduled rows keep the flat,
-        # budget-bounded first-fit behavior.
-        cosched_pending = _dispatch_query(
+        # Rank every PENDING candidate by effective band before the rate cap.
+        # The whole set is fetched (no SQL limit) so band ordering, not row
+        # insertion order, decides what the bounded budget promotes.
+        pending = _dispatch_query(
             cur,
             local_tasks.c.state == int(job_pb2.TASK_STATE_PENDING),
-            job_config_table.c.has_coscheduling == True,  # noqa: E712
             *backend_pred,
-            order_by_job_id=True,
         )
-        gangs: dict[JobName, list[PendingDispatchRow]] = {}
-        for row in cosched_pending:
-            gangs.setdefault(row.job_id, []).append(row)
-        for gang in gangs.values():
-            num_tasks = gang[0].num_tasks
-            if len(gang) != num_tasks:
-                # Gang not fully assembled yet (siblings still in flight,
-                # e.g. mid-bounce); a later cycle promotes it whole once
-                # they converge to PENDING.
-                continue
+        job_ids = {row.job_id for row in pending}
+        resolved_bands = reads.get_priority_bands(cur, job_ids)
+        user_spend = compute_user_spend(cur)
+        user_budget_limits = reads.get_all_user_budget_limits(cur)
+        effective_bands = {
+            job_id: compute_effective_band(resolved_bands[job_id], job_id.user, user_spend, user_budget_limits, defaults)
+            for job_id in job_ids
+        }
+        units = _rank_promotion_units(_build_promotion_units(pending), effective_bands, user_spend)
+
+        promoted_count = 0
+        for unit in units:
             remaining = max_promotions - promoted_count
-            if len(gang) > remaining and len(gang) <= max_promotions:
-                # Gang fits within the per-cycle cap but not this cycle's
-                # remaining budget — defer to a later cycle. (Oversized
-                # gangs, larger than the cap itself, fall through and are
-                # promoted whole to avoid a permanent deadlock.)
-                continue
-            rows_to_promote.extend(gang)
-            promoted_count += len(gang)
+            if remaining <= 0:
+                break
+            if len(unit) <= remaining or len(unit) > max_promotions:
+                # Fits this cycle, or an oversized gang (larger than the cap
+                # itself) promoted whole to avoid a permanent deadlock: Kueue
+                # only admits a pod group once every sibling pod exists, so a
+                # gang split across cycles would wait forever.
+                rows_to_promote.extend(unit)
+                promoted_count += len(unit)
+            else:
+                # A coscheduled gang that fits the cap but not this cycle's
+                # remaining budget defers whole. Stop here rather than promote a
+                # lower-ranked unit ahead of it — that would invert priority
+                # across the band boundary. A later cycle with fuller budget
+                # promotes the gang atomically.
+                break
 
-        # Non-coscheduled first-fit, bounded by the remaining budget.
-        remaining = max_promotions - promoted_count
-        if remaining > 0:
-            noncosched_pending = _dispatch_query(
-                cur,
-                local_tasks.c.state == int(job_pb2.TASK_STATE_PENDING),
-                job_config_table.c.has_coscheduling == False,  # noqa: E712
-                *backend_pred,
-                limit=remaining,
-            )
-            rows_to_promote.extend(noncosched_pending)
-
-    resolved_bands = reads.get_priority_bands(cur, {row.job_id for row in rows_to_promote})
     for row in rows_to_promote:
-        row = replace(row, priority_band=resolved_bands[row.job_id])
+        band = effective_bands[row.job_id]
+        row = replace(row, priority_band=band)
         attempt_id = row.current_attempt_id + 1
-        writes.promote_for_dispatch(cur, row.task_id, attempt_id, now_ms, priority_band=row.priority_band)
+        writes.promote_for_dispatch(cur, row.task_id, attempt_id, now_ms, priority_band=band)
         tasks_to_run.append(build_run_request(cur, row, attempt_id))
 
     # Redrive: pods for these rows may not exist yet (crash between

@@ -117,6 +117,13 @@ class PendingDispatchRow:
     # Requested container security profile (job_config). UNSPECIFIED(0) resolves
     # to DEFAULT when the backend applies it.
     container_profile: int  # job_pb2.ContainerProfile
+    # Hierarchy/submission ordering keys, mirroring the worker-daemon scheduler
+    # sort (see ``_PENDING_TASKS_STMT``). The dispatch drain ranks promotion
+    # candidates by these within an effective band before applying the rate cap.
+    priority_neg_depth: int
+    priority_root_submitted_ms: int
+    priority_submitted_ms: int
+    priority_insertion: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -1700,6 +1707,10 @@ PENDING_DISPATCH_COLS = (
     # Current stamped task band; see PendingDispatchRow.priority_band.
     local_tasks.c.priority_band,
     job_config_table.c.container_profile,
+    local_tasks.c.priority_neg_depth,
+    local_tasks.c.priority_root_submitted_ms,
+    local_tasks.c.submitted_at_ms,
+    local_tasks.c.priority_insertion,
 )
 
 
@@ -1728,6 +1739,10 @@ def pending_dispatch_row(r) -> PendingDispatchRow:
         coscheduling_group_by=str(r.coscheduling_group_by),
         priority_band=int(r.priority_band),
         container_profile=int(r.container_profile),
+        priority_neg_depth=int(r.priority_neg_depth),
+        priority_root_submitted_ms=int(r.priority_root_submitted_ms),
+        priority_submitted_ms=int(r.submitted_at_ms.epoch_ms()),
+        priority_insertion=int(r.priority_insertion),
     )
 
 
