@@ -64,7 +64,51 @@ config for one job with `SCALE_REPORT_DROPS=1`.
 comparison is fair and the EP line is further ahead than reported. If they drop
 <3%, the EP line's advantage is smaller than claimed and possibly negative.
 
-**This is the cheapest high-value experiment in the queue and it should run first.**
+### D-1 RESULT — 2026-07-29. The <3% clause fired: the FSDP baselines drop essentially nothing.
+
+| arm | shape | tail window | drops | tok/s | MFU |
+|---|---|---|---:|---:|---:|
+| D-1a | d6144 4-of-128 FSDP | 280–349/350 | **0.230%** | 274,387 | 24.480% |
+| D-1b | d5120 8-of-256 FSDP, trio-off, QB-off | 96–119/120 | **0.000%** | 326,500 | 21.078% |
+| D-1c | d5120 8-of-256 FSDP, trio-**on**, QB-off | 96–119/120 | **0.000%** | 318,711 | 20.575% |
+
+D-1b logged 0 of 38,654,705,664 assignments dropped across 384 tail records. Both
+baselines sit far below the pre-registered 3% threshold, so the falsification clause
+fires as written: **the EP line's fidelity advantage over FSDP does not exist.** Every
+EP-vs-FSDP comparison in the record credited EP with MFU earned by doing less work.
+
+**D-1c also tested, and largely refuted, the trio explanation.** The record's 19.2%
+baseline sits 1.88pp below D-1b, and the hypothesis was that the trio accounted for it.
+Measured, the trio costs **0.503pp MFU / 2.39% tok/s** on the FSDP line — about **27%**
+of the gap. It landed 0.0252pp under the 20.6% falsification threshold, close enough to
+the edge that it should not be read as a pass.
+
+**The gap's actual cause is a rack-count mismatch.** The historical 19.17% figure was
+taken on **two racks**; D-1b and D-1c ran on one. The 19.2% baseline is therefore not
+comparable to any single-rack number in this project, and should not be used as one.
+
+**Where the comparison now stands, and the one job that would settle it.** With the trio
+matched on both sides:
+
+| | tok/s | MFU | drops | QB |
+|---|---:|---:|---:|---|
+| FSDP trio-on, 1 rack (D-1c) | 318,711 | 20.575% | 0.000% | **off** |
+| EP64 trio-on, 1 rack (D-6a trio arm) | 317,253 | 20.481% | 2.055% | **on** |
+
+0.46% apart on tok/s, with EP carrying a QB penalty worth up to 1.44pp that FSDP is not
+paying. The comparison is **unresolved**, not decided either way. The missing arm is
+**FSDP at d5120 8-of-256, trio-on, QB-on, one rack** — one 120-step job, and the only
+thing that makes this fully matched.
+
+**Independent reconciliation needed.** Larry Dial estimated the trio at "2 MFU or so".
+Measured here it is 0.503pp on FSDP and 0.285pp on EP — roughly a quarter of that.
+Either the estimate came from a different shape or rack count, or it bundles something
+else. This matters because it is the number the EP-vs-FSDP table comparison hinges on.
+
+**Operational note.** D-1a needed 13 placement draws (failures on `s5kvxs64`,
+`s4bk6j84`) because it ran before the stale-image cleanup; D-1b and D-1c each scheduled
+cleanly on the first draw afterward. See
+[`.agents/ops/2026-07-29-gb200-stale-amd64-image-cache.md`](../../ops/2026-07-29-gb200-stale-amd64-image-cache.md).
 
 ### D-2. Re-establish the EP64 stack end to end at compliant fidelity, on merged code
 
