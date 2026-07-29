@@ -9,7 +9,21 @@ Health checks (emit a `probe_up` 1/0 sample; the runner adds `probe_latency_ms`)
 
 - `controller-ping` — `list_workers()` on the Iris controller (cadence 60s).
 - `finelog-write` — write a nonce and read it back (60s).
-- `iris-job-submit/<zone>` — submit a tiny job per zone, wait for SUCCEEDED (300s).
+- `iris-job-submit/<zone>` — submit a tiny job per zone, wait for SUCCEEDED
+  (cadence 30 min).
+- `iris-job-submit/federation` — discover every peer configured on the Marin
+  controller and concurrently submit a tiny, cluster-pinned job to each one
+  through `https://iris.oa.dev` (cadence 30 min). This emits one `probe_up`
+  sample per target, labelled with `route=federation` and `cluster=<peer>`.
+  Marin's production peers are the CoreWeave Kubernetes clusters, so this
+  exercises IAP authentication, federation handoff, Kueue, and pod scheduling
+  end to end.
+
+Scheduling canaries request 100 millicores and 128 MiB, run a one-second Python
+sleep, and set `setup_scripts=[]`. They use the task image as-is: there is no
+workspace upload or dependency build to obscure the scheduling result. They run
+every 30 minutes as a fallback for the lower-level cluster and federation
+eventers.
 
 Gauges:
 
@@ -38,6 +52,9 @@ written to the `infra.canary.metrics` finelog namespace (query it with
 `finelog query <cluster> 'SELECT ... FROM "infra.canary.metrics"'`, slicing
 labels with DuckDB `json_extract`), and appended to a daily JSONL that rolls up
 to `gs://<us-central1 data bucket>/infra/probes/dt=<date>/` at UTC rollover.
+Grafana evaluates the newest `probe_up` row from the last two scheduling
+cadences. A failed probe or an empty result becomes a warning in Grafana's home
+alert list; warning rules do not send notifications.
 
 Standalone package (own `pyproject.toml`/`uv.lock`): pulls `marin-iris`,
 `marin-finelog`, `marin-rigging` from PyPI as `0.2.x.dev` nightlies
@@ -60,6 +77,7 @@ Single COS VM `infra-probes` (us-central1-b), one container, `restart=always`.
 ```bash
 cd infra/probes
 uv run deploy/deploy.py build    # build + push :sha and :latest
+uv run deploy/deploy.py grant-iap # one-time access for the existing probe SA
 uv run deploy/deploy.py apply    # roll the VM to this HEAD's :sha image
 uv run deploy/deploy.py status   # VM state + recent logs
 ```
@@ -70,7 +88,7 @@ overridden per-command (`--project`, `--zone`, …) or via `MARIN_PROBES_*` env 
 ### One-time VM creation
 
 `create` provisions the service account (image pull, Cloud Logging, GCS
-roll-ups), its IAM bindings, and the COS VM in one shot:
+roll-ups, Marin Iris IAP access), its IAM bindings, and the COS VM in one shot:
 
 ```bash
 uv run deploy/deploy.py create    # --iris-endpoint / --machine-type to override
@@ -79,3 +97,10 @@ uv run deploy/deploy.py create    # --iris-endpoint / --machine-type to override
 The VM gets a `/var/lib/probes` host mount that persists the JSONL across
 container restarts, plus a startup-script that makes it writable by the uid-1000
 container.
+
+The service account is admitted as a federation submitter by each production
+CoreWeave cluster config. Deploy those controller configs before rolling out
+this probe version. The probe receives no CoreWeave kubeconfig and no Marin
+controller signing key: it authenticates to the public Marin edge with ambient
+service-account credentials, and the Marin controller signs the downstream
+federation handoffs.

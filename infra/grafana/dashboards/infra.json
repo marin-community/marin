@@ -941,6 +941,7 @@
       "id": 25,
       "type": "timeseries",
       "title": "Provisioning success ratio",
+      "description": "Trailing 3h success ratio, refreshed every 15m. Success is READY / (READY + STOCKOUT + ERROR); runtime preemptions are excluded.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -967,7 +968,12 @@
       },
       "options": {
         "legend": {
-          "displayMode": "list",
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ],
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
@@ -989,7 +995,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT collected_at AS t, value FROM \"infra.canary.metrics\" WHERE metric = 'provision_success_ratio' AND contains(labels, '\"scope\": \"fleet\"') AND collected_at >= {{from}} AND collected_at < {{to}} ORDER BY collected_at"
+                "value": "WITH region_counts AS (SELECT collected_at AS t, regexp_replace(json_get(labels, 'zone'), '-[^-]+$', '') AS series, SUM(CASE WHEN metric = 'provision_ready' THEN value ELSE 0 END) AS ready, SUM(CASE WHEN metric = 'provision_outcomes' THEN value ELSE 0 END) AS outcomes FROM \"infra.canary.metrics\" WHERE metric IN ('provision_ready', 'provision_outcomes') AND COALESCE(json_get(labels, 'zone'), '') <> '' AND collected_at >= {{from}} AND collected_at < {{to}} GROUP BY 1, 2), regional AS (SELECT t, series, ready / NULLIF(outcomes, 0) AS value FROM region_counts WHERE outcomes > 0), fleet AS (SELECT collected_at AS t, 'fleet' AS series, value FROM \"infra.canary.metrics\" WHERE metric = 'provision_success_ratio' AND contains(labels, '\"scope\": \"fleet\"') AND collected_at >= {{from}} AND collected_at < {{to}}) SELECT t, series, value FROM fleet UNION ALL SELECT t, series, value FROM regional ORDER BY t, series"
               },
               {
                 "key": "from",
@@ -1006,6 +1012,11 @@
               "selector": "t",
               "text": "time",
               "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "region",
+              "type": "string"
             },
             {
               "selector": "value",
@@ -1195,6 +1206,16 @@
       }
     },
     {
+      "id": 34,
+      "panelRef": "federation_peers",
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 42
+      }
+    },
+    {
       "id": 40,
       "type": "row",
       "title": "Hero training",
@@ -1203,7 +1224,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 42
+        "y": 49
       },
       "panels": []
     },
@@ -1220,7 +1241,7 @@
         "h": 9,
         "w": 8,
         "x": 0,
-        "y": 43
+        "y": 50
       },
       "options": {
         "view": "wandb"
@@ -1294,7 +1315,7 @@
         "h": 9,
         "w": 8,
         "x": 8,
-        "y": 43
+        "y": 50
       },
       "options": {
         "view": "wandb"
@@ -1368,7 +1389,7 @@
         "h": 9,
         "w": 8,
         "x": 16,
-        "y": 43
+        "y": 50
       },
       "options": {
         "view": "wandb"
@@ -1438,7 +1459,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 52
+        "y": 59
       },
       "panels": []
     },
@@ -1449,7 +1470,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 53
+        "y": 60
       }
     },
     {
@@ -1459,7 +1480,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 53
+        "y": 60
       }
     },
     {
@@ -1474,7 +1495,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 53
+        "y": 60
       },
       "fieldConfig": {
         "defaults": {
@@ -1548,7 +1569,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 60
+        "y": 67
       }
     },
     {
@@ -1558,7 +1579,7 @@
         "h": 7,
         "w": 16,
         "x": 8,
-        "y": 60
+        "y": 67
       }
     }
   ]

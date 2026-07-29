@@ -32,6 +32,7 @@ fetch server-side, so nothing outside the container reaches it.
 GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
 GET /finelog/marin/fleet_health                  main query probe + k8s mirror readiness
 GET /finelog/marin/alerts/fleet_health           alert rows: server labels + value(0|1)
+GET /finelog/marin/alerts/training_stalls        active jobs + stalled-progress value(0|1)
 GET /iris/{cluster}/jobs | workers | health      live controller RPCs
 GET /iris/{cluster}/query?sql=                    ad-hoc SELECT (admin/null-auth)
 GET /github/ferries | builds | nightlies          GitHub REST / GraphQL
@@ -56,7 +57,8 @@ relative range keeps one cache key as its edges drift. It calls only `Query`, av
 Timestamps come back as epoch milliseconds, so a panel selects a raw or `date_bin`-ned
 time column without casting. finelog has JSON SQL UDFs, so a panel groups by a label in SQL
 — `json_get(labels,'region')`; the bridge also flattens a `labels` column into
-`label_<key>` fields.
+`label_<key>` fields. The Kubernetes dashboard uses the hub datasource for a
+bounded recent view of `iris.task_event`, beside the live API server events.
 
 `fleet_health` reads one row from `finelog-marin`'s `log` namespace and combines that
 result with the three CoreWeave mirror Deployments' HTTP-readiness state. A hub query
@@ -133,7 +135,7 @@ is the exception — it returns `reachable=false` so the panel can render the ou
 ```
 src/server.py          the bridge routes (Starlette): finelog SQL, Iris, GitHub, k8s
 src/finelog_source.py  finelog query over its internal IP (LogClient)
-src/iris_source.py     live controller RPCs: jobs, workers, health, ad-hoc query
+src/iris_source.py     live controller RPCs: jobs, workers, health, federation peers, ad-hoc query
 src/github_source.py   ferry runs and CI build rollup, precomputed
 src/wandb_source.py    public W&B report runset and token-axis samples
 src/k8s_source.py      CW k8s API reads + the per-cluster fan-out and alert rows
@@ -159,8 +161,9 @@ state — see below), `fleet.json` (canary +
 worker health), `iris.json`
 (per-task and per-worker resource usage), `pipelines.json` (Zephyr throughput and shard
 memory), `training.json` (levanter training metrics from the `telltale` namespace,
-grouped by run), `k8s.json` (current CW control-plane state from the k8s source), and
-`finelog.json` (fleet readiness plus mirror pod, probe, resource, and PVC details).
+grouped by run), `k8s.json` (current CW control-plane state plus recent durable
+Iris task actions), and `finelog.json` (fleet readiness plus mirror pod, probe,
+resource, and PVC details).
 
 `jobs.json` is the at-a-glance job view. Its fleet panels read the `iris.task_state`
 finelog namespace on the marin hub — one row per active root job every 30s per
@@ -195,22 +198,37 @@ File provisioning owns that tree: UI edits to provisioned alerting resources are
 rejected by Grafana and would be overwritten by the files anyway. Change the YAML and
 redeploy.
 
-Rules page only on near-certain incidents: an unreachable cluster, a
-crash-looping watched component, an admission webhook with no ready endpoints, a
-degraded component, a dead Iris controller, an unhealthy finelog hub or mirror, a GPU
+Critical rules notify operators immediately: an unreachable cluster or
+federation peer, a crash-looping watched component, an admission webhook with no ready endpoints, a
+dead production Iris controller, or an unhealthy finelog hub or mirror.
+Warning rules remain in Grafana's home alert list without sending email, Slack,
+or Loom notifications: a degraded component, a failed infra probe, a GPU
 pod that stays node-bound and
 nonterminal without finalizers for five minutes after the bridge's two-minute
 overdue threshold, and a GB200 rack with fewer than 16 trays Ready for five
 minutes (the NVL72 rack spec is 18; a floor rather than an outright outage —
-see `gpu_racks` above). The stuck-pod rule groups by node and links the cordon-first
+see `gpu_racks` above). A warning-only training rule joins fresh running
+`iris.task_state` rows to root jobs with Levanter Telltale metrics in the prior
+24 hours: it waits 15 minutes for training progress or 45 minutes for
+initialization, then remains pending for five minutes. It does not require
+task-to-node GPU attribution. The stuck-pod
+rule groups by node and links the cordon-first
 recovery skill; terminal, unbound, and finalizer-held pods stay dashboard-only.
 Other workload-tier signals (gated pods, Kueue backlog, workload crashloops) are
-dashboard-only because they have expected benign causes. `severity=critical` routes to `ops-critical` (email ops@openathena.ai,
-Slack, and a Loom triage session); `severity=warning` routes to `ops-slack`
-(Slack only). Every rule sets
+dashboard panels rather than alert rules because they have expected benign
+causes. `severity=critical` routes to `ops-critical` (email
+ops@openathena.ai, Slack, and a Loom triage session). `severity=warning`
+matches the always-active `dashboard-only` mute timing: Grafana continues
+evaluating and displaying the alert, but creates no notification. Every rule sets
 `noDataState: Alerting` and `execErrState: Alerting`, and the alert endpoints return
-explicit zeros when healthy, so silence anywhere in the pipeline pages rather than
-resolving.
+explicit zeros when healthy, so monitoring-path failures use the same
+critical or warning handling as the rule.
+
+Federation peer reachability comes from `ListPeers` on the Marin controller.
+The controller heartbeat traverses production DNS, TLS, Traefik, the source-IP
+allowlist, and the Iris RPC path from Marin's static egress address. Grafana
+reads the resulting state over its existing VPC path to Marin, so Grafana's
+Cloud Run egress does not need admission to the CoreWeave federation ingress.
 
 Alert state — pending (`for`) timers, notification dedup, silences — lives in the
 shared `marin-metadata` Postgres with the rest of Grafana's state (see Deploy), so it

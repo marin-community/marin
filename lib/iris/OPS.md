@@ -178,9 +178,19 @@ For machine-readable job data, use the Iris Python client (`IrisClient`) directl
 ## Task Operations
 
 ```bash
-iris task exec /user/job/0 -- bash          # shell into running container
+iris task describe /user/job/0                 # state, attempts, backend object, root cause
+iris task events /user/job/0                   # retained backend + controller action timeline
+iris task events /user/job/0:2                 # one attempt only
+iris task exec /user/job/0 -- bash             # shell into running container
 iris task exec /user/job/0 -- python -c "import jax; print(jax.devices())"
 ```
+
+`task events` is the first stop when a pod or Kubernetes Event has already been
+garbage-collected. It queries `iris.task_event` across every retained attempt in
+the task's current job incarnation in one call and shows both backend
+observations (`k8s/kueue`, `k8s/container`) and controller decisions
+(`iris/controller`) in chronological order. Events are retained for up to seven
+days.
 
 Default timeout is 60s. Use `--timeout 300` for slow commands, `--timeout -1` for no timeout (last resort).
 
@@ -243,6 +253,8 @@ iris process profile cpu -t /user/job/0     # profile a running task container
 ```
 
 **Prefer `iris process profile` over SSH** for profiling — it uses the `/system/process` RPC and avoids direct VM access. SSH is a fallback only when the RPC doesn't cover your needs.
+
+GPU environments set `NCCL_RAS_ENABLE=1`, `NCCL_DEBUG=INFO`, and `NCCL_DEBUG_SUBSYS=INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS`. The default timestamp is `[%F %T.%3f]`. Short debug-smoke jobs may additionally select `COLL,PROXY,NVLS,REG`; do not use `TRACE` or `CALL` for normal runs.
 
 ## Scheduler & Autoscaler
 
@@ -397,6 +409,16 @@ Namespaces:
 
 - `iris.worker` — per-tick host utilization (cpu, mem, disk, running task count, net bps), keyed by `ts`.
 - `iris.task` — per-attempt task resource snapshots, keyed by `ts`.
+- `iris.task_event` — up to seven days of deduplicated backend verdicts and
+  state-changing controller actions per task attempt. Query all attempts with
+  `iris task events /user/job/0`, or directly:
+
+  ```sql
+  SELECT attempt_id, ts, type, reason, message, source, count
+  FROM "iris.task_event"
+  WHERE task_id='/user/job/0' AND attempt_uid='<uid from iris task describe>'
+  ORDER BY ts ASC;
+  ```
 - `iris.task_state` — controller-emitted (every 30s) task counts by state per root job, plus `oldest_pending_age_ms` / `oldest_building_age_ms` wait ages, keyed by `root_job_id`. The `root_job_id=""` row is the per-cluster rollup, written even when idle — its absence means the controller is down. Feeds fleet-wide stuck-BUILDING alerting and queue-depth history.
 - `iris.admission_probe` — on Kubernetes clusters, the outcome (every 60s) of a `dryRun=All` canary pod apply that traverses the full admission chain, keyed by `outcome` (`ok`/`failed` with `error_class`, latency, truncated message). `failed` rows (or silence) detect fail-closed admission webhooks before any task pod exists.
 - `iris.profile` — per-capture profile blobs (cpu/memory/thread, periodic or on-demand), keyed by `source` so the dashboard's per-source list query prunes via parquet row-group min/max. Filter on `source` (a task path like `/user/job/.../<index>`, `/system/worker/<id>`, or `/system/controller`) and `type` (`cpu`/`memory`/`thread`). `format` is the blob encoding — the GCE/TPU worker's periodic CPU captures are py-spy **speedscope** JSON; the k8s backend's periodic captures are py-spy **thread dumps** (`type=thread`), since a hung collective samples no CPU but a thread dump pinpoints where every rank is blocked. `vm_id` is the writer VM (worker id, `controller-self`, or `k8s/<node-or-pod>`). To find a hang, read the last periodic `thread` capture per `source` before the freeze.
@@ -549,6 +571,74 @@ State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/
 Always read [`docs/coreweave.md`](docs/coreweave.md) before operating a
 GPU/CoreWeave cluster. Use `lib/iris/config/coreweave-*.yaml` for CoreWeave
 cluster configs.
+
+### Public LoadBalancer reachability
+
+Federation reaches a CoreWeave controller through the public Traefik
+LoadBalancer. A direct `iris --cluster=<name> cluster status` uses a Kubernetes
+port-forward, so it can succeed while the federation route is unreachable.
+
+Test each layer separately:
+
+```bash
+KUBECONFIG=~/.kube/coreweave-iris
+CONTEXT=<platform.coreweave.kube_context>
+NAMESPACE=<platform.coreweave.namespace>
+HOST=<provisioning.coreweave.federation_dns.hostname>
+
+# Controller and ingress objects.
+kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n "$NAMESPACE" \
+  get pods,svc,ingress,certificate -o wide
+kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n traefik \
+  get pods,svc,endpointslice -o wide
+
+# Controller Service and Traefik route from inside the cluster.
+kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n "$NAMESPACE" \
+  exec deploy/iris-controller -- sh -c \
+  'curl -sS -o /dev/null -w "controller=%{http_code}\n" http://iris-controller-svc:10000/health'
+kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n "$NAMESPACE" \
+  exec deploy/iris-controller -- sh -c \
+  "curl -ksS -o /dev/null -w 'ingress=%{http_code}\n' https://$HOST/health"
+
+# The same public route from outside CoreWeave.
+curl -vk --connect-timeout 5 --max-time 10 "https://$HOST/health"
+```
+
+Interpret the result at the first failing layer:
+
+- Controller `200` and ingress `403` mean the backend, Traefik route, and
+  `ipAllowList` middleware are active. `403` is expected when the test source
+  is not allowlisted.
+- An external `403` proves the public route works. If the federation parent is
+  also rejected, compare its observed egress IP with the live
+  `iris-federation-ipallowlist` Middleware.
+- An external `503` reaches Traefik but not a healthy backend. Inspect the
+  Traefik EndpointSlice and controller Service.
+- A public VIP that answers inside the cluster but times out from multiple
+  external networks points to LoadBalancer route propagation. Check Cilium's
+  managed BGP session before escalating:
+
+```bash
+TRAEFIK_NODE=$(kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" \
+  -n traefik get pod -l app.kubernetes.io/name=traefik \
+  -o jsonpath='{.items[0].spec.nodeName}')
+CILIUM_POD=$(kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" \
+  -n cw-cilium-system get pod --field-selector "spec.nodeName=$TRAEFIK_NODE" \
+  -o jsonpath='{.items[0].metadata.name}')
+PEER=$(kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" \
+  get ciliumbgpclusterconfig cilium-bgp \
+  -o jsonpath='{.spec.bgpInstances[0].peers[0].peerAddress}')
+
+kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n cw-cilium-system \
+  exec "$CILIUM_POD" -c cilium -- cilium-dbg bgp peers
+kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n cw-cilium-system \
+  exec "$CILIUM_POD" -c cilium -- \
+  cilium-dbg bgp routes advertised ipv4 unicast peer "$PEER"
+```
+
+An established BGP session that advertises the public VIP, combined with an
+external TCP timeout, requires a CoreWeave route-export escalation. Restarting
+Iris or Traefik does not repair that layer.
 
 ## CI Workflows
 

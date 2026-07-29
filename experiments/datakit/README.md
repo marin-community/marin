@@ -15,11 +15,11 @@ its pipeline on its own dedicated Zephyr coordinator + worker fleet (vanilla
 the StepRunner walks at once.
 
 Every stage keeps one step per source with its own output dir
-(`datakit/<stage>/<source>_<hash>/`); only dedup and the store combine sources,
-by design. Steps write their main output under `outputs/main/` plus, where it
-makes sense, a small site/sample side output (`outputs/samples/`,
-`outputs/flagged_sample/`, …) that the per-stage HTML reports
-([`reports/`](reports/)) read.
+(`datakit/<stage>/<source>_<hash>/`). Dedup, the decontamination DF filter, and
+the store combine sources. Steps write their main output under `outputs/main/`
+plus, where it makes sense, a small site/sample side output
+(`outputs/samples/`, `outputs/flagged_sample/`, …) that the per-stage HTML
+reports ([`reports/`](reports/)) read.
 
 Each `datakit/report/<stage>` step depends only on that stage's steps, so it
 runs as soon as the stage finishes — reports are not deferred to the end of the
@@ -50,8 +50,9 @@ flowchart TD
     end
 
     BLOOM["eval bloom (shared)<br/>datakit/bloom/_combined_fixed"]
+    DF["eval n-gram DF (cross-source)<br/>datakit/decon_drop/_combined"]
     DEDUP["fuzzy dedup (cross-source)<br/>datakit/dedup"]
-    STORE["store: 5-way join, drop contaminated + non-canonical,<br/>route by (cluster_&lt;view&gt;, quality_bucket)<br/>datakit/store → cluster=C/quality=Q Levanter caches"]
+    STORE["store: shuffle 5-way join, drop contaminated + non-canonical,<br/>group by (cluster_&lt;view&gt;, quality_bucket, subshard)<br/>datakit/store → cluster=C/quality=Q Levanter caches"]
 
     SRC --> TOK
     SRC --> EMB
@@ -59,7 +60,9 @@ flowchart TD
     SRC --> DECON
     SRC --> MH
     MODEL --> QUAL
-    EVALS --> BLOOM --> DECON
+    EVALS --> BLOOM --> DF --> DECON
+    SRC --> DF
+    BLOOM --> DECON
     EMB --> SAMP --> KM --> ASG
     EMB --> ASG
     MH --> DEDUP
@@ -118,7 +121,7 @@ aws s3 ls s3://marin-us-east-02a/marin/datakit/ | grep sample
 | `cluster/domain/v0/` | Domain clustering: centroid sampling/training + per-source assignment |
 | `embeddings/luxical/` | Luxical-one document embeddings feeding the domain stage |
 | `decontam/` | Eval-corpus preparation (the decon step itself lives in `marin.datakit.decon`) |
-| `store/datakit_store.py` | 5-way join → per-(cluster, quality) Levanter caches |
+| `store/datakit_store.py` | Shuffle 5-way join → compact per-(cluster, quality) Levanter caches |
 | `reports/` | Per-stage single-page HTML reports (`common.py` + one module/template per stage) |
 | `scripts/` | Manual source triggering and synchronization, tier-2 dataset reproduction, and tier-1 output validation |
 | `testbed/` | Sampled-corpus testbed used by the smoke and decon experiments |

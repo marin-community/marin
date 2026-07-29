@@ -672,11 +672,15 @@ def promote_for_dispatch(
     task_id: JobName,
     attempt_id: int,
     now_ms: int,
+    *,
+    priority_band: int,
 ) -> None:
     """Insert a fresh ``task_attempts`` row and promote the task for direct-provider dispatch.
 
     No worker is assigned; ``current_worker_id`` is left NULL so the
-    direct-provider path can track and dispatch the task via K8s.
+    direct-provider path can track and dispatch the task via K8s. The resolved
+    priority band is fixed for the attempt so persisted state matches the
+    dispatched request.
     """
     insert_attempt(
         tx,
@@ -693,6 +697,7 @@ def promote_for_dispatch(
             state=job_pb2.TASK_STATE_ASSIGNED,
             current_attempt_id=attempt_id,
             started_at_ms=func.coalesce(tasks_table.c.started_at_ms, now_ms),
+            priority_band=priority_band,
         )
     )
 

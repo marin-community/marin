@@ -14,7 +14,7 @@ import json
 import math
 import re
 from collections import Counter, defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import pairwise
 from pathlib import Path
 from typing import Any, cast
@@ -225,25 +225,7 @@ def summarize_complete_events(
         optimization_candidates=[],
     )
 
-    candidates = derive_optimization_candidates(summary)
-    return ProfileSummary(
-        schema_version=summary.schema_version,
-        generated_at_utc=summary.generated_at_utc,
-        source_format=summary.source_format,
-        source_path=summary.source_path,
-        run_metadata=summary.run_metadata,
-        trace_overview=summary.trace_overview,
-        trace_provenance=summary.trace_provenance,
-        step_time=summary.step_time,
-        time_breakdown=summary.time_breakdown,
-        hot_ops=summary.hot_ops,
-        semantic_families=summary.semantic_families,
-        communication_ops=summary.communication_ops,
-        gap_before_ops=summary.gap_before_ops,
-        hierarchical_regions=summary.hierarchical_regions,
-        gap_region_contexts=summary.gap_region_contexts,
-        optimization_candidates=candidates,
-    )
+    return replace(summary, optimization_candidates=derive_optimization_candidates(summary))
 
 
 def load_trace_payload(trace_path: Path) -> dict[str, Any]:
@@ -493,26 +475,14 @@ def _summarize_breakdown(
     raise ValueError(f"Unsupported breakdown mode: {mode}")
 
 
-def _summarize_breakdown_per_track(events: list[CompleteTraceEvent], exclusive: list[float]) -> TimeBreakdown:
-    totals = {
-        "compute": 0.0,
-        "communication": 0.0,
-        "host": 0.0,
-        "stall": 0.0,
-        "other": 0.0,
-    }
+def _empty_category_totals() -> dict[str, float]:
+    return {"compute": 0.0, "communication": 0.0, "host": 0.0, "stall": 0.0, "other": 0.0}
 
-    for event, duration in zip(events, exclusive, strict=True):
-        # "Steps" is a wrapper timeline and heavily overlaps with lower-level device events.
-        if event.thread_name == "Steps":
-            continue
-        category = _event_category(event)
-        totals[category] += duration
 
-    total_duration = sum(totals.values())
-
+def _time_breakdown(duration_basis: str, totals: dict[str, float], total_duration: float) -> TimeBreakdown:
+    """Assemble a ``TimeBreakdown`` from per-category durations and the total they share."""
     return TimeBreakdown(
-        duration_basis="exclusive_duration_per_track",
+        duration_basis=duration_basis,
         total_duration=total_duration,
         compute=breakdown_part(totals["compute"], total_duration),
         communication=breakdown_part(totals["communication"], total_duration),
@@ -522,26 +492,25 @@ def _summarize_breakdown_per_track(events: list[CompleteTraceEvent], exclusive: 
     )
 
 
+def _summarize_breakdown_per_track(events: list[CompleteTraceEvent], exclusive: list[float]) -> TimeBreakdown:
+    totals = _empty_category_totals()
+
+    for event, duration in zip(events, exclusive, strict=True):
+        # "Steps" is a wrapper timeline and heavily overlaps with lower-level device events.
+        if event.thread_name == "Steps":
+            continue
+        category = _event_category(event)
+        totals[category] += duration
+
+    return _time_breakdown("exclusive_duration_per_track", totals, sum(totals.values()))
+
+
 def _summarize_breakdown_global(events: list[CompleteTraceEvent]) -> TimeBreakdown:
-    totals = {
-        "compute": 0.0,
-        "communication": 0.0,
-        "host": 0.0,
-        "stall": 0.0,
-        "other": 0.0,
-    }
+    totals = _empty_category_totals()
 
     window = _global_stall_window(events)
     if window is None:
-        return TimeBreakdown(
-            duration_basis="exclusive_duration_global_timeline",
-            total_duration=0.0,
-            compute=breakdown_part(0.0, 0.0),
-            communication=breakdown_part(0.0, 0.0),
-            host=breakdown_part(0.0, 0.0),
-            stall=breakdown_part(0.0, 0.0),
-            other=breakdown_part(0.0, 0.0),
-        )
+        return _time_breakdown("exclusive_duration_global_timeline", totals, 0.0)
     window_start, window_end = window
     window_duration = max(0.0, window_end - window_start)
 
@@ -569,7 +538,7 @@ def _summarize_breakdown_global(events: list[CompleteTraceEvent]) -> TimeBreakdo
     index = 0
     while index < len(points):
         timestamp = points[index][0]
-        if previous_ts is not None and timestamp > previous_ts:
+        if timestamp > previous_ts:
             category = _active_device_category(active)
             if category is not None:
                 totals[category] += timestamp - previous_ts
@@ -590,16 +559,7 @@ def _summarize_breakdown_global(events: list[CompleteTraceEvent]) -> TimeBreakdo
             uncovered_duration += window_end - previous_ts
 
     totals["stall"] = max(0.0, uncovered_duration)
-    total_duration = window_duration
-    return TimeBreakdown(
-        duration_basis="exclusive_duration_global_timeline",
-        total_duration=total_duration,
-        compute=breakdown_part(totals["compute"], total_duration),
-        communication=breakdown_part(totals["communication"], total_duration),
-        host=breakdown_part(totals["host"], total_duration),
-        stall=breakdown_part(totals["stall"], total_duration),
-        other=breakdown_part(totals["other"], total_duration),
-    )
+    return _time_breakdown("exclusive_duration_global_timeline", totals, window_duration)
 
 
 def _global_stall_window(events: list[CompleteTraceEvent]) -> tuple[float, float] | None:
@@ -1149,41 +1109,34 @@ def derive_optimization_candidates(summary: ProfileSummary) -> list[Optimization
     return candidates
 
 
+def _single_step_class(steady: list[tuple[int, float]]) -> list[StepClassSummary]:
+    """Classify every steady-state step as one ``typical`` class."""
+    stats = DurationStats.from_values([duration for _, duration in steady])
+    representative_step, representative_duration = _representative_step(steady, stats.median)
+    return [
+        StepClassSummary(
+            name="typical",
+            count=len(steady),
+            fraction_of_steady=1.0,
+            duration_stats=stats,
+            representative_step=representative_step,
+            representative_duration=representative_duration,
+            periodicity=None,
+        )
+    ]
+
+
 def _classify_step_patterns(averaged_steps: list[tuple[int, float]], *, warmup_steps: int) -> list[StepClassSummary]:
     steady = [(step, duration) for step, duration in averaged_steps if step >= warmup_steps]
     if not steady:
         return []
 
     if len(steady) < 6:
-        stats = DurationStats.from_values([duration for _, duration in steady])
-        representative_step, representative_duration = _representative_step(steady, stats.median)
-        return [
-            StepClassSummary(
-                name="typical",
-                count=len(steady),
-                fraction_of_steady=1.0,
-                duration_stats=stats,
-                representative_step=representative_step,
-                representative_duration=representative_duration,
-                periodicity=None,
-            )
-        ]
+        return _single_step_class(steady)
 
     clusters = _kmeans_two_clusters(steady)
     if clusters is None:
-        stats = DurationStats.from_values([duration for _, duration in steady])
-        representative_step, representative_duration = _representative_step(steady, stats.median)
-        return [
-            StepClassSummary(
-                name="typical",
-                count=len(steady),
-                fraction_of_steady=1.0,
-                duration_stats=stats,
-                representative_step=representative_step,
-                representative_duration=representative_duration,
-                periodicity=None,
-            )
-        ]
+        return _single_step_class(steady)
 
     low_cluster, high_cluster = clusters
     low_stats = DurationStats.from_values([duration for _, duration in low_cluster])
@@ -1194,19 +1147,8 @@ def _classify_step_patterns(averaged_steps: list[tuple[int, float]], *, warmup_s
         or low_stats.median <= 0
         or (high_stats.median / low_stats.median) < 1.5
     ):
-        stats = DurationStats.from_values([duration for _, duration in steady])
-        representative_step, representative_duration = _representative_step(steady, stats.median)
-        return [
-            StepClassSummary(
-                name="typical",
-                count=len(steady),
-                fraction_of_steady=1.0,
-                duration_stats=stats,
-                representative_step=representative_step,
-                representative_duration=representative_duration,
-                periodicity=None,
-            )
-        ]
+        # The two clusters are too close together to be meaningfully different step shapes.
+        return _single_step_class(steady)
 
     light_rep_step, light_rep_duration = _representative_step(low_cluster, low_stats.median)
     heavy_rep_step, heavy_rep_duration = _representative_step(high_cluster, high_stats.median)

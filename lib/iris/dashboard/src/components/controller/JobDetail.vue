@@ -3,7 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { controllerRpcCall, useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import { stateToName, stateDisplayName } from '@/types/status'
+import { stateToName, stateDisplayName, taskStateDisplayName } from '@/types/status'
 import { useBackends } from '@/composables/useBackends'
 import { useCopyToClipboard } from '@/composables/useCopyToClipboard'
 import {
@@ -1441,7 +1441,11 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             >
               Task {{ taskIndex(task.taskId) }}
             </RouterLink>
-            <StatusBadge :status="task.state" size="sm" />
+            <StatusBadge
+              :status="task.state"
+              :label="taskStateDisplayName(task.state, task.statusMessage)"
+              size="sm"
+            />
           </div>
           <div v-if="task.pendingReason" class="mt-1 text-xs text-status-warning" :title="task.pendingReason">
             {{ task.pendingReason }}
@@ -1555,7 +1559,11 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
                   </RouterLink>
                 </td>
                 <td class="px-2 sm:px-3 py-2 text-[13px] align-top">
-                  <StatusBadge :status="task.state" size="sm" />
+                  <StatusBadge
+                    :status="task.state"
+                    :label="taskStateDisplayName(task.state, task.statusMessage)"
+                    size="sm"
+                  />
                   <div v-if="task.pendingReason" class="text-xs text-status-warning mt-0.5 max-w-xs truncate" :title="task.pendingReason">
                     {{ task.pendingReason }}
                   </div>

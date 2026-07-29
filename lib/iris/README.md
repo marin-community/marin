@@ -335,6 +335,9 @@ iris --config cluster.yaml job logs /my-job
 iris --config cluster.yaml job logs /my-job --follow
 iris --config cluster.yaml job logs /my-job --since-seconds 300
 
+# Wait for an existing job; prints its terminal state and exits nonzero unless it succeeded
+iris --config cluster.yaml job wait /my-job
+
 # Stop one or more jobs
 iris --config cluster.yaml job stop /my-job
 iris --config cluster.yaml job stop --prefix /my-job-prefix

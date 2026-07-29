@@ -64,12 +64,9 @@ def health_collector(name: str, check: Callable[[], bool], *, timeout: float, ca
 
 
 def _up_value(samples: Sequence[Sample]) -> bool:
-    """The cycle's headline ok/fail for the log line: the METRIC_UP value if the
-    collector emitted one (health checks), else True (a gauge collector that ran)."""
-    for s in samples:
-        if s.metric == METRIC_UP:
-            return s.value == 1.0
-    return True
+    """Return whether every health sample is up, or a gauge collection ran."""
+    health = [sample.value == 1.0 for sample in samples if sample.metric == METRIC_UP]
+    return all(health) if health else True
 
 
 class CollectorRunner:

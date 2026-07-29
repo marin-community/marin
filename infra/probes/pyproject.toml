@@ -7,14 +7,14 @@ name = "marin-infra-probes"
 version = "0.1.0"
 description = "Synthetic infra monitoring: continuously exercises Iris and Finelog, records latency and error samples."
 requires-python = ">=3.12,<3.14"
-# marin-* libs ship to PyPI nightly (marin-release-libs-wheels.yaml for
-# iris/rigging, finelog-release-wheels.yaml for finelog), only as
-# `0.2.x.devYYYYMMDDhhmm` prereleases; `uv lock -U` picks up the latest. (The
+# marin-* libs ship development releases to PyPI (the scheduled pure-library
+# workflow for iris/rigging and source-triggered native workflow for finelog).
+# Automated compatibility PRs lock the selected releases. (The
 # old GH `*-latest` rolling releases are abandoned/frozen.)
 dependencies = [
-    "marin-iris    >= 0.2.0",
-    "marin-finelog >= 0.2.0",
-    "marin-rigging >= 0.2.0",
+    "marin-iris    >= 0.2.62.dev30341111543",
+    "marin-finelog >= 0.2.15.dev30321169593",
+    "marin-rigging >= 0.2.62.dev30341111543",
     "click >= 8.0",
     # marin-iris pulls s3fs -> aiobotocore, which breaks at import under the
     # httpx 1.0 prereleases (no httpx.TimeoutException). Pin to the 0.28 stable
@@ -29,10 +29,17 @@ probes = "infra_probes:main"
 dev = ["pytest >= 8.4"]
 
 [tool.uv]
-# if-necessary (not allow): take prereleases only for packages with no stable
-# release — the marin-* dev wheels — while pinning httpx/pydantic/etc to stable.
-# Global "allow" dragged in httpx 1.0.dev3, which broke aiobotocore at import.
-prerelease = "if-necessary"
+# The direct marin-* requirements and the two constraints below opt into
+# development releases. Global "allow" dragged in unrelated prereleases such
+# as httpx 1.0.dev3, which broke aiobotocore at import.
+prerelease = "explicit"
+constraint-dependencies = [
+    # Iris pulls these pre-release-only builds transitively. Declaring the
+    # development floors here opts them into uv's explicit pre-release policy
+    # without making server/native packages direct probe dependencies.
+    "marin-finelog-server >= 0.2.14.dev30290140609",
+    "marin-iris-native >= 0.1.5.dev30223685542",
+]
 
 [tool.hatch.build.targets.wheel]
 # Ship the whole package; an explicit per-file list silently drops new modules

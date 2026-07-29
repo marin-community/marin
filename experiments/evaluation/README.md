@@ -12,6 +12,9 @@ each executor. An evaluation failure is recorded and later evaluations continue.
 the current and remaining evaluations are recorded as infrastructure failures. This directory holds
 the model and suite catalogs, Marin fleet policy, and CLI choices.
 
+The user-facing [evaluation guide](../../docs/tutorials/run-lm-evals.md) contains model-specific
+commands, suite constraints, launch controls, and result locations.
+
 ## Commands
 
 Run through the module:
@@ -146,3 +149,8 @@ Add an `EvalchemyDefinition` or `HarborDefinition` to `EVALS` in `evals.py`, the
 `generation` routes the task through the chat API for chat-template models (MCQ tasks always use
 completions, which alone can echo prompt logprobs); `unsafe_code` passes lm-eval's
 `--confirm_run_unsafe_code`; and `completion_only` pins a generation task to the completions API.
+
+Use `_chat_eval` for a benchmark under Evalchemy's `eval/chat_benchmarks` tree. It normalizes the
+task directory into the matching Evalchemy extra, so adding a benchmark installs its endpoint and
+grading dependencies without rebuilding an image. The isolated client also installs CPU-only
+PyTorch as a compatibility floor; inference remains in the separately served model process.

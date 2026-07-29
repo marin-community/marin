@@ -5,7 +5,8 @@
 
 ``data/math_grader_benchmark.jsonl`` carries the verdict lm-evaluation-harness
 ``d5e3391`` produced for each of its 100 problems, so parity is checked without
-installing the harness
+installing the harness, which does not share Marin's project environment (see
+``marin.evaluation.evalchemy.runtime``).
 
 The single-case tests cover divergences a plausible fast path gets wrong, each
 observed against the reference rather than invented.

@@ -181,7 +181,7 @@ code, dispatch that workflow with a `deploy_generation` override. The deploy bui
 dashboard itself on every roll (node/npm required on the deploying machine).
 
 A manual deploy must export `DUCKY_GCS_HMAC_KEY_ID`, `DUCKY_GCS_HMAC_SECRET`,
-`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `DUCKY_CW_SECRET_KEY` before rolling the stack:
+`R2_KEY_ID`, `R2_KEY_SECRET`, and `DUCKY_CW_SECRET_KEY` before rolling the stack:
 
 ```bash
 uv sync --all-packages --extra deploy

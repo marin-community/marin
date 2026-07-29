@@ -56,11 +56,13 @@ def _env_entry(name: str, value: str) -> str:
 def _inline_env_block(cfg: FinelogConfig) -> str:
     """Render the non-secret container-env entries the templates splice in, or "".
 
-    `FINELOG_AUTH_POLICY` is inline-safe (a cidr layer carries network prefixes, a jwt
-    layer Ed25519 public keys), as is `FINELOG_FORWARDING` (a url and a cluster name).
-    The forwarding *private* key travels in the `<name>-env` Secret instead.
+    The query cache limit, `FINELOG_AUTH_POLICY` (network prefixes and Ed25519
+    public keys), and `FINELOG_FORWARDING` (a URL and cluster name) are
+    inline-safe. The forwarding private key travels in the `<name>-env` Secret.
     """
     entries = []
+    if cfg.query_metadata_cache_mb is not None:
+        entries.append(_env_entry("FINELOG_QUERY_METADATA_CACHE_MB", str(cfg.query_metadata_cache_mb)))
     if cfg.auth:
         entries.append(_env_entry("FINELOG_AUTH_POLICY", auth_policy_json(cfg.auth)))
     if cfg.forwarding:
@@ -117,8 +119,8 @@ def _env_secret_name(cfg: FinelogConfig) -> str:
 def _s3_env(cfg: FinelogConfig) -> dict[str, str]:
     """The ``AWS_*`` environment for an ``s3://`` archive, or ``{}`` when none.
 
-    Carries the operator's R2 credentials (from ``R2_ACCESS_KEY_ID`` /
-    ``R2_SECRET_ACCESS_KEY`` in the deploy shell) plus the configured endpoint and
+    Carries the operator's R2 credentials (from ``R2_KEY_ID`` /
+    ``R2_KEY_SECRET`` in the deploy shell) plus the configured endpoint and
     ``region=auto``, under the names ``AmazonS3Builder::from_env`` reads in the server.
     ``gs://`` and local archives need nothing (GCS uses workload identity).
 
@@ -134,11 +136,11 @@ def _s3_env(cfg: FinelogConfig) -> dict[str, str]:
             f"finelog config {cfg.name!r}: remote_log_dir is s3:// but "
             "deployment.k8s.object_storage_endpoint is unset"
         )
-    key_id = os.environ.get("R2_ACCESS_KEY_ID")
-    key_secret = os.environ.get("R2_SECRET_ACCESS_KEY")
+    key_id = os.environ.get("R2_KEY_ID")
+    key_secret = os.environ.get("R2_KEY_SECRET")
     if not key_id or not key_secret:
         raise click.ClickException(
-            "R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY must be set in the deploy "
+            "R2_KEY_ID and R2_KEY_SECRET must be set in the deploy "
             f"environment to deploy {cfg.name!r} with an s3:// archive"
         )
     endpoint = k8s.object_storage_endpoint

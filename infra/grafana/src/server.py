@@ -14,9 +14,11 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /finelog/{cluster}/query?sql=&from=&to=  finelog SQL (window macros, cached per bucket)
     GET /finelog/marin/fleet_health              hub query health + k8s mirror readiness
     GET /finelog/marin/alerts/fleet_health       alert rows: server labels + value(0|1)
+    GET /finelog/marin/alerts/training_stalls    active jobs + stalled-progress value(0|1)
     GET /iris/{cluster}/jobs                     root-job counts by state (in-flight + 24h terminal)
     GET /iris/{cluster}/workers                  healthy worker counts + resource totals per region
     GET /iris/{cluster}/health                   controller reachability + latency
+    GET /iris/{cluster}/peers                    federation reachability from the controller heartbeat
     GET /iris/{cluster}/query?sql=               ad-hoc SELECT via ExecuteRawQuery (admin/null-auth)
     GET /github/ferries                          recent ferry runs per tier, with success rate
     GET /github/builds                           recent main commits with CI rollup state
@@ -83,6 +85,7 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
+from training_stalls import task_state_query, telltale_query, training_stall_alert_rows
 from wandb_source import WandbSource
 
 logger = logging.getLogger(__name__)
@@ -341,6 +344,24 @@ def create_app(
         except _BadRequest as err:
             return JSONResponse({"error": str(err)}, status_code=400)
 
+    def finelog_alerts_training_stalls(_: Request) -> JSONResponse:
+        try:
+            target = _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
+            now = datetime.now(UTC)
+
+            def run() -> list[dict]:
+                source = finelog_sources[target.name]
+                task_states = source.query(task_state_query(now), max_rows=config.max_rows)
+                telltale_metrics = source.query(telltale_query(now), max_rows=config.max_rows)
+                return training_stall_alert_rows(task_states, telltale_metrics, now)
+
+            key = ("training_stalls", _bucket(now, config.cache_ttl))
+            return JSONResponse(finelog_cache.get_or_compute(key, run))
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        except QueryResultTooLargeError as err:
+            return JSONResponse({"error": f"{err}; reduce the alert query lookback"}, status_code=400)
+
     def iris_endpoint(request: Request, endpoint: str, run) -> JSONResponse:
         try:
             source = _iris_for(request.path_params["cluster"], iris_sources)
@@ -358,6 +379,9 @@ def create_app(
 
     def iris_health(request: Request) -> JSONResponse:
         return iris_endpoint(request, "health", lambda s: s.health())
+
+    def iris_peers(request: Request) -> JSONResponse:
+        return iris_endpoint(request, "peers", lambda s: s.peers())
 
     def iris_query(request: Request) -> JSONResponse:
         # Ad-hoc SELECT: not cached (arbitrary SQL) and not used by any committed panel.
@@ -503,9 +527,11 @@ def create_app(
             Route("/finelog/{cluster}/query", query),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/fleet_health", finelog_fleet_health),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/fleet_health", finelog_alerts_fleet_health),
+            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_stalls", finelog_alerts_training_stalls),
             Route("/iris/{cluster}/jobs", iris_jobs),
             Route("/iris/{cluster}/workers", iris_workers),
             Route("/iris/{cluster}/health", iris_health),
+            Route("/iris/{cluster}/peers", iris_peers),
             Route("/iris/{cluster}/query", iris_query),
             Route("/k8s/control_plane", k8s_control_plane),
             Route("/k8s/crashloops", k8s_crashloops),

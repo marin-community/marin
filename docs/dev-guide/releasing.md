@@ -1,14 +1,15 @@
 # Releasing Packages to PyPI
 
-Marin publishes ten distributions to [PyPI](https://pypi.org/). Two GitHub
-Actions workflows build and publish them:
+Marin publishes twelve distributions to [PyPI](https://pypi.org/).
+[`marin-release-libs-wheels.yaml`](https://github.com/marin-community/marin/blob/main/.github/workflows/marin-release-libs-wheels.yaml)
+is their single build and publish workflow. Its dynamic matrix handles four
+release families:
 
-- [`dupekit-release-wheels.yaml`](https://github.com/marin-community/marin/blob/main/.github/workflows/dupekit-release-wheels.yaml)
-  builds `marin-dupekit` (pure Python) and its native companion
-  `marin-dupekit-native` (the Rust dedup kernels), in lockstep.
-- [`marin-release-libs-wheels.yaml`](https://github.com/marin-community/marin/blob/main/.github/workflows/marin-release-libs-wheels.yaml)
-  builds the eight pure-Python libs, driven by
-  [`scripts/python_libs_package.py`](https://github.com/marin-community/marin/blob/main/scripts/python_libs_package.py).
+- The seven general pure-Python libraries share one version and exact sibling
+  dependency pins.
+- Dupekit and Finelog each publish a pure-Python distribution with a native
+  companion.
+- Iris publishes its native companion independently.
 
 The **distribution name** (what you `pip install`) carries a `marin-` prefix so
 the names don't collide on PyPI, which has no namespaces. The **import name**
@@ -24,8 +25,10 @@ the names don't collide on PyPI, which has no namespaces. The **import name**
 | `marin-rigging` | `rigging` | `lib/rigging` |
 | `marin-zephyr` | `zephyr` | `lib/zephyr` |
 | `marin-finelog` | `finelog` | `lib/finelog` |
+| `marin-finelog-server` | `finelog_server` | `lib/finelog/rust` |
 | `marin-dupekit` | `dupekit` | `lib/dupekit` |
 | `marin-dupekit-native` | `dupekit_native` | `lib/dupekit/rust` |
+| `marin-iris-native` | `iris_native` | `lib/iris/rust` |
 
 All publishing uses **OIDC trusted publishing**. There is no API token stored
 in the repository, in GitHub secrets, or anywhere else. At workflow runtime
@@ -37,24 +40,46 @@ upload token that expires when the run ends.
 
 | Trigger | Result |
 | --- | --- |
-| Daily schedule (06:00 UTC) | Nightly dev release: `<base>.dev<YYYYMMDDhhmm>`, published. |
-| Push a `marin-libs-v<X.Y.Z>` tag | Stable release at version `<X.Y.Z>`, published. |
+| Native source change merged to `main` | Package-specific dev release, followed by an automatic compatibility-floor and `uv.lock` pull request. |
+| Daily pure-library schedule (06:00 UTC) | Coupled pure-library development release, published. |
+| Push a package release tag | Stable release at the tag version, published. |
 | `workflow_dispatch` (manual mode) | Build-only smoke; nothing is published. |
-| Pull request touching the build script or workflow | Build-only smoke; nothing is published. |
+| Pull request touching package build inputs | Build the selected family; native wheels are installed and imported; nothing is published. |
 
-`marin-dupekit` follows the same shape with `dupekit-v<X.Y.Z>` tags.
+Stable tags are `marin-libs-v<X.Y.Z>`, `dupekit-v<X.Y.Z>`,
+`finelog-v<X.Y.Z>`, and `iris-native-v<X.Y.Z>`.
 
-The eight libs always share one version per build, and each published wheel
-pins its sibling `marin-*` dependencies to that exact version.
+The seven general libs always share one version per build, and each published
+wheel pins its sibling `marin-*` dependencies to that exact version.
+
+Native implementation pull requests compile their changed Rust sources in
+`unified-unit` and in the package release workflow. The follow-up dependency
+pull request changes only the consumer compatibility floor and `uv.lock`, so
+CI exercises the newly published wheels before they become the repository
+default. The shared update branch serializes releases from different native
+packages and uses a GitHub App token so its pull request triggers normal CI.
+
+Package-family differences are declared in `PACKAGES` in
+`scripts/ci/package_release.py`: source paths, version files, distributions,
+build legs, import probes, and optional dependency-floor targets. Adding a
+family extends that registry and adds its PyPI projects' Trusted Publisher
+bindings to `marin-release-libs-wheels.yaml`; it does not require another
+workflow. Add build-driver code only when the family introduces a genuinely
+new build system.
 
 ### Versioning
 
-The `version` declared in each lib's `pyproject.toml` (or
-`lib/haliax/src/haliax/__about__.py`) is only a **floor**. Nightlies are
-resolved to one patch above `max(declared version, latest stable on PyPI)`,
-so a `.dev` build always sorts above the current stable and `pip install
---pre` / `uv` prefer it. Because the script reads the latest stable from
-PyPI, the declared version never needs re-bumping after a release.
+Declared package versions are floors. Development releases use one patch above
+the greatest supported declared or published version in the family. The
+GitHub run ID is the unique, retry-stable development serial. Looking across
+every distribution in a coupled family keeps a legacy development release or
+one diverged project from sorting above the new release.
+
+After PyPI accepts a complete native family release, automation raises its
+consumer dependency floor and locks that exact registry version. A targeted
+lock validation rejects unrelated package churn. The general Python family
+does not need a follow-up pull request because its source packages remain the
+workspace defaults.
 
 To cut a stable release, pick the next [SemVer](https://semver.org/) version
 and push the tag — no `pyproject.toml` edit required:
@@ -95,7 +120,7 @@ be deleted wholesale.
 (`marin-core` is the distribution name for the top-level package; the
 unprefixed `marin` name is not used.)
 
-### 3. Configure a trusted publisher for each of the eight libs
+### 3. Configure a trusted publisher for each distribution
 
 Every project already exists (step 2 removes only the placeholder release,
 not the project), so open each one's per-project publishing page and add the
@@ -109,35 +134,39 @@ https://pypi.org/manage/project/<name>/settings/publishing/
 publisher** from `https://pypi.org/manage/account/publishing/`, which creates
 the project on the first matching upload — not needed here.)
 
-Add a publisher with these values — identical for all eight bindings except
-the project name:
+Add a publisher with these values, choosing the workflow that publishes the
+project:
 
 | Field | Value |
 | --- | --- |
-| PyPI project name | one of `marin-core`, `marin-iris`, `marin-fray`, `marin-haliax`, `marin-levanter`, `marin-rigging`, `marin-zephyr`, `marin-finelog` |
+| PyPI project name | the distribution name from the table above |
 | Repository owner | `marin-community` |
 | Repository name | `marin` |
 | Workflow filename | `marin-release-libs-wheels.yaml` |
 | Environment name | `pypi-publish` |
 
-Configure **all eight before the first publish run**. The publish job uploads
-the whole `dist/` directory in one batch; a single missing binding fails the
-upload partway and can poison a version (see [Troubleshooting](#troubleshooting)).
+Every distribution produced by the workflow needs its own binding. The publish
+job remains in this top-level workflow because
+[PyPI Trusted Publishing does not currently support naming a reusable workflow](https://docs.pypi.org/trusted-publishers/troubleshooting/#reusable-workflows-on-github)
+as the publisher.
 
-`marin-dupekit` and its native companion `marin-dupekit-native` each already
-have a binding for the `dupekit-release-wheels.yaml` workflow and `pypi-publish`
-environment; leave them untouched.
+The seven general-library bindings already name
+`marin-release-libs-wheels.yaml`. Before enabling consolidated native
+publishing, change the five native project bindings (`marin-dupekit`,
+`marin-dupekit-native`, `marin-finelog`, `marin-finelog-server`, and
+`marin-iris-native`) to that same filename and the `pypi-publish` environment.
+No Google Cloud WIF or long-lived credential change is required.
 
 ### 4. The `pypi-publish` GitHub Actions environment
 
-Both release workflows publish through the `pypi-publish`
+The release workflow publishes through the `pypi-publish`
 [deployment environment](https://github.com/marin-community/marin/settings/environments).
 It already exists for `marin-dupekit`. Recommended settings:
 
 - **Deployment branches and tags**: restrict to `main` and the release tags
-  (`marin-libs-v*`, `dupekit-v*`).
-- **No required reviewer**. The nightly runs unattended; a reviewer gate
-  would block every nightly on a manual approval click. Trust is anchored by
+  (`marin-libs-v*`, `dupekit-v*`, `finelog-v*`, `iris-native-v*`).
+- **No required reviewer**. Automated releases run unattended; a reviewer gate
+  would block them on a manual approval click. Trust is anchored by
   branch protection on `main` plus the publisher binding pinning a specific
   workflow filename and environment.
 
@@ -164,10 +193,10 @@ needs manual revocation if exposed.
 - **`gh-action-pypi-publish` fails with 403 for one project.** Its
   trusted-publisher binding is missing or a field does not match. Re-check
   the four fields in step 3 — they must match the workflow exactly.
-- **A version is "poisoned".** PyPI rejects re-uploads, so a run that
-  uploaded some wheels and then failed leaves that version partially
-  published and unrepeatable. Do not retry the same version: pick the next
-  one and re-tag.
-- **A nightly is not picked up by `pip install --pre`.** The dev build must
+- **A family release stopped after some files uploaded.** Rerun the failed
+  jobs in the same workflow run. The version is stable across reruns, and the
+  preflight accepts only remote files whose hashes match the complete family
+  manifest. The publisher skips those matching files and uploads the rest.
+- **A development release is not picked up by `pip install --pre`.** The dev build must
   sort above the latest stable. Confirm the stable on PyPI is not ahead of
-  what `scripts/python_libs_package.py --resolve-only` computes.
+  what `scripts/ci/package_release.py plan` computes for the family.

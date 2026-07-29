@@ -1,0 +1,15 @@
+[project]
+name = "marin-external-harbor"
+version = "0"
+requires-python = "==3.12.*"
+dependencies = [
+    "daytona==0.200.2",
+    "harbor",
+]
+
+[tool.uv]
+package = false
+prerelease = "allow"
+
+[tool.uv.sources]
+harbor = { git = "https://github.com/marin-community/harbor.git", branch = "main" }

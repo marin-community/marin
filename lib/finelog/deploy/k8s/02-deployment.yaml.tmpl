@@ -65,9 +65,10 @@ spec:
             - secretRef:
                 name: {{ name }}-env
                 optional: true
-          # FINELOG_AUTH_POLICY (public keys, network prefixes) and FINELOG_FORWARDING
-          # (a url and a cluster name) carry no secrets, so `finelog deploy up` splices
-          # them in below. Key material only ever arrives through the Secret above.
+          # The query cache limit, FINELOG_AUTH_POLICY (public keys, network prefixes),
+          # and FINELOG_FORWARDING (a URL and cluster name) carry no secrets, so
+          # `finelog deploy up` splices them in below. Key material only ever arrives
+          # through the Secret above.
           env:
             - name: FINELOG_PORT
               value: "{{ port }}"

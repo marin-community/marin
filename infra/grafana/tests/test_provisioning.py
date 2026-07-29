@@ -8,13 +8,15 @@ Grafana, which is the most expensive place to find out."""
 
 import re
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
+import pyarrow as pa
 import yaml
 from config import ClusterTarget
 from conftest import bridge_config, healthy_k8s_routes, k8s_api, make_k8s_source
 from dashboard_stitch import stitch_all
 from finelog_health import FinelogHealth, FinelogRole
+from fixture_bridge import _finelog
 from github_source import GithubSource
 from k8s_source import K8sFleet
 from server import create_app
@@ -84,6 +86,17 @@ class _FakeIris:
     def health(self) -> list[dict]:
         return [{"reachable": True, "up": 1, "latency_ms": 3}]
 
+    def peers(self) -> list[dict]:
+        return [
+            {
+                "peer": "cw-a",
+                "controller_address": "https://iris-cw-a.example",
+                "state": "reachable",
+                "last_contact_age_seconds": 3,
+                "value": 0,
+            }
+        ]
+
 
 class _FakeFinelog:
     def __init__(self, name: str) -> None:
@@ -101,6 +114,11 @@ class _FakeFinelog:
             error_class="",
             error="",
         )
+
+    def query(self, sql: str, *, max_rows: int) -> pa.Table:
+        if '"infra.canary.metrics"' in sql:
+            return pa.table({"probe": ["controller-ping"], "target": ["marin"], "value": [1]})
+        return pa.table({})
 
 
 def test_every_rule_query_url_answers_on_the_bridge():
@@ -144,10 +162,27 @@ def test_alert_queries_select_exactly_one_numeric_column():
 
 def test_policies_reference_provisioned_contact_points():
     contact_points = {point["name"] for point in _load(ALERTING / "contact-points.yaml")["contactPoints"]}
+    mute_timings = {timing["name"] for timing in _load(ALERTING / "mute-timings.yaml")["muteTimes"]}
     for policy in _load(ALERTING / "policies.yaml")["policies"]:
         assert policy["receiver"] in contact_points
         for route in policy.get("routes", []):
             assert route["receiver"] in contact_points
+            assert set(route.get("mute_time_intervals", ())) <= mute_timings
+
+
+def test_warning_alerts_remain_visible_without_notifications():
+    (policy,) = _load(ALERTING / "policies.yaml")["policies"]
+    routes_by_severity = {route["object_matchers"][0][2]: route for route in policy["routes"]}
+
+    assert routes_by_severity["critical"].get("mute_time_intervals") is None
+    assert routes_by_severity["warning"]["mute_time_intervals"] == ["dashboard-only"]
+    (dashboard_only,) = _load(ALERTING / "mute-timings.yaml")["muteTimes"]
+    assert dashboard_only["time_intervals"] == [
+        {
+            "times": [{"start_time": "00:00", "end_time": "24:00"}],
+            "location": "UTC",
+        }
+    ]
 
 
 def test_critical_contact_point_reaches_email_slack_and_loom():
@@ -235,6 +270,46 @@ def test_dashboard_datasource_uids_are_provisioned():
             if uid is None or uid.startswith("${"):  # row panels / template variables
                 continue
             assert uid in uids, f"{name} panel {panel.get('id')}: unknown datasource {uid!r}"
+
+
+def test_provisioning_success_ratio_shows_fleet_and_region_stats():
+    dashboard = _stitched_dashboards()["infra.json"]
+    (panel,) = [panel for panel in dashboard["panels"] if panel.get("title") == "Provisioning success ratio"]
+    (target,) = panel["targets"]
+
+    columns = {column["selector"]: column for column in target["columns"]}
+    assert columns["series"] == {"selector": "series", "text": "region", "type": "string"}
+    assert columns["value"]["type"] == "number"
+
+    sql = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "sql")
+    assert "metric = 'provision_success_ratio'" in sql
+    assert "metric IN ('provision_ready', 'provision_outcomes')" in sql
+    assert "regexp_replace(json_get(labels, 'zone'), '-[^-]+$', '') AS series" in sql
+    assert "ready / NULLIF(outcomes, 0)" in sql
+
+    legend = panel["options"]["legend"]
+    assert legend["displayMode"] == "table"
+    assert legend["calcs"] == ["lastNotNull", "min", "max"]
+
+
+def test_provisioning_render_fixture_routes_metric_query_to_region_series():
+    dashboard = _stitched_dashboards()["infra.json"]
+    (panel,) = [panel for panel in dashboard["panels"] if panel.get("title") == "Provisioning success ratio"]
+    (target,) = panel["targets"]
+    sql = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "sql")
+
+    rows = _finelog(urlencode({"sql": sql}))
+
+    assert rows
+    assert {row["series"] for row in rows} == {
+        "fleet",
+        "europe-west4",
+        "us-central1",
+        "us-east1",
+        "us-east5",
+        "us-west4",
+    }
+    assert all({"t", "series", "value"} <= row.keys() for row in rows)
 
 
 def test_stat_panels_use_grafana_reduce_options_schema():

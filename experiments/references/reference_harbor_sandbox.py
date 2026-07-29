@@ -9,11 +9,11 @@ running the task's prebuilt ``docker_image``, bin-packed onto spare host CPU
 of cluster workers, and torn down when the context exits.
 
 The task is Harbor's own ``examples/tasks/hello-world``, fetched from
-marin-community/harbor at the same commit as the workspace harbor pin (read
-from pyproject.toml). Its one incompatibility with the Iris backend (prebuilt
-images only) is the ``[environment]`` build spec: upstream builds a Dockerfile
-that is just ``FROM ubuntu:24.04`` + ``WORKDIR /app``, which we patch to the
-equivalent ``docker_image`` + ``workdir`` after download.
+marin-community/harbor at the same commit as Marin's generated external pin.
+Its one incompatibility with the Iris backend (prebuilt images only) is the
+``[environment]`` build spec: upstream builds a Dockerfile that is just
+``FROM ubuntu:24.04`` + ``WORKDIR /app``, which we patch to the equivalent
+``docker_image`` + ``workdir`` after download.
 
 Each episode walks the full Harbor trial shape by hand:
 
@@ -32,7 +32,6 @@ import asyncio
 import json
 import logging
 import tempfile
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -42,6 +41,7 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 from marin.experiment.namespacing import user_namespaced_name
+from marin.external_dependencies import HARBOR
 from marin.harbor.sandbox import iris_sandbox
 from rigging.filesystem import StoragePath
 
@@ -49,7 +49,6 @@ logger = logging.getLogger(__name__)
 
 CLUSTER = "marin"
 EPISODES = 3
-HARBOR_GIT_URL = "https://github.com/marin-community/harbor.git"
 HELLO_WORLD_PATH = Path("examples/tasks/hello-world")
 # Upstream builds environment/Dockerfile, which is just this base image and
 # workdir; the Iris backend (prebuilt images only) takes them directly.
@@ -59,16 +58,9 @@ PATCHED_ENVIRONMENT_SPEC = '[environment]\ndocker_image = "ubuntu:24.04"\nworkdi
 REWARD_PATH = "/logs/verifier/reward.txt"
 
 
-def harbor_pin() -> str:
-    """The workspace harbor git pin — the task is fetched at the same commit."""
-    pyproject = Path(__file__).parents[2] / "pyproject.toml"
-    with open(pyproject, "rb") as f:
-        return tomllib.load(f)["tool"]["uv"]["sources"]["harbor"]["rev"]
-
-
 async def fetch_hello_world_task(output_dir: Path) -> Path:
     """Download harbor's hello-world at the pinned commit and patch it to a prebuilt image."""
-    task_id = GitTaskId(git_url=HARBOR_GIT_URL, git_commit_id=harbor_pin(), path=HELLO_WORLD_PATH)
+    task_id = GitTaskId(git_url=HARBOR.repository, git_commit_id=HARBOR.commit, path=HELLO_WORLD_PATH)
     await TaskClient().download_tasks([task_id], output_dir=output_dir, export=True)
     task_dir = output_dir / HELLO_WORLD_PATH.name
 

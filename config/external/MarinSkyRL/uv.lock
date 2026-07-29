@@ -1,0 +1,19 @@
+version = 1
+revision = 3
+requires-python = "==3.12.*"
+
+[[package]]
+name = "marin-external-marinskyrl"
+version = "0"
+source = { virtual = "." }
+dependencies = [
+    { name = "skyrl" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "skyrl", git = "https://github.com/marin-community/MarinSkyRL.git?branch=main" }]
+
+[[package]]
+name = "skyrl"
+version = "0.1.0"
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=main#49fbef2dc2d83d626875801018f6f690992d5a1f" }

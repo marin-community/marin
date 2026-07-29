@@ -116,7 +116,7 @@ def _finelog(query: str) -> list[dict]:
         ]
     if "probe_up" in sql and "metric IN" not in sql:
         return [{"value": 1}, {"value": 1}, {"value": 1}]
-    if "metric IN" in sql:
+    if "metric IN" in sql and "provision_success_ratio" not in sql:
         return [
             {"probe": probe, "metric": metric, "value": value}
             for probe in ("iris", "finelog", "kueue")
@@ -134,7 +134,19 @@ def _finelog(query: str) -> list[dict]:
         ]
     if "provision_success_ratio" in sql:
         return [
-            {"t": round((_NOW - timedelta(minutes=10 * index)).timestamp() * 1000), "value": 0.96 + (index % 4) * 0.008}
+            {
+                "t": round((_NOW - timedelta(minutes=10 * index)).timestamp() * 1000),
+                "series": series,
+                "value": base + (index % 4) * 0.008,
+            }
+            for series, base in (
+                ("fleet", 0.81),
+                ("europe-west4", 0.72),
+                ("us-central1", 0.94),
+                ("us-east1", 0.78),
+                ("us-east5", 0.86),
+                ("us-west4", 0.75),
+            )
             for index in range(24)
         ]
     return []
@@ -223,6 +235,21 @@ def _rows(path: str, query: str) -> list[dict] | dict:
         ]
     if path == "/iris/marin/health":
         return [{"reachable": True, "up": 1, "latency_ms": 18}]
+    if path == "/iris/marin/peers":
+        return [
+            {
+                "peer": peer,
+                "controller_address": f"https://iris-{peer}.oa.dev",
+                "state": state,
+                "last_contact_age_seconds": age,
+                "value": int(state == "unreachable"),
+            }
+            for peer, state, age in (
+                ("cw-us-east-02a", "reachable", 12),
+                ("cw-us-east-08a", "unreachable", 10_800),
+                ("cw-rno2a", "reachable", 8),
+            )
+        ]
     if path == "/iris/marin/workers":
         return [
             {

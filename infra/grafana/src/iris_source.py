@@ -153,6 +153,25 @@ class IrisSource:
             self._base_url = None
             return [{"reachable": False, "up": 0, "latency_ms": None, "error": str(err)}]
 
+    def peers(self) -> list[dict]:
+        """Federation reachability as observed by this controller's heartbeat loop."""
+        result = self._post_rpc("ListPeers", {})
+        now_ms = time.time_ns() // 1_000_000
+        rows = []
+        for peer in result.get("peers", []):
+            last_contact_ms = int(peer.get("lastContactMs") or 0)
+            reachable = peer.get("reachable") is True
+            rows.append(
+                {
+                    "peer": peer["peerId"],
+                    "controller_address": peer.get("controllerAddress") or "",
+                    "state": "reachable" if reachable else "unreachable",
+                    "last_contact_age_seconds": max(0, (now_ms - last_contact_ms) // 1_000) if last_contact_ms else None,
+                    "value": int(not reachable),
+                }
+            )
+        return rows
+
     def raw_query(self, sql: str) -> list[dict]:
         """Run an ad-hoc SELECT via ExecuteRawQuery, zipping columns to values."""
         result = self._post_rpc("ExecuteRawQuery", {"sql": sql})

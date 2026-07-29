@@ -16,7 +16,7 @@ import pytest
 from marin.execution.step_spec import StepSpec
 
 from experiments.datakit import reference_pipeline
-from experiments.datakit.reference_pipeline import SMOKE_SCALE, PoolConfig, reference_datakit_steps
+from experiments.datakit.reference_pipeline import SMOKE_SCALE, PoolConfig, StoreConfig, reference_datakit_steps
 
 
 @pytest.fixture(autouse=True)
@@ -59,11 +59,23 @@ def test_store_hash_tracks_content_not_resources():
     # cluster_view is read by the store fn and NOT captured by any dep -> must re-key.
     cv = dataclasses.replace(SMOKE_SCALE.cluster, cluster_view=16)
     changed = _build(scale=dataclasses.replace(SMOKE_SCALE, cluster=cv)).output_buckets.hash_id
+    layout = dataclasses.replace(SMOKE_SCALE.store, default_subshards=2)
+    relaid = _build(scale=dataclasses.replace(SMOKE_SCALE, store=layout)).output_buckets.hash_id
     # The worker fleet is execution policy -> must NOT re-key.
     pool = dataclasses.replace(SMOKE_SCALE, pool=PoolConfig(n_workers=999))
     resourced = _build(scale=pool).output_buckets.hash_id
+    execution = StoreConfig(
+        shards_per_task=99,
+        reduce_shards=7,
+        target_tokens_per_subshard=SMOKE_SCALE.store.target_tokens_per_subshard,
+        max_subshards=SMOKE_SCALE.store.max_subshards,
+        default_subshards=SMOKE_SCALE.store.default_subshards,
+    )
+    rescheduled = _build(scale=dataclasses.replace(SMOKE_SCALE, store=execution)).output_buckets.hash_id
     assert changed != base
+    assert relaid != base
     assert resourced == base
+    assert rescheduled == base
 
 
 def test_minhash_params_rekey_minhash_and_dedup():
@@ -73,6 +85,19 @@ def test_minhash_params_rekey_minhash_and_dedup():
     assert changed["datakit/minhash/a"].hash_id != base["datakit/minhash/a"].hash_id
     # dedup has no params of its own; it must re-key via its minhash deps.
     assert changed["datakit/dedup"].hash_id != base["datakit/dedup"].hash_id
+
+
+def test_decon_drop_set_tracks_normalized_source_identity():
+    base = _steps_by_name(_build())["datakit/decon_drop/_combined"].hash_id
+    sources = _sources()
+    sources["a"] = dataclasses.replace(sources["a"], hash_attrs={"revision": 1})
+    changed = reference_datakit_steps(
+        sources,
+        quality_model="gs://some-region/quality/pooled_junkgate2",
+        quality_model_version="pooled-junkgate2",
+        scale=SMOKE_SCALE,
+    )
+    assert _steps_by_name(changed)["datakit/decon_drop/_combined"].hash_id != base
 
 
 def test_centroid_seed_rekeys_training():

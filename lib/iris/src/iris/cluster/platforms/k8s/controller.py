@@ -18,7 +18,8 @@ import time
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
 
-from rigging.filesystem.s3_compat import configure_fsspec_s3, fsspec_s3_conf
+from rigging.filesystem.cluster_config import StoreType, store_config
+from rigging.filesystem.s3_compat import configure_fsspec_s3, fsspec_s3_conf, s3_credentials
 from rigging.secrets import ENV_SCHEME, as_secret_spec, resolve_secret_spec
 from rigging.timing import Deadline
 
@@ -91,10 +92,10 @@ _CONTROLLER_STATE_PVC_SIZE = "50Gi"
 
 
 def configure_client_s3(config: IrisClusterConfig) -> None:
-    """Configure S3 env vars for fsspec access on CoreWeave (CW_KEY_* → AWS mapping).
+    """Configure S3 env vars for fsspec access on CoreWeave (CoreWeave keys → AWS mapping).
 
-    Maps CW_KEY_ID/CW_KEY_SECRET to their AWS equivalents and sets FSSPEC_S3
-    with the correct endpoint and addressing style. No-op if the config has no
+    Maps the CoreWeave store's credential variables to their AWS equivalents and sets
+    FSSPEC_S3 with the correct endpoint and addressing style. No-op if the config has no
     CoreWeave object storage endpoint.
 
     This configures the operator's own process, which runs outside the cluster, so it
@@ -107,7 +108,9 @@ def configure_client_s3(config: IrisClusterConfig) -> None:
     endpoint = coreweave.external_object_storage_endpoint or coreweave.object_storage_endpoint
     if not endpoint:
         return
-    configure_fsspec_s3(endpoint, key=os.environ.get("CW_KEY_ID"), secret=os.environ.get("CW_KEY_SECRET"))
+    credentials = s3_credentials(StoreType.COREWEAVE)
+    key, secret = credentials if credentials else (None, None)
+    configure_fsspec_s3(endpoint, key=key, secret=secret)
 
 
 # ============================================================================
@@ -760,19 +763,29 @@ class K8sControllerProvider:
         Secret so the controller and every task authenticate to s3:// without
         per-call-site configuration.
         """
-        key_id = os.environ.get("CW_KEY_ID")
-        key_secret = os.environ.get("CW_KEY_SECRET")
+        store = store_config(StoreType.COREWEAVE)
+        key_id = os.environ.get(store.key_id_env)
+        key_secret = os.environ.get(store.key_secret_env)
         if not key_id or not key_secret:
             raise InfraError(
-                "CW_KEY_ID and CW_KEY_SECRET environment variables are required for S3-compatible object storage"
+                f"{store.key_id_env} and {store.key_secret_env} environment variables are required "
+                "for S3-compatible object storage"
             )
-        env = {"AWS_ACCESS_KEY_ID": key_id, "AWS_SECRET_ACCESS_KEY": key_secret}
+        env = {
+            "AWS_ACCESS_KEY_ID": key_id,
+            "AWS_SECRET_ACCESS_KEY": key_secret,
+            store.key_id_env: key_id,
+            store.key_secret_env: key_secret,
+        }
         endpoint = self._config.object_storage_endpoint
         if endpoint:
             env["AWS_ENDPOINT_URL"] = endpoint
             env["AWS_REGION"] = "auto"
             env["AWS_DEFAULT_REGION"] = "auto"
             env["FSSPEC_S3"] = json.dumps(fsspec_s3_conf(endpoint))
+            # The pod's node-local endpoint, under the name the CoreWeave store config reads,
+            # so a bucket-routed filesystem in a task uses LOTA rather than the public VIP.
+            env[store.endpoint_env] = endpoint
         return env
 
     def ensure_task_env_secret(self, env: dict[str, str]) -> None:

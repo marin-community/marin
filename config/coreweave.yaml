@@ -9,5 +9,20 @@ data:
     na:          { bucket: marin-na,          store: r2 }
     us-east-02a: { bucket: marin-us-east-02a, store: coreweave, signing_region: US-EAST-02A }
     us-west-04a: { bucket: marin-us-west-04a, store: coreweave, signing_region: US-WEST-04A }
+  # How to reach each S3-compatible backend. `endpoint` is the account-level endpoint
+  # reachable from outside the cluster; `*_env` name the environment variables that
+  # override it and carry the keys. A CoreWeave pod's endpoint variable holds its
+  # node-local LOTA endpoint instead, set by the Iris controller.
+  stores:
+    coreweave:
+      endpoint: https://cwobject.com
+      endpoint_env: CW_S3_ENDPOINT
+      key_id_env: CW_KEY_ID
+      key_secret_env: CW_KEY_SECRET
+    r2:
+      endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
+      endpoint_env: R2_S3_ENDPOINT
+      key_id_env: R2_KEY_ID
+      key_secret_env: R2_KEY_SECRET
   temp: { path: tmp, ttl_days: [1, 2, 3, 7] }
   root: s3://marin-na/marin

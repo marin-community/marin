@@ -34,14 +34,15 @@ from marin.evaluation.harbor.driver_config import (
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.evaluation.samples import EvalSample, Grading, SampleKind, write_sample_parquet
+from marin.external_dependencies import HARBOR
 from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
 
 # Harbor is run as an external tool in an isolated uv environment (its Daytona SDK carries pre-release
 # pins that do not fit the marin lock). These specs pin what that ephemeral env installs.
-_HARBOR_SPEC = "harbor==0.20.1.dev202607240136"
-_DAYTONA_SPEC = "daytona==0.200.2"
+HARBOR_PACKAGES = (HARBOR.requirement(), *HARBOR.runtime_requirements)
+HARBOR_RUNTIME = "; ".join(HARBOR_PACKAGES)
 _DRIVER = str(Path(__file__).with_name("trial_driver.py"))
 _DRIVER_PYTHONPATH = str(Path(__file__).parents[3])
 _DRIVER_SYSTEM_ENV_KEYS = (
@@ -220,20 +221,18 @@ def _aggregate(trials: list[HarborTrial], dataset: str, samples_path: str | None
 
 def _run_driver(config_file: Path, driver_env: Mapping[str, str]) -> None:
     """Run the Harbor trial driver in an isolated uv env (Harbor + Daytona, no marin project)."""
+    runtime = {"version": HARBOR.version, "commit": HARBOR.commit}
+    logger.info("Harbor runtime: %s", json.dumps(runtime, sort_keys=True), extra={"harbor_runtime": runtime})
     cmd = [
         "uv",
         "run",
         "--isolated",
         "--no-project",
         "--prerelease=allow",
-        "--with",
-        _HARBOR_SPEC,
-        "--with",
-        _DAYTONA_SPEC,
-        "python",
-        _DRIVER,
-        str(config_file),
     ]
+    for package in HARBOR_PACKAGES:
+        cmd.extend(("--with", package))
+    cmd.extend(("python", _DRIVER, str(config_file)))
     logger.info("running Harbor driver: %s", " ".join(cmd))
     process_env = env_vars_from_keys(_DRIVER_SYSTEM_ENV_KEYS)
     process_env.update(driver_env)
