@@ -80,6 +80,12 @@ first, so "behind" is current). Each of these raises a `[WARN]`:
   that once cost ~5 red-canary days
 - a tree ahead of `origin/main` — the deploy ships unmerged code
 
+An untracked file counts as dirty here, but it does **not** change the tree hash
+(`git stash create` ignores untracked files), while the Docker build still copies
+it into the image. So two different images can carry one tag, and the verify step
+in step 2 cannot see the difference. Treat an untracked-file warning as a reason
+to commit or remove the file before deploying.
+
 On any warning `preflight` **exits non-zero and deploys nothing**. Show the
 warnings to the operator and ask whether to deploy this exact tree. A dirty tree
 is normal for a controller fix under test and reckless for a routine fleet
@@ -140,10 +146,12 @@ Do this loop for one cluster, then gate. Repeat for the next cluster.
 6. **Gate.** Report the verify samples, the verdict, and the smoke job state.
    Ask the operator to approve the next cluster.
 
-The restart writes a rollout record to
-`gs://…/<cluster>/state/rollout-record.json` and health-checks the new
-controller, with an automatic rollback if it does not come up. Confirm the
-recorded image is the tag you meant to ship.
+The restart writes a rollout record to `rollout-record.json` under the cluster's
+`storage.remote_state_dir` — `gs://` for `marin` and `marin-dev`, `s3://` for
+every CoreWeave cluster — and health-checks the new controller, with an automatic
+rollback if it does not come up. Confirm the recorded image is the tag you meant
+to ship. Read an `s3://` record with the CoreWeave S3 credentials from step 1,
+not with `gcloud storage`.
 
 ## Rollback
 

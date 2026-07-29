@@ -54,6 +54,12 @@ CI_CONFIG_PREFIX = "ci-"
 # The branch a deploy is expected to ship. Anything else is code no reviewer saw.
 DEFAULT_UPSTREAM = "origin/main"
 
+# Uncommitted files named in the warning before it summarizes the remainder.
+DIRTY_FILES_SHOWN = 5
+
+# Ceiling for a preflight probe command, so a hung daemon does not hang the gate.
+PROBE_TIMEOUT = 30.0
+
 # `iris job run` defaults. A smoke job asks for nothing more than a real user job's
 # floor, so it schedules on any cluster without competing with real work.
 SMOKE_CPU = 0.1
@@ -81,6 +87,7 @@ class Need(StrEnum):
 
     ENV = "env"
     COMMAND = "command"
+    COMMAND_RUNS = "command-runs"
     SECRET = "secret"
     KUBE_CONTEXT = "kube-context"
 
@@ -141,6 +148,20 @@ class Snapshot:
     def from_json(cls, raw: str) -> "Snapshot":
         data = json.loads(raw)
         return cls(**data)
+
+
+class TreeIssue(StrEnum):
+    """Why a tree is not a clean checkout of the upstream branch."""
+
+    DIRTY = "dirty"
+    BEHIND = "behind"
+    AHEAD = "ahead"
+
+
+@dataclass(frozen=True)
+class TreeWarning:
+    issue: TreeIssue
+    message: str
 
 
 @dataclass(frozen=True)
@@ -224,19 +245,27 @@ def parse_ahead_behind(rev_list_counts: str) -> tuple[int, int]:
     return ahead, behind
 
 
-def tree_warnings(state: TreeState) -> tuple[str, ...]:
+def tree_warnings(state: TreeState) -> tuple[TreeWarning, ...]:
     """Reasons a human must confirm this tree before it is deployed."""
     warnings = []
     if state.dirty_files:
-        shown = ", ".join(state.dirty_files[:5])
-        more = f" (+{len(state.dirty_files) - 5} more)" if len(state.dirty_files) > 5 else ""
+        shown = ", ".join(state.dirty_files[:DIRTY_FILES_SHOWN])
+        hidden = len(state.dirty_files) - DIRTY_FILES_SHOWN
+        more = f" (+{hidden} more)" if hidden > 0 else ""
         warnings.append(
-            f"the tree is dirty: the deploy ships {len(state.dirty_files)} uncommitted file(s): {shown}{more}"
+            TreeWarning(
+                TreeIssue.DIRTY,
+                f"the deploy ships {len(state.dirty_files)} uncommitted file(s): {shown}{more}",
+            )
         )
     if state.behind:
-        warnings.append(f"the tree is {state.behind} commit(s) behind {state.upstream}: the deploy ships stale code")
+        warnings.append(
+            TreeWarning(TreeIssue.BEHIND, f"the tree is {state.behind} behind {state.upstream}: it ships stale code")
+        )
     if state.ahead:
-        warnings.append(f"the tree is {state.ahead} commit(s) ahead of {state.upstream}: the deploy ships unmerged code")
+        warnings.append(
+            TreeWarning(TreeIssue.AHEAD, f"the tree is {state.ahead} ahead of {state.upstream}: it ships unmerged code")
+        )
     return tuple(warnings)
 
 
@@ -287,7 +316,11 @@ def requirements(config: IrisClusterConfig, *, s3_env: Sequence[str] | None = No
             names the marin store config declares.
     """
     needs = [
-        Requirement(Need.COMMAND, "docker", "builds the controller image from the working tree and pushes it"),
+        # `docker` on PATH is not enough: the deploy runs `docker buildx build --push`,
+        # which fails without a reachable daemon or without the buildx plugin — and it
+        # would fail after the operator already approved the cluster at its gate.
+        Requirement(Need.COMMAND_RUNS, "docker info", "the deploy builds the controller image locally"),
+        Requirement(Need.COMMAND_RUNS, "docker buildx version", "the image build and push runs through buildx"),
         Requirement(Need.COMMAND, "git", "the image tag is a hash of the working tree content"),
     ]
     for name in config.defaults.inject_env:
@@ -364,6 +397,25 @@ def check_kube_context(requirement: Requirement, *, environ: Mapping[str, str]) 
     )
 
 
+def run_probe(requirement: Requirement, *, timeout: float = PROBE_TIMEOUT) -> CheckResult:
+    """Run the requirement's command and pass on a zero exit status.
+
+    The target splits on whitespace into argv (no shell), so every probe must be a
+    command whose arguments carry no spaces.
+    """
+    argv = requirement.target.split()
+    if shutil.which(argv[0]) is None:
+        return CheckResult(requirement, False, f"{argv[0]} is not on PATH")
+    try:
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return CheckResult(requirement, False, f"{requirement.target!r} timed out after {timeout:.0f}s")
+    if result.returncode == 0:
+        return CheckResult(requirement, True, "ok")
+    reason = (result.stderr or result.stdout).strip().splitlines()
+    return CheckResult(requirement, False, f"exit {result.returncode}: {reason[0] if reason else 'no output'}")
+
+
 def check_requirement(requirement: Requirement, *, environ: Mapping[str, str]) -> CheckResult:
     """Check one requirement. Secret values are resolved but never returned."""
     target = requirement.target
@@ -373,6 +425,8 @@ def check_requirement(requirement: Requirement, *, environ: Mapping[str, str]) -
     if requirement.kind is Need.COMMAND:
         path = shutil.which(target)
         return CheckResult(requirement, path is not None, path or "not on PATH")
+    if requirement.kind is Need.COMMAND_RUNS:
+        return run_probe(requirement)
     if requirement.kind is Need.KUBE_CONTEXT:
         return check_kube_context(requirement, environ=environ)
     resolved = resolve_secret_spec((target,))
@@ -545,7 +599,7 @@ def preflight(clusters: str | None, upstream: str, no_fetch: bool, accept_tree_s
     click.echo(f"Working tree: {state.summary()}")
     warnings = tree_warnings(state)
     for warning in warnings:
-        click.echo(f"  [WARN] {warning}")
+        click.echo(f"  [WARN] {warning.issue.value}: {warning.message}")
 
     failures = 0
     for cluster in order:

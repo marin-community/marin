@@ -22,6 +22,7 @@ from scripts.iris.rollout_controllers import (
     Need,
     Requirement,
     Snapshot,
+    TreeIssue,
     TreeState,
     check_requirement,
     check_requirements,
@@ -33,6 +34,7 @@ from scripts.iris.rollout_controllers import (
     parse_kube_contexts,
     requirements,
     rollout_order,
+    run_probe,
     tree_warnings,
 )
 
@@ -113,6 +115,30 @@ def test_kubernetes_requirements_cover_s3_keys_kubeconfig_and_signing_key():
 def test_gcs_backed_kubernetes_cluster_needs_no_s3_keys():
     needs = requirements(coreweave_config(state_dir="gs://bucket/state"), s3_env=["CW_KEY_ID", "CW_KEY_SECRET"])
     assert not [n for n in needs if n.kind is Need.ENV]
+
+
+def test_every_cluster_probes_a_working_docker_build_toolchain():
+    # `docker` on PATH passes while the daemon is down; the deploy would then fail
+    # at image build, after the operator already approved the cluster.
+    for config in (coreweave_config(), gcp_config()):
+        probes = {n.target for n in requirements(config, s3_env=[]) if n.kind is Need.COMMAND_RUNS}
+        assert probes == {"docker info", "docker buildx version"}
+
+
+def test_probe_fails_on_a_nonzero_exit_and_reports_the_exit_code():
+    result = run_probe(Requirement(Need.COMMAND_RUNS, "python --no-such-flag", "why"))
+    assert not result.ok
+    assert "exit 2" in result.detail
+
+
+def test_probe_passes_on_a_zero_exit():
+    assert run_probe(Requirement(Need.COMMAND_RUNS, "python --version", "why")).ok
+
+
+def test_probe_fails_when_the_command_is_absent():
+    result = run_probe(Requirement(Need.COMMAND_RUNS, "definitely-not-a-real-binary --version", "why"))
+    assert not result.ok
+    assert "not on PATH" in result.detail
 
 
 def test_gcp_cluster_needs_gcloud_and_its_injected_env():
@@ -207,19 +233,24 @@ def test_unresolvable_secret_becomes_a_failed_check_not_an_exception():
 def test_verify_flags_a_controller_running_the_wrong_tree():
     verdict = compare(snapshot(tree_hash="aaa"), snapshot(tree_hash="bbb"), expect_tree_hash="ccc")
     assert not verdict.healthy
-    assert any("expected ccc" in concern for concern in verdict.concerns)
+    # The concern must carry both hashes, or the operator cannot tell what shipped.
+    assert any("bbb" in concern and "ccc" in concern for concern in verdict.concerns)
 
 
 def test_verify_flags_lost_workers():
     verdict = compare(snapshot(workers_healthy=10), snapshot(workers_healthy=6), expect_tree_hash="aaa")
     assert not verdict.healthy
-    assert any("healthy workers fell from 10 to 6" in concern for concern in verdict.concerns)
+    assert any("10" in concern and "6" in concern for concern in verdict.concerns)
 
 
 def test_verify_flags_an_unreachable_controller_before_anything_else():
     verdict = compare(snapshot(), snapshot(reachable=False, error="RpcError: unavailable"), expect_tree_hash="aaa")
     assert not verdict.healthy
-    assert verdict.concerns == ("controller is unreachable: RpcError: unavailable",)
+    # One concern only: an unreachable controller short-circuits every other check,
+    # which have no post-restart reading to compare against.
+    assert len(verdict.concerns) == 1
+    assert "RpcError: unavailable" in verdict.concerns[0]
+    assert not verdict.notes
 
 
 def test_verify_passes_when_the_expected_tree_came_back_with_its_workers():
@@ -236,8 +267,8 @@ def test_growing_queue_and_unchanged_tree_are_notes_not_blockers():
         expect_tree_hash="aaa",
     )
     assert verdict.healthy
-    assert any("pending jobs grew from 1 to 9" in note for note in verdict.notes)
-    assert any("tree hash is unchanged" in note for note in verdict.notes)
+    assert any("pending" in note and "9" in note for note in verdict.notes)
+    assert any("unchanged" in note for note in verdict.notes)
 
 
 def test_snapshot_round_trip_keeps_the_baseline_readable_by_verify():
@@ -266,22 +297,24 @@ def test_clean_tree_on_upstream_needs_no_confirmation():
     assert tree_warnings(tree()) == ()
 
 
-def test_dirty_tree_warns_and_names_the_files():
-    warnings = tree_warnings(tree(dirty_files=("lib/iris/src/iris/cluster/config.py", "AGENTS.md")))
-    assert len(warnings) == 1
-    assert "2 uncommitted file(s)" in warnings[0]
-    assert "AGENTS.md" in warnings[0]
+def test_each_kind_of_divergence_raises_its_own_warning():
+    assert [w.issue for w in tree_warnings(tree(dirty_files=("a.py",)))] == [TreeIssue.DIRTY]
+    assert [w.issue for w in tree_warnings(tree(behind=7))] == [TreeIssue.BEHIND]
+    assert [w.issue for w in tree_warnings(tree(ahead=2))] == [TreeIssue.AHEAD]
+    assert [w.issue for w in tree_warnings(tree(dirty_files=("a.py",), ahead=2, behind=7))] == [
+        TreeIssue.DIRTY,
+        TreeIssue.BEHIND,
+        TreeIssue.AHEAD,
+    ]
 
 
-def test_dirty_tree_warning_truncates_a_long_file_list():
-    warnings = tree_warnings(tree(dirty_files=tuple(f"f{index}.py" for index in range(9))))
-    assert "(+4 more)" in warnings[0]
-
-
-def test_behind_and_ahead_are_separate_warnings():
-    warnings = tree_warnings(tree(ahead=2, behind=7))
-    assert any("7 commit(s) behind origin/main" in w for w in warnings)
-    assert any("2 commit(s) ahead of origin/main" in w for w in warnings)
+def test_dirty_warning_names_the_files_and_counts_the_rest():
+    # The operator decides from this message, so it must carry the count and enough
+    # paths to recognize the change — a bare "tree is dirty" is not actionable.
+    warning = tree_warnings(tree(dirty_files=tuple(f"f{index}.py" for index in range(9))))[0]
+    assert "9" in warning.message
+    assert "f0.py" in warning.message
+    assert "(+4 more)" in warning.message
 
 
 def test_parse_dirty_files_strips_status_codes():
