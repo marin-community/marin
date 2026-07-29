@@ -269,11 +269,21 @@ def _domain_history(run: wandb.apis.public.Run, prefix: str) -> dict[int, dict[s
     return by_step
 
 
+def _metric_history(run: wandb.apis.public.Run, metric: str) -> list[HistoryPoint]:
+    by_step: dict[int, HistoryPoint] = {}
+    for row in run.scan_history(keys=[GLOBAL_STEP, metric], page_size=10_000):
+        step = row.get(GLOBAL_STEP)
+        value = row.get(metric)
+        if isinstance(step, (int, float)) and isinstance(value, (int, float)) and np.isfinite(value):
+            by_step[int(step)] = HistoryPoint(int(step), float(value))
+    return [by_step[step] for step in sorted(by_step)]
+
+
 def _latest_aligned_domains(
     control_run: wandb.apis.public.Run,
     treatment_run: wandb.apis.public.Run,
+    prefix: str,
 ) -> dict[str, Any]:
-    prefix = "eval/paloma/"
     control = _domain_history(control_run, prefix)
     treatment = _domain_history(treatment_run, prefix)
     common_steps = sorted(control.keys() & treatment.keys())
@@ -292,6 +302,14 @@ def main(config: AnalysisConfig) -> None:
     }
     runs = {arm: api.run(f"{ENTITY}/{config.project}/{run_id}") for arm, run_id in run_ids.items()}
     all_history = {arm: histories(run, include_nested=arm == TREATMENT) for arm, run in runs.items()}
+    for arm, run in runs.items():
+        all_history[arm]["uncheatable_macro"] = _metric_history(run, "eval/uncheatable_eval/macro_loss")
+        all_history[arm]["uncheatable_e128"] = (
+            _metric_history(run, "eval/nested_e128/uncheatable_eval/macro_loss") if arm == TREATMENT else []
+        )
+        all_history[arm]["uncheatable_e16"] = (
+            _metric_history(run, "eval/nested_e16/uncheatable_eval/macro_loss") if arm == TREATMENT else []
+        )
     timing_horizon = _common_horizon(all_history, "step_duration")
     timing = {
         arm: timing_summary([point for point in history["step_duration"] if point.step <= timing_horizon])
@@ -321,6 +339,9 @@ def main(config: AnalysisConfig) -> None:
             "full_paloma_micro": final_value(history["paloma_micro"]),
             "e128_paloma_macro": final_value(history["paloma_e128"]),
             "e16_paloma_macro": final_value(history["paloma_e16"]),
+            "full_uncheatable_macro": final_value(history["uncheatable_macro"]),
+            "e128_uncheatable_macro": final_value(history["uncheatable_e128"]),
+            "e16_uncheatable_macro": final_value(history["uncheatable_e16"]),
             "final_train_loss": final_value(history["train_loss"]),
             "final_cross_entropy_loss": final_value(history["cross_entropy_loss"]),
             "terminal_overflow": final_value(history["overflow"]),
@@ -353,7 +374,15 @@ def main(config: AnalysisConfig) -> None:
         "evaluation_history": {
             arm: {
                 metric: [asdict(point) for point in history[metric]]
-                for metric in ("paloma_macro", "paloma_micro", "paloma_e128", "paloma_e16")
+                for metric in (
+                    "paloma_macro",
+                    "paloma_micro",
+                    "paloma_e128",
+                    "paloma_e16",
+                    "uncheatable_macro",
+                    "uncheatable_e128",
+                    "uncheatable_e16",
+                )
             }
             for arm, history in all_history.items()
         },
@@ -369,7 +398,20 @@ def main(config: AnalysisConfig) -> None:
             all_history[CONTROL]["paloma_macro"],
             all_history[TREATMENT]["paloma_macro"],
         ),
-        "full_mode_domain_comparison": _latest_aligned_domains(runs[CONTROL], runs[TREATMENT]),
+        "full_mode_uncheatable_paired_delta_summary": _paired_delta_summary(
+            all_history[CONTROL]["uncheatable_macro"],
+            all_history[TREATMENT]["uncheatable_macro"],
+        ),
+        "full_mode_domain_comparison": _latest_aligned_domains(
+            runs[CONTROL],
+            runs[TREATMENT],
+            "eval/paloma/",
+        ),
+        "full_mode_uncheatable_domain_comparison": _latest_aligned_domains(
+            runs[CONTROL],
+            runs[TREATMENT],
+            "eval/uncheatable_eval/",
+        ),
     }
     (OUTPUT_DIR / f"{config.output_prefix}-results.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
 

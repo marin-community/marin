@@ -1,0 +1,609 @@
+{
+  "comparisons_vs_e256": {
+    "e128_layerwise": {
+      "full_paloma": {
+        "deltas": {
+          "1000": 0.00592041015625
+        },
+        "max_delta": 0.00592041015625,
+        "mean_delta": 0.00592041015625,
+        "median_delta": 0.00592041015625,
+        "min_delta": 0.00592041015625,
+        "points": 1,
+        "through_step": 1000,
+        "treatment_better": 0
+      },
+      "full_uncheatable": {
+        "deltas": {
+          "1000": 0.0038547515869140625
+        },
+        "max_delta": 0.0038547515869140625,
+        "mean_delta": 0.0038547515869140625,
+        "median_delta": 0.0038547515869140625,
+        "min_delta": 0.0038547515869140625,
+        "points": 1,
+        "through_step": 1000,
+        "treatment_better": 0
+      },
+      "paloma_domains": {
+        "deltas": {
+          "4chan-llama3": -0.014467954635620117,
+          "c4_100_domains-llama3": 0.005266666412353516,
+          "c4_en-llama3": 0.004489898681640625,
+          "dolma-v1_5-llama3": 0.004784584045410156,
+          "dolma_100_programing_languages-llama3": 0.005139827728271484,
+          "dolma_100_subreddits-llama3": 0.0057811737060546875,
+          "falcon-refinedweb-llama3": 0.004864215850830078,
+          "gab-llama3": 0.008077144622802734,
+          "m2d2_s2orc_unsplit-llama3": 0.0013518333435058594,
+          "m2d2_wikipedia_unsplit-llama3": 0.007057666778564453,
+          "manosphere_meta_sep-llama3": 0.0032176971435546875,
+          "mc4-llama3": 0.006800174713134766,
+          "ptb-llama3": 0.010909080505371094,
+          "redpajama-llama3": 0.007238626480102539,
+          "twitterAAE_HELM_fixed-llama3": 0.015333175659179688,
+          "wikitext_103-llama3": 0.01887989044189453
+        },
+        "domains": 16,
+        "max_delta": 0.01887989044189453,
+        "mean_delta": 0.005920231342315674,
+        "median_delta": 0.0055239200592041016,
+        "min_delta": -0.014467954635620117,
+        "through_step": 1000,
+        "treatment_better": 1
+      },
+      "time_to_equivalent_paloma": null,
+      "uncheatable_domains": {
+        "deltas": {
+          "ao3_english-llama3": 0.003970146179199219,
+          "arxiv_computer_science-llama3": 0.002551555633544922,
+          "arxiv_physics-llama3": 0.0013141632080078125,
+          "bbc_news-llama3": 0.006420135498046875,
+          "github_cpp-llama3": 0.0039441585540771484,
+          "github_python-llama3": 0.0035381317138671875,
+          "wikipedia_english-llama3": 0.005247592926025391
+        },
+        "domains": 7,
+        "max_delta": 0.006420135498046875,
+        "mean_delta": 0.0038551262446812223,
+        "median_delta": 0.0039441585540771484,
+        "min_delta": 0.0013141632080078125,
+        "through_step": 1000,
+        "treatment_better": 0
+      }
+    },
+    "e128_naive": {
+      "full_paloma": {
+        "deltas": {
+          "1000": 0.016671180725097656
+        },
+        "max_delta": 0.016671180725097656,
+        "mean_delta": 0.016671180725097656,
+        "median_delta": 0.016671180725097656,
+        "min_delta": 0.016671180725097656,
+        "points": 1,
+        "through_step": 1000,
+        "treatment_better": 0
+      },
+      "full_uncheatable": {
+        "deltas": {
+          "1000": 0.016536712646484375
+        },
+        "max_delta": 0.016536712646484375,
+        "mean_delta": 0.016536712646484375,
+        "median_delta": 0.016536712646484375,
+        "min_delta": 0.016536712646484375,
+        "points": 1,
+        "through_step": 1000,
+        "treatment_better": 0
+      },
+      "paloma_domains": {
+        "deltas": {
+          "4chan-llama3": 0.00020647048950195312,
+          "c4_100_domains-llama3": 0.01803112030029297,
+          "c4_en-llama3": 0.01639413833618164,
+          "dolma-v1_5-llama3": 0.014959335327148438,
+          "dolma_100_programing_languages-llama3": 0.010574102401733398,
+          "dolma_100_subreddits-llama3": 0.01453256607055664,
+          "falcon-refinedweb-llama3": 0.015927791595458984,
+          "gab-llama3": 0.030950546264648438,
+          "m2d2_s2orc_unsplit-llama3": 0.017353534698486328,
+          "m2d2_wikipedia_unsplit-llama3": 0.01587533950805664,
+          "manosphere_meta_sep-llama3": 0.013058662414550781,
+          "mc4-llama3": 0.02175617218017578,
+          "ptb-llama3": 0.03046560287475586,
+          "redpajama-llama3": 0.017380952835083008,
+          "twitterAAE_HELM_fixed-llama3": 0.0014491081237792969,
+          "wikitext_103-llama3": 0.027818679809570312
+        },
+        "domains": 16,
+        "max_delta": 0.030950546264648438,
+        "mean_delta": 0.01667088270187378,
+        "median_delta": 0.016160964965820312,
+        "min_delta": 0.00020647048950195312,
+        "through_step": 1000,
+        "treatment_better": 0
+      },
+      "time_to_equivalent_paloma": null,
+      "uncheatable_domains": {
+        "deltas": {
+          "ao3_english-llama3": 0.017734527587890625,
+          "arxiv_computer_science-llama3": 0.02115345001220703,
+          "arxiv_physics-llama3": 0.020370960235595703,
+          "bbc_news-llama3": 0.020346641540527344,
+          "github_cpp-llama3": 0.010572433471679688,
+          "github_python-llama3": 0.007002115249633789,
+          "wikipedia_english-llama3": 0.01857900619506836
+        },
+        "domains": 7,
+        "max_delta": 0.02115345001220703,
+        "mean_delta": 0.016537019184657505,
+        "median_delta": 0.01857900619506836,
+        "min_delta": 0.007002115249633789,
+        "through_step": 1000,
+        "treatment_better": 0
+      }
+    },
+    "e16_layerwise": {
+      "full_paloma": {
+        "deltas": {
+          "1000": 0.007159233093261719
+        },
+        "max_delta": 0.007159233093261719,
+        "mean_delta": 0.007159233093261719,
+        "median_delta": 0.007159233093261719,
+        "min_delta": 0.007159233093261719,
+        "points": 1,
+        "through_step": 1000,
+        "treatment_better": 0
+      },
+      "full_uncheatable": {
+        "deltas": {
+          "1000": 0.009808063507080078
+        },
+        "max_delta": 0.009808063507080078,
+        "mean_delta": 0.009808063507080078,
+        "median_delta": 0.009808063507080078,
+        "min_delta": 0.009808063507080078,
+        "points": 1,
+        "through_step": 1000,
+        "treatment_better": 0
+      },
+      "paloma_domains": {
+        "deltas": {
+          "4chan-llama3": 0.0016734600067138672,
+          "c4_100_domains-llama3": 0.010514259338378906,
+          "c4_en-llama3": 0.010410308837890625,
+          "dolma-v1_5-llama3": 0.00963592529296875,
+          "dolma_100_programing_languages-llama3": 0.007509469985961914,
+          "dolma_100_subreddits-llama3": 0.006516456604003906,
+          "falcon-refinedweb-llama3": 0.009118080139160156,
+          "gab-llama3": 0.005839824676513672,
+          "m2d2_s2orc_unsplit-llama3": 0.007460594177246094,
+          "m2d2_wikipedia_unsplit-llama3": 0.01032400131225586,
+          "manosphere_meta_sep-llama3": 0.004108428955078125,
+          "mc4-llama3": 0.011542797088623047,
+          "ptb-llama3": 0.00976705551147461,
+          "redpajama-llama3": 0.010736465454101562,
+          "twitterAAE_HELM_fixed-llama3": -0.011289119720458984,
+          "wikitext_103-llama3": 0.010679244995117188
+        },
+        "domains": 16,
+        "max_delta": 0.011542797088623047,
+        "mean_delta": 0.007159203290939331,
+        "median_delta": 0.009377002716064453,
+        "min_delta": -0.011289119720458984,
+        "through_step": 1000,
+        "treatment_better": 1
+      },
+      "time_to_equivalent_paloma": null,
+      "uncheatable_domains": {
+        "deltas": {
+          "ao3_english-llama3": 0.009705066680908203,
+          "arxiv_computer_science-llama3": 0.01277017593383789,
+          "arxiv_physics-llama3": 0.010234832763671875,
+          "bbc_news-llama3": 0.012160778045654297,
+          "github_cpp-llama3": 0.005026340484619141,
+          "github_python-llama3": 0.005372285842895508,
+          "wikipedia_english-llama3": 0.01338815689086914
+        },
+        "domains": 7,
+        "max_delta": 0.01338815689086914,
+        "mean_delta": 0.00980823380606515,
+        "median_delta": 0.010234832763671875,
+        "min_delta": 0.005026340484619141,
+        "through_step": 1000,
+        "treatment_better": 0
+      }
+    },
+    "e16_naive": {
+      "full_paloma": {
+        "deltas": {
+          "1000": 0.037998199462890625
+        },
+        "max_delta": 0.037998199462890625,
+        "mean_delta": 0.037998199462890625,
+        "median_delta": 0.037998199462890625,
+        "min_delta": 0.037998199462890625,
+        "points": 1,
+        "through_step": 1000,
+        "treatment_better": 0
+      },
+      "full_uncheatable": {
+        "deltas": {
+          "1000": 0.042810678482055664
+        },
+        "max_delta": 0.042810678482055664,
+        "mean_delta": 0.042810678482055664,
+        "median_delta": 0.042810678482055664,
+        "min_delta": 0.042810678482055664,
+        "points": 1,
+        "through_step": 1000,
+        "treatment_better": 0
+      },
+      "paloma_domains": {
+        "deltas": {
+          "4chan-llama3": 0.0181119441986084,
+          "c4_100_domains-llama3": 0.045055389404296875,
+          "c4_en-llama3": 0.042346954345703125,
+          "dolma-v1_5-llama3": 0.03790712356567383,
+          "dolma_100_programing_languages-llama3": 0.03206992149353027,
+          "dolma_100_subreddits-llama3": 0.035280704498291016,
+          "falcon-refinedweb-llama3": 0.040384769439697266,
+          "gab-llama3": 0.04773664474487305,
+          "m2d2_s2orc_unsplit-llama3": 0.04118156433105469,
+          "m2d2_wikipedia_unsplit-llama3": 0.04358100891113281,
+          "manosphere_meta_sep-llama3": 0.032063961029052734,
+          "mc4-llama3": 0.044817447662353516,
+          "ptb-llama3": 0.04626274108886719,
+          "redpajama-llama3": 0.04162740707397461,
+          "twitterAAE_HELM_fixed-llama3": 0.018468856811523438,
+          "wikitext_103-llama3": 0.041069984436035156
+        },
+        "domains": 16,
+        "max_delta": 0.04773664474487305,
+        "mean_delta": 0.03799790143966675,
+        "median_delta": 0.04112577438354492,
+        "min_delta": 0.0181119441986084,
+        "through_step": 1000,
+        "treatment_better": 0
+      },
+      "time_to_equivalent_paloma": null,
+      "uncheatable_domains": {
+        "deltas": {
+          "ao3_english-llama3": 0.03954124450683594,
+          "arxiv_computer_science-llama3": 0.04392528533935547,
+          "arxiv_physics-llama3": 0.04020261764526367,
+          "bbc_news-llama3": 0.04755735397338867,
+          "github_cpp-llama3": 0.038880109786987305,
+          "github_python-llama3": 0.045003414154052734,
+          "wikipedia_english-llama3": 0.04456758499145508
+        },
+        "domains": 7,
+        "max_delta": 0.04755735397338867,
+        "mean_delta": 0.04281108719961984,
+        "median_delta": 0.04392528533935547,
+        "min_delta": 0.038880109786987305,
+        "through_step": 1000,
+        "treatment_better": 0
+      }
+    }
+  },
+  "evaluation_history": {
+    "e128_layerwise": {
+      "paloma_e128": [
+        {
+          "step": 1000,
+          "value": 4.439290523529053
+        }
+      ],
+      "paloma_e16": [],
+      "paloma_macro": [
+        {
+          "step": 1000,
+          "value": 4.358847618103027
+        }
+      ],
+      "paloma_micro": [
+        {
+          "step": 1000,
+          "value": 4.035593032836914
+        }
+      ],
+      "uncheatable_e128": [
+        {
+          "step": 1000,
+          "value": 4.048919200897217
+        }
+      ],
+      "uncheatable_e16": [],
+      "uncheatable_macro": [
+        {
+          "step": 1000,
+          "value": 3.9488651752471924
+        }
+      ]
+    },
+    "e128_naive": {
+      "paloma_e128": [
+        {
+          "step": 1000,
+          "value": 4.390685081481934
+        }
+      ],
+      "paloma_e16": [],
+      "paloma_macro": [
+        {
+          "step": 1000,
+          "value": 4.369598388671875
+        }
+      ],
+      "paloma_micro": [
+        {
+          "step": 1000,
+          "value": 4.046092510223389
+        }
+      ],
+      "uncheatable_e128": [
+        {
+          "step": 1000,
+          "value": 3.99061918258667
+        }
+      ],
+      "uncheatable_e16": [],
+      "uncheatable_macro": [
+        {
+          "step": 1000,
+          "value": 3.9615471363067627
+        }
+      ]
+    },
+    "e16_layerwise": {
+      "paloma_e128": [],
+      "paloma_e16": [
+        {
+          "step": 1000,
+          "value": 4.760953426361084
+        }
+      ],
+      "paloma_macro": [
+        {
+          "step": 1000,
+          "value": 4.360086441040039
+        }
+      ],
+      "paloma_micro": [
+        {
+          "step": 1000,
+          "value": 4.038809776306152
+        }
+      ],
+      "uncheatable_e128": [],
+      "uncheatable_e16": [
+        {
+          "step": 1000,
+          "value": 4.449900150299072
+        }
+      ],
+      "uncheatable_macro": [
+        {
+          "step": 1000,
+          "value": 3.9548184871673584
+        }
+      ]
+    },
+    "e16_naive": {
+      "paloma_e128": [],
+      "paloma_e16": [
+        {
+          "step": 1000,
+          "value": 4.505940914154053
+        }
+      ],
+      "paloma_macro": [
+        {
+          "step": 1000,
+          "value": 4.390925407409668
+        }
+      ],
+      "paloma_micro": [
+        {
+          "step": 1000,
+          "value": 4.069387912750244
+        }
+      ],
+      "uncheatable_e128": [],
+      "uncheatable_e16": [
+        {
+          "step": 1000,
+          "value": 4.127790927886963
+        }
+      ],
+      "uncheatable_macro": [
+        {
+          "step": 1000,
+          "value": 3.987821102142334
+        }
+      ]
+    },
+    "e256": {
+      "paloma_e128": [
+        {
+          "step": 1000,
+          "value": 4.496725082397461
+        }
+      ],
+      "paloma_e16": [
+        {
+          "step": 1000,
+          "value": 4.95703125
+        }
+      ],
+      "paloma_macro": [
+        {
+          "step": 1000,
+          "value": 4.352927207946777
+        }
+      ],
+      "paloma_micro": [
+        {
+          "step": 1000,
+          "value": 4.03085994720459
+        }
+      ],
+      "uncheatable_e128": [
+        {
+          "step": 1000,
+          "value": 4.132230281829834
+        }
+      ],
+      "uncheatable_e16": [
+        {
+          "step": 1000,
+          "value": 4.681651592254639
+        }
+      ],
+      "uncheatable_macro": [
+        {
+          "step": 1000,
+          "value": 3.9450104236602783
+        }
+      ]
+    }
+  },
+  "gpu_count": 8,
+  "quality_log_linear_fits": {
+    "e128_layerwise": null,
+    "e128_naive": null,
+    "e16_layerwise": null,
+    "e16_naive": null,
+    "e256": null
+  },
+  "schema_version": 1,
+  "summaries": {
+    "e128_layerwise": {
+      "e128_paloma_macro": 4.439290523529053,
+      "e128_uncheatable_macro": 4.048919200897217,
+      "e16_paloma_macro": null,
+      "e16_uncheatable_macro": null,
+      "final_step": 1309,
+      "full_paloma_macro": 4.358847618103027,
+      "full_uncheatable_macro": 3.9488651752471924,
+      "gpu_hours_per_billion_tokens": 3.9682932811362863,
+      "median_step_seconds": 0.4681189232505858,
+      "run_name": "nest-augdk-e128-layer25-10b-r1",
+      "state": "running",
+      "step_overhead_vs_e256": 0.011098650173217539,
+      "tokens_billions": 0.34340864,
+      "url": "https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e128-layer25-10b-r1"
+    },
+    "e128_naive": {
+      "e128_paloma_macro": 4.390685081481934,
+      "e128_uncheatable_macro": 3.99061918258667,
+      "e16_paloma_macro": null,
+      "e16_uncheatable_macro": null,
+      "final_step": 1054,
+      "full_paloma_macro": 4.369598388671875,
+      "full_uncheatable_macro": 3.9615471363067627,
+      "gpu_hours_per_billion_tokens": 3.9533388237108134,
+      "median_step_seconds": 0.46635482367128134,
+      "run_name": "nest-augdk-e128-naive25-10b-r1",
+      "state": "running",
+      "step_overhead_vs_e256": 0.007288339128707522,
+      "tokens_billions": 0.27656192,
+      "url": "https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e128-naive25-10b-r1"
+    },
+    "e16_layerwise": {
+      "e128_paloma_macro": null,
+      "e128_uncheatable_macro": null,
+      "e16_paloma_macro": 4.760953426361084,
+      "e16_uncheatable_macro": 4.449900150299072,
+      "final_step": 1254,
+      "full_paloma_macro": 4.360086441040039,
+      "full_uncheatable_macro": 3.9548184871673584,
+      "gpu_hours_per_billion_tokens": 3.9725740208496063,
+      "median_step_seconds": 0.46862389985471964,
+      "run_name": "nest-augdk-e16-layer25-10b-r1",
+      "state": "running",
+      "step_overhead_vs_e256": 0.012189358404500528,
+      "tokens_billions": 0.32899072,
+      "url": "https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e16-layer25-10b-r1"
+    },
+    "e16_naive": {
+      "e128_paloma_macro": null,
+      "e128_uncheatable_macro": null,
+      "e16_paloma_macro": 4.505940914154053,
+      "e16_uncheatable_macro": 4.127790927886963,
+      "final_step": 1303,
+      "full_paloma_macro": 4.390925407409668,
+      "full_uncheatable_macro": 3.987821102142334,
+      "gpu_hours_per_billion_tokens": 3.970633358897481,
+      "median_step_seconds": 0.46839497005566955,
+      "run_name": "nest-augdk-e16-naive25-10b-r1",
+      "state": "running",
+      "step_overhead_vs_e256": 0.011694888731716091,
+      "tokens_billions": 0.341835776,
+      "url": "https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e16-naive25-10b-r1"
+    },
+    "e256": {
+      "e128_paloma_macro": 4.496725082397461,
+      "e128_uncheatable_macro": 4.132230281829834,
+      "e16_paloma_macro": 4.95703125,
+      "e16_uncheatable_macro": 4.681651592254639,
+      "final_step": 1243,
+      "full_paloma_macro": 4.352927207946777,
+      "full_uncheatable_macro": 3.9450104236602783,
+      "gpu_hours_per_billion_tokens": 3.9247340311021617,
+      "median_step_seconds": 0.4629804650321603,
+      "run_name": "nest-augdk-e256-10b-r1",
+      "state": "running",
+      "step_overhead_vs_e256": 0.0,
+      "tokens_billions": 0.326107136,
+      "url": "https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e256-10b-r1"
+    }
+  },
+  "timing": {
+    "e128_layerwise": {
+      "block_bootstrap_ci95_high": NaN,
+      "block_bootstrap_ci95_low": NaN,
+      "median_step_seconds": 0.4681189232505858,
+      "p10_step_seconds": 0.4585610027424991,
+      "p90_step_seconds": 0.4820777657441795,
+      "samples": 31
+    },
+    "e128_naive": {
+      "block_bootstrap_ci95_high": NaN,
+      "block_bootstrap_ci95_low": NaN,
+      "median_step_seconds": 0.46635482367128134,
+      "p10_step_seconds": 0.4574266131967306,
+      "p90_step_seconds": 0.47995209228247404,
+      "samples": 31
+    },
+    "e16_layerwise": {
+      "block_bootstrap_ci95_high": NaN,
+      "block_bootstrap_ci95_low": NaN,
+      "median_step_seconds": 0.46862389985471964,
+      "p10_step_seconds": 0.45689660124480724,
+      "p90_step_seconds": 0.48367716558277607,
+      "samples": 31
+    },
+    "e16_naive": {
+      "block_bootstrap_ci95_high": NaN,
+      "block_bootstrap_ci95_low": NaN,
+      "median_step_seconds": 0.46839497005566955,
+      "p10_step_seconds": 0.4558208370581269,
+      "p90_step_seconds": 0.4797144941985607,
+      "samples": 31
+    },
+    "e256": {
+      "block_bootstrap_ci95_high": NaN,
+      "block_bootstrap_ci95_low": NaN,
+      "median_step_seconds": 0.4629804650321603,
+      "p10_step_seconds": 0.4555052788928151,
+      "p90_step_seconds": 0.4734850022941828,
+      "samples": 31
+    }
+  },
+  "timing_through_step": 1054,
+  "tokens_per_step": 262144
+}

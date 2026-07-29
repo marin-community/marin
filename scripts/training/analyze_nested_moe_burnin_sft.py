@@ -38,7 +38,7 @@ RUNS = MappingProxyType(
         ("thinking", "fixed25"): "nest-augdk-fixed25-thinking-sft-r1",
     }
 )
-LABELS = MappingProxyType({"e256": "E256 control", "fixed25": "Fixed25"})
+LABELS = MappingProxyType({"e256": "E256 control", "fixed25": "Fixed25 nested routing"})
 COLORS = MappingProxyType({"e256": "#24292f", "fixed25": "#0969da"})
 
 
@@ -91,9 +91,9 @@ def _run_summary(
         "stage_tokens": completed_steps * tokens_per_step,
         "completed_steps": completed_steps,
         "loss_metric": TRAIN_LOSS if cross_entropy else TOTAL_LOSS,
-        "final_cross_entropy_loss": _final(effective_loss),
-        "mean_cross_entropy_loss_post_warmup": _mean(post_warmup_loss),
-        "mean_cross_entropy_loss_last_100": _mean(tail_loss),
+        "final_loss": _final(effective_loss),
+        "mean_loss_post_warmup": _mean(post_warmup_loss),
+        "mean_loss_last_100": _mean(tail_loss),
         "final_total_loss": _final(total_loss),
         "terminal_overflow": _final(overflow),
         "median_step_seconds": median_step_seconds,
@@ -124,29 +124,23 @@ def _paired_comparison(stage_result: dict[str, dict[str, Any]]) -> dict[str, flo
 
     control_step = control["median_step_seconds"]
     treatment_step = treatment["median_step_seconds"]
-    control_loss = {
-        point["step"]: point["value"]
-        for point in control["histories"]["cross_entropy_loss"]
-        if point["step"] >= LOSS_WARMUP_STEPS
-    }
-    treatment_loss = {
-        point["step"]: point["value"]
-        for point in treatment["histories"]["cross_entropy_loss"]
-        if point["step"] >= LOSS_WARMUP_STEPS
-    }
+    control_history = control["histories"]["cross_entropy_loss"] or control["histories"]["total_loss"]
+    treatment_history = treatment["histories"]["cross_entropy_loss"] or treatment["histories"]["total_loss"]
+    control_loss = {point["step"]: point["value"] for point in control_history if point["step"] >= LOSS_WARMUP_STEPS}
+    treatment_loss = {point["step"]: point["value"] for point in treatment_history if point["step"] >= LOSS_WARMUP_STEPS}
     common_steps = sorted(control_loss.keys() & treatment_loss.keys())
     paired_deltas = [treatment_loss[step] - control_loss[step] for step in common_steps]
     return {
-        "final_cross_entropy_delta": difference("final_cross_entropy_loss"),
-        "post_warmup_mean_cross_entropy_delta": difference("mean_cross_entropy_loss_post_warmup"),
-        "last_100_mean_cross_entropy_delta": difference("mean_cross_entropy_loss_last_100"),
+        "final_loss_delta": difference("final_loss"),
+        "post_warmup_mean_loss_delta": difference("mean_loss_post_warmup"),
+        "last_100_mean_loss_delta": difference("mean_loss_last_100"),
         "paired_steps_post_warmup": len(common_steps),
         "paired_treatment_wins_post_warmup": sum(delta < 0 for delta in paired_deltas),
         "paired_treatment_win_fraction_post_warmup": (
             sum(delta < 0 for delta in paired_deltas) / len(paired_deltas) if paired_deltas else None
         ),
-        "paired_mean_cross_entropy_delta_post_warmup": statistics.fmean(paired_deltas) if paired_deltas else None,
-        "paired_median_cross_entropy_delta_post_warmup": statistics.median(paired_deltas) if paired_deltas else None,
+        "paired_mean_loss_delta_post_warmup": statistics.fmean(paired_deltas) if paired_deltas else None,
+        "paired_median_loss_delta_post_warmup": statistics.median(paired_deltas) if paired_deltas else None,
         "median_step_overhead_fraction": (
             treatment_step / control_step - 1.0
             if control_step is not None and treatment_step is not None and control_step > 0
@@ -179,7 +173,7 @@ def _plot_loss(
             )
         axis.set_title(stage.capitalize())
         axis.set_xlabel("SFT tokens (billions)")
-        axis.set_ylabel("Completion-masked cross-entropy")
+        axis.set_ylabel("Completion-masked training loss")
         axis.grid(alpha=0.2)
         axis.legend()
     figure.suptitle(figure_title)
@@ -207,7 +201,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--tokens-per-step", type=int, default=TOKENS_PER_STEP)
     parser.add_argument("--gpu-count", type=int, default=GPU_COUNT)
     parser.add_argument("--output-prefix", default=OUTPUT_PREFIX)
-    parser.add_argument("--figure-title", default="Corrected augmented d768 matched two-stage SFT")
+    parser.add_argument("--figure-title", default="Corrected augmented d768 two-stage SFT")
     for stage in ("wildchat", "thinking"):
         for arm in ("e256", "fixed25"):
             parser.add_argument(f"--{stage}-{arm}-run", default=RUNS[(stage, arm)])

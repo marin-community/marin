@@ -2344,3 +2344,134 @@ result:
   not a numerical or model-shape failure. A bounded retry targets the current
   checkpoint; production SFT will consume each replica's durable final
   checkpoint after pretraining terminates.
+
+### 2026-07-29 01:35 - Eight corrected gates and exact-source snapshot
+
+- The matched measurement pair remains finite through the update-8,000
+  evaluation. Fixed25 full-mode Paloma deltas at updates 1,000 through 8,000
+  are `+0.022665`, `+0.031638`, `+0.025615`, `+0.024656`, `+0.030234`,
+  `+0.026350`, `+0.029090`, and `+0.027246` nat. The median is `+0.026798`;
+  fixed25 is worse at all eight gates but remains well inside the
+  preregistered `+0.10` rejection threshold.
+- A log-linear fit projects a `+0.030585` full-mode delta at 10B tokens and
+  `+0.031602` at 20B. The slope fit has `R²=0.119`, so it is weak evidence;
+  the directly observed stable eight-gate band is more reliable.
+- Through common update 8,823, median compiled step time is `456.507 ms` for
+  E256 and `461.972 ms` for fixed25, a `+1.197%` surcharge. Optimizer-only
+  forecasts are `38.699` versus `39.162` H100 GPU-hours per 10B tokens.
+- Both no-evaluation checkpoint replicas are healthy and writing rotating
+  temporary checkpoints. The validated weights-only SFT smoke succeeds for
+  both model shapes.
+- Pushed the exact augmented-reference overlay used for corrected pretraining,
+  SFT, and native generation evaluation as commit `b283929fd9` on
+  `weaver/652-augdk-exact-source`. The running jobs continue to use their
+  already-uploaded immutable source bundle.
+
+### 2026-07-29 02:31 - Corrected 4.414B-token pair completes
+
+- The exact augmented-datakit E256 control and fixed25 treatment both completed
+  16,840 optimizer updates without a failure or preemption.
+- Terminal full-mode Paloma macro loss is `3.258327` for E256 and `3.289642`
+  for fixed25, a `+0.031316` treatment delta. Uncheatable macro is `2.676667`
+  and `2.711534`, a `+0.034867` delta. Fixed25 was worse at every one of the
+  17 paired evaluation gates.
+- Median compiled optimizer-step time is `457.102 ms` for E256 and
+  `462.578 ms` for fixed25, a `+1.198%` mechanical surcharge.
+- Pre-phase-1 log-linear Paloma fits imply that matching the control's
+  4.4145B-token loss requires about `4.8795B` fixed25 tokens. Combining the
+  `+10.53%` token multiplier with measured step time gives an `+11.86%`
+  time-to-equivalent-loss estimate. The corresponding uncheatable estimate is
+  `+11.79%`.
+- Interpretation: fixed-prefix co-training is mechanically cheap but the
+  naive 75% E256 / 12.5% E128 / 12.5% E16 allocation imposes a small,
+  persistent full-model quality tax. It overexposes experts 0--15 at `3x`
+  baseline assignment frequency and underexposes experts 128--255 at `0.75x`.
+
+### 2026-07-29 02:48 - NEST-MOE-003 single-prefix 10B preregistration
+
+- Question: how much of the fixed25 quality tax comes from E128 versus E16
+  restriction, and can rotating the restriction across layers retain an
+  extractable prefix while reducing expert-update imbalance?
+- Fixed contract for all five runs: augmented d768/L8, six query heads, one KV
+  head, E256 top-4 plus one shared expert, sequence length 8,192, global batch
+  32, 38,147 updates (`9.9997B` nominal tokens), dense two-phase Datakit
+  mixture, MuonH/AdamH learning rates `0.00838`, beta1 `0.9062`, beta2
+  approximately `0.998`, epsilon approximately `1.03e-15`, linear schedule
+  with 1% warmup and 0.05 minimum ratio, no clipping, seed 0, one 8-H100 node.
+- Arms:
+  - `E256-10B`: no training restriction; required matched control.
+  - `E128-naive25`: 25% of sequences restrict every MoE layer to experts
+    0--127.
+  - `E16-naive25`: 25% restrict every MoE layer to experts 0--15.
+  - `E128-layer25`: the same 25% sequence schedule, but each restricted
+    sequence applies the prefix to a rotating two of eight layers.
+  - `E16-layer25`: the analogous rotating two-of-eight-layer schedule.
+- The rotating schedule gives every layer equal nested exposure and never
+  changes attention, shared-expert, embedding, or LM-head computation. At 10B
+  tokens each layer sees approximately 625M restricted token-events. Expected
+  per-expert assignment frequencies relative to E256 are `1.0625x/0.9375x`
+  for the E128 inner/outer groups and `1.9375x/0.9375x` for E16, versus
+  `1.25x/0.75x` and `4.75x/0.75x` in the all-layer naive arms.
+- Gate 0: existing all-layer masks remain numerically unchanged; layerwise
+  masks restrict exactly two layers for each nested sequence; restriction
+  rotates evenly over layers; full rows remain eligible for all experts; all
+  five launch configs lower.
+- Gate 1 at 1B tokens: all arms finite; observed nested layer-sequence
+  fractions within 0.5 percentage points of their targets; median compiled
+  step overhead below 5%; full-mode Paloma regression below `+0.10` versus
+  E256. Stop an arm that fails numerical or routing correctness. A quality
+  miss stops only if it exceeds `+0.10` at two consecutive gates.
+- Gate 2 at 4.4145B tokens: compare against the completed fixed25 result and
+  estimate full-mode time to equivalent loss. Continue arms whose full-mode
+  penalty is below `+0.10` and whose extracted prefix beats the same fixed
+  prefix evaluated from the E256 control.
+- Gate 3 at 10B tokens: rank by full E256 Paloma and uncheatable loss,
+  extracted-prefix loss, per-domain deltas, optimizer-step overhead, and
+  time-to-equivalent loss. The primary comparison is each single-prefix naive
+  arm versus E256. The primary enhancement comparison is layerwise versus its
+  same-prefix naive arm.
+- Post-training gate: carry E256 and at most two Pareto-optimal treatments
+  through the fixed WildChat-then-Nemotron SFT recipe and heldout/generation
+  evaluation. Do not spend SFT compute on a dominated or failed arm.
+- Limitations frozen before launch: one seed; layerwise training does not show
+  all restricted layers jointly during a training forward, so extracted
+  all-layer prefix quality is an empirical question; H100 EP size 1 does not
+  validate multi-rack expert-parallel routing.
+
+### 2026-07-29 17:53 - NEST-MOE-003 optimizer amendment before launch
+
+- The 10B cell uses the same `MoeHeuristic` contract as the reproduced
+  augmented reference, evaluated at its new 10B token budget. This gives MuonH
+  learning rate `0.0060668502`, Adam learning rate `0.0014000424`, beta1
+  `0.9062`, beta2 `0.998001`, epsilon `1.8898444e-15`, 1% warmup, linear
+  decay to a 0.05 minimum ratio, and no clipping.
+- The `0.00838`/`0.00193` rates in the preceding preregistration describe the
+  completed 4.4145B-token cell. Stretching those rates to 10B would no longer
+  follow the user's requested heuristic. This amendment was recorded before a
+  full NEST-MOE-003 job was launched or any arm result was observed.
+
+### 2026-07-29 18:05 - NEST-MOE-003 Gate 0 passes and five arms launch
+
+- Commit `613e570564` adds a rotating layerwise eligibility mask while
+  preserving the existing all-layer path. Focused nested-routing and SFT tests
+  pass, and the exact-source worktree passes the changed-file lint gate.
+- A 20-update E16 layerwise smoke completed on eight H100s. It logged an E16
+  nested sequence fraction of `0.25`, a nested layer-sequence fraction of
+  `0.0625`, and finite loss. This passes the preregistered mask and compilation
+  gate.
+- Launched the matched E256 control, E128-naive25, E16-naive25,
+  E128-layer25, and E16-layer25 arms on `cw-us-east-02a`. Each arm targets
+  38,147 updates and 9.9997B nominal tokens. The control evaluates fixed E128
+  and E16 counterfactual prefixes without using either restriction during
+  training.
+- Initial live telemetry confirms `0.25` sequence and layer-sequence fractions
+  for both naive arms and `0.25` sequence / `0.0625` layer-sequence fractions
+  for both layerwise arms. All arms are finite. Early compiled steps are
+  approximately `0.46--0.49` seconds before the timing warmup gate.
+- W&B runs:
+  [E256](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e256-10b-r1),
+  [E128 naive](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e128-naive25-10b-r1),
+  [E16 naive](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e16-naive25-10b-r1),
+  [E128 layerwise](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e128-layer25-10b-r1),
+  and
+  [E16 layerwise](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e16-layer25-10b-r1).

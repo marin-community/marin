@@ -89,6 +89,7 @@ One-off analysis pages published to durable public hosting (see
     - [GitHub Issue #652](https://github.com/marin-community/marin/issues/652)
     - [Experiment report](./nested-model-training.md)
     - [Corrected d768 fixed-prefix burn](./nested-model-training-corrected.md)
+    - [Single-prefix 10B sweep](./nested-model-training-single-prefix-10b.md)
     - [Invalidated first d768 burn](./nested-model-training-burnin.md)
 
 ## Training and Performance
