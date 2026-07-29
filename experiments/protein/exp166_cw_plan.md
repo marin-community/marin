@@ -95,8 +95,28 @@ bs128 runs take about twice as long.
 | 64 | 1, 2, 6, 7, 8 | 4 | 16 | 4 |
 | 128 | 3, 4, 5 | 4 | 16 | 8 |
 
-32 nodes with all eight running at once, about 26 h each. That figure extrapolates a
-one-node measurement to sixteen GPUs and has not been checked against a multi-node run.
+32 nodes if all eight run at once, about 26 h each.
+
+Measured on the first three production gangs (2026-07-29), which replaces the one-node
+extrapolation:
+
+| batch | tok/s at 4 nodes | vs one node | ETA |
+|---|---|---|---|
+| 64 | 354,923 | 3.23x | 28.9 h |
+| 64 | 372,683 | 3.39x | 27.5 h |
+| 128 | 407,948 | 3.71x | 25.1 h |
+
+81-93% scaling efficiency, and bs128 is about 10% faster per token than bs64 at the same
+gang — consistent with the 1.6% single-node gap widening slightly under communication.
+
+**Thirty-two nodes is not reliably available.** Submitting all eight at once on 2026-07-29
+admitted three and failed five within 90 seconds: Kueue gang admission is all-or-nothing,
+so a gang that cannot be placed fails immediately rather than queueing
+(`Unschedulable: 0/208 nodes are available`, `SchedulingGated`). The cluster is shared and
+other users held most of it. Submit in waves sized to what is free, and treat a
+gang-admission failure as capacity rather than a fault: the same trial that failed will
+run unchanged once nodes free up. Node count is a pure wall-clock knob, so a wave that
+cannot get four nodes per run can take two.
 
 ## Measured 2026-07-29
 
