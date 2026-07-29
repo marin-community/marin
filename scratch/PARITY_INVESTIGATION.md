@@ -104,7 +104,7 @@ Ordered by how much they would explain, not by how interesting they are.
 
 | id | hypothesis | test | status |
 |---|---|---|---|
-| B1 | Attention kernel differs: TPU splash vs GPU `JAX_FLASH` | `ATTN=JAX_FLASH` on TPU — harness already supports it | open |
+| B1 | Attention kernel differs: TPU splash vs GPU `JAX_FLASH` | `ATTN=JAX_FLASH` on TPU — harness already supports it | running (`parity-tpu-flash`, 400 steps, compares against `parity-v6e-4-b32-s400` default splash) |
 | B2 | Reduction order / accumulation depth | mesh-matched pair | **F2: not at 4 devices, 60 steps** |
 | B3 | Mesh shape itself (4 vs 8 devices) | `parity-h100-x8` | **REFUTED (F7)** — H100x8 is *closer* to TPU than GB200x4 |
 | B4 | Divergence only appears over a longer horizon | 400-step TPU + GB200 pair | **REFUTED (F8)** through 224 steps — excursion closes, does not compound |
@@ -141,6 +141,7 @@ Ordered by how much they would explain, not by how interesting they are.
 | 07-29 | `parity-hp-exp153` — GB200x4, 400 steps, **lr 1e-3 / wd 0.8** (A5) | finished, final train 4.102407 |
 | 07-29 | `parity-hp-exp146` — GB200x4, 400 steps, **lr 3.1623e-3 / wd 0.2** (A5) | finished, final train 4.131758 → **0.7% apart (F12)** |
 | 07-29 | `parity-hp-exp153-long` / `parity-hp-exp146-long` — GB200x4, **4,460 steps** | running — resolves the horizon problem at the step where exp153's gap opens |
+| 07-29 | `parity-tpu-flash` — v6e-4, 400 steps, `ATTN=JAX_FLASH` (B1) | running — same recipe as the 400-step TPU baseline, attention kernel the only change |
 
 ## Harness failures worth remembering
 
