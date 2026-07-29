@@ -98,6 +98,8 @@ def build(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
         routing = os.environ.get("AUGDK_SFT_ROUTING", "nested")
         if routing == "full":
             model = dataclasses.replace(model, nested_batch_fraction=0.0)
+        elif routing == "nested" and model.nested_batch_fraction != 0.25:
+            raise ValueError("nested fixed25 SFT requires SCALE_NESTED_FRACTION=0.25")
         elif routing != "nested":
             raise ValueError("AUGDK_SFT_ROUTING must be 'nested' or 'full'")
     elif model.nested_expert_counts:
