@@ -389,3 +389,10 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
 ```
 
 - Recovery gate: require the replacement to use production band 1 on the child, pass Trainer preflight, and emit a finite first-step loss/drop metric. If it repeats the all-rank first-step stall, do not retry blindly.
+
+### 2026-07-28 19:04 PDT - D67-CTL-01 r6 valid production start
+
+- Submitted parent `/mwittmann/d67-control-m3-draw1-r6-0728-1900` at 19:00 PDT from commit `f174e2ede` using the exact command above. Child: `/mwittmann/d67-control-m3-draw1-r6-0728-1900/grug-train-d67-control-m3-draw1-r6-0728-1900`.
+- The child admitted immediately. Iris SQL records priority band 1 on both job configs, the parent task, and all 16 child tasks.
+- All ranks reached the intended 350-step control setup. The logger confirmed 34,429,992,960 analytic FLOPs/token, 2.5 PFLOP/s theoretical BF16 per GB200, and 1.6e17 FLOP/s aggregate across 64 devices.
+- r6 is now entering first-step compilation. The recovery gate remains open until it emits a finite loss/drop metric.
