@@ -50,6 +50,7 @@ from levanter.utils.activation import ActivationFunctionEnum
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _ROUTING_RENORM_SUM = 2.5
+_INELIGIBLE_ROUTER_LOGIT = -1e9
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 
@@ -119,6 +120,10 @@ class GrugModelConfig:
     num_shared_experts: int = 1
     num_experts: int = 256
     num_experts_per_token: int = 4
+    nested_expert_counts: tuple[int, ...] = ()
+    """Fixed prefix expert-bank sizes used on restricted training sequences."""
+    nested_batch_fraction: float = 0.0
+    """Fraction of training sequences assigned to a nested expert bank."""
     num_layers: int = 6
     num_heads: int = 4
     num_kv_heads: int = 1
@@ -155,6 +160,11 @@ class GrugModelConfig:
     # runs entirely outside the trunk scan. 0 (default) = off. Only depth 1 is supported.
     mtp_depth: int = 0
     mtp_loss_weight: float = 0.3
+    # Optional MTP loss-weight schedule: hold ``mtp_loss_weight`` until ``mtp_decay_start_frac`` of
+    # training, then step down to ``mtp_final_loss_weight`` for the remainder (DeepSeek-V3: 0.3 -> 0.1
+    # for the tail). None = constant ``mtp_loss_weight`` throughout.
+    mtp_final_loss_weight: float | None = None
+    mtp_decay_start_frac: float = 0.8
     # Expert count for the MTP block; 0 (default) = same as the trunk. Fewer experts shrinks the MTP
     # block's params + expert-gather transient, which otherwise OOMs the HBM-bound trunk.
     mtp_num_experts: int = 0
@@ -231,9 +241,29 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be positive")
         if self.num_experts_per_token > self.num_experts:
             raise ValueError("num_experts_per_token must be <= num_experts")
+        if not 0.0 <= self.nested_batch_fraction <= 1.0:
+            raise ValueError("nested_batch_fraction must be between zero and one")
+        if self.nested_batch_fraction and not self.nested_expert_counts:
+            raise ValueError("nested_batch_fraction requires nested_expert_counts")
+        if tuple(sorted(self.nested_expert_counts, reverse=True)) != self.nested_expert_counts:
+            raise ValueError("nested_expert_counts must be in descending order")
+        for nested_count in self.nested_expert_counts:
+            if nested_count <= self.num_experts_per_token or nested_count >= self.num_experts:
+                raise ValueError("nested expert counts must exceed top-k and be smaller than num_experts")
+            if self.num_experts % nested_count:
+                raise ValueError("num_experts must be divisible by every nested expert count")
+        if self.nested_batch_fraction not in (0.0, 1.0):
+            period = round(1.0 / self.nested_batch_fraction)
+            if not math.isclose(self.nested_batch_fraction, 1.0 / period):
+                raise ValueError("nested_batch_fraction must be zero, one, or the reciprocal of an integer")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
         resolve_moe_implementation(self.moe_implementation)
+
+    @property
+    def router_balance_group_counts(self) -> tuple[int, ...]:
+        """Expert-bank sizes with independent QB state, full model first."""
+        return (self.num_experts, *self.nested_expert_counts)
 
     @property
     def Embed(self) -> Axis:
@@ -641,6 +671,64 @@ def _compute_qb_beta(router_logits: jax.Array, qb_alpha: jax.Array, cfg: "GrugMo
     )(s_minus_alpha)
 
 
+def _compute_nested_qb_beta(
+    eligible_router_logits: jax.Array,
+    qb_alpha: jax.Array,
+    eligible_counts: jax.Array,
+    cfg: "GrugModelConfig",
+) -> jax.Array:
+    """Compute independent QB updates for each fixed prefix expert bank."""
+    if os.environ.get("SCALE_MOE_SKIP_QB") == "1":
+        return jnp.zeros((len(cfg.router_balance_group_counts), cfg.num_experts), dtype=jnp.float32)
+
+    mesh = get_abstract_mesh()
+    num_devices = math.prod(mesh.shape[axis_name] for axis_name in _BATCH_AXES)
+    local_tokens = eligible_router_logits.shape[0] // num_devices
+    group_betas = []
+    for group_count in cfg.router_balance_group_counts:
+        group_scores = reshard(
+            jnp.where(
+                (eligible_counts == group_count)[:, None],
+                eligible_router_logits[:, :group_count] - qb_alpha,
+                _INELIGIBLE_ROUTER_LOGIT,
+            ),
+            P(_BATCH_AXES, None),
+        )
+        max_qb_count = max(1, local_tokens * cfg.num_experts_per_token // group_count)
+
+        def _local_group_qb_beta(
+            scores,
+            *,
+            group_count=group_count,
+            max_qb_count=max_qb_count,
+        ):
+            local_group_tokens = jnp.sum(jnp.any(scores > _INELIGIBLE_ROUTER_LOGIT / 2, axis=-1))
+            qb_count = jnp.clip(
+                local_group_tokens * cfg.num_experts_per_token // group_count,
+                1,
+                max_qb_count,
+            )
+            topk_vals, _ = jax.lax.top_k(scores.T, max_qb_count)
+            beta = jax.lax.dynamic_index_in_dim(topk_vals, qb_count - 1, axis=1, keepdims=False)
+            present = local_group_tokens > 0
+            beta = jnp.where(present, beta, 0.0)
+            mean_beta = jax.lax.pmean(beta, axis_name=_BATCH_AXES)
+            mean_presence = jax.lax.pmean(present.astype(jnp.float32), axis_name=_BATCH_AXES)
+            return mean_beta / jnp.maximum(mean_presence, 1.0 / num_devices)
+
+        compact_beta = shard_map(
+            _local_group_qb_beta,
+            mesh=mesh,
+            in_specs=(P(_BATCH_AXES, None),),
+            out_specs=P(),
+        )(group_scores)
+        group_betas.append(
+            jnp.zeros((cfg.num_experts,), dtype=eligible_router_logits.dtype).at[:group_count].set(compact_beta)
+        )
+
+    return jnp.stack(group_betas)
+
+
 class MoEMLP(eqx.Module):
     """Top-k routed MoE with sigmoid combine weights (optional QB balancing behind cfg.qb_routing)."""
 
@@ -659,9 +747,10 @@ class MoEMLP(eqx.Module):
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
         d, e = cfg.hidden_dim, cfg.num_experts
+        router_bias_shape = (len(cfg.router_balance_group_counts), e) if cfg.nested_expert_counts else (e,)
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
-            router_bias=jnp.zeros((e,)),
+            router_bias=jnp.zeros(router_bias_shape),
             expert_mlp=MoEExpertMlp.init(
                 num_experts=cfg.num_experts,
                 hidden_dim=cfg.hidden_dim,
@@ -681,25 +770,50 @@ class MoEMLP(eqx.Module):
         x: Float[Array, "B S D"],
         w13_pre0: jax.Array | None = None,
         w2_pre0: jax.Array | None = None,
+        expert_eligibility: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], jax.Array]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         # Keep the router path in fp32 before top-k and the sigmoid combine.
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
+        if expert_eligibility is None:
+            eligible_router_logits = router_logits
+            eligible_counts = None
+            token_router_bias = self.router_bias if self.router_bias.ndim == 1 else self.router_bias[0]
+        else:
+            if expert_eligibility.shape != (b, self.cfg.num_experts):
+                raise ValueError(
+                    f"expert_eligibility must have shape {(b, self.cfg.num_experts)}, " f"got {expert_eligibility.shape}"
+                )
+            token_eligibility = jnp.repeat(expert_eligibility.astype(jnp.bool_), s, axis=0)
+            eligible_router_logits = jnp.where(token_eligibility, router_logits, _INELIGIBLE_ROUTER_LOGIT)
+            eligible_counts = jnp.sum(token_eligibility, axis=-1)
+            group_ids = jnp.zeros_like(eligible_counts)
+            for group_id, group_count in enumerate(self.cfg.router_balance_group_counts[1:], start=1):
+                group_ids = jnp.where(eligible_counts == group_count, group_id, group_ids)
+            token_router_bias = self.router_bias.at[group_ids].get(out_sharding=P(_BATCH_AXES, None))
+
         if self.cfg.qb_routing:
             # QB aux-loss-free balancing: bias the top-k *selection* with the per-expert router_bias,
             # but form combine weights from the UNBIASED logits. Select top-(K+1); the (K+1)-th biased
             # logit is the QB threshold alpha, and qb_beta (returned up the stack) feeds NEXT step's
             # router_bias (train.py:_apply_qb_betas).
-            biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
+            biased_logits = eligible_router_logits + jax.lax.stop_gradient(token_router_bias)
             topk_biased, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
             qb_alpha = topk_biased[:, -1:]
             selected_experts = selected_experts[:, :-1]
             topk_logits = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-            qb_beta = _compute_qb_beta(router_logits, qb_alpha, self.cfg)
+            if eligible_counts is None:
+                full_qb_beta = _compute_qb_beta(router_logits, qb_alpha, self.cfg)
+                if self.router_bias.ndim == 1:
+                    qb_beta = full_qb_beta
+                else:
+                    qb_beta = jnp.zeros_like(self.router_bias).at[0].set(full_qb_beta)
+            else:
+                qb_beta = _compute_nested_qb_beta(eligible_router_logits, qb_alpha, eligible_counts, self.cfg)
         else:
-            topk_logits, selected_experts = jax.lax.top_k(router_logits, self.cfg.num_experts_per_token)
-            qb_beta = jnp.zeros((self.cfg.num_experts,), dtype=jnp.float32)
+            topk_logits, selected_experts = jax.lax.top_k(eligible_router_logits, self.cfg.num_experts_per_token)
+            qb_beta = jnp.zeros_like(self.router_bias, dtype=jnp.float32)
         # Sigmoid combine weights on the selected logits, renormalized to sum to ``_ROUTING_RENORM_SUM``.
         combine_weights_f = jax.nn.sigmoid(topk_logits)
         denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
@@ -763,7 +877,11 @@ class Block(eqx.Module):
 
     @named_call
     def __call__(
-        self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array, is_global: jax.Array | None = None
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        is_global: jax.Array | None = None,
+        expert_eligibility: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], jax.Array]:
         # Name the per-layer input residual so offload_residual's remat policy can offload it to pinned
         # host. Inert under every other remat_mode (the name is simply never referenced).
@@ -799,11 +917,16 @@ class Block(eqx.Module):
         if os.environ.get("SCALE_ATTN_ONLY") == "1":
             # Isolation probe: attention block only, no MoE/MLP. Loss is meaningless; used to profile
             # the attention weight-gather behavior with the MoE (memory hog + competing gathers) removed.
-            return x, jnp.zeros((self.mlp.cfg.num_experts,), jnp.float32)
+            return x, jnp.zeros_like(self.mlp.router_bias, dtype=jnp.float32)
         mlp_in = self.rms_mlp(x)
         if self.mlp_gated_norm is not None:
             mlp_in = self.mlp_gated_norm(mlp_in)
-        mlp_out, qb_beta = self.mlp(mlp_in, w13_pre0, w2_pre0)
+        mlp_out, qb_beta = self.mlp(
+            mlp_in,
+            w13_pre0,
+            w2_pre0,
+            expert_eligibility=expert_eligibility,
+        )
         if self.shared is not None:
             for shared_expert in self.shared:
                 mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
@@ -1131,6 +1254,8 @@ class Transformer(eqx.Module):
             mtp_cfg = dataclasses.replace(
                 cfg,
                 qb_routing=False,
+                nested_expert_counts=(),
+                nested_batch_fraction=0.0,
                 global_every=0,
                 local_kv_heads=None,
                 global_kv_heads=None,
@@ -1197,6 +1322,7 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
+        expert_eligibility: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], Float[Array, "L E"], Float[Array, "B S D"] | None]:
         if mask is None:
             mask = AttentionMask.causal()
@@ -1266,7 +1392,10 @@ class Transformer(eqx.Module):
                 layer_mask = causal_mask.with_fa4_bounds(lower_bounds, sliding_valid)
                 # Pass the per-layer global flag; the block derives NoPE / heterogeneous-KV behaviour.
                 new_hidden, qb_beta = eqx.filter_checkpoint(layer, policy=remat_policy)(
-                    carry_hidden, layer_mask, layer_is_global
+                    carry_hidden,
+                    layer_mask,
+                    layer_is_global,
+                    expert_eligibility,
                 )
                 return new_hidden, qb_beta
 
@@ -1280,7 +1409,12 @@ class Transformer(eqx.Module):
                 carry_hidden: Float[Array, "B S D"], layer: Block
             ) -> tuple[Float[Array, "B S D"], jax.Array]:
                 # Carry the hidden state; OUTPUT the per-layer qb_beta so scan stacks it to [L, E].
-                new_hidden, qb_beta = eqx.filter_checkpoint(layer, policy=remat_policy)(carry_hidden, layer_mask)
+                new_hidden, qb_beta = eqx.filter_checkpoint(layer, policy=remat_policy)(
+                    carry_hidden,
+                    layer_mask,
+                    None,
+                    expert_eligibility,
+                )
                 return new_hidden, qb_beta
 
             hidden, qb_beta_per_layer = jax.lax.scan(
@@ -1336,8 +1470,9 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
+        expert_eligibility: jax.Array | None = None,
     ) -> Float[Array, "B S V"]:
-        hidden, _, _ = self(token_ids, mask=mask)
+        hidden, _, _ = self(token_ids, mask=mask, expert_eligibility=expert_eligibility)
         return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=_batch_spec())
 
     def next_token_loss(
@@ -1349,12 +1484,22 @@ class Transformer(eqx.Module):
         reduction: str = "mean",
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
-    ) -> tuple[jax.Array, Float[Array, "L E"]]:
-        hidden, qb_beta_per_layer, mtp_hidden = self(token_ids, mask=mask)
+        mtp_loss_weight: float | jax.Array | None = None,
+        include_mtp: bool = True,
+        expert_eligibility: jax.Array | None = None,
+    ) -> tuple[jax.Array, Float[Array, "L E"], dict[str, jax.Array]]:
+        hidden, qb_beta_per_layer, mtp_hidden = self(
+            token_ids,
+            mask=mask,
+            expert_eligibility=expert_eligibility,
+        )
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
+        # mtp_loss_weight overrides the config weight (for a step-scheduled tail); include_mtp=False drops
+        # the MTP term entirely (eval reports pure next-token loss, not the main+MTP training objective).
+        mtp_w = self.config.mtp_loss_weight if mtp_loss_weight is None else mtp_loss_weight
 
-        if mtp_hidden is not None and reduction == "mean":
+        if mtp_hidden is not None and include_mtp and reduction == "mean":
             # MTP depth-1 predicts t_{i+2} (labels shifted one further; last two positions have no valid
             # target so their weight is zeroed). Run the main and MTP cross-entropies as ONE fused call
             # over 2B tokens (concatenated along batch) with reduction="none", then split and normalise
@@ -1376,7 +1521,8 @@ class Transformer(eqx.Module):
             mtp_den = jnp.sum(mtp_weight)
             loss_main = jnp.where(main_den != 0, jnp.sum(per_token[:b]) / main_den, 0.0)
             loss_mtp = jnp.where(mtp_den != 0, jnp.sum(per_token[b:]) / mtp_den, 0.0)
-            return loss_main + self.config.mtp_loss_weight * loss_mtp, qb_beta_per_layer
+            aux = {"loss_main": loss_main, "loss_mtp": loss_mtp, "mtp_weight": jnp.asarray(mtp_w, loss_main.dtype)}
+            return loss_main + mtp_w * loss_mtp, qb_beta_per_layer, aux
 
         loss = fused_linear_softmax_cross_entropy_loss(
             hidden,
@@ -1387,7 +1533,7 @@ class Transformer(eqx.Module):
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
         )
-        if mtp_hidden is not None:
+        if mtp_hidden is not None and include_mtp:
             # Non-mean reduction (e.g. per-position logging): keep the two-call form.
             mtp_labels = jnp.concatenate([labels[:, 1:], labels[:, :1] * 0], axis=1).astype(jnp.int32)
             mtp_weight = loss_weight.at[:, -2:].set(0.0)
@@ -1400,8 +1546,8 @@ class Transformer(eqx.Module):
                 logsumexp_weight=logsumexp_weight,
                 dtype=loss_dtype,
             )
-            loss = loss + self.config.mtp_loss_weight * mtp_loss
-        return loss, qb_beta_per_layer
+            loss = loss + mtp_w * mtp_loss
+        return loss, qb_beta_per_layer, {}
 
 
 def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractMesh, P]:

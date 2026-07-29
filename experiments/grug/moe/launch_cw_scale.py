@@ -25,6 +25,11 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_STEPS         training steps (default 50)
     SCALE_HIDDEN_DIM / SCALE_NUM_LAYERS / SCALE_NUM_EXPERTS / SCALE_TOP_K
                         model-shape overrides (e.g. a smaller FSDP smoke test)
+    SCALE_NESTED_COUNTS comma-separated fixed prefix expert banks (for example
+                        128,16); empty disables nested routing
+    SCALE_NESTED_FRACTION
+                        fraction of sequences alternating across the fixed
+                        prefix banks (for example 0.25)
     SCALE_REMAT         recompute_all (default) | save_moe -- save_moe keeps the
                         tagged MoE dispatch tensors for backward so the EP
                         collectives are not re-run during recompute
@@ -57,7 +62,7 @@ from typing import cast
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text.datasets import BlockShuffleConfig
+from levanter.data.text.datasets import BlockShuffleConfig, LmDataConfig
 from levanter.grug._moe.common import resolve_moe_implementation
 from levanter.grug.attention import GrugAttentionImplementation
 from levanter.optim.config import AdamConfig, OptimizerConfig
@@ -69,6 +74,8 @@ from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 
+from experiments.datasets.paloma import paloma_datasets
+from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.moe.heuristic import MoeHeuristic
 from experiments.grug.moe.launch import (
     GrugMoeLaunchConfig,
@@ -77,11 +84,12 @@ from experiments.grug.moe.launch import (
     run_grug_moe_trial,
     slimpajama_6b_dataset,
 )
-from experiments.grug.moe.launch_datakit_moe_mix import datakit_data_config
+from experiments.grug.moe.launch_datakit_moe_mix import _val_component, datakit_data_config
 from experiments.grug.moe.model import GrugModelConfig, RematMode
 from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
-from experiments.grug.moe.train import GrugTrainerConfig
+from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 from experiments.llama import llama3_tokenizer_vocab_size
+from experiments.marin_tokenizer import marin_tokenizer
 
 # head_dim is fixed at 128; hidden_dim must be a multiple of it.
 HEAD_DIM = 128
@@ -136,6 +144,8 @@ def build_scale_model() -> GrugModelConfig:
     moe_implementation = resolve_moe_implementation(moe_impl_env) if moe_impl_env else None
     attn_impl_env = os.environ.get("SCALE_ATTN_IMPL")
     attention_implementation = cast("GrugAttentionImplementation | None", attn_impl_env or None)
+    nested_counts_value = os.environ.get("SCALE_NESTED_COUNTS", "")
+    nested_expert_counts = tuple(int(value) for value in nested_counts_value.split(",") if value)
     base = MoeHeuristic().build_model_config(hidden_dim, seq_len=seq_len)
     return dataclasses.replace(
         base,
@@ -148,6 +158,8 @@ def build_scale_model() -> GrugModelConfig:
         num_layers=env_int("SCALE_NUM_LAYERS", 48),
         num_experts=env_int("SCALE_NUM_EXPERTS", 64),
         num_experts_per_token=env_int("SCALE_TOP_K", 4),
+        nested_expert_counts=nested_expert_counts,
+        nested_batch_fraction=env_float("SCALE_NESTED_FRACTION", 0.0),
         # Routed-expert MLP width; default keeps the heuristic value (hidden/2 at hidden=5120).
         intermediate_dim=env_int("SCALE_INTERMEDIATE", base.intermediate_dim),
         shared_expert_intermediate_dim=env_int("SCALE_SHARED_INTERMEDIATE", hidden_dim),
@@ -163,6 +175,8 @@ def build_scale_model() -> GrugModelConfig:
         mtp_loss_weight=env_float("SCALE_MTP_WEIGHT", 0.3),
         mtp_num_experts=env_int("SCALE_MTP_NUM_EXPERTS", 0),
         mtp_intermediate_dim=env_int("SCALE_MTP_INTERMEDIATE", 0),
+        mtp_final_loss_weight=env_float("SCALE_MTP_FINAL_WEIGHT", 0) or None,
+        mtp_decay_start_frac=env_float("SCALE_MTP_DECAY_START", 0.8),
         over_encoding_vocab_size=env_int("SCALE_OE_VOCAB", 0),
         over_encoding_splits=env_int("SCALE_OE_SPLITS", 4),
         over_encoding_num_grams=env_int("SCALE_OE_GRAMS", 3),
@@ -270,26 +284,33 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
     )
     schedule = dict(lr_schedule="linear", min_lr_ratio=0.05, warmup=0.01)
     lr_override = os.environ.get("SCALE_LR")
+    # SCALE_LR_MULT scales the heuristic peak (both muonh and adam groups, preserving the 13/3 ratio)
+    # for LR sweeps; ignored when SCALE_LR sets an absolute peak.
+    lr_mult = env_float("SCALE_LR_MULT", 1.0)
     opt_name = os.environ.get("SCALE_OPTIMIZER", "muonh").lower()
     optimizer: OptimizerConfig
     if opt_name in ("muonh", "grug_moe_muonh"):
         optimizer = (
             dataclasses.replace(heuristic, learning_rate=float(lr_override), adam_lr=float(lr_override))
             if lr_override
-            else heuristic
+            else dataclasses.replace(
+                heuristic,
+                learning_rate=heuristic.learning_rate * lr_mult,
+                adam_lr=heuristic.adam_lr * lr_mult,
+            )
         )
         # Over-Encoding tables train at this fraction of adam_lr (reference: 0.5); no-op when OE is off.
         optimizer = dataclasses.replace(optimizer, over_encoding_lr_multiplier=env_float("SCALE_OE_LR_MULT", 0.5))
     elif opt_name in ("adamh", "grug_moe_adamh"):
-        lr = float(lr_override) if lr_override else heuristic.adam_lr
+        lr = float(lr_override) if lr_override else heuristic.adam_lr * lr_mult
         optimizer = GrugMoeAdamHConfig(learning_rate=lr, adam_lr=lr, **schedule)
     else:
-        lr = float(lr_override) if lr_override else heuristic.adam_lr
+        lr = float(lr_override) if lr_override else heuristic.adam_lr * lr_mult
         optimizer = dataclasses.replace(SCALE_OPTIMIZER, learning_rate=lr, **schedule)
     print(
         f"[scale] optimizer={opt_name} muonh_lr={heuristic.learning_rate:.5f} adam_lr={heuristic.adam_lr:.5f} "
         f"(heuristic: {total_tokens / 1e9:.1f}B tokens, dim={model.hidden_dim}); "
-        f"peak override SCALE_LR={lr_override or 'none'}",
+        f"peak override SCALE_LR={lr_override or 'none'} lr_mult={lr_mult}",
         flush=True,
     )
 
@@ -297,6 +318,35 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
     # SCALE_DATA=datakit uses the two-phase datakit store mixture; default is SlimPajama.
     use_datakit = os.environ.get("SCALE_DATA", "slimpajama").lower() == "datakit"
     slim = None if use_datakit else slimpajama_6b_dataset()
+    # SCALE_EVAL=1 turns on periodic paloma+uncheatable perplexity eval (every SCALE_EVAL_STEPS steps).
+    # Val sets use each data path's tokenizer (datakit -> marin, slimpajama -> llama3) so the caches
+    # match the model vocab; they enter at weight 0 and resolve in-region via marin_prefix.
+    eval_on = os.environ.get("SCALE_EVAL") == "1"
+    # The only paloma/uncheatable caches materialized in-region are marin-tokenized. marin-tokenizer is
+    # llama3 + reserved specials (token-id-identical), so both data paths eval against the marin caches;
+    # the slimpajama path forces a single tokenizer in LmDataConfig to satisfy the loader (mixture()'s
+    # cross-component string check would otherwise reject llama3-slim + marin-val).
+    val_handles = (
+        [
+            *paloma_datasets(tokenizer=marin_tokenizer).values(),
+            *uncheatable_datasets(tokenizer=marin_tokenizer).values(),
+        ]
+        if eval_on
+        else []
+    )
+    eval_cfg = (
+        GrugEvalConfig(
+            steps_per_eval=env_int("SCALE_EVAL_STEPS", 1000),
+            eval_batch_size=env_int("SCALE_EVAL_BATCH", 128),
+            max_eval_batches=env_int("SCALE_EVAL_MAX_BATCHES", 8),
+            eval_current=True,
+            eval_ema=False,  # runs use ema_beta=None
+            compute_bpb=True,
+            nested_expert_counts=model.nested_expert_counts,
+        )
+        if eval_on
+        else None
+    )
 
     def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
         if use_wandb:
@@ -314,12 +364,32 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
             # Two-phase datakit store mixture (phase 1 begins at 80% of steps). Bucket cache dirs
             # are relative and rooted at marin_prefix() -> the local CoreWeave bucket, so there is
             # no cross-region I/O and no hardcoded bucket names.
+            val_components = {
+                v.name: _val_component(ctx.artifact_path(v)) if ctx.is_fingerprint else ctx.resolved(v).as_component()
+                for v in val_handles
+            }
             data = datakit_data_config(
                 total_steps=steps,
                 batch_size=batch_size,
                 max_seq_len=model.max_seq_len,
                 enable_simulated_epoching=False,
-                val_components={},
+                val_components=val_components,
+            )
+        elif eval_on:
+            # slimpajama (llama3) + marin-tokenized val caches: identical token ids, so build the
+            # LmDataConfig with one forced tokenizer rather than mixture() (which rejects the mismatch).
+            handles = [slim, *val_handles]
+            components = {
+                h.name: _val_component(ctx.artifact_path(h)) if ctx.is_fingerprint else ctx.resolved(h).as_component()
+                for h in handles
+            }
+            data = LmDataConfig(
+                components=components,
+                train_weights={slim.name: 1.0, **{v.name: 0.0 for v in val_handles}},
+                tokenizer=marin_tokenizer,
+                cache_dir=None,
+                shuffle=_SLIMPAJAMA_SHUFFLE,
+                permutation_type="feistel",
             )
         else:
             data = mixture(ctx, {slim: 1.0}, shuffle=_SLIMPAJAMA_SHUFFLE)
@@ -337,7 +407,7 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
             optimizer=optimizer,
             grug_trainer=grug_trainer,
             processes_per_task=processes_per_task,
-            eval=None,
+            eval=eval_cfg,
             profiler=profiler,
             checkpointer=checkpointer,
         )
@@ -348,7 +418,7 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
         artifact_type=LevanterCheckpoint,
         run=run_grug_moe_trial,
         build_config=build_config,
-        deps=() if use_datakit else (slim,),
+        deps=(*val_handles,) if use_datakit else (slim, *val_handles),
         runtime_args={"train_resources": resources},
     )
 

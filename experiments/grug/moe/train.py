@@ -7,6 +7,8 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import Protocol
 
 import equinox as eqx
 import fsspec
@@ -25,6 +27,7 @@ from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
+from levanter.checkpoint import load_checkpoint
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
@@ -52,6 +55,22 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 logger = logging.getLogger(__name__)
 
 
+class CheckpointLoader(Protocol):
+    def __call__(
+        self,
+        tree: dict[str, object],
+        checkpoint_path: str,
+        *,
+        mesh: Mesh | None,
+        allow_partial: bool,
+    ) -> dict[str, object]: ...
+
+
+class InitializationMode(StrEnum):
+    FULL_STATE = "full_state"
+    WEIGHTS_ONLY = "weights_only"
+
+
 @dataclass(frozen=True)
 class GrugTrainerConfig:
     """Runtime knobs for grug training."""
@@ -72,6 +91,7 @@ class GrugTrainerConfig:
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
     sharding_dump_path: str | None = None
+    initialization_mode: InitializationMode = InitializationMode.FULL_STATE
 
 
 @dataclass(frozen=True)
@@ -85,6 +105,8 @@ class GrugEvalConfig:
     eval_current: bool = True
     eval_ema: bool = True
     compute_bpb: bool = True
+    nested_expert_counts: tuple[int, ...] = ()
+    """Fixed prefix expert banks evaluated in addition to the full model."""
 
 
 @dataclass(frozen=True)
@@ -154,6 +176,8 @@ def build_tagged_evaluator(
     max_seq_len: int,
     mesh: Mesh,
     eval_cfg: GrugEvalConfig,
+    mp: jmp.Policy,
+    nested_expert_count: int | None = None,
 ) -> TaggedEvaluator[LmExample | GrugLmExample, Transformer] | None:
     pos = Axis("position", max_seq_len)
     tagged_eval_sets = data_config.tagged_eval_sets(pos)
@@ -173,14 +197,26 @@ def build_tagged_evaluator(
     eval_array_sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
 
     def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
+        # Eval receives the fp32 master params; cast to compute dtype so the forward matches
+        # training (and some GPU attention kernels accept only bf16/fp16, not fp32).
+        model = mp.cast_to_compute(model)
         if isinstance(batch, LmExample):
             batch = grug_lm_example_from_named(batch)
+        expert_eligibility = None
+        if nested_expert_count is not None:
+            expert_ids = jnp.arange(model.config.num_experts)
+            expert_eligibility = jnp.broadcast_to(
+                expert_ids[None, :] < nested_expert_count,
+                (batch.tokens.shape[0], model.config.num_experts),
+            )
         per_pos_loss = model.next_token_loss(
             batch.tokens,
             batch.loss_weight,
             mask=batch.attn_mask,
             reduction="none",
             logsumexp_weight=None,
+            include_mtp=False,  # eval reports pure next-token loss, not the main+MTP training objective
+            expert_eligibility=expert_eligibility,
         )[0]
         per_pos_loss = jax.sharding.reshard(per_pos_loss, eval_array_sharding)
         per_pos_weight = jax.sharding.reshard(batch.loss_weight, eval_array_sharding)
@@ -209,6 +245,7 @@ def _compute_flops(
         num_layers=model_config.num_layers,
         num_kv_heads=model_config.num_kv_heads,
         num_heads=model_config.num_heads,
+        head_dim=model_config.inferred_head_dim,
         seq_len=model_config.max_seq_len,
         vocab_size=model_config.vocab_size,
         glu=True,
@@ -321,9 +358,64 @@ def initial_state(
         params=host_params,
         opt_state=opt_state,
         ema_params=params if ema_beta is not None else None,
-        # Every grug layer is MoE, so this is [num_layers, num_experts]; zero == no bias at step 0.
-        pending_qb_betas=jnp.zeros((model_config.num_layers, model_config.num_experts)),
+        pending_qb_betas=jnp.zeros_like(params.stacked_blocks.stacked.mlp.router_bias),
     )
+
+
+def init_weights_only_from_checkpoint(
+    state: GrugTrainState,
+    checkpoint_path: str,
+    *,
+    mesh: Mesh | None,
+    load_ema: bool,
+    _load_fn: CheckpointLoader = load_checkpoint,
+) -> GrugTrainState:
+    """Load model and router-bias state while retaining a fresh optimizer and step."""
+    exemplar: dict[str, object] = {
+        "params": state.params,
+        "pending_qb_betas": state.pending_qb_betas,
+    }
+    loaded = _load_fn(exemplar, checkpoint_path, mesh=mesh, allow_partial=True)
+    updates: dict[str, object] = {
+        "params": loaded["params"],
+        "pending_qb_betas": loaded["pending_qb_betas"],
+    }
+    if load_ema and state.ema_params is not None:
+        updates["ema_params"] = loaded["params"]
+    return dataclasses.replace(state, **updates)
+
+
+def _scheduled_mtp_weight(config: GrugModelConfig, step: jax.Array, num_train_steps: int) -> jax.Array | None:
+    """MTP loss weight for the current step: constant ``mtp_loss_weight`` until ``mtp_decay_start_frac``
+    of training, then ``mtp_final_loss_weight`` for the tail. None when no schedule is configured."""
+    if config.mtp_final_loss_weight is None:
+        return None
+    frac = step.astype(jnp.float32) / num_train_steps
+    return jnp.where(frac >= config.mtp_decay_start_frac, config.mtp_final_loss_weight, config.mtp_loss_weight)
+
+
+def _training_expert_eligibility(
+    model_config: GrugModelConfig,
+    *,
+    batch_size: int,
+    step: jax.Array,
+) -> jax.Array | None:
+    """Assign a deterministic fraction of sequences to alternating fixed prefix banks."""
+    fraction = model_config.nested_batch_fraction
+    if fraction == 0.0:
+        return None
+
+    period = 1 if fraction == 1.0 else round(1.0 / fraction)
+    row_ids = jnp.arange(batch_size, dtype=jnp.int32)
+    schedule_ids = row_ids + step
+    restricted_rows = schedule_ids % period == 0
+    event_ids = schedule_ids // period
+    level_ids = event_ids % len(model_config.nested_expert_counts)
+    nested_counts = jnp.asarray(model_config.nested_expert_counts, dtype=jnp.int32)
+    eligible_counts = nested_counts[level_ids]
+    expert_ids = jnp.arange(model_config.num_experts, dtype=jnp.int32)
+    nested = expert_ids[None, :] < eligible_counts[:, None]
+    return jnp.where(restricted_rows[:, None], nested, True)
 
 
 def _make_train_step(
@@ -332,6 +424,7 @@ def _make_train_step(
     *,
     z_loss_weight: float,
     ema_beta: float | None,
+    num_train_steps: int,
     watch_config: WatchConfig | None = None,
 ):
     one = jnp.array(1, dtype=jnp.int32)
@@ -349,16 +442,25 @@ def _make_train_step(
         # Apply the pending QB betas (from the previous step) to the router biases inside JIT, before
         # the forward. All-zero when QB is off, so qb_params is numerically identical to state.params.
         qb_ema_params = _apply_qb_betas(state.ema_params, state.pending_qb_betas) if ema_beta is not None else None
+        mtp_w = _scheduled_mtp_weight(state.params.config, state.step, num_train_steps)
+        expert_eligibility = _training_expert_eligibility(
+            state.params.config,
+            batch_size=batch.tokens.shape[0],
+            step=state.step,
+        )
 
         def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
-            return compute_params.next_token_loss(
+            loss, qb_beta, aux = compute_params.next_token_loss(
                 batch.tokens,
                 batch.loss_weight,
                 mask=batch.attn_mask,
                 reduction="mean",
                 logsumexp_weight=z_loss,
+                mtp_loss_weight=mtp_w,
+                expert_eligibility=expert_eligibility,
             )
+            return loss, (qb_beta, aux)
 
         if _OFFLOAD_MASTER_PARAMS:
             # Host-resident master: stream to device, cast to bf16, and differentiate the bf16 params
@@ -366,18 +468,33 @@ def _make_train_step(
             # its HBM. Re-stream the fp32 for the update below. dL/dbf16 == dL/dfp32 (cast grad is id).
             qb_params_cast = _apply_qb_betas(_opt_state_to_memory_kind(state.params, "device"), state.pending_qb_betas)
             bf16_params = mp.cast_to_compute(qb_params_cast)
-            (loss, qb_beta_per_layer), grads = jax.value_and_grad(
-                lambda bp: bp.next_token_loss(
-                    batch.tokens, batch.loss_weight, mask=batch.attn_mask, reduction="mean", logsumexp_weight=z_loss
-                ),
-                has_aux=True,
-            )(bf16_params)
+
+            def offload_loss_fn(bp):
+                loss, qb_beta, aux = bp.next_token_loss(
+                    batch.tokens,
+                    batch.loss_weight,
+                    mask=batch.attn_mask,
+                    reduction="mean",
+                    logsumexp_weight=z_loss,
+                    mtp_loss_weight=mtp_w,
+                    expert_eligibility=expert_eligibility,
+                )
+                return loss, (qb_beta, aux)
+
+            (loss, (qb_beta_per_layer, aux)), grads = jax.value_and_grad(offload_loss_fn, has_aux=True)(bf16_params)
             grads = mp.cast_to_param(grads)  # bf16 grads -> fp32 to match the master/optimizer
             qb_params = _apply_qb_betas(_opt_state_to_memory_kind(state.params, "device"), state.pending_qb_betas)
         else:
             qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
-            (loss, qb_beta_per_layer), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
-        metrics = {"train/loss": loss}
+            (loss, (qb_beta_per_layer, aux)), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
+        # aux carries the main/MTP loss split (and scheduled MTP weight) when MTP is on; empty otherwise.
+        metrics = {"train/loss": loss, **{f"train/{key}": value for key, value in aux.items()}}
+        if expert_eligibility is not None:
+            eligible_counts = jnp.sum(expert_eligibility, axis=-1)
+            for nested_count in state.params.config.nested_expert_counts:
+                metrics[f"train/nested/e{nested_count}_sequence_fraction"] = jnp.mean(
+                    (eligible_counts == nested_count).astype(jnp.float32)
+                )
         # Optimizer state is host-resident between steps when offloading; stream it to device
         # only here (after backward) for the update, then send the new state back to host below.
         opt_state_in = _opt_state_to_memory_kind(state.opt_state, "device") if _OFFLOAD_OPT_STATE else state.opt_state
@@ -446,6 +563,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         trainer.mp,
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
+        num_train_steps=trainer.num_train_steps,
         watch_config=watch_config if watch_config.is_enabled else None,
     )
 
@@ -502,6 +620,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
         )
+        if config.trainer.initialization_mode is InitializationMode.WEIGHTS_ONLY:
+            if int(state.step) == 0 and trainer.initialize_from is not None:
+                state = init_weights_only_from_checkpoint(
+                    state,
+                    trainer.initialize_from,
+                    mesh=mesh,
+                    load_ema=config.trainer.ema_beta is not None,
+                )
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,
@@ -516,13 +642,26 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         eval_cfg = config.eval
         evaluator = None
+        nested_evaluators = []
         if eval_cfg is not None:
             evaluator = build_tagged_evaluator(
                 data_config=config.data,
                 max_seq_len=config.model.max_seq_len,
                 mesh=mesh,
                 eval_cfg=eval_cfg,
+                mp=trainer.mp,
             )
+            for nested_count in eval_cfg.nested_expert_counts:
+                nested_evaluator = build_tagged_evaluator(
+                    data_config=config.data,
+                    max_seq_len=config.model.max_seq_len,
+                    mesh=mesh,
+                    eval_cfg=eval_cfg,
+                    mp=trainer.mp,
+                    nested_expert_count=nested_count,
+                )
+                if nested_evaluator is not None:
+                    nested_evaluators.append((nested_count, nested_evaluator))
 
         profiler_cfg = trainer.profiler
         profiler_num_steps = profiler_cfg.resolve_num_profile_steps(num_train_steps=trainer.num_train_steps)
@@ -571,6 +710,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     ),
                     every=interval,
                 )
+                for nested_count, nested_evaluator in nested_evaluators:
+                    state_callbacks.add_hook(
+                        cb_tagged_evaluate(
+                            nested_evaluator,
+                            prefix=f"{eval_cfg.prefix}/nested_e{nested_count}",
+                            eval_current=eval_cfg.eval_current,
+                            eval_ema=eval_ema,
+                        ),
+                        every=interval,
+                    )
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
@@ -600,6 +749,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
                     last_loss = metrics["train/loss"]
                     last_step_duration = duration
+                    # train/loss is logged by the step-info callback above; forward the rest of the
+                    # metrics (e.g. the main/MTP loss split and scheduled MTP weight) to the tracker.
+                    extra_metrics = {key: value for key, value in metrics.items() if key != "train/loss"}
+                    if extra_metrics:
+                        levanter.tracker.log(extra_metrics, step=step)
                     levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
                     levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
 
