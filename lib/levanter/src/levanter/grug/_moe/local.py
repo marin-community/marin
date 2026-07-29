@@ -29,6 +29,20 @@ def _moe_mlp_local(
     num_experts: int,
     implementation: MoeImplementation,
 ) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
+    if implementation == "sonic_cute":
+        if activation_fn is not jax.nn.silu:
+            raise ValueError("sonic_cute requires SiLU because its QuACK kernel fuses SwiGLU")
+        # QuACK and CUTLASS DSL are installed only with the CUDA 13 GPU extra.
+        from levanter.grug._moe.sonic_cute import _moe_mlp_local_sonic_cute  # noqa: PLC0415
+
+        return _moe_mlp_local_sonic_cute(
+            x,
+            selected_experts,
+            combine_weights,
+            moe_w13,
+            moe_w2,
+            num_experts=num_experts,
+        )
     local_key = implementation if implementation in _LOCAL_MOE_IMPLEMENTATIONS else "scatter"
     return _MOE_LOCAL_FNS[local_key](
         x,

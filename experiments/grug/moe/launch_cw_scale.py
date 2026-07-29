@@ -49,6 +49,8 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import BlockShuffleConfig
+from levanter.grug._moe.common import resolve_moe_implementation
+from levanter.grug.attention import GrugAttentionImplementation
 from levanter.optim.config import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
@@ -111,6 +113,10 @@ def build_scale_model() -> GrugModelConfig:
     remat_mode = os.environ.get("SCALE_REMAT", "recompute_all")
     if remat_mode not in ("recompute_all", "save_moe"):
         raise ValueError(f"SCALE_REMAT={remat_mode!r} must be 'recompute_all' or 'save_moe'")
+    moe_impl_env = os.environ.get("SCALE_MOE_IMPL")
+    moe_implementation = resolve_moe_implementation(moe_impl_env) if moe_impl_env else None
+    attn_impl_env = os.environ.get("SCALE_ATTN_IMPL")
+    attention_implementation = cast("GrugAttentionImplementation | None", attn_impl_env or None)
     return GrugModelConfig(
         vocab_size=VOCAB_SIZE,
         hidden_dim=hidden_dim,
@@ -125,6 +131,8 @@ def build_scale_model() -> GrugModelConfig:
         max_seq_len=seq_len,
         sliding_window=seq_len,
         remat_mode=cast(RematMode, remat_mode),
+        moe_implementation=moe_implementation,
+        attention_implementation=attention_implementation,
     )
 
 

@@ -172,6 +172,29 @@ def test_moe_mlp_default_matches_explicit_ring_without_ep_axis():
     np.testing.assert_allclose(np.asarray(y_default), np.asarray(y_ring), rtol=1e-5, atol=1e-5)
 
 
+def test_moe_mlp_sonic_cute_rejects_non_silu_activation():
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(9),
+        tokens=4,
+        hidden_dim=4,
+        intermediate_dim=8,
+        num_experts=2,
+        topk=1,
+    )
+
+    with pytest.raises(ValueError, match="sonic_cute requires SiLU"):
+        moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation=ActivationFunctionEnum.relu,
+            implementation="sonic_cute",
+            mesh=None,
+        )
+
+
 def test_deepep_local_assignment_packing_uses_local_expert_ids():
     recv_x = jnp.array(
         [
