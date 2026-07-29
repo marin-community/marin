@@ -172,18 +172,22 @@ decision, not something to infer from a cluster read.
 |---|---|---|
 | `v6e` | 32, 64, 128, 256 | europe-west4, us-east1, us-east5 |
 | `v5litepod` (v5e) | 32, 64, 128, 256 | europe-west4, us-west4 |
-| `v5p` | *disabled* | us-central1, us-east5 |
+| `v5p` | 64, 128, 256, 512 | us-east5 (us-central1 unseeded) |
 
-`v5litepod-N` counts chips; `v5p-N` counts cores, so `v5p-64` is 32 chips. v5p
-is excluded from placement by operator decision pending a throughput measurement
-for this model — re-enable only on operator instruction.
+`v5litepod-N` counts chips; `v5p-N` counts cores, so `v5p-64` is 32 chips and
+`v5p-512` is 256. v5p is **low priority**: carry a probe or two when v5p capacity
+looks reachable, but do not rotate the fleet onto it or displace a v6e/v5e target
+that is placing. us-central1 is the other v5p region and stays out of the grid —
+placing there needs a full seeding and data-staging pass first, which is an
+operator decision, not a recovery action.
 
 **32 chips is the floor.** Below it a bs128 trial needs per-device parallelism
 above 4 and the calibrator starts trading throughput for gradient accumulation.
 256 is the ceiling.
 
-So four regions are placeable: **europe-west4** serves both families,
-**us-east1** and **us-east5** serve v6e only, **us-west4** serves v5e only.
+So four regions are placeable: **europe-west4** serves v6e and v5e, **us-east1**
+serves v6e, **us-east5** serves v6e and (low priority) v5p, **us-west4** serves
+v5e only.
 Enabled families are peers — rank targets by observed throughput and scheduling
 outcomes, never by a static family preference. Diversify initial targets across
 regions and, when practical, families, so one capacity failure mode cannot stall
