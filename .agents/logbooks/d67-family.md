@@ -728,3 +728,42 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
 ```
 
 - Acceptance gate: production band 1, attempt-specific coordinator endpoint, equal device counts per physical domain, and finite loss/drop metrics.
+
+### 2026-07-28 22:21 PDT - D67-CTL-02 r4 exhausts parent recovery budget
+
+- Submitted parent `/mwittmann/d67-control-m3-draw2-r4-0728-2205` at 22:03 PDT from commit `bb1c8e76c` using the exact command above. Child: `/mwittmann/d67-control-m3-draw2-r4-0728-2205/grug-train-d67-control-m3-draw2-r4-0728-2205`.
+- Across parent attempts, child preflight rejected unequal domain layouts including 24/24/16, 4/24/20/16, and 4/24/32/4. Other attempts failed workspace staging or lost peers after the rank that rejected topology exited.
+- Parent attempts 0–3 exhausted without a finite step metric. Parent and child are terminal failed; r4 is not an experimental draw.
+- Recovery change for r5: increase only the CPU parent `--max-retries` from 3 to 10. Unequal child placements fail before device work, while a larger launcher budget lets the same sequential job continue drawing placements.
+
+### 2026-07-28 22:21 PDT - D67-CTL-02 r5 pre-registration
+
+- Prediction carried forward verbatim from 15:35 PDT, before any experimental result was observed: This draw reproduces the healthy m=3/cf1.0625 operating point. Predict about 321K tokens/s and 20.7% MFU, allowing ±4% tokens/s for placement (308–334K), with tail-100 drops 1.2–1.7%. Loss must remain finite and decline through step 349.
+- Planned parent job ID: `/mwittmann/d67-control-m3-draw2-r5-0728-2225`
+- Planned child job ID: `/mwittmann/d67-control-m3-draw2-r5-0728-2225/grug-train-d67-control-m3-draw2-r5-0728-2225`
+- Exact command:
+
+```bash
+IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
+  --cpu 2 --memory 3GB --extra cpu --priority production --max-retries 10 \
+  --job-name d67-control-m3-draw2-r5-0728-2225 -e RUN_ID d67-control-m3-draw2-r5-0728-2225 \
+  -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async \
+  -e XLA_FLAGS "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false --xla_gpu_experimental_parallel_collective_overlap_limit=4" \
+  -e SCALE_ATTN_IMPL gpu_fa4_cute -e SCALE_WATCH_INTERVAL 0 -e SCALE_CHECKPOINTS local \
+  -e SCALE_A2A_FIXED 1 -e SCALE_A2A_CHUNKS 1 -e SCALE_A2A_NO_BARRIER 1 \
+  -e SCALE_A2A_GATHER_DISPATCH 1 -e SCALE_A2A_CUSTOM_ADJOINT 1 \
+  -e SCALE_MOE_QB 1 -e SCALE_REPORT_DROPS 1 -e SCALE_A2A_SPILL 3 \
+  -e SCALE_CAPACITY_FACTOR 1.0625 -e SCALE_JOB_PRIORITY 1 \
+  -e SCALE_GPUS_PER_NODE 4 -e SCALE_GPU_TYPE GB200 -e SCALE_GPU_REPLICAS 16 \
+  -e SCALE_EXPERT_AXIS 64 -e SCALE_NUM_EXPERTS 256 -e SCALE_TOP_K 8 \
+  -e SCALE_HIDDEN_DIM 5120 -e SCALE_NUM_LAYERS 48 -e SCALE_INTERMEDIATE 1280 \
+  -e SCALE_SHARED_INTERMEDIATE 5120 -e SCALE_SEQ_LEN 4096 -e SCALE_BATCH 1024 \
+  -e SCALE_SLIDING_WINDOW 2048 -e SCALE_STEPS 350 \
+  -e SCALE_MOE_IMPL ragged_all_to_all -e SCALE_OPTIMIZER muonh -e SCALE_MUON_SYRK 1 \
+  -e SCALE_SCAN_LAYERS 1 -e SCALE_REMAT recompute_all \
+  -e SCALE_TRACKER json_logger -e SCALE_JSON_LOGGER d67-control-m3-draw2-r5-0728-2225.metrics \
+  -e SCALE_DISABLE_CHECKPOINT 1 \
+  -- python -m experiments.grug.moe.launch_cw_scale --version d67-family-dev --run
+```
+
+- Acceptance gate unchanged. Parent and child retries do not count as draws until finite training metrics appear.
