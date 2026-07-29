@@ -88,6 +88,7 @@ optimizer configuration fields before these paths are generalized.
 | `SCALE_MUON_DIST_NONEXPERT` | off | Use the stack-batch-sharded layout for 3-D non-expert stacks |
 | `SCALE_MUON_PAD_NONEXPERT` | off | Pad 3-D non-expert stacks before the sharded Newton-Schulz path |
 | `SCALE_MUON_INTRA_RACK` | off | Exclude `replica_dcn` when distributing 4-D and padded matrix stacks |
+| `SCALE_MUON_SYRK` | off | Use batched QuACK SYRK for Newton-Schulz Gram matrices on distributed 4-D stacks |
 
 ## GB200 job environment
 

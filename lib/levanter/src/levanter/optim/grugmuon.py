@@ -353,7 +353,12 @@ def _newtonschulz_4d_distributed(
     eps: float,
     coefficient_type: CoefficientType,
 ) -> jax.Array:
-    """Run Newton-Schulz on a stacked 4D expert leaf without gathering matrix dimensions."""
+    """Run Newton-Schulz on a stacked 4D expert leaf without gathering matrix dimensions.
+
+    Under expert parallelism, the expert dimension stays on the expert mesh axis. Only
+    the layer dimension can move to non-expert axes, avoiding the layer-expert merge that
+    can rematerialize the complete expert stack.
+    """
     local_ns = lambda matrix: _zeropower_via_newtonschulz_local(matrix, steps, eps, coefficient_type)
     mesh = jax.sharding.get_abstract_mesh()
     if mesh.empty:
@@ -370,7 +375,57 @@ def _newtonschulz_4d_distributed(
     layers, expert_count, d, last = x.shape
     merged = layers * expert_count
 
-    best_axes: tuple[str, ...] = ()
+    is_w_down = any(getattr(entry, "name", None) == "w_down" for entry in path)
+    trailing = ("model", "data") if is_w_down else ("data", "model")
+    orig_4d_spec = PartitionSpec(None, "expert", *trailing)
+
+    expert_axis_size = int(mesh.shape.get("expert", 1))
+    if expert_axis_size > 1:
+        candidate_axes = [(name, size) for name, size in mesh_shape_items if name != "expert"]
+        best_axes: tuple[str, ...] = ()
+        best_shards = 1
+        for mask in range(1, 1 << len(candidate_axes)):
+            subset = [candidate_axes[i] for i in range(len(candidate_axes)) if mask & (1 << i)]
+            prod = math.prod(size for _, size in subset)
+            if layers % prod == 0 and prod > best_shards:
+                best_axes = tuple(name for name, _ in subset)
+                best_shards = prod
+
+        x_bf16 = x.astype(jnp.bfloat16)
+        if not best_axes:
+            distributed_4d_spec = PartitionSpec(None, "expert", None, None)
+            x_distributed = reshard(x_bf16, distributed_4d_spec)
+        else:
+            distributed_4d_spec = (
+                PartitionSpec(best_axes[0], "expert", None, None)
+                if len(best_axes) == 1
+                else PartitionSpec(best_axes, "expert", None, None)
+            )
+            x_distributed = reshard(x_bf16, PartitionSpec(best_axes[0], "expert", None, None))
+            if len(best_axes) > 1:
+                x_distributed = reshard(x_distributed, distributed_4d_spec)
+
+        if os.environ.get("SCALE_MUON_SYRK") == "1":
+
+            def local_syrk(stack):
+                local_layers, local_experts, local_d, local_last = stack.shape
+                flat = jax.lax.reshape(stack, (local_layers * local_experts, local_d, local_last))
+                updated = _newtonschulz_batched_syrk(flat, steps, eps, coefficient_type)
+                return jax.lax.reshape(updated, stack.shape)
+
+            updated_distributed = shard_map(
+                local_syrk,
+                mesh=mesh,
+                in_specs=distributed_4d_spec,
+                out_specs=distributed_4d_spec,
+                check_vma=False,
+            )(x_distributed)
+        else:
+            updated_distributed = jax.vmap(jax.vmap(local_ns))(x_distributed)
+        updated_bf16 = reshard(updated_distributed, orig_4d_spec)
+        return updated_bf16.astype(x.dtype)
+
+    best_axes = ()
     best_shards = 0
     for mask in range(1, 1 << len(mesh_shape_items)):
         subset = [mesh_shape_items[i] for i in range(len(mesh_shape_items)) if mask & (1 << i)]
@@ -385,13 +440,7 @@ def _newtonschulz_4d_distributed(
             f"{jax.tree_util.keystr(path)}."
         )
 
-    is_w_down = any(getattr(entry, "name", None) == "w_down" for entry in path)
-    if is_w_down:
-        intermediate_3d_spec = PartitionSpec(None, "model", "data")
-        orig_4d_spec = PartitionSpec(None, "expert", "model", "data")
-    else:
-        intermediate_3d_spec = PartitionSpec(None, "data", "model")
-        orig_4d_spec = PartitionSpec(None, "expert", "data", "model")
+    intermediate_3d_spec = PartitionSpec(None, *trailing)
     target_3d_spec = (
         PartitionSpec(best_axes[0], None, None) if len(best_axes) == 1 else PartitionSpec(best_axes, None, None)
     )
@@ -531,8 +580,9 @@ def _newtonschulz_padded_stack_sharded(
     pad = (-layers) % batch_shards
 
     Xp = jnp.pad(X, ((0, pad), (0, 0), (0, 0))) if pad else X
-    target = P(batch_axis[0], None, None) if len(batch_axis) == 1 else P(batch_axis, None, None)
-    Xd = reshard(Xp, target)
+    Xd = reshard(Xp, P(batch_axis[0], None, None))
+    if len(batch_axis) > 1:
+        Xd = reshard(Xd, P(batch_axis, None, None))
     updated = jax.vmap(local)(Xd)
     updated = reshard(updated, P(None, None, None))
     return updated[:layers] if pad else updated
