@@ -14,6 +14,7 @@ from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 
 from experiments.grug.moe.launch_cw_scale import build_scale_model
+from experiments.grug.moe.model import GrugModelConfig
 from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
 from experiments.grug.moe.sft_launch import GrugModel
 from experiments.marin_tokenizer import MARIN_CHAT_TEMPLATE, marin_tokenizer
@@ -56,6 +57,26 @@ _OPTIMIZER = GrugMoeAdamHConfig(
 class SFTArm(StrEnum):
     E256 = "e256"
     FIXED25 = "fixed25"
+    E128_NAIVE25 = "e128-naive25"
+    E16_NAIVE25 = "e16-naive25"
+    E128_LAYER25 = "e128-layer25"
+    E16_LAYER25 = "e16-layer25"
+
+    @property
+    def nested_expert_counts(self) -> tuple[int, ...]:
+        if self is SFTArm.E256:
+            return ()
+        if self is SFTArm.FIXED25:
+            return (128, 16)
+        if self in (SFTArm.E128_NAIVE25, SFTArm.E128_LAYER25):
+            return (128,)
+        return (16,)
+
+    @property
+    def nested_layer_fraction(self) -> float:
+        if self in (SFTArm.E128_LAYER25, SFTArm.E16_LAYER25):
+            return 0.25
+        return 1.0
 
 
 class SFTStage(StrEnum):
@@ -82,6 +103,26 @@ def _required_env(key: str) -> str:
     return value
 
 
+def sft_routing_model(model: GrugModelConfig, arm: SFTArm, routing: str) -> GrugModelConfig:
+    """Validate an SFT model against its pretraining arm and select routing."""
+    if model.nested_expert_counts != arm.nested_expert_counts:
+        raise ValueError(
+            f"{arm.value} SFT requires SCALE_NESTED_COUNTS="
+            f"{','.join(str(count) for count in arm.nested_expert_counts)}"
+        )
+    if arm is SFTArm.E256:
+        return model
+    if model.nested_layer_fraction != arm.nested_layer_fraction:
+        raise ValueError(f"{arm.value} SFT requires SCALE_NESTED_LAYER_FRACTION={arm.nested_layer_fraction}")
+    if routing == "full":
+        return dataclasses.replace(model, nested_batch_fraction=0.0)
+    if routing != "nested":
+        raise ValueError("AUGDK_SFT_ROUTING must be 'nested' or 'full'")
+    if model.nested_batch_fraction != 0.25:
+        raise ValueError("nested SFT requires SCALE_NESTED_FRACTION=0.25")
+    return model
+
+
 def build(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
     """Build one matched SFT stage."""
     arm = SFTArm(_required_env("AUGDK_SFT_ARM"))
@@ -92,18 +133,7 @@ def build(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
         raise ValueError("AUGDK_SFT_STEPS must be positive")
 
     model = build_scale_model()
-    if arm is SFTArm.FIXED25:
-        if model.nested_expert_counts != (128, 16):
-            raise ValueError("fixed25 SFT requires SCALE_NESTED_COUNTS=128,16")
-        routing = os.environ.get("AUGDK_SFT_ROUTING", "nested")
-        if routing == "full":
-            model = dataclasses.replace(model, nested_batch_fraction=0.0)
-        elif routing == "nested" and model.nested_batch_fraction != 0.25:
-            raise ValueError("nested fixed25 SFT requires SCALE_NESTED_FRACTION=0.25")
-        elif routing != "nested":
-            raise ValueError("AUGDK_SFT_ROUTING must be 'nested' or 'full'")
-    elif model.nested_expert_counts:
-        raise ValueError("E256 SFT must not configure nested expert counts")
+    model = sft_routing_model(model, arm, os.environ.get("AUGDK_SFT_ROUTING", "nested"))
 
     run_id = f"nest-augdk-{arm.value}-{stage.value}-sft-r1"
     suffix = os.environ.get("AUGDK_SFT_RUN_SUFFIX")
