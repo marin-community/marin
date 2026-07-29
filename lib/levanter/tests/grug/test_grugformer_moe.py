@@ -892,6 +892,246 @@ def test_fixed_a2a_spill_uses_candidate_expert_and_weight(monkeypatch: pytest.Mo
     assert int(dropped) == 0
 
 
+def _run_fixed_a2a_value_and_grads(
+    *,
+    x,
+    selected_experts,
+    combine_weights,
+    w_up_gate,
+    w_down,
+    seed_cotangent,
+    num_experts,
+    capacity_factor,
+):
+    """Return the value, dropped count, and gradients for fixed all-to-all."""
+    mesh = Mesh(
+        np.asarray([jax.devices()[0]]),
+        axis_names=("expert",),
+        axis_types=(AxisType.Explicit,),
+    )
+
+    def core(x, selected_experts, combine_weights, w_up_gate, w_down):
+        return _fixed_a2a_core(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation_fn=jax.nn.silu,
+            num_experts=num_experts,
+            capacity_factor=capacity_factor,
+        )
+
+    sharded = jax.shard_map(
+        core,
+        mesh=mesh,
+        in_specs=(P(), P(), P(), P(), P()),
+        out_specs=(P(), P()),
+        check_vma=False,
+    )
+
+    def loss(x, combine_weights, w_up_gate, w_down):
+        out, dropped = sharded(x, selected_experts, combine_weights, w_up_gate, w_down)
+        return jnp.sum(out * seed_cotangent), (out, dropped)
+
+    with jax.set_mesh(mesh):
+        (_, (out, dropped)), grads = jax.value_and_grad(loss, argnums=(0, 1, 2, 3), has_aux=True)(
+            x, combine_weights, w_up_gate, w_down
+        )
+    return out, int(dropped), grads
+
+
+def _expected_fixed_capacity_drops(
+    selected_experts: jax.Array,
+    *,
+    num_experts: int,
+    capacity_factor: float,
+) -> int:
+    assignments = np.asarray(selected_experts).reshape(-1)
+    capacity = max(int(np.ceil(capacity_factor * len(assignments) / num_experts)), 1)
+    expert_counts = np.bincount(assignments, minlength=num_experts)
+    return int(np.maximum(expert_counts - capacity, 0).sum())
+
+
+@pytest.mark.slow
+def test_gather_dispatch_matches_scatter_forward_and_drops(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
+    tokens, hidden_dim, intermediate_dim, num_experts, topk = 8, 6, 8, 4, 2
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(7),
+        tokens=tokens,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_experts=num_experts,
+        topk=topk,
+    )
+    seed = jax.random.normal(jax.random.key(99), (tokens, hidden_dim), dtype=jnp.float32)
+
+    monkeypatch.delenv("SCALE_A2A_GATHER_DISPATCH", raising=False)
+    monkeypatch.delenv("SCALE_A2A_CUSTOM_ADJOINT", raising=False)
+    scatter_out, scatter_dropped, _ = _run_fixed_a2a_value_and_grads(
+        x=x,
+        selected_experts=selected_experts,
+        combine_weights=combine_weights,
+        w_up_gate=w_up_gate,
+        w_down=w_down,
+        seed_cotangent=seed,
+        num_experts=num_experts,
+        capacity_factor=0.5,
+    )
+
+    monkeypatch.setenv("SCALE_A2A_GATHER_DISPATCH", "1")
+    gather_out, gather_dropped, _ = _run_fixed_a2a_value_and_grads(
+        x=x,
+        selected_experts=selected_experts,
+        combine_weights=combine_weights,
+        w_up_gate=w_up_gate,
+        w_down=w_down,
+        seed_cotangent=seed,
+        num_experts=num_experts,
+        capacity_factor=0.5,
+    )
+    expected_dropped = _expected_fixed_capacity_drops(
+        selected_experts,
+        num_experts=num_experts,
+        capacity_factor=0.5,
+    )
+
+    assert expected_dropped == 8
+    np.testing.assert_allclose(np.asarray(gather_out), np.asarray(scatter_out), rtol=1e-5, atol=1e-5)
+    assert scatter_dropped == expected_dropped
+    assert gather_dropped == expected_dropped
+
+
+@pytest.mark.slow
+def test_custom_adjoint_matches_autodiff_gradients(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
+    tokens, hidden_dim, intermediate_dim, num_experts, topk = 8, 6, 8, 4, 2
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(13),
+        tokens=tokens,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_experts=num_experts,
+        topk=topk,
+    )
+    seed = jax.random.normal(jax.random.key(31), (tokens, hidden_dim), dtype=jnp.float32)
+
+    monkeypatch.setenv("SCALE_A2A_GATHER_DISPATCH", "1")
+    monkeypatch.delenv("SCALE_A2A_CUSTOM_ADJOINT", raising=False)
+    auto_out, auto_dropped, auto_grads = _run_fixed_a2a_value_and_grads(
+        x=x,
+        selected_experts=selected_experts,
+        combine_weights=combine_weights,
+        w_up_gate=w_up_gate,
+        w_down=w_down,
+        seed_cotangent=seed,
+        num_experts=num_experts,
+        capacity_factor=0.5,
+    )
+
+    monkeypatch.setenv("SCALE_A2A_CUSTOM_ADJOINT", "1")
+    custom_out, custom_dropped, custom_grads = _run_fixed_a2a_value_and_grads(
+        x=x,
+        selected_experts=selected_experts,
+        combine_weights=combine_weights,
+        w_up_gate=w_up_gate,
+        w_down=w_down,
+        seed_cotangent=seed,
+        num_experts=num_experts,
+        capacity_factor=0.5,
+    )
+    expected_dropped = _expected_fixed_capacity_drops(
+        selected_experts,
+        num_experts=num_experts,
+        capacity_factor=0.5,
+    )
+
+    assert expected_dropped == 8
+    np.testing.assert_allclose(np.asarray(custom_out), np.asarray(auto_out), rtol=1e-5, atol=1e-5)
+    assert auto_dropped == expected_dropped
+    assert custom_dropped == expected_dropped
+    for auto_grad, custom_grad in zip(auto_grads, custom_grads):
+        np.testing.assert_allclose(np.asarray(custom_grad), np.asarray(auto_grad), rtol=1e-5, atol=1e-5)
+
+
+def _fixed_a2a_backward_stablehlo(
+    *,
+    x,
+    selected_experts,
+    combine_weights,
+    w_up_gate,
+    w_down,
+    seed_cotangent,
+    num_experts,
+    capacity_factor,
+) -> str:
+    mesh = Mesh(
+        np.asarray([jax.devices()[0]]),
+        axis_names=("expert",),
+        axis_types=(AxisType.Explicit,),
+    )
+
+    def core(x, combine_weights, w_up_gate, w_down):
+        output, _ = _fixed_a2a_core(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation_fn=jax.nn.silu,
+            num_experts=num_experts,
+            capacity_factor=capacity_factor,
+        )
+        return output
+
+    sharded = jax.shard_map(
+        core,
+        mesh=mesh,
+        in_specs=(P(), P(), P(), P()),
+        out_specs=P(),
+        check_vma=False,
+    )
+    with jax.set_mesh(mesh):
+        _, pullback = jax.vjp(sharded, x, combine_weights, w_up_gate, w_down)
+        lowered = jax.jit(pullback).lower(seed_cotangent)
+    return str(lowered.compiler_ir(dialect="stablehlo"))
+
+
+@pytest.mark.slow
+def test_custom_adjoint_backward_hlo_has_no_scatter(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
+    monkeypatch.setenv("SCALE_A2A_GATHER_DISPATCH", "1")
+    tokens, hidden_dim, intermediate_dim, num_experts, topk = 8, 6, 8, 4, 2
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(17),
+        tokens=tokens,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_experts=num_experts,
+        topk=topk,
+    )
+    seed = jax.random.normal(jax.random.key(19), (tokens, hidden_dim), dtype=jnp.float32)
+    hlo_args = dict(
+        x=x,
+        selected_experts=selected_experts,
+        combine_weights=combine_weights,
+        w_up_gate=w_up_gate,
+        w_down=w_down,
+        seed_cotangent=seed,
+        num_experts=num_experts,
+        capacity_factor=0.5,
+    )
+
+    monkeypatch.delenv("SCALE_A2A_CUSTOM_ADJOINT", raising=False)
+    autodiff_hlo = _fixed_a2a_backward_stablehlo(**hlo_args)
+    assert autodiff_hlo.count("stablehlo.scatter") > 0
+
+    monkeypatch.setenv("SCALE_A2A_CUSTOM_ADJOINT", "1")
+    custom_hlo = _fixed_a2a_backward_stablehlo(**hlo_args)
+    assert custom_hlo.count("stablehlo.scatter") == 0
+
+
 def test_shard_a2a_params_uses_sender_side_output_offsets():
     shard_counts = jnp.array(
         [

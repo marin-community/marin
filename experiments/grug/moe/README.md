@@ -103,6 +103,7 @@ explicit MoE configuration fields before these paths are generalized.
 | `SCALE_A2A_NO_BARRIER` | off | Skip the rematerialization barriers around fixed-capacity dispatch |
 | `SCALE_A2A_SPILL` | `0` | Retry each overflow assignment against this many lower-ranked selected experts |
 | `SCALE_A2A_GATHER_DISPATCH` | off | Scatter assignment indices and gather activation rows into the send buffer |
+| `SCALE_A2A_CUSTOM_ADJOINT` | off | Use structured gather transposes that avoid scatter in the fixed-capacity backward pass |
 
 ## GB200 job environment
 
