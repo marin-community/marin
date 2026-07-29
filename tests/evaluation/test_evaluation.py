@@ -363,6 +363,12 @@ def test_build_evaluation_batch_accepts_a_native_harbor_config(tmp_path, monkeyp
     assert captured["agents"][0]["model_name"] == "hosted_vllm/served-qwen3-8b"
     assert captured["agents"][0]["kwargs"]["api_base"] == "https://iris.example/capability/v1"
     assert captured["agents"][0]["kwargs"]["extra_body"] == '{"chat_template_kwargs":{"enable_thinking":true}}'
+    assert captured["agents"][0]["kwargs"]["model_info"] == {
+        "max_input_tokens": 32768,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+    }
     assert captured["agents"][0]["kwargs"]["trajectory_config"] == {"raw_content": False}
 
 

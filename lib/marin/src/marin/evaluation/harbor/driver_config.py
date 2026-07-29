@@ -284,6 +284,10 @@ def adapt_native_job_config(
     agent = resolved["agents"][0]
     agent["model_name"] = f"{_HOSTED_VLLM_PROVIDER}/{served_model}"
     agent_kwargs = {**model_agent_kwargs, **agent.get("kwargs", {})}
+    configured_model_info = agent_kwargs.get("model_info") or {}
+    if not isinstance(configured_model_info, Mapping):
+        raise ValueError("Harbor agent model_info must be a mapping")
+    agent_kwargs["model_info"] = {**_DEFAULT_MODEL_INFO, **configured_model_info}
     agent_kwargs["api_base"] = endpoint_url
     if agent.get("name") == _OPENCODE_AGENT:
         agent_kwargs["opencode_config"] = _opencode_config_for_endpoint(
