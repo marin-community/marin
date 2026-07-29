@@ -54,6 +54,23 @@ is chasing. Hyperparameters are a large enough lever to explain the gap. Which *
 they move it at 4,460 steps is the open question, and answering it needs a longer run than the
 "don't run them for long" budget this harness was built under. Flagged rather than launched.
 
+**F11 confirms the caveat was the right call.** Continuing the same two arms, the windowed
+delta does not hold — it collapses as cosine decay brings the high-LR run in:
+
+| window | exp153 HP | exp146 HP | delta |
+|---|---|---|---|
+| 0–49 | 6.86385 | 7.52541 | +0.66155 |
+| 150–199 | 4.29726 | 4.68346 | +0.38620 |
+| 200–249 | 4.21831 | 4.54692 | +0.32862 |
+| 250–299 | 4.18261 | 4.26629 | **+0.08367** |
+| 300–349 | 4.14888 | 4.19892 | **+0.05003** |
+
+An extrapolation from step 208 would have been wrong within 100 steps. The high-LR arm was
+never losing on the merits; it was behind on the schedule. This is the expected signature of
+a larger LR under cosine — worse early, closing hard at the end — and it is why a 400-step
+proxy cannot settle a question about step 4,460. The ordering at the end of *this* schedule
+still says nothing about the ordering at the end of a 35,680-step one.
+
 ## Hypotheses
 
 Ordered by how much they would explain, not by how interesting they are.
