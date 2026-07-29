@@ -124,6 +124,8 @@ class GrugModelConfig:
     """Fixed prefix expert-bank sizes used on restricted training sequences."""
     nested_batch_fraction: float = 0.0
     """Fraction of training sequences assigned to a nested expert bank."""
+    nested_layer_fraction: float = 1.0
+    """Fraction of MoE layers restricted on each nested training sequence."""
     num_layers: int = 6
     num_heads: int = 4
     num_kv_heads: int = 1
@@ -245,6 +247,8 @@ class GrugModelConfig:
             raise ValueError("nested_batch_fraction must be between zero and one")
         if self.nested_batch_fraction and not self.nested_expert_counts:
             raise ValueError("nested_batch_fraction requires nested_expert_counts")
+        if not 0.0 < self.nested_layer_fraction <= 1.0:
+            raise ValueError("nested_layer_fraction must be greater than zero and at most one")
         if tuple(sorted(self.nested_expert_counts, reverse=True)) != self.nested_expert_counts:
             raise ValueError("nested_expert_counts must be in descending order")
         for nested_count in self.nested_expert_counts:
@@ -256,6 +260,12 @@ class GrugModelConfig:
             period = round(1.0 / self.nested_batch_fraction)
             if not math.isclose(self.nested_batch_fraction, 1.0 / period):
                 raise ValueError("nested_batch_fraction must be zero, one, or the reciprocal of an integer")
+        if self.nested_layer_fraction != 1.0:
+            period = round(1.0 / self.nested_layer_fraction)
+            if not math.isclose(self.nested_layer_fraction, 1.0 / period):
+                raise ValueError("nested_layer_fraction must be one or the reciprocal of an integer")
+            if self.num_layers % period:
+                raise ValueError("num_layers must be divisible by the nested layer period")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
         resolve_moe_implementation(self.moe_implementation)
@@ -1259,6 +1269,7 @@ class Transformer(eqx.Module):
                 qb_routing=False,
                 nested_expert_counts=(),
                 nested_batch_fraction=0.0,
+                nested_layer_fraction=1.0,
                 global_every=0,
                 local_kv_heads=None,
                 global_kv_heads=None,
@@ -1375,6 +1386,17 @@ class Transformer(eqx.Module):
             remat_policy = None
 
         interleave_global = bool(cfg.global_every) and sliding_window is not None
+        layerwise_eligibility = expert_eligibility is not None and expert_eligibility.ndim == 3
+        if expert_eligibility is not None:
+            expected_shape = (
+                (cfg.num_layers, batch_size, cfg.num_experts) if layerwise_eligibility else (batch_size, cfg.num_experts)
+            )
+            if expert_eligibility.shape != expected_shape:
+                raise ValueError(
+                    "expert_eligibility must have shape "
+                    f"{(batch_size, cfg.num_experts)} or {(cfg.num_layers, batch_size, cfg.num_experts)}, "
+                    f"got {expert_eligibility.shape}"
+                )
         if interleave_global:
             # Only the lower_bounds depend on the window; ``valid`` (segment_ids >= 0) does not, so we
             # reuse ``sliding_valid`` for both layer types. Global layers drop the window (full causal
@@ -1402,9 +1424,33 @@ class Transformer(eqx.Module):
                 )
                 return new_hidden, qb_beta
 
-            hidden, qb_beta_per_layer = jax.lax.scan(
-                _scan_layer, hidden, xs=(self.stacked_blocks.stacked, is_global), unroll=cfg.scan_unroll
-            )
+            if layerwise_eligibility:
+
+                def _scan_layerwise(
+                    carry_hidden: Float[Array, "B S D"],
+                    layer_flag_and_eligibility: tuple[Block, jax.Array, jax.Array],
+                ) -> tuple[Float[Array, "B S D"], jax.Array]:
+                    layer, layer_is_global, layer_eligibility = layer_flag_and_eligibility
+                    lower_bounds = jnp.where(layer_is_global, global_lb, sliding_lb)
+                    layer_mask = causal_mask.with_fa4_bounds(lower_bounds, sliding_valid)
+                    new_hidden, qb_beta = eqx.filter_checkpoint(layer, policy=remat_policy)(
+                        carry_hidden,
+                        layer_mask,
+                        layer_is_global,
+                        layer_eligibility,
+                    )
+                    return new_hidden, qb_beta
+
+                hidden, qb_beta_per_layer = jax.lax.scan(
+                    _scan_layerwise,
+                    hidden,
+                    xs=(self.stacked_blocks.stacked, is_global, expert_eligibility),
+                    unroll=cfg.scan_unroll,
+                )
+            else:
+                hidden, qb_beta_per_layer = jax.lax.scan(
+                    _scan_layer, hidden, xs=(self.stacked_blocks.stacked, is_global), unroll=cfg.scan_unroll
+                )
         else:
             layer_mask = causal_mask.with_fa4_bounds(sliding_lb, sliding_valid)
 
@@ -1420,9 +1466,30 @@ class Transformer(eqx.Module):
                 )
                 return new_hidden, qb_beta
 
-            hidden, qb_beta_per_layer = jax.lax.scan(
-                _scan_layer, hidden, xs=self.stacked_blocks.stacked, unroll=cfg.scan_unroll
-            )
+            if layerwise_eligibility:
+
+                def _scan_layerwise(
+                    carry_hidden: Float[Array, "B S D"], layer_and_eligibility: tuple[Block, jax.Array]
+                ) -> tuple[Float[Array, "B S D"], jax.Array]:
+                    layer, layer_eligibility = layer_and_eligibility
+                    new_hidden, qb_beta = eqx.filter_checkpoint(layer, policy=remat_policy)(
+                        carry_hidden,
+                        layer_mask,
+                        None,
+                        layer_eligibility,
+                    )
+                    return new_hidden, qb_beta
+
+                hidden, qb_beta_per_layer = jax.lax.scan(
+                    _scan_layerwise,
+                    hidden,
+                    xs=(self.stacked_blocks.stacked, expert_eligibility),
+                    unroll=cfg.scan_unroll,
+                )
+            else:
+                hidden, qb_beta_per_layer = jax.lax.scan(
+                    _scan_layer, hidden, xs=self.stacked_blocks.stacked, unroll=cfg.scan_unroll
+                )
 
         out = self.final_norm(hidden)
         mtp_hidden = None

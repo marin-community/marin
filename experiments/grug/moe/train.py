@@ -394,13 +394,13 @@ def _scheduled_mtp_weight(config: GrugModelConfig, step: jax.Array, num_train_st
     return jnp.where(frac >= config.mtp_decay_start_frac, config.mtp_final_loss_weight, config.mtp_loss_weight)
 
 
-def _training_expert_eligibility(
+def training_expert_eligibility(
     model_config: GrugModelConfig,
     *,
     batch_size: int,
     step: jax.Array,
 ) -> jax.Array | None:
-    """Assign a deterministic fraction of sequences to alternating fixed prefix banks."""
+    """Return deterministic sequence- or layer-indexed fixed-prefix eligibility."""
     fraction = model_config.nested_batch_fraction
     if fraction == 0.0:
         return None
@@ -415,7 +415,14 @@ def _training_expert_eligibility(
     eligible_counts = nested_counts[level_ids]
     expert_ids = jnp.arange(model_config.num_experts, dtype=jnp.int32)
     nested = expert_ids[None, :] < eligible_counts[:, None]
-    return jnp.where(restricted_rows[:, None], nested, True)
+    if model_config.nested_layer_fraction == 1.0:
+        return jnp.where(restricted_rows[:, None], nested, True)
+
+    layer_period = round(1.0 / model_config.nested_layer_fraction)
+    layer_ids = jnp.arange(model_config.num_layers, dtype=jnp.int32)
+    restricted_layers = (layer_ids[:, None] + event_ids[None, :]) % layer_period == 0
+    restricted_layer_rows = restricted_layers & restricted_rows[None, :]
+    return jnp.where(restricted_layer_rows[:, :, None], nested[None, :, :], True)
 
 
 def _make_train_step(
@@ -443,7 +450,7 @@ def _make_train_step(
         # the forward. All-zero when QB is off, so qb_params is numerically identical to state.params.
         qb_ema_params = _apply_qb_betas(state.ema_params, state.pending_qb_betas) if ema_beta is not None else None
         mtp_w = _scheduled_mtp_weight(state.params.config, state.step, num_train_steps)
-        expert_eligibility = _training_expert_eligibility(
+        expert_eligibility = training_expert_eligibility(
             state.params.config,
             batch_size=batch.tokens.shape[0],
             step=state.step,
@@ -492,9 +499,14 @@ def _make_train_step(
         if expert_eligibility is not None:
             eligible_counts = jnp.sum(expert_eligibility, axis=-1)
             for nested_count in state.params.config.nested_expert_counts:
-                metrics[f"train/nested/e{nested_count}_sequence_fraction"] = jnp.mean(
-                    (eligible_counts == nested_count).astype(jnp.float32)
-                )
+                restricted = eligible_counts == nested_count
+                if restricted.ndim == 1:
+                    sequence_fraction = layer_sequence_fraction = jnp.mean(restricted.astype(jnp.float32))
+                else:
+                    sequence_fraction = jnp.mean(jnp.any(restricted, axis=0).astype(jnp.float32))
+                    layer_sequence_fraction = jnp.mean(restricted.astype(jnp.float32))
+                metrics[f"train/nested/e{nested_count}_sequence_fraction"] = sequence_fraction
+                metrics[f"train/nested/e{nested_count}_layer_sequence_fraction"] = layer_sequence_fraction
         # Optimizer state is host-resident between steps when offloading; stream it to device
         # only here (after backward) for the update, then send the new state back to host below.
         opt_state_in = _opt_state_to_memory_kind(state.opt_state, "device") if _OFFLOAD_OPT_STATE else state.opt_state

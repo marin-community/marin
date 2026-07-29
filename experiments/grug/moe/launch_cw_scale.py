@@ -160,6 +160,7 @@ def build_scale_model() -> GrugModelConfig:
         num_experts_per_token=env_int("SCALE_TOP_K", 4),
         nested_expert_counts=nested_expert_counts,
         nested_batch_fraction=env_float("SCALE_NESTED_FRACTION", 0.0),
+        nested_layer_fraction=env_float("SCALE_NESTED_LAYER_FRACTION", 1.0),
         # Routed-expert MLP width; default keeps the heuristic value (hidden/2 at hidden=5120).
         intermediate_dim=env_int("SCALE_INTERMEDIATE", base.intermediate_dim),
         shared_expert_intermediate_dim=env_int("SCALE_SHARED_INTERMEDIATE", hidden_dim),
@@ -334,6 +335,12 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
         if eval_on
         else []
     )
+    eval_nested_counts_value = os.environ.get("SCALE_EVAL_NESTED_COUNTS")
+    eval_nested_counts = (
+        tuple(int(value) for value in eval_nested_counts_value.split(",") if value)
+        if eval_nested_counts_value is not None
+        else model.nested_expert_counts
+    )
     eval_cfg = (
         GrugEvalConfig(
             steps_per_eval=env_int("SCALE_EVAL_STEPS", 1000),
@@ -342,7 +349,7 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
             eval_current=True,
             eval_ema=False,  # runs use ema_beta=None
             compute_bpb=True,
-            nested_expert_counts=model.nested_expert_counts,
+            nested_expert_counts=eval_nested_counts,
         )
         if eval_on
         else None
