@@ -54,8 +54,10 @@ DATA_SEED = 0
 SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=512, perm_type="feistel")
 WARMUP = 0.1
 LR_SCHEDULE = "cosine"
-LEARNING_RATE = 1e-3
-WEIGHT_DECAY = 0.2
+# Overridable so the hyperparameter ablation reuses this harness byte-for-byte instead of a
+# forked copy: exp153 ran lr 1e-3 / wd 0.8, exp146's winner ran lr 3.1623e-3 / wd 0.2.
+LEARNING_RATE = float(os.environ.get("LR", 1e-3))
+WEIGHT_DECAY = float(os.environ.get("WD", 0.2))
 BATCH_SIZE = 32  # divides 4 (v6e-4, GB200x1) and 8 (H100x8) so dp is the full mesh everywhere
 
 TOKENIZER = "timodonnell/contacts-v1-tokenizer@5d68a24a899f"
@@ -148,9 +150,10 @@ def attention_override() -> AttentionBackend | None:
 
 def run_id(plat: Platform, steps: int, attn: AttentionBackend | None) -> str:
     """Identity carries everything that could change the curve, so runs never collide."""
-    bits = f"{plat.name}-b{BATCH_SIZE}-s{steps}-lr{LEARNING_RATE:g}-{attn or 'default'}"
+    bits = f"{plat.name}-b{BATCH_SIZE}-s{steps}-lr{LEARNING_RATE:g}-wd{WEIGHT_DECAY:g}-{attn or 'default'}"
     digest = hashlib.sha256(bits.encode()).hexdigest()[:6]
-    return f"parity-{plat.name.lower()}-b{BATCH_SIZE}-s{steps}-{digest}"
+    hp = f"-lr{LEARNING_RATE:g}-wd{WEIGHT_DECAY:g}".replace(".", "p")
+    return f"parity-{plat.name.lower()}-b{BATCH_SIZE}-s{steps}{hp}-{digest}"
 
 
 # Explicit temp roots per cloud. ``marin_temp_bucket`` resolves from ambient config, which
