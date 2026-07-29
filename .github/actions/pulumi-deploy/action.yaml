@@ -54,7 +54,7 @@ runs:
       uses: docker/setup-buildx-action@v4
 
     - name: Roll the service
-      uses: pulumi/actions@v6
+      uses: pulumi/actions@v7
       with:
         command: up
         stack-name: ${{ inputs.stack }}
