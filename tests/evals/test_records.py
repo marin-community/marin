@@ -20,7 +20,10 @@ from marin.evaluation.records import (
     ModelRef,
     Provenance,
     RunStatus,
+    RunTiming,
+    ServingParams,
     read_record,
+    read_records,
     write_record,
 )
 
@@ -75,6 +78,61 @@ def test_record_json_uses_eval_alias_and_plain_string_enum(tmp_path):
     assert isinstance(raw["status"], str)
     assert raw["version"] == "2026.07.19"
     assert raw["description"] == "baseline sweep"
+
+
+def test_timing_round_trips_and_defaults_to_none(tmp_path):
+    """``timing`` is optional: the base record omits it (``None``), and a record carrying a window
+    round-trips through ``record.json`` and serializes under the ``timing`` key."""
+    assert _RECORD.timing is None
+
+    timed = _RECORD.model_copy(
+        update={"timing": RunTiming(started_at="2026-07-19T09:06:31+00:00", finished_at="2026-07-19T09:14:31+00:00")}
+    )
+    path = write_record(timed, str(tmp_path))
+    with open(path) as f:
+        raw = json.load(f)
+    assert raw["timing"] == {"started_at": "2026-07-19T09:06:31+00:00", "finished_at": "2026-07-19T09:14:31+00:00"}
+    assert read_record(path) == timed
+
+
+def test_serving_round_trips_and_defaults_to_none(tmp_path):
+    """``serving`` is optional and round-trips: typed fields plus the free-form ``extra`` string map."""
+    assert _RECORD.serving is None
+
+    served = _RECORD.model_copy(
+        update={
+            "serving": ServingParams(
+                tensor_parallel_size=8, max_model_len=4096, max_gen_tokens=2048, extra={"temperature": "0.0"}
+            )
+        }
+    )
+    path = write_record(served, str(tmp_path))
+    with open(path) as f:
+        raw = json.load(f)
+    assert raw["serving"] == {
+        "tensor_parallel_size": 8,
+        "data_parallel_size": None,
+        "max_model_len": 4096,
+        "max_gen_tokens": 2048,
+        "extra": {"temperature": "0.0"},
+    }
+    assert read_record(path) == served
+
+
+def test_read_records_collects_parse_failures_without_dropping_good_ones(tmp_path):
+    """A malformed record.json alongside a valid one is reported as a failure (path + error) rather
+    than silently skipped, and the valid record still comes back."""
+    write_record(_RECORD, str(tmp_path))
+    broken_dir = tmp_path / "20260101-000000-broken-mmlu"
+    broken_dir.mkdir()
+    (broken_dir / "record.json").write_text(json.dumps({"run_id": "broken", "not": "a record"}))
+
+    records, failures = read_records(str(tmp_path))
+
+    assert [r.run_id for r in records] == [_RECORD.run_id]
+    assert len(failures) == 1
+    assert failures[0].path.endswith("20260101-000000-broken-mmlu/record.json")
+    assert "ValidationError" in failures[0].error
 
 
 def test_record_json_includes_harbor_policy_identity_and_effective_limit(tmp_path):

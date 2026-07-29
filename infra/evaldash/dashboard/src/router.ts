@@ -15,7 +15,7 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/pages/SampleViewerPage.vue'),
     props: true,
   },
-  { path: '/status', name: 'status', component: () => import('@/pages/StatusPage.vue') },
+  { path: '/debug', name: 'debug', component: () => import('@/pages/DebugPage.vue') },
 ]
 
 export const router = createRouter({
