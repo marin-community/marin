@@ -76,8 +76,8 @@ def _search_statement(
                 semantic.distance,
                 lexical.lexical_score,
                 (
-                    coalesce(:semantic_weight / ({RRF_K} + semantic.rank), 0.0) +
-                    coalesce(:lexical_weight / ({RRF_K} + lexical.rank), 0.0)
+                    coalesce(CAST(:semantic_weight AS double precision) / ({RRF_K} + semantic.rank), 0.0) +
+                    coalesce(CAST(:lexical_weight AS double precision) / ({RRF_K} + lexical.rank), 0.0)
                 ) AS raw_score
             FROM candidate_ids
             JOIN {table} AS {alias} USING (id)

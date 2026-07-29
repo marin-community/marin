@@ -305,6 +305,13 @@ def test_prose_query_prefers_runbook_over_test_fixture():
     assert [result.id for result in ranked] == ["file:lib/iris/OPS.md", "file:infra/grafana/tests/test_k8s_source.py"]
 
 
+def test_rank_weight_binds_are_floating_point():
+    statement = str(echo.hybrid_search.repository_file_search_statement())
+
+    assert "CAST(:semantic_weight AS double precision)" in statement
+    assert "CAST(:lexical_weight AS double precision)" in statement
+
+
 def test_file_artifact_reconstructs_overlapping_indexed_chunks(client_with):
     state = make_row(
         commit_sha="abcdef1234567890",
