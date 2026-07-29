@@ -34,7 +34,7 @@ execution:
   max_inflight_chips: 8192
   observation_interval: 15m
   # One clock: hours since a regional run's step last advanced in W&B. A run that
-  # has never produced a step is stalled since its dispatch was submitted.
+  # has never produced a step is stalled since its *first* dispatch was submitted.
   recovery:
     restart_after: 3h    # same region, same slice; resumes from the regional checkpoint
     reslice_after: 12h   # same region, different slice
@@ -339,9 +339,14 @@ appear. Extra detail below Notes is welcome when it earns its place.
 ## Stall Escalation
 
 One clock governs all recovery: **hours since a regional run's step last
-advanced.** A run that has never produced a step is stalled since its dispatch
-was submitted, so the same clock covers a job that died and one that never
-started.
+advanced.** A run that has never produced a step is stalled since its **first**
+dispatch was submitted, so the same clock covers a job that died and one that
+never started.
+
+Measure a never-started run from its first dispatch, never its current one.
+Every restart mints a new dispatch, so a current-dispatch clock resets on each
+attempt, never reaches `reslice_after`, and retries a single slice size forever —
+which is precisely the region that most needs to try a different size.
 
 Cause is irrelevant. Preemption, an Iris hang, and absent capacity are
 indistinguishable from outside and escalate identically. Do not diagnose, and do
