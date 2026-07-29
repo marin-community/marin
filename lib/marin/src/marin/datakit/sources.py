@@ -29,6 +29,7 @@ from marin.datakit.download.davinci_dev import (
     davinci_dev_env_native_normalize_steps,
 )
 from marin.datakit.download.diagnostic_logs import GHALOGS_ROUGH_TOKENS_B, ghalogs_public_normalize_steps
+from marin.datakit.download.docx_corpus import docx_corpus_normalize_steps
 from marin.datakit.download.dolma3_5_code import dolma3_5_code_prose_normalize_steps
 from marin.datakit.download.dolma4pdfs import dolma4pdfs_normalize_steps
 from marin.datakit.download.eai_taxonomy_code import eai_taxonomy_code_normalize_steps
@@ -156,6 +157,9 @@ def all_sources() -> dict[str, DatakitSource]:
         ("common-crawl-focus-2026-22", common_crawl_focus_normalize_steps, 49.702569456),
         ("davinci-dev/ctx-native", davinci_dev_ctx_native_normalize_steps, 57.57),
         ("davinci-dev/env-native", davinci_dev_env_native_normalize_steps, 2.58),
+        # Exact count measured with marin-community/marin-tokenizer:
+        # 1,497,301,429 tokens / 242,086 docs.
+        ("docx-corpus/en", docx_corpus_normalize_steps, 1.497301429),
         # Exact count measured with marin-community/marin-tokenizer:
         # 65,538,632,427 tokens / 31,179,056 docs.
         ("dolma_code_prose", dolma3_5_code_prose_normalize_steps, 65.54),

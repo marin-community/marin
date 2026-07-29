@@ -34,6 +34,8 @@ provisioning:
       hostname: iris-cw-us-west-04a.oa.dev
       target: iris-cw-us-west-04a.208261-marin.coreweave.app
     rbac: { service_account: iris-controller }
+    grafana_observer_rbac:
+      usernames: [cwtoken-uhBSRqWXRtyV7WWciRtYr-readonly-ops-token]
 
 # Request auth. Identity is by network location: in-cluster peers (RFC1918 pods/nodes,
 # loopback for kubectl port-forward) are trusted as admin. A non-empty trusted_cidrs makes
@@ -74,7 +76,6 @@ storage:
 
 kubernetes_provider:
   namespace: iris-ci
-  default_image: ghcr.io/marin-community/iris-task:latest
   host_network: true
   cache_dir: /mnt/local/iris-cache
   controller_address: http://iris-ci-controller-svc.iris-ci.svc.cluster.local:10000

@@ -78,6 +78,7 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerLiveness
+from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.router import RoutingRequest, SubmitDisposition, SubmitPlan
@@ -172,11 +173,6 @@ _MERGED_AUTOSCALER_ACTIONS = 100
 
 # Max unroutable job sample entries returned by ListBackends.
 _UNROUTABLE_SAMPLE_SIZE = 10
-
-# Semantics version of BackendSummary.availability (free-capacity metric). A peer
-# reading an unrecognized version treats the amounts as unknown. Bump when the
-# meaning of the amounts (units, tokens, aggregation) changes.
-AVAILABILITY_METRIC_VERSION = 1
 
 # Shown when a local_admin (CIDR/loopback) caller tries to federate a job — a federated
 # job must carry an accountable authenticated user.
@@ -3417,9 +3413,14 @@ class ControllerServiceImpl:
             if capacity is not None:
                 summary.availability.version = AVAILABILITY_METRIC_VERSION
                 summary.availability.observation_epoch_ms = Timestamp.now().epoch_ms()
+                held_by_band: dict[int, dict[str, int]] = {}
                 for token, device_capacity in capacity.items():
                     summary.availability.amounts[token] = device_capacity.free
                     summary.availability.total_amounts[token] = device_capacity.total
+                    for band, amount in device_capacity.held_by_band.items():
+                        held_by_band.setdefault(band, {})[token] = amount
+                for band, amounts in sorted(held_by_band.items()):
+                    summary.availability.held_by_band.add(band=band, amounts=amounts)
 
             if variant == "kubernetes":
                 summary.detail.kubernetes.CopyFrom(backend_status.kubernetes)

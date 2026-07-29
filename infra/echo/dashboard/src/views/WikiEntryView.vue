@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
 import { fetchJson, formatDate, type WikiHit } from '../types'
+import WikiTags from '../WikiTags.vue'
 
 const props = defineProps<{ id: string }>()
 
@@ -51,6 +52,7 @@ watch(() => props.id, load)
     <p class="mt-6 rounded-xl border border-fern/20 bg-white/70 px-4 py-3 text-sm font-medium leading-6 text-moss">
       Use when: {{ entry.use_when }}
     </p>
+    <WikiTags :tags="entry.tags" class="mt-4" />
     <div class="mt-7 whitespace-pre-wrap text-[15px] leading-7 text-ink/80">{{ entry.body }}</div>
     <div class="mt-8 flex items-center justify-between border-t border-line pt-5">
       <span class="text-sm text-ink/45">{{ entry.reference_count }} references</span>

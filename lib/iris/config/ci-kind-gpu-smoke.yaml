@@ -25,7 +25,6 @@ storage:
 
 kubernetes_provider:
   namespace: iris
-  default_image: ghcr.io/marin-community/iris-task:latest  # branch-agnostic; gang code is in the controller
   kubeconfig: ""                                            # in-cluster auth inside the controller pod
   host_network: false                                       # kind: cluster DNS for bundle fetch + jax coordinator
   cache_dir: /tmp/iris-cache

@@ -10,20 +10,26 @@ rewrites every run's per-sample parquet exports from its kept ``samples_*.jsonl`
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import click
 from iris.cli.connect import open_iris_client
+from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import Platform, default_platform
 from marin.evaluation.records import CW_RECORDS_PREFIX, DEFAULT_RECORDS_PREFIX, list_records
-from marin.evaluation.runner import LaunchProvenance, wait_and_report
+from marin.evaluation.runner import EvaluationBatch, wait_and_report
 from marin.evaluation.samples import export_lm_eval_samples
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.evaluation.evals import EVALS, SUITES
-from experiments.evaluation.launch import LaunchSpec, build_evaluation_batch, launch_group
+from experiments.evaluation.launch import (
+    HarborConfigSelection,
+    LaunchSpec,
+    launch_group,
+    prepare_evaluation_batch,
+)
 from experiments.evaluation.models import models
-
-_DRY_RUN_IDENTITY = "dry-run"
 
 
 def _resolve_eval_keys(evals_arg: str) -> tuple[str, ...]:
@@ -36,15 +42,7 @@ def _resolve_eval_keys(evals_arg: str) -> tuple[str, ...]:
     return keys
 
 
-def _print_plan(spec: LaunchSpec) -> None:
-    batch = build_evaluation_batch(
-        spec,
-        LaunchProvenance(
-            git_sha=_DRY_RUN_IDENTITY,
-            launch_host=_DRY_RUN_IDENTITY,
-        ),
-        _DRY_RUN_IDENTITY,
-    )
+def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
     click.echo(f"model: {spec.model}  platform: {spec.platform.value}  cluster: {spec.cluster}")
     for evaluation in batch.evaluations:
         tasks = [task.name for task in evaluation.identity.eval_ref.tasks]
@@ -64,7 +62,18 @@ def cli() -> None:
 
 @cli.command()
 @click.option("--model", required=True, help="Model registry key.")
-@click.option("--evals", "evals_arg", default="smoke", help="Suite name (e.g. 'smoke') or comma-separated eval keys.")
+@click.option(
+    "--evals",
+    "evals_arg",
+    default=None,
+    help="Suite name (e.g. 'smoke') or comma-separated eval keys; defaults to smoke.",
+)
+@click.option(
+    "--harbor-config",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    multiple=True,
+    help="Harbor JobConfig YAML or JSON. Repeatable and additive with --evals.",
+)
 @click.option(
     "--platform",
     type=click.Choice([p.value for p in Platform]),
@@ -90,7 +99,8 @@ def cli() -> None:
 @click.option("--cluster", default="marin", envvar="IRIS_CLUSTER", help="Named iris cluster to submit to.")
 def launch(
     model: str,
-    evals_arg: str,
+    evals_arg: str | None,
+    harbor_config: tuple[Path, ...],
     platform: str | None,
     accelerator: str | None,
     limit: int | None,
@@ -107,9 +117,22 @@ def launch(
         raise click.BadParameter(f"unknown model {model!r}; known: {sorted(catalog)}")
     model_config = catalog[model]
     resolved_platform = Platform(platform) if platform else default_platform(model_config)
+    harbor_configs = [
+        HarborConfigSelection(
+            name=canonical_served_name(path.stem),
+            path=path,
+        )
+        for path in harbor_config
+    ]
+    evals = (
+        _resolve_eval_keys(evals_arg)
+        if evals_arg is not None
+        else (() if harbor_configs else _resolve_eval_keys("smoke"))
+    )
     spec = LaunchSpec(
         model=model,
-        evals=_resolve_eval_keys(evals_arg),
+        evals=evals,
+        harbor_configs=tuple(harbor_configs),
         platform=resolved_platform,
         accelerator=accelerator,
         limit=limit,
@@ -118,11 +141,16 @@ def launch(
         version=version,
         description=description,
     )
+    try:
+        batch = prepare_evaluation_batch(spec)
+    except ValueError as exc:
+        param_hint = "--harbor-config" if harbor_config else "--evals"
+        raise click.BadParameter(str(exc), param_hint=param_hint) from exc
     if dry_run:
-        _print_plan(spec)
+        _print_plan(spec, batch)
         return
     with open_iris_client(cluster_name=cluster, workspace=find_project_root()) as client:
-        group = launch_group(spec, client)
+        group = launch_group(batch, client)
         click.echo(
             f"submitted group {group.group_id} ({len(group.evaluations)} evals, one serve) to cluster {cluster!r}"
         )

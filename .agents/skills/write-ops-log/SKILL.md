@@ -1,148 +1,110 @@
 ---
 name: write-ops-log
-description: Write a postmortem incident record to .agents/ops/. Use after an infrastructure or durable debugging session.
+description: Publish a tagged postmortem incident record to Echo. Use after an infrastructure or durable debugging session, then link the canonical Echo URL from the associated PR or issue.
 ---
 
-# Skill: Ops Log
+# Skill: Write an Ops Log
 
-Summarize a debugging / incident-response conversation as a standalone
-postmortem entry under `.agents/ops/`. This is the canonical home for
-infrastructure and durable debugging incident records; `docs/` is not. The
-audience is a future sysops engineer (probably another Claude session) with no
-memory of this conversation who must reconstruct: what broke, what was tried,
-what the user steered, what fixed it, and how OPS.md guidance could have
-shortened the investigation.
+Publish the incident record to Echo. Do not add a repository debug-log file.
+The audience is a future engineer with no memory of the investigation who must
+reconstruct what broke, what was tried, what changed the direction, what fixed
+it, and which reusable guidance could have shortened the work.
 
-## Filename
+## Search before writing
 
-`.agents/ops/YYYY-MM-DD-<slug>.md`
+Invoke `consult-echo` and run its complete search-before-write sequence. Edit
+the existing entry when it covers the same incident. Create a new entry for a
+different incident even when the symptom resembles an older one; link related
+incidents and create or extend a separate synthesis only when they establish a
+reusable cross-incident pattern.
 
-The `.agents/ops/` directory is checked into git; `.agents/ops/logs/` is
-gitignored (matched by the global `logs/` pattern), so do not nest records
-under a `logs/` subdirectory. Do not use `docs/debug-log-*.md` or another
-debug-log directory.
+## Draft the Echo entry
 
-- Use the date the issue was investigated, not today's arbitrary date.
-- `<slug>` is 3-6 words, kebab-case, naming the system + symptom. Examples:
-  `iris-scheduler-freeze`, `coreweave-nodepool-stuck-delete`,
-  `zephyr-coordinator-oom`.
-- If a log already exists for this incident, extend it with a new section
-  rather than creating a parallel file.
+Write an OKF document in a temporary file:
 
-## Structure
-
-Write a single markdown file with these sections in order. Don't invent
-extra sections; omit any section that genuinely has nothing to say.
-
-### Frontmatter
-
-```yaml
+```markdown
 ---
-date: YYYY-MM-DD
-system: iris | zephyr | fray | coreweave | gcp | <component>
-severity: outage | degraded | near-miss | diagnostic-only
-resolution: fixed | mitigated | wontfix | investigating
-pr: <url or "none">
-issue: <url or "none">
+type: wiki-note
+title: "Incident YYYY-MM-DD: <system> — <symptom>"
+use_when: when investigating <specific symptom or exact error>
+tags:
+  - incident
+  - debugging
+  - ops
+  - <system>
+  - <severity>
+  - <resolution>
 ---
+
+# <System or component>: <symptom>
+
+## TL;DR
+
+- <user-visible symptom>
+- <root cause>
+- <fix or mitigation>
+- <remaining caveat>
+
+## Original problem report
+
+<What the user observed, including the exact error or dashboard text.>
+
+## Investigation path
+
+1. <What was checked, why, and what it established.>
+
+## User course corrections
+
+- <What direction changed, what the user supplied, and why it mattered.>
+
+## Root cause
+
+<One or two concrete paragraphs with code, query, log, or dashboard evidence.>
+
+## Fix
+
+<What changed. Separate code changes from live repair or migration steps.>
+
+## How OPS.md could have shortened this
+
+<The reusable procedure or diagnostic signal to add, or state that no generic
+OPS.md change follows from this incident.>
+
+## Artifacts
+
+- <PR, issue, dashboard, durable log bundle, or source URL>
 ```
 
-### TL;DR (3-6 bullets)
+Use the incident's investigation date. Use lowercase kebab-case tags and no
+more than 20. Always include `incident` and `debugging`; add `ops` for
+infrastructure work, followed by the subsystem, severity, and resolution.
 
-One screen. A future engineer should know from this alone whether the log is
-relevant. Include: user-visible symptom, real root cause, fix applied, any
-lingering caveat.
+## Write the record
 
-### Original problem report
+Create a new incident:
 
-Quote or paraphrase the user's opening message — what they *observed*, not the
-real bug. This is the pattern-match hook: preserve the exact error string /
-dashboard text / command the next engineer will grep for.
+```bash
+uv run infra/echo/cli.py wiki add --file incident.md
+```
 
-### Investigation path
+Continue the same incident:
 
-Narrative, not a log dump. What was checked, in order, and why. Include dead
-ends — they teach what *not* to spend time on. Cite file:line for code read,
-commit/log timestamps for live data.
+```bash
+uv run infra/echo/cli.py wiki show <id> > incident.md
+# Edit incident.md.
+uv run infra/echo/cli.py wiki edit <id> --file incident.md
+```
 
-Format as a numbered list of short paragraphs. Five to twelve steps; longer
-means you're narrating tool calls instead of decisions.
+Both commands print the canonical Echo URL. Return that URL and add it to the
+associated PR description or issue. Do not commit the temporary OKF file.
 
-### User course corrections
+## Keep the record useful
 
-Explicit list of points where the user redirected the investigation. Each
-entry: what the model was about to do, what the user said instead, and why it
-was right. The most load-bearing section — it captures judgment the model
-lacked.
-
-### Root cause
-
-Tight technical description, one or two paragraphs. Cite the specific file:line
-of the bug. If there's a class of bug (e.g. "invariant violation between tables
-X and Y"), name it.
-
-### Fix
-
-What changed, with file paths and a short diff-style excerpt if subtle. Include
-the migration / data repair step separately from the code change. If the fix is
-deferred, say so and link the tracking issue.
-
-### How OPS.md could have shortened this
-
-Concrete, actionable suggestions for `lib/<component>/OPS.md` edits. Each
-suggestion: the section to edit, the sentence or command to add, and the signal
-it would have unblocked.
-
-**Generic patterns only.** OPS.md is for recurring diagnostic workflows across
-many incidents — not this one bug. Before writing a suggestion, ask: *would
-this help an engineer debugging a completely different incident in the same
-subsystem?* If not, drop it.
-
-Good OPS.md addition: a recurring smell mapped to a class of cause — e.g. "same
-pending-reason text on many jobs → diagnostic cache has stopped updating"
-(applies to any future cache-update bug, not just this one). Also good: a new
-tool/workflow the investigation relied on, or a default that burned time.
-
-Bad OPS.md addition: a troubleshooting row keyed on the exact literal string
-this incident produced — Known-Bugs material at best, noise after the fix
-ships. Also bad: SQL queries that only detect this specific invariant
-violation, or "watch out for bug X" entries that duplicate the git log.
-
-If a lesson is genuinely incident-specific, put it in "Root cause"/"Fix" here;
-don't propose it for OPS.md. Avoid vague "improve documentation" — name the
-exact section and text to add. This section pays forward; take it seriously.
-
-### Artifacts
-
-Links or paths to supporting evidence, in order of usefulness:
-
-- Local files staged during the investigation — only if still present; don't
-  link to `/tmp` paths already gone.
-- GCS/S3 paths to parquet / sqlite / log bundles.
-- Grafana / dashboard URLs.
-- Parent PR and follow-up issues.
-
-## Writing style
-
-- Past tense, third person; you're writing for someone who wasn't there.
-- Short, dense sentences. The reader is busy.
-- No praise, no "we" language, no apology.
-- No emojis.
-- Absolute file paths relative to the repo root (e.g.
-  `lib/iris/src/iris/cluster/controller/transitions.py:2167`).
-- Command-line snippets the next engineer can paste verbatim.
-- If you cite a log message, preserve its exact text — that's the grep string.
-
-## What to skip
-
-- Minute-by-minute narration of tool calls.
-- Code already obvious from the fix diff.
-- Generic reminders ("remember to check logs first").
-- Hedged conclusions. If the root cause is known, state it; if not, say so
-  under "Investigating".
-
-## After writing
-
-Do not add an index file or update `MEMORY.md`. Logs are discoverable by
-`ls .agents/ops/` and full-text search. If the directory gets unwieldy (>30
-entries), flag it to the user.
+- Preserve exact error strings and canonical evidence URLs.
+- Summarize decisions and dead ends; do not paste raw logs or narrate every tool
+  call.
+- Keep incident-specific detail here. Promote recurring procedures and
+  guardrails to the relevant `OPS.md`.
+- Update `docs/` when behavior or configuration guidance belongs with the
+  repository.
+- Record an unknown root cause as unknown; do not fill the gap with speculation.

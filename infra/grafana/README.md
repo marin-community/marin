@@ -37,15 +37,17 @@ GET /iris/{cluster}/jobs | workers | health      live controller RPCs
 GET /iris/{cluster}/query?sql=                    ad-hoc SELECT (admin/null-auth)
 GET /github/ferries | builds | nightlies          GitHub REST / GraphQL
 GET /wandb/{train-loss,paloma-macro-loss,mfu}      public report runset and sampled history
+GET /overview/provisioning                         latest fleet and resource-pool cycle
 GET /k8s/control_plane | crashloops | pending     CW control-plane state, all clusters
 GET /k8s/termination_candidates | kueue | events | health
                                                     ... one response, `cluster` column
+GET /k8s/nodes                                    node readiness, cordons, deadlocks, reboot state
 GET /k8s/finelog | finelog_events                 mirror pods/PVCs and matching warnings
 GET /k8s/overview                                 explicit pending/crashloop counts
 GET /k8s/gpu_racks                                GPU nodes grouped by physical rack: trays total/ready
 GET /k8s/alerts/{unreachable,crashloops,          alert rows: string labels + one
-     webhook_ready,degraded,stuck_gpu_pods,        numeric; gpu_rack_trays omits rows for
-     gpu_rack_trays}                               a cluster it cannot reach, others zero
+     webhook_ready,degraded,node_deadlocks,        numeric; gpu_rack_trays omits rows for
+     stuck_gpu_pods,gpu_rack_trays}                a cluster it cannot reach, others zero
 GET /health                                       bridge liveness
 ```
 
@@ -84,7 +86,11 @@ W&B: the bridge reads the public hero-training report anonymously, follows the r
 pinned in its report spec, and samples train cross-entropy, Paloma macro loss, and MFU
 against cumulative training tokens. Grafana receives flat rows and never needs a W&B key.
 
-k8s: the bridge polls the three CoreWeave clusters' public CKS API servers with plain
+`overview/provisioning` reads the latest shared cycle in the prior six hours. It returns
+one fleet row and one row per resource pool. Each row contains outcome counts, success
+ratio, latency, and pool-health fields from the former status page.
+
+k8s: the bridge polls the four CoreWeave clusters' public CKS API servers with plain
 httpx GETs (paginated LISTs, bounded timeouts, one 429 retry) and a single org-wide CW
 read-role bearer token from `CW_READ_TOKEN` — genuine read-only kubectl, no Secrets, no
 writes. Each response aggregates every cluster with a `cluster` column: watched
@@ -100,6 +106,12 @@ finalizers. The pod-level scans skip provider-managed namespaces (`cw-*`, `kube-
 CoreWeave's per-node daemons are thousands of pods of someone else's infrastructure,
 while the namespaces we operate hold about a hundred. These are current-state reads —
 the bridge stores no history; trends come from the finelog-backed rows.
+
+`nodes` reports Kubernetes readiness and schedulability together with CoreWeave's
+`node.coreweave.cloud/cordonReason`, `KernelDeadlock`, and `PendingPhaseState`
+signals. `CoreWeaveNodeKernelDeadlock` pages when `KernelDeadlock=True` persists
+for five minutes. The alert labels carry the node and structured condition reason;
+the dashboard retains the condition message and pending lifecycle phase for diagnosis.
 
 `gpu_racks` lists every GB200 NVL72 node (`nvidia.com/gpu` capacity present and
 `node.kubernetes.io/instance-type` containing `gb200`), grouped by its CoreWeave
@@ -138,6 +150,7 @@ src/finelog_source.py  finelog query over its internal IP (LogClient)
 src/iris_source.py     live controller RPCs: jobs, workers, health, federation peers, ad-hoc query
 src/github_source.py   ferry runs and CI build rollup, precomputed
 src/wandb_source.py    public W&B report runset and token-axis samples
+src/overview.py        fixed provisioning projection for the status page
 src/k8s_source.py      CW k8s API reads + the per-cluster fan-out and alert rows
 src/discovery.py       GCE label -> internal IP
 src/config.py          cluster targets, watched components, and bridge settings
@@ -147,16 +160,16 @@ src/dashboard_stitch.py  resolves dashboards/*.json panelRef markers into full p
 provisioning/          datasources (finelog, iris, github, k8s), dashboards, alerting
 dashboards/            dashboard JSON source — reviewed like code; see "Adding a dashboard"
 dashboards/panels/     panel bodies shared across dashboards, referenced by panelRef
-marin-infra-panel/     internal React panel for the matrix, CI strip, and W&B charts
+marin-infra-panel/     internal React status page and its reusable dense views
 Dockerfile             Grafana + bridge venv + pinned Infinity and internal panel plugins
 entrypoint.sh          runs both; if either dies the container dies
 __main__.py            Pulumi entry point — the Cloud Run service (iac.gcp.cloud_run)
 Pulumi.yaml            Pulumi project, run on the shared repo venv
 ```
 
-Dashboards: `home.json` (the landing page — see below), `infra.json` (the compact
-cockpit — nightlies, CI and ferries, Iris capacity, provisioning, control-plane
-health, Kubernetes workload state, and hero training), `jobs.json` (fleet job
+Dashboards: `home.json` (the landing page — see below), `infra.json` (a custom
+React status page for nightly regressions, main CI, worker capacity, provisioning,
+and hero training), `jobs.json` (fleet job
 state — see below), `fleet.json` (canary +
 worker health), `iris.json`
 (per-task and per-worker resource usage), `pipelines.json` (Zephyr throughput and shard
@@ -297,14 +310,15 @@ Rotation is overlap-safe:
    line with no CR/LF; Secret Manager preserves trailing newlines.
 2. Use the token against one cluster's `SelfSubjectReview` to get its
    `cwtoken-…` username. Append it to `grafana_observer_rbac.usernames` in
-   `cw-us-east-02a.yaml`, `cw-us-east-08a.yaml`, and `cw-rno2a.yaml`, retaining
+   `cw-us-east-02a.yaml`, `cw-us-east-08a.yaml`, `cw-rno2a.yaml`, and
+   `cw-us-west-04a.yaml`, retaining
    the old username during the handoff.
-3. Preview and update the three CoreWeave Pulumi stacks. Verify both tokens can
+3. Preview and update the four CoreWeave Pulumi stacks. Verify both tokens can
    `list nodes`, while pod creation, Secret reads, and impersonation remain
    denied.
 4. Add the new token as a `marin-grafana-cw-read-token` version, deploy a fresh
    Grafana revision, and verify every k8s bridge route.
-5. Remove the old username from the three configs and update the stacks again.
+5. Remove the old username from the four configs and update the stacks again.
    Then disable the old secret version and revoke the old CoreWeave token.
 
 The same Secret Manager overlap pattern applies to the Slack webhook and SMTP

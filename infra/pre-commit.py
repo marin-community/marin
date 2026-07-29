@@ -649,9 +649,6 @@ SKILL_REFERENCE_PLACEHOLDERS = [
     "graphs.jsonl",
     "tasks.jsonl",
 ]
-SKILL_REFERENCE_ALLOWLIST = {
-    ".agents/ops/logs/",
-}
 
 
 def _is_skill_file(file_path: pathlib.Path) -> bool:
@@ -665,10 +662,8 @@ def _skill_reference_exists(skill_path: pathlib.Path, reference: str) -> bool:
 
 
 def _should_skip_skill_reference(reference: str) -> bool:
-    return (
-        reference in SKILL_REFERENCE_ALLOWLIST
-        or any(token in reference for token in SKILL_REFERENCE_PLACEHOLDERS)
-        or any(character in reference for character in "*{}")
+    return any(token in reference for token in SKILL_REFERENCE_PLACEHOLDERS) or any(
+        character in reference for character in "*{}"
     )
 
 

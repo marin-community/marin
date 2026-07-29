@@ -7,9 +7,10 @@ provides an IAP-gated HTTP interface and browser dashboard.
 
 - `chunks` contains issues, pull requests, comments, and Discord messages. Each row has
   a canonical URL, a weighted PostgreSQL full-text document, and a pgvector embedding.
-- `wiki_entries` contains durable agent-authored notes with a title, a one-sentence
-  `use_when` hint, a body, pgvector embeddings, timestamps, attribution, and
-  deliberate-reference counters. Search indexes all three text fields.
+- `wiki_entries` contains durable agent-authored notes and incident records with a
+  title, a one-sentence `use_when` hint, lowercase kebab-case tags, a body, pgvector
+  embeddings, timestamps, attribution, and deliberate-reference counters. Search
+  indexes the prose fields and can filter by tags.
 - `work_log` is an append-only agent logbook with one row per distilled milestone.
 
 ## CLI
@@ -20,7 +21,7 @@ provides an IAP-gated HTTP interface and browser dashboard.
 uv run infra/echo/cli.py search "expert parallel MoE MFU on B200" --limit 10
 uv run infra/echo/cli.py grep ragged_all_to_all --source discord
 uv run infra/echo/cli.py show <id>
-uv run infra/echo/cli.py wiki search "grafana access"
+uv run infra/echo/cli.py wiki search "grafana access" --tag ops
 uv run infra/echo/cli.py wiki add --file note.md          # OKF markdown document
 uv run infra/echo/cli.py wiki show <id> > note.md         # export as OKF, edit, then:
 uv run infra/echo/cli.py wiki edit <id> --file note.md
@@ -39,7 +40,8 @@ higher scores are better. Exact identifiers and names receive a strong lexical s
 paraphrases can enter through the semantic candidates. `grep` is a case-insensitive literal
 substring scan, newest first. Discord results contain one message, so open the result URL
 when the surrounding thread matters. Wiki writes go through the API so it can embed and
-attribute each note.
+attribute each note. Repeat `wiki search --tag <tag>` to require several tags. Tags are
+normalized to lowercase, deduplicated, and limited to 20 kebab-case values per entry.
 
 Wiki notes are authored as [Open Knowledge Format](https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing)
 (OKF) documents — a markdown file with a YAML frontmatter block. `wiki add --file` and
@@ -51,6 +53,9 @@ file (the `--title`/`--use-when`/`--body` flags remain as an alternative to `--f
 type: wiki-note
 title: chunks.text needs a pg_trgm index for grep
 use_when: when grep or ILIKE substring queries over the corpus are slow
+tags:
+  - echo
+  - debugging
 ---
 
 A pg_trgm GIN index on chunks.text makes the substring match an index scan.
@@ -98,6 +103,10 @@ npm --prefix infra/echo/dashboard run dev
 
 Rsbuild's development server proxies `/api/...` requests to `http://127.0.0.1:8000`.
 Production builds are compiled into the API image and served from the same origin.
+
+Infrastructure and durable debugging records are canonical Echo entries tagged
+`incident`, `debugging`, `ops`, the subsystem, severity, and resolution. Link the URL
+printed by `wiki add` or `wiki edit` from the associated PR or issue.
 
 ## Infrastructure
 

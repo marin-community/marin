@@ -1,7 +1,9 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { toDataFrame } from '@grafana/data';
+import { render, screen, within } from '@testing-library/react';
 import { CommitStrip } from './CommitStrip';
 import { NightlyMatrix } from './NightlyMatrix';
+import { StatusPage } from './StatusPage';
 import { WandbChart } from './WandbChart';
 
 // An empty query result — what the bridge returns while a source is briefly
@@ -16,4 +18,36 @@ test('every view renders a placeholder instead of throwing on empty data', () =>
 
   rerender(<WandbChart frames={[]} width={480} height={200} />);
   expect(screen.getByText('No W&B data')).toBeInTheDocument();
+});
+
+function frame(refId: string, rows: Array<Record<string, unknown>>) {
+  return toDataFrame({
+    refId,
+    fields: Object.keys(rows[0]).map((name) => ({ name, values: rows.map((row) => row[name]) })),
+  });
+}
+
+test('status page keeps worker and provisioning status visible when another source has no data', () => {
+  const frames = [
+    frame('W', [{
+      region: 'us-east5', healthy: 12, cpu_millicores: 96000, memory_bytes: 1099511627776, tpu_chips: 64,
+    }]),
+    frame('P', [{
+      scope: 'fleet', collected_at: Date.now(), resource_type: '', scale_group: '', zone: '',
+      ready: 8, stockout: 1, error: 1, preempted: 2, outcomes: 10, success_ratio: 0.8,
+      pools_placing: 4, pools_no_ready_outcome: 1, latency_p50_seconds: 45,
+      latency_p95_seconds: 90, window_hours: 3,
+    }]),
+  ];
+
+  render(<StatusPage frames={frames} width={1400} height={1500} />);
+
+  expect(screen.getByRole('main', { name: 'Marin infrastructure status' })).toBeInTheDocument();
+  const workers = screen.getByRole('region', { name: 'Worker status' });
+  expect(within(workers).getByText('healthy workers')).toBeInTheDocument();
+  expect(within(workers).getByText('us-east5')).toBeInTheDocument();
+  const provisioning = screen.getByRole('region', { name: 'Provisioning status' });
+  expect(within(provisioning).getByText('80%')).toBeInTheDocument();
+  expect(within(provisioning).getByText('pools without ready outcome')).toBeInTheDocument();
+  expect(screen.getAllByText('No W&B data')).toHaveLength(3);
 });

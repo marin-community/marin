@@ -24,6 +24,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /github/builds                           recent main commits with CI rollup state
     GET /github/nightlies                        7-day nightly-lane matrix (one row per lane/day)
     GET /wandb/{chart}                           sampled public hero-report series by chart key
+    GET /overview/provisioning                   latest fleet and resource-pool provisioning cycle
     GET /k8s/control_plane                       watched components + webhook endpoints, all clusters
     GET /k8s/crashloops                          containers in backoff waiting states
     GET /k8s/pending                             Pending / SchedulingGated pods with age
@@ -32,13 +33,14 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /k8s/events                              recent Warning events
     GET /k8s/finelog                             finelog pod, probe, resource, and PVC details
     GET /k8s/finelog_events                      recent Warning events involving finelog
-    GET /k8s/health                              per-cluster API server reachability + latency
+    GET /k8s/health | nodes                      API reachability and CoreWeave node health
     GET /k8s/overview                            explicit workload issue counts (zeros included)
     GET /k8s/gpu_racks                           GPU nodes grouped by physical rack: trays total/ready
     GET /k8s/alerts/unreachable                  alert rows: cluster, error_class, value(0|1)
     GET /k8s/alerts/crashloops?scope=            alert rows: cluster, scope, value(count)
     GET /k8s/alerts/webhook_ready                alert rows: cluster, webhook, value(ready count)
     GET /k8s/alerts/degraded                     alert rows: cluster, component, value(desired-ready)
+    GET /k8s/alerts/node_deadlocks                alert rows: cluster, node, reason, value(0|1)
     GET /k8s/alerts/stuck_gpu_pods                alert rows: cluster, node, value(count)
     GET /k8s/alerts/gpu_rack_trays                alert rows: cluster, rack_name, value(trays_ready)
     POST /alerts/loom                             firing Grafana groups become Loom automation runs
@@ -57,7 +59,7 @@ import json
 import logging
 from collections.abc import Mapping
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pyarrow as pa
 import uvicorn
@@ -81,6 +83,7 @@ from iris_source import IrisSource
 from k8s_source import K8sFleet, K8sSource
 from loom_alerts import LoomAlertClient, LoomAlertDeliveryError, LoomAlertPayloadError
 from nightly_config import NIGHTLY_LANES
+from overview import PROVISIONING_LOOKBACK_HOURS, provisioning_query, provisioning_rows
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -418,6 +421,23 @@ def create_app(
         except UpstreamError as err:
             return JSONResponse({"error": str(err), "source": err.source}, status_code=err.status_code)
 
+    def overview_provisioning(_: Request) -> JSONResponse:
+        try:
+            now = datetime.now(UTC)
+
+            def run() -> list[dict]:
+                source = finelog_sources[_target_for(_FINELOG_HUB_CLUSTER, finelog_sources).name]
+                cutoff = now - timedelta(hours=PROVISIONING_LOOKBACK_HOURS)
+                table = source.query(provisioning_query(cutoff), max_rows=config.max_rows)
+                return [asdict(row) for row in provisioning_rows(rows_to_json(table))]
+
+            key = ("overview_provisioning", _bucket(now, config.cache_ttl))
+            return JSONResponse(finelog_cache.get_or_compute(key, run))
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        except QueryResultTooLargeError as err:
+            return JSONResponse({"error": f"{err}; reduce the provisioning lookback"}, status_code=400)
+
     def k8s_endpoint(key: str, run) -> JSONResponse:
         # Per-cluster failures are labeled rows inside the response; only a bridge
         # bug raises here, and Starlette turns that into a 500.
@@ -460,6 +480,9 @@ def create_app(
     def k8s_health(_: Request) -> JSONResponse:
         return k8s_endpoint("health", k8s_fleet.health)
 
+    def k8s_nodes(_: Request) -> JSONResponse:
+        return k8s_endpoint("nodes", k8s_fleet.nodes)
+
     def k8s_overview(_: Request) -> JSONResponse:
         def compute() -> list[dict]:
             pending = k8s_cache.get_or_compute("pending", k8s_fleet.pending)
@@ -488,6 +511,9 @@ def create_app(
 
     def k8s_alerts_degraded(_: Request) -> JSONResponse:
         return k8s_endpoint("alerts_degraded", k8s_fleet.alert_degraded)
+
+    def k8s_alerts_node_deadlocks(_: Request) -> JSONResponse:
+        return k8s_endpoint("alerts_node_deadlocks", k8s_fleet.alert_node_deadlocks)
 
     def k8s_alerts_gpu_rack_trays(_: Request) -> JSONResponse:
         return k8s_endpoint("alerts_gpu_rack_trays", k8s_fleet.alert_gpu_rack_trays)
@@ -524,6 +550,7 @@ def create_app(
             Route("/github/builds", github_builds),
             Route("/github/nightlies", github_nightlies),
             Route("/wandb/{chart}", wandb_chart),
+            Route("/overview/provisioning", overview_provisioning),
             Route("/finelog/{cluster}/query", query),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/fleet_health", finelog_fleet_health),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/fleet_health", finelog_alerts_fleet_health),
@@ -542,12 +569,14 @@ def create_app(
             Route("/k8s/finelog", k8s_finelog),
             Route("/k8s/finelog_events", k8s_finelog_events),
             Route("/k8s/health", k8s_health),
+            Route("/k8s/nodes", k8s_nodes),
             Route("/k8s/overview", k8s_overview),
             Route("/k8s/gpu_racks", k8s_gpu_racks),
             Route("/k8s/alerts/unreachable", k8s_alerts_unreachable),
             Route("/k8s/alerts/crashloops", k8s_alerts_crashloops),
             Route("/k8s/alerts/webhook_ready", k8s_alerts_webhook_ready),
             Route("/k8s/alerts/degraded", k8s_alerts_degraded),
+            Route("/k8s/alerts/node_deadlocks", k8s_alerts_node_deadlocks),
             Route("/k8s/alerts/gpu_rack_trays", k8s_alerts_gpu_rack_trays),
             Route("/k8s/alerts/stuck_gpu_pods", k8s_alerts_stuck_gpu_pods),
         ]

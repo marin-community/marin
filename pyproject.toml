@@ -170,8 +170,6 @@ marin-zephyr = { workspace = true }
 nvidia-cutlass-dsl = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
-# Managed by config/update-external.py from config/external/harbor/uv.lock.
-harbor = { git = "https://github.com/marin-community/harbor.git", rev = "725fc069555013da7ae7f895dd3658a2c2452d55" }
 # Changes to TPU-vLLM fork SHAs must follow one of these protocols: if this is a
 # release/LKG refresh, then follow .agents/skills/refresh-tpu-vllm-forks/SKILL.md;
 # if this is a fixed-base overlay PR, then follow
@@ -323,11 +321,6 @@ ignore-missing-imports = [
     # Optional extra marin-rigging[secrets]; only rigging.secrets imports it, lazily.
     "google.cloud.secretmanager",
     "google.cloud.secretmanager.*",
-    "harbor",
-    "harbor.*",
-    # Ships with the harbor extra (universal-pathlib); marin.harbor imports it.
-    "upath",
-    "upath.*",
     "jax_triton",
     "jax_triton.*",
     "jaxlib",

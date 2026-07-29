@@ -62,7 +62,7 @@ class EvalTaskRef(BaseModel):
 
 
 class HarborRef(BaseModel):
-    """The Harbor dataset a run evaluated: registry name, version, agent, and sandbox environment."""
+    """The Harbor dataset, policy identity, agent, and sandbox environment used by a run."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -70,6 +70,16 @@ class HarborRef(BaseModel):
     version: str
     agent: str
     env: str
+    task_limit: int | None = Field(
+        default=None,
+        description="Marin runtime task cap; source-policy n_tasks remains part of config_digest",
+        exclude_if=lambda value: value is None,
+    )
+    config_digest: str | None = Field(
+        default=None,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+        exclude_if=lambda value: value is None,
+    )
 
 
 class EvalRef(BaseModel):
