@@ -2,14 +2,17 @@
 
 ## TL;DR
 
-Still undetermined. The pre-registered fast OOM did not occur: the final
-attempt compiled far enough to hold 148,525 MiB (145.0 GiB) resident on GPU 0
-without the recorded approximately 104 GiB allocation failure. It never emitted
-a training step, however. Its 64 GPUs were fragmented 12/52 across two physical
-slices, and the first-step compile/execution phase stopped producing logs while
-all four probed GPUs remained at 100% low-power utilization. The job was stopped
-after one hour, at the experiment budget. This report was pre-registered at
-2026-07-28 22:32 UTC, before any result was seen.
+Supported. The empty-cluster retry completed all 120 steps with finite loss and
+drop metrics on one physical slice. Tail steps 100–119 averaged 276.1K tok/s,
+17.82% MFU, and 11.42% drops; final loss was 5.6268. The run emitted neither
+the recorded 104.03/104.13 GiB allocation failure nor the involuntary-full-
+rematerialization diagnostic. The old failures and this arm both used
+`cuda_async`, so the allocator cannot explain the change.
+
+The pre-registered prediction below was registered at 2026-07-28 22:32 UTC,
+before any original or retry result was seen, and is carried forward verbatim.
+It predicted a fast OOM and was falsified. This result supports the shared C2
+root-cause hypothesis; it does not make EP32 a candidate operating point.
 
 ## Pre-registration
 
@@ -55,7 +58,84 @@ follow-up: both the old failure and this arm use `cuda_async`.
 
 ## Job
 
-Job ID: `/mwittmann/deri-d8-ep32-c2-120-0728-1715`
+Predecessor job ID: `/mwittmann/deri-d8-ep32-c2-120-0728-1715`
+
+### Empty-cluster retry
+
+The prediction in the pre-registration section above is carried forward
+verbatim. It was registered at 2026-07-28 22:32 UTC, before any result from the
+original run or this retry was seen. The retry was pre-recorded here at
+2026-07-29 04:08 UTC, before submission and before inspecting any retry result.
+
+The retry keeps every experiment variable from the predecessor's command. The
+only operational changes are the new run ID, the now-required default federated
+route through `marin`, and default interactive priority on both the parent and
+child. The cluster had emptied since the inconclusive 12/52 two-slice placement.
+
+Exact retry command:
+
+```bash
+IRIS_USER=mwittmann .venv/bin/iris --cluster=marin job run --no-wait \
+  --target-cluster cw-us-east-08a --user mwittmann --memory 2GB \
+  --job-name deri-d8-ep32-c2-120-0728-2108-r1 \
+  -e RUN_ID deri-d8-ep32-c2-120-0728-2108-r1 \
+  -e IRIS_CHILD_PRIORITY 0 \
+  -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async \
+  -e XLA_FLAGS "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false --xla_gpu_experimental_parallel_collective_overlap_limit=4" \
+  -e SCALE_ATTN_IMPL gpu_fa4_cute -e SCALE_WATCH_INTERVAL 0 -e SCALE_CHECKPOINTS local \
+  -e SCALE_A2A_FIXED 1 -e SCALE_A2A_CHUNKS 1 -e SCALE_A2A_NO_BARRIER 1 \
+  -e SCALE_A2A_GATHER_DISPATCH 1 -e SCALE_A2A_CUSTOM_ADJOINT 1 \
+  -e SCALE_GPUS_PER_NODE 4 -e SCALE_GPU_TYPE GB200 -e SCALE_GPU_REPLICAS 16 \
+  -e SCALE_REPLICA_AXIS 1 -e SCALE_EXPERT_AXIS 32 \
+  -e SCALE_NUM_EXPERTS 256 -e SCALE_TOP_K 8 \
+  -e SCALE_HIDDEN_DIM 5120 -e SCALE_NUM_LAYERS 48 \
+  -e SCALE_INTERMEDIATE 1280 -e SCALE_SHARED_INTERMEDIATE 5120 \
+  -e SCALE_SEQ_LEN 4096 -e SCALE_BATCH 1024 -e SCALE_SLIDING_WINDOW 2048 \
+  -e SCALE_STEPS 120 -e SCALE_MOE_IMPL ragged_all_to_all \
+  -e SCALE_OPTIMIZER muonh -e SCALE_MUON_SYRK 1 \
+  -e SCALE_SCAN_LAYERS 1 -e SCALE_REMAT recompute_all \
+  -e SCALE_MOE_QB 1 -e SCALE_CAPACITY_FACTOR 1.0 -e SCALE_REPORT_DROPS 1 \
+  -e SCALE_TRACKER json_logger \
+  -e SCALE_JSON_LOGGER deri-d8-ep32-c2-120-0728-2108-r1.metrics \
+  -e SCALE_DISABLE_CHECKPOINT 1 \
+  -- python -m experiments.grug.moe.launch_cw_scale \
+  --version d8-ep32-c2-dev --run
+```
+
+Retry job ID: `/mwittmann/deri-d8-ep32-c2-120-0728-2108-r1`
+
+Iris accepted the job at 2026-07-29 04:08:42 UTC through the `marin`
+controller and reported that it was federating to `cw-us-east-08a`. The peer
+controller recorded priority band 2, interactive, for both the parent and all
+16 child tasks.
+
+The first GPU-gang attempt failed during `stage-workdir` on node `s1zsxs64`.
+The other 15 tasks were atomically bounced as coscheduled siblings. This is a
+new failing node, distinct from the three known bad nodes `s4bk6j84`,
+`s5kvxs64`, and `s6xvdgb4`. Iris's built-in retry placed all 16 tasks on one
+physical slice: the 64-device hardware-topology record reported
+`slice_index=0` for every device. The clean attempt initialized the exact
+EP32 configuration at 2026-07-29 04:10:35 UTC.
+
+The pre-registered fast-death prediction was falsified by step 12 of the
+120-step run. At step 12, loss was finite at 9.3383, throughput was
+299.9K tok/s, reported MFU was 19.36%, and the populated drop fraction was
+0.8706. The drop figure is an early-schedule observation, not a steady-tail
+comparison. No approximately 104 GiB allocation failure or
+involuntary-full-rematerialization signature had appeared.
+
+At step 55 of 120, loss remained finite at 6.7591 and the drop fraction had
+fallen to 0.2431. Throughput was 281.9K tok/s and reported MFU was 18.20%.
+The falling MFU is coupled to lower drops and therefore more executed expert
+work; it is not a like-for-like throughput regression. No NaN, Inf, OOM,
+rematerialization warning, or new task failure appeared.
+
+At step 95 of 120, loss was 5.9725, drop fraction was 0.1335, throughput was
+278.0K tok/s, and reported MFU was 17.95%. The loss and drop trajectories
+remained finite and downward; no OOM, rematerialization warning, or numerical
+failure had appeared.
+
+### Predecessor attempt
 
 The first parent attempt used `--version d8-ep32-c2-0728-1532`, which the
 launcher rejected because version labels must be calendar versions or end in
@@ -63,8 +143,8 @@ launcher rejected because version labels must be calendar versions or end in
 valid label but exited 137 during dependency sync under Iris's 1 GB default
 parent-memory request, also before requesting GPUs. A third attempt with 2 GB
 used the federated `marin` route at interactive priority and never entered the
-target cluster's scheduler; it was cancelled without running. The current
-attempt keeps the 2 GB parent-memory request and submits directly to
+target cluster's scheduler; it was cancelled without running. The final
+predecessor attempt kept the 2 GB parent-memory request and submitted directly to
 `cw-us-east-08a` at production priority. No experiment configuration changed
 across these attempts.
 
@@ -75,10 +155,10 @@ attempt, `/mwittmann/deri-d8-ep32-c2-120-0728-2328`, exposed a nested-priority
 bug: its parent requested production, but the Fray-created GPU child defaulted
 to interactive. It was stopped before training. The launcher now maps
 `IRIS_CHILD_PRIORITY` to the existing Fray `JobRequest.priority` field, and the
-current command sets it to production (`1`). Controller state confirmed
+predecessor command set it to production (`1`). Controller state confirmed
 production on the parent, child, and all 16 GPU tasks.
 
-The current child used its first two automatic retries on transient
+The predecessor child used its first two automatic retries on transient
 `Init:Error stage-workdir` failures. Its third attempt was placed across three
 physical slices and failed before JAX initialization because the generic
 trainer requires 64 devices to be divisible by the physical slice count. The
@@ -118,41 +198,48 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
 
 ## Result
 
-The fourth attempt initialized the exact pre-registered configuration and
-entered compilation/execution of `jit_train_step`. It did not reproduce either
-recorded EP32 failure: there was no failed 104.03/104.13 GiB allocation, no
-`RESOURCE_EXHAUSTED`/OOM, and no involuntary-full-rematerialization diagnostic.
-There is therefore no failed allocation size to report. A live `nvidia-smi`
-probe instead showed a stable resident footprint of 148,525 MiB (145.0 GiB) on
-GPU 0 and 148,503 MiB on each of the other three GPUs on task 0, out of
-189,471 MiB per device.
+The retry passed the pre-registered operational and mechanistic criteria. Both
+the parent and 16-task child succeeded, and the metric log contains all
+120 steps from 0 through 119. The child ran for 38:59 after one automatic gang
+retry. Its first attempt failed during `stage-workdir` on `s1zsxs64`; the
+successful attempt used one physical slice and none of the four recorded
+stage-workdir nodes.
 
-This was not a pass. No loss, drop-fraction, throughput, or completed-step
-metric was emitted. The hardware-topology record shows that processes 0–2
-(12 GPUs) were on physical slice 0 and processes 3–15 (52 GPUs) were on
-physical slice 1. After XLA initialized the first 64-device clique, the run
-produced no further trainer output. Repeated probes showed the same resident
-memory, 100% reported utilization, and only 206–233 W on task 0. All 16 tasks
-remained in that state until the exact root job was stopped at the budget
-boundary. Iris records the final attempt duration as 1:01:07 and both the
-parent and child as `killed: Terminated by user`.
+Loss stayed finite and fell from 9.3383 at step 12 to 5.6268 at step 119. Drop
+fraction fell from 87.06% at step 12 to 9.32% at step 119. Over tail steps
+100–119 of this 120-step schedule:
 
-The allocator interpretation trap does not require a follow-up arm here. The
-historical EP32 failure and this arm both used `cuda_async`, so the absence of
-the old OOM cannot be attributed to an allocator change. The arm did not pass
-the 120-step criterion, and the scope permits no default-allocator leg for a
-non-pass.
+- throughput averaged 276.1K tok/s with a 276.7K median;
+- reported MFU averaged 17.82% with a 17.86% median;
+- drop fraction averaged 11.42% with a 10.34% median;
+- loss averaged 5.7691 with a 5.7517 median.
+
+Every MFU figure above is paired with tok/s and drops from the same tail
+window. The 2.5 PFLOP/s-per-GB200 bf16-dense denominator is unchanged. These
+numbers characterize the diagnosis; the high drop rate and EP32 dispatch cost
+exclude them from an operating-point comparison.
+
+There is no failed allocation size to report. The complete log contains no
+104.03/104.13 GiB allocation failure, `RESOURCE_EXHAUSTED`/OOM, or
+involuntary-full-rematerialization diagnostic. Coordinator connection-refused
+messages appeared only during shutdown after task 0 exited; all 16 tasks
+finished successfully and the full metric series was already present.
+
+The allocator interpretation trap is resolved. Commit `8198bd364` records the
+original `/mwittmann/mfu-64g-a2aep` failures with `recompute_all` and
+`cuda_async`, including both allocation sizes and the SPMD diagnostic. This arm
+also used `cuda_async`. No default-allocator follow-up was run.
 
 ## Verdict
 
-The shared-root-cause hypothesis is still undetermined. The missing
-approximately 104 GiB failure is evidence that the old EP32 memory wall moved
-on the C2 code, under the same allocator. It is not enough to establish that C2
-fixed the microbatch input-resharding path: the run completed no step and
-emitted no mechanistic reshard/rematerialization evidence, while the fragmented
-two-slice placement introduced a separate collective-progress confounder.
+The shared-root-cause hypothesis is supported. On the C2 branch and the same
+allocator as the historical failures, a one-slice placement completed the real
+rematerialized step 120 times without the allocation or SPMD signature that
+defined the old EP32 failure. This is not a single-commit A/B, so it does not
+prove C2 is the only relevant code difference, but it meets both registered
+criteria for the hypothesis.
 
-No tuning, throughput arm, allocator arm, or placement retry was submitted. A
-decisive rerun would keep this command unchanged and require one contiguous
-physical slice; that was not attempted under the one-job and approximately
-one-rack-hour scope.
+No allocator leg, tuning arm, throughput arm, or additional placement draw was
+submitted. EP32 still pays dispatch cost without EP64's memory relief, and this
+120-step run retained 11.42% mean tail drops. The result closes the D-8 memory
+diagnosis without reopening EP32 as a production candidate.
