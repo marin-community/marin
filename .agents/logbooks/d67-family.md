@@ -521,3 +521,41 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
 ```
 
 - Recovery gate: every retry must use an attempt-specific coordinator endpoint. Keep the physical-domain divisibility preflight: uneven-domain attempts may fail and retry, but accept the draw only after a balanced placement passes preflight and emits finite loss/drop metrics.
+
+### 2026-07-28 20:06 PDT - D67-CTL-01 r9 launcher fails before child submission
+
+- Submitted parent `/mwittmann/d67-control-m3-draw1-r9-0728-2005` at 20:04 PDT from commit `db91035ea` using the exact command above.
+- Parent task 0 never started the launcher. Iris recorded attempt 0 as `failed` on node `s1zsxs64` with terminal reason `Init:Error stage-workdir`; no child job was created.
+- No GPU was requested, no model code ran, and no metric was emitted, so r9 is not an experimental draw. The failure occurred before the attempt-scoped JAX endpoint fix could be exercised.
+
+### 2026-07-28 20:06 PDT - D67-CTL-01 replacement r10 pre-registration
+
+- Prediction carried forward verbatim from 15:35 PDT, before any experimental result was observed: This draw reproduces the healthy m=3/cf1.0625 operating point. Predict about 321K tokens/s and 20.7% MFU, allowing ±4% tokens/s for placement (308–334K), with tail-100 drops 1.2–1.7%. Loss must remain finite and decline through step 349.
+- Planned parent job ID: `/mwittmann/d67-control-m3-draw1-r10-0728-2010`
+- Planned child job ID: `/mwittmann/d67-control-m3-draw1-r10-0728-2010/grug-train-d67-control-m3-draw1-r10-0728-2010`
+- Exact command:
+
+```bash
+IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
+  --cpu 2 --memory 3GB --extra cpu --priority production \
+  --job-name d67-control-m3-draw1-r10-0728-2010 -e RUN_ID d67-control-m3-draw1-r10-0728-2010 \
+  -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async \
+  -e XLA_FLAGS "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false --xla_gpu_experimental_parallel_collective_overlap_limit=4" \
+  -e SCALE_ATTN_IMPL gpu_fa4_cute -e SCALE_WATCH_INTERVAL 0 -e SCALE_CHECKPOINTS local \
+  -e SCALE_A2A_FIXED 1 -e SCALE_A2A_CHUNKS 1 -e SCALE_A2A_NO_BARRIER 1 \
+  -e SCALE_A2A_GATHER_DISPATCH 1 -e SCALE_A2A_CUSTOM_ADJOINT 1 \
+  -e SCALE_MOE_QB 1 -e SCALE_REPORT_DROPS 1 -e SCALE_A2A_SPILL 3 \
+  -e SCALE_CAPACITY_FACTOR 1.0625 -e SCALE_JOB_PRIORITY 1 \
+  -e SCALE_GPUS_PER_NODE 4 -e SCALE_GPU_TYPE GB200 -e SCALE_GPU_REPLICAS 16 \
+  -e SCALE_EXPERT_AXIS 64 -e SCALE_NUM_EXPERTS 256 -e SCALE_TOP_K 8 \
+  -e SCALE_HIDDEN_DIM 5120 -e SCALE_NUM_LAYERS 48 -e SCALE_INTERMEDIATE 1280 \
+  -e SCALE_SHARED_INTERMEDIATE 5120 -e SCALE_SEQ_LEN 4096 -e SCALE_BATCH 1024 \
+  -e SCALE_SLIDING_WINDOW 2048 -e SCALE_STEPS 350 \
+  -e SCALE_MOE_IMPL ragged_all_to_all -e SCALE_OPTIMIZER muonh -e SCALE_MUON_SYRK 1 \
+  -e SCALE_SCAN_LAYERS 1 -e SCALE_REMAT recompute_all \
+  -e SCALE_TRACKER json_logger -e SCALE_JSON_LOGGER d67-control-m3-draw1-r10-0728-2010.metrics \
+  -e SCALE_DISABLE_CHECKPOINT 1 \
+  -- python -m experiments.grug.moe.launch_cw_scale --version d67-family-dev --run
+```
+
+- Recovery gate: the launcher must create a production-band child. Every child retry must use an attempt-specific coordinator endpoint, and only a balanced physical-domain placement with finite loss/drop metrics counts as the draw.
