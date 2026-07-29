@@ -30,6 +30,7 @@ token budget mid-reasoning: 3,711 of 3,724 untruncated turns close exactly once,
 from enum import StrEnum
 
 from fray.types import ResourceConfig
+from rigging.filesystem import prefix_join
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
@@ -129,10 +130,10 @@ def row_to_doc(row: dict, truncation_filter: TruncationFilter) -> list[dict]:
 
 def transform(input_path: str, output_path: str, truncation_filter: TruncationFilter) -> None:
     pipeline = (
-        Dataset.from_files(f"{input_path}/**/*.jsonl.gz")
+        Dataset.from_files(prefix_join(input_path, "**/*.jsonl.gz"))
         .flat_map(load_jsonl)
         .flat_map(lambda row: row_to_doc(row, truncation_filter))
-        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+        .write_parquet(prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"), skip_existing=True)
     )
     ctx = ZephyrContext(name="glm-kernelgym-rollouts-transform", resources=ResourceConfig(cpu=1, ram="8g"))
     ctx.execute(pipeline)
