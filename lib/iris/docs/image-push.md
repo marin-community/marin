@@ -59,7 +59,30 @@ upstream.
 - GHCR/Docker Hub → AR cache miss incurs internet egress, but only on the first
   pull per image/tag.
 
-## Authentication
+## Registry Access
+
+### Pull access
+
+Every GHCR image used by Iris on CoreWeave must allow anonymous pulls. This
+includes controller and worker images, the cluster default task image, and
+per-job task image overrides. CoreWeave task pods use an IaC-owned ServiceAccount
+with no `imagePullSecrets`; private and internal packages fail with
+`ImagePullBackOff`.
+
+GitHub organization packages may be internal when first created. After
+publishing an image, verify its exact digest without the credentials from the
+operator's Docker configuration:
+
+```bash
+anonymous_docker_config=$(mktemp -d)
+DOCKER_CONFIG="$anonymous_docker_config" \
+  crane manifest --platform linux/amd64 <repository>@sha256:<digest>
+rm -r "$anonymous_docker_config"
+```
+
+An authenticated pull only proves that the operator can read the package.
+
+### Push access
 
 To push images to GHCR, log in with a **classic** personal access token (PAT) that has the
 `write:packages` scope:

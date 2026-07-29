@@ -990,7 +990,8 @@ Examples:
     type=str,
     default=None,
     help=(
-        "Override the task container image for this job. The image must already exist in a registry visible to workers."
+        "Override the task container image for this job. The image must already exist in a registry visible to "
+        "workers and must allow anonymous pulls on CoreWeave."
     ),
 )
 @click.option(

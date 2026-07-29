@@ -8,10 +8,11 @@ Traefik/cert-manager/federation-ingress stack, and configured Cloudflare CNAMEs 
 cluster. It is the sole owner of these resources — Iris no longer provisions any of them
 (`verify_prerequisites()` in
 [`k8s/controller.py`](../../lib/iris/src/iris/cluster/platforms/k8s/controller.py) only checks
-presence and fails with a `pulumi up` remediation if something is missing). The CKS cluster
-object itself is not yet managed by Pulumi (see `coreweave/cluster.py` and "Future work" below).
-The cluster project retains the `marin-iac` Pulumi name so this directory's move from
-`infra/iac` did not change resource URNs or require a state migration.
+presence plus the task ServiceAccount's empty `imagePullSecrets`, and fails with a `pulumi up`
+remediation on drift). The CKS cluster object itself is not yet managed by Pulumi (see
+`coreweave/cluster.py` and "Future work" below). The cluster project retains the `marin-iac`
+Pulumi name so this directory's move from `infra/iac` did not change resource URNs or require a
+state migration.
 
 Stacks: one per cluster, each a `Pulumi.<cluster>.yaml` pointer to the cluster name. CoreWeave —
 `cw-us-west-04a`, `cw-us-east-02a`, `cw-rno2a`, `cw-us-east-08a` (GB200), all adopted into
@@ -32,8 +33,9 @@ while their values remain outside Pulumi.
 Everything comes from the per-cluster Iris config (`lib/iris/config/<cluster>.yaml`):
 
 - NodePools derive from `scale_groups` (`iac.nodepools.derive_nodepools`).
-- Namespace from `kubernetes_provider.namespace`; ClusterQueue name from
-  `kubernetes_provider.kueue.cluster_queue`.
+- Namespace and task ServiceAccount from `kubernetes_provider`; ClusterQueue name from
+  `kubernetes_provider.kueue.cluster_queue`. The task ServiceAccount is required and carries no
+  registry credentials because CoreWeave task images must be public.
 - The residual cluster facts (CKS cluster name, ResourceFlavor, ACME issuers, and optional
   federation CNAME) from the `provisioning:` section in that same file. Iris carries
   `provisioning:` as an opaque dict;

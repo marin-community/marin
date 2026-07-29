@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""IrisRbac — the Namespace + controller RBAC ceded from the K8s platform's ensure_rbac().
+"""IrisRbac — the Namespace, ServiceAccounts, and controller RBAC for CoreWeave.
 
 IaC is the owner of these resources now. Manifests come from the shared
 `iris.cluster.platforms.k8s.rbac_manifests` builders, so IaC and any imperative caller
@@ -29,6 +29,7 @@ GRAFANA_OBSERVER_ROLE = "marin-grafana-node-reader"
 class IrisRbacArgs:
     namespace: str  # from kubernetes_provider.namespace
     spec: RbacSpec
+    task_service_account: str  # from kubernetes_provider.service_account
     # Adoption mode: stamp import_=<live id> on each resource so `pulumi preview` shows the
     # real adoption diff (provider- and parent-correct) instead of planning creates. Set via
     # the `marin-iac:import` stack flag. See spec.md §4.
@@ -36,9 +37,7 @@ class IrisRbacArgs:
 
 
 class IrisRbac(pulumi.ComponentResource):
-    """Namespace, iris-controller ServiceAccount, and namespace-qualified ClusterRole +
-    ClusterRoleBinding (`iris-controller-<namespace>`, to allow multiple Iris instances on
-    one CKS cluster)."""
+    """Iris ServiceAccounts and namespace-qualified controller RBAC."""
 
     def __init__(
         self,
@@ -75,7 +74,15 @@ class IrisRbac(pulumi.ComponentResource):
         service_account = k8s.core.v1.ServiceAccount(
             "service-account",
             metadata=sa_manifest["metadata"],
+            image_pull_secrets=sa_manifest["imagePullSecrets"],
             opts=child_opts(f"{args.namespace}/{args.spec.service_account}", depends_on=[namespace]),
+        )
+        task_sa_manifest = service_account_manifest(args.namespace, args.task_service_account)
+        k8s.core.v1.ServiceAccount(
+            "task-service-account",
+            metadata=task_sa_manifest["metadata"],
+            image_pull_secrets=task_sa_manifest["imagePullSecrets"],
+            opts=child_opts(f"{args.namespace}/{args.task_service_account}", depends_on=[namespace]),
         )
         role_manifest = cluster_role_manifest(role_name)
         cluster_role = k8s.rbac.v1.ClusterRole(

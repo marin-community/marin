@@ -679,6 +679,33 @@ def test_verify_prerequisites_reports_only_the_missing_pieces():
     provider.shutdown()
 
 
+def test_verify_prerequisites_rejects_missing_task_service_account():
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+    cluster_config.kubernetes_provider.service_account = "iris-task"
+    _seed_prerequisites(k8s, cluster_config)
+
+    with pytest.raises(PrerequisitesNotProvisionedError):
+        provider.verify_prerequisites(cluster_config)
+
+    provider.shutdown()
+
+
+def test_verify_prerequisites_rejects_task_service_account_pull_secrets():
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+    cluster_config.kubernetes_provider.service_account = "iris-task"
+    _seed_prerequisites(k8s, cluster_config)
+    task_service_account = service_account_manifest("iris", "iris-task")
+    task_service_account["imagePullSecrets"] = [{"name": "ghcr-user"}]
+    k8s.apply_json(task_service_account)
+
+    with pytest.raises(PrerequisitesNotProvisionedError):
+        provider.verify_prerequisites(cluster_config)
+
+    provider.shutdown()
+
+
 # ============================================================================
 # Tests: tunnel
 # ============================================================================

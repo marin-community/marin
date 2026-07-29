@@ -18,6 +18,8 @@ or an exported `KUBECONFIG`.
 |--------------|---------------------|-------|--------------|
 | `cw-us-east-02a` | `marin-gpu`, US-EAST-02A | 32× 8xH100 + 4× CPU Genoa, pinned warm | `marin-gpu_US-EAST-02A` |
 | `cw-rno2a` | `marin-rn02a`, RNO2A | 64× 8xH100 + 1× CPU Turin, pinned warm | `marin-rn02a_RNO2A` |
+| `cw-us-east-08a` | `marin-us-east-08a`, US-EAST-08A | 216× 4xGB200 + 4× CPU Emerald Rapids, pinned warm | `marin-us-east-08a_US-EAST-08A` |
+| `cw-us-west-04a` | `marin`, US-WEST-04A | Persistent CI fleet | `marin_US-WEST-04A` |
 
 Console links:
 - Tokens (kubeconfig): https://console.coreweave.com/tokens
@@ -129,9 +131,10 @@ Example config: `lib/iris/config/examples/coreweave.yaml`
 │  │   plugin, hostNetwork: true)     │  │                          │ │
 │  └──────────────────────────────────┘  └──────────────────────────┘ │
 │                                                                     │
-│  All resources auto-created by `iris cluster start`:                │
-│    Namespace, ServiceAccount, ClusterRole, ClusterRoleBinding,      │
-│    ConfigMap, NodePools, Controller Deployment+Service, S3 Secret   │
+│  Provisioned by Pulumi: Namespace, controller/task ServiceAccounts, │
+│    ClusterRole, ClusterRoleBinding, NodePools, Kueue resources      │
+│  Created by `iris cluster start`: ConfigMap, controller             │
+│    Deployment+Service, task environment Secret                      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -163,8 +166,24 @@ Key architectural properties:
   `ClusterFirstWithHostNet` to preserve in-cluster DNS resolution.
 - **In-cluster auth**: The controller uses the `iris-controller` ServiceAccount.
   No kubeconfig needed inside the cluster.
-- **Public images**: All images on `ghcr.io/marin-community/` are public. No
-  `imagePullSecrets` required.
+- **Public images**: CoreWeave controllers and tasks cannot pull private registry
+  images. The persistent cluster configs select the IaC-owned `iris-task`
+  ServiceAccount, whose `imagePullSecrets` list is empty; controller startup
+  rejects credentials added to that account. Make each GHCR package public
+  before submitting it as a task image. New organization packages may start as
+  internal even when an older package at the same organization was public.
+
+Verify the exact image reference without local Docker or GHCR credentials:
+
+```bash
+anonymous_docker_config=$(mktemp -d)
+DOCKER_CONFIG="$anonymous_docker_config" \
+  crane manifest --platform linux/amd64 <repository>@sha256:<digest>
+rm -r "$anonymous_docker_config"
+```
+
+An authenticated `docker pull`, `crane manifest`, or laptop run does not verify
+that a CoreWeave node can fetch the image.
 
 ### CoreWeave controller networking (IP-locked to marin)
 
