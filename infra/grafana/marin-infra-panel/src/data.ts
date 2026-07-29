@@ -1,5 +1,5 @@
 import { DataFrame, Field } from '@grafana/data';
-import { CommitRow, NightlyCell, WandbPoint } from './types';
+import { CommitRow, NightlyCell, ProvisioningRow, SeriesPoint, WandbPoint, WorkerRegion } from './types';
 
 type Row = Record<string, unknown>;
 
@@ -95,6 +95,53 @@ export function wandbPoints(frame: DataFrame): WandbPoint[] {
     reportTitle: requiredString(row, 'report_title'),
     reportUrl: requiredString(row, 'report_url'),
   }));
+}
+
+export function workerRegions(frame: DataFrame): WorkerRegion[] {
+  return rows(frame).map((row) => ({
+    region: requiredString(row, 'region'),
+    healthy: requiredNumber(row, 'healthy'),
+    cpuMillicores: requiredNumber(row, 'cpu_millicores'),
+    memoryBytes: requiredNumber(row, 'memory_bytes'),
+    tpuChips: requiredNumber(row, 'tpu_chips'),
+  }));
+}
+
+export function provisioningStatus(frame: DataFrame): ProvisioningRow[] {
+  return rows(frame).map((row) => ({
+    scope: requiredString(row, 'scope'),
+    collectedAt: requiredNumber(row, 'collected_at'),
+    resourceType: optionalString(row, 'resource_type') ?? '',
+    scaleGroup: optionalString(row, 'scale_group') ?? '',
+    zone: optionalString(row, 'zone') ?? '',
+    ready: requiredNumber(row, 'ready'),
+    stockout: requiredNumber(row, 'stockout'),
+    error: requiredNumber(row, 'error'),
+    preempted: requiredNumber(row, 'preempted'),
+    outcomes: requiredNumber(row, 'outcomes'),
+    successRatio: optionalNumber(row, 'success_ratio'),
+    poolsPlacing: requiredNumber(row, 'pools_placing'),
+    poolsNoReadyOutcome: requiredNumber(row, 'pools_no_ready_outcome'),
+    latencyP50Seconds: optionalNumber(row, 'latency_p50_seconds'),
+    latencyP95Seconds: optionalNumber(row, 'latency_p95_seconds'),
+    windowHours: optionalNumber(row, 'window_hours'),
+  }));
+}
+
+export function seriesPoints(frame: DataFrame, seriesField: string, valueField: string): SeriesPoint[] {
+  return rows(frame).map((row) => ({
+    time: requiredNumber(row, 'time'),
+    series: requiredString(row, seriesField),
+    value: requiredNumber(row, valueField),
+  }));
+}
+
+export function frameByRefId(frames: DataFrame[], refId: string): DataFrame | undefined {
+  const matching = frames.filter((frame) => frame.refId === refId);
+  if (matching.length > 1) {
+    throw new Error(`Expected one data frame for ${refId}; received ${matching.length}`);
+  }
+  return matching[0];
 }
 
 /**

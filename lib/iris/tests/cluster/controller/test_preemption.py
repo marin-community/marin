@@ -20,6 +20,7 @@ from iris.cluster.controller.scheduling.scheduler import JobRequirements, Runnin
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
+from tests.cluster.controller._test_support import submit_job_in_tx
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
@@ -1280,15 +1281,17 @@ def test_pending_child_order_uses_parent_job_config_not_stamped_task_band():
             replicas=1,
         )
         with state._db.transaction() as cur:
-            ops.job.submit(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
+            submit_job_in_tx(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
         interactive_tasks = harness.submit(
             "/bob/interactive",
             cpu=1,
             priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
         )
 
+        # The child inherits the parent's requested PRODUCTION, not the BATCH the
+        # scheduler stamped on the parent's task row.
         child_task = query_tasks_for_job(state, child_id)[0]
-        assert child_task.priority_band == job_pb2.PRIORITY_BAND_INTERACTIVE
+        assert child_task.priority_band == job_pb2.PRIORITY_BAND_PRODUCTION
 
         with state._db.read_snapshot() as tx:
             pending = reads.pending_tasks_with_jobs(tx)

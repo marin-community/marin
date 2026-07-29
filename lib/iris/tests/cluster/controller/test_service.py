@@ -24,7 +24,7 @@ from iris.cluster.constraints import (
     WellKnownAttribute,
     device_variant_constraint,
 )
-from iris.cluster.controller import ops, reads
+from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller import service as service_module
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.codec import constraints_from_json
@@ -49,9 +49,9 @@ from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2
 from rigging.server_auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Duration, Timestamp
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
-from tests.cluster.controller._test_support import ControllerTestState
+from tests.cluster.controller._test_support import ControllerTestState, submit_job_in_tx
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
@@ -278,6 +278,84 @@ def test_launch_job_bundle_blob_rewrites_to_controller_bundle_id(service, state)
     job = _query_job(state, JobName.root("test-user", "bundle-job"))
     assert job is not None
     assert len(job.bundle_id) == 64
+
+
+def _cap_user_at(state, band: int, user: str = "test-user") -> None:
+    with state._db.transaction() as tx:
+        writes.set_user_budget(tx, user, 0, band, Timestamp.now())
+
+
+def test_launch_job_stores_the_inherited_band_on_both_rows(service, state):
+    """A band-less child submitted through LaunchJob stores the parent's band.
+
+    Goes through the real entry point rather than ``ops.job.submit``, so the parent
+    lookup under test is the service's own and not a test helper's.
+    """
+    _cap_user_at(state, job_pb2.PRIORITY_BAND_PRODUCTION)
+    parent = make_job_request("parent-prod")
+    parent.priority_band = job_pb2.PRIORITY_BAND_PRODUCTION
+    service.launch_job(parent, None)
+    service.launch_job(make_job_request("/test-user/parent-prod/child"), None)
+
+    child_id = JobName.from_string("/test-user/parent-prod/child")
+    with state._db.read_snapshot() as snap:
+        assert reads.get_priority_bands(snap, [child_id]) == {child_id: job_pb2.PRIORITY_BAND_PRODUCTION}
+        task_bands = snap.execute(select(tasks_table.c.priority_band).where(tasks_table.c.job_id == child_id)).scalars()
+        assert set(task_bands) == {job_pb2.PRIORITY_BAND_PRODUCTION}
+
+
+def test_launch_job_batch_capped_user_can_spawn_children(service, state):
+    """A child inheriting a band at the user's cap launches."""
+    _cap_user_at(state, job_pb2.PRIORITY_BAND_BATCH)
+
+    parent = make_job_request("parent-batch")
+    parent.priority_band = job_pb2.PRIORITY_BAND_BATCH
+    service.launch_job(parent, None)
+
+    service.launch_job(make_job_request("/test-user/parent-batch/child"), None)
+
+    child_id = JobName.from_string("/test-user/parent-batch/child")
+    with state._db.read_snapshot() as snap:
+        assert reads.get_priority_bands(snap, [child_id]) == {child_id: job_pb2.PRIORITY_BAND_BATCH}
+
+
+def test_launch_job_rejects_an_unknown_priority_band(service, state):
+    """proto3 enums are open, so an integer naming no band must not be stored as one."""
+    request = make_job_request("bogus-band")
+    request.priority_band = 99
+    with pytest.raises(ConnectError) as exc:
+        service.launch_job(request, None)
+    assert exc.value.code == Code.INVALID_ARGUMENT
+
+
+def test_launch_job_rejects_band_above_the_user_cap(service, state):
+    """An explicit band above the user's cap is refused."""
+    _cap_user_at(state, job_pb2.PRIORITY_BAND_BATCH)
+
+    request = make_job_request("too-high")
+    request.priority_band = job_pb2.PRIORITY_BAND_INTERACTIVE
+    with pytest.raises(ConnectError) as exc:
+        service.launch_job(request, None)
+    assert exc.value.code == Code.PERMISSION_DENIED
+
+
+def test_launch_job_child_cannot_inherit_past_a_lowered_cap(service, state):
+    """Omitting the band does not buy a child a band its owner may no longer request.
+
+    The client decides whether to send priority_band, so the cap has to be checked
+    against the band the child will inherit. Otherwise a user whose tier was lowered
+    could keep spawning PRODUCTION work under an older PRODUCTION parent.
+    """
+    _cap_user_at(state, job_pb2.PRIORITY_BAND_PRODUCTION)
+    parent = make_job_request("parent-prod")
+    parent.priority_band = job_pb2.PRIORITY_BAND_PRODUCTION
+    service.launch_job(parent, None)
+
+    _cap_user_at(state, job_pb2.PRIORITY_BAND_BATCH)
+
+    with pytest.raises(ConnectError) as exc:
+        service.launch_job(make_job_request("/test-user/parent-prod/child"), None)
+    assert exc.value.code == Code.PERMISSION_DENIED
 
 
 def test_launch_job_rejects_coscheduling_without_group_by(service):
@@ -675,7 +753,7 @@ def test_get_job_status_reports_has_children(service, state):
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
 
     parent = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=parent_id.to_wire()), None)
     assert parent.job.has_children is True
@@ -1287,7 +1365,7 @@ def test_list_jobs_all_scope_includes_descendants(service, state):
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
 
     request = controller_pb2.Controller.ListJobsRequest()
     response = service.list_jobs(request, None)
@@ -1312,7 +1390,7 @@ def test_list_jobs_job_query_roots_and_children(service, state):
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
 
     roots_response = service.list_jobs(
         controller_pb2.Controller.ListJobsRequest(
@@ -1693,7 +1771,7 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
         replicas=1,
     )
     with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=job_id, request=request, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=job_id, request=request, ts=Timestamp.now())
 
     w1 = WorkerId("w1")
     with state._db.transaction() as cur:
