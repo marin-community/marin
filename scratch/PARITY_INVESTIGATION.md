@@ -33,6 +33,8 @@ them proves nothing; a gap in this harness means something.
 | F4 | exp146's 3B winner was **LR 3.1623e-3 / WD 0.2 → 2.7109**; five of its top six runs use LR 3.1623e-3 | exp153's LR 1e-3 / WD 0.8 is off-optimum on **both** axes |
 | F5 | exp153's 3.14 was read at step 22,300 of 35,680 (62%) against exp146 **final** values, under cosine decay | Comparison was unfair, but see F6 |
 | F6 | At **equal step**, exp153 trails exp146 by a *flat* ~0.40 from step 4,460 onward (+0.419, +0.488, +0.399, +0.423, +0.400, +0.382). The gap opens between step 2,230 and 4,460 and never widens | **A3 refuted.** The gap is real, not a stopping-point artifact. A constant early offset implies a different trajectory from the start, not accumulating numerical error |
+| F7 | Three-way at step 59: v6e-4 5.75413, GB200x4 5.69206 (−1.08%), H100x8 5.74982 (−0.07%). The **8-device H100 matches the TPU more closely than the 4-device GB200 does** | **B3 answered: mesh shape is not the driver.** If mesh width mattered, H100x8 would be the outlier; instead it is the closest match. What remains is small per-device kernel numerics |
+| F8 | 400-step pair, windowed means of the GB200−TPU delta: +0.36% (0–49), −1.25% (50–99), −5.62% (100–149), −1.22% (150–199), **−0.24% (200–249)**. Per-step delta flips sign 19 times; mean −0.089 | **B4 answered: no late divergence.** The mid-run excursion closes back to noise rather than compounding. Both GPUs sit *below* the TPU — the opposite sign from exp153's +0.40 deficit |
 
 ## Hypotheses
 
@@ -54,8 +56,8 @@ Ordered by how much they would explain, not by how interesting they are.
 |---|---|---|---|
 | B1 | Attention kernel differs: TPU splash vs GPU `JAX_FLASH` | `ATTN=JAX_FLASH` on TPU — harness already supports it | open |
 | B2 | Reduction order / accumulation depth | mesh-matched pair | **F2: not at 4 devices, 60 steps** |
-| B3 | Mesh shape itself (4 vs 8 devices) | `parity-h100-x8` | running |
-| B4 | Divergence only appears over a longer horizon | 400-step TPU + GB200 pair | running |
+| B3 | Mesh shape itself (4 vs 8 devices) | `parity-h100-x8` | **REFUTED (F7)** — H100x8 is *closer* to TPU than GB200x4 |
+| B4 | Divergence only appears over a longer horizon | 400-step TPU + GB200 pair | **REFUTED (F8)** through 224 steps — excursion closes, does not compound |
 | B5 | Fused-CE Pallas kernel: GPU autotunes it; TPU path may differ | compare loss with the kernel disabled | open |
 | B6 | f32 FSDP parameter gathers (exp108's suspicion) inflate error at large dp | large-dp vs small-dp on one platform | open |
 | B7 | Precision policy applies identically but accumulates differently inside kernels | bit-level compare of first-step grads | open |
@@ -82,9 +84,11 @@ Ordered by how much they would explain, not by how interesting they are.
 | 07-29 | `compare_caches.py` — GCS vs S3 token caches | **identical** (F1) |
 | 07-29 | `parity-gb200-x4-b` — GB200x4, 60 steps | finished, final train 5.69206 |
 | 07-29 | `parity-tpu-v6e4-d` — v6e-4, 60 steps | finished, final train 5.75413 |
-| 07-29 | `parity-h100-x8` — H100x8, 60 steps (B3) | running |
-| 07-29 | `parity-tpu-long` — v6e-4, 400 steps (B4) | running |
-| 07-29 | `parity-gb200-long` — GB200x4, 400 steps (B4) | running |
+| 07-29 | `parity-h100-x8` — H100x8, 60 steps (B3) | finished, final train 5.74982 → **B3 refuted (F7)** |
+| 07-29 | `parity-gb200-long` — GB200x4, 400 steps (B4) | finished, final train 4.09203 |
+| 07-29 | `parity-tpu-long` — v6e-4, 400 steps (B4) | running, step 224 → **B4 refuted so far (F8)** |
+| 07-29 | `parity-hp-exp153` — GB200x4, 400 steps, **lr 1e-3 / wd 0.8** (A5) | running |
+| 07-29 | `parity-hp-exp146` — GB200x4, 400 steps, **lr 3.1623e-3 / wd 0.2** (A5) | running |
 
 ## Harness failures worth remembering
 
@@ -96,10 +100,22 @@ Ordered by how much they would explain, not by how interesting they are.
   `gs://marin-eu-west4`. Use `marin_prefix_for_region()`.
 - `marin_temp_bucket()` resolves from ambient config and picks the *GCS* cluster config inside a
   CoreWeave pod. Temp roots here are pinned explicitly per cloud instead.
+- This script is a *driver*: it must be submitted through `iris job run`, never invoked
+  directly on the dev box. Run locally it silently picks `fray.local_backend` and dies with
+  "No accelerator found" — `plat.cluster` is metadata, not dispatch.
+- Submitting from the dev box reads the bucket, so S3 arms need `CW_KEY_ID`/`CW_KEY_SECRET`
+  exported as `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` *and* `configure_coreweave_s3()` —
+  CoreWeave rejects boto's default path-style addressing with a bare `Forbidden`.
+- `--cluster` is a *top-level* iris option (`iris --cluster X job list`), not a subcommand
+  flag. GPU arms federate from `marin`; `iris --cluster cw-us-east-08a` needs kubectl, which
+  this box does not have.
 
 ## Next up
 
-~~A3~~ done and refuted (F6). Remaining, in priority order:
+~~A3~~ (F6), ~~B3~~ (F7) and ~~B4~~ (F8) all refuted. **Every platform hypothesis tested so far
+has come back negative, and on three separate comparisons the GPUs land at or slightly below
+the TPU** — so the ~0.40 deficit almost certainly does not come from the hardware.
+Remaining, in priority order:
 
 1. **The decisive experiment (C1 + A5 together): run exp153's exact 6B config — lr 1e-3,
    wd 0.8 — on a TPU.** If the TPU also lands ~0.40 above exp146, the cause is the config or
