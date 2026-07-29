@@ -49,6 +49,7 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import BlockShuffleConfig
+from levanter.grug.grug_moe import DEFAULT_EP_CAPACITY_FACTOR
 from levanter.optim.config import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
@@ -122,6 +123,7 @@ def build_scale_model() -> GrugModelConfig:
         shared_expert_intermediate_dim=intermediate_dim,
         num_experts=env_int("SCALE_NUM_EXPERTS", 128),
         num_experts_per_token=env_int("SCALE_TOP_K", 4),
+        capacity_factor=float(os.environ.get("SCALE_CAPACITY_FACTOR") or DEFAULT_EP_CAPACITY_FACTOR),
         max_seq_len=seq_len,
         sliding_window=seq_len,
         remat_mode=cast(RematMode, remat_mode),

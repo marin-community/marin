@@ -37,6 +37,7 @@ from levanter.grug.attention import (
     attention,
 )
 from levanter.grug.grug_moe import (
+    DEFAULT_EP_CAPACITY_FACTOR,
     MOE_REMAT_SAVE_NAMES,
     MoeActivation,
     MoEExpertMlp,
@@ -49,7 +50,6 @@ from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
 
-_DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
 GRUG_MOE_MODEL_TYPE = "grug_moe"
@@ -124,6 +124,8 @@ class GrugModelConfig:
     head_dim: int | None = None
     max_seq_len: int = 8192
     sliding_window: int = 2048
+    # Expert-parallel bucket capacity relative to the mean assignment load.
+    capacity_factor: float = DEFAULT_EP_CAPACITY_FACTOR
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.3
@@ -160,6 +162,8 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
+        if self.capacity_factor <= 0:
+            raise ValueError("capacity_factor must be positive")
         resolve_moe_implementation(self.moe_implementation)
 
     @property
@@ -559,7 +563,7 @@ class MoEMLP(eqx.Module):
                 key=k_expert,
                 implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
-                capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+                capacity_factor=cfg.capacity_factor,
             ),
             cfg=cfg,
         )
