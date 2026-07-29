@@ -144,24 +144,25 @@ class _RankRow:
     sort_key: _PriorityKey
 
 
-_RANK_COLS = (
-    local_tasks.c.task_id,
-    local_tasks.c.job_id,
-    jobs_table.c.num_tasks,
-    job_config_table.c.has_coscheduling,
-    local_tasks.c.priority_neg_depth,
-    local_tasks.c.priority_root_submitted_ms,
-    local_tasks.c.submitted_at_ms,
-    local_tasks.c.priority_insertion,
-)
-
-
 def _ranking_rows(cur: Tx, *predicates) -> list[_RankRow]:
     """Fetch lightweight :class:`_RankRow`s (no runtime blobs) for the given predicates."""
     rank_join = local_tasks.join(jobs_table, jobs_table.c.job_id == local_tasks.c.job_id).join(
         job_config_table, job_config_table.c.job_id == jobs_table.c.job_id
     )
-    stmt = select(*_RANK_COLS).select_from(rank_join).where(*predicates)
+    stmt = (
+        select(
+            local_tasks.c.task_id,
+            local_tasks.c.job_id,
+            jobs_table.c.num_tasks,
+            job_config_table.c.has_coscheduling,
+            local_tasks.c.priority_neg_depth,
+            local_tasks.c.priority_root_submitted_ms,
+            local_tasks.c.submitted_at_ms,
+            local_tasks.c.priority_insertion,
+        )
+        .select_from(rank_join)
+        .where(*predicates)
+    )
     return [
         _RankRow(
             task_id=r.task_id,
