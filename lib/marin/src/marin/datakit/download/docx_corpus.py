@@ -30,6 +30,8 @@ EXTRACTED_URL_TEMPLATE = "https://docxcorp.us/extracted/{id}.txt"
 SOURCE_VERSION = "2026-07-28"
 USER_AGENT = "marin-docx-corpus-ingress/1.0 (https://github.com/marin-community/marin)"
 HTTP_TIMEOUT = (10, 120)
+HTTP_RETRY_TOTAL = 8
+HTTP_BACKOFF_FACTOR = 2.0
 DOWNLOAD_BATCH_SIZE = 128
 DOWNLOAD_MAX_WORKERS = 4
 
@@ -119,7 +121,7 @@ def download_batch(batch: DocxCorpusBatch, output_path: str) -> dict:
     counters.pipeline.update_counter("docx_corpus/unique_ids", len(batch.tasks))
     counters.pipeline.update_counter("docx_corpus/duplicate_ids", batch.duplicate_ids)
 
-    session = build_retrying_session(total=8, backoff_factor=2.0)
+    session = build_retrying_session(total=HTTP_RETRY_TOTAL, backoff_factor=HTTP_BACKOFF_FACTOR)
     try:
         records = (_download_record(session, task) for task in batch.tasks)
         output_file = prefix_join(output_path, f"data-{batch.index:05d}-of-{batch.total:05d}.parquet")
@@ -130,7 +132,7 @@ def download_batch(batch: DocxCorpusBatch, output_path: str) -> dict:
 
 
 def _fetch_manifest() -> str:
-    session = build_retrying_session(total=8, backoff_factor=2.0)
+    session = build_retrying_session(total=HTTP_RETRY_TOTAL, backoff_factor=HTTP_BACKOFF_FACTOR)
     response = session.get(
         MANIFEST_URL,
         headers={"User-Agent": USER_AGENT},
