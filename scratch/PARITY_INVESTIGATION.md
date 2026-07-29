@@ -35,9 +35,12 @@ them proves nothing; a gap in this harness means something.
 | F6 | At **equal step**, exp153 trails exp146 by a *flat* ~0.40 from step 4,460 onward (+0.419, +0.488, +0.399, +0.423, +0.400, +0.382). The gap opens between step 2,230 and 4,460 and never widens | **A3 refuted.** The gap is real, not a stopping-point artifact. A constant early offset implies a different trajectory from the start, not accumulating numerical error |
 | F7 | Three-way at step 59: v6e-4 5.75413, GB200x4 5.69206 (−1.08%), H100x8 5.74982 (−0.07%). The **8-device H100 matches the TPU more closely than the 4-device GB200 does** | **B3 answered: mesh shape is not the driver.** If mesh width mattered, H100x8 would be the outlier; instead it is the closest match. What remains is small per-device kernel numerics |
 | F8 | 400-step pair, windowed means of the GB200−TPU delta: +0.36% (0–49), −1.25% (50–99), −5.62% (100–149), −1.22% (150–199), then **monotonically shrinking: −0.19%, −0.12%, −0.08%** through step 349. Per-step delta flips sign 19 times | **B4 refuted, and then some.** The two platforms do not merely fail to diverge — they *converge*, the delta decaying toward zero as training proceeds. The mid-run excursion is a transient. Both GPUs sit *below* the TPU, the opposite sign from exp153's +0.40 deficit |
-
 | F9 | **The 400-step pair ran to completion: v6e-4 4.090732 vs GB200x4 4.092026 — a delta of +0.032%.** Windowed delta decays −1.25% → −5.62% → −0.19% → −0.08% → −0.08% | **The platform question is closed.** Over a full run, identical config on TPU and GPU lands within a third of a tenth of a percent. exp153's deficit is ~13% relative — roughly 400x larger than anything the hardware produces |
 | F10 | HP ablation at step 208 of 400: exp153's lr 1e-3 / wd 0.8 is **ahead** of exp146's lr 3.1623e-3 / wd 0.2 by 0.33, and has led at every sampled step | **Cannot be read as an answer — horizon mismatch.** See below |
+| F11 | Continuing those arms, the delta collapses: +0.386 (150–199) → +0.084 (250–299) → +0.050 (300–349) | The caveat on F10 was correct — the ordering did not survive 100 more steps |
+| F12 | The 400-step HP arms finished **4.102407 (exp153 HP) vs 4.131758 (exp146 HP) — 0.7% apart**, after opening +0.66 | At a matched schedule endpoint, LR/WD is worth ~0.03, not ~0.40. The mid-run +0.33 was schedule phase, not merit |
+| F13 | **Every exp146 and exp153 production run shares an identical token budget of 4,567,040 sequences.** Batch size varies and steps vary inversely: bs 64/71,360, bs 128/35,680, bs 256/17,840 | Equal-*step* comparisons across different batch sizes are **not** equal-token — see the F6 correction below |
+| F14 | Within exp146, same LR/WD at different batch sizes lands differently: lr 3.162e-3 wd 0.4 gives **2.7952 at bs 128** but **2.7025 at bs 256**; the wd 0.2 winner ran **bs 64 → 2.7107** | **Batch size is an independent lever worth ~0.09**, untested by anything in this investigation. exp153 ran bs 128, exp146's best runs ran bs 256 |
 
 ### The horizon problem with F10
 
@@ -70,10 +73,6 @@ never losing on the merits; it was behind on the schedule. This is the expected 
 a larger LR under cosine — worse early, closing hard at the end — and it is why a 400-step
 proxy cannot settle a question about step 4,460. The ordering at the end of *this* schedule
 still says nothing about the ordering at the end of a 35,680-step one.
-
-| F12 | The 400-step HP arms finished **4.102407 (exp153 HP) vs 4.131758 (exp146 HP) — 0.7% apart**, after opening +0.66 | At a matched schedule endpoint, LR/WD is worth ~0.03, not ~0.40. The mid-run +0.33 was schedule phase, not merit |
-| F13 | **Every exp146 and exp153 production run shares an identical token budget of 4,567,040 sequences.** Batch size varies and steps vary inversely: bs 64/71,360, bs 128/35,680, bs 256/17,840 | Equal-*step* comparisons across different batch sizes are **not** equal-token — see the F6 correction below |
-| F14 | Within exp146, same LR/WD at different batch sizes lands differently: lr 3.162e-3 wd 0.4 gives **2.7952 at bs 128** but **2.7025 at bs 256**; the wd 0.2 winner ran **bs 64 → 2.7107** | **Batch size is an independent lever worth ~0.09**, untested by anything in this investigation. exp153 ran bs 128, exp146's best runs ran bs 256 |
 
 ### Correction to F6
 
