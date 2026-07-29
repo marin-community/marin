@@ -85,11 +85,15 @@ def _materialize_tasks(
 
 
 def resolve_priority_band(requested_band: int, inherited_band: int | None) -> int:
-    """The band a job is stored with. ``inherited_band`` is ``None`` for a root.
+    """Resolve the band a job is stored with.
 
-    The only place a ``PRIORITY_BAND_UNSPECIFIED`` (0) request becomes a real band, so
-    ``job_config.priority_band`` and ``tasks.priority_band`` never hold 0 and no reader
-    re-derives one. The launch-job gate authorizes this result, not the raw request.
+    Returns ``requested_band`` when it is set, else ``inherited_band``, else
+    ``PRIORITY_BAND_INTERACTIVE``. Never returns ``PRIORITY_BAND_UNSPECIFIED``, so
+    callers may store the result directly.
+
+    Args:
+        requested_band: The band on the launch request; 0 means the caller asked for none.
+        inherited_band: The parent job's stored band, or ``None`` for a root job.
     """
     if requested_band != job_pb2.PRIORITY_BAND_UNSPECIFIED:
         return requested_band
