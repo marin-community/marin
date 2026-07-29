@@ -470,13 +470,18 @@ def _collect_partition(
         chunk_work.extend((records[row_index], state, row_index - row_start) for row_index in range(row_start, row_end))
     work = iter(chunk_work)
     in_flight = {}
-    for _ in range(collection.concurrency):
+
+    def submit_next() -> bool:
         try:
             prompt, state, output_index = next(work)
         except StopIteration:
-            break
+            return False
         future = executor.submit(_completion, vllm_url, prompt, sampling)
         in_flight[future] = (state, output_index)
+        return True
+
+    while len(in_flight) < collection.concurrency and submit_next():
+        pass
 
     while in_flight:
         done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
@@ -489,12 +494,8 @@ def _collect_partition(
                 completed_chunks.append(state)
 
         for _ in done:
-            try:
-                prompt, state, output_index = next(work)
-            except StopIteration:
+            if not submit_next():
                 break
-            future = executor.submit(_completion, vllm_url, prompt, sampling)
-            in_flight[future] = (state, output_index)
 
         for state in completed_chunks:
             outputs = [output for output in state.outputs if output is not None]
