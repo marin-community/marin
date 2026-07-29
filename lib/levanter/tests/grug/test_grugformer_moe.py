@@ -499,6 +499,108 @@ def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
         assert lowered is not None
 
 
+def _ring_dispatch_buffer_rows(*, expert_axis_size: int, local_tokens: int) -> int:
+    mesh = _make_abstract_moe_mesh(data=1, expert=expert_axis_size, model=1)
+    tokens = expert_axis_size * local_tokens
+    hidden_dim = 8
+    intermediate_dim = 6
+    topk = 2
+    num_experts = 2 * expert_axis_size
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        x = jax.ShapeDtypeStruct(
+            (tokens, hidden_dim),
+            jnp.float32,
+            sharding=NamedSharding(mesh, P("data", None)),
+        )
+        selected_experts = jax.ShapeDtypeStruct(
+            (tokens, topk),
+            jnp.int32,
+            sharding=NamedSharding(mesh, P("data", None)),
+        )
+        combine_weights = jax.ShapeDtypeStruct(
+            (tokens, topk),
+            jnp.float32,
+            sharding=NamedSharding(mesh, P("data", None)),
+        )
+        w_up_gate = jax.ShapeDtypeStruct(
+            (num_experts, hidden_dim, 2 * intermediate_dim),
+            jnp.float32,
+            sharding=NamedSharding(mesh, P("expert", None, None)),
+        )
+        w_down = jax.ShapeDtypeStruct(
+            (num_experts, intermediate_dim, hidden_dim),
+            jnp.float32,
+            sharding=NamedSharding(mesh, P("expert", None, None)),
+        )
+        closed_jaxpr = jax.make_jaxpr(
+            lambda x, selected, weights, w13, w2: moe_mlp(
+                x,
+                selected,
+                weights,
+                w13,
+                w2,
+                implementation="ring",
+                mesh=mesh,
+                capacity_factor=1.0,
+            )
+        )(x, selected_experts, combine_weights, w_up_gate, w_down)
+
+    shard_map_eqn = next(eqn for eqn in closed_jaxpr.jaxpr.eqns if eqn.primitive.name == "shard_map")
+    local_jaxpr = shard_map_eqn.params["jaxpr"]
+    dispatch_eqn = next(
+        eqn
+        for eqn in local_jaxpr.eqns
+        if eqn.primitive.name == "name" and eqn.params["name"] == "grug_moe_dispatch_input"
+    )
+    return int(dispatch_eqn.outvars[0].aval.shape[0])
+
+
+def test_moe_ep_dispatch_buffer_does_not_scale_with_expert_axis_width():
+    local_tokens = 8
+    expected_rows = local_tokens * 2
+
+    assert _ring_dispatch_buffer_rows(expert_axis_size=2, local_tokens=local_tokens) == expected_rows
+    assert _ring_dispatch_buffer_rows(expert_axis_size=4, local_tokens=local_tokens) == expected_rows
+
+
+def test_moe_ep_boundary_shards_incoming_batch_over_expert_axis():
+    mesh = _make_ep_mesh_or_none()
+    if mesh is None:
+        pytest.skip("requires an even number of >=2 devices")
+
+    tokens = len(jax.devices()) * 8
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(28),
+        tokens=tokens,
+        hidden_dim=8,
+        intermediate_dim=6,
+        num_experts=4,
+        topk=2,
+    )
+    with jax.set_mesh(mesh):
+        incoming_batch_sharding = NamedSharding(mesh, P("data", None))
+        x = jax.sharding.reshard(x, incoming_batch_sharding)
+        selected_experts = jax.sharding.reshard(selected_experts, incoming_batch_sharding)
+        combine_weights = jax.sharding.reshard(combine_weights, incoming_batch_sharding)
+        w_up_gate = jax.sharding.reshard(w_up_gate, NamedSharding(mesh, P("expert", None, None)))
+        w_down = jax.sharding.reshard(w_down, NamedSharding(mesh, P("expert", None, None)))
+
+        out = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            implementation="ring",
+            mesh=mesh,
+            capacity_factor=1.0,
+        )
+
+    assert x.sharding.spec == P("data", None)
+    assert out.sharding.spec == P(("data", "expert"))
+
+
 def test_shard_a2a_params_uses_sender_side_output_offsets():
     shard_counts = jnp.array(
         [
