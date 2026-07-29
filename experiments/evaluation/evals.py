@@ -18,8 +18,9 @@ from marin.evaluation.harbor.driver_config import (
     HarborRetryConfig,
     HarborRunConfig,
     HarborVerifierConfig,
+    NativeHarborConfig,
 )
-from marin.evaluation.harbor.runner import HARBOR_RUNTIME, HarborExecutor
+from marin.evaluation.harbor.runner import HARBOR_RUNTIME, HarborExecutor, NativeHarborExecutor
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import EvalRef, EvalTaskRef, HarborRef
 from marin.evaluation.runner import EvalExecutor
@@ -134,6 +135,46 @@ class HarborDefinition:
             ),
         )
         return HarborExecutor(config=config, secret_env_keys=tuple(self.secret_env))
+
+
+@dataclass(frozen=True)
+class NativeHarborDefinition:
+    """One file-backed Harbor policy validated against the pinned native schema."""
+
+    name: str
+    config: NativeHarborConfig
+
+    @property
+    def secret_env(self) -> Mapping[str, SecretSpec]:
+        if self.config.environment == "daytona":
+            return _DAYTONA_SECRET_ENV
+        return MappingProxyType({})
+
+    @property
+    def record_ref(self) -> EvalRef:
+        return EvalRef(
+            name=self.name,
+            mechanism="harbor",
+            harbor=HarborRef(
+                dataset=self.config.dataset,
+                version=self.config.revision,
+                agent=self.config.agent,
+                env=self.config.environment,
+                config_digest=self.config.digest,
+            ),
+        )
+
+    @property
+    def runtime_descriptor(self) -> str:
+        return HARBOR_RUNTIME
+
+    def executor_for(self, model: ModelConfig, limit: int | None) -> EvalExecutor:
+        return NativeHarborExecutor(
+            config=self.config,
+            task_limit=limit,
+            model_agent_kwargs=model.agent.agent_kwargs,
+            secret_env_keys=tuple(self.secret_env),
+        )
 
 
 def _mcq_eval(name: str, task: str, shots: int) -> EvalchemyDefinition:

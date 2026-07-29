@@ -19,8 +19,8 @@ import json
 import logging
 import re
 import subprocess
-from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 from rigging.filesystem import StoragePath, is_remote_path, prefix_join, url_to_fs
@@ -30,6 +30,9 @@ from marin.evaluation.harbor.dataset import materialize_harbor_dataset
 from marin.evaluation.harbor.driver_config import (
     HarborDriverConfig,
     HarborRunConfig,
+    NativeHarborConfig,
+    adapt_native_job_config,
+    native_job_config,
 )
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
@@ -118,6 +121,13 @@ def canonical_served_name(name: str) -> str:
 def _job_name(model: RunningModel, config: HarborRunConfig) -> str:
     """A deterministic Harbor job name so a re-run resumes the previous job's completed trials."""
     key = f"{config.dataset}|{config.revision}|{model.endpoint.model}|{config.agent.name}|{config.task_limit}"
+    digest = hashlib.sha256(key.encode()).hexdigest()[:12]
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", config.dataset)[:32]
+    return f"harbor_{safe}_{digest}"
+
+
+def _native_job_name(model: RunningModel, config: NativeHarborConfig, task_limit: int | None) -> str:
+    key = f"{config.digest}|{model.endpoint.model}|{task_limit}"
     digest = hashlib.sha256(key.encode()).hexdigest()[:12]
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", config.dataset)[:32]
     return f"harbor_{safe}_{digest}"
@@ -246,6 +256,60 @@ def _upload_trials(job_dir: Path, out_path: str) -> None:
             target.upload_from(str(trial_dir), recursive=True)
 
 
+def _run_harbor_job(
+    *,
+    job_name: str,
+    workdir: Path,
+    job_config: Mapping[str, object],
+    dataset: str,
+    environment: str,
+    output_dir: str,
+    driver_env: Mapping[str, str],
+) -> HarborRunResult:
+    results_dir = workdir / "harbor_results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    job_dir = results_dir / job_name
+    if is_remote_path(output_dir):
+        restored = _restore_completed_trials(output_dir, job_dir)
+        if restored:
+            logger.info("restored %d completed Harbor trial(s) from %s", restored, output_dir)
+
+    config_file = workdir / "job_config.json"
+    config_file.write_text(json.dumps(job_config))
+    config_file.chmod(0o600)
+
+    logger.info("starting Harbor job %s (dataset=%s env=%s)", job_name, dataset, environment)
+    _run_driver(config_file, driver_env)
+
+    trials = _read_trials(job_dir)
+    if is_remote_path(output_dir):
+        _upload_trials(job_dir, output_dir)
+    samples_path = _write_samples(trials, dataset, output_dir)
+    result = _aggregate(trials, dataset, samples_path)
+    StoragePath(prefix_join(output_dir, "harbor_result.json")).write_text(
+        json.dumps(
+            {
+                "dataset": result.dataset,
+                "total_trials": result.total_trials,
+                "solved_trials": result.solved_trials,
+                "failed_trials": result.failed_trials,
+                "mean_reward": result.mean_reward,
+                "accuracy": result.accuracy,
+            },
+            indent=2,
+        )
+    )
+    logger.info(
+        "Harbor %s: %d/%d solved (accuracy=%.3f mean_reward=%.3f)",
+        dataset,
+        result.solved_trials,
+        result.total_trials,
+        result.accuracy,
+        result.mean_reward,
+    )
+    return result
+
+
 def run_harbor(
     model: RunningModel,
     config: HarborRunConfig,
@@ -263,20 +327,12 @@ def run_harbor(
     job_name = _job_name(model, config)
     workdir = Path("/tmp/harbor_workdir") / job_name
     results_dir = workdir / "harbor_results"
-    results_dir.mkdir(parents=True, exist_ok=True)
-    job_dir = results_dir / job_name
     dataset_path = materialize_harbor_dataset(
         config.dataset,
         config.revision,
         workdir,
         hf_token=hf_token,
     )
-
-    if is_remote_path(output_dir):
-        restored = _restore_completed_trials(output_dir, job_dir)
-        if restored:
-            logger.info("restored %d completed Harbor trial(s) from %s", restored, output_dir)
-
     driver_config = HarborDriverConfig(
         job_name=job_name,
         jobs_dir=str(results_dir),
@@ -285,45 +341,67 @@ def run_harbor(
         served_model=model.endpoint.model,
         run=config,
     )
-    config_file = workdir / "driver_config.json"
-    config_file.write_text(json.dumps(asdict(driver_config)))
-    config_file.chmod(0o600)
-
-    logger.info(
-        "starting Harbor job %s (dataset=%s env=%s)",
-        job_name,
-        config.dataset,
-        config.environment.environment_type,
+    return _run_harbor_job(
+        job_name=job_name,
+        workdir=workdir,
+        job_config=native_job_config(driver_config),
+        dataset=config.dataset,
+        environment=config.environment.environment_type,
+        output_dir=output_dir,
+        driver_env=driver_env,
     )
-    _run_driver(config_file, driver_env)
 
-    trials = _read_trials(job_dir)
-    if is_remote_path(output_dir):
-        _upload_trials(job_dir, output_dir)
-    samples_path = _write_samples(trials, config.dataset, output_dir)
-    result = _aggregate(trials, config.dataset, samples_path)
-    StoragePath(prefix_join(output_dir, "harbor_result.json")).write_text(
-        json.dumps(
-            {
-                "dataset": result.dataset,
-                "total_trials": result.total_trials,
-                "solved_trials": result.solved_trials,
-                "failed_trials": result.failed_trials,
-                "mean_reward": result.mean_reward,
-                "accuracy": result.accuracy,
-            },
-            indent=2,
+
+def run_native_harbor(
+    model: RunningModel,
+    config: NativeHarborConfig,
+    output_dir: str,
+    *,
+    task_limit: int | None,
+    model_agent_kwargs: Mapping[str, str],
+    driver_env: Mapping[str, str],
+) -> HarborRunResult:
+    """Run a validated native Harbor config after applying Marin's served-model overlays."""
+    job_name = _native_job_name(model, config, task_limit)
+    workdir = Path("/tmp/harbor_workdir") / job_name
+    results_dir = workdir / "harbor_results"
+    job_config = adapt_native_job_config(
+        config,
+        job_name=job_name,
+        jobs_dir=str(results_dir),
+        endpoint_url=model.endpoint.base_url,
+        served_model=model.endpoint.model,
+        task_limit=task_limit,
+        model_agent_kwargs=model_agent_kwargs,
+    )
+    return _run_harbor_job(
+        job_name=job_name,
+        workdir=workdir,
+        job_config=job_config,
+        dataset=config.dataset,
+        environment=config.environment,
+        output_dir=output_dir,
+        driver_env=driver_env,
+    )
+
+
+def _evaluation_outcome(run: Callable[[], HarborRunResult], output_dir: str) -> EvaluationOutcome:
+    try:
+        result = run()
+    except Exception as exc:
+        raise EvaluationError(str(exc), status=RunStatus.FAILED) from exc
+    if not result.total_trials:
+        raise EvaluationError(
+            f"Harbor eval finished with no trials under {output_dir!r}",
+            status=RunStatus.FAILED,
         )
-    )
-    logger.info(
-        "Harbor %s: %d/%d solved (accuracy=%.3f mean_reward=%.3f)",
-        config.dataset,
-        result.solved_trials,
-        result.total_trials,
-        result.accuracy,
-        result.mean_reward,
-    )
-    return result
+    if result.failed_trials:
+        raise EvaluationError(
+            f"Harbor eval finished with {result.failed_trials} of {result.total_trials} failed trials "
+            f"under {output_dir!r}",
+            status=RunStatus.FAILED,
+        )
+    return EvaluationOutcome(metrics=result.task_metrics())
 
 
 @dataclass(frozen=True)
@@ -339,25 +417,44 @@ class HarborExecutor:
         output_dir: str,
         env_vars: Mapping[str, str],
     ) -> EvaluationOutcome:
-        try:
-            result = run_harbor(
+        return _evaluation_outcome(
+            lambda: run_harbor(
                 model,
                 self.config,
                 output_dir,
                 hf_token=env_vars.get("HF_TOKEN"),
                 driver_env={key: env_vars[key] for key in self.secret_env_keys},
-            )
-        except Exception as exc:
-            raise EvaluationError(str(exc), status=RunStatus.FAILED) from exc
-        if not result.total_trials:
-            raise EvaluationError(
-                f"Harbor eval finished with no trials under {output_dir!r}",
-                status=RunStatus.FAILED,
-            )
-        if result.failed_trials:
-            raise EvaluationError(
-                f"Harbor eval finished with {result.failed_trials} of {result.total_trials} failed trials "
-                f"under {output_dir!r}",
-                status=RunStatus.FAILED,
-            )
-        return EvaluationOutcome(metrics=result.task_metrics())
+            ),
+            output_dir,
+        )
+
+
+@dataclass(frozen=True)
+class NativeHarborExecutor:
+    """Run one validated native Harbor configuration."""
+
+    config: NativeHarborConfig
+    task_limit: int | None
+    model_agent_kwargs: Mapping[str, str]
+    secret_env_keys: tuple[str, ...] = ()
+
+    def __call__(
+        self,
+        model: RunningModel,
+        output_dir: str,
+        env_vars: Mapping[str, str],
+    ) -> EvaluationOutcome:
+        driver_env = {key: env_vars[key] for key in self.secret_env_keys}
+        if hf_token := env_vars.get("HF_TOKEN"):
+            driver_env["HF_TOKEN"] = hf_token
+        return _evaluation_outcome(
+            lambda: run_native_harbor(
+                model,
+                self.config,
+                output_dir,
+                task_limit=self.task_limit,
+                model_agent_kwargs=self.model_agent_kwargs,
+                driver_env=driver_env,
+            ),
+            output_dir,
+        )

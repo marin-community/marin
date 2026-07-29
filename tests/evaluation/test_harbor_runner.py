@@ -180,10 +180,10 @@ def test_run_harbor_normalizes_a_completed_external_trial(tmp_path, monkeypatch)
 
     def run_driver(command, *, check, env) -> None:
         assert check
-        driver_config = HarborDriverConfig.from_dict(json.loads(Path(command[-1]).read_text()))
-        captured["driver_config"] = driver_config
+        job_config = json.loads(Path(command[-1]).read_text())
+        captured["job_config"] = job_config
         captured["env"] = env
-        trial_dir = Path(driver_config.jobs_dir) / driver_config.job_name / "trial-one"
+        trial_dir = Path(job_config["jobs_dir"]) / job_config["job_name"] / "trial-one"
         trial_dir.mkdir(parents=True, exist_ok=True)
         (trial_dir / "result.json").write_text(
             json.dumps(
@@ -211,8 +211,8 @@ def test_run_harbor_normalizes_a_completed_external_trial(tmp_path, monkeypatch)
         driver_env={"DAYTONA_API_KEY": "daytona-key"},
     )
 
-    assert captured["driver_config"].endpoint_url == model.endpoint.base_url
-    assert captured["driver_config"].served_model == "qwen3-0.6b"
+    assert captured["job_config"]["agents"][0]["kwargs"]["api_base"] == model.endpoint.base_url
+    assert captured["job_config"]["agents"][0]["model_name"] == "hosted_vllm/qwen3-0.6b"
     assert captured["env"]["DAYTONA_API_KEY"] == "daytona-key"
     assert "OPENAI_API_KEY" not in captured["env"]
     assert result.total_trials == 1
@@ -222,8 +222,8 @@ def test_run_harbor_normalizes_a_completed_external_trial(tmp_path, monkeypatch)
 def test_harbor_executor_fails_when_trial_contains_exception_info(tmp_path, monkeypatch):
     def run_driver(command, *, check, env) -> None:
         assert check and isinstance(env, dict)
-        config = HarborDriverConfig.from_dict(json.loads(Path(command[-1]).read_text()))
-        trial_dir = Path(config.jobs_dir) / config.job_name / "trial-one"
+        config = json.loads(Path(command[-1]).read_text())
+        trial_dir = Path(config["jobs_dir"]) / config["job_name"] / "trial-one"
         trial_dir.mkdir(parents=True, exist_ok=True)
         (trial_dir / "result.json").write_text(
             json.dumps(
@@ -259,8 +259,8 @@ def test_harbor_executor_fails_when_trial_contains_exception_info(tmp_path, monk
 def test_harbor_executor_accepts_zero_reward_without_exception_info(tmp_path, monkeypatch):
     def run_driver(command, *, check, env) -> None:
         assert check and isinstance(env, dict)
-        config = HarborDriverConfig.from_dict(json.loads(Path(command[-1]).read_text()))
-        trial_dir = Path(config.jobs_dir) / config.job_name / "trial-one"
+        config = json.loads(Path(command[-1]).read_text())
+        trial_dir = Path(config["jobs_dir"]) / config["job_name"] / "trial-one"
         trial_dir.mkdir(parents=True, exist_ok=True)
         (trial_dir / "result.json").write_text(
             json.dumps(

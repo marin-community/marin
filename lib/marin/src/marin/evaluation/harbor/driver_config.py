@@ -3,9 +3,15 @@
 
 """Typed configuration and native-schema adaptation for the isolated Harbor driver."""
 
+import hashlib
+import json
+import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+
+from marin.external_dependencies import HARBOR
 
 _DEFAULT_MODEL_INFO = {
     "max_input_tokens": 32768,
@@ -17,6 +23,7 @@ _OPENCODE_AGENT = "opencode"
 _HOSTED_VLLM_PROVIDER = "hosted_vllm"
 _HOSTED_VLLM_DISPLAY_NAME = "Hosted vLLM"
 _OPENAI_COMPATIBLE_PACKAGE = "@ai-sdk/openai-compatible"
+_CONFIG_VALIDATOR = Path(__file__).with_name("config_validator.py")
 
 
 @dataclass(frozen=True)
@@ -79,7 +86,7 @@ class HarborRunConfig:
 
 @dataclass(frozen=True)
 class HarborDriverConfig:
-    """JSON-safe input shared by the Marin parent and isolated Harbor process."""
+    """Stable Marin policy plus runtime values lowered into a native Harbor job."""
 
     job_name: str
     jobs_dir: str
@@ -88,16 +95,82 @@ class HarborDriverConfig:
     served_model: str
     run: HarborRunConfig
 
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "HarborDriverConfig":
-        """Decode a JSON object while rejecting unknown or missing config fields."""
-        values = dict(data)
-        run_values = dict(values.pop("run"))
-        run_values["agent"] = HarborAgentConfig(**run_values["agent"])
-        run_values["environment"] = HarborEnvironmentConfig(**run_values["environment"])
-        run_values["retry"] = HarborRetryConfig(**run_values["retry"])
-        run_values["verifier"] = HarborVerifierConfig(**run_values["verifier"])
-        return cls(run=HarborRunConfig(**run_values), **values)
+
+@dataclass(frozen=True)
+class NativeHarborConfig:
+    """A validated, normalized native Harbor ``JobConfig`` and its durable identity."""
+
+    normalized: Mapping[str, Any]
+    digest: str
+    dataset: str
+    revision: str
+    agent: str
+    environment: str
+
+
+def _single_config_entry(config: Mapping[str, Any], field_name: str) -> Mapping[str, Any]:
+    values = config.get(field_name)
+    if not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], Mapping):
+        raise ValueError(f"Harbor config must declare exactly one {field_name.removesuffix('s')}")
+    return values[0]
+
+
+def _native_config_from_normalized(config: Mapping[str, Any]) -> NativeHarborConfig:
+    if config.get("tasks"):
+        raise ValueError("Harbor config tasks are incompatible with the shared launcher; declare exactly one dataset")
+    agent = _single_config_entry(config, "agents")
+    dataset = _single_config_entry(config, "datasets")
+    environment = config.get("environment")
+    if not isinstance(environment, Mapping):
+        raise ValueError("Harbor config must declare one environment")
+
+    dataset_name = dataset.get("name") or dataset.get("path")
+    agent_name = agent.get("name") or agent.get("import_path")
+    environment_name = environment.get("type") or environment.get("import_path")
+    if not isinstance(dataset_name, str):
+        raise ValueError("Harbor config dataset must have a name or path")
+    if not isinstance(agent_name, str):
+        raise ValueError("Harbor config agent must have a name or import_path")
+    if not isinstance(environment_name, str):
+        raise ValueError("Harbor config environment must have a type or import_path")
+
+    canonical = json.dumps(config, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
+    return NativeHarborConfig(
+        normalized=config,
+        digest=f"sha256:{hashlib.sha256(canonical).hexdigest()}",
+        dataset=dataset_name,
+        revision=str(dataset.get("ref") or dataset.get("version") or "unversioned"),
+        agent=agent_name,
+        environment=environment_name,
+    )
+
+
+def load_native_harbor_config(path: Path) -> NativeHarborConfig:
+    """Validate and normalize a native Harbor YAML or JSON file with the pinned Harbor schema."""
+    command = [
+        "uv",
+        "run",
+        "--isolated",
+        "--no-project",
+        "--prerelease=allow",
+        "--with",
+        HARBOR.requirement(),
+        "python",
+        str(_CONFIG_VALIDATOR),
+        str(path),
+    ]
+    try:
+        completed = subprocess.run(command, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        detail = exc.stderr.strip() or exc.stdout.strip() or f"validator exited with status {exc.returncode}"
+        raise ValueError(f"invalid Harbor config {path}: {detail}") from exc
+    try:
+        normalized = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Harbor validator returned invalid JSON for {path}") from exc
+    if not isinstance(normalized, Mapping):
+        raise ValueError(f"Harbor config {path} must contain a mapping")
+    return _native_config_from_normalized(normalized)
 
 
 def _opencode_config_for_endpoint(config: object, endpoint_url: str) -> dict[str, Any]:
@@ -187,3 +260,35 @@ def native_job_config(config: HarborDriverConfig) -> dict[str, Any]:
         ],
         "datasets": [dataset],
     }
+
+
+def adapt_native_job_config(
+    config: NativeHarborConfig,
+    *,
+    job_name: str,
+    jobs_dir: str,
+    endpoint_url: str,
+    served_model: str,
+    task_limit: int | None,
+    model_agent_kwargs: Mapping[str, str],
+) -> dict[str, Any]:
+    """Overlay Marin-owned runtime values on a normalized Harbor ``JobConfig``."""
+    resolved = json.loads(json.dumps(config.normalized))
+    resolved["job_name"] = job_name
+    resolved["jobs_dir"] = jobs_dir
+
+    dataset = resolved["datasets"][0]
+    if task_limit is not None:
+        dataset["n_tasks"] = task_limit
+
+    agent = resolved["agents"][0]
+    agent["model_name"] = f"hosted_vllm/{served_model}"
+    agent_kwargs = {**model_agent_kwargs, **agent.get("kwargs", {})}
+    agent_kwargs["api_base"] = endpoint_url
+    if agent.get("name") == _OPENCODE_AGENT:
+        agent_kwargs["opencode_config"] = _opencode_config_for_endpoint(
+            agent_kwargs.get("opencode_config", {}),
+            endpoint_url,
+        )
+    agent["kwargs"] = agent_kwargs
+    return resolved

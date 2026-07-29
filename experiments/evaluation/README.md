@@ -100,6 +100,24 @@ land in evaldash like every other eval.
 uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals tb2-lite
 ```
 
+Use `--harbor-config` to launch a native Harbor `JobConfig` without adding it to `EVALS`:
+
+```bash
+# Serve Qwen3-8B and run the checked-in two-task AIME Harbor policy.
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-8b \
+  --harbor-config experiments/evaluation/configs/aime-smoke.yaml
+```
+
+`--harbor-config` and `--evals` are mutually exclusive. The launcher validates YAML and JSON files
+against Marin's pinned Harbor `JobConfig` before opening an Iris client. File-backed launches support
+one agent and one dataset; multiple agents, multiple datasets, and explicit `tasks` are rejected.
+Marin replaces the config's `job_name`, `jobs_dir`, agent `model_name`, `api_base`, and OpenCode
+provider URL with values for the served endpoint. Model-catalog agent kwargs are merged underneath
+the config's agent kwargs. `--limit` overrides the dataset's `n_tasks`; other normalized Harbor
+fields remain unchanged. The evaluation record stores the normalized config's SHA-256 digest in
+`eval.harbor.config_digest`.
+
 Daytona-backed definitions declare one experiment-owned credential specification. A launch first
 uses `DAYTONA_API_KEY` from its environment, then falls back to the `DAYTONA_EVAL_API_KEY` secret in
 the `hai-gcp-models` Google Secret Manager project. `DAYTONA_API_KEY` is the only supported

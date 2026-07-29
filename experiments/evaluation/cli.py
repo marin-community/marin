@@ -10,8 +10,12 @@ rewrites every run's per-sample parquet exports from its kept ``samples_*.jsonl`
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import click
 from iris.cli.connect import open_iris_client
+from marin.evaluation.harbor.driver_config import load_native_harbor_config
+from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import Platform, default_platform
 from marin.evaluation.records import CW_RECORDS_PREFIX, DEFAULT_RECORDS_PREFIX, list_records
 from marin.evaluation.runner import LaunchProvenance, wait_and_report
@@ -20,7 +24,13 @@ from rigging.config_discovery import find_project_root
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.evaluation.evals import EVALS, SUITES
-from experiments.evaluation.launch import LaunchSpec, build_evaluation_batch, launch_group
+from experiments.evaluation.launch import (
+    HarborConfigSelection,
+    LaunchSpec,
+    RegistrySelection,
+    build_evaluation_batch,
+    launch_group,
+)
 from experiments.evaluation.models import models
 
 _DRY_RUN_IDENTITY = "dry-run"
@@ -64,7 +74,18 @@ def cli() -> None:
 
 @cli.command()
 @click.option("--model", required=True, help="Model registry key.")
-@click.option("--evals", "evals_arg", default="smoke", help="Suite name (e.g. 'smoke') or comma-separated eval keys.")
+@click.option(
+    "--evals",
+    "evals_arg",
+    default=None,
+    help="Suite name (e.g. 'smoke') or comma-separated eval keys; defaults to smoke.",
+)
+@click.option(
+    "--harbor-config",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Native Harbor JobConfig YAML or JSON; mutually exclusive with --evals.",
+)
 @click.option(
     "--platform",
     type=click.Choice([p.value for p in Platform]),
@@ -90,7 +111,8 @@ def cli() -> None:
 @click.option("--cluster", default="marin", envvar="IRIS_CLUSTER", help="Named iris cluster to submit to.")
 def launch(
     model: str,
-    evals_arg: str,
+    evals_arg: str | None,
+    harbor_config: Path | None,
     platform: str | None,
     accelerator: str | None,
     limit: int | None,
@@ -107,9 +129,22 @@ def launch(
         raise click.BadParameter(f"unknown model {model!r}; known: {sorted(catalog)}")
     model_config = catalog[model]
     resolved_platform = Platform(platform) if platform else default_platform(model_config)
+    if harbor_config is not None and evals_arg is not None:
+        raise click.UsageError("--harbor-config and --evals are mutually exclusive")
+    if harbor_config is not None:
+        try:
+            native_config = load_native_harbor_config(harbor_config)
+        except ValueError as exc:
+            raise click.BadParameter(str(exc), param_hint="--harbor-config") from exc
+        selection = HarborConfigSelection(
+            name=canonical_served_name(harbor_config.stem),
+            config=native_config,
+        )
+    else:
+        selection = RegistrySelection(_resolve_eval_keys(evals_arg or "smoke"))
     spec = LaunchSpec(
         model=model,
-        evals=_resolve_eval_keys(evals_arg),
+        selection=selection,
         platform=resolved_platform,
         accelerator=accelerator,
         limit=limit,

@@ -15,6 +15,7 @@ from marin.evaluation.records import (
     EvalRef,
     EvalRunRecord,
     EvalTaskRef,
+    HarborRef,
     HardwareRef,
     ModelRef,
     Provenance,
@@ -74,6 +75,36 @@ def test_record_json_uses_eval_alias_and_plain_string_enum(tmp_path):
     assert isinstance(raw["status"], str)
     assert raw["version"] == "2026.07.19"
     assert raw["description"] == "baseline sweep"
+
+
+def test_record_json_includes_native_harbor_config_digest(tmp_path):
+    record = _RECORD.model_copy(
+        update={
+            "evaluation": EvalRef(
+                name="aime-policy",
+                mechanism="harbor",
+                harbor=HarborRef(
+                    dataset="aime",
+                    version="1.0",
+                    agent="terminus-2",
+                    env="daytona",
+                    config_digest="sha256:" + "a" * 64,
+                ),
+            )
+        }
+    )
+
+    path = write_record(record, str(tmp_path))
+    with open(path) as f:
+        raw = json.load(f)
+
+    assert raw["eval"]["harbor"] == {
+        "dataset": "aime",
+        "version": "1.0",
+        "agent": "terminus-2",
+        "env": "daytona",
+        "config_digest": "sha256:" + "a" * 64,
+    }
 
 
 def test_read_record_parses_a_previously_written_record_json(tmp_path):
