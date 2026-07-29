@@ -328,13 +328,16 @@ those are plumbing. Say what happened, not how it was invoked.
 | trial | progress | eval | vs exp117 |
 
 ### Notes
-One or two lines: what changed, anything worth flagging.
+What the operator should pay attention to. Nothing else.
 ```
 
 The two placement spans live in the **Fleet** line as `submitted → training`, so
 the gap between chips requested and chips working is unmissable. Omit an empty
 section rather than printing a placeholder, except Fleet and Trials which always
-appear. Extra detail below Notes is welcome when it earns its place.
+appear.
+
+**Notes: 100 words max, usually empty.** Only what the operator would act on or
+be wrong without. Not reasoning, not a restatement of the tables.
 
 ## Stall Escalation
 
