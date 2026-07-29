@@ -72,11 +72,12 @@ def namespace_manifest(namespace: str) -> dict:
 
 
 def service_account_manifest(namespace: str, service_account: str) -> dict:
-    """Return the controller's ServiceAccount."""
+    """Return an Iris ServiceAccount without registry credentials."""
     return {
         "apiVersion": "v1",
         "kind": "ServiceAccount",
         "metadata": {"name": service_account, "namespace": namespace},
+        "imagePullSecrets": [],
     }
 
 

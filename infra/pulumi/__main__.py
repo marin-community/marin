@@ -78,6 +78,11 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
         namespace = kubernetes_provider.namespace
     else:
         namespace = DEFAULT_NAMESPACE
+    if kubernetes_provider is None or not kubernetes_provider.service_account:
+        raise ValueError(
+            f"cluster {cluster!r} requires kubernetes_provider.service_account; "
+            "CoreWeave task pods must use an IaC-owned ServiceAccount without registry credentials"
+        )
 
     platform_coreweave = iris_config.platform.coreweave
     if platform_coreweave is None:
@@ -115,7 +120,12 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
     )
     rbac = IrisRbac(
         "rbac",
-        IrisRbacArgs(namespace=namespace, spec=coreweave_provisioning.rbac, adopt=adopt),
+        IrisRbacArgs(
+            namespace=namespace,
+            spec=coreweave_provisioning.rbac,
+            task_service_account=kubernetes_provider.service_account,
+            adopt=adopt,
+        ),
         k8s_provider=k8s_provider,
     )
     if grafana_observer := coreweave_provisioning.grafana_observer_rbac:

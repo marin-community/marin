@@ -645,24 +645,40 @@ class K8sControllerProvider:
     def verify_prerequisites(self, config: IrisClusterConfig) -> None:
         """Assert IaC-provisioned prerequisites exist before starting the controller.
 
-        Presence-only (not exact spec): the Namespace, iris-controller ServiceAccount,
-        namespace-qualified ClusterRole/ClusterRoleBinding, one NodePool per non-skipped
-        scale group, the Kueue ClusterQueue + ResourceFlavor, and (best-effort) the
-        IngressClass. All of these are provisioned by `infra/pulumi`'s Pulumi program
-        (spec.md §4) — this method creates nothing. Raises PrerequisitesNotProvisionedError
-        enumerating every missing object if any are absent.
+        The Namespace, Iris ServiceAccounts, namespace-qualified
+        ClusterRole/ClusterRoleBinding, one NodePool per non-skipped scale group,
+        the Kueue ClusterQueue + ResourceFlavor, and (best-effort) the
+        IngressClass must exist. The task ServiceAccount must not carry registry
+        credentials: CoreWeave task images are required to be public. All of these
+        are provisioned by `infra/pulumi`'s Pulumi program (spec.md §4) — this
+        method creates nothing. Raises PrerequisitesNotProvisionedError
+        enumerating every missing or invalid object.
         """
-        missing: list[str] = []
+        problems: list[str] = []
 
         if self._kubectl.get_json(K8sResource.NAMESPACES, self._namespace) is None:
-            missing.append(f"Namespace/{self._namespace}")
+            problems.append(f"Namespace/{self._namespace}")
         if self._kubectl.get_json(K8sResource.SERVICE_ACCOUNTS, "iris-controller") is None:
-            missing.append(f"ServiceAccount/{self._namespace}/iris-controller")
+            problems.append(f"ServiceAccount/{self._namespace}/iris-controller")
+        task_service_account_name = config.kubernetes_provider.service_account
+        if task_service_account_name:
+            task_service_account = self._kubectl.get_json(
+                K8sResource.SERVICE_ACCOUNTS,
+                task_service_account_name,
+            )
+            if task_service_account is None:
+                problems.append(f"ServiceAccount/{self._namespace}/{task_service_account_name}")
+            elif image_pull_secrets := task_service_account.get("imagePullSecrets", []):
+                secret_names = ", ".join(secret["name"] for secret in image_pull_secrets)
+                problems.append(
+                    f"ServiceAccount/{self._namespace}/{task_service_account_name} "
+                    f"has imagePullSecrets ({secret_names}); CoreWeave task images must be public"
+                )
         role_name = self.rbac_cluster_role_name()
         if self._kubectl.get_json(K8sResource.CLUSTER_ROLES, role_name) is None:
-            missing.append(f"ClusterRole/{role_name}")
+            problems.append(f"ClusterRole/{role_name}")
         if self._kubectl.get_json(K8sResource.CLUSTER_ROLE_BINDINGS, role_name) is None:
-            missing.append(f"ClusterRoleBinding/{role_name}")
+            problems.append(f"ClusterRoleBinding/{role_name}")
 
         label_prefix = config.platform.label_prefix
         for name, sg in config.scale_groups.items():
@@ -671,22 +687,22 @@ class K8sControllerProvider:
                 continue
             pool_name = nodepool_name(label_prefix, name)
             if self._kubectl.get_json(K8sResource.NODE_POOLS, pool_name) is None:
-                missing.append(f"NodePool/{pool_name}")
+                problems.append(f"NodePool/{pool_name}")
 
         cluster_queue = config.kubernetes_provider.kueue.cluster_queue
         if cluster_queue and self._kubectl.get_json(K8sResource.CLUSTER_QUEUES, cluster_queue) is None:
-            missing.append(f"ClusterQueue/{cluster_queue}")
+            problems.append(f"ClusterQueue/{cluster_queue}")
         if self._kubectl.get_json(K8sResource.RESOURCE_FLAVORS, RESOURCE_FLAVOR_NAME) is None:
-            missing.append(f"ResourceFlavor/{RESOURCE_FLAVOR_NAME}")
+            problems.append(f"ResourceFlavor/{RESOURCE_FLAVOR_NAME}")
 
         ingress_class = _ingress_class_from_provisioning(config)
         if ingress_class and self._kubectl.get_json(K8sResource.INGRESS_CLASSES, ingress_class) is None:
-            missing.append(f"IngressClass/{ingress_class}")
+            problems.append(f"IngressClass/{ingress_class}")
 
-        if missing:
+        if problems:
             raise PrerequisitesNotProvisionedError(
-                "IaC-provisioned prerequisites missing: "
-                + ", ".join(missing)
+                "IaC-provisioned prerequisites missing or invalid: "
+                + ", ".join(problems)
                 + f". Run: cd infra/pulumi && pulumi stack select {config.name} && pulumi up"
             )
 

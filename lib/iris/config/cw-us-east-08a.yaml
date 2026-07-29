@@ -122,6 +122,7 @@ auth:
 kubernetes_provider:
   namespace: iris
   default_image: ghcr.io/marin-community/iris-task:latest
+  service_account: iris-task       # IaC-owned and intentionally has no image pull credentials
   host_network: true                # Required for NCCL/IB multi-host traffic
   cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal nodes
   controller_address: http://iris-controller-svc.iris.svc.cluster.local:10000
