@@ -788,10 +788,13 @@ class MoEMLP(eqx.Module):
             token_eligibility = jnp.repeat(expert_eligibility.astype(jnp.bool_), s, axis=0)
             eligible_router_logits = jnp.where(token_eligibility, router_logits, _INELIGIBLE_ROUTER_LOGIT)
             eligible_counts = jnp.sum(token_eligibility, axis=-1)
-            group_ids = jnp.zeros_like(eligible_counts)
-            for group_id, group_count in enumerate(self.cfg.router_balance_group_counts[1:], start=1):
-                group_ids = jnp.where(eligible_counts == group_count, group_id, group_ids)
-            token_router_bias = self.router_bias.at[group_ids].get(out_sharding=P(_BATCH_AXES, None))
+            if self.router_bias.ndim == 1:
+                token_router_bias = self.router_bias
+            else:
+                group_ids = jnp.zeros_like(eligible_counts)
+                for group_id, group_count in enumerate(self.cfg.router_balance_group_counts[1:], start=1):
+                    group_ids = jnp.where(eligible_counts == group_count, group_id, group_ids)
+                token_router_bias = self.router_bias.at[group_ids].get(out_sharding=P(_BATCH_AXES, None))
 
         if self.cfg.qb_routing:
             # QB aux-loss-free balancing: bias the top-k *selection* with the per-expert router_bias,
