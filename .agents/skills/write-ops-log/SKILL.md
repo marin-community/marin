@@ -146,3 +146,8 @@ Links or paths to supporting evidence, in order of usefulness:
 Do not add an index file or update `MEMORY.md`. Logs are discoverable by
 `ls .agents/ops/` and full-text search. If the directory gets unwieldy (>30
 entries), flag it to the user.
+
+Invoke `consult-echo` at resolution and run its search-before-write sequence.
+Evaluate whether the incident exposes a reusable pattern for `OPS.md`, `docs/`,
+or the Echo wiki. Extend a near-duplicate wiki note instead of adding another,
+and keep incident-specific evidence in this ops log.

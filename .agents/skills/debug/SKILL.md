@@ -14,6 +14,13 @@ write `docs/debug-log-*` files or create another debug-log directory. Extend an
 existing record when it covers the same event. Use `write-ops-log` to finish an
 infrastructure or other multi-step incident as a standalone postmortem.
 
+## Consult Echo
+
+Invoke `consult-echo` at the start when prior discussions, decisions, or
+incident patterns could materially shorten debugging. At resolution, always
+invoke it to search before deciding whether the reusable lesson belongs in
+`OPS.md`, `docs/`, the incident record, or an existing or new Echo wiki note.
+
 ## Infrastructure faults
 
 Read `lib/iris/AGENTS.md` or `lib/zephyr/AGENTS.md` for context, then follow
