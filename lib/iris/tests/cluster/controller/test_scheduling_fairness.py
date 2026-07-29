@@ -180,8 +180,10 @@ def test_depth_boost_within_band():
         )
 
 
-def _submit_child(state, parent_id: JobName, parent_req, name: str = "child", band: int = 0) -> JobName:
-    """Submit a child reusing the parent's shape; ``band`` 0 is what an inheriting child sends."""
+def _submit_child(
+    state, parent_id: JobName, parent_req, name: str = "child", band: int = job_pb2.PRIORITY_BAND_INHERIT
+) -> JobName:
+    """Submit a child reusing the parent's shape; INHERIT is what an inheriting child sends."""
     child_id = parent_id.child(name)
     child_req = controller_pb2.Controller.LaunchJobRequest(
         name=child_id.to_wire(),

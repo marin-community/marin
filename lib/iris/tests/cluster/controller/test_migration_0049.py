@@ -81,7 +81,6 @@ def test_migration_0049_resolves_job_bands_up_the_parent_chain():
         "/u/batch/child/grand": _BATCH,
         "/u/prod": _PRODUCTION,
         "/u/prod/child": _PRODUCTION,
-        # No band anywhere in the chain.
         "/u/plain": _INTERACTIVE,
     }
     conn.close()

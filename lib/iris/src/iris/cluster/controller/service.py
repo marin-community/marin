@@ -186,6 +186,17 @@ _LOCAL_ADMIN_FEDERATION_DENIED = (
     "IAP or present a user token so the submission carries your identity."
 )
 
+# What LaunchJob accepts in priority_band: the three real bands, plus INHERIT for a
+# client that wants the parent's band (or the INTERACTIVE default at a root).
+_SUBMITTABLE_PRIORITY_BANDS = frozenset(
+    {
+        job_pb2.PRIORITY_BAND_INHERIT,
+        job_pb2.PRIORITY_BAND_PRODUCTION,
+        job_pb2.PRIORITY_BAND_INTERACTIVE,
+        job_pb2.PRIORITY_BAND_BATCH,
+    }
+)
+
 
 def _child_federation_refusal(job_id: JobName, peer_id: str) -> str:
     """The message refusing to federate child ``job_id`` to ``peer_id``, naming the remedy."""
@@ -1499,6 +1510,14 @@ class ControllerServiceImpl:
         # chooses whether to send the field; gating the request would let it pick whether
         # the cap applies at all. Inheriting a band at or below the cap still passes, so a
         # capped user's children launch normally.
+        # proto3 enums are open, so a newer or buggy client can put an integer here that
+        # names no band. Reject it at the boundary rather than storing it as a "real" one.
+        if request.priority_band not in _SUBMITTABLE_PRIORITY_BANDS:
+            raise ConnectError(
+                Code.INVALID_ARGUMENT,
+                f"Unknown priority_band {int(request.priority_band)}; "
+                f"expected one of {sorted(_SUBMITTABLE_PRIORITY_BANDS)}",
+            )
         inherited_band: int | None = None
         if request.priority_band == job_pb2.PRIORITY_BAND_INHERIT and job_id.parent is not None:
             with self._db.read_snapshot() as _snap:

@@ -143,12 +143,8 @@ def create_attempt_for_test(ctrl: ControllerTestState, task_id: JobName, worker_
     return next_attempt_id
 
 
-def resolve_band_for_test(cur: Tx, job_id: JobName, requested_band: int) -> int:
-    """Resolve a requested band the way ``LaunchJob`` does, using the open transaction.
-
-    ``ops.job.submit`` takes an already-resolved band, so a test that submits without
-    going through the service has to stand in for the RPC entry point.
-    """
+def resolve_band_for_test(cur: Tx, job_id: JobName, requested_band: int) -> job_pb2.PriorityBand:
+    """Stand in for ``LaunchJob``'s band resolution, using the open transaction."""
     inherited_band: int | None = None
     if requested_band == job_pb2.PRIORITY_BAND_INHERIT and job_id.parent is not None:
         inherited_band = reads.get_priority_bands(cur, [job_id.parent])[job_id.parent]
@@ -163,15 +159,16 @@ def submit_job_in_tx(
     ts: Timestamp | None = None,
     submitting_user: str | None = None,
 ) -> None:
-    """``ops.job.submit`` for a test that owns the transaction, resolving the band first.
-
-    Mirrors what ``LaunchJob`` does at ingestion so the stored band is real.
-    """
+    """``ops.job.submit`` for a test that owns the transaction, resolving the band first."""
+    # Normalize the request too, exactly as LaunchJob does, so the request a test hands
+    # in cannot disagree with the band that gets stored.
+    band = resolve_band_for_test(cur, job_id, int(request.priority_band))
+    request.priority_band = band
     ops.job.submit(
         cur,
         job_id=job_id,
         request=request,
         ts=ts if ts is not None else Timestamp.now(),
-        priority_band=resolve_band_for_test(cur, job_id, int(request.priority_band)),
+        priority_band=band,
         submitting_user=submitting_user,
     )

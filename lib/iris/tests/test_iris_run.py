@@ -225,8 +225,8 @@ def test_run_iris_job_passes_priority_band(monkeypatch):
     assert captured["priority_band"] == job_pb2.PRIORITY_BAND_BATCH
 
 
-def test_run_iris_job_default_priority_unspecified(monkeypatch):
-    """run_iris_job defaults to PRIORITY_BAND_INHERIT when --priority is omitted."""
+def test_run_iris_job_default_priority_inherit(monkeypatch):
+    """run_iris_job leaves the band for the controller to resolve when --priority is omitted."""
 
     captured: dict[str, object] = {}
 

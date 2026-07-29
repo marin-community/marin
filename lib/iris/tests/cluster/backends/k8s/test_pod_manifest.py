@@ -1393,3 +1393,14 @@ def test_kueue_topologies_override_config():
     annotations = manifest["metadata"]["annotations"]
     assert annotations[_KUEUE_REQUIRED_TOPOLOGY] == "rack.example.com/pod"
     assert _KUEUE_PREFERRED_TOPOLOGY not in annotations
+
+
+def test_pod_manifest_floors_an_unset_band_at_interactive():
+    """An unset band takes the interactive class, not the cluster default.
+
+    Dispatch always stamps a real band, so this is the floor for a request built outside
+    that path — without it an unset field would leave the pod unranked against its peers.
+    """
+    req = make_run_req("/test-job/0", priority=job_pb2.PRIORITY_BAND_INHERIT)
+    manifest = _build_pod_manifest(req, pod_config())
+    assert manifest["spec"]["priorityClassName"] == "iris-interactive"

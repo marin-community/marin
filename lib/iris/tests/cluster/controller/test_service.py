@@ -319,6 +319,15 @@ def test_launch_job_batch_capped_user_can_spawn_children(service, state):
         assert reads.get_priority_bands(snap, [child_id]) == {child_id: job_pb2.PRIORITY_BAND_BATCH}
 
 
+def test_launch_job_rejects_an_unknown_priority_band(service, state):
+    """proto3 enums are open, so an integer naming no band must not be stored as one."""
+    request = make_job_request("bogus-band")
+    request.priority_band = 99
+    with pytest.raises(ConnectError) as exc:
+        service.launch_job(request, None)
+    assert exc.value.code == Code.INVALID_ARGUMENT
+
+
 def test_launch_job_rejects_band_above_the_user_cap(service, state):
     """An explicit band above the user's cap is refused."""
     _cap_user_at(state, job_pb2.PRIORITY_BAND_BATCH)

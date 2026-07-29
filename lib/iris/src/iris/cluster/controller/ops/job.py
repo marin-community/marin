@@ -84,15 +84,7 @@ def _materialize_tasks(
 
 
 def resolve_priority_band(requested_band: int, inherited_band: int | None) -> job_pb2.PriorityBand:
-    """Resolve ``PRIORITY_BAND_INHERIT`` to the band a job is stored with.
-
-    Call this at ingestion only — ``LaunchJob``, or a test helper standing in for it.
-    Everything behind that boundary takes an already-resolved band, so no other
-    caller needs to reason about INHERIT.
-
-    Returns ``requested_band`` when the client asked for a band, else
-    ``inherited_band``, else ``PRIORITY_BAND_INTERACTIVE``. Never returns
-    ``PRIORITY_BAND_INHERIT``.
+    """Resolve ``PRIORITY_BAND_INHERIT`` to a real band. Call at ingestion only.
 
     Args:
         requested_band: The band on the launch request; INHERIT means the client asked for none.

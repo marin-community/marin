@@ -159,7 +159,7 @@ def test_reconcile_no_tiers_is_noop(db: ControllerDB) -> None:
     assert _list_user_budgets(db) == []
 
 
-def test_reconcile_rejects_unspecified_band(db: ControllerDB) -> None:
+def test_reconcile_rejects_inherit_band(db: ControllerDB) -> None:
     """A config missing max_band surfaces as a ValueError, not a silent BATCH."""
     tiers = [_tier(["frank"], 75000, job_pb2.PRIORITY_BAND_INHERIT)]
     with pytest.raises(ValueError, match="max_band must be one of"):
