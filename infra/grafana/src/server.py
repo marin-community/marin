@@ -24,6 +24,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /github/builds                           recent main commits with CI rollup state
     GET /github/nightlies                        7-day nightly-lane matrix (one row per lane/day)
     GET /wandb/{chart}                           sampled public hero-report series by chart key
+    GET /overview/provisioning                   latest fleet and resource-pool provisioning cycle
     GET /k8s/control_plane                       watched components + webhook endpoints, all clusters
     GET /k8s/crashloops                          containers in backoff waiting states
     GET /k8s/pending                             Pending / SchedulingGated pods with age
@@ -58,7 +59,7 @@ import json
 import logging
 from collections.abc import Mapping
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pyarrow as pa
 import uvicorn
@@ -82,6 +83,7 @@ from iris_source import IrisSource
 from k8s_source import K8sFleet, K8sSource
 from loom_alerts import LoomAlertClient, LoomAlertDeliveryError, LoomAlertPayloadError
 from nightly_config import NIGHTLY_LANES
+from overview import PROVISIONING_LOOKBACK_HOURS, provisioning_query, provisioning_rows
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -419,6 +421,23 @@ def create_app(
         except UpstreamError as err:
             return JSONResponse({"error": str(err), "source": err.source}, status_code=err.status_code)
 
+    def overview_provisioning(_: Request) -> JSONResponse:
+        try:
+            now = datetime.now(UTC)
+
+            def run() -> list[dict]:
+                source = finelog_sources[_target_for(_FINELOG_HUB_CLUSTER, finelog_sources).name]
+                cutoff = now - timedelta(hours=PROVISIONING_LOOKBACK_HOURS)
+                table = source.query(provisioning_query(cutoff), max_rows=config.max_rows)
+                return [asdict(row) for row in provisioning_rows(rows_to_json(table))]
+
+            key = ("overview_provisioning", _bucket(now, config.cache_ttl))
+            return JSONResponse(finelog_cache.get_or_compute(key, run))
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        except QueryResultTooLargeError as err:
+            return JSONResponse({"error": f"{err}; reduce the provisioning lookback"}, status_code=400)
+
     def k8s_endpoint(key: str, run) -> JSONResponse:
         # Per-cluster failures are labeled rows inside the response; only a bridge
         # bug raises here, and Starlette turns that into a 500.
@@ -531,6 +550,7 @@ def create_app(
             Route("/github/builds", github_builds),
             Route("/github/nightlies", github_nightlies),
             Route("/wandb/{chart}", wandb_chart),
+            Route("/overview/provisioning", overview_provisioning),
             Route("/finelog/{cluster}/query", query),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/fleet_health", finelog_fleet_health),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/fleet_health", finelog_alerts_fleet_health),
