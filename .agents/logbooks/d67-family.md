@@ -767,3 +767,42 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
 ```
 
 - Acceptance gate unchanged. Parent and child retries do not count as draws until finite training metrics appear.
+
+### 2026-07-28 23:22 PDT - D67-CTL-02 r5 exhausts extended placement recovery
+
+- Submitted parent `/mwittmann/d67-control-m3-draw2-r5-0728-2225` at 22:22 PDT from commit `53330ce36` using the exact command above.
+- Eleven parent attempts cycled child allocations through production band 1. Preflight rejected unequal layouts including 40/24 and 32/16/8/8; remaining attempts failed staging or lost peers after a rejecting rank exited.
+- No finite step metric appeared. Parent and child are terminal failed, so r5 is not an experimental draw.
+- Recovery change for r6: raise only the CPU parent retry budget to 50. The job remains one sequential experimental slot; fast topology rejections are not draws and do not enter the comparison.
+
+### 2026-07-28 23:22 PDT - D67-CTL-02 r6 pre-registration
+
+- Prediction carried forward verbatim from 15:35 PDT, before any experimental result was observed: This draw reproduces the healthy m=3/cf1.0625 operating point. Predict about 321K tokens/s and 20.7% MFU, allowing ±4% tokens/s for placement (308–334K), with tail-100 drops 1.2–1.7%. Loss must remain finite and decline through step 349.
+- Planned parent job ID: `/mwittmann/d67-control-m3-draw2-r6-0728-2325`
+- Planned child job ID: `/mwittmann/d67-control-m3-draw2-r6-0728-2325/grug-train-d67-control-m3-draw2-r6-0728-2325`
+- Exact command:
+
+```bash
+IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
+  --cpu 2 --memory 3GB --extra cpu --priority production --max-retries 50 \
+  --job-name d67-control-m3-draw2-r6-0728-2325 -e RUN_ID d67-control-m3-draw2-r6-0728-2325 \
+  -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async \
+  -e XLA_FLAGS "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false --xla_gpu_experimental_parallel_collective_overlap_limit=4" \
+  -e SCALE_ATTN_IMPL gpu_fa4_cute -e SCALE_WATCH_INTERVAL 0 -e SCALE_CHECKPOINTS local \
+  -e SCALE_A2A_FIXED 1 -e SCALE_A2A_CHUNKS 1 -e SCALE_A2A_NO_BARRIER 1 \
+  -e SCALE_A2A_GATHER_DISPATCH 1 -e SCALE_A2A_CUSTOM_ADJOINT 1 \
+  -e SCALE_MOE_QB 1 -e SCALE_REPORT_DROPS 1 -e SCALE_A2A_SPILL 3 \
+  -e SCALE_CAPACITY_FACTOR 1.0625 -e SCALE_JOB_PRIORITY 1 \
+  -e SCALE_GPUS_PER_NODE 4 -e SCALE_GPU_TYPE GB200 -e SCALE_GPU_REPLICAS 16 \
+  -e SCALE_EXPERT_AXIS 64 -e SCALE_NUM_EXPERTS 256 -e SCALE_TOP_K 8 \
+  -e SCALE_HIDDEN_DIM 5120 -e SCALE_NUM_LAYERS 48 -e SCALE_INTERMEDIATE 1280 \
+  -e SCALE_SHARED_INTERMEDIATE 5120 -e SCALE_SEQ_LEN 4096 -e SCALE_BATCH 1024 \
+  -e SCALE_SLIDING_WINDOW 2048 -e SCALE_STEPS 350 \
+  -e SCALE_MOE_IMPL ragged_all_to_all -e SCALE_OPTIMIZER muonh -e SCALE_MUON_SYRK 1 \
+  -e SCALE_SCAN_LAYERS 1 -e SCALE_REMAT recompute_all \
+  -e SCALE_TRACKER json_logger -e SCALE_JSON_LOGGER d67-control-m3-draw2-r6-0728-2325.metrics \
+  -e SCALE_DISABLE_CHECKPOINT 1 \
+  -- python -m experiments.grug.moe.launch_cw_scale --version d67-family-dev --run
+```
+
+- Acceptance gate unchanged. Do not advance to the trio until this control draw completes.
