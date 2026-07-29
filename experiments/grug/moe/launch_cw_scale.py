@@ -27,6 +27,9 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_STEPS         training steps (default 50)
     SCALE_HIDDEN_DIM / SCALE_NUM_LAYERS / SCALE_NUM_EXPERTS / SCALE_TOP_K
                         model-shape overrides (e.g. a smaller FSDP smoke test)
+    SCALE_INTERMEDIATE routed-expert MLP width (default hidden_dim / 2)
+    SCALE_SHARED_INTERMEDIATE shared-expert MLP width (default hidden_dim)
+    SCALE_SLIDING_WINDOW attention sliding-window span (default SCALE_SEQ_LEN)
     SCALE_REMAT         recompute_all (default) | save_moe -- save_moe keeps the
                         tagged MoE dispatch tensors for backward so the EP
                         collectives are not re-run during recompute
@@ -114,7 +117,8 @@ def build_scale_model() -> GrugModelConfig:
     num_kv_heads = max(1, num_heads // 4)
     while num_heads % num_kv_heads != 0:
         num_kv_heads -= 1
-    intermediate_dim = hidden_dim // 2  # expert FFN inner width (~d/2)
+    intermediate_dim = env_int("SCALE_INTERMEDIATE", hidden_dim // 2)
+    shared_intermediate_dim = env_int("SCALE_SHARED_INTERMEDIATE", hidden_dim)
     seq_len = env_int("SCALE_SEQ_LEN", DEFAULT_SEQ_LEN)
     remat_mode = os.environ.get("SCALE_REMAT", "recompute_all")
     if remat_mode not in ("recompute_all", "save_moe"):
@@ -131,12 +135,12 @@ def build_scale_model() -> GrugModelConfig:
         num_kv_heads=num_kv_heads,
         head_dim=HEAD_DIM,
         intermediate_dim=intermediate_dim,
-        shared_expert_intermediate_dim=intermediate_dim,
+        shared_expert_intermediate_dim=shared_intermediate_dim,
         num_experts=env_int("SCALE_NUM_EXPERTS", 128),
         num_experts_per_token=env_int("SCALE_TOP_K", 4),
         capacity_factor=float(os.environ.get("SCALE_CAPACITY_FACTOR") or DEFAULT_EP_CAPACITY_FACTOR),
         max_seq_len=seq_len,
-        sliding_window=seq_len,
+        sliding_window=env_int("SCALE_SLIDING_WINDOW", seq_len),
         remat_mode=cast(RematMode, remat_mode),
         moe_implementation=moe_implementation,
         attention_implementation=attention_implementation,
