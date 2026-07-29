@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 MARKER = "<!-- iac-preview -->"
@@ -17,33 +18,45 @@ _SEVERITY_ICON = {
 }
 
 
-def load_stacks(previews_dir: Path) -> list[dict]:
-    stacks: list[dict] = []
+@dataclass(frozen=True)
+class StackPreview:
+    stack: str
+    severity: str
+    diff: str
+
+
+def load_stacks(previews_dir: Path) -> list[StackPreview]:
+    stacks: list[StackPreview] = []
     for meta_path in sorted(previews_dir.glob("**/meta.json")):
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         diff_path = meta_path.with_name("diff.txt")
         diff = diff_path.read_text(encoding="utf-8") if diff_path.is_file() else ""
-        stacks.append({"meta": meta, "diff": diff.strip(), "stack": meta["stack"]})
-    stacks.sort(key=lambda item: item["stack"])
+        stacks.append(
+            StackPreview(
+                stack=meta["stack"],
+                severity=meta.get("severity", "error"),
+                diff=diff.strip(),
+            )
+        )
+    stacks.sort(key=lambda item: item.stack)
     return stacks
 
 
-def render_comment(stacks: list[dict]) -> str:
+def render_comment(stacks: list[StackPreview]) -> str:
     lines = [MARKER, "## IaC preview", ""]
     for item in stacks:
-        severity = item["meta"].get("severity", "error")
-        icon = _SEVERITY_ICON.get(severity, "🚨")
-        lines.append(f"- {icon} `{item['stack']}`")
+        icon = _SEVERITY_ICON.get(item.severity, "🚨")
+        lines.append(f"- {icon} `{item.stack}`")
 
     for item in stacks:
-        if not item["diff"]:
+        if not item.diff:
             continue
         lines.append("")
         lines.append("<details>")
-        lines.append(f"<summary>{item['stack']}</summary>")
+        lines.append(f"<summary>{item.stack}</summary>")
         lines.append("")
         lines.append("```diff")
-        lines.append(item["diff"])
+        lines.append(item.diff)
         lines.append("```")
         lines.append("")
         lines.append("</details>")
