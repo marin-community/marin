@@ -23,6 +23,7 @@ from datetime import timedelta
 import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig, latest_checkpoint_path
 from levanter.data.text.datasets import LmDataConfig
 from levanter.optim.config import OptimizerConfig
@@ -158,6 +159,9 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         profiler=config.profiler,
         mp=jmp.get_policy(config.mp),
         tracker=_resolve_tracker(config.tracker, config.run_id),
+        # Watch steps compile a heavier train step that unstacks scanned layers.
+        # An interval of zero disables the separate watch path.
+        watch=WatchConfig(interval=env_int("SCALE_WATCH_INTERVAL", 10)),
         use_explicit_mesh_axes=True,
         require_accelerator=True,
         allow_nondivisible_batch_size=False,

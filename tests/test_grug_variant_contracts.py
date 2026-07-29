@@ -38,14 +38,17 @@ from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.grug.sharding import _compact_grug_mesh_shape
+from levanter.optim.config import AdamConfig
 from levanter.schedule import BatchSchedule
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.artifact import ArtifactRecord, write_record
-from marin.execution.lazy import materialized_config
+from marin.execution.lazy import StepContext, materialized_config
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.ferries import canary_ferry
+from experiments.grug.moe import launch_cw_scale
+from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHConfig
 from experiments.llama import llama3_tokenizer
 
 _TOKENIZED_CACHE = f"{TokenizedCache.__module__}.{TokenizedCache.__qualname__}"
@@ -372,6 +375,82 @@ def test_coreweave_thd_canary_uses_fixed_shape_training_segments(monkeypatch, tm
     assert components
     assert all(isinstance(component, DatasetComponent) for component in components)
     assert {component.pack for component in components} == {1}
+
+
+def test_grug_moe_scale_launcher_resolves_gb200_ep64_run(monkeypatch):
+    env = {
+        "RUN_ID": "test-gb200-ep64",
+        "SCALE_HIDDEN_DIM": "5120",
+        "SCALE_NUM_LAYERS": "48",
+        "SCALE_NUM_EXPERTS": "256",
+        "SCALE_TOP_K": "8",
+        "SCALE_INTERMEDIATE": "1280",
+        "SCALE_SHARED_INTERMEDIATE": "5120",
+        "SCALE_SEQ_LEN": "4096",
+        "SCALE_SLIDING_WINDOW": "2048",
+        "SCALE_GPU_TYPE": "GB200",
+        "SCALE_GPUS_PER_NODE": "4",
+        "SCALE_GPU_REPLICAS": "16",
+        "SCALE_EXPERT_AXIS": "64",
+        "SCALE_BATCH": "1024",
+        "SCALE_STEPS": "120",
+        "SCALE_OPTIMIZER": "muonh",
+    }
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+    step = launch_cw_scale.build_scale_checkpoint(version="dev")
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args.keys(), step.deps))
+    resources = step.runtime_args["train_resources"]
+
+    assert (
+        config.model.hidden_dim,
+        config.model.num_layers,
+        config.model.num_experts,
+        config.model.num_experts_per_token,
+        config.model.intermediate_dim,
+        config.model.shared_expert_intermediate_dim,
+        config.model.max_seq_len,
+        config.model.sliding_window,
+    ) == (5120, 48, 256, 8, 1280, 5120, 4096, 2048)
+    assert (resources.device.variant, resources.device.count, resources.replicas) == ("GB200", 4, 16)
+    assert config.grug_trainer.expert_axis_size == 64
+    assert config.batch_size == 1024
+    assert config.steps == 120
+    assert isinstance(config.optimizer, GrugMoeMuonHConfig)
+    assert config.optimizer.learning_rate == min(0.05, (13 / 3) * config.optimizer.adam_lr)
+    assert (config.optimizer.lr_schedule, config.optimizer.min_lr_ratio, config.optimizer.warmup) == (
+        "linear",
+        0.05,
+        0.01,
+    )
+
+
+@pytest.mark.parametrize(
+    ("optimizer_name", "optimizer_type"),
+    [
+        (None, GrugMoeMuonHConfig),
+        ("muonh", GrugMoeMuonHConfig),
+        ("adamh", GrugMoeAdamHConfig),
+        ("adam", AdamConfig),
+    ],
+)
+def test_grug_moe_scale_launcher_selects_optimizer(monkeypatch, optimizer_name, optimizer_type):
+    monkeypatch.setenv("RUN_ID", "test-scale-optimizer")
+    if optimizer_name is None:
+        monkeypatch.delenv("SCALE_OPTIMIZER", raising=False)
+    else:
+        monkeypatch.setenv("SCALE_OPTIMIZER", optimizer_name)
+
+    step = launch_cw_scale.build_scale_checkpoint(version="dev")
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args.keys(), step.deps))
+
+    assert isinstance(config.optimizer, optimizer_type)
+    assert (config.optimizer.lr_schedule, config.optimizer.min_lr_ratio, config.optimizer.warmup) == (
+        "linear",
+        0.05,
+        0.01,
+    )
 
 
 @pytest.mark.parametrize(

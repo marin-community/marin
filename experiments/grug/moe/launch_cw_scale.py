@@ -42,10 +42,12 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_PROFILER_STEPS  >0 enables a jax_profile capture window of N steps
                           (use SCALE_TRACKER=wandb so the artifact uploads)
     SCALE_PROFILER_START  profiler start step (default 8, past compile/warmup)
+    SCALE_WATCH_INTERVAL per-parameter watch interval; 0 disables watches
     SCALE_CHECKPOINTS   s3 (default) | local. local writes checkpoints to
                         node-local disk with no periodic saves -- for throughput
                         experiments where the checkpoint is disposable and a
                         slow S3 commit must not wedge the end-of-run barrier
+    SCALE_DISABLE_CHECKPOINT 1 skips periodic and final checkpoint writes
     SCALE_OPTIMIZER     muonh (default) | adamh | adam. MuonH uses 13/3 times
                         Adam's heuristic LR; all use linear decay to 5% of peak
                         with 1% warmup

@@ -4,6 +4,7 @@
 import dataclasses
 import functools
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 
@@ -457,7 +458,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         state = _init_state(model_key)
 
-        checkpointer = trainer.checkpointer.create(run_id)
+        # Profiling runs may need tracker completion without a final sharded save.
+        checkpointer = None if os.environ.get("SCALE_DISABLE_CHECKPOINT") == "1" else trainer.checkpointer.create(run_id)
         state = restore_grug_state_from_checkpoint(
             state,
             checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
