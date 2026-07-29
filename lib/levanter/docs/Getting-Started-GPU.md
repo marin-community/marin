@@ -7,6 +7,17 @@
 !!! tip "Deterministic Training"
     If you want fully deterministic results when training on GPU, set `XLA_FLAGS="--xla_gpu_deterministic_ops=true"` in your environment before launching Levanter.
 
+!!! tip "MoE with the `ragged_all_to_all` backend"
+    XLA lowers `ragged_all_to_all` to a "one-shot" device kernel by default, which runs far below
+    NVLink bandwidth at MoE dispatch sizes. If you use the grug MoE `ragged_all_to_all`
+    expert-parallel backend on GPU, set
+    `XLA_FLAGS="--xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel=false"` so the
+    collective routes through NCCL. Measured on the grug MoE layer (d2560, top-4 of 256 experts,
+    16k tokens/device, fwd+bwd): 96 → 27 ms/step on one 8xH100 node (EP4). The one-shot kernel is
+    only used for single-host cliques, so multi-node runs are unaffected — but the flag still
+    matters there whenever the expert mesh fits within a node. Levanter warns when this backend
+    runs on GPU without the flag.
+
 We have two installation options for Levanter:
 
 1. [Using `uv` Virtual Environments](#using-uv-virtual-environments): This is the simplest way if you don't have root access to your machine (and don't have rootless docker installed).

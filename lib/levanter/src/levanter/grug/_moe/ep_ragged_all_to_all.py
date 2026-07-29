@@ -4,6 +4,8 @@
 """Ragged all-to-all expert-parallel Grug MoE backend."""
 
 import math
+import os
+import warnings
 from collections.abc import Callable
 
 import jax
@@ -23,6 +25,29 @@ from levanter.grug._moe.ep_common import (
     _unpermute_from_global_expert,
 )
 from levanter.grug.sharding import _batch_axes
+
+_ONE_SHOT_RAGGED_A2A_FLAG = "--xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel=false"
+
+
+def warn_if_slow_ragged_a2a_kernel() -> None:
+    """Warn when XLA's one-shot ragged-all-to-all kernel is not disabled on GPU.
+
+    XLA lowers ``ragged_all_to_all`` to a one-shot device kernel by default,
+    which runs ~30x below NVLink bandwidth at grug MoE sizes: measured 96 vs
+    27 ms/step for the layer fwd+bwd on 8xH100 (d2560, EP4). Disabling it via
+    ``XLA_FLAGS='... {flag}'`` routes the collective through NCCL instead.
+    XLA flags are read at backend initialization, so this must come from the
+    launch environment; warn rather than set it here.
+    """
+    if jax.default_backend() != "gpu":
+        return
+    if _ONE_SHOT_RAGGED_A2A_FLAG in os.environ.get("XLA_FLAGS", ""):
+        return
+    warnings.warn(
+        "The ragged_all_to_all MoE backend is ~4x slower with XLA's default one-shot ragged-all-to-all kernel. "
+        f"Add '{_ONE_SHOT_RAGGED_A2A_FLAG}' to XLA_FLAGS before launch.",
+        stacklevel=3,
+    )
 
 
 def _moe_mlp_ep_ragged_a2a_local(
