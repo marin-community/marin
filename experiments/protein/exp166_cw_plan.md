@@ -80,19 +80,33 @@ difference between two placements is not a defect.
 GB200 (`cw-us-east-08a`) first: 208 schedulable nodes against the H100 fleet's 36, the
 exp153 smoke passed there, and the parity runs put it slightly ahead of v6e-4. H100
 (`cw-us-east-02a`) is the fallback and needs no code difference. Gangs are whole nodes;
-node counts are powers of two.
+node counts are powers of two. The peer report does not break out GPU type, so how much
+of that 208 is GB200 and free is unknown until we submit — submitting is the only
+measurement.
 
-Each run is 8 x 4.677B = 37.4B tokens. Both the H100 and GB200 measurements available
-sit near 12-15k tokens/s per GPU for a 1.5B, which puts one run near a day on 8 GB200
-nodes and lets all eight run at once. Treat those figures as a prior, not a plan input;
-calibration replaces them.
+**Four nodes is the gang ceiling.** Every run moves the same 8 x 4.677B = 37.4B tokens,
+but a bs64 run spends 71,360 steps doing it against a bs128 run's 35,680, paying per-step
+optimizer and all-reduce overhead twice as often. The bigger gangs go to bs64 to even out
+completion times.
+
+| batch | runs | nodes | GPUs | seqs/device |
+|---|---|---|---|---|
+| 64 | 1, 2, 6, 7, 8 | 4 | 16 | 4 |
+| 128 | 3, 4, 5 | 2 | 8 | 16 |
+
+26 nodes with all eight running at once. If calibration shows 16 sequences per device does
+not fit at bs128, those three runs move to 4 nodes and the total becomes 32.
+
+Both the H100 and GB200 figures available sit near 12-15k tokens/s per GPU for a 1.5B.
+Treat that as a prior, not a plan input; calibration replaces it.
 
 ## Calibration
 
 Two short runs on `tmp/ttl=1d/`, one per GPU type, before anything else is launched.
-They fix max sequences per device for the 1.5B and give a measured tokens/s. exp153's
-H100 value of 8 was measured on the 6B and does not transfer. An unmeasured GPU type
-fails loudly rather than guessing, because guessing wrong costs a multi-day run.
+They fix max sequences per device for the 1.5B and give a measured tokens/s at 1, 2 and 4
+nodes for both batch sizes. exp153's H100 value of 8 was measured on the 6B and does not
+transfer. An unmeasured GPU type fails loudly rather than guessing, because guessing wrong
+costs a multi-day run.
 
 Watch the augmentation's cost during calibration: it does a `device_get` and
 `device_put` per example inside `get_batch`, so at batch 128 that is 128 host round trips
