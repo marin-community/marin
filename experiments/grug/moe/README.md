@@ -76,6 +76,68 @@ long layers.
 - **Expert parallelism**: `ragged_all_to_all` or ring-based via
   `levanter.grug.grug_moe.moe_mlp` (default: ring). Default capacity factor 1.0.
 
+## GB200 job environment
+
+Set these variables on every final accelerator process for multi-host GB200 MoE
+jobs using JAX/JAXlib 0.11:
+
+```bash
+export XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async
+export XLA_FLAGS="${XLA_FLAGS:+${XLA_FLAGS} }\
+--xla_gpu_enable_latency_hiding_scheduler=true \
+--xla_gpu_experimental_parallel_collective_overlap_limit=4 \
+--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false"
+unset JAX_ENABLE_PGLE JAX_PGLE_PROFILING_RUNS
+```
+
+If the job uses a CPU launcher that creates a second accelerator job, verify
+these variables in the accelerator process. Setting them only in the submitter's
+shell is insufficient. The current [Grug dispatcher](../dispatch.py) forwards
+`XLA_FLAGS` and `JAX_` variables, but it does not forward
+`XLA_PYTHON_CLIENT_ALLOCATOR`; inject the allocator setting into the final
+training task environment.
+
+The ragged all-to-all NCCL barrier flag is mandatory on JAX 0.11. Without
+`--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false`, a
+64-process job initialized, compiled the train step, and then segfaulted in NCCL
+`ncclDevCommCreate` before step 0. The retry with the flag completed on all 64
+ranks. [Latest-main control record](https://github.com/marin-community/marin/blob/0bfcd0c732695cdd20b1f12c7f32697f757dc853/.agents/logbooks/7201-ep64-mfu.md#L194-L229)
+
+Keep `--xla_gpu_experimental_parallel_collective_overlap_limit=4`. The setting
+is not monotone: limit 2 regressed below the default limit 1 on the ECHO line.
+[EP64 handoff](https://github.com/marin-community/marin/blob/cf7d649ea0ae82fbd881a4368d900d421e111552/.agents/projects/7201-ep64-drop3/HANDOFF.md#L325-L331)
+A d6144 schedule census on 2026-07-28 found `4, 0, 0, 0` synchronous MoE
+all-to-alls at limits `1, 2, 4, 8`. Limit 4 cleared all 12 MoE all-to-alls. The
+census measured schedule structure, not a d6144 throughput gain.
+[d6144 schedule census](https://github.com/marin-community/marin/blob/3afd517d3f4d34c17a9981a748712ecfbcb77bc4/.agents/projects/b200-perf-omnibus/d5-census-report.md#L134-L171)
+
+`XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async` selects JAX's CUDA async allocator.
+The default BFC allocator fragmented at the 64×GB200 driver configuration and
+caused a deterministic step-8 OOM; allocation failure during collective startup
+can also strand peers in a silent rendezvous deadlock.
+[`cuda_async` correction and 64×GB200 result](https://github.com/marin-community/marin/issues/7012#issuecomment-4997024240),
+[BFC deadlock record](https://github.com/marin-community/marin/blob/8d48fb7fb9f0a6b8ca66c5af7c3e820787fdd3e6/.agents/logbooks/7079-fp8-loss-val.md#L214-L280)
+`TF_GPU_ALLOCATOR=cuda_malloc_async` is a TensorFlow variable; JAX does not read
+it, so setting it does not change JAX's allocator.
+
+Do not add `xla_gpu_enable_custom_fusions` or
+`xla_gpu_enable_address_computation_fusion`. This installed XLA build rejects
+both flags as unknown and exits before distributed initialization.
+[Receiver-ECHO flag probe](https://github.com/marin-community/marin/blob/cf7d649ea0ae82fbd881a4368d900d421e111552/.agents/projects/7201-ep64-drop3/research.md#L374-L382)
+
+Do not enable auto-PGLE with `JAX_ENABLE_PGLE` on a multi-host job. Per-host
+recompilation can desynchronize the processes and crash the job.
+[#7012 multi-host PGLE result](https://github.com/marin-community/marin/issues/7012#issuecomment-4997270478)
+The restriction is limited to multi-host auto-PGLE. On the EP line where both
+variants completed, auto-PGLE was 0.235 percentage points above manual PGLE; the
+manual profile matched only 217 of 535 instructions.
+[EP64 PGLE comparison](https://github.com/marin-community/marin/blob/cf7d649ea0ae82fbd881a4368d900d421e111552/.agents/projects/7201-ep64-drop3/HANDOFF.md#L325-L331)
+
+Do not use a JAX 0.10.1-era run as the control for JAX 0.11. The matched JAX
+0.11 baseline measured 21.815% MFU, 1.217 percentage points below the earlier
+baseline. Re-run the control on the same JAX version.
+[JAX 0.11 control](https://github.com/marin-community/marin/blob/0bfcd0c732695cdd20b1f12c7f32697f757dc853/.agents/logbooks/7201-ep64-mfu.md#L216-L229)
+
 ## Scaling heuristic
 
 [`MoeHeuristic`](./heuristic.py) turns `(budget, hidden_dim)` into model +
