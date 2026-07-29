@@ -323,6 +323,9 @@ ignore-missing-imports = [
     # Optional extra marin-rigging[secrets]; only rigging.secrets imports it, lazily.
     "google.cloud.secretmanager",
     "google.cloud.secretmanager.*",
+    # QuACK and CUTLASS are Linux/CUDA-only optional dependencies.
+    "cutlass",
+    "cutlass.*",
     "harbor",
     "harbor.*",
     # Ships with the harbor extra (universal-pathlib); marin.harbor imports it.
@@ -346,6 +349,8 @@ ignore-missing-imports = [
     "prompt_toolkit.*",
     "pylatexenc",
     "pylatexenc.*",
+    "quack",
+    "quack.*",
     "resiliparse",
     "resiliparse.*",
     "sympy",
