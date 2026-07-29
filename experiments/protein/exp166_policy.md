@@ -361,6 +361,11 @@ not wait on a theory about which one it is.
 | `reslice_after` | resubmit in the same region on a different slice |
 | `relocate_after` | abandon the region; re-arm the trial in a different one |
 
+The reslice rotation **descends** through the eligible sizes, wrapping from the
+floor back to the ceiling. Ascending makes the largest slice the destination for
+every stalled mid-size dispatch, which piles the fleet onto one size regardless
+of whether it is being granted.
+
 Every replacement stops the old Iris job and submits a new uniquely-named one;
 there is no in-place resubmit. Same-region replacements resume from the regional
 checkpoint, so a restart costs at most one `save_interval`. A relocation starts
