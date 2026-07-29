@@ -109,6 +109,21 @@ extrapolation:
 81-93% scaling efficiency, and bs128 is about 10% faster per token than bs64 at the same
 gang — consistent with the 1.6% single-node gap widening slightly under communication.
 
+### Launch failure modes seen 2026-07-29
+
+Three distinct ones, all contention rather than defects. The same trial that failed runs
+unchanged on a later attempt, and a retry keeps the run id, so identity and any checkpoint
+carry over — only the Iris job name changes.
+
+| symptom | cause | response |
+|---|---|---|
+| `Unschedulable: 0/208 nodes are available`, `SchedulingGated` | Kueue admits a gang all-or-nothing and the nodes were not free | resubmit when capacity frees |
+| `ValueError: num_devices (16) must be divisible by num_slices (3)` at `trainer.py:942` | the gang asked for four nodes and only three registered with the JAX coordinator, so the mesh cannot be built | resubmit; a partial gang is unrecoverable in place |
+| `ConnectError` on `register_endpoint`, or a driver that fails with exit 0 and no log output | transient controller RPC, or a driver pod that never reached Python | resubmit |
+
+Read a Python traceback in the *training* task as a real fault; the three above all occur
+before or outside training and are indistinguishable from preemption.
+
 **Thirty-two nodes is not reliably available.** Submitting all eight at once on 2026-07-29
 admitted three and failed five within 90 seconds: Kueue gang admission is all-or-nothing,
 so a gang that cannot be placed fails immediately rather than queueing
