@@ -41,7 +41,7 @@ them proves nothing; a gap in this harness means something.
 | F12 | The 400-step HP arms finished **4.102407 (exp153 HP) vs 4.131758 (exp146 HP) — 0.7% apart**, after opening +0.66 | At a matched schedule endpoint, LR/WD is worth ~0.03, not ~0.40. The mid-run +0.33 was schedule phase, not merit |
 | F13 | **Every exp146 and exp153 production run shares an identical token budget of 4,567,040 sequences.** Batch size varies and steps vary inversely: bs 64/71,360, bs 128/35,680, bs 256/17,840 | Equal-*step* comparisons across different batch sizes are **not** equal-token — see the F6 correction below |
 | F14 | Within exp146, same LR/WD at different batch sizes lands differently: lr 3.162e-3 wd 0.4 gives **2.7952 at bs 128** but **2.7025 at bs 256**; the wd 0.2 winner ran **bs 64 → 2.7107** | **Batch size is an independent lever worth ~0.09**, untested by anything in this investigation. exp153 ran bs 128, exp146's best runs ran bs 256 |
-| F15 | **B1, through 58 matched steps: TPU splash vs TPU `JAX_FLASH`, everything else identical.** Deltas oscillate in sign (+0.014, −0.001, +0.046, −0.046, −0.018) and land at **+0.00001 at step 59**; mean +0.025 | **B1 refuted, and a real confound closed.** Every earlier platform comparison varied the attention kernel alongside the platform, because `JAX_FLASH` is mandatory on GPU. It turns out not to matter, so F2/F7/F8/F9 stand as platform results rather than kernel results |
+| F15 | **B1 complete, 390 matched steps: TPU splash vs TPU `JAX_FLASH`, everything else identical.** Final 4.090732 vs 4.103658 (**+0.32%**); mean delta over the run **+0.00629**, sign-oscillating throughout | **B1 refuted, and a real confound closed.** Every earlier platform comparison varied the attention kernel alongside the platform, because `JAX_FLASH` is mandatory on GPU. It turns out not to matter, so F2/F7/F8/F9 stand as platform results rather than kernel results |
 | F16 | *(in progress, ~19%)* The 4,460-step HP arms past warmup: windowed delta **+0.007, +0.005, +0.006, +0.006** across steps 500–899, stable and barely above noise | A **3.16x LR difference is producing ~0.006 in loss** at full LR separation. If this holds through cosine decay, **A1/A2/A5 are dead** and hyperparameters do not explain the gap either |
 
 ### The horizon problem with F10
@@ -106,7 +106,7 @@ Ordered by how much they would explain, not by how interesting they are.
 
 | id | hypothesis | test | status |
 |---|---|---|---|
-| B1 | Attention kernel differs: TPU splash vs GPU `JAX_FLASH` | `ATTN=JAX_FLASH` on TPU — harness already supports it | **REFUTED (F15)** — identical to 5 decimals at step 59 |
+| B1 | Attention kernel differs: TPU splash vs GPU `JAX_FLASH` | `ATTN=JAX_FLASH` on TPU — harness already supports it | **REFUTED (F15)** — +0.32% over a full 400-step run |
 | B2 | Reduction order / accumulation depth | mesh-matched pair | **F2: not at 4 devices, 60 steps** |
 | B3 | Mesh shape itself (4 vs 8 devices) | `parity-h100-x8` | **REFUTED (F7)** — H100x8 is *closer* to TPU than GB200x4 |
 | B4 | Divergence only appears over a longer horizon | 400-step TPU + GB200 pair | **REFUTED (F8)** through 224 steps — excursion closes, does not compound |
@@ -120,7 +120,7 @@ Ordered by how much they would explain, not by how interesting they are.
 |---|---|---|---|
 | C1 | The effect needs 6B, not 1.5B — deeper stacks, larger activations | short 6B run on both platforms | open |
 | C2 | The effect needs large dp (64 devices at 8 nodes), not 4 | 1.5B at 8 nodes vs 1 node on GPU | open |
-| C4 | **Batch size**: exp153 ran bs 128 where exp146's best rungs ran bs 256 | 1.5B at bs 128 vs 256, matched token budget | open — F14 shows ~0.09 in exp146's own data |
+| C4 | **Batch size**: exp153 ran bs 128 where exp146's best rungs ran bs 256 | 1.5B at bs 16 vs 32, matched token budget | running (`parity-tpu-bs16`) — F14 shows ~0.09 in exp146's own data |
 | C3 | Gradient accumulation only engages at ga>1; the parity runs use ga=1 | run a config forcing ga>1 on both | open |
 
 ### D — Infrastructure
@@ -143,7 +143,8 @@ Ordered by how much they would explain, not by how interesting they are.
 | 07-29 | `parity-hp-exp153` — GB200x4, 400 steps, **lr 1e-3 / wd 0.8** (A5) | finished, final train 4.102407 |
 | 07-29 | `parity-hp-exp146` — GB200x4, 400 steps, **lr 3.1623e-3 / wd 0.2** (A5) | finished, final train 4.131758 → **0.7% apart (F12)** |
 | 07-29 | `parity-hp-exp153-long` / `parity-hp-exp146-long` — GB200x4, **4,460 steps** | running — resolves the horizon problem at the step where exp153's gap opens |
-| 07-29 | `parity-tpu-flash` — v6e-4, 400 steps, `ATTN=JAX_FLASH` (B1) | running, step 59 → **B1 refuted (F15)** |
+| 07-29 | `parity-tpu-flash` — v6e-4, 400 steps, `ATTN=JAX_FLASH` (B1) | finished, final train 4.103658 vs 4.090732 baseline → **B1 refuted (F15)** |
+| 07-29 | `parity-tpu-bs16` — v6e-4, bs 16 x 800 steps (C4) | running — matched 12,800-sequence budget against the bs 32 x 400 baseline |
 
 ## Harness failures worth remembering
 
