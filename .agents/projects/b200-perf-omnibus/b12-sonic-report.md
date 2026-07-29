@@ -12,6 +12,11 @@ B2 adds the QuACK SM100 grouped-GEMM backend and wires `SCALE_MOE_IMPL` and
 a local backend, and its import remains inside the selected dispatch branch.
 The default, CPU, and non-`sonic_cute` paths do not import QuACK or CUTLASS.
 
+A follow-up commit fixes the expert-dimension chunker's dropped-assignment
+return. Its static per-chunk capacity can discard assignments, so it now returns
+`_chunk_capacity_drops(cu, bounds, caps)` instead of the structural zero used by
+the dropless unchunked and intermediate-dimension variants.
+
 The three backend files remain byte-identical to both source tips:
 
 | file | lines | blob |
@@ -32,6 +37,11 @@ generated lockfile change is +10/-3. B2 has +584 functional lines against the
 estimate of about +560: 561 lines in the three exact source blobs and 23 lines
 of registration, lazy dispatch, and launcher wiring. The B2 ratio is 1.04x the
 estimate.
+
+The drop-count follow-up has +12/-2 functional lines and +40/-1 test lines. It
+is the B2-dependent half of A1; together with A1's +11/-2 launcher/model change,
+the resolved split is +23/-4 functional lines against A1's approximately
+30-line estimate.
 
 ## Extraction decisions and dropped work
 
@@ -75,9 +85,8 @@ The chunk drop-accounting bug is not present on main at the assignment base
 because main has no chunk backend or selector. The exact canonical blob does
 contain the dormant bug: `_moe_mlp_local_sonic_cute_chunked` returns
 `_zero_dropped_assignments()` even though its fixed per-chunk capacity can
-drop assignments. Commit `cefc6d47b` changes that return to
-`_chunk_capacity_drops(cu, bounds, caps)` and adds the supporting metric code.
-That fix is not an ancestor of either source tip. It must accompany any later
+drop assignments. The follow-up extracts `cefc6d47b`'s shared helper and
+one-line return fix. B2 must be assembled with that follow-up before any later
 chunking enablement.
 
 ## CUTLASS wheel hazard
@@ -98,7 +107,10 @@ determinism.
   `SCALE_ATTN_IMPL=gpu_fa4_cute`: built the config and confirmed that no
   `quack` or `cutlass` module entered `sys.modules`.
 - `uv run --package marin-levanter --group test pytest
-  lib/levanter/tests/grug/test_grugformer_moe.py`: 13 passed, 6 skipped.
+  lib/levanter/tests/grug/test_grugformer_moe.py`: 17 passed, 6 skipped.
+- The chunk-capacity regression passed four CPU layouts. Three overload a chunk
+  and would fail if the returned count were the old structural zero; the
+  expected value comes from walking the sorted rows each chunk processes.
 - `./infra/pre-commit.py --all-files --fix`: passed, including Pyrefly.
 - `uv run pyrefly check`: 0 errors, 408 suppressed, 505 warnings not shown.
 - `uv run pytest`: 1,252 passed, 17 skipped, 47 deselected, 5 xfailed, and 1
