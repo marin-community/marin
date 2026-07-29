@@ -53,12 +53,13 @@ on `search`; the activity-only `grep` command retains `--source` and `--kind` fi
 The compatibility `GET /api/search` endpoint still accepts source, kind, and date
 filters for existing API clients.
 
-All domains use reciprocal-rank fusion with `k=60`. Paths, filenames, flags, and
-code-like identifiers use semantic weight 1 and lexical weight 2. Plain-language
-queries use semantic weight 2 and lexical weight 1; Markdown and reStructuredText
-files receive a 1.15 score multiplier, while test files receive a 0.85 multiplier.
-This keeps exact-code lookup lexical-first and favors runbooks over incidental test
-matches for questions such as `how do i deploy iris`.
+All domains use reciprocal-rank fusion with `k=60`. Paths, filenames, flags, code-like
+identifiers, and one- or two-token keyword searches use semantic weight 1 and lexical
+weight 2. Prose searches of at least three tokens use semantic weight 2 and lexical
+weight 1; Markdown and reStructuredText files receive a 1.15 score multiplier, while
+test files receive a 0.85 multiplier. This keeps exact-code and terse keyword lookup
+lexical-first and favors runbooks over incidental test matches for questions such as
+`how do i deploy iris`.
 
 Results with a lexical match always qualify. A semantic-only result must have cosine
 distance at most 0.45 (similarity at least 0.55), so an unrelated nearest neighbor is

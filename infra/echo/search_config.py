@@ -37,6 +37,7 @@ QUERY_PROSE_FILE_SCORE_MULTIPLIER = 1.15
 QUERY_TEST_FILE_SCORE_MULTIPLIER = 0.85
 PROSE_FILE_SUFFIXES = (".md", ".rst")
 IDENTIFIER_QUERY_PATTERN = re.compile(r"[/_.:]|(?:[a-z][A-Z])|(?:^|\s)--?[a-z0-9]")
+PROSE_QUERY_MIN_WORDS = 3
 
 
 @dataclass(frozen=True)
@@ -58,5 +59,7 @@ def is_identifier_query(query: str) -> bool:
 
 
 def search_weights(query: str) -> SearchWeights:
-    """Prefer lexical rank for identifiers and semantic rank for prose."""
-    return IDENTIFIER_SEARCH_WEIGHTS if is_identifier_query(query) else QUERY_SEARCH_WEIGHTS
+    """Prefer semantic rank for prose and lexical rank for identifiers or terse keywords."""
+    if not is_identifier_query(query) and len(query.split()) >= PROSE_QUERY_MIN_WORDS:
+        return QUERY_SEARCH_WEIGHTS
+    return IDENTIFIER_SEARCH_WEIGHTS
