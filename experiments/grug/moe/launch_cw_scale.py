@@ -28,6 +28,7 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_REMAT         recompute_all (default) | save_moe -- save_moe keeps the
                         tagged MoE dispatch tensors for backward so the EP
                         collectives are not re-run during recompute
+    SCALE_REPORT_DROPS  1 reports routed assignments dropped by backend capacity
     SCALE_MP            jmp policy (default params=float32,compute=bfloat16,
                         output=bfloat16); params=bfloat16 halves FSDP gather bytes
     SCALE_TRACKER       wandb | json_logger (default json_logger)
@@ -125,6 +126,7 @@ def build_scale_model() -> GrugModelConfig:
         max_seq_len=seq_len,
         sliding_window=seq_len,
         remat_mode=cast(RematMode, remat_mode),
+        report_capacity_overflow=os.environ.get("SCALE_REPORT_DROPS") == "1",
     )
 
 

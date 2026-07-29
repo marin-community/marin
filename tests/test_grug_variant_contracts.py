@@ -20,11 +20,12 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
+import numpy as np
 import optax
 import pytest
 from fray.cluster import ResourceConfig
 from jax._src import config as jax_config
-from jax.sharding import use_abstract_mesh
+from jax.sharding import AxisType, Mesh, use_abstract_mesh
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import DatasetComponent, DirectDatasetComponent, LmDataConfig
@@ -151,6 +152,41 @@ def test_grug_moe_layer_masks_preserve_thd_segment_metadata():
     assert long_mask.thd_segment_metadata is mask.thd_segment_metadata
     assert short_mask.segment_ids is mask.segment_ids
     assert long_mask.segment_ids is mask.segment_ids
+
+
+def test_scale_report_drops_controls_real_ring_drop_count(monkeypatch):
+    if len(jax.devices()) < 8:
+        pytest.skip("requires eight devices; use XLA's virtual CPU device flag")
+
+    launcher = importlib.import_module("experiments.grug.moe.launch_cw_scale")
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    mesh = Mesh(
+        np.asarray(jax.devices()[:8]).reshape((1, 1, 8, 1)),
+        ("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+    monkeypatch.setenv("SCALE_HIDDEN_DIM", "128")
+    monkeypatch.setenv("SCALE_NUM_LAYERS", "1")
+    monkeypatch.setenv("SCALE_NUM_EXPERTS", "8")
+    monkeypatch.setenv("SCALE_TOP_K", "2")
+    monkeypatch.setenv("SCALE_SEQ_LEN", "8")
+
+    def capacity_overflow(*, report_drops: bool) -> int:
+        if report_drops:
+            monkeypatch.setenv("SCALE_REPORT_DROPS", "1")
+        else:
+            monkeypatch.delenv("SCALE_REPORT_DROPS", raising=False)
+        config = launcher.build_scale_model()
+        with jax.set_mesh(mesh):
+            moe = model_module.MoEMLP.init(config, key=jax.random.key(0))
+            # Equal logits route every token to the same two experts, exceeding
+            # ring's capacity while leaving the backend to compute the count.
+            x = jnp.zeros((8, 1, config.hidden_dim), dtype=jnp.float32)
+            _, router_stats = moe(x)
+        return int(router_stats["capacity_overflow"])
+
+    assert capacity_overflow(report_drops=False) == 0
+    assert capacity_overflow(report_drops=True) > 0
 
 
 def test_grug_moe_xsa_forward_lowers_with_gpu_fa4_thd_gqa_sharding():
