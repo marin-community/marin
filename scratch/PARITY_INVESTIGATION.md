@@ -42,7 +42,8 @@ them proves nothing; a gap in this harness means something.
 | F13 | **Every exp146 and exp153 production run shares an identical token budget of 4,567,040 sequences.** Batch size varies and steps vary inversely: bs 64/71,360, bs 128/35,680, bs 256/17,840 | Equal-*step* comparisons across different batch sizes are **not** equal-token — see the F6 correction below |
 | F14 | Within exp146, same LR/WD at different batch sizes lands differently: lr 3.162e-3 wd 0.4 gives **2.7952 at bs 128** but **2.7025 at bs 256**; the wd 0.2 winner ran **bs 64 → 2.7107** | **Batch size is an independent lever worth ~0.09**, untested by anything in this investigation. exp153 ran bs 128, exp146's best runs ran bs 256 |
 | F15 | **B1 complete, 390 matched steps: TPU splash vs TPU `JAX_FLASH`, everything else identical.** Final 4.090732 vs 4.103658 (**+0.32%**); mean delta over the run **+0.00629**, sign-oscillating throughout | **B1 refuted, and a real confound closed.** Every earlier platform comparison varied the attention kernel alongside the platform, because `JAX_FLASH` is mandatory on GPU. It turns out not to matter, so F2/F7/F8/F9 stand as platform results rather than kernel results |
-| F16 | *(in progress, ~19%)* The 4,460-step HP arms past warmup: windowed delta **+0.007, +0.005, +0.006, +0.006** across steps 500–899, stable and barely above noise | A **3.16x LR difference is producing ~0.006 in loss** at full LR separation. If this holds through cosine decay, **A1/A2/A5 are dead** and hyperparameters do not explain the gap either |
+| F16 | *(in progress, ~81%)* The 4,460-step HP arms trace an **arc, not a trend**: +0.006 (step 500) → peak +0.028 (step 2600) → decline to +0.021 (step 3200) → **sharp reacceleration in the decay phase: +0.032, +0.062, +0.089 through step 3599, still climbing** | **Do not conclude yet.** I twice called this saturating and was twice wrong. Cosine decay is where the LR difference finally expresses, exactly as flagged when the arms launched. Direction favours **exp153's lr 1e-3 / wd 0.8**, i.e. the opposite of exp146's sweep |
+| F17 | **C4 complete.** bs 16 x 800 vs bs 32 x 400, matched 12,768-sequence budget, fixed LR. Delta decays monotonically: −1.09 (2.4k seqs) → −0.29 (4.8k) → −0.05 (10.4k) → **−0.016 at the matched endpoint**; late-half mean −0.046 | **C4 refuted as an explanation.** The early advantage is an update-count transient that washes out. The residual is ~20x too small for the 0.34–0.40 gap — *and* the comparison confounds three things (batch size, update count, effective LR per token, since LR was not scaled with batch), so even the residual is not cleanly attributable to batch size |
 
 ### The horizon problem with F10
 
@@ -120,7 +121,7 @@ Ordered by how much they would explain, not by how interesting they are.
 |---|---|---|---|
 | C1 | The effect needs 6B, not 1.5B — deeper stacks, larger activations | short 6B run on both platforms | open |
 | C2 | The effect needs large dp (64 devices at 8 nodes), not 4 | 1.5B at 8 nodes vs 1 node on GPU | open |
-| C4 | **Batch size**: exp153 ran bs 128 where exp146's best rungs ran bs 256 | 1.5B at bs 16 vs 32, matched token budget | running (`parity-tpu-bs16`) — F14 shows ~0.09 in exp146's own data |
+| C4 | **Batch size**: exp153 ran bs 128 where exp146's best rungs ran bs 256 | 1.5B at bs 16 vs 32, matched token budget | **REFUTED (F17)** — converges to −0.016, and direction is opposite to F14's |
 | C3 | Gradient accumulation only engages at ga>1; the parity runs use ga=1 | run a config forcing ga>1 on both | open |
 
 ### D — Infrastructure
@@ -144,7 +145,7 @@ Ordered by how much they would explain, not by how interesting they are.
 | 07-29 | `parity-hp-exp146` — GB200x4, 400 steps, **lr 3.1623e-3 / wd 0.2** (A5) | finished, final train 4.131758 → **0.7% apart (F12)** |
 | 07-29 | `parity-hp-exp153-long` / `parity-hp-exp146-long` — GB200x4, **4,460 steps** | running — resolves the horizon problem at the step where exp153's gap opens |
 | 07-29 | `parity-tpu-flash` — v6e-4, 400 steps, `ATTN=JAX_FLASH` (B1) | finished, final train 4.103658 vs 4.090732 baseline → **B1 refuted (F15)** |
-| 07-29 | `parity-tpu-bs16` — v6e-4, bs 16 x 800 steps (C4) | running — matched 12,800-sequence budget against the bs 32 x 400 baseline |
+| 07-29 | `parity-tpu-bs16` — v6e-4, bs 16 x 800 steps (C4) | finished → **C4 refuted (F17)**, −0.016 at the matched endpoint |
 
 ## Harness failures worth remembering
 
