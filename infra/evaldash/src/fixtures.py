@@ -34,6 +34,7 @@ from marin.evaluation.records import (
     Provenance,
     RunStatus,
     RunTiming,
+    ServingParams,
     write_record,
 )
 from marin.evaluation.samples import (
@@ -63,6 +64,16 @@ def _provenance() -> Provenance:
     return Provenance(git_sha=GIT_SHA, eval_runtime="evalchemy==0.1.0", launch_host="dev-host")
 
 
+# A representative vLLM serving profile shared by the lm-eval runs; agentic and legacy runs override it
+# (a longer generation budget, or None to model a run whose launcher never recorded serving params).
+_DEFAULT_SERVING = ServingParams(
+    tensor_parallel_size=8,
+    max_model_len=4096,
+    max_gen_tokens=2048,
+    extra={"temperature": "0.0", "top_p": "1.0"},
+)
+
+
 def _lm_eval_ref(eval_name: str, num_fewshot: int) -> EvalRef:
     return EvalRef(name=eval_name, mechanism="evalchemy", tasks=(EvalTaskRef(name=eval_name, num_fewshot=num_fewshot),))
 
@@ -90,6 +101,7 @@ def _record(
     error: str | None = None,
     log_tails: dict[str, tuple[str, ...]] | None = None,
     runtime_minutes: float = 8.0,
+    serving: ServingParams | None = _DEFAULT_SERVING,
 ) -> EvalRunRecord:
     # created_at is the terminal write time, so the run's window ends there and starts runtime_minutes
     # earlier -- enough to give the dashboard a real duration to show.
@@ -113,6 +125,7 @@ def _record(
         log_tails=log_tails or {},
         provenance=_provenance(),
         timing=RunTiming(started_at=started.isoformat(), finished_at=finished.isoformat()),
+        serving=serving,
     )
 
 
@@ -413,6 +426,12 @@ def build_fixtures(dest: str) -> list[str]:
             metrics={"aime": {"accuracy": 0.333, "mean_reward": 0.333, "solved": 3.0, "total": 9.0}},
             description=desc,
             runtime_minutes=42.0,  # agentic sandbox rollouts run far longer than the lm-eval tasks
+            serving=ServingParams(
+                tensor_parallel_size=8,
+                max_model_len=32768,
+                max_gen_tokens=8192,
+                extra={"temperature": "0.7", "top_p": "0.95", "agent": "terminus-2"},
+            ),
         )
     )
     _write_samples(
@@ -580,6 +599,7 @@ def build_fixtures(dest: str) -> list[str]:
             results_path=results_of(r),
             metrics=_lm_metrics("mmlu", 0.653, 0.012),
             description=None,
+            serving=None,  # a run whose launcher predates serving-param capture
         )
     )
     _write_samples(

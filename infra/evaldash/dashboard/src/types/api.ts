@@ -128,6 +128,13 @@ export interface EvalRecord {
   log_tails: Record<string, string[]>
   provenance: { git_sha: string; eval_runtime: string; launch_host: string }
   timing: { started_at: string; finished_at: string | null } | null
+  serving: {
+    tensor_parallel_size: number | null
+    data_parallel_size: number | null
+    max_model_len: number | null
+    max_gen_tokens: number | null
+    extra: Record<string, string>
+  } | null
   headline: { value: number; metric: string; stderr: number | null } | null
 }
 

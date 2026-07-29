@@ -3,7 +3,15 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
-import { formatDuration, formatScore, formatStderr, formatTimestamp, shortSha } from '@/utils/formatting'
+import {
+  formatDuration,
+  formatScore,
+  formatStderr,
+  formatTimestamp,
+  githubCommitUrl,
+  objectStoreUrl,
+  shortSha,
+} from '@/utils/formatting'
 import type { EvalRecord } from '@/types/api'
 import StatusChip from '@/components/shared/StatusChip.vue'
 import JobsPanel from '@/components/runs/JobsPanel.vue'
@@ -51,6 +59,20 @@ const durationLabel = computed<string | null>(() => {
 
 // When the run finished: the timing window's end, falling back to the record's created_at.
 const finishedAt = computed(() => data.value?.timing?.finished_at ?? data.value?.created_at ?? null)
+
+// Serving params as label/value pairs: the typed fields that were set, then the free-form extras.
+// Empty when the run captured no serving params (older launches), which hides the section.
+const servingRows = computed<{ label: string; value: string }[]>(() => {
+  const s = data.value?.serving
+  if (!s) return []
+  const rows: { label: string; value: string }[] = []
+  if (s.tensor_parallel_size != null) rows.push({ label: 'tensor parallel', value: String(s.tensor_parallel_size) })
+  if (s.data_parallel_size != null) rows.push({ label: 'data parallel', value: String(s.data_parallel_size) })
+  if (s.max_model_len != null) rows.push({ label: 'max model len', value: String(s.max_model_len) })
+  if (s.max_gen_tokens != null) rows.push({ label: 'max gen tokens', value: String(s.max_gen_tokens) })
+  for (const [key, value] of Object.entries(s.extra ?? {})) rows.push({ label: key, value })
+  return rows
+})
 
 const copied = ref(false)
 async function copyPath() {
@@ -128,7 +150,19 @@ async function copyPath() {
           <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Model</h3>
           <dl class="text-sm space-y-1">
             <div class="flex gap-2"><dt class="text-text-muted w-24">name</dt><dd class="font-mono break-all">{{ data.model.name }}</dd></div>
-            <div class="flex gap-2"><dt class="text-text-muted w-24">location</dt><dd class="font-mono break-all">{{ data.model.location }}</dd></div>
+            <div class="flex gap-2">
+              <dt class="text-text-muted w-24">location</dt>
+              <dd class="font-mono break-all">
+                <a
+                  v-if="objectStoreUrl(data.model.location)"
+                  :href="objectStoreUrl(data.model.location)!"
+                  target="_blank"
+                  rel="noopener"
+                  class="text-accent hover:text-accent-hover hover:underline"
+                >{{ data.model.location }} ↗</a>
+                <span v-else>{{ data.model.location }}</span>
+              </dd>
+            </div>
             <div class="flex gap-2"><dt class="text-text-muted w-24">backend</dt><dd>{{ data.model.backend }}</dd></div>
           </dl>
         </div>
@@ -156,6 +190,17 @@ async function copyPath() {
             <div class="flex gap-2"><dt class="text-text-muted w-24">user</dt><dd>{{ data.user }}</dd></div>
           </dl>
         </div>
+      </div>
+
+      <!-- Serving params, when the launcher captured them -->
+      <div v-if="servingRows.length" class="rounded-lg border border-surface-border bg-surface p-4">
+        <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Serving</h3>
+        <dl class="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1 text-sm">
+          <div v-for="row in servingRows" :key="row.label" class="flex gap-2 min-w-0">
+            <dt class="text-text-muted whitespace-nowrap">{{ row.label }}</dt>
+            <dd class="font-mono truncate" :title="row.value">{{ row.value }}</dd>
+          </div>
+        </dl>
       </div>
 
       <!-- Metrics -->
@@ -193,6 +238,13 @@ async function copyPath() {
         <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Results path</h3>
         <div class="flex items-center gap-2">
           <code class="flex-1 rounded border border-surface-border bg-surface-sunken px-3 py-2 text-[13px] font-mono break-all select-all">{{ data.results_path }}</code>
+          <a
+            v-if="objectStoreUrl(data.results_path)"
+            :href="objectStoreUrl(data.results_path)!"
+            target="_blank"
+            rel="noopener"
+            class="text-xs px-2 py-2 rounded border border-surface-border hover:bg-surface-raised whitespace-nowrap text-accent"
+          >Open ↗</a>
           <button
             class="text-xs px-2 py-2 rounded border border-surface-border hover:bg-surface-raised whitespace-nowrap"
             @click="copyPath"
@@ -206,7 +258,17 @@ async function copyPath() {
       <div class="rounded-lg border border-surface-border bg-surface p-4">
         <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Provenance</h3>
         <dl class="text-sm grid grid-cols-1 md:grid-cols-3 gap-2">
-          <div class="flex gap-2"><dt class="text-text-muted w-28">git sha</dt><dd class="font-mono" :title="data.provenance.git_sha">{{ shortSha(data.provenance.git_sha) }}</dd></div>
+          <div class="flex gap-2">
+            <dt class="text-text-muted w-28">git sha</dt>
+            <dd class="font-mono" :title="data.provenance.git_sha">
+              <a
+                :href="githubCommitUrl(data.provenance.git_sha)!"
+                target="_blank"
+                rel="noopener"
+                class="text-accent hover:text-accent-hover hover:underline"
+              >{{ shortSha(data.provenance.git_sha) }} ↗</a>
+            </dd>
+          </div>
           <div class="flex gap-2"><dt class="text-text-muted w-28">eval runtime</dt><dd class="font-mono break-all">{{ data.provenance.eval_runtime }}</dd></div>
           <div class="flex gap-2"><dt class="text-text-muted w-28">launch host</dt><dd class="font-mono break-all">{{ data.provenance.launch_host }}</dd></div>
         </dl>

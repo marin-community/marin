@@ -116,6 +116,9 @@ def test_api_surface_over_fixtures(client):
     assert detail["headline"]["metric"] == "acc,none"
     assert detail["headline"]["value"] == pytest.approx(0.741)
     assert detail["timing"]["started_at"] and detail["timing"]["finished_at"]
+    # Serving params round-trip through the record and reach the detail response.
+    assert detail["serving"]["tensor_parallel_size"] == 8
+    assert detail["serving"]["extra"]["temperature"] == "0.0"
 
     tasks = client.get("/api/runs/snowball-2026.07.20-mmlu/samples/tasks").json()
     assert tasks["available"] is True

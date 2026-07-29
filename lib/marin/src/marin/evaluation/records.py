@@ -122,6 +122,25 @@ class Provenance(BaseModel):
     launch_host: str
 
 
+class ServingParams(BaseModel):
+    """The model-serving and generation settings a run evaluated under, when the launcher captured them.
+
+    The typed fields are the settings that change results or throughput (parallelism, context length,
+    generation budget); ``extra`` carries the long tail -- backend-specific engine flags and extra
+    generation kwargs -- as strings so the record stays backend-agnostic. The whole field is optional:
+    runs whose launcher did not record it (every run written so far) omit it, and the dashboard shows
+    no serving section for them.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    tensor_parallel_size: int | None = None
+    data_parallel_size: int | None = None
+    max_model_len: int | None = None
+    max_gen_tokens: int | None = None
+    extra: dict[str, str] = Field(default_factory=dict)
+
+
 class RunTiming(BaseModel):
     """The eval's wall-clock window, when the orchestrator captured it.
 
@@ -180,6 +199,8 @@ class EvalRunRecord(BaseModel):
     provenance: Provenance
     timing: RunTiming | None = None
     """The eval's wall-clock window when captured; ``None`` on records without recorded timing."""
+    serving: ServingParams | None = None
+    """The model-serving and generation settings the run evaluated under; ``None`` when not captured."""
 
 
 def record_path(prefix: str, run_id: str) -> str:

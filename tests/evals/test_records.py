@@ -21,6 +21,7 @@ from marin.evaluation.records import (
     Provenance,
     RunStatus,
     RunTiming,
+    ServingParams,
     read_record,
     read_records,
     write_record,
@@ -92,6 +93,30 @@ def test_timing_round_trips_and_defaults_to_none(tmp_path):
         raw = json.load(f)
     assert raw["timing"] == {"started_at": "2026-07-19T09:06:31+00:00", "finished_at": "2026-07-19T09:14:31+00:00"}
     assert read_record(path) == timed
+
+
+def test_serving_round_trips_and_defaults_to_none(tmp_path):
+    """``serving`` is optional and round-trips: typed fields plus the free-form ``extra`` string map."""
+    assert _RECORD.serving is None
+
+    served = _RECORD.model_copy(
+        update={
+            "serving": ServingParams(
+                tensor_parallel_size=8, max_model_len=4096, max_gen_tokens=2048, extra={"temperature": "0.0"}
+            )
+        }
+    )
+    path = write_record(served, str(tmp_path))
+    with open(path) as f:
+        raw = json.load(f)
+    assert raw["serving"] == {
+        "tensor_parallel_size": 8,
+        "data_parallel_size": None,
+        "max_model_len": 4096,
+        "max_gen_tokens": 2048,
+        "extra": {"temperature": "0.0"},
+    }
+    assert read_record(path) == served
 
 
 def test_read_records_collects_parse_failures_without_dropping_good_ones(tmp_path):
