@@ -8,7 +8,7 @@ import json
 import logging
 import time
 from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -194,6 +194,13 @@ class CompletionRecord:
     usage: dict[str, Any]
     response_id: str | None
     elapsed_seconds: float
+
+
+@dataclass
+class ChunkState:
+    path: StoragePath
+    outputs: list[CompletionRecord | None]
+    remaining: int
 
 
 @dataclass(frozen=True)
@@ -457,14 +464,46 @@ def _collect_partition(
         return
 
     records = _read_partition(partition_slice)
+    chunk_work = []
     for row_start, row_end, path in pending_chunks:
-        chunk = records[row_start:row_end]
-        outputs = list(executor.map(lambda prompt: _completion(vllm_url, prompt, sampling), chunk))
-        path.write_text(
-            "".join(json.dumps(asdict(record), ensure_ascii=False, sort_keys=True) + "\n" for record in outputs),
-            compression="gzip",
-        )
-        yield CollectionDelta(len(outputs), len(outputs), 0, path)
+        state = ChunkState(path, [None] * (row_end - row_start), row_end - row_start)
+        chunk_work.extend((records[row_index], state, row_index - row_start) for row_index in range(row_start, row_end))
+    work = iter(chunk_work)
+    in_flight = {}
+    for _ in range(collection.concurrency):
+        try:
+            prompt, state, output_index = next(work)
+        except StopIteration:
+            break
+        future = executor.submit(_completion, vllm_url, prompt, sampling)
+        in_flight[future] = (state, output_index)
+
+    while in_flight:
+        done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+        completed_chunks = []
+        for future in done:
+            state, output_index = in_flight.pop(future)
+            state.outputs[output_index] = future.result()
+            state.remaining -= 1
+            if state.remaining == 0:
+                completed_chunks.append(state)
+
+        for _ in done:
+            try:
+                prompt, state, output_index = next(work)
+            except StopIteration:
+                break
+            future = executor.submit(_completion, vllm_url, prompt, sampling)
+            in_flight[future] = (state, output_index)
+
+        for state in completed_chunks:
+            outputs = [output for output in state.outputs if output is not None]
+            assert len(outputs) == len(state.outputs)
+            state.path.write_text(
+                "".join(json.dumps(asdict(record), ensure_ascii=False, sort_keys=True) + "\n" for record in outputs),
+                compression="gzip",
+            )
+            yield CollectionDelta(len(outputs), len(outputs), 0, state.path)
 
 
 def _run_collection(
