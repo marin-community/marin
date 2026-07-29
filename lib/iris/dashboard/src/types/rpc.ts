@@ -96,12 +96,19 @@ export interface TaskAttempt {
   finishedAt?: ProtoTimestamp
   isWorkerFailure?: boolean
   attemptUid?: string
-  // Bounded terminal cause, set only on a failed attempt. `error` reports the
-  // task container's own terminated state, so an init-container failure (a
-  // stage-workdir fetch that 404s, a wrong-architecture image) leaves `error`
-  // empty and lands here instead. Prefer this over `error` when rendering why
-  // an attempt failed.
+  // Bounded terminal cause, set only on a failed attempt. Read it through
+  // `attemptFailureReason` rather than directly.
   terminalReason?: string
+}
+
+/** Why a failed attempt ended, empty when it did not fail.
+ *
+ *  `terminalReason` comes first because `error` carries only the task
+ *  container's own terminated state: an init-container failure (a stage-workdir
+ *  fetch that 404s, a wrong-architecture image) arrives as an empty string
+ *  there, which `??` does not treat as missing. */
+export function attemptFailureReason(attempt: TaskAttempt): string {
+  return attempt.terminalReason || attempt.error || ''
 }
 
 export interface TaskStatus {

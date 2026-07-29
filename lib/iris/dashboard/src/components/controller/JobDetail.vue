@@ -7,7 +7,7 @@ import { stateToName, stateDisplayName, taskStateDisplayName } from '@/types/sta
 import { useBackends } from '@/composables/useBackends'
 import { useCopyToClipboard } from '@/composables/useCopyToClipboard'
 import {
-  LOCAL_CLUSTER, isFederated,
+  LOCAL_CLUSTER, isFederated, attemptFailureReason,
   type JobStatus, type TaskStatus, type LaunchJobRequest, type JobQuery,
   type GetJobStatusResponse, type GetTaskStatusResponse, type ListTasksResponse, type ListJobsResponse,
   type EndpointInfo, type ListEndpointsResponse,
@@ -651,9 +651,8 @@ function collectFailuresByState(stateName: string, count: (t: TaskStatus) => num
       if (stateToName(attempt.state) !== stateName) continue
       const finishedAtMs = timestampMs(attempt.finishedAt)
       if (!latest || finishedAtMs >= latest.finishedAtMs) {
-        // terminalReason first: an init-container failure leaves `error` empty,
-        // and the failure rows below hide themselves on an empty string.
-        const error = attempt.terminalReason || attempt.error || ''
+        // The failure rows below hide themselves on an empty reason.
+        const error = attemptFailureReason(attempt)
         latest = { attemptId: attempt.attemptId, error, finishedAtMs }
       }
     }

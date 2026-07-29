@@ -8,6 +8,7 @@ import { useBackends } from '@/composables/useBackends'
 import {
   isLocal,
   LOCAL_CLUSTER,
+  attemptFailureReason,
   type TaskStatus,
   type GetTaskStatusResponse,
   type EndpointInfo,
@@ -641,9 +642,9 @@ watch(() => props.taskId, async () => {
                      the full text lives in the tooltip. -->
                 <td
                   class="px-3 py-2 text-[13px] text-status-danger truncate max-w-xs"
-                  :title="attempt.terminalReason || attempt.error || ''"
+                  :title="attemptFailureReason(attempt)"
                 >
-                  {{ attempt.terminalReason || attempt.error || '-' }}
+                  {{ attemptFailureReason(attempt) || '-' }}
                 </td>
               </tr>
             </tbody>
