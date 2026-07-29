@@ -99,16 +99,36 @@ domains) rather than hanging, which is what makes a retry cheap.
 The cost is real: 12 wasted placements on one leg, roughly 12 minutes of scheduling
 churn, and it scales with gang size because any one member can bounce the set.
 
-## Fix
+## Root cause upstream, and resolution
 
-Evict the stale image from the containerd cache on the three nodes so the next pull
-resolves the correct arm64 variant. This is narrower than cordoning them and does not
-remove capacity.
+Confirmed by Rafal Wojdyla and Russell Power on 2026-07-29 (Slack `C0AHF5KV11Q`, thread
+`1785343376.364349`), and consistent with the node-level evidence above.
 
-Cordoning was considered and explicitly not done: it changes shared cluster state and
-affects other users. No node was cordoned, tainted, drained, or patched during this
+The k8s deployment pulls `ghcr.io/marin-community/iris-task:latest` — a mutable tag —
+under an `IfNotPresent` image-pull policy. A node that had cached `latest` while it
+briefly pointed at an amd64 build keeps serving that cached layer indefinitely, because
+`IfNotPresent` never re-resolves the tag. GCP deployments lock to a hash; that locking
+was lost for the k8s deployments through a duplicated config. Nodes swapped in during
+the window picked up whatever `latest` resolved to at the time.
+
+Resolution applied the same day:
+
+1. Images rebuilt (Actions run `30475812427`).
+2. The amd64 images deleted from the affected nodes.
+3. arm64 images refetched and pinned on those nodes.
+4. An alert planned for the arch-mismatch case, and a PR to lock the k8s deployments to
+   a hash rather than `latest`.
+
+Verified after the fix: the diagnosis command above returns **no** nodes holding
+`cfe4e8dd…`.
+
+The durable fix is (4) — pinning the digest. Until that lands, the same failure can
+recur on any node that caches a `latest` that briefly pointed at the wrong
+architecture.
+
+## What was not done
+
+Cordoning was considered and explicitly rejected: it changes shared cluster state and
+affects other users, and the correct fix turned out to be a per-node cache eviction that
+costs no capacity. No node was cordoned, tainted, drained, or patched during this
 investigation, and no other user's job was touched.
-
-Worth checking upstream: how a manifest that resolves to amd64 came to be cached on
-arm64 nodes at all. If the publish path can emit a single-arch image under a tag that
-arm64 nodes pull, this will recur.
