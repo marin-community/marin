@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Large sparse-MoE scale run for the CoreWeave cw-us-east-02a H100 cluster.
+"""Large sparse-MoE scale run for CoreWeave GPU clusters.
 
 Launches a ~90B-total / ~5B-active Grug MoE (hidden 3072, 48 layers, 128 experts,
-top-4 -> ~17x sparsity) across all 32 nodes / 256 H100s. Parameters are fully
+top-4 -> ~17x sparsity) across 32 H100 nodes by default. Parameters are fully
 sharded over the cross-node ``data`` axis (FSDP) while the 128 routed experts are
 sharded 8-way over the intra-node NVLink ``expert`` axis (expert parallelism).
 
@@ -15,11 +15,13 @@ shards one model across every device instead.
 
 Env knobs (all optional; defaults give the full 90B run on 256 H100):
 
-    SCALE_GPU_REPLICAS  number of 8xH100 nodes (default 32 -> 256 GPUs)
+    SCALE_GPU_REPLICAS  number of workers (default 32)
+    SCALE_GPU_TYPE      accelerator requested per worker (default H100)
+    SCALE_GPUS_PER_NODE accelerators requested per worker (default 8)
     SCALE_EXPERT_AXIS   expert-parallel axis size, intra-node (default 8)
     SCALE_REPLICA_AXIS  cross-node replication; 1 = pure FSDP (default 1)
-    SCALE_PROCESSES_PER_TASK  GPU processes per node: 1 = one process per node
-                          (default), 8 = one JAX process per GPU (multi-controller)
+    SCALE_PROCESSES_PER_TASK  GPU processes per worker: 1 = one process per worker
+                          (default); set to the GPU count for one process per GPU
     SCALE_BATCH         global batch in sequences (default 256)
     SCALE_SEQ_LEN       sequence length (default 2048)
     SCALE_STEPS         training steps (default 50)
@@ -152,8 +154,8 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
     replica_axis = env_int("SCALE_REPLICA_AXIS", 1)
     batch_size = env_int("SCALE_BATCH", DEFAULT_BATCH)
     steps = env_int("SCALE_STEPS", 50)
-    # 1 = one process per node (8 local GPUs). 8 = one JAX process per GPU
-    # (multi-controller) via the iris.hooks.multigpu_main supervisor.
+    # 1 = one process per worker. Setting this to the worker's GPU count uses one
+    # JAX process per GPU via the iris.hooks.multigpu_main supervisor.
     processes_per_task = env_int("SCALE_PROCESSES_PER_TASK", 1)
     # SCALE_PROFILER_STEPS > 0 captures a jax_profile window of that many steps
     # (uploaded via the tracker, so pair with SCALE_TRACKER=wandb to retrieve it).
@@ -181,14 +183,18 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
     if model.num_experts % expert_axis != 0:
         raise ValueError(f"num_experts={model.num_experts} must be divisible by SCALE_EXPERT_AXIS={expert_axis}")
 
+    gpus_per_node = env_int("SCALE_GPUS_PER_NODE", GPUS_PER_NODE)
+    gpu_type = os.environ.get("SCALE_GPU_TYPE", "H100")
     # Batch is sharded over the (replica_dcn, data, expert) axes; data absorbs the
-    # rest of the 8*replicas devices. Require the global batch to cover every shard.
-    data_axis = (replicas * GPUS_PER_NODE) // (replica_axis * expert_axis)
+    # rest of the devices. Require the global batch to cover every shard.
+    data_axis = (replicas * gpus_per_node) // (replica_axis * expert_axis)
     batch_shards = replica_axis * data_axis * expert_axis
     if batch_size % batch_shards != 0:
         raise ValueError(f"SCALE_BATCH={batch_size} must be divisible by batch shards={batch_shards}")
 
-    resources = ResourceConfig.with_gpu("H100", count=GPUS_PER_NODE, cpu=32, ram="256g", disk="256g", replicas=replicas)
+    resources = ResourceConfig.with_gpu(
+        gpu_type, count=gpus_per_node, cpu=32, ram="256g", disk="256g", replicas=replicas
+    )
 
     use_wandb = os.environ.get("SCALE_TRACKER", "json_logger").lower() == "wandb"
     json_logger_name = os.environ.get("SCALE_JSON_LOGGER", "grug_moe_scale.metrics")
