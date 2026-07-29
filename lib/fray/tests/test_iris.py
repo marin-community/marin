@@ -357,10 +357,31 @@ class TestWithTpuFlexible:
 # pod-manifest build, so the fray defaults must stay in sync with the provider's map.
 
 
-def test_resolve_coscheduling_gpu_multinode_uses_leafgroup():
-    cosched = resolve_coscheduling(GpuConfig(variant="H100", count=8), replicas=2)
+@pytest.mark.parametrize(
+    ("variant", "count", "replicas", "group_by"),
+    [
+        ("H100", 8, 2, "leafgroup"),
+        ("GB200", 4, 16, "nvlink.domain"),
+        ("GB200", 4, 32, "nvlink.domain.sliced"),
+        ("GB200", 4, 64, "nvlink.domain.sliced"),
+    ],
+)
+def test_resolve_coscheduling_gpu_multinode_uses_variant_topology(variant, count, replicas, group_by):
+    cosched = resolve_coscheduling(GpuConfig(variant=variant, count=count), replicas=replicas)
     assert cosched is not None
-    assert cosched.group_by == "leafgroup"
+    assert cosched.group_by == group_by
+
+
+@pytest.mark.parametrize(
+    ("count", "replicas"),
+    [
+        (1, 32),
+        (4, 17),
+    ],
+)
+def test_resolve_coscheduling_gpu_multirack_rejects_unplaceable_gang(count, replicas):
+    with pytest.raises(ValueError):
+        resolve_coscheduling(GpuConfig(variant="GB200", count=count), replicas=replicas)
 
 
 def test_resolve_coscheduling_tpu_multinode_uses_tpu_name():
