@@ -9,6 +9,7 @@ import os
 import sys
 import typing
 import warnings
+from collections import Counter
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
@@ -982,8 +983,14 @@ class TrainerConfig:
 
     @cached_property
     def num_slices(self):
-        """number of nodes"""
-        return max(getattr(device, "slice_index", 0) for device in jax.devices()) + 1
+        """Number of equally sized physical topology domains."""
+        slice_counts = Counter(getattr(device, "slice_index", 0) for device in jax.devices())
+        if len(set(slice_counts.values())) != 1:
+            raise ValueError(
+                f"Devices must be evenly distributed across physical topology domains; "
+                f"got {dict(sorted(slice_counts.items()))}"
+            )
+        return len(slice_counts)
 
     @property
     def num_devices_per_slice(self):

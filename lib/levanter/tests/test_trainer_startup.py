@@ -5,6 +5,7 @@ import json
 from types import SimpleNamespace
 
 import jax
+import pytest
 
 import levanter.tracker.tracker_fns as tracker_fns
 from levanter.distributed import DistributedConfig
@@ -67,6 +68,21 @@ def test_trainer_num_slices_counts_gpu_topology_domains(monkeypatch):
     monkeypatch.setattr(jax, "devices", lambda: devices)
 
     assert TrainerConfig().num_slices == 7
+
+
+def test_trainer_num_slices_rejects_uneven_topology_domains(monkeypatch):
+    devices = [
+        SimpleNamespace(platform="gpu", slice_index=slice_index)
+        for slice_index, count in ((0, 12), (1, 4))
+        for _ in range(count)
+    ]
+    monkeypatch.setattr(jax, "devices", lambda: devices)
+
+    with pytest.raises(
+        ValueError,
+        match=r"Devices must be evenly distributed across physical topology domains; got \{0: 12, 1: 4\}",
+    ):
+        _ = TrainerConfig().num_slices
 
 
 def test_nvidia_topology_matrix_summary_counts_gpu_and_nic_links():
