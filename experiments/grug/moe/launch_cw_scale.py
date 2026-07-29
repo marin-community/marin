@@ -46,9 +46,13 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
                         node-local disk with no periodic saves -- for throughput
                         experiments where the checkpoint is disposable and a
                         slow S3 commit must not wedge the end-of-run barrier
+    SCALE_OPTIMIZER     muonh (default) | adamh | adam. MuonH uses 13/3 times
+                        Adam's heuristic LR; all use linear decay to 5% of peak
+                        with 1% warmup
     RUN_ID              unique run identifier
 """
 
+import dataclasses
 import datetime
 import os
 from typing import cast
@@ -60,7 +64,7 @@ from levanter.data.text.datasets import BlockShuffleConfig
 from levanter.grug._moe.common import resolve_moe_implementation
 from levanter.grug.attention import GrugAttentionImplementation
 from levanter.grug.grug_moe import DEFAULT_EP_CAPACITY_FACTOR
-from levanter.optim.config import AdamConfig
+from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.build_context import resolve_version
@@ -70,8 +74,10 @@ from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 
+from experiments.grug.moe.heuristic import MoeHeuristic
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial, slimpajama_6b_dataset
 from experiments.grug.moe.model import GrugModelConfig, RematMode
+from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
 from experiments.grug.moe.train import GrugTrainerConfig
 from experiments.llama import llama3_tokenizer_vocab_size
 
@@ -212,6 +218,37 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
     )
 
     mp = os.environ.get("SCALE_MP", "params=float32,compute=bfloat16,output=bfloat16")
+
+    total_tokens = float(steps * batch_size * model.max_seq_len)
+    max_lr = float(os.environ.get("SCALE_MAX_LR", "0.05"))
+    heuristic = MoeHeuristic(min_lr_ratio=0.05, max_learning_rate=max_lr).build_optimizer_config(
+        batch_size=batch_size,
+        tokens=total_tokens,
+        hidden_dim=model.hidden_dim,
+        seq_len=model.max_seq_len,
+    )
+    schedule = dict(lr_schedule="linear", min_lr_ratio=0.05, warmup=0.01)
+    lr_override = os.environ.get("SCALE_LR")
+    opt_name = os.environ.get("SCALE_OPTIMIZER", "muonh").lower()
+    optimizer: OptimizerConfig
+    if opt_name in ("muonh", "grug_moe_muonh"):
+        optimizer = (
+            dataclasses.replace(heuristic, learning_rate=float(lr_override), adam_lr=float(lr_override))
+            if lr_override
+            else heuristic
+        )
+    elif opt_name in ("adamh", "grug_moe_adamh"):
+        lr = float(lr_override) if lr_override else heuristic.adam_lr
+        optimizer = GrugMoeAdamHConfig(learning_rate=lr, adam_lr=lr, **schedule)
+    elif opt_name == "adam":
+        lr = float(lr_override) if lr_override else heuristic.adam_lr
+        optimizer = dataclasses.replace(SCALE_OPTIMIZER, learning_rate=lr, **schedule)
+    else:
+        raise ValueError(
+            "SCALE_OPTIMIZER must be one of 'muonh', 'grug_moe_muonh', "
+            f"'adamh', 'grug_moe_adamh', or 'adam'; got {opt_name!r}"
+        )
+
     name = f"grug-moe-cw-d{model.hidden_dim}-L{model.num_layers}-e{model.num_experts}-r{replicas}"
     slim = slimpajama_6b_dataset()
 
@@ -238,7 +275,7 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
             seed=0,
             mp=mp,
             tracker=tracker,
-            optimizer=SCALE_OPTIMIZER,
+            optimizer=optimizer,
             grug_trainer=grug_trainer,
             processes_per_task=processes_per_task,
             eval=None,

@@ -250,6 +250,14 @@ def test_scale_report_drops_controls_real_ring_drop_count():
     assert result.returncode == 0, result.stderr
 
 
+def test_grug_moe_scale_launcher_rejects_unknown_optimizer(monkeypatch):
+    launch_module = importlib.import_module("experiments.grug.moe.launch_cw_scale")
+    monkeypatch.setenv("SCALE_OPTIMIZER", "muno")
+
+    with pytest.raises(ValueError, match="SCALE_OPTIMIZER"):
+        launch_module.build_scale_checkpoint(version="dev")
+
+
 def test_grug_moe_xsa_forward_lowers_with_gpu_fa4_thd_gqa_sharding():
     if jax.default_backend() != "gpu":
         pytest.skip("gpu_fa4_thd requires the JAX GPU backend")
