@@ -11,7 +11,7 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { useSamplePager, type SampleFilter } from '@/composables/useSamplePager'
 import type { SampleRow, SampleTasksResponse } from '@/types/api'
-import { sampleHint, sampleOutcome, outcomeChipClass } from '@/utils/samples'
+import { sampleFilters, sampleHint, sampleOutcome, outcomeChipClass } from '@/utils/samples'
 import McqSample from '@/components/samples/McqSample.vue'
 import GenerativeSample from '@/components/samples/GenerativeSample.vue'
 import AgenticSample from '@/components/samples/AgenticSample.vue'
@@ -54,11 +54,7 @@ const { total, counts, primaryMetric, loading, error, sample: sampleAt, ensure }
   filter,
 )
 
-// 'ungraded' only appears once a task reports unscored samples, matching the run-detail list.
-const FILTERS = computed<SampleFilter[]>(() => {
-  const base: SampleFilter[] = ['all', 'correct', 'incorrect']
-  return (counts.value?.ungraded ?? 0) > 0 ? [...base, 'ungraded'] : base
-})
+const FILTERS = computed(() => sampleFilters(counts.value?.ungraded))
 
 watch([task, filter], () => {
   index.value = 0

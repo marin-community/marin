@@ -8,16 +8,15 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import type { SamplesResponse, SampleTasksResponse } from '@/types/api'
-import { sampleHint, sampleOutcome, outcomeChipClass } from '@/utils/samples'
+import { sampleFilters, sampleHint, sampleOutcome, outcomeChipClass, type SampleFilter } from '@/utils/samples'
 
 const props = defineProps<{ runId: string }>()
 const router = useRouter()
 
 const LIMIT = 50
-type Correct = 'all' | 'correct' | 'incorrect' | 'ungraded'
 
 const selectedTask = ref('')
-const correct = ref<Correct>('all')
+const correct = ref<SampleFilter>('all')
 const offset = ref(0)
 
 const { data: tasksData, error: tasksError, refresh: refreshTasks } = useApi<SampleTasksResponse>(
@@ -48,12 +47,7 @@ watch([selectedTask, correct], () => {
   if (selectedTask.value) refresh()
 })
 
-// The filters offered: 'ungraded' only appears once the task actually has unscored samples,
-// so tasks that grade every row keep the compact all/correct/incorrect strip.
-const FILTERS = computed<Correct[]>(() => {
-  const base: Correct[] = ['all', 'correct', 'incorrect']
-  return (data.value?.counts?.ungraded ?? 0) > 0 ? [...base, 'ungraded'] : base
-})
+const FILTERS = computed(() => sampleFilters(data.value?.counts?.ungraded))
 
 const total = computed(() => data.value?.total ?? 0)
 const shownFrom = computed(() => (total.value === 0 ? 0 : offset.value + 1))

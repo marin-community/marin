@@ -112,9 +112,9 @@ class StoreInfo:
 
 
 def record_to_row(record: EvalRunRecord) -> dict:
-    """Flatten one record to the API run-row shape (ISO ``created_at``, task list, jobs map).
+    """Flatten one record to the canonical API run-row shape (ISO ``created_at``, task list, jobs map).
 
-    Shared by both stores so the memory and Postgres backends return the same run rows.
+    The single definition of that shape, so the run list is identical whichever store produced it.
     """
     return {
         "run_id": record.run_id,
@@ -625,7 +625,7 @@ def _status_rollup(statuses: set[str]) -> str:
 def _run_headline(record: dict) -> dict | None:
     """The run's overall grade for the detail header: its rolled-up primary metric as
     ``{value, metric, stderr}``, or None when nothing scored (an infra or eval failure that never
-    produced metrics). Computed from the same ``record_score`` the leaderboard and groups use."""
+    produced metrics)."""
     score = record_score(EvalRunRecord.model_validate(record))
     if score is None:
         return None

@@ -4,6 +4,15 @@ import type { SampleRow } from '@/types/api'
 
 export type SampleOutcome = 'passed' | 'failed' | 'ungraded' | 'errored'
 
+// The correctness filters a sample list offers. 'ungraded' is a real bucket, not a synonym for wrong.
+export type SampleFilter = 'all' | 'correct' | 'incorrect' | 'ungraded'
+
+/** The filters to show for a task: 'ungraded' only appears once the task reports unscored samples. */
+export function sampleFilters(ungradedCount: number | null | undefined): SampleFilter[] {
+  const base: SampleFilter[] = ['all', 'correct', 'incorrect']
+  return (ungradedCount ?? 0) > 0 ? [...base, 'ungraded'] : base
+}
+
 /** The grader's recorded error, if it emitted one (Harbor writes `{reward, error}` into detail). */
 function graderError(row: SampleRow): string | null {
   const detail = row.grading?.detail

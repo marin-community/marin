@@ -9,8 +9,9 @@
 import { ref, watch, type Ref } from 'vue'
 import { apiGet } from '@/composables/useApi'
 import type { SampleRow, SamplesResponse } from '@/types/api'
+import type { SampleFilter } from '@/utils/samples'
 
-export type SampleFilter = 'all' | 'correct' | 'incorrect' | 'ungraded'
+export type { SampleFilter }
 
 type SampleCounts = { all: number; correct: number; incorrect: number; ungraded: number }
 
