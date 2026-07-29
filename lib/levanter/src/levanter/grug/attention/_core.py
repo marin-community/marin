@@ -105,6 +105,12 @@ class AttentionMask(eqx.Module):
     segment_ids: tuple[jax.Array, jax.Array] | None = None
     thd_segment_metadata: ThdSegmentMetadata | None = None
     sliding_window: int | None = eqx.field(default=None, static=True)
+    # Optional precomputed FA4/CuTe per-token metadata (lower_bounds, valid), both [B, S] int32/bool.
+    # When set, ``gpu_fa4_cute_attention`` uses these directly instead of rebuilding from
+    # ``segment_ids``/``sliding_window``. This lets a caller compute the metadata once outside a
+    # ``lax.scan``/``lax.cond`` and select it per layer. A conditional metadata input to the FA4
+    # kernel can be pinned to {maximal device=0} and force an involuntary full rematerialization.
+    fa4_bounds: tuple[jax.Array, jax.Array] | None = None
 
     @classmethod
     def causal(
@@ -150,6 +156,16 @@ class AttentionMask(eqx.Module):
             segment_ids=self.segment_ids,
             thd_segment_metadata=self.thd_segment_metadata,
             sliding_window=sliding_window,
+        )
+
+    def with_fa4_bounds(self, lower_bounds: jax.Array, valid: jax.Array) -> "AttentionMask":
+        """Attach precomputed FA4/CuTe per-token metadata (see ``fa4_bounds``)."""
+        return AttentionMask(
+            is_causal=self.is_causal,
+            segment_ids=self.segment_ids,
+            thd_segment_metadata=self.thd_segment_metadata,
+            sliding_window=self.sliding_window,
+            fa4_bounds=(lower_bounds, valid),
         )
 
     def materialize_mask(self, q_len: int, k_len: int) -> Bool[Array, "..."] | None:
