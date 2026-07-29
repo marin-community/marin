@@ -36,6 +36,24 @@ them proves nothing; a gap in this harness means something.
 | F7 | Three-way at step 59: v6e-4 5.75413, GB200x4 5.69206 (−1.08%), H100x8 5.74982 (−0.07%). The **8-device H100 matches the TPU more closely than the 4-device GB200 does** | **B3 answered: mesh shape is not the driver.** If mesh width mattered, H100x8 would be the outlier; instead it is the closest match. What remains is small per-device kernel numerics |
 | F8 | 400-step pair, windowed means of the GB200−TPU delta: +0.36% (0–49), −1.25% (50–99), −5.62% (100–149), −1.22% (150–199), then **monotonically shrinking: −0.19%, −0.12%, −0.08%** through step 349. Per-step delta flips sign 19 times | **B4 refuted, and then some.** The two platforms do not merely fail to diverge — they *converge*, the delta decaying toward zero as training proceeds. The mid-run excursion is a transient. Both GPUs sit *below* the TPU, the opposite sign from exp153's +0.40 deficit |
 
+| F9 | **The 400-step pair ran to completion: v6e-4 4.090732 vs GB200x4 4.092026 — a delta of +0.032%.** Windowed delta decays −1.25% → −5.62% → −0.19% → −0.08% → −0.08% | **The platform question is closed.** Over a full run, identical config on TPU and GPU lands within a third of a tenth of a percent. exp153's deficit is ~13% relative — roughly 400x larger than anything the hardware produces |
+| F10 | HP ablation at step 208 of 400: exp153's lr 1e-3 / wd 0.8 is **ahead** of exp146's lr 3.1623e-3 / wd 0.2 by 0.33, and has led at every sampled step | **Cannot be read as an answer — horizon mismatch.** See below |
+
+### The horizon problem with F10
+
+The naive reading — "exp153's hyperparameters are actually better" — does not follow, and the
+ablation as designed cannot support it. exp153's gap opens at step **4,460**; this ablation
+runs **400** steps, so cosine decay is compressed ~89x and the whole comparison sits in the
+warmup-and-early-transient regime. A larger LR is expected to look worse there: it is noisier
+early and pays off over a long horizon. Measuring at step 208 and concluding anything about
+step 4,460 is exactly the extrapolation that would make this wrong.
+
+What F10 does establish: at matched hardware and matched everything-else, **LR/WD alone moves
+the loss by ~0.33 at 200 steps** — the same order as the ~0.40 that this whole investigation
+is chasing. Hyperparameters are a large enough lever to explain the gap. Which *direction*
+they move it at 4,460 steps is the open question, and answering it needs a longer run than the
+"don't run them for long" budget this harness was built under. Flagged rather than launched.
+
 ## Hypotheses
 
 Ordered by how much they would explain, not by how interesting they are.
@@ -86,8 +104,8 @@ Ordered by how much they would explain, not by how interesting they are.
 | 07-29 | `parity-tpu-v6e4-d` — v6e-4, 60 steps | finished, final train 5.75413 |
 | 07-29 | `parity-h100-x8` — H100x8, 60 steps (B3) | finished, final train 5.74982 → **B3 refuted (F7)** |
 | 07-29 | `parity-gb200-long` — GB200x4, 400 steps (B4) | finished, final train 4.09203 |
-| 07-29 | `parity-tpu-long` — v6e-4, 400 steps (B4) | running, step 224 → **B4 refuted so far (F8)** |
-| 07-29 | `parity-hp-exp153` — GB200x4, 400 steps, **lr 1e-3 / wd 0.8** (A5) | running |
+| 07-29 | `parity-tpu-long` — v6e-4, 400 steps (B4) | finished, final train 4.090732 → **platform closed (F9)** |
+| 07-29 | `parity-hp-exp153` — GB200x4, 400 steps, **lr 1e-3 / wd 0.8** (A5) | running, leads by 0.33 at step 208 (F10) |
 | 07-29 | `parity-hp-exp146` — GB200x4, 400 steps, **lr 3.1623e-3 / wd 0.2** (A5) | running |
 
 ## Harness failures worth remembering
