@@ -2321,3 +2321,26 @@ result:
 - Published an interim corrected report and marked the first d768 burn
   invalidated. Its pack-one control cannot support the earlier positive
   quality conclusion.
+
+### 2026-07-29 00:58 - Four corrected gates and SFT transfer smoke
+
+- The matched measurement pair remains finite through update 4,000. Full-mode
+  fixed25 Paloma deltas at updates 1,000 through 4,000 are `+0.022665`,
+  `+0.031638`, `+0.025615`, and `+0.024656` nat. The median delta is
+  `+0.025136`; no gate approaches the preregistered `+0.10` rejection
+  threshold.
+- Through common update 4,194, fixed25 adds `1.21%` to median compiled
+  optimizer-step time. Both measurement arms and both checkpoint replicas are
+  healthy.
+- Added an exact-source Grug SFT path that initializes model weights from a
+  pretraining checkpoint while retaining SFT step zero and a fresh optimizer.
+  It uses the existing CoreWeave WildChat cache. Unit tests cover full-E256 and
+  fixed25 model construction plus weights-only state replacement.
+- The E256 one-update smoke loaded checkpoint step 1,190, produced finite loss
+  `3.01`, and saved SFT checkpoint step 1. The first fixed25 smoke raced the
+  pretraining checkpointer's temporary-checkpoint rotation: step 1,173 was
+  discovered by the coordinator but deleted when step 2,394 became current
+  before the worker loaded it. This is a checkpoint-lifetime handoff failure,
+  not a numerical or model-shape failure. A bounded retry targets the current
+  checkpoint; production SFT will consume each replica's durable final
+  checkpoint after pretraining terminates.

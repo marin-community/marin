@@ -97,10 +97,14 @@ no-evaluation replica pair writes final checkpoints for matched SFT.
 |---:|---:|---:|---:|---:|---:|---:|
 | 1,000 | 0.262B | 4.219130 | 4.241795 | +0.022665 | 4.274152 | 4.399118 |
 | 2,000 | 0.524B | 3.961045 | 3.992682 | +0.031638 | 4.029015 | 4.173859 |
+| 3,000 | 0.786B | 3.868898 | 3.894513 | +0.025615 | 3.937864 | 4.076207 |
+| 4,000 | 1.049B | 3.790510 | 3.815166 | +0.024656 | 3.856960 | 4.011194 |
+| 5,000 | 1.311B | 3.732107 | 3.762341 | +0.030234 | 3.809299 | 3.951459 |
 
-Through the first common post-warmup interval, fixed25 adds approximately
-1.3% to median compiled optimizer-step time. The update-1,000 measurement was
-453.553 ms for control and 458.670 ms for fixed25, a 1.13% surcharge.
+Through common update 5,100, fixed25 adds 1.19% to median compiled
+optimizer-step time: 456.276 ms for control and 461.684 ms for fixed25.
+Across the five aligned evaluation gates, the median full-mode Paloma delta is
+`+0.025615` nat.
 Fixed25's three-mode evaluation takes longer than the control's one-mode
 evaluation; that instrumentation cost is excluded from the architecture
 surcharge.

@@ -15,6 +15,14 @@
         {
           "step": 3000,
           "value": 3.8688981533050537
+        },
+        {
+          "step": 4000,
+          "value": 3.7905101776123047
+        },
+        {
+          "step": 5000,
+          "value": 3.7321066856384277
         }
       ],
       "paloma_micro": [
@@ -29,6 +37,14 @@
         {
           "step": 3000,
           "value": 3.53558611869812
+        },
+        {
+          "step": 4000,
+          "value": 3.461461067199707
+        },
+        {
+          "step": 5000,
+          "value": 3.404170274734497
         }
       ]
     },
@@ -41,6 +57,18 @@
         {
           "step": 2000,
           "value": 4.029014587402344
+        },
+        {
+          "step": 3000,
+          "value": 3.937863826751709
+        },
+        {
+          "step": 4000,
+          "value": 3.856959819793701
+        },
+        {
+          "step": 5000,
+          "value": 3.8092989921569824
         }
       ],
       "paloma_e16": [
@@ -51,6 +79,18 @@
         {
           "step": 2000,
           "value": 4.173859119415283
+        },
+        {
+          "step": 3000,
+          "value": 4.076207160949707
+        },
+        {
+          "step": 4000,
+          "value": 4.011193752288818
+        },
+        {
+          "step": 5000,
+          "value": 3.9514589309692383
         }
       ],
       "paloma_macro": [
@@ -61,6 +101,18 @@
         {
           "step": 2000,
           "value": 3.9926822185516357
+        },
+        {
+          "step": 3000,
+          "value": 3.8945131301879883
+        },
+        {
+          "step": 4000,
+          "value": 3.815166473388672
+        },
+        {
+          "step": 5000,
+          "value": 3.762340545654297
         }
       ],
       "paloma_micro": [
@@ -71,185 +123,220 @@
         {
           "step": 2000,
           "value": 3.657707691192627
+        },
+        {
+          "step": 3000,
+          "value": 3.5608174800872803
+        },
+        {
+          "step": 4000,
+          "value": 3.4871020317077637
+        },
+        {
+          "step": 5000,
+          "value": 3.4316413402557373
         }
       ]
     }
   },
-  "full_mode_delta_log_linear_fit": null,
+  "full_mode_delta_log_linear_fit": {
+    "forecasts": {
+      "10.0": 0.03332902577213399,
+      "20.0": 0.034973464257238795
+    },
+    "intercept": 0.027866319368150292,
+    "points": 5,
+    "r_squared": 0.15633323480155625,
+    "slope_per_log_token": 0.002372423247507674,
+    "through_step": 5000
+  },
   "full_mode_domain_comparison": {
     "deltas": {
-      "4chan-llama3": 0.021114826202392578,
-      "c4_100_domains-llama3": 0.02765512466430664,
-      "c4_en-llama3": 0.025860309600830078,
-      "dolma-v1_5-llama3": 0.026341915130615234,
-      "dolma_100_programing_languages-llama3": 0.011024236679077148,
-      "dolma_100_subreddits-llama3": 0.025118350982666016,
-      "falcon-refinedweb-llama3": 0.023953914642333984,
-      "gab-llama3": 0.04039812088012695,
-      "m2d2_s2orc_unsplit-llama3": 0.025134801864624023,
-      "m2d2_wikipedia_unsplit-llama3": 0.02776336669921875,
-      "manosphere_meta_sep-llama3": 0.031880855560302734,
-      "mc4-llama3": 0.01706981658935547,
-      "ptb-llama3": 0.1032109260559082,
-      "redpajama-llama3": 0.024039030075073242,
-      "twitterAAE_HELM_fixed-llama3": 0.035704612731933594,
-      "wikitext_103-llama3": 0.039933204650878906
+      "4chan-llama3": 0.022031307220458984,
+      "c4_100_domains-llama3": 0.02960038185119629,
+      "c4_en-llama3": 0.027189016342163086,
+      "dolma-v1_5-llama3": 0.02726149559020996,
+      "dolma_100_programing_languages-llama3": 0.018218636512756348,
+      "dolma_100_subreddits-llama3": 0.024908065795898438,
+      "falcon-refinedweb-llama3": 0.02844524383544922,
+      "gab-llama3": 0.03574180603027344,
+      "m2d2_s2orc_unsplit-llama3": 0.030600547790527344,
+      "m2d2_wikipedia_unsplit-llama3": 0.03473639488220215,
+      "manosphere_meta_sep-llama3": 0.03106975555419922,
+      "mc4-llama3": 0.030687332153320312,
+      "ptb-llama3": 0.05123615264892578,
+      "redpajama-llama3": 0.02368307113647461,
+      "twitterAAE_HELM_fixed-llama3": 0.04024839401245117,
+      "wikitext_103-llama3": 0.02808403968811035
     },
     "domains": 16,
-    "max_delta": 0.1032109260559082,
-    "mean_delta": 0.03163771331310272,
-    "median_delta": 0.026101112365722656,
-    "min_delta": 0.011024236679077148,
-    "through_step": 2000,
+    "max_delta": 0.05123615264892578,
+    "mean_delta": 0.030233852565288544,
+    "median_delta": 0.029022812843322754,
+    "min_delta": 0.018218636512756348,
+    "through_step": 5000,
     "treatment_better": 0
   },
   "full_mode_paired_delta_summary": {
     "deltas": {
       "1000": 0.022665023803710938,
-      "2000": 0.03163766860961914
+      "2000": 0.03163766860961914,
+      "3000": 0.02561497688293457,
+      "4000": 0.024656295776367188,
+      "5000": 0.03023386001586914
     },
     "max_delta": 0.03163766860961914,
-    "mean_delta": 0.02715134620666504,
-    "median_delta": 0.02715134620666504,
+    "mean_delta": 0.026961565017700195,
+    "median_delta": 0.02561497688293457,
     "min_delta": 0.022665023803710938,
-    "points": 2,
-    "through_step": 2000,
+    "points": 5,
+    "through_step": 5000,
     "treatment_better": 0
   },
   "gpu_count": 8,
   "quality_log_linear_fits": {
     "e256": {
       "forecasts": {
-        "10.0": 3.028333907594236,
-        "20.0": 2.803366023411876
+        "10.0": 3.112724508335841,
+        "20.0": 2.905702613705105
       },
-      "intercept": 3.775661042506985,
-      "points": 3,
-      "r_squared": 0.9863811367828889,
-      "slope_per_log_token": -0.32456005086917383,
-      "through_step": 3000
+      "intercept": 3.8004363563664953,
+      "points": 5,
+      "r_squared": 0.9891645302820753,
+      "slope_per_log_token": -0.29866946073920075,
+      "through_step": 5000
     },
-    "fixed25": null
+    "fixed25": {
+      "forecasts": {
+        "10.0": 3.146053534107975,
+        "20.0": 2.9406760779623435
+      },
+      "intercept": 3.8283026757346446,
+      "points": 5,
+      "r_squared": 0.9913646741141696,
+      "slope_per_log_token": -0.2962970374916928,
+      "through_step": 5000
+    }
   },
   "schema_version": 1,
   "summaries": {
     "e256": {
       "e128_paloma_macro": null,
       "e16_paloma_macro": null,
-      "elapsed_gpu_hours": 3.614192772151111,
-      "elapsed_run_seconds": 1626.386747468,
-      "evaluation_hook_count": 3,
+      "elapsed_gpu_hours": 6.777519921822222,
+      "elapsed_run_seconds": 3049.88396482,
+      "evaluation_hook_count": 5,
       "final_cross_entropy_loss": null,
-      "final_step": 3037,
-      "final_train_loss": 2.7755072116851807,
-      "full_paloma_macro": 3.8688981533050537,
-      "full_paloma_micro": 3.53558611869812,
-      "gpu_hours_per_billion_tokens": 3.8654976918116466,
+      "final_step": 5885,
+      "final_train_loss": 2.404906988143921,
+      "full_paloma_macro": 3.7321066856384277,
+      "full_paloma_micro": 3.404170274734497,
+      "gpu_hours_per_billion_tokens": 3.8678985426877768,
       "loading_stall_count_10s": 0,
-      "median_evaluation_hook_seconds": 26.98216107673943,
-      "median_loading_seconds": 8.13184306025505e-06,
-      "median_step_seconds": 0.45599266211502254,
-      "p90_loading_seconds": 1.1460157111287117e-05,
-      "p99_loading_seconds": 1.6552163287997246e-05,
+      "median_evaluation_hook_seconds": 26.915560154244304,
+      "median_loading_seconds": 8.381903171539307e-06,
+      "median_step_seconds": 0.45627587800845504,
+      "p90_loading_seconds": 1.170281320810318e-05,
+      "p99_loading_seconds": 1.65642611682415e-05,
       "run_name": "nest-augdk-e256-4b-r2",
       "runtime_forecasts": {
         "10.0": {
-          "gpu_hours": 38.65500462600392,
-          "optimizer_hours": 4.83187557825049,
+          "gpu_hours": 38.67901315197452,
+          "optimizer_hours": 4.834876643996815,
           "steps": 38147
         },
         "100.0": {
-          "gpu_hours": 386.5500462600392,
-          "optimizer_hours": 48.3187557825049,
+          "gpu_hours": 386.7901315197452,
+          "optimizer_hours": 48.34876643996815,
           "steps": 381470
         },
         "1000.0": {
-          "gpu_hours": 3865.4974226493114,
-          "optimizer_hours": 483.1871778311639,
+          "gpu_hours": 3867.898273358265,
+          "optimizer_hours": 483.48728416978315,
           "steps": 3814697
         },
         "20.0": {
-          "gpu_hours": 77.31000925200784,
-          "optimizer_hours": 9.66375115650098,
+          "gpu_hours": 77.35802630394905,
+          "optimizer_hours": 9.66975328799363,
           "steps": 76294
         }
       },
       "state": "running",
       "step_overhead_vs_e256": 0.0,
       "terminal_overflow": null,
-      "tokens_billions": 0.796393472,
-      "total_logged_hook_seconds": 133.5586421363987,
-      "total_logged_loading_seconds": 0.014450289774686098,
+      "tokens_billions": 1.542979584,
+      "total_logged_hook_seconds": 219.20685075083748,
+      "total_logged_loading_seconds": 0.03618593141436577,
       "url": "https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e256-4b-r2"
     },
     "fixed25": {
-      "e128_paloma_macro": 4.029014587402344,
-      "e16_paloma_macro": 4.173859119415283,
-      "elapsed_gpu_hours": 3.611078409304444,
-      "elapsed_run_seconds": 1624.985284187,
-      "evaluation_hook_count": 2,
+      "e128_paloma_macro": 3.8092989921569824,
+      "e16_paloma_macro": 3.9514589309692383,
+      "elapsed_gpu_hours": 6.778361052564445,
+      "elapsed_run_seconds": 3050.262473654,
+      "evaluation_hook_count": 5,
       "final_cross_entropy_loss": null,
-      "final_step": 2689,
-      "final_train_loss": 3.0727779865264893,
-      "full_paloma_macro": 3.9926822185516357,
-      "full_paloma_micro": 3.657707691192627,
-      "gpu_hours_per_billion_tokens": 3.911244951619134,
+      "final_step": 5100,
+      "final_train_loss": 2.4829354286193848,
+      "full_paloma_macro": 3.762340545654297,
+      "full_paloma_micro": 3.4316413402557373,
+      "gpu_hours_per_billion_tokens": 3.9137408967980667,
       "loading_stall_count_10s": 0,
-      "median_evaluation_hook_seconds": 93.72323218802921,
-      "median_loading_seconds": 9.601004421710968e-06,
-      "median_step_seconds": 0.46138922846876085,
-      "p90_loading_seconds": 1.2693693861365318e-05,
-      "p99_loading_seconds": 1.6887322999536974e-05,
+      "median_evaluation_hook_seconds": 80.20350791793317,
+      "median_loading_seconds": 9.78820025920868e-06,
+      "median_step_seconds": 0.4616836621426046,
+      "p90_loading_seconds": 1.2989435344934465e-05,
+      "p99_loading_seconds": 1.686315983533859e-05,
       "run_name": "nest-augdk-fixed25-4b-r2",
       "runtime_forecasts": {
         "10.0": {
-          "gpu_hours": 39.112477551995156,
-          "optimizer_hours": 4.889059693999394,
+          "gpu_hours": 39.13743702167542,
+          "optimizer_hours": 4.892179627709427,
           "steps": 38147
         },
         "100.0": {
-          "gpu_hours": 391.1247755199516,
-          "optimizer_hours": 48.89059693999395,
+          "gpu_hours": 391.3743702167542,
+          "optimizer_hours": 48.92179627709427,
           "steps": 381470
         },
         "1000.0": {
-          "gpu_hours": 3911.244679271326,
-          "optimizer_hours": 488.9055849089157,
+          "gpu_hours": 3913.7406242764605,
+          "optimizer_hours": 489.21757803455756,
           "steps": 3814697
         },
         "20.0": {
-          "gpu_hours": 78.22495510399031,
-          "optimizer_hours": 9.778119387998789,
+          "gpu_hours": 78.27487404335083,
+          "optimizer_hours": 9.784359255418854,
           "steps": 76294
         }
       },
       "state": "running",
-      "step_overhead_vs_e256": 0.011834765780456946,
+      "step_overhead_vs_e256": 0.011852005321327352,
       "terminal_overflow": null,
-      "tokens_billions": 0.70516736,
-      "total_logged_hook_seconds": 231.18562390422449,
-      "total_logged_loading_seconds": 0.016561166383326054,
+      "tokens_billions": 1.337196544,
+      "total_logged_hook_seconds": 511.4448401085101,
+      "total_logged_loading_seconds": 0.04132797662168741,
       "url": "https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-fixed25-4b-r2"
     }
   },
   "timing": {
     "e256": {
-      "block_bootstrap_ci95_high": 0.45663348655216396,
-      "block_bootstrap_ci95_low": 0.45471870293840766,
-      "median_step_seconds": 0.45599266211502254,
-      "p10_step_seconds": 0.4476860025897622,
-      "p90_step_seconds": 0.47369573055766523,
-      "samples": 1666
+      "block_bootstrap_ci95_high": 0.4565531213302165,
+      "block_bootstrap_ci95_low": 0.4558059918927029,
+      "median_step_seconds": 0.45627587800845504,
+      "p10_step_seconds": 0.4479062116704881,
+      "p90_step_seconds": 0.47478505270555615,
+      "samples": 4077
     },
     "fixed25": {
-      "block_bootstrap_ci95_high": 0.4626348139718175,
-      "block_bootstrap_ci95_low": 0.46022927458398044,
-      "median_step_seconds": 0.46138922846876085,
-      "p10_step_seconds": 0.4529652569908649,
-      "p90_step_seconds": 0.48009126423858106,
-      "samples": 1666
+      "block_bootstrap_ci95_high": 0.4619741190690547,
+      "block_bootstrap_ci95_low": 0.46121459640562534,
+      "median_step_seconds": 0.4616836621426046,
+      "p10_step_seconds": 0.45330360466614367,
+      "p90_step_seconds": 0.48081632759422066,
+      "samples": 4077
     }
   },
-  "timing_through_step": 2689,
+  "timing_through_step": 5100,
   "tokens_per_step": 262144
 }
