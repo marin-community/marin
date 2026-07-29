@@ -96,11 +96,16 @@ re-run with `--accept-tree-state`. Never pass that flag on your own initiative.
 cluster config, so they cannot drift: `defaults.inject_env` names, the CoreWeave
 S3 keys a Kubernetes deploy folds into the `iris-task-env` Secret, the
 kube-context, the signing-key references a Kubernetes deploy resolves in the
-operator shell, and `docker` / `gcloud` / `kubectl` on PATH.
+operator shell, `git` / `gcloud` / `kubectl` on PATH, and a working image
+toolchain — `docker info` and `docker buildx version` must both exit clean,
+because the deploy builds and pushes through buildx.
 
 If anything reports FAIL, **ask the operator for it and stop**. Do not invent a
-value, do not mint credentials, and do not skip the cluster. Three specific cases:
+value, do not mint credentials, and do not skip the cluster. Four specific cases:
 
+- A `docker info` or `docker buildx version` FAIL — the daemon is down or the
+  buildx plugin is absent. The restart would fail at image build, after the
+  operator approved the cluster. Ask them to start Docker.
 - `CW_KEY_ID` / `CW_KEY_SECRET` unset — ask the operator to export them.
 - A `gcp-secret://` signing key that does not resolve — the session lacks GCP
   credentials. Ask the operator to run `gcloud auth application-default login`.

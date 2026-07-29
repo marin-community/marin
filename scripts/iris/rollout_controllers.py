@@ -75,10 +75,16 @@ WATCH_INTERVAL = 30
 # the RPC cheap on a busy controller.
 JOB_COUNT_LIMIT = 500
 
+# Snapshot job-count keys. `compare` reads the first two by name, so they are named
+# constants rather than literals repeated at both ends.
+JOB_RUNNING = "running"
+JOB_PENDING = "pending"
+JOB_BUILDING = "building"
+
 WATCHED_JOB_STATES = (
-    ("running", job_pb2.JOB_STATE_RUNNING),
-    ("pending", job_pb2.JOB_STATE_PENDING),
-    ("building", job_pb2.JOB_STATE_BUILDING),
+    (JOB_RUNNING, job_pb2.JOB_STATE_RUNNING),
+    (JOB_PENDING, job_pb2.JOB_STATE_PENDING),
+    (JOB_BUILDING, job_pb2.JOB_STATE_BUILDING),
 )
 
 
@@ -218,14 +224,11 @@ def rollout_order(capacities: Mapping[str, int]) -> tuple[str, ...]:
 
 
 def parse_dirty_files(porcelain: str) -> tuple[str, ...]:
-    """Paths from `git status --porcelain`, which prefixes each with its status code.
-
-    Splits on the first run of whitespace rather than at a fixed column, so a line
-    whose leading status column was stripped still yields the whole path. Git quotes
-    a path that contains a space, so one split keeps it intact.
-    """
+    """Paths from `git status --porcelain`, which prefixes each with its status code."""
     paths = []
     for line in porcelain.splitlines():
+        # Split on whitespace, not at a fixed column: a caller that stripped the
+        # output loses the leading status space, and git quotes a path with spaces.
         fields = line.split(maxsplit=1)
         if len(fields) == 2:
             paths.append(fields[1])
@@ -448,9 +451,10 @@ def check_requirements(needs: Sequence[Requirement], *, environ: Mapping[str, st
 def compare(baseline: Snapshot, latest: Snapshot, *, expect_tree_hash: str = "") -> Verdict:
     """Judge a post-restart snapshot against its pre-restart baseline.
 
-    Concerns are the things that stop a rollout: an unreachable controller, a
-    version that is not the tree that was deployed, or workers and queues that
-    did not come back. Notes are context a human still wants to read.
+    Concerns stop a rollout: an unreachable controller, a version that is not the
+    tree that was deployed, or healthy workers that did not come back. Queue depth
+    and job counts move on their own as work arrives, so they are notes — context
+    a human reads at the gate, not a blocker.
     """
     concerns: list[str] = []
     notes: list[str] = []
@@ -468,11 +472,12 @@ def compare(baseline: Snapshot, latest: Snapshot, *, expect_tree_hash: str = "")
     if latest.workers_total and latest.workers_healthy < latest.workers_total:
         notes.append(f"{latest.workers_total - latest.workers_healthy} of {latest.workers_total} workers are unhealthy")
 
-    baseline_running = baseline.jobs.get("running", 0)
-    if latest.jobs.get("running", 0) < baseline_running:
-        notes.append(f"running jobs fell from {baseline_running} to {latest.jobs.get('running', 0)}")
-    baseline_pending = baseline.jobs.get("pending", 0)
-    latest_pending = latest.jobs.get("pending", 0)
+    baseline_running = baseline.jobs.get(JOB_RUNNING, 0)
+    latest_running = latest.jobs.get(JOB_RUNNING, 0)
+    if latest_running < baseline_running:
+        notes.append(f"running jobs fell from {baseline_running} to {latest_running}")
+    baseline_pending = baseline.jobs.get(JOB_PENDING, 0)
+    latest_pending = latest.jobs.get(JOB_PENDING, 0)
     if latest_pending > baseline_pending:
         notes.append(f"pending jobs grew from {baseline_pending} to {latest_pending}")
 
