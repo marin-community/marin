@@ -93,7 +93,7 @@ class HarborDefinition:
             return _DAYTONA_SECRET_ENV
         return MappingProxyType({})
 
-    def record_ref_for(self, config: ValidatedHarborConfig, task_limit: int | None) -> EvalRef:
+    def record_ref_for(self, config: ValidatedHarborConfig, runtime_task_limit: int | None) -> EvalRef:
         return EvalRef(
             name=self.name,
             mechanism="harbor",
@@ -102,7 +102,7 @@ class HarborDefinition:
                 version=config.record_revision,
                 agent=config.agent,
                 env=config.environment,
-                task_limit=task_limit,
+                task_limit=runtime_task_limit,
                 config_digest=config.digest,
             ),
         )
@@ -115,12 +115,12 @@ class HarborDefinition:
         self,
         config: ValidatedHarborConfig,
         model: ModelConfig,
-        task_limit: int | None,
+        runtime_task_limit: int | None,
     ) -> EvalExecutor:
         secret_env = self.secret_env_for(config)
         return HarborExecutor(
             config=config,
-            task_limit=task_limit,
+            task_limit=runtime_task_limit,
             model_agent_kwargs=model.agent.agent_kwargs,
             secret_env_keys=tuple(secret_env),
         )

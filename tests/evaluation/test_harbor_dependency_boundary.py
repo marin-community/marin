@@ -9,7 +9,7 @@ from pathlib import Path
 
 _ROOT = Path(__file__).parents[2]
 _EXTERNAL_DRIVER = _ROOT / "lib/marin/src/marin/evaluation/harbor/trial_driver.py"
-_EXTERNAL_MODULES = {"daytona", "harbor", "harbor_config", "upath"}
+_EXTERNAL_MODULES = frozenset({"daytona", "harbor", "harbor_config", "upath"})
 
 
 def _external_imports(path: Path) -> set[str]:

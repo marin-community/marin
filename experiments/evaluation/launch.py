@@ -183,14 +183,14 @@ def _preflight_definitions(
 
         config: ValidatedHarborConfig = next(validated_configs)
         validate_harbor_dataset_source(config)
-        task_limit = definition.max_eval_instances if limit is None else limit
+        runtime_task_limit = definition.max_eval_instances if limit is None else limit
         resolved.append(
             (
                 name,
                 _ResolvedDefinition(
-                    record_ref=definition.record_ref_for(config, task_limit),
+                    record_ref=definition.record_ref_for(config, runtime_task_limit),
                     runtime_descriptor=definition.runtime_descriptor,
-                    executor=definition.executor_for(config, model, task_limit),
+                    executor=definition.executor_for(config, model, runtime_task_limit),
                     secret_env=dict(definition.secret_env_for(config)),
                 ),
             )

@@ -11,4 +11,3 @@ agents:
 datasets:
   - name: aime
     version: "1.0"
-    n_tasks: 2

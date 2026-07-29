@@ -16,15 +16,9 @@ from typing import Any
 from marin.evaluation.eval_env import env_vars_from_keys
 from marin.external_dependencies import HARBOR
 
-_DEFAULT_MODEL_INFO = {
-    "max_input_tokens": 32768,
-    "max_output_tokens": 8192,
-    "input_cost_per_token": 0.0,
-    "output_cost_per_token": 0.0,
-}
-_HOSTED_VLLM_PROVIDER = "hosted_vllm"
 _TRIAL_DRIVER = Path(__file__).with_name("trial_driver.py")
 _DRIVER_PYTHONPATH = str(Path(__file__).parents[3])
+_DEFAULT_MAX_OUTPUT_TOKENS = 8192
 _DRIVER_SYSTEM_ENV_KEYS = (
     "CURL_CA_BUNDLE",
     "HOME",
@@ -95,8 +89,8 @@ class HarborRuntimeOverlay:
     model_agent_kwargs: Mapping[str, object]
 
 
-# These authoring dataclasses remain only for the registry policies not converted
-# in the first YAML migration. They are removed with that mechanical follow-up.
+# Issue #7746 removes these temporary authoring dataclasses after the remaining
+# eleven registry policies move to checked-in YAML.
 @dataclass(frozen=True)
 class HarborRetryConfig:
     max_retries: int = 0
@@ -120,7 +114,7 @@ class HarborEnvironmentConfig:
 @dataclass(frozen=True)
 class HarborAgentConfig:
     name: str
-    max_output_tokens: int = 8192
+    max_output_tokens: int = _DEFAULT_MAX_OUTPUT_TOKENS
     max_timeout: float | None = None
     setup_timeout: float | None = None
     kwargs: Mapping[str, Any] = field(default_factory=dict)
@@ -153,9 +147,8 @@ def legacy_harbor_policy_document(run: HarborRunConfig) -> dict[str, object]:
     configured_model_info = agent_kwargs.get("model_info")
     if configured_model_info is not None and not isinstance(configured_model_info, Mapping):
         raise ValueError("Harbor agent model_info must be a mapping")
-    if configured_model_info is not None or run.agent.max_output_tokens != _DEFAULT_MODEL_INFO["max_output_tokens"]:
+    if configured_model_info is not None or run.agent.max_output_tokens != _DEFAULT_MAX_OUTPUT_TOKENS:
         agent_kwargs["model_info"] = {
-            **_DEFAULT_MODEL_INFO,
             **(configured_model_info or {}),
             "max_output_tokens": run.agent.max_output_tokens,
         }
@@ -280,7 +273,7 @@ def _validated_config(payload: object, path: Path) -> ValidatedHarborConfig:
 def preflight_harbor_configs(
     requests: Sequence[tuple[Path, Mapping[str, object]]],
 ) -> tuple[ValidatedHarborConfig, ...]:
-    """Validate Harbor policies and placeholder effective jobs in one isolated process."""
+    """Validate Harbor policies and their placeholder effective jobs before launch."""
     if not requests:
         return ()
 
@@ -314,14 +307,6 @@ def preflight_harbor_configs(
             f"result(s) for {len(requests)} request(s)"
         )
     return tuple(_validated_config(payload, path) for payload, (path, _) in zip(response, requests, strict=True))
-
-
-def preflight_harbor_config(
-    path: Path,
-    model_agent_kwargs: Mapping[str, object],
-) -> ValidatedHarborConfig:
-    """Validate one Harbor policy and a placeholder effective job."""
-    return preflight_harbor_configs(((path, model_agent_kwargs),))[0]
 
 
 def run_harbor_driver(

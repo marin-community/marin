@@ -44,9 +44,6 @@ def _install_fake_harbor_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
     def preflight(requests):
         configs = []
         for path, _model_agent_kwargs in requests:
-            contents = path.read_text()
-            if contents.count("- name:") > 2 or "model_info: []" in contents:
-                raise ValueError(f"invalid Harbor config {path}")
             policy = json.dumps({"source": path.name}, separators=(",", ":"))
             configs.append(
                 ValidatedHarborConfig(
@@ -56,7 +53,7 @@ def _install_fake_harbor_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
                     dataset_selector="aime",
                     dataset_revision="1.0",
                     config_dir=path.parent,
-                    agent="opencode" if "opencode" in contents else "terminus-2",
+                    agent="opencode",
                     environment="daytona",
                 )
             )
@@ -386,29 +383,23 @@ def test_build_evaluation_batch_combines_registry_and_file_harbor_configs(tmp_pa
     assert captured["overlay"].model_agent_kwargs["extra_body"] == ('{"chat_template_kwargs":{"enable_thinking":true}}')
 
 
-@pytest.mark.parametrize(
-    "agents",
-    [
-        """  - name: terminus-2
-  - name: opencode""",
-        """  - name: opencode
-    kwargs:
-      model_info: []""",
-    ],
-)
-def test_launch_rejects_incompatible_harbor_config_before_iris_submission(tmp_path, monkeypatch, agents):
-    _install_fake_harbor_preflight(monkeypatch)
+def test_launch_rejects_incompatible_harbor_config_before_iris_submission(tmp_path, monkeypatch):
     config_path = _write_harbor_config(
         tmp_path / "incompatible.yaml",
-        agents=agents,
+        agents="""  - name: terminus-2
+  - name: opencode""",
     )
     iris_opened = False
+
+    def reject_preflight(_requests):
+        raise ValueError("Harbor config must declare exactly one agent")
 
     def open_iris_client(**_kwargs):
         nonlocal iris_opened
         iris_opened = True
         raise AssertionError("Iris must not be opened for an incompatible Harbor config")
 
+    monkeypatch.setattr("experiments.evaluation.launch.preflight_harbor_configs", reject_preflight)
     monkeypatch.setattr("experiments.evaluation.cli.open_iris_client", open_iris_client)
 
     result = CliRunner().invoke(

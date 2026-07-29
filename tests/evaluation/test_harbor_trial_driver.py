@@ -89,17 +89,14 @@ def checked_policies(tmp_path_factory):
 def test_preflight_digest_is_stable_across_hash_seeds(tmp_path, checked_policies):
     path = _POLICIES / "grug-opencode-id.yaml"
 
-    seeded = [
-        json.loads(_preflight(tmp_path, [(path, {})], hash_seed=seed).stdout)[0]
-        for seed in ("1", "8675309")
-    ]
+    seeded = [json.loads(_preflight(tmp_path, [(path, {})], hash_seed=seed).stdout)[0] for seed in ("1", "8675309")]
 
     expected = checked_policies[path.name]
     assert all(result["stable_policy_json"] == expected["stable_policy_json"] for result in seeded)
     assert all(result["digest"] == expected["digest"] for result in seeded)
 
 
-def test_checked_yaml_matches_the_staged_python_policies(tmp_path, checked_policies):
+def test_yaml_policy_identity_matches_catalog_authoring(tmp_path, checked_policies):
     aime = HarborRunConfig(
         dataset="aime",
         revision="1.0",
@@ -270,4 +267,6 @@ def test_preflight_rejects_malformed_effective_provider_kwargs(tmp_path):
     completed = _preflight(tmp_path, [(path, {"model_info": []})], check=False)
 
     assert completed.returncode == 2
-    assert "model_info must be a mapping" in completed.stderr
+    assert completed.stdout == ""
+    assert "https://errors.pydantic.dev" not in completed.stderr
+    assert "input_value" not in completed.stderr

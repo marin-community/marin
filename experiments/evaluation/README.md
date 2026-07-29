@@ -107,7 +107,8 @@ Use `--harbor-config` to launch a Harbor `JobConfig` without adding it to `EVALS
 uv run python -m experiments.evaluation.cli launch \
   --model qwen3-8b \
   --evals gsm8k-smoke \
-  --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml
+  --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml \
+  --limit 2
 ```
 
 `--harbor-config` is repeatable and additive with `--evals`, so one served model can run registry
@@ -131,8 +132,9 @@ file extensions fail before Iris submission.
 
 Harbor and `harbor_config` are absent from Marin's environment and root lock. Both preflight and execution
 install the exact `marin.external_dependencies.HARBOR` revision in an isolated uv environment. Every
-Harbor record stores the deterministic source-policy digest in `eval.harbor.config_digest` and the
-effective runtime task cap in `eval.harbor.task_limit`.
+Harbor record stores the deterministic source-policy digest in `eval.harbor.config_digest` and any
+Marin runtime task cap in `eval.harbor.task_limit`. A policy's own `n_tasks` remains represented by
+the digest.
 
 Daytona-backed definitions declare one experiment-owned credential specification. A launch first
 uses `DAYTONA_API_KEY` from its environment, then falls back to the `DAYTONA_EVAL_API_KEY` secret in

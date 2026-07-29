@@ -10,8 +10,10 @@ import json
 import os
 import sys
 from collections.abc import Mapping
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import yaml
@@ -33,12 +35,14 @@ _STABLE_JOBS_DIR = "/__marin_jobs__"
 _STABLE_MODEL = "__marin_model__"
 _STABLE_ENDPOINT = "http://marin.invalid/v1"
 _PLACEHOLDER_DATASET_PATH = "/__marin_dataset__"
-_DEFAULT_MODEL_INFO = {
-    "max_input_tokens": 32768,
-    "max_output_tokens": 8192,
-    "input_cost_per_token": 0.0,
-    "output_cost_per_token": 0.0,
-}
+_DEFAULT_MODEL_INFO = MappingProxyType(
+    {
+        "max_input_tokens": 32768,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+    }
+)
 
 
 class RuntimeOverlay(BaseModel):
@@ -51,6 +55,13 @@ class RuntimeOverlay(BaseModel):
     served_model: str
     task_limit: int | None
     model_agent_kwargs: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class _DatasetMetadata:
+    kind: str
+    selector: str
+    revision: str | None
 
 
 def _document(path: Path) -> Mapping[str, object]:
@@ -123,13 +134,13 @@ def _raw_dataset_path(document: Mapping[str, object]) -> object:
 def _dataset_metadata(
     dataset: DatasetConfig,
     raw_path: object,
-) -> tuple[str, str, str | None]:
+) -> _DatasetMetadata:
     if isinstance(raw_path, str) and raw_path.startswith("hf://"):
         raise ValueError("Harbor hf:// sources must use datasets[].name, not datasets[].path")
     if dataset.path is not None:
         if dataset.path.is_absolute():
             raise ValueError("Harbor local dataset paths must be relative to the config file")
-        return "local", str(dataset.path), None
+        return _DatasetMetadata("local", str(dataset.path), None)
 
     assert dataset.name is not None
     revision = dataset.ref or dataset.version
@@ -140,8 +151,8 @@ def _dataset_metadata(
             raise ValueError("Harbor hf:// dataset names must identify an org/repository")
         if dataset.version is not None:
             raise ValueError("Harbor hf:// datasets must use ref for their revision")
-        return "hugging_face", selector, revision
-    return "harbor_registry", dataset.name, revision
+        return _DatasetMetadata("hugging_face", selector, revision)
+    return _DatasetMetadata("harbor_registry", dataset.name, revision)
 
 
 def _model_info(value: object) -> dict[str, Any]:
@@ -297,11 +308,11 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
     assert isinstance(dataset, DatasetConfig)
     agent_name = _validate_agent(agent)
     environment_name = _validate_environment(config)
-    dataset_kind, dataset_selector, dataset_revision = _dataset_metadata(dataset, _raw_dataset_path(document))
+    dataset_metadata = _dataset_metadata(dataset, _raw_dataset_path(document))
 
     stable_config = _stable_config(config)
     stable_policy_json = _stable_policy_json(stable_config)
-    placeholder_dataset_path = None if dataset_kind == "harbor_registry" else _PLACEHOLDER_DATASET_PATH
+    placeholder_dataset_path = None if dataset_metadata.kind == "harbor_registry" else _PLACEHOLDER_DATASET_PATH
     _effective_config(
         stable_config,
         RuntimeOverlay(
@@ -317,9 +328,9 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
     return {
         "stable_policy_json": stable_policy_json,
         "digest": f"sha256:{hashlib.sha256(stable_policy_json.encode()).hexdigest()}",
-        "dataset_kind": dataset_kind,
-        "dataset_selector": dataset_selector,
-        "dataset_revision": dataset_revision,
+        "dataset_kind": dataset_metadata.kind,
+        "dataset_selector": dataset_metadata.selector,
+        "dataset_revision": dataset_metadata.revision,
         "agent": agent_name,
         "environment": environment_name,
     }

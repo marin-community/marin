@@ -70,7 +70,11 @@ class HarborRef(BaseModel):
     version: str
     agent: str
     env: str
-    task_limit: int | None = Field(default=None, exclude_if=lambda value: value is None)
+    task_limit: int | None = Field(
+        default=None,
+        description="Marin runtime task cap; source-policy n_tasks remains part of config_digest",
+        exclude_if=lambda value: value is None,
+    )
     config_digest: str | None = Field(
         default=None,
         pattern=r"^sha256:[0-9a-f]{64}$",

@@ -45,12 +45,14 @@ Launch a Harbor `JobConfig` without adding it to the catalog:
 uv run python -m experiments.evaluation.cli launch \
   --model qwen3-8b \
   --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml \
+  --limit 2 \
   --dry-run
 
-# Serve the model and run the checked-in two-task policy.
+# Serve the model and run the checked-in policy with a two-task cap.
 uv run python -m experiments.evaluation.cli launch \
   --model qwen3-8b \
-  --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml
+  --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml \
+  --limit 2
 ```
 
 `--harbor-config` is repeatable and additive with `--evals`. All selected built-in and supplied
@@ -140,4 +142,5 @@ Each Harbor evaluation writes:
 Every completed trial becomes an agentic `EvalSample`. The verifier reward is stored as
 `Grading(method="harbor:verifier")`, and the trajectory is referenced by `trajectory_uri`. Evaldash
 ingests the record and sample parquet in the same way as Evalchemy runs. `record.json` stores the
-deterministic source-policy digest and the effective runtime task limit.
+deterministic source-policy digest and any Marin runtime task cap. A source policy's own `n_tasks`
+remains part of the policy digest.
