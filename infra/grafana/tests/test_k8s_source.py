@@ -661,13 +661,57 @@ def test_arch_mismatch_reports_exec_format_failures_on_a_non_amd64_node():
     assert row["exit_code"] == 255
 
 
-def test_arch_mismatch_ignores_the_same_failure_on_an_amd64_node():
-    # An amd64 image on an amd64 CPU node is correct; only the arm64 side is broken.
+def test_arch_mismatch_reports_an_arm64_image_stranded_on_an_amd64_node():
+    # The mismatch runs both ways: an arm64-only push breaks the amd64 CPU nodes.
     routes = _arch_routes(
         [_exec_format_pod("task-0", node_name="cpu-a")],
         nodes=[node("cpu-a", arch="amd64")],
     )
-    assert make_k8s_source(k8s_api(routes)).arch_mismatch_containers() == []
+    (row,) = make_k8s_source(k8s_api(routes)).arch_mismatch_containers()
+    assert row["node_arch"] == "amd64"
+
+
+def test_arch_mismatch_matches_the_recorded_incident_termination():
+    # Verbatim from iris-held-hero-run-4 stage-workdir on s4bk6j84, 2026-07-29, with
+    # the timestamps moved into the lookback window. Note the absent message field:
+    # terminationMessagePolicy is File, which is why detection cannot read the text.
+    stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    incident = {
+        "metadata": {"namespace": "iris", "name": "iris-held-hero-run-4-code-glm52-ro-702515a5-68"},
+        "spec": {"nodeName": "gpu-a"},
+        "status": {
+            "phase": "Failed",
+            "initContainerStatuses": [
+                {
+                    "name": "stage-workdir",
+                    "image": TASK_IMAGE,
+                    "state": {
+                        "terminated": {
+                            "containerID": (
+                                "containerd://0ac499e38fd7324dc14a7f16e78a9a681ce961f52064efad4b9c53329a5655eb"
+                            ),
+                            "exitCode": 255,
+                            "reason": "Error",
+                            "startedAt": stamp,
+                            "finishedAt": stamp,
+                        }
+                    },
+                }
+            ],
+        },
+    }
+    (row,) = make_k8s_source(k8s_api(_arch_routes([incident]))).arch_mismatch_containers()
+    assert row["container"] == "stage-workdir"
+    assert row["image"] == TASK_IMAGE
+
+
+def test_arch_mismatch_also_matches_an_unrelated_instant_exit_255():
+    # Known limit of the signature, not a bug: the API exposes no message to
+    # distinguish these, so an unrelated instant 255 reads the same. The alert text
+    # and lib/iris/OPS.md both say a row is evidence to confirm, not a proof.
+    routes = _arch_routes([_exec_format_pod("unrelated", image="ghcr.io/example/other:v1")])
+    (row,) = make_k8s_source(k8s_api(routes)).arch_mismatch_containers()
+    assert row["image"] == "ghcr.io/example/other:v1"
 
 
 @pytest.mark.parametrize(
@@ -691,7 +735,6 @@ def test_arch_mismatch_reads_last_state_for_a_restarting_container():
 
 
 def test_arch_mismatch_skips_pods_on_a_node_the_scan_cannot_resolve():
-    # An unscheduled pod has no nodeName, so there is no architecture to judge it against.
     routes = _arch_routes([_exec_format_pod("task-0", node_name="")])
     assert make_k8s_source(k8s_api(routes)).arch_mismatch_containers() == []
 
@@ -715,7 +758,6 @@ def test_alert_arch_mismatch_groups_by_node_and_image_with_zero_rows_elsewhere()
 
 
 def test_alert_arch_mismatch_reports_zero_for_an_unreachable_cluster():
-    # Absence of evidence is not evidence of a mismatch; K8sClusterUnreachable pages instead.
     fleet = _fleet(("cw-a", _forbidden))
     assert fleet.alert_arch_mismatch() == [{"cluster": "cw-a", "node": "", "image": "", "value": 0}]
 

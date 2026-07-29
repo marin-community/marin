@@ -84,22 +84,22 @@ _GB200_INSTANCE_TYPE_SUBSTRING = "gb200"
 # Container waiting reasons the crashloop rows report.
 BACKOFF_REASONS = ("CrashLoopBackOff", "ImagePullBackOff")
 
-# An image built for the wrong CPU architecture fails at exec, not at pull: the
-# kubelet starts the container and the runtime immediately reports
-# "exec format error". Kubernetes surfaces no distinct reason for it, so the
-# arch-mismatch scan matches the runtime's observable signature instead — the
-# container exits 255 with reason Error in under a second. Exit 255 is otherwise
-# unused across the fleet (a Python fault exits 1), and pairing it with a
-# sub-second runtime keeps a genuine 255 from a long-running job out of the rows.
+# An image built for the wrong CPU architecture fails at exec, not at pull, and the
+# kubelet records no distinct reason for it: the runtime's "exec format error" reaches
+# the pod log but not the API. terminationMessagePolicy is File by default, so the
+# termination record carries no message either — 28 of 4834 terminated records on
+# cw-us-east-08a had one, and the record from the 2026-07-29 incident did not.
 #
-# The scan reports a hit only on a node whose architecture is not amd64, because
-# an amd64 image on an amd64 node is correct. On CoreWeave that means the arm64
-# GB200 nodes: they run the same iris-task image tag as the amd64 CPU nodes, so a
-# tag that loses its arm64 manifest breaks only the GPU side of the fleet.
+# The scan therefore matches the runtime's observable signature: exit 255, reason
+# Error, and a sub-second runtime. This is indirect. Any program that exits 255
+# immediately matches too, so a row means "a container died the way an arch mismatch
+# dies", not "the image is provably the wrong architecture". Measured against
+# cw-us-east-08a the signature matched 0 of 11182 container statuses across all 208
+# nodes, and it matches the incident record. lib/iris/OPS.md carries the procedure
+# for confirming an actual mismatch.
 EXEC_FORMAT_EXIT_CODE = 255
 EXEC_FORMAT_MAX_RUNTIME_SECONDS = 1
 _EXEC_FORMAT_REASON = "Error"
-_HOST_ARCH_AMD64 = "amd64"
 
 # How far back a terminated container still counts as evidence. Failed pods linger
 # until garbage collection, so without a window one morning's bad image would keep
@@ -565,7 +565,6 @@ class K8sSource:
         return rows
 
     def node_architectures(self) -> dict[str, str]:
-        """Map node name to its reported CPU architecture (``arm64``, ``amd64``)."""
         architectures = {}
         for node in self._list("/api/v1/nodes"):
             name = (node.get("metadata") or {}).get("name")
@@ -575,20 +574,14 @@ class K8sSource:
         return architectures
 
     def arch_mismatch_containers(self) -> list[dict]:
-        """One row per container that died of an exec-format failure on a non-amd64 node.
-
-        Detection is the runtime signature described at EXEC_FORMAT_EXIT_CODE, scoped
-        to containers that finished inside ARCH_MISMATCH_LOOKBACK_SECONDS. Both the
-        current and previous termination are checked, so a restarting container still
-        reports while its newest state is Waiting. Most recent first.
-        """
+        """One row per container matching the exec-format signature, most recent first."""
         architectures = self.node_architectures()
         rows = []
         for pod in self._scan_pods(None):
             metadata = pod.get("metadata") or {}
             node_name = (pod.get("spec") or {}).get("nodeName") or ""
             node_arch = architectures.get(node_name, "")
-            if not node_arch or node_arch == _HOST_ARCH_AMD64:
+            if not node_arch:
                 continue
             for status in _container_statuses(pod):
                 terminated = _exec_format_termination(status)
@@ -1072,12 +1065,7 @@ class K8sFleet:
         return self._fan_out(deadlocks, lambda _err: [{"node": "", "reason": "", "value": 0}])
 
     def _counts_with_zero_rows(self, counts: dict[tuple[str, ...], int], labels: Sequence[str]) -> list[dict]:
-        """Turn counts keyed by ``(cluster, *labels)`` into alert rows, zero-filling clean clusters.
-
-        Every cluster keeps at least one row so the rule's NoData state stays
-        unreachable, and a cluster with no qualifying evidence reads as zero rather
-        than as a gap.
-        """
+        """Project counts keyed by ``(cluster, *labels)``, keeping one row per cluster so NoData stays unreachable."""
         rows = [
             {"cluster": key[0], **dict(zip(labels, key[1:], strict=True)), "value": count}
             for key, count in sorted(counts.items())
@@ -1091,12 +1079,7 @@ class K8sFleet:
         return rows
 
     def alert_arch_mismatch(self, rows: Sequence[dict] | None = None) -> list[dict]:
-        """Per cluster, node, and image: failed-container count, with zero rows where clean.
-
-        An unreachable cluster contributes its zero row like the other pod-scan alert
-        routes: absence of evidence is not evidence of a mismatch, and
-        K8sClusterUnreachable already pages for the unreachability itself.
-        """
+        """Per cluster, node, and image: matching-container count, zero where clean or unreachable."""
         scanned = list(rows) if rows is not None else self.arch_mismatch_containers()
         counts: dict[tuple[str, ...], int] = {}
         for row in scanned:

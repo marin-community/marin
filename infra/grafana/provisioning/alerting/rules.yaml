@@ -261,13 +261,13 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "{{ $labels.cluster }}: {{ $labels.image }} is built for the wrong CPU architecture for node {{ $labels.node }}"
+          summary: "{{ $labels.cluster }}: containers from {{ $labels.image }} died instantly on {{ $labels.node }}"
           description: >-
-            Containers on this node exited 255 immediately, the runtime's signature for
-            "exec format error" — an amd64 image on an arm64 GPU node. The image tag has
-            probably lost its arm64 manifest, or the node holds a stale amd64 copy that
-            imagePullPolicy IfNotPresent will never refresh.
-          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md
+            Containers exited 255 in under a second, which is how an image built for the
+            wrong CPU architecture fails. Kubernetes exposes no termination message for it,
+            so this signature is indirect: confirm the tag's manifest and the node's cached
+            copy before acting. The runbook has the commands.
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md#image-architecture-mismatch
         data:
           - refId: A
             relativeTimeRange: { from: 300, to: 0 }

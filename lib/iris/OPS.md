@@ -518,6 +518,51 @@ subpath and does not reach the controller's finelog server.
 | Task retrying | `iris job summary /user/job` — per-task state and exit codes; `iris job logs /user/job` for the per-attempt errors. |
 | Task failed with exit 137 / suspected OOM | `iris job summary /user/job` — per-task peak memory + exit code. If most shards peak near the container memory limit, raise `--memory` on resubmit. |
 | Dashboard unreachable | Verify tunnel is alive. `curl -sf http://localhost:10000/health`. |
+| `ArchMismatchImageExecuted` alert, or tasks die instantly with exit 255 | See [Image architecture mismatch](#image-architecture-mismatch). |
+
+### Image architecture mismatch
+
+An image built for the wrong CPU architecture fails at exec. The pod log shows
+`exec /usr/local/bin/python: exec format error` and the container exits 255 in under a
+second. The `ArchMismatchImageExecuted` alert matches that signature, which is indirect:
+any program exiting 255 immediately looks the same, so confirm before acting.
+
+Confirm the tag really lost the architecture. A multi-arch tag is an index listing every
+platform:
+
+```bash
+TOK=$(curl -s "https://ghcr.io/token?scope=repository%3Amarin-community%2Firis-task%3Apull&service=ghcr.io" \
+  | python3 -c "import json,sys; print(json.load(sys.stdin)['token'])")
+curl -s -H "Authorization: Bearer $TOK" \
+  -H "Accept: application/vnd.oci.image.index.v1+json" \
+  https://ghcr.io/v2/marin-community/iris-task/manifests/latest \
+  | python3 -c "import json,sys; d=json.load(sys.stdin); print([m.get('platform') for m in d.get('manifests',[])] or 'SINGLE-ARCH')"
+```
+
+A `platform: unknown` entry is buildx provenance, not a real architecture. If `linux/arm64`
+is missing, the tag itself is broken — rebuild and push a two-platform index before
+touching any node. Evicting first only re-pulls the same broken image.
+
+Then check what the node actually cached, since `imagePullPolicy: IfNotPresent` means a
+node never refreshes a tag it already holds:
+
+```bash
+kubectl --context <ctx> -n iris debug node/<node> --image=busybox --profile=sysadmin \
+  --attach=false -- chroot /host crictl inspecti ghcr.io/marin-community/iris-task:latest
+```
+
+Once the registry is confirmed good, drop the stale copy so the node re-pulls:
+
+```bash
+kubectl --context <ctx> -n iris debug node/<node> --image=busybox --profile=sysadmin \
+  --attach=false -- chroot /host crictl rmi ghcr.io/marin-community/iris-task:latest
+```
+
+Do not evict a node whose cached image still works unless the registry tag is confirmed
+good. On 2026-07-29 the only arm64 builds left in ghcr were the ones cached on the nodes;
+the tag had been overwritten with an amd64-only manifest, so an eviction would have been
+unrecoverable. Pinning the config to an index digest avoids both the drift and the
+overwrite.
 
 ## GCP (TPU) Operations
 
