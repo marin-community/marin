@@ -48,6 +48,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.local import _moe_mlp_local
 from levanter.grug.sharding import (
+    _batch_spec,
     _batch_spec_from_x,
     _current_mesh,
     _mesh_axis_size,
@@ -199,6 +200,16 @@ def moe_mlp(
     batch_spec = _batch_spec_from_x(x, mesh)
 
     if has_expert_axis and expert_axis_size > 1:
+        # EP requires the batch to be sharded over "expert": each shard must own only its
+        # 1/expert_axis_size slice of the tokens, because the dispatch/combine buffers are
+        # sized from x_local.shape[0] (recv_capacity = capacity_factor * tokens_local * topk).
+        # _batch_spec_from_x adopts x's incoming spec, which may be the expert-less
+        # P(("replica_dcn", "data")) (Pbatch). Under shard_map that hands every expert shard
+        # the full batch, inflating every dispatch buffer by expert_axis_size -- a silent 64x
+        # blowup at EP64 (320 GiB instead of 5 GiB) that surfaces only as an OOM. Force the
+        # canonical batch spec, which names "expert"; the _reshard_for_shard_map calls below
+        # then move all three batch inputs onto it.
+        batch_spec = _batch_spec(mesh)
         if resolved_implementation not in _EP_MOE_IMPLEMENTATIONS:
             raise ValueError(
                 "Local MoE implementations do not yet support expert-parallel collectives; adding EP support "
