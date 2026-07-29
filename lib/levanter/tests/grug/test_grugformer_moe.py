@@ -13,7 +13,11 @@ from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionS
 from haliax.nn.ragged_dot import ragged_dot
 
 import levanter.grug.grug_moe as grug_moe
-from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispatch_indices_with_assignment_ids
+from levanter.grug._moe.common import (
+    _chunk_capacity_drops,
+    _prepare_moe_dispatch,
+    _prepare_moe_dispatch_indices_with_assignment_ids,
+)
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
@@ -862,3 +866,38 @@ def test_ragged_a2a_receiver_clipping_respects_capacity():
         ),
     )
     assert int(jnp.sum(clipped)) < int(jnp.sum(group_sizes))
+
+
+def _unprocessed_chunk_assignments(group_sizes: np.ndarray, chunk_sizes: tuple[int, ...]) -> int:
+    cumulative_sizes = np.concatenate([[0], np.cumsum(group_sizes)])
+    expert_boundaries = np.concatenate([[0], np.cumsum(chunk_sizes)])
+    total_assignments = int(group_sizes.sum())
+    processed: set[int] = set()
+    for chunk, size in enumerate(chunk_sizes):
+        start = int(cumulative_sizes[expert_boundaries[chunk]])
+        stop = int(cumulative_sizes[expert_boundaries[chunk + 1]])
+        capacity = total_assignments * size // len(group_sizes)
+        processed.update(range(start, min(stop, start + capacity)))
+    return total_assignments - len(processed)
+
+
+@pytest.mark.parametrize(
+    "group_sizes,chunk_sizes",
+    [
+        (np.array([4, 4, 4, 4], dtype=np.int32), (2, 2)),
+        (np.array([9, 5, 1, 1], dtype=np.int32), (2, 2)),
+        (np.array([1, 1, 1, 13], dtype=np.int32), (3, 1)),
+        (np.array([0, 0, 0, 16], dtype=np.int32), (2, 2)),
+    ],
+)
+def test_chunk_capacity_drops_matches_unprocessed_sorted_rows(group_sizes, chunk_sizes):
+    cumulative_sizes = jnp.concatenate(
+        [jnp.zeros((1,), jnp.int32), jnp.cumsum(jnp.asarray(group_sizes)).astype(jnp.int32)]
+    )
+    bounds = np.concatenate([[0], np.cumsum(chunk_sizes)]).tolist()
+    total_assignments = int(group_sizes.sum())
+    capacities = [total_assignments * size // len(group_sizes) for size in chunk_sizes]
+
+    dropped = int(_chunk_capacity_drops(cumulative_sizes, bounds, capacities))
+
+    assert dropped == _unprocessed_chunk_assignments(group_sizes, chunk_sizes)

@@ -21,6 +21,7 @@ from jaxtyping import Array, Float, Int
 from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_DISPATCH_OUTPUT,
+    _chunk_capacity_drops,
     _prepare_moe_dispatch,
     _zero_dropped_assignments,
 )
@@ -196,4 +197,4 @@ def _moe_mlp_local_sonic_cute_chunked(
             )
         with jax.named_scope("scatter_chunk"):
             out = out.at[token_seg].add(out_dispatch * w_seg[:, None], mode="drop")
-    return out, _zero_dropped_assignments()
+    return out, _chunk_capacity_drops(cu, bounds, caps)
