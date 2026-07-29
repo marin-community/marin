@@ -24,6 +24,7 @@ from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import select
 
+from ._test_support import set_task_state_for_test
 from .conftest import (
     inject_device_constraints,
     make_controller_state,
@@ -219,6 +220,12 @@ def test_child_stores_the_inherited_band_on_both_rows():
         }
 
 
+def _activate_job(state, job_id: JobName) -> None:
+    """Move a job's tasks to RUNNING; ``compute_user_spend`` only reads active rows."""
+    for row in query_tasks_for_job(state, job_id):
+        set_task_state_for_test(state, row.task_id, job_pb2.TASK_STATE_RUNNING)
+
+
 def test_batch_childs_spend_does_not_count_against_the_budget():
     """A child of a BATCH job is excluded from user spend, like its parent."""
     with make_controller_state() as state:
@@ -227,10 +234,17 @@ def test_batch_childs_spend_does_not_count_against_the_budget():
             name="/alice/parent-batch", cpu=1, replicas=1, priority_band=job_pb2.PRIORITY_BAND_BATCH
         )
         submit_job(state, "/alice/parent-batch", parent_req)
-        _submit_child(state, parent_id, parent_req)
+        child_id = _submit_child(state, parent_id, parent_req)
+        _activate_job(state, parent_id)
+        _activate_job(state, child_id)
+
+        # Bob's INTERACTIVE job is the control: it proves the spend query sees
+        # active tasks at all, so alice's absence is exclusion and not an empty read.
+        _submit_user_job(state, "bob", "interactive-job", band=job_pb2.PRIORITY_BAND_INTERACTIVE)
+        _activate_job(state, JobName.root("bob", "interactive-job"))
 
         with state._db.read_snapshot() as snap:
-            assert compute_user_spend(snap) == {}
+            assert compute_user_spend(snap).keys() == {"bob"}
 
 
 def test_submit_does_not_create_user_budgets_row():
