@@ -172,22 +172,24 @@ decision, not something to infer from a cluster read.
 |---|---|---|
 | `v6e` | 32, 64, 128, 256 | europe-west4, us-east1, us-east5 |
 | `v5litepod` (v5e) | 32, 64, 128, 256 | europe-west4, us-west4 |
-| `v5p` | 64, 128, 256, 512 | us-east5 (us-central1 unseeded) |
+| `v5p` | 32, 64, 128, 256, 512 | us-east5 (us-central1 unseeded) |
 
-`v5litepod-N` counts chips; `v5p-N` counts cores, so `v5p-64` is 32 chips and
-`v5p-512` is 256. v5p is **low priority**: carry a probe or two when v5p capacity
-looks reachable, but do not rotate the fleet onto it or displace a v6e/v5e target
-that is placing. us-central1 is the other v5p region and stays out of the grid —
-placing there needs a full seeding and data-staging pass first, which is an
-operator decision, not a recovery action.
+`v5litepod-N` counts chips; `v5p-N` counts cores, so `v5p-32` is 16 chips and
+`v5p-512` is 256. v5p is a peer family ranked by grants like any other, not a
+probe-only exception. us-central1 is the other v5p region and stays out of the
+grid — placing there needs a full seeding and data-staging pass first, which is
+an operator decision, not a recovery action.
 
-**32 chips is the floor.** Below it a bs128 trial needs per-device parallelism
-above 4 and the calibrator starts trading throughput for gradient accumulation.
-256 is the ceiling.
+**32 chips is the floor for v5e and v6e**, and 256 is the ceiling everywhere.
+Below 32 a bs128 trial needs per-device parallelism above 4 and the calibrator
+starts trading throughput for gradient accumulation. **v5p reaches 16 chips**
+(`v5p-32`): its per-chip HBM absorbs that parallelism, and 16-chip v5p is often
+the most schedulable target on the fleet.
 
 So four regions are placeable: **europe-west4** serves v6e and v5e, **us-east1**
-serves v6e, **us-east5** serves v6e and (low priority) v5p, **us-west4** serves
-v5e only.
+serves v6e, **us-east5** serves v6e and v5p, **us-west4** serves v5e only. A
+region's families and sizes are both placement candidates — if a family is
+listed for a region, placement must be able to choose it.
 Enabled families are peers — rank targets by observed throughput and scheduling
 outcomes, never by a static family preference. Diversify initial targets across
 regions and, when practical, families, so one capacity failure mode cannot stall

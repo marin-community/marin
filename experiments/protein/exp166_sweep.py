@@ -306,9 +306,14 @@ def smoke_steps() -> int:
 def validate_tpu(tpu: str, *, allow_smaller: bool = False) -> None:
     """Enforce the slice-size floor while allowing every region.
 
-    The floor is 32 chips across all families. Below that a bs128 trial needs
+    The floor is 32 chips for v5e and v6e. Below that a bs128 trial needs
     per-device parallelism above 4 and the calibrator starts spending memory on
     gradient accumulation instead of throughput.
+
+    v5p goes down to 16 chips (`v5p-32`, since v5p names cores). Its per-chip
+    HBM is far larger, so the parallelism that forces accumulation on a 16-chip
+    v6e slice still fits here, and 16-chip v5p is often the most schedulable
+    thing on the fleet.
     """
     family = tpu_family(tpu)
     chips = get_tpu_topology(tpu).chip_count
@@ -316,10 +321,10 @@ def validate_tpu(tpu: str, *, allow_smaller: bool = False) -> None:
         return
     if family in {"v5e", "v6e"} and 32 <= chips <= 256:
         return
-    if family == "v5p" and chips >= 32:
+    if family == "v5p" and 16 <= chips <= 256:
         return
     message = f"unsupported TPU {tpu!r} ({family=}, {chips=}): "
-    message += "use 32-256 chip v5e/v6e or v5p-64+ (at least 32 chips)"
+    message += "use 32-256 chip v5e/v6e or 16-256 chip v5p (v5p-32 to v5p-512)"
     raise SystemExit(message)
 
 
