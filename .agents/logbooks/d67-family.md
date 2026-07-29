@@ -396,3 +396,42 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
 - The child admitted immediately. Iris SQL records priority band 1 on both job configs, the parent task, and all 16 child tasks.
 - All ranks reached the intended 350-step control setup. The logger confirmed 34,429,992,960 analytic FLOPs/token, 2.5 PFLOP/s theoretical BF16 per GB200, and 1.6e17 FLOP/s aggregate across 64 devices.
 - r6 is now entering first-step compilation. The recovery gate remains open until it emits a finite loss/drop metric.
+
+### 2026-07-28 19:32 PDT - D67-CTL-01 r6 repeats the identical-placement stall
+
+- r6 remained on attempt 0 without any `json_logger` step through 19:31 PDT, 30 minutes after child creation. Task 0's GPUs were fully utilized, but no local or retained metric appeared.
+- Iris SQL showed that r6 reused all 16 r5 nodes exactly, including the same task-index-to-node mapping. This was a correlated retry on the suspect topology rather than a fresh placement.
+- Action: stopped exact parent `/mwittmann/d67-control-m3-draw1-r6-0728-1900` at 19:32 PDT. Iris confirmed parent and child `killed`. No step, loss, throughput, MFU, or drop metric was observed, so r6 is not an experimental draw.
+- Immediately after release, another production EP64 job occupied all 16 r5/r6 nodes. Do not touch that job. This natural churn prevents the next recovery request from reproducing the failed mapping.
+
+### 2026-07-28 19:33 PDT - D67-CTL-01 replacement r7 pre-registration
+
+- Prediction carried forward verbatim from 15:35 PDT, before any experimental result was observed: This draw reproduces the healthy m=3/cf1.0625 operating point. Predict about 321K tokens/s and 20.7% MFU, allowing ±4% tokens/s for placement (308–334K), with tail-100 drops 1.2–1.7%. Loss must remain finite and decline through step 349.
+- Planned parent job ID: `/mwittmann/d67-control-m3-draw1-r7-0728-1935`
+- Planned child job ID: `/mwittmann/d67-control-m3-draw1-r7-0728-1935/grug-train-d67-control-m3-draw1-r7-0728-1935`
+- Exact command:
+
+```bash
+IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
+  --cpu 2 --memory 3GB --extra cpu --priority production \
+  --job-name d67-control-m3-draw1-r7-0728-1935 -e RUN_ID d67-control-m3-draw1-r7-0728-1935 \
+  -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async \
+  -e XLA_FLAGS "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false --xla_gpu_experimental_parallel_collective_overlap_limit=4" \
+  -e SCALE_ATTN_IMPL gpu_fa4_cute -e SCALE_WATCH_INTERVAL 0 -e SCALE_CHECKPOINTS local \
+  -e SCALE_A2A_FIXED 1 -e SCALE_A2A_CHUNKS 1 -e SCALE_A2A_NO_BARRIER 1 \
+  -e SCALE_A2A_GATHER_DISPATCH 1 -e SCALE_A2A_CUSTOM_ADJOINT 1 \
+  -e SCALE_MOE_QB 1 -e SCALE_REPORT_DROPS 1 -e SCALE_A2A_SPILL 3 \
+  -e SCALE_CAPACITY_FACTOR 1.0625 -e SCALE_JOB_PRIORITY 1 \
+  -e SCALE_GPUS_PER_NODE 4 -e SCALE_GPU_TYPE GB200 -e SCALE_GPU_REPLICAS 16 \
+  -e SCALE_EXPERT_AXIS 64 -e SCALE_NUM_EXPERTS 256 -e SCALE_TOP_K 8 \
+  -e SCALE_HIDDEN_DIM 5120 -e SCALE_NUM_LAYERS 48 -e SCALE_INTERMEDIATE 1280 \
+  -e SCALE_SHARED_INTERMEDIATE 5120 -e SCALE_SEQ_LEN 4096 -e SCALE_BATCH 1024 \
+  -e SCALE_SLIDING_WINDOW 2048 -e SCALE_STEPS 350 \
+  -e SCALE_MOE_IMPL ragged_all_to_all -e SCALE_OPTIMIZER muonh -e SCALE_MUON_SYRK 1 \
+  -e SCALE_SCAN_LAYERS 1 -e SCALE_REMAT recompute_all \
+  -e SCALE_TRACKER json_logger -e SCALE_JSON_LOGGER d67-control-m3-draw1-r7-0728-1935.metrics \
+  -e SCALE_DISABLE_CHECKPOINT 1 \
+  -- python -m experiments.grug.moe.launch_cw_scale --version d67-family-dev --run
+```
+
+- Recovery gate: require production band 1 on the child, a node set different from r5/r6, corrected Trainer preflight, and a finite first-step loss/drop metric.
