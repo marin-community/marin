@@ -100,11 +100,6 @@ or `delete` on a NodePool is not** — it deprovisions a reserved bare-metal fle
 reconcile the program to match reality; never `pulumi up` through a destructive NodePool diff.
 Once the preview is clean, `pulumi up`.
 
-`__main__.py` requires `KUBECONFIG` but does not pass it as a provider input, so Pulumi state
-contains neither the machine-local path nor the credential contents. The provider still uses
-the cluster's declared `platform.coreweave.kube_context`; it never relies on the kubeconfig's
-current context.
-
 ### Adopting a new cluster
 
 A cluster whose RBAC/NodePools/Kueue/Traefik already exist live (the normal case — the CKS
