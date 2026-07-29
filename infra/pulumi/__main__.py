@@ -110,10 +110,11 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
         raise ValueError(f"cluster {cluster!r} missing required platform.coreweave.kube_context")
     _require_kubeconfig(cluster)
     # kubeconfig="": bypasses the Python SDK's default of copying $KUBECONFIG into
-    # the provider input (which persists a machine-local path in state, creating spurious diffs)
+    # the provider input (which persists a machine-local path in state, creating spurious diffs).
     # The provider process still loads credentials from the ambient KUBECONFIG env.
-    # enable_patch_force=True: allows pulumi to take control of resources it didn't create.
-    # This should not happen in practice, but could during manual operations.
+    # enable_patch_force=True: Iris's controller re-applies RBAC/NodePools under its own field
+    # manager on every restart, so a plain SSA dry-run reports a field conflict without forced
+    # ownership (README §Adoption check). Declared here until the "cede" ships (spec.md §4).
     k8s_provider = k8s.Provider(
         "cw-k8s",
         kubeconfig="",
