@@ -96,12 +96,15 @@ _SHORT_FRAC = re.compile(r"(frac)([^{])(.)")
 _SHORT_SQRT = re.compile(r"(sqrt)([^{])")
 
 # Bracketed comma lists (tuples, intervals) have no production in sympy's LaTeX
-# grammar, so the reference scores them 0 against anything. Three details make
+# grammar, so the reference scores them 0 against anything. Four details make
 # the pattern sound: a bare "1,2,3" parses as its first element rather than
 # failing; a comma followed by three digits is a thousands separator, so
-# "(100,101)" lexes as 100101 and parses; and the comma must fall inside the
-# brackets, since trailing punctuation like "(E)," parses fine.
-_BRACKETED_TUPLE = re.compile(r"^(?:\\left)?[(\[][^)\]]*,(?!\d{3})")
+# "(100,101)" lexes as 100101 and parses; the comma must fall inside the
+# brackets, since trailing punctuation like "(E)," parses fine; and the grammar
+# does carry a comma production for function-call arguments
+# (args: (expr ',' args) | expr), so "(f(x,y))" parses. Barring any inner
+# bracket from the run before the comma leaves those to sympy.
+_BRACKETED_TUPLE = re.compile(r"^(?:\\left)?[(\[][^()\[\]]*,(?!\d{3})")
 
 # Integers reach sympy as Python int literals, so a leading zero is a
 # SyntaxError: "007" and "\frac{007}{2}" both fail to parse. Decimals skip that

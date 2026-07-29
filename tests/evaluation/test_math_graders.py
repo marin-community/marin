@@ -76,6 +76,12 @@ def test_minerva_reports_invalid_when_template_absent():
         ("(100,101)", "100101", True),
         # The comma must be inside the brackets to prove a parse failure.
         ("(E),", "(E),", True),
+        # The grammar does have a comma production for call arguments, so a
+        # bracketed function call parses and must not be rejected on sight.
+        ("(f(x,y))", "(f(x,y))", True),
+        ("[f(x,y)]", "[f(x,y)]", True),
+        ("(2f(x,y))", "(2f(x,y))", True),
+        ("(x+f(a,b))", "(x+f(a,b))", True),
         # Decimals compare exactly against rationals.
         ("0.5", "\\frac{1}{2}", True),
         ("0.3", "\\frac{3}{10}", True),
@@ -109,6 +115,16 @@ def test_hendrycks_normalizes_equivalent_spellings():
     assert hendrycks_math.is_equiv("\\left(3\\right)", "(3)")
     assert hendrycks_math.is_equiv("50\\%", "50")
     assert not hendrycks_math.is_equiv("\\frac{1}{2}", "\\frac{1}{3}")
+
+
+def test_hendrycks_strips_percent_escapes_created_by_an_earlier_removal():
+    """``str.replace`` is single-pass, so the reference's repeated ``\\%`` strip matters.
+
+    Collapsing ``\\\\`` to ``\\`` leaves ``\\\\%%``; one pass removes the middle
+    ``\\%`` and leaves a newly adjacent one that only a second pass catches.
+    """
+    assert hendrycks_math.strip_string(r"\\\%%") == ""
+    assert hendrycks_math.is_equiv(r"\\\%%", r"\\%")
 
 
 def test_hendrycks_falls_back_to_raw_equality_when_normalization_raises():

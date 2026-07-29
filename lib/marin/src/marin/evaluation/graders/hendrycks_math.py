@@ -109,8 +109,11 @@ def strip_string(string: str) -> str:
     string = string.replace("^\\circ", "")
     string = string.replace("\\$", "")
     string = remove_right_units(string)
-    # The reference strips "\%" twice (its second literal is an invalid escape
-    # Python leaves as backslash-percent) and never strips a bare "%".
+    # The reference strips "\%" twice and never strips a bare "%" (its second
+    # literal is an invalid escape Python leaves as backslash-percent). The
+    # repeat is not redundant: str.replace is single-pass, so removing one match
+    # can leave a newly adjacent one that only a second pass catches.
+    string = string.replace("\\%", "")
     string = string.replace("\\%", "")
     string = string.replace(" .", " 0.")
     string = string.replace("{.", "{0.")
