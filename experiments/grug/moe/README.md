@@ -76,6 +76,19 @@ long layers.
 - **Expert parallelism**: `ragged_all_to_all` or ring-based via
   `levanter.grug.grug_moe.moe_mlp` (default: ring). Default capacity factor 1.0.
 
+### Temporary Muon trace controls
+
+The following controls are read inside `lib/levanter` at trace time to
+reproduce measured GB200 screens. A follow-up should replace them with explicit
+optimizer configuration fields before these paths are generalized.
+
+| Variable | Default | Effect when set to `1` |
+|----------|---------|------------------------|
+| `SCALE_MUON_NO_NS` | off | Skip Newton-Schulz for every matrix update, reducing MuonH to momentum |
+| `SCALE_MUON_DIST_NONEXPERT` | off | Use the stack-batch-sharded layout for 3-D non-expert stacks |
+| `SCALE_MUON_PAD_NONEXPERT` | off | Pad 3-D non-expert stacks before the sharded Newton-Schulz path |
+| `SCALE_MUON_INTRA_RACK` | off | Exclude `replica_dcn` when distributing 4-D and padded matrix stacks |
+
 ## Scaling heuristic
 
 [`MoeHeuristic`](./heuristic.py) turns `(budget, hidden_dim)` into model +

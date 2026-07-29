@@ -5,11 +5,14 @@
 Muon optimizer for models using raw JAX arrays with (fan_in, fan_out) layout,
 such as Grug models.
 
-All 2D arrays are routed to Muon, except those whose path contains
-'embed', 'lm_head', or 'output' (case-insensitive), which use AdamW.
+Arrays with matrix-shaped trailing dimensions are routed to Muon, except those
+whose path contains 'embed', 'lm_head', or 'output' (case-insensitive), which
+use AdamW.
 """
 
+import logging
 import math
+import os
 from dataclasses import dataclass
 from functools import partial
 
@@ -28,6 +31,8 @@ from levanter.utils.jax_utils import leaf_key_paths
 VMAP_REPLICATED = "vmap_replicated"
 STACK_BATCH_SHARDED = "stack_batch_sharded"
 ORTHOGONALIZATION_LAYOUTS = (VMAP_REPLICATED, STACK_BATCH_SHARDED)
+
+logger = logging.getLogger(__name__)
 
 
 def _target_sharding(array) -> jax.sharding.Sharding | None:
@@ -126,18 +131,11 @@ class GrugMuonConfig(MuonConfig):
         def mask_fn(param, path):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             path_lower = path_str.lower()
-            if "embed" in path_lower or "lm_head" in path_lower or "output" in path_lower:
+            if not hasattr(param, "ndim") or param.ndim < 2:
                 return "adamw"
-            elif hasattr(param, "ndim") and param.ndim == 2:
-                return "muon"
-            elif (
-                hasattr(param, "ndim")
-                and param.ndim == 3
-                and ("w_up_gate" in path_lower or "w_gate_up" in path_lower or "w_down" in path_lower)
-            ):
-                return "muon"
-            else:
+            if any(key in path_lower for key in ("embed", "lm_head", "output")):
                 return "adamw"
+            return "muon"
 
         return jax.tree.map(mask_fn, params, paths)
 
@@ -158,6 +156,19 @@ def _grug_scale_with_muon(
             f"Unknown orthogonalization_layout={orthogonalization_layout!r}. "
             f"Expected one of {ORTHOGONALIZATION_LAYOUTS!r}."
         )
+    disable_newton_schulz = os.environ.get("SCALE_MUON_NO_NS") == "1"
+    if disable_newton_schulz:
+        logger.warning("SCALE_MUON_NO_NS=1 disables Newton-Schulz; Muon updates will use momentum only")
+
+    effective_orthogonalization_layout = orthogonalization_layout
+    if os.environ.get("SCALE_MUON_DIST_NONEXPERT") == "1":
+        if orthogonalization_layout != STACK_BATCH_SHARDED:
+            logger.warning(
+                "SCALE_MUON_DIST_NONEXPERT=1 overrides orthogonalization_layout=%r with %r",
+                orthogonalization_layout,
+                STACK_BATCH_SHARDED,
+            )
+        effective_orthogonalization_layout = STACK_BATCH_SHARDED
 
     def init_fn(params):
         momentum_buffer = otu.tree_zeros_like(params)
@@ -181,8 +192,10 @@ def _grug_scale_with_muon(
         else:
             updates = buf
 
-        def transform_array(x, param):
-            if not hasattr(x, "ndim") or x.ndim not in (2, 3):
+        def transform_array(path, x, param):
+            if not hasattr(x, "ndim") or x.ndim not in (2, 3, 4):
+                return x
+            if disable_newton_schulz:
                 return x
             if x.ndim == 2:
                 updated = _zeropower_via_newtonschulz_replicated(
@@ -192,8 +205,10 @@ def _grug_scale_with_muon(
                     coefficient_type,
                     None,
                 )
+            elif x.ndim == 4:
+                updated = _newtonschulz_4d_distributed(path, x, steps, muon_eps, coefficient_type)
             else:
-                if orthogonalization_layout == VMAP_REPLICATED:
+                if effective_orthogonalization_layout == VMAP_REPLICATED:
                     updated = jax.vmap(
                         lambda matrix: _zeropower_via_newtonschulz_replicated(
                             matrix,
@@ -203,6 +218,8 @@ def _grug_scale_with_muon(
                             None,
                         )
                     )(x)
+                elif os.environ.get("SCALE_MUON_PAD_NONEXPERT") == "1":
+                    updated = _newtonschulz_padded_stack_sharded(x, steps, muon_eps, coefficient_type)
                 else:
                     stack_target_pspec = _batch_sharded_stack_target_pspec(param)
                     if stack_target_pspec is None:
@@ -233,9 +250,9 @@ def _grug_scale_with_muon(
             return updated
 
         if params is None:
-            updates = jax.tree.map(lambda x: transform_array(x, None), updates)
+            updates = jax.tree_util.tree_map_with_path(lambda path, x: transform_array(path, x, None), updates)
         else:
-            updates = jax.tree.map(transform_array, updates, params)
+            updates = jax.tree_util.tree_map_with_path(transform_array, updates, params)
 
         return updates, ScaleByMuonState(momentum_buffer=buf)
 
@@ -265,6 +282,96 @@ def _match_update_sharding():
         return updates, state
 
     return optax.GradientTransformation(init_fn, update_fn)
+
+
+def _zeropower_via_newtonschulz_local(
+    X: jax.Array,
+    steps: int = 5,
+    eps: float = 1e-7,
+    coefficient_type: CoefficientType = "quintic",
+) -> jax.Array:
+    """Run Newton-Schulz on a matrix that is already local to one device."""
+    assert X.ndim == 2
+    orig_dtype = X.dtype
+    X = X.astype(jnp.bfloat16)
+
+    coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]
+    X = X / (jnp.linalg.norm(X) + eps)
+
+    transpose = False
+    if X.shape[0] > X.shape[1]:
+        X = X.T
+        transpose = True
+
+    for i in range(steps):
+        a, b, c = coeffs[i % len(coeffs)]
+        A = jnp.einsum("ik,jk->ij", X, X)
+        B = b * A + c * jnp.einsum("ik,kj->ij", A, A)
+        X = a * X + jnp.einsum("ik,kj->ij", B, X)
+
+    if transpose:
+        X = X.T
+
+    return X.astype(orig_dtype)
+
+
+def _newtonschulz_4d_distributed(
+    path,
+    x: jax.Array,
+    steps: int,
+    eps: float,
+    coefficient_type: CoefficientType,
+) -> jax.Array:
+    """Run Newton-Schulz on a stacked 4D expert leaf without gathering matrix dimensions."""
+    mesh = jax.sharding.get_abstract_mesh()
+    if mesh.empty:
+        return x
+    mesh_shape_items = [(name, size) for name, size in mesh.shape.items() if size > 1]
+    if not mesh_shape_items:
+        return x
+
+    if os.environ.get("SCALE_MUON_INTRA_RACK") == "1":
+        intra_axes = [(name, size) for name, size in mesh_shape_items if name != "replica_dcn"]
+        if intra_axes:
+            mesh_shape_items = intra_axes
+
+    layers, expert_count, d, last = x.shape
+    merged = layers * expert_count
+
+    best_axes: tuple[str, ...] = ()
+    best_shards = 0
+    for mask in range(1, 1 << len(mesh_shape_items)):
+        subset = [mesh_shape_items[i] for i in range(len(mesh_shape_items)) if mask & (1 << i)]
+        prod = math.prod(size for _, size in subset)
+        if merged % prod == 0 and prod > best_shards:
+            best_axes = tuple(name for name, _ in subset)
+            best_shards = prod
+    if not best_axes:
+        raise ValueError(
+            f"4D NS: no subset of batch mesh axes {dict(mesh.shape)} divides "
+            f"merged={merged} (layers={layers} * experts={expert_count}) for "
+            f"{jax.tree_util.keystr(path)}."
+        )
+
+    is_w_down = any(getattr(entry, "name", None) == "w_down" for entry in path)
+    if is_w_down:
+        intermediate_3d_spec = PartitionSpec(None, "model", "data")
+        orig_4d_spec = PartitionSpec(None, "expert", "model", "data")
+    else:
+        intermediate_3d_spec = PartitionSpec(None, "data", "model")
+        orig_4d_spec = PartitionSpec(None, "expert", "data", "model")
+    target_3d_spec = (
+        PartitionSpec(best_axes[0], None, None) if len(best_axes) == 1 else PartitionSpec(best_axes, None, None)
+    )
+
+    x_bf16 = x.astype(jnp.bfloat16)
+    x_flat = jax.lax.reshape(x_bf16, (merged, d, last), out_sharding=intermediate_3d_spec)
+    x_distributed = reshard(x_flat, target_3d_spec)
+    local_ns = lambda matrix: _zeropower_via_newtonschulz_local(matrix, steps, eps, coefficient_type)
+    updated_distributed = jax.vmap(local_ns)(x_distributed)
+    updated_flat = reshard(updated_distributed, intermediate_3d_spec)
+    updated_bf16 = jax.lax.reshape(updated_flat, (layers, expert_count, d, last), out_sharding=orig_4d_spec)
+    return updated_bf16.astype(x.dtype)
 
 
 def _zeropower_via_newtonschulz_replicated(
@@ -354,3 +461,38 @@ def _zeropower_via_newtonschulz_batched_stack_sharded(
         X = jnp.swapaxes(X, -1, -2)
 
     return X.astype(orig_dtype)
+
+
+def _newtonschulz_padded_stack_sharded(
+    X: jax.Array,
+    steps: int = 5,
+    eps: float = 1e-7,
+    coefficient_type: CoefficientType = "quintic",
+) -> jax.Array:
+    """Distribute a non-divisible matrix stack by zero-padding its leading axis."""
+    P = PartitionSpec
+    assert X.ndim == 3
+    local = lambda matrix: _zeropower_via_newtonschulz_local(matrix, steps, eps, coefficient_type)
+
+    mesh = jax.sharding.get_abstract_mesh()
+    if mesh.empty:
+        return jax.vmap(local)(X)
+    axes = [(name, size) for name, size in mesh.shape.items() if size > 1]
+    if os.environ.get("SCALE_MUON_INTRA_RACK") == "1":
+        intra_axes = [(name, size) for name, size in axes if name != "replica_dcn"]
+        if intra_axes:
+            axes = intra_axes
+    if not axes:
+        return jax.vmap(local)(X)
+
+    batch_axis = tuple(name for name, _ in axes)
+    batch_shards = math.prod(size for _, size in axes)
+    layers = X.shape[0]
+    pad = (-layers) % batch_shards
+
+    Xp = jnp.pad(X, ((0, pad), (0, 0), (0, 0))) if pad else X
+    target = P(batch_axis[0], None, None) if len(batch_axis) == 1 else P(batch_axis, None, None)
+    Xd = reshard(Xp, target)
+    updated = jax.vmap(local)(Xd)
+    updated = reshard(updated, P(None, None, None))
+    return updated[:layers] if pad else updated

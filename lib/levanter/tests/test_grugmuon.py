@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
+
 import jax
 import jax.numpy as jnp
 
@@ -36,14 +38,33 @@ def test_grug_scale_with_muon_orthogonalizes_matrix_trailing_dims():
     assert jnp.array_equal(new_updates["vector"], updates["vector"])
 
 
-def test_grug_muon_mask_routes_stacked_expert_weights_to_muon():
+def test_grug_scale_with_muon_warns_when_newton_schulz_is_disabled(monkeypatch, caplog):
+    monkeypatch.setenv("SCALE_MUON_NO_NS", "1")
+
+    with caplog.at_level(logging.WARNING):
+        _grug_scale_with_muon()
+
+    assert "SCALE_MUON_NO_NS=1 disables Newton-Schulz" in caplog.text
+
+
+def test_grug_scale_with_muon_warns_when_env_overrides_explicit_layout(monkeypatch, caplog):
+    monkeypatch.setenv("SCALE_MUON_DIST_NONEXPERT", "1")
+
+    with caplog.at_level(logging.WARNING):
+        _grug_scale_with_muon(orthogonalization_layout=VMAP_REPLICATED)
+
+    assert "SCALE_MUON_DIST_NONEXPERT=1 overrides orthogonalization_layout" in caplog.text
+
+
+def test_grug_muon_mask_routes_matrix_stacks_to_muon():
     params = {
         "embed": jnp.ones((16, 8), dtype=jnp.float32),
         "router": jnp.ones((8, 4), dtype=jnp.float32),
+        "attention": {"w_q": jnp.ones((2, 8, 16), dtype=jnp.float32)},
         "moe": {
-            "w_up_gate": jnp.ones((4, 8, 16), dtype=jnp.float32),
-            "w_gate_up": jnp.ones((4, 8, 16), dtype=jnp.float32),
-            "w_down": jnp.ones((4, 16, 8), dtype=jnp.float32),
+            "w_up_gate": jnp.ones((2, 4, 8, 16), dtype=jnp.float32),
+            "w_gate_up": jnp.ones((2, 4, 8, 16), dtype=jnp.float32),
+            "w_down": jnp.ones((2, 4, 16, 8), dtype=jnp.float32),
         },
         "vector": jnp.ones((8,), dtype=jnp.float32),
     }
@@ -52,6 +73,7 @@ def test_grug_muon_mask_routes_stacked_expert_weights_to_muon():
 
     assert mask["embed"] == "adamw"
     assert mask["router"] == "muon"
+    assert mask["attention"]["w_q"] == "muon"
     assert mask["moe"]["w_up_gate"] == "muon"
     assert mask["moe"]["w_gate_up"] == "muon"
     assert mask["moe"]["w_down"] == "muon"
