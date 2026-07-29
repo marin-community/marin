@@ -14,6 +14,7 @@ from iris.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.setup_scripts import default_setup_script
 from iris.cluster.types import CoschedulingConfig, Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device, is_job_finished
+from iris.rpc import job_pb2
 from marin.inference.config import DEFAULT_CUDA_VLLM_VERSION
 from marin.inference.model_preparation import resolve_model_path
 from marin.inference.proxy import _reserve_port
@@ -294,6 +295,7 @@ def submit_glm52(ctx, launch: Glm52LaunchConfig):
         replicas=VLLM_REPLICAS,
         timeout=Duration.from_hours(RUN_TIMEOUT_HOURS),
         max_retries_failure=0,
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
     )
 
 
