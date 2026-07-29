@@ -24,6 +24,13 @@ contacting the repositories:
 uv run config/update-external.py --check
 ```
 
+`Ops - External Dependency Update` runs the all-project command at 09:00 UTC
+each day and can also be started with `workflow_dispatch`. It opens or refreshes
+one `automation/external-dependencies` pull request containing every changed
+lock and generated pin. The workflow log and pull request body list each
+resolved package version and commit. Generate the same Markdown summary locally
+with `--summary-file <path>`.
+
 The projects intentionally model only what Marin needs:
 
 - `evalchemy` resolves the endpoint client core. Benchmark extras are selected

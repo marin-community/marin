@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,7 @@ from marin.evaluation.harbor.runner import (
 )
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError
+from marin.external_dependencies import HARBOR
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem import StoragePath
 
@@ -179,8 +181,9 @@ def test_harbor_job_config_adapts_the_external_harbor_contract():
     }
 
 
-def test_harbor_executor_normalizes_a_completed_external_trial(tmp_path, monkeypatch):
+def test_harbor_executor_normalizes_a_completed_external_trial(tmp_path, monkeypatch, caplog):
     captured: dict = {}
+    caplog.set_level(logging.INFO, logger="marin.evaluation.harbor.runner")
 
     def run_driver(command, *, check, env) -> None:
         assert check
@@ -227,6 +230,8 @@ def test_harbor_executor_normalizes_a_completed_external_trial(tmp_path, monkeyp
     assert captured["env"]["DAYTONA_API_KEY"] == "daytona-key"
     assert "OPENAI_API_KEY" not in captured["env"]
     assert outcome.metrics[f"toy-{tmp_path.name}"]["accuracy"] == 1.0
+    runtime_payloads = [getattr(record, "harbor_runtime", None) for record in caplog.records]
+    assert {"version": HARBOR.version, "commit": HARBOR.commit} in runtime_payloads
 
 
 def _harbor_executor(dataset: str) -> HarborExecutor:
