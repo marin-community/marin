@@ -640,6 +640,47 @@ An established BGP session that advertises the public VIP, combined with an
 external TCP timeout, requires a CoreWeave route-export escalation. Restarting
 Iris or Traefik does not repair that layer.
 
+### CoreWeave kernel deadlock pending reboot
+
+`CoreWeaveNodeKernelDeadlock` means CoreWeave reported the structured node
+condition `KernelDeadlock=True`. The node lifecycle controller normally cordons
+the node and moves it toward `production-reboot`; tenant pods can block that
+transition even while `Ready=True`.
+
+Read the canonical kubeconfig and context from the cluster config, then inspect
+the condition and blockers:
+
+```bash
+kubectl --kubeconfig <kubeconfig> --context <context> get node <node> \
+  -o jsonpath='{range .status.conditions[*]}{.type}{"\t"}{.status}{"\t"}{.reason}{"\t"}{.message}{"\n"}{end}'
+kubectl --kubeconfig <kubeconfig> --context <context> get pods --all-namespaces \
+  --field-selector spec.nodeName=<node> -o wide
+kubectl --kubeconfig <kubeconfig> --context <context> get pdb --all-namespaces
+```
+
+Do not uncordon a node that CoreWeave cordoned. If `PendingPhaseState` names
+`production-reboot` and `CWActive` lists tenant Deployments, get operator
+approval before changing workloads. Temporarily scale each blocking Deployment
+to two replicas, wait for the replacement to become Ready on another node, then
+delete only the original pod bound to the deadlocked node. Scale back to one
+after the blockers are gone. Do not delete provider DaemonSets or use
+`kubectl drain --force`.
+
+If a replacement remains Pending because no healthy node satisfies its required
+node affinity or pod anti-affinity, stop before deleting the original pod.
+Provision compatible capacity when possible. A temporary placement change is a
+last resort that requires operator approval: preserve the PodDisruptionBudget,
+wait for one replacement to become Ready on a healthy node, and record the
+original pod template so it can be restored after the reboot.
+
+CoreWeave should continue the pending reboot without a separate Iris restart.
+Before restoring workloads, verify that the provider operation completed, the
+node boot ID changed, `KernelDeadlock=False`, `Ready=True`, CoreWeave returned
+the node lifecycle state to `production`, and both the cordon and any
+`node.coreweave.cloud/reserved` taint are gone. Use
+`.agents/skills/recover-stuck-k8s-pod/SKILL.md` when a bound pod does not
+terminate or a manual reboot is required.
+
 ## CI Workflows
 
 | Workflow | Trigger | What |

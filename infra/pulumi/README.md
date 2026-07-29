@@ -142,7 +142,7 @@ pulumi up       # normal run, adopt=false now — creates the remaining componen
 ```
 
 A CoreWeave token rotation creates a new Managed Auth username (`cwtoken-…`). Append it to
-`grafana_observer_rbac.usernames` in all three cluster configs and run a normal preview/up for
+`grafana_observer_rbac.usernames` in all four cluster configs and run a normal preview/up for
 each stack before switching Grafana to the new token. Remove the old username and update the
 stacks again only after the new Grafana revision passes its bridge checks.
 

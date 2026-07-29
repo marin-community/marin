@@ -1,0 +1,111 @@
+{
+  "type": "table",
+  "title": "CoreWeave node health",
+  "description": "Node readiness, scheduler cordons, and CoreWeave kernel-deadlock and pending lifecycle state. KernelDeadlock=True pages after five minutes.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "k8s"
+  },
+  "fieldConfig": {
+    "defaults": {},
+    "overrides": [
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "kernel_deadlock"
+        },
+        "properties": [
+          {
+            "id": "custom.cellOptions",
+            "value": {
+              "type": "color-text"
+            }
+          },
+          {
+            "id": "mappings",
+            "value": [
+              {
+                "type": "value",
+                "options": {
+                  "false": {
+                    "color": "green",
+                    "index": 0
+                  },
+                  "true": {
+                    "color": "red",
+                    "index": 1
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "table",
+      "parser": "backend",
+      "url": "/nodes",
+      "url_options": {
+        "method": "GET"
+      },
+      "columns": [
+        {
+          "selector": "cluster",
+          "text": "cluster",
+          "type": "string"
+        },
+        {
+          "selector": "node",
+          "text": "node",
+          "type": "string"
+        },
+        {
+          "selector": "instance_type",
+          "text": "instance_type",
+          "type": "string"
+        },
+        {
+          "selector": "ready",
+          "text": "ready",
+          "type": "boolean"
+        },
+        {
+          "selector": "unschedulable",
+          "text": "unschedulable",
+          "type": "boolean"
+        },
+        {
+          "selector": "kernel_deadlock",
+          "text": "kernel_deadlock",
+          "type": "boolean"
+        },
+        {
+          "selector": "deadlock_reason",
+          "text": "deadlock_reason",
+          "type": "string"
+        },
+        {
+          "selector": "cordon_reason",
+          "text": "cordon_reason",
+          "type": "string"
+        },
+        {
+          "selector": "pending_phase",
+          "text": "pending_phase",
+          "type": "string"
+        },
+        {
+          "selector": "deadlock_message",
+          "text": "deadlock_message",
+          "type": "string"
+        }
+      ]
+    }
+  ]
+}
