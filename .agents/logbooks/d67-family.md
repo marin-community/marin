@@ -215,3 +215,12 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
 - Retry state: All 16 tasks are in attempt 1 under Kueue workload `iris-pg-b7f0be39b51da146-1`, waiting in `cw-use08a-lq`. The child remains active with failures=1 and preemptions=0.
 - Interpretation: No model initialization or training step ran, so attempt 0 is not an experimental placement draw. `stage-workdir` is a pre-training infrastructure failure; allow the built-in single gang retry to proceed. Do not submit another job.
 - Next action: Monitor attempt 1 through admission. Escalate instead of retrying blindly if the same `stage-workdir` failure repeats.
+
+### 2026-07-28 17:08 PDT - D67-CTL-01 repeated init failure diagnosis
+
+- Child job ID: `/mwittmann/d67-control-m3-draw1-r3-0728-1630/grug-train-d67-control-m3-draw1-r3-0728-1630`
+- Result: Attempt 1 admitted around 17:00 PDT and failed before training with the same `Init:Error stage-workdir`, this time on task 14. Iris atomically returned the gang as attempt 2 under workload `iris-pg-b7f0be39b51da146-2`.
+- Evidence: The two failures occurred on different nodes (`s6xvdgb4` and `s1zsxs64`) while production preemption was removing the occupying hero-run pods. Kubernetes recorded terminating-pod and insufficient-GPU scheduling delays around attempt 1. Both nodes now report Ready, schedulable, and four allocatable GPUs, with no pod deletion in progress.
+- Retry policy: `experiments/grug/dispatch.py` gives this child `max_retries_failure=3`. Attempts 0 and 1 reached setup only; neither initialized the model or emitted a training step.
+- Interpretation: The evidence is consistent with transient preemption cleanup rather than a deterministic command or model failure. Allow attempt 2 as the final automatic recovery attempt under this diagnosis.
+- Stop criterion: If attempt 2 repeats `Init:Error stage-workdir`, stop the parent job to prevent further production-band churn and escalate with the two-node evidence. Do not use the remaining built-in retry blindly.
