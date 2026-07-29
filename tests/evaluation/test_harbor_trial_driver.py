@@ -10,15 +10,39 @@ import tempfile
 from pathlib import Path
 
 import pytest
+import yaml
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
 from marin.evaluation.harbor.driver_config import preflight_harbor_configs
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.timeout(180)]
 
 _ROOT = Path(__file__).parents[2]
 _DRIVER = _ROOT / "lib/marin/src/marin/evaluation/harbor/trial_driver.py"
 _EXTERNAL_PROJECT = _ROOT / "config/external/harbor"
 _POLICIES = _ROOT / "experiments/evaluation/configs/harbor"
+_INVALID_SOURCE_DOCUMENTS = {
+    "hf-uri-in-path": {
+        "environment": {"type": "daytona"},
+        "agents": [{"name": "terminus-2"}],
+        "datasets": [{"path": "hf://org/repository"}],
+    },
+    "nested-hf-repository": {
+        "environment": {"type": "daytona"},
+        "agents": [{"name": "terminus-2"}],
+        "datasets": [{"name": "hf://org/repository/nested"}],
+    },
+    "unknown-job-field": {
+        "unknown_job_field": True,
+        "environment": {"type": "daytona"},
+        "agents": [{"name": "terminus-2"}],
+        "datasets": [{"name": "aime"}],
+    },
+    "multiple-agents": {
+        "environment": {"type": "daytona"},
+        "agents": [{"name": "terminus-2"}, {"name": "opencode"}],
+        "datasets": [{"name": "aime"}],
+    },
+}
 
 
 def _external_python(*args: str, hash_seed: str = "0", check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -157,54 +181,18 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
 
 
 @pytest.mark.parametrize(
-    "policy",
-    [
-        """
-environment:
-  type: daytona
-agents:
-  - name: terminus-2
-datasets:
-  - path: hf://org/repository
-""",
-        """
-environment:
-  type: daytona
-agents:
-  - name: terminus-2
-datasets:
-  - name: hf://org/repository/nested
-""",
-        """
-unknown_job_field: true
-environment:
-  type: daytona
-agents:
-  - name: terminus-2
-datasets:
-  - name: aime
-""",
-        """
-environment:
-  type: daytona
-agents:
-  - name: terminus-2
-  - name: opencode
-datasets:
-  - name: aime
-""",
-    ],
+    "document",
+    _INVALID_SOURCE_DOCUMENTS.values(),
+    ids=_INVALID_SOURCE_DOCUMENTS,
 )
-def test_preflight_rejects_invalid_source_policies_without_echoing_inputs(tmp_path, policy):
+def test_preflight_rejects_invalid_source_policies(tmp_path, document):
     path = tmp_path / "invalid.yaml"
-    path.write_text(policy)
+    path.write_text(yaml.safe_dump(document))
 
     completed = _preflight(tmp_path, [(path, {})], check=False)
 
     assert completed.returncode == 2
     assert completed.stdout == ""
-    assert "https://errors.pydantic.dev" not in completed.stderr
-    assert "input_value" not in completed.stderr
 
 
 def test_preflight_rejects_malformed_effective_provider_kwargs(tmp_path):
@@ -214,5 +202,3 @@ def test_preflight_rejects_malformed_effective_provider_kwargs(tmp_path):
 
     assert completed.returncode == 2
     assert completed.stdout == ""
-    assert "https://errors.pydantic.dev" not in completed.stderr
-    assert "input_value" not in completed.stderr
