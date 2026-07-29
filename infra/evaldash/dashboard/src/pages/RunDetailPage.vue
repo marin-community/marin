@@ -184,7 +184,8 @@ async function copyPath() {
            where its artifacts live, and its live job/log state. -->
       <GroupLinks :run-id="data.run_id" />
 
-      <!-- Configuration: model, eval, hardware, and serving params in one card -->
+      <!-- Run details: static configuration, serving params, provenance, and the artifact path in
+           one reference card below the results -->
       <div class="rounded-lg border border-surface-border bg-surface p-4">
         <div class="grid grid-cols-1 md:grid-cols-3 gap-x-6 gap-y-4">
           <div>
@@ -241,47 +242,45 @@ async function copyPath() {
             </div>
           </dl>
         </div>
-      </div>
 
-      <!-- Results path -->
-      <div>
-        <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Results path</h3>
-        <div class="flex items-center gap-2">
-          <code class="flex-1 rounded border border-surface-border bg-surface-sunken px-3 py-2 text-[13px] font-mono break-all select-all">{{ data.results_path }}</code>
-          <a
-            v-if="objectStoreUrl(data.results_path)"
-            :href="objectStoreUrl(data.results_path)!"
-            target="_blank"
-            rel="noopener"
-            class="text-xs px-2 py-2 rounded border border-surface-border hover:bg-surface-raised whitespace-nowrap text-accent"
-          >Open ↗</a>
-          <button
-            class="text-xs px-2 py-2 rounded border border-surface-border hover:bg-surface-raised whitespace-nowrap"
-            @click="copyPath"
-          >
-            {{ copied ? 'Copied' : 'Copy' }}
-          </button>
+        <div class="mt-4 pt-4 border-t border-surface-border-subtle">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Provenance</h3>
+          <dl class="text-sm grid grid-cols-1 md:grid-cols-3 gap-2">
+            <div class="flex gap-2">
+              <dt class="text-text-muted w-28">git sha</dt>
+              <dd class="font-mono" :title="data.provenance.git_sha">
+                <a
+                  :href="githubCommitUrl(data.provenance.git_sha)!"
+                  target="_blank"
+                  rel="noopener"
+                  class="text-accent hover:text-accent-hover hover:underline"
+                >{{ shortSha(data.provenance.git_sha) }} ↗</a>
+              </dd>
+            </div>
+            <div class="flex gap-2"><dt class="text-text-muted w-28">eval runtime</dt><dd class="font-mono break-all">{{ data.provenance.eval_runtime }}</dd></div>
+            <div class="flex gap-2"><dt class="text-text-muted w-28">launch host</dt><dd class="font-mono break-all">{{ data.provenance.launch_host }}</dd></div>
+          </dl>
         </div>
-      </div>
 
-      <!-- Provenance -->
-      <div class="rounded-lg border border-surface-border bg-surface p-4">
-        <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Provenance</h3>
-        <dl class="text-sm grid grid-cols-1 md:grid-cols-3 gap-2">
-          <div class="flex gap-2">
-            <dt class="text-text-muted w-28">git sha</dt>
-            <dd class="font-mono" :title="data.provenance.git_sha">
-              <a
-                :href="githubCommitUrl(data.provenance.git_sha)!"
-                target="_blank"
-                rel="noopener"
-                class="text-accent hover:text-accent-hover hover:underline"
-              >{{ shortSha(data.provenance.git_sha) }} ↗</a>
-            </dd>
+        <div class="mt-4 pt-4 border-t border-surface-border-subtle">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Results path</h3>
+          <div class="flex items-center gap-2">
+            <code class="flex-1 rounded border border-surface-border bg-surface-sunken px-3 py-2 text-[13px] font-mono break-all select-all">{{ data.results_path }}</code>
+            <a
+              v-if="objectStoreUrl(data.results_path)"
+              :href="objectStoreUrl(data.results_path)!"
+              target="_blank"
+              rel="noopener"
+              class="text-xs px-2 py-2 rounded border border-surface-border hover:bg-surface-raised whitespace-nowrap text-accent"
+            >Open ↗</a>
+            <button
+              class="text-xs px-2 py-2 rounded border border-surface-border hover:bg-surface-raised whitespace-nowrap"
+              @click="copyPath"
+            >
+              {{ copied ? 'Copied' : 'Copy' }}
+            </button>
           </div>
-          <div class="flex gap-2"><dt class="text-text-muted w-28">eval runtime</dt><dd class="font-mono break-all">{{ data.provenance.eval_runtime }}</dd></div>
-          <div class="flex gap-2"><dt class="text-text-muted w-28">launch host</dt><dd class="font-mono break-all">{{ data.provenance.launch_host }}</dd></div>
-        </dl>
+        </div>
       </div>
 
       <!-- Live iris job + attempt status for every role -->

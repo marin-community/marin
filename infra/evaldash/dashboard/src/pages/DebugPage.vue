@@ -55,11 +55,11 @@ onViewRefresh(refresh)
 
       <div>
         <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Prefixes scanned</h3>
-        <div class="space-y-2">
+        <div class="rounded-lg border border-surface-border divide-y divide-surface-border-subtle">
           <div
             v-for="p in data.ingest.prefixes"
             :key="p.prefix"
-            class="rounded-lg border border-surface-border bg-surface p-3"
+            class="px-3 py-2"
           >
             <div class="flex items-center justify-between gap-3 flex-wrap">
               <code class="font-mono text-[13px] break-all">{{ p.prefix }}</code>

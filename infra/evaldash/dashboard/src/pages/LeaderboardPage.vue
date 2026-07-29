@@ -189,8 +189,7 @@ function goToRun(runId: string) {
       <div>
         <h2 class="text-lg font-semibold">Leaderboard</h2>
         <p class="text-xs text-text-muted mt-0.5">
-          Mean of per-task primary-metric scores (each benchmark equal weight, mmlu subtasks rolled up).
-          Cell colour scales with the score; click a score for its history, a failure to open the run.
+          Mean of per-task primary-metric scores — each benchmark equal weight, mmlu subtasks rolled up.
         </p>
       </div>
     </div>
@@ -245,7 +244,7 @@ function goToRun(runId: string) {
       message="No runs yet."
     />
 
-    <div v-else-if="data" class="space-y-8">
+    <div v-else-if="data" class="space-y-6">
       <!-- Ranking: mean of per-task scores per model, with compare checkboxes -->
       <div>
         <div class="flex items-baseline justify-between mb-2">
