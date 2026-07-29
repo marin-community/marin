@@ -2300,3 +2300,24 @@ result:
   preregistered 10% ceiling. Continue both arms to 16,840 updates and
   4.4145B nominal tokens. The early quality penalty remains exploratory until
   the complete curve is available.
+
+### 2026-07-29 00:38 - Second corrected gate and checkpoint replicas
+
+- Both measurement arms crossed the update-2,000 evaluation and resumed
+  finite training. Full-mode Paloma macro is `3.961045` for E256 and
+  `3.992682` for fixed25, a `+0.031638` treatment delta. Fixed25 E128 and E16
+  are `4.029015` and `4.173859`.
+- Across the two aligned gates, fixed25 full mode is `+0.022665` and
+  `+0.031638` nat worse. Neither gate approaches the preregistered `+0.10`
+  regression threshold.
+- Through common update 2,689, post-warmup median compiled step time is
+  `455.993 ms` for control and `461.389 ms` for fixed25, a `+1.18%`
+  surcharge. Optimizer-only cost projects to `38.66` versus `39.11` H100
+  GPU-hours per 10B tokens.
+- The exact reference disables periodic checkpoints. Launched a second
+  matched E256/fixed25 pair with periodic evaluation disabled and checkpoints
+  enabled, so final state can feed matched SFT without changing the
+  measurement pair. Both replicas compiled and began finite training.
+- Published an interim corrected report and marked the first d768 burn
+  invalidated. Its pack-one control cannot support the earlier positive
+  quality conclusion.

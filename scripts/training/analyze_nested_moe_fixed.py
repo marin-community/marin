@@ -105,13 +105,11 @@ def histories(run: wandb.apis.public.Run, *, include_nested: bool) -> dict[str, 
             }
         )
     values = {name: [] for name in metrics}
-    metric_groups = (
-        ({name: metric for name, metric in metrics.items() if not metric.startswith("eval/")}, 8),
-        # W&B explicit-key scans return only rows containing every requested
-        # key. Eval suites and nested modes are not guaranteed to log in the
-        # same row, so scan them independently.
-        ({name: metric for name, metric in metrics.items() if metric.startswith("eval/")}, 1),
-    )
+    # W&B explicit-key scans return only rows containing every requested key.
+    # Router metrics, evaluation suites, and nested modes are optional, so a
+    # grouped scan can silently discard ordinary loss and timing rows when any
+    # requested metric is absent. Scan each metric independently.
+    metric_groups = ((metrics, 1),)
     for group, chunk_size in metric_groups:
         items = list(group.items())
         for start in range(0, len(items), chunk_size):

@@ -2,7 +2,18 @@
 
 Date: 2026-07-28
 
-Status: complete.
+Status: invalidated and superseded.
+
+> **Do not use these quality results.** This experiment forced one document
+> into each 8,192-token example while masking padding from the loss, unlike the
+> dense flat-token packing used by the `aug-dk` reference. On the phase-0
+> mixture, average document length implies at most 28.05% useful-token
+> occupancy and at least a 3.57x overstatement of trained tokens. The control
+> consequently failed to reproduce the reference curve. The implementation
+> also changed router state, so this report cannot isolate the data error from
+> the architecture treatment. The corrected exact-source experiment and its
+> conclusions are reported in
+> [Corrected fixed-prefix nested experts](nested-model-training-corrected.md).
 
 ## Decision
 

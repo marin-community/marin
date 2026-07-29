@@ -58,6 +58,7 @@ COLORS = {
 
 @dataclass(frozen=True)
 class AnalysisConfig:
+    project: str
     control_run: str
     treatment_run: str
     tokens_per_step: int
@@ -69,6 +70,7 @@ class AnalysisConfig:
 
 def _parse_args() -> AnalysisConfig:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--project", default=PROJECT)
     parser.add_argument("--control-run", default=RUNS[CONTROL])
     parser.add_argument("--treatment-run", default=RUNS[TREATMENT])
     parser.add_argument("--tokens-per-step", type=int, default=TOKENS_PER_STEP)
@@ -84,6 +86,7 @@ def _parse_args() -> AnalysisConfig:
     if args.quality_fit_end_step <= 0:
         raise ValueError("quality-fit-end-step must be positive")
     return AnalysisConfig(
+        project=args.project,
         control_run=args.control_run,
         treatment_run=args.treatment_run,
         tokens_per_step=args.tokens_per_step,
@@ -287,7 +290,7 @@ def main(config: AnalysisConfig) -> None:
         CONTROL: config.control_run,
         TREATMENT: config.treatment_run,
     }
-    runs = {arm: api.run(f"{ENTITY}/{PROJECT}/{run_id}") for arm, run_id in run_ids.items()}
+    runs = {arm: api.run(f"{ENTITY}/{config.project}/{run_id}") for arm, run_id in run_ids.items()}
     all_history = {arm: histories(run, include_nested=arm == TREATMENT) for arm, run in runs.items()}
     timing_horizon = _common_horizon(all_history, "step_duration")
     timing = {
@@ -318,6 +321,7 @@ def main(config: AnalysisConfig) -> None:
             "full_paloma_micro": final_value(history["paloma_micro"]),
             "e128_paloma_macro": final_value(history["paloma_e128"]),
             "e16_paloma_macro": final_value(history["paloma_e16"]),
+            "final_train_loss": final_value(history["train_loss"]),
             "final_cross_entropy_loss": final_value(history["cross_entropy_loss"]),
             "terminal_overflow": final_value(history["overflow"]),
             "median_step_seconds": median_step,
@@ -379,9 +383,9 @@ def main(config: AnalysisConfig) -> None:
     _plot_paloma(all_history, config)
     _plot_series(
         all_history,
-        metric="cross_entropy_loss",
-        title="Training cross-entropy (100-step medians; fixed25 mixes E256, E128, and E16 rows)",
-        ylabel="Cross-entropy loss",
+        metric="train_loss",
+        title="Training loss (100-step medians; fixed25 mixes E256, E128, and E16 rows)",
+        ylabel="Training loss",
         output_suffix="loss",
         config=config,
     )
