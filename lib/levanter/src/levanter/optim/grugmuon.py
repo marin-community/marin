@@ -221,7 +221,13 @@ def _grug_scale_with_muon(
                         )
                     )(x)
                 elif os.environ.get("SCALE_MUON_PAD_NONEXPERT") == "1":
-                    updated = _newtonschulz_padded_stack_sharded(x, steps, muon_eps, coefficient_type)
+                    updated = _newtonschulz_padded_stack_sharded(
+                        x,
+                        steps,
+                        muon_eps,
+                        coefficient_type,
+                        target_sharding=_target_sharding(param),
+                    )
                 else:
                     stack_target_pspec = _batch_sharded_stack_target_pspec(param)
                     if stack_target_pspec is None:
@@ -557,6 +563,8 @@ def _newtonschulz_padded_stack_sharded(
     steps: int = 5,
     eps: float = 1e-7,
     coefficient_type: CoefficientType = "quintic",
+    *,
+    target_sharding: jax.sharding.Sharding | None = None,
 ) -> jax.Array:
     """Distribute a non-divisible matrix stack by zero-padding its leading axis."""
     P = PartitionSpec
@@ -584,5 +592,11 @@ def _newtonschulz_padded_stack_sharded(
     if len(batch_axis) > 1:
         Xd = reshard(Xd, P(batch_axis, None, None))
     updated = jax.vmap(local)(Xd)
+    if target_sharding is not None:
+        target_spec = getattr(target_sharding, "spec", None)
+        if target_spec and target_spec[0] is not None:
+            raise ValueError("padded stack Newton-Schulz requires the parameter layer axis to be replicated")
+        updated = reshard(updated, target_sharding)
+        return updated[:layers] if pad else updated
     updated = reshard(updated, P(None, None, None))
     return updated[:layers] if pad else updated
