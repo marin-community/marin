@@ -16,9 +16,8 @@ uv run config/update-external.py evalchemy
 ```
 
 Omit the project name to advance all three. The command updates the selected
-lockfiles, regenerates the packaged pins, and keeps the root Harbor source and
-lock on the same commit. Verify that all generated state is current without
-contacting the repositories:
+lockfiles and regenerates the packaged pins. Verify that all generated state is
+current without contacting the repositories:
 
 ```bash
 uv run config/update-external.py --check
@@ -35,7 +34,8 @@ The projects intentionally model only what Marin needs:
 
 - `evalchemy` resolves the endpoint client core. Benchmark extras are selected
   by each evaluation at runtime.
-- `harbor` resolves the Git checkout and Marin's pinned Daytona SDK.
+- `harbor` resolves the Git checkout and pinned Daytona SDK used only by the
+  isolated evaluation driver. Harbor is absent from Marin's workspace lock.
 - `MarinSkyRL` tracks the repository-root package. It does not resolve the
   CUDA-heavy `skyrl-train` subproject because Marin has no runtime consumer for
   it yet.

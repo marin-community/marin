@@ -2,20 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import logging
 from pathlib import Path
 
 import pytest
 from fsspec.implementations.memory import MemoryFileSystem
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
 from marin.evaluation.harbor.driver_config import (
-    HarborAgentConfig,
-    HarborEnvironmentConfig,
-    HarborRetryConfig,
-    HarborRunConfig,
-    HarborVerifierConfig,
-    adapt_job_config,
-    harbor_job_config,
+    HarborDatasetKind,
+    ValidatedHarborConfig,
 )
 from marin.evaluation.harbor.runner import (
     HarborExecutor,
@@ -26,7 +20,6 @@ from marin.evaluation.harbor.runner import (
 )
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError
-from marin.external_dependencies import HARBOR
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem import StoragePath
 
@@ -37,6 +30,26 @@ def _running_model() -> RunningModel:
             base_url="https://iris.example/proxy/t/token/serve.model/v1",
             model="qwen3-0.6b",
         )
+    )
+
+
+def _validated_config(
+    *,
+    dataset_kind: HarborDatasetKind = HarborDatasetKind.HARBOR_REGISTRY,
+    dataset_selector: str = "aime",
+    dataset_revision: str | None = "1.0",
+    workspace_dataset_path: Path | None = None,
+    agent: str = "terminus-2",
+) -> ValidatedHarborConfig:
+    return ValidatedHarborConfig(
+        stable_policy_json='{"opaque":"policy"}',
+        digest=f"sha256:{'1' * 64}",
+        dataset_kind=dataset_kind,
+        dataset_selector=dataset_selector,
+        dataset_revision=dataset_revision,
+        workspace_dataset_path=workspace_dataset_path,
+        agent=agent,
+        environment="daytona",
     )
 
 
@@ -55,8 +68,11 @@ def test_materialize_harbor_dataset_downloads_hf_revision_as_local_tasks(tmp_pat
     monkeypatch.setattr("marin.evaluation.harbor.dataset.snapshot_download", download)
 
     path = materialize_harbor_dataset(
-        "hf://DCAgent2/terminal_bench_2",
-        "main",
+        _validated_config(
+            dataset_kind=HarborDatasetKind.HUGGING_FACE,
+            dataset_selector="DCAgent2/terminal_bench_2",
+            dataset_revision="main",
+        ),
         tmp_path / "workdir",
         hf_token=None,
     )
@@ -73,6 +89,31 @@ def test_materialize_harbor_dataset_downloads_hf_revision_as_local_tasks(tmp_pat
         }
     ]
     assert not (snapshot / ".gitattributes").exists()
+
+
+def test_materialize_harbor_dataset_rebases_local_path_onto_worker_workspace(tmp_path, monkeypatch):
+    worker_workspace = tmp_path / "worker"
+    dataset = worker_workspace / "policies" / "tasks"
+    dataset.mkdir(parents=True)
+    config = _validated_config(
+        dataset_kind=HarborDatasetKind.LOCAL,
+        dataset_selector="tasks",
+        dataset_revision=None,
+        workspace_dataset_path=Path("policies/tasks"),
+    )
+    monkeypatch.setattr(
+        "marin.evaluation.harbor.dataset.find_project_root",
+        lambda: worker_workspace,
+    )
+
+    assert (
+        materialize_harbor_dataset(
+            config,
+            tmp_path / "workdir",
+            hf_token=None,
+        )
+        == dataset
+    )
 
 
 def test_write_samples_uses_a_path_safe_name_for_hf_dataset(tmp_path):
@@ -119,78 +160,14 @@ def test_harbor_trials_round_trip_through_remote_storage(protocol, tmp_path, mon
     assert not (restored_dir / "incomplete").exists()
 
 
-def test_harbor_job_config_adapts_the_external_harbor_contract():
-    config = harbor_job_config(
-        job_name="job",
-        run=HarborRunConfig(
-            dataset="aime",
-            revision="1.0",
-            agent=HarborAgentConfig(
-                name="opencode",
-                max_output_tokens=16384,
-                max_timeout=7200,
-                setup_timeout=600,
-                kwargs={
-                    "model_info": {"max_input_tokens": 64512},
-                    "opencode_config": {"compaction": {"auto": False}},
-                },
-            ),
-            environment=HarborEnvironmentConfig(
-                environment_type="daytona",
-                cpus=2,
-                memory_mb=8192,
-                storage_mb=8192,
-            ),
-            attempts=3,
-            retry=HarborRetryConfig(max_retries=6, min_wait=2.0, max_wait=90.0),
-            verifier=HarborVerifierConfig(max_timeout=14400),
-        ),
-    )
-
-    adapted = adapt_job_config(
-        config,
-        job_name="job",
-        jobs_dir="/tmp/jobs",
-        dataset_path=None,
-        endpoint_url="https://iris.example/v1",
-        served_model="served-model",
-        task_limit=None,
-        model_agent_kwargs={},
-    )
-
-    assert adapted["datasets"] == [{"name": "aime", "version": "1.0", "n_tasks": None}]
-    assert adapted["n_attempts"] == 3
-    assert adapted["retry"]["min_wait_sec"] == 2.0
-    assert adapted["retry"]["max_wait_sec"] == 90.0
-    assert adapted["environment"]["override_cpus"] == 2
-    assert adapted["environment"]["override_memory_mb"] == 8192
-    assert adapted["environment"]["override_storage_mb"] == 8192
-    assert adapted["verifier"]["max_timeout_sec"] == 14400
-    agent = adapted["agents"][0]
-    assert agent["model_name"] == "hosted_vllm/served-model"
-    assert agent["override_setup_timeout_sec"] == 600
-    assert agent["kwargs"]["api_base"] == "https://iris.example/v1"
-    assert agent["kwargs"]["model_info"]["max_input_tokens"] == 64512
-    assert agent["kwargs"]["model_info"]["max_output_tokens"] == 16384
-    opencode_config = agent["kwargs"]["opencode_config"]
-    assert opencode_config["compaction"] == {"auto": False}
-    assert opencode_config["provider"]["hosted_vllm"] == {
-        "npm": "@ai-sdk/openai-compatible",
-        "name": "Hosted vLLM",
-        "options": {"baseURL": "https://iris.example/v1"},
-    }
-
-
-def test_harbor_executor_normalizes_a_completed_external_trial(tmp_path, monkeypatch, caplog):
+def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_path, monkeypatch):
     captured: dict = {}
-    caplog.set_level(logging.INFO, logger="marin.evaluation.harbor.runner")
 
-    def run_driver(command, *, check, env) -> None:
-        assert check
-        job_config = json.loads(Path(command[-1]).read_text())
-        captured["job_config"] = job_config
-        captured["env"] = env
-        trial_dir = Path(job_config["jobs_dir"]) / job_config["job_name"] / "trial-one"
+    def run_driver(config, overlay, driver_env) -> None:
+        captured["config"] = config
+        captured["overlay"] = overlay
+        captured["env"] = driver_env
+        trial_dir = Path(overlay.jobs_dir) / overlay.job_name / "trial-one"
         trial_dir.mkdir(parents=True, exist_ok=True)
         (trial_dir / "result.json").write_text(
             json.dumps(
@@ -201,22 +178,16 @@ def test_harbor_executor_normalizes_a_completed_external_trial(tmp_path, monkeyp
             )
         )
 
-    monkeypatch.setattr("marin.evaluation.harbor.runner.subprocess.run", run_driver)
+    monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
     monkeypatch.setenv("OPENAI_API_KEY", "must-not-reach-harbor")
     model = _running_model()
 
     executor = HarborExecutor(
-        harbor_job_config(
-            job_name="toy",
-            run=HarborRunConfig(
-                dataset=f"toy-{tmp_path.name}",
-                revision="1.0",
-                agent=HarborAgentConfig(name="terminus-2"),
-                environment=HarborEnvironmentConfig(environment_type="daytona"),
-            ),
+        _validated_config(
+            dataset_selector=f"toy-{tmp_path.name}",
         ),
-        task_limit=None,
-        model_agent_kwargs={},
+        task_limit=7,
+        model_agent_kwargs={"extra_body": "{}"},
         secret_env_keys=("DAYTONA_API_KEY",),
     )
     outcome = executor(
@@ -225,36 +196,28 @@ def test_harbor_executor_normalizes_a_completed_external_trial(tmp_path, monkeyp
         {"DAYTONA_API_KEY": "daytona-key"},
     )
 
-    assert captured["job_config"]["agents"][0]["kwargs"]["api_base"] == model.endpoint.base_url
-    assert captured["job_config"]["agents"][0]["model_name"] == "hosted_vllm/qwen3-0.6b"
+    assert captured["config"] is executor.config
+    assert captured["overlay"].endpoint_url == model.endpoint.base_url
+    assert captured["overlay"].served_model == "qwen3-0.6b"
+    assert captured["overlay"].task_limit == 7
+    assert captured["overlay"].model_agent_kwargs == {"extra_body": "{}"}
     assert captured["env"]["DAYTONA_API_KEY"] == "daytona-key"
     assert "OPENAI_API_KEY" not in captured["env"]
     assert outcome.metrics[f"toy-{tmp_path.name}"]["accuracy"] == 1.0
-    runtime_payloads = [getattr(record, "harbor_runtime", None) for record in caplog.records]
-    assert {"version": HARBOR.version, "commit": HARBOR.commit} in runtime_payloads
 
 
 def _harbor_executor(dataset: str) -> HarborExecutor:
     return HarborExecutor(
-        harbor_job_config(
-            job_name=dataset,
-            run=HarborRunConfig(
-                dataset=dataset,
-                revision="1.0",
-                agent=HarborAgentConfig(name="terminus-2"),
-                environment=HarborEnvironmentConfig(environment_type="daytona"),
-            ),
-        ),
+        _validated_config(dataset_selector=dataset),
         task_limit=None,
         model_agent_kwargs={},
     )
 
 
 def test_harbor_executor_fails_when_trial_contains_exception_info(tmp_path, monkeypatch):
-    def run_driver(command, *, check, env) -> None:
-        assert check and isinstance(env, dict)
-        config = json.loads(Path(command[-1]).read_text())
-        trial_dir = Path(config["jobs_dir"]) / config["job_name"] / "trial-one"
+    def run_driver(_config, overlay, driver_env) -> None:
+        assert isinstance(driver_env, dict)
+        trial_dir = Path(overlay.jobs_dir) / overlay.job_name / "trial-one"
         trial_dir.mkdir(parents=True, exist_ok=True)
         (trial_dir / "result.json").write_text(
             json.dumps(
@@ -269,7 +232,7 @@ def test_harbor_executor_fails_when_trial_contains_exception_info(tmp_path, monk
             )
         )
 
-    monkeypatch.setattr("marin.evaluation.harbor.runner.subprocess.run", run_driver)
+    monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
     executor = _harbor_executor(f"failed-{tmp_path.name}")
 
     with pytest.raises(EvaluationError) as exc_info:
@@ -281,10 +244,9 @@ def test_harbor_executor_fails_when_trial_contains_exception_info(tmp_path, monk
 
 
 def test_harbor_executor_accepts_zero_reward_without_exception_info(tmp_path, monkeypatch):
-    def run_driver(command, *, check, env) -> None:
-        assert check and isinstance(env, dict)
-        config = json.loads(Path(command[-1]).read_text())
-        trial_dir = Path(config["jobs_dir"]) / config["job_name"] / "trial-one"
+    def run_driver(_config, overlay, driver_env) -> None:
+        assert isinstance(driver_env, dict)
+        trial_dir = Path(overlay.jobs_dir) / overlay.job_name / "trial-one"
         trial_dir.mkdir(parents=True, exist_ok=True)
         (trial_dir / "result.json").write_text(
             json.dumps(
@@ -295,11 +257,11 @@ def test_harbor_executor_accepts_zero_reward_without_exception_info(tmp_path, mo
             )
         )
 
-    monkeypatch.setattr("marin.evaluation.harbor.runner.subprocess.run", run_driver)
+    monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
     executor = _harbor_executor(f"zero-{tmp_path.name}")
 
     outcome = executor(_running_model(), str(tmp_path), {})
 
-    assert outcome.metrics[executor.config.dataset]["accuracy"] == 0.0
+    assert outcome.metrics[executor.config.record_dataset]["accuracy"] == 0.0
     result = json.loads((tmp_path / "harbor_result.json").read_text())
     assert result["failed_trials"] == 0
