@@ -220,7 +220,8 @@ def test_run_harbor_normalizes_a_completed_external_trial(tmp_path, monkeypatch,
     assert "OPENAI_API_KEY" not in captured["env"]
     assert result.total_trials == 1
     assert result.accuracy == 1.0
-    assert f"Harbor runtime: version={HARBOR.version} commit={HARBOR.commit}" in caplog.messages
+    runtime_payloads = [getattr(record, "harbor_runtime", None) for record in caplog.records]
+    assert {"version": HARBOR.version, "commit": HARBOR.commit} in runtime_payloads
 
 
 def test_harbor_executor_fails_when_trial_contains_exception_info(tmp_path, monkeypatch):
