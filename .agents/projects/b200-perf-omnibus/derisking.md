@@ -127,6 +127,47 @@ across architectures. State the number, then measure.
 **Falsifies.** Whether the Phase D gains compose. Several of them are described as
 independent and stacking, and none of that has been tested.
 
+### D-2 RESULT — 2026-07-29. The Phase D gains compose. Prediction hit to 0.10pp.
+
+| draw | node | tok/s p50 | MFU p50 | drops | final loss |
+|---|---|---:|---:|---:|---:|
+| 1 | `s14fys64` | 347,700 | 22.446% | 1.431% | 3.3062 |
+| 2 | `s3dvxs64` | 346,950 | 22.398% | 1.461% | 3.2994 |
+| 3 | `s29txs64` | 345,573 | 22.309% | 1.444% | 3.3061 |
+| **median** | — | **346,950** | **22.398%** | **1.444%** | **3.3061** |
+
+Steps 250–349 of 350, at the fixed 2.5 PFLOP/s per-GB200 denominator. The median lands
+**0.102pp below the pre-registered 22.5%** and 0.898pp above the 21.5% falsification
+threshold, so the falsification clause did not fire: **the additive ledger held.**
+
+Three draws on three different nodes, every gang admitting 16/16 workers on the first
+attempt with zero preemptions — the first fully clean placement run in this project,
+post image-cache fix. Spread across draws is **0.137pp**, far tighter than the ±2–4pp
+placement variance this stack normally shows, which is itself evidence the leg is
+well-conditioned rather than luckily placed.
+
+**The number does not transfer to the shipped tree yet.** D-2 ran on
+`agent/deri-d2-build`, a research build of cherry-picks, at artifact `c24ccfcc2`. It
+validates the research composition, not the assembled series. Re-measuring D-2's
+configuration on the integration branch is a separate gate and remains open.
+
+**Not a matched A/B against the control.** Against the d67 two-draw trio-on control
+(321,670 tok/s, 20.766% MFU, 1.445% drops) the median is 7.86% faster and 1.632pp
+higher at an essentially identical drop fraction (−0.0014pp). But D-2 differs from that
+control in more than Phase D, so this is nearby context, not an attribution. Do not
+quote 346,950 against D-1c's 318,711 either — different shape, spill and QB settings.
+
+**PGLE replay match rate is not a quality metric; stop treating it as one.** The fresh
+profile matched 225 of 533 scheduled instructions. A same-build profile still missing
+58% indicates that most counted instructions structurally have no cost entry —
+parameters, constants, `get-tuple-element`, `tuple`, `bitcast` and fusion interiors
+never emit a device trace event, so they can never appear in a `ProfiledInstructionsProto`.
+Name drift would produce wide variance; instead three different modules cluster at
+217/535, 197/535 and 225/533. The earlier rejection of manual PGLE on the ECHO line was
+right, but for its 0.235pp deficit against AutoPGLE, not for its match rate. To settle
+it cheaply, bucket the missing names by opcode; only `fusion.*` or `custom-call.*` misses
+would indicate a real coverage gap.
+
 ### D-3. Resolve the leg-batching contradiction — **code recovered 2026-07-29; sign still open**
 
 **Why.** The same idea has measured **+1.35pp and −3.66pp**. The 25.39% figure is

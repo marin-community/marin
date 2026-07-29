@@ -4,10 +4,21 @@ Snapshot: 2026-07-29. This is the record of work performed; [`sequence.md`](sequ
 and [`derisking.md`](derisking.md) are the plan, and they have been reconciled against
 what is below.
 
-**Nothing here is merged.** Every item lives on its own `agent/*` branch against
-`origin/main` @ `6ce4a7e68`. Each branch carries its own `-report.md` in this directory,
-which is why the reports are not visible from `b200-perf-omnibus` — check out the branch,
-or read it on GitHub, to see the detail behind a row.
+**Nothing here is merged, but stage 1 is now assembled.** `b200-perf-omnibus` @
+`3a317c971` carries 14 documentation commits, the 15 implementation commits through A2,
+and [`assembly-report.md`](assembly-report.md). Each item's own `-report.md` travelled
+onto the branch with its commit, so the evidence behind a row is now readable from the
+integration branch rather than only from the source `agent/*` branch.
+
+Stage 1 is verified at four prefix boundaries: pre-commit clean, pyrefly zero errors, and
+the default pytest selection green except the one pre-existing dense-Grug
+explicit-sharding failure that reproduces on bare `origin/main`. What stage 1 does **not**
+have is any accelerator verification — the SM100 QuACK kernels, FA4 and the SYRK path
+were checked for control flow and blob identity on CPU only. That is the rack gate.
+
+Stage 2 (D1, E2, D2, D3, D4, F1, and B4) is not assembled. **The stage-1 prefix therefore
+cannot reproduce D-2's 22.398%** — padded Muon alone accounts for about 1.78pp of it —
+and roughly 20.7% is the correct expectation for this prefix.
 
 ## Commit series
 
@@ -45,9 +56,9 @@ A1's chunk-drop fix**, or it introduces a backend that drops while reporting zer
 | # | Experiment | Outcome |
 |---|---|---|
 | D-1 | FSDP baseline drop rates | **Done. `<3%` clause fired.** 0.230% (d6144) and 0.000% (d5120). The EP line's fidelity advantage does not exist. D-1c added trio-on at 318,711 tok/s / 20.575%. The 19.17% baseline was **two-rack** and is not comparable to single-rack numbers. |
-| D-2 | Composed EP64 stack | **Compile gate passed both SYRK arms**, zero `spmd_partitioner.cc:668` warnings. Composed 350-step draw running; prediction ~22.5%. |
+| D-2 | Composed EP64 stack | **Done. The Phase D gains compose.** Three draws, median **22.398% MFU / 346,950 tok/s**, drops 1.444%, spread 0.137pp — 0.102pp under the pre-registered 22.5%. Measured on the research build `c24ccfcc2`, so it does not yet license a claim about the assembled series. |
 | D-3 | Leg-batching contradiction | **Resolved.** Patch recovered from Iris bundle `0483b2f2…` and `98737aecf`. The two measurements tested different changes. Neither sign supported; 25.39% stays barred. |
-| D-4 | Multi-rack EP64 | Not started. Behind D-2. Still the largest unquantified schedule risk. |
+| D-4 | Multi-rack EP64 | **Running.** Released by the D-2 verdict, from artifact `c24ccfcc2`. 2 racks then 4, weak-scaled so per-device work is constant. Still the largest unquantified schedule risk: every 20T projection assumes a 7% weak-scaling penalty and FSDP measured ~19%. |
 | D-5 | Overlap-limit census | **Done.** 12 MoE all-to-alls at every limit; SYNC census `4,0,0,0` at limits 1/2/4/8. Limit 4 clears all. Prize repriced to ~+0.1pp. |
 | D-6a | GatedNorm/attn-gate/XSA trio | **Done, negative.** Two draws, 317,253 tok/s mean against 321,670 control, 1.37% below, non-overlapping bands. Trio is unconditional on `main`. |
 | D-6b | Muon shape-grouping | Not started. +0.09pp on FSDP, below the 2pp draw threshold. |
@@ -96,7 +107,8 @@ Listed so they are not re-derived. Each was believed, then disproved.
 
 1. **FSDP trio-on, QB-on, one rack at d5120 8-of-256.** The only arm that makes the
    EP-vs-FSDP comparison matched. Currently FSDP (QB-off) is 0.46% ahead on tok/s while EP
-   pays a QB penalty worth up to 1.44pp. One 120-step job.
+   pays a QB penalty worth up to 1.44pp. One 120-step job. **Running as D-1d** on
+   `agent/deri-d1d-fsdpqb`, one variable changed from D-1c.
 2. **Reconcile the trio's cost with Larry Dial's estimate.** He put it at "2 MFU or so";
    measured it is 0.503pp on FSDP and 0.285pp on EP.
 3. **Whether the FSDP comparison figures were single- or dual-rack**, and their QB state.
