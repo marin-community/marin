@@ -85,6 +85,13 @@ def main() -> None:
             browser = pw.chromium.launch()
             for scheme in ("light", "dark"):
                 context = browser.new_context(viewport=VIEWPORT, color_scheme=scheme)
+                # Drive the theme through the app's own persistence: template.html reads this key before
+                # any app code, so every navigation (including deep links) loads the right theme rather
+                # than relying on a post-load class toggle that a full page load then overwrites.
+                dark_flag = "true" if scheme == "dark" else "false"
+                context.add_init_script(
+                    f"try {{ localStorage.setItem('evaldash-dark-mode', '{dark_flag}'); }} catch (e) {{}}"
+                )
                 page = context.new_page()
                 for name, path, wait_for in SHOTS:
                     if scheme == "dark" and not name.startswith(("01", "03", "05")):
@@ -94,8 +101,6 @@ def main() -> None:
                         page.wait_for_selector(wait_for, timeout=4000)
                     except Exception:
                         print(f"  warn: selector {wait_for!r} not found for {path}")
-                    # The theme is a `.dark` class on <html> (keyed CSS variables); set it directly.
-                    page.evaluate(f"document.documentElement.classList.toggle('dark', {str(scheme == 'dark').lower()})")
                     page.wait_for_timeout(300)
                     dest = out_dir / (name if scheme == "light" else name.replace(".png", "-dark.png"))
                     page.screenshot(path=str(dest), full_page=True)
