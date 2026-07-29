@@ -100,6 +100,34 @@ not fit at bs128, those three runs move to 4 nodes and the total becomes 32.
 Both the H100 and GB200 figures available sit near 12-15k tokens/s per GPU for a 1.5B.
 Treat that as a prior, not a plan input; calibration replaces it.
 
+## Measured 2026-07-29
+
+Three one-node GB200 smokes, 20 steps each, with evals and a final checkpoint.
+
+| run | batch | seqs/device | tok/s | final eval |
+|---|---|---|---|---|
+| scratch, augmented | 128 | 32 | 110,030 | 6.2489 |
+| scratch, augmented | 64 | 16 | 108,290 | 6.3303 |
+| exp117-init, unaugmented | 64 | 16 | 107,059 | 5.8976 |
+
+`MAX_SEQS_PER_DEVICE["GB200"] = 32`. That is the largest microbatch one node can be asked
+for at batch 128, not an observed ceiling; the real limit is higher and unmeasured. H100
+stays unmeasured and fails loudly.
+
+**The two batch sizes run 1.6% apart.** Every run moves the same 37.4B tokens, so the
+extra 35,680 optimizer steps a bs64 run pays cost about that much — not the multiple the
+asymmetric gang allocation assumes. At bs64 on four nodes and bs128 on two, the bs128 runs
+get half the GPUs for the same token budget and take roughly twice as long, which is the
+opposite of evening out completion times. Four nodes for all eight runs gives 32 nodes and
+about 26 h each, finishing together. Multi-node scaling is extrapolated from one node and
+has not been measured.
+
+The seed loads: the training job logs `Loading checkpoint from .../exp166-init/`, and the
+exp117-init trajectory sits below scratch at every step. It does **not** start near
+exp117's 2.71 because a 20-step smoke compresses warmup to 2 steps, so the model takes two
+full-learning-rate updates before the first logged point. A production run warms up over
+7,136 steps.
+
 ## Calibration
 
 Two short runs on `tmp/ttl=1d/`, one per GPU type, before anything else is launched.
