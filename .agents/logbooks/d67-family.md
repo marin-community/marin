@@ -482,3 +482,42 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
 ```
 
 - Recovery gate: keep the original physical-domain divisibility preflight. Uneven-domain attempts must fail before a training step and may retry within this one job. Accept the draw only after a balanced placement passes preflight and emits finite loss/drop metrics.
+
+### 2026-07-28 20:03 PDT - D67-CTL-01 r8 stopped after cross-attempt coordinator split
+
+- Attempts 0–2 each had one node fail `Init:Error stage-workdir`; their gang siblings ended `COSCHED_FAILED`. Attempt 3 admitted 16 tasks in production band 1.
+- Attempt 3 never reached Trainer preflight or emitted a metric. Retained initialization logs showed stale attempt-2 ranks resolving coordinator `10.186.213.177:8476` while attempt-3 task 0 registered `10.186.213.89:8476`. The shared endpoint name `jax_coordinator` let a fast retry resolve the preceding attempt's endpoint, splitting the gang across two coordinators.
+- Action: stopped exact parent `/mwittmann/d67-control-m3-draw1-r8-0728-1955` at 20:01 PDT. Iris confirmed both parent and child `killed`. No step, loss, throughput, MFU, or drop metric was observed, so r8 is not an experimental draw.
+- Recovery: Iris coordinator registration and polling now derive an attempt-specific endpoint name from `JobInfo.attempt_id`. This covers both one-process-per-task and supervised multi-GPU initialization. `lib/iris/tests/test_jax_init.py` passes (23 tests), including registration and polling assertions for a nonzero attempt, and `./infra/pre-commit.py --changed-files --fix` passes.
+
+### 2026-07-28 20:03 PDT - D67-CTL-01 replacement r9 pre-registration
+
+- Prediction carried forward verbatim from 15:35 PDT, before any experimental result was observed: This draw reproduces the healthy m=3/cf1.0625 operating point. Predict about 321K tokens/s and 20.7% MFU, allowing ±4% tokens/s for placement (308–334K), with tail-100 drops 1.2–1.7%. Loss must remain finite and decline through step 349.
+- Planned parent job ID: `/mwittmann/d67-control-m3-draw1-r9-0728-2005`
+- Planned child job ID: `/mwittmann/d67-control-m3-draw1-r9-0728-2005/grug-train-d67-control-m3-draw1-r9-0728-2005`
+- Exact command:
+
+```bash
+IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
+  --cpu 2 --memory 3GB --extra cpu --priority production \
+  --job-name d67-control-m3-draw1-r9-0728-2005 -e RUN_ID d67-control-m3-draw1-r9-0728-2005 \
+  -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async \
+  -e XLA_FLAGS "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false --xla_gpu_experimental_parallel_collective_overlap_limit=4" \
+  -e SCALE_ATTN_IMPL gpu_fa4_cute -e SCALE_WATCH_INTERVAL 0 -e SCALE_CHECKPOINTS local \
+  -e SCALE_A2A_FIXED 1 -e SCALE_A2A_CHUNKS 1 -e SCALE_A2A_NO_BARRIER 1 \
+  -e SCALE_A2A_GATHER_DISPATCH 1 -e SCALE_A2A_CUSTOM_ADJOINT 1 \
+  -e SCALE_MOE_QB 1 -e SCALE_REPORT_DROPS 1 -e SCALE_A2A_SPILL 3 \
+  -e SCALE_CAPACITY_FACTOR 1.0625 -e SCALE_JOB_PRIORITY 1 \
+  -e SCALE_GPUS_PER_NODE 4 -e SCALE_GPU_TYPE GB200 -e SCALE_GPU_REPLICAS 16 \
+  -e SCALE_EXPERT_AXIS 64 -e SCALE_NUM_EXPERTS 256 -e SCALE_TOP_K 8 \
+  -e SCALE_HIDDEN_DIM 5120 -e SCALE_NUM_LAYERS 48 -e SCALE_INTERMEDIATE 1280 \
+  -e SCALE_SHARED_INTERMEDIATE 5120 -e SCALE_SEQ_LEN 4096 -e SCALE_BATCH 1024 \
+  -e SCALE_SLIDING_WINDOW 2048 -e SCALE_STEPS 350 \
+  -e SCALE_MOE_IMPL ragged_all_to_all -e SCALE_OPTIMIZER muonh -e SCALE_MUON_SYRK 1 \
+  -e SCALE_SCAN_LAYERS 1 -e SCALE_REMAT recompute_all \
+  -e SCALE_TRACKER json_logger -e SCALE_JSON_LOGGER d67-control-m3-draw1-r9-0728-2005.metrics \
+  -e SCALE_DISABLE_CHECKPOINT 1 \
+  -- python -m experiments.grug.moe.launch_cw_scale --version d67-family-dev --run
+```
+
+- Recovery gate: every retry must use an attempt-specific coordinator endpoint. Keep the physical-domain divisibility preflight: uneven-domain attempts may fail and retry, but accept the draw only after a balanced placement passes preflight and emits finite loss/drop metrics.

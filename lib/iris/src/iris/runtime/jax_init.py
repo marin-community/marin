@@ -288,6 +288,8 @@ def initialize_jax(
         return
 
     job_info = get_job_info()
+    if job_info is not None:
+        endpoint_name = f"{endpoint_name}-attempt-{job_info.attempt_id}"
     _log_jax_bootstrap_inputs(job_info, port=port, endpoint_name=endpoint_name)
 
     # Supervised (multi-process-per-task) mode short-circuits the task-derived

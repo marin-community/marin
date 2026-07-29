@@ -44,8 +44,10 @@ class FakeRegistry:
 class FakeResolver:
     results: list[ResolveResult] = field(default_factory=list)
     call_count: int = 0
+    resolved_names: list[str] = field(default_factory=list)
 
     def resolve(self, name: str) -> ResolveResult:
+        self.resolved_names.append(name)
         idx = min(self.call_count, len(self.results) - 1)
         result = self.results[idx]
         self.call_count += 1
@@ -58,13 +60,13 @@ class FakeContext:
     resolver: FakeResolver = field(default_factory=FakeResolver)
 
 
-def _make_job_info(task_index: int = 0, num_tasks: int = 1) -> JobInfo:
+def _make_job_info(task_index: int = 0, num_tasks: int = 1, attempt_id: int = 0) -> JobInfo:
     """Create a JobInfo with the given task_index and num_tasks."""
     job_name = JobName.from_string(f"/testuser/testjob/{task_index}")
     return JobInfo(
         task_id=job_name,
         num_tasks=num_tasks,
-        attempt_id=0,
+        attempt_id=attempt_id,
         advertise_host="10.0.0.1",
         controller_address="controller:8080",
         ports={},
@@ -131,7 +133,8 @@ def test_initialize_jax_tpu_multitask_uses_iris_registry(
     initialize_jax()
     initialize_jax(poll_timeout=10.0, poll_interval=0.01)
 
-    assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:8476")]
+    assert fake_ctx.registry.registered == [("jax_coordinator-attempt-0", "10.0.0.1:8476")]
+    assert fake_ctx.resolver.resolved_names == ["jax_coordinator-attempt-0"]
     assert mock_jax_init.call_args_list == [
         call("10.0.0.1:8476", 2, 0, initialization_timeout=_JAX_DIST_INIT_TIMEOUT),
         call("10.0.0.1:8476", 2, 1, initialization_timeout=_JAX_DIST_INIT_TIMEOUT),
@@ -168,13 +171,13 @@ def test_initialize_jax_task0_registers(
     mock_atexit: MagicMock,
 ) -> None:
     """Task 0 registers the coordinator endpoint and calls jax.distributed.initialize."""
-    mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=4)
+    mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=4, attempt_id=3)
     fake_ctx = FakeContext()
     mock_iris_ctx.return_value = fake_ctx
 
     initialize_jax(port=9999)
 
-    assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:9999")]
+    assert fake_ctx.registry.registered == [("jax_coordinator-attempt-3", "10.0.0.1:9999")]
     mock_jax_init.assert_called_once_with("10.0.0.1:9999", 4, 0, initialization_timeout=_JAX_DIST_INIT_TIMEOUT)
     mock_atexit.register.assert_called_once_with(fake_ctx.registry.unregister, "endpoint-1")
 
@@ -198,7 +201,7 @@ def test_initialize_jax_task0_uses_iris_port(
 
     initialize_jax(port=9999)
 
-    assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:12345")]
+    assert fake_ctx.registry.registered == [("jax_coordinator-attempt-0", "10.0.0.1:12345")]
     mock_jax_init.assert_called_once_with("10.0.0.1:12345", 2, 0, initialization_timeout=_JAX_DIST_INIT_TIMEOUT)
 
 
@@ -211,7 +214,7 @@ def test_initialize_jax_taskN_polls(
     mock_jax_init: MagicMock,
 ) -> None:
     """Task N polls for the coordinator endpoint and calls jax.distributed.initialize."""
-    mock_get_job_info.return_value = _make_job_info(task_index=2, num_tasks=4)
+    mock_get_job_info.return_value = _make_job_info(task_index=2, num_tasks=4, attempt_id=3)
 
     empty = ResolveResult(name="jax_coordinator", endpoints=[])
     found = ResolveResult(
@@ -224,6 +227,7 @@ def test_initialize_jax_taskN_polls(
     initialize_jax(poll_timeout=10.0, poll_interval=0.01)
 
     assert fake_ctx.resolver.call_count >= 3
+    assert set(fake_ctx.resolver.resolved_names) == {"jax_coordinator-attempt-3"}
     mock_jax_init.assert_called_once_with("10.0.0.1:8476", 4, 2, initialization_timeout=_JAX_DIST_INIT_TIMEOUT)
 
 
@@ -294,7 +298,7 @@ def test_initialize_jax_supervised_global_rank0_registers(
 
     initialize_jax()
 
-    assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:8476")]
+    assert fake_ctx.registry.registered == [("jax_coordinator-attempt-0", "10.0.0.1:8476")]
     mock_jax_init.assert_called_once_with(
         "10.0.0.1:8476", 16, 0, local_device_ids=[0], initialization_timeout=_JAX_DIST_INIT_TIMEOUT
     )
@@ -327,6 +331,7 @@ def test_initialize_jax_supervised_other_host_polls(
         "10.0.0.9:8476", 16, 8, local_device_ids=[0], initialization_timeout=_JAX_DIST_INIT_TIMEOUT
     )
     assert fake_ctx.registry.registered == []
+    assert fake_ctx.resolver.resolved_names == ["jax_coordinator-attempt-0"]
 
 
 # NOT_FOUND is the proper Connect "name absent"; UNIMPLEMENTED is what an older
