@@ -124,6 +124,19 @@ carry over — only the Iris job name changes.
 Read a Python traceback in the *training* task as a real fault; the three above all occur
 before or outside training and are indistinguishable from preemption.
 
+### What actually fit, 2026-07-29
+
+Five gangs of four nodes were placeable — 20 nodes. Every attempt at a sixth four-node
+gang came back `num_devices (16) must be divisible by num_slices (3)`: Kueue placed three
+of the four and the mesh could not be built. Repeated retries reproduced it exactly, so 20
+nodes was the practical ceiling that afternoon, not a transient dip.
+
+The remaining three runs were submitted at **two nodes** instead, which places within the
+same ceiling and roughly halves their throughput: about 50 h against 25 h. Node count is a
+pure wall-clock knob, so the objective, schedule and step count are unchanged and the
+results stay comparable to the four-node runs. Only bitwise reproducibility differs, which
+was never expected across gang shapes.
+
 **Thirty-two nodes is not reliably available.** Submitting all eight at once on 2026-07-29
 admitted three and failed five within 90 seconds: Kueue gang admission is all-or-nothing,
 so a gang that cannot be placed fails immediately rather than queueing
