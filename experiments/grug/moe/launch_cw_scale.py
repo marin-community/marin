@@ -28,6 +28,8 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_REMAT         recompute_all (default) | save_moe -- save_moe keeps the
                         tagged MoE dispatch tensors for backward so the EP
                         collectives are not re-run during recompute
+    SCALE_SCAN_LAYERS   1 stacks all blocks into one lax.scan body; the unrolled
+                        production program OOMs. Default off
     SCALE_MP            jmp policy (default params=float32,compute=bfloat16,
                         output=bfloat16); params=bfloat16 halves FSDP gather bytes
     SCALE_TRACKER       wandb | json_logger (default json_logger)
@@ -133,6 +135,7 @@ def build_scale_model() -> GrugModelConfig:
         remat_mode=cast(RematMode, remat_mode),
         moe_implementation=moe_implementation,
         attention_implementation=attention_implementation,
+        use_array_stacked_blocks=os.environ.get("SCALE_SCAN_LAYERS") == "1",
     )
 
 
