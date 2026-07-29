@@ -37,24 +37,6 @@ from iac.nodepools import derive_nodepools
 from rigging.secrets import resolve_secret_spec
 
 DEFAULT_NAMESPACE = "iris"
-DEFAULT_COREWEAVE_KUBECONFIG = os.path.expanduser("~/.kube/coreweave-iris")
-
-
-def _require_kubeconfig(cluster: str) -> None:
-    """Require KUBECONFIG in the execution environment, offering the default CoreWeave kubeconfig path."""
-    if os.environ.get("KUBECONFIG"):
-        return
-    candidate = DEFAULT_COREWEAVE_KUBECONFIG
-    if os.path.isfile(candidate) and sys.stdin.isatty():
-        answer = input(f"KUBECONFIG is unset; use {candidate}? [Y/n] ").strip().lower()
-        if answer in ("", "y", "yes"):
-            os.environ["KUBECONFIG"] = candidate
-            return
-    hint = f" (e.g. export KUBECONFIG={candidate})" if os.path.isfile(candidate) else ""
-    raise ValueError(
-        f"cluster {cluster!r} requires KUBECONFIG; "
-        f"Pulumi reads Kubernetes credentials from the execution environment{hint}"
-    )
 
 
 def _warn_if_no_persistent_signing_key(cluster: str, iris_config) -> None:
@@ -108,7 +90,10 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
     # another CoreWeave cluster sharing ~/.kube/coreweave-iris.
     if not platform_coreweave.kube_context:
         raise ValueError(f"cluster {cluster!r} missing required platform.coreweave.kube_context")
-    _require_kubeconfig(cluster)
+
+    if not os.environ.get("KUBECONFIG"):
+        raise ValueError("pulumi up requires KUBECONFIG (e.g. export KUBECONFIG=~/.kube/coreweave-iris).")
+
     # kubeconfig="": bypasses the Python SDK's default of copying $KUBECONFIG into
     # the provider input (which persists a machine-local path in state, creating spurious diffs)
     # The provider process still loads credentials from the ambient KUBECONFIG env.
