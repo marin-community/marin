@@ -101,6 +101,7 @@ explicit MoE configuration fields before these paths are generalized.
 | `SCALE_A2A_FIXED` | off | Use static-capacity `lax.all_to_all` buffers for ragged expert dispatch |
 | `SCALE_A2A_CHUNKS` | `1` | Split each local token batch into this many fixed-capacity dispatches |
 | `SCALE_A2A_NO_BARRIER` | off | Skip the rematerialization barriers around fixed-capacity dispatch |
+| `SCALE_A2A_SPILL` | `0` | Retry each overflow assignment against this many lower-ranked selected experts |
 
 ## GB200 job environment
 

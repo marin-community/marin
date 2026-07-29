@@ -23,7 +23,7 @@ from levanter.grug._moe.common import (
     _prepare_moe_dispatch_indices_with_assignment_ids,
 )
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
-from levanter.grug._moe.ep_ragged_all_to_all import _fixed_a2a_core
+from levanter.grug._moe.ep_ragged_all_to_all import _assign_with_spill, _fixed_a2a_core
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -802,6 +802,94 @@ def test_fixed_a2a_executes_cross_shard_slot_routing():
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_spill_preserves_capacity():
+    selected_experts = jnp.array(
+        [
+            [0, 1],
+            [0, 1],
+            [0, 2],
+        ],
+        dtype=jnp.int32,
+    )
+    combine_weights = jnp.array(
+        [
+            [0.9, 0.1],
+            [0.8, 0.2],
+            [0.7, 0.3],
+        ],
+        dtype=jnp.float32,
+    )
+    capacity = 2
+
+    _, _, _, baseline_keep = _assign_with_spill(
+        selected_experts,
+        combine_weights,
+        num_experts=3,
+        capacity=capacity,
+        attempts=0,
+    )
+    target, slot, routed_weights, keep = _assign_with_spill(
+        selected_experts,
+        combine_weights,
+        num_experts=3,
+        capacity=capacity,
+        attempts=1,
+    )
+    assert int(baseline_keep.sum()) == 5
+    assert int(keep.sum()) == 6
+    assert int(target[4]) == 2
+    assert float(routed_weights[4]) == pytest.approx(0.3)
+    occupied_slots = np.asarray(target[keep] * capacity + slot[keep])
+    assert len(np.unique(occupied_slots)) == int(keep.sum())
+    assert int(slot[keep].min()) >= 0
+    assert int(slot[keep].max()) < capacity
+    assert occupied_slots.max() < 3 * capacity
+
+
+def test_fixed_a2a_spill_uses_candidate_expert_and_weight(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
+    monkeypatch.setenv("SCALE_A2A_SPILL", "1")
+    mesh = Mesh(
+        np.asarray([jax.devices()[0]]),
+        axis_names=("expert",),
+        axis_types=(AxisType.Explicit,),
+    )
+    x = jnp.ones((3, 1), dtype=jnp.float32)
+    selected_experts = jnp.array([[0, 1], [0, 1], [0, 2]], dtype=jnp.int32)
+    combine_weights = jnp.array([[0.9, 0.1], [0.8, 0.2], [0.7, 0.3]], dtype=jnp.float32)
+    expert_scale = jnp.array([1.0, 10.0, 100.0], dtype=jnp.float32)[:, None, None]
+    w_up_gate = jnp.concatenate([expert_scale, jnp.ones_like(expert_scale)], axis=2)
+    w_down = jnp.ones((3, 1, 1), dtype=jnp.float32)
+
+    def fixed_a2a(x, selected_experts, combine_weights, w_up_gate, w_down):
+        return _fixed_a2a_core(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation_fn=lambda value: value,
+            num_experts=3,
+            capacity_factor=1.0,
+        )
+
+    fixed_a2a_sharded = jax.shard_map(
+        fixed_a2a,
+        mesh=mesh,
+        in_specs=(P(), P(), P(), P(), P()),
+        out_specs=(P(), P()),
+        check_vma=False,
+    )
+    with jax.set_mesh(mesh):
+        actual, dropped = fixed_a2a_sharded(x, selected_experts, combine_weights, w_up_gate, w_down)
+
+    # Token 2 executes expert 2 twice at expert 2's 0.3 weight. The spilled copy must not use
+    # the displaced expert 0's 0.7 weight, which would produce 100 instead of 60.
+    expected = np.array([[1.9], [2.8], [60.0]], dtype=np.float32)
+    np.testing.assert_allclose(np.asarray(actual), expected, rtol=1e-5, atol=1e-5)
+    assert int(dropped) == 0
 
 
 def test_shard_a2a_params_uses_sender_side_output_offsets():
