@@ -1488,31 +1488,36 @@ class ControllerServiceImpl:
         # A received handoff's band was authorized by the parent against the original
         # submitter and their budget tier; the receiving cluster does not manage that
         # user, so it trusts the parent rather than re-gating on its own tiers (the
-        # submitter allowlist bounds who may federate here). A child that asks for no
-        # band is exempt for the same reason: it inherits at insert, and the ancestor
-        # that set that band was gated at its own submit. Gating it here would read the
-        # inherited band as INTERACTIVE and deny every child a BATCH-capped user spawns.
-        inherits_parent_band = not job_id.is_root and not request.priority_band
-        band = ops.job.resolve_priority_band(int(request.priority_band), inherited_band=None)
-        if is_received_handoff or inherits_parent_band:
-            pass
-        elif band == job_pb2.PRIORITY_BAND_PRODUCTION and self._auth.provider:
-            authorize(AuthzAction.MANAGE_BUDGETS)
-        else:
+        # submitter allowlist bounds who may federate here).
+        #
+        # Gate the band the job will be stored with, not the one it asked for. A child
+        # that omits the field inherits its parent's band at insert, and the client
+        # chooses whether to send the field — gating the request would let it pick
+        # whether the cap applies at all. Inheriting a band at or below the cap still
+        # passes, so a capped user's children launch normally.
+        inherited_band: int | None = None
+        if not request.priority_band and job_id.parent is not None:
             with self._db.read_snapshot() as _snap:
-                user_budget = reads.get_user_budget(_snap, job_id.user)
-            max_band = user_budget.max_band if user_budget is not None else self._user_budget_defaults.max_band
-            if band < max_band:
-                raise ConnectError(
-                    Code.PERMISSION_DENIED,
-                    f"User {job_id.user} cannot submit {priority_band_name(band)} jobs "
-                    f"(max band: {priority_band_name(max_band)}). "
-                    f"Resubmit with `--priority {priority_band_name(max_band).lower()}` "
-                    f"(e.g. `--priority batch`) to launch opportunistically, or ping @Helw150 "
-                    f"if you believe your username ({job_id.user}) should have a higher band — "
-                    f"either to be added to the researcher list or to confirm your username is "
-                    f"registered correctly.",
-                )
+                inherited_band = reads.get_priority_bands(_snap, [job_id.parent])[job_id.parent]
+        band = ops.job.resolve_priority_band(int(request.priority_band), inherited_band)
+        if not is_received_handoff:
+            if band == job_pb2.PRIORITY_BAND_PRODUCTION and self._auth.provider:
+                authorize(AuthzAction.MANAGE_BUDGETS)
+            else:
+                with self._db.read_snapshot() as _snap:
+                    user_budget = reads.get_user_budget(_snap, job_id.user)
+                max_band = user_budget.max_band if user_budget is not None else self._user_budget_defaults.max_band
+                if band < max_band:
+                    raise ConnectError(
+                        Code.PERMISSION_DENIED,
+                        f"User {job_id.user} cannot submit {priority_band_name(band)} jobs "
+                        f"(max band: {priority_band_name(max_band)}). "
+                        f"Resubmit with `--priority {priority_band_name(max_band).lower()}` "
+                        f"(e.g. `--priority batch`) to launch opportunistically, or ping @Helw150 "
+                        f"if you believe your username ({job_id.user}) should have a higher band — "
+                        f"either to be added to the researcher list or to confirm your username is "
+                        f"registered correctly.",
+                    )
 
         # Elevated profiles (DOCKER_ACCESS, PRIVILEGED) are host-root-equivalent
         # and require the admin role. The check only runs when an auth provider is

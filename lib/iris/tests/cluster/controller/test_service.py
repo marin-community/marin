@@ -280,15 +280,14 @@ def test_launch_job_bundle_blob_rewrites_to_controller_bundle_id(service, state)
     assert len(job.bundle_id) == 64
 
 
-def test_launch_job_batch_capped_user_can_spawn_children(service, state):
-    """A BATCH-capped user's child job launches and stores the inherited band.
-
-    The child asks for no band, so gating it against the user's cap would read that
-    as INTERACTIVE and deny it — the band it actually gets is its parent's BATCH,
-    which the parent was already gated for.
-    """
+def _cap_user_at(state, band: int, user: str = "test-user") -> None:
     with state._db.transaction() as tx:
-        writes.set_user_budget(tx, "test-user", 0, job_pb2.PRIORITY_BAND_BATCH, Timestamp.now())
+        writes.set_user_budget(tx, user, 0, band, Timestamp.now())
+
+
+def test_launch_job_batch_capped_user_can_spawn_children(service, state):
+    """A child inheriting a band at the user's cap launches."""
+    _cap_user_at(state, job_pb2.PRIORITY_BAND_BATCH)
 
     parent = make_job_request("parent-batch")
     parent.priority_band = job_pb2.PRIORITY_BAND_BATCH
@@ -302,14 +301,32 @@ def test_launch_job_batch_capped_user_can_spawn_children(service, state):
 
 
 def test_launch_job_rejects_band_above_the_user_cap(service, state):
-    """An explicit band above the user's cap is still refused."""
-    with state._db.transaction() as tx:
-        writes.set_user_budget(tx, "test-user", 0, job_pb2.PRIORITY_BAND_BATCH, Timestamp.now())
+    """An explicit band above the user's cap is refused."""
+    _cap_user_at(state, job_pb2.PRIORITY_BAND_BATCH)
 
     request = make_job_request("too-high")
     request.priority_band = job_pb2.PRIORITY_BAND_INTERACTIVE
     with pytest.raises(ConnectError) as exc:
         service.launch_job(request, None)
+    assert exc.value.code == Code.PERMISSION_DENIED
+
+
+def test_launch_job_child_cannot_inherit_past_a_lowered_cap(service, state):
+    """Omitting the band does not buy a child a band its owner may no longer request.
+
+    The client decides whether to send priority_band, so the cap has to be checked
+    against the band the child will inherit. Otherwise a user whose tier was lowered
+    could keep spawning PRODUCTION work under an older PRODUCTION parent.
+    """
+    _cap_user_at(state, job_pb2.PRIORITY_BAND_PRODUCTION)
+    parent = make_job_request("parent-prod")
+    parent.priority_band = job_pb2.PRIORITY_BAND_PRODUCTION
+    service.launch_job(parent, None)
+
+    _cap_user_at(state, job_pb2.PRIORITY_BAND_BATCH)
+
+    with pytest.raises(ConnectError) as exc:
+        service.launch_job(make_job_request("/test-user/parent-prod/child"), None)
     assert exc.value.code == Code.PERMISSION_DENIED
 
 

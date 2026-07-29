@@ -85,15 +85,11 @@ def _materialize_tasks(
 
 
 def resolve_priority_band(requested_band: int, inherited_band: int | None) -> int:
-    """The band a job is stored with, from its request and its parent's stored band.
+    """The band a job is stored with. ``inherited_band`` is ``None`` for a root.
 
-    The one rule for turning a ``PRIORITY_BAND_UNSPECIFIED`` (0) request into a real
-    band: an explicit request wins, a child otherwise inherits its parent's band, and a
-    root with no request is INTERACTIVE. ``inherited_band`` is ``None`` for a root.
-
-    Applied once, at the submit boundary, so ``job_config.priority_band`` and
-    ``tasks.priority_band`` never hold 0 and no reader re-derives a band. Proto3 still
-    carries 0 on the wire for a request that omits the field.
+    The only place a ``PRIORITY_BAND_UNSPECIFIED`` (0) request becomes a real band, so
+    ``job_config.priority_band`` and ``tasks.priority_band`` never hold 0 and no reader
+    re-derives one. The launch-job gate authorizes this result, not the raw request.
     """
     if requested_band != job_pb2.PRIORITY_BAND_UNSPECIFIED:
         return requested_band

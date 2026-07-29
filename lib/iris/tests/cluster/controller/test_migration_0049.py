@@ -1,13 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for migration ``0049_resolve_priority_band``.
-
-Builds a job tree carrying the pre-migration ``PRIORITY_BAND_UNSPECIFIED`` (0) rows and
-asserts the migration resolves each one the way submit now does: nearest non-zero band up
-the parent chain, INTERACTIVE when the whole chain is 0, and a PENDING task re-stamped
-from its job.
-"""
+"""Tests for migration ``0049_resolve_priority_band``."""
 
 import importlib.util
 import sqlite3
@@ -62,8 +56,6 @@ def _task_bands(conn: sqlite3.Connection) -> dict[str, int]:
 
 
 def _tree() -> sqlite3.Connection:
-    """A BATCH root with a zero child and grandchild, a PRODUCTION root with a zero
-    child, and a root that never asked for a band."""
     conn = sqlite3.connect(":memory:")
     conn.executescript(_SCHEMA)
     _add_job(conn, "/u/batch", None, _BATCH)
