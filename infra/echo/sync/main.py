@@ -41,7 +41,7 @@ BATCH = 400
 # outlasts the 10-minute schedule, and Cloud Run jobs have no concurrency limit of their own.
 SYNC_LOCK_KEY = 0x6563686F  # "echo"
 
-CHUNK_COLUMNS = [c.name for c in schema.chunks.columns]
+MIRRORED_CHUNK_COLUMNS = tuple(column.name for column in schema.chunks.columns if column.computed is None)
 
 
 def mirror_open(path: str, timeout: int = 600):
@@ -90,10 +90,18 @@ def decode_embedding(blob: bytes | None) -> list[float] | None:
 
 
 def chunk_record(row: tuple) -> dict:
-    record = dict(zip(CHUNK_COLUMNS, row, strict=True))
+    record = dict(zip(MIRRORED_CHUNK_COLUMNS, row, strict=True))
     record["date"] = datetime.fromisoformat(record["date"]) if record["date"] else None
     record["embedding"] = decode_embedding(record["embedding"])
     return record
+
+
+def corpus_chunk_cursor(database: sqlite3.Connection) -> sqlite3.Cursor:
+    placeholders = ",".join("?" * len(SOURCES))
+    return database.execute(
+        f"SELECT {', '.join(MIRRORED_CHUNK_COLUMNS)} FROM chunks WHERE source IN ({placeholders}) ORDER BY id",
+        SOURCES,
+    )
 
 
 def upsert_chunks(conn: sqlalchemy.Connection, corpus: Path) -> tuple[int, int]:
@@ -105,29 +113,26 @@ def upsert_chunks(conn: sqlalchemy.Connection, corpus: Path) -> tuple[int, int]:
     exceeds the job's memory — with each batch a single multi-row VALUES statement.
     """
     existing = dict(conn.execute(sqlalchemy.select(schema.chunks.c.id, schema.chunks.c.hash)).fetchall())
-    placeholders = ",".join("?" * len(SOURCES))
-    cursor = sqlite3.connect(corpus).execute(
-        f"SELECT {', '.join(CHUNK_COLUMNS)} FROM chunks WHERE source IN ({placeholders}) ORDER BY id",
-        SOURCES,
-    )
     ids: list[int] = []
     upserted = 0
     started = time.time()
-    while rows := cursor.fetchmany(BATCH):
-        records = [chunk_record(row) for row in rows]
-        ids.extend(record["id"] for record in records)
-        changed = [r for r in records if existing.get(r["id"], object()) != r["hash"] or r["hash"] is None]
-        if not changed:
-            continue
-        statement = pg_insert(schema.chunks).values(changed)
-        statement = statement.on_conflict_do_update(
-            index_elements=[schema.chunks.c.id],
-            set_={name: statement.excluded[name] for name in CHUNK_COLUMNS if name != "id"},
-        )
-        conn.execute(statement)
-        upserted += len(changed)
-        if upserted % 8000 < len(changed):
-            print(f"  upserted {upserted} rows ({upserted / (time.time() - started):.0f}/s)")
+    with sqlite3.connect(corpus) as database:
+        cursor = corpus_chunk_cursor(database)
+        while rows := cursor.fetchmany(BATCH):
+            records = [chunk_record(row) for row in rows]
+            ids.extend(record["id"] for record in records)
+            changed = [r for r in records if existing.get(r["id"], object()) != r["hash"] or r["hash"] is None]
+            if not changed:
+                continue
+            statement = pg_insert(schema.chunks).values(changed)
+            statement = statement.on_conflict_do_update(
+                index_elements=[schema.chunks.c.id],
+                set_={name: statement.excluded[name] for name in MIRRORED_CHUNK_COLUMNS if name != "id"},
+            )
+            conn.execute(statement)
+            upserted += len(changed)
+            if upserted % 8000 < len(changed):
+                print(f"  upserted {upserted} rows ({upserted / (time.time() - started):.0f}/s)")
 
     # One array bind, not id.not_in(ids): expanding 73k+ ids into individual parameters
     # exceeds pg8000's 65535-parameter wire-protocol limit.

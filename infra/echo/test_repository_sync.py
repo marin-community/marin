@@ -1,14 +1,78 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Behavior tests for Echo's rolling GitHub file index."""
+"""Behavior tests for Echo's activity and repository synchronization."""
 
 import base64
 import io
+import sqlite3
 import tarfile
 from datetime import UTC, datetime, timedelta
 
 from sync import github_repository as echo_sync
+from sync import main as activity_sync
+
+
+def test_activity_corpus_reader_accepts_marinmirror_schema(tmp_path):
+    corpus = tmp_path / "corpus.db"
+    with sqlite3.connect(corpus) as database:
+        database.execute(
+            """
+            CREATE TABLE chunks (
+                id INTEGER PRIMARY KEY,
+                source TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                ref TEXT,
+                parent TEXT,
+                title TEXT,
+                author TEXT,
+                date TEXT,
+                url TEXT NOT NULL,
+                text TEXT,
+                hash TEXT,
+                embedding BLOB,
+                part INTEGER NOT NULL,
+                n_parts INTEGER NOT NULL
+            )
+            """
+        )
+        database.execute(
+            "INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                7,
+                "discord",
+                "message",
+                "ref",
+                None,
+                "deployments",
+                "operator",
+                "2026-07-29T21:00:00+00:00",
+                "https://discord.com/channels/1/2/3",
+                "Echo deployed",
+                "digest",
+                None,
+                0,
+                1,
+            ),
+        )
+        row = activity_sync.corpus_chunk_cursor(database).fetchone()
+
+    assert activity_sync.chunk_record(row) == {
+        "id": 7,
+        "source": "discord",
+        "kind": "message",
+        "ref": "ref",
+        "parent": None,
+        "title": "deployments",
+        "author": "operator",
+        "date": datetime(2026, 7, 29, 21, tzinfo=UTC),
+        "url": "https://discord.com/channels/1/2/3",
+        "text": "Echo deployed",
+        "hash": "digest",
+        "embedding": None,
+        "part": 0,
+        "n_parts": 1,
+    }
 
 
 def test_github_blob_accepts_api_line_wrapped_base64(monkeypatch):
