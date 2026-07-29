@@ -121,48 +121,26 @@ _SORT_VALUE_TMP_COL = "__zephyr_sort_value_tmp__"
 # Python items consumed before creating a DataFrame.
 _DATAFRAME_ROW_COUNT = 1000
 # Number of write() calls between memory checks.
-_MEMORY_CHECK_INTERVAL = 2
+_MEMORY_CHECK_INTERVAL = 10
 # Flush all scatter buffers when task memory usage exceeds this fraction.
 _SCATTER_FLUSH_THRESHOLD = 0.75
 # Threshold for triggering a gc.collect() after a flush.
 _GC_FLUSH_SIZE_THRESHOLD_BYTES = 8 * 1024 * 1024
 
 
-def _read_cgroup_stat_field(stat_path: str, field: str) -> int | None:
-    try:
-        with open(stat_path) as f:
-            for line in f:
-                if line.startswith(field + " "):
-                    return int(line.split()[1])
-    except OSError:
-        pass
-    return None
-
-
 def _read_cgroup_memory_bytes() -> int:
-    """Read current working-set memory in bytes from the cgroup controller.
-
-    Working set = memory.current - inactive_file, matching the metric Kubernetes
-    uses for OOM calculations. Inactive file pages are reclaimable under pressure
-    and should not count toward the task's memory budget. Without subtracting
-    them, flushing scatter buffers to parquet just moves bytes into the page
-    cache and memory.current stays elevated.
+    """Read current memory usage in bytes from the cgroup controller.
 
     Falls back to process RSS when running outside a cgroup (e.g., local dev).
     """
     try:
         with open("/sys/fs/cgroup/memory.current") as f:
-            total = int(f.read().strip())
-        inactive = _read_cgroup_stat_field("/sys/fs/cgroup/memory.stat", "inactive_file")
-        return max(0, total - inactive) if inactive is not None else total
+            return int(f.read().strip())
     except OSError:
         pass
     try:
         with open("/sys/fs/cgroup/memory/memory.usage_in_bytes") as f:
-            total = int(f.read().strip())
-        # cgroups v1: field is total_inactive_file in memory.stat
-        inactive = _read_cgroup_stat_field("/sys/fs/cgroup/memory/memory.stat", "total_inactive_file")
-        return max(0, total - inactive) if inactive is not None else total
+            return int(f.read().strip())
     except OSError:
         pass
     return int(psutil.Process().memory_info().rss)
@@ -549,11 +527,7 @@ class ScatterWriter:
 
         self._source_shard = source_shard
         self._combiner_fn = combiner_fn
-        ctx = _worker_ctx_var.get()
-        if ctx is not None and ctx.task_memory_bytes > 0:
-            self._memory_available_bytes = ctx.task_memory_bytes
-        else:
-            self._memory_available_bytes = TaskResources.from_environment().memory_bytes
+        self._memory_available_bytes = TaskResources.from_environment().memory_bytes
         if self._memory_available_bytes == 0:
             logger.warning("No memory available for scatter write, defaulting to 1GB. This will likely fail.")
             self._memory_available_bytes = 1024 * 1024 * 1024
