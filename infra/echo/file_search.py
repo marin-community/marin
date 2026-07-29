@@ -5,7 +5,6 @@
 
 import hashlib
 import math
-import os
 import sqlite3
 import struct
 import subprocess
@@ -14,74 +13,85 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 import search_config
+from search_result import SearchResult
 
 MAX_FILE_BYTES = 256 * 1024
 CHUNK_CHARACTERS = 6_000
 CHUNK_OVERLAP_LINES = 8
 EMBEDDING_BATCH_SIZE = 32
-INDEX_VERSION = "1:bge-small-en-v1.5:6000"
+INDEX_VERSION = f"1:{search_config.EMBED_MODEL}:{CHUNK_CHARACTERS}"
+REPOSITORY_CACHE_DIRECTORY = "repositories"
+DAEMON_SOCKET_NAME = "search.sock"
 
-INDEXED_SUFFIXES = {
-    ".c",
-    ".cc",
-    ".cfg",
-    ".cpp",
-    ".css",
-    ".go",
-    ".h",
-    ".html",
-    ".ini",
-    ".java",
-    ".js",
-    ".json",
-    ".md",
-    ".proto",
-    ".py",
-    ".rs",
-    ".rst",
-    ".sh",
-    ".sql",
-    ".toml",
-    ".ts",
-    ".tsx",
-    ".txt",
-    ".vue",
-    ".yaml",
-    ".yml",
-}
-INDEXED_NAMES = {"AGENTS.md", "Dockerfile", "LICENSE", "Makefile"}
-EXCLUDED_PARTS = {
-    ".cache",
-    ".git",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".tox",
-    ".venv",
-    "__pycache__",
-    "build",
-    "checkpoints",
-    "dist",
-    "node_modules",
-    "target",
-    "third_party",
-    "vendor",
-    "wandb",
-}
-SECRET_PARTS = {".secrets", "secret", "secrets"}
-SECRET_NAMES = {
-    ".env",
-    "credentials.json",
-    "service-account.json",
-    "service_account.json",
-}
-SECRET_SUFFIXES = {".key", ".p12", ".pem", ".pfx"}
-GENERATED_NAMES = {
-    "package-lock.json",
-    "pnpm-lock.yaml",
-    "uv.lock",
-    "yarn.lock",
-}
+INDEXED_SUFFIXES = frozenset(
+    {
+        ".c",
+        ".cc",
+        ".cfg",
+        ".cpp",
+        ".css",
+        ".go",
+        ".h",
+        ".html",
+        ".ini",
+        ".java",
+        ".js",
+        ".json",
+        ".md",
+        ".proto",
+        ".py",
+        ".rs",
+        ".rst",
+        ".sh",
+        ".sql",
+        ".toml",
+        ".ts",
+        ".tsx",
+        ".txt",
+        ".vue",
+        ".yaml",
+        ".yml",
+    }
+)
+INDEXED_NAMES = frozenset({"AGENTS.md", "Dockerfile", "LICENSE", "Makefile"})
+EXCLUDED_PARTS = frozenset(
+    {
+        ".cache",
+        ".git",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".tox",
+        ".venv",
+        "__pycache__",
+        "build",
+        "checkpoints",
+        "dist",
+        "node_modules",
+        "target",
+        "third_party",
+        "vendor",
+        "wandb",
+    }
+)
+SECRET_PARTS = frozenset({".secrets", "secret", "secrets"})
+SECRET_NAMES = frozenset(
+    {
+        ".env",
+        "credentials.json",
+        "service-account.json",
+        "service_account.json",
+    }
+)
+SECRET_SUFFIXES = frozenset({".key", ".p12", ".pem", ".pfx"})
+GENERATED_NAMES = frozenset(
+    {
+        "package-lock.json",
+        "pnpm-lock.yaml",
+        "uv.lock",
+        "yarn.lock",
+    }
+)
 
 EmbeddingProvider = Callable[[str, list[str]], list[list[float]]]
 
@@ -111,32 +121,6 @@ class RankedChunk:
     score: float
     distance: float | None
     lexical_score: float | None
-
-
-@dataclass(frozen=True)
-class FileSearchResult:
-    id: str
-    domain: str
-    title: str
-    subtitle: str
-    url: str
-    snippet: str
-    score: float
-    distance: float | None
-    lexical_score: float | None
-
-    def json_value(self) -> dict[str, object]:
-        return {
-            "id": self.id,
-            "domain": self.domain,
-            "title": self.title,
-            "subtitle": self.subtitle,
-            "url": self.url,
-            "snippet": self.snippet,
-            "score": self.score,
-            "distance": self.distance,
-            "lexical_score": self.lexical_score,
-        }
 
 
 def repository_root(path: Path | None = None) -> Path:
@@ -226,14 +210,9 @@ def text_chunks(text: str) -> Iterable[TextChunk]:
         index += 1
 
 
-def echo_cache_dir() -> Path:
-    configured = os.environ.get("ECHO_CACHE_DIR")
-    return Path(configured).expanduser() if configured else Path.home() / ".cache" / "echo"
-
-
-def cache_path(root: Path) -> Path:
+def cache_path(root: Path, cache_root: Path) -> Path:
     key = hashlib.sha256(str(root).encode()).hexdigest()[:16]
-    return echo_cache_dir() / "repositories" / f"{key}.sqlite3"
+    return cache_root / REPOSITORY_CACHE_DIRECTORY / f"{key}.sqlite3"
 
 
 def connect_index(path: Path) -> sqlite3.Connection:
@@ -362,15 +341,16 @@ def search_files(
     *,
     root: Path | None = None,
     index_path: Path | None = None,
-) -> list[dict[str, object]]:
+) -> list[SearchResult]:
     """Return one hybrid-ranked result per tracked repository file."""
     resolved_root = repository_root(root)
-    with connect_index(index_path or cache_path(resolved_root)) as conn:
+    resolved_index_path = index_path or cache_path(resolved_root, Path.home() / ".cache" / "echo")
+    with connect_index(resolved_index_path) as conn:
         refresh_index(resolved_root, conn, embed)
     query_vectors = embed("query", [query])
     if len(query_vectors) != 1:
         raise ValueError("embedding provider must return one query vector")
-    return search_index(query, query_vectors[0], limit, index_path or cache_path(resolved_root))
+    return search_index(query, query_vectors[0], limit, resolved_index_path)
 
 
 def search_index(
@@ -378,7 +358,7 @@ def search_index(
     query_vector: Sequence[float],
     limit: int,
     index_path: Path,
-) -> list[dict[str, object]]:
+) -> list[SearchResult]:
     """Search a warm index without refreshing it."""
     with connect_index(index_path) as conn:
         rows = [
@@ -440,11 +420,11 @@ def search_index(
         if previous is None or candidate.score > previous.score:
             by_path[candidate.path] = candidate
 
-    results: list[FileSearchResult] = []
+    results: list[SearchResult] = []
     for path, candidate in by_path.items():
         line, matching_line = best_line(candidate.text, query, candidate.start_line)
         results.append(
-            FileSearchResult(
+            SearchResult(
                 id=f"file:{path}",
                 domain="file",
                 title=candidate.title,
@@ -456,5 +436,4 @@ def search_index(
                 lexical_score=candidate.lexical_score,
             )
         )
-    ranked = sorted(results, key=lambda result: (-result.score, result.url))[:limit]
-    return [result.json_value() for result in ranked]
+    return sorted(results, key=lambda result: (-result.score, result.url))[:limit]

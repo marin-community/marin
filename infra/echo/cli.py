@@ -2,17 +2,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Search Echo activity, read chunks, and manage wiki notes through the echo-api service.
+"""Search Echo and local files, read activity, and manage wiki notes.
 
 Run inside the repo environment, e.g. ``uv run infra/echo/cli.py search "..."``. This shares
 Marin's IAP login helpers from ``marin-rigging`` (not on PyPI), so it is not a standalone
 ``uv --script``.
 
-Every command calls the IAP-gated ``echo-api`` Cloud Run service with a Google-signed ID
-token whose audience is the shared Marin desktop OAuth client — the same identity that
-reaches iris. There is no separate echo login: humans authenticate once with ``iris login``
-(cached under ``~/.config/marin/credentials``) and this reuses that token; agents and CI use
-ambient service-account credentials with no login. See ``infra/echo/README.md``.
+Remote commands call the IAP-gated ``echo-api`` Cloud Run service with a Google-signed ID
+token. The ``file`` search domain uses a user-local daemon and needs no Echo authentication.
+There is no separate echo login: humans authenticate once with ``iris login`` (cached under
+``~/.config/marin/credentials``) and this reuses that token; agents and CI use ambient
+service-account credentials with no login. See ``infra/echo/README.md``.
 
     uv run infra/echo/cli.py search "expert parallel MoE MFU on B200" --limit 10
     uv run infra/echo/cli.py grep ragged_all_to_all --source discord
@@ -41,6 +41,7 @@ from rigging.auth import (
 )
 from rigging.credential_store import credentials_dir
 from rigging.credentials import iap_edge_provider
+from search_result import SearchResult
 
 # echo.oa.dev maps to the echo-api Cloud Run service; the IAP token audience is the shared
 # Marin desktop OAuth client, which echo-api's IAP settings admit as a programmatic client.
@@ -52,10 +53,10 @@ AUDIENCE = MARIN_DESKTOP_OAUTH_CLIENT.client_id
 # client, so any cached record works and `iris login` alone is enough.
 LOGIN_CLUSTER = os.environ.get("ECHO_LOGIN_CLUSTER", "marin")
 LOGIN_HINT = "run `iris login`"
-SOURCES = ["github", "discord"]
-KINDS = ["issue", "pr", "comment", "message"]
-DOMAINS = ["wiki", "file", "discord", "pr", "issue"]
-REMOTE_DOMAINS = ["wiki", "discord", "pr", "issue"]
+SOURCES = ("github", "discord")
+KINDS = ("issue", "pr", "comment", "message")
+DOMAINS = ("wiki", "file", "discord", "pr", "issue")
+REMOTE_DOMAINS = ("wiki", "discord", "pr", "issue")
 
 
 def cached_login_provider() -> TokenProvider | None:
@@ -116,13 +117,13 @@ def print_hits(hits: list[dict]) -> None:
         print(f"    {hit['url']}")
 
 
-def print_search_results(results: list[dict]) -> None:
+def print_search_results(results: list[SearchResult]) -> None:
     for result in results:
-        print(f"{result['score']:.4f} [{result['domain']}] {result['title']}")
-        print(f"    {result['subtitle']}")
-        if result.get("snippet"):
-            print(f"    {result['snippet']}")
-        print(f"    {result['url']}")
+        print(f"{result.score:.4f} [{result.domain}] {result.title}")
+        print(f"    {result.subtitle}")
+        if result.snippet:
+            print(f"    {result.snippet}")
+        print(f"    {result.url}")
 
 
 def print_wiki(entries: list[dict]) -> None:
@@ -164,22 +165,23 @@ def cmd_search(args: argparse.Namespace) -> None:
         return
 
     domains = list(dict.fromkeys(args.domain or DOMAINS))
-    results = []
+    results: list[SearchResult] = []
     remote_domains = [domain for domain in domains if domain in REMOTE_DOMAINS]
     if remote_domains:
-        results.extend(
-            request(
-                "GET",
-                "/federated-search",
-                params={"q": args.query, "domain": remote_domains, "limit": args.limit},
-            )
+        remote_value = request(
+            "GET",
+            "/federated-search",
+            params={"q": args.query, "domain": remote_domains, "limit": args.limit},
         )
+        if not isinstance(remote_value, list):
+            raise SystemExit("echo-api returned a non-list federated search response")
+        results.extend(SearchResult.from_json(result) for result in remote_value)
     if "file" in domains:
-        local_results, message = local_search.search(args.query, args.limit)
-        results.extend(local_results)
-        if message:
-            print(message, file=sys.stderr)
-    results.sort(key=lambda result: (-result["score"], result["domain"], result["id"]))
+        local_response = local_search.search(args.query, args.limit)
+        results.extend(local_response.results)
+        if local_response.message:
+            print(local_response.message, file=sys.stderr)
+    results.sort(key=lambda result: (-result.score, result.domain, result.id))
     print_search_results(results[: args.limit])
 
 

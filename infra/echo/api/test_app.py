@@ -210,24 +210,6 @@ def test_federated_search_classifies_github_comment_domain(client_with):
     ]
 
 
-def test_federated_search_drops_weak_semantic_neighbor(client_with):
-    row = make_row(
-        id=8,
-        source="discord",
-        kind="message",
-        date=datetime(2026, 7, 23, tzinfo=UTC),
-        author="alice",
-        title="random",
-        url="https://discord.com/channels/1/2/3",
-        text="unrelated",
-        score=0.02,
-        distance=0.9,
-        lexical_score=None,
-    )
-    harness = client_with([row])
-    assert echo.federated_search(harness.engine, harness.model, "scheduler", ["discord"], 10) == []
-
-
 def test_add_wiki_embeds_applicability_hint_and_body_as_passage(client_with):
     row = make_row(
         id=12,

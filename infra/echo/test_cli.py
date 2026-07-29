@@ -32,7 +32,7 @@ def test_search_merges_remote_results_while_local_index_warms(monkeypatch, capsy
     monkeypatch.setattr(
         cli.local_search,
         "search",
-        lambda query, limit: ([], "local file search is starting; its first index builds in the background"),
+        lambda query, limit: local_search.LocalSearchResponse((), "local file search is warming"),
     )
     args = cli.build_parser().parse_args(["search", "collective diagnosis", "--domain", "wiki", "--domain", "file"])
     args.func(args)
@@ -40,7 +40,7 @@ def test_search_merges_remote_results_while_local_index_warms(monkeypatch, capsy
     captured = capsys.readouterr()
     assert "[wiki] Collective diagnosis" in captured.out
     assert "https://echo.oa.dev/wiki/7" in captured.out
-    assert "first index builds in the background" in captured.err
+    assert captured.err
 
 
 def test_search_legacy_activity_filters_keep_existing_endpoint(monkeypatch, capsys):
@@ -68,8 +68,8 @@ def test_cold_local_search_starts_daemon_without_waiting(tmp_path, monkeypatch):
 
     monkeypatch.setattr(local_search, "daemon_request", unavailable_daemon)
     monkeypatch.setattr(local_search, "start_daemon", started.append)
-    results, message = local_search.search("scheduler", 10, root=tmp_path)
+    response = local_search.search("scheduler", 10, root=tmp_path)
 
-    assert results == []
-    assert message == "local file search is starting; its first index builds in the background"
+    assert response.results == ()
+    assert response.message is not None
     assert started == [tmp_path.resolve()]

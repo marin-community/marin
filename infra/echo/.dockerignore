@@ -10,6 +10,7 @@ cli.py
 file_search.py
 local_search.py
 local_search_daemon.py
+search_result.py
 okf.py
 migrate.py
 __main__.py

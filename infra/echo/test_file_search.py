@@ -20,15 +20,12 @@ class FakeEmbedder:
         return [[1.0, 0.0] if "collective diagnosis" in text else [0.0, 1.0] for text in texts]
 
 
-def tracked_repository(tmp_path: Path, files: dict[str, str | bytes]) -> Path:
+def tracked_repository(tmp_path: Path, files: dict[str, str]) -> Path:
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     for relative, contents in files.items():
         path = tmp_path / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        if isinstance(contents, bytes):
-            path.write_bytes(contents)
-        else:
-            path.write_text(contents)
+        path.write_text(contents)
     subprocess.run(["git", "add", "-f", "--", *files], cwd=tmp_path, check=True)
     return tmp_path
 
@@ -51,15 +48,15 @@ def test_file_search_combines_exact_and_semantic_results(tmp_path):
         index_path=tmp_path / "index.sqlite3",
     )
 
-    assert [result["url"] for result in results] == [
+    assert [result.url for result in results] == [
         "lib/iris/src/worker.py",
         "docs/collectives.md",
     ]
-    assert results[0]["title"] == "worker.py"
-    assert results[0]["subtitle"] == "lib/iris/src/worker.py:1"
-    assert results[0]["lexical_score"] is not None
-    assert results[1]["distance"] == 0.0
-    assert all(result["url"] != "notes/unrelated.md" for result in results)
+    assert results[0].title == "worker.py"
+    assert results[0].subtitle == "lib/iris/src/worker.py:1"
+    assert results[0].lexical_score is not None
+    assert results[1].distance == 0.0
+    assert all(result.url != "notes/unrelated.md" for result in results)
 
 
 def test_file_index_excludes_untracked_generated_vendored_secret_and_oversized_files(tmp_path):
@@ -71,7 +68,7 @@ def test_file_index_excludes_untracked_generated_vendored_secret_and_oversized_f
             "config/external/model.py": "MODEL = 'vendored'\n",
             "keys/deploy.pem": "private material",
             "package-lock.json": "{}",
-            "docs/huge.md": b"x" * (file_search.MAX_FILE_BYTES + 1),
+            "docs/huge.md": "x" * (file_search.MAX_FILE_BYTES + 1),
         },
     )
     (root / "untracked.py").write_text("UNTRACKED_SECRET = True\n")

@@ -260,10 +260,6 @@ def activity_domain(row: sqlalchemy.Row) -> Literal["discord", "pr", "issue"]:
     return "issue"
 
 
-def quality_result(distance: float | None, lexical_score: float | None) -> bool:
-    return lexical_score is not None or (distance is not None and distance <= search_config.MAX_SEMANTIC_DISTANCE)
-
-
 def activity_search_result(row: sqlalchemy.Row) -> SearchResult:
     domain = activity_domain(row)
     title = row.title or snippet(row) or row.url
@@ -327,7 +323,7 @@ def search(
     params = {
         "q": query,
         "embedding": str(query_embedding(model, query)),
-        "candidate_limit": hybrid_search.candidate_limit(limit),
+        "candidate_limit": search_config.candidate_limit(limit),
         "limit": limit,
         "source": source,
         "kind": kind,
@@ -357,7 +353,7 @@ def federated_search(
     params = {
         "q": query,
         "embedding": str(query_embedding(model, query)),
-        "candidate_limit": hybrid_search.candidate_limit(limit),
+        "candidate_limit": search_config.candidate_limit(limit),
         "limit": limit,
     }
     results: list[SearchResult] = []
@@ -365,14 +361,12 @@ def federated_search(
         conn.execute(hybrid_search.HNSW_ITERATIVE_SCAN)
         if "wiki" in domains:
             for row in conn.execute(hybrid_search.wiki_search_statement(), params):
-                if quality_result(row.distance, row.lexical_score):
-                    results.append(wiki_search_result(row))
+                results.append(wiki_search_result(row))
         activity_domains = [candidate for candidate in domains if candidate != "wiki"]
         if activity_domains:
             statement = hybrid_search.chunk_search_statement([activity_domain_clause(activity_domains)])
             for row in conn.execute(statement, params):
-                if quality_result(row.distance, row.lexical_score):
-                    results.append(activity_search_result(row))
+                results.append(activity_search_result(row))
     return sorted(results, key=lambda result: (-result.score, result.domain, result.id))[:limit]
 
 
@@ -490,7 +484,7 @@ def search_wiki(
         params = {
             "q": query,
             "embedding": str(query_embedding(model, query)),
-            "candidate_limit": hybrid_search.candidate_limit(limit),
+            "candidate_limit": search_config.candidate_limit(limit),
             "limit": limit,
             "tags": tags,
         }

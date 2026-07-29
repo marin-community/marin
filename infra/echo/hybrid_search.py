@@ -13,15 +13,8 @@ from search_config import (
     TEXT_SEARCH_CONFIG,
     TS_RANK_NORMALIZATION,
 )
-from search_config import (
-    candidate_limit as configured_candidate_limit,
-)
 
 HNSW_ITERATIVE_SCAN = sqlalchemy.text("SET hnsw.iterative_scan = relaxed_order")
-
-
-def candidate_limit(limit: int) -> int:
-    return configured_candidate_limit(limit)
 
 
 def _where(clauses: Sequence[str], extra: str) -> str:

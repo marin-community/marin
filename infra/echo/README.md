@@ -62,9 +62,9 @@ File search runs in a user-local daemon. The first search starts
 returns the available remote results without waiting for the local model or index.
 Later searches include file results once the background index is ready. The daemon
 stores its Unix socket, log, model assets, and per-checkout SQLite indexes under
-`~/.cache/echo` (`ECHO_CACHE_DIR` overrides this root). It checks a warm checkout
-for changes at most once per minute and serves the previous complete index while a
-refresh runs. Indexes unused for 30 days are removed daily.
+`~/.cache/echo`. It checks a warm checkout for changes at most once per minute and
+serves the previous complete index while a refresh runs. Indexes unused for 30 days
+are removed daily.
 
 The file index starts from `git ls-files`, so untracked files never enter it. It
 accepts source, configuration, and prose file types up to 256 KiB, and rejects

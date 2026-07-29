@@ -18,7 +18,6 @@ import socketserver
 import threading
 import time
 from pathlib import Path
-from typing import Any
 
 import file_search
 import search_config
@@ -27,6 +26,7 @@ from fastembed import TextEmbedding
 REFRESH_INTERVAL = 60
 CACHE_MAX_AGE = 30 * 24 * 60 * 60
 CLEANUP_INTERVAL = 24 * 60 * 60
+CACHE_ROOT = Path.home() / ".cache" / "echo"
 
 
 class SearchState:
@@ -42,7 +42,7 @@ class SearchState:
     def _load_model(self) -> None:
         model = TextEmbedding(
             search_config.EMBED_MODEL,
-            cache_dir=str(file_search.echo_cache_dir() / "models"),
+            cache_dir=str(CACHE_ROOT / "models"),
         )
         with self._lock:
             self._model = model
@@ -66,7 +66,7 @@ class SearchState:
 
     def _refresh(self, root: Path) -> None:
         try:
-            with file_search.connect_index(file_search.cache_path(root)) as conn:
+            with file_search.connect_index(file_search.cache_path(root, CACHE_ROOT)) as conn:
                 file_search.refresh_index(root, conn, self._embed)
             with self._lock:
                 self._ready.add(root)
@@ -75,7 +75,7 @@ class SearchState:
             with self._lock:
                 self._indexing.discard(root)
 
-    def search(self, root_value: str, query: str, limit: int) -> dict[str, Any]:
+    def search(self, root_value: str, query: str, limit: int) -> dict[str, object]:
         root = file_search.repository_root(Path(root_value))
         now = time.time()
         with self._lock:
@@ -90,10 +90,10 @@ class SearchState:
         if now - refreshed_at >= REFRESH_INTERVAL:
             self._start_refresh(root)
         query_vector = self._embed("query", [query])[0]
-        index_path = file_search.cache_path(root)
+        index_path = file_search.cache_path(root, CACHE_ROOT)
         results = file_search.search_index(query, query_vector, limit, index_path)
         os.utime(index_path)
-        return {"status": "ready", "results": results}
+        return {"status": "ready", "results": [result.json_value() for result in results]}
 
 
 class SearchHandler(socketserver.StreamRequestHandler):
@@ -122,7 +122,7 @@ class SearchServer(socketserver.ThreadingUnixStreamServer):
 
 
 def remove_stale_indexes() -> None:
-    repository_cache = file_search.echo_cache_dir() / "repositories"
+    repository_cache = CACHE_ROOT / file_search.REPOSITORY_CACHE_DIRECTORY
     if not repository_cache.exists():
         return
     cutoff = time.time() - CACHE_MAX_AGE
@@ -138,12 +138,11 @@ def cleanup_loop() -> None:
 
 
 def socket_path() -> Path:
-    return file_search.echo_cache_dir() / "search.sock"
+    return CACHE_ROOT / file_search.DAEMON_SOCKET_NAME
 
 
 def serve(warm_root: Path | None) -> None:
-    cache = file_search.echo_cache_dir()
-    cache.mkdir(parents=True, exist_ok=True)
+    CACHE_ROOT.mkdir(parents=True, exist_ok=True)
     endpoint = socket_path()
     if endpoint.exists():
         try:
