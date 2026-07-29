@@ -224,3 +224,11 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
 - Retry policy: `experiments/grug/dispatch.py` gives this child `max_retries_failure=3`. Attempts 0 and 1 reached setup only; neither initialized the model or emitted a training step.
 - Interpretation: The evidence is consistent with transient preemption cleanup rather than a deterministic command or model failure. Allow attempt 2 as the final automatic recovery attempt under this diagnosis.
 - Stop criterion: If attempt 2 repeats `Init:Error stage-workdir`, stop the parent job to prevent further production-band churn and escalate with the two-node evidence. Do not use the remaining built-in retry blindly.
+
+### 2026-07-28 17:16 PDT - D67-CTL-01 attempt 2 topology wait
+
+- Child job ID: `/mwittmann/d67-control-m3-draw1-r3-0728-1630/grug-train-d67-control-m3-draw1-r3-0728-1630`
+- Result: Attempt 2 remains active with 16/16 tasks in `building`, failures=2, and preemptions=0. No new setup or training line has appeared.
+- Queue reason: Kueue workload `iris-pg-b7f0be39b51da146-2` reports `QuotaReserved (Pending)` because topology `multinode-nvlink-ib` cannot fit all 16 pods: 186 nodes excluded on CPU, 17 on `nvidia.com/gpu`, and one on memory.
+- Interpretation: This is a concrete rack-fit capacity wait, not a third `stage-workdir` failure. Preserve queue position and do not resubmit.
+- Next action: Continue on the 15-minute cadence. Apply the recorded stop criterion only if attempt 2 admits and repeats the init failure.
