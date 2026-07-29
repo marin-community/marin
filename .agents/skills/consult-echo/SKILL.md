@@ -38,6 +38,7 @@ Use `show <id>` for a complete activity hit and `wiki show <id>` for a complete
 wiki note. Activity results print canonical URLs. Wiki exports include the
 canonical Echo URL in their OKF frontmatter. Open Discord URLs when surrounding
 thread context matters because Echo stores each Discord hit as one message.
+Authentication reuses the shared Marin login via `iris login`; see [Echo setup and access](../../../infra/echo/README.md).
 
 ## Choose the durable home
 
