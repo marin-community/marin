@@ -42,7 +42,7 @@ from levanter.grug.grug_moe import (
     resolve_moe_implementation,
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
-from levanter.grug.sharding import Pembed_vocab, Plm_head, unshard
+from levanter.grug.sharding import Pembed_vocab, Pfsdp, unshard
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -699,7 +699,10 @@ class Transformer(eqx.Module):
         token_embed = reshard(
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
-        output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
+        output_proj = reshard(
+            _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std),
+            P(Pfsdp, "model"),
+        )
 
         blocks: tuple[Block, ...] | None
         stacked_blocks: ArrayStacked[Block] | None

@@ -15,7 +15,16 @@ Pbatch = P(("replica_dcn", "data"))
 # vector across all devices -- an all-to-all spanning racks whose NCCL first-call rendezvous wedges
 # at 8+ racks. The replicated table's gradient is a normal DDP all-reduce.
 Pembed_vocab = P(None, None)
-Plm_head = P(Pbatch[0], "model")
+Plm_head_dense = P(Pbatch[0], "model")
+# FSDP axes for non-expert weights. Both axes are intra-rack under the compact
+# Grug mesh, while replica_dcn remains the cross-rack gradient-sync axis.
+#
+# Expert parallelism collapses "data" as "expert" grows. Including both axes
+# keeps attention and shared-expert weights and optimizer state sharded at EP64.
+Pfsdp = ("data", "expert")
+# The lm head also preserves the cross-slice replica axis from the dense layout.
+# Adding only the expert axis makes EP1 exactly equivalent to Plm_head_dense.
+Plm_head_ep = P(("replica_dcn", "data", "expert"), "model")
 Plogits = P(Pbatch[0], None, "model")
 
 
