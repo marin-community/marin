@@ -1298,23 +1298,6 @@ Verify the image exists and is public:
 docker pull ghcr.io/marin-community/iris-worker:<git-sha>-amd64
 ```
 
-An `exec format error` before the process starts usually means the resolved
-image architecture does not match the node. Compare the node architecture with
-the init and task containers' resolved image IDs:
-
-```bash
-kubectl get node <node> -o jsonpath='{.status.nodeInfo.architecture}{"\n"}'
-kubectl -n iris get pod <pod> -o jsonpath='{range .status.initContainerStatuses[*]}{.name}{"\t"}{.imageID}{"\n"}{end}{range .status.containerStatuses[*]}{.name}{"\t"}{.imageID}{"\n"}{end}'
-docker buildx imagetools inspect <image>@sha256:<resolved-digest>
-```
-
-The resolved object must either declare the node's platform or contain it in a
-multi-platform manifest. Mutable tags combined with `IfNotPresent` can resolve
-to different cached images on different nodes. Iris deploys pin task,
-controller, and worker images to the deploy tree SHA. Single-platform images
-use `<sha>-<architecture>` so an amd64 build cannot overwrite a multi-platform
-SHA tag.
-
 ### CrashLoopBackOff
 
 The platform detects crash loops after 2+ restarts and reports the last 30 log
