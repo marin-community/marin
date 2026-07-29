@@ -411,34 +411,34 @@ def test_drain_redrives_assigned_null_worker(state):
     """ASSIGNED+null-worker rows are redriven into ``tasks_to_run`` on each
     cycle (idempotent ``kubectl apply``), so a controller crash between the
     promote-commit and the pod-apply still recovers. They are *also* in
-    ``running_tasks`` so the same-cycle poll observes the freshly-applied
+    ``task_attempts`` so the same-cycle poll observes the freshly-applied
     pod's phase and transitions the row out of ASSIGNED."""
     [task_id] = submit_direct_job(state, "drain-redrive")
 
     # First drain promotes PENDING -> ASSIGNED, builds a RunTaskRequest, and
-    # also includes the row in running_tasks so the post-apply poll picks up
+    # also includes the row in task_attempts so the post-apply poll picks up
     # the new pod's phase on the same cycle.
     with state._db.transaction() as cur:
         batch1 = dispatch.drain_for_dispatch(cur)
     assert len(batch1.tasks_to_run) == 1
     assert batch1.tasks_to_run[0].task_id == task_id.to_wire()
     assert batch1.tasks_to_run[0].attempt_id == 0
-    assert [(e.task_id, e.attempt_id) for e in batch1.running_tasks] == [(task_id, 0)]
+    assert [(e.task_id, e.attempt_id) for e in batch1.task_attempts] == [(task_id, 0)]
 
     # Second drain (simulates a crash between assign-commit and provider.sync,
     # or a transient apply failure): task is still ASSIGNED+null-worker, so it
     # is redriven in tasks_to_run with the same attempt_id and stays in
-    # running_tasks.
+    # task_attempts.
     with state._db.transaction() as cur:
         batch2 = dispatch.drain_for_dispatch(cur)
     assert len(batch2.tasks_to_run) == 1
     assert batch2.tasks_to_run[0].task_id == task_id.to_wire()
     assert batch2.tasks_to_run[0].attempt_id == 0
-    assert [(e.task_id, e.attempt_id) for e in batch2.running_tasks] == [(task_id, 0)]
+    assert [(e.task_id, e.attempt_id) for e in batch2.task_attempts] == [(task_id, 0)]
 
 
-def test_drain_scopes_running_tasks_to_backend(state):
-    """A CLUSTER_VIEW backend's drain scopes ``running_tasks`` (the poll set) to
+def test_drain_scopes_task_attempts_to_backend(state):
+    """A CLUSTER_VIEW backend's drain scopes ``task_attempts`` (the poll set) to
     its own backend_id. Without it two K8s backends each poll the other's
     running pods and, after the pod-not-found grace, mark them FAILED."""
     [task_a] = submit_direct_job(state, "backend-a")
@@ -456,11 +456,11 @@ def test_drain_scopes_running_tasks_to_backend(state):
         batch = dispatch.drain_for_dispatch(cur, backend_id="a")
 
     assert [r.task_id for r in batch.tasks_to_run] == [task_a.to_wire()]
-    assert [e.task_id for e in batch.running_tasks] == [task_a]
+    assert [e.task_id for e in batch.task_attempts] == [task_a]
 
 
-def test_drain_executing_goes_to_running_tasks(state):
-    """BUILDING/RUNNING rows with null worker land in running_tasks (poll set),
+def test_drain_executing_goes_to_task_attempts(state):
+    """BUILDING/RUNNING rows with null worker land in task_attempts (poll set),
     not tasks_to_run."""
     [task_id] = submit_direct_job(state, "drain-running")
 
@@ -480,9 +480,9 @@ def test_drain_executing_goes_to_running_tasks(state):
         batch2 = dispatch.drain_for_dispatch(cur)
 
     assert len(batch2.tasks_to_run) == 0
-    assert len(batch2.running_tasks) == 1
-    assert batch2.running_tasks[0].task_id == task_id
-    assert batch2.running_tasks[0].attempt_id == attempt_id
+    assert len(batch2.task_attempts) == 1
+    assert batch2.task_attempts[0].task_id == task_id
+    assert batch2.task_attempts[0].attempt_id == attempt_id
 
 
 # =============================================================================
@@ -926,8 +926,8 @@ def test_drain_does_not_promote_partial_gang(state):
 
 def test_coscheduled_gang_requeue_keeps_siblings_in_lockstep(state):
     """End-to-end lockstep invariant: a transient failure bounces the whole gang to PENDING,
-    and the next drain re-promotes every sibling to the SAME next attempt_id — which is what
-    keeps the per-generation pod-group-name uniform across the gang."""
+    and the next drain re-promotes every sibling to the SAME next attempt_id after the
+    old pod generation has stopped."""
     task_event_table = FakeStatsTable()
     state._db.attach_task_event_table(task_event_table)
     _jid, task_ids = _submit_cosched(state, "lockstep", replicas=3, max_retries_preemption=5)
@@ -958,6 +958,26 @@ def test_coscheduled_gang_requeue_keeps_siblings_in_lockstep(state):
         (task_ids[1].to_wire(), "CoscheduledSiblingRequeued"),
         (task_ids[2].to_wire(), "CoscheduledSiblingRequeued"),
     ]
+
+    # The failed task's pod has stopped, but its siblings were only told to
+    # stop. Do not create replacement pods while those JAX ranks may still be
+    # connected to the old coordinator.
+    with state._db.transaction() as cur:
+        draining = dispatch.drain_for_dispatch(cur)
+    assert draining.tasks_to_run == []
+    assert {
+        (entry.task_id, entry.attempt_id)
+        for entry in draining.task_attempts
+        if entry.task_state == job_pb2.TASK_STATE_PENDING
+    } == {(task_id, 0) for task_id in task_ids[1:]}
+
+    # Kubernetes confirms that the sibling pods are gone.
+    with state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [TaskUpdate(task_id=t, attempt_id=0, new_state=job_pb2.TASK_STATE_KILLED) for t in task_ids[1:]],
+            now=Timestamp.now(),
+        )
 
     # Re-drain: the entire gang re-promotes to attempt 1 in lockstep.
     with state._db.transaction() as cur:
@@ -1005,8 +1025,27 @@ def test_gang_requeue_bounces_assigned_sibling_off_old_generation(state):
         s == job_pb2.TASK_STATE_PENDING for s in _states(state, task_ids)
     ), "the ASSIGNED sibling must not be stranded on the old generation"
 
-    # Re-drain: every sibling re-promotes to attempt 1 together; nothing is redriven on
-    # attempt 0 (which would mean a split pod-group generation).
+    # The old sibling pods must drain before replacement. Nothing is redriven
+    # on attempt 0, and attempt 1 is not created early.
+    with state._db.transaction() as cur:
+        draining = dispatch.drain_for_dispatch(cur)
+    assert draining.tasks_to_run == []
+    assert {entry.task_id for entry in draining.task_attempts if entry.task_state == job_pb2.TASK_STATE_PENDING} == {
+        task_ids[0],
+        task_ids[2],
+    }
+
+    with state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [
+                TaskUpdate(task_id=t, attempt_id=0, new_state=job_pb2.TASK_STATE_KILLED)
+                for t in (task_ids[0], task_ids[2])
+            ],
+            now=Timestamp.now(),
+        )
+
+    # Re-drain: every sibling re-promotes to attempt 1 together.
     with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur)
     assert {r.task_id for r in batch.tasks_to_run} == {t.to_wire() for t in task_ids}

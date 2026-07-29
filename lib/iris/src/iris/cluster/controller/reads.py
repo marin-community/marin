@@ -60,7 +60,7 @@ from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
     DISPATCHED_TASK_STATES,
     ActiveTaskRow,
-    RunningTaskEntry,
+    TaskAttemptEntry,
     TaskDetailRow,
     task_row_can_be_scheduled,
 )
@@ -1875,8 +1875,9 @@ class ControlSnapshot:
       unless the caller requested the timeout sweep this tick.
     * ``job_specs`` — per-job ``RunTaskRequest`` templates for ASSIGNED reconcile
       rows, so a worker-daemon backend can build its per-worker reconcile plans.
-    * ``tasks_to_run`` / ``running_tasks`` — the dispatch drain for a cluster
-      backend that owns placement (built only when that backend reconciles).
+    * ``tasks_to_run`` / ``task_attempts`` — the dispatch drain and complete
+      unfinished attempt set for a cluster backend that owns placement (built
+      only when that backend reconciles).
 
     Worker liveness is never persisted and never read off the snapshot: the
     controller owns its in-memory :class:`WorkerHealthTracker` directly and folds
@@ -1889,7 +1890,7 @@ class ControlSnapshot:
     timeout_rows: Sequence[Row]
     job_specs: dict[JobName, job_pb2.RunTaskRequest] = field(default_factory=dict)
     tasks_to_run: list[job_pb2.RunTaskRequest] = field(default_factory=list)
-    running_tasks: list[RunningTaskEntry] = field(default_factory=list)
+    task_attempts: list[TaskAttemptEntry] = field(default_factory=list)
 
 
 def load_control_snapshot(

@@ -343,7 +343,7 @@ def apply_one_transition(
             and update.attempt_id == task.current_attempt_id
         ):
             attempt = attempt_map.get((update.task_id, update.attempt_id))
-            if attempt is not None and attempt.worker_id is not None:
+            if attempt is not None and (attempt.worker_id is not None or source is TransitionSource.DISPATCH):
                 _backfill_attempt_finished_at(state, update.task_id, update.attempt_id, now_ms)
         return None
 

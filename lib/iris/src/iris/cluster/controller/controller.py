@@ -1130,7 +1130,7 @@ class Controller:
                 drain = self._drain_dispatch_snapshot(backend_id)
                 inputs.reconcile_requests[backend_id] = ReconcileRequest(
                     tasks_to_run=drain.tasks_to_run,
-                    running_tasks=drain.running_tasks,
+                    task_attempts=drain.task_attempts,
                 )
 
         # Dedicated control pool: the tick's snapshot must not queue behind a slow
@@ -1677,7 +1677,7 @@ class Controller:
             reconcile_rows=[],
             timeout_rows=[],
             tasks_to_run=batch.tasks_to_run,
-            running_tasks=batch.running_tasks,
+            task_attempts=batch.task_attempts,
         )
 
     def _drain_pending_evictions(self) -> None:

@@ -21,9 +21,10 @@ from iris.cluster.backends.k8s.tasks import (
     _pod_name,
     _task_hash,
 )
-from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.controller.task_state import TaskAttemptEntry
 from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import JobName
+from iris.rpc import job_pb2
 from iris.test_util import FakeStatsTable
 
 from .conftest import (
@@ -38,9 +39,10 @@ from .conftest import (
     unevaluated_workload,
 )
 
-_ATTEMPT = RunningTaskEntry(
+_ATTEMPT = TaskAttemptEntry(
     task_id=JobName.from_wire("/job/0"),
     attempt_id=0,
+    task_state=job_pb2.TASK_STATE_RUNNING,
     attempt_uid="attempt-a",
 )
 
@@ -95,6 +97,7 @@ def test_event_log_writes_once_per_verdict_and_dedups_message_drift():
     log.observe(_ATTEMPT, _pod_event(gated_pod(), unadmitted_workload()))
     drifted = unadmitted_workload(msg=KUEUE_UNADMITTED_MSG.replace("Total nodes: 32", "Total nodes: 40"))
     log.observe(_ATTEMPT, _pod_event(gated_pod(), drifted))
+    log.observe(_ATTEMPT._replace(task_state=job_pb2.TASK_STATE_BUILDING), _pod_event(gated_pod(), drifted))
     log.observe(_ATTEMPT, None)  # pod momentarily quiet — no row, verdict retained
 
     rows = [r for w in table.writes for r in w]
@@ -189,9 +192,14 @@ def test_sync_writes_the_kueue_verdict_to_the_event_log(k8s):
     try:
         task_id = JobName.from_wire("/job/0")
         _seed_gated_task(k8s, task_id)
-        entry = RunningTaskEntry(task_id=task_id, attempt_id=0, attempt_uid="attempt-a")
+        entry = TaskAttemptEntry(
+            task_id=task_id,
+            attempt_id=0,
+            task_state=job_pb2.TASK_STATE_RUNNING,
+            attempt_uid="attempt-a",
+        )
 
-        provider.sync(make_batch(running_tasks=[entry]))
+        provider.sync(make_batch(task_attempts=[entry]))
 
         rows = [r for w in event_table.writes for r in w]
         assert len(rows) == 1
@@ -205,7 +213,7 @@ def test_sync_writes_the_kueue_verdict_to_the_event_log(k8s):
         assert "couldn't assign flavors" in row.message
 
         # A second identical tick must not append a duplicate (verdict unchanged).
-        provider.sync(make_batch(running_tasks=[entry]))
+        provider.sync(make_batch(task_attempts=[entry]))
         rows = [r for w in event_table.writes for r in w]
         assert len(rows) == 1
     finally:
@@ -219,7 +227,11 @@ def test_sync_singleton_surfaces_kueue_verdict_on_task_and_event(k8s):
         task_id = JobName.from_wire("/job/0")
         _seed_singleton_gated_task(k8s, task_id)
 
-        updates = provider.sync(make_batch(running_tasks=[RunningTaskEntry(task_id=task_id, attempt_id=0)]))
+        updates = provider.sync(
+            make_batch(
+                task_attempts=[TaskAttemptEntry(task_id=task_id, attempt_id=0, task_state=job_pb2.TASK_STATE_RUNNING)]
+            )
+        )
 
         assert len(updates) == 1
         assert "couldn't assign flavors" in (updates[0].status_message or "")

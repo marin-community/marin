@@ -66,7 +66,7 @@ from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
     WorkerSnapshot,
 )
-from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.controller.task_state import TaskAttemptEntry
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import JobName, PendingTask, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
@@ -283,11 +283,13 @@ class ReconcileRequest:
     A worker-daemon backend sources its own worker/placement snapshot and ignores
     this; a ``CLUSTER_VIEW`` backend that owns placement receives the dispatch
     drain (the PENDING->ASSIGNED promotion the controller commits as a DB write)
-    and applies it to its cluster.
+    and applies it to its cluster. ``task_attempts`` is the authoritative set
+    of unfinished direct-provider attempts, including inactive tasks whose
+    backend resources are still draining.
     """
 
     tasks_to_run: list[job_pb2.RunTaskRequest] = field(default_factory=list)
-    running_tasks: list[RunningTaskEntry] = field(default_factory=list)
+    task_attempts: list[TaskAttemptEntry] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
