@@ -8,7 +8,11 @@ from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
+from config import K8S_CLUSTERS
+
 _NOW = datetime(2026, 7, 21, 12, tzinfo=UTC)
+_CW_K8S_CLUSTERS = tuple(target.name for target in K8S_CLUSTERS)
+_CW_CI_CLUSTER = next(target.name for target in K8S_CLUSTERS if target.iris_namespace == "iris-ci")
 _LANES = (
     ("tpu-ferry", "TPU ferry", "marin", "training"),
     ("cw-gpu-ferry", "CW ferry", "marin", "training"),
@@ -290,13 +294,10 @@ def _rows(path: str, query: str) -> list[dict] | dict:
     if path == "/k8s/health":
         return [
             {"cluster": cluster, "reachable": True, "up": 1, "latency_ms": 31, "error_class": ""}
-            for cluster in ("cw-us-east-02a", "cw-us-east-08a", "cw-rno2a")
+            for cluster in _CW_K8S_CLUSTERS
         ]
     if path == "/k8s/alerts/unreachable":
-        return [
-            {"cluster": cluster, "error_class": "none", "value": 0}
-            for cluster in ("cw-us-east-02a", "cw-us-east-08a", "cw-rno2a")
-        ]
+        return [{"cluster": cluster, "error_class": "none", "value": 0} for cluster in _CW_K8S_CLUSTERS]
     if path == "/k8s/overview":
         return [{"pending_pods": 1, "crashlooping_containers": 1}]
     if path == "/k8s/control_plane":
@@ -310,8 +311,24 @@ def _rows(path: str, query: str) -> list[dict] | dict:
                 "restarts": 0,
                 "waiting_reason": "",
             }
-            for cluster in ("cw-us-east-02a", "cw-us-east-08a", "cw-rno2a")
+            for cluster in _CW_K8S_CLUSTERS
             for component in ("iris/iris-controller", "kueue-system/kueue-controller-manager")
+        ]
+    if path == "/k8s/nodes":
+        return [
+            {
+                "cluster": cluster,
+                "node": "g8fd930" if cluster == _CW_CI_CLUSTER else f"{cluster}-node-1",
+                "instance_type": "cd-gp-i64-erapids",
+                "ready": True,
+                "unschedulable": cluster == _CW_CI_CLUSTER,
+                "kernel_deadlock": cluster == _CW_CI_CLUSTER,
+                "deadlock_reason": "CPUSoftLockup" if cluster == _CW_CI_CLUSTER else "",
+                "cordon_reason": "KernelDeadlock,NLCCPendingExitProduction" if cluster == _CW_CI_CLUSTER else "",
+                "pending_phase": "production-reboot" if cluster == _CW_CI_CLUSTER else "",
+                "deadlock_message": "watchdog: CPU stuck" if cluster == _CW_CI_CLUSTER else "",
+            }
+            for cluster in _CW_K8S_CLUSTERS
         ]
     if path == "/k8s/pending":
         return [

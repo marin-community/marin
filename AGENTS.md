@@ -139,10 +139,9 @@ uv run pytest
 
 ## Agent Artifacts
 
-- Record infrastructure incidents and durable debugging investigations in
-  `.agents/ops/YYYY-MM-DD-<slug>.md`. Do not create `docs/debug-log-*` files or
-  ad hoc debug-log directories. Extend the existing incident record when it
-  covers the same event.
+- Publish infrastructure incidents and durable debugging investigations to
+  Echo with the `write-ops-log` skill. Link the canonical Echo URL from the
+  associated PR or issue. Do not create repository debug-log files.
 - Keep user-facing and reusable product documentation in `docs/`; keep research
   progress in the relevant task logbook or project artifact. These are distinct
   from incident records.

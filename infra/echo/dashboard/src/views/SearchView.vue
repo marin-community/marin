@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { fetchJson, formatDate, type ActivityHit, type Result, type WikiHit } from '../types'
+import WikiTags from '../WikiTags.vue'
 
 type Scope = 'all' | 'activity' | 'wiki'
 type Source = 'all' | 'github' | 'discord'
@@ -222,6 +223,7 @@ onMounted(search)
             <p v-if="result.type === 'wiki'" class="mt-2 text-sm font-medium leading-6 text-moss">
               Use when: {{ result.use_when }}
             </p>
+            <WikiTags v-if="result.type === 'wiki'" :tags="result.tags" class="mt-2" />
             <p class="mt-2 line-clamp-2 text-sm leading-6 text-ink/60">{{ result.snippet }}</p>
           </div>
           <span v-if="result.type === 'wiki'" class="shrink-0 text-xs text-ink/40">

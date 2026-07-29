@@ -325,6 +325,8 @@ ignore-missing-imports = [
     "google.cloud.secretmanager.*",
     "harbor",
     "harbor.*",
+    "harbor_config",
+    "harbor_config.*",
     # Ships with the harbor extra (universal-pathlib); marin.harbor imports it.
     "upath",
     "upath.*",

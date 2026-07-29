@@ -100,11 +100,6 @@ or `delete` on a NodePool is not** — it deprovisions a reserved bare-metal fle
 reconcile the program to match reality; never `pulumi up` through a destructive NodePool diff.
 Once the preview is clean, `pulumi up`.
 
-`__main__.py` requires `KUBECONFIG` but does not pass it as a provider input, so Pulumi state
-contains neither the machine-local path nor the credential contents. The provider still uses
-the cluster's declared `platform.coreweave.kube_context`; it never relies on the kubeconfig's
-current context.
-
 ### Adopting a new cluster
 
 A cluster whose RBAC/NodePools/Kueue/Traefik already exist live (the normal case — the CKS
@@ -142,7 +137,7 @@ pulumi up       # normal run, adopt=false now — creates the remaining componen
 ```
 
 A CoreWeave token rotation creates a new Managed Auth username (`cwtoken-…`). Append it to
-`grafana_observer_rbac.usernames` in all three cluster configs and run a normal preview/up for
+`grafana_observer_rbac.usernames` in all four cluster configs and run a normal preview/up for
 each stack before switching Grafana to the new token. Remove the old username and update the
 stacks again only after the new Grafana revision passes its bridge checks.
 
@@ -167,7 +162,10 @@ already provisioned:
 
 ## CI preview
 
-`.github/workflows/ops-iac-preview.yaml` posts `pulumi preview` for every stack as a PR comment.
+`.github/workflows/ops-iac-preview.yaml` runs `pulumi preview` for every stack in parallel and
+posts one aggregated PR comment (status list plus per-stack diffs). Manual
+`workflow_dispatch` accepts an optional `pr_number` to preview that PR's head and
+comment there; omit it for a drift check against the selected ref with no comment.
 **CI never runs `pulumi up`** — see `spec.md §9`. It authenticates as
 `pulumi-ci@hai-gcp-models.iam.gserviceaccount.com`, granted preview-only (decrypt/read, never
 write) access in [`infra/permissions`](../permissions/README.md).

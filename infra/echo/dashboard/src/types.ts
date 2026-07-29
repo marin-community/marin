@@ -22,6 +22,7 @@ export interface WikiHit {
   author: string
   title: string
   use_when: string
+  tags: string[]
   snippet: string
   reference_count: number
   score: number

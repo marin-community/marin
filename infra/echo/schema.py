@@ -13,6 +13,7 @@ corpus-build watermark.
 from pgvector.sqlalchemy import Vector
 from search_config import TEXT_SEARCH_CONFIG
 from sqlalchemy import (
+    ARRAY,
     BigInteger,
     Boolean,
     CheckConstraint,
@@ -31,6 +32,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects import postgresql
 
 EMBED_DIM = 384  # BAAI/bge-small-en-v1.5, the corpus's prose embedding space
+MAX_WIKI_TAGS = 20
 
 metadata = MetaData()
 
@@ -110,6 +112,7 @@ wiki_entries = Table(
     Column("author", Text, nullable=False),
     Column("title", Text, nullable=False),
     Column("use_when", Text, nullable=False),
+    Column("tags", ARRAY(Text), nullable=False, server_default=text("'{}'::text[]")),
     Column("body", Text, nullable=False),
     Column("reference_count", BigInteger, nullable=False, server_default=text("0")),
     Column("embedding", Vector(EMBED_DIM), nullable=False),
@@ -124,7 +127,9 @@ wiki_entries = Table(
         ),
     ),
     CheckConstraint("reference_count >= 0", name="wiki_entries_reference_count_nonnegative"),
+    CheckConstraint(f"cardinality(tags) <= {MAX_WIKI_TAGS}", name="wiki_entries_tags_limit"),
     Index("idx_wiki_entries_created_at", text("created_at DESC")),
+    Index("idx_wiki_entries_tags", "tags", postgresql_using="gin"),
     Index(
         "idx_wiki_entries_embedding",
         "embedding",

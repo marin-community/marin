@@ -65,7 +65,7 @@ The restart preflight resolves operator-side controller secrets before taking a 
 
 If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (restores from last periodic checkpoint; some recent state may be lost).
 
-**Restart builds and deploys your local working tree.** `iris cluster controller restart` builds the images required by the configured runtime from your **current checkout — HEAD plus any staged/unstaged changes** (`get_git_sha()` is a tree-content hash), pushes them under that hash, pins the in-memory deployment config to those tags, and restarts the container in place. Multi-platform images use `:<hash>`; single-platform images use `:<hash>-<architecture>`. Iris does not publish `:latest`. So the restart ships whatever code is in your tree; there is no separate image-rebuild step. To deploy a merged controller fix: update your checkout (`git pull`, or check out the fix) **then** restart — restarting from a stale checkout ships that stale code. Always confirm the controller is running the expected hash (`iris cluster status`), not just that it came back up; a stale-checkout deploy once cost ~5 red-canary days (`.agents/ops/2026-06-08-canary-ferry-reservation-taint-timeouts.md`).
+**Restart builds and deploys your local working tree.** `iris cluster controller restart` builds the images required by the configured runtime from your **current checkout — HEAD plus any staged/unstaged changes** (`get_git_sha()` is a tree-content hash), pushes them, pins the deploy to `:<hash>` in memory, and restarts the container in place. So the restart ships whatever code is in your tree; there is no separate image-rebuild step. To deploy a merged controller fix: update your checkout (`git pull`, or check out the fix) **then** restart — restarting from a stale checkout ships that stale code. Always confirm the controller is running the `:<git-short-hash>` you expect (`iris cluster status`), not just that it came back up; a stale-checkout deploy once cost ~5 red-canary days ([incident record](https://echo.oa.dev/wiki/14)).
 
 Restarts default to the fast Rust profile, which skips LTO and reduces native link time. Kubernetes clusters build the controller and task images for amd64+arm64 because task Pods run the controller image as the log-shipper sidecar; they skip the unused worker image. VM clusters build amd64 controller, worker, and task images. `--image-platform` overrides only the task image, for example when a Kubernetes dev cluster has amd64 nodes only:
 
@@ -639,6 +639,60 @@ kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n cw-cilium-system \
 An established BGP session that advertises the public VIP, combined with an
 external TCP timeout, requires a CoreWeave route-export escalation. Restarting
 Iris or Traefik does not repair that layer.
+
+### CoreWeave kernel deadlock pending reboot
+
+`CoreWeaveNodeKernelDeadlock` means CoreWeave reported the structured node
+condition `KernelDeadlock=True`. The node lifecycle controller normally cordons
+the node and moves it toward `production-reboot`; tenant pods can block that
+transition even while `Ready=True`.
+
+Read the canonical kubeconfig and context from the cluster config, then inspect
+the condition and blockers:
+
+```bash
+kubectl --kubeconfig <kubeconfig> --context <context> get node <node> \
+  -o jsonpath='{range .status.conditions[*]}{.type}{"\t"}{.status}{"\t"}{.reason}{"\t"}{.message}{"\n"}{end}'
+kubectl --kubeconfig <kubeconfig> --context <context> get pods --all-namespaces \
+  --field-selector spec.nodeName=<node> -o wide
+kubectl --kubeconfig <kubeconfig> --context <context> get pdb --all-namespaces
+```
+
+Do not uncordon a node that CoreWeave cordoned. If `PendingPhaseState` names
+`production-reboot` and `CWActive` lists tenant Deployments, get operator
+approval before changing workloads. Record each owner's original replica count
+and pod template, then choose an action by workload semantics:
+
+| Blocker | Reboot-unblocking action |
+| --- | --- |
+| Stateless or leader-elected Deployment | Add one replica, wait for it to become Ready on a healthy node, then delete only the pod bound to the deadlocked node. The current cert-manager and Kueue controllers are in this class. |
+| Singleton controller with persistent state or no concurrency protection | Do not overlap replicas. Confirm that its state is durable, accept the control-plane outage, and scale it to zero. The Iris controller uses a `Recreate` strategy and a PVC, so it belongs here. |
+| Availability service with a PodDisruptionBudget or hard placement constraints | First provide compatible capacity. If that is unavailable, use an operator-approved temporary placement change and wait for a Ready replacement. Scale to zero only with explicit approval for the resulting outage and after confirming that recovery does not depend on the service. Traefik belongs here. |
+| Running Iris task pod | Preserve the Iris state transition, not the pod: obtain the canonical attempt ID from `IRIS_TASK_ID`, stop the parent job or mark the attempt preempted, then delete the exact pod normally so Iris can retry it. Node-local task images and caches are disposable. |
+| Completed or failed Iris task pod | Delete the exact pod normally. It does not need replacement capacity. |
+| StatefulSet, local-volume workload, unmanaged pod, or unknown owner | Stop and escalate. Do not infer that another replica is safe. |
+
+A PodDisruptionBudget states the desired availability but does not prove that
+replicas may run concurrently. Scaling an owner to zero also bypasses the
+eviction protection that operators often expect from a PodDisruptionBudget, so
+treat it as an explicit outage decision. Change one owner at a time and confirm
+that `CWActive` drops the blocker before continuing. Do not delete provider
+DaemonSets or use `kubectl drain --force`.
+
+If a replacement remains Pending because no healthy node satisfies its required
+node affinity or pod anti-affinity, stop before deleting the original pod.
+Provision compatible capacity when possible. Record and restore any temporary
+placement change after the reboot. Use
+`.agents/skills/recover-stuck-k8s-pod/SKILL.md` for the exact Iris task retry
+sequence or when a bound pod does not terminate.
+
+CoreWeave should continue the pending reboot without a separate Iris restart.
+Before restoring workloads, verify that the provider operation completed, the
+node boot ID changed, `KernelDeadlock=False`, `Ready=True`, CoreWeave returned
+the node lifecycle state to `production`, and both the cordon and any
+`node.coreweave.cloud/reserved` taint are gone. Restore singleton controllers
+and original replica counts first, wait for them to become Ready, then remove
+temporary capacity or placement changes.
 
 ## CI Workflows
 

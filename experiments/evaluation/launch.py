@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.client import IrisClient
 from iris.cluster.config import load_config
+from marin.evaluation.harbor.driver_config import HarborJobConfig
 from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.records import (
@@ -34,17 +35,26 @@ from rigging.config_discovery import resolve_cluster_config
 from rigging.filesystem import prefix_join
 from rigging.secrets import SecretSpec
 
-from experiments.evaluation.evals import EVALS
+from experiments.evaluation.evals import EVALS, EvaluationDefinition, harbor_definition
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
 from experiments.evaluation.models import models
 
 
 @dataclass(frozen=True)
+class HarborConfigSelection:
+    """One validated Harbor config file supplied at launch."""
+
+    name: str
+    config: HarborJobConfig
+
+
+@dataclass(frozen=True)
 class LaunchSpec:
-    """One model, selected evaluations, execution target, and record destination."""
+    """One model, evaluation selection, execution target, and record destination."""
 
     model: str
     evals: tuple[str, ...]
+    harbor_configs: tuple[HarborConfigSelection, ...]
     platform: Platform
     accelerator: str | None
     limit: int | None
@@ -95,25 +105,35 @@ def records_prefix_for(accel: AcceleratorChoice, spec: LaunchSpec) -> str:
     return DEFAULT_RECORDS_PREFIX
 
 
+def _evaluation_definitions(spec: LaunchSpec) -> tuple[tuple[str, EvaluationDefinition], ...]:
+    registry_definitions: tuple[tuple[str, EvaluationDefinition], ...] = tuple(
+        (eval_key, EVALS[eval_key]) for eval_key in spec.evals
+    )
+    config_definitions: tuple[tuple[str, EvaluationDefinition], ...] = tuple(
+        (selection.name, harbor_definition(selection.name, selection.config)) for selection in spec.harbor_configs
+    )
+    definitions = registry_definitions + config_definitions
+    if not definitions:
+        raise ValueError("at least one evaluation is required")
+    names = [name for name, _ in definitions]
+    if len(set(names)) != len(names):
+        raise ValueError(f"duplicate eval names in one launch: {names}")
+    return definitions
+
+
 def build_evaluation_batch(
     spec: LaunchSpec,
     provenance: LaunchProvenance,
     user: str,
 ) -> EvaluationBatch:
     """Resolve experiment names into one model-serving evaluation batch."""
-    if not spec.evals:
-        raise ValueError("at least one evaluation is required")
-    if len(set(spec.evals)) != len(spec.evals):
-        raise ValueError(f"duplicate eval keys in one launch: {list(spec.evals)}")
-
     model = models()[spec.model]
     accelerator = MARIN_EVAL_HARDWARE.select(model, spec.platform, spec.accelerator)
     records_prefix = records_prefix_for(accelerator, spec)
     created_at = datetime.now(UTC).isoformat()
     evaluations: list[Evaluation] = []
     secret_env: dict[str, SecretSpec] = {}
-    for eval_key in spec.evals:
-        definition = EVALS[eval_key]
+    for eval_key, definition in _evaluation_definitions(spec):
         for name, spec_value in definition.secret_env.items():
             if name in secret_env and secret_env[name] != spec_value:
                 raise ValueError(f"evaluations declare conflicting secret specifications for {name}")

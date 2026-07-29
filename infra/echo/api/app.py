@@ -7,6 +7,7 @@ See ``infra/echo/README.md`` for endpoints and access requirements.
 """
 
 import os
+import re
 from collections.abc import Iterable
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -20,11 +21,13 @@ import sqlalchemy
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastembed import TextEmbedding
 from google.cloud.sql.connector import Connector
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"  # must match the corpus's embedding space
 SOURCES = ("github", "discord")
 KINDS = ("issue", "pr", "comment", "message")
+MAX_WIKI_TAG_LENGTH = 50
+WIKI_TAG_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
 @asynccontextmanager
@@ -112,6 +115,7 @@ class WikiSummary(BaseModel):
     author: str
     title: str
     use_when: str = Field(description="One-sentence hint describing when an agent should load this entry.")
+    tags: list[str]
     snippet: str
     reference_count: int
     score: float = 0.0
@@ -130,7 +134,24 @@ class WikiCreate(BaseModel):
         max_length=300,
         description="One sentence describing when this entry is useful.",
     )
+    tags: list[str] = Field(default_factory=list, max_length=schema.MAX_WIKI_TAGS)
     body: str = Field(min_length=1)
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, tags: list[str]) -> list[str]:
+        return normalize_wiki_tags(tags)
+
+
+def normalize_wiki_tags(tags: Iterable[str]) -> list[str]:
+    """Normalize tag slugs and reject values that cannot be filtered reliably."""
+    normalized = list(dict.fromkeys(tag.strip().lower() for tag in tags))
+    for tag in normalized:
+        if not tag or len(tag) > MAX_WIKI_TAG_LENGTH or WIKI_TAG_PATTERN.fullmatch(tag) is None:
+            raise ValueError(
+                f"invalid wiki tag {tag!r}; use lowercase kebab-case up to {MAX_WIKI_TAG_LENGTH} characters"
+            )
+    return normalized
 
 
 def snippet(row: sqlalchemy.Row) -> str:
@@ -171,8 +192,9 @@ def query_embedding(model: TextEmbedding, query: str) -> list[float]:
     return vector(next(iter(model.query_embed([query]))))
 
 
-def passage_embedding(model: TextEmbedding, title: str, use_when: str, body: str) -> list[float]:
-    return vector(next(iter(model.passage_embed([f"{title}\n\nUse when: {use_when}\n\n{body}"]))))
+def passage_embedding(model: TextEmbedding, title: str, use_when: str, tags: list[str], body: str) -> list[float]:
+    tag_text = f"\n\nTags: {', '.join(tags)}" if tags else ""
+    return vector(next(iter(model.passage_embed([f"{title}\n\nUse when: {use_when}{tag_text}\n\n{body}"]))))
 
 
 def escape_like(pattern: str) -> str:
@@ -201,6 +223,10 @@ def chunk_filter_clauses(source: str | None, kind: str | None, since: datetime |
     if since:
         clauses.append("c.date >= :since")
     return clauses
+
+
+def wiki_filter_clauses(tags: list[str]) -> list[str]:
+    return ["w.tags @> CAST(:tags AS text[])"] if tags else []
 
 
 @app.get("/healthz")
@@ -331,19 +357,23 @@ def search_wiki(
     engine: Engine,
     model: Model,
     q: str = Query("", description="Query text. Blank returns recently updated notes."),
+    tag: list[str] | None = Query(None, description="Require this tag; repeat to require several tags."),
     limit: int = Query(search_config.DEFAULT_SEARCH_LIMIT, ge=1, le=search_config.MAX_SEARCH_LIMIT),
 ) -> list[WikiSummary]:
     query = q.strip()
+    try:
+        tags = normalize_wiki_tags(tag or [])
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
     with engine.connect() as conn:
         if not query:
-            statement = (
-                sqlalchemy.select(
-                    schema.wiki_entries,
-                    *wiki_score_columns(),
-                )
-                .order_by(schema.wiki_entries.c.updated_at.desc())
-                .limit(limit)
+            statement = sqlalchemy.select(
+                schema.wiki_entries,
+                *wiki_score_columns(),
             )
+            if tags:
+                statement = statement.where(schema.wiki_entries.c.tags.contains(tags))
+            statement = statement.order_by(schema.wiki_entries.c.updated_at.desc()).limit(limit)
             return [wiki_summary(row) for row in conn.execute(statement)]
         conn.execute(hybrid_search.HNSW_ITERATIVE_SCAN)
         params = {
@@ -351,8 +381,10 @@ def search_wiki(
             "embedding": str(query_embedding(model, query)),
             "candidate_limit": hybrid_search.candidate_limit(limit),
             "limit": limit,
+            "tags": tags,
         }
-        return [wiki_summary(row) for row in conn.execute(hybrid_search.wiki_search_statement(), params)]
+        statement = hybrid_search.wiki_search_statement(wiki_filter_clauses(tags))
+        return [wiki_summary(row) for row in conn.execute(statement, params)]
 
 
 @api.get("/wiki/{entry_id}", response_model=WikiEntry)
@@ -376,8 +408,9 @@ def wiki_write_values(entry: WikiCreate, model: TextEmbedding) -> dict[str, Any]
     return {
         "title": title,
         "use_when": use_when,
+        "tags": entry.tags,
         "body": body,
-        "embedding": passage_embedding(model, title, use_when, body),
+        "embedding": passage_embedding(model, title, use_when, entry.tags, body),
     }
 
 

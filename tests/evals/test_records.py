@@ -15,6 +15,7 @@ from marin.evaluation.records import (
     EvalRef,
     EvalRunRecord,
     EvalTaskRef,
+    HarborRef,
     HardwareRef,
     ModelRef,
     Provenance,
@@ -107,6 +108,36 @@ def test_read_records_collects_parse_failures_without_dropping_good_ones(tmp_pat
     assert len(failures) == 1
     assert failures[0].path.endswith("20260101-000000-broken-mmlu/record.json")
     assert "ValidationError" in failures[0].error
+
+
+def test_record_json_includes_harbor_config_digest(tmp_path):
+    record = _RECORD.model_copy(
+        update={
+            "evaluation": EvalRef(
+                name="aime-policy",
+                mechanism="harbor",
+                harbor=HarborRef(
+                    dataset="aime",
+                    version="1.0",
+                    agent="terminus-2",
+                    env="daytona",
+                    config_digest="sha256:" + "a" * 64,
+                ),
+            )
+        }
+    )
+
+    path = write_record(record, str(tmp_path))
+    with open(path) as f:
+        raw = json.load(f)
+
+    assert raw["eval"]["harbor"] == {
+        "dataset": "aime",
+        "version": "1.0",
+        "agent": "terminus-2",
+        "env": "daytona",
+        "config_digest": "sha256:" + "a" * 64,
+    }
 
 
 def test_read_record_parses_a_previously_written_record_json(tmp_path):

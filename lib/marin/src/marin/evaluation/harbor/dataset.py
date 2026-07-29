@@ -7,7 +7,7 @@ from pathlib import Path
 
 from huggingface_hub import snapshot_download
 
-_HF_URL_PREFIX = "hf://"
+HF_DATASET_PREFIX = "hf://"
 
 
 def materialize_harbor_dataset(
@@ -24,8 +24,8 @@ def materialize_harbor_dataset(
     Harbor registry name.
     """
     dataset_path = Path(dataset).expanduser()
-    if dataset.startswith(_HF_URL_PREFIX):
-        repo_id = dataset.removeprefix(_HF_URL_PREFIX)
+    if dataset.startswith(HF_DATASET_PREFIX):
+        repo_id = dataset.removeprefix(HF_DATASET_PREFIX)
         local_dir = workdir / "hf_dataset"
         local_dir.mkdir(parents=True, exist_ok=True)
         root = Path(
