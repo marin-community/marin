@@ -28,6 +28,71 @@ from levanter.grug._moe.ep_common import (
 from levanter.grug.sharding import _batch_axes
 
 
+def _spill_attempts() -> int:
+    return int(os.environ.get("SCALE_A2A_SPILL", "0"))
+
+
+def _segment_rank(bucket: Int[Array, " n"], num_buckets: int) -> Int[Array, " n"]:
+    """Return each element's stable rank among elements in the same bucket."""
+    total = bucket.shape[0]
+    order = jnp.argsort(bucket, stable=True)
+    counts = jnp.bincount(bucket, length=num_buckets).astype(jnp.int32)
+    starts = jnp.cumsum(counts) - counts
+    ranks_sorted = jnp.arange(total, dtype=jnp.int32) - starts[bucket[order]]
+    return ranks_sorted[jnp.argsort(order)]
+
+
+def _assign_with_spill(
+    selected_experts_local: Int[Array, "Tlocal K"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    *,
+    num_experts: int,
+    capacity: int,
+    attempts: int,
+) -> tuple[Int[Array, " A"], Int[Array, " A"], Float[Array, " A"], Array]:
+    """Place assignments into fixed-capacity expert buckets with same-step spill.
+
+    Overflow assignments try the token's next-ranked selected experts. A successful spill carries
+    that candidate expert's router weight. Attempts are capped at ``top_k - 1`` so routing
+    granularity, rather than repeated passes over the same experts, sets the recovery ceiling.
+
+    Returns the target expert, its bucket slot, the target expert's combine weight, and a placed mask.
+    """
+    topk = selected_experts_local.shape[1]
+    attempts = min(max(attempts, 0), topk - 1)
+    flat_experts = selected_experts_local.reshape(-1).astype(jnp.int32)
+    routed_weights = combine_weights_local.reshape(-1)
+
+    slot = _segment_rank(flat_experts, num_experts)
+    placed = slot < capacity
+    if attempts == 0:
+        return flat_experts, slot, routed_weights, placed
+
+    target = flat_experts
+    occupancy = jnp.minimum(
+        jnp.bincount(flat_experts, length=num_experts).astype(jnp.int32),
+        capacity,
+    )
+    # Placed assignments use a sentinel bucket so they do not consume candidate ranks.
+    for attempt in range(1, attempts + 1):
+        candidate = jnp.roll(selected_experts_local, -attempt, axis=1).reshape(-1).astype(jnp.int32)
+        candidate_weights = jnp.roll(combine_weights_local, -attempt, axis=1).reshape(-1)
+        offered = jnp.where(placed, num_experts, candidate)
+        rank = _segment_rank(offered, num_experts + 1)
+        candidate_slot = occupancy[candidate] + rank
+        spilled = jnp.logical_and(~placed, candidate_slot < capacity)
+        target = jnp.where(spilled, candidate, target)
+        routed_weights = jnp.where(spilled, candidate_weights, routed_weights)
+        slot = jnp.where(spilled, candidate_slot, slot)
+        placed = jnp.logical_or(placed, spilled)
+        filled = jnp.bincount(
+            jnp.where(spilled, candidate, num_experts),
+            length=num_experts + 1,
+        )[:num_experts]
+        occupancy = jnp.minimum(occupancy + filled.astype(jnp.int32), capacity)
+    return target, slot, routed_weights, placed
+
+
 def _moe_mlp_ep_fixed_a2a_local(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
@@ -107,17 +172,15 @@ def _fixed_a2a_core(
         x_local, combine_weights_local = jax.lax.optimization_barrier((x_local, combine_weights_local))
 
     repeated_x = jnp.repeat(x_local, topk, axis=0)
-    flat_experts = selected_experts_local.reshape(-1).astype(jnp.int32)
-
-    order = jnp.argsort(flat_experts, stable=True)
-    inverse_order = jnp.argsort(order)
-    expert_counts = jnp.bincount(flat_experts, length=num_experts).astype(jnp.int32)
-    segment_start = jnp.cumsum(expert_counts) - expert_counts
-    sorted_rank = jnp.arange(assignments_per_shard, dtype=jnp.int32) - segment_start[flat_experts[order]]
-    slot = sorted_rank[inverse_order]
-    keep = slot < capacity
-    local_expert_indices = (flat_experts % local_experts).astype(jnp.int32)
-    destination_shards = (flat_experts // local_experts).astype(jnp.int32)
+    target_experts, slot, routed_weights, keep = _assign_with_spill(
+        selected_experts_local,
+        combine_weights_local,
+        num_experts=num_experts,
+        capacity=capacity,
+        attempts=_spill_attempts(),
+    )
+    local_expert_indices = (target_experts % local_experts).astype(jnp.int32)
+    destination_shards = (target_experts // local_experts).astype(jnp.int32)
     bucket_size = expert_shards * capacity
     send_size = local_experts * bucket_size
     linear_indices = jnp.where(
@@ -167,7 +230,7 @@ def _fixed_a2a_core(
         out_local = jnp.einsum(
             "tkh,tk->th",
             gathered,
-            combine_weights_local.astype(gathered.dtype),
+            routed_weights.reshape(tokens_per_shard, topk).astype(gathered.dtype),
             preferred_element_type=jnp.float32,
         ).astype(x_local.dtype)
         dropped_local = assignments_per_shard - jnp.sum(keep, dtype=jnp.int32)
