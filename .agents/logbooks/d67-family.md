@@ -442,3 +442,43 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
 - Attempts 0–2 each had one node fail `Init:Error stage-workdir`; the 15 gang siblings ended `COSCHED_FAILED`. Attempt 3 admitted and all 16 tasks are `running`.
 - Iris SQL records priority band 1 on both job configs and all assigned tasks. Attempt 3 uses 16 nodes with zero overlap against the r5/r6 node set.
 - This is the first independent recovery placement after the distributed first-step stalls. Continue through corrected Trainer preflight and require a finite first-step loss/drop metric before accepting it as an experimental draw.
+
+### 2026-07-28 19:49 PDT - D67-CTL-01 r7 exposes uneven-domain placement root cause
+
+- r7 passed the modified Trainer preflight but emitted no step. At 19:48 PDT, task 0's four GPUs were all 100% utilized at only 196–221 W with approximately 145 GiB allocated, matching r5's stalled device signature despite zero node overlap.
+- The logged hardware topology contained seven `slice_index` values with host counts 2/2/2/2/4/2/2. The 64-device mesh is not divisible across those seven physical NVLink domains.
+- Root cause: commit `cc6f57af0` incorrectly made GPU `num_slices` one after r4's preflight rejection. The original divisibility guard was correctly rejecting this uneven physical-domain placement; bypassing it converted a fast placement rejection into an all-rank device hang.
+- Action: stopped exact parent `/mwittmann/d67-control-m3-draw1-r7-0728-1935` at 19:49 PDT. Iris confirmed parent and child `killed`. No step, loss, throughput, MFU, or drop metric was observed, so r7 is not an experimental draw.
+- Recovery: restored physical `slice_index` counting for all accelerators and replaced the incorrect GPU test with a regression requiring seven GPU domains to remain seven. `test_trainer_startup.py` and `test_mesh_config.py` pass (12 tests), and `./infra/pre-commit.py --changed-files --fix` passes.
+
+### 2026-07-28 19:50 PDT - D67-CTL-01 replacement r8 pre-registration
+
+- Prediction carried forward verbatim from 15:35 PDT, before any experimental result was observed: This draw reproduces the healthy m=3/cf1.0625 operating point. Predict about 321K tokens/s and 20.7% MFU, allowing ±4% tokens/s for placement (308–334K), with tail-100 drops 1.2–1.7%. Loss must remain finite and decline through step 349.
+- Planned parent job ID: `/mwittmann/d67-control-m3-draw1-r8-0728-1955`
+- Planned child job ID: `/mwittmann/d67-control-m3-draw1-r8-0728-1955/grug-train-d67-control-m3-draw1-r8-0728-1955`
+- Exact command:
+
+```bash
+IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
+  --cpu 2 --memory 3GB --extra cpu --priority production \
+  --job-name d67-control-m3-draw1-r8-0728-1955 -e RUN_ID d67-control-m3-draw1-r8-0728-1955 \
+  -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async \
+  -e XLA_FLAGS "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false --xla_gpu_experimental_parallel_collective_overlap_limit=4" \
+  -e SCALE_ATTN_IMPL gpu_fa4_cute -e SCALE_WATCH_INTERVAL 0 -e SCALE_CHECKPOINTS local \
+  -e SCALE_A2A_FIXED 1 -e SCALE_A2A_CHUNKS 1 -e SCALE_A2A_NO_BARRIER 1 \
+  -e SCALE_A2A_GATHER_DISPATCH 1 -e SCALE_A2A_CUSTOM_ADJOINT 1 \
+  -e SCALE_MOE_QB 1 -e SCALE_REPORT_DROPS 1 -e SCALE_A2A_SPILL 3 \
+  -e SCALE_CAPACITY_FACTOR 1.0625 -e SCALE_JOB_PRIORITY 1 \
+  -e SCALE_GPUS_PER_NODE 4 -e SCALE_GPU_TYPE GB200 -e SCALE_GPU_REPLICAS 16 \
+  -e SCALE_EXPERT_AXIS 64 -e SCALE_NUM_EXPERTS 256 -e SCALE_TOP_K 8 \
+  -e SCALE_HIDDEN_DIM 5120 -e SCALE_NUM_LAYERS 48 -e SCALE_INTERMEDIATE 1280 \
+  -e SCALE_SHARED_INTERMEDIATE 5120 -e SCALE_SEQ_LEN 4096 -e SCALE_BATCH 1024 \
+  -e SCALE_SLIDING_WINDOW 2048 -e SCALE_STEPS 350 \
+  -e SCALE_MOE_IMPL ragged_all_to_all -e SCALE_OPTIMIZER muonh -e SCALE_MUON_SYRK 1 \
+  -e SCALE_SCAN_LAYERS 1 -e SCALE_REMAT recompute_all \
+  -e SCALE_TRACKER json_logger -e SCALE_JSON_LOGGER d67-control-m3-draw1-r8-0728-1955.metrics \
+  -e SCALE_DISABLE_CHECKPOINT 1 \
+  -- python -m experiments.grug.moe.launch_cw_scale --version d67-family-dev --run
+```
+
+- Recovery gate: keep the original physical-domain divisibility preflight. Uneven-domain attempts must fail before a training step and may retry within this one job. Accept the draw only after a balanced placement passes preflight and emits finite loss/drop metrics.

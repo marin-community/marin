@@ -982,11 +982,8 @@ class TrainerConfig:
 
     @cached_property
     def num_slices(self):
-        """Number of TPU slices in the device mesh."""
-        devices = jax.devices()
-        if devices[0].platform != "tpu":
-            return 1
-        return max(getattr(device, "slice_index", 0) for device in devices) + 1
+        """number of nodes"""
+        return max(getattr(device, "slice_index", 0) for device in jax.devices()) + 1
 
     @property
     def num_devices_per_slice(self):

@@ -62,18 +62,11 @@ def test_tpu_topology_shape_includes_multiple_slices():
     assert tpu_topology_shape(devices) == "2x4x8x8"
 
 
-def test_trainer_num_slices_ignores_gpu_topology_domains(monkeypatch):
+def test_trainer_num_slices_counts_gpu_topology_domains(monkeypatch):
     devices = [SimpleNamespace(platform="gpu", slice_index=s) for s in range(7)]
     monkeypatch.setattr(jax, "devices", lambda: devices)
 
-    assert TrainerConfig().num_slices == 1
-
-
-def test_trainer_num_slices_counts_tpu_slices(monkeypatch):
-    devices = [SimpleNamespace(platform="tpu", slice_index=s) for s in range(3)]
-    monkeypatch.setattr(jax, "devices", lambda: devices)
-
-    assert TrainerConfig().num_slices == 3
+    assert TrainerConfig().num_slices == 7
 
 
 def test_nvidia_topology_matrix_summary_counts_gpu_and_nic_links():
