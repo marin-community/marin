@@ -206,7 +206,10 @@ throughput is a standing, active job, performed every heartbeat by reading what
 was *granted* — not what was requested — and moving the fleet accordingly:
 
 - **Follow the grants.** Shift placement toward region/slice pairs that recently
-  produced steps and away from those that have not.
+  produced steps and away from those that have not. A new dispatch picks its size
+  this way, over the full 32–256 range; batch size never constrains it. Rank on
+  grant rate before throughput — a slice that is idle because it never schedules
+  is worth less than a slower one that runs.
 - **Probe floor: never fewer than two live dispatches in each eligible region.**
   A quiet region is in a lull, not broken — every region here has been
   productive before, and "no grants" is only ever a claim about the last few
