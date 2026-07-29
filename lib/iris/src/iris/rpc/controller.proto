@@ -741,7 +741,7 @@ message Controller {
     // Total amount per resource token over the same capacity the free amounts were
     // computed from (accelerator variant -> total chips, e.g. {"h100": 64}). Same
     // keys as `amounts`; a token's free amount never exceeds its total. Display
-    // only — the federation availability gate reads `amounts` alone.
+    // only — the federation availability gate never reads it.
     map<string, int64> total_amounts = 4;
     // What admitted work holds, split by the priority band holding it. A parent
     // whose queued job outranks a band knows that band's amount is reclaimable by

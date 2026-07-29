@@ -65,10 +65,12 @@ AVAILABILITY_METRIC_VERSION = 2
 class BackendAvailability:
     """One peer backend's advertised shape + free capacity, from a heartbeat.
 
-    ``supplies_metric`` is False for a legacy peer backend that never set the
-    availability wrapper (proto3 cannot distinguish an unset map from an empty
-    one, so the wrapper's presence is the signal); such a backend is matched on
-    shape alone, preserving today's behavior during a rolling upgrade.
+    ``supplies_metric`` is False for a peer backend whose metric the parent cannot
+    read: a legacy one that never set the availability wrapper (proto3 cannot
+    distinguish an unset map from an empty one, so the wrapper's presence is the
+    signal), or one reporting a version newer than ``AVAILABILITY_METRIC_VERSION``.
+    Such a backend is matched on shape alone, which preserves pre-metric behavior
+    during a rolling upgrade.
 
     ``held_by_band`` is what admitted work holds there, keyed by the priority band
     holding it; a candidate outranking a band may reclaim that band's amount by
