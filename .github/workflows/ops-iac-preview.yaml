@@ -140,8 +140,11 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const marker = '<!-- iac-preview -->';
             const body = fs.readFileSync('iac-preview-comment.md', 'utf8');
+            const marker = body.split('\n', 1)[0];
+            if (!marker.startsWith('<!--')) {
+              throw new Error(`assemble_comment.py must start the body with an HTML marker; got: ${marker}`);
+            }
             const { owner, repo } = context.repo;
             const issue_number = Number(process.env.PR_NUMBER);
             if (!Number.isInteger(issue_number) || issue_number <= 0) {

@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -20,6 +21,27 @@ _COUNT_RE = re.compile(
     re.IGNORECASE,
 )
 _UNCHANGED_RE = re.compile(r"(\d+)\s+unchanged", re.IGNORECASE)
+
+
+@dataclass
+class ResourceCounts:
+    create: int = 0
+    update: int = 0
+    delete: int = 0
+    replace: int = 0
+    import_: int = 0
+    same: int = 0
+
+    def as_meta(self) -> dict[str, int]:
+        """JSON field names match Pulumi's summary verbs (import, not import_)."""
+        return {
+            "create": self.create,
+            "update": self.update,
+            "delete": self.delete,
+            "replace": self.replace,
+            "import": self.import_,
+            "same": self.same,
+        }
 
 
 def strip_ansi(text: str) -> str:
@@ -47,42 +69,40 @@ def transform_preview(text: str) -> str:
     return "\n".join(transform_line(line) for line in text.splitlines())
 
 
-def parse_counts(text: str) -> dict[str, int]:
-    counts = {
-        "create": 0,
-        "update": 0,
-        "delete": 0,
-        "replace": 0,
-        "import": 0,
-        "same": 0,
-    }
+def parse_counts(text: str) -> ResourceCounts:
+    counts = ResourceCounts()
     if _NO_CHANGES_RE.search(text):
         return counts
     for match in _COUNT_RE.finditer(text):
-        counts[match.group(2).lower()] = int(match.group(1))
+        kind = match.group(2).lower()
+        value = int(match.group(1))
+        if kind == "import":
+            counts.import_ = value
+        else:
+            setattr(counts, kind, value)
     unchanged = _UNCHANGED_RE.findall(text)
     if unchanged:
-        counts["same"] = int(unchanged[-1])
+        counts.same = int(unchanged[-1])
     return counts
 
 
-def severity(ok: bool, counts: dict[str, int]) -> str:
+def severity(ok: bool, counts: ResourceCounts) -> str:
     if not ok:
         return "error"
-    if counts["delete"] > 0:
+    if counts.delete > 0:
         return "delete"
-    if counts["create"] + counts["update"] + counts["replace"] + counts["import"] > 0:
+    if counts.create + counts.update + counts.replace + counts.import_ > 0:
         return "change"
     return "none"
 
 
-def has_resource_changes(counts: dict[str, int]) -> bool:
+def has_resource_changes(counts: ResourceCounts) -> bool:
     return (
-        counts["create"]
-        + counts["update"]
-        + counts["delete"]
-        + counts["replace"]
-        + counts["import"]
+        counts.create
+        + counts.update
+        + counts.delete
+        + counts.replace
+        + counts.import_
     ) > 0
 
 
@@ -118,7 +138,7 @@ def main() -> None:
         "stack": args.stack,
         "ok": ok,
         "severity": sev,
-        **counts,
+        **counts.as_meta(),
     }
     (args.out_dir / "meta.json").write_text(
         json.dumps(meta, indent=2, sort_keys=True) + "\n",
