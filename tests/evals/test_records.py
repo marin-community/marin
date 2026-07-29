@@ -77,7 +77,7 @@ def test_record_json_uses_eval_alias_and_plain_string_enum(tmp_path):
     assert raw["description"] == "baseline sweep"
 
 
-def test_record_json_includes_native_harbor_config_digest(tmp_path):
+def test_record_json_includes_harbor_config_digest(tmp_path):
     record = _RECORD.model_copy(
         update={
             "evaluation": EvalRef(

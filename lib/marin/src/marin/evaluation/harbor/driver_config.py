@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed configuration and native-schema adaptation for the isolated Harbor driver."""
+"""Harbor job policies and served-endpoint adaptation for the isolated driver."""
 
 import hashlib
 import json
@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from marin.evaluation.harbor.dataset import HF_DATASET_PREFIX
 from marin.external_dependencies import HARBOR
 
 _DEFAULT_MODEL_INFO = {
@@ -23,7 +24,7 @@ _OPENCODE_AGENT = "opencode"
 _HOSTED_VLLM_PROVIDER = "hosted_vllm"
 _HOSTED_VLLM_DISPLAY_NAME = "Hosted vLLM"
 _OPENAI_COMPATIBLE_PACKAGE = "@ai-sdk/openai-compatible"
-_CONFIG_VALIDATOR = Path(__file__).with_name("config_validator.py")
+_TRIAL_DRIVER = Path(__file__).with_name("trial_driver.py")
 
 
 @dataclass(frozen=True)
@@ -70,7 +71,7 @@ class HarborVerifierConfig:
 
 @dataclass(frozen=True)
 class HarborRunConfig:
-    """One Harbor evaluation of one served model."""
+    """Typed authoring form for a registry-backed Harbor job."""
 
     dataset: str
     revision: str
@@ -85,22 +86,10 @@ class HarborRunConfig:
 
 
 @dataclass(frozen=True)
-class MarinHarborConfig:
-    """Stable Marin policy plus runtime values lowered into a native Harbor job."""
+class HarborJobConfig:
+    """One Harbor ``JobConfig`` document plus its durable identity and selectors."""
 
-    job_name: str
-    jobs_dir: str
-    dataset_path: str | None
-    endpoint_url: str
-    served_model: str
-    run: HarborRunConfig
-
-
-@dataclass(frozen=True)
-class NativeHarborConfig:
-    """A validated, normalized native Harbor ``JobConfig`` and its durable identity."""
-
-    normalized: Mapping[str, Any]
+    document: Mapping[str, Any]
     digest: str
     dataset: str
     revision: str
@@ -115,12 +104,13 @@ def _single_config_entry(config: Mapping[str, Any], field_name: str) -> Mapping[
     return values[0]
 
 
-def _native_config_from_normalized(config: Mapping[str, Any]) -> NativeHarborConfig:
-    if config.get("tasks"):
+def _job_config_from_document(document: Mapping[str, Any]) -> HarborJobConfig:
+    normalized = json.loads(json.dumps(document))
+    if normalized.get("tasks"):
         raise ValueError("Harbor config tasks are incompatible with the shared launcher; declare exactly one dataset")
-    agent = _single_config_entry(config, "agents")
-    dataset = _single_config_entry(config, "datasets")
-    environment = config.get("environment")
+    agent = _single_config_entry(normalized, "agents")
+    dataset = _single_config_entry(normalized, "datasets")
+    environment = normalized.get("environment")
     if not isinstance(environment, Mapping):
         raise ValueError("Harbor config must declare one environment")
 
@@ -133,10 +123,18 @@ def _native_config_from_normalized(config: Mapping[str, Any]) -> NativeHarborCon
         raise ValueError("Harbor config agent must have a name or import_path")
     if not isinstance(environment_name, str):
         raise ValueError("Harbor config environment must have a type or import_path")
+    agent_kwargs = agent.get("kwargs")
+    if agent_kwargs is None:
+        agent_kwargs = {}
+    if not isinstance(agent_kwargs, Mapping):
+        raise ValueError("Harbor agent kwargs must be a mapping")
+    _model_info(agent_kwargs.get("model_info"))
+    if agent.get("name") == _OPENCODE_AGENT:
+        _opencode_config_for_endpoint(agent_kwargs.get("opencode_config", {}), "http://validation.invalid")
 
-    canonical = json.dumps(config, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
-    return NativeHarborConfig(
-        normalized=config,
+    canonical = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
+    return HarborJobConfig(
+        document=normalized,
         digest=f"sha256:{hashlib.sha256(canonical).hexdigest()}",
         dataset=dataset_name,
         revision=str(dataset.get("ref") or dataset.get("version") or "unversioned"),
@@ -145,8 +143,8 @@ def _native_config_from_normalized(config: Mapping[str, Any]) -> NativeHarborCon
     )
 
 
-def load_native_harbor_config(path: Path) -> NativeHarborConfig:
-    """Validate and normalize a native Harbor YAML or JSON file with the pinned Harbor schema."""
+def load_harbor_job_config(path: Path) -> HarborJobConfig:
+    """Validate and normalize a Harbor YAML or JSON file with the pinned Harbor schema."""
     command = [
         "uv",
         "run",
@@ -156,7 +154,8 @@ def load_native_harbor_config(path: Path) -> NativeHarborConfig:
         "--with",
         HARBOR.requirement(),
         "python",
-        str(_CONFIG_VALIDATOR),
+        str(_TRIAL_DRIVER),
+        "validate",
         str(path),
     ]
     try:
@@ -170,7 +169,68 @@ def load_native_harbor_config(path: Path) -> NativeHarborConfig:
         raise ValueError(f"Harbor validator returned invalid JSON for {path}") from exc
     if not isinstance(normalized, Mapping):
         raise ValueError(f"Harbor config {path} must contain a mapping")
-    return _native_config_from_normalized(normalized)
+    return _job_config_from_document(normalized)
+
+
+def _model_info(value: object, max_output_tokens: int | None = None) -> dict[str, Any]:
+    configured = {} if value is None else value
+    if not isinstance(configured, Mapping):
+        raise ValueError("Harbor agent model_info must be a mapping")
+    model_info = {**_DEFAULT_MODEL_INFO, **configured}
+    if max_output_tokens is not None:
+        model_info["max_output_tokens"] = max_output_tokens
+    return model_info
+
+
+def harbor_job_config(job_name: str, run: HarborRunConfig) -> HarborJobConfig:
+    """Lower a registry-authored policy into the shared Harbor job representation."""
+    agent_kwargs = dict(run.agent.kwargs)
+    agent_kwargs["model_info"] = _model_info(
+        agent_kwargs.get("model_info"),
+        max_output_tokens=run.agent.max_output_tokens,
+    )
+
+    if run.dataset.startswith(HF_DATASET_PREFIX):
+        dataset = {"path": run.dataset, "n_tasks": run.task_limit}
+    else:
+        selector = {"ref": run.revision} if "/" in run.dataset else {"version": run.revision}
+        dataset = {"name": run.dataset, **selector, "n_tasks": run.task_limit}
+
+    return _job_config_from_document(
+        {
+            "job_name": job_name,
+            "n_attempts": run.attempts,
+            "timeout_multiplier": run.timeout_multiplier,
+            "n_concurrent_trials": run.n_concurrent,
+            "retry": {
+                "max_retries": run.retry.max_retries,
+                "exclude_exceptions": list(run.retry.exclude_exceptions),
+                "wait_multiplier": run.retry.wait_multiplier,
+                "min_wait_sec": run.retry.min_wait,
+                "max_wait_sec": run.retry.max_wait,
+            },
+            "environment": {
+                "type": run.environment.environment_type,
+                "force_build": run.environment.force_build,
+                "delete": run.environment.delete,
+                "override_cpus": run.environment.cpus,
+                "override_memory_mb": run.environment.memory_mb,
+                "override_storage_mb": run.environment.storage_mb,
+                "kwargs": dict(run.environment.kwargs),
+            },
+            "verifier": {"max_timeout_sec": run.verifier.max_timeout},
+            "agents": [
+                {
+                    "name": run.agent.name,
+                    "model_name": f"{_HOSTED_VLLM_PROVIDER}/{job_name}",
+                    "max_timeout_sec": run.agent.max_timeout,
+                    "override_setup_timeout_sec": run.agent.setup_timeout,
+                    "kwargs": agent_kwargs,
+                }
+            ],
+            "datasets": [dataset],
+        }
+    )
 
 
 def _opencode_config_for_endpoint(config: object, endpoint_url: str) -> dict[str, Any]:
@@ -201,93 +261,35 @@ def _opencode_config_for_endpoint(config: object, endpoint_url: str) -> dict[str
     }
 
 
-def native_job_config(config: MarinHarborConfig) -> dict[str, Any]:
-    """Translate the stable Marin config into the pinned Harbor ``JobConfig`` schema."""
-    run = config.run
-    agent_kwargs = dict(run.agent.kwargs)
-    configured_model_info = agent_kwargs.get("model_info") or {}
-    if not isinstance(configured_model_info, Mapping):
-        raise ValueError("Harbor agent model_info must be a mapping")
-    model_info = {
-        **_DEFAULT_MODEL_INFO,
-        **configured_model_info,
-        "max_output_tokens": run.agent.max_output_tokens,
-    }
-    agent_kwargs.update({"api_base": config.endpoint_url, "model_info": model_info})
-    if run.agent.name == _OPENCODE_AGENT:
-        agent_kwargs["opencode_config"] = _opencode_config_for_endpoint(
-            agent_kwargs.get("opencode_config", {}),
-            config.endpoint_url,
-        )
-
-    if config.dataset_path is not None:
-        dataset = {"path": config.dataset_path, "n_tasks": run.task_limit}
-    else:
-        selector = {"ref": run.revision} if "/" in run.dataset else {"version": run.revision}
-        dataset = {"name": run.dataset, **selector, "n_tasks": run.task_limit}
-
-    return {
-        "job_name": config.job_name,
-        "jobs_dir": config.jobs_dir,
-        "n_attempts": run.attempts,
-        "timeout_multiplier": run.timeout_multiplier,
-        "n_concurrent_trials": run.n_concurrent,
-        "retry": {
-            "max_retries": run.retry.max_retries,
-            "exclude_exceptions": list(run.retry.exclude_exceptions),
-            "wait_multiplier": run.retry.wait_multiplier,
-            "min_wait_sec": run.retry.min_wait,
-            "max_wait_sec": run.retry.max_wait,
-        },
-        "environment": {
-            "type": run.environment.environment_type,
-            "force_build": run.environment.force_build,
-            "delete": run.environment.delete,
-            "override_cpus": run.environment.cpus,
-            "override_memory_mb": run.environment.memory_mb,
-            "override_storage_mb": run.environment.storage_mb,
-            "kwargs": dict(run.environment.kwargs),
-        },
-        "verifier": {"max_timeout_sec": run.verifier.max_timeout},
-        "agents": [
-            {
-                "name": run.agent.name,
-                "model_name": f"{_HOSTED_VLLM_PROVIDER}/{config.served_model}",
-                "max_timeout_sec": run.agent.max_timeout,
-                "override_setup_timeout_sec": run.agent.setup_timeout,
-                "kwargs": agent_kwargs,
-            }
-        ],
-        "datasets": [dataset],
-    }
-
-
-def adapt_native_job_config(
-    config: NativeHarborConfig,
+def adapt_job_config(
+    config: HarborJobConfig,
     *,
     job_name: str,
     jobs_dir: str,
+    dataset_path: str | None,
     endpoint_url: str,
     served_model: str,
     task_limit: int | None,
-    model_agent_kwargs: Mapping[str, str],
+    model_agent_kwargs: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Overlay Marin-owned runtime values on a normalized Harbor ``JobConfig``."""
-    resolved = json.loads(json.dumps(config.normalized))
+    """Overlay Marin-owned runtime values on a Harbor ``JobConfig``."""
+    resolved = json.loads(json.dumps(config.document))
     resolved["job_name"] = job_name
     resolved["jobs_dir"] = jobs_dir
 
     dataset = resolved["datasets"][0]
+    if dataset_path is not None:
+        dataset.pop("name", None)
+        dataset.pop("ref", None)
+        dataset.pop("version", None)
+        dataset["path"] = dataset_path
     if task_limit is not None:
         dataset["n_tasks"] = task_limit
 
     agent = resolved["agents"][0]
     agent["model_name"] = f"{_HOSTED_VLLM_PROVIDER}/{served_model}"
     agent_kwargs = {**model_agent_kwargs, **agent.get("kwargs", {})}
-    configured_model_info = agent_kwargs.get("model_info") or {}
-    if not isinstance(configured_model_info, Mapping):
-        raise ValueError("Harbor agent model_info must be a mapping")
-    agent_kwargs["model_info"] = {**_DEFAULT_MODEL_INFO, **configured_model_info}
+    agent_kwargs["model_info"] = _model_info(agent_kwargs.get("model_info"))
     agent_kwargs["api_base"] = endpoint_url
     if agent.get("name") == _OPENCODE_AGENT:
         agent_kwargs["opencode_config"] = _opencode_config_for_endpoint(

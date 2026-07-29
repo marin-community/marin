@@ -28,11 +28,8 @@ from rigging.filesystem import StoragePath, is_remote_path, prefix_join, url_to_
 from marin.evaluation.eval_env import env_vars_from_keys
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
 from marin.evaluation.harbor.driver_config import (
-    HarborRunConfig,
-    MarinHarborConfig,
-    NativeHarborConfig,
-    adapt_native_job_config,
-    native_job_config,
+    HarborJobConfig,
+    adapt_job_config,
 )
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
@@ -242,7 +239,7 @@ def _run_driver(config_file: Path, driver_env: Mapping[str, str]) -> None:
     ]
     for package in HARBOR_PACKAGES:
         cmd.extend(("--with", package))
-    cmd.extend(("python", _DRIVER, str(config_file)))
+    cmd.extend(("python", _DRIVER, "run", str(config_file)))
     logger.info("running Harbor driver: %s", " ".join(cmd))
     process_env = env_vars_from_keys(_DRIVER_SYSTEM_ENV_KEYS)
     process_env.update(driver_env)
@@ -312,50 +309,6 @@ def _run_harbor_job(
     return result
 
 
-def run_harbor(
-    model: RunningModel,
-    config: HarborRunConfig,
-    output_dir: str,
-    *,
-    hf_token: str | None,
-    driver_env: Mapping[str, str],
-) -> HarborRunResult:
-    """Run ``config``'s Harbor dataset against the served model and write the normalized outputs.
-
-    Serving is the caller's job. Harbor derives both the OpenAI URL and served-model identity from
-    ``model``. It resumes completed trials under ``output_dir``, then writes normalized samples and
-    aggregate metrics there.
-    """
-    job_name = _job_name(
-        config.dataset,
-        (config.revision, model.endpoint.model, config.agent.name, config.task_limit),
-    )
-    workdir, results_dir = _job_paths(job_name)
-    dataset_path = materialize_harbor_dataset(
-        config.dataset,
-        config.revision,
-        workdir,
-        hf_token=hf_token,
-    )
-    driver_config = MarinHarborConfig(
-        job_name=job_name,
-        jobs_dir=str(results_dir),
-        dataset_path=str(dataset_path) if dataset_path is not None else None,
-        endpoint_url=model.endpoint.base_url,
-        served_model=model.endpoint.model,
-        run=config,
-    )
-    return _run_harbor_job(
-        job_name=job_name,
-        workdir=workdir,
-        job_config=native_job_config(driver_config),
-        dataset=config.dataset,
-        environment=config.environment.environment_type,
-        output_dir=output_dir,
-        driver_env=driver_env,
-    )
-
-
 def _evaluation_outcome(run: Callable[[], HarborRunResult], output_dir: str) -> EvaluationOutcome:
     try:
         result = run()
@@ -377,42 +330,18 @@ def _evaluation_outcome(run: Callable[[], HarborRunResult], output_dir: str) -> 
 
 @dataclass(frozen=True)
 class HarborExecutor:
-    """Run one resolved Harbor configuration."""
+    """Run one normalized Harbor job policy against a served model."""
 
-    config: HarborRunConfig
-    secret_env_keys: tuple[str, ...] = ()
-
-    def __call__(
-        self,
-        model: RunningModel,
-        output_dir: str,
-        env_vars: Mapping[str, str],
-    ) -> EvaluationOutcome:
-        return _evaluation_outcome(
-            lambda: run_harbor(
-                model,
-                self.config,
-                output_dir,
-                hf_token=env_vars.get("HF_TOKEN"),
-                driver_env={key: env_vars[key] for key in self.secret_env_keys},
-            ),
-            output_dir,
-        )
-
-
-@dataclass(frozen=True)
-class NativeHarborExecutor:
-    """Run one validated native Harbor configuration."""
-
-    config: NativeHarborConfig
+    config: HarborJobConfig
     task_limit: int | None
-    model_agent_kwargs: Mapping[str, str]
+    model_agent_kwargs: Mapping[str, object]
     secret_env_keys: tuple[str, ...] = ()
 
     def _run(
         self,
         model: RunningModel,
         output_dir: str,
+        hf_token: str | None,
         driver_env: Mapping[str, str],
     ) -> HarborRunResult:
         job_name = _job_name(
@@ -420,10 +349,17 @@ class NativeHarborExecutor:
             (self.config.digest, model.endpoint.model, self.task_limit),
         )
         workdir, results_dir = _job_paths(job_name)
-        job_config = adapt_native_job_config(
+        dataset_path = materialize_harbor_dataset(
+            self.config.dataset,
+            self.config.revision,
+            workdir,
+            hf_token=hf_token,
+        )
+        job_config = adapt_job_config(
             self.config,
             job_name=job_name,
             jobs_dir=str(results_dir),
+            dataset_path=str(dataset_path) if dataset_path is not None else None,
             endpoint_url=model.endpoint.base_url,
             served_model=model.endpoint.model,
             task_limit=self.task_limit,
@@ -446,9 +382,10 @@ class NativeHarborExecutor:
         env_vars: Mapping[str, str],
     ) -> EvaluationOutcome:
         driver_env = {key: env_vars[key] for key in self.secret_env_keys}
-        if hf_token := env_vars.get("HF_TOKEN"):
+        hf_token = env_vars.get("HF_TOKEN")
+        if hf_token:
             driver_env["HF_TOKEN"] = hf_token
         return _evaluation_outcome(
-            lambda: self._run(model, output_dir, driver_env),
+            lambda: self._run(model, output_dir, hf_token, driver_env),
             output_dir,
         )

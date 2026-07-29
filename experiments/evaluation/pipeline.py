@@ -30,7 +30,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 
 from experiments.evaluation.evals import SUITES
-from experiments.evaluation.launch import LaunchSpec, RegistrySelection, launch_group
+from experiments.evaluation.launch import LaunchSpec, launch_group
 from experiments.evaluation.models import models
 
 
@@ -50,7 +50,8 @@ def run_eval_pipeline_step(config: EvalStepConfig) -> None:
     keys = SUITES.get(config.evals) or (config.evals,)
     spec = LaunchSpec(
         model=config.model,
-        selection=RegistrySelection(keys),
+        evals=keys,
+        harbor_configs=(),
         platform=default_platform(models()[config.model]),
         accelerator=config.accelerator,
         limit=config.limit,

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import click
 from iris.cli.connect import open_iris_client
-from marin.evaluation.harbor.driver_config import load_native_harbor_config
+from marin.evaluation.harbor.driver_config import load_harbor_job_config
 from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import Platform, default_platform
 from marin.evaluation.records import CW_RECORDS_PREFIX, DEFAULT_RECORDS_PREFIX, list_records
@@ -27,7 +27,6 @@ from experiments.evaluation.evals import EVALS, SUITES
 from experiments.evaluation.launch import (
     HarborConfigSelection,
     LaunchSpec,
-    RegistrySelection,
     build_evaluation_batch,
     launch_group,
 )
@@ -83,8 +82,8 @@ def cli() -> None:
 @click.option(
     "--harbor-config",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    default=None,
-    help="Native Harbor JobConfig YAML or JSON; mutually exclusive with --evals.",
+    multiple=True,
+    help="Harbor JobConfig YAML or JSON. Repeatable and additive with --evals.",
 )
 @click.option(
     "--platform",
@@ -112,7 +111,7 @@ def cli() -> None:
 def launch(
     model: str,
     evals_arg: str | None,
-    harbor_config: Path | None,
+    harbor_config: tuple[Path, ...],
     platform: str | None,
     accelerator: str | None,
     limit: int | None,
@@ -129,22 +128,27 @@ def launch(
         raise click.BadParameter(f"unknown model {model!r}; known: {sorted(catalog)}")
     model_config = catalog[model]
     resolved_platform = Platform(platform) if platform else default_platform(model_config)
-    if harbor_config is not None and evals_arg is not None:
-        raise click.UsageError("--harbor-config and --evals are mutually exclusive")
-    if harbor_config is not None:
+    harbor_configs: list[HarborConfigSelection] = []
+    for path in harbor_config:
         try:
-            native_config = load_native_harbor_config(harbor_config)
+            config = load_harbor_job_config(path)
         except ValueError as exc:
             raise click.BadParameter(str(exc), param_hint="--harbor-config") from exc
-        selection = HarborConfigSelection(
-            name=canonical_served_name(harbor_config.stem),
-            config=native_config,
+        harbor_configs.append(
+            HarborConfigSelection(
+                name=canonical_served_name(path.stem),
+                config=config,
+            )
         )
-    else:
-        selection = RegistrySelection(_resolve_eval_keys(evals_arg or "smoke"))
+    evals = (
+        _resolve_eval_keys(evals_arg)
+        if evals_arg is not None
+        else (() if harbor_configs else _resolve_eval_keys("smoke"))
+    )
     spec = LaunchSpec(
         model=model,
-        selection=selection,
+        evals=evals,
+        harbor_configs=tuple(harbor_configs),
         platform=resolved_platform,
         accelerator=accelerator,
         limit=limit,

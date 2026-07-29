@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
-from marin.evaluation.harbor.driver_config import load_native_harbor_config
+from marin.evaluation.harbor.driver_config import load_harbor_job_config
 from marin.evaluation.harbor.runner import HARBOR_RUNTIME
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig, ResourceHint
@@ -37,7 +37,6 @@ from experiments.evaluation.evals import EVALS
 from experiments.evaluation.launch import (
     HarborConfigSelection,
     LaunchSpec,
-    RegistrySelection,
     build_evaluation_batch,
 )
 
@@ -61,7 +60,7 @@ with open(sys.argv[-1]) as config_file:
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
 
 
-def _write_native_harbor_config(path: Path, *, agents: str | None = None) -> Path:
+def _write_harbor_config(path: Path, *, agents: str | None = None) -> Path:
     path.write_text(
         f"""
 job_name: external-aime
@@ -224,7 +223,8 @@ def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     spec = LaunchSpec(
         model="qwen3-8b",
-        selection=RegistrySelection(("aime-harbor", "tb2")),
+        evals=("aime-harbor", "tb2"),
+        harbor_configs=(),
         platform=Platform.TPU,
         accelerator=None,
         limit=1,
@@ -245,13 +245,15 @@ def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
         )
     }
     assert {evaluation.identity.eval_runtime for evaluation in batch.evaluations} == {HARBOR_RUNTIME}
+    assert all(evaluation.identity.eval_ref.harbor.config_digest for evaluation in batch.evaluations)
 
 
 def test_build_evaluation_batch_records_evalchemy_benchmark_extras(monkeypatch):
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     spec = LaunchSpec(
         model="qwen3-8b",
-        selection=RegistrySelection(("math500",)),
+        evals=("math500",),
+        harbor_configs=(),
         platform=Platform.TPU,
         accelerator=None,
         limit=1,
@@ -278,7 +280,8 @@ def test_build_evaluation_batch_rejects_conflicting_secret_specs(monkeypatch):
     monkeypatch.setitem(EVALS, "conflicting-daytona", conflicting)
     spec = LaunchSpec(
         model="qwen3-8b",
-        selection=RegistrySelection(("aime-harbor", "conflicting-daytona")),
+        evals=("aime-harbor", "conflicting-daytona"),
+        harbor_configs=(),
         platform=Platform.TPU,
         accelerator=None,
         limit=1,
@@ -294,13 +297,14 @@ def test_build_evaluation_batch_rejects_conflicting_secret_specs(monkeypatch):
         )
 
 
-def test_build_evaluation_batch_accepts_a_native_harbor_config(tmp_path, monkeypatch):
+def test_build_evaluation_batch_combines_registry_and_file_harbor_configs(tmp_path, monkeypatch):
     _install_fake_harbor_validator(tmp_path, monkeypatch)
-    config = load_native_harbor_config(_write_native_harbor_config(tmp_path / "aime-policy.yaml"))
+    config = load_harbor_job_config(_write_harbor_config(tmp_path / "aime-policy.yaml"))
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     spec = LaunchSpec(
         model="qwen3-8b",
-        selection=HarborConfigSelection(name="aime-policy", config=config),
+        evals=("mmlu-smoke",),
+        harbor_configs=(HarborConfigSelection(name="aime-policy", config=config),),
         platform=Platform.TPU,
         accelerator=None,
         limit=2,
@@ -314,7 +318,11 @@ def test_build_evaluation_batch_accepts_a_native_harbor_config(tmp_path, monkeyp
         "tester",
     )
 
-    evaluation = batch.evaluations[0]
+    assert [evaluation.identity.eval_ref.name for evaluation in batch.evaluations] == [
+        "mmlu-smoke",
+        "aime-policy",
+    ]
+    evaluation = batch.evaluations[1]
     assert evaluation.identity.eval_ref.model_dump(mode="json", exclude_none=True) == {
         "name": "aime-policy",
         "mechanism": "harbor",
@@ -372,12 +380,21 @@ def test_build_evaluation_batch_accepts_a_native_harbor_config(tmp_path, monkeyp
     assert captured["agents"][0]["kwargs"]["trajectory_config"] == {"raw_content": False}
 
 
-def test_launch_rejects_incompatible_native_harbor_config_before_iris_submission(tmp_path, monkeypatch):
-    _install_fake_harbor_validator(tmp_path, monkeypatch)
-    config_path = _write_native_harbor_config(
-        tmp_path / "multiple-agents.yaml",
-        agents="""  - name: terminus-2
+@pytest.mark.parametrize(
+    "agents",
+    [
+        """  - name: terminus-2
   - name: opencode""",
+        """  - name: opencode
+    kwargs:
+      model_info: []""",
+    ],
+)
+def test_launch_rejects_incompatible_harbor_config_before_iris_submission(tmp_path, monkeypatch, agents):
+    _install_fake_harbor_validator(tmp_path, monkeypatch)
+    config_path = _write_harbor_config(
+        tmp_path / "incompatible.yaml",
+        agents=agents,
     )
     iris_opened = False
 
@@ -402,3 +419,31 @@ def test_launch_rejects_incompatible_native_harbor_config_before_iris_submission
 
     assert result.exit_code == 2
     assert not iris_opened
+
+
+def test_launch_accepts_registry_evals_and_repeated_harbor_configs(tmp_path, monkeypatch):
+    _install_fake_harbor_validator(tmp_path, monkeypatch)
+    first = _write_harbor_config(tmp_path / "first-policy.yaml")
+    second = _write_harbor_config(tmp_path / "second-policy.yaml")
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "launch",
+            "--model",
+            "qwen3-8b",
+            "--evals",
+            "mmlu-smoke",
+            "--harbor-config",
+            str(first),
+            "--harbor-config",
+            str(second),
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "eval=mmlu-smoke" in result.output
+    assert "eval=first-policy" in result.output
+    assert "eval=second-policy" in result.output

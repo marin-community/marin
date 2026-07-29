@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.client import IrisClient
 from iris.cluster.config import load_config
-from marin.evaluation.harbor.driver_config import NativeHarborConfig
+from marin.evaluation.harbor.driver_config import HarborJobConfig
 from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.records import (
@@ -35,24 +35,17 @@ from rigging.config_discovery import resolve_cluster_config
 from rigging.filesystem import prefix_join
 from rigging.secrets import SecretSpec
 
-from experiments.evaluation.evals import EVALS, EvaluationDefinition, NativeHarborDefinition
+from experiments.evaluation.evals import EVALS, EvaluationDefinition, harbor_definition
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
 from experiments.evaluation.models import models
 
 
 @dataclass(frozen=True)
-class RegistrySelection:
-    """Evaluation keys resolved from the source registry."""
-
-    evals: tuple[str, ...]
-
-
-@dataclass(frozen=True)
 class HarborConfigSelection:
-    """One validated native Harbor config supplied at launch."""
+    """One validated Harbor config file supplied at launch."""
 
     name: str
-    config: NativeHarborConfig
+    config: HarborJobConfig
 
 
 @dataclass(frozen=True)
@@ -60,7 +53,8 @@ class LaunchSpec:
     """One model, evaluation selection, execution target, and record destination."""
 
     model: str
-    selection: RegistrySelection | HarborConfigSelection
+    evals: tuple[str, ...]
+    harbor_configs: tuple[HarborConfigSelection, ...]
     platform: Platform
     accelerator: str | None
     limit: int | None
@@ -112,20 +106,19 @@ def records_prefix_for(accel: AcceleratorChoice, spec: LaunchSpec) -> str:
 
 
 def _evaluation_definitions(spec: LaunchSpec) -> tuple[tuple[str, EvaluationDefinition], ...]:
-    if isinstance(spec.selection, HarborConfigSelection):
-        return (
-            (
-                spec.selection.name,
-                NativeHarborDefinition(name=spec.selection.name, config=spec.selection.config),
-            ),
-        )
-
-    evals = spec.selection.evals
-    if not evals:
+    registry_definitions: tuple[tuple[str, EvaluationDefinition], ...] = tuple(
+        (eval_key, EVALS[eval_key]) for eval_key in spec.evals
+    )
+    config_definitions: tuple[tuple[str, EvaluationDefinition], ...] = tuple(
+        (selection.name, harbor_definition(selection.name, selection.config)) for selection in spec.harbor_configs
+    )
+    definitions = registry_definitions + config_definitions
+    if not definitions:
         raise ValueError("at least one evaluation is required")
-    if len(set(evals)) != len(evals):
-        raise ValueError(f"duplicate eval keys in one launch: {list(evals)}")
-    return tuple((eval_key, EVALS[eval_key]) for eval_key in evals)
+    names = [name for name, _ in definitions]
+    if len(set(names)) != len(names):
+        raise ValueError(f"duplicate eval names in one launch: {names}")
+    return definitions
 
 
 def build_evaluation_batch(
