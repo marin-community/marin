@@ -197,8 +197,23 @@ gate are **unconditional on `main`** — `experiments/grug/moe/model.py:6` state
 architecture as "QB-routed MoE with GatedNorm, XSA, sigmoid combine weights", and the
 config docstring lists them as hardcoded. So this is not an unported lever we declined;
 it is a cost `main` already pays at EP64. Whether the trade is correct is a *quality*
-question, and nothing in this experiment measures quality. It should be an explicit
-decision rather than an inherited default.
+question, and nothing in this experiment measures quality.
+
+**DECISION (2026-07-29): standardize on trio-ON for all arms.** Since the series lands on
+`main`, and `main` runs the trio unconditionally, trio-on is the configuration production
+will actually use. Every arm from here carries `SCALE_GATED_NORM=1`, `SCALE_ATTN_GATE=1`
+and `SCALE_XSA=1` unless the experiment is specifically about them. The D-2 composed draw
+already does.
+
+Two consequences to carry forward. **The trio-off control band (321,670 tok/s) is no
+longer the baseline** — the trio-on band, 316,587–317,919 tok/s (mean 317,253), is. Do not
+compare a new trio-on arm against the old control. And **the FSDP line gates the trio the
+same way**: `origin/b200-300B-tune` has
+`gated_norm=os.environ.get("SCALE_GATED_NORM") == "1"` and the same for the other two, all
+defaulting off. So whether the FSDP figures in the comparison table were taken trio-on is
+a submit-command question the branch cannot answer. Establish it before any EP-vs-FSDP
+claim; this is the same unmatched-conditions problem as D-1's unmeasured drop rates,
+raised independently by Larry Dial on 2026-07-29.
 
 **What is genuinely open.** Muon shape-grouping (+0.09pp on FSDP) only. That is below
 the ~2pp threshold this project's own protocol sets for repeated placement draws, so it
