@@ -190,3 +190,177 @@ author: Matt Wittmann
   recovery requires a corrected registry tag or controller/backend change.
 - Decision: numerical qualification produced no comparison result. Stop at this
   gate. Do not run the compile smokes, PGLE capture, or any D-2 rack draw.
+
+### 2026-07-28 16:46 PDT - Node-local retry authorized
+
+- Hypothesis: unchanged. The no-merge and pre-reconciliation layouts differ
+  only by floating-point reduction order at D-2 matrix dimensions. The
+  numerical criteria and the 22.5% D-2 prediction with a 21.5% falsification
+  threshold remain exactly as pre-registered above.
+- Commit Hash: `8779abc42b1e7cc4e915d69a004ca4f6af909856`
+- Correction: the failures on `s4bk6j84` do not establish a registry-wide image
+  fault. Four other GB200 legs are currently running on `cw-us-east-08a`, and
+  running and failed pods have overlapping `stage-workdir` image digests. Treat
+  `exec format error` as node-local or intermittent. Record every failed node
+  and stop after roughly a handful of fresh attempts if no task starts.
+- Command:
+
+  ```bash
+  IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
+    --priority production --job-name d2-muon-num-syrk1-r6-0728-1646 \
+    --enable-extra-resources --gpu GB200x4 --cpu 32 --memory 256GB --disk 256GB \
+    --extra gpu --max-retries 0 --timeout 7200 \
+    -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async \
+    -e XLA_FLAGS "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false --xla_gpu_experimental_parallel_collective_overlap_limit=4" \
+    -- python -m experiments.grug.moe.d2_muon_qualification --mode numerical --syrk 1
+  ```
+
+- Config: four GB200 GPUs; direct `cw-us-east-08a` route; production priority;
+  explicit `data=2, expert=2` mesh; FP32 arrays with BF16 Newton-Schulz
+  internals; realistic 5120/1280 matrix dimensions; SYRK on.
+- Queue audit: D-1a, D-1b, D-6/D-7 control, D-8, and the D-5 census have active
+  jobs. This four-GPU qualification retry does not request rack capacity.
+- Next action: submit once, verify direct Kueue admission, and monitor to
+  terminal. Record the assigned node if startup fails.
+
+### 2026-07-28 16:47 PDT - Node-local failure on retry R6
+
+- Commit Hash: `8779abc42b1e7cc4e915d69a004ca4f6af909856`
+- Job: `/mwittmann/d2-muon-num-syrk1-r6-0728-1646`.
+- Result: direct Kueue admission succeeded, but `stage-workdir` failed before
+  bundle fetch on node `s4bk6j84`. The init container again used
+  `iris-task@sha256:cfe4e8dd08f6d43076ade21a2a018ef7c1616356e46960f0a1ebc66434bb3425`.
+  Iris reported `Init:Error stage-workdir`; no `D2_ENV` or numerical output was
+  produced.
+- Interpretation: this is the same node-local/intermittent startup fault. Other
+  jobs continue to run on the cluster, and recent unrelated attempts also fail
+  when assigned to `s4bk6j84`. Do not patch the pod or change Iris.
+- Next action: retry the identical four-GPU command once as
+  `d2-muon-num-syrk1-r7-0728-1648`, then record its node and result.
+
+### 2026-07-28 16:54 PDT - Numerical qualification passed on retry R7
+
+- Commit Hash: `8779abc42b1e7cc4e915d69a004ca4f6af909856`
+- Command:
+
+  ```bash
+  IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
+    --priority production --job-name d2-muon-num-syrk1-r7-0728-1648 \
+    --enable-extra-resources --gpu GB200x4 --cpu 32 --memory 256GB --disk 256GB \
+    --extra gpu --max-retries 0 --timeout 7200 \
+    -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async \
+    -e XLA_FLAGS "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false --xla_gpu_experimental_parallel_collective_overlap_limit=4" \
+    -- python -m experiments.grug.moe.d2_muon_qualification --mode numerical --syrk 1
+  ```
+
+- Job: `/mwittmann/d2-muon-num-syrk1-r7-0728-1648`.
+- Node: `sjxsxs64`; `stage-workdir` completed with
+  `iris-task@sha256:29ec7e8d4702faa36b0006ee34fd084e3e634a541e0736475446051bba091524`.
+- Result: succeeded after 3 minutes 51.52 seconds. All 15 point comparisons
+  across expert gate/up, expert down, non-expert tall, non-expert wide, and
+  non-expert square orientations at NS0, NS2, and NS5 had `max_abs=0`,
+  `mean_abs=0`, `relative_l2=0`, exact fraction `1.0`, and finite values.
+  Cosines ranged from `0.9999998807907104` to `1.0000001192092896`.
+- Loss trajectory: all 25 paired updates were exactly equal. The largest
+  relative loss divergence was `1.627454638974007e-7` at expert-down step 3;
+  every other step was `0`.
+- Gate evaluation:
+  - finite: pass;
+  - relative L2 at every NS depth ≤ `2e-3`: pass (`0`);
+  - cosine ≥ `0.99999`: pass;
+  - NS5 relative L2 ≤ 2× NS2: pass (`0` and `0`);
+  - per-step relative loss divergence ≤ `1e-4`: pass (`1.63e-7` maximum).
+- Verdict: the composed and pre-reconciliation Muon paths are numerically
+  equivalent at these realistic FP32/BF16 D-2 shapes. There is no structural
+  divergence signal. Proceed to the compile/HLO smoke.
+- Fresh startup failure nodes after the retry notice: `s4bk6j84` (R6). R7
+  succeeded on `sjxsxs64`.
+
+### 2026-07-28 16:55 PDT - Non-SYRK compile/HLO smoke submitted
+
+- Hypothesis: with `SCALE_MUON_SYRK=0`, the GPU lowering preserves the
+  no-merge expert layout, the two-hop multi-axis padded inbound reshard, and the
+  direct padded outbound sharding without involuntary SPMD rematerialization.
+- Commit Hash: `8779abc42b1e7cc4e915d69a004ca4f6af909856`
+- Command:
+
+  ```bash
+  IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
+    --priority production --job-name d2-muon-compile-syrk0-0728-1655 \
+    --enable-extra-resources --gpu GB200x4 --cpu 32 --memory 256GB --disk 256GB \
+    --extra gpu --max-retries 0 --timeout 7200 \
+    -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async \
+    -e XLA_FLAGS "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false --xla_gpu_experimental_parallel_collective_overlap_limit=4" \
+    -- python -m experiments.grug.moe.d2_muon_qualification --mode compile --syrk 0
+  ```
+
+- Next action: monitor to terminal, count involuntary-remat SPMD warnings over
+  the complete untruncated log, and inspect every `D2_STRUCTURE` and
+  `D2_COMPILE` record before submitting the SYRK arm.
+
+### 2026-07-28 16:57 PDT - Non-SYRK compile/HLO smoke failed the gate
+
+- Job: `/mwittmann/d2-muon-compile-syrk0-0728-1655`.
+- Result: Iris succeeded in 30.49 seconds, but the experimental gate failed.
+  `D2_STRUCTURE` reported zero `(L,E)->LE` merges, padded reshards
+  `P('data',None,None)` then `P(('data','expert'),None,None)`, and zero
+  `P(None,None,None)` padded outbound reshards. Both compiled results were
+  finite and restored their expected shardings.
+- SPMD warning count: `1` over the complete log. While compiling
+  `nonexpert_tall`, XLA reported involuntary full rematerialization from
+  `{devices=[4,1,1]<=[4]}` to
+  `{devices=[1,2,1,2]<=[4] last_tile_dim_replicate}` at
+  `jit(current)/vmap()/convert_element_type`.
+- Interpretation: the structural jaxpr checks pass, but the zero-warning
+  requirement does not. A succeeded Iris job is not a passing compile gate.
+- Next action: run the required SYRK compile arm to determine whether the first
+  Blackwell SYRK lowering also compiles and whether it adds warnings. Stop
+  before PGLE regardless of the SYRK result.
+
+### 2026-07-28 16:57 PDT - SYRK compile/HLO smoke submitted
+
+- Hypothesis: the new EP-capable SYRK branch compiles and executes on Blackwell,
+  preserves the same structural layout, and does not add involuntary-remat
+  warnings beyond the non-SYRK padded-path regression.
+- Commit Hash: `8779abc42b1e7cc4e915d69a004ca4f6af909856`
+- Command:
+
+  ```bash
+  IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
+    --priority production --job-name d2-muon-compile-syrk1-0728-1657 \
+    --enable-extra-resources --gpu GB200x4 --cpu 32 --memory 256GB --disk 256GB \
+    --extra gpu --max-retries 0 --timeout 7200 \
+    -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async \
+    -e XLA_FLAGS "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false --xla_gpu_experimental_parallel_collective_overlap_limit=4" \
+    -- python -m experiments.grug.moe.d2_muon_qualification --mode compile --syrk 1
+  ```
+
+- Next action: monitor to terminal and inspect the complete log. Do not submit
+  PGLE capture or D-2 rack work after this arm.
+
+### 2026-07-28 16:59 PDT - Compile/HLO gate failed; stop
+
+- Job: `/mwittmann/d2-muon-compile-syrk1-0728-1657`.
+- Node: `sdxsxs64` for both compile arms.
+- Result: the first Blackwell EP SYRK lowering compiled and executed finite
+  expert and padded non-expert results. `D2_STRUCTURE` again reported zero
+  expert merges, the expected two padded inbound reshards, and zero replicated
+  padded outbound reshards.
+- SPMD warning count: `1` over the complete SYRK log, identical to the non-SYRK
+  arm. The warning was the same padded `convert_element_type` transition from
+  sharding `{devices=[4,1,1]<=[4]}` to
+  `{devices=[1,2,1,2]<=[4] last_tile_dim_replicate}`.
+- Compile summary:
+
+  | `SCALE_MUON_SYRK` | Iris state | expert merges | inbound two-hop | replicated outbound | involuntary-remat warnings |
+  |---:|---|---:|---|---:|---:|
+  | 0 | succeeded | 0 | yes | 0 | 1 |
+  | 1 | succeeded | 0 | yes | 0 | 1 |
+
+- Verdict: the structural layout and the new SYRK GPU dispatch both compile,
+  but the pre-registered zero-warning gate fails for both settings. The
+  isolated Muon smoke failed before a full rematerialized training-step smoke
+  was justified.
+- Decision: stop. Do not capture PGLE or submit any D-2 rack draw. Record the
+  numerical pass, compile failure, and unanswered composition question in the
+  qualification report.

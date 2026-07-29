@@ -2,19 +2,24 @@
 
 ## TL;DR
 
-Numerical qualification is blocked before the comparison can run. The current
-ARM64 `iris-task:latest` image exits with `exec format error` in Iris's
-`stage-workdir` init container, and that init container ignores the per-job
-`--task-image` override. No numerical result was observed. Per the fail-stop
-protocol, the compile smokes, fresh PGLE capture, and all D-2 rack draws were not
-run. D-2 is not qualified and the Phase D composition question remains
-unanswered.
+The composed Muon update passed the numerical gate on four GB200s. All 15
+realistic-shape point comparisons were exactly equal to the pre-reconciliation
+path, and the largest relative loss divergence across 25 paired synthetic
+steps was `1.63e-7`.
+
+The compile/HLO gate then failed. Both `SCALE_MUON_SYRK=0` and `1` preserved the
+intended structure and executed finite results, but each emitted one XLA
+involuntary-full-rematerialization warning in the padded non-expert path. The
+gate requires zero. Per the fail-stop protocol, fresh PGLE capture and all D-2
+rack draws were not run. D-2 is not qualified, and the Phase D composition
+question remains unanswered.
 
 ## Immutable build
 
 The starting handoff is `0b305d520` on `agent/deri-d2-build`. The qualification
 probe was committed at `0e9bfb9f1`; its explicit-sharding metric reduction was
-fixed at `fcbf431b0`. No immutable D-2 submission SHA was established because
+fixed at `fcbf431b0`. The successful numerical and compile bundles used
+`8779abc42`. No immutable D-2 submission SHA was established because
 qualification stopped before rack submission.
 
 ## Pre-registration
@@ -48,43 +53,68 @@ The pre-registered structural-versus-numerical gate is:
 These are qualification criteria, not changes to any repository test tolerance.
 No criterion will be changed after reading the result.
 
-Results: no max/mean absolute differences or loss trajectory were produced.
-
-The first direct production attempt failed before startup on ARM64 GB200 node
-`s4bk6j84`: `stage-workdir` used
+The retry after `fcbf431b0` first failed before startup on node `s4bk6j84`.
+`stage-workdir` used
 `iris-task@sha256:cfe4e8dd08f6d43076ade21a2a018ef7c1616356e46960f0a1ebc66434bb3425`
-and exited with `exec /usr/local/bin/python: exec format error`. One retry
-reached four GB200s using a working image and exposed a qualification-harness
-bug: `jnp.vdot` tried to flatten an explicitly sharded 4D array without an
-output sharding. Replacing the flattening dot/norm operations with
-shape-preserving reductions passed on an explicit four-device CPU mesh.
+and exited with `exec /usr/local/bin/python: exec format error`. This is
+node-local or intermittent, not a registry-wide blocker: other GB200 legs were
+running concurrently, and running and failed pods have overlapping image
+digests. The next identical attempt landed on `sjxsxs64` with
+`iris-task@sha256:29ec7e8d4702faa36b0006ee34fd084e3e634a541e0736475446051bba091524`
+and completed.
 
-Every corrected-bundle attempt then returned to `s4bk6j84` and failed before
-bundle fetch with the same bad ARM64 image. `--task-image` changed the main
-container but not `stage-workdir`. `--zone 136` did not change placement. A
-forced `imagePullPolicy: Always` helper confirmed that the registry's current
-ARM64 `latest` manifest resolves to the bad digest. A final pod-only image patch
-was rejected by Kueue because it no longer matched the admitted Workload
-template; the stranded Iris job was stopped.
+The successful job was
+`/mwittmann/d2-muon-num-syrk1-r7-0728-1648`. It used JAX 0.10.1 on a
+`data=2, expert=2` explicit mesh, FP32 parameter and update arrays, BF16
+Newton-Schulz internals, D-2 matrix dimensions 5120 and 1280, and SYRK enabled.
 
-Verdict: no structural-versus-numerical determination is possible. No Muon
-comparison ran after the harness fix. Qualification can resume when
-`iris-task:latest` has a working ARM64 manifest or the Kubernetes backend uses
-the per-task image for `stage-workdir`.
+| orientation | NS depths | max abs | mean abs | relative L2 | exact fraction |
+|---|---|---:|---:|---:|---:|
+| expert gate/up | 0, 2, 5 | 0 | 0 | 0 | 1.0 |
+| expert down | 0, 2, 5 | 0 | 0 | 0 | 1.0 |
+| non-expert tall | 0, 2, 5 | 0 | 0 | 0 | 1.0 |
+| non-expert wide | 0, 2, 5 | 0 | 0 | 0 | 1.0 |
+| non-expert square | 0, 2, 5 | 0 | 0 | 0 | 1.0 |
+
+All values were finite. Cosine similarities ranged from
+`0.9999998807907104` to `1.0000001192092896`. All 25 paired update comparisons
+were exactly equal. The largest relative loss divergence was
+`1.627454638974007e-7` at expert-down step 3; the other 24 steps were zero.
+
+Verdict: all five structural-versus-numerical criteria pass. The composed and
+pre-reconciliation Muon paths are numerically equivalent at the tested
+realistic GPU shapes. There is no structural divergence signal.
 
 ## GB200 compile and HLO smoke
 
 | `SCALE_MUON_SYRK` | 4D `(L,E)->LE` merges | padded inbound reshards | replicated padded outbound | involuntary-remat warnings |
 |---:|---:|---|---:|---:|
-| 0 | not run | not run | not run | not run |
-| 1 | not run | not run | not run | not run |
+| 0 | 0 | `P('data',None,None)` then `P(('data','expert'),None,None)` | 0 | **1** |
+| 1 | 0 | `P('data',None,None)` then `P(('data','expert'),None,None)` | 0 | **1** |
 
-The numerical gate did not pass, so no compile job was submitted.
+The jobs were `/mwittmann/d2-muon-compile-syrk0-0728-1655` and
+`/mwittmann/d2-muon-compile-syrk1-0728-1657`, both on `sdxsxs64`. Iris marked
+both succeeded. The non-SYRK expert and padded non-expert outputs were finite
+and restored `P(None,'expert','data','model')` and
+`P(None,'data','model')`, respectively. The previously unexecuted EP SYRK
+branch also compiled on Blackwell, produced finite outputs, and restored the
+same shardings.
+
+Both complete logs contain one `spmd_partitioner.cc:668` involuntary full
+rematerialization warning. The warning occurs in the padded non-expert
+`jit(current)/vmap()/convert_element_type` path while changing from
+`{devices=[4,1,1]<=[4]}` to
+`{devices=[1,2,1,2]<=[4] last_tile_dim_replicate}`.
+
+Verdict: the structural checks and first Blackwell SYRK compile pass, but the
+zero-warning gate fails for both settings. The isolated Muon smoke failed
+before a full rematerialized training-step smoke was justified. Qualification
+stopped here.
 
 ## Fresh PGLE capture
 
-Not run. The numerical gate did not pass, so no capture job was submitted and
-no PGLE on/off decision was made.
+Not run. The compile/HLO gate failed, so no capture job was submitted and no
+PGLE on/off decision was made.
 
 ## D-2 placement draws
 
@@ -100,5 +130,6 @@ with tok/s, run length, and a drop fraction from the same LR-schedule position.
 ## Do the Phase D gains compose?
 
 Unknown. The 22.5% prediction and 21.5% falsification threshold were committed
-before any GPU result was seen, but no D-2 placement result exists. The Phase D
-gains cannot be called composed or falsified from this qualification attempt.
+before any GPU result was seen. The numerical gate passed, but the compile gate
+failed before any D-2 placement result existed. The Phase D gains cannot be
+called composed or falsified from this qualification attempt.
