@@ -3,6 +3,7 @@
 
 """Download and normalize the public English text from DocxCorpus."""
 
+import hashlib
 import logging
 import re
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ logger = logging.getLogger(__name__)
 DATASET_ID = "superdoc-dev/docx-corpus"
 LANGUAGE = "en"
 MANIFEST_URL = f"https://api.docxcorp.us/manifest?lang={LANGUAGE}"
+MANIFEST_SHA256 = "34c7a3beae63d942a8d02dd3b49d4421acc1f351be5106b42262c192fc58fea9"
 RAW_URL_PATTERN = re.compile(r"https://docxcorp\.us/documents/([0-9a-f]{64})\.docx")
 EXTRACTED_URL_TEMPLATE = "https://docxcorp.us/extracted/{id}.txt"
 SOURCE_VERSION = "2026-07-28"
@@ -140,7 +142,11 @@ def _fetch_manifest() -> str:
     )
     try:
         response.raise_for_status()
-        return response.content.decode("utf-8")
+        manifest = response.content
+        digest = hashlib.sha256(manifest).hexdigest()
+        if digest != MANIFEST_SHA256:
+            raise ValueError(f"DocxCorpus manifest digest changed: expected {MANIFEST_SHA256}, got {digest}")
+        return manifest.decode("utf-8")
     finally:
         response.close()
         session.close()
@@ -197,6 +203,7 @@ def download_docx_corpus(output_path: str) -> None:
             "dataset": DATASET_ID,
             "version": SOURCE_VERSION,
             "language": LANGUAGE,
+            "manifest_sha256": MANIFEST_SHA256,
             "manifest_rows": manifest_rows,
             "unique_ids": len(tasks),
             "links": [MANIFEST_URL, "https://docxcorp.us/download"],
@@ -213,6 +220,7 @@ def docx_corpus_normalize_steps() -> tuple[StepSpec, ...]:
             "dataset": DATASET_ID,
             "language": LANGUAGE,
             "manifest_url": MANIFEST_URL,
+            "manifest_sha256": MANIFEST_SHA256,
             "source_version": SOURCE_VERSION,
             "download_batch_size": DOWNLOAD_BATCH_SIZE,
             "download_max_workers": DOWNLOAD_MAX_WORKERS,
