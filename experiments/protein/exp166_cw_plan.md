@@ -201,7 +201,7 @@ corrupt it.
 |---|---|
 | worktree | `/home/exedev/repos/marin-br/eac-plm-exp153-cw/.claude/worktrees/exp166-cw` |
 | branch | `eac/plm-exp166-cw`, cut from `eac/plm-exp153-cw` at `92a601707`, local only |
-| files written | `experiments/protein/exp166_sweep.py`, `experiments/protein/exp166_cw_plan.md` |
+| files written | `experiments/protein/exp166_cw_sweep.py`, `experiments/protein/exp166_cw_plan.md` |
 | read-only reference | `/home/exedev/repos/marin-br/eac-plm-exp166` (branch `eac/plm-exp166`) |
 
 Nothing outside that worktree is edited. The exp153 branch, the parity branch
@@ -222,7 +222,7 @@ exp154 read cannot write back.
 
 ## Code
 
-New `experiments/protein/exp166_sweep.py` on this branch, exp153's structure with
+New `experiments/protein/exp166_cw_sweep.py` on this branch, exp153's structure with
 exp166's augmentation dropped in.
 
 - Run identity is configuration plus initialization mode. No region.
