@@ -3,7 +3,7 @@
 
 """Shared types, routing helpers, and layout utilities for Grug MoE."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal, TypeAlias, cast, get_args
 
@@ -157,3 +157,12 @@ def _prepare_moe_dispatch_indices_with_assignment_ids(
 
 def _zero_dropped_assignments() -> Int[Array, ""]:
     return jnp.array(0, dtype=jnp.int32)
+
+
+def _chunk_capacity_drops(cu: Int[Array, "E1"], bounds: Sequence[int], caps: Sequence[int]) -> Int[Array, ""]:
+    """Count assignments lost to per-chunk static capacity."""
+    total = jnp.zeros((), jnp.int32)
+    for chunk, cap in enumerate(caps):
+        count = cu[bounds[chunk + 1]] - cu[bounds[chunk]]
+        total = total + jnp.maximum(count - cap, 0).astype(jnp.int32)
+    return total
