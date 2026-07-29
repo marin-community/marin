@@ -98,109 +98,56 @@ async function copyPath() {
 
     <div v-if="loading && !data" class="text-sm text-text-muted py-12 text-center">Loading…</div>
 
-    <div v-else-if="data" class="mt-3 space-y-6">
-      <div class="flex items-center gap-3 flex-wrap">
-        <h2 class="text-lg font-semibold font-mono">{{ data.run_id }}</h2>
-        <StatusChip :status="data.status" />
-        <span
-          v-if="data.version"
-          class="rounded bg-surface-sunken px-1.5 py-0.5 text-xs font-mono text-text-secondary"
-          :title="`version ${data.version}`"
-        >{{ data.version }}</span>
+    <div v-else-if="data" class="mt-3 space-y-5">
+      <!-- Identity: what this run is, at a glance -->
+      <div class="space-y-1.5">
+        <div class="flex items-center gap-3 flex-wrap">
+          <h2 class="text-lg font-semibold font-mono">{{ data.run_id }}</h2>
+          <StatusChip :status="data.status" />
+          <span
+            v-if="data.version"
+            class="rounded bg-surface-sunken px-1.5 py-0.5 text-xs font-mono text-text-secondary"
+            :title="`version ${data.version}`"
+          >{{ data.version }}</span>
+        </div>
+        <div class="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm text-text-secondary">
+          <span class="font-mono">{{ data.model.name }}</span>
+          <span class="text-text-muted">·</span>
+          <span>{{ data.eval.name }} <span class="text-text-muted">({{ data.eval.mechanism }})</span></span>
+          <span class="text-text-muted">·</span>
+          <span class="font-mono">{{ data.hardware.accelerator }}</span>
+          <span class="text-text-muted">·</span>
+          <span>{{ data.user }}</span>
+        </div>
+        <p v-if="data.description" class="text-sm text-text-secondary">{{ data.description }}</p>
       </div>
-
-      <p v-if="data.description" class="text-sm text-text-secondary -mt-3">{{ data.description }}</p>
 
       <div v-if="data.error" class="rounded border border-status-danger-border bg-status-danger-bg text-status-danger text-sm px-3 py-2">
         <span class="font-semibold">Error:</span> {{ data.error }}
       </div>
 
-      <!-- Results header: the grade, how long it took, and when it finished -->
-      <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
-        <div class="rounded-lg border border-surface-border bg-surface px-4 py-3">
-          <div class="text-xs font-semibold uppercase tracking-wider text-text-muted mb-1">Grade</div>
+      <!-- Result: the grade is the hero; duration and finish time sit beside it in one strip -->
+      <div class="flex flex-wrap items-center gap-x-10 gap-y-3 rounded-lg border border-surface-border bg-surface px-5 py-4">
+        <div>
+          <div class="text-[11px] font-semibold uppercase tracking-wider text-text-muted">Grade</div>
           <template v-if="data.headline">
-            <div class="text-2xl font-semibold tabular-nums leading-none">
-              {{ formatScore(data.headline.value) }}<span class="text-base text-text-muted">%</span>
+            <div class="text-3xl font-semibold tabular-nums leading-none mt-1">
+              {{ formatScore(data.headline.value) }}<span class="text-lg text-text-muted">%</span>
             </div>
-            <div class="text-xs font-mono text-text-muted mt-1 truncate" :title="data.headline.metric">
+            <div class="text-xs font-mono text-text-muted mt-1 truncate max-w-[16rem]" :title="data.headline.metric">
               {{ data.headline.metric }} {{ formatStderr(data.headline.value, data.headline.stderr) }}
             </div>
           </template>
-          <div v-else class="text-2xl font-semibold text-text-muted leading-none">—</div>
+          <div v-else class="text-3xl font-semibold text-text-muted leading-none mt-1">—</div>
         </div>
-        <div class="rounded-lg border border-surface-border bg-surface px-4 py-3">
-          <div class="text-xs font-semibold uppercase tracking-wider text-text-muted mb-1">Duration</div>
-          <div class="text-2xl font-semibold tabular-nums leading-none">{{ durationLabel ?? '—' }}</div>
-          <div v-if="data.timing" class="text-xs text-text-muted mt-1">
-            {{ formatTimestamp(data.timing.started_at) }} →
-          </div>
+        <div>
+          <div class="text-[11px] font-semibold uppercase tracking-wider text-text-muted">Duration</div>
+          <div class="text-lg font-semibold tabular-nums leading-none mt-1.5">{{ durationLabel ?? '—' }}</div>
         </div>
-        <div class="rounded-lg border border-surface-border bg-surface px-4 py-3 col-span-2 sm:col-span-1">
-          <div class="text-xs font-semibold uppercase tracking-wider text-text-muted mb-1">Finished</div>
-          <div class="text-sm font-medium mt-1">{{ formatTimestamp(finishedAt) }}</div>
+        <div>
+          <div class="text-[11px] font-semibold uppercase tracking-wider text-text-muted">Finished</div>
+          <div class="text-sm font-medium mt-1.5">{{ formatTimestamp(finishedAt) }}</div>
         </div>
-      </div>
-
-      <GroupLinks :run-id="data.run_id" />
-
-      <!-- Summary grid -->
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div class="rounded-lg border border-surface-border bg-surface p-4">
-          <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Model</h3>
-          <dl class="text-sm space-y-1">
-            <div class="flex gap-2"><dt class="text-text-muted w-24">name</dt><dd class="font-mono break-all">{{ data.model.name }}</dd></div>
-            <div class="flex gap-2">
-              <dt class="text-text-muted w-24">location</dt>
-              <dd class="font-mono break-all">
-                <a
-                  v-if="objectStoreUrl(data.model.location)"
-                  :href="objectStoreUrl(data.model.location)!"
-                  target="_blank"
-                  rel="noopener"
-                  class="text-accent hover:text-accent-hover hover:underline"
-                >{{ data.model.location }} ↗</a>
-                <span v-else>{{ data.model.location }}</span>
-              </dd>
-            </div>
-            <div class="flex gap-2"><dt class="text-text-muted w-24">backend</dt><dd>{{ data.model.backend }}</dd></div>
-          </dl>
-        </div>
-        <div class="rounded-lg border border-surface-border bg-surface p-4">
-          <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Eval</h3>
-          <dl class="text-sm space-y-1">
-            <div class="flex gap-2"><dt class="text-text-muted w-24">name</dt><dd>{{ data.eval.name }}</dd></div>
-            <div class="flex gap-2"><dt class="text-text-muted w-24">mechanism</dt><dd>{{ data.eval.mechanism }}</dd></div>
-            <div class="flex gap-2">
-              <dt class="text-text-muted w-24">tasks</dt>
-              <dd>
-                <span v-for="t in data.eval.tasks" :key="t.name" class="inline-block mr-2 font-mono text-[13px]">
-                  {{ t.name }}<span v-if="t.num_fewshot != null" class="text-text-muted">/{{ t.num_fewshot }}shot</span>
-                </span>
-              </dd>
-            </div>
-          </dl>
-        </div>
-        <div class="rounded-lg border border-surface-border bg-surface p-4">
-          <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Hardware</h3>
-          <dl class="text-sm space-y-1">
-            <div class="flex gap-2"><dt class="text-text-muted w-24">platform</dt><dd>{{ data.hardware.platform }}</dd></div>
-            <div class="flex gap-2"><dt class="text-text-muted w-24">accelerator</dt><dd class="font-mono">{{ data.hardware.accelerator }}</dd></div>
-            <div class="flex gap-2"><dt class="text-text-muted w-24">region</dt><dd>{{ data.hardware.region_or_cluster }}</dd></div>
-            <div class="flex gap-2"><dt class="text-text-muted w-24">user</dt><dd>{{ data.user }}</dd></div>
-          </dl>
-        </div>
-      </div>
-
-      <!-- Serving params, when the launcher captured them -->
-      <div v-if="servingRows.length" class="rounded-lg border border-surface-border bg-surface p-4">
-        <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Serving</h3>
-        <dl class="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1 text-sm">
-          <div v-for="row in servingRows" :key="row.label" class="flex gap-2 min-w-0">
-            <dt class="text-text-muted whitespace-nowrap">{{ row.label }}</dt>
-            <dd class="font-mono truncate" :title="row.value">{{ row.value }}</dd>
-          </div>
-        </dl>
       </div>
 
       <!-- Metrics -->
@@ -232,6 +179,69 @@ async function copyPath() {
       <!-- Per-question samples, when the run exported any. Rendered for every status: a failed eval
            can still have graded some questions, and the panel degrades gracefully when none exist. -->
       <SamplesPanel :key="props.runId" :run-id="data.run_id" />
+
+      <!-- Reference detail below the results: how to reach sibling evals, the run's configuration,
+           where its artifacts live, and its live job/log state. -->
+      <GroupLinks :run-id="data.run_id" />
+
+      <!-- Configuration: model, eval, hardware, and serving params in one card -->
+      <div class="rounded-lg border border-surface-border bg-surface p-4">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-x-6 gap-y-4">
+          <div>
+            <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-1.5">Model</h3>
+            <dl class="text-sm space-y-1">
+              <div class="flex gap-2"><dt class="text-text-muted w-24">name</dt><dd class="font-mono break-all">{{ data.model.name }}</dd></div>
+              <div class="flex gap-2">
+                <dt class="text-text-muted w-24">location</dt>
+                <dd class="font-mono break-all">
+                  <a
+                    v-if="objectStoreUrl(data.model.location)"
+                    :href="objectStoreUrl(data.model.location)!"
+                    target="_blank"
+                    rel="noopener"
+                    class="text-accent hover:text-accent-hover hover:underline"
+                  >{{ data.model.location }} ↗</a>
+                  <span v-else>{{ data.model.location }}</span>
+                </dd>
+              </div>
+              <div class="flex gap-2"><dt class="text-text-muted w-24">backend</dt><dd>{{ data.model.backend }}</dd></div>
+            </dl>
+          </div>
+          <div>
+            <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-1.5">Eval</h3>
+            <dl class="text-sm space-y-1">
+              <div class="flex gap-2"><dt class="text-text-muted w-24">name</dt><dd>{{ data.eval.name }}</dd></div>
+              <div class="flex gap-2"><dt class="text-text-muted w-24">mechanism</dt><dd>{{ data.eval.mechanism }}</dd></div>
+              <div class="flex gap-2">
+                <dt class="text-text-muted w-24">tasks</dt>
+                <dd>
+                  <span v-for="t in data.eval.tasks" :key="t.name" class="inline-block mr-2 font-mono text-[13px]">
+                    {{ t.name }}<span v-if="t.num_fewshot != null" class="text-text-muted">/{{ t.num_fewshot }}shot</span>
+                  </span>
+                </dd>
+              </div>
+            </dl>
+          </div>
+          <div>
+            <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-1.5">Hardware</h3>
+            <dl class="text-sm space-y-1">
+              <div class="flex gap-2"><dt class="text-text-muted w-24">platform</dt><dd>{{ data.hardware.platform }}</dd></div>
+              <div class="flex gap-2"><dt class="text-text-muted w-24">accelerator</dt><dd class="font-mono">{{ data.hardware.accelerator }}</dd></div>
+              <div class="flex gap-2"><dt class="text-text-muted w-24">region</dt><dd>{{ data.hardware.region_or_cluster }}</dd></div>
+              <div class="flex gap-2"><dt class="text-text-muted w-24">user</dt><dd>{{ data.user }}</dd></div>
+            </dl>
+          </div>
+        </div>
+        <div v-if="servingRows.length" class="mt-4 pt-4 border-t border-surface-border-subtle">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Serving</h3>
+          <dl class="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1 text-sm">
+            <div v-for="serving in servingRows" :key="serving.label" class="flex gap-2 min-w-0">
+              <dt class="text-text-muted whitespace-nowrap">{{ serving.label }}</dt>
+              <dd class="font-mono truncate" :title="serving.value">{{ serving.value }}</dd>
+            </div>
+          </dl>
+        </div>
+      </div>
 
       <!-- Results path -->
       <div>

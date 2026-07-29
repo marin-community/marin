@@ -139,7 +139,7 @@ function metricEntries(row: SampleRow): [string, number][] {
       <span class="text-xs text-text-muted ml-auto whitespace-nowrap">← → navigate · r random · esc back</span>
     </div>
 
-    <div class="max-w-4xl mx-auto px-6 py-6">
+    <div class="max-w-4xl mx-auto px-6 py-5">
       <p v-if="tasksError" class="text-sm text-status-danger">{{ tasksError }}</p>
       <p v-else-if="error" class="rounded border border-status-danger-border bg-status-danger-bg text-status-danger text-sm px-3 py-2">{{ error }}</p>
       <p v-else-if="loading && !row" class="text-sm text-text-muted py-12 text-center">Loading samples…</p>
@@ -161,9 +161,9 @@ function metricEntries(row: SampleRow): [string, number][] {
               : 'border-surface-border text-text-secondary'"
           >{{ name }} {{ value ?? '—' }}</span>
         </div>
-        <p class="text-sm text-text-secondary font-mono mb-6">{{ sampleHint(row) }}</p>
+        <p class="text-sm text-text-secondary font-mono mb-4">{{ sampleHint(row) }}</p>
 
-        <div class="space-y-6">
+        <div class="space-y-5">
           <GradingPanel :grading="row.grading" />
           <McqSample v-if="row.kind === 'multiple_choice'" :sample="row" />
           <GenerativeSample v-else-if="row.kind === 'generation'" :sample="row" />
