@@ -651,7 +651,6 @@ function collectFailuresByState(stateName: string, count: (t: TaskStatus) => num
       if (stateToName(attempt.state) !== stateName) continue
       const finishedAtMs = timestampMs(attempt.finishedAt)
       if (!latest || finishedAtMs >= latest.finishedAtMs) {
-        // The failure rows below hide themselves on an empty reason.
         const error = attemptFailureReason(attempt)
         latest = { attemptId: attempt.attemptId, error, finishedAtMs }
       }
