@@ -5,6 +5,7 @@ import { statusColors, stateDisplayName, stateToName } from '@/types/status'
 const props = withDefaults(
   defineProps<{
     status: string
+    label?: string
     size?: 'sm' | 'md'
     showDot?: boolean
   }>(),
@@ -16,7 +17,7 @@ const props = withDefaults(
 
 const normalizedState = computed(() => stateToName(props.status))
 const colors = computed(() => statusColors(normalizedState.value))
-const displayName = computed(() => stateDisplayName(normalizedState.value))
+const displayName = computed(() => props.label ?? stateDisplayName(normalizedState.value))
 
 const badgePadding = computed(() =>
   props.size === 'sm' ? 'px-2 py-0.5' : 'px-2.5 py-0.5'
