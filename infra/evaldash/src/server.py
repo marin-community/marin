@@ -41,7 +41,7 @@ import logging
 import os
 import threading
 from collections.abc import AsyncIterator
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
@@ -53,7 +53,8 @@ from marin.evaluation.records import (
     CW_RECORDS_PREFIX,
     DEFAULT_RECORDS_PREFIX,
     EvalRunRecord,
-    list_records,
+    RecordParseFailure,
+    read_records,
 )
 from metrics import build_matrix, build_meta, record_score
 from results_db import (
@@ -453,6 +454,9 @@ class PrefixProbe:
     last_success_time: str | None = None
     record_count: int | None = None
     error: str | None = None
+    parse_failures: list[RecordParseFailure] = field(default_factory=list)
+    """Records under this prefix that were found but failed to parse on the last successful listing --
+    dropped from the snapshot and surfaced here rather than only logged. Empty when all parsed."""
 
 
 class Ingestor:
@@ -488,7 +492,7 @@ class Ingestor:
                 probe = self._probes[prefix]
                 probe.last_probe_time = _utcnow_iso()
                 try:
-                    found = await asyncio.to_thread(list_records, prefix)
+                    found, failures = await asyncio.to_thread(read_records, prefix)
                 except Exception as exc:
                     # One unreachable store (missing CW keys, transient outage) must not hide the
                     # rest, and must not drop this prefix's previously-ingested runs from the
@@ -499,8 +503,9 @@ class Ingestor:
                     continue
                 probe.last_success_time = probe.last_probe_time
                 probe.record_count = len(found)
+                probe.parse_failures = failures
                 probe.error = None
-                logger.info("ingest: %d records from %s", len(found), prefix)
+                logger.info("ingest: %d records (%d unparseable) from %s", len(found), len(failures), prefix)
                 self._last_good[prefix] = found
                 records.extend(found)
             await asyncio.to_thread(self._store.refresh, records)

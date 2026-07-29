@@ -66,7 +66,10 @@ onViewRefresh(refresh)
               <div class="flex items-center gap-4 text-xs text-text-secondary whitespace-nowrap">
                 <span :title="formatTimestamp(p.last_probe_time)">probed {{ formatRelativeAge(p.last_probe_time) }}</span>
                 <span>{{ p.record_count ?? '—' }} records</span>
-                <span v-if="!p.error" class="text-status-success">ok</span>
+                <span v-if="p.parse_failures.length" class="text-status-warning">
+                  {{ p.parse_failures.length }} skipped
+                </span>
+                <span v-else-if="!p.error" class="text-status-success">ok</span>
               </div>
             </div>
             <div
@@ -76,6 +79,18 @@ onViewRefresh(refresh)
             >
               {{ p.error }}
             </div>
+            <!-- Records found under this prefix that failed to parse: dropped from the snapshot, listed
+                 here so a schema drift on old records is visible rather than silently swallowed. -->
+            <ul v-if="p.parse_failures.length" class="mt-2 space-y-1">
+              <li
+                v-for="f in p.parse_failures"
+                :key="f.path"
+                class="rounded border border-status-warning-border bg-status-warning-bg text-status-warning text-xs px-2 py-1"
+              >
+                <code class="font-mono break-all">{{ f.path }}</code>
+                <div class="text-text-secondary break-all">{{ f.error }}</div>
+              </li>
+            </ul>
           </div>
         </div>
       </div>

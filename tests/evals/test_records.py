@@ -21,6 +21,7 @@ from marin.evaluation.records import (
     RunStatus,
     RunTiming,
     read_record,
+    read_records,
     write_record,
 )
 
@@ -90,6 +91,22 @@ def test_timing_round_trips_and_defaults_to_none(tmp_path):
         raw = json.load(f)
     assert raw["timing"] == {"started_at": "2026-07-19T09:06:31+00:00", "finished_at": "2026-07-19T09:14:31+00:00"}
     assert read_record(path) == timed
+
+
+def test_read_records_collects_parse_failures_without_dropping_good_ones(tmp_path):
+    """A malformed record.json alongside a valid one is reported as a failure (path + error) rather
+    than silently skipped, and the valid record still comes back."""
+    write_record(_RECORD, str(tmp_path))
+    broken_dir = tmp_path / "20260101-000000-broken-mmlu"
+    broken_dir.mkdir()
+    (broken_dir / "record.json").write_text(json.dumps({"run_id": "broken", "not": "a record"}))
+
+    records, failures = read_records(str(tmp_path))
+
+    assert [r.run_id for r in records] == [_RECORD.run_id]
+    assert len(failures) == 1
+    assert failures[0].path.endswith("20260101-000000-broken-mmlu/record.json")
+    assert "ValidationError" in failures[0].error
 
 
 def test_read_record_parses_a_previously_written_record_json(tmp_path):

@@ -9,6 +9,7 @@ bare sibling imports; the tests put that directory on the path the same way to i
 HTTP surface a local dashboard serves with no database or cluster.
 """
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -141,6 +142,23 @@ def test_api_agentic_artifact_is_run_local(client):
     artifact = client.get(f"/api/runs/{rid}/samples/artifact", params={"uri": trajectory_uri}).json()
     assert artifact["available"] is True
     assert artifact["media_type"] == "application/json"
+
+
+def test_ingestor_surfaces_parse_failures(tmp_path):
+    # The fixtures include one malformed record.json; an ingest pass keeps the good records and reports
+    # the bad one on its prefix probe rather than dropping it silently -- what the Debug view shows.
+    fixtures.build_fixtures(str(tmp_path))
+    store = server.MemoryRecordStore()
+    ingestor = server.Ingestor(store, (str(tmp_path),), interval=999)
+
+    asyncio.run(ingestor.run_once())
+
+    probe = ingestor.status()["prefixes"][0]
+    assert probe["record_count"] == 13
+    assert probe["error"] is None
+    assert len(probe["parse_failures"]) == 1
+    assert probe["parse_failures"][0]["path"].endswith("20260722-000000-legacy-mmlu-broken/record.json")
+    assert "eval_runtime" in probe["parse_failures"][0]["error"]
 
 
 def test_api_jobs_degrade_without_a_cluster(client):

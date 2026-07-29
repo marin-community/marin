@@ -74,12 +74,18 @@ export interface Meta {
   store: string
 }
 
+export interface RecordParseFailure {
+  path: string
+  error: string
+}
+
 export interface PrefixProbe {
   prefix: string
   last_probe_time: string | null
   last_success_time: string | null
   record_count: number | null
   error: string | null
+  parse_failures: RecordParseFailure[]
 }
 
 export interface StoreInfo {

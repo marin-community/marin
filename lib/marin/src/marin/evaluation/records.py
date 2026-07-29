@@ -13,6 +13,7 @@ imports -- so it can be vendored verbatim into a standalone dashboard image that
 """
 
 import logging
+from dataclasses import dataclass
 from enum import StrEnum
 
 import fsspec
@@ -190,16 +191,37 @@ def read_record(path: str) -> EvalRunRecord:
         return EvalRunRecord.model_validate_json(handle.read())
 
 
-def list_records(prefix: str) -> list[EvalRunRecord]:
-    """Read every ``{prefix}/*/record.json``, skipping (with a warning) any that fail to parse."""
+@dataclass(frozen=True)
+class RecordParseFailure:
+    """One ``record.json`` that failed to parse during a listing: its path and the error message.
+
+    Surfaced so the dashboard's Debug view can show records dropped from the snapshot, rather than the
+    failure being only logged. A schema drift (a new required field on an old record) shows up here.
+    """
+
+    path: str
+    error: str
+
+
+def read_records(prefix: str) -> tuple[list[EvalRunRecord], list[RecordParseFailure]]:
+    """Read every ``{prefix}/*/record.json``, returning the parsed records and, separately, the paths
+    that failed to parse with their error. Parse failures are logged and collected rather than raised,
+    so one malformed record never hides the rest."""
     fs, root = url_to_fs(prefix)
     pattern = f"{root.rstrip('/')}/*/{RECORD_FILE}"
     protocol = f"{prefix.split('://', 1)[0]}://" if "://" in prefix else ""
     records: list[EvalRunRecord] = []
+    failures: list[RecordParseFailure] = []
     for match in sorted(fs.glob(pattern)):
         url = f"{protocol}{match}"
         try:
             records.append(read_record(url))
-        except Exception:
+        except Exception as exc:
             logger.warning("skipping unparseable eval record at %s", url, exc_info=True)
-    return records
+            failures.append(RecordParseFailure(path=url, error=f"{type(exc).__name__}: {exc}"))
+    return records, failures
+
+
+def list_records(prefix: str) -> list[EvalRunRecord]:
+    """Read every ``{prefix}/*/record.json``, skipping (with a warning) any that fail to parse."""
+    return read_records(prefix)[0]

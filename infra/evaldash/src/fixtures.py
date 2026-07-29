@@ -24,6 +24,7 @@ from datetime import datetime, timedelta
 
 from fsspec.core import url_to_fs
 from marin.evaluation.records import (
+    RECORD_FILE,
     EvalRef,
     EvalRunRecord,
     EvalTaskRef,
@@ -258,6 +259,36 @@ def _write_samples(fs, results_path: str, task: str, samples: list[EvalSample]) 
     fs.makedirs(results_path, exist_ok=True)
     dest = f"{results_path}/{SAMPLES_PREFIX}{task}_20260720{SAMPLES_SUFFIX}"
     write_sample_parquet(fs, dest, samples)
+
+
+def _write_broken_record(fs, dest: str) -> str:
+    """Write one record.json missing a required field, to exercise the Debug view's parse-failure list.
+
+    Mirrors the real schema drift seen in object storage: a record written before ``eval_runtime`` was
+    a required provenance field. ``read_records`` collects it as a failure rather than silently
+    dropping it, so the Debug tab has an error to show. Returns the path written."""
+    run_id = "20260722-000000-legacy-mmlu-broken"
+    path = f"{dest}/{run_id}/{RECORD_FILE}"
+    fs.makedirs(f"{dest}/{run_id}", exist_ok=True)
+    broken = {
+        "run_id": run_id,
+        "group_id": run_id,
+        "created_at": "2026-07-22T00:00:00+00:00",
+        "user": USER,
+        "model": {"name": "legacy", "location": "gs://marin-models/legacy", "backend": "vllm"},
+        "eval": {"name": "mmlu", "mechanism": "evalchemy", "tasks": [{"name": "mmlu", "num_fewshot": 5}]},
+        "hardware": {"platform": "tpu", "accelerator": "v6e-8", "region_or_cluster": "us-central2"},
+        "status": "succeeded",
+        "error": None,
+        "results_path": f"{dest}/{run_id}/results",
+        "metrics": {"mmlu": {"acc,none": 0.5}},
+        "jobs": {},
+        "log_tails": {},
+        "provenance": {"git_sha": "deadbeef", "launch_host": "old-host"},  # missing required eval_runtime
+    }
+    with fs.open(path, "w") as handle:
+        handle.write(json.dumps(broken, indent=2))
+    return path
 
 
 # --------------------------------------------------------------------------------------------------
@@ -560,6 +591,9 @@ def build_fixtures(dest: str) -> list[str]:
             for i in range(5)
         ],
     )
+
+    # One malformed record so the Debug view has a parse failure to surface (not counted in written).
+    _write_broken_record(fs, dest)
 
     return written
 
