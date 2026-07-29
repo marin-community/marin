@@ -637,8 +637,13 @@ watch(() => props.taskId, async () => {
                 <td class="px-3 py-2 text-[13px] font-mono">
                   {{ formatDuration(timestampMs(attempt.startedAt), timestampMs(attempt.finishedAt) || undefined) }}
                 </td>
-                <td class="px-3 py-2 text-[13px] text-status-danger truncate max-w-xs">
-                  {{ attempt.error ?? '-' }}
+                <!-- The reason can run to 500 chars, so the cell truncates and
+                     the full text lives in the tooltip. -->
+                <td
+                  class="px-3 py-2 text-[13px] text-status-danger truncate max-w-xs"
+                  :title="attempt.terminalReason || attempt.error || ''"
+                >
+                  {{ attempt.terminalReason || attempt.error || '-' }}
                 </td>
               </tr>
             </tbody>

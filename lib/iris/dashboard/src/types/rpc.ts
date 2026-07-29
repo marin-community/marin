@@ -96,6 +96,12 @@ export interface TaskAttempt {
   finishedAt?: ProtoTimestamp
   isWorkerFailure?: boolean
   attemptUid?: string
+  // Bounded terminal cause, set only on a failed attempt. `error` reports the
+  // task container's own terminated state, so an init-container failure (a
+  // stage-workdir fetch that 404s, a wrong-architecture image) leaves `error`
+  // empty and lands here instead. Prefer this over `error` when rendering why
+  // an attempt failed.
+  terminalReason?: string
 }
 
 export interface TaskStatus {

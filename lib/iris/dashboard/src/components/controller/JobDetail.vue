@@ -651,7 +651,10 @@ function collectFailuresByState(stateName: string, count: (t: TaskStatus) => num
       if (stateToName(attempt.state) !== stateName) continue
       const finishedAtMs = timestampMs(attempt.finishedAt)
       if (!latest || finishedAtMs >= latest.finishedAtMs) {
-        latest = { attemptId: attempt.attemptId, error: attempt.error ?? '', finishedAtMs }
+        // terminalReason first: an init-container failure leaves `error` empty,
+        // and the failure rows below hide themselves on an empty string.
+        const error = attempt.terminalReason || attempt.error || ''
+        latest = { attemptId: attempt.attemptId, error, finishedAtMs }
       }
     }
     if (!latest) continue
