@@ -35,6 +35,7 @@ from marin.execution.step_runner import StepRunner
 from marin.experiment.data import tokenized
 from marin.experiment.train import train_lm
 from marin.processing.tokenize.tokenize import TokenizedCache
+from marin.rl.placement import marin_prefix_for_region
 from marin.training.training import LevanterCheckpoint
 
 # --- Recipe, copied verbatim from exp166 so the TPU side is the known-good one ----------
@@ -63,17 +64,21 @@ TEXT_KEY = "document"
 # Caches verified byte-identical on 2026-07-29 (scratch/compare_caches.py). Pinned rather
 # than resolved through marin_prefix(), so neither platform can silently tokenize its own.
 # The TPU region is pinned because marin refuses a cross-region GCS read (correctly --
-# that is the expensive direction). marin-dev's v6e lives in europe-west4-a, us-east1-d and
-# us-east5-b, but europe-west4 has no contacts-v1 cache, so the region must be one that has
-# both. Derive the cache path from the region so the two can never disagree again.
-TPU_REGION = os.environ.get("TPU_REGION", "us-east5")
+# that is the expensive direction). All of marin-dev's v6e regions hold a contacts-v1 cache;
+# europe-west4 is the default because it is a v6e zone with good v6e-4 availability.
+#
+# Resolve the bucket through marin_prefix_for_region rather than f"marin-{region}": the
+# mapping is not mechanical (europe-west4 lives in gs://marin-eu-west4), and guessing it
+# cost a scheduling round.
+TPU_REGION = os.environ.get("TPU_REGION", "europe-west4")
+TPU_BUCKET = marin_prefix_for_region(TPU_REGION)
 
 TRAIN_CACHE = {
-    "gcs": f"gs://marin-{TPU_REGION}/tokenized/contacts-v1/2026.07.13.1",
+    "gcs": f"{TPU_BUCKET}/tokenized/contacts-v1/2026.07.13.1",
     "s3": "s3://marin-us-east-02a/MarinFold/exp154_qwen_contacts_v1/tokenized/contacts-v1/2026.07.25",
 }
 VAL_CACHE = {
-    "gcs": f"gs://marin-{TPU_REGION}/tokenized/contacts-v1-val/2026.07.13.1",
+    "gcs": f"{TPU_BUCKET}/tokenized/contacts-v1-val/2026.07.13.1",
     "s3": "s3://marin-us-east-02a/MarinFold/exp154_qwen_contacts_v1/tokenized/contacts-v1-val/2026.07.25",
 }
 
@@ -154,7 +159,7 @@ def run_id(plat: Platform, steps: int, attn: AttentionBackend | None) -> str:
 # carry a real 1-day delete rule: S3 reports an x-amz-expiration date naming marin-ttl-1d,
 # and gs://marin-us-east5 has "Delete age=1 matchesPrefix=[tmp/ttl=1d/]".
 TEMP_ROOT = {
-    "gcs": f"gs://marin-{TPU_REGION}/tmp/ttl={CHECKPOINT_TTL_DAYS}d/parity",
+    "gcs": f"{TPU_BUCKET}/tmp/ttl={CHECKPOINT_TTL_DAYS}d/parity",
     "s3": f"s3://marin-us-east-02a/tmp/ttl={CHECKPOINT_TTL_DAYS}d/parity",
 }
 
