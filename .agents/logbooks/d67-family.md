@@ -243,3 +243,9 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
 - Attempt 2 remains in `building`; attempts 0 and 1 are the only failed attempts, and no new setup or training output appeared.
 - Between 17:30 and 17:39 PDT, topology feasibility briefly rose from 2 to 3 of 16 pods, then returned to 2 of 16 as the GPU exclusion count moved from 17 to 16 and back. CPU and memory exclusions remained 184 and one.
 - Interpretation: shared-cluster capacity is moving, but a complete rack still cannot fit. Preserve this workload's queue position and continue monitoring it as the family's only submitted leg.
+
+### 2026-07-28 17:49 PDT - D67-CTL-01 capacity wait continues
+
+- Ten checks from 17:40 through 17:49 PDT found attempt 2 continuously in `building` with topology feasibility fixed at 2 of 16 pods.
+- The failure history remains limited to attempts 0 and 1. No rank entered setup, emitted a training metric, or triggered the attempt-2 stop criterion.
+- Continue waiting on the direct `cw-use08a-lq` production workload. No subsequent family leg has been submitted.
