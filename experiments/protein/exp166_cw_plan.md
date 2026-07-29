@@ -84,21 +84,19 @@ node counts are powers of two. The peer report does not break out GPU type, so h
 of that 208 is GB200 and free is unknown until we submit — submitting is the only
 measurement.
 
-**Four nodes is the gang ceiling.** Every run moves the same 8 x 4.677B = 37.4B tokens,
-but a bs64 run spends 71,360 steps doing it against a bs128 run's 35,680, paying per-step
-optimizer and all-reduce overhead twice as often. The bigger gangs go to bs64 to even out
-completion times.
+**Four nodes for every run**, which is also the gang ceiling. Every run moves the same
+8 x 4.677B = 37.4B tokens, and calibration measured the two batch sizes 1.6% apart, so
+wall clock depends on GPU count and almost nothing else. Equal gangs therefore finish
+together; the earlier plan of four nodes for bs64 and two for bs128 would have made the
+bs128 runs take about twice as long.
 
 | batch | runs | nodes | GPUs | seqs/device |
 |---|---|---|---|---|
 | 64 | 1, 2, 6, 7, 8 | 4 | 16 | 4 |
-| 128 | 3, 4, 5 | 2 | 8 | 16 |
+| 128 | 3, 4, 5 | 4 | 16 | 8 |
 
-26 nodes with all eight running at once. If calibration shows 16 sequences per device does
-not fit at bs128, those three runs move to 4 nodes and the total becomes 32.
-
-Both the H100 and GB200 figures available sit near 12-15k tokens/s per GPU for a 1.5B.
-Treat that as a prior, not a plan input; calibration replaces it.
+32 nodes with all eight running at once, about 26 h each. That figure extrapolates a
+one-node measurement to sixteen GPUs and has not been checked against a multi-node run.
 
 ## Measured 2026-07-29
 
