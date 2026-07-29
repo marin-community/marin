@@ -2502,3 +2502,27 @@ result:
 - Commit `9e9a44a4fb` extends the validated weights-only SFT launcher to all
   four single-prefix model-state shapes. The post-training selection remains
   capped at two treatments plus control.
+
+### 2026-07-29 20:58 - NEST-MOE-003 Gate 2 passes at 4.456B tokens
+
+- All four treatments remain finite, retain their exact routing fractions,
+  and improve the intended extracted prefix at every one of 17 aligned
+  evaluations.
+- At update 17,000, full Paloma deltas versus E256 are `+0.015783` E128
+  naive, `+0.037078` E16 naive, `+0.006652` E128 layerwise, and `+0.009429`
+  E16 layerwise. Full uncheatable deltas are `+0.017628`, `+0.040146`,
+  `+0.004921`, and `+0.005452`.
+- Prefix Paloma gains versus the same prefix cut from control are `-0.256294`,
+  `-0.893008`, `-0.151111`, and `-0.385389`. Every treatment has a prefix win
+  at all 17 gates.
+- Tail-slope time-to-equivalent estimates at the exact update-17,000 horizon
+  are `+8.00%`, `+18.59%`, `+3.49%`, and `+4.81%`. E16 naive is outside the
+  10% economic viability line, while E128 naive and both layerwise arms
+  remain inside it.
+- Through common update 17,205, median compiled-step overhead is `+0.49%`,
+  `+0.35%`, `+0.47%`, and `+0.43%`. Several multi-minute S3 checkpoint
+  commits changed instrumented wall progress but not optimizer throughput;
+  no arm stalled or restarted.
+- Decision: all arms satisfy the preregistered Gate 2 continuation rule
+  because full Paloma remains within `+0.10` and every intended prefix beats
+  control. Continue all five jobs to the 10B endpoint.

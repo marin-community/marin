@@ -230,20 +230,33 @@ evaluations, median full-mode penalties are `+0.010667` for E128 naive,
 `+0.032957` for E16 naive, `+0.004664` for E128 layerwise, and `+0.005327` for
 E16 layerwise. No arm is near the `+0.10` stopping bound.
 
-The isolation is already informative relative to the completed combined
-fixed25 arm. E128-only's full penalty is approximately `+0.010`, while
-E16-only is approximately `+0.033`, close to the combined arm's terminal
-`+0.031`. This is evidence that the E16 objective and its concentrated inner
-updates caused most of the earlier quality tax; the matched 4.4145B gate will
-test whether that attribution persists.
+All arms also pass Gate 2 at update 17,000 and 4.456B tokens:
 
-Through common update 4,289, median compiled-step overhead is `+0.50%` for
-E128 naive, `+0.38%` for E16 naive, `+0.44%` for E128 layerwise, and `+0.53%`
-for E16 layerwise. A log-linear local slope model anchored at the observed
-update-4,000 losses estimates full-Paloma time-to-equivalent penalties of
-`+2.87%`, `+8.46%`, `+1.26%`, and `+0.65%`, respectively. Four points are too
-few for a scaling conclusion; the anchored calculation is retained to show
-how the estimate evolves through 10B.
+| Arm | Full Paloma delta | Full uncheatable delta | Prefix Paloma gain | Time to equivalent Paloma |
+|---|---:|---:|---:|---:|
+| E128 naive | +0.015783 | +0.017628 | -0.256294 | +8.00% |
+| E16 naive | +0.037078 | +0.040146 | -0.893008 | +18.59% |
+| E128 layerwise | +0.006652 | +0.004921 | -0.151111 | +3.49% |
+| E16 layerwise | +0.009429 | +0.005452 | -0.385389 | +4.81% |
+
+Every treatment improves its intended prefix at all 17 aligned gates. Median
+full Paloma penalties through Gate 2 are `+0.0130` for E128 naive, `+0.0347`
+for E16 naive, `+0.0034` for E128 layerwise, and `+0.0042` for E16 layerwise.
+Layerwise restriction beats the corresponding naive schedule on full Paloma
+at every gate, by a median `0.0094` for E128 and `0.0308` for E16.
+
+The isolation persists relative to the completed combined fixed25 arm:
+E128-only is consistently gentler than E16-only, while E16-only's
+`+0.0347` median full penalty is close to the combined arm's `+0.0313`
+terminal penalty. The cross-study comparison is supporting evidence rather
+than an exact causal contrast because the completed run used a 4.414B
+heuristic learning-rate horizon and this sweep uses the 10B horizon.
+
+Gate 2 separates mechanical from quality cost. Median compiled-step overhead
+is only `+0.49%` for E128 naive, `+0.35%` for E16 naive, `+0.47%` for E128
+layerwise, and `+0.43%` for E16 layerwise. E128 naive remains inside the 10%
+viability line at this gate; E16 naive does not. Both layerwise arms remain
+well inside it. These are tail-slope estimates, not final endpoints.
 
 The control evaluates three routing modes and has a 76-second median
 evaluation hook. Each treatment evaluates two modes and has a 52--53-second
@@ -259,19 +272,19 @@ is:
 
 | Arm | Median step | 10B optimizer hours | 10B H100-hours | Surcharge |
 |---|---:|---:|---:|---:|
-| E256 control | 463.697 ms | 4.914 | 39.31 | -- |
-| E128 naive | 466.021 ms | 4.938 | 39.51 | +0.50% |
-| E16 naive | 465.479 ms | 4.932 | 39.46 | +0.38% |
-| E128 layerwise | 465.756 ms | 4.935 | 39.48 | +0.44% |
-| E16 layerwise | 466.170 ms | 4.940 | 39.52 | +0.53% |
+| E256 control | 464.596 ms | 4.923 | 39.38 | -- |
+| E128 naive | 466.865 ms | 4.947 | 39.58 | +0.49% |
+| E16 naive | 466.200 ms | 4.940 | 39.52 | +0.35% |
+| E128 layerwise | 466.767 ms | 4.946 | 39.57 | +0.47% |
+| E16 layerwise | 466.583 ms | 4.944 | 39.55 | +0.43% |
 
 This result is already precise enough to reject a material same-topology
 kernel surcharge. Quality-adjusted cost remains the deciding measurement.
 
 The two-checkpoint baseline is much more expensive. Analytic model FLOPs are
 approximately 357.7M per token for E256 and 356.2M for standalone E128, so
-training both independently costs about 1.996x one E256 run. At Gate 1, the
-quality-adjusted E128-naive estimate is 1.029x. This is not yet an
+training both independently costs about 1.996x one E256 run. At Gate 2, the
+quality-adjusted E128-naive estimate is 1.080x. This is not yet an
 apples-to-apples replacement claim: the current control provides an untrained
 same-checkpoint prefix, not an independently compute-optimal E128 run.
 
