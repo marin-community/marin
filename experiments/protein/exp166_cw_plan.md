@@ -77,14 +77,9 @@ difference between two placements is not a defect.
 
 ## Priority
 
-**Every submission carries `--priority batch`** — calibration, smokes, production and every
-retry. Required for all CoreWeave work by #108. The flag goes on the driver; the gang
-inherits it, because the scheduler resolves an unspecified child band by walking the
-parent chain. Do not submit at `interactive` and rely on demotion.
-
-This is also why capacity is tight: at batch band this experiment queues behind other
-users, so the partial-gang failures and the twenty-node ceiling below are the expected
-cost of running politely on a shared cluster, not anomalies.
+**Every submission carries `--priority batch`**, per #108. It goes on the driver and the
+gang inherits it up the parent chain. It is also why capacity is tight — batch band queues
+behind other users, so the twenty-node ceiling below is expected, not a fault.
 
 ## Placement
 
