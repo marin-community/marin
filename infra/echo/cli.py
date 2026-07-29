@@ -30,6 +30,7 @@ from pathlib import Path
 
 import okf
 import requests
+import search_config
 from rigging.auth import (
     MARIN_DESKTOP_OAUTH_CLIENT,
     IapCredentialsUnavailable,
@@ -53,7 +54,7 @@ LOGIN_CLUSTER = os.environ.get("ECHO_LOGIN_CLUSTER", "marin")
 LOGIN_HINT = "run `iris login`"
 SOURCES = ("github", "discord")
 KINDS = ("issue", "pr", "comment", "message")
-DOMAINS = ("wiki", "file", "discord", "pr", "issue")
+DOMAINS = search_config.SEARCH_DOMAINS
 
 
 def cached_login_provider() -> TokenProvider | None:

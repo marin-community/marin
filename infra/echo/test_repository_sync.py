@@ -8,7 +8,7 @@ import io
 import tarfile
 from datetime import UTC, datetime, timedelta
 
-from sync import main as echo_sync
+from sync import github_repository as echo_sync
 
 
 def test_github_blob_accepts_api_line_wrapped_base64(monkeypatch):

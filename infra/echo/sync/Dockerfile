@@ -11,9 +11,10 @@ WORKDIR /app
 COPY schema.py .
 COPY search_config.py .
 COPY repository_files.py .
+COPY sync/github_repository.py .
 COPY sync/main.py .
 
 # Bake the passage embedding model into the image so hourly runs do not download it.
-RUN python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
+RUN python -c "import search_config; from fastembed import TextEmbedding; TextEmbedding(search_config.EMBED_MODEL)"
 
 CMD ["python", "main.py"]

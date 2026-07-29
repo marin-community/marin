@@ -86,7 +86,6 @@ repository_file_chunks = Table(
     Column("repository", Text, nullable=False),
     Column("branch", Text, nullable=False),
     Column("path", Text, nullable=False),
-    Column("digest", Text, nullable=False),
     Column("title", Text, nullable=False),
     Column("chunk_index", Integer, nullable=False),
     Column("start_line", Integer, nullable=False),

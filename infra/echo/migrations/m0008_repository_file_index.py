@@ -11,7 +11,6 @@ CREATE TABLE repository_file_chunks (
     repository TEXT NOT NULL,
     branch TEXT NOT NULL,
     path TEXT NOT NULL,
-    digest TEXT NOT NULL,
     title TEXT NOT NULL,
     chunk_index INTEGER NOT NULL,
     start_line INTEGER NOT NULL,

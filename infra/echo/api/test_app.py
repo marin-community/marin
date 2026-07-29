@@ -198,7 +198,7 @@ def test_federated_search_classifies_github_comment_domain(client_with):
         lexical_score=0.5,
     )
     harness = client_with([row])
-    results = echo.federated_search(harness.engine, harness.model, "scheduler", ["pr"], 10)
+    results = echo.federated_search(harness.engine, harness.model, echo.DEFAULT_CONFIG, "scheduler", ["pr"], 10)
     assert [result.model_dump(mode="json") for result in results] == [
         {
             "id": "pr:8",

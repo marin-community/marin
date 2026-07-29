@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Checked result values shared by Echo's remote and local CLI clients."""
+"""Checked federated-search result values for the Echo CLI."""
 
 from dataclasses import dataclass
 
@@ -36,19 +36,6 @@ class SearchResult:
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(f"invalid search result: {error}") from error
-
-    def json_value(self) -> dict[str, object]:
-        return {
-            "id": self.id,
-            "domain": self.domain,
-            "title": self.title,
-            "subtitle": self.subtitle,
-            "url": self.url,
-            "snippet": self.snippet,
-            "score": self.score,
-            "distance": self.distance,
-            "lexical_score": self.lexical_score,
-        }
 
 
 def optional_float(value: object) -> float | None:

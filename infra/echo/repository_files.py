@@ -3,7 +3,6 @@
 
 """Safety filtering, chunking, and embedding for repository files."""
 
-import hashlib
 import struct
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -97,7 +96,6 @@ class TextChunk:
 @dataclass(frozen=True)
 class IndexedFile:
     path: str
-    digest: str
     title: str
     chunks: tuple[TextChunk, ...]
 
@@ -105,7 +103,6 @@ class IndexedFile:
 @dataclass(frozen=True)
 class EmbeddedChunk:
     path: str
-    digest: str
     title: str
     chunk_index: int
     start_line: int
@@ -149,8 +146,7 @@ def indexed_file(path: PurePosixPath, data: bytes) -> IndexedFile | None:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
         return None
-    digest = hashlib.sha256(data).hexdigest()
-    return IndexedFile(str(path), digest, file_title(path, text), tuple(text_chunks(text)))
+    return IndexedFile(str(path), file_title(path, text), tuple(text_chunks(text)))
 
 
 def file_title(path: PurePosixPath, text: str) -> str:
@@ -208,7 +204,6 @@ def embed_batch(
     return [
         EmbeddedChunk(
             path=file.path,
-            digest=file.digest,
             title=file.title,
             chunk_index=chunk.index,
             start_line=chunk.start_line,

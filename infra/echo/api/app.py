@@ -27,18 +27,38 @@ from pydantic import BaseModel, Field, field_validator
 
 SOURCES = ("github", "discord")
 KINDS = ("issue", "pr", "comment", "message")
-REMOTE_DOMAINS = ("wiki", "file", "discord", "pr", "issue")
-ECHO_PUBLIC_URL = os.environ.get("ECHO_PUBLIC_URL", "https://echo.oa.dev").rstrip("/")
-GITHUB_REPOSITORY = os.environ.get("GITHUB_REPOSITORY", "marin-community/marin")
-GITHUB_BRANCH = os.environ.get("GITHUB_BRANCH", "main")
+REMOTE_DOMAINS = search_config.SEARCH_DOMAINS
 MAX_WIKI_TAG_LENGTH = 50
 WIKI_TAG_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+@dataclass(frozen=True)
+class EchoConfig:
+    public_url: str
+    github_repository: str
+    github_branch: str
+
+
+DEFAULT_CONFIG = EchoConfig(
+    public_url="https://echo.oa.dev",
+    github_repository="marin-community/marin",
+    github_branch="main",
+)
+
+
+def environment_config() -> EchoConfig:
+    return EchoConfig(
+        public_url=os.environ.get("ECHO_PUBLIC_URL", DEFAULT_CONFIG.public_url).rstrip("/"),
+        github_repository=os.environ.get("GITHUB_REPOSITORY", DEFAULT_CONFIG.github_repository),
+        github_branch=os.environ.get("GITHUB_BRANCH", DEFAULT_CONFIG.github_branch),
+    )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     instance, database, user = os.environ["CLOUDSQL_CONNECTION"], os.environ["PGDATABASE"], os.environ["PGUSER"]
     with Connector() as connector:
+        app.state.config = environment_config()
         app.state.engine = sqlalchemy.create_engine(
             "postgresql+pg8000://",
             creator=lambda: connector.connect(instance, "pg8000", user=user, enable_iam_auth=True, db=database),
@@ -57,6 +77,7 @@ app = FastAPI(
     description="Search Marin activity and wiki notes, and read/append the shared agent work log.",
     lifespan=lifespan,
 )
+app.state.config = DEFAULT_CONFIG
 
 
 def get_engine(request: Request) -> sqlalchemy.Engine:
@@ -67,8 +88,13 @@ def get_model(request: Request) -> TextEmbedding:
     return request.app.state.model
 
 
+def get_config(request: Request) -> EchoConfig:
+    return request.app.state.config
+
+
 Engine = Annotated[sqlalchemy.Engine, Depends(get_engine)]
 Model = Annotated[TextEmbedding, Depends(get_model)]
+Config = Annotated[EchoConfig, Depends(get_config)]
 
 # Data endpoints live under /api so they don't collide with the dashboard SPA's client-side
 # routes (e.g. /wiki/123), which fall through to index.html at the root.
@@ -291,13 +317,13 @@ def activity_search_result(row: sqlalchemy.Row) -> SearchResult:
     )
 
 
-def wiki_search_result(row: sqlalchemy.Row) -> SearchResult:
+def wiki_search_result(row: sqlalchemy.Row, config: EchoConfig) -> SearchResult:
     return SearchResult(
         id=f"wiki:{row.id}",
         domain="wiki",
         title=row.title,
         subtitle=row.use_when,
-        url=f"{ECHO_PUBLIC_URL}/wiki/{row.id}",
+        url=f"{config.public_url}/wiki/{row.id}",
         snippet=wiki_snippet(row),
         score=row.score,
         distance=row.distance,
@@ -305,14 +331,17 @@ def wiki_search_result(row: sqlalchemy.Row) -> SearchResult:
     )
 
 
-def repository_index_state(conn: sqlalchemy.Connection) -> RepositoryIndexState | None:
+def repository_index_state(
+    conn: sqlalchemy.Connection,
+    config: EchoConfig,
+) -> RepositoryIndexState | None:
     row = conn.execute(
         sqlalchemy.select(
             schema.repository_index_state.c.commit_sha,
             schema.repository_index_state.c.indexed_at,
         ).where(
-            schema.repository_index_state.c.repository == GITHUB_REPOSITORY,
-            schema.repository_index_state.c.branch == GITHUB_BRANCH,
+            schema.repository_index_state.c.repository == config.github_repository,
+            schema.repository_index_state.c.branch == config.github_branch,
         )
     ).first()
     if row is None:
@@ -320,7 +349,7 @@ def repository_index_state(conn: sqlalchemy.Connection) -> RepositoryIndexState 
     return RepositoryIndexState(row.commit_sha, row.indexed_at)
 
 
-def matching_file_line(text: str, query: str, start_line: int) -> tuple[int, str]:
+def representative_file_line(text: str, query: str, start_line: int) -> tuple[int, str]:
     lines = text.splitlines()
     lowered_query = query.casefold()
     for offset, line in enumerate(lines):
@@ -336,17 +365,19 @@ def repository_file_search_result(
     row: sqlalchemy.Row,
     state: RepositoryIndexState,
     query: str,
+    config: EchoConfig,
 ) -> SearchResult:
-    line, matching_line = matching_file_line(row.text, query, row.start_line)
+    line, matching_line = representative_file_line(row.text, query, row.start_line)
     path = quote(row.path, safe="/")
     return SearchResult(
         id=f"file:{row.path}",
         domain="file",
         title=row.title,
         subtitle=(
-            f"{row.path}:{line} · {GITHUB_BRANCH}@{state.commit_sha[:12]} · " f"indexed {state.indexed_at.isoformat()}"
+            f"{row.path}:{line} · {config.github_branch}@{state.commit_sha[:12]} · "
+            f"indexed {state.indexed_at.isoformat()}"
         ),
-        url=f"https://github.com/{GITHUB_REPOSITORY}/blob/{state.commit_sha}/{path}#L{line}",
+        url=f"https://github.com/{config.github_repository}/blob/{state.commit_sha}/{path}#L{line}",
         snippet=matching_line[:240],
         score=row.score,
         distance=row.distance,
@@ -398,6 +429,7 @@ def search(
 def federated_search(
     engine: Engine,
     model: Model,
+    config: Config,
     q: str = Query(description="Natural-language query."),
     domain: list[Literal["wiki", "file", "discord", "pr", "issue"]] | None = Query(
         None, description="Search this domain; repeat to select several."
@@ -420,21 +452,21 @@ def federated_search(
         conn.execute(hybrid_search.HNSW_ITERATIVE_SCAN)
         if "wiki" in domains:
             for row in conn.execute(hybrid_search.wiki_search_statement(), params):
-                results.append(wiki_search_result(row))
+                results.append(wiki_search_result(row, config))
         if "file" in domains:
-            state = repository_index_state(conn)
+            state = repository_index_state(conn, config)
             if state is not None:
                 file_params = {
                     **params,
                     "candidate_limit": (
                         search_config.candidate_limit(limit) * search_config.FILE_CHUNK_CANDIDATE_MULTIPLIER
                     ),
-                    "repository": GITHUB_REPOSITORY,
-                    "branch": GITHUB_BRANCH,
+                    "repository": config.github_repository,
+                    "branch": config.github_branch,
                     "substring": f"%{escape_like(query)}%",
                 }
                 for row in conn.execute(hybrid_search.repository_file_search_statement(), file_params):
-                    results.append(repository_file_search_result(row, state, query))
+                    results.append(repository_file_search_result(row, state, query, config))
         activity_domains = [candidate for candidate in domains if candidate in ("discord", "pr", "issue")]
         if activity_domains:
             statement = hybrid_search.chunk_search_statement([activity_domain_clause(activity_domains)])

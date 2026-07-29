@@ -171,8 +171,8 @@ pulumi up
 ```
 
 `pulumi up` applies pending migrations from the operator's machine. It requires ADC
-with access to `cloudsql-pulumi-admin-password`. For this change, run
-`infra/echo/migrate.py` before `pulumi up` so the new API and sync images never observe
-a missing repository table. The first repository build fetches a GitHub archive and
-embeds all eligible files; later hourly runs normally process only changed paths.
-Review database grant changes before deploying them.
+with access to `cloudsql-pulumi-admin-password`. When a release adds tables queried by
+new API or sync images, run `infra/echo/migrate.py` before `pulumi up` to avoid a
+missing-table window. The first repository build fetches a GitHub archive and embeds
+all eligible files; later hourly runs normally process only changed paths. Review
+database grant changes before deploying them.

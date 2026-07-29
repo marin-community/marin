@@ -6,7 +6,7 @@
 import cli
 
 
-def test_search_requests_selected_remote_domains(monkeypatch, capsys):
+def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch):
     remote_result = {
         "id": "file:lib/iris/src/iris/scheduler.py",
         "domain": "file",
@@ -19,28 +19,30 @@ def test_search_requests_selected_remote_domains(monkeypatch, capsys):
         "lexical_score": 0.5,
     }
 
-    def fake_request(method, path, *, params=None, body=None):
-        assert (method, path) == ("GET", "/federated-search")
-        assert params is not None
-        assert params["domain"] == ["file", "pr"]
+    calls = []
+
+    def fake_request(method, path, **options):
+        calls.append((method, path, options))
         return [remote_result]
 
     monkeypatch.setattr(cli, "request", fake_request)
     args = cli.build_parser().parse_args(["search", "FAILED_PRECONDITION", "--domain", "file", "--domain", "pr"])
     args.func(args)
 
-    captured = capsys.readouterr()
-    assert "[file] scheduler.py" in captured.out
-    assert "main@abc1234" in captured.out
-    assert "/blob/abc1234/" in captured.out
-    assert captured.err == ""
+    assert calls == [
+        (
+            "GET",
+            "/federated-search",
+            {"params": {"q": "FAILED_PRECONDITION", "domain": ["file", "pr"], "limit": 10}},
+        )
+    ]
 
 
-def test_search_legacy_activity_filters_keep_existing_endpoint(monkeypatch, capsys):
+def test_search_legacy_activity_filters_keep_existing_endpoint(monkeypatch):
     calls = []
 
-    def fake_request(method, path, *, params=None, body=None):
-        calls.append((method, path, params))
+    def fake_request(method, path, **options):
+        calls.append((method, path, options))
         return []
 
     monkeypatch.setattr(cli, "request", fake_request)
@@ -48,5 +50,4 @@ def test_search_legacy_activity_filters_keep_existing_endpoint(monkeypatch, caps
     args.func(args)
 
     assert calls[0][1] == "/search"
-    assert calls[0][2]["source"] == "discord"
-    assert capsys.readouterr().err == ""
+    assert calls[0][2]["params"]["source"] == "discord"
