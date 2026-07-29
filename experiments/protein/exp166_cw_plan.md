@@ -124,6 +124,13 @@ carry over — only the Iris job name changes.
 Read a Python traceback in the *training* task as a real fault; the three above all occur
 before or outside training and are indistinguishable from preemption.
 
+### The seed is doing real work
+
+Confirmed in production, not just in the smoke. Early in training the two exp117-init runs
+sat at loss **3.06-3.07 by step 447-565**, while the from-scratch runs were at
+**3.88-3.98 at steps 976-1821**. Lower loss from a quarter of the steps is only reachable
+from pretrained weights, so the initialization path is verified end to end.
+
 ### What actually fit, 2026-07-29
 
 Five gangs of four nodes were placeable — 20 nodes. Every attempt at a sixth four-node
