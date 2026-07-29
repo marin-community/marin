@@ -20,6 +20,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
+import numpy as np
 import optax
 import pytest
 from fray.cluster import ResourceConfig
@@ -136,6 +137,13 @@ def _small_model_config(model_config_cls, *, vocab_size: int, seq_len: int):
     field_names = {field.name for field in dataclasses.fields(model_config_cls)}
     kwargs = {k: v for k, v in base_kwargs.items() if k in field_names}
     return model_config_cls(**kwargs)
+
+
+def _single_device_grug_mesh() -> jax.sharding.Mesh:
+    axis_names = ("replica_dcn", "data", "expert", "model")
+    axis_types = tuple(jax.sharding.AxisType.Explicit for _ in axis_names)
+    devices = np.array(jax.devices()[:1], dtype=object).reshape((1, 1, 1, 1))
+    return jax.sharding.Mesh(devices, axis_names, axis_types=axis_types)
 
 
 def test_grug_moe_layer_masks_preserve_thd_segment_metadata():
@@ -362,6 +370,107 @@ def test_grug_moe_model_init_against_single_expert_mesh():
         state_shape = eqx.filter_eval_shape(build)
 
     assert state_shape.params is not None
+
+
+def test_grug_moe_scanned_and_unscanned_forward_values_match():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=128, seq_len=4)
+    cfg = dataclasses.replace(cfg, num_layers=5)
+    key = jax.random.PRNGKey(0)
+    tokens = jnp.arange(4, dtype=jnp.int32).reshape(1, 4)
+    mesh = _single_device_grug_mesh()
+    forward = eqx.filter_jit(lambda model, token_ids: model(token_ids))
+
+    with jax.set_mesh(mesh):
+        scanned = model_module.Transformer.init(
+            dataclasses.replace(cfg, use_array_stacked_blocks=True),
+            key=key,
+        )
+        unscanned = model_module.Transformer.init(
+            dataclasses.replace(cfg, use_array_stacked_blocks=False),
+            key=key,
+        )
+        scanned_hidden, scanned_metrics = forward(scanned, tokens)
+        unscanned_hidden, unscanned_metrics = forward(unscanned, tokens)
+        scanned_state_dict = scanned.to_state_dict()
+        unscanned_state_dict = unscanned.to_state_dict()
+
+    np.testing.assert_allclose(scanned_hidden, unscanned_hidden, rtol=1e-5, atol=1e-5)
+    assert scanned_metrics.keys() == unscanned_metrics.keys()
+    for name in scanned_metrics:
+        np.testing.assert_allclose(scanned_metrics[name], unscanned_metrics[name], rtol=1e-5, atol=1e-5)
+
+    assert scanned_state_dict.keys() == unscanned_state_dict.keys()
+    for name in scanned_state_dict:
+        np.testing.assert_allclose(scanned_state_dict[name], unscanned_state_dict[name], rtol=1e-5, atol=1e-5)
+
+
+def test_grug_moe_scale_launcher_builds_one_homogeneous_scan(monkeypatch):
+    launch_module = importlib.import_module("experiments.grug.moe.launch_cw_scale")
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    monkeypatch.setattr(launch_module, "VOCAB_SIZE", 128)
+    monkeypatch.setattr(launch_module, "HEAD_DIM", 16)
+    monkeypatch.setenv("SCALE_HIDDEN_DIM", "32")
+    monkeypatch.setenv("SCALE_NUM_LAYERS", "5")
+    monkeypatch.setenv("SCALE_NUM_EXPERTS", "4")
+    monkeypatch.setenv("SCALE_TOP_K", "2")
+    monkeypatch.setenv("SCALE_SEQ_LEN", "4")
+    monkeypatch.setenv("SCALE_SCAN_LAYERS", "1")
+
+    cfg = launch_module.build_scale_model()
+    tokens = jnp.arange(4, dtype=jnp.int32).reshape(1, 4)
+    mesh = _single_device_grug_mesh()
+    with jax.set_mesh(mesh):
+        model = model_module.Transformer.init(cfg, key=jax.random.PRNGKey(0))
+        closed_jaxpr, _, _ = eqx.filter_make_jaxpr(model)(tokens)
+        lowered = eqx.filter_jit(model).lower(tokens)
+
+    scan_equations = [equation for equation in closed_jaxpr.jaxpr.eqns if equation.primitive.name == "scan"]
+    assert len(scan_equations) == 1
+    assert scan_equations[0].params["length"] == cfg.num_layers
+    assert scan_equations[0].params["unroll"] == 1
+    stablehlo = lowered.as_text()
+    assert stablehlo.count("stablehlo.while") == 1
+    with pytest.raises(ValueError, match="requires disable_pko=True"):
+        model_module.Transformer.init(dataclasses.replace(cfg, disable_pko=False), key=jax.random.PRNGKey(0))
+
+
+def test_grug_moe_scan_layers_one_step_lowers():
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=128, seq_len=4)
+    cfg = dataclasses.replace(cfg, use_array_stacked_blocks=True)
+    optimizer = optax.adam(1e-2)
+    mp = jmp.get_policy("f32")
+    train_step = train_module._make_train_step(optimizer, mp, z_loss_weight=0.0, ema_beta=None)
+    mesh, token_pspec = model_module.debug_mesh_and_token_pspec(num_devices=4)
+    batch = GrugLmExample(
+        tokens=jnp.zeros((8, 4), dtype=jnp.int32),
+        loss_weight=jnp.ones((8, 4), dtype=jnp.float32),
+        attn_mask=GrugAttentionMask.causal(),
+    )
+
+    def one_step():
+        sharded_batch = dataclasses.replace(
+            batch,
+            tokens=jax.sharding.reshard(batch.tokens, token_pspec),
+            loss_weight=jax.sharding.reshard(batch.loss_weight, token_pspec),
+        )
+        state = train_module.initial_state(
+            cfg,
+            optimizer=optimizer,
+            mp=mp,
+            key=jax.random.PRNGKey(0),
+            ema_beta=None,
+        )
+        return train_step(state, sharded_batch, compute_watch=False)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        out_state_shape, out_metrics_shape, out_watch_shape = eqx.filter_eval_shape(one_step)
+
+    assert out_state_shape.step.shape == ()
+    assert out_metrics_shape["train/loss"].shape == ()
+    assert out_watch_shape is None
 
 
 @pytest.mark.parametrize(
