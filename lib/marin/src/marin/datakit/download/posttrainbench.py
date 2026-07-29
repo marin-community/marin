@@ -250,10 +250,11 @@ def _replace_lone_surrogates(text: str) -> str:
 
 def _read_sidecar(task_dir: str, filename: str) -> str | None:
     """Read one of a task's sidecar files, or None when the harness never wrote it."""
-    path = posixpath.join(task_dir, filename)
-    if not StoragePath(path).exists():
+    path = StoragePath(task_dir) / filename
+    if not path.exists():
         return None
-    with open_url(path, "rt", encoding="utf-8", errors="replace") as f:
+    # open_url rather than StoragePath.open, so the read is charged to the cross-region budget.
+    with open_url(str(path), "rt", encoding="utf-8", errors="replace") as f:
         return f.read()
 
 
