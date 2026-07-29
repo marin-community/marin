@@ -297,11 +297,47 @@ def test_dashboard_datasource_uids_are_provisioned():
             assert uid in uids, f"{name} panel {panel.get('id')}: unknown datasource {uid!r}"
 
 
-def test_provisioning_success_ratio_shows_fleet_and_region_stats():
+def test_status_page_has_each_required_source():
     dashboard = _stitched_dashboards()["infra.json"]
-    (panel,) = [panel for panel in dashboard["panels"] if panel.get("title") == "Provisioning success ratio"]
-    (target,) = panel["targets"]
+    (panel,) = dashboard["panels"]
+    targets = {target["refId"]: target for target in panel["targets"]}
 
+    assert panel["datasource"]["uid"] == "status"
+    assert {ref_id: target["url"] for ref_id, target in targets.items()} == {
+        "N": "/github/nightlies",
+        "G": "/github/builds",
+        "W": "/iris/marin/workers",
+        "P": "/overview/provisioning",
+        "H": "/finelog/marin/query",
+        "R": "/finelog/marin/query",
+        "T": "/wandb/train-loss",
+        "L": "/wandb/paloma-macro-loss",
+        "M": "/wandb/mfu",
+    }
+
+
+def test_status_page_queries_provisioning_snapshot_and_region_history():
+    dashboard = _stitched_dashboards()["infra.json"]
+    (panel,) = dashboard["panels"]
+    targets = {target["refId"]: target for target in panel["targets"]}
+
+    assert panel["type"] == "marin-infra-panel"
+    assert panel["options"]["view"] == "status"
+    assert targets["P"]["url"] == "/overview/provisioning"
+    snapshot_columns = {column["selector"] for column in targets["P"]["columns"]}
+    assert {
+        "scope",
+        "ready",
+        "stockout",
+        "error",
+        "preempted",
+        "outcomes",
+        "success_ratio",
+        "pools_placing",
+        "pools_no_ready_outcome",
+    } <= snapshot_columns
+
+    target = targets["R"]
     columns = {column["selector"]: column for column in target["columns"]}
     assert columns["series"] == {"selector": "series", "text": "region", "type": "string"}
     assert columns["value"]["type"] == "number"
@@ -312,15 +348,11 @@ def test_provisioning_success_ratio_shows_fleet_and_region_stats():
     assert "regexp_replace(json_get(labels, 'zone'), '-[^-]+$', '') AS series" in sql
     assert "ready / NULLIF(outcomes, 0)" in sql
 
-    legend = panel["options"]["legend"]
-    assert legend["displayMode"] == "table"
-    assert legend["calcs"] == ["lastNotNull", "min", "max"]
-
 
 def test_provisioning_render_fixture_routes_metric_query_to_region_series():
     dashboard = _stitched_dashboards()["infra.json"]
-    (panel,) = [panel for panel in dashboard["panels"] if panel.get("title") == "Provisioning success ratio"]
-    (target,) = panel["targets"]
+    (panel,) = dashboard["panels"]
+    (target,) = [target for target in panel["targets"] if target["refId"] == "R"]
     sql = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "sql")
 
     rows = _finelog(urlencode({"sql": sql}))

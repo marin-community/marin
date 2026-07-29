@@ -106,6 +106,64 @@ def _wandb(chart: str) -> list[dict]:
     return rows
 
 
+def _provisioning() -> list[dict]:
+    common = {
+        "collected_at": round(_NOW.timestamp() * 1000),
+        "pools_placing": 0,
+        "pools_no_ready_outcome": 0,
+        "latency_p95_seconds": None,
+        "window_hours": None,
+    }
+    return [
+        {
+            **common,
+            "scope": "fleet",
+            "resource_type": "",
+            "scale_group": "",
+            "zone": "",
+            "ready": 18,
+            "stockout": 3,
+            "error": 1,
+            "preempted": 2,
+            "outcomes": 22,
+            "success_ratio": 18 / 22,
+            "pools_placing": 5,
+            "pools_no_ready_outcome": 1,
+            "latency_p50_seconds": 48,
+            "latency_p95_seconds": 132,
+            "window_hours": 3,
+        },
+        {
+            **common,
+            "scope": "pool",
+            "resource_type": "v5p-8",
+            "scale_group": "reserved",
+            "zone": "us-east5-a",
+            "ready": 6,
+            "stockout": 1,
+            "error": 0,
+            "preempted": 1,
+            "outcomes": 7,
+            "success_ratio": 6 / 7,
+            "latency_p50_seconds": 42,
+        },
+        {
+            **common,
+            "scope": "pool",
+            "resource_type": "h100-8",
+            "scale_group": "gpu",
+            "zone": "cw-us-east-08a",
+            "ready": 4,
+            "stockout": 2,
+            "error": 1,
+            "preempted": 1,
+            "outcomes": 7,
+            "success_ratio": 4 / 7,
+            "latency_p50_seconds": 65,
+        },
+    ]
+
+
 def _finelog(query: str) -> list[dict]:
     sql = parse_qs(query).get("sql", [""])[0]
     if "probe_latency_ms" in sql and "ROW_NUMBER" not in sql:
@@ -237,6 +295,8 @@ def _rows(path: str, query: str) -> list[dict] | dict:
                 )
             )
         ]
+    if path == "/overview/provisioning":
+        return _provisioning()
     if path == "/iris/marin/health":
         return [{"reachable": True, "up": 1, "latency_ms": 18}]
     if path == "/iris/marin/peers":

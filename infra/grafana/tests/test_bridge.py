@@ -138,6 +138,42 @@ def test_oversized_result_is_a_400_with_guidance():
     assert "narrow the time range" in resp.json()["error"]
 
 
+def test_overview_provisioning_returns_latest_cycle_summary():
+    source = FakeSource(
+        finelog_result(
+            metric=["provision_ready", "provision_outcomes", "provision_success_ratio"],
+            value=[8.0, 10.0, 0.8],
+            labels=['{"scope": "fleet"}'] * 3,
+            collected_at=[datetime(2026, 7, 17, 3, 0, tzinfo=UTC)] * 3,
+        )
+    )
+
+    response = _client(source).get("/overview/provisioning")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "scope": "fleet",
+            "collected_at": FROM_MS,
+            "resource_type": "",
+            "scale_group": "",
+            "zone": "",
+            "ready": 8.0,
+            "stockout": 0,
+            "error": 0,
+            "preempted": 0,
+            "outcomes": 10.0,
+            "success_ratio": 0.8,
+            "pools_placing": 0,
+            "pools_no_ready_outcome": 0,
+            "latency_p50_seconds": None,
+            "latency_p95_seconds": None,
+            "window_hours": None,
+        }
+    ]
+    assert "SELECT MAX(collected_at)" in source.queries[0]
+
+
 def test_repeated_identical_panels_hit_finelog_once():
     source = FakeSource(_ONE_ROW)
     client = _client(source)
