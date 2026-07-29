@@ -428,3 +428,108 @@ author: Matt Wittmann
   default interactive priority. No cluster or node mutation is permitted.
 - Next action: commit this pre-registration and mesh selector, then submit the
   four jobs in order and inspect complete, untruncated logs.
+
+### 2026-07-28 21:21 PDT - Leading-axis-only non-SYRK discriminator passed
+
+- Commit Hash: `12ce482bbeaf356e5cb0c24d0b52c1aa200b503c`
+- Job: `/mwittmann/d2-muon-mesh-d1e4-syrk0-0728-2120`.
+- Route: default-priority federated submission through `marin` to
+  `cw-us-east-08a`; the peer accepted and ran the job without a persistent
+  federation queue.
+- Result: Iris succeeded. `D2_ENV` reported JAX 0.10.1 and the explicit
+  `data=1, expert=4` mesh. `D2_STRUCTURE` reported zero expert merges, padded
+  reshards `P('expert',None,None)` then `P(None,'data','model')`, and zero
+  literal `P(None,None,None)` outbound reshards. Expert and `nonexpert_tall`
+  outputs were finite and restored their requested sharding.
+- SPMD warning count: `0` over the complete log fetched with
+  `--max-lines 400000`.
+- Interpretation: the non-SYRK discriminator matches the pre-registered
+  prediction. The hypothesis is not accepted until SYRK also emits zero and
+  both `data=2, expert=2` controls reproduce one warning.
+- Next action: submit the otherwise identical `data=1, expert=4`,
+  `SCALE_MUON_SYRK=1` arm.
+
+### 2026-07-28 21:23 PDT - Leading-axis-only SYRK discriminator passed
+
+- Commit Hash: `12ce482bbeaf356e5cb0c24d0b52c1aa200b503c`
+- Job: `/mwittmann/d2-muon-mesh-d1e4-syrk1-0728-2120`.
+- Result: Iris succeeded through the same default-priority federated route.
+  `D2_ENV` reported JAX 0.10.1 and `data=1, expert=4`. The structural record
+  matched the non-SYRK arm, and both compiled outputs were finite with the
+  requested shardings.
+- SPMD warning count: `0` over the complete log fetched with
+  `--max-lines 400000`.
+- Interpretation: both leading-axis-only arms meet the zero-warning prediction.
+  The hypothesis still requires the two `data=2, expert=2` positive controls.
+- Next action: rerun the original multi-axis mesh with SYRK off, changing only
+  `--mesh data1-expert4` to `--mesh data2-expert2`.
+
+### 2026-07-28 21:25 PDT - Multi-axis non-SYRK positive control reproduced
+
+- Commit Hash: `12ce482bbeaf356e5cb0c24d0b52c1aa200b503c`
+- Job: `/mwittmann/d2-muon-mesh-d2e2-syrk0-0728-2120`.
+- Result: Iris succeeded through the default-priority federated route.
+  `D2_STRUCTURE` reported the original inbound sequence
+  `P('data',None,None)` then `P(('data','expert'),None,None)`, followed by the
+  direct `P(None,'data','model')` outbound reshard. Both compiled outputs were
+  finite.
+- SPMD warning count: `1` over the complete log. The warning is the same
+  `f32[1,5120,1280]` `jit(current)/vmap()/convert_element_type` transition from
+  `{devices=[4,1,1]<=[4]}` to
+  `{devices=[1,2,1,2]<=[4] last_tile_dim_replicate}`.
+- Interpretation: the non-SYRK positive control reproduces the prior failure
+  under the current harness and route. One SYRK positive control remains.
+- Next action: submit the otherwise identical `data=2, expert=2`, SYRK-on arm.
+
+### 2026-07-28 21:27 PDT - Federated route stalled on final control
+
+- Job: `/mwittmann/d2-muon-mesh-d2e2-syrk1-0728-2120`.
+- Result: the job remained pending for more than one normal compile-job
+  scheduling interval with `Queued for peer cw-us-east-08a to report free
+  capacity`. The first three arms had already traversed the federated route and
+  run successfully.
+- Interpretation: this matches the shared protocol's known federation failure
+  mode, not a compile result.
+- Next action: stop only this pending job and use the protocol's direct
+  `--cluster=cw-us-east-08a` fallback at default priority. Do not alter any
+  cluster, node, or other user's job.
+
+### 2026-07-28 21:29 PDT - Mesh discriminator complete
+
+- Commit Hash: `12ce482bbeaf356e5cb0c24d0b52c1aa200b503c`
+- Final control job:
+  `/mwittmann/d2-muon-mesh-d2e2-syrk1-direct-r1-0728-2127`.
+- Recovery: stopped only the pending federated job
+  `/mwittmann/d2-muon-mesh-d2e2-syrk1-0728-2120`, then resubmitted the same
+  command through the protocol's direct `cw-us-east-08a` fallback at default
+  priority. No shared infrastructure or other job was changed.
+- Result: the direct control succeeded in 32.58 seconds with exit 0. It emitted
+  one warning on the same `f32[1,5120,1280]` transition as the non-SYRK
+  control. Both outputs were finite.
+- Warning-count matrix:
+
+  | mesh | `SCALE_MUON_SYRK=0` | `SCALE_MUON_SYRK=1` |
+  |---|---:|---:|
+  | `data=1, expert=4` | 0 | 0 |
+  | `data=2, expert=2` | 1 | 1 |
+
+- Verdict: the pre-registered mesh hypothesis is confirmed at the four-GB200
+  discriminator scope. The warning is caused by the multi-axis destination
+  layout, not by the leading-axis all-gather that remains when only `expert`
+  has size greater than one.
+- Replication limit: the `data=1, expert=4` jaxpr contains no literal
+  `P(None,None,None)` outbound reshard, but its destination
+  `P(None,'data','model')` is physically replicated because `data` and `model`
+  both have size one. Zero involuntary-remat warnings do not establish lower
+  peak memory or prove that `497423bc6` avoids physical replication at D-2.
+  The conditional memory/HLO comparison was not triggered because the warning
+  vanished.
+- Decision: do not implement the outbound two-hop fix. The `data=2, expert=2`
+  compile gate does not block D-2. Before any PGLE capture or placement draw,
+  compile the exact composed build on the full-rack
+  `replica_dcn=1, data=1, expert=64, model=1` mesh at both SYRK settings. Require
+  zero `spmd_partitioner.cc:668` warnings in complete logs, finite realistic
+  D-2 outputs, no expert `(L,E)->LE` merge, the single
+  `P('expert',None,None)` padded inbound reshard, and restoration to the real
+  parameter shardings. Any nonzero warning blocks D-2 and requires the outbound
+  two-hop fix before rack draws.

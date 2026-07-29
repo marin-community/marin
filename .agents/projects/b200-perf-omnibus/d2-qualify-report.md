@@ -186,3 +186,63 @@ return to zero before rack work proceeds. The first real EP64 full-rack compile
 must still satisfy the original zero-warning check before any placement result
 is accepted. Re-scoping the toy-mesh gate to “no more than baseline” would not
 change it because the measured baseline is zero.
+
+## Production-mesh discriminator — 2026-07-28
+
+The compile warning is mesh-scoped. The leading-axis-only
+`data=1, expert=4` mesh emitted zero warnings at both SYRK settings, while the
+same-session `data=2, expert=2` positive controls reproduced one warning each.
+This confirms the pre-registered mesh hypothesis at four GPUs and removes the
+`data=2, expert=2` warning as a blocker for D-2. It does not waive the real
+EP64 compile gate.
+
+The discriminator used harness commit `12ce482bb`. The harness added an
+explicit mesh selector and derived the structural expectation from that mesh;
+the probe cases, realistic 5120/1280 dimensions, compile path, four-GB200
+resource request, JAX 0.10.1 environment, allocator, and XLA flags remained
+unchanged. All four completed jobs produced finite expert and
+`nonexpert_tall` outputs.
+
+| mesh | `SCALE_MUON_SYRK` | job | warnings |
+|---|---:|---|---:|
+| `data=1, expert=4` | 0 | `/mwittmann/d2-muon-mesh-d1e4-syrk0-0728-2120` | 0 |
+| `data=1, expert=4` | 1 | `/mwittmann/d2-muon-mesh-d1e4-syrk1-0728-2120` | 0 |
+| `data=2, expert=2` | 0 | `/mwittmann/d2-muon-mesh-d2e2-syrk0-0728-2120` | 1 |
+| `data=2, expert=2` | 1 | `/mwittmann/d2-muon-mesh-d2e2-syrk1-direct-r1-0728-2127` | 1 |
+
+The first three jobs used the default-priority federated route through `marin`
+to `cw-us-east-08a`. The fourth federated submission,
+`/mwittmann/d2-muon-mesh-d2e2-syrk1-0728-2120`, remained pending at `Queued for
+peer cw-us-east-08a to report free capacity`. It was stopped without running,
+then resubmitted through the shared protocol's direct-cluster fallback at
+default priority. No shared infrastructure or other user's job was changed,
+and no `stage-workdir` failure occurred.
+
+On `data=1, expert=4`, the padded jaxpr changed from
+`P('expert',None,None)` directly to the parameter spec
+`P(None,'data','model')`. XLA compiled that leading-axis all-gather without an
+involuntary-full-rematerialization warning. On `data=2, expert=2`, both controls
+reproduced the earlier `f32[1,5120,1280]` warning from
+`{devices=[4,1,1]<=[4]}` to
+`{devices=[1,2,1,2]<=[4] last_tile_dim_replicate}`.
+
+This result does not establish that `497423bc6` avoids physical replication at
+the real D-2 mesh. When `data` and `model` both have size one,
+`P(None,'data','model')` is physically replicated across the expert devices
+even though the jaxpr contains no literal `P(None,None,None)` reshard. The zero
+warning establishes only that XLA can lower the direct leading-axis all-gather
+without its involuntary-remat fallback. Peak memory and materialized-shape
+comparisons were not run because the warning vanished, so the composed build
+has not independently reproduced `497423bc6`'s recorded +1.78pp gain or proven
+a replication-memory reduction.
+
+Do not implement the outbound two-hop fix from this result. D-2 rack draws may
+proceed only after the exact composed build passes a full-rack compile on the
+real `replica_dcn=1, data=1, expert=64, model=1` mesh at both
+`SCALE_MUON_SYRK=0` and `1`. That gate requires complete-log counts of zero
+`spmd_partitioner.cc:668` warnings, finite realistic D-2 outputs, no expert
+`(L,E)->LE` merge, the single `P('expert',None,None)` padded inbound reshard,
+and restoration to the real parameter shardings. Any warning on that mesh
+blocks D-2 and triggers the outbound two-hop fix and its before/after
+verification. Until this full-rack compile passes, do not capture fresh PGLE or
+start a D-2 placement draw.
