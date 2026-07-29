@@ -126,6 +126,36 @@ def test_simple_causal_lower_bounds_match_full_causal_semantics():
     np.testing.assert_array_equal(valid, np.ones((2, 4), dtype=np.bool_))
 
 
+def test_precomputed_fa4_bounds_match_inline_attention_output(monkeypatch):
+    def reference_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config):
+        del kernel_config
+        q_positions = jnp.arange(q.shape[1])[None, :, None]
+        k_positions = jnp.arange(k.shape[1])[None, None, :]
+        allowed = valid[..., None] & (k_positions >= lower_bounds[..., None]) & (k_positions <= q_positions)
+        logits = jnp.einsum("bqhd,bkhd->bhqk", q, k) * sm_scale
+        logits = jnp.where(allowed[:, None, :, :], logits, -jnp.inf)
+        out = jnp.einsum("bhqk,bkhd->bqhd", jax.nn.softmax(logits, axis=-1), v)
+        return jnp.where(valid[..., None, None], out, 0)
+
+    monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
+    monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", reference_forward)
+    q, k, v = _make_qkv(batch=1, q_len=6, k_len=6, q_heads=2, kv_heads=2)
+    segment_ids = jnp.array([[0, 0, 0, 1, 1, -1]], dtype=jnp.int32)
+    mask = AttentionMask.causal(sliding_window=2).with_segment_ids(segment_ids)
+    lower_bounds, valid = fa4_cute.fa4_cute_segment_bounds(
+        mask,
+        batch_size=q.shape[0],
+        seq_len=q.shape[1],
+        sliding_window=mask.sliding_window,
+    )
+
+    inline = gpu_fa4_cute_attention(q, k, v, mask)
+    precomputed = gpu_fa4_cute_attention(q, k, v, mask.with_fa4_bounds(lower_bounds, valid))
+
+    np.testing.assert_allclose(precomputed, inline, rtol=1e-6, atol=1e-6)
+
+
 def test_fa4_frontend_shards_metadata_with_qkv_batch_axis(monkeypatch):
     def fake_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config):
         del k, v, sm_scale, kernel_config
