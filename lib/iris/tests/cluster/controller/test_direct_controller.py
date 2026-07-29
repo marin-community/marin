@@ -350,7 +350,7 @@ def _submit_job_for_user(state, user: str, name: str, *, priority_band: int = 0)
     req = make_direct_job_request(name, priority_band=priority_band)
     req.name = jid.to_wire()  # make_direct_job_request roots names at test-user
     with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=jid, request=req, ts=Timestamp.now())
     return jid.task(0)
 
 
