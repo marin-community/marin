@@ -7,6 +7,7 @@ from functools import partial
 from typing import Any, Callable, Generic, List, Optional, Tuple, TypeVar, Union, cast
 
 import chex
+import haliax as hax
 import jax
 import numpy as np
 import optax
@@ -161,20 +162,6 @@ class KronConfig(OptimizerConfig, Generic[PartitionSpecTree]):
 """PSGD Kron"""
 
 
-try:
-    import flax.linen as nn
-
-    have_flax = True
-except ImportError:
-    have_flax = False
-try:
-    import haliax as hax
-
-    have_hax = True
-except ImportError:
-    have_hax = False
-
-
 def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=500) -> Callable[[int], float]:
     """Anneal preconditioner update probability during beginning of training.
 
@@ -275,6 +262,14 @@ def scale_by_kron(
     bs = lax_map_batch_size
     scanned_layers = None
 
+    def add_dims_to_spec(_, qss, sds):
+        """Prepend the stack and scan dims to a leaf's Q partition specs."""
+        if partition_grads_into_blocks:
+            qss = jax.tree.map(lambda qs: PartitionSpec(*((None,) + qs)), qss)
+        if sds is not None:
+            qss = jax.tree.map(lambda qs: PartitionSpec(*(sds + qs)), qss)
+        return qss
+
     def init_fn(params, return_partition_specs_only=False):
         # unbox if haliax style partitioned
         scanned_layers_ = scanned_layers
@@ -285,30 +280,20 @@ def scale_by_kron(
                 is_leaf=_is_scanned_stack,
             )
         params_sharding_ = params_sharding
-        if have_hax:
-            if any(
-                isinstance(x, hax.NamedArray)
-                for x in jax.tree.leaves(params, is_leaf=lambda x: isinstance(x, hax.NamedArray))
-            ):
-                # if in haliax, we can grab scanned_layers and params_sharding from params
-                # this does not support nested stacks
-                if params_sharding_ is None:
-                    params_sharding_ = hax.partitioning.infer_resource_partitions(params)
-                    params_sharding_ = jax.tree.map(lambda x: x.spec, params_sharding_)
-                params, params_struct = jax.tree.flatten(params)
-                scanned_layers_ = jax.tree.leaves(scanned_layers_)
-                params_sharding_ = jax.tree.leaves(params_sharding_)
+        if any(
+            isinstance(x, hax.NamedArray)
+            for x in jax.tree.leaves(params, is_leaf=lambda x: isinstance(x, hax.NamedArray))
+        ):
+            # if in haliax, we can grab scanned_layers and params_sharding from params
+            # this does not support nested stacks
+            if params_sharding_ is None:
+                params_sharding_ = hax.partitioning.infer_resource_partitions(params)
+                params_sharding_ = jax.tree.map(lambda x: x.spec, params_sharding_)
+            params = jax.tree.leaves(params)
+            scanned_layers_ = jax.tree.leaves(scanned_layers_)
+            params_sharding_ = jax.tree.leaves(params_sharding_)
 
         have_params_sharding = params_sharding_ is not None
-        have_qs_sharding = have_params_sharding or preconditioner_sharding is not None or have_hax
-
-        # unbox if flax style partitioned
-        if have_flax:
-            params = jax.tree.map(
-                lambda x: x.unbox() if isinstance(x, nn.Partitioned) else x,
-                params,
-                is_leaf=lambda x: isinstance(x, nn.Partitioned),
-            )
 
         # check that there is a PartitionSpec for every param
         if params_sharding_ is not None:
@@ -434,22 +419,13 @@ def scale_by_kron(
             Qs, exprs, Qs_sharding_no_leading_dims = [
                 jax.tree.map(lambda _, x: x[i], params, output) for i in range(3)
             ]
-        Qs_sharding = None
-        if have_qs_sharding:
-            # add scan and stack dims to Qs sharding
-            def add_dims_to_spec(_, qss, sds):
-                if partition_grads_into_blocks:
-                    qss = jax.tree.map(lambda qs: PartitionSpec(*((None,) + qs)), qss)
-                if sds is not None:
-                    qss = jax.tree.map(lambda qs: PartitionSpec(*(sds + qs)), qss)
-                return qss
 
-            Qs_sharding = jax.tree.map(
-                add_dims_to_spec,
-                params,
-                Qs_sharding_no_leading_dims,
-                scanned_dim_sharding if scanned_dim_sharding is not None else nones,
-            )
+        Qs_sharding = jax.tree.map(
+            add_dims_to_spec,
+            params,
+            Qs_sharding_no_leading_dims,
+            scanned_dim_sharding if scanned_dim_sharding is not None else nones,
+        )
 
         if not return_partition_specs_only:
             # broadcast Qs for stacks and scans
@@ -464,8 +440,7 @@ def scale_by_kron(
                 return q
 
             Qs = jax.tree.map(broadcast_qs, params, partitioned_shapes, Qs, scanned_sizes)
-            if have_qs_sharding:
-                Qs = _safe_sharding_constraint(Qs, Qs_sharding)
+            Qs = _safe_sharding_constraint(Qs, Qs_sharding)
 
         if return_partition_specs_only:
             return dict(
@@ -500,38 +475,23 @@ def scale_by_kron(
                 is_leaf=_is_scanned_stack,
             )
         params_sharding_ = params_sharding
-        hax_partitioned = False
-        if have_hax:
-            if any(
-                isinstance(x, hax.NamedArray)
-                for x in jax.tree.leaves(updates, is_leaf=lambda x: isinstance(x, hax.NamedArray))
-            ):
-                hax_partitioned = True
-                # if in haliax, we can grab scanned_layers and params_sharding from params
-                # this does not support nested stacks
-                if params_sharding_ is None:
-                    params_sharding_ = hax.partitioning.infer_resource_partitions(updates)
-                    params_sharding_ = jax.tree.map(lambda x: x.spec, params_sharding_)
-                updates, updates_struct = jax.tree.flatten(updates)
-                scanned_layers_ = jax.tree.leaves(scanned_layers_)
-                params_sharding_ = jax.tree.leaves(params_sharding_)
+        updates_struct = None
+        if any(
+            isinstance(x, hax.NamedArray)
+            for x in jax.tree.leaves(updates, is_leaf=lambda x: isinstance(x, hax.NamedArray))
+        ):
+            # if in haliax, we can grab scanned_layers and params_sharding from params
+            # this does not support nested stacks
+            if params_sharding_ is None:
+                params_sharding_ = hax.partitioning.infer_resource_partitions(updates)
+                params_sharding_ = jax.tree.map(lambda x: x.spec, params_sharding_)
+            updates, updates_struct = jax.tree.flatten(updates)
+            scanned_layers_ = jax.tree.leaves(scanned_layers_)
+            params_sharding_ = jax.tree.leaves(params_sharding_)
 
         have_params_sharding = params_sharding_ is not None
         if have_params_sharding:
             original_params_sharding_ = params_sharding_
-        have_qs_sharding = have_params_sharding or preconditioner_sharding is not None or have_hax
-
-        # unbox if flax style partitioned
-        flax_partitioned = False
-        if have_flax:
-            boxed_updates, grads_structure = jax.tree.flatten(
-                updates,
-                is_leaf=lambda g: isinstance(g, (chex.Array, nn.Partitioned, jax.ShapeDtypeStruct)),
-            )
-            if any(isinstance(g, nn.Partitioned) for g in boxed_updates):
-                flax_partitioned = True
-                updates = [g.unbox() for g in boxed_updates]
-                updates = grads_structure.unflatten(updates)
 
         # extend partition specs
         if have_params_sharding:
@@ -722,22 +682,13 @@ def scale_by_kron(
         exprs, Qs_sharding_no_leading_dims = [
             jax.tree.map(lambda _, x: x[i], dummy_updates_tree, exprs_and_sharding) for i in range(2)
         ]
-        Qs_sharding = None
-        if have_qs_sharding:
-            # add scan and stack dims to Qs sharding
-            def add_dims_to_spec(_, qss, sds):
-                if partition_grads_into_blocks:
-                    qss = jax.tree.map(lambda qs: PartitionSpec(*((None,) + qs)), qss)
-                if sds is not None:
-                    qss = jax.tree.map(lambda qs: PartitionSpec(*(sds + qs)), qss)
-                return qss
 
-            Qs_sharding = jax.tree.map(
-                add_dims_to_spec,
-                dummy_updates_tree,
-                Qs_sharding_no_leading_dims,
-                scanned_dim_sharding if scanned_dim_sharding is not None else nones,
-            )
+        Qs_sharding = jax.tree.map(
+            add_dims_to_spec,
+            dummy_updates_tree,
+            Qs_sharding_no_leading_dims,
+            scanned_dim_sharding if scanned_dim_sharding is not None else nones,
+        )
 
         # maybe update preconditioner
         def update_preconditioner_fn(rngkey, Qs, grads_in, bal_counter):
@@ -761,8 +712,7 @@ def scale_by_kron(
                 do_balances = balance_counter_inc >= 100
                 balance_counter_inc = jnp.where(do_balances, 0, balance_counter_inc)
                 Qs = jax.lax.cond(do_balances, balance_Qs, lambda qs: qs, Qs)
-                if have_qs_sharding:
-                    Qs = _safe_sharding_constraint(Qs, Qs_sharding)
+                Qs = _safe_sharding_constraint(Qs, Qs_sharding)
 
                 # create random vectors
                 Vs = _tree_random_like(rngkey, grads_in)
@@ -811,19 +761,16 @@ def scale_by_kron(
                     conjBs,
                     exprs,
                     n_dims_to_map,
-                    Qs_sharding_no_leading_dims if have_qs_sharding else nones,
+                    Qs_sharding_no_leading_dims,
                     sharding_without_scan if have_params_sharding else nones,
                 )
-                if have_qs_sharding:
-                    new_Qs = _safe_sharding_constraint(new_Qs, Qs_sharding)
+                new_Qs = _safe_sharding_constraint(new_Qs, Qs_sharding)
 
                 new_Qs = otu.tree_cast(new_Qs, precond_dtype)
                 return new_Qs, balance_counter_inc
 
         def pass_through_fn(rngkey, qs, grads_in, bal_counter):
-            if have_qs_sharding:
-                qs = _safe_sharding_constraint(qs, Qs_sharding)
-            return qs, bal_counter
+            return _safe_sharding_constraint(qs, Qs_sharding), bal_counter
 
         # update preconditioner deterministically
         update_counter_inc = safe_int32_increment(state["update_counter"])
@@ -838,8 +785,7 @@ def scale_by_kron(
             momentum_updates,
             state["balance_counter"],
         )
-        if have_qs_sharding:
-            Qs = _safe_sharding_constraint(Qs, Qs_sharding)
+        Qs = _safe_sharding_constraint(Qs, Qs_sharding)
 
         # precondition gradients
         with jax.default_matmul_precision(precond_grads_precision):
@@ -897,12 +843,8 @@ def scale_by_kron(
         if have_params_sharding:
             precond_gs = _safe_sharding_constraint(precond_gs, original_params_sharding_)
 
-        # box preconditioned grads
-        if flax_partitioned:
-            flat_precond_gs, _ = jax.tree.flatten(precond_gs)
-            precond_gs = [bu.replace_boxed(g) for bu, g in zip(boxed_updates, flat_precond_gs)]
-            precond_gs = grads_structure.unflatten(precond_gs)
-        if hax_partitioned:
+        # rebuild the haliax tree we flattened on the way in
+        if updates_struct is not None:
             precond_gs = updates_struct.unflatten(precond_gs)
 
         # dtypes and new state
@@ -1086,14 +1028,11 @@ def _init_Q_exprs(
         exprGs = []
         piece1P, piece2P, piece3P, piece4P = ([], [], "", "")
 
-        params_specs = param_sharding
-        if param_sharding is None:
-            params_specs = PartitionSpec(*((None,) * len(t_shape)))
         sharding_out: list[PartitionSpec | None] = [None] * len(t_shape)
         if have_qs_sharding:
             sharding_out = [PartitionSpec(None)] * len(t_shape)
 
-        for i, (size, dim_d, dim_sh) in enumerate(zip(t_shape, dim_diag, params_specs)):
+        for i, (size, dim_d) in enumerate(zip(t_shape, dim_diag)):
             if dim_d:
                 # use diagonal matrix as preconditioner for this dim
                 if existing_Q is None:
@@ -1115,28 +1054,20 @@ def _init_Q_exprs(
                 # use triangular matrix as preconditioner for this dim
                 q_sharding = None
                 if have_qs_sharding:
-                    if have_hax:
-                        # if we're in haliax we can grab fsdp axis and shard accordingly
-                        # get current mesh
-                        mesh = jax._src.mesh.get_concrete_mesh()
-                        if mesh.devices.shape == ():
-                            mesh = None
-                        # get fsdp mesh axis
-                        if mesh is not None:
-                            fsdp_axis_name = hax.partitioning.ResourceAxis.DATA
-                            fsdp_axis = mesh.axis_names.index(fsdp_axis_name)
-                            fsdp_size = mesh.devices.shape[fsdp_axis]
-                            if size % fsdp_size == 0:
-                                q_sharding = PartitionSpec(fsdp_axis_name, None)
-                            else:
-                                q_sharding = PartitionSpec(None, None)
+                    # grab the fsdp axis from the current mesh and shard Q accordingly
+                    mesh = jax._src.mesh.get_concrete_mesh()
+                    if mesh.devices.shape == ():
+                        mesh = None
+                    if mesh is not None:
+                        fsdp_axis_name = hax.partitioning.ResourceAxis.DATA
+                        fsdp_axis = mesh.axis_names.index(fsdp_axis_name)
+                        fsdp_size = mesh.devices.shape[fsdp_axis]
+                        if size % fsdp_size == 0:
+                            q_sharding = PartitionSpec(fsdp_axis_name, None)
                         else:
                             q_sharding = PartitionSpec(None, None)
                     else:
-                        # infer a so-so sharding scheme from params if nothing specified
-                        # (first dim of q will match corresponding dim in params)
-                        q_sharding = precond_sharding if precond_sharding is not None else PartitionSpec(dim_sh, None)
-                        # TODO ensure array axis is divisible by mesh axis
+                        q_sharding = PartitionSpec(None, None)
                     sharding_out[i] = q_sharding
 
                 if existing_Q is None:
