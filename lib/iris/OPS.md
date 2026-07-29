@@ -660,26 +660,39 @@ kubectl --kubeconfig <kubeconfig> --context <context> get pdb --all-namespaces
 
 Do not uncordon a node that CoreWeave cordoned. If `PendingPhaseState` names
 `production-reboot` and `CWActive` lists tenant Deployments, get operator
-approval before changing workloads. Temporarily scale each blocking Deployment
-to two replicas, wait for the replacement to become Ready on another node, then
-delete only the original pod bound to the deadlocked node. Scale back to one
-after the blockers are gone. Do not delete provider DaemonSets or use
-`kubectl drain --force`.
+approval before changing workloads. Record each owner's original replica count
+and pod template, then choose an action by workload semantics:
+
+| Blocker | Reboot-unblocking action |
+| --- | --- |
+| Stateless or leader-elected Deployment | Add one replica, wait for it to become Ready on a healthy node, then delete only the pod bound to the deadlocked node. The current cert-manager and Kueue controllers are in this class. |
+| Singleton controller with persistent state or no concurrency protection | Do not overlap replicas. Confirm that its state is durable, accept the control-plane outage, and scale it to zero. The Iris controller uses a `Recreate` strategy and a PVC, so it belongs here. |
+| Availability service with a PodDisruptionBudget or hard placement constraints | First provide compatible capacity. If that is unavailable, use an operator-approved temporary placement change and wait for a Ready replacement. Scale to zero only with explicit approval for the resulting outage and after confirming that recovery does not depend on the service. Traefik belongs here. |
+| Running Iris task pod | Preserve the Iris state transition, not the pod: obtain the canonical attempt ID from `IRIS_TASK_ID`, stop the parent job or mark the attempt preempted, then delete the exact pod normally so Iris can retry it. Node-local task images and caches are disposable. |
+| Completed or failed Iris task pod | Delete the exact pod normally. It does not need replacement capacity. |
+| StatefulSet, local-volume workload, unmanaged pod, or unknown owner | Stop and escalate. Do not infer that another replica is safe. |
+
+A PodDisruptionBudget states the desired availability but does not prove that
+replicas may run concurrently. Scaling an owner to zero also bypasses the
+eviction protection that operators often expect from a PodDisruptionBudget, so
+treat it as an explicit outage decision. Change one owner at a time and confirm
+that `CWActive` drops the blocker before continuing. Do not delete provider
+DaemonSets or use `kubectl drain --force`.
 
 If a replacement remains Pending because no healthy node satisfies its required
 node affinity or pod anti-affinity, stop before deleting the original pod.
-Provision compatible capacity when possible. A temporary placement change is a
-last resort that requires operator approval: preserve the PodDisruptionBudget,
-wait for one replacement to become Ready on a healthy node, and record the
-original pod template so it can be restored after the reboot.
+Provision compatible capacity when possible. Record and restore any temporary
+placement change after the reboot. Use
+`.agents/skills/recover-stuck-k8s-pod/SKILL.md` for the exact Iris task retry
+sequence or when a bound pod does not terminate.
 
 CoreWeave should continue the pending reboot without a separate Iris restart.
 Before restoring workloads, verify that the provider operation completed, the
 node boot ID changed, `KernelDeadlock=False`, `Ready=True`, CoreWeave returned
 the node lifecycle state to `production`, and both the cordon and any
-`node.coreweave.cloud/reserved` taint are gone. Use
-`.agents/skills/recover-stuck-k8s-pod/SKILL.md` when a bound pod does not
-terminate or a manual reboot is required.
+`node.coreweave.cloud/reserved` taint are gone. Restore singleton controllers
+and original replica counts first, wait for them to become Ready, then remove
+temporary capacity or placement changes.
 
 ## CI Workflows
 

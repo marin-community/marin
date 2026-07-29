@@ -130,11 +130,13 @@ Grafana observer identity permission to list Nodes.
 ## How OPS.md could have shortened this
 
 `lib/iris/OPS.md` now documents the provider cordon and pending-reboot signals,
-the replacement-before-deletion sequence, PodDisruptionBudget checks, and the
-boot-ID verification. It also records the placement-constraint fallback that
-was needed for Traefik, the provider reservation-taint restore gate, and the
-prohibition against uncordoning provider-cordoned nodes or force-draining
-provider DaemonSets.
+workload-specific drain decisions, PodDisruptionBudget limits, and the boot-ID
+verification. It distinguishes leader-elected controllers that can overlap,
+stateful singletons that must stop, Iris attempts that can retry, and
+availability services that require replacement capacity or an approved outage.
+It also records the placement-constraint fallback that was needed for Traefik,
+the provider reservation-taint restore gate, and the prohibition against
+uncordoning provider-cordoned nodes or force-draining provider DaemonSets.
 
 ## Artifacts
 
