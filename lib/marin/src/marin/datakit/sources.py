@@ -162,9 +162,10 @@ def all_sources() -> dict[str, DatakitSource]:
         ("eai-taxonomy-code-w-dclm", eai_taxonomy_code_normalize_steps, 591.90),
         ("finetranslations", finetranslations_normalize_steps, 3040.0),
         ("ghalogs/public", ghalogs_public_normalize_steps, GHALOGS_ROUGH_TOKENS_B),
-        # Exact count measured with marin-community/marin-tokenizer over the default
-        # final-turn truncation filter: 64,271,257 tokens / 2,835 docs.
-        ("glm-5.2-kernelgym-rollouts", glm_kernelgym_rollouts_normalize_steps, 0.064271257),
+        # Exact count from the tokenized cache .stats.json, measured with
+        # marin-community/marin-tokenizer over the normalized artifact under the
+        # final-turn truncation filter: 64,054,289 tokens / 2,835 docs.
+        ("glm-5.2-kernelgym-rollouts", glm_kernelgym_rollouts_normalize_steps, 0.064054289),
         ("gpt-oss-rollouts", gpt_oss_rollouts_normalize_steps, 3.20),
         ("hplt_v3", hplt_v3_normalize_steps, 612.7),
         ("institutional_books", institutional_books_normalize_steps, 203.63),
