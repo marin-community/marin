@@ -1,5 +1,7 @@
 n_attempts: 1
-n_concurrent_trials: 2
+n_concurrent_trials: 4
+retry:
+  exclude_exceptions: []
 environment:
   type: daytona
   force_build: false
@@ -9,4 +11,3 @@ agents:
 datasets:
   - name: aime
     version: "1.0"
-    n_tasks: 2

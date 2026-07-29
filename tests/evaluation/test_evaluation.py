@@ -3,8 +3,8 @@
 
 """Behavior of the endpoint-oriented evaluation loop and durable records."""
 
+import hashlib
 import json
-import os
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -12,8 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
-from marin.evaluation.harbor.driver_config import load_harbor_job_config
-from marin.evaluation.harbor.runner import HARBOR_RUNTIME
+from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, HarborDatasetKind, ValidatedHarborConfig
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig, ResourceHint
 from marin.evaluation.records import EvalRef, RunStatus, read_record
@@ -41,49 +40,30 @@ from experiments.evaluation.launch import (
 )
 
 
-def _install_fake_harbor_validator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    uv = bin_dir / "uv"
-    uv.write_text(
-        """#!/usr/bin/env python3
-import json
-import sys
+def _install_fake_harbor_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
+    def preflight(requests):
+        configs = []
+        for path, _model_agent_kwargs in requests:
+            policy = json.dumps({"source": path.name}, separators=(",", ":"))
+            configs.append(
+                ValidatedHarborConfig(
+                    stable_policy_json=policy,
+                    digest=f"sha256:{hashlib.sha256(policy.encode()).hexdigest()}",
+                    dataset_kind=HarborDatasetKind.HARBOR_REGISTRY,
+                    dataset_selector="aime",
+                    dataset_revision="1.0",
+                    workspace_dataset_path=None,
+                    agent="opencode",
+                    environment="daytona",
+                )
+            )
+        return tuple(configs)
 
-import yaml
-
-with open(sys.argv[-1]) as config_file:
-    print(json.dumps(yaml.safe_load(config_file)))
-"""
-    )
-    uv.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setattr("experiments.evaluation.launch.preflight_harbor_configs", preflight)
 
 
-def _write_harbor_config(path: Path, *, agents: str | None = None) -> Path:
-    path.write_text(
-        f"""
-job_name: external-aime
-jobs_dir: ignored-by-marin
-n_attempts: 2
-n_concurrent_trials: 3
-environment:
-  type: daytona
-  force_build: true
-agents:
-{agents or '''  - name: opencode
-    model_name: ignored-by-marin
-    kwargs:
-      trajectory_config:
-        raw_content: false
-      opencode_config:
-        compaction:
-          auto: false'''}
-datasets:
-  - name: aime
-    version: "1.0"
-"""
-    )
+def _write_harbor_config(path: Path) -> Path:
+    path.write_text("{}")
     return path
 
 
@@ -220,6 +200,7 @@ def test_submit_evaluation_batch_resolves_declared_secrets_outside_the_pickled_b
 
 
 def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
+    _install_fake_harbor_preflight(monkeypatch)
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     spec = LaunchSpec(
         model="qwen3-8b",
@@ -246,6 +227,7 @@ def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
     }
     assert {evaluation.identity.eval_runtime for evaluation in batch.evaluations} == {HARBOR_RUNTIME}
     assert all(evaluation.identity.eval_ref.harbor.config_digest for evaluation in batch.evaluations)
+    assert all(evaluation.identity.eval_ref.harbor.task_limit == 1 for evaluation in batch.evaluations)
 
 
 def test_build_evaluation_batch_records_evalchemy_benchmark_extras(monkeypatch):
@@ -272,15 +254,19 @@ def test_build_evaluation_batch_records_evalchemy_benchmark_extras(monkeypatch):
 
 def test_build_evaluation_batch_rejects_conflicting_secret_specs(monkeypatch):
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
-    conflicting = replace(
-        EVALS["aime-harbor"],
-        name="conflicting-daytona",
-        secret_env={"DAYTONA_API_KEY": ("env:OTHER_DAYTONA_API_KEY",)},
+    first = replace(
+        EVALS["math500"],
+        secret_env={"EVAL_TOKEN": ("env:FIRST_EVAL_TOKEN",)},
     )
-    monkeypatch.setitem(EVALS, "conflicting-daytona", conflicting)
+    second = replace(
+        EVALS["math500"],
+        secret_env={"EVAL_TOKEN": ("env:SECOND_EVAL_TOKEN",)},
+    )
+    monkeypatch.setitem(EVALS, "secret-first", first)
+    monkeypatch.setitem(EVALS, "secret-second", second)
     spec = LaunchSpec(
         model="qwen3-8b",
-        evals=("aime-harbor", "conflicting-daytona"),
+        evals=("secret-first", "secret-second"),
         harbor_configs=(),
         platform=Platform.TPU,
         accelerator=None,
@@ -289,7 +275,7 @@ def test_build_evaluation_batch_rejects_conflicting_secret_specs(monkeypatch):
         cluster="marin",
     )
 
-    with pytest.raises(ValueError, match="conflicting secret specifications for DAYTONA_API_KEY"):
+    with pytest.raises(ValueError, match="conflicting secret specifications for EVAL_TOKEN"):
         build_evaluation_batch(
             spec,
             LaunchProvenance(git_sha="abc", launch_host="host"),
@@ -298,13 +284,13 @@ def test_build_evaluation_batch_rejects_conflicting_secret_specs(monkeypatch):
 
 
 def test_build_evaluation_batch_combines_registry_and_file_harbor_configs(tmp_path, monkeypatch):
-    _install_fake_harbor_validator(tmp_path, monkeypatch)
-    config = load_harbor_job_config(_write_harbor_config(tmp_path / "aime-policy.yaml"))
+    _install_fake_harbor_preflight(monkeypatch)
+    config_path = _write_harbor_config(tmp_path / "aime-policy.yaml")
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     spec = LaunchSpec(
         model="qwen3-8b",
         evals=("mmlu-smoke",),
-        harbor_configs=(HarborConfigSelection(name="aime-policy", config=config),),
+        harbor_configs=(HarborConfigSelection(name="aime-policy", path=config_path),),
         platform=Platform.TPU,
         accelerator=None,
         limit=2,
@@ -332,7 +318,8 @@ def test_build_evaluation_batch_combines_registry_and_file_harbor_configs(tmp_pa
             "version": "1.0",
             "agent": "opencode",
             "env": "daytona",
-            "config_digest": config.digest,
+            "task_limit": 2,
+            "config_digest": evaluation.identity.eval_ref.harbor.config_digest,
         },
     }
     assert batch.secret_env == {
@@ -344,15 +331,15 @@ def test_build_evaluation_batch_combines_registry_and_file_harbor_configs(tmp_pa
 
     captured: dict = {}
 
-    def run_driver(command, **options) -> None:
-        assert options["env"]["DAYTONA_API_KEY"] == "daytona-key"
-        job_config = json.loads(Path(command[-1]).read_text())
-        captured.update(job_config)
-        trial_dir = Path(job_config["jobs_dir"]) / job_config["job_name"] / "trial-one"
+    def run_driver(config, overlay, driver_env) -> None:
+        assert driver_env["DAYTONA_API_KEY"] == "daytona-key"
+        captured["config"] = config
+        captured["overlay"] = overlay
+        trial_dir = Path(overlay.jobs_dir) / overlay.job_name / "trial-one"
         trial_dir.mkdir(parents=True, exist_ok=True)
         (trial_dir / "result.json").write_text('{"task_name":"trial-one","verifier_result":{"rewards":{"reward":1}}}')
 
-    monkeypatch.setattr("marin.evaluation.harbor.runner.subprocess.run", run_driver)
+    monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
     output_dir = tmp_path / "results"
     output_dir.mkdir()
     outcome = evaluation.executor(
@@ -367,42 +354,25 @@ def test_build_evaluation_batch_combines_registry_and_file_harbor_configs(tmp_pa
     )
 
     assert outcome.metrics["aime"]["accuracy"] == 1.0
-    assert captured["datasets"][0]["n_tasks"] == 2
-    assert captured["agents"][0]["model_name"] == "hosted_vllm/served-qwen3-8b"
-    assert captured["agents"][0]["kwargs"]["api_base"] == "https://iris.example/capability/v1"
-    assert captured["agents"][0]["kwargs"]["extra_body"] == '{"chat_template_kwargs":{"enable_thinking":true}}'
-    assert captured["agents"][0]["kwargs"]["model_info"] == {
-        "max_input_tokens": 32768,
-        "max_output_tokens": 8192,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-    }
-    assert captured["agents"][0]["kwargs"]["trajectory_config"] == {"raw_content": False}
+    assert captured["overlay"].task_limit == 2
+    assert captured["overlay"].served_model == "served-qwen3-8b"
+    assert captured["overlay"].endpoint_url == "https://iris.example/capability/v1"
+    assert captured["overlay"].model_agent_kwargs["extra_body"] == ('{"chat_template_kwargs":{"enable_thinking":true}}')
 
 
-@pytest.mark.parametrize(
-    "agents",
-    [
-        """  - name: terminus-2
-  - name: opencode""",
-        """  - name: opencode
-    kwargs:
-      model_info: []""",
-    ],
-)
-def test_launch_rejects_incompatible_harbor_config_before_iris_submission(tmp_path, monkeypatch, agents):
-    _install_fake_harbor_validator(tmp_path, monkeypatch)
-    config_path = _write_harbor_config(
-        tmp_path / "incompatible.yaml",
-        agents=agents,
-    )
+def test_launch_rejects_incompatible_harbor_config_before_iris_submission(tmp_path, monkeypatch):
+    config_path = _write_harbor_config(tmp_path / "incompatible.yaml")
     iris_opened = False
+
+    def reject_preflight(_requests):
+        raise ValueError("Harbor config must declare exactly one agent")
 
     def open_iris_client(**_kwargs):
         nonlocal iris_opened
         iris_opened = True
         raise AssertionError("Iris must not be opened for an incompatible Harbor config")
 
+    monkeypatch.setattr("experiments.evaluation.launch.preflight_harbor_configs", reject_preflight)
     monkeypatch.setattr("experiments.evaluation.cli.open_iris_client", open_iris_client)
 
     result = CliRunner().invoke(
@@ -422,7 +392,7 @@ def test_launch_rejects_incompatible_harbor_config_before_iris_submission(tmp_pa
 
 
 def test_launch_accepts_registry_evals_and_repeated_harbor_configs(tmp_path, monkeypatch):
-    _install_fake_harbor_validator(tmp_path, monkeypatch)
+    _install_fake_harbor_preflight(monkeypatch)
     first = _write_harbor_config(tmp_path / "first-policy.yaml")
     second = _write_harbor_config(tmp_path / "second-policy.yaml")
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
