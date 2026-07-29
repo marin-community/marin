@@ -46,8 +46,11 @@ def get_git_sha() -> str:
         raise click.ClickException(f"Failed to get git SHA. Are you in a git repository? ({e})") from e
 
 
-def _versioned_tag(image_base: str, git_sha: str) -> str:
-    return f"{image_base}:latest-{git_sha}"
+def _versioned_tag(image_base: str, git_sha: str, platform: str) -> str:
+    if "," in platform:
+        return f"{image_base}:{git_sha}"
+    architecture = platform.rsplit("/", 1)[-1]
+    return f"{image_base}:{git_sha}-{architecture}"
 
 
 def find_marin_root() -> Path:
@@ -108,6 +111,8 @@ def push_to_ghcr(
 ) -> None:
     """Push a local Docker image to GitHub Container Registry (ghcr.io)."""
     image_name, version = _resolve_image_name_and_version(source_tag, image_name, version)
+    if version == "latest":
+        raise click.ClickException("Refusing to publish a mutable :latest image; set --version to a SHA")
     dest_tag = f"ghcr.io/{ghcr_org}/{image_name}:{version}"
 
     click.echo(f"Pushing {source_tag} to ghcr.io/{ghcr_org}...")
@@ -175,9 +180,8 @@ def build_image(
 ) -> None:
     """Build a Docker image for Iris using the unified multi-stage Dockerfile.
 
-    Always tags the image with both the git SHA and "latest" so that
-    deployments can pin to a specific version while local workflows
-    continue to use "latest".
+    Registry pushes use the requested tag and reject ``latest``. Local builds
+    also receive a ``latest`` convenience tag.
 
     When ``push=True``, images are pushed directly via ``docker buildx build --push``
     and the registry cache is updated in the same operation. The images are NOT
@@ -199,20 +203,15 @@ def build_image(
 
     # Derive image base name from tag (e.g. "iris-worker:latest" -> "iris-worker")
     image_base = tag.split(":")[0]
-    sha_tag = f"{image_base}:{git_sha}"
+    sha_tag = _versioned_tag(image_base, git_sha, platform)
     latest_tag = f"{image_base}:latest"
 
     click.echo(f"Using Dockerfile: {dockerfile_path}")
 
     if push:
-        # Fully-qualified GHCR tags for the registry push
-        all_tags = dict.fromkeys(
-            [
-                f"ghcr.io/{ghcr_org}/{tag}",
-                f"ghcr.io/{ghcr_org}/{sha_tag}",
-                f"ghcr.io/{ghcr_org}/{latest_tag}",
-            ]
-        )
+        if tag == latest_tag:
+            raise click.ClickException("Refusing to publish a mutable :latest image; use a SHA-pinned tag")
+        all_tags = {f"ghcr.io/{ghcr_org}/{tag}": None}
     else:
         all_tags = dict.fromkeys([tag, sha_tag, latest_tag])
 
@@ -304,7 +303,7 @@ def _build_all(
 ) -> None:
     """Build all Iris images (worker, controller, task).
 
-    Tags are derived automatically: git SHA + latest.
+    Registry tags are derived from the git SHA.
     """
     git_sha = get_git_sha()
     marin_root = find_marin_root()
@@ -312,14 +311,14 @@ def _build_all(
     _ensure_protos()
 
     for image_type in ("worker", "controller"):
-        tag = _versioned_tag(f"iris-{image_type}", git_sha)
+        tag = _versioned_tag(f"iris-{image_type}", git_sha, platform)
         build_image(image_type, tag, push, None, platform, git_sha, ghcr_org, verbose)
         click.echo()
 
     # Task target uses the same Dockerfile but needs marin root as context
     build_image(
         "task",
-        _versioned_tag("iris-task", git_sha),
+        _versioned_tag("iris-task", git_sha, platform),
         push,
         str(marin_root),
         platform,
@@ -359,7 +358,7 @@ def build_all(
 
 
 @build.command("worker-image")
-@click.option("--tag", "-t", default=None, help="Image tag (default: latest-<git-short-sha>)")
+@click.option("--tag", "-t", default=None, help="Image tag (default: <git-short-sha>)")
 @click.option("--push", is_flag=True, help="Push image to registry after building")
 @click.option("--context", type=click.Path(exists=True), help="Build context directory")
 @click.option("--platform", default="linux/amd64", help="Target platform")
@@ -377,12 +376,12 @@ def build_worker_image(
     verbose = _is_verbose(ctx)
     git_sha = get_git_sha()
     _ensure_protos()
-    tag = tag or _versioned_tag("iris-worker", git_sha)
+    tag = tag or _versioned_tag("iris-worker", git_sha, platform)
     build_image("worker", tag, push, context, platform, git_sha, ghcr_org, verbose=verbose)
 
 
 @build.command("controller-image")
-@click.option("--tag", "-t", default=None, help="Image tag (default: latest-<git-short-sha>)")
+@click.option("--tag", "-t", default=None, help="Image tag (default: <git-short-sha>)")
 @click.option("--push", is_flag=True, help="Push image to registry after building")
 @click.option("--context", type=click.Path(exists=True), help="Build context directory")
 @click.option("--platform", default="linux/amd64", help="Target platform")
@@ -400,12 +399,12 @@ def build_controller_image(
     verbose = _is_verbose(ctx)
     git_sha = get_git_sha()
     _ensure_protos()
-    tag = tag or _versioned_tag("iris-controller", git_sha)
+    tag = tag or _versioned_tag("iris-controller", git_sha, platform)
     build_image("controller", tag, push, context, platform, git_sha, ghcr_org, verbose=verbose)
 
 
 @build.command("task-image")
-@click.option("--tag", "-t", default=None, help="Image tag (default: latest-<git-short-sha>)")
+@click.option("--tag", "-t", default=None, help="Image tag (default: <git-short-sha>)")
 @click.option("--push", is_flag=True, help="Push image to registry after building")
 @click.option("--platform", default="linux/amd64", help="Target platform")
 @click.option("--ghcr-org", default=GHCR_DEFAULT_ORG, help="GHCR organization")
@@ -427,7 +426,7 @@ def build_task_image(
     verbose = _is_verbose(ctx)
     git_sha = get_git_sha()
     _ensure_protos()
-    resolved_tag = tag or _versioned_tag("iris-task", git_sha)
+    resolved_tag = tag or _versioned_tag("iris-task", git_sha, platform)
 
     build_image(
         "task",
@@ -475,7 +474,7 @@ def build_push(
 
     Examples:
 
-        iris build push iris-worker:latest --image-name iris-worker
+        iris build push iris-worker:local --image-name iris-worker --version <git-sha>-amd64
 
         iris build push iris-task:v1.0 --ghcr-org my-org
     """
