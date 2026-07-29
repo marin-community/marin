@@ -32,13 +32,14 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /k8s/events                              recent Warning events
     GET /k8s/finelog                             finelog pod, probe, resource, and PVC details
     GET /k8s/finelog_events                      recent Warning events involving finelog
-    GET /k8s/health                              per-cluster API server reachability + latency
+    GET /k8s/health | nodes                      API reachability and CoreWeave node health
     GET /k8s/overview                            explicit workload issue counts (zeros included)
     GET /k8s/gpu_racks                           GPU nodes grouped by physical rack: trays total/ready
     GET /k8s/alerts/unreachable                  alert rows: cluster, error_class, value(0|1)
     GET /k8s/alerts/crashloops?scope=            alert rows: cluster, scope, value(count)
     GET /k8s/alerts/webhook_ready                alert rows: cluster, webhook, value(ready count)
     GET /k8s/alerts/degraded                     alert rows: cluster, component, value(desired-ready)
+    GET /k8s/alerts/node_deadlocks                alert rows: cluster, node, reason, value(0|1)
     GET /k8s/alerts/stuck_gpu_pods                alert rows: cluster, node, value(count)
     GET /k8s/alerts/gpu_rack_trays                alert rows: cluster, rack_name, value(trays_ready)
     POST /alerts/loom                             firing Grafana groups become Loom automation runs
@@ -460,6 +461,9 @@ def create_app(
     def k8s_health(_: Request) -> JSONResponse:
         return k8s_endpoint("health", k8s_fleet.health)
 
+    def k8s_nodes(_: Request) -> JSONResponse:
+        return k8s_endpoint("nodes", k8s_fleet.nodes)
+
     def k8s_overview(_: Request) -> JSONResponse:
         def compute() -> list[dict]:
             pending = k8s_cache.get_or_compute("pending", k8s_fleet.pending)
@@ -488,6 +492,9 @@ def create_app(
 
     def k8s_alerts_degraded(_: Request) -> JSONResponse:
         return k8s_endpoint("alerts_degraded", k8s_fleet.alert_degraded)
+
+    def k8s_alerts_node_deadlocks(_: Request) -> JSONResponse:
+        return k8s_endpoint("alerts_node_deadlocks", k8s_fleet.alert_node_deadlocks)
 
     def k8s_alerts_gpu_rack_trays(_: Request) -> JSONResponse:
         return k8s_endpoint("alerts_gpu_rack_trays", k8s_fleet.alert_gpu_rack_trays)
@@ -542,12 +549,14 @@ def create_app(
             Route("/k8s/finelog", k8s_finelog),
             Route("/k8s/finelog_events", k8s_finelog_events),
             Route("/k8s/health", k8s_health),
+            Route("/k8s/nodes", k8s_nodes),
             Route("/k8s/overview", k8s_overview),
             Route("/k8s/gpu_racks", k8s_gpu_racks),
             Route("/k8s/alerts/unreachable", k8s_alerts_unreachable),
             Route("/k8s/alerts/crashloops", k8s_alerts_crashloops),
             Route("/k8s/alerts/webhook_ready", k8s_alerts_webhook_ready),
             Route("/k8s/alerts/degraded", k8s_alerts_degraded),
+            Route("/k8s/alerts/node_deadlocks", k8s_alerts_node_deadlocks),
             Route("/k8s/alerts/gpu_rack_trays", k8s_alerts_gpu_rack_trays),
             Route("/k8s/alerts/stuck_gpu_pods", k8s_alerts_stuck_gpu_pods),
         ]

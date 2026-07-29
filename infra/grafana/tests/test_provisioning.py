@@ -205,6 +205,13 @@ def test_finelog_health_alert_pages_critical_after_five_minutes():
     assert rule["data"][0]["model"]["url"] == "/alerts/fleet_health"
 
 
+def test_node_deadlock_alert_pages_critical_after_five_minutes():
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "k8s-node-kernel-deadlock"]
+    assert rule["for"] == "5m"
+    assert rule["labels"]["severity"] == "critical"
+    assert rule["data"][0]["model"]["url"] == "/alerts/node_deadlocks"
+
+
 def test_k8s_dashboard_shows_finelog_fleet_health():
     dashboard = _stitched_dashboards()["k8s.json"]
     (panel,) = [
@@ -215,6 +222,24 @@ def test_k8s_dashboard_shows_finelog_fleet_health():
     assert panel["datasource"]["uid"] == "finelog-marin"
     selectors = {column["selector"] for column in panel["targets"][0]["columns"]}
     assert {"cluster", "server", "responsive", "ready", "desired", "latency_ms"} <= selectors
+
+
+def test_k8s_dashboard_shows_node_deadlock_and_reboot_state():
+    dashboard = _stitched_dashboards()["k8s.json"]
+    (target,) = [
+        target for panel in dashboard["panels"] for target in panel.get("targets", []) if target.get("url") == "/nodes"
+    ]
+    selectors = {column["selector"] for column in target["columns"]}
+    assert {
+        "cluster",
+        "node",
+        "ready",
+        "unschedulable",
+        "kernel_deadlock",
+        "deadlock_reason",
+        "cordon_reason",
+        "pending_phase",
+    } <= selectors
 
 
 def test_finelog_dashboard_shows_health_pods_storage_and_events():

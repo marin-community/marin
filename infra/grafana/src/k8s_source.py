@@ -69,6 +69,9 @@ _FINELOG_FALLBACK_SERVER = "finelog-mirror"
 _RACK_LABEL = "node.coreweave.cloud/rack"
 _RACK_NAME_LABEL = "ds.coreweave.com/physical-topology.rack-name"
 _INSTANCE_TYPE_LABEL = "node.kubernetes.io/instance-type"
+_CORDON_REASON_ANNOTATION = "node.coreweave.cloud/cordonReason"
+_KERNEL_DEADLOCK_CONDITION = "KernelDeadlock"
+_PENDING_PHASE_CONDITION = "PendingPhaseState"
 
 # gpu_racks' tray/rack concept — many nodes sharing one liquid-cooled rack, with a
 # fleet-wide expected tray count — is specific to GB200 NVL72. Other instance types
@@ -346,7 +349,7 @@ class K8sSource:
 
     def control_plane(self) -> list[dict]:
         """One row per watched component, then one per watched webhook service."""
-        rows = [self.component_status(component) for component in WATCHED_COMPONENTS]
+        rows = [self.component_status(component) for component in self.watched_components]
         for webhook in WATCHED_WEBHOOKS:
             rows.append(
                 {
@@ -356,6 +359,18 @@ class K8sSource:
                 }
             )
         return rows
+
+    @property
+    def watched_components(self) -> tuple[WatchedComponent, ...]:
+        """Resolve the Iris controller namespace for this cluster."""
+        return tuple(
+            (
+                WatchedComponent(self._target.iris_namespace, component.deployment)
+                if component.namespace == "iris" and component.deployment == "iris-controller"
+                else component
+            )
+            for component in WATCHED_COMPONENTS
+        )
 
     def finelog_health(self) -> FinelogHealth:
         """Report the mirror's HTTP-probe readiness from its Deployment status."""
@@ -607,6 +622,36 @@ class K8sSource:
         rows.sort(key=lambda row: row["last_seen"] or 0, reverse=True)
         return rows[:_EVENT_LIMIT]
 
+    def nodes(self) -> list[dict]:
+        """Node readiness, schedulability, and CoreWeave reboot/deadlock state."""
+        rows = []
+        for node in self._list("/api/v1/nodes"):
+            metadata = node.get("metadata") or {}
+            annotations = metadata.get("annotations") or {}
+            labels = metadata.get("labels") or {}
+            conditions = {
+                condition.get("type"): condition
+                for condition in (node.get("status") or {}).get("conditions") or []
+                if condition.get("type")
+            }
+            ready = conditions.get("Ready") or {}
+            deadlock = conditions.get(_KERNEL_DEADLOCK_CONDITION) or {}
+            pending_phase = conditions.get(_PENDING_PHASE_CONDITION) or {}
+            rows.append(
+                {
+                    "node": metadata.get("name", ""),
+                    "instance_type": labels.get(_INSTANCE_TYPE_LABEL, ""),
+                    "ready": ready.get("status") == "True",
+                    "unschedulable": bool((node.get("spec") or {}).get("unschedulable")),
+                    "cordon_reason": annotations.get(_CORDON_REASON_ANNOTATION, ""),
+                    "kernel_deadlock": deadlock.get("status") == "True",
+                    "deadlock_reason": deadlock.get("reason", ""),
+                    "deadlock_message": deadlock.get("message", ""),
+                    "pending_phase": pending_phase.get("reason", "") if pending_phase.get("status") == "True" else "",
+                }
+            )
+        return sorted(rows, key=lambda row: row["node"])
+
     def gpu_racks(self) -> list[dict]:
         """One row per physical rack of GB200 nodes: trays registered vs. Ready.
 
@@ -740,8 +785,11 @@ class K8sFleet:
         self,
         fn: Callable[[K8sSource], list[_Row]],
         on_error: Callable[[K8sSource, K8sError], list[_Row]],
+        *,
+        sources: Sequence[K8sSource] | None = None,
     ) -> list[_Row]:
-        futures = [(source, self._executor.submit(fn, source)) for source in self._sources]
+        selected_sources = self._sources if sources is None else sources
+        futures = [(source, self._executor.submit(fn, source)) for source in selected_sources]
         rows: list[_Row] = []
         for source, future in futures:
             try:
@@ -789,6 +837,9 @@ class K8sFleet:
     def warning_events(self) -> list[dict]:
         return self._fan_out(lambda s: s.warning_events(), self._error_row)
 
+    def nodes(self) -> list[dict]:
+        return self._fan_out(lambda s: s.nodes(), self._error_row)
+
     def gpu_racks(self) -> list[dict]:
         return self._fan_out(lambda s: s.gpu_racks(), self._error_row)
 
@@ -810,12 +861,17 @@ class K8sFleet:
                 )
             ]
 
-        return self._collect(lambda source: [source.finelog_health()], on_error)
+        return self._collect(
+            lambda source: [source.finelog_health()],
+            on_error,
+            sources=tuple(source for source in self._sources if source.target.finelog_expected),
+        )
 
     def finelog_pods(self) -> list[FinelogPodResult]:
         return self._collect(
             lambda source: source.finelog_pods(),
             lambda source, err: [FinelogPodError(source.target.name, str(err.error_class), str(err))],
+            sources=tuple(source for source in self._sources if source.target.finelog_expected),
         )
 
     def alert_gpu_rack_trays(self) -> list[dict]:
@@ -882,12 +938,38 @@ class K8sFleet:
 
         def gaps(source: K8sSource) -> list[dict]:
             rows = []
-            for component in WATCHED_COMPONENTS:
+            for component in source.watched_components:
                 status = source.component_status(component)
                 rows.append({"component": component.key, "value": max(status["desired"] - status["ready"], 0)})
             return rows
 
-        return self._fan_out(gaps, lambda err: [{"component": c.key, "value": 0} for c in WATCHED_COMPONENTS])
+        def on_error(source: K8sSource, _err: K8sError) -> list[dict]:
+            return [
+                {"cluster": source.target.name, "component": component.key, "value": 0}
+                for component in source.watched_components
+            ]
+
+        return self._collect(
+            lambda source: [{"cluster": source.target.name, **row} for row in gaps(source)],
+            on_error,
+        )
+
+    def alert_node_deadlocks(self) -> list[dict]:
+        """Per deadlocked node, with an explicit healthy row for every other cluster."""
+
+        def deadlocks(source: K8sSource) -> list[dict]:
+            rows = [
+                {
+                    "node": row["node"],
+                    "reason": row["deadlock_reason"],
+                    "value": 1,
+                }
+                for row in source.nodes()
+                if row["kernel_deadlock"]
+            ]
+            return rows or [{"node": "", "reason": "", "value": 0}]
+
+        return self._fan_out(deadlocks, lambda _err: [{"node": "", "reason": "", "value": 0}])
 
     def alert_stuck_gpu_pods(self, candidates: Sequence[TerminatingPodResult] | None = None) -> list[dict]:
         """Return node-grouped counts plus zero rows where no qualifying evidence exists."""

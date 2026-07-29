@@ -175,6 +175,45 @@ groups:
               conditions:
                 - evaluator: { type: gt, params: [0] }
 
+      - uid: k8s-node-kernel-deadlock
+        title: CoreWeaveNodeKernelDeadlock
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.cluster }}: node {{ $labels.node }} reports KernelDeadlock ({{ $labels.reason }})"
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: k8s
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: k8s }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/node_deadlocks
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: node, text: node, type: string }
+                - { selector: reason, text: reason, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
       - uid: k8s-gpu-pod-termination-stuck
         title: GpuPodTerminationStuck
         condition: C
