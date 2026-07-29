@@ -87,15 +87,21 @@ def render_message(message: dict) -> str:
 def render_conversation(messages: list[dict], turns: list[dict]) -> str:
     """Render a trajectory as a tagged transcript of its recorded generation turns.
 
-    Assistant messages absent from ``turns`` are sampler bookkeeping — the
-    ``KERNELGYM_FINAL`` stop sentinel and rejected replies to the "keep optimizing?"
-    prompt — and are dropped along with the trailing prompts they leave unanswered, so the
-    transcript ends on the kernel that passed.
+    An assistant message absent from ``turns`` is sampler bookkeeping rather than a recorded
+    generation: either the ``KERNELGYM_FINAL`` stop sentinel or a rejected answer to the
+    interleaved "keep optimizing?" prompt. Dropping such a reply together with the prompt
+    that drew it leaves no unanswered sampler-control prompt mid-transcript (122 of them
+    across 85 rows, averaging 6.3 KB) and ends every transcript on the kernel that passed,
+    since the sentinel and its prompt are the last such pair.
     """
     generations = {turn["response"] for turn in turns}
-    kept = [m for m in messages if m["role"] != "assistant" or m["content"] in generations]
-    while kept and kept[-1]["role"] != "assistant":
-        kept.pop()
+    kept: list[dict] = []
+    for message in messages:
+        if message["role"] == "assistant" and message["content"] not in generations:
+            if kept and kept[-1]["role"] == "user":
+                kept.pop()
+            continue
+        kept.append(message)
 
     return "\n\n".join(render_message(m) for m in kept)
 
@@ -132,15 +138,12 @@ def transform(input_path: str, output_path: str, truncation_filter: TruncationFi
     ctx.execute(pipeline)
 
 
-def download_glm_kernelgym_rollouts_step(
-    truncation_filter: TruncationFilter = TruncationFilter.FINAL_TURN,
-) -> StepSpec:
+def download_glm_kernelgym_rollouts_step(truncation_filter: TruncationFilter) -> StepSpec:
     """Download and transform GLM-5.2 KernelGym rollouts into tagged transcripts.
 
-    ``truncation_filter`` is a parameter rather than a hardcoded choice because it enters
-    the step hash: each setting lands at its own output path, so producing the strict
-    variant is a rerun rather than an edit, and it cannot silently serve the lenient
-    variant's cache.
+    ``truncation_filter`` is required rather than defaulted because it decides which rows
+    reach the artifact. It enters the step hash, so each setting lands at its own output
+    path and cannot serve another setting's cache.
     """
     dl = download_hf_step(
         "raw/glm-5.2-kernelgym-rollouts",
@@ -157,13 +160,13 @@ def download_glm_kernelgym_rollouts_step(
             output_path=output_path,
             truncation_filter=truncation_filter,
         ),
-        hash_attrs={"version": "v1", "truncation_filter": truncation_filter.value},
+        hash_attrs={"version": "v2", "truncation_filter": truncation_filter.value},
     )
 
 
 def glm_kernelgym_rollouts_normalize_steps() -> tuple[StepSpec, ...]:
     """Return the full ``(download+transform, normalize)`` chain for glm-5.2-kernelgym-rollouts."""
-    processed = download_glm_kernelgym_rollouts_step()
+    processed = download_glm_kernelgym_rollouts_step(TruncationFilter.FINAL_TURN)
     return (
         processed,
         normalize_step(name="normalized/glm-5.2-kernelgym-rollouts", download=processed),
