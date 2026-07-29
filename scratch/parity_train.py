@@ -62,12 +62,18 @@ TEXT_KEY = "document"
 
 # Caches verified byte-identical on 2026-07-29 (scratch/compare_caches.py). Pinned rather
 # than resolved through marin_prefix(), so neither platform can silently tokenize its own.
+# The TPU region is pinned because marin refuses a cross-region GCS read (correctly --
+# that is the expensive direction). marin-dev's v6e lives in europe-west4-a, us-east1-d and
+# us-east5-b, but europe-west4 has no contacts-v1 cache, so the region must be one that has
+# both. Derive the cache path from the region so the two can never disagree again.
+TPU_REGION = os.environ.get("TPU_REGION", "us-east5")
+
 TRAIN_CACHE = {
-    "gcs": "gs://marin-us-east5/tokenized/contacts-v1/2026.07.13.1",
+    "gcs": f"gs://marin-{TPU_REGION}/tokenized/contacts-v1/2026.07.13.1",
     "s3": "s3://marin-us-east-02a/MarinFold/exp154_qwen_contacts_v1/tokenized/contacts-v1/2026.07.25",
 }
 VAL_CACHE = {
-    "gcs": "gs://marin-us-east5/tokenized/contacts-v1-val/2026.07.13.1",
+    "gcs": f"gs://marin-{TPU_REGION}/tokenized/contacts-v1-val/2026.07.13.1",
     "s3": "s3://marin-us-east-02a/MarinFold/exp154_qwen_contacts_v1/tokenized/contacts-v1-val/2026.07.25",
 }
 
@@ -94,7 +100,7 @@ PLATFORMS: dict[str, Platform] = {
         cloud="gcs",
         devices=4,
         cluster="marin-dev",
-        resources=ResourceConfig.with_tpu("v6e-4", cpu=32, ram="128g", disk="50g"),
+        resources=ResourceConfig.with_tpu("v6e-4", cpu=32, ram="128g", disk="50g", regions=[TPU_REGION]),
         attn=None,  # TPU default (splash); the known-good path
     ),
     # 8 GPUs -- different mesh from the TPU on purpose.
@@ -148,7 +154,7 @@ def run_id(plat: Platform, steps: int, attn: AttentionBackend | None) -> str:
 # carry a real 1-day delete rule: S3 reports an x-amz-expiration date naming marin-ttl-1d,
 # and gs://marin-us-east5 has "Delete age=1 matchesPrefix=[tmp/ttl=1d/]".
 TEMP_ROOT = {
-    "gcs": f"gs://marin-us-east5/tmp/ttl={CHECKPOINT_TTL_DAYS}d/parity",
+    "gcs": f"gs://marin-{TPU_REGION}/tmp/ttl={CHECKPOINT_TTL_DAYS}d/parity",
     "s3": f"s3://marin-us-east-02a/tmp/ttl={CHECKPOINT_TTL_DAYS}d/parity",
 }
 
