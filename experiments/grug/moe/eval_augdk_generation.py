@@ -12,6 +12,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import draccus
 import jax
 import jax.numpy as jnp
 import jmp
@@ -21,12 +22,13 @@ from haliax.partitioning import set_mesh
 from jax.sharding import Mesh, reshard
 from jax.sharding import PartitionSpec as P
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
+from levanter.data.text.datasets import DatasetComponent, LmDataConfig
 from levanter.grug.sharding import compact_grug_mesh
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from experiments.grug.moe.launch_cw_scale import build_scale_model
 from experiments.grug.moe.model import Transformer
-from experiments.grug.moe.train import _apply_qb_betas
+from experiments.grug.moe.train import GrugEvalConfig, _apply_qb_betas, build_tagged_evaluator
 from experiments.marin_tokenizer import marin_tokenizer
 
 _GSM8K_REVISION = "e53f048"
@@ -34,6 +36,7 @@ _DEFAULT_LIMIT = 64
 _DEFAULT_BATCH_SIZE = 8
 _DEFAULT_MAX_NEW_TOKENS = 192
 _DEFAULT_MAX_LENGTH = 512
+_DEFAULT_EVAL_CONFIG_RUN = "nest-augdk-e256-4b-r2"
 _ANSWER_NUMBER = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
 
 
@@ -339,6 +342,58 @@ def _load_model(checkpoint_root: str, mesh: Mesh) -> Transformer:
     return jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16").cast_to_compute(params)
 
 
+def _evaluation_data_config(source_run_id: str) -> LmDataConfig:
+    source_run = wandb.Api(timeout=60).run(f"marin-community/marin_moe/{source_run_id}")
+    raw_data = source_run.config["data"]
+    components = {
+        name: draccus.decode(DatasetComponent, raw_component)
+        for name, raw_component in raw_data["components"].items()
+        if name.startswith(("paloma/", "uncheatable_eval/"))
+    }
+    if len(components) != 23:
+        raise ValueError(f"Expected 23 evaluation components from {source_run_id}, found {len(components)}")
+    return LmDataConfig(
+        components=components,
+        train_weights={name: 0.0 for name in components},
+        tokenizer=raw_data["tokenizer"],
+        cache_dir=None,
+    )
+
+
+def _evaluate_perplexity(
+    model: Transformer,
+    data_config: LmDataConfig,
+    mesh: Mesh,
+    *,
+    expert_count: int,
+) -> dict[str, object]:
+    model_config = model.config
+    evaluator = build_tagged_evaluator(
+        data_config=data_config,
+        max_seq_len=model_config.max_seq_len,
+        mesh=mesh,
+        eval_cfg=GrugEvalConfig(
+            eval_batch_size=128,
+            max_eval_batches=8,
+            eval_current=True,
+            eval_ema=False,
+            compute_bpb=True,
+        ),
+        mp=jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16"),
+        nested_expert_count=expert_count if expert_count != model_config.num_experts else None,
+    )
+    if evaluator is None:
+        raise ValueError("Evaluation data config produced no tagged evaluator")
+    result = evaluator.evaluate(model)
+    return {
+        "macro_loss": result.macro_avg_loss,
+        "micro_loss": result.micro_avg_loss,
+        "paloma_macro_loss": result.tag_macro_losses["paloma"],
+        "uncheatable_macro_loss": result.tag_macro_losses["uncheatable_eval"],
+        "domain_losses": result.tag_macro_losses,
+    }
+
+
 def main() -> None:
     checkpoint_root = _required_env("AUGDK_EVAL_CHECKPOINT")
     run_id = _required_env("AUGDK_EVAL_RUN_ID")
@@ -347,11 +402,19 @@ def main() -> None:
     batch_size = int(os.environ.get("AUGDK_EVAL_BATCH_SIZE", str(_DEFAULT_BATCH_SIZE)))
     max_new_tokens = int(os.environ.get("AUGDK_EVAL_MAX_NEW_TOKENS", str(_DEFAULT_MAX_NEW_TOKENS)))
     max_length = int(os.environ.get("AUGDK_EVAL_MAX_LENGTH", str(_DEFAULT_MAX_LENGTH)))
+    eval_config_run = os.environ.get("AUGDK_EVAL_CONFIG_RUN", _DEFAULT_EVAL_CONFIG_RUN)
 
     tokenizer = AutoTokenizer.from_pretrained(marin_tokenizer)
+    data_config = _evaluation_data_config(eval_config_run)
     mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
     with set_mesh(mesh):
         model = _load_model(checkpoint_root, mesh)
+        perplexity = _evaluate_perplexity(
+            model,
+            data_config,
+            mesh,
+            expert_count=expert_count,
+        )
         gsm8k = _evaluate_gsm8k(
             model,
             tokenizer,
@@ -371,6 +434,7 @@ def main() -> None:
     results = {
         "checkpoint": checkpoint_root,
         "expert_count": expert_count,
+        "perplexity": perplexity,
         "gsm8k": [asdict(result) for result in gsm8k],
         "instructions": [asdict(result) for result in instructions],
         "summary": {
@@ -378,6 +442,8 @@ def main() -> None:
             "instruction_pass_rate": statistics.fmean(result.correct is True for result in instructions),
             "gsm8k_examples": len(gsm8k),
             "instruction_examples": len(instructions),
+            "paloma_macro_loss": perplexity["paloma_macro_loss"],
+            "uncheatable_macro_loss": perplexity["uncheatable_macro_loss"],
         },
     }
     run = wandb.init(
@@ -391,6 +457,7 @@ def main() -> None:
         config={
             "checkpoint": checkpoint_root,
             "expert_count": expert_count,
+            "eval_config_run": eval_config_run,
             "gsm8k_revision": _GSM8K_REVISION,
             "gsm8k_limit": limit,
             "max_new_tokens": max_new_tokens,
