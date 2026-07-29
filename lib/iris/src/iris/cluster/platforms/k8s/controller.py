@@ -645,14 +645,15 @@ class K8sControllerProvider:
     def verify_prerequisites(self, config: IrisClusterConfig) -> None:
         """Assert IaC-provisioned prerequisites exist before starting the controller.
 
-        The Namespace, Iris ServiceAccounts, namespace-qualified
+        The Namespace, controller ServiceAccount, namespace-qualified
         ClusterRole/ClusterRoleBinding, one NodePool per non-skipped scale group,
         the Kueue ClusterQueue + ResourceFlavor, and (best-effort) the
-        IngressClass must exist. The task ServiceAccount must not carry registry
-        credentials: CoreWeave task images are required to be public. All of these
-        are provisioned by `infra/pulumi`'s Pulumi program (spec.md §4) — this
-        method creates nothing. Raises PrerequisitesNotProvisionedError
-        enumerating every missing or invalid object.
+        IngressClass must exist. A configured task ServiceAccount must also exist
+        and must not carry registry credentials: CoreWeave task images are
+        required to be public. All of these are provisioned by `infra/pulumi`'s
+        Pulumi program (spec.md §4) — this method creates nothing. Raises
+        PrerequisitesNotProvisionedError enumerating every missing or invalid
+        object.
         """
         problems: list[str] = []
 

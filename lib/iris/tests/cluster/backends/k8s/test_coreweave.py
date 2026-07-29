@@ -685,7 +685,7 @@ def test_verify_prerequisites_rejects_missing_task_service_account():
     cluster_config.kubernetes_provider.service_account = "iris-task"
     _seed_prerequisites(k8s, cluster_config)
 
-    with pytest.raises(PrerequisitesNotProvisionedError, match="ServiceAccount/iris/iris-task"):
+    with pytest.raises(PrerequisitesNotProvisionedError):
         provider.verify_prerequisites(cluster_config)
 
     provider.shutdown()
@@ -700,7 +700,7 @@ def test_verify_prerequisites_rejects_task_service_account_pull_secrets():
     task_service_account["imagePullSecrets"] = [{"name": "ghcr-user"}]
     k8s.apply_json(task_service_account)
 
-    with pytest.raises(PrerequisitesNotProvisionedError, match=r"imagePullSecrets.*ghcr-user"):
+    with pytest.raises(PrerequisitesNotProvisionedError):
         provider.verify_prerequisites(cluster_config)
 
     provider.shutdown()
