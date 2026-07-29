@@ -1,7 +1,9 @@
 name: "Ops - IaC preview"
 
-# Posts `pulumi preview` for each affected infra/pulumi (marin-iac) stack as a PR comment.
-# Also runnable via workflow_dispatch (e.g. to check for drift outside a PR)
+# Runs `pulumi preview` for each infra/pulumi (marin-iac) stack in parallel and
+# posts one aggregated PR comment. workflow_dispatch can take an optional PR
+# number to preview that PR's head and comment there; omit it for a drift check
+# against the selected ref with no comment.
 
 on:
   pull_request:
@@ -12,6 +14,11 @@ on:
       - ".github/workflows/ops-iac-preview.yaml"
       - ".github/actions/pulumi-preview/**"
   workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to preview and comment on (leave empty for drift check only)"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -19,6 +26,10 @@ permissions:
 env:
   PULUMI_CI_SERVICE_ACCOUNT: pulumi-ci@hai-gcp-models.iam.gserviceaccount.com
   PULUMI_CI_PROJECT: hai-gcp-models
+  # pull_request → PR head SHA; dispatch+pr_number → that PR's head ref; else the
+  # branch selected in the workflow_dispatch UI (or the triggering commit).
+  IAC_PREVIEW_REF: ${{ github.event.pull_request.head.sha || (inputs.pr_number != '' && format('refs/pull/{0}/head', inputs.pr_number)) || github.sha }}
+  IAC_PREVIEW_PR: ${{ github.event.pull_request.number || inputs.pr_number }}
 
 jobs:
   preview-coreweave:
@@ -30,9 +41,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
-      pull-requests: write
     concurrency:
-      group: iac-preview-${{ matrix.stack }}-${{ github.event.pull_request.number || github.run_id }}
+      group: iac-preview-${{ matrix.stack }}-${{ env.IAC_PREVIEW_PR || github.run_id }}
       cancel-in-progress: true
     strategy:
       fail-fast: false
@@ -41,6 +51,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          ref: ${{ env.IAC_PREVIEW_REF }}
 
       - name: Write kubeconfig
         run: |
@@ -66,8 +78,6 @@ jobs:
           work-dir: infra/pulumi
           service-account: ${{ env.PULUMI_CI_SERVICE_ACCOUNT }}
           gcp-project-id: ${{ env.PULUMI_CI_PROJECT }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          comment-on-pr: ${{ github.event_name == 'pull_request' }}
 
   preview-gcp:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -76,13 +86,14 @@ jobs:
     permissions:
       contents: read
       id-token: write
-      pull-requests: write
     concurrency:
-      group: iac-preview-marin-${{ github.event.pull_request.number || github.run_id }}
+      group: iac-preview-marin-${{ env.IAC_PREVIEW_PR || github.run_id }}
       cancel-in-progress: true
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          ref: ${{ env.IAC_PREVIEW_REF }}
 
       - name: Preview marin
         uses: ./.github/actions/pulumi-preview
@@ -91,9 +102,70 @@ jobs:
           work-dir: infra/pulumi
           service-account: ${{ env.PULUMI_CI_SERVICE_ACCOUNT }}
           gcp-project-id: ${{ env.PULUMI_CI_PROJECT }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          comment-on-pr: ${{ github.event_name == 'pull_request' }}
-          # The live GCP resources predate this empty stack. Show their adoption diff instead
-          # of reporting creates that would fail because the names already exist. Remove this
-          # after the first successful `pulumi up` adopts the six resources into the marin stack.
-          config-map: '{"marin-iac:import": {"value": "true"}}'
+
+  comment:
+    if: >-
+      always()
+      && (github.event_name == 'pull_request' || inputs.pr_number != '')
+      && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    needs: [preview-coreweave, preview-gcp]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ env.IAC_PREVIEW_REF }}
+
+      - name: Download preview artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: iac-preview-*
+          path: iac-previews
+          merge-multiple: false
+
+      - name: Assemble comment body
+        run: |
+          python3 .github/actions/pulumi-preview/assemble_comment.py \
+            --previews-dir iac-previews \
+            --out iac-preview-comment.md
+
+      - name: Upsert sticky PR comment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        env:
+          PR_NUMBER: ${{ env.IAC_PREVIEW_PR }}
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- iac-preview -->';
+            const body = fs.readFileSync('iac-preview-comment.md', 'utf8');
+            const { owner, repo } = context.repo;
+            const issue_number = Number(process.env.PR_NUMBER);
+            if (!Number.isInteger(issue_number) || issue_number <= 0) {
+              throw new Error(`Invalid PR_NUMBER: ${process.env.PR_NUMBER}`);
+            }
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+            const existing = comments.find((comment) => comment.body && comment.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              });
+            }

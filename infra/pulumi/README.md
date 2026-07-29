@@ -167,7 +167,10 @@ already provisioned:
 
 ## CI preview
 
-`.github/workflows/ops-iac-preview.yaml` posts `pulumi preview` for every stack as a PR comment.
+`.github/workflows/ops-iac-preview.yaml` runs `pulumi preview` for every stack in parallel and
+posts one aggregated PR comment (status list plus per-stack diffs). Manual
+`workflow_dispatch` accepts an optional `pr_number` to preview that PR's head and
+comment there; omit it for a drift check against the selected ref with no comment.
 **CI never runs `pulumi up`** — see `spec.md §9`. It authenticates as
 `pulumi-ci@hai-gcp-models.iam.gserviceaccount.com`, granted preview-only (decrypt/read, never
 write) access in [`infra/permissions`](../permissions/README.md).
