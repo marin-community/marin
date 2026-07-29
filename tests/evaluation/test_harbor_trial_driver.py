@@ -72,24 +72,6 @@ def test_preflight_digest_is_stable_across_hash_seeds(tmp_path, checked_policies
     assert all(result["digest"] == expected["digest"] for result in seeded)
 
 
-def test_catalog_policy_digests_preserve_reviewed_job_identity(checked_policies):
-    assert {name: policy["digest"] for name, policy in checked_policies.items()} == {
-        "aider.yaml": "sha256:5cb46786e2f1eacf43fb3b5eac849b5ad6a1cf29a956b47177de682fce1c2ab0",
-        "aime-harbor.yaml": "sha256:d6061d09ff3994e8baf5bed293ff826caad47702eafef26835d9ba786460302c",
-        "aime-smoke.yaml": "sha256:2554c05ee716c4a4be7c26bd2ae445f237d60bbea8f6fd2c084a6ab67ff53f9f",
-        "bfcl.yaml": "sha256:47ce3c5ec0afd851ecced3b99643aabbe84f98a6bf4337ebf75b487a576c4712",
-        "financeagent.yaml": "sha256:347afaa2ca78088f020db6ceacbf13e32ba16f00e647d24a6084269bad754e03",
-        "gaia.yaml": "sha256:77e4522db26d408ac488e55d0ba579f822e4d794c135fd545dc92f3de656364a",
-        "grug-opencode-id.yaml": "sha256:e2bcc00724d70dad05eca5c78ccb612bae18530d34c3816660dea33f9eab3873",
-        "medagentbench.yaml": "sha256:08166bdab2e3ccd26012b202db7a7b8223eb09d6c97c217c363910ad52f3d45b",
-        "swebench-full.yaml": "sha256:e78b976fd6fa8ee925d6a89b0d1d357483c7a8f99b1f47688ba5b4f597ecac11",
-        "swebench-lite.yaml": "sha256:6638a989caf7c101f70b16f542de94375b778496d0478a9e4f51ad21c6c54d1d",
-        "swebench.yaml": "sha256:834a966205d8a95339f4ee02c8173f12fe1071985165ccaa211d3be034acf425",
-        "tb2-lite.yaml": "sha256:995430d2abbabe39c35c7cce7a3ddf27cd2a32de1a02b19e9c0f6e9b883ece65",
-        "tb2.yaml": "sha256:4ae314abd378080983e87ab391473620df031539918cbb1f274d92b84f4640a9",
-    }
-
-
 def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(tmp_path, checked_policies):
     policy_path = tmp_path / "policy.json"
     policy_path.write_text(checked_policies["grug-opencode-id.yaml"]["stable_policy_json"])

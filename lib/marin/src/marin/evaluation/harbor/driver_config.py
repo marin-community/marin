@@ -17,6 +17,7 @@ from marin.external_dependencies import HARBOR
 
 _TRIAL_DRIVER = Path(__file__).with_name("trial_driver.py")
 _DRIVER_PYTHONPATH = str(Path(__file__).parents[3])
+_OWNER_ONLY_MODE = 0o600
 _DRIVER_SYSTEM_ENV_KEYS = (
     "CURL_CA_BUNDLE",
     "HOME",
@@ -185,7 +186,7 @@ def preflight_harbor_configs(
             request_path.write_text(json.dumps(request_payload, ensure_ascii=False, separators=(",", ":")))
         except (TypeError, ValueError) as exc:
             raise ValueError("Harbor model agent kwargs must be JSON-serializable") from exc
-        request_path.chmod(0o600)
+        request_path.chmod(_OWNER_ONLY_MODE)
         try:
             completed = _capture_driver(_driver_command("preflight", request_path))
         except ValueError as exc:
@@ -229,8 +230,8 @@ def run_harbor_driver(
             )
         except (TypeError, ValueError) as exc:
             raise ValueError("Harbor runtime overlay must be JSON-serializable") from exc
-        policy_path.chmod(0o600)
-        overlay_path.chmod(0o600)
+        policy_path.chmod(_OWNER_ONLY_MODE)
+        overlay_path.chmod(_OWNER_ONLY_MODE)
         command = _driver_command("run", policy_path, overlay_path)
         logger.info("running Harbor driver: %s", " ".join(command))
         _stream_driver(command, driver_env)

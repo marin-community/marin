@@ -11,7 +11,7 @@ import os
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, StrEnum
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -35,6 +35,7 @@ _STABLE_JOBS_DIR = "/__marin_jobs__"
 _STABLE_MODEL = "__marin_model__"
 _STABLE_ENDPOINT = "http://marin.invalid/v1"
 _PLACEHOLDER_DATASET_PATH = "/__marin_dataset__"
+_HF_DATASET_PREFIX = "hf://"
 _DEFAULT_MODEL_INFO = MappingProxyType(
     {
         "max_input_tokens": 32768,
@@ -57,9 +58,15 @@ class RuntimeOverlay(BaseModel):
     model_agent_kwargs: dict[str, Any]
 
 
+class _DatasetKind(StrEnum):
+    HARBOR_REGISTRY = "harbor_registry"
+    HUGGING_FACE = "hugging_face"
+    LOCAL = "local"
+
+
 @dataclass(frozen=True)
 class _DatasetMetadata:
-    kind: str
+    kind: _DatasetKind
     selector: str
     revision: str | None
 
@@ -74,10 +81,6 @@ def _document(path: Path) -> Mapping[str, object]:
     if not isinstance(document, Mapping):
         raise ValueError("Harbor config must contain a mapping")
     return document
-
-
-def _job_config_from_document(document: Mapping[str, object]) -> JobConfig:
-    return JobConfig.model_validate(document, extra="forbid")
 
 
 def _single_entry(config: JobConfig, field_name: str) -> object:
@@ -135,24 +138,24 @@ def _dataset_metadata(
     dataset: DatasetConfig,
     raw_path: object,
 ) -> _DatasetMetadata:
-    if isinstance(raw_path, str) and raw_path.startswith("hf://"):
+    if isinstance(raw_path, str) and raw_path.startswith(_HF_DATASET_PREFIX):
         raise ValueError("Harbor hf:// sources must use datasets[].name, not datasets[].path")
     if dataset.path is not None:
         if dataset.path.is_absolute():
             raise ValueError("Harbor local dataset paths must be relative to the config file")
-        return _DatasetMetadata("local", str(dataset.path), None)
+        return _DatasetMetadata(_DatasetKind.LOCAL, str(dataset.path), None)
 
     assert dataset.name is not None
     revision = dataset.ref or dataset.version
-    if dataset.name.startswith("hf://"):
-        selector = dataset.name.removeprefix("hf://")
+    if dataset.name.startswith(_HF_DATASET_PREFIX):
+        selector = dataset.name.removeprefix(_HF_DATASET_PREFIX)
         repository_parts = selector.split("/")
         if len(repository_parts) != 2 or any(not part for part in repository_parts):
             raise ValueError("Harbor hf:// dataset names must identify an org/repository")
         if dataset.version is not None:
             raise ValueError("Harbor hf:// datasets must use ref for their revision")
-        return _DatasetMetadata("hugging_face", selector, revision)
-    return _DatasetMetadata("harbor_registry", dataset.name, revision)
+        return _DatasetMetadata(_DatasetKind.HUGGING_FACE, selector, revision)
+    return _DatasetMetadata(_DatasetKind.HARBOR_REGISTRY, dataset.name, revision)
 
 
 def _model_info(value: object) -> dict[str, Any]:
@@ -188,30 +191,45 @@ def _opencode_config(config: object, endpoint_url: str) -> dict[str, Any]:
     }
 
 
-def _agent_with_runtime(
+def _agent_config(
     agent: AgentConfig,
     *,
     endpoint_url: str,
     served_model: str,
-    model_agent_kwargs: Mapping[str, object],
-    include_model_defaults: bool,
+    kwargs: Mapping[str, object],
 ) -> AgentConfig:
-    policy_kwargs = agent.kwargs
-    kwargs = {**model_agent_kwargs, **policy_kwargs}
-    if include_model_defaults:
-        kwargs["model_info"] = _model_info(kwargs.get("model_info"))
-    elif "model_info" in kwargs:
-        _model_info(kwargs["model_info"])
-    kwargs["api_base"] = endpoint_url
+    runtime_kwargs = {**kwargs, "api_base": endpoint_url}
     if agent.name == _OPENCODE_AGENT:
-        kwargs["opencode_config"] = _opencode_config(kwargs.get("opencode_config", {}), endpoint_url)
+        runtime_kwargs["opencode_config"] = _opencode_config(kwargs.get("opencode_config", {}), endpoint_url)
     return AgentConfig.model_validate(
         {
             **agent.model_dump(mode="python"),
             "model_name": f"{_HOSTED_VLLM_PROVIDER}/{served_model}",
-            "kwargs": kwargs,
+            "kwargs": runtime_kwargs,
         },
         extra="forbid",
+    )
+
+
+def _effective_agent(agent: AgentConfig, overlay: RuntimeOverlay) -> AgentConfig:
+    kwargs = {**overlay.model_agent_kwargs, **agent.kwargs}
+    kwargs["model_info"] = _model_info(kwargs.get("model_info"))
+    return _agent_config(
+        agent,
+        endpoint_url=overlay.endpoint_url,
+        served_model=overlay.served_model,
+        kwargs=kwargs,
+    )
+
+
+def _stable_agent(agent: AgentConfig) -> AgentConfig:
+    if "model_info" in agent.kwargs:
+        _model_info(agent.kwargs["model_info"])
+    return _agent_config(
+        agent,
+        endpoint_url=_STABLE_ENDPOINT,
+        served_model=_STABLE_MODEL,
+        kwargs=agent.kwargs,
     )
 
 
@@ -233,13 +251,7 @@ def _dataset_with_runtime(
 
 
 def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
-    agent = _agent_with_runtime(
-        config.agents[0],
-        endpoint_url=overlay.endpoint_url,
-        served_model=overlay.served_model,
-        model_agent_kwargs=overlay.model_agent_kwargs,
-        include_model_defaults=True,
-    )
+    agent = _effective_agent(config.agents[0], overlay)
     dataset = _dataset_with_runtime(
         config.datasets[0],
         dataset_path=overlay.dataset_path,
@@ -257,13 +269,7 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
 
 
 def _stable_config(config: JobConfig) -> JobConfig:
-    agent = _agent_with_runtime(
-        config.agents[0],
-        endpoint_url=_STABLE_ENDPOINT,
-        served_model=_STABLE_MODEL,
-        model_agent_kwargs={},
-        include_model_defaults=False,
-    )
+    agent = _stable_agent(config.agents[0])
     stable = config.model_copy(
         update={
             "job_name": _STABLE_JOB_NAME,
@@ -299,7 +305,7 @@ def _stable_policy_json(config: JobConfig) -> str:
 
 def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict[str, object]:
     document = _document(path)
-    config = _job_config_from_document(document)
+    config = JobConfig.model_validate(document, extra="forbid")
     if config.tasks:
         raise ValueError("Harbor config tasks are incompatible with the shared launcher; declare one dataset")
     agent = _single_entry(config, "agents")
@@ -312,7 +318,9 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
 
     stable_config = _stable_config(config)
     stable_policy_json = _stable_policy_json(stable_config)
-    placeholder_dataset_path = None if dataset_metadata.kind == "harbor_registry" else _PLACEHOLDER_DATASET_PATH
+    placeholder_dataset_path = (
+        None if dataset_metadata.kind == _DatasetKind.HARBOR_REGISTRY else _PLACEHOLDER_DATASET_PATH
+    )
     _effective_config(
         stable_config,
         RuntimeOverlay(

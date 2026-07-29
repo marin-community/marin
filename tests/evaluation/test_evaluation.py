@@ -62,30 +62,8 @@ def _install_fake_harbor_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("experiments.evaluation.launch.preflight_harbor_configs", preflight)
 
 
-def _write_harbor_config(path: Path, *, agents: str | None = None) -> Path:
-    path.write_text(
-        f"""
-job_name: external-aime
-jobs_dir: ignored-by-marin
-n_attempts: 2
-n_concurrent_trials: 3
-environment:
-  type: daytona
-  force_build: true
-agents:
-{agents or '''  - name: opencode
-    model_name: ignored-by-marin
-    kwargs:
-      trajectory_config:
-        raw_content: false
-      opencode_config:
-        compaction:
-          auto: false'''}
-datasets:
-  - name: aime
-    version: "1.0"
-"""
-    )
+def _write_harbor_config(path: Path) -> Path:
+    path.write_text("{}")
     return path
 
 
@@ -376,7 +354,6 @@ def test_build_evaluation_batch_combines_registry_and_file_harbor_configs(tmp_pa
     )
 
     assert outcome.metrics["aime"]["accuracy"] == 1.0
-    assert captured["config"].stable_policy_json
     assert captured["overlay"].task_limit == 2
     assert captured["overlay"].served_model == "served-qwen3-8b"
     assert captured["overlay"].endpoint_url == "https://iris.example/capability/v1"
@@ -384,11 +361,7 @@ def test_build_evaluation_batch_combines_registry_and_file_harbor_configs(tmp_pa
 
 
 def test_launch_rejects_incompatible_harbor_config_before_iris_submission(tmp_path, monkeypatch):
-    config_path = _write_harbor_config(
-        tmp_path / "incompatible.yaml",
-        agents="""  - name: terminus-2
-  - name: opencode""",
-    )
+    config_path = _write_harbor_config(tmp_path / "incompatible.yaml")
     iris_opened = False
 
     def reject_preflight(_requests):

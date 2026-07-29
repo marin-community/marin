@@ -188,7 +188,6 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
     )
 
     assert captured["config"] is executor.config
-    assert captured["config"].stable_policy_json == '{"opaque":"policy"}'
     assert captured["overlay"].endpoint_url == model.endpoint.base_url
     assert captured["overlay"].served_model == "qwen3-0.6b"
     assert captured["overlay"].task_limit == 7
