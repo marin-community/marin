@@ -271,7 +271,7 @@ def scale_by_kron(
         return qss
 
     def init_fn(params, return_partition_specs_only=False):
-        # unbox if haliax style partitioned
+        # flatten haliax trees so the rest of the algorithm sees plain arrays
         scanned_layers_ = scanned_layers
         if scanned_layers_ is None:
             scanned_layers_ = jax.tree.map(
@@ -466,7 +466,7 @@ def scale_by_kron(
         count_inc = safe_int32_increment(state["count"])
         key, subkey = jax.random.split(state["key"])
 
-        # unbox if haliax style partitioned
+        # flatten haliax trees so the rest of the algorithm sees plain arrays
         scanned_layers_ = scanned_layers
         if scanned_layers_ is None:
             scanned_layers_ = jax.tree.map(
