@@ -195,6 +195,31 @@ scheduling gate and never evidence that training started.
 One hard invariant: at most one live dispatch per run. Two gangs writing one checkpoint
 corrupt it.
 
+## Where the code lives
+
+| what | where |
+|---|---|
+| worktree | `/home/exedev/repos/marin-br/eac-plm-exp153-cw/.claude/worktrees/exp166-cw` |
+| branch | `eac/plm-exp166-cw`, cut from `eac/plm-exp153-cw` at `92a601707`, local only |
+| files written | `experiments/protein/exp166_sweep.py`, `experiments/protein/exp166_cw_plan.md` |
+| read-only reference | `/home/exedev/repos/marin-br/eac-plm-exp166` (branch `eac/plm-exp166`) |
+
+Nothing outside that worktree is edited. The exp153 branch, the parity branch
+(`eac/plm-exp153-parity`), the exp166 TPU clone, and `main` are all untouched.
+
+### Isolation
+
+| resource | exp166cw | shared with |
+|---|---|---|
+| S3 writes | `MarinFold/exp166cw_qwen_contacts_v1/` (new, empty) | nothing |
+| S3 reads | `exp154_.../tokenized/`, `MarinFold/data/document_structures/` | exp153, #117 — read-only |
+| W&B | group `exp166cw-*`, run ids `prot-exp166cw-*` | nothing; zero name collisions |
+| Iris | job names derived from the run ids | nothing |
+
+The prefixes `exp108_*`, `exp112_*`, `exp154_*/checkpoints`, `exp163`, `exp167_eval` and
+`exp169_eval` are never written to. A pinned cache step records no provenance, so the
+exp154 read cannot write back.
+
 ## Code
 
 New `experiments/protein/exp166_sweep.py` on this branch, exp153's structure with
