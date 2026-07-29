@@ -111,6 +111,10 @@ def test_api_surface_over_fixtures(client):
 
     detail = client.get("/api/runs/snowball-2026.07.20-mmlu").json()
     assert detail["status"] == "succeeded"
+    # The detail endpoint attaches the rolled-up headline grade and the captured timing window.
+    assert detail["headline"]["metric"] == "acc,none"
+    assert detail["headline"]["value"] == pytest.approx(0.741)
+    assert detail["timing"]["started_at"] and detail["timing"]["finished_at"]
 
     tasks = client.get("/api/runs/snowball-2026.07.20-mmlu/samples/tasks").json()
     assert tasks["available"] is True
@@ -118,6 +122,15 @@ def test_api_surface_over_fixtures(client):
     samples_page = client.get("/api/runs/snowball-2026.07.20-mmlu/samples", params={"task": "mmlu"}).json()
     assert samples_page["total"] == 5
     assert samples_page["primary_metric"] == "acc,none"
+
+
+def test_run_detail_headline_is_null_for_a_failed_run(client):
+    # The math500 run failed before producing metrics, so there is no grade to roll up; timing is
+    # still present because the run had a wall-clock window before it failed.
+    detail = client.get("/api/runs/tootsie-8b-2026.07.20-math500").json()
+    assert detail["status"] == "failed"
+    assert detail["headline"] is None
+    assert detail["timing"]["finished_at"]
 
 
 def test_api_agentic_artifact_is_run_local(client):

@@ -19,6 +19,7 @@ from marin.evaluation.records import (
     ModelRef,
     Provenance,
     RunStatus,
+    RunTiming,
     read_record,
     write_record,
 )
@@ -74,6 +75,21 @@ def test_record_json_uses_eval_alias_and_plain_string_enum(tmp_path):
     assert isinstance(raw["status"], str)
     assert raw["version"] == "2026.07.19"
     assert raw["description"] == "baseline sweep"
+
+
+def test_timing_round_trips_and_defaults_to_none(tmp_path):
+    """``timing`` is optional: the base record omits it (``None``), and a record carrying a window
+    round-trips through ``record.json`` and serializes under the ``timing`` key."""
+    assert _RECORD.timing is None
+
+    timed = _RECORD.model_copy(
+        update={"timing": RunTiming(started_at="2026-07-19T09:06:31+00:00", finished_at="2026-07-19T09:14:31+00:00")}
+    )
+    path = write_record(timed, str(tmp_path))
+    with open(path) as f:
+        raw = json.load(f)
+    assert raw["timing"] == {"started_at": "2026-07-19T09:06:31+00:00", "finished_at": "2026-07-19T09:14:31+00:00"}
+    assert read_record(path) == timed
 
 
 def test_read_record_parses_a_previously_written_record_json(tmp_path):

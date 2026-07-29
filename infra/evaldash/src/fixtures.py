@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime, timedelta
 
 from fsspec.core import url_to_fs
 from marin.evaluation.records import (
@@ -31,6 +32,7 @@ from marin.evaluation.records import (
     ModelRef,
     Provenance,
     RunStatus,
+    RunTiming,
     write_record,
 )
 from marin.evaluation.samples import (
@@ -86,7 +88,12 @@ def _record(
     description: str | None,
     error: str | None = None,
     log_tails: dict[str, tuple[str, ...]] | None = None,
+    runtime_minutes: float = 8.0,
 ) -> EvalRunRecord:
+    # created_at is the terminal write time, so the run's window ends there and starts runtime_minutes
+    # earlier -- enough to give the dashboard a real duration to show.
+    finished = datetime.fromisoformat(created_at)
+    started = finished - timedelta(minutes=runtime_minutes)
     return EvalRunRecord(
         run_id=run_id,
         group_id=group_id,
@@ -104,6 +111,7 @@ def _record(
         jobs={"serve": f"jobs/{group_id}/serve", "eval": f"jobs/{run_id}/eval"},
         log_tails=log_tails or {},
         provenance=_provenance(),
+        timing=RunTiming(started_at=started.isoformat(), finished_at=finished.isoformat()),
     )
 
 
@@ -373,6 +381,7 @@ def build_fixtures(dest: str) -> list[str]:
             results_path=results_of(r),
             metrics={"aime": {"accuracy": 0.333, "mean_reward": 0.333, "solved": 3.0, "total": 9.0}},
             description=desc,
+            runtime_minutes=42.0,  # agentic sandbox rollouts run far longer than the lm-eval tasks
         )
     )
     _write_samples(
@@ -449,6 +458,7 @@ def build_fixtures(dest: str) -> list[str]:
             description=desc,
             error="grader raised: unparived latex in 3 of 500 problems",
             log_tails={"eval": ("Traceback (most recent call last):", "ValueError: could not parse boxed answer")},
+            runtime_minutes=3.5,  # failed partway through grading
         )
     )
     r = f"{grp}-aime"
@@ -466,6 +476,7 @@ def build_fixtures(dest: str) -> list[str]:
             description=desc,
             error="serving endpoint never became healthy (timeout after 1800s)",
             log_tails={"serve": ("vllm: waiting for model weights", "readiness probe failed")},
+            runtime_minutes=30.0,  # matches the 1800s serving-readiness timeout above
         )
     )
 

@@ -102,7 +102,8 @@ export interface EvalTask {
   num_fewshot: number | null
 }
 
-// The canonical record.json shape (records.EvalRunRecord).
+// The canonical record.json shape (records.EvalRunRecord). `headline` is not stored on the record --
+// the run-detail endpoint computes it (the rolled-up primary metric) and attaches it to the response.
 export interface EvalRecord {
   run_id: string
   group_id: string
@@ -120,6 +121,8 @@ export interface EvalRecord {
   jobs: Record<string, string>
   log_tails: Record<string, string[]>
   provenance: { git_sha: string; eval_runtime: string; launch_host: string }
+  timing: { started_at: string; finished_at: string | null } | null
+  headline: { value: number; metric: string; stderr: number | null } | null
 }
 
 // --- Live Iris/finelog protobuf JSON (cluster.py) ---

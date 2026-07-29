@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
-import { formatScore, formatTimestamp, shortSha } from '@/utils/formatting'
+import { formatDuration, formatScore, formatStderr, formatTimestamp, shortSha } from '@/utils/formatting'
 import type { EvalRecord } from '@/types/api'
 import StatusChip from '@/components/shared/StatusChip.vue'
 import JobsPanel from '@/components/runs/JobsPanel.vue'
@@ -39,6 +39,19 @@ const metricRows = computed<MetricRow[]>(() => {
 
 const jobRoles = computed(() => Object.keys(data.value?.jobs ?? {}))
 
+// The eval's wall-clock duration, when the record captured a timing window. Null (rendered as "—")
+// for records without timing.
+const durationLabel = computed<string | null>(() => {
+  const timing = data.value?.timing
+  if (!timing) return null
+  const start = new Date(timing.started_at).getTime()
+  const end = timing.finished_at ? new Date(timing.finished_at).getTime() : null
+  return formatDuration(start, end)
+})
+
+// When the run finished: the timing window's end, falling back to the record's created_at.
+const finishedAt = computed(() => data.value?.timing?.finished_at ?? data.value?.created_at ?? null)
+
 const copied = ref(false)
 async function copyPath() {
   const record = data.value
@@ -72,13 +85,39 @@ async function copyPath() {
           class="rounded bg-surface-sunken px-1.5 py-0.5 text-xs font-mono text-text-secondary"
           :title="`version ${data.version}`"
         >{{ data.version }}</span>
-        <span class="text-xs text-text-muted">{{ formatTimestamp(data.created_at) }}</span>
       </div>
 
       <p v-if="data.description" class="text-sm text-text-secondary -mt-3">{{ data.description }}</p>
 
       <div v-if="data.error" class="rounded border border-status-danger-border bg-status-danger-bg text-status-danger text-sm px-3 py-2">
         <span class="font-semibold">Error:</span> {{ data.error }}
+      </div>
+
+      <!-- Results header: the grade, how long it took, and when it finished -->
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        <div class="rounded-lg border border-surface-border bg-surface px-4 py-3">
+          <div class="text-xs font-semibold uppercase tracking-wider text-text-muted mb-1">Grade</div>
+          <template v-if="data.headline">
+            <div class="text-2xl font-semibold tabular-nums leading-none">
+              {{ formatScore(data.headline.value) }}<span class="text-base text-text-muted">%</span>
+            </div>
+            <div class="text-xs font-mono text-text-muted mt-1 truncate" :title="data.headline.metric">
+              {{ data.headline.metric }} {{ formatStderr(data.headline.value, data.headline.stderr) }}
+            </div>
+          </template>
+          <div v-else class="text-2xl font-semibold text-text-muted leading-none">—</div>
+        </div>
+        <div class="rounded-lg border border-surface-border bg-surface px-4 py-3">
+          <div class="text-xs font-semibold uppercase tracking-wider text-text-muted mb-1">Duration</div>
+          <div class="text-2xl font-semibold tabular-nums leading-none">{{ durationLabel ?? '—' }}</div>
+          <div v-if="data.timing" class="text-xs text-text-muted mt-1">
+            {{ formatTimestamp(data.timing.started_at) }} →
+          </div>
+        </div>
+        <div class="rounded-lg border border-surface-border bg-surface px-4 py-3 col-span-2 sm:col-span-1">
+          <div class="text-xs font-semibold uppercase tracking-wider text-text-muted mb-1">Finished</div>
+          <div class="text-sm font-medium mt-1">{{ formatTimestamp(finishedAt) }}</div>
+        </div>
       </div>
 
       <GroupLinks :run-id="data.run_id" />
@@ -145,8 +184,9 @@ async function copyPath() {
         <p v-else class="text-sm text-text-muted">No metrics recorded.</p>
       </div>
 
-      <!-- Samples (succeeded runs) -->
-      <SamplesPanel v-if="data.status === 'succeeded'" :key="props.runId" :run-id="data.run_id" />
+      <!-- Per-question samples, when the run exported any. Rendered for every status: a failed eval
+           can still have graded some questions, and the panel degrades gracefully when none exist. -->
+      <SamplesPanel :key="props.runId" :run-id="data.run_id" />
 
       <!-- Results path -->
       <div>

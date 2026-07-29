@@ -111,6 +111,21 @@ class Provenance(BaseModel):
     launch_host: str
 
 
+class RunTiming(BaseModel):
+    """The eval's wall-clock window, when the orchestrator captured it.
+
+    ``started_at`` is when the eval began executing (after the served model was healthy);
+    ``finished_at`` is when the run reached its terminal state. Both are ISO 8601 strings. The whole
+    field is optional on a record: runs whose orchestrator did not record timing, and every record
+    written before timing existed, simply omit it, and the dashboard shows no duration for them.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    started_at: str
+    finished_at: str | None = None
+
+
 class EvalRunRecord(BaseModel):
     """The full account of one eval run, serialized to ``record.json``.
 
@@ -152,6 +167,8 @@ class EvalRunRecord(BaseModel):
     """For failed runs, the last log lines of the child job(s) behind the failure, keyed like
     ``jobs`` -- enough to diagnose most failures without cluster access. Empty on success."""
     provenance: Provenance
+    timing: RunTiming | None = None
+    """The eval's wall-clock window when captured; ``None`` on records without recorded timing."""
 
 
 def record_path(prefix: str, run_id: str) -> str:

@@ -617,6 +617,16 @@ def _status_rollup(statuses: set[str]) -> str:
     return "mixed"
 
 
+def _run_headline(record: dict) -> dict | None:
+    """The run's overall grade for the detail header: its rolled-up primary metric as
+    ``{value, metric, stderr}``, or None when nothing scored (an infra or eval failure that never
+    produced metrics). Computed from the same ``record_score`` the leaderboard and groups use."""
+    score = record_score(EvalRunRecord.model_validate(record))
+    if score is None:
+        return None
+    return {"value": score.value, "metric": score.metric, "stderr": score.stderr}
+
+
 def _group_member(record: EvalRunRecord) -> dict:
     """One eval within a launch: its identity, status, and headline score for the expanded group row."""
     score = record_score(record)
@@ -694,7 +704,7 @@ def create_app(
         record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
         if record is None:
             return JSONResponse({"error": "unknown run_id"}, status_code=404)
-        return JSONResponse(record)
+        return JSONResponse({**record, "headline": _run_headline(record)})
 
     async def api_run_jobs(request: Request) -> JSONResponse:
         record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
