@@ -4,6 +4,7 @@
 import gzip
 import itertools
 import json
+import threading
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -93,3 +94,54 @@ def test_run_collection_writes_chunks_and_resumes(tmp_path, monkeypatch):
     assert progress["state"] == "complete"
     assert progress["complete_records"] == 5
     assert progress["skipped_records_this_attempt"] == 5
+
+
+def test_run_collection_refills_requests_before_chunk_stragglers_finish(tmp_path, monkeypatch):
+    table = pa.table(
+        {
+            "id": ["a", "b", "c"],
+            "instruction_seed": ["one", "two", "three"],
+            "__original_row_idx": [0, 1, 2],
+        }
+    )
+    parquet_path = tmp_path / "input.parquet"
+    pq.write_table(table, parquet_path)
+    partitions = [collect.PartitionSpec(0, 0, 0, 0, 3)]
+    monkeypatch.setattr(collect, "partition_specs", lambda: partitions)
+    monkeypatch.setattr(collect.PartitionSpec, "url", property(lambda _self: str(parquet_path)))
+    release_straggler = threading.Event()
+    next_chunk_started = threading.Event()
+
+    def post(_url, **kwargs):
+        prompt = kwargs["json"]["messages"][0]["content"]
+        if prompt == "one":
+            release_straggler.wait()
+        if prompt == "three":
+            next_chunk_started.set()
+        return _response(
+            {
+                "choices": [{"message": {"role": "assistant", "content": prompt}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            }
+        )
+
+    monkeypatch.setattr(requests, "post", post)
+    collection = collect.CollectionConfig("test", StoragePath(str(tmp_path / "output")), 0, 1, None, 2, 2)
+    server = collect.ServerConfig(65536, 12)
+    sampling = collect.SamplingConfig(1.0, 0.95, 16384)
+    errors = []
+
+    def run_collection():
+        try:
+            collect._run_collection("http://vllm", collection, server, sampling)
+        except Exception as error:
+            errors.append(error)
+
+    thread = threading.Thread(target=run_collection)
+    thread.start()
+    try:
+        assert next_chunk_started.wait(timeout=2)
+    finally:
+        release_straggler.set()
+        thread.join()
+    assert not errors
