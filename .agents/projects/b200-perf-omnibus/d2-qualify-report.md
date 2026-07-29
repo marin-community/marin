@@ -133,3 +133,56 @@ Unknown. The 22.5% prediction and 21.5% falsification threshold were committed
 before any GPU result was seen. The numerical gate passed, but the compile gate
 failed before any D-2 placement result existed. The Phase D gains cannot be
 called composed or falsified from this qualification attempt.
+
+## Decision-1 warning A/B — 2026-07-28
+
+The warning is a regression relative to the pre-reconciliation
+`f53f781ce` baseline. Both baseline settings emitted zero
+`spmd_partitioner.cc:668` involuntary-full-rematerialization warnings; both
+composed settings emitted one. The pre-registered zero-warning gate is therefore
+not mis-scoped for this four-GPU mesh.
+
+The baseline ran from detached harness commit `9f46c3ca0`, whose parent is
+`f53f781ce`. The only added file is the qualification harness. It selects the
+harness's frozen `f53f781ce` reference functions and asserts the baseline
+structure; `lib/levanter/src/levanter/optim/grugmuon.py` is byte-identical to
+`f53f781ce`. Both arms otherwise used the same probe cases, `data=2, expert=2`
+mesh, four GB200s, JAX 0.10.1, allocator, XLA flags, resources, and SYRK
+settings.
+
+| arm | `SCALE_MUON_SYRK` | job | warnings | offending path |
+|---|---:|---|---:|---|
+| composed `8779abc42` | 0 | `/mwittmann/d2-muon-compile-syrk0-0728-1655` | 1 | `jit(current)/vmap()/convert_element_type` |
+| composed `8779abc42` | 1 | `/mwittmann/d2-muon-compile-syrk1-0728-1657` | 1 | `jit(current)/vmap()/convert_element_type` |
+| baseline `f53f781ce` | 0 | `/mwittmann/d2-muon-baseline-f53-syrk0-0728-1709` | 0 | none |
+| baseline `f53f781ce` | 1 | `/mwittmann/d2-muon-baseline-f53-syrk1-0728-1710` | 0 | none |
+
+The two composed warnings are identical. XLA changes
+`%convert_element_type.21`, shape `f32[1,5120,1280]`, from
+`{devices=[4,1,1]<=[4]}` to
+`{devices=[1,2,1,2]<=[4] last_tile_dim_replicate}`. Both complete baseline logs
+contain no offending path because their counts are zero. All four jobs
+succeeded and produced finite expert and padded non-expert outputs.
+
+The count A/B establishes a post-`f53f781ce` regression, but the warned
+transition does not point to any of the three `888fff904` mechanisms. The
+no-merge layout affects the expert case, while this warning is in
+`nonexpert_tall`. SYRK threading is excluded because the warning is identical
+with SYRK disabled and enabled. The inbound two-hop ends at the warning's
+four-way leading-axis source sharding. Its second hop would instead move from a
+two-way leading-axis sharding to `{devices=[4,1,1]<=[4]}`.
+
+The warning is on the direct padded outbound reshard from the four-way
+leading-axis layout to the parameter layout. That reshard was added by
+`5c031c31b` before the Decision-1 reconciliation and is still blamed to that
+commit at `grugmuon.py:681`; `888fff904` changed the inbound path at lines
+670-672. The baseline first reshards the padded result to
+`P(None,None,None)` and then restores the parameter layout outside the helper,
+and emitted zero warnings. No code was changed in this A/B.
+
+Recommendation: do not start fresh PGLE capture or D-2 rack draws. Keep the
+existing four-GPU zero-warning criterion unchanged: both SYRK settings must
+return to zero before rack work proceeds. The first real EP64 full-rack compile
+must still satisfy the original zero-warning check before any placement result
+is accepted. Re-scoping the toy-mesh gate to “no more than baseline” would not
+change it because the measured baseline is zero.
