@@ -24,7 +24,7 @@ from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.schema import tasks_table
 from iris.cluster.controller.writes import set_user_budget, stamp_backend
-from iris.cluster.types import JobName
+from iris.cluster.types import JobName, UserBudgetDefaults
 from iris.rpc import controller_pb2, job_pb2
 from iris.test_util import FakeStatsTable
 from rigging.timing import RateLimiter, Timestamp
@@ -239,8 +239,8 @@ def _make_test_user_over_budget(state) -> None:
 
 
 def test_drain_demotes_over_budget_user_to_batch(state):
-    """A task promoted for an over-budget user is stamped BATCH — the band the
-    dispatched request, tasks.priority_band, and Kueue priority all mirror."""
+    """An interactive task promoted for an over-budget user drains at BATCH; the
+    dispatched request priority and the stamped tasks.priority_band agree."""
     _make_test_user_over_budget(state)
     [over] = submit_direct_job(state, "over-budget", priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE)
 
@@ -250,6 +250,21 @@ def test_drain_demotes_over_budget_user_to_batch(state):
     [req] = [r for r in batch.tasks_to_run if r.task_id == over.to_wire()]
     assert req.priority == job_pb2.PRIORITY_BAND_BATCH
     assert query_task(state, over).priority_band == job_pb2.PRIORITY_BAND_BATCH
+
+
+def test_drain_demotes_via_default_budget_for_unlisted_user(state):
+    """An unlisted user is demoted by ``UserBudgetDefaults.budget_limit`` (the
+    controller-wide fallback), not only by a per-user budget row."""
+    submit_direct_job(state, "default-spend")
+    with state._db.transaction() as cur:
+        dispatch.drain_for_dispatch(cur)  # active spend, no user_budgets row
+    [over] = submit_direct_job(state, "default-over", priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE)
+
+    with state._db.transaction() as cur:
+        batch = dispatch.drain_for_dispatch(cur, defaults=UserBudgetDefaults(budget_limit=1))
+
+    [req] = [r for r in batch.tasks_to_run if r.task_id == over.to_wire()]
+    assert req.priority == job_pb2.PRIORITY_BAND_BATCH
 
 
 def test_drain_production_immune_to_budget_demotion(state):
@@ -312,6 +327,58 @@ def test_drain_deferred_gang_does_not_invert_lower_band(state):
     assert [r.task_id for r in drained.tasks_to_run] == [prod.to_wire()]
     assert all(query_task(state, t).state == job_pb2.TASK_STATE_PENDING for t in gang)
     assert query_task(state, batch_task).state == job_pb2.TASK_STATE_PENDING
+
+
+def test_drain_deferred_gang_still_fills_same_band(state):
+    """A deferred gang blocks only worse bands: a same-band singleton behind it
+    still fills the remaining budget (the barrier is band-aware, not a full stop)."""
+    [prod] = submit_direct_job(state, "fill-prod", priority_band=job_pb2.PRIORITY_BAND_PRODUCTION)
+    _jid, gang = _submit_cosched(state, "fill-gang", replicas=3, band=job_pb2.PRIORITY_BAND_INTERACTIVE)
+    [single] = submit_direct_job(state, "fill-single", priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE)
+
+    # Cap = 3: PRODUCTION single promotes (remaining 2); the INTERACTIVE gang of 3
+    # cannot fit and defers, but the INTERACTIVE single behind it still fits.
+    with state._db.transaction() as cur:
+        drained = dispatch.drain_for_dispatch(cur, max_promotions=3)
+
+    assert {r.task_id for r in drained.tasks_to_run} == {prod.to_wire(), single.to_wire()}
+    assert all(query_task(state, t).state == job_pb2.TASK_STATE_PENDING for t in gang)
+
+
+def _submit_job_for_user(state, user: str, name: str, *, priority_band: int = 0) -> JobName:
+    """Submit a single-task direct job owned by ``user`` and return its task id."""
+    jid = JobName.root(user, name)
+    req = make_direct_job_request(name, priority_band=priority_band)
+    req.name = jid.to_wire()  # make_direct_job_request roots names at test-user
+    with state._db.transaction() as cur:
+        ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now())
+    return jid.task(0)
+
+
+def test_drain_interleaves_users_within_band(state):
+    """Within a band the drain round-robins across users, so a tight cap promotes
+    one task per user rather than draining one user's backlog first."""
+    a1 = _submit_job_for_user(state, "user-a", "a1", priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE)
+    _submit_job_for_user(state, "user-a", "a2", priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE)
+    b1 = _submit_job_for_user(state, "user-b", "b1", priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE)
+    _submit_job_for_user(state, "user-b", "b2", priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE)
+
+    with state._db.transaction() as cur:
+        drained = dispatch.drain_for_dispatch(cur, max_promotions=2)
+
+    assert {r.task_id for r in drained.tasks_to_run} == {a1.to_wire(), b1.to_wire()}
+
+
+def test_drain_orders_same_band_by_submission(state):
+    """Same user and band: the earlier submission wins the single promotion slot,
+    confirming the hierarchy/submission sort key is wired into ranking."""
+    [first] = submit_direct_job(state, "order-first", priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE)
+    submit_direct_job(state, "order-second", priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE)
+
+    with state._db.transaction() as cur:
+        drained = dispatch.drain_for_dispatch(cur, max_promotions=1)
+
+    assert [r.task_id for r in drained.tasks_to_run] == [first.to_wire()]
 
 
 def test_drain_includes_workdir_files(state):
