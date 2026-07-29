@@ -63,6 +63,7 @@ def dispatch_grug_training_run(
         return
     safe_run_id = _safe_job_suffix(run_id)
     env_vars = resolve_training_env(base_env=_forwarded_env_vars(), resources=resources)
+    iris_child_priority = int(os.environ.get("IRIS_CHILD_PRIORITY", "0"))
     request = JobRequest(
         name=f"grug-train-{safe_run_id}",
         entrypoint=Entrypoint.from_callable(local_entrypoint, args=[config]),
@@ -71,6 +72,7 @@ def dispatch_grug_training_run(
         max_retries_failure=max_retries_failure,
         max_task_failures=10,
         processes_per_task=processes_per_task,
+        priority=iris_child_priority,
     )
     logger.info("Dispatching grug training via Fray: %s", request.name)
     job = current_client().submit(request)
