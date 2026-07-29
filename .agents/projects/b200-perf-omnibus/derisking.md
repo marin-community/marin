@@ -83,23 +83,40 @@ across architectures. State the number, then measure.
 **Falsifies.** Whether the Phase D gains compose. Several of them are described as
 independent and stacking, and none of that has been tested.
 
-### D-3. Resolve the leg-batching contradiction
+### D-3. Resolve the leg-batching contradiction — **code recovered 2026-07-29; sign still open**
 
 **Why.** The same idea has measured **+1.35pp and −3.66pp**. The 25.39% figure is
 QB-off on an unmatched run; an independent reconstruction with QB on and matched
 drops measured control 22.66% against batched G=2 **19.00%**, bands
 non-overlapping, with the batched path bit-exact against the loop. G=4 never
-produced a step. **This is not a pending win — it is an open disagreement**, and
-until it resolves, 25.39% should not appear in any planning document as an
-achievable number.
+produced a step.
 
-**What.** *First recover the code.* The patch behind the 25.39% run was never
-committed, so the only inspectable leg-batching implementation is the
-reconstruction that regresses. Recovering it is step one; a rack A/B is step three,
-behind an EP64 runtime and memory gate that G=4 already failed.
+**The recovery is done, and it dissolves most of the contradiction.** Full findings in
+[`d3-legbatching-report.md`](d3-legbatching-report.md) on `agent/deri-d3-recover`.
 
-**Cost.** A code recovery, then two runs — not the clean two-run experiment this
-looked like.
+The claim that the patch was never committed is **wrong**. The exact submitted source
+survives as Iris bundle
+`0483b2f207323fb3cd79ec326b7592546aabb0812ef8c058be95bd6c8049cd43` (ZIP SHA-256 verified
+against the bundle ID), and the same mechanism was committed the next morning in
+[`98737aecf`](https://github.com/marin-community/marin/commit/98737aecfa5cd05b9bffe09c96754c96d7177f06).
+
+**The two measurements were never testing the same change.** The recovered positive
+implementation defines `SCALE_A2A_BATCH_EXPERT_GEMMS`, requires
+`SCALE_A2A_PACK_DISPATCH=1` and `SCALE_A2A_PACK_COMBINE=1`, and keeps the already-packed
+one-dispatch/one-combine schedule — it replaces only the per-local-expert GEMM loop with
+batched `jnp.matmul`. The reconstruction changes GEMM batching **and** collective
+scheduling: its G=2 arm runs two dispatches and two combines and concatenates.
+
+So the −3.66pp is credible evidence that the *reconstruction* regresses, and says nothing
+about compute-only batching. Equally, 25.39% is not causal evidence for a win: QB-off,
+unmatched baseline from another build, no matched drop accounting, a different FLOPs
+denominator, and it did not contain the custom adjoint the issue comment said it stacked
+with.
+
+**Standing conclusion: the record supports neither sign.** 25.39% remains barred from any
+planning document as an achievable number. Settling the sign needs a new matched rack
+A/B, and only after the treatment passes the EP64 compile/runtime/memory gate that the
+reconstructed G=4 path already failed.
 
 ### D-4. Multi-rack EP64
 
@@ -161,14 +178,34 @@ in a degraded form, and has never tested the rest.
   *rejected* at d5120, where it needed a 135 GiB pinned-host arena and landed at
   19.694%.
 
-**What is genuinely open.** Muon shape-grouping (+0.09pp on FSDP) and the
-GatedNorm / attention-gate / XSA trio, none of which appear in
-`run_best_bf16_ep64.sh` at all. The unported items sum to roughly **+1.5pp of
-measured FSDP gain that EP64 has not collected**, and they are architecture-level
-rather than MoE-specific — which is exactly the point being made.
+**The GatedNorm / attention-gate / XSA trio is CLOSED, negative, as of 2026-07-29.**
+Two matched 350-step draws at d5120 8-of-256 EP64 against a two-draw shared control.
 
-**What.** Single-variable A/Bs on the D-2 stack for shape-grouping and for the
-GatedNorm/attn-gate/XSA trio. Each ≥2 draws given the sub-2pp margins.
+| arm | tok/s (tail 250–349) | reported MFU | drops |
+|---|---|---|---|
+| control | 321,082–322,258 (mean 321,670) | 20.73–20.80% | 1.42–1.47% |
+| trio | 316,587–317,919 (mean 317,253) | 20.44–20.52% | 2.04–2.06% |
+
+Bands are non-overlapping and the trio mean is **1.37% below** control, missing the
+pre-registered +1.0% gate in both draws. Ranked on tok/s: reported MFU is shown but not
+used, because `lm_flops_per_token` omits the work XSA and the attention gate add. Drops
+are 42.1% worse, which was not the registered ranking metric. No conditional
+single-variable arms were submitted, per the pre-registration.
+
+**Reconciliation that matters more than the verdict:** GatedNorm, XSA and the attention
+gate are **unconditional on `main`** — `experiments/grug/moe/model.py:6` states the
+architecture as "QB-routed MoE with GatedNorm, XSA, sigmoid combine weights", and the
+config docstring lists them as hardcoded. So this is not an unported lever we declined;
+it is a cost `main` already pays at EP64. Whether the trade is correct is a *quality*
+question, and nothing in this experiment measures quality. It should be an explicit
+decision rather than an inherited default.
+
+**What is genuinely open.** Muon shape-grouping (+0.09pp on FSDP) only. That is below
+the ~2pp threshold this project's own protocol sets for repeated placement draws, so it
+needs a reason to believe before it earns rack time.
+
+**What.** A single-variable A/B on the D-2 stack for shape-grouping, ≥2 draws given the
+sub-2pp margin. The trio arm is done and closed; do not resubmit it.
 
 ### D-7. Attack the drop residual somewhere other than the router controller
 

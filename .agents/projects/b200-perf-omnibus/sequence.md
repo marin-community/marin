@@ -74,9 +74,29 @@ changes what the series contains.
 
 | # | Commit | From | Size |
 |--:|---|---|--:|
-| A1 | Log the MoE capacity-overflow metric through the tracker | `2d4a87395`, `4fbc89152` | ~+30 |
+| A0 | Port scan-layers (`use_array_stacked_blocks` + `SCALE_SCAN_LAYERS`) | `97b53fe0e` | +92 / −22 |
+| A1 | Finish the drop metric: `SCALE_REPORT_DROPS` and the chunked-backend count | `cefc6d47b` (extract) | ~+30 |
 | A2 | Expose `SCALE_CAPACITY_FACTOR` on the EP launcher and reconcile the default | `54bbe3d23` (extract) | ~+8 |
 | A3 | Document the required XLA flag set | new | docs only |
+| A4 | Widen the dispatcher's forwarded-env prefix so the allocator reaches tasks | `agent/deri-d67` | ~+1 |
+
+**A0 is a prerequisite the plan originally missed, and it must land first.**
+`97b53fe0e` is not an ancestor of `origin/main` and appeared nowhere in this series,
+yet **every EP64 submit command in the record sets `SCALE_SCAN_LAYERS 1`** — including
+the D-2 composed draw. Without it the series lands a `main` that cannot run the
+configuration every measurement was taken at. It also blocks B4 (whose source
+`a33e16ced` modifies the scan path A0 introduces) and blocked the D-12 memory probe,
+which could find no ref combining the candidate graph with EP64 and JAX 0.11.
+
+**A1 is half-landed on `main` and the half that is missing is the load-bearing half.**
+The counter and tracker keys already exist — `capacity_overflow_rate` and
+`train/router/capacity_overflow_rate_mean` in `experiments/grug/moe/model.py`, with
+`_zero_dropped_assignments` wired through `_moe/common.py`, `sonic.py` and
+`scatter.py`. But **`SCALE_REPORT_DROPS` does not exist on `main` at all** (zero
+occurrences in `launch_cw_scale.py`), and neither does the chunked-backend
+drop-accounting fix `cefc6d47b`. Both live only on `mcwitt/fsdp-drop-metric`. The
+regression risk to test for is a backend that silently reports *zero* drops because its
+path was never wired — indistinguishable from a clean run.
 
 A2 carries two hazards. `SCALE_CAPACITY_FACTOR` was implemented **twice
 independently under the same environment-variable name** (`595958b83` and
@@ -112,7 +132,7 @@ and `agent/deri-d2-build` both carry
 standalone-benchmark numbers from that line may have run on the default allocator —
 worth checking before any of them are used as a control.
 
-A1 first, always. It is one line of the fix plus the metric, and it is what makes
+A0 first, then A1. A1 is one line of the fix plus the metric, and it is what makes
 every subsequent measurement interpretable — including settling the unmeasured drop
 rates of the FSDP figures the EP work is being compared against.
 
@@ -126,7 +146,7 @@ auto-PGLE must not be enabled (it crashes multi-host).
 | B1 | Add the `quack-kernels[cu13]` dependency and cutlass/quack mypy ignores | `538381606` (extract) | ~+10 |
 | B2 | Add the `sonic_cute` QuACK SM100 grouped-GEMM backend and `SCALE_MOE_IMPL`/`SCALE_ATTN_IMPL` | branch-tip file set, **not** `5cf76b64a` — see below | ~+560 |
 | B3 | Replica-local embedding gather | `bdf61d7ed` | +32 / −6 |
-| B4 | Precompute FA4 per-layer segment bounds outside the scan | `a33e16ced` | +156 / −30 |
+| B4 | Precompute FA4 per-layer segment bounds outside the scan — **blocked on A0** | `a33e16ced` | +156 / −30 |
 
 The dependency commit comes first: the backend imports QuACK, and `538381606` is
 what supplies the pinned package.
@@ -202,7 +222,20 @@ Default `SCALE_A2A_CHUNKS` to 1; chunks=2 measured worse.
 
 | # | Commit | From | Size | Measured |
 |--:|---|---|--:|---|
-| E2 | Same-step spill to the next-ranked selected expert on bucket overflow | `1224ccb02` | **+147 / −12** | **−0.213pp for half the drops**; 20.708% at 1.44% with cf1.0625 |
+| E2 | Same-step spill to the next-ranked selected expert on bucket overflow | `1224ccb02` (see bug below) | **+147 / −12** | **−0.213pp for half the drops**; 20.708% at 1.44% with cf1.0625 — measured on the buggy source |
+
+**The source commit `1224ccb02` has a routing bug, found during extraction.** It reuses
+the **displaced** expert's combine weight for a spilled assignment instead of the
+router-endorsed expert's own weight, and it does not cap attempts at `top_k − 1` — it
+wraps repeatedly over the selected experts. Both are corrected in the extraction
+(`agent/impl-e2-spill`), with a regression test that distinguishes the two numerically.
+
+This bears on the measurement, not just the code. E2's recorded result is the
+qualifying evidence that spill is the only mechanism reaching ≤3% drops with a true
+tail-100 window, and it was taken with routing that credited tokens at the wrong
+expert's weight. The throughput figure is probably unaffected — collective volume is
+unchanged — but the *fidelity* interpretation rests on a mis-crediting path, and a loss
+curve would hide exactly this. Re-measure inside a D-2 draw rather than standalone.
 
 QB routing needs no commit: it is hardcoded on `main` and has been since April, via
 `36104c763` (#4084) and `90f3c2f8f` (#4458). `GrugModelConfig` documents GatedNorm, XSA
