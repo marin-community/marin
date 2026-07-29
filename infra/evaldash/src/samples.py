@@ -54,13 +54,15 @@ class SampleTasksResponse(BaseModel):
 
 
 class SampleCounts(BaseModel):
-    """Unpaginated correctness counts for one task."""
+    """Unpaginated per-task outcome counts. ``ungraded`` (no primary metric, ``correct is None``) is
+    tracked apart from ``incorrect`` so a sample that was never scored is not reported as a wrong answer."""
 
     model_config = ConfigDict(frozen=True)
 
     all: int
     correct: int
     incorrect: int
+    ungraded: int
 
 
 class SamplesResponse(BaseModel):
@@ -195,7 +197,7 @@ def _empty_samples(
         total=0,
         offset=offset,
         limit=limit,
-        counts=SampleCounts(all=0, correct=0, incorrect=0),
+        counts=SampleCounts(all=0, correct=0, incorrect=0, ungraded=0),
         rows=(),
     )
 
@@ -249,16 +251,20 @@ def fetch_samples(
     metric_columns = tuple(sorted({name for row in metric_maps if row for name in row}))
     picked = primary_metric(dict.fromkeys(metric_columns, 0.0))
     primary = picked[0] if picked is not None else None
-    n_correct = sum(1 for value in correct_values if bool(value))
+    n_correct = sum(1 for value in correct_values if value is True)
+    n_ungraded = sum(1 for value in correct_values if value is None)
     counts = SampleCounts(
         all=table.num_rows,
         correct=n_correct,
-        incorrect=table.num_rows - n_correct,
+        incorrect=table.num_rows - n_correct - n_ungraded,
+        ungraded=n_ungraded,
     )
     if correct == "correct":
-        indices = [i for i, value in enumerate(correct_values) if bool(value)]
+        indices = [i for i, value in enumerate(correct_values) if value is True]
     elif correct == "incorrect":
-        indices = [i for i, value in enumerate(correct_values) if not bool(value)]
+        indices = [i for i, value in enumerate(correct_values) if value is False]
+    elif correct == "ungraded":
+        indices = [i for i, value in enumerate(correct_values) if value is None]
     else:
         indices = list(range(table.num_rows))
     page_indices = indices[offset : offset + limit]

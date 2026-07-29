@@ -71,11 +71,12 @@ def main() -> None:
     if not records_dir:
         records_dir = tempfile.mkdtemp(prefix="evaldash-fixtures-")
         fixtures.build_fixtures(records_dir)
-    os.environ["RECORDS_PREFIXES"] = records_dir
 
     store = server.MemoryRecordStore()
     store.refresh(list_records(records_dir))
-    app = server.create_app(store, server._dashboard_dist(), server.NullClusterGateway())
+    # Ingest only the local fixture dir (never the remote gs://+s3:// defaults the module captured
+    # at import) so a screenshot run stays fully offline.
+    app = server.create_app(store, server._dashboard_dist(), server.NullClusterGateway(), prefixes=(records_dir,))
 
     uv_server, thread = _serve(app)
     base = f"http://{HOST}:{PORT}"

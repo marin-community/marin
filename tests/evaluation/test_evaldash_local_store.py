@@ -35,7 +35,9 @@ def store(tmp_path) -> server.MemoryRecordStore:
 
 @pytest.fixture
 def client(store) -> TestClient:
-    app = server.create_app(store, server._dashboard_dist(), server.NullClusterGateway())
+    # prefixes=() disables the background ingestor: the store is already populated from fixtures, and
+    # this keeps the test hermetic (it never scans the remote gs://+s3:// defaults).
+    app = server.create_app(store, server._dashboard_dist(), server.NullClusterGateway(), prefixes=())
     with TestClient(app) as client:
         yield client
 
@@ -82,6 +84,16 @@ def test_ungraded_sample_does_not_count_as_incorrect_answer(store):
     ungraded = [row for row in page.rows if row.correct is None]
     assert len(ungraded) == 1
     assert ungraded[0].metrics == {}
+
+    # The ungraded row is its own bucket: it is excluded from both correct and incorrect, so the
+    # three counts partition the graded rows and `ungraded` accounts for the rest.
+    assert page.counts.model_dump() == {"all": 5, "correct": 3, "incorrect": 1, "ungraded": 1}
+
+    only_ungraded = samples.fetch_samples(results_path, "mmlu", offset=0, limit=50, correct="ungraded")
+    assert [row.doc_id for row in only_ungraded.rows] == [ungraded[0].doc_id]
+
+    incorrect = samples.fetch_samples(results_path, "mmlu", offset=0, limit=50, correct="incorrect")
+    assert all(row.correct is False for row in incorrect.rows)
 
 
 def test_api_surface_over_fixtures(client):

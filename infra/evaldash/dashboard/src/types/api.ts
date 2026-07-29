@@ -320,7 +320,7 @@ export interface SamplesResponse {
   total: number
   offset: number
   limit: number
-  counts?: { all: number; correct: number; incorrect: number }
+  counts?: { all: number; correct: number; incorrect: number; ungraded: number }
   rows: SampleRow[]
 }
 

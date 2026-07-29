@@ -478,6 +478,10 @@ class Ingestor:
 
     async def run_once(self) -> None:
         """Run one full ingest pass, serialised against any other pass via ``_lock``."""
+        if not self._prefixes:
+            # No roots to scan: leave the (externally populated) store untouched rather than
+            # refreshing it to empty.
+            return
         async with self._lock:
             records: list[EvalRunRecord] = []
             for prefix in self._prefixes:
@@ -503,6 +507,8 @@ class Ingestor:
             self.last_pass_time = _utcnow_iso()
 
     async def run_loop(self) -> None:
+        if not self._prefixes:
+            return  # ingestion disabled; nothing to poll
         while True:
             try:
                 await self.run_once()
@@ -644,9 +650,19 @@ class NullClusterGateway:
         return {"reachable": False, "error": "local mode: cluster unavailable", "source": "", "entries": []}
 
 
-def create_app(store: RecordStore, dist: Path, gateway: ClusterGatewayLike) -> Starlette:
-    """Build the Starlette app over a store, the built SPA directory, and the cluster gateway."""
-    ingestor = Ingestor(store, RECORDS_PREFIXES, INGEST_INTERVAL_SECONDS)
+def create_app(
+    store: RecordStore,
+    dist: Path,
+    gateway: ClusterGatewayLike,
+    prefixes: tuple[str, ...] = RECORDS_PREFIXES,
+) -> Starlette:
+    """Build the Starlette app over a store, the built SPA directory, and the cluster gateway.
+
+    ``prefixes`` are the record roots the background ingestor scans; pass an empty tuple to disable
+    ingestion entirely (for a store populated out of band, e.g. tests or a one-shot screenshot run),
+    which keeps the app from ever reaching the remote defaults.
+    """
+    ingestor = Ingestor(store, prefixes, INGEST_INTERVAL_SECONDS)
 
     @contextlib.asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
