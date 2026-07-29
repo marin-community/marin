@@ -221,7 +221,7 @@ def test_drain_child_priority_uses_explicit_or_inherited_band(state, parent_band
 
 
 # =============================================================================
-# Effective-band budget demotion + priority ordering (issue #7726)
+# Effective-band budget demotion + priority ordering on the K8s dispatch drain
 # =============================================================================
 
 
