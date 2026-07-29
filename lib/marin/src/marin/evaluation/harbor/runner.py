@@ -221,6 +221,7 @@ def _aggregate(trials: list[HarborTrial], dataset: str, samples_path: str | None
 
 def _run_driver(config_file: Path, driver_env: Mapping[str, str]) -> None:
     """Run the Harbor trial driver in an isolated uv env (Harbor + Daytona, no marin project)."""
+    logger.info("Harbor runtime: version=%s commit=%s", HARBOR.version, HARBOR.commit)
     cmd = [
         "uv",
         "run",

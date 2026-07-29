@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,7 @@ from marin.evaluation.harbor.runner import (
 )
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError
+from marin.external_dependencies import HARBOR
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem import StoragePath
 
@@ -175,8 +177,9 @@ def test_native_job_config_translates_the_external_harbor_contract():
     }
 
 
-def test_run_harbor_normalizes_a_completed_external_trial(tmp_path, monkeypatch):
+def test_run_harbor_normalizes_a_completed_external_trial(tmp_path, monkeypatch, caplog):
     captured: dict = {}
+    caplog.set_level(logging.INFO, logger="marin.evaluation.harbor.runner")
 
     def run_driver(command, *, check, env) -> None:
         assert check
@@ -217,6 +220,7 @@ def test_run_harbor_normalizes_a_completed_external_trial(tmp_path, monkeypatch)
     assert "OPENAI_API_KEY" not in captured["env"]
     assert result.total_trials == 1
     assert result.accuracy == 1.0
+    assert f"Harbor runtime: version={HARBOR.version} commit={HARBOR.commit}" in caplog.messages
 
 
 def test_harbor_executor_fails_when_trial_contains_exception_info(tmp_path, monkeypatch):
