@@ -77,7 +77,7 @@ def test_record_json_uses_eval_alias_and_plain_string_enum(tmp_path):
     assert raw["description"] == "baseline sweep"
 
 
-def test_record_json_includes_harbor_config_digest(tmp_path):
+def test_record_json_includes_harbor_policy_identity_and_effective_limit(tmp_path):
     record = _RECORD.model_copy(
         update={
             "evaluation": EvalRef(
@@ -88,6 +88,7 @@ def test_record_json_includes_harbor_config_digest(tmp_path):
                     version="1.0",
                     agent="terminus-2",
                     env="daytona",
+                    task_limit=2,
                     config_digest="sha256:" + "a" * 64,
                 ),
             )
@@ -103,6 +104,7 @@ def test_record_json_includes_harbor_config_digest(tmp_path):
         "version": "1.0",
         "agent": "terminus-2",
         "env": "daytona",
+        "task_limit": 2,
         "config_digest": "sha256:" + "a" * 64,
     }
 

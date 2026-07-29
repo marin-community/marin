@@ -1,5 +1,7 @@
 n_attempts: 1
 n_concurrent_trials: 2
+retry:
+  exclude_exceptions: []
 environment:
   type: daytona
   force_build: false

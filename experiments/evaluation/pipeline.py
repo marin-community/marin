@@ -30,7 +30,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 
 from experiments.evaluation.evals import SUITES
-from experiments.evaluation.launch import LaunchSpec, launch_group
+from experiments.evaluation.launch import LaunchSpec, launch_group, prepare_evaluation_batch
 from experiments.evaluation.models import models
 
 
@@ -59,7 +59,7 @@ def run_eval_pipeline_step(config: EvalStepConfig) -> None:
         cluster="marin",
         version=config.version,
     )
-    submitted = launch_group(spec, iris_ctx().client)
+    submitted = launch_group(prepare_evaluation_batch(spec), iris_ctx().client)
     submitted.job.wait(timeout=float("inf"))
 
 

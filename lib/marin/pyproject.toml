@@ -184,10 +184,6 @@ vllm = [
     "torchvision==0.26.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
 ]
 
-harbor = [
-    "harbor>=0.1.42",
-]
-
 dedup = [
     # Pure-Python workspace member; it pulls the native marin-dupekit-native
     # kernels transitively (see lib/dupekit/pyproject.toml).

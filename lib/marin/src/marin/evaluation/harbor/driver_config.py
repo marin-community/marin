@@ -1,17 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Harbor job policies and served-endpoint adaptation for the isolated driver."""
+"""Opaque Harbor policies and the isolated-driver process protocol."""
 
-import hashlib
 import json
+import logging
 import subprocess
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+import tempfile
+from collections.abc import Mapping, Sequence
+from dataclasses import asdict, dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from marin.evaluation.harbor.dataset import HF_DATASET_PREFIX
+from marin.evaluation.eval_env import env_vars_from_keys
 from marin.external_dependencies import HARBOR
 
 _DEFAULT_MODEL_INFO = {
@@ -20,17 +22,83 @@ _DEFAULT_MODEL_INFO = {
     "input_cost_per_token": 0.0,
     "output_cost_per_token": 0.0,
 }
-_OPENCODE_AGENT = "opencode"
 _HOSTED_VLLM_PROVIDER = "hosted_vllm"
-_HOSTED_VLLM_DISPLAY_NAME = "Hosted vLLM"
-_OPENAI_COMPATIBLE_PACKAGE = "@ai-sdk/openai-compatible"
 _TRIAL_DRIVER = Path(__file__).with_name("trial_driver.py")
+_DRIVER_PYTHONPATH = str(Path(__file__).parents[3])
+_DRIVER_SYSTEM_ENV_KEYS = (
+    "CURL_CA_BUNDLE",
+    "HOME",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "PATH",
+    "PYTHONHASHSEED",
+    "REQUESTS_CA_BUNDLE",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE",
+    "TMPDIR",
+    "UV_CACHE_DIR",
+    "XDG_CACHE_HOME",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+)
+
+HARBOR_PACKAGES = (HARBOR.requirement(), *HARBOR.runtime_requirements)
+HARBOR_RUNTIME = "; ".join(HARBOR_PACKAGES)
+
+logger = logging.getLogger(__name__)
+
+
+class HarborDatasetKind(StrEnum):
+    """How Marin obtains the dataset before the isolated driver runs."""
+
+    HARBOR_REGISTRY = "harbor_registry"
+    HUGGING_FACE = "hugging_face"
+    LOCAL = "local"
 
 
 @dataclass(frozen=True)
-class HarborRetryConfig:
-    """Retry failed trials unless their exception type is explicitly excluded."""
+class ValidatedHarborConfig:
+    """An opaque validated policy plus Marin-owned launch metadata."""
 
+    stable_policy_json: str
+    digest: str
+    dataset_kind: HarborDatasetKind
+    dataset_selector: str
+    dataset_revision: str | None
+    config_dir: Path
+    agent: str
+    environment: str
+
+    @property
+    def record_dataset(self) -> str:
+        if self.dataset_kind == HarborDatasetKind.HUGGING_FACE:
+            return f"hf://{self.dataset_selector}"
+        return self.dataset_selector
+
+    @property
+    def record_revision(self) -> str:
+        return self.dataset_revision or "unversioned"
+
+
+@dataclass(frozen=True)
+class HarborRuntimeOverlay:
+    """Marin-owned values applied after the isolated driver reparses the policy."""
+
+    job_name: str
+    jobs_dir: str
+    dataset_path: str | None
+    endpoint_url: str
+    served_model: str
+    task_limit: int | None
+    model_agent_kwargs: Mapping[str, object]
+
+
+# These authoring dataclasses remain only for the registry policies not converted
+# in the first YAML migration. They are removed with that mechanical follow-up.
+@dataclass(frozen=True)
+class HarborRetryConfig:
     max_retries: int = 0
     exclude_exceptions: tuple[str, ...] = ()
     wait_multiplier: float = 1.0
@@ -40,8 +108,6 @@ class HarborRetryConfig:
 
 @dataclass(frozen=True)
 class HarborEnvironmentConfig:
-    """Sandbox type, lifecycle, and resources for each trial."""
-
     environment_type: str
     force_build: bool = False
     delete: bool = True
@@ -53,8 +119,6 @@ class HarborEnvironmentConfig:
 
 @dataclass(frozen=True)
 class HarborAgentConfig:
-    """Agent identity, timeouts, token budget, and implementation arguments."""
-
     name: str
     max_output_tokens: int = 8192
     max_timeout: float | None = None
@@ -64,14 +128,12 @@ class HarborAgentConfig:
 
 @dataclass(frozen=True)
 class HarborVerifierConfig:
-    """Verifier execution policy."""
-
     max_timeout: float | None = None
 
 
 @dataclass(frozen=True)
 class HarborRunConfig:
-    """Typed authoring form for a registry-backed Harbor job."""
+    """Temporary Python authoring form for Harbor policies not yet moved to YAML."""
 
     dataset: str
     revision: str
@@ -85,216 +147,210 @@ class HarborRunConfig:
     verifier: HarborVerifierConfig = field(default_factory=HarborVerifierConfig)
 
 
-@dataclass(frozen=True)
-class HarborJobConfig:
-    """One Harbor ``JobConfig`` document plus its durable identity and selectors."""
+def legacy_harbor_policy_document(run: HarborRunConfig) -> dict[str, object]:
+    """Lower a not-yet-migrated Python policy for isolated preflight."""
+    agent_kwargs = dict(run.agent.kwargs)
+    configured_model_info = agent_kwargs.get("model_info")
+    if configured_model_info is not None and not isinstance(configured_model_info, Mapping):
+        raise ValueError("Harbor agent model_info must be a mapping")
+    if configured_model_info is not None or run.agent.max_output_tokens != _DEFAULT_MODEL_INFO["max_output_tokens"]:
+        agent_kwargs["model_info"] = {
+            **_DEFAULT_MODEL_INFO,
+            **(configured_model_info or {}),
+            "max_output_tokens": run.agent.max_output_tokens,
+        }
 
-    document: Mapping[str, Any]
-    digest: str
-    dataset: str
-    revision: str
-    agent: str
-    environment: str
+    if run.dataset.startswith("hf://"):
+        dataset = {"name": run.dataset, "ref": run.revision, "n_tasks": run.task_limit}
+    else:
+        selector = {"ref": run.revision} if "/" in run.dataset else {"version": run.revision}
+        dataset = {"name": run.dataset, **selector, "n_tasks": run.task_limit}
 
-
-def _single_config_entry(config: Mapping[str, Any], field_name: str) -> Mapping[str, Any]:
-    values = config.get(field_name)
-    if not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], Mapping):
-        raise ValueError(f"Harbor config must declare exactly one {field_name.removesuffix('s')}")
-    return values[0]
-
-
-def _job_config_from_document(document: Mapping[str, Any]) -> HarborJobConfig:
-    normalized = json.loads(json.dumps(document))
-    if normalized.get("tasks"):
-        raise ValueError("Harbor config tasks are incompatible with the shared launcher; declare exactly one dataset")
-    agent = _single_config_entry(normalized, "agents")
-    dataset = _single_config_entry(normalized, "datasets")
-    environment = normalized.get("environment")
-    if not isinstance(environment, Mapping):
-        raise ValueError("Harbor config must declare one environment")
-
-    dataset_name = dataset.get("name") or dataset.get("path")
-    agent_name = agent.get("name") or agent.get("import_path")
-    environment_name = environment.get("type") or environment.get("import_path")
-    if not isinstance(dataset_name, str):
-        raise ValueError("Harbor config dataset must have a name or path")
-    if not isinstance(agent_name, str):
-        raise ValueError("Harbor config agent must have a name or import_path")
-    if not isinstance(environment_name, str):
-        raise ValueError("Harbor config environment must have a type or import_path")
-    agent_kwargs = agent.get("kwargs")
-    if agent_kwargs is None:
-        agent_kwargs = {}
-    if not isinstance(agent_kwargs, Mapping):
-        raise ValueError("Harbor agent kwargs must be a mapping")
-    _model_info(agent_kwargs.get("model_info"))
-    if agent.get("name") == _OPENCODE_AGENT:
-        _opencode_config_for_endpoint(agent_kwargs.get("opencode_config", {}), "http://validation.invalid")
-
-    canonical = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
-    return HarborJobConfig(
-        document=normalized,
-        digest=f"sha256:{hashlib.sha256(canonical).hexdigest()}",
-        dataset=dataset_name,
-        revision=str(dataset.get("ref") or dataset.get("version") or "unversioned"),
-        agent=agent_name,
-        environment=environment_name,
-    )
+    return {
+        "n_attempts": run.attempts,
+        "timeout_multiplier": run.timeout_multiplier,
+        "n_concurrent_trials": run.n_concurrent,
+        "retry": {
+            "max_retries": run.retry.max_retries,
+            "exclude_exceptions": list(run.retry.exclude_exceptions),
+            "wait_multiplier": run.retry.wait_multiplier,
+            "min_wait_sec": run.retry.min_wait,
+            "max_wait_sec": run.retry.max_wait,
+        },
+        "environment": {
+            "type": run.environment.environment_type,
+            "force_build": run.environment.force_build,
+            "delete": run.environment.delete,
+            "override_cpus": run.environment.cpus,
+            "override_memory_mb": run.environment.memory_mb,
+            "override_storage_mb": run.environment.storage_mb,
+            "kwargs": dict(run.environment.kwargs),
+        },
+        "verifier": {"max_timeout_sec": run.verifier.max_timeout},
+        "agents": [
+            {
+                "name": run.agent.name,
+                "max_timeout_sec": run.agent.max_timeout,
+                "override_setup_timeout_sec": run.agent.setup_timeout,
+                "kwargs": agent_kwargs,
+            }
+        ],
+        "datasets": [dataset],
+    }
 
 
-def load_harbor_job_config(path: Path) -> HarborJobConfig:
-    """Validate and normalize a Harbor YAML or JSON file with the pinned Harbor schema."""
-    command = [
+def _driver_command(command: str, *paths: Path) -> list[str]:
+    args = [
         "uv",
         "run",
         "--isolated",
         "--no-project",
         "--prerelease=allow",
-        "--with",
-        HARBOR.requirement(),
-        "python",
-        str(_TRIAL_DRIVER),
-        "validate",
-        str(path),
     ]
+    for package in HARBOR_PACKAGES:
+        args.extend(("--with", package))
+    args.extend(("python", str(_TRIAL_DRIVER), command, *(str(path) for path in paths)))
+    return args
+
+
+def _driver_environment(driver_env: Mapping[str, str] | None = None) -> dict[str, str]:
+    environment = env_vars_from_keys(_DRIVER_SYSTEM_ENV_KEYS)
+    environment.update(driver_env or {})
+    environment["PYTHONPATH"] = _DRIVER_PYTHONPATH
+    return environment
+
+
+def _driver_failure(exc: subprocess.CalledProcessError) -> ValueError:
+    stderr = exc.stderr.strip() if isinstance(exc.stderr, str) else ""
+    stdout = exc.stdout.strip() if isinstance(exc.stdout, str) else ""
+    detail = stderr or stdout or f"driver exited with status {exc.returncode}"
+    return ValueError(detail)
+
+
+def _capture_driver(command: list[str]) -> subprocess.CompletedProcess[str]:
     try:
-        completed = subprocess.run(command, check=True, capture_output=True, text=True)
-    except subprocess.CalledProcessError as exc:
-        detail = exc.stderr.strip() or exc.stdout.strip() or f"validator exited with status {exc.returncode}"
-        raise ValueError(f"invalid Harbor config {path}: {detail}") from exc
-    try:
-        normalized = json.loads(completed.stdout)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Harbor validator returned invalid JSON for {path}") from exc
-    if not isinstance(normalized, Mapping):
-        raise ValueError(f"Harbor config {path} must contain a mapping")
-    return _job_config_from_document(normalized)
-
-
-def _model_info(value: object, max_output_tokens: int | None = None) -> dict[str, Any]:
-    configured = {} if value is None else value
-    if not isinstance(configured, Mapping):
-        raise ValueError("Harbor agent model_info must be a mapping")
-    model_info = {**_DEFAULT_MODEL_INFO, **configured}
-    if max_output_tokens is not None:
-        model_info["max_output_tokens"] = max_output_tokens
-    return model_info
-
-
-def harbor_job_config(job_name: str, run: HarborRunConfig) -> HarborJobConfig:
-    """Lower a registry-authored policy into the shared Harbor job representation."""
-    agent_kwargs = dict(run.agent.kwargs)
-    agent_kwargs["model_info"] = _model_info(
-        agent_kwargs.get("model_info"),
-        max_output_tokens=run.agent.max_output_tokens,
-    )
-
-    if run.dataset.startswith(HF_DATASET_PREFIX):
-        dataset = {"path": run.dataset, "n_tasks": run.task_limit}
-    else:
-        selector = {"ref": run.revision} if "/" in run.dataset else {"version": run.revision}
-        dataset = {"name": run.dataset, **selector, "n_tasks": run.task_limit}
-
-    return _job_config_from_document(
-        {
-            "job_name": job_name,
-            "n_attempts": run.attempts,
-            "timeout_multiplier": run.timeout_multiplier,
-            "n_concurrent_trials": run.n_concurrent,
-            "retry": {
-                "max_retries": run.retry.max_retries,
-                "exclude_exceptions": list(run.retry.exclude_exceptions),
-                "wait_multiplier": run.retry.wait_multiplier,
-                "min_wait_sec": run.retry.min_wait,
-                "max_wait_sec": run.retry.max_wait,
-            },
-            "environment": {
-                "type": run.environment.environment_type,
-                "force_build": run.environment.force_build,
-                "delete": run.environment.delete,
-                "override_cpus": run.environment.cpus,
-                "override_memory_mb": run.environment.memory_mb,
-                "override_storage_mb": run.environment.storage_mb,
-                "kwargs": dict(run.environment.kwargs),
-            },
-            "verifier": {"max_timeout_sec": run.verifier.max_timeout},
-            "agents": [
-                {
-                    "name": run.agent.name,
-                    "model_name": f"{_HOSTED_VLLM_PROVIDER}/{job_name}",
-                    "max_timeout_sec": run.agent.max_timeout,
-                    "override_setup_timeout_sec": run.agent.setup_timeout,
-                    "kwargs": agent_kwargs,
-                }
-            ],
-            "datasets": [dataset],
-        }
-    )
-
-
-def _opencode_config_for_endpoint(config: object, endpoint_url: str) -> dict[str, Any]:
-    opencode_config = config
-    if not isinstance(opencode_config, Mapping):
-        raise ValueError("Harbor agent opencode_config must be a mapping")
-    providers = opencode_config.get("provider", {})
-    if not isinstance(providers, Mapping):
-        raise ValueError("Harbor OpenCode provider config must be a mapping")
-    hosted_vllm = providers.get(_HOSTED_VLLM_PROVIDER, {})
-    if not isinstance(hosted_vllm, Mapping):
-        raise ValueError("Harbor OpenCode hosted_vllm provider config must be a mapping")
-    options = hosted_vllm.get("options", {})
-    if not isinstance(options, Mapping):
-        raise ValueError("Harbor OpenCode hosted_vllm provider options must be a mapping")
-
-    return {
-        **opencode_config,
-        "provider": {
-            **providers,
-            _HOSTED_VLLM_PROVIDER: {
-                **hosted_vllm,
-                "npm": _OPENAI_COMPATIBLE_PACKAGE,
-                "name": _HOSTED_VLLM_DISPLAY_NAME,
-                "options": {**options, "baseURL": endpoint_url},
-            },
-        },
-    }
-
-
-def adapt_job_config(
-    config: HarborJobConfig,
-    *,
-    job_name: str,
-    jobs_dir: str,
-    dataset_path: str | None,
-    endpoint_url: str,
-    served_model: str,
-    task_limit: int | None,
-    model_agent_kwargs: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Overlay Marin-owned runtime values on a Harbor ``JobConfig``."""
-    resolved = json.loads(json.dumps(config.document))
-    resolved["job_name"] = job_name
-    resolved["jobs_dir"] = jobs_dir
-
-    dataset = resolved["datasets"][0]
-    if dataset_path is not None:
-        dataset.pop("name", None)
-        dataset.pop("ref", None)
-        dataset.pop("version", None)
-        dataset["path"] = dataset_path
-    if task_limit is not None:
-        dataset["n_tasks"] = task_limit
-
-    agent = resolved["agents"][0]
-    agent["model_name"] = f"{_HOSTED_VLLM_PROVIDER}/{served_model}"
-    agent_kwargs = {**model_agent_kwargs, **agent.get("kwargs", {})}
-    agent_kwargs["model_info"] = _model_info(agent_kwargs.get("model_info"))
-    agent_kwargs["api_base"] = endpoint_url
-    if agent.get("name") == _OPENCODE_AGENT:
-        agent_kwargs["opencode_config"] = _opencode_config_for_endpoint(
-            agent_kwargs.get("opencode_config", {}),
-            endpoint_url,
+        return subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            env=_driver_environment(),
         )
-    agent["kwargs"] = agent_kwargs
-    return resolved
+    except subprocess.CalledProcessError as exc:
+        raise _driver_failure(exc) from exc
+
+
+def _stream_driver(command: list[str], driver_env: Mapping[str, str]) -> None:
+    try:
+        subprocess.run(command, check=True, env=_driver_environment(driver_env))
+    except subprocess.CalledProcessError as exc:
+        raise _driver_failure(exc) from exc
+
+
+def _validated_config(payload: object, path: Path) -> ValidatedHarborConfig:
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"Harbor preflight returned a non-object result for {path}")
+
+    def required_string(name: str) -> str:
+        value = payload.get(name)
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"Harbor preflight returned invalid {name!r} metadata for {path}")
+        return value
+
+    revision = payload.get("dataset_revision")
+    if revision is not None and not isinstance(revision, str):
+        raise ValueError(f"Harbor preflight returned invalid dataset revision metadata for {path}")
+    try:
+        dataset_kind = HarborDatasetKind(required_string("dataset_kind"))
+    except ValueError as exc:
+        raise ValueError(f"Harbor preflight returned an unknown dataset kind for {path}") from exc
+
+    return ValidatedHarborConfig(
+        stable_policy_json=required_string("stable_policy_json"),
+        digest=required_string("digest"),
+        dataset_kind=dataset_kind,
+        dataset_selector=required_string("dataset_selector"),
+        dataset_revision=revision,
+        config_dir=path.resolve().parent,
+        agent=required_string("agent"),
+        environment=required_string("environment"),
+    )
+
+
+def preflight_harbor_configs(
+    requests: Sequence[tuple[Path, Mapping[str, object]]],
+) -> tuple[ValidatedHarborConfig, ...]:
+    """Validate Harbor policies and placeholder effective jobs in one isolated process."""
+    if not requests:
+        return ()
+
+    request_payload = [
+        {
+            "path": str(path.resolve()),
+            "model_agent_kwargs": dict(model_agent_kwargs),
+        }
+        for path, model_agent_kwargs in requests
+    ]
+    with tempfile.TemporaryDirectory(prefix="marin-harbor-preflight-") as temp_dir:
+        request_path = Path(temp_dir) / "requests.json"
+        try:
+            request_path.write_text(json.dumps(request_payload, ensure_ascii=False, separators=(",", ":")))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Harbor model agent kwargs must be JSON-serializable") from exc
+        request_path.chmod(0o600)
+        try:
+            completed = _capture_driver(_driver_command("preflight", request_path))
+        except ValueError as exc:
+            paths = ", ".join(str(path) for path, _ in requests)
+            raise ValueError(f"invalid Harbor config in [{paths}]: {exc}") from exc
+
+    try:
+        response = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Harbor preflight returned invalid JSON") from exc
+    if not isinstance(response, list) or len(response) != len(requests):
+        raise ValueError(
+            f"Harbor preflight returned {len(response) if isinstance(response, list) else 'invalid'} "
+            f"result(s) for {len(requests)} request(s)"
+        )
+    return tuple(_validated_config(payload, path) for payload, (path, _) in zip(response, requests, strict=True))
+
+
+def preflight_harbor_config(
+    path: Path,
+    model_agent_kwargs: Mapping[str, object],
+) -> ValidatedHarborConfig:
+    """Validate one Harbor policy and a placeholder effective job."""
+    return preflight_harbor_configs(((path, model_agent_kwargs),))[0]
+
+
+def run_harbor_driver(
+    config: ValidatedHarborConfig,
+    overlay: HarborRuntimeOverlay,
+    driver_env: Mapping[str, str],
+) -> None:
+    """Apply a runtime overlay and run one Harbor job in the isolated environment."""
+    runtime = {"version": HARBOR.version, "commit": HARBOR.commit}
+    logger.info("Harbor runtime: %s", json.dumps(runtime, sort_keys=True), extra={"harbor_runtime": runtime})
+    with tempfile.TemporaryDirectory(prefix="marin-harbor-run-") as temp_dir:
+        policy_path = Path(temp_dir) / "policy.json"
+        overlay_path = Path(temp_dir) / "overlay.json"
+        policy_path.write_text(config.stable_policy_json)
+        try:
+            overlay_path.write_text(
+                json.dumps(
+                    {
+                        **asdict(overlay),
+                        "model_agent_kwargs": dict(overlay.model_agent_kwargs),
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Harbor runtime overlay must be JSON-serializable") from exc
+        policy_path.chmod(0o600)
+        overlay_path.chmod(0o600)
+        command = _driver_command("run", policy_path, overlay_path)
+        logger.info("running Harbor driver: %s", " ".join(command))
+        _stream_driver(command, driver_env)

@@ -18,54 +18,29 @@ import hashlib
 import json
 import logging
 import re
-import subprocess
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from rigging.filesystem import StoragePath, is_remote_path, prefix_join, url_to_fs
 
-from marin.evaluation.eval_env import env_vars_from_keys
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
 from marin.evaluation.harbor.driver_config import (
-    HarborJobConfig,
-    adapt_job_config,
+    HarborRuntimeOverlay,
+    ValidatedHarborConfig,
+    run_harbor_driver,
 )
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.evaluation.samples import EvalSample, Grading, SampleKind, write_sample_parquet
-from marin.external_dependencies import HARBOR
 from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
 
-# Harbor is run as an external tool in an isolated uv environment (its Daytona SDK carries pre-release
-# pins that do not fit the marin lock). These specs pin what that ephemeral env installs.
-HARBOR_PACKAGES = (HARBOR.requirement(), *HARBOR.runtime_requirements)
-HARBOR_RUNTIME = "; ".join(HARBOR_PACKAGES)
-_DRIVER = str(Path(__file__).with_name("trial_driver.py"))
-_DRIVER_PYTHONPATH = str(Path(__file__).parents[3])
 _HARBOR_WORKDIR = Path("/tmp/harbor_workdir")
 _HARBOR_RESULTS_DIR = "harbor_results"
 _JOB_DATASET_LENGTH = 32
 _JOB_DIGEST_LENGTH = 12
-_DRIVER_SYSTEM_ENV_KEYS = (
-    "CURL_CA_BUNDLE",
-    "HOME",
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "NO_PROXY",
-    "PATH",
-    "REQUESTS_CA_BUNDLE",
-    "SSL_CERT_DIR",
-    "SSL_CERT_FILE",
-    "TMPDIR",
-    "UV_CACHE_DIR",
-    "XDG_CACHE_HOME",
-    "http_proxy",
-    "https_proxy",
-    "no_proxy",
-)
 
 # The reward at or above which a Harbor trial counts as solved (rewards are typically 0.0 / 1.0; the
 # margin tolerates float noise).
@@ -228,27 +203,6 @@ def _aggregate(trials: list[HarborTrial], dataset: str, samples_path: str | None
     )
 
 
-def _run_driver(config_file: Path, driver_env: Mapping[str, str]) -> None:
-    """Run the Harbor trial driver in an isolated uv env (Harbor + Daytona, no marin project)."""
-    runtime = {"version": HARBOR.version, "commit": HARBOR.commit}
-    logger.info("Harbor runtime: %s", json.dumps(runtime, sort_keys=True), extra={"harbor_runtime": runtime})
-    cmd = [
-        "uv",
-        "run",
-        "--isolated",
-        "--no-project",
-        "--prerelease=allow",
-    ]
-    for package in HARBOR_PACKAGES:
-        cmd.extend(("--with", package))
-    cmd.extend(("python", _DRIVER, "run", str(config_file)))
-    logger.info("running Harbor driver: %s", " ".join(cmd))
-    process_env = env_vars_from_keys(_DRIVER_SYSTEM_ENV_KEYS)
-    process_env.update(driver_env)
-    process_env["PYTHONPATH"] = _DRIVER_PYTHONPATH
-    subprocess.run(cmd, check=True, env=process_env)
-
-
 def _upload_trials(job_dir: Path, out_path: str) -> None:
     """Upload each finished trial directory under ``job_dir`` to ``out_path/harbor_trials`` for resume."""
     for trial_dir in (d for d in job_dir.iterdir() if d.is_dir()):
@@ -261,7 +215,8 @@ def _run_harbor_job(
     *,
     job_name: str,
     workdir: Path,
-    job_config: Mapping[str, object],
+    config: ValidatedHarborConfig,
+    overlay: HarborRuntimeOverlay,
     dataset: str,
     environment: str,
     output_dir: str,
@@ -275,12 +230,8 @@ def _run_harbor_job(
         if restored:
             logger.info("restored %d completed Harbor trial(s) from %s", restored, output_dir)
 
-    config_file = workdir / "job_config.json"
-    config_file.write_text(json.dumps(job_config))
-    config_file.chmod(0o600)
-
     logger.info("starting Harbor job %s (dataset=%s env=%s)", job_name, dataset, environment)
-    _run_driver(config_file, driver_env)
+    run_harbor_driver(config, overlay, driver_env)
 
     trials = _read_trials(job_dir)
     if is_remote_path(output_dir):
@@ -334,7 +285,7 @@ def _evaluation_outcome(run: Callable[[], HarborRunResult], output_dir: str) -> 
 class HarborExecutor:
     """Run one normalized Harbor job policy against a served model."""
 
-    config: HarborJobConfig
+    config: ValidatedHarborConfig
     task_limit: int | None
     model_agent_kwargs: Mapping[str, object]
     secret_env_keys: tuple[str, ...] = ()
@@ -346,19 +297,18 @@ class HarborExecutor:
         hf_token: str | None,
         driver_env: Mapping[str, str],
     ) -> HarborRunResult:
+        dataset = self.config.record_dataset
         job_name = _job_name(
-            self.config.dataset,
+            dataset,
             (self.config.digest, model.endpoint.model, self.task_limit),
         )
         workdir, results_dir = _job_paths(job_name)
         dataset_path = materialize_harbor_dataset(
-            self.config.dataset,
-            self.config.revision,
+            self.config,
             workdir,
             hf_token=hf_token,
         )
-        job_config = adapt_job_config(
-            self.config,
+        overlay = HarborRuntimeOverlay(
             job_name=job_name,
             jobs_dir=str(results_dir),
             dataset_path=str(dataset_path) if dataset_path is not None else None,
@@ -370,8 +320,9 @@ class HarborExecutor:
         return _run_harbor_job(
             job_name=job_name,
             workdir=workdir,
-            job_config=job_config,
-            dataset=self.config.dataset,
+            config=self.config,
+            overlay=overlay,
+            dataset=dataset,
             environment=self.config.environment,
             output_dir=output_dir,
             driver_env=driver_env,
