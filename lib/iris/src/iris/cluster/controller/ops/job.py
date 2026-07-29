@@ -25,6 +25,7 @@ from iris.cluster.controller.reconcile.policy import (
     MAX_REPLICAS_PER_JOB,
 )
 from iris.cluster.controller.schema import (
+    job_config_table,
     job_workdir_files_table,
     jobs_table,
 )
@@ -83,6 +84,24 @@ def _materialize_tasks(
     writes.bulk_insert_tasks(cur, rows)
 
 
+def resolve_priority_band(requested_band: int, inherited_band: int | None) -> int:
+    """The band a job is stored with, from its request and its parent's stored band.
+
+    The one rule for turning a ``PRIORITY_BAND_UNSPECIFIED`` (0) request into a real
+    band: an explicit request wins, a child otherwise inherits its parent's band, and a
+    root with no request is INTERACTIVE. ``inherited_band`` is ``None`` for a root.
+
+    Applied once, at the submit boundary, so ``job_config.priority_band`` and
+    ``tasks.priority_band`` never hold 0 and no reader re-derives a band. Proto3 still
+    carries 0 on the wire for a request that omits the field.
+    """
+    if requested_band != job_pb2.PRIORITY_BAND_UNSPECIFIED:
+        return requested_band
+    if inherited_band:
+        return inherited_band
+    return job_pb2.PRIORITY_BAND_INTERACTIVE
+
+
 @dataclass(frozen=True)
 class JobInsertResult:
     """What :func:`insert_job_and_config` computed, for the task-materialization
@@ -91,7 +110,7 @@ class JobInsertResult:
     replicas: int
     effective_submission_ms: int
     root_submitted_ms: int
-    band_sort_key: int
+    priority_band: int
     validation_error: str | None
 
 
@@ -118,7 +137,7 @@ def submit(
             max_retries_failure=int(request.max_retries_failure),
             max_retries_preemption=int(request.max_retries_preemption),
             priority_root_submitted_ms=inserted.root_submitted_ms,
-            priority_band=inserted.band_sort_key,
+            priority_band=inserted.priority_band,
         )
     cur.register(
         lambda: log_event(
@@ -163,11 +182,16 @@ def insert_job_and_config(
 
     parent_job_id = job_id.parent.to_wire() if job_id.parent is not None else None
     root_submitted_ms = effective_submission_ms
+    inherited_band: int | None = None
     if job_id.parent is not None:
         parent_row = cur.execute(
-            select(jobs_table.c.root_submitted_at_ms, jobs_table.c.submitting_user).where(
-                jobs_table.c.job_id == bindparam("job_id")
-            ),
+            select(
+                jobs_table.c.root_submitted_at_ms,
+                jobs_table.c.submitting_user,
+                job_config_table.c.priority_band,
+            )
+            .select_from(jobs_table.join(job_config_table, job_config_table.c.job_id == jobs_table.c.job_id))
+            .where(jobs_table.c.job_id == bindparam("job_id")),
             {"job_id": job_id.parent},
         ).first()
         if parent_row is None:
@@ -177,6 +201,9 @@ def insert_job_and_config(
         # caller: a federated subtree stays attributed to the principal that
         # launched the root.
         submitting_user = parent_row.submitting_user
+        # One level is enough: the parent's own submit already resolved its band, so
+        # the stored value is real and no chain walk is needed.
+        inherited_band = int(parent_row.priority_band)
     elif submitting_user is None:
         # A root with no resolved principal is an identity-less direct/loopback
         # submit — the same case the submit-time resolver attributes to local_admin.
@@ -188,11 +215,7 @@ def insert_job_and_config(
             Timestamp.from_ms(effective_submission_ms).add(duration_from_proto(request.scheduling_timeout)).epoch_ms()
         )
 
-    requested_band = int(request.priority_band)
-    if requested_band != job_pb2.PRIORITY_BAND_UNSPECIFIED:
-        band_sort_key = requested_band
-    else:
-        band_sort_key = job_pb2.PRIORITY_BAND_INTERACTIVE
+    priority_band = resolve_priority_band(int(request.priority_band), inherited_band)
 
     replicas = int(request.replicas)
     validation_error: str | None = None
@@ -265,7 +288,7 @@ def insert_job_and_config(
         timeout_ms=timeout_ms,
         preemption_policy=int(request.preemption_policy),
         existing_job_policy=int(request.existing_job_policy),
-        priority_band=int(request.priority_band),
+        priority_band=priority_band,
         task_image=request.task_image,
         container_profile=int(request.container_profile),
         submit_argv_json=list(request.submit_argv),
@@ -305,7 +328,7 @@ def insert_job_and_config(
         replicas=replicas,
         effective_submission_ms=effective_submission_ms,
         root_submitted_ms=root_submitted_ms,
-        band_sort_key=band_sort_key,
+        priority_band=priority_band,
         validation_error=validation_error,
     )
 

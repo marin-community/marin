@@ -895,12 +895,15 @@ def insert_mirrored_job_config(
     job_id: JobName,
     name: str,
     resources: job_pb2.ResourceSpecProto,
+    priority_band: int,
 ) -> None:
     """Insert the ``job_config`` companion for a job mirrored from a peer.
 
-    Sets the name and the resources the peer reports; the columns describing how to
-    run the job (entrypoint, bundle, retries, timeouts) keep their defaults, since
-    the peer runs it and the parent only renders it.
+    Sets the name, the resources the peer reports, and the band inherited from the
+    parent (the peer resolves the child's band the same way, and no row on either
+    side holds UNSPECIFIED). The columns describing how to run the job (entrypoint,
+    bundle, retries, timeouts) keep their defaults, since the peer runs it and the
+    parent only renders it.
     """
     tx.execute(
         insert(job_config_table).values(
@@ -910,6 +913,7 @@ def insert_mirrored_job_config(
             res_memory_bytes=int(resources.memory_bytes),
             res_disk_bytes=int(resources.disk_bytes),
             res_device_json=proto_to_json(resources.device),
+            priority_band=priority_band,
         )
     )
 

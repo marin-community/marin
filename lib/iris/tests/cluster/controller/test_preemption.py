@@ -1287,8 +1287,10 @@ def test_pending_child_order_uses_parent_job_config_not_stamped_task_band():
             priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
         )
 
+        # The child inherits the parent's requested PRODUCTION, not the BATCH the
+        # scheduler stamped on the parent's task row.
         child_task = query_tasks_for_job(state, child_id)[0]
-        assert child_task.priority_band == job_pb2.PRIORITY_BAND_INTERACTIVE
+        assert child_task.priority_band == job_pb2.PRIORITY_BAND_PRODUCTION
 
         with state._db.read_snapshot() as tx:
             pending = reads.pending_tasks_with_jobs(tx)

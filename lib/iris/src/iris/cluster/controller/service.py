@@ -1485,13 +1485,16 @@ class ControllerServiceImpl:
         #   configured tiers and UserBudgetDefaults still bite — an unlisted
         #   submitter hits the INTERACTIVE default cap and can't punch up to
         #   PRODUCTION just by skipping auth.
-        # UNSPECIFIED (0) defaults to INTERACTIVE. A received handoff's band was
-        # authorized by the parent against the original submitter and their budget
-        # tier; the receiving cluster does not manage that user, so it trusts the
-        # parent rather than re-gating on its own tiers (the submitter allowlist
-        # bounds who may federate here).
-        band = request.priority_band or job_pb2.PRIORITY_BAND_INTERACTIVE
-        if is_received_handoff:
+        # A received handoff's band was authorized by the parent against the original
+        # submitter and their budget tier; the receiving cluster does not manage that
+        # user, so it trusts the parent rather than re-gating on its own tiers (the
+        # submitter allowlist bounds who may federate here). A child that asks for no
+        # band is exempt for the same reason: it inherits at insert, and the ancestor
+        # that set that band was gated at its own submit. Gating it here would read the
+        # inherited band as INTERACTIVE and deny every child a BATCH-capped user spawns.
+        inherits_parent_band = not job_id.is_root and not request.priority_band
+        band = ops.job.resolve_priority_band(int(request.priority_band), inherited_band=None)
+        if is_received_handoff or inherits_parent_band:
             pass
         elif band == job_pb2.PRIORITY_BAND_PRODUCTION and self._auth.provider:
             authorize(AuthzAction.MANAGE_BUDGETS)

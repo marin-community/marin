@@ -24,7 +24,7 @@ from iris.cluster.constraints import (
     WellKnownAttribute,
     device_variant_constraint,
 )
-from iris.cluster.controller import ops, reads
+from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller import service as service_module
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.codec import constraints_from_json
@@ -278,6 +278,39 @@ def test_launch_job_bundle_blob_rewrites_to_controller_bundle_id(service, state)
     job = _query_job(state, JobName.root("test-user", "bundle-job"))
     assert job is not None
     assert len(job.bundle_id) == 64
+
+
+def test_launch_job_batch_capped_user_can_spawn_children(service, state):
+    """A BATCH-capped user's child job launches and stores the inherited band.
+
+    The child asks for no band, so gating it against the user's cap would read that
+    as INTERACTIVE and deny it — the band it actually gets is its parent's BATCH,
+    which the parent was already gated for.
+    """
+    with state._db.transaction() as tx:
+        writes.set_user_budget(tx, "test-user", 0, job_pb2.PRIORITY_BAND_BATCH, Timestamp.now())
+
+    parent = make_job_request("parent-batch")
+    parent.priority_band = job_pb2.PRIORITY_BAND_BATCH
+    service.launch_job(parent, None)
+
+    service.launch_job(make_job_request("/test-user/parent-batch/child"), None)
+
+    child_id = JobName.from_string("/test-user/parent-batch/child")
+    with state._db.read_snapshot() as snap:
+        assert reads.get_priority_bands(snap, [child_id]) == {child_id: job_pb2.PRIORITY_BAND_BATCH}
+
+
+def test_launch_job_rejects_band_above_the_user_cap(service, state):
+    """An explicit band above the user's cap is still refused."""
+    with state._db.transaction() as tx:
+        writes.set_user_budget(tx, "test-user", 0, job_pb2.PRIORITY_BAND_BATCH, Timestamp.now())
+
+    request = make_job_request("too-high")
+    request.priority_band = job_pb2.PRIORITY_BAND_INTERACTIVE
+    with pytest.raises(ConnectError) as exc:
+        service.launch_job(request, None)
+    assert exc.value.code == Code.PERMISSION_DENIED
 
 
 def test_launch_job_rejects_coscheduling_without_group_by(service):
