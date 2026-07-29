@@ -26,6 +26,8 @@ def _search_statement(
     alias: str,
     semantic_where: str | None,
     lexical_where: str,
+    lexical_score: str,
+    result_key: str,
     final_order: str,
 ) -> sqlalchemy.TextClause:
     semantic_filter = f"WHERE {semantic_where}" if semantic_where else ""
@@ -52,13 +54,9 @@ def _search_statement(
             SELECT
                 {alias}.id,
                 row_number() OVER (
-                    ORDER BY ts_rank_cd(
-                        {alias}.search_document, input.query, {TS_RANK_NORMALIZATION}
-                    ) DESC
+                    ORDER BY {lexical_score} DESC
                 ) AS rank,
-                ts_rank_cd(
-                    {alias}.search_document, input.query, {TS_RANK_NORMALIZATION}
-                ) AS lexical_score
+                {lexical_score} AS lexical_score
             FROM {table} AS {alias} CROSS JOIN input
             WHERE {lexical_where}
             ORDER BY lexical_score DESC
@@ -68,25 +66,43 @@ def _search_statement(
             SELECT id FROM semantic
             UNION
             SELECT id FROM lexical
+        ),
+        fused AS (
+            SELECT
+                {alias}.*,
+                semantic.distance,
+                lexical.lexical_score,
+                (
+                    coalesce(1.0 / ({RRF_K} + semantic.rank), 0.0) +
+                    coalesce({LEXICAL_WEIGHT} / ({RRF_K} + lexical.rank), 0.0)
+                ) AS score
+            FROM candidate_ids
+            JOIN {table} AS {alias} USING (id)
+            LEFT JOIN semantic USING (id)
+            LEFT JOIN lexical USING (id)
+            WHERE lexical.id IS NOT NULL
+                OR semantic.distance <= {MAX_SEMANTIC_DISTANCE}
+        ),
+        ranked AS (
+            SELECT
+                fused.*,
+                row_number() OVER (
+                    PARTITION BY {result_key}
+                    ORDER BY score DESC, {final_order}
+                ) AS result_rank
+            FROM fused
         )
-        SELECT
-            {alias}.*,
-            semantic.distance,
-            lexical.lexical_score,
-            (
-                coalesce(1.0 / ({RRF_K} + semantic.rank), 0.0) +
-                coalesce({LEXICAL_WEIGHT} / ({RRF_K} + lexical.rank), 0.0)
-            ) AS score
-        FROM candidate_ids
-        JOIN {table} AS {alias} USING (id)
-        LEFT JOIN semantic USING (id)
-        LEFT JOIN lexical USING (id)
-        WHERE lexical.id IS NOT NULL
-            OR semantic.distance <= {MAX_SEMANTIC_DISTANCE}
+        SELECT *
+        FROM ranked
+        WHERE result_rank = 1
         ORDER BY score DESC, {final_order}
         LIMIT :limit
         """
     )
+
+
+def full_text_score(alias: str) -> str:
+    return f"ts_rank_cd({alias}.search_document, input.query, {TS_RANK_NORMALIZATION})"
 
 
 def chunk_search_statement(filter_clauses: Sequence[str] = ()) -> sqlalchemy.TextClause:
@@ -95,7 +111,9 @@ def chunk_search_statement(filter_clauses: Sequence[str] = ()) -> sqlalchemy.Tex
         alias="c",
         semantic_where=_where(filter_clauses, "c.embedding IS NOT NULL"),
         lexical_where=_where(filter_clauses, "c.search_document @@ input.query"),
-        final_order="c.date DESC NULLS LAST",
+        lexical_score=full_text_score("c"),
+        result_key="id",
+        final_order="date DESC NULLS LAST",
     )
 
 
@@ -105,5 +123,27 @@ def wiki_search_statement(filter_clauses: Sequence[str] = ()) -> sqlalchemy.Text
         alias="w",
         semantic_where=" AND ".join(filter_clauses) or None,
         lexical_where=_where(filter_clauses, "w.search_document @@ input.query"),
-        final_order="w.updated_at DESC",
+        lexical_score=full_text_score("w"),
+        result_key="id",
+        final_order="updated_at DESC",
+    )
+
+
+def repository_file_search_statement() -> sqlalchemy.TextClause:
+    filters = ["r.repository = :repository", "r.branch = :branch"]
+    path_match = "r.path ILIKE :substring ESCAPE '\\'"
+    text_match = "r.text ILIKE :substring ESCAPE '\\'"
+    lexical_score = (
+        f"{full_text_score('r')}"
+        f" + CASE WHEN {path_match} THEN 3.0 ELSE 0.0 END"
+        f" + CASE WHEN {text_match} THEN 1.0 ELSE 0.0 END"
+    )
+    return _search_statement(
+        table="repository_file_chunks",
+        alias="r",
+        semantic_where=_where(filters, "r.embedding IS NOT NULL"),
+        lexical_where=_where(filters, f"(r.search_document @@ input.query OR {path_match} OR {text_match})"),
+        lexical_score=lexical_score,
+        result_key="path",
+        final_order="path",
     )

@@ -7,6 +7,8 @@ provides an IAP-gated HTTP interface and browser dashboard.
 
 - `chunks` contains issues, pull requests, comments, and Discord messages. Each row has
   a canonical URL, a weighted PostgreSQL full-text document, and a pgvector embedding.
+- `repository_file_chunks` contains the indexed `marin-community/marin` `main` head.
+  Results identify the exact indexed commit and link to its GitHub blob.
 - `wiki_entries` contains durable agent-authored notes and incident records with a
   title, a one-sentence `use_when` hint, lowercase kebab-case tags, a body, pgvector
   embeddings, timestamps, attribution, and deliberate-reference counters. Search
@@ -39,7 +41,7 @@ which cached login to reuse.
 `search` returns one ranked result set across five domains:
 
 - `wiki` searches durable Echo entries.
-- `file` searches tracked files in the current repository checkout.
+- `file` searches files from the hourly index of GitHub `main`.
 - `discord` searches Discord messages.
 - `pr` searches GitHub pull requests and their comments.
 - `issue` searches GitHub issues and their comments.
@@ -48,30 +50,31 @@ All domains are searched by default. Repeat `--domain` to select a subset. The o
 activity filters remain available: a search with `--source`, `--kind`, or `--since`
 uses the activity-only endpoint and cannot be combined with `--domain`.
 
-Remote and file results use reciprocal-rank fusion with `k=60`: semantic rank has
+All domains use reciprocal-rank fusion with `k=60`: semantic rank has
 weight 1 and lexical rank has weight 2. Results with a lexical match always qualify.
 A semantic-only result must have cosine distance at most 0.45 (similarity at least
 0.55), so an unrelated nearest neighbor is not returned just because it is the
 closest candidate. Scores compare rank positions, not calibrated relevance
-probabilities. Exact file substrings and repository paths receive the lexical
-signal; paraphrases can enter through BGE semantic retrieval. `grep` remains a
-case-insensitive literal substring scan over activity, newest first.
+probabilities. File paths, PostgreSQL full-text matches, and case-insensitive exact
+file substrings contribute the lexical signal; paraphrases can enter through BGE
+semantic retrieval. `grep` remains a case-insensitive literal substring scan over
+activity, newest first.
 
-File search runs in a user-local daemon. The first search starts
-`infra/echo/local_search_daemon.py` through `uv`, prints a warming message, and
-returns the available remote results without waiting for the local model or index.
-Later searches include file results once the background index is ready. The daemon
-stores its Unix socket, log, model assets, and per-checkout SQLite indexes under
-`~/.cache/echo`. It checks a warm checkout for changes at most once per minute and
-serves the previous complete index while a refresh runs. Indexes unused for 30 days
-are removed daily.
+The scheduled sync checks GitHub at most once per hour. An unchanged head only advances
+the check time. A new head uses GitHub's compare API to delete, fetch, and re-embed
+changed paths; the first build, a divergent history, or a comparison of at least 300
+files falls back to one repository archive. Embeddings are prepared before the database
+transaction, then the changed paths and `repository_index_state` watermark are published
+atomically. Searches continue to use the previous complete index while a refresh runs.
+The job reuses the existing `marinmirror-token` GitHub PAT for authenticated REST calls.
 
-The file index starts from `git ls-files`, so untracked files never enter it. It
-accepts source, configuration, and prose file types up to 256 KiB, and rejects
+The file index accepts source, configuration, and prose files up to 256 KiB. It rejects
 binary/non-UTF-8 content, lock files, generated/minified files, build and cache
 directories, vendored or external trees, and secret-like names or key/certificate
-extensions. Changed files alone are re-embedded. A file result shows a title,
-repository-relative `path:line` subtitle, matching snippet, and repository path.
+extensions. A file result shows a title, matching snippet, and a subtitle containing
+`path:line`, the exact indexed `main` commit, and index time. Its URL is pinned to that
+commit. Working-tree and branch changes are absent until they reach `main`; use `rg`
+locally when the current checkout matters.
 
 Discord results contain one message, so open the result URL when the surrounding
 thread matters. Wiki writes go through the API so it can embed and attribute each
@@ -98,9 +101,10 @@ A pg_trgm GIN index on chunks.text makes the substring match an index scan.
 
 Direct SQL access remains available for raw queries through Cloud SQL IAM group
 authentication. Members of `eng-all@openathena.ai` inherit `roles/cloudsql.instanceUser`,
-`roles/cloudsql.client`, `SELECT` on `chunks` and `wiki_entries`, and `SELECT, INSERT` on
-`work_log`; the `loom-vm` service account receives the same access. No database password is
-shared. Group membership and IAM changes can take about 15 minutes to propagate.
+`roles/cloudsql.client`, `SELECT` on `chunks`, `repository_file_chunks`,
+`repository_index_state`, and `wiki_entries`, and `SELECT, INSERT` on `work_log`; the
+`loom-vm` service account receives the same access. No database password is shared.
+Group membership and IAM changes can take about 15 minutes to propagate.
 
 ## Dashboard and HTTP API
 
@@ -125,9 +129,9 @@ The API connects to PostgreSQL as `echo-api@hai-gcp-models.iam`; callers do not 
 direct database access.
 
 `GET /api/search` preserves the activity-only response used by existing clients.
-`GET /api/federated-search` accepts repeated `domain=wiki|discord|pr|issue`
-parameters and returns the common ranked result shape. The `file` domain is
-CLI-local because the service cannot observe a caller's checkout.
+`GET /api/federated-search` accepts repeated
+`domain=wiki|file|discord|pr|issue` parameters and returns the common ranked result
+shape.
 
 The dashboard is a Vue single-page app served from the same origin, with client-side
 routes at `/` (search), `/wiki` (recently updated notes), `/wiki/<id>` (a note), and
@@ -152,9 +156,10 @@ printed by `wiki add` or `wiki edit` from the associated PR or issue.
 ## Infrastructure
 
 The `marin-echo` Pulumi stack creates the database, IAM database users, Cloud Run
-service, and scheduled sync job. Database migrations in `infra/echo/migrations/` create
-tables and apply PostgreSQL grants. `infra/echo/migrate.py` records applied migrations
-in `schema_migrations`.
+service, and scheduled sync job. The job mirrors activity every ten minutes and gates
+its GitHub repository check to once per hour. Database migrations in
+`infra/echo/migrations/` create tables and apply PostgreSQL grants.
+`infra/echo/migrate.py` records applied migrations in `schema_migrations`.
 
 Preview or deploy from the service directory:
 
@@ -166,5 +171,8 @@ pulumi up
 ```
 
 `pulumi up` applies pending migrations from the operator's machine. It requires ADC
-with access to `cloudsql-pulumi-admin-password`. Review database grant changes before
-deploying them.
+with access to `cloudsql-pulumi-admin-password`. For this change, run
+`infra/echo/migrate.py` before `pulumi up` so the new API and sync images never observe
+a missing repository table. The first repository build fetches a GitHub archive and
+embeds all eligible files; later hourly runs normally process only changed paths.
+Review database grant changes before deploying them.

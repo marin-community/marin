@@ -10,8 +10,10 @@ import os
 import re
 from collections.abc import Iterable
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, Any, Literal
+from urllib.parse import quote
 
 import dashboard as echo_dashboard
 import hybrid_search
@@ -25,8 +27,10 @@ from pydantic import BaseModel, Field, field_validator
 
 SOURCES = ("github", "discord")
 KINDS = ("issue", "pr", "comment", "message")
-REMOTE_DOMAINS = ("wiki", "discord", "pr", "issue")
+REMOTE_DOMAINS = ("wiki", "file", "discord", "pr", "issue")
 ECHO_PUBLIC_URL = os.environ.get("ECHO_PUBLIC_URL", "https://echo.oa.dev").rstrip("/")
+GITHUB_REPOSITORY = os.environ.get("GITHUB_REPOSITORY", "marin-community/marin")
+GITHUB_BRANCH = os.environ.get("GITHUB_BRANCH", "main")
 MAX_WIKI_TAG_LENGTH = 50
 WIKI_TAG_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
@@ -93,7 +97,7 @@ class Chunk(Hit):
 
 class SearchResult(BaseModel):
     id: str
-    domain: Literal["wiki", "discord", "pr", "issue"]
+    domain: Literal["wiki", "file", "discord", "pr", "issue"]
     title: str
     subtitle: str
     url: str
@@ -154,6 +158,12 @@ class WikiCreate(BaseModel):
     @classmethod
     def validate_tags(cls, tags: list[str]) -> list[str]:
         return normalize_wiki_tags(tags)
+
+
+@dataclass(frozen=True)
+class RepositoryIndexState:
+    commit_sha: str
+    indexed_at: datetime
 
 
 def normalize_wiki_tags(tags: Iterable[str]) -> list[str]:
@@ -295,6 +305,55 @@ def wiki_search_result(row: sqlalchemy.Row) -> SearchResult:
     )
 
 
+def repository_index_state(conn: sqlalchemy.Connection) -> RepositoryIndexState | None:
+    row = conn.execute(
+        sqlalchemy.select(
+            schema.repository_index_state.c.commit_sha,
+            schema.repository_index_state.c.indexed_at,
+        ).where(
+            schema.repository_index_state.c.repository == GITHUB_REPOSITORY,
+            schema.repository_index_state.c.branch == GITHUB_BRANCH,
+        )
+    ).first()
+    if row is None:
+        return None
+    return RepositoryIndexState(row.commit_sha, row.indexed_at)
+
+
+def matching_file_line(text: str, query: str, start_line: int) -> tuple[int, str]:
+    lines = text.splitlines()
+    lowered_query = query.casefold()
+    for offset, line in enumerate(lines):
+        if lowered_query in line.casefold():
+            return start_line + offset, line.strip()
+    for offset, line in enumerate(lines):
+        if line.strip():
+            return start_line + offset, line.strip()
+    return start_line, ""
+
+
+def repository_file_search_result(
+    row: sqlalchemy.Row,
+    state: RepositoryIndexState,
+    query: str,
+) -> SearchResult:
+    line, matching_line = matching_file_line(row.text, query, row.start_line)
+    path = quote(row.path, safe="/")
+    return SearchResult(
+        id=f"file:{row.path}",
+        domain="file",
+        title=row.title,
+        subtitle=(
+            f"{row.path}:{line} · {GITHUB_BRANCH}@{state.commit_sha[:12]} · " f"indexed {state.indexed_at.isoformat()}"
+        ),
+        url=f"https://github.com/{GITHUB_REPOSITORY}/blob/{state.commit_sha}/{path}#L{line}",
+        snippet=matching_line[:240],
+        score=row.score,
+        distance=row.distance,
+        lexical_score=row.lexical_score,
+    )
+
+
 def wiki_filter_clauses(tags: list[str]) -> list[str]:
     return ["w.tags @> CAST(:tags AS text[])"] if tags else []
 
@@ -340,7 +399,7 @@ def federated_search(
     engine: Engine,
     model: Model,
     q: str = Query(description="Natural-language query."),
-    domain: list[Literal["wiki", "discord", "pr", "issue"]] | None = Query(
+    domain: list[Literal["wiki", "file", "discord", "pr", "issue"]] | None = Query(
         None, description="Search this domain; repeat to select several."
     ),
     limit: int = Query(search_config.DEFAULT_SEARCH_LIMIT, ge=1, le=search_config.MAX_SEARCH_LIMIT),
@@ -362,7 +421,21 @@ def federated_search(
         if "wiki" in domains:
             for row in conn.execute(hybrid_search.wiki_search_statement(), params):
                 results.append(wiki_search_result(row))
-        activity_domains = [candidate for candidate in domains if candidate != "wiki"]
+        if "file" in domains:
+            state = repository_index_state(conn)
+            if state is not None:
+                file_params = {
+                    **params,
+                    "candidate_limit": (
+                        search_config.candidate_limit(limit) * search_config.FILE_CHUNK_CANDIDATE_MULTIPLIER
+                    ),
+                    "repository": GITHUB_REPOSITORY,
+                    "branch": GITHUB_BRANCH,
+                    "substring": f"%{escape_like(query)}%",
+                }
+                for row in conn.execute(hybrid_search.repository_file_search_statement(), file_params):
+                    results.append(repository_file_search_result(row, state, query))
+        activity_domains = [candidate for candidate in domains if candidate in ("discord", "pr", "issue")]
         if activity_domains:
             statement = hybrid_search.chunk_search_statement([activity_domain_clause(activity_domains)])
             for row in conn.execute(statement, params):

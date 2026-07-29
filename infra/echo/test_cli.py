@@ -3,20 +3,17 @@
 
 """Behavior tests for Echo CLI federation."""
 
-import subprocess
-
 import cli
-import local_search
 
 
-def test_search_merges_remote_results_while_local_index_warms(monkeypatch, capsys):
+def test_search_requests_selected_remote_domains(monkeypatch, capsys):
     remote_result = {
-        "id": "wiki:7",
-        "domain": "wiki",
-        "title": "Collective diagnosis",
-        "subtitle": "when a collective stalls",
-        "url": "https://echo.oa.dev/wiki/7",
-        "snippet": "Inspect the topology.",
+        "id": "file:lib/iris/src/iris/scheduler.py",
+        "domain": "file",
+        "title": "scheduler.py",
+        "subtitle": "lib/iris/src/iris/scheduler.py:42 · main@abc1234 · indexed 2026-07-29T20:00:00+00:00",
+        "url": "https://github.com/marin-community/marin/blob/abc1234/lib/iris/src/iris/scheduler.py#L42",
+        "snippet": "raise FAILED_PRECONDITION",
         "score": 0.04,
         "distance": 0.1,
         "lexical_score": 0.5,
@@ -25,22 +22,18 @@ def test_search_merges_remote_results_while_local_index_warms(monkeypatch, capsy
     def fake_request(method, path, *, params=None, body=None):
         assert (method, path) == ("GET", "/federated-search")
         assert params is not None
-        assert params["domain"] == ["wiki"]
+        assert params["domain"] == ["file", "pr"]
         return [remote_result]
 
     monkeypatch.setattr(cli, "request", fake_request)
-    monkeypatch.setattr(
-        cli.local_search,
-        "search",
-        lambda query, limit: local_search.LocalSearchResponse((), "local file search is warming"),
-    )
-    args = cli.build_parser().parse_args(["search", "collective diagnosis", "--domain", "wiki", "--domain", "file"])
+    args = cli.build_parser().parse_args(["search", "FAILED_PRECONDITION", "--domain", "file", "--domain", "pr"])
     args.func(args)
 
     captured = capsys.readouterr()
-    assert "[wiki] Collective diagnosis" in captured.out
-    assert "https://echo.oa.dev/wiki/7" in captured.out
-    assert captured.err
+    assert "[file] scheduler.py" in captured.out
+    assert "main@abc1234" in captured.out
+    assert "/blob/abc1234/" in captured.out
+    assert captured.err == ""
 
 
 def test_search_legacy_activity_filters_keep_existing_endpoint(monkeypatch, capsys):
@@ -57,19 +50,3 @@ def test_search_legacy_activity_filters_keep_existing_endpoint(monkeypatch, caps
     assert calls[0][1] == "/search"
     assert calls[0][2]["source"] == "discord"
     assert capsys.readouterr().err == ""
-
-
-def test_cold_local_search_starts_daemon_without_waiting(tmp_path, monkeypatch):
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-    started = []
-
-    def unavailable_daemon(root, query, limit):
-        raise FileNotFoundError
-
-    monkeypatch.setattr(local_search, "daemon_request", unavailable_daemon)
-    monkeypatch.setattr(local_search, "start_daemon", started.append)
-    response = local_search.search("scheduler", 10, root=tmp_path)
-
-    assert response.results == ()
-    assert response.message is not None
-    assert started == [tmp_path.resolve()]

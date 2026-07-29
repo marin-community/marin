@@ -33,12 +33,15 @@ class FakeResult:
 
 
 class FakeConn:
-    def __init__(self, rows, sink):
+    def __init__(self, rows, sink, responses):
         self._rows = rows
         self._sink = sink
+        self._responses = responses
 
     def execute(self, statement, *args):
         self._sink.append(statement)
+        if self._responses:
+            return FakeResult(self._responses.pop(0))
         return FakeResult(self._rows)
 
     @contextlib.contextmanager
@@ -55,15 +58,16 @@ class FakeConn:
 class FakeEngine:
     """Returns `rows` from every query and records executed SQL expressions."""
 
-    def __init__(self, rows):
+    def __init__(self, rows, responses=None):
         self.rows = rows
+        self.responses = list(responses or [])
         self.executions: list[sqlalchemy.ClauseElement] = []
 
     def connect(self):
-        return FakeConn(self.rows, self.executions)
+        return FakeConn(self.rows, self.executions, self.responses)
 
     def begin(self):
-        return FakeConn(self.rows, self.executions)
+        return FakeConn(self.rows, self.executions, self.responses)
 
 
 class FakeModel:
@@ -94,8 +98,8 @@ class ApiHarness:
 
 @pytest.fixture
 def client_with():
-    def _install(rows):
-        engine = FakeEngine(rows)
+    def _install(rows, responses=None):
+        engine = FakeEngine(rows, responses)
         model = FakeModel()
         echo.app.dependency_overrides[echo.get_engine] = lambda: engine
         echo.app.dependency_overrides[echo.get_model] = lambda: model
@@ -206,6 +210,46 @@ def test_federated_search_classifies_github_comment_domain(client_with):
             "score": 0.04,
             "distance": 0.2,
             "lexical_score": 0.5,
+        }
+    ]
+
+
+def test_federated_file_result_names_exact_indexed_head(client_with):
+    state = make_row(
+        commit_sha="abcdef1234567890",
+        indexed_at=datetime(2026, 7, 29, 20, tzinfo=UTC),
+    )
+    file = make_row(
+        id=9,
+        path="lib/iris/src/iris/scheduler.py",
+        title="scheduler.py",
+        start_line=40,
+        text="def place_gang():\n    raise FAILED_PRECONDITION\n",
+        score=0.05,
+        distance=0.1,
+        lexical_score=4.0,
+    )
+    harness = client_with([], responses=[[], [state], [file]])
+
+    response = harness.client.get(
+        "/api/federated-search",
+        params={"q": "FAILED_PRECONDITION", "domain": "file"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "id": "file:lib/iris/src/iris/scheduler.py",
+            "domain": "file",
+            "title": "scheduler.py",
+            "subtitle": "lib/iris/src/iris/scheduler.py:41 · main@abcdef123456 · " "indexed 2026-07-29T20:00:00+00:00",
+            "url": (
+                "https://github.com/marin-community/marin/blob/abcdef1234567890/" "lib/iris/src/iris/scheduler.py#L41"
+            ),
+            "snippet": "raise FAILED_PRECONDITION",
+            "score": 0.05,
+            "distance": 0.1,
+            "lexical_score": 4.0,
         }
     ]
 

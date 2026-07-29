@@ -2,17 +2,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Search Echo and local files, read activity, and manage wiki notes.
+"""Search Echo wiki, GitHub, Discord, and repository files.
 
 Run inside the repo environment, e.g. ``uv run infra/echo/cli.py search "..."``. This shares
 Marin's IAP login helpers from ``marin-rigging`` (not on PyPI), so it is not a standalone
 ``uv --script``.
 
-Remote commands call the IAP-gated ``echo-api`` Cloud Run service with a Google-signed ID
-token. The ``file`` search domain uses a user-local daemon and needs no Echo authentication.
-There is no separate echo login: humans authenticate once with ``iris login`` (cached under
-``~/.config/marin/credentials``) and this reuses that token; agents and CI use ambient
-service-account credentials with no login. See ``infra/echo/README.md``.
+Commands call the IAP-gated ``echo-api`` Cloud Run service with a Google-signed ID token.
+There is no separate echo login: humans authenticate once with ``iris login`` (cached
+under ``~/.config/marin/credentials``) and this reuses that token; agents and CI use
+ambient service-account credentials with no login. See ``infra/echo/README.md``.
 
     uv run infra/echo/cli.py search "expert parallel MoE MFU on B200" --limit 10
     uv run infra/echo/cli.py grep ragged_all_to_all --source discord
@@ -29,7 +28,6 @@ import os
 import sys
 from pathlib import Path
 
-import local_search
 import okf
 import requests
 from rigging.auth import (
@@ -56,7 +54,6 @@ LOGIN_HINT = "run `iris login`"
 SOURCES = ("github", "discord")
 KINDS = ("issue", "pr", "comment", "message")
 DOMAINS = ("wiki", "file", "discord", "pr", "issue")
-REMOTE_DOMAINS = ("wiki", "discord", "pr", "issue")
 
 
 def cached_login_provider() -> TokenProvider | None:
@@ -165,22 +162,14 @@ def cmd_search(args: argparse.Namespace) -> None:
         return
 
     domains = list(dict.fromkeys(args.domain or DOMAINS))
-    results: list[SearchResult] = []
-    remote_domains = [domain for domain in domains if domain in REMOTE_DOMAINS]
-    if remote_domains:
-        remote_value = request(
-            "GET",
-            "/federated-search",
-            params={"q": args.query, "domain": remote_domains, "limit": args.limit},
-        )
-        if not isinstance(remote_value, list):
-            raise SystemExit("echo-api returned a non-list federated search response")
-        results.extend(SearchResult.from_json(result) for result in remote_value)
-    if "file" in domains:
-        local_response = local_search.search(args.query, args.limit)
-        results.extend(local_response.results)
-        if local_response.message:
-            print(local_response.message, file=sys.stderr)
+    remote_value = request(
+        "GET",
+        "/federated-search",
+        params={"q": args.query, "domain": domains, "limit": args.limit},
+    )
+    if not isinstance(remote_value, list):
+        raise SystemExit("echo-api returned a non-list federated search response")
+    results = [SearchResult.from_json(result) for result in remote_value]
     results.sort(key=lambda result: (-result.score, result.domain, result.id))
     print_search_results(results[: args.limit])
 

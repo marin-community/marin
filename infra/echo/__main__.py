@@ -56,6 +56,8 @@ API_DB_USER = API_SA.removesuffix(".gserviceaccount.com")
 LOOM_VM_DB_USER = LOOM_VM_SA.removesuffix(".gserviceaccount.com")
 # marinmirror bearer token: a GitHub PAT (read:org) of an Open-Athena member.
 MARINMIRROR_TOKEN_SECRET = "marinmirror-token"
+GITHUB_REPOSITORY = "marin-community/marin"
+GITHUB_BRANCH = "main"
 
 # Login roles for Cloud SQL IAM auth: instanceUser carries the cloudsql.instances.login
 # permission, client lets the connector reach the instance.
@@ -135,18 +137,23 @@ def main() -> None:
             job_name="echo-sync",
             build_context=".",
             dockerfile="sync/Dockerfile",
-            # Cheap when nothing changed: the job exits on the manifest watermark check, and
-            # only a new upstream corpus build (~every 90 min) triggers the full download+upsert.
+            # Activity checks retain their ten-minute cadence. The repository phase uses its
+            # database watermark to query GitHub no more than once per hour.
             schedule="*/10 * * * *",
             env={
                 "CLOUDSQL_CONNECTION": CONNECTION_NAME,
                 "PGDATABASE": DATABASE,
                 "PGUSER": SYNC_DB_USER,
+                "GITHUB_REPOSITORY": GITHUB_REPOSITORY,
+                "GITHUB_BRANCH": GITHUB_BRANCH,
             },
             secrets=(SecretEnv(name="MARINMIRROR_TOKEN", secret=MARINMIRROR_TOKEN_SECRET, wait_for=(mirror_token,)),),
             cloudsql_instances=(CONNECTION_NAME,),
-            # The sync holds a ~650 MB corpus download plus batch buffers in memory.
-            memory="2Gi",
+            # Four CPUs keep the first repository embedding build within its two-hour
+            # attempt; incremental hourly refreshes normally embed only changed files.
+            cpu="4",
+            memory="4Gi",
+            timeout=7200,
         ),
         gcp_provider=gcp_provider,
     )
@@ -163,6 +170,8 @@ def main() -> None:
                 "CLOUDSQL_CONNECTION": CONNECTION_NAME,
                 "PGDATABASE": DATABASE,
                 "PGUSER": API_DB_USER,
+                "GITHUB_REPOSITORY": GITHUB_REPOSITORY,
+                "GITHUB_BRANCH": GITHUB_BRANCH,
             },
             # Keep one instance warm: it holds the ~130 MB embedding model and the DB pool.
             min_instances=1,
