@@ -338,3 +338,9 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
 - Priority verification passed: all 16 live child pods are `priorityClassName: iris-production` at priority 1000, and Iris SQL records band 1 on both parent and child configs.
 - Queue state: attempt 0 is in `building` under direct workload `iris-pg-1f828bf14a398703-0` in `cw-use08a-lq`. Kueue reports topology fit for 10 of 16 pods and is pending preemption of three workloads.
 - Interpretation: this is the first valid production-band rack request in the family. Preserve it as the only submitted leg; do not resubmit while preemption frees the remaining six nodes.
+
+### 2026-07-28 18:23 PDT - D67-CTL-01 r5 passes corrected preflight
+
+- Kueue admitted attempt 0 and all 16 ranks entered `running`. Environment setup and distributed JAX initialization completed across 64 GB200 devices.
+- Trainer emitted the intended control hparams: top-8/256, EP64, QB on, spill m=3, capacity factor 1.0625, trio off, batch 1024, sequence length 4096, and 350 steps.
+- The prior `num_devices (64) must be divisible by num_slices (7)` failure is absent. The run is compiling and autotuning the first real step; no loss, throughput, MFU, or drop metric has been emitted yet.
