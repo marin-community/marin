@@ -70,7 +70,7 @@ def make_run_req(
     cpu_mc: int = 1000,
     num_tasks: int = 0,
     coscheduling_group_by: str = "",
-    priority: int = job_pb2.PRIORITY_BAND_UNSPECIFIED,
+    priority: int = job_pb2.PRIORITY_BAND_INHERIT,
     attempt_uid: str = "",
 ) -> job_pb2.RunTaskRequest:
     req = job_pb2.RunTaskRequest()
