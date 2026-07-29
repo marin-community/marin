@@ -18,15 +18,21 @@ author: Marin research
 
 ## Current TL;DR
 
-- Google Gemma 3n is a shipped dense-model precedent: E2B was optimized inside
-  E4B using MatFormer.
-- The Marin test nests a fixed, interleaved 128-expert subset inside a
-  256-expert bank and assigns whole sequences to subset or full routes.
-- A four-step fp32 nested25 canary was finite and showed a `+0.00298`
-  full-versus-nested Paloma gap, but capacity factor 1.0 dropped 5.93% of
-  assignments and the control did not reach step 0.
-- A user-directed discovery rerun compares all four architectures for 20 fp32
-  updates at common capacity factor 1.25.
+- The NEST-BURN-001/002 control is invalid for the original architecture
+  comparison. It trained one document per 8,192-token example with padding
+  excluded from loss and also changed the model/router source. Its nominal
+  token count overstates useful phase-0 targets by at least 3.57x.
+- The immutable `aug-dk-d768-ev-sw2k-g4-nomtp-noconv-f1` bundle reproduced
+  through update 1,000. Median absolute pointwise loss error was `0.00229`
+  nat and Paloma macro differed by `+0.00368`.
+- The corrected treatment uses the same augmented Grug source, dense packing,
+  Datakit mixture, optimizer, batch, and one-node/8-H100 topology as the
+  reproduced control. It restricts 12.5% of sequences to experts 0--127 and
+  12.5% to experts 0--15, with independent QB state for E256/E128/E16.
+- At update 1,000, corrected fixed25 costs `+1.13%` median optimizer-step time.
+  Full-model Paloma is `+0.02267` nat worse than the matched control; E128 and
+  E16 are `+0.05502` and `+0.17999` worse. Both arms continue to the matched
+  4.42B-token endpoint.
 
 ## Hypothesis queue
 
@@ -61,6 +67,10 @@ author: Marin research
   forward with no extra active experts.
 - 2026-07-26: keep four arms through the common token target instead of
   screening a broad hyperparameter sweep.
+- 2026-07-28: reject NEST-BURN-001/002 as evidence for model quality after the
+  control failed to reproduce the augmented d768 reference.
+- 2026-07-29: continue the corrected E256/fixed25 pair after the exact-source
+  control passed the preregistered update-1,000 gate.
 
 ## Entry log
 
@@ -2227,3 +2237,66 @@ result:
 - Stopped both bounded diagnostic roots after collecting the result and
   updated issue #7712. The production continuation remains queued from the
   clean checkpoint with periodic evaluation disabled.
+
+### 2026-07-28 23:52 - Exact augmented control reproduces through update 1,000
+
+- Hypothesis: the poor NEST-BURN control curve comes from its data/model
+  contract, not the requested d768 compute-optimal cell.
+- Bundle:
+  `adc2aad8a60b45f4a105d4d6e4134cb7fff350caa77d7e56ab23fbe66bd3479b`.
+- Reference:
+  <https://wandb.ai/marin-community/marin_moe/runs/aug-dk-d768-ev-sw2k-g4-nomtp-noconv-f1>.
+- Reproduction:
+  <https://wandb.ai/marin-community/marin_moe/runs/nest-burn-control-augdk-repro1000-r1>.
+- Config: d768/L8, six query heads, one KV head, E256 top-4, one shared
+  expert, sequence length 8,192, batch 32, 16,840-step MuonH schedule, dense
+  Datakit packing, one 8-H100 node. The launch changes only run identity,
+  output paths, credentials, priority, and stop time.
+- Result: median absolute pointwise train-loss error over 999 matched updates
+  is `0.002285` nat; p95 is `0.013817`; LR matches exactly. Update-1,000
+  Paloma macro is `4.224867` versus `4.221188`; uncheatable macro is
+  `3.788470` versus `3.790526`.
+- Interpretation: the reference cell is reproducible. NEST-BURN-001 forced
+  `pack=1` and disabled cross-document attention while changing model/router
+  source. Phase-0 cache ledgers imply a mean document length of 2,297.7
+  tokens, so one-document examples fill at most 28.05% of the nominal
+  8,192-token context on average. The old control does not answer the nested
+  architecture question.
+- Next action: port fixed-prefix E128/E16 routing onto the immutable augmented
+  source and require a matched control to pass the same gate.
+
+### 2026-07-29 00:22 - Corrected fixed-prefix pair passes update-1,000 gate
+
+- Hypothesis: restricting 25% of whole sequences to fixed nested expert
+  prefixes produces usable E128/E16 models for less than 10% optimizer-step
+  overhead without materially degrading full E256.
+- Source: immutable augmented reference bundle plus changes limited to
+  `experiments/grug/moe/model.py`, `train.py`, and `launch_cw_scale.py`.
+  E128 always routes within experts 0--127; E16 always routes within experts
+  0--15. The groups use independent QB balance state.
+- Control:
+  <https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e256-4b-r2>.
+- Treatment:
+  <https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-fixed25-4b-r2>.
+- Data: 168 top-level train components expand to 200 physical caches because
+  the tail concat contains 33 caches. The 23 evaluation components bring the
+  expanded graph to 223. The earlier 168-versus-200 alarm was a representation
+  mismatch, not mixture drift.
+- Control gate: across updates 2--1,000, median absolute train-loss error
+  versus the reference is `0.002182` nat, p95 is `0.011893`, and LR matches
+  exactly. Median loss over updates 900--999 is `3.230410` versus `3.226803`.
+  Paloma macro is `4.219130` versus `4.221188`; uncheatable macro is
+  `3.788652` versus `3.790526`.
+- Cost: over updates 100--999, median compiled step time is `453.553 ms` for
+  control and `458.670 ms` for fixed25, a `+1.13%` surcharge. Means are
+  `459.107 ms` and `463.865 ms`, a `+1.04%` surcharge. The three-mode
+  treatment evaluation takes about 108 seconds per gate versus 44 seconds for
+  the control and is excluded from co-training cost.
+- Quality at 262M tokens: control/fixed25 full/E128/E16 Paloma macro losses
+  are `4.219130`, `4.241795`, `4.274152`, and `4.399118`. Full fixed25 is
+  `+0.022665` nat worse than control. Uncheatable macro losses are `3.788652`,
+  `3.814934`, `3.856844`, and `4.002663`.
+- Decision: the control gate passes and optimizer-step overhead is below the
+  preregistered 10% ceiling. Continue both arms to 16,840 updates and
+  4.4145B nominal tokens. The early quality penalty remains exploratory until
+  the complete curve is available.
