@@ -311,6 +311,7 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
             optimizer=optimizer,
             grug_trainer=grug_trainer,
             processes_per_task=processes_per_task,
+            priority=env_int("SCALE_JOB_PRIORITY", 0),
             eval=None,
             profiler=profiler,
             checkpointer=checkpointer,

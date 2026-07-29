@@ -249,3 +249,43 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
 - Ten checks from 17:40 through 17:49 PDT found attempt 2 continuously in `building` with topology feasibility fixed at 2 of 16 pods.
 - The failure history remains limited to attempts 0 and 1. No rank entered setup, emitted a training metric, or triggered the attempt-2 stop criterion.
 - Continue waiting on the direct `cw-use08a-lq` production workload. No subsequent family leg has been submitted.
+
+### 2026-07-28 18:02 PDT - D67-CTL-01 stopped after child-priority verification
+
+- Read-only Kubernetes inspection found that the CPU dispatcher parent was correctly stamped `iris-production` at priority 1000, but all 16 GB200 child pods were stamped `iris-interactive` at priority 10. The child's Kueue workload also reported numeric priority 10.
+- Iris SQL confirmed the root job config requested production band 1, the child job config left its band unspecified at 0, and the child tasks were assigned effective interactive band 2. `experiments/grug/dispatch.py` constructs the nested `JobRequest` without a priority, so the production setting on the CLI-submitted parent did not reach the rack leg.
+- This reproduces the forbidden priority-band defect at the actual capacity request. I stopped exact parent `/mwittmann/d67-control-m3-draw1-r3-0728-1630`; Iris confirmed both parent and child `killed`. Attempt 2 never admitted or emitted a training step, so no experimental result was observed.
+- Next action: add and locally test an explicit child-priority path, then resubmit the same pre-registered control under a new run ID. Verify the child pod's `priorityClassName` is `iris-production` before treating its scheduler wait as valid.
+
+### 2026-07-28 18:06 PDT - D67-CTL-01 replacement pre-registration
+
+- Priority fix: the scale launch config now carries `SCALE_JOB_PRIORITY` through the MoE run config and dispatcher into the nested Fray `JobRequest`. The regression failed before the fix because the dispatcher rejected the `priority` argument, then passed after the fix. `./infra/pre-commit.py --changed-files --fix` passed, as did `tests/test_grug_dispatch.py` and `tests/test_grug_launch_checkpoint_paths.py` (4 tests).
+- Prediction carried forward verbatim from 15:35 PDT, before any experimental result was observed: This draw reproduces the healthy m=3/cf1.0625 operating point. Predict about 321K tokens/s and 20.7% MFU, allowing ±4% tokens/s for placement (308–334K), with tail-100 drops 1.2–1.7%. Loss must remain finite and decline through step 349.
+- Planned parent job ID: `/mwittmann/d67-control-m3-draw1-r4-0728-1810`
+- Planned child job ID: `/mwittmann/d67-control-m3-draw1-r4-0728-1810/grug-train-d67-control-m3-draw1-r4-0728-1810`
+- Exact command:
+
+```bash
+IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
+  --cpu 2 --memory 3GB --extra cpu --priority production \
+  --job-name d67-control-m3-draw1-r4-0728-1810 -e RUN_ID d67-control-m3-draw1-r4-0728-1810 \
+  -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async \
+  -e XLA_FLAGS "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false --xla_gpu_experimental_parallel_collective_overlap_limit=4" \
+  -e SCALE_ATTN_IMPL gpu_fa4_cute -e SCALE_WATCH_INTERVAL 0 -e SCALE_CHECKPOINTS local \
+  -e SCALE_A2A_FIXED 1 -e SCALE_A2A_CHUNKS 1 -e SCALE_A2A_NO_BARRIER 1 \
+  -e SCALE_A2A_GATHER_DISPATCH 1 -e SCALE_A2A_CUSTOM_ADJOINT 1 \
+  -e SCALE_MOE_QB 1 -e SCALE_REPORT_DROPS 1 -e SCALE_A2A_SPILL 3 \
+  -e SCALE_CAPACITY_FACTOR 1.0625 -e SCALE_JOB_PRIORITY 1 \
+  -e SCALE_GPUS_PER_NODE 4 -e SCALE_GPU_TYPE GB200 -e SCALE_GPU_REPLICAS 16 \
+  -e SCALE_EXPERT_AXIS 64 -e SCALE_NUM_EXPERTS 256 -e SCALE_TOP_K 8 \
+  -e SCALE_HIDDEN_DIM 5120 -e SCALE_NUM_LAYERS 48 -e SCALE_INTERMEDIATE 1280 \
+  -e SCALE_SHARED_INTERMEDIATE 5120 -e SCALE_SEQ_LEN 4096 -e SCALE_BATCH 1024 \
+  -e SCALE_SLIDING_WINDOW 2048 -e SCALE_STEPS 350 \
+  -e SCALE_MOE_IMPL ragged_all_to_all -e SCALE_OPTIMIZER muonh -e SCALE_MUON_SYRK 1 \
+  -e SCALE_SCAN_LAYERS 1 -e SCALE_REMAT recompute_all \
+  -e SCALE_TRACKER json_logger -e SCALE_JSON_LOGGER d67-control-m3-draw1-r4-0728-1810.metrics \
+  -e SCALE_DISABLE_CHECKPOINT 1 \
+  -- python -m experiments.grug.moe.launch_cw_scale --version d67-family-dev --run
+```
+
+- Verification gate: after the child appears, inspect both its pod `priorityClassName` and the Kueue workload priority. Do not accept the rack request unless they are `iris-production` / 1000.

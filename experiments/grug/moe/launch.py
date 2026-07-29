@@ -96,6 +96,8 @@ class GrugMoeLaunchConfig:
     """GPU processes per task. > 1 fans each node into one JAX process per GPU
     (multi-controller) via the iris.hooks.multigpu_main supervisor; 1 keeps the
     single-process-per-node model."""
+    priority: int = 0
+    """Fray/Iris priority band for the nested training job. Zero uses the default."""
     checkpointer: CheckpointerConfig | None = None
     """Override the checkpointer. None builds the default (periodic + final saves
     under output_path). Throughput experiments point this at node-local disk so a
@@ -190,6 +192,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         trainer=grug_trainer,
         eval=config.eval,
         processes_per_task=config.processes_per_task,
+        priority=config.priority,
     )
     run_grug(run_config)
 

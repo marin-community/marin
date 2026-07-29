@@ -50,6 +50,7 @@ def dispatch_grug_training_run(
     resources: ResourceConfig,
     max_retries_failure: int = 3,
     processes_per_task: int = 1,
+    priority: int = 0,
 ) -> None:
     """Submit a grug train entrypoint through Fray and wait for completion.
 
@@ -71,6 +72,7 @@ def dispatch_grug_training_run(
         max_retries_failure=max_retries_failure,
         max_task_failures=10,
         processes_per_task=processes_per_task,
+        priority=priority,
     )
     logger.info("Dispatching grug training via Fray: %s", request.name)
     job = current_client().submit(request)

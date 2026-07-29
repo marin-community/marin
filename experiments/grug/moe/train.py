@@ -100,6 +100,7 @@ class GrugRunConfig:
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.hooks.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
+    priority: int = 0
 
 
 def build_train_dataset(
@@ -633,6 +634,7 @@ def run_grug(config: GrugRunConfig) -> None:
         local_entrypoint=_run_grug_local,
         resources=config.resources,
         processes_per_task=config.processes_per_task,
+        priority=config.priority,
     )
 
 
