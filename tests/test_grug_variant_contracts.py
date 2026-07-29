@@ -28,6 +28,7 @@ import numpy as np
 import optax
 import pytest
 from fray.cluster import ResourceConfig
+from haliax.partitioning import set_mesh
 from jax._src import config as jax_config
 from jax.sharding import AxisType, Mesh, use_abstract_mesh
 from levanter.checkpoint import CheckpointerConfig
@@ -393,6 +394,66 @@ def test_grug_moe_variant_threads_moe_implementation_to_kernel():
         closed_jaxpr, _, _ = eqx.filter_make_jaxpr(one_step)()
 
     assert "ragged_all_to_all" in str(closed_jaxpr)
+
+
+def test_grug_moe_optimizer_state_offload_lowers_pinned_update():
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    compact_grug_mesh = importlib.import_module("levanter.grug.sharding").compact_grug_mesh
+
+    cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=128, seq_len=4)
+    optimizer = optax.adam(1e-2)
+    mp = jmp.get_policy("f32")
+    mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
+    batch = GrugLmExample(
+        tokens=jnp.arange(8, dtype=jnp.int32).reshape(2, 4),
+        loss_weight=jnp.ones((2, 4), dtype=jnp.float32),
+        attn_mask=GrugAttentionMask.causal(),
+    )
+
+    with set_mesh(mesh):
+
+        def init_state(key, *, offload_opt_state: bool):
+            return train_module.initial_state(
+                cfg,
+                optimizer=optimizer,
+                mp=mp,
+                key=key,
+                ema_beta=None,
+                offload_opt_state=offload_opt_state,
+            )
+
+        init_state = jax.jit(init_state, static_argnames=("offload_opt_state",))
+        key = jax.random.PRNGKey(0)
+        device_state = init_state(key, offload_opt_state=False)
+        offloaded_state = init_state(key, offload_opt_state=True)
+        offloaded_step = train_module._make_train_step(
+            optimizer,
+            mp,
+            z_loss_weight=0.0,
+            ema_beta=None,
+            offload_opt_state=True,
+        )
+        lowered = offloaded_step.lower(offloaded_state, batch)
+
+    offloaded_arrays = [
+        leaf for leaf in jax.tree.leaves(offloaded_state.opt_state) if isinstance(leaf, jax.Array) and leaf.ndim > 0
+    ]
+    assert offloaded_arrays
+    assert {leaf.sharding.memory_kind for leaf in offloaded_arrays} == {"pinned_host"}
+    assert eqx.tree_equal(offloaded_state.params, device_state.params)
+    offloaded_leaves, offloaded_treedef = jax.tree.flatten(offloaded_state.opt_state)
+    device_leaves, device_treedef = jax.tree.flatten(device_state.opt_state)
+    assert offloaded_treedef == device_treedef
+    for offloaded_leaf, device_leaf in zip(offloaded_leaves, device_leaves, strict=True):
+        np.testing.assert_allclose(np.asarray(offloaded_leaf), np.asarray(device_leaf))
+
+    next_state_info, _, _ = lowered.out_info
+    next_opt_state_info = [
+        leaf for leaf in jax.tree.leaves(next_state_info.opt_state) if leaf.shape != () and leaf.sharding is not None
+    ]
+    assert next_opt_state_info
+    assert {leaf.sharding.memory_kind for leaf in next_opt_state_info} == {"pinned_host"}
 
 
 def test_grug_moe_data_loaders_build_against_single_expert_mesh():
