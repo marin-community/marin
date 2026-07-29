@@ -289,3 +289,45 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
 ```
 
 - Verification gate: after the child appears, inspect both its pod `priorityClassName` and the Kueue workload priority. Do not accept the rack request unless they are `iris-production` / 1000.
+
+### 2026-07-28 18:16 PDT - D67-CTL-01 replacement r4 fails GPU slice preflight
+
+- Submitted parent `/mwittmann/d67-control-m3-draw1-r4-0728-1810` at 18:08 PDT from commit `6d347f269` using the exact command above. Child: `/mwittmann/d67-control-m3-draw1-r4-0728-1810/grug-train-d67-control-m3-draw1-r4-0728-1810`.
+- Priority verification: Iris SQL records production band 1 on both parent and child job configs and on all 16 assigned child tasks. The explicit child-priority fix therefore reached the rack leg.
+- Attempts 0–2 failed before training with node-local `Init:Error stage-workdir`. Attempt 3 admitted, completed environment setup, and initialized distributed JAX across all 64 GB200 devices.
+- Root cause: all ranks then failed in `TrainerConfig.initialize()` with `ValueError: num_devices (64) must be divisible by num_slices (7)`. Levanter counted JAX GPU `slice_index` topology-domain values as TPU slices during its generic mesh preflight. A seven-domain placement therefore failed before Grug constructed its own explicit 64-device mesh.
+- Action: stopped the exact r4 parent at 18:11 PDT; Iris confirmed parent and child `killed`. No training step, loss, throughput, MFU, or drop metric was emitted, so this is not an experimental draw.
+- Fix: `TrainerConfig.num_slices` now counts `slice_index` only for TPU devices and returns one ICI slice for GPU devices. This prevents physical GPU placement-domain count from changing or invalidating the logical Grug mesh.
+- Verification: the regression failed before the fix with seven GPU topology domains reported as seven slices. After the fix, `test_trainer_startup.py` and `test_mesh_config.py` pass, including GPU-domain and TPU-multislice cases (13 tests). `./infra/pre-commit.py --changed-files --fix` also passes.
+
+### 2026-07-28 18:17 PDT - D67-CTL-01 replacement r5 pre-registration
+
+- Prediction carried forward verbatim from 15:35 PDT, before any experimental result was observed: This draw reproduces the healthy m=3/cf1.0625 operating point. Predict about 321K tokens/s and 20.7% MFU, allowing ±4% tokens/s for placement (308–334K), with tail-100 drops 1.2–1.7%. Loss must remain finite and decline through step 349.
+- Planned parent job ID: `/mwittmann/d67-control-m3-draw1-r5-0728-1820`
+- Planned child job ID: `/mwittmann/d67-control-m3-draw1-r5-0728-1820/grug-train-d67-control-m3-draw1-r5-0728-1820`
+- Exact command:
+
+```bash
+IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
+  --cpu 2 --memory 3GB --extra cpu --priority production \
+  --job-name d67-control-m3-draw1-r5-0728-1820 -e RUN_ID d67-control-m3-draw1-r5-0728-1820 \
+  -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async \
+  -e XLA_FLAGS "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false --xla_gpu_experimental_parallel_collective_overlap_limit=4" \
+  -e SCALE_ATTN_IMPL gpu_fa4_cute -e SCALE_WATCH_INTERVAL 0 -e SCALE_CHECKPOINTS local \
+  -e SCALE_A2A_FIXED 1 -e SCALE_A2A_CHUNKS 1 -e SCALE_A2A_NO_BARRIER 1 \
+  -e SCALE_A2A_GATHER_DISPATCH 1 -e SCALE_A2A_CUSTOM_ADJOINT 1 \
+  -e SCALE_MOE_QB 1 -e SCALE_REPORT_DROPS 1 -e SCALE_A2A_SPILL 3 \
+  -e SCALE_CAPACITY_FACTOR 1.0625 -e SCALE_JOB_PRIORITY 1 \
+  -e SCALE_GPUS_PER_NODE 4 -e SCALE_GPU_TYPE GB200 -e SCALE_GPU_REPLICAS 16 \
+  -e SCALE_EXPERT_AXIS 64 -e SCALE_NUM_EXPERTS 256 -e SCALE_TOP_K 8 \
+  -e SCALE_HIDDEN_DIM 5120 -e SCALE_NUM_LAYERS 48 -e SCALE_INTERMEDIATE 1280 \
+  -e SCALE_SHARED_INTERMEDIATE 5120 -e SCALE_SEQ_LEN 4096 -e SCALE_BATCH 1024 \
+  -e SCALE_SLIDING_WINDOW 2048 -e SCALE_STEPS 350 \
+  -e SCALE_MOE_IMPL ragged_all_to_all -e SCALE_OPTIMIZER muonh -e SCALE_MUON_SYRK 1 \
+  -e SCALE_SCAN_LAYERS 1 -e SCALE_REMAT recompute_all \
+  -e SCALE_TRACKER json_logger -e SCALE_JSON_LOGGER d67-control-m3-draw1-r5-0728-1820.metrics \
+  -e SCALE_DISABLE_CHECKPOINT 1 \
+  -- python -m experiments.grug.moe.launch_cw_scale --version d67-family-dev --run
+```
+
+- Verification gate: confirm the child task is production band 1 and inspect the live pod as `iris-production` / 1000 before accepting the scheduler state. Confirm Trainer preflight passes the prior `num_slices` failure before harvesting any metric.
