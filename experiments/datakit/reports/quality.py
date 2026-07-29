@@ -32,7 +32,21 @@ HOMOGENEOUS_FRAC = 0.9  # one bucket holding >= this share = genuinely uniform s
 _DOMAIN_RULES = [
     ("multilingual", ("finepdfs/", "translated", "climblab-ja", "cmn_", "_translated")),
     ("math", ("math", "arxiv", "numina")),
-    ("code", ("starcoder2/", "code", "stackv2", "github", "swe-", "coderforge", "svg", "kaggle", "transpilation")),
+    (
+        "code",
+        (
+            "starcoder2/",
+            "code",
+            "stackv2",
+            "github",
+            "swe-",
+            "coderforge",
+            "svg",
+            "kaggle",
+            "transpilation",
+            "posttrainbench",
+        ),
+    ),
     ("formal", ("formal_logic", "unconditional_algorithmic", "infinibyte_reasoning", "superior-reasoning", "rqa")),
     ("wiki", ("wikiteam", "wiki_rewrite", "wikipedia")),
     ("web", ("nemotron_cc_v2", "refuseweb", "safeweb", "diverse_qa")),

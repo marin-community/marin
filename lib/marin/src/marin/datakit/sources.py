@@ -49,6 +49,7 @@ from marin.datakit.download.nemotron_v2 import (
 from marin.datakit.download.nsf_awards import nsf_awards_normalize_steps
 from marin.datakit.download.numinamath_tir import numinamath_tir_normalize_steps
 from marin.datakit.download.numinamath_v1_5 import numinamath_v1_5_normalize_steps
+from marin.datakit.download.posttrainbench import posttrainbench_open_weights_normalize_steps
 from marin.datakit.download.sec_edgar import sec_edgar_normalize_steps
 from marin.datakit.download.stack_v3 import stack_v3_normalize_steps
 from marin.datakit.download.starcoder2_extras import starcoder2_extras_normalize_steps
@@ -175,6 +176,9 @@ def all_sources() -> dict[str, DatakitSource]:
         ("nsf_awards", nsf_awards_normalize_steps, 0.17),
         ("numinamath-1.5", numinamath_v1_5_normalize_steps, 0.40),
         ("numinamath-tir", numinamath_tir_normalize_steps, 0.08),
+        # Exact count measured with marin-community/marin-tokenizer:
+        # 36,382,773 tokens / 198 docs.
+        ("posttrainbench/open-weights", posttrainbench_open_weights_normalize_steps, 0.036382773),
         ("sec-edgar", sec_edgar_normalize_steps, 334.90),
         # Exact count measured with marin-community/marin-tokenizer:
         # 4,568,429,666,429 tokens / 172,898,790 docs.
