@@ -28,11 +28,11 @@ from iris.cluster.controller.federation_store import ControllerFederationStore
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.service import (
-    AVAILABILITY_METRIC_VERSION,
     WORKDIR_FILE_OFFLOAD_THRESHOLD,
     ControllerServiceImpl,
     _peer_status,
 )
+from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec, HandoffState
@@ -140,6 +140,19 @@ class _FullGpuPeerConnection(_InProcessPeerConnection):
         summary.availability.observation_epoch_ms = 1
         summary.availability.amounts["h100"] = 0
         return [summary]
+
+
+class _BatchOccupiedGpuPeerConnection(_FullGpuPeerConnection):
+    """A peer with no free chips whose H100s are all held by preemptible batch work.
+
+    The reclaim case: nothing is idle, but the held capacity sits below an interactive
+    candidate's band, so the parent delegates and lets the peer's scheduler preempt.
+    """
+
+    def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
+        summaries = super().list_backends()
+        summaries[0].availability.held_by_band.add(band=job_pb2.PRIORITY_BAND_BATCH, amounts={"h100": 8})
+        return summaries
 
 
 class _RefusingPeerConnection(_InProcessPeerConnection):
@@ -805,6 +818,44 @@ def test_a_job_the_peer_has_no_room_for_waits_in_the_queue_unassigned(tmp_path, 
             controller_pb2.Controller.GetJobStatusRequest(job_id=response.job_id), None
         ).job
         assert status.pending_reason == "Queued for a federation peer to report free capacity"
+
+
+@pytest.mark.parametrize(
+    ("band", "handoff_state", "peer_id", "launch_calls"),
+    [
+        (job_pb2.PRIORITY_BAND_INTERACTIVE, HandoffState.HANDED_OFF, "cw", 1),
+        (job_pb2.PRIORITY_BAND_BATCH, HandoffState.QUEUED_HANDOFF, "", 0),
+    ],
+    ids=["interactive-outranks-the-held-band", "batch-outranks-nothing"],
+)
+def test_a_peer_with_no_free_gpus_receives_only_work_that_outranks_the_holder(
+    band, handoff_state, peer_id, launch_calls, tmp_path, log_client
+):
+    """The peer reports 0 free and 8 held at PRIORITY_BAND_BATCH.
+
+    An interactive job outranks that band, so the pass places it and the handoff is
+    delivered. A batch job outranks nothing, so it stays queued at the parent. Delivery
+    is the boundary this test owns — whether the peer's Kueue then evicts the batch work
+    is the peer's decision, not the parent's.
+    """
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
+        connection = _BatchOccupiedGpuPeerConnection(peer_service)
+        manager = _attach_federation(parent_service, connection)
+        parent_service._controller.provider.autoscaler = Mock(job_feasibility=Mock(return_value="no local GPU backend"))
+
+        request = make_direct_job_request("held-by-batch", replicas=1)
+        request.priority_band = band
+        request.resources.device.CopyFrom(job_pb2.DeviceConfig(gpu=job_pb2.GpuDevice(variant="h100", count=8)))
+        response = parent_service.launch_job(request, None)
+
+        promote_queued_federation(manager, parent_state)
+
+        handle = _handle(parent_state, JobName.from_wire(response.job_id))
+        assert handle.handoff_state == int(handoff_state)
+        assert handle.peer_id == peer_id
+        assert connection.launch_calls == launch_calls
 
 
 @pytest.mark.parametrize(

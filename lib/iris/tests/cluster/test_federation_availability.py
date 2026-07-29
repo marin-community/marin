@@ -35,13 +35,22 @@ def _gpu_shape(variant: str = "h100") -> list:
     ]
 
 
-def _backend(backend_id: str, free: int, variant: str = "h100", *, supplies: bool = True, generation: int = 1000):
+def _backend(
+    backend_id: str,
+    free: int,
+    variant: str = "h100",
+    *,
+    supplies: bool = True,
+    generation: int = 1000,
+    held: dict[int, int] | None = None,
+):
     return BackendAvailability(
         backend_id=backend_id,
         supplies_metric=supplies,
         generation=generation if supplies else 0,
         amounts={variant: free} if supplies else {},
         advertised_shape={"device-type": ["gpu"], "device-variant": [variant]},
+        held_by_band={band: {variant: amount} for band, amount in (held or {}).items()},
     )
 
 
@@ -171,6 +180,101 @@ def test_legacy_backend_without_a_metric_matches_on_shape_only():
 def test_unreachable_peer_hosts_nothing():
     peers = [_peer("cw", [_backend("b", free=8)], reachable=False)]
     assert assign_queued([_candidate("j", count=8)], peers, ReservationLedger(), max_per_peer_per_cycle=8) == []
+
+
+# --- priority-aware placement ----------------------------------------------
+
+_INTERACTIVE = job_pb2.PRIORITY_BAND_INTERACTIVE
+_BATCH = job_pb2.PRIORITY_BAND_BATCH
+
+
+def test_interactive_job_reaches_a_peer_saturated_by_preemptible_batch_work():
+    # The peer advertises nothing free, but every chip is held by batch work the
+    # candidate outranks: it is placed so the peer's own scheduler can preempt.
+    peers = [_peer("cw", [_backend("b", free=0, held={_BATCH: 64})])]
+    [promotion] = assign_queued(
+        [_candidate("j", count=32, band=_INTERACTIVE)], peers, ReservationLedger(), max_per_peer_per_cycle=8
+    )
+    assert promotion.peer_id == "cw"
+    assert promotion.reserved == {"h100": 32}
+
+
+def test_a_job_never_reclaims_capacity_at_its_own_band_or_above():
+    # Held by equal-priority (interactive) work: an interactive candidate cannot
+    # preempt it, so the job stays queued.
+    peers = [_peer("cw", [_backend("b", free=0, held={_INTERACTIVE: 64})])]
+    assert (
+        assign_queued(
+            [_candidate("j", count=32, band=_INTERACTIVE)], peers, ReservationLedger(), max_per_peer_per_cycle=8
+        )
+        == []
+    )
+    # And batch work reclaims nothing: no band is below it.
+    peers = [_peer("cw", [_backend("b", free=0, held={_BATCH: 64})])]
+    assert (
+        assign_queued([_candidate("j", count=32, band=_BATCH)], peers, ReservationLedger(), max_per_peer_per_cycle=8)
+        == []
+    )
+
+
+def test_idle_capacity_wins_over_preempting_a_busy_peer():
+    peers = [
+        _peer("cw-busy", [_backend("b", free=0, held={_BATCH: 64})]),
+        _peer("cw-idle", [_backend("b", free=64)]),
+    ]
+    [promotion] = assign_queued(
+        [_candidate("j", count=8, band=_INTERACTIVE)], peers, ReservationLedger(), max_per_peer_per_cycle=8
+    )
+    assert promotion.peer_id == "cw-idle"
+
+
+def test_a_tracked_preempting_backend_beats_a_shape_only_one():
+    # One backend fits only by reclaiming batch work; the other is legacy (no metric).
+    # Taking the legacy one would place the job while charging nothing, so successive
+    # ticks could keep piling onto the same peer: the tracked fit wins and reserves.
+    peers = [_peer("cw", [_backend("metric", free=0, held={_BATCH: 64}), _backend("legacy", free=0, supplies=False)])]
+    [promotion] = assign_queued(
+        [_candidate("j", count=32, band=_INTERACTIVE)], peers, ReservationLedger(), max_per_peer_per_cycle=8
+    )
+    assert promotion.backend_id == "metric"
+    assert promotion.reserved == {"h100": 32}
+
+
+def test_a_tracked_preempting_peer_beats_a_shape_only_peer():
+    # Same ordering across peers, where the legacy peer also sorts first by id.
+    peers = [
+        _peer("cw-legacy", [_backend("b", free=0, supplies=False)]),
+        _peer("cw-metric", [_backend("b", free=0, held={_BATCH: 64})]),
+    ]
+    [promotion] = assign_queued(
+        [_candidate("j", count=32, band=_INTERACTIVE)], peers, ReservationLedger(), max_per_peer_per_cycle=8
+    )
+    assert promotion.peer_id == "cw-metric"
+    assert promotion.reserved == {"h100": 32}
+
+
+def test_reclaimed_capacity_is_decremented_within_a_tick():
+    # 8 free + 8 reclaimable from batch hosts exactly two 8-GPU jobs, not three.
+    peers = [_peer("cw", [_backend("b", free=8, held={_BATCH: 8})])]
+    promotions = assign_queued(
+        [_candidate(f"j{i}", count=8, band=_INTERACTIVE, ts=i) for i in range(3)],
+        peers,
+        ReservationLedger(),
+        max_per_peer_per_cycle=8,
+    )
+    assert [p.job_id.to_wire() for p in promotions] == ["/u/j0", "/u/j1"]
+
+
+def test_a_peer_reporting_no_band_split_reclaims_nothing():
+    # A backend that cannot attribute held capacity to a band (worker-daemon, or one
+    # that predates the field) is gated on its free amount alone, as before.
+    peers = [_peer("cw", [_backend("b", free=4)])]
+    assert (
+        assign_queued(
+            [_candidate("j", count=8, band=_INTERACTIVE)], peers, ReservationLedger(), max_per_peer_per_cycle=8
+        )
+        == []
+    )
 
 
 def test_per_peer_cap_limits_promotions_per_tick():
