@@ -26,7 +26,7 @@ from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, Float, Int
 
 from levanter.grug._moe.common import (
-    _DEFAULT_EP_CAPACITY_FACTOR,
+    DEFAULT_EP_CAPACITY_FACTOR as DEFAULT_EP_CAPACITY_FACTOR,
     _EP_MOE_IMPLEMENTATIONS,
     _init_weight,
     MOE_REMAT_SAVE_NAMES as MOE_REMAT_SAVE_NAMES,
@@ -80,7 +80,7 @@ class MoEExpertMlp(eqx.Module):
         key: jax.Array,
         implementation: MoeImplementation | str | None = None,
         activation: MoeActivation = ActivationFunctionEnum.silu,
-        capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
+        capacity_factor: float = DEFAULT_EP_CAPACITY_FACTOR,
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
@@ -136,7 +136,7 @@ def moe_mlp(
     activation: MoeActivation = ActivationFunctionEnum.silu,
     implementation: MoeImplementation | str | None = None,
     mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh | None = None,
-    capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
+    capacity_factor: float = DEFAULT_EP_CAPACITY_FACTOR,
     report_capacity_overflow: bool = False,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
@@ -301,6 +301,7 @@ def moe_mlp(
 
 
 __all__ = [
+    "DEFAULT_EP_CAPACITY_FACTOR",
     "MoeActivation",
     "MoEExpertMlp",
     "MoEExpertMlpPspecs",
