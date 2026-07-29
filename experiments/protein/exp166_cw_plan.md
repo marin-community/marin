@@ -8,6 +8,10 @@ original harness existed to survive TRC capacity and does not carry over.
 Branch `eac/plm-exp166-cw`, cut from `eac/plm-exp153-cw`. The exp166 TPU tree
 (`eac-plm-exp166`) is read-only reference and is never modified.
 
+The only data movement this plan authorizes is one 16.44 GiB pull of the published exp117
+seed into S3. Nothing is uploaded, and nothing leaves CoreWeave or GCS, without explicit
+approval first.
+
 ## What the experiment asks
 
 Does re-permuting the `<pN> <AA>` sequence statements during training improve
@@ -49,9 +53,8 @@ All eight are 1.5B Qwen3, seq 8192, 8 epochs, cosine with 10% warmup, `data_seed
 `pack=True`, 2 evals per epoch. Objective is `eval/tokenized/contacts-v1-val/loss` at the
 final step.
 
-Extending continuation to the other five configurations means uploading their exp117
-checkpoints first, at two runs per configuration. Do that only if runs 7 and 8 show the
-continuation question is worth pursuing.
+Continuation covers one configuration. Whether it is worth extending is a question for
+after runs 7 and 8 report.
 
 ## What CoreWeave removes
 
@@ -151,17 +154,15 @@ data out of the TPU-vs-GPU investigation.
 
 ## Seeds
 
-Run 7 and run 8 both initialize from a single S3 copy of the exp117 final checkpoint for
-`lr3.1623e-3 / wd0.2 / bs64`, taken from
+Runs 7 and 8 initialize from a single S3 copy of the exp117 final checkpoint for
+`lr3.1623e-3 / wd0.2 / bs64`, pulled once from
 [open-athena/marinfold-exp117](https://huggingface.co/open-athena/marinfold-exp117) in
-Levanter format. It is the only one of the six exp117 configurations whose checkpoint is
-published there, which is why continuation is limited to that configuration.
+Levanter format, then read-only. It is the only exp117 checkpoint published there, which
+is why continuation covers that one configuration.
 
 exp166 pairs each configuration with the checkpoint from the exp117 run that used the same
-hyperparameters, so extending continuation to another configuration means uploading that
-run's checkpoint first (16.44 GiB each, 82.21 GiB for the remaining five).
-
-Copied once, then read-only. No region check, because there is one bucket.
+hyperparameters, so a configuration without a published checkpoint cannot have a
+continuation run.
 
 ## Recovery
 
