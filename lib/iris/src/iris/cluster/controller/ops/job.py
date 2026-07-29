@@ -83,7 +83,7 @@ def _materialize_tasks(
     writes.bulk_insert_tasks(cur, rows)
 
 
-def resolve_priority_band(requested_band: int, inherited_band: int | None) -> int:
+def resolve_priority_band(requested_band: int, inherited_band: int | None) -> job_pb2.PriorityBand:
     """Resolve ``PRIORITY_BAND_INHERIT`` to the band a job is stored with.
 
     Call this at ingestion only — ``LaunchJob``, or a test helper standing in for it.
@@ -99,9 +99,9 @@ def resolve_priority_band(requested_band: int, inherited_band: int | None) -> in
         inherited_band: The parent job's stored band, or ``None`` for a root job.
     """
     if requested_band != job_pb2.PRIORITY_BAND_INHERIT:
-        return requested_band
+        return job_pb2.PriorityBand.ValueType(requested_band)
     if inherited_band:
-        return inherited_band
+        return job_pb2.PriorityBand.ValueType(inherited_band)
     return job_pb2.PRIORITY_BAND_INTERACTIVE
 
 

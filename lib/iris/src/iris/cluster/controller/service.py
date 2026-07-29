@@ -1365,7 +1365,6 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.LaunchJobRequest,
         pinned_peer_id: str,
         submitting_user: str,
-        priority_band: int,
     ) -> controller_pb2.Controller.LaunchJobResponse:
         """Admit a root job to the federation queue and return the parent's job id.
 
@@ -1383,7 +1382,6 @@ class ControllerServiceImpl:
             pinned_peer_id=pinned_peer_id,
             owner_principal=job_id.user,
             submitting_user=submitting_user,
-            priority_band=priority_band,
         )
         return controller_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
 
@@ -1506,6 +1504,10 @@ class ControllerServiceImpl:
             with self._db.read_snapshot() as _snap:
                 inherited_band = reads.get_priority_bands(_snap, [job_id.parent])[job_id.parent]
         band = ops.job.resolve_priority_band(int(request.priority_band), inherited_band)
+        # Normalize the request itself, so every downstream consumer of it — the local
+        # insert, a queued handoff's stored config, the request the peer finally runs —
+        # reads the same real band without re-deriving one.
+        request.priority_band = band
         if not is_received_handoff:
             if band == job_pb2.PRIORITY_BAND_PRODUCTION and self._auth.provider:
                 authorize(AuthzAction.MANAGE_BUDGETS)
@@ -1818,7 +1820,7 @@ class ControllerServiceImpl:
             # Null-auth (dev/loopback) has no real identity to carry, so it federates.
             if self._auth.provider and submitting_user == LOCAL_ADMIN_SUBMITTER:
                 raise ConnectError(Code.PERMISSION_DENIED, _LOCAL_ADMIN_FEDERATION_DENIED)
-            return self._queue_federated_job(job_id, request, plan.pinned_peer_id, submitting_user, band)
+            return self._queue_federated_job(job_id, request, plan.pinned_peer_id, submitting_user)
 
         if plan.disposition == SubmitDisposition.REJECT:
             # Not locally feasible and no reachable peer advertises the shape, so no

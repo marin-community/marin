@@ -674,7 +674,8 @@ message RunTaskRequest {
   CoschedulingConfig coscheduling = 13;
 
   // Effective priority band for the owning job, used to select the Kueue
-  // WorkloadPriorityClass on the K8s direct path. UNSPECIFIED => INTERACTIVE.
+  // WorkloadPriorityClass on the K8s direct path. Always a real band — the
+  // controller stamps it from the resolved value it stored, never INHERIT.
   PriorityBand priority = 14;
 
   // Container security profile for the owning job. Stamped by the controller

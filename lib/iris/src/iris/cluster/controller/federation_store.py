@@ -141,7 +141,7 @@ class ControllerFederationStore:
                 job_id=spec.local_job_id,
                 request=spec.request,
                 ts=now,
-                priority_band=spec.priority_band,
+                priority_band=int(spec.request.priority_band),
                 cluster=spec.peer_id,
                 submitting_user=spec.submitting_user,
             )
@@ -188,7 +188,6 @@ class ControllerFederationStore:
                         request=reconstruct_launch_job_request(
                             job, workdir_files=reads.get_workdir_files(tx, handle.job_id)
                         ),
-                        priority_band=int(job.priority_band),
                         handoff_nonce=handle.handoff_nonce,
                     )
                 )

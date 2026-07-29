@@ -75,7 +75,7 @@ def compute_effective_band(
     PRODUCTION tasks are never downgraded. Users without a ``user_budgets``
     row fall back to ``defaults.budget_limit``; a limit of 0 means unlimited.
 
-    ``task_band`` is a real band: submit resolves UNSPECIFIED once (see
+    ``task_band`` is a real band: ``LaunchJob`` resolves INHERIT once at ingestion (see
     :func:`iris.cluster.controller.ops.job.resolve_priority_band`).
     """
     if task_band == job_pb2.PRIORITY_BAND_PRODUCTION:

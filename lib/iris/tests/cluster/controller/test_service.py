@@ -49,7 +49,7 @@ from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2
 from rigging.server_auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Duration, Timestamp
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
 from tests.cluster.controller._test_support import ControllerTestState, submit_job_in_tx
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
@@ -283,6 +283,25 @@ def test_launch_job_bundle_blob_rewrites_to_controller_bundle_id(service, state)
 def _cap_user_at(state, band: int, user: str = "test-user") -> None:
     with state._db.transaction() as tx:
         writes.set_user_budget(tx, user, 0, band, Timestamp.now())
+
+
+def test_launch_job_stores_the_inherited_band_on_both_rows(service, state):
+    """A band-less child submitted through LaunchJob stores the parent's band.
+
+    Goes through the real entry point rather than ``ops.job.submit``, so the parent
+    lookup under test is the service's own and not a test helper's.
+    """
+    _cap_user_at(state, job_pb2.PRIORITY_BAND_PRODUCTION)
+    parent = make_job_request("parent-prod")
+    parent.priority_band = job_pb2.PRIORITY_BAND_PRODUCTION
+    service.launch_job(parent, None)
+    service.launch_job(make_job_request("/test-user/parent-prod/child"), None)
+
+    child_id = JobName.from_string("/test-user/parent-prod/child")
+    with state._db.read_snapshot() as snap:
+        assert reads.get_priority_bands(snap, [child_id]) == {child_id: job_pb2.PRIORITY_BAND_PRODUCTION}
+        task_bands = snap.execute(select(tasks_table.c.priority_band).where(tasks_table.c.job_id == child_id)).scalars()
+        assert set(task_bands) == {job_pb2.PRIORITY_BAND_PRODUCTION}
 
 
 def test_launch_job_batch_capped_user_can_spawn_children(service, state):
