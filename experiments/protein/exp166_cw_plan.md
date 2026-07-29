@@ -19,16 +19,23 @@ no corpus is regenerated and nothing is re-tokenized.
 Eight. Six train from random weights with augmentation, one per exp117 configuration.
 Two continue from an exp117 checkpoint and differ only in whether augmentation is on.
 
-| # | initial weights | augmentation | lr | wd | batch |
-|---|---|---|---|---|---|
-| 1 | random | yes | 3.1623e-3 | 0.2 | 64 |
-| 2 | random | yes | 3.1623e-4 | 1.6 | 64 |
-| 3 | random | yes | 3.1623e-3 | 0.1 | 128 |
-| 4 | random | yes | 1e-3 | 0.8 | 128 |
-| 5 | random | yes | 3.1623e-4 | 1.6 | 128 |
-| 6 | random | yes | 1e-3 | 0.2 | 64 |
-| 7 | exp117 `lr3p162e-3-wd0p2-bs64` | yes | 3.1623e-3 | 0.2 | 64 |
-| 8 | exp117 `lr3p162e-3-wd0p2-bs64` | no | 3.1623e-3 | 0.2 | 64 |
+| # | initial weights | augmentation | lr | wd | batch | run id suffix |
+|---|---|---|---|---|---|---|
+| 1 | random | yes | 3.1623e-3 | 0.2 | 64 | `lr3p162e-3-wd0p2-bs64-scratch-aug` |
+| 2 | random | yes | 3.1623e-4 | 1.6 | 64 | `lr3p162e-4-wd1p6-bs64-scratch-aug` |
+| 3 | random | yes | 3.1623e-3 | 0.1 | 128 | `lr3p162e-3-wd0p1-bs128-scratch-aug` |
+| 4 | random | yes | 1e-3 | 0.8 | 128 | `lr1e-3-wd0p8-bs128-scratch-aug` |
+| 5 | random | yes | 3.1623e-4 | 1.6 | 128 | `lr3p162e-4-wd1p6-bs128-scratch-aug` |
+| 6 | random | yes | 1e-3 | 0.2 | 64 | `lr1e-3-wd0p2-bs64-scratch-aug` |
+| 7 | exp117 `lr3p162e-3-wd0p2-bs64` | yes | 3.1623e-3 | 0.2 | 64 | `lr3p162e-3-wd0p2-bs64-exp117init-aug` |
+| 8 | exp117 `lr3p162e-3-wd0p2-bs64` | no | 3.1623e-3 | 0.2 | 64 | `lr3p162e-3-wd0p2-bs64-exp117init-noaug` |
+
+Run IDs are `prot-exp166cw-cv1-aaaug-1_5b-e8-<suffix>`, W&B group
+`exp166cw-contacts-v1-aa-augmentation`, smoke group `exp166cw-aaaug-smoke`. The `exp166cw`
+prefix keeps these clear of the 28 exp166 runs the TPU attempt already left in W&B, whose
+names all end in a region. The suffix carries both variables that distinguish runs 7 and 8.
+Names are identity only: lr, weight decay, batch, epochs and initialization mode live in
+W&B tags and config and are never parsed back out of the string.
 
 Runs 1-6 are each compared against the exp117 result for the same settings: same config,
 same 8 epochs, augmentation the only difference.
@@ -42,9 +49,9 @@ All eight are 1.5B Qwen3, seq 8192, 8 epochs, cosine with 10% warmup, `data_seed
 `pack=True`, 2 evals per epoch. Objective is `eval/tokenized/contacts-v1-val/loss` at the
 final step.
 
-Extending continuation to the other five configurations is possible once their seeds are
-on HF, at two runs per configuration. Do that only if runs 7 and 8 show the continuation
-question is worth pursuing.
+Extending continuation to the other five configurations means uploading their exp117
+checkpoints first, at two runs per configuration. Do that only if runs 7 and 8 show the
+continuation question is worth pursuing.
 
 ## What CoreWeave removes
 
@@ -90,27 +97,71 @@ per step. It was acceptable on TPU and has not been profiled on GPU.
 
 ## Storage
 
-Final checkpoint only. No per-epoch permanents: the objective is the final val loss, and
-the R-precision-vs-tokens curve that motivated per-epoch keeps belongs to #117.
+Everything this experiment writes goes under its own prefix,
+`s3://marin-us-east-02a/MarinFold/exp166cw_qwen_contacts_v1`, which is what `MARIN_PREFIX`
+is set to on both driver and gang.
 
-| what | size |
+| what | path under the prefix |
 |---|---|
-| final Levanter checkpoint | 16.44 GiB per run, ~132 GiB for eight |
-| final HF export, if wanted for downstream eval | 5.48 GiB per run, ~44 GiB |
+| run outputs | `checkpoints/{run_id}/2026.07.29.01/{checkpoints,hf}` |
+| init seed | `checkpoints/exp166-init/prot-exp117-cv1-s02-1_5b-e8-lr3p162e-3-wd0p2-bs64-europe-west4/2026.07.13.02/checkpoints/step-71359/` |
 
-Everything lands under the exp153 prefix,
-`s3://marin-us-east-02a/MarinFold/exp154_qwen_contacts_v1`. The contacts-v1 token cache
-is already there at `tokenized/contacts-v1{,-val}/2026.07.25/`, validated byte-for-byte
-against #117, so nothing is tokenized again.
+Checkpoint cadence:
+
+| kind | cadence | size |
+|---|---|---|
+| resumption checkpoint | every 10 minutes, rolling; each replaces the last | 16.44 GiB transient |
+| permanent Levanter | final step only | 16.44 GiB per run |
+| HF export | final step only | 5.48 GiB per run |
+
+The 10-minute rolling save is marin's `_RESUMPTION_INTERVAL` and caps what a preemption
+costs. It is written inside the run's own directory rather than the bucket-root
+`tmp/ttl=` path, following exp153's `temporary_base_path=None`, so nothing escapes the
+prefix. No per-epoch permanents: the objective is the final val loss, and the
+R-precision-vs-tokens curve that motivated per-epoch keeps belongs to #117.
+
+Total footprint ~192 GiB: 16.4 GiB seed plus ~21.9 GiB for each of eight completed runs.
 
 Nothing under `MarinFold/` expires on its own and the bucket has no object versioning, so
 every delete is permanent.
 
+### Token cache
+
+The cache is **read in place, not copied**. `tokenized(pin=...)` takes an absolute
+location:
+
+```
+s3://marin-us-east-02a/MarinFold/exp154_qwen_contacts_v1/tokenized/contacts-v1/2026.07.25
+s3://marin-us-east-02a/MarinFold/exp154_qwen_contacts_v1/tokenized/contacts-v1-val/2026.07.25
+```
+
+`ArtifactStep.path()` returns a pin verbatim when it carries a URL scheme instead of
+joining it onto the prefix (`lazy.py:229-233`), and a pinned step records no provenance
+(`lazy.py:334`), so exp154 is read-only from here. That saves copying 6.2 GiB and 820
+objects, and avoids rewriting the absolute `output_path` embedded in the cache's
+`.executor_info` and `.artifact.json`.
+
+**Consequence: `exp154_qwen_contacts_v1/tokenized/` must not be pruned.** That prefix is
+the one 614 GiB of exp153 checkpoints were deleted from; the cache under it is now a live
+dependency of this experiment.
+
+Before the first real run, byte-compare the pinned cache against the GCS original. It is
+the one confound that would invalidate every number here, and it is the check that ruled
+data out of the TPU-vs-GPU investigation.
+
 ## Seeds
 
-Continuation runs read one S3 copy of the exp117 final checkpoint. Source is
-[open-athena/marinfold-exp117](https://huggingface.co/open-athena/marinfold-exp117),
-Levanter format, copied once. No region check, because there is one bucket.
+Run 7 and run 8 both initialize from a single S3 copy of the exp117 final checkpoint for
+`lr3.1623e-3 / wd0.2 / bs64`, taken from
+[open-athena/marinfold-exp117](https://huggingface.co/open-athena/marinfold-exp117) in
+Levanter format. It is the only one of the six exp117 configurations whose checkpoint is
+published there, which is why continuation is limited to that configuration.
+
+exp166 pairs each configuration with the checkpoint from the exp117 run that used the same
+hyperparameters, so extending continuation to another configuration means uploading that
+run's checkpoint first (16.44 GiB each, 82.21 GiB for the remaining five).
+
+Copied once, then read-only. No region check, because there is one bucket.
 
 ## Recovery
 
@@ -140,6 +191,7 @@ exp166's augmentation dropped in.
   that OOMs at seq 8192.
 - GPU batch calibration in place of the TPU per-family correction factors.
 - Seed resolved from a single S3 path.
+- Token caches declared with an absolute `pin=` rather than resolved against the prefix.
 - `MARIN_PREFIX` forwarded to the gang, which does not inherit the driver's environment.
 - `--priority batch`; driver runs inside the target cluster and must outlive its gang.
 - Driver needs at least 3 GB; Kubernetes enforces memory requests as hard limits.
@@ -148,8 +200,8 @@ The augmentation code, the six configurations, and their exp117 losses port unch
 
 ## Order
 
-1. Upload the five missing exp117 final checkpoints to HF (82.21 GiB).
-2. Copy the needed seed from HF into S3.
+1. Copy the one published exp117 seed from HF into S3 (16.44 GiB).
+2. Byte-compare the pinned token cache against the GCS original.
 3. Write the sweep script.
 4. Calibrate on GB200, then H100.
 5. Smoke one run end to end, checkpoint and eval, on temp storage.
