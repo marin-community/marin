@@ -42,6 +42,8 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /k8s/alerts/degraded                     alert rows: cluster, component, value(desired-ready)
     GET /k8s/alerts/node_deadlocks                alert rows: cluster, node, reason, value(0|1)
     GET /k8s/alerts/stuck_gpu_pods                alert rows: cluster, node, value(count)
+    GET /k8s/arch_mismatch                        containers killed by exec format error on non-amd64 nodes
+    GET /k8s/alerts/arch_mismatch                 alert rows: cluster, node, image, value(count)
     GET /k8s/alerts/gpu_rack_trays                alert rows: cluster, rack_name, value(trays_ready)
     POST /alerts/loom                             firing Grafana groups become Loom automation runs
     GET /health                                  bridge liveness
@@ -103,6 +105,7 @@ TO_MACRO = "{{to}}"
 LABELS_COLUMN = "labels"
 LABEL_PREFIX = "label_"
 _K8S_TERMINATION_CANDIDATES_CACHE_KEY = "termination_candidates"
+_K8S_ARCH_MISMATCH_CACHE_KEY = "arch_mismatch"
 _K8S_EVENTS_CACHE_KEY = "events"
 _K8S_FINELOG_CACHE_KEY = "finelog"
 _FINELOG_FILTER_TOKEN = "finelog"
@@ -523,6 +526,14 @@ def create_app(
         rows = k8s_cache.get_or_compute(_K8S_TERMINATION_CANDIDATES_CACHE_KEY, k8s_fleet.termination_candidates)
         return JSONResponse(k8s_fleet.alert_stuck_gpu_pods(rows))
 
+    def k8s_arch_mismatch(_: Request) -> JSONResponse:
+        return k8s_endpoint(_K8S_ARCH_MISMATCH_CACHE_KEY, k8s_fleet.arch_mismatch_pods)
+
+    def k8s_alerts_arch_mismatch(_: Request) -> JSONResponse:
+        # Shares the detail scan's cache entry, as stuck_gpu_pods does.
+        rows = k8s_cache.get_or_compute(_K8S_ARCH_MISMATCH_CACHE_KEY, k8s_fleet.arch_mismatch_pods)
+        return JSONResponse(k8s_fleet.alert_arch_mismatch(rows))
+
     def health(_: Request) -> JSONResponse:
         return JSONResponse({"status": "ok", "clusters": sorted(finelog_sources)})
 
@@ -572,6 +583,7 @@ def create_app(
             Route("/k8s/nodes", k8s_nodes),
             Route("/k8s/overview", k8s_overview),
             Route("/k8s/gpu_racks", k8s_gpu_racks),
+            Route("/k8s/arch_mismatch", k8s_arch_mismatch),
             Route("/k8s/alerts/unreachable", k8s_alerts_unreachable),
             Route("/k8s/alerts/crashloops", k8s_alerts_crashloops),
             Route("/k8s/alerts/webhook_ready", k8s_alerts_webhook_ready),
@@ -579,6 +591,7 @@ def create_app(
             Route("/k8s/alerts/node_deadlocks", k8s_alerts_node_deadlocks),
             Route("/k8s/alerts/gpu_rack_trays", k8s_alerts_gpu_rack_trays),
             Route("/k8s/alerts/stuck_gpu_pods", k8s_alerts_stuck_gpu_pods),
+            Route("/k8s/alerts/arch_mismatch", k8s_alerts_arch_mismatch),
         ]
     )
 

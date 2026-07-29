@@ -45,9 +45,11 @@ GET /k8s/nodes                                    node readiness, cordons, deadl
 GET /k8s/finelog | finelog_events                 mirror pods/PVCs and matching warnings
 GET /k8s/overview                                 explicit pending/crashloop counts
 GET /k8s/gpu_racks                                GPU nodes grouped by physical rack: trays total/ready
+GET /k8s/arch_mismatch                            containers killed by an exec-format failure on a non-amd64 node
 GET /k8s/alerts/{unreachable,crashloops,          alert rows: string labels + one
-     webhook_ready,degraded,node_deadlocks,        numeric; gpu_rack_trays omits rows for
-     stuck_gpu_pods,gpu_rack_trays}                a cluster it cannot reach, others zero
+     webhook_ready,degraded,node_deadlocks,       numeric; gpu_rack_trays omits rows for
+     stuck_gpu_pods,gpu_rack_trays,               a cluster it cannot reach, others zero
+     arch_mismatch}
 GET /health                                       bridge liveness
 ```
 

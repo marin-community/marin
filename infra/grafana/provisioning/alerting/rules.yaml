@@ -252,6 +252,50 @@ groups:
               conditions:
                 - evaluator: { type: gt, params: [0] }
 
+      - uid: k8s-arch-mismatch-image
+        title: ArchMismatchImageExecuted
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.image }} is built for the wrong CPU architecture for node {{ $labels.node }}"
+          description: >-
+            Containers on this node exited 255 immediately, the runtime's signature for
+            "exec format error" — an amd64 image on an arm64 GPU node. The image tag has
+            probably lost its arm64 manifest, or the node holds a stale amd64 copy that
+            imagePullPolicy IfNotPresent will never refresh.
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: k8s
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: k8s }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/arch_mismatch
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: node, text: node, type: string }
+                - { selector: image, text: image, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
       - uid: k8s-gpu-rack-trays-low
         title: GpuRackTraysBelowMinimum
         condition: C

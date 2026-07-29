@@ -5,7 +5,7 @@
 error classification, and the fleet's always-one-row-per-cluster alert contract."""
 
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -608,6 +608,118 @@ def test_finelog_pods_reports_runtime_resources_probes_and_pvc():
     }
 
 
+TASK_IMAGE = "ghcr.io/marin-community/iris-task:latest"
+
+
+def _exec_format_pod(
+    name: str,
+    *,
+    node_name: str = "gpu-a",
+    image: str = TASK_IMAGE,
+    exit_code: int = 255,
+    reason: str = "Error",
+    runtime_seconds: float = 0.0,
+    finished_ago_seconds: int = 60,
+    state_key: str = "state",
+) -> dict:
+    finished = datetime.now(UTC) - timedelta(seconds=finished_ago_seconds)
+    started = finished - timedelta(seconds=runtime_seconds)
+    terminated = {
+        "exitCode": exit_code,
+        "reason": reason,
+        "startedAt": started.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "finishedAt": finished.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    return {
+        "metadata": {"namespace": "iris", "name": name},
+        "spec": {"nodeName": node_name},
+        "status": {
+            "phase": "Failed",
+            "initContainerStatuses": [
+                {"name": "stage-workdir", "image": image, "imageID": "sha256:abc", state_key: {"terminated": terminated}}
+            ],
+        },
+    }
+
+
+def _arch_routes(pods: list[dict], *, nodes: list[dict] | None = None) -> dict:
+    routes = healthy_k8s_routes()
+    routes["/api/v1/namespaces"] = [_namespace("iris")]
+    routes["/api/v1/namespaces/iris/pods"] = pods
+    routes["/api/v1/nodes"] = nodes if nodes is not None else [node("gpu-a", arch="arm64")]
+    return routes
+
+
+def test_arch_mismatch_reports_exec_format_failures_on_a_non_amd64_node():
+    routes = _arch_routes([_exec_format_pod("task-0")])
+    (row,) = make_k8s_source(k8s_api(routes)).arch_mismatch_pods()
+    assert row["pod"] == "task-0"
+    assert row["container"] == "stage-workdir"
+    assert row["node"] == "gpu-a"
+    assert row["node_arch"] == "arm64"
+    assert row["image"] == TASK_IMAGE
+    assert row["exit_code"] == 255
+
+
+def test_arch_mismatch_ignores_the_same_failure_on_an_amd64_node():
+    # An amd64 image on an amd64 CPU node is correct; only the arm64 side is broken.
+    routes = _arch_routes(
+        [_exec_format_pod("task-0", node_name="cpu-a")],
+        nodes=[node("cpu-a", arch="amd64")],
+    )
+    assert make_k8s_source(k8s_api(routes)).arch_mismatch_pods() == []
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        pytest.param({"exit_code": 1}, id="ordinary-failure-exit-1"),
+        pytest.param({"reason": "OOMKilled"}, id="other-termination-reason"),
+        pytest.param({"runtime_seconds": 600}, id="ran-too-long-to-be-exec-failure"),
+        pytest.param({"finished_ago_seconds": 7200}, id="older-than-the-lookback-window"),
+    ],
+)
+def test_arch_mismatch_rejects_terminations_outside_the_signature(kwargs):
+    routes = _arch_routes([_exec_format_pod("task-0", **kwargs)])
+    assert make_k8s_source(k8s_api(routes)).arch_mismatch_pods() == []
+
+
+def test_arch_mismatch_reads_last_state_for_a_restarting_container():
+    routes = _arch_routes([_exec_format_pod("task-0", state_key="lastState")])
+    (row,) = make_k8s_source(k8s_api(routes)).arch_mismatch_pods()
+    assert row["pod"] == "task-0"
+
+
+def test_arch_mismatch_skips_pods_on_a_node_the_scan_cannot_resolve():
+    # An unscheduled pod has no nodeName, so there is no architecture to judge it against.
+    routes = _arch_routes([_exec_format_pod("task-0", node_name="")])
+    assert make_k8s_source(k8s_api(routes)).arch_mismatch_pods() == []
+
+
+def test_alert_arch_mismatch_groups_by_node_and_image_with_zero_rows_elsewhere():
+    routes = _arch_routes(
+        [
+            _exec_format_pod("task-0"),
+            _exec_format_pod("task-1"),
+            _exec_format_pod("task-2", node_name="gpu-b"),
+            _exec_format_pod("ok", exit_code=0),
+        ],
+        nodes=[node("gpu-a", arch="arm64"), node("gpu-b", arch="arm64")],
+    )
+    fleet = _fleet(("cw-a", k8s_api(routes)), ("cw-b", k8s_api(healthy_k8s_routes())))
+    assert fleet.alert_arch_mismatch() == [
+        {"cluster": "cw-a", "node": "gpu-a", "image": TASK_IMAGE, "value": 2},
+        {"cluster": "cw-a", "node": "gpu-b", "image": TASK_IMAGE, "value": 1},
+        {"cluster": "cw-b", "node": "", "image": "", "value": 0},
+    ]
+
+
+def test_alert_arch_mismatch_reports_zero_for_an_unreachable_cluster():
+    # Absence of evidence is not evidence of a mismatch; K8sClusterUnreachable pages instead.
+    fleet = _fleet(("cw-a", _forbidden))
+    assert fleet.alert_arch_mismatch() == [{"cluster": "cw-a", "node": "", "image": "", "value": 0}]
+
+
 def test_alert_gpu_rack_trays_maps_trays_ready_to_value():
     fleet = _fleet(("cw-a", k8s_api(healthy_k8s_routes())))
     assert fleet.alert_gpu_rack_trays() == [
@@ -641,6 +753,7 @@ def test_alert_routes_return_explicit_zeros_when_healthy():
     ]
     assert fleet.alert_stuck_gpu_pods() == [{"cluster": "cw-a", "node": "", "value": 0}]
     assert fleet.alert_node_deadlocks() == [{"cluster": "cw-a", "node": "", "reason": "", "value": 0}]
+    assert fleet.alert_arch_mismatch() == [{"cluster": "cw-a", "node": "", "image": "", "value": 0}]
 
 
 def test_alert_routes_keep_one_row_per_cluster_when_unreachable():

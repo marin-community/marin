@@ -84,6 +84,28 @@ _GB200_INSTANCE_TYPE_SUBSTRING = "gb200"
 # Container waiting reasons the crashloop rows report.
 BACKOFF_REASONS = ("CrashLoopBackOff", "ImagePullBackOff")
 
+# An image built for the wrong CPU architecture fails at exec, not at pull: the
+# kubelet starts the container and the runtime immediately reports
+# "exec format error". Kubernetes surfaces no distinct reason for it, so the
+# arch-mismatch scan matches the runtime's observable signature instead — the
+# container exits 255 with reason Error in under a second. Exit 255 is otherwise
+# unused across the fleet (a Python fault exits 1), and pairing it with a
+# sub-second runtime keeps a genuine 255 from a long-running job out of the rows.
+#
+# The scan reports a hit only on a node whose architecture is not amd64, because
+# an amd64 image on an amd64 node is correct. On CoreWeave that means the arm64
+# GB200 nodes: they run the same iris-task image tag as the amd64 CPU nodes, so a
+# tag that loses its arm64 manifest breaks only the GPU side of the fleet.
+EXEC_FORMAT_EXIT_CODE = 255
+EXEC_FORMAT_MAX_RUNTIME_SECONDS = 1
+_EXEC_FORMAT_REASON = "Error"
+_HOST_ARCH_AMD64 = "amd64"
+
+# How far back a terminated container still counts as evidence. Failed pods linger
+# until garbage collection, so without a window one morning's bad image would keep
+# the alert firing for as long as its pods survive.
+ARCH_MISMATCH_LOOKBACK_SECONDS = 3600
+
 # Crashloop scope labels: pods of a watched component vs everything else. The alert
 # rules filter on these values (the crashloops rule pages only on SCOPE_CONTROL_PLANE).
 SCOPE_CONTROL_PLANE = "control-plane"
@@ -542,6 +564,56 @@ class K8sSource:
         rows.sort(key=lambda row: row["age_seconds"] or 0, reverse=True)
         return rows
 
+    def node_architectures(self) -> dict[str, str]:
+        """Map node name to its reported CPU architecture (``arm64``, ``amd64``)."""
+        architectures = {}
+        for node in self._list("/api/v1/nodes"):
+            name = (node.get("metadata") or {}).get("name")
+            if not name:
+                continue
+            architectures[name] = ((node.get("status") or {}).get("nodeInfo") or {}).get("architecture") or ""
+        return architectures
+
+    def arch_mismatch_pods(self) -> list[dict]:
+        """One row per container that died of an exec-format failure on a non-amd64 node.
+
+        Detection is the runtime signature described at EXEC_FORMAT_EXIT_CODE, scoped
+        to containers that finished inside ARCH_MISMATCH_LOOKBACK_SECONDS. Both the
+        current and previous termination are checked, so a restarting container still
+        reports while its newest state is Waiting. Most recent first.
+        """
+        architectures = self.node_architectures()
+        rows = []
+        for pod in self._scan_pods(None):
+            metadata = pod.get("metadata") or {}
+            node_name = (pod.get("spec") or {}).get("nodeName") or ""
+            node_arch = architectures.get(node_name, "")
+            if not node_arch or node_arch == _HOST_ARCH_AMD64:
+                continue
+            for status in _container_statuses(pod):
+                terminated = _exec_format_termination(status)
+                if terminated is None:
+                    continue
+                age = _terminated_age_seconds(terminated)
+                if age is None or age > ARCH_MISMATCH_LOOKBACK_SECONDS:
+                    continue
+                rows.append(
+                    {
+                        "namespace": metadata.get("namespace") or "",
+                        "pod": metadata.get("name") or "",
+                        "container": status.get("name") or "",
+                        "node": node_name,
+                        "node_arch": node_arch,
+                        "image": status.get("image") or "",
+                        "image_id": status.get("imageID") or "",
+                        "exit_code": terminated.get("exitCode"),
+                        "finished_at": _epoch_ms(terminated.get("finishedAt")),
+                        "age_seconds": age,
+                    }
+                )
+        rows.sort(key=lambda row: row["age_seconds"])
+        return rows
+
     def termination_candidates(self) -> list[TerminatingPod]:
         """Return overdue terminating pods and invalid deletion timestamps.
 
@@ -706,6 +778,39 @@ def _container_statuses(pod: dict) -> list[dict]:
     return list(status.get("initContainerStatuses") or []) + list(status.get("containerStatuses") or [])
 
 
+def _terminated_runtime_seconds(terminated: dict) -> float | None:
+    """Wall-clock seconds the container ran, or None when either timestamp is unusable."""
+    started, finished = terminated.get("startedAt"), terminated.get("finishedAt")
+    if not started or not finished:
+        return None
+    try:
+        return (datetime.fromisoformat(finished) - datetime.fromisoformat(started)).total_seconds()
+    except (TypeError, ValueError):
+        return None
+
+
+def _terminated_age_seconds(terminated: dict) -> int | None:
+    try:
+        return _age_seconds(terminated.get("finishedAt"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _exec_format_termination(status: dict) -> dict | None:
+    """Return the termination record matching the exec-format signature, if either state does."""
+    for state_key in ("state", "lastState"):
+        terminated = (status.get(state_key) or {}).get("terminated") or {}
+        if terminated.get("exitCode") != EXEC_FORMAT_EXIT_CODE:
+            continue
+        if terminated.get("reason") != _EXEC_FORMAT_REASON:
+            continue
+        runtime = _terminated_runtime_seconds(terminated)
+        if runtime is None or runtime > EXEC_FORMAT_MAX_RUNTIME_SECONDS:
+            continue
+        return terminated
+    return None
+
+
 def _pod_condition(pod: dict, condition_type: str) -> dict:
     for condition in (pod.get("status") or {}).get("conditions") or []:
         if condition.get("type") == condition_type:
@@ -842,6 +947,9 @@ class K8sFleet:
     def gpu_racks(self) -> list[dict]:
         return self._fan_out(lambda s: s.gpu_racks(), self._error_row)
 
+    def arch_mismatch_pods(self) -> list[dict]:
+        return self._fan_out(lambda s: s.arch_mismatch_pods(), self._error_row)
+
     def finelog_health(self) -> list[FinelogHealth]:
         """One health row per k8s finelog mirror, including API failures."""
 
@@ -969,6 +1077,33 @@ class K8sFleet:
             return rows or [{"node": "", "reason": "", "value": 0}]
 
         return self._fan_out(deadlocks, lambda _err: [{"node": "", "reason": "", "value": 0}])
+
+    def alert_arch_mismatch(self, rows: Sequence[dict] | None = None) -> list[dict]:
+        """Per cluster, node, and image: failed-container count, with zero rows where clean.
+
+        An unreachable cluster contributes its zero row like the other pod-scan alert
+        routes: absence of evidence is not evidence of a mismatch, and
+        K8sClusterUnreachable already pages for the unreachability itself.
+        """
+        scanned = list(rows) if rows is not None else self.arch_mismatch_pods()
+        counts: dict[tuple[str, str, str], int] = {}
+        for row in scanned:
+            if row.get("error_class"):
+                continue
+            key = (row.get("cluster") or "", row.get("node") or "", row.get("image") or "")
+            counts[key] = counts.get(key, 0) + 1
+
+        alert_rows = [
+            {"cluster": cluster, "node": node, "image": image, "value": count}
+            for (cluster, node, image), count in sorted(counts.items())
+        ]
+        affected = {cluster for cluster, _, _ in counts}
+        alert_rows.extend(
+            {"cluster": source.target.name, "node": "", "image": "", "value": 0}
+            for source in self._sources
+            if source.target.name not in affected
+        )
+        return alert_rows
 
     def alert_stuck_gpu_pods(self, candidates: Sequence[TerminatingPodResult] | None = None) -> list[dict]:
         """Return node-grouped counts plus zero rows where no qualifying evidence exists."""
