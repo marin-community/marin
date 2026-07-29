@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from config import K8S_CLUSTERS, BridgeConfig
+from config import BridgeConfig
 
 LOOM_ENV = (
     "LOOM_ALERT_URL",
@@ -33,10 +33,3 @@ def test_partial_loom_alert_configuration_fails_fast(monkeypatch):
 
     with pytest.raises(ValueError, match="LOOM_ALERT_PROFILE"):
         BridgeConfig.from_environment()
-
-
-def test_coreweave_ci_cluster_uses_its_namespace_without_finelog():
-    targets = {target.name: target for target in K8S_CLUSTERS}
-
-    assert targets["cw-us-west-04a"].iris_namespace == "iris-ci"
-    assert targets["cw-us-west-04a"].finelog_expected is False

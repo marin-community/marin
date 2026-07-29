@@ -205,6 +205,22 @@ def test_crashloop_scope_separates_watched_components_from_workloads():
     ]
 
 
+def test_crashloop_scope_uses_the_cluster_iris_namespace():
+    routes = {
+        "/api/v1/namespaces": [_namespace("iris-ci")],
+        "/api/v1/namespaces/iris-ci/pods": [
+            pod("iris-ci", "iris-controller-7f9-x2", waiting="CrashLoopBackOff"),
+        ],
+    }
+    target = K8sClusterTarget("cw-ci", "https://api.example", iris_namespace="iris-ci")
+
+    rows = make_k8s_source(k8s_api(routes), target=target).crashloops()
+
+    assert [(row["pod"], row["scope"]) for row in rows] == [
+        ("iris-controller-7f9-x2", "control-plane"),
+    ]
+
+
 def test_provider_namespaces_are_excluded_from_pod_scans():
     # Only the iris pods route exists: a scan reaching cw-* or kube-* would 404
     # and raise, so a passing scan proves the exclusion.

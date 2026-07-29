@@ -517,7 +517,7 @@ class K8sSource:
                         "container": status.get("name"),
                         "reason": reason,
                         "restarts": status.get("restartCount") or 0,
-                        "scope": _pod_scope(metadata),
+                        "scope": _pod_scope(metadata, self.watched_components),
                     }
                 )
         return rows
@@ -634,14 +634,13 @@ class K8sSource:
                 for condition in (node.get("status") or {}).get("conditions") or []
                 if condition.get("type")
             }
-            ready = conditions.get("Ready") or {}
             deadlock = conditions.get(_KERNEL_DEADLOCK_CONDITION) or {}
             pending_phase = conditions.get(_PENDING_PHASE_CONDITION) or {}
             rows.append(
                 {
                     "node": metadata.get("name", ""),
                     "instance_type": labels.get(_INSTANCE_TYPE_LABEL, ""),
-                    "ready": ready.get("status") == "True",
+                    "ready": _node_ready(node),
                     "unschedulable": bool((node.get("spec") or {}).get("unschedulable")),
                     "cordon_reason": annotations.get(_CORDON_REASON_ANNOTATION, ""),
                     "kernel_deadlock": deadlock.get("status") == "True",
@@ -714,10 +713,10 @@ def _pod_condition(pod: dict, condition_type: str) -> dict:
     return {}
 
 
-def _pod_scope(metadata: dict) -> str:
+def _pod_scope(metadata: dict, watched_components: Sequence[WatchedComponent]) -> str:
     """SCOPE_CONTROL_PLANE if the pod belongs to a watched Deployment, else SCOPE_WORKLOAD."""
     namespace, name = metadata.get("namespace"), metadata.get("name") or ""
-    for component in WATCHED_COMPONENTS:
+    for component in watched_components:
         if namespace == component.namespace and name.startswith(f"{component.deployment}-"):
             return SCOPE_CONTROL_PLANE
     return SCOPE_WORKLOAD
