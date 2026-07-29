@@ -13,6 +13,7 @@ import jax.numpy as jnp
 import jmp
 import levanter.callbacks as callbacks
 import levanter.tracker
+import numpy as np
 import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
@@ -297,6 +298,22 @@ def initial_state(
     )
 
 
+def _drop_metrics(
+    dropped_assignments_per_layer: jax.Array,
+    *,
+    batch_size: int,
+    sequence_length: int,
+    top_k: int,
+    num_layers: int,
+) -> dict[str, int | float]:
+    dropped_assignments_host = sum(int(count) for count in np.asarray(dropped_assignments_per_layer))
+    total_assignments = batch_size * sequence_length * top_k * num_layers
+    return {
+        "moe/dropped_assignments": dropped_assignments_host,
+        "moe/drop_fraction": dropped_assignments_host / total_assignments,
+    }
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -556,6 +573,15 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
                             step=step,
                         )
+                    if "moe/dropped_assignments_per_layer" in metrics:
+                        drop_metrics = _drop_metrics(
+                            metrics["moe/dropped_assignments_per_layer"],
+                            batch_size=batch.tokens.shape[0],
+                            sequence_length=batch.tokens.shape[1],
+                            top_k=config.model.num_experts_per_token,
+                            num_layers=config.model.num_layers,
+                        )
+                        levanter.tracker.log(drop_metrics, step=step)
 
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)

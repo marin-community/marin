@@ -232,6 +232,8 @@ def test_scale_report_drops_controls_real_ring_drop_count():
 
         unreported = capacity_overflow(report_drops=False)
         reported = capacity_overflow(report_drops=True)
+        assert unreported.dtype == jnp.int32, unreported.dtype
+        assert reported.dtype == jnp.int32, reported.dtype
         assert int(unreported) == 0, unreported
         assert int(reported) == 12, reported
     """

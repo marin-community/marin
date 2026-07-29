@@ -639,7 +639,7 @@ class MoEMLP(eqx.Module):
         else:
             routed_flat = moe_out
             dropped_assignments = _zero_dropped_assignments()
-        router_stats["capacity_overflow"] = dropped_assignments.astype(jnp.float32)
+        router_stats["capacity_overflow"] = dropped_assignments
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
@@ -891,6 +891,8 @@ class Transformer(eqx.Module):
             )
             summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
             summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
+            if self.config.report_capacity_overflow:
+                summarized_metrics["moe/dropped_assignments_per_layer"] = router_metrics["capacity_overflow_per_layer"]
             return loss, summarized_metrics
         return loss
 
