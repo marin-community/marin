@@ -25,9 +25,7 @@ def test_pin_latest_images_pins_kubernetes_task_pods_to_deploy_sha():
                 runtime="kubernetes",
             )
         ),
-        kubernetes_provider=KubernetesProviderConfig(
-            default_image="ghcr.io/marin-community/iris-task:latest",
-        ),
+        kubernetes_provider=KubernetesProviderConfig(),
     )
 
     _pin_latest_images(config, "abc1234")
@@ -35,7 +33,6 @@ def test_pin_latest_images_pins_kubernetes_task_pods_to_deploy_sha():
     assert config.controller.image == "ghcr.io/marin-community/iris-controller:abc1234"
     assert config.defaults.worker.docker_image == "ghcr.io/marin-community/iris-worker:abc1234-amd64"
     assert config.defaults.worker.default_task_image == "ghcr.io/marin-community/iris-task:abc1234"
-    assert config.kubernetes_provider.default_image == "ghcr.io/marin-community/iris-task:abc1234"
 
 
 def test_build_image_push_does_not_publish_latest(monkeypatch):
@@ -101,31 +98,10 @@ def test_pin_latest_images_single_platform_task_uses_architecture_suffix():
                 runtime="kubernetes",
             )
         ),
-        kubernetes_provider=KubernetesProviderConfig(
-            default_image="ghcr.io/marin-community/iris-task:latest",
-        ),
+        kubernetes_provider=KubernetesProviderConfig(),
     )
 
     _pin_latest_images(config, "abc1234", "linux/amd64")
 
     assert config.controller.image == "ghcr.io/marin-community/iris-controller:abc1234"
     assert config.defaults.worker.default_task_image == "ghcr.io/marin-community/iris-task:abc1234-amd64"
-    assert config.kubernetes_provider.default_image == "ghcr.io/marin-community/iris-task:abc1234-amd64"
-
-
-def test_pin_latest_images_rejects_different_kubernetes_task_images():
-    config = IrisClusterConfig(
-        controller=ControllerVmConfig(image="ghcr.io/marin-community/iris-controller:latest"),
-        defaults=DefaultsConfig(
-            worker=WorkerConfig(
-                default_task_image="ghcr.io/marin-community/iris-task:latest",
-                runtime="kubernetes",
-            )
-        ),
-        kubernetes_provider=KubernetesProviderConfig(
-            default_image="ghcr.io/example/other-task:latest",
-        ),
-    )
-
-    with pytest.raises(image_build.click.ClickException):
-        _pin_latest_images(config, "abc1234")

@@ -2,8 +2,8 @@
 date: 2026-07-29
 system: coreweave
 severity: degraded
-resolution: investigating
-pr: none
+resolution: fixed
+pr: https://github.com/marin-community/marin/pull/7735
 issue: none
 ---
 
@@ -13,7 +13,7 @@ issue: none
 - All four nodes reported `arm64`. Their cached `iris-task:latest` images resolved to single-platform `amd64` manifests.
 - Healthy arm64 nodes kept running because `imagePullPolicy: IfNotPresent` reused older multi-platform images cached under the same mutable tag.
 - The live controller config pinned `defaults.worker.default_task_image` to `:a88653b976` but left `kubernetes_provider.default_image` at `:latest`. `stage-workdir` used the latter.
-- The code change pins the Kubernetes task image to the deploy tree SHA and stops Iris image publishers from writing remote `:latest` or date tags. Single-platform builds use `<sha>-<architecture>`.
+- The code change removes the duplicate Kubernetes task-image field, pins the canonical task image to the deploy tree SHA, and stops Iris image publishers from writing remote `:latest` or date tags. Single-platform builds use `<sha>-<architecture>`.
 - The live controller has not been restarted. Existing tasks can still resolve `iris-task:latest` until the fix is deployed.
 
 ## Original problem report
@@ -98,14 +98,15 @@ under SHA, date, and `latest` tags.
 
 ## Fix
 
-`lib/iris/src/iris/cli/cluster.py` now pins
-`kubernetes_provider.default_image` with the other deploy images:
+`lib/iris/src/iris/cluster/composer.py` now gives the Kubernetes backend the
+canonical task image:
 
 ```python
-"kubernetes_task": config.kubernetes_provider.default_image
-...
-config.kubernetes_provider.default_image = pinned["kubernetes_task"]
+default_image=config.defaults.worker.default_task_image
 ```
+
+`KubernetesProviderConfig.default_image` and its duplicated YAML values were
+removed. The deploy pinning and image builder now share the same source.
 
 `lib/iris/src/iris/cli/build.py` rejects remote `:latest` pushes. Multi-platform
 images use the tree SHA; single-platform images use

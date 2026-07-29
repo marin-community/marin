@@ -268,30 +268,18 @@ def _pin_latest_images(config, git_sha: str, task_platforms: str | None = None) 
         "controller": (config.controller.image, controller_platforms),
         "worker": (config.defaults.worker.docker_image, AMD64_IMAGE_PLATFORM),
         "task": (config.defaults.worker.default_task_image, resolved_task_platforms),
-        "kubernetes_task": (
-            config.kubernetes_provider.default_image if config.kubernetes_provider else None,
-            resolved_task_platforms,
-        ),
     }
     needs_pin = any(tag.endswith(":latest") for tag, _platform in tags.values() if tag)
     if not needs_pin:
         return {name: tag for name, (tag, _platform) in tags.items() if tag}
 
     pinned = {name: _pin_tag(tag, platform) for name, (tag, platform) in tags.items()}
-    if kubernetes and pinned["task"] != pinned["kubernetes_task"]:
-        raise click.ClickException(
-            "Kubernetes task image configuration differs between "
-            "defaults.worker.default_task_image and kubernetes_provider.default_image"
-        )
-
     if pinned["controller"]:
         config.controller.image = pinned["controller"]
     if pinned["worker"]:
         config.defaults.worker.docker_image = pinned["worker"]
     if pinned["task"]:
         config.defaults.worker.default_task_image = pinned["task"]
-    if config.kubernetes_provider and pinned["kubernetes_task"]:
-        config.kubernetes_provider.default_image = pinned["kubernetes_task"]
 
     click.echo("Pinning :latest image tags to git SHA for this run:")
     for name, tag in pinned.items():

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from iris.cluster.backends.k8s.tasks import K8sTaskProvider
 from iris.cluster.composer import make_task_backend
 from iris.cluster.config import (
     BackendConfig,
@@ -23,6 +24,7 @@ from iris.cluster.config import (
     GcpSliceConfig,
     IrisClusterConfig,
     KubernetesProviderConfig,
+    KueueConfig,
     LocalSliceConfig,
     ManualSliceConfig,
     PlatformConfig,
@@ -2193,3 +2195,15 @@ def test_make_task_backend_requires_kueue_for_k8s_backend():
     )
     with pytest.raises(ValueError, match=r"kueue\.cluster_queue"):
         make_task_backend(config, unreachable_grace=Duration.from_seconds(1))
+
+
+def test_k8s_backend_uses_canonical_default_task_image():
+    config = IrisClusterConfig(
+        defaults=DefaultsConfig(worker=WorkerConfig(default_task_image="registry.example/iris-task:abc1234")),
+        kubernetes_provider=KubernetesProviderConfig(kueue=KueueConfig(cluster_queue="iris-cq")),
+    )
+
+    backend = make_task_backend(config, unreachable_grace=Duration.from_seconds(1))
+
+    assert isinstance(backend, K8sTaskProvider)
+    assert backend.default_image == "registry.example/iris-task:abc1234"
