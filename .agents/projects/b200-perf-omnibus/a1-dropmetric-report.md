@@ -85,6 +85,10 @@ equivalent ragged-all-to-all test failed only at the unsupported XLA:CPU HLO,
 as described above. The B2 helper tests passed all four balanced and unbalanced
 layouts.
 
+The priority helper returned Iris's unspecified band when unset, mapped
+`production`, `interactive`, and `batch` to their Iris priority bands, and
+rejected `urgent`. No Fray or Iris job was submitted.
+
 `./infra/pre-commit.py --all-files --fix` passed. The repository's pinned
 Pyrefly invocation reported 0 errors. The literal `uv run pyrefly` command
 cannot start because this workspace does not install a root `pyrefly`
