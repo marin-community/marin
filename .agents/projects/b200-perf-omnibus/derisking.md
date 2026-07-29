@@ -70,7 +70,7 @@ comparison is fair and the EP line is further ahead than reported. If they drop
 
 **Why.** The Phase D wins were each measured against a different baseline on a
 different branch, at QB-off (D2, D3) or on a 20-step screen (D4). Nobody has run
-the *composed* stack — C1–C4 + D1–D4 + E1 + E2 — at once.
+the *composed* stack — C1–C4 + D1–D4 + E2, with QB on — at once.
 
 **What.** 350-step run at d5120 8-of-256 EP64, one rack, batch 1024, seq 4096,
 QB on, cf 1.0625, spill m=3, custom adjoint, padded Muon, PGLE + overlap-limit 4.
@@ -214,6 +214,45 @@ rather than the expert stack. Nobody has retested EP32 since.
 **Note.** Even if it runs, EP32 is unlikely to be the right operating point (it pays
 dispatch cost without the memory relief). This experiment is worth running for the
 *diagnosis*, not because EP32 is a candidate.
+
+### D-12. Does `all_but_moe` remat fit at the production shape?
+
+**Why.** [#7489](https://github.com/marin-community/marin/pull/7489) (slim Sonic CuTe
+residuals plus the `all_but_moe` rematerialization split) is the one remat lever with a
+measured win, but its memory behaviour is only characterised at shapes we do not run.
+Every measurement in the record is **26 layers**; production is **48**, and the
+mechanism is layer-stacking — the homogeneous scan stacks all layers, which is why
+`attn_only` was called *structurally* infeasible rather than merely tight.
+
+The sharding-width story is favourable and already measured: at 8-way, d5120
+`all_but_moe` does not fit (`recompute_all` alone peaks at 157 GiB); at 32-way it fits
+and wins, 16.90% against `recompute_all`, +0.74pp, while `none` OOMs. Production EP64 is
+wider still, and multi-rack only adds data-parallel replicas — per-device activation
+memory is roughly invariant and optimizer state shards wider — so the binding constraint
+is within one rack. If it fits on one rack it fits on twelve.
+
+What is unmeasured is layers × per-device tokens at the real shape. A desk estimate
+against the one probe with exact buffer shapes (8-way d2560/26L, `all_but_moe` temp
+134.99 GiB, irreducible pins `gu` + `out_dispatch` at 2 × 32.5 GiB and 262144
+tokens/device) scales those terms by 0.25 for tokens (65536/device at batch 1024 × seq
+4096 ÷ 64) × 1.85 for layers, intermediate unchanged at 1280 — so they *shrink*, and it
+fits with room. That estimate rests on reconstructed shapes and the token factor carries
+most of it. Measure rather than trust it.
+
+**What.** Run the existing compile-only AOT memory probe, `remat_oom_probe.py` (the tool
+behind the 283.63 vs 36.89 GiB comparison, jobs 3264/3265), at d5120 / 48L / EP64 for
+`recompute_all` and `all_but_moe`. Report peak temp arena for each.
+
+**Cost.** Compile only — minutes, no training steps, no rack draw.
+
+**Falsifies.** Whether #7489 is adoptable at the operating point at all. Note the answer
+is a package deal: slim residuals alone cost **−0.28pp under `recompute_all`** (backward
+re-gathers with no memory dividend cashed), so the residuals cannot land ahead of the
+remat mode without paying for nothing in between.
+
+**Reading the failure mode.** At high HBM occupancy an OOM here surfaces as a BFC
+fragmentation wedge or clique stall, not a clean `RESOURCE_EXHAUSTED`. Check
+`bfc_allocator` before blaming collectives.
 
 ---
 

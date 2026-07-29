@@ -186,37 +186,20 @@ Default `SCALE_A2A_CHUNKS` to 1; chunks=2 measured worse.
 
 | # | Commit | From | Size | Measured |
 |--:|---|---|--:|---|
-| E1 | ~~Enable QB routing by default on the EP launcher path~~ **STRUCK — already on main** | — | — | — |
 | E2 | Same-step spill to the next-ranked selected expert on bucket overflow | `1224ccb02` | **+147 / −12** | **−0.213pp for half the drops**; 20.708% at 1.44% with cf1.0625 |
 
-**E1 is struck from the series (2026-07-29).** The premise below was wrong. QB routing
-is hardcoded on `main` and has been since April: it landed via `36104c763` (#4084,
-2026-03-24) and `90f3c2f8f` (#4458, 2026-04-07), both ancestors of `origin/main`, while
-`cff962d730` is not an ancestor of main at all. `GrugModelConfig`'s docstring states
-that GatedNorm, XSA and QB routing are hardcoded; `pending_qb_betas` is already a
-`GrugTrainState` field and betas are applied every step in `train_step`. There is no
-`qb_routing=False` to flip and no launcher setting to change.
+QB routing needs no commit: it is hardcoded on `main` and has been since April, via
+`36104c763` (#4084) and `90f3c2f8f` (#4458). `GrugModelConfig` documents GatedNorm, XSA
+and QB routing as hardcoded, `pending_qb_betas` is a `GrugTrainState` field, and betas
+are applied every step in `train_step`.
 
-This is not drift — main moved only 8 commits in the day between the plan and this
-check. The plan simply missed four-month-old history.
-
-What survives the correction is the *measurement* caveat, and it still matters: the
-research branches that gate QB behind a `SCALE_MOE_QB` env var diverged from an older
-main, so a branch measurement taken with that flag unset ran QB-off. Any EP64 number
-inherited from those branches still needs its QB state established before it is
-comparable. What does not survive is the idea that anything needs to be committed.
-
-The original text, retained so the reasoning can be audited: *E1 is the sharpest item
-in the series and it is not a code change so much as a default change: `qb_routing`
-defaults to `False` and no recorded EP64 submit command set it. Extracting it from
-`cff962d730` requires manual surgery — that commit bundles `SCALE_ATTN_GATE`,
-`SCALE_XSA`, `SCALE_MOE_QB`, `SCALE_OFFLOAD_OPT_STATE` and `SCALE_NO_HYPERBALL`, and
-the QB code changes `GrugTrainState` (adding `pending_qb_betas`) and
-`next_token_loss`'s return signature, updating all callers.*
+The measurement caveat still applies to inherited numbers: research branches gate QB
+behind a `SCALE_MOE_QB` env var and diverged from an older main, so a branch run with
+that flag unset routed QB-off. Establish the QB state of any branch measurement before
+comparing it.
 **Ship E2 in the same PR as D2–D4, or ship it first.** Landing the throughput work
 without the fidelity work reproduces exactly the situation the record spent a week
-correcting. With E1 struck, E2 is the whole of Phase E and carries that constraint
-alone.
+correcting. E2 is the whole of Phase E and carries that constraint alone.
 
 ### Phase F — FSDP-line levers.
 
@@ -224,9 +207,9 @@ alone.
 |--:|---|---|--:|---|
 | F1 | Offload MuonH optimizer state to pinned host memory | `cff962d730` (extract) | ~+45 / −6 | +0.4pp (bundled with four other features) |
 
-F1 is now the only item extracted from `cff962d730`, since E1 is struck. The surgery is
-still required: take `SCALE_OFFLOAD_OPT_STATE` and leave `SCALE_ATTN_GATE`, `SCALE_XSA`,
-`SCALE_MOE_QB` and `SCALE_NO_HYPERBALL` behind. Host offload is split by model size — it
+F1 is the only item extracted from `cff962d730`. The surgery is still required: take
+`SCALE_OFFLOAD_OPT_STATE` and leave `SCALE_ATTN_GATE`, `SCALE_XSA`, `SCALE_MOE_QB` and
+`SCALE_NO_HYPERBALL` behind. Host offload is split by model size — it
 was used on the d6144 EP64 leg but rejected at d5120, where it needed a 135 GiB
 pinned-host arena and landed at 19.694% — so it lands as a documented flag, not a
 default.

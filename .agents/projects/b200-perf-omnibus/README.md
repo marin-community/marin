@@ -57,8 +57,9 @@ statistical floor (0.88% at top-8, 1.24% at top-4). Comparing them confounds top
 dispatch mechanism and drop metric at once.
 
 **Rows 2 and 3 are not shippable configurations.** The 25.39% and the d6144 legs
-route with quantile balancing off — `qb_routing` defaults to `False` in
-`launch_cw_scale.py` and no recorded EP64 submit command set `SCALE_MOE_QB` — so
+route with quantile balancing off — the research branches gate it behind
+`SCALE_MOE_QB`, which no recorded EP64 submit command set (QB is hardcoded on
+`main`, but those branches diverged from an older main) — so
 the router collapses, dropping 85–89% of assignments early and oscillating 17–79%
 over a full run, invisibly, because the always-on shared expert keeps loss
 descending
