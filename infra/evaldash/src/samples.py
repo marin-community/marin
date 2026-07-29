@@ -263,6 +263,13 @@ def fetch_samples(
         indices = list(range(table.num_rows))
     page_indices = indices[offset : offset + limit]
     page_rows = table.take(pa.array(page_indices, type=pa.int64())).to_pylist()
+    for row in page_rows:
+        # Parquet unifies the metrics struct across all rows, so a row missing a metric that another
+        # row carries reads back with that key set to null. A null value means the metric is absent
+        # for this row (an ungraded sample), not zero -- drop it so the row still validates.
+        row_metrics = row.get("metrics")
+        if row_metrics:
+            row["metrics"] = {name: value for name, value in row_metrics.items() if value is not None}
     page = tuple(EvalSample.model_validate(row) for row in page_rows)
     return SamplesResponse(
         available=True,
