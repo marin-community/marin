@@ -90,6 +90,18 @@ optimizer configuration fields before these paths are generalized.
 | `SCALE_MUON_INTRA_RACK` | off | Exclude `replica_dcn` when distributing 4-D and padded matrix stacks |
 | `SCALE_MUON_SYRK` | off | Use batched QuACK SYRK for Newton-Schulz Gram matrices on distributed 4-D stacks |
 
+### Temporary all-to-all trace controls
+
+These controls are also read inside `lib/levanter` at trace time for the
+measured expert-dispatch experiments. A follow-up should replace them with
+explicit MoE configuration fields before these paths are generalized.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `SCALE_A2A_FIXED` | off | Use static-capacity `lax.all_to_all` buffers for ragged expert dispatch |
+| `SCALE_A2A_CHUNKS` | `1` | Split each local token batch into this many fixed-capacity dispatches |
+| `SCALE_A2A_NO_BARRIER` | off | Skip the rematerialization barriers around fixed-capacity dispatch |
+
 ## GB200 job environment
 
 Set these variables on every final accelerator process for multi-host GB200 MoE
