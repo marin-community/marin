@@ -3,26 +3,60 @@
 
 """Search settings shared by Echo's schema and query statements."""
 
+import re
+from dataclasses import dataclass
+from typing import Literal
+
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 INDEXED_REPOSITORY = "marin-community/marin"
 INDEXED_BRANCH = "main"
 DISPLAY_SHA_CHARACTERS = 12
 FEDERATED_SUMMARY_CHARACTERS = 240
-SEARCH_DOMAINS = ("wiki", "file", "discord", "pr", "issue")
-DEFAULT_SEARCH_DOMAINS = ("wiki", "file", "pr", "issue")
+SearchDomain = Literal["wiki", "file", "discord", "pr", "issue"]
+SEARCH_DOMAINS: tuple[SearchDomain, ...] = ("wiki", "file", "discord", "pr", "issue")
+DEFAULT_SEARCH_DOMAINS: tuple[SearchDomain, ...] = ("wiki", "file", "pr", "issue")
+SEARCH_DOMAIN_LABELS: dict[SearchDomain, str] = {
+    "wiki": "Wiki",
+    "file": "Files",
+    "discord": "Discord",
+    "pr": "Pull requests",
+    "issue": "Issues",
+}
 TEXT_SEARCH_CONFIG = "english"
 TS_RANK_NORMALIZATION = 32
 DEFAULT_SEARCH_LIMIT = 10
 MAX_SEARCH_LIMIT = 100
 MAX_SEMANTIC_DISTANCE = 0.45
 RRF_K = 60
-LEXICAL_WEIGHT = 2.0
 MIN_CANDIDATES = 40
 CANDIDATE_MULTIPLIER = 4
 FILE_CHUNK_CANDIDATE_MULTIPLIER = 4
 FILE_ADDITIONAL_HIT_WEIGHT = 0.2
 FILE_ADDITIONAL_HIT_MAX_FRACTION = 0.3
+QUERY_PROSE_FILE_SCORE_MULTIPLIER = 1.15
+QUERY_TEST_FILE_SCORE_MULTIPLIER = 0.85
+PROSE_FILE_SUFFIXES = (".md", ".rst")
+IDENTIFIER_QUERY_PATTERN = re.compile(r"[/_.:]|(?:[a-z][A-Z])|(?:^|\s)--?[a-z0-9]")
+
+
+@dataclass(frozen=True)
+class SearchWeights:
+    semantic: float
+    lexical: float
+
+
+QUERY_SEARCH_WEIGHTS = SearchWeights(semantic=2.0, lexical=1.0)
+IDENTIFIER_SEARCH_WEIGHTS = SearchWeights(semantic=1.0, lexical=2.0)
 
 
 def candidate_limit(limit: int) -> int:
     return max(MIN_CANDIDATES, limit * CANDIDATE_MULTIPLIER)
+
+
+def is_identifier_query(query: str) -> bool:
+    return IDENTIFIER_QUERY_PATTERN.search(query) is not None
+
+
+def search_weights(query: str) -> SearchWeights:
+    """Prefer lexical rank for identifiers and semantic rank for prose."""
+    return IDENTIFIER_SEARCH_WEIGHTS if is_identifier_query(query) else QUERY_SEARCH_WEIGHTS

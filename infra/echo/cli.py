@@ -14,8 +14,8 @@ under ``~/.config/marin/credentials``) and this reuses that token; agents and CI
 ambient service-account credentials with no login. See ``infra/echo/README.md``.
 
     uv run infra/echo/cli.py search "expert parallel MoE MFU on B200" --limit 10
+    uv run infra/echo/cli.py get file:lib/iris/OPS.md
     uv run infra/echo/cli.py grep ragged_all_to_all --source discord
-    uv run infra/echo/cli.py show 12345
     uv run infra/echo/cli.py wiki search "grafana access" --tag ops
     uv run infra/echo/cli.py wiki add --file note.md          # OKF: frontmatter title/use_when + body
     uv run infra/echo/cli.py wiki show 12 > note.md           # export as OKF, edit, then:
@@ -24,8 +24,10 @@ ambient service-account credentials with no login. See ``infra/echo/README.md``.
 
 import argparse
 import os
+import shutil
 import sys
 from pathlib import Path
+from urllib.parse import quote
 
 import okf
 import requests
@@ -55,6 +57,7 @@ SOURCES = ("github", "discord")
 KINDS = ("issue", "pr", "comment", "message")
 DOMAINS = search_config.SEARCH_DOMAINS
 DEFAULT_DOMAINS = search_config.DEFAULT_SEARCH_DOMAINS
+SEARCH_DETAIL_INSTRUCTION = "Detail: uv run infra/echo/cli.py get <domain:id>"
 
 
 def cached_login_provider() -> TokenProvider | None:
@@ -128,11 +131,35 @@ def print_hits(hits: list[dict]) -> None:
 
 
 def print_search_results(results: list[SearchResult]) -> None:
+    print(SEARCH_DETAIL_INSTRUCTION)
+    if not results:
+        print("No results.")
+        return
+
+    ids = [result.id for result in results]
+    titles = [one_line(result.title) for result in results]
+    id_width = max(len("ID"), *(len(value) for value in ids))
+    available = max(40, shutil.get_terminal_size(fallback=(160, 24)).columns - id_width - 4)
+    title_width = min(max(len("TITLE"), *(len(value) for value in titles)), 36, max(16, available // 3))
+    detail_width = max(20, available - title_width)
+    print(f"{'ID':<{id_width}}  {'TITLE':<{title_width}}  DETAIL")
     for result in results:
-        summary = result.subtitle if result.domain == "wiki" else result.snippet
-        suffix = f" — {' '.join(summary.split())}" if summary else ""
-        print(f"[{result.domain}] {result.id} · {result.title}{suffix}")
-        print(f"    {result.url}")
+        detail = result.subtitle if result.domain == "wiki" else result.snippet
+        print(
+            f"{result.id:<{id_width}}  "
+            f"{truncate_cell(one_line(result.title), title_width):<{title_width}}  "
+            f"{truncate_cell(one_line(detail), detail_width)}"
+        )
+
+
+def one_line(value: str) -> str:
+    return " ".join(value.split())
+
+
+def truncate_cell(value: str, width: int) -> str:
+    if len(value) <= width:
+        return value
+    return f"{value[: width - 1]}…"
 
 
 def print_wiki(entries: list[dict]) -> None:
@@ -179,11 +206,43 @@ def cmd_grep(args: argparse.Namespace) -> None:
     )
 
 
-def cmd_show(args: argparse.Namespace) -> None:
-    chunk = response_object(request("GET", f"/chunks/{args.id}"))
-    print(f"[{chunk['source']}/{chunk['kind']}] {chunk['date']} {chunk['author'] or '?'} {chunk['title'] or ''}")
-    print(f"{chunk['url']}\n")
-    print(chunk.get("text") or "")
+def cmd_get(args: argparse.Namespace) -> None:
+    domain, _, value = args.id.partition(":")
+    if domain == "wiki":
+        entry = response_object(request("GET", f"/wiki/{value}"))
+        title = entry["title"]
+        subtitle = entry["use_when"]
+        url = wiki_link(int(value))
+        text = entry["body"]
+    elif domain == "file":
+        file = response_object(request("GET", f"/repository-files/{quote(value, safe='/')}"))
+        title, subtitle, url, text = file["title"], file["subtitle"], file["url"], file["text"]
+    else:
+        chunk = response_object(request("GET", f"/chunks/{value}"))
+        actual_domain = chunk_domain(chunk)
+        if actual_domain != domain:
+            raise SystemExit(f"{args.id} identifies a {actual_domain} result")
+        title = chunk.get("title") or chunk.get("snippet") or chunk["url"]
+        details = [domain]
+        if chunk.get("author"):
+            details.append(str(chunk["author"]))
+        if chunk.get("date"):
+            details.append(str(chunk["date"]))
+        subtitle = " · ".join(details)
+        url, text = chunk["url"], chunk.get("text") or ""
+    print(f"[{args.id}] {title}")
+    if subtitle:
+        print(subtitle)
+    print(f"{url}\n")
+    print(text)
+
+
+def chunk_domain(chunk: dict[str, object]) -> str:
+    if chunk["source"] == "discord":
+        return "discord"
+    if chunk["kind"] == "pr" or "/pull/" in str(chunk["url"]):
+        return "pr"
+    return "issue"
 
 
 def cmd_wiki_search(args: argparse.Namespace) -> None:
@@ -244,6 +303,15 @@ def nonblank(value: str) -> str:
     return value
 
 
+def artifact_id(value: str) -> str:
+    domain, separator, detail = value.partition(":")
+    if not separator or domain not in DOMAINS or not detail:
+        raise argparse.ArgumentTypeError("must be <wiki|file|discord|pr|issue>:<id>")
+    if domain != "file" and not detail.isdecimal():
+        raise argparse.ArgumentTypeError(f"{domain} result IDs are numeric")
+    return value
+
+
 def add_wiki_write_args(parser: argparse.ArgumentParser) -> None:
     # Either an OKF document (--file) or the three fields as flags.
     parser.add_argument("--file", help="OKF markdown file (frontmatter title/use_when + body), or - for stdin")
@@ -280,9 +348,9 @@ def build_parser() -> argparse.ArgumentParser:
     grep.add_argument("--limit", type=bounded_limit, default=20)
     grep.set_defaults(func=cmd_grep)
 
-    show = sub.add_parser("show", help="print one activity chunk verbatim")
-    show.add_argument("id", type=int)
-    show.set_defaults(func=cmd_show)
+    get = sub.add_parser("get", help="print full detail for a federated-search result ID")
+    get.add_argument("id", type=artifact_id)
+    get.set_defaults(func=cmd_get)
 
     wiki = sub.add_parser("wiki", help="search, read, add, or edit wiki notes").add_subparsers(
         dest="wiki", required=True

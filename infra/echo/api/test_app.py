@@ -183,6 +183,16 @@ def test_activity_search_rejects_whitespace_without_embedding(client_with):
     assert harness.model.queries == []
 
 
+def test_search_configuration_keeps_discord_opt_in(client_with):
+    harness = client_with([])
+
+    configuration = harness.client.get("/api/search-configuration").json()
+
+    assert [domain["value"] for domain in configuration["domains"]] == ["wiki", "file", "discord", "pr", "issue"]
+    assert configuration["default_domains"] == ["wiki", "file", "pr", "issue"]
+    assert "discord" not in configuration["default_domains"]
+
+
 def test_federated_search_classifies_github_comment_domain(client_with):
     row = make_row(
         id=8,
@@ -261,6 +271,74 @@ def test_file_summary_skips_license_boilerplate_for_filename_match():
     text = '# Copyright The Marin Authors\n# SPDX-License-Identifier: Apache-2.0\n\n"""Search Echo activity."""'
 
     assert echo.representative_file_line(text, "app.py", 1) == (4, '"""Search Echo activity."""')
+
+
+def test_prose_query_prefers_runbook_over_test_fixture():
+    runbook = echo.SearchResult(
+        id="file:lib/iris/OPS.md",
+        domain="file",
+        title="Iris Operations",
+        subtitle="lib/iris/OPS.md:68",
+        url="https://example.com/OPS.md",
+        snippet="Restart builds and deploys your local working tree.",
+        score=0.0488,
+        distance=0.2355,
+        lexical_score=0.21,
+    )
+    test_fixture = echo.SearchResult(
+        id="file:infra/grafana/tests/test_k8s_source.py",
+        domain="file",
+        title="test_k8s_source.py",
+        subtitle="infra/grafana/tests/test_k8s_source.py:106",
+        url="https://example.com/test_k8s_source.py",
+        snippet="def test_control_plane_uses_the_cluster_iris_namespace():",
+        score=0.05386,
+        distance=0.247,
+        lexical_score=0.55,
+    )
+
+    ranked = sorted(
+        [echo.query_oriented_result(result, "how do i deploy iris") for result in (test_fixture, runbook)],
+        key=lambda result: -result.score,
+    )
+
+    assert [result.id for result in ranked] == ["file:lib/iris/OPS.md", "file:infra/grafana/tests/test_k8s_source.py"]
+
+
+def test_file_artifact_reconstructs_overlapping_indexed_chunks(client_with):
+    state = make_row(
+        commit_sha="abcdef1234567890",
+        indexed_at=datetime(2026, 7, 29, 20, tzinfo=UTC),
+        completed_files=None,
+        total_files=None,
+        started_at=None,
+    )
+    first = make_row(
+        path="lib/iris/OPS.md",
+        title="Iris Operations",
+        chunk_index=0,
+        start_line=1,
+        text="# Iris Operations\n\nDeploy Iris.",
+    )
+    second = make_row(
+        path="lib/iris/OPS.md",
+        title="Iris Operations",
+        chunk_index=1,
+        start_line=3,
+        text="Deploy Iris.\nThen verify health.",
+    )
+    harness = client_with([], responses=[[state], [first, second]])
+
+    response = harness.client.get("/api/repository-files/lib/iris/OPS.md")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": "file:lib/iris/OPS.md",
+        "title": "Iris Operations",
+        "subtitle": "lib/iris/OPS.md · main@abcdef123456 · indexed 2026-07-29T20:00:00+00:00",
+        "url": "https://github.com/marin-community/marin/blob/abcdef1234567890/lib/iris/OPS.md",
+        "text": "# Iris Operations\n\nDeploy Iris.\nThen verify health.",
+    }
 
 
 def test_repository_index_reports_searchable_partial_build(client_with):

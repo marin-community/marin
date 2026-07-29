@@ -6,38 +6,34 @@ import {
   formatDate,
   type FederatedResult,
   type RepositoryIndexStatus,
+  type SearchConfiguration,
   type SearchDomain,
 } from '../types'
 
 const PAGE_SIZE = 30
 const DEBOUNCE_MS = 250
-const DISPLAY_SHA_CHARACTERS = 12
-const DOMAINS: { value: SearchDomain; label: string }[] = [
-  { value: 'file', label: 'Files' },
-  { value: 'wiki', label: 'Wiki' },
-  { value: 'pr', label: 'Pull requests' },
-  { value: 'issue', label: 'Issues' },
-  { value: 'discord', label: 'Discord' },
-]
-const DEFAULT_DOMAINS: SearchDomain[] = ['file', 'wiki', 'pr', 'issue']
 
 const route = useRoute()
 const router = useRouter()
 const query = ref(typeof route.query.q === 'string' ? route.query.q : '')
-const selectedDomains = ref<SearchDomain[]>(domainsFromQuery(route.query.domain))
+const domains = ref<SearchConfiguration['domains']>([])
+const defaultDomains = ref<SearchDomain[]>([])
+const displayShaCharacters = ref<number | null>(null)
+const selectedDomains = ref<SearchDomain[]>([])
 const results = ref<FederatedResult[]>([])
 const index = ref<RepositoryIndexStatus | null>(null)
 const indexError = ref('')
 const loading = ref(false)
 const error = ref('')
 let request: AbortController | null = null
+let ready = false
 
 function domainsFromQuery(value: unknown): SearchDomain[] {
   const requested = Array.isArray(value) ? value : typeof value === 'string' ? [value] : []
   const valid = requested.filter((domain): domain is SearchDomain =>
-    DOMAINS.some((candidate) => candidate.value === domain),
+    domains.value.some((candidate) => candidate.value === domain),
   )
-  return valid.length ? [...new Set(valid)] : DEFAULT_DOMAINS
+  return valid.length ? [...new Set(valid)] : defaultDomains.value
 }
 
 const indexPercent = computed(() => {
@@ -64,15 +60,13 @@ function wikiPath(result: FederatedResult): string {
 
 function indexLabel(): string {
   if (!index.value || index.value.status === 'empty') return 'The repository index has not started.'
+  const commit = index.value.commit_sha?.slice(0, displayShaCharacters.value || undefined)
   if (index.value.status === 'building') {
     return `Indexing ${index.value.completed_files || 0} of ${index.value.total_files || 0} files from ${
       index.value.branch
-    }@${index.value.commit_sha?.slice(0, DISPLAY_SHA_CHARACTERS)}. Partial results are available.`
+    }@${commit}. Partial results are available.`
   }
-  return `Files reflect ${index.value.branch}@${index.value.commit_sha?.slice(
-    0,
-    DISPLAY_SHA_CHARACTERS,
-  )}, indexed ${formatDate(index.value.indexed_at)}.`
+  return `Files reflect ${index.value.branch}@${commit}, indexed ${formatDate(index.value.indexed_at)}.`
 }
 
 async function loadIndex(): Promise<void> {
@@ -83,6 +77,14 @@ async function loadIndex(): Promise<void> {
     index.value = null
     indexError.value = reason instanceof Error ? reason.message : 'Index status unavailable'
   }
+}
+
+async function loadSearchConfiguration(): Promise<void> {
+  const configuration = await fetchJson<SearchConfiguration>('/api/search-configuration')
+  domains.value = configuration.domains
+  defaultDomains.value = configuration.default_domains
+  displayShaCharacters.value = configuration.display_sha_characters
+  selectedDomains.value = domainsFromQuery(route.query.domain)
 }
 
 async function search(): Promise<void> {
@@ -113,8 +115,8 @@ function syncUrl(): void {
   const params: Record<string, string | string[]> = {}
   if (query.value.trim()) params.q = query.value.trim()
   if (
-    selectedDomains.value.length !== DEFAULT_DOMAINS.length ||
-    selectedDomains.value.some((domain) => !DEFAULT_DOMAINS.includes(domain))
+    selectedDomains.value.length !== defaultDomains.value.length ||
+    selectedDomains.value.some((domain) => !defaultDomains.value.includes(domain))
   ) {
     params.domain = selectedDomains.value
   }
@@ -122,6 +124,7 @@ function syncUrl(): void {
 }
 
 function run(): void {
+  if (!ready) return
   syncUrl()
   search()
 }
@@ -132,17 +135,31 @@ function debouncedRun(): void {
   debounceTimer = setTimeout(run, DEBOUNCE_MS)
 }
 
-watch(query, debouncedRun)
-watch(selectedDomains, run, { deep: true })
+watch(query, () => {
+  if (ready) debouncedRun()
+})
+watch(
+  selectedDomains,
+  () => {
+    if (ready) run()
+  },
+  { deep: true },
+)
 
 function submit(): void {
   clearTimeout(debounceTimer)
   run()
 }
 
-onMounted(() => {
+onMounted(async () => {
   loadIndex()
-  search()
+  try {
+    await loadSearchConfiguration()
+    ready = true
+    search()
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'Search configuration unavailable'
+  }
 })
 </script>
 
@@ -187,7 +204,7 @@ onMounted(() => {
     <fieldset class="mt-3 flex flex-wrap gap-x-4 gap-y-2">
       <legend class="sr-only">Search domains</legend>
       <label
-        v-for="domain in DOMAINS"
+        v-for="domain in domains"
         :key="domain.value"
         class="flex cursor-pointer items-center gap-2 text-sm text-ink/65"
       >

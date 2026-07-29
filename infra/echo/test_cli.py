@@ -37,10 +37,11 @@ def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch, capsys
         )
     ]
     output = capsys.readouterr().out.splitlines()
-    assert len(output) == 2
-    assert "file:lib/iris/src/iris/scheduler.py" in output[0]
-    assert "raise FAILED_PRECONDITION" in output[0]
-    assert remote_result["url"] in output[1]
+    assert "get <domain:id>" in output[0]
+    assert len(output) == 3
+    assert "file:lib/iris/src/iris/scheduler.py" in output[2]
+    assert "scheduler.py" in output[2]
+    assert "raise FAILED_PRECONDITION" in output[2]
 
 
 def test_search_defaults_to_curated_domains_without_discord(monkeypatch):
@@ -61,3 +62,26 @@ def test_search_defaults_to_curated_domains_without_discord(monkeypatch):
             {"params": {"q": "scheduler", "domain": ["wiki", "file", "pr", "issue"], "limit": 10}},
         )
     ]
+
+
+def test_get_fetches_full_detail_by_search_result_id(monkeypatch, capsys):
+    calls = []
+
+    def fake_request(method, path, **options):
+        calls.append((method, path, options))
+        return {
+            "id": "file:lib/iris/OPS.md",
+            "title": "Iris Operations",
+            "subtitle": "lib/iris/OPS.md · main@abc123",
+            "url": "https://github.com/marin-community/marin/blob/abc123/lib/iris/OPS.md",
+            "text": "# Iris Operations\n\nDeploy with the restart command.",
+        }
+
+    monkeypatch.setattr(cli, "request", fake_request)
+    args = cli.build_parser().parse_args(["get", "file:lib/iris/OPS.md"])
+    args.func(args)
+
+    assert calls == [("GET", "/repository-files/lib/iris/OPS.md", {})]
+    output = capsys.readouterr().out
+    assert "[file:lib/iris/OPS.md] Iris Operations" in output
+    assert "# Iris Operations" in output

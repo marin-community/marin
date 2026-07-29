@@ -22,8 +22,8 @@ provides an IAP-gated HTTP interface and browser dashboard.
 ```bash
 uv run infra/echo/cli.py search "expert parallel MoE MFU on B200" --limit 10
 uv run infra/echo/cli.py search "ragged_all_to_all" --domain file --domain pr
+uv run infra/echo/cli.py get file:lib/iris/OPS.md
 uv run infra/echo/cli.py grep ragged_all_to_all --source discord
-uv run infra/echo/cli.py show <id>
 uv run infra/echo/cli.py wiki search "grafana access" --tag ops
 uv run infra/echo/cli.py wiki add --file note.md          # OKF markdown document
 uv run infra/echo/cli.py wiki show <id> > note.md         # export as OKF, edit, then:
@@ -53,23 +53,30 @@ on `search`; the activity-only `grep` command retains `--source` and `--kind` fi
 The compatibility `GET /api/search` endpoint still accepts source, kind, and date
 filters for existing API clients.
 
-All domains use reciprocal-rank fusion with `k=60`: semantic rank has
-weight 1 and lexical rank has weight 2. Results with a lexical match always qualify.
-A semantic-only result must have cosine distance at most 0.45 (similarity at least
-0.55), so an unrelated nearest neighbor is not returned just because it is the
-closest candidate. Scores compare rank positions, not calibrated relevance
-probabilities. File paths, PostgreSQL full-text matches, and case-insensitive exact
-file substrings contribute the lexical signal; exact and partial basename matches
-receive additional weight. A file with several independently qualifying chunks gains
-up to 30% over its best chunk score, so repeated evidence helps without allowing a
-large file to dominate. Paraphrases can enter through BGE semantic retrieval. `grep`
-remains a case-insensitive literal substring scan over activity, newest first.
+All domains use reciprocal-rank fusion with `k=60`. Paths, filenames, flags, and
+code-like identifiers use semantic weight 1 and lexical weight 2. Plain-language
+queries use semantic weight 2 and lexical weight 1; Markdown and reStructuredText
+files receive a 1.15 score multiplier, while test files receive a 0.85 multiplier.
+This keeps exact-code lookup lexical-first and favors runbooks over incidental test
+matches for questions such as `how do i deploy iris`.
 
-CLI search results use two lines: domain, stable result ID, title, and a source-derived
-one-line summary followed by the canonical URL. Wiki summaries use the `use_when`
-hint; files and activity use the matching source excerpt. Echo does not generate
-summaries with an LLM at query time, avoiding added latency and an additional
-prompt-injection path.
+Results with a lexical match always qualify. A semantic-only result must have cosine
+distance at most 0.45 (similarity at least 0.55), so an unrelated nearest neighbor is
+not returned just because it is the closest candidate. Scores compare rank positions,
+not calibrated relevance probabilities. File paths, PostgreSQL full-text matches, and
+case-insensitive exact file substrings contribute the lexical signal; exact and partial
+basename matches receive additional weight. A file with several independently
+qualifying chunks gains up to 30% over its best chunk score, so repeated evidence helps
+without allowing a large file to dominate. Paraphrases can enter through BGE semantic
+retrieval. `grep` remains a case-insensitive literal substring scan over activity,
+newest first.
+
+CLI search prints one table with stable result ID, title, and source-derived detail.
+Run `uv run infra/echo/cli.py get <domain:id>` to fetch the full indexed wiki body,
+repository file, pull request or issue chunk, or Discord message and its canonical URL.
+Wiki summaries use the `use_when` hint; files and activity use the matching source
+excerpt. Echo does not generate summaries with an LLM at query time, avoiding added
+latency and an additional prompt-injection path.
 
 The scheduled sync checks GitHub at most once per hour. An unchanged head only advances
 the check time. A new head uses GitHub's compare API to delete, fetch, and re-embed
@@ -129,7 +136,9 @@ the activity corpus and wiki notes. The same service exposes OpenAPI documentati
 
 - `GET /api/search`
 - `GET /api/federated-search`
+- `GET /api/search-configuration`
 - `GET /api/repository-index`
+- `GET /api/repository-files/{path}`
 - `GET /api/grep`
 - `GET /api/chunks/{id}`
 - `GET /api/wiki/search`
@@ -149,7 +158,10 @@ direct database access.
 `domain=wiki|file|discord|pr|issue` parameters and returns the common ranked result
 shape. `GET /api/repository-index` reports the indexed GitHub commit and freshness, or
 the completed and total file counts for an active build. The dashboard displays this
-state on its landing page.
+state on its landing page. `GET /api/search-configuration` supplies the domain catalog,
+defaults, and displayed commit length used by the dashboard. The CLI's `get` command
+uses the existing wiki and activity detail endpoints plus
+`GET /api/repository-files/{path}` for complete indexed files.
 
 The dashboard is a Vue single-page app served from the same origin, with client-side
 routes at `/` (search), `/wiki` (recently updated notes), `/wiki/<id>` (a note), and

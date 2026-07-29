@@ -9,7 +9,6 @@ import sqlalchemy
 from search_config import (
     FILE_ADDITIONAL_HIT_MAX_FRACTION,
     FILE_ADDITIONAL_HIT_WEIGHT,
-    LEXICAL_WEIGHT,
     MAX_SEMANTIC_DISTANCE,
     RRF_K,
     TEXT_SEARCH_CONFIG,
@@ -77,8 +76,8 @@ def _search_statement(
                 semantic.distance,
                 lexical.lexical_score,
                 (
-                    coalesce(1.0 / ({RRF_K} + semantic.rank), 0.0) +
-                    coalesce({LEXICAL_WEIGHT} / ({RRF_K} + lexical.rank), 0.0)
+                    coalesce(:semantic_weight / ({RRF_K} + semantic.rank), 0.0) +
+                    coalesce(:lexical_weight / ({RRF_K} + lexical.rank), 0.0)
                 ) AS raw_score
             FROM candidate_ids
             JOIN {table} AS {alias} USING (id)

@@ -12,6 +12,7 @@ from collections.abc import Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import PurePosixPath
 from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
@@ -130,14 +131,33 @@ class Chunk(Hit):
 
 class SearchResult(BaseModel):
     id: str
-    domain: Literal["wiki", "file", "discord", "pr", "issue"]
+    domain: search_config.SearchDomain
     title: str
     subtitle: str
     url: str
     snippet: str
-    score: float = Field(description="Hybrid reciprocal-rank score; higher is better.")
+    score: float = Field(description="Final hybrid score after query-oriented source priors; higher is better.")
     distance: float | None = Field(None, description="Cosine distance; lower is closer.")
     lexical_score: float | None = Field(None, description="PostgreSQL full-text rank; higher is better.")
+
+
+class RepositoryFileDetail(BaseModel):
+    id: str
+    title: str
+    subtitle: str
+    url: str
+    text: str
+
+
+class SearchDomainOption(BaseModel):
+    value: search_config.SearchDomain
+    label: str
+
+
+class SearchConfiguration(BaseModel):
+    domains: list[SearchDomainOption]
+    default_domains: list[search_config.SearchDomain]
+    display_sha_characters: int
 
 
 class RepositoryIndexStatus(BaseModel):
@@ -264,6 +284,18 @@ def vector(values: Iterable[float]) -> list[float]:
 
 def query_embedding(model: TextEmbedding, query: str) -> list[float]:
     return vector(next(iter(model.query_embed([query]))))
+
+
+def hybrid_search_params(model: TextEmbedding, query: str, limit: int) -> dict[str, object]:
+    weights = search_config.search_weights(query)
+    return {
+        "q": query,
+        "embedding": str(query_embedding(model, query)),
+        "candidate_limit": search_config.candidate_limit(limit),
+        "limit": limit,
+        "semantic_weight": weights.semantic,
+        "lexical_weight": weights.lexical,
+    }
 
 
 def passage_embedding(model: TextEmbedding, title: str, use_when: str, tags: list[str], body: str) -> list[float]:
@@ -410,6 +442,13 @@ def representative_file_line(text: str, query: str, start_line: int) -> tuple[in
     return start_line, ""
 
 
+def repository_freshness(state: RepositoryIndexState) -> str:
+    if state.building:
+        return f"building {state.completed_files}/{state.total_files} since {state.started_at.isoformat()}"
+    assert state.indexed_at is not None
+    return f"indexed {state.indexed_at.isoformat()}"
+
+
 def repository_file_search_result(
     row: sqlalchemy.Row,
     state: RepositoryIndexState,
@@ -418,18 +457,14 @@ def repository_file_search_result(
 ) -> SearchResult:
     line, matching_line = representative_file_line(row.text, query, row.start_line)
     path = quote(row.path, safe="/")
-    if state.building:
-        freshness = f"building {state.completed_files}/{state.total_files} since {state.started_at.isoformat()}"
-    else:
-        assert state.indexed_at is not None
-        freshness = f"indexed {state.indexed_at.isoformat()}"
     return SearchResult(
         id=f"file:{row.path}",
         domain="file",
         title=row.title,
         subtitle=(
             f"{row.path}:{line} · "
-            f"{config.github_branch}@{state.commit_sha[: search_config.DISPLAY_SHA_CHARACTERS]} · {freshness}"
+            f"{config.github_branch}@{state.commit_sha[: search_config.DISPLAY_SHA_CHARACTERS]} · "
+            f"{repository_freshness(state)}"
         ),
         url=f"https://github.com/{config.github_repository}/blob/{state.commit_sha}/{path}#L{line}",
         snippet=matching_line[: search_config.FEDERATED_SUMMARY_CHARACTERS],
@@ -437,6 +472,35 @@ def repository_file_search_result(
         distance=row.distance,
         lexical_score=row.lexical_score,
     )
+
+
+def query_oriented_result(result: SearchResult, query: str) -> SearchResult:
+    """Apply a small source-quality prior to prose queries over repository files."""
+    if result.domain != "file" or search_config.is_identifier_query(query):
+        return result
+    path = result.id.removeprefix("file:")
+    filename = PurePosixPath(path).name
+    score = result.score
+    if path.lower().endswith(search_config.PROSE_FILE_SUFFIXES):
+        score *= search_config.QUERY_PROSE_FILE_SCORE_MULTIPLIER
+    if "tests" in PurePosixPath(path).parts or filename == "conftest.py" or filename.startswith("test_"):
+        score *= search_config.QUERY_TEST_FILE_SCORE_MULTIPLIER
+    return result.model_copy(update={"score": score})
+
+
+def indexed_file_text(rows: Iterable[sqlalchemy.Row]) -> str:
+    """Reconstruct indexed source while discarding repeated overlap lines."""
+    lines: list[str] = []
+    for row in rows:
+        chunk_lines = row.text.split("\n")
+        offset = row.start_line - 1
+        if offset > len(lines):
+            raise ValueError(f"repository file chunk starts at line {row.start_line} after line {len(lines)}")
+        overlap = len(lines) - offset
+        if overlap:
+            assert lines[offset:] == chunk_lines[:overlap], "repository file chunks disagree in their overlap"
+        lines.extend(chunk_lines[overlap:])
+    return "\n".join(lines)
 
 
 def wiki_filter_clauses(tags: list[str]) -> list[str]:
@@ -448,6 +512,18 @@ def healthz(engine: Engine) -> dict[str, str]:
     with engine.connect() as conn:
         conn.execute(sqlalchemy.text("SELECT 1"))
     return {"status": "ok"}
+
+
+@api.get("/search-configuration", response_model=SearchConfiguration)
+def search_configuration() -> SearchConfiguration:
+    return SearchConfiguration(
+        domains=[
+            SearchDomainOption(value=domain, label=search_config.SEARCH_DOMAIN_LABELS[domain])
+            for domain in search_config.SEARCH_DOMAINS
+        ],
+        default_domains=list(search_config.DEFAULT_SEARCH_DOMAINS),
+        display_sha_characters=search_config.DISPLAY_SHA_CHARACTERS,
+    )
 
 
 @api.get("/repository-index", response_model=RepositoryIndexStatus)
@@ -493,10 +569,7 @@ def search(
     if not query:
         raise HTTPException(422, "q must not be blank")
     params = {
-        "q": query,
-        "embedding": str(query_embedding(model, query)),
-        "candidate_limit": search_config.candidate_limit(limit),
-        "limit": limit,
+        **hybrid_search_params(model, query, limit),
         "source": source,
         "kind": kind,
         "since": since,
@@ -513,7 +586,7 @@ def federated_search(
     model: Model,
     config: Config,
     q: str = Query(description="Natural-language query."),
-    domain: list[Literal["wiki", "file", "discord", "pr", "issue"]] | None = Query(
+    domain: list[search_config.SearchDomain] | None = Query(
         None, description="Search this domain; repeat to select several."
     ),
     limit: int = Query(search_config.DEFAULT_SEARCH_LIMIT, ge=1, le=search_config.MAX_SEARCH_LIMIT),
@@ -523,12 +596,7 @@ def federated_search(
     if not query:
         raise HTTPException(422, "q must not be blank")
     domains = list(dict.fromkeys(domain or search_config.DEFAULT_SEARCH_DOMAINS))
-    params = {
-        "q": query,
-        "embedding": str(query_embedding(model, query)),
-        "candidate_limit": search_config.candidate_limit(limit),
-        "limit": limit,
-    }
+    params = hybrid_search_params(model, query, limit)
     results: list[SearchResult] = []
     with engine.connect() as conn:
         conn.execute(hybrid_search.HNSW_ITERATIVE_SCAN)
@@ -555,7 +623,8 @@ def federated_search(
             statement = hybrid_search.chunk_search_statement([activity_domain_clause(activity_domains)])
             for row in conn.execute(statement, params):
                 results.append(activity_search_result(row))
-    return sorted(results, key=lambda result: (-result.score, result.domain, result.id))[:limit]
+    ranked = [query_oriented_result(result, query) for result in results]
+    return sorted(ranked, key=lambda result: (-result.score, result.domain, result.id))[:limit]
 
 
 @api.get("/grep", response_model=list[Hit])
@@ -595,6 +664,35 @@ def chunk(chunk_id: int, engine: Engine) -> Chunk:
         if field not in ("score", "distance", "lexical_score", "snippet")
     }
     return Chunk(score=0.0, distance=None, lexical_score=None, snippet=snippet(row), **fields)
+
+
+@api.get("/repository-files/{path:path}", response_model=RepositoryFileDetail)
+def repository_file(path: str, engine: Engine, config: Config) -> RepositoryFileDetail:
+    """Return the complete indexed text and pinned URL for one repository path."""
+    with engine.connect() as conn:
+        state = repository_index_state(conn, config)
+        rows = conn.execute(
+            sqlalchemy.select(schema.repository_file_chunks)
+            .where(
+                schema.repository_file_chunks.c.repository == config.github_repository,
+                schema.repository_file_chunks.c.branch == config.github_branch,
+                schema.repository_file_chunks.c.path == path,
+            )
+            .order_by(schema.repository_file_chunks.c.chunk_index)
+        ).all()
+    if state is None or not rows:
+        raise HTTPException(404, f"no indexed repository file {path}")
+    quoted_path = quote(path, safe="/")
+    return RepositoryFileDetail(
+        id=f"file:{path}",
+        title=rows[0].title,
+        subtitle=(
+            f"{path} · {config.github_branch}@"
+            f"{state.commit_sha[: search_config.DISPLAY_SHA_CHARACTERS]} · {repository_freshness(state)}"
+        ),
+        url=f"https://github.com/{config.github_repository}/blob/{state.commit_sha}/{quoted_path}",
+        text=indexed_file_text(rows),
+    )
 
 
 @api.get("/work_log", response_model=list[LogSummary])
@@ -669,13 +767,7 @@ def search_wiki(
             statement = statement.order_by(schema.wiki_entries.c.updated_at.desc()).limit(limit)
             return [wiki_summary(row) for row in conn.execute(statement)]
         conn.execute(hybrid_search.HNSW_ITERATIVE_SCAN)
-        params = {
-            "q": query,
-            "embedding": str(query_embedding(model, query)),
-            "candidate_limit": search_config.candidate_limit(limit),
-            "limit": limit,
-            "tags": tags,
-        }
+        params = {**hybrid_search_params(model, query, limit), "tags": tags}
         statement = hybrid_search.wiki_search_statement(wiki_filter_clauses(tags))
         return [wiki_summary(row) for row in conn.execute(statement, params)]
 

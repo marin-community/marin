@@ -29,7 +29,18 @@ export interface WikiHit {
   body?: string
 }
 
-export type SearchDomain = 'wiki' | 'file' | 'discord' | 'pr' | 'issue'
+export type SearchDomain = string
+
+export interface SearchDomainOption {
+  value: SearchDomain
+  label: string
+}
+
+export interface SearchConfiguration {
+  domains: SearchDomainOption[]
+  default_domains: SearchDomain[]
+  display_sha_characters: number
+}
 
 export interface FederatedResult {
   id: string

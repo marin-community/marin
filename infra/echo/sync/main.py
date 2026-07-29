@@ -44,17 +44,17 @@ SYNC_LOCK_KEY = 0x6563686F  # "echo"
 MIRRORED_CHUNK_COLUMNS = tuple(column.name for column in schema.chunks.columns if column.computed is None)
 
 
-def mirror_open(path: str, timeout: int = 600):
+def mirror_open(path: str, token: str, timeout: int = 600):
     req = urllib.request.Request(
         MARINMIRROR_URL + path,
-        headers={"Authorization": f"Bearer {os.environ['MARINMIRROR_TOKEN']}", "User-Agent": "echo-sync"},
+        headers={"Authorization": f"Bearer {token}", "User-Agent": "echo-sync"},
     )
     return urllib.request.urlopen(req, timeout=timeout)
 
 
-def download_corpus(dest: Path, expected_sha: str) -> None:
+def download_corpus(dest: Path, expected_sha: str, token: str) -> None:
     digest = hashlib.sha256()
-    with mirror_open("/corpus-index.db") as response, open(dest, "wb") as out:
+    with mirror_open("/corpus-index.db", token) as response, open(dest, "wb") as out:
         while block := response.read(1 << 20):
             out.write(block)
             digest.update(block)
@@ -145,8 +145,8 @@ def upsert_chunks(conn: sqlalchemy.Connection, corpus: Path) -> tuple[int, int]:
     return upserted, deleted
 
 
-def fetch_manifest() -> dict:
-    with mirror_open("/manifest.json", timeout=30) as response:
+def fetch_manifest(token: str) -> dict:
+    with mirror_open("/manifest.json", token, timeout=30) as response:
         return json.load(response)
 
 
@@ -161,7 +161,7 @@ def corpus_build_epoch(path: Path) -> int:
         db.close()
 
 
-def fetch_corpus(dest: Path, manifest: dict, attempts: int = 2) -> int:
+def fetch_corpus(dest: Path, manifest: dict, token: str, attempts: int = 2) -> int:
     """Download the corpus and return the build epoch actually downloaded.
 
     The manifest sha is the fast path. marinmirror rebuilds every ~90 minutes, so a
@@ -173,19 +173,19 @@ def fetch_corpus(dest: Path, manifest: dict, attempts: int = 2) -> int:
     error: RuntimeError | None = None
     for _ in range(attempts):
         try:
-            download_corpus(dest, manifest["corpus_index"]["sha256"])
+            download_corpus(dest, manifest["corpus_index"]["sha256"], token)
             return manifest["built_at_epoch"]
         except RuntimeError as caught:
             error = caught
             print(f"{caught}; refetching manifest")
-            manifest = fetch_manifest()
+            manifest = fetch_manifest(token)
     built = corpus_build_epoch(dest)
     print(f"{error}; accepting intact corpus self-reporting build {built} (manifest/corpus skew)")
     return built
 
 
-def sync_corpus(engine: sqlalchemy.Engine) -> int:
-    manifest = fetch_manifest()
+def sync_corpus(engine: sqlalchemy.Engine, token: str) -> int:
+    manifest = fetch_manifest(token)
     built = manifest["built_at_epoch"]
 
     with engine.connect() as conn:
@@ -197,7 +197,7 @@ def sync_corpus(engine: sqlalchemy.Engine) -> int:
     start = time.time()
     with tempfile.TemporaryDirectory() as tmp:
         corpus = Path(tmp) / "corpus-index.db"
-        built = fetch_corpus(corpus, manifest)
+        built = fetch_corpus(corpus, manifest, token)
         if watermark is not None and watermark >= built:
             print(f"up to date: downloaded corpus is build {built}, already synced")
             return 0
@@ -227,7 +227,7 @@ def sync_corpus(engine: sqlalchemy.Engine) -> int:
 
 def run(engine: sqlalchemy.Engine, target: github_repository.RepositoryTarget, token: str) -> int:
     github_repository.sync_repository(engine, target, token, datetime.now(UTC))
-    sync_corpus(engine)
+    sync_corpus(engine, token)
     return 0
 
 
