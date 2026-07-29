@@ -71,6 +71,22 @@ a larger LR under cosine — worse early, closing hard at the end — and it is 
 proxy cannot settle a question about step 4,460. The ordering at the end of *this* schedule
 still says nothing about the ordering at the end of a 35,680-step one.
 
+| F12 | The 400-step HP arms finished **4.102407 (exp153 HP) vs 4.131758 (exp146 HP) — 0.7% apart**, after opening +0.66 | At a matched schedule endpoint, LR/WD is worth ~0.03, not ~0.40. The mid-run +0.33 was schedule phase, not merit |
+| F13 | **Every exp146 and exp153 production run shares an identical token budget of 4,567,040 sequences.** Batch size varies and steps vary inversely: bs 64/71,360, bs 128/35,680, bs 256/17,840 | Equal-*step* comparisons across different batch sizes are **not** equal-token — see the F6 correction below |
+| F14 | Within exp146, same LR/WD at different batch sizes lands differently: lr 3.162e-3 wd 0.4 gives **2.7952 at bs 128** but **2.7025 at bs 256**; the wd 0.2 winner ran **bs 64 → 2.7107** | **Batch size is an independent lever worth ~0.09**, untested by anything in this investigation. exp153 ran bs 128, exp146's best runs ran bs 256 |
+
+### Correction to F6
+
+F6 compared exp153 against exp146's winner at equal step and found a flat ~0.40. That winner
+runs **bs 64**; exp153 runs **bs 128**. At any equal step the exp146 run had therefore seen
+**half** the sequences — so it was ahead by 0.40 on half the tokens. The equal-step framing
+understates the gap rather than manufacturing it, and F6's conclusion survives, but the
+number is not the honest size of the effect.
+
+The better-matched comparison is exp146's **bs 128 / 35,680-step** run — same batch, same
+steps, same token budget as exp153 — which reached **2.7952** against exp153's 3.14. That
+narrows the confound to three variables: 6B vs 3B, lr 1e-3 vs 3.162e-3, wd 0.8 vs 0.4.
+
 ## Hypotheses
 
 Ordered by how much they would explain, not by how interesting they are.
@@ -103,6 +119,7 @@ Ordered by how much they would explain, not by how interesting they are.
 |---|---|---|---|
 | C1 | The effect needs 6B, not 1.5B — deeper stacks, larger activations | short 6B run on both platforms | open |
 | C2 | The effect needs large dp (64 devices at 8 nodes), not 4 | 1.5B at 8 nodes vs 1 node on GPU | open |
+| C4 | **Batch size**: exp153 ran bs 128 where exp146's best rungs ran bs 256 | 1.5B at bs 128 vs 256, matched token budget | open — F14 shows ~0.09 in exp146's own data |
 | C3 | Gradient accumulation only engages at ga>1; the parity runs use ga=1 | run a config forcing ga>1 on both | open |
 
 ### D — Infrastructure
@@ -122,8 +139,9 @@ Ordered by how much they would explain, not by how interesting they are.
 | 07-29 | `parity-h100-x8` — H100x8, 60 steps (B3) | finished, final train 5.74982 → **B3 refuted (F7)** |
 | 07-29 | `parity-gb200-long` — GB200x4, 400 steps (B4) | finished, final train 4.09203 |
 | 07-29 | `parity-tpu-long` — v6e-4, 400 steps (B4) | finished, final train 4.090732 → **platform closed (F9)** |
-| 07-29 | `parity-hp-exp153` — GB200x4, 400 steps, **lr 1e-3 / wd 0.8** (A5) | running, leads by 0.33 at step 208 (F10) |
-| 07-29 | `parity-hp-exp146` — GB200x4, 400 steps, **lr 3.1623e-3 / wd 0.2** (A5) | running |
+| 07-29 | `parity-hp-exp153` — GB200x4, 400 steps, **lr 1e-3 / wd 0.8** (A5) | finished, final train 4.102407 |
+| 07-29 | `parity-hp-exp146` — GB200x4, 400 steps, **lr 3.1623e-3 / wd 0.2** (A5) | finished, final train 4.131758 → **0.7% apart (F12)** |
+| 07-29 | `parity-hp-exp153-long` / `parity-hp-exp146-long` — GB200x4, **4,460 steps** | running — resolves the horizon problem at the step where exp153's gap opens |
 
 ## Harness failures worth remembering
 
