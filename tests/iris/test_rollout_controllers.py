@@ -1,10 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import functools
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
+
 from iris.cluster.config import (
     AuthConfig,
     ControllerVmConfig,
@@ -17,7 +20,6 @@ from iris.cluster.config import (
     ScaleGroupConfig,
     StorageConfig,
 )
-
 from scripts.iris.rollout_controllers import (
     Need,
     Requirement,
@@ -32,6 +34,7 @@ from scripts.iris.rollout_controllers import (
     parse_ahead_behind,
     parse_dirty_files,
     parse_kube_contexts,
+    read_tree_state,
     requirements,
     rollout_order,
     run_probe,
@@ -110,6 +113,14 @@ def test_kubernetes_requirements_cover_s3_keys_kubeconfig_and_signing_key():
     # is an operator-side requirement.
     assert [n.target for n in needs if n.kind is Need.SECRET] == ["gcp-secret://p/secrets/k/versions/1"]
     assert "kubectl" in {n.target for n in needs if n.kind is Need.COMMAND}
+
+
+def test_env_only_signing_key_becomes_an_operator_env_requirement():
+    # With no persistent source behind it, the deploy resolves `env:IRIS_SIGNING_KEY`
+    # in this shell. Skipping it let the gate pass and the deploy fail after approval.
+    needs = requirements(coreweave_config(signing_key=["env:IRIS_SIGNING_KEY"]), s3_env=[])
+    assert [n.target for n in needs if n.kind is Need.ENV] == ["IRIS_SIGNING_KEY"]
+    assert not [n for n in needs if n.kind is Need.SECRET]
 
 
 def test_gcs_backed_kubernetes_cluster_needs_no_s3_keys():
@@ -219,6 +230,15 @@ def test_a_merged_kubeconfig_list_satisfies_the_context(tmp_path):
     assert check_requirement(need, environ=environ).ok
 
 
+def test_a_context_without_a_pinned_path_resolves_against_the_default_kubeconfig(tmp_path, monkeypatch):
+    # A config may name a context and no file; the deploy then binds that context within
+    # kubectl's default resolution, so preflight must not fail it for a missing path.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".kube").mkdir()
+    (tmp_path / ".kube" / "config").write_text(KUBECONFIG_DOC)
+    assert check_requirement(kube_context_need("marin_US-WEST-04A", ""), environ={}).ok
+
+
 def test_parse_kube_contexts_tolerates_a_document_without_contexts():
     assert parse_kube_contexts("apiVersion: v1\n") == ()
     assert parse_kube_contexts("") == ()
@@ -315,6 +335,28 @@ def test_dirty_warning_names_the_files_and_counts_the_rest():
     assert "9" in warning.message
     assert "f0.py" in warning.message
     assert "(+4 more)" in warning.message
+
+
+def test_untracked_files_stay_dirty_when_the_operator_git_config_hides_them(tmp_path, monkeypatch):
+    # Regression: with status.showUntrackedFiles=no, `git status --porcelain` prints no
+    # `??` lines, so preflight called the tree clean. The image build still copies the
+    # file in and the tree hash does not cover it, so two images share one tag.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run = functools.partial(subprocess.run, cwd=repo, check=True, capture_output=True)
+    run(["git", "init", "--initial-branch=main", "--quiet"])
+    run(["git", "config", "user.email", "test@example.com"])
+    run(["git", "config", "user.name", "Test"])
+    run(["git", "config", "status.showUntrackedFiles", "no"])
+    (repo / "tracked.py").write_text("x = 1\n")
+    run(["git", "add", "tracked.py"])
+    run(["git", "commit", "--quiet", "-m", "init"])
+    run(["git", "branch", "base"])
+    (repo / "untracked.py").write_text("y = 2\n")
+
+    monkeypatch.chdir(repo)
+    state = read_tree_state(upstream="base", fetch=False)
+    assert state.dirty_files == ("untracked.py",)
 
 
 def test_parse_dirty_files_strips_status_codes():

@@ -107,13 +107,17 @@ value, do not mint credentials, and do not skip the cluster. Four specific cases
   buildx plugin is absent. The restart would fail at image build, after the
   operator approved the cluster. Ask them to start Docker.
 - `CW_KEY_ID` / `CW_KEY_SECRET` unset — ask the operator to export them.
-- A `gcp-secret://` signing key that does not resolve — the session lacks GCP
-  credentials. Ask the operator to run `gcloud auth application-default login`.
+- A signing key that does not resolve — for a `gcp-secret://` reference the
+  session lacks GCP credentials, so ask the operator to run
+  `gcloud auth application-default login`. A config that names only
+  `env:IRIS_SIGNING_KEY` has no persistent source behind it, so the deploy reads
+  the key straight from the shell and preflight requires that variable.
 - A `kube-context` FAIL — the kubeconfig does not define the context this cluster
   binds. The check resolves the kubeconfig the way the deploy does: an exported
   `KUBECONFIG` replaces the configured `~/.kube/coreweave-iris` (and a
   path-separated list is merged), so an unrelated exported `KUBECONFIG` is a
-  common cause. Ask the operator to unset it or to add the context.
+  common cause. Ask the operator to unset it or to add the context. A config that
+  pins a context but no path resolves it against `~/.kube/config`.
 
 A defined context proves the configuration, not live credentials. The per-cluster
 snapshot in step 2 reaches the controller through that context, so expired

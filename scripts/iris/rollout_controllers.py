@@ -60,6 +60,10 @@ DIRTY_FILES_SHOWN = 5
 # Ceiling for a preflight probe command, so a hung daemon does not hang the gate.
 PROBE_TIMEOUT = 30.0
 
+# Where kubectl and the kubernetes client look when no path is pinned and KUBECONFIG is
+# unset. A cluster config may name a context without a file and still deploy.
+DEFAULT_KUBECONFIG = "~/.kube/config"
+
 # `iris job run` defaults. A smoke job asks for nothing more than a real user job's
 # floor, so it schedules on any cluster without competing with real work.
 SMOKE_CPU = 0.1
@@ -293,7 +297,10 @@ def read_tree_state(*, upstream: str = DEFAULT_UPSTREAM, fetch: bool = True) -> 
         tree_hash=provenance.tree_hash,
         branch=provenance.branch or "",
         base_commit=provenance.base_commit,
-        dirty_files=parse_dirty_files(_git(["status", "--porcelain"], cwd=repo)),
+        # --untracked-files=all overrides a status.showUntrackedFiles=no in the
+        # operator's git config, which would otherwise report a tree with new files as
+        # clean. The image build copies them in, and the tree hash does not cover them.
+        dirty_files=parse_dirty_files(_git(["status", "--porcelain", "--untracked-files=all"], cwd=repo)),
         upstream=upstream,
         ahead=ahead,
         behind=behind,
@@ -345,12 +352,24 @@ def requirements(config: IrisClusterConfig, *, s3_env: Sequence[str] | None = No
         if config.storage.remote_state_dir.startswith("s3://"):
             for name in s3_env if s3_env is not None else _s3_credential_env():
                 needs.append(Requirement(Need.ENV, name, "S3 state auth projected into the iris-task-env Secret"))
-        # A Kubernetes controller pod holds no cloud credentials, so every non-env
-        # signing-key reference is resolved here and projected into the Secret.
+        # A Kubernetes controller pod holds no cloud credentials, so the deploy resolves
+        # the signing key in the operator's shell and projects it into the Secret. It
+        # resolves `persistent or refs`, so an `env:` reference addresses the pod only
+        # while a persistent source backs it. Alone, it is what the deploy reads here.
         if config.auth and config.auth.signing_key:
-            for ref in as_secret_spec(config.auth.signing_key):
-                if not ref.startswith(ENV_SCHEME):
-                    needs.append(Requirement(Need.SECRET, ref, "signing key projected as IRIS_SIGNING_KEY"))
+            refs = as_secret_spec(config.auth.signing_key)
+            persistent = [ref for ref in refs if not ref.startswith(ENV_SCHEME)]
+            for ref in persistent:
+                needs.append(Requirement(Need.SECRET, ref, "signing key projected as IRIS_SIGNING_KEY"))
+            if not persistent:
+                needs.extend(
+                    Requirement(
+                        Need.ENV,
+                        ref.removeprefix(ENV_SCHEME),
+                        "the only signing-key source: the deploy reads it from this shell",
+                    )
+                    for ref in refs
+                )
     elif kind == "gcp":
         needs.append(Requirement(Need.COMMAND, "gcloud", "the restart drives the controller VM over IAP SSH"))
 
@@ -362,12 +381,13 @@ def effective_kubeconfigs(configured: str, *, environ: Mapping[str, str]) -> tup
 
     An exported ``KUBECONFIG`` wins over the configured path — the k8s controller
     manager passes ``kubeconfig_path=None`` when it sees that variable — and kubectl
-    merges a path-separated list, so a context may come from any entry.
+    merges a path-separated list, so a context may come from any entry. A config that
+    pins a context but no path resolves that context against the default kubeconfig.
     """
-    override = environ.get("KUBECONFIG", "")
+    override = [part for part in environ.get("KUBECONFIG", "").split(os.pathsep) if part]
     if override:
-        return tuple(Path(part).expanduser() for part in override.split(os.pathsep) if part)
-    return (Path(configured).expanduser(),) if configured else ()
+        return tuple(Path(part).expanduser() for part in override)
+    return (Path(configured or DEFAULT_KUBECONFIG).expanduser(),)
 
 
 def parse_kube_contexts(kubeconfig: str) -> tuple[str, ...]:
@@ -380,9 +400,6 @@ def parse_kube_contexts(kubeconfig: str) -> tuple[str, ...]:
 def check_kube_context(requirement: Requirement, *, environ: Mapping[str, str]) -> CheckResult:
     """Check that a kubeconfig the deploy will read defines the cluster's context."""
     paths = effective_kubeconfigs(requirement.source, environ=environ)
-    if not paths:
-        return CheckResult(requirement, False, "no kubeconfig is configured and KUBECONFIG is unset")
-
     present = [path for path in paths if path.is_file()]
     if not present:
         listed = ", ".join(str(path) for path in paths)
