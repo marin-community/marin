@@ -1,6 +1,6 @@
 ---
 name: consult-echo
-description: Search and cite Marin's Echo activity and wiki, then capture reusable shared knowledge. Use when looking for prior discussions, decisions, workflows, incident patterns, exact errors, tags, or identifiers; when prior context could shorten debugging; or when an investigation reaches resolution and its lessons may belong in docs, OPS.md, an ops log, or the Echo wiki.
+description: Search and cite Marin's Echo activity and wiki, then capture incident records or reusable shared knowledge. Use when looking for prior discussions, decisions, workflows, incident patterns, exact errors, tags, or identifiers; when prior context could shorten debugging; or when an investigation reaches resolution and its record or lessons may belong in Echo, docs, or OPS.md.
 ---
 
 # Skill: Consult Echo
@@ -17,7 +17,7 @@ shorten debugging.
 1. Search wiki entries semantically for an existing synthesis:
 
    ```bash
-   uv run infra/echo/cli.py wiki search "stalled TPU collective diagnosis"
+   uv run infra/echo/cli.py wiki search "stalled TPU collective diagnosis" --tag ops
    ```
 
 2. Search GitHub and Discord activity semantically for prior discussions and
@@ -34,6 +34,7 @@ shorten debugging.
    ```
 
 Use `--source`, `--kind`, or `--since` to narrow semantic activity searches.
+Use repeated `--tag` flags to require all named wiki tags.
 Use `show <id>` for a complete activity hit and `wiki show <id>` for a complete
 wiki note. Activity results print canonical URLs. Wiki exports include the
 canonical Echo URL in their OKF frontmatter. Open Discord URLs when surrounding
@@ -48,17 +49,20 @@ At resolution, choose the narrowest durable home:
   or guardrail in one subsystem.
 - Update `docs/` for reusable product or user guidance that belongs with the
   repository.
-- Write or extend `.agents/ops/YYYY-MM-DD-<slug>.md` for the evidence,
-  decisions, and outcome of a specific incident. Extend the existing record
-  when it covers the same event.
+- Add one Echo entry for the evidence, decisions, and outcome of a specific
+  incident. Tag it `incident`, `debugging`, the subsystem, severity, and
+  resolution; add `ops` for infrastructure incidents. Link its canonical Echo
+  URL from the associated PR or issue.
 - Edit an existing Echo wiki note for a cross-cutting pattern or synthesis that
   has no single repository home.
 - Add a wiki note only when the searches find no near-duplicate.
 
-Do not create one wiki note per incident. Do not copy a commit, diff, or log into
-the wiki. A fixed bug can still justify a wiki update when evidence from
-multiple incidents supports a reusable diagnostic pattern. Synthesize the
-pattern and link the incidents, PRs, messages, or docs that establish it.
+Create one incident entry per incident, and edit that entry only when the same
+incident continues. Keep raw logs and commit diffs in their source systems; the
+incident entry records the investigation and links the evidence. A fixed bug can
+also justify a separate cross-incident synthesis when several incidents support
+a reusable diagnostic pattern. Edit a near-duplicate synthesis instead of
+adding another.
 
 ## Write or revise a wiki note
 
@@ -69,13 +73,18 @@ Write an Open Knowledge Format document:
 type: wiki-note
 title: Stalled TPU collectives can have several low-power causes
 use_when: when a distributed TPU job stalls before the first optimizer update
+tags:
+  - ops
+  - debugging
+  - iris
 ---
 
 State the reusable pattern, how to distinguish its causes, and the evidence URLs.
 ```
 
-Keep the title concrete and make `use_when` describe the future search trigger.
-Make the body stand alone. Cite canonical URLs inline.
+Use lowercase kebab-case tags. Keep the title concrete and make `use_when`
+describe the future search trigger. Make the body stand alone. Cite canonical
+URLs inline.
 
 Create a note:
 

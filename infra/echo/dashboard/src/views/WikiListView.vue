@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { fetchJson, formatDate, type WikiHit } from '../types'
+import WikiTags from '../WikiTags.vue'
 
 const PAGE_SIZE = 30
 
@@ -58,6 +59,7 @@ onMounted(load)
               {{ entry.title }}
             </router-link>
             <p class="mt-2 text-sm font-medium leading-6 text-moss">Use when: {{ entry.use_when }}</p>
+            <WikiTags :tags="entry.tags" class="mt-2" />
             <p class="mt-2 line-clamp-2 text-sm leading-6 text-ink/60">{{ entry.snippet }}</p>
           </div>
           <span class="shrink-0 text-xs text-ink/40">{{ entry.reference_count }} refs</span>

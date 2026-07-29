@@ -627,8 +627,8 @@ Renames land with their call sites, in the same change:
 - `lib/iris/docs/*` live docs (`federation.md`).
 - `iris.cluster` OPS references in `lib/zephyr/OPS.md` (shared-infra commands).
 
-Historical `.agents/ops/*` postmortems are **not** rewritten — they are dated
-records of what was run at the time.
+Historical Echo incident records are **not** rewritten — they are dated records
+of what was run at the time.
 
 ## Implementation plan (spiral — each stage independently testable)
 

@@ -17,7 +17,7 @@ ambient service-account credentials with no login. See ``infra/echo/README.md``.
     uv run infra/echo/cli.py search "expert parallel MoE MFU on B200" --limit 10
     uv run infra/echo/cli.py grep ragged_all_to_all --source discord
     uv run infra/echo/cli.py show 12345
-    uv run infra/echo/cli.py wiki search "grafana access"
+    uv run infra/echo/cli.py wiki search "grafana access" --tag ops
     uv run infra/echo/cli.py wiki add --file note.md          # OKF: frontmatter title/use_when + body
     uv run infra/echo/cli.py wiki show 12 > note.md           # export as OKF, edit, then:
     uv run infra/echo/cli.py wiki edit 12 --file note.md
@@ -117,6 +117,8 @@ def print_wiki(entries: list[dict]) -> None:
     for entry in entries:
         print(f"#{entry['id']} {entry['title']} (refs={entry.get('reference_count', 0)}, by {entry['author']})")
         print(f"    use when: {entry['use_when']}")
+        if entry.get("tags"):
+            print(f"    tags: {', '.join(entry['tags'])}")
         if entry.get("snippet"):
             print(f"    {entry['snippet']}")
 
@@ -158,7 +160,7 @@ def cmd_show(args: argparse.Namespace) -> None:
 
 
 def cmd_wiki_search(args: argparse.Namespace) -> None:
-    print_wiki(request("GET", "/wiki/search", params={"q": args.query, "limit": args.limit}))
+    print_wiki(request("GET", "/wiki/search", params={"q": args.query, "tag": args.tag, "limit": args.limit}))
 
 
 def cmd_wiki_show(args: argparse.Namespace) -> None:
@@ -173,19 +175,19 @@ def wiki_link(entry_id: int) -> str:
     return f"{API_URL}/wiki/{entry_id}"
 
 
-def wiki_write_body(args: argparse.Namespace) -> dict[str, str]:
-    """The title/use_when/body for a wiki write, from an OKF ``--file`` or the individual flags."""
+def wiki_write_body(args: argparse.Namespace) -> dict[str, object]:
+    """The fields for a wiki write, from an OKF ``--file`` or individual flags."""
     if args.file:
         text = sys.stdin.read() if args.file == "-" else Path(args.file).read_text()
         try:
             fields = okf.parse_wiki(text)
         except ValueError as error:
             raise SystemExit(f"{args.file}: {error}") from error
-        return {"title": fields.title, "use_when": fields.use_when, "body": fields.body}
+        return {"title": fields.title, "use_when": fields.use_when, "tags": list(fields.tags), "body": fields.body}
     missing = [name for name in ("title", "use_when", "body") if not getattr(args, name)]
     if missing:
         raise SystemExit(f"provide --file (OKF) or all of --title/--use-when/--body (missing: {', '.join(missing)})")
-    return {"title": args.title, "use_when": args.use_when, "body": read_body(args.body)}
+    return {"title": args.title, "use_when": args.use_when, "tags": args.tag, "body": read_body(args.body)}
 
 
 def cmd_wiki_add(args: argparse.Namespace) -> None:
@@ -229,6 +231,7 @@ def add_wiki_write_args(parser: argparse.ArgumentParser) -> None:
         help="one sentence: when an agent should load this note",
     )
     parser.add_argument("--body", help="text inline, a file path, or - for stdin")
+    parser.add_argument("--tag", action="append", default=[], help="lowercase kebab-case tag; repeat as needed")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -257,6 +260,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     wiki_search = wiki.add_parser("search", help="search wiki notes")
     wiki_search.add_argument("query", nargs="?", default="", help="blank returns recently updated notes")
+    wiki_search.add_argument("--tag", action="append", default=[], help="require this tag; repeat to require several")
     wiki_search.add_argument("--limit", type=bounded_limit, default=10)
     wiki_search.set_defaults(func=cmd_wiki_search)
     wiki_show = wiki.add_parser("show", help="print one wiki note verbatim")

@@ -6,20 +6,18 @@ description: Debug code bugs or Iris/Zephyr/TPU infrastructure faults with a str
 # Skill: Debug
 
 Systematic debugging for code-level bugs and Marin infrastructure faults.
-For infrastructure symptoms, route to the right `OPS.md` section first. Keep
-durable investigation records in `.agents/ops/YYYY-MM-DD-<slug>.md`.
+For infrastructure symptoms, route to the right `OPS.md` section first. Publish
+durable investigation records to Echo with `write-ops-log`.
 
-Use the incident's investigation date and a 3-6-word kebab-case slug. Do not
-write `docs/debug-log-*` files or create another debug-log directory. Extend an
-existing record when it covers the same event. Use `write-ops-log` to finish an
-infrastructure or other multi-step incident as a standalone postmortem.
+Do not add repository debug-log files. Use `write-ops-log` to finish an
+infrastructure or other multi-step incident as a standalone Echo postmortem.
 
 ## Consult Echo
 
 Invoke `consult-echo` at the start when prior discussions, decisions, or
 incident patterns could materially shorten debugging. At resolution, always
 invoke it to search before deciding whether the reusable lesson belongs in
-`OPS.md`, `docs/`, the incident record, or an existing or new Echo wiki note.
+`OPS.md`, `docs/`, the Echo incident record, or an existing or new synthesis.
 
 ## Infrastructure faults
 
@@ -41,10 +39,10 @@ loop (`babysit-job` or `babysit-zephyr`).
 
 ## Code bugs
 
-For code-level bugs that are not infrastructure faults, maintain the same
-record at `.agents/ops/YYYY-MM-DD-<slug>.md`. A contained fix may use the
-lightweight structure below; preserve it and complete the `write-ops-log`
-structure when the investigation exposes an operational lesson:
+For code-level bugs that are not infrastructure faults, keep working notes in
+the active task. A contained fix may use the lightweight structure below.
+Publish the complete `write-ops-log` structure to Echo when the investigation
+exposes a durable operational lesson:
 
 ```
 # <System or component>: <symptom>

@@ -81,6 +81,7 @@ class FakeModel:
 
 
 def make_row(**values):
+    values.setdefault("tags", [])
     return type("Row", (), {"_mapping": values, **values})()
 
 
@@ -198,6 +199,7 @@ def test_add_wiki_embeds_applicability_hint_and_body_as_passage(client_with):
         json={
             "title": "  Grafana access  ",
             "use_when": "  Use this when you need to inspect training dashboards.  ",
+            "tags": [" Ops ", "grafana", "ops"],
             "body": "  Use the IAP route.  ",
         },
         headers={"X-Goog-Authenticated-User-Email": "accounts.google.com:agent@openathena.ai"},
@@ -206,8 +208,10 @@ def test_add_wiki_embeds_applicability_hint_and_body_as_passage(client_with):
     insert_params = harness.engine.executions[-1].compile().params
     assert insert_params["author"] == "agent@openathena.ai"
     assert insert_params["use_when"] == "Use this when you need to inspect training dashboards."
+    assert insert_params["tags"] == ["ops", "grafana"]
     assert harness.model.passages == [
-        "Grafana access\n\nUse when: Use this when you need to inspect training dashboards.\n\nUse the IAP route."
+        "Grafana access\n\nUse when: Use this when you need to inspect training dashboards."
+        "\n\nTags: ops, grafana\n\nUse the IAP route."
     ]
     assert harness.model.queries == []
 
@@ -217,6 +221,40 @@ def test_add_wiki_requires_applicability_hint(client_with):
     response = harness.client.post("/api/wiki", json={"title": "Grafana access", "body": "Use the IAP route."})
     assert response.status_code == 422
     assert harness.model.passages == []
+
+
+def test_add_wiki_rejects_non_slug_tag(client_with):
+    harness = client_with([])
+    response = harness.client.post(
+        "/api/wiki",
+        json={"title": "Grafana access", "use_when": "when dashboards fail", "tags": ["Needs Triage"], "body": "Body"},
+    )
+    assert response.status_code == 422
+    assert harness.model.passages == []
+
+
+def test_search_wiki_accepts_repeated_tags(client_with):
+    row = make_row(
+        id=12,
+        created_at=datetime(2026, 7, 27, tzinfo=UTC),
+        updated_at=datetime(2026, 7, 27, tzinfo=UTC),
+        author="agent@openathena.ai",
+        title="Iris scheduler freeze",
+        use_when="when the Iris scheduler stops making progress",
+        tags=["ops", "iris"],
+        body="Inspect controller thread state.",
+        reference_count=0,
+        score=0.03,
+        distance=0.2,
+        lexical_score=0.4,
+    )
+    harness = client_with([row])
+    response = harness.client.get(
+        "/api/wiki/search",
+        params=[("q", "scheduler freeze"), ("tag", "OPS"), ("tag", "iris")],
+    )
+    assert response.status_code == 200
+    assert response.json()[0]["tags"] == ["ops", "iris"]
 
 
 def test_update_wiki_re_embeds_and_keeps_author(client_with):

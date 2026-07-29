@@ -99,11 +99,11 @@ def chunk_search_statement(filter_clauses: Sequence[str] = ()) -> sqlalchemy.Tex
     )
 
 
-def wiki_search_statement() -> sqlalchemy.TextClause:
+def wiki_search_statement(filter_clauses: Sequence[str] = ()) -> sqlalchemy.TextClause:
     return _search_statement(
         table="wiki_entries",
         alias="w",
-        semantic_where=None,
-        lexical_where="w.search_document @@ input.query",
+        semantic_where=" AND ".join(filter_clauses) or None,
+        lexical_where=_where(filter_clauses, "w.search_document @@ input.query"),
         final_order="w.updated_at DESC",
     )
