@@ -36,8 +36,8 @@ function toggleDark() {
       <span
         v-if="store === 'memory'"
         class="text-xs px-1.5 py-0.5 rounded bg-status-warning-bg text-status-warning border border-status-warning-border"
-        title="Database unreachable — serving from the GCS record cache"
-      >GCS cache</span>
+        title="Local mode — serving from the record snapshot with no database"
+      >local</span>
     </div>
     <div class="flex items-center gap-3">
       <span v-if="currentUser" class="text-xs text-text-muted font-mono">{{ currentUser }}</span>

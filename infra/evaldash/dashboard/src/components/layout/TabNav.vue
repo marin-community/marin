@@ -4,7 +4,7 @@ import { RouterLink } from 'vue-router'
 const tabs = [
   { to: '/', label: 'Leaderboard' },
   { to: '/runs', label: 'Runs' },
-  { to: '/status', label: 'Status' },
+  { to: '/debug', label: 'Debug' },
 ]
 </script>
 

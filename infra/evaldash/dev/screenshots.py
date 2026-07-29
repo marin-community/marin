@@ -47,7 +47,7 @@ SHOTS = [
     ("04-sample-mcq.png", "/runs/snowball-2026.07.20-mmlu/samples?task=mmlu&i=1", "text=Choices"),
     ("05-sample-agentic.png", "/runs/snowball-2026.07.20-aime/samples?task=aime&i=0", "text=Trajectory"),
     ("06-run-failed.png", "/runs/tootsie-8b-2026.07.20-aime", "text=Error"),
-    ("07-status.png", "/status", "text=Ingest"),
+    ("07-debug.png", "/debug", "text=Prefixes scanned"),
 ]
 
 
@@ -84,8 +84,6 @@ def main() -> None:
             browser = pw.chromium.launch()
             for scheme in ("light", "dark"):
                 context = browser.new_context(viewport=VIEWPORT, color_scheme=scheme)
-                # The SPA reads its theme from localStorage before first paint; seed it to match.
-                context.add_init_script(f"localStorage.setItem('evaldash-dark-mode', '{scheme == 'dark'}')")
                 page = context.new_page()
                 for name, path, wait_for in SHOTS:
                     if scheme == "dark" and not name.startswith(("01", "03", "05")):
@@ -95,6 +93,8 @@ def main() -> None:
                         page.wait_for_selector(wait_for, timeout=4000)
                     except Exception:
                         print(f"  warn: selector {wait_for!r} not found for {path}")
+                    # The theme is a `.dark` class on <html> (keyed CSS variables); set it directly.
+                    page.evaluate(f"document.documentElement.classList.toggle('dark', {str(scheme == 'dark').lower()})")
                     page.wait_for_timeout(300)
                     dest = out_dir / (name if scheme == "light" else name.replace(".png", "-dark.png"))
                     page.screenshot(path=str(dest), full_page=True)

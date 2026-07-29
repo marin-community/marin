@@ -4,7 +4,6 @@ import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatRelativeAge, formatTimestamp } from '@/utils/formatting'
 import type { Status } from '@/types/api'
-import RefreshButton from '@/components/shared/RefreshButton.vue'
 
 const { data, loading, error, refresh } = useApi<Status>(() => 'api/status')
 
@@ -14,12 +13,12 @@ onViewRefresh(refresh)
 
 <template>
   <section>
-    <div class="flex items-baseline justify-between mb-4">
-      <div>
-        <h2 class="text-lg font-semibold">Status</h2>
-        <p class="text-xs text-text-muted mt-0.5">Ingest health per records prefix and the active data source.</p>
-      </div>
-      <RefreshButton />
+    <div class="mb-4">
+      <h2 class="text-lg font-semibold">Debug</h2>
+      <p class="text-xs text-text-muted mt-0.5">
+        Where records are scanned, the active data source, and any errors seen while ingesting. Use the
+        header Refresh to run an ingest pass now.
+      </p>
     </div>
 
     <div v-if="error" class="rounded border border-status-danger-border bg-status-danger-bg text-status-danger text-sm px-3 py-2 mb-4">
@@ -55,7 +54,7 @@ onViewRefresh(refresh)
       </div>
 
       <div>
-        <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Prefixes</h3>
+        <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Prefixes scanned</h3>
         <div class="space-y-2">
           <div
             v-for="p in data.ingest.prefixes"
