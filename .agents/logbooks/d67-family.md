@@ -435,3 +435,10 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
 ```
 
 - Recovery gate: require production band 1 on the child, a node set different from r5/r6, corrected Trainer preflight, and a finite first-step loss/drop metric.
+
+### 2026-07-28 19:37 PDT - D67-CTL-01 r7 reaches an independent production placement
+
+- Submitted parent `/mwittmann/d67-control-m3-draw1-r7-0728-1935` at 19:33 PDT from commit `39440b540` using the exact command above. Child: `/mwittmann/d67-control-m3-draw1-r7-0728-1935/grug-train-d67-control-m3-draw1-r7-0728-1935`.
+- Attempts 0–2 each had one node fail `Init:Error stage-workdir`; the 15 gang siblings ended `COSCHED_FAILED`. Attempt 3 admitted and all 16 tasks are `running`.
+- Iris SQL records priority band 1 on both job configs and all assigned tasks. Attempt 3 uses 16 nodes with zero overlap against the r5/r6 node set.
+- This is the first independent recovery placement after the distributed first-step stalls. Continue through corrected Trainer preflight and require a finite first-step loss/drop metric before accepting it as an experimental draw.
