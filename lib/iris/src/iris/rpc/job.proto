@@ -605,8 +605,12 @@ enum ExistingJobPolicy {
   EXISTING_JOB_POLICY_RECREATE = 3;
 }
 
+// A client that does not care about the band leaves it INHERIT. LaunchJob resolves
+// INHERIT to the parent's band, or INTERACTIVE for a root, and stores the result;
+// nothing behind that entry point sees INHERIT, so the scheduler, budget, and
+// dispatch paths only ever compare real bands.
 enum PriorityBand {
-  PRIORITY_BAND_UNSPECIFIED = 0;  // defaults to INTERACTIVE
+  PRIORITY_BAND_INHERIT = 0;      // resolved at LaunchJob: parent's band, else INTERACTIVE
   PRIORITY_BAND_PRODUCTION = 1;   // admin-only, never preempted
   PRIORITY_BAND_INTERACTIVE = 2;  // normal work, default
   PRIORITY_BAND_BATCH = 3;        // opportunistic, preemptible

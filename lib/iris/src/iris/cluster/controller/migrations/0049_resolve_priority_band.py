@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Store the band a job resolves to, replacing ``PRIORITY_BAND_UNSPECIFIED`` (0).
+"""Store the band a job resolves to, replacing ``PRIORITY_BAND_INHERIT`` (0).
 
 Submit used to persist the request's band verbatim, so a job that inherited its band
 stored 0 and every reader re-derived a band from it under its own rule. The band is now

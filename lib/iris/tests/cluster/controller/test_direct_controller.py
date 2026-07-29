@@ -7,7 +7,6 @@ import threading
 
 import pytest
 from finelog.rpc import logging_pb2
-from iris.cluster.controller import ops
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
@@ -29,7 +28,7 @@ from iris.rpc import controller_pb2, job_pb2
 from iris.test_util import FakeStatsTable
 from rigging.timing import RateLimiter, Timestamp
 from sqlalchemy import update as sa_update
-from tests.cluster.controller._test_support import ControllerTestState
+from tests.cluster.controller._test_support import ControllerTestState, submit_job_in_tx
 from tests.cluster.controller.transition_driver import commit_dispatch_updates
 
 from .conftest import (
@@ -178,12 +177,12 @@ def test_drain_default_task_image_is_empty(state):
     [
         (
             job_pb2.PRIORITY_BAND_PRODUCTION,
-            job_pb2.PRIORITY_BAND_UNSPECIFIED,
+            job_pb2.PRIORITY_BAND_INHERIT,
             job_pb2.PRIORITY_BAND_PRODUCTION,
         ),
         (
             job_pb2.PRIORITY_BAND_BATCH,
-            job_pb2.PRIORITY_BAND_UNSPECIFIED,
+            job_pb2.PRIORITY_BAND_INHERIT,
             job_pb2.PRIORITY_BAND_BATCH,
         ),
         (
@@ -192,8 +191,8 @@ def test_drain_default_task_image_is_empty(state):
             job_pb2.PRIORITY_BAND_BATCH,
         ),
         (
-            job_pb2.PRIORITY_BAND_UNSPECIFIED,
-            job_pb2.PRIORITY_BAND_UNSPECIFIED,
+            job_pb2.PRIORITY_BAND_INHERIT,
+            job_pb2.PRIORITY_BAND_INHERIT,
             job_pb2.PRIORITY_BAND_INTERACTIVE,
         ),
     ],
@@ -208,8 +207,8 @@ def test_drain_child_priority_uses_explicit_or_inherited_band(state, parent_band
     child_req.name = child_id.to_wire()
 
     with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=parent_id, request=parent_req, ts=Timestamp.now())
-        ops.job.submit(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=parent_id, request=parent_req, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
 
     with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur)
@@ -235,7 +234,7 @@ def test_drain_includes_workdir_files(state):
         replicas=1,
     )
     with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=job_name, request=req, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=job_name, request=req, ts=Timestamp.now())
 
     with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur)
@@ -392,7 +391,7 @@ def test_apply_failed_with_retry(state):
     req.max_retries_failure = 2
     req.max_task_failures = 2
     with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=jid, request=req, ts=Timestamp.now())
     task_id = query_tasks_for_job(state, jid)[0].task_id
 
     with state._db.transaction() as cur:
@@ -428,7 +427,7 @@ def test_apply_failed_no_retry(state):
     req = make_direct_job_request("no-retry-job")
     req.max_retries_failure = 0
     with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=jid, request=req, ts=Timestamp.now())
     task_id = query_tasks_for_job(state, jid)[0].task_id
 
     with state._db.transaction() as cur:
@@ -491,7 +490,7 @@ def test_apply_worker_failed_from_running_retries(state):
     req = make_direct_job_request("wf-retry")
     req.max_retries_preemption = 5
     with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=jid, request=req, ts=Timestamp.now())
     task_id = query_tasks_for_job(state, jid)[0].task_id
 
     with state._db.transaction() as cur:
@@ -563,7 +562,7 @@ def test_k8s_executing_task_past_deadline_is_timed_out(make_controller):
     req = make_direct_job_request("gang-timeout", replicas=1)
     req.timeout.milliseconds = 1000
     with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=jid, request=req, ts=Timestamp.now())
     [task_id] = [t.task_id for t in query_tasks_for_job(state, jid)]
 
     # Start the task two hours before the timeout scan.
@@ -594,7 +593,7 @@ def test_k8s_pending_task_not_timed_out_before_admission(make_controller):
     req = make_direct_job_request("gang-pending", replicas=1)
     req.timeout.milliseconds = 1000
     with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=jid, request=req, ts=Timestamp.now())
     [task_id] = [t.task_id for t in query_tasks_for_job(state, jid)]
 
     # K8s reports Pending/SchedulingGated pods as BUILDING.
@@ -666,7 +665,7 @@ def _submit_cosched(state, name, replicas, *, max_retries_preemption=0, band=0):
     req = make_direct_job_request(name, replicas=replicas, coscheduling_group_by=_GROUP, priority_band=band)
     req.max_retries_preemption = max_retries_preemption
     with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=jid, request=req, ts=Timestamp.now())
     return jid, [t.task_id for t in query_tasks_for_job(state, jid)]
 
 

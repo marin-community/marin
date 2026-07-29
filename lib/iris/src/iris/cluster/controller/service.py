@@ -1365,6 +1365,7 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.LaunchJobRequest,
         pinned_peer_id: str,
         submitting_user: str,
+        priority_band: int,
     ) -> controller_pb2.Controller.LaunchJobResponse:
         """Admit a root job to the federation queue and return the parent's job id.
 
@@ -1382,6 +1383,7 @@ class ControllerServiceImpl:
             pinned_peer_id=pinned_peer_id,
             owner_principal=job_id.user,
             submitting_user=submitting_user,
+            priority_band=priority_band,
         )
         return controller_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
 
@@ -1490,13 +1492,17 @@ class ControllerServiceImpl:
         # user, so it trusts the parent rather than re-gating on its own tiers (the
         # submitter allowlist bounds who may federate here).
         #
-        # Gate the band the job will be stored with, not the one it asked for. A child
-        # that omits the field inherits its parent's band at insert, and the client
-        # chooses whether to send the field — gating the request would let it pick
-        # whether the cap applies at all. Inheriting a band at or below the cap still
-        # passes, so a capped user's children launch normally.
+        # This is the one place INHERIT becomes a real band: resolve it here, gate that
+        # result, and store it. Everything behind this point — the scheduler, spend, the
+        # k8s mapping, a federated handoff — only ever sees PRODUCTION, INTERACTIVE, or
+        # BATCH, so none of them re-derive a band of their own.
+        #
+        # Gating the resolved band rather than the request matters because the client
+        # chooses whether to send the field; gating the request would let it pick whether
+        # the cap applies at all. Inheriting a band at or below the cap still passes, so a
+        # capped user's children launch normally.
         inherited_band: int | None = None
-        if not request.priority_band and job_id.parent is not None:
+        if request.priority_band == job_pb2.PRIORITY_BAND_INHERIT and job_id.parent is not None:
             with self._db.read_snapshot() as _snap:
                 inherited_band = reads.get_priority_bands(_snap, [job_id.parent])[job_id.parent]
         band = ops.job.resolve_priority_band(int(request.priority_band), inherited_band)
@@ -1812,7 +1818,7 @@ class ControllerServiceImpl:
             # Null-auth (dev/loopback) has no real identity to carry, so it federates.
             if self._auth.provider and submitting_user == LOCAL_ADMIN_SUBMITTER:
                 raise ConnectError(Code.PERMISSION_DENIED, _LOCAL_ADMIN_FEDERATION_DENIED)
-            return self._queue_federated_job(job_id, request, plan.pinned_peer_id, submitting_user)
+            return self._queue_federated_job(job_id, request, plan.pinned_peer_id, submitting_user, band)
 
         if plan.disposition == SubmitDisposition.REJECT:
             # Not locally feasible and no reachable peer advertises the shape, so no
@@ -1864,6 +1870,7 @@ class ControllerServiceImpl:
                 job_id=job_id,
                 request=request,
                 ts=Timestamp.now(),
+                priority_band=band,
                 submitting_user=submitting_user,
             )
         self._controller.wake()

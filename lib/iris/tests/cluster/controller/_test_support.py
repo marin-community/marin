@@ -16,8 +16,8 @@ projections through ``Controller`` constructor arguments.
 from dataclasses import dataclass
 
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller import writes
-from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller import ops, reads, writes
+from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
@@ -29,6 +29,7 @@ from iris.cluster.controller.schema import (
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import JobName, WorkerId
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import bindparam, select
 from sqlalchemy import update as sa_update
@@ -140,3 +141,37 @@ def create_attempt_for_test(ctrl: ControllerTestState, task_id: JobName, worker_
             0,
         )
     return next_attempt_id
+
+
+def resolve_band_for_test(cur: Tx, job_id: JobName, requested_band: int) -> int:
+    """Resolve a requested band the way ``LaunchJob`` does, using the open transaction.
+
+    ``ops.job.submit`` takes an already-resolved band, so a test that submits without
+    going through the service has to stand in for the RPC entry point.
+    """
+    inherited_band: int | None = None
+    if requested_band == job_pb2.PRIORITY_BAND_INHERIT and job_id.parent is not None:
+        inherited_band = reads.get_priority_bands(cur, [job_id.parent])[job_id.parent]
+    return ops.job.resolve_priority_band(requested_band, inherited_band)
+
+
+def submit_job_in_tx(
+    cur: Tx,
+    *,
+    job_id: JobName,
+    request: controller_pb2.Controller.LaunchJobRequest,
+    ts: Timestamp | None = None,
+    submitting_user: str | None = None,
+) -> None:
+    """``ops.job.submit`` for a test that owns the transaction, resolving the band first.
+
+    Mirrors what ``LaunchJob`` does at ingestion so the stored band is real.
+    """
+    ops.job.submit(
+        cur,
+        job_id=job_id,
+        request=request,
+        ts=ts if ts is not None else Timestamp.now(),
+        priority_band=resolve_band_for_test(cur, job_id, int(request.priority_band)),
+        submitting_user=submitting_user,
+    )

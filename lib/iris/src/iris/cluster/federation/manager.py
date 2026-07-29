@@ -159,6 +159,7 @@ class FederationManager:
         pinned_peer_id: str,
         owner_principal: str,
         submitting_user: str,
+        priority_band: int,
     ) -> None:
         """Admit a job to the federation queue (``QUEUED_HANDOFF``), choosing no peer.
 
@@ -184,6 +185,7 @@ class FederationManager:
                 owner_principal=owner_principal,
                 submitting_user=submitting_user,
                 request=request,
+                priority_band=priority_band,
             )
         )
 

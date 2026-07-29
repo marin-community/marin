@@ -5,6 +5,7 @@
 
 from collections import defaultdict
 
+import pytest
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.budget import (
     UserTask,
@@ -24,7 +25,7 @@ from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import select
 
-from ._test_support import set_task_state_for_test
+from ._test_support import set_task_state_for_test, submit_job_in_tx
 from .conftest import (
     inject_device_constraints,
     make_controller_state,
@@ -158,7 +159,7 @@ def test_depth_boost_within_band():
             replicas=1,
         )
         with state._db.transaction() as cur:
-            ops.job.submit(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
+            submit_job_in_tx(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
         child_tasks = query_tasks_for_job(state, child_id)
 
         schedulable = _pending(state)
@@ -191,7 +192,7 @@ def _submit_child(state, parent_id: JobName, parent_req, name: str = "child", ba
         priority_band=band,
     )
     with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
     return child_id
 
 
@@ -218,6 +219,27 @@ def test_child_stores_the_inherited_band_on_both_rows():
             child_id: job_pb2.PRIORITY_BAND_PRODUCTION,
             grandchild_id: job_pb2.PRIORITY_BAND_PRODUCTION,
         }
+
+
+def test_submit_refuses_an_unresolved_band():
+    """``ops.job.submit`` rejects INHERIT instead of storing it.
+
+    INHERIT is resolved at ingestion; the guard keeps a future writer that skips that
+    step from putting a 0 back into ``job_config``, where it would sort ahead of
+    PRODUCTION and drop out of the BATCH spend exclusion.
+    """
+    with make_controller_state() as state:
+        job_id = JobName.root("alice", "unresolved")
+        request = make_job_request(name="/alice/unresolved", cpu=1, replicas=1)
+        with pytest.raises(AssertionError, match="unresolved priority band"):
+            with state._db.transaction() as cur:
+                ops.job.submit(
+                    cur,
+                    job_id=job_id,
+                    request=request,
+                    ts=Timestamp.now(),
+                    priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+                )
 
 
 def _activate_job(state, job_id: JobName) -> None:
@@ -337,7 +359,7 @@ def test_production_never_downgraded_by_budget():
 
 
 def test_get_priority_bands_returns_a_real_band_for_every_job():
-    """``get_priority_bands`` never returns UNSPECIFIED (0).
+    """``get_priority_bands`` never returns INHERIT (0).
 
     The scheduler feeds this lookup into ``compute_effective_band`` and sorts on the
     result, so a 0 would place the task ahead of PRODUCTION (1). Submit resolves the
@@ -410,7 +432,7 @@ def test_unplaceable_tasks_do_not_starve_placeable_tasks(make_controller, tmp_pa
         inject_device_constraints(tpu_req)
         jid = JobName.from_string(f"/alice/tpu-job-{i}")
         with ctrl._db.transaction() as cur:
-            ops.job.submit(
+            submit_job_in_tx(
                 cur,
                 job_id=jid,
                 request=tpu_req,
@@ -422,7 +444,7 @@ def test_unplaceable_tasks_do_not_starve_placeable_tasks(make_controller, tmp_pa
     cpu_req = make_job_request(name="/alice/cpu-job", cpu=1, replicas=1)
     inject_device_constraints(cpu_req)
     with ctrl._db.transaction() as cur:
-        ops.job.submit(
+        submit_job_in_tx(
             cur,
             job_id=cpu_jid,
             request=cpu_req,

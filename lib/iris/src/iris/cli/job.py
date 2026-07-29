@@ -732,7 +732,7 @@ def run_iris_job(
         logger.info(f"Task image: {task_image}")
 
     logger.info(f"Using controller: {controller_url}")
-    priority_band = job_pb2.PRIORITY_BAND_UNSPECIFIED
+    priority_band = job_pb2.PRIORITY_BAND_INHERIT
     if priority is not None:
         priority_band = priority_band_value(priority)
         logger.info(f"Priority band: {priority}")
@@ -785,7 +785,7 @@ def _submit_and_wait_job(
     constraints: list[Constraint] | None = None,
     coscheduling: CoschedulingConfig | None = None,
     user: str | None = None,
-    priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
+    priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
     container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,

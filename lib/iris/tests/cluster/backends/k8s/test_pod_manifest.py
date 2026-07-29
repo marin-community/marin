@@ -1119,7 +1119,7 @@ def test_build_pdb_manifest_selector_and_cleanup_labels():
 
 def _cosched_req(task_id: str, attempt_id: int = 0, num_tasks: int = 64, group_by: str = "leafgroup", priority=None):
     if priority is None:
-        priority = job_pb2.PRIORITY_BAND_UNSPECIFIED
+        priority = job_pb2.PRIORITY_BAND_INHERIT
     return make_run_req(
         task_id,
         attempt_id=attempt_id,
