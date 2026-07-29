@@ -12,13 +12,7 @@ from types import MappingProxyType
 
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig, EvalchemyRuntimeConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.harbor.driver_config import (
-    HARBOR_RUNTIME,
-    HarborAgentConfig,
-    HarborEnvironmentConfig,
-    HarborRunConfig,
-    ValidatedHarborConfig,
-)
+from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, ValidatedHarborConfig
 from marin.evaluation.harbor.runner import HarborExecutor
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import EvalRef, EvalTaskRef, HarborRef
@@ -26,9 +20,6 @@ from marin.evaluation.runner import EvalExecutor
 from marin.external_dependencies import EVALCHEMY
 from rigging.secrets import SecretSpec
 
-_TERMINAL_BENCH_DATASET = "DCAgent2/terminal_bench_2"
-_SWEBENCH_RANDOM_100_DATASET = "DCAgent2/swebench-verified-random-100-folders"
-_AGENTIC_CONCURRENCY = 32
 _DAYTONA_ENVIRONMENT_TYPE = "daytona"
 _HARBOR_CONFIG_DIR = Path(__file__).with_name("configs") / "harbor"
 _DAYTONA_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType(
@@ -77,16 +68,11 @@ class EvalchemyDefinition:
 
 @dataclass(frozen=True)
 class HarborDefinition:
-    """Experiment metadata plus one file or temporary Python-authored policy source."""
+    """Experiment metadata plus one Harbor policy source."""
 
     name: str
-    config_path: Path | None = None
-    legacy_config: HarborRunConfig | None = None
+    config_path: Path
     max_eval_instances: int | None = None
-
-    def __post_init__(self) -> None:
-        if (self.config_path is None) == (self.legacy_config is None):
-            raise ValueError("HarborDefinition requires exactly one policy source")
 
     def secret_env_for(self, config: ValidatedHarborConfig) -> Mapping[str, SecretSpec]:
         if config.environment == _DAYTONA_ENVIRONMENT_TYPE:
@@ -128,25 +114,12 @@ class HarborDefinition:
 
 def harbor_definition(
     name: str,
-    config_path: Path,
     max_eval_instances: int | None = None,
 ) -> HarborDefinition:
-    """Create a file-backed Harbor catalog definition."""
+    """Create a Harbor definition from its same-named checked-in YAML policy."""
     return HarborDefinition(
         name=name,
-        config_path=config_path,
-        max_eval_instances=max_eval_instances,
-    )
-
-
-def _harbor_eval(
-    name: str,
-    run: HarborRunConfig,
-    max_eval_instances: int | None = None,
-) -> HarborDefinition:
-    return HarborDefinition(
-        name=name,
-        legacy_config=run,
+        config_path=_HARBOR_CONFIG_DIR / f"{name}.yaml",
         max_eval_instances=max_eval_instances,
     )
 
@@ -184,33 +157,6 @@ def _chat_eval(name: str, task: str, max_gen_toks: int, *, unsafe_code: bool = F
             runtime=EvalchemyRuntimeConfig(requirement=EVALCHEMY.requirement((benchmark_extra,))),
         )
     )
-
-
-def _agentic_eval(
-    name: str,
-    hugging_face_dataset: str,
-    *,
-    agent: str = "terminus-2",
-    n_concurrent: int = 8,
-    max_instances: int | None = None,
-) -> HarborDefinition:
-    return _harbor_eval(
-        name,
-        HarborRunConfig(
-            dataset=f"hf://{hugging_face_dataset}",
-            revision="main",
-            agent=HarborAgentConfig(name=agent),
-            environment=HarborEnvironmentConfig(environment_type=_DAYTONA_ENVIRONMENT_TYPE),
-            n_concurrent=n_concurrent,
-        ),
-        max_instances,
-    )
-
-
-GRUG_OPENCODE_EVAL = harbor_definition(
-    "grug-opencode-id",
-    _HARBOR_CONFIG_DIR / "grug-opencode-id.yaml",
-)
 
 
 EVALS: dict[str, EvaluationDefinition] = {
@@ -291,27 +237,20 @@ EVALS: dict[str, EvaluationDefinition] = {
     # --- Harbor (agentic registry benchmarks) ---
     # aime@1.0 is 60 AIME math problems; the served model solves each in a Daytona sandbox and
     # Harbor's verifier scores the boxed answer. aime-smoke caps the task count for a fast check.
-    "aime-harbor": harbor_definition(
-        "aime-harbor",
-        _HARBOR_CONFIG_DIR / "aime.yaml",
-    ),
-    "aime-smoke": harbor_definition(
-        "aime-smoke",
-        _HARBOR_CONFIG_DIR / "aime-smoke.yaml",
-        2,
-    ),
+    "aime-harbor": harbor_definition("aime-harbor"),
+    "aime-smoke": harbor_definition("aime-smoke", 2),
     # Agentic datasets contain Harbor task directories and run with Daytona.
-    "tb2": _agentic_eval("tb2", _TERMINAL_BENCH_DATASET, n_concurrent=_AGENTIC_CONCURRENCY),
-    "tb2-lite": _agentic_eval("tb2-lite", _TERMINAL_BENCH_DATASET, n_concurrent=4, max_instances=2),
-    "swebench": _agentic_eval("swebench", _SWEBENCH_RANDOM_100_DATASET, n_concurrent=_AGENTIC_CONCURRENCY),
-    "swebench-lite": _agentic_eval("swebench-lite", _SWEBENCH_RANDOM_100_DATASET, n_concurrent=4, max_instances=2),
-    "swebench-full": _agentic_eval("swebench-full", "DCAgent/swebench-verified", n_concurrent=_AGENTIC_CONCURRENCY),
-    "gaia": _agentic_eval("gaia", "DCAgent/gaia_127", n_concurrent=_AGENTIC_CONCURRENCY),
-    "bfcl": _agentic_eval("bfcl", "DCAgent2/bfcl-parity", n_concurrent=_AGENTIC_CONCURRENCY),
-    "aider": _agentic_eval("aider", "DCAgent2/aider_polyglot", n_concurrent=_AGENTIC_CONCURRENCY),
-    "medagentbench": _agentic_eval("medagentbench", "DCAgent/medagentbench", n_concurrent=_AGENTIC_CONCURRENCY),
-    "financeagent": _agentic_eval("financeagent", "DCAgent/financeagent_terminal", n_concurrent=16),
-    "grug-opencode-id": GRUG_OPENCODE_EVAL,
+    "tb2": harbor_definition("tb2"),
+    "tb2-lite": harbor_definition("tb2-lite", 2),
+    "swebench": harbor_definition("swebench"),
+    "swebench-lite": harbor_definition("swebench-lite", 2),
+    "swebench-full": harbor_definition("swebench-full"),
+    "gaia": harbor_definition("gaia"),
+    "bfcl": harbor_definition("bfcl"),
+    "aider": harbor_definition("aider"),
+    "medagentbench": harbor_definition("medagentbench"),
+    "financeagent": harbor_definition("financeagent"),
+    "grug-opencode-id": harbor_definition("grug-opencode-id"),
 }
 
 # A fast cluster smoke: one small MCQ cut plus a capped gsm8k generation task.

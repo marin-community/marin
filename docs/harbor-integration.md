@@ -111,8 +111,9 @@ Local paths resolve against the directory containing the policy. Absolute paths 
 directories fail before Iris submission. Hugging Face selector syntax is checked before submission;
 repository availability is checked when the worker downloads the snapshot.
 
-Checked-in policies live under `experiments/evaluation/configs/harbor/`. Keep suite membership,
-model and hardware selection, and secret source declarations in `experiments/evaluation/evals.py`.
+Every catalog policy lives under `experiments/evaluation/configs/harbor/` and shares its filename
+with its `EVALS` key. Keep suite membership, runtime task caps, model and hardware selection, and
+secret source declarations in `experiments/evaluation/evals.py`.
 
 ## Ownership boundary
 

@@ -8,17 +8,15 @@ import logging
 import subprocess
 import tempfile
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
 
 from marin.evaluation.eval_env import env_vars_from_keys
 from marin.external_dependencies import HARBOR
 
 _TRIAL_DRIVER = Path(__file__).with_name("trial_driver.py")
 _DRIVER_PYTHONPATH = str(Path(__file__).parents[3])
-_DEFAULT_MAX_OUTPUT_TOKENS = 8192
 _DRIVER_SYSTEM_ENV_KEYS = (
     "CURL_CA_BUNDLE",
     "HOME",
@@ -87,109 +85,6 @@ class HarborRuntimeOverlay:
     served_model: str
     task_limit: int | None
     model_agent_kwargs: Mapping[str, object]
-
-
-# Issue #7746 removes these temporary authoring dataclasses after the remaining
-# eleven registry policies move to checked-in YAML.
-@dataclass(frozen=True)
-class HarborRetryConfig:
-    max_retries: int = 0
-    exclude_exceptions: tuple[str, ...] = ()
-    wait_multiplier: float = 1.0
-    min_wait: float = 1.0
-    max_wait: float = 60.0
-
-
-@dataclass(frozen=True)
-class HarborEnvironmentConfig:
-    environment_type: str
-    force_build: bool = False
-    delete: bool = True
-    cpus: int | None = None
-    memory_mb: int | None = None
-    storage_mb: int | None = None
-    kwargs: Mapping[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class HarborAgentConfig:
-    name: str
-    max_output_tokens: int = _DEFAULT_MAX_OUTPUT_TOKENS
-    max_timeout: float | None = None
-    setup_timeout: float | None = None
-    kwargs: Mapping[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class HarborVerifierConfig:
-    max_timeout: float | None = None
-
-
-@dataclass(frozen=True)
-class HarborRunConfig:
-    """Temporary Python authoring form for Harbor policies not yet moved to YAML."""
-
-    dataset: str
-    revision: str
-    agent: HarborAgentConfig
-    environment: HarborEnvironmentConfig
-    n_concurrent: int = 4
-    task_limit: int | None = None
-    attempts: int = 1
-    timeout_multiplier: float = 1.0
-    retry: HarborRetryConfig = field(default_factory=HarborRetryConfig)
-    verifier: HarborVerifierConfig = field(default_factory=HarborVerifierConfig)
-
-
-def legacy_harbor_policy_document(run: HarborRunConfig) -> dict[str, object]:
-    """Lower a not-yet-migrated Python policy for isolated preflight."""
-    agent_kwargs = dict(run.agent.kwargs)
-    configured_model_info = agent_kwargs.get("model_info")
-    if configured_model_info is not None and not isinstance(configured_model_info, Mapping):
-        raise ValueError("Harbor agent model_info must be a mapping")
-    if configured_model_info is not None or run.agent.max_output_tokens != _DEFAULT_MAX_OUTPUT_TOKENS:
-        agent_kwargs["model_info"] = {
-            **(configured_model_info or {}),
-            "max_output_tokens": run.agent.max_output_tokens,
-        }
-
-    if run.dataset.startswith("hf://"):
-        dataset = {"name": run.dataset, "ref": run.revision, "n_tasks": run.task_limit}
-    else:
-        selector = {"ref": run.revision} if "/" in run.dataset else {"version": run.revision}
-        dataset = {"name": run.dataset, **selector, "n_tasks": run.task_limit}
-
-    return {
-        "n_attempts": run.attempts,
-        "timeout_multiplier": run.timeout_multiplier,
-        "n_concurrent_trials": run.n_concurrent,
-        "retry": {
-            "max_retries": run.retry.max_retries,
-            "exclude_exceptions": list(run.retry.exclude_exceptions),
-            "wait_multiplier": run.retry.wait_multiplier,
-            "min_wait_sec": run.retry.min_wait,
-            "max_wait_sec": run.retry.max_wait,
-        },
-        "environment": {
-            "type": run.environment.environment_type,
-            "force_build": run.environment.force_build,
-            "delete": run.environment.delete,
-            "override_cpus": run.environment.cpus,
-            "override_memory_mb": run.environment.memory_mb,
-            "override_storage_mb": run.environment.storage_mb,
-            "kwargs": dict(run.environment.kwargs),
-        },
-        "verifier": {"max_timeout_sec": run.verifier.max_timeout},
-        "agents": [
-            {
-                "name": run.agent.name,
-                "max_timeout_sec": run.agent.max_timeout,
-                "override_setup_timeout_sec": run.agent.setup_timeout,
-                "kwargs": agent_kwargs,
-            }
-        ],
-        "datasets": [dataset],
-    }
 
 
 def _driver_command(command: str, *paths: Path) -> list[str]:

@@ -1,0 +1,10 @@
+n_concurrent_trials: 16
+retry:
+  exclude_exceptions: []
+environment:
+  type: daytona
+agents:
+  - name: terminus-2
+datasets:
+  - name: hf://DCAgent/financeagent_terminal
+    ref: main

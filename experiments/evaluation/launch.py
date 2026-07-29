@@ -6,11 +6,9 @@
 from __future__ import annotations
 
 import getpass
-import json
 import os
 import socket
 import subprocess
-import tempfile
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -22,7 +20,6 @@ from iris.cluster.config import load_config
 from marin.evaluation.harbor.dataset import validate_harbor_dataset_source
 from marin.evaluation.harbor.driver_config import (
     ValidatedHarborConfig,
-    legacy_harbor_policy_document,
     preflight_harbor_configs,
 )
 from marin.evaluation.harbor.runner import canonical_served_name
@@ -51,7 +48,6 @@ from experiments.evaluation.evals import (
     EvalchemyDefinition,
     EvaluationDefinition,
     HarborDefinition,
-    harbor_definition,
 )
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
 from experiments.evaluation.models import models
@@ -127,7 +123,11 @@ def _evaluation_definitions(spec: LaunchSpec) -> tuple[tuple[str, EvaluationDefi
         (eval_key, EVALS[eval_key]) for eval_key in spec.evals
     )
     config_definitions: tuple[tuple[str, EvaluationDefinition], ...] = tuple(
-        (selection.name, harbor_definition(selection.name, selection.path)) for selection in spec.harbor_configs
+        (
+            selection.name,
+            HarborDefinition(name=selection.name, config_path=selection.path),
+        )
+        for selection in spec.harbor_configs
     )
     definitions = registry_definitions + config_definitions
     if not definitions:
@@ -152,18 +152,8 @@ def _preflight_definitions(
     limit: int | None,
 ) -> tuple[tuple[str, _ResolvedDefinition], ...]:
     harbor_definitions = [definition for _, definition in definitions if isinstance(definition, HarborDefinition)]
-    with tempfile.TemporaryDirectory(prefix="marin-harbor-legacy-policies-") as temp_dir:
-        requests: list[tuple[Path, dict[str, object]]] = []
-        for index, definition in enumerate(harbor_definitions):
-            if definition.config_path is not None:
-                path = definition.config_path
-            else:
-                assert definition.legacy_config is not None
-                path = Path(temp_dir) / f"{index:04d}-{definition.name}.json"
-                path.write_text(json.dumps(legacy_harbor_policy_document(definition.legacy_config)))
-                path.chmod(0o600)
-            requests.append((path, dict(model.agent.agent_kwargs)))
-        validated_configs = iter(preflight_harbor_configs(requests))
+    requests = [(definition.config_path, dict(model.agent.agent_kwargs)) for definition in harbor_definitions]
+    validated_configs = iter(preflight_harbor_configs(requests))
 
     resolved: list[tuple[str, _ResolvedDefinition]] = []
     for name, definition in definitions:

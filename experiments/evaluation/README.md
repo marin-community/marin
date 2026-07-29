@@ -143,11 +143,10 @@ environment override; the old `DAYTONA_EVAL_API_KEY` environment alias is not re
 launcher resolves the declaration immediately before Iris submission, and the isolated Harbor
 subprocess receives that key without inheriting the orchestrator's other credentials.
 
-The AIME and Grug catalog policies are YAML under `experiments/evaluation/configs/harbor/`. Evalchemy
-definitions, suite membership, model and hardware selection, and secret source declarations remain in
-Python. [Issue #7746](https://github.com/marin-community/marin/issues/7746) tracks the mechanical
-conversion of the remaining Harbor catalog policies. The Grug OpenCode profile runs its YAML policy
-through the same path:
+Every Harbor catalog policy is YAML under `experiments/evaluation/configs/harbor/`, named after its
+`EVALS` key. Python retains the catalog and suite membership, Evalchemy definitions, model and hardware
+selection, runtime task caps, and secret source declarations. The Grug OpenCode profile runs its YAML
+policy through the same path:
 
 ```bash
 # One OpenCode trial with the step-1903 Grug SFT on H100x8.
@@ -184,9 +183,9 @@ Every explicit `serve` value wins over what `auto_serve_overrides` derives from 
 `config.json`; `generation.extra_gen_kwargs` (e.g. `skip_special_tokens=false` for a thinking model)
 rides on `--gen_kwargs`.
 
-Add an `EvalchemyDefinition` to `EVALS` in `evals.py`, or add a Harbor `JobConfig` YAML under
-`configs/harbor/` and reference it with `harbor_definition()`. Add the key to `SUITES` when it belongs
-in a named group. Task flags that matter for served evals:
+Add an `EvalchemyDefinition` to `EVALS` in `evals.py`, or add a same-named Harbor `JobConfig` YAML
+under `configs/harbor/` and reference it with `harbor_definition()`. Add the key to `SUITES` when it
+belongs in a named group. Task flags that matter for served evals:
 `generation` routes the task through the chat API for chat-template models (MCQ tasks always use
 completions, which alone can echo prompt logprobs); `unsafe_code` passes lm-eval's
 `--confirm_run_unsafe_code`; and `completion_only` pins a generation task to the completions API.
