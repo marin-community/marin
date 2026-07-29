@@ -6,9 +6,14 @@
 import json
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
+from marin.evaluation.harbor.dataset import materialize_harbor_dataset
+from marin.evaluation.harbor.driver_config import preflight_harbor_configs
+
+pytestmark = pytest.mark.integration
 
 _ROOT = Path(__file__).parents[2]
 _DRIVER = _ROOT / "lib/marin/src/marin/evaluation/harbor/trial_driver.py"
@@ -70,6 +75,35 @@ def test_preflight_digest_is_stable_across_hash_seeds(tmp_path, checked_policies
     expected = checked_policies[path.name]
     assert all(result["stable_policy_json"] == expected["stable_policy_json"] for result in seeded)
     assert all(result["digest"] == expected["digest"] for result in seeded)
+
+
+def test_local_source_is_rebased_onto_worker_workspace(tmp_path, monkeypatch):
+    with tempfile.TemporaryDirectory(prefix=".harbor-local-", dir=_ROOT) as launch_dir_string:
+        launch_dir = Path(launch_dir_string)
+        policy_path = launch_dir / "policy.yaml"
+        policy_path.write_text(
+            """
+environment:
+  type: daytona
+agents:
+  - name: terminus-2
+datasets:
+  - path: tasks
+"""
+        )
+        (launch_dir / "tasks").mkdir()
+
+        (config,) = preflight_harbor_configs([(policy_path, {})])
+
+        worker_workspace = tmp_path / "worker"
+        worker_dataset = worker_workspace / launch_dir.relative_to(_ROOT) / "tasks"
+        worker_dataset.mkdir(parents=True)
+        monkeypatch.setattr(
+            "marin.evaluation.harbor.dataset.find_project_root",
+            lambda: worker_workspace,
+        )
+
+        assert materialize_harbor_dataset(config, tmp_path / "workdir", hf_token=None) == worker_dataset
 
 
 def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(tmp_path, checked_policies):

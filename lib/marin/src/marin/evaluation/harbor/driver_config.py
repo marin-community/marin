@@ -12,6 +12,8 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from rigging.config_discovery import find_project_root
+
 from marin.evaluation.eval_env import env_vars_from_keys
 from marin.external_dependencies import HARBOR
 
@@ -60,7 +62,7 @@ class ValidatedHarborConfig:
     dataset_kind: HarborDatasetKind
     dataset_selector: str
     dataset_revision: str | None
-    config_dir: Path
+    workspace_dataset_path: Path | None
     agent: str
     environment: str
 
@@ -153,14 +155,27 @@ def _validated_config(payload: object, path: Path) -> ValidatedHarborConfig:
         dataset_kind = HarborDatasetKind(required_string("dataset_kind"))
     except ValueError as exc:
         raise ValueError(f"Harbor preflight returned an unknown dataset kind for {path}") from exc
+    dataset_selector = required_string("dataset_selector")
+    workspace_dataset_path = None
+    if dataset_kind == HarborDatasetKind.LOCAL:
+        workspace_root = find_project_root(path)
+        if workspace_root is None:
+            raise ValueError(f"Harbor local dataset source must be inside a Marin workspace: {path}")
+        local_dataset_path = (path.resolve().parent / dataset_selector).resolve()
+        try:
+            workspace_dataset_path = local_dataset_path.relative_to(workspace_root)
+        except ValueError as exc:
+            raise ValueError(
+                f"Harbor local dataset source must be inside the Marin workspace: {local_dataset_path}"
+            ) from exc
 
     return ValidatedHarborConfig(
         stable_policy_json=required_string("stable_policy_json"),
         digest=required_string("digest"),
         dataset_kind=dataset_kind,
-        dataset_selector=required_string("dataset_selector"),
+        dataset_selector=dataset_selector,
         dataset_revision=revision,
-        config_dir=path.resolve().parent,
+        workspace_dataset_path=workspace_dataset_path,
         agent=required_string("agent"),
         environment=required_string("environment"),
     )

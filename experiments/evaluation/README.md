@@ -126,8 +126,10 @@ before calling Harbor. Policy agent kwargs override model-catalog kwargs; endpoi
 materialized source, and an explicit `--limit` are reserved runtime values.
 
 Write Hugging Face sources as `datasets[].name: hf://org/repository` with an optional `ref`; do not put
-an `hf://` URI in `datasets[].path`. Local `path` values must be relative to the config file and must
-name an existing directory. Absolute paths, unknown fields, malformed provider kwargs, and unsupported
+an `hf://` URI in `datasets[].path`. Local `path` values must be relative to the config file, must name
+an existing directory inside the Marin workspace, and must be included in the Iris workspace bundle.
+The launcher records the workspace-relative path so the submitted worker resolves the same directory
+under its unpacked workspace. Absolute paths, unknown fields, malformed provider kwargs, and unsupported
 file extensions fail before Iris submission.
 
 Harbor and `harbor_config` are absent from Marin's environment and root lock. Both preflight and execution

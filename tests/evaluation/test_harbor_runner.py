@@ -34,11 +34,11 @@ def _running_model() -> RunningModel:
 
 
 def _validated_config(
-    tmp_path: Path,
     *,
     dataset_kind: HarborDatasetKind = HarborDatasetKind.HARBOR_REGISTRY,
     dataset_selector: str = "aime",
     dataset_revision: str | None = "1.0",
+    workspace_dataset_path: Path | None = None,
     agent: str = "terminus-2",
 ) -> ValidatedHarborConfig:
     return ValidatedHarborConfig(
@@ -47,7 +47,7 @@ def _validated_config(
         dataset_kind=dataset_kind,
         dataset_selector=dataset_selector,
         dataset_revision=dataset_revision,
-        config_dir=tmp_path,
+        workspace_dataset_path=workspace_dataset_path,
         agent=agent,
         environment="daytona",
     )
@@ -69,7 +69,6 @@ def test_materialize_harbor_dataset_downloads_hf_revision_as_local_tasks(tmp_pat
 
     path = materialize_harbor_dataset(
         _validated_config(
-            tmp_path,
             dataset_kind=HarborDatasetKind.HUGGING_FACE,
             dataset_selector="DCAgent2/terminal_bench_2",
             dataset_revision="main",
@@ -92,18 +91,29 @@ def test_materialize_harbor_dataset_downloads_hf_revision_as_local_tasks(tmp_pat
     assert not (snapshot / ".gitattributes").exists()
 
 
-def test_materialize_harbor_dataset_resolves_local_path_from_policy_directory(tmp_path):
-    config_dir = tmp_path / "policy"
-    dataset = config_dir / "tasks"
+def test_materialize_harbor_dataset_rebases_local_path_onto_worker_workspace(tmp_path, monkeypatch):
+    worker_workspace = tmp_path / "worker"
+    dataset = worker_workspace / "policies" / "tasks"
     dataset.mkdir(parents=True)
     config = _validated_config(
-        config_dir,
         dataset_kind=HarborDatasetKind.LOCAL,
         dataset_selector="tasks",
         dataset_revision=None,
+        workspace_dataset_path=Path("policies/tasks"),
+    )
+    monkeypatch.setattr(
+        "marin.evaluation.harbor.dataset.find_project_root",
+        lambda: worker_workspace,
     )
 
-    assert materialize_harbor_dataset(config, tmp_path / "workdir", hf_token=None) == dataset
+    assert (
+        materialize_harbor_dataset(
+            config,
+            tmp_path / "workdir",
+            hf_token=None,
+        )
+        == dataset
+    )
 
 
 def test_write_samples_uses_a_path_safe_name_for_hf_dataset(tmp_path):
@@ -174,7 +184,6 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
 
     executor = HarborExecutor(
         _validated_config(
-            tmp_path,
             dataset_selector=f"toy-{tmp_path.name}",
         ),
         task_limit=7,
@@ -197,9 +206,9 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
     assert outcome.metrics[f"toy-{tmp_path.name}"]["accuracy"] == 1.0
 
 
-def _harbor_executor(dataset: str, tmp_path: Path) -> HarborExecutor:
+def _harbor_executor(dataset: str) -> HarborExecutor:
     return HarborExecutor(
-        _validated_config(tmp_path, dataset_selector=dataset),
+        _validated_config(dataset_selector=dataset),
         task_limit=None,
         model_agent_kwargs={},
     )
@@ -224,7 +233,7 @@ def test_harbor_executor_fails_when_trial_contains_exception_info(tmp_path, monk
         )
 
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
-    executor = _harbor_executor(f"failed-{tmp_path.name}", tmp_path)
+    executor = _harbor_executor(f"failed-{tmp_path.name}")
 
     with pytest.raises(EvaluationError) as exc_info:
         executor(_running_model(), str(tmp_path), {})
@@ -249,7 +258,7 @@ def test_harbor_executor_accepts_zero_reward_without_exception_info(tmp_path, mo
         )
 
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
-    executor = _harbor_executor(f"zero-{tmp_path.name}", tmp_path)
+    executor = _harbor_executor(f"zero-{tmp_path.name}")
 
     outcome = executor(_running_model(), str(tmp_path), {})
 

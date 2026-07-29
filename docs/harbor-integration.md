@@ -107,9 +107,12 @@ datasets:
   - path: tasks
 ```
 
-Local paths resolve against the directory containing the policy. Absolute paths and missing local
-directories fail before Iris submission. Hugging Face selector syntax is checked before submission;
-repository availability is checked when the worker downloads the snapshot.
+Local paths resolve against the directory containing the policy. The resulting directory must remain
+inside the Marin workspace and must be included in the Iris workspace bundle. The launcher stores its
+workspace-relative path so the submitted worker resolves it under the unpacked workspace. Absolute,
+outside-workspace, and missing local directories fail before Iris submission. Hugging Face selector
+syntax is checked before submission; repository availability is checked when the worker downloads the
+snapshot.
 
 Every catalog policy lives under `experiments/evaluation/configs/harbor/` and shares its filename
 with its `EVALS` key. Keep suite membership, runtime task caps, model and hardware selection, and

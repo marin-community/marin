@@ -52,7 +52,7 @@ def _install_fake_harbor_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
                     dataset_kind=HarborDatasetKind.HARBOR_REGISTRY,
                     dataset_selector="aime",
                     dataset_revision="1.0",
-                    config_dir=path.parent,
+                    workspace_dataset_path=None,
                     agent="opencode",
                     environment="daytona",
                 )
