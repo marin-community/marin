@@ -573,3 +573,42 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
 - Attempt 5 recorded one `slice_index` across all 64 GB200 devices, an ideal single-domain placement.
 - The first finite steady-state records cleared the recovery gate. Step 2: 334,015 tok/s, 21.56% MFU, loss 10.0532, drop fraction 28.8754%. Step 3: 347,172 tok/s, 22.41% MFU, loss 11.2073, drop fraction 61.0111%.
 - The large early drop values occur during optimizer warmup and are not the registered outcome. Continue to step 349 and judge drops at the matched tail-100 window, steps 250–349.
+
+### 2026-07-28 21:38 PDT - D67-CTL-01 control draw 1 complete
+
+- Parent and child succeeded after all 350 steps (0–349).
+- Registered tail window, steps 250–349, 100 observations per metric: 322,257.9 tok/s, 20.8038% MFU, 1.4161% drop fraction, and 3.44269 mean loss.
+- Tail ranges: 295,371.3–324,432.0 tok/s, 19.0681–20.9441% MFU, 0.9887–2.6160% drop fraction, and 3.28248–3.69181 loss.
+- Final step 349: 322,304.1 tok/s, 20.8067% MFU, 1.1297% drop fraction, and 3.30556 loss. Loss was finite and lower than the first reported loss, satisfying the registered health check.
+
+### 2026-07-28 21:38 PDT - D67-CTL-02 control draw 2 pre-registration
+
+- Prediction carried forward verbatim from 15:35 PDT, before any experimental result was observed: This draw reproduces the healthy m=3/cf1.0625 operating point. Predict about 321K tokens/s and 20.7% MFU, allowing ±4% tokens/s for placement (308–334K), with tail-100 drops 1.2–1.7%. Loss must remain finite and decline through step 349.
+- Planned parent job ID: `/mwittmann/d67-control-m3-draw2-r1-0728-2140`
+- Planned child job ID: `/mwittmann/d67-control-m3-draw2-r1-0728-2140/grug-train-d67-control-m3-draw2-r1-0728-2140`
+- Exact command:
+
+```bash
+IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
+  --cpu 2 --memory 3GB --extra cpu --priority production \
+  --job-name d67-control-m3-draw2-r1-0728-2140 -e RUN_ID d67-control-m3-draw2-r1-0728-2140 \
+  -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async \
+  -e XLA_FLAGS "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false --xla_gpu_experimental_parallel_collective_overlap_limit=4" \
+  -e SCALE_ATTN_IMPL gpu_fa4_cute -e SCALE_WATCH_INTERVAL 0 -e SCALE_CHECKPOINTS local \
+  -e SCALE_A2A_FIXED 1 -e SCALE_A2A_CHUNKS 1 -e SCALE_A2A_NO_BARRIER 1 \
+  -e SCALE_A2A_GATHER_DISPATCH 1 -e SCALE_A2A_CUSTOM_ADJOINT 1 \
+  -e SCALE_MOE_QB 1 -e SCALE_REPORT_DROPS 1 -e SCALE_A2A_SPILL 3 \
+  -e SCALE_CAPACITY_FACTOR 1.0625 -e SCALE_JOB_PRIORITY 1 \
+  -e SCALE_GPUS_PER_NODE 4 -e SCALE_GPU_TYPE GB200 -e SCALE_GPU_REPLICAS 16 \
+  -e SCALE_EXPERT_AXIS 64 -e SCALE_NUM_EXPERTS 256 -e SCALE_TOP_K 8 \
+  -e SCALE_HIDDEN_DIM 5120 -e SCALE_NUM_LAYERS 48 -e SCALE_INTERMEDIATE 1280 \
+  -e SCALE_SHARED_INTERMEDIATE 5120 -e SCALE_SEQ_LEN 4096 -e SCALE_BATCH 1024 \
+  -e SCALE_SLIDING_WINDOW 2048 -e SCALE_STEPS 350 \
+  -e SCALE_MOE_IMPL ragged_all_to_all -e SCALE_OPTIMIZER muonh -e SCALE_MUON_SYRK 1 \
+  -e SCALE_SCAN_LAYERS 1 -e SCALE_REMAT recompute_all \
+  -e SCALE_TRACKER json_logger -e SCALE_JSON_LOGGER d67-control-m3-draw2-r1-0728-2140.metrics \
+  -e SCALE_DISABLE_CHECKPOINT 1 \
+  -- python -m experiments.grug.moe.launch_cw_scale --version d67-family-dev --run
+```
+
+- Acceptance gate: production band 1, attempt-specific coordinator endpoint, divisible physical-domain placement, and finite loss/drop metrics. Do not submit the trio until this job is terminal.
