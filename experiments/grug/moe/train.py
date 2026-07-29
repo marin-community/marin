@@ -61,6 +61,9 @@ class GrugTrainerConfig:
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 1e-4  # Weight on final-logit logsumexp z-loss stabilization term.
+    # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
+    # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
+    offload_opt_state: bool = False
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -277,6 +280,22 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     return eqx.tree_at(lambda t: t.blocks, model, tuple(new_blocks))
 
 
+def _optimizer_state_to_memory_kind(tree, memory_kind: str):
+    """Move named-sharded optimizer arrays to a JAX memory kind."""
+
+    def _move(leaf):
+        if not isinstance(leaf, jax.Array):
+            return leaf
+        sharding = jax.typeof(leaf).sharding
+        mesh = getattr(sharding, "mesh", None)
+        if mesh is None or len(getattr(mesh, "axis_names", ())) == 0:
+            # Scalar optimizer metadata carries no named mesh and is negligible in HBM.
+            return leaf
+        return jax.device_put(leaf, sharding.with_memory_kind(memory_kind))
+
+    return jax.tree.map(_move, tree)
+
+
 def initial_state(
     model_config: GrugModelConfig,
     *,
@@ -284,16 +303,20 @@ def initial_state(
     mp: jmp.Policy,
     key: PRNGKeyArray,
     ema_beta: float | None,
+    offload_opt_state: bool = False,
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
     if params.blocks is None:
         num_moe_layers = model_config.num_layers
     else:
         num_moe_layers = sum(1 for block in params.blocks if block.mlp is not None)
+    opt_state = optimizer.init(params)
+    if offload_opt_state:
+        opt_state = _optimizer_state_to_memory_kind(opt_state, "pinned_host")
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
-        opt_state=optimizer.init(params),
+        opt_state=opt_state,
         ema_params=params if ema_beta is not None else None,
         pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
     )
@@ -322,6 +345,7 @@ def _make_train_step(
     z_loss_weight: float,
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
+    offload_opt_state: bool = False,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -356,7 +380,10 @@ def _make_train_step(
 
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
         metrics = {"train/loss": loss, **summarized_metrics}
-        updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
+        opt_state_in = (
+            _optimizer_state_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
+        )
+        updates, opt_state = optimizer.update(grads, opt_state_in, qb_params)
         params = optax.apply_updates(qb_params, updates)
 
         if ema_beta is None:
@@ -381,9 +408,12 @@ def _make_train_step(
                 params=qb_params,
                 grads=grads,
                 updates=updates,
-                opt_state=state.opt_state,
+                opt_state=opt_state_in,
                 model_tree_type=type(state.params),
             )
+
+        if offload_opt_state:
+            opt_state = _optimizer_state_to_memory_kind(opt_state, "pinned_host")
 
         next_state = dataclasses.replace(
             state,
@@ -417,6 +447,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
         watch_config=watch_config if watch_config.is_enabled else None,
+        offload_opt_state=config.trainer.offload_opt_state,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
@@ -454,6 +485,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 mp=trainer.mp,
                 key=model_rng,
                 ema_beta=config.trainer.ema_beta,
+                offload_opt_state=config.trainer.offload_opt_state,
             )
 
         state = _init_state(model_key)

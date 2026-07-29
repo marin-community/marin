@@ -36,6 +36,10 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_SCAN_LAYERS   1 stacks all blocks into one lax.scan body; the unrolled
                         production program OOMs. Default off
     SCALE_REPORT_DROPS  1 reports routed assignments dropped by backend capacity
+    SCALE_OFFLOAD_OPT_STATE  1 parks MuonH state in pinned host memory between
+                        steps. Leave unset on the default H100/PCIe run. It was
+                        used at d6144 EP64 on Grace-Blackwell; at d5120 it needed
+                        a 135 GiB pinned arena and regressed to 19.694% MFU
     SCALE_MP            jmp policy (default params=float32,compute=bfloat16,
                         output=bfloat16); params=bfloat16 halves FSDP gather bytes
     SCALE_TRACKER       wandb | json_logger (default json_logger)
@@ -216,6 +220,7 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
     grug_trainer = GrugTrainerConfig(
         expert_axis_size=expert_axis,
         replica_axis_size=replica_axis,
+        offload_opt_state=os.environ.get("SCALE_OFFLOAD_OPT_STATE") == "1",
         **SCALE_TRAINER_DEFAULTS,
     )
 
