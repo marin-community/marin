@@ -83,7 +83,7 @@ def _required_env(key: str) -> str:
 
 
 def build(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
-    """Build one matched full-E256 SFT stage."""
+    """Build one matched SFT stage."""
     arm = SFTArm(_required_env("AUGDK_SFT_ARM"))
     stage = SFTStage(_required_env("AUGDK_SFT_STAGE"))
     init_from = _required_env("AUGDK_SFT_INIT_FROM")
@@ -95,7 +95,11 @@ def build(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
     if arm is SFTArm.FIXED25:
         if model.nested_expert_counts != (128, 16):
             raise ValueError("fixed25 SFT requires SCALE_NESTED_COUNTS=128,16")
-        model = dataclasses.replace(model, nested_batch_fraction=0.0)
+        routing = os.environ.get("AUGDK_SFT_ROUTING", "nested")
+        if routing == "full":
+            model = dataclasses.replace(model, nested_batch_fraction=0.0)
+        elif routing != "nested":
+            raise ValueError("AUGDK_SFT_ROUTING must be 'nested' or 'full'")
     elif model.nested_expert_counts:
         raise ValueError("E256 SFT must not configure nested expert counts")
 
