@@ -1,7 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from experiments.grug.dispatch import _forwarded_env_vars
+from iris.rpc import job_pb2
+
+from experiments.grug.dispatch import _forwarded_env_vars, _job_priority
 
 
 def test_forwarded_env_vars_includes_runtime_settings_and_excludes_dispatcher_platform(monkeypatch) -> None:
@@ -16,3 +18,9 @@ def test_forwarded_env_vars_includes_runtime_settings_and_excludes_dispatcher_pl
     assert forwarded["SCALE_MUON_SYRK"] == "1"
     assert "JAX_PLATFORMS" not in forwarded
     assert "UNRELATED_SETTING" not in forwarded
+
+
+def test_job_priority_inherits_when_unset(monkeypatch) -> None:
+    monkeypatch.delenv("GRUG_JOB_PRIORITY", raising=False)
+
+    assert _job_priority() == job_pb2.PRIORITY_BAND_INHERIT
