@@ -6,17 +6,22 @@
 from collections.abc import Sequence
 
 import sqlalchemy
-from search_config import TEXT_SEARCH_CONFIG, TS_RANK_NORMALIZATION
+from search_config import (
+    LEXICAL_WEIGHT,
+    MAX_SEMANTIC_DISTANCE,
+    RRF_K,
+    TEXT_SEARCH_CONFIG,
+    TS_RANK_NORMALIZATION,
+)
+from search_config import (
+    candidate_limit as configured_candidate_limit,
+)
 
-RRF_K = 60
-LEXICAL_WEIGHT = 2.0
-MIN_CANDIDATES = 40
-CANDIDATE_MULTIPLIER = 4
 HNSW_ITERATIVE_SCAN = sqlalchemy.text("SET hnsw.iterative_scan = relaxed_order")
 
 
 def candidate_limit(limit: int) -> int:
-    return max(MIN_CANDIDATES, limit * CANDIDATE_MULTIPLIER)
+    return configured_candidate_limit(limit)
 
 
 def _where(clauses: Sequence[str], extra: str) -> str:
@@ -83,6 +88,8 @@ def _search_statement(
         JOIN {table} AS {alias} USING (id)
         LEFT JOIN semantic USING (id)
         LEFT JOIN lexical USING (id)
+        WHERE lexical.id IS NOT NULL
+            OR semantic.distance <= {MAX_SEMANTIC_DISTANCE}
         ORDER BY score DESC, {final_order}
         LIMIT :limit
         """

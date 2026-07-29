@@ -29,6 +29,7 @@ import os
 import sys
 from pathlib import Path
 
+import local_search
 import okf
 import requests
 from rigging.auth import (
@@ -53,6 +54,8 @@ LOGIN_CLUSTER = os.environ.get("ECHO_LOGIN_CLUSTER", "marin")
 LOGIN_HINT = "run `iris login`"
 SOURCES = ["github", "discord"]
 KINDS = ["issue", "pr", "comment", "message"]
+DOMAINS = ["wiki", "file", "discord", "pr", "issue"]
+REMOTE_DOMAINS = ["wiki", "discord", "pr", "issue"]
 
 
 def cached_login_provider() -> TokenProvider | None:
@@ -113,6 +116,15 @@ def print_hits(hits: list[dict]) -> None:
         print(f"    {hit['url']}")
 
 
+def print_search_results(results: list[dict]) -> None:
+    for result in results:
+        print(f"{result['score']:.4f} [{result['domain']}] {result['title']}")
+        print(f"    {result['subtitle']}")
+        if result.get("snippet"):
+            print(f"    {result['snippet']}")
+        print(f"    {result['url']}")
+
+
 def print_wiki(entries: list[dict]) -> None:
     for entry in entries:
         print(f"#{entry['id']} {entry['title']} (refs={entry.get('reference_count', 0)}, by {entry['author']})")
@@ -133,13 +145,42 @@ def read_body(value: str) -> str:
 
 
 def cmd_search(args: argparse.Namespace) -> None:
-    print_hits(
-        request(
-            "GET",
-            "/search",
-            params={"q": args.query, "source": args.source, "kind": args.kind, "since": args.since, "limit": args.limit},
+    if args.source or args.kind or args.since:
+        if args.domain:
+            raise SystemExit("--domain cannot be combined with the compatibility filters --source, --kind, or --since")
+        print_hits(
+            request(
+                "GET",
+                "/search",
+                params={
+                    "q": args.query,
+                    "source": args.source,
+                    "kind": args.kind,
+                    "since": args.since,
+                    "limit": args.limit,
+                },
+            )
         )
-    )
+        return
+
+    domains = list(dict.fromkeys(args.domain or DOMAINS))
+    results = []
+    remote_domains = [domain for domain in domains if domain in REMOTE_DOMAINS]
+    if remote_domains:
+        results.extend(
+            request(
+                "GET",
+                "/federated-search",
+                params={"q": args.query, "domain": remote_domains, "limit": args.limit},
+            )
+        )
+    if "file" in domains:
+        local_results, message = local_search.search(args.query, args.limit)
+        results.extend(local_results)
+        if message:
+            print(message, file=sys.stderr)
+    results.sort(key=lambda result: (-result["score"], result["domain"], result["id"]))
+    print_search_results(results[: args.limit])
 
 
 def cmd_grep(args: argparse.Namespace) -> None:
@@ -239,7 +280,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     for name, help_text, default_limit, func in (
-        ("search", "hybrid semantic + lexical activity search", 10, cmd_search),
+        ("search", "federated semantic + lexical search", 10, cmd_search),
         ("grep", "exact substring scan over activity, newest first", 20, cmd_grep),
     ):
         p = sub.add_parser(name, help=help_text)
@@ -248,6 +289,12 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--kind", choices=KINDS)
         if name == "search":
             p.add_argument("--since", type=iso_date, help="YYYY-MM-DD lower bound on chunk date")
+            p.add_argument(
+                "--domain",
+                action="append",
+                choices=DOMAINS,
+                help="search this domain; repeat to select several (default: all)",
+            )
         p.add_argument("--limit", type=bounded_limit, default=default_limit)
         p.set_defaults(func=func)
 

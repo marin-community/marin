@@ -179,6 +179,55 @@ def test_activity_search_rejects_whitespace_without_embedding(client_with):
     assert harness.model.queries == []
 
 
+def test_federated_search_classifies_github_comment_domain(client_with):
+    row = make_row(
+        id=8,
+        source="github",
+        kind="comment",
+        date=datetime(2026, 7, 23, tzinfo=UTC),
+        author="alice",
+        title="Scheduler discussion",
+        url="https://github.com/marin-community/marin/pull/7000#issuecomment-1",
+        text="The scheduler can stop here.",
+        score=0.04,
+        distance=0.2,
+        lexical_score=0.5,
+    )
+    harness = client_with([row])
+    results = echo.federated_search(harness.engine, harness.model, "scheduler", ["pr"], 10)
+    assert [result.model_dump(mode="json") for result in results] == [
+        {
+            "id": "pr:8",
+            "domain": "pr",
+            "title": "Scheduler discussion",
+            "subtitle": "pr · alice · 2026-07-23T00:00:00+00:00",
+            "url": "https://github.com/marin-community/marin/pull/7000#issuecomment-1",
+            "snippet": "The scheduler can stop here.",
+            "score": 0.04,
+            "distance": 0.2,
+            "lexical_score": 0.5,
+        }
+    ]
+
+
+def test_federated_search_drops_weak_semantic_neighbor(client_with):
+    row = make_row(
+        id=8,
+        source="discord",
+        kind="message",
+        date=datetime(2026, 7, 23, tzinfo=UTC),
+        author="alice",
+        title="random",
+        url="https://discord.com/channels/1/2/3",
+        text="unrelated",
+        score=0.02,
+        distance=0.9,
+        lexical_score=None,
+    )
+    harness = client_with([row])
+    assert echo.federated_search(harness.engine, harness.model, "scheduler", ["discord"], 10) == []
+
+
 def test_add_wiki_embeds_applicability_hint_and_body_as_passage(client_with):
     row = make_row(
         id=12,

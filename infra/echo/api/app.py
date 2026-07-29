@@ -11,7 +11,7 @@ import re
 from collections.abc import Iterable
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import dashboard as echo_dashboard
 import hybrid_search
@@ -23,9 +23,10 @@ from fastembed import TextEmbedding
 from google.cloud.sql.connector import Connector
 from pydantic import BaseModel, Field, field_validator
 
-EMBED_MODEL = "BAAI/bge-small-en-v1.5"  # must match the corpus's embedding space
 SOURCES = ("github", "discord")
 KINDS = ("issue", "pr", "comment", "message")
+REMOTE_DOMAINS = ("wiki", "discord", "pr", "issue")
+ECHO_PUBLIC_URL = os.environ.get("ECHO_PUBLIC_URL", "https://echo.oa.dev").rstrip("/")
 MAX_WIKI_TAG_LENGTH = 50
 WIKI_TAG_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
@@ -40,7 +41,7 @@ async def lifespan(app: FastAPI):
             pool_size=5,
             pool_pre_ping=True,
         )
-        app.state.model = TextEmbedding(EMBED_MODEL)
+        app.state.model = TextEmbedding(search_config.EMBED_MODEL)
         try:
             yield
         finally:
@@ -88,6 +89,18 @@ class Chunk(Hit):
     text: str | None
     ref: str | None
     parent: str | None
+
+
+class SearchResult(BaseModel):
+    id: str
+    domain: Literal["wiki", "discord", "pr", "issue"]
+    title: str
+    subtitle: str
+    url: str
+    snippet: str
+    score: float = Field(description="Hybrid reciprocal-rank score; higher is better.")
+    distance: float | None = Field(None, description="Cosine distance; lower is closer.")
+    lexical_score: float | None = Field(None, description="PostgreSQL full-text rank; higher is better.")
 
 
 class LogSummary(BaseModel):
@@ -225,6 +238,67 @@ def chunk_filter_clauses(source: str | None, kind: str | None, since: datetime |
     return clauses
 
 
+def activity_domain_clause(domains: Iterable[str]) -> str:
+    clauses = []
+    selected = set(domains)
+    if "discord" in selected:
+        clauses.append("c.source = 'discord'")
+    if "pr" in selected:
+        clauses.append("(c.source = 'github' AND (c.kind = 'pr' OR (c.kind = 'comment' AND c.url LIKE '%/pull/%')))")
+    if "issue" in selected:
+        clauses.append(
+            "(c.source = 'github' AND (c.kind = 'issue' OR (c.kind = 'comment' AND c.url LIKE '%/issues/%')))"
+        )
+    return f"({' OR '.join(clauses)})"
+
+
+def activity_domain(row: sqlalchemy.Row) -> Literal["discord", "pr", "issue"]:
+    if row.source == "discord":
+        return "discord"
+    if row.kind == "pr" or "/pull/" in row.url:
+        return "pr"
+    return "issue"
+
+
+def quality_result(distance: float | None, lexical_score: float | None) -> bool:
+    return lexical_score is not None or (distance is not None and distance <= search_config.MAX_SEMANTIC_DISTANCE)
+
+
+def activity_search_result(row: sqlalchemy.Row) -> SearchResult:
+    domain = activity_domain(row)
+    title = row.title or snippet(row) or row.url
+    details = [domain]
+    if row.author:
+        details.append(row.author)
+    if row.date:
+        details.append(row.date.isoformat())
+    return SearchResult(
+        id=f"{domain}:{row.id}",
+        domain=domain,
+        title=title,
+        subtitle=" · ".join(details),
+        url=row.url,
+        snippet=snippet(row),
+        score=row.score,
+        distance=row.distance,
+        lexical_score=row.lexical_score,
+    )
+
+
+def wiki_search_result(row: sqlalchemy.Row) -> SearchResult:
+    return SearchResult(
+        id=f"wiki:{row.id}",
+        domain="wiki",
+        title=row.title,
+        subtitle=row.use_when,
+        url=f"{ECHO_PUBLIC_URL}/wiki/{row.id}",
+        snippet=wiki_snippet(row),
+        score=row.score,
+        distance=row.distance,
+        lexical_score=row.lexical_score,
+    )
+
+
 def wiki_filter_clauses(tags: list[str]) -> list[str]:
     return ["w.tags @> CAST(:tags AS text[])"] if tags else []
 
@@ -263,6 +337,43 @@ def search(
     with engine.connect() as conn:
         conn.execute(hybrid_search.HNSW_ITERATIVE_SCAN)
         return [hit(row) for row in conn.execute(statement, params)]
+
+
+@api.get("/federated-search", response_model=list[SearchResult])
+def federated_search(
+    engine: Engine,
+    model: Model,
+    q: str = Query(description="Natural-language query."),
+    domain: list[Literal["wiki", "discord", "pr", "issue"]] | None = Query(
+        None, description="Search this domain; repeat to select several."
+    ),
+    limit: int = Query(search_config.DEFAULT_SEARCH_LIMIT, ge=1, le=search_config.MAX_SEARCH_LIMIT),
+) -> list[SearchResult]:
+    """Search wiki and activity domains and merge their hybrid ranks."""
+    query = q.strip()
+    if not query:
+        raise HTTPException(422, "q must not be blank")
+    domains = list(dict.fromkeys(domain or REMOTE_DOMAINS))
+    params = {
+        "q": query,
+        "embedding": str(query_embedding(model, query)),
+        "candidate_limit": hybrid_search.candidate_limit(limit),
+        "limit": limit,
+    }
+    results: list[SearchResult] = []
+    with engine.connect() as conn:
+        conn.execute(hybrid_search.HNSW_ITERATIVE_SCAN)
+        if "wiki" in domains:
+            for row in conn.execute(hybrid_search.wiki_search_statement(), params):
+                if quality_result(row.distance, row.lexical_score):
+                    results.append(wiki_search_result(row))
+        activity_domains = [candidate for candidate in domains if candidate != "wiki"]
+        if activity_domains:
+            statement = hybrid_search.chunk_search_statement([activity_domain_clause(activity_domains)])
+            for row in conn.execute(statement, params):
+                if quality_result(row.distance, row.lexical_score):
+                    results.append(activity_search_result(row))
+    return sorted(results, key=lambda result: (-result.score, result.domain, result.id))[:limit]
 
 
 @api.get("/grep", response_model=list[Hit])

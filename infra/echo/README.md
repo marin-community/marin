@@ -19,6 +19,7 @@ provides an IAP-gated HTTP interface and browser dashboard.
 
 ```bash
 uv run infra/echo/cli.py search "expert parallel MoE MFU on B200" --limit 10
+uv run infra/echo/cli.py search "ragged_all_to_all" --domain file --domain pr
 uv run infra/echo/cli.py grep ragged_all_to_all --source discord
 uv run infra/echo/cli.py show <id>
 uv run infra/echo/cli.py wiki search "grafana access" --tag ops
@@ -35,13 +36,47 @@ credentials (a key, GCE/Cloud Run metadata, or an ADC impersonating a service ac
 the token instead. `ECHO_API_URL` overrides the target host; `ECHO_LOGIN_CLUSTER` selects
 which cached login to reuse.
 
-`search` uses reciprocal-rank fusion over PostgreSQL full-text and BGE semantic candidates;
-higher scores are better. Exact identifiers and names receive a strong lexical signal while
-paraphrases can enter through the semantic candidates. `grep` is a case-insensitive literal
-substring scan, newest first. Discord results contain one message, so open the result URL
-when the surrounding thread matters. Wiki writes go through the API so it can embed and
-attribute each note. Repeat `wiki search --tag <tag>` to require several tags. Tags are
-normalized to lowercase, deduplicated, and limited to 20 kebab-case values per entry.
+`search` returns one ranked result set across five domains:
+
+- `wiki` searches durable Echo entries.
+- `file` searches tracked files in the current repository checkout.
+- `discord` searches Discord messages.
+- `pr` searches GitHub pull requests and their comments.
+- `issue` searches GitHub issues and their comments.
+
+All domains are searched by default. Repeat `--domain` to select a subset. The old
+activity filters remain available: a search with `--source`, `--kind`, or `--since`
+uses the activity-only endpoint and cannot be combined with `--domain`.
+
+Remote and file results use reciprocal-rank fusion with `k=60`: semantic rank has
+weight 1 and lexical rank has weight 2. Results with a lexical match always qualify.
+A semantic-only result must have cosine distance at most 0.45 (similarity at least
+0.55), so an unrelated nearest neighbor is not returned just because it is the
+closest candidate. Scores compare rank positions, not calibrated relevance
+probabilities. Exact file substrings and repository paths receive the lexical
+signal; paraphrases can enter through BGE semantic retrieval. `grep` remains a
+case-insensitive literal substring scan over activity, newest first.
+
+File search runs in a user-local daemon. The first search starts
+`infra/echo/local_search_daemon.py` through `uv`, prints a warming message, and
+returns the available remote results without waiting for the local model or index.
+Later searches include file results once the background index is ready. The daemon
+stores its Unix socket, log, model assets, and per-checkout SQLite indexes under
+`~/.cache/echo` (`ECHO_CACHE_DIR` overrides this root). It checks a warm checkout
+for changes at most once per minute and serves the previous complete index while a
+refresh runs. Indexes unused for 30 days are removed daily.
+
+The file index starts from `git ls-files`, so untracked files never enter it. It
+accepts source, configuration, and prose file types up to 256 KiB, and rejects
+binary/non-UTF-8 content, lock files, generated/minified files, build and cache
+directories, vendored or external trees, and secret-like names or key/certificate
+extensions. Changed files alone are re-embedded. A file result shows a title,
+repository-relative `path:line` subtitle, matching snippet, and repository path.
+
+Discord results contain one message, so open the result URL when the surrounding
+thread matters. Wiki writes go through the API so it can embed and attribute each
+note. Repeat `wiki search --tag <tag>` to require several tags. Tags are normalized
+to lowercase, deduplicated, and limited to 20 kebab-case values per entry.
 
 Wiki notes are authored as [Open Knowledge Format](https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing)
 (OKF) documents — a markdown file with a YAML frontmatter block. `wiki add --file` and
@@ -74,6 +109,7 @@ the activity corpus and wiki notes. The same service exposes OpenAPI documentati
 `/docs` and the following endpoints, all under `/api`:
 
 - `GET /api/search`
+- `GET /api/federated-search`
 - `GET /api/grep`
 - `GET /api/chunks/{id}`
 - `GET /api/wiki/search`
@@ -87,6 +123,11 @@ the activity corpus and wiki notes. The same service exposes OpenAPI documentati
 
 The API connects to PostgreSQL as `echo-api@hai-gcp-models.iam`; callers do not need
 direct database access.
+
+`GET /api/search` preserves the activity-only response used by existing clients.
+`GET /api/federated-search` accepts repeated `domain=wiki|discord|pr|issue`
+parameters and returns the common ranked result shape. The `file` domain is
+CLI-local because the service cannot observe a caller's checkout.
 
 The dashboard is a Vue single-page app served from the same origin, with client-side
 routes at `/` (search), `/wiki` (recently updated notes), `/wiki/<id>` (a note), and
