@@ -4,6 +4,8 @@
 """Search settings shared by Echo's schema and query statements."""
 
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
+INDEXED_REPOSITORY = "marin-community/marin"
+INDEXED_BRANCH = "main"
 SEARCH_DOMAINS = ("wiki", "file", "discord", "pr", "issue")
 TEXT_SEARCH_CONFIG = "english"
 TS_RANK_NORMALIZATION = 32

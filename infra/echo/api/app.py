@@ -27,7 +27,6 @@ from pydantic import BaseModel, Field, field_validator
 
 SOURCES = ("github", "discord")
 KINDS = ("issue", "pr", "comment", "message")
-REMOTE_DOMAINS = search_config.SEARCH_DOMAINS
 MAX_WIKI_TAG_LENGTH = 50
 WIKI_TAG_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
@@ -41,8 +40,8 @@ class EchoConfig:
 
 DEFAULT_CONFIG = EchoConfig(
     public_url="https://echo.oa.dev",
-    github_repository="marin-community/marin",
-    github_branch="main",
+    github_repository=search_config.INDEXED_REPOSITORY,
+    github_branch=search_config.INDEXED_BRANCH,
 )
 
 
@@ -436,11 +435,11 @@ def federated_search(
     ),
     limit: int = Query(search_config.DEFAULT_SEARCH_LIMIT, ge=1, le=search_config.MAX_SEARCH_LIMIT),
 ) -> list[SearchResult]:
-    """Search wiki and activity domains and merge their hybrid ranks."""
+    """Search wiki, repository file, and activity domains and merge their hybrid ranks."""
     query = q.strip()
     if not query:
         raise HTTPException(422, "q must not be blank")
-    domains = list(dict.fromkeys(domain or REMOTE_DOMAINS))
+    domains = list(dict.fromkeys(domain or search_config.SEARCH_DOMAINS))
     params = {
         "q": query,
         "embedding": str(query_embedding(model, query)),

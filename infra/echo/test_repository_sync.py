@@ -80,7 +80,7 @@ def test_github_blob_accepts_api_line_wrapped_base64(monkeypatch):
     monkeypatch.setattr(
         echo_sync,
         "github_json",
-        lambda path, token: {"encoding": "base64", "content": encoded},
+        lambda _path, _token: {"encoding": "base64", "content": encoded},
     )
 
     assert echo_sync.github_blob("marin-community/marin", "abc", "token") == b"def scheduler():\n    pass\n"

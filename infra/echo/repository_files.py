@@ -179,7 +179,7 @@ def text_chunks(text: str) -> Iterable[TextChunk]:
 
 
 def embed_files(files: Iterable[IndexedFile], embed: EmbeddingProvider) -> list[EmbeddedChunk]:
-    """Embed repository files in bounded batches."""
+    """Return embedded chunks with their repository paths and source line positions."""
     pending: list[tuple[IndexedFile, TextChunk]] = []
     embedded: list[EmbeddedChunk] = []
     for file in files:

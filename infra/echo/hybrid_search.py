@@ -101,7 +101,7 @@ def _search_statement(
     )
 
 
-def full_text_score(alias: str) -> str:
+def full_text_score_expression(alias: str) -> str:
     return f"ts_rank_cd({alias}.search_document, input.query, {TS_RANK_NORMALIZATION})"
 
 
@@ -111,7 +111,7 @@ def chunk_search_statement(filter_clauses: Sequence[str] = ()) -> sqlalchemy.Tex
         alias="c",
         semantic_where=_where(filter_clauses, "c.embedding IS NOT NULL"),
         lexical_where=_where(filter_clauses, "c.search_document @@ input.query"),
-        lexical_score=full_text_score("c"),
+        lexical_score=full_text_score_expression("c"),
         result_key="id",
         final_order="date DESC NULLS LAST",
     )
@@ -123,7 +123,7 @@ def wiki_search_statement(filter_clauses: Sequence[str] = ()) -> sqlalchemy.Text
         alias="w",
         semantic_where=" AND ".join(filter_clauses) or None,
         lexical_where=_where(filter_clauses, "w.search_document @@ input.query"),
-        lexical_score=full_text_score("w"),
+        lexical_score=full_text_score_expression("w"),
         result_key="id",
         final_order="updated_at DESC",
     )
@@ -134,7 +134,7 @@ def repository_file_search_statement() -> sqlalchemy.TextClause:
     path_match = "r.path ILIKE :substring ESCAPE '\\'"
     text_match = "r.text ILIKE :substring ESCAPE '\\'"
     lexical_score = (
-        f"{full_text_score('r')}"
+        f"{full_text_score_expression('r')}"
         f" + CASE WHEN {path_match} THEN 3.0 ELSE 0.0 END"
         f" + CASE WHEN {text_match} THEN 1.0 ELSE 0.0 END"
     )

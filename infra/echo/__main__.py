@@ -22,6 +22,7 @@ import pulumi
 import pulumi_cloudflare as cloudflare
 import pulumi_command as command
 import pulumi_gcp as gcp
+import search_config
 from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv
 from iac.gcp.cloud_run_job import ScheduledCloudRunJob, ScheduledCloudRunJobArgs
 from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT
@@ -56,8 +57,6 @@ API_DB_USER = API_SA.removesuffix(".gserviceaccount.com")
 LOOM_VM_DB_USER = LOOM_VM_SA.removesuffix(".gserviceaccount.com")
 # marinmirror bearer token: a GitHub PAT (read:org) of an Open-Athena member.
 MARINMIRROR_TOKEN_SECRET = "marinmirror-token"
-GITHUB_REPOSITORY = "marin-community/marin"
-GITHUB_BRANCH = "main"
 
 # Login roles for Cloud SQL IAM auth: instanceUser carries the cloudsql.instances.login
 # permission, client lets the connector reach the instance.
@@ -144,8 +143,8 @@ def main() -> None:
                 "CLOUDSQL_CONNECTION": CONNECTION_NAME,
                 "PGDATABASE": DATABASE,
                 "PGUSER": SYNC_DB_USER,
-                "GITHUB_REPOSITORY": GITHUB_REPOSITORY,
-                "GITHUB_BRANCH": GITHUB_BRANCH,
+                "GITHUB_REPOSITORY": search_config.INDEXED_REPOSITORY,
+                "GITHUB_BRANCH": search_config.INDEXED_BRANCH,
             },
             secrets=(SecretEnv(name="MARINMIRROR_TOKEN", secret=MARINMIRROR_TOKEN_SECRET, wait_for=(mirror_token,)),),
             cloudsql_instances=(CONNECTION_NAME,),
@@ -170,8 +169,8 @@ def main() -> None:
                 "CLOUDSQL_CONNECTION": CONNECTION_NAME,
                 "PGDATABASE": DATABASE,
                 "PGUSER": API_DB_USER,
-                "GITHUB_REPOSITORY": GITHUB_REPOSITORY,
-                "GITHUB_BRANCH": GITHUB_BRANCH,
+                "GITHUB_REPOSITORY": search_config.INDEXED_REPOSITORY,
+                "GITHUB_BRANCH": search_config.INDEXED_BRANCH,
             },
             # Keep one instance warm: it holds the ~130 MB embedding model and the DB pool.
             min_instances=1,
