@@ -9,11 +9,11 @@ from fsspec.implementations.memory import MemoryFileSystem
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
 from marin.evaluation.harbor.driver_config import (
     HarborAgentConfig,
-    HarborDriverConfig,
     HarborEnvironmentConfig,
     HarborRetryConfig,
     HarborRunConfig,
     HarborVerifierConfig,
+    MarinHarborConfig,
     native_job_config,
 )
 from marin.evaluation.harbor.runner import (
@@ -119,7 +119,7 @@ def test_harbor_trials_round_trip_through_remote_storage(protocol, tmp_path, mon
 
 
 def test_native_job_config_translates_the_external_harbor_contract():
-    config = HarborDriverConfig(
+    config = MarinHarborConfig(
         job_name="job",
         jobs_dir="/tmp/jobs",
         dataset_path=None,

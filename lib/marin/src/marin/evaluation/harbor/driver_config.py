@@ -85,7 +85,7 @@ class HarborRunConfig:
 
 
 @dataclass(frozen=True)
-class HarborDriverConfig:
+class MarinHarborConfig:
     """Stable Marin policy plus runtime values lowered into a native Harbor job."""
 
     job_name: str
@@ -201,7 +201,7 @@ def _opencode_config_for_endpoint(config: object, endpoint_url: str) -> dict[str
     }
 
 
-def native_job_config(config: HarborDriverConfig) -> dict[str, Any]:
+def native_job_config(config: MarinHarborConfig) -> dict[str, Any]:
     """Translate the stable Marin config into the pinned Harbor ``JobConfig`` schema."""
     run = config.run
     agent_kwargs = dict(run.agent.kwargs)
@@ -252,7 +252,7 @@ def native_job_config(config: HarborDriverConfig) -> dict[str, Any]:
         "agents": [
             {
                 "name": run.agent.name,
-                "model_name": f"hosted_vllm/{config.served_model}",
+                "model_name": f"{_HOSTED_VLLM_PROVIDER}/{config.served_model}",
                 "max_timeout_sec": run.agent.max_timeout,
                 "override_setup_timeout_sec": run.agent.setup_timeout,
                 "kwargs": agent_kwargs,
@@ -282,7 +282,7 @@ def adapt_native_job_config(
         dataset["n_tasks"] = task_limit
 
     agent = resolved["agents"][0]
-    agent["model_name"] = f"hosted_vllm/{served_model}"
+    agent["model_name"] = f"{_HOSTED_VLLM_PROVIDER}/{served_model}"
     agent_kwargs = {**model_agent_kwargs, **agent.get("kwargs", {})}
     agent_kwargs["api_base"] = endpoint_url
     if agent.get("name") == _OPENCODE_AGENT:

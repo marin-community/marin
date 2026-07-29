@@ -336,8 +336,8 @@ def test_build_evaluation_batch_accepts_a_native_harbor_config(tmp_path, monkeyp
 
     captured: dict = {}
 
-    def run_driver(command, *, check, env) -> None:
-        assert check
+    def run_driver(command, **options) -> None:
+        assert options["env"]["DAYTONA_API_KEY"] == "daytona-key"
         job_config = json.loads(Path(command[-1]).read_text())
         captured.update(job_config)
         trial_dir = Path(job_config["jobs_dir"]) / job_config["job_name"] / "trial-one"
@@ -373,6 +373,14 @@ def test_launch_rejects_incompatible_native_harbor_config_before_iris_submission
         agents="""  - name: terminus-2
   - name: opencode""",
     )
+    iris_opened = False
+
+    def open_iris_client(**_kwargs):
+        nonlocal iris_opened
+        iris_opened = True
+        raise AssertionError("Iris must not be opened for an incompatible Harbor config")
+
+    monkeypatch.setattr("experiments.evaluation.cli.open_iris_client", open_iris_client)
 
     result = CliRunner().invoke(
         cli,
@@ -387,4 +395,4 @@ def test_launch_rejects_incompatible_native_harbor_config_before_iris_submission
     )
 
     assert result.exit_code == 2
-    assert "exactly one agent" in result.output
+    assert not iris_opened
