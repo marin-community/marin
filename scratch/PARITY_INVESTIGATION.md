@@ -42,7 +42,7 @@ them proves nothing; a gap in this harness means something.
 | F13 | **Every exp146 and exp153 production run shares an identical token budget of 4,567,040 sequences.** Batch size varies and steps vary inversely: bs 64/71,360, bs 128/35,680, bs 256/17,840 | Equal-*step* comparisons across different batch sizes are **not** equal-token — see the F6 correction below |
 | F14 | Within exp146, same LR/WD at different batch sizes lands differently: lr 3.162e-3 wd 0.4 gives **2.7952 at bs 128** but **2.7025 at bs 256**; the wd 0.2 winner ran **bs 64 → 2.7107** | **Batch size is an independent lever worth ~0.09**, untested by anything in this investigation. exp153 ran bs 128, exp146's best runs ran bs 256 |
 | F15 | **B1 complete, 390 matched steps: TPU splash vs TPU `JAX_FLASH`, everything else identical.** Final 4.090732 vs 4.103658 (**+0.32%**); mean delta over the run **+0.00629**, sign-oscillating throughout | **B1 refuted, and a real confound closed.** Every earlier platform comparison varied the attention kernel alongside the platform, because `JAX_FLASH` is mandatory on GPU. It turns out not to matter, so F2/F7/F8/F9 stand as platform results rather than kernel results |
-| F16 | *(in progress, ~81%)* The 4,460-step HP arms trace an **arc, not a trend**: +0.006 (step 500) → peak +0.028 (step 2600) → decline to +0.021 (step 3200) → **sharp reacceleration in the decay phase: +0.032, +0.062, +0.089 through step 3599, still climbing** | **Do not conclude yet.** I twice called this saturating and was twice wrong. Cosine decay is where the LR difference finally expresses, exactly as flagged when the arms launched. Direction favours **exp153's lr 1e-3 / wd 0.8**, i.e. the opposite of exp146's sweep |
+| F16 | **A5 complete, 4,460 steps.** Final **3.886545 (lr 1e-3 / wd 0.8) vs 3.951600 (lr 3.1623e-3 / wd 0.2) — delta +0.065 (1.67%)**. The delta traces an arc: +0.006 (step 500) → +0.028 (2600) → +0.021 (3200) → **peak +0.097 (3650, decay phase)** → settles to +0.064 | **A1/A2/A5 answered: LR/WD is worth ~0.065, at most ~0.097 transiently.** That is a fifth of the 0.34–0.40 gap — real but not the cause. **Direction favours exp153's lr 1e-3 / wd 0.8**, inverting the premise the ablation was built on: exp153's hyperparameters are not wrong at 1.5B/bs32. I called this curve saturating twice before the decay phase and was wrong both times |
 | F17 | **C4 complete.** bs 16 x 800 vs bs 32 x 400, matched 12,768-sequence budget, fixed LR. Delta decays monotonically: −1.09 (2.4k seqs) → −0.29 (4.8k) → −0.05 (10.4k) → **−0.016 at the matched endpoint**; late-half mean −0.046 | **C4 refuted as an explanation.** The early advantage is an update-count transient that washes out. The residual is ~20x too small for the 0.34–0.40 gap — *and* the comparison confounds three things (batch size, update count, effective LR per token, since LR was not scaled with batch), so even the residual is not cleanly attributable to batch size |
 
 ### The horizon problem with F10
@@ -97,10 +97,10 @@ Ordered by how much they would explain, not by how interesting they are.
 
 | id | hypothesis | test | status |
 |---|---|---|---|
-| A1 | LR 1e-3 is simply wrong at this scale; the optimum is ~3.16e-3 | rerun 1.5B at both LRs, same platform | open |
-| A2 | WD 0.8 over-regularizes; winners cluster 0.1–0.4 | rerun at wd 0.2 vs 0.8 | open |
+| A1 | LR 1e-3 is simply wrong at this scale; the optimum is ~3.16e-3 | rerun 1.5B at both LRs, same platform | **REFUTED (F16)** — lr 1e-3 *wins* by 0.065 at 1.5B/bs32 |
+| A2 | WD 0.8 over-regularizes; winners cluster 0.1–0.4 | rerun at wd 0.2 vs 0.8 | **REFUTED (F16)** — wd 0.8 wins in the same arm |
 | A3 | The gap is mostly "62% vs 100% under cosine" | compare exp153's curve to exp146 at *equal step* | **REFUTED (F6)** — gap is flat ~0.40 at every matched step |
-| A5 | The ~0.40 is an LR/WD effect: 1e-3 vs 3.1623e-3 (half a decade) and wd 0.8 vs 0.2 (4x) | HP ablation on ONE platform, no hardware involved | open — highest value |
+| A5 | The ~0.40 is an LR/WD effect: 1e-3 vs 3.1623e-3 (half a decade) and wd 0.8 vs 0.2 (4x) | HP ablation on ONE platform, no hardware involved | **REFUTED (F16)** — worth 0.065, wrong sign |
 | A4 | The 6B arch is not a clean width-scale (64 heads x 64 head_dim vs hidden 3200; 2:1 GQA vs 4:1), so LR does not transfer — exp108 showed transfer holds under width, not depth | short 6B run at several LRs | open |
 
 ### B — Platform / numerics
@@ -143,7 +143,7 @@ Ordered by how much they would explain, not by how interesting they are.
 | 07-29 | `parity-tpu-long` — v6e-4, 400 steps (B4) | finished, final train 4.090732 → **platform closed (F9)** |
 | 07-29 | `parity-hp-exp153` — GB200x4, 400 steps, **lr 1e-3 / wd 0.8** (A5) | finished, final train 4.102407 |
 | 07-29 | `parity-hp-exp146` — GB200x4, 400 steps, **lr 3.1623e-3 / wd 0.2** (A5) | finished, final train 4.131758 → **0.7% apart (F12)** |
-| 07-29 | `parity-hp-exp153-long` / `parity-hp-exp146-long` — GB200x4, **4,460 steps** | running — resolves the horizon problem at the step where exp153's gap opens |
+| 07-29 | `parity-hp-exp153-long` / `parity-hp-exp146-long` — GB200x4, **4,460 steps** | finished, 3.886545 vs 3.951600 → **A1/A2/A5 refuted (F16)** |
 | 07-29 | `parity-tpu-flash` — v6e-4, 400 steps, `ATTN=JAX_FLASH` (B1) | finished, final train 4.103658 vs 4.090732 baseline → **B1 refuted (F15)** |
 | 07-29 | `parity-tpu-bs16` — v6e-4, bs 16 x 800 steps (C4) | finished → **C4 refuted (F17)**, −0.016 at the matched endpoint |
 
