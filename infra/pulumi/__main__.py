@@ -37,6 +37,24 @@ from iac.nodepools import derive_nodepools
 from rigging.secrets import resolve_secret_spec
 
 DEFAULT_NAMESPACE = "iris"
+DEFAULT_COREWEAVE_KUBECONFIG = os.path.expanduser("~/.kube/coreweave-iris")
+
+
+def _require_kubeconfig(cluster: str) -> None:
+    """Require KUBECONFIG in the execution environment, offering the default CoreWeave kubeconfig path."""
+    if os.environ.get("KUBECONFIG"):
+        return
+    candidate = DEFAULT_COREWEAVE_KUBECONFIG
+    if os.path.isfile(candidate) and sys.stdin.isatty():
+        answer = input(f"KUBECONFIG is unset; use {candidate}? [Y/n] ").strip().lower()
+        if answer in ("", "y", "yes"):
+            os.environ["KUBECONFIG"] = candidate
+            return
+    hint = f" (e.g. export KUBECONFIG={candidate})" if os.path.isfile(candidate) else ""
+    raise ValueError(
+        f"cluster {cluster!r} requires KUBECONFIG; "
+        f"Pulumi reads Kubernetes credentials from the execution environment{hint}"
+    )
 
 
 def _warn_if_no_persistent_signing_key(cluster: str, iris_config) -> None:
@@ -85,22 +103,21 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
             f"cluster {cluster!r} has no platform.coreweave config; "
             "the minimal IaC cut needs an out-of-cluster Kubernetes target"
         )
-    if not os.environ.get("KUBECONFIG"):
-        raise ValueError(
-            f"cluster {cluster!r} requires KUBECONFIG; "
-            "Pulumi reads Kubernetes credentials from the execution environment"
-        )
-    # Bind to the cluster's declared kube_context, not the kubeconfig's current-context —
-    # otherwise a stack silently targets whatever `kubectl` was last pointed at.
-    #
-    # enable_patch_force=True: declared here until the "cede" ships (spec.md §4). Iris's
-    # controller still re-applies RBAC/NodePools under its own field manager on every restart, so
-    # a plain SSA dry-run reports a field conflict without forced ownership (README §Adoption
-    # check). KUBECONFIG stays in the execution environment instead of becoming a provider
-    # input, which keeps credentials and machine-local paths out of Pulumi state.
+    # Require an explicit context: omitting it makes the provider use the kubeconfig's
+    # current-context (whatever kubectl last pointed at), which can silently retarget
+    # another CoreWeave cluster sharing ~/.kube/coreweave-iris.
+    if not platform_coreweave.kube_context:
+        raise ValueError(f"cluster {cluster!r} missing required platform.coreweave.kube_context")
+    _require_kubeconfig(cluster)
+    # kubeconfig="": bypasses the Python SDK's default of copying $KUBECONFIG into
+    # the provider input (which persists a machine-local path in state, creating spurious diffs)
+    # The provider process still loads credentials from the ambient KUBECONFIG env.
+    # enable_patch_force=True: allows pulumi to take control of resources it didn't create.
+    # This should not happen in practice, but could during manual operations.
     k8s_provider = k8s.Provider(
         "cw-k8s",
-        context=platform_coreweave.kube_context or None,
+        kubeconfig="",
+        context=platform_coreweave.kube_context,
         enable_patch_force=True,
     )
 
