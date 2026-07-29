@@ -96,6 +96,22 @@ kill the process before distributed init on this build, and that the JAX 0.11
 baseline sits **1.217pp below** the 0.10.1-era baseline, so pre-0.11 numbers cannot
 be borrowed as controls.
 
+**A4 — widen the dispatcher's forwarded-env prefix.** Found while building A3, and it
+is a prerequisite for A3's guidance being true rather than aspirational. On `main`,
+`experiments/grug/dispatch.py` forwards only
+`("XLA_FLAGS", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_")`, and Iris tasks do not inherit the
+submitter's shell. `XLA_PYTHON_CLIENT_ALLOCATOR` matches none of those prefixes and is
+set nowhere else in the repo, so a run launched from `main` with
+`-e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async` silently gets the default BFC allocator on
+the accelerator tasks — the exact configuration the standing protocol forbids.
+
+The research branches already fixed this and `main` never picked it up: `agent/deri-d67`
+and `agent/deri-d2-build` both carry
+`("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "CE_", "SCALE_")`. Take the `XLA_FLAGS`
+→ `XLA_` widening. Note `moe-standalone-ep` (`75c517148`) still has the narrow tuple, so
+standalone-benchmark numbers from that line may have run on the default allocator —
+worth checking before any of them are used as a control.
+
 A1 first, always. It is one line of the fix plus the metric, and it is what makes
 every subsequent measurement interpretable — including settling the unmeasured drop
 rates of the FSDP figures the EP work is being compared against.
