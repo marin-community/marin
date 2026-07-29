@@ -1,7 +1,7 @@
 # D-1: FSDP baseline token-drop rates
 
-Status: both corrected production-band child gangs are queued on
-`cw-us-east-08a`; no D-1 metrics inspected.
+Status: blocked before training by a repeatable node-local Iris failure. No D-1
+model metrics exist.
 
 The first submission attempt used the federated `marin` route and
 `interactive` priority. Both jobs remained outside the target cluster's
@@ -29,11 +29,25 @@ stopped before training. The dispatcher now accepts an explicit
 `GRUG_JOB_PRIORITY=production`; its child rows must show `priority_band=1`
 before either job is accepted as a measurement.
 
-The priority fix and drop metric run from source commit `fc5532108`.
+The priority fix and drop metric run from source commit `fc5532108`. The
+corrected children all entered `cw-us-east-08a` at production
+`priority_band=1`, were admitted by Kueue after preemption, and received a
+16-node topology assignment. Each admitted gang then failed before the Python
+training process started: one member was assigned to node `s6xvdgb4`, failed
+with terminal reason `Init:Error stage-workdir`, and caused Iris to bounce the
+other 15 members for atomic rescheduling. The same node and init-container
+failure occurred in D-1a attempts r5, r6, and r7 and D-1b attempt r4. Iris
+terminated each gang immediately because `max_task_failures=0`.
+
+The node was newly registered at 2026-07-28 22:53 UTC. Before r7, Kubernetes
+reported clean node conditions and another active workload on it, so r7 was
+the single recovery attempt after that material state change. It failed the
+same way. No further retries were launched because the failure is repeatable,
+node-local, and precedes all model code.
 
 ## TL;DR
 
-The measurements are pending. D-1a is the positive control: its chunked local
+The measurements are blocked. D-1a is the positive control: its chunked local
 expert path has a static per-chunk capacity and should report nonzero overflow.
 D-1b uses the unchunked local expert path, which has no capacity, so its
 pre-registered prediction is exactly zero drops.
@@ -90,22 +104,28 @@ model and implementation.
 
 ## D-1a: d6144, 4-of-128, chunk-2
 
-Job ID: `/mwittmann/d1a-fsdp-drops-350-r5-20260728-2348`
-
-Submission state at 2026-07-28 23:48 UTC: all 16 child tasks had production
-`priority_band=1` and zero assigned workers. Kueue reported that 8 of 16 nodes
-fit and it was preempting four workloads to admit the gang.
+Final job ID: `/mwittmann/d1a-fsdp-drops-350-r7-20260728-2359`
 
 Training gang:
-`/mwittmann/d1a-fsdp-drops-350-r5-20260728-2348/grug-train-d1a-fsdp-drops-350-r5-20260728-2348`
+`/mwittmann/d1a-fsdp-drops-350-r7-20260728-2359/grug-train-d1a-fsdp-drops-350-r7-20260728-2359`
+
+Earlier production-band attempts:
+
+- `/mwittmann/d1a-fsdp-drops-350-r5-20260728-2348`
+- `/mwittmann/d1a-fsdp-drops-350-r6-20260728-2354`
+
+All three child gangs were persisted with production `priority_band=1` and
+admitted by Kueue. In every attempt, one child failed
+`Init:Error stage-workdir` on `s6xvdgb4`; the other 15 were atomically bounced.
+No training process started.
 
 Exact command:
 
 ```bash
 IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run \
   --no-wait --user mwittmann --priority production --memory 2GB \
-  --job-name d1a-fsdp-drops-350-r5-20260728-2348 \
-  -e RUN_ID d1a-fsdp-drops-350-r5-20260728-2348 \
+  --job-name d1a-fsdp-drops-350-r7-20260728-2359 \
+  -e RUN_ID d1a-fsdp-drops-350-r7-20260728-2359 \
   -e GRUG_JOB_PRIORITY production \
   -e SCALE_GPUS_PER_NODE 4 -e SCALE_GPU_TYPE GB200 \
   -e SCALE_GPU_REPLICAS 16 -e SCALE_EXPERT_AXIS 1 -e SCALE_REPLICA_AXIS 1 \
@@ -125,7 +145,7 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run \
   -e CE_IMPL liger -e CE_LIGER_CHUNK 8192 \
   -e SCALE_REMAT recompute_all -e SCALE_MOE_EXPERT_CHUNKS 2 \
   -e SCALE_REPORT_DROPS 1 -e SCALE_TRACKER json_logger \
-  -e SCALE_JSON_LOGGER d1a-fsdp-drops-350-r5-20260728-2348.metrics \
+  -e SCALE_JSON_LOGGER d1a-fsdp-drops-350-r7-20260728-2359.metrics \
   -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async \
   -e XLA_FLAGS "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false --xla_gpu_experimental_parallel_collective_overlap_limit=4" \
   -- python -m experiments.grug.moe.launch_cw_scale \
@@ -139,20 +159,23 @@ QB/XSA/gating/MuonH stack, and two expert chunks. The historical command
 omitted the two widths because those were the heuristic defaults; they are
 explicit here to prevent default drift.
 
-Observed capacity factor: pending
+Observed capacity factor: unavailable. Static configuration resolves to `1.0`,
+but the runtime hyperparameter log was never emitted.
 
-Results: pending
+Results: unavailable. Run length was configured for 350 steps, but the run
+completed zero training steps. There is no LR position, drop fraction, MFU,
+tok/s, or loss trajectory to report. The positive control was not exercised.
 
 ## D-1b: d5120, 8-of-256, unchunked
 
-Job ID: `/mwittmann/d1b-fsdp-drops-120-r4-20260728-2349`
-
-Submission state at 2026-07-28 23:49 UTC: all 16 child tasks had production
-`priority_band=1` and zero assigned workers. Kueue reported that no node yet
-fit and it was preempting one workload to admit the gang.
+Final job ID: `/mwittmann/d1b-fsdp-drops-120-r4-20260728-2349`
 
 Training gang:
 `/mwittmann/d1b-fsdp-drops-120-r4-20260728-2349/grug-train-d1b-fsdp-drops-120-r4-20260728-2349`
+
+All 16 child tasks were persisted with production `priority_band=1` and
+admitted by Kueue. One child failed `Init:Error stage-workdir` on
+`s6xvdgb4`; the other 15 were atomically bounced. No training process started.
 
 Exact command:
 
@@ -190,10 +213,24 @@ window 2048, MuonH with SYRK, and the sonic-cute/FA4 backends. The historical
 one rack and global batch 1024. `SCALE_MOE_EXPERT_CHUNKS=1` makes the historical
 unchunked default explicit.
 
-Observed capacity factor: pending
+Observed capacity factor: unavailable. Static configuration resolves to `1.0`,
+but the runtime hyperparameter log was never emitted.
 
-Results: pending
+Results: unavailable. Run length was configured for 120 steps, but the run
+completed zero training steps. There is no LR position, drop fraction, MFU,
+tok/s, or loss trajectory to report. In particular, the predicted structural
+zero was not measured and is not being reported as a result.
 
 ## Verdict
 
-Pending D-1a validation and both completed measurements.
+No EP-versus-FSDP fairness verdict can be rendered from these jobs. The
+comparison remains unresolved because neither FSDP drop rate was measured, and
+the D-1a positive control never reached model code. Reporting D-1b's static
+prediction as a zero measurement would violate the pre-registered
+positive-control rule.
+
+The missing prerequisite is an Iris/Kubernetes scheduling path that excludes
+or repairs `s6xvdgb4` for this gang. After that infrastructure change, rerun
+D-1a first and confirm a nonzero drop metric before interpreting D-1b. No
+cluster restart, node cordon, or other shared-infrastructure mutation was
+performed during this work.

@@ -29,7 +29,15 @@ controller persisted all 16 tasks in each child gang with `priority_band=1`.
 Kueue then reported active workload preemption rather than the previous
 interactive-band capacity wait.
 
+The corrected gangs were admitted, but D-1a attempts r5, r6, and r7 and D-1b
+attempt r4 all failed before training. In every case, one member landed on node
+`s6xvdgb4` and terminated with `Init:Error stage-workdir`; Iris atomically
+bounced the other 15 members. Kubernetes reported clean node conditions before
+r7, but r7 reproduced the same failure. The priority propagation fix is
+validated independently of this node-local infrastructure blocker.
+
 ## Future work
 
 - Decide whether Iris should inherit a parent job's priority when a child leaves
   its priority unspecified.
+- Repair or exclude `s6xvdgb4` before rerunning the D-1 positive control.
