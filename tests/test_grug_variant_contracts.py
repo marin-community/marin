@@ -23,6 +23,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
+import levanter.grug.attention._fa4_cute as fa4_cute
 import numpy as np
 import optax
 import pytest
@@ -457,7 +458,7 @@ def test_grug_moe_model_init_against_single_expert_mesh():
 def test_grug_moe_scanned_and_unscanned_forward_values_match():
     model_module = importlib.import_module("experiments.grug.moe.model")
     cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=128, seq_len=4)
-    cfg = dataclasses.replace(cfg, num_layers=5)
+    cfg = dataclasses.replace(cfg, num_layers=5, disable_long_rope=True)
     key = jax.random.PRNGKey(0)
     tokens = jnp.arange(4, dtype=jnp.int32).reshape(1, 4)
     mesh = _single_device_grug_mesh()
@@ -515,6 +516,55 @@ def test_grug_moe_scale_launcher_builds_one_homogeneous_scan(monkeypatch):
     assert stablehlo.count("stablehlo.while") == 1
     with pytest.raises(ValueError, match="requires disable_pko=True"):
         model_module.Transformer.init(dataclasses.replace(cfg, disable_pko=False), key=jax.random.PRNGKey(0))
+
+
+def test_grug_moe_fa4_bounds_are_loop_invariant_in_scanned_graph(monkeypatch):
+    def consume_precomputed_bounds(q, k, v, mask):
+        del k, v
+        assert mask.fa4_bounds is not None
+        lower_bounds, valid = mask.fa4_bounds
+        return q + lower_bounds[..., None, None].astype(q.dtype) * 0 + valid[..., None, None].astype(q.dtype) * 0
+
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    monkeypatch.setattr(fa4_cute, "gpu_fa4_cute_attention", consume_precomputed_bounds)
+    cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=128, seq_len=8)
+    cfg = dataclasses.replace(
+        cfg,
+        num_layers=5,
+        use_array_stacked_blocks=True,
+        attention_implementation="gpu_fa4_cute",
+    )
+    tokens = jnp.arange(8, dtype=jnp.int32).reshape(1, 8)
+    mesh = _single_device_grug_mesh()
+
+    with jax.set_mesh(mesh):
+        model = model_module.Transformer.init(cfg, key=jax.random.PRNGKey(0))
+        closed_jaxpr, _, _ = eqx.filter_make_jaxpr(model)(tokens)
+        stablehlo = eqx.filter_jit(model).lower(tokens).as_text()
+
+    layer_scan = next(
+        equation
+        for equation in closed_jaxpr.jaxpr.eqns
+        if equation.primitive.name == "scan" and equation.params["length"] == cfg.num_layers
+    )
+    scan_body = layer_scan.params["jaxpr"]
+    long_bounds, short_bounds, valid = scan_body.invars[:3]
+    layer_uses_long_mask = scan_body.invars[-1]
+    select_bounds, rematerialized_layer = scan_body.eqns
+
+    assert [var.aval.shape for var in (long_bounds, short_bounds, valid)] == [(1, 8)] * 3
+    assert [var.aval.dtype for var in (long_bounds, short_bounds, valid)] == [
+        jnp.dtype(jnp.int32),
+        jnp.dtype(jnp.int32),
+        jnp.dtype(jnp.bool_),
+    ]
+    assert select_bounds.primitive.name == "jit"
+    assert [equation.primitive.name for equation in select_bounds.params["jaxpr"].eqns] == ["select_n"]
+    assert select_bounds.invars == [layer_uses_long_mask, long_bounds, short_bounds]
+    assert rematerialized_layer.primitive.name == "remat2"
+    assert rematerialized_layer.invars[-3:] == [select_bounds.outvars[0], valid, layer_uses_long_mask]
+    assert stablehlo.count("stablehlo.while") == 1
+    assert "stablehlo.case" not in stablehlo
 
 
 def test_grug_moe_scan_layers_one_step_lowers():
