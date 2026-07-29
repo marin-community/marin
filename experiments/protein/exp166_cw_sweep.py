@@ -207,10 +207,20 @@ HF_EXPORT_BYTES: int = int(5.48 * 1024**3)
 # for every larger one, because parameters, gradients and optimizer state are FSDP-sharded
 # over the data axis while activations are not.
 #
-# EMPTY ON PURPOSE. exp153's H100 value of 8 was measured on the 6B and does not transfer
-# to this 1.5B. Fill each entry from a calibration probe (SMOKE=yes with PER_DEVICE,
-# stepping up until it stops surviving) before any production run on that GPU type.
-MAX_SEQS_PER_DEVICE: dict[str, int] = {}
+# exp153's H100 value of 8 was measured on the 6B and does not transfer to this 1.5B, so
+# each entry here comes from a probe on this model (SMOKE=yes with PER_DEVICE).
+#
+# GB200 = 32: measured 2026-07-29 on one node (4 chips). pd=32 at batch 128 trained,
+# evaluated and checkpointed cleanly at 110,030 tokens/s. 32 is the largest microbatch a
+# single node can be asked for at batch 128 (128/4), not an observed ceiling — the true
+# limit is higher and unmeasured. It comfortably covers both planned shapes, which need 4
+# and 16 sequences per device.
+#
+# H100 is deliberately absent: no probe has been run for this model on that GPU, and a
+# production run there will fail loudly rather than guess.
+MAX_SEQS_PER_DEVICE: dict[str, int] = {
+    "GB200": 32,
+}
 
 
 # --- Targets -----------------------------------------------------------------
