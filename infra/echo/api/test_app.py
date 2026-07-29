@@ -257,6 +257,12 @@ def test_federated_file_result_names_exact_indexed_head(client_with):
     ]
 
 
+def test_file_summary_skips_license_boilerplate_for_filename_match():
+    text = '# Copyright The Marin Authors\n# SPDX-License-Identifier: Apache-2.0\n\n"""Search Echo activity."""'
+
+    assert echo.representative_file_line(text, "app.py", 1) == (4, '"""Search Echo activity."""')
+
+
 def test_repository_index_reports_searchable_partial_build(client_with):
     state = make_row(
         commit_sha="fedcba9876543210",

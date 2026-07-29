@@ -29,6 +29,14 @@ SOURCES = ("github", "discord")
 KINDS = ("issue", "pr", "comment", "message")
 MAX_WIKI_TAG_LENGTH = 50
 WIKI_TAG_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+FILE_BOILERPLATE_PREFIXES = (
+    "# copyright",
+    "// copyright",
+    "/* copyright",
+    "# spdx-license-identifier:",
+    "// spdx-license-identifier:",
+    "* spdx-license-identifier:",
+)
 
 
 @dataclass(frozen=True)
@@ -396,8 +404,9 @@ def representative_file_line(text: str, query: str, start_line: int) -> tuple[in
         if lowered_query in line.casefold():
             return start_line + offset, line.strip()
     for offset, line in enumerate(lines):
-        if line.strip():
-            return start_line + offset, line.strip()
+        stripped = line.strip()
+        if stripped and not stripped.casefold().startswith(FILE_BOILERPLATE_PREFIXES):
+            return start_line + offset, stripped
     return start_line, ""
 
 
