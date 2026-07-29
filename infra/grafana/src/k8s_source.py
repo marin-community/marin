@@ -224,8 +224,8 @@ def _age_seconds(timestamp: str | None) -> int | None:
     return max(int((datetime.now(UTC) - created).total_seconds()), 0)
 
 
-def _deletion_overdue_seconds(timestamp: str) -> int | None:
-    """Return age past a deletion deadline, or None for an invalid deadline."""
+def _age_seconds_or_none(timestamp: str | None) -> int | None:
+    """Seconds since an API timestamp, or None when it is missing or malformed."""
     try:
         return _age_seconds(timestamp)
     except (TypeError, ValueError):
@@ -574,7 +574,7 @@ class K8sSource:
             architectures[name] = ((node.get("status") or {}).get("nodeInfo") or {}).get("architecture") or ""
         return architectures
 
-    def arch_mismatch_pods(self) -> list[dict]:
+    def arch_mismatch_containers(self) -> list[dict]:
         """One row per container that died of an exec-format failure on a non-amd64 node.
 
         Detection is the runtime signature described at EXEC_FORMAT_EXIT_CODE, scoped
@@ -594,7 +594,7 @@ class K8sSource:
                 terminated = _exec_format_termination(status)
                 if terminated is None:
                     continue
-                age = _terminated_age_seconds(terminated)
+                age = _age_seconds_or_none(terminated.get("finishedAt"))
                 if age is None or age > ARCH_MISMATCH_LOOKBACK_SECONDS:
                     continue
                 rows.append(
@@ -626,7 +626,7 @@ class K8sSource:
             deletion_timestamp = metadata.get("deletionTimestamp")
             if not deletion_timestamp:
                 continue
-            overdue_seconds = _deletion_overdue_seconds(deletion_timestamp)
+            overdue_seconds = _age_seconds_or_none(deletion_timestamp)
             if overdue_seconds is not None and overdue_seconds < STUCK_TERMINATION_OVERDUE_SECONDS:
                 continue
             spec = pod.get("spec") or {}
@@ -789,13 +789,6 @@ def _terminated_runtime_seconds(terminated: dict) -> float | None:
         return None
 
 
-def _terminated_age_seconds(terminated: dict) -> int | None:
-    try:
-        return _age_seconds(terminated.get("finishedAt"))
-    except (TypeError, ValueError):
-        return None
-
-
 def _exec_format_termination(status: dict) -> dict | None:
     """Return the termination record matching the exec-format signature, if either state does."""
     for state_key in ("state", "lastState"):
@@ -947,8 +940,8 @@ class K8sFleet:
     def gpu_racks(self) -> list[dict]:
         return self._fan_out(lambda s: s.gpu_racks(), self._error_row)
 
-    def arch_mismatch_pods(self) -> list[dict]:
-        return self._fan_out(lambda s: s.arch_mismatch_pods(), self._error_row)
+    def arch_mismatch_containers(self) -> list[dict]:
+        return self._fan_out(lambda s: s.arch_mismatch_containers(), self._error_row)
 
     def finelog_health(self) -> list[FinelogHealth]:
         """One health row per k8s finelog mirror, including API failures."""
@@ -1078,6 +1071,25 @@ class K8sFleet:
 
         return self._fan_out(deadlocks, lambda _err: [{"node": "", "reason": "", "value": 0}])
 
+    def _counts_with_zero_rows(self, counts: dict[tuple[str, ...], int], labels: Sequence[str]) -> list[dict]:
+        """Turn counts keyed by ``(cluster, *labels)`` into alert rows, zero-filling clean clusters.
+
+        Every cluster keeps at least one row so the rule's NoData state stays
+        unreachable, and a cluster with no qualifying evidence reads as zero rather
+        than as a gap.
+        """
+        rows = [
+            {"cluster": key[0], **dict(zip(labels, key[1:], strict=True)), "value": count}
+            for key, count in sorted(counts.items())
+        ]
+        affected = {key[0] for key in counts}
+        rows.extend(
+            {"cluster": source.target.name, **dict.fromkeys(labels, ""), "value": 0}
+            for source in self._sources
+            if source.target.name not in affected
+        )
+        return rows
+
     def alert_arch_mismatch(self, rows: Sequence[dict] | None = None) -> list[dict]:
         """Per cluster, node, and image: failed-container count, with zero rows where clean.
 
@@ -1085,56 +1097,24 @@ class K8sFleet:
         routes: absence of evidence is not evidence of a mismatch, and
         K8sClusterUnreachable already pages for the unreachability itself.
         """
-        scanned = list(rows) if rows is not None else self.arch_mismatch_pods()
-        counts: dict[tuple[str, str, str], int] = {}
+        scanned = list(rows) if rows is not None else self.arch_mismatch_containers()
+        counts: dict[tuple[str, ...], int] = {}
         for row in scanned:
             if row.get("error_class"):
                 continue
             key = (row.get("cluster") or "", row.get("node") or "", row.get("image") or "")
             counts[key] = counts.get(key, 0) + 1
-
-        alert_rows = [
-            {"cluster": cluster, "node": node, "image": image, "value": count}
-            for (cluster, node, image), count in sorted(counts.items())
-        ]
-        affected = {cluster for cluster, _, _ in counts}
-        alert_rows.extend(
-            {"cluster": source.target.name, "node": "", "image": "", "value": 0}
-            for source in self._sources
-            if source.target.name not in affected
-        )
-        return alert_rows
+        return self._counts_with_zero_rows(counts, ("node", "image"))
 
     def alert_stuck_gpu_pods(self, candidates: Sequence[TerminatingPodResult] | None = None) -> list[dict]:
         """Return node-grouped counts plus zero rows where no qualifying evidence exists."""
         rows = list(candidates) if candidates is not None else self.termination_candidates()
-        by_node: dict[tuple[str, str], int] = {}
+        counts: dict[tuple[str, ...], int] = {}
         for row in rows:
             if not isinstance(row, TerminatingPod):
                 continue
             if row.classification != TerminationClass.NODE_CLEANUP or row.gpu_count <= 0:
                 continue
             key = (row.cluster, row.node)
-            by_node[key] = by_node.get(key, 0) + 1
-
-        alert_rows = []
-        affected_clusters = set()
-        for (cluster, node), count in sorted(by_node.items()):
-            affected_clusters.add(cluster)
-            alert_rows.append(
-                {
-                    "cluster": cluster,
-                    "node": node,
-                    "value": count,
-                }
-            )
-        for source in self._sources:
-            if source.target.name not in affected_clusters:
-                alert_rows.append(
-                    {
-                        "cluster": source.target.name,
-                        "node": "",
-                        "value": 0,
-                    }
-                )
-        return alert_rows
+            counts[key] = counts.get(key, 0) + 1
+        return self._counts_with_zero_rows(counts, ("node",))

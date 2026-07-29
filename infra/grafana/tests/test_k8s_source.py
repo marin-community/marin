@@ -652,7 +652,7 @@ def _arch_routes(pods: list[dict], *, nodes: list[dict] | None = None) -> dict:
 
 def test_arch_mismatch_reports_exec_format_failures_on_a_non_amd64_node():
     routes = _arch_routes([_exec_format_pod("task-0")])
-    (row,) = make_k8s_source(k8s_api(routes)).arch_mismatch_pods()
+    (row,) = make_k8s_source(k8s_api(routes)).arch_mismatch_containers()
     assert row["pod"] == "task-0"
     assert row["container"] == "stage-workdir"
     assert row["node"] == "gpu-a"
@@ -667,7 +667,7 @@ def test_arch_mismatch_ignores_the_same_failure_on_an_amd64_node():
         [_exec_format_pod("task-0", node_name="cpu-a")],
         nodes=[node("cpu-a", arch="amd64")],
     )
-    assert make_k8s_source(k8s_api(routes)).arch_mismatch_pods() == []
+    assert make_k8s_source(k8s_api(routes)).arch_mismatch_containers() == []
 
 
 @pytest.mark.parametrize(
@@ -681,19 +681,19 @@ def test_arch_mismatch_ignores_the_same_failure_on_an_amd64_node():
 )
 def test_arch_mismatch_rejects_terminations_outside_the_signature(kwargs):
     routes = _arch_routes([_exec_format_pod("task-0", **kwargs)])
-    assert make_k8s_source(k8s_api(routes)).arch_mismatch_pods() == []
+    assert make_k8s_source(k8s_api(routes)).arch_mismatch_containers() == []
 
 
 def test_arch_mismatch_reads_last_state_for_a_restarting_container():
     routes = _arch_routes([_exec_format_pod("task-0", state_key="lastState")])
-    (row,) = make_k8s_source(k8s_api(routes)).arch_mismatch_pods()
+    (row,) = make_k8s_source(k8s_api(routes)).arch_mismatch_containers()
     assert row["pod"] == "task-0"
 
 
 def test_arch_mismatch_skips_pods_on_a_node_the_scan_cannot_resolve():
     # An unscheduled pod has no nodeName, so there is no architecture to judge it against.
     routes = _arch_routes([_exec_format_pod("task-0", node_name="")])
-    assert make_k8s_source(k8s_api(routes)).arch_mismatch_pods() == []
+    assert make_k8s_source(k8s_api(routes)).arch_mismatch_containers() == []
 
 
 def test_alert_arch_mismatch_groups_by_node_and_image_with_zero_rows_elsewhere():

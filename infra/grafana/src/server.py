@@ -527,11 +527,11 @@ def create_app(
         return JSONResponse(k8s_fleet.alert_stuck_gpu_pods(rows))
 
     def k8s_arch_mismatch(_: Request) -> JSONResponse:
-        return k8s_endpoint(_K8S_ARCH_MISMATCH_CACHE_KEY, k8s_fleet.arch_mismatch_pods)
+        return k8s_endpoint(_K8S_ARCH_MISMATCH_CACHE_KEY, k8s_fleet.arch_mismatch_containers)
 
     def k8s_alerts_arch_mismatch(_: Request) -> JSONResponse:
         # Shares the detail scan's cache entry, as stuck_gpu_pods does.
-        rows = k8s_cache.get_or_compute(_K8S_ARCH_MISMATCH_CACHE_KEY, k8s_fleet.arch_mismatch_pods)
+        rows = k8s_cache.get_or_compute(_K8S_ARCH_MISMATCH_CACHE_KEY, k8s_fleet.arch_mismatch_containers)
         return JSONResponse(k8s_fleet.alert_arch_mismatch(rows))
 
     def health(_: Request) -> JSONResponse:
