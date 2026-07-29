@@ -36,6 +36,8 @@ from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topolog
 from iris.cluster.types import (
     AUTO_DEVICE_VARIANT,
     DEFAULT_BACKEND_ID,
+    DEFAULT_USER_BUDGET_LIMIT,
+    DEFAULT_USER_BUDGET_MAX_BAND,
     LOCAL_CLUSTER,
     AcceleratorType,
     CapacityType,
@@ -648,6 +650,11 @@ class UserBudgetTier(_Config):
     max_band: PriorityBandField = 0  # highest band these users may submit to
 
 
+class UserBudgetDefaultsConfig(_Config):
+    budget_limit: int = DEFAULT_USER_BUDGET_LIMIT
+    max_band: PriorityBandField = DEFAULT_USER_BUDGET_MAX_BAND
+
+
 class EndpointSpec(_Config):
     uri: str = ""  # http(s)://host:port, gcp://<service>, k8s://<service>[.<ns>]
     metadata: dict[str, str] = Field(default_factory=dict)  # resolver hints
@@ -766,6 +773,7 @@ class IrisClusterConfig(_OneofConfig):
     # synthesized from the top-level platform/scale_groups/provider fields by
     # resolve_backends. Mixing the two is rejected by validate_config.
     backends: dict[str, BackendConfig] | None = None
+    user_budget_defaults: UserBudgetDefaultsConfig = Field(default_factory=UserBudgetDefaultsConfig)
     user_budgets: list[UserBudgetTier] = Field(default_factory=list)
     endpoints: dict[str, EndpointSpec] = Field(default_factory=dict)
     # Federation peers (peer id -> declaration): remote Iris controllers this

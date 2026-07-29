@@ -456,6 +456,10 @@ class PendingTask:
     res_device_json: str | None
 
 
+DEFAULT_USER_BUDGET_LIMIT = 1000
+DEFAULT_USER_BUDGET_MAX_BAND = job_pb2.PRIORITY_BAND_INTERACTIVE
+
+
 @dataclass
 class UserBudgetDefaults:
     """Budget settings applied when a user has no override row in ``user_budgets``.
@@ -464,8 +468,8 @@ class UserBudgetDefaults:
     ``compute_effective_band`` downgrades INTERACTIVE work to BATCH.
     """
 
-    budget_limit: int = 1000
-    max_band: int = job_pb2.PRIORITY_BAND_INTERACTIVE
+    budget_limit: int = DEFAULT_USER_BUDGET_LIMIT
+    max_band: int = DEFAULT_USER_BUDGET_MAX_BAND
 
 
 class WorkerUsability(StrEnum):
