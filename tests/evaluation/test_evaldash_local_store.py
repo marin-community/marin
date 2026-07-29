@@ -109,6 +109,9 @@ def test_api_surface_over_fixtures(client):
 
     runs = client.get("/api/runs?limit=100").json()
     assert len(runs) == 13
+    # Rows carry version (from the record jsonb) so the client can facet on it.
+    assert any(row["version"] == "2026.07.20" for row in runs)
+    assert {row["version"] for row in runs} >= {"2026.07.19", "2026.07.20", "2026.07.21"}
 
     detail = client.get("/api/runs/snowball-2026.07.20-mmlu").json()
     assert detail["status"] == "succeeded"

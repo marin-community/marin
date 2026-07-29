@@ -5,6 +5,7 @@ export interface RunRow {
   run_id: string
   group_id: string | null
   created_at: string
+  version: string | null
   user_name: string | null
   model_name: string | null
   model_location: string | null

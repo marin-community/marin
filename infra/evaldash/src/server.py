@@ -120,6 +120,7 @@ def record_to_row(record: EvalRunRecord) -> dict:
         "run_id": record.run_id,
         "group_id": record.group_id,
         "created_at": record.created_at,
+        "version": record.version,
         "user_name": record.user,
         "model_name": record.model.name,
         "model_location": record.model.location,
@@ -387,6 +388,8 @@ class PgRecordStore(RecordStore):
             record = by_id.get(row.get("run_id"))
             row["tasks"] = [task.name for task in record.evaluation.tasks] if record else []
             row["jobs"] = dict(record.jobs) if record else {}
+            # version lives only in the record jsonb, not an eval_runs column, so fill it from the cache.
+            row["version"] = record.version if record else None
         return rows
 
     def group_siblings(self, group_id: str, exclude_run_id: str) -> list[dict]:
