@@ -35,12 +35,7 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
-from iris.cluster.platforms.k8s.coreweave_topology import (
-    COSCHEDULE_NVLINK_DOMAIN_SLICED,
-    NVL72_GPUS_PER_NODE,
-    balanced_rack_slice_size,
-    gpu_gang_coscheduling_level,
-)
+from iris.cluster.platforms.k8s.coreweave_topology import gpu_gang_coscheduling_level
 from iris.cluster.types import (
     CoschedulingConfig,
     EnvironmentSpec,
@@ -90,17 +85,7 @@ def resolve_coscheduling(device: DeviceConfig, replicas: int) -> CoschedulingCon
             return None
         return CoschedulingConfig(group_by="tpu-name")
     if isinstance(device, GpuConfig):
-        level = gpu_gang_coscheduling_level(device.variant, replicas)
-        if level == COSCHEDULE_NVLINK_DOMAIN_SLICED:
-            if device.count != NVL72_GPUS_PER_NODE:
-                raise ValueError(
-                    f"A sliced multi-rack {device.variant} gang requires node-saturating pods "
-                    f"({NVL72_GPUS_PER_NODE} GPUs each); got {device.count}"
-                )
-            try:
-                balanced_rack_slice_size(replicas)
-            except ValueError as e:
-                raise ValueError(f"{replicas} replicas for {device.variant}: {e}") from e
+        level = gpu_gang_coscheduling_level(device.variant, device.count, replicas)
         return CoschedulingConfig(group_by=level)
     return None
 

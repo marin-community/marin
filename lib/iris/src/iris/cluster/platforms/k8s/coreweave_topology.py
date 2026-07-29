@@ -146,7 +146,17 @@ def balanced_rack_slice_size(num_tasks: int) -> int:
     return slice_size
 
 
-def gpu_gang_coscheduling_level(gpu_variant: str, replicas: int) -> str:
+def sliced_gpu_gang_rack_size(gpu_count: int, replicas: int) -> int:
+    """Return the rack slice size for a node-saturating multi-rack NVL72 gang."""
+    if gpu_count != NVL72_GPUS_PER_NODE:
+        raise ValueError(
+            f"sliced multi-rack placement requires node-saturating NVL72 pods "
+            f"({NVL72_GPUS_PER_NODE} GPUs each); got {gpu_count}"
+        )
+    return balanced_rack_slice_size(replicas)
+
+
+def gpu_gang_coscheduling_level(gpu_variant: str, gpu_count: int, replicas: int) -> str:
     """The Kueue topology level a multi-node GPU gang of ``replicas`` nodes should bind to.
 
     NVL72 (GB200/GB300) nodes carry ``ds.coreweave.com/nvlink.domain`` and one rack is a
@@ -167,5 +177,6 @@ def gpu_gang_coscheduling_level(gpu_variant: str, replicas: int) -> str:
     if is_rack_based(gpu_variant):
         if replicas <= SCHEDULABLE_RACK_NODES:
             return COSCHEDULE_NVLINK_DOMAIN
+        sliced_gpu_gang_rack_size(gpu_count, replicas)
         return COSCHEDULE_NVLINK_DOMAIN_SLICED
     return COSCHEDULE_LEAFGROUP
