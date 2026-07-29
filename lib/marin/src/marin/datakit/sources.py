@@ -29,11 +29,13 @@ from marin.datakit.download.davinci_dev import (
     davinci_dev_env_native_normalize_steps,
 )
 from marin.datakit.download.diagnostic_logs import GHALOGS_ROUGH_TOKENS_B, ghalogs_public_normalize_steps
+from marin.datakit.download.docx_corpus import docx_corpus_normalize_steps
 from marin.datakit.download.dolma3_5_code import dolma3_5_code_prose_normalize_steps
 from marin.datakit.download.dolma4pdfs import dolma4pdfs_normalize_steps
 from marin.datakit.download.eai_taxonomy_code import eai_taxonomy_code_normalize_steps
 from marin.datakit.download.finepdfs import finepdfs_normalize_steps
 from marin.datakit.download.finetranslations import finetranslations_normalize_steps
+from marin.datakit.download.glm_kernelgym_rollouts import glm_kernelgym_rollouts_normalize_steps
 from marin.datakit.download.gpt_oss_rollouts import gpt_oss_rollouts_normalize_steps
 from marin.datakit.download.hplt import hplt_v3_normalize_steps
 from marin.datakit.download.institutional_books import institutional_books_normalize_steps
@@ -156,11 +158,18 @@ def all_sources() -> dict[str, DatakitSource]:
         ("davinci-dev/ctx-native", davinci_dev_ctx_native_normalize_steps, 57.57),
         ("davinci-dev/env-native", davinci_dev_env_native_normalize_steps, 2.58),
         # Exact count measured with marin-community/marin-tokenizer:
+        # 1,497,301,429 tokens / 242,086 docs.
+        ("docx-corpus/en", docx_corpus_normalize_steps, 1.497301429),
+        # Exact count measured with marin-community/marin-tokenizer:
         # 65,538,632,427 tokens / 31,179,056 docs.
         ("dolma_code_prose", dolma3_5_code_prose_normalize_steps, 65.54),
         ("eai-taxonomy-code-w-dclm", eai_taxonomy_code_normalize_steps, 591.90),
         ("finetranslations", finetranslations_normalize_steps, 3040.0),
         ("ghalogs/public", ghalogs_public_normalize_steps, GHALOGS_ROUGH_TOKENS_B),
+        # Exact count from the tokenized cache .stats.json, measured with
+        # marin-community/marin-tokenizer over the normalized artifact under the
+        # final-turn truncation filter: 64,054,289 tokens / 2,835 docs.
+        ("glm-5.2-kernelgym-rollouts", glm_kernelgym_rollouts_normalize_steps, 0.064054289),
         ("gpt-oss-rollouts", gpt_oss_rollouts_normalize_steps, 3.20),
         ("hplt_v3", hplt_v3_normalize_steps, 612.7),
         ("institutional_books", institutional_books_normalize_steps, 203.63),

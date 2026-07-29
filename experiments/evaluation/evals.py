@@ -15,9 +15,11 @@ from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import (
     HarborAgentConfig,
     HarborEnvironmentConfig,
+    HarborJobConfig,
     HarborRetryConfig,
     HarborRunConfig,
     HarborVerifierConfig,
+    harbor_job_config,
 )
 from marin.evaluation.harbor.runner import HARBOR_RUNTIME, HarborExecutor
 from marin.evaluation.model_config import ModelConfig
@@ -29,6 +31,7 @@ from rigging.secrets import SecretSpec
 _TERMINAL_BENCH_DATASET = "DCAgent2/terminal_bench_2"
 _SWEBENCH_RANDOM_100_DATASET = "DCAgent2/swebench-verified-random-100-folders"
 _AGENTIC_CONCURRENCY = 32
+_DAYTONA_ENVIRONMENT_TYPE = "daytona"
 _DAYTONA_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType(
     {
         "DAYTONA_API_KEY": (
@@ -102,7 +105,7 @@ class EvalchemyDefinition:
 @dataclass(frozen=True)
 class HarborDefinition:
     name: str
-    config: HarborRunConfig
+    config: HarborJobConfig
     max_eval_instances: int | None = None
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
 
@@ -114,8 +117,9 @@ class HarborDefinition:
             harbor=HarborRef(
                 dataset=self.config.dataset,
                 version=self.config.revision,
-                agent=self.config.agent.name,
-                env=self.config.environment.environment_type,
+                agent=self.config.agent,
+                env=self.config.environment,
+                config_digest=self.config.digest,
             ),
         )
 
@@ -125,15 +129,35 @@ class HarborDefinition:
 
     def executor_for(self, model: ModelConfig, limit: int | None) -> EvalExecutor:
         effective_limit = self.max_eval_instances if limit is None else limit
-        config = replace(
-            self.config,
+        return HarborExecutor(
+            config=self.config,
             task_limit=effective_limit,
-            agent=replace(
-                self.config.agent,
-                kwargs={**model.agent.agent_kwargs, **self.config.agent.kwargs},
-            ),
+            model_agent_kwargs=model.agent.agent_kwargs,
+            secret_env_keys=tuple(self.secret_env),
         )
-        return HarborExecutor(config=config, secret_env_keys=tuple(self.secret_env))
+
+
+def harbor_definition(
+    name: str,
+    config: HarborJobConfig,
+    max_eval_instances: int | None = None,
+) -> HarborDefinition:
+    """Attach shared-launch metadata and secrets to one Harbor job policy."""
+    secret_env = _DAYTONA_SECRET_ENV if config.environment == _DAYTONA_ENVIRONMENT_TYPE else MappingProxyType({})
+    return HarborDefinition(
+        name=name,
+        config=config,
+        max_eval_instances=max_eval_instances,
+        secret_env=secret_env,
+    )
+
+
+def _harbor_eval(
+    name: str,
+    run: HarborRunConfig,
+    max_eval_instances: int | None = None,
+) -> HarborDefinition:
+    return harbor_definition(name, harbor_job_config(name, run), max_eval_instances)
 
 
 def _mcq_eval(name: str, task: str, shots: int) -> EvalchemyDefinition:
@@ -176,23 +200,22 @@ def _agentic_eval(
     n_concurrent: int = 8,
     max_instances: int | None = None,
 ) -> HarborDefinition:
-    return HarborDefinition(
-        name=name,
-        config=HarborRunConfig(
+    return _harbor_eval(
+        name,
+        HarborRunConfig(
             dataset=f"hf://{hugging_face_dataset}",
             revision="main",
             agent=HarborAgentConfig(name=agent),
-            environment=HarborEnvironmentConfig(environment_type="daytona"),
+            environment=HarborEnvironmentConfig(environment_type=_DAYTONA_ENVIRONMENT_TYPE),
             n_concurrent=n_concurrent,
         ),
-        max_eval_instances=max_instances,
-        secret_env=_DAYTONA_SECRET_ENV,
+        max_instances,
     )
 
 
-GRUG_OPENCODE_EVAL = HarborDefinition(
-    name="grug-opencode-id",
-    config=HarborRunConfig(
+GRUG_OPENCODE_EVAL = _harbor_eval(
+    "grug-opencode-id",
+    HarborRunConfig(
         dataset="hf://DCAgent/dev_set_v2",
         revision="377118ff3031c934f5a647ae2c425eb74eef3b21",
         agent=HarborAgentConfig(
@@ -211,7 +234,7 @@ GRUG_OPENCODE_EVAL = HarborDefinition(
             },
         ),
         environment=HarborEnvironmentConfig(
-            environment_type="daytona",
+            environment_type=_DAYTONA_ENVIRONMENT_TYPE,
             force_build=True,
             delete=True,
             cpus=2,
@@ -231,7 +254,6 @@ GRUG_OPENCODE_EVAL = HarborDefinition(
         ),
         verifier=HarborVerifierConfig(max_timeout=14400),
     ),
-    secret_env=_DAYTONA_SECRET_ENV,
 )
 
 
@@ -313,27 +335,25 @@ EVALS: dict[str, EvaluationDefinition] = {
     # --- Harbor (agentic registry benchmarks) ---
     # aime@1.0 is 60 AIME math problems; the served model solves each in a Daytona sandbox and
     # Harbor's verifier scores the boxed answer. aime-smoke caps the task count for a fast check.
-    "aime-harbor": HarborDefinition(
-        name="aime-harbor",
-        config=HarborRunConfig(
+    "aime-harbor": _harbor_eval(
+        "aime-harbor",
+        HarborRunConfig(
             dataset="aime",
             revision="1.0",
             agent=HarborAgentConfig(name="terminus-2"),
-            environment=HarborEnvironmentConfig(environment_type="daytona"),
+            environment=HarborEnvironmentConfig(environment_type=_DAYTONA_ENVIRONMENT_TYPE),
         ),
-        secret_env=_DAYTONA_SECRET_ENV,
     ),
-    "aime-smoke": HarborDefinition(
-        name="aime-smoke",
-        config=HarborRunConfig(
+    "aime-smoke": _harbor_eval(
+        "aime-smoke",
+        HarborRunConfig(
             dataset="aime",
             revision="1.0",
             agent=HarborAgentConfig(name="terminus-2"),
-            environment=HarborEnvironmentConfig(environment_type="daytona"),
+            environment=HarborEnvironmentConfig(environment_type=_DAYTONA_ENVIRONMENT_TYPE),
             n_concurrent=2,
         ),
-        max_eval_instances=2,
-        secret_env=_DAYTONA_SECRET_ENV,
+        2,
     ),
     # Agentic datasets contain Harbor task directories and run with Daytona.
     "tb2": _agentic_eval("tb2", _TERMINAL_BENCH_DATASET, n_concurrent=_AGENTIC_CONCURRENCY),

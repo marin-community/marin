@@ -113,11 +113,14 @@ auth:
       -----BEGIN PUBLIC KEY-----
       MCowBQYDK2VwAyEA42ziFTlGKgaA/fQ1wJCONKOml7rx5Y8UAQqVLTCtrCo=
       -----END PUBLIC KEY-----
-  allowed_submitters: ["*@openathena.ai", "wg0420@princeton.edu", "ravwojdyla@rav-openathena.iam.gserviceaccount.com"]
+  allowed_submitters:
+    - "*@openathena.ai"
+    - wg0420@princeton.edu
+    - ravwojdyla@rav-openathena.iam.gserviceaccount.com
+    - infra-probes@hai-gcp-models.iam.gserviceaccount.com
 
 kubernetes_provider:
   namespace: iris
-  default_image: ghcr.io/marin-community/iris-task:latest
   host_network: true                # Required for NCCL/IB multi-host traffic
   cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal nodes
   controller_address: http://iris-controller-svc.iris.svc.cluster.local:10000

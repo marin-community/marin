@@ -8,6 +8,7 @@ Subcommands:
     build    docker build, tag with git sha + "latest", push to Artifact Registry.
     apply    roll the prod VM to the "latest" image.
     status   show VM state + tail container logs.
+    grant-iap grant the probe service account access to the Marin Iris IAP edge.
     create   one-time: service account, IAM bindings, and the COS VM itself.
 
 Run with ``uv run deploy/deploy.py <command>`` (click resolves from the project
@@ -16,6 +17,7 @@ venv), or ``python deploy/deploy.py <command>`` if click is on the path.
 
 import logging
 import subprocess
+import sys
 from pathlib import Path
 
 import click
@@ -36,6 +38,7 @@ RESULTS_GCS_PREFIX = "infra/probes"
 RESULTS_HOST_PATH = "/var/lib/probes"
 # Build context / git repo root for `build`: this script lives in deploy/.
 PROBES_DIR = Path(__file__).resolve().parent.parent
+IAP_GCLB = PROBES_DIR.parent.parent / "lib" / "iris" / "scripts" / "iap_gclb.py"
 
 
 def _run(cmd: list[str], *, capture_output: bool = False) -> subprocess.CompletedProcess[str]:
@@ -49,6 +52,21 @@ def _artifact_registry(region: str, project: str, repo: str) -> str:
 
 def _service_account(project: str) -> str:
     return f"{IMAGE_NAME}@{project}.iam.gserviceaccount.com"
+
+
+def _grant_iap_access(project: str, service_account: str) -> None:
+    member = f"serviceAccount:{service_account}"
+    logger.info("Granting Marin Iris IAP access to %s", service_account)
+    _run(
+        [
+            sys.executable,
+            str(IAP_GCLB),
+            "grant",
+            "marin",
+            f"--project={project}",
+            f"--member={member}",
+        ]
+    )
 
 
 @click.group()
@@ -160,6 +178,14 @@ def status(cfg: dict[str, str]) -> None:
     )
 
 
+@cli.command("grant-iap")
+@click.pass_obj
+def grant_iap(cfg: dict[str, str]) -> None:
+    """Allow the probe VM's service account through the Marin Iris IAP edge."""
+    project = cfg["project"]
+    _grant_iap_access(project, _service_account(project))
+
+
 @cli.command()
 @click.option(
     "--iris-endpoint",
@@ -231,6 +257,7 @@ def create(cfg: dict[str, str], iris_endpoint: str, machine_type: str) -> None:
             f"--condition={prefix_condition}",
         ]
     )
+    _grant_iap_access(project, sa)
 
     # The host mount persists the JSONL across container restarts; the
     # startup-script makes it writable by the uid-1000 container.

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run a Harbor registry dataset against an already-served model and normalize the trials.
+"""Run a Harbor dataset against an already-served model and normalize the trials.
 
 The group launcher serves a model once and hands this runner an OpenAI endpoint; the runner points a
 Harbor agent at it (``hosted_vllm/<served-name>``), runs the dataset's trials on the configured
@@ -19,8 +19,8 @@ import json
 import logging
 import re
 import subprocess
-from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 from rigging.filesystem import StoragePath, is_remote_path, prefix_join, url_to_fs
@@ -28,8 +28,8 @@ from rigging.filesystem import StoragePath, is_remote_path, prefix_join, url_to_
 from marin.evaluation.eval_env import env_vars_from_keys
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
 from marin.evaluation.harbor.driver_config import (
-    HarborDriverConfig,
-    HarborRunConfig,
+    HarborJobConfig,
+    adapt_job_config,
 )
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
@@ -45,6 +45,10 @@ HARBOR_PACKAGES = (HARBOR.requirement(), *HARBOR.runtime_requirements)
 HARBOR_RUNTIME = "; ".join(HARBOR_PACKAGES)
 _DRIVER = str(Path(__file__).with_name("trial_driver.py"))
 _DRIVER_PYTHONPATH = str(Path(__file__).parents[3])
+_HARBOR_WORKDIR = Path("/tmp/harbor_workdir")
+_HARBOR_RESULTS_DIR = "harbor_results"
+_JOB_DATASET_LENGTH = 32
+_JOB_DIGEST_LENGTH = 12
 _DRIVER_SYSTEM_ENV_KEYS = (
     "CURL_CA_BUNDLE",
     "HOME",
@@ -115,12 +119,17 @@ def canonical_served_name(name: str) -> str:
     return candidate
 
 
-def _job_name(model: RunningModel, config: HarborRunConfig) -> str:
+def _job_name(dataset: str, identity: tuple[object, ...]) -> str:
     """A deterministic Harbor job name so a re-run resumes the previous job's completed trials."""
-    key = f"{config.dataset}|{config.revision}|{model.endpoint.model}|{config.agent.name}|{config.task_limit}"
-    digest = hashlib.sha256(key.encode()).hexdigest()[:12]
-    safe = re.sub(r"[^A-Za-z0-9_-]", "_", config.dataset)[:32]
+    key = "|".join(str(value) for value in identity)
+    digest = hashlib.sha256(key.encode()).hexdigest()[:_JOB_DIGEST_LENGTH]
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", dataset)[:_JOB_DATASET_LENGTH]
     return f"harbor_{safe}_{digest}"
+
+
+def _job_paths(job_name: str) -> tuple[Path, Path]:
+    workdir = _HARBOR_WORKDIR / job_name
+    return workdir, workdir / _HARBOR_RESULTS_DIR
 
 
 def _restore_completed_trials(out_path: str, job_dir: Path) -> int:
@@ -221,6 +230,8 @@ def _aggregate(trials: list[HarborTrial], dataset: str, samples_path: str | None
 
 def _run_driver(config_file: Path, driver_env: Mapping[str, str]) -> None:
     """Run the Harbor trial driver in an isolated uv env (Harbor + Daytona, no marin project)."""
+    runtime = {"version": HARBOR.version, "commit": HARBOR.commit}
+    logger.info("Harbor runtime: %s", json.dumps(runtime, sort_keys=True), extra={"harbor_runtime": runtime})
     cmd = [
         "uv",
         "run",
@@ -230,7 +241,7 @@ def _run_driver(config_file: Path, driver_env: Mapping[str, str]) -> None:
     ]
     for package in HARBOR_PACKAGES:
         cmd.extend(("--with", package))
-    cmd.extend(("python", _DRIVER, str(config_file)))
+    cmd.extend(("python", _DRIVER, "run", str(config_file)))
     logger.info("running Harbor driver: %s", " ".join(cmd))
     process_env = env_vars_from_keys(_DRIVER_SYSTEM_ENV_KEYS)
     process_env.update(driver_env)
@@ -246,62 +257,36 @@ def _upload_trials(job_dir: Path, out_path: str) -> None:
             target.upload_from(str(trial_dir), recursive=True)
 
 
-def run_harbor(
-    model: RunningModel,
-    config: HarborRunConfig,
-    output_dir: str,
+def _run_harbor_job(
     *,
-    hf_token: str | None,
+    job_name: str,
+    workdir: Path,
+    job_config: Mapping[str, object],
+    dataset: str,
+    environment: str,
+    output_dir: str,
     driver_env: Mapping[str, str],
 ) -> HarborRunResult:
-    """Run ``config``'s Harbor dataset against the served model and write the normalized outputs.
-
-    Serving is the caller's job. Harbor derives both the OpenAI URL and served-model identity from
-    ``model``. It resumes completed trials under ``output_dir``, then writes normalized samples and
-    aggregate metrics there.
-    """
-    job_name = _job_name(model, config)
-    workdir = Path("/tmp/harbor_workdir") / job_name
-    results_dir = workdir / "harbor_results"
+    results_dir = workdir / _HARBOR_RESULTS_DIR
     results_dir.mkdir(parents=True, exist_ok=True)
     job_dir = results_dir / job_name
-    dataset_path = materialize_harbor_dataset(
-        config.dataset,
-        config.revision,
-        workdir,
-        hf_token=hf_token,
-    )
-
     if is_remote_path(output_dir):
         restored = _restore_completed_trials(output_dir, job_dir)
         if restored:
             logger.info("restored %d completed Harbor trial(s) from %s", restored, output_dir)
 
-    driver_config = HarborDriverConfig(
-        job_name=job_name,
-        jobs_dir=str(results_dir),
-        dataset_path=str(dataset_path) if dataset_path is not None else None,
-        endpoint_url=model.endpoint.base_url,
-        served_model=model.endpoint.model,
-        run=config,
-    )
-    config_file = workdir / "driver_config.json"
-    config_file.write_text(json.dumps(asdict(driver_config)))
+    config_file = workdir / "job_config.json"
+    config_file.write_text(json.dumps(job_config))
     config_file.chmod(0o600)
 
-    logger.info(
-        "starting Harbor job %s (dataset=%s env=%s)",
-        job_name,
-        config.dataset,
-        config.environment.environment_type,
-    )
+    logger.info("starting Harbor job %s (dataset=%s env=%s)", job_name, dataset, environment)
     _run_driver(config_file, driver_env)
 
     trials = _read_trials(job_dir)
     if is_remote_path(output_dir):
         _upload_trials(job_dir, output_dir)
-    samples_path = _write_samples(trials, config.dataset, output_dir)
-    result = _aggregate(trials, config.dataset, samples_path)
+    samples_path = _write_samples(trials, dataset, output_dir)
+    result = _aggregate(trials, dataset, samples_path)
     StoragePath(prefix_join(output_dir, "harbor_result.json")).write_text(
         json.dumps(
             {
@@ -317,7 +302,7 @@ def run_harbor(
     )
     logger.info(
         "Harbor %s: %d/%d solved (accuracy=%.3f mean_reward=%.3f)",
-        config.dataset,
+        dataset,
         result.solved_trials,
         result.total_trials,
         result.accuracy,
@@ -326,12 +311,71 @@ def run_harbor(
     return result
 
 
+def _evaluation_outcome(run: Callable[[], HarborRunResult], output_dir: str) -> EvaluationOutcome:
+    try:
+        result = run()
+    except Exception as exc:
+        raise EvaluationError(str(exc), status=RunStatus.FAILED) from exc
+    if not result.total_trials:
+        raise EvaluationError(
+            f"Harbor eval finished with no trials under {output_dir!r}",
+            status=RunStatus.FAILED,
+        )
+    if result.failed_trials:
+        raise EvaluationError(
+            f"Harbor eval finished with {result.failed_trials} of {result.total_trials} failed trials "
+            f"under {output_dir!r}",
+            status=RunStatus.FAILED,
+        )
+    return EvaluationOutcome(metrics=result.task_metrics())
+
+
 @dataclass(frozen=True)
 class HarborExecutor:
-    """Run one resolved Harbor configuration."""
+    """Run one normalized Harbor job policy against a served model."""
 
-    config: HarborRunConfig
+    config: HarborJobConfig
+    task_limit: int | None
+    model_agent_kwargs: Mapping[str, object]
     secret_env_keys: tuple[str, ...] = ()
+
+    def _run(
+        self,
+        model: RunningModel,
+        output_dir: str,
+        hf_token: str | None,
+        driver_env: Mapping[str, str],
+    ) -> HarborRunResult:
+        job_name = _job_name(
+            self.config.dataset,
+            (self.config.digest, model.endpoint.model, self.task_limit),
+        )
+        workdir, results_dir = _job_paths(job_name)
+        dataset_path = materialize_harbor_dataset(
+            self.config.dataset,
+            self.config.revision,
+            workdir,
+            hf_token=hf_token,
+        )
+        job_config = adapt_job_config(
+            self.config,
+            job_name=job_name,
+            jobs_dir=str(results_dir),
+            dataset_path=str(dataset_path) if dataset_path is not None else None,
+            endpoint_url=model.endpoint.base_url,
+            served_model=model.endpoint.model,
+            task_limit=self.task_limit,
+            model_agent_kwargs=self.model_agent_kwargs,
+        )
+        return _run_harbor_job(
+            job_name=job_name,
+            workdir=workdir,
+            job_config=job_config,
+            dataset=self.config.dataset,
+            environment=self.config.environment,
+            output_dir=output_dir,
+            driver_env=driver_env,
+        )
 
     def __call__(
         self,
@@ -339,25 +383,11 @@ class HarborExecutor:
         output_dir: str,
         env_vars: Mapping[str, str],
     ) -> EvaluationOutcome:
-        try:
-            result = run_harbor(
-                model,
-                self.config,
-                output_dir,
-                hf_token=env_vars.get("HF_TOKEN"),
-                driver_env={key: env_vars[key] for key in self.secret_env_keys},
-            )
-        except Exception as exc:
-            raise EvaluationError(str(exc), status=RunStatus.FAILED) from exc
-        if not result.total_trials:
-            raise EvaluationError(
-                f"Harbor eval finished with no trials under {output_dir!r}",
-                status=RunStatus.FAILED,
-            )
-        if result.failed_trials:
-            raise EvaluationError(
-                f"Harbor eval finished with {result.failed_trials} of {result.total_trials} failed trials "
-                f"under {output_dir!r}",
-                status=RunStatus.FAILED,
-            )
-        return EvaluationOutcome(metrics=result.task_metrics())
+        driver_env = {key: env_vars[key] for key in self.secret_env_keys}
+        hf_token = env_vars.get("HF_TOKEN")
+        if hf_token:
+            driver_env["HF_TOKEN"] = hf_token
+        return _evaluation_outcome(
+            lambda: self._run(model, output_dir, hf_token, driver_env),
+            output_dir,
+        )

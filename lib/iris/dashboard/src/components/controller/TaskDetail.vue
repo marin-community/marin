@@ -3,7 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { useControllerRpc, useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import { stateToName } from '@/types/status'
+import { stateToName, taskStateDisplayName } from '@/types/status'
 import { useBackends } from '@/composables/useBackends'
 import {
   isLocal,
@@ -391,7 +391,11 @@ watch(() => props.taskId, async () => {
         <!-- Status card -->
         <InfoCard title="Status">
           <InfoRow label="State">
-            <StatusBadge :status="task.state" size="sm" />
+            <StatusBadge
+              :status="task.state"
+              :label="taskStateDisplayName(task.state, task.statusMessage)"
+              size="sm"
+            />
           </InfoRow>
           <!-- Human-readable status for a waiting/building task (e.g. the Kueue
                admission detail). Often long and multi-line, so it renders as a

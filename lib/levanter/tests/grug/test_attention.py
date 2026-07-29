@@ -236,6 +236,44 @@ def test_gpu_fa4_thd_hopper_backward_passes_smem_safe_options_to_kernel():
     assert captured_kwargs["num_threads"] == 384
 
 
+@pytest.mark.parametrize("sliding_window", [None, 5], ids=["full-causal", "sliding-window"])
+def test_real_gpu_fa4_thd_attention_matches_reference_value_and_gradients(sliding_window):
+    if jax.default_backend() != "gpu":
+        pytest.skip("FA4 THD correctness requires a GPU backend.")
+    pytest.importorskip("cutlass")
+    pytest.importorskip("cutlass.cute")
+    pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
+    arch_family = fa4_thd._gpu_compute_arch() // 10
+    if arch_family not in fa4_thd._SUPPORTED_ARCH_FAMILIES:
+        pytest.skip("gpu_fa4_thd_attention supports only SM90/SM100/SM110.")
+    if sliding_window is not None and arch_family == fa4_thd._HOPPER_ARCH_FAMILY:
+        pytest.skip("FA4 THD sliding-window attention is not wired for SM90.")
+
+    q_key, k_key, v_key, cotangent_key = jax.random.split(jax.random.PRNGKey(0), 4)
+    q = jax.random.normal(q_key, (1, 64, 4, 128), dtype=jnp.bfloat16)
+    k = jax.random.normal(k_key, (1, 64, 2, 128), dtype=jnp.bfloat16)
+    v = jax.random.normal(v_key, (1, 64, 2, 128), dtype=jnp.bfloat16)
+    cotangent = jax.random.normal(cotangent_key, q.shape, dtype=jnp.bfloat16)
+    segment_ids = jnp.array([[3] * 31 + [8] * 33], dtype=jnp.int32)
+    mask = AttentionMask.causal(sliding_window=sliding_window).with_segment_ids(segment_ids, max_segments=2)
+
+    def fa4(q_arg, k_arg, v_arg):
+        return attention(q_arg, k_arg, v_arg, mask, implementation="gpu_fa4_thd")
+
+    def reference(q_arg, k_arg, v_arg):
+        return reference_attention(q_arg, k_arg, v_arg, mask, logits_dtype=jnp.float32)
+
+    def weighted_sum(fn):
+        return lambda *args: jnp.sum(fn(*args).astype(jnp.float32) * cotangent.astype(jnp.float32))
+
+    np.testing.assert_allclose(jax.jit(fa4)(q, k, v), jax.jit(reference)(q, k, v), atol=7e-2, rtol=7e-2)
+
+    actual_grads = jax.jit(jax.grad(weighted_sum(fa4), argnums=(0, 1, 2)))(q, k, v)
+    expected_grads = jax.jit(jax.grad(weighted_sum(reference), argnums=(0, 1, 2)))(q, k, v)
+    for actual_grad, expected_grad in zip(actual_grads, expected_grads, strict=True):
+        np.testing.assert_allclose(actual_grad, expected_grad, atol=7e-2, rtol=7e-2)
+
+
 def test_attention_rejects_unknown_implementation():
     q, k, v = _make_qkv()
 
