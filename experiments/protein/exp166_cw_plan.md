@@ -75,6 +75,17 @@ Training is deterministic at a fixed gang shape, so repeated runs of one configu
 add nothing. It is not bitwise reproducible across node counts, and a small objective
 difference between two placements is not a defect.
 
+## Priority
+
+**Every submission carries `--priority batch`** — calibration, smokes, production and every
+retry. Required for all CoreWeave work by #108. The flag goes on the driver; the gang
+inherits it, because the scheduler resolves an unspecified child band by walking the
+parent chain. Do not submit at `interactive` and rely on demotion.
+
+This is also why capacity is tight: at batch band this experiment queues behind other
+users, so the partial-gang failures and the twenty-node ceiling below are the expected
+cost of running politely on a shared cluster, not anomalies.
+
 ## Placement
 
 GB200 (`cw-us-east-08a`) first: 208 schedulable nodes against the H100 fleet's 36, the
@@ -314,7 +325,7 @@ exp166's augmentation dropped in.
 - Seed resolved from a single S3 path.
 - Token caches declared with an absolute `pin=` rather than resolved against the prefix.
 - `MARIN_PREFIX` forwarded to the gang, which does not inherit the driver's environment.
-- `--priority batch`; driver runs inside the target cluster and must outlive its gang.
+- Driver runs inside the target cluster and must outlive its gang.
 - Driver needs at least 3 GB; Kubernetes enforces memory requests as hard limits.
 
 The augmentation code, the six configurations, and their exp117 losses port unchanged.
