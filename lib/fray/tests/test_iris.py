@@ -352,11 +352,6 @@ class TestWithTpuFlexible:
         assert rc.replicas == 4
 
 
-# resolve_coscheduling: multi-host gangs pick the topology level the Iris provider maps.
-# group_by is now a literal topology level (B4 rename); an unmapped value raises at K8s
-# pod-manifest build, so the fray defaults must stay in sync with the provider's map.
-
-
 @pytest.mark.parametrize(
     ("variant", "count", "replicas", "group_by"),
     [

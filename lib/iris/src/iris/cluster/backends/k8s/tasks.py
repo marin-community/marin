@@ -64,7 +64,7 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     SCHEDULABLE_RACK_NODES,
     KueueTopologyBinding,
     TopologyMode,
-    sliced_gpu_gang_rack_size,
+    gpu_gang_rack_slice_size,
 )
 from iris.cluster.platforms.k8s.service import K8sService
 from iris.cluster.platforms.k8s.types import (
@@ -726,7 +726,7 @@ def _topology_request_annotations(
     unschedulable whenever a rack is short a node — this raises instead (the CLI never emits it;
     the guard catches a programmatic or stale client).
     SLICE_REQUIRED partitions the gang into balanced per-rack slices (size from
-    ``sliced_gpu_gang_rack_size``), each hard-bound to one nvlink.domain, and pairs a soft coarse
+    ``gpu_gang_rack_slice_size``), each hard-bound to one nvlink.domain, and pairs a soft coarse
     preference so the racks cluster on the IB fabric. The one-slice-per-rack guarantee holds only
     for node-saturating pods and a gang that splits into equal, more-than-half-a-rack slices;
     both are validated here.
@@ -734,7 +734,7 @@ def _topology_request_annotations(
     node_label = binding.node_label
     if binding.mode is TopologyMode.SLICE_REQUIRED:
         try:
-            slice_size = sliced_gpu_gang_rack_size(gpu_count, num_tasks)
+            slice_size = gpu_gang_rack_slice_size(gpu_count, num_tasks)
         except ValueError as e:
             raise PodManifestError(
                 f"Coscheduled task {task_ref!r} on sliced level {group_by!r}: {e}. Round the gang size, or set "

@@ -146,7 +146,7 @@ def balanced_rack_slice_size(num_tasks: int) -> int:
     return slice_size
 
 
-def sliced_gpu_gang_rack_size(gpu_count: int, replicas: int) -> int:
+def gpu_gang_rack_slice_size(gpu_count: int, replicas: int) -> int:
     """Return the rack slice size for a node-saturating multi-rack NVL72 gang."""
     if gpu_count != NVL72_GPUS_PER_NODE:
         raise ValueError(
@@ -167,9 +167,10 @@ def gpu_gang_coscheduling_level(gpu_variant: str, gpu_count: int, replicas: int)
     hard would demand a fully healthy rack and could leave it unschedulable whenever a rack is
     down a node, so that is the largest hard single-domain gang.
 
-    A larger gang binds to ``nvlink.domain.sliced``: the gang is partitioned into
-    ``SCHEDULABLE_RACK_NODES``-node slices, each hard-bound to its own nvlink.domain, so it lands
-    as an exact N racks x SCHEDULABLE_RACK_NODES balanced layout (see ``COSCHEDULE_NVLINK_DOMAIN_SLICED``).
+    A larger valid gang binds to ``nvlink.domain.sliced``: the gang is partitioned into
+    balanced, more-than-half-rack slices, each hard-bound to its own nvlink.domain. Before
+    selecting that level, this validates that each pod fills an NVL72 node and the replicas
+    split into valid rack slices.
 
     H100 and every non-NVL72 GPU carry no ``nvlink.domain`` label, so they always coschedule
     on ``leafgroup`` (soft IB colocation), which is the behavior this preserves for them.
@@ -177,6 +178,6 @@ def gpu_gang_coscheduling_level(gpu_variant: str, gpu_count: int, replicas: int)
     if is_rack_based(gpu_variant):
         if replicas <= SCHEDULABLE_RACK_NODES:
             return COSCHEDULE_NVLINK_DOMAIN
-        sliced_gpu_gang_rack_size(gpu_count, replicas)
+        gpu_gang_rack_slice_size(gpu_count, replicas)
         return COSCHEDULE_NVLINK_DOMAIN_SLICED
     return COSCHEDULE_LEAFGROUP
