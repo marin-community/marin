@@ -6,7 +6,7 @@
 import cli
 
 
-def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch):
+def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch, capsys):
     remote_result = {
         "id": "file:lib/iris/src/iris/scheduler.py",
         "domain": "file",
@@ -36,9 +36,14 @@ def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch):
             {"params": {"q": "FAILED_PRECONDITION", "domain": ["file", "pr"], "limit": 10}},
         )
     ]
+    output = capsys.readouterr().out.splitlines()
+    assert len(output) == 2
+    assert "file:lib/iris/src/iris/scheduler.py" in output[0]
+    assert "raise FAILED_PRECONDITION" in output[0]
+    assert remote_result["url"] in output[1]
 
 
-def test_search_legacy_activity_filters_keep_existing_endpoint(monkeypatch):
+def test_search_defaults_to_curated_domains_without_discord(monkeypatch):
     calls = []
 
     def fake_request(method, path, **options):
@@ -46,8 +51,13 @@ def test_search_legacy_activity_filters_keep_existing_endpoint(monkeypatch):
         return []
 
     monkeypatch.setattr(cli, "request", fake_request)
-    args = cli.build_parser().parse_args(["search", "scheduler", "--source", "discord"])
+    args = cli.build_parser().parse_args(["search", "scheduler"])
     args.func(args)
 
-    assert calls[0][1] == "/search"
-    assert calls[0][2]["params"]["source"] == "discord"
+    assert calls == [
+        (
+            "GET",
+            "/federated-search",
+            {"params": {"q": "scheduler", "domain": ["wiki", "file", "pr", "issue"], "limit": 10}},
+        )
+    ]

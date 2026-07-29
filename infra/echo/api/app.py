@@ -229,7 +229,7 @@ def hit(row: sqlalchemy.Row) -> Hit:
 
 
 def wiki_snippet(row: sqlalchemy.Row) -> str:
-    return " ".join(row.body.split())[:240]
+    return " ".join(row.body.split())[: search_config.FEDERATED_SUMMARY_CHARACTERS]
 
 
 def wiki_summary(row: sqlalchemy.Row) -> WikiSummary:
@@ -423,7 +423,7 @@ def repository_file_search_result(
             f"{config.github_branch}@{state.commit_sha[: search_config.DISPLAY_SHA_CHARACTERS]} · {freshness}"
         ),
         url=f"https://github.com/{config.github_repository}/blob/{state.commit_sha}/{path}#L{line}",
-        snippet=matching_line[:240],
+        snippet=matching_line[: search_config.FEDERATED_SUMMARY_CHARACTERS],
         score=row.score,
         distance=row.distance,
         lexical_score=row.lexical_score,
@@ -442,7 +442,7 @@ def healthz(engine: Engine) -> dict[str, str]:
 
 
 @api.get("/repository-index", response_model=RepositoryIndexStatus)
-def repository_index(engine: Engine, config: Config) -> RepositoryIndexStatus:
+def repository_index_status(engine: Engine, config: Config) -> RepositoryIndexStatus:
     """Return repository index freshness and current build progress."""
     with engine.connect() as conn:
         state = repository_index_state(conn, config)
@@ -513,7 +513,7 @@ def federated_search(
     query = q.strip()
     if not query:
         raise HTTPException(422, "q must not be blank")
-    domains = list(dict.fromkeys(domain or search_config.SEARCH_DOMAINS))
+    domains = list(dict.fromkeys(domain or search_config.DEFAULT_SEARCH_DOMAINS))
     params = {
         "q": query,
         "embedding": str(query_embedding(model, query)),
@@ -536,6 +536,7 @@ def federated_search(
                     ),
                     "repository": config.github_repository,
                     "branch": config.github_branch,
+                    "exact": escape_like(query),
                     "substring": f"%{escape_like(query)}%",
                 }
                 for row in conn.execute(hybrid_search.repository_file_search_statement(), file_params):

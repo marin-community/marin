@@ -23,7 +23,6 @@ ambient service-account credentials with no login. See ``infra/echo/README.md``.
 """
 
 import argparse
-import datetime
 import os
 import sys
 from pathlib import Path
@@ -55,6 +54,7 @@ LOGIN_HINT = "run `iris login`"
 SOURCES = ("github", "discord")
 KINDS = ("issue", "pr", "comment", "message")
 DOMAINS = search_config.SEARCH_DOMAINS
+DEFAULT_DOMAINS = search_config.DEFAULT_SEARCH_DOMAINS
 
 
 def cached_login_provider() -> TokenProvider | None:
@@ -104,6 +104,18 @@ def request(method: str, path: str, *, params: dict | None = None, body: dict | 
     return response.json()
 
 
+def response_object(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise SystemExit("echo-api returned a non-object response")
+    return value
+
+
+def response_objects(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise SystemExit("echo-api returned a non-list response")
+    return value
+
+
 def print_hits(hits: list[dict]) -> None:
     for hit in hits:
         score = f"{hit['score']:.4f} " if hit.get("score") else ""
@@ -117,10 +129,9 @@ def print_hits(hits: list[dict]) -> None:
 
 def print_search_results(results: list[SearchResult]) -> None:
     for result in results:
-        print(f"{result.score:.4f} [{result.domain}] {result.title}")
-        print(f"    {result.subtitle}")
-        if result.snippet:
-            print(f"    {result.snippet}")
+        summary = result.subtitle if result.domain == "wiki" else result.snippet
+        suffix = f" — {' '.join(summary.split())}" if summary else ""
+        print(f"[{result.domain}] {result.id} · {result.title}{suffix}")
         print(f"    {result.url}")
 
 
@@ -144,62 +155,47 @@ def read_body(value: str) -> str:
 
 
 def cmd_search(args: argparse.Namespace) -> None:
-    if args.source or args.kind or args.since:
-        if args.domain:
-            raise SystemExit("--domain cannot be combined with the compatibility filters --source, --kind, or --since")
-        print_hits(
-            request(
-                "GET",
-                "/search",
-                params={
-                    "q": args.query,
-                    "source": args.source,
-                    "kind": args.kind,
-                    "since": args.since,
-                    "limit": args.limit,
-                },
-            )
+    domains = list(dict.fromkeys(args.domain or DEFAULT_DOMAINS))
+    remote_value = response_objects(
+        request(
+            "GET",
+            "/federated-search",
+            params={"q": args.query, "domain": domains, "limit": args.limit},
         )
-        return
-
-    domains = list(dict.fromkeys(args.domain or DOMAINS))
-    remote_value = request(
-        "GET",
-        "/federated-search",
-        params={"q": args.query, "domain": domains, "limit": args.limit},
     )
-    if not isinstance(remote_value, list):
-        raise SystemExit("echo-api returned a non-list federated search response")
     results = [SearchResult.from_json(result) for result in remote_value]
-    results.sort(key=lambda result: (-result.score, result.domain, result.id))
-    print_search_results(results[: args.limit])
+    print_search_results(results)
 
 
 def cmd_grep(args: argparse.Namespace) -> None:
     print_hits(
-        request(
-            "GET",
-            "/grep",
-            params={"pattern": args.pattern, "source": args.source, "kind": args.kind, "limit": args.limit},
+        response_objects(
+            request(
+                "GET",
+                "/grep",
+                params={"pattern": args.pattern, "source": args.source, "kind": args.kind, "limit": args.limit},
+            )
         )
     )
 
 
 def cmd_show(args: argparse.Namespace) -> None:
-    chunk = request("GET", f"/chunks/{args.id}")
+    chunk = response_object(request("GET", f"/chunks/{args.id}"))
     print(f"[{chunk['source']}/{chunk['kind']}] {chunk['date']} {chunk['author'] or '?'} {chunk['title'] or ''}")
     print(f"{chunk['url']}\n")
     print(chunk.get("text") or "")
 
 
 def cmd_wiki_search(args: argparse.Namespace) -> None:
-    print_wiki(request("GET", "/wiki/search", params={"q": args.query, "tag": args.tag, "limit": args.limit}))
+    print_wiki(
+        response_objects(request("GET", "/wiki/search", params={"q": args.query, "tag": args.tag, "limit": args.limit}))
+    )
 
 
 def cmd_wiki_show(args: argparse.Namespace) -> None:
     # Emit the entry as an OKF document so it round-trips through a file: `wiki show > note.md`,
     # edit, `wiki edit --file note.md`.
-    entry = request("GET", f"/wiki/{args.id}")
+    entry = response_object(request("GET", f"/wiki/{args.id}"))
     print(okf.wiki_to_okf(entry, resource=wiki_link(args.id)), end="")
 
 
@@ -224,13 +220,13 @@ def wiki_write_body(args: argparse.Namespace) -> dict[str, object]:
 
 
 def cmd_wiki_add(args: argparse.Namespace) -> None:
-    entry = request("POST", "/wiki", body=wiki_write_body(args))
+    entry = response_object(request("POST", "/wiki", body=wiki_write_body(args)))
     print(f"created wiki #{entry['id']}: {entry['title']}")
     print(wiki_link(entry["id"]))
 
 
 def cmd_wiki_edit(args: argparse.Namespace) -> None:
-    entry = request("PUT", f"/wiki/{args.id}", body=wiki_write_body(args))
+    entry = response_object(request("PUT", f"/wiki/{args.id}", body=wiki_write_body(args)))
     print(f"updated wiki #{entry['id']}: {entry['title']}")
     print(wiki_link(entry["id"]))
 
@@ -240,11 +236,6 @@ def bounded_limit(value: str) -> int:
     if not 1 <= limit <= 100:
         raise argparse.ArgumentTypeError("must be between 1 and 100")
     return limit
-
-
-def iso_date(value: str) -> str:
-    datetime.date.fromisoformat(value)  # raises ValueError -> argparse rejects
-    return value
 
 
 def nonblank(value: str) -> str:
@@ -271,24 +262,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Query Echo and manage wiki notes via echo-api.")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    for name, help_text, default_limit, func in (
-        ("search", "federated semantic + lexical search", 10, cmd_search),
-        ("grep", "exact substring scan over activity, newest first", 20, cmd_grep),
-    ):
-        p = sub.add_parser(name, help=help_text)
-        p.add_argument("query" if name == "search" else "pattern", type=nonblank)
-        p.add_argument("--source", choices=SOURCES)
-        p.add_argument("--kind", choices=KINDS)
-        if name == "search":
-            p.add_argument("--since", type=iso_date, help="YYYY-MM-DD lower bound on chunk date")
-            p.add_argument(
-                "--domain",
-                action="append",
-                choices=DOMAINS,
-                help="search this domain; repeat to select several (default: all)",
-            )
-        p.add_argument("--limit", type=bounded_limit, default=default_limit)
-        p.set_defaults(func=func)
+    search = sub.add_parser("search", help="federated semantic + lexical search")
+    search.add_argument("query", type=nonblank)
+    search.add_argument(
+        "--domain",
+        action="append",
+        choices=DOMAINS,
+        help="search this domain; repeat to select several (default: wiki,file,pr,issue)",
+    )
+    search.add_argument("--limit", type=bounded_limit, default=10)
+    search.set_defaults(func=cmd_search)
+
+    grep = sub.add_parser("grep", help="exact substring scan over activity, newest first")
+    grep.add_argument("pattern", type=nonblank)
+    grep.add_argument("--source", choices=SOURCES)
+    grep.add_argument("--kind", choices=KINDS)
+    grep.add_argument("--limit", type=bounded_limit, default=20)
+    grep.set_defaults(func=cmd_grep)
 
     show = sub.add_parser("show", help="print one activity chunk verbatim")
     show.add_argument("id", type=int)

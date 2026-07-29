@@ -19,6 +19,7 @@ const DOMAINS: { value: SearchDomain; label: string }[] = [
   { value: 'issue', label: 'Issues' },
   { value: 'discord', label: 'Discord' },
 ]
+const DEFAULT_DOMAINS: SearchDomain[] = ['file', 'wiki', 'pr', 'issue']
 
 const route = useRoute()
 const router = useRouter()
@@ -36,7 +37,7 @@ function domainsFromQuery(value: unknown): SearchDomain[] {
   const valid = requested.filter((domain): domain is SearchDomain =>
     DOMAINS.some((candidate) => candidate.value === domain),
   )
-  return valid.length ? [...new Set(valid)] : DOMAINS.map((domain) => domain.value)
+  return valid.length ? [...new Set(valid)] : DEFAULT_DOMAINS
 }
 
 const indexPercent = computed(() => {
@@ -111,7 +112,12 @@ async function search(): Promise<void> {
 function syncUrl(): void {
   const params: Record<string, string | string[]> = {}
   if (query.value.trim()) params.q = query.value.trim()
-  if (selectedDomains.value.length !== DOMAINS.length) params.domain = selectedDomains.value
+  if (
+    selectedDomains.value.length !== DEFAULT_DOMAINS.length ||
+    selectedDomains.value.some((domain) => !DEFAULT_DOMAINS.includes(domain))
+  ) {
+    params.domain = selectedDomains.value
+  }
   router.replace({ query: params }).catch(() => {})
 }
 

@@ -64,6 +64,13 @@ class RepositoryChangeSet:
     files: tuple[repository_files.IndexedFile, ...]
 
 
+@dataclass(frozen=True)
+class RepositoryPlan:
+    mode: RepositoryBuildMode
+    base_sha: str | None
+    changes: RepositoryChangeSet
+
+
 def github_open(path: str, token: str, accept: str = GITHUB_JSON_MEDIA_TYPE):
     request = urllib.request.Request(
         f"https://api.github.com/repos/{path}",
@@ -421,7 +428,7 @@ def load_repository_changes(
     commit_sha: str,
     base_sha: str | None,
     mode: RepositoryBuildMode,
-) -> tuple[RepositoryBuildMode, str | None, RepositoryChangeSet]:
+) -> RepositoryPlan:
     if mode is RepositoryBuildMode.FULL:
         changes = RepositoryChangeSet(frozenset(), github_archive_files(target, commit_sha, token))
     else:
@@ -442,32 +449,30 @@ def load_repository_changes(
             changes = incremental
     if mode is RepositoryBuildMode.FULL and not changes.files:
         raise RuntimeError(f"GitHub archive for {target.repository}@{commit_sha} contained no eligible files")
-    return mode, base_sha, changes
+    return RepositoryPlan(mode, base_sha, changes)
 
 
 def initialize_repository_build(
     engine: sqlalchemy.Engine,
     target: RepositoryTarget,
     commit_sha: str,
-    base_sha: str | None,
-    mode: RepositoryBuildMode,
-    changes: RepositoryChangeSet,
+    plan: RepositoryPlan,
     now: datetime,
 ) -> RepositoryBuild:
     build = RepositoryBuild(
         commit_sha=commit_sha,
-        base_sha=base_sha,
-        mode=mode,
-        total_files=len(changes.files),
+        base_sha=plan.base_sha,
+        mode=plan.mode,
+        total_files=len(plan.changes.files),
         completed_files=0,
         started_at=now,
     )
-    if mode is RepositoryBuildMode.FULL:
+    if plan.mode is RepositoryBuildMode.FULL:
         deletion = sqlalchemy.delete(schema.repository_file_chunks).where(*repository_scope(target))
-    elif changes.replaced_paths:
+    elif plan.changes.replaced_paths:
         deletion = sqlalchemy.delete(schema.repository_file_chunks).where(
             *repository_scope(target),
-            schema.repository_file_chunks.c.path.in_(changes.replaced_paths),
+            schema.repository_file_chunks.c.path.in_(plan.changes.replaced_paths),
         )
     else:
         deletion = None
@@ -482,13 +487,12 @@ def initialize_repository_build(
 
 def validate_resumed_build(
     build: RepositoryBuild,
-    mode: RepositoryBuildMode,
-    changes: RepositoryChangeSet,
+    plan: RepositoryPlan,
 ) -> None:
-    if build.total_files != len(changes.files) or build.mode is not mode:
+    if build.total_files != len(plan.changes.files) or build.mode is not plan.mode:
         raise RuntimeError(
             f"repository build {build.commit_sha} changed shape while resuming: "
-            f"{build.mode} {build.total_files} files became {mode} {len(changes.files)} files"
+            f"{build.mode} {build.total_files} files became {plan.mode} {len(plan.changes.files)} files"
         )
 
 
@@ -563,7 +567,7 @@ def sync_repository_locked(
         base_sha = build.base_sha
         build_mode = build.mode
 
-    build_mode, base_sha, changes = load_repository_changes(
+    plan = load_repository_changes(
         target,
         token,
         head_sha,
@@ -571,7 +575,7 @@ def sync_repository_locked(
         build_mode,
     )
     if build is None:
-        build = initialize_repository_build(engine, target, head_sha, base_sha, build_mode, changes, now)
+        build = initialize_repository_build(engine, target, head_sha, plan, now)
     else:
-        validate_resumed_build(build, build_mode, changes)
-    run_repository_build(engine, target, build, changes)
+        validate_resumed_build(build, plan)
+    run_repository_build(engine, target, build, plan.changes)

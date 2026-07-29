@@ -225,19 +225,19 @@ def sync_corpus(engine: sqlalchemy.Engine) -> int:
     return 0
 
 
-def run(engine: sqlalchemy.Engine) -> int:
-    target = github_repository.RepositoryTarget(
-        repository=os.environ["GITHUB_REPOSITORY"],
-        branch=os.environ["GITHUB_BRANCH"],
-    )
-    github_repository.sync_repository(engine, target, os.environ["MARINMIRROR_TOKEN"], datetime.now(UTC))
+def run(engine: sqlalchemy.Engine, target: github_repository.RepositoryTarget, token: str) -> int:
+    github_repository.sync_repository(engine, target, token, datetime.now(UTC))
     sync_corpus(engine)
     return 0
 
 
 def main() -> int:
+    target = github_repository.RepositoryTarget(
+        repository=os.environ["GITHUB_REPOSITORY"],
+        branch=os.environ["GITHUB_BRANCH"],
+    )
     with Connector() as connector:
-        return run(make_engine(connector))
+        return run(make_engine(connector), target, os.environ["MARINMIRROR_TOKEN"])
 
 
 if __name__ == "__main__":

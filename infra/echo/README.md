@@ -46,9 +46,12 @@ which cached login to reuse.
 - `pr` searches GitHub pull requests and their comments.
 - `issue` searches GitHub issues and their comments.
 
-All domains are searched by default. Repeat `--domain` to select a subset. The old
-activity filters remain available: a search with `--source`, `--kind`, or `--since`
-uses the activity-only endpoint and cannot be combined with `--domain`.
+Wiki, files, pull requests, and issues are searched by default. Discord is opt-in
+because high-volume conversation is a noisier source of agent context. Repeat
+`--domain` to select a subset or add `--domain discord`. `domain` is the only selector
+on `search`; the activity-only `grep` command retains `--source` and `--kind` filters.
+The compatibility `GET /api/search` endpoint still accepts source, kind, and date
+filters for existing API clients.
 
 All domains use reciprocal-rank fusion with `k=60`: semantic rank has
 weight 1 and lexical rank has weight 2. Results with a lexical match always qualify.
@@ -56,9 +59,17 @@ A semantic-only result must have cosine distance at most 0.45 (similarity at lea
 0.55), so an unrelated nearest neighbor is not returned just because it is the
 closest candidate. Scores compare rank positions, not calibrated relevance
 probabilities. File paths, PostgreSQL full-text matches, and case-insensitive exact
-file substrings contribute the lexical signal; paraphrases can enter through BGE
-semantic retrieval. `grep` remains a case-insensitive literal substring scan over
-activity, newest first.
+file substrings contribute the lexical signal; exact and partial basename matches
+receive additional weight. A file with several independently qualifying chunks gains
+up to 30% over its best chunk score, so repeated evidence helps without allowing a
+large file to dominate. Paraphrases can enter through BGE semantic retrieval. `grep`
+remains a case-insensitive literal substring scan over activity, newest first.
+
+CLI search results use two lines: domain, stable result ID, title, and a source-derived
+one-line summary followed by the canonical URL. Wiki summaries use the `use_when`
+hint; files and activity use the matching source excerpt. Echo does not generate
+summaries with an LLM at query time, avoiding added latency and an additional
+prompt-injection path.
 
 The scheduled sync checks GitHub at most once per hour. An unchanged head only advances
 the check time. A new head uses GitHub's compare API to delete, fetch, and re-embed
@@ -147,8 +158,8 @@ any path that isn't `/api/...`, `/healthz`, `/static/...`, `/docs`, or `/openapi
 so vue-router's history-mode navigation and reloads resolve correctly.
 
 Dashboard search uses the federated endpoint and exposes checkboxes for files, wiki,
-Discord, pull requests, and issues. Header tabs provide common domain presets. Wiki note
-bodies render sanitized Markdown.
+Discord, pull requests, and issues. Discord starts unchecked. Header tabs provide common
+domain presets. Wiki note bodies render sanitized Markdown.
 
 For local dashboard development:
 
