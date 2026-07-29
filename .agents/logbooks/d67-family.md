@@ -559,3 +559,17 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
 ```
 
 - Recovery gate: the launcher must create a production-band child. Every child retry must use an attempt-specific coordinator endpoint, and only a balanced physical-domain placement with finite loss/drop metrics counts as the draw.
+
+### 2026-07-28 20:14 PDT - D67-CTL-01 r10 reaches a valid training start
+
+- Submitted parent `/mwittmann/d67-control-m3-draw1-r10-0728-2010` at 20:07 PDT from commit `bc41b7e32` using the exact command above. Child: `/mwittmann/d67-control-m3-draw1-r10-0728-2010/grug-train-d67-control-m3-draw1-r10-0728-2010`.
+- Iris SQL records priority band 1 on the parent and all 16 child tasks.
+- Attempts 0, 1, and 3 each had one task fail `Init:Error stage-workdir`; their 15 gang siblings ended `COSCHED_FAILED`.
+- Attempt 2 reached task-0 Trainer preflight through coordinator `10.186.213.89:8476` and rejected a six-domain placement with `num_devices (64) must be divisible by num_slices (6)`. Attempt 4 independently used coordinator `10.186.207.81:8476` and rejected a three-domain placement. These distinct attempt coordinators confirm that retries no longer resolve the stale shared endpoint.
+- Attempt 5 has all 16 tasks `running`, passed physical-domain divisibility, emitted the intended analytic setup (34,429,992,960 FLOPs/token on 64 GB200s), and entered the 350-step train loop. No step metric has been emitted yet; keep the recovery gate open until finite loss/drop appears.
+
+### 2026-07-28 20:22 PDT - D67-CTL-01 r10 accepted as control draw 1
+
+- Attempt 5 recorded one `slice_index` across all 64 GB200 devices, an ideal single-domain placement.
+- The first finite steady-state records cleared the recovery gate. Step 2: 334,015 tok/s, 21.56% MFU, loss 10.0532, drop fraction 28.8754%. Step 3: 347,172 tok/s, 22.41% MFU, loss 11.2073, drop fraction 61.0111%.
+- The large early drop values occur during optimizer warmup and are not the registered outcome. Continue to step 349 and judge drops at the matched tail-100 window, steps 250–349.
