@@ -21,7 +21,7 @@ from levanter.analysis.backward_flow import (
 )
 from levanter.grug.attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
-from levanter.grug.sharding import Pbatch, Pembed_vocab, Plm_head, Plogits, unshard
+from levanter.grug.sharding import Pbatch, Pembed_vocab, Plm_head_dense, Plogits, unshard
 
 
 @dataclass(frozen=True)
@@ -171,7 +171,9 @@ class Transformer(eqx.Module):
         token_embed = reshard(
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
-        output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
+        output_proj = reshard(
+            _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head_dense
+        )
         blocks = tuple(Block.init(cfg, key=layer_key) for layer_key in block_keys)
         final_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
         return Transformer(
