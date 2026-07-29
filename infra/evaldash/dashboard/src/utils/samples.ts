@@ -36,27 +36,16 @@ export function sampleOutcome(row: SampleRow): SampleOutcome {
   return row.correct ? 'passed' : 'failed'
 }
 
-const TONE: Record<SampleOutcome, 'success' | 'danger' | 'warning' | 'muted'> = {
-  passed: 'success',
-  failed: 'danger',
-  errored: 'warning',
-  ungraded: 'muted',
-}
-
-export function outcomeTone(outcome: SampleOutcome): 'success' | 'danger' | 'warning' | 'muted' {
-  return TONE[outcome]
-}
-
-const CHIP_CLASS: Record<'success' | 'danger' | 'warning' | 'muted', string> = {
-  success: 'bg-status-success-bg text-status-success border-status-success-border',
-  danger: 'bg-status-danger-bg text-status-danger border-status-danger-border',
-  warning: 'bg-status-warning-bg text-status-warning border-status-warning-border',
-  muted: 'bg-surface-sunken text-text-muted border-surface-border',
+const OUTCOME_CHIP_CLASS: Record<SampleOutcome, string> = {
+  passed: 'bg-status-success-bg text-status-success border-status-success-border',
+  failed: 'bg-status-danger-bg text-status-danger border-status-danger-border',
+  errored: 'bg-status-warning-bg text-status-warning border-status-warning-border',
+  ungraded: 'bg-surface-sunken text-text-muted border-surface-border',
 }
 
 /** Tailwind classes for an outcome chip (bg/text/border), shared by the list and the viewer. */
 export function outcomeChipClass(outcome: SampleOutcome): string {
-  return CHIP_CLASS[outcomeTone(outcome)]
+  return OUTCOME_CHIP_CLASS[outcome]
 }
 
 function truncate(text: string, n = 48): string {

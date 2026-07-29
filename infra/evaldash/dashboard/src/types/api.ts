@@ -328,6 +328,14 @@ export interface Trajectory {
   final_metrics?: Record<string, number>
 }
 
+// Unpaginated per-task outcome counts; `ungraded` is its own bucket, apart from `incorrect`.
+export interface SampleCounts {
+  all: number
+  correct: number
+  incorrect: number
+  ungraded: number
+}
+
 export interface SamplesResponse {
   available: boolean
   error: string | null
@@ -337,7 +345,7 @@ export interface SamplesResponse {
   total: number
   offset: number
   limit: number
-  counts?: { all: number; correct: number; incorrect: number; ungraded: number }
+  counts?: SampleCounts
   rows: SampleRow[]
 }
 
