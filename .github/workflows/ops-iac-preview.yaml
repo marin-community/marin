@@ -26,10 +26,6 @@ permissions:
 env:
   PULUMI_CI_SERVICE_ACCOUNT: pulumi-ci@hai-gcp-models.iam.gserviceaccount.com
   PULUMI_CI_PROJECT: hai-gcp-models
-  # pull_request → PR head SHA; dispatch+pr_number → that PR's head ref; else the
-  # branch selected in the workflow_dispatch UI (or the triggering commit).
-  IAC_PREVIEW_REF: ${{ github.event.pull_request.head.sha || (inputs.pr_number != '' && format('refs/pull/{0}/head', inputs.pr_number)) || github.sha }}
-  IAC_PREVIEW_PR: ${{ github.event.pull_request.number || inputs.pr_number }}
 
 jobs:
   preview-coreweave:
@@ -42,7 +38,8 @@ jobs:
       contents: read
       id-token: write
     concurrency:
-      group: iac-preview-${{ matrix.stack }}-${{ env.IAC_PREVIEW_PR || github.run_id }}
+      # Job concurrency cannot use the env context.
+      group: iac-preview-${{ matrix.stack }}-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}
       cancel-in-progress: true
     strategy:
       fail-fast: false
@@ -52,7 +49,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: ${{ env.IAC_PREVIEW_REF }}
+          ref: ${{ github.event.pull_request.head.sha || (inputs.pr_number != '' && format('refs/pull/{0}/head', inputs.pr_number)) || github.sha }}
 
       - name: Write kubeconfig
         run: |
@@ -87,13 +84,13 @@ jobs:
       contents: read
       id-token: write
     concurrency:
-      group: iac-preview-marin-${{ env.IAC_PREVIEW_PR || github.run_id }}
+      group: iac-preview-marin-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}
       cancel-in-progress: true
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: ${{ env.IAC_PREVIEW_REF }}
+          ref: ${{ github.event.pull_request.head.sha || (inputs.pr_number != '' && format('refs/pull/{0}/head', inputs.pr_number)) || github.sha }}
 
       - name: Preview marin
         uses: ./.github/actions/pulumi-preview
@@ -118,7 +115,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: ${{ env.IAC_PREVIEW_REF }}
+          ref: ${{ github.event.pull_request.head.sha || (inputs.pr_number != '' && format('refs/pull/{0}/head', inputs.pr_number)) || github.sha }}
 
       - name: Download preview artifacts
         uses: actions/download-artifact@v8
@@ -136,7 +133,7 @@ jobs:
       - name: Upsert sticky PR comment
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         env:
-          PR_NUMBER: ${{ env.IAC_PREVIEW_PR }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
         with:
           script: |
             const fs = require('fs');
