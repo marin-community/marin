@@ -102,6 +102,7 @@ explicit MoE configuration fields before these paths are generalized.
 | `SCALE_A2A_CHUNKS` | `1` | Split each local token batch into this many fixed-capacity dispatches |
 | `SCALE_A2A_NO_BARRIER` | off | Skip the rematerialization barriers around fixed-capacity dispatch |
 | `SCALE_A2A_SPILL` | `0` | Retry each overflow assignment against this many lower-ranked selected experts |
+| `SCALE_A2A_GATHER_DISPATCH` | off | Scatter assignment indices and gather activation rows into the send buffer |
 
 ## GB200 job environment
 
