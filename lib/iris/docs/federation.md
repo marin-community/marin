@@ -45,16 +45,14 @@ advertised free capacity meets the gate. This mirrors the `availability:<variant
 constraints the scheduler already uses for reservations, but the `available:<token>` metric is
 *numeric* (a count), not a boolean.
 
-A peer reports more than a free count: alongside `amounts` it reports `held_by_band`, what its
-*admitted* work holds at each priority band. A candidate's effective capacity on a backend is
-that backend's free amount plus everything held **below** its own band (a numerically higher
-band is lower priority), because the peer's scheduler will preempt that work to admit the job.
-So an `interactive` job reaches a peer whose GPUs are entirely held by `batch` work, while a
-`batch` job — which outranks nothing — waits for something to actually free up. Placement
-spends idle capacity first and reclaims from the lowest-priority band upward, and prefers a
-peer that needs no preemption at all, so work only lands where preemption is warranted. A peer
-that reports no band split (a worker-daemon backend, or one predating the field) reclaims
-nothing and is gated on its free amount alone.
+A peer reports the resources available per band: alongside `amounts` it reports `held_by_band`,
+what its *admitted* work holds at each priority band. A candidate's effective capacity on a
+backend is that backend's free amount plus everything held **below** its own band (a
+numerically higher band is lower priority) — the work the peer's scheduler would preempt to
+admit the job. Placement spends idle capacity first, reclaims from the lowest-priority band
+upward, and prefers a peer that needs no preemption at all. A peer that reports no band split
+(a worker-daemon backend, or one predating the field) reclaims nothing and is gated on its free
+amount alone.
 
 Three properties keep placement honest without pretending to be exact:
 

@@ -709,12 +709,6 @@ message Controller {
     }
   }
 
-  // How much of each consumable resource a backend has free right now. Wrapped in
-  // a message (not a bare map on BackendSummary) so a peer that predates the field
-  // is distinguishable from one reporting an authoritative zero: proto3 cannot tell
-  // an omitted map from an empty one, but it CAN tell an unset message from a set
-  // one. UNSET => legacy peer, the parent falls back to shape-only federation for
-  // that backend; SET with empty amounts => authoritative "nothing free".
   // Capacity held by admitted work at one priority band, per resource token.
   message BandCapacity {
     iris.job.PriorityBand band = 1;
@@ -723,6 +717,12 @@ message Controller {
     map<string, int64> amounts = 2;
   }
 
+  // How much of each consumable resource a backend has free right now. Wrapped in
+  // a message (not a bare map on BackendSummary) so a peer that predates the field
+  // is distinguishable from one reporting an authoritative zero: proto3 cannot tell
+  // an omitted map from an empty one, but it CAN tell an unset message from a set
+  // one. UNSET => legacy peer, the parent falls back to shape-only federation for
+  // that backend; SET with empty amounts => authoritative "nothing free".
   message ResourceAvailability {
     // Metric-semantics version. A parent reading a version newer than it knows treats
     // the availability as unknown rather than trusting the amounts.

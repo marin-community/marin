@@ -228,6 +228,31 @@ def test_idle_capacity_wins_over_preempting_a_busy_peer():
     assert promotion.peer_id == "cw-idle"
 
 
+def test_a_tracked_preempting_backend_beats_a_shape_only_one():
+    # One backend fits only by reclaiming batch work; the other is legacy (no metric).
+    # Taking the legacy one would place the job while charging nothing, so successive
+    # ticks could keep piling onto the same peer: the tracked fit wins and reserves.
+    peers = [_peer("cw", [_backend("metric", free=0, held={_BATCH: 64}), _backend("legacy", free=0, supplies=False)])]
+    [promotion] = assign_queued(
+        [_candidate("j", count=32, band=_INTERACTIVE)], peers, ReservationLedger(), max_per_peer_per_cycle=8
+    )
+    assert promotion.backend_id == "metric"
+    assert promotion.reserved == {"h100": 32}
+
+
+def test_a_tracked_preempting_peer_beats_a_shape_only_peer():
+    # Same ordering across peers, where the legacy peer also sorts first by id.
+    peers = [
+        _peer("cw-legacy", [_backend("b", free=0, supplies=False)]),
+        _peer("cw-metric", [_backend("b", free=0, held={_BATCH: 64})]),
+    ]
+    [promotion] = assign_queued(
+        [_candidate("j", count=32, band=_INTERACTIVE)], peers, ReservationLedger(), max_per_peer_per_cycle=8
+    )
+    assert promotion.peer_id == "cw-metric"
+    assert promotion.reserved == {"h100": 32}
+
+
 def test_reclaimed_capacity_is_decremented_within_a_tick():
     # 8 free + 8 reclaimable from batch hosts exactly two 8-GPU jobs, not three.
     peers = [_peer("cw", [_backend("b", free=8, held={_BATCH: 8})])]

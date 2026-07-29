@@ -32,15 +32,12 @@ observation. That residual staleness is acceptable by design — placement need 
 be exact; the peer's own scheduler rejects (and the parent requeues) anything that
 does not fit, which is the backstop.
 
-Free capacity alone would leave a saturated peer permanently ineligible even when
-everything running on it is preemptible: an interactive job pinned to a peer full
-of batch work would queue at the parent forever instead of reaching the peer's
-scheduler, which is what would evict the batch work. So a peer also reports what
-its admitted work *holds* per priority band, and a candidate's effective capacity
-on a backend is its free amount plus everything held below its own band (a
-numerically higher band is lower priority). Placement spends idle capacity first
-and reclaims from the lowest-priority band upward, and prefers a peer that needs no
-preemption at all — the parent only sends work where preemption is warranted.
+A peer reports its capacity per priority band: a free amount plus what its admitted
+work holds at each band. A candidate's effective capacity on a backend is that free
+amount plus everything held below its own band (a numerically higher band is lower
+priority), which is what the peer's scheduler would preempt to admit the job.
+Placement spends idle capacity first, reclaims from the lowest-priority band upward,
+and prefers a peer that needs no preemption at all.
 """
 
 import logging
@@ -261,11 +258,12 @@ def assign_queued(
     and whose *effective* availability (advertised idle capacity plus capacity held
     below the candidate's band, minus reservations already made this generation,
     minus what earlier candidates in this pass took) meets the ``ge`` gate. A legacy
-    backend that supplies no metric is matched on shape alone. Prefer a placement
-    that needs no preemption; tie-break by best fit (least remaining capacity for the
-    gated token after placement), then peer id, then backend id, so load spreads and
-    large free blocks are preserved. Fit-aware: a candidate that fits nowhere is
-    skipped, not head-of-line-blocking the queue.
+    backend that supplies no metric is matched on shape alone, and ranks behind every
+    backend whose capacity the parent can see. Among the rest, prefer a placement that
+    needs no preemption; tie-break by best fit (least remaining capacity for the gated
+    token after placement), then peer id, then backend id, so load spreads and large
+    free blocks are preserved. Fit-aware: a candidate that fits nowhere is skipped, not
+    head-of-line-blocking the queue.
 
     Returns the promotions; the caller applies each as a conditional CAS and charges
     the ledger only for confirmed ones. Does not mutate ``ledger``.
@@ -290,9 +288,9 @@ def assign_queued(
     promotions: list[Promotion] = []
 
     for candidate in candidates:
-        # (preempts, fit, peer_id, backend_id): a _Placement widened with the peer id,
-        # which breaks ties between equally good backends on different peers.
-        best: tuple[int, float, str, str] | None = None
+        # (shape_only, preempts, fit, peer_id, backend_id): a _Placement widened with the
+        # peer id, which breaks ties between equally good backends on different peers.
+        best: tuple[bool, bool, float, str, str] | None = None
         for peer in reachable_peers:
             if candidate.pinned_peer_id and candidate.pinned_peer_id != peer.peer_id:
                 continue
@@ -301,14 +299,20 @@ def assign_queued(
             placement = _place_on_peer(candidate, peer, working)
             if placement is None:
                 continue
-            ranked = (placement.preempts, placement.remaining, peer.peer_id, placement.backend_id)
+            ranked = (
+                placement.shape_only,
+                placement.preempts,
+                placement.remaining,
+                peer.peer_id,
+                placement.backend_id,
+            )
             if best is None or ranked < best:
                 best = ranked
 
         if best is None:
             continue
 
-        _, _, peer_id, backend_id = best
+        _, _, _, peer_id, backend_id = best
         reserved: dict[str, int] = {}
         key = (peer_id, backend_id)
         if key in working:  # a metric backend was chosen: charge and decrement its capacity
@@ -334,17 +338,27 @@ def assign_queued(
 class _Placement(NamedTuple):
     """One backend a candidate could go to, in best-first field order.
 
-    A tuple so it doubles as the sort key: ``preempts`` first (an idle backend always
-    beats one that would have to evict work), then how much capacity is left after the
-    job lands (tighter fit first), then the backend id for a stable tie-break.
+    A tuple so it doubles as the sort key: ``shape_only`` first, so a backend whose
+    capacity the parent cannot see loses to every backend that verifiably fits, even
+    one that fits only by preemption (choosing it would drop the reservation the
+    tracked placement would have charged). Then ``preempts``, so an idle backend beats
+    one that would have to evict work, then how much capacity is left after the job
+    lands (tighter fit first), then the backend id for a stable tie-break.
     """
 
-    preempts: int  # 0 when idle capacity covers the job, 1 when it must reclaim held work
+    shape_only: bool  # True for a backend matched on shape alone: no capacity metric
+    preempts: bool  # True when the job fits only by reclaiming held work
     remaining: float  # capacity left across the gated tokens after placement
     backend_id: str  # "" for a force-routed candidate (shapeless or pinned)
 
 
-_UNTRACKED = float("inf")  # remaining capacity of a backend the parent has no metric for
+def _shape_only_placement(backend_id: str) -> _Placement:
+    """A shape-matched backend the parent has no capacity metric for.
+
+    ``preempts`` and ``remaining`` are unknown and never consulted: ``shape_only``
+    already ranks this behind every placement whose capacity the parent can see.
+    """
+    return _Placement(shape_only=True, preempts=False, remaining=0.0, backend_id=backend_id)
 
 
 def _place_on_peer(
@@ -364,33 +378,34 @@ def _place_on_peer(
     shape_matching = [b for b in peer.backends if _shape_ok(b, candidate.shape_constraints)]
     best: _Placement | None = None
     for backend in shape_matching:
-        key = (peer.peer_id, backend.backend_id)
-        if key in working:  # metric backend: gate on effective capacity
-            capacity = working[key]
-            if _availability_ok(capacity, candidate.availability_gate, candidate.priority_band):
-                candidate_fit = _Placement(
-                    preempts=_preempts(capacity, candidate.availability_gate),
-                    remaining=_remaining_after(capacity, candidate.availability_gate, candidate.priority_band),
-                    backend_id=backend.backend_id,
-                )
-                if best is None or candidate_fit < best:
-                    best = candidate_fit
-        elif best is None or _Placement(0, _UNTRACKED, backend.backend_id) < best:  # legacy: shape-only
-            best = _Placement(0, _UNTRACKED, backend.backend_id)
+        capacity = working.get((peer.peer_id, backend.backend_id))
+        if capacity is None:  # legacy backend: no metric, matched on shape alone
+            option = _shape_only_placement(backend.backend_id)
+        elif _availability_ok(capacity, candidate.availability_gate, candidate.priority_band):
+            option = _Placement(
+                shape_only=False,
+                preempts=_preempts(capacity, candidate.availability_gate),
+                remaining=_remaining_after(capacity, candidate.availability_gate, candidate.priority_band),
+                backend_id=backend.backend_id,
+            )
+        else:  # metric backend that cannot fit the job even by preemption
+            continue
+        if best is None or option < best:
+            best = option
     if best is not None:
         return best
     if not shape_matching and (not candidate.shape_constraints or candidate.pinned_peer_id == peer.peer_id):
-        return _Placement(0, _UNTRACKED, "")
+        return _shape_only_placement("")
     return None
 
 
-def _preempts(capacity: _WorkingCapacity, gate: list[Constraint]) -> int:
-    """1 when placing the job has to reclaim held capacity for some gated token.
+def _preempts(capacity: _WorkingCapacity, gate: list[Constraint]) -> bool:
+    """Whether placing the job has to reclaim held capacity for some gated token.
 
-    The leading best-fit key, so an idle peer always beats one that would have to
+    Ranked ahead of best fit, so an idle peer always beats one that would have to
     evict work — the parent preempts only where nothing idle fits.
     """
-    return int(any(capacity.would_preempt(_token(c), int(c.values[0].value)) for c in gate))
+    return any(capacity.would_preempt(_token(c), int(c.values[0].value)) for c in gate)
 
 
 def _remaining_after(capacity: _WorkingCapacity, gate: list[Constraint], band: int) -> float:
