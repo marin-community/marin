@@ -282,6 +282,9 @@ scheduling gate and never evidence that training started.
 One hard invariant: at most one live dispatch per run. Two gangs writing one checkpoint
 corrupt it.
 
+The monitor armed on 2026-07-29 polls Iris driver state only, so it catches a dead driver
+but **not a stall**. Check W&B step advancement by hand, or replace it.
+
 ## Where the code lives
 
 | what | where |
