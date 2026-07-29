@@ -1938,7 +1938,9 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
         frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}),
         advertised={"device-variant": {"v6e-16", "v5e-4"}},
     )
-    gcp_backend.resource_capacity.return_value = {"v6e-16": DeviceCapacity(free=32, total=64)}
+    gcp_backend.resource_capacity.return_value = {
+        "v6e-16": DeviceCapacity(free=32, total=64, held_by_band={job_pb2.PRIORITY_BAND_BATCH: 32})
+    }
     k8s_backend = _backend_mock("eu-k8s", frozenset({BackendCapability.CLUSTER_VIEW}))  # supplies none (UNSET)
     controller_mock.backends = {"gcp": gcp_backend, "eu-k8s": k8s_backend}
     controller_mock.scale_group_to_backend = {"tpu-v5e": "gcp"}
@@ -1971,7 +1973,12 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
     # UNSET (absent) for one that returns None.
     assert summaries["gcp"]["availability"]["amounts"] == {"v6e-16": "32"}  # int64 JSON-encodes as a string
     assert summaries["gcp"]["availability"]["totalAmounts"] == {"v6e-16": "64"}
-    assert summaries["gcp"]["availability"]["version"] == 1
+    assert summaries["gcp"]["availability"]["version"] == 2  # wire contract; not the constant
+    # Held capacity is reported per priority band so a parent can see what a
+    # higher-priority job would reclaim there.
+    assert summaries["gcp"]["availability"]["heldByBand"] == [
+        {"band": "PRIORITY_BAND_BATCH", "amounts": {"v6e-16": "32"}}
+    ]
     assert "availability" not in summaries["eu-k8s"]
     # Unroutable jobs surface as a structured count + sample, not parsed reason strings.
     assert resp["unroutableJobCount"] == 1

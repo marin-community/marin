@@ -1782,16 +1782,30 @@ class ClusterState:
             self._workloads = new_workloads
             self._node_pools = list(node_pools)
 
-    def gpu_capacity(self) -> DeviceCapacity:
-        """Approximate free vs. total GPUs across the cluster.
+    def gpu_capacity(self, priority_class_names: dict[int, str]) -> DeviceCapacity:
+        """Approximate free vs. total GPUs across the cluster, split by holder priority.
 
         Best-effort federation availability hint inferred from the last periodic
         kubectl sync (no extra kubectl call): total ``nvidia.com/gpu`` allocatable
-        across nodes, with the free count subtracting what non-terminal pods
-        request. Counts GPUs on all nodes (GPU nodes are commonly tainted, and a
-        taint a GPU pod tolerates does not make the GPU unavailable). Deliberately
-        imperfect — it lags the sync and ignores per-node packing, which the
-        meta-scheduler tolerates (the peer's own Kueue is the backstop)."""
+        across nodes, with the free count subtracting what *admitted* pods request.
+        Counts GPUs on all nodes (GPU nodes are commonly tainted, and a taint a GPU
+        pod tolerates does not make the GPU unavailable).
+
+        Admitted means Kueue released the pod's scheduling gate — it has reserved the
+        quota, whether or not the pod is bound to a node yet. A still-gated pod is
+        waiting in the peer's queue and holds nothing, so it neither reduces the free
+        count nor appears in the band split; counting it made a cluster with a long
+        queue advertise nothing free and kept federated work out of it.
+
+        ``held_by_band`` attributes each admitted pod's request to the ``PriorityBand``
+        whose configured PriorityClass it carries, so a parent can see which of the
+        held GPUs a higher-priority job would reclaim. A pod carrying no known class
+        is dropped from the split (still counted as held) — it cannot be preempted on
+        a band the parent can reason about.
+
+        Deliberately imperfect — it lags the sync and ignores per-node packing, which
+        the meta-scheduler tolerates (the peer's own Kueue is the backstop)."""
+        band_by_class = {name: band for band, name in priority_class_names.items()}
         with self._lock:
             nodes = self._nodes[:]
             pods = self._pods[:]
@@ -1800,12 +1814,21 @@ class ClusterState:
             gpu = node.get("status", {}).get("allocatable", {}).get(_GPU_RESOURCE)
             if gpu:
                 allocatable += int(parse_k8s_quantity(str(gpu)))
-        requested = 0
+        held = 0
+        held_by_band: dict[int, int] = {}
         for pod in pods:
             if pod.get("status", {}).get("phase", "") in ("Succeeded", "Failed"):
                 continue
-            requested += _pod_gpu_request(pod)
-        return DeviceCapacity(free=max(0, allocatable - int(requested)), total=allocatable)
+            if pod.get("spec", {}).get("schedulingGates"):  # not admitted: holds no capacity
+                continue
+            request = _pod_gpu_request(pod)
+            if request <= 0:
+                continue
+            held += request
+            band = band_by_class.get(pod.get("spec", {}).get("priorityClassName", ""))
+            if band is not None:
+                held_by_band[band] = held_by_band.get(band, 0) + request
+        return DeviceCapacity(free=max(0, allocatable - held), total=allocatable, held_by_band=held_by_band)
 
     def to_status_response(self, namespace: str) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
         """Build the dashboard RPC response from current state. No kubectl calls."""
@@ -2412,7 +2435,7 @@ class K8sTaskProvider:
         if not variants or len(variants) != 1:
             return None
         variant = next(iter(variants)).strip().lower()
-        return {variant: self._cluster_state.gpu_capacity()}
+        return {variant: self._cluster_state.gpu_capacity(self.priority_class_names)}
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         """No-op: Kueue owns placement, so Iris makes no scheduling decisions."""
