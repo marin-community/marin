@@ -331,3 +331,10 @@ IRIS_USER=mwittmann .venv/bin/iris --cluster=cw-us-east-08a job run --no-wait \
 ```
 
 - Verification gate: confirm the child task is production band 1 and inspect the live pod as `iris-production` / 1000 before accepting the scheduler state. Confirm Trainer preflight passes the prior `num_slices` failure before harvesting any metric.
+
+### 2026-07-28 18:19 PDT - D67-CTL-01 r5 reaches valid production queue
+
+- Submitted parent `/mwittmann/d67-control-m3-draw1-r5-0728-1820` at 18:18 PDT from commit `cc6f57af0` using the exact command above. Child: `/mwittmann/d67-control-m3-draw1-r5-0728-1820/grug-train-d67-control-m3-draw1-r5-0728-1820`.
+- Priority verification passed: all 16 live child pods are `priorityClassName: iris-production` at priority 1000, and Iris SQL records band 1 on both parent and child configs.
+- Queue state: attempt 0 is in `building` under direct workload `iris-pg-1f828bf14a398703-0` in `cw-use08a-lq`. Kueue reports topology fit for 10 of 16 pods and is pending preemption of three workloads.
+- Interpretation: this is the first valid production-band rack request in the family. Preserve it as the only submitted leg; do not resubmit while preemption frees the remaining six nodes.
