@@ -46,7 +46,12 @@ function canSelect(model: string): boolean {
 const comparing = computed(() => selected.value.length >= 2)
 
 // --- Δ best: gap from each model's mean score to the leader's, empty for the leader ---
-const topScore = computed<number | null>(() => data.value?.leaderboard.find((e) => e.score !== null)?.score ?? null)
+const topEntry = computed<LeaderboardEntry | null>(() => data.value?.leaderboard.find((e) => e.score !== null) ?? null)
+const topScore = computed<number | null>(() => topEntry.value?.score ?? null)
+const topModel = computed<string | null>(() => topEntry.value?.model ?? null)
+
+// The dense model x eval matrix is opt-in: the ranking, profiles, and sparklines are the overview.
+const showMatrix = ref(false)
 
 function deltaBest(entry: LeaderboardEntry): number | null {
   if (entry.score === null || topScore.value === null || entry.score === topScore.value) return null
@@ -312,13 +317,13 @@ function goToRun(runId: string) {
         </div>
       </div>
 
-      <!-- Eval profile: every model's score on every task, snowball highlighted -->
+      <!-- Eval profile: every model's score on every task, the top-ranked model highlighted -->
       <div>
         <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Eval profile</h3>
         <p class="text-xs text-text-muted mb-2">
-          each row: one eval; dots: models; highlighted: snowball; line: gap to fleet best
+          each row: one eval; dots: models; highlighted: {{ topModel ?? 'top model' }}; line: gap to fleet best
         </p>
-        <EvalProfileChart :matrix="filteredMatrix" />
+        <EvalProfileChart :matrix="filteredMatrix" :reference-model="topModel" />
       </div>
 
       <!-- Model comparison chart -->
@@ -329,10 +334,17 @@ function goToRun(runId: string) {
         <ModelCompareChart :matrix="filteredMatrix" :models="selected" />
       </div>
 
-      <!-- Per-task heatmap -->
+      <!-- Per-task heatmap: dense model x eval grid, opt-in so it never dominates the page -->
       <div>
-        <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Per-task scores</h3>
-        <div class="overflow-x-auto rounded-lg border border-surface-border">
+        <button
+          class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2 hover:text-text"
+          @click="showMatrix = !showMatrix"
+        >
+          <span class="text-text-muted">{{ showMatrix ? '▾' : '▸' }}</span>
+          Per-task matrix
+          <span class="font-normal normal-case text-text-muted">({{ sortedRows.length }} models × {{ visibleTasks.length }} evals)</span>
+        </button>
+        <div v-if="showMatrix" class="overflow-x-auto rounded-lg border border-surface-border">
           <table class="w-full border-collapse text-sm">
             <thead>
               <tr class="border-b border-surface-border bg-surface-raised">
