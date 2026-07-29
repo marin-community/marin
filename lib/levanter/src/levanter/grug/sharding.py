@@ -10,7 +10,15 @@ from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec, get_abstr
 # default distributed batch mapping, which includes the cross-slice axis.
 Pbatch = P(("replica_dcn", "data"))
 Pembed_vocab = P("model", Pbatch[0])
-Plm_head = P(Pbatch[0], "model")
+Plm_head_dense = P(Pbatch[0], "model")
+# FSDP axes for non-expert weights. Both axes are intra-rack under the compact
+# Grug mesh, while replica_dcn remains the cross-rack gradient-sync axis.
+#
+# Expert parallelism collapses "data" as "expert" grows. Including both axes
+# keeps attention, shared-expert, and lm-head weights and optimizer state sharded
+# at EP64. At EP1 this is equivalent to the previous P("data", ...) layout.
+Pfsdp = ("data", "expert")
+Plm_head_ep = P(Pfsdp, "model")
 Plogits = P(Pbatch[0], None, "model")
 
 

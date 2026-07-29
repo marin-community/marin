@@ -51,7 +51,7 @@ from levanter.grug.attention import (
 from levanter.grug.grug_moe import MoeImplementation, MoEExpertMlp
 from levanter.grug.sharding import (
     Pembed_vocab,
-    Plm_head,
+    Plm_head_ep,
     _current_mesh,
     _drop_absent_mesh_axes,
     _mesh_axis_size,
@@ -631,7 +631,7 @@ class SnowballTransformer(eqx.Module):
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
         output_proj = _reshard_for_init(
-            _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head
+            _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head_ep
         )
         blocks = tuple(SnowballBlock.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
         return SnowballTransformer(
@@ -839,7 +839,7 @@ def snowball_from_state_dict(
     m = eqx.tree_at(
         lambda t: t.final_gated_norm.w_up, m, _reshard_replicated(_T(g("model.final_gated_norm.up_proj.weight")))
     )
-    m = eqx.tree_at(lambda t: t.output_proj, m, _reshard_for_init(_T(g("lm_head.weight")), Plm_head))
+    m = eqx.tree_at(lambda t: t.output_proj, m, _reshard_for_init(_T(g("lm_head.weight")), Plm_head_ep))
 
     for i in range(len(m.blocks)):
         p = f"model.layers.{i}"
