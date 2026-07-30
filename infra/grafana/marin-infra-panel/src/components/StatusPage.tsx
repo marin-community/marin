@@ -32,19 +32,11 @@ const STATUS_GRID_CLASS = css`display:grid;grid-template-columns:minmax(220px,.8
 const STATUS_CARD_CLASS = css`flex:1;`;
 const STATUS_SECTION_CLASS = css`display:flex;flex-direction:column;`;
 const FLEET_SCOPE = 'fleet';
-const PERCENT_SCALE_LIMIT = 0.001;
-const PERCENT_TICKS = [1, 0.99, 0.95, 0.5, 0.05, 0.01, 0];
-
-function seriesColor(name: string): string {
-  let value = 0;
-  for (const character of name) {
-    value = (value * 31 + character.charCodeAt(0)) >>> 0;
-  }
-  return SERIES_COLORS[value % SERIES_COLORS.length];
-}
+const LOGIT_CLAMP_EPSILON = 0.001;
+const PERCENT_TICKS = [0.99, 0.95, 0.5, 0.05, 0.01];
 
 function logitPercent(value: number): number {
-  const bounded = Math.min(1 - PERCENT_SCALE_LIMIT, Math.max(PERCENT_SCALE_LIMIT, value));
+  const bounded = Math.min(1 - LOGIT_CLAMP_EPSILON, Math.max(LOGIT_CLAMP_EPSILON, value));
   return Math.log(bounded / (1 - bounded));
 }
 
@@ -138,12 +130,11 @@ function MiniSeriesChart({ points, unit }: { points: SeriesPoint[]; unit: 'count
             </g>
           );
         })}
-        {series.map(([name, samples]) => (
+        {series.map(([name, samples], index) => (
           <polyline
             key={name}
-            aria-label={`${name} history`}
             fill="none"
-            stroke={seriesColor(name)}
+            stroke={SERIES_COLORS[index % SERIES_COLORS.length]}
             strokeWidth="2"
             points={samples.map((point) => `${x(point.time)},${y(point.value)}`).join(' ')}
           />
@@ -156,15 +147,10 @@ function MiniSeriesChart({ points, unit }: { points: SeriesPoint[]; unit: 'count
         </text>
       </svg>
       <div role="list" aria-label="Status history series" className={css`display:flex;flex-wrap:wrap;gap:5px 14px;font-size:12px;color:${theme.colors.text.secondary};`}>
-        {series.map(([name]) => (
-          <span role="listitem" key={name}><span className={css`color:${seriesColor(name)};`}>━</span> {name}</span>
+        {series.map(([name], index) => (
+          <span role="listitem" key={name}><span className={css`color:${SERIES_COLORS[index % SERIES_COLORS.length]};`}>━</span> {name}</span>
         ))}
       </div>
-      {unit === 'percent' && (
-        <div className={css`margin-top:4px;font-size:12px;color:${theme.colors.text.secondary};`}>
-          The logit scale expands values near 0% and 100%.
-        </div>
-      )}
     </div>
   );
 }
@@ -264,7 +250,7 @@ function ProvisioningStatus({ frames }: { frames: DataFrame[] }) {
 
   return (
     <section className={STATUS_SECTION_CLASS} aria-label="Provisioning status">
-      <SectionTitle detail={fleet?.windowHours === undefined ? undefined : `trailing ${fleet.windowHours} hour window`}>Provisioning</SectionTitle>
+      <SectionTitle detail={fleet?.windowHours === undefined ? 'logit scale' : `trailing ${fleet.windowHours} hour window · logit scale`}>Provisioning</SectionTitle>
       <Card className={STATUS_CARD_CLASS}>
         {!fleet ? (
           <PanelMessage width={400} height={220}>No provisioning data</PanelMessage>

@@ -53,7 +53,7 @@ test('status page keeps worker and provisioning status visible when another sour
   expect(screen.getAllByText('No W&B data')).toHaveLength(3);
 });
 
-test('status page expands extreme provisioning values and keeps every region in the graph', () => {
+test('status page rolls provisioning pools into a logit region graph', () => {
   const now = Date.now();
   const frames = [
     frame('P', [{
@@ -121,23 +121,17 @@ test('status page expands extreme provisioning values and keeps every region in 
   expect(within(chart).getByText('5%')).toBeInTheDocument();
   expect(within(chart).getByText('95%')).toBeInTheDocument();
   expect(within(chart).getByText('99%')).toBeInTheDocument();
+  const tickY = (label: string) => Number(within(chart).getByText(label).getAttribute('y'));
+  const lowTailGap = Math.abs(tickY('1%') - tickY('5%'));
+  const centerGap = Math.abs(tickY('5%') - tickY('50%'));
+  expect(lowTailGap / centerGap).toBeGreaterThan(0.4);
+
+  expect(within(provisioning).queryByText('fleet')).not.toBeInTheDocument();
   const chartSeries = within(provisioning).getByRole('list', { name: 'Status history series' });
-  expect(within(chartSeries).queryByText('fleet')).not.toBeInTheDocument();
   expect(within(chartSeries).getByText('us-east5')).toBeInTheDocument();
   expect(within(chartSeries).getByText('asia-east1')).toBeInTheDocument();
   expect(within(chartSeries).getByText('us-central1')).toBeInTheDocument();
   expect(within(chartSeries).getByText('europe-west4')).toBeInTheDocument();
-  expect(within(provisioning).getByText('The logit scale expands values near 0% and 100%.')).toBeInTheDocument();
-
-  const onePercentLine = within(chart).getByLabelText('europe-west4 history');
-  const fivePercentLine = within(chart).getByLabelText('asia-east1 history');
-  const firstY = (line: HTMLElement) => {
-    const points = line.getAttribute('points');
-    if (!points) {
-      throw new Error('The chart line has no points');
-    }
-    return Number(points.split(' ')[0].split(',')[1]);
-  };
-  expect(Math.abs(firstY(onePercentLine) - firstY(fivePercentLine))).toBeGreaterThan(15);
+  expect(within(provisioning).getByText('trailing 3 hour window · logit scale')).toBeInTheDocument();
   expect(within(provisioning).queryByText('us-east5-a')).not.toBeInTheDocument();
 });
