@@ -208,6 +208,30 @@ def test_search_configuration_keeps_discord_opt_in(client_with):
     assert "discord" not in configuration["default_domains"]
 
 
+def test_training_log_question_uses_finelog_and_iris_query_vocabulary(client_with):
+    row = make_row(
+        id=8,
+        source="github",
+        kind="issue",
+        date=None,
+        author=None,
+        title="Training logs",
+        url="https://github.com/marin-community/marin/issues/8",
+        text="Query logs from a training job.",
+        score=0.04,
+        distance=0.2,
+        lexical_score=0.5,
+    )
+    harness = client_with([row])
+    query = "how do i query logs from training runs?"
+
+    echo.federated_search(harness.engine, harness.model, harness.reranker, echo.DEFAULT_CONFIG, query, ["issue"], 10)
+
+    expanded = f"{query}\n{echo.search_config.LOG_QUERY_EXPANSION}"
+    assert harness.model.queries == [expanded]
+    assert harness.reranker.queries == [expanded]
+
+
 def test_federated_search_classifies_github_comment_domain(client_with):
     row = make_row(
         id=8,

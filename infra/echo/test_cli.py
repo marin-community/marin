@@ -3,6 +3,8 @@
 
 """Behavior tests for Echo CLI federation."""
 
+import logging
+
 import cli
 
 
@@ -66,6 +68,22 @@ def test_search_defaults_to_curated_domains_without_discord(monkeypatch):
             {"params": {"q": "scheduler", "domain": ["wiki", "file", "pr", "issue"], "limit": 10}},
         )
     ]
+
+
+def test_bearer_token_quiets_only_the_known_missing_email_scope_warning(monkeypatch, caplog):
+    class Provider:
+        def get_token(self):
+            logger = logging.getLogger("google.oauth2.credentials")
+            logger.warning(cli.MISSING_EMAIL_SCOPE_WARNING)
+            logger.warning("token endpoint is degraded")
+            return "token"
+
+    monkeypatch.setattr(cli, "cached_login_provider", lambda: Provider())
+
+    with caplog.at_level(logging.WARNING):
+        assert cli.bearer_token() == "token"
+
+    assert [record.getMessage() for record in caplog.records] == ["token endpoint is degraded"]
 
 
 def test_get_fetches_full_detail_by_search_result_id(monkeypatch):

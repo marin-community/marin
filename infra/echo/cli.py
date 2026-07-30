@@ -23,6 +23,7 @@ ambient service-account credentials with no login. See ``infra/echo/README.md``.
 """
 
 import argparse
+import logging
 import os
 import shutil
 import sys
@@ -58,6 +59,7 @@ KINDS = ("issue", "pr", "comment", "message")
 DOMAINS = search_config.SEARCH_DOMAINS
 DEFAULT_DOMAINS = search_config.DEFAULT_SEARCH_DOMAINS
 SEARCH_DETAIL_INSTRUCTION = "Detail: uv run infra/echo/cli.py get <domain:id>"
+MISSING_EMAIL_SCOPE_WARNING = "Not all requested scopes were granted by the authorization server, missing scopes email."
 
 
 def cached_login_provider() -> TokenProvider | None:
@@ -72,11 +74,20 @@ def cached_login_provider() -> TokenProvider | None:
     return None
 
 
+def keep_oauth_log(record: logging.LogRecord) -> bool:
+    return record.getMessage() != MISSING_EMAIL_SCOPE_WARNING
+
+
 def bearer_token() -> str:
     """A Google ID token for echo-api's IAP: cached human login first, else ambient SA creds."""
     provider = cached_login_provider() or IapServiceAccountTokenProvider(AUDIENCE)
+    oauth_logger = logging.getLogger("google.oauth2.credentials")
+    oauth_logger.addFilter(keep_oauth_log)
     try:
-        token = provider.get_token()
+        try:
+            token = provider.get_token()
+        finally:
+            oauth_logger.removeFilter(keep_oauth_log)
     except (IapCredentialsUnavailable, IapLoginRequired) as error:
         raise SystemExit(f"{error}\nHuman callers: {LOGIN_HINT}.") from error
     if not token:

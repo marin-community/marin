@@ -344,7 +344,7 @@ def hybrid_search_params(model: TextEmbedding, query: str, limit: int) -> dict[s
     weights = search_config.search_weights(query)
     return {
         "q": query,
-        "embedding": str(query_embedding(model, query)),
+        "embedding": str(query_embedding(model, search_config.expanded_query(query))),
         "candidate_limit": search_config.candidate_limit(limit),
         "limit": limit,
         "semantic_weight": weights.semantic,
@@ -595,7 +595,7 @@ def rerank_candidates(
     selected = base[: search_config.RERANK_MAX_CANDIDATES]
     if not selected:
         return []
-    scores = list(reranker.rerank(query, [candidate.text for candidate in selected]))
+    scores = list(reranker.rerank(search_config.expanded_query(query), [candidate.text for candidate in selected]))
     if len(scores) != len(selected):
         raise ValueError(f"reranker returned {len(scores)} scores for {len(selected)} candidates")
     model_order = sorted(range(len(selected)), key=lambda index: (-scores[index], index))

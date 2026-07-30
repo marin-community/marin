@@ -61,6 +61,11 @@ multiplier, while test files receive a 0.85 multiplier. This keeps exact-code an
 keyword lookup lexical-first and favors runbooks over incidental test matches for
 questions such as `how do i deploy iris`.
 
+Prose questions that combine logs with training, jobs, runs, or querying add
+`finelog iris job logs` to the semantic and cross-encoder inputs. The lexical query
+and displayed query remain unchanged. This maps user vocabulary onto Marin's log
+stack without weakening exact identifier lookup.
+
 Results with a lexical match always qualify. A semantic-only result must have cosine
 distance at most 0.45 (similarity at least 0.55), so an unrelated nearest neighbor is
 not retained just because it is the closest candidate. File paths, PostgreSQL full-text

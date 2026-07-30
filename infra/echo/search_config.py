@@ -48,6 +48,10 @@ RERANK_MODEL_WEIGHT = 0.8
 MIN_RERANK_SCORE = -2.0
 PROSE_FILE_SUFFIXES = (".md", ".rst")
 IDENTIFIER_QUERY_PATTERN = re.compile(r"[/_.:]|(?:[a-z][A-Z])|(?:^|\s)--?[a-z0-9]")
+QUERY_WORD_PATTERN = re.compile(r"[a-z0-9]+")
+LOG_QUERY_TERMS = frozenset({"log", "logging", "logs"})
+LOG_QUERY_CONTEXT_TERMS = frozenset({"job", "jobs", "query", "run", "runs", "train", "training"})
+LOG_QUERY_EXPANSION = "Relevant Marin terms: finelog iris job logs"
 PROSE_QUERY_MIN_WORDS = 3
 
 
@@ -74,3 +78,11 @@ def search_weights(query: str) -> SearchWeights:
     if not is_identifier_query(query) and len(query.split()) >= PROSE_QUERY_MIN_WORDS:
         return QUERY_SEARCH_WEIGHTS
     return IDENTIFIER_SEARCH_WEIGHTS
+
+
+def expanded_query(query: str) -> str:
+    """Add Marin vocabulary when a prose question names a known subsystem indirectly."""
+    terms = set(QUERY_WORD_PATTERN.findall(query.casefold()))
+    if terms & LOG_QUERY_TERMS and terms & LOG_QUERY_CONTEXT_TERMS:
+        return f"{query}\n{LOG_QUERY_EXPANSION}"
+    return query
