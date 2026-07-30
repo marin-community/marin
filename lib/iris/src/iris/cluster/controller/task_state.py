@@ -41,11 +41,6 @@ DISPATCHED_TASK_STATES: frozenset[int] = frozenset(
 class RunningTaskEntry(NamedTuple):
     """Task ID and attempt ID pair captured at snapshot time.
 
-    ``coscheduled`` lets the direct (K8s) provider classify a vanished pod as
-    a gang preemption (WORKER_FAILED) rather than an application failure: when
-    Kueue preempts a pod group it deletes every pod, leaving no terminal pod
-    status to read — only the absence. See K8sTaskProvider._poll_pods.
-
     ``attempt_uid`` is the incarnation key the K8s provider needs to rebuild the
     pod name (which embeds it): a resubmit reuses (task_id, attempt_id) but mints
     a new uid, so poll must target this attempt's pod, not a stale one. Empty off
@@ -54,7 +49,6 @@ class RunningTaskEntry(NamedTuple):
 
     task_id: JobName
     attempt_id: int
-    coscheduled: bool = False
     attempt_uid: str = ""
 
 
