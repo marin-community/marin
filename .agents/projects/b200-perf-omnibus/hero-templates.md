@@ -180,8 +180,24 @@ PGLE was rejected on the EP line for a 0.235pp deficit against AutoPGLE.
 - **D5 QuACK grouped wgrad**, **Receiver-ECHO**, **MXFP8**, **latent MoE**,
   **`SCALE_MOE_EXPERT_CHUNKS`**, **slim Sonic residuals** — unchanged from
   [`sequence.md`](sequence.md).
-- **`z_loss_weight = 0.0001`** — appears in no `main` levanter or Grug path. Resolve its
-  provenance before adding it anywhere.
+## Resolved: `z_loss_weight` needs no commit
+
+An earlier note held this open, claiming `z_loss_weight = 0.0001` appeared in no `main` levanter
+or Grug path. That was wrong — it was looked for in `lib/levanter`, but Grug config lives in the
+experiment variant. On `origin/main` it is already the default in three places:
+`experiments/grug/moe/train.py:61` (`z_loss_weight: float = 1e-4`),
+`experiments/grug/moe/launch_cw_scale.py:89` (`SCALE_TRAINER_DEFAULTS`), and
+`experiments/grug/moe/launch.py:238`. `experiments/grug/moe/README.md` documents it, along with
+router z-loss being off by default (`router_z_loss_coef = 0.0`). Nothing to add; both hero
+templates inherit it by copying `moe`.
+
+This has a consequence for the chunked cross-entropy. `lib/levanter/src/levanter/grug/loss.py`
+threads `logsumexp_weight` into `fused_cross_entropy_loss_and_logsumexp_penalty`, so the chunked
+path must carry the z-loss penalty too. `mean(logsumexp(logits)²)` is a per-token quantity, so
+chunking it is exact **only if the per-chunk means are recombined weighted by each chunk's token
+count**. A ragged final chunk averaged unweighted with the others silently changes the penalty,
+and would do so by a small enough amount to look like noise. This is the specific defect to test
+for, not a hypothetical.
 
 ## Verification
 
