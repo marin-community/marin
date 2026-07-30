@@ -1,12 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import json
 import logging
 import os
 import urllib.parse
 from collections.abc import Callable, Sequence
-from typing import TypeVar
+from typing import Any, Protocol, TypeVar, cast
 
 import fsspec
 import jax
@@ -16,6 +17,20 @@ from levanter.checkpoint import load_checkpoint
 logger = logging.getLogger(__name__)
 
 StateT = TypeVar("StateT")
+
+
+class _GrugState(Protocol):
+    @property
+    def step(self) -> jax.Array: ...
+
+    @property
+    def params(self) -> object: ...
+
+    @property
+    def ema_params(self) -> object | None: ...
+
+
+GrugStateT = TypeVar("GrugStateT", bound=_GrugState)
 
 
 def _get_fs_and_plain_path(path: str) -> tuple[AbstractFileSystem, str]:
@@ -125,6 +140,45 @@ def restore_grug_state_from_checkpoint(
 
     logger.info("Checkpoint not found under %s. Starting from scratch.", checkpoint_search_paths)
     return state
+
+
+def initialize_grug_state_from_checkpoint(
+    state: GrugStateT,
+    *,
+    checkpoint_search_paths: Sequence[str],
+    load_checkpoint_setting: bool | None,
+    initialize_from: str | None,
+    mesh: jax.sharding.Mesh | None,
+    allow_partial: bool,
+    additional_weight_fields: Sequence[str] = (),
+) -> GrugStateT:
+    """Resume an own-run checkpoint or initialize a new phase from external weights."""
+    state = restore_grug_state_from_checkpoint(
+        state,
+        checkpoint_search_paths=checkpoint_search_paths,
+        load_checkpoint_setting=load_checkpoint_setting,
+        mesh=mesh,
+        allow_partial=allow_partial,
+    )
+    if int(state.step) != 0 or initialize_from is None:
+        return state
+
+    weight_fields = ("params", *additional_weight_fields)
+    exemplar = {field_name: getattr(state, field_name) for field_name in weight_fields}
+    loaded = cast(
+        dict[str, object],
+        load_checkpoint(
+            exemplar,
+            initialize_from,
+            axis_mapping=None,
+            mesh=mesh,
+            allow_partial=True,
+        ),
+    )
+    updates = {field_name: loaded[field_name] for field_name in weight_fields}
+    if state.ema_params is not None:
+        updates["ema_params"] = loaded["params"]
+    return cast(GrugStateT, dataclasses.replace(cast(Any, state), **updates))
 
 
 def _load_candidate_state(
