@@ -558,3 +558,56 @@ Reject:
 Even a pass does not authorize changing the 300B–700B architecture. It
 authorizes a larger preregistered replication with the intended expert count,
 parallelism, data mix, and at least two seeds.
+
+## NEST-MOE-006 addendum: direct breakout and balanced complements
+
+This addendum was registered after the matched 10B E256, E128, and
+single-prefix runs completed, but before either follow-up produced an update.
+It tests two explanations for the remaining E128 gap.
+
+### Direct breakout
+
+Use the terminal 10B E128-naive checkpoint at update 38,147 as the common
+breakout point. Initialize two fresh-optimizer trainers from exactly those
+weights:
+
+1. an unrestricted E256 trainer retaining the checkpoint's full-bank QB state;
+2. a physical E128 trainer containing experts 0--127, the corresponding router
+   columns, and the E128 QB state.
+
+Both branches use the terminal Datakit mixture throughout. MuonH and AdamH
+restart at the parent schedule's terminal learning rates, respectively
+`3.033425e-4` and `7.000212e-5`, with no warmup and linear decay. Evaluate
+every 250 updates for at most 12,000 updates. The primary recovery events are
+the first Paloma macro evaluations at or below `3.143486738` for E256 and
+`3.181439161` for E128, the terminal losses of the matched standalone controls.
+Uncheatable losses are secondary checks.
+
+Report both total accelerator compute and parallel critical-path time. Total
+breakout compute includes the observed 38,147-update joint prefix plus both
+cooldown branches through their first recovery evaluations. The comparison
+baseline is the sum of the completed E256 and E128 standalone runs. This
+directly tests the report's extrapolated `34.0%` saving; that number is a
+saving versus two separate runs, not overhead versus one E256 run.
+
+### Balanced complements
+
+Train one matched 10B E256 run from scratch with 50% full-bank sequences, 25%
+restricted to experts 0--127, and 25% restricted to experts 128--255. Rotate
+the row assignment by update while preserving exactly 16 full, eight lower,
+and eight upper sequences in every batch of 32. Each routing bank has
+independent QB state. The expected routed assignment rate of every expert is
+therefore equal to the E256 control, unlike the single-prefix schedule.
+
+At update 4,000, continue only if:
+
+- full Paloma is at most `3.872742`, the matched control plus `0.10`;
+- both E128 halves beat the matched control's fixed-half loss `4.023812`;
+- median compiled-step overhead versus the matched E256 control is below 5%;
+- training is finite and assignment overflow remains operationally comparable.
+
+If the gate passes, continue to update 38,147. The primary endpoint compares
+full E256 Paloma to the E256 control and both extracted halves to standalone
+E128. A balanced-complements success requires the worse half to reduce the
+single-prefix E128 gap without increasing the full-model loss penalty or
+optimizer-step time.

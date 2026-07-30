@@ -2667,3 +2667,83 @@ result:
 - The report now includes the standalone loss curve, post-hoc endpoints,
   residual Gate 1, and machine-readable fixed-exponent joint-cost model:
   `docs/reports/nested-model-training-single-prefix-10b.md`.
+
+### 2026-07-30 15:20 - NEST-MOE-007 breakout and balanced complements launched
+
+- Registered the direct-breakout and balanced-complements protocol in
+  `.agents/projects/2026-07-26_nested-model-training-preregistration.md`
+  before either follow-up produced an update.
+- The breakout point is the completed 10B E128-naive checkpoint at update
+  38,147. The E256 branch retains all 256 experts and disables restricted
+  routing. The E128 branch physically extracts experts 0--127, router columns
+  0--127, and the E128 QB state into a 128-expert trainer.
+- Both cooldown branches use the terminal Datakit phase and fresh MuonH/AdamH
+  state at the parent run's terminal learning rates. The first Paloma
+  evaluation at or below the matched control endpoint is the recovery event;
+  the cap is 12,000 additional updates.
+- The balanced arm assigns 25% of sequences to experts 0--127, 25% to experts
+  128--255, and 50% to all experts. This restores equal expected assignment
+  pressure across the two halves while retaining two extractable E128 banks.
+- Exact experiment source is commit `5f12ed16de`. Focused routing and extraction
+  tests pass, and the repository commit checks include Pyrefly.
+- Submitted two-update sharded smokes:
+  `/power/nest-augdk-breakout-e256-smoke-r1-coord`,
+  `/power/nest-augdk-breakout-e128-smoke-r1-coord`, and
+  `/power/nest-augdk-balanced-complements-smoke-r1-coord`.
+
+### 2026-07-30 15:43 - NEST-MOE-007 production arms running
+
+- The E256 and balanced-complements smokes completed on their first attempts.
+  The E128 smoke exposed two checkpoint-extraction defects before production:
+  ordinary slicing could not preserve explicit expert sharding, then retained
+  E256 static model metadata made the extracted tree incompatible with the E128
+  trainer. Source commits `10a6893138` and `6a2e0900eb` fixed those defects.
+  The third E128 smoke completed two finite updates and wrote a checkpoint.
+- Submitted all production jobs at batch priority on one eight-H100 node each:
+  `/power/nest-augdk-balanced-complements-10b-r1-coord`,
+  `/power/nest-augdk-breakout-e256-cooldown12k-r1-coord`, and
+  `/power/nest-augdk-breakout-e128-cooldown12k-r1-coord`.
+- At its first aligned evaluation, update 1,000, balanced complements records
+  `4.379674` full Paloma, `4.423274` for experts 0--127, and `4.425094` for
+  experts 128--255. The matched E256 control is `4.352927` full and `4.496725`
+  for its fixed lower-half chop. Both balanced E128 banks therefore beat the
+  control chop while remaining within `0.001821` of one another. The
+  preregistered continuation gate remains update 4,000.
+- The E256 cooldown has improved full Paloma from the joint checkpoint's
+  `3.163708` endpoint to `3.159109` after 750 updates. Its recovery target is
+  `3.143487`. The physical E128 cooldown is compiling and training without a
+  retry; its target is the standalone E128 endpoint, `3.181439`.
+
+### 2026-07-30 16:12 - NEST-MOE-007 balanced complements passes Gate 1
+
+- At update 4,000 and 1.049B tokens, balanced complements records `3.786975`
+  full E256 Paloma, `3.859420` for experts 0--127, and `3.852478` for experts
+  128--255.
+- Relative to the matched control, the full-model delta is `+0.014233`; both
+  halves improve on the fixed control chop by `0.164392` and `0.171335`.
+  The two trained halves differ by only `0.006943`.
+- Median optimizer-step duration after update 500 is approximately `0.2%`
+  above the E256 control. Training is finite and no restart, preemption, or
+  overflow anomaly has occurred.
+- Decision: pass the preregistered gate and continue the arm to update 38,147.
+
+### 2026-07-30 16:38 - NEST-MOE-007 breakout recovery complete
+
+- The unrestricted E256 branch first crossed the matched control endpoint at
+  cooldown update 3,500 and 0.918B added tokens: `3.143365` Paloma versus the
+  `3.143487` target. The physical E128 branch first crossed at cooldown update
+  6,000 and 1.573B added tokens: `3.181276` versus the `3.181439` standalone
+  target. Both exact jobs were intentionally stopped immediately after their
+  first logged crossing.
+- Median optimizer-step durations are `0.466` seconds for the E256 cooldown
+  and `0.422` seconds for the physical E128 cooldown. The completed joint
+  prefix, E256 cooldown, and E128 cooldown sum to `48.86` H100-hours. The
+  matched E256 plus standalone E128 controls sum to `74.95` H100-hours.
+- Breakout therefore costs `1.240x` one E256 run in total optimizer compute,
+  versus `1.901x` for the two independent controls, saving `34.8%`. If the two
+  cooldowns run concurrently, critical-path optimizer time is `1.148x` one
+  E256 run and `39.6%` shorter than training the controls serially.
+- This directly validates the earlier fixed-exponent economics: the forecast
+  was `1.258x` one E256 run and a `34.0%` saving. The observed result is
+  slightly better because direct mode-specific cooldown reaches both targets
+  before the mixed-continuation step forecasts of 5,659 and 9,609 updates.

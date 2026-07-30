@@ -3,8 +3,9 @@
 Date: 2026-07-30
 
 Status: complete for the registered 10B-token, post-training, standalone E128,
-post-hoc pruning, and paired-residual gates. Production expert-parallel
-validation remains.
+post-hoc pruning, paired-residual, and direct-breakout gates. Balanced
+complements has passed its 1B-token gate and is running to 10B. Production
+expert-parallel validation remains.
 
 ## TL;DR
 
@@ -25,6 +26,14 @@ validation remains.
   behind standalone E128. Paired expert/router residuals add no step cost and
   preserve E256, but fail the 1B-token extraction gate without an explicit
   compact objective.
+- Direct breakout reaches the E256 and standalone E128 targets after 3,500 and
+  6,000 added updates. It costs `48.86` H100-hours versus `74.95` for two
+  independent controls: `1.240x` one E256 run and a `34.8%` compute saving
+  against separate training. Parallel cooldown makes elapsed optimizer time
+  `1.148x` one E256 run.
+- Balanced complements passes its 1B-token gate with a `+0.0142` full-model
+  delta, two nearly symmetric E128 banks that both beat the control chop, and
+  approximately 0.2% optimizer-step overhead.
 
 ## Question
 
@@ -354,6 +363,74 @@ may strengthen the standalone baseline.
 ![Matched E128 training and post-hoc controls.](assets/nested-model-training-e128-controls.png)
 
 [Machine-readable E128 endpoint and cost results](assets/nested-model-training-e128-controls-results.json)
+
+## Breakout and balanced-complements addendum
+
+The direct breakout test starts from the completed 10B E128-naive checkpoint.
+One branch restores all 256 experts and removes routing restrictions. The
+other physically extracts experts 0--127, router columns 0--127, and the E128
+QB state into a 128-expert trainer. Both branches use fresh optimizer state,
+the terminal Datakit phase, the parent run's terminal MuonH/AdamH learning
+rates, no warmup, and a 12,000-update linear cooldown. Evaluation runs every
+250 updates. The first E256 Paloma value at or below `3.143487` and the first
+E128 value at or below `3.181439` are the preregistered recovery events.
+
+Both branches recover before the cap:
+
+| Branch | Starting Paloma | Target | First crossing | Added tokens | Median step |
+|---|---:|---:|---:|---:|---:|
+| Full E256 | 3.163708 | 3.143487 | 3,500 updates | 0.918B | 466 ms |
+| Physical E128 | 3.215226 | 3.181439 | 6,000 updates | 1.573B | 422 ms |
+
+The E256 crossing is `3.143365`; the E128 crossing is `3.181276`. They occur
+well before the fixed-exponent mixed-continuation forecasts of 5,659 and 9,609
+updates. Direct mode-specific cooldown is therefore more efficient than
+continuing the joint objective in this cell.
+
+The cost accounting excludes compilation, checkpointing, and evaluation hooks
+and sums optimizer time across both cooldown nodes:
+
+| Training plan | Joint prefix | E256 cooldown | E128 cooldown | Total H100-hours | Relative to E256 |
+|---|---:|---:|---:|---:|---:|
+| Separate E256 + E128 | -- | 39.42 | 35.53 | 74.95 | 1.901x |
+| Naive joint prefix + breakout | 39.61 | 3.62 | 5.62 | 48.86 | 1.240x |
+
+Breakout adds `24.0%` total optimizer compute relative to producing only E256
+and saves `34.8%` relative to training E256 and E128 separately. This is the
+same comparison behind the earlier `34.0%` forecast; 34% is a saving against
+two runs, not an overhead against one. If the two cooldown branches run
+concurrently, critical-path optimizer time is `1.148x` one E256 run and 39.6%
+shorter than the serial two-run baseline. Total GPU compute remains the
+primary economic number.
+
+Balanced complements tests whether two compact checkpoints can be trained
+without overexposing either expert bank. In every batch, 25% of sequences
+route within experts 0--127, 25% route within experts 128--255, and 50% route
+over all 256 experts. Each expert consequently retains its expected control
+assignment rate. At the preregistered 1.049B-token gate:
+
+| Update 4,000 | Full E256 | Delta vs control | E128 Paloma | Gain vs control chop |
+|---|---:|---:|---:|---:|
+| Lower bank, experts 0--127 | 3.786975 | +0.014233 | 3.859420 | 0.164392 |
+| Upper bank, experts 128--255 | 3.786975 | +0.014233 | 3.852478 | 0.171335 |
+
+The two compact banks differ by only `0.006943` Paloma. Median optimizer-step
+overhead is approximately 0.2%, and all finite-loss and routing checks pass.
+The arm therefore passes Gate 1 and continues to the 10B endpoint.
+
+Breakout and balanced-complements source is pinned at
+[`6a2e0900eb`](https://github.com/marin-community/marin/commit/6a2e0900eb).
+Physical extraction required preserving explicit target sharding and
+rebuilding on the E128 target pytree so identical-shaped shared modules carry
+E128 static metadata.
+
+![Breakout recovery and balanced-complements curves.](assets/nested-model-training-breakout.png)
+
+[Machine-readable breakout and balanced-complements results](assets/nested-model-training-breakout-results.json)
+
+- [E256 breakout cooldown](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-breakout-e256-cooldown12k-r1)
+- [Physical E128 breakout cooldown](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-breakout-e128-cooldown12k-r1)
+- [Balanced complements](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-balanced-complements-10b-r1)
 
 ## Post-training plan
 
