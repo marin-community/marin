@@ -53,24 +53,31 @@ on `search`; the activity-only `grep` command retains `--source` and `--kind` fi
 The compatibility `GET /api/search` endpoint still accepts source, kind, and date
 filters for existing API clients.
 
-All domains use reciprocal-rank fusion with `k=60`. Paths, filenames, flags, code-like
-identifiers, and one- or two-token keyword searches use semantic weight 1 and lexical
-weight 2. Prose searches of at least three tokens use semantic weight 2 and lexical
-weight 1; Markdown and reStructuredText files receive a 1.15 score multiplier, while
-test files receive a 0.85 multiplier. This keeps exact-code and terse keyword lookup
-lexical-first and favors runbooks over incidental test matches for questions such as
-`how do i deploy iris`.
+The first retrieval stage uses reciprocal-rank fusion with `k=60`. Paths, filenames,
+flags, code-like identifiers, and one- or two-token keyword searches use semantic
+weight 1 and lexical weight 2. Prose searches of at least three tokens use semantic
+weight 2 and lexical weight 1; Markdown and reStructuredText files receive a 1.15 score
+multiplier, while test files receive a 0.85 multiplier. This keeps exact-code and terse
+keyword lookup lexical-first and favors runbooks over incidental test matches for
+questions such as `how do i deploy iris`.
 
 Results with a lexical match always qualify. A semantic-only result must have cosine
 distance at most 0.45 (similarity at least 0.55), so an unrelated nearest neighbor is
-not returned just because it is the closest candidate. Scores compare rank positions,
-not calibrated relevance probabilities. File paths, PostgreSQL full-text matches, and
-case-insensitive exact file substrings contribute the lexical signal; exact and partial
-basename matches receive additional weight. A file with several independently
-qualifying chunks gains up to 30% over its best chunk score, so repeated evidence helps
-without allowing a large file to dominate. Paraphrases can enter through BGE semantic
-retrieval. `grep` remains a case-insensitive literal substring scan over activity,
-newest first.
+not retained just because it is the closest candidate. File paths, PostgreSQL full-text
+matches, and case-insensitive exact file substrings contribute the lexical signal;
+exact and partial basename matches receive additional weight. A file with several
+independently qualifying chunks gains up to 30% over its best chunk score, so repeated
+evidence helps without allowing a large file to dominate. Paraphrases can enter through
+BGE semantic retrieval.
+
+The API retrieves at least 20 candidates from each selected domain, takes the best 20
+after first-stage fusion, and reranks their complete indexed chunks with
+`ms-marco-MiniLM-L-6-v2`. Final rank is reciprocal-rank fusion of the first-stage rank
+(weight 0.2) and cross-encoder rank (weight 0.8). Candidates with a raw cross-encoder
+score below -2 are omitted. The threshold is an empirical relevance floor, not a
+calibrated probability. Because every returned result must be reranked, a search can
+return fewer than the requested limit and returns at most 20 results. `grep` remains a
+case-insensitive literal substring scan over activity, newest first.
 
 CLI search prints one table with stable result ID, title, and source-derived detail.
 Run `uv run infra/echo/cli.py get <domain:id>` to fetch the full indexed wiki body,
@@ -94,10 +101,11 @@ authenticated REST calls.
 The file index accepts source, configuration, and prose files up to 256 KiB. It rejects
 binary/non-UTF-8 content, lock files, generated/minified files, build and cache
 directories, vendored or external trees, and secret-like names or key/certificate
-extensions. A file result shows a title, matching snippet, and a subtitle containing
-`path:line`, the exact indexed `main` commit, and index time. Its URL is pinned to that
-commit. Working-tree and branch changes are absent until they reach `main`; use `rg`
-locally when the current checkout matters.
+extensions. A file result shows a title, up to three query-ranked `path:line` excerpts
+from the best matching chunk, and a subtitle containing the first line, exact indexed
+`main` commit, and index time. Each reference URL is pinned to that commit. Working-tree
+and branch changes are absent until they reach `main`; use `rg` locally when the current
+checkout matters.
 
 Discord results contain one message, so open the result URL when the surrounding
 thread matters. Wiki writes go through the API so it can embed and attribute each

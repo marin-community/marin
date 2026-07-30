@@ -144,7 +144,10 @@ def print_search_results(results: list[SearchResult]) -> None:
     detail_width = max(20, available - title_width)
     print(f"{'ID':<{id_width}}  {'TITLE':<{title_width}}  DETAIL")
     for result in results:
-        detail = result.subtitle if result.domain == "wiki" else result.snippet
+        if result.references:
+            detail = " · ".join(f"L{reference.line} {reference.text}" for reference in result.references)
+        else:
+            detail = result.subtitle if result.domain == "wiki" else result.snippet
         print(
             f"{result.id:<{id_width}}  "
             f"{truncate_cell(one_line(result.title), title_width):<{title_width}}  "

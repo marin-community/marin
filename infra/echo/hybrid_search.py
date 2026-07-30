@@ -158,7 +158,7 @@ def repository_file_search_statement() -> sqlalchemy.TextClause:
         semantic_where=_where(filters, "r.embedding IS NOT NULL"),
         lexical_where=_where(
             filters,
-            f"(r.search_document @@ input.query OR {filename_match} OR {path_match} OR {text_match})",
+            f"(r.search_document @@ input.query OR {path_match} OR {text_match})",
         ),
         lexical_score=lexical_score,
         result_key="path",

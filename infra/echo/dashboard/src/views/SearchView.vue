@@ -257,7 +257,14 @@ onMounted(async () => {
               {{ result.title }}
             </a>
             <p class="mt-1 break-words text-xs text-ink/45">{{ result.subtitle }}</p>
-            <p class="mt-2 line-clamp-3 text-sm leading-6 text-ink/65">{{ result.snippet }}</p>
+            <ul v-if="result.references.length" class="mt-2 space-y-1 font-mono text-xs leading-5 text-ink/65">
+              <li v-for="reference in result.references" :key="reference.url">
+                <a :href="reference.url" rel="noreferrer" target="_blank" class="hover:text-moss">
+                  L{{ reference.line }} {{ reference.text }}
+                </a>
+              </li>
+            </ul>
+            <p v-else class="mt-2 line-clamp-3 text-sm leading-6 text-ink/65">{{ result.snippet }}</p>
           </div>
         </div>
       </article>

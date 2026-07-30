@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import PurePosixPath
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Protocol
 from urllib.parse import quote
 
 import dashboard as echo_dashboard
@@ -23,6 +23,7 @@ import search_config
 import sqlalchemy
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastembed import TextEmbedding
+from fastembed.rerank.cross_encoder import TextCrossEncoder
 from google.cloud.sql.connector import Connector
 from pydantic import BaseModel, Field, field_validator
 
@@ -38,6 +39,32 @@ FILE_BOILERPLATE_PREFIXES = (
     "// spdx-license-identifier:",
     "* spdx-license-identifier:",
 )
+QUERY_LINE_TERM_PATTERN = re.compile(r"[a-z0-9]+")
+QUERY_LINE_STOP_WORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "do",
+        "does",
+        "for",
+        "how",
+        "i",
+        "in",
+        "is",
+        "of",
+        "or",
+        "the",
+        "to",
+        "we",
+        "what",
+        "when",
+        "where",
+        "which",
+    }
+)
+FILE_REFERENCE_LIMIT = 3
 
 
 @dataclass(frozen=True)
@@ -74,6 +101,7 @@ async def lifespan(app: FastAPI):
             pool_pre_ping=True,
         )
         app.state.model = TextEmbedding(search_config.EMBED_MODEL)
+        app.state.reranker = TextCrossEncoder(search_config.RERANK_MODEL)
         try:
             yield
         finally:
@@ -96,12 +124,17 @@ def get_model(request: Request) -> TextEmbedding:
     return request.app.state.model
 
 
+def get_reranker(request: Request) -> TextCrossEncoder:
+    return request.app.state.reranker
+
+
 def get_config(request: Request) -> EchoConfig:
     return request.app.state.config
 
 
 Engine = Annotated[sqlalchemy.Engine, Depends(get_engine)]
 Model = Annotated[TextEmbedding, Depends(get_model)]
+Reranker = Annotated[TextCrossEncoder, Depends(get_reranker)]
 Config = Annotated[EchoConfig, Depends(get_config)]
 
 # Data endpoints live under /api so they don't collide with the dashboard SPA's client-side
@@ -129,6 +162,12 @@ class Chunk(Hit):
     parent: str | None
 
 
+class SearchReference(BaseModel):
+    line: int
+    text: str
+    url: str
+
+
 class SearchResult(BaseModel):
     id: str
     domain: search_config.SearchDomain
@@ -136,9 +175,14 @@ class SearchResult(BaseModel):
     subtitle: str
     url: str
     snippet: str
-    score: float = Field(description="Final hybrid score after query-oriented source priors; higher is better.")
+    score: float = Field(description="Final reciprocal-rank fusion score; higher is better.")
     distance: float | None = Field(None, description="Cosine distance; lower is closer.")
     lexical_score: float | None = Field(None, description="PostgreSQL full-text rank; higher is better.")
+    references: list[SearchReference] = Field(
+        default_factory=list,
+        description="Ranked line-level references within a repository file.",
+    )
+    rerank_score: float | None = Field(default=None, exclude=True)
 
 
 class RepositoryFileDetail(BaseModel):
@@ -235,6 +279,17 @@ class RepositoryIndexState:
     @property
     def building(self) -> bool:
         return self.started_at is not None
+
+
+@dataclass(frozen=True)
+class SearchCandidate:
+    result: SearchResult
+    text: str
+
+
+class RerankerModel(Protocol):
+    def rerank(self, query: str, documents: Iterable[str], batch_size: int = 64, **kwargs: Any) -> Iterable[float]:
+        """Score documents for their relevance to one query."""
 
 
 def normalize_wiki_tags(tags: Iterable[str]) -> list[str]:
@@ -429,17 +484,45 @@ def repository_index_state(
     )
 
 
-def representative_file_line(text: str, query: str, start_line: int) -> tuple[int, str]:
-    lines = text.splitlines()
+def query_line_terms(query: str) -> frozenset[str]:
+    """Return content terms and light stems for ranking source lines."""
+    terms = {term for term in QUERY_LINE_TERM_PATTERN.findall(query.casefold()) if term not in QUERY_LINE_STOP_WORDS}
+    stems = set()
+    for term in terms:
+        if len(term) > 5 and term.endswith("ing"):
+            stems.add(term[:-3])
+        elif len(term) > 4 and term.endswith("ed"):
+            stems.add(term[:-2])
+        elif len(term) > 4 and term.endswith("es"):
+            stems.add(term[:-2])
+        elif len(term) > 3 and term.endswith("s"):
+            stems.add(term[:-1])
+    return frozenset(terms | stems)
+
+
+def representative_file_lines(text: str, query: str, start_line: int) -> list[tuple[int, str]]:
+    """Choose up to three non-boilerplate source lines that best explain a file match."""
+    candidates = []
     lowered_query = query.casefold()
+    terms = query_line_terms(query)
+    lines = text.splitlines()
     for offset, line in enumerate(lines):
-        if lowered_query in line.casefold():
-            return start_line + offset, line.strip()
-    for offset, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped and not stripped.casefold().startswith(FILE_BOILERPLATE_PREFIXES):
-            return start_line + offset, stripped
-    return start_line, ""
+        stripped = " ".join(line.split())
+        lowered_line = stripped.casefold()
+        if not stripped or lowered_line.startswith(FILE_BOILERPLATE_PREFIXES):
+            continue
+        matched_terms = {term for term in terms if term in lowered_line}
+        score = len(matched_terms) * 10 + sum(lowered_line.count(term) for term in matched_terms)
+        if lowered_query and lowered_query in lowered_line:
+            score += 100
+        candidates.append((score, offset, stripped))
+    if not candidates:
+        return [(start_line, "")]
+    if max(score for score, _, _ in candidates) == 0:
+        selected = candidates[:FILE_REFERENCE_LIMIT]
+    else:
+        selected = sorted(candidates, key=lambda candidate: (-candidate[0], candidate[1]))[:FILE_REFERENCE_LIMIT]
+    return [(start_line + offset, line) for _, offset, line in selected]
 
 
 def repository_freshness(state: RepositoryIndexState) -> str:
@@ -455,22 +538,32 @@ def repository_file_search_result(
     query: str,
     config: EchoConfig,
 ) -> SearchResult:
-    line, matching_line = representative_file_line(row.text, query, row.start_line)
     path = quote(row.path, safe="/")
+    source_url = f"https://github.com/{config.github_repository}/blob/{state.commit_sha}/{path}"
+    lines = representative_file_lines(row.text, query, row.start_line)
+    references = [
+        SearchReference(
+            line=line,
+            text=text[: search_config.FEDERATED_SUMMARY_CHARACTERS],
+            url=f"{source_url}#L{line}",
+        )
+        for line, text in lines
+    ]
     return SearchResult(
         id=f"file:{row.path}",
         domain="file",
         title=row.title,
         subtitle=(
-            f"{row.path}:{line} · "
+            f"{row.path}:{references[0].line} · "
             f"{config.github_branch}@{state.commit_sha[: search_config.DISPLAY_SHA_CHARACTERS]} · "
             f"{repository_freshness(state)}"
         ),
-        url=f"https://github.com/{config.github_repository}/blob/{state.commit_sha}/{path}#L{line}",
-        snippet=matching_line[: search_config.FEDERATED_SUMMARY_CHARACTERS],
+        url=references[0].url,
+        snippet=" · ".join(f"{row.path}:{reference.line} {reference.text}" for reference in references),
         score=row.score,
         distance=row.distance,
         lexical_score=row.lexical_score,
+        references=references,
     )
 
 
@@ -486,6 +579,45 @@ def query_oriented_result(result: SearchResult, query: str) -> SearchResult:
     if "tests" in PurePosixPath(path).parts or filename == "conftest.py" or filename.startswith("test_"):
         score *= search_config.QUERY_TEST_FILE_SCORE_MULTIPLIER
     return result.model_copy(update={"score": score})
+
+
+def rerank_candidates(
+    candidates: Iterable[SearchCandidate],
+    query: str,
+    reranker: RerankerModel,
+    limit: int,
+) -> list[SearchResult]:
+    """Fuse the existing hybrid order with bounded full-text cross-encoder ranks."""
+    base = [SearchCandidate(query_oriented_result(candidate.result, query), candidate.text) for candidate in candidates]
+    base.sort(key=lambda candidate: (-candidate.result.score, candidate.result.domain, candidate.result.id))
+    selected = base[: search_config.RERANK_MAX_CANDIDATES]
+    if not selected:
+        return []
+    scores = list(reranker.rerank(query, [candidate.text for candidate in selected]))
+    if len(scores) != len(selected):
+        raise ValueError(f"reranker returned {len(scores)} scores for {len(selected)} candidates")
+    model_order = sorted(range(len(selected)), key=lambda index: (-scores[index], index))
+    model_ranks = {index: rank for rank, index in enumerate(model_order, start=1)}
+    reranked = []
+    for base_rank, candidate in enumerate(selected, start=1):
+        score = search_config.RERANK_BASE_WEIGHT / (
+            search_config.RRF_K + base_rank
+        ) + search_config.RERANK_MODEL_WEIGHT / (search_config.RRF_K + model_ranks[base_rank - 1])
+        reranked.append(
+            candidate.result.model_copy(
+                update={
+                    "score": score,
+                    "rerank_score": float(scores[base_rank - 1]),
+                }
+            )
+        )
+    reranked = [
+        result
+        for result in reranked
+        if result.rerank_score is not None and result.rerank_score >= search_config.MIN_RERANK_SCORE
+    ]
+    reranked.sort(key=lambda result: (-result.score, result.domain, result.id))
+    return reranked[:limit]
 
 
 def indexed_file_text(rows: Iterable[sqlalchemy.Row]) -> str:
@@ -584,6 +716,7 @@ def search(
 def federated_search(
     engine: Engine,
     model: Model,
+    reranker: Reranker,
     config: Config,
     q: str = Query(description="Natural-language query."),
     domain: list[search_config.SearchDomain] | None = Query(
@@ -596,20 +729,26 @@ def federated_search(
     if not query:
         raise HTTPException(422, "q must not be blank")
     domains = list(dict.fromkeys(domain or search_config.DEFAULT_SEARCH_DOMAINS))
-    params = hybrid_search_params(model, query, limit)
-    results: list[SearchResult] = []
+    retrieval_limit = max(limit, search_config.RERANK_MIN_RESULTS_PER_DOMAIN)
+    params = hybrid_search_params(model, query, retrieval_limit)
+    candidates: list[SearchCandidate] = []
     with engine.connect() as conn:
         conn.execute(hybrid_search.HNSW_ITERATIVE_SCAN)
         if "wiki" in domains:
             for row in conn.execute(hybrid_search.wiki_search_statement(), params):
-                results.append(wiki_search_result(row, config))
+                candidates.append(
+                    SearchCandidate(
+                        wiki_search_result(row, config),
+                        f"{row.title}\n{row.use_when}\n\n{row.body}",
+                    )
+                )
         if "file" in domains:
             state = repository_index_state(conn, config)
             if state is not None:
                 file_params = {
                     **params,
                     "candidate_limit": (
-                        search_config.candidate_limit(limit) * search_config.FILE_CHUNK_CANDIDATE_MULTIPLIER
+                        search_config.candidate_limit(retrieval_limit) * search_config.FILE_CHUNK_CANDIDATE_MULTIPLIER
                     ),
                     "repository": config.github_repository,
                     "branch": config.github_branch,
@@ -617,14 +756,23 @@ def federated_search(
                     "substring": f"%{escape_like(query)}%",
                 }
                 for row in conn.execute(hybrid_search.repository_file_search_statement(), file_params):
-                    results.append(repository_file_search_result(row, state, query, config))
+                    candidates.append(
+                        SearchCandidate(
+                            repository_file_search_result(row, state, query, config),
+                            f"{row.path}\n{row.title}\n\n{row.text}",
+                        )
+                    )
         activity_domains = [candidate for candidate in domains if candidate in ("discord", "pr", "issue")]
         if activity_domains:
             statement = hybrid_search.chunk_search_statement([activity_domain_clause(activity_domains)])
             for row in conn.execute(statement, params):
-                results.append(activity_search_result(row))
-    ranked = [query_oriented_result(result, query) for result in results]
-    return sorted(ranked, key=lambda result: (-result.score, result.domain, result.id))[:limit]
+                candidates.append(
+                    SearchCandidate(
+                        activity_search_result(row),
+                        f"{row.title or ''}\n\n{row.text or ''}",
+                    )
+                )
+    return rerank_candidates(candidates, query, reranker, limit)
 
 
 @api.get("/grep", response_model=list[Hit])

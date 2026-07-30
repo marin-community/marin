@@ -7,6 +7,22 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class SearchReference:
+    line: int
+    text: str
+    url: str
+
+    @classmethod
+    def from_json(cls, value: object) -> "SearchReference":
+        if not isinstance(value, dict):
+            raise ValueError("search reference must be an object")
+        try:
+            return cls(line=int(value["line"]), text=str(value["text"]), url=str(value["url"]))
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(f"invalid search reference: {error}") from error
+
+
+@dataclass(frozen=True)
 class SearchResult:
     id: str
     domain: str
@@ -17,6 +33,7 @@ class SearchResult:
     score: float
     distance: float | None
     lexical_score: float | None
+    references: tuple[SearchReference, ...] = ()
 
     @classmethod
     def from_json(cls, value: object) -> "SearchResult":
@@ -33,6 +50,7 @@ class SearchResult:
                 score=float(value["score"]),
                 distance=optional_float(value.get("distance")),
                 lexical_score=optional_float(value.get("lexical_score")),
+                references=tuple(SearchReference.from_json(reference) for reference in value.get("references", [])),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(f"invalid search result: {error}") from error

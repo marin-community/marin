@@ -84,6 +84,18 @@ class FakeModel:
         return iter([[0.3, 0.4]])
 
 
+class FakeReranker:
+    def __init__(self):
+        self.queries: list[str] = []
+        self.documents: list[list[str]] = []
+
+    def rerank(self, query, documents, batch_size=64, **kwargs):
+        values = list(documents)
+        self.queries.append(query)
+        self.documents.append(values)
+        return [0.0] * len(values)
+
+
 def make_row(**values):
     values.setdefault("tags", [])
     return type("Row", (), {"_mapping": values, **values})()
@@ -94,6 +106,7 @@ class ApiHarness:
     client: TestClient
     engine: FakeEngine
     model: FakeModel
+    reranker: FakeReranker
 
 
 @pytest.fixture
@@ -101,9 +114,11 @@ def client_with():
     def _install(rows, responses=None):
         engine = FakeEngine(rows, responses)
         model = FakeModel()
+        reranker = FakeReranker()
         echo.app.dependency_overrides[echo.get_engine] = lambda: engine
         echo.app.dependency_overrides[echo.get_model] = lambda: model
-        return ApiHarness(TestClient(echo.app), engine, model)
+        echo.app.dependency_overrides[echo.get_reranker] = lambda: reranker
+        return ApiHarness(TestClient(echo.app), engine, model, reranker)
 
     yield _install
     echo.app.dependency_overrides.clear()
@@ -208,7 +223,15 @@ def test_federated_search_classifies_github_comment_domain(client_with):
         lexical_score=0.5,
     )
     harness = client_with([row])
-    results = echo.federated_search(harness.engine, harness.model, echo.DEFAULT_CONFIG, "scheduler", ["pr"], 10)
+    results = echo.federated_search(
+        harness.engine,
+        harness.model,
+        harness.reranker,
+        echo.DEFAULT_CONFIG,
+        "scheduler",
+        ["pr"],
+        10,
+    )
     assert [result.model_dump(mode="json") for result in results] == [
         {
             "id": "pr:8",
@@ -217,9 +240,10 @@ def test_federated_search_classifies_github_comment_domain(client_with):
             "subtitle": "pr · alice · 2026-07-23T00:00:00+00:00",
             "url": "https://github.com/marin-community/marin/pull/7000#issuecomment-1",
             "snippet": "The scheduler can stop here.",
-            "score": 0.04,
+            "score": 0.01639344262295082,
             "distance": 0.2,
             "lexical_score": 0.5,
+            "references": [],
         }
     ]
 
@@ -259,10 +283,31 @@ def test_federated_file_result_names_exact_indexed_head(client_with):
             "url": (
                 "https://github.com/marin-community/marin/blob/abcdef1234567890/" "lib/iris/src/iris/scheduler.py#L41"
             ),
-            "snippet": "raise FAILED_PRECONDITION",
-            "score": 0.05,
+            "snippet": (
+                "lib/iris/src/iris/scheduler.py:41 raise FAILED_PRECONDITION · "
+                "lib/iris/src/iris/scheduler.py:40 def place_gang():"
+            ),
+            "score": 0.01639344262295082,
             "distance": 0.1,
             "lexical_score": 4.0,
+            "references": [
+                {
+                    "line": 41,
+                    "text": "raise FAILED_PRECONDITION",
+                    "url": (
+                        "https://github.com/marin-community/marin/blob/abcdef1234567890/"
+                        "lib/iris/src/iris/scheduler.py#L41"
+                    ),
+                },
+                {
+                    "line": 40,
+                    "text": "def place_gang():",
+                    "url": (
+                        "https://github.com/marin-community/marin/blob/abcdef1234567890/"
+                        "lib/iris/src/iris/scheduler.py#L40"
+                    ),
+                },
+            ],
         }
     ]
 
@@ -270,7 +315,25 @@ def test_federated_file_result_names_exact_indexed_head(client_with):
 def test_file_summary_skips_license_boilerplate_for_filename_match():
     text = '# Copyright The Marin Authors\n# SPDX-License-Identifier: Apache-2.0\n\n"""Search Echo activity."""'
 
-    assert echo.representative_file_line(text, "app.py", 1) == (4, '"""Search Echo activity."""')
+    assert echo.representative_file_lines(text, "app.py", 1) == [(4, '"""Search Echo activity."""')]
+
+
+def test_file_summary_ranks_multiple_query_term_lines_with_stemming():
+    text = "\n".join(
+        [
+            "class Cache:",
+            "    pass",
+            "def allocate_kv_pages():",
+            "    # Caches key/value pages for generation.",
+            "    return pages",
+        ]
+    )
+
+    assert echo.representative_file_lines(text, "how do we handle kv caching", 20) == [
+        (20, "class Cache:"),
+        (22, "def allocate_kv_pages():"),
+        (23, "# Caches key/value pages for generation."),
+    ]
 
 
 def test_prose_query_prefers_runbook_over_test_fixture():
@@ -303,6 +366,75 @@ def test_prose_query_prefers_runbook_over_test_fixture():
     )
 
     assert [result.id for result in ranked] == ["file:lib/iris/OPS.md", "file:infra/grafana/tests/test_k8s_source.py"]
+
+
+def test_reranker_uses_full_candidate_text_without_erasing_hybrid_rank():
+    distractor = echo.SearchCandidate(
+        echo.SearchResult(
+            id="file:tests/test_deploy.py",
+            domain="file",
+            title="test_deploy.py",
+            subtitle="tests/test_deploy.py:10",
+            url="https://example.com/test",
+            snippet="test_deploy",
+            score=0.2,
+            distance=0.2,
+            lexical_score=0.4,
+        ),
+        "A deployment test fixture.",
+    )
+    runbook = echo.SearchCandidate(
+        echo.SearchResult(
+            id="file:lib/iris/OPS.md",
+            domain="file",
+            title="Iris Operations",
+            subtitle="lib/iris/OPS.md:68",
+            url="https://example.com/ops",
+            snippet="Iris controller operations.",
+            score=0.1,
+            distance=0.2,
+            lexical_score=None,
+        ),
+        "Restart builds and deploys the current checkout, then verifies controller health.",
+    )
+
+    class DeploymentReranker:
+        def rerank(self, query, documents, batch_size=64, **kwargs):
+            assert query == "how do i deploy iris"
+            return [float("verifies controller health" in document) for document in documents]
+
+    ranked = echo.rerank_candidates([distractor, runbook], "how do i deploy iris", DeploymentReranker(), 2)
+
+    assert [result.id for result in ranked] == ["file:lib/iris/OPS.md", "file:tests/test_deploy.py"]
+
+
+def test_reranker_suppresses_all_candidates_below_the_quality_floor(monkeypatch):
+    candidate = echo.SearchCandidate(
+        echo.SearchResult(
+            id="file:irrelevant.py",
+            domain="file",
+            title="irrelevant.py",
+            subtitle="irrelevant.py:1",
+            url="https://example.com/irrelevant",
+            snippet="unrelated",
+            score=0.1,
+            distance=0.4,
+            lexical_score=None,
+        ),
+        "This text has no relationship to the query.",
+    )
+
+    class RejectingReranker:
+        def rerank(self, query, documents, batch_size=64, **kwargs):
+            return [-3.0 for _ in documents]
+
+    monkeypatch.setattr(echo.search_config, "RERANK_MAX_CANDIDATES", 2)
+    candidates = [
+        echo.SearchCandidate(candidate.result.model_copy(update={"id": f"file:irrelevant-{index}.py"}), candidate.text)
+        for index in range(3)
+    ]
+
+    assert echo.rerank_candidates(candidates, "how do i deploy iris", RejectingReranker(), 3) == []
 
 
 def test_rank_weight_binds_are_floating_point():

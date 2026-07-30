@@ -52,6 +52,13 @@ export interface FederatedResult {
   score: number
   distance: number | null
   lexical_score: number | null
+  references: SearchReference[]
+}
+
+export interface SearchReference {
+  line: number
+  text: string
+  url: string
 }
 
 export interface RepositoryIndexStatus {

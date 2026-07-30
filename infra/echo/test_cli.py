@@ -17,6 +17,13 @@ def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch, capsys
         "score": 0.04,
         "distance": 0.1,
         "lexical_score": 0.5,
+        "references": [
+            {
+                "line": 42,
+                "text": "raise FAILED_PRECONDITION",
+                "url": "https://github.com/marin-community/marin/blob/abc1234/" "lib/iris/src/iris/scheduler.py#L42",
+            }
+        ],
     }
 
     calls = []
@@ -41,7 +48,7 @@ def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch, capsys
     assert len(output) == 3
     assert "file:lib/iris/src/iris/scheduler.py" in output[2]
     assert "scheduler.py" in output[2]
-    assert "raise FAILED_PRECONDITION" in output[2]
+    assert "L42 raise FAILED_PRECONDITION" in output[2]
 
 
 def test_search_defaults_to_curated_domains_without_discord(monkeypatch):
