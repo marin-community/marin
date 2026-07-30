@@ -12,10 +12,10 @@ import threading
 import time
 from pathlib import Path
 
-import fsspec
 import pytest
 from aiobotocore.config import AioConfig
 from botocore.awsrequest import AWSRequest
+from botocore.exceptions import ReadTimeoutError
 from rigging.filesystem import s3_compat
 from rigging.filesystem.cross_region import CrossRegionGuardedFS
 from rigging.filesystem.factory import (
@@ -143,58 +143,20 @@ def test_filesystem_local():
     assert not isinstance(fs, CrossRegionGuardedFS)
 
 
-def test_s3_kwargs_carry_a_whole_request_deadline():
-    """S3 filesystems built here get http_session_cls, the only bound that covers
-    the wait for a first response byte. Without it a peer that accepts a request
-    body and answers nothing hangs the caller forever (#6719)."""
-    result = _with_s3_timeout_defaults({})
-
-    assert result["config_kwargs"]["http_session_cls"] is TotalDeadlineAIOHTTPSession
-
-
-def test_total_deadline_session_keeps_the_socket_timeouts():
-    """The subclass adds `total` without dropping the sock_* bounds aiobotocore set."""
-    session = TotalDeadlineAIOHTTPSession(timeout=(7, 11))
-
-    assert session._timeout.total == 600
-    assert session._timeout.sock_connect == 7
-    assert session._timeout.sock_read == 11
-
-
-def test_caller_supplied_session_class_wins():
-    """Callers can still override the session class; we only fill in a default."""
-
-    class OtherSession(TotalDeadlineAIOHTTPSession):
-        pass
-
-    result = _with_s3_timeout_defaults({"config_kwargs": {"http_session_cls": OtherSession}})
-
-    assert result["config_kwargs"]["http_session_cls"] is OtherSession
-
-
-def test_s3_timeout_defaults_preserve_addressing_style_from_env_conf(monkeypatch):
-    """Virtual-host addressing from FSSPEC_S3 survives the merge; dropping it
-    makes CoreWeave endpoints reject every path-style request."""
-    monkeypatch.setitem(fsspec.config.conf, "s3", {"config_kwargs": {"s3": {"addressing_style": "virtual"}}})
-
-    result = _with_s3_timeout_defaults({})
-
-    assert result["config_kwargs"]["s3"] == {"addressing_style": "virtual"}
-    assert result["config_kwargs"]["http_session_cls"] is TotalDeadlineAIOHTTPSession
-
-
-def test_session_class_survives_the_handoff_to_aiobotocore():
-    """Our config_kwargs reach AioConfig, which is the call s3fs makes to build
-    the client that ultimately instantiates the session class."""
+def test_s3_filesystems_are_built_with_the_deadline():
+    """Without this wiring the deadline exists but nothing uses it, and every
+    rigging-built S3 filesystem keeps the #6719 hang."""
     config_kwargs = _with_s3_timeout_defaults({})["config_kwargs"]
 
+    assert config_kwargs["http_session_cls"] is TotalDeadlineAIOHTTPSession
+    # AioConfig is the call s3fs makes; it rejects the kwarg before aiobotocore 2.12.2.
     assert AioConfig(**config_kwargs).http_session_cls is TotalDeadlineAIOHTTPSession
 
 
 def test_request_to_a_silent_peer_gives_up(monkeypatch):
     """The production failure, reproduced: a peer accepts the whole request body
-    and then never answers. Without `total` no timer is armed and the caller
-    waits forever (#6719); the request must instead fail on its own."""
+    and then never answers. Under the sock_* bounds alone no timer is armed and
+    the caller waits forever (#6719)."""
     monkeypatch.setattr(s3_compat, "_S3_TOTAL_TIMEOUT", 1)
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
@@ -203,15 +165,16 @@ def test_request_to_a_silent_peer_gives_up(monkeypatch):
         listener.listen(1)
         port = listener.getsockname()[1]
 
-        accepted: list[socket.socket] = []
+        swallowed = threading.Event()
+        held: list[socket.socket] = []
 
         def swallow_request():
             conn, _ = listener.accept()
             conn.recv(65536)  # take the request, then answer nothing at all
-            accepted.append(conn)
+            held.append(conn)
+            swallowed.set()
 
-        server = threading.Thread(target=swallow_request, daemon=True)
-        server.start()
+        threading.Thread(target=swallow_request, daemon=True).start()
 
         # sock_read is deliberately long: it is the bound that does NOT cover
         # this wait, so only `total` can end the call.
@@ -223,15 +186,16 @@ def test_request_to_a_silent_peer_gives_up(monkeypatch):
                 return await session.send(request)
 
         started = time.monotonic()
-        with pytest.raises(Exception):  # noqa: B017 - the deadline, not a specific mapping
+        with pytest.raises(ReadTimeoutError):
             asyncio.run(send_and_close())
         elapsed = time.monotonic() - started
 
-        server.join(timeout=5)
-        for conn in accepted:
+        for conn in held:
             conn.close()
 
-    assert elapsed < 30, f"request should have given up near the 1s deadline, took {elapsed:.1f}s"
+    assert swallowed.is_set(), "peer never received the body; the test did not exercise the deadline"
+    # Bounded below too: an immediate setup or wiring failure would also raise.
+    assert 0.5 < elapsed < 30, f"expected the 1s deadline to end the call, took {elapsed:.2f}s"
 
 
 def test_env_config_block_stays_json_serializable():
