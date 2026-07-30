@@ -87,7 +87,7 @@ from experiments.grug.moe.launch import (
 from experiments.grug.moe.launch_datakit_moe_mix import _val_component, datakit_data_config
 from experiments.grug.moe.model import GrugModelConfig, RematMode
 from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
-from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
+from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig, InitializationMode
 from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.marin_tokenizer import marin_tokenizer
 
@@ -146,6 +146,8 @@ def build_scale_model() -> GrugModelConfig:
     attention_implementation = cast("GrugAttentionImplementation | None", attn_impl_env or None)
     nested_counts_value = os.environ.get("SCALE_NESTED_COUNTS", "")
     nested_expert_counts = tuple(int(value) for value in nested_counts_value.split(",") if value)
+    nested_offsets_value = os.environ.get("SCALE_NESTED_OFFSETS", "")
+    nested_expert_offsets = tuple(int(value) for value in nested_offsets_value.split(",") if value)
     base = MoeHeuristic().build_model_config(hidden_dim, seq_len=seq_len)
     return dataclasses.replace(
         base,
@@ -159,6 +161,7 @@ def build_scale_model() -> GrugModelConfig:
         num_experts=env_int("SCALE_NUM_EXPERTS", 64),
         num_experts_per_token=env_int("SCALE_TOP_K", 4),
         nested_expert_counts=nested_expert_counts,
+        nested_expert_offsets=nested_expert_offsets,
         nested_batch_fraction=env_float("SCALE_NESTED_FRACTION", 0.0),
         nested_layer_fraction=env_float("SCALE_NESTED_LAYER_FRACTION", 1.0),
         paired_expert_residuals=os.environ.get("SCALE_PAIRED_EXPERT_RESIDUALS") == "1",
@@ -268,9 +271,28 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
     wandb_entity = os.environ.get("WANDB_ENTITY") or None
     wandb_project = os.environ.get("WANDB_PROJECT", "marin_moe")
 
+    init_from = os.environ.get("SCALE_INIT_FROM") or None
+    initialization_source_model = None
+    initialization_expert_offset = None
+    source_num_experts = env_int("SCALE_INIT_SOURCE_NUM_EXPERTS", 0)
+    if source_num_experts:
+        source_counts_value = os.environ.get("SCALE_INIT_SOURCE_NESTED_COUNTS", "")
+        source_offsets_value = os.environ.get("SCALE_INIT_SOURCE_NESTED_OFFSETS", "")
+        initialization_source_model = dataclasses.replace(
+            model,
+            num_experts=source_num_experts,
+            nested_expert_counts=tuple(int(value) for value in source_counts_value.split(",") if value),
+            nested_expert_offsets=tuple(int(value) for value in source_offsets_value.split(",") if value),
+            nested_batch_fraction=env_float("SCALE_INIT_SOURCE_NESTED_FRACTION", 0.0),
+        )
+        initialization_expert_offset = env_int("SCALE_INIT_EXPERT_OFFSET", 0)
+
     grug_trainer = GrugTrainerConfig(
         expert_axis_size=expert_axis,
         replica_axis_size=replica_axis,
+        initialization_mode=InitializationMode.WEIGHTS_ONLY if init_from is not None else InitializationMode.FULL_STATE,
+        initialization_source_model=initialization_source_model,
+        initialization_expert_offset=initialization_expert_offset,
         **SCALE_TRAINER_DEFAULTS,
     )
 
@@ -285,8 +307,13 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
     heuristic = MoeHeuristic(min_lr_ratio=0.05, max_learning_rate=max_lr).build_optimizer_config(
         batch_size=batch_size, tokens=total_tokens, hidden_dim=model.hidden_dim, seq_len=model.max_seq_len
     )
-    schedule = dict(lr_schedule="linear", min_lr_ratio=0.05, warmup=0.01)
+    schedule = dict(
+        lr_schedule=os.environ.get("SCALE_LR_SCHEDULE", "linear"),
+        min_lr_ratio=env_float("SCALE_MIN_LR_RATIO", 0.05),
+        warmup=env_float("SCALE_WARMUP", 0.01),
+    )
     lr_override = os.environ.get("SCALE_LR")
+    adam_lr_override = os.environ.get("SCALE_ADAM_LR")
     # SCALE_LR_MULT scales the heuristic peak (both muonh and adam groups, preserving the 13/3 ratio)
     # for LR sweeps; ignored when SCALE_LR sets an absolute peak.
     lr_mult = env_float("SCALE_LR_MULT", 1.0)
@@ -294,12 +321,18 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
     optimizer: OptimizerConfig
     if opt_name in ("muonh", "grug_moe_muonh"):
         optimizer = (
-            dataclasses.replace(heuristic, learning_rate=float(lr_override), adam_lr=float(lr_override))
+            dataclasses.replace(
+                heuristic,
+                learning_rate=float(lr_override),
+                adam_lr=float(adam_lr_override or lr_override),
+                **schedule,
+            )
             if lr_override
             else dataclasses.replace(
                 heuristic,
                 learning_rate=heuristic.learning_rate * lr_mult,
-                adam_lr=heuristic.adam_lr * lr_mult,
+                adam_lr=float(adam_lr_override) if adam_lr_override else heuristic.adam_lr * lr_mult,
+                **schedule,
             )
         )
         # Over-Encoding tables train at this fraction of adam_lr (reference: 0.5); no-op when OE is off.
@@ -313,7 +346,8 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
     print(
         f"[scale] optimizer={opt_name} muonh_lr={heuristic.learning_rate:.5f} adam_lr={heuristic.adam_lr:.5f} "
         f"(heuristic: {total_tokens / 1e9:.1f}B tokens, dim={model.hidden_dim}); "
-        f"peak override SCALE_LR={lr_override or 'none'} lr_mult={lr_mult}",
+        f"peak override SCALE_LR={lr_override or 'none'} SCALE_ADAM_LR={adam_lr_override or 'none'} "
+        f"lr_mult={lr_mult}",
         flush=True,
     )
 
@@ -343,6 +377,12 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
         if eval_nested_counts_value is not None
         else model.nested_expert_counts
     )
+    eval_nested_ranges_value = os.environ.get("SCALE_EVAL_NESTED_RANGES", "")
+    eval_nested_ranges = tuple(
+        tuple(int(endpoint) for endpoint in value.split(":", maxsplit=1))
+        for value in eval_nested_ranges_value.split(",")
+        if value
+    )
     eval_cfg = (
         GrugEvalConfig(
             steps_per_eval=env_int("SCALE_EVAL_STEPS", 1000),
@@ -352,6 +392,7 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
             eval_ema=False,  # runs use ema_beta=None
             compute_bpb=True,
             nested_expert_counts=eval_nested_counts,
+            nested_expert_ranges=eval_nested_ranges,
         )
         if eval_on
         else None
@@ -383,6 +424,7 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
                 max_seq_len=model.max_seq_len,
                 enable_simulated_epoching=False,
                 val_components=val_components,
+                fixed_phase=env_int("SCALE_DATAKIT_PHASE", -1) if os.environ.get("SCALE_DATAKIT_PHASE") else None,
             )
         elif eval_on:
             # slimpajama (llama3) + marin-tokenized val caches: identical token ids, so build the
@@ -419,6 +461,7 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
             eval=eval_cfg,
             profiler=profiler,
             checkpointer=checkpointer,
+            init_from=init_from,
         )
 
     return ArtifactStep(

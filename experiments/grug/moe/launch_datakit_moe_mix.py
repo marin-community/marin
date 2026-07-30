@@ -322,6 +322,7 @@ def datakit_data_config(
     max_seq_len: int,
     enable_simulated_epoching: bool,
     val_components: dict[str, DatasetComponent | ConcatDatasetComponent],
+    fixed_phase: int | None = None,
 ) -> LmDataConfig:
     phase_1_start = _phase_1_start_step(total_steps, batch_size)
     budget_kwargs: dict = {}
@@ -341,14 +342,20 @@ def datakit_data_config(
     all_components = {**_datakit_components(), **val_components}
     val_zero_weights = {name: 0.0 for name in val_components}
 
+    train_weights: dict[str, float] | list[tuple[int, dict[str, float]]]
+    if fixed_phase is None:
+        train_weights = [
+            (0, {**_phase_weights(0), **val_zero_weights}),
+            (phase_1_start, {**_phase_weights(1), **val_zero_weights}),
+        ]
+    else:
+        train_weights = {**_phase_weights(fixed_phase), **val_zero_weights}
+
     return LmDataConfig(
         tokenizer=marin_tokenizer,
         cache_dir=None,
         components=all_components,
-        train_weights=[
-            (0, {**_phase_weights(0), **val_zero_weights}),
-            (phase_1_start, {**_phase_weights(1), **val_zero_weights}),
-        ],
+        train_weights=train_weights,
         auto_build_caches=False,
         mixture_block_size=_MIXTURE_BLOCK_SIZE,
         **budget_kwargs,

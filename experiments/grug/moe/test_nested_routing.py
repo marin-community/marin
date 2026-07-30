@@ -62,3 +62,31 @@ def test_layerwise_schedule_rotates_two_restricted_layers_evenly() -> None:
 
     restrictions_per_layer = np.concatenate(restricted_by_step, axis=1).sum(axis=1)
     np.testing.assert_array_equal(restrictions_per_layer, np.full(8, 8))
+
+
+def test_balanced_complements_split_restricted_rows_between_both_halves() -> None:
+    config = GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=64,
+        intermediate_dim=32,
+        shared_expert_intermediate_dim=64,
+        num_experts=256,
+        num_experts_per_token=4,
+        nested_expert_counts=(128, 128),
+        nested_expert_offsets=(0, 128),
+        nested_batch_fraction=0.5,
+        num_layers=8,
+        num_heads=1,
+        num_kv_heads=1,
+        max_seq_len=16,
+    )
+
+    eligibility = np.asarray(training_expert_eligibility(config, batch_size=32, step=jnp.asarray(5)))
+
+    lower = np.all(eligibility[:, :128], axis=-1) & ~np.any(eligibility[:, 128:], axis=-1)
+    upper = ~np.any(eligibility[:, :128], axis=-1) & np.all(eligibility[:, 128:], axis=-1)
+    full = np.all(eligibility, axis=-1)
+    assert np.count_nonzero(lower) == 8
+    assert np.count_nonzero(upper) == 8
+    assert np.count_nonzero(full) == 16
+    np.testing.assert_array_equal(lower | upper | full, True)

@@ -122,7 +122,9 @@ class GrugModelConfig:
     num_experts: int = 256
     num_experts_per_token: int = 4
     nested_expert_counts: tuple[int, ...] = ()
-    """Fixed prefix expert-bank sizes used on restricted training sequences."""
+    """Fixed expert-bank sizes used on restricted training sequences."""
+    nested_expert_offsets: tuple[int, ...] = ()
+    """Optional start offsets for nested banks. Empty means every bank is a prefix."""
     nested_batch_fraction: float = 0.0
     """Fraction of training sequences assigned to a nested expert bank."""
     nested_layer_fraction: float = 1.0
@@ -258,11 +260,15 @@ class GrugModelConfig:
             raise ValueError("nested_layer_fraction must be greater than zero and at most one")
         if tuple(sorted(self.nested_expert_counts, reverse=True)) != self.nested_expert_counts:
             raise ValueError("nested_expert_counts must be in descending order")
-        for nested_count in self.nested_expert_counts:
+        if self.nested_expert_offsets and len(self.nested_expert_offsets) != len(self.nested_expert_counts):
+            raise ValueError("nested_expert_offsets must have the same length as nested_expert_counts")
+        for nested_count, nested_offset in self.nested_expert_ranges:
             if nested_count <= self.num_experts_per_token or nested_count >= self.num_experts:
                 raise ValueError("nested expert counts must exceed top-k and be smaller than num_experts")
             if self.num_experts % nested_count:
                 raise ValueError("num_experts must be divisible by every nested expert count")
+            if nested_offset < 0 or nested_offset + nested_count > self.num_experts:
+                raise ValueError("nested expert bank falls outside the full expert bank")
         if self.nested_batch_fraction not in (0.0, 1.0):
             period = round(1.0 / self.nested_batch_fraction)
             if not math.isclose(self.nested_batch_fraction, 1.0 / period):
@@ -281,6 +287,20 @@ class GrugModelConfig:
     def router_balance_group_counts(self) -> tuple[int, ...]:
         """Expert-bank sizes with independent QB state, full model first."""
         return (self.num_experts, *self.nested_expert_counts)
+
+    @property
+    def nested_expert_ranges(self) -> tuple[tuple[int, int], ...]:
+        """Return each nested bank as ``(count, offset)``."""
+        offsets = self.nested_expert_offsets or (0,) * len(self.nested_expert_counts)
+        return tuple(zip(self.nested_expert_counts, offsets, strict=True))
+
+    @property
+    def router_balance_group_ranges(self) -> tuple[tuple[int, int], ...]:
+        """Half-open expert ranges with independent QB state, full model first."""
+        return (
+            (0, self.num_experts),
+            *((offset, offset + count) for count, offset in self.nested_expert_ranges),
+        )
 
     @property
     def Embed(self) -> Axis:
@@ -691,22 +711,23 @@ def _compute_qb_beta(router_logits: jax.Array, qb_alpha: jax.Array, cfg: "GrugMo
 def _compute_nested_qb_beta(
     eligible_router_logits: jax.Array,
     qb_alpha: jax.Array,
-    eligible_counts: jax.Array,
+    group_ids: jax.Array,
     cfg: "GrugModelConfig",
 ) -> jax.Array:
-    """Compute independent QB updates for each fixed prefix expert bank."""
+    """Compute independent QB updates for each fixed expert bank."""
     if os.environ.get("SCALE_MOE_SKIP_QB") == "1":
-        return jnp.zeros((len(cfg.router_balance_group_counts), cfg.num_experts), dtype=jnp.float32)
+        return jnp.zeros((len(cfg.router_balance_group_ranges), cfg.num_experts), dtype=jnp.float32)
 
     mesh = get_abstract_mesh()
     num_devices = math.prod(mesh.shape[axis_name] for axis_name in _BATCH_AXES)
     local_tokens = eligible_router_logits.shape[0] // num_devices
     group_betas = []
-    for group_count in cfg.router_balance_group_counts:
+    for group_id, (group_start, group_end) in enumerate(cfg.router_balance_group_ranges):
+        group_count = group_end - group_start
         group_scores = reshard(
             jnp.where(
-                (eligible_counts == group_count)[:, None],
-                eligible_router_logits[:, :group_count] - qb_alpha,
+                (group_ids == group_id)[:, None],
+                eligible_router_logits[:, group_start:group_end] - qb_alpha,
                 _INELIGIBLE_ROUTER_LOGIT,
             ),
             P(_BATCH_AXES, None),
@@ -740,7 +761,7 @@ def _compute_nested_qb_beta(
             out_specs=P(),
         )(group_scores)
         group_betas.append(
-            jnp.zeros((cfg.num_experts,), dtype=eligible_router_logits.dtype).at[:group_count].set(compact_beta)
+            jnp.zeros((cfg.num_experts,), dtype=eligible_router_logits.dtype).at[group_start:group_end].set(compact_beta)
         )
 
     return jnp.stack(group_betas)
@@ -764,7 +785,7 @@ class MoEMLP(eqx.Module):
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
         d, e = cfg.hidden_dim, cfg.num_experts
-        router_bias_shape = (len(cfg.router_balance_group_counts), e) if cfg.nested_expert_counts else (e,)
+        router_bias_shape = (len(cfg.router_balance_group_ranges), e) if cfg.nested_expert_counts else (e,)
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros(router_bias_shape),
@@ -796,7 +817,7 @@ class MoEMLP(eqx.Module):
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(router, P(None, None))).astype(jnp.float32)
         if expert_eligibility is None:
             eligible_router_logits = router_logits
-            eligible_counts = None
+            group_ids = None
             token_router_bias = self.router_bias if self.router_bias.ndim == 1 else self.router_bias[0]
         else:
             if expert_eligibility.shape != (b, self.cfg.num_experts):
@@ -805,13 +826,16 @@ class MoEMLP(eqx.Module):
                 )
             token_eligibility = jnp.repeat(expert_eligibility.astype(jnp.bool_), s, axis=0)
             eligible_router_logits = jnp.where(token_eligibility, router_logits, _INELIGIBLE_ROUTER_LOGIT)
-            eligible_counts = jnp.sum(token_eligibility, axis=-1)
             if self.router_bias.ndim == 1:
+                group_ids = jnp.zeros((token_eligibility.shape[0],), dtype=jnp.int32)
                 token_router_bias = self.router_bias
             else:
-                group_ids = jnp.zeros_like(eligible_counts)
-                for group_id, group_count in enumerate(self.cfg.router_balance_group_counts[1:], start=1):
-                    group_ids = jnp.where(eligible_counts == group_count, group_id, group_ids)
+                expert_ids = jnp.arange(self.cfg.num_experts)
+                group_ids = jnp.zeros((token_eligibility.shape[0],), dtype=jnp.int32)
+                for group_id, (group_start, group_end) in enumerate(self.cfg.router_balance_group_ranges[1:], start=1):
+                    group_eligibility = (expert_ids >= group_start) & (expert_ids < group_end)
+                    matches = jnp.all(token_eligibility == group_eligibility[None, :], axis=-1)
+                    group_ids = jnp.where(matches, group_id, group_ids)
                 token_router_bias = self.router_bias.at[group_ids].get(out_sharding=P(_BATCH_AXES, None))
 
         if self.cfg.qb_routing:
@@ -824,14 +848,14 @@ class MoEMLP(eqx.Module):
             qb_alpha = topk_biased[:, -1:]
             selected_experts = selected_experts[:, :-1]
             topk_logits = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-            if eligible_counts is None:
+            if group_ids is None:
                 full_qb_beta = _compute_qb_beta(router_logits, qb_alpha, self.cfg)
                 if self.router_bias.ndim == 1:
                     qb_beta = full_qb_beta
                 else:
                     qb_beta = jnp.zeros_like(self.router_bias).at[0].set(full_qb_beta)
             else:
-                qb_beta = _compute_nested_qb_beta(eligible_router_logits, qb_alpha, eligible_counts, self.cfg)
+                qb_beta = _compute_nested_qb_beta(eligible_router_logits, qb_alpha, group_ids, self.cfg)
         else:
             topk_logits, selected_experts = jax.lax.top_k(eligible_router_logits, self.cfg.num_experts_per_token)
             qb_beta = jnp.zeros_like(self.router_bias, dtype=jnp.float32)

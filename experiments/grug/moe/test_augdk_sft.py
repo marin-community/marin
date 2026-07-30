@@ -1,11 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
+
+import jax
 import jax.numpy as jnp
+import numpy as np
+from levanter.grug.sharding import compact_grug_mesh
 
 from experiments.grug.moe.launch_augdk_nested_sft import SFTArm, sft_routing_model
-from experiments.grug.moe.model import GrugModelConfig
-from experiments.grug.moe.train import GrugTrainState, init_weights_only_from_checkpoint
+from experiments.grug.moe.model import GrugModelConfig, Transformer
+from experiments.grug.moe.train import GrugTrainState, extract_expert_range, init_weights_only_from_checkpoint
 
 
 def _nested_model(*, count: int, layer_fraction: float) -> GrugModelConfig:
@@ -116,3 +121,47 @@ def test_weights_only_initialization_retains_fresh_training_state() -> None:
     assert restored.opt_state is fresh_optimizer
     assert int(restored.step) == 0
     assert restored.pending_qb_betas.shape == (2, 3, 32)
+
+
+def test_expert_range_extraction_preserves_selected_router_experts_and_qb_state() -> None:
+    source_config = GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=64,
+        intermediate_dim=32,
+        shared_expert_intermediate_dim=64,
+        num_experts=8,
+        num_experts_per_token=2,
+        nested_expert_counts=(4,),
+        nested_batch_fraction=0.25,
+        num_layers=2,
+        num_heads=1,
+        num_kv_heads=1,
+        max_seq_len=16,
+    )
+    target_config = dataclasses.replace(
+        source_config,
+        num_experts=4,
+        nested_expert_counts=(),
+        nested_batch_fraction=0.0,
+    )
+    mesh = compact_grug_mesh()
+    with jax.set_mesh(mesh):
+        source = Transformer.init(source_config, key=jax.random.PRNGKey(0))
+    pending = jnp.arange(2 * 2 * 8, dtype=jnp.float32).reshape(2, 2, 8)
+
+    target, target_pending = extract_expert_range(
+        source,
+        pending,
+        target_config=target_config,
+        expert_offset=0,
+    )
+
+    assert target.config is target_config
+    assert target.stacked_blocks.stacked.mlp.router.shape == (2, 64, 4)
+    assert target.stacked_blocks.stacked.mlp.router_bias.shape == (2, 4)
+    assert target.stacked_blocks.stacked.mlp.expert_mlp.w_down.shape == (2, 4, 32, 64)
+    np.testing.assert_array_equal(
+        target.stacked_blocks.stacked.mlp.router,
+        source.stacked_blocks.stacked.mlp.router[..., :4],
+    )
+    np.testing.assert_array_equal(target_pending, pending[:, 1, :4])

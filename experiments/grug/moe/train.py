@@ -92,6 +92,8 @@ class GrugTrainerConfig:
     replica_axis_size: int | None = None
     sharding_dump_path: str | None = None
     initialization_mode: InitializationMode = InitializationMode.FULL_STATE
+    initialization_source_model: GrugModelConfig | None = None
+    initialization_expert_offset: int | None = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +109,8 @@ class GrugEvalConfig:
     compute_bpb: bool = True
     nested_expert_counts: tuple[int, ...] = ()
     """Fixed prefix expert banks evaluated in addition to the full model."""
+    nested_expert_ranges: tuple[tuple[int, int], ...] = ()
+    """Named by range in metrics; each pair is a half-open ``(start, end)`` bank."""
 
 
 @dataclass(frozen=True)
@@ -402,6 +406,90 @@ def init_weights_only_from_checkpoint(
     return dataclasses.replace(state, **updates)
 
 
+def extract_expert_range(
+    model: Transformer,
+    pending_qb_betas: jax.Array,
+    *,
+    target_config: GrugModelConfig,
+    expert_offset: int,
+) -> tuple[Transformer, jax.Array]:
+    """Extract one contiguous routed-expert bank into a smaller physical model."""
+    source_config = model.config
+    expert_count = target_config.num_experts
+    expert_end = expert_offset + expert_count
+    if target_config.mtp_depth or source_config.mtp_depth:
+        raise ValueError("expert-range extraction does not support MTP models")
+    if expert_offset < 0 or expert_end > source_config.num_experts:
+        raise ValueError("requested expert range falls outside the source model")
+    if target_config.nested_expert_counts:
+        raise ValueError("the extracted target must use an ordinary single-bank router")
+    source_ranges = source_config.router_balance_group_ranges
+    try:
+        balance_group = source_ranges.index((expert_offset, expert_end))
+    except ValueError as error:
+        raise ValueError("source model has no independent QB state for the requested expert range") from error
+
+    source_blocks = model.stacked_blocks.stacked
+    source_mlp = source_blocks.mlp
+    source_experts = source_mlp.expert_mlp
+
+    def expert_slice(weights: jax.Array | None) -> jax.Array | None:
+        return None if weights is None else weights[:, expert_offset:expert_end]
+
+    target_experts = dataclasses.replace(
+        source_experts,
+        w_gate=expert_slice(source_experts.w_gate),
+        w_up=expert_slice(source_experts.w_up),
+        w_down=expert_slice(source_experts.w_down),
+        w_gate_up=expert_slice(source_experts.w_gate_up),
+    )
+    target_mlp = dataclasses.replace(
+        source_mlp,
+        router=source_mlp.router[..., expert_offset:expert_end],
+        router_bias=source_mlp.router_bias[:, balance_group, expert_offset:expert_end],
+        expert_mlp=target_experts,
+        cfg=target_config,
+    )
+    target_blocks = dataclasses.replace(source_blocks, mlp=target_mlp)
+    target_model = dataclasses.replace(
+        model,
+        stacked_blocks=dataclasses.replace(model.stacked_blocks, stacked=target_blocks),
+        config=target_config,
+    )
+    target_pending_qb_betas = pending_qb_betas[:, balance_group, expert_offset:expert_end]
+    return target_model, target_pending_qb_betas
+
+
+def init_expert_range_from_checkpoint(
+    state: GrugTrainState,
+    checkpoint_path: str,
+    *,
+    source_model: Transformer,
+    mesh: Mesh | None,
+    expert_offset: int,
+    load_ema: bool,
+    _load_fn: CheckpointLoader = load_checkpoint,
+) -> GrugTrainState:
+    """Load a larger nested checkpoint and initialize a fresh smaller trainer."""
+    exemplar = {
+        "params": source_model,
+        "pending_qb_betas": jnp.zeros_like(source_model.stacked_blocks.stacked.mlp.router_bias),
+    }
+    loaded = _load_fn(exemplar, checkpoint_path, mesh=mesh, allow_partial=True)
+    params, pending_qb_betas = extract_expert_range(
+        loaded["params"],
+        loaded["pending_qb_betas"],
+        target_config=state.params.config,
+        expert_offset=expert_offset,
+    )
+    return dataclasses.replace(
+        state,
+        params=params,
+        pending_qb_betas=pending_qb_betas,
+        ema_params=params if load_ema and state.ema_params is not None else state.ema_params,
+    )
+
+
 def _scheduled_mtp_weight(config: GrugModelConfig, step: jax.Array, num_train_steps: int) -> jax.Array | None:
     """MTP loss weight for the current step: constant ``mtp_loss_weight`` until ``mtp_decay_start_frac``
     of training, then ``mtp_final_loss_weight`` for the tail. None when no schedule is configured."""
@@ -428,10 +516,15 @@ def training_expert_eligibility(
     restricted_rows = schedule_ids % period == 0
     event_ids = schedule_ids // period
     level_ids = event_ids % len(model_config.nested_expert_counts)
-    nested_counts = jnp.asarray(model_config.nested_expert_counts, dtype=jnp.int32)
+    nested_ranges = model_config.nested_expert_ranges
+    nested_counts = jnp.asarray([count for count, _ in nested_ranges], dtype=jnp.int32)
+    nested_offsets = jnp.asarray([offset for _, offset in nested_ranges], dtype=jnp.int32)
     eligible_counts = nested_counts[level_ids]
+    eligible_offsets = nested_offsets[level_ids]
     expert_ids = jnp.arange(model_config.num_experts, dtype=jnp.int32)
-    nested = expert_ids[None, :] < eligible_counts[:, None]
+    nested = (expert_ids[None, :] >= eligible_offsets[:, None]) & (
+        expert_ids[None, :] < eligible_offsets[:, None] + eligible_counts[:, None]
+    )
     if model_config.nested_layer_fraction == 1.0:
         return jnp.where(restricted_rows[:, None], nested, True)
 
@@ -514,16 +607,18 @@ def _make_train_step(
         # aux carries the main/MTP loss split (and scheduled MTP weight) when MTP is on; empty otherwise.
         metrics = {"train/loss": loss, **{f"train/{key}": value for key, value in aux.items()}}
         if expert_eligibility is not None:
-            eligible_counts = jnp.sum(expert_eligibility, axis=-1)
-            for nested_count in state.params.config.nested_expert_counts:
-                restricted = eligible_counts == nested_count
+            expert_ids = jnp.arange(state.params.config.num_experts)
+            for nested_count, nested_offset in state.params.config.nested_expert_ranges:
+                bank = (expert_ids >= nested_offset) & (expert_ids < nested_offset + nested_count)
+                restricted = jnp.all(expert_eligibility == bank, axis=-1)
                 if restricted.ndim == 1:
                     sequence_fraction = layer_sequence_fraction = jnp.mean(restricted.astype(jnp.float32))
                 else:
                     sequence_fraction = jnp.mean(jnp.any(restricted, axis=0).astype(jnp.float32))
                     layer_sequence_fraction = jnp.mean(restricted.astype(jnp.float32))
-                metrics[f"train/nested/e{nested_count}_sequence_fraction"] = sequence_fraction
-                metrics[f"train/nested/e{nested_count}_layer_sequence_fraction"] = layer_sequence_fraction
+                bank_name = f"e{nested_count}" if nested_offset == 0 else f"e{nested_count}_offset{nested_offset}"
+                metrics[f"train/nested/{bank_name}_sequence_fraction"] = sequence_fraction
+                metrics[f"train/nested/{bank_name}_layer_sequence_fraction"] = layer_sequence_fraction
         # Optimizer state is host-resident between steps when offloading; stream it to device
         # only here (after backward) for the update, then send the new state back to host below.
         opt_state_in = _opt_state_to_memory_kind(state.opt_state, "device") if _OFFLOAD_OPT_STATE else state.opt_state
@@ -651,12 +746,31 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         )
         if config.trainer.initialization_mode is InitializationMode.WEIGHTS_ONLY:
             if int(state.step) == 0 and trainer.initialize_from is not None:
-                state = init_weights_only_from_checkpoint(
-                    state,
-                    trainer.initialize_from,
-                    mesh=mesh,
-                    load_ema=config.trainer.ema_beta is not None,
-                )
+                source_config = config.trainer.initialization_source_model
+                expert_offset = config.trainer.initialization_expert_offset
+                if source_config is None and expert_offset is None:
+                    state = init_weights_only_from_checkpoint(
+                        state,
+                        trainer.initialize_from,
+                        mesh=mesh,
+                        load_ema=config.trainer.ema_beta is not None,
+                    )
+                elif source_config is not None and expert_offset is not None:
+
+                    @jax.jit
+                    def _init_source_model(source_key):
+                        return trainer.mp.cast_to_param(Transformer.init(source_config, key=source_key))
+
+                    state = init_expert_range_from_checkpoint(
+                        state,
+                        trainer.initialize_from,
+                        source_model=_init_source_model(model_key),
+                        mesh=mesh,
+                        expert_offset=expert_offset,
+                        load_ema=config.trainer.ema_beta is not None,
+                    )
+                else:
+                    raise ValueError("initialization_source_model and initialization_expert_offset must be set together")
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,
@@ -691,6 +805,17 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 )
                 if nested_evaluator is not None:
                     nested_evaluators.append((nested_count, nested_evaluator))
+            for expert_start, expert_end in eval_cfg.nested_expert_ranges:
+                nested_evaluator = build_tagged_evaluator(
+                    data_config=config.data,
+                    max_seq_len=config.model.max_seq_len,
+                    mesh=mesh,
+                    eval_cfg=eval_cfg,
+                    mp=trainer.mp,
+                    expert_selection=(tuple(range(expert_start, expert_end)),),
+                )
+                if nested_evaluator is not None:
+                    nested_evaluators.append((f"e{expert_end - expert_start}_offset{expert_start}", nested_evaluator))
 
         profiler_cfg = trainer.profiler
         profiler_num_steps = profiler_cfg.resolve_num_profile_steps(num_train_steps=trainer.num_train_steps)
@@ -740,10 +865,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     every=interval,
                 )
                 for nested_count, nested_evaluator in nested_evaluators:
+                    nested_name = f"e{nested_count}" if isinstance(nested_count, int) else nested_count
                     state_callbacks.add_hook(
                         cb_tagged_evaluate(
                             nested_evaluator,
-                            prefix=f"{eval_cfg.prefix}/nested_e{nested_count}",
+                            prefix=f"{eval_cfg.prefix}/nested_{nested_name}",
                             eval_current=eval_cfg.eval_current,
                             eval_ema=eval_ema,
                         ),
