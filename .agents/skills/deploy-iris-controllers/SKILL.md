@@ -36,8 +36,6 @@ red-canary days ([incident record](https://echo.oa.dev/wiki/14)).
    a tool yields, poll the same task and read each new output block. Do not pipe
    a command to `tail -25` or an equivalent last-lines command. Such a pipeline
    hides earlier output and gives no useful progress while the command runs.
-7. Print the completion cake only after all selected clusters pass their final
-   gates. Do not print the cake for a blocked, stopped, or partial rollout.
 
 ## How to gate
 
@@ -165,20 +163,6 @@ Do this loop for one cluster. After a passed final gate, start the next cluster.
 7. **Final gate.** Report the verify samples, the verdict, and the smoke job
    state. If the gate passes, continue to the next cluster without operator
    input. If the gate is blocked, stop the rollout.
-
-After the final selected cluster passes its final gate, print the rollout
-summary. Then print this ASCII cake:
-
-```text
-       ,,,,,
-       |||||
-     __|||||__
-    |         |
-    | ROLLOUT |
-  __|_________|__
- |               |
- |_______________|
-```
 
 The restart writes `rollout-record.json` under the cluster's
 `storage.remote_state_dir` and health-checks the new controller, rolling back
