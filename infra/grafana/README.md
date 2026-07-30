@@ -33,6 +33,7 @@ GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
 GET /finelog/marin/fleet_health                  main query probe + k8s mirror readiness
 GET /finelog/marin/alerts/fleet_health           alert rows: server labels + value(0|1)
 GET /finelog/marin/alerts/training_stalls        active jobs + stalled-progress value(0|1)
+GET /finelog/marin/alerts/zephyr_stalls          active pipelines + stalled-progress value(0|1)
 GET /iris/{cluster}/jobs | workers | health      live controller RPCs
 GET /iris/{cluster}/query?sql=                    ad-hoc SELECT (admin/null-auth)
 GET /github/ferries | builds | nightlies          GitHub REST / GraphQL
@@ -226,7 +227,10 @@ see `gpu_racks` above). A warning-only training rule joins fresh running
 `iris.task_state` rows to root jobs with Levanter Telltale metrics in the prior
 24 hours: it waits 15 minutes for training progress or 45 minutes for
 initialization, then remains pending for five minutes. It does not require
-task-to-node GPU attribution. The stuck-pod
+task-to-node GPU attribution. A warning-only Zephyr rule reads fresh
+`zephyr_progress_time_seconds` rows from Telltale. It waits 45 minutes after a
+stage start or shard completion, then remains pending for five minutes. The
+execution ID separates concurrent pipelines under one root job. The stuck-pod
 rule groups by node and links the cordon-first
 recovery skill; terminal, unbound, and finalizer-held pods stay dashboard-only.
 Other workload-tier signals (gated pods, Kueue backlog, workload crashloops) are

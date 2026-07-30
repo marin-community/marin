@@ -91,6 +91,8 @@ MAX_STATUS_TEXT_LENGTH = 1000
 
 MAX_WORKERS_PER_JOB = 1_024
 
+ZEPHYR_PROGRESS_TIME_METRIC = "zephyr_progress_time_seconds"
+
 
 class ShardFailureKind(enum.StrEnum):
     """TASK failures count toward MAX_SHARD_FAILURES; INFRA failures (preemption) do not."""
@@ -324,6 +326,7 @@ class ZephyrCoordinator:
 
         # Set at each _start_stage so _log_status can show average throughput since stage start.
         self._stage_monotonic_start: float | None = None
+        self._progress_time_seconds: float = 0.0
 
         # Lock for accessing coordinator state from background thread
         self._lock = threading.Lock()
@@ -441,6 +444,13 @@ class ZephyrCoordinator:
         """
         for name, value in self.get_counters().items():
             telltale.publish_gauge(name, value, f"zephyr counter {name}")
+        with self._lock:
+            progress_time_seconds = self._progress_time_seconds
+        telltale.publish_gauge(
+            ZEPHYR_PROGRESS_TIME_METRIC,
+            progress_time_seconds,
+            "Unix time of the current stage start or most recent shard completion",
+        )
 
     def _build_status_md(self) -> tuple[str, str]:
         """Render pipeline progress as ``(detail, summary)`` markdown."""
@@ -737,6 +747,7 @@ class ZephyrCoordinator:
 
             self._results[shard_idx] = result
             self._completed_shards += 1
+            self._progress_time_seconds = time.time()
             self._in_flight.pop(shard_idx, None)
             self._completed_counters.append(counter_snapshot)
             # Zero the in-flight counters but keep the generation watermark
@@ -874,6 +885,7 @@ class ZephyrCoordinator:
             # accumulate across stages for full pipeline visibility.
             self._worker_counters = {}
             self._stage_monotonic_start = time.monotonic()
+            self._progress_time_seconds = time.time()
             self._stage_done.clear()
 
     def _wait_for_stage(self) -> None:
@@ -946,6 +958,7 @@ class ZephyrCoordinator:
                 raise RuntimeError(self._fatal_error)
             self._pipeline_running = True
             self._execution_id = execution_id
+        telltale.set_global_labels(source="zephyr", run=execution_id)
 
         try:
             shards = _build_source_shards(plan.source_items)
