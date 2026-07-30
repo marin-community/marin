@@ -29,22 +29,22 @@ onViewRefresh(() => {
   refreshMatrix()
 })
 
-// Cohort scope: a specific version, or 'all' for the union across every run. Defaults to the
-// current (newest) version once the record loads.
-const ALL = '__all__'
-const selectedVersion = ref<string | undefined>(undefined)
-const scope = computed<string>(() => selectedVersion.value ?? data.value?.current_version ?? ALL)
+// Smoke suites are capped-instance launcher validation runs; they stay out of the rail exactly as
+// the matrix and cohorts exclude them (mirrors metrics.py SMOKE_SUFFIX). They remain in the Runs list.
+const SMOKE_SUFFIX = '-smoke'
+const isSmoke = (evalName: string) => evalName.endsWith(SMOKE_SUFFIX)
 
-watch(
-  () => data.value?.current_version,
-  (v) => {
-    if (selectedVersion.value === undefined) selectedVersion.value = v ?? ALL
-  },
+// Cohort scope: a specific version (null = the unversioned cohort, distinct from ALL), or ALL for the
+// union across every run. Defaults to the current (newest) version once the record loads.
+const ALL = '__all__'
+const selectedVersion = ref<string | null | undefined>(undefined)
+const scope = computed<string | null>(() =>
+  selectedVersion.value === undefined ? (data.value?.current_version ?? null) : selectedVersion.value,
 )
 
-// Benchmarks this model has ever run, in the matrix's column order where known.
+// Benchmarks this model has graded runs for, in the matrix's column order where known (no smoke).
 const tasks = computed<string[]>(() => {
-  const present = new Set((data.value?.runs ?? []).map((r) => r.eval_name))
+  const present = new Set((data.value?.runs ?? []).filter((r) => !isSmoke(r.eval_name)).map((r) => r.eval_name))
   const ordered = (matrix.value?.tasks ?? []).filter((t) => present.has(t))
   const extra = [...present].filter((t) => !ordered.includes(t)).sort()
   return [...ordered, ...extra]
@@ -53,16 +53,18 @@ const tasks = computed<string[]>(() => {
 // Fleet best per benchmark (for the rail caret), from the matrix across all models.
 const best = computed(() => fleetBest(matrix.value?.rows ?? [], tasks.value))
 
-// The runs in scope, and the per-benchmark cell derived from them (latest succeeded per benchmark,
-// else the latest run's failure) — the same union rule the server applies to the current cohort.
+// Every run in the selected cohort (smoke included), for the Runs list.
 const scopedRuns = computed<ModelRun[]>(() =>
   (data.value?.runs ?? []).filter((r) => scope.value === ALL || r.version === scope.value),
 )
 
+// Per-benchmark cell from the graded runs in scope (latest succeeded per benchmark, else the latest
+// run's failure) — the same union rule the server applies to a cohort, smoke excluded like the matrix.
 const displayCells = computed<Record<string, MatrixCell>>(() => {
   const succeeded: Record<string, ModelRun> = {}
   const latest: Record<string, ModelRun> = {}
   for (const run of scopedRuns.value) {
+    if (isSmoke(run.eval_name)) continue
     const key = run.eval_name
     if (!latest[key] || (run.created_at ?? '') > (latest[key].created_at ?? '')) latest[key] = run
     if (run.value !== null && (!succeeded[key] || (run.created_at ?? '') > (succeeded[key].created_at ?? ''))) {
@@ -127,8 +129,8 @@ const location = computed(() => data.value?.location ?? null)
             v-for="c in data.cohorts"
             :key="c.version ?? 'none'"
             class="font-mono text-xs px-2.5 py-1 rounded border"
-            :class="scope === (c.version ?? ALL) ? 'border-accent text-text bg-accent-subtle' : 'border-surface-border text-text-secondary hover:bg-surface-raised'"
-            @click="selectedVersion = c.version ?? ALL"
+            :class="scope === c.version ? 'border-accent text-text bg-accent-subtle' : 'border-surface-border text-text-secondary hover:bg-surface-raised'"
+            @click="selectedVersion = c.version"
           >{{ c.version ?? 'unversioned' }}</button>
           <button
             class="font-mono text-xs px-2.5 py-1 rounded border"

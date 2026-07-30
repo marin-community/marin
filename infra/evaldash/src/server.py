@@ -95,7 +95,7 @@ DEFAULT_SAMPLE_LIMIT = 50
 MAX_SAMPLE_LIMIT = 500
 DEFAULT_REVIEW_SAMPLES = 20
 MAX_REVIEW_SAMPLES = 40
-REVIEW_FILTERS = ("all", "correct", "incorrect")
+REVIEW_FILTERS = ("all", "correct", "incorrect", "ungraded")
 
 IAP_USER_HEADER = "x-goog-authenticated-user-email"
 IAP_USER_PREFIX = "accounts.google.com:"

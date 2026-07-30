@@ -146,13 +146,16 @@ const visibleTasks = computed(() => (data.value?.tasks ?? []).filter((t) => sele
 const best = computed(() => fleetBest(data.value?.rows ?? [], visibleTasks.value))
 
 // --- Fleet readout ---
+// Coverage counts scored cells over the *visible* columns only, so deselecting benchmarks keeps the
+// numerator and denominator on the same set (a full-set numerator would inflate past 100%).
 const readout = computed(() => {
   const rows = data.value?.rows ?? []
-  const covered = (data.value?.leaderboard ?? []).reduce((n, e) => n + e.covered, 0)
-  const cells = rows.length * visibleTasks.value.length
+  const tasks = visibleTasks.value
+  const covered = rows.reduce((n, row) => n + tasks.filter((t) => row.cells[t]?.value != null).length, 0)
+  const cells = rows.length * tasks.length
   return {
     models: rows.length,
-    benchmarks: visibleTasks.value.length,
+    benchmarks: tasks.length,
     coverage: cells ? Math.round((covered / cells) * 100) : 0,
   }
 })
