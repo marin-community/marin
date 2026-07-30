@@ -12,6 +12,31 @@ The only data movement this plan authorizes is one 16.44 GiB pull of the publish
 seed into S3. Nothing is uploaded, and nothing leaves CoreWeave or GCS, without explicit
 approval first.
 
+## Result: the platform, not the augmentation
+
+First three completions, 2026-07-30:
+
+| run | init | aug | batch | final val | exp117 same config |
+|---|---|---|---|---|---|
+| `wd1p6-bs64-scratch-aug` | scratch | yes | 64 | 3.1454 | 2.7330 |
+| `exp117init-noaug` | exp117 weights | **no** | 64 | 3.1597 | 2.7131 (its own start) |
+| `wd1p6-bs128-scratch-aug` | scratch | yes | 128 | 3.1624 | 2.7489 |
+
+Everything lands in a 0.017 band around 3.15 regardless of augmentation, initialization or
+batch size — a constant **+0.41** over exp117's TPU results, and the same magnitude as
+exp153's deficit.
+
+The unaugmented run settles it: a model that reached **2.7131** on TPU trained 8 further
+epochs on GPU with no augmentation and ended at **3.1597**, worse by 0.4466. No
+hyperparameter, data or augmentation story explains a pretrained model degrading.
+
+**This contradicts `scratch/PARITY_INVESTIGATION.md`**, which closed the platform question
+on arms of 60-4,460 steps. These are 35,680- and 71,360-step runs. exp153's gap opened
+around step 4,460 and held flat, so the parity arms stopped exactly at the edge of the
+effect.
+
+The augmentation question cannot be answered from these runs: the platform offset swamps it.
+
 ## What the experiment asks
 
 Does re-permuting the `<pN> <AA>` sequence statements during training improve
