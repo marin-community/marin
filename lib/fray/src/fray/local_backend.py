@@ -165,7 +165,13 @@ class LocalClient:
         finally:
             _reset_current_actor(token)
         _local_actor_registry[endpoint] = instance
-        return HostedActor(handle, endpoint=endpoint)
+
+        def _stop() -> None:
+            # Drop the registry entry so get_actor(endpoint) stops resolving,
+            # matching the Iris backend where shutdown stops the actor server.
+            _local_actor_registry.pop(endpoint, None)
+
+        return HostedActor(handle, stop=_stop, endpoint=endpoint)
 
     def get_actor(self, endpoint: str) -> "LocalActorHandle":
         """Return a handle to an in-process actor by its endpoint name."""

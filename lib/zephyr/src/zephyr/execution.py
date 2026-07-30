@@ -372,7 +372,6 @@ class _PipelineExecution:
     completed_counters: list[CounterSnapshot] = field(default_factory=list)
     # Set at each _start_stage so status logs show throughput since stage start.
     stage_monotonic_start: float | None = None
-    # True once run_pipeline returned or raised for this execution.
     done: bool = False
 
 
@@ -424,7 +423,6 @@ class ZephyrCoordinator:
         # Pipeline executions keyed by execution_id, insertion-ordered. All
         # per-pipeline state lives in the _PipelineExecution values.
         self._executions: dict[str, _PipelineExecution] = {}
-        # Per-worker resource pool size; run_pipeline validates task costs fit.
         self._worker_resources = worker_resources
         self._shared = shared
         # Set when the coordinator as a whole can no longer make progress
@@ -1223,6 +1221,12 @@ class ZephyrCoordinator:
                 )
 
         with self._lock:
+            if self._shutdown_event.is_set():
+                # Workers already got SHUTDOWN from pull_task, so an accepted
+                # pipeline would block in _wait_for_stage until
+                # no_workers_timeout (6h by default). A driver reaching here
+                # holds an endpoint whose pool the owner already tore down.
+                raise ZephyrWorkerError("Coordinator is shut down; cannot accept new pipelines")
             if self._pool_error is not None:
                 raise ZephyrWorkerError(f"Coordinator pool failed: {self._pool_error}")
             if execution_id in self._executions:
@@ -1539,7 +1543,13 @@ class ZephyrWorker:
                 continue
 
             if future is None:
-                future = self._coordinator.pull_task.remote(self._worker_id, avail)
+                try:
+                    future = self._coordinator.pull_task.remote(self._worker_id, avail)
+                except Exception as e:
+                    # Resolving the handle can fail outright once the coordinator
+                    # is gone (its endpoint stops resolving), not just the call.
+                    logger.info("[%s] pull_task failed (coordinator may be dead): %s", self._worker_id, e)
+                    break
                 future_start = time.monotonic()
                 warned = False
 
@@ -2178,9 +2188,10 @@ class ZephyrPool:
     pip_dependency_groups: list[str] | None = None
     job_env_vars: dict[str, str] | None = None
 
-    # Coordinator endpoint, published once the pool is started.
     endpoint: str | None = field(default=None, repr=False)
     _serve_job: JobHandle | None = field(default=None, repr=False)
+    # Bumped per start() so a restart never reads the previous attempt's endpoint file.
+    _start_count: int = field(default=0, repr=False)
 
     def __post_init__(self):
         if self.client is None:
@@ -2193,6 +2204,10 @@ class ZephyrPool:
             self.chunk_storage_prefix = marin_temp_bucket(ttl_days=1, prefix="zephyr")
         if self.stage_runner_factory is None:
             self.stage_runner_factory = _default_stage_runner_factory_for(self.client)
+        if self.max_workers < 1:
+            # A pool with no workers still publishes an endpoint, so every
+            # pipeline submitted to it would block until no_workers_timeout.
+            raise ValueError(f"ZephyrPool needs at least one worker, got max_workers={self.max_workers}")
         # Unique per pool so its coordinator job and endpoint file never collide.
         self.name = f"{self.name}-{uuid.uuid4().hex[:8]}"
 
@@ -2218,8 +2233,11 @@ class ZephyrPool:
             max_shard_failures=self.max_shard_failures,
             max_shard_infra_failures=self.max_shard_infra_failures,
         )
-        # self.name is uuid-suffixed, so this directory is unique per pool.
-        base = f"{self.chunk_storage_prefix}/{self.name}-shared"
+        # self.name is uuid-suffixed, so this directory is unique per pool. The
+        # attempt suffix keeps a restart from reading the previous coordinator's
+        # endpoint.txt, which still holds a now-dead endpoint.
+        self._start_count += 1
+        base = f"{self.chunk_storage_prefix}/{self.name}-shared-{self._start_count}"
         config_path = f"{base}/config.pkl"
         endpoint_path = f"{base}/endpoint.txt"
         ensure_parent_dir(config_path)
@@ -2256,31 +2274,46 @@ class ZephyrPool:
                 if time.monotonic() > deadline:
                     raise TimeoutError(f"Shared coordinator did not publish an endpoint within {timeout}s")
                 time.sleep(backoff.next_interval())
+            endpoint = endpoint_file.read_bytes().decode()
+            if not endpoint:
+                raise RuntimeError(f"Shared coordinator published an empty endpoint at {endpoint_path}")
         except BaseException:
             with suppress(Exception):
                 self._serve_job.terminate()
             self._serve_job = None
             raise
 
-        self.endpoint = endpoint_file.read_bytes().decode()
+        self.endpoint = endpoint
         logger.info("Shared zephyr coordinator ready: %s", self.endpoint)
         return self.endpoint
 
     def shutdown(self) -> None:
-        """Gracefully stop the coordinator (workers drain and exit) and terminate the pool job."""
-        if self._serve_job is None:
+        """Gracefully stop the coordinator (workers drain and exit) and terminate the pool job.
+
+        Raises if the job is still running and could not be terminated — the
+        caller must not believe the pool is gone while it still holds workers.
+        """
+        serve_job = self._serve_job
+        if serve_job is None:
             return
+        # Best-effort: a coordinator that already died cannot drain its workers,
+        # and terminating the job below cascades to them anyway.
         if self.endpoint is not None:
             with suppress(Exception):
                 self.client.get_actor(self.endpoint).shutdown.remote().result(timeout=30.0)
         with suppress(Exception):
-            # Give the serve loop a moment to exit cleanly (workers land
-            # SUCCEEDED); terminate() below is the backstop that cascades.
-            self._serve_job.wait(timeout=60.0, raise_on_failure=False)
-        with suppress(Exception):
-            self._serve_job.terminate()
-        self._serve_job = None
-        self.endpoint = None
+            status = serve_job.wait(timeout=60.0, raise_on_failure=False)
+            if status in (FrayJobStatus.SUCCEEDED, FrayJobStatus.FAILED, FrayJobStatus.STOPPED):
+                # Already finished: terminating now would only relabel a clean
+                # exit as STOPPED.
+                self._serve_job = None
+                self.endpoint = None
+                return
+        try:
+            serve_job.terminate()
+        finally:
+            self._serve_job = None
+            self.endpoint = None
 
     def __enter__(self) -> str:
         """Start the pool and return its coordinator endpoint; ``__exit__`` tears it down."""

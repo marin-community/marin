@@ -58,7 +58,7 @@ class HostedActor:
     other processes can pass to ``Client.get_actor`` to obtain a handle.
     """
 
-    def __init__(self, handle: ActorHandle, stop: Any = None, endpoint: str = ""):
+    def __init__(self, handle: ActorHandle, endpoint: str, stop: Any = None):
         self.handle = handle
         self.endpoint = endpoint
         self._stop = stop

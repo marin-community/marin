@@ -28,6 +28,7 @@ from zephyr.execution import (
     _job_environment,
     _PipelineExecution,
 )
+from zephyr.plan import compute_plan
 from zephyr.shuffle import ListShard
 from zephyr.stage_io import ShardTask
 
@@ -109,10 +110,8 @@ def test_shared_pool_pipeline_failure_does_not_break_the_pool(shared_pool):
         with pytest.raises(ZephyrWorkerError, match="ValueError"):
             failing.result()
 
-        # The concurrent healthy pipeline is unaffected.
         assert sorted(healthy.result().results) == [101, 102, 103, 104]
 
-    # The pool survived the failure: a fresh pipeline still runs.
     later = _connect(shared_pool)
     assert sorted(later.execute(Dataset.from_list([5, 6]).map(lambda x: x * 10)).results) == [50, 60]
 
@@ -157,7 +156,7 @@ def test_coordinator_shutdown_fails_in_flight_run_promptly(tmp_path, actor_conte
 
 
 def test_pool_shutdown_disconnects(tmp_path):
-    """After shutdown() the pool is torn down and its endpoint cleared."""
+    """After shutdown() a driver holding the old endpoint cannot reach the coordinator."""
     client = LocalClient(max_threads=8)
     pool = ZephyrPool(
         client=client,
@@ -169,7 +168,6 @@ def test_pool_shutdown_disconnects(tmp_path):
     endpoint = pool.start()
     assert endpoint and pool.endpoint == endpoint
 
-    # A driver runs on it while it is up.
     driver = ZephyrContext(client=client, resources=ResourceConfig(cpu=1, ram="512m"), coordinator_endpoint=endpoint)
     assert sorted(driver.execute(Dataset.from_list([1, 2]).map(lambda x: x + 1)).results) == [2, 3]
 
@@ -177,7 +175,65 @@ def test_pool_shutdown_disconnects(tmp_path):
     assert pool.endpoint is None
     assert pool._serve_job is None
 
+    # The stale endpoint must stop resolving; otherwise a late driver would
+    # register a pipeline on a dead pool and block until no_workers_timeout.
+    stale = ZephyrContext(client=client, resources=ResourceConfig(cpu=1, ram="512m"), coordinator_endpoint=endpoint)
+    with pytest.raises(RuntimeError, match="not found in registry"):
+        stale.execute(Dataset.from_list([1, 2]).map(lambda x: x + 1))
+
     client.shutdown(wait=True)
+
+
+def test_coordinator_rejects_pipelines_after_shutdown(tmp_path, actor_context):
+    """A pipeline submitted to an already-shut-down coordinator fails fast.
+
+    Guards the direct handle path: without the check the call registers an
+    execution and then waits out no_workers_timeout for workers that already
+    exited.
+    """
+    coordinator = _make_test_coordinator(tmp_path)
+    coordinator.shutdown()
+
+    with pytest.raises(ZephyrWorkerError, match="shut down"):
+        coordinator.run_pipeline(
+            compute_plan(Dataset.from_list([1, 2]).map(lambda x: x + 1)),
+            "exec-after-shutdown",
+            _TEST_TASK_COST,
+            _TEST_TASK_COST,
+        )
+
+
+def test_pool_restart_waits_for_the_new_coordinator(tmp_path):
+    """start() after shutdown() publishes to a fresh endpoint file and serves again.
+
+    Each attempt writes its own endpoint file. Sharing one file would let the
+    startup wait return immediately on the dead attempt's contents, handing the
+    caller an endpoint that resolves to nothing.
+    """
+    client = LocalClient(max_threads=8)
+    prefix = tmp_path / "chunks"
+    pool = ZephyrPool(
+        client=client,
+        max_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(prefix),
+        name=f"shared-{uuid.uuid4().hex[:8]}",
+    )
+    pool.start()
+    pool.shutdown()
+
+    endpoint = pool.start()
+    try:
+        # Two attempt directories, so the second start could not have returned
+        # on the first attempt's endpoint file. LocalClient reuses the endpoint
+        # name across restarts, so only the file layout shows the difference.
+        assert len(list(prefix.glob(f"{pool.name}-shared-*"))) == 2
+
+        driver = ZephyrContext(client=client, resources=ResourceConfig(cpu=1, ram="512m"), coordinator_endpoint=endpoint)
+        assert sorted(driver.execute(Dataset.from_list([1, 2]).map(lambda x: x + 1)).results) == [2, 3]
+    finally:
+        pool.shutdown()
+        client.shutdown(wait=True)
 
 
 def test_pool_context_manager_yields_endpoint_and_tears_down(tmp_path):
@@ -198,7 +254,6 @@ def test_pool_context_manager_yields_endpoint_and_tears_down(tmp_path):
     with pool as endpoint:
         assert endpoint == pool.endpoint
 
-        # Connecting driver → runs on the shared pool.
         shared_driver = ZephyrContext(
             client=client, resources=ResourceConfig(cpu=1, ram="512m"), coordinator_endpoint=endpoint
         )
@@ -215,7 +270,6 @@ def test_pool_context_manager_yields_endpoint_and_tears_down(tmp_path):
         assert dedicated.coordinator_endpoint is None
         assert sorted(dedicated.execute(Dataset.from_list([4, 5]).map(lambda x: x + 1)).results) == [5, 6]
 
-    # On block exit the pool is torn down.
     assert pool.endpoint is None
     assert pool._serve_job is None
     client.shutdown(wait=True)
