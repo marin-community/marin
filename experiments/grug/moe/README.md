@@ -88,6 +88,22 @@ optimizer configuration fields before these paths are generalized.
 | `SCALE_MUON_DIST_NONEXPERT` | off | Use the stack-batch-sharded layout for 3-D non-expert stacks |
 | `SCALE_MUON_PAD_NONEXPERT` | off | Pad 3-D non-expert stacks before the sharded Newton-Schulz path |
 | `SCALE_MUON_INTRA_RACK` | off | Exclude `replica_dcn` when distributing 4-D and padded matrix stacks |
+| `SCALE_MUON_SYRK` | off | Use batched QuACK SYRK for Newton-Schulz Gram matrices on distributed 4-D stacks |
+
+### Temporary all-to-all trace controls
+
+These controls are also read inside `lib/levanter` at trace time for the
+measured expert-dispatch experiments. A follow-up should replace them with
+explicit MoE configuration fields before these paths are generalized.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `SCALE_A2A_FIXED` | off | Use static-capacity `lax.all_to_all` buffers for ragged expert dispatch |
+| `SCALE_A2A_CHUNKS` | `1` | Split each local token batch into this many fixed-capacity dispatches |
+| `SCALE_A2A_NO_BARRIER` | off | Skip the rematerialization barriers around fixed-capacity dispatch |
+| `SCALE_A2A_SPILL` | `0` | Retry each overflow assignment against this many lower-ranked selected experts |
+| `SCALE_A2A_GATHER_DISPATCH` | off | Scatter assignment indices and gather activation rows into the send buffer |
+| `SCALE_A2A_CUSTOM_ADJOINT` | off | Use structured gather transposes that avoid scatter in the fixed-capacity backward pass |
 
 ## GB200 job environment
 

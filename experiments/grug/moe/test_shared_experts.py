@@ -66,7 +66,11 @@ def test_split_shared_experts_preserve_weight_sharding():
 
     assert unsplit is not None
     assert split is not None
-    expected_specs = (P("data", "model"), P("data", "model"), P("model", "data"))
+    expected_specs = (
+        P(("data", "expert"), "model"),
+        P(("data", "expert"), "model"),
+        P("model", ("data", "expert")),
+    )
     unsplit_specs = tuple(weight.sharding.spec for weight in (unsplit[0].w_gate, unsplit[0].w_up, unsplit[0].w_down))
     split_specs = tuple(
         tuple(weight.sharding.spec for weight in (expert.w_gate, expert.w_up, expert.w_down)) for expert in split

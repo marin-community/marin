@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Hardcoded one-rack GB200 launcher for the FSDP MoE hero configuration."""
+"""Hardcoded one-rack d5120 EP64 launcher with 256 routed experts and top-8 routing."""
 
 import dataclasses
-import math
+import datetime
 import os
 
 import jmp
@@ -14,7 +14,7 @@ from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import BlockShuffleConfig
 from levanter.grug.attention import RotaryConfig
-from levanter.tracker.wandb import WandbConfig
+from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -24,95 +24,76 @@ from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint
 
-from experiments.grug.moe.heuristic import MoeHeuristic
-from experiments.grug.moe_hero_fsdp.model import GrugModelConfig
-from experiments.grug.moe_hero_fsdp.optimizer import GrugMoeMuonHConfig
-from experiments.grug.moe_hero_fsdp.train import GrugRunConfig, GrugTrainerConfig, run_grug
-from experiments.llama import llama3_tokenizer
+from experiments.grug.moe_hero_ep.model import GrugModelConfig
+from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
+from experiments.grug.moe_hero_ep.train import GrugRunConfig, GrugTrainerConfig, run_grug
+from experiments.llama import llama3_tokenizer, llama3_tokenizer_vocab_size
 
-HERO_RUN_ID = "moe-hero-fsdp"
-HERO_STEPS = 25
-HERO_BATCH_SIZE = 1152
+HERO_STEPS = 350
+HERO_BATCH_SIZE = 1024
 HERO_PROCESSES_PER_TASK = 1
 HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
-HERO_TOKENS = float(HERO_STEPS * HERO_BATCH_SIZE * 4096)
 
 HERO_MODEL = GrugModelConfig(
-    vocab_size=128_256,
-    hidden_dim=6144,
-    intermediate_dim=3072,
-    shared_expert_intermediate_dim=6144,
-    num_shared_experts=2,
-    num_experts=128,
-    num_experts_per_token=4,
+    vocab_size=llama3_tokenizer_vocab_size,
+    hidden_dim=5120,
+    intermediate_dim=1280,
+    shared_expert_intermediate_dim=5120,
+    num_shared_experts=1,
+    num_experts=256,
+    num_experts_per_token=8,
     num_layers=48,
-    num_heads=48,
-    num_kv_heads=12,
-    local_kv_heads=12,
-    global_kv_heads=6,
+    num_heads=40,
+    num_kv_heads=10,
     head_dim=128,
     max_seq_len=4096,
-    sliding_window=512,
-    global_every=6,
-    capacity_factor=1.0,
+    sliding_window=2048,
+    capacity_factor=1.0625,
     layer_norm_eps=1e-5,
-    initializer_std=0.5 / math.sqrt(6144),
+    initializer_std=0.006987712429686843,
     qk_mult=1.3,
-    xsa=True,
     router_z_loss_coef=0.0,
     disable_pko=True,
     disable_long_rope=True,
     attention_implementation="gpu_fa4_cute",
-    moe_implementation="sonic_cute",
-    expert_chunks=4,
+    moe_implementation="ragged_all_to_all",
+    expert_chunks=1,
     report_capacity_overflow=True,
     remat_mode="recompute_all",
     rope=RotaryConfig(theta=10_000.0, scaling_factor=None),
-    rope_fused=True,
     use_array_stacked_blocks=True,
 )
 
-
-def _build_hero_optimizer() -> GrugMoeMuonHConfig:
-    derived = MoeHeuristic(min_lr_ratio=0.05, max_learning_rate=0.05).build_optimizer_config(
-        batch_size=HERO_BATCH_SIZE,
-        tokens=HERO_TOKENS,
-        hidden_dim=HERO_MODEL.hidden_dim,
-        seq_len=HERO_MODEL.max_seq_len,
-    )
-    return GrugMoeMuonHConfig(
-        learning_rate=derived.learning_rate,
-        min_lr_ratio=derived.min_lr_ratio,
-        warmup=derived.warmup,
-        decay=derived.decay,
-        rewarmup=0.0,
-        cooldown=None,
-        cycle_length=None,
-        cycles=None,
-        lr_schedule="linear",
-        haps=None,
-        adam_lr=derived.adam_lr,
-        momentum=0.95,
-        nesterov=True,
-        backend_steps=5,
-        beta1=derived.beta1,
-        beta2=derived.beta2,
-        epsilon=derived.epsilon,
-        muon_epsilon=1e-8,
-        max_grad_norm=None,
-        coefficient_type="quintic",
-    )
-
-
-HERO_OPTIMIZER = _build_hero_optimizer()
+HERO_OPTIMIZER = GrugMoeMuonHConfig(
+    learning_rate=0.038956464533085024,
+    min_lr_ratio=0.05,
+    warmup=0.01,
+    decay=None,
+    rewarmup=0.0,
+    cooldown=None,
+    cycle_length=None,
+    cycles=None,
+    lr_schedule="linear",
+    haps=None,
+    adam_lr=0.008989953353788853,
+    momentum=0.95,
+    nesterov=True,
+    backend_steps=5,
+    beta1=0.9062,
+    beta2=0.9684910757595268,
+    epsilon=1.810213843721233e-16,
+    muon_epsilon=1e-8,
+    max_grad_norm=None,
+    coefficient_type="quintic",
+)
 
 HERO_GRUG_TRAINER = GrugTrainerConfig(
     data_seed=None,
     log_every=1,
     ema_beta=None,
     z_loss_weight=1e-4,
-    offload_opt_state=True,
-    expert_axis_size=1,
+    offload_opt_state=False,
+    expert_axis_size=64,
     replica_axis_size=1,
     sharding_dump_path=None,
 )
@@ -141,9 +122,9 @@ def _slimpajama_6b_dataset() -> ArtifactStep[TokenizedCache]:
 
 
 def build_hero_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
-    """Build the fixed 64-GPU FSDP hero run."""
-    run_id = os.environ.get("RUN_ID") or HERO_RUN_ID
-    name = "grug/moe-hero-fsdp"
+    """Build the fixed one-rack EP64 throughput run."""
+    run_id = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.UTC).strftime("hero-ep-%Y%m%d-%H%M%S")
+    name = f"experiments/grug-moe-hero-ep/d5120-L48-e256-{run_id}"
     version = resolve_version(name, version)
     slim = _slimpajama_6b_dataset()
 
@@ -155,15 +136,8 @@ def build_hero_checkpoint(*, version: str | None = None) -> ArtifactStep[Levante
             num_train_steps=HERO_STEPS,
             profiler=ProfilerConfig(enabled=False, start_step=8, num_steps=0),
             mp=jmp.get_policy(HERO_MIXED_PRECISION),
-            tracker=WandbConfig(
-                entity="marin-community",
-                project="marin_moe",
-                tags=["grug", "moe", "hero", "fsdp", "gb200"],
-                group="moe-hero-fsdp",
-                name=run_id,
-                replicate_path=ctx.output_path,
-            ),
-            watch=WatchConfig(interval=20),
+            tracker=JsonLoggerConfig(logger_name=f"{run_id}.metrics"),
+            watch=WatchConfig(interval=0),
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,

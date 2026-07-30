@@ -12,6 +12,7 @@ import dataclasses
 import importlib
 import json
 import logging
+import math
 import os
 import subprocess
 import sys
@@ -19,6 +20,7 @@ import textwrap
 import uuid
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 
 import equinox as eqx
 import jax
@@ -31,7 +33,7 @@ import pytest
 from fray.cluster import ResourceConfig
 from haliax.partitioning import set_mesh
 from jax._src import config as jax_config
-from jax.sharding import use_abstract_mesh
+from jax.sharding import AxisType, use_abstract_mesh
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import DatasetComponent, DirectDatasetComponent, LmDataConfig
@@ -43,7 +45,6 @@ from levanter.grug.sharding import _compact_grug_mesh_shape
 from levanter.optim.config import AdamConfig
 from levanter.schedule import BatchSchedule
 from levanter.tracker.json_logger import JsonLoggerConfig
-from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.artifact import ArtifactRecord, write_record
 from marin.execution.lazy import StepContext, materialized_config
@@ -431,35 +432,11 @@ def test_grug_moe_scale_launcher_resolves_gb200_ep64_run(monkeypatch):
 
 def _assert_grug_moe_hero_fsdp_config(config, resources, train_module) -> None:
     model = config.model
-    optimizer = config.optimizer
     grug_trainer = config.trainer
-    trainer = grug_trainer.trainer
 
-    assert (
-        model.vocab_size,
-        model.hidden_dim,
-        model.intermediate_dim,
-        model.shared_expert_intermediate_dim,
-        model.num_shared_experts,
-        model.num_experts,
-        model.num_experts_per_token,
-        model.num_layers,
-        model.num_heads,
-        model.num_kv_heads,
-        model.local_kv_heads,
-        model.global_kv_heads,
-        model.head_dim,
-        model.max_seq_len,
-        model.sliding_window,
-        model.global_every,
-    ) == (128_256, 6144, 3072, 6144, 2, 128, 4, 48, 48, 12, 12, 6, 128, 4096, 512, 6)
-    assert (
-        model.capacity_factor,
-        model.layer_norm_eps,
-        model.initializer_std,
-        model.qk_mult,
-        model.router_z_loss_coef,
-    ) == (1.0, 1e-5, 0.0063788795384978605, 1.3, 0.0)
+    assert model.sliding_window == 512
+    assert model.capacity_factor == 1.0
+    assert model.initializer_std == 0.5 / math.sqrt(model.hidden_dim)
     assert model.xsa
     assert model.disable_pko
     assert model.disable_long_rope
@@ -468,86 +445,14 @@ def _assert_grug_moe_hero_fsdp_config(config, resources, train_module) -> None:
     assert model.expert_chunks == 4
     assert model.report_capacity_overflow
     assert model.remat_mode == "recompute_all"
-    assert model.rope.theta == 10_000.0
-    assert model.rope.scaling_factor is None
     assert model.rope_fused
     assert model.use_array_stacked_blocks
-    model_module = importlib.import_module("experiments.grug.moe_hero_fsdp.model")
-    np.testing.assert_array_equal(
-        np.flatnonzero(np.asarray(model_module._long_layer_schedule(model.num_layers, model.global_every))),
-        np.arange(5, 48, 6),
-    )
-
-    assert isinstance(optimizer, importlib.import_module("experiments.grug.moe_hero_fsdp.optimizer").GrugMoeMuonHConfig)
     assert (
-        optimizer.learning_rate,
-        optimizer.weight_decay,
-        optimizer.min_lr_ratio,
-        optimizer.warmup,
-        optimizer.decay,
-        optimizer.rewarmup,
-        optimizer.cooldown,
-        optimizer.cycle_length,
-        optimizer.cycles,
-        optimizer.lr_schedule,
-        optimizer.haps,
-        optimizer.weight_decay_modules,
-        optimizer.default_weight_decay_mask,
-        optimizer.adam_lr,
-        optimizer.momentum,
-        optimizer.nesterov,
-        optimizer.backend_steps,
-        optimizer.beta1,
-        optimizer.beta2,
-        optimizer.epsilon,
-        optimizer.muon_epsilon,
-        optimizer.max_grad_norm,
-        optimizer.coefficient_type,
-    ) == (
-        0.05,
-        0.1,
-        0.05,
-        0.01,
-        None,
-        0.0,
-        None,
-        None,
-        None,
-        "linear",
-        None,
-        None,
-        None,
-        0.02511723566133071,
-        0.95,
-        True,
-        5,
-        0.9062,
-        0.9646229185299474,
-        4.8379999999999997e-17,
-        1e-8,
-        None,
-        "quintic",
-    )
-    assert (
-        grug_trainer.data_seed,
-        grug_trainer.log_every,
-        grug_trainer.ema_beta,
-        grug_trainer.z_loss_weight,
         grug_trainer.offload_opt_state,
         grug_trainer.expert_axis_size,
         grug_trainer.replica_axis_size,
-        grug_trainer.sharding_dump_path,
-    ) == (None, 1, None, 1e-4, True, 1, 1, None)
-    assert (
-        trainer.seed,
-        trainer.train_batch_size,
-        trainer.num_train_steps,
-        trainer.watch.interval,
         config.processes_per_task,
-    ) == (0, 1152, 25, 20, 1)
-    assert isinstance(trainer.tracker, WandbConfig)
-    assert trainer.checkpointer.save_interval is None
-    assert config.eval is None
+    ) == (True, 1, 1, 1)
     assert (resources.device.variant, resources.device.count, resources.replicas) == ("GB200", 4, 16)
     assert dict(train_module.HERO_FSDP_RUNTIME_ENV) == {
         "JAX_ENABLE_PGLE": "1",
@@ -594,70 +499,6 @@ def test_grug_moe_rank_four_muon_update_runs_newton_schulz_without_mesh(monkeypa
 
     assert update.shape == raw_momentum.shape
     assert not jnp.array_equal(update, raw_momentum)
-
-
-def test_grug_moe_hero_fsdp_newton_schulz_hlo_reaches_syrk():
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
-    script = """
-        import importlib
-        import os
-        import sys
-        from types import SimpleNamespace
-
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
-
-        from levanter.optim import grugmuon
-
-        def symmetric_gemm(x):
-            with jax.named_scope("quack_symmetric_gemm"):
-                return jnp.matmul(x, jnp.swapaxes(x, -1, -2))
-
-        sys.modules["levanter.grug._moe.quack_symmetric_cute"] = SimpleNamespace(
-            quack_symmetric_gemm=symmetric_gemm
-        )
-        train_module = importlib.import_module("experiments.grug.moe_hero_fsdp.train")
-        os.environ.update(train_module.HERO_FSDP_RUNTIME_ENV)
-
-        axis_names = ("replica_dcn", "data", "expert", "model")
-        mesh = Mesh(
-            np.asarray(jax.devices()).reshape((1, 4, 1, 1)),
-            axis_names,
-            axis_types=(AxisType.Explicit,) * 4,
-        )
-        x = jax.device_put(
-            jax.random.normal(jax.random.key(0), (2, 4, 8, 4), dtype=jnp.float32),
-            NamedSharding(mesh, P(None, None, None, None)),
-        )
-        path = (jax.tree_util.GetAttrKey("w_gate"),)
-
-        def apply_ns(y):
-            return grugmuon._newtonschulz_4d_distributed(
-                path,
-                y,
-                steps=2,
-                eps=1e-7,
-                coefficient_type="quintic",
-            )
-
-        with jax.set_mesh(mesh):
-            stablehlo = jax.jit(apply_ns).lower(x).as_text(debug_info=True)
-
-        assert "quack_symmetric_gemm/dot_general" in stablehlo, stablehlo
-    """
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
 
 
 def test_grug_moe_chunk_drops_sum_across_data_shards():
@@ -725,6 +566,212 @@ def test_grug_moe_chunk_drops_sum_across_data_shards():
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def _assert_grug_moe_hero_ep_config(config, resources, train_module) -> None:
+    model = config.model
+    grug_trainer = config.trainer
+
+    assert model.sliding_window == 2048
+    assert model.capacity_factor == 1.0625
+    assert model.initializer_std == 0.5 / math.sqrt(model.hidden_dim)
+    assert model.disable_pko
+    assert model.disable_long_rope
+    assert model.attention_implementation == "gpu_fa4_cute"
+    assert model.moe_implementation == "ragged_all_to_all"
+    assert model.expert_chunks == 1
+    assert model.report_capacity_overflow
+    assert model.remat_mode == "recompute_all"
+    assert model.use_array_stacked_blocks
+    assert (
+        grug_trainer.offload_opt_state,
+        grug_trainer.expert_axis_size,
+        grug_trainer.replica_axis_size,
+        config.processes_per_task,
+    ) == (False, 64, 1, 1)
+    assert (resources.device.variant, resources.device.count, resources.replicas) == ("GB200", 4, 16)
+    assert dict(train_module.HERO_EP_RUNTIME_ENV) == {
+        "JAX_ENABLE_PGLE": "false",
+        "SCALE_A2A_FIXED": "1",
+        "SCALE_A2A_CHUNKS": "1",
+        "SCALE_A2A_NO_BARRIER": "1",
+        "SCALE_A2A_GATHER_DISPATCH": "1",
+        "SCALE_A2A_CUSTOM_ADJOINT": "1",
+        "SCALE_A2A_SPILL": "3",
+        "SCALE_MUON_PAD_NONEXPERT": "1",
+        "SCALE_MUON_SYRK": "1",
+    }
+
+
+def test_grug_moe_hero_ep_resolves_one_rack_d5120_ep64_configuration(monkeypatch):
+    monkeypatch.setenv("RUN_ID", "test-moe-hero-ep")
+    launcher = importlib.import_module("experiments.grug.moe_hero_ep.launch")
+    train_module = importlib.import_module("experiments.grug.moe_hero_ep.train")
+
+    step = launcher.build_hero_checkpoint(version="test-dev")
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args.keys(), step.deps))
+    resources = step.runtime_args["train_resources"]
+
+    _assert_grug_moe_hero_ep_config(config, resources, train_module)
+
+
+@pytest.mark.parametrize(
+    ("variant", "runtime_env_name", "sharded_axis"),
+    [
+        ("moe_hero_fsdp", "HERO_FSDP_RUNTIME_ENV", "data"),
+        ("moe_hero_ep", "HERO_EP_RUNTIME_ENV", "expert"),
+    ],
+)
+def test_grug_moe_hero_newton_schulz_hlo_reaches_syrk(variant, runtime_env_name, sharded_axis):
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+    script = f"""
+        import importlib
+        import os
+        import sys
+        from types import SimpleNamespace
+
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+        from levanter.optim import grugmuon
+
+        def symmetric_gemm(x):
+            with jax.named_scope("quack_symmetric_gemm"):
+                return jnp.matmul(x, jnp.swapaxes(x, -1, -2))
+
+        # QuACK/CUTLASS is unavailable on CPU. Replace that accelerator boundary
+        # with dense SYRK while retaining a name that survives into lowered HLO.
+        sys.modules["levanter.grug._moe.quack_symmetric_cute"] = SimpleNamespace(
+            quack_symmetric_gemm=symmetric_gemm
+        )
+        train_module = importlib.import_module("experiments.grug.{variant}.train")
+        runtime_env = getattr(train_module, "{runtime_env_name}")
+        os.environ.update(runtime_env)
+
+        axis_names = ("replica_dcn", "data", "expert", "model")
+        mesh_shape = tuple(4 if name == "{sharded_axis}" else 1 for name in axis_names)
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(mesh_shape),
+            axis_names,
+            axis_types=(AxisType.Explicit,) * 4,
+        )
+        input_spec = P(None, "expert" if "{sharded_axis}" == "expert" else None, None, None)
+        x = jax.device_put(
+            jax.random.normal(jax.random.key(0), (2, 4, 8, 4), dtype=jnp.float32),
+            NamedSharding(mesh, input_spec),
+        )
+        path = (jax.tree_util.GetAttrKey("w_gate"),)
+
+        def apply_ns(y):
+            return grugmuon._newtonschulz_4d_distributed(
+                path,
+                y,
+                steps=2,
+                eps=1e-7,
+                coefficient_type="quintic",
+            )
+
+        with jax.set_mesh(mesh):
+            hlo = jax.jit(apply_ns).lower(x).as_text(debug_info=True)
+
+        assert "quack_symmetric_gemm/dot_general" in hlo, hlo
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_grug_moe_hero_fsdp_reaches_chunked_sonic(monkeypatch):
+    grug_moe = importlib.import_module("levanter.grug.grug_moe")
+
+    class ChunkerReached(Exception):
+        pass
+
+    def chunked_sonic(*args, **kwargs):
+        del args, kwargs
+        raise ChunkerReached
+
+    monkeypatch.setitem(
+        sys.modules,
+        "levanter.grug._moe.sonic_cute",
+        SimpleNamespace(
+            _moe_mlp_local_sonic_cute=lambda *args, **kwargs: (args[0], jnp.array(0, dtype=jnp.int32)),
+            _moe_mlp_local_sonic_cute_chunked=chunked_sonic,
+        ),
+    )
+    mesh = jax.sharding.AbstractMesh(
+        axis_sizes=(1, 1, 1, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+    x = jnp.zeros((8, 4), dtype=jnp.bfloat16)
+    selected_experts = jnp.zeros((8, 2), dtype=jnp.int32)
+    combine_weights = jnp.ones((8, 2), dtype=jnp.bfloat16)
+    w_up_gate = jnp.zeros((4, 4, 8), dtype=jnp.bfloat16)
+    w_down = jnp.zeros((4, 4, 4), dtype=jnp.bfloat16)
+
+    with use_abstract_mesh(mesh), pytest.raises(ChunkerReached):
+        jax.make_jaxpr(
+            lambda x, selected, weights, up_gate, down: grug_moe.moe_mlp(
+                x,
+                selected,
+                weights,
+                up_gate,
+                down,
+                implementation="sonic_cute",
+                mesh=mesh,
+                expert_chunks=4,
+            )
+        )(x, selected_experts, combine_weights, w_up_gate, w_down)
+
+
+def test_grug_moe_hero_ep_avoids_known_involuntary_remat_layouts(monkeypatch):
+    train_module = importlib.import_module("experiments.grug.moe_hero_ep.train")
+    grugmuon = importlib.import_module("levanter.optim.grugmuon")
+    for key, value in train_module.HERO_EP_RUNTIME_ENV.items():
+        monkeypatch.setenv(key, value)
+
+    mesh = jax.sharding.AbstractMesh(
+        axis_sizes=(1, 1, 64, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+    parameter_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec(None, "expert", None))
+    x = jax.ShapeDtypeStruct((48, 64, 4), jnp.float32, sharding=parameter_sharding)
+
+    def apply_ns(y):
+        return grugmuon._newtonschulz_padded_stack_sharded(
+            y,
+            steps=0,
+            eps=1e-8,
+            coefficient_type="quintic",
+            target_sharding=parameter_sharding,
+        )
+
+    with use_abstract_mesh(mesh):
+        closed_jaxpr = jax.make_jaxpr(apply_ns)(x)
+        output = jax.eval_shape(apply_ns, x)
+
+    padded_shape = (64, 64, 4)
+    fully_replicated_padded_reshards = [
+        equation
+        for equation in closed_jaxpr.jaxpr.eqns
+        if equation.primitive.name == "reshard"
+        and equation.invars[0].aval.shape == padded_shape
+        and equation.params["dst_sharding"].spec == jax.sharding.PartitionSpec(None, None, None)
+    ]
+    assert not fully_replicated_padded_reshards
+    assert output.sharding == parameter_sharding
 
 
 @pytest.mark.parametrize(

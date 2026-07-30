@@ -2,6 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import importlib.util
+import os
+import subprocess
+import sys
+import textwrap
 
 import numpy as np
 import pytest
@@ -19,6 +23,7 @@ from levanter.grug._moe.common import (
     _prepare_moe_dispatch_indices_with_assignment_ids,
 )
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
+from levanter.grug._moe.ep_ragged_all_to_all import _assign_with_spill, _fixed_a2a_core
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -464,8 +469,22 @@ def test_moe_expert_mlp_init_uses_logical_weight_pspecs():
     assert mlp.w_down.sharding.spec == P(None, "model", "data")
 
 
-@pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all"])
-def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
+@pytest.mark.parametrize(
+    ("implementation", "fixed_a2a"),
+    [
+        ("ring", False),
+        ("ragged_all_to_all", False),
+        ("ragged_all_to_all", True),
+    ],
+)
+def test_moe_ep_path_lowers_on_abstract_mesh(
+    implementation: MoeImplementation, fixed_a2a: bool, monkeypatch: pytest.MonkeyPatch
+):
+    if fixed_a2a:
+        monkeypatch.setenv("SCALE_A2A_FIXED", "1")
+        monkeypatch.setenv("SCALE_A2A_CHUNKS", "2")
+        monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
+
     mesh = _make_abstract_moe_mesh(data=2, expert=2, model=1)
 
     tokens = 16
@@ -520,6 +539,597 @@ def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
             .lower(lowering_platforms=(platform,))
         )
         assert lowered is not None
+
+
+def _ring_dispatch_buffer_rows(*, expert_axis_size: int, local_tokens: int) -> int:
+    mesh = _make_abstract_moe_mesh(data=1, expert=expert_axis_size, model=1)
+    tokens = expert_axis_size * local_tokens
+    hidden_dim = 8
+    intermediate_dim = 6
+    topk = 2
+    num_experts = 2 * expert_axis_size
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        x = jax.ShapeDtypeStruct(
+            (tokens, hidden_dim),
+            jnp.float32,
+            sharding=NamedSharding(mesh, P("data", None)),
+        )
+        selected_experts = jax.ShapeDtypeStruct(
+            (tokens, topk),
+            jnp.int32,
+            sharding=NamedSharding(mesh, P("data", None)),
+        )
+        combine_weights = jax.ShapeDtypeStruct(
+            (tokens, topk),
+            jnp.float32,
+            sharding=NamedSharding(mesh, P("data", None)),
+        )
+        w_up_gate = jax.ShapeDtypeStruct(
+            (num_experts, hidden_dim, 2 * intermediate_dim),
+            jnp.float32,
+            sharding=NamedSharding(mesh, P("expert", None, None)),
+        )
+        w_down = jax.ShapeDtypeStruct(
+            (num_experts, intermediate_dim, hidden_dim),
+            jnp.float32,
+            sharding=NamedSharding(mesh, P("expert", None, None)),
+        )
+        closed_jaxpr = jax.make_jaxpr(
+            lambda x, selected, weights, w13, w2: moe_mlp(
+                x,
+                selected,
+                weights,
+                w13,
+                w2,
+                implementation="ring",
+                mesh=mesh,
+                capacity_factor=1.0,
+            )
+        )(x, selected_experts, combine_weights, w_up_gate, w_down)
+
+    shard_map_eqn = next(eqn for eqn in closed_jaxpr.jaxpr.eqns if eqn.primitive.name == "shard_map")
+    local_jaxpr = shard_map_eqn.params["jaxpr"]
+    dispatch_eqn = next(
+        eqn
+        for eqn in local_jaxpr.eqns
+        if eqn.primitive.name == "name" and eqn.params["name"] == "grug_moe_dispatch_input"
+    )
+    return int(dispatch_eqn.outvars[0].aval.shape[0])
+
+
+def test_moe_ep_dispatch_buffer_does_not_scale_with_expert_axis_width():
+    local_tokens = 8
+    expected_rows = local_tokens * 2
+
+    assert _ring_dispatch_buffer_rows(expert_axis_size=2, local_tokens=local_tokens) == expected_rows
+    assert _ring_dispatch_buffer_rows(expert_axis_size=4, local_tokens=local_tokens) == expected_rows
+
+
+def test_moe_ep_boundary_shards_incoming_batch_over_expert_axis():
+    mesh = _make_ep_mesh_or_none()
+    if mesh is None:
+        pytest.skip("requires an even number of >=2 devices")
+
+    tokens = len(jax.devices()) * 8
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(28),
+        tokens=tokens,
+        hidden_dim=8,
+        intermediate_dim=6,
+        num_experts=4,
+        topk=2,
+    )
+    with jax.set_mesh(mesh):
+        incoming_batch_sharding = NamedSharding(mesh, P("data", None))
+        x = jax.sharding.reshard(x, incoming_batch_sharding)
+        selected_experts = jax.sharding.reshard(selected_experts, incoming_batch_sharding)
+        combine_weights = jax.sharding.reshard(combine_weights, incoming_batch_sharding)
+        w_up_gate = jax.sharding.reshard(w_up_gate, NamedSharding(mesh, P("expert", None, None)))
+        w_down = jax.sharding.reshard(w_down, NamedSharding(mesh, P("expert", None, None)))
+
+        out = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            implementation="ring",
+            mesh=mesh,
+            capacity_factor=1.0,
+        )
+
+    assert x.sharding.spec == P("data", None)
+    assert out.sharding.spec == P(("data", "expert"))
+
+
+def test_fixed_a2a_matches_dense_reference_on_one_expert_shard(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
+    mesh = Mesh(
+        np.asarray([jax.devices()[0]]),
+        axis_names=("expert",),
+        axis_types=(AxisType.Explicit,),
+    )
+    tokens = 4
+    hidden_dim = 4
+    intermediate_dim = 6
+    num_experts = 2
+    topk = 2
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(41),
+        tokens=tokens,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_experts=num_experts,
+        topk=topk,
+    )
+    selected_experts = jnp.tile(jnp.arange(topk, dtype=jnp.int32), (tokens, 1))
+
+    def fixed_a2a(x, selected_experts, combine_weights, w_up_gate, w_down):
+        return _fixed_a2a_core(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation_fn=jax.nn.silu,
+            num_experts=num_experts,
+            capacity_factor=0.5,
+        )
+
+    fixed_a2a_sharded = jax.shard_map(
+        fixed_a2a,
+        mesh=mesh,
+        in_specs=(P(), P(), P(), P(), P()),
+        out_specs=(P(), P()),
+        check_vma=False,
+    )
+    with jax.set_mesh(mesh):
+        actual, dropped = fixed_a2a_sharded(x, selected_experts, combine_weights, w_up_gate, w_down)
+
+    selected_w13 = w_up_gate[selected_experts]
+    hidden = jnp.einsum("th,tkhi->tki", x, selected_w13)
+    gate, up = jnp.split(hidden, [intermediate_dim], axis=-1)
+    expert_output = jnp.einsum(
+        "tki,tkih->tkh",
+        jax.nn.silu(gate) * up,
+        w_down[selected_experts],
+    )
+    kept_assignments = np.zeros((tokens, topk), dtype=bool)
+    expert_counts = np.zeros(num_experts, dtype=np.int32)
+    for token_index in range(tokens):
+        for topk_index in range(topk):
+            expert = int(selected_experts[token_index, topk_index])
+            if expert_counts[expert] < 2:
+                kept_assignments[token_index, topk_index] = True
+                expert_counts[expert] += 1
+    expected = jnp.einsum(
+        "tkh,tk->th",
+        expert_output,
+        combine_weights * jnp.asarray(kept_assignments),
+    )
+
+    np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
+    assert int(dropped) == 4
+
+
+def test_fixed_a2a_executes_cross_shard_slot_routing():
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+    script = """
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+        from levanter.grug._moe.ep_ragged_all_to_all import _fixed_a2a_core
+
+        assert jax.device_count() == 4
+        mesh = Mesh(
+            np.asarray(jax.devices()),
+            axis_names=("expert",),
+            axis_types=(AxisType.Explicit,),
+        )
+        x = jax.random.normal(jax.random.key(0), (4, 4))
+        selected_experts = jnp.asarray(
+            [[2, 3], [4, 5], [6, 7], [0, 1]],
+            dtype=jnp.int32,
+        )
+        combine_weights = jax.nn.softmax(jax.random.normal(jax.random.key(1), (4, 2)), axis=-1)
+        w_up_gate = jax.random.normal(jax.random.key(2), (8, 4, 6))
+        w_down = jax.random.normal(jax.random.key(3), (8, 3, 4))
+        selected_w13 = w_up_gate[selected_experts]
+        hidden = jnp.einsum("th,tkhi->tki", x, selected_w13)
+        gate, up = jnp.split(hidden, [3], axis=-1)
+        expert_output = jnp.einsum(
+            "tki,tkih->tkh",
+            jax.nn.silu(gate) * up,
+            w_down[selected_experts],
+        )
+        expected = jnp.einsum("tkh,tk->th", expert_output, combine_weights)
+
+        def fixed_a2a(x, selected_experts, combine_weights, w_up_gate, w_down):
+            return _fixed_a2a_core(
+                x,
+                selected_experts,
+                combine_weights,
+                w_up_gate,
+                w_down,
+                activation_fn=jax.nn.silu,
+                num_experts=8,
+                capacity_factor=4.0,
+            )
+
+        sharded_fixed_a2a = jax.shard_map(
+            fixed_a2a,
+            mesh=mesh,
+            in_specs=(
+                P("expert", None),
+                P("expert", None),
+                P("expert", None),
+                P("expert", None, None),
+                P("expert", None, None),
+            ),
+            out_specs=(P("expert", None), P()),
+            check_vma=False,
+        )
+        with jax.set_mesh(mesh):
+            batch_sharding = NamedSharding(mesh, P("expert", None))
+            expert_sharding = NamedSharding(mesh, P("expert", None, None))
+            x = jax.device_put(x, batch_sharding)
+            selected_experts = jax.device_put(selected_experts, batch_sharding)
+            combine_weights = jax.device_put(combine_weights, batch_sharding)
+            w_up_gate = jax.device_put(w_up_gate, expert_sharding)
+            w_down = jax.device_put(w_down, expert_sharding)
+            actual, dropped = sharded_fixed_a2a(
+                x,
+                selected_experts,
+                combine_weights,
+                w_up_gate,
+                w_down,
+            )
+
+        np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
+        assert int(dropped) == 0
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_spill_preserves_capacity():
+    selected_experts = jnp.array(
+        [
+            [0, 1],
+            [0, 1],
+            [0, 2],
+        ],
+        dtype=jnp.int32,
+    )
+    combine_weights = jnp.array(
+        [
+            [0.9, 0.1],
+            [0.8, 0.2],
+            [0.7, 0.3],
+        ],
+        dtype=jnp.float32,
+    )
+    capacity = 2
+
+    _, _, _, baseline_keep = _assign_with_spill(
+        selected_experts,
+        combine_weights,
+        num_experts=3,
+        capacity=capacity,
+        attempts=0,
+    )
+    target, slot, routed_weights, keep = _assign_with_spill(
+        selected_experts,
+        combine_weights,
+        num_experts=3,
+        capacity=capacity,
+        attempts=1,
+    )
+    assert int(baseline_keep.sum()) == 5
+    assert int(keep.sum()) == 6
+    assert int(target[4]) == 2
+    assert float(routed_weights[4]) == pytest.approx(0.3)
+    occupied_slots = np.asarray(target[keep] * capacity + slot[keep])
+    assert len(np.unique(occupied_slots)) == int(keep.sum())
+    assert int(slot[keep].min()) >= 0
+    assert int(slot[keep].max()) < capacity
+    assert occupied_slots.max() < 3 * capacity
+
+
+def test_fixed_a2a_spill_uses_candidate_expert_and_weight(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
+    monkeypatch.setenv("SCALE_A2A_SPILL", "1")
+    mesh = Mesh(
+        np.asarray([jax.devices()[0]]),
+        axis_names=("expert",),
+        axis_types=(AxisType.Explicit,),
+    )
+    x = jnp.ones((3, 1), dtype=jnp.float32)
+    selected_experts = jnp.array([[0, 1], [0, 1], [0, 2]], dtype=jnp.int32)
+    combine_weights = jnp.array([[0.9, 0.1], [0.8, 0.2], [0.7, 0.3]], dtype=jnp.float32)
+    expert_scale = jnp.array([1.0, 10.0, 100.0], dtype=jnp.float32)[:, None, None]
+    w_up_gate = jnp.concatenate([expert_scale, jnp.ones_like(expert_scale)], axis=2)
+    w_down = jnp.ones((3, 1, 1), dtype=jnp.float32)
+
+    def fixed_a2a(x, selected_experts, combine_weights, w_up_gate, w_down):
+        return _fixed_a2a_core(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation_fn=lambda value: value,
+            num_experts=3,
+            capacity_factor=1.0,
+        )
+
+    fixed_a2a_sharded = jax.shard_map(
+        fixed_a2a,
+        mesh=mesh,
+        in_specs=(P(), P(), P(), P(), P()),
+        out_specs=(P(), P()),
+        check_vma=False,
+    )
+    with jax.set_mesh(mesh):
+        actual, dropped = fixed_a2a_sharded(x, selected_experts, combine_weights, w_up_gate, w_down)
+
+    # Token 2 executes expert 2 twice at expert 2's 0.3 weight. The spilled copy must not use
+    # the displaced expert 0's 0.7 weight, which would produce 100 instead of 60.
+    expected = np.array([[1.9], [2.8], [60.0]], dtype=np.float32)
+    np.testing.assert_allclose(np.asarray(actual), expected, rtol=1e-5, atol=1e-5)
+    assert int(dropped) == 0
+
+
+def _run_fixed_a2a_value_and_grads(
+    *,
+    x,
+    selected_experts,
+    combine_weights,
+    w_up_gate,
+    w_down,
+    seed_cotangent,
+    num_experts,
+    capacity_factor,
+):
+    """Return the value, dropped count, and gradients for fixed all-to-all."""
+    mesh = Mesh(
+        np.asarray([jax.devices()[0]]),
+        axis_names=("expert",),
+        axis_types=(AxisType.Explicit,),
+    )
+
+    def core(x, selected_experts, combine_weights, w_up_gate, w_down):
+        return _fixed_a2a_core(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation_fn=jax.nn.silu,
+            num_experts=num_experts,
+            capacity_factor=capacity_factor,
+        )
+
+    sharded = jax.shard_map(
+        core,
+        mesh=mesh,
+        in_specs=(P(), P(), P(), P(), P()),
+        out_specs=(P(), P()),
+        check_vma=False,
+    )
+
+    def loss(x, combine_weights, w_up_gate, w_down):
+        out, dropped = sharded(x, selected_experts, combine_weights, w_up_gate, w_down)
+        return jnp.sum(out * seed_cotangent), (out, dropped)
+
+    with jax.set_mesh(mesh):
+        (_, (out, dropped)), grads = jax.value_and_grad(loss, argnums=(0, 1, 2, 3), has_aux=True)(
+            x, combine_weights, w_up_gate, w_down
+        )
+    return out, int(dropped), grads
+
+
+def _expected_fixed_capacity_drops(
+    selected_experts: jax.Array,
+    *,
+    num_experts: int,
+    capacity_factor: float,
+) -> int:
+    assignments = np.asarray(selected_experts).reshape(-1)
+    capacity = max(int(np.ceil(capacity_factor * len(assignments) / num_experts)), 1)
+    expert_counts = np.bincount(assignments, minlength=num_experts)
+    return int(np.maximum(expert_counts - capacity, 0).sum())
+
+
+@pytest.mark.slow
+def test_gather_dispatch_matches_scatter_forward_and_drops(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
+    tokens, hidden_dim, intermediate_dim, num_experts, topk = 8, 6, 8, 4, 2
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(7),
+        tokens=tokens,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_experts=num_experts,
+        topk=topk,
+    )
+    seed = jax.random.normal(jax.random.key(99), (tokens, hidden_dim), dtype=jnp.float32)
+
+    monkeypatch.delenv("SCALE_A2A_GATHER_DISPATCH", raising=False)
+    monkeypatch.delenv("SCALE_A2A_CUSTOM_ADJOINT", raising=False)
+    scatter_out, scatter_dropped, _ = _run_fixed_a2a_value_and_grads(
+        x=x,
+        selected_experts=selected_experts,
+        combine_weights=combine_weights,
+        w_up_gate=w_up_gate,
+        w_down=w_down,
+        seed_cotangent=seed,
+        num_experts=num_experts,
+        capacity_factor=0.5,
+    )
+
+    monkeypatch.setenv("SCALE_A2A_GATHER_DISPATCH", "1")
+    gather_out, gather_dropped, _ = _run_fixed_a2a_value_and_grads(
+        x=x,
+        selected_experts=selected_experts,
+        combine_weights=combine_weights,
+        w_up_gate=w_up_gate,
+        w_down=w_down,
+        seed_cotangent=seed,
+        num_experts=num_experts,
+        capacity_factor=0.5,
+    )
+    expected_dropped = _expected_fixed_capacity_drops(
+        selected_experts,
+        num_experts=num_experts,
+        capacity_factor=0.5,
+    )
+
+    assert expected_dropped == 8
+    np.testing.assert_allclose(np.asarray(gather_out), np.asarray(scatter_out), rtol=1e-5, atol=1e-5)
+    assert scatter_dropped == expected_dropped
+    assert gather_dropped == expected_dropped
+
+
+@pytest.mark.slow
+def test_custom_adjoint_matches_autodiff_gradients(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
+    tokens, hidden_dim, intermediate_dim, num_experts, topk = 8, 6, 8, 4, 2
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(13),
+        tokens=tokens,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_experts=num_experts,
+        topk=topk,
+    )
+    seed = jax.random.normal(jax.random.key(31), (tokens, hidden_dim), dtype=jnp.float32)
+
+    monkeypatch.setenv("SCALE_A2A_GATHER_DISPATCH", "1")
+    monkeypatch.delenv("SCALE_A2A_CUSTOM_ADJOINT", raising=False)
+    auto_out, auto_dropped, auto_grads = _run_fixed_a2a_value_and_grads(
+        x=x,
+        selected_experts=selected_experts,
+        combine_weights=combine_weights,
+        w_up_gate=w_up_gate,
+        w_down=w_down,
+        seed_cotangent=seed,
+        num_experts=num_experts,
+        capacity_factor=0.5,
+    )
+
+    monkeypatch.setenv("SCALE_A2A_CUSTOM_ADJOINT", "1")
+    custom_out, custom_dropped, custom_grads = _run_fixed_a2a_value_and_grads(
+        x=x,
+        selected_experts=selected_experts,
+        combine_weights=combine_weights,
+        w_up_gate=w_up_gate,
+        w_down=w_down,
+        seed_cotangent=seed,
+        num_experts=num_experts,
+        capacity_factor=0.5,
+    )
+    expected_dropped = _expected_fixed_capacity_drops(
+        selected_experts,
+        num_experts=num_experts,
+        capacity_factor=0.5,
+    )
+
+    assert expected_dropped == 8
+    np.testing.assert_allclose(np.asarray(custom_out), np.asarray(auto_out), rtol=1e-5, atol=1e-5)
+    assert auto_dropped == expected_dropped
+    assert custom_dropped == expected_dropped
+    for auto_grad, custom_grad in zip(auto_grads, custom_grads):
+        np.testing.assert_allclose(np.asarray(custom_grad), np.asarray(auto_grad), rtol=1e-5, atol=1e-5)
+
+
+def _fixed_a2a_backward_stablehlo(
+    *,
+    x,
+    selected_experts,
+    combine_weights,
+    w_up_gate,
+    w_down,
+    seed_cotangent,
+    num_experts,
+    capacity_factor,
+) -> str:
+    mesh = Mesh(
+        np.asarray([jax.devices()[0]]),
+        axis_names=("expert",),
+        axis_types=(AxisType.Explicit,),
+    )
+
+    def core(x, combine_weights, w_up_gate, w_down):
+        output, _ = _fixed_a2a_core(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation_fn=jax.nn.silu,
+            num_experts=num_experts,
+            capacity_factor=capacity_factor,
+        )
+        return output
+
+    sharded = jax.shard_map(
+        core,
+        mesh=mesh,
+        in_specs=(P(), P(), P(), P()),
+        out_specs=P(),
+        check_vma=False,
+    )
+    with jax.set_mesh(mesh):
+        _, pullback = jax.vjp(sharded, x, combine_weights, w_up_gate, w_down)
+        lowered = jax.jit(pullback).lower(seed_cotangent)
+    return str(lowered.compiler_ir(dialect="stablehlo"))
+
+
+@pytest.mark.slow
+def test_custom_adjoint_backward_hlo_has_no_scatter(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
+    monkeypatch.setenv("SCALE_A2A_GATHER_DISPATCH", "1")
+    tokens, hidden_dim, intermediate_dim, num_experts, topk = 8, 6, 8, 4, 2
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(17),
+        tokens=tokens,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_experts=num_experts,
+        topk=topk,
+    )
+    seed = jax.random.normal(jax.random.key(19), (tokens, hidden_dim), dtype=jnp.float32)
+    hlo_args = dict(
+        x=x,
+        selected_experts=selected_experts,
+        combine_weights=combine_weights,
+        w_up_gate=w_up_gate,
+        w_down=w_down,
+        seed_cotangent=seed,
+        num_experts=num_experts,
+        capacity_factor=0.5,
+    )
+
+    monkeypatch.delenv("SCALE_A2A_CUSTOM_ADJOINT", raising=False)
+    autodiff_hlo = _fixed_a2a_backward_stablehlo(**hlo_args)
+    assert autodiff_hlo.count("stablehlo.scatter") > 0
+
+    monkeypatch.setenv("SCALE_A2A_CUSTOM_ADJOINT", "1")
+    custom_hlo = _fixed_a2a_backward_stablehlo(**hlo_args)
+    assert custom_hlo.count("stablehlo.scatter") == 0
 
 
 def test_shard_a2a_params_uses_sender_side_output_offsets():
