@@ -26,6 +26,7 @@ from marin.datakit.download.diagnostic_logs import (
     assign_partition,
     download_ghalogs_step,
     extract_diagnostic_logs,
+    extract_ghalogs,
     extract_ghalogs_step,
     ghalogs_member_to_records,
     ghalogs_public_normalize_steps,
@@ -167,11 +168,12 @@ def test_ghalogs_member_to_records_removes_stray_control_bytes_and_keeps_ansi_co
     assert "\x1b[36;1mmake build\x1b[0m" in record["text"]
 
 
-def test_ghalogs_member_to_records_drops_oversize_job_logs():
+def test_ghalogs_member_to_records_drops_oversize_job_logs(monkeypatch):
+    monkeypatch.setattr(diagnostic_logs, "_GHALOGS_MAX_JOB_LOG_BYTES", 1024)
     member_path = "logs/owner/repo/build_1234/10-1.tar.gz"
     content = _run_archive_member(
         {
-            "0_build.txt": b"byte dump line of a pytest assertion diff\n" * 300_000,
+            "0_build.txt": b"byte dump line of a pytest assertion diff\n" * 64,
             "1_test.txt": b"plain job log line\n",
         }
     )
@@ -336,6 +338,42 @@ def test_extract_diagnostic_logs_is_sample_capped(tmp_path):
     assert loghub_records[0]["source"] == "loghub"
     loghub_metadata = json.loads((output_dir / "eval_only" / "loghub" / "metadata.json").read_text())
     assert loghub_metadata["source_manifest"]["policy"]["eval_only"] is True
+
+
+def test_extract_ghalogs_caps_run_archives_not_records(tmp_path):
+    """max_members bounds run archives; one capped run still yields all of its job logs."""
+    archive_dir = tmp_path / "zenodo.org" / "records" / "14796970" / "files"
+    archive_dir.mkdir(parents=True)
+    with zipfile.ZipFile(archive_dir / "github_run_logs.zip", "w") as archive:
+        for member_path in ("logs/owner/repo-a/w_1/1-1.tar.gz", "logs/owner/repo-b/w_1/2-1.tar.gz"):
+            archive.writestr(
+                member_path,
+                _run_archive_member(
+                    {
+                        "0_build.txt": b"build job log",
+                        "1_test.txt": b"test job log",
+                        "2_deploy.txt": b"deploy job log",
+                        # Per-step files repeat the job text, so they are not records.
+                        "0_build/1_checkout.txt": b"build job log",
+                    }
+                ),
+            )
+
+    extracted = extract_ghalogs(str(tmp_path), str(tmp_path / "output"), max_members=1)
+
+    metadata = json.loads((tmp_path / "output" / "metadata.json").read_text())
+    assert metadata["materialized_output"]["metadata"]["counters"]["seen_members"] == 1
+    assert extracted.record_count == 3
+    records = []
+    for partition in DiagnosticPartition:
+        records.extend(_read_jsonl(str(tmp_path / "output" / partition.value / "data-00000-of-00001.jsonl")))
+    assert sorted(record["archive_path"] for record in records) == [
+        "logs/owner/repo-a/w_1/1-1.tar.gz!0_build.txt",
+        "logs/owner/repo-a/w_1/1-1.tar.gz!1_test.txt",
+        "logs/owner/repo-a/w_1/1-1.tar.gz!2_deploy.txt",
+    ]
+    # All job logs of one run share the run's partition.
+    assert len({record["partition"] for record in records}) == 1
 
 
 def test_extract_diagnostic_logs_uses_staged_ghalogs_and_fetches_missing_eval_sources(tmp_path, monkeypatch):

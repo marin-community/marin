@@ -125,15 +125,16 @@ _GHALOGS_MEMBER_SUFFIX = ".tar.gz"
 _GHALOGS_JOB_LOG_SUFFIX = ".txt"
 # Separates the run archive from the job log inside it in a record's archive_path.
 _GHALOGS_LOG_PATH_SEPARATOR = "!"
-# Job logs above this size are byte dumps (pytest diffs of binary blobs), and
-# sanitization rescans a document one time for each identity that it finds, so
-# an unbounded document turns one worker into a multi-hour straggler.
+# A cap on document size, not a content test: sanitization rescans a document one
+# time for each identity that it finds, so an unbounded document turns one worker
+# into a multi-hour straggler. The cap does discard the rare valid long log. In a
+# 300-run sample the logs above it were pytest diffs of binary blobs — 0.6% of the
+# job logs and 60% of the bytes — so the accepted loss is small.
 _GHALOGS_MAX_JOB_LOG_BYTES = 8 * 1024 * 1024
 # Characters that a text log cannot contain: C0 controls other than tab, line
 # feed, carriage return, and ESC, plus DEL and the Unicode replacement
 # character. ESC stays because GitHub Actions logs carry ANSI color sequences.
 _NON_TEXT_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f\x7f\ufffd]")
-# Above this fraction of non-text characters the payload is binary, not a log.
 _MAX_NON_TEXT_CHAR_RATIO = 0.01
 
 _PARTITION_BUCKETS = 10_000
@@ -192,6 +193,14 @@ class DiagnosticPartition(StrEnum):
     DEV = auto()
     TEST = auto()
     ISSUE_5093_HOLDOUT = auto()
+
+
+class JobLogDrop(StrEnum):
+    """Why a GHALogs job log yields no record. The value names its drop counter."""
+
+    OVERSIZE = auto()
+    NON_TEXT = auto()
+    EMPTY = auto()
 
 
 class DiagnosticLogsArtifact(BaseModel):
@@ -492,12 +501,18 @@ def _is_job_log(member: tarfile.TarInfo) -> bool:
     )
 
 
-def _decode_job_log_text(content: bytes) -> str | None:
-    """Decode job-log bytes as text, or return None when the payload is not text."""
+def _decode_job_log_text(content: bytes) -> str | JobLogDrop:
+    """Decode job-log bytes into cleaned text, or report why the payload is not usable.
+
+    Removes the non-text characters in one pass and reads the count of removed
+    characters from the length difference, so a binary payload never builds a
+    match object for each of its bytes.
+    """
     text = content.decode("utf-8", errors="replace")
-    if len(_NON_TEXT_CHAR_RE.findall(text)) > _MAX_NON_TEXT_CHAR_RATIO * len(text):
-        return None
-    return _NON_TEXT_CHAR_RE.sub("", text).strip() or None
+    cleaned = _NON_TEXT_CHAR_RE.sub("", text)
+    if len(text) - len(cleaned) > _MAX_NON_TEXT_CHAR_RATIO * len(text):
+        return JobLogDrop.NON_TEXT
+    return cleaned.strip() or JobLogDrop.EMPTY
 
 
 def ghalogs_member_to_records(member_path: str, content: bytes) -> Iterator[dict[str, str]]:
@@ -520,13 +535,13 @@ def ghalogs_member_to_records(member_path: str, content: bytes) -> Iterator[dict
                 continue
             log_path = f"{member_path}{_GHALOGS_LOG_PATH_SEPARATOR}{member.name}"
             if member.size > _GHALOGS_MAX_JOB_LOG_BYTES:
-                counters.pipeline.update_counter("ghalogs_materialize/dropped_oversize", 1)
+                counters.pipeline.update_counter(f"ghalogs_materialize/dropped_{JobLogDrop.OVERSIZE}", 1)
                 continue
             handle = run_logs.extractfile(member)
             assert handle is not None, f"{log_path} is a regular file"
             text = _decode_job_log_text(handle.read())
-            if text is None:
-                counters.pipeline.update_counter("ghalogs_materialize/dropped_non_text", 1)
+            if isinstance(text, JobLogDrop):
+                counters.pipeline.update_counter(f"ghalogs_materialize/dropped_{text}", 1)
                 continue
 
             yield {
