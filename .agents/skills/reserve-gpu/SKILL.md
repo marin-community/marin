@@ -1,6 +1,6 @@
 ---
 name: reserve-gpu
-description: Reserve an Iris-backed CoreWeave H100 pod for fast debugging with dev_gpu.py.
+description: Reserve one or more Iris-backed CoreWeave GPU nodes (H100 or GB200) for fast debugging with dev_gpu.py.
 ---
 
 # Skill: Dev GPU
@@ -13,7 +13,7 @@ This is a lean tool: `allocate`, `connect`, `status`, `release`. It does not syn
 
 ## Cost rule
 
-A holder pod sits on an expensive 8×H100 node for the session's lifetime. Release as soon as you are done — `Ctrl-C` the `allocate` terminal, or run `release` from another shell.
+A holder pod sits on an expensive 8×H100 node for the session's lifetime, and a `--nodes N` session holds N of them. Release as soon as you are done — `Ctrl-C` the `allocate` terminal, or run `release` from another shell.
 
 ## Commands
 
@@ -43,10 +43,31 @@ uv run scripts/iris/dev_gpu.py \
 
 Subcommands and distinctive flags:
 
-- `allocate` — reserves a whole `h100-8x` node (`--gpu-count` defaults to `8`) and holds it until `Ctrl-C`. Add `--timeout` (default `900`) to bound the wait for the task to reach `RUNNING`, and `--pod-timeout` (default `120`) to bound the wait for the backing pod. Only `--gpu-count 8` is validated; a sub-node value schedules as a fractional share (`nvidia-smi -L` then shows fewer GPUs) but fragments the 8-GPU InfiniBand gang pool, so prefer the whole node.
-- `status` — show the active session (job id, config, GPU count, resolved pod).
-- `connect` — interactive shell into the pod. It first checks job liveness with the controller (failing fast if the job is gone), then `kubectl exec -it`s into container `task`.
+- `allocate` — reserves a whole `h100-8x` node (`--gpus-per-node` defaults to `8`) and holds it until `Ctrl-C`. Add `--timeout` (default `900`) to bound the wait for the tasks to reach `RUNNING`, and `--pod-timeout` (default `120`) to bound the wait for the backing pods. Only `--gpus-per-node 8` is validated; a sub-node value schedules as a fractional share (`nvidia-smi -L` then shows fewer GPUs) but fragments the 8-GPU InfiniBand gang pool, so prefer the whole node. `--nodes N` reserves N whole nodes in one session; `--gpu-variant GB200` reserves `gb200-4x` trays instead, where a whole node is 4 GPUs.
+- `status` — show the active session (job id, config, node count, GPUs per node, and every resolved pod).
+- `connect` — interactive shell into a pod. It first checks job liveness with the controller (failing fast if the job is gone), then `kubectl exec -it`s into container `task`. On a multi-node session pass `--node N` (default `0`) to pick which pod, in `status` order.
 - `release` — terminate the holder job and clear the session file. Pass `--force` to drop local state even when the terminate call fails (then confirm the job is gone with `iris job list`).
+
+## Multi-node sessions
+
+`--nodes N` submits one Iris job with N gang-scheduled tasks, so the whole session lands
+at once or not at all. Each task is one pod on one whole node, and the pods are numbered
+in task order: `connect --node 0`, `connect --node 1`, and so on.
+
+The gang's placement follows the variant. GB200 (`gb200-4x`) gangs of up to 16 nodes bind
+hard to a single `ds.coreweave.com/nvlink.domain`, so every node shares one rack's NVLink
+fabric — the reason to reserve GB200 nodes together rather than one at a time. H100 and
+other variants get soft `leafgroup` InfiniBand colocation instead. `allocate` prints the
+level it used as `Coscheduling: …`, and you can confirm the placement from the node labels:
+
+```bash
+kubectl --kubeconfig ~/.kube/coreweave-iris --context marin-us-east-08a_US-EAST-08A \
+  get nodes -o custom-columns=NAME:.metadata.name,DOMAIN:'.metadata.labels.ds\.coreweave\.com/nvlink\.domain'
+```
+
+Multi-node sessions must reserve whole nodes, so `--gpus-per-node` has to stay at the
+variant's per-node count (GB200: 4, H100: 8). A fractional pod would let two nodes of the
+session land on the same machine, and `allocate` rejects it before submitting.
 
 ## GPU JAX inside the pod
 
@@ -79,7 +100,7 @@ kubectl --kubeconfig ~/.kube/coreweave-iris --context marin-gpu_US-EAST-02A \
 - Local session state lives under `~/.cache/marin/dev_gpu_iris/`.
 - If the `allocate` terminal dies unexpectedly, run `release` to terminate the holder job and clear the stale state file.
 - A failed `allocate` cleans up after itself: the holder job is terminated and the local state file is removed only once the job is confirmed gone, so a failed terminate never orphans an expensive pod with no local record of its job id.
-- `connect` execs into the pod resolved at allocation time. If Iris rescheduled the task onto a new pod while the job stayed active, `connect` fails — re-allocate.
+- `connect` execs into the pods resolved at allocation time. If Iris rescheduled a task onto a new pod while the job stayed active, `connect` fails for that node — re-allocate.
 
 ## Agent Usage
 
