@@ -43,11 +43,11 @@ MuonH uses a linear schedule with 1% warmup and a 5% minimum ratio. Its fixed
 peak learning rates are 0.038956464533085024 for MuonH and
 0.008989953353788853 for Adam, with `beta1=0.9062`,
 `beta2=0.9684910757595268`, `epsilon=1.810213843721233e-16`, five
-Newton–Schulz steps, and no gradient clipping. Optimizer state stays on the
-device. Host offload is intentionally absent: the d5120 EP64 trial required a
-135 GiB pinned-host arena and measured 19.694% MFU. The shared-expert split is
-also absent: this template keeps the shared MLP as one expert because the
-multi-way split used 89.49 GiB before step 0 at EP64.
+Newton–Schulz steps, no gradient clipping, and no weight decay. Optimizer state
+stays on the device. Host offload is intentionally absent: the d5120 EP64 trial
+required a 135 GiB pinned-host arena and measured 19.694% MFU. The shared-expert
+split is also absent: this template keeps the shared MLP as one expert because
+the multi-way split used 89.49 GiB before step 0 at EP64.
 
 ## Result provenance
 

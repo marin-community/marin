@@ -82,7 +82,6 @@ def _build_hero_optimizer() -> GrugMoeMuonHConfig:
     )
     return GrugMoeMuonHConfig(
         learning_rate=derived.learning_rate,
-        weight_decay=0.1,
         min_lr_ratio=derived.min_lr_ratio,
         warmup=derived.warmup,
         decay=derived.decay,
@@ -92,8 +91,6 @@ def _build_hero_optimizer() -> GrugMoeMuonHConfig:
         cycles=None,
         lr_schedule="linear",
         haps=None,
-        weight_decay_modules=None,
-        default_weight_decay_mask=None,
         adam_lr=derived.adam_lr,
         momentum=0.95,
         nesterov=True,

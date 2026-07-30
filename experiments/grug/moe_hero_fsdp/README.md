@@ -51,8 +51,8 @@ MuonH uses a 0.05 peak learning rate, linear decay, a 0.05 minimum ratio, and
 `beta2=0.9646229185299474`, and
 `epsilon=4.8379999999999997e-17`. The initializer standard deviation is
 `0.5 / sqrt(6144) = 0.0063788795384978605`. Final-logit z-loss is `1e-4`,
-router z-loss is 0, gradient clipping and EMA are disabled, and optimizer state
-is offloaded to pinned host memory.
+router z-loss is 0, weight decay is not applied, gradient clipping and EMA are
+disabled, and optimizer state is offloaded to pinned host memory.
 
 The d6144 reproduction used host offload. The rejected offload result applies
 to the d5120 EP shape: it needed a 135 GiB pinned-host arena and measured

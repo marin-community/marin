@@ -66,7 +66,6 @@ HERO_MODEL = GrugModelConfig(
 
 HERO_OPTIMIZER = GrugMoeMuonHConfig(
     learning_rate=0.038956464533085024,
-    weight_decay=0.1,
     min_lr_ratio=0.05,
     warmup=0.01,
     decay=None,
@@ -76,8 +75,6 @@ HERO_OPTIMIZER = GrugMoeMuonHConfig(
     cycles=None,
     lr_schedule="linear",
     haps=None,
-    weight_decay_modules=None,
-    default_weight_decay_mask=None,
     adam_lr=0.008989953353788853,
     momentum=0.95,
     nesterov=True,
