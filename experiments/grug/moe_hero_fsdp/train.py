@@ -52,10 +52,7 @@ logger = logging.getLogger(__name__)
 
 HERO_FSDP_RUNTIME_ENV = {
     "JAX_ENABLE_PGLE": "1",
-    "SCALE_MUON_DIST_NONEXPERT": "1",
-    "SCALE_MUON_INTRA_RACK": "1",
-    "SCALE_MUON_PAD_NONEXPERT": "1",
-    "SCALE_MUON_SYRK": "1",
+    "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
 }
 
 
