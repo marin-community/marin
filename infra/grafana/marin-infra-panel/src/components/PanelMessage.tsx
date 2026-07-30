@@ -14,7 +14,7 @@ export function PanelMessage({ width, height, children }: Props) {
   const theme = useTheme2();
   return (
     <div
-      className={css`display:flex;align-items:center;justify-content:center;width:${width}px;height:${height}px;color:${theme.colors.text.secondary};font-size:12px;`}
+      className={css`display:flex;align-items:center;justify-content:center;width:${width}px;height:${height}px;color:${theme.colors.text.secondary};font-size:14px;`}
       aria-label="No data"
     >
       {children}

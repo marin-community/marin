@@ -59,11 +59,11 @@ export function NightlyMatrix({ frames, width, height }: Props) {
   const border = theme.colors.border.weak;
   return (
     <section className={css`width:${width}px;height:${height}px;overflow:auto;color:${theme.colors.text.primary};padding:2px 4px;`} aria-label="Nightly regression status">
-      <div className={css`display:flex;align-items:baseline;justify-content:space-between;margin:0 2px 5px;font-size:11px;color:${theme.colors.text.secondary};`}>
-        <span><strong className={css`color:${theme.colors.text.primary};font-size:13px;`}>Nightly regressions</strong>{todayCells.length > 0 && ` · Today: ${todayCells.filter((cell) => cell.healthy).length}/${todayCells.length} healthy`}</span>
+      <div className={css`display:flex;align-items:baseline;justify-content:space-between;margin:0 2px 5px;font-size:13px;color:${theme.colors.text.secondary};`}>
+        <span><strong className={css`color:${theme.colors.text.primary};font-size:16px;`}>Nightly regressions</strong>{todayCells.length > 0 && ` · Today: ${todayCells.filter((cell) => cell.healthy).length}/${todayCells.length} healthy`}</span>
         <span>✓ healthy · amber slow · × failed · ! missing</span>
       </div>
-      <table className={css`width:100%;min-width:980px;border-collapse:separate;border-spacing:2px;table-layout:fixed;font-size:10px;`}>
+      <table className={css`width:100%;min-width:980px;border-collapse:separate;border-spacing:2px;table-layout:fixed;font-size:12px;`}>
         <caption className={css`position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);`}>Seven UTC days of scheduled regression status and duration by lane</caption>
         <colgroup><col className={css`width:72px;`} />{lanes.map((lane) => <col key={lane.laneId} />)}</colgroup>
         <thead>
@@ -75,12 +75,12 @@ export function NightlyMatrix({ frames, width, height }: Props) {
           <th scope="row" className={css`text-align:left;white-space:nowrap;color:${theme.colors.text.secondary};`}>{new Date(`${date}T00:00:00Z`).toLocaleDateString('en', { weekday:'short', month:'short', day:'numeric', timeZone:'UTC' })}</th>
           {lanes.map((lane) => {
             const cell = byKey.get(`${lane.laneId}\u0000${date}`);
-            if (!cell) {return <td key={lane.laneId} className={css`height:29px;background:${theme.colors.background.secondary};border-radius:3px;`} />;}
+            if (!cell) {return <td key={lane.laneId} className={css`height:24px;background:${theme.colors.background.secondary};border-radius:3px;`} />;}
             const display = status(cell);
             const duration = formatDuration(cell.durationSeconds);
             const label = `${cell.label}, ${date}: ${display.label}${cell.durationSeconds === undefined ? '' : `, ${duration}`}`;
-            const content = <><span aria-hidden="true" className={css`font-size:13px;line-height:1;`}>{display.icon}</span><span className={css`font-family:${theme.typography.fontFamilyMonospace};font-size:10px;`}>{duration}</span></>;
-            const cellClass = cx(css`display:flex;align-items:center;justify-content:center;gap:4px;height:29px;border-radius:3px;background:${display.tone};color:${display.tone === 'transparent' ? theme.colors.text.secondary : '#f8fafc'};text-decoration:none;&:hover,&:focus-visible{outline:2px solid ${theme.colors.text.primary};outline-offset:1px;}`, cell.durationState === 'too-short' && css`box-shadow:inset 0 0 0 1px #fbbf24;background-image:repeating-linear-gradient(135deg,rgba(251,191,36,.22) 0,rgba(251,191,36,.22) 2px,transparent 2px,transparent 6px);`);
+            const content = <><span aria-hidden="true" className={css`font-size:16px;line-height:1;`}>{display.icon}</span><span className={css`font-family:${theme.typography.fontFamilyMonospace};font-size:12px;`}>{duration}</span></>;
+            const cellClass = cx(css`display:flex;align-items:center;justify-content:center;gap:4px;height:24px;border-radius:3px;background:${display.tone};color:${display.tone === 'transparent' ? theme.colors.text.secondary : '#f8fafc'};text-decoration:none;&:hover,&:focus-visible{outline:2px solid ${theme.colors.text.primary};outline-offset:1px;}`, cell.durationState === 'too-short' && css`box-shadow:inset 0 0 0 1px #fbbf24;background-image:repeating-linear-gradient(135deg,rgba(251,191,36,.22) 0,rgba(251,191,36,.22) 2px,transparent 2px,transparent 6px);`);
             return <td key={lane.laneId}>{cell.url || cell.workflowUrl ? <a href={cell.url ?? cell.workflowUrl} target="_blank" rel="noreferrer" aria-label={label} title={`${label}${cell.sourceError ? ` · ${cell.sourceError}` : ''}`} className={cellClass}>{content}</a> : <div aria-label={label} title={label} className={cellClass}>{content}</div>}</td>;
           })}
         </tr>)}</tbody>
