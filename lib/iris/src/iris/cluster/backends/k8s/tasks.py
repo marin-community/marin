@@ -1036,7 +1036,7 @@ def _task_container_status(pod: dict) -> dict | None:
     return statuses[0]
 
 
-def _infrastructure_failure_condition(pod: dict) -> dict | None:
+def _disruption_condition(pod: dict) -> dict | None:
     """Return the authoritative pod disruption condition, if present.
 
     Kubernetes stamps ``DisruptionTarget`` for native disruptions. Kueue stamps
@@ -1077,7 +1077,7 @@ def _pod_failure_state(pod: dict) -> int:
     # exit 137 — which the terminated-reason whitelist below misses. A container
     # that OOMs on its own cgroup limit carries no such condition and correctly
     # falls through to an application failure.
-    if _infrastructure_failure_condition(pod) is not None:
+    if _disruption_condition(pod) is not None:
         return job_pb2.TASK_STATE_PREEMPTED
     status = _task_container_status(pod)
     if status is None:
@@ -1210,7 +1210,7 @@ def _extract_terminal_reason(pod: dict) -> str | None:
     init-container failure invisible to the task-container extractors, over the
     task container's own terminal reason.
     """
-    condition = _infrastructure_failure_condition(pod)
+    condition = _disruption_condition(pod)
     condition_reason = _format_disruption_reason(condition) if condition is not None else None
     reason = condition_reason or _init_container_failure(pod) or _extract_error(pod)
     return reason[:_TERMINAL_REASON_MAX_CHARS] if reason is not None else None
@@ -1521,7 +1521,7 @@ def _pod_event(pod: dict, workload: dict | None) -> _PodEvent | None:
     Kueue-declined admission, Normal for a transient wait. Returns ``None`` for a
     running or otherwise quiet pod.
     """
-    disruption = _infrastructure_failure_condition(pod)
+    disruption = _disruption_condition(pod)
     if disruption is not None and disruption.get("type") == _KUEUE_TERMINATION_TARGET_CONDITION:
         return _PodEvent(
             source=_EVENT_SOURCE_KUEUE,
@@ -2371,9 +2371,10 @@ class K8sTaskProvider:
     # worker store, so it reads its dispatch drain through this).
     transition_reader: TransitionReader | None = field(default=None, repr=False)
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
-    # "<task_id>:<attempt_id>:<attempt_uid>" -> the disruption condition last
-    # seen on that pod, kept only while the attempt is in the poll set.
-    _disruption_reasons: dict[str, str] = field(default_factory=dict, init=False, repr=False)
+    # The disruption condition last seen on an attempt's pod, keyed by the
+    # incarnation (a resubmit reuses task_id/attempt_id under a fresh uid) and
+    # dropped once the attempt leaves the poll set.
+    _disruption_reasons: dict[RunningTaskEntry, str] = field(default_factory=dict, init=False, repr=False)
     # (task_id_wire, attempt_id) this process has dispatched a pod for. Those pods
     # were created under the current name, so their lookups must never consider the
     # pre-uid name — see _pod_name_candidates.
@@ -3157,10 +3158,6 @@ class K8sTaskProvider:
         for entry in running:
             pod_name, pod = self._lookup_entry_pod(pods_by_name, entry)
             cursor_key = f"{entry.task_id.to_wire()}:{entry.attempt_id}"
-            # A resubmit reuses (task_id, attempt_id) under a fresh uid, so the
-            # disruption cache keys on the incarnation: the previous pod's
-            # eviction must not be reported for the new one.
-            incarnation_key = f"{cursor_key}:{entry.attempt_uid}"
             task_key = (entry.task_id.to_wire(), entry.attempt_id)
 
             if pod is None:
@@ -3182,7 +3179,7 @@ class K8sTaskProvider:
                 # leaving no terminal status), WORKER_FAILED when the cause was
                 # never observed.
                 self._pod_not_found_counts.pop(cursor_key, None)
-                disruption_reason = self._disruption_reasons.get(incarnation_key)
+                disruption_reason = self._disruption_reasons.get(entry)
                 updates.append(
                     TaskUpdate(
                         task_id=entry.task_id,
@@ -3204,9 +3201,9 @@ class K8sTaskProvider:
             update = _task_update_from_pod(entry, pod, workload)
             # Readable only while the pod terminates; the vanished-pod path
             # above has no pod left to read it from.
-            disruption = _infrastructure_failure_condition(pod)
+            disruption = _disruption_condition(pod)
             if disruption is not None:
-                self._disruption_reasons[incarnation_key] = _format_disruption_reason(disruption)
+                self._disruption_reasons[entry] = _format_disruption_reason(disruption)
             phase = pod.get("status", {}).get("phase", "")
             if phase == "Running":
                 resource_pods[task_key] = pod_name
@@ -3229,9 +3226,7 @@ class K8sTaskProvider:
             periodic_profiler.set_pods(profile_targets)
         if event_log is not None:
             event_log.retain(set(running))
-        for stale_key in self._disruption_reasons.keys() - {
-            f"{entry.task_id.to_wire()}:{entry.attempt_id}:{entry.attempt_uid}" for entry in running
-        }:
-            del self._disruption_reasons[stale_key]
+        for stale_entry in self._disruption_reasons.keys() - set(running):
+            del self._disruption_reasons[stale_entry]
 
         return updates
