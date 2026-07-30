@@ -2,11 +2,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Per-cluster steps of a human-gated Iris controller rollout.
+"""Per-cluster steps of an evidence-gated Iris controller rollout.
 
 The ``deploy-iris-controllers`` skill drives these subcommands. The restart itself
 stays in ``iris cluster controller restart``: this script never restarts a
-controller and never walks the cluster list, so every deploy keeps its human gate.
+controller and never walks the cluster list. The skill continues after passed
+gates and stops when a gate is blocked.
 """
 
 import functools
@@ -75,6 +76,10 @@ SMOKE_TIMEOUT = 1800
 WATCH_DURATION = 300
 WATCH_INTERVAL = 30
 
+# A small health loss can be normal autoscaler churn during the watch. Always
+# permit one execution unit, then permit 5% of larger baselines.
+HEALTH_LOSS_TOLERANCE_PERCENT = 5
+
 # Rough counts are enough for a before/after comparison, and a bounded query keeps
 # the RPC cheap on a busy controller.
 JOB_COUNT_LIMIT = 500
@@ -124,6 +129,26 @@ class CheckResult:
     detail: str
 
 
+class HealthUnit(StrEnum):
+    """The backend resource used for rollout health."""
+
+    WORKER = "workers"
+    NODE = "nodes"
+
+
+@dataclass(frozen=True)
+class ExecutionHealth:
+    """The healthy execution resources for one backend."""
+
+    backend_id: str
+    unit: HealthUnit
+    healthy: int
+    total: int
+
+    def summary(self) -> str:
+        return f"{self.backend_id}={self.healthy}/{self.total} healthy {self.unit.value}"
+
+
 @dataclass(frozen=True)
 class Snapshot:
     """A rough controller state reading, taken before and after a restart."""
@@ -133,8 +158,7 @@ class Snapshot:
     reachable: bool
     tree_hash: str = ""
     version: str = ""
-    workers_total: int = 0
-    workers_healthy: int = 0
+    execution_health: tuple[ExecutionHealth, ...] = ()
     jobs: dict[str, int] = field(default_factory=dict)
     error: str = ""
     # The tree this session would deploy, read when the baseline is taken. `verify`
@@ -148,10 +172,9 @@ class Snapshot:
         counts = " ".join(
             f"{name}={count}{'+' if count >= JOB_COUNT_LIMIT else ''}" for name, count in sorted(self.jobs.items())
         )
-        return (
-            f"{self.cluster}: version={self.version} tree={self.tree_hash} "
-            f"workers={self.workers_healthy}/{self.workers_total} healthy, jobs {counts}"
-        )
+        health = ", ".join(item.summary() for item in self.execution_health)
+        identity = f"{self.cluster}: version={self.version} tree={self.tree_hash}"
+        return f"{identity} health {health}, jobs {counts}"
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, sort_keys=True)
@@ -159,6 +182,15 @@ class Snapshot:
     @classmethod
     def from_json(cls, raw: str) -> "Snapshot":
         data = json.loads(raw)
+        data["execution_health"] = tuple(
+            ExecutionHealth(
+                backend_id=item["backend_id"],
+                unit=HealthUnit(item["unit"]),
+                healthy=item["healthy"],
+                total=item["total"],
+            )
+            for item in data["execution_health"]
+        )
         return cls(**data)
 
 
@@ -475,13 +507,55 @@ def check_requirements(needs: Sequence[Requirement], *, environ: Mapping[str, st
     return results
 
 
+def backend_health(
+    backends: Sequence[controller_pb2.Controller.BackendSummary],
+) -> tuple[ExecutionHealth, ...]:
+    """Read the execution health that each backend type provides."""
+    if not backends:
+        raise ValueError("controller reported no execution backends")
+
+    health = []
+    for backend in backends:
+        detail_kind = backend.detail.WhichOneof("detail")
+        if detail_kind == "worker":
+            detail = backend.detail.worker
+            health.append(
+                ExecutionHealth(
+                    backend_id=backend.backend_id,
+                    unit=HealthUnit.WORKER,
+                    healthy=detail.healthy_worker_count,
+                    total=detail.total_worker_count,
+                )
+            )
+            continue
+        if detail_kind == "kubernetes":
+            detail = backend.detail.kubernetes
+            if detail.total_nodes != len(detail.nodes):
+                raise ValueError(
+                    f"backend {backend.backend_id!r} reports {detail.total_nodes} nodes "
+                    f"but includes {len(detail.nodes)} node records"
+                )
+            health.append(
+                ExecutionHealth(
+                    backend_id=backend.backend_id,
+                    unit=HealthUnit.NODE,
+                    healthy=sum(node.ready and node.schedulable for node in detail.nodes),
+                    total=detail.total_nodes,
+                )
+            )
+            continue
+        raise ValueError(f"backend {backend.backend_id!r} has no supported health detail")
+
+    return tuple(health)
+
+
 def compare(baseline: Snapshot, latest: Snapshot, *, expect_tree_hash: str = "") -> Verdict:
     """Judge a post-restart snapshot against its pre-restart baseline.
 
     Concerns stop a rollout: an unreachable controller, a version that is not the
-    tree that was deployed, or healthy workers that did not come back. Queue depth
-    and job counts move on their own as work arrives, so they are notes — context
-    a human reads at the gate, not a blocker.
+    tree that was deployed, or backend health loss above the churn tolerance.
+    Queue depth and job counts move on their own as work arrives, so they are
+    notes — context a human reads at the gate, not a blocker.
     """
     concerns: list[str] = []
     notes: list[str] = []
@@ -494,10 +568,35 @@ def compare(baseline: Snapshot, latest: Snapshot, *, expect_tree_hash: str = "")
     if latest.tree_hash and latest.tree_hash == baseline.tree_hash:
         notes.append(f"tree hash is unchanged ({latest.tree_hash}) — the deploy shipped the same tree content")
 
-    if latest.workers_healthy < baseline.workers_healthy:
-        concerns.append(f"healthy workers fell from {baseline.workers_healthy} to {latest.workers_healthy}")
-    if latest.workers_total and latest.workers_healthy < latest.workers_total:
-        notes.append(f"{latest.workers_total - latest.workers_healthy} of {latest.workers_total} workers are unhealthy")
+    baseline_health = {(item.backend_id, item.unit): item for item in baseline.execution_health}
+    latest_health = {(item.backend_id, item.unit): item for item in latest.execution_health}
+    if baseline_health.keys() != latest_health.keys():
+        baseline_targets = ", ".join(f"{backend_id} ({unit.value})" for backend_id, unit in baseline_health)
+        latest_targets = ", ".join(f"{backend_id} ({unit.value})" for backend_id, unit in latest_health)
+        concerns.append(
+            f"execution health targets changed from [{baseline_targets or 'none'}] to [{latest_targets or 'none'}]"
+        )
+
+    for key in sorted(baseline_health.keys() & latest_health.keys()):
+        before = baseline_health[key]
+        after = latest_health[key]
+        loss = before.healthy - after.healthy
+        tolerance = max(1, before.healthy * HEALTH_LOSS_TOLERANCE_PERCENT // 100)
+        subject = f"{before.backend_id} healthy {before.unit.value}"
+        if loss > tolerance:
+            concerns.append(
+                f"{subject} fell from {before.healthy} to {after.healthy} "
+                f"(loss {loss} exceeds churn tolerance {tolerance})"
+            )
+        elif loss > 0:
+            notes.append(
+                f"{subject} fell from {before.healthy} to {after.healthy} "
+                f"(loss {loss} is within churn tolerance {tolerance})"
+            )
+        if after.total and after.healthy < after.total:
+            notes.append(
+                f"{after.total - after.healthy} of {after.total} {after.backend_id} {after.unit.value} are unhealthy"
+            )
 
     baseline_running = baseline.jobs.get(JOB_RUNNING, 0)
     latest_running = latest.jobs.get(JOB_RUNNING, 0)
@@ -516,12 +615,12 @@ def _now() -> str:
 
 
 def take_snapshot(cluster: str) -> Snapshot:
-    """Read a controller's version, worker counts, and rough job counts."""
+    """Read a controller's version, backend health, and rough job counts."""
     try:
         with connect_controller(cluster_name=cluster) as endpoint:
             with rpc_client(endpoint.url, endpoint.credentials) as client:
                 info = client.get_process_status(job_pb2.GetProcessStatusRequest(max_log_lines=0)).process_info
-                workers = client.list_workers(controller_pb2.Controller.ListWorkersRequest()).workers
+                backends = client.list_backends(controller_pb2.Controller.ListBackendsRequest()).backends
                 provenance = provenance_from_proto(info.provenance)
             with IrisClient.remote(endpoint.url, credentials=endpoint.credentials) as iris:
                 jobs = {
@@ -533,8 +632,7 @@ def take_snapshot(cluster: str) -> Snapshot:
             reachable=True,
             tree_hash=provenance.tree_hash,
             version=str(provenance),
-            workers_total=len(workers),
-            workers_healthy=sum(1 for worker in workers if worker.healthy),
+            execution_health=backend_health(backends),
             jobs=jobs,
             working_tree_hash=get_git_sha(),
         )
@@ -592,7 +690,7 @@ def _selected_order(clusters: str | None) -> tuple[str, ...]:
 @click.group()
 @click.option("--verbose", is_flag=True, help="Enable debug logging.")
 def cli(verbose: bool) -> None:
-    """Steps of a human-gated Iris controller rollout."""
+    """Steps of an evidence-gated Iris controller rollout."""
     # Every step reports through click.echo, so the default level keeps iris's own
     # config/tunnel chatter out of a gate the operator has to read.
     logging.basicConfig(
