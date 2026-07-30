@@ -18,7 +18,7 @@ from enum import StrEnum
 
 import fsspec
 from fsspec.core import url_to_fs
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
 
@@ -112,13 +112,14 @@ class Provenance(BaseModel):
     """Where the run came from: launch-time git SHA, eval runtime, and launch host.
 
     ``eval_runtime`` is Evalchemy's commit-pinned package requirement or Harbor's pinned package
-    requirements.
+    requirements. Records written before external evaluators used ``eval_image`` or
+    ``evalchemy_image`` for the same value.
     """
 
     model_config = ConfigDict(frozen=True)
 
     git_sha: str
-    eval_runtime: str
+    eval_runtime: str = Field(validation_alias=AliasChoices("eval_runtime", "eval_image", "evalchemy_image"))
     launch_host: str
 
 

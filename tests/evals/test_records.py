@@ -11,6 +11,7 @@ These tests pin that shape independently of the pydantic model that produces it.
 
 import json
 
+import pytest
 from marin.evaluation.records import (
     EvalRef,
     EvalRunRecord,
@@ -167,10 +168,9 @@ def test_record_json_includes_harbor_policy_identity_and_effective_limit(tmp_pat
     }
 
 
-def test_read_record_parses_a_previously_written_record_json(tmp_path):
-    """A ``record.json`` written by a prior version of the module (plain dict, ``eval`` key, list-typed
-    ``log_tails``) must still parse -- this is the on-disk shape of every record already in object
-    storage, independent of whatever Python type produces or consumes it now."""
+@pytest.mark.parametrize("runtime_key", ["evalchemy_image", "eval_image"])
+def test_read_record_parses_a_previously_written_record_json(tmp_path, runtime_key):
+    """Historical runtime field names normalize to the current record schema."""
     legacy = {
         "run_id": "20260101-000000-llama-3-8b-mmlu-abcd",
         "group_id": "20260101-000000-llama-3-8b-abcd",
@@ -189,7 +189,7 @@ def test_read_record_parses_a_previously_written_record_json(tmp_path):
         "metrics": {},
         "jobs": {"orchestrator": "job/1"},
         "log_tails": {"serve": ["boot failed", "OOM"]},
-        "provenance": {"git_sha": "deadbeef", "eval_runtime": "evalchemy:old", "launch_host": "ci-runner"},
+        "provenance": {"git_sha": "deadbeef", runtime_key: "evalchemy:old", "launch_host": "ci-runner"},
     }
     path = tmp_path / "record.json"
     path.write_text(json.dumps(legacy))
@@ -202,3 +202,9 @@ def test_read_record_parses_a_previously_written_record_json(tmp_path):
     assert record.status is RunStatus.INFRA_FAILED
     assert record.log_tails == {"serve": ("boot failed", "OOM")}
     assert record.hardware.region_or_cluster is None
+    assert record.provenance.eval_runtime == "evalchemy:old"
+    assert record.model_dump(mode="json", by_alias=True)["provenance"] == {
+        "git_sha": "deadbeef",
+        "eval_runtime": "evalchemy:old",
+        "launch_host": "ci-runner",
+    }
