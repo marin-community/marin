@@ -31,6 +31,7 @@ const REF = {
 const STATUS_GRID_CLASS = css`display:grid;grid-template-columns:minmax(220px,.8fr) minmax(360px,1.8fr);gap:22px;@media(max-width:900px){grid-template-columns:1fr;}`;
 const STATUS_CARD_CLASS = css`flex:1;`;
 const STATUS_SECTION_CLASS = css`display:flex;flex-direction:column;`;
+const FLEET_SCOPE = 'fleet';
 
 function one(frames: DataFrame[], refId: string): DataFrame[] {
   const frame = frameByRefId(frames, refId);
@@ -227,11 +228,13 @@ function ProvisioningStatus({ frames }: { frames: DataFrame[] }) {
   const currentFrame = frameByRefId(frames, REF.provisioning);
   const historyFrame = frameByRefId(frames, REF.provisioningHistory);
   const rows = currentFrame ? provisioningStatus(currentFrame) : [];
-  const fleet = rows.find((row) => row.scope === 'fleet');
+  const fleet = rows.find((row) => row.scope === FLEET_SCOPE);
   const regions = provisioningRegions(rows).sort(
     (a, b) => b.outcomes - a.outcomes || a.region.localeCompare(b.region)
   );
-  const history = historyFrame ? seriesPoints(historyFrame, 'region', 'success_ratio') : [];
+  const history = historyFrame
+    ? seriesPoints(historyFrame, 'region', 'success_ratio').filter((point) => point.series !== FLEET_SCOPE)
+    : [];
 
   return (
     <section className={STATUS_SECTION_CLASS} aria-label="Provisioning status">
