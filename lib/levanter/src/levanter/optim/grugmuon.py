@@ -6,8 +6,8 @@ Muon optimizer for models using raw JAX arrays with (fan_in, fan_out) layout,
 such as Grug models.
 
 Arrays with matrix-shaped trailing dimensions are routed to Muon, except those
-whose path contains 'embed', 'lm_head', or 'output' (case-insensitive), which
-use AdamW.
+whose path contains 'embed', 'lm_head', 'output', or 'norm'
+(case-insensitive), which use AdamW.
 """
 
 import logging
@@ -133,7 +133,7 @@ class GrugMuonConfig(MuonConfig):
             path_lower = path_str.lower()
             if not hasattr(param, "ndim") or param.ndim < 2:
                 return "adamw"
-            if any(key in path_lower for key in ("embed", "lm_head", "output")):
+            if any(key in path_lower for key in ("embed", "lm_head", "output", "norm")):
                 return "adamw"
             return "muon"
 

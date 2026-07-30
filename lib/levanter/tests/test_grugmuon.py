@@ -60,6 +60,7 @@ def test_grug_muon_mask_routes_matrix_stacks_to_muon():
     params = {
         "embed": jnp.ones((16, 8), dtype=jnp.float32),
         "router": jnp.ones((8, 4), dtype=jnp.float32),
+        "norm": jnp.ones((2, 8), dtype=jnp.float32),
         "attention": {"w_q": jnp.ones((2, 8, 16), dtype=jnp.float32)},
         "moe": {
             "w_up_gate": jnp.ones((2, 4, 8, 16), dtype=jnp.float32),
@@ -73,6 +74,7 @@ def test_grug_muon_mask_routes_matrix_stacks_to_muon():
 
     assert mask["embed"] == "adamw"
     assert mask["router"] == "muon"
+    assert mask["norm"] == "adamw"
     assert mask["attention"]["w_q"] == "muon"
     assert mask["moe"]["w_up_gate"] == "muon"
     assert mask["moe"]["w_gate_up"] == "muon"
