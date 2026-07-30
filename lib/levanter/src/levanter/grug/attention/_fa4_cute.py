@@ -299,12 +299,17 @@ def gpu_fa4_cute_attention(
         raise RuntimeError("gpu_fa4_cute_attention requires the JAX GPU backend.")
 
     _validate_head_layout(q, k, backend_name="gpu_fa4_cute_attention")
-    lower_bounds, valid = _self_attention_lower_bounds(
-        q,
-        k,
-        mask,
-        backend_name="gpu_fa4_cute_attention",
-    )
+    if isinstance(mask, AttentionMask) and mask.fa4_bounds is not None:
+        # The caller precomputed and selected the per-token metadata outside any per-layer scan/cond
+        # (see fa4_cute_segment_bounds); use it directly instead of rebuilding from the static mask.
+        lower_bounds, valid = mask.fa4_bounds
+    else:
+        lower_bounds, valid = _self_attention_lower_bounds(
+            q,
+            k,
+            mask,
+            backend_name="gpu_fa4_cute_attention",
+        )
     kernel_config = _segmented_kernel_config(q.shape[-1])
 
     return _fa4_cute_attention_forward_sharded(
@@ -318,6 +323,37 @@ def gpu_fa4_cute_attention(
     )
 
 
+def fa4_cute_segment_bounds(
+    mask: AttentionMask,
+    *,
+    batch_size: int,
+    seq_len: int,
+    sliding_window: int | None,
+) -> tuple[Int[Array, "B S"], Bool[Array, "B S"]]:
+    """Compute FA4/CuTe per-token ``(lower_bounds, valid)`` for ``mask`` at a given window.
+
+    Exposed so callers can precompute the metadata once outside a ``lax.scan``/``lax.cond`` and
+    select it per layer via :meth:`AttentionMask.with_fa4_bounds`. This lets a homogeneous layer
+    scan pick a per-layer sliding window (a static field the scan body cannot vary) by selecting
+    between precomputed bound arrays.
+    """
+    if not isinstance(mask, AttentionMask):
+        raise NotImplementedError("fa4_cute_segment_bounds requires an AttentionMask.")
+    if not mask.is_causal:
+        raise NotImplementedError("fa4_cute_segment_bounds supports only causal self-attention.")
+    if mask.segment_ids is None:
+        return _simple_causal_lower_bounds(batch_size=batch_size, seq_len=seq_len, sliding_window=sliding_window)
+    q_segment_ids, _ = mask.segment_ids
+    q_segment_ids = _batched_segment_ids(q_segment_ids, batch_size=batch_size, seq_len=seq_len)
+    return _packed_segment_causal_lower_bounds(
+        q_segment_ids,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        sliding_window=sliding_window,
+    )
+
+
 __all__ = [
+    "fa4_cute_segment_bounds",
     "gpu_fa4_cute_attention",
 ]

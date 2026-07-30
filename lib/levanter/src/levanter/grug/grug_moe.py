@@ -68,6 +68,7 @@ class MoEExpertMlp(eqx.Module):
     implementation: MoeImplementation = eqx.field(static=True)
     activation: MoeActivation = eqx.field(static=True)
     capacity_factor: float = eqx.field(static=True)
+    expert_chunks: int = eqx.field(static=True, default=1)
 
     @staticmethod
     def init(
@@ -80,6 +81,7 @@ class MoEExpertMlp(eqx.Module):
         implementation: MoeImplementation | str | None = None,
         activation: MoeActivation = ActivationFunctionEnum.silu,
         capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
+        expert_chunks: int = 1,
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
@@ -97,6 +99,7 @@ class MoEExpertMlp(eqx.Module):
             implementation=resolved_implementation,
             activation=activation,
             capacity_factor=capacity_factor,
+            expert_chunks=expert_chunks,
         )
 
     @named_call
@@ -121,6 +124,7 @@ class MoEExpertMlp(eqx.Module):
             mesh=mesh,
             capacity_factor=self.capacity_factor,
             report_capacity_overflow=report_capacity_overflow,
+            expert_chunks=self.expert_chunks,
         )
 
 
@@ -137,6 +141,7 @@ def moe_mlp(
     mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh | None = None,
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
     report_capacity_overflow: bool = False,
+    expert_chunks: int = 1,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -146,6 +151,9 @@ def moe_mlp(
 
     Set `report_capacity_overflow=True` to also return a scalar count of
     dropped expert assignments from EP capacity clipping.
+
+    `expert_chunks` applies only to the local `sonic_cute` FSDP path. Values
+    greater than one split the expert bank into equal, statically sized chunks.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
 
@@ -191,6 +199,7 @@ def moe_mlp(
             activation_fn=activation_fn,
             num_experts=num_experts,
             implementation=resolved_implementation,
+            expert_chunks=expert_chunks,
         )
         if report_capacity_overflow:
             return out, dropped
@@ -199,6 +208,8 @@ def moe_mlp(
     batch_spec = _batch_spec_from_x(x, mesh)
 
     if has_expert_axis and expert_axis_size > 1:
+        if expert_chunks != 1:
+            raise ValueError("expert_chunks must be 1 when expert parallelism is active")
         if resolved_implementation not in _EP_MOE_IMPLEMENTATIONS:
             raise ValueError(
                 "Local MoE implementations do not yet support expert-parallel collectives; adding EP support "
@@ -265,13 +276,25 @@ def moe_mlp(
     w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
     w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
 
-    shard_fn = shard_map(
-        partial(
-            _moe_mlp_local,
+    def local_moe(x, selected_experts, combine_weights, w_up_gate, w_down):
+        out, dropped = _moe_mlp_local(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
             activation_fn=activation_fn,
             num_experts=num_experts,
             implementation=resolved_implementation,
-        ),
+            expert_chunks=expert_chunks,
+        )
+        batch_axis_names = x_spec[0]
+        if report_capacity_overflow and batch_axis_names is not None:
+            dropped = jax.lax.psum(dropped, axis_name=batch_axis_names)
+        return out, dropped
+
+    shard_fn = shard_map(
+        local_moe,
         mesh=mesh,
         in_specs=(
             x_spec,
