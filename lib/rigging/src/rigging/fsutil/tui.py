@@ -12,7 +12,7 @@ import curses
 from dataclasses import dataclass, field
 
 from rigging.filesystem.buckets import MissingCredentials
-from rigging.fsutil.listing import ROOT, Entry, list_entries, parent_url, read_preview, total_size
+from rigging.fsutil.listing import ROOT, Entry, list_entries, parent_url, read_decompressed_preview, total_size
 from rigging.fsutil.render import file_lines, format_size, format_time
 
 _HELP = "[enter] open  [backspace] up  [/] filter  [s] sort  [d] size  [y] print URL  [q] quit"
@@ -132,8 +132,8 @@ def _open(stdscr: "curses.window", screen: Screen) -> None:
         return
 
     try:
-        raw, _ = read_preview(selected.url)
-        lines = file_lines(selected.name, raw)
+        preview = read_decompressed_preview(selected.url)
+        lines = file_lines(selected.name, preview.data)
     except Exception as e:
         screen.status = f"error: {e}"
         return

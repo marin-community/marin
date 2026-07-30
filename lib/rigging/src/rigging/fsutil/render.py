@@ -15,6 +15,7 @@ from datetime import datetime
 from rich.console import Console
 from rich.table import Table
 
+from rigging.fsutil.compression import uncompressed_name
 from rigging.fsutil.listing import Entry
 
 _SIZE_UNITS = ("B", "KB", "MB", "GB", "TB", "PB")
@@ -59,9 +60,10 @@ def print_entries(console: Console, entries: list[Entry], *, long: bool) -> None
 def file_lines(name: str, raw: bytes) -> list[str]:
     """Render *raw* as display lines, using *name*'s extension to pick a JSON reader.
 
-    A ``.json`` or ``.jsonl`` file whose content is tabular renders as a table; anything
-    else renders as decoded text, and undecodable bytes as a one-line size summary.
+    A tabular ``.json`` or ``.jsonl`` file renders as a table. A supported compression
+    suffix does not change this selection. Other files render as text or a byte count.
     """
+    name = uncompressed_name(name).lower()
     if name.endswith((".json", ".jsonl")):
         try:
             text = raw.decode("utf-8")

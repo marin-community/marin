@@ -15,6 +15,7 @@ from datetime import datetime
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
 from rigging.filesystem.storage_path import StoragePath
+from rigging.fsutil.compression import compression_for
 
 # The root of the browsable tree: the list of declared buckets rather than any one
 # filesystem. Not a URL, so it never reaches fsspec.
@@ -44,6 +45,14 @@ class Entry:
     size: int | None
     mtime: datetime | None
     is_dir: bool
+
+
+@dataclasses.dataclass(frozen=True)
+class Preview:
+    """A bounded file preview and its truncation state."""
+
+    data: bytes
+    truncated: bool
 
 
 def bucket_url(bucket: str) -> str:
@@ -127,6 +136,14 @@ def read_preview(url: str) -> tuple[bytes, int]:
     size = fs.size(path)
     with fs.open(path, "rb") as f:
         return f.read(MAX_PREVIEW_BYTES), size
+
+
+def read_decompressed_preview(url: str) -> Preview:
+    """Read a bounded preview and decompress supported file suffixes."""
+    fs, path = filesystem_for(url)
+    with fs.open(path, "rb", compression=compression_for(path)) as file:
+        data = file.read(MAX_PREVIEW_BYTES + 1)
+    return Preview(data=data[:MAX_PREVIEW_BYTES], truncated=len(data) > MAX_PREVIEW_BYTES)
 
 
 def total_size(url: str) -> tuple[int, int]:

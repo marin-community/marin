@@ -46,16 +46,20 @@ that touch its buckets; the rest keep working.
 | Command | What it does |
 |---------|--------------|
 | `ls [URL] [-l]` | Immediate children; with no URL, the declared buckets. `-l` adds size and modification time |
-| `cat URL [--raw]` | Print a file. Tabular JSON and JSONL render as a table; `--raw` writes bytes to stdout |
-| `head URL [-n N]` | The first N lines, reading only the bytes needed |
+| `cat URL [--raw]` | Print a file. Tabular JSON and JSONL render as a table, and `--raw` writes stored bytes to stdout |
+| `head URL [-n N]` | Print the first N lines |
 | `stat URL` | The object's metadata as the backend reports it |
 | `du URL` | Total bytes and object count beneath a prefix |
 | `find PATTERN` | Paths matching a glob, e.g. `gs://marin-us-central2/x/**/*.json` |
 | `cp SRC DST [-r]` | Copy between any two locations, including across backends |
 | `browse [URL]` | The interactive browser |
 
-Reads through `cat` and `head` and the browser's file viewer are capped at 10 MB; use
-`cp` to fetch a whole object.
+`cat`, `head`, and the browser decompress `.gz`, `.bz2`, `.xz`, and `.lzma` files by
+suffix. Thus, a `data.json.gz` preview uses the JSON table view. `cat --raw` writes the
+compressed bytes.
+
+Formatted file previews are capped at 10 MB after decompression. `cat --raw` is capped
+at 10 MB of stored bytes. Use `cp` to fetch a whole object.
 
 ## The browser
 
