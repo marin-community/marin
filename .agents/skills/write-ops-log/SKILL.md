@@ -13,10 +13,12 @@ it, and which reusable guidance could have shortened the work.
 ## Search before writing
 
 Invoke `consult-echo` and run its complete search-before-write sequence. Edit
-the existing entry when it covers the same incident. Create a new entry for a
-different incident even when the symptom resembles an older one; link related
-incidents and create or extend a separate synthesis only when they establish a
-reusable cross-incident pattern.
+the existing entry when it covers the same incident. Start with a natural-language
+`infra/echo/cli.py search`, fetch likely matches with `get <domain:id>`, and use
+`grep` for the exact error or run identifier. Create a new entry for a different
+incident even when the symptom resembles an older one; link related incidents
+and create or extend a separate synthesis only when they establish a reusable
+cross-incident pattern.
 
 ## Draft the Echo entry
 
