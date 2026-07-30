@@ -18,6 +18,7 @@ from urllib.parse import quote
 
 import dashboard as echo_dashboard
 import hybrid_search
+import reranking
 import schema
 import search_config
 import sqlalchemy
@@ -101,7 +102,7 @@ async def lifespan(app: FastAPI):
             pool_pre_ping=True,
         )
         app.state.model = TextEmbedding(search_config.EMBED_MODEL)
-        app.state.reranker = TextCrossEncoder(search_config.RERANK_MODEL)
+        app.state.reranker = reranking.text_cross_encoder()
         try:
             yield
         finally:
@@ -589,7 +590,7 @@ def rerank_candidates(
     reranker: RerankerModel,
     limit: int,
 ) -> list[SearchResult]:
-    """Fuse the existing hybrid order with bounded full-text cross-encoder ranks."""
+    """Fuse the existing hybrid order with bounded cross-encoder ranks."""
     base = [SearchCandidate(query_oriented_result(candidate.result, query), candidate.text) for candidate in candidates]
     base.sort(key=lambda candidate: (-candidate.result.score, candidate.result.domain, candidate.result.id))
     selected = base[: search_config.RERANK_MAX_CANDIDATES]

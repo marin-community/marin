@@ -53,3 +53,16 @@ no-answer accuracy 0.000. Its mean, p50, and p95 latency were 2.35, 3.27, and
 0.714. Its mean, p50, and p95 latency were 2.14, 2.15, and 2.71 seconds. These
 figures are a regression reference, not a service-level objective: corpus
 freshness, Cloud SQL load, and model cold starts affect live latency.
+
+A 2026-07-30 same-candidate ablation compared the float and 23 MB INT8 ONNX
+MiniLM models over complete chunks. On dev, INT8 kept hit rates of 0.923 at
+rank 5 and 0.942 at rank 10; MRR@10 changed from 0.874 to 0.862 and nDCG@10
+from 0.858 to 0.849. Mean reranker time fell from 1.69 to 1.21 seconds. On the
+held-out split, hit rates were unchanged at 0.692 at rank 1 and 0.846 at ranks
+3, 5, and 10. MRR@10 changed from 0.744 to 0.756, nDCG@10 from 0.736 to 0.738,
+and mean reranker time from 1.60 to 1.17 seconds. Judgment recall fell from
+0.722 to 0.667 because one secondary artifact moved from rank 9 to rank 12.
+
+An evidence-first 1,000-character input improved dev MRR@10 to 0.899, but was
+rejected because held-out pass@5 fell to 0.769 with both float and INT8 weights.
+Preserving complete chunks mattered more than the dev-only gain.

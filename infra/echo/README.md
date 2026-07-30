@@ -77,13 +77,13 @@ evidence helps without allowing a large file to dominate. Paraphrases can enter 
 BGE semantic retrieval.
 
 The API retrieves at least 20 candidates from each selected domain, takes the best 20
-after first-stage fusion, and reranks their complete indexed chunks with
-`ms-marco-MiniLM-L-6-v2`. Final rank is reciprocal-rank fusion of the first-stage rank
-(weight 0.2) and cross-encoder rank (weight 0.8). Candidates with a raw cross-encoder
-score below -2 are omitted. The threshold is an empirical relevance floor, not a
-calibrated probability. Because every returned result must be reranked, a search can
-return fewer than the requested limit and returns at most 20 results. `grep` remains a
-case-insensitive literal substring scan over activity, newest first.
+after first-stage fusion, and reranks their complete indexed chunks with the INT8 ONNX
+build of `ms-marco-MiniLM-L-6-v2`. Final rank is reciprocal-rank fusion of the
+first-stage rank (weight 0.2) and cross-encoder rank (weight 0.8). Candidates with a
+raw cross-encoder score below -2 are omitted. The threshold is an empirical relevance
+floor, not a calibrated probability. Because every returned result must be reranked,
+a search can return fewer than the requested limit and returns at most 20 results.
+`grep` remains a case-insensitive literal substring scan over activity, newest first.
 
 CLI search prints one table with stable result ID, title, and source-derived detail.
 Run `uv run infra/echo/cli.py get <domain:id>` to fetch the full indexed wiki body,

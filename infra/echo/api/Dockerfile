@@ -18,12 +18,13 @@ RUN pip install --no-cache-dir \
 WORKDIR /app
 COPY schema.py .
 COPY hybrid_search.py .
+COPY reranking.py .
 COPY search_config.py .
 COPY api/app.py .
 COPY api/dashboard.py .
 COPY --from=dashboard /build/dist /app/dist
 
 # Bake the query embedding model into the image so the first request is not a cold download.
-RUN python -c "import search_config; from fastembed import TextEmbedding; from fastembed.rerank.cross_encoder import TextCrossEncoder; TextEmbedding(search_config.EMBED_MODEL); TextCrossEncoder(search_config.RERANK_MODEL)"
+RUN python -c "import reranking, search_config; from fastembed import TextEmbedding; TextEmbedding(search_config.EMBED_MODEL); reranking.text_cross_encoder()"
 
 CMD ["sh", "-c", "exec uvicorn app:app --host 0.0.0.0 --port ${PORT:-8080}"]
