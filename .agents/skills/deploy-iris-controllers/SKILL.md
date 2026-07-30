@@ -31,12 +31,17 @@ red-canary days ([incident record](https://echo.oa.dev/wiki/14)).
 
 ## How to gate
 
-Put every gate in front of the operator with `AskUserQuestion`, and give the same
-three options each time: approve this cluster, stop the rollout here, or skip
-this cluster and hold at the next gate. Show the evidence for the decision in
-your message — the snapshot, the verify samples, the smoke result — because the
+Put every gate in front of the operator with `AskUserQuestion`. Show the evidence
+in your message — the snapshot, the verify samples, the smoke result — because the
 operator answers from your text, not from the raw command output. Never treat
 silence, a previous approval, or a passing gate on another cluster as approval.
+
+The options depend on what the evidence says:
+
+- **Everything passed:** approve this cluster, stop the rollout here, or skip this
+  cluster and hold at the next gate.
+- **Anything failed:** stop, or roll this cluster back. Never offer to skip ahead
+  after a failure — rule 3 ends the rollout there.
 
 ## Helper
 
@@ -80,11 +85,9 @@ first, so "behind" is current). Each of these raises a `[WARN]`:
   that once cost ~5 red-canary days
 - a tree ahead of `origin/main` — the deploy ships unmerged code
 
-An untracked file counts as dirty here, but it does **not** change the tree hash
-(`git stash create` ignores untracked files), while the Docker build still copies
-it into the image. So two different images can carry one tag, and the verify step
-in step 2 cannot see the difference. Treat an untracked-file warning as a reason
-to commit or remove the file before deploying.
+An untracked file is dirty but does **not** change the tree hash, while the Docker
+build still copies it into the image — so two different images can carry one tag
+and verify cannot tell them apart. Commit or remove the file before deploying.
 
 On any warning `preflight` **exits non-zero and deploys nothing**. Show the
 warnings to the operator and ask whether to deploy this exact tree. A dirty tree
@@ -94,34 +97,21 @@ re-run with `--accept-tree-state`. Never pass that flag on your own initiative.
 
 **What the deploy reads from this session.** Requirements are derived from each
 cluster config, so they cannot drift: `defaults.inject_env` names, the CoreWeave
-S3 keys a Kubernetes deploy folds into the `iris-task-env` Secret, the
-kube-context, the signing-key references a Kubernetes deploy resolves in the
-operator shell, `git` / `gcloud` / `kubectl` on PATH, and a working image
-toolchain — `docker info` and `docker buildx version` must both exit clean,
-because the deploy builds and pushes through buildx.
+S3 keys, the kube-context, the signing-key references, `git` / `gcloud` /
+`kubectl` on PATH, and `docker info` plus `docker buildx version`.
 
 If anything reports FAIL, **ask the operator for it and stop**. Do not invent a
-value, do not mint credentials, and do not skip the cluster. Four specific cases:
+value, mint credentials, or skip the cluster. Each FAIL line names what it needs
+and why. Two causes are easy to misread:
 
-- A `docker info` or `docker buildx version` FAIL — the daemon is down or the
-  buildx plugin is absent. The restart would fail at image build, after the
-  operator approved the cluster. Ask them to start Docker.
-- `CW_KEY_ID` / `CW_KEY_SECRET` unset — ask the operator to export them.
-- A signing key that does not resolve — for a `gcp-secret://` reference the
-  session lacks GCP credentials, so ask the operator to run
-  `gcloud auth application-default login`. A config that names only
-  `env:IRIS_SIGNING_KEY` has no persistent source behind it, so the deploy reads
-  the key straight from the shell and preflight requires that variable.
-- A `kube-context` FAIL — the kubeconfig does not define the context this cluster
-  binds. The check resolves the kubeconfig the way the deploy does: an exported
-  `KUBECONFIG` replaces the configured `~/.kube/coreweave-iris` (and a
-  path-separated list is merged), so an unrelated exported `KUBECONFIG` is a
-  common cause. Ask the operator to unset it or to add the context. A config that
-  pins a context but no path resolves it against `~/.kube/config`.
+- A `kube-context` FAIL often means an unrelated exported `KUBECONFIG`, which
+  replaces the configured path exactly as the deploy resolves it.
+- A signing-key FAIL on a `gcp-secret://` reference means the session lacks GCP
+  credentials (`gcloud auth application-default login`).
 
-A defined context proves the configuration, not live credentials. The per-cluster
-snapshot in step 2 reaches the controller through that context, so expired
-CoreWeave credentials surface there — before any restart.
+A defined context proves the configuration, not live credentials. The snapshot in
+step 2 reaches the controller through it, so expired CoreWeave credentials surface
+there — still before any restart.
 
 GCE clusters (`marin`, `marin-dev`) also need working `gcloud compute ssh` as
 your local username. A failed SSH leg aborts the restart safely — the running
@@ -133,34 +123,31 @@ keys. Hand those clusters to a session that already has SSH.
 Do this loop for one cluster, then gate. Repeat for the next cluster.
 
 1. **Snapshot.** `snapshot --cluster <name> --out <scratchpad>/<name>-before.json`
-   records the tree hash the controller runs, healthy and total workers, and
-   rough running / pending / building job counts. A count printed with `+` hit
-   the query cap and is a floor. If the controller is unreachable now, stop and
-   diagnose — do not restart it.
+   records the controller's tree hash, its workers, rough job counts, and the tree
+   this session would deploy. A count printed with `+` hit the query cap and is a
+   floor. If the controller is unreachable now, stop and diagnose.
 2. **Gate.** Show the snapshot. State how many running jobs ride through the
-   restart, and that the restart takes seconds of control-plane downtime. Ask
-   the operator to approve this cluster.
+   restart, and that the restart takes seconds of control-plane downtime.
 3. **Restart.** `iris --cluster=<name> cluster controller restart`. Add
    `--skip-checkpoint` only if the checkpoint step times out. On a Kubernetes dev
    cluster with amd64 nodes only, add `--image-platform linux/amd64`.
-4. **Watch.** `verify --cluster <name> --baseline <name>-before.json` samples the
-   controller every 30s for 5 minutes, then compares. It fails on an unreachable
-   controller, a tree hash that is not the one you deployed, or lost healthy
-   workers. It reports queue growth as a note. Do not shorten the watch to save
-   time.
-5. **Smoke.** `smoke --cluster <name>` submits one `echo hello world` job at
-   interactive priority and waits for it. `setup_scripts=[]` skips the workspace
-   `uv sync`, so a failure points at the control plane (submit, schedule,
-   dispatch, container start, logs), not at the Python environment.
-6. **Gate.** Report the verify samples, the verdict, and the smoke job state.
-   Ask the operator to approve the next cluster.
+4. **Start the smoke.** `smoke --cluster <name>` submits one `echo hello world`
+   job at interactive priority and waits for it. Start it **as a background task,
+   right after the restart**, so the watch runs while it waits. A cluster with no
+   idle worker must scale one up first, and that dominates: on `marin-dev` (0
+   workers, TPU-backed) a smoke takes 15-20 minutes. In series it costs 20-25.
+5. **Watch.** `verify --cluster <name> --baseline <name>-before.json` samples the
+   controller every 30s for 5 minutes, then compares against the baseline. It
+   fails on an unreachable controller, a tree hash that is not the one the
+   baseline recorded, or lost healthy workers. Do not shorten the watch.
+6. **Collect the smoke.** Read the background task. If it is still waiting, keep
+   waiting — the timeout is 30 minutes and a scale-up is the expected reason.
+7. **Gate.** Report the verify samples, the verdict, and the smoke job state.
 
-The restart writes a rollout record to `rollout-record.json` under the cluster's
-`storage.remote_state_dir` — `gs://` for `marin` and `marin-dev`, `s3://` for
-every CoreWeave cluster — and health-checks the new controller, with an automatic
-rollback if it does not come up. Confirm the recorded image is the tag you meant
-to ship. Read an `s3://` record with the CoreWeave S3 credentials from step 1,
-not with `gcloud storage`.
+The restart writes `rollout-record.json` under the cluster's
+`storage.remote_state_dir` and health-checks the new controller, rolling back
+automatically if it does not come up. `verify` proves which tree is running, so
+read the record only when you need the rollback coordinates by hand.
 
 ## Rollback
 

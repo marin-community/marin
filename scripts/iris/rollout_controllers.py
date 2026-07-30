@@ -4,14 +4,9 @@
 
 """Per-cluster steps of a human-gated Iris controller rollout.
 
-Each subcommand is one mechanical step of the rollout that the
-``deploy-iris-controllers`` skill drives: resolve the deploy order, check the
-operator credentials the deploy consumes, snapshot a controller, watch it after
-the restart, and run one throwaway job through it.
-
-The restart itself stays in ``iris cluster controller restart``. This script
-never restarts a controller and never walks the cluster list on its own, so
-every deploy keeps its human gate.
+The ``deploy-iris-controllers`` skill drives these subcommands. The restart itself
+stays in ``iris cluster controller restart``: this script never restarts a
+controller and never walks the cluster list, so every deploy keeps its human gate.
 """
 
 import functools
@@ -70,6 +65,11 @@ SMOKE_CPU = 0.1
 SMOKE_MEMORY = "1GB"
 SMOKE_DISK = "5GB"
 SMOKE_COMMAND = ("bash", "-c", "echo hello world")
+
+# A cluster with no idle worker must scale one up before the smoke job can run. On
+# marin-dev, which sits at 0 workers and is TPU-backed, that takes 15-20 minutes, so
+# the wait covers a scale-up rather than only the dispatch of an already-idle worker.
+SMOKE_TIMEOUT = 1800
 
 # Post-restart watch: the skill's gate wants ~5 minutes of steady controller.
 WATCH_DURATION = 300
@@ -137,12 +137,14 @@ class Snapshot:
     workers_healthy: int = 0
     jobs: dict[str, int] = field(default_factory=dict)
     error: str = ""
+    # The tree this session would deploy, read when the baseline is taken. `verify`
+    # compares against it, so an edit made during the restart cannot move the target.
+    working_tree_hash: str = ""
 
     def summary(self) -> str:
         if not self.reachable:
             return f"{self.cluster}: UNREACHABLE ({self.error})"
-        # A count at the query cap is a floor, not a total: mark it so a reader does
-        # not compare two capped numbers as if they were exact.
+        # A count at the cap is a floor, not a total.
         counts = " ".join(
             f"{name}={count}{'+' if count >= JOB_COUNT_LIMIT else ''}" for name, count in sorted(self.jobs.items())
         )
@@ -526,6 +528,7 @@ def take_snapshot(cluster: str) -> Snapshot:
             workers_total=len(workers),
             workers_healthy=sum(1 for worker in workers if worker.healthy),
             jobs=jobs,
+            working_tree_hash=get_git_sha(),
         )
     except Exception as exc:
         logger.debug("Snapshot of %s failed", cluster, exc_info=True)
@@ -538,6 +541,9 @@ def run_smoke_job(cluster: str, *, workspace: Path, timeout: float) -> job_pb2.J
     ``setup_scripts=[]`` skips the default workspace ``uv sync`` so the job tests
     the control plane (submit, schedule, dispatch, container start, logs) instead
     of the Python environment build.
+
+    On a cluster with no idle worker the job waits for an autoscaler scale-up, which
+    dominates the runtime. Submit it as early as the rollout permits.
     """
     name = f"deploy-smoke-{int(time.time())}"
     with connect_controller(cluster_name=cluster) as endpoint:
@@ -550,6 +556,7 @@ def run_smoke_job(cluster: str, *, workspace: Path, timeout: float) -> job_pb2.J
                 priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
             )
             click.echo(f"Submitted {job.job_id}")
+            click.echo(f"Waiting up to {timeout:.0f}s — a cluster at 0 workers must scale one up first.")
             status = job.wait(timeout=timeout, poll_interval=10, raise_on_failure=False)
             for entry in job.logs(max_lines=20):
                 click.echo(f"  {entry.data.rstrip()}")
@@ -636,8 +643,7 @@ def preflight(clusters: str | None, upstream: str, no_fetch: bool, accept_tree_s
         raise click.ClickException(f"{failures} requirement(s) are missing. Supply them before deploying.")
     click.echo("\nAll requirements are present.")
 
-    # A missing credential is the operator's to supply; a dirty tree is theirs to
-    # approve. Both stop here, so neither is decided by whoever reads the output.
+    # A dirty tree is the operator's to approve, not the reader of this output.
     if warnings and not accept_tree_state:
         raise click.ClickException(
             "The working tree is not a clean checkout of "
@@ -670,11 +676,13 @@ def snapshot(cluster: str, out: Path | None) -> None:
 @click.option("--baseline", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
 @click.option("--duration", default=WATCH_DURATION, show_default=True, help="Seconds to watch the controller.")
 @click.option("--interval", default=WATCH_INTERVAL, show_default=True, help="Seconds between samples.")
-@click.option("--expect-tree-hash", default=None, help="Tree hash the controller must run. Defaults to this tree.")
+@click.option("--expect-tree-hash", default=None, help="Tree hash the controller must run. Defaults to the baseline's.")
 def verify(cluster: str, baseline: Path, duration: int, interval: int, expect_tree_hash: str | None) -> None:
     """Watch a restarted controller, then compare it against its baseline."""
     before = Snapshot.from_json(baseline.read_text())
-    expected = expect_tree_hash if expect_tree_hash is not None else get_git_sha()
+    expected = expect_tree_hash if expect_tree_hash is not None else before.working_tree_hash
+    if not expected:
+        raise click.ClickException("The baseline records no tree hash. Re-take it, or pass --expect-tree-hash.")
 
     deadline = time.monotonic() + duration
     latest = take_snapshot(cluster)
@@ -701,7 +709,9 @@ def verify(cluster: str, baseline: Path, duration: int, interval: int, expect_tr
 
 @cli.command("smoke")
 @click.option("--cluster", required=True, help="Cluster to run the smoke job on.")
-@click.option("--timeout", default=900, show_default=True, help="Seconds to wait for the job to finish.")
+@click.option(
+    "--timeout", default=SMOKE_TIMEOUT, show_default=True, help="Seconds to wait for the job to finish."
+)
 @click.option(
     "--workspace",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
