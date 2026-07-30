@@ -286,6 +286,50 @@ def test_grug_moe_xsa_forward_lowers_with_gpu_fa4_thd_gqa_sharding():
     assert out_shape.shape == (8, 16, cfg.hidden_dim)
 
 
+def test_grug_moe_embedding_lookup_hlo_has_no_collectives():
+    script = textwrap.dedent(
+        """
+        import os
+        os.environ["JAX_PLATFORMS"] = "cpu"
+        os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+
+        import jax
+        import numpy as np
+        from jax.sharding import NamedSharding, PartitionSpec as P
+
+        from experiments.grug.moe.model import _embedding_gather
+        from levanter.grug.sharding import Pembed_vocab, compact_grug_mesh
+
+        assert jax.device_count() == 4
+        mesh = compact_grug_mesh(replica_axis_size=4)
+        table_sharding = NamedSharding(mesh, Pembed_vocab)
+        token_sharding = NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None))
+        host_table = np.arange(64 * 8, dtype=np.float32).reshape(64, 8)
+        host_token_ids = np.arange(16, dtype=np.int32).reshape(4, 4)
+        table = jax.device_put(host_table, table_sharding)
+        token_ids = jax.device_put(host_token_ids, token_sharding)
+
+        with jax.set_mesh(mesh):
+            compiled = jax.jit(
+                _embedding_gather,
+                in_shardings=(table_sharding, token_sharding),
+            ).lower(table, token_ids).compile()
+            actual = np.asarray(compiled(table, token_ids))
+
+        np.testing.assert_array_equal(actual, host_table[host_token_ids])
+        print(compiled.as_text())
+        """
+    )
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+    hlo = result.stdout.lower()
+    assert "num_partitions=4" in hlo
+    collective_opcodes = ("all-to-all", "all-gather", "all-reduce", "collective-permute", "reduce-scatter")
+    found_collectives = [opcode for opcode in collective_opcodes if opcode in hlo]
+    assert not found_collectives, f"embedding lookup HLO contains collectives {found_collectives}\n{result.stdout}"
+
+
 def _seed_cache_records(step, prefix: str) -> None:
     """Write the minimal record a built ``TokenizedCache`` dep would leave, so the run-time
     ``mixture`` can read each dataset's tokenizer/format offline (mirrors a real run, where the
