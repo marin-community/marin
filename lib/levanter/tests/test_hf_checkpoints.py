@@ -1,7 +1,9 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
 import glob
+import json
 import os
 import tempfile
 import uuid
@@ -25,6 +27,7 @@ from levanter.compat.hf_checkpoints import (
     SAFE_TENSORS_INDEX_NAME,
     SAFE_TENSORS_MODEL,
     ModelWithHfSerializationMixin,
+    _add_legacy_rope_keys,
     _causal_lm_architecture_name,
     _convert_to_jnp,
 )
@@ -312,3 +315,101 @@ def test_build_hf_config_dict_degrades_when_reference_unreachable(local_gpt2_tok
 
     assert dict_config["model_type"] == "gpt2"
     assert dict_config["architectures"] == ["GPT2LMHeadModel"]
+
+
+# ---------------------------------------------------------------------------
+# transformers-5 rope block -> also written in the 4.x shape
+# ---------------------------------------------------------------------------
+# The failure this guards against is silent: transformers 4.x does not error on
+# a `rope_parameters` block, it ignores it and falls back to the architecture
+# default rope. So these assert on values, not on whether a call raised.
+#
+# They also do not round-trip through a transformers 4.x `AutoConfig`, because
+# levanter pins `transformers>=5.5.3` and 4.x is not installable in any
+# supported test environment. The contract under test is therefore the JSON we
+# emit — which is exactly what a 4.x loader reads.
+
+_TF5_LLAMA3_ROPE = {
+    "rope_type": "llama3",
+    "rope_theta": 500000,
+    "factor": 8.0,
+    "low_freq_factor": 1.0,
+    "high_freq_factor": 4.0,
+    "original_max_position_embeddings": 8192,
+}
+
+
+def test_legacy_rope_keys_added_for_transformers5_block():
+    out = _add_legacy_rope_keys({"model_type": "qwen3", "rope_parameters": _TF5_LLAMA3_ROPE})
+
+    assert out["rope_theta"] == 500000
+    assert out["rope_scaling"]["rope_type"] == "llama3"
+    assert out["rope_scaling"]["factor"] == 8.0
+    # The base frequency belongs at the top level, not inside the scaling spec.
+    assert "rope_theta" not in out["rope_scaling"]
+    # transformers 5.x still needs the block it wrote.
+    assert out["rope_parameters"] == _TF5_LLAMA3_ROPE
+
+
+def test_legacy_rope_keys_does_not_mutate_input():
+    config = {"model_type": "qwen3", "rope_parameters": dict(_TF5_LLAMA3_ROPE)}
+    before = copy.deepcopy(config)
+    _add_legacy_rope_keys(config)
+    assert config == before
+
+
+def test_legacy_rope_keys_noop_without_rope_parameters():
+    config = {"model_type": "gpt2", "rope_theta": 10000}
+    assert _add_legacy_rope_keys(config) is config
+
+
+def test_legacy_rope_keys_noop_when_both_shapes_present():
+    """An already-converted config must not be converted twice."""
+    config = {
+        "model_type": "qwen3",
+        "rope_parameters": _TF5_LLAMA3_ROPE,
+        "rope_theta": 500000,
+        "rope_scaling": {"rope_type": "llama3"},
+    }
+    assert _add_legacy_rope_keys(config) is config
+
+
+def test_legacy_rope_keys_unscaled_rope_yields_no_scaling():
+    out = _add_legacy_rope_keys(
+        {"model_type": "qwen3", "rope_parameters": {"rope_type": "default", "rope_theta": 10000}}
+    )
+    assert out["rope_theta"] == 10000
+    assert out["rope_scaling"] is None
+
+
+def test_saved_config_carries_legacy_rope_keys():
+    """The export path itself, not just the helper.
+
+    A unit test on `_add_legacy_rope_keys` keeps passing if the call in
+    `_build_hf_config_dict` is dropped or moved before the `config_overrides`
+    merge, while exported checkpoints go back to being unreadable by
+    transformers 4.x. This drives a real `save_pretrained` and reads the
+    `config.json` that lands on disk.
+
+    `rope_parameters` arrives via `config_overrides` — GPT-2 has no rope of its
+    own, and injecting it there also pins down the ordering, since overrides
+    are merged in before the conversion runs.
+    """
+    nano_config = Gpt2Config(hidden_dim=32, num_heads=2, num_layers=2, resid_pdrop=0.0, use_flash_attention=False)
+    converter = nano_config.hf_checkpoint_converter().with_config_overrides(
+        {"rope_parameters": _TF5_LLAMA3_ROPE}
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with use_test_mesh():
+            model = Gpt2LMHeadModel.init(converter.Vocab, nano_config, key=PRNGKey(0))
+            converter.save_pretrained(model, tmpdir, save_tokenizer=False)
+
+        with open(os.path.join(tmpdir, "config.json")) as f:
+            saved = json.load(f)
+
+    # What a transformers 4.x loader reads.
+    assert saved["rope_theta"] == 500000
+    assert saved["rope_scaling"]["rope_type"] == "llama3"
+    # What transformers 5.x reads, unchanged.
+    assert saved["rope_parameters"] == _TF5_LLAMA3_ROPE
