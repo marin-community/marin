@@ -120,7 +120,7 @@ def test_ghalogs_member_to_records_extracts_job_logs_and_ignores_step_copies():
 
     records = list(ghalogs_member_to_records(member_path, content))
 
-    assert [record["archive_path"] for record in records] == [f"{member_path}!0_build.txt"]
+    assert [record["archive_path"] for record in records] == [f"{member_path}!0_build.txt#0"]
     assert records[0]["source"] == "ghalogs"
     assert "abc123456789" not in records[0]["text"]
     assert "<REDACTED_SECRET>" in records[0]["text"]
@@ -152,7 +152,7 @@ def test_ghalogs_member_to_records_rejects_binary_job_logs():
 
     records = list(ghalogs_member_to_records(member_path, content))
 
-    assert [record["archive_path"] for record in records] == [f"{member_path}!1_test.txt"]
+    assert [record["archive_path"] for record in records] == [f"{member_path}!1_test.txt#0"]
 
 
 def test_ghalogs_member_to_records_removes_stray_control_bytes_and_keeps_ansi_color():
@@ -168,19 +168,46 @@ def test_ghalogs_member_to_records_removes_stray_control_bytes_and_keeps_ansi_co
     assert "\x1b[36;1mmake build\x1b[0m" in record["text"]
 
 
-def test_ghalogs_member_to_records_drops_oversize_job_logs(monkeypatch):
-    monkeypatch.setattr(diagnostic_logs, "_GHALOGS_MAX_JOB_LOG_BYTES", 1024)
+def test_ghalogs_member_to_records_splits_long_job_logs_into_chunks(monkeypatch):
+    monkeypatch.setattr(diagnostic_logs, "_GHALOGS_JOB_LOG_CHUNK_BYTES", 1024)
     member_path = "logs/owner/repo/build_1234/10-1.tar.gz"
-    content = _run_archive_member(
-        {
-            "0_build.txt": b"byte dump line of a pytest assertion diff\n" * 64,
-            "1_test.txt": b"plain job log line\n",
-        }
-    )
+    long_log = b"".join(f"byte dump line {index} of a pytest assertion diff\n".encode() for index in range(64))
+    content = _run_archive_member({"0_build.txt": long_log, "1_test.txt": b"plain job log line\n"})
 
     records = list(ghalogs_member_to_records(member_path, content))
 
-    assert [record["archive_path"] for record in records] == [f"{member_path}!1_test.txt"]
+    chunks = [record for record in records if "0_build.txt" in record["archive_path"]]
+    assert len(chunks) > 1
+    assert [record["archive_path"] for record in chunks] == [
+        f"{member_path}!0_build.txt#{index}" for index in range(len(chunks))
+    ]
+    assert all(len(record["text"]) <= 1024 for record in chunks)
+    # No line is split across chunks, and no line is lost or repeated.
+    assert "\n".join(record["text"] for record in chunks).splitlines() == long_log.decode().splitlines()
+    # A job log that fits in one chunk still gives one record.
+    assert f"{member_path}!1_test.txt#0" in {record["archive_path"] for record in records}
+
+
+def test_ghalogs_member_to_records_gives_each_chunk_its_own_id(monkeypatch):
+    monkeypatch.setattr(diagnostic_logs, "_GHALOGS_JOB_LOG_CHUNK_BYTES", 128)
+    member_path = "logs/owner/repo/build_1234/12-1.tar.gz"
+    content = _run_archive_member({"0_build.txt": b"a line of job log output\n" * 32})
+
+    records = list(ghalogs_member_to_records(member_path, content))
+
+    assert len(records) > 1
+    assert len({record["id"] for record in records}) == len(records)
+    assert {record["partition"] for record in records} == {records[0]["partition"]}
+
+
+def test_ghalogs_member_to_records_splits_a_job_log_without_line_breaks(monkeypatch):
+    monkeypatch.setattr(diagnostic_logs, "_GHALOGS_JOB_LOG_CHUNK_BYTES", 64)
+    member_path = "logs/owner/repo/build_1234/13-1.tar.gz"
+    content = _run_archive_member({"0_build.txt": b"x" * 256})
+
+    records = list(ghalogs_member_to_records(member_path, content))
+
+    assert [record["text"] for record in records] == ["x" * 64] * 4
 
 
 def test_ghalogs_member_to_records_rejects_an_unexpected_member_layout():
@@ -368,9 +395,9 @@ def test_extract_ghalogs_caps_run_archives_not_records(tmp_path):
     for partition in DiagnosticPartition:
         records.extend(_read_jsonl(str(tmp_path / "output" / partition.value / "data-00000-of-00001.jsonl")))
     assert sorted(record["archive_path"] for record in records) == [
-        "logs/owner/repo-a/w_1/1-1.tar.gz!0_build.txt",
-        "logs/owner/repo-a/w_1/1-1.tar.gz!1_test.txt",
-        "logs/owner/repo-a/w_1/1-1.tar.gz!2_deploy.txt",
+        "logs/owner/repo-a/w_1/1-1.tar.gz!0_build.txt#0",
+        "logs/owner/repo-a/w_1/1-1.tar.gz!1_test.txt#0",
+        "logs/owner/repo-a/w_1/1-1.tar.gz!2_deploy.txt#0",
     ]
     # All job logs of one run share the run's partition.
     assert len({record["partition"] for record in records}) == 1
@@ -547,7 +574,7 @@ def test_ghalogs_public_normalize_steps_write_datakit_normalized_train_partition
 
     assert len(rows) == 1
     assert rows[0]["source"] == "ghalogs"
-    assert rows[0]["archive_path"] == f"{train_member}!0_build.txt"
+    assert rows[0]["archive_path"] == f"{train_member}!0_build.txt#0"
     assert rows[0]["partition"] == DiagnosticPartition.TRAIN.value
     assert "abc123456789" not in rows[0]["text"]
     assert rows[0]["source_id"] != rows[0]["id"]
@@ -577,7 +604,7 @@ def test_ghalogs_public_normalize_steps_read_where_download_wrote(tmp_path, monk
     StepRunner().run([download, materialized])
 
     rows = _read_parquet_rows(Path(materialized.output_path))
-    assert [row["archive_path"] for row in rows] == [f"{train_member}!0_build.txt"]
+    assert [row["archive_path"] for row in rows] == [f"{train_member}!0_build.txt#0"]
 
 
 class _FakeStreamResponse:

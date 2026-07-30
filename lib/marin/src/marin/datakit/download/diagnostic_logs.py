@@ -19,7 +19,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 from enum import StrEnum, auto
 from io import BytesIO
-from typing import NamedTuple
+from typing import IO, NamedTuple
 
 import fsspec
 import requests
@@ -125,12 +125,16 @@ _GHALOGS_MEMBER_SUFFIX = ".tar.gz"
 _GHALOGS_JOB_LOG_SUFFIX = ".txt"
 # Separates the run archive from the job log inside it in a record's archive_path.
 _GHALOGS_LOG_PATH_SEPARATOR = "!"
-# A cap on document size, not a content test: sanitization rescans a document one
-# time for each identity that it finds, so an unbounded document turns one worker
-# into a multi-hour straggler. The cap does discard the rare valid long log. In a
-# 300-run sample the logs above it were pytest diffs of binary blobs — 0.6% of the
-# job logs and 60% of the bytes — so the accepted loss is small.
-_GHALOGS_MAX_JOB_LOG_BYTES = 8 * 1024 * 1024
+# Separates a job log from the index of its chunk in a record's archive_path.
+_GHALOGS_CHUNK_PATH_SEPARATOR = "#"
+# A job log longer than this becomes more than one record, split at line
+# boundaries. This bounds work, and is not a content test: sanitization rescans a
+# document one time for each identity that it finds, so an unbounded document
+# turns one worker into a multi-hour straggler. A split divides that quadratic
+# term by the count of chunks, and holds peak memory at one chunk. In a 300-run
+# sample only 0.6% of the job logs are above this size, but they hold 60% of the
+# bytes, thus a split keeps text that a cap would discard.
+_GHALOGS_JOB_LOG_CHUNK_BYTES = 8 * 1024 * 1024
 # Characters that a text log cannot contain: C0 controls other than tab, line
 # feed, carriage return, and ESC, plus DEL and the Unicode replacement
 # character. ESC stays because GitHub Actions logs carry ANSI color sequences.
@@ -196,9 +200,8 @@ class DiagnosticPartition(StrEnum):
 
 
 class JobLogDrop(StrEnum):
-    """Why a GHALogs job log yields no record. The value names its drop counter."""
+    """Why a GHALogs job-log chunk yields no record. The value names its drop counter."""
 
-    OVERSIZE = auto()
     NON_TEXT = auto()
     EMPTY = auto()
 
@@ -501,8 +504,8 @@ def _is_job_log(member: tarfile.TarInfo) -> bool:
     )
 
 
-def _decode_job_log_text(content: bytes) -> str | JobLogDrop:
-    """Decode job-log bytes into cleaned text, or report why the payload is not usable.
+def _decode_log_chunk_text(content: bytes) -> str | JobLogDrop:
+    """Decode job-log chunk bytes into cleaned text, or report why the chunk is not usable.
 
     Removes the non-text characters in one pass and reads the count of removed
     characters from the length difference, so a binary payload never builds a
@@ -515,13 +518,39 @@ def _decode_job_log_text(content: bytes) -> str | JobLogDrop:
     return cleaned.strip() or JobLogDrop.EMPTY
 
 
+def _job_log_chunks(handle: IO[bytes], chunk_bytes: int) -> Iterator[bytes]:
+    """Split a job log into line-aligned chunks of at most ``chunk_bytes`` bytes.
+
+    Reads a line at a time, thus peak memory stays at one chunk rather than the
+    whole log. A line longer than ``chunk_bytes`` becomes a chunk of its own:
+    ``readline`` is bounded, so a log without line breaks cannot exhaust memory.
+    """
+    lines: list[bytes] = []
+    size = 0
+    while line := handle.readline(chunk_bytes):
+        if lines and size + len(line) > chunk_bytes:
+            yield b"".join(lines)
+            lines, size = [], 0
+        lines.append(line)
+        size += len(line)
+    if lines:
+        yield b"".join(lines)
+
+
 def ghalogs_member_to_records(member_path: str, content: bytes) -> Iterator[dict[str, str]]:
     """Convert one GHALogs ``.tar.gz`` run archive into sanitized job-log records.
 
-    Yields one record for each job log of the run (see :func:`_is_job_log`),
-    with ``archive_path`` set to ``<member_path>!<job log>``. All records of one
-    run share the run's partition, thus no job log lands away from its sibling
-    logs. Raises ``ValueError`` for a member that is not a run archive.
+    Yields one record for each chunk of each job log of the run (see
+    :func:`_is_job_log`), with ``archive_path`` set to
+    ``<member_path>!<job log>#<chunk index>``. A job log above
+    ``_GHALOGS_JOB_LOG_CHUNK_BYTES`` becomes more than one record instead of
+    being discarded. Each chunk is a document of its own for pseudonymization,
+    so an identity keeps one pseudonym inside a chunk but not across chunks —
+    the contract that already holds across the job logs of one run.
+
+    All records of one run share the run's partition, thus no job log lands away
+    from its sibling logs. Raises ``ValueError`` for a member that is not a run
+    archive.
     """
     if not member_path.endswith(_GHALOGS_MEMBER_SUFFIX):
         raise ValueError(f"Expected a {_GHALOGS_MEMBER_SUFFIX} GHALogs run archive, got {member_path}")
@@ -534,23 +563,24 @@ def ghalogs_member_to_records(member_path: str, content: bytes) -> Iterator[dict
             if not _is_job_log(member):
                 continue
             log_path = f"{member_path}{_GHALOGS_LOG_PATH_SEPARATOR}{member.name}"
-            if member.size > _GHALOGS_MAX_JOB_LOG_BYTES:
-                counters.pipeline.update_counter(f"ghalogs_materialize/dropped_{JobLogDrop.OVERSIZE}", 1)
-                continue
             handle = run_logs.extractfile(member)
             assert handle is not None, f"{log_path} is a regular file"
-            text = _decode_job_log_text(handle.read())
-            if isinstance(text, JobLogDrop):
-                counters.pipeline.update_counter(f"ghalogs_materialize/dropped_{text}", 1)
-                continue
+            for index, chunk in enumerate(_job_log_chunks(handle, _GHALOGS_JOB_LOG_CHUNK_BYTES)):
+                if index == 1:
+                    counters.pipeline.update_counter("ghalogs_materialize/split_job_logs", 1)
+                text = _decode_log_chunk_text(chunk)
+                if isinstance(text, JobLogDrop):
+                    counters.pipeline.update_counter(f"ghalogs_materialize/dropped_{text}", 1)
+                    continue
 
-            yield {
-                "id": hashlib.sha256(f"ghalogs:{log_path}".encode()).hexdigest(),
-                "text": sanitize_diagnostic_log_text(text),
-                "source": "ghalogs",
-                "archive_path": log_path,
-                "partition": partition.value,
-            }
+                chunk_path = f"{log_path}{_GHALOGS_CHUNK_PATH_SEPARATOR}{index}"
+                yield {
+                    "id": hashlib.sha256(f"ghalogs:{chunk_path}".encode()).hexdigest(),
+                    "text": sanitize_diagnostic_log_text(text),
+                    "source": "ghalogs",
+                    "archive_path": chunk_path,
+                    "partition": partition.value,
+                }
 
 
 def logchunks_example_to_record(source_path: str, example_index: int, example: ET.Element) -> dict[str, str] | None:
@@ -1083,11 +1113,11 @@ def extract_ghalogs_step(
         output_path_prefix=output_path_prefix,
         fn=lambda output_path: extract_ghalogs(source_path, output_path, max_members=max_members),
         hash_attrs={
-            "version": "v5",
+            "version": "v6",
             "source_path": source_path,
             "source_label": source.source_label,
             "max_members": max_members,
-            "max_job_log_bytes": _GHALOGS_MAX_JOB_LOG_BYTES,
+            "job_log_chunk_bytes": _GHALOGS_JOB_LOG_CHUNK_BYTES,
             "split_policy": "97% train / 1% dev / 1% test / 1% issue_5093_holdout",
             "source_content_fingerprint": source.fingerprint(),
             "sanitization_rules": "gh token/aws key/secret kv/email/user path/internal gs path",
@@ -1351,11 +1381,11 @@ def materialize_ghalogs_step(
             num_shards=num_shards,
         ),
         hash_attrs={
-            "version": "v2",
+            "version": "v3",
             "source_path": source_path,
             "source_label": source.source_label,
             "max_members": max_members,
-            "max_job_log_bytes": _GHALOGS_MAX_JOB_LOG_BYTES,
+            "job_log_chunk_bytes": _GHALOGS_JOB_LOG_CHUNK_BYTES,
             "num_shards": num_shards,
             "source_content_fingerprint": source.fingerprint(),
             "sanitization_rules": "gh token/aws key/secret kv/email/user path/internal gs path",

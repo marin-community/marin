@@ -52,7 +52,7 @@ def _ghalogs_normalized() -> ArtifactStep[TokenizedCache]:
         "normalized/ghalogs/public",
         fn=_run_ghalogs_normalize_pipeline,
         build_config=lambda ctx: ctx.output_path,
-        version="2026.07.30",
+        version="2026.07.30.1",
     )
 
 
@@ -63,7 +63,7 @@ def ghalogs_dataset(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[Tokeniz
         tokenizer=tokenizer,
         raw=_ghalogs_normalized(),
         glob="outputs/main/*.parquet",
-        version="2026.07.30",
+        version="2026.07.30.1",
     )
 
 
