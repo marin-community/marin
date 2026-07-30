@@ -25,7 +25,6 @@ import pulumi_gcp as gcp
 import search_config
 from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv
 from iac.gcp.cloud_run_job import ScheduledCloudRunJob, ScheduledCloudRunJobArgs
-from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT
 
 ECHO_DIR = Path(__file__).parent
 MIGRATIONS_DIR = ECHO_DIR / "migrations"
@@ -179,9 +178,6 @@ def main() -> None:
             cpu_always_allocated=True,
             memory="4Gi",
             max_instance_request_concurrency=4,
-            # Admit CLI/agent tokens (cli.py) whose audience is the shared Marin desktop OAuth
-            # client, so the same rigging login that reaches iris also reaches echo-api.
-            iap_programmatic_clients=(MARIN_DESKTOP_OAUTH_CLIENT.client_id,),
             cloudsql_instances=(CONNECTION_NAME,),
         ),
         gcp_provider=gcp_provider,

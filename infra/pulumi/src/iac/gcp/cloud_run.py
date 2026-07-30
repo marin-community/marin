@@ -21,12 +21,15 @@ from dataclasses import dataclass, field
 import pulumi
 import pulumi_docker_build as docker_build
 import pulumi_gcp as gcp
+from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT
 
 # Cloud Run terminates the browser session as the IAP service agent, so that agent —
 # not the end user — is what invokes the service. People are admitted separately, through
 # IAP's httpsResourceAccessor role.
 IAP_SERVICE_AGENT = "serviceAccount:service-{project_number}@gcp-sa-iap.iam.gserviceaccount.com"
 OPENATHENA_IAP_MEMBER = "domain:openathena.ai"
+LOOM_VM_IAP_MEMBER = "serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com"
+MARIN_INTERNAL_IAP_MEMBERS = (OPENATHENA_IAP_MEMBER, LOOM_VM_IAP_MEMBER)
 
 
 @dataclass(frozen=True)
@@ -98,16 +101,16 @@ class CloudRunServiceArgs:
     # account roles/secretmanager.secretAccessor on its secret; the component references the
     # secret and never creates it or holds its value.
     secrets: tuple[SecretEnv, ...] = ()
-    # Additional people admitted through IAP beyond the organization-wide OpenAthena domain
-    # grant. Each entry is a bare email ("alice@x.com"), a domain wildcard ("*@example.com"),
-    # or an already-qualified IAM member ("group:eng@example.com"). Each grant is its own
-    # resource, so re-running with a changed list updates only the added/removed grants —
-    # never the service.
+    # Additional people admitted through IAP beyond the shared OpenAthena domain and Loom VM
+    # grants. Each entry is a bare email ("alice@x.com"), a domain wildcard
+    # ("*@example.com"), or an already-qualified IAM member ("group:eng@example.com"). Each
+    # grant is its own resource, so re-running with a changed list updates only the
+    # added/removed grants — never the service.
     iap_members: tuple[str, ...] = ()
-    # OAuth client IDs IAP accepts as a programmatic-token audience, so a CLI or agent can
-    # reach the service with a Google-signed ID token (browser desktop-login or a
-    # service-account-minted token) instead of the interactive browser session. Empty leaves
-    # the service browser-only. Each id must be an OAuth client that already exists.
+    # Additional OAuth client IDs IAP accepts as programmatic-token audiences beyond the
+    # shared Marin desktop client. This lets a CLI or agent reach the service with a
+    # Google-signed ID token instead of an interactive browser session. Each id must be an
+    # OAuth client that already exists.
     iap_programmatic_clients: tuple[str, ...] = ()
     # Cloud SQL connection names (project:region:instance) to attach. When non-empty the
     # service mounts the connector socket at /cloudsql and the runtime service account gets
@@ -373,8 +376,8 @@ class CloudRunService(pulumi.ComponentResource):
 
         # IAP invokes the service as its own service agent; only that agent gets run.invoker.
         # People are admitted separately through IAP (httpsResourceAccessor). The shared
-        # organization grant keeps every internal site consistent; `iap_members` adds only
-        # service-specific exceptions.
+        # human and automation grants keep every internal site consistent; `iap_members`
+        # adds only service-specific exceptions.
         project_number = gcp.organizations.get_project(
             project_id=args.project, opts=pulumi.InvokeOptions(provider=gcp_provider)
         ).number
@@ -388,7 +391,7 @@ class CloudRunService(pulumi.ComponentResource):
             opts=child,
         )
         iap_members = (
-            OPENATHENA_IAP_MEMBER,
+            *MARIN_INTERNAL_IAP_MEMBERS,
             *(normalize_iap_member(member) for member in args.iap_members),
         )
         for member in dict.fromkeys(iap_members):
@@ -405,19 +408,22 @@ class CloudRunService(pulumi.ComponentResource):
         # Register programmatic-token audiences on the service's IAP resource. IAP then admits
         # an ID token whose `aud` is one of these client ids and attributes the caller by its
         # email claim — the path a CLI or agent uses instead of the interactive browser sign-in.
-        if args.iap_programmatic_clients:
-            gcp.iap.Settings(
-                "iap-settings",
-                name=service.name.apply(
-                    lambda name: f"projects/{project_number}/iap_web/cloud_run-{args.region}/services/{name}"
+        programmatic_clients = (
+            MARIN_DESKTOP_OAUTH_CLIENT.client_id,
+            *args.iap_programmatic_clients,
+        )
+        gcp.iap.Settings(
+            "iap-settings",
+            name=service.name.apply(
+                lambda name: f"projects/{project_number}/iap_web/cloud_run-{args.region}/services/{name}"
+            ),
+            access_settings=gcp.iap.SettingsAccessSettingsArgs(
+                oauth_settings=gcp.iap.SettingsAccessSettingsOauthSettingsArgs(
+                    programmatic_clients=list(dict.fromkeys(programmatic_clients)),
                 ),
-                access_settings=gcp.iap.SettingsAccessSettingsArgs(
-                    oauth_settings=gcp.iap.SettingsAccessSettingsOauthSettingsArgs(
-                        programmatic_clients=list(args.iap_programmatic_clients),
-                    ),
-                ),
-                opts=child,
-            )
+            ),
+            opts=child,
+        )
 
         self.uri = service.uri
         self.image_ref = image.ref

@@ -5,9 +5,8 @@
 
 Deploys this directory (Grafana + the finelog bridge) as an IAP-gated Cloud Run service
 through the reusable `iac.gcp.cloud_run.CloudRunService` component. Grafana's fixed shape
-— project, region, one warm instance — lives here. The shared component admits the
-OpenAthena Workspace domain; additional IAP members are stack config
-(`marin-grafana:viewers`).
+— project, region, one warm instance — lives here. The shared component owns the common
+IAP access policy; additional members are stack config (`marin-grafana:viewers`).
 
 Runs on the shared repo venv (plain `python` runtime), which is where `iac` and the Pulumi
 GCP/Docker providers live; `uv sync --all-packages` first. See README.md.

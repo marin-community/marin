@@ -6,8 +6,8 @@
 Deploys this directory as an IAP-gated Cloud Run service through the reusable
 ``iac.gcp.cloud_run.CloudRunService`` component. The service's fixed shape — project,
 region, one warm instance for the background ingest loop, the CloudSQL connection, and
-the record bucket — lives here. The shared component admits the OpenAthena Workspace
-domain; additional IAP members are stack config (``marin-evaldash:viewers``).
+the record bucket — lives here. The shared component owns the common IAP access policy;
+additional members are stack config (``marin-evaldash:viewers``).
 
 The image build context is the repo root (the runtime image copies the eval record/DB
 modules from ``lib/marin``), so ``build_context`` points there and ``dockerfile`` is the

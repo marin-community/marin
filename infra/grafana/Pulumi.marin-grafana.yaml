@@ -1,8 +1,8 @@
 config:
-  # Extra people admitted through IAP beyond the OpenAthena Workspace domain granted by
-  # CloudRunService. Each entry is a bare email, a domain wildcard (quote it — YAML reads a
-  # leading `*` as an alias), or an already-qualified IAM member. Editing this and re-running
-  # `pulumi up` updates only the grants, never the service:
+  # Extra people admitted through IAP beyond the shared CloudRunService baseline. Each entry is
+  # a bare email, a domain wildcard (quote it — YAML reads a leading `*` as an alias), or an
+  # already-qualified IAM member. Editing this and re-running `pulumi up` updates only the
+  # grants, never the service:
   #
   #   marin-grafana:viewers:
   #     - alice@example.com
