@@ -212,6 +212,13 @@ def test_node_deadlock_alert_pages_critical_after_five_minutes():
     assert rule["data"][0]["model"]["url"] == "/alerts/node_deadlocks"
 
 
+def test_zephyr_stall_alert_is_a_warning_after_five_minutes():
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "zephyr-pipeline-progress-stalled"]
+    assert rule["for"] == "5m"
+    assert rule["labels"]["severity"] == "warning"
+    assert rule["data"][0]["model"]["url"] == "/alerts/zephyr_stalls"
+
+
 def test_k8s_dashboard_shows_finelog_fleet_health():
     dashboard = _stitched_dashboards()["k8s.json"]
     (panel,) = [

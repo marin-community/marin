@@ -5,7 +5,7 @@
 cache's coalescing and eviction contract."""
 
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pyarrow as pa
 from cache import TtlCache
@@ -20,6 +20,7 @@ from server import create_app, workload_overview
 from starlette.testclient import TestClient
 from training_stalls import training_stall_alert_rows
 from wandb_source import WandbSource
+from zephyr_stalls import zephyr_stall_alert_rows
 
 # 2026-07-17T03:00:00Z and +1h, as Grafana sends them.
 FROM_MS = 1_784_257_200_000
@@ -317,6 +318,48 @@ def test_training_stall_alert_does_not_warn_on_a_producer_that_predates_phase():
 def test_training_stall_alert_returns_explicit_zero_without_running_jobs():
     assert training_stall_alert_rows(pa.table({}), pa.table({}), datetime(2026, 7, 28, tzinfo=UTC)) == [
         {"cluster": "fleet", "job": "", "phase": "idle", "reason": "healthy", "value": 0}
+    ]
+
+
+def test_zephyr_stall_alert_distinguishes_stale_healthy_and_expired_producers():
+    now = datetime(2026, 7, 28, 12, tzinfo=UTC)
+    progress = finelog_result(
+        cluster=["cw-a", "cw-a", "cw-a"],
+        job=["/user/stale", "/user/healthy", "/user/expired"],
+        execution=["run-stale", "run-healthy", "run-expired"],
+        progress_time=[
+            now.timestamp() - 46 * 60,
+            now.timestamp() - 44 * 60,
+            now.timestamp() - 60 * 60,
+        ],
+        producer_at=[
+            now - timedelta(seconds=20),
+            now - timedelta(seconds=20),
+            now - timedelta(minutes=2),
+        ],
+    )
+
+    assert zephyr_stall_alert_rows(progress, now) == [
+        {
+            "cluster": "cw-a",
+            "job": "/user/stale",
+            "execution": "run-stale",
+            "reason": "shard_progress_stale",
+            "value": 1,
+        },
+        {
+            "cluster": "cw-a",
+            "job": "/user/healthy",
+            "execution": "run-healthy",
+            "reason": "healthy",
+            "value": 0,
+        },
+    ]
+
+
+def test_zephyr_stall_alert_returns_explicit_zero_without_active_pipelines():
+    assert zephyr_stall_alert_rows(pa.table({}), datetime(2026, 7, 28, tzinfo=UTC)) == [
+        {"cluster": "fleet", "job": "", "execution": "", "reason": "healthy", "value": 0}
     ]
 
 

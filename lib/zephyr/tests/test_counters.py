@@ -32,6 +32,7 @@ def _make_coordinator(
     coord._lock = threading.Lock()
     coord._completed_counters = list(completed)
     coord._worker_counters = {str(i): s for i, s in enumerate(inflight or [])}
+    coord._progress_time_seconds = 0.0
     return coord
 
 
