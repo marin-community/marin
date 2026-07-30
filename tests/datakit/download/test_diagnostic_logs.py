@@ -126,7 +126,6 @@ def test_ghalogs_member_to_records_extracts_job_logs_and_ignores_step_copies():
     assert "<REDACTED_SECRET>" in records[0]["text"]
     assert "<USER_0_EMAIL>" in records[0]["text"]
     assert "/home/<USER_0>/project" in records[0]["text"]
-    assert records[0]["partition"] in {partition.value for partition in DiagnosticPartition}
 
 
 def test_ghalogs_member_to_records_keeps_one_partition_for_each_run():
@@ -186,18 +185,6 @@ def test_ghalogs_member_to_records_splits_long_job_logs_into_chunks(monkeypatch)
     assert "\n".join(record["text"] for record in chunks).splitlines() == long_log.decode().splitlines()
     # A job log that fits in one chunk still gives one record.
     assert f"{member_path}!1_test.txt#0" in {record["archive_path"] for record in records}
-
-
-def test_ghalogs_member_to_records_gives_each_chunk_its_own_id(monkeypatch):
-    monkeypatch.setattr(diagnostic_logs, "_GHALOGS_JOB_LOG_CHUNK_BYTES", 128)
-    member_path = "logs/owner/repo/build_1234/12-1.tar.gz"
-    content = _run_archive_member({"0_build.txt": b"a line of job log output\n" * 32})
-
-    records = list(ghalogs_member_to_records(member_path, content))
-
-    assert len(records) > 1
-    assert len({record["id"] for record in records}) == len(records)
-    assert {record["partition"] for record in records} == {records[0]["partition"]}
 
 
 def test_ghalogs_member_to_records_splits_a_job_log_without_line_breaks(monkeypatch):

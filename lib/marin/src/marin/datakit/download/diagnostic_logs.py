@@ -507,9 +507,8 @@ def _is_job_log(member: tarfile.TarInfo) -> bool:
 def _decode_log_chunk_text(content: bytes) -> str | JobLogDrop:
     """Decode job-log chunk bytes into cleaned text, or report why the chunk is not usable.
 
-    Removes the non-text characters in one pass and reads the count of removed
-    characters from the length difference, so a binary payload never builds a
-    match object for each of its bytes.
+    Counts the non-text characters from a length difference rather than from
+    matches, so a binary payload costs one pass and not one object for each byte.
     """
     text = content.decode("utf-8", errors="replace")
     cleaned = _NON_TEXT_CHAR_RE.sub("", text)
@@ -756,8 +755,8 @@ def _process_ghalogs_member_batch(batch: list[str], archive_path: str) -> Iterat
     Opens the zip a single time per worker (vs once per record). ``zipfile``
     seeks to each member's offset, so the worker only fetches the bytes for
     members in its batch — not the whole archive. One member yields one record
-    for each job log of that run, thus ``zephyr/records_in`` counts runs and
-    ``ghalogs_materialize/kept`` counts job logs.
+    for each chunk of each job log of that run, thus ``zephyr/records_in``
+    counts runs and ``ghalogs_materialize/kept`` counts job-log chunks.
     """
     with open_url(archive_path, "rb") as f:
         with zipfile.ZipFile(f) as zf:
@@ -787,7 +786,7 @@ def materialize_ghalogs_to_parquet(
     partitioned into ``num_shards`` batches and shipped to zephyr workers,
     each of which opens the archive once and streams its assigned members
     via ``zipfile``'s random-access reads — bounding per-worker memory to one
-    run archive plus one job log, rather than the whole archive.
+    run archive plus one job-log chunk, rather than the whole archive.
     """
     if max_members is not None and max_members <= 0:
         raise ValueError(f"max_members must be positive when set, got {max_members}")
