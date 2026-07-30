@@ -7,7 +7,7 @@ import logging
 import os
 import urllib.parse
 from collections.abc import Callable, Sequence
-from typing import Any, Protocol, TypeVar, cast
+from typing import ClassVar, Protocol, TypeVar, cast
 
 import fsspec
 import jax
@@ -20,6 +20,8 @@ StateT = TypeVar("StateT")
 
 
 class _GrugState(Protocol):
+    __dataclass_fields__: ClassVar[dict[str, dataclasses.Field[object]]]
+
     @property
     def step(self) -> jax.Array: ...
 
@@ -142,43 +144,35 @@ def restore_grug_state_from_checkpoint(
     return state
 
 
-def initialize_grug_state_from_checkpoint(
+def init_weights_only_from_checkpoint(
     state: GrugStateT,
+    checkpoint_path: str,
     *,
-    checkpoint_search_paths: Sequence[str],
-    load_checkpoint_setting: bool | None,
-    initialize_from: str | None,
     mesh: jax.sharding.Mesh | None,
     allow_partial: bool,
     additional_weight_fields: Sequence[str] = (),
 ) -> GrugStateT:
-    """Resume an own-run checkpoint or initialize a new phase from external weights."""
-    state = restore_grug_state_from_checkpoint(
-        state,
-        checkpoint_search_paths=checkpoint_search_paths,
-        load_checkpoint_setting=load_checkpoint_setting,
-        mesh=mesh,
-        allow_partial=allow_partial,
-    )
-    if int(state.step) != 0 or initialize_from is None:
+    """Initialize a fresh Grug state from external weights."""
+    if int(state.step) != 0:
         return state
 
     weight_fields = ("params", *additional_weight_fields)
     exemplar = {field_name: getattr(state, field_name) for field_name in weight_fields}
+    logger.info("Initializing model weights from %s", checkpoint_path)
     loaded = cast(
         dict[str, object],
         load_checkpoint(
             exemplar,
-            initialize_from,
+            checkpoint_path,
             axis_mapping=None,
             mesh=mesh,
-            allow_partial=True,
+            allow_partial=allow_partial,
         ),
     )
     updates = {field_name: loaded[field_name] for field_name in weight_fields}
     if state.ema_params is not None:
         updates["ema_params"] = loaded["params"]
-    return cast(GrugStateT, dataclasses.replace(cast(Any, state), **updates))
+    return cast(GrugStateT, dataclasses.replace(state, **updates))
 
 
 def _load_candidate_state(

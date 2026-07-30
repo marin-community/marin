@@ -12,7 +12,7 @@ import pytest
 from jax.tree_util import register_dataclass
 from levanter.checkpoint import Checkpointer, CheckpointInterval, latest_checkpoint_path
 
-from experiments.grug.checkpointing import initialize_grug_state_from_checkpoint, restore_grug_state_from_checkpoint
+from experiments.grug.checkpointing import init_weights_only_from_checkpoint, restore_grug_state_from_checkpoint
 
 
 @register_dataclass
@@ -71,11 +71,9 @@ def test_initialize_from_loads_only_phase_weight_state(
         pending_qb_betas=jnp.array([7, 8]),
     )
 
-    initialized = initialize_grug_state_from_checkpoint(
+    initialized = init_weights_only_from_checkpoint(
         fresh_state,
-        checkpoint_search_paths=[str(tmp_path / "new-run")],
-        load_checkpoint_setting=None,
-        initialize_from=source_checkpoint,
+        source_checkpoint,
         mesh=None,
         allow_partial=False,
         additional_weight_fields=additional_weight_fields,
@@ -115,11 +113,16 @@ def test_initialize_from_preserves_own_run_resume_precedence(tmp_path: Path):
         pending_qb_betas=jnp.array([5, 6]),
     )
 
-    initialized = initialize_grug_state_from_checkpoint(
+    resumed = restore_grug_state_from_checkpoint(
         fresh_state,
         checkpoint_search_paths=[str(own_checkpoint_root)],
         load_checkpoint_setting=None,
-        initialize_from=source_checkpoint,
+        mesh=None,
+        allow_partial=False,
+    )
+    initialized = init_weights_only_from_checkpoint(
+        resumed,
+        source_checkpoint,
         mesh=None,
         allow_partial=False,
         additional_weight_fields=("pending_qb_betas",),
