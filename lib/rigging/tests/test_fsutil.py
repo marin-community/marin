@@ -1,7 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for fsutil copy operations and file previews on local paths."""
+"""Tests for fsutil's copy semantics and file rendering, over local paths — which
+``filesystem_for`` routes exactly as it routes an object store."""
 
 import bz2
 import gzip
@@ -10,6 +11,7 @@ import lzma
 
 import pytest
 from click.testing import CliRunner
+from rigging.fsutil import listing
 from rigging.fsutil.cli import cli
 from rigging.fsutil.listing import MAX_PREVIEW_BYTES, read_decompressed_preview
 from rigging.fsutil.render import file_lines
@@ -104,3 +106,25 @@ def test_cat_raw_keeps_compressed_bytes(tmp_path):
 
     assert result.exit_code == 0, result.output
     assert result.stdout_bytes == compressed
+
+
+@pytest.mark.parametrize("command", [["cat"], ["head", "-n", "3"]])
+def test_formatted_cli_commands_decompress_json(tmp_path, command):
+    path = tmp_path / "metrics.jsonl.gz"
+    path.write_bytes(gzip.compress(b'{"step": 1, "loss": 3.5}\n'))
+
+    result = CliRunner().invoke(cli, [*command, str(path)])
+
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines()[2].split() == ["1", "3.5"]
+
+
+def test_cat_reports_full_size_when_uncompressed_preview_is_truncated(tmp_path, monkeypatch):
+    path = tmp_path / "large.txt"
+    path.write_text("abcdef")
+    monkeypatch.setattr(listing, "MAX_PREVIEW_BYTES", 4)
+
+    result = CliRunner().invoke(cli, ["cat", str(path)])
+
+    assert result.exit_code == 0, result.output
+    assert result.stderr == "[truncated: read 4 B of 6 B]\n"

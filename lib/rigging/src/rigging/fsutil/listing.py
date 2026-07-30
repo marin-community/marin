@@ -49,10 +49,9 @@ class Entry:
 
 @dataclasses.dataclass(frozen=True)
 class Preview:
-    """A bounded file preview and its truncation state."""
-
     data: bytes
     truncated: bool
+    full_size: int | None
 
 
 def bucket_url(bucket: str) -> str:
@@ -127,23 +126,24 @@ def parent_url(url: str) -> str:
     return str(parsed.parent)
 
 
-def read_preview(url: str) -> tuple[bytes, int]:
-    """Read up to :data:`MAX_PREVIEW_BYTES` of *url*, returning ``(data, full_size)``.
-
-    The caller compares the two to tell a whole small file from a truncated large one.
-    """
+def read_preview(url: str) -> Preview:
+    """Read a bounded preview of the stored bytes in *url*."""
     fs, path = filesystem_for(url)
-    size = fs.size(path)
-    with fs.open(path, "rb") as f:
-        return f.read(MAX_PREVIEW_BYTES), size
+    return _read_preview(fs, path, compression=None, full_size=fs.size(path))
 
 
 def read_decompressed_preview(url: str) -> Preview:
     """Read a bounded preview and decompress supported file suffixes."""
     fs, path = filesystem_for(url)
-    with fs.open(path, "rb", compression=compression_for(path)) as file:
+    compression = compression_for(path)
+    full_size = fs.size(path) if compression is None else None
+    return _read_preview(fs, path, compression=compression, full_size=full_size)
+
+
+def _read_preview(fs, path: str, *, compression: str | None, full_size: int | None) -> Preview:
+    with fs.open(path, "rb", compression=compression) as file:
         data = file.read(MAX_PREVIEW_BYTES + 1)
-    return Preview(data=data[:MAX_PREVIEW_BYTES], truncated=len(data) > MAX_PREVIEW_BYTES)
+    return Preview(data=data[:MAX_PREVIEW_BYTES], truncated=len(data) > MAX_PREVIEW_BYTES, full_size=full_size)
 
 
 def total_size(url: str) -> tuple[int, int]:

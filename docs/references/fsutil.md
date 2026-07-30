@@ -55,8 +55,8 @@ that touch its buckets; the rest keep working.
 | `browse [URL]` | The interactive browser |
 
 `cat`, `head`, and the browser decompress `.gz`, `.bz2`, `.xz`, and `.lzma` files by
-suffix. Thus, a `data.json.gz` preview uses the JSON table view. `cat --raw` writes the
-compressed bytes.
+suffix. A `data.json.gz` preview uses the JSON table view. `cat --raw` writes the compressed
+bytes.
 
 Formatted file previews are capped at 10 MB after decompression. `cat --raw` is capped
 at 10 MB of stored bytes. Use `cp` to fetch a whole object.

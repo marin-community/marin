@@ -60,10 +60,10 @@ def print_entries(console: Console, entries: list[Entry], *, long: bool) -> None
 def file_lines(name: str, raw: bytes) -> list[str]:
     """Render *raw* as display lines, using *name*'s extension to pick a JSON reader.
 
-    A tabular ``.json`` or ``.jsonl`` file renders as a table. A supported compression
-    suffix does not change this selection. Other files render as text or a byte count.
+    A tabular ``.json`` or ``.jsonl`` file renders as a table. The renderer ignores one
+    supported compression suffix. Other files render as text or a byte count.
     """
-    name = uncompressed_name(name).lower()
+    name = uncompressed_name(name)
     if name.endswith((".json", ".jsonl")):
         try:
             text = raw.decode("utf-8")

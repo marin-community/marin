@@ -20,7 +20,7 @@ from rigging.filesystem.buckets import MissingCredentials, filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
 from rigging.filesystem.s3_compat import s3_credentials, s3_endpoint
 from rigging.filesystem.storage_path import StoragePath
-from rigging.fsutil.listing import ROOT, list_entries, read_decompressed_preview, read_preview, total_size
+from rigging.fsutil.listing import ROOT, Preview, list_entries, read_decompressed_preview, read_preview, total_size
 from rigging.fsutil.render import file_lines, format_size, print_entries
 from rigging.fsutil.tui import run as run_browser
 
@@ -162,17 +162,27 @@ def browse(url: str) -> None:
 def _read(url: str) -> bytes:
     """Read a bounded, decompressed preview of *url*."""
     preview = read_decompressed_preview(url)
-    if preview.truncated:
-        click.echo(f"[truncated: read {format_size(len(preview.data))}]", err=True)
+    _report_truncation(preview)
     return preview.data
 
 
 def _read_raw(url: str) -> bytes:
     """Read stored bytes from *url* and report truncation on stderr."""
-    data, size = read_preview(url)
-    if size is not None and size > len(data):
-        click.echo(f"[truncated: read {format_size(len(data))} of {format_size(size)}]", err=True)
-    return data
+    preview = read_preview(url)
+    _report_truncation(preview)
+    return preview.data
+
+
+def _report_truncation(preview: Preview) -> None:
+    if not preview.truncated:
+        return
+    if preview.full_size is None:
+        click.echo(f"[truncated: read first {format_size(len(preview.data))} of decompressed data]", err=True)
+        return
+    click.echo(
+        f"[truncated: read {format_size(len(preview.data))} of {format_size(preview.full_size)}]",
+        err=True,
+    )
 
 
 def _destination(match: str, src_path: str, dst_path: str) -> str:
