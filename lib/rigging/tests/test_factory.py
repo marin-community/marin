@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the guarded fsspec factory: the url_to_fs/open_url/filesystem entry
-points, unique_temp_path, atomic_rename, and fetch_file_atomic."""
+points, unique_temp_path, atomic_rename, and fetch_file_atomic, plus the S3
+request bounds those entry points inject."""
 
 import asyncio
 import json
