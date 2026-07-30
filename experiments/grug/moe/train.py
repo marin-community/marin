@@ -410,11 +410,13 @@ def extract_expert_range(
     model: Transformer,
     pending_qb_betas: jax.Array,
     *,
-    target_config: GrugModelConfig,
+    target_model: Transformer,
+    target_pending_qb_betas: jax.Array,
     expert_offset: int,
 ) -> tuple[Transformer, jax.Array]:
     """Extract one contiguous routed-expert bank into a smaller physical model."""
     source_config = model.config
+    target_config = target_model.config
     expert_count = target_config.num_experts
     expert_end = expert_offset + expert_count
     if target_config.mtp_depth or source_config.mtp_depth:
@@ -432,32 +434,47 @@ def extract_expert_range(
     source_blocks = model.stacked_blocks.stacked
     source_mlp = source_blocks.mlp
     source_experts = source_mlp.expert_mlp
+    target_mlp = target_model.stacked_blocks.stacked.mlp
+    target_experts = target_mlp.expert_mlp
 
-    def expert_slice(weights: jax.Array | None) -> jax.Array | None:
-        return None if weights is None else weights[:, expert_offset:expert_end]
+    def output_sharding(target: jax.Array) -> NamedSharding | None:
+        return target.sharding if isinstance(target.sharding, NamedSharding) else None
 
-    target_experts = dataclasses.replace(
+    def expert_slice(weights: jax.Array | None, target_weights: jax.Array | None) -> jax.Array | None:
+        if weights is None:
+            if target_weights is not None:
+                raise ValueError("source and target expert parameter layouts differ")
+            return None
+        if target_weights is None:
+            raise ValueError("source and target expert parameter layouts differ")
+        return weights.at[:, expert_offset:expert_end].get(out_sharding=output_sharding(target_weights))
+
+    extracted_experts = dataclasses.replace(
         source_experts,
-        w_gate=expert_slice(source_experts.w_gate),
-        w_up=expert_slice(source_experts.w_up),
-        w_down=expert_slice(source_experts.w_down),
-        w_gate_up=expert_slice(source_experts.w_gate_up),
+        w_gate=expert_slice(source_experts.w_gate, target_experts.w_gate),
+        w_up=expert_slice(source_experts.w_up, target_experts.w_up),
+        w_down=expert_slice(source_experts.w_down, target_experts.w_down),
+        w_gate_up=expert_slice(source_experts.w_gate_up, target_experts.w_gate_up),
     )
-    target_mlp = dataclasses.replace(
+    extracted_mlp = dataclasses.replace(
         source_mlp,
-        router=source_mlp.router[..., expert_offset:expert_end],
-        router_bias=source_mlp.router_bias[:, balance_group, expert_offset:expert_end],
-        expert_mlp=target_experts,
+        router=source_mlp.router.at[..., expert_offset:expert_end].get(out_sharding=output_sharding(target_mlp.router)),
+        router_bias=source_mlp.router_bias.at[:, balance_group, expert_offset:expert_end].get(
+            out_sharding=output_sharding(target_mlp.router_bias)
+        ),
+        expert_mlp=extracted_experts,
         cfg=target_config,
     )
-    target_blocks = dataclasses.replace(source_blocks, mlp=target_mlp)
-    target_model = dataclasses.replace(
+    target_blocks = dataclasses.replace(source_blocks, mlp=extracted_mlp)
+    extracted_model = dataclasses.replace(
         model,
         stacked_blocks=dataclasses.replace(model.stacked_blocks, stacked=target_blocks),
         config=target_config,
     )
-    target_pending_qb_betas = pending_qb_betas[:, balance_group, expert_offset:expert_end]
-    return target_model, target_pending_qb_betas
+    extracted_pending_qb_betas = pending_qb_betas.at[:, balance_group, expert_offset:expert_end].get(
+        out_sharding=output_sharding(target_pending_qb_betas)
+    )
+    return extracted_model, extracted_pending_qb_betas
 
 
 def init_expert_range_from_checkpoint(
@@ -479,7 +496,8 @@ def init_expert_range_from_checkpoint(
     params, pending_qb_betas = extract_expert_range(
         loaded["params"],
         loaded["pending_qb_betas"],
-        target_config=state.params.config,
+        target_model=state.params,
+        target_pending_qb_betas=state.pending_qb_betas,
         expert_offset=expert_offset,
     )
     return dataclasses.replace(

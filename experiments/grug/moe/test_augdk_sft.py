@@ -147,12 +147,15 @@ def test_expert_range_extraction_preserves_selected_router_experts_and_qb_state(
     mesh = compact_grug_mesh()
     with jax.set_mesh(mesh):
         source = Transformer.init(source_config, key=jax.random.PRNGKey(0))
+        target_exemplar = Transformer.init(target_config, key=jax.random.PRNGKey(1))
     pending = jnp.arange(2 * 2 * 8, dtype=jnp.float32).reshape(2, 2, 8)
+    target_pending_exemplar = jnp.zeros((2, 4), dtype=jnp.float32)
 
     target, target_pending = extract_expert_range(
         source,
         pending,
-        target_config=target_config,
+        target_model=target_exemplar,
+        target_pending_qb_betas=target_pending_exemplar,
         expert_offset=0,
     )
 
