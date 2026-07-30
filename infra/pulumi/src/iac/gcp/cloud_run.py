@@ -135,12 +135,6 @@ def normalize_iap_member(entry: str) -> str:
     raise ValueError(f"cannot read IAP access entry {entry!r}: use an email, *@domain, or a prefixed IAM member")
 
 
-def iap_access_members(additional_members: tuple[str, ...]) -> tuple[str, ...]:
-    """Add the OpenAthena Workspace domain to a service's normalized IAP exceptions."""
-    members = (OPENATHENA_IAP_MEMBER, *(normalize_iap_member(member) for member in additional_members))
-    return tuple(dict.fromkeys(members))
-
-
 def _role_slug(role: str) -> str:
     """Pulumi resource-name-safe slug for an IAM role id (roles/compute.viewer -> compute-viewer)."""
     return role.removeprefix("roles/").replace(".", "-").replace("/", "-")
@@ -391,7 +385,11 @@ class CloudRunService(pulumi.ComponentResource):
             member=IAP_SERVICE_AGENT.format(project_number=project_number),
             opts=child,
         )
-        for member in iap_access_members(args.iap_members):
+        iap_members = (
+            OPENATHENA_IAP_MEMBER,
+            *(normalize_iap_member(member) for member in args.iap_members),
+        )
+        for member in dict.fromkeys(iap_members):
             gcp.iap.WebCloudRunServiceIamMember(
                 f"iap-access-{resource_slug(member)}",
                 project=args.project,
