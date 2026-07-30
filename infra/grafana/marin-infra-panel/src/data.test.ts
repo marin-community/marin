@@ -73,10 +73,14 @@ test('provisioning regions combine pool outcomes across zones', () => {
     { scope: 'pool', zone: 'us-west4-a', ready: 0, outcomes: 0 },
     { scope: 'pool', zone: 'us-east5-a', ready: 6, outcomes: 7 },
     { scope: 'pool', zone: 'us-east5-b', ready: 2, outcomes: 3 },
+    { scope: 'pool', zone: 'US-EAST-02A', ready: 1, outcomes: 2 },
+    { scope: 'pool', zone: 'US-EAST-08A', ready: 3, outcomes: 4 },
   ];
 
   expect(provisioningRegions(rows)).toEqual([
     { region: 'us-east5', ready: 8, outcomes: 10, successRatio: 0.8 },
+    { region: 'US-EAST-02A', ready: 1, outcomes: 2, successRatio: 0.5 },
+    { region: 'US-EAST-08A', ready: 3, outcomes: 4, successRatio: 0.75 },
   ]);
 });
 

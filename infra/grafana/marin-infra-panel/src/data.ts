@@ -136,13 +136,17 @@ export function provisioningStatus(frame: DataFrame): ProvisioningRow[] {
 
 type ProvisioningRegionSource = Pick<ProvisioningRow, 'scope' | 'zone' | 'ready' | 'outcomes'>;
 
+function regionFromProvisioningZone(zone: string): string {
+  return /^[a-z]+-[a-z]+\d+-[a-z]$/.test(zone) ? zone.replace(/-[a-z]$/, '') : zone;
+}
+
 export function provisioningRegions(provisioning: ProvisioningRegionSource[]): ProvisioningRegion[] {
   const totals = new Map<string, { ready: number; outcomes: number }>();
   for (const pool of provisioning) {
     if (pool.scope !== 'pool' || !pool.zone || pool.outcomes <= 0) {
       continue;
     }
-    const region = pool.zone.replace(/-[^-]+$/, '');
+    const region = regionFromProvisioningZone(pool.zone);
     const counts = totals.get(region);
     if (counts) {
       counts.ready += pool.ready;

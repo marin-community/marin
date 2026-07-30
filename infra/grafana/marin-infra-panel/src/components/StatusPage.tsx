@@ -29,6 +29,7 @@ const REF = {
 } as const;
 
 const STATUS_GRID_CLASS = css`display:grid;grid-template-columns:minmax(220px,.8fr) minmax(360px,1.8fr);gap:22px;@media(max-width:900px){grid-template-columns:1fr;}`;
+const STATUS_CARD_CLASS = css`flex:1;`;
 const STATUS_SECTION_CLASS = css`display:flex;flex-direction:column;`;
 
 function one(frames: DataFrame[], refId: string): DataFrame[] {
@@ -151,9 +152,9 @@ function SectionTitle({ children, detail }: { children: React.ReactNode; detail?
   );
 }
 
-function Card({ children, grow = false }: { children: React.ReactNode; grow?: boolean }) {
+function Card({ children, className }: { children: React.ReactNode; className?: string }) {
   const theme = useTheme2();
-  return <div className={css`border:1px solid ${theme.colors.border.weak};border-radius:7px;background:${theme.colors.background.secondary};padding:14px;box-shadow:0 12px 30px rgba(0,0,0,.10);${grow ? 'flex:1;' : ''}`}>{children}</div>;
+  return <div className={`${css`border:1px solid ${theme.colors.border.weak};border-radius:7px;background:${theme.colors.background.secondary};padding:14px;box-shadow:0 12px 30px rgba(0,0,0,.10);`} ${className ?? ''}`}>{children}</div>;
 }
 
 function RegionList({ title, rows }: { title: string; rows: Array<{ region: string; value: React.ReactNode }> }) {
@@ -190,7 +191,7 @@ function WorkerStatus({ frames }: { frames: DataFrame[] }) {
   return (
     <section className={STATUS_SECTION_CLASS} aria-label="Worker status">
       <SectionTitle detail="current capacity and 24 hour history">Workers</SectionTitle>
-      <Card grow>
+      <Card className={STATUS_CARD_CLASS}>
         {regions.length === 0 ? (
           <PanelMessage width={400} height={220}>No worker data</PanelMessage>
         ) : (
@@ -235,7 +236,7 @@ function ProvisioningStatus({ frames }: { frames: DataFrame[] }) {
   return (
     <section className={STATUS_SECTION_CLASS} aria-label="Provisioning status">
       <SectionTitle detail={fleet?.windowHours === undefined ? undefined : `trailing ${fleet.windowHours} hour window`}>Provisioning</SectionTitle>
-      <Card grow>
+      <Card className={STATUS_CARD_CLASS}>
         {!fleet ? (
           <PanelMessage width={400} height={220}>No provisioning data</PanelMessage>
         ) : (
