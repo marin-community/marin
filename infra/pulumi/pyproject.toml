@@ -13,6 +13,7 @@ dependencies = [
     # .service.CloudK8sService) when the target Iris cluster (iac.iris.service, used by
     # infra/ducky) is CoreWeave-backed.
     "marin-iris[controller]",
+    "marin-finelog",
     "marin-rigging",
     "pyyaml>=6.0",
 ]

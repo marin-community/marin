@@ -7,8 +7,8 @@
 # Build context must be the marin repo root:
 #   docker build -f lib/finelog/deploy/Dockerfile -t finelog:dev .
 #
-# The server is unauthenticated by design — restrict at the network layer
-# (k8s NetworkPolicy, GCP firewall). Do NOT expose it to the public internet.
+# The server's authenticated-ingress policy is default-deny. Keep Kubernetes
+# NetworkPolicy and GCP firewall restrictions as defense in depth.
 
 # ── Stage: dashboard ─────────────────────────────────────────────────
 # Build the Vue SPA. Output is consumed by the runtime stage at
@@ -89,7 +89,7 @@ RUN groupadd --system --gid 1000 finelog \
 
 VOLUME ["/var/cache/finelog"]
 
-# The k8s manifest sets FINELOG_PORT + FINELOG_REMOTE_DIR but NOT
+# The Kubernetes Deployment sets FINELOG_PORT + FINELOG_REMOTE_DIR but NOT
 # FINELOG_LOG_DIR; the Python launcher defaulted port=10001 and
 # log-dir=/var/cache/finelog in its CLI. The Rust clap CLI defaults port 8080
 # and has NO log-dir default — an unset log-dir runs the store in-memory and
