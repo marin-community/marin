@@ -3631,7 +3631,7 @@ wheels = [
 [[package]]
 name = "joint-decode"
 version = "0.1.0"
-source = { git = "https://github.com/RohithKuditipudi/joint-decode.git?rev=c3ab40cfcd51c628df84c53e5442dc4e18195473#c3ab40cfcd51c628df84c53e5442dc4e18195473" }
+source = { git = "https://github.com/RohithKuditipudi/joint-decode.git?rev=f438927f5c3ade6b157fc30715a055bf125a4e6a#f438927f5c3ade6b157fc30715a055bf125a4e6a" }
 dependencies = [
     { name = "fsspec" },
 ]
@@ -4651,7 +4651,7 @@ requires-dist = [
     { name = "jaxlib", marker = "extra == 'tpu'", specifier = "==0.10.1" },
     { name = "jaxlib", marker = "extra == 'vllm'", specifier = "==0.10.1" },
     { name = "jaxopt", specifier = ">=0.8.3" },
-    { name = "joint-decode", marker = "extra == 'vllm'", git = "https://github.com/RohithKuditipudi/joint-decode.git?rev=c3ab40cfcd51c628df84c53e5442dc4e18195473" },
+    { name = "joint-decode", marker = "extra == 'vllm'", git = "https://github.com/RohithKuditipudi/joint-decode.git?rev=f438927f5c3ade6b157fc30715a055bf125a4e6a" },
     { name = "libtpu", marker = "extra == 'tpu'", specifier = "==0.0.41" },
     { name = "libtpu", marker = "extra == 'vllm'", specifier = "==0.0.41" },
     { name = "lm-eval", extras = ["math"], marker = "extra == 'evalchemy'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },

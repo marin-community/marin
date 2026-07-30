@@ -177,7 +177,7 @@ vllm = { git = "https://github.com/marin-community/vllm.git", rev = "a0b205f2afd
 # https://github.com/marin-community/tpu-inference/compare/23d17a8120d9cc34890135599f42e1db4f947c10...734d2842aa883c8f7bcff87a4b437a366f3adbc0
 tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "734d2842aa883c8f7bcff87a4b437a366f3adbc0" }
 thalas = { git = "https://github.com/marin-community/thalas.git", rev = "6429a38c9747695111129b5b917836012cd77da8" }
-joint-decode = { git = "https://github.com/RohithKuditipudi/joint-decode.git", rev = "c3ab40cfcd51c628df84c53e5442dc4e18195473" }
+joint-decode = { git = "https://github.com/RohithKuditipudi/joint-decode.git", rev = "f438927f5c3ade6b157fc30715a055bf125a4e6a" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 
