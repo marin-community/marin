@@ -2,8 +2,7 @@
 
 How the Iris source tree is organized and the rule that keeps it navigable.
 For the controller's reconcile kernel specifically, see
-[`reconcile_rpc.md`](reconcile_rpc.md) and the design notes in
-`.agents/projects/reconcile-final-design.md`.
+[`reconcile_rpc.md`](reconcile_rpc.md).
 
 ## The one rule: five layers, imports go down
 

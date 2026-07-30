@@ -17,6 +17,8 @@ exceeds ``query_timeout``.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import json
 import logging
 import math
 import os
@@ -27,6 +29,7 @@ import time
 from collections.abc import Callable
 
 import duckdb
+import pyarrow as pa
 from iris.env_resources import TaskResources
 from rigging.filesystem import (
     MARIN_CROSS_REGION_OVERRIDE_ENV,
@@ -34,6 +37,7 @@ from rigging.filesystem import (
     cached_marin_region,
     get_bucket_location,
     is_cross_region_url,
+    prefix_join,
 )
 
 from ducky.catalog import DATAKIT_SCHEMA, FINELOG_SCHEMA, View, build_catalog
@@ -43,6 +47,19 @@ logger = logging.getLogger(__name__)
 
 # query_id is interpolated into the result path, so it must be a bare uuid4 hex.
 _QUERY_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+
+# Sub-prefix under `<scratch>/ducky/` for the restart-survivable cache sidecars — one small
+# parquet per distinct SQL, named by its hash, holding the metadata needed to rebuild a
+# QueryResult without re-executing. Kept under the same `ducky/` prefix so the scratch bucket's
+# lifecycle rule reaps a sidecar together with the result it points at.
+_CACHE_SUBDIR = "cache"
+
+
+def _sql_hash(sql: str) -> str:
+    """Content-address a query by the exact SQL text — the same identity the in-memory cache
+    keys on. A hex digest is filesystem-safe, so it can't inject into the sidecar path."""
+    return hashlib.sha256(sql.encode("utf-8")).hexdigest()
+
 
 # Object-store URIs referenced in the SQL (read_parquet('gs://…'), etc.). Stops at the
 # closing quote/paren/whitespace of the SQL literal.
@@ -271,11 +288,11 @@ class QueryRunner:
         self._con.execute(f"SET max_temp_directory_size = {_sql_literal(config.spill_limit)}")
         logger.info("DuckDB configured: threads=%d memory_limit_bytes=%d", threads, memory_limit_bytes)
         self._install_secrets()
-        # A local scratch dir (smoke deploy / tests) needs the ducky/ subdir to exist;
+        # A local scratch dir (smoke deploy / tests) needs the ducky/ subdirs to exist;
         # object stores create the prefix implicitly.
         scratch_is_remote = "://" in config.scratch_bucket
         if not scratch_is_remote:
-            os.makedirs(f"{config.scratch_bucket.rstrip('/')}/ducky", exist_ok=True)
+            os.makedirs(prefix_join(config.scratch_bucket, f"ducky/{_CACHE_SUBDIR}"), exist_ok=True)
         # Harden: when results go to object storage, block user SQL from touching the local
         # filesystem (e.g. read_text('/proc/self/environ') to exfil the injected creds). Object
         # stores are separate DuckDB filesystems and spilling is internal, so both still work.
@@ -402,7 +419,7 @@ class QueryRunner:
             needs_cross_region_optin,
         )
 
-        result_path = f"{self._config.scratch_bucket.rstrip('/')}/ducky/{query_id}.parquet"
+        result_path = prefix_join(self._config.scratch_bucket, f"ducky/{query_id}.parquet")
         path_literal = _sql_literal(result_path)
         # hive_partitioning=false: the scratch path embeds a `tmp/ttl=Nd/` segment, which
         # DuckDB would otherwise read back as a phantom `ttl` partition column.
@@ -442,7 +459,7 @@ class QueryRunner:
 
         columns = list(preview.column_names)
         preview_rows = [[_coerce_cell(row[col]) for col in columns] for row in preview.to_pylist()]
-        return QueryResult(
+        result = QueryResult(
             columns=columns,
             preview_rows=preview_rows,
             total_rows=total_rows,
@@ -450,6 +467,90 @@ class QueryRunner:
             result_path=result_path,
             elapsed_ms=elapsed_ms,
             result_bytes=result_bytes,
+        )
+        if self._config.persist_cache:
+            self._write_persistent_cache(sql, result)
+        return result
+
+    def _sidecar_path(self, sql: str) -> str:
+        """Scratch-bucket path of the cache sidecar for ``sql`` (content-addressed by SQL hash)."""
+        return prefix_join(self._config.scratch_bucket, f"ducky/{_CACHE_SUBDIR}/{_sql_hash(sql)}.meta.parquet")
+
+    def _write_persistent_cache(self, sql: str, result: QueryResult) -> None:
+        """Write the restart-survivable cache sidecar for ``sql`` (best-effort).
+
+        Stores everything needed to rebuild ``result`` without re-running the query: the capped
+        preview (already JSON-coercible scalars) and stats as a one-row parquet, plus the
+        wall-clock write time so a stale entry can be dropped on read. Written after the result
+        parquet, so its presence marks a complete result; a failure here only forfeits the future
+        cache hit — it must never fail the query that just succeeded."""
+        sidecar = pa.table(
+            {
+                "written_at": [time.time()],
+                "columns_json": [json.dumps(result.columns)],
+                "preview_json": [json.dumps(result.preview_rows)],
+                "total_rows": [result.total_rows],
+                "truncated": [result.truncated],
+                "result_path": [result.result_path],
+                "elapsed_ms": [result.elapsed_ms],
+                "result_bytes": [result.result_bytes],
+            }
+        )
+        try:
+            cursor = self._con.cursor()
+            try:
+                cursor.from_arrow(sidecar).write_parquet(self._sidecar_path(sql))
+            finally:
+                cursor.close()
+        except (duckdb.Error, OSError) as e:
+            logger.warning("failed to write persistent cache sidecar: %s", str(e).splitlines()[0])
+
+    def lookup_persistent(self, sql: str) -> QueryResult | None:
+        """Return a restart-survivable cached result for ``sql``, or None on miss/staleness.
+
+        Reads the sidecar written by a prior run (surviving the restarts that clear the in-memory
+        cache) and rebuilds the ``QueryResult`` — no source scan. Returns None if the sidecar is
+        absent, unreadable, or older than ``result_ttl_days`` (its result parquet may have been
+        reaped by the scratch bucket's lifecycle rule). Fails open: any error is a miss, so a
+        hiccup here just falls back to a normal run.
+
+        A hit is served only if the SQL still passes the *current* access policy: because the
+        persistent tier outlives the restart that re-reads config, a sidecar written under a looser
+        policy must not keep serving SQL that a tightened ``allowed_buckets``/region policy would
+        now refuse. The check runs against live config and raises (as a fresh run would) rather
+        than returning a stale-authorized result."""
+        if not self._config.persist_cache:
+            return None
+        try:
+            cursor = self._con.cursor()
+            try:
+                row = cursor.execute(
+                    "SELECT written_at, columns_json, preview_json, total_rows, truncated, "
+                    f"result_path, elapsed_ms, result_bytes FROM read_parquet({_sql_literal(self._sidecar_path(sql))})"
+                ).fetchone()
+            finally:
+                cursor.close()
+        except duckdb.Error:
+            return None  # absent or unreadable sidecar → miss
+        if row is None:
+            return None
+        if (time.time() - float(row[0])) > self._config.result_ttl_days * 86400:
+            return None  # past the TTL; the spilled result may already be gone
+        # Re-enforce the current egress/region policy on the cached SQL before serving it.
+        check_query_access(
+            sql,
+            self._config.effective_allowed_buckets,
+            self._config.catalog_root_prefixes,
+            needs_cross_region_optin,
+        )
+        return QueryResult(
+            columns=json.loads(row[1]),
+            preview_rows=json.loads(row[2]),
+            total_rows=int(row[3]),
+            truncated=bool(row[4]),
+            result_path=row[5],
+            elapsed_ms=int(row[6]),
+            result_bytes=int(row[7]),
         )
 
     def close(self) -> None:

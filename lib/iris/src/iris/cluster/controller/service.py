@@ -11,16 +11,17 @@ aggregated from task states.
 import json
 import logging
 import secrets
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
+from rigging.connect import capability_path, federated_capability_path
 from rigging.server_auth import ANONYMOUS_ADMIN, VerifiedIdentity, get_verified_identity, require_identity
 from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
 from sqlalchemy import bindparam, case, func, select, text, tuple_
@@ -47,6 +48,7 @@ from iris.cluster.controller.budget import (
     compute_effective_band,
     compute_user_spend,
 )
+from iris.cluster.controller.checkpoint import CHECKPOINT_EPOCH_META_KEY
 from iris.cluster.controller.codec import (
     decode_attribute_value,
     reconstruct_launch_job_request,
@@ -62,9 +64,12 @@ from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
 from iris.cluster.controller.reconcile.task import TerminalKind
 from iris.cluster.controller.scheduling.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
+    federation_changelog_table,
+    federation_sync_state_table,
     job_config_table,
     jobs_table,
     local_tasks,
+    meta_table,
     task_attempts_table,
     tasks_table,
     user_budgets_table,
@@ -73,7 +78,9 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerLiveness
+from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
 from iris.cluster.federation.manager import FederationManager
+from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.router import RoutingRequest, SubmitDisposition, SubmitPlan
 from iris.cluster.federation.store import HandoffState
 from iris.cluster.log_highlights import extract_failure_highlights
@@ -81,10 +88,15 @@ from iris.cluster.log_keys import build_log_source
 from iris.cluster.process_status import get_process_status
 from iris.cluster.redaction import redact_request_env_vars
 from iris.cluster.runtime.profile import (
-    PROFILE_NAMESPACE,
-    IrisProfile,
     build_profile_row,
     profile_local_process,
+)
+from iris.cluster.stats.tables import (
+    PROFILE_NAMESPACE,
+    TASK_EVENT_NAMESPACE,
+    TASK_EVENT_STORAGE_POLICY,
+    IrisProfile,
+    TaskEventRow,
 )
 from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
@@ -108,6 +120,9 @@ from iris.rpc.proto_display import (
 from iris.time_proto import duration_from_proto, duration_to_proto, timestamp_to_proto
 
 logger = logging.getLogger(__name__)
+
+# Return type of a proxied on-demand RPC (a unary controller response).
+_T = TypeVar("_T")
 
 
 def submitting_user_for_root(
@@ -159,17 +174,23 @@ _MERGED_AUTOSCALER_ACTIONS = 100
 # Max unroutable job sample entries returned by ListBackends.
 _UNROUTABLE_SAMPLE_SIZE = 10
 
-# Semantics version of BackendSummary.availability (free-capacity metric). A peer
-# reading an unrecognized version treats the amounts as unknown. Bump when the
-# meaning of the amounts (units, tokens, aggregation) changes.
-AVAILABILITY_METRIC_VERSION = 1
-
 # Shown when a local_admin (CIDR/loopback) caller tries to federate a job — a federated
 # job must carry an accountable authenticated user.
 _LOCAL_ADMIN_FEDERATION_DENIED = (
     "A local_admin (CIDR/loopback) identity cannot submit a federated job. "
     "Federating to a remote cluster requires an authenticated user — log in via "
     "IAP or present a user token so the submission carries your identity."
+)
+
+# What LaunchJob accepts in priority_band: the three real bands, plus INHERIT for a
+# client that wants the parent's band (or the INTERACTIVE default at a root).
+_SUBMITTABLE_PRIORITY_BANDS = frozenset(
+    {
+        job_pb2.PRIORITY_BAND_INHERIT,
+        job_pb2.PRIORITY_BAND_PRODUCTION,
+        job_pb2.PRIORITY_BAND_INTERACTIVE,
+        job_pb2.PRIORITY_BAND_BATCH,
+    }
 )
 
 
@@ -298,6 +319,9 @@ class TaskWithAttempts:
     current_worker_id: WorkerId | None
     current_worker_address: str | None
     container_id: str | None
+    # Backend status one-liner for a waiting/building task (why it is not running
+    # yet); None/"" when running or quiet. See tasks.status_message.
+    status_message: str | None
     backend_id: str
     cluster: str
     # Display worker identity for a federated task (the peer-side worker name from
@@ -328,6 +352,7 @@ class TaskWithAttempts:
             current_worker_id=row.current_worker_id,
             current_worker_address=row.current_worker_address,
             container_id=row.container_id,
+            status_message=row.status_message,
             backend_id=str(row.backend_id or ""),
             cluster=str(row.cluster),
             peer_worker_label=str(row.peer_worker_label or ""),
@@ -377,6 +402,10 @@ def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.T
             error=attempt.error or "",
             is_worker_failure=attempt_is_worker_failure(attempt.state),
             attempt_uid=attempt.attempt_uid,
+            pod_name=attempt.pod_name or "",
+            pod_uid=attempt.pod_uid or "",
+            node_name=attempt.node_name or "",
+            terminal_reason=attempt.terminal_reason or "",
         )
         if attempt.started_at_ms is not None:
             proto_attempt.started_at.CopyFrom(timestamp_to_proto(attempt.started_at_ms))
@@ -413,6 +442,8 @@ def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.T
         proto.finished_at.CopyFrom(timestamp_to_proto(current_attempt.finished_at_ms))
     if task.container_id:
         proto.container_id = task.container_id
+    if task.status_message:
+        proto.status_message = task.status_message
     # For pending tasks with prior terminal attempts, surface retry context.
     if task.state == job_pb2.TASK_STATE_PENDING and task.attempts and task.attempts[-1].state in TERMINAL_TASK_STATES:
         last = task.attempts[-1]
@@ -979,6 +1010,10 @@ def _attempts_for_worker(
             error=row.error or "",
             is_worker_failure=attempt_is_worker_failure(row.state),
             attempt_uid=row.attempt_uid,
+            pod_name=row.pod_name or "",
+            pod_uid=row.pod_uid or "",
+            node_name=row.node_name or "",
+            terminal_reason=row.terminal_reason or "",
         )
         if row.started_at_ms is not None:
             proto_attempt.started_at.CopyFrom(timestamp_to_proto(row.started_at_ms))
@@ -1006,6 +1041,28 @@ class PendingKick:
     attempt_id: int | None
     kind: TerminalKind
     reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class CapabilityUrlConfig:
+    """Origins for fully-qualifying a minted endpoint's capability URL.
+
+    With ``parent_origin`` and ``cluster_name`` set (a child fronted by a public
+    parent), a minted URL is the cluster-tagged parent form the parent relays; with
+    only ``local_origin`` set, the plain local form; with neither, the response
+    carries no URL and the caller prints just the path.
+    """
+
+    cluster_name: str = ""
+    local_origin: str = ""
+    parent_origin: str = ""
+
+    def build(self, name: str, token: str) -> str:
+        if self.parent_origin and self.cluster_name:
+            return f"{self.parent_origin.rstrip('/')}{federated_capability_path(self.cluster_name, name, token)}"
+        if self.local_origin:
+            return f"{self.local_origin.rstrip('/')}{capability_path(name, token)}"
+        return ""
 
 
 class ControllerProtocol(Protocol):
@@ -1103,6 +1160,7 @@ class ControllerServiceImpl:
         endpoint_service: EndpointServiceImpl,
         auth: ControllerAuth | None = None,
         user_budget_defaults: UserBudgetDefaults | None = None,
+        capability_url_config: CapabilityUrlConfig | None = None,
     ):
         # Every cursor this DB mints carries the per-controller cache registry as
         # ``tx.caches``, so cache-touching reads/writes reach the derived-count memo
@@ -1117,13 +1175,32 @@ class ControllerServiceImpl:
         self._timer = Timer()
         self._auth = auth or ControllerAuth()
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
+        self._capability_url_config = capability_url_config or CapabilityUrlConfig()
         self._profile_table = self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
+        self._db.attach_task_event_table(
+            self._log_client.get_table(
+                TASK_EVENT_NAMESPACE,
+                TaskEventRow,
+                storage_policy=TASK_EVENT_STORAGE_POLICY,
+            )
+        )
 
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get(bundle_id)
 
     def blob_data(self, blob_id: str) -> bytes:
         return self._bundle_store.get(blob_id)
+
+    def probe_database(self) -> int | None:
+        """Return checkpoint ancestry after verifying controller state is readable."""
+        with self._db.read_snapshot() as tx:
+            checkpoint_epoch_ms = tx.execute(
+                select(meta_table.c.value).where(meta_table.c.key == CHECKPOINT_EPOCH_META_KEY)
+            ).scalar()
+            tx.execute(select(task_attempts_table.c.attempt_uid).limit(1)).first()
+            tx.execute(select(federation_changelog_table.c.seq).limit(1)).first()
+            tx.execute(select(federation_sync_state_table.c.peer_id).limit(1)).first()
+        return int(checkpoint_epoch_ms) if checkpoint_epoch_ms is not None else None
 
     def _get_autoscaler_pending_hints(self) -> dict[str, PendingHint]:
         """Build autoscaler-based pending hints keyed by job id, merged across
@@ -1202,10 +1279,32 @@ class ControllerServiceImpl:
         identity = get_verified_identity()
         if identity is not None and identity.role == FEDERATION_PEER_ROLE:
             with self._db.read_snapshot() as snap:
-                if reads.received_requester(snap, job_id) == identity.user_id:
+                handoff = reads.received_handoff(snap, job_id)
+                if handoff is not None and handoff.requester_id == identity.user_id:
                     return
             raise ConnectError(Code.PERMISSION_DENIED, f"Peer {identity.user_id!r} did not federate job {job_id}")
         authorize_resource_owner(job_id.user)
+
+    def _authorize_federated_debug_target(self, root_job: JobName) -> None:
+        """Scope a federation peer's on-demand debug RPC to a job it federated here.
+
+        ``authorize_method`` admits ProfileTask/ExecInContainer/GetProcessStatus for a
+        ``FEDERATION_PEER_ROLE`` identity; this confirms ``root_job`` is one the peer
+        actually handed off (matching its received handle), so a peer cannot profile,
+        exec into, or inspect this cluster's own tasks. Non-peer callers pass through
+        untouched — their access stays governed by ``authorize_method``'s role
+        allowlist, so the read-only dashboard keeps reading any task's process status.
+        """
+        if not self._auth.provider:
+            return
+        identity = get_verified_identity()
+        if identity is None or identity.role != FEDERATION_PEER_ROLE:
+            return
+        with self._db.read_snapshot() as snap:
+            handoff = reads.received_handoff(snap, root_job)
+            if handoff is not None and handoff.requester_id == identity.user_id:
+                return
+        raise ConnectError(Code.PERMISSION_DENIED, f"Peer {identity.user_id!r} did not federate job {root_job}")
 
     def _wait_until_job_drained(self, job_id: JobName, wait: Duration) -> bool:
         """Wait up to ``wait`` for ``job_id`` to have no unfinished worker-bound
@@ -1223,7 +1322,7 @@ class ControllerServiceImpl:
 
         return ExponentialBackoff(initial=1.0, maximum=10.0, factor=2).wait_until(drained, timeout=wait)
 
-    def _replace_finished_job(self, cur, job_id: JobName) -> bool:
+    def _replace_finished_job(self, cur, job_id: JobName, *, record_tombstone: bool = True) -> bool:
         """Attempt to replace a terminal job; signal whether a drain is needed.
 
         CASCADE-deleting a job's tasks while its attempts are still worker-
@@ -1236,7 +1335,7 @@ class ControllerServiceImpl:
         """
         if reads.has_unfinished_worker_attempts(cur, job_id):
             return True
-        ops.job.remove_finished(cur, job_id)
+        ops.job.remove_finished(cur, job_id, record_tombstone=record_tombstone)
         return False
 
     def _admit_federated_resubmit(
@@ -1244,22 +1343,28 @@ class ControllerServiceImpl:
         cur: Tx,
         job_id: JobName,
         request: controller_pb2.Controller.LaunchJobRequest,
-    ) -> controller_pb2.Controller.LaunchJobResponse:
+    ) -> controller_pb2.Controller.LaunchJobResponse | None:
         """Federation-aware admission for a handoff whose job id already exists.
 
-        Runs before the generic ``existing_job_policy`` switch, so it governs a
-        handoff regardless of that policy. A re-drive from the *same* requester
-        (recorded as a RECEIVED handle) is an idempotent replay — return the existing
-        job. Any other existing row — a local job, a job received from a different
-        requester, or a SENT handle — is a genuine collision the parent must see, so
-        reject with ``ALREADY_EXISTS``.
+        A delivery repeating the stored nonce from the same requester is an
+        idempotent replay: return the existing job and re-report its state, so a
+        parent whose sync cursor already consumed this job's deltas still
+        converges. The same requester with a new nonce is a fresh incarnation
+        (the parent replaced its finished job and resubmitted): return ``None``
+        and the caller applies the generic ``existing_job_policy``. Anything
+        else — a local job, a different requester's job, or a SENT handle — is a
+        collision: raise ``ALREADY_EXISTS``.
         """
-        if reads.received_requester(cur, job_id) == request.federation.requester_id:
-            return controller_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
-        raise ConnectError(
-            Code.ALREADY_EXISTS,
-            f"Job {job_id} already exists and was not handed off by {request.federation.requester_id!r}",
-        )
+        handoff = reads.received_handoff(cur, job_id)
+        if handoff is None or handoff.requester_id != request.federation.requester_id:
+            raise ConnectError(
+                Code.ALREADY_EXISTS,
+                f"Job {job_id} already exists and was not handed off by {request.federation.requester_id!r}",
+            )
+        if handoff.handoff_nonce != request.federation.handoff_nonce:
+            return None
+        writes.record_federation_change(cur, job_id)
+        return controller_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
 
     def _queue_federated_job(
         self,
@@ -1387,31 +1492,55 @@ class ControllerServiceImpl:
         #   configured tiers and UserBudgetDefaults still bite — an unlisted
         #   submitter hits the INTERACTIVE default cap and can't punch up to
         #   PRODUCTION just by skipping auth.
-        # UNSPECIFIED (0) defaults to INTERACTIVE. A received handoff's band was
-        # authorized by the parent against the original submitter and their budget
-        # tier; the receiving cluster does not manage that user, so it trusts the
-        # parent rather than re-gating on its own tiers (the submitter allowlist
-        # bounds who may federate here).
-        band = request.priority_band or job_pb2.PRIORITY_BAND_INTERACTIVE
-        if is_received_handoff:
-            pass
-        elif band == job_pb2.PRIORITY_BAND_PRODUCTION and self._auth.provider:
-            authorize(AuthzAction.MANAGE_BUDGETS)
-        else:
+        # A received handoff's band was authorized by the parent against the original
+        # submitter and their budget tier; the receiving cluster does not manage that
+        # user, so it trusts the parent rather than re-gating on its own tiers (the
+        # submitter allowlist bounds who may federate here).
+        #
+        # This is the one place INHERIT becomes a real band: resolve it here, gate that
+        # result, and store it. Everything behind this point — the scheduler, spend, the
+        # k8s mapping, a federated handoff — only ever sees PRODUCTION, INTERACTIVE, or
+        # BATCH, so none of them re-derive a band of their own.
+        #
+        # Gating the resolved band rather than the request matters because the client
+        # chooses whether to send the field; gating the request would let it pick whether
+        # the cap applies at all. Inheriting a band at or below the cap still passes, so a
+        # capped user's children launch normally.
+        # proto3 enums are open, so a newer or buggy client can put an integer here that
+        # names no band. Reject it at the boundary rather than storing it as a "real" one.
+        if request.priority_band not in _SUBMITTABLE_PRIORITY_BANDS:
+            raise ConnectError(
+                Code.INVALID_ARGUMENT,
+                f"Unknown priority_band {int(request.priority_band)}; "
+                f"expected one of {sorted(_SUBMITTABLE_PRIORITY_BANDS)}",
+            )
+        inherited_band: int | None = None
+        if request.priority_band == job_pb2.PRIORITY_BAND_INHERIT and job_id.parent is not None:
             with self._db.read_snapshot() as _snap:
-                user_budget = reads.get_user_budget(_snap, job_id.user)
-            max_band = user_budget.max_band if user_budget is not None else self._user_budget_defaults.max_band
-            if band < max_band:
-                raise ConnectError(
-                    Code.PERMISSION_DENIED,
-                    f"User {job_id.user} cannot submit {priority_band_name(band)} jobs "
-                    f"(max band: {priority_band_name(max_band)}). "
-                    f"Resubmit with `--priority {priority_band_name(max_band).lower()}` "
-                    f"(e.g. `--priority batch`) to launch opportunistically, or ping @Helw150 "
-                    f"if you believe your username ({job_id.user}) should have a higher band — "
-                    f"either to be added to the researcher list or to confirm your username is "
-                    f"registered correctly.",
-                )
+                inherited_band = reads.get_priority_bands(_snap, [job_id.parent])[job_id.parent]
+        band = ops.job.resolve_priority_band(int(request.priority_band), inherited_band)
+        # Normalize the request itself, so every downstream consumer of it — the local
+        # insert, a queued handoff's stored config, the request the peer finally runs —
+        # reads the same real band without re-deriving one.
+        request.priority_band = band
+        if not is_received_handoff:
+            if band == job_pb2.PRIORITY_BAND_PRODUCTION and self._auth.provider:
+                authorize(AuthzAction.MANAGE_BUDGETS)
+            else:
+                with self._db.read_snapshot() as _snap:
+                    user_budget = reads.get_user_budget(_snap, job_id.user)
+                max_band = user_budget.max_band if user_budget is not None else self._user_budget_defaults.max_band
+                if band < max_band:
+                    raise ConnectError(
+                        Code.PERMISSION_DENIED,
+                        f"User {job_id.user} cannot submit {priority_band_name(band)} jobs "
+                        f"(max band: {priority_band_name(max_band)}). "
+                        f"Resubmit with `--priority {priority_band_name(max_band).lower()}` "
+                        f"(e.g. `--priority batch`) to launch opportunistically, or ping @Helw150 "
+                        f"if you believe your username ({job_id.user}) should have a higher band — "
+                        f"either to be added to the researcher list or to confirm your username is "
+                        f"registered correctly.",
+                    )
 
         # Elevated profiles (DOCKER_ACCESS, PRIVILEGED) are host-root-equivalent
         # and require the admin role. The check only runs when an auth provider is
@@ -1441,6 +1570,19 @@ class ControllerServiceImpl:
                 "Container profile docker_access requires the docker worker backend (it mounts the "
                 "host docker socket); this cluster's backend does not support it. Use a privileged "
                 "profile with an in-pod runtime, or submit to a docker-worker cluster.",
+            )
+
+        # gVisor runs the container under the runsc runtime, which cannot pass an
+        # accelerator through to the guest. Reject a GPU/TPU task up front rather
+        # than let it start under a runtime that can't see the device.
+        if resolve_container_profile(
+            request.container_profile
+        ) == job_pb2.CONTAINER_PROFILE_GVISOR and request.resources.device.WhichOneof("device") in ("gpu", "tpu"):
+            raise ConnectError(
+                Code.INVALID_ARGUMENT,
+                "Container profile gvisor is CPU-only: the runsc runtime cannot pass a GPU or TPU "
+                "through to the sandboxed guest. Use the default or privileged profile for "
+                "accelerator tasks.",
             )
 
         # Cap the number of non-terminal tasks a single user may hold at once.
@@ -1490,14 +1632,20 @@ class ControllerServiceImpl:
         # avoid tripping the jobs.job_id PK. See the inner re-check at
         # the second ``with self._db.transaction()`` below.
         needs_drain = False
+        # A federated replacement (same requester, new handoff nonce) deletes the
+        # previous run's rows without a tombstone: the job id lives on, so the
+        # parent must mirror the fresh run, not drop its handle.
+        record_tombstone = not is_received_handoff
         with self._db.transaction() as cur:
             existing_state = reads.get_job_state(cur, job_id)
             if existing_state is not None:
-                # A received handoff whose id already exists takes the federation
-                # admission path (idempotent re-drive vs. genuine collision) before
-                # any generic replace/keep policy applies.
-                if request.HasField("federation"):
-                    return self._admit_federated_resubmit(cur, job_id, request)
+                # Federation admission first: a replay returns the existing job,
+                # a collision raises, and a new incarnation (``None``) falls
+                # through to the policy switch like any local resubmission.
+                if is_received_handoff:
+                    replay = self._admit_federated_resubmit(cur, job_id, request)
+                    if replay is not None:
+                        return replay
                 policy = request.existing_job_policy
                 if policy == job_pb2.EXISTING_JOB_POLICY_ERROR:
                     raise ConnectError(
@@ -1511,7 +1659,9 @@ class ControllerServiceImpl:
                     # If worker-bound attempts haven't finalized yet (e.g. the
                     # task is terminal at the job level but its attempt is still
                     # pending a heartbeat), defer to the drain wait below.
-                    needs_drain = needs_drain or self._replace_finished_job(cur, job_id)
+                    needs_drain = needs_drain or self._replace_finished_job(
+                        cur, job_id, record_tombstone=record_tombstone
+                    )
                 elif policy == job_pb2.EXISTING_JOB_POLICY_RECREATE:
                     if not is_job_finished(existing_state):
                         ops.job.cancel(
@@ -1527,7 +1677,9 @@ class ControllerServiceImpl:
                         # path is still racing to land.
                         needs_drain = True
                     else:
-                        needs_drain = needs_drain or self._replace_finished_job(cur, job_id)
+                        needs_drain = needs_drain or self._replace_finished_job(
+                            cur, job_id, record_tombstone=record_tombstone
+                        )
                 elif is_job_finished(existing_state):
                     # Default/UNSPECIFIED: replace finished jobs
                     logger.info(
@@ -1535,7 +1687,9 @@ class ControllerServiceImpl:
                         job_id,
                         job_pb2.JobState.Name(existing_state),
                     )
-                    needs_drain = needs_drain or self._replace_finished_job(cur, job_id)
+                    needs_drain = needs_drain or self._replace_finished_job(
+                        cur, job_id, record_tombstone=record_tombstone
+                    )
                 else:
                     raise ConnectError(Code.ALREADY_EXISTS, f"Job {job_id} already exists and is still running")
 
@@ -1553,7 +1707,7 @@ class ControllerServiceImpl:
                     _JOB_REPLACEMENT_DRAIN_WAIT.to_seconds(),
                 )
             with self._db.transaction() as cur:
-                ops.job.remove_finished(cur, job_id)
+                ops.job.remove_finished(cur, job_id, record_tombstone=record_tombstone)
 
         # Handle bundle_blob: upload to bundle store, then replace blob
         # with the resulting GCS path (preserving all other fields).
@@ -1658,7 +1812,6 @@ class ControllerServiceImpl:
         # never picks a peer — the control tick's federation pass does, once a peer
         # reports free capacity. A job this cluster received via handoff (federation
         # field set) always runs here — it is never re-federated — so it skips this.
-        is_received_handoff = request.HasField("federation")
         if is_received_handoff:
             plan = SubmitPlan(SubmitDisposition.LOCAL)
         else:
@@ -1713,7 +1866,16 @@ class ControllerServiceImpl:
             # replace without re-running the whole flow.
             if reads.get_job_state(cur, job_id) is not None:
                 if request.HasField("federation"):
-                    return self._admit_federated_resubmit(cur, job_id, request)
+                    replay = self._admit_federated_resubmit(cur, job_id, request)
+                    if replay is not None:
+                        return replay
+                    # A different incarnation of the same requester's job landed
+                    # between the two transactions; too late to re-run the
+                    # replacement flow, so surface the collision.
+                    raise ConnectError(
+                        Code.ALREADY_EXISTS,
+                        f"Job {job_id} already exists (concurrent submission)",
+                    )
                 if request.existing_job_policy == job_pb2.EXISTING_JOB_POLICY_KEEP:
                     return controller_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
                 raise ConnectError(
@@ -1725,6 +1887,7 @@ class ControllerServiceImpl:
                 job_id=job_id,
                 request=request,
                 ts=Timestamp.now(),
+                priority_band=band,
                 submitting_user=submitting_user,
             )
         self._controller.wake()
@@ -1873,6 +2036,11 @@ class ControllerServiceImpl:
                 job_id=job_id,
                 reason="Terminated by user",
             )
+            # Re-report the job's state to its requester (a no-op unless this
+            # root was received via handoff). A routed cancel of an already-
+            # terminal job changes nothing, and this re-report is what converges
+            # the parent's stale mirror and stops its cancel re-drive.
+            writes.record_federation_change(cur, job_id)
         # The next polling tick reconciles each affected worker; the
         # cancellation appears in the desired-set diff so the worker stops
         # the attempt within one tick rather than waiting on the next backoff.
@@ -2324,11 +2492,12 @@ class ControllerServiceImpl:
             has_more=has_more,
         )
 
-    # --- Endpoint Management (compatibility surface) ---
+    # --- Endpoint registry (deprecated compatibility surface) ---
     #
-    # These RPCs forward to the leased EndpointService backend so clients that
-    # call the old surface keep working; clients that want to renew call
-    # EndpointService directly to learn their lease.
+    # EndpointService is the canonical home and all current clients call it. These
+    # forward there so a pre-migration worker or task (e.g. an already-running log
+    # shipper) that still calls the old ControllerService surface keeps working
+    # across a controller update. Remove once those old callers have drained.
 
     def register_endpoint(
         self,
@@ -2381,6 +2550,20 @@ class ControllerServiceImpl:
         with self._db.read_snapshot() as snap:
             return reads.federated_handle(snap, task_id.root_job)
 
+    def _proxy_if_federated(self, task_id: JobName, call: Callable[[FederationPeer], _T]) -> _T | None:
+        """Forward an on-demand RPC to its owning peer if ``task_id`` is federated.
+
+        ``call`` invokes the matching typed method on the peer connection; the peer is
+        authoritative, so its ``NOT_FOUND`` for a moved or finished task propagates
+        back. Returns the peer's response, or ``None`` when the root job runs locally —
+        the caller then resolves it against the local backend. The proxied responses
+        are unary messages, never ``None``, so callers dispatch on ``is not None``.
+        """
+        handle = self._federated_handle_for_task(task_id)
+        if handle is None:
+            return None
+        return self._controller.federation.proxy_to_peer(handle.peer_id, call)
+
     def _resolve_task_target(self, task: TaskWithAttempts, attempt_id: int, *, wire_name: str) -> TaskTarget:
         """Resolve a running task to a :class:`TaskTarget` for on-demand worker RPCs.
 
@@ -2390,11 +2573,20 @@ class ControllerServiceImpl:
         its worker is gone or unhealthy. Shared by ``profile_task`` and
         ``exec_in_container``.
         """
+        # The K8s backend rebuilds the pod name from (task_id, attempt_id, uid);
+        # the uid rides on the attempt rows already attached to ``task``.
+        attempt_uid = next((a.attempt_uid for a in task.attempts if a.attempt_id == attempt_id), "")
         task_worker_id = _task_worker_id(task)
         if not task_worker_id:
             if BackendCapability.CLUSTER_VIEW not in self._controller.capabilities:
                 raise ConnectError(Code.FAILED_PRECONDITION, f"Task {wire_name} not yet assigned to a worker")
-            return TaskTarget(task_id=task.task_id.to_wire(), attempt_id=attempt_id, worker_id=None, address=None)
+            return TaskTarget(
+                task_id=task.task_id.to_wire(),
+                attempt_id=attempt_id,
+                worker_id=None,
+                address=None,
+                attempt_uid=attempt_uid,
+            )
         worker = _read_worker(self._db, task_worker_id)
         if not worker or not self._controller.liveness_for_worker(task_worker_id).healthy:
             raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
@@ -2403,6 +2595,7 @@ class ControllerServiceImpl:
             attempt_id=attempt_id,
             worker_id=task_worker_id,
             address=worker.address,
+            attempt_uid=attempt_uid,
         )
 
     @property
@@ -2591,6 +2784,7 @@ class ControllerServiceImpl:
             target.task_id.require_task()
         except ValueError as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
+        self._authorize_federated_debug_target(target.task_id.root_job)
         task = _read_task_with_attempts(self._db, target.task_id)
         if not task:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.target} not found")
@@ -2599,12 +2793,9 @@ class ControllerServiceImpl:
         # attempt rows. Proxy the profile through the peer controller (which does
         # its own task->worker resolution) before the local resolution below, so
         # it is never dispatched to _backend_for_id's local fallback.
-        handle = self._federated_handle_for_task(target.task_id)
-        if handle is not None:
-            return self._controller.federation.proxy_profile(
-                peer_id=handle.peer_id,
-                request=request,
-            )
+        proxied = self._proxy_if_federated(target.task_id, lambda peer: peer.profile_task(request))
+        if proxied is not None:
+            return proxied
 
         attempt_id = target.attempt_id if target.attempt_id is not None else task.current_attempt_id
         task_target = self._resolve_task_target(task, attempt_id, wire_name=request.target)
@@ -2725,6 +2916,8 @@ class ControllerServiceImpl:
         Target routing (same convention as ProfileTask):
         - empty or /system/process: the controller process itself
         - /system/worker/<worker_id>: proxy to a specific worker
+        - /job/.../task/N: the process serving that task — proxied to the owning
+          peer for a federated task, else resolved against the local backend.
         """
         target = request.target
         if not target or target == "/system/process":
@@ -2733,7 +2926,7 @@ class ControllerServiceImpl:
         # Parse /system/worker/<worker_id>
         worker_id = _parse_worker_target(target)
         if worker_id is None:
-            raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid target: {target}")
+            return self._task_process_status(target, request)
 
         worker = _read_worker(self._db, WorkerId(worker_id))
         if not worker:
@@ -2752,6 +2945,37 @@ class ControllerServiceImpl:
                 self._controller.backend_id_for_scale_group(str(worker.scale_group or ""))
             )
             return worker_backend.get_process_status(process_target, request)
+        except ProviderError as exc:
+            raise ConnectError(Code.UNAVAILABLE, str(exc)) from exc
+
+    def _task_process_status(
+        self, target: str, request: job_pb2.GetProcessStatusRequest
+    ) -> job_pb2.GetProcessStatusResponse:
+        """Process status for a ``/job/.../task/N`` target.
+
+        A federated task's subtree runs on a peer, so the request is proxied through
+        the peer controller before any local resolution. Otherwise the owning backend
+        reports it: a worker-daemon backend returns the worker hosting the task; the
+        K8s backend reads the task pod's PID 1.
+        """
+        try:
+            task_id = JobName.from_wire(target)
+            task_id.require_task()
+        except ValueError as exc:
+            raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid target: {target}") from exc
+
+        self._authorize_federated_debug_target(task_id.root_job)
+        task = _read_task_with_attempts(self._db, task_id)
+        if not task:
+            raise ConnectError(Code.NOT_FOUND, f"Task {target} not found")
+
+        proxied = self._proxy_if_federated(task_id, lambda peer: peer.get_process_status(request))
+        if proxied is not None:
+            return proxied
+
+        task_target = self._resolve_task_target(task, task.current_attempt_id, wire_name=target)
+        try:
+            return self._backend_for_id(str(task.backend_id or "")).get_process_status(task_target, request)
         except ProviderError as exc:
             raise ConnectError(Code.UNAVAILABLE, str(exc)) from exc
 
@@ -2794,6 +3018,7 @@ class ControllerServiceImpl:
         return controller_pb2.Controller.MintEndpointTokenResponse(
             token=token,
             expires_at=timestamp_to_proto(expires_at),
+            capability_url=self._capability_url_config.build(row.name, token),
         )
 
     def get_current_user(
@@ -2824,6 +3049,7 @@ class ControllerServiceImpl:
         except ValueError as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
 
+        self._authorize_federated_debug_target(task_id.root_job)
         task = _read_task_with_attempts(self._db, task_id)
         if not task:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
@@ -2832,12 +3058,9 @@ class ControllerServiceImpl:
         # attempt rows. Proxy the exec through the peer controller (which does its
         # own task->worker resolution) before the local resolution below, so it is
         # never dispatched to _backend_for_id's local fallback.
-        handle = self._federated_handle_for_task(task_id)
-        if handle is not None:
-            return self._controller.federation.proxy_exec(
-                peer_id=handle.peer_id,
-                request=request,
-            )
+        proxied = self._proxy_if_federated(task_id, lambda peer: peer.exec_in_container(request))
+        if proxied is not None:
+            return proxied
 
         worker_request = worker_pb2.Worker.ExecInContainerRequest(
             task_id=request.task_id,
@@ -3181,17 +3404,23 @@ class ControllerServiceImpl:
             for key, values in adv.items():
                 summary.advertised_attributes[key].values.extend(sorted(values))
 
-            # Free-capacity metric for federation queueing. A backend that supplies
-            # it (worker-daemon) fills availability even when empty (authoritative
-            # zero); one that returns None (CLUSTER_VIEW) leaves it UNSET so a peer
-            # falls back to shape-only federation. observation_epoch_ms is the
-            # generation the parent's reservation ledger keys on.
-            free = backend.available_resources()
-            if free is not None:
+            # Capacity metric for federation queueing and the dashboard. A backend
+            # that supplies it fills availability even when empty (authoritative
+            # zero); one that returns None leaves it UNSET so a peer falls back to
+            # shape-only federation. observation_epoch_ms is the generation the
+            # parent's reservation ledger keys on.
+            capacity = backend.resource_capacity()
+            if capacity is not None:
                 summary.availability.version = AVAILABILITY_METRIC_VERSION
                 summary.availability.observation_epoch_ms = Timestamp.now().epoch_ms()
-                for token, amount in free.items():
-                    summary.availability.amounts[token] = amount
+                held_by_band: dict[int, dict[str, int]] = {}
+                for token, device_capacity in capacity.items():
+                    summary.availability.amounts[token] = device_capacity.free
+                    summary.availability.total_amounts[token] = device_capacity.total
+                    for band, amount in device_capacity.held_by_band.items():
+                        held_by_band.setdefault(band, {})[token] = amount
+                for band, amounts in sorted(held_by_band.items()):
+                    summary.availability.held_by_band.add(band=band, amounts=amounts)
 
             if variant == "kubernetes":
                 summary.detail.kubernetes.CopyFrom(backend_status.kubernetes)
@@ -3227,7 +3456,10 @@ class ControllerServiceImpl:
         return controller_pb2.Controller.ListPeersResponse(peers=self._controller.federation.peer_summaries())
 
     def _federated_job_summary(self, q: Tx, job) -> job_pb2.JobStatus:
-        """A ``JobStatus`` for a handed-off job as this peer holds it (sync summary)."""
+        """A ``JobStatus`` for a handed-off job as this peer holds it (sync summary).
+
+        Carries the job's resource spec, which the requester mirrors onto its config.
+        """
         summaries = reads.task_summaries_for_jobs(
             q, {job.job_id}, attempt_counts=q.caches[AttemptCountsProjection].get_jobs(q, [job.job_id])
         )
@@ -3239,6 +3471,7 @@ class ControllerServiceImpl:
             name=job.name,
             backend_id=job.backend_id or "",
             cluster=job.cluster,
+            resources=resource_spec_from_job_row(job),
             **_job_status_counts(summaries.get(job.job_id), job.job_id),
         )
         if job.started_at_ms:
@@ -3366,6 +3599,13 @@ class ControllerServiceImpl:
                     order.append(row.job_id)
                 if row.tombstone:
                     tombstoned[row.job_id] = True
+                elif tombstoned[row.job_id]:
+                    # Re-created after a delete within this window (a prune racing
+                    # a fresh handoff of the same id): rows are in seq order, so
+                    # the later creation supersedes the tombstone — report full
+                    # current state, not an instruction to drop the handle.
+                    tombstoned[row.job_id] = False
+                    all_tasks[row.job_id] = True
                 elif row.task_index is None:
                     all_tasks[row.job_id] = True
                 else:

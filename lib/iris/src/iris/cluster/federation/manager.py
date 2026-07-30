@@ -19,6 +19,7 @@ to hand a job off or run the sync loop; the observability slice (heartbeat,
 import logging
 import threading
 from collections.abc import Callable, Sequence
+from typing import TypeVar
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -27,6 +28,7 @@ from rigging.timing import Duration, Timestamp
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import BACKEND_CONSTRAINT_KEY, CLUSTER_CONSTRAINT_KEY
 from iris.cluster.federation.availability import (
+    AVAILABILITY_METRIC_VERSION,
     BackendAvailability,
     PeerAvailability,
     Promotion,
@@ -43,9 +45,12 @@ from iris.cluster.federation.store import (
 )
 from iris.cluster.types import JobName
 from iris.managed_thread import ManagedThread, ThreadContainer
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2
 
 logger = logging.getLogger(__name__)
+
+# Return type of a proxied on-demand RPC (a unary controller response).
+_T = TypeVar("_T")
 
 DEFAULT_HEARTBEAT_INTERVAL = Duration.from_seconds(30)
 DEFAULT_SYNC_INTERVAL = Duration.from_seconds(3)
@@ -64,6 +69,36 @@ _PEER_RPC_ERRORS = (ConnectError, ConnectionError, OSError)
 # auth failures are excluded — a federation bearer is minted per request, so
 # UNAUTHENTICATED is a key/clock/rollout transient that a later attempt can clear.
 _TERMINAL_HANDOFF_CODES = frozenset({Code.ALREADY_EXISTS, Code.PERMISSION_DENIED, Code.INVALID_ARGUMENT})
+
+
+def _backend_availability(peer_id: str, backend: controller_pb2.Controller.BackendSummary) -> BackendAvailability:
+    """Project one heartbeat backend into the assignment pass's view of it.
+
+    A backend supplies a usable capacity metric only when it set the availability
+    wrapper at a version this parent knows how to read; anything newer is dropped to
+    shape-only matching rather than acted on with the wrong semantics.
+    """
+    understood = backend.HasField("availability") and backend.availability.version <= AVAILABILITY_METRIC_VERSION
+    if backend.HasField("availability") and not understood:
+        logger.warning(
+            "Peer %s backend %s reports availability metric v%d, newer than v%d: matching it on shape alone",
+            peer_id,
+            backend.backend_id,
+            backend.availability.version,
+            AVAILABILITY_METRIC_VERSION,
+        )
+    return BackendAvailability(
+        backend_id=backend.backend_id,
+        supplies_metric=understood,
+        generation=backend.availability.observation_epoch_ms if understood else 0,
+        amounts=dict(backend.availability.amounts) if understood else {},
+        held_by_band=(
+            {held.band: dict(held.amounts) for held in backend.availability.held_by_band if held.band}
+            if understood
+            else {}
+        ),
+        advertised_shape={key: list(values.values) for key, values in backend.advertised_attributes.items()},
+    )
 
 
 class FederationManager:
@@ -188,23 +223,19 @@ class FederationManager:
     def peer_availability(self) -> list[PeerAvailability]:
         """Each configured peer's reachability + per-backend advertised availability.
 
-        Read off the latest capability heartbeat. A backend that set the availability
-        wrapper supplies a free-capacity metric (``supplies_metric``); a legacy backend
-        that did not is matched on shape alone.
+        Read off the latest capability heartbeat. A backend supplies a free-capacity
+        metric (``supplies_metric``) when it set the availability wrapper at a version
+        this parent understands; a legacy backend that set none, and a backend
+        reporting a newer metric version whose meaning is unknown here, are both
+        matched on shape alone. ``held_by_band`` is what admitted work holds there, per
+        priority band, which the assignment pass reads as capacity a higher-priority
+        candidate could reclaim; a band of UNSPECIFIED carries no preemption order and
+        is dropped.
         """
         result: list[PeerAvailability] = []
         for peer_id, peer in sorted(self._peers.items()):
             heartbeat = peer.heartbeat()
-            backends = [
-                BackendAvailability(
-                    backend_id=backend.backend_id,
-                    supplies_metric=backend.HasField("availability"),
-                    generation=backend.availability.observation_epoch_ms,
-                    amounts=dict(backend.availability.amounts),
-                    advertised_shape={key: list(values.values) for key, values in backend.advertised_attributes.items()},
-                )
-                for backend in heartbeat.backends
-            ]
+            backends = [_backend_availability(peer_id, backend) for backend in heartbeat.backends]
             result.append(PeerAvailability(peer_id=peer_id, reachable=heartbeat.reachable, backends=backends))
         return result
 
@@ -284,37 +315,16 @@ class FederationManager:
 
     # -- on-demand proxy (parent side) ---------------------------------------
 
-    def proxy_profile(
-        self,
-        *,
-        peer_id: str,
-        request: job_pb2.ProfileTaskRequest,
-    ) -> job_pb2.ProfileTaskResponse:
-        """Forward a profile RPC for a federated task to its peer controller.
+    def proxy_to_peer(self, peer_id: str, call: Callable[[FederationPeer], _T]) -> _T:
+        """Forward an on-demand RPC for a federated task to its owning peer controller.
 
-        Job ids are cluster-invariant, so the request's target names the same task
-        on the peer — it is proxied verbatim to the peer's ``ProfileTask``. The peer
-        is authoritative: its answer — including a ``NOT_FOUND`` for a task it has
-        since moved or finished — propagates back.
+        Job ids are cluster-invariant, so a task's request names the same task on the
+        peer; ``call`` invokes the matching typed method on the peer connection (e.g.
+        ``lambda peer: peer.profile_task(request)``). The peer is authoritative — its
+        answer, including a ``NOT_FOUND`` for a task it has since moved or finished,
+        propagates back verbatim.
         """
-        peer = self._require_peer(peer_id)
-        return peer.profile_task(request)
-
-    def proxy_exec(
-        self,
-        *,
-        peer_id: str,
-        request: controller_pb2.Controller.ExecInContainerRequest,
-    ) -> controller_pb2.Controller.ExecInContainerResponse:
-        """Forward an exec RPC for a federated task to its peer controller.
-
-        Job ids are cluster-invariant, so the request's task id names the same task
-        on the peer — it is proxied verbatim to the peer's ``ExecInContainer``. The
-        peer is authoritative: its answer — including a ``NOT_FOUND`` — propagates
-        back.
-        """
-        peer = self._require_peer(peer_id)
-        return peer.exec_in_container(request)
+        return call(self._require_peer(peer_id))
 
     # -- background loops ----------------------------------------------------
 
@@ -380,9 +390,7 @@ class FederationManager:
             logger.warning("Cannot hand off %s: peer %s is not configured", spec.local_job_id, spec.peer_id)
             return
         try:
-            handoff = self._build_handoff_request(
-                spec.request, spec.local_job_id, spec.owner_principal, spec.submitting_user
-            )
+            handoff = self._build_handoff_request(spec)
             peer.launch_job(handoff)
         except ConnectError as exc:
             # The peer answers a rejected handoff the same way every time — a name
@@ -424,29 +432,22 @@ class FederationManager:
 
     # -- helpers -------------------------------------------------------------
 
-    def _build_handoff_request(
-        self,
-        request: controller_pb2.Controller.LaunchJobRequest,
-        local_job_id: JobName,
-        owner_principal: str,
-        submitting_user: str,
-    ) -> controller_pb2.Controller.LaunchJobRequest:
+    def _build_handoff_request(self, spec: HandoffSpec) -> controller_pb2.Controller.LaunchJobRequest:
         """The request delivered to the peer: the same cluster-invariant job name,
-        federation attribution, and the routing directives stripped (the peer matches
-        workers, not the parent's ``backend``/``cluster`` pins). Idempotency of a
-        re-drive is owned by the peer's federation-aware admission, which returns the
-        existing job for a re-drive from the same requester."""
+        federation attribution, and the routing directives stripped (the peer
+        matches workers, not the parent's ``backend``/``cluster`` pins)."""
         handoff = controller_pb2.Controller.LaunchJobRequest()
-        handoff.CopyFrom(request)
-        handoff.name = local_job_id.to_wire()
-        kept = [c for c in request.constraints if c.key not in (BACKEND_CONSTRAINT_KEY, CLUSTER_CONSTRAINT_KEY)]
+        handoff.CopyFrom(spec.request)
+        handoff.name = spec.local_job_id.to_wire()
+        kept = [c for c in spec.request.constraints if c.key not in (BACKEND_CONSTRAINT_KEY, CLUSTER_CONSTRAINT_KEY)]
         del handoff.constraints[:]
         handoff.constraints.extend(kept)
         handoff.federation.CopyFrom(
             controller_pb2.Controller.FederationHandoff(
                 requester_id=self._cluster_id,
-                owner_principal=owner_principal,
-                submitting_user=submitting_user,
+                owner_principal=spec.owner_principal,
+                submitting_user=spec.submitting_user,
+                handoff_nonce=spec.handoff_nonce,
             )
         )
         self._inline_blobs(handoff)

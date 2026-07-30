@@ -3,6 +3,7 @@ port: 10001
 image: ghcr.io/marin-community/finelog:latest
 remote_log_dir: gs://marin-us-central2/finelog/marin
 client_url: iap+https://iris.oa.dev/proxy/system.log-server
+query_metadata_cache_mb: 1024
 deployment:
   gcp:
     project: hai-gcp-models
@@ -28,4 +29,10 @@ auth:
           - |
               -----BEGIN PUBLIC KEY-----
               MCowBQYDK2VwAyEAJYrTAboQmQmVnSRcsxusCfosRTUl7t2L3q2yRzW5Kwk=
+              -----END PUBLIC KEY-----
+      - cluster: cw-us-east-08a
+        public_keys:
+          - |
+              -----BEGIN PUBLIC KEY-----
+              MCowBQYDK2VwAyEAfUBNvrpunm0oJIaOSVElfwPSEdob4v8ehthSiqsk9ZM=
               -----END PUBLIC KEY-----

@@ -13,6 +13,7 @@ from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import cached_property
 from typing import Protocol, runtime_checkable
 
 try:
@@ -53,6 +54,10 @@ DEFAULT_TIMEOUT: float = 60.0
 
 # Threshold for slow-operation warnings (milliseconds)
 _SLOW_THRESHOLD_MS: int = 2000
+
+# API error bodies quote the offending manifest; keep enough to identify the
+# verdict without flooding logs.
+_ERROR_BODY_MAX_LEN: int = 500
 
 
 @runtime_checkable
@@ -184,25 +189,16 @@ class CloudK8sService:
     kubeconfig_path: str | None = None
     context: str | None = None  # kubeconfig context; None = the file's current-context
     timeout: float = DEFAULT_TIMEOUT
-    _api_client: "kubernetes.client.ApiClient" = field(init=False, repr=False)
-    _dyn: "DynamicClient" = field(init=False, repr=False)
-    _core_v1: "kubernetes.client.CoreV1Api" = field(init=False, repr=False)
-    _custom: "kubernetes.client.CustomObjectsApi" = field(init=False, repr=False)
     _kubectl_prefix: list[str] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        if kubernetes is None:
-            raise ImportError("Install iris[controller] to use CloudK8sService")
+        # Construct only what needs no `kubernetes` python client: the kubectl
+        # prefix for the port-forward subprocess. The DynamicClient-backed clients
+        # (_api_client/_dyn/_core_v1/_custom) build lazily on first CRUD use, so
+        # controller-URL resolution and tunnelling work on a plain install with
+        # just the kubectl binary present.
         if self.kubeconfig_path:
             self.kubeconfig_path = os.path.expanduser(self.kubeconfig_path)
-        self._api_client = self.create_api_client()
-
-        assert DynamicClient is not None
-        self._dyn = DynamicClient(self._api_client)
-        self._core_v1 = kubernetes.client.CoreV1Api(self._api_client)
-        self._custom = kubernetes.client.CustomObjectsApi(self._api_client)
-
-        # kubectl prefix for port-forward subprocess only
         cmd = ["kubectl"]
         if self.kubeconfig_path:
             cmd.extend(["--kubeconfig", self.kubeconfig_path])
@@ -210,7 +206,33 @@ class CloudK8sService:
             cmd.extend(["--context", self.context])
         self._kubectl_prefix = cmd
 
+    @staticmethod
+    def _require_kubernetes() -> None:
+        if kubernetes is None:
+            raise ImportError("Install iris[controller] to use CloudK8sService")
+
+    @cached_property
+    def _api_client(self) -> "kubernetes.client.ApiClient":
+        return self.create_api_client()
+
+    @cached_property
+    def _dyn(self) -> "DynamicClient":
+        self._require_kubernetes()
+        assert DynamicClient is not None
+        return DynamicClient(self._api_client)
+
+    @cached_property
+    def _core_v1(self) -> "kubernetes.client.CoreV1Api":
+        self._require_kubernetes()
+        return kubernetes.client.CoreV1Api(self._api_client)
+
+    @cached_property
+    def _custom(self) -> "kubernetes.client.CustomObjectsApi":
+        self._require_kubernetes()
+        return kubernetes.client.CustomObjectsApi(self._api_client)
+
     def create_api_client(self) -> "kubernetes.client.ApiClient":
+        self._require_kubernetes()
         # A bare context (no kubeconfig_path) binds the named context within the
         # default kubeconfig resolution (KUBECONFIG env var or ~/.kube/config).
         if self.kubeconfig_path or self.context:
@@ -270,20 +292,22 @@ class CloudK8sService:
                         **({"namespace": ns} if ns else {}),
                     )
             except ApiException as e:
-                raise KubectlError(f"apply {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:500]}") from e
+                raise KubectlError(
+                    f"apply {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:_ERROR_BODY_MAX_LEN]}"
+                ) from e
 
     def _apply_pod(self, res: K8sResource, name: str, ns: str | None, manifest: dict) -> None:
         """Create the Pod if it is not already present (create-if-absent).
 
-        A task attempt's pod name is stable and its manifest deterministic, so a
-        pod that already exists — in any phase — is the one we want; we must NOT
-        delete and recreate it. Delete-then-create would destroy a running task
-        on every redrive and, because the delete and the create race, fail with
-        409 AlreadyExists ("object is being deleted") while the prior pod is
-        still Terminating — which the dispatch loop then mistakes for worker loss
-        and retries, churning the task through attempts until it fails. A pod
-        that genuinely needs to change comes from a new attempt (new name); one
-        that should go away is removed by stray-pod GC.
+        The pod name embeds the attempt's uid (see K8s backend ``_pod_name``), so a
+        fresh incarnation — a resubmit that reuses (task_id, attempt_id) but mints a
+        new uid — never collides with a previous run's leftover pod: ``create`` just
+        succeeds. A 409 therefore means our own attempt's pod already exists, in any
+        phase; a redrive fires every reconcile tick until a (slower) poll observes
+        it, and it must be left untouched. Deleting and recreating would destroy a
+        running task and race its own deletion (409 AlreadyExists while the prior pod
+        is still Terminating). The stale pod from a superseded incarnation carries a
+        different name and is reaped by the age-based terminal GC.
         """
         api = self._resource_api(res)
         ns_kw = {"namespace": ns} if ns else {}

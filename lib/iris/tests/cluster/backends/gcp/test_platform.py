@@ -24,13 +24,13 @@ from iris.cluster.config import (
     VmConfig,
     WorkerConfig,
 )
+from iris.cluster.platforms.bootstrap import composite_slice_state
 from iris.cluster.platforms.gcp.controller import GcpControllerProvider
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.handles import (
     GcpSliceHandle,
     GcpVmSliceHandle,
     _build_gce_resource_name,
-    _composite_slice_state,
 )
 from iris.cluster.platforms.gcp.service import OperationStatus, TpuCreateRequest, VmCreateRequest
 from iris.cluster.platforms.gcp.workers import (
@@ -41,8 +41,8 @@ from iris.cluster.platforms.gcp.workers import (
     _validate_slice_config,
 )
 from iris.cluster.platforms.manual.controller import ManualControllerProvider
-from iris.cluster.platforms.manual.workers import ManualWorkerProvider
-from iris.cluster.platforms.remote_exec import GceRemoteExec, GcloudRemoteExec
+from iris.cluster.platforms.manual.workers import ManualSliceHandle, ManualWorkerProvider
+from iris.cluster.platforms.remote_exec import DirectSshRemoteExec, GceRemoteExec, GcloudRemoteExec
 from iris.cluster.platforms.types import (
     CloudSliceState,
     InfraError,
@@ -616,9 +616,12 @@ def test_describe_resolves_topology_from_live_tpu_when_handle_variant_empty():
 
 
 def test_gcp_create_slice_resolves_ghcr_image_in_worker_config():
-    """create_slice rewrites GHCR images in worker_config via resolve_image."""
+    """create_slice rewrites mirrored images in worker_config via resolve_image."""
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="my-proj")
-    gcp_config = GcpPlatformConfig(project_id="my-proj")
+    gcp_config = GcpPlatformConfig(
+        project_id="my-proj",
+        registry_mirrors={"ghcr.io": {"europe": "europe-docker.pkg.dev/my-proj/ghcr-mirror"}},
+    )
     platform = GcpWorkerProvider(gcp_config, label_prefix="iris", worker_port=10001, gcp_service=gcp_service)
 
     cfg = SliceConfig(
@@ -739,6 +742,33 @@ def test_manual_terminated_host_returns_to_pool():
     cfg2 = VmConfig(name="ctrl-2", manual=ManualVmConfig(host="10.0.0.1"))
     handle2 = platform.create_vm(cfg2)
     assert handle2.internal_address == "10.0.0.1"
+
+
+def test_manual_slice_bootstrap_lifecycle_surfaces_failure_reason():
+    """A manual slice reports BOOTSTRAPPING until its bootstrap thread reaches a verdict.
+
+    The hosts are pre-existing and always reachable, so only the bootstrap verdict
+    can move the slice off READY — and a failure must carry its reason through
+    describe() so the autoscaler can classify it.
+    """
+    handle = ManualSliceHandle(
+        _slice_id="iris-group-abc",
+        _hosts=["10.0.0.1"],
+        _labels={},
+        _created_at=Timestamp.now(),
+        _label_prefix="iris",
+        _worker_port=10001,
+        _ssh_connections=[DirectSshRemoteExec(host="10.0.0.1")],
+        _bootstrapping=True,
+    )
+
+    assert handle.describe().state == CloudSliceState.BOOTSTRAPPING
+
+    handle.bootstrap.mark_failed("ssh: connect to host 10.0.0.1 port 22: Connection refused")
+
+    status = handle.describe()
+    assert status.state == CloudSliceState.FAILED
+    assert "Connection refused" in status.error_message
 
 
 def test_manual_slice_terminate_returns_hosts():
@@ -978,7 +1008,7 @@ def test_vm_bootstrap_health_probe_succeeds_without_serial_port():
             bootstrap_timeout=5.0,
         )
 
-    assert handle._bootstrap_state == CloudSliceState.READY
+    assert handle.describe().state == CloudSliceState.READY
 
 
 def test_vm_bootstrap_serial_port_succeeds_without_health_probe():
@@ -1004,7 +1034,7 @@ def test_vm_bootstrap_serial_port_succeeds_without_health_probe():
             bootstrap_timeout=5.0,
         )
 
-    assert handle._bootstrap_state == CloudSliceState.READY
+    assert handle.describe().state == CloudSliceState.READY
 
 
 def test_vm_bootstrap_serial_port_error_raises():
@@ -1141,7 +1171,6 @@ def test_tpu_bootstrap_marks_ready_while_cloud_stuck_creating():
             bootstrap_timeout=5.0,
         )
 
-    assert handle._bootstrap_state == CloudSliceState.READY
     assert handle.describe().state == CloudSliceState.READY
     # Slice was kept despite the cloud status never reaching READY.
     surviving = gcp_service.tpu_describe(handle.slice_id, handle.zone)
@@ -1216,7 +1245,7 @@ def test_tpu_bootstrap_aborts_when_slice_enters_deleting():
     ],
 )
 def test_composite_slice_state(cloud_state, bootstrap_state, expected):
-    assert _composite_slice_state(cloud_state, bootstrap_state) == expected
+    assert composite_slice_state(cloud_state, bootstrap_state) == expected
 
 
 def _bootstrapping_tpu_handle(gcp_service, slice_id="slice-x"):
@@ -1243,9 +1272,7 @@ def test_describe_surfaces_bootstrap_failure_reason():
     # In progress: no failure reason surfaced.
     assert handle.describe().error_message == ""
 
-    with handle._bootstrap_lock:
-        handle._bootstrap_state = CloudSliceState.FAILED
-        handle._bootstrap_error = 'There is no more capacity in the zone "us-east5-b"'
+    handle.bootstrap.mark_failed('There is no more capacity in the zone "us-east5-b"')
 
     status = handle.describe()
     assert status.state == CloudSliceState.FAILED
@@ -1273,5 +1300,6 @@ def test_bootstrap_thread_captures_failure_reason(monkeypatch):
 
     _spawn_bootstrap_thread(handle, boom)
 
-    assert handle._bootstrap_state == CloudSliceState.FAILED
-    assert "no more capacity" in handle._bootstrap_error
+    verdict = handle.bootstrap.status()
+    assert verdict.state == CloudSliceState.FAILED
+    assert "no more capacity" in verdict.error

@@ -3,15 +3,28 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Block until the first of several events fires — a ``select`` over shell
-predicates and GitHub PR state.
+predicates, GitHub PR state, and Iris jobs.
 
 Each event is ``<kind> <arg>``. The general kind is an arbitrary shell predicate;
-the ``github.*`` kinds are built-in conveniences so common PR waits need no shell:
+the built-in kinds cover common PR and Iris waits without shell parsing:
 
     poll <shell command>    fires when the command exits 0
     github.ci <PR>          fires the moment any check fails, else when all checks pass
+    github.pr <PR>          fires on terminal, conflicted, review, or ready-for-review state
     github.pr_comment <PR>  fires on a new comment that raises a real code concern
     github.review <PR>      fires on a decisive review, or one whose body raises a concern
+    iris.job <job-id>       fires when an Iris job reaches a terminal state (in-task only)
+
+``github.pr`` snapshots the PR's state, mergeability, review decision, and draft
+status. It fires when the PR merges or closes, becomes conflicted, its review
+decision changes, or a draft becomes ready for review. The payload names every
+reason that fired and includes the complete before/after snapshots. A PR first
+observed as terminal or conflicted fires immediately, so arming the selector
+after the state change does not lose an actionable condition.
+
+``iris.job`` runs the Iris client's blocking ``Job.wait`` in a daemon worker. Its
+state polling and controller retries use the Iris client policy; the selector
+interval options apply to the sources the selector polls itself.
 
 ``github.pr_comment`` and ``github.review`` skip low-signal chatter by default so the
 caller is not woken for nothing. A catalog of rules (``COMMENT_RULES``) names, per bot,
@@ -19,22 +32,24 @@ the mundane shapes that bot emits: the in-progress placeholder it posts the mome
 opens and edits in place once done, its "no issues found" verdict, and the
 automated-review wrapper whose findings arrive as separate inline comments. Only the
 automation a rule names is ever suppressed, so a comment from a human — or from a bot the
-catalog does not cover — always fires. Comments are keyed on content, so a placeholder a
-bot later edits into a real finding re-surfaces as new activity. Pass
+catalog does not cover — always fires. The catalog also suppresses Loom's exact
+``Working on this in loom: <session URL>`` acknowledgement, only when the Loom bot
+authored it. Comments are keyed on content, so a placeholder a bot later edits into a
+real finding re-surfaces as new activity. Pass
 ``--comment-filter all`` to fire on every new comment instead.
 
 `poll` is the escape hatch for anything without a built-in: compose the predicate
-with the shell (``| grep -q``, ``| jq -e``, ``test``). For example, wait for the
-PR to close with ``poll 'test "$(gh pr view 1234 --json state --jq .state)" != OPEN'``.
-Specs come from argv (one quoted token each) or stdin (one per line; ``#`` comments):
+with the shell (``| grep -q``, ``| jq -e``, ``test``). Specs come from argv (one
+quoted token each) or stdin (one per line; ``#`` comments):
 
     uv run scripts/ci/wait_for.py --timeout 12h \\
       'poll loom session poll weaver/foo --quiet | grep -q done' \\
-      'github.ci 1234' 'github.pr_comment 1234'
+      'github.ci 1234' 'github.pr 1234' 'github.pr_comment 1234'
 
     uv run scripts/ci/wait_for.py --timeout 12h <<'HERE'
     poll loom session poll weaver/foo --quiet | grep -q done
     github.ci 1234
+    github.pr 1234
     github.pr_comment 1234
     HERE
 
@@ -49,12 +64,22 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable, Iterable
+from concurrent.futures import Future
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
+from functools import partial
+from threading import Event, Thread
 from typing import NamedTuple
 
 import click
+from connectrpc.errors import ConnectError
+from iris.client import IrisClient, Job
+from iris.cluster.client.job_info import get_job_info
+from iris.cluster.types import JobName
+from iris.rpc import job_pb2
+from iris.rpc.errors import format_connect_error
+from iris.rpc.proto_display import job_state_friendly
 from rigging.timing import ExponentialBackoff
 
 # `gh` calls are quick metadata reads; bound them so a hung call cannot wedge the
@@ -81,8 +106,10 @@ class GhError(RuntimeError):
 
 class EventKind(StrEnum):
     GITHUB_CI = "github.ci"
+    GITHUB_PR = "github.pr"
     GITHUB_PR_COMMENT = "github.pr_comment"
     GITHUB_REVIEW = "github.review"
+    IRIS_JOB = "iris.job"
     POLL = "poll"
 
 
@@ -153,6 +180,40 @@ def gh_pr_checks(pr: str, repo: str) -> list[dict]:
         return json.loads(out)
     except json.JSONDecodeError as exc:
         raise GhError(f"`gh pr checks {pr}` returned unparseable JSON: {exc}") from exc
+
+
+@dataclass(frozen=True)
+class PrSnapshot:
+    """The GitHub PR state used by the lifecycle selector."""
+
+    state: str
+    mergeable: str
+    review_decision: str | None
+    is_draft: bool
+    url: str
+
+    def payload(self) -> dict:
+        return {
+            "state": self.state,
+            "mergeable": self.mergeable,
+            "review_decision": self.review_decision,
+            "is_draft": self.is_draft,
+            "url": self.url,
+        }
+
+
+def gh_pr_snapshot(pr: str, repo: str) -> PrSnapshot:
+    """Read the fields observed by ``github.pr``."""
+    data: dict = gh_json(
+        ["pr", "view", pr, "--repo", repo, "--json", "state,mergeable,reviewDecision,isDraft,url"]
+    )  # pyrefly: ignore  # gh JSON shape
+    return PrSnapshot(
+        state=data["state"],
+        mergeable=data["mergeable"],
+        review_decision=data["reviewDecision"] or None,
+        is_draft=data["isDraft"],
+        url=data["url"],
+    )
 
 
 @dataclass(frozen=True)
@@ -275,6 +336,7 @@ class CommentFilter(StrEnum):
 # unlike the GraphQL login, which does not).
 CLAUDE_BOT = "claude[bot]"
 CODEX_BOT = "chatgpt-codex-connector[bot]"
+LOOM_BOT = "loom-oa-dev[bot]"
 
 # --- body shapes -------------------------------------------------------------------
 #
@@ -330,6 +392,7 @@ _FINDING_RE = re.compile(
 _WRAPPER_RE = re.compile(
     r"automated review suggestions|<summary>[^<]*About Codex|#+\s*💡?\s*Codex Review", re.IGNORECASE
 )
+_LOOM_PLACEHOLDER_RE = re.compile(r"^Working on this in loom: https://loom\.oa\.dev/s/[A-Za-z0-9_-]+/?$")
 
 
 def _placeholder_residue(body: str) -> str:
@@ -361,6 +424,10 @@ def is_review_wrapper(body: str) -> bool:
     return bool(_WRAPPER_RE.search(body))
 
 
+def is_loom_placeholder(body: str) -> bool:
+    return bool(_LOOM_PLACEHOLDER_RE.fullmatch(body))
+
+
 @dataclass(frozen=True)
 class CommentRule:
     """One entry in the noise catalog: whose comments it judges, and which shape it suppresses."""
@@ -378,6 +445,7 @@ COMMENT_RULES: tuple[CommentRule, ...] = (
     CommentRule(CLAUDE_BOT, is_progress_placeholder, Significance.PROGRESS),
     CommentRule(CLAUDE_BOT, is_clean_verdict, Significance.CLEAN),
     CommentRule(CODEX_BOT, is_review_wrapper, Significance.WRAPPER),
+    CommentRule(LOOM_BOT, is_loom_placeholder, Significance.PROGRESS),
 )
 
 
@@ -401,6 +469,33 @@ def classify_significance(body: str, author: str) -> Significance:
 _DECISIVE_REVIEW_STATES = {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}
 
 
+class PrEventReason(StrEnum):
+    """Why a ``github.pr`` source fired."""
+
+    MERGED = "merged"
+    CLOSED = "closed"
+    CONFLICTED = "conflicted"
+    READY_FOR_REVIEW = "ready_for_review"
+    REVIEW_DECISION = "review_decision"
+
+
+def pr_event_reasons(before: PrSnapshot | None, after: PrSnapshot) -> tuple[PrEventReason, ...]:
+    """Return every actionable PR lifecycle change between two snapshots."""
+    reasons: list[PrEventReason] = []
+    if after.state == "MERGED" and (before is None or before.state != after.state):
+        reasons.append(PrEventReason.MERGED)
+    elif after.state == "CLOSED" and (before is None or before.state != after.state):
+        reasons.append(PrEventReason.CLOSED)
+    if after.mergeable == "CONFLICTING" and (before is None or before.mergeable != after.mergeable):
+        reasons.append(PrEventReason.CONFLICTED)
+    if before is not None:
+        if before.is_draft and not after.is_draft:
+            reasons.append(PrEventReason.READY_FOR_REVIEW)
+        if before.review_decision != after.review_decision:
+            reasons.append(PrEventReason.REVIEW_DECISION)
+    return tuple(reasons)
+
+
 # ----------------------------------------------------------------------- sources
 
 
@@ -415,6 +510,12 @@ class Source:
 
     def check(self) -> dict | None:
         raise NotImplementedError
+
+    def _attach_wakeup(self, wakeup: Event) -> None:
+        del wakeup
+
+    def _ready(self) -> bool:
+        return False
 
 
 def _parse_pr(arg: str) -> str:
@@ -447,6 +548,34 @@ class CiSource(Source):
             "pending": list(outcome.pending),
             "observed_checks": outcome.observed,
             "checks": list(outcome.checks),
+        }
+
+
+class PrSource(Source):
+    """Fires on actionable PR lifecycle and review-state changes."""
+
+    def __init__(self, spec: EventSpec, repo: str):
+        super().__init__(spec)
+        self.repo = repo
+        self.pr = _parse_pr(spec.arg)
+        self.previous: PrSnapshot | None = None
+
+    def check(self) -> dict | None:
+        before = self.previous
+        after = gh_pr_snapshot(self.pr, self.repo)
+        self.previous = after
+        reasons = pr_event_reasons(before, after)
+        review_decision = after.review_decision or "NONE"
+        self.last_status = (
+            f"state={after.state}, mergeable={after.mergeable}, "
+            f"review_decision={review_decision}, is_draft={after.is_draft}"
+        )
+        if not reasons:
+            return None
+        return {
+            "reasons": [reason.value for reason in reasons],
+            "before": before.payload() if before is not None else None,
+            "after": after.payload(),
         }
 
 
@@ -539,6 +668,51 @@ class ReviewSource(PrActivitySource):
         return {"reviews": [{"author": r.author, "state": r.state, "url": r.url} for r in new]}
 
 
+class IrisJobSource(Source):
+    """Fires when an Iris job reaches a terminal state."""
+
+    def __init__(self, spec: EventSpec, wait_for_job: Callable[[JobName], job_pb2.JobStatus]):
+        super().__init__(spec)
+        try:
+            self.job_id = JobName.from_wire(spec.arg)
+        except ValueError:
+            raise click.BadParameter(f"expected an Iris job ID, got {spec.arg!r}") from None
+        self._wait_for_job = wait_for_job
+        self._result: Future[job_pb2.JobStatus] = Future()
+        self._wakeup: Event | None = None
+        # The selector is a command-line process and exits after any arm fires.
+        # A daemon worker lets that exit proceed without joining an Iris wait
+        # that may still be retrying a controller outage or watching a long job.
+        Thread(target=self._wait, name=f"iris-job-wait-{self.job_id}", daemon=True).start()
+
+    def _wait(self) -> None:
+        try:
+            status = self._wait_for_job(self.job_id)
+        except Exception as exc:
+            self._result.set_exception(exc)
+        else:
+            self._result.set_result(status)
+        if self._wakeup is not None:
+            self._wakeup.set()
+
+    def _attach_wakeup(self, wakeup: Event) -> None:
+        self._wakeup = wakeup
+        if self._result.done():
+            wakeup.set()
+
+    def _ready(self) -> bool:
+        return self._result.done()
+
+    def check(self) -> dict | None:
+        if not self._result.done():
+            self.last_status = "waiting"
+            return None
+        status = self._result.result()
+        state_name = job_state_friendly(status.state)
+        self.last_status = state_name
+        return {"state": state_name}
+
+
 class PollSource(Source):
     def __init__(self, spec: EventSpec, poll_timeout: float):
         super().__init__(spec)
@@ -562,14 +736,25 @@ class PollSource(Source):
 
 
 def build_source(
-    spec: EventSpec, *, repo: str, ignore_authors: set[str], poll_timeout: float, comment_filter: CommentFilter
+    spec: EventSpec,
+    *,
+    repo: str,
+    ignore_authors: set[str],
+    poll_timeout: float,
+    comment_filter: CommentFilter,
+    iris_job_waiter: Callable[[JobName], job_pb2.JobStatus] | None,
 ) -> Source:
     if spec.kind is EventKind.GITHUB_CI:
         return CiSource(spec, repo)
+    if spec.kind is EventKind.GITHUB_PR:
+        return PrSource(spec, repo)
     if spec.kind is EventKind.GITHUB_PR_COMMENT:
         return CommentSource(spec, repo, ignore_authors, comment_filter)
     if spec.kind is EventKind.GITHUB_REVIEW:
         return ReviewSource(spec, repo, ignore_authors, comment_filter)
+    if spec.kind is EventKind.IRIS_JOB:
+        assert iris_job_waiter is not None
+        return IrisJobSource(spec, iris_job_waiter)
     if spec.kind is EventKind.POLL:
         return PollSource(spec, poll_timeout)
     raise click.BadParameter(f"unsupported event kind {spec.kind!r}")  # pragma: no cover
@@ -614,24 +799,28 @@ def _timeout_result(sources: list[Source]) -> dict:
 
 
 def select_loop(sources: list[Source], *, deadline: float | None, backoff: BackoffConfig) -> dict:
-    """Poll each source on its own backoff; return the first fired event, or a timeout result."""
+    """Check each source on its own backoff and honor asynchronous source wakeups."""
+    wakeup = Event()
+    for source in sources:
+        source._attach_wakeup(wakeup)
     now = time.monotonic()
     armed = [
         _Armed(s, ExponentialBackoff(backoff.initial, backoff.maximum, backoff.factor, backoff.jitter), now)
         for s in sources
     ]
     while True:
-        next_arm = min(armed, key=lambda a: a.due_at)
+        ready_arm = next((arm for arm in armed if arm.source._ready()), None)
+        next_arm = ready_arm or min(armed, key=lambda a: a.due_at)
         now = time.monotonic()
         if deadline is not None and now >= deadline:
             return _timeout_result(sources)
-        wait = next_arm.due_at - now
+        wait = 0.0 if ready_arm is not None else next_arm.due_at - now
         if deadline is not None:
             wait = min(wait, deadline - now)
         if wait > 0:
-            time.sleep(wait)
-            if deadline is not None and time.monotonic() >= deadline:
-                return _timeout_result(sources)
+            wakeup.wait(timeout=wait)
+            wakeup.clear()
+            continue
         try:
             result = next_arm.source.check()
         except (GhError, OSError, subprocess.SubprocessError) as exc:
@@ -669,6 +858,24 @@ def read_specs(argv_specs: tuple[str, ...], *, use_stdin: bool | None) -> list[E
     return [parse_spec(s) for s in raw]
 
 
+def _wait_for_iris_job(
+    controller_address: str,
+    bundle_id: str | None,
+    job_id: JobName,
+) -> job_pb2.JobStatus:
+    with IrisClient.in_cluster(controller_address, bundle_id=bundle_id) as client:
+        return Job(client, job_id).wait(timeout=float("inf"), raise_on_failure=False)
+
+
+def _iris_job_waiter_from_job_info() -> Callable[[JobName], job_pb2.JobStatus]:
+    info = get_job_info()
+    if info is None:
+        raise click.ClickException("iris.job requires wait_for.py to run inside an Iris job")
+    if not info.controller_address:
+        raise click.ClickException("iris.job requires a controller address in the current Iris job metadata")
+    return partial(_wait_for_iris_job, info.controller_address, info.bundle_id)
+
+
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
 @click.argument("specs", nargs=-1)
 @click.option(
@@ -679,10 +886,10 @@ def read_specs(argv_specs: tuple[str, ...], *, use_stdin: bool | None) -> list[E
 )
 @click.option("--timeout", default=None, help="Overall deadline, e.g. 90, 30m, 4h. Default: wait indefinitely.")
 @click.option("--poll-timeout", default="120", help="Per-attempt timeout for `poll` commands.")
-@click.option("--initial-interval", default="10", help="First backoff interval per source.")
-@click.option("--max-interval", default="120", help="Backoff ceiling per source.")
-@click.option("--factor", default=2.0, type=float, help="Backoff growth factor.")
-@click.option("--jitter", default=0.1, type=float, help="Backoff jitter fraction in [0, 1).")
+@click.option("--initial-interval", default="10", help="First selector-polled source backoff interval.")
+@click.option("--max-interval", default="120", help="Selector-polled source backoff ceiling.")
+@click.option("--factor", default=2.0, type=float, help="Selector-polled source backoff growth factor.")
+@click.option("--jitter", default=0.1, type=float, help="Selector-polled source backoff jitter fraction in [0, 1).")
 @click.option("--repo", default=None, help="OWNER/NAME (default: gh auto-detect from cwd).")
 @click.option("--ignore-author", "ignore_authors", multiple=True, help="Comment/review author to ignore (repeatable).")
 @click.option("--include-self", is_flag=True, help="Do not ignore the authenticated user's own comments.")
@@ -691,7 +898,8 @@ def read_specs(argv_specs: tuple[str, ...], *, use_stdin: bool | None) -> list[E
     type=click.Choice([f.value for f in CommentFilter]),
     default=CommentFilter.SIGNIFICANT.value,
     help="Which new comments fire github.pr_comment/github.review: 'significant' skips the review bots' "
-    "in-progress placeholders, clean verdicts, and review wrappers; 'all' fires on every new comment.",
+    "in-progress placeholders, clean verdicts, review wrappers, and Loom's session acknowledgement; "
+    "'all' fires on every new comment.",
 )
 @click.option("--quiet", is_flag=True, help="Print only the fired event kind, not the JSON payload.")
 def main(
@@ -711,14 +919,17 @@ def main(
 ) -> None:
     """Block until the first armed event fires; print which one as JSON."""
     parsed = read_specs(specs, use_stdin=use_stdin)
-    needs_github = any(s.kind is not EventKind.POLL for s in parsed)
+    github_kinds = (EventKind.GITHUB_CI, EventKind.GITHUB_PR, EventKind.GITHUB_PR_COMMENT, EventKind.GITHUB_REVIEW)
+    needs_github = any(s.kind in github_kinds for s in parsed)
     needs_authors = any(s.kind in (EventKind.GITHUB_PR_COMMENT, EventKind.GITHUB_REVIEW) for s in parsed)
+    needs_iris = any(s.kind is EventKind.IRIS_JOB for s in parsed)
 
     try:
         resolved_repo = resolve_repo(repo) if needs_github else ""
         ignored = set(ignore_authors)
         if needs_authors and not include_self:
             ignored.add(authenticated_user())
+        iris_job_waiter = _iris_job_waiter_from_job_info() if needs_iris else None
         sources = [
             build_source(
                 s,
@@ -726,6 +937,7 @@ def main(
                 ignore_authors=ignored,
                 poll_timeout=parse_duration(poll_timeout),
                 comment_filter=CommentFilter(comment_filter),
+                iris_job_waiter=iris_job_waiter,
             )
             for s in parsed
         ]
@@ -739,6 +951,8 @@ def main(
         result = select_loop(sources, deadline=deadline, backoff=backoff)
     except GhError as exc:
         raise click.ClickException(str(exc)) from exc
+    except ConnectError as exc:
+        raise click.ClickException(format_connect_error(exc)) from exc
     except KeyboardInterrupt:
         click.echo("[wait_for] interrupted", err=True)
         raise SystemExit(130) from None

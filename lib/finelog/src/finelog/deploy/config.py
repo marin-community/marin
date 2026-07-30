@@ -69,6 +69,10 @@ class K8sDeployment:
     kube_context: str | None = None
     storage_class: str | None = None
     storage_gb: int = 200
+    cpu_request: str = "2"
+    cpu_limit: str = "8"
+    memory_request: str = "16Gi"
+    memory_limit: str = "32Gi"
     # S3-compatible endpoint (e.g. Cloudflare R2) for an `s3://` remote_log_dir.
     # Required there: `finelog deploy up` mints a Secret holding this endpoint
     # plus the operator's R2 creds, projected into the pod via envFrom so the
@@ -228,6 +232,13 @@ class FinelogConfig:
     auth: tuple[AuthLayer, ...] = ()
     # Cross-cluster log shipping to a hub finelog. Unset forwards nothing.
     forwarding: ForwardingConfig | None = None
+    # DataFusion's process-wide Parquet metadata cache limit. Unset preserves
+    # DataFusion's default.
+    query_metadata_cache_mb: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.query_metadata_cache_mb is not None and self.query_metadata_cache_mb <= 0:
+            raise ValueError("query_metadata_cache_mb must be > 0")
 
 
 def _config_search_paths(name_or_path: str) -> list[Path]:
@@ -290,13 +301,18 @@ def _build_forwarding(raw: dict, path: Path) -> ForwardingConfig:
 
 
 def _build_k8s(raw: dict) -> K8sDeployment:
+    defaults = K8sDeployment(namespace=raw["namespace"])
     priority_class_value = raw.get("priority_class_value")
     return K8sDeployment(
         namespace=raw["namespace"],
         kubeconfig=raw.get("kubeconfig"),
         kube_context=raw.get("kube_context"),
         storage_class=raw.get("storage_class"),
-        storage_gb=int(raw.get("storage_gb", 200)),
+        storage_gb=int(raw.get("storage_gb", defaults.storage_gb)),
+        cpu_request=str(raw.get("cpu_request", defaults.cpu_request)),
+        cpu_limit=str(raw.get("cpu_limit", defaults.cpu_limit)),
+        memory_request=str(raw.get("memory_request", defaults.memory_request)),
+        memory_limit=str(raw.get("memory_limit", defaults.memory_limit)),
         object_storage_endpoint=raw.get("object_storage_endpoint"),
         priority_class_name=raw.get("priority_class_name"),
         priority_class_value=None if priority_class_value is None else int(priority_class_value),
@@ -351,6 +367,9 @@ def _load_from_path(path: Path) -> FinelogConfig:
         client_url=raw.get("client_url"),
         auth=auth,
         forwarding=forwarding,
+        query_metadata_cache_mb=(
+            None if raw.get("query_metadata_cache_mb") is None else int(raw["query_metadata_cache_mb"])
+        ),
     )
 
 

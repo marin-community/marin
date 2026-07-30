@@ -1,11 +1,12 @@
 [package]
-name = "dupekit"
-version = "0.1.0"
+name = "dupekit-native"
+version = "0.1.2"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+# Keep in sync with `module-name` in the sibling pyproject.toml. See
+# src/dupekit/__init__.py for why the extension is a top-level module.
 [lib]
-name = "_native"
+name = "dupekit_native"
 crate-type = ["cdylib"]
 
 [dependencies]
@@ -23,10 +24,7 @@ rand_pcg = "0.3"
 regex = "1.10"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
-# Standalone single-crate package — no [workspace] table (dupekit shares no
-# crates with finelog). The release profile mirrors the thin-LTO settings the
-# former shared rust/ workspace applied, so wheel build characteristics are
-# unchanged: within ~1% of fat-LTO runtime but a fraction of the link time.
+# thin-LTO: within ~1% of fat-LTO runtime at a fraction of the link time.
 [profile.release]
 lto = "thin"
 codegen-units = 16

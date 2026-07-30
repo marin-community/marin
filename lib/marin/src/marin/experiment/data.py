@@ -36,6 +36,7 @@ from rigging.filesystem import prefix_join
 
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.execution.artifact import Artifact
+from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext, lower, run
 from marin.execution.remote import remote
 from marin.execution.step_spec import _is_relative_path
@@ -73,7 +74,7 @@ def hf_download(
     *,
     hf_id: str,
     revision: str,
-    version: str,
+    version: str | None = None,
     urls_glob: Sequence[str] = (),
     pin: str | None = None,
     resources: ResourceConfig | None = None,
@@ -83,8 +84,10 @@ def hf_download(
     Wraps :func:`marin.datakit.download.huggingface.download_hf` into a handle that
     :func:`tokenized` (via ``raw=``) or :func:`marin.execution.lazy.apply` can depend on.
     ``urls_glob`` restricts which files in the repo are fetched (empty = all). ``pin``
-    references an existing download at a fixed location instead of re-fetching it.
+    references an existing download at a fixed location instead of re-fetching it. ``version``
+    defers to the ambient :class:`~marin.execution.build_context.BuildContext` when omitted.
     """
+    version = resolve_version(name, version)
 
     def build_config(ctx: StepContext) -> DownloadConfig:
         return DownloadConfig(
@@ -110,7 +113,7 @@ def raw_download(
     *,
     fn: Callable[[object], object],
     build_config: Callable[[StepContext], object],
-    version: str,
+    version: str | None = None,
     pin: str | None = None,
     resources: ResourceConfig | None = None,
 ) -> ArtifactStep[Artifact]:
@@ -119,8 +122,10 @@ def raw_download(
     The generic download builder for a source that is not a HuggingFace-Hub dataset (use
     :func:`hf_download` for that): ``fn(build_config(ctx))`` writes the download to
     ``ctx.output_path``. Returned as a raw :class:`~marin.execution.artifact.Artifact` (not a
-    tokenized cache). ``pin`` references an existing download instead of re-fetching it.
+    tokenized cache). ``pin`` references an existing download instead of re-fetching it. ``version``
+    defers to the ambient :class:`~marin.execution.build_context.BuildContext` when omitted.
     """
+    version = resolve_version(name, version)
     return ArtifactStep(
         name=name,
         version=version,
@@ -135,7 +140,7 @@ def tokenized(
     name: str,
     *,
     tokenizer: str,
-    version: str,
+    version: str | None = None,
     source: str | None = None,
     paths: Sequence[str] | None = None,
     raw: ArtifactStep[Artifact] | None = None,
@@ -154,8 +159,12 @@ def tokenized(
     (a download handle and a subpath glob within it). ``validation=True`` routes the data
     to the cache's validation split. ``sample_count`` caps the documents tokenized per shard
     (it bears identity — a sampled cache differs from the full one). ``pin`` references
-    already-tokenized data at an existing location instead of recomputing it.
+    already-tokenized data at an existing location instead of recomputing it. ``version`` defers
+    to the ambient :class:`~marin.execution.build_context.BuildContext` when omitted — but a large
+    corpus should pin an explicit calendar version, since a mutable (``dev``) tokenize rebuilds the
+    whole cache on every run.
     """
+    version = resolve_version(name, version)
     if sum(x is not None for x in (source, paths, raw)) != 1:
         raise ValueError(f"{name}: provide exactly one of source, paths, or raw")
     if (raw is None) != (glob is None):
@@ -205,7 +214,7 @@ def pretokenized(
     *,
     repo_id: str,
     tokenizer: str,
-    version: str,
+    version: str | None = None,
     revision: str | None = None,
     pin: str | None = None,
     tags: Sequence[str] = (),
@@ -217,8 +226,10 @@ def pretokenized(
     a Levanter cache; the handle then reads as a ``TokenizedCache`` with no
     re-tokenization. Use it where a tokenizing :func:`tokenized` handle would be too
     slow — e.g. the fineweb-edu prebuilt subcaches. ``pin`` references an
-    already-downloaded cache at an existing location instead of fetching it again.
+    already-downloaded cache at an existing location instead of fetching it again. ``version``
+    defers to the ambient :class:`~marin.execution.build_context.BuildContext` when omitted.
     """
+    version = resolve_version(name, version)
 
     def build_config(ctx: StepContext) -> PretokenizedCacheDownloadConfig:
         return PretokenizedCacheDownloadConfig(
@@ -325,6 +336,12 @@ def dataset_main(datasets: Mapping[str, ArtifactStep[TokenizedCache]]) -> None:
     Building is opt-in so ``python -m experiments.datasets.<name>`` never starts a large
     tokenize by accident: by default it prints the lowered plan for the selected handles;
     ``--run`` builds them, and ``--only`` restricts a family to named keys.
+
+    Dataset catalogs are intentionally *outside* the deferred-version surface
+    (:mod:`marin.experiment.cli`): they pin an explicit calendar version because a mutable
+    tokenize would rebuild the whole (often multi-TB) cache. The handles here are constructed
+    eagerly at import, so a catalog that omitted its version would fail fast — by design — rather
+    than silently resolve to ``dev``.
     """
 
     @click.command()

@@ -83,6 +83,20 @@ def _materialize_tasks(
     writes.bulk_insert_tasks(cur, rows)
 
 
+def resolve_priority_band(requested_band: int, inherited_band: int | None) -> job_pb2.PriorityBand:
+    """Resolve ``PRIORITY_BAND_INHERIT`` to a real band. Call at ingestion only.
+
+    Args:
+        requested_band: The band on the launch request; INHERIT means the client asked for none.
+        inherited_band: The parent job's stored band, or ``None`` for a root job.
+    """
+    if requested_band != job_pb2.PRIORITY_BAND_INHERIT:
+        return job_pb2.PriorityBand.ValueType(requested_band)
+    if inherited_band:
+        return job_pb2.PriorityBand.ValueType(inherited_band)
+    return job_pb2.PRIORITY_BAND_INTERACTIVE
+
+
 @dataclass(frozen=True)
 class JobInsertResult:
     """What :func:`insert_job_and_config` computed, for the task-materialization
@@ -91,7 +105,6 @@ class JobInsertResult:
     replicas: int
     effective_submission_ms: int
     root_submitted_ms: int
-    band_sort_key: int
     validation_error: str | None
 
 
@@ -101,14 +114,23 @@ def submit(
     job_id: JobName,
     request: controller_pb2.Controller.LaunchJobRequest,
     ts: Timestamp,
+    priority_band: int,
     submitting_user: str | None = None,
 ) -> None:
     """Insert the job row and expand its tasks. Caller owns the transaction.
 
+    ``priority_band`` must already be resolved — see :func:`resolve_priority_band`.
     ``submitting_user`` is the authenticated principal for a root submission; a
     child ignores it and inherits its root's value (see :func:`insert_job_and_config`).
     """
-    inserted = insert_job_and_config(cur, job_id=job_id, request=request, ts=ts, submitting_user=submitting_user)
+    inserted = insert_job_and_config(
+        cur,
+        job_id=job_id,
+        request=request,
+        ts=ts,
+        priority_band=priority_band,
+        submitting_user=submitting_user,
+    )
     if inserted.validation_error is None:
         _materialize_tasks(
             cur,
@@ -118,7 +140,7 @@ def submit(
             max_retries_failure=int(request.max_retries_failure),
             max_retries_preemption=int(request.max_retries_preemption),
             priority_root_submitted_ms=inserted.root_submitted_ms,
-            priority_band=inserted.band_sort_key,
+            priority_band=priority_band,
         )
     cur.register(
         lambda: log_event(
@@ -136,6 +158,7 @@ def insert_job_and_config(
     job_id: JobName,
     request: controller_pb2.Controller.LaunchJobRequest,
     ts: Timestamp,
+    priority_band: int,
     cluster: str = LOCAL_CLUSTER,
     submitting_user: str | None = None,
 ) -> JobInsertResult:
@@ -145,10 +168,15 @@ def insert_job_and_config(
     federated handoff (``cluster`` set to a peer) has no local tasks (the peer
     creates them; the sync mirrors them back). Caller owns the transaction.
 
+    ``priority_band`` must already be resolved by :func:`resolve_priority_band`, so
+    ``job_config.priority_band`` never holds INHERIT and no reader re-derives a band.
     ``submitting_user`` — the authenticated principal — is required for a root and
     stored verbatim. A child ignores it and inherits its root's stored value, so a
     federated subtree keeps the root's submitter no matter who spawns each child.
     """
+    assert (
+        priority_band != job_pb2.PRIORITY_BAND_INHERIT
+    ), f"Job {job_id} would store an unresolved priority band; resolve it at ingestion"
 
     submitted_ms = ts.epoch_ms()
 
@@ -187,12 +215,6 @@ def insert_job_and_config(
         deadline_epoch_ms = (
             Timestamp.from_ms(effective_submission_ms).add(duration_from_proto(request.scheduling_timeout)).epoch_ms()
         )
-
-    requested_band = int(request.priority_band)
-    if requested_band != job_pb2.PRIORITY_BAND_UNSPECIFIED:
-        band_sort_key = requested_band
-    else:
-        band_sort_key = job_pb2.PRIORITY_BAND_INTERACTIVE
 
     replicas = int(request.replicas)
     validation_error: str | None = None
@@ -265,7 +287,7 @@ def insert_job_and_config(
         timeout_ms=timeout_ms,
         preemption_policy=int(request.preemption_policy),
         existing_job_policy=int(request.existing_job_policy),
-        priority_band=int(request.priority_band),
+        priority_band=priority_band,
         task_image=request.task_image,
         container_profile=int(request.container_profile),
         submit_argv_json=list(request.submit_argv),
@@ -289,6 +311,7 @@ def insert_job_and_config(
             job_id=job_id,
             requester_id=request.federation.requester_id,
             owner_principal=request.federation.owner_principal,
+            handoff_nonce=request.federation.handoff_nonce,
         )
 
     # Record the job-level creation for any requester federating with this peer (a
@@ -304,7 +327,6 @@ def insert_job_and_config(
         replicas=replicas,
         effective_submission_ms=effective_submission_ms,
         root_submitted_ms=root_submitted_ms,
-        band_sort_key=band_sort_key,
         validation_error=validation_error,
     )
 
@@ -347,18 +369,22 @@ def cancel(
 def remove_finished(
     cur: Tx,
     job_id: JobName,
+    *,
+    record_tombstone: bool = True,
 ) -> bool:
     """Remove a finished job and its tasks from state.
 
     Only removes jobs that are in a terminal state. Returns True if removed,
-    False if the job does not exist or is not finished.
+    False if the job does not exist or is not finished. ``record_tombstone=False``
+    is for a federated resubmission replacing a finished run in place — the
+    parent must see the fresh submission's changelog row, not a tombstone.
     """
     job_state = reads.get_job_state(cur, job_id)
     if job_state is None:
         return False
     if job_state not in TERMINAL_JOB_STATES:
         return False
-    writes.delete_job(cur, job_id)
+    writes.delete_job(cur, job_id, record_tombstone=record_tombstone)
     cur.register(
         lambda: log_event(
             "job_removed",

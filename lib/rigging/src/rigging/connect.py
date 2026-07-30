@@ -144,6 +144,10 @@ def capability_path(name: str, token: str) -> str:
     return f"/proxy/t/{token}/" + name.strip("/").replace("/", ".")
 
 
+def federated_capability_path(cluster: str, name: str, token: str) -> str:
+    return f"/proxy/t/cluster={cluster}/{token}/" + name.strip("/").replace("/", ".")
+
+
 @dataclass(frozen=True)
 class ParsedTransport:
     """A transport URL resolved into its transport, scheme-implied auth, and path."""

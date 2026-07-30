@@ -22,7 +22,7 @@
       "name": "/test-user/endpoint-job",
       "ports_json": "[]",
       "preemption_policy": 0,
-      "priority_band": 0,
+      "priority_band": 2,
       "res_cpu_millicores": 1000,
       "res_device_json": "{}",
       "res_disk_bytes": 0,
@@ -73,9 +73,13 @@
       "error": null,
       "exit_code": null,
       "finished_at_ms": null,
+      "node_name": "",
+      "pod_name": "",
+      "pod_uid": "",
       "started_at_ms": null,
       "state": 9,
       "task_id": "/test-user/endpoint-job/0",
+      "terminal_reason": "",
       "worker_id": "w-endpoint"
     }
   ],
@@ -99,6 +103,7 @@
       "priority_root_submitted_ms": 1704067200000,
       "started_at_ms": 1704067200000,
       "state": 9,
+      "status_message": null,
       "submitted_at_ms": 1704067200000,
       "task_id": "/test-user/endpoint-job/0",
       "task_index": 0

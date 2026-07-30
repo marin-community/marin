@@ -16,6 +16,7 @@ from iris.cluster.controller.reconcile.effects import (
     ControllerEffects,
     JobRowDelta,
     LogEvent,
+    TaskActionEvent,
     TaskRowDelta,
 )
 from iris.cluster.controller.reconcile.policy import CANCEL_GUARD_STATES
@@ -238,8 +239,8 @@ class Overlay:
         """Merge a task delta into the accumulator.
 
         Per-field fold (earlier accumulated ``old`` then newer ``delta``):
-        state last-wins; error/exit_code/container_id last-non-null; started_at
-        first-non-null; finished_at last-wins (may clear to None).
+        state last-wins; error/exit_code/container_id/status_message last-non-null;
+        started_at first-non-null; finished_at last-wins (may clear to None).
         """
         old = self._effects.tasks.get(delta.task_id)
         if old is None:
@@ -253,6 +254,7 @@ class Overlay:
             started_at=_first(old.started_at, delta.started_at),
             finished_at=delta.finished_at,
             container_id=_last_non_null(old.container_id, delta.container_id),
+            status_message=_last_non_null(old.status_message, delta.status_message),
         )
 
     def merge_attempt(self, delta: AttemptRowDelta) -> None:
@@ -275,6 +277,10 @@ class Overlay:
                 finished_at=_first(old.finished_at, delta.finished_at),
                 exit_code=_last_non_null(old.exit_code, delta.exit_code),
                 error=_last_non_null(old.error, delta.error),
+                pod_name=_last_non_null(old.pod_name, delta.pod_name),
+                pod_uid=_last_non_null(old.pod_uid, delta.pod_uid),
+                node_name=_last_non_null(old.node_name, delta.node_name),
+                terminal_reason=_last_non_null(old.terminal_reason, delta.terminal_reason),
             )
         self._effects.attempts[key] = merged
         # The job-wide failure budget counts FAILED attempt deltas (job_basis); a
@@ -340,6 +346,11 @@ class Overlay:
 
     def emit_log_event(self, event: LogEvent) -> None:
         self._effects.log_events.append(event)
+
+    def emit_task_event(self, event: TaskActionEvent) -> None:
+        if event.attempt_id < 0:
+            return
+        self._effects.task_events.append(event)
 
     def emit_worker_build_failed(self, worker_id: WorkerId) -> None:
         self._effects.health.build_failed.append(worker_id)

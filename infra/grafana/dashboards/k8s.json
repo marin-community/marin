@@ -1,0 +1,601 @@
+{
+  "uid": "marin-k8s",
+  "title": "K8s control plane",
+  "description": "CoreWeave Kubernetes control-plane state and recent task actions: live API reads cover watched components, webhook endpoints, pods, Kueue admission, Warning events, and GPU rack inventory; the finelog-backed task-action table retains Iris and backend decisions after Kubernetes objects disappear. Every table carries a cluster column.",
+  "tags": [
+    "marin",
+    "generated"
+  ],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "Cluster health",
+      "description": "Whether each cluster's k8s API server answers the bridge, with the error class (auth, network, timeout, http) when it does not.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "k8s"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "latency_ms"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/health",
+          "url_options": {
+            "method": "GET"
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "reachable",
+              "text": "reachable",
+              "type": "boolean"
+            },
+            {
+              "selector": "error_class",
+              "text": "error_class",
+              "type": "string"
+            },
+            {
+              "selector": "error",
+              "text": "error",
+              "type": "string"
+            },
+            {
+              "selector": "latency_ms",
+              "text": "latency_ms",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "Webhook endpoints",
+      "description": "Ready endpoints behind each watched admission-webhook service, from discovery.k8s.io EndpointSlices. Zero means fail-closed admission is rejecting pod CREATE.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "k8s"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ready_endpoints"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "green",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "kind"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/control_plane",
+          "url_options": {
+            "method": "GET"
+          },
+          "filterExpression": "kind == 'webhook'",
+          "columns": [
+            {
+              "selector": "kind",
+              "text": "kind",
+              "type": "string"
+            },
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "component",
+              "text": "webhook",
+              "type": "string"
+            },
+            {
+              "selector": "ready_endpoints",
+              "text": "ready_endpoints",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "panelRef": "kueue_admission_backlog",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      }
+    },
+    {
+      "id": 4,
+      "panelRef": "control_plane_components",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 7
+      }
+    },
+    {
+      "id": 13,
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "panelRef": "coreweave_node_health"
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Stuck terminating pods",
+      "description": "Pods still present at least two minutes after metadata.deletionTimestamp. Only node_cleanup rows that request GPUs page; finalizer, terminal, unbound, and invalid_timestamp rows need API/controller cleanup rather than an automatic node reboot.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "k8s"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 23
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "overdue_seconds"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "deletion_grace_seconds"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/termination_candidates",
+          "url_options": {
+            "method": "GET"
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "namespace",
+              "text": "namespace",
+              "type": "string"
+            },
+            {
+              "selector": "pod",
+              "text": "pod",
+              "type": "string"
+            },
+            {
+              "selector": "node",
+              "text": "node",
+              "type": "string"
+            },
+            {
+              "selector": "phase",
+              "text": "phase",
+              "type": "string"
+            },
+            {
+              "selector": "classification",
+              "text": "classification",
+              "type": "string"
+            },
+            {
+              "selector": "gpu_count",
+              "text": "gpu_count",
+              "type": "number"
+            },
+            {
+              "selector": "task_attempt",
+              "text": "task_attempt",
+              "type": "string"
+            },
+            {
+              "selector": "priority_class",
+              "text": "priority_class",
+              "type": "string"
+            },
+            {
+              "selector": "overdue_seconds",
+              "text": "overdue_seconds",
+              "type": "number"
+            },
+            {
+              "selector": "deletion_grace_seconds",
+              "text": "deletion_grace_seconds",
+              "type": "number"
+            },
+            {
+              "selector": "finalizers",
+              "text": "finalizers",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "panelRef": "crashlooping_pods",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 31
+      }
+    },
+    {
+      "id": 6,
+      "panelRef": "pending_gated_pods",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 31
+      }
+    },
+    {
+      "id": 7,
+      "panelRef": "warning_events",
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 39
+      }
+    },
+    {
+      "id": 12,
+      "type": "table",
+      "title": "Recent Iris task actions",
+      "description": "Task-scoped backend verdicts and controller decisions retained in iris.task_event on the fleet finelog hub. Kueue evictions, retries, gang bounces, and finalization remain visible here after Kubernetes Events and Pods disappear; CoreWeave audit logs remain the actor-level API record.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 48
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "attempt_uid"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "time",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT ts, COALESCE(NULLIF(cluster,''),'marin') AS cluster, task_id, attempt_id, attempt_uid, type, source, reason, message, count FROM \"iris.task_event\" WHERE ts >= {{from}} AND ts < {{to}} ORDER BY ts DESC LIMIT 200"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "ts",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "task_id",
+              "text": "task",
+              "type": "string"
+            },
+            {
+              "selector": "attempt_id",
+              "text": "attempt",
+              "type": "number"
+            },
+            {
+              "selector": "attempt_uid",
+              "text": "attempt_uid",
+              "type": "string"
+            },
+            {
+              "selector": "type",
+              "text": "type",
+              "type": "string"
+            },
+            {
+              "selector": "source",
+              "text": "source",
+              "type": "string"
+            },
+            {
+              "selector": "reason",
+              "text": "reason",
+              "type": "string"
+            },
+            {
+              "selector": "message",
+              "text": "message",
+              "type": "string"
+            },
+            {
+              "selector": "count",
+              "text": "count",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "panelRef": "gpu_rack_tray_inventory",
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 58
+      }
+    },
+    {
+      "id": 10,
+      "type": "barchart",
+      "title": "GPU racks — trays ready",
+      "description": "GB200 NVL72 racks only, same scope as the inventory table above. Trays Ready per physical rack (bar height), colored by the same thresholds: red under 16, orange 16-17, green at the 18-tray full spec. One bar per rack_name, so a rack short of trays reads at a glance without scanning the table.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "k8s"
+      },
+      "gridPos": {
+        "h": 14,
+        "w": 24,
+        "x": 0,
+        "y": 67
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 18,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 16
+              },
+              {
+                "color": "green",
+                "value": 18
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xField": "rack_name",
+        "barWidth": 0.8,
+        "groupWidth": 0.7,
+        "showValue": "always",
+        "stacking": "none",
+        "tooltip": {
+          "mode": "single"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/gpu_racks",
+          "url_options": {
+            "method": "GET"
+          },
+          "columns": [
+            {
+              "selector": "rack_name",
+              "text": "rack_name",
+              "type": "string"
+            },
+            {
+              "selector": "trays_ready",
+              "text": "trays_ready",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 81
+      },
+      "panelRef": "finelog_fleet_health"
+    }
+  ]
+}

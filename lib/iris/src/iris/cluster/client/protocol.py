@@ -37,7 +37,7 @@ class ClusterClient(Protocol):
         preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
         task_image: str | None = None,
-        priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
+        priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
         container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
         submit_argv: list[str] | None = None,
     ) -> JobName: ...
@@ -82,7 +82,9 @@ class ClusterClient(Protocol):
         self, endpoint_name: str, ttl: Duration | None = None
     ) -> controller_pb2.Controller.MintEndpointTokenResponse: ...
 
-    def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[controller_pb2.Controller.Endpoint]: ...
+    def list_endpoints(self, prefix: str) -> list[controller_pb2.Controller.Endpoint]: ...
+
+    def list_endpoint_instances(self, name: str) -> list[controller_pb2.Controller.Endpoint]: ...
 
     def list_workers(
         self,
@@ -93,6 +95,7 @@ class ClusterClient(Protocol):
         self,
         *,
         query: controller_pb2.Controller.JobQuery | None = None,
+        limit: int | None = None,
         page_size: int = 500,
     ) -> list[job_pb2.JobStatus]: ...
 

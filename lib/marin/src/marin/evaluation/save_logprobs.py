@@ -25,7 +25,7 @@ import levanter
 import levanter.tracker
 import numpy as np
 from fray.current_client import current_client
-from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
+from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
 from jax.experimental import multihost_utils
@@ -42,6 +42,7 @@ from thalas.execution.types import ExecutorStep, InputName, this_output_path
 
 from marin.evaluation.model_loading import load_eval_model
 from marin.processing.tokenize.data_configs import with_pack
+from marin.training.run_environment import extras_for_resources
 from marin.utils import fsspec_exists
 
 logger = logging.getLogger(__name__)
@@ -210,9 +211,7 @@ def run_save_logprobs_on_pod(config: SaveLogprobsOnPodConfig) -> None:
     """Submit save_logprobs as a fray job on a TPU pod and wait for completion."""
     client = current_client()
 
-    extras = []
-    if isinstance(config.resources.device, TpuConfig):
-        extras.append("tpu")
+    extras = extras_for_resources(config.resources)
 
     # Name must be unique per (parent, name) — concurrent steps under the same parent
     # collide otherwise and adopt_existing=True silently merges them onto one container.

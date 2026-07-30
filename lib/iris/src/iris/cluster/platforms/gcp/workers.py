@@ -49,8 +49,8 @@ from iris.cluster.platforms.gcp.service import (
 from iris.cluster.platforms.gcp.ssh import OS_LOGIN_METADATA, ssh_impersonate_service_account
 from iris.cluster.platforms.gcp.worker_bootstrap import (
     build_worker_bootstrap_script,
-    rewrite_ghcr_to_ar_remote,
-    zone_to_multi_region,
+    rewrite_image_to_mirror,
+    upstream_registry,
 )
 from iris.cluster.platforms.remote_exec import GceRemoteExec
 from iris.cluster.platforms.types import (
@@ -88,11 +88,7 @@ def _spawn_bootstrap_thread(
                     handle.slice_id,
                     cleanup_error,
                 )
-            with handle._bootstrap_lock:
-                handle._bootstrap_state = CloudSliceState.FAILED
-                # Keep the reason (e.g. the create-LRO "no more capacity" stockout)
-                # so describe() can surface it and the autoscaler can classify it.
-                handle._bootstrap_error = str(e)
+            handle.bootstrap.mark_failed(str(e))
 
     threading.Thread(target=_run, name=f"bootstrap-{handle.slice_id}", daemon=True).start()
 
@@ -262,6 +258,7 @@ class GcpWorkerProvider:
         gcp_service: GcpService | None = None,
     ):
         self._project_id = gcp_config.project_id
+        self._registry_mirrors = gcp_config.registry_mirrors
         self._label_prefix = label_prefix
         self._worker_port = worker_port
         self._iris_labels = Labels(label_prefix)
@@ -290,18 +287,19 @@ class GcpWorkerProvider:
         return self._ssh_config
 
     def resolve_image(self, image: str, zone: str | None = None) -> str:
-        """Rewrite ``ghcr.io/`` images to the AR remote repo for *zone*'s continent.
+        """Rewrite public-registry images to the pull-through mirror for *zone*'s continent.
 
-        Non-GHCR images pass through unchanged.
+        Routing comes from ``platform.gcp.registry_mirrors`` (upstream registry →
+        zone prefix → mirror repo prefix); mirrored pulls stay on-continent and
+        dodge upstream rate limits. Images whose registry has no mirror entry —
+        gcr.io, Artifact Registry, a private host, or any upstream the cluster
+        config leaves unlisted — pass through unchanged.
         """
-        if not image.startswith("ghcr.io/"):
+        if upstream_registry(image) not in self._registry_mirrors:
             return image
         if not zone:
-            raise ValueError("zone is required for GHCR→AR image rewriting on GCP")
-        multi_region = zone_to_multi_region(zone)
-        if not multi_region:
-            return image
-        return rewrite_ghcr_to_ar_remote(image, multi_region, self._project_id)
+            raise ValueError("zone is required to rewrite public images to a registry mirror on GCP")
+        return rewrite_image_to_mirror(image, zone, self._registry_mirrors)
 
     def _best_effort_delete_vm(self, vm_name: str, zone: str) -> None:
         """Try to delete a GCE VM that may have been partially created."""
@@ -957,8 +955,7 @@ def _run_tpu_bootstrap(
         )
 
     logger.info("Bootstrap completed for TPU slice %s (%d workers)", handle.slice_id, len(workers))
-    with handle._bootstrap_lock:
-        handle._bootstrap_state = CloudSliceState.READY
+    handle.bootstrap.mark_ready()
 
 
 def _fetch_bootstrap_logs(gcp_service: GcpService, handle: GcpSliceHandle) -> None:
@@ -968,7 +965,7 @@ def _fetch_bootstrap_logs(gcp_service: GcpService, handle: GcpSliceHandle) -> No
     log_filter = (
         f'resource.type="gce_instance" '
         f'textPayload:"[iris-init]" '
-        f'labels."compute.googleapis.com/resource_name":"{handle._slice_id}" '
+        f'labels."compute.googleapis.com/resource_name":"{handle.slice_id}" '
         f'timestamp>="{cutoff_str}"'
     )
     texts = gcp_service.logging_read(log_filter, limit=200)
@@ -1057,5 +1054,4 @@ def _run_vm_slice_bootstrap(
         raise InfraError(f"VM slice {handle.slice_id} bootstrap did not complete within {bootstrap_timeout}s")
 
     logger.info("Bootstrap completed for VM slice %s", handle.slice_id)
-    with handle._bootstrap_lock:
-        handle._bootstrap_state = CloudSliceState.READY
+    handle.bootstrap.mark_ready()

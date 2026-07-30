@@ -26,6 +26,7 @@ from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_VALUES, priority_band_name, priority_band_value
 from rigging.server_auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Timestamp
+from tests.cluster.controller._test_support import submit_job_in_tx
 from tests.cluster.controller.conftest import (
     MockController,
     make_controller_state,
@@ -203,7 +204,7 @@ def _start_running_job(
         replicas=replicas,
     )
     with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=job_id, request=request, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=job_id, request=request, ts=Timestamp.now())
 
     worker_id = WorkerId(f"w-{user}")
     with state._db.transaction() as cur:
@@ -256,7 +257,7 @@ def test_compute_user_spend_excludes_pending(state):
     job_id = JobName.root("bob", "pending")
     request = _launch_request(job_id.to_wire(), cpu_millicores=2000, memory_bytes=8 * GiB)
     with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=job_id, request=request, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=job_id, request=request, ts=Timestamp.now())
     with state._db.read_snapshot() as snap:
         assert compute_user_spend(snap).get("bob", 0) == 0
 

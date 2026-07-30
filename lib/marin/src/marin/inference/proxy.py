@@ -1,16 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import logging
 import socket
 import threading
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any
 
 import anyio
 import uvicorn
@@ -20,6 +20,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
+from marin.inference.http_proxy import forwardable_request_headers
 from marin.inference.types import (
     InferenceRequest,
     InferenceResponse,
@@ -27,8 +28,6 @@ from marin.inference.types import (
     OpenAIEndpoint,
     RunningModel,
     format_request_ids,
-    pack_json_payload,
-    unpack_json_payload,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,6 +53,7 @@ class InferenceProxy:
         readiness_timeout_seconds: float,
         max_pending_requests: int,
         response_fetch_batch_size: int,
+        ignored_request_fields: Sequence[str] = (),
         backoff: ExponentialBackoff | None = None,
     ) -> None:
         if max_pending_requests < 1:
@@ -66,6 +66,7 @@ class InferenceProxy:
         self._readiness_timeout_seconds = readiness_timeout_seconds
         self._max_pending_requests = max_pending_requests
         self._response_fetch_batch_size = response_fetch_batch_size
+        self._ignored_request_fields = frozenset(ignored_request_fields)
         if backoff is None:
             backoff = ExponentialBackoff(initial=0.01, maximum=0.25, factor=2.0)
         self._backoff = backoff
@@ -76,9 +77,8 @@ class InferenceProxy:
         self.stats = ProxyStats()
         self.app = Starlette(
             routes=[
-                Route("/v1/models", self._models),
-                Route("/v1/completions", self._forward, methods=["POST"]),
-                Route("/v1/chat/completions", self._forward, methods=["POST"]),
+                Route("/health", self._health),
+                Route("/v1/{path:path}", self._forward, methods=["GET", "POST", "OPTIONS"]),
             ],
         )
 
@@ -116,28 +116,49 @@ class InferenceProxy:
         self._poll_stop_event = None
         logger.info("InferenceProxy stopped stats=%s", self.stats)
 
-    def _models(self, request: Request) -> Response:
-        return self.forward_request(
-            request.url.path,
-            {},
-            method="GET",
-            timeout_seconds=self._readiness_timeout_seconds,
+    def _health(self, _request: Request) -> Response:
+        ready = self._poll_thread is not None and self._poll_thread.is_alive()
+        return JSONResponse({"status": "ok" if ready else "stopped"}, status_code=200 if ready else 503)
+
+    async def _forward(self, request: Request) -> Response:
+        body = await request.body()
+        timeout_seconds = (
+            self._readiness_timeout_seconds if request.url.path == "/v1/models" else self._request_timeout_seconds
+        )
+        content_type = request.headers.get("content-type", "")
+        if body and "application/json" in content_type:
+            try:
+                request_json = json.loads(body)
+            except ValueError:
+                return JSONResponse({"error": "request body must be valid JSON"}, status_code=400)
+            if not isinstance(request_json, dict):
+                return JSONResponse({"error": "request body must be a JSON object"}, status_code=400)
+            if request_json.get("stream") is True:
+                return JSONResponse({"error": "brokered inference does not support streaming"}, status_code=400)
+            if self._ignored_request_fields:
+                request_json = {
+                    key: value for key, value in request_json.items() if key not in self._ignored_request_fields
+                }
+                body = json.dumps(request_json, separators=(",", ":")).encode()
+        return await anyio.to_thread.run_sync(
+            lambda: self.forward_raw_request(
+                request.url.path,
+                body,
+                method=request.method,
+                query_string=request.url.query,
+                headers=forwardable_request_headers(request.headers),
+                timeout_seconds=timeout_seconds,
+            )
         )
 
-    def _forward(self, request: Request) -> Response:
-        # Starlette runs sync endpoints in a worker thread, but request.json()
-        # still reads the async ASGI body stream.
-        request_json = anyio.from_thread.run(request.json)
-        if not isinstance(request_json, dict):
-            return JSONResponse({"error": "request body must be a JSON object"}, status_code=400)
-        return self.forward_request(request.url.path, request_json, method=request.method)
-
-    def forward_request(
+    def forward_raw_request(
         self,
         path: str,
-        request_json: Mapping[str, Any],
+        body: bytes,
         *,
         method: str,
+        query_string: str = "",
+        headers: Mapping[str, str] | None = None,
         timeout_seconds: float | None = None,
     ) -> Response:
         request_id = str(uuid.uuid4())
@@ -168,7 +189,9 @@ class InferenceProxy:
                     request_id=request_id,
                     method=method,
                     path=path,
-                    payload=pack_json_payload(request_json),
+                    payload=body,
+                    query_string=query_string,
+                    headers=tuple((headers or {}).items()),
                 ),
             )
             logger.info(
@@ -203,7 +226,7 @@ class InferenceProxy:
             path,
             response.status_code,
         )
-        return JSONResponse(unpack_json_payload(response.payload), status_code=response.status_code)
+        return Response(content=response.payload, status_code=response.status_code, headers=dict(response.headers))
 
     def run_forever(
         self,
@@ -271,6 +294,7 @@ def serve_inference_proxy(
     max_pending_requests: int,
     response_fetch_batch_size: int,
     server_start_timeout_seconds: float,
+    ignored_request_fields: Sequence[str] = (),
     backoff: ExponentialBackoff | None = None,
 ) -> Iterator[RunningModel]:
     actual_port = _reserve_port(host, port)
@@ -281,6 +305,7 @@ def serve_inference_proxy(
         readiness_timeout_seconds=readiness_timeout_seconds,
         max_pending_requests=max_pending_requests,
         response_fetch_batch_size=response_fetch_batch_size,
+        ignored_request_fields=ignored_request_fields,
         backoff=backoff,
     )
     config = uvicorn.Config(proxy.app, host=host, port=actual_port, log_level="error", log_config=None)

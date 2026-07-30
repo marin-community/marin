@@ -22,6 +22,7 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.config import PeerConfig
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.cluster.controller import reads, writes
+from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_store import ControllerFederationStore
 from iris.cluster.controller.service import ControllerServiceImpl
@@ -30,6 +31,7 @@ from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.types import JobName
 from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
+from iris.rpc.auth import FEDERATION_PEER_ROLE
 from rigging.server_auth import VerifiedIdentity, identity_scope
 
 from ._test_support import ControllerTestState
@@ -61,6 +63,7 @@ class _ProxyPeerConnection:
         self._service = service
         self.profile_calls = 0
         self.exec_calls = 0
+        self.status_calls = 0
 
     def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
         return []
@@ -95,6 +98,11 @@ class _ProxyPeerConnection:
         self.exec_calls += 1
         with identity_scope(_PEER_IDENTITY):
             return self._service.exec_in_container(request, None)
+
+    def get_process_status(self, request: job_pb2.GetProcessStatusRequest) -> job_pb2.GetProcessStatusResponse:
+        self.status_calls += 1
+        with identity_scope(_PEER_IDENTITY):
+            return self._service.get_process_status(request, None)
 
 
 def _make_service(
@@ -239,6 +247,70 @@ def test_exec_against_a_federated_task_runs_on_the_peer(tmp_path, log_client):
         (call,) = peer_service._controller.provider.exec_in_container.call_args_list
         assert call.args[0].task_id == job_id.task(0).to_wire()
         assert call.args[1].task_id == job_id.task(0).to_wire()
+
+
+def test_process_status_against_a_federated_task_runs_on_the_peer(tmp_path, log_client):
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
+        manager = _attach_federation(parent_service, _ProxyPeerConnection(peer_service))
+        job_id = _handoff_and_mirror_running_task(parent_service, parent_state, peer_state, manager)
+
+        peer_service._controller.provider.get_process_status.return_value = job_pb2.GetProcessStatusResponse(
+            process_info=job_pb2.ProcessInfo(pid=1, thread_count=7)
+        )
+        resp = parent_service.get_process_status(
+            job_pb2.GetProcessStatusRequest(target=job_id.task(0).to_wire()),
+            None,
+        )
+
+        # The status could only have come from the peer's backend.
+        assert resp.process_info.thread_count == 7
+        # The federated task was never dispatched to the parent's local fallback backend.
+        parent_service._controller.provider.get_process_status.assert_not_called()
+        # The peer resolved the task under the same, cluster-invariant job id.
+        (call,) = peer_service._controller.provider.get_process_status.call_args_list
+        assert call.args[0].task_id == job_id.task(0).to_wire()
+
+
+def test_process_status_scopes_a_federated_peer_to_the_jobs_it_handed_off(tmp_path, log_client):
+    """Under enforced federation auth, the proxied debug RPC lands on the peer carrying a
+    federation-peer bearer — not the admin identity the other tests assert under. The peer
+    runs it only for a job that peer actually federated here (its received handle); a peer
+    that never handed the job off is denied before any backend call."""
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
+        manager = _attach_federation(parent_service, _ProxyPeerConnection(peer_service))
+        job_id = _handoff_and_mirror_running_task(parent_service, parent_state, peer_state, manager)
+
+        # An auth-enforcing view of the peer over the same state. The handoff above ran
+        # through the null-auth service (scoping skipped); this one activates it.
+        enforcing_peer = ControllerServiceImpl(
+            controller=peer_service._controller,
+            bundle_store=BundleStore(storage_dir=str(tmp_path / "peer" / "bundles")),
+            log_client=log_client,
+            db=peer_state._db,
+            endpoint_service=peer_service._endpoint_service,
+            auth=ControllerAuth(provider="iap"),
+        )
+        peer_service._controller.provider.get_process_status.return_value = job_pb2.GetProcessStatusResponse(
+            process_info=job_pb2.ProcessInfo(pid=1, thread_count=7)
+        )
+        request = job_pb2.GetProcessStatusRequest(target=job_id.task(0).to_wire())
+
+        # "parent" is the requester on the received handle — it may read the task.
+        with identity_scope(VerifiedIdentity(user_id="parent", role=FEDERATION_PEER_ROLE)):
+            resp = enforcing_peer.get_process_status(request, None)
+        assert resp.process_info.thread_count == 7
+
+        # A different peer never federated this job here — PERMISSION_DENIED, no backend call.
+        peer_service._controller.provider.get_process_status.reset_mock()
+        with identity_scope(VerifiedIdentity(user_id="intruder", role=FEDERATION_PEER_ROLE)):
+            with pytest.raises(ConnectError) as exc:
+                enforcing_peer.get_process_status(request, None)
+        assert exc.value.code == Code.PERMISSION_DENIED
+        peer_service._controller.provider.get_process_status.assert_not_called()
 
 
 def test_exec_forwards_a_task_id_whose_job_name_contains_a_colon(tmp_path, log_client):

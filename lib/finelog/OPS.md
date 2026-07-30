@@ -38,6 +38,41 @@ sets `client_url`:
 uv run finelog query marin 'SELECT * FROM "iris.profile" LIMIT 10'
 ```
 
+## Diagnosing query latency
+
+Inspect the namespace before changing its policy or resetting it. Record its row
+count, bytes, segment count, key column, and policy from `ListNamespaces`; a
+correct key with many segments points to a different problem than a
+misconfigured key. Do not reset a shared namespace such as `telltale` without
+checking which producers use it.
+
+Use native timestamp comparisons for timestamp columns:
+
+```sql
+WHERE ts >= now() - INTERVAL '5 minutes'
+```
+
+DataFusion folds `now()` to a literal and can push the resulting range into
+Parquet pruning. `epoch_ms` is a column in Finelog's `log` namespace, not a
+timestamp conversion function.
+
+For a bounded query that is still slow, run `EXPLAIN ANALYZE` and compare
+`row_groups_pruned_statistics`, `bytes_scanned`, `metadata_load_time`, and
+`time_elapsed_opening`. High metadata/opening time with few scanned bytes means
+row-group pruning worked and file metadata is the remaining cost.
+
+`query_metadata_cache_mb` in a deployment config overrides DataFusion's
+process-wide Parquet metadata cache limit. Leave it unset to retain DataFusion's
+default. Finelog logs the effective limit at query-engine startup; every slow
+query warning also includes `metadata_cache_limit_bytes`,
+`metadata_cache_size_bytes`, `metadata_cache_entries`, and
+`metadata_cache_hits`. Compare warm-query latency and those fields before
+retaining or increasing an override.
+
+`StoragePolicy` controls eviction of eligible uploaded segments from Finelog's
+local cache. It is not a row-age retention guarantee and does not delete objects
+from the remote archive.
+
 ## Onboarding a cluster onto the forwarding hub
 
 `marin` is the hub: every other cluster's finelog forwards its rows there, so a
@@ -84,7 +119,7 @@ runs it needs `roles/secretmanager.secretAccessor` on that secret.
 
 ```bash
 uv run finelog deploy restart marin              # hub: gcp backend, in-place
-export R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=...
+export R2_KEY_ID=... R2_KEY_SECRET=...
 uv run finelog deploy up "$CLUSTER" --no-build   # sender: k8s, applies Secret + env
 ```
 
@@ -108,3 +143,41 @@ To rotate a key, add the new Secret Manager version, add its public key alongsid
 the old one under the same `keys[].cluster` (the hub accepts either), roll the
 hub, re-pin the sender's `signing_key` to the new version, roll the sender, then
 drop the old public key and roll the hub again.
+
+## Diagnosing Kubernetes mirror readiness
+
+Use the kubeconfig and context from `config/<cluster>.yaml`; do not rely on the
+file's current context. Inspect the deployment, termination reason, probe events,
+and persistent cache before changing resources:
+
+```bash
+kubectl --kubeconfig ~/.kube/coreweave-iris --context <context> -n iris \
+  describe pod -l app=finelog-<cluster>
+kubectl --kubeconfig ~/.kube/coreweave-iris --context <context> -n iris \
+  logs deployment/finelog-<cluster> --previous --tail=300 --timestamps=true
+kubectl --kubeconfig ~/.kube/coreweave-iris --context <context> -n iris \
+  exec deployment/finelog-<cluster> -- cat /sys/fs/cgroup/memory.events
+kubectl --kubeconfig ~/.kube/coreweave-iris --context <context> -n iris \
+  exec deployment/finelog-<cluster> -- df -h /var/cache/finelog
+kubectl --kubeconfig ~/.kube/coreweave-iris --context <context> -n iris \
+  logs deployment/finelog-<cluster> --timestamps=true | \
+  rg 'finelog (catalog sqlite ready|local segment adoption complete|namespace startup complete|store startup complete|remote reconcile complete)'
+```
+
+Exit 137 is ambiguous by itself. A nearby `Killing ... failed liveness probe`
+event with zero `oom_kill` events means kubelet terminated an unresponsive
+process; it was not a memory-limit OOM. Compare `memory.current` and
+`memory.peak` with the configured limit, and compare cache use with the PVC
+capacity before raising either. Slow `WriteRows` calls coincident with large
+compactions indicate ingest pressure; tune `cpu_request`, `cpu_limit`,
+`memory_request`, and `memory_limit` in the cluster's finelog config. Every
+Kubernetes deployment also has a five-minute startup probe so reopening an
+existing network-backed store does not feed a liveness restart loop.
+
+The startup events carry millisecond timings for SQLite open, one-time catalog
+adoption, local directory discovery, catalog reads, Parquet footer reconciliation,
+batched catalog refresh, namespace rehydration, and total store open. The catalog
+event also reports the effective SQLite journal and synchronous modes. Remote
+reconcile runs after the listener binds and reports object listing, footer fetch,
+catalog update, and delete timings separately; a slow remote phase cannot explain
+pre-bind readiness delay.

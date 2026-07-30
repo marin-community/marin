@@ -534,11 +534,11 @@ def _vllm_backend(args: argparse.Namespace) -> None:
     os.environ.setdefault("VLLM_XLA_CACHE_PATH", args.cache_dir)
     os.environ.setdefault("PYTHONUNBUFFERED", "1")
 
-    from marin.evaluation.evaluators.evaluator import ModelConfig  # noqa: PLC0415
+    from marin.inference.config import InferenceModelConfig  # noqa: PLC0415
     from marin.inference.vllm_server import VllmEnvironment  # noqa: PLC0415
 
     staged_artifact = _stage_artifact_for_vllm(args.artifact_dir)
-    model = ModelConfig(
+    model = InferenceModelConfig(
         name=SERVED_MODEL_NAME,
         path=staged_artifact.vllm_model_path,
         engine_kwargs={

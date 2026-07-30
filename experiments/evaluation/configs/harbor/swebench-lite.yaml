@@ -1,0 +1,10 @@
+n_concurrent_trials: 4
+retry:
+  exclude_exceptions: []
+environment:
+  type: daytona
+agents:
+  - name: terminus-2
+datasets:
+  - name: hf://DCAgent2/swebench-verified-random-100-folders
+    ref: main

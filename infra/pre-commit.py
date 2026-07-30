@@ -312,24 +312,6 @@ def check_license_headers(files: list[pathlib.Path], fix: bool, license_file: pa
     return _record(label, 0)
 
 
-def check_mypy(files: list[pathlib.Path], fix: bool) -> int:
-    if not files:
-        return 0
-
-    args = ["uvx", "mypy@1.19.1", "--ignore-missing-imports", "--python-version=3.12"]
-
-    test_excluded = [f for f in files if not str(f.relative_to(ROOT_DIR)).startswith("tests/")]
-    if not test_excluded:
-        return _record("Mypy type checker", 0)
-
-    file_args = [str(f.relative_to(ROOT_DIR)) for f in test_excluded]
-    args.extend(file_args)
-
-    result = run_cmd(args)
-    output = (result.stdout + result.stderr).strip()
-    return _record("Mypy type checker", result.returncode, output)
-
-
 def check_large_files(files: list[pathlib.Path], fix: bool) -> int:
     if not files:
         return 0
@@ -440,6 +422,50 @@ def check_toml_yaml(files: list[pathlib.Path], fix: bool) -> int:
         return _record("TOML and YAML", 1, buf.getvalue())
 
     return _record("TOML and YAML", 0)
+
+
+def check_json(files: list[pathlib.Path], fix: bool) -> int:
+    """Format JSON with a canonical 2-space indent and validate it parses.
+
+    Object key order is preserved (Grafana panel arrays are order-sensitive and
+    object keys carry no meaning, so reordering would only churn). Scoped by the
+    caller to hand-edited dashboard JSON; a repo-wide sweep would rewrite fixtures.
+    """
+    json_files = [f for f in files if f.suffix == ".json"]
+    if not json_files:
+        return 0
+
+    buf = io.StringIO()
+    invalid = []
+    reformatted = []
+    for file_path in json_files:
+        try:
+            with open(file_path) as f:
+                original = f.read()
+            data = json.loads(original)
+        except (OSError, json.JSONDecodeError) as e:
+            invalid.append((file_path, str(e)))
+            continue
+
+        formatted = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+        if formatted == original:
+            continue
+        reformatted.append(file_path)
+        if fix:
+            with open(file_path, "w") as f:
+                f.write(formatted)
+
+    if invalid:
+        for path, error in invalid:
+            buf.write(f"  - {path.relative_to(ROOT_DIR)}: {error}\n")
+        return _record("JSON formatter", 1, buf.getvalue())
+
+    if reformatted:
+        for path in reformatted:
+            buf.write(f"  - {path.relative_to(ROOT_DIR)}\n")
+        return _record("JSON formatter", 1, buf.getvalue())
+
+    return _record("JSON formatter", 0)
 
 
 def check_trailing_whitespace(files: list[pathlib.Path], fix: bool) -> int:
@@ -623,9 +649,6 @@ SKILL_REFERENCE_PLACEHOLDERS = [
     "graphs.jsonl",
     "tasks.jsonl",
 ]
-SKILL_REFERENCE_ALLOWLIST = {
-    ".agents/ops/logs/",
-}
 
 
 def _is_skill_file(file_path: pathlib.Path) -> bool:
@@ -639,10 +662,8 @@ def _skill_reference_exists(skill_path: pathlib.Path, reference: str) -> bool:
 
 
 def _should_skip_skill_reference(reference: str) -> bool:
-    return (
-        reference in SKILL_REFERENCE_ALLOWLIST
-        or any(token in reference for token in SKILL_REFERENCE_PLACEHOLDERS)
-        or any(character in reference for character in "*{}")
+    return any(token in reference for token in SKILL_REFERENCE_PLACEHOLDERS) or any(
+        character in reference for character in "*{}"
     )
 
 
@@ -813,7 +834,6 @@ PRECOMMIT_CONFIGS = [
             check_ruff,
             partial(check_black, config=LEVANTER_BLACK_CONFIG),
             partial(check_license_headers, license_file=LEVANTER_LICENSE),
-            # check_mypy,
         ],
     ),
     PrecommitConfig(
@@ -856,6 +876,12 @@ PRECOMMIT_CONFIGS = [
             check_toml_yaml,
             check_trailing_whitespace,
             check_eof_newline,
+        ],
+    ),
+    PrecommitConfig(
+        patterns=["infra/grafana/dashboards/*.json"],
+        checks=[
+            check_json,
         ],
     ),
     PrecommitConfig(

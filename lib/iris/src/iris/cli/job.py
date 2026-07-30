@@ -19,6 +19,8 @@ from pathlib import Path
 import click
 import humanfriendly
 import yaml
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from rigging.credentials import ClientCredentials
 from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
@@ -39,6 +41,7 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
+from iris.cluster.platforms.k8s.coreweave_topology import gpu_gang_coscheduling_level
 from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
@@ -52,6 +55,7 @@ from iris.cluster.types import (
     tpu_device,
 )
 from iris.rpc import job_pb2
+from iris.rpc.errors import format_connect_error
 from iris.rpc.proto_display import (
     CONTAINER_PROFILE_NAMES,
     PRIORITY_BAND_NAMES,
@@ -62,6 +66,11 @@ from iris.rpc.proto_display import (
 from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)
+
+# Default page size for `iris job list`. The server sorts by submission date
+# descending, so this fetches the most recent jobs rather than walking the whole
+# jobs table (which would hit the controller's deep-offset cap on a busy cluster).
+DEFAULT_JOB_LIST_LIMIT = 50
 
 _STATE_MAP: dict[str, job_pb2.JobState] = {
     "pending": job_pb2.JOB_STATE_PENDING,
@@ -82,16 +91,27 @@ def _remote_client(ctx: click.Context) -> IrisClient:
 def _terminate_jobs(
     client: IrisClient,
     job_ids: tuple[str, ...],
-    include_children: bool,
+    prefix: bool,
 ) -> list[JobName]:
     terminated: list[JobName] = []
     for raw in job_ids:
+        if prefix:
+            terminated.extend(client.terminate_prefix(raw))
+            continue
+
         name = JobName.from_wire(raw)
-        if include_children:
-            terminated.extend(client.terminate_prefix(name, exclude_finished=True))
-        else:
+        try:
             client.terminate(name)
-            terminated.append(name)
+        except ConnectError as exc:
+            if exc.code != Code.NOT_FOUND:
+                raise
+            candidates = client.list_jobs(prefix=name.to_wire(), limit=5)
+            suggestion = ""
+            if candidates:
+                candidate_names = ", ".join(job.job_id for job in candidates)
+                suggestion = f" Did you mean: {candidate_names}?"
+            raise click.ClickException(f"No job named '{name}'.{suggestion}") from exc
+        terminated.append(name)
     return terminated
 
 
@@ -490,13 +510,18 @@ def resolve_multinode_defaults(
 
     For TPUs with vm_count > 1, infers replicas from the topology and enables
     coscheduling by ``tpu-name`` so that all tasks land on workers in the same
-    TPU slice. For GPUs with replicas > 1, enables coscheduling by ``leafgroup``
-    (the H100 InfiniBand multi-node colocation level) so all replicas are
-    scheduled together.
+    TPU slice. For GPUs with replicas > 1, the coscheduling level is derived from
+    the GPU variant: NVL72 (GB200/GB300) gangs that fit a rack's guaranteed-schedulable
+    node slice bind HARD to ``nvlink.domain``; larger NVL72 gangs bind to
+    ``nvlink.domain.sliced``, which partitions them into rack-sized slices placed one per
+    NVLink domain (balanced N racks x 16); H100 and other GPUs coschedule on the soft
+    ``leafgroup`` IB level. A sliced gang whose size cannot split into equal, more-than-half-a-rack
+    slices, or whose pods are not node-saturating, is rejected here with a ``click.UsageError``
+    rather than deferred to a controller-side failure.
 
     Args:
         tpu: TPU type string (e.g. ``"v6e-32"``), or ``None``.
-        gpu: GPU type string (e.g. ``"H100"``), or ``None``.
+        gpu: GPU spec string (e.g. ``"H100x8"``, ``"GB200x4"``), or ``None``.
         replicas: Explicit replica count from the caller, or ``None`` if not
             specified (meaning the default should be inferred).
 
@@ -506,7 +531,12 @@ def resolve_multinode_defaults(
     """
     if not tpu:
         if gpu and replicas is not None and replicas > 1:
-            return replicas, CoschedulingConfig(group_by="leafgroup")
+            variant, gpu_count = parse_gpu_spec(gpu)
+            try:
+                level = gpu_gang_coscheduling_level(variant, gpu_count, replicas)
+            except ValueError as e:
+                raise click.UsageError(f"--replicas {replicas} for {variant}: {e}") from e
+            return replicas, CoschedulingConfig(group_by=level)
         return replicas or 1, None
 
     try:
@@ -588,7 +618,6 @@ def run_iris_job(
     wait: bool = True,
     job_name: str | None = None,
     replicas: int | None = None,
-    processes_per_task: int = 1,
     max_retries: int = 0,
     timeout: int = 0,
     extras: list[str] | None = None,
@@ -688,7 +717,7 @@ def run_iris_job(
         logger.info(f"Task image: {task_image}")
 
     logger.info(f"Using controller: {controller_url}")
-    priority_band = job_pb2.PRIORITY_BAND_UNSPECIFIED
+    priority_band = job_pb2.PRIORITY_BAND_INHERIT
     if priority is not None:
         priority_band = priority_band_value(priority)
         logger.info(f"Priority band: {priority}")
@@ -714,7 +743,6 @@ def run_iris_job(
         terminate_on_exit=terminate_on_exit,
         constraints=constraints or None,
         coscheduling=coscheduling,
-        processes_per_task=processes_per_task,
         user=user,
         priority_band=priority_band,
         container_profile=profile,
@@ -741,9 +769,8 @@ def _submit_and_wait_job(
     terminate_on_exit: bool = True,
     constraints: list[Constraint] | None = None,
     coscheduling: CoschedulingConfig | None = None,
-    processes_per_task: int = 1,
     user: str | None = None,
-    priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
+    priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
     container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
@@ -763,12 +790,14 @@ def _submit_and_wait_job(
         name=job_name,
         resources=resources,
         environment=EnvironmentSpec(
-            env_vars=env_vars, extras=extras or [], setup_scripts=setup_scripts, sync_packages=sync_packages or []
+            env_vars=env_vars,
+            extras=extras or [],
+            setup_scripts=setup_scripts,
+            sync_packages=sync_packages or [],
         ),
         constraints=constraints,
         coscheduling=coscheduling,
         replicas=replicas,
-        processes_per_task=processes_per_task,
         max_retries_failure=max_retries,
         max_task_failures=max_retries,
         timeout=Duration.from_seconds(timeout) if timeout else None,
@@ -802,7 +831,7 @@ def _submit_and_wait_job(
     except KeyboardInterrupt:
         if terminate_on_exit:
             logger.info(f"Terminating job {job.job_id}...")
-            terminated = _terminate_jobs(client, (str(job.job_id),), include_children=True)
+            terminated = _terminate_jobs(client, (str(job.job_id),), prefix=False)
             for t in terminated:
                 logger.info(f"  Terminated: {t}")
         return 130
@@ -884,12 +913,6 @@ Examples:
 @click.option("--user", type=str, help="Override the user prefix for the submitted job.")
 @click.option(
     "--replicas", type=int, default=None, help="Number of tasks for gang scheduling (auto-detected for multinode TPUs)"
-)
-@click.option(
-    "--processes-per-task",
-    type=int,
-    default=1,
-    help="GPU processes to run inside each task (default 1). >1 fans each task into N JAX processes per GPU group.",
 )
 @click.option("--max-retries", type=int, default=0, help="Max retries on failure (default: 0)")
 @click.option("--timeout", type=int, default=0, show_default=True, help="Job timeout in seconds (0 = no timeout)")
@@ -984,7 +1007,6 @@ def run(
     job_name: str | None,
     user: str | None,
     replicas: int | None,
-    processes_per_task: int,
     max_retries: int,
     timeout: int,
     region: tuple[str, ...],
@@ -1043,7 +1065,6 @@ def run(
             job_name=job_name,
             user=user,
             replicas=replicas,
-            processes_per_task=processes_per_task,
             max_retries=max_retries,
             timeout=timeout,
             extras=list(extra),
@@ -1074,31 +1095,38 @@ def run(
     sys.exit(exit_code)
 
 
-def _stop_jobs(ctx, job_id: tuple[str, ...], include_children: bool, stdin: bool, dry_run: bool) -> None:
+def _stop_jobs(ctx, job_id: tuple[str, ...], prefix: bool, stdin: bool, dry_run: bool) -> None:
     targets = _collect_targets(job_id, stdin)
     if not targets:
         raise click.UsageError("No jobs given. Pass job ids, or --stdin (or '-') to read them from stdin.")
     if dry_run:
-        click.echo(f"[dry-run] would terminate {len(targets)} job(s):")
-        for t in targets:
-            click.echo(f"  {t}")
+        if prefix:
+            client = _remote_client(ctx)
+            matches = [
+                job_name.to_wire() for target in targets for job_name in client.active_job_names_for_prefix(target)
+            ]
+        else:
+            matches = [JobName.from_wire(target).to_wire() for target in targets]
+        click.echo(f"[dry-run] would terminate {len(matches)} job(s):")
+        for match in matches:
+            click.echo(f"  {match}")
         return
     client = _remote_client(ctx)
-    terminated = _terminate_jobs(client, tuple(targets), include_children)
+    terminated = _terminate_jobs(client, tuple(targets), prefix)
     _print_terminated(terminated)
 
 
 @job.command("stop")
 @click.argument("job_id", nargs=-1, required=False)
 @click.option(
-    "--include-children/--no-include-children",
-    default=True,
-    help="Terminate child jobs under the given job ID prefix (default: include).",
+    "--prefix/--exact",
+    default=False,
+    help="Match each job ID as a prefix instead of exactly (default: exact).",
 )
 @click.option("--stdin", is_flag=True, default=False, help="Also read job ids from stdin (one per line; CSV-tolerant).")
 @click.option("--dry-run", is_flag=True, default=False, help="Print the jobs that would be terminated without sending.")
 @click.pass_context
-def stop(ctx, job_id: tuple[str, ...], include_children: bool, stdin: bool, dry_run: bool) -> None:
+def stop(ctx, job_id: tuple[str, ...], prefix: bool, stdin: bool, dry_run: bool) -> None:
     """Terminate one or more jobs.
 
     Pass ``-`` or ``--stdin`` to read job ids from stdin so a query can pipe in:
@@ -1107,22 +1135,22 @@ def stop(ctx, job_id: tuple[str, ...], include_children: bool, stdin: bool, dry_
       iris query -f csv "SELECT job_id FROM jobs WHERE user_id='alice' AND state=3" \\
         | iris job stop --stdin
     """
-    _stop_jobs(ctx, job_id, include_children, stdin, dry_run)
+    _stop_jobs(ctx, job_id, prefix, stdin, dry_run)
 
 
 @job.command("kill")
 @click.argument("job_id", nargs=-1, required=False)
 @click.option(
-    "--include-children/--no-include-children",
-    default=True,
-    help="Terminate child jobs under the given job ID prefix (default: include).",
+    "--prefix/--exact",
+    default=False,
+    help="Match each job ID as a prefix instead of exactly (default: exact).",
 )
 @click.option("--stdin", is_flag=True, default=False, help="Also read job ids from stdin (one per line; CSV-tolerant).")
 @click.option("--dry-run", is_flag=True, default=False, help="Print the jobs that would be terminated without sending.")
 @click.pass_context
-def kill(ctx, job_id: tuple[str, ...], include_children: bool, stdin: bool, dry_run: bool) -> None:
+def kill(ctx, job_id: tuple[str, ...], prefix: bool, stdin: bool, dry_run: bool) -> None:
     """Terminate one or more jobs (alias for stop)."""
-    _stop_jobs(ctx, job_id, include_children, stdin, dry_run)
+    _stop_jobs(ctx, job_id, prefix, stdin, dry_run)
 
 
 _KICK_STATE_MAP = {
@@ -1198,9 +1226,21 @@ def kick(ctx, target: tuple[str, ...], state: str, reason: str, stdin: bool, dry
     default=None,
     help="Anchored prefix match against the wire-form job_id (e.g. '/alice/exp-').",
 )
+@click.option(
+    "--limit",
+    type=click.IntRange(min=1),
+    default=DEFAULT_JOB_LIST_LIMIT,
+    show_default=True,
+    help="Show at most this many of the most recent jobs. Raise it (with --state/--prefix to narrow) to see more.",
+)
 @click.pass_context
-def list_jobs(ctx, state: str | None, prefix: str | None) -> None:
-    """List jobs with optional filtering."""
+def list_jobs(ctx, state: str | None, prefix: str | None, limit: int) -> None:
+    """List the most recent jobs with optional filtering.
+
+    Only the ``--limit`` most recently submitted matching jobs are fetched, so
+    the command stays fast on a busy cluster instead of scanning the whole jobs
+    table. Narrow with ``--state`` / ``--prefix`` to find older jobs.
+    """
     client = _remote_client(ctx)
 
     state_value: job_pb2.JobState | None = None
@@ -1211,7 +1251,7 @@ def list_jobs(ctx, state: str | None, prefix: str | None) -> None:
             raise click.UsageError(f"Unknown state '{state}'. Valid states: {valid}")
         state_value = _STATE_MAP[state_lower]
 
-    jobs = client.list_jobs(state=state_value, prefix=prefix)
+    jobs = client.list_jobs(state=state_value, prefix=prefix, limit=limit)
 
     # Sort by submitted_at descending (most recent first)
     jobs.sort(key=lambda j: j.submitted_at.epoch_ms, reverse=True)
@@ -1243,6 +1283,12 @@ def list_jobs(ctx, state: str | None, prefix: str | None) -> None:
 
     click.echo(tabulate(rows, headers=headers, tablefmt="plain"))
 
+    if len(jobs) >= limit:
+        click.echo(
+            f"\nShowing the {limit} most recent jobs. Raise --limit or narrow with --state/--prefix to see more.",
+            err=True,
+        )
+
 
 def _task_index(task_id: str) -> str:
     last = task_id.rsplit("/", 1)[-1]
@@ -1272,11 +1318,10 @@ def build_job_summary(
     job_status: job_pb2.JobStatus,
     tasks: list[job_pb2.TaskStatus],
 ) -> dict:
-    """Build a structured job/task summary (CLI + test entry point).
+    """Build a structured job/task summary for CLI rendering.
 
-    Returns a dict with job-level fields and a per-task list including
-    peak memory, final state, exit code, and duration. Pure function over
-    protos — no RPC calls — so it can be unit-tested without a cluster.
+    Returns job-level fields and per-task peak memory, final state, exit code,
+    duration, and backend diagnostic.
     """
     task_summaries = []
 
@@ -1304,6 +1349,7 @@ def build_job_summary(
                 "cpu_millicores": int(usage.cpu_millicores) if usage.cpu_millicores else 0,
                 "disk_mb": int(usage.disk_mb) if usage.disk_mb else 0,
                 "worker_id": t.worker_id,
+                "status_message": t.status_message,
                 "error": t.error,
             }
         )
@@ -1337,6 +1383,9 @@ def _render_job_summary_text(summary: dict) -> str:
 
     rows = []
     for t in summary["tasks"]:
+        diagnostic = t["status_message"] or t["error"] or ""
+        if len(diagnostic) > 120:
+            diagnostic = diagnostic[:117] + "..."
         rows.append(
             [
                 t["index"],
@@ -1345,10 +1394,10 @@ def _render_job_summary_text(summary: dict) -> str:
                 _format_duration_ms(t["duration_ms"]),
                 _format_memory_mb(t["memory_peak_mb"]),
                 _format_memory_mb(t["memory_mb"]),
-                (t["error"] or "")[:50] + ("..." if len(t["error"] or "") > 50 else ""),
+                diagnostic,
             ]
         )
-    headers = ["TASK", "STATE", "EXIT", "DURATION", "PEAK MEM", "CUR MEM", "ERROR"]
+    headers = ["TASK", "STATE", "EXIT", "DURATION", "PEAK MEM", "CUR MEM", "DIAGNOSTIC"]
     lines.append(tabulate(rows, headers=headers, tablefmt="plain"))
     return "\n".join(lines)
 
@@ -1357,7 +1406,7 @@ def _render_job_summary_text(summary: dict) -> str:
 @click.argument("job_id")
 @click.pass_context
 def summary(ctx, job_id: str) -> None:
-    """Print a per-task summary (peak memory, state, exit, duration) for a job.
+    """Print per-task state, resource, exit, duration, and diagnostic details.
 
     Works for both running and completed jobs. Data is read from the controller's
     existing ``GetJobStatus`` / ``ListTasks`` RPCs (no checkpoint scraping).
@@ -1368,6 +1417,26 @@ def summary(ctx, job_id: str) -> None:
     tasks = client.list_tasks(job_name)
     result = build_job_summary(job_status, tasks)
     click.echo(_render_job_summary_text(result))
+
+
+@job.command("wait")
+@click.argument("job_id")
+@click.pass_context
+def wait(ctx, job_id: str) -> None:
+    """Wait for an existing job to finish and print its terminal state."""
+    client = _remote_client(ctx)
+    job_name = JobName.from_wire(job_id)
+    try:
+        status = Job(client, job_name).wait(
+            timeout=float("inf"),
+            raise_on_failure=False,
+        )
+    except ConnectError as exc:
+        raise click.ClickException(format_connect_error(exc)) from exc
+
+    click.echo(job_state_friendly(status.state))
+    if status.state != job_pb2.JOB_STATE_SUCCEEDED:
+        raise SystemExit(1)
 
 
 @job.command("logs")

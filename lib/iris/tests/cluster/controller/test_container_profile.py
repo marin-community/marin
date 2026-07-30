@@ -33,6 +33,7 @@ PRIVILEGED = job_pb2.CONTAINER_PROFILE_PRIVILEGED
 DOCKER_ACCESS = job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS
 RESTRICTED = job_pb2.CONTAINER_PROFILE_RESTRICTED
 DEFAULT = job_pb2.CONTAINER_PROFILE_DEFAULT
+GVISOR = job_pb2.CONTAINER_PROFILE_GVISOR
 
 
 @pytest.fixture
@@ -90,11 +91,25 @@ def test_admin_can_use_elevated_profile(service, profile):
     assert resp.job_id == "/admin/job"
 
 
-@pytest.mark.parametrize("profile", [RESTRICTED, DEFAULT, job_pb2.CONTAINER_PROFILE_UNSPECIFIED])
+@pytest.mark.parametrize("profile", [RESTRICTED, DEFAULT, GVISOR, job_pb2.CONTAINER_PROFILE_UNSPECIFIED])
 def test_non_admin_can_use_unprivileged_profile(service, profile):
-    """RESTRICTED/DEFAULT/UNSPECIFIED need no authorization."""
+    """RESTRICTED/DEFAULT/GVISOR/UNSPECIFIED need no authorization.
+
+    gVisor is un-gated on purpose: it gives in-guest capabilities while
+    isolating the host, so it is safe to hand out without the admin role.
+    """
     resp = _as("user", "alice", service.launch_job, _launch("/alice/job", profile), None)
     assert resp.job_id == "/alice/job"
+
+
+def test_gvisor_rejected_on_accelerator_task(service):
+    """gVisor cannot pass a GPU/TPU through, so an accelerator task is rejected."""
+    req = _launch("/alice/job", GVISOR)
+    req.resources.device.gpu.count = 1
+    with pytest.raises(ConnectError) as exc:
+        _as("user", "alice", service.launch_job, req, None)
+    assert exc.value.code == Code.INVALID_ARGUMENT
+    assert "gvisor" in str(exc.value.message).lower()
 
 
 def test_docker_access_rejected_on_cluster_backend(state, tmp_path, log_client):

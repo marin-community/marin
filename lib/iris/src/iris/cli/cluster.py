@@ -23,24 +23,28 @@ from connectrpc.errors import ConnectError
 from finelog.deploy.cli import down_cmd, logs_cmd, restart_cmd, status_cmd, up_cmd
 from rigging.config_discovery import list_cluster_configs
 from rigging.filesystem import marin_temp_bucket
+from rigging.provenance import Provenance
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from rigging.token_authority import SigningKey, generate_ed25519_keypair, signing_key_from_private_pem
 
 from iris.cli.build import (
+    CARGO_PROFILES,
+    DEFAULT_CARGO_PROFILE,
+    _versioned_tag,
     build_image,
     find_marin_root,
-    get_git_sha,
+    get_git_provenance,
 )
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client_for_ctx
 from iris.cluster.composer import provider_bundle
-from iris.cluster.config import clear_remote_state, make_local_config
+from iris.cluster.config import KUBERNETES_WORKER_RUNTIME, clear_remote_state, make_local_config
 from iris.cluster.controller.autoscaler.scaling_group import (
     _zone_from_template,
     build_worker_config_for_group,
     prepare_slice_config,
 )
 from iris.cluster.controller.dashboard import ProxyControllerDashboard
-from iris.cluster.controller.main import run_controller_serve
+from iris.cluster.controller.main import controller_serve_options, run_controller_serve
 from iris.cluster.controller.rollout import (
     ROLLOUT_RECORD_FILENAME,
     RolloutPhase,
@@ -54,10 +58,13 @@ from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.platforms.gcp.worker_bootstrap import build_worker_bootstrap_script
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.platforms.types import Labels
-from iris.cluster.provenance import provenance_from_proto
+from iris.cluster.provenance import is_same_image_provenance, provenance_from_proto
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2
 from iris.rpc.proto_display import format_accelerator_display, vm_state_name
 from iris.time_proto import timestamp_from_proto
+
+AMD64_IMAGE_PLATFORM = "linux/amd64"
+KUBERNETES_IMAGE_PLATFORMS = "linux/amd64,linux/arm64"
 
 
 @dataclass(frozen=True)
@@ -156,7 +163,14 @@ def _parse_ghcr_tag(image_tag: str) -> tuple[str, str, str] | None:
     return org, image_name, version
 
 
-def _build_and_push_image(image_tag: str, image_type: str, git_sha: str, verbose: bool = False) -> None:
+def _build_and_push_image(
+    image_tag: str,
+    image_type: str,
+    provenance: Provenance,
+    verbose: bool = False,
+    platform: str = AMD64_IMAGE_PLATFORM,
+    cargo_profile: str = DEFAULT_CARGO_PROFILE,
+) -> None:
     """Build and push a single image to GHCR, parsing org/name/version from the tag.
 
     The task image uses the ``task`` target in the unified Dockerfile and needs the
@@ -177,51 +191,90 @@ def _build_and_push_image(image_tag: str, image_type: str, git_sha: str, verbose
         tag=local_tag,
         push=True,
         context=context,
-        platform="linux/amd64,linux/arm64",
-        git_sha=git_sha,
+        platform=platform,
+        provenance=provenance,
         ghcr_org=org,
         verbose=verbose,
+        cargo_profile=cargo_profile,
     )
     click.echo()
 
 
-def _build_cluster_images(config, git_sha: str, verbose: bool = False) -> dict[str, str]:
+def _build_cluster_images(
+    config,
+    provenance: Provenance,
+    verbose: bool = False,
+    task_platforms: str | None = None,
+    cargo_profile: str = DEFAULT_CARGO_PROFILE,
+) -> dict[str, str]:
     built: dict[str, str] = {}
+    kubernetes = config.defaults.worker.runtime == KUBERNETES_WORKER_RUNTIME
 
-    for tag, typ in [(config.defaults.worker.docker_image, "worker"), (config.controller.image, "controller")]:
-        if tag:
-            _build_and_push_image(tag, typ, git_sha, verbose=verbose)
-            built[typ] = tag
+    worker_tag = config.defaults.worker.docker_image
+    if worker_tag and not kubernetes:
+        _build_and_push_image(
+            worker_tag,
+            "worker",
+            provenance,
+            verbose=verbose,
+            platform=AMD64_IMAGE_PLATFORM,
+            cargo_profile=cargo_profile,
+        )
+        built["worker"] = worker_tag
+
+    controller_tag = config.controller.image
+    if controller_tag:
+        controller_platforms = KUBERNETES_IMAGE_PLATFORMS if kubernetes else AMD64_IMAGE_PLATFORM
+        _build_and_push_image(
+            controller_tag,
+            "controller",
+            provenance,
+            verbose=verbose,
+            platform=controller_platforms,
+            cargo_profile=cargo_profile,
+        )
+        built["controller"] = controller_tag
 
     task_tag = config.defaults.worker.default_task_image
     if task_tag:
-        _build_and_push_image(task_tag, "task", git_sha, verbose=verbose)
+        task_platforms = task_platforms or (KUBERNETES_IMAGE_PLATFORMS if kubernetes else AMD64_IMAGE_PLATFORM)
+        _build_and_push_image(
+            task_tag,
+            "task",
+            provenance,
+            verbose=verbose,
+            platform=task_platforms,
+            cargo_profile=cargo_profile,
+        )
         built["task"] = task_tag
 
     return built
 
 
-def _pin_latest_images(config, git_sha: str) -> dict[str, str]:
+def _pin_latest_images(config, provenance: Provenance, task_platforms: str | None = None) -> dict[str, str]:
     """Pin :latest image tags to the current git SHA in memory only."""
 
-    def _pin_tag(tag: str | None, git_sha: str) -> str | None:
+    kubernetes = config.defaults.worker.runtime == KUBERNETES_WORKER_RUNTIME
+    controller_platforms = KUBERNETES_IMAGE_PLATFORMS if kubernetes else AMD64_IMAGE_PLATFORM
+    resolved_task_platforms = task_platforms or (KUBERNETES_IMAGE_PLATFORMS if kubernetes else AMD64_IMAGE_PLATFORM)
+
+    def _pin_tag(tag: str | None, platform: str) -> str | None:
         if not tag:
             return tag
         if tag.endswith(":latest"):
-            return f"{tag.removesuffix(':latest')}:{git_sha}"
+            return _versioned_tag(tag.removesuffix(":latest"), provenance, platform)
         return tag
 
     tags = {
-        "controller": config.controller.image,
-        "worker": config.defaults.worker.docker_image,
-        "task": config.defaults.worker.default_task_image,
+        "controller": (config.controller.image, controller_platforms),
+        "worker": (config.defaults.worker.docker_image, AMD64_IMAGE_PLATFORM),
+        "task": (config.defaults.worker.default_task_image, resolved_task_platforms),
     }
-    needs_pin = any(tag.endswith(":latest") for tag in tags.values() if tag)
+    needs_pin = any(tag.endswith(":latest") for tag, _platform in tags.values() if tag)
     if not needs_pin:
-        return {k: v for k, v in tags.items() if v}
+        return {name: tag for name, (tag, _platform) in tags.items() if tag}
 
-    pinned = {name: _pin_tag(tag, git_sha) for name, tag in tags.items()}
-
+    pinned = {name: _pin_tag(tag, platform) for name, (tag, platform) in tags.items()}
     if pinned["controller"]:
         config.controller.image = pinned["controller"]
     if pinned["worker"]:
@@ -237,12 +290,24 @@ def _pin_latest_images(config, git_sha: str) -> dict[str, str]:
     return {k: v for k, v in pinned.items() if v}
 
 
-def _build_and_pin_deploy_images(ctx, config) -> None:
+def _build_and_pin_deploy_images(
+    ctx,
+    config,
+    *,
+    task_platforms: str | None = None,
+    cargo_profile: str = DEFAULT_CARGO_PROFILE,
+) -> None:
     """Pin :latest tags to the working-tree hash, build + push the images, echo them."""
-    git_sha = get_git_sha()
-    _pin_latest_images(config, git_sha)
+    provenance = get_git_provenance()
+    _pin_latest_images(config, provenance, task_platforms)
     verbose = ctx.obj.get("verbose", False)
-    built = _build_cluster_images(config, git_sha, verbose=verbose)
+    built = _build_cluster_images(
+        config,
+        provenance,
+        verbose=verbose,
+        task_platforms=task_platforms,
+        cargo_profile=cargo_profile,
+    )
     if built:
         click.echo("Built image tags:")
         for name, tag in built.items():
@@ -470,8 +535,21 @@ def cluster_init_keys(out_file: Path | None, gcp_secret: str | None, accessor: s
 @click.option(
     "--fresh", is_flag=True, default=False, help="Start with an empty database, ignoring any remote checkpoint"
 )
+@click.option(
+    "--image-platform",
+    "task_image_platforms",
+    default=None,
+    help="Override the Docker platform(s) selected automatically for the task image.",
+)
+@click.option(
+    "--cargo-profile",
+    type=click.Choice(CARGO_PROFILES),
+    default=DEFAULT_CARGO_PROFILE,
+    show_default=True,
+    help="Rust profile used to build native Iris components.",
+)
 @click.pass_context
-def cluster_start(ctx, local: bool, fresh: bool):
+def cluster_start(ctx, local: bool, fresh: bool, task_image_platforms: str | None, cargo_profile: str):
     """Start controller and wait for health.
 
     Each platform handles its own controller lifecycle:
@@ -488,10 +566,16 @@ def cluster_start(ctx, local: bool, fresh: bool):
         config = make_local_config(config)
     is_local = config.controller.controller_kind() == "local"
     if not is_local:
-        git_sha = get_git_sha()
-        _pin_latest_images(config, git_sha)
+        provenance = get_git_provenance()
+        _pin_latest_images(config, provenance, task_image_platforms)
         verbose = ctx.obj.get("verbose", False)
-        built = _build_cluster_images(config, git_sha, verbose=verbose)
+        built = _build_cluster_images(
+            config,
+            provenance,
+            verbose=verbose,
+            task_platforms=task_image_platforms,
+            cargo_profile=cargo_profile,
+        )
         if built:
             click.echo("Built image tags:")
             for name, tag in built.items():
@@ -530,8 +614,30 @@ def cluster_start(ctx, local: bool, fresh: bool):
 @click.option("--wait-for-workers", "min_workers", type=int, default=1, help="Min healthy workers before writing URL")
 @click.option("--worker-timeout", type=int, default=600, help="Seconds to wait for workers")
 @click.option("--clear-state/--no-clear-state", default=True, help="Wipe remote state before starting")
+@click.option(
+    "--image-platform",
+    "task_image_platforms",
+    default=None,
+    help="Override the Docker platform(s) selected automatically for the task image.",
+)
+@click.option(
+    "--cargo-profile",
+    type=click.Choice(CARGO_PROFILES),
+    default=DEFAULT_CARGO_PROFILE,
+    show_default=True,
+    help="Rust profile used to build native Iris components.",
+)
 @click.pass_context
-def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout, clear_state):
+def cluster_start_smoke(
+    ctx,
+    label_prefix,
+    url_file,
+    min_workers,
+    worker_timeout,
+    clear_state,
+    task_image_platforms,
+    cargo_profile,
+):
     """Boot a smoke-test cluster, open tunnel, write URL to file, and block until killed.
 
     Designed for CI: run in background, poll for url_file, then pass URL to pytest.
@@ -547,10 +653,16 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
     # region-appropriate storage from MARIN_PREFIX.
     config.storage.remote_state_dir = marin_temp_bucket(ttl_days=7, prefix=f"iris/state/{label_prefix}")
 
-    git_sha = get_git_sha()
-    _pin_latest_images(config, git_sha)
+    provenance = get_git_provenance()
+    _pin_latest_images(config, provenance, task_image_platforms)
     verbose = ctx.obj.get("verbose", False)
-    _build_cluster_images(config, git_sha, verbose=verbose)
+    _build_cluster_images(
+        config,
+        provenance,
+        verbose=verbose,
+        task_platforms=task_image_platforms,
+        cargo_profile=cargo_profile,
+    )
 
     bundle = provider_bundle(config)
 
@@ -662,7 +774,7 @@ def _require_log_server_config(ctx: click.Context) -> str:
         raise click.ClickException("--config is required for cluster log-server commands")
     if not cfg.finelog.config:
         raise click.ClickException(
-            "cluster does not declare finelog.config; " "set it or manage the log server via `finelog deploy` directly"
+            "cluster does not declare finelog.config; set it or manage the log server via `finelog deploy` directly"
         )
     return cfg.finelog.config
 
@@ -1021,37 +1133,7 @@ def controller(ctx):
 
 
 @controller.command("serve")
-@click.option("--host", default="0.0.0.0", help="Bind host")
-@click.option("--port", default=10000, type=int, help="Bind port")
-@click.option(
-    "--checkpoint-path",
-    default=None,
-    help="Restore from this specific checkpoint directory (e.g. gs://bucket/.../controller-state/1234567890)",
-)
-@click.option(
-    "--checkpoint-interval",
-    default=None,
-    type=float,
-    help="Periodic checkpoint interval in seconds (default: hourly)",
-)
-@click.option(
-    "--dry-run",
-    is_flag=True,
-    default=False,
-    help="Start in dry-run mode: compute scheduling but suppress all side effects",
-)
-@click.option(
-    "--fresh",
-    is_flag=True,
-    default=False,
-    help="Start with an empty database, ignoring any remote checkpoint",
-)
-@click.option(
-    "--state-dir",
-    default=None,
-    type=click.Path(path_type=Path),
-    help="Override the local state dir (default: /var/cache/iris/controller, or /tmp/dry-run/{today} in dry-run)",
-)
+@controller_serve_options
 @click.pass_context
 def controller_serve(ctx, host, port, checkpoint_path, checkpoint_interval, dry_run, fresh, state_dir):
     """Start a local controller process.
@@ -1143,12 +1225,27 @@ def controller_checkpoint(ctx, stop: bool):
         "once a prior restart has recorded a deploy."
     ),
 )
+@click.option(
+    "--image-platform",
+    "task_image_platforms",
+    default=None,
+    help="Override the Docker platform(s) selected automatically for the task image.",
+)
+@click.option(
+    "--cargo-profile",
+    type=click.Choice(CARGO_PROFILES),
+    default=DEFAULT_CARGO_PROFILE,
+    show_default=True,
+    help="Rust profile used to build native Iris components; fast skips LTO for dev rollouts.",
+)
 @click.pass_context
 def controller_restart(
     ctx,
     skip_checkpoint: bool,
     checkpoint_timeout: int,
     rollback: bool,
+    task_image_platforms: str | None,
+    cargo_profile: str,
 ):
     """Restart the controller in place, preserving state (remote platforms only).
 
@@ -1171,9 +1268,14 @@ def controller_restart(
             "Stop and restart the 'iris cluster start --local' process instead."
         )
 
+    bundle = provider_bundle(config)
+    try:
+        bundle.controller.preflight_controller(config)
+    except Exception as e:
+        raise click.ClickException(f"Controller restart preflight failed: {e}") from e
+
     remote_state_dir = config.storage.remote_state_dir
     prior_record = read_rollout_record(remote_state_dir) if remote_state_dir else None
-    bundle = provider_bundle(config)
 
     if rollback:
         _rollback_last_deploy(ctx, bundle, config, remote_state_dir, prior_record)
@@ -1184,7 +1286,12 @@ def controller_restart(
         controller_url = require_controller_url(ctx)
     except (RuntimeError, click.ClickException):
         click.echo("No existing controller found. Starting fresh...")
-        new_image = _build_forward_image(ctx, config)
+        new_image = _build_forward_image(
+            ctx,
+            config,
+            task_platforms=task_image_platforms,
+            cargo_profile=cargo_profile,
+        )
         try:
             address = bundle.controller.start_controller(config)
         except Exception as e:
@@ -1209,7 +1316,12 @@ def controller_restart(
     else:
         pre_deploy_checkpoint = _take_pre_deploy_checkpoint(ctx, controller_url, checkpoint_timeout)
 
-    new_image = _build_forward_image(ctx, config)
+    new_image = _build_forward_image(
+        ctx,
+        config,
+        task_platforms=task_image_platforms,
+        cargo_profile=cargo_profile,
+    )
     previous_image = prior_record.image if prior_record else None
 
     # Record the in-flight deploy before restarting: a crash mid-restart leaves a
@@ -1264,9 +1376,20 @@ def _rollback_last_deploy(ctx, bundle, config, remote_state_dir: str | None, pri
     _rollback_controller(bundle, config, remote_state_dir, prior_record.previous_image, prior_record.rollback_checkpoint)
 
 
-def _build_forward_image(ctx, config) -> str:
+def _build_forward_image(
+    ctx,
+    config,
+    *,
+    task_platforms: str | None = None,
+    cargo_profile: str = DEFAULT_CARGO_PROFILE,
+) -> str:
     """Build deploy images from the working tree and return the controller image tag."""
-    _build_and_pin_deploy_images(ctx, config)
+    _build_and_pin_deploy_images(
+        ctx,
+        config,
+        task_platforms=task_platforms,
+        cargo_profile=cargo_profile,
+    )
     return config.controller.image
 
 
@@ -1450,13 +1573,13 @@ def worker_restart(
     # ``controller restart`` (or by autoscaler-fresh VMs racing the registry),
     # producing a fleet split across multiple git_hashes and making
     # ``--skip-current-hash`` a no-op.
-    git_sha = get_git_sha()
-    _pin_latest_images(config, git_sha)
+    provenance = get_git_provenance()
+    _pin_latest_images(config, provenance)
     verbose = ctx.obj.get("verbose", False)
     if config.defaults.worker.docker_image:
-        _build_and_push_image(config.defaults.worker.docker_image, "worker", git_sha, verbose=verbose)
+        _build_and_push_image(config.defaults.worker.docker_image, "worker", provenance, verbose=verbose)
     if config.defaults.worker.default_task_image:
-        _build_and_push_image(config.defaults.worker.default_task_image, "task", git_sha, verbose=verbose)
+        _build_and_push_image(config.defaults.worker.default_task_image, "task", provenance, verbose=verbose)
 
     # Resolve the controller address workers will reconnect to (matches cluster_create_slice).
     worker_controller_address = config.controller_address()
@@ -1489,12 +1612,16 @@ def worker_restart(
             workers = list(all_workers)
 
         if skip_current_hash:
-            target_hash = get_git_sha()
+            target_hash = provenance.tree_hash
             if not target_hash or target_hash == "unknown":
                 click.echo(f"--skip-current-hash requires a known git_hash (got: {target_hash!r})", err=True)
                 raise SystemExit(1)
             before = len(workers)
-            workers = [w for w in workers if w.metadata.provenance.tree_hash != target_hash]
+            workers = [
+                worker
+                for worker in workers
+                if not is_same_image_provenance(provenance_from_proto(worker.metadata.provenance), provenance)
+            ]
             skipped = before - len(workers)
             click.echo(f"Skipping {skipped}/{before} worker(s) already at local git_hash {target_hash}")
 
@@ -1641,6 +1768,5 @@ def _check_worker_health(client, worker_ids: set[str]) -> list[tuple[str, str]]:
 
 def _print_summary(succeeded: int, failures: int, remaining: int, offset: int):
     click.echo(
-        f"\nSummary: {succeeded} succeeded, {failures} failed, {remaining} remaining "
-        f"(aborted at worker {offset + 1})"
+        f"\nSummary: {succeeded} succeeded, {failures} failed, {remaining} remaining (aborted at worker {offset + 1})"
     )

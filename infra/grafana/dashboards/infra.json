@@ -1,0 +1,600 @@
+{
+  "uid": "infra",
+  "title": "Infra",
+  "description": "Marin infrastructure status: nightly regressions, GitHub CI, workers, provisioning, and hero training.",
+  "tags": [
+    "marin"
+  ],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 42,
+  "refresh": "1m",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "templating": {
+    "list": []
+  },
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Fleet",
+      "type": "link",
+      "url": "/d/marin-fleet"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Iris",
+      "type": "link",
+      "url": "/d/marin-iris"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "K8s",
+      "type": "link",
+      "url": "/d/marin-k8s"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Pipelines",
+      "type": "link",
+      "url": "/d/marin-pipelines"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Training",
+      "type": "link",
+      "url": "/d/marin-training"
+    },
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": false,
+      "targetBlank": true,
+      "title": "GitHub Actions",
+      "type": "link",
+      "url": "https://github.com/marin-community/marin/actions"
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "marin-infra-panel",
+      "title": "",
+      "transparent": true,
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "status"
+      },
+      "gridPos": {
+        "h": 42,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "view": "status"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "N",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/github/nightlies",
+          "url_options": {
+            "method": "GET",
+            "params": []
+          },
+          "columns": [
+            {
+              "selector": "date",
+              "text": "date",
+              "type": "string"
+            },
+            {
+              "selector": "lane_id",
+              "text": "lane_id",
+              "type": "string"
+            },
+            {
+              "selector": "lane",
+              "text": "lane",
+              "type": "string"
+            },
+            {
+              "selector": "label",
+              "text": "label",
+              "type": "string"
+            },
+            {
+              "selector": "group",
+              "text": "group",
+              "type": "string"
+            },
+            {
+              "selector": "subgroup",
+              "text": "subgroup",
+              "type": "string"
+            },
+            {
+              "selector": "state",
+              "text": "state",
+              "type": "string"
+            },
+            {
+              "selector": "duration_state",
+              "text": "duration_state",
+              "type": "string"
+            },
+            {
+              "selector": "duration_seconds",
+              "text": "duration_seconds",
+              "type": "number"
+            },
+            {
+              "selector": "conclusion",
+              "text": "conclusion",
+              "type": "string"
+            },
+            {
+              "selector": "url",
+              "text": "url",
+              "type": "string"
+            },
+            {
+              "selector": "workflow_url",
+              "text": "workflow_url",
+              "type": "string"
+            },
+            {
+              "selector": "healthy",
+              "text": "healthy",
+              "type": "boolean"
+            },
+            {
+              "selector": "due",
+              "text": "due",
+              "type": "boolean"
+            },
+            {
+              "selector": "source_error",
+              "text": "source_error",
+              "type": "string"
+            },
+            {
+              "selector": "lane_order",
+              "text": "lane_order",
+              "type": "number"
+            }
+          ]
+        },
+        {
+          "refId": "G",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/github/builds",
+          "url_options": {
+            "method": "GET",
+            "params": []
+          },
+          "columns": [
+            {
+              "selector": "oid",
+              "text": "oid",
+              "type": "string"
+            },
+            {
+              "selector": "short_oid",
+              "text": "short_oid",
+              "type": "string"
+            },
+            {
+              "selector": "headline",
+              "text": "headline",
+              "type": "string"
+            },
+            {
+              "selector": "author",
+              "text": "author",
+              "type": "string"
+            },
+            {
+              "selector": "avatar_url",
+              "text": "avatar_url",
+              "type": "string"
+            },
+            {
+              "selector": "state",
+              "text": "state",
+              "type": "string"
+            },
+            {
+              "selector": "committed_at",
+              "text": "committed_at",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "url",
+              "text": "url",
+              "type": "string"
+            },
+            {
+              "selector": "success_rate",
+              "text": "success_rate",
+              "type": "number"
+            }
+          ]
+        },
+        {
+          "refId": "W",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/iris/marin/workers",
+          "url_options": {
+            "method": "GET",
+            "params": []
+          },
+          "columns": [
+            {
+              "selector": "region",
+              "text": "region",
+              "type": "string"
+            },
+            {
+              "selector": "healthy",
+              "text": "healthy",
+              "type": "number"
+            },
+            {
+              "selector": "cpu_millicores",
+              "text": "cpu_millicores",
+              "type": "number"
+            },
+            {
+              "selector": "memory_bytes",
+              "text": "memory_bytes",
+              "type": "number"
+            },
+            {
+              "selector": "tpu_chips",
+              "text": "tpu_chips",
+              "type": "number"
+            }
+          ]
+        },
+        {
+          "refId": "P",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/overview/provisioning",
+          "url_options": {
+            "method": "GET",
+            "params": []
+          },
+          "columns": [
+            {
+              "selector": "scope",
+              "text": "scope",
+              "type": "string"
+            },
+            {
+              "selector": "collected_at",
+              "text": "collected_at",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "zone",
+              "text": "zone",
+              "type": "string"
+            },
+            {
+              "selector": "ready",
+              "text": "ready",
+              "type": "number"
+            },
+            {
+              "selector": "stockout",
+              "text": "stockout",
+              "type": "number"
+            },
+            {
+              "selector": "error",
+              "text": "error",
+              "type": "number"
+            },
+            {
+              "selector": "preempted",
+              "text": "preempted",
+              "type": "number"
+            },
+            {
+              "selector": "outcomes",
+              "text": "outcomes",
+              "type": "number"
+            },
+            {
+              "selector": "success_ratio",
+              "text": "success_ratio",
+              "type": "number"
+            },
+            {
+              "selector": "pools_placing",
+              "text": "pools_placing",
+              "type": "number"
+            },
+            {
+              "selector": "pools_no_ready_outcome",
+              "text": "pools_no_ready_outcome",
+              "type": "number"
+            },
+            {
+              "selector": "latency_p50_seconds",
+              "text": "latency_p50_seconds",
+              "type": "number"
+            },
+            {
+              "selector": "latency_p95_seconds",
+              "text": "latency_p95_seconds",
+              "type": "number"
+            },
+            {
+              "selector": "window_hours",
+              "text": "window_hours",
+              "type": "number"
+            }
+          ]
+        },
+        {
+          "refId": "H",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/finelog/marin/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT collected_at AS t, value, labels FROM \"infra.canary.metrics\" WHERE metric = 'worker_healthy' AND contains(labels, '\"region\"') AND collected_at >= {{from}} AND collected_at < {{to}} ORDER BY collected_at"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "label_region",
+              "text": "region",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "workers",
+              "type": "number"
+            }
+          ]
+        },
+        {
+          "refId": "R",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/finelog/marin/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH region_counts AS (SELECT collected_at AS t, CASE WHEN regexp_matches(json_get(labels, 'zone'), '^[a-z]+-[a-z]+[0-9]+-[a-z]$') THEN regexp_replace(json_get(labels, 'zone'), '-[a-z]$', '') ELSE json_get(labels, 'zone') END AS series, SUM(CASE WHEN metric = 'provision_ready' THEN value ELSE 0 END) AS ready, SUM(CASE WHEN metric = 'provision_outcomes' THEN value ELSE 0 END) AS outcomes FROM \"infra.canary.metrics\" WHERE metric IN ('provision_ready', 'provision_outcomes') AND COALESCE(json_get(labels, 'zone'), '') <> '' AND collected_at >= {{from}} AND collected_at < {{to}} GROUP BY 1, 2), regional AS (SELECT t, series, ready / NULLIF(outcomes, 0) AS value FROM region_counts WHERE outcomes > 0), fleet AS (SELECT collected_at AS t, 'fleet' AS series, value FROM \"infra.canary.metrics\" WHERE metric = 'provision_success_ratio' AND contains(labels, '\"scope\": \"fleet\"') AND collected_at >= {{from}} AND collected_at < {{to}}) SELECT t, series, value FROM fleet UNION ALL SELECT t, series, value FROM regional ORDER BY t, series"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "region",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "success_ratio",
+              "type": "number"
+            }
+          ]
+        },
+        {
+          "refId": "T",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/wandb/train-loss",
+          "url_options": {
+            "method": "GET",
+            "params": []
+          },
+          "columns": [
+            {
+              "selector": "chart",
+              "text": "chart",
+              "type": "string"
+            },
+            {
+              "selector": "run",
+              "text": "run",
+              "type": "string"
+            },
+            {
+              "selector": "tokens",
+              "text": "tokens",
+              "type": "number"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            },
+            {
+              "selector": "report_title",
+              "text": "report_title",
+              "type": "string"
+            },
+            {
+              "selector": "report_url",
+              "text": "report_url",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "refId": "L",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/wandb/paloma-macro-loss",
+          "url_options": {
+            "method": "GET",
+            "params": []
+          },
+          "columns": [
+            {
+              "selector": "chart",
+              "text": "chart",
+              "type": "string"
+            },
+            {
+              "selector": "run",
+              "text": "run",
+              "type": "string"
+            },
+            {
+              "selector": "tokens",
+              "text": "tokens",
+              "type": "number"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            },
+            {
+              "selector": "report_title",
+              "text": "report_title",
+              "type": "string"
+            },
+            {
+              "selector": "report_url",
+              "text": "report_url",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "refId": "M",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/wandb/mfu",
+          "url_options": {
+            "method": "GET",
+            "params": []
+          },
+          "columns": [
+            {
+              "selector": "chart",
+              "text": "chart",
+              "type": "string"
+            },
+            {
+              "selector": "run",
+              "text": "run",
+              "type": "string"
+            },
+            {
+              "selector": "tokens",
+              "text": "tokens",
+              "type": "number"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            },
+            {
+              "selector": "report_title",
+              "text": "report_title",
+              "type": "string"
+            },
+            {
+              "selector": "report_url",
+              "text": "report_url",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

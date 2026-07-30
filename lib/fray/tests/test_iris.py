@@ -14,12 +14,13 @@ import pytest
 from fray.iris_backend import (
     FrayIrisClient,
     IrisActorHandle,
+    IrisJobHandle,
     convert_constraints,
     resolve_coscheduling,
+    wrap_multiprocess,
 )
 from fray.types import (
     ANY_REGION,
-    CpuConfig,
     Entrypoint,
     GpuConfig,
     JobRequest,
@@ -27,6 +28,8 @@ from fray.types import (
     TpuConfig,
 )
 from iris.cluster.constraints import ConstraintOp
+from iris.cluster.types import Entrypoint as IrisEntrypoint
+from iris.cluster.types import ResourceSpec, gpu_device
 
 
 class TestConvertConstraints:
@@ -95,6 +98,13 @@ class TestConvertConstraints:
         assert c.op == ConstraintOp.EQ
         assert c.values[0].value == "us-east1-d"
 
+    def test_target_cluster_produces_eq_constraint(self):
+        constraints = convert_constraints(ResourceConfig(target_cluster="cw-us-east-02a"))
+        cluster_constraints = [constraint for constraint in constraints if constraint.key == "cluster"]
+        assert len(cluster_constraints) == 1
+        assert cluster_constraints[0].op == ConstraintOp.EQ
+        assert cluster_constraints[0].values[0].value == "cw-us-east-02a"
+
 
 class TestConvertConstraintsDeviceAlternatives:
     def test_no_alternatives_produces_no_device_constraint(self):
@@ -130,6 +140,20 @@ class TestIrisActorHandlePickle:
         data = pickle.dumps(handle)
         restored = pickle.loads(data)
         assert restored._client is None
+
+
+def test_iris_job_handle_returns_a_globally_bounded_tail():
+    job = MagicMock()
+    job.job_id = "/user/job"
+    job.logs.return_value = [
+        MagicMock(data="task-0 earlier\n"),
+        MagicMock(data="task-1 latest\n"),
+    ]
+
+    lines = IrisJobHandle(job).logs(max_lines=2)
+
+    assert lines == ("task-0 earlier", "task-1 latest")
+    job.logs.assert_called_once_with(max_lines=2, tail=True)
 
 
 class TestResourceConfigScale:
@@ -288,6 +312,21 @@ class TestActorGroupEnvironment:
         assert env.env_vars["JAX_PLATFORMS"] == ""
 
 
+def test_create_gpu_actor_group_uses_leafgroup_topology():
+    fake_iris = MagicMock()
+    fake_iris.submit.return_value = MagicMock(job_id="job-gpu")
+    client = FrayIrisClient.from_iris_client(fake_iris)
+
+    class _DummyActor:
+        pass
+
+    resources = ResourceConfig.with_gpu("GB200", count=4)
+    client.create_actor_group(_DummyActor, name="gpu-actors", count=32, resources=resources)
+
+    coscheduling = fake_iris.submit.call_args.kwargs["coscheduling"]
+    assert coscheduling.group_by == "leafgroup"
+
+
 class TestWithTpuFlexible:
     def test_single_type_returns_standard_config(self):
         rc = ResourceConfig.with_tpu(["v5p-8"])
@@ -327,23 +366,116 @@ class TestWithTpuFlexible:
         assert rc.replicas == 4
 
 
-# resolve_coscheduling: multi-host gangs pick the topology level the Iris provider maps.
-# group_by is now a literal topology level (B4 rename); an unmapped value raises at K8s
-# pod-manifest build, so the fray defaults must stay in sync with the provider's map.
-
-
-def test_resolve_coscheduling_gpu_multinode_uses_leafgroup():
-    cosched = resolve_coscheduling(GpuConfig(variant="H100", count=8), replicas=2)
+@pytest.mark.parametrize(
+    ("variant", "count", "replicas", "group_by"),
+    [
+        ("H100", 8, 2, "leafgroup"),
+        ("GB200", 4, 16, "nvlink.domain"),
+        ("GB200", 4, 32, "nvlink.domain.sliced"),
+        ("GB200", 4, 64, "nvlink.domain.sliced"),
+    ],
+)
+def test_resolve_coscheduling_gpu_multinode_uses_variant_topology(variant, count, replicas, group_by):
+    resources = ResourceConfig(device=GpuConfig(variant=variant, count=count))
+    cosched = resolve_coscheduling(resources, replicas=replicas)
     assert cosched is not None
-    assert cosched.group_by == "leafgroup"
+    assert cosched.group_by == group_by
+
+
+@pytest.mark.parametrize(
+    ("count", "replicas"),
+    [
+        (1, 32),
+        (4, 17),
+    ],
+)
+def test_resolve_coscheduling_gpu_multirack_rejects_unplaceable_gang(count, replicas):
+    resources = ResourceConfig(device=GpuConfig(variant="GB200", count=count))
+    with pytest.raises(ValueError):
+        resolve_coscheduling(resources, replicas=replicas)
+
+
+def test_resolve_coscheduling_gpu_allows_compatible_alternative_topologies():
+    resources = ResourceConfig(
+        device=GpuConfig(variant="GB200", count=4),
+        device_alternatives=["GB300"],
+    )
+
+    cosched = resolve_coscheduling(resources, replicas=32)
+
+    assert cosched is not None
+    assert cosched.group_by == "nvlink.domain.sliced"
+
+
+def test_resolve_coscheduling_gpu_rejects_incompatible_alternative_topologies():
+    resources = ResourceConfig(
+        device=GpuConfig(variant="GB200", count=4),
+        device_alternatives=["H100"],
+    )
+
+    with pytest.raises(ValueError, match=r"GB200=nvlink\.domain\.sliced, H100=leafgroup"):
+        resolve_coscheduling(resources, replicas=32)
 
 
 def test_resolve_coscheduling_tpu_multinode_uses_tpu_name():
-    cosched = resolve_coscheduling(TpuConfig(variant="v5litepod-16"), replicas=4)
+    resources = ResourceConfig(device=TpuConfig(variant="v5litepod-16"))
+    cosched = resolve_coscheduling(resources, replicas=4)
     assert cosched is not None
     assert cosched.group_by == "tpu-name"
 
 
 def test_resolve_coscheduling_single_replica_is_none():
-    assert resolve_coscheduling(GpuConfig(variant="H100", count=8), replicas=1) is None
-    assert resolve_coscheduling(CpuConfig(), replicas=4) is None
+    assert resolve_coscheduling(ResourceConfig(device=GpuConfig(variant="H100", count=8)), replicas=1) is None
+    assert resolve_coscheduling(ResourceConfig(), replicas=4) is None
+
+
+def _gpu_resources(count: int) -> ResourceSpec:
+    return ResourceSpec(cpu=4, memory="8GB", disk="16GB", device=gpu_device("H100", count))
+
+
+def test_wrap_multiprocess_one_process_per_gpu() -> None:
+    # fray composes the multigpu supervisor into the command; iris runs it verbatim.
+    wrapped = wrap_multiprocess(
+        IrisEntrypoint.from_command("python", "train.py", "--steps", "10"), _gpu_resources(8), processes_per_task=8
+    )
+    assert wrapped.command == [
+        "python",
+        "-m",
+        "iris.hooks.multigpu_main",
+        "--nproc",
+        "8",
+        "--devices-per-proc",
+        "1",
+        "--",
+        "python",
+        "train.py",
+        "--steps",
+        "10",
+    ]
+
+
+def test_wrap_multiprocess_groups_devices_when_fewer_processes() -> None:
+    wrapped = wrap_multiprocess(
+        IrisEntrypoint.from_command("python", "train.py"), _gpu_resources(8), processes_per_task=4
+    )
+    assert wrapped.command[:8] == [
+        "python",
+        "-m",
+        "iris.hooks.multigpu_main",
+        "--nproc",
+        "4",
+        "--devices-per-proc",
+        "2",
+        "--",
+    ]
+
+
+def test_wrap_multiprocess_requires_gpu() -> None:
+    cpu_only = ResourceSpec(cpu=4, memory="8GB", disk="16GB", device=None)
+    with pytest.raises(ValueError, match="requires a GPU device"):
+        wrap_multiprocess(IrisEntrypoint.from_command("python", "x.py"), cpu_only, processes_per_task=2)
+
+
+def test_wrap_multiprocess_requires_divisible_gpu_count() -> None:
+    with pytest.raises(ValueError, match="must divide the GPU count"):
+        wrap_multiprocess(IrisEntrypoint.from_command("python", "x.py"), _gpu_resources(8), processes_per_task=3)

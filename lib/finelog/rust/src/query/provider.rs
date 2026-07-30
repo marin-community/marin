@@ -284,6 +284,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn native_map_column_scans_and_json_get_reads_it() {
+        // A sealed segment carrying a native Map<Utf8,Utf8> column reads back
+        // through the ListingTable provider as a MapArray, and the duck-typed
+        // json_get UDF filters/groups it — the whole storage-flip point.
+        use crate::query::udf::register_scalar_udfs;
+        use crate::store::schema::map_utf8_utf8_type;
+        use arrow::array::{MapBuilder, MapFieldNames, StringBuilder};
+
+        let dir = tempdir("map_scan");
+        let schema: SchemaRef = Arc::new(ArrowSchema::new(vec![
+            Field::new("seq", DataType::Int64, false),
+            Field::new("labels", map_utf8_utf8_type(), true),
+        ]));
+
+        let names = MapFieldNames {
+            entry: "entries".to_string(),
+            key: "key".to_string(),
+            value: "value".to_string(),
+        };
+        let mut mb = MapBuilder::new(Some(names), StringBuilder::new(), StringBuilder::new());
+        for scope in ["fleet", "fleet", "local"] {
+            mb.keys().append_value("scope");
+            mb.values().append_value(scope);
+            mb.append(true).unwrap();
+        }
+        let labels = mb.finish();
+        assert_eq!(labels.data_type(), &map_utf8_utf8_type());
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int64Array::from_iter_values(1..=3)),
+                Arc::new(labels),
+            ],
+        )
+        .unwrap();
+        write_segment_to_dir(&dir, 0, 1, &batch).unwrap();
+        let paths: Vec<String> = crate::store::segment::discover_segments(&dir)
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+
+        let provider = NamespaceProvider::build(schema, &paths).unwrap();
+        let ctx = SessionContext::new();
+        register_scalar_udfs(&ctx);
+        ctx.register_table(
+            datafusion::common::TableReference::bare("probes"),
+            Arc::new(provider),
+        )
+        .unwrap();
+        let batches = ctx
+            .sql(
+                "SELECT count(*) AS n FROM probes \
+                 WHERE json_get(labels, 'scope') = 'fleet'",
+            )
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let n = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(n.value(0), 2);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
     async fn two_providers_join() {
         let wdir = tempdir("join_w");
         let tdir = tempdir("join_t");

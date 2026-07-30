@@ -268,6 +268,17 @@ def _sharding_of(x: Array | None) -> jax.sharding.Sharding | None:
     return None
 
 
+def _window_size_arguments(sliding_window: int | None) -> tuple[int | None, int | None]:
+    """Return FA4's ``(window_size_left, window_size_right)`` for a Marin sliding window.
+
+    ``sliding_window=W`` keeps the last ``W`` tokens including the query, so FA4 sees ``W - 1``
+    tokens to the left and none to the right; full causal attention is ``(None, None)``.
+    """
+    if sliding_window is None:
+        return None, None
+    return sliding_window - 1, 0
+
+
 def _upstream_fa4_thd_forward_launcher(
     modules: _UpstreamFa4CuteModules,
     *,
@@ -282,6 +293,7 @@ def _upstream_fa4_thd_forward_launcher(
     cute = modules.cute
     cuda = modules.cuda
     cute_dtype = _cutlass_dtype(cutlass, dtype)
+    window_size_left, window_size_right = _window_size_arguments(sliding_window)
     if modules.arch // 10 == _HOPPER_ARCH_FAMILY:
         if sliding_window is not None:
             raise NotImplementedError("gpu_fa4_thd_attention does not support sliding-window attention on SM90.")
@@ -338,39 +350,19 @@ def _upstream_fa4_thd_forward_launcher(
         *,
         softmax_scale: cutlass.Float32,
     ):
-        if sliding_window is None:
-            flash_fwd(
-                q,
-                k,
-                v,
-                out,
-                lse,
-                softmax_scale,
-                cu_seqlens,
-                cu_seqlens,
-                stream=stream,
-            )
-        else:
-            flash_fwd(
-                q,
-                k,
-                v,
-                out,
-                lse,
-                softmax_scale,
-                cu_seqlens,
-                cu_seqlens,
-                None,
-                None,
-                None,
-                sliding_window - 1,
-                0,
-                None,
-                None,
-                None,
-                None,
-                stream,
-            )
+        flash_fwd(
+            q,
+            k,
+            v,
+            out,
+            lse,
+            softmax_scale,
+            cu_seqlens,
+            cu_seqlens,
+            window_size_left=window_size_left,
+            window_size_right=window_size_right,
+            stream=stream,
+        )
 
     return _launch_upstream_fa4_thd_forward
 
@@ -389,6 +381,7 @@ def _upstream_fa4_thd_backward_launcher(
     cute = modules.cute
     cuda = modules.cuda
     cute_dtype = _cutlass_dtype(cutlass, dtype)
+    window_size_left, window_size_right = _window_size_arguments(sliding_window)
 
     tile_m, tile_n = kernel_config.backward_tile
     preprocess = modules.FlashAttentionBackwardPreprocess(
@@ -521,47 +514,23 @@ def _upstream_fa4_thd_backward_launcher(
         preprocess(out, dout, dpsum, lse, lse_log2, dq_accum, cu_seqlens, None, None, stream)
         zero_fill(dk_accum, stream)
         zero_fill(dv_accum, stream)
-        if sliding_window is None:
-            backward(
-                q,
-                k,
-                v,
-                dout,
-                lse_log2,
-                dpsum,
-                dq_accum,
-                dk_accum,
-                dv_accum,
-                softmax_scale,
-                cu_seqlens,
-                cu_seqlens,
-                stream=stream,
-            )
-        else:
-            backward(
-                q,
-                k,
-                v,
-                dout,
-                lse_log2,
-                dpsum,
-                dq_accum,
-                dk_accum,
-                dv_accum,
-                softmax_scale,
-                cu_seqlens,
-                cu_seqlens,
-                None,
-                None,
-                sliding_window - 1,
-                0,
-                None,
-                None,
-                None,
-                None,
-                None,
-                stream,
-            )
+        backward(
+            q,
+            k,
+            v,
+            dout,
+            lse_log2,
+            dpsum,
+            dq_accum,
+            dk_accum,
+            dv_accum,
+            softmax_scale,
+            cu_seqlens,
+            cu_seqlens,
+            window_size_left=window_size_left,
+            window_size_right=window_size_right,
+            stream=stream,
+        )
         dq_postprocess(dq_accum, dq, softmax_scale, cu_seqlens, None, stream)
         dk_postprocess(dk_accum, dk, softmax_scale, cu_seqlens, None, stream)
         dv_postprocess(dv_accum, dv, cutlass.Float32(1.0), cu_seqlens, None, stream)

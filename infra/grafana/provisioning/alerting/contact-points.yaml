@@ -1,0 +1,43 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Contact points, provisioned from files like the rest of the alerting tree: UI
+# edits do not persist (Grafana's SQLite is ephemeral on Cloud Run) and would be
+# overwritten by these files anyway.
+#
+# ops-critical carries three receivers so a critical alert reaches email, Slack,
+# and Loom without relying on routing-tree subtleties. ops-slack is the fallback
+# for malformed or unlabeled alerts; the warning policy references it through an
+# always-active mute timing and never invokes it. The Loom endpoint is loopback-
+# only and authenticates to Loom as the Cloud Run service account through Google
+# identity federation.
+# $SLACK_ALERTS_WEBHOOK is expanded from the container environment (Secret
+# Manager: marin-grafana-slack-webhook). Email delivery additionally needs valid
+# SMTP credentials — without them email is inert while Slack still delivers.
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: ops-critical
+    receivers:
+      - uid: ops-critical-email
+        type: email
+        settings:
+          addresses: ops@openathena.ai
+      - uid: ops-critical-slack
+        type: slack
+        settings:
+          url: $SLACK_ALERTS_WEBHOOK
+      - uid: ops-critical-loom
+        type: webhook
+        settings:
+          url: http://127.0.0.1:8081/alerts/loom
+          httpMethod: POST
+
+  - orgId: 1
+    name: ops-slack
+    receivers:
+      - uid: ops-slack-webhook
+        type: slack
+        settings:
+          url: $SLACK_ALERTS_WEBHOOK

@@ -23,6 +23,7 @@ from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.runtime.env import with_slice_topology_env
+from iris.cluster.stats.tables import TASK_STATUS_NAMESPACE, TASK_STATUS_STORAGE_POLICY, TaskStatusRow
 from iris.cluster.types import (
     EndpointAccess,
     Entrypoint,
@@ -32,7 +33,6 @@ from iris.cluster.types import (
     adjust_tpu_replicas,
     is_job_finished,
 )
-from iris.cluster.worker.stats import TASK_STATUS_NAMESPACE, TASK_STATUS_STORAGE_POLICY, TaskStatusRow
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
@@ -162,7 +162,7 @@ class RemoteClusterClient:
         preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
         task_image: str | None = None,
-        priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
+        priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
         container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
         submit_argv: list[str] | None = None,
     ) -> JobName:
@@ -424,8 +424,11 @@ class RemoteClusterClient:
             f"mint_endpoint_token({endpoint_name})", lambda: self._client.mint_endpoint_token(request)
         )
 
-    def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[controller_pb2.Controller.Endpoint]:
-        return self._endpoint_client.list_endpoints(prefix, exact=exact)
+    def list_endpoints(self, prefix: str) -> list[controller_pb2.Controller.Endpoint]:
+        return self._endpoint_client.list_endpoints(prefix)
+
+    def list_endpoint_instances(self, name: str) -> list[controller_pb2.Controller.Endpoint]:
+        return self._endpoint_client.list_endpoint_instances(name)
 
     def resolve_endpoint(self, endpoint_name: str) -> str:
         """Resolve ``endpoint_name`` to a service address.
@@ -437,7 +440,7 @@ class RemoteClusterClient:
         """
         if self._use_controller_proxy:
             return f"{self._address.rstrip('/')}{proxy_path(endpoint_name)}"
-        endpoints = self.list_endpoints(endpoint_name, exact=True)
+        endpoints = self.list_endpoint_instances(endpoint_name)
         if not endpoints:
             raise ConnectionError(f"No {endpoint_name!r} endpoint registered on controller")
         return endpoints[0].address
@@ -461,23 +464,29 @@ class RemoteClusterClient:
         self,
         *,
         query: controller_pb2.Controller.JobQuery,
+        limit: int | None = None,
         page_size: int = 500,
     ) -> list[job_pb2.JobStatus]:
-        """Fetch all jobs matching ``query`` by paging through ``ListJobs``.
+        """Fetch jobs matching ``query`` by paging through ``ListJobs``.
 
-        The server caps each page at ``MAX_LIST_JOBS_LIMIT`` and rejects deep
-        offsets (``MAX_LIST_JOBS_OFFSET``). Callers must supply a query that
-        narrows the result set with ``state_filter`` / ``name_filter`` /
-        ``parent_job_id``; otherwise the page walk will fail once it reaches
-        the offset cap.
+        ``limit`` caps the total number of jobs returned; paging stops as soon
+        as that many are collected (or the result set is exhausted). Because the
+        server defaults to sorting by submission date descending, a small
+        ``limit`` yields the most recent jobs without scanning the whole table.
+
+        ``limit=None`` walks every matching job. That requires a query narrow
+        enough to stay under ``MAX_LIST_JOBS_OFFSET`` (via ``state_filter`` /
+        ``name_filter`` / ``job_id_prefix`` / ``parent_job_id``); otherwise the
+        walk fails once it reaches the offset cap.
         """
         jobs: list[job_pb2.JobStatus] = []
         offset = query.offset or 0
-        while True:
+        while limit is None or len(jobs) < limit:
+            this_page = page_size if limit is None else min(page_size, limit - len(jobs))
             page_query = controller_pb2.Controller.JobQuery()
             page_query.CopyFrom(query)
             page_query.offset = offset
-            page_query.limit = page_size
+            page_query.limit = this_page
 
             def _call(q=page_query):
                 request = controller_pb2.Controller.ListJobsRequest(query=q)
@@ -486,8 +495,9 @@ class RemoteClusterClient:
             response = call_with_retry("list_jobs", _call)
             jobs.extend(response.jobs)
             if not response.has_more or not response.jobs:
-                return jobs
+                break
             offset += len(response.jobs)
+        return jobs
 
     def shutdown(self, wait: bool = True) -> None:
         del wait

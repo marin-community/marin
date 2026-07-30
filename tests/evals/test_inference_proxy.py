@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import json
 import socket
 import threading
 from collections.abc import Iterator
@@ -12,32 +13,37 @@ from types import SimpleNamespace
 from typing import cast
 
 import httpx
-import marin.inference.vllm as vllm_module
+import marin.inference.iris as iris_module
 import pytest
-from fray.types import ResourceConfig
+from fray.types import JobStatus, ResourceConfig, create_environment
+from iris.cluster.types import EndpointAccess
+from marin.execution.lazy import lower
 from marin.inference.broker import InferenceBroker
+from marin.inference.config import (
+    BrokerConfig,
+    InferenceProxyConfig,
+    InferenceWorkerConfig,
+    IrisConfig,
+    RemoteInferenceConfig,
+    ServedModelConfig,
+    VllmEngineConfig,
+)
+from marin.inference.iris import RemoteInferenceStartupError, remote_inference
 from marin.inference.proxy import InferenceProxy, serve_inference_proxy
 from marin.inference.types import (
     InferenceRequest,
     InferenceResponse,
+    InferenceWorkerMetadata,
     LeasedInferenceRequest,
     LeasedInferenceResponse,
     OpenAIEndpoint,
     RunningModel,
-    pack_json_payload,
-    unpack_json_payload,
-)
-from marin.inference.vllm import (
-    DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER,
-    BrokeredVllmSystemConfig,
-    InferenceWorkerConfig,
-    VllmProxyConfig,
-    start_iris_brokered_vllm,
-    start_local_brokered_vllm,
 )
 from marin.inference.worker import InferenceWorker, run_inference_worker
 from rigging.timing import ExponentialBackoff
 
+from experiments.evals.federated_inference_proxy_demo import _redacted_url
+from experiments.evals.served_qwen3 import QWEN3_GPU_EVAL_RESULTS
 from tests.evals.openai_stub import (
     DeterministicOpenAIStub,
     assert_completions_scoring_contract,
@@ -45,6 +51,169 @@ from tests.evals.openai_stub import (
 )
 
 BROKER_LEASE_TIMEOUT_SECONDS = 300.0
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        (
+            "https://iris.example/proxy/t/secret-token/serve.inference/v1",
+            "https://iris.example/proxy/t/<redacted>/serve.inference/v1",
+        ),
+        (
+            "https://iris.example/proxy/t/cluster=cw-us-west-04a/secret-token/serve.inference/v1",
+            "https://iris.example/proxy/t/cluster=cw-us-west-04a/<redacted>/serve.inference/v1",
+        ),
+    ],
+)
+def test_capability_url_redaction(url: str, expected: str) -> None:
+    assert _redacted_url(url) == expected
+
+
+def _json_bytes(payload: object) -> bytes:
+    return json.dumps(payload, separators=(",", ":")).encode()
+
+
+def _json_payload(payload: bytes) -> dict:
+    return json.loads(payload)
+
+
+def test_brokered_gpu_eval_lowers_with_symbolic_worker_resources() -> None:
+    step = lower(QWEN3_GPU_EVAL_RESULTS)
+    fingerprint = json.loads(step.fingerprint_payload)
+
+    # Artifact lowering replaces runtime resources with a symbolic value. Backend validation must
+    # remain at the serving boundary, where the concrete ResourceConfig is available.
+    assert fingerprint["inference"]["iris"]["worker_resources"] == "<worker_resources>"
+    assert fingerprint["inference"]["instances"] == 1
+    assert fingerprint["inference"]["engine"]["launcher"] == "cuda"
+
+
+def test_remote_topology_selection() -> None:
+    explicit = BrokerConfig()
+
+    assert iris_module._broker_config(1, None) is None
+    assert isinstance(iris_module._broker_config(2, None), BrokerConfig)
+    assert iris_module._broker_config(1, explicit) is explicit
+    with pytest.raises(ValueError, match="instances must be positive"):
+        iris_module._broker_config(0, None)
+
+
+def test_remote_inference_uses_controller_minted_federated_capability_url(monkeypatch) -> None:
+    class _Job:
+        job_id = "serve-job"
+        iris_job = None
+        terminated = False
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+    minted: list[tuple[str, object]] = []
+    submitted = []
+    job = _Job()
+    iris_client = SimpleNamespace(
+        mint_endpoint_token=lambda name, ttl: minted.append((name, ttl))
+        or SimpleNamespace(
+            token="secret-token",
+            capability_url="https://iris.example/proxy/t/cluster=cw-us-west-04a/secret-token/serve.inference",
+        ),
+    )
+    monkeypatch.setattr(iris_module, "get_job_info", lambda: SimpleNamespace())
+    monkeypatch.setattr(
+        iris_module,
+        "current_client",
+        lambda: SimpleNamespace(submit=lambda request: submitted.append(request) or job),
+    )
+    monkeypatch.setattr(iris_module, "iris_ctx", lambda: SimpleNamespace(client=iris_client))
+    monkeypatch.setattr(
+        iris_module,
+        "_wait_for_endpoint",
+        lambda *_args, **_kwargs: (
+            "http://10.0.0.1:8000",
+            {"tensor_parallel_size": "1", "backend": "vllm"},
+        ),
+    )
+    iris = IrisConfig(
+        worker_resources=ResourceConfig.with_tpu("v6e-4"),
+        worker_environment=create_environment(extras=["tpu", "vllm"]),
+    )
+
+    with remote_inference(
+        RemoteInferenceConfig(
+            model=ServedModelConfig(
+                weights="physical-model",
+                api_model="public-model",
+                tokenizer="Qwen/Qwen3-0.6B",
+            ),
+            engine=VllmEngineConfig(),
+            iris=iris,
+            capability_origin="https://iris.example",
+        ),
+    ) as session:
+        model = session.model
+
+    (request,) = submitted
+    (service,) = request.entrypoint.callable_entrypoint.args
+    assert service.controller_proxy_timeout_seconds > 1800
+    assert service.endpoint_name == minted[0][0]
+    assert "physical-model" not in service.endpoint_name
+    assert model.endpoint.base_url == (
+        "https://iris.example/proxy/t/cluster=cw-us-west-04a/secret-token/serve.inference/v1"
+    )
+    assert "10.0.0.1" not in model.endpoint.base_url
+    assert model.endpoint.model == "public-model"
+    assert model.tokenizer == "Qwen/Qwen3-0.6B"
+    assert "secret-token" not in repr(model.endpoint)
+    assert job.terminated
+
+
+def test_remote_inference_reports_direct_startup_job(monkeypatch) -> None:
+    class _FailedJob:
+        job_id = "failed-serve"
+        terminated = False
+
+        def status(self) -> JobStatus:
+            return JobStatus.FAILED
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+    job = _FailedJob()
+    requests = []
+    monkeypatch.setattr(iris_module, "get_job_info", lambda: SimpleNamespace())
+    monkeypatch.setattr(
+        iris_module,
+        "current_client",
+        lambda: SimpleNamespace(submit=lambda request: requests.append(request) or job),
+    )
+    monkeypatch.setattr(
+        iris_module,
+        "iris_ctx",
+        lambda: SimpleNamespace(client=SimpleNamespace(list_endpoints=lambda *_args, **_kwargs: [])),
+    )
+    iris = IrisConfig(
+        worker_resources=ResourceConfig.with_tpu("v6e-4"),
+        worker_environment=create_environment(extras=["tpu", "vllm"]),
+    )
+
+    with pytest.raises(RemoteInferenceStartupError) as exc_info:
+        with remote_inference(
+            RemoteInferenceConfig(
+                model=ServedModelConfig(weights="gpt2"),
+                engine=VllmEngineConfig(),
+                iris=iris,
+            )
+        ):
+            pass
+
+    assert exc_info.value.jobs == (job,)
+    assert job.terminated
+    assert len(requests) == 1
+
+
+def test_broker_config_rejects_invalid_timeout_ordering() -> None:
+    with pytest.raises(ValueError, match=r"worker\.request_timeout_seconds"):
+        BrokerConfig(worker=InferenceWorkerConfig(request_timeout_seconds=240))
 
 
 @dataclass
@@ -68,7 +237,7 @@ def mock_cluster() -> Iterator[MockInferenceCluster]:
                 request_timeout_seconds=5,
                 readiness_timeout_seconds=5,
             ) as proxy,
-            run_inference_worker(worker, max_in_flight=DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER),
+            run_inference_worker(worker, max_in_flight=InferenceWorkerConfig().max_in_flight),
         ):
             yield MockInferenceCluster(
                 broker=broker,
@@ -98,6 +267,42 @@ def test_inference_broker_round_trip() -> None:
     assert broker.fetch_responses(max_items=1) == [response_a]
     assert broker.fetch_responses(max_items=8) == []
     assert broker.size() == 0
+
+
+def test_inference_worker_preserves_raw_transport_fields() -> None:
+    request = InferenceRequest(
+        request_id="raw",
+        method="POST",
+        path="/v1/embeddings",
+        query_string="encoding_format=float",
+        headers=(("content-type", "application/octet-stream"), ("x-request-id", "caller-1")),
+        payload=b"\x00raw-body",
+    )
+
+    def _handle(upstream_request: httpx.Request) -> httpx.Response:
+        assert upstream_request.url == "http://upstream/v1/embeddings?encoding_format=float"
+        assert upstream_request.headers["x-request-id"] == "caller-1"
+        assert upstream_request.content == b"\x00raw-body"
+        return httpx.Response(
+            201,
+            content=b"\x00raw-response",
+            headers={"content-type": "application/octet-stream", "x-request-id": "upstream-1"},
+        )
+
+    worker = InferenceWorker(
+        broker=InferenceBroker(request_lease_timeout_seconds=5),
+        upstream=RunningModel(endpoint=OpenAIEndpoint(base_url="http://upstream/v1", model="gpt2")),
+        request_timeout_seconds=5,
+    )
+    with httpx.Client(transport=httpx.MockTransport(_handle)) as client:
+        response = worker._forward_one(client, LeasedInferenceRequest(lease_id="lease", request=request))
+
+    assert response.response.status_code == 201
+    assert response.response.payload == b"\x00raw-response"
+    assert dict(response.response.headers) == {
+        "content-type": "application/octet-stream",
+        "x-request-id": "upstream-1",
+    }
 
 
 def test_inference_broker_requeues_unanswered_request_after_lease_timeout() -> None:
@@ -145,26 +350,27 @@ def test_inference_broker_drops_response_for_expired_lease_after_requeue() -> No
     assert broker.fetch_responses(max_items=1) == [fresh_response]
 
 
-def test_local_brokered_vllm_rejects_multiple_workers() -> None:
-    config = BrokeredVllmSystemConfig(model="gpt2", workers=InferenceWorkerConfig(count=2))
+def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) -> None:
+    broker_actor = InferenceBroker(request_lease_timeout_seconds=240)
+    broker_actor.register_worker("worker-0", InferenceWorkerMetadata(tensor_parallel_size=1, backend_name="vllm"))
+    proxy_models: list[str] = []
+    events = []
+    minted = []
 
-    with pytest.raises(ValueError):
-        with start_local_brokered_vllm(config):
-            pass
-
-
-def test_iris_brokered_vllm_worker_env_defaults_tpu_build_settings(monkeypatch) -> None:
     class _FakeJob:
         job_id = "worker-0"
 
         def terminate(self) -> None:
             pass
 
+        def status(self) -> JobStatus:
+            return JobStatus.RUNNING
+
     class _FakeActorGroup:
         def wait_ready(self, *, count: int, timeout: float):
             assert count == 1
             assert timeout > 0
-            return [object()]
+            return [broker_actor]
 
         def shutdown(self) -> None:
             pass
@@ -181,28 +387,71 @@ def test_iris_brokered_vllm_worker_env_defaults_tpu_build_settings(monkeypatch) 
             return _FakeJob()
 
     @contextmanager
-    def _fake_start_proxy(config, response_provider):
-        yield RunningModel(endpoint=OpenAIEndpoint(base_url="http://127.0.0.1:1", model=config.model))
+    def _fake_start_proxy(**kwargs):
+        proxy_models.append(kwargs["model"])
+        yield RunningModel(endpoint=OpenAIEndpoint(base_url="http://127.0.0.1:1/v1", model=kwargs["model"]))
 
     client = _FakeClient()
-    monkeypatch.setattr(vllm_module, "current_client", lambda: client)
-    monkeypatch.setattr(vllm_module, "get_job_info", lambda: SimpleNamespace(job_id="parent"))
-    monkeypatch.setattr(vllm_module, "_start_proxy", _fake_start_proxy)
-    monkeypatch.setattr(vllm_module, "_wait_for_brokered_vllm_ready", lambda *args, **kwargs: None)
 
-    config = BrokeredVllmSystemConfig(
-        model="gpt2",
-        worker_resources=ResourceConfig.with_tpu("v6e-4"),
-        worker_env_vars={"VLLM_ENABLE_V1_MULTIPROCESSING": "0"},
+    @contextmanager
+    def registered(*args, **kwargs):
+        events.append(("register", args, kwargs))
+        try:
+            yield "endpoint-id"
+        finally:
+            events.append(("unregister", "endpoint-id"))
+
+    registry = SimpleNamespace(registered=registered)
+    iris_client = SimpleNamespace(
+        mint_endpoint_token=lambda name, ttl: minted.append(name)
+        or SimpleNamespace(token="broker-token", capability_url=""),
+    )
+    monkeypatch.setattr(iris_module, "current_client", lambda: client)
+    monkeypatch.setattr(
+        iris_module,
+        "iris_ctx",
+        lambda: SimpleNamespace(registry=registry, client=iris_client),
+    )
+    monkeypatch.setattr(iris_module, "get_job_info", lambda: SimpleNamespace(advertise_host="127.0.0.1"))
+    monkeypatch.setattr(iris_module, "serve_inference_proxy", _fake_start_proxy)
+    monkeypatch.setattr(
+        iris_module.requests, "get", lambda *_args, **_kwargs: SimpleNamespace(raise_for_status=lambda: None)
     )
 
-    with start_iris_brokered_vllm(config):
-        pass
+    iris = IrisConfig(
+        worker_resources=ResourceConfig.with_tpu("v6e-4", regions=["us-east5"], zone="us-east5-a"),
+        worker_environment=create_environment(
+            extras=["tpu", "vllm"],
+            env_vars={"VLLM_ENABLE_V1_MULTIPROCESSING": "0"},
+        ),
+    )
 
-    [worker_request] = client.submissions
-    assert worker_request.environment.extras == ["tpu", "vllm"]
-    assert worker_request.environment.env_vars["VLLM_ENABLE_V1_MULTIPROCESSING"] == "0"
-    assert worker_request.environment.env_vars["VLLM_TARGET_DEVICE"] == "tpu"
+    with remote_inference(
+        RemoteInferenceConfig(
+            model=ServedModelConfig(weights="physical-model", api_model="public-model"),
+            engine=VllmEngineConfig(),
+            iris=iris,
+            instances=2,
+            capability_origin="https://iris.example",
+        )
+    ) as session:
+        assert session.model.endpoint.model == "public-model"
+        assert session.model.endpoint.base_url.startswith("https://iris.example/proxy/t/broker-token/")
+
+    assert proxy_models == ["public-model"]
+    _, register_args, register_kwargs = events[0]
+    endpoint_name, address, metadata = register_args
+    assert endpoint_name == minted[0]
+    assert address == "http://127.0.0.1:1"
+    assert metadata["model"] == "public-model"
+    assert register_kwargs["access"] == EndpointAccess.ENDPOINT_ACCESS_LINK
+    assert events[-1] == ("unregister", "endpoint-id")
+    assert len(client.submissions) == 2
+    for worker_request in client.submissions:
+        assert worker_request.environment.extras == ["tpu", "vllm"]
+        assert worker_request.environment.env_vars["VLLM_ENABLE_V1_MULTIPROCESSING"] == "0"
+        assert worker_request.resources.regions == ["us-east5"]
+        assert worker_request.resources.zone == "us-east5-a"
 
 
 def test_inference_proxy_forwards_completions_to_running_model(mock_cluster: MockInferenceCluster) -> None:
@@ -221,6 +470,21 @@ def test_inference_proxy_routes_models_readiness_to_running_model(mock_cluster: 
     assert response.json()["data"][0]["id"] == mock_cluster.model
     assert len(mock_cluster.upstream.requests_for("/v1/models")) == 1
     assert mock_cluster.broker.pending() == []
+    assert mock_cluster.broker.size() == 0
+
+
+def test_inference_proxy_rejects_streaming_before_submitting_to_broker(
+    mock_cluster: MockInferenceCluster,
+) -> None:
+    response = httpx.post(
+        f"{mock_cluster.proxy.endpoint.base_url}/chat/completions",
+        json={"model": mock_cluster.model, "messages": [], "stream": True},
+        timeout=5,
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"error": "brokered inference does not support streaming"}
+    assert mock_cluster.upstream.requests_for("/v1/chat/completions") == []
     assert mock_cluster.broker.size() == 0
 
 
@@ -277,7 +541,7 @@ async def test_inference_worker_returns_504_for_upstream_timeout() -> None:
 
     assert responses[0].request_id == "slow"
     assert responses[0].status_code == 504
-    assert "error" in unpack_json_payload(responses[0].payload)
+    assert "error" in _json_payload(responses[0].payload)
 
 
 @pytest.mark.asyncio
@@ -299,7 +563,7 @@ async def test_inference_worker_returns_502_for_upstream_connection_failure() ->
 
     assert responses[0].request_id == "connect-failure"
     assert responses[0].status_code == 502
-    assert "error" in unpack_json_payload(responses[0].payload)
+    assert "error" in _json_payload(responses[0].payload)
 
 
 @pytest.mark.asyncio
@@ -319,11 +583,10 @@ async def test_inference_worker_preserves_status_for_non_json_upstream_response(
         ):
             responses = await _fetch_until_responses(broker, count=1)
 
-    payload = unpack_json_payload(responses[0].payload)
     assert responses[0].request_id == "non-json"
     assert responses[0].status_code == 503
-    assert "error" in payload
-    assert payload["error"]["body"] == "temporarily unavailable"
+    assert responses[0].payload == b"temporarily unavailable"
+    assert dict(responses[0].headers)["content-type"].startswith("text/plain")
 
 
 @pytest.mark.asyncio
@@ -343,9 +606,7 @@ async def test_inference_proxy_matches_out_of_order_responses_to_inflight_reques
             )
 
             requests = await _fetch_until_two_requests(broker)
-            requests_by_prompt = {
-                unpack_json_payload(request.request.payload)["prompt"]: request for request in requests
-            }
+            requests_by_prompt = {_json_payload(request.request.payload)["prompt"]: request for request in requests}
             broker.submit_responses(
                 [
                     _leased_response(
@@ -353,7 +614,8 @@ async def test_inference_proxy_matches_out_of_order_responses_to_inflight_reques
                         InferenceResponse(
                             request_id=requests_by_prompt["second"].request.request_id,
                             status_code=200,
-                            payload=pack_json_payload({"prompt": "second"}),
+                            payload=_json_bytes({"prompt": "second"}),
+                            headers=(("content-type", "application/json"),),
                         ),
                     ),
                     _leased_response(
@@ -361,7 +623,8 @@ async def test_inference_proxy_matches_out_of_order_responses_to_inflight_reques
                         InferenceResponse(
                             request_id=requests_by_prompt["first"].request.request_id,
                             status_code=200,
-                            payload=pack_json_payload({"prompt": "first"}),
+                            payload=_json_bytes({"prompt": "first"}),
+                            headers=(("content-type", "application/json"),),
                         ),
                     ),
                 ]
@@ -400,7 +663,8 @@ async def test_inference_proxy_rejects_when_pending_queue_is_full() -> None:
                         InferenceResponse(
                             request_id=requests[0].request.request_id,
                             status_code=200,
-                            payload=pack_json_payload({"prompt": "first"}),
+                            payload=_json_bytes({"prompt": "first"}),
+                            headers=(("content-type", "application/json"),),
                         ),
                     )
                 ]
@@ -442,7 +706,7 @@ async def test_inference_proxy_drops_stale_responses() -> None:
                 InferenceResponse(
                     request_id="stale",
                     status_code=200,
-                    payload=pack_json_payload({"prompt": "stale"}),
+                    payload=_json_bytes({"prompt": "stale"}),
                 ),
             )
         ]
@@ -497,7 +761,7 @@ def _completion_inference_request(*, request_id: str, prompt: str) -> InferenceR
         request_id=request_id,
         method="POST",
         path="/v1/completions",
-        payload=pack_json_payload(
+        payload=_json_bytes(
             {
                 "model": "gpt2",
                 "prompt": prompt,
@@ -507,6 +771,7 @@ def _completion_inference_request(*, request_id: str, prompt: str) -> InferenceR
                 "logprobs": 1,
             }
         ),
+        headers=(("content-type", "application/json"),),
     )
 
 
@@ -519,7 +784,7 @@ def _serve_inference_proxy(
     max_pending_requests: int | None = None,
     readiness_timeout_seconds: float | None = None,
 ) -> Iterator[RunningModel]:
-    config = VllmProxyConfig(
+    config = InferenceProxyConfig(
         request_timeout_seconds=request_timeout_seconds,
         readiness_timeout_seconds=(
             request_timeout_seconds if readiness_timeout_seconds is None else readiness_timeout_seconds

@@ -33,6 +33,14 @@ class ControllerProvider(Protocol):
         """
         ...
 
+    def preflight_controller(self, config: IrisClusterConfig) -> None:
+        """Resolve operator-side inputs without mutating cluster resources.
+
+        Providers may cache the resolved inputs for the subsequent start or
+        restart.
+        """
+        ...
+
     def start_controller(self, config: IrisClusterConfig, *, fresh: bool = False) -> str:
         """Start or discover existing controller. Returns address (host:port).
 
@@ -77,8 +85,9 @@ class ControllerProvider(Protocol):
     def resolve_image(self, image: str, zone: str | None = None) -> str:
         """Resolve a container image reference for this platform's registry.
 
-        On GCP, rewrites ghcr.io/ images to the Artifact Registry remote repo
-        for the given zone's continent. Other platforms return the image unchanged.
+        On GCP, rewrites public-registry images to the pull-through mirror the
+        cluster's ``registry_mirrors`` config maps for the zone's continent.
+        Other platforms return the image unchanged.
         """
         ...
 

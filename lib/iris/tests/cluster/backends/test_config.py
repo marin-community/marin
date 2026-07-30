@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 import yaml
+from iris.cluster.backends.k8s.tasks import K8sTaskProvider
+from iris.cluster.composer import make_task_backend
 from iris.cluster.config import (
     BackendConfig,
     ControllerVmConfig,
@@ -22,6 +24,7 @@ from iris.cluster.config import (
     GcpSliceConfig,
     IrisClusterConfig,
     KubernetesProviderConfig,
+    KueueConfig,
     LocalSliceConfig,
     ManualSliceConfig,
     PlatformConfig,
@@ -751,7 +754,7 @@ scale_groups:
             iris_root / "config" / "marin.yaml",
             iris_root / "config" / "marin-dev.yaml",
             iris_root / "config" / "examples" / "coreweave.yaml",
-            iris_root / "config" / "ci-coreweave.yaml",
+            iris_root / "config" / "cw-us-west-04a.yaml",
             iris_root / "config" / "ci-test.yaml",
         ]
 
@@ -2117,13 +2120,17 @@ class TestBackendsConfig:
         backend = _worker_daemon_backend(scale_groups={"tpu": _accel_scale_group(AcceleratorType.TPU, "auto")})
         assert backend_attribute_sets(backend) == {"device-type": {"tpu"}}
 
-    def test_coreweave_implicit_config_advertises_gpu_attrs(self):
+    def test_coreweave_implicit_config_advertises_gpu_and_region_attrs(self):
         # The CoreWeave configs use the implicit single-backend shape (no backends:).
         # resolve_backends synthesizes one backend whose GPU scale group must
-        # advertise device-type/device-variant, else a GPU job can neither route to
-        # it locally nor federate to it as a peer.
+        # advertise device-type/device-variant and its region, else a GPU job can
+        # neither route to it locally nor federate to it by --region as a peer.
         iris_root = Path(__file__).parent.parent.parent.parent
-        for rel in ("config/examples/coreweave.yaml", "config/cw-us-east-02a.yaml"):
+        expected_region = {
+            "config/examples/coreweave.yaml": "US-WEST-04A",
+            "config/cw-us-east-02a.yaml": "US-EAST-02A",
+        }
+        for rel, region in expected_region.items():
             config_path = iris_root / rel
             if not config_path.exists():
                 pytest.skip(f"Config not found: {rel}")
@@ -2133,4 +2140,70 @@ class TestBackendsConfig:
             assert backend_attribute_sets(resolved[DEFAULT_BACKEND_ID]) == {
                 "device-type": {"gpu"},
                 "device-variant": {"h100"},
+                "region": {region},
             }
+
+    def test_region_derived_from_coreweave_slice_template(self):
+        # A CoreWeave scale group advertises its region so --region routes to it across
+        # a federation; the CoreWeave region is exported verbatim (not a GCP zone prefix).
+        backend = _worker_daemon_backend(
+            scale_groups={
+                "h100": ScaleGroupConfig(
+                    name="h100",
+                    num_vms=1,
+                    resources=ScaleGroupResources(
+                        cpu_millicores=8000,
+                        memory_bytes=16 * 1024**3,
+                        device_type=AcceleratorType.GPU,
+                        device_variant="H100",
+                        capacity_type=CapacityType.ON_DEMAND,
+                    ),
+                    slice_template=SliceConfig(
+                        num_vms=1, coreweave=CoreweaveSliceConfig(region="US-EAST-02A", gpu_class="H100")
+                    ),
+                )
+            }
+        )
+        assert backend_attribute_sets(backend) == {
+            "device-type": {"gpu"},
+            "device-variant": {"h100"},
+            "region": {"US-EAST-02A"},
+        }
+
+    def test_region_derived_from_gcp_zone_prefix(self):
+        # A GCP scale group advertises the zone's region prefix (us-central2-b -> us-central2).
+        backend = _worker_daemon_backend(
+            scale_groups={
+                "tpu": ScaleGroupConfig(
+                    name="tpu",
+                    num_vms=1,
+                    slice_template=SliceConfig(
+                        num_vms=1, gcp=GcpSliceConfig(zone="us-central2-b", runtime_version="tpu-ubuntu2204-base")
+                    ),
+                )
+            }
+        )
+        assert backend_attribute_sets(backend) == {"region": {"us-central2"}}
+
+
+def test_make_task_backend_requires_kueue_for_k8s_backend():
+    """Kueue is mandatory on the K8s backend (every pod is admitted through it), so building
+    one without a configured cluster_queue fails fast rather than stamping empty queue labels."""
+    config = IrisClusterConfig(
+        platform=PlatformConfig(label_prefix="iris"),
+        kubernetes_provider=KubernetesProviderConfig(),  # no kueue.cluster_queue
+    )
+    with pytest.raises(ValueError, match=r"kueue\.cluster_queue"):
+        make_task_backend(config, unreachable_grace=Duration.from_seconds(1))
+
+
+def test_k8s_backend_uses_canonical_default_task_image():
+    config = IrisClusterConfig(
+        defaults=DefaultsConfig(worker=WorkerConfig(default_task_image="registry.example/iris-task:abc1234")),
+        kubernetes_provider=KubernetesProviderConfig(kueue=KueueConfig(cluster_queue="iris-cq")),
+    )
+
+    backend = make_task_backend(config, unreachable_grace=Duration.from_seconds(1))
+
+    assert isinstance(backend, K8sTaskProvider)
+    assert backend.default_image == "registry.example/iris-task:abc1234"

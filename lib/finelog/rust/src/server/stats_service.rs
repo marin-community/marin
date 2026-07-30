@@ -18,7 +18,8 @@ use crate::proto::finelog::stats::{
     OwnedQueryRequestView, OwnedRegisterTableRequestView, OwnedWriteRowsRequestView, QueryResponse,
     RegisterTableResponse, StatsService, WriteRowsResponse,
 };
-use crate::query::{make_ctx, run_query_over};
+use crate::query::{make_ctx, query_timeout, run_query_over, truncate_sql_for_log};
+use crate::server::auth::{request_identity, AuthIdentity};
 use crate::server::MAX_MESSAGE_BYTES;
 use crate::store::ipc::encode_ipc;
 use crate::store::namespace::DEFAULT_PERSIST_TIMEOUT;
@@ -49,6 +50,25 @@ where
         Err(join) => Err(ConnectError::internal(format!(
             "store task panicked: {join}"
         ))),
+    }
+}
+
+/// The origin cluster to stamp on a WriteRows batch, bound to the credential
+/// that carried it — the stats-plane analogue of the log plane's
+/// `authorized_cluster`. A forwarding JWT names exactly one cluster, so its rows
+/// are attributed to it regardless of what the batch carried; this is what makes
+/// cross-cluster attribution independent of whether the sender's local schema
+/// held the implicit origin column (the federation gap where forwarded `iris.*`
+/// stats from a finelog whose namespace predates that column arrive unstamped).
+/// A trusted-network writer carries no per-writer identity and names its own
+/// origin (empty for a local write), so its batch is left as supplied.
+fn write_origin_cluster(ctx: &RequestContext) -> Result<Option<String>, ConnectError> {
+    match request_identity(ctx) {
+        Some(AuthIdentity::Jwt { cluster }) => Ok(Some(cluster.clone())),
+        Some(AuthIdentity::Network) => Ok(None),
+        None => Err(ConnectError::internal(
+            "finelog: request reached a handler with no auth identity",
+        )),
     }
 }
 
@@ -120,13 +140,17 @@ impl StatsService for StatsServiceImpl {
         // Copy the IPC bytes out of the borrowed request so the blocking decode
         // owns them across the spawn_blocking boundary.
         let arrow_ipc: Vec<u8> = request.arrow_ipc.unwrap_or(&[]).to_vec();
+        // Resolve the origin cluster from the credential before the blocking
+        // hop so a forwarding writer's rows are stamped with its cluster.
+        let origin_cluster = write_origin_cluster(&ctx)?;
 
         // Decode + validate + align + append on the blocking pool; the size/row
         // caps and IPC decode live in `Store::write_rows`.
         let store = Arc::clone(&self.store);
         let ns = namespace.clone();
         let (rows_written, last_seq) =
-            run_blocking(move || store.write_rows(&ns, &arrow_ipc)).await?;
+            run_blocking(move || store.write_rows(&ns, &arrow_ipc, origin_cluster.as_deref()))
+                .await?;
 
         // The server does not auto-cancel on the client deadline; enforce the
         // durability await ourselves, bounded by the remaining budget (falling
@@ -160,10 +184,29 @@ impl StatsService for StatsServiceImpl {
         // DataFusion schedules its own CPU tasks; await sql()/collect() directly
         // (no spawn_blocking). Errors map by variant: parse/plan/schema/catalog
         // faults are client errors, IO/execution faults are server errors.
+        //
+        // Bound execution by the server-side wall-clock deadline: on elapse the
+        // query future is dropped (aborting the scan) and the caller gets a
+        // clean deadline_exceeded, so one pathological query can't run unbounded.
         let ctx = make_ctx();
-        let result = run_query_over(&ctx, providers, &sql)
-            .await
-            .map_err(map_query_error)?;
+        let query = run_query_over(&ctx, providers, &sql);
+        let result = match query_timeout() {
+            Some(deadline) => match tokio::time::timeout(deadline, query).await {
+                Ok(r) => r.map_err(map_query_error)?,
+                Err(_elapsed) => {
+                    tracing::warn!(
+                        deadline_ms = deadline.as_millis() as u64,
+                        sql = %truncate_sql_for_log(&sql),
+                        "query aborted: exceeded server-side deadline",
+                    );
+                    return Err(ConnectError::deadline_exceeded(format!(
+                        "query exceeded server-side deadline of {} ms",
+                        deadline.as_millis()
+                    )));
+                }
+            },
+            None => query.await.map_err(map_query_error)?,
+        };
 
         let row_count: i64 = result.batches.iter().map(|b| b.num_rows() as i64).sum();
         // The schema is captured from the planned DataFrame, so an empty result
@@ -248,5 +291,58 @@ impl StatsService for StatsServiceImpl {
             schema: MessageField::some(schema_to_proto_owned(&schema)),
             ..Default::default()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::{Extensions, HeaderMap};
+
+    use super::*;
+
+    fn ctx_with(identity: Option<AuthIdentity>) -> RequestContext {
+        let mut extensions = Extensions::new();
+        if let Some(identity) = identity {
+            extensions.insert(identity);
+        }
+        RequestContext::new(HeaderMap::new()).with_extensions(extensions)
+    }
+
+    fn jwt(cluster: &str) -> RequestContext {
+        ctx_with(Some(AuthIdentity::Jwt {
+            cluster: cluster.to_string(),
+        }))
+    }
+
+    #[test]
+    fn a_forwarding_jwt_stamps_the_cluster_its_key_authenticates() {
+        // The stats-plane twin of the log path's `authorized_cluster`: a WriteRows
+        // batch's origin is bound to the credential that carried it. The function reads
+        // no caller-supplied cluster at all, so a spoofed origin in the batch cannot
+        // influence the stamp — `stamp_cluster_column` then overwrites the batch column
+        // with this value. That is what makes attribution independent of whether the
+        // sender's local schema even held the origin column (the cross-cluster
+        // forwarding gap, where a forwarded batch arrives without the column).
+        assert_eq!(
+            write_origin_cluster(&jwt("cw-rno2a")).unwrap(),
+            Some("cw-rno2a".to_string())
+        );
+    }
+
+    #[test]
+    fn a_trusted_network_writer_stamps_nothing() {
+        // A local write (admitted by the loopback/VPC cidr rule) carries no per-writer
+        // identity, so its batch is left as supplied — empty for a store writing its own
+        // rows. Nothing is stamped, so an empty/NULL origin denotes the local cluster.
+        let network = ctx_with(Some(AuthIdentity::Network));
+        assert_eq!(write_origin_cluster(&network).unwrap(), None);
+    }
+
+    #[test]
+    fn a_write_with_no_auth_identity_is_refused() {
+        // Unreachable through the interceptor, which admits nothing without recording an
+        // identity. Refusing rather than defaulting fails closed: an unauthenticated
+        // write can never silently become a hub-local row.
+        assert!(write_origin_cluster(&ctx_with(None)).is_err());
     }
 }

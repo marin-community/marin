@@ -40,7 +40,7 @@ from levanter.utils.thread_utils import blocking_wait
 from levanter.data._preprocessor import BatchProcessor, BatchResult, canonicalize_batch, dict_from_record_batch
 from levanter.data.sharded_datasource import ShardedDataSource
 from .jagged_array import JaggedArrayStore, _no_cache_read_context
-from .tree_store import TreeStore
+from .tree_store import TreeStore, heuristic_is_leaf
 
 T = TypeVar("T")
 U = TypeVar("U")
@@ -604,7 +604,7 @@ class _ShardedTreeCacheReader(Generic[T_co]):
             field = "/".join(_render_path_elem(part) for part in path)
             return _ShardedJaggedArrayStore(self._cache, field)
 
-        return jtu.tree_map_with_path(field_store, self._cache._exemplar)
+        return jtu.tree_map_with_path(field_store, self._cache._exemplar, is_leaf=heuristic_is_leaf)
 
     async def get_flat_field_batch(self, field: str, offsets: Sequence[int], length: int) -> Sequence[np.ndarray]:
         if len(offsets) == 0:

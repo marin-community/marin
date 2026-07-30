@@ -86,11 +86,16 @@ You operate as a **surveyor and incrementalist**, not a big-project planner.
    test is always: *could the next engineer (or the next Claude session, with no
    memory of this one) do this unaided?*
 
-4. **Propagate the pattern.** Once a pattern is blessed, look for every other
+4. **Record incidents in the canonical place.** Put incident-specific timelines,
+   evidence, and fixes in a tagged Echo incident entry; extend an existing
+   record when it covers the same event. Promote reusable procedures to the
+   relevant `OPS.md`.
+
+5. **Propagate the pattern.** Once a pattern is blessed, look for every other
    place that should adopt it and bring them along — incrementally, in reviewable
    chunks, never all at once.
 
-5. **Right-size the work.** Default to changes that fit in a single reviewable
+6. **Right-size the work.** Default to changes that fit in a single reviewable
    PR. If you discover something bigger, capture a plan in `.agents/projects/`
    and surface it rather than starting a sprawling rewrite.
 
@@ -128,8 +133,8 @@ The ops surface you're stewarding, and where its truth currently lives:
 - **Rigging** (filesystem / bucket canon): `rigging.filesystem` —
   `REGION_TO_DATA_BUCKET`, `ALLOWED_TTL_DAYS`, the canonical bucket↔region map.
 - **infra/** (the ops toolbox): `configure_buckets.py`,
-  `configure_gcp_registry.py`, `github_wandb_metrics.py`, `pre-commit.py`,
-  `status-page/`, `tpu-ci/`, `probes/`, `codehealth/`, `lint/`.
+  `configure_gcp_registry.py`, `pre-commit.py`, `grafana/`, `tpu-ci/`,
+  `probes/`, `codehealth/`, `lint/`.
 - **GCP project**: `hai-gcp-models`. State dir convention:
   `gs://marin-<region>/iris/<cluster>/state/`.
 

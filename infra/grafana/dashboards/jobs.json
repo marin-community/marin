@@ -1,0 +1,448 @@
+{
+  "uid": "marin-jobs",
+  "title": "Jobs",
+  "description": "Fleet job state at a glance. The CoreWeave jobs come from the iris.task_state finelog namespace on the marin hub (per active root job: waiting/running task counts and the oldest PENDING / stuck-in-BUILDING wait ages), grouped by origin cluster. GCE clusters (marin, marin-dev) do not emit iris.task_state — their controller DB is queried directly for job-state counts. Until the finelog CoreWeave stamping fix deploys, CoreWeave rows arrive without an origin cluster and show as 'unknown'; unifying GCE into the per-job table needs the follow-up in the unified-grafana-job-dash-design artifact.",
+  "tags": [
+    "marin",
+    "generated"
+  ],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Home",
+      "type": "link",
+      "url": "/d/marin-home"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Iris resources",
+      "type": "link",
+      "url": "/d/marin-iris"
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "panelRef": "fleet_tasks_inflight"
+    },
+    {
+      "id": 2,
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "panelRef": "fleet_jobs_stuck"
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "Active jobs (CoreWeave fleet)",
+      "description": "One row per active root job across the CoreWeave clusters, latest iris.task_state snapshot within the last 2 minutes, worst-first by wait age. A finished job stops emitting and ages out of the 2-minute window rather than lingering as active. cluster='unknown' means the origin stamp is missing (pre-stamping-fix); after the fix each row carries its cw-* cluster.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 11,
+        "w": 24,
+        "x": 0,
+        "y": 4
+      },
+      "timeFrom": "2m",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "oldest building"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "text",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 900000
+                    },
+                    {
+                      "color": "red",
+                      "value": 3600000
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "oldest pending"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "text",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 900000
+                    },
+                    {
+                      "color": "red",
+                      "value": 3600000
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "oldest building",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH recent AS (SELECT COALESCE(NULLIF(cluster,''),'unknown') AS cluster, root_job_id, pending, assigned, building, running, oldest_pending_age_ms, oldest_building_age_ms, ROW_NUMBER() OVER (PARTITION BY COALESCE(cluster,''), root_job_id ORDER BY ts DESC) AS rn FROM \"iris.task_state\" WHERE root_job_id <> '' AND ts >= {{from}} AND ts < {{to}}) SELECT cluster, root_job_id AS job, pending, assigned, building, running, oldest_pending_age_ms, oldest_building_age_ms FROM recent WHERE rn = 1 ORDER BY GREATEST(oldest_building_age_ms, oldest_pending_age_ms) DESC"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "job",
+              "text": "job",
+              "type": "string"
+            },
+            {
+              "selector": "pending",
+              "text": "pending",
+              "type": "number"
+            },
+            {
+              "selector": "assigned",
+              "text": "assigned",
+              "type": "number"
+            },
+            {
+              "selector": "building",
+              "text": "building",
+              "type": "number"
+            },
+            {
+              "selector": "running",
+              "text": "running",
+              "type": "number"
+            },
+            {
+              "selector": "oldest_pending_age_ms",
+              "text": "oldest pending",
+              "type": "number"
+            },
+            {
+              "selector": "oldest_building_age_ms",
+              "text": "oldest building",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "CoreWeave queue depth",
+      "description": "Pending task count per cluster over the dashboard window, from the iris.task_state rollup rows (root_job_id=''). A rising line is queue backlog; a line going flat-then-absent is a controller that stopped emitting.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "never",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, COALESCE(NULLIF(cluster,''),'unknown') AS series, MAX(pending) AS value FROM \"iris.task_state\" WHERE root_job_id = '' AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "pending",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "GCE job state (marin, marin-dev)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 23
+      },
+      "panels": []
+    },
+    {
+      "id": 11,
+      "type": "table",
+      "title": "marin jobs by state",
+      "description": "Root-job counts by state from the marin controller: in-flight now, plus terminal states over the trailing 24h. GCE controllers are queried directly (they emit no iris.task_state).",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "iris-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/jobs",
+          "url_options": {
+            "method": "GET",
+            "params": []
+          },
+          "columns": [
+            {
+              "selector": "bucket",
+              "text": "bucket",
+              "type": "string"
+            },
+            {
+              "selector": "state",
+              "text": "state",
+              "type": "string"
+            },
+            {
+              "selector": "count",
+              "text": "count",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "table",
+      "title": "marin-dev jobs by state",
+      "description": "Root-job counts by state from the marin-dev controller: in-flight now, plus terminal states over the trailing 24h.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "iris-marin-dev"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/jobs",
+          "url_options": {
+            "method": "GET",
+            "params": []
+          },
+          "columns": [
+            {
+              "selector": "bucket",
+              "text": "bucket",
+              "type": "string"
+            },
+            {
+              "selector": "state",
+              "text": "state",
+              "type": "string"
+            },
+            {
+              "selector": "count",
+              "text": "count",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

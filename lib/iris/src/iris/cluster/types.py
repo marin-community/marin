@@ -28,7 +28,11 @@ import humanfriendly
 from rigging.provenance import LAUNCH_PROVENANCE_ENV, launch_provenance
 from rigging.timing import Timestamp
 
-from iris.cluster.setup_scripts import cuda_toolchain_setup_script, default_setup_script, setup_is_quiet, wants_gpu_extra
+from iris.cluster.setup_scripts import (
+    cuda_toolchain_setup_script,
+    default_setup_script,
+    wants_gpu_extra,
+)
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import controller_pb2, job_pb2
 
@@ -687,6 +691,10 @@ _root.addHandler(_handler)
 _root.setLevel(logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
+# botocore/aiobotocore log credential discovery + retry chatter at INFO once per
+# fresh S3 session; pure noise on S3-backed tasks (mirror of rigging.log_setup).
+logging.getLogger("botocore").setLevel(logging.WARNING)
+logging.getLogger("aiobotocore").setLevel(logging.WARNING)
 
 workdir = os.environ["IRIS_WORKDIR"]
 
@@ -751,6 +759,15 @@ class EnvironmentSpec:
             # re-submitting captures this same env value.
             LAUNCH_PROVENANCE_ENV: launch_provenance().to_json(),
         }
+        if wants_gpu_extra(self.extras or ()):
+            default_env_vars.update(
+                {
+                    "NCCL_RAS_ENABLE": "1",
+                    "NCCL_DEBUG": "INFO",
+                    "NCCL_DEBUG_SUBSYS": "INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS",
+                    "NCCL_DEBUG_TIMESTAMP": "[%F %T.%3f]",
+                }
+            )
 
         merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
 
@@ -763,7 +780,6 @@ class EnvironmentSpec:
                     pip_packages=list(self.pip_packages or []),
                     python_version=py_version,
                     packages=list(self.sync_packages or []) or None,
-                    quiet=setup_is_quiet(merged_env_vars),
                 )
             ]
             # GPU jobs need the venv's CUDA toolchain (ptxas/nvlink/libdevice)
@@ -849,6 +865,13 @@ def is_task_finished(state: int) -> bool:
 JobState = job_pb2.JobState
 TaskState = job_pb2.TaskState
 EndpointAccess = controller_pb2.Controller.EndpointAccess
+
+# Endpoint-metadata key a registrant sets (as a stringified number of seconds) to
+# override the controller proxy's per-request upstream timeout for that endpoint —
+# e.g. ``marin-serve`` sizing it to long model generations. In the shared types
+# module so registry client and controller proxy agree on the key with no client
+# dependency on controller code.
+PROXY_TIMEOUT_METADATA_KEY = "proxy_timeout_seconds"
 
 
 # TPU topology table and lookup helpers live in iris.cluster.tpu_topology so

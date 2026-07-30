@@ -189,26 +189,6 @@ pub fn segment_bounds(
     Some((num_rows, lo, hi))
 }
 
-/// Footer-only sum of each row group's uncompressed byte size, or `None` on an
-/// unreadable footer.
-///
-/// This is the size of the segment's decoded column data — the scale of the
-/// Arrow arrays a merge materializes in RAM. The on-disk (compressed) size
-/// understates it by the compression ratio, which reaches 10-20x on log text,
-/// so the compaction planner budgets merge memory against this instead.
-pub fn segment_uncompressed_bytes(path: &Path) -> Option<i64> {
-    let file = std::fs::File::open(path).ok()?;
-    let reader = SerializedFileReader::new(file).ok()?;
-    Some(
-        reader
-            .metadata()
-            .row_groups()
-            .iter()
-            .map(|rg| rg.total_byte_size())
-            .sum(),
-    )
-}
-
 /// Footer-only row-group count for the parquet file at `path`, or `None` on an
 /// unreadable footer. Used by the trigram prune to confirm a sidecar's
 /// per-row-group entries align with the segment before attaching an access plan.
@@ -235,21 +215,6 @@ pub fn discover_segments(dir: &Path) -> Vec<PathBuf> {
     }
     out.sort();
     out
-}
-
-/// Recover the next seq to allocate by scanning `dir`'s segment footers.
-///
-/// Returns `max(max_seq over all segments) + 1`, or `1` when no segments exist.
-pub fn recover_next_seq(dir: &Path) -> i64 {
-    let mut next_seq = 1_i64;
-    for p in discover_segments(dir) {
-        if let Some(meta) = read_segment_footer(&p, None) {
-            if meta.max_seq + 1 > next_seq {
-                next_seq = meta.max_seq + 1;
-            }
-        }
-    }
-    next_seq
 }
 
 #[cfg(test)]
@@ -335,23 +300,6 @@ mod tests {
             .downcast_ref::<Int64Array>()
             .unwrap();
         assert_eq!(keys.values(), &[30_i64, 10, 20], "L0 must be UNSORTED");
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn recover_next_seq_over_two_segments() {
-        let dir = tempdir();
-        // segment 1: seqs 1..3 (min_seq 1); segment 2: seqs 4..5 (min_seq 4).
-        write_segment_to_dir(&dir, 0, 1, &batch_with_keys(1, vec![1, 2, 3])).unwrap();
-        write_segment_to_dir(&dir, 0, 4, &batch_with_keys(4, vec![4, 5])).unwrap();
-        assert_eq!(recover_next_seq(&dir), 6);
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn recover_next_seq_empty_dir_is_one() {
-        let dir = tempdir();
-        assert_eq!(recover_next_seq(&dir), 1);
         std::fs::remove_dir_all(&dir).ok();
     }
 

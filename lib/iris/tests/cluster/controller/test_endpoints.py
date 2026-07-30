@@ -11,6 +11,7 @@ time cannot observe.
 """
 
 import uuid
+from pathlib import Path
 
 import pytest
 from connectrpc.code import Code
@@ -19,11 +20,16 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.client.endpoint_client import EndpointClient, EndpointLeaseRenewer, renew_interval
 from iris.cluster.config import AuthConfig
 from iris.cluster.controller.auth import MAX_ENDPOINT_TOKEN_TTL_SECONDS, create_controller_auth
-from iris.cluster.controller.endpoint_service import ENDPOINT_LEASE, MIN_ENDPOINT_LEASE, EndpointServiceImpl
-from iris.cluster.controller.projections.endpoints import EndpointRow, EndpointsProjection
+from iris.cluster.controller.endpoint_service import (
+    ENDPOINT_LEASE,
+    MIN_ENDPOINT_LEASE,
+    EndpointServiceImpl,
+    ProxyRegistryReset,
+)
+from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
 from iris.cluster.controller.schema import tasks_table
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.types import EndpointAccess, JobName, TaskAttempt
+from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName, TaskAttempt
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_to_proto
 from rigging.server_auth import VerifiedIdentity, identity_scope
@@ -51,11 +57,17 @@ def _row(endpoint_id: str, name: str, task_id: JobName, *, lease_deadline: Times
 
 
 def _register_request(
-    name: str, task_id: JobName, *, attempt_id: int, endpoint_id: str = "", lease: Duration | None = None
+    name: str,
+    task_id: JobName,
+    *,
+    attempt_id: int,
+    endpoint_id: str = "",
+    address: str = "h:1",
+    lease: Duration | None = None,
 ) -> controller_pb2.Controller.RegisterEndpointRequest:
     return controller_pb2.Controller.RegisterEndpointRequest(
         name=name,
-        address="h:1",
+        address=address,
         task_id=task_id.to_wire(),
         attempt_id=attempt_id,
         endpoint_id=endpoint_id,
@@ -166,6 +178,56 @@ def test_register_returns_lease_duration(state):
     assert state._endpoints.resolve("svc").address == "h:1"
 
 
+def test_proxy_registry_publishes_deltas_and_snapshots(state):
+    task, attempt = _live_task(state)
+    service = _service(state)
+    deltas = []
+    service.subscribe_proxy_updates(deltas.append)
+
+    response = service.register_endpoint(
+        _register_request("svc", task, attempt_id=attempt, endpoint_id="endpoint-1"),
+        None,
+    )
+    service.register_system_endpoint("/system/log-server", "http://logs:9000")
+
+    assert response.endpoint_id == "endpoint-1"
+    assert [(delta.base_generation, delta.next_generation) for delta in deltas] == [(0, 1), (1, 2)]
+    assert [mapping.endpoint_id for mapping in deltas[0].upserts] == ["endpoint-1"]
+    assert [mapping.endpoint_id for mapping in deltas[1].upserts] == ["system:/system/log-server"]
+
+    snapshot = service.proxy_registry_snapshot()
+    assert snapshot.generation == 2
+    assert {mapping.endpoint_id for mapping in snapshot.endpoints} == {
+        "endpoint-1",
+        "system:/system/log-server",
+    }
+
+    service.unregister_endpoint(
+        controller_pb2.Controller.UnregisterEndpointRequest(endpoint_id="endpoint-1"),
+        None,
+    )
+    assert deltas[-1].base_generation == 2
+    assert deltas[-1].next_generation == 3
+    assert deltas[-1].deletes == ("endpoint-1",)
+
+
+def test_proxy_registry_requires_snapshot_after_database_replace(state, tmp_path: Path):
+    service = _service(state)
+    updates = []
+    service.subscribe_proxy_updates(updates.append)
+    backup_dir = tmp_path / "backup"
+    backup_dir.mkdir()
+    state._db.backup_to(backup_dir / "controller.sqlite3")
+    state._db.backup_to(backup_dir / "auth.sqlite3")
+
+    state._db.replace_from(backup_dir)
+
+    assert len(updates) == 1
+    reset = updates[0]
+    assert isinstance(reset, ProxyRegistryReset)
+    assert service.proxy_registry_snapshot().generation == 1
+
+
 def test_register_honors_and_clamps_requested_lease(state):
     task, attempt = _live_task(state)
     svc = _service(state)  # ceiling is the default ENDPOINT_LEASE
@@ -193,6 +255,39 @@ def test_reregister_renews_expired_endpoint(state):
     renewed = live.register_endpoint(_register_request("svc", task, attempt_id=attempt, endpoint_id=endpoint_id), None)
     assert renewed.endpoint_id == endpoint_id
     assert [r.endpoint_id for r in state._endpoints.query()] == [endpoint_id]  # single row, renewed
+
+
+def test_new_attempt_atomically_replaces_same_name_endpoint(state):
+    task, attempt = _live_task(state)
+    service = _service(state)
+    updates = []
+    service.subscribe_proxy_updates(updates.append)
+    service.register_endpoint(
+        _register_request("svc", task, attempt_id=attempt, endpoint_id="old", address="old:1"),
+        None,
+    )
+    updates.clear()
+
+    with state._db.transaction() as tx:
+        tx.execute(sa_update(tasks_table).where(tasks_table.c.task_id == task).values(current_attempt_id=attempt + 1))
+    service.register_endpoint(
+        _register_request("svc", task, attempt_id=attempt + 1, endpoint_id="new", address="new:1"),
+        None,
+    )
+
+    [row] = state._endpoints.query(EndpointQuery(exact_name="svc"))
+    assert (row.endpoint_id, row.address) == ("new", "new:1")
+    [delta] = updates
+    assert [mapping.endpoint_id for mapping in delta.upserts] == ["new"]
+    assert delta.deletes == ("old",)
+
+    with pytest.raises(ConnectError) as excinfo:
+        service.register_endpoint(
+            _register_request("svc", task, attempt_id=attempt, endpoint_id="old", address="old:1"),
+            None,
+        )
+    assert excinfo.value.code is Code.FAILED_PRECONDITION
+    assert state._endpoints.resolve("svc").endpoint_id == "new"
 
 
 def test_register_terminal_task_raises(state):
@@ -238,17 +333,21 @@ def test_register_defaults_to_private_and_persists_access(state):
         _register_with_access("/j/link", task, attempt, controller_pb2.Controller.ENDPOINT_ACCESS_LINK), None
     )
 
-    assert svc.resolve_proxy_target("j.private").access == EndpointAccess.ENDPOINT_ACCESS_PRIVATE
-    assert svc.resolve_proxy_target("j.link").access == EndpointAccess.ENDPOINT_ACCESS_LINK
+    assert state._endpoints.resolve("/j/private").access == EndpointAccess.ENDPOINT_ACCESS_PRIVATE
+    assert state._endpoints.resolve("/j/link").access == EndpointAccess.ENDPOINT_ACCESS_LINK
 
 
-def test_resolve_proxy_target_decodes_slash_names(state):
-    """A slash-containing wire name is reachable via its dotted encoded form.
-
-    Regression for the encode/decode namespace bug: quick-serve's default
-    ``/serve/<job>`` arrives at the proxy as ``serve.foo`` and must still
-    resolve (access + address + canonical wire name).
-    """
+@pytest.mark.parametrize(
+    ("metadata_value", "expected"),
+    [
+        ({PROXY_TIMEOUT_METADATA_KEY: "600"}, 600.0),  # registered override surfaces
+        ({}, None),  # unset -> proxy default
+        ({PROXY_TIMEOUT_METADATA_KEY: "nope"}, None),  # non-numeric -> ignored
+        ({PROXY_TIMEOUT_METADATA_KEY: "0"}, None),  # non-positive -> ignored
+    ],
+)
+def test_proxy_registry_reads_timeout_metadata(state, metadata_value, expected):
+    """The native registry carries a valid timeout override or the default marker."""
     task, attempt = _live_task(state)
     svc = _service(state)
     svc.register_endpoint(
@@ -257,28 +356,12 @@ def test_resolve_proxy_target_decodes_slash_names(state):
             address="up:8000",
             task_id=task.to_wire(),
             attempt_id=attempt,
-            access=controller_pb2.Controller.ENDPOINT_ACCESS_LINK,
+            metadata=metadata_value,
         ),
         None,
     )
-
-    resolved = svc.resolve_proxy_target("serve.foo")
-    assert resolved is not None
-    assert (resolved.name, resolved.address, resolved.access) == (
-        "/serve/foo",
-        "up:8000",
-        EndpointAccess.ENDPOINT_ACCESS_LINK,
-    )
-    assert svc.resolve_proxy_target("nope.missing") is None
-
-
-def test_resolve_proxy_target_system_endpoint_is_private(state):
-    svc = _service(state)
-    svc.register_system_endpoint("/system/log-server", "logs:9000")
-    resolved = svc.resolve_proxy_target("system.log-server")
-    assert resolved is not None
-    assert resolved.access == EndpointAccess.ENDPOINT_ACCESS_PRIVATE
-    assert resolved.address == "logs:9000"
+    [mapping] = svc.proxy_registry_snapshot().endpoints
+    assert mapping.timeout_seconds == expected
 
 
 def test_resolve_task_endpoint_returns_owner_row(state):
@@ -358,7 +441,7 @@ def test_mint_endpoint_token_unknown_endpoint(state, mock_controller, log_client
 
 
 def test_mint_endpoint_token_clamps_ttl(state, mock_controller, log_client, tmp_path):
-    """A requested TTL above the ceiling is clamped, not honored verbatim."""
+    """A requested TTL above the ceiling is clamped down to the ceiling, not honored verbatim."""
     task, attempt = _live_task(state)
     service, endpoint_service, _ = _mint_service(state, mock_controller, log_client, tmp_path)
     endpoint_service.register_endpoint(
@@ -366,10 +449,27 @@ def test_mint_endpoint_token_clamps_ttl(state, mock_controller, log_client, tmp_
     )
 
     with identity_scope(VerifiedIdentity(user_id=task.user, role="user")):
-        resp = service.mint_endpoint_token(_mint_request("/serve/foo", ttl=Duration.from_hours(72)), None)
+        # A month is well past the week-long ceiling, so the result pins to the max.
+        resp = service.mint_endpoint_token(_mint_request("/serve/foo", ttl=Duration.from_hours(24 * 30)), None)
 
     ttl_ms = resp.expires_at.epoch_ms - Timestamp.now().epoch_ms()
-    assert ttl_ms <= (MAX_ENDPOINT_TOKEN_TTL_SECONDS + 5) * 1000
+    assert (MAX_ENDPOINT_TOKEN_TTL_SECONDS - 5) * 1000 <= ttl_ms <= (MAX_ENDPOINT_TOKEN_TTL_SECONDS + 5) * 1000
+
+
+def test_mint_endpoint_token_honors_multiday_ttl(state, mock_controller, log_client, tmp_path):
+    """A multi-day TTL under the week ceiling is honored — the long-running datagen/eval case."""
+    task, attempt = _live_task(state)
+    service, endpoint_service, _ = _mint_service(state, mock_controller, log_client, tmp_path)
+    endpoint_service.register_endpoint(
+        _register_with_access("/serve/foo", task, attempt, controller_pb2.Controller.ENDPOINT_ACCESS_LINK), None
+    )
+
+    requested = Duration.from_hours(96)
+    with identity_scope(VerifiedIdentity(user_id=task.user, role="user")):
+        resp = service.mint_endpoint_token(_mint_request("/serve/foo", ttl=requested), None)
+
+    ttl_ms = resp.expires_at.epoch_ms - Timestamp.now().epoch_ms()
+    assert abs(ttl_ms - requested.to_ms()) <= 5 * 1000
 
 
 # --- EndpointClient: registers and keeps leases against the real service ------

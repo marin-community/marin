@@ -141,18 +141,37 @@ def plans_from_snapshot(snapshot: ControlSnapshot) -> list[WorkerReconcilePlan]:
 
 
 @dataclass(frozen=True)
+class DeviceCapacity:
+    """Free vs. total consumable capacity for one resource token, in the token's
+    natural unit (accelerator variant → chips).
+
+    ``held_by_band`` splits the non-free remainder by the ``PriorityBand`` holding
+    it, so a federation parent can tell capacity it could reclaim by preemption
+    (work it outranks) from capacity it cannot. Empty when the backend cannot
+    attribute held capacity to a band; the parent then reclaims nothing.
+    """
+
+    free: int
+    total: int
+    held_by_band: dict[int, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class TaskTarget:
     """Addresses one task attempt for on-demand RPCs (status / profile / exec).
 
     Worker-daemon backends route by :attr:`address`; direct backends route by
-    :attr:`task_id` / :attr:`attempt_id`. Each backend reads the fields it needs;
-    the controller fills them from the DB once at the RPC boundary.
+    :attr:`task_id` / :attr:`attempt_id` / :attr:`attempt_uid`. Each backend reads
+    the fields it needs; the controller fills them from the DB once at the RPC
+    boundary. ``attempt_uid`` is the incarnation key the K8s backend needs to
+    rebuild the pod name (which embeds it); empty for worker-daemon targets.
     """
 
     task_id: str
     attempt_id: int
     worker_id: WorkerId | None
     address: str | None
+    attempt_uid: str = ""
 
 
 @dataclass(frozen=True)
@@ -372,13 +391,19 @@ def run_scheduling_decision(
 
     order = compute_scheduling_order(ctx, gated, trace=trace)
     all_assignments, context, placed_jobs = apply_placements(scheduler, order, gated, ctx, trace=trace)
-    preemptions = apply_preemptions(order, placed_jobs, all_assignments, ctx.running_for_preemption, context)
-    diagnostics = compute_diagnostics(scheduler, context, placed_jobs, all_assignments, order.ordered_task_ids)
+    preemption_plan = apply_preemptions(order, placed_jobs, all_assignments, ctx.running_for_preemption, context)
+
+    # Commit each preemptor onto the worker its victim frees in the same tick as
+    # the PREEMPT, so it is not re-competed for its own freed slot next tick. The
+    # freed worker is not physically empty until the victim's attempt finalizes;
+    # the reconcile dispatch gate holds the preemptor's run-intent until then.
+    assignments = all_assignments + preemption_plan.placements
+    diagnostics = compute_diagnostics(scheduler, context, placed_jobs, assignments, order.ordered_task_ids)
 
     return ScheduleResult(
         assignments=[
             Assignment(task_id=task_id, worker_id=worker_id, priority_band=order.task_band_map.get(task_id))
-            for task_id, worker_id in all_assignments
+            for task_id, worker_id in assignments
         ],
         preemptions=[
             TerminalDecision(
@@ -386,7 +411,7 @@ def run_scheduling_decision(
                 task_id=victim_id,
                 reason=f"Preempted by {preemptor_name}",
             )
-            for preemptor_name, victim_id in preemptions
+            for preemptor_name, victim_id in preemption_plan.evictions
         ],
         unschedulable=list(gated.expired_tasks),
         diagnostics=diagnostics,
@@ -492,14 +517,15 @@ class TaskBackend(Protocol):
         the (comma-expanded) attribute sets."""
         ...
 
-    def available_resources(self) -> dict[str, int] | None:
-        """Free consumable capacity right now, per resource token, for federation.
+    def resource_capacity(self) -> dict[str, DeviceCapacity] | None:
+        """Free and total consumable capacity right now, per resource token.
 
         A federation parent advertises this to peers so a queued federated job can
-        wait for a peer that actually has room (see ``federation.availability``).
-        v1 reports free accelerator chips keyed by lowercased ``device-variant``
-        (e.g. ``{"h100": 8}``), computed from the same live-worker ``WorkerCapacity``
-        (``total - committed``) the scheduler uses.
+        wait for a peer that actually has room (see ``federation.availability``);
+        the dashboard renders the same numbers. v1 reports accelerator chips keyed
+        by lowercased ``device-variant`` (e.g. ``{"h100": DeviceCapacity(8, 64)}``),
+        computed from the same live-worker ``WorkerCapacity`` (``total - committed``)
+        the scheduler uses.
 
         Returns ``None`` when this backend does not supply the metric (a placement-
         owning ``CLUSTER_VIEW`` backend that does not track per-worker capacity); the

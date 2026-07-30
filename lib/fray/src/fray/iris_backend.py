@@ -26,15 +26,25 @@ from iris.client.client import JobAlreadyExists as IrisJobAlreadyExists
 from iris.client.client import get_iris_ctx, iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.constraints import (
+    CLUSTER_CONSTRAINT_KEY,
     Constraint,
+    ConstraintOp,
     any_region_constraint,
     device_variant_constraint,
     preemptible_constraint,
     region_constraint,
     zone_constraint,
 )
-from iris.cluster.types import CoschedulingConfig, EnvironmentSpec, ResourceSpec, is_job_finished, tpu_device
+from iris.cluster.platforms.k8s.coreweave_topology import COSCHEDULE_LEAFGROUP, gpu_gang_coscheduling_level
+from iris.cluster.types import (
+    CoschedulingConfig,
+    EnvironmentSpec,
+    ResourceSpec,
+    is_job_finished,
+    tpu_device,
+)
 from iris.cluster.types import Entrypoint as IrisEntrypoint
+from iris.hooks.multigpu import build_multigpu_hook
 from iris.rpc import actor_pb2, job_pb2
 from rigging.timing import ExponentialBackoff
 
@@ -66,18 +76,24 @@ from fray.types import (
 logger = logging.getLogger(__name__)
 
 
-def resolve_coscheduling(device: DeviceConfig, replicas: int) -> CoschedulingConfig | None:
-    """Determine coscheduling config for multi-host jobs."""
+def resolve_coscheduling(resources: ResourceConfig, replicas: int) -> CoschedulingConfig | None:
+    """Determine coscheduling config from resources for multi-host jobs."""
     if replicas <= 1:
         return None
+    device = resources.device
     if isinstance(device, TpuConfig):
         if device.vm_count() <= 1:
             return None
         return CoschedulingConfig(group_by="tpu-name")
     if isinstance(device, GpuConfig):
-        # leafgroup = the H100 InfiniBand multi-node colocation topology level
-        # (the level the K8s provider maps for GPU gangs; "pool" no longer maps).
-        return CoschedulingConfig(group_by="leafgroup")
+        variants = [device.variant, *(resources.device_alternatives or ())]
+        topology_levels = [
+            (variant, gpu_gang_coscheduling_level(variant, device.count, replicas)) for variant in variants
+        ]
+        if len({level for _, level in topology_levels}) != 1:
+            variant_levels = ", ".join(f"{variant}={level}" for variant, level in topology_levels)
+            raise ValueError(f"GPU alternatives must share one coscheduling topology; got {variant_levels}")
+        return CoschedulingConfig(group_by=topology_levels[0][1])
     return None
 
 
@@ -127,6 +143,14 @@ def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
         constraints.append(region_constraint(list(regions)))
     if resources.zone:
         constraints.append(zone_constraint(resources.zone))
+    if resources.target_cluster:
+        constraints.append(
+            Constraint.create(
+                key=CLUSTER_CONSTRAINT_KEY,
+                op=ConstraintOp.EQ,
+                value=resources.target_cluster,
+            )
+        )
     if resources.device_alternatives:
         if isinstance(resources.device, (TpuConfig, GpuConfig)):
             all_variants = [resources.device.variant, *resources.device_alternatives]
@@ -143,6 +167,20 @@ def convert_entrypoint(entrypoint: FrayEntrypoint) -> IrisEntrypoint:
         be = entrypoint.binary_entrypoint
         return IrisEntrypoint.from_command(be.command, *be.args)
     raise ValueError("Entrypoint must have either callable_entrypoint or binary_entrypoint")
+
+
+def wrap_multiprocess(entrypoint: IrisEntrypoint, resources: ResourceSpec, processes_per_task: int) -> IrisEntrypoint:
+    """Prepend the multigpu supervisor so each task runs ``processes_per_task`` GPU processes.
+
+    iris runs the entrypoint verbatim, so fray applies the hook here. Requires a GPU
+    device whose count is divisible by ``processes_per_task``.
+    """
+    hook = build_multigpu_hook(resources, processes_per_task)
+    return IrisEntrypoint(
+        command=hook.wrap(entrypoint.command),
+        workdir_files=entrypoint.workdir_files,
+        workdir_file_refs=entrypoint.workdir_file_refs,
+    )
 
 
 def convert_environment(env: EnvironmentConfig | None, device: DeviceConfig | None = None) -> EnvironmentSpec | None:
@@ -204,6 +242,10 @@ class IrisJobHandle:
                 raise
             logger.warning("Job %s failed with exception (raise_on_failure=False)", self.job_id, exc_info=True)
         return self.status()
+
+    def logs(self, max_lines: int = 0) -> tuple[str, ...]:
+        """Return the most recent Iris log lines across all tasks."""
+        return tuple(entry.data.rstrip("\n") for entry in self._job.logs(max_lines=max_lines, tail=True))
 
     def terminate(self) -> None:
         self._job.terminate()
@@ -474,7 +516,7 @@ class IrisActorGroup:
         # Single RPC: prefix match all actors for this group
         # _host_actor registers endpoints as "{job_id}/{name}-{task_index}"
         prefix = f"{self._job_id}/{self._name}-"
-        endpoints = client._cluster_client.list_endpoints(prefix=prefix, exact=False)
+        endpoints = client.list_endpoints(prefix=prefix)
 
         newly_discovered: list[ActorHandle] = []
         for ep in endpoints:
@@ -581,11 +623,13 @@ class FrayIrisClient:
     def submit(self, request: JobRequest, adopt_existing: bool = True) -> IrisJobHandle:
         iris_resources = convert_resources(request.resources)
         iris_entrypoint = convert_entrypoint(request.entrypoint)
+        if request.processes_per_task > 1:
+            iris_entrypoint = wrap_multiprocess(iris_entrypoint, iris_resources, request.processes_per_task)
         iris_environment = convert_environment(request.environment, request.resources.device)
         iris_constraints = convert_constraints(request.resources)
 
         replicas = request.replicas or 1
-        coscheduling = resolve_coscheduling(request.resources.device, replicas)
+        coscheduling = resolve_coscheduling(request.resources, replicas)
 
         policy = job_pb2.EXISTING_JOB_POLICY_KEEP if adopt_existing else job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED
         try:
@@ -597,7 +641,6 @@ class FrayIrisClient:
                 constraints=iris_constraints if iris_constraints else None,
                 coscheduling=coscheduling,
                 replicas=replicas,
-                processes_per_task=request.processes_per_task,
                 max_retries_failure=request.max_retries_failure,
                 max_retries_preemption=request.max_retries_preemption,
                 max_task_failures=request.max_task_failures,
@@ -681,7 +724,11 @@ class FrayIrisClient:
         iris_constraints = convert_constraints(resources)
         iris_environment = convert_environment(None, device=resources.device)
 
-        coscheduling = resolve_coscheduling(resources.device, count)
+        # Actor group replicas are independent workers, not an NVLink collective.
+        if count > 1 and isinstance(resources.device, GpuConfig):
+            coscheduling = CoschedulingConfig(group_by=COSCHEDULE_LEAFGROUP)
+        else:
+            coscheduling = resolve_coscheduling(resources, count)
 
         # Create a single job with N replicas
         # Each replica will run _host_actor with a unique task-based actor name

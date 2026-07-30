@@ -25,6 +25,23 @@ matching skill exists** by scanning the skill descriptions in your system
 prompt. If a skill matches, invoke it via the Skill tool — do not skip it in
 favor of ad-hoc commands.
 
+## Search Prior Work
+
+Use Echo when prior Marin decisions, incidents, workflows, GitHub work, or
+indexed repository documentation could inform a task:
+
+```bash
+uv run infra/echo/cli.py search "how do I deploy Iris"
+uv run infra/echo/cli.py get <domain:id>
+```
+
+Search covers wiki, repository files, pull requests, and issues by default.
+Repeat `--domain` to select a subset; add `--domain discord` only when discussion
+history is relevant. Use `grep` for exact strings in remote activity and `rg`
+for the current checkout, including branch-only or uncommitted files. Echo's
+file results follow the periodically refreshed GitHub head rather than the local
+working tree. See the `consult-echo` skill for the complete workflow.
+
 ## Development
 
 ```bash
@@ -37,13 +54,24 @@ favor of ad-hoc commands.
 uv run pyrefly
 - Keep type hints passing under `uv run pyrefly`; configuration lives in `pyproject.toml`.
 
+# Safe local test suite
+uv run pytest
+- Pytest's repository defaults exclude slow, integration, data-integration,
+  live-cluster, Docker, and manual tests. Keep those defaults for local runs.
+
 # Lint review — agentic pass over the branch diff against the infra/lint/ catalog
 ./infra/pre-commit.py --review
-- Always run this before opening a PR, and always fix or respond to every
-  finding it reports (see the `commit` skill).
+- Run this once before opening or updating a PR, and fix or respond to every
+  finding it reports (see the `commit` skill). Do not rerun it after small,
+  targeted touch-ups made in response to its findings. Rerun only when the
+  follow-up materially changes the design or scope.
 ```
 
 - Python >=3.12. Use `uv run` for entry points; fall back to `.venv/bin/python` if needed.
+- Do not replace pytest's default marker expression with a partial expression
+  such as `-m "not slow"`; `-m` overrides the whole default and can select live
+  cluster tests. Run excluded markers only when the user or a dedicated task
+  guide explicitly requests them; otherwise defer them to CI.
 - NEVER stop, restart, or bounce an Iris cluster unless the user gives express permission.
 - In general, never read or write large amounts of data across GCS regions or to the open internet; storage and bandwidth are major cost drivers for this project.
 - do not use storage transfer service to move files from one region to another unless the user says "I personally will write grants for Percy to pay for this"
@@ -58,10 +86,16 @@ uv run pyrefly
 - Agent *comments* on PRs/issues must begin with `🤖` unless the exact text was
   explicitly approved by the user. This applies to comments only — never put a
   `🤖` marker in a commit message or a PR/issue body.
-- A PR description is the squash-merge commit message: lead with what the change
-  does, no template scaffold (no `Problem`/`Fix`/`Summary`/`Changes` headings),
-  no "Testing"/"Verification" section. Use markdown only when it makes the change
-  clearer for a human, never as boilerplate. Follow the `commit` skill
+- All agent-authored commit, PR, and issue titles and bodies must follow
+  `.agents/skills/writing-style/SKILL.md` and its PR or issue guide. Review the
+  exact text that will be published, then apply `ai-writing-donts.md` as a final
+  compression pass. Do not publish raw implementation notes, test narration,
+  prompt-shaped headings, or claims that use emphasis in place of evidence.
+- A PR description is the squash-merge commit message. Keep every fact a future
+  reader needs to understand the behavior and rationale, including measured
+  results and caveats when they affect review. Remove headings, diff narration,
+  and implementation inventories; put extended history in a linked issue,
+  design doc, logbook, or artifact. Follow the `commit` skill
   (`.agents/skills/commit/SKILL.md`) when committing, pushing, or opening a PR.
 - When using `gh` to inspect issues or PRs, prefer `--json <fields>` or explicit narrow flags such as `--comments`; avoid plain `gh issue view` / `gh pr view`, which can fail on this repo because GitHub classic project fields are deprecated.
 
@@ -119,6 +153,15 @@ uv run pyrefly
 
 - Keep MkDocs content in sync with code. Use Markdown and mkdocs-style links.
 - Write docs that stand alone without conversational context.
+
+## Agent Artifacts
+
+- Publish infrastructure incidents and durable debugging investigations to
+  Echo with the `write-ops-log` skill. Link the canonical Echo URL from the
+  associated PR or issue. Do not create repository debug-log files.
+- Keep user-facing and reusable product documentation in `docs/`; keep research
+  progress in the relevant task logbook or project artifact. These are distinct
+  from incident records.
 
 ## Deprecation
 

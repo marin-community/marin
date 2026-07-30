@@ -24,6 +24,7 @@ Usage:
     # (independent of the checkpoint-driven groups above).
     uv run python lib/iris/scripts/benchmark_controller.py reconcile \\
         --num-tasks 5000 --tasks-per-worker 64 --payload-bytes 100000
+
 """
 
 import asyncio
@@ -73,6 +74,7 @@ from iris.cluster.controller.backend import (
 from iris.cluster.controller.backend_store import BackendWorkerStore, DbBackendWorkerStore
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
+    _CONTROLLER_KEEPALIVE,
     Controller,
     ControllerConfig,
 )
@@ -117,10 +119,10 @@ from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudg
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
-from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
 from iris.rpc.worker_connect import WorkerService, WorkerServiceASGIApplication
 from iris.version import client_revision_date
-from rigging.timing import Timestamp
+from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from sqlalchemy import func, select, text, update
 from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.transition_driver import CursorTransitionReader
@@ -334,6 +336,9 @@ class RpcHarness:
     def make_client(self) -> ControllerServiceClientSync:
         return ControllerServiceClientSync(address=self.url, timeout_ms=30000)
 
+    def make_endpoint_client(self) -> EndpointServiceClientSync:
+        return EndpointServiceClientSync(address=self.url, timeout_ms=30000)
+
     def close(self) -> None:
         try:
             self.client.close()
@@ -362,7 +367,9 @@ _SCENARIO_DURATION: float = 60.0
 class RpcLoad:
     name: str
     target_rps: float
-    invoke: Callable[[ControllerServiceClientSync], None]
+    # Client type is per-load (controller vs endpoint), so the param is untyped
+    # here; each builder annotates its own invoke with the concrete client.
+    invoke: Callable[[Any], None]
     n_clients_min: int = 1
     """Minimum number of client threads / connections for this load.
 
@@ -372,6 +379,9 @@ class RpcLoad:
     processes, each holding its own connection. A single thread doing N rps
     doesn't expose the same concurrency on the server.
     """
+    # Per-load client factory. Defaults to the controller client; loads that
+    # exercise the endpoint registry set this to ``harness.make_endpoint_client``.
+    make_client: Callable[[], Any] | None = None
 
 
 @dataclasses.dataclass
@@ -402,7 +412,7 @@ class ScenarioRunner:
                 idx: int, tl: list[float], te: list[Exception], lload: RpcLoad, ptr: float
             ) -> threading.Thread:
                 def worker() -> None:
-                    client = self.harness.make_client()
+                    client = (lload.make_client or self.harness.make_client)()
                     interval = 1.0 / ptr
                     next_call = time.perf_counter()
                     try:
@@ -465,15 +475,15 @@ class ScenarioRunner:
                     "max": 0.0,
                 }
             else:
-                p50, p95, p99, _p999, mx = _percentiles_ms(all_latencies)
+                percentiles = _percentiles_ms(all_latencies)
                 results[load.name] = {
                     "n": n,
                     "errors": len(all_errors),
                     "actual_rps": n / elapsed,
-                    "p50": p50,
-                    "p95": p95,
-                    "p99": p99,
-                    "max": mx,
+                    "p50": percentiles.p50,
+                    "p95": percentiles.p95,
+                    "p99": percentiles.p99,
+                    "max": percentiles.maximum,
                 }
         return results
 
@@ -742,7 +752,7 @@ def load_register_endpoint(harness: RpcHarness, db: ControllerDB, rps: float) ->
     lock = threading.Lock()
     counter = {"n": 0}
 
-    def invoke(client: ControllerServiceClientSync) -> None:
+    def invoke(client: EndpointServiceClientSync) -> None:
         with lock:
             n = counter["n"]
             counter["n"] += 1
@@ -756,7 +766,7 @@ def load_register_endpoint(harness: RpcHarness, db: ControllerDB, rps: float) ->
             )
         )
 
-    return RpcLoad(name="RegisterEndpoint", target_rps=rps, invoke=invoke)
+    return RpcLoad(name="RegisterEndpoint", target_rps=rps, invoke=invoke, make_client=harness.make_endpoint_client)
 
 
 def load_register(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
@@ -845,10 +855,10 @@ def load_list_jobs(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad
 def load_list_endpoints(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
     req = controller_pb2.Controller.ListEndpointsRequest()
 
-    def invoke(client: ControllerServiceClientSync) -> None:
+    def invoke(client: EndpointServiceClientSync) -> None:
         client.list_endpoints(req)
 
-    return RpcLoad(name="ListEndpoints", target_rps=rps, invoke=invoke)
+    return RpcLoad(name="ListEndpoints", target_rps=rps, invoke=invoke, make_client=harness.make_endpoint_client)
 
 
 def load_list_workers(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
@@ -2050,15 +2060,24 @@ def benchmark_control_isolation(db: ControllerDB) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _percentiles_ms(latencies: list[float]) -> tuple[float, float, float, float, float]:
+@dataclasses.dataclass(frozen=True)
+class LatencyPercentiles:
+    p50: float
+    p95: float
+    p99: float
+    p999: float
+    maximum: float
+
+
+def _percentiles_ms(latencies: list[float]) -> LatencyPercentiles:
     latencies.sort()
     n = len(latencies)
-    return (
-        latencies[n // 2],
-        latencies[int(n * 0.95)],
-        latencies[int(n * 0.99)],
-        latencies[min(int(n * 0.999), n - 1)],
-        latencies[-1],
+    return LatencyPercentiles(
+        p50=latencies[n // 2],
+        p95=latencies[int(n * 0.95)],
+        p99=latencies[int(n * 0.99)],
+        p999=latencies[min(int(n * 0.999), n - 1)],
+        maximum=latencies[-1],
     )
 
 
@@ -2298,6 +2317,17 @@ def run_cmd(db_path: Path | None, only_group: str | None, scenario_scale: float,
     db.close()
 
 
+_SERVER_START_TIMEOUT = Duration.from_seconds(10)
+
+
+def _wait_for_server_start(condition: Callable[[], bool], error_message: str) -> None:
+    ExponentialBackoff(initial=0.01, maximum=0.1).wait_until_or_raise(
+        condition,
+        timeout=_SERVER_START_TIMEOUT,
+        error_message=error_message,
+    )
+
+
 @main.command("serve")
 @click.option(
     "--db-path",
@@ -2347,14 +2377,14 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
         threads=threads,
     )
     controller.start()
-    deadline = time.time() + 10.0
-    while time.time() < deadline:
-        if controller._server is not None and controller._server.started:
-            break
-        time.sleep(0.02)
-    else:
+    try:
+        _wait_for_server_start(
+            lambda: controller._server is not None and controller._server.started,
+            "Controller server did not start within 10s",
+        )
+    except TimeoutError as exc:
         controller.stop()
-        raise click.ClickException("Controller server did not start within 10s")
+        raise click.ClickException(str(exc)) from exc
 
     print(f"READY port={controller.port}", flush=True)
 
@@ -2496,7 +2526,13 @@ def _build_synthetic_reconcile_state(
     health.heartbeat(worker_ids, now.epoch_ms())
 
     with db.transaction() as cur:
-        ops.job.submit(cur, job_id=job_id, request=request, ts=now)
+        ops.job.submit(
+            cur,
+            job_id=job_id,
+            request=request,
+            ts=now,
+            priority_band=ops.job.resolve_priority_band(int(request.priority_band), None),
+        )
 
     with db.read_snapshot() as tx:
         task_rows = tx.execute(
@@ -2589,7 +2625,14 @@ def _serve_fake_worker():
         cast(WorkerService, _EchoWorker()),
         compressions=IRIS_RPC_COMPRESSIONS,
     )
-    config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="error", log_config=None, timeout_keep_alive=120)
+    config = uvicorn.Config(
+        app,
+        host="127.0.0.1",
+        port=0,
+        log_level="error",
+        log_config=None,
+        timeout_keep_alive=_CONTROLLER_KEEPALIVE,
+    )
     server = uvicorn.Server(config)
 
     def _run():
@@ -2605,13 +2648,7 @@ def _serve_fake_worker():
     thread = threading.Thread(target=_run, name="fake-worker", daemon=True)
     thread.start()
 
-    deadline = time.time() + 10
-    while time.time() < deadline:
-        if server.started:
-            break
-        time.sleep(0.02)
-    else:
-        raise RuntimeError("fake worker did not start in 10s")
+    _wait_for_server_start(lambda: server.started, "fake worker did not start within 10s")
 
     port = None
     for sock in server.servers or []:

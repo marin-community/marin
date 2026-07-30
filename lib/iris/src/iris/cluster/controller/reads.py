@@ -24,7 +24,7 @@ from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from rigging.timing import Timestamp
-from sqlalchemy import Row, bindparam, case, exists, func, literal_column, select, tuple_
+from sqlalchemy import Integer, Row, bindparam, case, exists, func, literal_column, select, tuple_
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.attempt_counts import (
@@ -58,6 +58,7 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
+    DISPATCHED_TASK_STATES,
     ActiveTaskRow,
     RunningTaskEntry,
     TaskDetailRow,
@@ -109,12 +110,10 @@ class PendingDispatchRow:
     # Coscheduling + priority drive Kueue gang admission on the direct path.
     has_coscheduling: bool
     coscheduling_group_by: str  # "" when not coscheduled
-    # Effective band from tasks.priority_band (normalized to INTERACTIVE at
-    # submit, overwritten with any over-budget demotion at assign time) — NOT
-    # the immutable requested band in job_config. The Kueue WorkloadPriorityClass
-    # must mirror the band Iris actually enforces, and tasks.priority_band is
-    # never UNSPECIFIED(0), so the provider's plain .get() resolves correctly.
-    priority_band: int  # job_pb2.PriorityBand, effective
+    # Current tasks.priority_band. Before first direct dispatch, the drain
+    # resolves parent inheritance from job_config and stamps the result; a
+    # redrive reads that fixed band back from the task row.
+    priority_band: int  # job_pb2.PriorityBand
     # Requested container security profile (job_config). UNSPECIFIED(0) resolves
     # to DEFAULT when the backend applies it.
     container_profile: int  # job_pb2.ContainerProfile
@@ -457,6 +456,74 @@ def task_summaries_for_jobs(
     }
 
 
+@dataclass(frozen=True, slots=True)
+class ActiveTaskRollupRow:
+    """One (root job, state) aggregate over waiting/running local tasks.
+
+    ``oldest_anchor_ms`` is the group's oldest wait anchor: for PENDING tasks the
+    last requeue (prior attempt's finish, else submission), for ASSIGNED/BUILDING
+    the current attempt's creation (dispatch time), NULL for RUNNING.
+    """
+
+    root_job_id: str
+    state: int
+    count: int
+    oldest_anchor_ms: int | None
+
+
+# Every state the task-state rollup counts: PENDING plus ASSIGNED/BUILDING/RUNNING.
+# PENDING and dispatched rows also carry a wait anchor; RUNNING rows are counted only.
+_ROLLUP_ACTIVE_STATES = (job_pb2.TASK_STATE_PENDING, *sorted(ACTIVE_TASK_STATES))
+
+_ROLLUP_ANCHOR_MS = case(
+    (
+        local_tasks.c.state == job_pb2.TASK_STATE_PENDING,
+        func.coalesce(task_attempts_table.c.finished_at_ms, local_tasks.c.submitted_at_ms),
+    ),
+    (
+        local_tasks.c.state.in_(sorted(DISPATCHED_TASK_STATES)),
+        func.coalesce(task_attempts_table.c.created_at_ms, local_tasks.c.submitted_at_ms),
+    ),
+    else_=None,
+)
+
+_ACTIVE_TASK_ROLLUP_STMT = (
+    select(
+        jobs_table.c.root_job_id,
+        local_tasks.c.state,
+        func.count().label("cnt"),
+        func.min(_ROLLUP_ANCHOR_MS, type_=Integer).label("oldest_anchor_ms"),
+    )
+    .select_from(
+        local_tasks.join(jobs_table, local_tasks.c.job_id == jobs_table.c.job_id).outerjoin(
+            task_attempts_table,
+            (task_attempts_table.c.task_id == local_tasks.c.task_id)
+            & (task_attempts_table.c.attempt_id == local_tasks.c.current_attempt_id),
+        )
+    )
+    .where(hint_rare_state(local_tasks.c.state.in_(bindparam("rollup_states", expanding=True))))
+    .group_by(jobs_table.c.root_job_id, local_tasks.c.state)
+)
+
+
+def active_task_rollup_by_root_job(tx: Tx) -> list[ActiveTaskRollupRow]:
+    """Aggregate waiting/running local tasks per (root job, state) with wait anchors.
+
+    Scans only tasks in the waiting/running states, so cost scales with the
+    active set rather than the table.
+    """
+    rows = tx.execute(_ACTIVE_TASK_ROLLUP_STMT, {"rollup_states": list(_ROLLUP_ACTIVE_STATES)}).all()
+    return [
+        ActiveTaskRollupRow(
+            root_job_id=str(row.root_job_id),
+            state=int(row.state),
+            count=int(row.cnt),
+            oldest_anchor_ms=int(row.oldest_anchor_ms) if row.oldest_anchor_ms is not None else None,
+        )
+        for row in rows
+    ]
+
+
 def parent_ids_with_children(tx: Tx, job_ids: Iterable[JobName]) -> set[JobName]:
     """Return the subset of ``job_ids`` that currently have at least one direct child."""
     ids = list(job_ids)
@@ -599,57 +666,25 @@ def bulk_get_job_configs(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, di
     return {row["job_id"]: dict(row) for row in rows}
 
 
-def _build_priority_bands_stmt():
-    """Build the recursive-CTE statement once with an expanding bindparam.
-
-    Walks parent_job_id chain until a non-UNSPECIFIED priority_band is found.
-    """
-    j = jobs_table.alias("j")
-    jc = job_config_table.alias("jc")
-    base_q = (
-        select(
-            j.c.job_id.label("input_id"),
-            j.c.job_id.label("current_id"),
-            jc.c.priority_band.label("current_band"),
-            j.c.parent_job_id.label("parent_id"),
-        )
-        .select_from(j.join(jc, jc.c.job_id == j.c.job_id))
-        .where(j.c.job_id.in_(bindparam("job_ids", expanding=True)))
-    )
-    chain = base_q.cte("chain", recursive=True)
-    j2 = jobs_table.alias("j2")
-    jc2 = job_config_table.alias("jc2")
-    recursive_q = (
-        select(
-            chain.c.input_id,
-            j2.c.job_id.label("current_id"),
-            jc2.c.priority_band.label("current_band"),
-            j2.c.parent_job_id.label("parent_id"),
-        )
-        .select_from(chain.join(j2, j2.c.job_id == chain.c.parent_id).join(jc2, jc2.c.job_id == j2.c.job_id))
-        .where(chain.c.current_band == 0)
-    )
-    full_chain = chain.union_all(recursive_q)
-    return select(full_chain.c.input_id, full_chain.c.current_band).where(full_chain.c.current_band != 0)
-
-
-_PRIORITY_BANDS_STMT = _build_priority_bands_stmt()
+_PRIORITY_BANDS_STMT = select(job_config_table.c.job_id, job_config_table.c.priority_band).where(
+    job_config_table.c.job_id.in_(bindparam("job_ids", expanding=True))
+)
 
 
 def get_priority_bands(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, int]:
-    """Return ``{job_id: resolved priority_band}`` for the given jobs.
+    """Return ``{job_id: priority_band}`` for the given jobs.
 
-    Walks the parent_job_id chain for jobs with UNSPECIFIED (0) band until a
-    non-zero band is found. Jobs whose entire ancestor chain is UNSPECIFIED
-    fall back to ``PRIORITY_BAND_INTERACTIVE``.
+    ``job_config.priority_band`` is the band submit resolved — an explicit request,
+    else the parent's band (see :func:`ops.job.resolve_priority_band`) — so this is a
+    plain read, not an inheritance walk. It is the band the job asked for, never the
+    one the scheduler later stamped on ``tasks``. A job whose config row is gone
+    (removed concurrently) falls back to ``PRIORITY_BAND_INTERACTIVE``.
     """
     ids = list(job_ids)
     if not ids:
         return {}
     rows = tx.execute(_PRIORITY_BANDS_STMT, {"job_ids": ids}).all()
-    resolved: dict[JobName, int] = {}
-    for row in rows:
-        resolved[row.input_id] = int(row.current_band)
+    resolved = {row.job_id: int(row.priority_band) for row in rows}
     for jid in ids:
         resolved.setdefault(jid, int(job_pb2.PRIORITY_BAND_INTERACTIVE))
     return resolved
@@ -957,6 +992,10 @@ ATTEMPT_COLS = (
     task_attempts_table.c.exit_code,
     task_attempts_table.c.error,
     task_attempts_table.c.attempt_uid,
+    task_attempts_table.c.pod_name,
+    task_attempts_table.c.pod_uid,
+    task_attempts_table.c.node_name,
+    task_attempts_table.c.terminal_reason,
 )
 
 _BULK_GET_CHUNK_SIZE = 450
@@ -1070,6 +1109,46 @@ _RESOLVE_ATTEMPT_UIDS_STMT = (
 )
 
 
+def attempt_uid_for(tx: Tx, task_id: JobName, attempt_id: int) -> AttemptUid | None:
+    """Return the controller-minted ``attempt_uid`` for ``(task_id, attempt_id)``.
+
+    Point-read over the ``task_attempts`` primary key. ``None`` when the attempt
+    row does not exist — e.g. a never-run PENDING task whose ``current_attempt_id``
+    is still ``-1``.
+    """
+    row = tx.execute(
+        select(task_attempts_table.c.attempt_uid).where(
+            task_attempts_table.c.task_id == task_id,
+            task_attempts_table.c.attempt_id == attempt_id,
+        )
+    ).first()
+    return AttemptUid(row.attempt_uid) if row is not None else None
+
+
+def attempt_uids_for(tx: Tx, keys: Sequence[tuple[JobName, int]]) -> dict[tuple[JobName, int], AttemptUid]:
+    """Bulk ``(task_id, attempt_id) -> attempt_uid`` over the task_attempts PK.
+
+    Chunked to bound the IN-list size. Missing keys are silently absent — a
+    caller treats their uid as empty (pre-uid name).
+    """
+    if not keys:
+        return {}
+    unique = list(dict.fromkeys(keys))
+    result: dict[tuple[JobName, int], AttemptUid] = {}
+    for chunk_start in range(0, len(unique), _BULK_GET_CHUNK_SIZE):
+        chunk = unique[chunk_start : chunk_start + _BULK_GET_CHUNK_SIZE]
+        rows = tx.execute(
+            select(
+                task_attempts_table.c.task_id,
+                task_attempts_table.c.attempt_id,
+                task_attempts_table.c.attempt_uid,
+            ).where(tuple_(task_attempts_table.c.task_id, task_attempts_table.c.attempt_id).in_(chunk))
+        ).all()
+        for row in rows:
+            result[(row.task_id, int(row.attempt_id))] = AttemptUid(row.attempt_uid)
+    return result
+
+
 def resolve_attempt_uids(
     tx: Tx,
     uids: Sequence[AttemptUid],
@@ -1132,6 +1211,7 @@ TASK_DETAIL_COLS = (
     tasks_table.c.current_worker_id,
     tasks_table.c.current_worker_address,
     tasks_table.c.container_id,
+    tasks_table.c.status_message,
     tasks_table.c.backend_id,
     tasks_table.c.cluster,
 )
@@ -1169,6 +1249,7 @@ def _task_detail_from_row(row, counts: AttemptCounts) -> TaskDetailRow:
         current_worker_id=row.current_worker_id,
         current_worker_address=row.current_worker_address,
         container_id=row.container_id,
+        status_message=row.status_message,
         backend_id=str(row.backend_id or ""),
         cluster=str(row.cluster),
         peer_worker_label=row.peer_worker_label,
@@ -1584,8 +1665,7 @@ PENDING_DISPATCH_COLS = (
     job_config_table.c.timeout_ms,
     job_config_table.c.has_coscheduling,
     job_config_table.c.coscheduling_group_by,
-    # Effective band (tasks), not the immutable requested band (job_config):
-    # see PendingDispatchRow.priority_band.
+    # Current stamped task band; see PendingDispatchRow.priority_band.
     local_tasks.c.priority_band,
     job_config_table.c.container_profile,
 )
@@ -1816,6 +1896,7 @@ class FederatedHandle:
     owner_principal: str
     handoff_state: int
     cancel_intent_version: int
+    handoff_nonce: str  # this handle's incarnation, repeated on every re-drive
 
 
 _SENT_HANDLE_COLUMNS = (
@@ -1824,6 +1905,7 @@ _SENT_HANDLE_COLUMNS = (
     federated_jobs_table.c.owner_principal,
     federated_jobs_table.c.handoff_state,
     federated_jobs_table.c.cancel_intent_version,
+    federated_jobs_table.c.handoff_nonce,
 )
 
 
@@ -1834,6 +1916,7 @@ def _sent_handle(row) -> FederatedHandle:
         owner_principal=row.owner_principal,
         handoff_state=int(row.handoff_state),
         cancel_intent_version=int(row.cancel_intent_version),
+        handoff_nonce=row.handoff_nonce,
     )
 
 
@@ -1964,18 +2047,23 @@ def has_received_job_from_peer(tx: Tx, peer_id: str, job_id: JobName) -> bool:
 
 
 def parent_mirror_seed(tx: Tx, parent_job_id: JobName):
-    """The ``submitting_user`` and ``root_submitted_at_ms`` of an existing parent row.
+    """The mirror-inherited columns of an existing parent row.
 
     Seeds a mirrored child job — one born on a peer under a received root and
     reported back over sync — from its already-present parent: the whole federated
-    subtree shares the root's submitter and root submit time. Returns the SA Row
-    (``.submitting_user``, ``.root_submitted_at_ms``) or ``None`` when the parent is
-    absent (a delta arrived out of order).
+    subtree shares the root's submitter, root submit time, and priority band (the
+    peer resolves the child's band by the same inheritance rule). Returns the SA Row
+    (``.submitting_user``, ``.root_submitted_at_ms``, ``.priority_band``) or ``None``
+    when the parent is absent (a delta arrived out of order).
     """
     return tx.execute(
-        select(jobs_table.c.submitting_user, jobs_table.c.root_submitted_at_ms).where(
-            jobs_table.c.job_id == bindparam("job_id")
-        ),
+        select(
+            jobs_table.c.submitting_user,
+            jobs_table.c.root_submitted_at_ms,
+            job_config_table.c.priority_band,
+        )
+        .select_from(jobs_table.join(job_config_table, job_config_table.c.job_id == jobs_table.c.job_id))
+        .where(jobs_table.c.job_id == bindparam("job_id")),
         {"job_id": parent_job_id},
     ).first()
 
@@ -2000,19 +2088,26 @@ def handoff_states(tx: Tx, job_ids: Sequence[JobName]) -> dict[JobName, int]:
     return {r.job_id: int(r.handoff_state) for r in rows}
 
 
-def received_requester(tx: Tx, job_id: JobName) -> str | None:
-    """The requester ``peer_id`` of a RECEIVED ``federated_jobs`` row for ``job_id``, else ``None``.
+@dataclass(frozen=True)
+class ReceivedHandoff:
+    """The RECEIVED ``federated_jobs`` row a peer keeps for a handed-off job."""
 
-    Drives peer-side handoff admission: a re-drive from the same requester is an
-    idempotent replay; any other existing row is a genuine collision.
-    """
+    requester_id: str  # the parent cluster that handed the job here
+    handoff_nonce: str  # the incarnation the parent delivered
+
+
+def received_handoff(tx: Tx, job_id: JobName) -> ReceivedHandoff | None:
+    """The RECEIVED handoff record for ``job_id``, or ``None`` if this cluster
+    did not receive the job via handoff."""
     row = tx.execute(
-        select(federated_jobs_table.c.peer_id).where(
+        select(federated_jobs_table.c.peer_id, federated_jobs_table.c.handoff_nonce).where(
             federated_jobs_table.c.job_id == job_id,
             federated_jobs_table.c.direction == int(FederationDirection.RECEIVED),
         )
     ).first()
-    return row.peer_id if row is not None else None
+    if row is None:
+        return None
+    return ReceivedHandoff(requester_id=row.peer_id, handoff_nonce=row.handoff_nonce)
 
 
 def federated_handles_for_peer(tx: Tx, peer_id: str) -> set[JobName]:
@@ -2081,15 +2176,21 @@ def changelog_min_seq(tx: Tx) -> int:
 
 
 def received_jobs_for_requester(tx: Tx, requester_id: str) -> list[JobName]:
-    """Every still-present job this peer received from ``requester_id`` (the full set
-    a stale/first-contact requester is resynced with)."""
+    """Every still-present job under a root this peer received from ``requester_id``
+    (the full set a stale/first-contact requester is resynced with).
+
+    Covers the whole subtree, not just the handed-off roots: a job the root spawns
+    runs locally on this peer and is reported to the same requester, so it is matched
+    through ``root_job_id``. Ordered by depth, so a parent precedes its children.
+    """
     rows = tx.execute(
-        select(federated_jobs_table.c.job_id)
-        .select_from(federated_jobs_table.join(jobs_table, jobs_table.c.job_id == federated_jobs_table.c.job_id))
+        select(jobs_table.c.job_id)
+        .select_from(jobs_table.join(federated_jobs_table, federated_jobs_table.c.job_id == jobs_table.c.root_job_id))
         .where(
             federated_jobs_table.c.direction == int(FederationDirection.RECEIVED),
             federated_jobs_table.c.peer_id == requester_id,
         )
+        .order_by(jobs_table.c.depth)
     ).all()
     return [r.job_id for r in rows]
 

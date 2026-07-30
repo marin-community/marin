@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 
 import numpy as np
 import pytest
-from levanter.inference.openai import ChatMessage
+from levanter.inference.openai import ChatMessage, _compute_tokens
 from marin.rl.decoding import DecodingConfig
 from marin.rl.environments.inference_ctx import (
     MODEL_MAPPINGS,
@@ -149,7 +149,7 @@ def test_tokenize_prompt_adds_special_tokens(inference_ctx, llama3_tokenizer):
 
 
 def test_tokenize_prompt_fallback_no_template(gpt2_tokenizer, dummy_server):
-    """Test fallback when tokenizer has no chat template."""
+    """A tokenizer with no chat template gets a BOS token and the plain 'role: content' transcript."""
     ctx = LevanterInferenceContext(
         LevanterInferenceContextConfig(
             inference_server_config=None,
@@ -164,10 +164,31 @@ def test_tokenize_prompt_fallback_no_template(gpt2_tokenizer, dummy_server):
     prompt = "Test prompt"
     tokens = ctx.tokenize_prompt(prompt)
 
-    # Should fallback to "user: Test prompt" format
     decoded = gpt2_tokenizer.decode(tokens)
-    assert "user:" in decoded
-    assert prompt in decoded
+    assert decoded == f"{gpt2_tokenizer.bos_token}user: Test prompt"
+
+
+def test_prompt_tokens_match_what_the_server_builds(gpt2_tokenizer, dummy_server):
+    """Rollout prompt tokens must equal the ones the Levanter server generates from.
+
+    The context and the server share a tokenizer, so a base checkpoint's missing chat template has to
+    be filled in on both sides or the recorded prompt drifts from the generated one.
+    """
+    ctx = LevanterInferenceContext(
+        LevanterInferenceContextConfig(
+            inference_server_config=None,
+            tokenizer=gpt2_tokenizer,
+            stop_tokens=None,
+            max_tokens=100,
+            mesh=None,
+            axis_mapping={},
+        )
+    )
+
+    prompt = "Test prompt"
+    server_tokens = _compute_tokens([ChatMessage(role="user", content=prompt)], ctx.tokenizer)
+
+    assert list(ctx.tokenize_prompt(prompt)) == server_tokens
 
 
 def test_response_tokens_from_choice(inference_ctx, llama3_tokenizer):
@@ -661,17 +682,31 @@ def test_worker_extension_uses_public_sync_weights():
             calls["transpose_keys"] = transpose_keys
             calls["reshard_fn"] = reshard_fn
 
+    q_proj = np.arange(2 * 64 * 3, dtype=np.float32).reshape(1, 2, 64, 3)
     serialized_state = {
         "model.layers.0.input_layernorm.weight": (
             np.zeros((2,), dtype=np.float32).tobytes(),
             "float32",
             (2,),
         ),
+        "model.layers.0.self_attn.q_proj.weight": (
+            q_proj.tobytes(),
+            "float32",
+            q_proj.shape,
+        ),
     }
 
     WorkerExtension.update_weight(_FakeWorker(), serialized_state, "meta-llama/Llama-3.1-8B-Instruct")
 
-    assert hasattr(calls["new_state"], "flat_state")
+    synced_weights = dict(calls["new_state"].flat_state())
+    np.testing.assert_array_equal(
+        synced_weights[("model", "layers", "0", "input_layernorm")].get_value(),
+        np.zeros((2,), dtype=np.float32),
+    )
+    synced_q_proj = synced_weights[("model", "layers", "0", "self_attn", "q_proj")].get_value()
+    assert synced_q_proj.shape == (2, 128, 3)
+    np.testing.assert_array_equal(synced_q_proj[:, :64, :], q_proj.reshape(2, 64, 3))
+    np.testing.assert_array_equal(synced_q_proj[:, 64:, :], np.zeros((2, 64, 3), dtype=np.float32))
     assert calls["mappings"] == MODEL_MAPPINGS["meta-llama/Llama-3.1-8B-Instruct"]
     assert calls["transpose_keys"] == MODEL_TRANSPOSE_KEYS["meta-llama/Llama-3.1-8B-Instruct"]
     assert calls["reshard_fn"] is None

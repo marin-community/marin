@@ -759,7 +759,7 @@ def allocate(
         client_cm = controller_client(ctx.obj.config_file)
         client = client_cm.__enter__()
         resources = ResourceSpec(cpu=cpu, memory=ram, disk=disk, device=tpu_device(tpu_type))
-        priority_band = job_pb2.PRIORITY_BAND_UNSPECIFIED if priority is None else priority_band_value(priority)
+        priority_band = job_pb2.PRIORITY_BAND_INHERIT if priority is None else priority_band_value(priority)
         constraints = []
         if zone:
             constraints.append(zone_constraint(zone))

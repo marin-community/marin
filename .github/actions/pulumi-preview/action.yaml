@@ -1,0 +1,102 @@
+name: "Pulumi preview"
+description: "Preview a stack against the shared iac backend and upload the plan as an artifact for the aggregate PR comment."
+
+inputs:
+  stack:
+    description: "Pulumi stack name (e.g. cw-us-east-02a, marin-grafana)."
+    required: true
+  work-dir:
+    description: "Directory holding the Pulumi.yaml (e.g. infra/pulumi)."
+    required: true
+  service-account:
+    description: "GCP service account impersonated through Workload Identity Federation."
+    required: true
+  workload-identity-provider:
+    description: "GCP workload identity provider resource name."
+    default: "projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc"
+  gcp-project-id:
+    description: "GCP project id."
+    required: true
+  uv-sync-args:
+    description: "Arguments for the venv sync (stacks whose program imports more than iac widen this)."
+    default: "--package marin-iac --extra deploy --frozen"
+  config-map:
+    description: "Optional pulumi/actions config-map JSON applied before preview."
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v3
+      with:
+        project_id: ${{ inputs.gcp-project-id }}
+        workload_identity_provider: ${{ inputs.workload-identity-provider }}
+        service_account: ${{ inputs.service-account }}
+
+    - name: Set up uv
+      uses: astral-sh/setup-uv@v7
+
+    - name: Sync the iac venv
+      shell: bash
+      run: uv sync ${{ inputs.uv-sync-args }}
+
+    - name: Preview the stack
+      id: preview
+      continue-on-error: true
+      uses: pulumi/actions@v7
+      env:
+        # infra/pulumi's plain `runtime: python` (no `virtualenv:` option) resolves `python3`
+        # from PATH, which `uv sync` above does not add to this step's PATH — without this,
+        # Pulumi runs the program under the runner's system Python and fails with
+        # `ModuleNotFoundError: No module named 'pulumi'` instead of previewing.
+        PULUMI_PYTHON_CMD: ${{ github.workspace }}/.venv/bin/python
+      with:
+        command: preview
+        stack-name: ${{ inputs.stack }}
+        work-dir: ${{ inputs.work-dir }}
+        cloud-url: gs://marin-iac-state
+        diff: true
+        color: never
+        comment-on-pr: false
+        config-map: ${{ inputs.config-map }}
+
+    - name: Format preview artifact
+      if: always()
+      shell: bash
+      env:
+        PREVIEW_RAW: ${{ steps.preview.outputs.output }}
+        PREVIEW_OK: ${{ steps.preview.outcome == 'success' }}
+        STACK: ${{ inputs.stack }}
+        OUT_DIR: ${{ github.workspace }}/iac-preview-out
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$OUT_DIR"
+        printf '%s' "${PREVIEW_RAW:-}" > "$OUT_DIR/raw.txt"
+        ok=false
+        if [[ "$PREVIEW_OK" == "true" ]]; then
+          ok=true
+        fi
+        python3 "$ACTION_PATH/format_preview.py" \
+          --stack "$STACK" \
+          --ok "$ok" \
+          --input "$OUT_DIR/raw.txt" \
+          --out-dir "$OUT_DIR"
+
+    - name: Upload preview artifact
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: iac-preview-${{ inputs.stack }}
+        path: |
+          ${{ github.workspace }}/iac-preview-out/meta.json
+          ${{ github.workspace }}/iac-preview-out/diff.txt
+        if-no-files-found: error
+
+    - name: Fail if preview failed
+      if: steps.preview.outcome == 'failure'
+      shell: bash
+      run: |
+        echo "pulumi preview failed for stack ${{ inputs.stack }}" >&2
+        exit 1

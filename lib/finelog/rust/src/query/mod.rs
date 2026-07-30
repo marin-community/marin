@@ -1,10 +1,10 @@
 //! DataFusion read engine.
 //!
 //! `make_ctx()` builds a `SessionContext` configured to match DuckDB's result
-//! shape (Utf8 strings, DuckDB parsing dialect) with the compat UDFs registered.
+//! shape (Utf8 strings, DuckDB parsing dialect) with the scalar UDFs registered.
 //! `run_query_over()` registers every live namespace as a `TableProvider`, runs
-//! the user SQL verbatim, collects the result, and deregisters — the body of the
-//! `StatsService::Query` handler.
+//! the user SQL under a SELECT-only gate (see `read_only_sql_options`), collects
+//! the result, and deregisters — the body of the `StatsService::Query` handler.
 //!
 //! Query visibility = sealed parquet segments ONLY (see `provider.rs`). The
 //! durability contract makes written rows visible because they are sealed before
@@ -26,7 +26,7 @@ use datafusion::common::TableReference;
 use datafusion::error::Result as DFResult;
 use datafusion::execution::memory_pool::GreedyMemoryPool;
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
-use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion::prelude::{SQLOptions, SessionConfig, SessionContext};
 
 use crate::query::provider::NamespaceProvider;
 
@@ -46,6 +46,8 @@ const MIN_QUERY_POOL_BYTES: usize = 256 * 1024 * 1024;
 /// headroom for non-pool allocations (parquet decode scratch, IPC encode,
 /// tokio/allocator overhead).
 const QUERY_POOL_FRACTION: f64 = 0.7;
+
+const MEBIBYTE: usize = 1024 * 1024;
 
 /// Best-effort detect the process memory ceiling: the cgroup v2 limit
 /// (`memory.max`, i.e. the container's `--memory`) if set, else `/proc/meminfo`
@@ -92,6 +94,43 @@ fn query_pool_bytes() -> usize {
     }
 }
 
+fn build_runtime_env(
+    memory_pool_bytes: usize,
+    metadata_cache_bytes: Option<usize>,
+) -> Arc<RuntimeEnv> {
+    let mut builder = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::new(GreedyMemoryPool::new(memory_pool_bytes)));
+    if let Some(bytes) = metadata_cache_bytes {
+        builder = builder.with_metadata_cache_limit(bytes);
+    }
+    builder.build_arc().expect("build query RuntimeEnv")
+}
+
+static SHARED_RUNTIME_ENV: OnceLock<Arc<RuntimeEnv>> = OnceLock::new();
+
+fn configured_runtime_env(metadata_cache_mb: Option<usize>) -> Arc<RuntimeEnv> {
+    let memory_pool_bytes = query_pool_bytes();
+    let metadata_cache_bytes = metadata_cache_mb.map(|mb| mb.saturating_mul(MEBIBYTE));
+    let runtime = build_runtime_env(memory_pool_bytes, metadata_cache_bytes);
+    tracing::info!(
+        memory_pool_limit_mb = memory_pool_bytes / MEBIBYTE,
+        metadata_cache_limit_mb = runtime.cache_manager.get_metadata_cache_limit() / MEBIBYTE,
+        "query engine configured"
+    );
+    runtime
+}
+
+/// Initialize the process-wide DataFusion runtime before serving requests.
+///
+/// `metadata_cache_mb = None` preserves DataFusion's default. The deployment
+/// entry point calls this once with its parsed CLI configuration; library users
+/// that only call [`make_ctx`] receive the default.
+pub fn configure_query_runtime(metadata_cache_mb: Option<usize>) -> Result<(), &'static str> {
+    SHARED_RUNTIME_ENV
+        .set(configured_runtime_env(metadata_cache_mb))
+        .map_err(|_| "query runtime is already initialized")
+}
+
 /// A process-wide `RuntimeEnv` whose `GreedyMemoryPool` bounds total query
 /// memory. Shared across every `make_ctx` so concurrent queries compete for one
 /// budget (bounding the SERVER, not each query independently): a runaway query
@@ -101,19 +140,9 @@ fn query_pool_bytes() -> usize {
 /// OOM-killing the process (which surfaces to clients as a dropped connection /
 /// 502).
 fn shared_runtime_env() -> Arc<RuntimeEnv> {
-    static RT: OnceLock<Arc<RuntimeEnv>> = OnceLock::new();
-    RT.get_or_init(|| {
-        let bytes = query_pool_bytes();
-        tracing::info!(
-            limit_mb = bytes / (1024 * 1024),
-            "query engine: bounded memory pool (GreedyMemoryPool)"
-        );
-        RuntimeEnvBuilder::new()
-            .with_memory_pool(Arc::new(GreedyMemoryPool::new(bytes)))
-            .build_arc()
-            .expect("build query RuntimeEnv")
-    })
-    .clone()
+    SHARED_RUNTIME_ENV
+        .get_or_init(|| configured_runtime_env(None))
+        .clone()
 }
 
 /// Build a read-only `SessionContext` matching DuckDB's externally-observable
@@ -135,11 +164,12 @@ fn shared_runtime_env() -> Arc<RuntimeEnv> {
 ///   DuckDB's late materialization reads zero blobs for a non-matching key. This
 ///   is the dominant cost in the dashboard's profile-history query.
 ///
-/// The compat UDFs (`prefix`/`regexp_matches`/`contains`) are registered so the
-/// corpus and FetchLogs resolve them, and the [`PrefixRangeRewrite`] analyzer
-/// rule rewrites starts-with predicates to expose a prunable key range to the
-/// planner (so both FetchLogs and the generic Query API prune row groups on the
-/// `[key, seq]`-sorted segments — see [`crate::query::optimizer`]).
+/// The scalar UDFs (`prefix`/`regexp_matches`/`contains` and the `json_*`
+/// extraction family — see [`crate::query::udf`]) are registered so the corpus,
+/// FetchLogs, and JSON-label queries resolve them, and the [`PrefixRangeRewrite`]
+/// analyzer rule rewrites starts-with predicates to expose a prunable key range
+/// to the planner (so both FetchLogs and the generic Query API prune row groups
+/// on the `[key, seq]`-sorted segments — see [`crate::query::optimizer`]).
 ///
 /// The context runs on a shared, memory-bounded `RuntimeEnv` (see
 /// [`shared_runtime_env`]) so a pathological query fails cleanly rather than
@@ -152,7 +182,7 @@ pub fn make_ctx() -> SessionContext {
     cfg.options_mut().execution.parquet.reorder_filters = true;
     let ctx = SessionContext::new_with_config_rt(cfg, shared_runtime_env());
     ctx.add_analyzer_rule(Arc::new(crate::query::optimizer::PrefixRangeRewrite));
-    udf::register_compat_udfs(&ctx);
+    udf::register_scalar_udfs(&ctx);
     ctx
 }
 
@@ -212,10 +242,41 @@ fn slow_query_log_ms() -> u128 {
     })
 }
 
+/// Default server-side wall-clock deadline for a single Query RPC. A query
+/// still running when this elapses is aborted (its execution future is dropped,
+/// cancelling the scan) and the caller gets `deadline_exceeded` — so one
+/// pathological query can no longer run unbounded and crash-loop the hub on
+/// memory. This bounds the SERVER independently of any client deadline, which
+/// a caller may set huge or omit entirely.
+const DEFAULT_QUERY_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Parse the `FINELOG_QUERY_TIMEOUT_MS` override: an integer millisecond budget,
+/// `0` to disable the deadline entirely (ops escape hatch for a known-heavy
+/// backfill), or absent/unparseable → [`DEFAULT_QUERY_TIMEOUT`].
+fn parse_query_timeout(raw: Option<&str>) -> Option<Duration> {
+    match raw {
+        None => Some(DEFAULT_QUERY_TIMEOUT),
+        Some(v) => match v.trim().parse::<u64>() {
+            Ok(0) => None,
+            Ok(ms) => Some(Duration::from_millis(ms)),
+            Err(_) => Some(DEFAULT_QUERY_TIMEOUT),
+        },
+    }
+}
+
+/// The server-side Query deadline, resolved once from `FINELOG_QUERY_TIMEOUT_MS`
+/// (see [`parse_query_timeout`]). `None` disables it.
+pub(crate) fn query_timeout() -> Option<Duration> {
+    static TIMEOUT: OnceLock<Option<Duration>> = OnceLock::new();
+    *TIMEOUT.get_or_init(|| {
+        parse_query_timeout(std::env::var("FINELOG_QUERY_TIMEOUT_MS").ok().as_deref())
+    })
+}
+
 /// Cap arbitrary (possibly user-supplied) SQL for a single log line. Truncates on
 /// a char boundary — never mid-codepoint — so non-ASCII SQL can't panic the
 /// logger, in a single pass over at most `MAX_CHARS + 1` chars.
-fn truncate_sql_for_log(sql: &str) -> String {
+pub(crate) fn truncate_sql_for_log(sql: &str) -> String {
     const MAX_CHARS: usize = 4000;
     let mut chars = sql.chars();
     let head: String = chars.by_ref().take(MAX_CHARS).collect();
@@ -230,24 +291,64 @@ fn truncate_sql_for_log(sql: &str) -> String {
 /// threshold. `rows` is the result row count on success, `None` when the query
 /// errored — a slow *failed* query (e.g. `ResourcesExhausted` after a long scan)
 /// is exactly the case worth seeing.
-fn log_slow_query(elapsed: Duration, kind: &str, sql: &str, rows: Option<usize>) {
+fn log_slow_query(
+    ctx: &SessionContext,
+    elapsed: Duration,
+    kind: &str,
+    sql: &str,
+    rows: Option<usize>,
+) {
     let elapsed_ms = elapsed.as_millis();
     if elapsed_ms < slow_query_log_ms() {
         return;
     }
     let preview = truncate_sql_for_log(sql);
     let rows_str = rows.map_or_else(|| "ERR".to_string(), |n| n.to_string());
+    let runtime = ctx.runtime_env();
+    let cache_manager = &runtime.cache_manager;
+    let entries = cache_manager.get_file_metadata_cache().list_entries();
+    let metadata_cache_size_bytes = entries.values().fold(0_usize, |total, entry| {
+        total.saturating_add(entry.size_bytes)
+    });
+    let metadata_cache_hits = entries
+        .values()
+        .fold(0_usize, |total, entry| total.saturating_add(entry.hits));
     tracing::warn!(
         kind,
         elapsed_ms = elapsed_ms as u64,
         rows = %rows_str,
+        metadata_cache_limit_bytes = cache_manager.get_metadata_cache_limit(),
+        metadata_cache_size_bytes,
+        metadata_cache_entries = entries.len(),
+        metadata_cache_hits,
         sql = %preview,
         "slow {kind}: {elapsed_ms}ms rows={rows_str} sql={preview}",
     );
 }
 
-/// Register every namespace in `providers`, run `sql` verbatim, collect, and
-/// deregister. Returns the result schema + batches.
+/// The SQL surface the generic Query RPC exposes: `SELECT` only.
+///
+/// DDL (`CREATE`/`DROP`), DML (`INSERT` and `COPY … TO`), and statements
+/// (`SET`/`BEGIN`) are denied at plan-verification time (`verify_plan` inside
+/// [`SessionContext::sql_with_options`]) — a denied plan surfaces as
+/// `DataFusionError::Plan`, which the handler maps to `invalid_argument`.
+///
+/// DML is the load-bearing denial. DataFusion's default object-store registry
+/// registers a `LocalFileSystem` rooted at `/` for `file://`, so an admitted
+/// caller could otherwise `COPY <table> TO 'file:///…'` and write the finelog
+/// VM's own filesystem (the registered GCS/S3 stores live only in the store's
+/// remote-sync layer, not on this query context, so those stay out of reach).
+/// Denying DML closes both the store-mutation and the host-write paths.
+fn read_only_sql_options() -> SQLOptions {
+    SQLOptions::new()
+        .with_allow_ddl(false)
+        .with_allow_dml(false)
+        .with_allow_statements(false)
+}
+
+/// Register every namespace in `providers`, run `sql` (SELECT-only, see
+/// [`read_only_sql_options`]), collect, and deregister. Returns the result
+/// schema + batches.
 ///
 /// Registration is per-call (a fresh `ctx`): names are used exactly as the
 /// catalog records them, so `FROM "iris.worker"` resolves. An unknown namespace
@@ -269,7 +370,7 @@ pub async fn run_query_over(
     }
     let started = Instant::now();
     let result = async {
-        let df = ctx.sql(sql).await?;
+        let df = ctx.sql_with_options(sql, read_only_sql_options()).await?;
         let schema = Arc::new(df.schema().as_arrow().clone());
         let batches = df.collect().await?;
         // Match DuckDB's all-nullable result schema (the captured plan schema
@@ -288,7 +389,7 @@ pub async fn run_query_over(
         .as_ref()
         .ok()
         .map(|r| r.batches.iter().map(|b| b.num_rows()).sum());
-    log_slow_query(elapsed, "Query", sql, rows);
+    log_slow_query(ctx, elapsed, "Query", sql, rows);
     result
 }
 
@@ -347,7 +448,7 @@ pub async fn fetch_log_rows(
         .as_ref()
         .ok()
         .map(|b| b.iter().map(|x| x.num_rows()).sum());
-    log_slow_query(elapsed, "FetchLogs", &sql, rows);
+    log_slow_query(ctx, elapsed, "FetchLogs", &sql, rows);
     let batches = collected?;
 
     let mut rows = Vec::new();
@@ -413,6 +514,87 @@ mod tests {
         let out = truncate_sql_for_log(&long);
         assert!(out.ends_with("…[truncated]"));
         assert_eq!(out.chars().filter(|&c| c == '✓').count(), 4000);
+    }
+
+    #[test]
+    fn parse_query_timeout_variants() {
+        // Absent, unparseable, and negative-ish garbage all fall back to the default.
+        assert_eq!(parse_query_timeout(None), Some(DEFAULT_QUERY_TIMEOUT));
+        assert_eq!(
+            parse_query_timeout(Some("nonsense")),
+            Some(DEFAULT_QUERY_TIMEOUT)
+        );
+        assert_eq!(parse_query_timeout(Some("-5")), Some(DEFAULT_QUERY_TIMEOUT));
+        // An explicit millisecond budget (whitespace tolerated).
+        assert_eq!(
+            parse_query_timeout(Some("5000")),
+            Some(Duration::from_millis(5000))
+        );
+        assert_eq!(
+            parse_query_timeout(Some("  250 ")),
+            Some(Duration::from_millis(250))
+        );
+        // Zero is the explicit disable escape hatch.
+        assert_eq!(parse_query_timeout(Some("0")), None);
+    }
+
+    #[tokio::test]
+    async fn read_only_options_reject_mutations() {
+        // The generic Query RPC exposes SELECT only. Each mutating statement is
+        // rejected at plan verification as a `Plan` error (which the handler maps
+        // to invalid_argument) — never executed, so nothing is created or written.
+        // These plan without any registered table, so the rejection is the gate,
+        // not a missing-table error.
+        let ctx = make_ctx();
+        let copy_target = std::env::temp_dir().join(format!(
+            "finelog_copy_gate_{}.parquet",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let copy_sql = format!("COPY (SELECT 1 AS n) TO 'file://{}'", copy_target.display());
+        let cases = [
+            ("CREATE TABLE t (x INT)", "DDL not supported"),
+            (copy_sql.as_str(), "DML not supported"),
+            (
+                "SET datafusion.execution.batch_size = 1",
+                "Statement not supported",
+            ),
+        ];
+        for (sql, expected) in cases {
+            let err = match run_query_over(&ctx, Vec::new(), sql).await {
+                Ok(_) => panic!("{sql} should have been rejected, but ran"),
+                Err(e) => e,
+            };
+            assert!(
+                matches!(err.find_root(), datafusion::error::DataFusionError::Plan(_)),
+                "{sql} should be rejected as a Plan error, got: {err}"
+            );
+            assert!(
+                err.to_string().contains(expected),
+                "{sql} error should mention {expected:?}, got: {err}"
+            );
+        }
+        // The rejected COPY must not have touched the VM filesystem.
+        assert!(
+            !copy_target.exists(),
+            "COPY was rejected but still wrote {}",
+            copy_target.display()
+        );
+    }
+
+    #[tokio::test]
+    async fn read_only_options_allow_select() {
+        // The positive control: a plain SELECT still runs through the gated path.
+        let ctx = make_ctx();
+        let result = run_query_over(&ctx, Vec::new(), "SELECT 1 AS n")
+            .await
+            .unwrap();
+        assert_eq!(
+            result.batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+            1
+        );
     }
 
     #[tokio::test]

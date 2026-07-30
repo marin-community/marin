@@ -107,7 +107,11 @@ from rigging.timing import Duration, RateLimiter, Timestamp
 from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
 from tests.cluster.backends.conftest import make_mock_platform
-from tests.cluster.controller._test_support import ControllerTestState, set_task_state_for_test
+from tests.cluster.controller._test_support import (
+    ControllerTestState,
+    resolve_band_for_test,
+    set_task_state_for_test,
+)
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 check_task_can_be_scheduled = task_row_can_be_scheduled
@@ -556,7 +560,13 @@ def submit_direct_job(
         priority_band=priority_band,
     )
     with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now())
+        ops.job.submit(
+            cur,
+            job_id=jid,
+            request=req,
+            ts=Timestamp.now(),
+            priority_band=resolve_band_for_test(cur, jid, priority_band),
+        )
     with state._db.read_snapshot() as tx:
         rows = tx.execute(select(tasks_table.c.task_id).where(tasks_table.c.job_id == jid)).all()
     return [row.task_id for row in rows]
@@ -796,8 +806,8 @@ def submit_job(
 ) -> list:
     """Submit a job and return created task rows.
 
-    Auto-injects resource-derived device constraints to mirror service-layer
-    behavior, then submits and returns the created tasks.
+    Auto-injects resource-derived device constraints and resolves the priority band to
+    mirror service-layer behavior, then submits and returns the created tasks.
     """
     inject_device_constraints(request)
     jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root("test-user", job_id)
@@ -808,6 +818,7 @@ def submit_job(
             job_id=jid,
             request=request,
             ts=Timestamp.from_ms(timestamp_ms) if timestamp_ms is not None else Timestamp.now(),
+            priority_band=resolve_band_for_test(cur, jid, int(request.priority_band)),
         )
     return query_tasks_for_job(state, jid)
 
@@ -984,6 +995,13 @@ def healthy_active_workers(state: ControllerTestState) -> list[SchedulableWorker
         return reads.healthy_active_workers_with_attributes(tx, state._health, state._worker_attrs)
 
 
+def assign_task(state: ControllerTestState, task, worker_id: WorkerId) -> None:
+    """Assign a task to a worker (creates the attempt, leaves it ASSIGNED) without
+    driving it to RUNNING — so a caller can land its own BUILDING/terminal update."""
+    with state._db.transaction() as cur:
+        ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
+
+
 def dispatch_task(state: ControllerTestState, task, worker_id: WorkerId) -> None:
     with state._db.transaction() as cur:
         ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
@@ -1014,6 +1032,7 @@ def transition_task(
     *,
     error: str | None = None,
     exit_code: int | None = None,
+    status_message: str | None = None,
 ) -> object:
     task = query_task_with_attempts(state, task_id)
     assert task is not None
@@ -1046,6 +1065,7 @@ def transition_task(
                             new_state=new_state,
                             error=error,
                             exit_code=exit_code,
+                            status_message=status_message,
                         )
                     ],
                 )

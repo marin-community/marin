@@ -37,13 +37,14 @@ import zstandard
 from rigging.filesystem import prefix_join
 from rigging.timing import Duration, Timestamp
 
-from iris.cluster.controller import reads
+from iris.cluster.controller import reads, writes
 from iris.cluster.controller.db import ControllerDB
 
 logger = logging.getLogger(__name__)
 
 ZSTD_LEVEL = 3
 DEFAULT_PRUNE_AGE = Duration.from_hours(3 * 24)  # 3 days
+CHECKPOINT_EPOCH_META_KEY = "last_checkpoint_epoch_ms"
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +79,86 @@ class CheckpointResult:
     job_count: int
     task_count: int
     worker_count: int
+
+
+@dataclass(frozen=True)
+class DatabaseProbe:
+    """Integrity and checkpoint ancestry read from a local controller DB directory."""
+
+    exists: bool
+    healthy: bool
+    checkpoint_epoch_ms: int | None
+    detail: str
+
+
+def _sqlite_quick_check(path: Path) -> str | None:
+    """Return an integrity error for ``path``, or ``None`` when it is healthy."""
+    try:
+        connection = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
+        try:
+            result = connection.execute("PRAGMA quick_check(1)").fetchone()
+        finally:
+            connection.close()
+    except sqlite3.Error as error:
+        return str(error)
+    if result is None:
+        return "quick_check returned no result"
+    if result[0] != "ok":
+        return str(result[0])
+    return None
+
+
+def probe_database_dir(db_dir: Path) -> DatabaseProbe:
+    """Return database integrity and checkpoint ancestry for reuse decisions."""
+    main_path = db_dir / ControllerDB.DB_FILENAME
+    auth_path = db_dir / ControllerDB.AUTH_DB_FILENAME
+    existing = [path for path in (main_path, auth_path) if path.exists()]
+    if not existing:
+        return DatabaseProbe(exists=False, healthy=False, checkpoint_epoch_ms=None, detail="database files absent")
+    if len(existing) != 2:
+        missing = auth_path.name if main_path.exists() else main_path.name
+        return DatabaseProbe(
+            exists=True,
+            healthy=False,
+            checkpoint_epoch_ms=None,
+            detail=f"{missing} is missing",
+        )
+
+    checkpoint_epoch_ms: int | None = None
+    try:
+        for path in (main_path, auth_path):
+            error = _sqlite_quick_check(path)
+            if error is not None:
+                return DatabaseProbe(
+                    exists=True,
+                    healthy=False,
+                    checkpoint_epoch_ms=None,
+                    detail=f"{path.name}: {error}",
+                )
+            connection = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
+            try:
+                if path == main_path:
+                    row = connection.execute(
+                        "SELECT value FROM meta WHERE key = ?",
+                        (CHECKPOINT_EPOCH_META_KEY,),
+                    ).fetchone()
+                    checkpoint_epoch_ms = int(row[0]) if row is not None else None
+            finally:
+                connection.close()
+    except sqlite3.Error as error:
+        return DatabaseProbe(
+            exists=True,
+            healthy=False,
+            checkpoint_epoch_ms=None,
+            detail=str(error),
+        )
+
+    return DatabaseProbe(
+        exists=True,
+        healthy=True,
+        checkpoint_epoch_ms=checkpoint_epoch_ms,
+        detail="ok",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -207,17 +288,24 @@ def upload_checkpoint(
     backup: DatabaseBackup,
     remote_state_dir: str,
 ) -> tuple[str, CheckpointResult]:
-    """Compress, upload, count rows, and prune old checkpoints.
+    """Publish a prepared backup, record its ancestry, and prune old checkpoints.
 
-    This is the slow half of checkpointing (zstd compression + GCS upload)
-    and does not need any write lock on the database.
+    The live database records the published checkpoint as its restore ancestor.
     """
     prefix = prefix_join(remote_state_dir, "controller-state")
-    checkpoint_dir = f"{prefix}/{backup.created_at.epoch_ms()}"
+    checkpoint_dir = prefix_join(prefix, str(backup.created_at.epoch_ms()))
 
-    _compress_and_upload_db(backup.main_path, f"{checkpoint_dir}/{ControllerDB.DB_FILENAME}.zst", "main")
+    main_url = prefix_join(checkpoint_dir, f"{ControllerDB.DB_FILENAME}.zst")
+    _compress_and_upload_db(backup.main_path, main_url, "main")
     if backup.auth_path is not None:
-        _compress_and_upload_db(backup.auth_path, f"{checkpoint_dir}/{ControllerDB.AUTH_DB_FILENAME}.zst", "auth")
+        auth_url = prefix_join(checkpoint_dir, f"{ControllerDB.AUTH_DB_FILENAME}.zst")
+        _compress_and_upload_db(backup.auth_path, auth_url, "auth")
+
+    # The marker proves the live DB contains this successfully-published
+    # checkpoint. It is deliberately written after upload: a failed upload must
+    # not make local state claim ancestry from a checkpoint that does not exist.
+    with db.transaction() as tx:
+        writes.meta_value_set(tx, CHECKPOINT_EPOCH_META_KEY, backup.created_at.epoch_ms())
 
     # Row counts are read from the live DB (not the backup) for convenience.
     # They may diverge slightly from the backup contents if writes occurred
@@ -282,6 +370,16 @@ def _list_checkpoint_entries(remote_state_dir: str) -> list[str] | None:
         return None
 
 
+def _entry_epoch_ms(entry: str) -> int | None:
+    """Epoch-ms timestamp encoded in a checkpoint dir entry, or None if not a timestamp dir.
+
+    Checkpoint directories are named ``{controller-state}/{epoch_ms}``; entries
+    whose basename is not a plain integer (e.g. unrelated files) are ignored.
+    """
+    basename = entry.rstrip("/").rsplit("/", 1)[-1]
+    return int(basename) if basename.isdigit() else None
+
+
 def _find_latest_checkpoint_dir(remote_state_dir: str) -> str | None:
     """Find the most recent timestamped checkpoint directory.
 
@@ -292,19 +390,12 @@ def _find_latest_checkpoint_dir(remote_state_dir: str) -> str | None:
     if entries is None:
         return None
 
-    # Filter to numeric directory names (epoch_ms timestamps)
-    timestamp_dirs: list[tuple[int, str]] = []
-    for entry in entries:
-        basename = entry.rstrip("/").rsplit("/", 1)[-1]
-        if basename.isdigit():
-            timestamp_dirs.append((int(basename), entry))
-
+    timestamp_dirs = [(epoch_ms, entry) for entry in entries if (epoch_ms := _entry_epoch_ms(entry)) is not None]
     if not timestamp_dirs:
         return None
 
     # Return the most recent (highest timestamp)
-    timestamp_dirs.sort(reverse=True)
-    _, latest_path = timestamp_dirs[0]
+    _, latest_path = max(timestamp_dirs)
     return _reconstruct_uri(remote_state_dir, latest_path)
 
 
@@ -313,7 +404,11 @@ def latest_checkpoint_epoch_ms(remote_state_dir: str) -> int | None:
     found = _find_latest_checkpoint_dir(remote_state_dir)
     if found is None:
         return None
-    return int(found.rstrip("/").rsplit("/", 1)[-1])
+    return _entry_epoch_ms(found)
+
+
+def parse_checkpoint_epoch_ms(checkpoint_dir: str) -> int | None:
+    return _entry_epoch_ms(checkpoint_dir)
 
 
 def prune_old_checkpoints(
@@ -332,16 +427,15 @@ def prune_old_checkpoints(
     fs, _ = fsspec.core.url_to_fs(remote_state_dir)
     pruned = 0
     for entry in entries:
-        basename = entry.rstrip("/").rsplit("/", 1)[-1]
-        if not basename.isdigit():
+        epoch_ms = _entry_epoch_ms(entry)
+        if epoch_ms is None or epoch_ms >= cutoff_ms:
             continue
-        if int(basename) < cutoff_ms:
-            try:
-                fs.rm(entry, recursive=True)
-                logger.info("Pruned old checkpoint: %s", entry)
-                pruned += 1
-            except Exception:
-                logger.warning("Failed to prune checkpoint: %s", entry, exc_info=True)
+        try:
+            fs.rm(entry, recursive=True)
+            logger.info("Pruned old checkpoint: %s", entry)
+            pruned += 1
+        except Exception:
+            logger.warning("Failed to prune checkpoint: %s", entry, exc_info=True)
     return pruned
 
 
@@ -392,7 +486,7 @@ def download_checkpoint_to_local(
     Returns True if the sync produced a usable ``controller.sqlite3``.
     """
     if checkpoint_dir:
-        source_dir = checkpoint_dir.rstrip("/")
+        source_dir = checkpoint_dir
     else:
         found = _find_latest_checkpoint_dir(remote_state_dir)
         if found is None:
@@ -400,14 +494,57 @@ def download_checkpoint_to_local(
             return False
         source_dir = found
 
-    _sync_dir(source_dir, local_db_dir)
-    for zst_path in list(local_db_dir.glob("*.zst")):
-        _decompress_zstd(zst_path, zst_path.with_suffix(""))
-        zst_path.unlink()
+    local_db_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging_dir = Path(tempfile.mkdtemp(prefix=f".{local_db_dir.name}.restore-", dir=local_db_dir.parent))
+    previous_dir = staging_dir.with_name(f"{staging_dir.name}.previous")
+    installed = False
+    try:
+        _sync_dir(source_dir, staging_dir)
+        for zst_path in list(staging_dir.glob("*.zst")):
+            _decompress_zstd(zst_path, zst_path.with_suffix(""))
+            zst_path.unlink()
 
-    if not (local_db_dir / ControllerDB.DB_FILENAME).exists():
-        logger.info("No checkpoint at %s, starting fresh", source_dir)
-        return False
+        main_path = staging_dir / ControllerDB.DB_FILENAME
+        if not main_path.exists():
+            logger.info("No checkpoint at %s, starting fresh", source_dir)
+            return False
 
-    logger.info("Synced checkpoint %s to %s", source_dir, local_db_dir)
+        source_epoch_ms = parse_checkpoint_epoch_ms(source_dir)
+        if source_epoch_ms is not None:
+            connection = sqlite3.connect(str(main_path))
+            try:
+                connection.execute(
+                    "INSERT INTO meta(key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (CHECKPOINT_EPOCH_META_KEY, source_epoch_ms),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+        for path in (main_path, staging_dir / ControllerDB.AUTH_DB_FILENAME):
+            if not path.exists():
+                continue
+            error = _sqlite_quick_check(path)
+            if error is not None:
+                raise ValueError(f"Checkpoint {source_dir} failed SQLite validation: {path.name}: {error}")
+
+        if local_db_dir.exists():
+            local_db_dir.rename(previous_dir)
+        try:
+            staging_dir.rename(local_db_dir)
+            installed = True
+        except Exception:
+            if previous_dir.exists() and not local_db_dir.exists():
+                previous_dir.rename(local_db_dir)
+            raise
+        if previous_dir.exists():
+            shutil.rmtree(previous_dir)
+    finally:
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir)
+        if installed and previous_dir.exists():
+            shutil.rmtree(previous_dir)
+
+    logger.info("Synced and validated checkpoint %s to %s", source_dir, local_db_dir)
     return True

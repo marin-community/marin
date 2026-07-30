@@ -647,9 +647,10 @@ class InMemoryK8sService:
         resource = K8sResource.from_kind(manifest["kind"])
         name = manifest["metadata"]["name"]
 
-        # Pods are create-if-absent (mirrors K8sService._apply_pod): an existing
-        # pod — in any phase — is the one we want, so re-applying it on a redrive
-        # is a no-op. Overwriting and rescheduling would reset a running pod.
+        # Pods are create-if-absent (mirrors K8sService._apply_pod): the pod name
+        # embeds the attempt uid, so a fresh incarnation never collides — an
+        # existing pod is our own attempt, and re-applying on a redrive is a no-op
+        # (overwriting would reset a running pod).
         if resource is K8sResource.PODS and (resource.plural, name) in self._resources:
             return
 

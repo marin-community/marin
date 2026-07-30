@@ -20,18 +20,10 @@ if it exists, so a setup that leaves no venv runs in the image's own environment
 """
 
 import shlex
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 
 # cloudpickle for callable entrypoints, py-spy/memray for the profiler attach paths.
 _IRIS_RUNTIME_DEPS = ("cloudpickle", "py-spy", "memray")
-
-# Set this env var (to any non-empty value) to surface uv's output during setup.
-DEBUG_UV_SYNC_ENV = "IRIS_DEBUG_UV_SYNC"
-
-
-def setup_is_quiet(env_vars: Mapping[str, str]) -> bool:
-    """Whether setup scripts should suppress uv output (the default)."""
-    return not env_vars.get(DEBUG_UV_SYNC_ENV)
 
 
 def _uv_sync_target(packages: Sequence[str] | None) -> str:
@@ -60,9 +52,12 @@ def default_setup_script(
     pip_packages: Sequence[str] = (),
     python_version: str | None = None,
     packages: Sequence[str] | None = None,
-    quiet: bool = True,
 ) -> str:
     """Render the standard uv-based setup script as a bash string.
+
+    uv runs at its default verbosity so its progress (``Resolved``,
+    ``Downloading <pkg>``, ``Installed``) streams into the task logs; this is the
+    only signal a live setup gives, so it is never suppressed.
 
     Args:
         extras: uv extras to enable (``extra`` or ``package:extra``).
@@ -72,12 +67,10 @@ def default_setup_script(
         packages: workspace members to sync. ``None`` syncs every member
             (``--all-packages``); a list scopes the sync to those members so an
             unrelated member that fails to resolve cannot fail the job.
-        quiet: suppress uv output.
 
     Returns:
         A bash snippet that creates and populates the venv at ``$IRIS_VENV``.
     """
-    quiet_flag = "--quiet" if quiet else ""
     python_flag = f"--python {shlex.quote(python_version)}" if python_version else ""
     # --frozen when a lockfile is present skips resolution; ConfigMap-based
     # workdirs may drop uv.lock (>1MB limit), so fall back to a normal resolve.
@@ -92,7 +85,6 @@ def default_setup_script(
         part
         for part in [
             "uv sync",
-            quiet_flag,
             frozen_flag,
             link_mode_flag,
             python_flag,
@@ -115,13 +107,13 @@ def default_setup_script(
         " echo 'rust-dev mode: building native extensions';"
         " for crate in lib/*/pyproject.toml; do"
         ' grep -q \'build-backend = "maturin"\' "$crate" 2>/dev/null &&'
-        f' uv pip install {quiet_flag} -e "$(dirname "$crate")";'
+        ' uv pip install -e "$(dirname "$crate")";'
         " done;"
         " fi",
     ]
     if pip_packages:
         pip_args = " ".join(shlex.quote(p) for p in pip_packages)
-        pip_cmd = " ".join(part for part in ["uv pip install", quiet_flag, link_mode_flag, pip_args] if part)
+        pip_cmd = " ".join(["uv pip install", link_mode_flag, pip_args])
         lines += ["echo 'installing pip deps'", pip_cmd]
     return "\n".join(lines) + "\n"
 
@@ -135,19 +127,23 @@ def wants_gpu_extra(extras: Sequence[str]) -> bool:
 _LIBDEVICE_FILE = "libdevice.10.bc"
 # XLA's built-in default --xla_gpu_cuda_data_dir, resolved relative to the workdir.
 _XLA_CUDA_DATA_DIR = "cuda_sdk_lib"
-CUDNN_CU13_PACKAGE = "nvidia-cudnn-cu13"
+# These are the only CUDA 12/13 distributions in the resolved GPU environment
+# that both install files under the same nvidia namespace.  Reinstalling them
+# last makes the requested CUDA 13 wheel own its shared-library paths again.
+CUDA_13_LIBRARY_PACKAGES = ("nvidia-cudnn-cu13", "nvidia-nccl-cu13")
 
 
 def cuda_toolchain_setup_script() -> str:
     """Return a setup script that exposes the venv's CUDA toolchain to JAX/Pallas.
 
     Appended to a GPU job's setup so Mosaic GPU kernels compile and JAX sees the
-    CUDA 13 cuDNN wheel after mixed CUDA package installs. It puts the
+    CUDA 13 shared libraries after mixed CUDA package installs. It puts the
     ``jax[cuda13]`` toolchain (``ptxas``/``nvlink``) on ``PATH``, stages
-    ``libdevice.10.bc`` where XLA looks, and restores CUDA 13 cuDNN library
-    precedence when that package is installed. A no-op when the venv carries no
-    CUDA toolchain.
+    ``libdevice.10.bc`` where XLA looks, and restores CUDA 13 cuDNN and NCCL
+    precedence when those packages are installed. A no-op when the venv carries
+    no CUDA toolchain.
     """
+    cuda_13_library_packages = " ".join(CUDA_13_LIBRARY_PACKAGES)
     return rf"""set -e
 cuda_bin=""
 for _d in "$IRIS_VENV"/lib/python*/site-packages/nvidia/cu*/bin; do
@@ -162,11 +158,11 @@ if [ -f "$_libdevice" ]; then
   cp -f "$_libdevice" "$IRIS_WORKDIR/{_XLA_CUDA_DATA_DIR}/nvvm/libdevice/{_LIBDEVICE_FILE}"
   cp -f "$_libdevice" "$IRIS_WORKDIR/{_LIBDEVICE_FILE}"
 fi
-_cudnn_cu13_package="{CUDNN_CU13_PACKAGE}"
-_cudnn_cu13_version=""
-if [ -x "$IRIS_VENV/bin/python" ]; then
-  _cudnn_cu13_version="$(
-    "$IRIS_VENV/bin/python" - "$_cudnn_cu13_package" <<'PY'
+for _cuda13_package in {cuda_13_library_packages}; do
+  _cuda13_version=""
+  if [ -x "$IRIS_VENV/bin/python" ]; then
+    _cuda13_version="$(
+      "$IRIS_VENV/bin/python" - "$_cuda13_package" <<'PY'
 import importlib.metadata as md
 import sys
 
@@ -175,19 +171,20 @@ try:
 except md.PackageNotFoundError:
     pass
 PY
-  )"
-fi
-if [ -n "$_cudnn_cu13_version" ]; then
-  echo 'restoring CUDA 13 cuDNN library precedence'
-  uv pip install --python "$IRIS_VENV/bin/python" \
-    --link-mode symlink \
-    --reinstall-package "$_cudnn_cu13_package" \
-    "$_cudnn_cu13_package==$_cudnn_cu13_version"
-fi
+    )"
+  fi
+  if [ -n "$_cuda13_version" ]; then
+    echo "restoring CUDA 13 library precedence for $_cuda13_package"
+    uv pip install --python "$IRIS_VENV/bin/python" \
+      --link-mode symlink \
+      --reinstall-package "$_cuda13_package" \
+      "$_cuda13_package==$_cuda13_version"
+  fi
+done
 """
 
 
-def iris_runtime_setup_script(*, quiet: bool = True) -> str:
+def iris_runtime_setup_script() -> str:
     """Render the script that installs iris's own runtime deps into ``$IRIS_VENV``.
 
     Installs cloudpickle (callable entrypoints) and py-spy/memray (the profiler)
@@ -195,9 +192,8 @@ def iris_runtime_setup_script(*, quiet: bool = True) -> str:
     unless a venv exists (a bring-your-own image is left untouched) and a failed
     install only warns, so it never fails the job.
     """
-    quiet_flag = "--quiet" if quiet else ""
     pkgs = " ".join(shlex.quote(p) for p in _IRIS_RUNTIME_DEPS)
-    pip_cmd = " ".join(part for part in ["uv pip install", quiet_flag, "--link-mode symlink", pkgs] if part)
+    pip_cmd = " ".join(["uv pip install", "--link-mode symlink", pkgs])
     return (
         'cd "$IRIS_WORKDIR" 2>/dev/null || true\n'
         'if [ -d "$IRIS_VENV" ]; then\n'
