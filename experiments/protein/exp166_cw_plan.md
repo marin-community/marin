@@ -282,8 +282,13 @@ scheduling gate and never evidence that training started.
 One hard invariant: at most one live dispatch per run. Two gangs writing one checkpoint
 corrupt it.
 
-The monitor armed on 2026-07-29 polls Iris driver state only, so it catches a dead driver
-but **not a stall**. Check W&B step advancement by hand, or replace it.
+Measure the stall clock from the last logged step — `iris job logs | grep run_levanter |
+tail -1` — not from when it was noticed. `r.summary` is unreliable here: the same run
+returned three different `_step` values within minutes depending on the endpoint. Use
+`scan_history` with a fresh `Api()` client.
+
+A collective hang shows as every rank stopping at the same instant with no error and a live
+heartbeat, so Iris keeps reporting `running`.
 
 ## Where the code lives
 
