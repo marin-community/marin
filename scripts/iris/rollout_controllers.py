@@ -213,11 +213,19 @@ def deploy_candidates(configs: Mapping[str, Path]) -> dict[str, Path]:
 
 
 def cluster_capacity(config: IrisClusterConfig) -> int:
-    """Rough cluster size: the slices its scale groups may hold at once.
+    """Summed `max_slices` config cap across scale groups. An ordering key only.
 
-    Used only to order the rollout smallest-first, so a bad deploy hits the least
-    capacity first. Config caps (not live workers) keep the order stable before
-    any controller is contacted.
+    This is not a slice count the cluster can reach. On a TPU cluster it is far
+    above one, because `tpu_pools` expands to a scale group per size *per zone*:
+    the sum multiplies each cap by the zone count, and it adds the sizes of one
+    pool even though those are tiers over the same quota. Flat scale groups, which
+    is what every CoreWeave config declares, do sum honestly.
+
+    Used only to order non-lead clusters smallest-first, so a bad deploy hits the
+    least capacity first. Config caps (not live workers) keep the order stable
+    before any controller is contacted. `DEPLOY_LEAD` pins the GCE clusters ahead
+    of that sort, so their inflated totals never order anything. `plan` does not
+    print a cap for them, because the figure would only mislead.
     """
     return sum(group.max_slices for group in config.scale_groups.values())
 
@@ -604,7 +612,12 @@ def plan(clusters: str | None) -> None:
     for position, cluster in enumerate(order, start=1):
         config = _resolve_config(cluster)
         kind = config.controller.controller_kind() or "unknown"
-        click.echo(f"  {position}. {cluster} (controller={kind}, capacity={cluster_capacity(config)} slices)")
+        # Lead clusters are pinned first, so their cap sorts nothing. Printing one
+        # invites reading it as capacity, which it is not (see cluster_capacity).
+        if cluster in DEPLOY_LEAD:
+            click.echo(f"  {position}. {cluster} (controller={kind}, deploy-lead)")
+            continue
+        click.echo(f"  {position}. {cluster} (controller={kind}, max_slices cap={cluster_capacity(config)})")
 
 
 @cli.command("preflight")
@@ -709,9 +722,7 @@ def verify(cluster: str, baseline: Path, duration: int, interval: int, expect_tr
 
 @cli.command("smoke")
 @click.option("--cluster", required=True, help="Cluster to run the smoke job on.")
-@click.option(
-    "--timeout", default=SMOKE_TIMEOUT, show_default=True, help="Seconds to wait for the job to finish."
-)
+@click.option("--timeout", default=SMOKE_TIMEOUT, show_default=True, help="Seconds to wait for the job to finish.")
 @click.option(
     "--workspace",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
