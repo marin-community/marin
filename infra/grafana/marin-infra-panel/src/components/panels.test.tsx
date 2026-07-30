@@ -33,7 +33,7 @@ test('status page keeps worker and provisioning status visible when another sour
       region: 'us-east5', healthy: 12, cpu_millicores: 96000, memory_bytes: 1099511627776, tpu_chips: 64,
     }]),
     frame('P', [{
-      scope: 'fleet', collected_at: Date.now(), resource_type: '', scale_group: '', zone: '',
+      scope: 'fleet', collected_at: Date.now(), zone: '',
       ready: 8, stockout: 1, error: 1, preempted: 2, outcomes: 10, success_ratio: 0.8,
       pools_placing: 4, pools_no_ready_outcome: 1, latency_p50_seconds: 45,
       latency_p95_seconds: 90, window_hours: 3,
@@ -48,6 +48,46 @@ test('status page keeps worker and provisioning status visible when another sour
   expect(within(workers).getByText('us-east5')).toBeInTheDocument();
   const provisioning = screen.getByRole('region', { name: 'Provisioning status' });
   expect(within(provisioning).getByText('80%')).toBeInTheDocument();
+  expect(within(provisioning).getByText('No region data')).toBeInTheDocument();
   expect(within(provisioning).getByText('pools without ready outcome')).toBeInTheDocument();
   expect(screen.getAllByText('No W&B data')).toHaveLength(3);
+});
+
+test('status page rolls pool outcomes up to regions beside the history graph', () => {
+  const now = Date.now();
+  const frames = [
+    frame('P', [{
+      scope: 'fleet', collected_at: now, zone: '',
+      ready: 8, stockout: 1, error: 1, preempted: 2, outcomes: 10, success_ratio: 0.8,
+      pools_placing: 4, pools_no_ready_outcome: 1, latency_p50_seconds: 45,
+      latency_p95_seconds: 90, window_hours: 3,
+    }, {
+      scope: 'pool', collected_at: now, zone: 'us-east5-a',
+      ready: 6, stockout: 1, error: 0, preempted: 0, outcomes: 7, success_ratio: 6 / 7,
+      pools_placing: 0, pools_no_ready_outcome: 0, latency_p50_seconds: 45,
+      latency_p95_seconds: 90, window_hours: 3,
+    }, {
+      scope: 'pool', collected_at: now, zone: 'us-east5-b',
+      ready: 2, stockout: 0, error: 1, preempted: 0, outcomes: 3, success_ratio: 2 / 3,
+      pools_placing: 0, pools_no_ready_outcome: 0, latency_p50_seconds: 45,
+      latency_p95_seconds: 90, window_hours: 3,
+    }]),
+    frame('R', [
+      { time: now - 60_000, region: 'fleet', success_ratio: 0.7 },
+      { time: now, region: 'fleet', success_ratio: 0.8 },
+      { time: now - 60_000, region: 'us-east5', success_ratio: 0.7 },
+      { time: now, region: 'us-east5', success_ratio: 0.8 },
+    ]),
+  ];
+
+  render(<StatusPage frames={frames} width={1400} height={1500} />);
+
+  const provisioning = screen.getByRole('region', { name: 'Provisioning status' });
+  const regionLabel = within(provisioning).getByText('us-east5', { selector: 'code' });
+  const regionRow = regionLabel.parentElement;
+  expect(regionRow).not.toBeNull();
+  expect(regionRow).toHaveTextContent('80%');
+  expect(regionRow).toHaveTextContent('8/10');
+  expect(within(provisioning).getByRole('img', { name: '24 hour status history' })).toBeInTheDocument();
+  expect(within(provisioning).queryByText('us-east5-a')).not.toBeInTheDocument();
 });

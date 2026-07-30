@@ -56,8 +56,6 @@ export interface WorkerRegion {
 export interface ProvisioningRow {
   scope: string;
   collectedAt: number;
-  resourceType: string;
-  scaleGroup: string;
   zone: string;
   ready: number;
   stockout: number;
@@ -70,6 +68,13 @@ export interface ProvisioningRow {
   latencyP50Seconds?: number;
   latencyP95Seconds?: number;
   windowHours?: number;
+}
+
+export interface ProvisioningRegion {
+  region: string;
+  ready: number;
+  outcomes: number;
+  successRatio: number;
 }
 
 export interface SeriesPoint {

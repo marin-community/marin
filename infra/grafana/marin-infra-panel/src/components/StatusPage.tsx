@@ -2,8 +2,8 @@ import React, { useMemo } from 'react';
 import { css } from '@emotion/css';
 import { DataFrame } from '@grafana/data';
 import { useTheme2 } from '@grafana/ui';
-import { frameByRefId, provisioningStatus, seriesPoints, workerRegions } from '../data';
-import { ProvisioningRow, SeriesPoint } from '../types';
+import { frameByRefId, provisioningRegions, provisioningStatus, seriesPoints, workerRegions } from '../data';
+import { SeriesPoint } from '../types';
 import { CommitStrip } from './CommitStrip';
 import { NightlyMatrix } from './NightlyMatrix';
 import { SERIES_COLORS } from './palette';
@@ -27,6 +27,9 @@ const REF = {
   paloma: 'L',
   mfu: 'M',
 } as const;
+
+const STATUS_GRID_CLASS = css`display:grid;grid-template-columns:minmax(220px,.8fr) minmax(360px,1.8fr);gap:22px;@media(max-width:900px){grid-template-columns:1fr;}`;
+const STATUS_SECTION_CLASS = css`display:flex;flex-direction:column;`;
 
 function one(frames: DataFrame[], refId: string): DataFrame[] {
   const frame = frameByRefId(frames, refId);
@@ -148,9 +151,24 @@ function SectionTitle({ children, detail }: { children: React.ReactNode; detail?
   );
 }
 
-function Card({ children }: { children: React.ReactNode }) {
+function Card({ children, grow = false }: { children: React.ReactNode; grow?: boolean }) {
   const theme = useTheme2();
-  return <div className={css`border:1px solid ${theme.colors.border.weak};border-radius:7px;background:${theme.colors.background.secondary};padding:14px;box-shadow:0 12px 30px rgba(0,0,0,.10);`}>{children}</div>;
+  return <div className={css`border:1px solid ${theme.colors.border.weak};border-radius:7px;background:${theme.colors.background.secondary};padding:14px;box-shadow:0 12px 30px rgba(0,0,0,.10);${grow ? 'flex:1;' : ''}`}>{children}</div>;
+}
+
+function RegionList({ title, rows }: { title: string; rows: Array<{ region: string; value: React.ReactNode }> }) {
+  const theme = useTheme2();
+  return (
+    <div>
+      <div className={css`font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:${theme.colors.text.secondary};margin-bottom:5px;`}>{title}</div>
+      {rows.map((row) => (
+        <div key={row.region} className={css`display:grid;grid-template-columns:1fr auto;gap:12px;padding:6px 0;border-top:1px solid ${theme.colors.border.weak};font-size:12px;`}>
+          <code>{row.region}</code>
+          {row.value}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function WorkerStatus({ frames }: { frames: DataFrame[] }) {
@@ -170,9 +188,9 @@ function WorkerStatus({ frames }: { frames: DataFrame[] }) {
   );
 
   return (
-    <section aria-label="Worker status">
+    <section className={STATUS_SECTION_CLASS} aria-label="Worker status">
       <SectionTitle detail="current capacity and 24 hour history">Workers</SectionTitle>
-      <Card>
+      <Card grow>
         {regions.length === 0 ? (
           <PanelMessage width={400} height={220}>No worker data</PanelMessage>
         ) : (
@@ -185,16 +203,11 @@ function WorkerStatus({ frames }: { frames: DataFrame[] }) {
               <span><strong>{formatBytes(totals.memory)}</strong> memory</span>
               <span><strong>{totals.chips}</strong> TPU chips</span>
             </div>
-            <div className={css`display:grid;grid-template-columns:minmax(220px,.8fr) minmax(360px,1.8fr);gap:22px;@media(max-width:900px){grid-template-columns:1fr;}`}>
-              <div>
-                <div className={css`font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:${theme.colors.text.secondary};margin-bottom:5px;`}>Availability by region</div>
-                {regions.map((region) => (
-                  <div key={region.region} className={css`display:grid;grid-template-columns:1fr auto;gap:12px;padding:6px 0;border-top:1px solid ${theme.colors.border.weak};font-size:12px;`}>
-                    <code>{region.region}</code>
-                    <strong>{region.healthy}</strong>
-                  </div>
-                ))}
-              </div>
+            <div className={STATUS_GRID_CLASS}>
+              <RegionList
+                title="Availability by region"
+                rows={regions.map((region) => ({ region: region.region, value: <strong>{region.healthy}</strong> }))}
+              />
               <MiniSeriesChart points={history} unit="count" />
             </div>
           </>
@@ -208,48 +221,21 @@ function Outcome({ label, value, color }: { label: string; value: number; color:
   return <span><strong className={css`font-family:monospace;color:${color};`}>{value}</strong> <span>{label}</span></span>;
 }
 
-function PoolTable({ pools }: { pools: ProvisioningRow[] }) {
-  const theme = useTheme2();
-  if (pools.length === 0) {
-    return null;
-  }
-  return (
-    <div className={css`overflow:auto;margin-top:12px;`}>
-      <table className={css`width:100%;border-collapse:collapse;font-size:11px;min-width:760px;`}>
-        <thead>
-          <tr className={css`text-align:left;text-transform:uppercase;letter-spacing:.06em;color:${theme.colors.text.secondary};`}>
-            <th>Pool</th><th>Attempts</th><th>Ready</th><th>Stockout</th><th>Error</th><th>Preempted</th><th>Success</th><th>p50</th>
-          </tr>
-        </thead>
-        <tbody>
-          {pools.map((pool) => (
-            <tr key={`${pool.resourceType}/${pool.scaleGroup}/${pool.zone}`} className={css`border-top:1px solid ${theme.colors.border.weak};`}>
-              <td className={css`padding:7px 12px 7px 0;`}><code>{pool.resourceType}</code> <span className={css`color:${theme.colors.text.secondary};`}>· {pool.scaleGroup} · {pool.zone}</span></td>
-              <td>{pool.outcomes}</td><td className={css`color:${theme.colors.success.text};`}>{pool.ready}</td>
-              <td className={css`color:${theme.colors.warning.text};`}>{pool.stockout}</td>
-              <td className={css`color:${theme.colors.error.text};`}>{pool.error}</td><td>{pool.preempted}</td>
-              <td>{formatPercent(pool.successRatio)}</td><td>{formatLatency(pool.latencyP50Seconds)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
 function ProvisioningStatus({ frames }: { frames: DataFrame[] }) {
   const theme = useTheme2();
   const currentFrame = frameByRefId(frames, REF.provisioning);
   const historyFrame = frameByRefId(frames, REF.provisioningHistory);
   const rows = currentFrame ? provisioningStatus(currentFrame) : [];
   const fleet = rows.find((row) => row.scope === 'fleet');
-  const pools = rows.filter((row) => row.scope === 'pool');
+  const regions = provisioningRegions(rows).sort(
+    (a, b) => b.outcomes - a.outcomes || a.region.localeCompare(b.region)
+  );
   const history = historyFrame ? seriesPoints(historyFrame, 'region', 'success_ratio') : [];
 
   return (
-    <section aria-label="Provisioning status">
+    <section className={STATUS_SECTION_CLASS} aria-label="Provisioning status">
       <SectionTitle detail={fleet?.windowHours === undefined ? undefined : `trailing ${fleet.windowHours} hour window`}>Provisioning</SectionTitle>
-      <Card>
+      <Card grow>
         {!fleet ? (
           <PanelMessage width={400} height={220}>No provisioning data</PanelMessage>
         ) : (
@@ -272,8 +258,27 @@ function ProvisioningStatus({ frames }: { frames: DataFrame[] }) {
                 <br />collected {relativeTime(fleet.collectedAt)}
               </div>
             </div>
-            <MiniSeriesChart points={history} unit="percent" />
-            <PoolTable pools={pools} />
+            <div className={STATUS_GRID_CLASS}>
+              {regions.length === 0 ? (
+                <PanelMessage width={220} height={160}>No region data</PanelMessage>
+              ) : (
+                <RegionList
+                  title="Create success by region"
+                  rows={regions.map((region) => ({
+                    region: region.region,
+                    value: (
+                      <span>
+                        <strong>{formatPercent(region.successRatio)}</strong>
+                        <span className={css`margin-left:6px;color:${theme.colors.text.secondary};font-size:10px;`}>
+                          {region.ready}/{region.outcomes}
+                        </span>
+                      </span>
+                    ),
+                  }))}
+                />
+              )}
+              <MiniSeriesChart points={history} unit="percent" />
+            </div>
           </>
         )}
       </Card>
@@ -305,7 +310,7 @@ export function StatusPage({ frames, width, height }: Props) {
           <SectionTitle>GitHub status</SectionTitle>
           <Card><CommitStrip frames={one(frames, REF.builds)} width={contentWidth - 30} height={68} /></Card>
         </section>
-        <div className={css`display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:24px;align-items:start;@media(max-width:1100px){grid-template-columns:1fr;}`}>
+        <div className={css`display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:24px;align-items:stretch;@media(max-width:1100px){grid-template-columns:1fr;}`}>
           <WorkerStatus frames={frames} />
           <ProvisioningStatus frames={frames} />
         </div>

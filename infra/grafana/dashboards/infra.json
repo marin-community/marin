@@ -317,16 +317,6 @@
               "type": "timestamp_epoch"
             },
             {
-              "selector": "resource_type",
-              "text": "resource_type",
-              "type": "string"
-            },
-            {
-              "selector": "scale_group",
-              "text": "scale_group",
-              "type": "string"
-            },
-            {
               "selector": "zone",
               "text": "zone",
               "type": "string"
