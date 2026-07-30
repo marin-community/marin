@@ -38,7 +38,7 @@ from pathlib import Path
 
 from joint_decode.config import JointDecodeSamplingConfig
 from joint_decode.selection import select_avg_logits
-from joint_decode.tpu.config import JointDecodeConfig, JointDecodeModelConfig
+from joint_decode.tpu.config import JointDecodeConfig, JointDecodeModelConfig, TpuPlacement
 from joint_decode.tpu.decoder import joint_decoder
 
 from experiments.downstream_scaling.evals.framework.schema import prompts_file, read_prompt_rows
@@ -106,7 +106,7 @@ def generate(args: argparse.Namespace, rows: list[dict], chunks_dir: Path) -> No
     def model_config(path: str, chip: int, rpa_patch: bool) -> JointDecodeModelConfig:
         return JointDecodeModelConfig(
             model_path=path,
-            chip_index=chip,
+            placement=TpuPlacement((chip,), (1, 1, 1), 1),
             max_model_len=args.max_model_len,
             gpu_memory_utilization=None,
             enable_prefix_caching=False,

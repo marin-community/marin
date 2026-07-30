@@ -7,6 +7,7 @@ open-ended. The framework fixes the artifact contract and the top-level graph:
 task -> prompts.jsonl.gz
 model + prompts.jsonl.gz + completion algorithm -> completions.jsonl.gz
 task + prompts.jsonl.gz + completions.jsonl.gz -> grades.jsonl.gz
+statistic + prompts.jsonl.gz + completion-algorithm output -> statistics.jsonl.gz
 ```
 
 Completion algorithms own their internal execution topology. They may run one
@@ -20,6 +21,7 @@ framework only requires that the final completion step writes
 - `framework/schema.py`: artifact filenames, row types, and JSONL readers.
 - `tasks/`: task implementations that write prompts and grades.
 - `algorithms/`: completion-generation implementations.
+- `statistics/`: per-completion measurements over completion-algorithm outputs.
 
 ## Top-Level API
 
@@ -100,11 +102,34 @@ Rules:
   `ExecutorStep` configs. `InputName` and `MirroredValue` inputs pass through
   unchanged.
 
+## Statistic Contract
+
+A statistic is an already-configured object with this shape:
+
+```python
+class Statistic(Protocol):
+    def make_statistic_step(
+        self,
+        *,
+        name: str,
+        prompts_path: str | InputName | MirroredValue,
+        alg_output_path: str | InputName | MirroredValue,
+    ) -> ExecutorStep:
+        """Return a step whose output directory contains statistics.jsonl.gz."""
+```
+
+`alg_output_path` is the completion algorithm's output directory. A statistic
+may read `completions.jsonl.gz` or an algorithm-specific artifact in that
+directory. Model and execution configuration, when needed, belong on the
+configured statistic. A statistic may construct an internal executor subgraph.
+Its returned step writes `statistics.jsonl.gz`.
+
 ## Artifact Formats
 
 All artifacts are gzip-compressed JSONL files. `id` is the stable join key
-across prompts, completions, and grades. Readers in `framework/schema.py`
-validate row shape and reject duplicate ids.
+across prompts, completions, grades, and statistics. Readers in
+`framework/schema.py` and `statistics/schema.py` validate row shape and reject
+duplicate ids.
 
 ### `prompts.jsonl.gz`
 
@@ -205,6 +230,33 @@ Optional metadata:
 `grades[i]` corresponds to `completions[i]`. Task-specific grading details
 belong in grade metadata. Tasks may write additional summary artifacts in their
 grade output directory, but the framework only requires `grades.jsonl.gz`.
+
+### `statistics.jsonl.gz`
+
+Required shape:
+
+```json
+{
+  "id": "gsm8k/test/42",
+  "values": [
+    {
+      "entropy": [1.2, 0.8]
+    }
+  ]
+}
+```
+
+`values[i]` corresponds to completion index `i`. The value payload is defined by
+the statistic. Optional row-level `metadata` records statistic configuration
+such as model, side, and top-k width.
+
+`statistics/topk_logprobs.py` scores a recorded cross-tokenizer token path and
+stores top-k token ids and logprobs for every forced token, grouped by decision
+step. `statistics/entropy.py` exposes two equivalent entropy statistics:
+`TokenPathEntropy` reduces each decision boundary in the TPU worker, while
+`ChainedTokenPathEntropy` materializes the top-k statistic and reduces it in a
+CPU step. Both consume `token_paths.jsonl.gz` from the completion algorithm
+output and emit `{"entropy": [float, ...]}` per completion.
 
 ## Versioning
 

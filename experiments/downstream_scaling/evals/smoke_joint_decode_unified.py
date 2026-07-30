@@ -37,7 +37,7 @@ from typing import Any
 from joint_decode.config import JointDecodeSamplingConfig
 from joint_decode.coordinator import SelectTokens
 from joint_decode.selection import select_top_rank
-from joint_decode.tpu.config import JointDecodeConfig, JointDecodeModelConfig
+from joint_decode.tpu.config import JointDecodeConfig, JointDecodeModelConfig, TpuPlacement
 from joint_decode.tpu.decoder import run_joint_decode
 
 logger = logging.getLogger(__name__)
@@ -100,7 +100,7 @@ def main() -> None:
     def model_config(model_path: str, chip: int) -> JointDecodeModelConfig:
         return JointDecodeModelConfig(
             model_path=model_path,
-            chip_index=chip,
+            placement=TpuPlacement((chip,), (1, 1, 1), 1),
             max_model_len=args.max_model_len,
             gpu_memory_utilization=None,
             enable_prefix_caching=False,
@@ -134,9 +134,9 @@ def main() -> None:
     if args.max_tokens_b < args.max_tokens_a:
         # Side B finishes by length first; the coordinator must force-stop
         # side A's rows, so A can never exhaust its own (larger) budget.
-        assert not any(
-            output.finish_reason == "length" for output in outputs
-        ), "side A finished by length; force-stop never fired"
+        assert not any(output.finish_reason == "length" for output in outputs), (
+            "side A finished by length; force-stop never fired"
+        )
     logger.info("joint-decode unified TPU smoke passed: %d completions", len(outputs))
 
 

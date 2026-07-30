@@ -54,7 +54,7 @@ from experiments.downstream_scaling.evals.framework.schema import (
 )
 from experiments.downstream_scaling.evals.framework.xregion import ledger
 from experiments.downstream_scaling.evals.framework.xregion import pool as xregion_pool
-from experiments.downstream_scaling.evals.framework.xregion.pool import WorkerPoolConfig
+from experiments.downstream_scaling.evals.framework.xregion.pool import EnginePlacement, WorkerPoolConfig
 from experiments.downstream_scaling.evals.utils import version_path
 
 logger = logging.getLogger(__name__)
@@ -326,8 +326,8 @@ def _run_joint_decode_local_worker(config: JointDecodeLocalWorkerConfig) -> None
             advisor_weight=config.sampling.advisor_weight,
             temperature=config.sampling.temperature,
         ),
-        chip_a=config.chip_pair[0],
-        chip_b=config.chip_pair[1],
+        decoder_placement=EnginePlacement((config.chip_pair[0],), (1, 1, 1), 1),
+        advisor_placement=EnginePlacement((config.chip_pair[1],), (1, 1, 1), 1),
         max_microbatch_size=config.microbatch_size,
         max_num_batched_tokens=max_num_batched_tokens,
         barrier_timeout_s=config.barrier_timeout_s,

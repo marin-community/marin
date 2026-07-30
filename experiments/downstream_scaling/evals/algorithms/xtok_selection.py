@@ -5,7 +5,7 @@
 
 Two models with different tokenizers share no id space, so candidates are
 compared as byte strings: ``load_vocab`` maps each vocab id to the exact
-bytes it emits, each decision round scores byte-keyed candidates (the two
+bytes it emits, each decision round scores byte-keyed candidates (the
 selectors below), and the committed chunk is forced per side as that side's
 own token segmentation — the exact candidate id when one matches, greedy
 longest-match segmentation otherwise. The joint-decode package's
@@ -26,6 +26,7 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 
@@ -255,6 +256,33 @@ def avg_bytes_union_scores(a: dict[Key, Candidate], b: dict[Key, Candidate], adv
     }
 
 
+def kl_bytes_union(a: dict[Key, Candidate], b: dict[Key, Candidate]) -> float:
+    """KL(P_a || P_b) over the byte-keyed union of the two top-k sets.
+
+    Missing keys take the side's minimum top-k logit as a floor (the
+    ``avg_bytes_union_scores`` convention); each side is softmaxed over the
+    union at temperature 1. A truncated-support approximation of the true
+    next-token KL: only the two top-k sets are observable. Clamped at 0
+    (float error can make the sum tiny-negative); inf if a b-side entry
+    underflows to zero mass against nonzero p — divergence beyond float
+    range, reported as inf rather than raising on log(0), for the caller's
+    gate to resolve against its threshold like any other value.
+    """
+    union = set(a) | set(b)
+    a_floor = min(candidate.logit for candidate in a.values())
+    b_floor = min(candidate.logit for candidate in b.values())
+    p = _softmax({key: a[key].logit if key in a else a_floor for key in union})
+    q = _softmax({key: b[key].logit if key in b else b_floor for key in union})
+    kl = 0.0
+    for key in union:
+        if p[key] == 0.0:
+            continue
+        if q[key] == 0.0:
+            return math.inf
+        kl += p[key] * (math.log(p[key]) - math.log(q[key]))
+    return max(kl, 0.0)
+
+
 def select_avg_bytes_union(
     a_topk: list[dict[str, Any]],
     b_topk: list[dict[str, Any]],
@@ -305,3 +333,87 @@ def select_avg_anchored(
         scores.append(w_a * a[key].logit + w_b * (math.log(mass) if mass > 0.0 else b_floor))
     key = _temperature_sample(keys, scores, temperature, rng)
     return [a[key].token_id], force(vocab_b, key, b)
+
+
+class GateDirection(StrEnum):
+    """Which side of the threshold hands the round to the advisor."""
+
+    ADVISOR_BELOW = "advisor_below"
+    ADVISOR_AT_OR_ABOVE = "advisor_at_or_above"
+
+
+def _advisor_wins(signal: float, threshold: float, gate: GateDirection) -> bool:
+    if gate is GateDirection.ADVISOR_BELOW:
+        return signal < threshold
+    if gate is GateDirection.ADVISOR_AT_OR_ABOVE:
+        return signal >= threshold
+    # Exhaustive by design: a raw string that survived a config round trip
+    # compares equal to a member but is not `is`-identical to one, so it lands
+    # here on the first decision round instead of silently running the other
+    # direction for a whole sweep.
+    raise ValueError(f"unknown gate direction {gate!r}")
+
+
+def select_kl_gate(
+    a_topk: list[dict[str, Any]],
+    b_topk: list[dict[str, Any]],
+    *,
+    kl_threshold: float,
+    gate: GateDirection,
+    temperature: float,
+    rng: random.Random,
+    vocab_a: Vocab,
+    vocab_b: Vocab,
+) -> tuple[list[int], list[int], float]:
+    """Gate on model disagreement: ``kl_bytes_union`` (KL(P_A || P_B), computed
+    at temperature 1) decides which side's own top-k the round's winner is
+    temperature-sampled from — each side's own candidates only, not the
+    floor-filled union. Under ``ADVISOR_AT_OR_ABOVE`` B takes the round when
+    ``kl >= kl_threshold``; under ``ADVISOR_BELOW`` when ``kl < kl_threshold``.
+    The winner is forced on both sides as usual. Returns ``(tokens_a, tokens_b,
+    kl)``; the kl is for the caller's token-path sidecar, and recovering which
+    side was sampled needs both it and the run's gate direction."""
+    a = candidates(vocab_a, a_topk)
+    b = candidates(vocab_b, b_topk)
+    kl = kl_bytes_union(a, b)
+    source = b if _advisor_wins(kl, kl_threshold, gate) else a
+    key = _temperature_sample(list(source), [candidate.logit for candidate in source.values()], temperature, rng)
+    return force(vocab_a, key, a), force(vocab_b, key, b), kl
+
+
+def topk_entropy(cands: dict[Key, Candidate]) -> float:
+    """Shannon entropy in nats of the temperature-1 softmax over one side's
+    top-k logits. Truncated support: bounded by log(len(cands)). Clamped at
+    0 (a single-candidate top-k can float-round to -0.0)."""
+    probs = _softmax({key: candidate.logit for key, candidate in cands.items()})
+    return max(-sum(prob * math.log(prob) for prob in probs.values() if prob > 0.0), 0.0)
+
+
+def select_entropy_gate(
+    a_topk: list[dict[str, Any]],
+    b_topk: list[dict[str, Any]],
+    *,
+    entropy_threshold: float,
+    gate: GateDirection,
+    temperature: float,
+    rng: random.Random,
+    vocab_a: Vocab,
+    vocab_b: Vocab,
+) -> tuple[list[int], list[int], float]:
+    """Gate on the advisor's entropy: ``topk_entropy`` of B's top-k decides
+    which side's own top-k the round's winner is temperature-sampled from —
+    each side's own candidates only, not a union. The same gate shape as
+    ``select_kl_gate`` with B's entropy as the signal. Under
+    ``ADVISOR_AT_OR_ABOVE`` B takes the round when ``entropy >=
+    entropy_threshold``, so threshold 0 is pure advisor and anything above
+    log(top_k_b) pure decoder; ``ADVISOR_BELOW`` inverts the comparison and
+    swaps those two anchors. The winner is forced on both sides as usual.
+    Returns ``(tokens_a, tokens_b, entropy)``; the entropy is for the caller's
+    token-path sidecar, and recovering which side was sampled needs both it
+    and the run's gate direction."""
+    a = candidates(vocab_a, a_topk)
+    b = candidates(vocab_b, b_topk)
+    entropy = topk_entropy(b)
+    source = b if _advisor_wins(entropy, entropy_threshold, gate) else a
+    key = _temperature_sample(list(source), [candidate.logit for candidate in source.values()], temperature, rng)
+    return force(vocab_a, key, a), force(vocab_b, key, b), entropy

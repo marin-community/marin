@@ -35,7 +35,11 @@ from experiments.downstream_scaling.evals.framework.schema import (
 )
 from experiments.downstream_scaling.evals.framework.xregion import ledger
 from experiments.downstream_scaling.evals.framework.xregion import pool as xregion_pool
-from experiments.downstream_scaling.evals.framework.xregion.pool import WorkerPoolConfig
+from experiments.downstream_scaling.evals.framework.xregion.pool import (
+    EnginePlacement,
+    WorkerPoolConfig,
+    validate_pool_placements,
+)
 from experiments.downstream_scaling.evals.utils import discover_hf_checkpoints, localize_mirror_path, version_path
 
 logger = logging.getLogger(__name__)
@@ -75,13 +79,21 @@ class IIDModelConfig:
 
 
 @dataclass(frozen=True)
+class IIDPoolConfig:
+    pool: WorkerPoolConfig
+    placements: tuple[EnginePlacement, ...]
+
+    def __post_init__(self) -> None:
+        validate_pool_placements(self.pool, self.placements)
+
+
+@dataclass(frozen=True)
 class IIDExecutionConfig:
-    worker_pools: tuple[WorkerPoolConfig, ...]
+    worker_pools: tuple[IIDPoolConfig, ...]
     ledger_prefix: str = DEFAULT_LEDGER_PREFIX
     chunk_size: int = 512
     heartbeat_timeout: float = DEFAULT_HEARTBEAT_TIMEOUT
     poll_backoff: float = DEFAULT_POLL_BACKOFF
-    tensor_parallel_size: int = 1
     aggregate_workers: int = 32
 
     def __post_init__(self) -> None:
@@ -115,12 +127,11 @@ class IIDCompletionStepConfig:
     seed: int
     sampling_configs: tuple[IIDSamplingConfig, ...]
     model: IIDModelConfig
-    worker_pools: tuple[WorkerPoolConfig, ...]
+    worker_pools: tuple[IIDPoolConfig, ...]
     ledger_prefix: str
     chunk_size: int
     heartbeat_timeout: float
     poll_backoff: float
-    tensor_parallel_size: int
     aggregate_workers: int
 
 
@@ -143,9 +154,8 @@ class IIDLocalEngineWorkerConfig:
     model: IIDModelConfig
     ledger_path: str
     poll_backoff: float
-    tensor_parallel_size: int
     owner: str
-    chip_group: tuple[int, ...]
+    placement: EnginePlacement
 
 
 @dataclass(frozen=True)
@@ -216,9 +226,9 @@ def _reseed_sampler(worker, seed: int) -> None:
     import jax  # noqa: PLC0415
     from flax import nnx  # noqa: PLC0415
 
-    assert hasattr(
-        worker.model_runner, "rng_params_for_sampling"
-    ), "tpu_inference runner missing rng_params_for_sampling; upstream API may have changed"
+    assert hasattr(worker.model_runner, "rng_params_for_sampling"), (
+        "tpu_inference runner missing rng_params_for_sampling; upstream API may have changed"
+    )
     worker.model_runner.rng_params_for_sampling = nnx.Rngs(jax.random.key(seed)).params()
 
 
@@ -256,7 +266,6 @@ def make_iid_completion_step(
             chunk_size=versioned(config.execution.chunk_size),  # type: ignore[arg-type]
             heartbeat_timeout=config.execution.heartbeat_timeout,
             poll_backoff=config.execution.poll_backoff,
-            tensor_parallel_size=config.execution.tensor_parallel_size,
             aggregate_workers=config.execution.aggregate_workers,
         ),
     )
@@ -353,6 +362,15 @@ def _num_prompts(prompts_path: str) -> int:
     return sum(1 for _ in read_prompt_rows(prompts_path))
 
 
+def _engine_placement_from_dict(data: dict[str, Any]) -> EnginePlacement:
+    bounds = data["chips_per_process_bounds"]
+    return EnginePlacement(
+        visible_chips=tuple(data["visible_chips"]),
+        chips_per_process_bounds=(bounds[0], bounds[1], bounds[2]),
+        tensor_parallel_size=data["tensor_parallel_size"],
+    )
+
+
 def _child_config_from_file(path: str) -> IIDLocalEngineWorkerConfig:
     with open(path) as f:
         data = json.load(f)
@@ -375,14 +393,13 @@ def _child_config_from_file(path: str) -> IIDLocalEngineWorkerConfig:
         model=IIDModelConfig(**data["model"]),
         ledger_path=data["ledger_path"],
         poll_backoff=data["poll_backoff"],
-        tensor_parallel_size=data["tensor_parallel_size"],
         owner=data["owner"],
-        chip_group=tuple(data["chip_group"]),
+        placement=_engine_placement_from_dict(data["placement"]),
     )
 
 
 def _run_iid_local_engine_worker(config: IIDLocalEngineWorkerConfig) -> None:
-    expected_visible_chips = ",".join(str(chip) for chip in config.chip_group)
+    expected_visible_chips = ",".join(str(chip) for chip in config.placement.visible_chips)
     actual_visible_chips = os.environ.get("TPU_VISIBLE_CHIPS")
     if actual_visible_chips != expected_visible_chips:
         raise ValueError(f"TPU_VISIBLE_CHIPS={actual_visible_chips!r}, expected {expected_visible_chips!r}")
@@ -408,26 +425,29 @@ def _run_iid_local_engine_worker(config: IIDLocalEngineWorkerConfig) -> None:
                 sampling=config.sampling_configs[chunk.sampling_config_index],
                 n_samples=config.n_samples,
                 seed=config.seed,
-                tensor_parallel_size=config.tensor_parallel_size,
+                tensor_parallel_size=config.placement.tensor_parallel_size,
             )
             ledger.mark_done(claim)
 
 
-def _chip_groups(chips_per_vm: int, tensor_parallel_size: int) -> list[tuple[int, ...]]:
-    if tensor_parallel_size <= 0:
-        raise ValueError(f"tensor_parallel_size must be positive, got {tensor_parallel_size}")
-    if chips_per_vm % tensor_parallel_size != 0:
-        raise ValueError(f"chips_per_vm={chips_per_vm} must be divisible by tensor_parallel_size={tensor_parallel_size}")
-    return [tuple(range(start, start + tensor_parallel_size)) for start in range(0, chips_per_vm, tensor_parallel_size)]
+def iid_tp1_placements(chips_per_vm: int) -> tuple[EnginePlacement, ...]:
+    return tuple(
+        EnginePlacement(
+            visible_chips=(chip,),
+            chips_per_process_bounds=(1, 1, 1),
+            tensor_parallel_size=1,
+        )
+        for chip in range(chips_per_vm)
+    )
 
 
-def _child_owner(pool_id: str, shard_idx: int, chip_group: tuple[int, ...]) -> str:
-    chips = ",".join(str(chip) for chip in chip_group)
+def _child_owner(pool_id: str, shard_idx: int, placement: EnginePlacement) -> str:
+    chips = ",".join(str(chip) for chip in placement.visible_chips)
     return f"{pool_id}/shard-{shard_idx}/chips-{chips}"
 
 
 def _write_child_config(tmpdir: Path, config: IIDLocalEngineWorkerConfig) -> Path:
-    chips = "-".join(str(chip) for chip in config.chip_group)
+    chips = "-".join(str(chip) for chip in config.placement.visible_chips)
     path = tmpdir / f"child_chips_{chips}.json"
     with open(path, "wt") as f:
         json.dump(asdict(config), f, sort_keys=True)
@@ -456,7 +476,7 @@ def _spawn_child(
     ledger_path: str,
     pool_id: str,
     shard_idx: int,
-    chip_group: tuple[int, ...],
+    placement: EnginePlacement,
 ) -> tuple[subprocess.Popen[str], list[threading.Thread]]:
     child_config = IIDLocalEngineWorkerConfig(
         model_path=config.model_path,
@@ -467,17 +487,17 @@ def _spawn_child(
         model=config.model,
         ledger_path=ledger_path,
         poll_backoff=config.poll_backoff,
-        tensor_parallel_size=config.tensor_parallel_size,
-        owner=_child_owner(pool_id, shard_idx, chip_group),
-        chip_group=chip_group,
+        owner=_child_owner(pool_id, shard_idx, placement),
+        placement=placement,
     )
     config_path = _write_child_config(tmpdir, child_config)
-    chip_label = ",".join(str(chip) for chip in chip_group)
+    chip_label = ",".join(str(chip) for chip in placement.visible_chips)
+    bounds_label = ",".join(str(size) for size in placement.chips_per_process_bounds)
 
     env = os.environ.copy()
     env["TPU_VISIBLE_CHIPS"] = chip_label
     env["TPU_PROCESS_BOUNDS"] = "1,1,1"
-    env["TPU_CHIPS_PER_PROCESS_BOUNDS"] = f"{config.tensor_parallel_size},1,1"
+    env["TPU_CHIPS_PER_PROCESS_BOUNDS"] = bounds_label
     env["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
     env["JAX_COMPILATION_CACHE_DIR"] = str(tmpdir / f"jax_cache_{chip_label.replace(',', '_')}")
     env["VLLM_ASSETS_CACHE"] = str(tmpdir / f"vllm_assets_{chip_label.replace(',', '_')}")
@@ -560,20 +580,16 @@ def _supervise_iid_worker(
     config: IIDCompletionStepConfig,
     ledger_path: str,
     pool: WorkerPoolConfig,
+    placements: tuple[EnginePlacement, ...],
 ) -> Iterator[dict[str, object]]:
     if os.environ.get("TPU_VISIBLE_CHIPS") is not None:
         raise ValueError("IID per-chip supervisor expects to own the full TPU VM; TPU_VISIBLE_CHIPS is already set")
-    if pool.vm_count != 1:
-        raise ValueError(f"IID per-chip workers support only single-VM TPU pools, got vm_count={pool.vm_count}")
-
-    groups = _chip_groups(pool.chips_per_vm, config.tensor_parallel_size)
     logger.info(
-        "Starting IID per-chip supervisor pool=%s shard=%d chips_per_vm=%d tensor_parallel_size=%d groups=%s",
+        "Starting IID per-chip supervisor pool=%s shard=%d chips_per_vm=%d placements=%s",
         pool.pool_id,
         shard_info.shard_idx,
         pool.chips_per_vm,
-        config.tensor_parallel_size,
-        groups,
+        placements,
     )
 
     with tempfile.TemporaryDirectory(prefix="iid_xregion_local_workers_") as tmp:
@@ -581,14 +597,14 @@ def _supervise_iid_worker(
         procs: list[subprocess.Popen[str]] = []
         threads: list[threading.Thread] = []
         try:
-            for group in groups:
+            for placement in placements:
                 proc, proc_threads = _spawn_child(
                     tmpdir=tmpdir,
                     config=config,
                     ledger_path=ledger_path,
                     pool_id=pool.pool_id,
                     shard_idx=shard_info.shard_idx,
-                    chip_group=group,
+                    placement=placement,
                 )
                 procs.append(proc)
                 threads.extend(proc_threads)
@@ -618,16 +634,20 @@ def run_iid_completion_chunks(config: IIDCompletionStepConfig) -> None:
     )
     ledger.ensure_manifest(ledger_path, chunks)
 
+    pool_configs = {pool_config.pool.pool_id: pool_config for pool_config in config.worker_pools}
+
     def make_process_shard(pool: WorkerPoolConfig):
+        pool_config = pool_configs[pool.pool_id]
         return functools.partial(
             _supervise_iid_worker,
             config=config,
             ledger_path=ledger_path,
             pool=pool,
+            placements=pool_config.placements,
         )
 
     xregion_pool.run_worker_pools(
-        worker_pools=config.worker_pools,
+        worker_pools=tuple(pool_config.pool for pool_config in config.worker_pools),
         ledger_path=ledger_path,
         make_process_shard=make_process_shard,
         poll_backoff=config.poll_backoff,

@@ -32,8 +32,11 @@ from experiments.downstream_scaling.evals.algorithms.joint_decode_avg_xtok impor
     JointDecodeConfig,
     JointDecodeExecutionConfig,
     JointDecodeModelConfig,
+    JointDecodePlacement,
+    JointDecodePoolConfig,
     JointDecodeSamplingConfig,
     XtokSelectionRule,
+    joint_decode_pool_configs,
 )
 from experiments.downstream_scaling.evals.framework.core import make_eval_step
 from experiments.downstream_scaling.evals.framework.xregion.pool import WorkerPoolConfig
@@ -57,6 +60,7 @@ CHUNK_SIZE = 64
 #   v6e-4        europe-west4-a, us-east1-d, us-east5-b
 #   v6e-8        europe-west4-a, us-east1-d, us-east5-b
 TPU_TYPES: tuple[str, ...] = ("v4-8", "v5p-8", "v5litepod-4", "v5litepod-8", "v6e-4", "v6e-8")
+PLACEMENT_OVERRIDES: dict[tuple[str, str], tuple[JointDecodePlacement, ...]] = {}
 
 # Generous enough to absorb the first-step XLA compilation skew between the
 # two engines for the largest delphi sizes (60s was too short for 1e22).
@@ -120,7 +124,7 @@ def make_task() -> GSM8KTask:
 
 def make_algorithm(
     *,
-    worker_pools: tuple[WorkerPoolConfig, ...],
+    worker_pools: tuple[JointDecodePoolConfig, ...],
     microbatch_size: int | None,
     advisor_model_path,
 ) -> JointDecodeCompletionAlgorithm:
@@ -168,7 +172,7 @@ def build_run_steps(worker_pools: tuple[WorkerPoolConfig, ...]) -> list[Executor
             model_path=output_path_of(DELPHI_HF_DOWNLOADS[slug]),
             task=make_task(),
             alg=make_algorithm(
-                worker_pools=worker_pools,
+                worker_pools=joint_decode_pool_configs(slug, worker_pools, PLACEMENT_OVERRIDES),
                 microbatch_size=MICROBATCH_SIZE_BY_DELPHI_KEY.get(slug),
                 advisor_model_path=advisor_model_path,
             ),

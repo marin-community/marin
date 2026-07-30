@@ -53,7 +53,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -75,7 +75,11 @@ from experiments.downstream_scaling.evals.framework.schema import (
 )
 from experiments.downstream_scaling.evals.framework.xregion import ledger
 from experiments.downstream_scaling.evals.framework.xregion import pool as xregion_pool
-from experiments.downstream_scaling.evals.framework.xregion.pool import WorkerPoolConfig
+from experiments.downstream_scaling.evals.framework.xregion.pool import (
+    EnginePlacement,
+    WorkerPoolConfig,
+    validate_pool_placements,
+)
 from experiments.downstream_scaling.evals.utils import discover_hf_checkpoints, version_path
 
 logger = logging.getLogger(__name__)
@@ -155,8 +159,24 @@ class JointDecodeModelConfig:
 
 
 @dataclass(frozen=True)
+class JointDecodePlacement:
+    decoder: EnginePlacement
+    advisor: EnginePlacement
+
+
+@dataclass(frozen=True)
+class JointDecodePoolConfig:
+    pool: WorkerPoolConfig
+    placements: tuple[JointDecodePlacement, ...]
+
+    def __post_init__(self) -> None:
+        engines = tuple(engine for placement in self.placements for engine in (placement.decoder, placement.advisor))
+        validate_pool_placements(self.pool, engines)
+
+
+@dataclass(frozen=True)
 class JointDecodeExecutionConfig:
-    worker_pools: tuple[WorkerPoolConfig, ...]
+    worker_pools: tuple[JointDecodePoolConfig, ...]
     ledger_prefix: str = DEFAULT_LEDGER_PREFIX
     chunk_size: int = 512
     # Cap on in-flight requests per engine pair. Under the package backend
@@ -197,7 +217,7 @@ class JointDecodeCompletionStepConfig:
     sampling: JointDecodeSamplingConfig
     decoder_model: JointDecodeModelConfig
     advisor_model: JointDecodeModelConfig
-    worker_pools: tuple[WorkerPoolConfig, ...]
+    worker_pools: tuple[JointDecodePoolConfig, ...]
     ledger_prefix: str
     chunk_size: int
     microbatch_size: int
@@ -238,7 +258,7 @@ class JointDecodeLocalWorkerConfig:
     microbatch_size: int
     barrier_timeout_s: float
     owner: str
-    chip_pair: tuple[int, int]
+    placement: JointDecodePlacement
     max_num_batched_tokens: int | None = None
 
 
@@ -424,12 +444,22 @@ def _num_prompts(prompts_path: str) -> int:
     return sum(1 for _ in read_prompt_rows(prompts_path))
 
 
+def _engine_placement_from_dict(data: dict[str, Any]) -> EnginePlacement:
+    bounds = data["chips_per_process_bounds"]
+    return EnginePlacement(
+        visible_chips=tuple(data["visible_chips"]),
+        chips_per_process_bounds=(bounds[0], bounds[1], bounds[2]),
+        tensor_parallel_size=data["tensor_parallel_size"],
+    )
+
+
 def _child_config_from_file(path: str) -> JointDecodeLocalWorkerConfig:
     with open(path) as f:
         data = json.load(f)
     sampling_data = dict(data["sampling"])
     sampling_data["selection_rule"] = XtokSelectionRule(sampling_data["selection_rule"])
     sampling_data["advisor_weights"] = tuple(sampling_data["advisor_weights"])
+    placement_data = data["placement"]
     return JointDecodeLocalWorkerConfig(
         decoder_model_path=data["decoder_model_path"],
         advisor_model_path=data["advisor_model_path"],
@@ -442,7 +472,10 @@ def _child_config_from_file(path: str) -> JointDecodeLocalWorkerConfig:
         microbatch_size=data["microbatch_size"],
         barrier_timeout_s=data["barrier_timeout_s"],
         owner=data["owner"],
-        chip_pair=tuple(data["chip_pair"]),
+        placement=JointDecodePlacement(
+            decoder=_engine_placement_from_dict(placement_data["decoder"]),
+            advisor=_engine_placement_from_dict(placement_data["advisor"]),
+        ),
         max_num_batched_tokens=data["max_num_batched_tokens"],
     )
 
@@ -500,7 +533,8 @@ def _run_joint_decode_local_worker(config: JointDecodeLocalWorkerConfig) -> None
     # module must stay importable for step construction everywhere.
     from experiments.downstream_scaling.evals.algorithms import joint_decode_backend  # noqa: PLC0415
 
-    expected_visible_chips = ",".join(str(chip) for chip in config.chip_pair)
+    visible_chips = config.placement.decoder.visible_chips + config.placement.advisor.visible_chips
+    expected_visible_chips = ",".join(str(chip) for chip in visible_chips)
     actual_visible_chips = os.environ.get("TPU_VISIBLE_CHIPS")
     if actual_visible_chips != expected_visible_chips:
         raise ValueError(f"TPU_VISIBLE_CHIPS={actual_visible_chips!r}, expected {expected_visible_chips!r}")
@@ -537,8 +571,8 @@ def _run_joint_decode_local_worker(config: JointDecodeLocalWorkerConfig) -> None
         seed=config.sampling.seed,
         stop=tuple(config.sampling.stop or ()),
         select_token=_make_select_token(config.sampling, vocab_a, vocab_b, state),
-        chip_a=config.chip_pair[0],
-        chip_b=config.chip_pair[1],
+        decoder_placement=config.placement.decoder,
+        advisor_placement=config.placement.advisor,
         max_microbatch_size=config.microbatch_size,
         max_num_batched_tokens=max_num_batched_tokens,
         barrier_timeout_s=config.barrier_timeout_s,
@@ -566,18 +600,43 @@ def _run_joint_decode_local_worker(config: JointDecodeLocalWorkerConfig) -> None
                 ledger.mark_done(claim)
 
 
-def _chip_pairs(chips_per_vm: int) -> list[tuple[int, int]]:
+def joint_decode_tp1_placements(chips_per_vm: int) -> tuple[JointDecodePlacement, ...]:
     if chips_per_vm % 2 != 0:
         raise ValueError(f"joint decode needs an even number of chips per VM, got {chips_per_vm}")
-    return [(start, start + 1) for start in range(0, chips_per_vm, 2)]
+    return tuple(
+        JointDecodePlacement(
+            decoder=EnginePlacement((chip,), (1, 1, 1), 1),
+            advisor=EnginePlacement((chip + 1,), (1, 1, 1), 1),
+        )
+        for chip in range(0, chips_per_vm, 2)
+    )
 
 
-def _child_owner(pool_id: str, shard_idx: int, chip_pair: tuple[int, int]) -> str:
-    return f"{pool_id}/shard-{shard_idx}/chips-{chip_pair[0]},{chip_pair[1]}"
+def joint_decode_pool_configs(
+    model_key: str,
+    worker_pools: tuple[WorkerPoolConfig, ...],
+    overrides: Mapping[tuple[str, str], tuple[JointDecodePlacement, ...]],
+) -> tuple[JointDecodePoolConfig, ...]:
+    configs = []
+    for pool in worker_pools:
+        placements = overrides.get((model_key, pool.pool_id))
+        if placements is None:
+            placements = joint_decode_tp1_placements(pool.chips_per_vm)
+        configs.append(JointDecodePoolConfig(pool=pool, placements=placements))
+    return tuple(configs)
+
+
+def _placement_chips(placement: JointDecodePlacement) -> tuple[int, ...]:
+    return placement.decoder.visible_chips + placement.advisor.visible_chips
+
+
+def _child_owner(pool_id: str, shard_idx: int, placement: JointDecodePlacement) -> str:
+    chips = ",".join(str(chip) for chip in _placement_chips(placement))
+    return f"{pool_id}/shard-{shard_idx}/chips-{chips}"
 
 
 def _write_child_config(tmpdir: Path, config: JointDecodeLocalWorkerConfig) -> Path:
-    chips = "-".join(str(chip) for chip in config.chip_pair)
+    chips = "-".join(str(chip) for chip in _placement_chips(config.placement))
     path = tmpdir / f"child_chips_{chips}.json"
     with open(path, "wt") as f:
         json.dump(asdict(config), f, sort_keys=True)
@@ -606,7 +665,7 @@ def _spawn_child(
     ledger_path: str,
     pool_id: str,
     shard_idx: int,
-    chip_pair: tuple[int, int],
+    placement: JointDecodePlacement,
 ) -> tuple[subprocess.Popen[str], list[threading.Thread]]:
     child_config = JointDecodeLocalWorkerConfig(
         decoder_model_path=config.decoder_model_path,
@@ -619,12 +678,12 @@ def _spawn_child(
         poll_backoff=config.poll_backoff,
         microbatch_size=config.microbatch_size,
         barrier_timeout_s=config.barrier_timeout_s,
-        owner=_child_owner(pool_id, shard_idx, chip_pair),
-        chip_pair=chip_pair,
+        owner=_child_owner(pool_id, shard_idx, placement),
+        placement=placement,
         max_num_batched_tokens=config.max_num_batched_tokens,
     )
     config_path = _write_child_config(tmpdir, child_config)
-    chip_label = ",".join(str(chip) for chip in chip_pair)
+    chip_label = ",".join(str(chip) for chip in _placement_chips(placement))
 
     # The child only partitions chips (a validated invariant of the pair
     # harness); JAX/vLLM process env is owned per engine worker by the
@@ -717,21 +776,19 @@ def _supervise_joint_decode_worker(
     config: JointDecodeCompletionStepConfig,
     ledger_path: str,
     pool: WorkerPoolConfig,
+    placements: tuple[JointDecodePlacement, ...],
 ) -> Iterator[dict[str, object]]:
-    if pool.vm_count != 1:
-        raise ValueError(f"joint decode avg xtok supports only single-VM TPU pools, got vm_count={pool.vm_count}")
     if os.environ.get("TPU_VISIBLE_CHIPS") is not None:
         raise ValueError(
             "joint decode avg xtok supervisor expects to own the full TPU VM; TPU_VISIBLE_CHIPS is already set"
         )
 
-    chip_pairs = _chip_pairs(pool.chips_per_vm)
     logger.info(
-        "Starting joint-decode-avg-xtok supervisor pool=%s shard=%d chips_per_vm=%d chip_pairs=%s",
+        "Starting joint-decode-avg-xtok supervisor pool=%s shard=%d chips_per_vm=%d placements=%s",
         pool.pool_id,
         shard_info.shard_idx,
         pool.chips_per_vm,
-        chip_pairs,
+        placements,
     )
 
     with tempfile.TemporaryDirectory(prefix="joint_decode_avg_xtok_local_workers_") as tmp:
@@ -739,14 +796,14 @@ def _supervise_joint_decode_worker(
         procs: list[subprocess.Popen[str]] = []
         threads: list[threading.Thread] = []
         try:
-            for chip_pair in chip_pairs:
+            for placement in placements:
                 proc, proc_threads = _spawn_child(
                     tmpdir=tmpdir,
                     config=config,
                     ledger_path=ledger_path,
                     pool_id=pool.pool_id,
                     shard_idx=shard_info.shard_idx,
-                    chip_pair=chip_pair,
+                    placement=placement,
                 )
                 procs.append(proc)
                 threads.extend(proc_threads)
@@ -776,16 +833,20 @@ def run_joint_decode_completion_chunks(config: JointDecodeCompletionStepConfig) 
     )
     ledger.ensure_manifest(ledger_path, chunks)
 
+    pool_configs = {pool_config.pool.pool_id: pool_config for pool_config in config.worker_pools}
+
     def make_process_shard(pool: WorkerPoolConfig):
+        pool_config = pool_configs[pool.pool_id]
         return functools.partial(
             _supervise_joint_decode_worker,
             config=config,
             ledger_path=ledger_path,
             pool=pool,
+            placements=pool_config.placements,
         )
 
     xregion_pool.run_worker_pools(
-        worker_pools=config.worker_pools,
+        worker_pools=tuple(pool_config.pool for pool_config in config.worker_pools),
         ledger_path=ledger_path,
         make_process_shard=make_process_shard,
         poll_backoff=config.poll_backoff,

@@ -32,12 +32,15 @@ from experiments.downstream_scaling.evals.algorithms.joint_decode_avg_xtok impor
     JointDecodeConfig,
     JointDecodeExecutionConfig,
     JointDecodeModelConfig,
+    JointDecodePlacement,
+    JointDecodePoolConfig,
     JointDecodeSamplingConfig,
     XtokSelectionRule,
+    joint_decode_pool_configs,
 )
 from experiments.downstream_scaling.evals.framework.core import make_eval_step
 from experiments.downstream_scaling.evals.framework.schema import COMPLETIONS_FILENAME, read_completion_rows
-from experiments.downstream_scaling.evals.framework.xregion.pool import WorkerPoolConfig
+from experiments.downstream_scaling.evals.framework.xregion.pool import EnginePlacement, WorkerPoolConfig
 from experiments.downstream_scaling.evals.tasks.gsm8k import GSM8KTask, GSM8KTaskConfig
 from experiments.downstream_scaling.evals.utils import version_path
 from experiments.downstream_scaling.models.delphi import DELPHI_HF_DOWNLOADS
@@ -52,6 +55,14 @@ WORKERS_PER_TPU_TYPE = 2
 AGGREGATE_WORKERS = 32
 CHUNK_SIZE = 16
 TPU_TYPES: tuple[str, ...] = ("v4-8", "v5p-8", "v6e-4", "v5litepod-4", "v6e-8", "v5litepod-8")
+PLACEMENT_OVERRIDES: dict[tuple[str, str], tuple[JointDecodePlacement, ...]] = {
+    ("1e23", "v6e-8"): (
+        JointDecodePlacement(
+            decoder=EnginePlacement((0, 1, 2, 3), (2, 2, 1), 2),
+            advisor=EnginePlacement((4,), (1, 1, 1), 1),
+        ),
+    ),
+}
 
 BARRIER_TIMEOUT_S = 1200.0
 HEARTBEAT_TIMEOUT = 120.0
@@ -112,7 +123,7 @@ def make_task(n_problems: int) -> GSM8KTask:
 def make_algorithm(
     *,
     selection_rule: XtokSelectionRule,
-    worker_pools: tuple[WorkerPoolConfig, ...],
+    worker_pools: tuple[JointDecodePoolConfig, ...],
     chunk_size: int,
     n_samples: int,
     heartbeat_timeout: float,
@@ -276,6 +287,7 @@ def build_run_steps(
     pool_slug = "_".join(pool.pool_id for pool in worker_pools)
     model_path = output_path_of(DELPHI_HF_DOWNLOADS[model_key])
     advisor_model_path = output_path_of(QWEN3_0_6B_BASE)
+    resolved_pools = joint_decode_pool_configs(model_key, worker_pools, PLACEMENT_OVERRIDES)
 
     steps = []
     for selection_rule in SELECTION_RULES:
@@ -288,7 +300,7 @@ def build_run_steps(
             task=make_task(n_problems),
             alg=make_algorithm(
                 selection_rule=selection_rule,
-                worker_pools=worker_pools,
+                worker_pools=resolved_pools,
                 chunk_size=chunk_size,
                 n_samples=n_samples,
                 heartbeat_timeout=heartbeat_timeout,

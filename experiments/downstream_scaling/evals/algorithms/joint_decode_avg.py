@@ -36,6 +36,7 @@ from thalas.execution.executor import ExecutorStep, InputName, MirroredValue
 from thalas.execution.remote import remote
 from thalas.execution.types import this_output_path, versioned
 
+from experiments.downstream_scaling.evals.framework.xregion.pool import EnginePlacement
 from experiments.downstream_scaling.evals.utils import version_path
 
 logger = logging.getLogger(__name__)
@@ -223,8 +224,8 @@ def run_joint_decode_completion_chunks(config: JointDecodeCompletionStepConfig) 
         seed=config.sampling.seed,
         stop=tuple(config.sampling.stop or ()),
         select_token=select_token,
-        chip_a=config.chip_a,
-        chip_b=config.chip_b,
+        decoder_placement=EnginePlacement((config.chip_a,), (1, 1, 1), 1),
+        advisor_placement=EnginePlacement((config.chip_b,), (1, 1, 1), 1),
         max_microbatch_size=config.microbatch_size,
         max_num_batched_tokens=None,
         barrier_timeout_s=config.barrier_timeout_s,

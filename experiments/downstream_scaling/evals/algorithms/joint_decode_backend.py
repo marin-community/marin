@@ -33,6 +33,7 @@ from joint_decode.config import JointDecodeSamplingConfig as PackageSamplingConf
 from joint_decode.coordinator import JointDecoder, SelectTokens
 from joint_decode.tpu.config import JointDecodeConfig as PackageConfig
 from joint_decode.tpu.config import JointDecodeModelConfig as PackageModelConfig
+from joint_decode.tpu.config import TpuPlacement
 from joint_decode.tpu.decoder import joint_decoder
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
@@ -41,6 +42,7 @@ from experiments.downstream_scaling.evals.framework.schema import (
     completions_file,
     read_prompt_rows,
 )
+from experiments.downstream_scaling.evals.framework.xregion.pool import EnginePlacement
 from experiments.downstream_scaling.evals.utils import discover_hf_checkpoints, fsspec_exists, localize_mirror_path
 
 logger = logging.getLogger(__name__)
@@ -90,10 +92,18 @@ def _resolve_model_path(model_path: str) -> str:
     return localize_mirror_path(resolved)
 
 
-def _package_model_config(params: EngineModelParams, chip: int, resolved_path: str) -> PackageModelConfig:
+def _package_model_config(
+    params: EngineModelParams,
+    placement: EnginePlacement,
+    resolved_path: str,
+) -> PackageModelConfig:
     return PackageModelConfig(
         model_path=resolved_path,
-        chip_index=chip,
+        placement=TpuPlacement(
+            visible_chips=placement.visible_chips,
+            chips_per_process_bounds=placement.chips_per_process_bounds,
+            tensor_parallel_size=placement.tensor_parallel_size,
+        ),
         max_model_len=params.max_model_len,
         gpu_memory_utilization=params.gpu_memory_utilization,
         enable_prefix_caching=params.enable_prefix_caching,
@@ -115,8 +125,8 @@ def open_joint_decoder(
     seed: int,
     stop: tuple[str, ...],
     select_token: SelectTokens,
-    chip_a: int,
-    chip_b: int,
+    decoder_placement: EnginePlacement,
+    advisor_placement: EnginePlacement,
     max_microbatch_size: int,
     max_num_batched_tokens: int | None,
     barrier_timeout_s: float,
@@ -129,8 +139,8 @@ def open_joint_decoder(
     """
     with tempfile.TemporaryDirectory(prefix="joint_decode_") as cache_dir:
         decode_config = PackageConfig(
-            model_a=_package_model_config(decoder, chip_a, _resolve_model_path(decoder.model_path)),
-            model_b=_package_model_config(advisor, chip_b, _resolve_model_path(advisor.model_path)),
+            model_a=_package_model_config(decoder, decoder_placement, _resolve_model_path(decoder.model_path)),
+            model_b=_package_model_config(advisor, advisor_placement, _resolve_model_path(advisor.model_path)),
             sampling=PackageSamplingConfig(
                 max_tokens_a=max_tokens,
                 max_tokens_b=advisor_max_tokens if advisor_max_tokens is not None else max_tokens,
@@ -200,8 +210,8 @@ def run_completion_chunks(
     seed: int,
     stop: tuple[str, ...],
     select_token: SelectTokens,
-    chip_a: int,
-    chip_b: int,
+    decoder_placement: EnginePlacement,
+    advisor_placement: EnginePlacement,
     max_microbatch_size: int,
     max_num_batched_tokens: int | None,
     barrier_timeout_s: float,
@@ -230,8 +240,8 @@ def run_completion_chunks(
         seed=seed,
         stop=stop,
         select_token=select_token,
-        chip_a=chip_a,
-        chip_b=chip_b,
+        decoder_placement=decoder_placement,
+        advisor_placement=advisor_placement,
         max_microbatch_size=max_microbatch_size,
         max_num_batched_tokens=max_num_batched_tokens,
         barrier_timeout_s=barrier_timeout_s,

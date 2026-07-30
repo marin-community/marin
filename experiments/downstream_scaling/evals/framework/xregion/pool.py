@@ -10,6 +10,7 @@ import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
+from math import prod
 
 from fray.cluster import ResourceConfig
 from zephyr.dataset import Dataset, ShardInfo
@@ -28,6 +29,52 @@ class WorkerPoolConfig:
     worker_resources: ResourceConfig
     vm_count: int
     chips_per_vm: int
+
+
+@dataclass(frozen=True)
+class EnginePlacement:
+    visible_chips: tuple[int, ...]
+    chips_per_process_bounds: tuple[int, int, int]
+    tensor_parallel_size: int
+
+    def __post_init__(self) -> None:
+        if not self.visible_chips:
+            raise ValueError("visible_chips must be non-empty")
+        if len(set(self.visible_chips)) != len(self.visible_chips):
+            raise ValueError(f"visible_chips must be unique, got {self.visible_chips}")
+        if any(chip < 0 for chip in self.visible_chips):
+            raise ValueError(f"visible_chips must be non-negative, got {self.visible_chips}")
+        if any(size <= 0 for size in self.chips_per_process_bounds):
+            raise ValueError(f"chips_per_process_bounds must be positive, got {self.chips_per_process_bounds}")
+        bounds_volume = prod(self.chips_per_process_bounds)
+        if bounds_volume != len(self.visible_chips):
+            raise ValueError(
+                f"chips_per_process_bounds={self.chips_per_process_bounds} has volume {bounds_volume}, "
+                f"expected {len(self.visible_chips)}"
+            )
+        if not 1 <= self.tensor_parallel_size <= len(self.visible_chips):
+            raise ValueError(
+                f"tensor_parallel_size must be in [1, {len(self.visible_chips)}], got {self.tensor_parallel_size}"
+            )
+
+
+def validate_pool_placements(pool: WorkerPoolConfig, placements: tuple[EnginePlacement, ...]) -> None:
+    if pool.vm_count != 1:
+        raise ValueError(f"xregion placements require vm_count=1, got {pool.vm_count}")
+    if not placements:
+        raise ValueError("placements must be non-empty")
+
+    used_chips: set[int] = set()
+    for placement in placements:
+        out_of_range = [chip for chip in placement.visible_chips if chip >= pool.chips_per_vm]
+        if out_of_range:
+            raise ValueError(
+                f"placement chips {out_of_range} are outside pool {pool.pool_id!r} with {pool.chips_per_vm} chips"
+            )
+        overlap = used_chips.intersection(placement.visible_chips)
+        if overlap:
+            raise ValueError(f"placements overlap on chips {sorted(overlap)} in pool {pool.pool_id!r}")
+        used_chips.update(placement.visible_chips)
 
 
 @dataclass

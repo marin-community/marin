@@ -54,7 +54,7 @@ from experiments.downstream_scaling.evals.framework.schema import (
 )
 from experiments.downstream_scaling.evals.framework.xregion import ledger
 from experiments.downstream_scaling.evals.framework.xregion import pool as xregion_pool
-from experiments.downstream_scaling.evals.framework.xregion.pool import WorkerPoolConfig
+from experiments.downstream_scaling.evals.framework.xregion.pool import EnginePlacement, WorkerPoolConfig
 from experiments.downstream_scaling.evals.utils import version_path
 
 logger = logging.getLogger(__name__)
@@ -94,7 +94,7 @@ class JointDecodeSamplingConfig:
         if self.top_k_a < 1 or self.top_k_b < 1:
             raise ValueError("top_k_a and top_k_b must both be >= 1")
         if self.n_samples != 1:
-            raise ValueError("joint_decode is deterministic per prompt; n_samples must be 1 " f"(got {self.n_samples})")
+            raise ValueError(f"joint_decode is deterministic per prompt; n_samples must be 1 (got {self.n_samples})")
 
 
 @dataclass(frozen=True)
@@ -321,8 +321,8 @@ def _run_joint_decode_local_worker(config: JointDecodeLocalWorkerConfig) -> None
         seed=config.sampling.seed,
         stop=tuple(config.sampling.stop or ()),
         select_token=select_top_rank,
-        chip_a=config.chip_pair[0],
-        chip_b=config.chip_pair[1],
+        decoder_placement=EnginePlacement((config.chip_pair[0],), (1, 1, 1), 1),
+        advisor_placement=EnginePlacement((config.chip_pair[1],), (1, 1, 1), 1),
         max_microbatch_size=config.microbatch_size,
         max_num_batched_tokens=max_num_batched_tokens,
         barrier_timeout_s=config.barrier_timeout_s,
