@@ -98,16 +98,8 @@ class CoreweaveTarget:
 
 
 @dataclass(frozen=True)
-class DevGpuNode:
-    """One node of a dev GPU session: an Iris task and the k8s pod running it."""
-
-    task_id: str
-    pod: PodRef
-
-
-@dataclass(frozen=True)
 class DevGpuState:
-    """Persisted local state for an active dev GPU session."""
+    """Persisted local state for an active dev GPU session. One pod per reserved node."""
 
     session_name: str
     config_file: str
@@ -116,7 +108,7 @@ class DevGpuState:
     gpu_variant: str
     priority: Priority
     target: CoreweaveTarget
-    nodes: list[DevGpuNode]
+    pods: list[PodRef]
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, sort_keys=True)
@@ -132,7 +124,7 @@ class DevGpuState:
             gpu_variant=data["gpu_variant"],
             priority=Priority(data["priority"]),
             target=CoreweaveTarget(**data["target"]),
-            nodes=[DevGpuNode(task_id=node["task_id"], pod=PodRef(**node["pod"])) for node in data["nodes"]],
+            pods=[PodRef(**pod) for pod in data["pods"]],
         )
 
 
@@ -185,27 +177,16 @@ def resolve_coscheduling(gpu_variant: str, gpus_per_node: int, node_count: int) 
     return CoschedulingConfig(group_by=level)
 
 
-def select_node(state: DevGpuState, node_index: int) -> DevGpuNode:
-    if node_index >= len(state.nodes):
-        raise click.ClickException(
-            f"Dev GPU session '{state.session_name}' has {len(state.nodes)} node(s); "
-            f"--node {node_index} is out of range."
-        )
-    return state.nodes[node_index]
-
-
 def session_summary(state: DevGpuState) -> str:
-    """Render the session as one human-readable block, one line per reserved pod."""
+    """Render the session as one human-readable block, one line per reserved node."""
     lines = [
         f"Session: {state.session_name}",
         f"Job: {state.job_id}",
         f"Config: {state.config_file}",
-        f"Nodes: {len(state.nodes)} x {state.gpus_per_node} {state.gpu_variant}",
+        f"Nodes: {len(state.pods)} x {state.gpus_per_node} {state.gpu_variant}",
         f"Priority: {state.priority.value}",
     ]
-    lines += [
-        f"Pod[{index}]: {node.pod.pod_name} (namespace={node.pod.namespace})" for index, node in enumerate(state.nodes)
-    ]
+    lines += [f"Node {index}: {pod.pod_name} (namespace={pod.namespace})" for index, pod in enumerate(state.pods)]
     return "\n".join(lines)
 
 
@@ -457,10 +438,6 @@ def allocate(
 
         try:
             task_ids = wait_for_running_tasks(job, node_count=node_count, timeout=timeout)
-            nodes = [
-                DevGpuNode(task_id=task_id, pod=wait_for_running_pod(target, task_id, timeout=pod_timeout))
-                for task_id in task_ids
-            ]
             state = DevGpuState(
                 session_name=session_name,
                 config_file=ctx.obj.config_file,
@@ -469,7 +446,7 @@ def allocate(
                 gpu_variant=gpu_variant,
                 priority=resolved_priority,
                 target=target,
-                nodes=nodes,
+                pods=[wait_for_running_pod(target, task_id, timeout=pod_timeout) for task_id in task_ids],
             )
             save_state(state_file, state)
 
@@ -515,7 +492,11 @@ def allocate(
 def connect(ctx, node_index: int) -> None:
     """Open an interactive shell into one of the reserved pods."""
     state = load_state(state_path(ctx.obj.state_dir, ctx.obj.session_name))
-    node = select_node(state, node_index)
+    if node_index >= len(state.pods):
+        raise click.ClickException(
+            f"Dev GPU session '{state.session_name}' has {len(state.pods)} node(s); "
+            f"--node {node_index} is out of range."
+        )
     # connect fundamentally only needs `kubectl exec`. The controller liveness check is a
     # courtesy: if the controller is reachable and reports the job inactive we fail fast,
     # but if reaching the controller itself fails we proceed, since a healthy pod should
@@ -533,9 +514,9 @@ def connect(ctx, node_index: int) -> None:
             raise click.ClickException(
                 f"Dev GPU session '{state.session_name}' is no longer active. Use release to clean up."
             )
-    # node.pod is the pod resolved at allocation time. If Iris rescheduled the task
+    # These are the pods resolved at allocation time. If Iris rescheduled the task
     # onto a new pod while the job stayed active, this kubectl exec fails; re-allocate.
-    run_logged(kubectl_connect_cmd(state.target, node.pod), check=True)
+    run_logged(kubectl_connect_cmd(state.target, state.pods[node_index]), check=True)
 
 
 @cli.command("status")
