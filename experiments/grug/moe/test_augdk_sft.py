@@ -160,6 +160,7 @@ def test_expert_range_extraction_preserves_selected_router_experts_and_qb_state(
     )
 
     assert target.config is target_config
+    assert jax.tree.structure(target) == jax.tree.structure(target_exemplar)
     assert target.stacked_blocks.stacked.mlp.router.shape == (2, 64, 4)
     assert target.stacked_blocks.stacked.mlp.router_bias.shape == (2, 4)
     assert target.stacked_blocks.stacked.mlp.expert_mlp.w_down.shape == (2, 4, 32, 64)

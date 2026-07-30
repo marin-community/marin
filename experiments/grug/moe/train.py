@@ -465,11 +465,27 @@ def extract_expert_range(
         expert_mlp=extracted_experts,
         cfg=target_config,
     )
-    target_blocks = dataclasses.replace(source_blocks, mlp=extracted_mlp)
+    target_blocks = dataclasses.replace(
+        target_model.stacked_blocks.stacked,
+        rms_attn=source_blocks.rms_attn,
+        attn_gated_norm=source_blocks.attn_gated_norm,
+        attn=dataclasses.replace(source_blocks.attn, cfg=target_config),
+        rms_mlp=source_blocks.rms_mlp,
+        mlp_gated_norm=source_blocks.mlp_gated_norm,
+        mlp=extracted_mlp,
+        shared=source_blocks.shared,
+        sconv_attn=source_blocks.sconv_attn,
+        sconv_mlp=source_blocks.sconv_mlp,
+    )
     extracted_model = dataclasses.replace(
-        model,
-        stacked_blocks=dataclasses.replace(model.stacked_blocks, stacked=target_blocks),
-        config=target_config,
+        target_model,
+        token_embed=model.token_embed,
+        over_encoding=model.over_encoding,
+        embed_norm=model.embed_norm,
+        embed_gated_norm=model.embed_gated_norm,
+        output_proj=model.output_proj,
+        stacked_blocks=dataclasses.replace(target_model.stacked_blocks, stacked=target_blocks),
+        final_norm=model.final_norm,
     )
     extracted_pending_qb_betas = pending_qb_betas.at[:, balance_group, expert_offset:expert_end].get(
         out_sharding=output_sharding(target_pending_qb_betas)
