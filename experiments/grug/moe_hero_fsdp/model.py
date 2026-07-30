@@ -47,14 +47,17 @@ from levanter.grug.grug_moe import (
     MoeImplementation,
     resolve_moe_implementation,
 )
-from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
-from levanter.grug.sharding import Pembed_vocab, Plm_head, unshard
+from levanter.grug.loss import chunked_linear_softmax_cross_entropy_loss
+from levanter.grug.sharding import Pembed_vocab, unshard
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
 
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
+_CROSS_ENTROPY_CHUNK_SIZE = 16_384
+_CROSS_ENTROPY_BACKWARD_PASS_UNROLL = 1
+_LM_HEAD_PARTITION_SPEC = P(("replica_dcn", "data"), "model")
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
@@ -116,10 +119,6 @@ def _partition_spec_of(x: jax.Array) -> P | None:
     return None
 
 
-def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
-    return mask.with_sliding_window(sliding_window // 2), mask.with_sliding_window(sliding_window)
-
-
 class GrugMoeHfConfig(HfConfig):
     model_type = GRUG_MOE_MODEL_TYPE
 
@@ -150,9 +149,12 @@ class GrugModelConfig:
     num_layers: int = 6
     num_heads: int = 4
     num_kv_heads: int = 1
+    local_kv_heads: int | None = None
+    global_kv_heads: int | None = None
     head_dim: int | None = None
     max_seq_len: int = 8192
     sliding_window: int = 2048
+    global_every: int = 4
     # Expert-parallel bucket capacity relative to the mean assignment load.
     capacity_factor: float = DEFAULT_EP_CAPACITY_FACTOR
     layer_norm_eps: float = 1e-5
@@ -161,21 +163,23 @@ class GrugModelConfig:
     xsa: bool = True
     router_z_loss_coef: float = 0.0
     disable_pko: bool = True
-    """When True (default), the every-4th + last 'long' layers skip Partial
+    """When True (default), the full-causal layers skip Partial
     Key Offset (no shift of the second half of K, no doc-start zeroing). Short
     layers never had PKO. Set to False to re-enable PKO on long layers."""
     disable_long_rope: bool = True
-    """When True (default), the every-4th + last 'long' layers skip rotary
+    """When True (default), the full-causal layers skip rotary
     embedding entirely (Q and K go into attention un-rotated). Short layers
     still apply half-RoPE. Set to False to keep RoPE on long layers."""
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
+    expert_chunks: int = 1
     report_capacity_overflow: bool = False
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
     backward skips re-running expert dispatch and its EP collectives."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    rope_fused: bool = False
     use_array_stacked_blocks: bool = False
     """Stack all transformer blocks into one ``ArrayStacked[Block]`` and run them
     through a homogeneous ``jax.lax.scan`` body. The unrolled production program
@@ -184,8 +188,19 @@ class GrugModelConfig:
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
-        if self.num_heads % self.num_kv_heads != 0:
-            raise ValueError("num_heads must be divisible by num_kv_heads for grouped-query attention")
+        if self.num_heads % self.stored_kv_heads != 0:
+            raise ValueError("num_heads must be divisible by the stored KV-head count")
+        if (self.local_kv_heads is None) != (self.global_kv_heads is None):
+            raise ValueError("local_kv_heads and global_kv_heads must be set together")
+        if self.local_kv_heads is not None and self.global_kv_heads is not None:
+            if self.local_kv_heads <= 0 or self.global_kv_heads <= 0:
+                raise ValueError("local_kv_heads and global_kv_heads must be positive")
+            if self.num_heads % self.local_kv_heads != 0 or self.num_heads % self.global_kv_heads != 0:
+                raise ValueError("num_heads must be divisible by both local and global KV-head counts")
+            if self.num_kv_heads != max(self.local_kv_heads, self.global_kv_heads):
+                raise ValueError("num_kv_heads must equal the stored maximum of local/global KV heads")
+        if self.global_every <= 0:
+            raise ValueError("global_every must be positive")
         if self.vocab_size <= 0:
             raise ValueError("vocab_size must be positive")
         if self.max_seq_len <= 0:
@@ -200,6 +215,8 @@ class GrugModelConfig:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
         if self.capacity_factor <= 0:
             raise ValueError("capacity_factor must be positive")
+        if self.expert_chunks <= 0:
+            raise ValueError("expert_chunks must be positive")
         if self.num_shared_experts <= 0:
             raise ValueError("num_shared_experts must be positive")
         if self.shared_expert_intermediate_dim % self.num_shared_experts != 0:
@@ -226,6 +243,12 @@ class GrugModelConfig:
                 f"hidden_dim={self.hidden_dim} is not divisible by num_heads={self.num_heads}; set head_dim explicitly"
             )
         return self.hidden_dim // self.num_heads
+
+    @property
+    def stored_kv_heads(self) -> int:
+        if self.local_kv_heads is None or self.global_kv_heads is None:
+            return self.num_kv_heads
+        return max(self.local_kv_heads, self.global_kv_heads)
 
     def build(self, Vocab: Axis, *, key: PRNGKeyArray) -> "Transformer":
         cfg = self if Vocab.size == self.vocab_size else dataclasses.replace(self, vocab_size=Vocab.size)
@@ -314,6 +337,44 @@ def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
     return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
 
 
+def _apply_rotary_embedding_fused(
+    q: Float[Array, "B S H D"],
+    k: Float[Array, "B S H D"],
+    *,
+    seq_len: int,
+    head_dim: int,
+    rotary_dim: int,
+    rope: RotaryConfig,
+    disable_rope: jax.Array | bool,
+) -> tuple[Float[Array, "B S H D"], Float[Array, "B S H D"]]:
+    half = rotary_dim // 2
+    inv_freq = 1.0 / (rope.theta ** (jnp.arange(0, half, dtype=jnp.float32) / half))
+    angles = jnp.arange(seq_len, dtype=jnp.float32)[:, None] * inv_freq[None, :]
+    cos = jnp.cos(angles)
+    sin = jnp.sin(angles)
+    first_factor = jnp.repeat(cos, 2, axis=-1)
+    second_factor = jnp.reshape(jnp.stack([-sin, sin], axis=-1), (seq_len, rotary_dim))
+    if rotary_dim < head_dim:
+        padding = head_dim - rotary_dim
+        first_factor = jnp.concatenate(
+            [first_factor, jnp.ones((seq_len, padding), first_factor.dtype)],
+            axis=-1,
+        )
+        second_factor = jnp.concatenate(
+            [second_factor, jnp.zeros((seq_len, padding), second_factor.dtype)],
+            axis=-1,
+        )
+    first_factor = jnp.where(disable_rope, 1.0, first_factor)[None, :, None, :]
+    second_factor = jnp.where(disable_rope, 0.0, second_factor)[None, :, None, :]
+
+    def _apply(x: Float[Array, "B S H D"]) -> Float[Array, "B S H D"]:
+        dtype = x.dtype
+        flipped = jnp.flip(x.reshape(*x.shape[:-1], head_dim // 2, 2), axis=-1).reshape(x.shape)
+        return (first_factor * x + second_factor * flipped).astype(dtype)
+
+    return _apply(q), _apply(k)
+
+
 class CausalSelfAttention(eqx.Module):
     w_q: Float[Array, "D NH"]
     w_k: Float[Array, "D MH"]
@@ -325,7 +386,7 @@ class CausalSelfAttention(eqx.Module):
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
         k_q, k_k, k_v, k_o = random.split(key, 4)
-        d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+        d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.stored_kv_heads, cfg.inferred_head_dim
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
@@ -342,6 +403,7 @@ class CausalSelfAttention(eqx.Module):
         mask: AttentionMask | jax.Array,
         use_pko: bool = False,
         disable_rope: bool | jax.Array = False,
+        is_global: bool | jax.Array = False,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
@@ -350,6 +412,27 @@ class CausalSelfAttention(eqx.Module):
         q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
         k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
         v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
+
+        if self.cfg.local_kv_heads is not None and self.cfg.global_kv_heads is not None:
+            stored_kv_heads = self.cfg.stored_kv_heads
+
+            def _logical_kv(projection: jax.Array, num_kv_heads: int) -> jax.Array:
+                if num_kv_heads == stored_kv_heads:
+                    return projection
+                return align_kv_heads(projection[:, :, :num_kv_heads, :], num_q_heads=stored_kv_heads)
+
+            k, v = jax.lax.cond(
+                jnp.asarray(is_global, dtype=jnp.bool_),
+                lambda kv: (
+                    _logical_kv(kv[0], self.cfg.global_kv_heads),
+                    _logical_kv(kv[1], self.cfg.global_kv_heads),
+                ),
+                lambda kv: (
+                    _logical_kv(kv[0], self.cfg.local_kv_heads),
+                    _logical_kv(kv[1], self.cfg.local_kv_heads),
+                ),
+                (k, v),
+            )
 
         # Shift the second half of K's head_dim back by one position so the
         # query at position i sees K[i] on head_dim[:half] but K[i-1] on
@@ -388,24 +471,36 @@ class CausalSelfAttention(eqx.Module):
         # traced scalar bool (per-layer choice inside the layer scan): then RoPE
         # is always computed and selected with ``jnp.where`` so the scan body has
         # no ``lax.cond`` (which would pin the FA4 metadata to device 0).
-        def _rope(qh: jax.Array, kh: jax.Array) -> tuple[jax.Array, jax.Array]:
-            half = head_dim // 2
-            q_rot, k_rot = apply_rotary_embedding(
-                qh[..., :half], kh[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
+        if self.cfg.rope_fused:
+            q, k = _apply_rotary_embedding_fused(
+                q,
+                k,
+                seq_len=seq_len,
+                head_dim=head_dim,
+                rotary_dim=head_dim // 2,
+                rope=self.cfg.rope,
+                disable_rope=disable_rope,
             )
-            return (
-                jnp.concatenate([q_rot, qh[..., half:]], axis=-1),
-                jnp.concatenate([k_rot, kh[..., half:]], axis=-1),
-            )
-
-        if isinstance(disable_rope, bool):
-            if not disable_rope:
-                q, k = _rope(q, k)
         else:
-            q_roped, k_roped = _rope(q, k)
-            keep = ~jnp.asarray(disable_rope, dtype=jnp.bool_)
-            q = jnp.where(keep, q_roped, q)
-            k = jnp.where(keep, k_roped, k)
+
+            def _rope(qh: jax.Array, kh: jax.Array) -> tuple[jax.Array, jax.Array]:
+                half = head_dim // 2
+                q_rot, k_rot = apply_rotary_embedding(
+                    qh[..., :half], kh[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
+                )
+                return (
+                    jnp.concatenate([q_rot, qh[..., half:]], axis=-1),
+                    jnp.concatenate([k_rot, kh[..., half:]], axis=-1),
+                )
+
+            if isinstance(disable_rope, bool):
+                if not disable_rope:
+                    q, k = _rope(q, k)
+            else:
+                q_roped, k_roped = _rope(q, k)
+                keep = ~jnp.asarray(disable_rope, dtype=jnp.bool_)
+                q = jnp.where(keep, q_roped, q)
+                k = jnp.where(keep, k_roped, k)
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         if self.cfg.xsa:
@@ -625,6 +720,7 @@ class MoEMLP(eqx.Module):
                 implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=cfg.capacity_factor,
+                expert_chunks=cfg.expert_chunks,
             ),
             cfg=cfg,
         )
@@ -738,9 +834,16 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
         use_pko: bool = False,
         disable_rope: bool | jax.Array = False,
+        is_global: bool | jax.Array = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope)
+        x = x + self.attn(
+            attn_in,
+            mask,
+            use_pko=use_pko,
+            disable_rope=disable_rope,
+            is_global=is_global,
+        )
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
@@ -750,9 +853,9 @@ class Block(eqx.Module):
         return x, router_stats
 
 
-def _long_layer_schedule(num_layers: int) -> jax.Array:
+def _long_layer_schedule(num_layers: int, global_every: int) -> jax.Array:
     layer_indices = jnp.arange(num_layers)
-    return ((layer_indices % 4) == 3) | (layer_indices == num_layers - 1)
+    return ((layer_indices + 1) % global_every) == 0
 
 
 class Transformer(eqx.Module):
@@ -796,7 +899,9 @@ class Transformer(eqx.Module):
         token_embed = reshard(
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
-        output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
+        output_proj = reshard(
+            _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), _LM_HEAD_PARTITION_SPEC
+        )
         blocks: tuple[Block, ...] | None
         stacked_blocks: ArrayStacked[Block] | None
         if cfg.use_array_stacked_blocks:
@@ -834,7 +939,7 @@ class Transformer(eqx.Module):
         hidden = _embedding_gather(self.token_embed, token_ids)
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
-        # Short layers: sliding window. Long layers (every 4th + last): full causal.
+        # Local layers use a sliding window; every global_every-th layer is full causal.
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
         if segment_ids is not None:
             # Pin the per-token [B, S] segment ids batch-sharded before they enter the layer-scan
@@ -851,16 +956,14 @@ class Transformer(eqx.Module):
             remat_policy = None
 
         if self.blocks is not None:
-            num_blocks = len(self.blocks)
             moe_router_stats: list[dict[str, jax.Array]] = []
             for i, block in enumerate(self.blocks):
-                is_last = i == num_blocks - 1
-                is_long = i % 4 == 3 or is_last
+                is_long = (i + 1) % cfg.global_every == 0
                 layer_mask = long_mask if is_long else short_mask
                 use_pko = is_long and not cfg.disable_pko
                 disable_rope = is_long and cfg.disable_long_rope
                 hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
-                    hidden, layer_mask, use_pko, disable_rope
+                    hidden, layer_mask, use_pko, disable_rope, is_long
                 )
                 moe_router_stats.append(router_stats)
 
@@ -877,7 +980,7 @@ class Transformer(eqx.Module):
             # Homogeneous scan: one compiled Block body over the stacked layers. The per-layer
             # short/long choice rides in as a Bool[num_layers] scan input. PKO is never used here
             # (scan requires disable_pko=True).
-            mask_schedule = _long_layer_schedule(cfg.num_layers)
+            mask_schedule = _long_layer_schedule(cfg.num_layers, cfg.global_every)
             # Precompute the FA4 per-token metadata for both the full-causal (long) and
             # sliding-window (short) layers outside the scan, then select per layer with a
             # jnp.where inside the body. This keeps the metadata inputs to the FA4 kernel out of a
@@ -904,7 +1007,13 @@ class Transformer(eqx.Module):
                 lower_bounds = jnp.where(use_long, long_lower_bounds, short_lower_bounds)
                 layer_mask = long_mask.with_fa4_bounds(lower_bounds, valid)
                 disable_rope = use_long if cfg.disable_long_rope else False
-                return eqx.filter_checkpoint(layer, policy=remat_policy)(carry_hidden, layer_mask, False, disable_rope)
+                return eqx.filter_checkpoint(layer, policy=remat_policy)(
+                    carry_hidden,
+                    layer_mask,
+                    False,
+                    disable_rope,
+                    use_long,
+                )
 
             hidden, stacked_router_stats = jax.lax.scan(
                 _scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
@@ -948,10 +1057,12 @@ class Transformer(eqx.Module):
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
-        cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
+        cross_entropy_loss = chunked_linear_softmax_cross_entropy_loss(
             hidden,
             self.output_proj,
             labels,
+            chunk_size=_CROSS_ENTROPY_CHUNK_SIZE,
+            backward_pass_unroll=_CROSS_ENTROPY_BACKWARD_PASS_UNROLL,
             weight=loss_weight,
             reduction=reduction,
             logsumexp_weight=logsumexp_weight,

@@ -50,6 +50,14 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 logger = logging.getLogger(__name__)
 
+HERO_FSDP_RUNTIME_ENV = {
+    "JAX_ENABLE_PGLE": "1",
+    "SCALE_MUON_DIST_NONEXPERT": "1",
+    "SCALE_MUON_INTRA_RACK": "1",
+    "SCALE_MUON_PAD_NONEXPERT": "1",
+    "SCALE_MUON_SYRK": "1",
+}
+
 
 @dataclass(frozen=True)
 class GrugTrainerConfig:
@@ -490,8 +498,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         state = _init_state(model_key)
 
-        # Profiling runs may need tracker completion without a final sharded save.
-        checkpointer = None if os.environ.get("SCALE_DISABLE_CHECKPOINT") == "1" else trainer.checkpointer.create(run_id)
+        # This throughput reproduction intentionally produces no checkpoint.
+        checkpointer = None
         state = restore_grug_state_from_checkpoint(
             state,
             checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
@@ -643,6 +651,9 @@ def run_grug(config: GrugRunConfig) -> None:
     if trainer.id is None:
         raise ValueError("trainer.id must be set before dispatching grug training.")
 
+    # Dispatch snapshots os.environ for the child task, so apply the hero values first.
+    # These fixed recipe values intentionally override the submitter environment.
+    os.environ.update(HERO_FSDP_RUNTIME_ENV)
     dispatch_grug_training_run(
         run_id=trainer.id,
         config=config,
