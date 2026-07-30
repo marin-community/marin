@@ -2561,3 +2561,27 @@ result:
 - Draft report:
   `docs/reports/nested-model-training-single-prefix-10b.md`. The final version
   waits for standalone E128, post-hoc pruning, SFT, and generation results.
+
+### 2026-07-30 01:42 - NEST-MOE-004 paired residual experts launched
+
+- Hypothesis: storing experts 0--127 as extractable bases and experts
+  128--255 as residuals over the paired base lets every E256 token train the
+  E128 checkpoint without masking rows away from the outer bank.
+- Commit hash: exact-source commit `f2104e7f60`.
+- Command: `scratch/augdk-reference-nested-wt/scratch/resubmit_paired_residual_10b.sh`.
+- Config: the matched d768/L8/E256 top-4, batch-32, 10B-token augmented
+  Datakit cell. Full route `128+i` materializes each expert weight as
+  `(base[i] + residual[i]) / sqrt(2)`; route `i` and E128 extraction use
+  `base[i]`. The scaling preserves initialization variance, stored parameter
+  count, top-4 active expert count, optimizer, data stream, and LR schedule.
+- Result: focused residual and nested-routing tests pass. Job
+  `/power/nest-augdk-e128-pairedresidual-10b-r1-coord` submitted to one
+  eight-H100 node. W&B run:
+  [nest-augdk-e128-pairedresidual-10b-r1](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e128-pairedresidual-10b-r1).
+- Interpretation: this is a Gate 1 architecture probe, not yet a production
+  implementation. It does not test expert-parallel sharding or folded E256
+  checkpoint export.
+- Next action: at update 4,000, compare full E256 and extracted E128 Paloma,
+  compiled-step overhead, overflow, and uncheatable loss against the existing
+  E256 control. Continue only if full Paloma remains within `+0.10`, E128 beats
+  the control chop, and step overhead remains below 5%.
