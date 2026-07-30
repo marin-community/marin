@@ -109,6 +109,7 @@ auth:
     - "*@openathena.ai"
     - github-iris@hai-gcp-models.iam.gserviceaccount.com
     - infra-probes@hai-gcp-models.iam.gserviceaccount.com
+    - ravwojdyla@rav-openathena.iam.gserviceaccount.com
 
 kubernetes_provider:
   namespace: iris
