@@ -1,0 +1,168 @@
+{
+  "thinking": {
+    "comparisons_vs_e256": {
+      "e128_layerwise": {
+        "final_loss_delta": 0.0030084848403930664,
+        "gpu_hours_delta": 0.24712309107777775,
+        "last_100_mean_loss_delta": 0.004490888118743985,
+        "median_step_overhead_fraction": 0.011373621028683445,
+        "paired_mean_loss_delta_post_warmup": 0.0028621192773183187,
+        "paired_median_loss_delta_post_warmup": 0.0032607316970825195,
+        "paired_steps_post_warmup": 900,
+        "paired_treatment_win_fraction_post_warmup": 0.13111111111111112,
+        "paired_treatment_wins_post_warmup": 118,
+        "post_warmup_mean_loss_delta": 0.0028621192773183868,
+        "runtime_delta_seconds": 111.20539098500001
+      },
+      "e128_naive": {
+        "final_loss_delta": 0.01598513126373291,
+        "gpu_hours_delta": 0.013990695057777724,
+        "last_100_mean_loss_delta": 0.016817357540130695,
+        "median_step_overhead_fraction": 0.01235560268752356,
+        "paired_mean_loss_delta_post_warmup": 0.015218331946267021,
+        "paired_median_loss_delta_post_warmup": 0.015495479106903076,
+        "paired_steps_post_warmup": 900,
+        "paired_treatment_win_fraction_post_warmup": 0.0,
+        "paired_treatment_wins_post_warmup": 0,
+        "post_warmup_mean_loss_delta": 0.015218331946267094,
+        "runtime_delta_seconds": 6.295812776000048
+      }
+    },
+    "runs": {
+      "e128_layerwise": {
+        "completed_steps": 1000,
+        "final_loss": 1.771570086479187,
+        "final_total_loss": 1.771570086479187,
+        "gpu_hours": 1.3785504709177778,
+        "loss_metric": "train/loss",
+        "mean_loss_last_100": 1.80143101811409,
+        "mean_loss_post_warmup": 1.8354125077194638,
+        "median_step_seconds": 0.4486923166550696,
+        "optimizer_gpu_hours": 0.9970940370112658,
+        "run_name": "nest-augdk-e128-layer25-thinking-sft-r1",
+        "runtime_seconds": 620.347711913,
+        "stage_tokens": 262144000,
+        "state": "finished",
+        "terminal_overflow": null,
+        "url": "https://wandb.ai/marin-community/marin_moe_sft/runs/nest-augdk-e128-layer25-thinking-sft-r1"
+      },
+      "e128_naive": {
+        "completed_steps": 1000,
+        "final_loss": 1.7845467329025269,
+        "final_total_loss": 1.7845467329025269,
+        "gpu_hours": 1.1454180748977778,
+        "loss_metric": "train/loss",
+        "mean_loss_last_100": 1.8137574875354767,
+        "mean_loss_post_warmup": 1.8477687203884126,
+        "median_step_seconds": 0.44912796933203936,
+        "optimizer_gpu_hours": 0.9980621540711986,
+        "run_name": "nest-augdk-e128-naive25-thinking-sft-r1",
+        "runtime_seconds": 515.438133704,
+        "stage_tokens": 262144000,
+        "state": "finished",
+        "terminal_overflow": null,
+        "url": "https://wandb.ai/marin-community/marin_moe_sft/runs/nest-augdk-e128-naive25-thinking-sft-r1"
+      },
+      "e256": {
+        "completed_steps": 1000,
+        "final_loss": 1.768561601638794,
+        "final_total_loss": 1.768561601638794,
+        "gpu_hours": 1.13142737984,
+        "loss_metric": "train/loss",
+        "mean_loss_last_100": 1.796940129995346,
+        "mean_loss_post_warmup": 1.8325503884421455,
+        "median_step_seconds": 0.44364645006135106,
+        "optimizer_gpu_hours": 0.9858810001363357,
+        "run_name": "nest-augdk-e256-thinking-sft-r1",
+        "runtime_seconds": 509.142320928,
+        "stage_tokens": 262144000,
+        "state": "finished",
+        "terminal_overflow": null,
+        "url": "https://wandb.ai/marin-community/marin_moe_sft/runs/nest-augdk-e256-thinking-sft-r1"
+      }
+    }
+  },
+  "wildchat": {
+    "comparisons_vs_e256": {
+      "e128_layerwise": {
+        "final_loss_delta": 0.009583711624145508,
+        "gpu_hours_delta": -0.3806609527000002,
+        "last_100_mean_loss_delta": 0.010633621215820233,
+        "median_step_overhead_fraction": 0.006256680805312609,
+        "paired_mean_loss_delta_post_warmup": 0.009888622363408407,
+        "paired_median_loss_delta_post_warmup": 0.010265767574310303,
+        "paired_steps_post_warmup": 900,
+        "paired_treatment_win_fraction_post_warmup": 0.03111111111111111,
+        "paired_treatment_wins_post_warmup": 28,
+        "post_warmup_mean_loss_delta": 0.009888622363408484,
+        "runtime_delta_seconds": -171.29742871500002
+      },
+      "e128_naive": {
+        "final_loss_delta": 0.027736902236938477,
+        "gpu_hours_delta": -0.3406986886000003,
+        "last_100_mean_loss_delta": 0.0284372234344481,
+        "median_step_overhead_fraction": 0.007158868239861338,
+        "paired_mean_loss_delta_post_warmup": 0.026748242643144397,
+        "paired_median_loss_delta_post_warmup": 0.02712690830230713,
+        "paired_steps_post_warmup": 900,
+        "paired_treatment_win_fraction_post_warmup": 0.0022222222222222222,
+        "paired_treatment_wins_post_warmup": 2,
+        "post_warmup_mean_loss_delta": 0.02674824264314446,
+        "runtime_delta_seconds": -153.31440987000008
+      }
+    },
+    "runs": {
+      "e128_layerwise": {
+        "completed_steps": 1000,
+        "final_loss": 1.6017709970474243,
+        "final_total_loss": 1.6017709970474243,
+        "gpu_hours": 1.2592996738977777,
+        "loss_metric": "train/loss",
+        "mean_loss_last_100": 1.5637692630290985,
+        "mean_loss_post_warmup": 1.580026918384764,
+        "median_step_seconds": 0.4407850664574653,
+        "optimizer_gpu_hours": 0.9795223699054785,
+        "run_name": "nest-augdk-e128-layer25-wildchat-sft-r1",
+        "runtime_seconds": 566.684853254,
+        "stage_tokens": 262144000,
+        "state": "finished",
+        "terminal_overflow": null,
+        "url": "https://wandb.ai/marin-community/marin_moe_sft/runs/nest-augdk-e128-layer25-wildchat-sft-r1"
+      },
+      "e128_naive": {
+        "completed_steps": 1000,
+        "final_loss": 1.6199241876602173,
+        "final_total_loss": 1.6199241876602173,
+        "gpu_hours": 1.2992619379977777,
+        "loss_metric": "train/loss",
+        "mean_loss_last_100": 1.5815728652477263,
+        "mean_loss_post_warmup": 1.5968865386645,
+        "median_step_seconds": 0.44118026457726955,
+        "optimizer_gpu_hours": 0.9804005879494879,
+        "run_name": "nest-augdk-e128-naive25-wildchat-sft-r1",
+        "runtime_seconds": 584.667872099,
+        "stage_tokens": 262144000,
+        "state": "finished",
+        "terminal_overflow": null,
+        "url": "https://wandb.ai/marin-community/marin_moe_sft/runs/nest-augdk-e128-naive25-wildchat-sft-r1"
+      },
+      "e256": {
+        "completed_steps": 1000,
+        "final_loss": 1.5921872854232788,
+        "final_total_loss": 1.5921872854232788,
+        "gpu_hours": 1.639960626597778,
+        "loss_metric": "train/loss",
+        "mean_loss_last_100": 1.5531356418132782,
+        "mean_loss_post_warmup": 1.5701382960213555,
+        "median_step_seconds": 0.4380443627014756,
+        "optimizer_gpu_hours": 0.9734319171143903,
+        "run_name": "nest-augdk-e256-wildchat-sft-r1",
+        "runtime_seconds": 737.982281969,
+        "stage_tokens": 262144000,
+        "state": "finished",
+        "terminal_overflow": null,
+        "url": "https://wandb.ai/marin-community/marin_moe_sft/runs/nest-augdk-e256-wildchat-sft-r1"
+      }
+    }
+  }
+}

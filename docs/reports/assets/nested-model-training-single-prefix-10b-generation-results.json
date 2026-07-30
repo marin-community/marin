@@ -1,0 +1,68 @@
+{
+  "e128_layerwise": {
+    "128": {
+      "checkpoint": "s3://marin-us-east-02a/marin/users/root/experiments/nested-moe-augdk-sft/nest-augdk-e128-layer25-thinking-sft-r1/dev/checkpoints",
+      "gsm8k_exact_match": 0.0,
+      "instruction_pass_rate": 0.0,
+      "paloma_macro_loss": 3.4368367195129395,
+      "run_name": "nest-augdk-e128-layer25-thinking-generation-e128-r2",
+      "runtime_seconds": 0.0,
+      "uncheatable_macro_loss": 2.8329951763153076,
+      "url": "https://wandb.ai/marin-community/marin_moe_sft/runs/nest-augdk-e128-layer25-thinking-generation-e128-r2"
+    },
+    "256": {
+      "checkpoint": "s3://marin-us-east-02a/marin/users/root/experiments/nested-moe-augdk-sft/nest-augdk-e128-layer25-thinking-sft-r1/dev/checkpoints",
+      "gsm8k_exact_match": 0.015625,
+      "instruction_pass_rate": 0.0,
+      "paloma_macro_loss": 3.255244493484497,
+      "run_name": "nest-augdk-e128-layer25-thinking-generation-e256-r2",
+      "runtime_seconds": 1.0,
+      "uncheatable_macro_loss": 2.6372885704040527,
+      "url": "https://wandb.ai/marin-community/marin_moe_sft/runs/nest-augdk-e128-layer25-thinking-generation-e256-r2"
+    }
+  },
+  "e128_naive": {
+    "128": {
+      "checkpoint": "s3://marin-us-east-02a/marin/users/root/experiments/nested-moe-augdk-sft/nest-augdk-e128-naive25-thinking-sft-r1/dev/checkpoints",
+      "gsm8k_exact_match": 0.0625,
+      "instruction_pass_rate": 0.0,
+      "paloma_macro_loss": 3.3191096782684326,
+      "run_name": "nest-augdk-e128-naive25-thinking-generation-e128-r2",
+      "runtime_seconds": 0.0,
+      "uncheatable_macro_loss": 2.7056992053985596,
+      "url": "https://wandb.ai/marin-community/marin_moe_sft/runs/nest-augdk-e128-naive25-thinking-generation-e128-r2"
+    },
+    "256": {
+      "checkpoint": "s3://marin-us-east-02a/marin/users/root/experiments/nested-moe-augdk-sft/nest-augdk-e128-naive25-thinking-sft-r1/dev/checkpoints",
+      "gsm8k_exact_match": 0.0,
+      "instruction_pass_rate": 0.0,
+      "paloma_macro_loss": 3.266356945037842,
+      "run_name": "nest-augdk-e128-naive25-thinking-generation-e256-r2",
+      "runtime_seconds": 0.0,
+      "uncheatable_macro_loss": 2.650312662124634,
+      "url": "https://wandb.ai/marin-community/marin_moe_sft/runs/nest-augdk-e128-naive25-thinking-generation-e256-r2"
+    }
+  },
+  "e256": {
+    "128": {
+      "checkpoint": "s3://marin-us-east-02a/marin/users/root/experiments/nested-moe-augdk-sft/nest-augdk-e256-thinking-sft-r1/dev/checkpoints",
+      "gsm8k_exact_match": 0.0,
+      "instruction_pass_rate": 0.0,
+      "paloma_macro_loss": 3.6523241996765137,
+      "run_name": "nest-augdk-e256-thinking-generation-e128-r2",
+      "runtime_seconds": 1.0,
+      "uncheatable_macro_loss": 3.099757671356201,
+      "url": "https://wandb.ai/marin-community/marin_moe_sft/runs/nest-augdk-e256-thinking-generation-e128-r2"
+    },
+    "256": {
+      "checkpoint": "s3://marin-us-east-02a/marin/users/root/experiments/nested-moe-augdk-sft/nest-augdk-e256-thinking-sft-r1/dev/checkpoints",
+      "gsm8k_exact_match": 0.046875,
+      "instruction_pass_rate": 0.0,
+      "paloma_macro_loss": 3.2503275871276855,
+      "run_name": "nest-augdk-e256-thinking-generation-e256-r2",
+      "runtime_seconds": 0.0,
+      "uncheatable_macro_loss": 2.6365551948547363,
+      "url": "https://wandb.ai/marin-community/marin_moe_sft/runs/nest-augdk-e256-thinking-generation-e256-r2"
+    }
+  }
+}

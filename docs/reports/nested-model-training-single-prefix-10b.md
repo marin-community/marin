@@ -229,6 +229,46 @@ tests for agentic usability, not benchmark-grade capability estimates.
 Post-training source and model-shape validation are pinned at
 [`9e9a44a4fb`](https://github.com/marin-community/marin/commit/9e9a44a4fb).
 
+All six selected SFT stages completed. The nesting tax remains ordered the
+same way as in pretraining:
+
+| Stage | Arm | Final loss | Last-100 mean | Delta vs E256 | Median step overhead |
+|---|---|---:|---:|---:|---:|
+| WildChat | E256 control | 1.592187 | 1.553136 | -- | -- |
+| WildChat | E128 naive | 1.619924 | 1.581573 | +0.028437 | +0.72% |
+| WildChat | E128 layerwise | 1.601771 | 1.563769 | +0.010634 | +0.63% |
+| Thinking | E256 control | 1.768562 | 1.796940 | -- | -- |
+| Thinking | E128 naive | 1.784547 | 1.813757 | +0.016817 | +1.24% |
+| Thinking | E128 layerwise | 1.771570 | 1.801431 | +0.004491 | +1.14% |
+
+The layerwise treatment recovers 63% of the naive WildChat loss penalty and
+73% of the naive thinking-stage penalty. The total job runtimes include
+checkpoint and scheduler variance; median compiled steps are the relevant
+architecture-cost comparison.
+
+![Selected SFT loss curves.](assets/nested-model-training-single-prefix-10b-sft-loss.png)
+
+The bounded generation smoke completed, but it is too small to rank the arms:
+
+| Checkpoint | Inference mode | Paloma | Uncheatable | GSM8K exact match | Format pass |
+|---|---|---:|---:|---:|---:|
+| E256 control | E256 | 3.250328 | 2.636555 | 3 / 64 | 0 / 8 |
+| E256 control | E128 | 3.652324 | 3.099758 | 0 / 64 | 0 / 8 |
+| E128 naive | E256 | 3.266357 | 2.650313 | 0 / 64 | 0 / 8 |
+| E128 naive | E128 | 3.319110 | 2.705699 | 4 / 64 | 0 / 8 |
+| E128 layerwise | E256 | 3.255244 | 2.637289 | 1 / 64 | 0 / 8 |
+| E128 layerwise | E128 | 3.436837 | 2.832995 | 0 / 64 | 0 / 8 |
+
+The two SFT stages increase Paloma by a nearly arm-independent
+`0.103--0.105` nat, consistent with narrow-mixture forgetting rather than a
+nested-specific regression. The E128 ordering survives post-training: naive
+remains best at extraction, layerwise remains intermediate, and chopping the
+control remains worst. Three or four correct GSM8K answers out of 64 and zero
+format passes do not establish agentic quality; this d768 proxy and 524M SFT
+tokens provide a pipeline smoke, not a capability result.
+
+![Post-SFT Paloma and GSM8K smoke.](assets/nested-model-training-single-prefix-10b-generation.png)
+
 ## Results
 
 All arms pass the preregistered 1B-token gate:
@@ -395,8 +435,8 @@ test remains required evidence.
 
 ![Rolling anchored time to equivalent full-mode Paloma loss.](assets/nested-model-training-single-prefix-10b-time-to-equivalent.png)
 
-Post-training results will be added after the selected SFT and generation
-runs complete.
+Standalone E128 and post-hoc pruning results will be added after those jobs
+complete.
 
 - [E256 control](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e256-10b-r1)
 - [E128 naive](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e128-naive25-10b-r1)

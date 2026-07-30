@@ -21,12 +21,12 @@ OUTPUT_PREFIX = "nested-model-training-single-prefix-10b-generation"
 ARMS = ("e256", "e128_naive", "e128_layerwise")
 EXPERT_COUNTS = (256, 128)
 RUNS = {
-    ("e256", 256): "nest-augdk-e256-thinking-generation-e256-r1",
-    ("e256", 128): "nest-augdk-e256-thinking-generation-e128-r1",
-    ("e128_naive", 256): "nest-augdk-e128-naive25-thinking-generation-e256-r1",
-    ("e128_naive", 128): "nest-augdk-e128-naive25-thinking-generation-e128-r1",
-    ("e128_layerwise", 256): "nest-augdk-e128-layer25-thinking-generation-e256-r1",
-    ("e128_layerwise", 128): "nest-augdk-e128-layer25-thinking-generation-e128-r1",
+    ("e256", 256): "nest-augdk-e256-thinking-generation-e256-r2",
+    ("e256", 128): "nest-augdk-e256-thinking-generation-e128-r2",
+    ("e128_naive", 256): "nest-augdk-e128-naive25-thinking-generation-e256-r2",
+    ("e128_naive", 128): "nest-augdk-e128-naive25-thinking-generation-e128-r2",
+    ("e128_layerwise", 256): "nest-augdk-e128-layer25-thinking-generation-e256-r2",
+    ("e128_layerwise", 128): "nest-augdk-e128-layer25-thinking-generation-e128-r2",
 }
 LABELS = {
     "e256": "E256 control checkpoint",
@@ -95,7 +95,11 @@ def _plot(
     figure, axes = plt.subplots(1, 2, figsize=(12, 4.6))
     positions = np.arange(len(EXPERT_COUNTS))
     width = 0.25
-    for axis, (metric, title) in zip(axes, SCORE_METRICS.items(), strict=True):
+    panels = (
+        ("gsm8k_exact_match", "GSM8K exact match", "Score"),
+        ("paloma_macro_loss", "Paloma after SFT", "Macro loss (lower is better)"),
+    )
+    for axis, (metric, title, ylabel) in zip(axes, panels, strict=True):
         for arm_index, arm in enumerate(ARMS):
             values = [float(result[arm][str(count)][metric]) for count in EXPERT_COUNTS]
             offsets = positions + (arm_index - 1) * width
@@ -103,10 +107,11 @@ def _plot(
             axis.bar_label(bars, labels=[f"{value:.3f}" for value in values], padding=3, fontsize=8)
         axis.set_title(title)
         axis.set_xticks(positions, [f"E{count} inference" for count in EXPERT_COUNTS])
-        axis.set_ylim(0.0, 1.0)
-        axis.set_ylabel("Score")
+        axis.set_ylabel(ylabel)
         axis.grid(axis="y", alpha=0.2)
         axis.legend(fontsize=8)
+    axes[0].set_ylim(0.0, 0.08)
+    axes[1].set_ylim(3.15, 3.75)
     figure.suptitle("Selected d768 nested-MoE post-SFT generation")
     figure.tight_layout()
     figure.savefig(path, dpi=180)
