@@ -275,11 +275,7 @@ def _write_samples(fs, results_path: str, task: str, samples: list[EvalSample]) 
 
 
 def _write_broken_record(fs, dest: str) -> str:
-    """Write one record.json missing ``launch_host`` to exercise Debug parse failures.
-
-    The historical ``evalchemy_image`` key remains valid; the absent launch host makes this record
-    genuinely malformed. ``read_records`` collects it as a failure rather than silently dropping it,
-    so the Debug tab has an error to show. Returns the path written."""
+    """Write one record.json missing ``launch_host`` and return its path."""
     run_id = "20260722-000000-legacy-mmlu-broken"
     path = f"{dest}/{run_id}/{RECORD_FILE}"
     fs.makedirs(f"{dest}/{run_id}", exist_ok=True)
