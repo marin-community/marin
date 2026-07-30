@@ -2526,3 +2526,38 @@ result:
 - Decision: all arms satisfy the preregistered Gate 2 continuation rule
   because full Paloma remains within `+0.10` and every intended prefix beats
   control. Continue all five jobs to the 10B endpoint.
+
+### 2026-07-30 00:52 - NEST-MOE-003 10B draft snapshot
+
+- All five arms finished 38,147 updates without a restart. Terminal full
+  Paloma is `3.143487` for E256 control. Deltas are `+0.020221` E128 naive,
+  `+0.036839` E16 naive, `+0.007248` E128 layerwise, and `+0.011082` E16
+  layerwise. Full uncheatable deltas are `+0.018201`, `+0.037782`,
+  `+0.004206`, and `+0.009424`.
+- The trained-prefix Paloma gains against the same fixed prefix cut from
+  control are `-0.340158`, `-1.195134`, `-0.223621`, and `-0.616815`.
+  Every intended prefix wins all 39 aligned evaluations.
+- Mean throughput over the final 100 updates is 556,653 tok/s for control and
+  553,997, 555,481, 555,469, and 555,591 tok/s for the four treatments.
+  Compiled-step overhead is only `0.41--0.49%`.
+- The primary cost conversion now follows `experiments/grug/moe/agent.md`:
+  recenter `loss(C) = 1.6 + A*C^-0.0941` at each endpoint, invert at the
+  control loss, and apply the terminal throughput ratio. Equivalent extra
+  update counts are 5,659 E128 naive, 10,867 E16 naive, 1,947 E128
+  layerwise, and 3,013 E16 layerwise. Equivalent wall costs are `+15.38%`,
+  `+28.76%`, `+5.33%`, and `+8.11%`.
+- The earlier empirical tail-slope estimates (`+4.88%`, `+8.03%`, `+2.03%`,
+  and `+2.81%`) remain a sensitivity analysis. The fixed-exponent Grug
+  conversion is the primary scale decision because it does not let each
+  short run choose a different terminal slope.
+- E128 naive and E128 layerwise are non-dominated and completed matched
+  WildChat/Nemotron SFT or are in its final stage. Corrected GPU-native
+  full/prefix evaluations are running.
+- A matched standalone E128 10B run launched as
+  [nest-augdk-e128-standalone-10b-r1](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e128-standalone-10b-r1).
+  The ordinary E256 checkpoint's fixed first-half chop is already measured at
+  `3.555385`; calibration-ranked and greedy post-hoc E128 pruning will provide
+  a stronger uncompromised-E256 extraction control.
+- Draft report:
+  `docs/reports/nested-model-training-single-prefix-10b.md`. The final version
+  waits for standalone E128, post-hoc pruning, SFT, and generation results.

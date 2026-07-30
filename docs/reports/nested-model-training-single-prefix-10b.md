@@ -1,8 +1,9 @@
 # Single-prefix nested experts at 10B tokens
 
-Date: 2026-07-29
+Date: 2026-07-30
 
-Status: running.
+Status: draft; five-arm pretraining complete, standalone and post-training
+controls in progress.
 
 ## Question
 
@@ -193,6 +194,24 @@ The first three can be tested without changing the expert parameterization.
 Balanced complements are the clearest next E128 gate if the current E128
 naive arm shows useful prefix gains but retains a measurable full-model tax.
 
+## Additional E128 controls
+
+Two controls are in progress for the final report:
+
+1. A matched standalone E128 model uses the same d768/L8/top-4 shape, Datakit
+   stream, 10B-token horizon, optimizer, batch, and seed. It determines
+   whether nested extraction is competitive with training E128 directly,
+   rather than merely better than an accidental prefix.
+2. The uncompromised E256 control is being pruned after training. The fixed
+   first-half chop is already measured at `3.555385` Paloma. Calibration-based
+   expert ranking and gated greedy refinement will test whether post-hoc
+   selection can produce a better E128 without changing E256 training.
+
+The standalone run is
+[tracked in W&B](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e128-standalone-10b-r1).
+The final comparison will report E128 loss at equal tokens, total compute to
+obtain both checkpoints, and the Grug fixed-exponent loss-to-step conversion.
+
 ## Post-training plan
 
 The E256 control and at most two non-dominated treatments will use
@@ -258,6 +277,51 @@ layerwise, and `+0.43%` for E16 layerwise. E128 naive remains inside the 10%
 viability line at this gate; E16 naive does not. Both layerwise arms remain
 well inside it. These are tail-slope estimates, not final endpoints.
 
+All five arms reached the preregistered 10B-token endpoint:
+
+| Arm | Full Paloma | Full delta | Full uncheatable delta | Prefix Paloma | Prefix gain | Grug-equivalent wall cost |
+|---|---:|---:|---:|---:|---:|---:|
+| E256 control | 3.143487 | -- | -- | E128: 3.555385 | -- | -- |
+| E256 control | 3.143487 | -- | -- | E16: 4.590494 | -- | -- |
+| E128 naive | 3.163708 | +0.020221 | +0.018201 | 3.215226 | -0.340158 | +15.38% |
+| E16 naive | 3.180326 | +0.036839 | +0.037782 | 3.395360 | -1.195134 | +28.76% |
+| E128 layerwise | 3.150735 | +0.007248 | +0.004206 | 3.331763 | -0.223621 | +5.33% |
+| E16 layerwise | 3.154569 | +0.011082 | +0.009424 | 3.973680 | -0.616815 | +8.11% |
+
+Every intended prefix beats the corresponding control prefix at all 39
+aligned evaluations. E128 naive delivers the strongest E128 prefix. E128
+layerwise gives up 0.1165 nat of that prefix gain in exchange for recovering
+0.0130 nat of full-model quality and reducing Grug-equivalent wall cost by
+10.05 percentage points. Both are non-dominated and proceed to post-training.
+
+The E16 isolation confirms the mechanism more strongly. Naive E16 has a
+`+0.0368` full-model penalty, while restricting only two rotating layers cuts
+that to `+0.0111`. The layerwise schedule recovers 70% of the full-model
+penalty but retains 52% of the naive prefix gain. E16 remains a routing stress
+test rather than a production candidate.
+
+The primary endpoint conversion follows the Grug guide. It recenters the
+fixed-exponent scaling law
+`loss(C) = 1.6 + A * C^(-0.0941)` through each observed endpoint, inverts it
+at the control loss, and applies the mean token-throughput ratio over the last
+100 updates. This gives the following standardized step and wall-time
+equivalents:
+
+| Arm | Mean terminal tok/s | Extra compute | Equivalent updates | Extra updates | Extra wall time |
+|---|---:|---:|---:|---:|---:|
+| E256 control | 556,653 | -- | 38,147 | -- | -- |
+| E128 naive | 553,997 | +14.83% | 43,806 | +5,659 | +15.38% |
+| E16 naive | 555,481 | +28.49% | 49,014 | +10,867 | +28.76% |
+| E128 layerwise | 555,469 | +5.10% | 40,094 | +1,947 | +5.33% |
+| E16 layerwise | 555,591 | +7.90% | 41,160 | +3,013 | +8.11% |
+
+The fixed-exponent conversion is the preregistered Grug comparison and is the
+primary cost number. The empirical ten-point tail fits shown in the rolling
+chart are less conservative: they estimate `+4.88%`, `+8.03%`, `+2.03%`, and
+`+2.81%` for the same four arms. Their fitted slopes vary by arm over a short
+10B horizon, so they are retained as a sensitivity analysis rather than used
+for the scale decision.
+
 The control evaluates three routing modes and has a 76-second median
 evaluation hook. Each treatment evaluates two modes and has a 52--53-second
 median hook. This research instrumentation is excluded from the architecture
@@ -272,19 +336,20 @@ is:
 
 | Arm | Median step | 10B optimizer hours | 10B H100-hours | Surcharge |
 |---|---:|---:|---:|---:|
-| E256 control | 464.596 ms | 4.923 | 39.38 | -- |
-| E128 naive | 466.865 ms | 4.947 | 39.58 | +0.49% |
-| E16 naive | 466.200 ms | 4.940 | 39.52 | +0.35% |
-| E128 layerwise | 466.767 ms | 4.946 | 39.57 | +0.47% |
-| E16 layerwise | 466.583 ms | 4.944 | 39.55 | +0.43% |
+| E256 control | 465.128 ms | 4.929 | 39.43 | -- |
+| E128 naive | 467.391 ms | 4.953 | 39.62 | +0.49% |
+| E16 naive | 467.030 ms | 4.949 | 39.59 | +0.41% |
+| E128 layerwise | 467.429 ms | 4.953 | 39.62 | +0.49% |
+| E16 layerwise | 467.127 ms | 4.950 | 39.60 | +0.43% |
 
 This result is already precise enough to reject a material same-topology
 kernel surcharge. Quality-adjusted cost remains the deciding measurement.
 
 The two-checkpoint baseline is much more expensive. Analytic model FLOPs are
 approximately 357.7M per token for E256 and 356.2M for standalone E128, so
-training both independently costs about 1.996x one E256 run. At Gate 2, the
-quality-adjusted E128-naive estimate is 1.080x. This is not yet an
+training both independently costs about 1.996x one E256 run. At 10B tokens,
+the Grug quality-adjusted estimates are 1.154x for E128 naive and 1.053x for
+E128 layerwise. This is not yet an
 apples-to-apples replacement claim: the current control provides an untrained
 same-checkpoint prefix, not an independently compute-optimal E128 run.
 
@@ -316,20 +381,22 @@ turn a promising quality curve into capacity overflow and all-to-all
 imbalance.
 
 An architecture is economically viable if its final quality-adjusted cost is
-below about 10%. The Gate 1 point estimates put both layerwise arms and E128
-naive inside that range, but the 10B endpoint and an expert-parallel
-replication remain required evidence.
+below about 10%. The fixed-exponent Grug conversion puts both layerwise arms
+inside that threshold and both naive arms outside it. E128 naive is the better
+breakout model; E128 layerwise is the better full model and the only E128 arm
+inside the threshold. A production expert-parallel replication and balance
+test remains required evidence.
 
-![Interim full and prefix Paloma curves.](assets/nested-model-training-single-prefix-10b-paloma.png)
+![Full and prefix Paloma curves.](assets/nested-model-training-single-prefix-10b-paloma.png)
 
-![Interim mixed-mode training loss.](assets/nested-model-training-single-prefix-10b-loss.png)
+![Mixed-mode training loss.](assets/nested-model-training-single-prefix-10b-loss.png)
 
-![Interim compiled optimizer-step timing.](assets/nested-model-training-single-prefix-10b-step-time.png)
+![Compiled optimizer-step timing.](assets/nested-model-training-single-prefix-10b-step-time.png)
 
 ![Rolling anchored time to equivalent full-mode Paloma loss.](assets/nested-model-training-single-prefix-10b-time-to-equivalent.png)
 
-Final results will be added after the preregistered 10B endpoint and selected
-post-training runs complete.
+Post-training results will be added after the selected SFT and generation
+runs complete.
 
 - [E256 control](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e256-10b-r1)
 - [E128 naive](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e128-naive25-10b-r1)
