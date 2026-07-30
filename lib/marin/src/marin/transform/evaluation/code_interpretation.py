@@ -3,24 +3,20 @@
 
 """Deterministic code-interpretation records for supervised PPL evals."""
 
-import json
-import posixpath
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from marin.datakit.ingestion_manifest import (
-    IngestionSourceManifest,
-    MaterializedOutputMetadata,
-    write_ingestion_metadata_json,
+from marin.transform.evaluation.continuation_records import (
+    ContinuationStagingConfig,
+    render_continuation_target,
+    render_support_and_query,
+    stage_continuation_slice,
 )
-from marin.transform.evaluation.continuation_records import render_continuation_target, render_support_and_query
-from rigging.filesystem import StoragePath, open_url
-from zephyr.writers import atomic_rename
 
 CODE_INTERPRETATION_NUM_FEWSHOT = 5
 CODE_INTERPRETATION_RENDERER_VERSION = "v1"
-DEFAULT_CODE_INTERPRETATION_OUTPUT_FILENAME = "staged.jsonl.gz"
+CODE_INTERPRETATION_SOURCE_ID = "code_interpretation_static"
 
 
 @dataclass(frozen=True)
@@ -52,18 +48,6 @@ class CodeInterpretationTemplate:
     family: str
     description: str
     renderer: Callable[[CodeInterpretationExample, bool], str]
-
-
-@dataclass(frozen=True)
-class CodeInterpretationStagingConfig:
-    """Configuration for staging one code-interpretation slice."""
-
-    output_path: str
-    task_key: str
-    template_key: str
-    output_filename: str = DEFAULT_CODE_INTERPRETATION_OUTPUT_FILENAME
-    source_manifest: IngestionSourceManifest | None = None
-    content_fingerprint: str = ""
 
 
 def _examples(prefix: str, pairs: tuple[tuple[str, str], ...]) -> tuple[CodeInterpretationExample, ...]:
@@ -258,7 +242,7 @@ def code_interpretation_record(task_key: str, template_key: str, heldout_index: 
             task=task, template=template, heldout=heldout, num_fewshot=CODE_INTERPRETATION_NUM_FEWSHOT
         ),
         "target": render_continuation_target(template=template, heldout=heldout),
-        "source": "code_interpretation_static",
+        "source": CODE_INTERPRETATION_SOURCE_ID,
         "provenance": {
             "task_key": task.key,
             "task_family": task.family,
@@ -274,58 +258,27 @@ def code_interpretation_record(task_key: str, template_key: str, heldout_index: 
     }
 
 
-def stage_code_interpretation_source(cfg: CodeInterpretationStagingConfig) -> dict[str, Any]:
+def stage_code_interpretation_source(cfg: ContinuationStagingConfig) -> dict[str, Any]:
     """Stage one code-interpretation task/template slice as JSONL."""
-
-    if cfg.source_manifest is not None and cfg.content_fingerprint:
-        expected = cfg.source_manifest.fingerprint()
-        if cfg.content_fingerprint != expected:
-            raise ValueError(
-                f"content_fingerprint mismatch: config has {cfg.content_fingerprint}, source manifest has {expected}"
-            )
 
     task = CODE_INTERPRETATION_TASKS_BY_KEY[cfg.task_key]
     if cfg.template_key not in CODE_INTERPRETATION_TEMPLATES_BY_KEY:
         raise ValueError(f"Unknown code-interpretation template: {cfg.template_key}")
-    if len(task.support_examples) != CODE_INTERPRETATION_NUM_FEWSHOT:
-        raise ValueError(f"{cfg.task_key} must have exactly {CODE_INTERPRETATION_NUM_FEWSHOT} support examples")
 
-    StoragePath(cfg.output_path).mkdirs(exist_ok=True)
-    out_file = posixpath.join(cfg.output_path, cfg.output_filename)
-    compression = "gzip" if out_file.endswith(".gz") else None
-
-    with atomic_rename(out_file) as temp_path:
-        with open_url(temp_path, "wt", encoding="utf-8", compression=compression) as outfile:
-            for heldout_index in range(len(task.heldout_examples)):
-                json.dump(code_interpretation_record(cfg.task_key, cfg.template_key, heldout_index), outfile)
-                outfile.write("\n")
-
-    output_size = StoragePath(out_file).size()
-    result: dict[str, Any] = {
-        "record_count": len(task.heldout_examples),
-        "bytes_written": output_size,
-        "output_file": out_file,
-    }
-
-    if cfg.source_manifest is not None:
-        metadata_path = write_ingestion_metadata_json(
-            manifest=cfg.source_manifest,
-            materialized_output=MaterializedOutputMetadata(
-                input_path="code_interpretation_static",
-                output_path=cfg.output_path,
-                output_file=out_file,
-                record_count=len(task.heldout_examples),
-                bytes_written=output_size,
-                metadata={
-                    "task_key": cfg.task_key,
-                    "task_family": task.family,
-                    "template_key": cfg.template_key,
-                    "renderer_version": CODE_INTERPRETATION_RENDERER_VERSION,
-                    "num_fewshot": CODE_INTERPRETATION_NUM_FEWSHOT,
-                    "heldout_examples": len(task.heldout_examples),
-                },
-            ),
-        )
-        result["metadata_file"] = metadata_path
-
-    return result
+    records = [
+        code_interpretation_record(cfg.task_key, cfg.template_key, heldout_index)
+        for heldout_index in range(len(task.heldout_examples))
+    ]
+    return stage_continuation_slice(
+        cfg,
+        records=records,
+        source_id=CODE_INTERPRETATION_SOURCE_ID,
+        metadata={
+            "task_key": cfg.task_key,
+            "task_family": task.family,
+            "template_key": cfg.template_key,
+            "renderer_version": CODE_INTERPRETATION_RENDERER_VERSION,
+            "num_fewshot": CODE_INTERPRETATION_NUM_FEWSHOT,
+            "heldout_examples": len(task.heldout_examples),
+        },
+    )
