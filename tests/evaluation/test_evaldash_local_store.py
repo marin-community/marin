@@ -164,7 +164,7 @@ def test_ingestor_surfaces_parse_failures(tmp_path):
     assert probe["error"] is None
     assert len(probe["parse_failures"]) == 1
     assert probe["parse_failures"][0]["path"].endswith("20260722-000000-legacy-mmlu-broken/record.json")
-    assert "eval_runtime" in probe["parse_failures"][0]["error"]
+    assert "launch_host" in probe["parse_failures"][0]["error"]
 
 
 def test_api_jobs_degrade_without_a_cluster(client):

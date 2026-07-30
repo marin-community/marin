@@ -275,11 +275,11 @@ def _write_samples(fs, results_path: str, task: str, samples: list[EvalSample]) 
 
 
 def _write_broken_record(fs, dest: str) -> str:
-    """Write one record.json missing a required field, to exercise the Debug view's parse-failure list.
+    """Write one record.json missing ``launch_host`` to exercise Debug parse failures.
 
-    Mirrors the real schema drift seen in object storage: a record written before ``eval_runtime`` was
-    a required provenance field. ``read_records`` collects it as a failure rather than silently
-    dropping it, so the Debug tab has an error to show. Returns the path written."""
+    The historical ``evalchemy_image`` key remains valid; the absent launch host makes this record
+    genuinely malformed. ``read_records`` collects it as a failure rather than silently dropping it,
+    so the Debug tab has an error to show. Returns the path written."""
     run_id = "20260722-000000-legacy-mmlu-broken"
     path = f"{dest}/{run_id}/{RECORD_FILE}"
     fs.makedirs(f"{dest}/{run_id}", exist_ok=True)
@@ -297,7 +297,7 @@ def _write_broken_record(fs, dest: str) -> str:
         "metrics": {"mmlu": {"acc,none": 0.5}},
         "jobs": {},
         "log_tails": {},
-        "provenance": {"git_sha": "deadbeef", "launch_host": "old-host"},  # missing required eval_runtime
+        "provenance": {"git_sha": "deadbeef", "evalchemy_image": "evalchemy:old"},
     }
     with fs.open(path, "w") as handle:
         handle.write(json.dumps(broken, indent=2))
