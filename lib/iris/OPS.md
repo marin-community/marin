@@ -54,6 +54,13 @@ iris cluster dashboard-proxy        # local proxy to remote controller (no tunne
 
 ### Controller Restart
 
+For a rollout across more than one cluster, use
+[the `deploy-iris-controllers` skill](../../.agents/skills/deploy-iris-controllers/SKILL.md).
+It fixes the order (`marin-dev`, `marin`, then CoreWeave smallest first), puts a
+human gate on every step, and drives `scripts/iris/rollout_controllers.py` for
+the credential preflight, the before/after snapshots, the 5-minute watch, and a
+one-job smoke test.
+
 `iris cluster controller restart` restarts the controller only (seconds of downtime, workers unaffected).
 `iris cluster restart` tears down **everything** — controller + all workers. All jobs die. **Never run the full `iris cluster restart` without explicit user approval.**
 
