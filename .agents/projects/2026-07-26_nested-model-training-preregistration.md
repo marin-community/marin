@@ -611,3 +611,31 @@ full E256 Paloma to the E256 control and both extracted halves to standalone
 E128. A balanced-complements success requires the worse half to reduce the
 single-prefix E128 gap without increasing the full-model loss penalty or
 optimizer-step time.
+
+## NEST-MOE-008 addendum: post-hoc-drop strongman recovery
+
+This control is registered after the direct-breakout crossings and before
+post-hoc E128 recovery training begins. It tests whether nesting beats an
+unmodified E256 run followed by expert dropping and direct E128 cooldown.
+
+Start from the completed E256 control checkpoint at update 38,147. Select 128
+experts independently in each layer using the previously evaluated
+`hybrid_greedy` rule: sum the standardized negative full-router QB bias and
+standardized router-column norm, then retain the top 128 columns. This is the
+best observed post-hoc Paloma selection at `3.539280891`; the expert sets are
+fixed by its logged W&B artifact. Physically gather those expert weights,
+router columns, full-router QB state, and pending QB state into an ordinary
+E128 trainer.
+
+Use the same direct-cooldown contract as nested breakout: terminal Datakit
+phase, fresh optimizer state, MuonH learning rate `3.033425e-4`, AdamH learning
+rate `7.000212e-5`, no warmup, a 12,000-update linear schedule, and evaluation
+every 250 updates. The recovery event is the first Paloma macro evaluation at
+or below the standalone E128 endpoint `3.181439161`.
+
+The primary cost is E256-control optimizer time plus post-hoc E128 cooldown
+through the first crossing. Compare it with the observed nested-prefix plus
+two-branch breakout cost, `48.8628` H100-hours. At the measured E128 step time,
+post-hoc recovery must cross in approximately 10,100 updates to beat nesting
+in total accelerator compute. If it does not cross by 12,000 updates, report
+the result as a lower bound and stop.
