@@ -485,11 +485,6 @@
               "type": "string"
             },
             {
-              "selector": "run_state",
-              "text": "run_state",
-              "type": "string"
-            },
-            {
               "selector": "tokens",
               "text": "tokens",
               "type": "number"
@@ -534,11 +529,6 @@
               "type": "string"
             },
             {
-              "selector": "run_state",
-              "text": "run_state",
-              "type": "string"
-            },
-            {
               "selector": "tokens",
               "text": "tokens",
               "type": "number"
@@ -580,11 +570,6 @@
             {
               "selector": "run",
               "text": "run",
-              "type": "string"
-            },
-            {
-              "selector": "run_state",
-              "text": "run_state",
               "type": "string"
             },
             {

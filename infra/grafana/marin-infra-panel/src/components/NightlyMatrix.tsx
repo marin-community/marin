@@ -58,12 +58,12 @@ export function NightlyMatrix({ frames, width, height }: Props) {
   const subgroups = spans(lanes, (lane) => `${lane.group}/${lane.subgroup}`);
   const border = theme.colors.border.weak;
   return (
-    <section className={css`width:${width}px;height:${height}px;overflow:auto;color:${theme.colors.text.primary};padding:2px 4px;`} aria-label="Nightly regression status">
+    <section className={css`width:${width}px;min-height:${height}px;color:${theme.colors.text.primary};padding:2px 4px;`} aria-label="Nightly regression status">
       <div className={css`display:flex;align-items:baseline;justify-content:space-between;margin:0 2px 5px;font-size:13px;color:${theme.colors.text.secondary};`}>
         <span><strong className={css`color:${theme.colors.text.primary};font-size:16px;`}>Nightly regressions</strong>{todayCells.length > 0 && ` · Today: ${todayCells.filter((cell) => cell.healthy).length}/${todayCells.length} healthy`}</span>
         <span>✓ healthy · amber slow · × failed · ! missing</span>
       </div>
-      <table className={css`width:100%;min-width:980px;border-collapse:separate;border-spacing:2px;table-layout:fixed;font-size:12px;`}>
+      <table className={css`width:100%;border-collapse:separate;border-spacing:2px;table-layout:fixed;font-size:12px;`}>
         <caption className={css`position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);`}>Seven UTC days of scheduled regression status and duration by lane</caption>
         <colgroup><col className={css`width:72px;`} />{lanes.map((lane) => <col key={lane.laneId} />)}</colgroup>
         <thead>

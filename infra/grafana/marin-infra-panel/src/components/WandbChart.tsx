@@ -31,7 +31,7 @@ export function WandbChart({ frames, width, height }: Props) {
     return { paths: [...groups.entries()], xMin: Math.min(...xs), xMax: Math.max(...xs), yMin: low, yMax: high === low ? low + 1 : high };
   }, [points]);
   if (points.length === 0) {return <PanelMessage width={width} height={height}>No W&B data</PanelMessage>;}
-  const pad = { left: 45, right: 10, top: 28, bottom: 28 };
+  const pad = { left: 45, right: 10, top: 28, bottom: 20 };
   const chartWidth = Math.max(1, width - pad.left - pad.right);
   const chartHeight = Math.max(1, height - pad.top - pad.bottom);
   const x = (value: number) => pad.left + ((value - xMin) / Math.max(1, xMax - xMin)) * chartWidth;
@@ -43,8 +43,5 @@ export function WandbChart({ frames, width, height }: Props) {
       {[0, .5, 1].map((fraction) => { const xx = pad.left + fraction * chartWidth; const value = xMin + fraction * (xMax-xMin); return <text key={fraction} x={xx} y={height-7} textAnchor={fraction===0?'start':fraction===1?'end':'middle'} fill={theme.colors.text.secondary} fontSize="11">{compact(value)}</text>; })}
       {paths.map(([run, values], index) => <polyline key={run} fill="none" stroke={SERIES_COLORS[index % SERIES_COLORS.length]} strokeWidth="2" points={values.map((point) => `${x(point.tokens)},${y(Math.min(yMax, Math.max(yMin, point.value)))}`).join(' ')} />)}
     </svg>
-    <div className={css`position:absolute;left:${pad.left}px;right:8px;bottom:15px;display:flex;gap:10px;overflow:hidden;font-size:11px;`}>
-      {paths.map(([run, values], index) => <span key={run} title={run} className={css`display:flex;gap:3px;min-width:0;`}><span aria-hidden="true" className={css`color:${SERIES_COLORS[index % SERIES_COLORS.length]};`}>━</span><span className={css`overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`}>{run}{values[0].runState === 'running' ? '' : ` (${values[0].runState})`}</span></span>)}
-    </div>
   </section>;
 }
