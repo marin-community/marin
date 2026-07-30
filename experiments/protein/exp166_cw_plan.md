@@ -282,8 +282,10 @@ scheduling gate and never evidence that training started.
 One hard invariant: at most one live dispatch per run. Two gangs writing one checkpoint
 corrupt it.
 
-Measure the stall clock from the last logged step — `iris job logs | grep run_levanter |
-tail -1` — not from when it was noticed. `r.summary` is unreliable here: the same run
+Measure the stall clock from the last **training** line — `iris job logs | grep "Progress
+on:train" | tail -1` — not from when it was noticed and not from any log output. A wedged
+gang keeps emitting `Failed to renew endpoint lease` warnings, so a fresh timestamp is not
+evidence of progress. `r.summary` is unreliable here: the same run
 returned three different `_step` values within minutes depending on the endpoint. Use
 `scan_history` with a fresh `Api()` client.
 
