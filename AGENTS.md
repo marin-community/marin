@@ -25,6 +25,23 @@ matching skill exists** by scanning the skill descriptions in your system
 prompt. If a skill matches, invoke it via the Skill tool — do not skip it in
 favor of ad-hoc commands.
 
+## Search Prior Work
+
+Use Echo when prior Marin decisions, incidents, workflows, GitHub work, or
+indexed repository documentation could inform a task:
+
+```bash
+uv run infra/echo/cli.py search "how do I deploy Iris"
+uv run infra/echo/cli.py get <domain:id>
+```
+
+Search covers wiki, repository files, pull requests, and issues by default.
+Repeat `--domain` to select a subset; add `--domain discord` only when discussion
+history is relevant. Use `grep` for exact strings in remote activity and `rg`
+for the current checkout, including branch-only or uncommitted files. Echo's
+file results follow the periodically refreshed GitHub head rather than the local
+working tree. See the `consult-echo` skill for the complete workflow.
+
 ## Development
 
 ```bash

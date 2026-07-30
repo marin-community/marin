@@ -10,36 +10,50 @@ Discord URLs for the evidence you use.
 
 ## Search
 
-Run these searches in order before adding or editing a wiki note. Use the same
-sequence at the start of an investigation when prior context could materially
-shorten debugging.
+Use federated search when prior decisions, incidents, workflows, current GitHub
+work, or indexed repository documentation could inform the task. Natural-language
+questions work:
 
-1. Search wiki entries semantically for an existing synthesis:
+```bash
+uv run infra/echo/cli.py search "how do I diagnose a stalled TPU collective" --limit 10
+```
 
-   ```bash
-   uv run infra/echo/cli.py wiki search "stalled TPU collective diagnosis" --tag ops
-   ```
+Search covers `wiki`, `file`, `pr`, and `issue` by default. Repeat `--domain` to
+select a subset:
 
-2. Search GitHub and Discord activity semantically for prior discussions and
-   decisions:
+```bash
+uv run infra/echo/cli.py search "stalled TPU collective" \
+  --domain wiki --domain file --domain issue
+```
 
-   ```bash
-   uv run infra/echo/cli.py search "stalled TPU collective diagnosis" --limit 10
-   ```
+Discord is excluded by default because messages may be noisy or untrusted. Add
+`--domain discord` only when discussion history is relevant, and open the
+canonical URL when surrounding thread context matters.
 
-3. Grep each exact error string, tag, run name, or identifier:
+Search output is deliberately compact. Fetch any result's complete indexed or
+raw-source detail with the printed ID:
 
-   ```bash
-   uv run infra/echo/cli.py grep "FAILED_PRECONDITION"
-   ```
+```bash
+uv run infra/echo/cli.py get <domain:id>
+```
 
-Use `--source`, `--kind`, or `--since` to narrow semantic activity searches.
-Use repeated `--tag` flags to require all named wiki tags.
-Use `show <id>` for a complete activity hit and `wiki show <id>` for a complete
-wiki note. Activity results print canonical URLs. Wiki exports include the
-canonical Echo URL in their OKF frontmatter. Open Discord URLs when surrounding
-thread context matters because Echo stores each Discord hit as one message.
-Authentication reuses the shared Marin login via `iris login`; see [Echo setup and access](../../../infra/echo/README.md).
+Use `grep` for exact strings in GitHub or Discord activity, with `--source` or
+`--kind` when needed:
+
+```bash
+uv run infra/echo/cli.py grep "FAILED_PRECONDITION" --source github
+```
+
+Use `rg` for exact identifiers in the current checkout. Echo's file index
+follows the periodically refreshed GitHub head, so it does not contain
+branch-only or uncommitted files. Use `wiki search --tag <tag>` when tags, rather
+than federated relevance, define the desired synthesis. Authentication reuses
+the shared Marin login via `iris login`; see
+[Echo setup and access](../../../infra/echo/README.md).
+
+Run this search sequence before adding or editing a wiki note. Use it at the
+start of an investigation when prior context could materially shorten
+debugging.
 
 ## Choose the durable home
 

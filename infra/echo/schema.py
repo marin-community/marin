@@ -5,9 +5,9 @@
 
 The single source of truth for echo's schema. Migrations (migrations/) create and evolve
 these tables; the sync job (sync/main.py) uses them for DML. `chunks` mirrors the
-marinmirror corpus schema for the github+discord sources; `wiki_entries` holds durable
-agent-authored notes; `work_log` is the agents' shared logbook; `sync_state` is the
-corpus-build watermark.
+marinmirror corpus schema for the github+discord sources; `repository_file_chunks`
+indexes GitHub branch heads; `wiki_entries` holds durable agent-authored notes;
+`work_log` is the agents' shared logbook; the state tables hold sync watermarks.
 """
 
 from pgvector.sqlalchemy import Vector
@@ -26,6 +26,7 @@ from sqlalchemy import (
     MetaData,
     Table,
     Text,
+    UniqueConstraint,
     func,
     text,
 )
@@ -76,6 +77,74 @@ chunks = Table(
     Index("idx_chunks_search_document", "search_document", postgresql_using="gin"),
     # Trigram index so `grep` (text ILIKE '%pattern%') is an index scan, not a seq scan.
     Index("idx_chunks_text_trgm", "text", postgresql_using="gin", postgresql_ops={"text": "gin_trgm_ops"}),
+)
+
+repository_file_chunks = Table(
+    "repository_file_chunks",
+    metadata,
+    Column("id", BigInteger, Identity(always=True), primary_key=True),
+    Column("repository", Text, nullable=False),
+    Column("branch", Text, nullable=False),
+    Column("path", Text, nullable=False),
+    Column("title", Text, nullable=False),
+    Column("chunk_index", Integer, nullable=False),
+    Column("start_line", Integer, nullable=False),
+    Column("text", Text, nullable=False),
+    Column("embedding", Vector(EMBED_DIM), nullable=False),
+    Column(
+        "search_document",
+        postgresql.TSVECTOR,
+        Computed(
+            f"setweight(to_tsvector('{TEXT_SEARCH_CONFIG}'::regconfig, path), 'A') || "
+            f"setweight(to_tsvector('{TEXT_SEARCH_CONFIG}'::regconfig, title), 'A') || "
+            f"setweight(to_tsvector('{TEXT_SEARCH_CONFIG}'::regconfig, text), 'B')",
+            persisted=True,
+        ),
+    ),
+    UniqueConstraint("repository", "branch", "path", "chunk_index", name="repository_file_chunks_path_part"),
+    Index("idx_repository_file_chunks_repository_branch", "repository", "branch"),
+    Index(
+        "idx_repository_file_chunks_embedding",
+        "embedding",
+        postgresql_using="hnsw",
+        postgresql_ops={"embedding": "vector_cosine_ops"},
+    ),
+    Index("idx_repository_file_chunks_search_document", "search_document", postgresql_using="gin"),
+    Index(
+        "idx_repository_file_chunks_path_trgm",
+        "path",
+        postgresql_using="gin",
+        postgresql_ops={"path": "gin_trgm_ops"},
+    ),
+    Index(
+        "idx_repository_file_chunks_text_trgm",
+        "text",
+        postgresql_using="gin",
+        postgresql_ops={"text": "gin_trgm_ops"},
+    ),
+)
+
+repository_index_state = Table(
+    "repository_index_state",
+    metadata,
+    Column("repository", Text, primary_key=True),
+    Column("branch", Text, primary_key=True),
+    Column("commit_sha", Text, nullable=False),
+    Column("checked_at", DateTime(timezone=True), nullable=False),
+    Column("indexed_at", DateTime(timezone=True), nullable=False),
+)
+
+repository_index_builds = Table(
+    "repository_index_builds",
+    metadata,
+    Column("repository", Text, primary_key=True),
+    Column("branch", Text, primary_key=True),
+    Column("commit_sha", Text, nullable=False),
+    Column("base_sha", Text),
+    Column("mode", Text, nullable=False),
+    Column("total_files", Integer, nullable=False),
+    Column("completed_files", Integer, nullable=False, server_default=text("0")),
+    Column("started_at", DateTime(timezone=True), nullable=False),
 )
 
 sync_state = Table(

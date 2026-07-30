@@ -72,6 +72,7 @@ class CloudRunServiceArgs:
     # (an apiserver, indexers, reconcilers). True also enables startup CPU boost.
     cpu_always_allocated: bool = False
     request_timeout: int = 60
+    max_instance_request_concurrency: int | None = None
     # Service-level min == max == 1 for a service whose local SQLite is per-instance:
     # >1 diverges alert and dashboard state, while 0 stops alert evaluation and makes
     # first paint a cold start. Cloud Run can temporarily overlap instances while a new
@@ -320,6 +321,7 @@ class CloudRunService(pulumi.ComponentResource):
             template=gcp.cloudrunv2.ServiceTemplateArgs(
                 service_account=service_account.email,
                 timeout=f"{args.request_timeout}s",
+                max_instance_request_concurrency=args.max_instance_request_concurrency,
                 vpc_access=gcp.cloudrunv2.ServiceTemplateVpcAccessArgs(
                     egress="PRIVATE_RANGES_ONLY",
                     network_interfaces=[
