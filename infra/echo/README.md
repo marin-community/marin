@@ -63,8 +63,9 @@ questions such as `how do i deploy iris`.
 
 Prose questions that combine logs with training, jobs, runs, or querying add
 `finelog iris job logs` to the semantic and cross-encoder inputs. The lexical query
-and displayed query remain unchanged. This maps user vocabulary onto Marin's log
-stack without weakening exact identifier lookup.
+and displayed query remain unchanged. Prose KV-cache questions similarly add
+Levanter's `KvPageCache` and `kv_cache` vocabulary. These expansions map user
+vocabulary onto Marin subsystem names without changing identifier queries.
 
 Results with a lexical match always qualify. A semantic-only result must have cosine
 distance at most 0.45 (similarity at least 0.55), so an unrelated nearest neighbor is

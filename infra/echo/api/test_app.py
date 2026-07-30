@@ -232,6 +232,13 @@ def test_training_log_question_uses_finelog_and_iris_query_vocabulary(client_wit
     assert harness.reranker.queries == [expanded]
 
 
+def test_kv_cache_question_uses_levanter_query_vocabulary():
+    query = "how do we handle kv caching"
+
+    assert echo.search_config.expanded_query(query) == f"{echo.search_config.KV_QUERY_EXPANSION}\nUser query: {query}"
+    assert echo.search_config.expanded_query("kv_cache.py") == "kv_cache.py"
+
+
 def test_federated_search_classifies_github_comment_domain(client_with):
     row = make_row(
         id=8,

@@ -52,6 +52,9 @@ QUERY_WORD_PATTERN = re.compile(r"[a-z0-9]+")
 LOG_QUERY_TERMS = frozenset({"log", "logging", "logs"})
 LOG_QUERY_CONTEXT_TERMS = frozenset({"job", "jobs", "query", "run", "runs", "train", "training"})
 LOG_QUERY_EXPANSION = "Relevant Marin terms: finelog iris job logs"
+KV_QUERY_TERMS = frozenset({"kv"})
+KV_CACHE_TERMS = frozenset({"cache", "caches", "caching"})
+KV_QUERY_EXPANSION = "Levanter inference KvPageCache kv_cache"
 PROSE_QUERY_MIN_WORDS = 3
 
 
@@ -82,7 +85,11 @@ def search_weights(query: str) -> SearchWeights:
 
 def expanded_query(query: str) -> str:
     """Add Marin vocabulary when a prose question names a known subsystem indirectly."""
+    if is_identifier_query(query):
+        return query
     terms = set(QUERY_WORD_PATTERN.findall(query.casefold()))
+    if terms & KV_QUERY_TERMS and terms & KV_CACHE_TERMS:
+        return f"{KV_QUERY_EXPANSION}\nUser query: {query}"
     if terms & LOG_QUERY_TERMS and terms & LOG_QUERY_CONTEXT_TERMS:
         return f"{query}\n{LOG_QUERY_EXPANSION}"
     return query
