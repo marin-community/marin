@@ -12,7 +12,7 @@ from typing import ClassVar, Protocol, TypeVar, cast
 import fsspec
 import jax
 from fsspec import AbstractFileSystem
-from levanter.checkpoint import load_checkpoint
+from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 
 logger = logging.getLogger(__name__)
 
@@ -156,14 +156,15 @@ def init_weights_only_from_checkpoint(
     if int(state.step) != 0:
         return state
 
+    concrete_checkpoint_path = latest_checkpoint_path(checkpoint_path)
     weight_fields = ("params", *additional_weight_fields)
     exemplar = {field_name: getattr(state, field_name) for field_name in weight_fields}
-    logger.info("Initializing model weights from %s", checkpoint_path)
+    logger.info("Initializing model weights from %s", concrete_checkpoint_path)
     loaded = cast(
         dict[str, object],
         load_checkpoint(
             exemplar,
-            checkpoint_path,
+            concrete_checkpoint_path,
             axis_mapping=None,
             mesh=mesh,
             allow_partial=allow_partial,

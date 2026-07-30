@@ -62,7 +62,8 @@ def test_initialize_from_loads_only_phase_weight_state(
         ema_params=jnp.array([50, 60]),
         pending_qb_betas=jnp.array([70, 80]),
     )
-    source_checkpoint = _save_checkpoint(tmp_path / "source", source_state)
+    source_root = tmp_path / "source"
+    _save_checkpoint(source_root, source_state)
     fresh_state = _TestGrugState(
         step=jnp.array(0),
         params=jnp.array([1, 2]),
@@ -73,7 +74,7 @@ def test_initialize_from_loads_only_phase_weight_state(
 
     initialized = init_weights_only_from_checkpoint(
         fresh_state,
-        source_checkpoint,
+        str(source_root),
         mesh=None,
         allow_partial=False,
         additional_weight_fields=additional_weight_fields,
