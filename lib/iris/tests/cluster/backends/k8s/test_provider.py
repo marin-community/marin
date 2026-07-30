@@ -19,6 +19,7 @@ from iris.cluster.backends.k8s.tasks import (
     _LABEL_TASK_HASH,
     _LABEL_TASK_ID,
     _MANAGED_POD_LABELS,
+    _POD_DELETED_TERMINAL_REASON,
     _POD_NOT_FOUND_GRACE_CYCLES,
     _RUNTIME_LABEL_VALUE,
     K8sTaskProvider,
@@ -274,8 +275,10 @@ def test_sync_running_task_returns_running_state(provider, k8s):
     assert result[0].new_state == job_pb2.TASK_STATE_RUNNING
 
 
-def test_sync_pod_not_found_marks_failed(provider, k8s):
-    """Pod must be missing for _POD_NOT_FOUND_GRACE_CYCLES consecutive syncs before FAILED."""
+def test_sync_pod_not_found_marks_worker_failed(provider, k8s):
+    """A pod missing for _POD_NOT_FOUND_GRACE_CYCLES consecutive syncs with no
+    disruption ever observed is worker loss (preemption budget), not an
+    application failure — nothing the task did deletes its own pod."""
     task_id = JobName.from_wire("/job/0")
     entry = RunningTaskEntry(task_id=task_id, attempt_id=0)
 
@@ -288,7 +291,8 @@ def test_sync_pod_not_found_marks_failed(provider, k8s):
 
     result = provider.sync(batch)
     assert len(result) == 1
-    assert result[0].new_state == job_pb2.TASK_STATE_FAILED
+    assert result[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
+    assert result[0].terminal_reason == _POD_DELETED_TERMINAL_REASON
 
 
 def test_sync_finds_pod_dispatched_before_pod_names_embedded_uid(provider, k8s):
@@ -350,27 +354,68 @@ def test_sync_ignores_legacy_pod_for_an_attempt_this_process_dispatched(provider
         assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_RUNNING
 
     result = provider.sync(batch)
-    assert result[0].new_state == job_pb2.TASK_STATE_FAILED
+    assert result[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
     assert result[0].error == "Pod not found"
 
 
-def test_sync_coscheduled_pod_not_found_is_worker_failed(provider, k8s):
-    """A vanished pod for a coscheduled task is billed as WORKER_FAILED (gang preemption),
-    not FAILED — Kueue deletes every pod in a preempted group, leaving only the absence."""
-    task_id = JobName.from_wire("/gang/task/0")
-    entry = RunningTaskEntry(task_id=task_id, attempt_id=0, coscheduled=True)
-    batch = make_batch(running_tasks=[entry])
+_EVICTION_REASON = "WorkloadEvictedDueToPreempted: Preempted to accommodate a higher priority Workload"
 
+
+def _populate_evicted_pod(k8s, pod_name: str) -> None:
+    """A running pod carrying the Kueue eviction condition it gets while terminating."""
+    populate_pod(k8s, pod_name, "Running")
+    pod = k8s.get_json(K8sResource.PODS, pod_name)
+    pod["status"]["conditions"] = [
+        {
+            "type": "TerminationTarget",
+            "status": "True",
+            "reason": "WorkloadEvictedDueToPreempted",
+            "message": "Preempted to accommodate a higher priority Workload",
+        }
+    ]
+    k8s.seed_resource(K8sResource.PODS, pod_name, pod)
+
+
+def test_sync_vanished_pod_reports_the_kueue_eviction_that_deleted_it(provider, k8s):
+    """A pod Kueue evicts carries its TerminationTarget condition only while it
+    terminates, and is then deleted — so the vanished-pod path must report the
+    eviction observed on the last poll rather than a bare absence."""
+    task_id = JobName.from_wire("/gang/task/0")
+    pod_name = _pod_name(task_id, 0)
+    batch = make_batch(running_tasks=[RunningTaskEntry(task_id=task_id, attempt_id=0)])
+
+    _populate_evicted_pod(k8s, pod_name)
+    assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_RUNNING
+
+    k8s.delete(K8sResource.PODS, pod_name)
     for _ in range(_POD_NOT_FOUND_GRACE_CYCLES - 1):
-        result = provider.sync(batch)
-        assert result[0].new_state == job_pb2.TASK_STATE_RUNNING
+        assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_RUNNING
+
+    result = provider.sync(batch)
+    assert result[0].new_state == job_pb2.TASK_STATE_PREEMPTED
+    assert result[0].terminal_reason == _EVICTION_REASON
+
+
+def test_sync_does_not_charge_a_new_incarnation_with_the_previous_eviction(provider, k8s):
+    """A resubmit reuses (task_id, attempt_id) under a fresh uid, so the evicted
+    pod's reason must not follow the new incarnation."""
+    task_id = JobName.from_wire("/gang/task/1")
+    evicted_uid = "aaaabbbbccccdddd"
+    _populate_evicted_pod(k8s, _pod_name(task_id, 0, evicted_uid))
+    provider.sync(make_batch(running_tasks=[RunningTaskEntry(task_id=task_id, attempt_id=0, attempt_uid=evicted_uid)]))
+    k8s.delete(K8sResource.PODS, _pod_name(task_id, 0, evicted_uid))
+
+    batch = make_batch(running_tasks=[RunningTaskEntry(task_id=task_id, attempt_id=0, attempt_uid="1111222233334444")])
+    for _ in range(_POD_NOT_FOUND_GRACE_CYCLES - 1):
+        assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_RUNNING
 
     result = provider.sync(batch)
     assert result[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
+    assert result[0].terminal_reason == _POD_DELETED_TERMINAL_REASON
 
 
 def test_pod_not_found_grace_period(provider, k8s):
-    """A single missing-pod sync returns RUNNING, not FAILED."""
+    """A single missing-pod sync returns RUNNING, not a terminal state."""
     task_id = JobName.from_wire("/job/grace")
     entry = RunningTaskEntry(task_id=task_id, attempt_id=0)
 
@@ -398,14 +443,14 @@ def test_pod_not_found_grace_resets_when_pod_reappears(provider, k8s):
     result = provider.sync(batch)
     assert result[0].new_state == job_pb2.TASK_STATE_RUNNING
 
-    # Now disappear again: need full grace cycles again before failure.
+    # Now disappear again: need full grace cycles again before the terminal update.
     k8s.delete(K8sResource.PODS, pod_name)
     for _ in range(_POD_NOT_FOUND_GRACE_CYCLES - 1):
         result = provider.sync(batch)
         assert result[0].new_state == job_pb2.TASK_STATE_RUNNING
 
     result = provider.sync(batch)
-    assert result[0].new_state == job_pb2.TASK_STATE_FAILED
+    assert result[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
 
 
 def test_sync_empty_batch(provider):
@@ -1555,9 +1600,7 @@ def test_reconcile_evicts_blockers_while_gang_gated(preempt_provider, k8s):
     """A blocker that lands AFTER gang submission is evicted by the reconcile
     loop while the gang's pods remain SchedulingGated, and the sweep is
     debounced so back-to-back reconciles don't re-list the namespace."""
-    entries = [
-        RunningTaskEntry(task_id=JobName.from_wire(f"/gang/task/{i}"), attempt_id=0, coscheduled=True) for i in range(2)
-    ]
+    entries = [RunningTaskEntry(task_id=JobName.from_wire(f"/gang/task/{i}"), attempt_id=0) for i in range(2)]
     preempt_provider.sync(make_batch(tasks_to_run=_gang_reqs(), running_tasks=entries))
 
     # Kueue's webhook gates gang pods until the pod-group Workload is admitted.

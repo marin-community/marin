@@ -366,7 +366,6 @@ def drain_for_dispatch(
         RunningTaskEntry(
             task_id=row.task_id,
             attempt_id=row.current_attempt_id,
-            coscheduled=row.has_coscheduling,
             attempt_uid=uids.get((row.task_id, row.current_attempt_id), ""),
         )
         for row in running_rows
