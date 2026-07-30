@@ -48,8 +48,13 @@ VIRTUAL_HOST_ONLY_S3_DOMAINS = ("cwobject.com", "cwlota.com")
 _S3_CONNECT_TIMEOUT = 30
 _S3_READ_TIMEOUT = 120
 _S3_RETRY_MAX_ATTEMPTS = 5
-# Whole-request ceiling, well above any healthy transfer: a 50 MiB multipart
-# part needs ~437 KiB/s to finish inside it. Only a wedged request reaches it.
+# Whole-request ceiling. It spans pool wait, connect, body upload, and response
+# download, so it bounds every S3 request rather than only a stalled one: a
+# genuine transfer slower than 600s now fails and is retried from byte zero, up
+# to _S3_RETRY_MAX_ATTEMPTS times. 600 leaves ample headroom for the largest
+# request we issue (a 50 MiB multipart part needs ~90 KiB/s to fit), while still
+# failing a wedged request inside a shard's useful lifetime. Single-object reads
+# of many GB through this filesystem are the case to re-check if this bites.
 _S3_TOTAL_TIMEOUT = 600
 
 
@@ -84,10 +89,9 @@ def s3_request_bounds_config_kwargs() -> dict[str, Any]:
     connection wedges. Finite bounds turn that stall into an error handled by the
     task retry path (#6487).
 
-    JSON-safe by construction: this feeds the ``FSSPEC_S3`` environment block
-    that the Iris controller exports to every task. The whole-request deadline
-    cannot travel that way, because it needs a class rather than a scalar — see
-    :func:`s3_python_config_kwargs`.
+    JSON-safe by construction: this feeds the ``FSSPEC_S3`` environment block the
+    Iris controller exports to every task. Callers building a filesystem in
+    Python want :func:`s3_python_config_kwargs` instead.
     """
     return {
         "connect_timeout": _S3_CONNECT_TIMEOUT,

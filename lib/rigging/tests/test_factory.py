@@ -4,13 +4,18 @@
 """Tests for the guarded fsspec factory: the url_to_fs/open_url/filesystem entry
 points, unique_temp_path, atomic_rename, and fetch_file_atomic."""
 
+import asyncio
 import json
+import socket
+import threading
+import time
 from pathlib import Path
 
 import fsspec
 import pytest
-import s3fs
 from aiobotocore.config import AioConfig
+from botocore.awsrequest import AWSRequest
+from rigging.filesystem import s3_compat
 from rigging.filesystem.cross_region import CrossRegionGuardedFS
 from rigging.filesystem.factory import (
     _with_s3_timeout_defaults,
@@ -178,14 +183,54 @@ def test_s3_timeout_defaults_preserve_addressing_style_from_env_conf(monkeypatch
 
 
 def test_session_class_survives_the_handoff_to_aiobotocore():
-    """End to end through the real seam: our config_kwargs reach AioConfig (the
-    call s3fs makes) and s3fs passes the class on rather than dropping it."""
+    """Our config_kwargs reach AioConfig, which is the call s3fs makes to build
+    the client that ultimately instantiates the session class."""
     config_kwargs = _with_s3_timeout_defaults({})["config_kwargs"]
 
     assert AioConfig(**config_kwargs).http_session_cls is TotalDeadlineAIOHTTPSession
 
-    fs = s3fs.S3FileSystem(anon=True, config_kwargs=config_kwargs)
-    assert fs._prepare_config_kwargs()["http_session_cls"] is TotalDeadlineAIOHTTPSession
+
+def test_request_to_a_silent_peer_gives_up(monkeypatch):
+    """The production failure, reproduced: a peer accepts the whole request body
+    and then never answers. Without `total` no timer is armed and the caller
+    waits forever (#6719); the request must instead fail on its own."""
+    monkeypatch.setattr(s3_compat, "_S3_TOTAL_TIMEOUT", 1)
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        port = listener.getsockname()[1]
+
+        accepted: list[socket.socket] = []
+
+        def swallow_request():
+            conn, _ = listener.accept()
+            conn.recv(65536)  # take the request, then answer nothing at all
+            accepted.append(conn)
+
+        server = threading.Thread(target=swallow_request, daemon=True)
+        server.start()
+
+        # sock_read is deliberately long: it is the bound that does NOT cover
+        # this wait, so only `total` can end the call.
+        session = TotalDeadlineAIOHTTPSession(timeout=(5, 300))
+        request = AWSRequest(method="PUT", url=f"http://127.0.0.1:{port}/part", data=b"x" * 1024).prepare()
+
+        async def send_and_close():
+            async with session:
+                return await session.send(request)
+
+        started = time.monotonic()
+        with pytest.raises(Exception):  # noqa: B017 - the deadline, not a specific mapping
+            asyncio.run(send_and_close())
+        elapsed = time.monotonic() - started
+
+        server.join(timeout=5)
+        for conn in accepted:
+            conn.close()
+
+    assert elapsed < 30, f"request should have given up near the 1s deadline, took {elapsed:.1f}s"
 
 
 def test_env_config_block_stays_json_serializable():

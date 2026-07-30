@@ -45,10 +45,6 @@ def _with_s3_timeout_defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
     in ``FSSPEC_S3`` -- silently dropping settings like
     ``{"s3": {"addressing_style": "virtual"}}`` that S3-compatible endpoints
     (CoreWeave object storage) require, which then hangs/path-style-rejects.
-
-    Building the filesystem here (rather than reading a JSON env block) also
-    lets us pass ``http_session_cls``, which carries the whole-request deadline
-    that the scalar timeouts cannot express (#6719).
     """
     conf_config_kwargs = (fsspec.config.conf.get("s3") or {}).get("config_kwargs") or {}
     config_kwargs = {**conf_config_kwargs, **dict(kwargs.get("config_kwargs") or {})}
