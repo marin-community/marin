@@ -232,8 +232,18 @@ function ProvisioningStatus({ frames }: { frames: DataFrame[] }) {
   const regions = provisioningRegions(rows).sort(
     (a, b) => b.outcomes - a.outcomes || a.region.localeCompare(b.region)
   );
+  const hiddenChartRegions = new Set<string>();
+  if (regions.length > 2) {
+    const regionsBySuccess = [...regions].sort(
+      (a, b) => a.successRatio - b.successRatio || a.region.localeCompare(b.region)
+    );
+    hiddenChartRegions.add(regionsBySuccess[0].region);
+    hiddenChartRegions.add(regionsBySuccess[regionsBySuccess.length - 1].region);
+  }
   const history = historyFrame
-    ? seriesPoints(historyFrame, 'region', 'success_ratio').filter((point) => point.series !== FLEET_SCOPE)
+    ? seriesPoints(historyFrame, 'region', 'success_ratio').filter(
+      (point) => point.series !== FLEET_SCOPE && !hiddenChartRegions.has(point.series)
+    )
     : [];
 
   return (

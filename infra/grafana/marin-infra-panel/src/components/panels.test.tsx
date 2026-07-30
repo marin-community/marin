@@ -53,7 +53,7 @@ test('status page keeps worker and provisioning status visible when another sour
   expect(screen.getAllByText('No W&B data')).toHaveLength(3);
 });
 
-test('status page rolls pool outcomes up to regions beside the history graph', () => {
+test('status page keeps extreme provisioning values in the region table and out of the graph', () => {
   const now = Date.now();
   const frames = [
     frame('P', [{
@@ -71,12 +71,26 @@ test('status page rolls pool outcomes up to regions beside the history graph', (
       ready: 2, stockout: 0, error: 1, preempted: 0, outcomes: 3, success_ratio: 2 / 3,
       pools_placing: 0, pools_no_ready_outcome: 0, latency_p50_seconds: 45,
       latency_p95_seconds: 90, window_hours: 3,
+    }, {
+      scope: 'pool', collected_at: now, zone: 'us-central1-a',
+      ready: 10, stockout: 0, error: 0, preempted: 0, outcomes: 10, success_ratio: 1,
+      pools_placing: 0, pools_no_ready_outcome: 0, latency_p50_seconds: 45,
+      latency_p95_seconds: 90, window_hours: 3,
+    }, {
+      scope: 'pool', collected_at: now, zone: 'europe-west4-a',
+      ready: 1, stockout: 1, error: 0, preempted: 0, outcomes: 2, success_ratio: 0.5,
+      pools_placing: 0, pools_no_ready_outcome: 0, latency_p50_seconds: 45,
+      latency_p95_seconds: 90, window_hours: 3,
     }]),
     frame('R', [
       { time: now - 60_000, region: 'fleet', success_ratio: 0.7 },
       { time: now, region: 'fleet', success_ratio: 0.8 },
       { time: now - 60_000, region: 'us-east5', success_ratio: 0.7 },
       { time: now, region: 'us-east5', success_ratio: 0.8 },
+      { time: now - 60_000, region: 'us-central1', success_ratio: 0.9 },
+      { time: now, region: 'us-central1', success_ratio: 1 },
+      { time: now - 60_000, region: 'europe-west4', success_ratio: 0.4 },
+      { time: now, region: 'europe-west4', success_ratio: 0.5 },
     ]),
   ];
 
@@ -88,8 +102,19 @@ test('status page rolls pool outcomes up to regions beside the history graph', (
   expect(regionRow).not.toBeNull();
   expect(regionRow).toHaveTextContent('80%');
   expect(regionRow).toHaveTextContent('8/10');
-  expect(within(provisioning).getByRole('img', { name: '24 hour status history' })).toBeInTheDocument();
-  expect(within(provisioning).queryByText('fleet')).not.toBeInTheDocument();
-  expect(within(provisioning).getAllByText('us-east5')).toHaveLength(2);
+  const highestRegionRow = within(provisioning).getByText('us-central1', { selector: 'code' }).parentElement;
+  expect(highestRegionRow).toHaveTextContent('100%');
+  expect(highestRegionRow).toHaveTextContent('10/10');
+  const lowestRegionRow = within(provisioning).getByText('europe-west4', { selector: 'code' }).parentElement;
+  expect(lowestRegionRow).toHaveTextContent('50%');
+  expect(lowestRegionRow).toHaveTextContent('1/2');
+
+  const chart = within(provisioning).getByRole('img', { name: '24 hour status history' });
+  const chartContainer = chart.parentElement;
+  expect(chartContainer).not.toBeNull();
+  expect(within(chartContainer!).queryByText('fleet')).not.toBeInTheDocument();
+  expect(within(chartContainer!).getByText('us-east5')).toBeInTheDocument();
+  expect(within(chartContainer!).queryByText('us-central1')).not.toBeInTheDocument();
+  expect(within(chartContainer!).queryByText('europe-west4')).not.toBeInTheDocument();
   expect(within(provisioning).queryByText('us-east5-a')).not.toBeInTheDocument();
 });
