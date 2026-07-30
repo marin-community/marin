@@ -37,11 +37,13 @@ from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import DatasetComponent, DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
+from levanter.grug._moe.common import resolve_moe_implementation
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.grug.sharding import _compact_grug_mesh_shape
 from levanter.optim.config import AdamConfig
 from levanter.schedule import BatchSchedule
 from levanter.tracker.json_logger import JsonLoggerConfig
+from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.artifact import ArtifactRecord, write_record
 from marin.execution.lazy import StepContext, materialized_config
@@ -425,6 +427,148 @@ def test_grug_moe_scale_launcher_resolves_gb200_ep64_run(monkeypatch):
         0.05,
         0.01,
     )
+
+
+def _assert_grug_moe_hero_fsdp_config(config, resources, train_module) -> None:
+    model = config.model
+    optimizer = config.optimizer
+    grug_trainer = config.trainer
+    trainer = grug_trainer.trainer
+
+    assert (
+        model.vocab_size,
+        model.hidden_dim,
+        model.intermediate_dim,
+        model.shared_expert_intermediate_dim,
+        model.num_shared_experts,
+        model.num_experts,
+        model.num_experts_per_token,
+        model.num_layers,
+        model.num_heads,
+        model.num_kv_heads,
+        model.local_kv_heads,
+        model.global_kv_heads,
+        model.head_dim,
+        model.max_seq_len,
+        model.sliding_window,
+        model.global_every,
+    ) == (128_256, 6144, 3072, 6144, 2, 128, 4, 48, 48, 12, 12, 6, 128, 4096, 512, 6)
+    assert (
+        model.capacity_factor,
+        model.layer_norm_eps,
+        model.initializer_std,
+        model.qk_mult,
+        model.router_z_loss_coef,
+    ) == (1.0, 1e-5, 0.0063788795384978605, 1.3, 0.0)
+    assert model.xsa
+    assert model.disable_pko
+    assert model.disable_long_rope
+    assert model.attention_implementation == "gpu_fa4_cute"
+    assert resolve_moe_implementation(model.moe_implementation) == "sonic_cute"
+    assert model.expert_chunks == 4
+    assert model.report_capacity_overflow
+    assert model.remat_mode == "recompute_all"
+    assert model.rope.theta == 10_000.0
+    assert model.rope.scaling_factor is None
+    assert model.rope_fused
+    assert model.use_array_stacked_blocks
+    model_module = importlib.import_module("experiments.grug.moe_hero_fsdp.model")
+    np.testing.assert_array_equal(
+        np.flatnonzero(np.asarray(model_module._long_layer_schedule(model.num_layers, model.global_every))),
+        np.arange(5, 48, 6),
+    )
+
+    assert isinstance(optimizer, importlib.import_module("experiments.grug.moe_hero_fsdp.optimizer").GrugMoeMuonHConfig)
+    assert (
+        optimizer.learning_rate,
+        optimizer.weight_decay,
+        optimizer.min_lr_ratio,
+        optimizer.warmup,
+        optimizer.decay,
+        optimizer.rewarmup,
+        optimizer.cooldown,
+        optimizer.cycle_length,
+        optimizer.cycles,
+        optimizer.lr_schedule,
+        optimizer.haps,
+        optimizer.weight_decay_modules,
+        optimizer.default_weight_decay_mask,
+        optimizer.adam_lr,
+        optimizer.momentum,
+        optimizer.nesterov,
+        optimizer.backend_steps,
+        optimizer.beta1,
+        optimizer.beta2,
+        optimizer.epsilon,
+        optimizer.muon_epsilon,
+        optimizer.max_grad_norm,
+        optimizer.coefficient_type,
+    ) == (
+        0.05,
+        0.1,
+        0.05,
+        0.01,
+        None,
+        0.0,
+        None,
+        None,
+        None,
+        "linear",
+        None,
+        None,
+        None,
+        0.02511723566133071,
+        0.95,
+        True,
+        5,
+        0.9062,
+        0.9646229185299474,
+        4.8379999999999997e-17,
+        1e-8,
+        None,
+        "quintic",
+    )
+    assert (
+        grug_trainer.data_seed,
+        grug_trainer.log_every,
+        grug_trainer.ema_beta,
+        grug_trainer.z_loss_weight,
+        grug_trainer.offload_opt_state,
+        grug_trainer.expert_axis_size,
+        grug_trainer.replica_axis_size,
+        grug_trainer.sharding_dump_path,
+    ) == (None, 1, None, 1e-4, True, 1, 1, None)
+    assert (
+        trainer.seed,
+        trainer.train_batch_size,
+        trainer.num_train_steps,
+        trainer.watch.interval,
+        config.processes_per_task,
+    ) == (0, 1152, 25, 20, 1)
+    assert isinstance(trainer.tracker, WandbConfig)
+    assert trainer.checkpointer.save_interval is None
+    assert config.eval is None
+    assert (resources.device.variant, resources.device.count, resources.replicas) == ("GB200", 4, 16)
+    assert dict(train_module.HERO_FSDP_RUNTIME_ENV) == {
+        "JAX_ENABLE_PGLE": "1",
+        "SCALE_MUON_DIST_NONEXPERT": "1",
+        "SCALE_MUON_INTRA_RACK": "1",
+        "SCALE_MUON_PAD_NONEXPERT": "1",
+        "SCALE_MUON_SYRK": "1",
+    }
+
+
+def test_grug_moe_hero_fsdp_resolves_reproduced_one_rack_run(monkeypatch):
+    monkeypatch.setenv("RUN_ID", "test-moe-hero-fsdp")
+    launcher = importlib.import_module("experiments.grug.moe_hero_fsdp.launch")
+    train_module = importlib.import_module("experiments.grug.moe_hero_fsdp.train")
+    step = launcher.build_hero_checkpoint(version="dev")
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args.keys(), step.deps))
+    resources = step.runtime_args["train_resources"]
+
+    _assert_grug_moe_hero_fsdp_config(config, resources, train_module)
+    assert config.trainer.trainer.id == "test-moe-hero-fsdp"
+    assert config.trainer.trainer.tracker.name == "test-moe-hero-fsdp"
 
 
 @pytest.mark.parametrize(
