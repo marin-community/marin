@@ -4,6 +4,7 @@
 """Behavior tests for Echo CLI federation."""
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 import cli
 
@@ -81,9 +82,12 @@ def test_bearer_token_quiets_only_the_known_missing_email_scope_warning(monkeypa
     monkeypatch.setattr(cli, "cached_login_provider", lambda: Provider())
 
     with caplog.at_level(logging.WARNING):
-        assert cli.bearer_token() == "token"
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = [pool.submit(cli.bearer_token) for _ in range(4)]
+            tokens = [future.result() for future in futures]
 
-    assert [record.getMessage() for record in caplog.records] == ["token endpoint is degraded"]
+    assert tokens == ["token"] * 4
+    assert [record.getMessage() for record in caplog.records] == ["token endpoint is degraded"] * 4
 
 
 def test_get_fetches_full_detail_by_search_result_id(monkeypatch):

@@ -78,16 +78,14 @@ def keep_oauth_log(record: logging.LogRecord) -> bool:
     return record.getMessage() != MISSING_EMAIL_SCOPE_WARNING
 
 
+logging.getLogger("google.oauth2.credentials").addFilter(keep_oauth_log)
+
+
 def bearer_token() -> str:
     """A Google ID token for echo-api's IAP: cached human login first, else ambient SA creds."""
     provider = cached_login_provider() or IapServiceAccountTokenProvider(AUDIENCE)
-    oauth_logger = logging.getLogger("google.oauth2.credentials")
-    oauth_logger.addFilter(keep_oauth_log)
     try:
-        try:
-            token = provider.get_token()
-        finally:
-            oauth_logger.removeFilter(keep_oauth_log)
+        token = provider.get_token()
     except (IapCredentialsUnavailable, IapLoginRequired) as error:
         raise SystemExit(f"{error}\nHuman callers: {LOGIN_HINT}.") from error
     if not token:

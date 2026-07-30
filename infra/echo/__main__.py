@@ -172,11 +172,13 @@ def main() -> None:
                 "GITHUB_REPOSITORY": search_config.INDEXED_REPOSITORY,
                 "GITHUB_BRANCH": search_config.INDEXED_BRANCH,
             },
-            # Keep one instance warm: it holds the ~130 MB embedding model and the DB pool.
+            # Keep one instance warm. Four concurrent embedding/reranking requests peak
+            # around 2.7 GiB; bound concurrency and leave headroom for the DB pool.
             min_instances=1,
             max_instances=1,
             cpu_always_allocated=True,
-            memory="2Gi",
+            memory="4Gi",
+            max_instance_request_concurrency=4,
             iap_members=("*@openathena.ai",),
             # Admit CLI/agent tokens (cli.py) whose audience is the shared Marin desktop OAuth
             # client, so the same rigging login that reaches iris also reaches echo-api.
