@@ -68,6 +68,20 @@ def _run_archive_member(run_logs: dict[str, bytes]) -> bytes:
     return buffer.getvalue()
 
 
+def _write_ghalogs_archive(archive_path: Path, job_logs: dict[str, bytes]) -> None:
+    """Write a GHALogs zip whose members are run archives holding one job log each."""
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        for member_path, job_log in job_logs.items():
+            archive.writestr(member_path, _run_archive_member({"0_build.txt": job_log}))
+
+
+_THREE_RUN_JOB_LOGS = {
+    "logs/owner/repo-a/workflow_1234/1-1.tar.gz": b"ERROR token=abc123456789 traceback",
+    "logs/owner/repo-b/workflow_1234/2-1.tar.gz": b"FAILED alice@example.com /Users/alice/project",
+    "logs/owner/repo-c/workflow_1234/3-1.tar.gz": b"WARNING path=/home/bob/src",
+}
+
+
 def _member_path_for_partition(partition: DiagnosticPartition) -> str:
     for index in range(10_000):
         member_path = f"logs/owner/repo-{partition.value}/workflow_1234/{index}-1.tar.gz"
@@ -247,15 +261,13 @@ def test_extract_diagnostic_logs_is_sample_capped(tmp_path):
 
     ghalogs_dir = input_dir / "ghalogs" / "zenodo-14796970" / "zenodo.org" / "records" / "14796970" / "files"
     ghalogs_dir.mkdir(parents=True)
-    with zipfile.ZipFile(ghalogs_dir / "github_run_logs.zip", "w") as archive:
-        archive.writestr(
-            "logs/owner/repo-a/workflow_1234/1-1.tar.gz",
-            _run_archive_member({"0_build.txt": b"ERROR token=abc123456789 traceback"}),
-        )
-        archive.writestr(
-            "logs/owner/repo-b/workflow_1234/2-1.tar.gz",
-            _run_archive_member({"0_build.txt": b"FAILED alice@example.com /Users/alice/project"}),
-        )
+    _write_ghalogs_archive(
+        ghalogs_dir / "github_run_logs.zip",
+        {
+            "logs/owner/repo-a/workflow_1234/1-1.tar.gz": b"ERROR token=abc123456789 traceback",
+            "logs/owner/repo-b/workflow_1234/2-1.tar.gz": b"FAILED alice@example.com /Users/alice/project",
+        },
+    )
 
     with zipfile.ZipFile(input_dir / "LogChunks.zip", "w") as archive:
         archive.writestr(
@@ -332,11 +344,10 @@ def test_extract_diagnostic_logs_uses_staged_ghalogs_and_fetches_missing_eval_so
     output_dir = tmp_path / "output"
     ghalogs_archive_dir.mkdir(parents=True)
 
-    with zipfile.ZipFile(ghalogs_archive_dir / "github_run_logs.zip", "w") as archive:
-        archive.writestr(
-            "logs/owner/repo-a/workflow_1234/1-1.tar.gz",
-            _run_archive_member({"0_build.txt": b"ERROR token=abc123456789 traceback"}),
-        )
+    _write_ghalogs_archive(
+        ghalogs_archive_dir / "github_run_logs.zip",
+        {"logs/owner/repo-a/workflow_1234/1-1.tar.gz": b"ERROR token=abc123456789 traceback"},
+    )
 
     def _fake_fetch_logchunks(destination_dir: str) -> str:
         destination = Path(destination_dir)
@@ -395,11 +406,10 @@ def test_extract_ghalogs_step_persists_typed_artifact(tmp_path):
     archive_dir = input_dir / "zenodo.org" / "records" / "14796970" / "files"
     archive_dir.mkdir(parents=True)
 
-    with zipfile.ZipFile(archive_dir / "github_run_logs.zip", "w") as archive:
-        archive.writestr(
-            "logs/owner/repo-a/workflow_1234/1-1.tar.gz",
-            _run_archive_member({"0_build.txt": b"ERROR token=abc123456789 traceback"}),
-        )
+    _write_ghalogs_archive(
+        archive_dir / "github_run_logs.zip",
+        {"logs/owner/repo-a/workflow_1234/1-1.tar.gz": b"ERROR token=abc123456789 traceback"},
+    )
 
     step = extract_ghalogs_step(
         source_path=str(input_dir),
@@ -420,19 +430,7 @@ def test_materialize_ghalogs_to_parquet_writes_reusable_shards(tmp_path):
     output_dir = tmp_path / "materialized"
     archive_dir.mkdir(parents=True)
 
-    with zipfile.ZipFile(archive_dir / "github_run_logs.zip", "w") as archive:
-        archive.writestr(
-            "logs/owner/repo-a/workflow_1234/1-1.tar.gz",
-            _run_archive_member({"0_build.txt": b"ERROR token=abc123456789 traceback"}),
-        )
-        archive.writestr(
-            "logs/owner/repo-b/workflow_1234/2-1.tar.gz",
-            _run_archive_member({"0_build.txt": b"FAILED alice@example.com /Users/alice/project"}),
-        )
-        archive.writestr(
-            "logs/owner/repo-c/workflow_1234/3-1.tar.gz",
-            _run_archive_member({"0_build.txt": b"WARNING path=/home/bob/src"}),
-        )
+    _write_ghalogs_archive(archive_dir / "github_run_logs.zip", _THREE_RUN_JOB_LOGS)
 
     materialized = materialize_ghalogs_to_parquet(
         str(input_dir),
@@ -459,19 +457,7 @@ def test_materialize_ghalogs_partition_to_parquet_filters_one_partition(tmp_path
     partition_dir = tmp_path / "train_only"
     archive_dir.mkdir(parents=True)
 
-    with zipfile.ZipFile(archive_dir / "github_run_logs.zip", "w") as archive:
-        archive.writestr(
-            "logs/owner/repo-a/workflow_1234/1-1.tar.gz",
-            _run_archive_member({"0_build.txt": b"ERROR token=abc123456789 traceback"}),
-        )
-        archive.writestr(
-            "logs/owner/repo-b/workflow_1234/2-1.tar.gz",
-            _run_archive_member({"0_build.txt": b"FAILED alice@example.com /Users/alice/project"}),
-        )
-        archive.writestr(
-            "logs/owner/repo-c/workflow_1234/3-1.tar.gz",
-            _run_archive_member({"0_build.txt": b"WARNING path=/home/bob/src"}),
-        )
+    _write_ghalogs_archive(archive_dir / "github_run_logs.zip", _THREE_RUN_JOB_LOGS)
 
     materialize_ghalogs_to_parquet(
         str(input_dir),
@@ -501,12 +487,10 @@ def test_ghalogs_public_normalize_steps_write_datakit_normalized_train_partition
 
     train_member = _member_path_for_partition(DiagnosticPartition.TRAIN)
     dev_member = _member_path_for_partition(DiagnosticPartition.DEV)
-    with zipfile.ZipFile(archive_dir / "github_run_logs.zip", "w") as archive:
-        archive.writestr(
-            train_member,
-            _run_archive_member({"0_build.txt": b"ERROR token=abc123456789 traceback"}),
-        )
-        archive.writestr(dev_member, _run_archive_member({"0_build.txt": b"FAILED validation-only log"}))
+    _write_ghalogs_archive(
+        archive_dir / "github_run_logs.zip",
+        {train_member: b"ERROR token=abc123456789 traceback", dev_member: b"FAILED validation-only log"},
+    )
 
     # The archive is already staged at ``source_path``; no-op the Zenodo stream
     # so the download step doesn't try to fetch the real ~142 GB archive.
@@ -548,11 +532,7 @@ def test_ghalogs_public_normalize_steps_read_where_download_wrote(tmp_path, monk
     staged_archive = Path(download.output_path) / GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH
     staged_archive.parent.mkdir(parents=True)
     train_member = _member_path_for_partition(DiagnosticPartition.TRAIN)
-    with zipfile.ZipFile(staged_archive, "w") as archive:
-        archive.writestr(
-            train_member,
-            _run_archive_member({"0_build.txt": b"ERROR token=abc123456789 traceback"}),
-        )
+    _write_ghalogs_archive(staged_archive, {train_member: b"ERROR token=abc123456789 traceback"})
 
     # Archive is pre-staged; no-op the Zenodo stream.
     monkeypatch.setattr(diagnostic_logs, "stage_ghalogs_archive", lambda output_path: None)

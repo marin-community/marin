@@ -123,6 +123,8 @@ _GHALOGS_RESUME_BACKOFF_CAP = 120.0
 # workflow run's logs; there are no plain-text members.
 _GHALOGS_MEMBER_SUFFIX = ".tar.gz"
 _GHALOGS_JOB_LOG_SUFFIX = ".txt"
+# Separates the run archive from the job log inside it in a record's archive_path.
+_GHALOGS_LOG_PATH_SEPARATOR = "!"
 # Job logs above this size are byte dumps (pytest diffs of binary blobs), and
 # sanitization rescans a document one time for each identity that it finds, so
 # an unbounded document turns one worker into a multi-hour straggler.
@@ -499,34 +501,34 @@ def _decode_job_log_text(content: bytes) -> str | None:
 
 
 def ghalogs_member_to_records(member_path: str, content: bytes) -> Iterator[dict[str, str]]:
-    """Convert one GHALogs zip member into sanitized diagnostic-log records.
+    """Convert one GHALogs ``.tar.gz`` run archive into sanitized job-log records.
 
-    Each member of ``github_run_logs.zip`` is a gzipped tar of one workflow
-    run's logs, so the member bytes are read as a tar archive and one record is
-    written for each job log inside it (see :func:`_is_job_log`). Members are
-    read in archive order, which keeps the gzip stream at one forward pass and
-    holds one job log in memory at a time. All records of one run share the
-    run's partition, thus no job log lands away from its sibling logs.
+    Yields one record for each job log of the run (see :func:`_is_job_log`),
+    with ``archive_path`` set to ``<member_path>!<job log>``. All records of one
+    run share the run's partition, thus no job log lands away from its sibling
+    logs. Raises ``ValueError`` for a member that is not a run archive.
     """
     if not member_path.endswith(_GHALOGS_MEMBER_SUFFIX):
         raise ValueError(f"Expected a {_GHALOGS_MEMBER_SUFFIX} GHALogs run archive, got {member_path}")
 
     partition = assign_partition(f"ghalogs:{member_path}")
     with tarfile.open(fileobj=BytesIO(content), mode="r:gz") as run_logs:
+        # Iterate instead of getmembers(): each log is read as the tar iterator
+        # reaches it, so the gzip stream is decompressed one time.
         for member in run_logs:
             if not _is_job_log(member):
                 continue
+            log_path = f"{member_path}{_GHALOGS_LOG_PATH_SEPARATOR}{member.name}"
             if member.size > _GHALOGS_MAX_JOB_LOG_BYTES:
                 counters.pipeline.update_counter("ghalogs_materialize/dropped_oversize", 1)
                 continue
             handle = run_logs.extractfile(member)
-            assert handle is not None, f"{member_path}!{member.name} is a regular file"
+            assert handle is not None, f"{log_path} is a regular file"
             text = _decode_job_log_text(handle.read())
             if text is None:
                 counters.pipeline.update_counter("ghalogs_materialize/dropped_non_text", 1)
                 continue
 
-            log_path = f"{member_path}!{member.name}"
             yield {
                 "id": hashlib.sha256(f"ghalogs:{log_path}".encode()).hexdigest(),
                 "text": sanitize_diagnostic_log_text(text),
