@@ -44,6 +44,26 @@ def test_sft_can_disable_training_restriction_without_changing_router_state_shap
     assert configured.nested_expert_counts == (16,)
 
 
+def test_sft_accepts_matched_standalone_e128_model() -> None:
+    model = GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=128,
+        intermediate_dim=64,
+        shared_expert_intermediate_dim=128,
+        num_experts=128,
+        num_experts_per_token=4,
+        num_layers=4,
+        num_heads=1,
+        num_kv_heads=1,
+    )
+
+    configured = sft_routing_model(model, SFTArm.E128_STANDALONE, "nested")
+
+    assert configured is model
+    assert configured.num_experts == 128
+    assert configured.nested_expert_counts == ()
+
+
 def test_fixed_banks_can_be_retained_when_sft_uses_only_full_routing() -> None:
     model = GrugModelConfig(
         vocab_size=128,

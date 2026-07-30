@@ -56,6 +56,7 @@ _OPTIMIZER = GrugMoeAdamHConfig(
 
 class SFTArm(StrEnum):
     E256 = "e256"
+    E128_STANDALONE = "e128-standalone"
     FIXED25 = "fixed25"
     E128_NAIVE25 = "e128-naive25"
     E16_NAIVE25 = "e16-naive25"
@@ -64,13 +65,19 @@ class SFTArm(StrEnum):
 
     @property
     def nested_expert_counts(self) -> tuple[int, ...]:
-        if self is SFTArm.E256:
+        if self in (SFTArm.E256, SFTArm.E128_STANDALONE):
             return ()
         if self is SFTArm.FIXED25:
             return (128, 16)
         if self in (SFTArm.E128_NAIVE25, SFTArm.E128_LAYER25):
             return (128,)
         return (16,)
+
+    @property
+    def num_experts(self) -> int:
+        if self is SFTArm.E128_STANDALONE:
+            return 128
+        return 256
 
     @property
     def nested_layer_fraction(self) -> float:
@@ -105,12 +112,14 @@ def _required_env(key: str) -> str:
 
 def sft_routing_model(model: GrugModelConfig, arm: SFTArm, routing: str) -> GrugModelConfig:
     """Validate an SFT model against its pretraining arm and select routing."""
+    if model.num_experts != arm.num_experts:
+        raise ValueError(f"{arm.value} SFT requires SCALE_NUM_EXPERTS={arm.num_experts}")
     if model.nested_expert_counts != arm.nested_expert_counts:
         raise ValueError(
             f"{arm.value} SFT requires SCALE_NESTED_COUNTS="
             f"{','.join(str(count) for count in arm.nested_expert_counts)}"
         )
-    if arm is SFTArm.E256:
+    if arm in (SFTArm.E256, SFTArm.E128_STANDALONE):
         return model
     if model.nested_layer_fraction != arm.nested_layer_fraction:
         raise ValueError(f"{arm.value} SFT requires SCALE_NESTED_LAYER_FRACTION={arm.nested_layer_fraction}")
