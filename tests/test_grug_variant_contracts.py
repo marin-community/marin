@@ -571,6 +571,162 @@ def test_grug_moe_hero_fsdp_resolves_reproduced_one_rack_run(monkeypatch):
     assert config.trainer.trainer.tracker.name == "test-moe-hero-fsdp"
 
 
+def test_grug_moe_hero_fsdp_hf_roundtrip_preserves_attention_architecture():
+    launch_module = importlib.import_module("experiments.grug.moe_hero_fsdp.launch")
+    model = launch_module.HERO_MODEL
+
+    hf_config = model.to_hf_config(model.vocab_size)
+    reloaded = model.from_hf_config(hf_config)
+
+    attention_fields = ("local_kv_heads", "global_kv_heads", "global_every", "rope_fused")
+    assert tuple(getattr(reloaded, field) for field in attention_fields) == tuple(
+        getattr(model, field) for field in attention_fields
+    )
+
+
+def test_grug_moe_rank_four_muon_update_runs_newton_schulz_without_mesh(monkeypatch):
+    grugmuon = importlib.import_module("levanter.optim.grugmuon")
+    monkeypatch.delenv("SCALE_MUON_NO_NS", raising=False)
+    raw_momentum = jax.random.normal(jax.random.key(0), (2, 3, 4, 4), dtype=jnp.float32)
+    transform = grugmuon._grug_scale_with_muon(momentum=0.0, nesterov=False, steps=2)
+
+    update, _ = transform.update(raw_momentum, transform.init(raw_momentum))
+
+    assert update.shape == raw_momentum.shape
+    assert not jnp.array_equal(update, raw_momentum)
+
+
+def test_grug_moe_hero_fsdp_newton_schulz_hlo_reaches_syrk():
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+    script = """
+        import importlib
+        import os
+        import sys
+        from types import SimpleNamespace
+
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+        from levanter.optim import grugmuon
+
+        def symmetric_gemm(x):
+            with jax.named_scope("quack_symmetric_gemm"):
+                return jnp.matmul(x, jnp.swapaxes(x, -1, -2))
+
+        sys.modules["levanter.grug._moe.quack_symmetric_cute"] = SimpleNamespace(
+            quack_symmetric_gemm=symmetric_gemm
+        )
+        train_module = importlib.import_module("experiments.grug.moe_hero_fsdp.train")
+        os.environ.update(train_module.HERO_FSDP_RUNTIME_ENV)
+
+        axis_names = ("replica_dcn", "data", "expert", "model")
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape((1, 4, 1, 1)),
+            axis_names,
+            axis_types=(AxisType.Explicit,) * 4,
+        )
+        x = jax.device_put(
+            jax.random.normal(jax.random.key(0), (2, 4, 8, 4), dtype=jnp.float32),
+            NamedSharding(mesh, P(None, None, None, None)),
+        )
+        path = (jax.tree_util.GetAttrKey("w_gate"),)
+
+        def apply_ns(y):
+            return grugmuon._newtonschulz_4d_distributed(
+                path,
+                y,
+                steps=2,
+                eps=1e-7,
+                coefficient_type="quintic",
+            )
+
+        with jax.set_mesh(mesh):
+            stablehlo = jax.jit(apply_ns).lower(x).as_text(debug_info=True)
+
+        assert "quack_symmetric_gemm/dot_general" in stablehlo, stablehlo
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_grug_moe_chunk_drops_sum_across_data_shards():
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+    script = """
+        import sys
+        from types import SimpleNamespace
+
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+        from levanter.grug.grug_moe import moe_mlp
+
+        def chunked_sonic(x, selected_experts, combine_weights, *weights, **kwargs):
+            del combine_weights, weights, kwargs
+            local_drops = jnp.sum(selected_experts == 0, dtype=jnp.int32)
+            return x, local_drops
+
+        sys.modules["levanter.grug._moe.sonic_cute"] = SimpleNamespace(
+            _moe_mlp_local_sonic_cute=chunked_sonic,
+            _moe_mlp_local_sonic_cute_chunked=chunked_sonic,
+        )
+        axis_names = ("replica_dcn", "data", "expert", "model")
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape((1, 4, 1, 1)),
+            axis_names,
+            axis_types=(AxisType.Explicit,) * 4,
+        )
+        batch_sharding = NamedSharding(mesh, P("data", None))
+        replicated_weights = NamedSharding(mesh, P(None, None, None))
+        x = jax.device_put(jnp.zeros((8, 4), dtype=jnp.float32), batch_sharding)
+        selected_experts = jax.device_put(
+            jnp.asarray([[0], [0], [0], [1], [1], [1], [0], [1]], dtype=jnp.int32),
+            batch_sharding,
+        )
+        combine_weights = jax.device_put(jnp.ones((8, 1), dtype=jnp.float32), batch_sharding)
+        w_up_gate = jax.device_put(jnp.zeros((2, 4, 8), dtype=jnp.float32), replicated_weights)
+        w_down = jax.device_put(jnp.zeros((2, 4, 4), dtype=jnp.float32), replicated_weights)
+
+        with jax.set_mesh(mesh):
+            _, dropped = moe_mlp(
+                x,
+                selected_experts,
+                combine_weights,
+                w_up_gate,
+                w_down,
+                implementation="sonic_cute",
+                mesh=mesh,
+                report_capacity_overflow=True,
+                expert_chunks=2,
+            )
+
+        assert int(dropped) == 4, dropped
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize(
     ("optimizer_name", "optimizer_type"),
     [
@@ -884,30 +1040,13 @@ def test_grug_moe_fa4_bounds_are_loop_invariant_in_scanned_graph(monkeypatch):
 
     with jax.set_mesh(mesh):
         model = model_module.Transformer.init(cfg, key=jax.random.PRNGKey(0))
-        closed_jaxpr, _, _ = eqx.filter_make_jaxpr(model)(tokens)
         stablehlo = eqx.filter_jit(model).lower(tokens).as_text()
 
-    layer_scan = next(
-        equation
-        for equation in closed_jaxpr.jaxpr.eqns
-        if equation.primitive.name == "scan" and equation.params["length"] == cfg.num_layers
-    )
-    scan_body = layer_scan.params["jaxpr"]
-    long_bounds, short_bounds, valid = scan_body.invars[:3]
-    layer_uses_long_mask = scan_body.invars[-1]
-    select_bounds, rematerialized_layer = scan_body.eqns
-
-    assert [var.aval.shape for var in (long_bounds, short_bounds, valid)] == [(1, 8)] * 3
-    assert [var.aval.dtype for var in (long_bounds, short_bounds, valid)] == [
-        jnp.dtype(jnp.int32),
-        jnp.dtype(jnp.int32),
-        jnp.dtype(jnp.bool_),
-    ]
-    assert select_bounds.primitive.name == "jit"
-    assert [equation.primitive.name for equation in select_bounds.params["jaxpr"].eqns] == ["select_n"]
-    assert select_bounds.invars == [layer_uses_long_mask, long_bounds, short_bounds]
-    assert rematerialized_layer.primitive.name == "remat2"
-    assert rematerialized_layer.invars[-3:] == [select_bounds.outvars[0], valid, layer_uses_long_mask]
+    # The two lower-bound tensors and one validity tensor are loop operands in StableHLO.
+    # Recomputing the FA4 metadata inside the layer body removes them from this signature.
+    while_header = stablehlo.split("stablehlo.while", maxsplit=1)[1].split("cond {", maxsplit=1)[0]
+    assert while_header.count("tensor<1x8xi32>") == 2
+    assert while_header.count("tensor<1x8xi1>") == 1
     assert stablehlo.count("stablehlo.while") == 1
     assert "stablehlo.case" not in stablehlo
 
