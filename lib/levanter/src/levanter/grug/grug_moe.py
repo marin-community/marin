@@ -280,14 +280,25 @@ def moe_mlp(
     w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
     w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
 
-    shard_fn = shard_map(
-        partial(
-            _moe_mlp_local,
+    def local_moe(x, selected_experts, combine_weights, w_up_gate, w_down):
+        out, dropped = _moe_mlp_local(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
             activation_fn=activation_fn,
             num_experts=num_experts,
             implementation=resolved_implementation,
             expert_chunks=expert_chunks,
-        ),
+        )
+        batch_axis_names = x_spec[0]
+        if report_capacity_overflow and batch_axis_names is not None:
+            dropped = jax.lax.psum(dropped, axis_name=batch_axis_names)
+        return out, dropped
+
+    shard_fn = shard_map(
+        local_moe,
         mesh=mesh,
         in_specs=(
             x_spec,
