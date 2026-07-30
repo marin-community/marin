@@ -137,3 +137,40 @@ def test_transform_writes_nullable_metadata_with_stable_schema(tmp_path: Path):
     normalized_github_metadata = normalized_schema.field("github_metadata").type
     assert normalized_github_metadata.field("forked_from").type == pa.string()
     assert pq.read_table(normalized_path).to_pylist()[0]["github_metadata"]["forked_from"] is None
+
+
+def test_duplicate_file_entries_are_serialized_once():
+    """A Stack v3 row lists each file many times; the serialized document carries it once."""
+    row = {
+        "repo_path": "org/repo",
+        "repo_id": 1,
+        "commit_id": "c",
+        "github_metadata": {"branch": "main", "stars": 1},
+        "num_files": 20,
+        "files": (
+            [_file("a.py", "alpha", "id-a") for _ in range(10)] + [_file("b.py", "beta", "id-b") for _ in range(10)]
+        ),
+    }
+
+    doc = row_to_doc(row)
+
+    assert doc["text"] == ("Repository: org/repo\n\nFile: a.py\nalpha\n\nFile: b.py\nbeta")
+    assert doc["num_files"] == 2
+    assert [entry["file_path"] for entry in doc["file_metadata"]] == ["a.py", "b.py"]
+
+
+def test_same_content_at_two_paths_is_kept():
+    """Two paths sharing one content_id are distinct files and both survive."""
+    row = {
+        "repo_path": "org/repo",
+        "repo_id": 1,
+        "commit_id": "c",
+        "github_metadata": {"branch": "main", "stars": 1},
+        "num_files": 2,
+        "files": [_file("pkg/__init__.py", "", "empty-id"), _file("pkg/sub/__init__.py", "", "empty-id")],
+    }
+
+    doc = row_to_doc(row)
+
+    assert doc["num_files"] == 2
+    assert [entry["file_path"] for entry in doc["file_metadata"]] == ["pkg/__init__.py", "pkg/sub/__init__.py"]
