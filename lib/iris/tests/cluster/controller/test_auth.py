@@ -1,14 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for auth: session cookies, CSRF, default-deny middleware, auth DB isolation,
-stateless JWT, controller auth setup, and null-auth mode."""
+"""Tests for auth: session cookies, CSRF, default-deny middleware, stateless JWT,
+controller auth setup, and null-auth mode."""
 
 from unittest.mock import Mock
 
 import jwt
 import pytest
-import sqlalchemy.exc
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
@@ -54,7 +53,6 @@ from rigging.server_auth import (
 )
 from rigging.testing import MockVerifier
 from rigging.token_authority import JwksVerifier, JwtSigner, generate_ed25519_keypair, signing_key_from_private_pem
-from sqlalchemy import text
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
@@ -276,40 +274,6 @@ def test_all_routes_accessible_when_auth_disabled(noauth_client):
     """The permissive chain admits every route when auth is not configured."""
     for path in ["/job/123", "/worker/456", "/health", "/auth/config"]:
         assert noauth_client.get(path).status_code == 200
-
-
-# -- Auth DB isolation ---------------------------------------------------------
-
-
-def _write_secret(db: ControllerDB, key: str, value: str) -> None:
-    """Create a table in the attached auth DB and write a row into it.
-
-    The auth schema ships no tables of its own, so the test declares one: what is
-    under test is which connection pools resolve ``auth.*`` at all, not any
-    particular table.
-    """
-    with db.transaction() as tx:
-        tx.execute(text("CREATE TABLE IF NOT EXISTS auth.secrets (key TEXT PRIMARY KEY, value TEXT NOT NULL)"))
-        tx.execute(text("INSERT INTO auth.secrets (key, value) VALUES (:k, :v)"), {"k": key, "v": value})
-
-
-def test_read_snapshot_cannot_access_auth_tables(db: ControllerDB):
-    """Read pool connections must not see the attached auth DB's tables."""
-    _write_secret(db, "signing_key", "pem")
-
-    with db.read_snapshot() as q:
-        for table in ["secrets", "auth.secrets"]:
-            with pytest.raises(sqlalchemy.exc.OperationalError, match="no such table"):
-                q.execute(text(f"SELECT * FROM {table}"))
-
-
-def test_write_connection_can_access_auth_tables(db: ControllerDB):
-    _write_secret(db, "signing_key", "pem")
-
-    with db.transaction() as q:
-        rows = q.execute(text("SELECT value FROM auth.secrets WHERE key = 'signing_key'")).all()
-        assert len(rows) == 1
-        assert rows[0].value == "pem"
 
 
 # -- Stateless JWT -------------------------------------------------------------

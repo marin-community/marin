@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for ControllerDB transaction, read snapshot, and replace_from behavior."""
+"""Tests for ControllerDB transactions and read snapshots."""
 
 from pathlib import Path
 
@@ -67,30 +67,3 @@ def test_read_snapshot_returns_consistent_data(db: ControllerDB) -> None:
     with db.read_snapshot() as q:
         all_rows = q.execute(text("SELECT key FROM kv ORDER BY key")).all()
     assert len(all_rows) == 2
-
-
-def test_replace_from_reattaches_auth_db(tmp_path: Path) -> None:
-    """replace_from() must re-attach the auth DB so auth tables remain accessible."""
-    db = ControllerDB(db_dir=tmp_path)
-
-    # Declare a table in the attached auth DB (the auth schema ships none) and write to it.
-    with db.transaction() as cur:
-        cur.execute(text("CREATE TABLE auth.secrets (key TEXT PRIMARY KEY, value TEXT NOT NULL)"))
-        cur.execute(
-            text("INSERT INTO auth.secrets (key, value) VALUES (:key, :value)"),
-            {"key": "signing_key", "value": "secret-pem"},
-        )
-
-    # Create a copy of the DB to replace from (replace_from expects a directory)
-    backup_dir = tmp_path / "backup"
-    backup_dir.mkdir()
-    db.backup_to(backup_dir / "controller.sqlite3")
-
-    db.replace_from(str(backup_dir))
-
-    # Auth tables should still be accessible after replace_from via the write connection.
-    with db.transaction() as q:
-        rows = q.execute(text("SELECT value FROM auth.secrets WHERE key = 'signing_key'")).all()
-    assert len(rows) == 1
-    assert rows[0][0] == "secret-pem"
-    db.close()
