@@ -17,6 +17,13 @@ For debugging and operating live infrastructure, read the relevant OPS.md:
 
 Zephyr OPS.md references Iris OPS.md for shared infrastructure commands — read Iris first when debugging zephyr jobs on Iris.
 
+## Infrastructure (Pulumi)
+
+`infra/` hosts several independent Pulumi projects following three distinct
+patterns (infrastructure, application deploys, SaaS resource declarations). Read
+`infra/pulumi.md` before creating or modifying a Pulumi project so new work
+lands in the right pattern.
+
 ## Workflow Playbooks
 
 Skills are task-focused playbooks in `.agents/skills/` (also accessible as
