@@ -5,15 +5,15 @@ description: Reserve one or more Iris-backed CoreWeave GPU nodes (H100 or GB200)
 
 # Skill: Dev GPU
 
-Use this skill for the standard fast H100 debugging loop without wiring a full training job each time. It is the GPU counterpart to `reserve-tpu`.
+Use this skill for the standard fast GPU debugging loop without wiring a full training job each time. It is the GPU counterpart to `reserve-tpu`.
 
-`scripts/iris/dev_gpu.py` reserves a CoreWeave H100 pod through Iris, waits for the backing Kubernetes pod to come up, and `kubectl exec -it`s you into it. Marin's H100s are CoreWeave Kubernetes pods, not GCE VMs, so access is `kubectl`, not SSH — there is no `ssh`/`scp` transport and no `~/.ssh/config` alias.
+`scripts/iris/dev_gpu.py` reserves CoreWeave GPU nodes through Iris, waits for the backing Kubernetes pods to come up, and `kubectl exec -it`s you into one. A whole node is an 8-GPU `h100-8x` box or a 4-GPU `gb200-4x` NVL72 tray, chosen with `--gpu-variant`. Marin's GPUs are CoreWeave Kubernetes pods, not GCE VMs, so access is `kubectl`, not SSH — there is no `ssh`/`scp` transport and no `~/.ssh/config` alias.
 
 This is a lean tool: `allocate`, `connect`, `status`, `release`. It does not sync files or run remote env setup (no `execute`/`watch`/`setup_env`). The CoreWeave task image is self-contained; the loop is "reserve a node, shell in." Sync those steps in yourself once connected.
 
 ## Cost rule
 
-A holder pod sits on an expensive 8×H100 node for the session's lifetime, and a `--nodes N` session holds N of them. Release as soon as you are done — `Ctrl-C` the `allocate` terminal, or run `release` from another shell.
+A holder pod sits on an expensive whole node — 8×H100 or 4×GB200 — for the session's lifetime, and a `--nodes N` session holds N of them. Release as soon as you are done — `Ctrl-C` the `allocate` terminal, or run `release` from another shell.
 
 ## Commands
 
@@ -77,7 +77,11 @@ The `iris-task` image ships a CPU-only `uv` environment at `/app`, so bare `pyth
 cd /app && uv sync --all-packages --extra=gpu
 ```
 
-`--all-packages` is required: the `gpu` extra is defined on the sub-packages (`marin-levanter` / `marin-core`), not the root project. This is the GPU analog of `dev_tpu.py`'s `--extra=tpu`. Verify the hardware with `nvidia-smi -L` (expect 8×H100 80GB on a whole node).
+`--all-packages` is required: the `gpu` extra is defined on the sub-packages (`marin-levanter` / `marin-core`), not the root project. This is the GPU analog of `dev_tpu.py`'s `--extra=tpu`.
+
+This recipe is only exercised on H100. GB200 trays are aarch64 Grace hosts and pull a different CUDA wheel set, so treat the sync as untested there.
+
+Either way, `nvidia-smi -L` confirms what the pod actually got: 8×H100 80GB, or 4×GB200 on a `gb200-4x` tray.
 
 ## Observability
 
@@ -99,7 +103,7 @@ kubectl --kubeconfig ~/.kube/coreweave-iris --context marin-gpu_US-EAST-02A \
 
 - Local session state lives under `~/.cache/marin/dev_gpu_iris/`.
 - If the `allocate` terminal dies unexpectedly, run `release` to terminate the holder job and clear the stale state file.
-- A failed `allocate` cleans up after itself: the holder job is terminated and the local state file is removed only once the job is confirmed gone, so a failed terminate never orphans an expensive pod with no local record of its job id.
+- A failed `allocate` attempts cleanup on its way out: it terminates the holder job and drops the local state file only if that terminate call was accepted. An accepted terminate is not proof the pod is gone — confirm with `iris job list` when it matters. If the call fails, the state file survives, so you always keep a local record of the job id and can retry with `release`.
 - `connect` execs into the pods resolved at allocation time. If Iris rescheduled a task onto a new pod while the job stayed active, `connect` fails for that node — re-allocate.
 
 ## Agent Usage
@@ -111,6 +115,10 @@ export GPU_NAME="${USER}-$(git rev-parse --abbrev-ref HEAD | tr '/' '-')"
 uv run scripts/iris/dev_gpu.py --config lib/iris/config/cw-us-east-02a.yaml --name "$GPU_NAME" allocate
 ```
 
+`allocate` blocks until Ctrl-C, so an agent has to launch it detached — and Ctrl-C cannot reach it there. A background job started from a non-interactive shell inherits `SIGINT` as ignored, so `kill -INT` does nothing and Python never raises `KeyboardInterrupt`. Release with the `release` subcommand from a second shell instead; the held `allocate` notices the dead job within 30 s, cleans up, and exits.
+
+Its stdout is block-buffered into a redirected log, so the session summary only appears once the process exits. Read `~/.cache/marin/dev_gpu_iris/<name>.json` for live session state.
+
 ## Cleanup
 
-Normal cleanup is `Ctrl-C` in the `allocate` terminal. To clean up from another shell, run the `release` subcommand (add `--force` only if the job is already dead and `release` keeps erroring).
+Normal cleanup is `Ctrl-C` in the `allocate` terminal, which only works when `allocate` is running in the foreground of a real terminal. To clean up from another shell, or from any agent-launched session, run the `release` subcommand (add `--force` only if the job is already dead and `release` keeps erroring).
