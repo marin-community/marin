@@ -69,7 +69,7 @@ from zephyr.stats import (
     StatsWriter,
     ZephyrWorkerStatStatus,
 )
-from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot
+from zephyr.worker_context import CounterEntry, CounterSnapshot, merge_counter_entries
 from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
@@ -798,6 +798,12 @@ class ZephyrCoordinator:
             stage: If provided, only include entries with ``entry.stage == stage``.
                 If None (default), include all entries regardless of stage.
 
+        Snapshots are folded with :func:`merge_counter_entries`, the same
+        reducer the worker uses to combine its concurrent runners, so an
+        AVERAGE counter is weighted by each entry's observation count rather
+        than treating one shard's single sample as equal to another's
+        thousand.
+
         If snapshots disagree on a counter's aggregation (only possible for
         user counters that reuse a name with different ``set_aggregation``
         modes), the counter is omitted from the result and a warning is
@@ -812,41 +818,13 @@ class ZephyrCoordinator:
 
             all_snaps = list(self._completed_counters) + list(self._worker_counters.values())
 
-        aggregations: dict[str, Aggregation] = {}
-        values: dict[str, list[int | float]] = {}
-        conflicted: set[str] = set()
-        for snap in all_snaps:
-            for k, entry in snap.counters.items():
-                if stage is not None and entry.stage != stage:
-                    continue
-                if k in aggregations:
-                    if aggregations[k] != entry.aggregation:
-                        if k not in conflicted:
-                            logger.warning(
-                                "Counter %r has conflicting aggregations: %r vs %r; dropping",
-                                k,
-                                aggregations[k],
-                                entry.aggregation,
-                            )
-                            conflicted.add(k)
-                else:
-                    aggregations[k] = entry.aggregation
-                values.setdefault(k, []).append(entry.value)
-
-        result: dict[str, int | float] = {}
-        for k, vals in values.items():
-            if k in conflicted:
-                continue
-            match aggregations.get(k, Aggregation.SUM):
-                case Aggregation.SUM:
-                    result[k] = sum(vals)
-                case Aggregation.AVERAGE:
-                    result[k] = sum(vals) / len(vals)
-                case Aggregation.MAX:
-                    result[k] = max(vals)
-                case Aggregation.MIN:
-                    result[k] = min(vals)
-        return result
+        merged, conflicted = merge_counter_entries(
+            (k, entry)
+            for snap in all_snaps
+            for k, entry in snap.counters.items()
+            if stage is None or entry.stage == stage
+        )
+        return {k: e.value for k, e in merged.items() if k not in conflicted}
 
     def get_fatal_error(self) -> str | None:
         with self._lock:
@@ -1361,13 +1339,7 @@ class ZephyrWorker:
         """Aggregate live counters from all active runners; return None if unchanged."""
         with self._resources_lock:
             runners = list(self._active_runners)
-        current: dict[str, CounterEntry] = {}
-        for r in runners:
-            for name, entry in r.live_counters().items():
-                if name not in current:
-                    current[name] = CounterEntry(entry.value, entry.aggregation, entry.stage, entry.count)
-                else:
-                    current[name].merge(entry)
+        current, _ = merge_counter_entries((name, entry) for r in runners for name, entry in r.live_counters().items())
         if current == self._last_reported_counters:
             return None
         self._last_reported_counters = current
