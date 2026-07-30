@@ -42,6 +42,7 @@ from marin.datakit.download.hplt import hplt_v3_normalize_steps
 from marin.datakit.download.institutional_books import institutional_books_normalize_steps
 from marin.datakit.download.massive import massive_normalize_steps
 from marin.datakit.download.molmo2_cap import molmo2_cap_normalize_steps
+from marin.datakit.download.nemotron_code_v1_content import nemotron_code_v1_content_normalize_steps
 from marin.datakit.download.nemotron_code_v2_content import nemotron_code_v2_content_normalize_steps
 from marin.datakit.download.nemotron_terminal import nemotron_terminal_normalize_steps
 from marin.datakit.download.nemotron_v2 import (
@@ -182,6 +183,15 @@ def all_sources() -> dict[str, DatakitSource]:
         ("institutional_books", institutional_books_normalize_steps, 203.63),
         ("massive_function_calling", massive_normalize_steps, 11.39),
         ("molmo2-cap", molmo2_cap_normalize_steps, 0.36),
+        # Rough count: no tokenized cache exists yet, so this scales v2's measured
+        # rate (120.254379519 B tokens / 132,666,330 present docs ~= 906 tokens/doc)
+        # to v1's 513,109,851 present docs. Replace with the measured
+        # marin-community/marin-tokenizer total once the normalized cache is built.
+        (
+            "nemotron_code_v1/content",
+            nemotron_code_v1_content_normalize_steps,
+            465.0,
+        ),
         (
             "nemotron_code_v2/content",
             nemotron_code_v2_content_normalize_steps,
