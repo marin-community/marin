@@ -75,6 +75,29 @@ The archived PRISM-Berkeley result from PR #4933 reached `1.170267` BPB at learn
 
 This sweep used one seed and selected a winner from 40 runs. A clean follow-up should pair Hesscorr `0.1` with fresh Muon at learning rate `0.020` across multiple seeds, then add an exact historical-Muon configuration on the same v5p-8 hardware.
 
+## 300M spectral/Sylvester follow-up
+
+The 300M continuation completed 23 of 40 cells. The best completed cell was blend gain `0.05` at learning rate `0.012`, reaching `1.056606` C4-en BPB. The paired Muon control reached `1.058626`, a delta of `-0.002020` BPB. This is a single completed comparison, not evidence for the Hessian correction at 300M: all 15 Hesscorr cells failed at global step 0 with `Loss is NaN`.
+
+The 300M sweep estimates the spectral norm with five power iterations, divides the cubic Newton--Schulz input by `1.1` times that estimate, and uses 15 cubic steps. The correction uses the SVD-free polar/Sylvester identity: a 400-step damped fixed-point solve of `H S + S H = C` plus a 60-step Newton--Hotelling inverse. It does not use JVP.
+
+The model is Qwen3 ~300M, trained for 11,444 steps with batch size 128 and sequence length 4,096 on one v5p-8 slice. Each completed cell processed 5,999,951,872 tokens. The learning rates are `0.004`, `0.006`, `0.008`, `0.010`, and `0.012`; momentum is `0.98`.
+
+Final Paloma C4-en BPB; lower is better. A dash means the cell did not produce a final result.
+
+| Variant | LR 0.004 | LR 0.006 | LR 0.008 | LR 0.010 | LR 0.012 |
+|---|---:|---:|---:|---:|---:|
+| Muon | 1.067245 | 1.062251 | 1.060028 | 1.059351 | 1.058626 |
+| Blend 0.05 | 1.066771 | 1.061070 | 1.059204 | 1.057656 | **1.056606** |
+| Blend 0.15 | 1.071553 | 1.064368 | — | 1.059578 | 1.058150 |
+| Blend 0.3 | 1.080248 | 1.070832 | 1.065348 | 1.064243 | 1.063211 |
+| Blend 0.5 | 1.091561 | 1.077783 | — | 1.069972 | 1.068790 |
+| Hesscorr 0.1 | — | — | — | — | — |
+| Hesscorr 0.3 | — | — | — | — | — |
+| Hesscorr 1.0 | — | — | — | — | — |
+
+All five Muon cells and 18 of 20 blend cells reached global step 11,443. Blend `0.5` at learning rate `0.008` became NaN at step 5,393. Blend `0.15` at learning rate `0.008` did not produce a usable final W&B summary. The 15 Hesscorr cells all failed before their first logged training step, so this sweep does not establish whether the 130M Hesscorr `0.1` result transfers to 300M.
+
 ## Artifacts
 
 - [Completed experiment](https://marin.community/data-browser/experiment?path=gs%3A//marin-us-central1/experiments/muon_error_feedback_sweep-d76bb7.json)
@@ -83,3 +106,5 @@ This sweep used one seed and selected a winner from 40 runs. A clean follow-up s
 - [Paired Muon control](https://wandb.ai/understanding-sam/marin/runs/qwen3_130m_error_aware_muon_muon_lr0p02-5c7b32)
 - [Historical Muon baseline](https://wandb.ai/marin-community/marin/runs/qwen3_130m_muon_4096-04770b)
 - [PRISM-Berkeley baseline](https://wandb.ai/understanding-sam/marin/runs/qwen3_130m_prism_berkeley_o5_4096_lrx1-2fd229)
+- [Best completed 300M blend run](https://wandb.ai/understanding-sam/marin/runs/qwen3_300m_error_aware_muon_blend-g0p05_lr0p012-2026.07.23.4)
+- [Paired 300M Muon control](https://wandb.ai/understanding-sam/marin/runs/qwen3_300m_error_aware_muon_muon_lr0p012-2026.07.23.4)

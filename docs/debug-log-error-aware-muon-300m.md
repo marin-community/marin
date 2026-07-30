@@ -73,7 +73,31 @@ Paloma's new c4_en-marin cache to marin-community/marin-tokenizer. The new
 Marin cache prefixes are empty, so the next launch cannot reuse an
 incompatible record.
 
+## Hypothesis 4
+
+The spectral-normalized cubic and SVD-free Sylvester implementation would make
+the Hessian correction stable enough to test at 300M.
+
+## Results
+
+Recovery job
+`/kaiyuew/muon-error-feedback-300m-spectral-sylvester-20260723-201500`
+materialized the fresh Marin validation caches and reached TPU training. The
+parent finished with `RuntimeError: 16 step(s) failed`.
+
+All five Muon controls and 18 of 20 blend cells reached the final global step
+11,443. Blend gain `0.05` at learning rate `0.012` reached 1.056606 Paloma
+C4-en BPB, compared with 1.058626 for paired Muon. Blend gain `0.5` at learning
+rate `0.008` failed with `Loss is NaN` at step 5,393; blend gain `0.15` at
+learning rate `0.008` did not produce a usable final W&B summary.
+
+Every Hesscorr cell ended failed at global step 0. The task logs report
+`RuntimeError: Loss is NaN`, so the 300M run does not test whether the 130M
+Hesscorr result transfers to this scale.
+
 ## Future work
 
-- [ ] Verify the fresh Marin validation caches materialize, then launch a new
-  300M sweep version.
+- [ ] Identify which quantity in the polar/Sylvester correction becomes
+  non-finite at the first 300M update.
+- [ ] Add a finite-value regression test for the failing matrix shapes and
+  retry only the Hesscorr cells after the numerical issue is fixed.
