@@ -199,6 +199,37 @@ count**. A ragged final chunk averaged unweighted with the others silently chang
 and would do so by a small enough amount to look like noise. This is the specific defect to test
 for, not a hypothetical.
 
+## D-1d changes what the FSDP template may claim
+
+Two results, both from `d1d-fsdp-qb-report.md` on `agent/deri-d1d-fsdpqb`.
+
+**Larry's configuration reproduces on our stack.** Two draws on independent rack placements
+(`DH1-137`, `DH1-124`) averaged **23.667% summary mean MFU** against his published 23.653%
+(+0.013pp) and **280,876 final tok/s** against 283,560 (−0.947%). Step-24 drops were 0.0267%,
+losses finite at 6.114 and 6.136 against his 6.113. The FSDP template's provenance statement is
+therefore stronger than the plan originally assumed: the headline is **reproduced**, not merely
+inherited from a research build. Say that, and say it was two draws at 25 steps, not a
+tail-window measurement.
+
+**The predicted QB cost on FSDP did not materialise, and the pre-registration was falsified.**
+D-1d predicted 296,405 tok/s / 19.135% MFU by applying the EP line's 1.44pp QB cost to D-1c,
+with the directional claim that FSDP would fall behind EP once matched. Measured: 320,240 tok/s
+/ 20.673% MFU with **exactly 0.000% drops** across all four QB-on draws. Unchunked local
+`sonic_cute` has no capacity bound, so QB changes expert selection without anything to drop. The
+asymmetry is real and it favours FSDP: EP pays up to 1.44pp for QB, FSDP pays nothing.
+
+**Neither template may claim to beat the other, and the reason is a confound the report
+under-weights.** It attributes a 1.415% FSDP gap to tracker provenance — W&B 320,240 tok/s
+against `json_logger` 315,772 — and asks for a W&B-tracked EP pair. But tracker and placement
+are fully confounded in those draws: the W&B pair shares one placement (`DH1-125`) and the JSON
+pair shares another (`DH1-124`). Within a placement, repeatability is **0.02%**
+(320,274/320,206 and 315,775/315,770); across the two it is 1.415%. Placement is the simpler
+explanation and it matches this project's own ±2pp placement-variance rule. Treat the
+cross-strategy margin as unresolved, and do not let either README imply a winner.
+
+The useful by-product: within-placement repeatability at 0.02% means a repeated draw on the
+*same* placement measures almost nothing. Independent placements are what buy information.
+
 ## Verification
 
 Per phase, the assertions named in [`sequence.md`](sequence.md) §Verification, plus for the
