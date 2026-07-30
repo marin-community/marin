@@ -75,7 +75,7 @@ class EchoConfig:
 
 
 DEFAULT_CONFIG = EchoConfig(
-    public_url="https://echo.oa.dev",
+    public_url=search_config.PUBLIC_URL,
     github_repository=search_config.INDEXED_REPOSITORY,
     github_branch=search_config.INDEXED_BRANCH,
 )
@@ -288,8 +288,7 @@ class SearchCandidate:
 
 
 class RerankerModel(Protocol):
-    def rerank(self, query: str, documents: Iterable[str], batch_size: int = 64, **kwargs: Any) -> Iterable[float]:
-        """Score documents for their relevance to one query."""
+    def rerank(self, query: str, documents: Iterable[str]) -> Iterable[float]: ...
 
 
 def normalize_wiki_tags(tags: Iterable[str]) -> list[str]:
@@ -532,14 +531,17 @@ def repository_freshness(state: RepositoryIndexState) -> str:
     return f"indexed {state.indexed_at.isoformat()}"
 
 
+def repository_blob_url(config: EchoConfig, commit_sha: str, path: str) -> str:
+    return f"https://github.com/{config.github_repository}/blob/{commit_sha}/{quote(path, safe='/')}"
+
+
 def repository_file_search_result(
     row: sqlalchemy.Row,
     state: RepositoryIndexState,
     query: str,
     config: EchoConfig,
 ) -> SearchResult:
-    path = quote(row.path, safe="/")
-    source_url = f"https://github.com/{config.github_repository}/blob/{state.commit_sha}/{path}"
+    source_url = repository_blob_url(config, state.commit_sha, row.path)
     lines = representative_file_lines(row.text, query, row.start_line)
     references = [
         SearchReference(
@@ -618,6 +620,64 @@ def rerank_candidates(
     ]
     reranked.sort(key=lambda result: (-result.score, result.domain, result.id))
     return reranked[:limit]
+
+
+def wiki_candidates(
+    conn: sqlalchemy.Connection,
+    params: dict[str, object],
+    config: EchoConfig,
+) -> list[SearchCandidate]:
+    return [
+        SearchCandidate(
+            wiki_search_result(row, config),
+            f"{row.title}\n{row.use_when}\n\n{row.body}",
+        )
+        for row in conn.execute(hybrid_search.wiki_search_statement(), params)
+    ]
+
+
+def repository_file_candidates(
+    conn: sqlalchemy.Connection,
+    params: dict[str, object],
+    retrieval_limit: int,
+    query: str,
+    config: EchoConfig,
+) -> list[SearchCandidate]:
+    state = repository_index_state(conn, config)
+    if state is None:
+        return []
+    file_params = {
+        **params,
+        "candidate_limit": (
+            search_config.candidate_limit(retrieval_limit) * search_config.FILE_CHUNK_CANDIDATE_MULTIPLIER
+        ),
+        "repository": config.github_repository,
+        "branch": config.github_branch,
+        "exact": escape_like(query),
+        "substring": f"%{escape_like(query)}%",
+    }
+    return [
+        SearchCandidate(
+            repository_file_search_result(row, state, query, config),
+            f"{row.path}\n{row.title}\n\n{row.text}",
+        )
+        for row in conn.execute(hybrid_search.repository_file_search_statement(), file_params)
+    ]
+
+
+def activity_candidates(
+    conn: sqlalchemy.Connection,
+    params: dict[str, object],
+    domains: list[search_config.SearchDomain],
+) -> list[SearchCandidate]:
+    statement = hybrid_search.chunk_search_statement([activity_domain_clause(domains)])
+    return [
+        SearchCandidate(
+            activity_search_result(row),
+            f"{row.title or ''}\n\n{row.text or ''}",
+        )
+        for row in conn.execute(statement, params)
+    ]
 
 
 def indexed_file_text(rows: Iterable[sqlalchemy.Row]) -> str:
@@ -735,43 +795,12 @@ def federated_search(
     with engine.connect() as conn:
         conn.execute(hybrid_search.HNSW_ITERATIVE_SCAN)
         if "wiki" in domains:
-            for row in conn.execute(hybrid_search.wiki_search_statement(), params):
-                candidates.append(
-                    SearchCandidate(
-                        wiki_search_result(row, config),
-                        f"{row.title}\n{row.use_when}\n\n{row.body}",
-                    )
-                )
+            candidates.extend(wiki_candidates(conn, params, config))
         if "file" in domains:
-            state = repository_index_state(conn, config)
-            if state is not None:
-                file_params = {
-                    **params,
-                    "candidate_limit": (
-                        search_config.candidate_limit(retrieval_limit) * search_config.FILE_CHUNK_CANDIDATE_MULTIPLIER
-                    ),
-                    "repository": config.github_repository,
-                    "branch": config.github_branch,
-                    "exact": escape_like(query),
-                    "substring": f"%{escape_like(query)}%",
-                }
-                for row in conn.execute(hybrid_search.repository_file_search_statement(), file_params):
-                    candidates.append(
-                        SearchCandidate(
-                            repository_file_search_result(row, state, query, config),
-                            f"{row.path}\n{row.title}\n\n{row.text}",
-                        )
-                    )
+            candidates.extend(repository_file_candidates(conn, params, retrieval_limit, query, config))
         activity_domains = [candidate for candidate in domains if candidate in ("discord", "pr", "issue")]
         if activity_domains:
-            statement = hybrid_search.chunk_search_statement([activity_domain_clause(activity_domains)])
-            for row in conn.execute(statement, params):
-                candidates.append(
-                    SearchCandidate(
-                        activity_search_result(row),
-                        f"{row.title or ''}\n\n{row.text or ''}",
-                    )
-                )
+            candidates.extend(activity_candidates(conn, params, activity_domains))
     return rerank_candidates(candidates, query, reranker, limit)
 
 
@@ -830,7 +859,6 @@ def repository_file(path: str, engine: Engine, config: Config) -> RepositoryFile
         ).all()
     if state is None or not rows:
         raise HTTPException(404, f"no indexed repository file {path}")
-    quoted_path = quote(path, safe="/")
     return RepositoryFileDetail(
         id=f"file:{path}",
         title=rows[0].title,
@@ -838,7 +866,7 @@ def repository_file(path: str, engine: Engine, config: Config) -> RepositoryFile
             f"{path} · {config.github_branch}@"
             f"{state.commit_sha[: search_config.DISPLAY_SHA_CHARACTERS]} · {repository_freshness(state)}"
         ),
-        url=f"https://github.com/{config.github_repository}/blob/{state.commit_sha}/{quoted_path}",
+        url=repository_blob_url(config, state.commit_sha, path),
         text=indexed_file_text(rows),
     )
 

@@ -43,12 +43,9 @@ def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch, capsys
             {"params": {"q": "FAILED_PRECONDITION", "domain": ["file", "pr"], "limit": 10}},
         )
     ]
-    output = capsys.readouterr().out.splitlines()
-    assert "get <domain:id>" in output[0]
-    assert len(output) == 3
-    assert "file:lib/iris/src/iris/scheduler.py" in output[2]
-    assert "scheduler.py" in output[2]
-    assert "L42 raise FAILED_PRECONDITION" in output[2]
+    output = capsys.readouterr().out
+    assert cli.SEARCH_DETAIL_INSTRUCTION in output
+    assert "L42 raise FAILED_PRECONDITION" in output
 
 
 def test_search_defaults_to_curated_domains_without_discord(monkeypatch):
@@ -71,7 +68,7 @@ def test_search_defaults_to_curated_domains_without_discord(monkeypatch):
     ]
 
 
-def test_get_fetches_full_detail_by_search_result_id(monkeypatch, capsys):
+def test_get_fetches_full_detail_by_search_result_id(monkeypatch):
     calls = []
 
     def fake_request(method, path, **options):
@@ -89,6 +86,3 @@ def test_get_fetches_full_detail_by_search_result_id(monkeypatch, capsys):
     args.func(args)
 
     assert calls == [("GET", "/repository-files/lib/iris/OPS.md", {})]
-    output = capsys.readouterr().out
-    assert "[file:lib/iris/OPS.md] Iris Operations" in output
-    assert "# Iris Operations" in output

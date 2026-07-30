@@ -218,7 +218,4 @@ with access to `cloudsql-pulumi-admin-password`. When a release adds tables quer
 new API or sync images, run `infra/echo/migrate.py` before `pulumi up` to avoid a
 missing-table window. The first repository build fetches a GitHub archive and embeds
 all eligible files in resumable ten-file batches; later hourly runs normally process
-only changed paths. `repository_index_builds` is required by both the sync job and the
-API progress endpoint, so apply migration `m0009_repository_index_progress` before
-deploying images that contain the incremental builder. Review database grant changes
-before deploying them.
+only changed paths. Review database grant changes before deploying them.

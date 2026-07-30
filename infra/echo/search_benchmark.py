@@ -55,7 +55,6 @@ class QueryMetrics:
     hit: bool
     recalled: int
     relevant: int
-    result_count: int
 
 
 def checked_string(value: object, field: str) -> str:
@@ -221,7 +220,6 @@ def query_metrics(case: BenchmarkCase, results: Sequence[SearchResult], limit: i
         hit=bool(first_rank),
         recalled=recalled,
         relevant=len(judgments),
-        result_count=len(results),
     )
 
 

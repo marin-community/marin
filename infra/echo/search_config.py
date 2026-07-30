@@ -4,9 +4,12 @@
 """Search settings shared by Echo's schema and query statements."""
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Literal
 
+PUBLIC_URL = "https://echo.oa.dev"
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 INDEXED_REPOSITORY = "marin-community/marin"
 INDEXED_BRANCH = "main"
@@ -15,13 +18,15 @@ FEDERATED_SUMMARY_CHARACTERS = 240
 SearchDomain = Literal["wiki", "file", "discord", "pr", "issue"]
 SEARCH_DOMAINS: tuple[SearchDomain, ...] = ("wiki", "file", "discord", "pr", "issue")
 DEFAULT_SEARCH_DOMAINS: tuple[SearchDomain, ...] = ("wiki", "file", "pr", "issue")
-SEARCH_DOMAIN_LABELS: dict[SearchDomain, str] = {
-    "wiki": "Wiki",
-    "file": "Files",
-    "discord": "Discord",
-    "pr": "Pull requests",
-    "issue": "Issues",
-}
+SEARCH_DOMAIN_LABELS: Mapping[SearchDomain, str] = MappingProxyType(
+    {
+        "wiki": "Wiki",
+        "file": "Files",
+        "discord": "Discord",
+        "pr": "Pull requests",
+        "issue": "Issues",
+    }
+)
 TEXT_SEARCH_CONFIG = "english"
 TS_RANK_NORMALIZATION = 32
 DEFAULT_SEARCH_LIMIT = 10

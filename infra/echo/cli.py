@@ -45,7 +45,7 @@ from search_result import SearchResult
 
 # echo.oa.dev maps to the echo-api Cloud Run service; the IAP token audience is the shared
 # Marin desktop OAuth client, which echo-api's IAP settings admit as a programmatic client.
-API_URL = os.environ.get("ECHO_API_URL", "https://echo.oa.dev").rstrip("/")
+API_URL = os.environ.get("ECHO_API_URL", search_config.PUBLIC_URL).rstrip("/")
 # Data endpoints live under /api on the service; the dashboard SPA owns the bare paths.
 API_BASE = f"{API_URL}/api"
 AUDIENCE = MARIN_DESKTOP_OAUTH_CLIENT.client_id

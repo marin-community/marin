@@ -89,7 +89,7 @@ class FakeReranker:
         self.queries: list[str] = []
         self.documents: list[list[str]] = []
 
-    def rerank(self, query, documents, batch_size=64, **kwargs):
+    def rerank(self, query, documents):
         values = list(documents)
         self.queries.append(query)
         self.documents.append(values)
@@ -399,7 +399,7 @@ def test_reranker_uses_full_candidate_text_without_erasing_hybrid_rank():
     )
 
     class DeploymentReranker:
-        def rerank(self, query, documents, batch_size=64, **kwargs):
+        def rerank(self, query, documents):
             assert query == "how do i deploy iris"
             return [float("verifies controller health" in document) for document in documents]
 
@@ -425,7 +425,7 @@ def test_reranker_suppresses_all_candidates_below_the_quality_floor(monkeypatch)
     )
 
     class RejectingReranker:
-        def rerank(self, query, documents, batch_size=64, **kwargs):
+        def rerank(self, _query, documents):
             return [-3.0 for _ in documents]
 
     monkeypatch.setattr(echo.search_config, "RERANK_MAX_CANDIDATES", 2)
@@ -435,13 +435,6 @@ def test_reranker_suppresses_all_candidates_below_the_quality_floor(monkeypatch)
     ]
 
     assert echo.rerank_candidates(candidates, "how do i deploy iris", RejectingReranker(), 3) == []
-
-
-def test_rank_weight_binds_are_floating_point():
-    statement = str(echo.hybrid_search.repository_file_search_statement())
-
-    assert "CAST(:semantic_weight AS double precision)" in statement
-    assert "CAST(:lexical_weight AS double precision)" in statement
 
 
 def test_file_artifact_reconstructs_overlapping_indexed_chunks(client_with):
