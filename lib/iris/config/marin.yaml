@@ -290,9 +290,9 @@ scale_groups:
 # ---------------------------------------------------------------------------
 # User budget tiers
 #
-# This section is the source of truth for per-user budgets. It is reconciled
-# into user_budgets on every controller start (migration 0037 truncates the
-# table first so the config fully owns row contents).
+# reconcile_user_budget_tiers upserts these tiers into user_budgets on every
+# controller start. It never deletes, so a row set with `iris user budget set`
+# outlives a restart and is overwritten only when the user is listed here.
 #
 # Unlisted submitters have no row and fall through to UserBudgetDefaults at
 # read time — a small INTERACTIVE budget that silently degrades to BATCH once

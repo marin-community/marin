@@ -217,3 +217,23 @@ scale_groups:
       coreweave:
         region: US-EAST-08A
         instance_type: gb200-4x
+
+# 128000 is about one NVL72 rack: 18 gb200-4x nodes cost ~102,000.
+user_budgets:
+  - user_ids:
+      - benjaminfeuer
+      - betsy
+      - dlwh
+      - eczech
+      - held
+      - larry
+      - marin
+      - muchanem
+      - mwittmann
+      - power
+      - rav
+      - romain
+      - wmoss
+      - zack
+    budget_limit: 128000
+    max_band: PRIORITY_BAND_INTERACTIVE

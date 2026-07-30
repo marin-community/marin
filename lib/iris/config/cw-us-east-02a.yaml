@@ -204,3 +204,27 @@ scale_groups:
       coreweave:
         region: US-EAST-02A
         instance_type: gd-8xh100ib-i128
+
+# 42752 is 4 h100-8x nodes (32 GPUs) at full node resources.
+user_budgets:
+  - user_ids:
+      - benjaminfeuer
+      - betsy
+      - dlwh
+      - eczech
+      - held
+      - larry
+      - marin
+      - muchanem
+      - mwittmann
+      - power
+      - rav
+      - romain
+      - wmoss
+      - zack
+    budget_limit: 42752
+    max_band: PRIORITY_BAND_INTERACTIVE
+  # 171008 is 16 h100-8x nodes: half of this cluster's 32-node fleet.
+  - user_ids: [benjaminfeuer]
+    budget_limit: 171008
+    max_band: PRIORITY_BAND_INTERACTIVE
