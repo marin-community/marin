@@ -95,9 +95,32 @@ Every Hesscorr cell ended failed at global step 0. The task logs report
 `RuntimeError: Loss is NaN`, so the 300M run does not test whether the 130M
 Hesscorr result transfers to this scale.
 
+## Hypothesis 5
+
+At the first optimizer update, the normalized EMA is `(1 - momentum)` times
+the gradient, so `gradient - EMA` is purely radial. The nuclear-norm Hessian
+annihilates this direction, but the product-only Sylvester approximation
+produces a clipped nonzero correction when the gradient matrix is rank
+deficient.
+
+## Changes to make
+
+- Remove the radial tangent component before the Sylvester solve and return a
+  zero correction when only float32 roundoff remains.
+- Add a scale-relative eigenvalue floor to the polar Hessian used by the
+  fixed-point and inverse iterations.
+- Fall back to Frobenius normalization only when the power-normalized cubic
+  iterate does not produce a finite SPD polar factor.
+- Add a Hesscorr-only 300M retry group for the 15 unfinished cells.
+
+## Results
+
+A local rank-deficient first-update reproducer returned a correction at the
+Frobenius clipping cap under the prior implementation. The corrected path
+returns the exact Muon direction for the same radial update. The focused
+optimizer and speedrun suite passes after the change.
+
 ## Future work
 
-- [ ] Identify which quantity in the polar/Sylvester correction becomes
-  non-finite at the first 300M update.
-- [ ] Add a finite-value regression test for the failing matrix shapes and
-  retry only the Hesscorr cells after the numerical issue is fixed.
+- [ ] Launch the 15-cell Hesscorr-only 300M retry and verify that each run
+  advances beyond the first optimizer update.

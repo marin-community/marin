@@ -36,6 +36,7 @@ DEFAULT_CUBIC_POWER_ITERATIONS = 5
 DEFAULT_SYLVESTER_STEPS = 400
 DEFAULT_INVERSE_NEWTON_STEPS = 60
 SPECTRAL_NORM_SAFETY_FACTOR = 1.1
+ROUNDING_ERROR_MULTIPLIER = 32.0
 
 
 @dataclass(frozen=True)
@@ -75,6 +76,33 @@ def _spectral_norm_power_iteration(matrix: jax.Array, *, steps: int, eps: float)
     return jnp.linalg.vector_norm(matrix @ vector)
 
 
+def _cubic_iteration(matrix: jax.Array, *, steps: int) -> jax.Array:
+    def iterate(_, value):
+        return 1.5 * value - 0.5 * value @ value.T @ value
+
+    return jax.lax.fori_loop(0, int(steps), iterate, matrix)
+
+
+def _regularized_polar_hessian(polar: jax.Array, matrix: jax.Array, *, eps: float) -> jax.Array:
+    """Return the SPD polar factor with a float32-scale eigenvalue floor."""
+    hessian = 0.5 * (polar.T @ matrix + matrix.T @ polar)
+    dimension = hessian.shape[0]
+    scale = jnp.maximum(
+        jnp.linalg.norm(hessian, ord="fro") / jnp.sqrt(jnp.asarray(dimension, hessian.dtype)),
+        jnp.asarray(eps, hessian.dtype),
+    )
+    rounding_floor = ROUNDING_ERROR_MULTIPLIER * jnp.finfo(hessian.dtype).eps * scale
+    floor = jnp.maximum(rounding_floor, jnp.asarray(eps, hessian.dtype))
+    return hessian + floor * jnp.eye(dimension, dtype=hessian.dtype)
+
+
+def _polar_factor_is_usable(polar: jax.Array, matrix: jax.Array, *, eps: float) -> jax.Array:
+    """Check that the cubic iterate defines a finite SPD polar factor."""
+    hessian = _regularized_polar_hessian(polar, matrix, eps=eps)
+    cholesky = jnp.linalg.cholesky(hessian)
+    return jnp.all(jnp.isfinite(polar)) & jnp.all(jnp.isfinite(cholesky))
+
+
 def cubic_newton_schulz(
     matrix: jax.Array,
     *,
@@ -99,10 +127,19 @@ def cubic_newton_schulz(
     if not jax.sharding.get_abstract_mesh().empty:
         working = jax.lax.with_sharding_constraint(working, PartitionSpec(None, ("data", "model")))
 
-    def iterate(_, value):
-        return 1.5 * value - 0.5 * value @ value.T @ value
+    spectral_polar = _cubic_iteration(working, steps=steps)
 
-    working = jax.lax.fori_loop(0, int(steps), iterate, working)
+    def use_frobenius_scale(_):
+        frobenius_norm = jnp.linalg.norm(working, ord="fro")
+        denominator = jnp.maximum(frobenius_norm, jnp.asarray(eps, working.dtype))
+        return _cubic_iteration(working / denominator, steps=steps)
+
+    working = jax.lax.cond(
+        _polar_factor_is_usable(spectral_polar, working, eps=eps),
+        lambda _: spectral_polar,
+        use_frobenius_scale,
+        operand=None,
+    )
 
     if transposed:
         working = working.T
@@ -154,7 +191,7 @@ def _nuclear_hessian_sylvester(
         ).T
 
     polar = cubic_newton_schulz(matrix, steps=settings.cubic_steps, eps=settings.eps)
-    polar_hessian = 0.5 * (polar.T @ matrix + matrix.T @ polar)
+    polar_hessian = _regularized_polar_hessian(polar, matrix, eps=settings.eps)
     skew_term = polar.T @ tangent - tangent.T @ polar
     skew_solution = _solve_sylvester_fixed_point(
         polar_hessian,
@@ -171,6 +208,25 @@ def _nuclear_hessian_sylvester(
     return polar @ skew_solution + normal_complement @ inverse_hessian
 
 
+def _tangent_without_radial_component(
+    matrix: jax.Array, tangent: jax.Array, *, eps: float
+) -> tuple[jax.Array, jax.Array]:
+    """Remove the Hessian-null radial component from a nuclear-norm tangent."""
+    matrix_norm_squared = jnp.vdot(matrix, matrix).real
+    denominator = jnp.maximum(matrix_norm_squared, jnp.asarray(eps**2, matrix.dtype))
+    radial_coefficient = jnp.vdot(matrix, tangent).real / denominator
+    residual = tangent - radial_coefficient * matrix
+    residual_norm = jnp.linalg.norm(residual, ord="fro")
+    tangent_norm = jnp.linalg.norm(tangent, ord="fro")
+    rounding_tolerance = (
+        ROUNDING_ERROR_MULTIPLIER
+        * jnp.finfo(matrix.dtype).eps
+        * jnp.maximum(tangent_norm, jnp.asarray(eps, matrix.dtype))
+    )
+    is_effectively_radial = (matrix_norm_squared <= eps**2) | (residual_norm <= rounding_tolerance)
+    return residual, is_effectively_radial
+
+
 def clipped_nuclear_hessian(
     matrix: jax.Array,
     tangent: jax.Array,
@@ -184,19 +240,30 @@ def clipped_nuclear_hessian(
     compute_dtype = _compute_dtype(matrix)
     working_matrix = matrix.astype(compute_dtype)
     working_tangent = tangent.astype(compute_dtype)
-    correction = _nuclear_hessian_sylvester(
+    tangent, is_effectively_radial = _tangent_without_radial_component(
         working_matrix,
         working_tangent,
-        settings=settings,
+        eps=settings.eps,
     )
 
-    cap = jnp.sqrt(jnp.asarray(min(matrix.shape), dtype=correction.dtype))
-    correction_norm = jnp.linalg.norm(correction, ord="fro")
-    clip_scale = jnp.minimum(
-        1.0,
-        cap / jnp.maximum(correction_norm, jnp.asarray(settings.eps, correction.dtype)),
-    )
-    return correction * clip_scale
+    def zero_correction(_):
+        return jnp.zeros_like(working_matrix)
+
+    def hessian_correction(_):
+        correction = _nuclear_hessian_sylvester(
+            working_matrix,
+            tangent,
+            settings=settings,
+        )
+        cap = jnp.sqrt(jnp.asarray(min(matrix.shape), dtype=correction.dtype))
+        correction_norm = jnp.linalg.norm(correction, ord="fro")
+        clip_scale = jnp.minimum(
+            1.0,
+            cap / jnp.maximum(correction_norm, jnp.asarray(settings.eps, correction.dtype)),
+        )
+        return correction * clip_scale
+
+    return jax.lax.cond(is_effectively_radial, zero_correction, hessian_correction, operand=None)
 
 
 def error_aware_muon_step(

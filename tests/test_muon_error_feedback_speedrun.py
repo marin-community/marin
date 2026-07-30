@@ -27,6 +27,7 @@ from experiments.speedrun.prism_berkeley_qwen3_scaling.muon_error_feedback_sweep
     ADAM_LR_RATIO,
     FEEDBACK_VARIANTS,
     LEARNING_RATES,
+    SWEEP_VARIANT_GROUPS,
     build_sweep_configs,
 )
 from experiments.speedrun.prism_berkeley_qwen3_scaling.submission_support import default_speedrun
@@ -152,6 +153,24 @@ def test_hesscorr_policy_matches_clipped_svd_oracle_in_float32(shape):
     )
 
     np.testing.assert_allclose(np.asarray(actual), expected, atol=2e-5, rtol=2e-5)
+
+
+def test_hesscorr_matches_muon_for_a_radial_rank_deficient_first_update():
+    left = jnp.arange(16, dtype=jnp.float32)[:, None] + 1.0
+    right = jnp.arange(8, dtype=jnp.float32)[None, :] + 1.0
+    momentum = 0.02 * left * right
+    gradient = 50.0 * momentum
+
+    hesscorr = error_aware_muon_step(
+        momentum,
+        gradient,
+        policy="hesscorr",
+        correction_gain=1.0,
+    )
+    muon = error_aware_muon_step(momentum, gradient, policy="muon")
+
+    assert jnp.all(jnp.isfinite(hesscorr))
+    np.testing.assert_allclose(np.asarray(hesscorr), np.asarray(muon), atol=1e-6, rtol=1e-6)
 
 
 def test_clipped_nuclear_hessian_matches_unclipped_oracle_and_activates_cap():
@@ -397,6 +416,13 @@ def test_300m_sweep_uses_archived_learning_rates_and_speedrun_geometry():
         for variant in FEEDBACK_VARIANTS
         for learning_rate in expected_learning_rates
     }
+
+
+def test_300m_hesscorr_retry_builds_only_the_unfinished_cells():
+    sweep = build_sweep_configs(size="300m", variants=SWEEP_VARIANT_GROUPS["hesscorr"])
+
+    assert len(sweep) == 15
+    assert all(config.train_config.optimizer_config.policy == "hesscorr" for _, config in sweep)
 
 
 def test_checked_in_results_cover_the_completed_grid_and_recompute_selection():

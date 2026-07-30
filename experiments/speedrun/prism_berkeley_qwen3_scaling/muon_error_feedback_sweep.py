@@ -69,6 +69,10 @@ FEEDBACK_VARIANTS = (
     FeedbackVariant("hesscorr", 0.3),
     FeedbackVariant("hesscorr", 1.0),
 )
+SWEEP_VARIANT_GROUPS = {
+    "all": FEEDBACK_VARIANTS,
+    "hesscorr": tuple(variant for variant in FEEDBACK_VARIANTS if variant.policy == "hesscorr"),
+}
 
 
 def _float_slug(value: float) -> str:
@@ -163,13 +167,19 @@ def build_sweep_configs(
     return sweep_configs
 
 
-def main(*, size: str = "130m", version: str = "dev", max_concurrent: int = 8) -> None:
+def main(
+    *,
+    size: str = "130m",
+    version: str = "dev",
+    max_concurrent: int = 8,
+    variants: tuple[FeedbackVariant, ...] = FEEDBACK_VARIANTS,
+) -> None:
     if os.getenv("CI") is not None:
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
 
     result_steps = []
-    for name, config in build_sweep_configs(size=size):
+    for name, config in build_sweep_configs(size=size, variants=variants):
         config.print_run_info()
         _, result_step = default_speedrun(
             name,
@@ -187,9 +197,15 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--size", choices=tuple(SWEEP_SETTINGS), default="130m")
     parser.add_argument("--version", default="dev")
     parser.add_argument("--max-concurrent", type=int, default=8)
+    parser.add_argument("--variant-group", choices=tuple(SWEEP_VARIANT_GROUPS), default="all")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = _parse_args()
-    main(size=args.size, version=args.version, max_concurrent=args.max_concurrent)
+    main(
+        size=args.size,
+        version=args.version,
+        max_concurrent=args.max_concurrent,
+        variants=SWEEP_VARIANT_GROUPS[args.variant_group],
+    )
