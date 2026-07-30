@@ -230,6 +230,66 @@ cross-strategy margin as unresolved, and do not let either README imply a winner
 The useful by-product: within-placement repeatability at 0.02% means a repeated draw on the
 *same* placement measures almost nothing. Independent placements are what buy information.
 
+## Outcome, 2026-07-30
+
+Both PRs are open as drafts against `origin/main` @ `689ed80ea`.
+
+- **[#7779](https://github.com/marin-community/marin/pull/7779)** — 27 commits, base `main`: the
+  shared substrate, the base-`moe` folds, and `moe_hero_fsdp`.
+- **[#7780](https://github.com/marin-community/marin/pull/7780)** — 10 commits, stacked on #7779:
+  the expert-parallel core and `moe_hero_ep`.
+
+[#7488](https://github.com/marin-community/marin/pull/7488) and
+[#7493](https://github.com/marin-community/marin/pull/7493) were closed as superseded by #7779,
+[#7490](https://github.com/marin-community/marin/pull/7490) by #7780.
+[#7489](https://github.com/marin-community/marin/pull/7489) and
+[#7494](https://github.com/marin-community/marin/pull/7494) stay open: their content is not on this
+branch, and #7489's slim Sonic residuals now conflict harder, because the FSDP template's four-way
+expert chunking reaches the `_expert_mlp` path they rewrite.
+
+Four independent reviews and five fix passes ran over the series; the reports are the `hero-*.md`
+files beside this one. What they caught, in descending order of what it would have cost:
+
+1. **PR 1 would have gone up red.** The FSDP variant commit asserted `processes_per_task == 4` and
+   `num_train_steps == 120` against a template resolving to `1` and `25`, and the *EP variant
+   commit in PR 2* silently repaired both — so the tip was green while the boundary was not. The
+   contract test had been written against a draft of the template.
+2. **The branch published 49 fabricated zeros by default.** The drop count was gated behind
+   `SCALE_REPORT_DROPS` and replaced with a structural zero, while the rate derived from it stayed
+   ungated — so an unmeasured configuration reported a clean `0.0` at every layer. `main` reports
+   those metrics unconditionally, so this was a regression, in a commit carrying `Fixes #7514`,
+   the issue asking for that exact metric.
+3. **The FSDP template would not have reproduced its headline.** No `SCALE_MUON_*` switches were
+   installed, so Newton–Schulz bypassed SYRK, and four optimizer and initialization values were
+   library defaults — `initializer_std` 0.02 against the heuristic's 0.0063789, a 3.1× error in
+   initialization. Root cause was a briefing error: the config was written from a W&B dump rather
+   than from the resolved submit command.
+4. **The int32 drop overflow was only half fixed** — the division moved to the host, the
+   accumulation did not, giving a negative drop fraction above about 66.7%.
+5. **An optimizer-routing change was hidden** inside a commit about scanned expert stacks, with the
+   pre-existing assertion edited to match it. Routers stayed on Muon; the norm-gain move was split
+   into its own justified commit.
+6. **Two failing tests masked each other by JAX version.** The local venv runs 0.11.0, CI's `marin`
+   lane runs 0.10.1 via the `cpu` extra's pin. Under 0.11 a dense-Grug sharding test failed and was
+   written off as pre-existing all session; under 0.10.1 that test passed and the branch's own
+   offload test failed instead, against a green `main`. Both are now fixed — the dense-Grug one by
+   building shifted labels with padding instead of concatenating sharded slices — and the suite is
+   green under both.
+
+Two claims that were made during this work and turned out to be false, recorded so they are not
+re-derived: the `sonic_cute` expert-dimension chunker is **not** dead code, it is what the
+reproduction's `SCALE_MOE_EXPERT_CHUNKS 4` reaches and only its caller was missing (the
+*intermediate*-dimension chunker beside it genuinely was dead and is deleted); and "no PR-2 commit
+touches `experiments/grug/base` or `experiments/grug/moe`" was never true — six do, legitimately.
+The property that holds is the weaker one the boundary review established: no PR-1 file references
+a PR-2 symbol, and PR 1 is green at its own boundary.
+
+Still open at handoff: the codex connector does not review draft PRs, so neither PR has had one;
+marking them ready for review triggers it. Auto-PGLE is enabled in the FSDP template because the
+reproduction ran it successfully at 64 GPUs twice, which contradicts the standing "auto-PGLE
+crashes multi-host" guidance for this configuration. The EP template ships no PGLE profile and is
+expected to land about 0.427pp below its quoted 22.398% as a result.
+
 ## Verification
 
 Per phase, the assertions named in [`sequence.md`](sequence.md) §Verification, plus for the
