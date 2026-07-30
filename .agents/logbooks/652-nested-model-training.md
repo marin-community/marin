@@ -2585,3 +2585,50 @@ result:
   compiled-step overhead, overflow, and uncheatable loss against the existing
   E256 control. Continue only if full Paloma remains within `+0.10`, E128 beats
   the control chop, and step overhead remains below 5%.
+
+### 2026-07-30 01:51 - NEST-MOE-005 paired router residuals launched
+
+- Hypothesis: pairing only expert weights sends outer-route examples into the
+  E128 base but does not make the compact router send related examples to that
+  base. Applying the same base-plus-residual parameterization to router columns
+  should align the route hierarchy and improve extraction.
+- Commit hash: exact-source commit `4a32e6ee22`.
+- Command:
+  `scratch/augdk-reference-nested-wt/scratch/resubmit_paired_residual_10b.sh nest-augdk-e128-pairedrouterresidual-10b-r1 1`.
+- Config: identical to NEST-MOE-004, with outer router column `128+i`
+  materialized as `(base_router[i] + router_residual[i]) / sqrt(2)`.
+- Result: focused tests pass and job
+  `/power/nest-augdk-e128-pairedrouterresidual-10b-r1-coord` is running.
+  W&B run:
+  [nest-augdk-e128-pairedrouterresidual-10b-r1](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e128-pairedrouterresidual-10b-r1).
+- Interpretation: the two residual arms isolate weight sharing from
+  hierarchical route sharing without adding parameters or active expert
+  matmuls.
+- Next action: apply the same update-4,000 gate to both arms.
+
+### 2026-07-30 02:33 - NEST-MOE-004/005 stop at Gate 1
+
+- Both residual arms reached update 4,000 and 1.049B nominal tokens without a
+  restart. Weight-only residuals finish at `3.785311` full E256 Paloma and
+  `4.178945` extracted E128 Paloma. Pairing the router finishes at `3.788318`
+  full and `4.116328` extracted.
+- Against the matched control, the full-model deltas are `+0.012569` for
+  weight-only residuals and `+0.015575` for weight-plus-router residuals. Both
+  pass the `+0.10` full-model bound.
+- The control's fixed E128 chop is `4.023812` at the same update. Extracted
+  E128 deltas are therefore `+0.155132` for weight-only residuals and
+  `+0.092516` for weight-plus-router residuals. Both fail the preregistered
+  requirement to beat the untrained control chop. Pairing router columns
+  recovers `0.062616` nat relative to pairing expert weights alone, but it
+  does not make the extracted model competitive.
+- Median compiled-step durations over updates 500--4,000 are `463.392` ms
+  control, `462.800` ms weight-only residuals, and `462.928` ms paired-router
+  residuals. The residual materialization has no measurable optimizer-step
+  surcharge in this one-node full-FSDP test.
+- The jobs were intentionally stopped after the gate. Iris reports the
+  user-requested termination as one preemption on each coordinator; neither
+  run suffered an infrastructure preemption.
+- Decision: do not spend 10B tokens on residual sharing without compact-mode
+  supervision. A follow-up should combine paired expert/router residuals with
+  a sparse explicit E128 objective, or test a balanced-complement schedule
+  that restores each bank's expected control assignment rate.
