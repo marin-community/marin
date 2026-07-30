@@ -380,6 +380,67 @@ export interface GroupResponse {
   siblings: GroupSibling[]
 }
 
+// --- Model detail (/api/models/{model}) ---
+
+// A model runs each benchmark many times; a cohort is one version's launch. Newest cohort first.
+export interface ModelCohort {
+  version: string | null
+  created_at: string
+  n_evals: number
+  n_succeeded: number
+  group_id: string | null
+}
+
+export interface ModelRun {
+  run_id: string
+  eval_name: string
+  status: string
+  created_at: string | null
+  version: string | null
+  value: number | null
+  stderr: number | null
+  metric: string | null
+}
+
+// Everything the model view needs in one call: the cohort list for the version selector, every
+// succeeded run's score per benchmark for the sparklines, and every run for the run list. The page
+// derives each cohort's per-benchmark cells from `runs`, so no precomputed cell map is sent.
+export interface ModelDetail {
+  model: string
+  location: string | null
+  backend: string | null
+  user: string | null
+  current_version: string | null
+  cohorts: ModelCohort[]
+  history: Record<string, HistoryPoint[]>
+  runs: ModelRun[]
+}
+
+// --- Agentic failure review (POST /api/runs/{run_id}/samples/review) ---
+
+export interface ReviewCategory {
+  label: string
+  count: number
+  doc_ids: string[]
+}
+
+export interface ReviewSummary {
+  categories: ReviewCategory[]
+  narrative: string
+}
+
+// `available` is false with a `reason` when the reviewer is not configured (no API key/SDK) or
+// there are no samples — mirroring the logs/artifact endpoints rather than erroring.
+export interface ReviewResponse {
+  available: boolean
+  reason: string | null
+  model: string | null
+  task: string
+  filter: string
+  n_reviewed: number
+  summary: ReviewSummary | null
+}
+
 // One eval within a launch (a serve group), with its headline score.
 export interface GroupMember {
   run_id: string

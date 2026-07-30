@@ -39,7 +39,9 @@ GET  /api/runs/{run_id}/logs?role=&tail=&substring=   live finelog log lines for
 GET  /api/runs/{run_id}/samples/tasks  tasks with exported per-sample parquets
 GET  /api/runs/{run_id}/samples?task=&offset=&limit=&correct=   paged sample rows
 GET  /api/runs/{run_id}/samples/artifact?uri=   one run-local sample artifact (trajectory/exchange) as text
+POST /api/runs/{run_id}/samples/review   LLM failure-mode review of up to n sampled task rows ({task, filter, n})
 GET  /api/runs/{run_id}/group          sibling runs sharing the run's group_id
+GET  /api/models/{model}    one model's aggregated detail (identity, version cohorts, current cohort cells, per-eval history, all runs; 404 if absent)
 GET  /api/matrix?include_archived=   model x task matrix (per cell, per-model version cohort) + leaderboard rows
 GET  /api/history?model=&task=   every run's headline score for one cell, over time
 GET  /api/meta              distinct models / evals / suites / users / statuses + archived_models + current_user
@@ -70,6 +72,19 @@ restricted to URIs under the run's own `results_path` -- a `..` segment or an ou
 refused, so the endpoint cannot fetch arbitrary object storage. It size-caps each read and, like the
 logs endpoint, returns a typed `{available: false, reason}` for a missing, unreadable, or oversized
 object rather than a 500. Reads are cached briefly, as sample tables are.
+
+`/api/models/{model}` aggregates in one call everything the Model view needs: the model's identity from
+its newest record, one cohort entry per distinct version (newest first), the current version cohort's
+per-eval cells and each eval's score-over-time -- both following the matrix's cohort semantics with
+`-smoke` suites excluded -- and every run for the model (smoke included), newest first.
+
+`/api/runs/{run_id}/samples/review` samples up to `n` (default 20, capped at 40) rows of the run's
+`{task}` filtered by `{filter}` (`all`/`correct`/`incorrect`), renders each into a bounded text digest,
+and asks one Claude call (`EVALDASH_REVIEW_MODEL`, default `claude-haiku-4-5-20251001`, keyed by
+`ANTHROPIC_API_KEY`) to bucket them into a fixed failure-mode rubric with a short narrative. Like the
+logs and artifact endpoints it returns `{available: false, reason}` -- never a 500 -- when the
+`anthropic` SDK is missing, the key is unset, the task has no matching samples, or the reply is not
+valid JSON.
 
 ## Layout
 
@@ -112,8 +127,11 @@ EVALDASH_DASHBOARD_DIST=infra/evaldash/dashboard/dist \
 PORT=8080 \
 PYTHONPATH=infra/evaldash/src:lib/marin/src:lib/rigging/src \
 uv run --with starlette --with uvicorn --with sqlalchemy --with pyarrow --with pydantic --with fsspec \
+  --with anthropic \
   python infra/evaldash/src/server.py
 # → http://localhost:8080  (binds loopback in local mode)
+# The samples/review endpoint needs `anthropic` importable and ANTHROPIC_API_KEY set; without either it
+# degrades to {available: false, reason}. EVALDASH_REVIEW_MODEL overrides the default review model.
 ```
 
 ### Against the shared Postgres index
@@ -126,6 +144,7 @@ EVALDASH_DASHBOARD_DIST=infra/evaldash/dashboard/dist \
 PORT=8080 \
 PYTHONPATH=lib/marin/src:lib/iris/src:lib/finelog/src \
 uv run \
+  --with anthropic \
   --with cloud-sql-python-connector \
   --with connect-python \
   --with google-cloud-compute \

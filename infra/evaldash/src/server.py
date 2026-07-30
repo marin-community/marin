@@ -46,6 +46,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
+import review
 import samples
 import sqlalchemy
 import uvicorn
@@ -56,7 +57,7 @@ from marin.evaluation.records import (
     RecordParseFailure,
     read_records,
 )
-from metrics import build_matrix, build_meta, record_score
+from metrics import build_matrix, build_meta, build_model_detail, record_score
 from results_db import (
     connect_engine,
     ensure_schema,
@@ -92,6 +93,9 @@ DEFAULT_LOG_TAIL = 200
 MAX_LOG_TAIL = 5000
 DEFAULT_SAMPLE_LIMIT = 50
 MAX_SAMPLE_LIMIT = 500
+DEFAULT_REVIEW_SAMPLES = 20
+MAX_REVIEW_SAMPLES = 40
+REVIEW_FILTERS = ("all", "correct", "incorrect", "ungraded")
 
 IAP_USER_HEADER = "x-goog-authenticated-user-email"
 IAP_USER_PREFIX = "accounts.google.com:"
@@ -307,6 +311,14 @@ class RecordStore:
             )
         points.sort(key=lambda point: point["created_at"] or "")
         return points
+
+    def model_detail(self, model: str) -> dict | None:
+        """One model's aggregated detail view: cohorts, per-eval history, and every run.
+
+        ``None`` when the model has no records, so the route can answer 404.
+        """
+        records, _by_id = self._snapshot()
+        return build_model_detail(records, model)
 
     def group_siblings(self, group_id: str, exclude_run_id: str) -> list[dict]:
         records, _by_id = self._snapshot()
@@ -606,6 +618,17 @@ def _parse_int(raw: str | None, *, default: int, low: int, high: int) -> int:
     return max(low, min(value, high))
 
 
+def _parse_review_n(raw: object) -> int:
+    """Clamp the review sample count to ``[1, MAX_REVIEW_SAMPLES]``; the default on absent/unparseable."""
+    if raw is None:
+        return DEFAULT_REVIEW_SAMPLES
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_REVIEW_SAMPLES
+    return max(1, min(value, MAX_REVIEW_SAMPLES))
+
+
 def _collect_job_status(gateway: ClusterGatewayLike, jobs: dict[str, str]) -> list[dict]:
     """Live iris job status for each pipeline role in a record's ``jobs`` map, order preserved."""
     return [{"role": role, "job_path": path, **gateway.job_status(path)} for role, path in jobs.items()]
@@ -773,6 +796,27 @@ def create_app(
         payload = await asyncio.to_thread(samples.fetch_artifact, record.get("results_path"), uri)
         return JSONResponse(payload.model_dump(mode="json"))
 
+    async def api_run_samples_review(request: Request) -> JSONResponse:
+        record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
+        if record is None:
+            return JSONResponse({"error": "unknown run_id"}, status_code=404)
+        body = await request.json()
+        task = body.get("task")
+        if not task:
+            return JSONResponse({"error": "task is required"}, status_code=400)
+        sample_filter = body.get("filter", "all")
+        if sample_filter not in REVIEW_FILTERS:
+            return JSONResponse({"error": f"filter must be one of {REVIEW_FILTERS}"}, status_code=400)
+        payload = await asyncio.to_thread(
+            review.review_run_samples,
+            record.get("results_path"),
+            (record.get("model") or {}).get("name"),
+            task,
+            sample_filter,
+            _parse_review_n(body.get("n")),
+        )
+        return JSONResponse(payload.model_dump(mode="json"))
+
     async def api_run_group(request: Request) -> JSONResponse:
         run_id = request.path_params["run_id"]
         record = await asyncio.to_thread(store.get_record, run_id)
@@ -790,6 +834,12 @@ def create_app(
             return JSONResponse({"error": "model and task are required"}, status_code=400)
         points = await asyncio.to_thread(store.history, model, task)
         return JSONResponse({"model": model, "task": task, "points": points})
+
+    async def api_model_detail(request: Request) -> JSONResponse:
+        detail = await asyncio.to_thread(store.model_detail, request.path_params["model_name"])
+        if detail is None:
+            return JSONResponse({"error": "unknown model"}, status_code=404)
+        return JSONResponse(detail)
 
     async def api_matrix(request: Request) -> JSONResponse:
         include_archived = request.query_params.get("include_archived") in ("1", "true")
@@ -833,10 +883,12 @@ def create_app(
         Route("/api/runs", api_runs),
         Route("/api/groups", api_groups),
         Route("/api/models/{model_name:str}/archive", api_model_archive, methods=["POST"]),
+        Route("/api/models/{model_name:str}", api_model_detail),
         Route("/api/runs/{run_id:str}/jobs", api_run_jobs),
         Route("/api/runs/{run_id:str}/logs", api_run_logs),
         Route("/api/runs/{run_id:str}/samples/tasks", api_run_samples_tasks),
         Route("/api/runs/{run_id:str}/samples/artifact", api_run_samples_artifact),
+        Route("/api/runs/{run_id:str}/samples/review", api_run_samples_review, methods=["POST"]),
         Route("/api/runs/{run_id:str}/samples", api_run_samples),
         Route("/api/runs/{run_id:str}/group", api_run_group),
         Route("/api/runs/{run_id:str}", api_run_detail),
