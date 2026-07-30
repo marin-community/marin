@@ -5,8 +5,9 @@ import { apiPost, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatDelta, formatScore, formatStderr } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
+import { cellsByModel, fleetBest } from '@/utils/matrix'
+import { MAX_COMPARE } from '@/constants'
 import type { LeaderboardEntry, Matrix, MatrixCell, MatrixRow, Meta } from '@/types/api'
-import type { BestCell } from '@/components/charts/EvalRail.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import EvalRail from '@/components/charts/EvalRail.vue'
 import HistoryModal from '@/components/charts/HistoryModal.vue'
@@ -30,7 +31,6 @@ onViewRefresh(() => {
 })
 
 // --- Model comparison selection (2–4 models) -> the Compare surface ---
-const MAX_COMPARE = 4
 const selected = ref<string[]>([])
 
 function toggleModel(model: string) {
@@ -47,7 +47,7 @@ const comparing = computed(() => selected.value.length >= 2)
 const sharedTasks = computed<string[]>(() => {
   if (!comparing.value) return []
   return visibleTasks.value.filter((task) =>
-    selected.value.every((model) => cellsByModel.value[model]?.[task]?.value != null),
+    selected.value.every((model) => modelCells.value[model]?.[task]?.value != null),
   )
 })
 
@@ -69,11 +69,7 @@ const rankedLeaderboard = computed<LeaderboardEntry[]>(() =>
   [...(data.value?.leaderboard ?? [])].sort((a, b) => Number(a.archived) - Number(b.archived)),
 )
 
-const cellsByModel = computed<Record<string, Record<string, MatrixCell>>>(() => {
-  const out: Record<string, Record<string, MatrixCell>> = {}
-  for (const row of data.value?.rows ?? []) out[row.model] = row.cells
-  return out
-})
+const modelCells = computed(() => cellsByModel(data.value?.rows ?? []))
 
 async function toggleArchive(model: string, archived: boolean) {
   await apiPost(`api/models/${encodeURIComponent(model)}/archive`, { archived: !archived })
@@ -147,22 +143,7 @@ function toggleEval(name: string) {
 const visibleTasks = computed(() => (data.value?.tasks ?? []).filter((t) => selectedEvals.has(t)))
 
 // --- Fleet best per benchmark (the rail caret and matrix column marker) ---
-const best = computed<Record<string, BestCell>>(() => {
-  const out: Record<string, BestCell> = {}
-  for (const task of visibleTasks.value) {
-    let bv = -Infinity
-    let bm = ''
-    for (const row of data.value?.rows ?? []) {
-      const c = row.cells[task]
-      if (c && c.value !== null && c.value > bv) {
-        bv = c.value
-        bm = row.model
-      }
-    }
-    if (bm) out[task] = { value: bv, model: bm }
-  }
-  return out
-})
+const best = computed(() => fleetBest(data.value?.rows ?? [], visibleTasks.value))
 
 // --- Fleet readout ---
 const readout = computed(() => {
@@ -369,7 +350,7 @@ function goToModel(model: string) {
                 <td class="px-3 py-2" @click.stop>
                   <EvalRail
                     :tasks="visibleTasks"
-                    :cells="cellsByModel[entry.model] ?? {}"
+                    :cells="modelCells[entry.model] ?? {}"
                     :best="best"
                     :model="entry.model"
                     size="sm"

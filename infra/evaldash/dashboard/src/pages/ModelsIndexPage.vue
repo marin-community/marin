@@ -4,8 +4,8 @@ import { useRouter } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatScore, formatStderr } from '@/utils/formatting'
+import { cellsByModel, fleetBest } from '@/utils/matrix'
 import type { LeaderboardEntry, Matrix } from '@/types/api'
-import type { BestCell } from '@/components/charts/EvalRail.vue'
 import EvalRail from '@/components/charts/EvalRail.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 
@@ -20,28 +20,8 @@ const { data, refresh } = useApi<Matrix>(() =>
 onMounted(refresh)
 onViewRefresh(refresh)
 
-const cellsByModel = computed<Record<string, Matrix['rows'][number]['cells']>>(() => {
-  const out: Record<string, Matrix['rows'][number]['cells']> = {}
-  for (const r of data.value?.rows ?? []) out[r.model] = r.cells
-  return out
-})
-
-const best = computed<Record<string, BestCell>>(() => {
-  const out: Record<string, BestCell> = {}
-  for (const task of data.value?.tasks ?? []) {
-    let bv = -Infinity
-    let bm = ''
-    for (const row of data.value?.rows ?? []) {
-      const c = row.cells[task]
-      if (c && c.value !== null && c.value > bv) {
-        bv = c.value
-        bm = row.model
-      }
-    }
-    if (bm) out[task] = { value: bv, model: bm }
-  }
-  return out
-})
+const modelCells = computed(() => cellsByModel(data.value?.rows ?? []))
+const best = computed(() => fleetBest(data.value?.rows ?? [], data.value?.tasks ?? []))
 
 const models = computed<LeaderboardEntry[]>(() => {
   const q = query.value.trim().toLowerCase()
@@ -101,7 +81,7 @@ function open(model: string) {
         <div class="mt-3" @click.stop>
           <EvalRail
             :tasks="data?.tasks ?? []"
-            :cells="cellsByModel[entry.model] ?? {}"
+            :cells="modelCells[entry.model] ?? {}"
             :best="best"
             :model="entry.model"
             size="sm"

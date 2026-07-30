@@ -313,10 +313,9 @@ class RecordStore:
         return points
 
     def model_detail(self, model: str) -> dict | None:
-        """One model's aggregated detail view (cohorts, current cells, per-eval history, all runs).
+        """One model's aggregated detail view: cohorts, per-eval history, and every run.
 
-        Reads the snapshot like ``matrix``/``history``; ``None`` when the model has no records so the
-        route can answer 404.
+        ``None`` when the model has no records, so the route can answer 404.
         """
         records, _by_id = self._snapshot()
         return build_model_detail(records, model)
@@ -816,7 +815,7 @@ def create_app(
             sample_filter,
             _parse_review_n(body.get("n")),
         )
-        return JSONResponse(payload)
+        return JSONResponse(payload.model_dump(mode="json"))
 
     async def api_run_group(request: Request) -> JSONResponse:
         run_id = request.path_params["run_id"]

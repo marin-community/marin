@@ -402,9 +402,9 @@ export interface ModelRun {
   metric: string | null
 }
 
-// Everything the model view needs in one call: the current cohort's per-benchmark cells (same
-// shape as a matrix row), every succeeded run's score per benchmark for the sparklines, the
-// cohort list for the version selector, and every run for the run list.
+// Everything the model view needs in one call: the cohort list for the version selector, every
+// succeeded run's score per benchmark for the sparklines, and every run for the run list. The page
+// derives each cohort's per-benchmark cells from `runs`, so no precomputed cell map is sent.
 export interface ModelDetail {
   model: string
   location: string | null
@@ -412,7 +412,6 @@ export interface ModelDetail {
   user: string | null
   current_version: string | null
   cohorts: ModelCohort[]
-  cells: Record<string, MatrixCell>
   history: Record<string, HistoryPoint[]>
   runs: ModelRun[]
 }

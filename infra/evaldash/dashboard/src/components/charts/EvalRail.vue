@@ -11,17 +11,16 @@ import { computed } from 'vue'
 import type { MatrixCell } from '@/types/api'
 import { formatScore, formatStderr } from '@/utils/formatting'
 import { scoreColor } from '@/utils/score'
+import { type BestCell } from '@/utils/matrix'
 import { tip, type TipContent } from '@/composables/tooltip'
-
-export interface BestCell {
-  value: number
-  model: string
-}
 
 interface HistoryPoint {
   created_at: string | null
   value: number
 }
+
+// Sparkline geometry, shared by the polyline and its dots so they never drift apart.
+const SPARK = { width: 90, height: 26, pad: 3 }
 
 const props = withDefaults(
   defineProps<{
@@ -35,7 +34,7 @@ const props = withDefaults(
   { size: 'sm' },
 )
 
-const emit = defineEmits<{ (e: 'pick', task: string, cell: MatrixCell): void }>()
+const emit = defineEmits<{ (e: 'pick', task: string): void }>()
 
 const H = computed(() => (props.size === 'lg' ? 150 : 40))
 const W = computed(() => (props.size === 'lg' ? 46 : 15))
@@ -45,8 +44,8 @@ interface Gauge {
   cell: MatrixCell | null
   kind: 'score' | 'missing' | 'failed' | 'infra'
   fillH: number
-  whiskBottom: number
-  whiskH: number
+  whiskerBottom: number
+  whiskerHeight: number
   bestY: number
   isBest: boolean
   color: string
@@ -63,24 +62,24 @@ const gauges = computed<Gauge[]>(() =>
 
     if (!cell) {
       return {
-        task, cell, kind: 'missing', fillH: 0, whiskBottom: 0, whiskH: 0, bestY: 0, isBest: false,
+        task, cell, kind: 'missing', fillH: 0, whiskerBottom: 0, whiskerHeight: 0, bestY: 0, isBest: false,
         color: '', content: { title: task, lines: [{ label: props.model, value: 'not run', tone: 'muted' }, bestLine] },
       }
     }
     if (cell.value === null) {
       const kind = cell.status === 'infra_failed' ? 'infra' : 'failed'
       return {
-        task, cell, kind, fillH: 0, whiskBottom: 0, whiskH: 0, bestY: 0, isBest: false, color: '',
+        task, cell, kind, fillH: 0, whiskerBottom: 0, whiskerHeight: 0, bestY: 0, isBest: false, color: '',
         content: { title: task, lines: [{ label: props.model, value: cell.status.replace('_', ' '), tone: 'muted' }] },
       }
     }
     const v = Math.max(0, Math.min(1, cell.value))
     const fillH = Math.max(3, v * H.value)
-    const seH = cell.stderr ? cell.stderr * H.value : 0
+    const stderrHeight = cell.stderr ? cell.stderr * H.value : 0
     const bestY = best ? Math.max(0, Math.min(1, best.value)) * H.value : 0
     const isBest = best?.model === props.model
     return {
-      task, cell, kind: 'score', fillH, whiskBottom: fillH - seH, whiskH: seH * 2, bestY, isBest,
+      task, cell, kind: 'score', fillH, whiskerBottom: fillH - stderrHeight, whiskerHeight: stderrHeight * 2, bestY, isBest,
       color: scoreColor(v),
       content: {
         title: task,
@@ -96,12 +95,19 @@ const gauges = computed<Gauge[]>(() =>
   }),
 )
 
-function spark(points: HistoryPoint[]): string {
-  if (points.length < 2) return ''
-  const w = 90, h = 26, pad = 3
-  const xs = (i: number) => pad + (i * (w - 2 * pad)) / (points.length - 1)
-  const ys = (v: number) => h - pad - Math.max(0, Math.min(1, v)) * (h - 2 * pad)
-  return points.map((p, i) => `${xs(i).toFixed(1)},${ys(p.value).toFixed(1)}`).join(' ')
+function sparkPoints(points: HistoryPoint[]): { x: number; y: number }[] {
+  const { width, height, pad } = SPARK
+  const innerW = width - 2 * pad
+  const innerH = height - 2 * pad
+  return points.map((p, i) => ({
+    x: pad + (points.length > 1 ? (i * innerW) / (points.length - 1) : 0),
+    y: height - pad - Math.max(0, Math.min(1, p.value)) * innerH,
+  }))
+}
+function sparkLine(points: HistoryPoint[]): string {
+  return sparkPoints(points)
+    .map((pt) => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`)
+    .join(' ')
 }
 </script>
 
@@ -122,7 +128,7 @@ function spark(points: HistoryPoint[]): string {
           g.kind === 'missing' ? 'border border-dashed border-surface-border bg-transparent' : '',
         ]"
         v-on="g.kind !== 'missing' ? tip(g.content) : {}"
-        @click="g.kind === 'score' && g.cell && emit('pick', g.task, g.cell)"
+        @click="g.kind === 'score' && g.cell && emit('pick', g.task)"
       >
         <!-- score fill -->
         <div
@@ -132,10 +138,10 @@ function spark(points: HistoryPoint[]): string {
         />
         <!-- stderr whisker -->
         <div
-          v-if="g.kind === 'score' && g.whiskH > 0"
+          v-if="g.kind === 'score' && g.whiskerHeight > 0"
           class="absolute left-1/2 -translate-x-1/2 w-[1.5px] opacity-50"
           style="background: var(--c-text)"
-          :style="{ bottom: `${g.whiskBottom}px`, height: `${g.whiskH}px` }"
+          :style="{ bottom: `${g.whiskerBottom}px`, height: `${g.whiskerHeight}px` }"
         />
         <!-- fleet-best caret -->
         <div
@@ -170,14 +176,14 @@ function spark(points: HistoryPoint[]): string {
           </template>
           <template v-else>—</template>
         </div>
-        <div class="h-[26px] flex items-center">
-          <svg v-if="history && history[g.task] && history[g.task].length >= 2" width="90" height="26">
-            <polyline :points="spark(history[g.task])" fill="none" stroke="var(--c-accent)" stroke-width="1.5" />
+        <div class="flex items-center" :style="{ height: `${SPARK.height}px` }">
+          <svg v-if="history && history[g.task] && history[g.task].length >= 2" :width="SPARK.width" :height="SPARK.height">
+            <polyline :points="sparkLine(history[g.task])" fill="none" stroke="var(--c-accent)" stroke-width="1.5" />
             <circle
-              v-for="(p, i) in history[g.task]"
+              v-for="(pt, i) in sparkPoints(history[g.task])"
               :key="i"
-              :cx="(3 + (i * 84) / (history[g.task].length - 1)).toFixed(1)"
-              :cy="(26 - 3 - Math.max(0, Math.min(1, p.value)) * 20).toFixed(1)"
+              :cx="pt.x.toFixed(1)"
+              :cy="pt.y.toFixed(1)"
               :r="i === history[g.task].length - 1 ? 2.5 : 1.8"
               fill="var(--c-accent)"
             />

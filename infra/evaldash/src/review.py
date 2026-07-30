@@ -22,6 +22,7 @@ import os
 
 import samples
 from marin.evaluation.samples import EvalSample, SampleKind
+from pydantic import BaseModel, ConfigDict
 
 logger = logging.getLogger(__name__)
 
@@ -54,16 +55,48 @@ _SYSTEM_PROMPT = (
 )
 
 
-def _unavailable(model: str | None, task: str, sample_filter: str, reason: str, n_reviewed: int = 0) -> dict:
-    return {
-        "available": False,
-        "reason": reason,
-        "model": model,
-        "task": task,
-        "filter": sample_filter,
-        "n_reviewed": n_reviewed,
-        "summary": None,
-    }
+class ReviewCategory(BaseModel):
+    """One failure-mode bucket: its label, how many samples fell in it, and representative doc ids."""
+
+    model_config = ConfigDict(frozen=True)
+    label: str
+    count: int
+    doc_ids: list[str]
+
+
+class ReviewSummary(BaseModel):
+    """The model's structured verdict: the failure-mode buckets plus a short narrative."""
+
+    model_config = ConfigDict(frozen=True)
+    categories: list[ReviewCategory]
+    narrative: str
+
+
+class ReviewResponse(BaseModel):
+    """One review call's result. ``available`` is false with a ``reason`` when the reviewer could not
+    run (SDK/key missing, no samples, or an unparseable reply), mirroring the logs/artifact endpoints
+    rather than raising."""
+
+    model_config = ConfigDict(frozen=True, protected_namespaces=())
+    available: bool
+    reason: str | None
+    model: str | None
+    task: str
+    filter: str
+    n_reviewed: int
+    summary: ReviewSummary | None
+
+
+def _unavailable(model: str | None, task: str, sample_filter: str, reason: str, n_reviewed: int = 0) -> ReviewResponse:
+    return ReviewResponse(
+        available=False,
+        reason=reason,
+        model=model,
+        task=task,
+        filter=sample_filter,
+        n_reviewed=n_reviewed,
+        summary=None,
+    )
 
 
 def _clip(text: str, limit: int) -> str:
@@ -152,7 +185,7 @@ def _extract_json(text: str) -> dict | None:
     return None
 
 
-def _shape_summary(raw: dict) -> dict | None:
+def _shape_summary(raw: dict) -> ReviewSummary | None:
     """Coerce a parsed reply into the ``summary`` contract, or None when it has neither expected key."""
     if "categories" not in raw and "narrative" not in raw:
         return None
@@ -163,13 +196,13 @@ def _shape_summary(raw: dict) -> dict | None:
         count = entry.get("count")
         doc_ids = entry.get("doc_ids") or []
         categories.append(
-            {
-                "label": str(entry.get("label", "")),
-                "count": int(count) if isinstance(count, (int, float)) and not isinstance(count, bool) else 0,
-                "doc_ids": [str(doc_id) for doc_id in doc_ids][:MAX_DOC_IDS_PER_CATEGORY],
-            }
+            ReviewCategory(
+                label=str(entry.get("label", "")),
+                count=int(count) if isinstance(count, (int, float)) and not isinstance(count, bool) else 0,
+                doc_ids=[str(doc_id) for doc_id in doc_ids][:MAX_DOC_IDS_PER_CATEGORY],
+            )
         )
-    return {"categories": categories, "narrative": str(raw.get("narrative", ""))}
+    return ReviewSummary(categories=categories, narrative=str(raw.get("narrative", "")))
 
 
 def review_run_samples(
@@ -178,7 +211,7 @@ def review_run_samples(
     task: str,
     sample_filter: str,
     n: int,
-) -> dict:
+) -> ReviewResponse:
     """Review up to ``n`` of a run's ``task`` samples for failure modes with one Claude call.
 
     ``sample_filter`` is ``all``/``correct``/``incorrect`` (the samples reader's correctness filter).
@@ -222,12 +255,12 @@ def review_run_samples(
     if summary is None:
         return _unavailable(model, task, sample_filter, "model did not return valid JSON", len(digests))
 
-    return {
-        "available": True,
-        "reason": None,
-        "model": model,
-        "task": task,
-        "filter": sample_filter,
-        "n_reviewed": len(digests),
-        "summary": summary,
-    }
+    return ReviewResponse(
+        available=True,
+        reason=None,
+        model=model,
+        task=task,
+        filter=sample_filter,
+        n_reviewed=len(digests),
+        summary=summary,
+    )

@@ -5,13 +5,14 @@ import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatScore, formatStderr, formatDelta } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
+import { cellsByModel } from '@/utils/matrix'
+import { MAX_COMPARE } from '@/constants'
 import type { Matrix, MatrixCell, Meta } from '@/types/api'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import ModelCompareChart from '@/components/charts/ModelCompareChart.vue'
 
 const route = useRoute()
 const router = useRouter()
-const MAX = 4
 
 const { data: matrix, refresh } = useApi<Matrix>(() => 'api/matrix?include_archived=1')
 const { data: meta, refresh: refreshMeta } = useApi<Meta>(() => 'api/meta')
@@ -21,7 +22,7 @@ const selected = ref<string[]>([])
 function fromQuery(): string[] {
   const raw = route.query.models
   const csv = Array.isArray(raw) ? raw[0] : raw
-  return (csv ?? '').split(',').map((s) => s.trim()).filter(Boolean).slice(0, MAX)
+  return (csv ?? '').split(',').map((s) => s.trim()).filter(Boolean).slice(0, MAX_COMPARE)
 }
 
 onMounted(() => {
@@ -41,15 +42,11 @@ function syncQuery() {
 function toggle(model: string) {
   const at = selected.value.indexOf(model)
   if (at >= 0) selected.value.splice(at, 1)
-  else if (selected.value.length < MAX) selected.value.push(model)
+  else if (selected.value.length < MAX_COMPARE) selected.value.push(model)
   syncQuery()
 }
 
-const rowByModel = computed<Record<string, Record<string, MatrixCell>>>(() => {
-  const out: Record<string, Record<string, MatrixCell>> = {}
-  for (const r of matrix.value?.rows ?? []) out[r.model] = r.cells
-  return out
-})
+const rowByModel = computed(() => cellsByModel(matrix.value?.rows ?? []))
 
 // Benchmarks any selected model covers (delta-table rows), and the subset all cover (scored set).
 const unionTasks = computed<string[]>(() =>
@@ -70,9 +67,6 @@ const sharedScores = computed(() =>
     .sort((a, b) => (b.mean ?? -1) - (a.mean ?? -1)),
 )
 const leaderMean = computed<number | null>(() => sharedScores.value[0]?.mean ?? null)
-function sharedMeanFor(model: string): number | null {
-  return sharedScores.value.find((s) => s.model === model)?.mean ?? null
-}
 
 function bestInRow(task: string): number | null {
   let bv: number | null = null
@@ -101,14 +95,14 @@ const comparing = computed(() => selected.value.length >= 2)
     <div class="mb-4">
       <h2 class="text-lg font-semibold">Compare</h2>
       <p class="text-xs text-text-muted mt-0.5">
-        Pick 2–{{ MAX }} models. The ranking scores them on their shared benchmarks only, so a coverage gap never
+        Pick 2–{{ MAX_COMPARE }} models. The ranking scores them on their shared benchmarks only, so a coverage gap never
         flatters a model.
       </p>
     </div>
 
     <!-- model picker -->
     <div class="rounded-lg border border-surface-border bg-surface p-4 mb-5">
-      <div class="font-mono text-[10px] uppercase tracking-widest text-text-muted mb-2">Models ({{ selected.length }}/{{ MAX }})</div>
+      <div class="font-mono text-[10px] uppercase tracking-widest text-text-muted mb-2">Models ({{ selected.length }}/{{ MAX_COMPARE }})</div>
       <div class="flex flex-wrap gap-2">
         <button
           v-for="m in meta?.models ?? []"
@@ -116,10 +110,10 @@ const comparing = computed(() => selected.value.length >= 2)
           class="font-mono text-xs px-2.5 py-1 rounded-full border"
           :class="selected.includes(m)
             ? 'border-accent bg-accent-subtle text-text'
-            : selected.length >= MAX
+            : selected.length >= MAX_COMPARE
               ? 'border-surface-border-subtle text-text-muted opacity-50 cursor-not-allowed'
               : 'border-surface-border text-text-secondary hover:bg-surface-raised'"
-          :disabled="!selected.includes(m) && selected.length >= MAX"
+          :disabled="!selected.includes(m) && selected.length >= MAX_COMPARE"
           @click="toggle(m)"
         >{{ m }}</button>
       </div>

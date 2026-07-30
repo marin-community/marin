@@ -4,8 +4,8 @@ import { useRouter } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatScore, formatStderr, formatTimestamp, objectStoreUrl } from '@/utils/formatting'
+import { fleetBest } from '@/utils/matrix'
 import type { Matrix, MatrixCell, ModelDetail, ModelRun } from '@/types/api'
-import type { BestCell } from '@/components/charts/EvalRail.vue'
 import EvalRail from '@/components/charts/EvalRail.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import StatusChip from '@/components/shared/StatusChip.vue'
@@ -51,22 +51,7 @@ const tasks = computed<string[]>(() => {
 })
 
 // Fleet best per benchmark (for the rail caret), from the matrix across all models.
-const best = computed<Record<string, BestCell>>(() => {
-  const out: Record<string, BestCell> = {}
-  for (const task of tasks.value) {
-    let bv = -Infinity
-    let bm = ''
-    for (const row of matrix.value?.rows ?? []) {
-      const c = row.cells[task]
-      if (c && c.value !== null && c.value > bv) {
-        bv = c.value
-        bm = row.model
-      }
-    }
-    if (bm) out[task] = { value: bv, model: bm }
-  }
-  return out
-})
+const best = computed(() => fleetBest(matrix.value?.rows ?? [], tasks.value))
 
 // The runs in scope, and the per-benchmark cell derived from them (latest succeeded per benchmark,
 // else the latest run's failure) — the same union rule the server applies to the current cohort.
