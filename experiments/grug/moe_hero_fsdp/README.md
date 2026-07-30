@@ -18,7 +18,7 @@ lowering coverage, but it has not been run on an accelerator.
 | Attention heads / KV heads / head dimension | 48 / 12 / 128 |
 | Routed experts / experts per token | 128 / 4 |
 | Routed / aggregate shared intermediate dimension | 3072 / 6144 |
-| Shared-expert count | 1 |
+| Shared-expert count | 2 × 3072 |
 | Sequence length / short-layer sliding window | 4096 / 512 |
 | Short / long attention layers | 36 sliding-window / 12 full-causal |
 | Attention implementation | `gpu_fa4_cute` |
@@ -35,6 +35,11 @@ The model hardcodes QB routing, GatedNorm, and the attention output gate. XSA
 is a model config key and the launcher explicitly sets `xsa=True`; there are no
 `gated_norm` or `attn_gate` launcher flags. MTP and SConv are absent, which
 keeps both mechanisms off.
+
+The two shared experts preserve the aggregate 6144 intermediate width and total
+parameter count. Larry's experiment record explicitly sets
+`SCALE_NUM_SHARED_EXPERTS=2`; the preceding unreplicated screen measured
+23.17% to 23.46% MFU (+0.29 percentage points).
 
 The optimizer is MuonH with peak learning rate 0.05, linear decay, minimum LR
 ratio 0.05, 1% warmup, and no gradient clipping. The 0.05 value is the binding
