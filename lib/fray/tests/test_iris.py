@@ -21,7 +21,6 @@ from fray.iris_backend import (
 )
 from fray.types import (
     ANY_REGION,
-    CpuConfig,
     Entrypoint,
     GpuConfig,
     JobRequest,
@@ -313,6 +312,21 @@ class TestActorGroupEnvironment:
         assert env.env_vars["JAX_PLATFORMS"] == ""
 
 
+def test_create_gpu_actor_group_uses_leafgroup_topology():
+    fake_iris = MagicMock()
+    fake_iris.submit.return_value = MagicMock(job_id="job-gpu")
+    client = FrayIrisClient.from_iris_client(fake_iris)
+
+    class _DummyActor:
+        pass
+
+    resources = ResourceConfig.with_gpu("GB200", count=4)
+    client.create_actor_group(_DummyActor, name="gpu-actors", count=32, resources=resources)
+
+    coscheduling = fake_iris.submit.call_args.kwargs["coscheduling"]
+    assert coscheduling.group_by == "leafgroup"
+
+
 class TestWithTpuFlexible:
     def test_single_type_returns_standard_config(self):
         rc = ResourceConfig.with_tpu(["v5p-8"])
@@ -352,26 +366,67 @@ class TestWithTpuFlexible:
         assert rc.replicas == 4
 
 
-# resolve_coscheduling: multi-host gangs pick the topology level the Iris provider maps.
-# group_by is now a literal topology level (B4 rename); an unmapped value raises at K8s
-# pod-manifest build, so the fray defaults must stay in sync with the provider's map.
-
-
-def test_resolve_coscheduling_gpu_multinode_uses_leafgroup():
-    cosched = resolve_coscheduling(GpuConfig(variant="H100", count=8), replicas=2)
+@pytest.mark.parametrize(
+    ("variant", "count", "replicas", "group_by"),
+    [
+        ("H100", 8, 2, "leafgroup"),
+        ("GB200", 4, 16, "nvlink.domain"),
+        ("GB200", 4, 32, "nvlink.domain.sliced"),
+        ("GB200", 4, 64, "nvlink.domain.sliced"),
+    ],
+)
+def test_resolve_coscheduling_gpu_multinode_uses_variant_topology(variant, count, replicas, group_by):
+    resources = ResourceConfig(device=GpuConfig(variant=variant, count=count))
+    cosched = resolve_coscheduling(resources, replicas=replicas)
     assert cosched is not None
-    assert cosched.group_by == "leafgroup"
+    assert cosched.group_by == group_by
+
+
+@pytest.mark.parametrize(
+    ("count", "replicas"),
+    [
+        (1, 32),
+        (4, 17),
+    ],
+)
+def test_resolve_coscheduling_gpu_multirack_rejects_unplaceable_gang(count, replicas):
+    resources = ResourceConfig(device=GpuConfig(variant="GB200", count=count))
+    with pytest.raises(ValueError):
+        resolve_coscheduling(resources, replicas=replicas)
+
+
+def test_resolve_coscheduling_gpu_allows_compatible_alternative_topologies():
+    resources = ResourceConfig(
+        device=GpuConfig(variant="GB200", count=4),
+        device_alternatives=["GB300"],
+    )
+
+    cosched = resolve_coscheduling(resources, replicas=32)
+
+    assert cosched is not None
+    assert cosched.group_by == "nvlink.domain.sliced"
+
+
+def test_resolve_coscheduling_gpu_rejects_incompatible_alternative_topologies():
+    resources = ResourceConfig(
+        device=GpuConfig(variant="GB200", count=4),
+        device_alternatives=["H100"],
+    )
+
+    with pytest.raises(ValueError, match=r"GB200=nvlink\.domain\.sliced, H100=leafgroup"):
+        resolve_coscheduling(resources, replicas=32)
 
 
 def test_resolve_coscheduling_tpu_multinode_uses_tpu_name():
-    cosched = resolve_coscheduling(TpuConfig(variant="v5litepod-16"), replicas=4)
+    resources = ResourceConfig(device=TpuConfig(variant="v5litepod-16"))
+    cosched = resolve_coscheduling(resources, replicas=4)
     assert cosched is not None
     assert cosched.group_by == "tpu-name"
 
 
 def test_resolve_coscheduling_single_replica_is_none():
-    assert resolve_coscheduling(GpuConfig(variant="H100", count=8), replicas=1) is None
-    assert resolve_coscheduling(CpuConfig(), replicas=4) is None
+    assert resolve_coscheduling(ResourceConfig(device=GpuConfig(variant="H100", count=8)), replicas=1) is None
+    assert resolve_coscheduling(ResourceConfig(), replicas=4) is None
 
 
 def _gpu_resources(count: int) -> ResourceSpec:
