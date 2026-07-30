@@ -374,8 +374,9 @@ export CLOUDFLARE_API_TOKEN="$(gcloud secrets versions access latest \
   --secret=cloudflare-oa-dns-token --project=hai-gcp-models)"
 pulumi stack select marin-grafana
 
-# Who gets in — a bare email, a *@domain wildcard, or a qualified IAM member. Editing this
-# and re-running updates only the grant, never the service.
+# Extra viewers beyond the OpenAthena Workspace domain — a bare email, a *@domain wildcard,
+# or a qualified IAM member. Editing this and re-running updates only the grant, never the
+# service.
 pulumi config set --path 'viewers[0]' you@example.com
 
 pulumi preview                                            # plan; then, once it looks right:
@@ -408,9 +409,9 @@ create the `grafana` SQL user + its secret version (see `infra/cloudsql/README.m
 `pulumi up` here, or Grafana fails to reach its database.
 
 IAP is the only gate — Grafana runs anonymous Viewer. The OAuth consent screen is
-project-level and shared across the project's IAP services, so nothing per-service needs
-configuring beyond the `viewers` list. The service is created IAP-gated with no viewers,
-i.e. reachable by nobody until the first grant.
+project-level and shared across the project's IAP services. The shared Cloud Run component
+admits the OpenAthena Workspace domain on every internal site; the `viewers` list contains
+only additional accounts or groups needed by Grafana.
 
 The ferry, build, and nightly panels read the GitHub API, which gates the GraphQL
 build query behind auth even for public repos. The bridge authenticates as the

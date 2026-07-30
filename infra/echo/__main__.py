@@ -179,7 +179,6 @@ def main() -> None:
             cpu_always_allocated=True,
             memory="4Gi",
             max_instance_request_concurrency=4,
-            iap_members=("*@openathena.ai",),
             # Admit CLI/agent tokens (cli.py) whose audience is the shared Marin desktop OAuth
             # client, so the same rigging login that reaches iris also reaches echo-api.
             iap_programmatic_clients=(MARIN_DESKTOP_OAUTH_CLIENT.client_id,),
