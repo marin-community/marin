@@ -43,6 +43,13 @@ goes stale on the next commit.
 - Purpose: canonical Mixture-of-Experts variant; carries its own model, optimizer, train loop, and launch wiring so it can iterate independently of the dense template.
 - Issue: https://github.com/marin-community/marin/pull/3046
 
+### grug-moe-hero-fsdp
+- Path: `experiments/grug/moe_hero_fsdp/`
+- Origin: moe
+- Introduced: 1a7a7be59
+- Status: active
+- Purpose: hardcoded one-rack 64×GB200 pure-FSDP configuration derived from Larry's best measured FSDP run.
+
 ### grugformer-vs-hackable-125m
 - Path: `experiments/speedrun/grugformer_vs_hackable_125m/grugformer_vs_hackable_125m.py`
 - Introduced: 5efe76834
