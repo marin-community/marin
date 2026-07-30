@@ -84,6 +84,36 @@ _GB200_INSTANCE_TYPE_SUBSTRING = "gb200"
 # Container waiting reasons the crashloop rows report.
 BACKOFF_REASONS = ("CrashLoopBackOff", "ImagePullBackOff")
 
+# An image built for the wrong CPU architecture fails at exec, not at pull, and the
+# kubelet records no distinct reason for it. The runtime's "exec format error" goes to
+# the container log, which reaches the termination record only under
+# terminationMessagePolicy: FallbackToLogsOnError. Verified on cw-us-east-08a by running
+# an amd64 image on an arm64 node under both policies: File left message empty, the
+# fallback policy recorded "exec /bin/echo: exec format error".
+#
+# So the scan takes the message when it is there (EVIDENCE_MESSAGE — unambiguous) and
+# otherwise falls back to the runtime signature of exit 255, reason Error, and a
+# sub-second runtime (EVIDENCE_SIGNATURE). The fallback is indirect: any program exiting
+# 255 immediately matches, so such a row means "a container died the way an arch mismatch
+# dies", not proof about the image. Measured against cw-us-east-08a the signature matched
+# 0 of 11182 container statuses across all 208 nodes, and it matches the 2026-07-29
+# incident record. Iris sets the fallback policy on stage-workdir and task, so new
+# failures there carry the message; other workloads keep the default and the signature.
+EXEC_FORMAT_EXIT_CODE = 255
+EXEC_FORMAT_MAX_RUNTIME_SECONDS = 1
+_EXEC_FORMAT_REASON = "Error"
+_EXEC_FORMAT_MESSAGE = "exec format error"
+
+# Which of the two tests matched, reported per row so an operator can tell a proven
+# mismatch from a lookalike without re-deriving it.
+EVIDENCE_MESSAGE = "message"
+EVIDENCE_SIGNATURE = "signature"
+
+# How far back a terminated container still counts as evidence. Failed pods linger
+# until garbage collection, so without a window one morning's bad image would keep
+# the alert firing for as long as its pods survive.
+ARCH_MISMATCH_LOOKBACK_SECONDS = 3600
+
 # Crashloop scope labels: pods of a watched component vs everything else. The alert
 # rules filter on these values (the crashloops rule pages only on SCOPE_CONTROL_PLANE).
 SCOPE_CONTROL_PLANE = "control-plane"
@@ -202,8 +232,8 @@ def _age_seconds(timestamp: str | None) -> int | None:
     return max(int((datetime.now(UTC) - created).total_seconds()), 0)
 
 
-def _deletion_overdue_seconds(timestamp: str) -> int | None:
-    """Return age past a deletion deadline, or None for an invalid deadline."""
+def _age_seconds_or_none(timestamp: str | None) -> int | None:
+    """Seconds since an API timestamp, or None when it is missing or malformed."""
     try:
         return _age_seconds(timestamp)
     except (TypeError, ValueError):
@@ -542,6 +572,51 @@ class K8sSource:
         rows.sort(key=lambda row: row["age_seconds"] or 0, reverse=True)
         return rows
 
+    def node_architectures(self) -> dict[str, str]:
+        architectures = {}
+        for node in self._list("/api/v1/nodes"):
+            name = (node.get("metadata") or {}).get("name")
+            if not name:
+                continue
+            architectures[name] = ((node.get("status") or {}).get("nodeInfo") or {}).get("architecture") or ""
+        return architectures
+
+    def arch_mismatch_containers(self) -> list[dict]:
+        """One row per container matching the exec-format signature, most recent first."""
+        architectures = self.node_architectures()
+        rows = []
+        for pod in self._scan_pods(None):
+            metadata = pod.get("metadata") or {}
+            node_name = (pod.get("spec") or {}).get("nodeName") or ""
+            node_arch = architectures.get(node_name, "")
+            if not node_arch:
+                continue
+            for status in _container_statuses(pod):
+                match = _exec_format_termination(status)
+                if match is None:
+                    continue
+                terminated, evidence = match
+                age = _age_seconds_or_none(terminated.get("finishedAt"))
+                if age is None or age > ARCH_MISMATCH_LOOKBACK_SECONDS:
+                    continue
+                rows.append(
+                    {
+                        "namespace": metadata.get("namespace") or "",
+                        "pod": metadata.get("name") or "",
+                        "container": status.get("name") or "",
+                        "node": node_name,
+                        "node_arch": node_arch,
+                        "image": status.get("image") or "",
+                        "image_id": status.get("imageID") or "",
+                        "evidence": evidence,
+                        "exit_code": terminated.get("exitCode"),
+                        "finished_at": _epoch_ms(terminated.get("finishedAt")),
+                        "age_seconds": age,
+                    }
+                )
+        rows.sort(key=lambda row: row["age_seconds"])
+        return rows
+
     def termination_candidates(self) -> list[TerminatingPod]:
         """Return overdue terminating pods and invalid deletion timestamps.
 
@@ -554,7 +629,7 @@ class K8sSource:
             deletion_timestamp = metadata.get("deletionTimestamp")
             if not deletion_timestamp:
                 continue
-            overdue_seconds = _deletion_overdue_seconds(deletion_timestamp)
+            overdue_seconds = _age_seconds_or_none(deletion_timestamp)
             if overdue_seconds is not None and overdue_seconds < STUCK_TERMINATION_OVERDUE_SECONDS:
                 continue
             spec = pod.get("spec") or {}
@@ -706,6 +781,36 @@ def _container_statuses(pod: dict) -> list[dict]:
     return list(status.get("initContainerStatuses") or []) + list(status.get("containerStatuses") or [])
 
 
+def _terminated_runtime_seconds(terminated: dict) -> float | None:
+    """Wall-clock seconds the container ran, or None when either timestamp is unusable."""
+    started, finished = terminated.get("startedAt"), terminated.get("finishedAt")
+    if not started or not finished:
+        return None
+    try:
+        return (datetime.fromisoformat(finished) - datetime.fromisoformat(started)).total_seconds()
+    except (TypeError, ValueError):
+        return None
+
+
+def _exec_format_termination(status: dict) -> tuple[dict, str] | None:
+    """Return the matching termination record and which evidence matched, else None."""
+    for state_key in ("state", "lastState"):
+        terminated = (status.get(state_key) or {}).get("terminated") or {}
+        if not terminated:
+            continue
+        if _EXEC_FORMAT_MESSAGE in (terminated.get("message") or "").lower():
+            return terminated, EVIDENCE_MESSAGE
+        if terminated.get("exitCode") != EXEC_FORMAT_EXIT_CODE:
+            continue
+        if terminated.get("reason") != _EXEC_FORMAT_REASON:
+            continue
+        runtime = _terminated_runtime_seconds(terminated)
+        if runtime is None or runtime > EXEC_FORMAT_MAX_RUNTIME_SECONDS:
+            continue
+        return terminated, EVIDENCE_SIGNATURE
+    return None
+
+
 def _pod_condition(pod: dict, condition_type: str) -> dict:
     for condition in (pod.get("status") or {}).get("conditions") or []:
         if condition.get("type") == condition_type:
@@ -842,6 +947,9 @@ class K8sFleet:
     def gpu_racks(self) -> list[dict]:
         return self._fan_out(lambda s: s.gpu_racks(), self._error_row)
 
+    def arch_mismatch_containers(self) -> list[dict]:
+        return self._fan_out(lambda s: s.arch_mismatch_containers(), self._error_row)
+
     def finelog_health(self) -> list[FinelogHealth]:
         """One health row per k8s finelog mirror, including API failures."""
 
@@ -970,36 +1078,40 @@ class K8sFleet:
 
         return self._fan_out(deadlocks, lambda _err: [{"node": "", "reason": "", "value": 0}])
 
+    def _counts_with_zero_rows(self, counts: dict[tuple[str, ...], int], labels: Sequence[str]) -> list[dict]:
+        """Project counts keyed by ``(cluster, *labels)``, keeping one row per cluster so NoData stays unreachable."""
+        rows = [
+            {"cluster": key[0], **dict(zip(labels, key[1:], strict=True)), "value": count}
+            for key, count in sorted(counts.items())
+        ]
+        affected = {key[0] for key in counts}
+        rows.extend(
+            {"cluster": source.target.name, **dict.fromkeys(labels, ""), "value": 0}
+            for source in self._sources
+            if source.target.name not in affected
+        )
+        return rows
+
+    def alert_arch_mismatch(self, rows: Sequence[dict] | None = None) -> list[dict]:
+        """Per cluster, node, and image: matching-container count, zero where clean or unreachable."""
+        scanned = list(rows) if rows is not None else self.arch_mismatch_containers()
+        counts: dict[tuple[str, ...], int] = {}
+        for row in scanned:
+            if row.get("error_class"):
+                continue
+            key = (row.get("cluster") or "", row.get("node") or "", row.get("image") or "")
+            counts[key] = counts.get(key, 0) + 1
+        return self._counts_with_zero_rows(counts, ("node", "image"))
+
     def alert_stuck_gpu_pods(self, candidates: Sequence[TerminatingPodResult] | None = None) -> list[dict]:
         """Return node-grouped counts plus zero rows where no qualifying evidence exists."""
         rows = list(candidates) if candidates is not None else self.termination_candidates()
-        by_node: dict[tuple[str, str], int] = {}
+        counts: dict[tuple[str, ...], int] = {}
         for row in rows:
             if not isinstance(row, TerminatingPod):
                 continue
             if row.classification != TerminationClass.NODE_CLEANUP or row.gpu_count <= 0:
                 continue
             key = (row.cluster, row.node)
-            by_node[key] = by_node.get(key, 0) + 1
-
-        alert_rows = []
-        affected_clusters = set()
-        for (cluster, node), count in sorted(by_node.items()):
-            affected_clusters.add(cluster)
-            alert_rows.append(
-                {
-                    "cluster": cluster,
-                    "node": node,
-                    "value": count,
-                }
-            )
-        for source in self._sources:
-            if source.target.name not in affected_clusters:
-                alert_rows.append(
-                    {
-                        "cluster": source.target.name,
-                        "node": "",
-                        "value": 0,
-                    }
-                )
-        return alert_rows
+            counts[key] = counts.get(key, 0) + 1
+        return self._counts_with_zero_rows(counts, ("node",))

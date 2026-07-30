@@ -586,6 +586,13 @@ def _build_init_container_spec(
             "command": ["python", "-c", bundle_script],
             "env": init_env,
             "volumeMounts": init_mounts,
+            # _init_container_failure reports this container's terminated message, and
+            # bounds it because it can be a full log tail — but with the default File
+            # policy the kubelet never writes one, so every stage-workdir failure
+            # degraded to a bare "Init:Error stage-workdir". An image built for the
+            # wrong CPU architecture is the worst case: the whole cause is the runtime's
+            # "exec format error", which reaches the log and nothing else.
+            "terminationMessagePolicy": "FallbackToLogsOnError",
         }
     ]
 

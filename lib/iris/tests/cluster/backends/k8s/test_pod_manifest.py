@@ -945,6 +945,22 @@ def test_init_container_created_when_bundle_id_present():
     assert extra_volumes == []
 
 
+def test_init_container_records_its_log_tail_on_failure():
+    """_init_container_failure reports the terminated message, which the default File
+    policy never populates — so a stage-workdir crash surfaced with no cause at all."""
+    req = make_run_req("/my-job/task-0")
+    req.bundle_id = "bundle-abc"
+
+    init_containers, _, _ = _build_init_container_spec(
+        req,
+        "iris-my-job-task-0-abcd1234-0",
+        "myrepo/iris:latest",
+        "http://ctrl:8080",
+    )
+
+    assert init_containers[0]["terminationMessagePolicy"] == "FallbackToLogsOnError"
+
+
 def test_no_init_container_when_no_bundle_or_files():
     """No init containers when neither bundle_id nor workdir_files are set."""
     req = make_run_req("/my-job/task-0")

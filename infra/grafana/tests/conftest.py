@@ -80,6 +80,7 @@ def node(
     ready: bool = True,
     unschedulable: bool = False,
     kernel_deadlock_reason: str = "",
+    arch: str = "arm64",
 ) -> dict:
     labels = {}
     if rack is not None:
@@ -112,6 +113,7 @@ def node(
         "status": {
             "capacity": {"nvidia.com/gpu": str(gpu_capacity)},
             "conditions": conditions,
+            "nodeInfo": {"architecture": arch},
         },
     }
 
