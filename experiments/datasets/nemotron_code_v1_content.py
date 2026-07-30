@@ -23,9 +23,7 @@ Layout of the adopted dataset (Parquet, zstd), one row per distinct content:
     present  : bool         True if fetched; False -> ``content`` is b""
 
 513,109,851 of 513,110,667 distinct contents present (99.9998%); 585 GB across 514 shards.
-v1 is the oldest corpus and Software Heritage archives it almost completely, hence the
-near-total coverage (v2, a newer corpus, resolves at ~46%). Each stored content is
-byte-verified: ``sha1(content) == sha1``.
+Each stored content is byte-verified: ``sha1(content) == sha1``.
 """
 
 from marin.execution.artifact import Artifact
