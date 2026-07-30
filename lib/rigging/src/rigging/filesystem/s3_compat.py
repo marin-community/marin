@@ -62,12 +62,13 @@ class TotalDeadlineAIOHTTPSession(AIOHTTPSession):
     """aiobotocore HTTP session that also bounds the request as a whole.
 
     aiobotocore builds ``ClientTimeout(sock_connect=..., sock_read=...)`` and
-    never sets ``total``. ``sock_read`` only limits the gap between received
-    bytes *after* a response has started, so a peer that accepts a request body
-    and then answers nothing leaves the caller with no asyncio timer armed at
-    all: the event loop parks in ``epoll_wait(timeout=-1)`` and the fsspec
-    caller polls forever. ``total`` is the only bound that covers the wait for
-    the first response byte (#6719).
+    never sets ``total``. botocore sends ``Expect: 100-continue`` on
+    ``UploadPart``, so aiohttp waits for the interim response before it writes
+    the body. None of the scalar bounds covers that wait: ``sock_read`` cannot
+    arm because no read is in flight. A peer that withholds ``100 Continue``
+    therefore leaves no timer scheduled at all -- the loop parks in
+    ``epoll_wait(timeout=-1)`` and the fsspec caller polls forever, with the
+    body still unsent (#6719). ``total`` is the only bound that ends it.
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:

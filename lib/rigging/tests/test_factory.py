@@ -153,10 +153,15 @@ def test_s3_filesystems_are_built_with_the_deadline():
     assert AioConfig(**config_kwargs).http_session_cls is TotalDeadlineAIOHTTPSession
 
 
-def test_request_to_a_silent_peer_gives_up(monkeypatch):
-    """The production failure, reproduced: a peer accepts the whole request body
-    and then never answers. Under the sock_* bounds alone no timer is armed and
-    the caller waits forever (#6719)."""
+def test_upload_part_to_a_peer_that_withholds_100_continue_gives_up(monkeypatch):
+    """The production failure, reproduced (#6719).
+
+    botocore sends `Expect: 100-continue` on UploadPart, so aiohttp waits for the
+    interim response before writing the body. That wait is covered by none of
+    aiobotocore's scalar bounds -- sock_read cannot arm because no read is in
+    flight -- so a peer that withholds `100 Continue` hangs the caller forever.
+    `total` is the only bound that ends it.
+    """
     monkeypatch.setattr(s3_compat, "_S3_TOTAL_TIMEOUT", 1)
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
@@ -165,21 +170,32 @@ def test_request_to_a_silent_peer_gives_up(monkeypatch):
         listener.listen(1)
         port = listener.getsockname()[1]
 
-        swallowed = threading.Event()
+        headers_seen = threading.Event()
+        body_bytes: list[int] = []
         held: list[socket.socket] = []
 
-        def swallow_request():
+        def withhold_continue():
             conn, _ = listener.accept()
-            conn.recv(65536)  # take the request, then answer nothing at all
             held.append(conn)
-            swallowed.set()
+            buf = b""
+            while b"\r\n\r\n" not in buf:
+                chunk = conn.recv(65536)
+                if not chunk:
+                    return
+                buf += chunk
+            body_bytes.append(len(buf.split(b"\r\n\r\n", 1)[1]))
+            headers_seen.set()  # never send `100 Continue`, never respond, never close
 
-        threading.Thread(target=swallow_request, daemon=True).start()
+        threading.Thread(target=withhold_continue, daemon=True).start()
 
-        # sock_read is deliberately long: it is the bound that does NOT cover
-        # this wait, so only `total` can end the call.
+        # sock_read is deliberately long: it is not the bound that ends this call.
         session = TotalDeadlineAIOHTTPSession(timeout=(5, 300))
-        request = AWSRequest(method="PUT", url=f"http://127.0.0.1:{port}/part", data=b"x" * 1024).prepare()
+        request = AWSRequest(
+            method="PUT",
+            url=f"http://127.0.0.1:{port}/part",
+            headers={"Expect": "100-continue", "Content-Length": "1024"},
+            data=b"x" * 1024,
+        ).prepare()
 
         async def send_and_close():
             async with session:
@@ -193,7 +209,8 @@ def test_request_to_a_silent_peer_gives_up(monkeypatch):
         for conn in held:
             conn.close()
 
-    assert swallowed.is_set(), "peer never received the body; the test did not exercise the deadline"
+    assert headers_seen.is_set(), "peer never got the headers; the test did not exercise the deadline"
+    assert body_bytes == [0], f"body must still be unsent while awaiting 100 Continue, got {body_bytes}"
     # Bounded below too: an immediate setup or wiring failure would also raise.
     assert 0.5 < elapsed < 30, f"expected the 1s deadline to end the call, took {elapsed:.2f}s"
 
