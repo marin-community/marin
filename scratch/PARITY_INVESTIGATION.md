@@ -8,6 +8,16 @@ GPU training wrong, or was exp153 just badly configured and unfairly compared?
 Living document — every iteration of the supervision loop appends here. Written because the
 conversation carrying these findings will be compacted away.
 
+> **SUPERSEDED 2026-07-30 — the platform conclusion below is wrong.** exp166cw ran
+> full-length 1.5B jobs on GPU (35,680 and 71,360 steps); they land a constant **+0.41**
+> over exp117's TPU results for the same configs, matching exp153's deficit. The decisive
+> case is unaugmented and starts from pretrained weights: a model that reached **2.7131**
+> on TPU trained 8 further epochs on GPU and ended at **3.1597**.
+>
+> Why this missed it: the longest arm here is **4,460 steps**, and exp153's gap opens
+> around step 4,460 then holds flat. Every arm stopped at or before the edge of the effect.
+> See `experiments/protein/exp166_cw_plan.md` on `eac/plm-exp166-cw`.
+
 ## Method
 
 `scratch/parity_train.py` runs **one recipe on three accelerators**, changing only
