@@ -7,6 +7,10 @@ This wraps the shared fused kernel API for TPU and falls back to a full-logits
 reference implementation on non-TPU backends.
 """
 
+import functools
+from collections.abc import Callable
+from typing import NamedTuple
+
 import jax
 import jax.numpy as jnp
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P, get_abstract_mesh, get_mesh, reshard
@@ -14,6 +18,152 @@ from jax.sharding import Mesh, NamedSharding, PartitionSpec as P, get_abstract_m
 from haliax.jax_utils import named_call
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
     fused_cross_entropy_loss_and_logsumexp_penalty,
+)
+
+
+class _ChunkLayout(NamedTuple):
+    chunk_size: int
+    padded_num_tokens: int
+    num_chunks: int
+
+
+def _chunk_layout(num_tokens: int, chunk_size: int) -> _ChunkLayout:
+    effective_chunk_size = min(chunk_size, max(num_tokens, 1))
+    padded_num_tokens = -(-num_tokens // effective_chunk_size) * effective_chunk_size
+    num_chunks = padded_num_tokens // effective_chunk_size
+    return _ChunkLayout(effective_chunk_size, padded_num_tokens, num_chunks)
+
+
+def _cross_entropy_and_log_normalizers(
+    logits: jax.Array,
+    labels: jax.Array,
+    logsumexp_weight: float,
+) -> tuple[jax.Array, jax.Array]:
+    log_normalizers = jax.scipy.special.logsumexp(logits, axis=-1)
+    target_logits = jnp.take_along_axis(logits, labels[:, None], axis=1)[:, 0]
+    loss = log_normalizers - target_logits
+    if logsumexp_weight:
+        loss = loss + logsumexp_weight * log_normalizers * log_normalizers
+    return loss, log_normalizers
+
+
+def _chunked_cross_entropy_forward(
+    hidden: jax.Array,
+    lm_head: jax.Array,
+    labels: jax.Array,
+    weight: jax.Array,
+    logsumexp_weight: float,
+    chunk_size: int,
+) -> jax.Array:
+    num_tokens, hidden_dim = hidden.shape
+    layout = _chunk_layout(num_tokens, chunk_size)
+    padded_hidden = jnp.pad(hidden, ((0, layout.padded_num_tokens - num_tokens), (0, 0)))
+    padded_labels = jnp.pad(labels.astype(jnp.int32), (0, layout.padded_num_tokens - num_tokens))
+    padded_weight = jnp.pad(weight, (0, layout.padded_num_tokens - num_tokens))
+
+    def chunk_loss(chunk: tuple[jax.Array, jax.Array, jax.Array]) -> jax.Array:
+        chunk_hidden, chunk_labels, chunk_weight = chunk
+        logits = (chunk_hidden @ lm_head).astype(jnp.float32)
+        loss, _ = _cross_entropy_and_log_normalizers(logits, chunk_labels, logsumexp_weight)
+        return chunk_weight * loss
+
+    chunked_loss = jax.lax.map(
+        chunk_loss,
+        (
+            padded_hidden.reshape(layout.num_chunks, layout.chunk_size, hidden_dim),
+            padded_labels.reshape(layout.num_chunks, layout.chunk_size),
+            padded_weight.reshape(layout.num_chunks, layout.chunk_size),
+        ),
+    )
+    return chunked_loss.reshape(layout.padded_num_tokens)[:num_tokens]
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(4, 5, 6))
+def _chunked_weighted_cross_entropy(
+    hidden: jax.Array,
+    lm_head: jax.Array,
+    labels: jax.Array,
+    weight: jax.Array,
+    logsumexp_weight: float,
+    chunk_size: int,
+    backward_pass_unroll: int,
+) -> jax.Array:
+    del backward_pass_unroll
+    return _chunked_cross_entropy_forward(hidden, lm_head, labels, weight, logsumexp_weight, chunk_size)
+
+
+def _chunked_cross_entropy_vjp_forward(
+    hidden: jax.Array,
+    lm_head: jax.Array,
+    labels: jax.Array,
+    weight: jax.Array,
+    logsumexp_weight: float,
+    chunk_size: int,
+    backward_pass_unroll: int,
+) -> tuple[jax.Array, tuple[jax.Array, jax.Array, jax.Array, jax.Array]]:
+    del backward_pass_unroll
+    loss = _chunked_cross_entropy_forward(hidden, lm_head, labels, weight, logsumexp_weight, chunk_size)
+    return loss, (hidden, lm_head, labels, weight)
+
+
+def _chunked_cross_entropy_vjp_backward(
+    logsumexp_weight: float,
+    chunk_size: int,
+    backward_pass_unroll: int,
+    residual: tuple[jax.Array, jax.Array, jax.Array, jax.Array],
+    output_cotangent: jax.Array,
+) -> tuple[jax.Array, jax.Array, None, jax.Array]:
+    hidden, lm_head, labels, weight = residual
+    num_tokens, hidden_dim = hidden.shape
+    vocab_size = lm_head.shape[1]
+    layout = _chunk_layout(num_tokens, chunk_size)
+    padded_hidden = jnp.pad(hidden, ((0, layout.padded_num_tokens - num_tokens), (0, 0)))
+    padded_labels = jnp.pad(labels.astype(jnp.int32), (0, layout.padded_num_tokens - num_tokens))
+    padded_weight = jnp.pad(weight, (0, layout.padded_num_tokens - num_tokens))
+    padded_cotangent = jnp.pad(output_cotangent.astype(jnp.float32), (0, layout.padded_num_tokens - num_tokens))
+
+    def backward_chunk(
+        lm_head_cotangent: jax.Array,
+        chunk: tuple[jax.Array, jax.Array, jax.Array, jax.Array],
+    ) -> tuple[jax.Array, tuple[jax.Array, jax.Array]]:
+        chunk_hidden, chunk_labels, chunk_weight, chunk_cotangent = chunk
+        logits = (chunk_hidden @ lm_head).astype(jnp.float32)
+        unweighted_loss, log_normalizers = _cross_entropy_and_log_normalizers(logits, chunk_labels, logsumexp_weight)
+        probabilities = jnp.exp(logits - log_normalizers[:, None])
+        one_hot_labels = jax.nn.one_hot(chunk_labels, vocab_size, dtype=jnp.float32)
+        if logsumexp_weight:
+            probability_scale = (1.0 + 2.0 * logsumexp_weight * log_normalizers)[:, None]
+        else:
+            probability_scale = 1.0
+        loss_scale = (chunk_weight * chunk_cotangent)[:, None]
+        logits_cotangent = (loss_scale * (probabilities * probability_scale - one_hot_labels)).astype(hidden.dtype)
+        hidden_cotangent = logits_cotangent @ lm_head.T
+        chunk_lm_head_cotangent = (chunk_hidden.T @ logits_cotangent).astype(jnp.float32)
+        weight_cotangent = chunk_cotangent * unweighted_loss
+        return lm_head_cotangent + chunk_lm_head_cotangent, (hidden_cotangent, weight_cotangent)
+
+    lm_head_cotangent, (hidden_cotangent, weight_cotangent) = jax.lax.scan(
+        backward_chunk,
+        jnp.zeros((hidden_dim, vocab_size), jnp.float32),
+        (
+            padded_hidden.reshape(layout.num_chunks, layout.chunk_size, hidden_dim),
+            padded_labels.reshape(layout.num_chunks, layout.chunk_size),
+            padded_weight.reshape(layout.num_chunks, layout.chunk_size),
+            padded_cotangent.reshape(layout.num_chunks, layout.chunk_size),
+        ),
+        unroll=backward_pass_unroll,
+    )
+    return (
+        hidden_cotangent.reshape(layout.padded_num_tokens, hidden_dim)[:num_tokens].astype(hidden.dtype),
+        lm_head_cotangent.astype(lm_head.dtype),
+        None,
+        weight_cotangent.reshape(layout.padded_num_tokens)[:num_tokens].astype(weight.dtype),
+    )
+
+
+_chunked_weighted_cross_entropy.defvjp(
+    _chunked_cross_entropy_vjp_forward,
+    _chunked_cross_entropy_vjp_backward,
 )
 
 
@@ -66,36 +216,16 @@ def _reshard_for_shard_map(
     return x
 
 
-@named_call
-def fused_linear_softmax_cross_entropy_loss(
+def _linear_softmax_cross_entropy_loss(
     hidden: jax.Array,
     lm_head: jax.Array,
     labels: jax.Array,
     *,
-    weight: jax.Array | None = None,
-    reduction: str = "mean",
-    logsumexp_weight: float | None = None,
-    dtype: jnp.dtype = jnp.float32,
-    precision: jax.lax.PrecisionLike = None,
-    implementation: str | tuple[str, ...] | None = None,
+    weight: jax.Array | None,
+    reduction: str,
+    dtype: jnp.dtype,
+    per_token_loss: Callable[[jax.Array, jax.Array, jax.Array, jax.Array], jax.Array],
 ) -> jax.Array:
-    """Compute cross-entropy loss via the fused kernel path.
-
-    Args:
-        hidden: Array with shape (..., hidden_dim).
-        lm_head: Array with shape (hidden_dim, vocab_size).
-        labels: Integer array with shape (...,).
-        weight: Optional per-example weights with shape matching labels.
-        reduction: One of {"mean", "sum", "none"}.
-        logsumexp_weight: Optional z-loss weight (logsumexp^2 term).
-        dtype: Accumulator dtype for logits/logsumexp.
-        precision: Optional matmul precision override for XLA/reference paths.
-        implementation: Optional fused CE backend selection override.
-
-    Returns:
-        If reduction=="none": array with shape labels.shape.
-        Else: scalar array.
-    """
     if lm_head.ndim != 2:
         raise ValueError(f"lm_head must be 2D (hidden_dim, vocab), got shape={lm_head.shape}")
     hidden_dim = hidden.shape[-1]
@@ -126,18 +256,7 @@ def fused_linear_softmax_cross_entropy_loss(
         flat_labels = shard_labels.reshape((-1,)).astype(jnp.int32)
         flat_weight = shard_weight.reshape((-1,))
 
-        loss = fused_cross_entropy_loss_and_logsumexp_penalty(
-            flat_hidden,
-            flat_labels,
-            shard_lm_head,
-            reduction=None,
-            weight=flat_weight,
-            logsumexp_weight=logsumexp_weight,
-            dtype=dtype,
-            logit_soft_cap=None,
-            precision=precision,
-            implementation=implementation,
-        )
+        loss = per_token_loss(flat_hidden, shard_lm_head, flat_labels, flat_weight)
 
         if reduction_mode is None:
             return loss.reshape(shard_labels.shape)
@@ -171,6 +290,130 @@ def fused_linear_softmax_cross_entropy_loss(
     )(hidden, lm_head, labels, weight_array)
 
 
+@named_call
+def fused_linear_softmax_cross_entropy_loss(
+    hidden: jax.Array,
+    lm_head: jax.Array,
+    labels: jax.Array,
+    *,
+    weight: jax.Array | None = None,
+    reduction: str = "mean",
+    logsumexp_weight: float | None = None,
+    dtype: jnp.dtype = jnp.float32,
+    precision: jax.lax.PrecisionLike = None,
+    implementation: str | tuple[str, ...] | None = None,
+) -> jax.Array:
+    """Compute cross-entropy loss via the fused kernel path.
+
+    Args:
+        hidden: Array with shape (..., hidden_dim).
+        lm_head: Array with shape (hidden_dim, vocab_size).
+        labels: Integer array with shape (...,).
+        weight: Optional per-example weights with shape matching labels.
+        reduction: One of {"mean", "sum", "none"}.
+        logsumexp_weight: Optional z-loss weight (logsumexp^2 term).
+        dtype: Accumulator dtype for logits/logsumexp.
+        precision: Optional matmul precision override for XLA/reference paths.
+        implementation: Optional fused CE backend selection override.
+
+    Returns:
+        If reduction=="none": array with shape labels.shape.
+        Else: scalar array.
+    """
+
+    def per_token_loss(
+        flat_hidden: jax.Array,
+        shard_lm_head: jax.Array,
+        flat_labels: jax.Array,
+        flat_weight: jax.Array,
+    ) -> jax.Array:
+        return fused_cross_entropy_loss_and_logsumexp_penalty(
+            flat_hidden,
+            flat_labels,
+            shard_lm_head,
+            reduction=None,
+            weight=flat_weight,
+            logsumexp_weight=logsumexp_weight,
+            dtype=dtype,
+            logit_soft_cap=None,
+            precision=precision,
+            implementation=implementation,
+        )
+
+    return _linear_softmax_cross_entropy_loss(
+        hidden,
+        lm_head,
+        labels,
+        weight=weight,
+        reduction=reduction,
+        dtype=dtype,
+        per_token_loss=per_token_loss,
+    )
+
+
+@named_call
+def chunked_linear_softmax_cross_entropy_loss(
+    hidden: jax.Array,
+    lm_head: jax.Array,
+    labels: jax.Array,
+    *,
+    chunk_size: int,
+    backward_pass_unroll: int,
+    weight: jax.Array | None = None,
+    reduction: str = "mean",
+    logsumexp_weight: float | None = None,
+    dtype: jnp.dtype = jnp.float32,
+) -> jax.Array:
+    """Compute cross-entropy in token chunks and recompute logits during the backward pass.
+
+    Args:
+        hidden: Array with shape (..., hidden_dim).
+        lm_head: Array with shape (hidden_dim, vocab_size).
+        labels: Integer array with shape (...,).
+        chunk_size: Maximum number of tokens in each per-device logit tile.
+        backward_pass_unroll: Number of backward scan iterations to unroll.
+        weight: Optional per-example weights with shape matching labels.
+        reduction: One of {"mean", "sum", "none"}.
+        logsumexp_weight: Optional z-loss weight (logsumexp^2 term).
+        dtype: Dtype used to create or cast per-token weights. Logits and loss are computed in float32.
+
+    Returns:
+        If reduction=="none": array with shape labels.shape.
+        Else: scalar array.
+    """
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+    if backward_pass_unroll <= 0:
+        raise ValueError(f"backward_pass_unroll must be positive, got {backward_pass_unroll}")
+
+    def per_token_loss(
+        flat_hidden: jax.Array,
+        shard_lm_head: jax.Array,
+        flat_labels: jax.Array,
+        flat_weight: jax.Array,
+    ) -> jax.Array:
+        return _chunked_weighted_cross_entropy(
+            flat_hidden,
+            shard_lm_head,
+            flat_labels,
+            flat_weight.astype(dtype),
+            float(logsumexp_weight or 0.0),
+            chunk_size,
+            backward_pass_unroll,
+        )
+
+    return _linear_softmax_cross_entropy_loss(
+        hidden,
+        lm_head,
+        labels,
+        weight=weight,
+        reduction=reduction,
+        dtype=dtype,
+        per_token_loss=per_token_loss,
+    )
+
+
 __all__ = [
+    "chunked_linear_softmax_cross_entropy_loss",
     "fused_linear_softmax_cross_entropy_loss",
 ]
