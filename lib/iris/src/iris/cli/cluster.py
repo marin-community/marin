@@ -34,7 +34,6 @@ from iris.cli.build import (
     build_image,
     find_marin_root,
     get_git_provenance,
-    get_git_sha,
 )
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client_for_ctx
 from iris.cluster.composer import provider_bundle
@@ -59,7 +58,7 @@ from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.platforms.gcp.worker_bootstrap import build_worker_bootstrap_script
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.platforms.types import Labels
-from iris.cluster.provenance import provenance_from_proto
+from iris.cluster.provenance import is_same_image_provenance, provenance_from_proto
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2
 from iris.rpc.proto_display import format_accelerator_display, vm_state_name
 from iris.time_proto import timestamp_from_proto
@@ -1613,12 +1612,16 @@ def worker_restart(
             workers = list(all_workers)
 
         if skip_current_hash:
-            target_hash = get_git_sha()
+            target_hash = provenance.tree_hash
             if not target_hash or target_hash == "unknown":
                 click.echo(f"--skip-current-hash requires a known git_hash (got: {target_hash!r})", err=True)
                 raise SystemExit(1)
             before = len(workers)
-            workers = [w for w in workers if w.metadata.provenance.tree_hash != target_hash]
+            workers = [
+                worker
+                for worker in workers
+                if not is_same_image_provenance(provenance_from_proto(worker.metadata.provenance), provenance)
+            ]
             skipped = before - len(workers)
             click.echo(f"Skipping {skipped}/{before} worker(s) already at local git_hash {target_hash}")
 
