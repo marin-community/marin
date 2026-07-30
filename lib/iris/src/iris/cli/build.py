@@ -4,7 +4,6 @@
 """Image build commands."""
 
 import subprocess
-from dataclasses import replace
 from pathlib import Path
 
 import click
@@ -32,25 +31,31 @@ def _is_verbose(ctx: click.Context) -> bool:
     return False
 
 
-def get_git_sha() -> str:
-    """Short hash of the current working tree content (the image dedup key).
+def get_git_provenance() -> Provenance:
+    """Get the provenance of the current working tree.
 
-    Returns the tree hash of HEAD plus any staged/unstaged changes. This is
-    deterministic: the same tree content always produces the same hash, so
-    ``iris build`` and a later ``worker-restart --skip-current-hash`` see
-    matching values without having to be invoked back-to-back.
+    The tree hash includes staged and unstaged tracked changes. The dirty flag
+    also includes untracked files.
     """
     try:
-        return Provenance.from_git().dedup_key
+        return Provenance.from_git()
     except RuntimeError as e:
-        raise click.ClickException(f"Failed to get git SHA. Are you in a git repository? ({e})") from e
+        raise click.ClickException(f"Failed to get git provenance. Are you in a git repository? ({e})") from e
 
 
-def _versioned_tag(image_base: str, git_sha: str, platform: str) -> str:
-    if "," in platform:
-        return f"{image_base}:{git_sha}"
-    architecture = platform.rsplit("/", 1)[-1]
-    return f"{image_base}:{git_sha}-{architecture}"
+def get_git_sha() -> str:
+    """Get the short hash of the current tracked worktree."""
+    return get_git_provenance().dedup_key
+
+
+def _versioned_tag(image_base: str, provenance: Provenance, platform: str) -> str:
+    version = provenance.dedup_key
+    if "," not in platform:
+        architecture = platform.rsplit("/", 1)[-1]
+        version = f"{version}-{architecture}"
+    if provenance.dirty:
+        version = f"{version}-dirty"
+    return f"{image_base}:{version}"
 
 
 def find_marin_root() -> Path:
@@ -173,7 +178,7 @@ def build_image(
     push: bool,
     context: str | None,
     platform: str,
-    git_sha: str,
+    provenance: Provenance,
     ghcr_org: str = GHCR_DEFAULT_ORG,
     verbose: bool = False,
     cargo_profile: str = DEFAULT_CARGO_PROFILE,
@@ -203,7 +208,7 @@ def build_image(
 
     # Derive image base name from tag (e.g. "iris-worker:latest" -> "iris-worker")
     image_base = tag.split(":")[0]
-    sha_tag = _versioned_tag(image_base, git_sha, platform)
+    sha_tag = _versioned_tag(image_base, provenance, platform)
     latest_tag = f"{image_base}:latest"
 
     click.echo(f"Using Dockerfile: {dockerfile_path}")
@@ -225,9 +230,6 @@ def build_image(
     cmd = ["docker", "buildx", "build", "--platform", platform]
     cmd.extend(["--target", image_type])
     cmd.extend(["--build-arg", f"CARGO_PROFILE={cargo_profile}"])
-    # tree_hash is pinned to the rollout's git_sha (which the tags also use) so a
-    # mid-build edit can't make a worker report a hash that disagrees with its tag.
-    provenance = replace(Provenance.from_git(), tree_hash=git_sha)
     for key, value in provenance_to_env(provenance).items():
         cmd.extend(["--build-arg", f"{key}={value}"])
     for t in all_tags:
@@ -305,24 +307,24 @@ def _build_all(
 
     Registry tags are derived from the git SHA.
     """
-    git_sha = get_git_sha()
+    provenance = get_git_provenance()
     marin_root = find_marin_root()
 
     _ensure_protos()
 
     for image_type in ("worker", "controller"):
-        tag = _versioned_tag(f"iris-{image_type}", git_sha, platform)
-        build_image(image_type, tag, push, None, platform, git_sha, ghcr_org, verbose)
+        tag = _versioned_tag(f"iris-{image_type}", provenance, platform)
+        build_image(image_type, tag, push, None, platform, provenance, ghcr_org, verbose)
         click.echo()
 
     # Task target uses the same Dockerfile but needs marin root as context
     build_image(
         "task",
-        _versioned_tag("iris-task", git_sha, platform),
+        _versioned_tag("iris-task", provenance, platform),
         push,
         str(marin_root),
         platform,
-        git_sha,
+        provenance,
         ghcr_org,
         verbose,
     )
@@ -374,10 +376,10 @@ def build_worker_image(
 ):
     """Build Docker image for Iris worker."""
     verbose = _is_verbose(ctx)
-    git_sha = get_git_sha()
+    provenance = get_git_provenance()
     _ensure_protos()
-    tag = tag or _versioned_tag("iris-worker", git_sha, platform)
-    build_image("worker", tag, push, context, platform, git_sha, ghcr_org, verbose=verbose)
+    tag = tag or _versioned_tag("iris-worker", provenance, platform)
+    build_image("worker", tag, push, context, platform, provenance, ghcr_org, verbose=verbose)
 
 
 @build.command("controller-image")
@@ -397,10 +399,10 @@ def build_controller_image(
 ):
     """Build Docker image for Iris controller."""
     verbose = _is_verbose(ctx)
-    git_sha = get_git_sha()
+    provenance = get_git_provenance()
     _ensure_protos()
-    tag = tag or _versioned_tag("iris-controller", git_sha, platform)
-    build_image("controller", tag, push, context, platform, git_sha, ghcr_org, verbose=verbose)
+    tag = tag or _versioned_tag("iris-controller", provenance, platform)
+    build_image("controller", tag, push, context, platform, provenance, ghcr_org, verbose=verbose)
 
 
 @build.command("task-image")
@@ -424,9 +426,9 @@ def build_task_image(
     marin_root = find_marin_root()
 
     verbose = _is_verbose(ctx)
-    git_sha = get_git_sha()
+    provenance = get_git_provenance()
     _ensure_protos()
-    resolved_tag = tag or _versioned_tag("iris-task", git_sha, platform)
+    resolved_tag = tag or _versioned_tag("iris-task", provenance, platform)
 
     build_image(
         "task",
@@ -434,7 +436,7 @@ def build_task_image(
         push,
         str(marin_root),
         platform,
-        git_sha,
+        provenance,
         ghcr_org,
         verbose=verbose,
     )

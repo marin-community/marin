@@ -1,5 +1,13 @@
 import { DataFrame, Field } from '@grafana/data';
-import { CommitRow, NightlyCell, ProvisioningRow, SeriesPoint, WandbPoint, WorkerRegion } from './types';
+import {
+  CommitRow,
+  NightlyCell,
+  ProvisioningRegion,
+  ProvisioningRow,
+  SeriesPoint,
+  WandbPoint,
+  WorkerRegion,
+} from './types';
 
 type Row = Record<string, unknown>;
 
@@ -111,8 +119,6 @@ export function provisioningStatus(frame: DataFrame): ProvisioningRow[] {
   return rows(frame).map((row) => ({
     scope: requiredString(row, 'scope'),
     collectedAt: requiredNumber(row, 'collected_at'),
-    resourceType: optionalString(row, 'resource_type') ?? '',
-    scaleGroup: optionalString(row, 'scale_group') ?? '',
     zone: optionalString(row, 'zone') ?? '',
     ready: requiredNumber(row, 'ready'),
     stockout: requiredNumber(row, 'stockout'),
@@ -125,6 +131,35 @@ export function provisioningStatus(frame: DataFrame): ProvisioningRow[] {
     latencyP50Seconds: optionalNumber(row, 'latency_p50_seconds'),
     latencyP95Seconds: optionalNumber(row, 'latency_p95_seconds'),
     windowHours: optionalNumber(row, 'window_hours'),
+  }));
+}
+
+type ProvisioningRegionSource = Pick<ProvisioningRow, 'scope' | 'zone' | 'ready' | 'outcomes'>;
+
+function regionFromProvisioningZone(zone: string): string {
+  return /^[a-z]+-[a-z]+\d+-[a-z]$/.test(zone) ? zone.replace(/-[a-z]$/, '') : zone;
+}
+
+export function provisioningRegions(provisioning: ProvisioningRegionSource[]): ProvisioningRegion[] {
+  const totals = new Map<string, { ready: number; outcomes: number }>();
+  for (const pool of provisioning) {
+    if (pool.scope !== 'pool' || !pool.zone || pool.outcomes <= 0) {
+      continue;
+    }
+    const region = regionFromProvisioningZone(pool.zone);
+    const counts = totals.get(region);
+    if (counts) {
+      counts.ready += pool.ready;
+      counts.outcomes += pool.outcomes;
+    } else {
+      totals.set(region, { ready: pool.ready, outcomes: pool.outcomes });
+    }
+  }
+  return [...totals.entries()].map(([region, counts]) => ({
+    region,
+    ready: counts.ready,
+    outcomes: counts.outcomes,
+    successRatio: counts.ready / counts.outcomes,
   }));
 }
 

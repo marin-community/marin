@@ -22,7 +22,7 @@ from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import select, text
-from tests.cluster.controller._test_support import ControllerTestState
+from tests.cluster.controller._test_support import ControllerTestState, submit_job_in_tx
 
 _TICKS = 200
 
@@ -250,7 +250,7 @@ def test_submit_job_with_n_replicas_perf(submit_perf_db: ControllerTestState) ->
         )
         jid = JobName.from_wire(name)
         with state._db.transaction() as cur:
-            ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now())
+            submit_job_in_tx(cur, job_id=jid, request=req, ts=Timestamp.now())
 
     per_call_s = _measure(_submit, _TICKS)
     max_ms = _SUBMIT_32_REPLICAS_MAX_MS

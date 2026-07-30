@@ -67,29 +67,32 @@ function stateBadge(state: string): string {
       orchestrator died before submitting any children.
     </p>
 
-    <div v-else-if="data" class="space-y-4">
-      <div v-for="role in data.roles" :key="role.role" class="rounded-lg border border-surface-border bg-surface p-4">
-        <div class="flex items-center gap-2 flex-wrap mb-2">
-          <span class="text-sm font-semibold">{{ role.role }}</span>
+    <div v-else-if="data" class="rounded-lg border border-surface-border divide-y divide-surface-border-subtle">
+      <div v-for="role in data.roles" :key="role.role" class="px-3 py-2">
+        <div class="flex items-center gap-2 text-sm">
+          <span class="font-semibold w-14 shrink-0">{{ role.role }}</span>
           <span
             v-if="role.job"
-            class="inline-block rounded px-1.5 py-0.5 text-xs font-medium border whitespace-nowrap"
+            class="inline-block rounded px-1.5 py-0.5 text-xs font-medium border whitespace-nowrap shrink-0"
             :class="stateBadge(stateName(role.job.state))"
           >{{ stateName(role.job.state).replace(/_/g, ' ') }}</span>
-          <span v-else-if="!role.reachable" class="text-xs text-text-muted" :title="role.error ?? ''">iris unreachable</span>
+          <span v-else-if="!role.reachable" class="text-xs text-text-muted shrink-0" :title="role.error ?? ''">iris unreachable</span>
+          <code
+            class="font-mono text-[12px] text-text-secondary truncate min-w-0 flex-1 select-all"
+            :title="role.job_path"
+          >{{ role.job_path }}</code>
           <a
             :href="irisJobUrl(role.job_path)"
             target="_blank"
             rel="noopener"
-            class="text-accent hover:text-accent-hover hover:underline text-xs whitespace-nowrap ml-auto"
+            class="text-accent hover:text-accent-hover hover:underline text-xs whitespace-nowrap shrink-0"
           >iris ↗</a>
         </div>
-        <code class="block font-mono text-[12px] break-all text-text-secondary mb-2 select-all">{{ role.job_path }}</code>
 
-        <p v-if="role.job?.status_message" class="text-xs text-text-secondary mb-2">{{ role.job.status_message }}</p>
-        <p v-if="role.job?.error" class="text-xs text-status-danger break-words mb-2">{{ role.job.error }}</p>
+        <p v-if="role.job?.status_message" class="text-xs text-text-secondary mt-1">{{ role.job.status_message }}</p>
+        <p v-if="role.job?.error" class="text-xs text-status-danger break-words mt-1">{{ role.job.error }}</p>
 
-        <div v-if="role.tasks.length" class="overflow-x-auto rounded border border-surface-border">
+        <div v-if="role.tasks.length" class="mt-2 overflow-x-auto rounded border border-surface-border">
           <table class="w-full border-collapse text-xs">
             <thead>
               <tr class="border-b border-surface-border bg-surface-raised text-text-secondary">
@@ -131,7 +134,7 @@ function stateBadge(state: string): string {
             </tbody>
           </table>
         </div>
-        <p v-else-if="role.reachable" class="text-xs text-text-muted">No tasks reported.</p>
+        <p v-else-if="role.reachable" class="text-xs text-text-muted mt-1">No tasks reported.</p>
       </div>
     </div>
   </div>

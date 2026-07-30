@@ -7,16 +7,16 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useApi } from '@/composables/useApi'
-import type { SampleRow, SamplesResponse, SampleTasksResponse } from '@/types/api'
+import type { SamplesResponse, SampleTasksResponse } from '@/types/api'
+import { sampleFilters, sampleHint, sampleOutcome, outcomeChipClass, type SampleFilter } from '@/utils/samples'
 
 const props = defineProps<{ runId: string }>()
 const router = useRouter()
 
 const LIMIT = 50
-type Correct = 'all' | 'correct' | 'incorrect'
 
 const selectedTask = ref('')
-const correct = ref<Correct>('all')
+const correct = ref<SampleFilter>('all')
 const offset = ref(0)
 
 const { data: tasksData, error: tasksError, refresh: refreshTasks } = useApi<SampleTasksResponse>(
@@ -47,27 +47,7 @@ watch([selectedTask, correct], () => {
   if (selectedTask.value) refresh()
 })
 
-/** A short "answer" summary for a row: the picked choice, the extracted generation, or a trajectory hint. */
-function answerSummary(row: SampleRow): string {
-  if (row.kind === 'multiple_choice') {
-    const choice = row.model_choice !== null ? (row.choices?.[row.model_choice] ?? null) : null
-    return choice ? `${choice.label}: ${choice.text.trim()}` : '—'
-  }
-  if (row.kind === 'agentic') {
-    return row.trajectory_uri ? 'agentic trajectory' : '—'
-  }
-  return row.extracted ?? ''
-}
-
-/** The row's primary-metric value, looked up by the page's primary metric name. */
-function primaryValue(row: SampleRow): number | null {
-  const metric = data.value?.primary_metric
-  return metric ? (row.metrics[metric] ?? null) : null
-}
-
-function truncate(text: string, n = 140): string {
-  return text.length > n ? `${text.slice(0, n)}…` : text
-}
+const FILTERS = computed(() => sampleFilters(data.value?.counts?.ungraded))
 
 const total = computed(() => data.value?.total ?? 0)
 const shownFrom = computed(() => (total.value === 0 ? 0 : offset.value + 1))
@@ -115,14 +95,14 @@ function openViewer(rowIndex: number) {
         </label>
         <div class="flex gap-1">
           <button
-            v-for="opt in (['all', 'correct', 'incorrect'] as Correct[])"
+            v-for="opt in FILTERS"
             :key="opt"
             class="px-2 py-1 text-xs rounded border capitalize"
             :class="opt === correct
               ? 'border-accent-border bg-accent-subtle text-accent'
               : 'border-surface-border text-text-muted hover:bg-surface-raised'"
             @click="correct = opt"
-          >{{ opt }}</button>
+          >{{ opt }}<span v-if="data?.counts" class="ml-1 tabular-nums">({{ data.counts[opt] }})</span></button>
         </div>
         <button
           class="px-2 py-1 text-xs rounded border border-surface-border hover:bg-surface-raised"
@@ -144,10 +124,9 @@ function openViewer(rowIndex: number) {
             <thead>
               <tr class="border-b border-surface-border bg-surface-raised text-text-secondary">
                 <th class="px-2 py-1.5 text-left w-16">Doc</th>
-                <th class="px-2 py-1.5 text-left w-16">Metric</th>
-                <th class="px-2 py-1.5 text-left w-28">Grading</th>
-                <th class="px-2 py-1.5 text-left">Gold target</th>
-                <th class="px-2 py-1.5 text-left">Model answer</th>
+                <th class="px-2 py-1.5 text-left w-24">Outcome</th>
+                <th class="px-2 py-1.5 text-left">Why</th>
+                <th class="px-2 py-1.5 text-left w-28">Grader</th>
               </tr>
             </thead>
             <tbody>
@@ -160,15 +139,12 @@ function openViewer(rowIndex: number) {
                 <td class="px-2 py-1.5 font-mono text-text-secondary">{{ row.doc_id }}</td>
                 <td class="px-2 py-1.5">
                   <span
-                    class="inline-block rounded px-1 py-0.5 border font-medium"
-                    :class="row.correct
-                      ? 'bg-status-success-bg text-status-success border-status-success-border'
-                      : 'bg-status-danger-bg text-status-danger border-status-danger-border'"
-                  >{{ primaryValue(row) ?? (row.correct ? '✓' : '✗') }}</span>
+                    class="inline-block rounded px-1 py-0.5 border font-medium capitalize"
+                    :class="outcomeChipClass(sampleOutcome(row))"
+                  >{{ sampleOutcome(row) }}</span>
                 </td>
+                <td class="px-2 py-1.5 font-mono text-text-secondary max-w-[48ch] truncate">{{ sampleHint(row) }}</td>
                 <td class="px-2 py-1.5 font-mono text-text-muted truncate">{{ row.grading?.method ?? '—' }}</td>
-                <td class="px-2 py-1.5 font-mono max-w-[24ch] truncate">{{ truncate(row.target_text ?? '', 60) }}</td>
-                <td class="px-2 py-1.5 font-mono max-w-[40ch] truncate">{{ truncate(answerSummary(row)) }}</td>
               </tr>
             </tbody>
           </table>

@@ -10,9 +10,10 @@ import * as Plot from '@observablehq/plot'
 import type { Matrix } from '@/types/api'
 import PlotFigure from '@/components/charts/PlotFigure.vue'
 
-const props = defineProps<{ matrix: Matrix }>()
+// `referenceModel` is the emphasized row (a rule is drawn from it to the fleet best per task).
+// The leaderboard passes its top-ranked model; absent one, no row is emphasized.
+const props = defineProps<{ matrix: Matrix; referenceModel?: string | null }>()
 
-const REFERENCE_MODEL = 'snowball'
 const HEIGHT_PER_TASK = 26
 const MARGIN_TOP = 8
 const MARGIN_BOTTOM = 28
@@ -27,7 +28,7 @@ interface Dot {
 const dots = computed<Dot[]>(() => {
   const rows: Dot[] = []
   for (const row of props.matrix.rows) {
-    const isReference = row.model === REFERENCE_MODEL
+    const isReference = row.model === props.referenceModel
     for (const task of props.matrix.tasks) {
       const value = row.cells[task]?.value
       if (value === null || value === undefined) continue
@@ -37,7 +38,7 @@ const dots = computed<Dot[]>(() => {
   return rows
 })
 
-const hasReference = computed(() => props.matrix.rows.some((r) => r.model === REFERENCE_MODEL))
+const hasReference = computed(() => props.matrix.rows.some((r) => r.model === props.referenceModel))
 
 interface GapLine {
   task: string
@@ -56,7 +57,7 @@ const gapLines = computed<GapLine[]>(() => {
     for (const row of props.matrix.rows) {
       const value = row.cells[task]?.value
       if (value === null || value === undefined) continue
-      if (row.model === REFERENCE_MODEL) referenceValue = value
+      if (row.model === props.referenceModel) referenceValue = value
       if (best === null || value > best) best = value
     }
     if (referenceValue !== null && best !== null && best !== referenceValue) {

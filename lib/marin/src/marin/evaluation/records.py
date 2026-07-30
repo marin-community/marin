@@ -13,11 +13,12 @@ imports -- so it can be vendored verbatim into a standalone dashboard image that
 """
 
 import logging
+from dataclasses import dataclass
 from enum import StrEnum
 
 import fsspec
 from fsspec.core import url_to_fs
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
 
@@ -111,14 +112,49 @@ class Provenance(BaseModel):
     """Where the run came from: launch-time git SHA, eval runtime, and launch host.
 
     ``eval_runtime`` is Evalchemy's commit-pinned package requirement or Harbor's pinned package
-    requirements.
+    requirements. Records written before external evaluators used ``eval_image`` or
+    ``evalchemy_image`` for the same value.
     """
 
     model_config = ConfigDict(frozen=True)
 
     git_sha: str
-    eval_runtime: str
+    eval_runtime: str = Field(validation_alias=AliasChoices("eval_runtime", "eval_image", "evalchemy_image"))
     launch_host: str
+
+
+class ServingParams(BaseModel):
+    """The model-serving and generation settings a run evaluated under, when the launcher captured them.
+
+    The typed fields are the settings that change results or throughput (parallelism, context length,
+    generation budget); ``extra`` carries the long tail -- backend-specific engine flags and extra
+    generation kwargs -- as strings so the record stays backend-agnostic. The whole field is optional:
+    runs whose launcher did not record it (every run written so far) omit it, and the dashboard shows
+    no serving section for them.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    tensor_parallel_size: int | None = None
+    data_parallel_size: int | None = None
+    max_model_len: int | None = None
+    max_gen_tokens: int | None = None
+    extra: dict[str, str] = Field(default_factory=dict)
+
+
+class RunTiming(BaseModel):
+    """The eval's wall-clock window, when the orchestrator captured it.
+
+    ``started_at`` is when the eval began executing (after the served model was healthy);
+    ``finished_at`` is when the run reached its terminal state. Both are ISO 8601 strings. The whole
+    field is optional on a record: runs whose orchestrator did not record timing, and every record
+    written before timing existed, simply omit it, and the dashboard shows no duration for them.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    started_at: str
+    finished_at: str | None = None
 
 
 class EvalRunRecord(BaseModel):
@@ -162,6 +198,10 @@ class EvalRunRecord(BaseModel):
     """For failed runs, the last log lines of the child job(s) behind the failure, keyed like
     ``jobs`` -- enough to diagnose most failures without cluster access. Empty on success."""
     provenance: Provenance
+    timing: RunTiming | None = None
+    """The eval's wall-clock window when captured; ``None`` on records without recorded timing."""
+    serving: ServingParams | None = None
+    """The model-serving and generation settings the run evaluated under; ``None`` when not captured."""
 
 
 def record_path(prefix: str, run_id: str) -> str:
@@ -183,16 +223,37 @@ def read_record(path: str) -> EvalRunRecord:
         return EvalRunRecord.model_validate_json(handle.read())
 
 
-def list_records(prefix: str) -> list[EvalRunRecord]:
-    """Read every ``{prefix}/*/record.json``, skipping (with a warning) any that fail to parse."""
+@dataclass(frozen=True)
+class RecordParseFailure:
+    """One ``record.json`` that failed to parse during a listing: its path and the error message.
+
+    Surfaced so the dashboard's Debug view can show records dropped from the snapshot, rather than the
+    failure being only logged. A schema drift (a new required field on an old record) shows up here.
+    """
+
+    path: str
+    error: str
+
+
+def read_records(prefix: str) -> tuple[list[EvalRunRecord], list[RecordParseFailure]]:
+    """Read every ``{prefix}/*/record.json``, returning the parsed records and, separately, the paths
+    that failed to parse with their error. Parse failures are logged and collected rather than raised,
+    so one malformed record never hides the rest."""
     fs, root = url_to_fs(prefix)
     pattern = f"{root.rstrip('/')}/*/{RECORD_FILE}"
     protocol = f"{prefix.split('://', 1)[0]}://" if "://" in prefix else ""
     records: list[EvalRunRecord] = []
+    failures: list[RecordParseFailure] = []
     for match in sorted(fs.glob(pattern)):
         url = f"{protocol}{match}"
         try:
             records.append(read_record(url))
-        except Exception:
+        except Exception as exc:
             logger.warning("skipping unparseable eval record at %s", url, exc_info=True)
-    return records
+            failures.append(RecordParseFailure(path=url, error=f"{type(exc).__name__}: {exc}"))
+    return records, failures
+
+
+def list_records(prefix: str) -> list[EvalRunRecord]:
+    """Read every ``{prefix}/*/record.json``, skipping (with a warning) any that fail to parse."""
+    return read_records(prefix)[0]

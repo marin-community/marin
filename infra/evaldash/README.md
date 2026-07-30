@@ -88,11 +88,37 @@ Pulumi.yaml            Pulumi project, run on the shared repo venv
 
 ## Develop
 
+### Local mode (no database, no cluster)
+
+`EVALDASH_STORE=local` serves every view from a local records directory with no Cloud SQL, no
+CoreWeave credentials, and no Iris/finelog access — the fastest way to iterate on the UI. Records
+and their per-sample parquet are read straight from `RECORDS_PREFIXES`; the live job/log panels
+degrade to "unreachable" exactly as they do off-VPC. `infra/evaldash/src/fixtures.py` writes a
+deterministic sample dataset (several models across version cohorts; multiple-choice, generation,
+and agentic samples; success/eval-failure/infra-failure/ungraded cases) in the on-disk layout the
+reader expects.
+
 ```bash
-# Build the SPA (served from dashboard/dist)
 npm --prefix infra/evaldash/dashboard install
 npm --prefix infra/evaldash/dashboard run build
 
+# Generate fixtures, then serve them.
+PYTHONPATH=lib/marin/src uv run --with fsspec --with pyarrow --with pydantic \
+  python infra/evaldash/src/fixtures.py /tmp/evaldash-fixtures
+
+EVALDASH_STORE=local \
+RECORDS_PREFIXES=/tmp/evaldash-fixtures \
+EVALDASH_DASHBOARD_DIST=infra/evaldash/dashboard/dist \
+PORT=8080 \
+PYTHONPATH=infra/evaldash/src:lib/marin/src:lib/rigging/src \
+uv run --with starlette --with uvicorn --with sqlalchemy --with pyarrow --with pydantic --with fsspec \
+  python infra/evaldash/src/server.py
+# → http://localhost:8080  (binds loopback in local mode)
+```
+
+### Against the shared Postgres index
+
+```bash
 # EVAL_DB_* defaults to the shared hai-gcp-models:us-central1:marin-metadata/evals instance;
 # EVAL_DB_PASSWORD comes from the cloudsql-evals-password secret when unset.
 RECORDS_PREFIXES=/path/to/records \

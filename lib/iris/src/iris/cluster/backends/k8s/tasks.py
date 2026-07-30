@@ -984,10 +984,12 @@ def _build_pod_manifest(
     if run_req.HasField("timeout") and run_req.timeout.milliseconds > 0 and not is_gang:
         spec["activeDeadlineSeconds"] = max(1, run_req.timeout.milliseconds // 1000)
 
-    # Stamp the native k8s PriorityClass so the scheduler knows how to
-    # preempt/queue this pod relative to others. UNSPECIFIED defaults to
-    # INTERACTIVE (the normal user work band). A band with no configured
-    # class name leaves priorityClassName unset (cluster default applies).
+    # Stamp the native k8s PriorityClass so the scheduler knows how to preempt/queue this
+    # pod relative to others. Dispatch resolves the band from job_config and re-stamps the
+    # attempt before building this request, so ``priority`` is a real band in production.
+    # The INTERACTIVE floor keeps a request built outside that path (an unset field reads
+    # as INHERIT) from silently dropping to the cluster default. A band with no configured
+    # class name leaves priorityClassName unset.
     effective_band = run_req.priority or job_pb2.PRIORITY_BAND_INTERACTIVE
     priority_class_name = config.priority_class_names.get(effective_band)
     if priority_class_name:
