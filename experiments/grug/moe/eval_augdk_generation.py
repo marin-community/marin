@@ -445,11 +445,11 @@ def _evaluate_perplexity(
         raise ValueError("Evaluation data config produced no tagged evaluator")
     result = evaluator.evaluate(model)
     return {
-        "macro_loss": result.macro_avg_loss,
-        "micro_loss": result.micro_avg_loss,
-        "paloma_macro_loss": result.tag_macro_losses["paloma"],
-        "uncheatable_macro_loss": result.tag_macro_losses["uncheatable_eval"],
-        "domain_losses": result.tag_macro_losses,
+        "macro_loss": float(result.macro_avg_loss),
+        "micro_loss": float(result.micro_avg_loss),
+        "paloma_macro_loss": float(result.tag_macro_losses["paloma"]),
+        "uncheatable_macro_loss": float(result.tag_macro_losses["uncheatable_eval"]),
+        "domain_losses": {name: float(loss) for name, loss in result.tag_macro_losses.items()},
     }
 
 
