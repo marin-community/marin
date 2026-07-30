@@ -32,6 +32,13 @@ const STATUS_GRID_CLASS = css`display:grid;grid-template-columns:minmax(220px,.8
 const STATUS_CARD_CLASS = css`flex:1;`;
 const STATUS_SECTION_CLASS = css`display:flex;flex-direction:column;`;
 const FLEET_SCOPE = 'fleet';
+const LOGIT_CLAMP_EPSILON = 0.001;
+const PERCENT_TICKS = [0.99, 0.95, 0.5, 0.05, 0.01];
+
+function logitPercent(value: number): number {
+  const bounded = Math.min(1 - LOGIT_CLAMP_EPSILON, Math.max(LOGIT_CLAMP_EPSILON, value));
+  return Math.log(bounded / (1 - bounded));
+}
 
 function one(frames: DataFrame[], refId: string): DataFrame[] {
   const frame = frameByRefId(frames, refId);
@@ -98,19 +105,24 @@ function MiniSeriesChart({ points, unit }: { points: SeriesPoint[]; unit: 'count
   const values = points.map((point) => point.value);
   const xMin = Math.min(...times);
   const xMax = Math.max(...times);
-  const yMin = unit === 'percent' ? 0 : Math.min(0, ...values);
-  const yMax = unit === 'percent' ? 1 : Math.max(1, ...values);
+  const rawYMin = unit === 'percent' ? 0 : Math.min(0, ...values);
+  const rawYMax = unit === 'percent' ? 1 : Math.max(1, ...values);
+  const scaleY = unit === 'percent' ? logitPercent : (value: number) => value;
+  const yMin = scaleY(rawYMin);
+  const yMax = scaleY(rawYMax);
   const x = (value: number) => pad.left + ((value - xMin) / Math.max(1, xMax - xMin)) * (width - pad.left - pad.right);
-  const y = (value: number) => pad.top + (1 - (value - yMin) / Math.max(1e-9, yMax - yMin)) * (height - pad.top - pad.bottom);
+  const y = (value: number) => pad.top + (1 - (scaleY(value) - yMin) / Math.max(1e-9, yMax - yMin)) * (height - pad.top - pad.bottom);
+  const tickValues = unit === 'percent'
+    ? PERCENT_TICKS
+    : [rawYMax, (rawYMax + rawYMin) / 2, rawYMin];
 
   return (
     <div>
       <svg viewBox={`0 0 ${width} ${height}`} width="100%" height="170" role="img" aria-label="24 hour status history">
-        {[0, 0.5, 1].map((fraction) => {
-          const value = yMax - fraction * (yMax - yMin);
-          const rowY = pad.top + fraction * (height - pad.top - pad.bottom);
+        {tickValues.map((value) => {
+          const rowY = y(value);
           return (
-            <g key={fraction}>
+            <g key={value}>
               <line x1={pad.left} x2={width - pad.right} y1={rowY} y2={rowY} stroke={theme.colors.border.weak} strokeDasharray="2 5" />
               <text x={pad.left - 6} y={rowY + 4} textAnchor="end" fill={theme.colors.text.secondary} fontSize="12">
                 {unit === 'percent' ? `${Math.round(value * 100)}%` : Math.round(value)}
@@ -134,9 +146,9 @@ function MiniSeriesChart({ points, unit }: { points: SeriesPoint[]; unit: 'count
           {new Date(xMax).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
         </text>
       </svg>
-      <div className={css`display:flex;flex-wrap:wrap;gap:5px 14px;font-size:12px;color:${theme.colors.text.secondary};`}>
+      <div role="list" aria-label="Status history series" className={css`display:flex;flex-wrap:wrap;gap:5px 14px;font-size:12px;color:${theme.colors.text.secondary};`}>
         {series.map(([name], index) => (
-          <span key={name}><span className={css`color:${SERIES_COLORS[index % SERIES_COLORS.length]};`}>━</span> {name}</span>
+          <span role="listitem" key={name}><span className={css`color:${SERIES_COLORS[index % SERIES_COLORS.length]};`}>━</span> {name}</span>
         ))}
       </div>
     </div>
@@ -238,7 +250,7 @@ function ProvisioningStatus({ frames }: { frames: DataFrame[] }) {
 
   return (
     <section className={STATUS_SECTION_CLASS} aria-label="Provisioning status">
-      <SectionTitle detail={fleet?.windowHours === undefined ? undefined : `trailing ${fleet.windowHours} hour window`}>Provisioning</SectionTitle>
+      <SectionTitle detail={fleet?.windowHours === undefined ? 'logit scale' : `trailing ${fleet.windowHours} hour window · logit scale`}>Provisioning</SectionTitle>
       <Card className={STATUS_CARD_CLASS}>
         {!fleet ? (
           <PanelMessage width={400} height={220}>No provisioning data</PanelMessage>

@@ -53,7 +53,7 @@ test('status page keeps worker and provisioning status visible when another sour
   expect(screen.getAllByText('No W&B data')).toHaveLength(3);
 });
 
-test('status page rolls pool outcomes up to regions beside the history graph', () => {
+test('status page rolls provisioning pools into a logit region graph', () => {
   const now = Date.now();
   const frames = [
     frame('P', [{
@@ -63,20 +63,41 @@ test('status page rolls pool outcomes up to regions beside the history graph', (
       latency_p95_seconds: 90, window_hours: 3,
     }, {
       scope: 'pool', collected_at: now, zone: 'us-east5-a',
-      ready: 6, stockout: 1, error: 0, preempted: 0, outcomes: 7, success_ratio: 6 / 7,
+      ready: 1, stockout: 49, error: 0, preempted: 0, outcomes: 50, success_ratio: 0.02,
       pools_placing: 0, pools_no_ready_outcome: 0, latency_p50_seconds: 45,
       latency_p95_seconds: 90, window_hours: 3,
     }, {
       scope: 'pool', collected_at: now, zone: 'us-east5-b',
-      ready: 2, stockout: 0, error: 1, preempted: 0, outcomes: 3, success_ratio: 2 / 3,
+      ready: 1, stockout: 49, error: 0, preempted: 0, outcomes: 50, success_ratio: 0.02,
+      pools_placing: 0, pools_no_ready_outcome: 0, latency_p50_seconds: 45,
+      latency_p95_seconds: 90, window_hours: 3,
+    }, {
+      scope: 'pool', collected_at: now, zone: 'us-central1-a',
+      ready: 100, stockout: 0, error: 0, preempted: 0, outcomes: 100, success_ratio: 1,
+      pools_placing: 0, pools_no_ready_outcome: 0, latency_p50_seconds: 45,
+      latency_p95_seconds: 90, window_hours: 3,
+    }, {
+      scope: 'pool', collected_at: now, zone: 'europe-west4-a',
+      ready: 1, stockout: 99, error: 0, preempted: 0, outcomes: 100, success_ratio: 0.01,
+      pools_placing: 0, pools_no_ready_outcome: 0, latency_p50_seconds: 45,
+      latency_p95_seconds: 90, window_hours: 3,
+    }, {
+      scope: 'pool', collected_at: now, zone: 'asia-east1-a',
+      ready: 5, stockout: 95, error: 0, preempted: 0, outcomes: 100, success_ratio: 0.05,
       pools_placing: 0, pools_no_ready_outcome: 0, latency_p50_seconds: 45,
       latency_p95_seconds: 90, window_hours: 3,
     }]),
     frame('R', [
       { time: now - 60_000, region: 'fleet', success_ratio: 0.7 },
       { time: now, region: 'fleet', success_ratio: 0.8 },
-      { time: now - 60_000, region: 'us-east5', success_ratio: 0.7 },
-      { time: now, region: 'us-east5', success_ratio: 0.8 },
+      { time: now - 60_000, region: 'us-east5', success_ratio: 0.02 },
+      { time: now, region: 'us-east5', success_ratio: 0.02 },
+      { time: now - 60_000, region: 'us-central1', success_ratio: 0.99 },
+      { time: now, region: 'us-central1', success_ratio: 1 },
+      { time: now - 60_000, region: 'europe-west4', success_ratio: 0.01 },
+      { time: now, region: 'europe-west4', success_ratio: 0.01 },
+      { time: now - 60_000, region: 'asia-east1', success_ratio: 0.05 },
+      { time: now, region: 'asia-east1', success_ratio: 0.05 },
     ]),
   ];
 
@@ -86,10 +107,31 @@ test('status page rolls pool outcomes up to regions beside the history graph', (
   const regionLabel = within(provisioning).getByText('us-east5', { selector: 'code' });
   const regionRow = regionLabel.parentElement;
   expect(regionRow).not.toBeNull();
-  expect(regionRow).toHaveTextContent('80%');
-  expect(regionRow).toHaveTextContent('8/10');
-  expect(within(provisioning).getByRole('img', { name: '24 hour status history' })).toBeInTheDocument();
+  expect(regionRow).toHaveTextContent('2%');
+  expect(regionRow).toHaveTextContent('2/100');
+  const highestRegionRow = within(provisioning).getByText('us-central1', { selector: 'code' }).parentElement;
+  expect(highestRegionRow).toHaveTextContent('100%');
+  expect(highestRegionRow).toHaveTextContent('100/100');
+  const lowestRegionRow = within(provisioning).getByText('europe-west4', { selector: 'code' }).parentElement;
+  expect(lowestRegionRow).toHaveTextContent('1%');
+  expect(lowestRegionRow).toHaveTextContent('1/100');
+
+  const chart = within(provisioning).getByRole('img', { name: '24 hour status history' });
+  expect(within(chart).getByText('1%')).toBeInTheDocument();
+  expect(within(chart).getByText('5%')).toBeInTheDocument();
+  expect(within(chart).getByText('95%')).toBeInTheDocument();
+  expect(within(chart).getByText('99%')).toBeInTheDocument();
+  const tickY = (label: string) => Number(within(chart).getByText(label).getAttribute('y'));
+  const lowTailGap = Math.abs(tickY('1%') - tickY('5%'));
+  const centerGap = Math.abs(tickY('5%') - tickY('50%'));
+  expect(lowTailGap / centerGap).toBeGreaterThan(0.4);
+
   expect(within(provisioning).queryByText('fleet')).not.toBeInTheDocument();
-  expect(within(provisioning).getAllByText('us-east5')).toHaveLength(2);
+  const chartSeries = within(provisioning).getByRole('list', { name: 'Status history series' });
+  expect(within(chartSeries).getByText('us-east5')).toBeInTheDocument();
+  expect(within(chartSeries).getByText('asia-east1')).toBeInTheDocument();
+  expect(within(chartSeries).getByText('us-central1')).toBeInTheDocument();
+  expect(within(chartSeries).getByText('europe-west4')).toBeInTheDocument();
+  expect(within(provisioning).getByText('trailing 3 hour window · logit scale')).toBeInTheDocument();
   expect(within(provisioning).queryByText('us-east5-a')).not.toBeInTheDocument();
 });
