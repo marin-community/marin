@@ -56,7 +56,11 @@ from iris.test_util import FakeStatsTable
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import func, insert, select
 from sqlalchemy import update as sa_update
-from tests.cluster.controller._test_support import ControllerTestState, create_attempt_for_test
+from tests.cluster.controller._test_support import (
+    ControllerTestState,
+    create_attempt_for_test,
+    submit_job_in_tx,
+)
 from tests.cluster.controller.transition_driver import (
     WorkerTaskUpdates,
     apply_task_observations,
@@ -3867,7 +3871,7 @@ def test_resubmit_invalidates_run_template_cache(state):
 
     req_v1 = make_job_request("my-job", task_image="image:v1")
     with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=job_id, request=req_v1, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=job_id, request=req_v1, ts=Timestamp.now())
 
     # Warm the cache by reading the first submission's template.
     with state._db.read_snapshot() as snap:
@@ -3884,7 +3888,7 @@ def test_resubmit_invalidates_run_template_cache(state):
     # Resubmit with a different payload under the same job name.
     req_v2 = make_job_request("my-job", task_image="image:v2")
     with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=job_id, request=req_v2, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=job_id, request=req_v2, ts=Timestamp.now())
 
     # The cache must return the new template, not the old one.
     with state._db.read_snapshot() as snap:
@@ -3935,7 +3939,7 @@ def _submit_job_direct(
         max_task_failures=max_task_failures,
     )
     with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=job_id, request=request, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=job_id, request=request, ts=Timestamp.now())
     return [job_id.task(idx) for idx in range(replicas)]
 
 

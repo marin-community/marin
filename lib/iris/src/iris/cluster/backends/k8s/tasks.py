@@ -60,12 +60,11 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     COSCHEDULE_NVLINK_DOMAIN_SLICED,
     CW_LABEL_LEAFGROUP,
     CW_LABEL_NVLINK_DOMAIN,
-    NVL72_GPUS_PER_NODE,
     RACK_SIZE,
     SCHEDULABLE_RACK_NODES,
     KueueTopologyBinding,
     TopologyMode,
-    balanced_rack_slice_size,
+    gpu_gang_rack_slice_size,
 )
 from iris.cluster.platforms.k8s.service import K8sService
 from iris.cluster.platforms.k8s.types import (
@@ -587,6 +586,13 @@ def _build_init_container_spec(
             "command": ["python", "-c", bundle_script],
             "env": init_env,
             "volumeMounts": init_mounts,
+            # _init_container_failure reports this container's terminated message, and
+            # bounds it because it can be a full log tail — but with the default File
+            # policy the kubelet never writes one, so every stage-workdir failure
+            # degraded to a bare "Init:Error stage-workdir". An image built for the
+            # wrong CPU architecture is the worst case: the whole cause is the runtime's
+            # "exec format error", which reaches the log and nothing else.
+            "terminationMessagePolicy": "FallbackToLogsOnError",
         }
     ]
 
@@ -727,20 +733,15 @@ def _topology_request_annotations(
     unschedulable whenever a rack is short a node — this raises instead (the CLI never emits it;
     the guard catches a programmatic or stale client).
     SLICE_REQUIRED partitions the gang into balanced per-rack slices (size from
-    ``balanced_rack_slice_size``), each hard-bound to one nvlink.domain, and pairs a soft coarse
+    ``gpu_gang_rack_slice_size``), each hard-bound to one nvlink.domain, and pairs a soft coarse
     preference so the racks cluster on the IB fabric. The one-slice-per-rack guarantee holds only
     for node-saturating pods and a gang that splits into equal, more-than-half-a-rack slices;
     both are validated here.
     """
     node_label = binding.node_label
     if binding.mode is TopologyMode.SLICE_REQUIRED:
-        if gpu_count != NVL72_GPUS_PER_NODE:
-            raise PodManifestError(
-                f"Coscheduled task {task_ref!r} uses sliced level {group_by!r}, which requires node-saturating "
-                f"NVL72 pods ({NVL72_GPUS_PER_NODE} GPUs each) so one slice fills whole nodes; got gpu_count={gpu_count}"
-            )
         try:
-            slice_size = balanced_rack_slice_size(num_tasks)
+            slice_size = gpu_gang_rack_slice_size(gpu_count, num_tasks)
         except ValueError as e:
             raise PodManifestError(
                 f"Coscheduled task {task_ref!r} on sliced level {group_by!r}: {e}. Round the gang size, or set "
@@ -990,10 +991,12 @@ def _build_pod_manifest(
     if run_req.HasField("timeout") and run_req.timeout.milliseconds > 0 and not is_gang:
         spec["activeDeadlineSeconds"] = max(1, run_req.timeout.milliseconds // 1000)
 
-    # Stamp the native k8s PriorityClass so the scheduler knows how to
-    # preempt/queue this pod relative to others. UNSPECIFIED defaults to
-    # INTERACTIVE (the normal user work band). A band with no configured
-    # class name leaves priorityClassName unset (cluster default applies).
+    # Stamp the native k8s PriorityClass so the scheduler knows how to preempt/queue this
+    # pod relative to others. Dispatch resolves the band from job_config and re-stamps the
+    # attempt before building this request, so ``priority`` is a real band in production.
+    # The INTERACTIVE floor keeps a request built outside that path (an unset field reads
+    # as INHERIT) from silently dropping to the cluster default. A band with no configured
+    # class name leaves priorityClassName unset.
     effective_band = run_req.priority or job_pb2.PRIORITY_BAND_INTERACTIVE
     priority_class_name = config.priority_class_names.get(effective_band)
     if priority_class_name:

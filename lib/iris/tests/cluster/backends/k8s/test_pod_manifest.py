@@ -945,6 +945,22 @@ def test_init_container_created_when_bundle_id_present():
     assert extra_volumes == []
 
 
+def test_init_container_records_its_log_tail_on_failure():
+    """_init_container_failure reports the terminated message, which the default File
+    policy never populates — so a stage-workdir crash surfaced with no cause at all."""
+    req = make_run_req("/my-job/task-0")
+    req.bundle_id = "bundle-abc"
+
+    init_containers, _, _ = _build_init_container_spec(
+        req,
+        "iris-my-job-task-0-abcd1234-0",
+        "myrepo/iris:latest",
+        "http://ctrl:8080",
+    )
+
+    assert init_containers[0]["terminationMessagePolicy"] == "FallbackToLogsOnError"
+
+
 def test_no_init_container_when_no_bundle_or_files():
     """No init containers when neither bundle_id nor workdir_files are set."""
     req = make_run_req("/my-job/task-0")
@@ -1119,7 +1135,7 @@ def test_build_pdb_manifest_selector_and_cleanup_labels():
 
 def _cosched_req(task_id: str, attempt_id: int = 0, num_tasks: int = 64, group_by: str = "leafgroup", priority=None):
     if priority is None:
-        priority = job_pb2.PRIORITY_BAND_UNSPECIFIED
+        priority = job_pb2.PRIORITY_BAND_INHERIT
     return make_run_req(
         task_id,
         attempt_id=attempt_id,
@@ -1393,3 +1409,14 @@ def test_kueue_topologies_override_config():
     annotations = manifest["metadata"]["annotations"]
     assert annotations[_KUEUE_REQUIRED_TOPOLOGY] == "rack.example.com/pod"
     assert _KUEUE_PREFERRED_TOPOLOGY not in annotations
+
+
+def test_pod_manifest_floors_an_unset_band_at_interactive():
+    """An unset band takes the interactive class, not the cluster default.
+
+    Dispatch always stamps a real band, so this is the floor for a request built outside
+    that path — without it an unset field would leave the pod unranked against its peers.
+    """
+    req = make_run_req("/test-job/0", priority=job_pb2.PRIORITY_BAND_INHERIT)
+    manifest = _build_pod_manifest(req, pod_config())
+    assert manifest["spec"]["priorityClassName"] == "iris-interactive"

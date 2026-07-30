@@ -252,6 +252,51 @@ groups:
               conditions:
                 - evaluator: { type: gt, params: [0] }
 
+      - uid: k8s-arch-mismatch-image
+        title: ArchMismatchImageExecuted
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.cluster }}: containers from {{ $labels.image }} died instantly on {{ $labels.node }}"
+          description: >-
+            Containers died the way an image built for the wrong CPU architecture dies.
+            Check the evidence column on /k8s/arch_mismatch: "message" means the kubelet
+            recorded the runtime's "exec format error" and the mismatch is confirmed,
+            while "signature" means only exit 255 in under a second, which an unrelated
+            instant failure also produces. The runbook has the confirmation commands.
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md#image-architecture-mismatch
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: k8s
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: k8s }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/arch_mismatch
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: node, text: node, type: string }
+                - { selector: image, text: image, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
       - uid: k8s-gpu-rack-trays-low
         title: GpuRackTraysBelowMinimum
         condition: C

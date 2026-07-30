@@ -9,15 +9,18 @@
 import { ref, watch, type Ref } from 'vue'
 import { apiGet } from '@/composables/useApi'
 import type { SampleRow, SamplesResponse } from '@/types/api'
+import type { SampleFilter } from '@/utils/samples'
 
-export type SampleFilter = 'all' | 'correct' | 'incorrect'
+export type { SampleFilter }
+
+type SampleCounts = { all: number; correct: number; incorrect: number; ungraded: number }
 
 const PAGE_SIZE = 25
 const PREFETCH_MARGIN = 5
 
 export interface SamplePager {
   total: Ref<number>
-  counts: Ref<{ all: number; correct: number; incorrect: number } | null>
+  counts: Ref<SampleCounts | null>
   primaryMetric: Ref<string | null>
   loading: Ref<boolean>
   error: Ref<string | null>
@@ -27,7 +30,7 @@ export interface SamplePager {
 
 export function useSamplePager(runId: string, task: Ref<string>, filter: Ref<SampleFilter>): SamplePager {
   const total = ref(0)
-  const counts = ref<{ all: number; correct: number; incorrect: number } | null>(null)
+  const counts = ref<SampleCounts | null>(null)
   const primaryMetric = ref<string | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)

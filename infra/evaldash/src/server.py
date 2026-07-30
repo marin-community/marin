@@ -7,12 +7,14 @@ Serves a bundled Vue SPA plus a small JSON API over the eval run records. Record
 the canonical per-run JSON written to ``gs://marin-eval-metadata/runs/<run_id>/record.json``
 and indexed into CloudSQL Postgres.
 
-A background task ingests the GCS records on startup and every ``EVALDASH_INGEST_INTERVAL``
-seconds (default 300), upserting each into Postgres. Reads are served through a
-``RecordStore``, backed by Postgres: the service fails to start if no DB is configured. Each
-ingest pass also refreshes an in-memory snapshot the matrix/meta/history views read from,
-since ``results_db`` exposes no aggregate query for them; a prefix whose listing fails keeps
-its last successfully-listed records in that snapshot rather than dropping out of it.
+A background task ingests the records on startup and every ``EVALDASH_INGEST_INTERVAL`` seconds
+(default 300). Reads are served through a ``RecordStore`` selected by ``EVALDASH_STORE``: the
+production ``postgres`` store upserts each record into Cloud SQL and fails fast if no DB is
+configured, while the ``local`` store serves entirely from the object-store record snapshot with
+no database (for development against a ``RECORDS_PREFIXES`` directory). Both keep an in-memory
+snapshot the matrix/meta/groups/history views read from, since ``results_db`` exposes no aggregate
+query for them; a prefix whose listing fails keeps its last successfully-listed records in that
+snapshot rather than dropping out of it.
 
 ``/api/status`` reports each prefix's last-probe health, the active store, and the ingest
 cadence; ``POST /api/refresh`` runs one ingest pass immediately, serialised with the loop.
@@ -31,25 +33,28 @@ and finelog RPC packages are copied as directories; ``results_db`` lives beside 
 ``infra/evaldash/src``.
 """
 
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import logging
 import os
 import threading
 from collections.abc import AsyncIterator
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Protocol
 
 import samples
 import sqlalchemy
 import uvicorn
-from cluster import ClusterGateway
 from marin.evaluation.records import (
     CW_RECORDS_PREFIX,
     DEFAULT_RECORDS_PREFIX,
     EvalRunRecord,
-    list_records,
+    RecordParseFailure,
+    read_records,
 )
 from metrics import build_matrix, build_meta, record_score
 from results_db import (
@@ -78,6 +83,9 @@ RECORDS_PREFIXES = tuple(
     if part.strip()
 )
 INGEST_INTERVAL_SECONDS = int(os.environ.get("EVALDASH_INGEST_INTERVAL", "300"))
+# Which record store backs reads: "postgres" (production, requires the eval DB) or "local"
+# (development, serves entirely from the RECORDS_PREFIXES record snapshot with no database).
+STORE_MODE = os.environ.get("EVALDASH_STORE", "postgres").strip().lower()
 DEFAULT_RUNS_LIMIT = 200
 MAX_RUNS_LIMIT = 1000
 DEFAULT_LOG_TAIL = 200
@@ -96,31 +104,70 @@ IAP_USER_PREFIX = "accounts.google.com:"
 
 @dataclass(frozen=True)
 class StoreInfo:
-    """The store backing reads: always Postgres, plus its instance/database."""
+    """Which store serves reads and, for Postgres, the instance/database behind it."""
 
     backend: str
-    instance: str
-    database: str
+    instance: str | None
+    database: str | None
+
+
+def record_to_row(record: EvalRunRecord) -> dict:
+    """Flatten one record to the canonical API run-row shape (ISO ``created_at``, task list, jobs map).
+
+    The single definition of that shape, so the run list is identical whichever store produced it.
+    """
+    return {
+        "run_id": record.run_id,
+        "group_id": record.group_id,
+        "created_at": record.created_at,
+        "version": record.version,
+        "user_name": record.user,
+        "model_name": record.model.name,
+        "model_location": record.model.location,
+        "eval_name": record.evaluation.name,
+        "mechanism": record.evaluation.mechanism,
+        "backend": record.model.backend,
+        "platform": record.hardware.platform,
+        "accelerator": record.hardware.accelerator,
+        "region": record.hardware.region_or_cluster,
+        "status": record.status.value,
+        "results_path": record.results_path,
+        "git_sha": record.provenance.git_sha,
+        "image_digest": record.provenance.eval_runtime,
+        "error": record.error,
+        "tasks": [task.name for task in record.evaluation.tasks],
+        "jobs": dict(record.jobs),
+    }
+
+
+def _group_sibling_row(record: EvalRunRecord) -> dict:
+    """One sibling run in a group, for the run-detail group panel."""
+    return {
+        "run_id": record.run_id,
+        "eval_name": record.evaluation.name,
+        "model_name": record.model.name,
+        "status": record.status.value,
+        "created_at": record.created_at,
+    }
 
 
 class RecordStore:
-    """Serves the run list and run details from the indexed Postgres tables; upserts on refresh.
+    """In-memory snapshot of eval records plus the read views the API serves over it.
 
-    ``get_record`` reads the durable ``record`` jsonb from Postgres -- the same table the run list
-    is served from -- so a run indexed there but absent from the latest ingest snapshot (its source
-    prefix failed to list this cycle) still resolves. ``matrix``, ``meta``, and ``history`` read an
-    in-memory snapshot instead, since ``results_db`` exposes no aggregate query for them; the lock
-    guards its swap against the ingest worker thread.
+    The base serves every read from the snapshot the ingest loop swaps wholesale each cycle (run
+    list, run detail, group siblings, matrix, meta, groups, history) and holds the archived-model
+    set in memory. :class:`MemoryRecordStore` uses these directly for local, offline runs;
+    :class:`PgRecordStore` overrides the run list, run detail, group siblings, refresh, and archive
+    state to read the durable Postgres index instead. The lock guards the snapshot swap against the
+    ingest worker thread.
     """
 
-    backend = "postgres"
+    backend = "memory"
 
-    def __init__(self, engine: Engine, instance: str, database: str) -> None:
-        self._engine = engine
-        self._instance = instance
-        self._database = database
+    def __init__(self) -> None:
         self._records: list[EvalRunRecord] = []
         self._by_id: dict[str, EvalRunRecord] = {}
+        self._archived: set[str] = set()
         self._lock = threading.Lock()
 
     def _set_snapshot(self, records: list[EvalRunRecord]) -> None:
@@ -134,19 +181,29 @@ class RecordStore:
             return self._records, self._by_id
 
     def store_info(self) -> StoreInfo:
-        return StoreInfo(backend=self.backend, instance=self._instance, database=self._database)
-
-    def get_record(self, run_id: str) -> dict | None:
-        stmt = sqlalchemy.select(eval_runs.c.record).where(eval_runs.c.run_id == run_id)
-        with self._engine.begin() as conn:
-            row = conn.execute(stmt).first()
-        return row[0] if row is not None else None
+        return StoreInfo(backend=self.backend, instance=None, database=None)
 
     def refresh(self, records: list[EvalRunRecord]) -> None:
+        """Absorb a fresh record listing. The base only swaps the snapshot; Postgres also upserts."""
         self._set_snapshot(records)
-        for record in records:
-            upsert_record(self._engine, record)
-        logger.info("postgres store upserted %d records", len(records))
+        logger.info("memory store refreshed: %d records", len(records))
+
+    def archived_models(self) -> set[str]:
+        """Model names hidden from the headline matrix. In-memory in the base; a table in Postgres."""
+        with self._lock:
+            return set(self._archived)
+
+    def set_model_archived(self, model_name: str, archived: bool, updated_by: str | None) -> None:
+        with self._lock:
+            if archived:
+                self._archived.add(model_name)
+            else:
+                self._archived.discard(model_name)
+
+    def get_record(self, run_id: str) -> dict | None:
+        _records, by_id = self._snapshot()
+        record = by_id.get(run_id)
+        return record.model_dump(mode="json", by_alias=True) if record is not None else None
 
     def fetch_runs(
         self,
@@ -158,32 +215,32 @@ class RecordStore:
         group: str | None = None,
         limit: int = DEFAULT_RUNS_LIMIT,
     ) -> list[dict]:
-        rows = fetch_runs(
-            self._engine, model=model, eval_name=eval_name, user=user, status=status, group=group, limit=limit
-        )
-        # The task list and jobs map live in the record jsonb, so enrich each row from the cache.
-        _records, by_id = self._snapshot()
-        for row in rows:
-            record = by_id.get(row.get("run_id"))
-            row["tasks"] = [task.name for task in record.evaluation.tasks] if record else []
-            row["jobs"] = dict(record.jobs) if record else {}
-        return rows
+        records, _by_id = self._snapshot()
+        rows = [record_to_row(record) for record in records]
+        rows = [
+            row
+            for row in rows
+            if (model is None or row["model_name"] == model)
+            and (eval_name is None or row["eval_name"] == eval_name)
+            and (user is None or row["user_name"] == user)
+            and (status is None or row["status"] == status)
+            and (group is None or row["group_id"] == group)
+        ]
+        rows.sort(key=lambda row: row["created_at"] or "", reverse=True)
+        return rows[:limit]
 
     def matrix(self, include_archived: bool = False) -> dict:
         """The model x eval matrix over the snapshot. Archived models are dropped unless requested;
         when included, their rows carry ``archived: true`` so the UI can style them apart."""
         records, _by_id = self._snapshot()
-        archived = fetch_archived_models(self._engine)
+        archived = self.archived_models()
         if not include_archived:
             records = [record for record in records if record.model.name not in archived]
         return build_matrix(records, frozenset(archived))
 
     def meta(self) -> dict:
         records, _by_id = self._snapshot()
-        return build_meta(records, frozenset(fetch_archived_models(self._engine)))
-
-    def set_model_archived(self, model_name: str, archived: bool, updated_by: str | None) -> None:
-        set_model_archived(self._engine, model_name, archived, updated_by)
+        return build_meta(records, frozenset(self.archived_models()))
 
     def groups(
         self, *, model: str | None = None, user: str | None = None, limit: int = DEFAULT_RUNS_LIMIT
@@ -252,6 +309,90 @@ class RecordStore:
         return points
 
     def group_siblings(self, group_id: str, exclude_run_id: str) -> list[dict]:
+        records, _by_id = self._snapshot()
+        siblings = [
+            _group_sibling_row(record)
+            for record in records
+            if record.group_id == group_id and record.run_id != exclude_run_id
+        ]
+        siblings.sort(key=lambda sibling: sibling["created_at"] or "", reverse=True)
+        return siblings
+
+
+class MemoryRecordStore(RecordStore):
+    """Serves every view from the object-store record snapshot, with no database.
+
+    Used for local development and offline runs (``EVALDASH_STORE=local``): records listed from
+    ``RECORDS_PREFIXES`` fill the snapshot, archive state lives in memory, and there is no Postgres
+    index. The base class already implements every read from the snapshot, so this is the base
+    behaviour under an explicit, intentional name.
+    """
+
+    backend = "memory"
+
+
+class PgRecordStore(RecordStore):
+    """Serves the run list and run details from the indexed Postgres tables; upserts on refresh.
+
+    ``get_record`` reads the durable ``record`` jsonb from Postgres -- the same table the run list
+    is served from -- so a run indexed there but absent from the latest ingest snapshot (its source
+    prefix failed to list this cycle) still resolves. ``matrix``, ``meta``, ``groups``, and
+    ``history`` inherit the base's snapshot reads, since ``results_db`` exposes no aggregate query.
+    """
+
+    backend = "postgres"
+
+    def __init__(self, engine: Engine, instance: str, database: str) -> None:
+        super().__init__()
+        self._engine = engine
+        self._instance = instance
+        self._database = database
+
+    def store_info(self) -> StoreInfo:
+        return StoreInfo(backend=self.backend, instance=self._instance, database=self._database)
+
+    def refresh(self, records: list[EvalRunRecord]) -> None:
+        self._set_snapshot(records)
+        for record in records:
+            upsert_record(self._engine, record)
+        logger.info("postgres store upserted %d records", len(records))
+
+    def archived_models(self) -> set[str]:
+        return fetch_archived_models(self._engine)
+
+    def set_model_archived(self, model_name: str, archived: bool, updated_by: str | None) -> None:
+        set_model_archived(self._engine, model_name, archived, updated_by)
+
+    def get_record(self, run_id: str) -> dict | None:
+        stmt = sqlalchemy.select(eval_runs.c.record).where(eval_runs.c.run_id == run_id)
+        with self._engine.begin() as conn:
+            row = conn.execute(stmt).first()
+        return row[0] if row is not None else None
+
+    def fetch_runs(
+        self,
+        *,
+        model: str | None = None,
+        eval_name: str | None = None,
+        user: str | None = None,
+        status: str | None = None,
+        group: str | None = None,
+        limit: int = DEFAULT_RUNS_LIMIT,
+    ) -> list[dict]:
+        rows = fetch_runs(
+            self._engine, model=model, eval_name=eval_name, user=user, status=status, group=group, limit=limit
+        )
+        # The task list and jobs map live in the record jsonb, so enrich each row from the cache.
+        _records, by_id = self._snapshot()
+        for row in rows:
+            record = by_id.get(row.get("run_id"))
+            row["tasks"] = [task.name for task in record.evaluation.tasks] if record else []
+            row["jobs"] = dict(record.jobs) if record else {}
+            # version lives only in the record jsonb, not an eval_runs column, so fill it from the cache.
+            row["version"] = record.version if record else None
+        return rows
+
+    def group_siblings(self, group_id: str, exclude_run_id: str) -> list[dict]:
         stmt = (
             sqlalchemy.select(
                 eval_runs.c.run_id,
@@ -271,18 +412,27 @@ class RecordStore:
 
 
 def create_store() -> RecordStore:
-    """Connect to the configured eval DB and build its store; the DB is required to start.
+    """Pick the store at boot from ``EVALDASH_STORE`` (default ``postgres``).
 
-    Raises if ``EVAL_DB_*`` resolves no password or the instance is unreachable -- the dashboard
-    has no reads without Postgres, so it must fail fast at boot rather than serve degraded.
+    ``postgres`` requires a reachable eval DB and fails fast without one -- the production service
+    has no reads without its index. ``local`` serves entirely from the object-store record snapshot
+    with no database, for development against a ``RECORDS_PREFIXES`` directory.
     """
+    if STORE_MODE == "local":
+        logger.info("EVALDASH_STORE=local: serving from the record snapshot, no database")
+        return MemoryRecordStore()
+    if STORE_MODE != "postgres":
+        raise RuntimeError(f"unknown EVALDASH_STORE={STORE_MODE!r}; expected 'postgres' or 'local'")
     config = resolve_db_config()
     if config is None:
-        raise RuntimeError("eval DB unavailable: set EVAL_DB_PASSWORD or grant access to EVAL_DB_PASSWORD_SECRET")
+        raise RuntimeError(
+            "eval DB unavailable: set EVAL_DB_PASSWORD, grant access to EVAL_DB_PASSWORD_SECRET, "
+            "or run with EVALDASH_STORE=local"
+        )
     engine = connect_engine(config.instance, config.db, config.user, config.password)
     ensure_schema(engine)
     logger.info("connected to eval DB %s/%s", config.instance, config.db)
-    return RecordStore(engine, instance=config.instance, database=config.db)
+    return PgRecordStore(engine, instance=config.instance, database=config.db)
 
 
 # --------------------------------------------------------------------------------------
@@ -307,6 +457,9 @@ class PrefixProbe:
     last_success_time: str | None = None
     record_count: int | None = None
     error: str | None = None
+    parse_failures: list[RecordParseFailure] = field(default_factory=list)
+    """Records under this prefix that were found but failed to parse on the last successful listing --
+    dropped from the snapshot and surfaced here rather than only logged. Empty when all parsed."""
 
 
 class Ingestor:
@@ -332,13 +485,17 @@ class Ingestor:
 
     async def run_once(self) -> None:
         """Run one full ingest pass, serialised against any other pass via ``_lock``."""
+        if not self._prefixes:
+            # No roots to scan: leave the (externally populated) store untouched rather than
+            # refreshing it to empty.
+            return
         async with self._lock:
             records: list[EvalRunRecord] = []
             for prefix in self._prefixes:
                 probe = self._probes[prefix]
                 probe.last_probe_time = _utcnow_iso()
                 try:
-                    found = await asyncio.to_thread(list_records, prefix)
+                    found, failures = await asyncio.to_thread(read_records, prefix)
                 except Exception as exc:
                     # One unreachable store (missing CW keys, transient outage) must not hide the
                     # rest, and must not drop this prefix's previously-ingested runs from the
@@ -349,14 +506,17 @@ class Ingestor:
                     continue
                 probe.last_success_time = probe.last_probe_time
                 probe.record_count = len(found)
+                probe.parse_failures = failures
                 probe.error = None
-                logger.info("ingest: %d records from %s", len(found), prefix)
+                logger.info("ingest: %d records (%d unparseable) from %s", len(found), len(failures), prefix)
                 self._last_good[prefix] = found
                 records.extend(found)
             await asyncio.to_thread(self._store.refresh, records)
             self.last_pass_time = _utcnow_iso()
 
     async def run_loop(self) -> None:
+        if not self._prefixes:
+            return  # ingestion disabled; nothing to poll
         while True:
             try:
                 await self.run_once()
@@ -446,7 +606,7 @@ def _parse_int(raw: str | None, *, default: int, low: int, high: int) -> int:
     return max(low, min(value, high))
 
 
-def _collect_job_status(gateway: ClusterGateway, jobs: dict[str, str]) -> list[dict]:
+def _collect_job_status(gateway: ClusterGatewayLike, jobs: dict[str, str]) -> list[dict]:
     """Live iris job status for each pipeline role in a record's ``jobs`` map, order preserved."""
     return [{"role": role, "job_path": path, **gateway.job_status(path)} for role, path in jobs.items()]
 
@@ -465,6 +625,16 @@ def _status_rollup(statuses: set[str]) -> str:
     return "mixed"
 
 
+def _run_headline(record: dict) -> dict | None:
+    """The run's overall grade for the detail header: its rolled-up primary metric as
+    ``{value, metric, stderr}``, or None when nothing scored (an infra or eval failure that never
+    produced metrics)."""
+    score = record_score(EvalRunRecord.model_validate(record))
+    if score is None:
+        return None
+    return {"value": score.value, "metric": score.metric, "stderr": score.stderr}
+
+
 def _group_member(record: EvalRunRecord) -> dict:
     """One eval within a launch: its identity, status, and headline score for the expanded group row."""
     score = record_score(record)
@@ -479,9 +649,38 @@ def _group_member(record: EvalRunRecord) -> dict:
     }
 
 
-def create_app(store: RecordStore, dist: Path, gateway: ClusterGateway) -> Starlette:
-    """Build the Starlette app over a store, the built SPA directory, and the cluster gateway."""
-    ingestor = Ingestor(store, RECORDS_PREFIXES, INGEST_INTERVAL_SECONDS)
+class ClusterGatewayLike(Protocol):
+    """The live-status surface the run-detail endpoints call: real Iris/finelog, or a local no-op."""
+
+    def job_status(self, job_path: str) -> dict: ...
+
+    def fetch_logs(self, job_path: str, *, max_lines: int, substring: str | None) -> dict: ...
+
+
+class NullClusterGateway:
+    """Local-mode gateway: every live query degrades to unreachable, exactly as the real gateway does
+    off-VPC, without any GCE discovery or RPC. Keeps run-detail working with no cluster access."""
+
+    def job_status(self, job_path: str) -> dict:
+        return {"reachable": False, "error": "local mode: cluster unavailable", "job": None, "tasks": []}
+
+    def fetch_logs(self, job_path: str, *, max_lines: int, substring: str | None) -> dict:
+        return {"reachable": False, "error": "local mode: cluster unavailable", "source": "", "entries": []}
+
+
+def create_app(
+    store: RecordStore,
+    dist: Path,
+    gateway: ClusterGatewayLike,
+    prefixes: tuple[str, ...] = RECORDS_PREFIXES,
+) -> Starlette:
+    """Build the Starlette app over a store, the built SPA directory, and the cluster gateway.
+
+    ``prefixes`` are the record roots the background ingestor scans; pass an empty tuple to disable
+    ingestion entirely (for a store populated out of band, e.g. tests or a one-shot screenshot run),
+    which keeps the app from ever reaching the remote defaults.
+    """
+    ingestor = Ingestor(store, prefixes, INGEST_INTERVAL_SECONDS)
 
     @contextlib.asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
@@ -513,7 +712,7 @@ def create_app(store: RecordStore, dist: Path, gateway: ClusterGateway) -> Starl
         record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
         if record is None:
             return JSONResponse({"error": "unknown run_id"}, status_code=404)
-        return JSONResponse(record)
+        return JSONResponse({**record, "headline": _run_headline(record)})
 
     async def api_run_jobs(request: Request) -> JSONResponse:
         record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
@@ -656,11 +855,24 @@ def create_app(store: RecordStore, dist: Path, gateway: ClusterGateway) -> Starl
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
-    configure_coreweave_s3()
     store = create_store()
-    app = create_app(store, _dashboard_dist(), ClusterGateway())
+    gateway: ClusterGatewayLike
+    if STORE_MODE == "local":
+        # Local mode reads records straight from RECORDS_PREFIXES and never reaches the cluster or
+        # the CoreWeave object store, so skip the CW S3 credential setup and the live gateway.
+        gateway = NullClusterGateway()
+    else:
+        # Production only: the live gateway pulls in the iris/finelog connect clients, which local
+        # mode neither has nor needs. Import it lazily so local dev runs without those deps.
+        from cluster import ClusterGateway  # noqa: PLC0415
+
+        configure_coreweave_s3()
+        gateway = ClusterGateway()
+    app = create_app(store, _dashboard_dist(), gateway)
     port = int(os.environ.get("PORT", "8080"))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    # Cloud Run needs the container to listen on all interfaces; local dev binds loopback only.
+    host = os.environ.get("EVALDASH_HOST", "127.0.0.1" if STORE_MODE == "local" else "0.0.0.0")
+    uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == "__main__":

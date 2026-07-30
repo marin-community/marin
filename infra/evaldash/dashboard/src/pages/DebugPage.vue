@@ -4,7 +4,6 @@ import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatRelativeAge, formatTimestamp } from '@/utils/formatting'
 import type { Status } from '@/types/api'
-import RefreshButton from '@/components/shared/RefreshButton.vue'
 
 const { data, loading, error, refresh } = useApi<Status>(() => 'api/status')
 
@@ -14,12 +13,12 @@ onViewRefresh(refresh)
 
 <template>
   <section>
-    <div class="flex items-baseline justify-between mb-4">
-      <div>
-        <h2 class="text-lg font-semibold">Status</h2>
-        <p class="text-xs text-text-muted mt-0.5">Ingest health per records prefix and the active data source.</p>
-      </div>
-      <RefreshButton />
+    <div class="mb-4">
+      <h2 class="text-lg font-semibold">Debug</h2>
+      <p class="text-xs text-text-muted mt-0.5">
+        Where records are scanned, the active data source, and any errors seen while ingesting. Use the
+        header Refresh to run an ingest pass now.
+      </p>
     </div>
 
     <div v-if="error" class="rounded border border-status-danger-border bg-status-danger-bg text-status-danger text-sm px-3 py-2 mb-4">
@@ -55,19 +54,22 @@ onViewRefresh(refresh)
       </div>
 
       <div>
-        <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Prefixes</h3>
-        <div class="space-y-2">
+        <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Prefixes scanned</h3>
+        <div class="rounded-lg border border-surface-border divide-y divide-surface-border-subtle">
           <div
             v-for="p in data.ingest.prefixes"
             :key="p.prefix"
-            class="rounded-lg border border-surface-border bg-surface p-3"
+            class="px-3 py-2"
           >
             <div class="flex items-center justify-between gap-3 flex-wrap">
               <code class="font-mono text-[13px] break-all">{{ p.prefix }}</code>
               <div class="flex items-center gap-4 text-xs text-text-secondary whitespace-nowrap">
                 <span :title="formatTimestamp(p.last_probe_time)">probed {{ formatRelativeAge(p.last_probe_time) }}</span>
                 <span>{{ p.record_count ?? '—' }} records</span>
-                <span v-if="!p.error" class="text-status-success">ok</span>
+                <span v-if="p.parse_failures.length" class="text-status-warning">
+                  {{ p.parse_failures.length }} skipped
+                </span>
+                <span v-else-if="!p.error" class="text-status-success">ok</span>
               </div>
             </div>
             <div
@@ -77,6 +79,18 @@ onViewRefresh(refresh)
             >
               {{ p.error }}
             </div>
+            <!-- Records found under this prefix that failed to parse: dropped from the snapshot, listed
+                 here so a schema drift on old records is visible rather than silently swallowed. -->
+            <ul v-if="p.parse_failures.length" class="mt-2 space-y-1">
+              <li
+                v-for="f in p.parse_failures"
+                :key="f.path"
+                class="rounded border border-status-warning-border bg-status-warning-bg text-status-warning text-xs px-2 py-1"
+              >
+                <code class="font-mono break-all">{{ f.path }}</code>
+                <div class="text-text-secondary break-all">{{ f.error }}</div>
+              </li>
+            </ul>
           </div>
         </div>
       </div>

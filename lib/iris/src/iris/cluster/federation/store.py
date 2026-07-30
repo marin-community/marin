@@ -66,7 +66,9 @@ class HandoffSpec:
     peer_id: str
     owner_principal: str  # end-user friendly owner asserted to the peer (attribution)
     submitting_user: str  # authenticated principal the peer's allowlist gates on
-    request: controller_pb2.Controller.LaunchJobRequest  # normalized request, for job_config
+    # Normalized request, for job_config. Its priority_band is already resolved (never
+    # INHERIT), so the band the peer runs under survives the handoff.
+    request: controller_pb2.Controller.LaunchJobRequest
     # This handle's incarnation, letting the peer tell a replay from a new
     # submission reusing the id. "" only at admission time, before the store
     # mints one; every delivered spec carries the persisted handle's nonce.

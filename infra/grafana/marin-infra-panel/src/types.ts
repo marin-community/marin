@@ -1,4 +1,4 @@
-export type InfraPanelView = 'nightlies' | 'commits' | 'wandb';
+export type InfraPanelView = 'status' | 'nightlies' | 'commits' | 'wandb';
 
 export interface InfraPanelOptions {
   view: InfraPanelView;
@@ -43,4 +43,42 @@ export interface WandbPoint {
   value: number;
   reportTitle: string;
   reportUrl: string;
+}
+
+export interface WorkerRegion {
+  region: string;
+  healthy: number;
+  cpuMillicores: number;
+  memoryBytes: number;
+  tpuChips: number;
+}
+
+export interface ProvisioningRow {
+  scope: string;
+  collectedAt: number;
+  zone: string;
+  ready: number;
+  stockout: number;
+  error: number;
+  preempted: number;
+  outcomes: number;
+  successRatio?: number;
+  poolsPlacing: number;
+  poolsNoReadyOutcome: number;
+  latencyP50Seconds?: number;
+  latencyP95Seconds?: number;
+  windowHours?: number;
+}
+
+export interface ProvisioningRegion {
+  region: string;
+  ready: number;
+  outcomes: number;
+  successRatio: number;
+}
+
+export interface SeriesPoint {
+  time: number;
+  series: string;
+  value: number;
 }

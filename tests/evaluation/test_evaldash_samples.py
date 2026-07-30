@@ -42,7 +42,7 @@ def test_sample_reader_returns_typed_filtered_page(tmp_path) -> None:
         "tasks": [{"task": "arc", "files": 1}],
     }
     assert page.primary_metric == "acc_norm,none"
-    assert page.counts.model_dump() == {"all": 2, "correct": 1, "incorrect": 1}
+    assert page.counts.model_dump() == {"all": 2, "correct": 1, "incorrect": 1, "ungraded": 0}
     assert page.total == 1
     assert page.offset == 0
     assert page.limit == 1

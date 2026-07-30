@@ -24,18 +24,18 @@ export function CommitStrip({ frames, width, height }: Props) {
   const finalized = values.filter((row) => ['SUCCESS', 'FAILURE', 'ERROR'].includes(row.state)).length;
   const rate = latest.successRate === undefined ? '—' : `${Math.round(latest.successRate * 100)}%`;
   return (
-    <section className={css`width:${width}px;height:${height}px;overflow:hidden;color:${theme.colors.text.primary};padding:4px 8px;`} aria-label="Main branch build history">
-      <div className={css`display:flex;align-items:center;gap:8px;min-width:0;font-size:12px;`}>
+    <section className={css`width:${width}px;height:${height}px;overflow:hidden;color:${theme.colors.text.primary};padding:2px 4px;`} aria-label="Main branch build history">
+      <div className={css`display:flex;align-items:center;gap:8px;min-width:0;font-size:14px;`}>
         <a href={latest.url} target="_blank" rel="noreferrer" className={css`display:flex;align-items:center;gap:7px;min-width:0;flex:1;color:inherit;text-decoration:none;&:hover{text-decoration:underline;}`}>
           {latest.avatarUrl && <img src={latest.avatarUrl} alt="" className={css`width:22px;height:22px;border-radius:50%;`} />}
-          <span aria-hidden="true" className={css`color:${STATUS_COLORS[latest.state] ?? STATUS_COLORS.NONE};font-size:16px;`}>{latest.state === 'SUCCESS' ? '●' : latest.state === 'FAILURE' || latest.state === 'ERROR' ? '×' : '◷'}</span>
+          <span aria-hidden="true" className={css`color:${STATUS_COLORS[latest.state] ?? STATUS_COLORS.NONE};font-size:19px;`}>{latest.state === 'SUCCESS' ? '●' : latest.state === 'FAILURE' || latest.state === 'ERROR' ? '×' : '◷'}</span>
           <code>{latest.shortOid}</code>
           <span className={css`overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`}>{latest.headline}</span>
           <span className={css`color:${theme.colors.text.secondary};white-space:nowrap;`}>· {relativeTime(latest.committedAt)}</span>
         </a>
         <span className={css`color:${theme.colors.text.secondary};white-space:nowrap;`}>{rate} success over {finalized}</span>
       </div>
-      <div className={css`display:flex;gap:2px;margin-top:8px;height:${Math.max(12, height - 44)}px;`}>
+      <div className={css`display:flex;gap:2px;margin-top:5px;height:${Math.max(10, height - 36)}px;`}>
         {[...values].reverse().map((row) => (
           <a key={row.oid} href={row.url} target="_blank" rel="noreferrer" aria-label={`${row.shortOid}: ${row.state.toLowerCase()}, ${row.headline}, ${relativeTime(row.committedAt)}`} title={`${row.shortOid} · ${row.state.toLowerCase()} · ${row.headline}`} className={css`min-width:2px;flex:1;border-radius:2px;background:${STATUS_COLORS[row.state] ?? STATUS_COLORS.NONE};&:hover,&:focus-visible{outline:2px solid ${theme.colors.text.primary};outline-offset:1px;}`} />
         ))}
