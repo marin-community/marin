@@ -6,8 +6,8 @@
 Deploys this directory as an IAP-gated Cloud Run service through the reusable
 ``iac.gcp.cloud_run.CloudRunService`` component. The service's fixed shape — project,
 region, one warm instance for the background ingest loop, the CloudSQL connection, and
-the record bucket — lives here; who is admitted through IAP is stack config
-(``marin-evaldash:viewers``).
+the record bucket — lives here. The shared component admits the OpenAthena Workspace
+domain; additional IAP members are stack config (``marin-evaldash:viewers``).
 
 The image build context is the repo root (the runtime image copies the eval record/DB
 modules from ``lib/marin``), so ``build_context`` points there and ``dockerfile`` is the
@@ -50,7 +50,7 @@ DOCKERFILE = "infra/evaldash/Dockerfile"
 
 def main() -> None:
     config = pulumi.Config()
-    # IAM members admitted through IAP, e.g. group:marin@…; set with
+    # Additional IAM members admitted through IAP, e.g. group:marin@…; set with
     #   pulumi config set --path 'viewers[0]' group:someone@example.com
     viewers = config.get_object("viewers") or []
 

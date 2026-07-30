@@ -152,3 +152,7 @@ provisioning them.
 
 The stack uses the shared `marin-iac-key` KMS secrets provider. The operator needs
 `roles/cloudkms.cryptoKeyEncrypterDecrypter` on that key; no passphrase is used.
+
+The shared Cloud Run component admits the OpenAthena Workspace domain through IAP on every
+internal site. The stack's `viewers` list contains only additional accounts or groups needed
+by evaldash.

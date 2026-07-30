@@ -26,6 +26,7 @@ import pulumi_gcp as gcp
 # not the end user — is what invokes the service. People are admitted separately, through
 # IAP's httpsResourceAccessor role.
 IAP_SERVICE_AGENT = "serviceAccount:service-{project_number}@gcp-sa-iap.iam.gserviceaccount.com"
+OPENATHENA_IAP_MEMBER = "domain:openathena.ai"
 
 
 @dataclass(frozen=True)
@@ -96,10 +97,11 @@ class CloudRunServiceArgs:
     # account roles/secretmanager.secretAccessor on its secret; the component references the
     # secret and never creates it or holds its value.
     secrets: tuple[SecretEnv, ...] = ()
-    # People admitted through IAP. Each entry is a bare email ("alice@x.com"), a domain
-    # wildcard ("*@openathena.ai"), or an already-qualified IAM member ("group:eng@x.com").
-    # Each grant is its own resource, so re-running with a changed list updates only the
-    # added/removed grants — never the service.
+    # Additional people admitted through IAP beyond the organization-wide OpenAthena domain
+    # grant. Each entry is a bare email ("alice@x.com"), a domain wildcard ("*@example.com"),
+    # or an already-qualified IAM member ("group:eng@example.com"). Each grant is its own
+    # resource, so re-running with a changed list updates only the added/removed grants —
+    # never the service.
     iap_members: tuple[str, ...] = ()
     # OAuth client IDs IAP accepts as a programmatic-token audience, so a CLI or agent can
     # reach the service with a Google-signed ID token (browser desktop-login or a
@@ -131,6 +133,17 @@ def normalize_iap_member(entry: str) -> str:
     if "@" in entry:
         return f"user:{entry}"
     raise ValueError(f"cannot read IAP access entry {entry!r}: use an email, *@domain, or a prefixed IAM member")
+
+
+def iap_access_members(additional_members: tuple[str, ...]) -> tuple[str, ...]:
+    """Return the canonical IAP members for an internal Marin web service.
+
+    Every component-managed service admits the OpenAthena Workspace domain. Service
+    configuration supplies only deliberate exceptions, such as a personal Google account or
+    an automation service account.
+    """
+    members = (OPENATHENA_IAP_MEMBER, *(normalize_iap_member(member) for member in additional_members))
+    return tuple(dict.fromkeys(members))
 
 
 def _role_slug(role: str) -> str:
@@ -368,8 +381,9 @@ class CloudRunService(pulumi.ComponentResource):
         )
 
         # IAP invokes the service as its own service agent; only that agent gets run.invoker.
-        # People are admitted separately through IAP (httpsResourceAccessor); an empty
-        # `iap_members` leaves the service reachable by nobody until access is granted.
+        # People are admitted separately through IAP (httpsResourceAccessor). The shared
+        # organization grant keeps every internal site consistent; `iap_members` adds only
+        # service-specific exceptions.
         project_number = gcp.organizations.get_project(
             project_id=args.project, opts=pulumi.InvokeOptions(provider=gcp_provider)
         ).number
@@ -382,8 +396,7 @@ class CloudRunService(pulumi.ComponentResource):
             member=IAP_SERVICE_AGENT.format(project_number=project_number),
             opts=child,
         )
-        for raw_member in args.iap_members:
-            member = normalize_iap_member(raw_member)
+        for member in iap_access_members(args.iap_members):
             gcp.iap.WebCloudRunServiceIamMember(
                 f"iap-access-{resource_slug(member)}",
                 project=args.project,
