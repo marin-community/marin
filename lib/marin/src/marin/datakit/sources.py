@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from functools import cache
 
 from marin.datakit.canonical.safety_pretraining import safety_pretraining_normalize_steps
+from marin.datakit.download.agenttrove import agenttrove_normalize_steps
 from marin.datakit.download.biocollection import biocollection_normalize_steps
 from marin.datakit.download.biodiversity import biodiversity_normalize_steps
 from marin.datakit.download.climblab_ja import climblab_ja_normalize_steps
@@ -149,6 +150,12 @@ def all_sources() -> dict[str, DatakitSource]:
     # returning ``tuple[StepSpec, ...]``; the registry pairs the chain with
     # a rough token count.
     single_sources: tuple[_SourceRow, ...] = (
+        # Exact count from the tokenized cache .stats.json, measured with
+        # marin-community/marin-tokenizer over the normalized artifact:
+        # 8,957,298,636 tokens / 781,076 docs. The row chain behind that doc count
+        # is 1,696,847 → 997,026 past the proprietary-teacher filter → 869,901
+        # with a non-null transcript → 781,076 after exact dedup.
+        ("agenttrove", agenttrove_normalize_steps, 8.957298636),
         # cp/biodiversity is carved out of common_pile (see common_pile.py)
         # because it needs page-stitching before normalize.
         ("cp/biodiversity", biodiversity_normalize_steps, 8.60),
