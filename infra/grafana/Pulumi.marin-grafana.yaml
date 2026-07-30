@@ -1,14 +1,14 @@
 config:
-  # People admitted through IAP (roles/iap.httpsResourceAccessor). Each entry is a bare
-  # email, a domain wildcard (quote it — YAML reads a leading `*` as an alias), or an
+  # Extra people admitted through IAP beyond the shared CloudRunService baseline. Each entry is
+  # a bare email, a domain wildcard (quote it — YAML reads a leading `*` as an alias), or an
   # already-qualified IAM member. Editing this and re-running `pulumi up` updates only the
   # grants, never the service:
   #
   #   marin-grafana:viewers:
   #     - alice@example.com
-  #     - "*@openathena.ai"
+  #     - "*@example.com"
   #     - group:marin-eng@example.com
-  marin-grafana:viewers: [russell.power@gmail.com, sf.office.shared.openathena@gmail.com, '*@openathena.ai']
+  marin-grafana:viewers: [russell.power@gmail.com, sf.office.shared.openathena@gmail.com]
   # Vanity host for the service. The DNS CNAME (grafana -> ghs.googlehosted.com) is created
   # in the oa.dev Cloudflare zone; unset custom_domain to serve only the run.app URL.
   marin-grafana:custom_domain: grafana.oa.dev

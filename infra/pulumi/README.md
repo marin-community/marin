@@ -20,8 +20,41 @@ federation-egress static IPs (`GcpStaticAddresses`, the GCP arm's first slice).
 
 Beyond cluster prerequisites, the `iac` package also carries the reusable *service* components
 other `infra/<service>/` Pulumi projects build on: `iac.gcp.cloud_run` (IAP-gated Cloud Run,
-used by `infra/grafana`) and `iac.iris` (always-on Iris service jobs via a `local.Command`
-around the `iac.iris.deploy` CLI, used by `infra/ducky` and `infra/xprof`).
+used by `infra/echo`, `infra/evaldash`, and `infra/grafana`) and `iac.iris` (always-on Iris
+service jobs via a `local.Command` around the `iac.iris.deploy` CLI, used by `infra/ducky` and
+`infra/xprof`). Every `CloudRunService` grants `roles/iap.httpsResourceAccessor` to the
+OpenAthena Workspace domain and the Loom VM service account. It also registers the shared Marin
+desktop OAuth client as a programmatic audience. The `iap_members` and
+`iap_programmatic_clients` arguments are only for service-specific exceptions.
+
+### Cloud Run IAP access
+
+For an access report on a component-managed service, compare the live IAP policy and settings:
+
+```bash
+gcloud iap web get-iam-policy \
+  --project=hai-gcp-models \
+  --resource-type=cloud-run \
+  --region=us-central1 \
+  --service=marin-evaldash
+gcloud iap settings get \
+  --project=hai-gcp-models \
+  --resource-type=cloud-run \
+  --region=us-central1 \
+  --service=marin-evaldash
+```
+
+`domain:openathena.ai` and
+`serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com` must be present. The settings
+must include `rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT` under `programmaticClients`, so human
+CLIs and service accounts use the same audience across Cloud Run sites and Iris.
+
+An unauthenticated `curl -I` to each vanity host shows the browser OAuth client in the redirect
+URL. IAP error code 9 is a failed OAuth redirect, not an IAM denial. If the policy and client
+match a working site, the request failed before Cloud Run and will not appear in application
+logs. An existing IAP cookie also lets one site work without exercising a fresh OAuth redirect.
+Retry the failing login in a private window; for a persistent code 9, capture the browser
+redirect trace and follow [Google's IAP troubleshooting guide](https://cloud.google.com/iap/docs/faq#error_codes).
 
 GitHub organization and repository resources live in the independent
 [`github`](github/README.md) Pulumi project. Its stack YAML declares existing Actions secrets
