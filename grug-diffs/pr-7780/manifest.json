@@ -2,13 +2,13 @@
   "added_variants": [
     "moe_hero_ep"
   ],
-  "base_sha": "690ef5fdb859f712dc6207d4d8588c039e9830da",
-  "head_sha": "b4ae2e42c79b9bf57c1ae17ff319d0511dd4014a",
+  "base_sha": "857463be8969aa896bfa8f84bbda60ee371ce293",
+  "head_sha": "7e96da55423a3b6dbfea98d1f2e149fb252aa23b",
   "report_count": 1,
   "reports": [
     {
       "closest_variant": "moe_hero_fsdp",
-      "distance_score": 615,
+      "distance_score": 620,
       "report_relpath": "moe_hero_ep/index.html",
       "status_counts": {
         "added": 0,
