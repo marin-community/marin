@@ -23,6 +23,7 @@ from connectrpc.errors import ConnectError
 from finelog.deploy.cli import down_cmd, logs_cmd, restart_cmd, status_cmd, up_cmd
 from rigging.config_discovery import list_cluster_configs
 from rigging.filesystem import marin_temp_bucket
+from rigging.provenance import Provenance
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from rigging.token_authority import SigningKey, generate_ed25519_keypair, signing_key_from_private_pem
 
@@ -32,6 +33,7 @@ from iris.cli.build import (
     _versioned_tag,
     build_image,
     find_marin_root,
+    get_git_provenance,
     get_git_sha,
 )
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client_for_ctx
@@ -165,7 +167,7 @@ def _parse_ghcr_tag(image_tag: str) -> tuple[str, str, str] | None:
 def _build_and_push_image(
     image_tag: str,
     image_type: str,
-    git_sha: str,
+    provenance: Provenance,
     verbose: bool = False,
     platform: str = AMD64_IMAGE_PLATFORM,
     cargo_profile: str = DEFAULT_CARGO_PROFILE,
@@ -191,7 +193,7 @@ def _build_and_push_image(
         push=True,
         context=context,
         platform=platform,
-        git_sha=git_sha,
+        provenance=provenance,
         ghcr_org=org,
         verbose=verbose,
         cargo_profile=cargo_profile,
@@ -201,7 +203,7 @@ def _build_and_push_image(
 
 def _build_cluster_images(
     config,
-    git_sha: str,
+    provenance: Provenance,
     verbose: bool = False,
     task_platforms: str | None = None,
     cargo_profile: str = DEFAULT_CARGO_PROFILE,
@@ -214,7 +216,7 @@ def _build_cluster_images(
         _build_and_push_image(
             worker_tag,
             "worker",
-            git_sha,
+            provenance,
             verbose=verbose,
             platform=AMD64_IMAGE_PLATFORM,
             cargo_profile=cargo_profile,
@@ -227,7 +229,7 @@ def _build_cluster_images(
         _build_and_push_image(
             controller_tag,
             "controller",
-            git_sha,
+            provenance,
             verbose=verbose,
             platform=controller_platforms,
             cargo_profile=cargo_profile,
@@ -240,7 +242,7 @@ def _build_cluster_images(
         _build_and_push_image(
             task_tag,
             "task",
-            git_sha,
+            provenance,
             verbose=verbose,
             platform=task_platforms,
             cargo_profile=cargo_profile,
@@ -250,7 +252,7 @@ def _build_cluster_images(
     return built
 
 
-def _pin_latest_images(config, git_sha: str, task_platforms: str | None = None) -> dict[str, str]:
+def _pin_latest_images(config, provenance: Provenance, task_platforms: str | None = None) -> dict[str, str]:
     """Pin :latest image tags to the current git SHA in memory only."""
 
     kubernetes = config.defaults.worker.runtime == KUBERNETES_WORKER_RUNTIME
@@ -261,7 +263,7 @@ def _pin_latest_images(config, git_sha: str, task_platforms: str | None = None) 
         if not tag:
             return tag
         if tag.endswith(":latest"):
-            return _versioned_tag(tag.removesuffix(":latest"), git_sha, platform)
+            return _versioned_tag(tag.removesuffix(":latest"), provenance, platform)
         return tag
 
     tags = {
@@ -297,12 +299,12 @@ def _build_and_pin_deploy_images(
     cargo_profile: str = DEFAULT_CARGO_PROFILE,
 ) -> None:
     """Pin :latest tags to the working-tree hash, build + push the images, echo them."""
-    git_sha = get_git_sha()
-    _pin_latest_images(config, git_sha, task_platforms)
+    provenance = get_git_provenance()
+    _pin_latest_images(config, provenance, task_platforms)
     verbose = ctx.obj.get("verbose", False)
     built = _build_cluster_images(
         config,
-        git_sha,
+        provenance,
         verbose=verbose,
         task_platforms=task_platforms,
         cargo_profile=cargo_profile,
@@ -565,12 +567,12 @@ def cluster_start(ctx, local: bool, fresh: bool, task_image_platforms: str | Non
         config = make_local_config(config)
     is_local = config.controller.controller_kind() == "local"
     if not is_local:
-        git_sha = get_git_sha()
-        _pin_latest_images(config, git_sha, task_image_platforms)
+        provenance = get_git_provenance()
+        _pin_latest_images(config, provenance, task_image_platforms)
         verbose = ctx.obj.get("verbose", False)
         built = _build_cluster_images(
             config,
-            git_sha,
+            provenance,
             verbose=verbose,
             task_platforms=task_image_platforms,
             cargo_profile=cargo_profile,
@@ -652,12 +654,12 @@ def cluster_start_smoke(
     # region-appropriate storage from MARIN_PREFIX.
     config.storage.remote_state_dir = marin_temp_bucket(ttl_days=7, prefix=f"iris/state/{label_prefix}")
 
-    git_sha = get_git_sha()
-    _pin_latest_images(config, git_sha, task_image_platforms)
+    provenance = get_git_provenance()
+    _pin_latest_images(config, provenance, task_image_platforms)
     verbose = ctx.obj.get("verbose", False)
     _build_cluster_images(
         config,
-        git_sha,
+        provenance,
         verbose=verbose,
         task_platforms=task_image_platforms,
         cargo_profile=cargo_profile,
@@ -1572,13 +1574,13 @@ def worker_restart(
     # ``controller restart`` (or by autoscaler-fresh VMs racing the registry),
     # producing a fleet split across multiple git_hashes and making
     # ``--skip-current-hash`` a no-op.
-    git_sha = get_git_sha()
-    _pin_latest_images(config, git_sha)
+    provenance = get_git_provenance()
+    _pin_latest_images(config, provenance)
     verbose = ctx.obj.get("verbose", False)
     if config.defaults.worker.docker_image:
-        _build_and_push_image(config.defaults.worker.docker_image, "worker", git_sha, verbose=verbose)
+        _build_and_push_image(config.defaults.worker.docker_image, "worker", provenance, verbose=verbose)
     if config.defaults.worker.default_task_image:
-        _build_and_push_image(config.defaults.worker.default_task_image, "task", git_sha, verbose=verbose)
+        _build_and_push_image(config.defaults.worker.default_task_image, "task", provenance, verbose=verbose)
 
     # Resolve the controller address workers will reconnect to (matches cluster_create_slice).
     worker_controller_address = config.controller_address()

@@ -13,9 +13,27 @@ from iris.cluster.config import (
     KubernetesProviderConfig,
     WorkerConfig,
 )
+from rigging.provenance import Provenance
 
 
-def test_pin_latest_images_pins_kubernetes_task_pods_to_deploy_sha():
+def _provenance(dirty: bool) -> Provenance:
+    return Provenance(
+        tree_hash="abc1234",
+        base_commit="abc1234",
+        dirty=dirty,
+        branch="feature",
+        built_by="tester",
+    )
+
+
+@pytest.mark.parametrize(
+    ("dirty", "dirty_suffix"),
+    [
+        (False, ""),
+        (True, "-dirty"),
+    ],
+)
+def test_pin_latest_images_marks_only_dirty_worktrees(dirty: bool, dirty_suffix: str):
     config = IrisClusterConfig(
         controller=ControllerVmConfig(image="ghcr.io/marin-community/iris-controller:latest"),
         defaults=DefaultsConfig(
@@ -28,11 +46,11 @@ def test_pin_latest_images_pins_kubernetes_task_pods_to_deploy_sha():
         kubernetes_provider=KubernetesProviderConfig(),
     )
 
-    _pin_latest_images(config, "abc1234")
+    _pin_latest_images(config, _provenance(dirty))
 
-    assert config.controller.image == "ghcr.io/marin-community/iris-controller:abc1234"
-    assert config.defaults.worker.docker_image == "ghcr.io/marin-community/iris-worker:abc1234-amd64"
-    assert config.defaults.worker.default_task_image == "ghcr.io/marin-community/iris-task:abc1234"
+    assert config.controller.image == f"ghcr.io/marin-community/iris-controller:abc1234{dirty_suffix}"
+    assert config.defaults.worker.docker_image == f"ghcr.io/marin-community/iris-worker:abc1234-amd64{dirty_suffix}"
+    assert config.defaults.worker.default_task_image == f"ghcr.io/marin-community/iris-task:abc1234{dirty_suffix}"
 
 
 def test_build_image_push_does_not_publish_latest(monkeypatch):
@@ -51,7 +69,7 @@ def test_build_image_push_does_not_publish_latest(monkeypatch):
             push=True,
             context=None,
             platform="linux/arm64",
-            git_sha="abc1234",
+            provenance=_provenance(False),
         )
 
     assert commands == []
@@ -79,7 +97,7 @@ def test_pin_latest_images_single_platform_task_uses_architecture_suffix():
         kubernetes_provider=KubernetesProviderConfig(),
     )
 
-    _pin_latest_images(config, "abc1234", "linux/amd64")
+    _pin_latest_images(config, _provenance(False), "linux/amd64")
 
     assert config.controller.image == "ghcr.io/marin-community/iris-controller:abc1234"
     assert config.defaults.worker.default_task_image == "ghcr.io/marin-community/iris-task:abc1234-amd64"
