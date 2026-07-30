@@ -1,14 +1,15 @@
 ---
 name: deploy-iris-controllers
-description: Deploy the Iris controller to one cluster or across the fleet, with a human gate at every step. Use when restarting, rolling out, or rolling back a controller.
+description: Deploy the Iris controller to one cluster or across the fleet, with automatic progress through passed gates. Use when restarting, rolling out, or rolling back a controller.
 ---
 
 # Skill: Deploy Iris controllers
 
 Roll the controller in your working tree out to one cluster or to the whole
-fleet. One cluster at a time, one human gate per step. The reference for every
-command is `lib/iris/OPS.md` ("Controller Restart", "Rolling back a controller
-deploy", "Controller Checkpoint Rollback").
+fleet. Process one cluster at a time. Continue automatically after each passed
+gate. Stop when a gate is blocked. The reference for every command is
+`lib/iris/OPS.md` ("Controller Restart", "Rolling back a controller deploy",
+"Controller Checkpoint Rollback").
 
 **A restart deploys your working tree, not `main`.** `iris cluster controller
 restart` builds images from HEAD plus staged and unstaged changes
@@ -21,33 +22,43 @@ red-canary days ([incident record](https://echo.oa.dev/wiki/14)).
 1. Never run `iris cluster restart` (no `controller`). It kills every worker and
    every job. `iris cluster controller restart` is the deploy — seconds of
    control-plane downtime, workers unaffected.
-2. Stop at every gate. Present the evidence, then wait for the operator. Do not
-   deploy the next cluster because the previous one passed.
-3. Stop the whole rollout on the first failed gate. Report the failure and offer
-   `--rollback` for that cluster. Do not continue to other clusters and do not
-   retry a restart to "see if it sticks".
-4. Never modify the controller database, and never take an action the operator
-   did not approve at a gate.
+2. Treat an explicit rollout request as approval for its cluster set. Use its
+   order when given. Otherwise, use the order from `plan`. Ask only when the
+   scope is missing or ambiguous.
+3. Evaluate each gate from the command evidence. Report a passed gate and
+   continue without operator input.
+4. Stop the whole rollout at the first blocked gate. Report the cause. After a
+   restart, offer `--rollback` for that cluster. Do not continue to other
+   clusters. Do not retry a restart to "see if it sticks".
+5. Never modify the controller database. Never take an action outside the
+   approved rollout scope.
+6. Continuously monitor the stdout and stderr of each command until it exits. If
+   a tool yields, poll the same task and read each new output block. Do not pipe
+   a command to `tail -25` or an equivalent last-lines command. Such a pipeline
+   hides earlier output and gives no useful progress while the command runs.
+7. Print the completion cake only after all selected clusters pass their final
+   gates. Do not print the cake for a blocked, stopped, or partial rollout.
 
 ## How to gate
 
-Put every gate in front of the operator with `AskUserQuestion`. Show the evidence
-in your message — the snapshot, the verify samples, the smoke result — because the
-operator answers from your text, not from the raw command output. Never treat
-silence, a previous approval, or a passing gate on another cluster as approval.
+A passed gate does not require operator input. Show the evidence, then continue
+to the next step or cluster. Use `AskUserQuestion` only when a blocked gate
+requires operator input. Show the snapshot, verify samples, smoke result, and
+blocker. Silence is not approval for a blocked gate.
 
-The options depend on what the evidence says:
+Process each gate from its evidence:
 
-- **Everything passed:** approve this cluster, stop the rollout here, or skip this
-  cluster and hold at the next gate.
-- **Anything failed:** stop, or roll this cluster back. Never offer to skip ahead
-  after a failure — rule 3 ends the rollout there.
+- **Passed:** Report the evidence and continue within the approved scope.
+- **Blocked before restart:** Report the cause. Ask for the necessary input or
+  stop.
+- **Blocked after restart:** Stop or ask for rollback approval. Never offer to
+  skip ahead.
 
 ## Helper
 
 `scripts/iris/rollout_controllers.py` covers the mechanical steps. It never
-restarts a controller and never walks the cluster list on its own, so the gates
-stay with the operator:
+restarts a controller and never walks the cluster list on its own. The agent
+keeps the approved scope and continues after each passed gate:
 
 ```bash
 uv run python scripts/iris/rollout_controllers.py plan [--clusters a,b]
@@ -66,7 +77,9 @@ Write the snapshot files to the session scratchpad, one per cluster.
    `--clusters` it uses the operator's list verbatim, in that order.
 2. Print `git log -1 --oneline` and the tree image tag that `plan` reports.
    `preflight` reports the tree state in full at the next step.
-3. Ask the operator to confirm the cluster set and the order.
+3. If the rollout request gives the cluster set, continue without another
+   confirmation. Use its order when given. Otherwise, use the `plan` order. If
+   the cluster set is missing or ambiguous, ask the operator.
 
 Do not resolve the cluster list from memory. Cluster names come from `plan` or
 from the operator.
@@ -120,14 +133,17 @@ keys. Hand those clusters to a session that already has SSH.
 
 ## Step 2 — Per cluster
 
-Do this loop for one cluster, then gate. Repeat for the next cluster.
+Do this loop for one cluster. After a passed final gate, start the next cluster.
 
 1. **Snapshot.** `snapshot --cluster <name> --out <scratchpad>/<name>-before.json`
-   records the controller's tree hash, its workers, rough job counts, and the tree
-   this session would deploy. A count printed with `+` hit the query cap and is a
+   records the controller's tree hash, rough job counts, and backend health. A
+   worker-daemon backend reports healthy workers. A Kubernetes backend reports
+   nodes that are ready and schedulable. The snapshot also records the tree this
+   session would deploy. A job count printed with `+` hit the query cap and is a
    floor. If the controller is unreachable now, stop and diagnose.
-2. **Gate.** Show the snapshot. State how many running jobs ride through the
-   restart, and that the restart takes seconds of control-plane downtime.
+2. **Snapshot gate.** Show the snapshot. State how many running jobs ride
+   through the restart. State that the restart causes seconds of control-plane
+   downtime. If the gate passes, restart without waiting for operator input.
 3. **Restart.** `iris --cluster=<name> cluster controller restart`. Add
    `--skip-checkpoint` only if the checkpoint step times out. On a Kubernetes dev
    cluster with amd64 nodes only, add `--image-platform linux/amd64`.
@@ -139,10 +155,30 @@ Do this loop for one cluster, then gate. Repeat for the next cluster.
 5. **Watch.** `verify --cluster <name> --baseline <name>-before.json` samples the
    controller every 30s for 5 minutes, then compares against the baseline. It
    fails on an unreachable controller, a tree hash that is not the one the
-   baseline recorded, or lost healthy workers. Do not shorten the watch.
+   baseline recorded, a changed backend health target, or health loss above the
+   churn tolerance. The tolerance applies to each backend. It is one worker or
+   node, or 5% of that backend's baseline healthy count, whichever is larger. A
+   loss within this tolerance is a note in the gate evidence. Do not shorten the
+   watch.
 6. **Collect the smoke.** Read the background task. If it is still waiting, keep
    waiting — the timeout is 30 minutes and a scale-up is the expected reason.
-7. **Gate.** Report the verify samples, the verdict, and the smoke job state.
+7. **Final gate.** Report the verify samples, the verdict, and the smoke job
+   state. If the gate passes, continue to the next cluster without operator
+   input. If the gate is blocked, stop the rollout.
+
+After the final selected cluster passes its final gate, print the rollout
+summary. Then print this ASCII cake:
+
+```text
+       ,,,,,
+       |||||
+     __|||||__
+    |         |
+    | ROLLOUT |
+  __|_________|__
+ |               |
+ |_______________|
+```
 
 The restart writes `rollout-record.json` under the cluster's
 `storage.remote_state_dir` and health-checks the new controller, rolling back

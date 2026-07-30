@@ -18,13 +18,17 @@ from iris.cluster.config import (
     PlatformConfig,
     StorageConfig,
 )
+from iris.rpc import controller_pb2
 
 from scripts.iris.rollout_controllers import (
+    ExecutionHealth,
+    HealthUnit,
     Need,
     Requirement,
     Snapshot,
     TreeIssue,
     TreeState,
+    backend_health,
     check_requirement,
     check_requirements,
     compare,
@@ -68,11 +72,60 @@ def snapshot(**overrides) -> Snapshot:
         "reachable": True,
         "tree_hash": "aaa",
         "version": "aaa (main)",
-        "workers_total": 10,
-        "workers_healthy": 10,
+        "execution_health": (ExecutionHealth(backend_id="worker-daemon", unit=HealthUnit.WORKER, healthy=10, total=10),),
         "jobs": {"running": 4, "pending": 1, "building": 0},
     }
     return Snapshot(**{**base, **overrides})
+
+
+def health(
+    *,
+    healthy: int = 10,
+    total: int = 10,
+    backend_id: str = "worker-daemon",
+    unit: HealthUnit = HealthUnit.WORKER,
+) -> tuple[ExecutionHealth, ...]:
+    return (ExecutionHealth(backend_id=backend_id, unit=unit, healthy=healthy, total=total),)
+
+
+def test_backend_health_uses_ready_schedulable_kubernetes_nodes():
+    backend = controller_pb2.Controller.BackendSummary(
+        backend_id="kubernetes",
+        running_task_count=40,
+        detail=controller_pb2.Controller.BackendStatus(
+            kubernetes=controller_pb2.Controller.GetKubernetesClusterStatusResponse(
+                total_nodes=3,
+                nodes=[
+                    controller_pb2.Controller.NodeStatus(name="ready", ready=True, schedulable=True),
+                    controller_pb2.Controller.NodeStatus(name="not-ready", ready=False, schedulable=True),
+                    controller_pb2.Controller.NodeStatus(name="cordoned", ready=True, schedulable=False),
+                ],
+            )
+        ),
+    )
+
+    result = backend_health((backend,))
+
+    assert result == (ExecutionHealth(backend_id="kubernetes", unit=HealthUnit.NODE, healthy=1, total=3),)
+    summary = snapshot(execution_health=result, jobs={"running": 40}).summary()
+    assert "kubernetes=1/3 healthy nodes" in summary
+    assert "workers=" not in summary
+
+
+def test_backend_health_uses_worker_daemon_liveness():
+    backend = controller_pb2.Controller.BackendSummary(
+        backend_id="worker-daemon",
+        detail=controller_pb2.Controller.BackendStatus(
+            worker=controller_pb2.Controller.WorkerFleetDetail(
+                healthy_worker_count=8,
+                total_worker_count=10,
+            )
+        ),
+    )
+
+    assert backend_health((backend,)) == (
+        ExecutionHealth(backend_id="worker-daemon", unit=HealthUnit.WORKER, healthy=8, total=10),
+    )
 
 
 def test_rollout_order_leads_with_dev_then_production_then_smallest_first():
@@ -226,9 +279,47 @@ def test_verify_flags_a_controller_running_the_wrong_tree():
 
 
 def test_verify_flags_lost_workers():
-    verdict = compare(snapshot(workers_healthy=10), snapshot(workers_healthy=6), expect_tree_hash="aaa")
+    verdict = compare(
+        snapshot(execution_health=health(healthy=10)),
+        snapshot(execution_health=health(healthy=6)),
+        expect_tree_hash="aaa",
+    )
     assert not verdict.healthy
     assert any("10" in concern and "6" in concern for concern in verdict.concerns)
+
+
+def test_verify_allows_one_lost_worker_as_churn():
+    verdict = compare(
+        snapshot(execution_health=health(healthy=10)),
+        snapshot(execution_health=health(healthy=9)),
+        expect_tree_hash="aaa",
+    )
+    assert verdict.healthy
+    assert not verdict.concerns
+    assert any("churn" in note and "1" in note for note in verdict.notes)
+
+
+def test_verify_flags_worker_loss_above_five_percent():
+    baseline = snapshot(execution_health=health(healthy=100, total=100))
+    permitted = compare(
+        baseline,
+        snapshot(execution_health=health(healthy=95, total=100)),
+        expect_tree_hash="aaa",
+    )
+    too_many = compare(
+        baseline,
+        snapshot(execution_health=health(healthy=94, total=100)),
+        expect_tree_hash="aaa",
+    )
+    assert permitted.healthy
+    assert not too_many.healthy
+
+
+def test_verify_blocks_when_a_backend_health_target_disappears():
+    verdict = compare(snapshot(), snapshot(execution_health=()), expect_tree_hash="aaa")
+
+    assert not verdict.healthy
+    assert any("targets changed" in concern for concern in verdict.concerns)
 
 
 def test_verify_flags_an_unreachable_controller_before_anything_else():
