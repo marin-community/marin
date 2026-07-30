@@ -125,7 +125,7 @@ def transform(input_path: str, output_path: str) -> None:
 
 
 def download_agenttrove_step() -> StepSpec:
-    """Download AgentTrove and transform the non-GPT/Claude rollouts into documents."""
+    """Download AgentTrove and transform the open-weight-teacher rollouts into documents."""
     dl = download_hf_step(
         "raw/agenttrove",
         hf_dataset_id=HF_DATASET_ID,
