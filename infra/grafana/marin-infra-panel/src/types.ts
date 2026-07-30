@@ -38,7 +38,6 @@ export interface CommitRow {
 export interface WandbPoint {
   chart: string;
   run: string;
-  runState: string;
   tokens: number;
   value: number;
   reportTitle: string;

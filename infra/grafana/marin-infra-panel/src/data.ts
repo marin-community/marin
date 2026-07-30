@@ -97,7 +97,6 @@ export function wandbPoints(frame: DataFrame): WandbPoint[] {
   return rows(frame).map((row) => ({
     chart: requiredString(row, 'chart'),
     run: requiredString(row, 'run'),
-    runState: requiredString(row, 'run_state'),
     tokens: requiredNumber(row, 'tokens'),
     value: requiredNumber(row, 'value'),
     reportTitle: requiredString(row, 'report_title'),

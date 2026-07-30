@@ -93,7 +93,6 @@ def _wandb(chart: str) -> list[dict]:
                 {
                     "chart": titles[chart],
                     "run": run,
-                    "run_state": "running" if run_index else "finished",
                     "tokens": tokens,
                     "value": value,
                     "report_title": "67B-A2B MoE on 10T tokens",
