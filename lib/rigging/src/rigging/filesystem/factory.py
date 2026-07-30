@@ -27,7 +27,7 @@ from rigging.filesystem.cross_region import (
     _is_gcs_protocol,
     _is_gcs_url,
 )
-from rigging.filesystem.s3_compat import s3_request_bounds_config_kwargs
+from rigging.filesystem.s3_compat import s3_python_config_kwargs
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 logger = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ def _with_s3_timeout_defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
     """
     conf_config_kwargs = (fsspec.config.conf.get("s3") or {}).get("config_kwargs") or {}
     config_kwargs = {**conf_config_kwargs, **dict(kwargs.get("config_kwargs") or {})}
-    for key, value in s3_request_bounds_config_kwargs().items():
+    for key, value in s3_python_config_kwargs().items():
         config_kwargs.setdefault(key, value)
     return {**kwargs, "config_kwargs": config_kwargs}
 
