@@ -1,4 +1,6 @@
 name: marin-cloudsql
+backend:
+  url: gs://marin-iac-state/
 runtime:
   name: python
   # Pin the shared repo venv (which has the `iac` helper package and the Pulumi GCP provider
@@ -7,7 +9,4 @@ runtime:
   options:
     virtualenv: ../../.venv
 description: Shared Cloud SQL (Postgres) metadata instance + eval-records bucket.
-# The state backend is selected by the operator/CI environment and shared with infra/pulumi
-# (see README.md):
-#   pulumi login gs://marin-iac-state
 # Pulumi.marin-cloudsql.yaml records the production stack's shared GCP KMS provider.

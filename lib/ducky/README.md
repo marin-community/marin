@@ -186,7 +186,6 @@ A manual deploy must export `DUCKY_GCS_HMAC_KEY_ID`, `DUCKY_GCS_HMAC_SECRET`,
 ```bash
 uv sync --all-packages --extra deploy
 cd infra/ducky
-pulumi login gs://marin-iac-state
 pulumi stack select ducky-marin
 pulumi up
 ```

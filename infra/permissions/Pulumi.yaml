@@ -1,4 +1,6 @@
 name: marin-permissions
+backend:
+  url: gs://marin-iac-state/
 runtime:
   name: python
   options:

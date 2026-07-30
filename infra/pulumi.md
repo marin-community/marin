@@ -54,8 +54,9 @@ system owns the resource contents.
 
 All projects share these conventions:
 
-- **State backend.** GCS, `gs://marin-iac-state`, selected by the operator/CI
-  environment (`pulumi login`), not committed in `Pulumi.yaml`.
+- **State backend.** GCS, `gs://marin-iac-state/`, committed as `backend.url` in
+  every project's `Pulumi.yaml`. The CLI and CI read the project setting
+  directly; do not add `pulumi login` steps or CI `cloud-url` overrides.
 - **Secrets provider.** GCP KMS
   (`gcpkms://…/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key`), configured
   per-stack in `Pulumi.<stack>.yaml`.

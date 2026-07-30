@@ -367,7 +367,6 @@ uv sync --all-packages --extra deploy                     # once: iac + Pulumi p
 gcloud auth configure-docker us-central1-docker.pkg.dev   # once: let buildx push to Artifact Registry
 
 cd infra/grafana
-pulumi login gs://marin-iac-state
 # The grafana.oa.dev DNS record lives in the oa.dev Cloudflare zone; the provider
 # reads this token from the environment.
 export CLOUDFLARE_API_TOKEN="$(gcloud secrets versions access latest \
