@@ -274,3 +274,106 @@ def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = f
         "statuses": sorted({r.status.value for r in records}),
         "archived_models": sorted(archived_models),
     }
+
+
+def _model_cohorts(records: list[EvalRunRecord]) -> list[dict]:
+    """One entry per distinct version cohort, newest first, with its eval counts and serve group.
+
+    ``created_at`` is the cohort's most recent run (which also orders the list) and ``group_id`` is that
+    run's serve group. Mirrors the version grouping :func:`build_matrix` collapses each model row to.
+    """
+    by_version: dict[str | None, list[EvalRunRecord]] = {}
+    for record in records:
+        by_version.setdefault(record.version, []).append(record)
+    cohorts = []
+    for version, members in by_version.items():
+        newest = max(members, key=lambda record: record.created_at or "")
+        cohorts.append(
+            {
+                "version": version,
+                "created_at": newest.created_at,
+                "n_evals": len(members),
+                "n_succeeded": sum(1 for record in members if record.status.value == "succeeded"),
+                "group_id": newest.group_id,
+            }
+        )
+    cohorts.sort(key=lambda cohort: cohort["created_at"] or "", reverse=True)
+    return cohorts
+
+
+def _model_history(records: list[EvalRunRecord]) -> dict[str, list[dict]]:
+    """Per-eval score-over-time: every scored run for the model on each eval, oldest first.
+
+    Each point shares the shape of the ``/api/history`` series (see :meth:`RecordStore.history`), so the
+    Model view can reuse the same chart. A run contributes only when it produced a primary metric.
+    """
+    history: dict[str, list[dict]] = {}
+    for record in records:
+        score = record_score(record)
+        if score is None:
+            continue
+        history.setdefault(record.evaluation.name, []).append(
+            {
+                "run_id": record.run_id,
+                "created_at": record.created_at,
+                "value": score.value,
+                "stderr": score.stderr,
+                "metric": score.metric,
+                "status": record.status.value,
+                "git_sha": record.provenance.git_sha,
+            }
+        )
+    for points in history.values():
+        points.sort(key=lambda point: point["created_at"] or "")
+    return history
+
+
+def _model_runs(records: list[EvalRunRecord]) -> list[dict]:
+    """Every run for the model, newest first, each with its rolled-up primary score when it scored."""
+    runs = []
+    for record in records:
+        score = record_score(record)
+        runs.append(
+            {
+                "run_id": record.run_id,
+                "eval_name": record.evaluation.name,
+                "status": record.status.value,
+                "created_at": record.created_at,
+                "version": record.version,
+                "value": score.value if score else None,
+                "stderr": score.stderr if score else None,
+                "metric": score.metric if score else None,
+            }
+        )
+    runs.sort(key=lambda run: run["created_at"] or "", reverse=True)
+    return runs
+
+
+def build_model_detail(records: list[EvalRunRecord], model: str) -> dict | None:
+    """Everything the frontend Model view needs for one model, in one payload, or None when unknown.
+
+    ``cells`` and ``cohorts`` follow :func:`build_matrix`'s cohort semantics: the current version cohort
+    (the version of the model's most recent non-smoke run) fills ``cells``, and ``cohorts`` lists one
+    entry per distinct version -- ``-smoke`` suites excluded from both, as they are from the headline
+    grid. ``history`` is the per-eval score-over-time across every scored run, and ``runs`` spans every
+    run for the model (smoke included), newest first. The identity fields come from the newest record.
+    Returns None when the model has no records so the caller can answer 404.
+    """
+    model_records = [record for record in records if record.model.name == model]
+    if not model_records:
+        return None
+    newest = max(model_records, key=lambda record: record.created_at or "")
+    graded = [record for record in model_records if not record.evaluation.name.endswith("-smoke")]
+    current_version = _current_version(graded) if graded else None
+    cohort = [record for record in graded if record.version == current_version]
+    return {
+        "model": model,
+        "location": newest.model.location,
+        "backend": newest.model.backend,
+        "user": newest.user,
+        "current_version": current_version,
+        "cohorts": _model_cohorts(graded),
+        "cells": _cohort_cells(cohort),
+        "history": _model_history(graded),
+        "runs": _model_runs(model_records),
+    }

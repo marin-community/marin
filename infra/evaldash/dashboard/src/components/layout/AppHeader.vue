@@ -30,9 +30,14 @@ function toggleDark() {
 
 <template>
   <header class="border-b border-surface-border bg-surface px-6 py-3 flex items-center justify-between">
-    <div class="flex items-baseline gap-3">
-      <h1 class="text-base font-semibold tracking-tight">Marin Evals</h1>
-      <span class="text-xs text-text-muted font-mono">leaderboard &amp; runs</span>
+    <div class="flex items-baseline gap-2.5 font-mono">
+      <span
+        class="w-2 h-2 rounded-full bg-status-success self-center shrink-0"
+        style="box-shadow: 0 0 0 3px var(--c-status-success-bg)"
+        title="Ingest is live"
+      ></span>
+      <h1 class="text-sm font-semibold tracking-wide">MARIN<span class="text-text-muted">·</span>EVALS</h1>
+      <span class="text-[10px] uppercase tracking-[0.18em] text-text-muted">measurement&nbsp;log</span>
       <span
         v-if="store === 'memory'"
         class="text-xs px-1.5 py-0.5 rounded bg-status-warning-bg text-status-warning border border-status-warning-border"

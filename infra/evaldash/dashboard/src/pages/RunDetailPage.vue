@@ -111,7 +111,10 @@ async function copyPath() {
           >{{ data.version }}</span>
         </div>
         <div class="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm text-text-secondary">
-          <span class="font-mono">{{ data.model.name }}</span>
+          <RouterLink
+            :to="`/models/${encodeURIComponent(data.model.name)}`"
+            class="font-mono text-accent hover:underline"
+          >{{ data.model.name }}</RouterLink>
           <span class="text-text-muted">·</span>
           <span>{{ data.eval.name }} <span class="text-text-muted">({{ data.eval.mechanism }})</span></span>
           <span class="text-text-muted">·</span>
