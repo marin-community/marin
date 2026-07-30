@@ -2747,3 +2747,57 @@ result:
   was `1.258x` one E256 run and a `34.0%` saving. The observed result is
   slightly better because direct mode-specific cooldown reaches both targets
   before the mixed-continuation step forecasts of 5,659 and 9,609 updates.
+
+### 2026-07-30 20:00 - NEST-MOE-008 post-hoc strongman launched
+
+- Registered the post-hoc recovery control before training in commit
+  `b981f0cdca`. It starts from the uncompromised E256 control endpoint and
+  physically extracts the best previously evaluated layer-specific hybrid
+  E128 bank.
+- A two-update extraction smoke completed on its first attempt. Production
+  job `/power/nest-augdk-posthoc-hybrid-e128-cooldown12k-r1-coord` uses the
+  same fresh-optimizer cooldown contract as the nested E128 breakout.
+- The primary comparison is E256-control optimizer time plus post-hoc E128
+  recovery versus the observed `48.8628` H100-hour nested-prefix and
+  two-breakout total. At measured E128 throughput, post-hoc recovery must
+  cross the standalone target by approximately update 10,100 to beat nesting.
+- The first production evaluation, update 250, improves Paloma from the
+  post-hoc endpoint `3.539281` to `3.392535`. Median optimizer-step time is
+  approximately `0.421` seconds. The recovery target is `3.181439`.
+
+### 2026-07-30 21:52 - NEST-MOE-008 post-hoc strongman reaches cap
+
+- The physical hybrid E128 completed all 12,000 cooldown updates without a
+  failure or preemption. It did not reach the `3.181439` standalone target:
+  final Paloma is `3.230114` and uncheatable loss is `2.657257`.
+- At 6,250 updates, the nearest evaluation to nested parallel critical-path
+  parity, post-hoc Paloma is `3.248645`. At 10,000 updates and 48.75
+  H100-hours including the untouched E256 control, approximately equal to the
+  48.86 H100-hour nested total, it is `3.231701`. The recovered nested E128 is
+  `3.181276`.
+- The capped post-hoc plan costs 50.62 H100-hours, `3.6%` more than nested
+  prefix training plus both direct breakouts, while missing the compact target
+  by `0.048675` Paloma.
+- The fixed Grug exponent anchored at the capped point projects recovery after
+  16,561 cooldown updates and 54.88 total H100-hours, `12.3%` above nesting.
+  This is an optimistic sensitivity estimate because the late observed curve
+  nearly plateaus as the cooldown learning rate decays.
+- Decision: nesting beats the strongest tested zero-E256-degradation
+  post-hoc-drop control in both parallel elapsed optimizer time and total
+  optimizer compute at equal E128 quality.
+
+### 2026-07-30 21:56 - NEST-MOE-007 balanced complements completes
+
+- The balanced-complements run completed 38,147 updates without a failure or
+  preemption. Final full Paloma is `3.182115`, `+0.038628` versus E256
+  control. Its lower and upper E128 banks are `3.239840` and `3.239008`,
+  respectively `+0.058401` and `+0.057569` versus standalone E128.
+- The banks finish within `0.000831` Paloma, confirming that the schedule
+  equalizes assignment pressure. They are nevertheless both worse than naive
+  E128 nesting, as is the full model.
+- Median compiled-step duration is `0.468964` seconds, `0.85%` above control.
+  The Grug fixed-exponent conversion gives a `31.1%`
+  time-to-equivalent-control-loss tax, versus `15.4%` for naive nesting.
+- Decision: reject balanced complements. Symmetric exposure is not sufficient;
+  training two compact banks divides useful specialization and worsens both
+  sides of the naive full-versus-compact Pareto point.

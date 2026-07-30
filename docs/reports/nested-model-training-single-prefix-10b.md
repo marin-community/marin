@@ -2,10 +2,10 @@
 
 Date: 2026-07-30
 
-Status: complete for the registered 10B-token, post-training, standalone E128,
-post-hoc pruning, paired-residual, and direct-breakout gates. Balanced
-complements has passed its 1B-token gate and is running to 10B. Production
-expert-parallel validation remains.
+Status: complete for the registered 10B-token proxy suite, including
+standalone E128, post-hoc pruning, paired residuals, direct breakout, balanced
+complements, and post-hoc recovery. Production expert-parallel validation
+remains.
 
 ## TL;DR
 
@@ -32,9 +32,15 @@ expert-parallel validation remains.
   against separate training. Recovering only E256 costs `1.097x` control;
   parallel cooldown makes elapsed optimizer time for both targets `1.148x` one
   E256 run.
-- Balanced complements passes its 1B-token gate with a `+0.0142` full-model
-  delta, two nearly symmetric E128 banks that both beat the control chop, and
-  approximately 0.2% optimizer-step overhead.
+- The zero-E256-degradation strongman—train control, select the best post-hoc
+  E128 bank, then cooldown—does not recover by 12,000 updates. At equal total
+  compute it is `0.05043` Paloma worse than nested E128; at the cap it costs
+  `3.6%` more than nesting and remains `0.04867` worse. A fixed-exponent
+  sensitivity projects `12.3%` more total compute than nesting to recover.
+- Balanced complements passes its early gate but fails at 10B. Its two E128
+  banks are symmetric within `0.000831`, yet full E256 is `+0.03863` behind
+  control and the banks are about `+0.058` behind standalone E128. Its
+  time-to-equivalent full-model loss tax is `31.1%`.
 
 ## Question
 
@@ -365,7 +371,7 @@ may strengthen the standalone baseline.
 
 [Machine-readable E128 endpoint and cost results](assets/nested-model-training-e128-controls-results.json)
 
-## Breakout and balanced-complements addendum
+## Breakout, balanced-complements, and post-hoc recovery addendum
 
 The direct breakout test starts from the completed 10B E128-naive checkpoint.
 One branch restores all 256 experts and removes routing restrictions. The
@@ -428,37 +434,75 @@ The two compact banks differ by only `0.006943` Paloma. Median optimizer-step
 overhead is approximately 0.2%, and all finite-loss and routing checks pass.
 The arm therefore passes Gate 1 and continues to the 10B endpoint.
 
-At update 22,000 and 5.767B tokens, the result remains mechanically balanced
-but does not improve the naive single-prefix Pareto point:
+At the 10B endpoint, the result remains mechanically balanced but is
+Pareto-dominated by naive single-prefix training:
 
-| Checkpoint at update 22,000 | Full E256 | Full delta vs control | E128 Paloma | E128 delta vs standalone |
+| 10B checkpoint | Full E256 | Full delta vs control | E128 Paloma | E128 delta vs standalone |
 |---|---:|---:|---:|---:|
-| E256 control / chop | 3.383695 | -- | 3.717767 | +0.309063 |
-| E128 naive | 3.402678 | +0.018982 | 3.445370 | +0.036667 |
-| Balanced lower bank | 3.408329 | +0.024634 | 3.481723 | +0.073020 |
-| Balanced upper bank | 3.408329 | +0.024634 | 3.481045 | +0.072342 |
-| Standalone E128 | -- | -- | 3.408703 | -- |
+| E256 control / chop | 3.143487 | -- | 3.555385 | +0.373945 |
+| E128 naive | 3.163708 | +0.020221 | 3.215226 | +0.033787 |
+| Balanced lower bank | 3.182115 | +0.038628 | 3.239840 | +0.058401 |
+| Balanced upper bank | 3.182115 | +0.038628 | 3.239008 | +0.057569 |
+| Standalone E128 | -- | -- | 3.181439 | -- |
 
 Balanced complements buys two symmetric E128 checkpoints and exact expected
-expert-update balance. At this interim point, each compact checkpoint is about
-`0.036` Paloma worse than the naive single prefix, and full E256 is `0.0057`
-worse. Median step overhead through update 22,000 is `0.72%`. The
-fixed-exponent conversion of the current `+0.024634` full loss gap is a
-provisional `+15.7%` compute tax. These are interim measurements; the
-registered comparison remains the 10B endpoint.
+expert-update balance, but the banks are only `0.000831` Paloma apart because
+both are worse. Relative to naive nesting, full E256 is `0.018406` worse and
+the compact banks are `0.0238`--`0.0246` worse. Median compiled-step overhead
+is `0.85%`. The Grug fixed-exponent conversion of the full loss gap gives a
+`31.1%` time-to-equivalent-control-loss tax, more than twice naive nesting's
+`15.4%`. Balanced complements therefore fails the final gate despite passing
+the early gate.
 
-Breakout and balanced-complements source is pinned at
-[`6a2e0900eb`](https://github.com/marin-community/marin/commit/6a2e0900eb).
+The final strongman control removes the E256-quality tradeoff entirely. It
+starts from the completed, unmodified E256 control, selects the best observed
+128-expert post-hoc bank independently in each layer, physically gathers that
+bank into an ordinary E128 trainer, and applies the same direct cooldown as
+the nested breakout. Its initial Paloma is `3.539281`; recovery means reaching
+the standalone E128 endpoint, `3.181439`.
+
+Two break-even points distinguish accelerator cost from elapsed time:
+
+| Comparison with nested prefix plus both breakouts | Nested reference | Latest post-hoc crossing that wins |
+|---|---:|---:|
+| Total optimizer compute | 48.8628 H100-hours | 10,116 E128 updates |
+| Parallel critical-path optimizer time | 45.2382 H100-hours | 6,234 E128 updates |
+
+The total-compute reference sums both nested cooldown branches. The
+critical-path reference assumes those branches run concurrently, while the
+post-hoc plan must finish E256 before starting E128. Neither break-even is
+met:
+
+| Post-hoc point | E128 Paloma | Delta vs target | E256 plus cooldown H100-hours |
+|---|---:|---:|---:|
+| 6,250 updates, parallel-time parity | 3.248645 | +0.067206 | 45.25 |
+| 10,000 updates, total-compute parity | 3.231701 | +0.050426 | 48.75 |
+| 12,000-update cap | 3.230114 | +0.048675 | 50.62 |
+
+At equal total optimizer compute, nested training has already recovered both
+models while post-hoc E128 remains `0.050426` Paloma worse. At the cap,
+post-hoc is `3.6%` more expensive than nesting and still has not recovered.
+Its uncheatable loss is `2.657257`, versus `2.591321` for nested E128 at its
+crossing. Applying the Grug fixed exponent to the capped post-hoc point
+projects recovery at 16,561 cooldown updates and 54.88 H100-hours in total,
+`12.3%` above nesting. This is an optimistic sensitivity estimate because the
+observed late curve has nearly plateaued under the decayed cooldown learning
+rate.
+
+Breakout, balanced-complements, and physical post-hoc extraction source is
+pinned at
+[`2e36eac7bb`](https://github.com/marin-community/marin/commit/2e36eac7bb).
 Physical extraction required preserving explicit target sharding and
 rebuilding on the E128 target pytree so identical-shaped shared modules carry
 E128 static metadata.
 
-![Breakout recovery and balanced-complements curves.](assets/nested-model-training-breakout.png)
+![Breakout, post-hoc recovery, and balanced-complements curves.](assets/nested-model-training-breakout.png)
 
-[Machine-readable breakout and balanced-complements results](assets/nested-model-training-breakout-results.json)
+[Machine-readable breakout, post-hoc recovery, and balanced-complements results](assets/nested-model-training-breakout-results.json)
 
 - [E256 breakout cooldown](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-breakout-e256-cooldown12k-r1)
 - [Physical E128 breakout cooldown](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-breakout-e128-cooldown12k-r1)
+- [Post-hoc hybrid E128 cooldown](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-posthoc-hybrid-e128-cooldown12k-r1)
 - [Balanced complements](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-balanced-complements-10b-r1)
 
 ## Post-training plan
@@ -681,12 +725,16 @@ puts both layerwise arms inside that threshold and both naive arms outside it.
 E128 layerwise is therefore the better schedule when the large model is
 primary and the compact model is optional.
 
-When both checkpoints are required, naive E128 nesting costs an estimated
-1.258x one E256 run to match both direct targets, saving 34.0% against separate
-E256 and E128 runs. It is the viable joint-training arm despite exceeding the
-10% single-model surcharge line. Layerwise E128 is not viable at equal compact
-quality without a faster breakout cooldown. A production expert-parallel
-replication and balance test remains required evidence.
+When both checkpoints are required, observed naive E128 training plus direct
+breakout costs `1.240x` one E256 run and saves `34.8%` against separate E256
+and E128 training. It also beats the zero-degradation post-hoc-drop strongman:
+at equal total optimizer compute, post-hoc E128 is `0.05043` Paloma worse; its
+optimistic fixed-exponent recovery projection costs `12.3%` more than nesting.
+This makes naive E128 the viable joint-training arm despite exceeding the 10%
+single-model surcharge line. Layerwise E128 and balanced complements are not
+viable at equal compact quality without a faster breakout schedule. A
+production expert-parallel replication and balance test remains required
+evidence.
 
 ![Full and prefix Paloma curves.](assets/nested-model-training-single-prefix-10b-paloma.png)
 
