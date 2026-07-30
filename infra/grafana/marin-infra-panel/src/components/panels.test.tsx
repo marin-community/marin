@@ -89,5 +89,7 @@ test('status page rolls pool outcomes up to regions beside the history graph', (
   expect(regionRow).toHaveTextContent('80%');
   expect(regionRow).toHaveTextContent('8/10');
   expect(within(provisioning).getByRole('img', { name: '24 hour status history' })).toBeInTheDocument();
+  expect(within(provisioning).queryByText('fleet')).not.toBeInTheDocument();
+  expect(within(provisioning).getAllByText('us-east5')).toHaveLength(2);
   expect(within(provisioning).queryByText('us-east5-a')).not.toBeInTheDocument();
 });

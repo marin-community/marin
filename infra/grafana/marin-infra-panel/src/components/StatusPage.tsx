@@ -31,6 +31,7 @@ const REF = {
 const STATUS_GRID_CLASS = css`display:grid;grid-template-columns:minmax(220px,.8fr) minmax(360px,1.8fr);gap:22px;@media(max-width:900px){grid-template-columns:1fr;}`;
 const STATUS_CARD_CLASS = css`flex:1;`;
 const STATUS_SECTION_CLASS = css`display:flex;flex-direction:column;`;
+const FLEET_SCOPE = 'fleet';
 
 function one(frames: DataFrame[], refId: string): DataFrame[] {
   const frame = frameByRefId(frames, refId);
@@ -87,7 +88,7 @@ function MiniSeriesChart({ points, unit }: { points: SeriesPoint[]; unit: 'count
   }, [points]);
 
   if (points.length < 2) {
-    return <div className={css`height:160px;display:flex;align-items:center;justify-content:center;color:${theme.colors.text.secondary};font-size:12px;`}>History is not available</div>;
+    return <div className={css`height:160px;display:flex;align-items:center;justify-content:center;color:${theme.colors.text.secondary};font-size:14px;`}>History is not available</div>;
   }
 
   const width = 800;
@@ -111,7 +112,7 @@ function MiniSeriesChart({ points, unit }: { points: SeriesPoint[]; unit: 'count
           return (
             <g key={fraction}>
               <line x1={pad.left} x2={width - pad.right} y1={rowY} y2={rowY} stroke={theme.colors.border.weak} strokeDasharray="2 5" />
-              <text x={pad.left - 6} y={rowY + 4} textAnchor="end" fill={theme.colors.text.secondary} fontSize="10">
+              <text x={pad.left - 6} y={rowY + 4} textAnchor="end" fill={theme.colors.text.secondary} fontSize="12">
                 {unit === 'percent' ? `${Math.round(value * 100)}%` : Math.round(value)}
               </text>
             </g>
@@ -126,14 +127,14 @@ function MiniSeriesChart({ points, unit }: { points: SeriesPoint[]; unit: 'count
             points={samples.map((point) => `${x(point.time)},${y(point.value)}`).join(' ')}
           />
         ))}
-        <text x={pad.left} y={height - 7} fill={theme.colors.text.secondary} fontSize="10">
+        <text x={pad.left} y={height - 7} fill={theme.colors.text.secondary} fontSize="12">
           {new Date(xMin).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
         </text>
-        <text x={width - pad.right} y={height - 7} textAnchor="end" fill={theme.colors.text.secondary} fontSize="10">
+        <text x={width - pad.right} y={height - 7} textAnchor="end" fill={theme.colors.text.secondary} fontSize="12">
           {new Date(xMax).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
         </text>
       </svg>
-      <div className={css`display:flex;flex-wrap:wrap;gap:5px 14px;font-size:10px;color:${theme.colors.text.secondary};`}>
+      <div className={css`display:flex;flex-wrap:wrap;gap:5px 14px;font-size:12px;color:${theme.colors.text.secondary};`}>
         {series.map(([name], index) => (
           <span key={name}><span className={css`color:${SERIES_COLORS[index % SERIES_COLORS.length]};`}>━</span> {name}</span>
         ))}
@@ -147,7 +148,7 @@ function SectionTitle({ children, detail }: { children: React.ReactNode; detail?
   return (
     <div className={css`display:flex;align-items:baseline;gap:10px;margin:0 0 10px;`}>
       <h2 className={css`font-size:19px;line-height:1.2;margin:0;font-weight:600;color:${theme.colors.text.primary};`}>{children}</h2>
-      {detail && <span className={css`font-size:11px;color:${theme.colors.text.secondary};`}>{detail}</span>}
+      {detail && <span className={css`font-size:13px;color:${theme.colors.text.secondary};`}>{detail}</span>}
     </div>
   );
 }
@@ -161,9 +162,9 @@ function RegionList({ title, rows }: { title: string; rows: Array<{ region: stri
   const theme = useTheme2();
   return (
     <div>
-      <div className={css`font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:${theme.colors.text.secondary};margin-bottom:5px;`}>{title}</div>
+      <div className={css`font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:${theme.colors.text.secondary};margin-bottom:5px;`}>{title}</div>
       {rows.map((row) => (
-        <div key={row.region} className={css`display:grid;grid-template-columns:1fr auto;gap:12px;padding:6px 0;border-top:1px solid ${theme.colors.border.weak};font-size:12px;`}>
+        <div key={row.region} className={css`display:grid;grid-template-columns:1fr auto;gap:12px;padding:6px 0;border-top:1px solid ${theme.colors.border.weak};font-size:14px;`}>
           <code>{row.region}</code>
           {row.value}
         </div>
@@ -198,7 +199,7 @@ function WorkerStatus({ frames }: { frames: DataFrame[] }) {
           <>
             <div className={css`display:flex;align-items:baseline;flex-wrap:wrap;gap:6px 14px;margin-bottom:14px;`}>
               <strong className={css`font-size:36px;color:${theme.colors.success.text};`}>{totals.healthy}</strong>
-              <span className={css`color:${theme.colors.text.secondary};font-size:13px;`}>healthy workers</span>
+              <span className={css`color:${theme.colors.text.secondary};font-size:16px;`}>healthy workers</span>
               <span className={css`color:${theme.colors.text.disabled};`}>·</span>
               <span><strong>{formatCores(totals.cpu)}</strong> CPU</span>
               <span><strong>{formatBytes(totals.memory)}</strong> memory</span>
@@ -227,11 +228,13 @@ function ProvisioningStatus({ frames }: { frames: DataFrame[] }) {
   const currentFrame = frameByRefId(frames, REF.provisioning);
   const historyFrame = frameByRefId(frames, REF.provisioningHistory);
   const rows = currentFrame ? provisioningStatus(currentFrame) : [];
-  const fleet = rows.find((row) => row.scope === 'fleet');
+  const fleet = rows.find((row) => row.scope === FLEET_SCOPE);
   const regions = provisioningRegions(rows).sort(
     (a, b) => b.outcomes - a.outcomes || a.region.localeCompare(b.region)
   );
-  const history = historyFrame ? seriesPoints(historyFrame, 'region', 'success_ratio') : [];
+  const history = historyFrame
+    ? seriesPoints(historyFrame, 'region', 'success_ratio').filter((point) => point.series !== FLEET_SCOPE)
+    : [];
 
   return (
     <section className={STATUS_SECTION_CLASS} aria-label="Provisioning status">
@@ -244,9 +247,9 @@ function ProvisioningStatus({ frames }: { frames: DataFrame[] }) {
             <div className={css`display:flex;align-items:center;flex-wrap:wrap;gap:10px 26px;margin-bottom:14px;`}>
               <div>
                 <strong className={css`display:block;font-size:34px;color:${fleet.successRatio !== undefined && fleet.successRatio >= .9 ? theme.colors.success.text : theme.colors.warning.text};`}>{formatPercent(fleet.successRatio)}</strong>
-                <span className={css`font-size:11px;color:${theme.colors.text.secondary};`}>create success · {fleet.ready}/{fleet.outcomes} attempts</span>
+                <span className={css`font-size:13px;color:${theme.colors.text.secondary};`}>create success · {fleet.ready}/{fleet.outcomes} attempts</span>
               </div>
-              <div className={css`display:flex;flex-wrap:wrap;gap:8px 16px;color:${theme.colors.text.secondary};font-size:11px;`}>
+              <div className={css`display:flex;flex-wrap:wrap;gap:8px 16px;color:${theme.colors.text.secondary};font-size:13px;`}>
                 <Outcome label="ready" value={fleet.ready} color={theme.colors.success.text} />
                 <Outcome label="stockout" value={fleet.stockout} color={theme.colors.warning.text} />
                 <Outcome label="error" value={fleet.error} color={theme.colors.error.text} />
@@ -254,7 +257,7 @@ function ProvisioningStatus({ frames }: { frames: DataFrame[] }) {
                 <Outcome label="pools placing" value={fleet.poolsPlacing} color={theme.colors.success.text} />
                 <Outcome label="pools without ready outcome" value={fleet.poolsNoReadyOutcome} color={fleet.poolsNoReadyOutcome > 0 ? theme.colors.error.text : theme.colors.text.primary} />
               </div>
-              <div className={css`margin-left:auto;font-size:11px;color:${theme.colors.text.secondary};`}>
+              <div className={css`margin-left:auto;font-size:13px;color:${theme.colors.text.secondary};`}>
                 latency p50 {formatLatency(fleet.latencyP50Seconds)} · p95 {formatLatency(fleet.latencyP95Seconds)}
                 <br />collected {relativeTime(fleet.collectedAt)}
               </div>
@@ -270,7 +273,7 @@ function ProvisioningStatus({ frames }: { frames: DataFrame[] }) {
                     value: (
                       <span>
                         <strong>{formatPercent(region.successRatio)}</strong>
-                        <span className={css`margin-left:6px;color:${theme.colors.text.secondary};font-size:10px;`}>
+                        <span className={css`margin-left:6px;color:${theme.colors.text.secondary};font-size:12px;`}>
                           {region.ready}/{region.outcomes}
                         </span>
                       </span>
@@ -292,24 +295,24 @@ export function StatusPage({ frames, width, height }: Props) {
   const contentWidth = Math.max(320, width - 32);
   return (
     <main className={css`width:${width}px;min-height:${height}px;padding:18px 16px 28px;box-sizing:border-box;color:${theme.colors.text.primary};background:${theme.colors.background.canvas};overflow:hidden;`} aria-label="Marin infrastructure status">
-      <header className={css`display:flex;align-items:baseline;justify-content:space-between;gap:20px;margin-bottom:24px;`}>
+      <header className={css`display:flex;align-items:baseline;justify-content:space-between;gap:20px;margin-bottom:16px;`}>
         <div>
           <h1 className={css`font-size:27px;line-height:1.2;margin:0;font-weight:700;letter-spacing:-.02em;`}>Marin Infra Status</h1>
-          <span className={css`font-size:11px;color:${theme.colors.text.secondary};`}>Grafana refresh controls update all sources</span>
+          <span className={css`font-size:13px;color:${theme.colors.text.secondary};`}>Grafana refresh controls update all sources</span>
         </div>
-        <nav className={css`display:flex;flex-wrap:wrap;justify-content:flex-end;gap:5px 14px;font-size:11px;`}>
+        <nav className={css`display:flex;flex-wrap:wrap;justify-content:flex-end;gap:5px 14px;font-size:13px;`}>
           <a href="/d/marin-fleet">Fleet</a><a href="/d/marin-iris">Iris</a><a href="/d/marin-k8s">Kubernetes</a>
           <a href="/d/marin-training">Training</a><a href="https://github.com/marin-community/marin/actions" target="_blank" rel="noreferrer">GitHub Actions ↗</a>
         </nav>
       </header>
 
-      <div className={css`display:flex;flex-direction:column;gap:26px;`}>
+      <div className={css`display:flex;flex-direction:column;gap:20px;`}>
         <section>
-          <NightlyMatrix frames={one(frames, REF.nightlies)} width={contentWidth} height={315} />
+          <NightlyMatrix frames={one(frames, REF.nightlies)} width={contentWidth} height={260} />
         </section>
         <section>
           <SectionTitle>GitHub status</SectionTitle>
-          <Card><CommitStrip frames={one(frames, REF.builds)} width={contentWidth - 30} height={68} /></Card>
+          <Card><CommitStrip frames={one(frames, REF.builds)} width={contentWidth - 30} height={40} /></Card>
         </section>
         <div className={css`display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:24px;align-items:stretch;@media(max-width:1100px){grid-template-columns:1fr;}`}>
           <WorkerStatus frames={frames} />
