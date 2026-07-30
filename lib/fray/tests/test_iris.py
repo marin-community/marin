@@ -312,6 +312,21 @@ class TestActorGroupEnvironment:
         assert env.env_vars["JAX_PLATFORMS"] == ""
 
 
+def test_create_gpu_actor_group_uses_leafgroup_topology():
+    fake_iris = MagicMock()
+    fake_iris.submit.return_value = MagicMock(job_id="job-gpu")
+    client = FrayIrisClient.from_iris_client(fake_iris)
+
+    class _DummyActor:
+        pass
+
+    resources = ResourceConfig.with_gpu("GB200", count=4)
+    client.create_actor_group(_DummyActor, name="gpu-actors", count=32, resources=resources)
+
+    coscheduling = fake_iris.submit.call_args.kwargs["coscheduling"]
+    assert coscheduling.group_by == "leafgroup"
+
+
 class TestWithTpuFlexible:
     def test_single_type_returns_standard_config(self):
         rc = ResourceConfig.with_tpu(["v5p-8"])

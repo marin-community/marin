@@ -35,7 +35,7 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
-from iris.cluster.platforms.k8s.coreweave_topology import gpu_gang_coscheduling_level
+from iris.cluster.platforms.k8s.coreweave_topology import COSCHEDULE_LEAFGROUP, gpu_gang_coscheduling_level
 from iris.cluster.types import (
     CoschedulingConfig,
     EnvironmentSpec,
@@ -724,7 +724,11 @@ class FrayIrisClient:
         iris_constraints = convert_constraints(resources)
         iris_environment = convert_environment(None, device=resources.device)
 
-        coscheduling = resolve_coscheduling(resources, count)
+        # Actor group replicas are independent workers, not an NVLink collective.
+        if count > 1 and isinstance(resources.device, GpuConfig):
+            coscheduling = CoschedulingConfig(group_by=COSCHEDULE_LEAFGROUP)
+        else:
+            coscheduling = resolve_coscheduling(resources, count)
 
         # Create a single job with N replicas
         # Each replica will run _host_actor with a unique task-based actor name
