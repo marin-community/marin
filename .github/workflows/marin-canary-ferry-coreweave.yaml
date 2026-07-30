@@ -124,12 +124,14 @@ jobs:
       # autoscaler recreates them with the images we're about to push.
       # NodePools survive — the H100 node is warm.
       - name: Reset stale task pods
+        if: ${{ false }}
         run: |
           export KUBECONFIG=~/.kube/coreweave-iris
           kubectl delete pods -n "$IRIS_NAMESPACE" -l "$IRIS_MANAGED_LABEL=true" \
             --grace-period=0 --ignore-not-found || true
 
       - name: Start shared iris-ci controller
+        if: ${{ false }}
         env:
           BUILDKIT_PROGRESS: plain
           CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
