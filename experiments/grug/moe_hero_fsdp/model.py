@@ -286,14 +286,18 @@ class GrugModelConfig:
             num_layers=int(_hf_config_attr(hf_config, ("num_layers", "num_hidden_layers"), 24)),
             num_heads=int(_hf_config_attr(hf_config, ("num_heads", "num_attention_heads"), 16)),
             num_kv_heads=int(_hf_config_attr(hf_config, ("num_kv_heads", "num_key_value_heads"), 16)),
+            local_kv_heads=_hf_config_attr(hf_config, ("local_kv_heads",)),
+            global_kv_heads=_hf_config_attr(hf_config, ("global_kv_heads",)),
             head_dim=_hf_config_attr(hf_config, ("head_dim", "attention_head_dim")),
             max_seq_len=int(_hf_config_attr(hf_config, ("max_seq_len", "max_position_embeddings"), 4096)),
             sliding_window=int(_hf_config_attr(hf_config, ("sliding_window",), 4096)),
+            global_every=int(_hf_config_attr(hf_config, ("global_every",), 4)),
             layer_norm_eps=float(_hf_config_attr(hf_config, ("layer_norm_eps", "rms_norm_eps"), 1e-5)),
             initializer_std=float(_hf_config_attr(hf_config, ("initializer_std", "initializer_range"), 0.02)),
             qk_mult=float(_hf_config_attr(hf_config, ("qk_mult",), 1.0)),
             xsa=bool(_hf_config_attr(hf_config, ("xsa",), True)),
             rope=rope,
+            rope_fused=bool(_hf_config_attr(hf_config, ("rope_fused",), False)),
         )
 
     def to_hf_config(self, vocab_size: int, config_overrides: dict[str, Any] | None = None) -> GrugMoeHfConfig:
@@ -323,6 +327,10 @@ class GrugModelConfig:
             # grug-specific (no public equivalent)
             "qk_mult": self.qk_mult,
             "xsa": self.xsa,
+            "local_kv_heads": self.local_kv_heads,
+            "global_kv_heads": self.global_kv_heads,
+            "global_every": self.global_every,
+            "rope_fused": self.rope_fused,
             "grugmoe_attention_mode": "production",
             GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY: GRUG_MOE_ARTIFACT_SCHEMA_VERSION,
         }
