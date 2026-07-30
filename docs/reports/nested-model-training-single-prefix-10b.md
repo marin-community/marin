@@ -29,8 +29,9 @@ expert-parallel validation remains.
 - Direct breakout reaches the E256 and standalone E128 targets after 3,500 and
   6,000 added updates. It costs `48.86` H100-hours versus `74.95` for two
   independent controls: `1.240x` one E256 run and a `34.8%` compute saving
-  against separate training. Parallel cooldown makes elapsed optimizer time
-  `1.148x` one E256 run.
+  against separate training. Recovering only E256 costs `1.097x` control;
+  parallel cooldown makes elapsed optimizer time for both targets `1.148x` one
+  E256 run.
 - Balanced complements passes its 1B-token gate with a `+0.0142` full-model
   delta, two nearly symmetric E128 banks that both beat the control chop, and
   approximately 0.2% optimizer-step overhead.
@@ -387,21 +388,30 @@ well before the fixed-exponent mixed-continuation forecasts of 5,659 and 9,609
 updates. Direct mode-specific cooldown is therefore more efficient than
 continuing the joint objective in this cell.
 
-The cost accounting excludes compilation, checkpointing, and evaluation hooks
-and sums optimizer time across both cooldown nodes:
+The cost accounting excludes compilation, checkpointing, and evaluation hooks.
+It sums optimizer time across both cooldown nodes:
 
-| Training plan | Joint prefix | E256 cooldown | E128 cooldown | Total H100-hours | Relative to E256 |
+| Training plan | Initial train | E256 recovery | E128 train or recovery | Total H100-hours | Relative to E256 |
 |---|---:|---:|---:|---:|---:|
-| Separate E256 + E128 | -- | 39.42 | 35.53 | 74.95 | 1.901x |
-| Naive joint prefix + breakout | 39.61 | 3.62 | 5.62 | 48.86 | 1.240x |
+| E256 control | 39.42 | -- | -- | 39.42 | 1.000x |
+| Joint prefix, recover E256 only | 39.61 | 3.62 | -- | 43.23 | 1.097x |
+| Separate E256 + E128 | 39.42 | -- | 35.53 | 74.95 | 1.901x |
+| Joint prefix, recover both | 39.61 | 3.62 | 5.62 | 48.86 | 1.240x |
 
-Breakout adds `24.0%` total optimizer compute relative to producing only E256
-and saves `34.8%` relative to training E256 and E128 separately. This is the
-same comparison behind the earlier `34.0%` forecast; 34% is a saving against
-two runs, not an overhead against one. If the two cooldown branches run
-concurrently, critical-path optimizer time is `1.148x` one E256 run and 39.6%
-shorter than the serial two-run baseline. Total GPU compute remains the
-primary economic number.
+There are three useful tax numbers. The eligibility mask adds `0.49%` to a
+compiled optimizer step. At the equal-10B endpoint, the Grug fixed-exponent
+conversion prices the unrecovered E256 loss gap at `15.38%` wall time.
+Observed E256 breakout reduces the end-to-end E256 tax to `9.7%`: 39.61
+H100-hours for the joint prefix plus 3.62 for E256 recovery, versus 39.42 for
+control.
+
+Producing both recovered checkpoints adds `24.0%` total optimizer compute
+relative to E256 alone and saves `34.8%` relative to training E256 and E128
+separately. This is the same comparison behind the earlier `34.0%` forecast;
+34% is a saving against two runs, not an overhead against one. If the cooldown
+branches run concurrently, critical-path optimizer time is `1.148x` one E256
+run and 39.6% shorter than the serial two-run baseline. Total GPU compute
+remains the primary economic number.
 
 Balanced complements tests whether two compact checkpoints can be trained
 without overexposing either expert bank. In every batch, 25% of sequences
@@ -417,6 +427,25 @@ assignment rate. At the preregistered 1.049B-token gate:
 The two compact banks differ by only `0.006943` Paloma. Median optimizer-step
 overhead is approximately 0.2%, and all finite-loss and routing checks pass.
 The arm therefore passes Gate 1 and continues to the 10B endpoint.
+
+At update 22,000 and 5.767B tokens, the result remains mechanically balanced
+but does not improve the naive single-prefix Pareto point:
+
+| Checkpoint at update 22,000 | Full E256 | Full delta vs control | E128 Paloma | E128 delta vs standalone |
+|---|---:|---:|---:|---:|
+| E256 control / chop | 3.383695 | -- | 3.717767 | +0.309063 |
+| E128 naive | 3.402678 | +0.018982 | 3.445370 | +0.036667 |
+| Balanced lower bank | 3.408329 | +0.024634 | 3.481723 | +0.073020 |
+| Balanced upper bank | 3.408329 | +0.024634 | 3.481045 | +0.072342 |
+| Standalone E128 | -- | -- | 3.408703 | -- |
+
+Balanced complements buys two symmetric E128 checkpoints and exact expected
+expert-update balance. At this interim point, each compact checkpoint is about
+`0.036` Paloma worse than the naive single prefix, and full E256 is `0.0057`
+worse. Median step overhead through update 22,000 is `0.72%`. The
+fixed-exponent conversion of the current `+0.024634` full loss gap is a
+provisional `+15.7%` compute tax. These are interim measurements; the
+registered comparison remains the 10B endpoint.
 
 Breakout and balanced-complements source is pinned at
 [`6a2e0900eb`](https://github.com/marin-community/marin/commit/6a2e0900eb).
