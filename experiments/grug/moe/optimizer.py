@@ -197,7 +197,8 @@ class GrugMoeAdamHConfig(OptimizerConfig):
                 return "adam"
             if "router_bias" in path_lower or "attn_gate" in path_lower or ".router" in path_lower:
                 return "adam"
-            if ".mlp.expert_mlp.w_" in path_lower or ".mlp.w_" in path_lower or ".shared.w_" in path_lower:
+            is_shared_weight = ".shared." in path_lower and ".w_" in path_lower
+            if ".mlp.expert_mlp.w_" in path_lower or ".mlp.w_" in path_lower or is_shared_weight:
                 return "adamh_expert"
             if hasattr(param, "ndim") and param.ndim >= 2:
                 return "adamh"

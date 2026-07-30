@@ -18,9 +18,11 @@ def test_grug_moe_adamh_mask_routes_expert_mlp_weights_to_expert_group():
                         "w_down": jnp.ones((4, 16, 8), dtype=jnp.float32),
                     },
                 },
-                "shared": {
-                    "w_gate": jnp.ones((8, 16), dtype=jnp.float32),
-                },
+                "shared": (
+                    {
+                        "w_gate": jnp.ones((8, 16), dtype=jnp.float32),
+                    },
+                ),
             },
         },
         "token_embed": jnp.ones((128, 8), dtype=jnp.float32),
@@ -33,7 +35,7 @@ def test_grug_moe_adamh_mask_routes_expert_mlp_weights_to_expert_group():
     assert block_mask["mlp"]["expert_mlp"]["w_gate"] == "adamh_expert"
     assert block_mask["mlp"]["expert_mlp"]["w_up"] == "adamh_expert"
     assert block_mask["mlp"]["expert_mlp"]["w_down"] == "adamh_expert"
-    assert block_mask["shared"]["w_gate"] == "adamh_expert"
+    assert block_mask["shared"][0]["w_gate"] == "adamh_expert"
     assert mask["token_embed"] == "adam"
 
 

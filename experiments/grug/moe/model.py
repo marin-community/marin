@@ -143,6 +143,9 @@ class GrugModelConfig:
     hidden_dim: int = 512
     intermediate_dim: int = 256
     shared_expert_intermediate_dim: int = 512
+    # Split the shared expert into this many independent DenseMLPs while
+    # preserving the aggregate intermediate width and parameter count.
+    num_shared_experts: int = 1
     num_experts: int = 256
     num_experts_per_token: int = 4
     num_layers: int = 6
@@ -197,6 +200,13 @@ class GrugModelConfig:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
         if self.capacity_factor <= 0:
             raise ValueError("capacity_factor must be positive")
+        if self.num_shared_experts <= 0:
+            raise ValueError("num_shared_experts must be positive")
+        if self.shared_expert_intermediate_dim % self.num_shared_experts != 0:
+            raise ValueError(
+                "shared_expert_intermediate_dim must be divisible by num_shared_experts; "
+                f"got {self.shared_expert_intermediate_dim} and {self.num_shared_experts}"
+            )
         resolve_moe_implementation(self.moe_implementation)
 
     @property
@@ -697,15 +707,21 @@ class Block(eqx.Module):
     rms_mlp: RMSNorm
     mlp_gated_norm: GatedNorm
     mlp: MoEMLP
-    shared: DenseMLP | None
+    shared: tuple[DenseMLP, ...] | None
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
         attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
         shared = None
         if cfg.shared_expert_intermediate_dim > 0:
-            shared = DenseMLP.init(
-                cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key
+            num_shared_experts = cfg.num_shared_experts
+            per_expert_dim = cfg.shared_expert_intermediate_dim // num_shared_experts
+            if num_shared_experts == 1:
+                shared_keys = (shared_key,)
+            else:
+                shared_keys = tuple(random.split(shared_key, num_shared_experts))
+            shared = tuple(
+                DenseMLP.init(cfg.hidden_dim, per_expert_dim, cfg.initializer_std, key=key) for key in shared_keys
             )
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
@@ -730,7 +746,8 @@ class Block(eqx.Module):
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
-            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+            for shared_expert in self.shared:
+                mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
         x = x + mlp_out
         return x, router_stats
 
@@ -1035,11 +1052,14 @@ def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) 
             }
         )
         if block.shared is not None:
+            shared_w_gate = jnp.concatenate([expert.w_gate for expert in block.shared], axis=1)
+            shared_w_up = jnp.concatenate([expert.w_up for expert in block.shared], axis=1)
+            shared_w_down = jnp.concatenate([expert.w_down for expert in block.shared], axis=0)
             tensors.update(
                 {
-                    f"{layer_prefix}.shared_expert.gate_proj.weight": _linear_inference_tensor(block.shared.w_gate),
-                    f"{layer_prefix}.shared_expert.up_proj.weight": _linear_inference_tensor(block.shared.w_up),
-                    f"{layer_prefix}.shared_expert.down_proj.weight": _linear_inference_tensor(block.shared.w_down),
+                    f"{layer_prefix}.shared_expert.gate_proj.weight": _linear_inference_tensor(shared_w_gate),
+                    f"{layer_prefix}.shared_expert.up_proj.weight": _linear_inference_tensor(shared_w_up),
+                    f"{layer_prefix}.shared_expert.down_proj.weight": _linear_inference_tensor(shared_w_down),
                 }
             )
 
