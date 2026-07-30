@@ -177,7 +177,7 @@ def build_tagged_evaluator(
     mesh: Mesh,
     eval_cfg: GrugEvalConfig,
     mp: jmp.Policy,
-    nested_expert_count: int | None = None,
+    expert_selection: tuple[tuple[int, ...], ...] | None = None,
 ) -> TaggedEvaluator[LmExample | GrugLmExample, Transformer] | None:
     pos = Axis("position", max_seq_len)
     tagged_eval_sets = data_config.tagged_eval_sets(pos)
@@ -203,12 +203,29 @@ def build_tagged_evaluator(
         if isinstance(batch, LmExample):
             batch = grug_lm_example_from_named(batch)
         expert_eligibility = None
-        if nested_expert_count is not None:
-            expert_ids = jnp.arange(model.config.num_experts)
-            expert_eligibility = jnp.broadcast_to(
-                expert_ids[None, :] < nested_expert_count,
-                (batch.tokens.shape[0], model.config.num_experts),
+        if expert_selection is not None:
+            if len(expert_selection) not in (1, model.config.num_layers):
+                raise ValueError(f"expert_selection must have one shared set or {model.config.num_layers} layer sets")
+            layer_eligibility = jnp.zeros(
+                (len(expert_selection), model.config.num_experts),
+                dtype=jnp.bool_,
             )
+            for layer, selected_experts in enumerate(expert_selection):
+                if len(set(selected_experts)) != len(selected_experts):
+                    raise ValueError("expert_selection contains duplicate experts")
+                if not all(0 <= expert < model.config.num_experts for expert in selected_experts):
+                    raise ValueError("expert_selection contains an out-of-range expert")
+                layer_eligibility = layer_eligibility.at[layer, jnp.asarray(selected_experts)].set(True)
+            if len(expert_selection) == 1:
+                expert_eligibility = jnp.broadcast_to(
+                    layer_eligibility[0, None, :],
+                    (batch.tokens.shape[0], model.config.num_experts),
+                )
+            else:
+                expert_eligibility = jnp.broadcast_to(
+                    layer_eligibility[:, None, :],
+                    (model.config.num_layers, batch.tokens.shape[0], model.config.num_experts),
+                )
         per_pos_loss = model.next_token_loss(
             batch.tokens,
             batch.loss_weight,
@@ -670,7 +687,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     mesh=mesh,
                     eval_cfg=eval_cfg,
                     mp=trainer.mp,
-                    nested_expert_count=nested_count,
+                    expert_selection=(tuple(range(nested_count)),),
                 )
                 if nested_evaluator is not None:
                     nested_evaluators.append((nested_count, nested_evaluator))

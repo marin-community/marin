@@ -16,6 +16,7 @@ import draccus
 import jax
 import jax.numpy as jnp
 import jmp
+import numpy as np
 import wandb
 from datasets import load_dataset
 from haliax.partitioning import set_mesh
@@ -163,13 +164,71 @@ def _generation_batch(
     return token_ids, lengths
 
 
-def _eligibility(batch_size: int, expert_count: int, total_experts: int) -> jax.Array | None:
+def _expert_selection(
+    model: Transformer,
+    *,
+    expert_count: int,
+    method: str,
+    seed: int,
+) -> tuple[tuple[int, ...], ...] | None:
+    total_experts = model.config.num_experts
     if expert_count == total_experts:
         return None
     if expert_count <= 0 or expert_count > total_experts:
         raise ValueError(f"expert count must be in [1, {total_experts}], got {expert_count}")
-    expert_ids = jnp.arange(total_experts)
-    return jnp.broadcast_to(expert_ids < expert_count, (batch_size, total_experts))
+    if method == "prefix":
+        return (tuple(range(expert_count)),)
+
+    router = np.asarray(jax.device_get(model.stacked_blocks.stacked.mlp.router), dtype=np.float64)
+    router_norm = np.linalg.norm(router, axis=1)
+    router_bias = np.asarray(jax.device_get(model.stacked_blocks.stacked.mlp.router_bias), dtype=np.float64)
+    if router_bias.ndim == 3:
+        router_bias = router_bias[:, 0, :]
+    if router_bias.shape != router_norm.shape:
+        raise ValueError(f"router bias shape {router_bias.shape} does not match router scores {router_norm.shape}")
+
+    if method == "qb_bias_greedy":
+        scores = -router_bias
+    elif method == "router_norm_greedy":
+        scores = router_norm
+    elif method == "hybrid_greedy":
+        bias_scale = np.std(router_bias, axis=-1, keepdims=True)
+        norm_scale = np.std(router_norm, axis=-1, keepdims=True)
+        bias_score = -(router_bias - np.mean(router_bias, axis=-1, keepdims=True)) / np.maximum(bias_scale, 1e-12)
+        norm_score = (router_norm - np.mean(router_norm, axis=-1, keepdims=True)) / np.maximum(norm_scale, 1e-12)
+        scores = bias_score + norm_score
+    elif method == "random":
+        generator = np.random.default_rng(seed)
+        return tuple(
+            tuple(sorted(int(expert) for expert in generator.choice(total_experts, expert_count, replace=False)))
+            for _ in range(model.config.num_layers)
+        )
+    else:
+        raise ValueError(
+            "AUGDK_EVAL_SELECTION_METHOD must be prefix, qb_bias_greedy, " "router_norm_greedy, hybrid_greedy, or random"
+        )
+
+    return tuple(
+        tuple(sorted(int(expert) for expert in np.argsort(layer_scores)[-expert_count:])) for layer_scores in scores
+    )
+
+
+def _eligibility(
+    batch_size: int,
+    total_experts: int,
+    expert_selection: tuple[tuple[int, ...], ...] | None,
+) -> jax.Array | None:
+    if expert_selection is None:
+        return None
+    layer_eligibility = jnp.zeros((len(expert_selection), total_experts), dtype=jnp.bool_)
+    for layer, selected_experts in enumerate(expert_selection):
+        layer_eligibility = layer_eligibility.at[layer, jnp.asarray(selected_experts)].set(True)
+    if len(expert_selection) == 1:
+        return jnp.broadcast_to(layer_eligibility[0, None, :], (batch_size, total_experts))
+    return jnp.broadcast_to(
+        layer_eligibility[:, None, :],
+        (len(expert_selection), batch_size, total_experts),
+    )
 
 
 def _generate(
@@ -177,13 +236,13 @@ def _generate(
     token_ids: jax.Array,
     prompt_lengths: jax.Array,
     *,
-    expert_count: int,
+    expert_selection: tuple[tuple[int, ...], ...] | None,
     eos_token_id: int,
     pad_token_id: int,
     max_new_tokens: int,
 ) -> jax.Array:
     batch_size = token_ids.shape[0]
-    eligibility = _eligibility(batch_size, expert_count, model.config.num_experts)
+    eligibility = _eligibility(batch_size, model.config.num_experts, expert_selection)
     row_ids = jnp.arange(batch_size)
 
     @jax.jit
@@ -240,7 +299,7 @@ def _evaluate_gsm8k(
     model: Transformer,
     tokenizer: PreTrainedTokenizerBase,
     *,
-    expert_count: int,
+    expert_selection: tuple[tuple[int, ...], ...] | None,
     limit: int,
     batch_size: int,
     max_length: int,
@@ -270,7 +329,7 @@ def _evaluate_gsm8k(
             model,
             token_ids,
             lengths,
-            expert_count=expert_count,
+            expert_selection=expert_selection,
             eos_token_id=eos_token_id,
             pad_token_id=pad_token_id,
             max_new_tokens=max_new_tokens,
@@ -292,7 +351,7 @@ def _evaluate_instructions(
     model: Transformer,
     tokenizer: PreTrainedTokenizerBase,
     *,
-    expert_count: int,
+    expert_selection: tuple[tuple[int, ...], ...] | None,
     max_length: int,
     max_new_tokens: int,
 ) -> list[GenerationResult]:
@@ -312,7 +371,7 @@ def _evaluate_instructions(
         model,
         token_ids,
         lengths,
-        expert_count=expert_count,
+        expert_selection=expert_selection,
         eos_token_id=eos_token_id,
         pad_token_id=pad_token_id,
         max_new_tokens=max_new_tokens,
@@ -365,7 +424,7 @@ def _evaluate_perplexity(
     data_config: LmDataConfig,
     mesh: Mesh,
     *,
-    expert_count: int,
+    expert_selection: tuple[tuple[int, ...], ...] | None,
 ) -> dict[str, object]:
     model_config = model.config
     evaluator = build_tagged_evaluator(
@@ -380,7 +439,7 @@ def _evaluate_perplexity(
             compute_bpb=True,
         ),
         mp=jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16"),
-        nested_expert_count=expert_count if expert_count != model_config.num_experts else None,
+        expert_selection=expert_selection,
     )
     if evaluator is None:
         raise ValueError("Evaluation data config produced no tagged evaluator")
@@ -403,22 +462,30 @@ def main() -> None:
     max_new_tokens = int(os.environ.get("AUGDK_EVAL_MAX_NEW_TOKENS", str(_DEFAULT_MAX_NEW_TOKENS)))
     max_length = int(os.environ.get("AUGDK_EVAL_MAX_LENGTH", str(_DEFAULT_MAX_LENGTH)))
     eval_config_run = os.environ.get("AUGDK_EVAL_CONFIG_RUN", _DEFAULT_EVAL_CONFIG_RUN)
+    selection_method = os.environ.get("AUGDK_EVAL_SELECTION_METHOD", "prefix")
+    selection_seed = int(os.environ.get("AUGDK_EVAL_SELECTION_SEED", "0"))
 
     tokenizer = AutoTokenizer.from_pretrained(marin_tokenizer)
     data_config = _evaluation_data_config(eval_config_run)
     mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
     with set_mesh(mesh):
         model = _load_model(checkpoint_root, mesh)
+        expert_selection = _expert_selection(
+            model,
+            expert_count=expert_count,
+            method=selection_method,
+            seed=selection_seed,
+        )
         perplexity = _evaluate_perplexity(
             model,
             data_config,
             mesh,
-            expert_count=expert_count,
+            expert_selection=expert_selection,
         )
         gsm8k = _evaluate_gsm8k(
             model,
             tokenizer,
-            expert_count=expert_count,
+            expert_selection=expert_selection,
             limit=limit,
             batch_size=batch_size,
             max_length=max_length,
@@ -427,13 +494,15 @@ def main() -> None:
         instructions = _evaluate_instructions(
             model,
             tokenizer,
-            expert_count=expert_count,
+            expert_selection=expert_selection,
             max_length=max_length,
             max_new_tokens=min(max_new_tokens, 96),
         )
     results = {
         "checkpoint": checkpoint_root,
         "expert_count": expert_count,
+        "expert_selection": expert_selection,
+        "selection_method": selection_method,
         "perplexity": perplexity,
         "gsm8k": [asdict(result) for result in gsm8k],
         "instructions": [asdict(result) for result in instructions],
@@ -452,11 +521,13 @@ def main() -> None:
         id=run_id,
         name=run_id,
         group="NEST-AUGDK-SFT-EVAL",
-        tags=["moe", "nested-moe", "aug-dk", "generation-eval", f"e{expert_count}"],
+        tags=["moe", "nested-moe", "aug-dk", "generation-eval", f"e{expert_count}", selection_method],
         resume="never",
         config={
             "checkpoint": checkpoint_root,
             "expert_count": expert_count,
+            "selection_method": selection_method,
+            "selection_seed": selection_seed,
             "eval_config_run": eval_config_run,
             "gsm8k_revision": _GSM8K_REVISION,
             "gsm8k_limit": limit,
