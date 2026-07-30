@@ -53,7 +53,7 @@ test('status page keeps worker and provisioning status visible when another sour
   expect(screen.getAllByText('No W&B data')).toHaveLength(3);
 });
 
-test('status page keeps extreme provisioning values in the region table and out of the graph', () => {
+test('status page expands extreme provisioning values and keeps every region in the graph', () => {
   const now = Date.now();
   const frames = [
     frame('P', [{
@@ -63,34 +63,41 @@ test('status page keeps extreme provisioning values in the region table and out 
       latency_p95_seconds: 90, window_hours: 3,
     }, {
       scope: 'pool', collected_at: now, zone: 'us-east5-a',
-      ready: 6, stockout: 1, error: 0, preempted: 0, outcomes: 7, success_ratio: 6 / 7,
+      ready: 1, stockout: 49, error: 0, preempted: 0, outcomes: 50, success_ratio: 0.02,
       pools_placing: 0, pools_no_ready_outcome: 0, latency_p50_seconds: 45,
       latency_p95_seconds: 90, window_hours: 3,
     }, {
       scope: 'pool', collected_at: now, zone: 'us-east5-b',
-      ready: 2, stockout: 0, error: 1, preempted: 0, outcomes: 3, success_ratio: 2 / 3,
+      ready: 1, stockout: 49, error: 0, preempted: 0, outcomes: 50, success_ratio: 0.02,
       pools_placing: 0, pools_no_ready_outcome: 0, latency_p50_seconds: 45,
       latency_p95_seconds: 90, window_hours: 3,
     }, {
       scope: 'pool', collected_at: now, zone: 'us-central1-a',
-      ready: 10, stockout: 0, error: 0, preempted: 0, outcomes: 10, success_ratio: 1,
+      ready: 100, stockout: 0, error: 0, preempted: 0, outcomes: 100, success_ratio: 1,
       pools_placing: 0, pools_no_ready_outcome: 0, latency_p50_seconds: 45,
       latency_p95_seconds: 90, window_hours: 3,
     }, {
       scope: 'pool', collected_at: now, zone: 'europe-west4-a',
-      ready: 1, stockout: 1, error: 0, preempted: 0, outcomes: 2, success_ratio: 0.5,
+      ready: 1, stockout: 99, error: 0, preempted: 0, outcomes: 100, success_ratio: 0.01,
+      pools_placing: 0, pools_no_ready_outcome: 0, latency_p50_seconds: 45,
+      latency_p95_seconds: 90, window_hours: 3,
+    }, {
+      scope: 'pool', collected_at: now, zone: 'asia-east1-a',
+      ready: 5, stockout: 95, error: 0, preempted: 0, outcomes: 100, success_ratio: 0.05,
       pools_placing: 0, pools_no_ready_outcome: 0, latency_p50_seconds: 45,
       latency_p95_seconds: 90, window_hours: 3,
     }]),
     frame('R', [
       { time: now - 60_000, region: 'fleet', success_ratio: 0.7 },
       { time: now, region: 'fleet', success_ratio: 0.8 },
-      { time: now - 60_000, region: 'us-east5', success_ratio: 0.7 },
-      { time: now, region: 'us-east5', success_ratio: 0.8 },
-      { time: now - 60_000, region: 'us-central1', success_ratio: 0.9 },
+      { time: now - 60_000, region: 'us-east5', success_ratio: 0.02 },
+      { time: now, region: 'us-east5', success_ratio: 0.02 },
+      { time: now - 60_000, region: 'us-central1', success_ratio: 0.99 },
       { time: now, region: 'us-central1', success_ratio: 1 },
-      { time: now - 60_000, region: 'europe-west4', success_ratio: 0.4 },
-      { time: now, region: 'europe-west4', success_ratio: 0.5 },
+      { time: now - 60_000, region: 'europe-west4', success_ratio: 0.01 },
+      { time: now, region: 'europe-west4', success_ratio: 0.01 },
+      { time: now - 60_000, region: 'asia-east1', success_ratio: 0.05 },
+      { time: now, region: 'asia-east1', success_ratio: 0.05 },
     ]),
   ];
 
@@ -100,21 +107,37 @@ test('status page keeps extreme provisioning values in the region table and out 
   const regionLabel = within(provisioning).getByText('us-east5', { selector: 'code' });
   const regionRow = regionLabel.parentElement;
   expect(regionRow).not.toBeNull();
-  expect(regionRow).toHaveTextContent('80%');
-  expect(regionRow).toHaveTextContent('8/10');
+  expect(regionRow).toHaveTextContent('2%');
+  expect(regionRow).toHaveTextContent('2/100');
   const highestRegionRow = within(provisioning).getByText('us-central1', { selector: 'code' }).parentElement;
   expect(highestRegionRow).toHaveTextContent('100%');
-  expect(highestRegionRow).toHaveTextContent('10/10');
+  expect(highestRegionRow).toHaveTextContent('100/100');
   const lowestRegionRow = within(provisioning).getByText('europe-west4', { selector: 'code' }).parentElement;
-  expect(lowestRegionRow).toHaveTextContent('50%');
-  expect(lowestRegionRow).toHaveTextContent('1/2');
+  expect(lowestRegionRow).toHaveTextContent('1%');
+  expect(lowestRegionRow).toHaveTextContent('1/100');
 
   const chart = within(provisioning).getByRole('img', { name: '24 hour status history' });
-  const chartContainer = chart.parentElement;
-  expect(chartContainer).not.toBeNull();
-  expect(within(chartContainer!).queryByText('fleet')).not.toBeInTheDocument();
-  expect(within(chartContainer!).getByText('us-east5')).toBeInTheDocument();
-  expect(within(chartContainer!).queryByText('us-central1')).not.toBeInTheDocument();
-  expect(within(chartContainer!).queryByText('europe-west4')).not.toBeInTheDocument();
+  expect(within(chart).getByText('1%')).toBeInTheDocument();
+  expect(within(chart).getByText('5%')).toBeInTheDocument();
+  expect(within(chart).getByText('95%')).toBeInTheDocument();
+  expect(within(chart).getByText('99%')).toBeInTheDocument();
+  const chartSeries = within(provisioning).getByRole('list', { name: 'Status history series' });
+  expect(within(chartSeries).queryByText('fleet')).not.toBeInTheDocument();
+  expect(within(chartSeries).getByText('us-east5')).toBeInTheDocument();
+  expect(within(chartSeries).getByText('asia-east1')).toBeInTheDocument();
+  expect(within(chartSeries).getByText('us-central1')).toBeInTheDocument();
+  expect(within(chartSeries).getByText('europe-west4')).toBeInTheDocument();
+  expect(within(provisioning).getByText('The logit scale expands values near 0% and 100%.')).toBeInTheDocument();
+
+  const onePercentLine = within(chart).getByLabelText('europe-west4 history');
+  const fivePercentLine = within(chart).getByLabelText('asia-east1 history');
+  const firstY = (line: HTMLElement) => {
+    const points = line.getAttribute('points');
+    if (!points) {
+      throw new Error('The chart line has no points');
+    }
+    return Number(points.split(' ')[0].split(',')[1]);
+  };
+  expect(Math.abs(firstY(onePercentLine) - firstY(fivePercentLine))).toBeGreaterThan(15);
   expect(within(provisioning).queryByText('us-east5-a')).not.toBeInTheDocument();
 });
