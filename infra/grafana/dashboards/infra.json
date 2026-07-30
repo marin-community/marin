@@ -317,16 +317,6 @@
               "type": "timestamp_epoch"
             },
             {
-              "selector": "resource_type",
-              "text": "resource_type",
-              "type": "string"
-            },
-            {
-              "selector": "scale_group",
-              "text": "scale_group",
-              "type": "string"
-            },
-            {
               "selector": "zone",
               "text": "zone",
               "type": "string"
@@ -442,7 +432,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "WITH region_counts AS (SELECT collected_at AS t, regexp_replace(json_get(labels, 'zone'), '-[^-]+$', '') AS series, SUM(CASE WHEN metric = 'provision_ready' THEN value ELSE 0 END) AS ready, SUM(CASE WHEN metric = 'provision_outcomes' THEN value ELSE 0 END) AS outcomes FROM \"infra.canary.metrics\" WHERE metric IN ('provision_ready', 'provision_outcomes') AND COALESCE(json_get(labels, 'zone'), '') <> '' AND collected_at >= {{from}} AND collected_at < {{to}} GROUP BY 1, 2), regional AS (SELECT t, series, ready / NULLIF(outcomes, 0) AS value FROM region_counts WHERE outcomes > 0), fleet AS (SELECT collected_at AS t, 'fleet' AS series, value FROM \"infra.canary.metrics\" WHERE metric = 'provision_success_ratio' AND contains(labels, '\"scope\": \"fleet\"') AND collected_at >= {{from}} AND collected_at < {{to}}) SELECT t, series, value FROM fleet UNION ALL SELECT t, series, value FROM regional ORDER BY t, series"
+                "value": "WITH region_counts AS (SELECT collected_at AS t, CASE WHEN regexp_matches(json_get(labels, 'zone'), '^[a-z]+-[a-z]+[0-9]+-[a-z]$') THEN regexp_replace(json_get(labels, 'zone'), '-[a-z]$', '') ELSE json_get(labels, 'zone') END AS series, SUM(CASE WHEN metric = 'provision_ready' THEN value ELSE 0 END) AS ready, SUM(CASE WHEN metric = 'provision_outcomes' THEN value ELSE 0 END) AS outcomes FROM \"infra.canary.metrics\" WHERE metric IN ('provision_ready', 'provision_outcomes') AND COALESCE(json_get(labels, 'zone'), '') <> '' AND collected_at >= {{from}} AND collected_at < {{to}} GROUP BY 1, 2), regional AS (SELECT t, series, ready / NULLIF(outcomes, 0) AS value FROM region_counts WHERE outcomes > 0), fleet AS (SELECT collected_at AS t, 'fleet' AS series, value FROM \"infra.canary.metrics\" WHERE metric = 'provision_success_ratio' AND contains(labels, '\"scope\": \"fleet\"') AND collected_at >= {{from}} AND collected_at < {{to}}) SELECT t, series, value FROM fleet UNION ALL SELECT t, series, value FROM regional ORDER BY t, series"
               },
               {
                 "key": "from",
