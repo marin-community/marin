@@ -51,6 +51,7 @@ from levanter.utils.activation import ActivationFunctionEnum
 _DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _ROUTING_RENORM_SUM = 2.5
 _INELIGIBLE_ROUTER_LOGIT = -1e9
+_PAIRED_RESIDUAL_SCALE = 1.0 / math.sqrt(2.0)
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 
@@ -126,6 +127,8 @@ class GrugModelConfig:
     """Fraction of training sequences assigned to a nested expert bank."""
     nested_layer_fraction: float = 1.0
     """Fraction of MoE layers restricted on each nested training sequence."""
+    paired_expert_residuals: bool = False
+    """Interpret the outer expert half as residuals over the extractable inner half."""
     num_layers: int = 6
     num_heads: int = 4
     num_kv_heads: int = 1
@@ -243,6 +246,8 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be positive")
         if self.num_experts_per_token > self.num_experts:
             raise ValueError("num_experts_per_token must be <= num_experts")
+        if self.paired_expert_residuals and self.num_experts % 2:
+            raise ValueError("paired expert residuals require an even number of experts")
         if not 0.0 <= self.nested_batch_fraction <= 1.0:
             raise ValueError("nested_batch_fraction must be between zero and one")
         if self.nested_batch_fraction and not self.nested_expert_counts:
@@ -833,7 +838,8 @@ class MoEMLP(eqx.Module):
         combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
         combine_weights = combine_weights_f.astype(x.dtype)
 
-        routed_flat = self.expert_mlp(
+        expert_mlp = paired_residual_expert_mlp(self.expert_mlp) if self.cfg.paired_expert_residuals else self.expert_mlp
+        routed_flat = expert_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
             combine_weights,
@@ -844,6 +850,26 @@ class MoEMLP(eqx.Module):
         )
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         return reshard(routed, _batch_spec()), qb_beta
+
+
+def paired_residual_expert_mlp(expert_mlp: MoEExpertMlp) -> MoEExpertMlp:
+    """Materialize paired outer experts as scaled base-plus-residual weights."""
+
+    def paired(weights: jax.Array | None) -> jax.Array | None:
+        if weights is None:
+            return None
+        if weights.shape[0] % 2:
+            raise ValueError("paired expert residuals require an even expert dimension")
+        base, residual = jnp.split(weights, 2, axis=0)
+        return jnp.concatenate([base, (base + residual) * _PAIRED_RESIDUAL_SCALE], axis=0)
+
+    return dataclasses.replace(
+        expert_mlp,
+        w_gate=paired(expert_mlp.w_gate),
+        w_up=paired(expert_mlp.w_up),
+        w_down=paired(expert_mlp.w_down),
+        w_gate_up=paired(expert_mlp.w_gate_up),
+    )
 
 
 class Block(eqx.Module):
@@ -910,7 +936,11 @@ class Block(eqx.Module):
                 per = int(sizes_env.split(",")[0])
             else:
                 per = self.mlp.cfg.num_experts // int(os.environ.get("SCALE_MOE_EXPERT_CHUNKS", "1"))
-            em = self.mlp.expert_mlp
+            em = (
+                paired_residual_expert_mlp(self.mlp.expert_mlp)
+                if self.mlp.cfg.paired_expert_residuals
+                else self.mlp.expert_mlp
+            )
             w_up_gate = em.w_gate_up if em.w_gate_up is not None else jnp.concatenate([em.w_gate, em.w_up], axis=-1)
             w13_pre0 = reshard(w_up_gate[:per], P(None, None, None))
             w2_pre0 = reshard(em.w_down[:per], P(None, None, None))
