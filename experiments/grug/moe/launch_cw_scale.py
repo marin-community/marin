@@ -162,6 +162,7 @@ def build_scale_model() -> GrugModelConfig:
         nested_batch_fraction=env_float("SCALE_NESTED_FRACTION", 0.0),
         nested_layer_fraction=env_float("SCALE_NESTED_LAYER_FRACTION", 1.0),
         paired_expert_residuals=os.environ.get("SCALE_PAIRED_EXPERT_RESIDUALS") == "1",
+        paired_router_residuals=os.environ.get("SCALE_PAIRED_ROUTER_RESIDUALS") == "1",
         # Routed-expert MLP width; default keeps the heuristic value (hidden/2 at hidden=5120).
         intermediate_dim=env_int("SCALE_INTERMEDIATE", base.intermediate_dim),
         shared_expert_intermediate_dim=env_int("SCALE_SHARED_INTERMEDIATE", hidden_dim),

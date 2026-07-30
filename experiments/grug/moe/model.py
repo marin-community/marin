@@ -129,6 +129,8 @@ class GrugModelConfig:
     """Fraction of MoE layers restricted on each nested training sequence."""
     paired_expert_residuals: bool = False
     """Interpret the outer expert half as residuals over the extractable inner half."""
+    paired_router_residuals: bool = False
+    """Interpret the outer router half as residuals over the extractable inner half."""
     num_layers: int = 6
     num_heads: int = 4
     num_kv_heads: int = 1
@@ -246,8 +248,8 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be positive")
         if self.num_experts_per_token > self.num_experts:
             raise ValueError("num_experts_per_token must be <= num_experts")
-        if self.paired_expert_residuals and self.num_experts % 2:
-            raise ValueError("paired expert residuals require an even number of experts")
+        if (self.paired_expert_residuals or self.paired_router_residuals) and self.num_experts % 2:
+            raise ValueError("paired residuals require an even number of experts")
         if not 0.0 <= self.nested_batch_fraction <= 1.0:
             raise ValueError("nested_batch_fraction must be between zero and one")
         if self.nested_batch_fraction and not self.nested_expert_counts:
@@ -790,7 +792,8 @@ class MoEMLP(eqx.Module):
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         # Keep the router path in fp32 before top-k and the sigmoid combine.
-        router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
+        router = paired_residual_weights(self.router, axis=-1) if self.cfg.paired_router_residuals else self.router
+        router_logits = jnp.einsum("td,de->te", x_flat, reshard(router, P(None, None))).astype(jnp.float32)
         if expert_eligibility is None:
             eligible_router_logits = router_logits
             eligible_counts = None
@@ -858,10 +861,7 @@ def paired_residual_expert_mlp(expert_mlp: MoEExpertMlp) -> MoEExpertMlp:
     def paired(weights: jax.Array | None) -> jax.Array | None:
         if weights is None:
             return None
-        if weights.shape[0] % 2:
-            raise ValueError("paired expert residuals require an even expert dimension")
-        base, residual = jnp.split(weights, 2, axis=0)
-        return jnp.concatenate([base, (base + residual) * _PAIRED_RESIDUAL_SCALE], axis=0)
+        return paired_residual_weights(weights, axis=0)
 
     return dataclasses.replace(
         expert_mlp,
@@ -870,6 +870,15 @@ def paired_residual_expert_mlp(expert_mlp: MoEExpertMlp) -> MoEExpertMlp:
         w_down=paired(expert_mlp.w_down),
         w_gate_up=paired(expert_mlp.w_gate_up),
     )
+
+
+def paired_residual_weights(weights: jax.Array, *, axis: int) -> jax.Array:
+    """Return a bank whose outer half is a variance-preserving base-plus-residual."""
+
+    if weights.shape[axis] % 2:
+        raise ValueError("paired residuals require an even paired dimension")
+    base, residual = jnp.split(weights, 2, axis=axis)
+    return jnp.concatenate([base, (base + residual) * _PAIRED_RESIDUAL_SCALE], axis=axis)
 
 
 class Block(eqx.Module):

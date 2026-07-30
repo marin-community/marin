@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from levanter.grug.grug_moe import MoEExpertMlp
 
-from experiments.grug.moe.model import GrugModelConfig, paired_residual_expert_mlp
+from experiments.grug.moe.model import GrugModelConfig, paired_residual_expert_mlp, paired_residual_weights
 
 
 def test_paired_residual_experts_materialize_base_and_scaled_outer_weights() -> None:
@@ -41,3 +41,13 @@ def test_paired_residual_experts_require_even_expert_count() -> None:
             num_experts=5,
             paired_expert_residuals=True,
         )
+
+
+def test_paired_router_residuals_transform_expert_columns() -> None:
+    weights = jnp.arange(24, dtype=jnp.float32).reshape(3, 8)
+
+    transformed = paired_residual_weights(weights, axis=-1)
+
+    base, residual = jnp.split(weights, 2, axis=-1)
+    expected = jnp.concatenate([base, (base + residual) / np.sqrt(2.0)], axis=-1)
+    np.testing.assert_allclose(transformed, expected, rtol=1e-6, atol=1e-7)
