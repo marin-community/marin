@@ -2,8 +2,29 @@
 
 Date: 2026-07-30
 
-Status: draft; five-arm pretraining complete, standalone and post-training
-controls in progress.
+Status: complete for the registered 10B-token, post-training, standalone E128,
+post-hoc pruning, and paired-residual gates. Production expert-parallel
+validation remains.
+
+## TL;DR
+
+- Naive E128 nesting produces both checkpoints in one run. At 10B tokens its
+  E128 is `0.033787` Paloma worse than matched standalone E128, while its E256
+  is `0.020221` worse than control. The nested mask adds `0.49%` compiled-step
+  time.
+- Under the preregistered Grug fixed-exponent conversion, extending
+  nested-naive training to match both standalone E128 and control E256 costs
+  an estimated `1.258x` one E256 run. Training E256 and E128 separately costs
+  `1.906x` under the same terminal-throughput wall model. Co-training therefore
+  saves an estimated `34.0%` against the two-run baseline.
+- Layerwise nesting protects E256, reducing its equivalent wall penalty from
+  `15.38%` to `5.33%`, but its E128 needs an extrapolated `2.625x` compute to
+  match standalone. It is suitable when E128 is a secondary breakout target,
+  not when equal E128 quality is required without cooldown.
+- Post-hoc expert selection preserves E256 but remains at least `0.358` Paloma
+  behind standalone E128. Paired expert/router residuals add no step cost and
+  preserve E256, but fail the 1B-token extraction gate without an explicit
+  compact objective.
 
 ## Question
 
@@ -54,8 +75,8 @@ directly to a 300B--700B expert-parallel system.
 | Rotating ladder25 / ladder50 | E128, E32, E8, and E1 use changing expert cosets | useful regularization test; reject as an extractable model |
 | Fixed-chain50 | 25% E128, 25% E16, 50% E256 | reject for broad full-model degradation |
 | Corrected combined fixed25 | 12.5% E128, 12.5% E16, 75% E256 | mechanically cheap; `+0.0313` terminal Paloma and `+11.86%` time to equivalent loss |
-| Single-prefix naive | 25% one fixed E128 or E16 prefix | current causal-isolation arms |
-| Single-prefix layerwise | same sequences, rotating two of eight restricted layers | current low-intensity enhancement arms |
+| Single-prefix naive | 25% one fixed E128 or E16 prefix | completed causal-isolation arms |
+| Single-prefix layerwise | same sequences, rotating two of eight restricted layers | completed low-intensity enhancement arms |
 
 The first Datakit d768 burn used a pack-one loader and changed model/router
 source, so it is excluded. The corrected control reproduces the historical
@@ -152,7 +173,7 @@ The preregistered gates are:
 
 ## Other schedules worth testing
 
-The current layerwise arm is the cheapest enhancement because it changes only
+The layerwise arm is the cheapest tested enhancement because it changes only
 eligibility. Several stronger designs are plausible:
 
 1. **Balanced complement routing.** For E128, allocate 25% of rows to
@@ -174,12 +195,11 @@ eligibility. Several stronger designs are plausible:
    gradients or optimizer updates by their expected sampling frequency. This
    attacks update-magnitude imbalance directly, but it needs careful treatment
    under Muon and does not restore missing outer-expert examples.
-5. **Hierarchical expert residuals.** Parameterize full experts as a shared
-   E16 or E128 base plus expert-specific residuals. Full-mode tokens then
-   train the extractable base without forcing all of their routing into the
-   small bank. This is a larger architecture change, but it most directly
-   expresses the desired rule that outer capacity should learn residual
-   concepts.
+5. **Hierarchical expert residuals.** Parameterize each outer expert as an E128
+   base plus an expert-specific residual. The simple no-prefix-loss version is
+   tested below and fails its 1B-token extraction gate. Pairing the router helps,
+   so the remaining candidate is residual sharing with sparse compact-mode
+   supervision.
 6. **Full-to-prefix distillation.** Add a router-logit or expert-output
    distillation loss on nested rows. Router-only distillation is cheap;
    computing full and restricted expert outputs is stronger but adds a partial
@@ -189,28 +209,151 @@ eligibility. Several stronger designs are plausible:
    weights. The adapters can be folded into the extracted checkpoint at
    breakout. This weakens the identical-weights constraint but could isolate
    the compact objective for much less than a second forward.
+8. **Breakout cooldown.** Train the low-tax layerwise schedule through the main
+   run, extract E128, and restart a direct E128 schedule for 0.5--2B tokens.
+   This tests the operational proposal directly: preserve E256 during the
+   shared run, then spend compact-only compute only when E128 is needed.
+9. **Pair-factorized routing.** Route first over 128 expert pairs, then choose
+   the base or residual member within the selected pair. E128 reuses the pair
+   router and always selects the base member. This trains the compact routing
+   decision on every token, but it changes top-k semantics and needs a new
+   dispatcher path.
+10. **Residual-coupling schedules.** Generalize the outer weight to
+    `a * base + b * residual`, with `a^2 + b^2 = 1`. Starting with larger `a`
+    exposes the base to more full-mode gradient; decaying `a` later restores
+    outer specialization. This should only be swept after adding compact
+    supervision, since the equal-coupling arm below already fails without it.
 
 The first three can be tested without changing the expert parameterization.
-Balanced complements are the clearest next E128 gate if the current E128
-naive arm shows useful prefix gains but retains a measurable full-model tax.
+The next sweep should remain gated:
+
+| Priority | Arm | Gate horizon | Reason |
+|---|---|---:|---|
+| 1 | Balanced complementary E128 halves | 1B, then 10B | exact expected expert-update balance and two extractable halves |
+| 2 | Progressive layer closure plus E128 cooldown | 1B cooldown, then 2B | tests whether a cheap breakout closes the standalone gap |
+| 3 | Paired weight/router residuals plus sparse compact loss | 1B, then 10B | preserves the zero-overhead residual path while adding route alignment |
+| 4 | Pair-factorized router | 1B | strongest hierarchy, but requires dispatcher work |
+
+Only arms that beat the fixed control chop, stay within `+0.10` full Paloma,
+and add less than 5% compiled-step cost should pass the 1B gate.
+
+### Paired residual Gate 1
+
+An exploratory residual parameterization tested whether full E256 tokens could
+train an extractable E128 without any restricted rows. Experts 0--127 remain
+ordinary extractable bases. Outer expert `128+i` materializes each weight as
+`(base[i] + residual[i]) / sqrt(2)`. The full model can still represent any
+pair of expert weights, initialization variance is preserved, and folding the
+weights removes the parameterization at export.
+
+The first arm paired expert weights only. The second applied the same
+parameterization to router columns, so outer route `128+i` uses
+`(base_router[i] + router_residual[i]) / sqrt(2)`. Both arms used the matched
+10B schedule but were registered to stop at update 4,000 unless their extracted
+E128 beat the fixed first-half control chop. Probe source is pinned at
+[`f2104e7f60`](https://github.com/marin-community/marin/commit/f2104e7f60)
+for expert weights and
+[`4a32e6ee22`](https://github.com/marin-community/marin/commit/4a32e6ee22)
+for router columns.
+
+| Arm at update 4,000 | Full E256 | Full delta | Extracted E128 | Delta vs control chop | Median step |
+|---|---:|---:|---:|---:|---:|
+| E256 control | 3.772742 | -- | 4.023812 | -- | 463.392 ms |
+| Paired expert weights | 3.785311 | +0.012569 | 4.178945 | +0.155132 | 462.800 ms |
+| Paired weights and router | 3.788318 | +0.015575 | 4.116328 | +0.092516 | 462.928 ms |
+
+Both residual arms preserve full-model quality and add no measurable
+optimizer-step cost, but both fail the extraction gate. Pairing router columns
+recovers `0.062616` nat relative to pairing weights alone. Route hierarchy
+matters in this proxy, but shared gradients from full-mode routing do not
+replace an explicit compact objective.
+
+The proxy change is small: it materializes paired weights immediately before
+the existing router and expert calls. A production expert-parallel version is
+a medium systems change. Each base/residual pair must be colocated or
+interleaved across expert-parallel ranks, and checkpoint export must fold the
+E256 weights while preserving the E128 bases. Inference has no residual
+overhead after that fold.
+
+The next residual follow-up should pair expert and router residuals with a
+sparse compact objective: for example, restrict two of eight layers on 25% of
+rows, or run all-layer E128 on 5% of rows. This directly aligns the compact
+router and experts while retaining shared full-mode gradients. Balanced
+complement routing remains the lower-risk next 10B arm because it restores
+each half-bank's expected control assignment rate without changing the
+parameterization.
 
 ## Additional E128 controls
 
-Two controls are in progress for the final report:
+A matched standalone E128 model uses the same d768/L8/top-4 shape, Datakit
+stream, 10B-token horizon, optimizer, batch, and seed. It determines whether
+nested extraction is competitive with training E128 directly, rather than
+merely better than an accidental prefix. This is a matched causal control, not
+an independently tuned E128 compute-optimal recipe: it deliberately retains
+the E256-derived learning-rate schedule. A dedicated E128 tuning sweep could
+improve the direct baseline.
 
-1. A matched standalone E128 model uses the same d768/L8/top-4 shape, Datakit
-   stream, 10B-token horizon, optimizer, batch, and seed. It determines
-   whether nested extraction is competitive with training E128 directly,
-   rather than merely better than an accidental prefix.
-2. The uncompromised E256 control is being pruned after training. The fixed
-   first-half chop is already measured at `3.555385` Paloma. Calibration-based
-   expert ranking and gated greedy refinement will test whether post-hoc
-   selection can produce a better E128 without changing E256 training.
+Post-hoc pruning of the uncompromised E256 control is complete:
+
+| E128 selection from E256 | Paloma | Uncheatable |
+|---|---:|---:|
+| Fixed experts 0--127 | 3.555385 | 3.025669 |
+| QB-bias score plus greedy refinement | 3.582255 | 3.208569 |
+| Router-norm score plus greedy refinement | 3.656008 | 3.111759 |
+| Hybrid score plus greedy refinement | 3.539281 | 3.035254 |
+| Random half | 3.563974 | 3.012820 |
+
+The hybrid score improves fixed-half Paloma by only `0.016104` and worsens
+uncheatable loss by `0.009585`. Random selection is better on uncheatable but
+worse on Paloma. None approaches nested-naive E128 at `3.215226` Paloma.
+Post-hoc selection preserves E256 exactly, but this calibration set and these
+scores do not recover a competitive E128 checkpoint.
 
 The standalone run is
 [tracked in W&B](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e128-standalone-10b-r1).
-The final comparison will report E128 loss at equal tokens, total compute to
-obtain both checkpoints, and the Grug fixed-exponent loss-to-step conversion.
+It completed 38,147 updates without a restart and committed its terminal
+checkpoint to CoreWeave S3. The coordinator ran for 5 hours 12 minutes,
+including compilation, 39 evaluations, and checkpoint commits.
+
+| E128 checkpoint | Paloma | Delta vs standalone | Uncheatable | Delta vs standalone | Terminal mean tok/s |
+|---|---:|---:|---:|---:|---:|
+| Standalone E128 | 3.181439 | -- | 2.592110 | -- | 614,100 |
+| Nested E128 naive | 3.215226 | +0.033787 | 2.628674 | +0.036564 | 553,997 |
+| Nested E128 layerwise | 3.331763 | +0.150324 | 2.756485 | +0.164376 | 555,469 |
+| E256 fixed first half | 3.555385 | +0.373945 | 3.025669 | +0.433559 | -- |
+| E256 hybrid post-hoc half | 3.539281 | +0.357842 | 3.035254 | +0.443144 | -- |
+
+Standalone E128 wins every aligned evaluation after update 1,000. Naive
+nesting is close but does not outperform direct training: its terminal gap is
+`0.033787` Paloma. Layerwise nesting gives up `0.150324` Paloma to protect the
+full model.
+
+The joint-cost model uses the fixed exponent from the Grug guide. For each
+nested endpoint, it recenters `loss(C) = 1.6 + A*C^(-0.0941)` and estimates
+the updates needed to reach standalone E128 loss and control E256 loss. The
+larger requirement determines how long the joint run must continue. Measured
+terminal throughput converts updates to wall time.
+
+| Training plan | E128 compute to standalone loss | E256 compute to control loss | Joint wall vs one E256 | Saving vs separate E256 + E128 |
+|---|---:|---:|---:|---:|
+| E256 plus standalone E128 | 1.000x | 1.000x | 1.906x | -- |
+| Nested E128 naive | 1.252x | 1.148x | 1.258x | 34.0% |
+| Nested E128 layerwise | 2.625x | 1.051x | 2.630x | -38.0% |
+
+For naive nesting, E128 is the binding target: the model predicts 47,756
+updates, 9,609 beyond the observed endpoint, to match standalone E128.
+The E256 target needs 43,806 updates. The resulting `1.258x` wall estimate is
+34.0% below the two-run terminal-throughput estimate of `1.906x`.
+
+This is an extrapolation, not an observed continuation. It assumes the fixed
+Grug exponent remains applicable past the 10B learning-rate horizon and that
+throughput stays constant. A direct breakout cooldown may close E128 faster
+than extending the mixed schedule, while an independently tuned E128 recipe
+may strengthen the standalone baseline.
+
+![Matched E128 training and post-hoc controls.](assets/nested-model-training-e128-controls.png)
+
+[Machine-readable E128 endpoint and cost results](assets/nested-model-training-e128-controls-results.json)
 
 ## Post-training plan
 
@@ -385,13 +528,19 @@ is:
 This result is already precise enough to reject a material same-topology
 kernel surcharge. Quality-adjusted cost remains the deciding measurement.
 
-The two-checkpoint baseline is much more expensive. Analytic model FLOPs are
+The two-checkpoint baseline costs nearly two full runs. Analytic model FLOPs are
 approximately 357.7M per token for E256 and 356.2M for standalone E128, so
-training both independently costs about 1.996x one E256 run. At 10B tokens,
-the Grug quality-adjusted estimates are 1.154x for E128 naive and 1.053x for
-E128 layerwise. This is not yet an
-apples-to-apples replacement claim: the current control provides an untrained
-same-checkpoint prefix, not an independently compute-optimal E128 run.
+training both independently costs about 1.996x one E256 run by FLOPs.
+Standalone E128 is 10.3% faster in measured terminal throughput because its
+stored expert bank is half as large, making the terminal-throughput wall ratio
+1.906x.
+
+At equal 10B-token endpoints, one nested run costs approximately one E256 run
+but trails both direct targets. The Grug joint-target model estimates 1.258x
+E256 wall for naive E128 nesting, versus 1.906x for separate training. The
+layerwise arm protects E256 but requires 2.630x wall to extrapolate its weaker
+E128 to standalone quality. The earlier 1.154x and 1.053x values measure only
+time to equivalent E256 loss; they do not price the E128 target.
 
 ## Scaling interpretation
 
@@ -421,11 +570,17 @@ turn a promising quality curve into capacity overflow and all-to-all
 imbalance.
 
 An architecture is economically viable if its final quality-adjusted cost is
-below about 10%. The fixed-exponent Grug conversion puts both layerwise arms
-inside that threshold and both naive arms outside it. E128 naive is the better
-breakout model; E128 layerwise is the better full model and the only E128 arm
-inside the threshold. A production expert-parallel replication and balance
-test remains required evidence.
+below about 10% when E256 is the only target. The fixed-exponent Grug conversion
+puts both layerwise arms inside that threshold and both naive arms outside it.
+E128 layerwise is therefore the better schedule when the large model is
+primary and the compact model is optional.
+
+When both checkpoints are required, naive E128 nesting costs an estimated
+1.258x one E256 run to match both direct targets, saving 34.0% against separate
+E256 and E128 runs. It is the viable joint-training arm despite exceeding the
+10% single-model surcharge line. Layerwise E128 is not viable at equal compact
+quality without a faster breakout cooldown. A production expert-parallel
+replication and balance test remains required evidence.
 
 ![Full and prefix Paloma curves.](assets/nested-model-training-single-prefix-10b-paloma.png)
 
@@ -435,11 +590,11 @@ test remains required evidence.
 
 ![Rolling anchored time to equivalent full-mode Paloma loss.](assets/nested-model-training-single-prefix-10b-time-to-equivalent.png)
 
-Standalone E128 and post-hoc pruning results will be added after those jobs
-complete.
-
 - [E256 control](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e256-10b-r1)
 - [E128 naive](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e128-naive25-10b-r1)
 - [E16 naive](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e16-naive25-10b-r1)
 - [E128 layerwise](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e128-layer25-10b-r1)
 - [E16 layerwise](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e16-layer25-10b-r1)
+- [Standalone E128](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e128-standalone-10b-r1)
+- [Paired expert residual Gate 1](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e128-pairedresidual-10b-r1)
+- [Paired expert/router residual Gate 1](https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e128-pairedrouterresidual-10b-r1)

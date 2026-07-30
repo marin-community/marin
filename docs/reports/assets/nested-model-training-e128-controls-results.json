@@ -1,0 +1,722 @@
+{
+  "comparisons": {
+    "nested_layerwise": {
+      "full_compute_multiplier_to_control_loss": 1.0510474108659595,
+      "full_equivalent_updates": 40094.30558230376,
+      "independent_wall_vs_one_e256": 1.9064528111693482,
+      "joint_compute_multiplier": 2.624740940340944,
+      "joint_wall_savings_vs_independent": -0.37970165148943447,
+      "joint_wall_vs_one_e256": 2.6303360920570245,
+      "prefix_compute_multiplier_to_standalone_loss": 2.624740940340944,
+      "prefix_equivalent_updates": 100125.99265118598
+    },
+    "nested_naive": {
+      "full_compute_multiplier_to_control_loss": 1.148345076340025,
+      "full_equivalent_updates": 43805.91962714293,
+      "independent_wall_vs_one_e256": 1.9064528111693482,
+      "joint_compute_multiplier": 1.2518862530608825,
+      "joint_wall_savings_vs_independent": 0.34019524476266205,
+      "joint_wall_vs_one_e256": 1.2578866304451266,
+      "prefix_compute_multiplier_to_standalone_loss": 1.2518862530608825,
+      "prefix_equivalent_updates": 47755.70489551349
+    }
+  },
+  "runs": {
+    "control_prefix": {
+      "full_paloma_macro_loss": 3.143486738204956,
+      "history": [
+        {
+          "step": 1000,
+          "value": 4.496725082397461
+        },
+        {
+          "step": 2000,
+          "value": 4.173059463500977
+        },
+        {
+          "step": 3000,
+          "value": 4.081601619720459
+        },
+        {
+          "step": 4000,
+          "value": 4.023812294006348
+        },
+        {
+          "step": 5000,
+          "value": 3.982099771499634
+        },
+        {
+          "step": 6000,
+          "value": 3.939568519592285
+        },
+        {
+          "step": 7000,
+          "value": 3.9269795417785645
+        },
+        {
+          "step": 8000,
+          "value": 3.9211363792419434
+        },
+        {
+          "step": 9000,
+          "value": 3.89207124710083
+        },
+        {
+          "step": 10000,
+          "value": 3.874454975128174
+        },
+        {
+          "step": 11000,
+          "value": 3.8503193855285645
+        },
+        {
+          "step": 12000,
+          "value": 3.8416242599487305
+        },
+        {
+          "step": 13000,
+          "value": 3.8344757556915283
+        },
+        {
+          "step": 14000,
+          "value": 3.81052565574646
+        },
+        {
+          "step": 15000,
+          "value": 3.805389404296875
+        },
+        {
+          "step": 16000,
+          "value": 3.7912511825561523
+        },
+        {
+          "step": 17000,
+          "value": 3.778529644012451
+        },
+        {
+          "step": 18000,
+          "value": 3.7658567428588867
+        },
+        {
+          "step": 19000,
+          "value": 3.7552061080932617
+        },
+        {
+          "step": 20000,
+          "value": 3.746288537979126
+        },
+        {
+          "step": 21000,
+          "value": 3.734771251678467
+        },
+        {
+          "step": 22000,
+          "value": 3.717766523361206
+        },
+        {
+          "step": 23000,
+          "value": 3.710206985473633
+        },
+        {
+          "step": 24000,
+          "value": 3.7051877975463867
+        },
+        {
+          "step": 25000,
+          "value": 3.687068223953247
+        },
+        {
+          "step": 26000,
+          "value": 3.685230016708374
+        },
+        {
+          "step": 27000,
+          "value": 3.662306308746338
+        },
+        {
+          "step": 28000,
+          "value": 3.664647340774536
+        },
+        {
+          "step": 29000,
+          "value": 3.649305820465088
+        },
+        {
+          "step": 30000,
+          "value": 3.6371889114379883
+        },
+        {
+          "step": 31000,
+          "value": 3.6191086769104004
+        },
+        {
+          "step": 32000,
+          "value": 3.608283042907715
+        },
+        {
+          "step": 33000,
+          "value": 3.602792739868164
+        },
+        {
+          "step": 34000,
+          "value": 3.589770555496216
+        },
+        {
+          "step": 35000,
+          "value": 3.5783166885375977
+        },
+        {
+          "step": 36000,
+          "value": 3.5796279907226562
+        },
+        {
+          "step": 37000,
+          "value": 3.561112403869629
+        },
+        {
+          "step": 38000,
+          "value": 3.555574893951416
+        },
+        {
+          "step": 38146,
+          "value": 3.555384635925293
+        }
+      ],
+      "metric": "eval/nested_e128/paloma/macro_loss",
+      "paloma_macro_loss": 3.555384635925293,
+      "run_name": "nest-augdk-e256-10b-r1",
+      "terminal_mean_tokens_per_second": 556652.824156402,
+      "uncheatable_macro_loss": 3.0256686210632324,
+      "url": "https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e256-10b-r1"
+    },
+    "hybrid": {
+      "paloma_macro_loss": 3.539280891418457,
+      "run_name": "nest-augdk-e256-10b-posthoc-e128-hybrid-r2",
+      "selection_method": "hybrid_greedy",
+      "uncheatable_macro_loss": 3.0352540016174316,
+      "url": "https://wandb.ai/marin-community/marin_moe_sft/runs/nest-augdk-e256-10b-posthoc-e128-hybrid-r2"
+    },
+    "nested_layerwise": {
+      "full_paloma_macro_loss": 3.1507349014282227,
+      "history": [
+        {
+          "step": 1000,
+          "value": 4.439290523529053
+        },
+        {
+          "step": 2000,
+          "value": 4.072394371032715
+        },
+        {
+          "step": 3000,
+          "value": 3.9755239486694336
+        },
+        {
+          "step": 4000,
+          "value": 3.911731481552124
+        },
+        {
+          "step": 5000,
+          "value": 3.8565995693206787
+        },
+        {
+          "step": 6000,
+          "value": 3.815108060836792
+        },
+        {
+          "step": 7000,
+          "value": 3.789210796356201
+        },
+        {
+          "step": 8000,
+          "value": 3.7862842082977295
+        },
+        {
+          "step": 9000,
+          "value": 3.760068893432617
+        },
+        {
+          "step": 10000,
+          "value": 3.736567497253418
+        },
+        {
+          "step": 11000,
+          "value": 3.7064871788024902
+        },
+        {
+          "step": 12000,
+          "value": 3.695018768310547
+        },
+        {
+          "step": 13000,
+          "value": 3.694058895111084
+        },
+        {
+          "step": 14000,
+          "value": 3.6676506996154785
+        },
+        {
+          "step": 15000,
+          "value": 3.646270990371704
+        },
+        {
+          "step": 16000,
+          "value": 3.6278977394104004
+        },
+        {
+          "step": 17000,
+          "value": 3.6274185180664062
+        },
+        {
+          "step": 18000,
+          "value": 3.6021666526794434
+        },
+        {
+          "step": 19000,
+          "value": 3.5960044860839844
+        },
+        {
+          "step": 20000,
+          "value": 3.576241970062256
+        },
+        {
+          "step": 21000,
+          "value": 3.567470073699951
+        },
+        {
+          "step": 22000,
+          "value": 3.5471243858337402
+        },
+        {
+          "step": 23000,
+          "value": 3.5366008281707764
+        },
+        {
+          "step": 24000,
+          "value": 3.5235402584075928
+        },
+        {
+          "step": 25000,
+          "value": 3.514453649520874
+        },
+        {
+          "step": 26000,
+          "value": 3.4999032020568848
+        },
+        {
+          "step": 27000,
+          "value": 3.4862444400787354
+        },
+        {
+          "step": 28000,
+          "value": 3.474031448364258
+        },
+        {
+          "step": 29000,
+          "value": 3.465137481689453
+        },
+        {
+          "step": 30000,
+          "value": 3.4397571086883545
+        },
+        {
+          "step": 31000,
+          "value": 3.423513889312744
+        },
+        {
+          "step": 32000,
+          "value": 3.4067344665527344
+        },
+        {
+          "step": 33000,
+          "value": 3.3955438137054443
+        },
+        {
+          "step": 34000,
+          "value": 3.3807783126831055
+        },
+        {
+          "step": 35000,
+          "value": 3.374314546585083
+        },
+        {
+          "step": 36000,
+          "value": 3.3580069541931152
+        },
+        {
+          "step": 37000,
+          "value": 3.3481836318969727
+        },
+        {
+          "step": 38000,
+          "value": 3.335252285003662
+        },
+        {
+          "step": 38146,
+          "value": 3.33176326751709
+        }
+      ],
+      "metric": "eval/nested_e128/paloma/macro_loss",
+      "paloma_macro_loss": 3.33176326751709,
+      "run_name": "nest-augdk-e128-layer25-10b-r1",
+      "terminal_mean_tokens_per_second": 555468.7332663652,
+      "uncheatable_macro_loss": 2.7564852237701416,
+      "url": "https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e128-layer25-10b-r1"
+    },
+    "nested_naive": {
+      "full_paloma_macro_loss": 3.163708209991455,
+      "history": [
+        {
+          "step": 1000,
+          "value": 4.390685081481934
+        },
+        {
+          "step": 2000,
+          "value": 4.001550674438477
+        },
+        {
+          "step": 3000,
+          "value": 3.889505624771118
+        },
+        {
+          "step": 4000,
+          "value": 3.815397024154663
+        },
+        {
+          "step": 5000,
+          "value": 3.7699320316314697
+        },
+        {
+          "step": 6000,
+          "value": 3.7238245010375977
+        },
+        {
+          "step": 7000,
+          "value": 3.6975629329681396
+        },
+        {
+          "step": 8000,
+          "value": 3.687587261199951
+        },
+        {
+          "step": 9000,
+          "value": 3.657987356185913
+        },
+        {
+          "step": 10000,
+          "value": 3.6390156745910645
+        },
+        {
+          "step": 11000,
+          "value": 3.6097049713134766
+        },
+        {
+          "step": 12000,
+          "value": 3.5927720069885254
+        },
+        {
+          "step": 13000,
+          "value": 3.5883874893188477
+        },
+        {
+          "step": 14000,
+          "value": 3.567272663116455
+        },
+        {
+          "step": 15000,
+          "value": 3.549468517303467
+        },
+        {
+          "step": 16000,
+          "value": 3.5341453552246094
+        },
+        {
+          "step": 17000,
+          "value": 3.52223539352417
+        },
+        {
+          "step": 18000,
+          "value": 3.50364351272583
+        },
+        {
+          "step": 19000,
+          "value": 3.4940571784973145
+        },
+        {
+          "step": 20000,
+          "value": 3.471694231033325
+        },
+        {
+          "step": 21000,
+          "value": 3.460533618927002
+        },
+        {
+          "step": 22000,
+          "value": 3.4453704357147217
+        },
+        {
+          "step": 23000,
+          "value": 3.429936408996582
+        },
+        {
+          "step": 24000,
+          "value": 3.423558473587036
+        },
+        {
+          "step": 25000,
+          "value": 3.4045333862304688
+        },
+        {
+          "step": 26000,
+          "value": 3.3915653228759766
+        },
+        {
+          "step": 27000,
+          "value": 3.3758840560913086
+        },
+        {
+          "step": 28000,
+          "value": 3.3651556968688965
+        },
+        {
+          "step": 29000,
+          "value": 3.348059892654419
+        },
+        {
+          "step": 30000,
+          "value": 3.330129861831665
+        },
+        {
+          "step": 31000,
+          "value": 3.307018756866455
+        },
+        {
+          "step": 32000,
+          "value": 3.2931909561157227
+        },
+        {
+          "step": 33000,
+          "value": 3.2835614681243896
+        },
+        {
+          "step": 34000,
+          "value": 3.268373727798462
+        },
+        {
+          "step": 35000,
+          "value": 3.252716064453125
+        },
+        {
+          "step": 36000,
+          "value": 3.2397351264953613
+        },
+        {
+          "step": 37000,
+          "value": 3.228787422180176
+        },
+        {
+          "step": 38000,
+          "value": 3.2176554203033447
+        },
+        {
+          "step": 38146,
+          "value": 3.215226173400879
+        }
+      ],
+      "metric": "eval/nested_e128/paloma/macro_loss",
+      "paloma_macro_loss": 3.215226173400879,
+      "run_name": "nest-augdk-e128-naive25-10b-r1",
+      "terminal_mean_tokens_per_second": 553997.4759428975,
+      "uncheatable_macro_loss": 2.628673791885376,
+      "url": "https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e128-naive25-10b-r1"
+    },
+    "qb_bias": {
+      "paloma_macro_loss": 3.582254648208618,
+      "run_name": "nest-augdk-e256-10b-posthoc-e128-qb-bias-r2",
+      "selection_method": "qb_bias_greedy",
+      "uncheatable_macro_loss": 3.208569049835205,
+      "url": "https://wandb.ai/marin-community/marin_moe_sft/runs/nest-augdk-e256-10b-posthoc-e128-qb-bias-r2"
+    },
+    "random": {
+      "paloma_macro_loss": 3.563974380493164,
+      "run_name": "nest-augdk-e256-10b-posthoc-e128-random-r2",
+      "selection_method": "random",
+      "uncheatable_macro_loss": 3.012819528579712,
+      "url": "https://wandb.ai/marin-community/marin_moe_sft/runs/nest-augdk-e256-10b-posthoc-e128-random-r2"
+    },
+    "router_norm": {
+      "paloma_macro_loss": 3.656008005142212,
+      "run_name": "nest-augdk-e256-10b-posthoc-e128-router-norm-r2",
+      "selection_method": "router_norm_greedy",
+      "uncheatable_macro_loss": 3.1117594242095947,
+      "url": "https://wandb.ai/marin-community/marin_moe_sft/runs/nest-augdk-e256-10b-posthoc-e128-router-norm-r2"
+    },
+    "standalone": {
+      "full_paloma_macro_loss": 3.181439161300659,
+      "history": [
+        {
+          "step": 1000,
+          "value": 4.370637893676758
+        },
+        {
+          "step": 2000,
+          "value": 3.9748408794403076
+        },
+        {
+          "step": 3000,
+          "value": 3.862788677215576
+        },
+        {
+          "step": 4000,
+          "value": 3.7857723236083984
+        },
+        {
+          "step": 5000,
+          "value": 3.740424633026123
+        },
+        {
+          "step": 6000,
+          "value": 3.695080280303955
+        },
+        {
+          "step": 7000,
+          "value": 3.6677451133728027
+        },
+        {
+          "step": 8000,
+          "value": 3.6620616912841797
+        },
+        {
+          "step": 9000,
+          "value": 3.629354953765869
+        },
+        {
+          "step": 10000,
+          "value": 3.6063284873962402
+        },
+        {
+          "step": 11000,
+          "value": 3.5812997817993164
+        },
+        {
+          "step": 12000,
+          "value": 3.567574977874756
+        },
+        {
+          "step": 13000,
+          "value": 3.5549001693725586
+        },
+        {
+          "step": 14000,
+          "value": 3.5360493659973145
+        },
+        {
+          "step": 15000,
+          "value": 3.5163064002990723
+        },
+        {
+          "step": 16000,
+          "value": 3.5019917488098145
+        },
+        {
+          "step": 17000,
+          "value": 3.4923410415649414
+        },
+        {
+          "step": 18000,
+          "value": 3.4712743759155273
+        },
+        {
+          "step": 19000,
+          "value": 3.4559733867645264
+        },
+        {
+          "step": 20000,
+          "value": 3.4442906379699707
+        },
+        {
+          "step": 21000,
+          "value": 3.4259138107299805
+        },
+        {
+          "step": 22000,
+          "value": 3.408703327178955
+        },
+        {
+          "step": 23000,
+          "value": 3.395005226135254
+        },
+        {
+          "step": 24000,
+          "value": 3.3885505199432373
+        },
+        {
+          "step": 25000,
+          "value": 3.3688066005706787
+        },
+        {
+          "step": 26000,
+          "value": 3.35331392288208
+        },
+        {
+          "step": 27000,
+          "value": 3.337784767150879
+        },
+        {
+          "step": 28000,
+          "value": 3.3309226036071777
+        },
+        {
+          "step": 29000,
+          "value": 3.312714099884033
+        },
+        {
+          "step": 30000,
+          "value": 3.2942519187927246
+        },
+        {
+          "step": 31000,
+          "value": 3.275334596633911
+        },
+        {
+          "step": 32000,
+          "value": 3.2572176456451416
+        },
+        {
+          "step": 33000,
+          "value": 3.24843168258667
+        },
+        {
+          "step": 34000,
+          "value": 3.232602834701538
+        },
+        {
+          "step": 35000,
+          "value": 3.217838764190674
+        },
+        {
+          "step": 36000,
+          "value": 3.2082135677337646
+        },
+        {
+          "step": 37000,
+          "value": 3.19403076171875
+        },
+        {
+          "step": 38000,
+          "value": 3.181770086288452
+        },
+        {
+          "step": 38146,
+          "value": 3.181439161300659
+        }
+      ],
+      "metric": "eval/paloma/macro_loss",
+      "paloma_macro_loss": 3.181439161300659,
+      "run_name": "nest-augdk-e128-standalone-10b-r1",
+      "terminal_mean_tokens_per_second": 614100.1685882634,
+      "uncheatable_macro_loss": 2.5921096801757812,
+      "url": "https://wandb.ai/marin-community/marin_moe/runs/nest-augdk-e128-standalone-10b-r1"
+    }
+  }
+}

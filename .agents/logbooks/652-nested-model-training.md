@@ -2632,3 +2632,38 @@ result:
   supervision. A follow-up should combine paired expert/router residuals with
   a sparse explicit E128 objective, or test a balanced-complement schedule
   that restores each bank's expected control assignment rate.
+
+### 2026-07-30 05:59 - NEST-MOE-006 standalone and E128 controls complete
+
+- The matched standalone E128 run completed 38,147 updates without a restart
+  or preemption. The Iris coordinator succeeded in 5 hours 12 minutes. The
+  terminal checkpoint committed to
+  `s3://marin-us-east-02a/marin/users/root/experiments/grug-moe-cw/grug-moe-cw-d768-L8-e128-r1-nest-augdk-e128-standalone-10b-r1/dev/checkpoints/step-38147`.
+- Standalone E128 finishes at `3.181439` Paloma and `2.592110`
+  uncheatable loss. Mean throughput over the final 100 updates is 614,100
+  tok/s. Nested-naive E128 is `+0.033787` Paloma and `+0.036564`
+  uncheatable at the same token count; nested-layerwise is `+0.150324` and
+  `+0.164376`.
+- Standalone E128 beats nested-naive at every aligned evaluation from update
+  1,000 through the endpoint. The matched direct baseline therefore rejects
+  the hypothesis that nested E128 is better than direct E128 at equal tokens.
+  The gap is small enough that joint-training economics remain favorable.
+- The fixed Grug exponent predicts that nested-naive needs 47,756 updates
+  (`1.252x` compute) to reach standalone E128 loss. Its full E256 needs 43,806
+  updates (`1.148x`) to reach control E256 loss. Taking the larger target and
+  applying measured throughput gives `1.258x` one-E256 wall time to obtain both
+  targets, versus `1.906x` for separate E256 and E128 runs, a `34.0%`
+  estimated saving.
+- The same joint-target calculation rejects layerwise nesting as a direct E128
+  replacement: its E128 target extrapolates to 100,126 updates and `2.630x`
+  one-E256 wall time. Layerwise remains the lowest-tax E256-primary schedule
+  and should be paired with an observed breakout cooldown rather than extended
+  under the mixed objective.
+- Post-hoc selection from the uncompromised E256 checkpoint also fails to
+  replace co-training. Hybrid greedy selection is best on Paloma at `3.539281`,
+  only `0.016104` better than the fixed first-half chop and `0.357842` worse
+  than standalone. QB-bias, router-norm, and random-half selections finish at
+  `3.582255`, `3.656008`, and `3.563974`.
+- The report now includes the standalone loss curve, post-hoc endpoints,
+  residual Gate 1, and machine-readable fixed-exponent joint-cost model:
+  `docs/reports/nested-model-training-single-prefix-10b.md`.
