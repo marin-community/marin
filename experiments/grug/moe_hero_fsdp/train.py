@@ -265,23 +265,9 @@ class GrugTrainState:
 
 def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     """Set router biases from QB betas (computed on previous step)."""
-    if model.blocks is None:
-        assert model.stacked_blocks is not None
-        new_bias = -qb_betas
-        new_bias = new_bias - jnp.mean(new_bias, axis=-1, keepdims=True)
-        return eqx.tree_at(lambda t: t.stacked_blocks.stacked.mlp.router_bias, model, new_bias)
-
-    new_blocks = list(model.blocks)
-    moe_idx = 0
-    for i, block in enumerate(model.blocks):
-        if block.mlp is None:
-            continue
-        new_bias = -qb_betas[moe_idx]
-        new_bias = new_bias - jnp.mean(new_bias)
-        new_mlp = eqx.tree_at(lambda m: m.router_bias, block.mlp, new_bias)
-        new_blocks[i] = eqx.tree_at(lambda b: b.mlp, block, new_mlp)
-        moe_idx += 1
-    return eqx.tree_at(lambda t: t.blocks, model, tuple(new_blocks))
+    new_bias = -qb_betas
+    new_bias = new_bias - jnp.mean(new_bias, axis=-1, keepdims=True)
+    return eqx.tree_at(lambda t: t.stacked_blocks.stacked.mlp.router_bias, model, new_bias)
 
 
 def _optimizer_state_to_memory_kind(tree, memory_kind: str):
@@ -310,10 +296,7 @@ def initial_state(
     offload_opt_state: bool = False,
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
-    if params.blocks is None:
-        num_moe_layers = model_config.num_layers
-    else:
-        num_moe_layers = sum(1 for block in params.blocks if block.mlp is not None)
+    num_moe_layers = model_config.num_layers
     opt_state = optimizer.init(params)
     if offload_opt_state:
         opt_state = _optimizer_state_to_memory_kind(opt_state, "pinned_host")
