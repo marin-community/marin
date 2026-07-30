@@ -10,7 +10,12 @@ from levanter.grug.sharding import compact_grug_mesh
 
 from experiments.grug.moe.launch_augdk_nested_sft import SFTArm, sft_routing_model
 from experiments.grug.moe.model import GrugModelConfig, Transformer
-from experiments.grug.moe.train import GrugTrainState, extract_expert_range, init_weights_only_from_checkpoint
+from experiments.grug.moe.train import (
+    GrugTrainState,
+    extract_expert_range,
+    extract_expert_selection,
+    init_weights_only_from_checkpoint,
+)
 
 
 def _nested_model(*, count: int, layer_fraction: float) -> GrugModelConfig:
@@ -169,3 +174,51 @@ def test_expert_range_extraction_preserves_selected_router_experts_and_qb_state(
         source.stacked_blocks.stacked.mlp.router[..., :4],
     )
     np.testing.assert_array_equal(target_pending, pending[:, 1, :4])
+
+
+def test_layerwise_expert_selection_compacts_each_layer() -> None:
+    source_config = GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=64,
+        intermediate_dim=32,
+        shared_expert_intermediate_dim=64,
+        num_experts=8,
+        num_experts_per_token=2,
+        num_layers=2,
+        num_heads=1,
+        num_kv_heads=1,
+        max_seq_len=16,
+    )
+    target_config = dataclasses.replace(source_config, num_experts=4)
+    mesh = compact_grug_mesh()
+    with jax.set_mesh(mesh):
+        source = Transformer.init(source_config, key=jax.random.PRNGKey(0))
+        target_exemplar = Transformer.init(target_config, key=jax.random.PRNGKey(1))
+    pending = jnp.arange(2 * 8, dtype=jnp.float32).reshape(2, 8)
+    target_pending_exemplar = jnp.zeros((2, 4), dtype=jnp.float32)
+    selection = ((0, 2, 4, 6), (1, 3, 5, 7))
+
+    target, target_pending = extract_expert_selection(
+        source,
+        pending,
+        target_model=target_exemplar,
+        target_pending_qb_betas=target_pending_exemplar,
+        expert_selection=selection,
+    )
+
+    assert target.config is target_config
+    assert jax.tree.structure(target) == jax.tree.structure(target_exemplar)
+    for layer, layer_selection in enumerate(selection):
+        np.testing.assert_array_equal(
+            target.stacked_blocks.stacked.mlp.router[layer],
+            np.take(np.asarray(source.stacked_blocks.stacked.mlp.router)[layer], layer_selection, axis=-1),
+        )
+        np.testing.assert_array_equal(
+            target.stacked_blocks.stacked.mlp.expert_mlp.w_down[layer],
+            np.take(
+                np.asarray(source.stacked_blocks.stacked.mlp.expert_mlp.w_down)[layer],
+                layer_selection,
+                axis=0,
+            ),
+        )
+        np.testing.assert_array_equal(target_pending[layer], pending[layer, layer_selection])

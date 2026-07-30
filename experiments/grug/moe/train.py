@@ -45,6 +45,7 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
+from experiments.grug.moe.expert_selection import ExpertSelectionMethod, select_experts
 from experiments.grug.moe.model import GrugModelConfig, Transformer
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
@@ -94,6 +95,7 @@ class GrugTrainerConfig:
     initialization_mode: InitializationMode = InitializationMode.FULL_STATE
     initialization_source_model: GrugModelConfig | None = None
     initialization_expert_offset: int | None = None
+    initialization_expert_selection_method: ExpertSelectionMethod | None = None
 
 
 @dataclass(frozen=True)
@@ -524,6 +526,149 @@ def init_expert_range_from_checkpoint(
     )
 
 
+def extract_expert_selection(
+    model: Transformer,
+    pending_qb_betas: jax.Array,
+    *,
+    target_model: Transformer,
+    target_pending_qb_betas: jax.Array,
+    expert_selection: tuple[tuple[int, ...], ...],
+) -> tuple[Transformer, jax.Array]:
+    """Gather one possibly layer-specific expert bank into a physical model."""
+    source_config = model.config
+    target_config = target_model.config
+    expert_count = target_config.num_experts
+    if target_config.mtp_depth or source_config.mtp_depth:
+        raise ValueError("expert-selection extraction does not support MTP models")
+    if target_config.nested_expert_counts:
+        raise ValueError("the extracted target must use an ordinary single-bank router")
+    if len(expert_selection) == 1:
+        expert_selection = expert_selection * source_config.num_layers
+    if len(expert_selection) != source_config.num_layers:
+        raise ValueError("expert selection must contain one shared bank or one bank per layer")
+    if any(len(layer_selection) != expert_count for layer_selection in expert_selection):
+        raise ValueError("every expert selection must match the target expert count")
+    if any(len(set(layer_selection)) != expert_count for layer_selection in expert_selection):
+        raise ValueError("expert selection contains duplicate experts")
+    if any(
+        expert < 0 or expert >= source_config.num_experts
+        for layer_selection in expert_selection
+        for expert in layer_selection
+    ):
+        raise ValueError("expert selection contains an out-of-range expert")
+
+    source_blocks = model.stacked_blocks.stacked
+    source_mlp = source_blocks.mlp
+    source_experts = source_mlp.expert_mlp
+    target_mlp = target_model.stacked_blocks.stacked.mlp
+    target_experts = target_mlp.expert_mlp
+    selection = jnp.asarray(expert_selection, dtype=jnp.int32)
+    layer_indices = jnp.arange(source_config.num_layers, dtype=jnp.int32)[:, None]
+
+    def output_sharding(target: jax.Array) -> NamedSharding | None:
+        return target.sharding if isinstance(target.sharding, NamedSharding) else None
+
+    def gather_experts(weights: jax.Array | None, target_weights: jax.Array | None) -> jax.Array | None:
+        if weights is None:
+            if target_weights is not None:
+                raise ValueError("source and target expert parameter layouts differ")
+            return None
+        if target_weights is None:
+            raise ValueError("source and target expert parameter layouts differ")
+        return weights.at[layer_indices, selection].get(out_sharding=output_sharding(target_weights))
+
+    hidden_indices = jnp.arange(source_config.hidden_dim, dtype=jnp.int32)[None, :, None]
+    router = source_mlp.router.at[
+        layer_indices[:, :, None],
+        hidden_indices,
+        selection[:, None, :],
+    ].get(out_sharding=output_sharding(target_mlp.router))
+    source_router_bias = source_mlp.router_bias[:, 0, :] if source_mlp.router_bias.ndim == 3 else source_mlp.router_bias
+    source_pending_qb_betas = pending_qb_betas[:, 0, :] if pending_qb_betas.ndim == 3 else pending_qb_betas
+
+    extracted_experts = dataclasses.replace(
+        source_experts,
+        w_gate=gather_experts(source_experts.w_gate, target_experts.w_gate),
+        w_up=gather_experts(source_experts.w_up, target_experts.w_up),
+        w_down=gather_experts(source_experts.w_down, target_experts.w_down),
+        w_gate_up=gather_experts(source_experts.w_gate_up, target_experts.w_gate_up),
+    )
+    extracted_mlp = dataclasses.replace(
+        source_mlp,
+        router=router,
+        router_bias=source_router_bias.at[layer_indices, selection].get(
+            out_sharding=output_sharding(target_mlp.router_bias)
+        ),
+        expert_mlp=extracted_experts,
+        cfg=target_config,
+    )
+    target_blocks = dataclasses.replace(
+        target_model.stacked_blocks.stacked,
+        rms_attn=source_blocks.rms_attn,
+        attn_gated_norm=source_blocks.attn_gated_norm,
+        attn=dataclasses.replace(source_blocks.attn, cfg=target_config),
+        rms_mlp=source_blocks.rms_mlp,
+        mlp_gated_norm=source_blocks.mlp_gated_norm,
+        mlp=extracted_mlp,
+        shared=source_blocks.shared,
+        sconv_attn=source_blocks.sconv_attn,
+        sconv_mlp=source_blocks.sconv_mlp,
+    )
+    extracted_model = dataclasses.replace(
+        target_model,
+        token_embed=model.token_embed,
+        over_encoding=model.over_encoding,
+        embed_norm=model.embed_norm,
+        embed_gated_norm=model.embed_gated_norm,
+        output_proj=model.output_proj,
+        stacked_blocks=dataclasses.replace(target_model.stacked_blocks, stacked=target_blocks),
+        final_norm=model.final_norm,
+    )
+    extracted_pending_qb_betas = source_pending_qb_betas.at[layer_indices, selection].get(
+        out_sharding=output_sharding(target_pending_qb_betas)
+    )
+    return extracted_model, extracted_pending_qb_betas
+
+
+def init_expert_selection_from_checkpoint(
+    state: GrugTrainState,
+    checkpoint_path: str,
+    *,
+    source_model: Transformer,
+    mesh: Mesh | None,
+    method: ExpertSelectionMethod,
+    load_ema: bool,
+    _load_fn: CheckpointLoader = load_checkpoint,
+) -> GrugTrainState:
+    """Load a larger checkpoint and initialize a selected physical expert bank."""
+    exemplar = {
+        "params": source_model,
+        "pending_qb_betas": jnp.zeros_like(source_model.stacked_blocks.stacked.mlp.router_bias),
+    }
+    loaded = _load_fn(exemplar, checkpoint_path, mesh=mesh, allow_partial=True)
+    expert_selection = select_experts(
+        loaded["params"],
+        expert_count=state.params.config.num_experts,
+        method=method,
+        seed=0,
+    )
+    if expert_selection is None:
+        raise ValueError("expert selection requires a smaller target model")
+    params, pending_qb_betas = extract_expert_selection(
+        loaded["params"],
+        loaded["pending_qb_betas"],
+        target_model=state.params,
+        target_pending_qb_betas=state.pending_qb_betas,
+        expert_selection=expert_selection,
+    )
+    return dataclasses.replace(
+        state,
+        params=params,
+        pending_qb_betas=pending_qb_betas,
+        ema_params=params if load_ema and state.ema_params is not None else state.ema_params,
+    )
+
+
 def _scheduled_mtp_weight(config: GrugModelConfig, step: jax.Array, num_train_steps: int) -> jax.Array | None:
     """MTP loss weight for the current step: constant ``mtp_loss_weight`` until ``mtp_decay_start_frac``
     of training, then ``mtp_final_loss_weight`` for the tail. None when no schedule is configured."""
@@ -782,14 +927,15 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             if int(state.step) == 0 and trainer.initialize_from is not None:
                 source_config = config.trainer.initialization_source_model
                 expert_offset = config.trainer.initialization_expert_offset
-                if source_config is None and expert_offset is None:
+                selection_method = config.trainer.initialization_expert_selection_method
+                if source_config is None and expert_offset is None and selection_method is None:
                     state = init_weights_only_from_checkpoint(
                         state,
                         trainer.initialize_from,
                         mesh=mesh,
                         load_ema=config.trainer.ema_beta is not None,
                     )
-                elif source_config is not None and expert_offset is not None:
+                elif source_config is not None and expert_offset is not None and selection_method is None:
 
                     @jax.jit
                     def _init_source_model(source_key):
@@ -803,8 +949,22 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         expert_offset=expert_offset,
                         load_ema=config.trainer.ema_beta is not None,
                     )
+                elif source_config is not None and expert_offset is None and selection_method is not None:
+
+                    @jax.jit
+                    def _init_source_model(source_key):
+                        return trainer.mp.cast_to_param(Transformer.init(source_config, key=source_key))
+
+                    state = init_expert_selection_from_checkpoint(
+                        state,
+                        trainer.initialize_from,
+                        source_model=_init_source_model(model_key),
+                        mesh=mesh,
+                        method=selection_method,
+                        load_ema=config.trainer.ema_beta is not None,
+                    )
                 else:
-                    raise ValueError("initialization_source_model and initialization_expert_offset must be set together")
+                    raise ValueError("invalid expert-extraction initialization configuration")
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,

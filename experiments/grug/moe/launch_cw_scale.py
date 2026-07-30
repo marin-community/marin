@@ -76,6 +76,7 @@ from marin.training.training import LevanterCheckpoint
 
 from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
+from experiments.grug.moe.expert_selection import ExpertSelectionMethod
 from experiments.grug.moe.heuristic import MoeHeuristic
 from experiments.grug.moe.launch import (
     GrugMoeLaunchConfig,
@@ -274,6 +275,7 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
     init_from = os.environ.get("SCALE_INIT_FROM") or None
     initialization_source_model = None
     initialization_expert_offset = None
+    initialization_expert_selection_method = None
     source_num_experts = env_int("SCALE_INIT_SOURCE_NUM_EXPERTS", 0)
     if source_num_experts:
         source_counts_value = os.environ.get("SCALE_INIT_SOURCE_NESTED_COUNTS", "")
@@ -285,7 +287,11 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
             nested_expert_offsets=tuple(int(value) for value in source_offsets_value.split(",") if value),
             nested_batch_fraction=env_float("SCALE_INIT_SOURCE_NESTED_FRACTION", 0.0),
         )
-        initialization_expert_offset = env_int("SCALE_INIT_EXPERT_OFFSET", 0)
+        selection_method_value = os.environ.get("SCALE_INIT_EXPERT_SELECTION_METHOD")
+        if selection_method_value is None:
+            initialization_expert_offset = env_int("SCALE_INIT_EXPERT_OFFSET", 0)
+        else:
+            initialization_expert_selection_method = ExpertSelectionMethod(selection_method_value)
 
     grug_trainer = GrugTrainerConfig(
         expert_axis_size=expert_axis,
@@ -293,6 +299,7 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
         initialization_mode=InitializationMode.WEIGHTS_ONLY if init_from is not None else InitializationMode.FULL_STATE,
         initialization_source_model=initialization_source_model,
         initialization_expert_offset=initialization_expert_offset,
+        initialization_expert_selection_method=initialization_expert_selection_method,
         **SCALE_TRAINER_DEFAULTS,
     )
 
