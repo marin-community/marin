@@ -282,12 +282,15 @@ def test_all_routes_accessible_when_auth_disabled(noauth_client):
 
 
 def _write_secret(db: ControllerDB, key: str, value: str) -> None:
-    """Write a row into the attached auth DB (``controller_secrets``)."""
+    """Create a table in the attached auth DB and write a row into it.
+
+    The auth schema ships no tables of its own, so the test declares one: what is
+    under test is which connection pools resolve ``auth.*`` at all, not any
+    particular table.
+    """
     with db.transaction() as tx:
-        tx.execute(
-            text("INSERT INTO auth.controller_secrets (key, value, created_at_ms) VALUES (:k, :v, 1000)"),
-            {"k": key, "v": value},
-        )
+        tx.execute(text("CREATE TABLE IF NOT EXISTS auth.secrets (key TEXT PRIMARY KEY, value TEXT NOT NULL)"))
+        tx.execute(text("INSERT INTO auth.secrets (key, value) VALUES (:k, :v)"), {"k": key, "v": value})
 
 
 def test_read_snapshot_cannot_access_auth_tables(db: ControllerDB):
@@ -295,7 +298,7 @@ def test_read_snapshot_cannot_access_auth_tables(db: ControllerDB):
     _write_secret(db, "signing_key", "pem")
 
     with db.read_snapshot() as q:
-        for table in ["controller_secrets", "auth.controller_secrets"]:
+        for table in ["secrets", "auth.secrets"]:
             with pytest.raises(sqlalchemy.exc.OperationalError, match="no such table"):
                 q.execute(text(f"SELECT * FROM {table}"))
 
@@ -304,7 +307,7 @@ def test_write_connection_can_access_auth_tables(db: ControllerDB):
     _write_secret(db, "signing_key", "pem")
 
     with db.transaction() as q:
-        rows = q.execute(text("SELECT value FROM auth.controller_secrets WHERE key = 'signing_key'")).all()
+        rows = q.execute(text("SELECT value FROM auth.secrets WHERE key = 'signing_key'")).all()
         assert len(rows) == 1
         assert rows[0].value == "pem"
 

@@ -73,14 +73,12 @@ def test_replace_from_reattaches_auth_db(tmp_path: Path) -> None:
     """replace_from() must re-attach the auth DB so auth tables remain accessible."""
     db = ControllerDB(db_dir=tmp_path)
 
-    # Write to an auth table
+    # Declare a table in the attached auth DB (the auth schema ships none) and write to it.
     with db.transaction() as cur:
+        cur.execute(text("CREATE TABLE auth.secrets (key TEXT PRIMARY KEY, value TEXT NOT NULL)"))
         cur.execute(
-            text(
-                "INSERT INTO auth.controller_secrets (key, value, created_at_ms) "
-                "VALUES (:key, :value, :created_at_ms)"
-            ),
-            {"key": "signing_key", "value": "secret-pem", "created_at_ms": 1000},
+            text("INSERT INTO auth.secrets (key, value) VALUES (:key, :value)"),
+            {"key": "signing_key", "value": "secret-pem"},
         )
 
     # Create a copy of the DB to replace from (replace_from expects a directory)
@@ -92,7 +90,7 @@ def test_replace_from_reattaches_auth_db(tmp_path: Path) -> None:
 
     # Auth tables should still be accessible after replace_from via the write connection.
     with db.transaction() as q:
-        rows = q.execute(text("SELECT value FROM auth.controller_secrets WHERE key = 'signing_key'")).all()
+        rows = q.execute(text("SELECT value FROM auth.secrets WHERE key = 'signing_key'")).all()
     assert len(rows) == 1
     assert rows[0][0] == "secret-pem"
     db.close()
