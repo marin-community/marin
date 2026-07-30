@@ -4,17 +4,27 @@
 """Tests for the guarded fsspec factory: the url_to_fs/open_url/filesystem entry
 points, unique_temp_path, atomic_rename, and fetch_file_atomic."""
 
+import json
 from pathlib import Path
 
+import fsspec
 import pytest
+import s3fs
+from aiobotocore.config import AioConfig
 from rigging.filesystem.cross_region import CrossRegionGuardedFS
 from rigging.filesystem.factory import (
+    _with_s3_timeout_defaults,
     atomic_rename,
     fetch_file_atomic,
     filesystem,
     open_url,
     unique_temp_path,
     url_to_fs,
+)
+from rigging.filesystem.s3_compat import (
+    TotalDeadlineAIOHTTPSession,
+    fsspec_s3_conf,
+    s3_request_bounds_config_kwargs,
 )
 
 
@@ -125,3 +135,62 @@ def test_open_url_local_file(tmp_path):
 def test_filesystem_local():
     fs = filesystem("file")
     assert not isinstance(fs, CrossRegionGuardedFS)
+
+
+def test_s3_kwargs_carry_a_whole_request_deadline():
+    """S3 filesystems built here get http_session_cls, the only bound that covers
+    the wait for a first response byte. Without it a peer that accepts a request
+    body and answers nothing hangs the caller forever (#6719)."""
+    result = _with_s3_timeout_defaults({})
+
+    assert result["config_kwargs"]["http_session_cls"] is TotalDeadlineAIOHTTPSession
+
+
+def test_total_deadline_session_keeps_the_socket_timeouts():
+    """The subclass adds `total` without dropping the sock_* bounds aiobotocore set."""
+    session = TotalDeadlineAIOHTTPSession(timeout=(7, 11))
+
+    assert session._timeout.total == 600
+    assert session._timeout.sock_connect == 7
+    assert session._timeout.sock_read == 11
+
+
+def test_caller_supplied_session_class_wins():
+    """Callers can still override the session class; we only fill in a default."""
+
+    class OtherSession(TotalDeadlineAIOHTTPSession):
+        pass
+
+    result = _with_s3_timeout_defaults({"config_kwargs": {"http_session_cls": OtherSession}})
+
+    assert result["config_kwargs"]["http_session_cls"] is OtherSession
+
+
+def test_s3_timeout_defaults_preserve_addressing_style_from_env_conf(monkeypatch):
+    """Virtual-host addressing from FSSPEC_S3 survives the merge; dropping it
+    makes CoreWeave endpoints reject every path-style request."""
+    monkeypatch.setitem(fsspec.config.conf, "s3", {"config_kwargs": {"s3": {"addressing_style": "virtual"}}})
+
+    result = _with_s3_timeout_defaults({})
+
+    assert result["config_kwargs"]["s3"] == {"addressing_style": "virtual"}
+    assert result["config_kwargs"]["http_session_cls"] is TotalDeadlineAIOHTTPSession
+
+
+def test_session_class_survives_the_handoff_to_aiobotocore():
+    """End to end through the real seam: our config_kwargs reach AioConfig (the
+    call s3fs makes) and s3fs passes the class on rather than dropping it."""
+    config_kwargs = _with_s3_timeout_defaults({})["config_kwargs"]
+
+    assert AioConfig(**config_kwargs).http_session_cls is TotalDeadlineAIOHTTPSession
+
+    fs = s3fs.S3FileSystem(anon=True, config_kwargs=config_kwargs)
+    assert fs._prepare_config_kwargs()["http_session_cls"] is TotalDeadlineAIOHTTPSession
+
+
+def test_env_config_block_stays_json_serializable():
+    """The FSSPEC_S3 block is json.dumps'd into every Iris task's environment.
+    Moving the session class into the shared bounds helper would break task
+    startup fleet-wide, so guard the boundary."""
+    json.dumps(s3_request_bounds_config_kwargs())
+    json.dumps(fsspec_s3_conf("http://cwlota.com"))
