@@ -35,6 +35,13 @@ goes stale on the next commit.
 - Status: active
 - Purpose: canonical grug template (model/train/launch).
 
+### grug-moe-hero-ep
+- Path: `experiments/grug/moe_hero_ep/`
+- Origin: moe
+- Introduced: 84656eea4
+- Status: active
+- Purpose: fixed one-rack D-2 configuration for 64-way expert-parallel GB200 training.
+
 ### grug-moe
 - Path: `experiments/grug/moe/`
 - Origin: base
