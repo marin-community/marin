@@ -56,7 +56,7 @@ auth:
       -----BEGIN PUBLIC KEY-----
       MCowBQYDK2VwAyEA42ziFTlGKgaA/fQ1wJCONKOml7rx5Y8UAQqVLTCtrCo=
       -----END PUBLIC KEY-----
-  allowed_submitters: ["*@openathena.ai"]
+  allowed_submitters: ["*@openathena.ai", "ravwojdyla@rav-openathena.iam.gserviceaccount.com"]
 
 platform:
   label_prefix: iris-ci
