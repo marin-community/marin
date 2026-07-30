@@ -137,12 +137,7 @@ def normalize_iap_member(entry: str) -> str:
 
 
 def iap_access_members(additional_members: tuple[str, ...]) -> tuple[str, ...]:
-    """Return the canonical IAP members for an internal Marin web service.
-
-    Every component-managed service admits the OpenAthena Workspace domain. Service
-    configuration supplies only deliberate exceptions, such as a personal Google account or
-    an automation service account.
-    """
+    """Add the OpenAthena Workspace domain to a service's normalized IAP exceptions."""
     members = (OPENATHENA_IAP_MEMBER, *(normalize_iap_member(member) for member in additional_members))
     return tuple(dict.fromkeys(members))
 
