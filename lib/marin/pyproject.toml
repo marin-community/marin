@@ -213,6 +213,16 @@ datakit = [
     # `Booster.inplace_predict` (classify.py), so the GPU build buys nothing and costs a latent
     # library collision.
     "xgboost-cpu>=3.0.5",
+    # Text extraction from the non-OCR route (experiments/build_pdf_source/docling_extract/).
+    # Not pinned: the extractor tracks upstream docling rather than vendoring a fork of it, and
+    # tests/datakit/test_docling_fields.py fails loudly if an upstream release collides with the
+    # model fields it adds.
+    "docling>=2.117.0",
+    # Runs docling's layout model as an INT8 graph on the CoreWeave CPU fleet, which is Emerald
+    # Rapids and has AMX-INT8 (experiments/build_pdf_source/layout_model.py). nncf is build-time
+    # only -- it quantizes the graph; openvino is what executes it.
+    "openvino>=2025.3.0",
+    "nncf>=2.14.0",
 ]
 
 math = ["pylatexenc", "sympy"]
