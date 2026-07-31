@@ -95,19 +95,27 @@ def _build_source_checkpoint(
 
 
 def _build_growth_target_checkpoint(
-    source: ArtifactStep[LevanterCheckpoint],
+    source: ArtifactStep[LevanterCheckpoint] | None,
     *,
     run_id: str,
     steps: int,
     growth: DepthGrowthConfig,
     version: str | None,
     pilot: bool,
+    source_checkpoint_root: str | None = None,
 ) -> ArtifactStep[LevanterCheckpoint]:
+    if (source is None) == (source_checkpoint_root is None):
+        raise ValueError("exactly one source artifact or checkpoint root is required")
     model = build_model_config(CouponClippingArm.C0_P0)
     step_name = f"grug/coupon-clipping/{run_id}"
     resolved_version = resolve_version(step_name, version)
 
     def build_config(ctx: StepContext) -> CouponClippingLaunchConfig:
+        initialize_from = (
+            prefix_join(ctx.artifact_path(source), "checkpoints") if source is not None else source_checkpoint_root
+        )
+        if initialize_from is None:
+            raise AssertionError("source checkpoint root was validated before building the target")
         return CouponClippingLaunchConfig(
             model=model,
             data=datakit_data_config(
@@ -128,7 +136,7 @@ def _build_growth_target_checkpoint(
                 replicate_path=ctx.output_path,
             ),
             steps=steps,
-            initialize_from=prefix_join(ctx.artifact_path(source), "checkpoints"),
+            initialize_from=initialize_from,
             depth_growth=growth,
             watch_interval=8 if pilot else 0,
         )
@@ -139,7 +147,7 @@ def _build_growth_target_checkpoint(
         artifact_type=LevanterCheckpoint,
         run=run_coupon_clipping_trial,
         build_config=build_config,
-        deps=(source,),
+        deps=(source,) if source is not None else (),
         runtime_args={"train_resources": _TRAIN_RESOURCES},
     )
 
@@ -170,6 +178,29 @@ def build_growth_pilot_checkpoint(*, version: str | None = None) -> ArtifactStep
         growth=growth,
         version=version,
         pilot=True,
+    )
+
+
+def build_growth_target_only_checkpoint(
+    *,
+    source_checkpoint_root: str,
+    version: str | None = None,
+) -> ArtifactStep[LevanterCheckpoint]:
+    """Recover the pilot target from an already-complete L1 source checkpoint root."""
+    growth = DepthGrowthConfig(
+        source_layers=DEPTH_SOURCE_LAYERS,
+        target_layers=build_model_config(CouponClippingArm.C0_P0).num_layers,
+        expected_step=PILOT_SOURCE_STEPS,
+        expected_data_offset=PILOT_SOURCE_STEPS * TRAIN_BATCH_SIZE,
+    )
+    return _build_growth_target_checkpoint(
+        None,
+        run_id="cc16-growth-pilot-l1-to-l48-16-recovery",
+        steps=PILOT_SOURCE_STEPS + PILOT_GROWN_STEPS,
+        growth=growth,
+        version=version,
+        pilot=True,
+        source_checkpoint_root=source_checkpoint_root,
     )
 
 

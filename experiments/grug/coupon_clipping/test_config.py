@@ -29,6 +29,7 @@ from experiments.grug.coupon_clipping.depth_launch import (
     build_d1_checkpoint,
     build_depth_source_model_config,
     build_growth_pilot_checkpoint,
+    build_growth_target_only_checkpoint,
 )
 from experiments.grug.coupon_clipping.model import GrugModelConfig, Transformer
 from experiments.grug.depth_growth import DepthGrowthConfig
@@ -139,6 +140,12 @@ def test_depth_artifacts_chain_source_before_growth():
 
     assert len(pilot.deps) == 1
     assert len(d1.deps) == 1
+
+    target_only = build_growth_target_only_checkpoint(
+        source_checkpoint_root="s3://example/source/checkpoints",
+        version="test-dev",
+    )
+    assert target_only.deps == ()
 
 
 def test_coupon_optimizer_routes_segmented_model_parameters_to_intended_groups():

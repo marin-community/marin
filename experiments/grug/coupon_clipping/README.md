@@ -14,6 +14,7 @@ order, 6.711B-token horizon, optimizer schedule, and 16-GB200 topology.
   center learning rate.
 - `pilot_l1.py`: the one-layer source bounded to 128 updates for the throughput gate.
 - `pilot_growth.py`: 32 one-layer updates, an L1-to-L48 transform, and 16 grown updates.
+- `pilot_growth_target.py`: target-only recovery from an explicit completed source checkpoint root.
 - `d1.py`: the token-matched D1 pipeline, with L1 through update 4,480 and L48
   through update 6,400.
 
