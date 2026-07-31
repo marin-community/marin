@@ -225,6 +225,32 @@ def test_correctness_selects_both_required_boundaries_once() -> None:
     assert [request["prefix_token_count"] for request in selected] == [17, 513]
 
 
+def test_completion_can_pin_a_data_parallel_rank(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed: dict[str, object] = {}
+
+    class Response:
+        ok = True
+
+        @staticmethod
+        def json() -> dict[str, object]:
+            return {"choices": [{}]}
+
+    def post(url: str, **kwargs: object) -> Response:
+        observed.update(url=url, **kwargs)
+        return Response()
+
+    monkeypatch.setattr(grug_preflight.requests, "post", post)
+
+    grug_preflight._completion(
+        "http://server",
+        "model",
+        [1, 2, 3],
+        data_parallel_rank=2,
+    )
+
+    assert observed["headers"] == {"X-data-parallel-rank": "2"}
+
+
 def test_completion_evidence_keeps_routes_out_of_compact_result(tmp_path) -> None:
     routes = np.array([[[1, 3, 5, 7]]], dtype=np.uint8)
     encoded = io.BytesIO()

@@ -76,6 +76,7 @@ PYTHON_VERSION = "3.12"
 RPC_PORT = 13345
 SERVER_PORT = 8000
 LOCAL_DP_SIZE = 4
+PINNED_PROBE_DP_RANK = 0
 SERVER_TIMEOUT_SECONDS = 3600
 REQUEST_TIMEOUT_SECONDS = 3600
 ACCEPTANCE_MINIMUM_SECONDS = 600
@@ -564,9 +565,18 @@ def _metrics(base_url: str) -> tuple[str, dict[str, float]]:
     return response.text, parse_prometheus(response.text)
 
 
-def _completion(base_url: str, model: str, prompt_token_ids: list[int], *, max_tokens: int = 4) -> dict[str, Any]:
+def _completion(
+    base_url: str,
+    model: str,
+    prompt_token_ids: list[int],
+    *,
+    max_tokens: int = 4,
+    data_parallel_rank: int | None = None,
+) -> dict[str, Any]:
+    headers = {"X-data-parallel-rank": str(data_parallel_rank)} if data_parallel_rank is not None else None
     response = requests.post(
         f"{base_url}/v1/completions",
+        headers=headers,
         json={
             "model": model,
             "prompt": prompt_token_ids,
@@ -697,11 +707,28 @@ def run_correctness(
     for request in candidates:
         prompt_token_ids = materialize_prompt(workload, request)
         mutated_prompt_token_ids = materialize_prompt(workload, request, mutated=True)
-        cold = _completion(base_url, model, prompt_token_ids)
+        # Prefix caches belong to individual DP engines. Keep this triplet on
+        # one engine so it measures reuse instead of the load balancer.
+        cold = _completion(
+            base_url,
+            model,
+            prompt_token_ids,
+            data_parallel_rank=PINNED_PROBE_DP_RANK,
+        )
         after_cold_text, after_cold = _metrics(base_url)
-        reused = _completion(base_url, model, prompt_token_ids)
+        reused = _completion(
+            base_url,
+            model,
+            prompt_token_ids,
+            data_parallel_rank=PINNED_PROBE_DP_RANK,
+        )
         after_reuse_text, after_reuse = _metrics(base_url)
-        mutated = _completion(base_url, model, mutated_prompt_token_ids)
+        mutated = _completion(
+            base_url,
+            model,
+            mutated_prompt_token_ids,
+            data_parallel_rank=PINNED_PROBE_DP_RANK,
+        )
         after_mutated_text, after_mutated = _metrics(base_url)
         _assert_same_reuse(cold, reused)
         reuse_hits = metric_delta(after_cold, after_reuse, "vllm:prefix_cache_hits")
@@ -724,6 +751,7 @@ def run_correctness(
             {
                 "request_id": request_id,
                 "prefix_token_count": request["prefix_token_count"],
+                "data_parallel_rank": PINNED_PROBE_DP_RANK,
                 "cold": _record_completion(cold, artifact_dir=artifact_dir, stem=f"{request_id}-cold"),
                 "reused": _record_completion(reused, artifact_dir=artifact_dir, stem=f"{request_id}-reused"),
                 "mutated": _record_completion(mutated, artifact_dir=artifact_dir, stem=f"{request_id}-mutated"),
@@ -1201,12 +1229,14 @@ def run_kv_measurement(
         log_start = log_path.stat().st_size if log_path.exists() else 0
         running_samples: list[float] = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            # Keep both context probes on one cache-owning engine.
             future = executor.submit(
                 _completion,
                 base_url,
                 model,
                 prompt,
                 max_tokens=response_tokens,
+                data_parallel_rank=PINNED_PROBE_DP_RANK,
             )
             while not future.done():
                 try:
@@ -1265,6 +1295,7 @@ def run_kv_measurement(
         observations.append(
             {
                 "final_sequence_tokens": final_length,
+                "data_parallel_rank": PINNED_PROBE_DP_RANK,
                 "prompt_tokens": prompt_length,
                 "generated_tokens": completion_tokens,
                 "fixed_active_request_count": 1,
