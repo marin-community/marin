@@ -30,7 +30,7 @@ from marin.datakit.download.davinci_dev import (
     davinci_dev_ctx_native_normalize_steps,
     davinci_dev_env_native_normalize_steps,
 )
-from marin.datakit.download.diagnostic_logs import GHALOGS_ROUGH_TOKENS_B, ghalogs_public_normalize_steps
+from marin.datakit.download.diagnostic_logs import ghalogs_public_normalize_steps
 from marin.datakit.download.docx_corpus import docx_corpus_normalize_steps
 from marin.datakit.download.dolma3_5_code import dolma3_5_code_prose_normalize_steps
 from marin.datakit.download.dolma4pdfs import dolma4pdfs_normalize_steps
@@ -178,7 +178,10 @@ def all_sources() -> dict[str, DatakitSource]:
         ("dolma_code_prose", dolma3_5_code_prose_normalize_steps, 65.54),
         ("eai-taxonomy-code-w-dclm", eai_taxonomy_code_normalize_steps, 591.90),
         ("finetranslations", finetranslations_normalize_steps, 3040.0),
-        ("ghalogs/public", ghalogs_public_normalize_steps, GHALOGS_ROUGH_TOKENS_B),
+        # Exact count from the tokenized cache .stats.json, measured with
+        # marin-community/marin-tokenizer over the normalized artifact:
+        # 253,343,866,746 tokens / 2,613,421 documents.
+        ("ghalogs/public", ghalogs_public_normalize_steps, 253.343866746),
         # Exact count from the tokenized cache .stats.json, measured with
         # marin-community/marin-tokenizer over the normalized artifact under the
         # final-turn truncation filter: 64,054,289 tokens / 2,835 docs.
