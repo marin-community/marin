@@ -1,8 +1,9 @@
 # Datakit Ferry Operations
 
 Ad-hoc run/stop/validate for `experiments/ferries/datakit_ferry.py`.
-The ferry runs download → normalize → minhash → fuzzy dedup → consolidate →
-tokenize on FineWeb-Edu `sample/10BT`. It normally runs daily from the
+The ferry runs download → normalize → MinHash candidate search → full-text
+verification → consolidate → tokenize on FineWeb-Edu `sample/10BT`. It
+normally runs daily from the
 `Marin - Canary - Datakit - Tier 1` GitHub Actions workflow
 (`.github/workflows/marin-canary-datakit-tier1.yaml`). The commands below are
 for manual runs.
@@ -22,8 +23,10 @@ uv run iris --cluster=marin job run --no-wait \
 - `--no-wait` returns immediately; the command prints the Iris job ID
   (`/<user>/iris-run-job-YYYYMMDD-HHMMSS`). Export it as `JOB_ID` for the
   stop command below.
-- `SMOKE_RUN_ID` is required by the ferry; it namespaces outputs under
-  `$MARIN_PREFIX/datakit-smoke/$SMOKE_RUN_ID/{download,normalize,minhash,fuzzy_dups,consolidate,tokens}`.
+- `SMOKE_RUN_ID` is required by the ferry. It namespaces outputs under
+  `$MARIN_PREFIX/datakit-smoke/$SMOKE_RUN_ID/`. The output includes
+  `download`, `normalize`, `minhash`, `fuzzy_dups`, `verify_fuzzy_dups`,
+  `consolidate`, and `tokens`.
 - `MARIN_PREFIX` defaults to `marin_temp_bucket(ttl_days=1)`
   (`gs://marin-<region>/tmp/ttl=1d/...`). Override with `-e MARIN_PREFIX gs://...`
   for persistence or a specific bucket.

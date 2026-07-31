@@ -6,10 +6,10 @@
 Shares the sample stage (``build_testbed_steps(...)``) with the
 baseline and with other fuzzy-dedup variants so one set of sampled
 parquet serves every hyperparam sweep. Each variant then MinHash→fuzzy-dups
-→consolidates the sampled data with its own fuzzy-dedup parameters,
+→full-text verification→consolidates the sampled data,
 tokenizes the deduped output, and trains.
 
-The whole pipeline (ferry → minhash → fuzzy_dups → consolidate → tokenize
+The whole pipeline (ferry → minhash → fuzzy_dups → verification → consolidate → tokenize
 → weights → train) lives in one ``StepSpec`` graph that :class:`StepRunner`
 walks, scheduling each step once its dependencies are satisfied.
 """
@@ -33,6 +33,12 @@ from marin.processing.classification.deduplication.fuzzy_dups import (
     compute_fuzzy_dups_attrs,
 )
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, compute_minhash_attrs
+from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
+from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
+    VerifiedFuzzyDupsAttrData,
+    verify_fuzzy_dups,
+)
 from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.log_setup import configure_logging
 
@@ -53,6 +59,7 @@ _SAMPLE_STEP_PREFIX = "data/datakit/normalized/"
 _FUZZY_DUPS_MAX_PARALLELISM = 128
 _MINHASH_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
 _FUZZY_DUPS_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
+_FUZZY_VERIFICATION_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g")
 _CONSOLIDATE_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
 
 
@@ -95,26 +102,49 @@ def _fuzzy_dups_step(minhash_steps: list[StepSpec], cc_max_iterations: int) -> S
     )
 
 
-def _deduped_step(src_name: str, sampled: StepSpec, fuzzy_dups: StepSpec) -> StepSpec:
-    """Per-source consolidate: keep the canonical cluster member, drop the rest.
+def _fuzzy_verification_step(sampled_by_source: dict[str, StepSpec], fuzzy_dups: StepSpec) -> StepSpec:
+    """Verify candidate cluster members against one full-text representative."""
+    params = FuzzyVerificationParams()
+    return StepSpec(
+        name="data/datakit/verify_fuzzy_dups",
+        deps=[*sampled_by_source.values(), fuzzy_dups],
+        hash_attrs={
+            "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
+            "verification": params.model_dump(mode="json"),
+        },
+        fn=lambda output_path: verify_fuzzy_dups(
+            normalized_sources={
+                name: read_artifact(step.output_path, NormalizedData) for name, step in sampled_by_source.items()
+            },
+            candidates=read_artifact(fuzzy_dups.output_path, FuzzyDupsAttrData),
+            output_path=output_path,
+            verification_params=params,
+            max_parallelism=_FUZZY_DUPS_MAX_PARALLELISM,
+            worker_resources=_FUZZY_VERIFICATION_WORKER_RESOURCES,
+        ),
+    )
+
+
+def _deduped_step(src_name: str, sampled: StepSpec, verified_dups: StepSpec) -> StepSpec:
+    """Per-source consolidate: remove only directly verified duplicates.
 
     Writes to ``{output_path}/outputs/main/part-*.parquet`` so the downstream
     tokenize's ``outputs/main/*.parquet`` glob picks it up unchanged.
     """
     return StepSpec(
         name=f"data/datakit/deduped/{src_name}",
-        deps=[sampled, fuzzy_dups],
+        deps=[sampled, verified_dups],
         fn=lambda output_path, sampled=sampled: consolidate(
             input_path=read_artifact(sampled.output_path, NormalizedData).main_output_dir,
             output_path=os.path.join(output_path, "outputs/main"),
             filetype="parquet",
             filters=[
                 FilterConfig(
-                    type=FilterType.KEEP_DOC,
-                    attribute_path=read_artifact(fuzzy_dups.output_path, FuzzyDupsAttrData).attr_dir_for_source(
-                        read_artifact(sampled.output_path, NormalizedData).main_output_dir
-                    ),
-                    name="is_cluster_canonical",
+                    type=FilterType.REMOVE_DOC,
+                    attribute_path=read_artifact(
+                        verified_dups.output_path, VerifiedFuzzyDupsAttrData
+                    ).attr_dir_for_source(read_artifact(sampled.output_path, NormalizedData).main_output_dir),
+                    name="dup_doc",
                     attribute_filetype="parquet",
                     keep_if_missing=True,
                 ),
@@ -158,12 +188,14 @@ def dedup(
         src_name: _minhash_step(src_name, sampled, **minhash_params) for src_name, sampled in sampled_by_source.items()
     }
     fuzzy_dups = _fuzzy_dups_step(list(minhash_by_source.values()), fuzzy_dedup_cc_max_iterations)
+    verified_dups = _fuzzy_verification_step(sampled_by_source, fuzzy_dups)
     deduped_by_source = {
-        src_name: _deduped_step(src_name, sampled, fuzzy_dups) for src_name, sampled in sampled_by_source.items()
+        src_name: _deduped_step(src_name, sampled, verified_dups) for src_name, sampled in sampled_by_source.items()
     }
 
     logger.info(
-        "fuzzy-dedup variant %s: %d sources → minhash → fuzzy_dups → consolidate. params=%s, cc_max=%d",
+        "fuzzy-dedup variant %s: %d sources → minhash → fuzzy_dups → verification → consolidate. "
+        "params=%s, cc_max=%d",
         name,
         len(sampled_by_source),
         minhash_params,

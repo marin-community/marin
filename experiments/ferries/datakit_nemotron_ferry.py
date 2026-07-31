@@ -3,8 +3,8 @@
 
 """Datakit nemotron ferry: weekly full-pipeline run on the Nemotron-CC high split.
 
-Pipeline: verify raw dump → normalize → minhash → fuzzy_dups → consolidate →
-tokenize. The first step is verification-only: it confirms the ``quality=high``
+Pipeline: verify raw dump → normalize → minhash → fuzzy_dups → full-text
+verification → consolidate → tokenize. The first step confirms the ``quality=high``
 subtree of the Nemotron-CC dump is already staged at ``NEMOTRON_RAW_PATH`` and
 refuses to initiate a Common Crawl download.
 
@@ -34,6 +34,12 @@ from marin.processing.classification.deduplication.fuzzy_dups import (
 from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashAttrData,
     compute_minhash_attrs,
+)
+from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
+from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
+    VerifiedFuzzyDupsAttrData,
+    verify_fuzzy_dups,
 )
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 from rigging.filesystem import (
@@ -116,7 +122,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         override_output_path=f"{base}/minhash",
     )  # ~1,380 output shards
 
-    deduped = StepSpec(
+    candidates = StepSpec(
         name="datakit-nemotron-smoke/fuzzy_dups",
         deps=[minhash],
         hash_attrs={"artifact_version": FUZZY_DUPS_ATTR_DATA_VERSION, "cc_max_iterations": 3},
@@ -131,20 +137,40 @@ def build_steps(run_id: str) -> list[StepSpec]:
         override_output_path=f"{base}/fuzzy_dups",
     )  # ~1,380 output shards
 
+    verification_params = FuzzyVerificationParams()
+    verified = StepSpec(
+        name="datakit-nemotron-smoke/verify_fuzzy_dups",
+        deps=[normalized, candidates],
+        hash_attrs={
+            "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
+            "verification": verification_params.model_dump(mode="json"),
+        },
+        fn=lambda output_path: verify_fuzzy_dups(
+            normalized_sources={"source": read_artifact(normalized.output_path, NormalizedData)},
+            candidates=read_artifact(candidates.output_path, FuzzyDupsAttrData),
+            output_path=output_path,
+            verification_params=verification_params,
+            worker_resources=(resources := ResourceConfig(cpu=16, ram="160g", disk="32g")),
+            map_task_resources=resources.scale(1 / 16),
+            reduce_task_resources=resources.scale(3 / 16),
+        ),
+        override_output_path=f"{base}/verify_fuzzy_dups",
+    )
+
     consolidated = StepSpec(
         name="datakit-nemotron-smoke/consolidate",
-        deps=[normalized, deduped],
+        deps=[normalized, verified],
         fn=lambda output_path: consolidate(
             input_path=read_artifact(normalized.output_path, NormalizedData).main_output_dir,
             output_path=output_path,
             filetype="parquet",
             filters=[
                 FilterConfig(
-                    type=FilterType.KEEP_DOC,
-                    attribute_path=read_artifact(deduped.output_path, FuzzyDupsAttrData).attr_dir_for_source(
+                    type=FilterType.REMOVE_DOC,
+                    attribute_path=read_artifact(verified.output_path, VerifiedFuzzyDupsAttrData).attr_dir_for_source(
                         read_artifact(normalized.output_path, NormalizedData).main_output_dir
                     ),
-                    name="is_cluster_canonical",
+                    name="dup_doc",
                     attribute_filetype="parquet",
                     keep_if_missing=True,
                 ),
@@ -172,7 +198,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         override_output_path=f"{base}/tokens",
     )  # ~1,380 output shards
 
-    return [download, normalized, minhash, deduped, consolidated, tokenized]
+    return [download, normalized, minhash, candidates, verified, consolidated, tokenized]
 
 
 def _write_status(status: str, marin_prefix: str) -> None:
