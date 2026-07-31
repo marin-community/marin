@@ -17,8 +17,8 @@ from typing import Literal
 
 import click
 from google.protobuf import json_format
-from iris.client import IrisClient
 from iris.cli.connect import open_iris_client
+from iris.client import IrisClient
 from iris.cluster.backends.k8s.tasks import _sanitize_label_value
 from iris.cluster.controller.autoscaler.provisioning import STOCKOUT_MARKER
 from iris.cluster.types import JobName, is_job_finished
