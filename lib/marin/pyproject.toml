@@ -202,6 +202,17 @@ datakit = [
     # Reads WARC response records out of Common Crawl byte ranges
     # (experiments/build_pdf_source/fetch.py).
     "warcio>=1.7.5",
+    # PDF parsing and the FinePDFs OCR router
+    # (experiments/build_pdf_source/{ocr_features,classify}.py). PyMuPDF is pinned to the version
+    # the router's features were trained against; its per-page measurements are not stable across
+    # MuPDF releases.
+    "pymupdf==1.26.1",
+    # The CPU build. Plain `xgboost` depends on nvidia-nccl-cu12, which installs its library at the
+    # same `nvidia/nccl/lib/libnccl.so.2` that torch's nvidia-nccl-cu13 owns, so whichever lands
+    # last wins for the whole venv. datakit runs on the CPU fleet and only calls
+    # `Booster.inplace_predict` (classify.py), so the GPU build buys nothing and costs a latent
+    # library collision.
+    "xgboost-cpu>=3.0.5",
 ]
 
 math = ["pylatexenc", "sympy"]
