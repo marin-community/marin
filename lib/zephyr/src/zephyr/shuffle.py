@@ -17,9 +17,10 @@ groups via byte-range GETs, so each reducer reads roughly 1/N of each file.
 The resulting LazyFrames are merged via ``external_sort_merge`` (two-pass
 fan-in merge with ``sink_parquet`` pass-1, fully streaming).
 
-Write-side memory is bounded by cgroup memory usage: when the process exceeds
-``_SCATTER_FLUSH_THRESHOLD`` of the task memory limit, all buffers are flushed
-together into one combined file.
+Write-side memory is bounded by buffer estimated size: when the sum of
+``DataFrame.estimated_size()`` across buffered frames exceeds
+``_SCATTER_FLUSH_THRESHOLD * _ESTIMATED_SIZE_CORRECTION_FACTOR`` of available
+task memory, all buffers are flushed together into one combined file.
 
 Routing columns (``__zephyr_shard__``, ``__zephyr_sort_key__``) are added
 in ``_items_to_dataframe``; ``__zephyr_shard__`` is stripped on read,
@@ -41,7 +42,6 @@ import cloudpickle
 import humanfriendly
 import msgspec
 import polars as pl
-import psutil
 from iris.env_resources import TaskResources
 from rigging.filesystem import StoragePath, open_url, url_to_fs
 from rigging.timing import RateLimiter, log_time
@@ -120,30 +120,14 @@ _SORT_VALUE_TMP_COL = "__zephyr_sort_value_tmp__"
 
 # Python items consumed before creating a DataFrame.
 _DATAFRAME_ROW_COUNT = 1000
-# Number of write() calls between memory checks.
-_MEMORY_CHECK_INTERVAL = 10
-# Flush all scatter buffers when task memory usage exceeds this fraction.
+# Flush all scatter buffers when the buffer's estimated size exceeds this fraction of available memory.
 _SCATTER_FLUSH_THRESHOLD = 0.75
+# Empirically measured ratio of DataFrame.estimated_size() to actual per-shard process RSS growth,
+# across three datasets (nemotron: 0.54-0.60, skewed: 0.59-0.66, FineWeb-Edu: 0.66-0.70).
+# Applied to _SCATTER_FLUSH_THRESHOLD so the effective trigger is ~45% of available memory.
+_ESTIMATED_SIZE_CORRECTION_FACTOR = 0.60
 # Threshold for triggering a gc.collect() after a flush.
 _GC_FLUSH_SIZE_THRESHOLD_BYTES = 8 * 1024 * 1024
-
-
-def _read_cgroup_memory_bytes() -> int:
-    """Read current memory usage in bytes from the cgroup controller.
-
-    Falls back to process RSS when running outside a cgroup (e.g., local dev).
-    """
-    try:
-        with open("/sys/fs/cgroup/memory.current") as f:
-            return int(f.read().strip())
-    except OSError:
-        pass
-    try:
-        with open("/sys/fs/cgroup/memory/memory.usage_in_bytes") as f:
-            return int(f.read().strip())
-    except OSError:
-        pass
-    return int(psutil.Process().memory_info().rss)
 
 
 def _dataframe_to_items(df: pl.DataFrame) -> Iterator[Any]:
@@ -508,9 +492,9 @@ class ScatterWriter:
     ``[_SHARD_COL, _SORT_KEY_COL]`` with row groups sized so Polars predicate
     pushdown skips non-target row groups on the read side.
 
-    Flushing is task-memory-based: when task memory usage exceeds
-    ``_SCATTER_FLUSH_THRESHOLD``, all buffered frames are flushed together into
-    one combined file.
+    Flushing is estimated-size-based: when the sum of ``DataFrame.estimated_size()``
+    across buffered frames exceeds ``_SCATTER_FLUSH_THRESHOLD * _ESTIMATED_SIZE_CORRECTION_FACTOR``
+    of available task memory, all buffered frames are flushed together into one combined file.
     """
 
     def __init__(
@@ -531,7 +515,11 @@ class ScatterWriter:
         if self._memory_available_bytes == 0:
             logger.warning("No memory available for scatter write, defaulting to 1GB. This will likely fail.")
             self._memory_available_bytes = 1024 * 1024 * 1024
-        self._flush_threshold_bytes = int(self._memory_available_bytes * _SCATTER_FLUSH_THRESHOLD)
+        # estimated_size() measures only the buffer columns, not process overhead (Python runtime,
+        # Arrow allocator, Parquet scan). The correction factor maps estimated_size to estimated RSS.
+        self._flush_threshold_bytes = int(
+            self._memory_available_bytes * _SCATTER_FLUSH_THRESHOLD * _ESTIMATED_SIZE_CORRECTION_FACTOR
+        )
 
         # Buffered DataFrames, combined into one file per flush. Buffering
         # frames (not Python items) keeps the writer format-agnostic: a future
@@ -548,8 +536,8 @@ class ScatterWriter:
         self._n_chunks_written = 0
         # Throttles the per-flush progress log so high-fanout workloads don't log too often
         self._progress_log_limiter = RateLimiter(interval_seconds=_PROGRESS_LOG_INTERVAL_SECONDS)
-        self._peak_rss_bytes: int = 0
-        self._write_calls: int = 0
+        # Running estimated_size() total of unflushed frames; reset to 0 on flush.
+        self._buffer_estimated_bytes: int = 0
 
         ensure_parent_dir(self._data_path)
         self._result: ListShard | None = None
@@ -561,6 +549,7 @@ class ScatterWriter:
 
         buffer = pl.concat(self._frames, how="vertical_relaxed", rechunk=False)
         self._frames = []
+        self._buffer_estimated_bytes = 0
 
         if self._combiner_fn is not None:
             frames: list[pl.DataFrame] = []
@@ -622,22 +611,16 @@ class ScatterWriter:
             return
 
         self._frames.append(df)
-        self._write_calls += 1
+        self._buffer_estimated_bytes += int(df.estimated_size())
 
-        if self._write_calls % _MEMORY_CHECK_INTERVAL == 0:
-            mem = _read_cgroup_memory_bytes()
-            if mem > self._peak_rss_bytes:
-                self._peak_rss_bytes = mem
-
-            if mem > self._flush_threshold_bytes:
-                logger.info(
-                    "[shard %d] Memory at %s (%.0f%% of %s); flushing scatter buffers",
-                    self._source_shard,
-                    humanfriendly.format_size(mem, binary=True),
-                    100.0 * mem / self._memory_available_bytes,
-                    humanfriendly.format_size(self._memory_available_bytes, binary=True),
-                )
-                self._flush()
+        if self._buffer_estimated_bytes > self._flush_threshold_bytes:
+            logger.info(
+                "[shard %d] Buffer estimated at %s (threshold %s); flushing scatter buffers",
+                self._source_shard,
+                humanfriendly.format_size(self._buffer_estimated_bytes, binary=True),
+                humanfriendly.format_size(self._flush_threshold_bytes, binary=True),
+            )
+            self._flush()
 
     def close(self) -> ListShard:
         """Flush remaining buffers, write sidecar, return ListShard.
@@ -656,14 +639,12 @@ class ScatterWriter:
         )
 
         logger.info(
-            "[shard %d] scatter write done: %d pre-close flushes + %d at close = %d total; "
-            "avg_item_bytes=%.0f B, peak_rss=%d MB",
+            "[shard %d] scatter write done: %d pre-close flushes + %d at close = %d total; avg_item_bytes=%.0f B",
             self._source_shard,
             pre_close_flushes,
             self._n_chunks_written - pre_close_flushes,
             self._n_chunks_written,
             self._avg_item_bytes,
-            self._peak_rss_bytes // (1024 * 1024),
         )
 
         sidecar: dict = {
