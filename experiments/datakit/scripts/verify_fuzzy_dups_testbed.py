@@ -54,11 +54,12 @@ DEFAULT_INSPECTION_LIMIT = 10_000
 TEXT_PREVIEW_CHARS = 500
 SHARED_POOL_NAME = "fuzzy-verification-testbed"
 CANDIDATE_IMPORT_VERSION = 1
-WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g", disk="8g")
+WORKER_RESOURCES = ResourceConfig(cpu=2, ram="16g", disk="8g")
 COORDINATOR_RESOURCES = ResourceConfig(cpu=1, ram="4g", disk="16g", preemptible=False)
+STORE_ACTOR_RESOURCES = ResourceConfig(cpu=2, ram="8g", disk="8g")
 STORE_CONFIG = FuzzyVerificationStoreConfig(
     max_actors=32,
-    actor_resources=WORKER_RESOURCES,
+    actor_resources=STORE_ACTOR_RESOURCES,
     actor_config=ActorConfig(max_concurrency=32, max_task_retries=1_000),
     max_actor_bytes=4_000_000_000,
     recovery_timeout=1_800,
