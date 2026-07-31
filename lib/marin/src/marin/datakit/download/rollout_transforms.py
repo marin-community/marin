@@ -65,6 +65,7 @@ def render_role_message(msg: dict) -> str:
 # render the same tag text.
 TRAJECTORY_SOLVED_TAG = "This trajectory solved the task successfully."
 TRAJECTORY_FAILED_TAG = "This trajectory failed to solve the task."
+TRAJECTORY_UNVERIFIED_TAG = "This trajectory ended before the task was verified."
 
 
 def render_tool_call(tool_call: dict) -> str:
