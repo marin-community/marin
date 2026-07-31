@@ -99,7 +99,38 @@ artifact root.
 - Clustering seeds: 42, 43, and 44.
 - F1 uncertainty: 10,000 paired source bootstrap samples.
 
-The corrected manifest digest and job results are pending.
+The corrected manifest has these fixed results:
+
+- Manifest SHA-256:
+  `4aea19379cb6b7414d80f0b72c868f239e9247c05c3a703a26b19a059599f211`
+- Sources: 146
+- Source groups: 28 code, 24 name-matched multilingual, 91 standard, and
+  3 OOD
+- Training rows: exactly 750,000 and 3,000,000
+- Held-out evaluation rows: 74,752
+- Selected input files: 5,341
+- Stack v3 output hash: `32b6fa6f`
+- Manifest audit: passed
+- Survey documents: 14,600
+- Non-constant documents: 100 percent
+- Raw and normalized unique documents: 99.9589 percent
+- Documents in a near-duplicate pair: 0.3356 percent
+
+Corrected manifest artifacts:
+
+- Manifest:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/manifest.json`
+- Audit:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/manifest-audit.json`
+- Survey:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/survey/report.html`
+- Manifest job: `/rav/lux-arctic-manifest-v2-004`
+- Audit job: `/rav/lux-arctic-manifest-audit-v2-001`
+- Survey job: `/rav/lux-arctic-survey-v2-001-r1`
+
+The first survey attempt did not import the workspace `marin-dupekit`
+package. The replacement job synced `marin-core` and `marin-dupekit`
+explicitly. It then completed without a data or native-kernel error.
 
 ## Fixed inputs for the first run
 
