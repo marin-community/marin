@@ -3,7 +3,7 @@
 
 """Shared types, routing helpers, and layout utilities for Grug MoE."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal, TypeAlias, cast, get_args
 
@@ -26,6 +26,7 @@ MoeImplementation: TypeAlias = Literal[
     "deepep",  # Expert-parallel DeepEP intranode dispatch/combine backend.
     "scatter",  # Single-process grouped GMM with scatter-add combine.
     "sonic",  # Single-process raw Sonic Triton gather/combine backend.
+    "sonic_cute",  # Single-process QuACK SM100 (Blackwell/B200) grouped-GEMM backend.
 ]
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
 _EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all", "deepep")
@@ -34,6 +35,7 @@ _EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all", "deepep")
 _LOCAL_MOE_IMPLEMENTATIONS = (
     "scatter",
     "sonic",
+    "sonic_cute",
 )
 
 _CHECKPOINT_DISPATCH_INPUT = "grug_moe_dispatch_input"
@@ -155,3 +157,12 @@ def _prepare_moe_dispatch_indices_with_assignment_ids(
 
 def _zero_dropped_assignments() -> Int[Array, ""]:
     return jnp.array(0, dtype=jnp.int32)
+
+
+def _chunk_capacity_drops(cu: Int[Array, "E1"], bounds: Sequence[int], caps: Sequence[int]) -> Int[Array, ""]:
+    """Count assignments lost to per-chunk static capacity."""
+    total = jnp.zeros((), jnp.int32)
+    for chunk, cap in enumerate(caps):
+        count = cu[bounds[chunk + 1]] - cu[bounds[chunk]]
+        total = total + jnp.maximum(count - cap, 0).astype(jnp.int32)
+    return total
