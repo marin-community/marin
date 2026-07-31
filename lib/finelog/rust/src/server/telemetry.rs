@@ -16,7 +16,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{Mutex, OnceCell, OwnedSemaphorePermit, Semaphore};
 use uuid::Uuid;
 
 use crate::errors::StatsError;
@@ -216,7 +216,7 @@ struct TelemetryState {
     store: Arc<Store>,
     admission: Arc<Semaphore>,
     dedupe: Mutex<DedupeCache>,
-    schema_error: Option<String>,
+    namespace_registration: OnceCell<Result<(), String>>,
 }
 
 struct PreparedBatch {
@@ -227,6 +227,38 @@ struct PreparedBatch {
     record_count: usize,
 }
 
+impl TelemetryState {
+    async fn ensure_namespace_registered(&self) -> Result<(), ApiError> {
+        let result = self
+            .namespace_registration
+            .get_or_init(|| async {
+                let store = Arc::clone(&self.store);
+                match tokio::task::spawn_blocking(move || {
+                    store.register_table(
+                        TELEMETRY_NAMESPACE,
+                        telemetry_schema(),
+                        StoragePolicy::default(),
+                    )
+                })
+                .await
+                {
+                    Ok(Ok(_)) => Ok(()),
+                    Ok(Err(error)) => Err(error.to_string()),
+                    Err(join) => Err(format!("telemetry namespace task failed: {join}")),
+                }
+            })
+            .await;
+        result.as_ref().map_err(|error| {
+            ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "storage_unavailable",
+                format!("telemetry namespace is unavailable: {error}"),
+            )
+        })?;
+        Ok(())
+    }
+}
+
 /// Return an authenticated `POST /v1/telemetry` router with bounded admission and
 /// process-local retry deduplication.
 pub fn router(
@@ -235,19 +267,11 @@ pub fn router(
     max_concurrent: usize,
     dedupe_capacity: usize,
 ) -> Router {
-    let schema_error = store
-        .register_table(
-            TELEMETRY_NAMESPACE,
-            telemetry_schema(),
-            StoragePolicy::default(),
-        )
-        .err()
-        .map(|error| error.to_string());
     let state = Arc::new(TelemetryState {
         store,
         admission: Arc::new(Semaphore::new(max_concurrent)),
         dedupe: Mutex::new(DedupeCache::new(dedupe_capacity)),
-        schema_error,
+        namespace_registration: OnceCell::new(),
     });
     Router::new()
         .route("/v1/telemetry", post(post_telemetry))
@@ -268,13 +292,7 @@ async fn post_telemetry(
                 "too many telemetry requests are active",
             )
         })?;
-    if let Some(error) = &state.schema_error {
-        return Err(ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "storage_unavailable",
-            format!("telemetry namespace is unavailable: {error}"),
-        ));
-    }
+    state.ensure_namespace_registered().await?;
     let batch_id_header = required_header(request.headers(), "idempotency-key", 64)?;
     let content_type = required_header(request.headers(), CONTENT_TYPE.as_str(), 128)?;
     if content_type
