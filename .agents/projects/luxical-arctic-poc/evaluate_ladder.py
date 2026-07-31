@@ -473,10 +473,21 @@ def model_metrics(
 ) -> dict[str, Any]:
     """Return all fixed model metrics."""
     vectors = embed_on_cpu(model, texts)
+    return vector_metrics(vectors, labels, probe_roles, categories) | {
+        "arctic_fidelity": cosine_fidelity(vectors, teacher_vectors, left, right),
+    }
+
+
+def vector_metrics(
+    vectors: np.ndarray,
+    labels: np.ndarray,
+    probe_roles: np.ndarray,
+    categories: np.ndarray,
+) -> dict[str, Any]:
+    """Return the fixed quality and collapse metrics for supplied vectors."""
     return {
         "probe": source_probe(vectors, labels, probe_roles, categories),
         "collapse": collapse_metrics(vectors, labels, categories),
-        "arctic_fidelity": cosine_fidelity(vectors, teacher_vectors, left, right),
     }
 
 
@@ -562,14 +573,12 @@ def probe_uncertainty(student: dict[str, Any], baseline: dict[str, Any]) -> dict
     }
 
 
-def comparison_report(student: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]:
-    """Return all pass gates for one student."""
-    collapse = collapse_comparison(student["collapse"], baseline["collapse"])
-    speed_ratio = student["speed"]["median_documents_per_second"] / baseline["speed"]["median_documents_per_second"]
-    macro_f1_delta = student["probe"]["macro_f1"] - baseline["probe"]["macro_f1"]
-    worst_recall_delta = student["probe"]["worst_source_recall"] - baseline["probe"]["worst_source_recall"]
-    fidelity_delta = student["arctic_fidelity"]["spearman"] - baseline["arctic_fidelity"]["spearman"]
-    student_distribution = student["collapse"]["cluster_distribution"]
+def representation_comparison(candidate: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]:
+    """Compare representation quality and collapse metrics with Luxical-One."""
+    collapse = collapse_comparison(candidate["collapse"], baseline["collapse"])
+    macro_f1_delta = candidate["probe"]["macro_f1"] - baseline["probe"]["macro_f1"]
+    worst_recall_delta = candidate["probe"]["worst_source_recall"] - baseline["probe"]["worst_source_recall"]
+    candidate_distribution = candidate["collapse"]["cluster_distribution"]
     baseline_distribution = baseline["collapse"]["cluster_distribution"]
     required_categories = (
         SourceCategory.CODE.value,
@@ -577,42 +586,69 @@ def comparison_report(student: dict[str, Any], baseline: dict[str, Any]) -> dict
         SourceCategory.STANDARD.value,
     )
     category_macro_f1_delta = {
-        category: student["probe"]["category_macro_f1"][category] - baseline["probe"]["category_macro_f1"][category]
+        category: candidate["probe"]["category_macro_f1"][category] - baseline["probe"]["category_macro_f1"][category]
         for category in required_categories
     }
-    uncertainty = probe_uncertainty(student["probe"], baseline["probe"])
-    gates = {
-        "finite": collapse["finite_gate_passed"],
-        "unique": collapse["overall_unique_gate_passed"],
-        "regular_source_collapse": collapse["regular_source_gate_passed"],
-        "arctic_fidelity": fidelity_delta >= 0.0,
-        "macro_f1": macro_f1_delta >= QUALITY_DELTA,
-        "worst_source_recall": worst_recall_delta >= QUALITY_DELTA,
-        "code_macro_f1": category_macro_f1_delta[SourceCategory.CODE.value] >= QUALITY_DELTA,
-        "multilingual_macro_f1": category_macro_f1_delta[SourceCategory.MULTILINGUAL.value] >= QUALITY_DELTA,
-        "standard_macro_f1": category_macro_f1_delta[SourceCategory.STANDARD.value] >= QUALITY_DELTA,
-        "cpu_speed_minimum": speed_ratio >= SPEED_MINIMUM_RATIO,
-    }
+    uncertainty = probe_uncertainty(candidate["probe"], baseline["probe"])
     return {
-        "speed_ratio": speed_ratio,
-        "speed_target_passed": speed_ratio >= SPEED_TARGET_RATIO,
         "macro_f1_delta": macro_f1_delta,
         "worst_source_recall_delta": worst_recall_delta,
-        "arctic_fidelity_delta": fidelity_delta,
         "category_macro_f1_delta": category_macro_f1_delta,
         "probe_uncertainty": uncertainty,
         "cluster_distribution_delta": {
             "largest_cluster_share": (
-                student_distribution["largest_cluster_share"] - baseline_distribution["largest_cluster_share"]
+                candidate_distribution["largest_cluster_share"] - baseline_distribution["largest_cluster_share"]
             ),
             "effective_cluster_count": (
-                student_distribution["effective_cluster_count"] - baseline_distribution["effective_cluster_count"]
+                candidate_distribution["effective_cluster_count"] - baseline_distribution["effective_cluster_count"]
             ),
             "source_cluster_nmi": (
-                student_distribution["source_cluster_nmi"] - baseline_distribution["source_cluster_nmi"]
+                candidate_distribution["source_cluster_nmi"] - baseline_distribution["source_cluster_nmi"]
             ),
         },
         "collapse": collapse,
+    }
+
+
+def quality_gates(comparison: dict[str, Any]) -> dict[str, bool]:
+    """Return the common representation quality and collapse gates."""
+    collapse = comparison["collapse"]
+    category_macro_f1_delta = comparison["category_macro_f1_delta"]
+    return {
+        "finite": collapse["finite_gate_passed"],
+        "unique": collapse["overall_unique_gate_passed"],
+        "regular_source_collapse": collapse["regular_source_gate_passed"],
+        "macro_f1": comparison["macro_f1_delta"] >= QUALITY_DELTA,
+        "worst_source_recall": comparison["worst_source_recall_delta"] >= QUALITY_DELTA,
+        "code_macro_f1": category_macro_f1_delta[SourceCategory.CODE.value] >= QUALITY_DELTA,
+        "multilingual_macro_f1": category_macro_f1_delta[SourceCategory.MULTILINGUAL.value] >= QUALITY_DELTA,
+        "standard_macro_f1": category_macro_f1_delta[SourceCategory.STANDARD.value] >= QUALITY_DELTA,
+    }
+
+
+def teacher_comparison_report(teacher: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]:
+    """Return the direct Arctic quality and collapse gates."""
+    comparison = representation_comparison(teacher, baseline)
+    gates = quality_gates(comparison)
+    return comparison | {
+        "gates": gates,
+        "all_required_gates_passed": all(gates.values()),
+    }
+
+
+def comparison_report(student: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]:
+    """Return all pass gates for one student."""
+    comparison = representation_comparison(student, baseline)
+    speed_ratio = student["speed"]["median_documents_per_second"] / baseline["speed"]["median_documents_per_second"]
+    fidelity_delta = student["arctic_fidelity"]["spearman"] - baseline["arctic_fidelity"]["spearman"]
+    gates = quality_gates(comparison) | {
+        "arctic_fidelity": fidelity_delta >= 0.0,
+        "cpu_speed_minimum": speed_ratio >= SPEED_MINIMUM_RATIO,
+    }
+    return comparison | {
+        "speed_ratio": speed_ratio,
+        "speed_target_passed": speed_ratio >= SPEED_TARGET_RATIO,
+        "arctic_fidelity_delta": fidelity_delta,
         "gates": gates,
         "all_required_gates_passed": all(gates.values()),
     }
