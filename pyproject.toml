@@ -250,6 +250,9 @@ ignore = ["F722", "B008", "UP015", "UP046", "UP047", "A005", "E741"]
 # The decon report renderer embeds CSS/JS/HTML as long string literals; wrapping
 # those lines hurts readability far more than the length limit helps.
 "experiments/datakit/decontam/viewer/report.py" = ["E501"]
+# Embeds the upstream Infinity-Parser2 doc2md prompt verbatim; the prompt string
+# is part of the model's validated input and must not be rewrapped.
+"experiments/b200_ocr/bench_infinity_parser.py" = ["E501"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["experiments"]

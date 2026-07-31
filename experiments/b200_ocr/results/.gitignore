@@ -1,0 +1,4 @@
+# The repo-root ignore excludes *.jsonl wholesale to keep datasets out of git;
+# these files are small benchmark result records (~30KB each) that
+# budget_sweep_report.md and summarize_budget_sweep.py are built from.
+!*.jsonl

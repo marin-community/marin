@@ -747,6 +747,44 @@ def _prepare_vllm_compilation_cache(
     return cache, cache.environment()
 
 
+_gpu_telemetry_started = False
+
+
+def _start_gpu_telemetry_sampler(interval_seconds: float = 15.0) -> None:
+    """Periodically log nvidia-smi utilization so GPU headroom can be computed from the job log.
+
+    No-op on hosts without nvidia-smi (TPU/CPU) and on repeated calls within a process.
+    """
+    global _gpu_telemetry_started
+    if _gpu_telemetry_started or shutil.which("nvidia-smi") is None:
+        return
+    _gpu_telemetry_started = True
+
+    def _sample_forever() -> None:
+        logged_failure = False
+        while True:
+            time.sleep(interval_seconds)
+            # Sampling must never affect serving: swallow failures, reporting only the first at debug level.
+            try:
+                output = subprocess.check_output(
+                    [
+                        "nvidia-smi",
+                        "--query-gpu=index,utilization.gpu,memory.used,memory.total,power.draw",
+                        "--format=csv,noheader,nounits",
+                    ],
+                    text=True,
+                    timeout=10,
+                )
+            except Exception:
+                if not logged_failure:
+                    logger.debug("gpu telemetry sample failed", exc_info=True)
+                    logged_failure = True
+                continue
+            logger.info("gpu telemetry: %s", output.strip().replace("\n", " | "))
+
+    threading.Thread(target=_sample_forever, name="gpu-telemetry-sampler", daemon=True).start()
+
+
 def _launch_vllm_process(
     *,
     command: list[str],
@@ -900,6 +938,7 @@ def _start_vllm_native_server(
             log_dir=log_dir,
             compilation_cache=cache,
         )
+        _start_gpu_telemetry_sampler()
         try:
             _wait_for_vllm_server(
                 handle,

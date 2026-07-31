@@ -72,9 +72,14 @@ def build_dashboard_app(
 
     @asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
+        # Every /v1 request funnels through this one client, so httpx's default
+        # connection pool (max_connections=100) silently caps the whole serve at
+        # 100 concurrent requests — far below what a batch-inference vLLM engine
+        # sustains (max_num_seqs is commonly 512+).
         state["client"] = httpx.AsyncClient(
             base_url=upstream_base_url,
             timeout=httpx.Timeout(request_timeout_seconds, connect=10.0),
+            limits=httpx.Limits(max_connections=4096, max_keepalive_connections=1024),
         )
         try:
             yield
