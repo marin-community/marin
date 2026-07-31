@@ -110,3 +110,13 @@ The pyramid and L1-to-L48 paths are implemented and passing their focused tests.
 - Result: C0 finished at loss 5.2744 / 5.1301 / 4.9888 for low / center / high. Terminal gradient norms were 0.3467 / 0.3318 / 0.3282, capacity overflow was zero for all three, and throughput was 191,442 / 191,579 / 191,870 tok/s. At center LR, P1 finished at loss 5.1373, gradient norm 0.4852, zero overflow, and 192,583 tok/s; P2 finished at loss 5.1286, gradient norm 0.3750, zero overflow, and 190,439 tok/s.
 - Interpretation: select the high candidate for production: it improves terminal pilot loss by 0.1413 versus center without a gradient or throughput penalty. P1/P2 throughput differs from C0 by less than 1%, so placement comparisons are not confounded by a large kernel-speed difference. The 128-update losses do not distinguish P1, P2, and uniform at center LR; that is the question for the longer core wave.
 - Next action: commit the selected high rate, finish the offline recovery of the growth canary, then launch C0, P1, P2, and D1 together.
+
+### 2026-07-31 16:30 - CC16-005 depth-growth gate and core admission
+
+- Hypothesis: exact L1-to-L48 state growth remains numerically trainable after preserving the source step, data offset, optimizer schedule, and non-block optimizer state.
+- Commit Hash: `1e0dc4f62b`.
+- Command: target-only recovery `/power/cc16-growth-target-recovery-coord/grug-train-cc16-growth-pilot-l1-to-l48-16-recovery`, followed by the four production coordinators recorded in `scratch/20260731T153724Z_monitoring_state.json`.
+- Config: recovery loaded the completed step-32 L1 checkpoint and trained 16 L48 updates. The core wave assigns four 4-GPU GB200 nodes to each of C0, P1, P2, and D1; all use the selected high learning rate and common 6,400-update optimizer/data horizon.
+- Result: every recovery rank reported `step=32`, `data_offset=8192`, 84 copied parameter leaves, 96 reset new-block optimizer leaves, and 19 preserved optimizer leaves. The grown model reached step 48 with loss 8.77 and saved its checkpoint. C0, P1, P2, and the D1 L1 source were all gang-admitted by 16:29:28 UTC with no task failure or preemption.
+- Interpretation: the growth implementation passes both structural and short numerical gates. W&B finalization stalled after uploading the recovery run, but Iris completed all four workers successfully; this is telemetry teardown, not a training failure.
+- Next action: require first finite metrics from every core arm, then compare loss, throughput, target fraction, overflow, and effective tokens at the 20:29:28 UTC four-hour checkpoint without stopping healthy jobs.

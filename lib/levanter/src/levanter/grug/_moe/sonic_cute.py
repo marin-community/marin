@@ -11,8 +11,6 @@ elementwise in JAX; the two weight-gradient GEMMs (``dw13``/``dw2``) stay on XLA
 ``ragged_dot`` (a different varlen-k grouping). QuACK covers ~2/3 of the MoE FLOPs.
 """
 
-from collections.abc import Callable
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -38,11 +36,7 @@ def _interleave_gate_up(moe_w13: jax.Array, moe_dim: int) -> jax.Array:
 
 @jax.custom_vjp
 def _expert_mlp(x_dispatch, w13_il, moe_w2, group_sizes, cu):
-    """y = down( swiglu( x @ w13_il ) ), grouped by experts. Activation-path GEMMs on QuACK.
-
-    ``group_sizes``/``cu`` are traced int arrays passed as explicit args (not closed
-    over — that leaks under shard_map; not nondiff_argnums — that rejects tracers).
-    """
+    """Apply the grouped SwiGLU expert projection."""
     _gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True)
     return quack_grouped_gemm(h, moe_w2, cu, b_major="n")
 
@@ -84,7 +78,6 @@ def _moe_mlp_local_sonic_cute(
     moe_w13: Float[Array, "E H I2"],
     moe_w2: Float[Array, "E I H"],
     *,
-    activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
 ) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
     x_dispatch, w_dispatch, token_dispatch, group_sizes = _prepare_moe_dispatch(

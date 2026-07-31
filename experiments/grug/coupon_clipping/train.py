@@ -344,13 +344,12 @@ def _make_train_step(
 
         def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
-            return compute_params.next_token_loss(
+            return compute_params.next_token_loss_with_router_metrics(
                 batch.tokens,
                 batch.loss_weight,
                 mask=batch.attn_mask,
                 reduction="mean",
                 logsumexp_weight=z_loss,
-                return_router_metrics=True,
             )
 
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)

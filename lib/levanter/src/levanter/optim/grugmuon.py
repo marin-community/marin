@@ -1,13 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Muon optimizer for models using raw JAX arrays with (fan_in, fan_out) layout,
-such as Grug models.
-
-All 2D arrays are routed to Muon, except those whose path contains
-'embed', 'lm_head', or 'output' (case-insensitive), which use AdamW.
-"""
+"""Muon optimizer routing for Grug matrix-shaped parameter leaves."""
 
 import math
 import os
@@ -32,11 +26,7 @@ ORTHOGONALIZATION_LAYOUTS = (VMAP_REPLICATED, STACK_BATCH_SHARDED)
 
 
 def _effective_ns_steps(steps: int) -> int:
-    """Newton-Schulz iteration count, forced to 0 when SCALE_MUON_DROP_NS_MATMULS=1.
-
-    Dropping the iterations skips the XX^T / A@A / B@X matmuls while keeping the bf16 cast,
-    Frobenius normalization, and any reshard/distribution the caller performs -- isolating the
-    NS matmul cost without the fp32/undistributed confound of a full no-op. Read at trace time."""
+    """Return the configured Newton-Schulz iteration count for this trace."""
     return 0 if os.environ.get("SCALE_MUON_DROP_NS_MATMULS") == "1" else steps
 
 
@@ -77,13 +67,7 @@ def _batch_sharded_stack_target_pspec(array) -> PartitionSpec | None:
 @OptimizerConfig.register_subclass("grug_muon")
 @dataclass(frozen=True)
 class GrugMuonConfig(MuonConfig):
-    """
-    Muon optimizer for models that use raw JAX arrays in (fan_in, fan_out) layout.
-
-    Routing rules:
-    - 2D arrays whose path does NOT contain 'embed', 'lm_head', or 'output' -> Muon
-    - Everything else -> AdamW
-    """
+    """Route matrix-shaped Grug weights to Muon and scale-like leaves to AdamW."""
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -300,14 +284,7 @@ def _match_update_sharding():
 
 
 def _newtonschulz_batched_syrk(X: jax.Array, steps: int, eps: float, coefficient_type: CoefficientType) -> jax.Array:
-    """Batched Newton-Schulz using the QuACK SM100 symmetric GEMM for the two symmetric products.
-
-    ``X`` is a device-local stack ``[batch, m, k]`` (call inside a shard_map). Same math as the
-    vmapped :func:`_zeropower_via_newtonschulz_local`, but ``X@X^T`` and ``A@A`` go through the
-    in-kernel-mirror symmetric GEMM (~half the matmul FLOPs, ~1.7x vs dense on each symmetric
-    product; ~1.19x on the full NS end-to-end since B@X stays dense). Gated at the call sites by
-    ``SCALE_MUON_SYRK=1``. QuACK is Blackwell-only, so it is imported lazily.
-    """
+    """Apply batched Newton-Schulz with symmetric SM100 matrix products."""
     from levanter.grug._moe.quack_symmetric_cute import quack_symmetric_gemm  # noqa: PLC0415
 
     orig_dtype = X.dtype
@@ -377,15 +354,7 @@ def _newtonschulz_4d_distributed(
     eps: float,
     coefficient_type: CoefficientType,
 ) -> jax.Array:
-    """Newton-Schulz on a stacked 4D MoE expert leaf without gathering D/I to replicated.
-
-    The leaf is ``(L, E, D, I)`` for ``w_gate``/``w_up`` or ``(L, E, I, D)`` for ``w_down``,
-    sharded ``P(None, "expert", "data", "model")``. The "one matrix per chip" plan: bf16
-    cast, free-merge ``(L, E) -> LE`` keeping the sharding on the ``data`` axis, an explicit
-    all-to-all reshard to move ``LE`` onto the batch axis (each chip ends up owning
-    ``LE / shards`` *full* matrices), local NS, then reverse. Splitting the axis merge from
-    the cross-axis migration lets XLA do each cheaply instead of materializing the full stack.
-    """
+    """Apply Newton-Schulz to a distributed stack of MoE expert matrices."""
     mesh = jax.sharding.get_abstract_mesh()
     if mesh.empty:
         return x
@@ -551,15 +520,7 @@ def _newtonschulz_padded_stack_sharded(
     eps: float = 1e-7,
     coefficient_type: CoefficientType = "quintic",
 ) -> jax.Array:
-    """Distribute NS over a 3D stack whose length does not divide the mesh, via zero-padding.
-
-    The non-expert stack is ``[L, d_in, d_out]`` (e.g. L=48 attn/dense matrices). When L does not
-    divide the intra-rack shard count (48 over 64 data GPUs), the plain stack-sharded path can't
-    distribute and falls back to replicating NS on every device. Here we pad L up to the next
-    multiple of the shard count with zero matrices (``NS(0) == 0``), shard one matrix per chip,
-    run local NS, gather, and slice the padding off. Honors ``SCALE_MUON_INTRA_RACK`` by keeping
-    the distribution (and hence the scatter/gather) off the cross-rack ``replica_dcn`` axis.
-    """
+    """Apply Newton-Schulz to a zero-padded, mesh-sharded matrix stack."""
     P = PartitionSpec
     assert X.ndim == 3
     local = lambda matrix: _zeropower_via_newtonschulz_local(matrix, steps, eps, coefficient_type)

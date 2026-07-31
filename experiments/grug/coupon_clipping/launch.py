@@ -7,6 +7,7 @@ import dataclasses
 import os
 from dataclasses import dataclass
 from datetime import timedelta
+from enum import StrEnum
 
 import jmp
 from fray.cluster import ResourceConfig
@@ -64,6 +65,11 @@ class CouponClippingLaunchConfig:
     depth_growth: DepthGrowthConfig | None = None
     learning_rate: CouponClippingLearningRate = SELECTED_LEARNING_RATE
     watch_interval: int = 0
+
+
+class CouponClippingRunKind(StrEnum):
+    FULL = "full"
+    PILOT = "pilot"
 
 
 def run_coupon_clipping_trial(config: CouponClippingLaunchConfig) -> None:
@@ -124,15 +130,45 @@ def build_coupon_clipping_checkpoint(
     arm: CouponClippingArm,
     *,
     version: str | None = None,
-    pilot: bool = False,
     learning_rate: CouponClippingLearningRate = SELECTED_LEARNING_RATE,
 ) -> ArtifactStep[LevanterCheckpoint]:
-    """Assemble one fixed coupon-clipping arm as a lazy checkpoint artifact."""
+    """Assemble one full coupon-clipping arm as a lazy checkpoint artifact."""
+    return _build_coupon_clipping_checkpoint(
+        arm,
+        version=version,
+        run_kind=CouponClippingRunKind.FULL,
+        learning_rate=learning_rate,
+    )
+
+
+def build_coupon_clipping_pilot_checkpoint(
+    arm: CouponClippingArm,
+    *,
+    version: str | None = None,
+    learning_rate: CouponClippingLearningRate = SELECTED_LEARNING_RATE,
+) -> ArtifactStep[LevanterCheckpoint]:
+    """Assemble one 128-step coupon-clipping pilot artifact."""
+    return _build_coupon_clipping_checkpoint(
+        arm,
+        version=version,
+        run_kind=CouponClippingRunKind.PILOT,
+        learning_rate=learning_rate,
+    )
+
+
+def _build_coupon_clipping_checkpoint(
+    arm: CouponClippingArm,
+    *,
+    version: str | None,
+    run_kind: CouponClippingRunKind,
+    learning_rate: CouponClippingLearningRate,
+) -> ArtifactStep[LevanterCheckpoint]:
     model = build_model_config(arm)
-    steps = PILOT_STEPS if pilot else TRAIN_STEPS
-    if pilot:
+    if run_kind is CouponClippingRunKind.PILOT:
+        steps = PILOT_STEPS
         run_id = f"{arm.value}-pilot128-{learning_rate.value}"
     else:
+        steps = TRAIN_STEPS
         if learning_rate is not SELECTED_LEARNING_RATE:
             raise ValueError("full pyramid arms use the learning rate selected by the systems gate")
         run_id = arm.value
@@ -155,14 +191,14 @@ def build_coupon_clipping_checkpoint(
             resources=ctx.runtime_arg("train_resources"),
             tracker=WandbConfig(
                 project=_WANDB_PROJECT,
-                tags=["grug", "moe", "coupon-clipping", "gb200", arm.value, "pilot" if pilot else "full"],
+                tags=["grug", "moe", "coupon-clipping", "gb200", arm.value, run_kind.value],
                 group=_WANDB_GROUP,
                 name=None,
                 replicate_path=ctx.output_path,
             ),
             steps=steps,
             learning_rate=learning_rate,
-            watch_interval=8 if pilot else 0,
+            watch_interval=8 if run_kind is CouponClippingRunKind.PILOT else 0,
         )
 
     return ArtifactStep(

@@ -41,7 +41,6 @@ def _moe_mlp_local(
             combine_weights,
             moe_w13,
             moe_w2,
-            activation_fn=activation_fn,
             num_experts=num_experts,
         )
     local_key = implementation if implementation in _LOCAL_MOE_IMPLEMENTATIONS else "scatter"

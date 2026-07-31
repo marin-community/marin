@@ -50,7 +50,7 @@ def _liger_ce_forward(hidden, lm_head, labels, weight, logsumexp_weight, chunk_s
 
 @functools.partial(jax.custom_vjp, nondiff_argnums=(4, 5))
 def _liger_weighted_ce(hidden, lm_head, labels, weight, logsumexp_weight, chunk_size):
-    """Per-token weight*(CE + z-loss), Liger-chunked. custom_vjp over (hidden, lm_head)."""
+    """Return weighted per-token cross-entropy and z-loss."""
     return _liger_ce_forward(hidden, lm_head, labels, weight, logsumexp_weight, chunk_size)
 
 

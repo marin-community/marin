@@ -195,13 +195,7 @@ def _active_batch_axes(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> t
 
 
 def _q_batch_axes(q: jax.Array, mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> tuple[str, ...]:
-    """Batch mesh axes ``q`` is actually sharded over (its leading PartitionSpec entry).
-
-    FA4 shards its metadata (lower_bounds/valid) and output to match the activation's batch
-    sharding rather than hardcoding the mesh's batch axes, so it follows the model's choice --
-    e.g. intra-rack ``(data, expert)`` vs the full ``(replica_dcn, data, expert)``. Falls back to
-    the mesh-derived default when ``q``'s batch axis is unsharded.
-    """
+    """Return the active mesh axes that shard ``q``'s batch dimension."""
     sharding = jax.typeof(q).sharding if isinstance(q, core.Tracer) else getattr(q, "sharding", None)
     spec = getattr(sharding, "spec", None)
     if spec and spec[0] is not None:
@@ -365,13 +359,7 @@ def fa4_cute_segment_bounds(
     seq_len: int,
     sliding_window: int | None,
 ) -> tuple[Int[Array, "B S"], Bool[Array, "B S"]]:
-    """Compute FA4/CuTe per-token ``(lower_bounds, valid)`` for ``mask`` at a given window.
-
-    Exposed so callers can precompute the metadata once outside a ``lax.scan``/``lax.cond`` and
-    select it per layer (via :meth:`AttentionMask.with_fa4_bounds`), keeping the FA4 pure_callback
-    out of a conditional whose device-0-pinned output would otherwise force an involuntary full
-    rematerialization at scale.
-    """
+    """Return per-token lower bounds and validity for FA4 causal attention."""
     if not isinstance(mask, AttentionMask):
         raise NotImplementedError("fa4_cute_segment_bounds requires an AttentionMask.")
     if not mask.is_causal:

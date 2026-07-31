@@ -25,16 +25,9 @@ from quack.gemm_act import GemmActMixin, GemmGatedSm100, act_fn_map, gate_fn_map
 from quack.gemm_act import get_max_active_clusters
 from quack.gemm_tvm_ffi_utils import make_scheduler_args, make_varlen_args
 
+from levanter.grug._moe.quack_cute_dtype import SM100_FALLBACK_MAX_ACTIVE_CLUSTERS, quack_cute_dtype
+
 _ACC = cutlass.Float32
-_JAX_TO_CUTE = {
-    jnp.dtype(jnp.bfloat16): cutlass.BFloat16,
-    jnp.dtype(jnp.float16): cutlass.Float16,
-    jnp.dtype(jnp.float32): cutlass.Float32,
-}
-
-
-def _cute_dtype(dt):
-    return _JAX_TO_CUTE[jnp.dtype(dt)]
 
 
 def _build_launcher(*, a_dtype, tile_mn, cluster_mnk, activation, max_active_clusters, max_swizzle):
@@ -88,11 +81,11 @@ def quack_gated_grouped_gemm(
     M, K = x_sort.shape
     N2 = w_gate_up.shape[2]
     N = N2 // 2
-    a_dtype = _cute_dtype(x_sort.dtype)
+    a_dtype = quack_cute_dtype(x_sort.dtype)
     try:
         max_active_clusters = get_max_active_clusters(cluster_mnk[0] * cluster_mnk[1])
     except Exception:
-        max_active_clusters = 148  # B200 SM-count fallback for host-side lowering tests
+        max_active_clusters = SM100_FALLBACK_MAX_ACTIVE_CLUSTERS
     launcher = _build_launcher(
         a_dtype=a_dtype,
         tile_mn=tile_mn,
@@ -149,11 +142,11 @@ def quack_grouped_gemm(a, w, cu_seqlens, *, b_major="n", tile_mn=(256, 128), clu
     M, K = a.shape
     N = w.shape[2] if b_major == "n" else w.shape[1]
     _bmode = (2, 1, 0) if b_major == "n" else (1, 2, 0)
-    a_dtype = _cute_dtype(a.dtype)
+    a_dtype = quack_cute_dtype(a.dtype)
     try:
         mac = get_max_active_clusters(cluster_mnk[0] * cluster_mnk[1])
     except Exception:
-        mac = 148
+        mac = SM100_FALLBACK_MAX_ACTIVE_CLUSTERS
     launcher = _build_plain_launcher(
         a_dtype=a_dtype, tile_mn=tile_mn, cluster_mnk=cluster_mnk, max_active_clusters=mac, max_swizzle=max_swizzle
     )

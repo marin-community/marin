@@ -78,6 +78,7 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
 
 
 RematMode = Literal["recompute_all", "save_moe"]
+BlockStorage = Literal["unrolled", "array_stacked"]
 
 
 def _batch_spec() -> P:
@@ -89,15 +90,7 @@ def _batch_reshard(x: jax.Array) -> jax.Array:
 
 
 def _embedding_gather(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
-    """Replica-local embedding lookup.
-
-    The naive ``token_embed.at[token_ids].get(out_sharding=...)`` emits an all-to-all to lay the
-    gathered rows onto the batch-sharded token axis; because that axis spans ``replica_dcn`` it runs
-    cross-rack and its NCCL first-call rendezvous wedges at 8+ racks. Instead, run the gather under a
-    ``shard_map`` over the batch axes so each shard looks up its own tokens in its (fully replicated)
-    copy of the table -- a purely local op, no collective. Relies on ``Pembed_vocab`` replicating the
-    table across all devices; output hidden is replicated, matching the downstream FFN/attention.
-    """
+    """Look up token embeddings independently within each batch shard."""
 
     def _local(te: jax.Array, ids: jax.Array) -> jax.Array:
         return te[ids]
@@ -173,12 +166,8 @@ class GrugModelConfig:
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
     backward skips re-running expert dispatch and its EP collectives."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
-    use_array_stacked_blocks: bool = False
-    """Stack all transformer blocks into a single ``ArrayStacked[Block]`` and run them
-    through one ``jax.lax.scan``. Collapses the per-layer subgraphs into one scan body so
-    compile time and per-layer overhead stop scaling with ``num_layers``. Requires
-    ``disable_pko=True`` (PKO reads a per-layer flag at trace time, not scan-expressible).
-    The default (False) keeps the unrolled per-layer loop with identical numerics."""
+    block_storage: BlockStorage = "unrolled"
+    """Representation used for transformer blocks during execution."""
     block_segment_lengths: tuple[int, ...] | None = None
     """Layer counts for independently scanned block segments.
 
@@ -840,9 +829,9 @@ class Transformer(eqx.Module):
                 raise ValueError("config must not be provided when initializing directly from GrugModelConfig")
             cfg = cfg_or_vocab
 
-        if cfg.use_array_stacked_blocks and not cfg.disable_pko:
+        if cfg.block_storage == "array_stacked" and not cfg.disable_pko:
             raise ValueError(
-                "use_array_stacked_blocks=True requires disable_pko=True because "
+                "block_storage='array_stacked' requires disable_pko=True because "
                 "the attention path reads use_pko at trace time (not scan-expressible)."
             )
 
@@ -854,7 +843,7 @@ class Transformer(eqx.Module):
 
         blocks: tuple[Block, ...] | None
         stacked_block_segments: tuple[ArrayStacked[Block], ...] | None
-        if cfg.use_array_stacked_blocks:
+        if cfg.block_storage == "array_stacked":
             blocks = None
             stacked_segments = []
             first_layer = 0
@@ -1034,8 +1023,46 @@ class Transformer(eqx.Module):
         reduction: str = "mean",
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
-        return_router_metrics: bool = False,
-    ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
+    ) -> jax.Array:
+        loss, _ = self._next_token_loss_with_router_metrics(
+            token_ids,
+            loss_weight,
+            mask=mask,
+            reduction=reduction,
+            logsumexp_weight=logsumexp_weight,
+            loss_dtype=loss_dtype,
+        )
+        return loss
+
+    def next_token_loss_with_router_metrics(
+        self,
+        token_ids: Int[Array, "B S"],
+        loss_weight: Float[Array, "B S"],
+        *,
+        mask: AttentionMask | jax.Array | None = None,
+        reduction: str = "mean",
+        logsumexp_weight: float | None = None,
+        loss_dtype: jnp.dtype = jnp.float32,
+    ) -> tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
+        return self._next_token_loss_with_router_metrics(
+            token_ids,
+            loss_weight,
+            mask=mask,
+            reduction=reduction,
+            logsumexp_weight=logsumexp_weight,
+            loss_dtype=loss_dtype,
+        )
+
+    def _next_token_loss_with_router_metrics(
+        self,
+        token_ids: Int[Array, "B S"],
+        loss_weight: Float[Array, "B S"],
+        *,
+        mask: AttentionMask | jax.Array | None,
+        reduction: str,
+        logsumexp_weight: float | None,
+        loss_dtype: jnp.dtype,
+    ) -> tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         hidden, router_metrics = self(token_ids, mask=mask)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
@@ -1054,12 +1081,10 @@ class Transformer(eqx.Module):
         rzl = jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
         aux_loss = self.config.router_z_loss_coef * rzl
         loss = cross_entropy_loss + aux_loss if reduction != "none" else cross_entropy_loss
-        if return_router_metrics:
-            summarized_metrics = _summarize_router_metrics(router_metrics)
-            summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
-            summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
-            return loss, summarized_metrics
-        return loss
+        summarized_metrics = _summarize_router_metrics(router_metrics)
+        summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
+        summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
+        return loss, summarized_metrics
 
 
 def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:

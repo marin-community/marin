@@ -27,6 +27,7 @@ from experiments.grug.coupon_clipping.launch import (
     _WANDB_GROUP,
     _WANDB_PROJECT,
     CouponClippingLaunchConfig,
+    CouponClippingRunKind,
     run_coupon_clipping_trial,
 )
 from experiments.grug.coupon_clipping.model import GrugModelConfig
@@ -53,7 +54,7 @@ def _build_source_checkpoint(
     run_id: str,
     steps: int,
     version: str | None,
-    pilot: bool,
+    run_kind: CouponClippingRunKind,
 ) -> ArtifactStep[LevanterCheckpoint]:
     model = build_depth_source_model_config()
     step_name = f"grug/coupon-clipping/{run_id}"
@@ -74,13 +75,13 @@ def _build_source_checkpoint(
             resources=ctx.runtime_arg("train_resources"),
             tracker=WandbConfig(
                 project=_WANDB_PROJECT,
-                tags=["grug", "moe", "coupon-clipping", "gb200", "depth-source", "pilot" if pilot else "full"],
+                tags=["grug", "moe", "coupon-clipping", "gb200", "depth-source", run_kind.value],
                 group=_WANDB_GROUP,
                 name=None,
                 replicate_path=ctx.output_path,
             ),
             steps=steps,
-            watch_interval=8 if pilot else 0,
+            watch_interval=8 if run_kind is CouponClippingRunKind.PILOT else 0,
         )
 
     return ArtifactStep(
@@ -101,7 +102,7 @@ def _build_growth_target_checkpoint(
     steps: int,
     growth: DepthGrowthConfig,
     version: str | None,
-    pilot: bool,
+    run_kind: CouponClippingRunKind,
     source_checkpoint_root: str | None = None,
 ) -> ArtifactStep[LevanterCheckpoint]:
     if (source is None) == (source_checkpoint_root is None):
@@ -130,7 +131,7 @@ def _build_growth_target_checkpoint(
             resources=ctx.runtime_arg("train_resources"),
             tracker=WandbConfig(
                 project=_WANDB_PROJECT,
-                tags=["grug", "moe", "coupon-clipping", "gb200", "depth-growth", "pilot" if pilot else "full"],
+                tags=["grug", "moe", "coupon-clipping", "gb200", "depth-growth", run_kind.value],
                 group=_WANDB_GROUP,
                 name=None,
                 replicate_path=ctx.output_path,
@@ -138,7 +139,7 @@ def _build_growth_target_checkpoint(
             steps=steps,
             initialize_from=initialize_from,
             depth_growth=growth,
-            watch_interval=8 if pilot else 0,
+            watch_interval=8 if run_kind is CouponClippingRunKind.PILOT else 0,
         )
 
     return ArtifactStep(
@@ -154,7 +155,12 @@ def _build_growth_target_checkpoint(
 
 def build_l1_pilot_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     """Run 128 L1 updates against the production optimizer and data horizons."""
-    return _build_source_checkpoint(run_id="cc16-l1-pilot128", steps=L1_PILOT_STEPS, version=version, pilot=True)
+    return _build_source_checkpoint(
+        run_id="cc16-l1-pilot128",
+        steps=L1_PILOT_STEPS,
+        version=version,
+        run_kind=CouponClippingRunKind.PILOT,
+    )
 
 
 def build_growth_pilot_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
@@ -163,7 +169,7 @@ def build_growth_pilot_checkpoint(*, version: str | None = None) -> ArtifactStep
         run_id="cc16-growth-pilot-source32",
         steps=PILOT_SOURCE_STEPS,
         version=version,
-        pilot=True,
+        run_kind=CouponClippingRunKind.PILOT,
     )
     growth = DepthGrowthConfig(
         source_layers=DEPTH_SOURCE_LAYERS,
@@ -177,7 +183,7 @@ def build_growth_pilot_checkpoint(*, version: str | None = None) -> ArtifactStep
         steps=PILOT_SOURCE_STEPS + PILOT_GROWN_STEPS,
         growth=growth,
         version=version,
-        pilot=True,
+        run_kind=CouponClippingRunKind.PILOT,
     )
 
 
@@ -199,7 +205,7 @@ def build_growth_target_only_checkpoint(
         steps=PILOT_SOURCE_STEPS + PILOT_GROWN_STEPS,
         growth=growth,
         version=version,
-        pilot=True,
+        run_kind=CouponClippingRunKind.PILOT,
         source_checkpoint_root=source_checkpoint_root,
     )
 
@@ -210,7 +216,7 @@ def build_d1_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterC
         run_id=f"cc16-d1-l1-source-step{DEPTH_TRANSITION_STEP}",
         steps=DEPTH_TRANSITION_STEP,
         version=version,
-        pilot=False,
+        run_kind=CouponClippingRunKind.FULL,
     )
     return _build_growth_target_checkpoint(
         source,
@@ -218,5 +224,5 @@ def build_d1_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterC
         steps=TRAIN_STEPS,
         growth=DEPTH_GROWTH_CONFIG,
         version=version,
-        pilot=False,
+        run_kind=CouponClippingRunKind.FULL,
     )

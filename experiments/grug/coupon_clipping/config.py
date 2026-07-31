@@ -109,7 +109,7 @@ def build_model_config(arm: CouponClippingArm) -> GrugModelConfig:
         attention_implementation=cast(GrugAttentionImplementation, "gpu_fa4_cute"),
         moe_implementation=resolve_moe_implementation("sonic_cute"),
         remat_mode="recompute_all",
-        use_array_stacked_blocks=True,
+        block_storage="array_stacked",
         block_segment_lengths=SEGMENT_LENGTHS,
         block_segment_shared_expert_intermediate_dims=_SHARED_WIDTHS_BY_ARM[arm],
     )

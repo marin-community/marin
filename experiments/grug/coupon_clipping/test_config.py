@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-from typing import Any, cast
 
 import jax
 import pytest
@@ -16,6 +15,7 @@ from experiments.grug.coupon_clipping.config import (
     EXPECTED_TRAIN_TOKENS,
     SEGMENT_LENGTHS,
     SELECTED_LEARNING_RATE,
+    TRAIN_BATCH_SIZE,
     TRAIN_STEPS,
     CouponClippingArm,
     CouponClippingLearningRate,
@@ -33,6 +33,17 @@ from experiments.grug.coupon_clipping.depth_launch import (
 )
 from experiments.grug.coupon_clipping.model import GrugModelConfig, Transformer
 from experiments.grug.depth_growth import DepthGrowthConfig
+
+
+def _test_data_config():
+    model = build_model_config(CouponClippingArm.C0_P0)
+    return launch.datakit_data_config(
+        total_steps=TRAIN_STEPS,
+        batch_size=TRAIN_BATCH_SIZE,
+        max_seq_len=model.max_seq_len,
+        enable_simulated_epoching=False,
+        val_components={},
+    )
 
 
 def test_pyramid_arms_match_parameters_flops_and_scan_boundaries():
@@ -77,7 +88,7 @@ def test_pilot_keeps_production_mesh_allocator_and_optimizer_horizon(monkeypatch
     monkeypatch.setattr(launch, "run_grug", dispatched.append)
     config = launch.CouponClippingLaunchConfig(
         model=build_model_config(CouponClippingArm.C0_P0),
-        data=cast(Any, None),
+        data=_test_data_config(),
         output_path=str(tmp_path),
         run_id="cc16-c0-p0-pilot128",
         resources=launch._TRAIN_RESOURCES,
@@ -112,7 +123,7 @@ def test_depth_launch_propagates_transition_contract(monkeypatch, tmp_path):
     )
     config = launch.CouponClippingLaunchConfig(
         model=build_model_config(CouponClippingArm.C0_P0),
-        data=cast(Any, None),
+        data=_test_data_config(),
         output_path=str(tmp_path),
         run_id="cc16-growth-pilot-l1-to-l48-16",
         resources=launch._TRAIN_RESOURCES,
@@ -161,7 +172,7 @@ def test_coupon_optimizer_routes_segmented_model_parameters_to_intended_groups()
         num_kv_heads=1,
         max_seq_len=8,
         sliding_window=4,
-        use_array_stacked_blocks=True,
+        block_storage="array_stacked",
         block_segment_lengths=(1, 2),
         block_segment_shared_expert_intermediate_dims=(8, 8),
     )

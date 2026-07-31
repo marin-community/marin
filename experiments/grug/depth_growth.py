@@ -68,6 +68,13 @@ class DepthGrowthReport:
     preserved_optimizer_leaves: int
 
 
+@dataclass(frozen=True)
+class _OptimizerGrowthResult:
+    state: object
+    reset_leaves: int
+    preserved_leaves: int
+
+
 def grow_grug_depth_state(
     source_state: StateT,
     fresh_target_state: StateT,
@@ -90,13 +97,14 @@ def grow_grug_depth_state(
 
     params, copied_parameter_leaves = _grow_model_tree(source_state.params, fresh_target_state.params, config)
     ema_params = _grow_ema_tree(source_state.ema_params, fresh_target_state.ema_params, config)
-    pending_qb_betas = _repeat_layer_array(
+    pending_qb_betas = _repeat_layer_slice(
         source_state.pending_qb_betas,
         fresh_target_state.pending_qb_betas,
         config,
+        target_layer_offset=0,
         path="pending_qb_betas",
     )
-    opt_state, reset_optimizer_leaves, preserved_optimizer_leaves = _grow_optimizer_state(
+    optimizer_growth = _grow_optimizer_state(
         source_state.opt_state,
         fresh_target_state.opt_state,
     )
@@ -107,7 +115,7 @@ def grow_grug_depth_state(
             fresh_target_state,
             step=_copy_array(source_state.step, fresh_target_state.step, path="step"),
             params=params,
-            opt_state=opt_state,
+            opt_state=optimizer_growth.state,
             ema_params=ema_params,
             pending_qb_betas=pending_qb_betas,
         ),
@@ -116,8 +124,8 @@ def grow_grug_depth_state(
         step=source_step,
         data_offset=config.expected_data_offset,
         copied_parameter_leaves=copied_parameter_leaves,
-        reset_optimizer_leaves=reset_optimizer_leaves,
-        preserved_optimizer_leaves=preserved_optimizer_leaves,
+        reset_optimizer_leaves=optimizer_growth.reset_leaves,
+        preserved_optimizer_leaves=optimizer_growth.preserved_leaves,
     )
 
 
@@ -213,7 +221,7 @@ def _grow_model_tree(source: object, target: object, config: DepthGrowthConfig) 
     return target_treedef.unflatten(grown_leaves), copied_parameter_leaves
 
 
-def _grow_optimizer_state(source: object, target: object) -> tuple[object, int, int]:
+def _grow_optimizer_state(source: object, target: object) -> _OptimizerGrowthResult:
     source_leaves = _leaves_by_path(source)
     target_path_leaves, target_treedef = jax.tree_util.tree_flatten_with_path(target)
     grown_leaves: list[object] = []
@@ -233,7 +241,11 @@ def _grow_optimizer_state(source: object, target: object) -> tuple[object, int, 
         if _is_array(target_leaf):
             preserved_optimizer_leaves += 1
 
-    return target_treedef.unflatten(grown_leaves), reset_optimizer_leaves, preserved_optimizer_leaves
+    return _OptimizerGrowthResult(
+        state=target_treedef.unflatten(grown_leaves),
+        reset_leaves=reset_optimizer_leaves,
+        preserved_leaves=preserved_optimizer_leaves,
+    )
 
 
 def _validate_optimizer_schedule_count(opt_state: object, expected_step: int) -> None:
@@ -243,10 +255,6 @@ def _validate_optimizer_schedule_count(opt_state: object, expected_step: int) ->
         raise ValueError("optimizer schedule count must be a scalar array")
     if int(count) != expected_step:
         raise ValueError(f"optimizer schedule is at step {int(count)}, expected {expected_step}")
-
-
-def _repeat_layer_array(source: object, target: object, config: DepthGrowthConfig, *, path: str) -> jax.Array:
-    return _repeat_layer_slice(source, target, config, target_layer_offset=0, path=path)
 
 
 def _repeat_layer_slice(
