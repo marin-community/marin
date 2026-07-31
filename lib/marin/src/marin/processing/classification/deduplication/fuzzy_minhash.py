@@ -28,11 +28,13 @@ from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
 
 from marin.datakit.normalize import NormalizedData
+from marin.datakit.source_key import datakit_source_key
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.dedup_commons import _load_batches
 
 logger = logging.getLogger(__name__)
+MINHASH_ATTR_DATA_VERSION = 3
 
 
 class MinHashParams(BaseModel):
@@ -65,17 +67,17 @@ class MinHashAttrData(BaseModel):
     Attributes:
         version: Schema version of this artifact.
         params: MinHash params; downstream jobs require these to match.
-        source_main_dir: Source ``NormalizedData.main_output_dir`` whose shards
-            this dataset mirrors 1:1.
+        source_key: Prefix-relative identity of the ``NormalizedData.main_output_dir``
+            whose shards this dataset mirrors 1:1.
         attr_dir: Directory containing per-shard attr Parquet files. Filenames
             mirror the source shards. Each row has ``id: str`` and
             ``buckets: list[str]``.
         counters: Aggregated zephyr counters.
     """
 
-    version: str = "v2"
+    version: str = f"v{MINHASH_ATTR_DATA_VERSION}"
     params: MinHashParams
-    source_main_dir: str
+    source_key: str
     attr_dir: str
     counters: dict[str, int | float]
 
@@ -247,7 +249,7 @@ def compute_minhash_attrs(
 
     return MinHashAttrData(
         params=params,
-        source_main_dir=source.main_output_dir,
+        source_key=datakit_source_key(source.main_output_dir),
         attr_dir=attr_dir,
         counters=dict(outcome.counters),
     )
@@ -282,6 +284,7 @@ def compute_minhash_attrs_step(
             max_workers=max_workers,
         ),
         hash_attrs={
+            "artifact_version": MINHASH_ATTR_DATA_VERSION,
             "num_perms": num_perms,
             "num_bands": num_bands,
             "ngram_size": ngram_size,

@@ -14,11 +14,11 @@ dominated by token I/O.
 
 Pipeline:
 
-1. **map** (per input shard): a 5-way positional join over tokenization,
-   decontamination, domain assignment, quality, and dedup attributes, emitting
-   ``{cluster, quality, sub, input_ids}`` per surviving doc. ``sub`` is a stable
-   hash of the doc id mod that bucket's subshard count, so a hot bucket is split
-   evenly across many reducers instead of one.
+1. **map** (per input shard): a positional join over tokenization,
+   decontamination, domain assignment, quality, exact-dedup, and fuzzy-dedup
+   attributes, emitting ``{cluster, quality, sub, input_ids}`` per surviving
+   doc. ``sub`` is a stable hash of the doc id mod that bucket's subshard count,
+   so a hot bucket is split evenly across many reducers instead of one.
 2. **group_by** ``(cluster, quality, sub)`` -> **reduce**: each reducer streams
    its group into one materialized cache at
    ``<output>/cluster=<C>/quality=<Q>/sub=<S>`` via ``SerialCacheWriter``.
@@ -41,7 +41,7 @@ import logging
 import math
 import os
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 
 import numpy as np
 import pyarrow as pa
@@ -56,7 +56,7 @@ from levanter.store.cache import (
 )
 from marin.datakit.decon import DeconAttributes
 from marin.execution.artifact import read_artifact, write_artifact
-from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
+from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData, FuzzyDupsPerSource
 from marin.processing.tokenize.attributes import TokenizedAttrData
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath
@@ -68,6 +68,7 @@ from zephyr.writers import atomic_rename
 
 from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
 from experiments.datakit.cluster.quality.fast_transformer.artifact import QualityScores
+from experiments.datakit.global_exact_dedup import ExactDupsPerSource, GlobalExactDedupData
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,7 @@ def _per_source_shard_tuples(
     decontam: DeconAttributes,
     cluster_assign: AssignmentAttrData,
     quality: QualityScores,
+    exact_dedup_attr_dir: str,
     dedup_attr_dir: str,
     split: str,
 ) -> list[dict[str, str]]:
@@ -122,6 +124,7 @@ def _per_source_shard_tuples(
     decon_dir = decontam.main_output_dir.rstrip("/")
     cluster_dir = cluster_assign.output_dir.rstrip("/")
     quality_dir = quality.main_output_dir.rstrip("/")
+    exact_dedup_dir = exact_dedup_attr_dir.rstrip("/")
     dedup_dir = dedup_attr_dir.rstrip("/")
     return [
         {
@@ -129,6 +132,7 @@ def _per_source_shard_tuples(
             "decontam": f"{decon_dir}/{os.path.basename(tok_path)}",
             "cluster": f"{cluster_dir}/{os.path.basename(tok_path)}",
             "quality": f"{quality_dir}/{os.path.basename(tok_path)}",
+            "exact_dedup": f"{exact_dedup_dir}/{os.path.basename(tok_path)}",
             "dedup": f"{dedup_dir}/{os.path.basename(tok_path)}",
             "source_name": source_name,
             "basename": os.path.basename(tok_path),
@@ -177,6 +181,14 @@ def _load_dedup_canonical(path: str) -> dict[str, bool]:
     return dict(zip(ids, canonical, strict=True))
 
 
+def _load_exact_duplicates(path: str) -> set[str]:
+    """Return IDs marked as exact duplicates in one sparse attribute shard."""
+    table = _read_columns(path, ["id", "attributes"])
+    ids = table.column("id").to_pylist()
+    duplicate = table.column("attributes").combine_chunks().field("dup_doc").to_pylist()
+    return {doc_id for doc_id, is_duplicate in zip(ids, duplicate, strict=True) if is_duplicate}
+
+
 def _validate_cluster_view(cluster_assign: dict[str, AssignmentAttrData], cluster_view: int) -> str:
     """Check that every assignment artifact materialized the selected view."""
     for name, assignment in cluster_assign.items():
@@ -192,14 +204,15 @@ def _validate_cluster_view(cluster_assign: dict[str, AssignmentAttrData], cluste
 def _resolve_dedup_attr_dir(
     *,
     source_name: str,
-    main_output_dir: str,
-    dedup: FuzzyDupsAttrData,
+    source_key: str,
+    sources: Mapping[str, ExactDupsPerSource | FuzzyDupsPerSource],
+    label: str,
 ) -> str:
-    entry = dedup.sources.get(main_output_dir)
+    entry = sources.get(source_key)
     if entry is None:
         raise KeyError(
-            f"{source_name}: dedup.sources has no entry for source_main_dir={main_output_dir!r}. "
-            "Drop the source from the config or rebuild dedup with it included."
+            f"{source_name}: {label}.sources has no entry for source_key={source_key!r}. "
+            f"Drop the source from the config or rebuild {label} with it included."
         )
     return entry.attr_dir
 
@@ -240,11 +253,11 @@ class _SubshardStat:
 
 
 def _iter_surviving_docs(spec: dict[str, str], cluster_col: str) -> Iterator[tuple[int, int, str, np.ndarray]]:
-    """Join one shard's five datasets; yield ``(cluster, quality_bucket, doc_id, input_ids)`` per surviving doc.
+    """Join one shard's datasets; yield ``(cluster, quality_bucket, doc_id, input_ids)`` per surviving doc.
 
-    Reads decon/cluster/quality densely, dedup sparsely, streams tokenize in
-    positional lockstep, and drops contaminated rows and dedup-cluster
-    non-canonicals. Fails loud on missing or misaligned inputs.
+    Reads decon/cluster/quality densely and duplicate attributes sparsely. It
+    streams tokenize in positional lockstep and drops filtered rows. It fails
+    on missing or misaligned inputs.
     """
     decon_ids, contaminated = _load_decon_table(spec["decontam"])
     cluster_ids, cluster_vals = _load_cluster_table(spec["cluster"], cluster_col)
@@ -266,10 +279,12 @@ def _iter_surviving_docs(spec: dict[str, str], cluster_col: str) -> Iterator[tup
     if not pc.all(pc.equal(decon_ids, quality_ids)).as_py():
         raise RuntimeError(f"{where}: decon/quality id mismatch -- co-partitioning broken")
     del decon_ids, cluster_ids, quality_ids
+    exact_duplicates = _load_exact_duplicates(spec["exact_dedup"])
     dedup_canonical = _load_dedup_canonical(spec["dedup"])
 
     n_in = 0
     n_contaminated = 0
+    n_exact_dedup_dropped = 0
     n_dedup_dropped = 0
     n_out = 0
     with StoragePath(spec["tokenize"]).open("rb") as fh:
@@ -288,6 +303,9 @@ def _iter_surviving_docs(spec: dict[str, str], cluster_col: str) -> Iterator[tup
                 if contam_slice[i]:
                     n_contaminated += 1
                     continue
+                if doc_id in exact_duplicates:
+                    n_exact_dedup_dropped += 1
+                    continue
                 if dedup_canonical.get(doc_id) is False:
                     n_dedup_dropped += 1
                     continue
@@ -301,6 +319,7 @@ def _iter_surviving_docs(spec: dict[str, str], cluster_col: str) -> Iterator[tup
             )
     counters.pipeline.update_counter("datakit_store/records_in", n_in)
     counters.pipeline.update_counter("datakit_store/contaminated_dropped", n_contaminated)
+    counters.pipeline.update_counter("datakit_store/exact_duplicate_dropped", n_exact_dedup_dropped)
     counters.pipeline.update_counter("datakit_store/dedup_noncanonical_dropped", n_dedup_dropped)
     counters.pipeline.update_counter("datakit_store/records_out", n_out)
 
@@ -492,6 +511,7 @@ def build_clustered_store(
     decontam: dict[str, DeconAttributes],
     cluster_assign: dict[str, AssignmentAttrData],
     quality: dict[str, QualityScores],
+    exact_dedup: GlobalExactDedupData,
     dedup: FuzzyDupsAttrData,
     output_path: str,
     cluster_view: int = 40,
@@ -505,7 +525,7 @@ def build_clustered_store(
     max_subshards: int = 128,
     default_subshards: int = DEFAULT_SUBSHARDS,
 ) -> ClusteredStoreData:
-    """Shuffle 5-way join + filter into one materialized cache per ``(cluster, quality, sub)``.
+    """Shuffle the joined attributes into one materialized cache per ``(cluster, quality, sub)``.
 
     The store is born compact: reducers create the final materialized caches
     directly rather than producing per-input-shard leaf caches.
@@ -556,16 +576,27 @@ def build_clustered_store(
     shard_specs: list[dict[str, str]] = []
     for source_name in sorted(tokenize):
         tok = tokenize[source_name]
-        main_dir = tok.source_main_dirs.get(split)
-        if main_dir is None:
-            raise ValueError(f"{source_name}: tokenize has no source_main_dir for split={split!r}")
+        source_key = tok.source_keys.get(split)
+        if source_key is None:
+            raise ValueError(f"{source_name}: tokenize has no source_key for split={split!r}")
         cluster_asg = cluster_assign[source_name]
-        if cluster_asg.source_main_dir != main_dir:
+        if cluster_asg.source_key != source_key:
             raise ValueError(
-                f"{source_name}: cluster_assign.source_main_dir={cluster_asg.source_main_dir!r} "
-                f"!= tokenize.source_main_dirs[{split!r}]={main_dir!r}"
+                f"{source_name}: cluster_assign.source_key={cluster_asg.source_key!r} "
+                f"!= tokenize.source_keys[{split!r}]={source_key!r}"
             )
-        dedup_attr_dir = _resolve_dedup_attr_dir(source_name=source_name, main_output_dir=main_dir, dedup=dedup)
+        dedup_attr_dir = _resolve_dedup_attr_dir(
+            source_name=source_name,
+            source_key=source_key,
+            sources=dedup.sources,
+            label="dedup",
+        )
+        exact_dedup_attr_dir = _resolve_dedup_attr_dir(
+            source_name=source_name,
+            source_key=source_key,
+            sources=exact_dedup.sources,
+            label="exact_dedup",
+        )
         shard_specs.extend(
             _per_source_shard_tuples(
                 source_name=source_name,
@@ -573,6 +604,7 @@ def build_clustered_store(
                 decontam=decontam[source_name],
                 cluster_assign=cluster_asg,
                 quality=quality[source_name],
+                exact_dedup_attr_dir=exact_dedup_attr_dir,
                 dedup_attr_dir=dedup_attr_dir,
                 split=split,
             )

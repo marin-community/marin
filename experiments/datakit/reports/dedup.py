@@ -19,8 +19,8 @@ SAMPLE_LIMIT = 1000
 COUNTER_PREFIX = "dedup/fuzzy/document"
 
 
-def _source_label(source_main_dir: str) -> str:
-    return "/".join(source_main_dir.rstrip("/").split("/")[-3:])
+def _source_label(source_key: str) -> str:
+    return "/".join(source_key.rstrip("/").split("/")[-3:])
 
 
 def dedup_report(output_path: str, dedup: FuzzyDupsAttrData) -> StageReport:
@@ -35,14 +35,14 @@ def dedup_report(output_path: str, dedup: FuzzyDupsAttrData) -> StageReport:
     # samples yields cross-source cluster sizes (within the sample).
     sampled_cluster_sizes: Counter[str] = Counter()
     per_source = []
-    for source_main_dir, entry in dedup.sources.items():
+    for source_key, entry in dedup.sources.items():
         rows = sample_rows(entry.attr_dir, ["id", "attributes"], SAMPLE_LIMIT)
         source_clusters = {r["attributes"]["dup_cluster_id"] for r in rows}
         sampled_cluster_sizes.update(r["attributes"]["dup_cluster_id"] for r in rows)
         per_source.append(
             {
-                "label": _source_label(source_main_dir),
-                "source_main_dir": source_main_dir,
+                "label": _source_label(source_key),
+                "source_key": source_key,
                 "sampled_members": len(rows),
                 "sampled_clusters": len(source_clusters),
             }

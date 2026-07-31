@@ -1,220 +1,166 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Global exact deduplication of normalized Datakit sources by record ID.
+"""Global exact-duplicate attributes for normalized Datakit sources.
 
-The global shuffle carries record IDs and row positions only. A second pass
-uses the row positions to filter each source shard without changing its schema.
-The two passes read rows in Parquet order, so their row positions are equal.
+The Zephyr pipeline shuffles record IDs across all sources. It keeps the first
+source, shard, and row occurrence. It writes sparse duplicate markers back to
+one attribute file for each source shard.
 
-``Dataset.deduplicate`` cannot retain the source and shard position that the
-second pass needs.
+Output rows have this schema::
+
+    {
+      id: str,
+      attributes: {
+        dup_doc: bool,
+      },
+    }
+
+Each output attribute directory has the same shard names as its normalized
+source. Empty marker files retain co-partitioning for shards without duplicates.
 """
 
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
-from typing import Any
+from typing import TypedDict
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
+from marin.datakit.copartitioned import CopartitionedShard, CopartitionedSource, build_copartitioned_shards
 from marin.datakit.normalize import NormalizedData
+from marin.datakit.source_key import datakit_source_key
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, atomic_rename, prefix_join, url_to_fs
+from rigging.filesystem import StoragePath
+from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
-from zephyr.writers import parquet_sink, write_parquet_file
+from zephyr.worker_context import zephyr_worker_ctx
+from zephyr.writers import write_parquet_file
 
 COUNTER_PREFIX = "global_exact_dedup"
-_DEDUP_SUCCESS_FILE = "_DEDUP_SUCCESS"
-_FILTER_BATCH_ROWS = 256
-_DUPLICATE_SCHEMA = pa.schema(
+_SHARED_ENTRIES_KEY = "global_exact_dedup_entries"
+_SHARD_MARKER_ROW_INDEX = -1
+GLOBAL_EXACT_DEDUP_DATA_VERSION = 1
+_ATTR_SCHEMA = pa.schema(
     [
         pa.field("id", pa.string(), nullable=False),
-        pa.field("row_index", pa.int64(), nullable=False),
+        pa.field(
+            "attributes",
+            pa.struct([pa.field("dup_doc", pa.bool_(), nullable=False)]),
+            nullable=False,
+        ),
     ]
 )
 
 
-class GlobalExactDedupData(BaseModel):
-    """Output sources and counters from global exact deduplication."""
+class ExactDupsPerSource(BaseModel):
+    attr_dir: str
 
-    version: str = "v1"
-    sources: dict[str, NormalizedData]
+
+class GlobalExactDedupData(BaseModel):
+    """Co-partitioned exact-duplicate attributes for normalized sources.
+
+    ``sources`` maps each input's prefix-relative source key to its attribute
+    directory.
+    """
+
+    version: str = f"v{GLOBAL_EXACT_DEDUP_DATA_VERSION}"
+    sources: dict[str, ExactDupsPerSource]
     counters: dict[str, int | float]
 
 
-@dataclass(frozen=True)
-class _SourceShard:
-    source: str
-    shard_index: int
-    input_path: str
-    output_path: str
-    duplicate_ids_path: str
+class _ExactRecord(TypedDict):
+    id: str
+    file_idx: int
+    row_index: int
 
 
-def global_exact_dedup_source_path(output_path: str, source_rank: int) -> str:
-    """Get the output root for one source rank."""
-    return prefix_join(output_path, f"sources/{source_rank:05d}")
-
-
-def _input_shards(
+def _build_shard_index(
     sources: dict[str, NormalizedData],
     output_path: str,
-) -> tuple[list[_SourceShard], dict[str, NormalizedData]]:
-    shards: list[_SourceShard] = []
-    outputs: dict[str, NormalizedData] = {}
+) -> tuple[list[CopartitionedShard], dict[str, ExactDupsPerSource]]:
+    source_entries = [
+        (source_name, normalized, datakit_source_key(normalized.main_output_dir))
+        for source_name, normalized in sources.items()
+    ]
+    source_dirs: dict[str, str] = {}
+    for _source_name, normalized, source_key in source_entries:
+        if source_key in source_dirs:
+            raise ValueError(f"Multiple sources use source_key={source_key!r}")
+        source_dirs[source_key] = normalized.main_output_dir
 
-    for source_rank, source in enumerate(sorted(sources)):
-        normalized = sources[source]
-        input_root = StoragePath(normalized.main_output_dir)
-        input_paths = sorted(
-            StoragePath(f"{normalized.main_output_dir.rstrip('/')}/**/*.parquet").glob(),
-            key=str,
-        )
-        if not input_paths:
-            raise FileNotFoundError(f"No Parquet files found under {normalized.main_output_dir}")
-
-        source_root = global_exact_dedup_source_path(output_path, source_rank)
-        main_output_dir = prefix_join(source_root, "outputs/main")
-        outputs[source] = NormalizedData(
-            main_output_dir=main_output_dir,
-            dup_output_dir=normalized.dup_output_dir,
-            counters={},
-        )
-
-        for input_path in input_paths:
-            relative_path = input_path.relative_to(input_root)
-            shard_index = len(shards)
-            shards.append(
-                _SourceShard(
-                    source=source,
-                    shard_index=shard_index,
-                    input_path=str(input_path),
-                    output_path=prefix_join(main_output_dir, relative_path),
-                    duplicate_ids_path=prefix_join(output_path, f"duplicate_ids/{shard_index:08d}.parquet"),
-                )
-            )
-
-    return shards, outputs
+    ordered_sources = [
+        CopartitionedSource(source_key=source_key, input_dir=normalized.main_output_dir)
+        for _source_name, normalized, source_key in sorted(source_entries)
+    ]
+    entries, attr_dirs = build_copartitioned_shards(
+        sources=ordered_sources,
+        output_path=output_path,
+    )
+    outputs = {source_key: ExactDupsPerSource(attr_dir=attr_dir) for source_key, attr_dir in attr_dirs.items()}
+    return entries, outputs
 
 
-def _read_record_ids(shard: _SourceShard) -> Iterator[dict[str, int | str]]:
+def _read_record_ids(entry: CopartitionedShard) -> Iterator[_ExactRecord]:
+    input_path = entry.input_path
     row_index = 0
-    with StoragePath(shard.input_path).open("rb") as input_file:
+    # Force the second group to write a schema-only attribute file when a
+    # source shard has no duplicate rows.
+    yield {
+        "id": "",
+        "file_idx": entry.file_idx,
+        "row_index": _SHARD_MARKER_ROW_INDEX,
+    }
+    with StoragePath(input_path).open("rb") as input_file:
         parquet = pq.ParquetFile(input_file)
         if "id" not in parquet.schema_arrow.names:
-            raise ValueError(f"Parquet file has no id column: {shard.input_path}")
+            raise ValueError(f"Parquet file has no id column: {input_path}")
         id_type = parquet.schema_arrow.field("id").type
         if not (pa.types.is_string(id_type) or pa.types.is_large_string(id_type)):
-            raise ValueError(f"Record ID column is not a string in {shard.input_path}: {id_type}")
+            raise ValueError(f"Record ID column is not a string in {input_path}: {id_type}")
         for batch in parquet.iter_batches(columns=["id"]):
             for record_id in batch.column("id").to_pylist():
                 yield {
                     "id": record_id,
-                    "shard_index": shard.shard_index,
+                    "file_idx": entry.file_idx,
                     "row_index": row_index,
                 }
                 row_index += 1
+    counters.pipeline.update_counter(f"{COUNTER_PREFIX}/records_in", row_index)
 
 
-def _select_duplicates(_record_id: str, records: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
-    next(records)
+def _select_duplicates(_key: tuple[str, str | int], records: Iterator[_ExactRecord]) -> Iterator[_ExactRecord]:
+    canonical = next(records)
+    if canonical["row_index"] == _SHARD_MARKER_ROW_INDEX:
+        yield canonical
+        return
+
     yield from records
 
 
-def _duplicate_id_writer(
-    output_path: str,
-) -> Callable[[int, Iterator[dict[str, Any]]], dict[str, int | str]]:
-    def write_duplicate_ids(shard_index: int, records: Iterator[dict[str, Any]]) -> dict[str, int | str]:
-        return write_parquet_file(
-            ({"id": record["id"], "row_index": record["row_index"]} for record in records),
-            output_path=prefix_join(output_path, f"duplicate_ids/{shard_index:08d}.parquet"),
-            schema=_DUPLICATE_SCHEMA,
-        )
+def _make_per_shard_writer() -> Callable[[int, Iterator[_ExactRecord]], dict[str, int | str]]:
+    def write_shard(file_idx: int, records: Iterator[_ExactRecord]) -> dict[str, int | str]:
+        entries: list[CopartitionedShard] = zephyr_worker_ctx().get_shared(_SHARED_ENTRIES_KEY)
+        entry = entries[file_idx]
+        duplicate_records = 0
 
-    return write_duplicate_ids
+        def duplicate_rows() -> Iterator[dict[str, str | dict[str, bool]]]:
+            nonlocal duplicate_records
+            for record in records:
+                if record["row_index"] == _SHARD_MARKER_ROW_INDEX:
+                    continue
+                duplicate_records += 1
+                yield {"id": record["id"], "attributes": {"dup_doc": True}}
 
-
-def _copy_file(source: str, destination: str) -> None:
-    source_storage = StoragePath(source)
-    destination_storage = StoragePath(destination)
-    if (source_storage.scheme, source_storage.netloc) != (destination_storage.scheme, destination_storage.netloc):
-        raise ValueError(f"Cannot copy between storage roots: {source!r} to {destination!r}")
-
-    source_fs, source_path = url_to_fs(source)
-    destination_storage.parent.mkdirs()
-    with atomic_rename(destination) as temp_path:
-        temp_fs, resolved_temp_path = url_to_fs(temp_path)
-        if source_fs.protocol != temp_fs.protocol:
-            raise ValueError(f"Cannot copy between filesystems: {source!r} to {destination!r}")
-        temp_fs.copy(source_path, resolved_temp_path)
-
-
-def _duplicate_rows(path: str) -> set[int]:
-    if not StoragePath(path).exists():
-        return set()
-    with StoragePath(path).open("rb") as duplicate_file:
-        return set(pq.read_table(duplicate_file, columns=["row_index"]).column("row_index").to_pylist())
-
-
-def _filter_shard(shard: _SourceShard) -> dict[str, int | str]:
-    duplicate_rows = _duplicate_rows(shard.duplicate_ids_path)
-    if StoragePath(shard.output_path).exists():
-        with StoragePath(shard.input_path).open("rb") as input_file:
-            records_in = pq.ParquetFile(input_file).metadata.num_rows
-        with StoragePath(shard.output_path).open("rb") as output_file:
-            records_out = pq.ParquetFile(output_file).metadata.num_rows
+        result = write_parquet_file(duplicate_rows(), output_path=entry.output_path, schema=_ATTR_SCHEMA)
+        counters.pipeline.update_counter(f"{COUNTER_PREFIX}/duplicate_records", duplicate_records)
         return {
-            "source": shard.source,
-            "path": shard.output_path,
-            "records_in": records_in,
-            "records_out": records_out,
+            **result,
+            "file_idx": file_idx,
+            "duplicate_records": duplicate_records,
         }
 
-    with StoragePath(shard.input_path).open("rb") as input_file:
-        parquet = pq.ParquetFile(input_file)
-        records_in = parquet.metadata.num_rows
-        schema = parquet.schema_arrow
-
-        if not duplicate_rows:
-            _copy_file(shard.input_path, shard.output_path)
-            return {
-                "source": shard.source,
-                "path": shard.output_path,
-                "records_in": records_in,
-                "records_out": records_in,
-            }
-
-        records_out = 0
-        row_index = 0
-        StoragePath(shard.output_path).parent.mkdirs()
-        with atomic_rename(shard.output_path) as temp_path:
-            with parquet_sink(temp_path) as (where_fd, native_fs):
-                with pq.ParquetWriter(where_fd, schema, filesystem=native_fs) as writer:
-                    for batch in parquet.iter_batches(batch_size=_FILTER_BATCH_ROWS):
-                        keep = pa.array(
-                            (index not in duplicate_rows for index in range(row_index, row_index + batch.num_rows)),
-                            type=pa.bool_(),
-                        )
-                        filtered = batch.filter(keep)
-                        writer.write_batch(filtered)
-                        records_out += filtered.num_rows
-                        row_index += batch.num_rows
-
-    return {
-        "source": shard.source,
-        "path": shard.output_path,
-        "records_in": records_in,
-        "records_out": records_out,
-    }
-
-
-def _write_success_file(path: str) -> None:
-    StoragePath(path).parent.mkdirs()
-    with atomic_rename(path) as temp_path:
-        with StoragePath(temp_path).open("wb") as success_file:
-            success_file.write(b"")
+    return write_shard
 
 
 def global_exact_deduplicate(
@@ -224,64 +170,37 @@ def global_exact_deduplicate(
     worker_resources: ResourceConfig,
     max_workers: int,
 ) -> GlobalExactDedupData:
-    """Keep one record for each record ID across all normalized sources.
+    """Mark duplicate record IDs across all normalized sources.
 
-    The lexicographically first source keeps a shared record ID. The function
-    keeps each source schema and shard layout.
+    Source names set canonical priority. The first shard and row set priority
+    within a source.
     """
     if not sources:
         raise ValueError("Global exact deduplication requires at least one source")
 
-    shards, output_sources = _input_shards(sources, output_path)
+    entries, outputs = _build_shard_index(sources, output_path)
     context = ZephyrContext(
         name="datakit-global-exact-dedup",
         resources=worker_resources,
         max_workers=max_workers,
     )
-
-    dedup_success_path = prefix_join(output_path, f"duplicate_ids/{_DEDUP_SUCCESS_FILE}")
-    if not StoragePath(dedup_success_path).exists():
-        dedup_pipeline = (
-            Dataset.from_list(shards)
-            .flat_map(_read_record_ids)
-            .group_by(
-                key=lambda record: record["id"],
-                reducer=_select_duplicates,
-                sort_by=lambda record: (record["shard_index"], record["row_index"]),
-            )
-            .group_by(
-                key=lambda record: record["shard_index"],
-                reducer=_duplicate_id_writer(output_path),
-                sort_by=lambda record: record["id"],
-            )
+    context.put(_SHARED_ENTRIES_KEY, entries)
+    pipeline = (
+        Dataset.from_list(entries)
+        .flat_map(_read_record_ids)
+        .group_by(
+            key=lambda record: (
+                "shard" if record["row_index"] == _SHARD_MARKER_ROW_INDEX else "record",
+                record["file_idx"] if record["row_index"] == _SHARD_MARKER_ROW_INDEX else record["id"],
+            ),
+            reducer=_select_duplicates,
+            sort_by=lambda record: (record["file_idx"], record["row_index"]),
         )
-        context.execute(dedup_pipeline)
-        _write_success_file(dedup_success_path)
-
-    filter_outcome = context.execute(Dataset.from_list(shards).map(_filter_shard))
-
-    filter_results = filter_outcome.results
-    records_in = sum(int(result["records_in"]) for result in filter_results)
-    records_out = sum(int(result["records_out"]) for result in filter_results)
-    source_ranks = {source: rank for rank, source in enumerate(sorted(sources))}
-    stage_counters: dict[str, int | float] = {
-        f"{COUNTER_PREFIX}/records_in": records_in,
-        f"{COUNTER_PREFIX}/records_out": records_out,
-        f"{COUNTER_PREFIX}/duplicate_records": records_in - records_out,
-    }
-    for source, normalized in output_sources.items():
-        source_results = [result for result in filter_results if result["source"] == source]
-        source_records_in = sum(int(result["records_in"]) for result in source_results)
-        source_records_out = sum(int(result["records_out"]) for result in source_results)
-        source_counters = {
-            f"{COUNTER_PREFIX}/records_in": source_records_in,
-            f"{COUNTER_PREFIX}/records_out": source_records_out,
-            f"{COUNTER_PREFIX}/duplicate_records": source_records_in - source_records_out,
-        }
-        rank = source_ranks[source]
-        stage_counters[f"{COUNTER_PREFIX}/source/{rank}/records_in"] = source_records_in
-        stage_counters[f"{COUNTER_PREFIX}/source/{rank}/records_out"] = source_records_out
-        stage_counters[f"{COUNTER_PREFIX}/source/{rank}/duplicate_records"] = source_records_in - source_records_out
-        output_sources[source] = normalized.model_copy(update={"counters": source_counters})
-
-    return GlobalExactDedupData(sources=output_sources, counters=stage_counters)
+        .group_by(
+            key=lambda record: record["file_idx"],
+            reducer=_make_per_shard_writer(),
+            sort_by=lambda record: (record["row_index"] == _SHARD_MARKER_ROW_INDEX, record["id"]),
+        )
+    )
+    outcome = context.execute(pipeline)
+    return GlobalExactDedupData(sources=outputs, counters=dict(outcome.counters))

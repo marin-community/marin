@@ -12,16 +12,16 @@ StepRunner-walkable graph. Two modes (``--mode``), same DAG:
 
 Per source::
 
-    all normalize steps → global exact dedup by record ID
-    exact dedup → tokenize
-                → embed (luxical-one)   → assign (domain v0, given centroids)
-                → quality                (pooled fast-transformer, given model dir)
-                → decontam               (shared eval bloom)
-                → minhash
+    normalize → tokenize
+              → embed (luxical-one)   → assign (domain v0, given centroids)
+              → quality                (pooled fast-transformer, given model dir)
+              → decontam               (shared eval bloom)
+              → minhash
 
 Then:
+    global_exact_dedup([<normalized source>])
     fuzzy_dups([<minhash per source>])
-    build_clustered_store(tokenize, decontam, cluster_assign, quality, dedup)
+    build_clustered_store(tokenize, decontam, cluster_assign, quality, exact_dedup, dedup)
     one ``datakit/report/<stage>`` step per stage -- a single self-contained
     HTML page built from that stage's counters + site/sample outputs
     (:mod:`experiments.datakit.reports`)
@@ -100,10 +100,12 @@ from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.fuzzy_dups import (
+    FUZZY_DUPS_ATTR_DATA_VERSION,
     FuzzyDupsAttrData,
     compute_fuzzy_dups_attrs,
 )
 from marin.processing.classification.deduplication.fuzzy_minhash import (
+    MINHASH_ATTR_DATA_VERSION,
     MinHashAttrData,
     compute_minhash_attrs,
 )
@@ -115,6 +117,7 @@ from rigging.filesystem import StoragePath, marin_prefix
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.cluster.domain.v0.assign import (
+    ASSIGNMENT_ATTR_DATA_VERSION,
     AssignmentAttrData,
     assign_source,
 )
@@ -132,6 +135,7 @@ from experiments.datakit.decontam.config import (
 )
 from experiments.datakit.decontam.prepare_eval_corpus import DECON_EXCLUDED_EVAL_TASKS
 from experiments.datakit.embeddings.luxical.pipeline import (
+    EMBEDDING_ATTR_DATA_VERSION,
     LUXICAL_REPO,
     LUXICAL_REVISION,
     LUXICAL_WEIGHTS_FILE,
@@ -139,8 +143,8 @@ from experiments.datakit.embeddings.luxical.pipeline import (
     embed_source,
 )
 from experiments.datakit.global_exact_dedup import (
+    GLOBAL_EXACT_DEDUP_DATA_VERSION,
     GlobalExactDedupData,
-    global_exact_dedup_source_path,
     global_exact_deduplicate,
 )
 from experiments.datakit.reports.decontam import decontam_report
@@ -339,7 +343,7 @@ def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale)
             "luxical_weights": LUXICAL_WEIGHTS_FILE,
             "luxical_revision": LUXICAL_REVISION,
             "batch_size": scale.embed_batch_size,
-            "v": 1,
+            "v": EMBEDDING_ATTR_DATA_VERSION,
         },
         fn=remote(
             lambda output_path, np=normalize_step.output_path: embed_source(
@@ -548,7 +552,7 @@ def reference_datakit_steps(
     exact_dedup = StepSpec(
         name="datakit/global_exact_dedup",
         deps=[sources[name] for name in source_names],
-        hash_attrs={"sources": source_names, "v": 1},
+        hash_attrs={"sources": source_names, "v": GLOBAL_EXACT_DEDUP_DATA_VERSION},
         fn=lambda output_path: global_exact_deduplicate(
             sources={name: read_artifact(sources[name].output_path, NormalizedData) for name in source_names},
             output_path=output_path,
@@ -556,20 +560,7 @@ def reference_datakit_steps(
             max_workers=scale.pool.n_workers,
         ),
     )
-    deduplicated_sources = {
-        name: StepSpec(
-            name=f"datakit/global_exact_dedup_source/{name}",
-            deps=[exact_dedup],
-            hash_attrs={"source": name, "v": 1},
-            override_output_path=global_exact_dedup_source_path(exact_dedup.output_path, source_rank),
-            fn=lambda _output_path, source=name: read_artifact(exact_dedup.output_path, GlobalExactDedupData).sources[
-                source
-            ],
-        )
-        for source_rank, name in enumerate(source_names)
-    }
-
-    embed_steps = build_per_source_embed_steps(deduplicated_sources, scale)
+    embed_steps = build_per_source_embed_steps(sources, scale)
     if domain_centroids is None:
         domain_centroids = build_train_centroids_step(embed_steps, scale)
 
@@ -600,7 +591,7 @@ def reference_datakit_steps(
                 data_path=f"{normalize_step.output_path.rstrip('/')}/outputs/main",
                 dependency=normalize_step,
             )
-            for source_name, normalize_step in deduplicated_sources.items()
+            for source_name, normalize_step in sources.items()
         ],
         prebuilt_bloom=decon_bloom_step,
         ngram_length=NGRAM_LENGTH,
@@ -618,7 +609,7 @@ def reference_datakit_steps(
     per_source: dict[str, dict[str, StepSpec]] = {}
     minhash_steps: list[StepSpec] = []
 
-    for name, normalize_step in deduplicated_sources.items():
+    for name, normalize_step in sources.items():
         embed = embed_steps[name]
 
         tokenize = tokenize_attributes_step(
@@ -642,7 +633,7 @@ def reference_datakit_steps(
                 "k_train": cluster.k_train,
                 "k_views": list(cluster.k_views),
                 "batch_size": scale.assign_batch_size,
-                "v": 1,
+                "v": ASSIGNMENT_ATTR_DATA_VERSION,
             },
             fn=remote(
                 lambda output_path, ep=embed.output_path: assign_source(
@@ -699,7 +690,7 @@ def reference_datakit_steps(
                 "ngram_size": mh.ngram_size,
                 "text_cap_chars": mh.text_cap_chars,
                 "seed": mh.seed,
-                "v": 1,
+                "v": MINHASH_ATTR_DATA_VERSION,
             },
             fn=lambda op, n=normalize_step: compute_minhash_attrs(
                 source=read_artifact(n.output_path, NormalizedData),
@@ -730,7 +721,7 @@ def reference_datakit_steps(
     dedup = StepSpec(
         name="datakit/dedup",
         deps=minhash_steps,
-        hash_attrs={"v": 1},
+        hash_attrs={"v": FUZZY_DUPS_ATTR_DATA_VERSION},
         fn=lambda op: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(s.output_path, MinHashAttrData) for s in minhash_steps],
             output_path=op,
@@ -740,7 +731,7 @@ def reference_datakit_steps(
         ),
     )
 
-    # ---- Final store: 5-way join + per-bucket Levanter cache ------------------
+    # ---- Final store: attribute join + per-bucket Levanter cache ---------------
     def _store_fn(output_path: str) -> ClusteredStoreData:
         return build_clustered_store(
             tokenize={n: read_artifact(s["tokenize"].output_path, TokenizedAttrData) for n, s in per_source.items()},
@@ -749,6 +740,7 @@ def reference_datakit_steps(
                 n: read_artifact(s["assign"].output_path, AssignmentAttrData) for n, s in per_source.items()
             },
             quality={n: read_artifact(s["quality"].output_path, QualityScores) for n, s in per_source.items()},
+            exact_dedup=read_artifact(exact_dedup.output_path, GlobalExactDedupData),
             dedup=read_artifact(dedup.output_path, FuzzyDupsAttrData),
             output_path=output_path,
             cluster_view=cluster.cluster_view,
@@ -765,7 +757,7 @@ def reference_datakit_steps(
     store_deps: list[StepSpec] = []
     for s in per_source.values():
         store_deps += [s["tokenize"], s["decontam"], s["assign"], s["quality"]]
-    store_deps.append(dedup)
+    store_deps += [exact_dedup, dedup]
 
     # Hash output-shaping values read directly by the store. ``shards_per_task``
     # and ``reduce_shards`` only schedule the shuffle, so they intentionally do
@@ -846,17 +838,13 @@ def reference_datakit_steps(
         ),
     ]
 
-    all_steps: list[StepSpec] = [exact_dedup, *deduplicated_sources.values(), decon_bloom_step, decon_drop_sets]
+    all_steps: list[StepSpec] = [exact_dedup, decon_bloom_step, decon_drop_sets]
     if isinstance(domain_centroids, StepSpec):
         all_steps.append(domain_centroids)
     for s in per_source.values():
         all_steps += list(s.values())
     all_steps += [dedup, store, *reports]
-    return DatakitSteps(
-        sources=sources,
-        output_buckets=store,
-        all_steps=all_steps,
-    )
+    return DatakitSteps(sources=sources, output_buckets=store, all_steps=all_steps)
 
 
 SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_0.1b_7d7d8fd7"

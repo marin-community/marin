@@ -48,13 +48,14 @@ def _depends_on(step: StepSpec, dependency: StepSpec) -> bool:
     return any(parent is dependency or _depends_on(parent, dependency) for parent in step.deps)
 
 
-def test_global_exact_dedup_precedes_per_source_processing():
+def test_global_exact_dedup_filters_only_the_store():
     result = _build()
     steps = _steps_by_name(result)
     exact_dedup = steps["datakit/global_exact_dedup"]
 
     for stage in ("tokenize", "embed", "quality", "decontam", "minhash"):
-        assert _depends_on(steps[f"datakit/{stage}/a"], exact_dedup)
+        assert not _depends_on(steps[f"datakit/{stage}/a"], exact_dedup)
+    assert _depends_on(steps["datakit/store"], exact_dedup)
 
 
 def test_no_region_path_in_hash_attrs_except_known_bloom_gap():

@@ -39,14 +39,15 @@ from zephyr.runners import InlineRunner
 from experiments.datakit.embeddings.luxical.pipeline import EmbeddingAttrData, dequantize_to_fp32
 
 logger = logging.getLogger(__name__)
+ASSIGNMENT_ATTR_DATA_VERSION = 2
 
 
 class AssignmentAttrData(BaseModel):
     """Co-partitioned per-source cluster-assignment parquet shards."""
 
-    version: str = "v1"
+    version: str = f"v{ASSIGNMENT_ATTR_DATA_VERSION}"
     output_dir: str
-    source_main_dir: str
+    source_key: str
     embedding_output_dir: str
     k_train: int
     k_views: list[int]
@@ -220,7 +221,7 @@ def assign_source(
 
     artifact = AssignmentAttrData(
         output_dir=output_path,
-        source_main_dir=embedding.source_main_dir,
+        source_key=embedding.source_key,
         embedding_output_dir=embedding.output_dir,
         k_train=k_train,
         k_views=k_views,

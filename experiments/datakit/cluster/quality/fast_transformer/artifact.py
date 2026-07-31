@@ -4,7 +4,7 @@
 """The quality step's output contract.
 
 Deliberately import-light (pydantic only): the store step consumes
-:class:`QualityScores` for its 5-way join and must not drag the jax/equinox/
+:class:`QualityScores` for its attribute join and must not drag the jax/equinox/
 transformers stack of the scorer into its workers.
 """
 

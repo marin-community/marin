@@ -4,7 +4,7 @@
 """Behavioral smoke for the Datakit clustered store.
 
 Builds tiny synthetic co-partitioned inputs (tokenize / decon / cluster /
-quality / dedup) on the local filesystem, runs ``build_clustered_store``
+quality / exact dedup / fuzzy dedup) on the local filesystem, runs ``build_clustered_store``
 through a local Zephyr context, and checks the externally observable contract:
 the right docs survive filtering, land in the right ``(cluster, quality)``
 bucket, round-trip out of the materialized caches, and hot-bucket subsharding
@@ -26,6 +26,7 @@ from zephyr.shard_keys import deterministic_hash
 
 from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
 from experiments.datakit.cluster.quality.fast_transformer.artifact import QualityScores
+from experiments.datakit.global_exact_dedup import ExactDupsPerSource, GlobalExactDedupData
 from experiments.datakit.store.datakit_store import ClusteredStoreData, build_clustered_store
 
 CLUSTER_VIEW = 2  # cluster column "cluster_2", clusters {0, 1}
@@ -49,7 +50,7 @@ SHARD0: list[_Doc] = [
 SHARD1: list[_Doc] = [
     ("d4", 0, 0, False, None, 104, 4),  # -> (0, 0)
     ("d5", 1, 2, False, False, 905, 8),  # non-canonical -> dropped
-    ("d6", 1, 4, False, None, 106, 6),  # -> (1, 4)
+    ("d6", 1, 4, False, None, 106, 6),  # exact duplicate -> dropped
     ("d7", 0, 4, False, None, 107, 7),  # -> (0, 4)
 ]
 
@@ -58,9 +59,9 @@ EXPECTED: dict[tuple[int, int], dict[int, int]] = {
     (0, 0): {100: 3, 104: 4},
     (0, 4): {101: 5, 107: 7},
     (1, 2): {103: 2},
-    (1, 4): {106: 6},
 }
-DROPPED_TOKEN_VALUES = {902, 905}
+EXACT_DUPLICATES = {"d6"}
+DROPPED_TOKEN_VALUES = {902, 905, 106}
 
 
 def _write_parquet(path: str, table: pa.Table) -> None:
@@ -68,7 +69,7 @@ def _write_parquet(path: str, table: pa.Table) -> None:
 
 
 def _write_shard(dirs: dict[str, str], basename: str, docs: list[_Doc]) -> None:
-    """Write one shard's five co-partitioned parquets from a doc list (same row order)."""
+    """Write one shard's co-partitioned Parquet inputs in the same row order."""
     ids = [d[0] for d in docs]
     _write_parquet(
         f"{dirs['tokenize']}/{basename}",
@@ -94,6 +95,22 @@ def _write_shard(dirs: dict[str, str], basename: str, docs: list[_Doc]) -> None:
             }
         ),
     )
+    _write_parquet(
+        f"{dirs['exact_dedup']}/{basename}",
+        pa.Table.from_pylist(
+            [{"id": doc_id, "attributes": {"dup_doc": True}} for doc_id in ids if doc_id in EXACT_DUPLICATES],
+            schema=pa.schema(
+                [
+                    pa.field("id", pa.string(), nullable=False),
+                    pa.field(
+                        "attributes",
+                        pa.struct([pa.field("dup_doc", pa.bool_(), nullable=False)]),
+                        nullable=False,
+                    ),
+                ]
+            ),
+        ),
+    )
     # Dedup is sparse: only non-singleton docs (canonical True/False) appear.
     marked = [(d[0], d[4]) for d in docs if d[4] is not None]
     if marked:
@@ -109,9 +126,9 @@ def _write_shard(dirs: dict[str, str], basename: str, docs: list[_Doc]) -> None:
 
 
 def _build_inputs(tmp_path):
-    """Materialize the synthetic inputs and return the five typed artifacts."""
+    """Materialize the synthetic inputs and return the typed artifacts."""
     main_dir = str(tmp_path / "src")
-    dirs = {k: str(tmp_path / k) for k in ("tokenize", "decon", "cluster", "quality", "dedup")}
+    dirs = {k: str(tmp_path / k) for k in ("tokenize", "decon", "cluster", "quality", "exact_dedup", "dedup")}
     tok_train = f"{dirs['tokenize']}/{SPLIT}"
     for d in (*dirs.values(), tok_train):
         os.makedirs(d, exist_ok=True)
@@ -123,7 +140,7 @@ def _build_inputs(tmp_path):
     tokenize = {
         "src": TokenizedAttrData(
             output_dirs={SPLIT: tok_train},
-            source_main_dirs={SPLIT: main_dir},
+            source_keys={SPLIT: main_dir},
             tokenizer="dummy",
             tokenizer_backend="huggingface",
             counters={},
@@ -141,7 +158,7 @@ def _build_inputs(tmp_path):
     cluster_assign = {
         "src": AssignmentAttrData(
             output_dir=dirs["cluster"],
-            source_main_dir=main_dir,
+            source_key=main_dir,
             embedding_output_dir="",
             k_train=CLUSTER_VIEW,
             k_views=[],
@@ -162,7 +179,15 @@ def _build_inputs(tmp_path):
         sources={main_dir: FuzzyDupsPerSource(attr_dir=dirs["dedup"])},
         counters={},
     )
-    return tokenize, decontam, cluster_assign, quality, dedup
+    exact_dedup = GlobalExactDedupData(
+        sources={
+            main_dir: ExactDupsPerSource(
+                attr_dir=dirs["exact_dedup"],
+            )
+        },
+        counters={},
+    )
+    return tokenize, decontam, cluster_assign, quality, exact_dedup, dedup
 
 
 def _read_bucket_tokens(bucket_root: str) -> list[np.ndarray]:
@@ -175,7 +200,7 @@ def _read_bucket_tokens(bucket_root: str) -> list[np.ndarray]:
 
 
 def test_store_filters_routes_and_roundtrips(tmp_path):
-    tokenize, decontam, cluster_assign, quality, dedup = _build_inputs(tmp_path)
+    tokenize, decontam, cluster_assign, quality, exact_dedup, dedup = _build_inputs(tmp_path)
     output_path = str(tmp_path / "store")
 
     artifact = build_clustered_store(
@@ -183,6 +208,7 @@ def test_store_filters_routes_and_roundtrips(tmp_path):
         decontam=decontam,
         cluster_assign=cluster_assign,
         quality=quality,
+        exact_dedup=exact_dedup,
         dedup=dedup,
         output_path=output_path,
         cluster_view=CLUSTER_VIEW,
@@ -210,9 +236,10 @@ def test_store_filters_routes_and_roundtrips(tmp_path):
             assert len(set(arr.tolist())) == 1  # each doc is a run of its unique token value
             all_tokens.extend(arr.tolist())
 
-    assert DROPPED_TOKEN_VALUES.isdisjoint(all_tokens), "contaminated + non-canonical docs must be absent"
+    assert DROPPED_TOKEN_VALUES.isdisjoint(all_tokens), "filtered docs must be absent"
     assert artifact.counters["datakit_store/records_in"] == len(SHARD0) + len(SHARD1)
     assert artifact.counters["datakit_store/contaminated_dropped"] == 1
+    assert artifact.counters["datakit_store/exact_duplicate_dropped"] == 1
     assert artifact.counters["datakit_store/dedup_noncanonical_dropped"] == 1
     assert artifact.counters["datakit_store/records_out"] == sum(len(docs) for docs in EXPECTED.values())
     assert artifact.counters["datakit_store/tokens_out"] == sum(
@@ -221,7 +248,7 @@ def test_store_filters_routes_and_roundtrips(tmp_path):
 
 
 def test_store_subshards_hot_bucket_without_data_loss(tmp_path):
-    tokenize, decontam, cluster_assign, quality, dedup = _build_inputs(tmp_path)
+    tokenize, decontam, cluster_assign, quality, exact_dedup, dedup = _build_inputs(tmp_path)
     output_path = str(tmp_path / "store_split")
 
     # Force bucket (0, 4) to split 4 ways; every other bucket stays at 1 sub.
@@ -236,6 +263,7 @@ def test_store_subshards_hot_bucket_without_data_loss(tmp_path):
         decontam=decontam,
         cluster_assign=cluster_assign,
         quality=quality,
+        exact_dedup=exact_dedup,
         dedup=dedup,
         output_path=output_path,
         cluster_view=CLUSTER_VIEW,
