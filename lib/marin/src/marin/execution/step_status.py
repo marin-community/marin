@@ -37,6 +37,7 @@ STATUS_RUNNING = "RUNNING"
 STATUS_FAILED = "FAILED"
 STATUS_SUCCESS = "SUCCESS"
 STATUS_DEP_FAILED = "DEP_FAILED"  # Dependency failed
+_IRIS_TASK_ID_ENV = "IRIS_TASK_ID"
 
 
 def get_status_path(output_path: str) -> str:
@@ -143,6 +144,10 @@ class StatusFile:
         """Check if any worker has an active (non-stale) lock."""
         return self._lock.has_active_holder()
 
+    def active_lock_holder(self) -> str | None:
+        """Return the active lock-owner ID, or None if no active lock exists."""
+        return self._lock.active_holder_id()
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -150,7 +155,11 @@ class StatusFile:
 
 
 def worker_id() -> str:
-    return default_worker_id()
+    local_worker_id = default_worker_id()
+    iris_task_id = os.environ.get(_IRIS_TASK_ID_ENV)
+    if iris_task_id is None:
+        return local_worker_id
+    return f"{iris_task_id} ({local_worker_id})"
 
 
 class PreviousTaskFailedError(Exception):
@@ -172,9 +181,20 @@ def should_run(
 
     while True:
         status = status_file.status
+        active_lock_holder = status_file.active_lock_holder() if status == STATUS_RUNNING else None
 
         if log_once:
-            logger.info(f"[{wid}] Status {step_name}: {status}")
+            if active_lock_holder is not None:
+                logger.info(
+                    "[%s] Status %s: %s. Another worker holds the active lock (owner=%s). "
+                    "Waiting for that worker to finish.",
+                    wid,
+                    step_name,
+                    status,
+                    active_lock_holder,
+                )
+            else:
+                logger.info(f"[{wid}] Status {step_name}: {status}")
             log_once = False
 
         if status == STATUS_SUCCESS and not force_rerun:
@@ -186,7 +206,7 @@ def should_run(
                 logger.info(f"[{wid}] Force running {step_name}, previous status: {status}")
             else:
                 raise PreviousTaskFailedError(f"Step {step_name} failed previously. Status: {status}")
-        elif status == STATUS_RUNNING and status_file.has_active_lock():
+        elif status == STATUS_RUNNING and active_lock_holder is not None:
             logger.debug(f"[{wid}] Step {step_name} has active lock, waiting...")
             time.sleep(5)
             continue

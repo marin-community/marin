@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import logging
 import os
 from functools import cache
 from pathlib import Path
@@ -11,7 +12,14 @@ from marin.execution.artifact import read_artifact, write_artifact
 from marin.execution.disk_cache import disk_cache
 from marin.execution.step_runner import check_cache, run_step
 from marin.execution.step_spec import StepSpec
-from marin.execution.step_status import STATUS_SUCCESS, StatusFile, distributed_lock
+from marin.execution.step_status import (
+    STATUS_RUNNING,
+    STATUS_SUCCESS,
+    StatusFile,
+    distributed_lock,
+    should_run,
+    worker_id,
+)
 from pydantic import BaseModel
 
 
@@ -100,6 +108,30 @@ def test_composition_with_save_load(tmp_path: Path):
     result2 = cached_fn(output_path)
     assert call_count == 1
     assert result2 == result1
+
+
+def test_should_run_reports_active_iris_lock_owner(tmp_path: Path, caplog, monkeypatch):
+    output_path = str(tmp_path / "active-lock")
+    iris_task_id = "/larry/executor/0:2"
+    monkeypatch.setenv("IRIS_TASK_ID", iris_task_id)
+
+    owner = StatusFile(output_path, worker_id())
+    waiter = StatusFile(output_path, "waiting-worker")
+    assert owner.try_acquire_lock()
+    owner.write_status(STATUS_RUNNING)
+
+    def release_owner(_seconds: float) -> None:
+        owner.release_lock()
+
+    monkeypatch.setattr("marin.execution.step_status.time.sleep", release_owner)
+
+    with caplog.at_level(logging.INFO, logger="marin.execution.step_status"):
+        assert should_run(waiter, "active-step")
+
+    waiter.release_lock()
+    assert iris_task_id in caplog.text
+    assert "Another worker holds the active lock" in caplog.text
+    assert "Waiting for that worker to finish" in caplog.text
 
 
 def test_decorator_with_cloudpickle(tmp_path: Path):
