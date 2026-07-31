@@ -65,6 +65,7 @@ SERVER_TIMEOUT_SECONDS = 3600
 REQUEST_TIMEOUT_SECONDS = 600
 REMOTE_ROOT = "/tmp/grugmoe-inference-preflight"
 LOG_TAIL_LINES = 400
+GLOO_CONTROL_INTERFACE = "enP6p3s0np0"
 REMOTE_UPLOAD_PROGRAM = """
 import json
 import pathlib
@@ -224,6 +225,7 @@ class PodRuntime:
     pod_ip: str
     image: str
     image_id: str
+    environment: dict[str, str]
     command: list[str]
     remote_dir: str
 
@@ -283,6 +285,12 @@ class Gang:
                     pod_ip=str(payload["status"]["podIP"]),
                     image=str(task_status.get("image", "")),
                     image_id=str(task_status.get("imageID", "")),
+                    environment={
+                        # The Iris GB200 hostname resolves to 127.0.0.1.
+                        # Gloo otherwise advertises loopback to remote ranks.
+                        "GLOO_SOCKET_IFNAME": GLOO_CONTROL_INTERFACE,
+                        "VLLM_HOST_IP": str(payload["status"]["podIP"]),
+                    },
                     command=vllm_command(args),
                     remote_dir=self.remote_dir,
                 )
@@ -296,6 +304,7 @@ class Gang:
 
     def stage(self) -> None:
         for runtime in self.runtimes:
+            self._exec(runtime, "test", "-e", f"/sys/class/net/{GLOO_CONTROL_INTERFACE}")
             self._exec(runtime, "mkdir", "-p", runtime.remote_dir)
             for filename in ("config.json", "workload.json", "manifest.json"):
                 source = str(self.local_dir / filename)
@@ -310,8 +319,10 @@ class Gang:
             log_path = f"{runtime.remote_dir}/vllm-node-{runtime.node_index}.log"
             pid_path = f"{runtime.remote_dir}/vllm-node-{runtime.node_index}.pid"
             command_text = shlex.join(runtime.command)
+            environment = " ".join(f"{key}={shlex.quote(value)}" for key, value in sorted(runtime.environment.items()))
             shell = (
-                "export VLLM_USE_PRECOMPILED=1 VLLM_USE_FLASHINFER_SAMPLER=0 PYTHONUNBUFFERED=1; "
+                "export VLLM_USE_PRECOMPILED=1 VLLM_USE_FLASHINFER_SAMPLER=0 "
+                f"PYTHONUNBUFFERED=1 {environment}; "
                 f"setsid {command_text} </dev/null > {shlex.quote(log_path)} 2>&1 & "
                 f"echo $! > {shlex.quote(pid_path)}"
             )
@@ -337,20 +348,30 @@ class Gang:
     def wait_for_leader_port(self, timeout_seconds: float) -> None:
         if not self.runtimes:
             raise RuntimeError("gang must be inspected before waiting for the server")
-        runtime = self.runtimes[0]
-        pid_path = f"{runtime.remote_dir}/vllm-node-{runtime.node_index}.pid"
-        timeout = max(1, int(timeout_seconds))
-        shell = (
-            f"deadline=$((SECONDS + {timeout})); "
-            "while (( SECONDS < deadline )); do "
-            f"if (exec 3<>/dev/tcp/127.0.0.1/{SERVER_PORT}) 2>/dev/null; then exit 0; fi; "
-            f"if test -s {shlex.quote(pid_path)} && ! kill -0 $(cat {shlex.quote(pid_path)}) 2>/dev/null; then "
-            "echo 'vLLM process exited before opening the API port' >&2; exit 1; fi; "
-            "sleep 5; "
-            "done; "
-            f"echo 'vLLM did not open port {SERVER_PORT} before timeout' >&2; exit 124"
-        )
-        self._exec(runtime, "bash", "-lc", shell)
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            states: list[str] = []
+            for runtime in self.runtimes:
+                pid_path = f"{runtime.remote_dir}/vllm-node-{runtime.node_index}.pid"
+                process_probe = (
+                    f"test -s {shlex.quote(pid_path)} " f"&& kill -0 $(cat {shlex.quote(pid_path)}) 2>/dev/null"
+                )
+                if runtime.node_index == 0:
+                    shell = (
+                        f"if (exec 3<>/dev/tcp/127.0.0.1/{SERVER_PORT}) 2>/dev/null; "
+                        f"then echo ready; elif {process_probe}; "
+                        "then echo running; else echo failed; fi"
+                    )
+                else:
+                    shell = f"if {process_probe}; then echo running; else echo failed; fi"
+                states.append(self._exec(runtime, "bash", "-lc", shell).stdout.strip())
+            if states[0] == "ready":
+                return
+            failed_nodes = [index for index, state in enumerate(states) if state == "failed"]
+            if failed_nodes:
+                raise RuntimeError(f"vLLM exited before opening the API port on nodes {failed_nodes}")
+            time.sleep(5)
+        raise TimeoutError(f"vLLM did not open port {SERVER_PORT} within {timeout_seconds}s")
 
     def collect_logs(self) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
