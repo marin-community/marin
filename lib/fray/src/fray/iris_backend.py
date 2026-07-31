@@ -14,7 +14,6 @@ import sys
 import threading
 import time
 from concurrent.futures import Future
-from contextlib import suppress
 from pathlib import Path
 from typing import Any, cast
 
@@ -40,7 +39,6 @@ from iris.cluster.platforms.k8s.coreweave_topology import COSCHEDULE_LEAFGROUP, 
 from iris.cluster.types import (
     CoschedulingConfig,
     EnvironmentSpec,
-    JobName,
     ResourceSpec,
     is_job_finished,
     tpu_device,
@@ -59,7 +57,6 @@ from fray.actor import (
     _set_current_actor,
 )
 from fray.client import JobAlreadyExists as FrayJobAlreadyExists
-from fray.client import JobHandle
 from fray.types import (
     ANY_REGION,
     ActorConfig,
@@ -673,6 +670,7 @@ class FrayIrisClient:
         actor_class: type,
         *args: Any,
         name: str,
+        endpoint: str | None = None,
         actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> HostedActor:
@@ -682,7 +680,7 @@ class FrayIrisClient:
         if job_info is None:
             raise RuntimeError("host_actor requires an Iris job context")
 
-        actor_name = f"{ctx.job_id}/{name}-0"
+        actor_name = endpoint if endpoint is not None else f"{ctx.job_id}/{name}-0"
         handle = IrisActorHandle(actor_name)
         actor_ctx = ActorContext(handle=handle, index=0, group_name=name)
         token = _set_current_actor(actor_ctx)
@@ -707,19 +705,7 @@ class FrayIrisClient:
         The handle carries a resolver bound to this client, so it works from a
         driver process that has a client but no ambient Iris job context.
         """
-        resolver = None
-        with suppress(Exception):
-            # Endpoints are absolute ("/user/job/actor-0"), and NamespacedResolver
-            # passes absolute names through untouched, so the namespace this
-            # resolver is built for does not affect the lookup.
-            owning_job = JobName.from_string(endpoint).parent
-            if owning_job is not None:
-                resolver = self._iris.resolver_for_job(owning_job)
-        return IrisActorHandle(endpoint, resolver=resolver)
-
-    def actor_endpoint(self, job: JobHandle, name: str, index: int = 0) -> str:
-        # Matches the name _host_actor registers under.
-        return f"{job.job_id}/{name}-{index}"
+        return IrisActorHandle(endpoint, resolver=self._iris.resolver())
 
     def create_actor(
         self,

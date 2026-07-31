@@ -136,14 +136,15 @@ class _PoolConfig:
     max_shard_failures: int
     max_shard_infra_failures: int
     drain_idle_workers: bool
+    coordinator_endpoint: str
 
 
 def _run_pool_job(config_path: str) -> None:
     """Entrypoint for the coordinator + worker pool job.
 
     Hosts the coordinator actor, boots ``max_workers`` workers, and serves
-    until the owning ``_ZephyrPool`` shuts it down. The coordinator's address is
-    derivable from this job, so nothing is published. Drivers submit through
+    until the owning ``_ZephyrPool`` shuts it down. The coordinator's address
+    was chosen by the pool before this job existed, so nothing is published. Drivers submit through
     ``run_pipeline`` and the coordinator runs them concurrently. A one-shot
     pipeline is just a pool that runs one pipeline and is then torn down. The
     job fails (visibly) if the worker pool terminates permanently.
@@ -168,6 +169,7 @@ def _run_pool_job(config_path: str) -> None:
         config.max_shard_infra_failures,
         config.drain_idle_workers,
         name=coordinator_actor_name(config.name),
+        endpoint=config.coordinator_endpoint,
         actor_config=ActorConfig(max_concurrency=100),
     )
     coordinator = hosted.handle
@@ -236,6 +238,19 @@ def pool_job_name(pool: str) -> str:
 def coordinator_actor_name(pool: str) -> str:
     """Actor name the pool's coordinator hosts itself under."""
     return f"zephyr-{pool}-coord"
+
+
+def coordinator_endpoint(pool_instance: str) -> str:
+    """Address the pool's coordinator registers itself at.
+
+    Absolute (a leading "/"), because both registration and resolution prefix a
+    relative name with the namespace of whoever is asking, and the pool is
+    addressed from jobs that do not share the coordinator's namespace.
+
+    ``pool_instance`` is unique per start, so a coordinator left over from an
+    earlier pool of the same name is never reachable at this address.
+    """
+    return f"/zephyr/{pool_instance}/coord"
 
 
 def _default_max_workers(client: Client) -> int:
@@ -340,7 +355,14 @@ class _ZephyrPool:
         if self._serve_job is not None:
             raise RuntimeError("Pool is already started")
 
+        # One id per start, for both the coordinator's address and its storage:
+        # two entrypoints may each host a pool named "ingest" under one prefix,
+        # and they must not share a config file, delete each other's directory
+        # on shutdown, or answer at each other's address.
+        instance = f"{pool_job_name(self.name)}-{uuid.uuid4().hex[:8]}"
+        endpoint = coordinator_endpoint(instance)
         config = _PoolConfig(
+            coordinator_endpoint=endpoint,
             name=self.name,
             chunk_storage_prefix=self.chunk_storage_prefix,
             max_workers=self.max_workers,
@@ -352,11 +374,7 @@ class _ZephyrPool:
             max_shard_infra_failures=self.max_shard_infra_failures,
             drain_idle_workers=self.drain_idle_workers,
         )
-        # Job and actor names stay derivable so siblings can address the pool,
-        # but storage gets a unique suffix: two entrypoints may each host a pool
-        # named "ingest" under one prefix, and they must not share a config file
-        # or delete each other's directory on shutdown.
-        base = f"{self.chunk_storage_prefix}/{pool_job_name(self.name)}-{uuid.uuid4().hex[:8]}"
+        base = f"{self.chunk_storage_prefix}/{instance}"
         self._job_dir = base
         config_path = f"{base}/config.pkl"
         ensure_parent_dir(config_path)
@@ -375,11 +393,10 @@ class _ZephyrPool:
             )
         logger.info("Shared coordinator job submitted: %s", self._serve_job.job_id)
 
-        # The coordinator's address is derivable from the job we just created,
-        # so there is nothing to publish and nothing to read back. If the pool
-        # never becomes ready (crash, or slow scheduling), terminate it before
-        # re-raising so we never leak a running coordinator + full worker pool.
-        endpoint = self.client.actor_endpoint(self._serve_job, coordinator_actor_name(self.name))
+        # The address went into the job's config, so there is nothing to
+        # publish and nothing to read back. If the pool never becomes ready
+        # (crash, or slow scheduling), terminate it before re-raising so we
+        # never leak a running coordinator + full worker pool.
         try:
             coordinator = self.client.get_actor(endpoint)
             backoff = ExponentialBackoff(initial=0.2, maximum=5.0)

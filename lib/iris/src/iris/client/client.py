@@ -628,6 +628,15 @@ class IrisClient:
     def __exit__(self, *_) -> None:
         self.shutdown()
 
+    def resolver(self) -> Resolver:
+        """Get a resolver for absolute endpoint names.
+
+        An absolute name carries its own namespace, so it needs no prefix. Use
+        this to resolve one from outside a job context, where there is no
+        namespace to prefix with anyway.
+        """
+        return NamespacedResolver(self._cluster_client, namespace=None)
+
     def resolver_for_job(self, job_id: JobName) -> Resolver:
         """Get a resolver for endpoints registered by a specific job.
 

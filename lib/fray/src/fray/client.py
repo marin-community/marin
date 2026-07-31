@@ -47,6 +47,7 @@ class Client(Protocol):
         actor_class: type,
         *args: Any,
         name: str,
+        endpoint: str | None = None,
         actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> HostedActor:
@@ -55,6 +56,15 @@ class Client(Protocol):
         Unlike create_actor, this does not spawn a separate job/process.
         The actor runs in the caller's process and is reachable via the
         returned handle. Call shutdown() on the result to stop the server.
+
+        Args:
+            name: Identifies the actor to itself and, by default, in the
+                registry, where it is scoped to the hosting job.
+            endpoint: Register under this exact address instead. It must be
+                absolute (a leading "/"), because a relative name is resolved
+                inside the namespace of whoever looks it up. Lets a submitter
+                choose the address before it creates the job that hosts the
+                actor, so nothing has to be published or read back.
         """
         ...
 
@@ -88,14 +98,6 @@ class Client(Protocol):
 
         Resolution to a live connection happens lazily at call time, so this
         never blocks or validates that the actor is currently reachable.
-        """
-        ...
-
-    def actor_endpoint(self, job: JobHandle, name: str, index: int = 0) -> str:
-        """Endpoint an actor hosted by ``job`` under ``name`` registers itself as.
-
-        Lets a submitter address an actor inside a job it just created without
-        that job having to publish its own address out-of-band.
         """
         ...
 

@@ -152,11 +152,12 @@ class LocalClient:
         actor_class: type,
         *args: Any,
         name: str,
+        endpoint: str | None = None,
         actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> HostedActor:
         """Host an actor in-process. No server to stop for LocalClient."""
-        endpoint = f"local/{name}-0"
+        endpoint = endpoint if endpoint is not None else f"local/{name}-0"
         handle = LocalActorHandle(endpoint)
         ctx = ActorContext(handle=handle, index=0, group_name=name)
         token = _set_current_actor(ctx)
@@ -176,10 +177,6 @@ class LocalClient:
     def get_actor(self, endpoint: str) -> "LocalActorHandle":
         """Return a handle to an in-process actor by its endpoint name."""
         return LocalActorHandle(endpoint)
-
-    def actor_endpoint(self, job: Any, name: str, index: int = 0) -> str:
-        # One process, no job tree: the name alone locates the actor.
-        return f"local/{name}-{index}"
 
     def create_actor(
         self,
