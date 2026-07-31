@@ -17,7 +17,7 @@ author: rjpower
 
 ## Current TL;DR
 
-The pyramid and L1-to-L48 paths are implemented and passing their focused tests. The frozen design uses a `d3072/L48/E64/top4` Grug MoE with 5.295B active and 46.064B stored parameters. The production-path canaries are ready to submit; no training result has landed.
+The first wave found no loss effect from fat-first versus fat-middle shared capacity, and its full-width L1 source did not improve time-to-loss after growth. The aggressive `d1536/L1` source measures 7.55x C0 throughput; its exact width/depth transition passed 16 finite full-model updates. A 95/5 WD1 production run is active, projecting to 5.69x loop-time speed before setup and compilation. Paloma and downstream capability results remain pending.
 
 ## Current Baseline
 
@@ -159,3 +159,13 @@ The pyramid and L1-to-L48 paths are implemented and passing their focused tests.
 - Result: the source finished at step 127 with loss 6.15569, 1.493M tok/s on the terminal step, 99.976% valid targets, finite gradients, and zero router overflow. Median logged throughput from step 16 onward was 1.431M tok/s, or 7.55x C0's 189.5k tok/s. At that measured rate, a 90/10 split projects to only 4.56x training-loop speed; 95/5 projects to 5.69x before setup and compilation. The independent 32-step transition source also succeeded with finite loss and zero overflow; its widened target canary is running.
 - Interpretation: the systems result clears the 5x admission gate and nearly reaches the preferred 8x source rate. Meeting the end-to-end treatment objective requires spending less than 10% of updates at full width and depth; the revised arm makes that constraint explicit rather than claiming the source-only speedup for the entire run.
 - Next action: require 16 finite post-growth updates from the transition canary, then launch the 95/5 production WD1 arm on the same four-node slice and record its four-hour checkpoint from gang admission.
+
+### 2026-07-31 23:33 - CC16-009 width/depth transition gate and production admission
+
+- Hypothesis: the narrow source can be expanded without a loss discontinuity that prevents rapid full-model adaptation, and the measured 7.55x source rate can support a greater-than-fivefold end-to-end schedule.
+- Commit Hash: `4c100e9287`.
+- Command: `/power/ccx-wd1-growth-pilot-coord`, followed by production coordinator `/power/ccx-wd1-coord` on the same four-node slice.
+- Config: the transition canary trained 32 `d1536/L1` updates, expanded to `d3072/L48`, and trained through step 48. Production WD1 trains the source through step 6,080, then gives the expanded target 320 updates covering the complete optimizer decay.
+- Result: every canary rank restored step 32 and data offset 8,192, copied 84 parameter leaves, reset 108 width/depth-dependent optimizer leaves, and preserved seven optimizer leaves. Logged target loss fell from 10.6 at step 34 to 9.82 at step 45, and every rank saved the step-48 checkpoint. Production source gang `/power/ccx-wd1-coord/grug-train-ccx-wd1-d1536-l1-source-step6080` was admitted at 23:32:52 UTC; its preregistered four-hour boundary is 03:32:52 UTC on 2026-08-01.
+- Interpretation: exact width and identity-prefix depth growth is operational on the production topology. At the canary's measured rates, the 95/5 loop projects to 1.73 hours versus 9.84 hours for C0, or 5.69x before setup and compilation. This is a systems projection, not yet a capability result.
+- Next action: require finite production source metrics, monitor at 30-minute intervals while healthy, verify the automatic target transition, then run C-short sequentially on the released slice. Evaluate terminal checkpoints on held-out Datamix, Paloma, factual retrieval, and matched manipulation probes.
