@@ -172,9 +172,10 @@ def all_sources() -> dict[str, DatakitSource]:
         ("common-crawl-focus-2026-22", common_crawl_focus_normalize_steps, 49.702569456),
         ("davinci-dev/ctx-native", davinci_dev_ctx_native_normalize_steps, 57.57),
         ("davinci-dev/env-native", davinci_dev_env_native_normalize_steps, 2.58),
-        # Exact count measured with marin-community/marin-tokenizer:
-        # 9,479,133,096 tokens / 66,515,612 docs.
-        ("dna/functional-regions", dna_normalize_steps, 9.479133096),
+        # Exact count from the tokenized cache .stats.json, measured with
+        # marin-community/marin-tokenizer over the normalized artifact:
+        # 9,094,282,709 tokens / 64,026,220 docs.
+        ("dna/functional-regions", dna_normalize_steps, 9.094282709),
         # Exact count measured with marin-community/marin-tokenizer:
         # 1,497,301,429 tokens / 242,086 docs.
         ("docx-corpus/en", docx_corpus_normalize_steps, 1.497301429),
