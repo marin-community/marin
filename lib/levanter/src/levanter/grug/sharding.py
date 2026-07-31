@@ -10,9 +10,6 @@ from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec, get_abstr
 # default distributed batch mapping, which includes the cross-slice axis.
 Pbatch = P(("replica_dcn", "data"))
 Pembed_vocab = P("model", Pbatch[0])
-# Fully-replicated embedding table: the token lookup becomes a replica-local shard_map gather (see
-# the hero model's _embedding_gather) instead of an all-to-all. Used only by the FSDP hero variant.
-Pembed_vocab_repl = P(None, None)
 Plm_head = P(Pbatch[0], "model")
 Plogits = P(Pbatch[0], None, "model")
 

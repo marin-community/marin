@@ -47,7 +47,7 @@ from levanter.grug.grug_moe import (
     resolve_moe_implementation,
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
-from levanter.grug.sharding import Pembed_vocab_repl, unshard
+from levanter.grug.sharding import Pembed_vocab, unshard
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
@@ -87,27 +87,6 @@ def _batch_spec() -> P:
 
 def _batch_reshard(x: jax.Array) -> jax.Array:
     return reshard(x, _batch_spec())
-
-
-def _embedding_gather(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
-    """Replica-local embedding lookup over a fully-replicated table (Pembed_vocab_repl).
-
-    Runs the gather under a shard_map over the batch axes so each shard looks up its own tokens in
-    its replicated copy of the table -- a purely local op, no all-to-all. The naive
-    ``token_embed.at[token_ids].get`` would emit an all-to-all to lay the gathered rows onto the
-    batch-sharded token axis.
-    """
-
-    def _local(te: jax.Array, ids: jax.Array) -> jax.Array:
-        return te[ids]
-
-    token_ids = reshard(token_ids, P(_BATCH_AXES, None))
-    return shard_map(
-        _local,
-        mesh=get_abstract_mesh(),
-        in_specs=(P(None, None), P(_BATCH_AXES, None)),
-        out_specs=P(_BATCH_AXES, None, None),
-    )(token_embed, token_ids)
 
 
 def _partition_spec_of(x: jax.Array) -> P | None:
@@ -903,7 +882,7 @@ class Transformer(eqx.Module):
 
         embed_key, out_key, embed_gn_key, final_gn_key, *block_keys = random.split(key, cfg.num_layers + 4)
         token_embed = reshard(
-            _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab_repl
+            _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
         output_proj = reshard(
             _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), _LM_HEAD_PARTITION_SPEC
@@ -934,7 +913,7 @@ class Transformer(eqx.Module):
             mask = AttentionMask.causal()
 
         cfg = self.config
-        hidden = _embedding_gather(self.token_embed, token_ids)
+        hidden = self.token_embed.at[token_ids].get(out_sharding=_batch_spec())
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
         # Local layers use a sliding window; every global_every-th layer is full causal.
