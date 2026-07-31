@@ -99,11 +99,26 @@ expresses the actual requirement ("must run on x86") without naming a pool or
 hard-coding cluster topology. For this workload it is the highest-value line in
 the whole change.
 
+Because the value maps straight onto `kubernetes.io/arch`, the accepted values
+are the Kubernetes/GOARCH label values — `amd64`, `arm64` — not `x86`,
+`x86_64`, or `aarch64` as this document's prose and tables otherwise write
+them. A pod with `kubernetes.io/arch=x86_64` pends forever. Either document
+`amd64`/`arm64` as the only accepted values or normalize the common aliases at
+the fray API boundary before the constraint is emitted.
+
 ### 2. Pin the Kueue CPU flavor on 08a
 
-`build_cpu_resource_flavor((Labels("cw-use08a").iris_scale_group, "cpu-erapids"))`
-at `infra/pulumi/src/iac/coreweave/kueue.py:131`. The knob already exists
+Pass `build_cpu_resource_flavor` a node label at
+`infra/pulumi/src/iac/coreweave/kueue.py:131`. The knob already exists
 (`lib/iris/scripts/install_kueue.py:449-455`, `--cpu-flavor-node-label`).
+
+The pin must be **per-cluster**, not a literal in the shared code path:
+`infra/pulumi/__main__.py` instantiates one `KueueAddon` for every CoreWeave
+stack, so hard-coding `(Labels("cw-use08a").iris_scale_group, "cpu-erapids")`
+there would inject a selector for a label no other cluster's nodes carry and
+strand every CPU-only pod on those stacks. Key the pin on the 08a stack (or a
+per-cluster config field) and derive the label from that cluster's own
+`label_prefix`.
 
 This makes every CPU-only pod on 08a land on erapids with no client-side change —
 a safe default. It is *not* a substitute for (1): it is cluster-global and
@@ -149,10 +164,15 @@ half.
    Either restrict the API to a single value or emit `nodeAffinity`
    `matchExpressions` instead.
 4. **Controller redeploy required**, since `_build_pod_manifest` runs in the
-   controller. It is backward-compatible both ways: an old client sends no
-   constraint and is unaffected; an old controller receiving one writes a
-   nodeSelector for a nonexistent label and fails closed with a pend, never a
-   mis-schedule.
+   controller — and the compatibility story differs by key. `pool` is already
+   a known key, so an old controller receiving it writes a nodeSelector for a
+   nonexistent label and fails closed with a pend. `arch` is **unknown** to an
+   old controller: `_constraints_to_node_selector` skips unknown keys and adds
+   only the managed selector, so an `arch=amd64` job sent before the mapping
+   is deployed schedules anywhere — a silent mis-schedule, not a pend. Clients
+   must not emit `arch` until the controllers understand it (or old
+   controllers must reject unknown placement constraints); sequence the fray
+   release after the controller rollout.
 5. **The Kueue change needs a Pulumi apply, not a redeploy** — different blast
    radius and approval path. `ResourceFlavor` is cluster-scoped, so it affects
    every CPU pod on 08a including the controller's own
