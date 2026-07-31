@@ -21,6 +21,7 @@ use crate::server::{build_app_with_config, ServerConfig};
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{Column, Schema};
 use crate::store::Store;
+use crate::test_support::unique_dir;
 
 type TestHttpClient = HyperClient<HttpConnector, ClientBody>;
 
@@ -152,7 +153,15 @@ async fn query(store: &Store, sql: &str) -> Vec<arrow::array::RecordBatch> {
 
 #[tokio::test]
 async fn accepted_batch_is_queryable_through_normal_store_rows() {
-    let store = disk_store("telemetry-query");
+    let remote_dir = unique_dir("telemetry-query-remote");
+    let store = Arc::new(
+        Store::new(
+            Some(unique_dir("telemetry-query")),
+            remote_dir.to_string_lossy().into_owned(),
+        )
+        .unwrap(),
+    );
+    store.bootstrap_maintenance();
     let (addr, _) = serve(Arc::clone(&store), AuthPolicy::allow_localhost()).await;
     let client = http_client();
     let batch_id = "f47ac10b-58cc-4372-a567-0e02b2c3d479";
