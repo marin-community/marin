@@ -49,6 +49,7 @@ DEFAULT_TEMPERATURE = 0.9
 DEFAULT_TOP_P = 0.95
 DEFAULT_MAX_MODEL_LEN = 8192
 DEFAULT_MAX_NUM_SEQS = 64
+PROGRESS_COMPLETE = "complete"
 CHUNK_PATTERN = re.compile(r"chunk-(?P<start>\d+)-(?P<end>\d+)-tokens-(?P<tokens>\d+)\.jsonl\.gz")
 UNSUPPORTED_USER_DETAIL_MARKERS = (
     "checkpoint",
@@ -313,7 +314,7 @@ def _run_collection(vllm_url: str, config: CollectionConfig, sampling: SamplingC
     chunks = _existing_chunks(config.output_path, config.shard_index)
     accepted_tokens = sum(chunk.tokens for chunk in chunks.values())
     if accepted_tokens >= config.target_tokens:
-        _write_progress(config, "complete", chunks, 0, 0)
+        _write_progress(config, PROGRESS_COMPLETE, chunks, 0, 0)
         return
 
     max_active_batches = max(1, config.concurrency // config.microbatch_size)
@@ -368,7 +369,7 @@ def _run_collection(vllm_url: str, config: CollectionConfig, sampling: SamplingC
                 if accepted_tokens < config.target_tokens:
                     launch_batch(executor)
 
-    _write_progress(config, "complete", chunks, accepted_conversations, rejected_conversations)
+    _write_progress(config, PROGRESS_COMPLETE, chunks, accepted_conversations, rejected_conversations)
     if accepted_tokens < config.target_tokens:
         raise RuntimeError(f"Shard stopped at {accepted_tokens} of {config.target_tokens} target tokens")
 

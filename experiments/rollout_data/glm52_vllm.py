@@ -29,6 +29,7 @@ MODEL = "zai-org/GLM-5.2-FP8"
 MODEL_REVISION = "ba978f7d347eaf65d22f1a86833408afdb953541"
 CUDA_COMPILER_REQUIREMENT = "cuda-toolkit[cccl,crt,cudart,nvcc,nvvm]==13.0.2"
 MODEL_CACHE_TTL_DAYS = 30
+DEVICE_TYPE = "GB200"
 GPUS_PER_NODE = 4
 VLLM_REPLICAS = 2
 TENSOR_PARALLEL_SIZE = GPUS_PER_NODE * VLLM_REPLICAS
@@ -240,7 +241,7 @@ def _serve_ray_head(
             ExponentialBackoff(initial=10, maximum=10, jitter=0).wait_until_or_raise(
                 ray_ready,
                 timeout=Duration.from_seconds(900),
-                error_message=f"Ray cluster did not register all {TENSOR_PARALLEL_SIZE} GB200 GPUs",
+                error_message=f"Ray cluster did not register all {TENSOR_PARALLEL_SIZE} {DEVICE_TYPE} GPUs",
             )
             _run_vllm(ctx, host, http_port, ray_address, vllm_command, environment, weights, launch)
         finally:
@@ -293,7 +294,7 @@ def submit_glm52(ctx, launch: Glm52LaunchConfig):
             cpu=120,
             memory="850g",
             disk="1000g",
-            device=gpu_device("GB200", GPUS_PER_NODE),
+            device=gpu_device(DEVICE_TYPE, GPUS_PER_NODE),
         ),
         environment=EnvironmentSpec(
             setup_scripts=[default_setup_script(packages=["marin-core"])],

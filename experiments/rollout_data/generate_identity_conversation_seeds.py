@@ -73,7 +73,7 @@ class HumanPhrasing:
 
 
 @dataclass(frozen=True)
-class Entropy:
+class EntropyAxes:
     register: str
     turn_pattern: str
     question_strategy: str
@@ -93,7 +93,7 @@ class ConversationSeed:
     distractor_model: str | None
     distractor_developer: str | None
     human_phrasing: HumanPhrasing | None
-    entropy: Entropy
+    entropy: EntropyAxes
     neutral_bridge: str | None
     generation_prompt: str
 
@@ -296,7 +296,7 @@ def _false_premise_answer(
 def _generation_prompt(
     topic: str,
     truth_status: TruthStatus,
-    entropy: Entropy,
+    entropy: EntropyAxes,
     canonical_answer: str,
     neutral_bridge: str | None,
     distractor_model: str | None,
@@ -367,7 +367,7 @@ def generate_seeds(
             if turn_pattern == TURN_PATTERNS[0]
             else _balanced_value(NEUTRAL_BRIDGES, index, random_seed, "neutral_bridge")
         )
-        entropy = Entropy(
+        entropy = EntropyAxes(
             register=_balanced_value(REGISTERS, index, random_seed, "register"),
             turn_pattern=turn_pattern,
             question_strategy=_balanced_value(QUESTION_STRATEGIES, index, random_seed, "question_strategy"),
