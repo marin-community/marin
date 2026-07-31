@@ -1,0 +1,62 @@
+{
+  "approved_scales": [
+    "60m",
+    "delphi_3e18"
+  ],
+  "approved_stage": "full",
+  "decision_basis": {
+    "cross_scale_transfer": [
+      {
+        "n_interventions": 7,
+        "pearson_r": 0.9722012808345495,
+        "same_sign": 7,
+        "spearman_r": 0.8928571428571429,
+        "target": "table9"
+      },
+      {
+        "n_interventions": 7,
+        "pearson_r": 0.9889635747970097,
+        "same_sign": 5,
+        "spearman_r": 0.8928571428571429,
+        "target": "uncheatable"
+      }
+    ],
+    "deployment_exclusion": "Conditional one-bucket minima are not independently combined into a deployment mixture.",
+    "scale_diagnostics": {
+      "60m": {
+        "joined_rows": 37,
+        "max_abs_paired_effect_bpb": 0.037503316137857366,
+        "max_effect_to_paired_sd": 36.64025058488506,
+        "max_trainer_sd_bpb": 0.004792893451139996,
+        "resolvable": true
+      },
+      "delphi_3e18": {
+        "joined_rows": 37,
+        "max_abs_paired_effect_bpb": 0.05867314508992827,
+        "max_effect_to_paired_sd": 35.18151221540695,
+        "max_trainer_sd_bpb": 0.003342389010012186,
+        "resolvable": true
+      }
+    },
+    "subset_variance_conclusion": "High-replay subset variation does not dominate the observed effect for all probe buckets."
+  },
+  "full_grid": {
+    "focal_weight_cap": 0.5,
+    "multipliers": [
+      0.0,
+      0.25,
+      0.5,
+      1.0,
+      2.0,
+      4.0,
+      8.0,
+      16.0,
+      32.0
+    ],
+    "policies_per_scale": 277,
+    "x32_interpretation": "Exploratory and right-censored: the pilot directly identified replay variance only through x16."
+  },
+  "gate_status": "pass",
+  "pilot_experiment_id": "exp_01kypvqav0saymyc7mbrqfh5gc",
+  "schema_version": 1
+}

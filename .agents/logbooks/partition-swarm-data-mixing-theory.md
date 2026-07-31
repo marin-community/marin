@@ -378,3 +378,106 @@
   - 300M: 241 completed qsplit240 core histories fetched. First common eval at progress 0.044 has rank Spearman 0.204 vs final and pair-flip fraction 0.429. First eval after 80% progress has rank Spearman 0.937 and pair-flip fraction 0.105.
 - Interpretation:
   - The historical qsplit240 swarms did not show stable early rank ordering on this metric; the new production swarm's apparent stability around 10% progress is qualitatively different and should be verified with the same crossover diagnostics.
+
+### 2026-07-26 - Two-phase theory and Data Mixture literature synthesis
+- Goal: extend the paper's fixed-bucket policy theory to two phases using the
+  established policy-value, budget, partition, controllability, and noise
+  terminology; audit the local Zotero `Data Mixture` collection for what the
+  literature actually establishes about phase order.
+- Theory source updated:
+  - `/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper/theory.md`
+- Reproducer:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/build_two_phase_theory_literature_audit_20260726.py`
+- Synthesis artifacts:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/two_phase_theory_literature_synthesis_20260726/report.md`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/two_phase_theory_literature_synthesis_20260726/zotero_data_mixture_inventory.csv`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/two_phase_theory_literature_synthesis_20260726/two_phase_evidence_ledger.csv`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/two_phase_theory_literature_synthesis_20260726/adversarial_review_resolution.md`
+- Corpus audit:
+  - Zotero contains three root collections named `Data Mixture`; two are empty.
+  - The populated collection and descendants contain 75 records, 74 unique
+    titles, and 73 records with local attachments.
+  - Sixteen directly relevant papers were classified in a phase-specific
+    evidence ledger; every record remains available in the complete inventory.
+- Main theoretical objects:
+  - Token-weighted aggregate
+    \(a=\alpha w^{(0)}+(1-\alpha)w^{(1)}\).
+  - Aggregate-preserving phase contrast \(d=w^{(1)}-w^{(0)}\), with
+    \(w^{(0)}=a-(1-\alpha)d\) and \(w^{(1)}=a+\alpha d\).
+  - Global phase-policy-class gap \(\Gamma^{\mathrm{phase}}\), distinct from
+    fixed-aggregate phase-order headroom \(H(a)\).
+  - Antithetic odd/even decomposition into signed order value \(O(a,d)\) and
+    even asymmetry response \(C(a,d)\).
+  - Aggregate and order controllability, with the exact token-fraction-weighted
+    identity \(G^2=(G^{\mathrm{agg}})^2+(G^{\mathrm{ord}})^2\).
+  - A local contrast-space expansion
+    \(f(a,d)=f(a,0)+s(a)^\top d-\tfrac12d^\top R(a)d+o(\|d\|^2)\),
+    explicitly treated as a falsifiable local candidate rather than a validated
+    surrogate.
+- Literature verdict:
+  - The reviewed literature supports conditional, finite-budget,
+    order-sensitive training dynamics.
+  - It generally does not identify the globally optimized two-phase versus tied
+    gap because aggregate exposure, phase duration, future target, support, or
+    optimizer-time location also changes.
+  - `Algorithmic Stability and Uniform Generalization` assumes i.i.d.
+    observations and permutation-invariant learning, so it informs sensitivity
+    and uncertainty but cannot determine an early/late sign.
+  - `Maximize Your Data's Potential` is useful same-aggregate selected-policy
+    evidence, but its random-order comparison does not isolate the odd order
+    channel or the globally optimized tied policy.
+- Independent review:
+  - Two fresh Claude Opus 5 read-only reviews were run with `Agent` disabled.
+  - The first exposed gauge dependence, an unjustified PSD curvature
+    assumption, incomplete antithetic feasibility at 80/20, and overgraded
+    literature claims.
+  - After correction, the blocker-only review found no remaining mathematical
+    blocker. It added precision around generic antithetic strictness,
+    local-validity radius, indefinite curvature, and odd-versus-even evidence.
+- Consequence:
+  - The defensible modeling factorization is
+    \(\widehat f^{(2)}(a,d)=\widehat f^{(1)}(a)+\widehat g(a,d)\), with
+    \(\widehat g(a,0)=0\).
+  - This is a theory and experimental-design result, not evidence that the
+    proposed local quadratic is already a deployable or superior surrogate.
+
+### 2026-07-26 - Aggregate-matched tied versus two-phase trajectory audit
+- Goal: test the limited curriculum-theory claim that a small endpoint gap can
+  coexist with a meaningful optimization-trajectory effect.
+- Reproducer:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/build_tied_two_phase_trajectory_audit_20260726.py`
+- Outputs:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tied_two_phase_trajectory_audit_20260726/report.md`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tied_two_phase_trajectory_audit_20260726/matched_endpoint_learning_curves.html`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tied_two_phase_trajectory_audit_20260726/mean_delta_trajectories.html`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tied_two_phase_trajectory_audit_20260726/phase_boundary_catchup.html`
+  - Source tables in the same directory.
+- Design:
+  - Compare exact aggregate-matched policies \(L_t(a,d)\) and \(L_t(a,0)\)
+    using the same data seed and fixed-distribution
+    `eval/uncheatable_eval/bpb`.
+  - Analyze 238 paired 300M trajectories and 233 paired Delphi 3e18
+    trajectories. Five additional Delphi pairs have endpoints but no tied
+    pre-switch history in W&B.
+  - Report all pairs and a descriptive near-equal-endpoint slice defined by
+    \(|L_B(a,d)-L_B(a,0)|\le0.003\) BPB.
+- Result:
+  - At the final pre-switch evaluation, two-phase was worse for 201/238 300M
+    pairs and 193/233 Delphi pairs.
+  - The mean post-switch catch-up was 0.00939 BPB at 300M and 0.01030 BPB at
+    Delphi; both 95% pair-bootstrap intervals exclude zero.
+  - In the near-equal-endpoint slice, two-phase was worse pre-switch in 21/22
+    300M and 39/46 Delphi pairs, then caught up in 20/22 and 40/46.
+  - Mean endpoint differences in that slice were -0.00027 BPB at 300M and
+    -0.00026 BPB at Delphi, with both bootstrap intervals spanning zero.
+  - The catch-up is strongest for poor aggregate mixtures; 3e18 frontier
+    aggregates have a smaller catch-up and a mean two-phase endpoint penalty.
+- Interpretation:
+  - Marin supports an optimizer-time-dependent chronology effect even when
+    endpoints are nearly tied.
+  - The observed pattern is late specialization or recency, not classical
+    faster-from-the-start curriculum learning: two-phase usually lags before
+    the 80% switch.
+  - The audit cannot establish a shared asymptotic optimum because both
+    policies stop at finite compute under WSD rather than converging under a
+    common stationary objective.
