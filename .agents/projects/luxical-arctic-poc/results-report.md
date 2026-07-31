@@ -48,6 +48,12 @@ The 3M student is viable only if it passes all required gates:
 - CPU throughput is at least 70 percent of Luxical-One. The target is 85
   percent.
 
+The work is complete only when the report contains the corrected results and
+reproducible artifact links. An independent peer review must inspect the
+report and experiment code. The report must record each finding and its
+disposition. All accepted findings must be addressed and checked before the
+final handoff.
+
 ## Peer review and dispositions
 
 The peer-review skill used this report and the experiment code. One independent
