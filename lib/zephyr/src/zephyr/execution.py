@@ -23,14 +23,15 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypeVar
 
 import cloudpickle
 import humanfriendly
+from fray.actor import ActorGroup
 from fray.client import Client
 from fray.current_client import current_client
 from fray.local_backend import LocalClient
-from fray.types import ResourceConfig
+from fray.types import ActorConfig, ResourceConfig
 from iris.cluster.client.job_info import get_job_info
 from rigging.filesystem import StoragePath, TransferBudgetExceeded, marin_temp_bucket
 from rigging.timing import ExponentialBackoff
@@ -46,6 +47,7 @@ from zephyr.coordinator import (
     _get_stage_description,
 )
 from zephyr.dataset import Dataset
+from zephyr.memory_store import MemoryStore, _MemoryStoreActor, _store_plan
 from zephyr.plan import (
     PhysicalPlan,
     compute_plan,
@@ -66,6 +68,9 @@ from zephyr.stage_io import (
 from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
+
+K = TypeVar("K")
+V = TypeVar("V")
 
 
 MAX_WORKERS_PER_JOB = 1_024
@@ -376,6 +381,8 @@ class ZephyrContext:
 
     # Shared data staged by put(), uploaded to disk at the start of execute()
     _shared_data: dict[str, Any] = field(default_factory=dict, repr=False)
+    # Actor groups backing read-only memory stores created by this context.
+    _memory_store_groups: list[ActorGroup] = field(default_factory=list, repr=False)
     # Handle to the coordinator job (for termination on retry/shutdown)
     _active_pool: "_ZephyrPool | None" = field(default=None, repr=False)
     # Pool created by start(); this context owns its lifetime.
@@ -498,6 +505,95 @@ class ZephyrContext:
         once the execution_id is known, so each execution is isolated.
         """
         self._shared_data[name] = obj
+
+    def load_memory_store(
+        self,
+        dataset: Dataset[tuple[K, V]],
+        *,
+        name: str,
+        hash_key: Callable[[K], int],
+        num_actors: int,
+        actor_resources: ResourceConfig,
+        actor_config: ActorConfig,
+        max_actor_bytes: int,
+        recovery_timeout: float,
+        ready_timeout: float = 900.0,
+    ) -> MemoryStore[K, V]:
+        """Load an existing partitioned Dataset into read-only actors.
+
+        The Dataset must contain only shard-local operations and yield `(key,
+        value)` tuples. `hash_key(key) % num_source_partitions` must equal the
+        physical source shard containing that key. Construction validates this
+        contract for every row and never inserts a shuffle.
+
+        The returned handle is picklable. This context owns the actor group and
+        shuts it down after its worker pool drains.
+
+        Args:
+            dataset: Shard-local Dataset yielding `(key, value)` tuples.
+            name: Descriptive name for the actor group.
+            hash_key: Stable, picklable key hash used by the existing partitioning.
+            num_actors: Number of actors. Source shards are assigned round-robin.
+            actor_resources: Resources for each store actor.
+            actor_config: Actor recovery and concurrency policy. A positive
+                `max_task_retries` is required.
+            max_actor_bytes: Maximum encoded key/value bytes loaded by one actor.
+            recovery_timeout: Seconds a lookup waits for an unavailable actor.
+            ready_timeout: Seconds to wait for every actor to finish loading.
+        """
+        if not name:
+            raise ValueError("memory store name must not be empty")
+        if num_actors <= 0:
+            raise ValueError(f"num_actors must be positive, got {num_actors}")
+        if max_actor_bytes <= 0:
+            raise ValueError(f"max_actor_bytes must be positive, got {max_actor_bytes}")
+        if recovery_timeout <= 0:
+            raise ValueError(f"recovery_timeout must be positive, got {recovery_timeout}")
+        if ready_timeout <= 0:
+            raise ValueError(f"ready_timeout must be positive, got {ready_timeout}")
+        if actor_config.max_task_retries is None or actor_config.max_task_retries <= 0:
+            raise ValueError("memory-store actor_config.max_task_retries must be positive")
+
+        source_items, operations, num_source_partitions = _store_plan(dataset)
+        if num_actors > num_source_partitions:
+            raise ValueError(f"num_actors ({num_actors}) cannot exceed source partitions ({num_source_partitions})")
+
+        assert self.client is not None
+        group = self.client.create_actor_group(
+            _MemoryStoreActor,
+            source_items,
+            operations,
+            hash_key,
+            num_source_partitions,
+            num_actors,
+            max_actor_bytes,
+            name=f"{self.name}-{name}-memory-store",
+            count=num_actors,
+            resources=actor_resources,
+            actor_config=actor_config,
+        )
+        try:
+            handles = group.wait_ready(timeout=ready_timeout)
+            index_futures = [(handle, handle.stats.remote()) for handle in handles]
+            actors_by_index: list[Any] = [None] * num_actors
+            for handle, future in index_futures:
+                stats = future.result()
+                if actors_by_index[stats.actor_index] is not None:
+                    raise RuntimeError(f"two memory-store actors reported index {stats.actor_index}")
+                actors_by_index[stats.actor_index] = handle
+            if any(handle is None for handle in actors_by_index):
+                raise RuntimeError("memory-store actor group did not report every actor index")
+        except BaseException:
+            group.shutdown()
+            raise
+
+        self._memory_store_groups.append(group)
+        return MemoryStore(
+            actors=tuple(actors_by_index),
+            hash_key=hash_key,
+            num_source_partitions=num_source_partitions,
+            recovery_timeout=recovery_timeout,
+        )
 
     def _upload_shared_data(self, prefix: str, execution_id: str) -> None:
         """Serialize all staged shared data to disk under the execution directory."""
@@ -726,6 +822,11 @@ class ZephyrContext:
         if self._active_pool is not None:
             self._active_pool.shutdown()
             self._active_pool = None
+
+        while self._memory_store_groups:
+            group = self._memory_store_groups[-1]
+            group.shutdown()
+            self._memory_store_groups.pop()
 
     def __enter__(self) -> "ZephyrContext":
         """Start the owned pool, if this context owns one.
