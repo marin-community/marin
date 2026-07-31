@@ -115,10 +115,6 @@ DNA_DATASETS = (
     ),
 )
 
-# Exact count from the full normalized artifact with
-# marin-community/marin-tokenizer: 9,479,133,096 tokens / 66,515,612 docs.
-ROUGH_TOKEN_COUNT_B = 9.479133096
-
 
 def dna_document_prefix(region_type: str) -> str:
     """Return the conditioning prefix shared by training and DNA evaluations."""
