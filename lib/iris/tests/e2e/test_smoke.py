@@ -432,7 +432,7 @@ def _wait_for_task_log_marker(
 
 
 def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_screenshot):
-    """Task logs show lines and substring filter on the task detail page."""
+    """Task logs show search, filter, permalink, and time-bound controls."""
     task_status = smoke_cluster.task_status(verbose_job)
     task_id = task_status.task_id
     job_id = verbose_job.job_id.to_wire()
@@ -490,6 +490,31 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
         "task-logs-filtered",
         "Task detail page with log filter input populated and filtered log lines visible in the log viewer.",
     )
+
+    # The timestamp action still makes a permalink. The next control sets an
+    # exact start time. The start time stays set after the string filter clears.
+    filtered_row = smoke_page.locator("[data-row]").filter(has_text="validation failed").first
+    filtered_row.locator("[data-log-permalink]").click()
+    smoke_page.wait_for_function("() => location.hash.includes('logSeq=')", timeout=5000)
+
+    selected_message = filtered_row.locator(":scope > span").last.inner_text()
+    filtered_row.locator("[data-log-start]").click()
+    since_input = "input[type='datetime-local']"
+    smoke_page.wait_for_function(
+        "() => document.querySelector(\"input[type='datetime-local']\")?.value.length > 0",
+        timeout=5000,
+    )
+    locked_since = smoke_page.input_value(since_input)
+    assert locked_since
+    smoke_page.locator("[data-row]").filter(has_text=selected_message).wait_for(timeout=5000)
+
+    smoke_page.get_by_role("button", name="Clear filter").click()
+    smoke_page.wait_for_function(
+        "() => document.querySelector(\"input[placeholder^='Filter:']\")?.value === '' && "
+        "document.body.textContent.includes('processing data batch')",
+        timeout=5000,
+    )
+    assert smoke_page.input_value(since_input) == locked_since
 
 
 def test_dashboard_jump_to_exception(smoke_cluster, smoke_page, smoke_screenshot):
