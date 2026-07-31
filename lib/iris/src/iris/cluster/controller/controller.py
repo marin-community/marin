@@ -1664,7 +1664,12 @@ class Controller:
         max_promotions = self._promotion_bucket.available
         backend_filter = None if len(self._backends) == 1 else backend_id
         with self._db.transaction() as cur:
-            batch = dispatch.drain_for_dispatch(cur, max_promotions=max_promotions, backend_id=backend_filter)
+            batch = dispatch.drain_for_dispatch(
+                cur,
+                max_promotions=max_promotions,
+                backend_id=backend_filter,
+                defaults=self._config.user_budget_defaults,
+            )
         if batch.tasks_to_run:
             self._promotion_bucket.try_acquire(len(batch.tasks_to_run))
         return reads.ControlSnapshot(

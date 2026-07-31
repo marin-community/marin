@@ -31,13 +31,16 @@ const show = computed(() => siblings.value.length > 0)
         class="text-xs text-accent hover:text-accent-hover hover:underline ml-auto"
       >view all in group →</RouterLink>
     </div>
-    <ul class="space-y-1">
-      <li v-for="s in siblings" :key="s.run_id" class="flex items-center gap-2 flex-wrap text-sm">
-        <StatusChip :status="s.status" />
-        <RouterLink :to="`/runs/${s.run_id}`" class="font-mono text-[13px] text-accent hover:text-accent-hover hover:underline">
-          {{ s.eval_name ?? s.run_id }}
+    <ul class="rounded-md border border-surface-border-subtle overflow-hidden">
+      <li v-for="s in siblings" :key="s.run_id">
+        <RouterLink
+          :to="`/runs/${s.run_id}`"
+          class="flex items-center gap-2.5 px-3 py-2 text-sm border-b border-surface-border-subtle last:border-b-0 hover:bg-surface-raised"
+        >
+          <StatusChip :status="s.status" />
+          <span class="font-mono text-[13px] text-accent">{{ s.eval_name ?? s.run_id }}</span>
+          <span class="text-xs text-text-muted ml-auto">{{ formatTimestamp(s.created_at) }}</span>
         </RouterLink>
-        <span class="text-xs text-text-muted">{{ formatTimestamp(s.created_at) }}</span>
       </li>
     </ul>
   </div>

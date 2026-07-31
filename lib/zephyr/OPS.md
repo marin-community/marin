@@ -82,6 +82,27 @@ for entry in task_logs:
     print(msg)
 ```
 
+### Stale Pipeline Warning
+
+Grafana evaluates `ZephyrPipelineProgressStalled` once each minute. The rule
+becomes pending after 45 minutes without a shard completion. The warning
+becomes active after five more minutes.
+
+The coordinator publishes `zephyr_progress_time_seconds` through Telltale. The
+metric resets at each stage start and after each shard completion. The metric
+includes the root job ID and the Zephyr execution ID. Grafana removes a
+producer when its most recent row is more than 90 seconds old.
+
+This rule is a passive warning. It does not send a notification, restart a job,
+or kick a task. A valid long shard can activate the warning. The warning means
+that no shard completed during the time limit. It does not mean that item,
+byte, CPU, or memory values stayed constant.
+
+Use `get_status` to confirm the completed, in-flight, and queued shard counts.
+Then compare the per-worker counters and collect thread profiles from the
+in-flight workers. Do not restart or kick a task before you collect this
+evidence.
+
 ### Straggler Detection
 
 1. **Progress line**: `in-flight >> 0` with `queued == 0` means stragglers — no new work to assign, waiting on slow shards.

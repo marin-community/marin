@@ -22,7 +22,7 @@
       "name": "/test-user/cosched5-job",
       "ports_json": "[]",
       "preemption_policy": 0,
-      "priority_band": 0,
+      "priority_band": 2,
       "res_cpu_millicores": 1000,
       "res_device_json": "{}",
       "res_disk_bytes": 0,

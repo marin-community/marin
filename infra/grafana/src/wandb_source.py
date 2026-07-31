@@ -93,7 +93,6 @@ class WandbSource:
                         {
                             "chart": chart_title,
                             "run": run,
-                            "run_state": run_data.get("state") or "unknown",
                             "tokens": tokens,
                             "value": value,
                             "report_title": report_title,

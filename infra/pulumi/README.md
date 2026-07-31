@@ -20,8 +20,41 @@ federation-egress static IPs (`GcpStaticAddresses`, the GCP arm's first slice).
 
 Beyond cluster prerequisites, the `iac` package also carries the reusable *service* components
 other `infra/<service>/` Pulumi projects build on: `iac.gcp.cloud_run` (IAP-gated Cloud Run,
-used by `infra/grafana`) and `iac.iris` (always-on Iris service jobs via a `local.Command`
-around the `iac.iris.deploy` CLI, used by `infra/ducky` and `infra/xprof`).
+used by `infra/echo`, `infra/evaldash`, and `infra/grafana`) and `iac.iris` (always-on Iris
+service jobs via a `local.Command` around the `iac.iris.deploy` CLI, used by `infra/ducky` and
+`infra/xprof`). Every `CloudRunService` grants `roles/iap.httpsResourceAccessor` to the
+OpenAthena Workspace domain and the Loom VM service account. It also registers the shared Marin
+desktop OAuth client as a programmatic audience. The `iap_members` and
+`iap_programmatic_clients` arguments are only for service-specific exceptions.
+
+### Cloud Run IAP access
+
+For an access report on a component-managed service, compare the live IAP policy and settings:
+
+```bash
+gcloud iap web get-iam-policy \
+  --project=hai-gcp-models \
+  --resource-type=cloud-run \
+  --region=us-central1 \
+  --service=marin-evaldash
+gcloud iap settings get \
+  --project=hai-gcp-models \
+  --resource-type=cloud-run \
+  --region=us-central1 \
+  --service=marin-evaldash
+```
+
+`domain:openathena.ai` and
+`serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com` must be present. The settings
+must include `rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT` under `programmaticClients`, so human
+CLIs and service accounts use the same audience across Cloud Run sites and Iris.
+
+An unauthenticated `curl -I` to each vanity host shows the browser OAuth client in the redirect
+URL. IAP error code 9 is a failed OAuth redirect, not an IAM denial. If the policy and client
+match a working site, the request failed before Cloud Run and will not appear in application
+logs. An existing IAP cookie also lets one site work without exercising a fresh OAuth redirect.
+Retry the failing login in a private window; for a persistent code 9, capture the browser
+redirect trace and follow [Google's IAP troubleshooting guide](https://cloud.google.com/iap/docs/faq#error_codes).
 
 GitHub organization and repository resources live in the independent
 [`github`](github/README.md) Pulumi project. Its stack YAML declares existing Actions secrets
@@ -100,11 +133,6 @@ or `delete` on a NodePool is not** — it deprovisions a reserved bare-metal fle
 reconcile the program to match reality; never `pulumi up` through a destructive NodePool diff.
 Once the preview is clean, `pulumi up`.
 
-`__main__.py` requires `KUBECONFIG` but does not pass it as a provider input, so Pulumi state
-contains neither the machine-local path nor the credential contents. The provider still uses
-the cluster's declared `platform.coreweave.kube_context`; it never relies on the kubeconfig's
-current context.
-
 ### Adopting a new cluster
 
 A cluster whose RBAC/NodePools/Kueue/Traefik already exist live (the normal case — the CKS
@@ -142,7 +170,7 @@ pulumi up       # normal run, adopt=false now — creates the remaining componen
 ```
 
 A CoreWeave token rotation creates a new Managed Auth username (`cwtoken-…`). Append it to
-`grafana_observer_rbac.usernames` in all three cluster configs and run a normal preview/up for
+`grafana_observer_rbac.usernames` in all four cluster configs and run a normal preview/up for
 each stack before switching Grafana to the new token. Remove the old username and update the
 stacks again only after the new Grafana revision passes its bridge checks.
 
@@ -167,7 +195,10 @@ already provisioned:
 
 ## CI preview
 
-`.github/workflows/ops-iac-preview.yaml` posts `pulumi preview` for every stack as a PR comment.
+`.github/workflows/ops-iac-preview.yaml` runs `pulumi preview` for every stack in parallel and
+posts one aggregated PR comment (status list plus per-stack diffs). Manual
+`workflow_dispatch` accepts an optional `pr_number` to preview that PR's head and
+comment there; omit it for a drift check against the selected ref with no comment.
 **CI never runs `pulumi up`** — see `spec.md §9`. It authenticates as
 `pulumi-ci@hai-gcp-models.iam.gserviceaccount.com`, granted preview-only (decrypt/read, never
 write) access in [`infra/permissions`](../permissions/README.md).

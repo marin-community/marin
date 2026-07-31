@@ -115,7 +115,7 @@ Then route the cluster's pulls through it by adding the repo to
 gcloud artifacts repositories list --project=hai-gcp-models --filter="mode=REMOTE_REPOSITORY"
 
 # Test pull-through
-docker pull us-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-worker:latest
+docker pull us-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-worker:<git-sha>-amd64
 docker pull us-docker.pkg.dev/hai-gcp-models/docker-mirror/library/ubuntu:24.04
 ```
 

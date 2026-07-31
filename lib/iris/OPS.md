@@ -54,6 +54,13 @@ iris cluster dashboard-proxy        # local proxy to remote controller (no tunne
 
 ### Controller Restart
 
+For a rollout across more than one cluster, use
+[the `deploy-iris-controllers` skill](../../.agents/skills/deploy-iris-controllers/SKILL.md).
+It fixes the order (`marin-dev`, `marin`, then CoreWeave smallest first), puts a
+human gate on every step, and drives `scripts/iris/rollout_controllers.py` for
+the credential preflight, the before/after snapshots, the 5-minute watch, and a
+one-job smoke test.
+
 `iris cluster controller restart` restarts the controller only (seconds of downtime, workers unaffected).
 `iris cluster restart` tears down **everything** — controller + all workers. All jobs die. **Never run the full `iris cluster restart` without explicit user approval.**
 
@@ -65,7 +72,7 @@ The restart preflight resolves operator-side controller secrets before taking a 
 
 If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (restores from last periodic checkpoint; some recent state may be lost).
 
-**Restart builds and deploys your local working tree.** `iris cluster controller restart` builds the images required by the configured runtime from your **current checkout — HEAD plus any staged/unstaged changes** (`get_git_sha()` is a tree-content hash), pushes them (`:<hash>` and `:latest`), pins the deploy to `:<hash>` in memory, and restarts the container in place. So the restart ships whatever code is in your tree; there is no separate image-rebuild step. To deploy a merged controller fix: update your checkout (`git pull`, or check out the fix) **then** restart — restarting from a stale checkout ships that stale code. Always confirm the controller is running the `:<git-short-hash>` you expect (`iris cluster status`), not just that it came back up; a stale-checkout deploy once cost ~5 red-canary days (`.agents/ops/2026-06-08-canary-ferry-reservation-taint-timeouts.md`).
+**Restart builds and deploys your local working tree.** `iris cluster controller restart` builds the images required by the configured runtime from your **current checkout — HEAD plus any staged/unstaged changes** (`get_git_sha()` is a tree-content hash), pushes them, pins the deploy to `:<hash>` in memory, and restarts the container in place. So the restart ships whatever code is in your tree; there is no separate image-rebuild step. To deploy a merged controller fix: update your checkout (`git pull`, or check out the fix) **then** restart — restarting from a stale checkout ships that stale code. Always confirm the controller is running the `:<git-short-hash>` you expect (`iris cluster status`), not just that it came back up; a stale-checkout deploy once cost ~5 red-canary days ([incident record](https://echo.oa.dev/wiki/14)).
 
 Restarts default to the fast Rust profile, which skips LTO and reduces native link time. Kubernetes clusters build the controller and task images for amd64+arm64 because task Pods run the controller image as the log-shipper sidecar; they skip the unused worker image. VM clusters build amd64 controller, worker, and task images. `--image-platform` overrides only the task image, for example when a Kubernetes dev cluster has amd64 nodes only:
 
@@ -511,6 +518,56 @@ subpath and does not reach the controller's finelog server.
 | Task retrying | `iris job summary /user/job` — per-task state and exit codes; `iris job logs /user/job` for the per-attempt errors. |
 | Task failed with exit 137 / suspected OOM | `iris job summary /user/job` — per-task peak memory + exit code. If most shards peak near the container memory limit, raise `--memory` on resubmit. |
 | Dashboard unreachable | Verify tunnel is alive. `curl -sf http://localhost:10000/health`. |
+| `ArchMismatchImageExecuted` alert, or tasks die instantly with exit 255 | See [Image architecture mismatch](#image-architecture-mismatch). |
+
+### Image architecture mismatch
+
+An image built for the wrong CPU architecture fails at exec. The pod log shows
+`exec /usr/local/bin/python: exec format error` and the container exits 255 in under a
+second. The `ArchMismatchImageExecuted` alert reports an `evidence` column on
+`/k8s/arch_mismatch`: `message` means the kubelet captured that text and the mismatch is
+confirmed, `signature` means only the exit-255-in-under-a-second pattern matched, which an
+unrelated instant failure also produces. Confirm a `signature` row before acting.
+
+Only containers set to `terminationMessagePolicy: FallbackToLogsOnError` yield `message`
+evidence — Iris sets it on `task` and `stage-workdir`. Everything else reports `signature`.
+
+Confirm the tag really lost the architecture. A multi-arch tag is an index listing every
+platform:
+
+```bash
+TOK=$(curl -s "https://ghcr.io/token?scope=repository%3Amarin-community%2Firis-task%3Apull&service=ghcr.io" \
+  | python3 -c "import json,sys; print(json.load(sys.stdin)['token'])")
+curl -s -H "Authorization: Bearer $TOK" \
+  -H "Accept: application/vnd.oci.image.index.v1+json" \
+  https://ghcr.io/v2/marin-community/iris-task/manifests/latest \
+  | python3 -c "import json,sys; d=json.load(sys.stdin); print([m.get('platform') for m in d.get('manifests',[])] or 'SINGLE-ARCH')"
+```
+
+A `platform: unknown` entry is buildx provenance, not a real architecture. If `linux/arm64`
+is missing, the tag itself is broken — rebuild and push a two-platform index before
+touching any node. Evicting first only re-pulls the same broken image.
+
+Then check what the node actually cached, since `imagePullPolicy: IfNotPresent` means a
+node never refreshes a tag it already holds:
+
+```bash
+kubectl --context <ctx> -n iris debug node/<node> --image=busybox --profile=sysadmin \
+  --attach=false -- chroot /host crictl inspecti ghcr.io/marin-community/iris-task:latest
+```
+
+Once the registry is confirmed good, drop the stale copy so the node re-pulls:
+
+```bash
+kubectl --context <ctx> -n iris debug node/<node> --image=busybox --profile=sysadmin \
+  --attach=false -- chroot /host crictl rmi ghcr.io/marin-community/iris-task:latest
+```
+
+Do not evict a node whose cached image still works unless the registry tag is confirmed
+good. On 2026-07-29 the only arm64 builds left in ghcr were the ones cached on the nodes;
+the tag had been overwritten with an amd64-only manifest, so an eviction would have been
+unrecoverable. Pinning the config to an index digest avoids both the drift and the
+overwrite.
 
 ## GCP (TPU) Operations
 
@@ -640,6 +697,60 @@ An established BGP session that advertises the public VIP, combined with an
 external TCP timeout, requires a CoreWeave route-export escalation. Restarting
 Iris or Traefik does not repair that layer.
 
+### CoreWeave kernel deadlock pending reboot
+
+`CoreWeaveNodeKernelDeadlock` means CoreWeave reported the structured node
+condition `KernelDeadlock=True`. The node lifecycle controller normally cordons
+the node and moves it toward `production-reboot`; tenant pods can block that
+transition even while `Ready=True`.
+
+Read the canonical kubeconfig and context from the cluster config, then inspect
+the condition and blockers:
+
+```bash
+kubectl --kubeconfig <kubeconfig> --context <context> get node <node> \
+  -o jsonpath='{range .status.conditions[*]}{.type}{"\t"}{.status}{"\t"}{.reason}{"\t"}{.message}{"\n"}{end}'
+kubectl --kubeconfig <kubeconfig> --context <context> get pods --all-namespaces \
+  --field-selector spec.nodeName=<node> -o wide
+kubectl --kubeconfig <kubeconfig> --context <context> get pdb --all-namespaces
+```
+
+Do not uncordon a node that CoreWeave cordoned. If `PendingPhaseState` names
+`production-reboot` and `CWActive` lists tenant Deployments, get operator
+approval before changing workloads. Record each owner's original replica count
+and pod template, then choose an action by workload semantics:
+
+| Blocker | Reboot-unblocking action |
+| --- | --- |
+| Stateless or leader-elected Deployment | Add one replica, wait for it to become Ready on a healthy node, then delete only the pod bound to the deadlocked node. The current cert-manager and Kueue controllers are in this class. |
+| Singleton controller with persistent state or no concurrency protection | Do not overlap replicas. Confirm that its state is durable, accept the control-plane outage, and scale it to zero. The Iris controller uses a `Recreate` strategy and a PVC, so it belongs here. |
+| Availability service with a PodDisruptionBudget or hard placement constraints | First provide compatible capacity. If that is unavailable, use an operator-approved temporary placement change and wait for a Ready replacement. Scale to zero only with explicit approval for the resulting outage and after confirming that recovery does not depend on the service. Traefik belongs here. |
+| Running Iris task pod | Preserve the Iris state transition, not the pod: obtain the canonical attempt ID from `IRIS_TASK_ID`, stop the parent job or mark the attempt preempted, then delete the exact pod normally so Iris can retry it. Node-local task images and caches are disposable. |
+| Completed or failed Iris task pod | Delete the exact pod normally. It does not need replacement capacity. |
+| StatefulSet, local-volume workload, unmanaged pod, or unknown owner | Stop and escalate. Do not infer that another replica is safe. |
+
+A PodDisruptionBudget states the desired availability but does not prove that
+replicas may run concurrently. Scaling an owner to zero also bypasses the
+eviction protection that operators often expect from a PodDisruptionBudget, so
+treat it as an explicit outage decision. Change one owner at a time and confirm
+that `CWActive` drops the blocker before continuing. Do not delete provider
+DaemonSets or use `kubectl drain --force`.
+
+If a replacement remains Pending because no healthy node satisfies its required
+node affinity or pod anti-affinity, stop before deleting the original pod.
+Provision compatible capacity when possible. Record and restore any temporary
+placement change after the reboot. Use
+`.agents/skills/recover-stuck-k8s-pod/SKILL.md` for the exact Iris task retry
+sequence or when a bound pod does not terminate.
+
+CoreWeave should continue the pending reboot without a separate Iris restart.
+Before restoring workloads, verify that the provider operation completed, the
+node boot ID changed, `KernelDeadlock=False`, `Ready=True`, CoreWeave returned
+the node lifecycle state to `production`, and both the cordon and any
+`node.coreweave.cloud/reserved` taint are gone. Restore singleton controllers
+and original replica counts first, wait for them to become Ready, then remove
+temporary capacity or placement changes.
+
 ## CI Workflows
 
 | Workflow | Trigger | What |
@@ -648,7 +759,7 @@ Iris or Traefik does not repair that layer.
 | `marin-canary-ferry-coreweave.yaml` | Daily 10AM UTC | GPU canary on CW — shares `iris-ci` controller + H100 nodepool with `iris-smoke-coreweave.yaml` (concurrency group `iris-coreweave-ci-shared`) |
 | `iris-smoke-gcp.yaml` | PRs touching `lib/iris/` | GCP smoke test (ephemeral cluster) |
 | `iris-smoke-coreweave.yaml` | PRs touching `lib/iris/` | CW integration tests (warm cluster) |
-| `ops-docker-images.yaml` | `workflow_dispatch` / Sun 02:00 UTC | Rebuilds + pushes `iris-{controller,worker,task}:latest` to GHCR (see Controller Restart) |
+| `ops-docker-images.yaml` | `workflow_dispatch` / Sun 02:00 UTC | Rebuilds + pushes SHA-pinned `iris-{controller,worker,task}` images to GHCR (see Controller Restart) |
 
 ```bash
 # Trigger manually

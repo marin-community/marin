@@ -100,6 +100,44 @@ land in evaldash like every other eval.
 uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals tb2-lite
 ```
 
+Use `--harbor-config` to launch a Harbor `JobConfig` without adding it to `EVALS`:
+
+```bash
+# Serve Qwen3-8B and run the checked-in two-task AIME Harbor policy.
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-8b \
+  --evals gsm8k-smoke \
+  --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml \
+  --limit 2
+```
+
+`--harbor-config` is repeatable and additive with `--evals`, so one served model can run registry
+entries and file-backed Harbor policies in the same launch. When neither option is supplied, the
+launcher uses the `smoke` suite; a file-only launch does not add that default. The launcher validates
+all selected YAML and JSON files against Marin's pinned Harbor `JobConfig` before opening an Iris client.
+File-backed launches support one agent and one dataset; multiple agents, multiple datasets, and
+explicit `tasks` are rejected.
+
+The pinned subprocess returns deterministic policy JSON, a SHA-256 digest, and dataset/agent/environment
+metadata. Marin treats the JSON as opaque. At execution it supplies a separate overlay for `job_name`,
+`jobs_dir`, the served model, endpoint, materialized dataset path, model-catalog kwargs, and `--limit`.
+The isolated driver applies that overlay to typed Harbor models and validates the complete effective job
+before calling Harbor. Policy agent kwargs override model-catalog kwargs; endpoint, model, output path,
+materialized source, and an explicit `--limit` are reserved runtime values.
+
+Write Hugging Face sources as `datasets[].name: hf://org/repository` with an optional `ref`; do not put
+an `hf://` URI in `datasets[].path`. Local `path` values must be relative to the config file, must name
+an existing directory inside the Marin workspace, and must be included in the Iris workspace bundle.
+The launcher records the workspace-relative path so the submitted worker resolves the same directory
+under its unpacked workspace. Absolute paths, unknown fields, malformed provider kwargs, and unsupported
+file extensions fail before Iris submission.
+
+Harbor and `harbor_config` are absent from Marin's environment and root lock. Both preflight and execution
+install the exact `marin.external_dependencies.HARBOR` revision in an isolated uv environment. Every
+Harbor record stores the deterministic source-policy digest in `eval.harbor.config_digest` and any
+Marin runtime task cap in `eval.harbor.task_limit`. A policy's own `n_tasks` remains represented by
+the digest.
+
 Daytona-backed definitions declare one experiment-owned credential specification. A launch first
 uses `DAYTONA_API_KEY` from its environment, then falls back to the `DAYTONA_EVAL_API_KEY` secret in
 the `hai-gcp-models` Google Secret Manager project. `DAYTONA_API_KEY` is the only supported
@@ -107,7 +145,10 @@ environment override; the old `DAYTONA_EVAL_API_KEY` environment alias is not re
 launcher resolves the declaration immediately before Iris submission, and the isolated Harbor
 subprocess receives that key without inheriting the orchestrator's other credentials.
 
-The Grug OpenCode profile keeps its model and Harbor policy on the unified path:
+Every Harbor catalog policy is YAML under `experiments/evaluation/configs/harbor/`, named after its
+`EVALS` key. Python retains the catalog and suite membership, Evalchemy definitions, model and hardware
+selection, runtime task caps, and secret source declarations. The Grug OpenCode profile runs its YAML
+policy through the same path:
 
 ```bash
 # One OpenCode trial with the step-1903 Grug SFT on H100x8.
@@ -144,8 +185,9 @@ Every explicit `serve` value wins over what `auto_serve_overrides` derives from 
 `config.json`; `generation.extra_gen_kwargs` (e.g. `skip_special_tokens=false` for a thinking model)
 rides on `--gen_kwargs`.
 
-Add an `EvalchemyDefinition` or `HarborDefinition` to `EVALS` in `evals.py`, then add its key to
-`SUITES` when it belongs in a named group. Task flags that matter for served evals:
+Add an `EvalchemyDefinition` to `EVALS` in `evals.py`, or add a same-named Harbor `JobConfig` YAML
+under `configs/harbor/` and reference it with `harbor_definition()`. Add the key to `SUITES` when it
+belongs in a named group. Task flags that matter for served evals:
 `generation` routes the task through the chat API for chat-template models (MCQ tasks always use
 completions, which alone can echo prompt logprobs); `unsafe_code` passes lm-eval's
 `--confirm_run_unsafe_code`; and `completion_only` pins a generation task to the completions API.

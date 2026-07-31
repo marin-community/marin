@@ -33,7 +33,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Iterator
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from typing import Any, TypeVar
 
 import cloudpickle
@@ -234,6 +234,76 @@ def _periodic_sampler(
             logger.warning("Failed to sample/emit process stats", exc_info=True)
 
 
+@contextmanager
+def _shard_stats_session(
+    ctx: _InProcessWorkerContext,
+    task: ShardTask,
+    execution_id: str,
+    stats_writer: StatsWriter,
+    *,
+    sampler_thread_name: str,
+) -> Iterator[float]:
+    """Emit START/END worker stats and run the resource sampler for one shard.
+
+    Shared by ``InlineRunner.execute`` and the ``SubprocessRunner`` child: both
+    need the same lifecycle around the shard body — prime ``psutil`` so
+    ``cpu_percent`` has a baseline, record the CPU-time origin so samples are
+    per-shard deltas, emit the START row, run the periodic sampler, then take a
+    final sample and emit END (or FAILED if the body raised).
+
+    Yields the shard's monotonic start time, which callers reuse for their own
+    elapsed-time reporting.
+    """
+    proc = psutil.Process()
+    proc.cpu_percent()  # prime so subsequent calls have a baseline
+    cpu_times_at_start = proc.cpu_times()
+    cpu_s_at_start = cpu_times_at_start.user + cpu_times_at_start.system
+    start_time = time.monotonic()
+
+    stats_writer.emit_worker_stat(
+        task.stage_name, task.shard_idx, execution_id, ZephyrWorkerStatStatus.START, start_time, ctx.get_counters()
+    )
+
+    stop_event = threading.Event()
+    sampler = threading.Thread(
+        target=_periodic_sampler,
+        kwargs={
+            "stop_event": stop_event,
+            "ctx": ctx,
+            "interval": SUBPROCESS_STATS_INTERVAL,
+            "cpu_s_at_start": cpu_s_at_start,
+            "stats_writer": stats_writer,
+            "task": task,
+            "execution_id": execution_id,
+            "start_time": start_time,
+            "proc": proc,
+        },
+        daemon=True,
+        name=sampler_thread_name,
+    )
+    sampler.start()
+
+    failed = True  # cleared only when the body completes without raising
+    try:
+        yield start_time
+        failed = False
+    finally:
+        stop_event.set()
+        sampler.join(timeout=2.0)
+        if not sampler.is_alive():
+            # Final reading so the END row reflects the shard's true peak rather
+            # than the last periodic tick. Telemetry must not fail a shard that
+            # already produced its result, so a sampling error is logged only.
+            try:
+                _sample_process_stats(cpu_s_at_start, proc)
+            except Exception:
+                logger.warning("Failed to take final process stats sample", exc_info=True)
+        status = ZephyrWorkerStatStatus.FAILED if failed else ZephyrWorkerStatStatus.END
+        stats_writer.emit_worker_stat(
+            task.stage_name, task.shard_idx, execution_id, status, start_time, ctx.get_counters()
+        )
+
+
 def _run_stage_with_ctx(
     task: ShardTask,
     chunk_prefix: str,
@@ -293,48 +363,13 @@ class InlineRunner:
         self._ctx = ctx
         worker_token = _worker_ctx_var.set(ctx)
         _set_counter_aggregations()
-        stop_event = threading.Event()
         stats_writer = StatsWriter.connect()
-        proc = psutil.Process()
-        start_time = time.monotonic()
-        cpu_times_at_start = proc.cpu_times()
-        cpu_s_at_start = cpu_times_at_start.user + cpu_times_at_start.system
-        proc.cpu_percent()  # prime so subsequent calls have a baseline
-        stats_writer.emit_worker_stat(
-            task.stage_name, task.shard_idx, execution_id, ZephyrWorkerStatStatus.START, start_time, ctx.get_counters()
-        )
-        sampler = threading.Thread(
-            target=_periodic_sampler,
-            kwargs={
-                "stop_event": stop_event,
-                "ctx": ctx,
-                "interval": SUBPROCESS_STATS_INTERVAL,
-                "cpu_s_at_start": cpu_s_at_start,
-                "stats_writer": stats_writer,
-                "task": task,
-                "execution_id": execution_id,
-                "start_time": start_time,
-                "proc": proc,
-            },
-            daemon=True,
-            name="zephyr-inline-stats-sampler",
-        )
-        sampler.start()
-        _task_failed = False
         try:
-            result = _run_stage_with_ctx(task, chunk_prefix, execution_id)
-        except Exception:
-            _task_failed = True
-            raise
+            with _shard_stats_session(
+                ctx, task, execution_id, stats_writer, sampler_thread_name="zephyr-inline-stats-sampler"
+            ):
+                result = _run_stage_with_ctx(task, chunk_prefix, execution_id)
         finally:
-            stop_event.set()
-            sampler.join(timeout=2.0)
-            if not sampler.is_alive():
-                _sample_process_stats(cpu_s_at_start, proc)
-            _status = ZephyrWorkerStatStatus.FAILED if _task_failed else ZephyrWorkerStatStatus.END
-            stats_writer.emit_worker_stat(
-                task.stage_name, task.shard_idx, execution_id, _status, start_time, ctx.get_counters()
-            )
             stats_writer.close()
             _worker_ctx_var.reset(worker_token)
             self._ctx = None

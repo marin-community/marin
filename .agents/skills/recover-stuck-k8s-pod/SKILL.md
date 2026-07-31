@@ -167,9 +167,9 @@ kubectl --kubeconfig <kubeconfig> --context <context> uncordon <node>
 ```
 
 Record the timeline, commands, canonical attempt, node, provider operation,
-collateral workloads, and verification evidence in
-`.agents/ops/YYYY-MM-DD-<slug>.md`. Extend the incident's existing record when
-one already exists.
+collateral workloads, and verification evidence in a tagged Echo incident entry
+with `write-ops-log`. Link the canonical Echo URL from the associated PR or
+issue.
 
 ## References
 

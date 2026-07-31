@@ -60,6 +60,7 @@ from iris.cluster.controller.native_proxy import (
     PROXY_DECISION_PATH,
     PROXY_METHODS,
     PROXY_PREFIX_HEADER,
+    PROXY_RELAY_TIMEOUT_SECONDS,
     PROXY_TIMEOUT_HEADER,
     UPSTREAM_AUTHORIZATION_HEADER,
     UPSTREAM_URL_HEADER,
@@ -252,9 +253,14 @@ class ControllerDashboard:
                 return JSONResponse({"error": "route not found"}, status_code=404)
 
             decision = _FederationDecision(**await request.json())
+            timeout_seconds = decision.timeout_seconds
+            if timeout_seconds is None:
+                timeout_seconds = (
+                    PROXY_RELAY_TIMEOUT_SECONDS if decision.direction == "relay" else DEFAULT_PROXY_TIMEOUT_SECONDS
+                )
             headers = {
                 PROXY_PREFIX_HEADER: decision.proxy_prefix,
-                PROXY_TIMEOUT_HEADER: str(decision.timeout_seconds or DEFAULT_PROXY_TIMEOUT_SECONDS),
+                PROXY_TIMEOUT_HEADER: str(timeout_seconds),
             }
             if decision.direction == "inbound":
                 if (

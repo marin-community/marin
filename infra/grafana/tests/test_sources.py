@@ -318,7 +318,6 @@ def test_wandb_points_follow_report_runset_and_drop_null_metric_rows():
         {
             "chart": "MFU (%)",
             "run": "hero",
-            "run_state": "running",
             "tokens": 10,
             "value": 0.42,
             "report_title": "Hero report",

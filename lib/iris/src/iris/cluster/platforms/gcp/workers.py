@@ -88,11 +88,7 @@ def _spawn_bootstrap_thread(
                     handle.slice_id,
                     cleanup_error,
                 )
-            with handle._bootstrap_lock:
-                handle._bootstrap_state = CloudSliceState.FAILED
-                # Keep the reason (e.g. the create-LRO "no more capacity" stockout)
-                # so describe() can surface it and the autoscaler can classify it.
-                handle._bootstrap_error = str(e)
+            handle.bootstrap.mark_failed(str(e))
 
     threading.Thread(target=_run, name=f"bootstrap-{handle.slice_id}", daemon=True).start()
 
@@ -959,8 +955,7 @@ def _run_tpu_bootstrap(
         )
 
     logger.info("Bootstrap completed for TPU slice %s (%d workers)", handle.slice_id, len(workers))
-    with handle._bootstrap_lock:
-        handle._bootstrap_state = CloudSliceState.READY
+    handle.bootstrap.mark_ready()
 
 
 def _fetch_bootstrap_logs(gcp_service: GcpService, handle: GcpSliceHandle) -> None:
@@ -970,7 +965,7 @@ def _fetch_bootstrap_logs(gcp_service: GcpService, handle: GcpSliceHandle) -> No
     log_filter = (
         f'resource.type="gce_instance" '
         f'textPayload:"[iris-init]" '
-        f'labels."compute.googleapis.com/resource_name":"{handle._slice_id}" '
+        f'labels."compute.googleapis.com/resource_name":"{handle.slice_id}" '
         f'timestamp>="{cutoff_str}"'
     )
     texts = gcp_service.logging_read(log_filter, limit=200)
@@ -1059,5 +1054,4 @@ def _run_vm_slice_bootstrap(
         raise InfraError(f"VM slice {handle.slice_id} bootstrap did not complete within {bootstrap_timeout}s")
 
     logger.info("Bootstrap completed for VM slice %s", handle.slice_id)
-    with handle._bootstrap_lock:
-        handle._bootstrap_state = CloudSliceState.READY
+    handle.bootstrap.mark_ready()

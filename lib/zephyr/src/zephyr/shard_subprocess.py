@@ -26,20 +26,18 @@ from contextlib import suppress
 from typing import Any
 
 import cloudpickle
-import psutil
 import pyarrow as pa
 from rigging.log_setup import configure_logging
 
 from zephyr.runners import (
     SUBPROCESS_STATS_INTERVAL,
     _InProcessWorkerContext,
-    _periodic_sampler,
     _run_stage_with_ctx,
-    _sample_process_stats,
     _set_counter_aggregations,
+    _shard_stats_session,
 )
 from zephyr.stage_io import _ensure_picklable_exception, _stage_throughput
-from zephyr.stats import StatsWriter, ZephyrWorkerStatStatus
+from zephyr.stats import StatsWriter
 from zephyr.worker_context import _worker_ctx_var
 
 logger = logging.getLogger(__name__)
@@ -105,83 +103,60 @@ def _execute_shard_subprocess(task_file: str, result_file: str) -> None:
     configure_logging(level=logging.INFO)
 
     counter_file = f"{result_file}.counters"
-    stop_event = threading.Event()
-    flusher: threading.Thread | None = None
-    status_logger: threading.Thread | None = None
-    sampler: threading.Thread | None = None
     result_or_error: Any
     ctx: _InProcessWorkerContext | None = None
-    stats_writer: StatsWriter = StatsWriter(None)
-    proc = psutil.Process()
-    proc.cpu_percent()
-    start_time = 0.0
-    cpu_s_at_start = 0.0
-    _task_failed = True  # cleared to False only on clean _run_stage_with_ctx completion
     try:
         with open(task_file, "rb") as f:
             task, chunk_prefix, execution_id, finelog_url = cloudpickle.load(f)
 
-        start_time = time.monotonic()
-        _cpu = proc.cpu_times()
-        cpu_s_at_start = _cpu.user + _cpu.system
+        stats_writer = StatsWriter.connect(finelog_url) if finelog_url else StatsWriter(None)
+        try:
+            ctx = _InProcessWorkerContext(
+                chunk_prefix, execution_id, task.stage_name, task_memory_bytes=task.cost.memory
+            )
+            _worker_ctx_var.set(ctx)
+            _set_counter_aggregations()
 
-        if finelog_url:
-            stats_writer = StatsWriter.connect(finelog_url)
+            with _shard_stats_session(
+                ctx, task, execution_id, stats_writer, sampler_thread_name="zephyr-subprocess-stats-sampler"
+            ) as start_time:
+                # Threads unique to the child: the parent polls the counter file
+                # for live heartbeat counters, and the shard has no coordinator
+                # of its own to log progress.
+                stop_event = threading.Event()
+                flusher = threading.Thread(
+                    target=_periodic_counter_writer,
+                    args=(stop_event, ctx, counter_file, SUBPROCESS_STATS_INTERVAL),
+                    daemon=True,
+                    name="zephyr-subprocess-counter-flusher",
+                )
+                flusher.start()
 
-        ctx = _InProcessWorkerContext(chunk_prefix, execution_id, task.stage_name, task_memory_bytes=task.cost.memory)
-        _worker_ctx_var.set(ctx)
-        _set_counter_aggregations()
+                status_logger = threading.Thread(
+                    target=_periodic_status_logger,
+                    args=(
+                        stop_event,
+                        ctx,
+                        task.stage_name,
+                        execution_id,
+                        task.shard_idx,
+                        task.total_shards,
+                        start_time,
+                        SUBPROCESS_STATS_INTERVAL,
+                    ),
+                    daemon=True,
+                    name="zephyr-subprocess-status-logger",
+                )
+                status_logger.start()
 
-        shard_monotonic_start = time.monotonic()
-        stats_writer.emit_worker_stat(
-            task.stage_name, task.shard_idx, execution_id, ZephyrWorkerStatStatus.START, start_time, ctx.get_counters()
-        )
-
-        flusher = threading.Thread(
-            target=_periodic_counter_writer,
-            args=(stop_event, ctx, counter_file, SUBPROCESS_STATS_INTERVAL),
-            daemon=True,
-            name="zephyr-subprocess-counter-flusher",
-        )
-        flusher.start()
-
-        status_logger = threading.Thread(
-            target=_periodic_status_logger,
-            args=(
-                stop_event,
-                ctx,
-                task.stage_name,
-                execution_id,
-                task.shard_idx,
-                task.total_shards,
-                shard_monotonic_start,
-                SUBPROCESS_STATS_INTERVAL,
-            ),
-            daemon=True,
-            name="zephyr-subprocess-status-logger",
-        )
-        status_logger.start()
-
-        sampler = threading.Thread(
-            target=_periodic_sampler,
-            kwargs={
-                "stop_event": stop_event,
-                "ctx": ctx,
-                "interval": SUBPROCESS_STATS_INTERVAL,
-                "cpu_s_at_start": cpu_s_at_start,
-                "stats_writer": stats_writer,
-                "task": task,
-                "execution_id": execution_id,
-                "start_time": start_time,
-                "proc": proc,
-            },
-            daemon=True,
-            name="zephyr-subprocess-stats-sampler",
-        )
-        sampler.start()
-
-        result_or_error = _run_stage_with_ctx(task, chunk_prefix, execution_id)
-        _task_failed = False
+                try:
+                    result_or_error = _run_stage_with_ctx(task, chunk_prefix, execution_id)
+                finally:
+                    stop_event.set()
+                    flusher.join(timeout=2.0)
+                    status_logger.join(timeout=2.0)
+        finally:
+            stats_writer.close()
     except Exception as e:
         # Cloudpickling an exception drops ``__traceback__``, so a naive
         # parent re-raise would otherwise show only the parent stack at the
@@ -194,24 +169,6 @@ def _execute_shard_subprocess(task_file: str, result_file: str) -> None:
         # does not match its args) would otherwise revive into a TypeError when
         # the parent loads the result file, masking the real failure.
         result_or_error = _ensure_picklable_exception(e)
-    finally:
-        stop_event.set()
-        if flusher is not None and flusher.is_alive():
-            flusher.join(timeout=2.0)
-        if status_logger is not None and status_logger.is_alive():
-            status_logger.join(timeout=2.0)
-        if sampler is not None and sampler.is_alive():
-            sampler.join(timeout=2.0)
-        if ctx is not None:
-            if sampler is None or not sampler.is_alive():
-                with suppress(Exception):
-                    _sample_process_stats(cpu_s_at_start, proc)
-            _status = ZephyrWorkerStatStatus.FAILED if _task_failed else ZephyrWorkerStatStatus.END
-            with suppress(Exception):
-                stats_writer.emit_worker_stat(
-                    task.stage_name, task.shard_idx, execution_id, _status, start_time, ctx.get_counters()
-                )
-        stats_writer.close()
 
     with open(result_file, "wb") as f:
         counters_out = dict(ctx._counters) if ctx is not None else {}

@@ -24,6 +24,7 @@ from iris.cluster.config import (
     WorkerConfig,
 )
 from iris.cluster.platforms._worker_base import RemoteExecWorkerBase
+from iris.cluster.platforms.bootstrap import SliceBootstrap, slice_status_with_bootstrap
 from iris.cluster.platforms.gcp.worker_bootstrap import build_worker_bootstrap_script
 from iris.cluster.platforms.remote_exec import DirectSshRemoteExec
 from iris.cluster.platforms.types import (
@@ -124,11 +125,7 @@ class ManualSliceHandle:
         self._ssh_connections = _ssh_connections
         self._on_terminate = _on_terminate
         self._terminated = False
-        self._bootstrapping = _bootstrapping
-        # Bootstrap state: None means bootstrap not yet completed.
-        # Set by the provider's internal bootstrap thread.
-        self._bootstrap_state: CloudSliceState | None = None
-        self._bootstrap_lock = threading.Lock()
+        self.bootstrap = SliceBootstrap(bootstrapping=_bootstrapping)
 
     @property
     def slice_id(self) -> str:
@@ -163,22 +160,10 @@ class ManualSliceHandle:
             for i, (host, ssh) in enumerate(zip(self._hosts, self._ssh_connections, strict=True))
         ]
 
-        # Composite state: if bootstrap was requested, reflect its progress
-        if self._bootstrapping:
-            with self._bootstrap_lock:
-                bs = self._bootstrap_state
-            if bs is None:
-                state = CloudSliceState.BOOTSTRAPPING
-            elif bs == CloudSliceState.READY:
-                state = CloudSliceState.READY
-            elif bs == CloudSliceState.FAILED:
-                state = CloudSliceState.FAILED
-            else:
-                state = CloudSliceState.READY
-        else:
-            state = CloudSliceState.READY
-
-        return SliceStatus(state=state, worker_count=len(self._hosts), workers=workers)
+        # The hosts already exist, so the cloud side is always READY; only
+        # bootstrap progress can move the slice off READY.
+        cloud_status = SliceStatus(state=CloudSliceState.READY, worker_count=len(self._hosts), workers=workers)
+        return slice_status_with_bootstrap(cloud_status, self.bootstrap)
 
     def terminate(self, *, wait: bool = False) -> None:
         if self._terminated:
@@ -317,8 +302,7 @@ class ManualWorkerProvider:
                     _run_bootstrap(handle, worker_config)
                 except Exception as e:
                     logger.error("Bootstrap failed for slice %s: %s", handle.slice_id, e)
-                    with handle._bootstrap_lock:
-                        handle._bootstrap_state = CloudSliceState.FAILED
+                    handle.bootstrap.mark_failed(str(e))
 
             threading.Thread(
                 target=_bootstrap_worker,
@@ -484,5 +468,4 @@ def _run_bootstrap(
         )
 
     logger.info("Bootstrap completed for slice %s (%d workers)", handle.slice_id, len(workers))
-    with handle._bootstrap_lock:
-        handle._bootstrap_state = CloudSliceState.READY
+    handle.bootstrap.mark_ready()

@@ -1,0 +1,153 @@
+name: "Ops - External Dependency Update"
+
+on:
+  schedule:
+    - cron: "0 9 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: ops-external-dependencies
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      BRANCH: automation/external-dependencies
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      TITLE: "[dependencies] Advance external runtimes"
+    steps:
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.NIGHTSHIFT_APP_ID }}
+          private-key: ${{ secrets.NIGHTSHIFT_APP_PRIVATE_KEY }}
+
+      - name: Checkout default branch
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch }}
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Prepare update branch
+        id: prepare
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$DEFAULT_BRANCH"
+          pr_url=$(gh pr list \
+            --head "$BRANCH" \
+            --base "$DEFAULT_BRANCH" \
+            --state open \
+            --json url \
+            --jq '.[0].url // ""')
+
+          set +e
+          git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null
+          branch_status=$?
+          set -e
+          if [[ "$branch_status" == "0" ]]; then
+            git fetch origin "$BRANCH"
+            echo "force_push=true" >> "$GITHUB_OUTPUT"
+          elif [[ "$branch_status" == "2" ]]; then
+            echo "force_push=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Could not inspect origin/$BRANCH"
+            exit "$branch_status"
+          fi
+
+          git switch -C "$BRANCH" "origin/$DEFAULT_BRANCH"
+          echo "pr_url=$pr_url" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve external dependency heads
+        id: update
+        env:
+          PR_BODY: ${{ runner.temp }}/external-dependencies.md
+          UV_CACHE_DIR: ${{ runner.temp }}/uv-cache
+        run: |
+          set -euo pipefail
+          uv run config/update-external.py --summary-file "$PR_BODY"
+          cat "$PR_BODY" >> "$GITHUB_STEP_SUMMARY"
+
+          changed=$(git diff --name-only)
+          unexpected=$(comm -23 \
+            <(printf '%s\n' "$changed" | sed '/^$/d' | sort) \
+            <(printf '%s\n' \
+              config/external/MarinSkyRL/uv.lock \
+              config/external/evalchemy/uv.lock \
+              config/external/harbor/uv.lock \
+              lib/marin/src/marin/external_dependencies.py \
+              pyproject.toml \
+              uv.lock | sort))
+          if [[ -n "$unexpected" ]]; then
+            echo "Unexpected files changed by config/update-external.py:"
+            echo "$unexpected"
+            exit 1
+          fi
+
+          if [[ -z "$changed" ]]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "All external dependency pins already match their configured heads."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or update pull request
+        if: steps.update.outputs.changed == 'true'
+        env:
+          FORCE_PUSH: ${{ steps.prepare.outputs.force_push }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_BODY: ${{ runner.temp }}/external-dependencies.md
+          PR_URL: ${{ steps.prepare.outputs.pr_url }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            config/external/MarinSkyRL/uv.lock \
+            config/external/evalchemy/uv.lock \
+            config/external/harbor/uv.lock \
+            lib/marin/src/marin/external_dependencies.py \
+            pyproject.toml \
+            uv.lock
+          git commit -m "$TITLE"
+
+          if [[ "$FORCE_PUSH" == "true" ]]; then
+            git push --force-with-lease origin "HEAD:$BRANCH"
+          else
+            git push origin "HEAD:$BRANCH"
+          fi
+
+          pr_url="$PR_URL"
+          if [[ -z "$pr_url" ]]; then
+            gh pr create \
+              --base "$DEFAULT_BRANCH" \
+              --head "$BRANCH" \
+              --title "$TITLE" \
+              --body-file "$PR_BODY" \
+              --label agent-generated \
+              --label dependencies >/dev/null
+            pr_url=$(gh pr view "$BRANCH" --json url --jq .url)
+          else
+            gh pr edit "$pr_url" \
+              --title "$TITLE" \
+              --body-file "$PR_BODY" \
+              --add-label agent-generated \
+              --add-label dependencies >/dev/null
+          fi
+          echo "Updated $pr_url"

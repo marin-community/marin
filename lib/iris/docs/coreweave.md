@@ -1190,7 +1190,7 @@ from iris.sdk import IrisClient, CoschedulingConfig
 client = IrisClient()
 client.submit(
     name="multi-node-training",
-    image="ghcr.io/marin-community/iris-task:latest",
+    image="ghcr.io/marin-community/iris-task:<git-sha>",
     command=["python", "train.py"],
     replicas=2,
     ports=["jax"],
@@ -1295,7 +1295,7 @@ The platform detects `ErrImagePull` / `ImagePullBackOff` and fails immediately.
 Verify the image exists and is public:
 
 ```bash
-docker pull ghcr.io/marin-community/iris-worker:latest
+docker pull ghcr.io/marin-community/iris-worker:<git-sha>-amd64
 ```
 
 ### CrashLoopBackOff

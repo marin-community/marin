@@ -672,11 +672,15 @@ def promote_for_dispatch(
     task_id: JobName,
     attempt_id: int,
     now_ms: int,
+    *,
+    priority_band: int,
 ) -> None:
     """Insert a fresh ``task_attempts`` row and promote the task for direct-provider dispatch.
 
     No worker is assigned; ``current_worker_id`` is left NULL so the
-    direct-provider path can track and dispatch the task via K8s.
+    direct-provider path can track and dispatch the task via K8s. The resolved
+    priority band is fixed for the attempt so persisted state matches the
+    dispatched request.
     """
     insert_attempt(
         tx,
@@ -693,6 +697,7 @@ def promote_for_dispatch(
             state=job_pb2.TASK_STATE_ASSIGNED,
             current_attempt_id=attempt_id,
             started_at_ms=func.coalesce(tasks_table.c.started_at_ms, now_ms),
+            priority_band=priority_band,
         )
     )
 
@@ -890,12 +895,18 @@ def insert_mirrored_job_config(
     job_id: JobName,
     name: str,
     resources: job_pb2.ResourceSpecProto,
+    priority_band: int,
 ) -> None:
     """Insert the ``job_config`` companion for a job mirrored from a peer.
 
-    Sets the name and the resources the peer reports; the columns describing how to
-    run the job (entrypoint, bundle, retries, timeouts) keep their defaults, since
-    the peer runs it and the parent only renders it.
+    Sets the name and the resources the peer reports. The columns describing how to
+    run the job (entrypoint, bundle, retries, timeouts) keep their defaults, since the
+    peer runs it and the parent only renders it.
+
+    ``priority_band`` is the parent's band, which is what the peer's own inheritance
+    resolves for this child unless the child overrode it — the sync summary carries no
+    band, so the parent cannot know. It is a display value: a mirrored row is stamped
+    with the peer cluster, so it never enters local scheduling, spend, or dispatch.
     """
     tx.execute(
         insert(job_config_table).values(
@@ -905,6 +916,7 @@ def insert_mirrored_job_config(
             res_memory_bytes=int(resources.memory_bytes),
             res_disk_bytes=int(resources.disk_bytes),
             res_device_json=proto_to_json(resources.device),
+            priority_band=priority_band,
         )
     )
 

@@ -51,6 +51,7 @@ class WikiFields:
 
     title: str
     use_when: str
+    tags: tuple[str, ...]
     body: str
 
 
@@ -73,14 +74,17 @@ def parse(text: str) -> OkfDocument:
 
 
 def parse_wiki(text: str) -> WikiFields:
-    """Parse an OKF wiki note into the title, use_when, and body a wiki write needs."""
+    """Parse an OKF wiki note into the fields a wiki write needs."""
     document = parse(text)
     title = str(document.frontmatter.get("title", "")).strip()
     use_when = str(document.frontmatter.get("use_when", "")).strip()
+    raw_tags = document.frontmatter.get("tags", [])
+    if not isinstance(raw_tags, list) or not all(isinstance(tag, str) for tag in raw_tags):
+        raise ValueError("OKF wiki note tags must be a YAML list of strings")
     missing = [name for name, value in (("title", title), ("use_when", use_when), ("body", document.body)) if not value]
     if missing:
         raise ValueError(f"OKF wiki note is missing: {', '.join(missing)}")
-    return WikiFields(title=title, use_when=use_when, body=document.body)
+    return WikiFields(title=title, use_when=use_when, tags=tuple(raw_tags), body=document.body)
 
 
 def emit(frontmatter: dict, body: str) -> str:
@@ -90,8 +94,10 @@ def emit(frontmatter: dict, body: str) -> str:
 
 
 def wiki_to_okf(entry: dict, *, resource: str | None = None) -> str:
-    """Render a stored wiki entry (title/use_when/body/author/updated_at) as an OKF document."""
+    """Render a stored wiki entry as an OKF document."""
     frontmatter: dict = {"type": WIKI_TYPE, "title": entry["title"], "use_when": entry["use_when"]}
+    if entry.get("tags"):
+        frontmatter["tags"] = entry["tags"]
     if entry.get("author"):
         frontmatter["author"] = entry["author"]
     if entry.get("updated_at"):

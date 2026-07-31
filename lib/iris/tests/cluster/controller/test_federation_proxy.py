@@ -44,6 +44,7 @@ from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
 from iris.cluster.controller.native_proxy import (
     DECISION_SECRET_HEADER,
     PROXY_DECISION_PATH,
+    PROXY_TIMEOUT_HEADER,
     UPSTREAM_URL_HEADER,
     NativeProxy,
 )
@@ -475,6 +476,7 @@ def test_relay_decision_builds_the_child_upstream_and_rejects_an_unknown_peer(tm
         assert (
             ok.headers[UPSTREAM_URL_HEADER] == f"https://iris-cw.oa.dev/proxy/t/tok/{ENDPOINT_PROXY_NAME}/v1/models?q=1"
         )
+        assert ok.headers[PROXY_TIMEOUT_HEADER] == "3600"
         assert "x-iris-upstream-authorization" not in ok.headers
 
         unknown = client.post(

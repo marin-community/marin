@@ -12,7 +12,7 @@ import curses
 from dataclasses import dataclass, field
 
 from rigging.filesystem.buckets import MissingCredentials
-from rigging.fsutil.listing import ROOT, Entry, list_entries, parent_url, read_preview, total_size
+from rigging.fsutil.listing import ROOT, Entry, list_entries, parent_url, read_decompressed_preview, total_size
 from rigging.fsutil.render import file_lines, format_size, format_time
 
 _HELP = "[enter] open  [backspace] up  [/] filter  [s] sort  [d] size  [y] print URL  [q] quit"
@@ -132,12 +132,13 @@ def _open(stdscr: "curses.window", screen: Screen) -> None:
         return
 
     try:
-        raw, _ = read_preview(selected.url)
-        lines = file_lines(selected.name, raw)
+        preview = read_decompressed_preview(selected.url)
+        lines = file_lines(selected.name, preview.data)
     except Exception as e:
         screen.status = f"error: {e}"
         return
-    _view(stdscr, selected.name, lines)
+    truncated_bytes = len(preview.data) if preview.truncated else None
+    _view(stdscr, selected.name, lines, truncated_bytes)
 
 
 def _measure(stdscr: "curses.window", screen: Screen) -> None:
@@ -183,7 +184,7 @@ def _draw(stdscr: "curses.window", screen: Screen) -> None:
     stdscr.refresh()
 
 
-def _view(stdscr: "curses.window", name: str, lines: list[str]) -> None:
+def _view(stdscr: "curses.window", name: str, lines: list[str], truncated_bytes: int | None) -> None:
     """Scrollable read-only pager for one file's rendered lines."""
     scroll = 0
     while True:
@@ -192,7 +193,10 @@ def _view(stdscr: "curses.window", name: str, lines: list[str]) -> None:
         body_height = max(1, height - 3)
 
         stdscr.addnstr(0, 0, name, width - 1, curses.color_pair(1) | curses.A_BOLD)
-        stdscr.addnstr(1, 0, f"{len(lines)} lines", width - 1, curses.A_DIM)
+        subtitle = f"{len(lines)} lines"
+        if truncated_bytes is not None:
+            subtitle += f"  preview truncated at {format_size(truncated_bytes)}"
+        stdscr.addnstr(1, 0, subtitle, width - 1, curses.A_DIM)
         for row, line in enumerate(lines[scroll : scroll + body_height]):
             stdscr.addnstr(2 + row, 0, line, width - 1)
         stdscr.addnstr(height - 1, 0, _VIEWER_HELP[: width - 1], width - 1, curses.A_DIM)

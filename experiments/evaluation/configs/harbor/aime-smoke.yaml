@@ -1,0 +1,13 @@
+n_attempts: 1
+n_concurrent_trials: 2
+retry:
+  exclude_exceptions: []
+environment:
+  type: daytona
+  force_build: false
+  delete: true
+agents:
+  - name: terminus-2
+datasets:
+  - name: aime
+    version: "1.0"

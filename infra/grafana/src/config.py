@@ -86,6 +86,8 @@ class K8sClusterTarget:
 
     name: str  # iris cluster name, e.g. "cw-us-east-08a"
     api_server: str  # public CKS API server URL
+    iris_namespace: str = "iris"
+    finelog_expected: bool = True
 
 
 # All requests authenticate with the single org-wide CW read-role token from the
@@ -94,6 +96,12 @@ K8S_CLUSTERS: tuple[K8sClusterTarget, ...] = (
     K8sClusterTarget("cw-us-east-02a", "https://208261-34513e48.k8s.us-east-02a.coreweave.com"),
     K8sClusterTarget("cw-us-east-08a", "https://208261-d2cd61ed.k8s.us-east-08a.coreweave.com"),
     K8sClusterTarget("cw-rno2a", "https://208261-6670debc.k8s.rno2a.coreweave.com"),
+    K8sClusterTarget(
+        "cw-us-west-04a",
+        "https://208261-52d9a2cc.k8s.us-west-04a.coreweave.com",
+        iris_namespace="iris-ci",
+        finelog_expected=False,
+    ),
 )
 
 

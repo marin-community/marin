@@ -28,6 +28,7 @@ from rigging.filesystem.s3_compat import (
     fsspec_s3_conf,
     s3_credentials,
     s3_endpoint,
+    s3_python_config_kwargs,
 )
 from rigging.filesystem.storage_path import StoragePath
 
@@ -85,5 +86,7 @@ def _s3_filesystem(spec: BucketSpec) -> s3fs.S3FileSystem:
         secret=secret,
         endpoint_url=endpoint,
         client_kwargs={"region_name": spec.signing_region or "auto"},
-        config_kwargs=conf["config_kwargs"],
+        # ``fsspec_s3_conf`` is the JSON-safe env shape, so it carries the
+        # endpoint's addressing style but not the whole-request deadline.
+        config_kwargs={**conf["config_kwargs"], **s3_python_config_kwargs()},
     )

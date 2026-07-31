@@ -60,12 +60,11 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     COSCHEDULE_NVLINK_DOMAIN_SLICED,
     CW_LABEL_LEAFGROUP,
     CW_LABEL_NVLINK_DOMAIN,
-    NVL72_GPUS_PER_NODE,
     RACK_SIZE,
     SCHEDULABLE_RACK_NODES,
     KueueTopologyBinding,
     TopologyMode,
-    balanced_rack_slice_size,
+    gpu_gang_rack_slice_size,
 )
 from iris.cluster.platforms.k8s.service import K8sService
 from iris.cluster.platforms.k8s.types import (
@@ -170,8 +169,18 @@ _CONSTRAINT_KEY_TO_NODE_LABEL: dict[str, str] = {
 _K8S_LABEL_MAX_LEN = 63
 
 # Number of consecutive sync cycles where a pod is missing from the k8s API
-# before declaring FAILED. Avoids false positives from transient API misses.
+# before declaring the attempt preempted. Avoids false positives from transient
+# API misses.
 _POD_NOT_FOUND_GRACE_CYCLES = 3
+
+# A terminal reason can carry a full log tail (an init container running under
+# terminationMessagePolicy: FallbackToLogsOnError) or a Kueue eviction message,
+# so bound what we persist.
+_TERMINAL_REASON_MAX_CHARS = 500
+
+# Terminal reason for a vanished pod whose disruption was never observed — the
+# pod was deleted between two polls, so no condition survived to name the cause.
+_POD_DELETED_TERMINAL_REASON = "PodDeleted: pod was deleted while the attempt was active"
 
 # Kubernetes terminated reasons that indicate infrastructure failure (not application error).
 # Evicted: kubelet evicted the pod due to resource pressure.
@@ -587,6 +596,13 @@ def _build_init_container_spec(
             "command": ["python", "-c", bundle_script],
             "env": init_env,
             "volumeMounts": init_mounts,
+            # _init_container_failure reports this container's terminated message, and
+            # bounds it because it can be a full log tail — but with the default File
+            # policy the kubelet never writes one, so every stage-workdir failure
+            # degraded to a bare "Init:Error stage-workdir". An image built for the
+            # wrong CPU architecture is the worst case: the whole cause is the runtime's
+            # "exec format error", which reaches the log and nothing else.
+            "terminationMessagePolicy": "FallbackToLogsOnError",
         }
     ]
 
@@ -727,20 +743,15 @@ def _topology_request_annotations(
     unschedulable whenever a rack is short a node — this raises instead (the CLI never emits it;
     the guard catches a programmatic or stale client).
     SLICE_REQUIRED partitions the gang into balanced per-rack slices (size from
-    ``balanced_rack_slice_size``), each hard-bound to one nvlink.domain, and pairs a soft coarse
+    ``gpu_gang_rack_slice_size``), each hard-bound to one nvlink.domain, and pairs a soft coarse
     preference so the racks cluster on the IB fabric. The one-slice-per-rack guarantee holds only
     for node-saturating pods and a gang that splits into equal, more-than-half-a-rack slices;
     both are validated here.
     """
     node_label = binding.node_label
     if binding.mode is TopologyMode.SLICE_REQUIRED:
-        if gpu_count != NVL72_GPUS_PER_NODE:
-            raise PodManifestError(
-                f"Coscheduled task {task_ref!r} uses sliced level {group_by!r}, which requires node-saturating "
-                f"NVL72 pods ({NVL72_GPUS_PER_NODE} GPUs each) so one slice fills whole nodes; got gpu_count={gpu_count}"
-            )
         try:
-            slice_size = balanced_rack_slice_size(num_tasks)
+            slice_size = gpu_gang_rack_slice_size(gpu_count, num_tasks)
         except ValueError as e:
             raise PodManifestError(
                 f"Coscheduled task {task_ref!r} on sliced level {group_by!r}: {e}. Round the gang size, or set "
@@ -990,10 +1001,12 @@ def _build_pod_manifest(
     if run_req.HasField("timeout") and run_req.timeout.milliseconds > 0 and not is_gang:
         spec["activeDeadlineSeconds"] = max(1, run_req.timeout.milliseconds // 1000)
 
-    # Stamp the native k8s PriorityClass so the scheduler knows how to
-    # preempt/queue this pod relative to others. UNSPECIFIED defaults to
-    # INTERACTIVE (the normal user work band). A band with no configured
-    # class name leaves priorityClassName unset (cluster default applies).
+    # Stamp the native k8s PriorityClass so the scheduler knows how to preempt/queue this
+    # pod relative to others. Dispatch resolves the band from job_config and re-stamps the
+    # attempt before building this request, so ``priority`` is a real band in production.
+    # The INTERACTIVE floor keeps a request built outside that path (an unset field reads
+    # as INHERIT) from silently dropping to the cluster default. A band with no configured
+    # class name leaves priorityClassName unset.
     effective_band = run_req.priority or job_pb2.PRIORITY_BAND_INTERACTIVE
     priority_class_name = config.priority_class_names.get(effective_band)
     if priority_class_name:
@@ -1023,7 +1036,7 @@ def _task_container_status(pod: dict) -> dict | None:
     return statuses[0]
 
 
-def _infrastructure_failure_condition(pod: dict) -> dict | None:
+def _disruption_condition(pod: dict) -> dict | None:
     """Return the authoritative pod disruption condition, if present.
 
     Kubernetes stamps ``DisruptionTarget`` for native disruptions. Kueue stamps
@@ -1042,12 +1055,21 @@ def _infrastructure_failure_condition(pod: dict) -> dict | None:
     return None
 
 
-def _is_infrastructure_failure(pod: dict) -> bool:
-    """Check if the pod failure was caused by infrastructure (preemption, eviction, etc.).
+def _format_disruption_reason(condition: dict) -> str:
+    """Render a disruption condition as a bounded ``<reason>: <message>`` for an
+    attempt's terminal reason (Kueue's message names the preemptor's queue)."""
+    short_reason = condition.get("reason", "") or condition.get("type", "")
+    message = condition.get("message", "")
+    reason = f"{short_reason}: {message}" if message else short_reason
+    return reason[:_TERMINAL_REASON_MAX_CHARS]
 
-    Returns True when the failure was NOT caused by the application itself, so it
-    should be classified as a worker/preemption failure rather than an
-    application failure.
+
+def _pod_failure_state(pod: dict) -> int:
+    """Classify a failed pod as PREEMPTED, WORKER_FAILED, or FAILED.
+
+    PREEMPTED and WORKER_FAILED both charge the preemption budget; the split
+    tells a triager whether the control plane took the pod away or the node let
+    it die.
     """
     # Authoritative first: the control plane explicitly disrupted this pod
     # (preempted/evicted/drained), regardless of how the container exited. This
@@ -1055,22 +1077,26 @@ def _is_infrastructure_failure(pod: dict) -> bool:
     # exit 137 — which the terminated-reason whitelist below misses. A container
     # that OOMs on its own cgroup limit carries no such condition and correctly
     # falls through to an application failure.
-    if _infrastructure_failure_condition(pod) is not None:
-        return True
+    if _disruption_condition(pod) is not None:
+        return job_pb2.TASK_STATE_PREEMPTED
     status = _task_container_status(pod)
     if status is None:
         # Pod-level eviction: the pod status reason indicates infrastructure.
-        pod_reason = pod.get("status", {}).get("reason", "")
-        return pod_reason in _INFRASTRUCTURE_FAILURE_REASONS
-    terminated = status.get("state", {}).get("terminated", {})
-    return terminated.get("reason", "") in _INFRASTRUCTURE_FAILURE_REASONS
+        reason = pod.get("status", {}).get("reason", "")
+    else:
+        reason = status.get("state", {}).get("terminated", {}).get("reason", "")
+    if reason in _INFRASTRUCTURE_FAILURE_REASONS:
+        return job_pb2.TASK_STATE_WORKER_FAILED
+    return job_pb2.TASK_STATE_FAILED
 
 
 def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | None = None) -> TaskUpdate:
     """Build a TaskUpdate from a Kubernetes Pod dict.
 
-    Infrastructure failures (eviction, preemption) are reported as WORKER_FAILED
-    so they count against max_retries_preemption.
+    A control-plane disruption (Kueue preemption, node drain, API eviction) is
+    reported as PREEMPTED and a node-level infrastructure failure as
+    WORKER_FAILED; both count against max_retries_preemption, and the split lets
+    a triager tell a capacity preemption from a broken node.
     Application failures (non-zero exit code) are reported as FAILED so they
     count against max_retries_failure (default: 0, no retries).
 
@@ -1121,14 +1147,10 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
     # Failed or Unknown -- distinguish infrastructure vs application failure. The
     # error field carries the failure story, so clear the waiting one-liner.
     exit_code = _extract_exit_code(pod)
-    if _is_infrastructure_failure(pod):
-        new_state = job_pb2.TASK_STATE_WORKER_FAILED
-    else:
-        new_state = job_pb2.TASK_STATE_FAILED
     return TaskUpdate(
         task_id=task_id,
         attempt_id=attempt_id,
-        new_state=new_state,
+        new_state=_pod_failure_state(pod),
         exit_code=exit_code,
         error=_extract_error(pod),
         status_message="",
@@ -1161,11 +1183,6 @@ def _extract_error(pod: dict) -> str | None:
     return message or reason or None
 
 
-# An init-container failure message can be a full log tail
-# (terminationMessagePolicy: FallbackToLogsOnError), so bound what we persist.
-_TERMINAL_REASON_MAX_CHARS = 500
-
-
 def _init_container_failure(pod: dict) -> str | None:
     """Return ``Init:<reason> <container>: <message>`` for the first init container
     that terminated non-zero (excluding the log-shipper sidecar), else ``None``.
@@ -1193,12 +1210,8 @@ def _extract_terminal_reason(pod: dict) -> str | None:
     init-container failure invisible to the task-container extractors, over the
     task container's own terminal reason.
     """
-    condition = _infrastructure_failure_condition(pod)
-    condition_reason = None
-    if condition is not None:
-        short_reason = condition.get("reason", "") or condition.get("type", "")
-        message = condition.get("message", "")
-        condition_reason = f"{short_reason}: {message}" if message else short_reason
+    condition = _disruption_condition(pod)
+    condition_reason = _format_disruption_reason(condition) if condition is not None else None
     reason = condition_reason or _init_container_failure(pod) or _extract_error(pod)
     return reason[:_TERMINAL_REASON_MAX_CHARS] if reason is not None else None
 
@@ -1508,7 +1521,7 @@ def _pod_event(pod: dict, workload: dict | None) -> _PodEvent | None:
     Kueue-declined admission, Normal for a transient wait. Returns ``None`` for a
     running or otherwise quiet pod.
     """
-    disruption = _infrastructure_failure_condition(pod)
+    disruption = _disruption_condition(pod)
     if disruption is not None and disruption.get("type") == _KUEUE_TERMINATION_TARGET_CONDITION:
         return _PodEvent(
             source=_EVENT_SOURCE_KUEUE,
@@ -1782,16 +1795,30 @@ class ClusterState:
             self._workloads = new_workloads
             self._node_pools = list(node_pools)
 
-    def gpu_capacity(self) -> DeviceCapacity:
-        """Approximate free vs. total GPUs across the cluster.
+    def gpu_capacity(self, priority_class_names: dict[int, str]) -> DeviceCapacity:
+        """Approximate free vs. total GPUs across the cluster, split by holder priority.
 
         Best-effort federation availability hint inferred from the last periodic
         kubectl sync (no extra kubectl call): total ``nvidia.com/gpu`` allocatable
-        across nodes, with the free count subtracting what non-terminal pods
-        request. Counts GPUs on all nodes (GPU nodes are commonly tainted, and a
-        taint a GPU pod tolerates does not make the GPU unavailable). Deliberately
-        imperfect — it lags the sync and ignores per-node packing, which the
-        meta-scheduler tolerates (the peer's own Kueue is the backstop)."""
+        across nodes, with the free count subtracting what *admitted* pods request.
+        Counts GPUs on all nodes (GPU nodes are commonly tainted, and a taint a GPU
+        pod tolerates does not make the GPU unavailable).
+
+        Admitted means Kueue released the pod's scheduling gate — it has reserved the
+        quota, whether or not the pod is bound to a node yet. A still-gated pod is
+        waiting in the peer's queue and holds nothing, so it neither reduces the free
+        count nor appears in the band split; counting it made a cluster with a long
+        queue advertise nothing free and kept federated work out of it.
+
+        ``held_by_band`` attributes each admitted pod's request to the ``PriorityBand``
+        whose configured PriorityClass it carries, so a parent can see which of the
+        held GPUs a higher-priority job would reclaim. A pod carrying no known class
+        is dropped from the split (still counted as held) — it cannot be preempted on
+        a band the parent can reason about.
+
+        Deliberately imperfect — it lags the sync and ignores per-node packing, which
+        the meta-scheduler tolerates (the peer's own Kueue is the backstop)."""
+        band_by_class = {name: band for band, name in priority_class_names.items()}
         with self._lock:
             nodes = self._nodes[:]
             pods = self._pods[:]
@@ -1800,12 +1827,21 @@ class ClusterState:
             gpu = node.get("status", {}).get("allocatable", {}).get(_GPU_RESOURCE)
             if gpu:
                 allocatable += int(parse_k8s_quantity(str(gpu)))
-        requested = 0
+        held = 0
+        held_by_band: dict[int, int] = {}
         for pod in pods:
             if pod.get("status", {}).get("phase", "") in ("Succeeded", "Failed"):
                 continue
-            requested += _pod_gpu_request(pod)
-        return DeviceCapacity(free=max(0, allocatable - int(requested)), total=allocatable)
+            if pod.get("spec", {}).get("schedulingGates"):  # not admitted: holds no capacity
+                continue
+            request = _pod_gpu_request(pod)
+            if request <= 0:
+                continue
+            held += request
+            band = band_by_class.get(pod.get("spec", {}).get("priorityClassName", ""))
+            if band is not None:
+                held_by_band[band] = held_by_band.get(band, 0) + request
+        return DeviceCapacity(free=max(0, allocatable - held), total=allocatable, held_by_band=held_by_band)
 
     def to_status_response(self, namespace: str) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
         """Build the dashboard RPC response from current state. No kubectl calls."""
@@ -2335,6 +2371,10 @@ class K8sTaskProvider:
     # worker store, so it reads its dispatch drain through this).
     transition_reader: TransitionReader | None = field(default=None, repr=False)
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+    # The disruption condition last seen on an attempt's pod, keyed by the
+    # incarnation (a resubmit reuses task_id/attempt_id under a fresh uid) and
+    # dropped once the attempt leaves the poll set.
+    _disruption_reasons: dict[RunningTaskEntry, str] = field(default_factory=dict, init=False, repr=False)
     # (task_id_wire, attempt_id) this process has dispatched a pod for. Those pods
     # were created under the current name, so their lookups must never consider the
     # pre-uid name — see _pod_name_candidates.
@@ -2412,7 +2452,7 @@ class K8sTaskProvider:
         if not variants or len(variants) != 1:
             return None
         variant = next(iter(variants)).strip().lower()
-        return {variant: self._cluster_state.gpu_capacity()}
+        return {variant: self._cluster_state.gpu_capacity(self.priority_class_names)}
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         """No-op: Kueue owns placement, so Iris makes no scheduling decisions."""
@@ -3090,6 +3130,7 @@ class K8sTaskProvider:
                 self._periodic_profiler.set_pods({})
             if self._task_event_log is not None:
                 self._task_event_log.retain(set())
+            self._disruption_reasons.clear()
             return []
 
         pods_by_name: dict[str, dict] = {pod.get("metadata", {}).get("name", ""): pod for pod in cached_pods}
@@ -3131,19 +3172,25 @@ class K8sTaskProvider:
                         )
                     )
                     continue
-                # Grace exhausted — pod is truly gone. For a coscheduled task
-                # this is almost always a Kueue gang preemption (Kueue deletes
-                # every pod in a preempted group, leaving no terminal status to
-                # read), so bill it to the preemption budget (WORKER_FAILED)
-                # rather than the application budget (FAILED).
+                # Grace exhausted — the pod is truly gone. Absence is not an
+                # application failure, so charge the preemption budget either
+                # way: PREEMPTED when the pod was seen terminating under a
+                # disruption (Kueue deletes every pod of a preempted Workload,
+                # leaving no terminal status), WORKER_FAILED when the cause was
+                # never observed.
                 self._pod_not_found_counts.pop(cursor_key, None)
-                gone_state = job_pb2.TASK_STATE_WORKER_FAILED if entry.coscheduled else job_pb2.TASK_STATE_FAILED
+                disruption_reason = self._disruption_reasons.get(entry)
                 updates.append(
                     TaskUpdate(
                         task_id=entry.task_id,
                         attempt_id=entry.attempt_id,
-                        new_state=gone_state,
+                        new_state=(
+                            job_pb2.TASK_STATE_PREEMPTED
+                            if disruption_reason is not None
+                            else job_pb2.TASK_STATE_WORKER_FAILED
+                        ),
                         error="Pod not found",
+                        terminal_reason=disruption_reason or _POD_DELETED_TERMINAL_REASON,
                         status_message="",
                     )
                 )
@@ -3152,6 +3199,11 @@ class K8sTaskProvider:
             self._pod_not_found_counts.pop(cursor_key, None)
             workload = _workload_for_pod(pod, workload_index)
             update = _task_update_from_pod(entry, pod, workload)
+            # Readable only while the pod terminates; the vanished-pod path
+            # above has no pod left to read it from.
+            disruption = _disruption_condition(pod)
+            if disruption is not None:
+                self._disruption_reasons[entry] = _format_disruption_reason(disruption)
             phase = pod.get("status", {}).get("phase", "")
             if phase == "Running":
                 resource_pods[task_key] = pod_name
@@ -3174,5 +3226,7 @@ class K8sTaskProvider:
             periodic_profiler.set_pods(profile_targets)
         if event_log is not None:
             event_log.retain(set(running))
+        for stale_entry in self._disruption_reasons.keys() - set(running):
+            del self._disruption_reasons[stale_entry]
 
         return updates

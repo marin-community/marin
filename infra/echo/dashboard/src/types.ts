@@ -22,10 +22,54 @@ export interface WikiHit {
   author: string
   title: string
   use_when: string
+  tags: string[]
   snippet: string
   reference_count: number
   score: number
   body?: string
+}
+
+export type SearchDomain = string
+
+export interface SearchDomainOption {
+  value: SearchDomain
+  label: string
+}
+
+export interface SearchConfiguration {
+  domains: SearchDomainOption[]
+  default_domains: SearchDomain[]
+  display_sha_characters: number
+}
+
+export interface FederatedResult {
+  id: string
+  domain: SearchDomain
+  title: string
+  subtitle: string
+  url: string
+  snippet: string
+  score: number
+  distance: number | null
+  lexical_score: number | null
+  references: SearchReference[]
+}
+
+export interface SearchReference {
+  line: number
+  text: string
+  url: string
+}
+
+export interface RepositoryIndexStatus {
+  repository: string
+  branch: string
+  status: 'empty' | 'building' | 'ready'
+  commit_sha: string | null
+  completed_files: number | null
+  total_files: number | null
+  started_at: string | null
+  indexed_at: string | null
 }
 
 // The full chunk behind an activity hit: GET /api/chunks/{id} adds the untruncated text.
@@ -34,8 +78,6 @@ export interface ActivityDetail extends ActivityHit {
   ref: string | null
   parent: string | null
 }
-
-export type Result = ActivityHit | WikiHit
 
 export async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(url, { signal })

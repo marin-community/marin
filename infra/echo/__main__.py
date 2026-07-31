@@ -22,9 +22,9 @@ import pulumi
 import pulumi_cloudflare as cloudflare
 import pulumi_command as command
 import pulumi_gcp as gcp
+import search_config
 from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv
 from iac.gcp.cloud_run_job import ScheduledCloudRunJob, ScheduledCloudRunJobArgs
-from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT
 
 ECHO_DIR = Path(__file__).parent
 MIGRATIONS_DIR = ECHO_DIR / "migrations"
@@ -135,18 +135,23 @@ def main() -> None:
             job_name="echo-sync",
             build_context=".",
             dockerfile="sync/Dockerfile",
-            # Cheap when nothing changed: the job exits on the manifest watermark check, and
-            # only a new upstream corpus build (~every 90 min) triggers the full download+upsert.
+            # Activity checks retain their ten-minute cadence. The repository phase uses its
+            # database watermark to query GitHub no more than once per hour.
             schedule="*/10 * * * *",
             env={
                 "CLOUDSQL_CONNECTION": CONNECTION_NAME,
                 "PGDATABASE": DATABASE,
                 "PGUSER": SYNC_DB_USER,
+                "GITHUB_REPOSITORY": search_config.INDEXED_REPOSITORY,
+                "GITHUB_BRANCH": search_config.INDEXED_BRANCH,
             },
             secrets=(SecretEnv(name="MARINMIRROR_TOKEN", secret=MARINMIRROR_TOKEN_SECRET, wait_for=(mirror_token,)),),
             cloudsql_instances=(CONNECTION_NAME,),
-            # The sync holds a ~650 MB corpus download plus batch buffers in memory.
-            memory="2Gi",
+            # Four CPUs keep the first repository embedding build within its two-hour
+            # attempt; incremental hourly refreshes normally embed only changed files.
+            cpu="4",
+            memory="4Gi",
+            timeout=7200,
         ),
         gcp_provider=gcp_provider,
     )
@@ -163,16 +168,16 @@ def main() -> None:
                 "CLOUDSQL_CONNECTION": CONNECTION_NAME,
                 "PGDATABASE": DATABASE,
                 "PGUSER": API_DB_USER,
+                "GITHUB_REPOSITORY": search_config.INDEXED_REPOSITORY,
+                "GITHUB_BRANCH": search_config.INDEXED_BRANCH,
             },
-            # Keep one instance warm: it holds the ~130 MB embedding model and the DB pool.
+            # Keep one instance warm. Four concurrent embedding/reranking requests peak
+            # around 2.7 GiB; bound concurrency and leave headroom for the DB pool.
             min_instances=1,
             max_instances=1,
             cpu_always_allocated=True,
-            memory="2Gi",
-            iap_members=("*@openathena.ai",),
-            # Admit CLI/agent tokens (cli.py) whose audience is the shared Marin desktop OAuth
-            # client, so the same rigging login that reaches iris also reaches echo-api.
-            iap_programmatic_clients=(MARIN_DESKTOP_OAUTH_CLIENT.client_id,),
+            memory="4Gi",
+            max_instance_request_concurrency=4,
             cloudsql_instances=(CONNECTION_NAME,),
         ),
         gcp_provider=gcp_provider,

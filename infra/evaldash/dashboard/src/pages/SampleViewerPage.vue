@@ -11,6 +11,7 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { useSamplePager, type SampleFilter } from '@/composables/useSamplePager'
 import type { SampleRow, SampleTasksResponse } from '@/types/api'
+import { sampleFilters, sampleHint, sampleOutcome, outcomeChipClass } from '@/utils/samples'
 import McqSample from '@/components/samples/McqSample.vue'
 import GenerativeSample from '@/components/samples/GenerativeSample.vue'
 import AgenticSample from '@/components/samples/AgenticSample.vue'
@@ -21,14 +22,12 @@ const props = defineProps<{ runId: string }>()
 const route = useRoute()
 const router = useRouter()
 
-const FILTERS: SampleFilter[] = ['all', 'correct', 'incorrect']
-
 function queryTask(): string {
   return typeof route.query.task === 'string' ? route.query.task : ''
 }
 function queryFilter(): SampleFilter {
   const f = route.query.filter
-  return f === 'correct' || f === 'incorrect' ? f : 'all'
+  return f === 'correct' || f === 'incorrect' || f === 'ungraded' ? f : 'all'
 }
 function queryIndex(): number {
   const i = Number(route.query.i)
@@ -54,6 +53,8 @@ const { total, counts, primaryMetric, loading, error, sample: sampleAt, ensure }
   task,
   filter,
 )
+
+const FILTERS = computed(() => sampleFilters(counts.value?.ungraded))
 
 watch([task, filter], () => {
   index.value = 0
@@ -138,21 +139,19 @@ function metricEntries(row: SampleRow): [string, number][] {
       <span class="text-xs text-text-muted ml-auto whitespace-nowrap">← → navigate · r random · esc back</span>
     </div>
 
-    <div class="max-w-4xl mx-auto px-6 py-6">
+    <div class="max-w-4xl mx-auto px-6 py-5">
       <p v-if="tasksError" class="text-sm text-status-danger">{{ tasksError }}</p>
       <p v-else-if="error" class="rounded border border-status-danger-border bg-status-danger-bg text-status-danger text-sm px-3 py-2">{{ error }}</p>
       <p v-else-if="loading && !row" class="text-sm text-text-muted py-12 text-center">Loading samples…</p>
       <EmptyState v-else-if="!task" message="No task selected." icon="○" />
       <EmptyState v-else-if="total === 0" message="No samples for this task and filter." icon="○" />
       <template v-else-if="row">
-        <div class="flex items-center gap-2 flex-wrap mb-6">
+        <div class="flex items-center gap-2 flex-wrap mb-2">
           <span class="font-mono text-sm text-text-secondary">doc {{ row.doc_id }}</span>
           <span
-            class="inline-block rounded px-1.5 py-0.5 text-xs border font-medium"
-            :class="row.correct
-              ? 'bg-status-success-bg text-status-success border-status-success-border'
-              : 'bg-status-danger-bg text-status-danger border-status-danger-border'"
-          >{{ row.correct ? 'correct' : 'incorrect' }}</span>
+            class="inline-block rounded px-1.5 py-0.5 text-xs border font-medium capitalize"
+            :class="outcomeChipClass(sampleOutcome(row))"
+          >{{ sampleOutcome(row) }}</span>
           <span
             v-for="[name, value] in metricEntries(row)"
             :key="name"
@@ -162,8 +161,9 @@ function metricEntries(row: SampleRow): [string, number][] {
               : 'border-surface-border text-text-secondary'"
           >{{ name }} {{ value ?? '—' }}</span>
         </div>
+        <p class="text-sm text-text-secondary font-mono mb-4">{{ sampleHint(row) }}</p>
 
-        <div class="space-y-6">
+        <div class="space-y-5">
           <GradingPanel :grading="row.grading" />
           <McqSample v-if="row.kind === 'multiple_choice'" :sample="row" />
           <GenerativeSample v-else-if="row.kind === 'generation'" :sample="row" />

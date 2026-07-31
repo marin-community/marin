@@ -655,8 +655,7 @@ def test_vm_slice_advances_from_creating_to_ready() -> None:
     ), f"Expected BOOTSTRAPPING after VM is RUNNING but before bootstrap completes, got {status.state}"
 
     # Simulate bootstrap thread completing
-    with handle._bootstrap_lock:
-        handle._bootstrap_state = CloudSliceState.READY
+    handle.bootstrap.mark_ready()
 
     status = handle.describe()
     assert status.state == CloudSliceState.READY

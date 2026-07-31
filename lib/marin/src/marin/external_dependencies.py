@@ -17,6 +17,7 @@ class ExternalDependency:
     config_name: str
     distribution: str
     repository: str
+    version: str
     commit: str
     runtime_requirements: tuple[str, ...]
 
@@ -32,6 +33,7 @@ EVALCHEMY = ExternalDependency(
     config_name="evalchemy",
     distribution="evalchemy",
     repository="https://github.com/marin-community/evalchemy.git",
+    version="0.1.0",
     commit="adf37c2878906870f7c7d8845f72a25649513bed",
     runtime_requirements=(),
 )
@@ -40,7 +42,8 @@ HARBOR = ExternalDependency(
     config_name="harbor",
     distribution="harbor",
     repository="https://github.com/marin-community/harbor.git",
-    commit="725fc069555013da7ae7f895dd3658a2c2452d55",
+    version="0.8.1",
+    commit="f2dd505f609021611eb85521a097e6dff384d12d",
     runtime_requirements=("daytona==0.200.2",),
 )
 
@@ -48,7 +51,8 @@ MARIN_SKYRL = ExternalDependency(
     config_name="MarinSkyRL",
     distribution="skyrl",
     repository="https://github.com/marin-community/MarinSkyRL.git",
-    commit="49fbef2dc2d83d626875801018f6f690992d5a1f",
+    version="0.1.0",
+    commit="624f030ad179bd8ec0f572abc6149fb5c878ce67",
     runtime_requirements=(),
 )
 

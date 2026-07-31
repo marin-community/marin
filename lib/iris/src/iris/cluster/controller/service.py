@@ -78,6 +78,7 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerLiveness
+from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.router import RoutingRequest, SubmitDisposition, SubmitPlan
@@ -173,17 +174,23 @@ _MERGED_AUTOSCALER_ACTIONS = 100
 # Max unroutable job sample entries returned by ListBackends.
 _UNROUTABLE_SAMPLE_SIZE = 10
 
-# Semantics version of BackendSummary.availability (free-capacity metric). A peer
-# reading an unrecognized version treats the amounts as unknown. Bump when the
-# meaning of the amounts (units, tokens, aggregation) changes.
-AVAILABILITY_METRIC_VERSION = 1
-
 # Shown when a local_admin (CIDR/loopback) caller tries to federate a job — a federated
 # job must carry an accountable authenticated user.
 _LOCAL_ADMIN_FEDERATION_DENIED = (
     "A local_admin (CIDR/loopback) identity cannot submit a federated job. "
     "Federating to a remote cluster requires an authenticated user — log in via "
     "IAP or present a user token so the submission carries your identity."
+)
+
+# What LaunchJob accepts in priority_band: the three real bands, plus INHERIT for a
+# client that wants the parent's band (or the INTERACTIVE default at a root).
+_SUBMITTABLE_PRIORITY_BANDS = frozenset(
+    {
+        job_pb2.PRIORITY_BAND_INHERIT,
+        job_pb2.PRIORITY_BAND_PRODUCTION,
+        job_pb2.PRIORITY_BAND_INTERACTIVE,
+        job_pb2.PRIORITY_BAND_BATCH,
+    }
 )
 
 
@@ -1485,31 +1492,55 @@ class ControllerServiceImpl:
         #   configured tiers and UserBudgetDefaults still bite — an unlisted
         #   submitter hits the INTERACTIVE default cap and can't punch up to
         #   PRODUCTION just by skipping auth.
-        # UNSPECIFIED (0) defaults to INTERACTIVE. A received handoff's band was
-        # authorized by the parent against the original submitter and their budget
-        # tier; the receiving cluster does not manage that user, so it trusts the
-        # parent rather than re-gating on its own tiers (the submitter allowlist
-        # bounds who may federate here).
-        band = request.priority_band or job_pb2.PRIORITY_BAND_INTERACTIVE
-        if is_received_handoff:
-            pass
-        elif band == job_pb2.PRIORITY_BAND_PRODUCTION and self._auth.provider:
-            authorize(AuthzAction.MANAGE_BUDGETS)
-        else:
+        # A received handoff's band was authorized by the parent against the original
+        # submitter and their budget tier; the receiving cluster does not manage that
+        # user, so it trusts the parent rather than re-gating on its own tiers (the
+        # submitter allowlist bounds who may federate here).
+        #
+        # This is the one place INHERIT becomes a real band: resolve it here, gate that
+        # result, and store it. Everything behind this point — the scheduler, spend, the
+        # k8s mapping, a federated handoff — only ever sees PRODUCTION, INTERACTIVE, or
+        # BATCH, so none of them re-derive a band of their own.
+        #
+        # Gating the resolved band rather than the request matters because the client
+        # chooses whether to send the field; gating the request would let it pick whether
+        # the cap applies at all. Inheriting a band at or below the cap still passes, so a
+        # capped user's children launch normally.
+        # proto3 enums are open, so a newer or buggy client can put an integer here that
+        # names no band. Reject it at the boundary rather than storing it as a "real" one.
+        if request.priority_band not in _SUBMITTABLE_PRIORITY_BANDS:
+            raise ConnectError(
+                Code.INVALID_ARGUMENT,
+                f"Unknown priority_band {int(request.priority_band)}; "
+                f"expected one of {sorted(_SUBMITTABLE_PRIORITY_BANDS)}",
+            )
+        inherited_band: int | None = None
+        if request.priority_band == job_pb2.PRIORITY_BAND_INHERIT and job_id.parent is not None:
             with self._db.read_snapshot() as _snap:
-                user_budget = reads.get_user_budget(_snap, job_id.user)
-            max_band = user_budget.max_band if user_budget is not None else self._user_budget_defaults.max_band
-            if band < max_band:
-                raise ConnectError(
-                    Code.PERMISSION_DENIED,
-                    f"User {job_id.user} cannot submit {priority_band_name(band)} jobs "
-                    f"(max band: {priority_band_name(max_band)}). "
-                    f"Resubmit with `--priority {priority_band_name(max_band).lower()}` "
-                    f"(e.g. `--priority batch`) to launch opportunistically, or ping @Helw150 "
-                    f"if you believe your username ({job_id.user}) should have a higher band — "
-                    f"either to be added to the researcher list or to confirm your username is "
-                    f"registered correctly.",
-                )
+                inherited_band = reads.get_priority_bands(_snap, [job_id.parent])[job_id.parent]
+        band = ops.job.resolve_priority_band(int(request.priority_band), inherited_band)
+        # Normalize the request itself, so every downstream consumer of it — the local
+        # insert, a queued handoff's stored config, the request the peer finally runs —
+        # reads the same real band without re-deriving one.
+        request.priority_band = band
+        if not is_received_handoff:
+            if band == job_pb2.PRIORITY_BAND_PRODUCTION and self._auth.provider:
+                authorize(AuthzAction.MANAGE_BUDGETS)
+            else:
+                with self._db.read_snapshot() as _snap:
+                    user_budget = reads.get_user_budget(_snap, job_id.user)
+                max_band = user_budget.max_band if user_budget is not None else self._user_budget_defaults.max_band
+                if band < max_band:
+                    raise ConnectError(
+                        Code.PERMISSION_DENIED,
+                        f"User {job_id.user} cannot submit {priority_band_name(band)} jobs "
+                        f"(max band: {priority_band_name(max_band)}). "
+                        f"Resubmit with `--priority {priority_band_name(max_band).lower()}` "
+                        f"(e.g. `--priority batch`) to launch opportunistically, or ping @Helw150 "
+                        f"if you believe your username ({job_id.user}) should have a higher band — "
+                        f"either to be added to the researcher list or to confirm your username is "
+                        f"registered correctly.",
+                    )
 
         # Elevated profiles (DOCKER_ACCESS, PRIVILEGED) are host-root-equivalent
         # and require the admin role. The check only runs when an auth provider is
@@ -1856,6 +1887,7 @@ class ControllerServiceImpl:
                 job_id=job_id,
                 request=request,
                 ts=Timestamp.now(),
+                priority_band=band,
                 submitting_user=submitting_user,
             )
         self._controller.wake()
@@ -3381,9 +3413,14 @@ class ControllerServiceImpl:
             if capacity is not None:
                 summary.availability.version = AVAILABILITY_METRIC_VERSION
                 summary.availability.observation_epoch_ms = Timestamp.now().epoch_ms()
+                held_by_band: dict[int, dict[str, int]] = {}
                 for token, device_capacity in capacity.items():
                     summary.availability.amounts[token] = device_capacity.free
                     summary.availability.total_amounts[token] = device_capacity.total
+                    for band, amount in device_capacity.held_by_band.items():
+                        held_by_band.setdefault(band, {})[token] = amount
+                for band, amounts in sorted(held_by_band.items()):
+                    summary.availability.held_by_band.add(band=band, amounts=amounts)
 
             if variant == "kubernetes":
                 summary.detail.kubernetes.CopyFrom(backend_status.kubernetes)

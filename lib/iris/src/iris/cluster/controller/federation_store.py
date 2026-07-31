@@ -36,7 +36,6 @@ from iris.cluster.federation.store import (
     HandoffState,
 )
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName
-from iris.rpc import job_pb2
 from iris.time_proto import duration_from_proto, timestamp_from_proto
 
 logger = logging.getLogger(__name__)
@@ -53,9 +52,8 @@ def build_queued_candidates(tx: Tx) -> list[QueuedCandidate]:
 
     Each candidate carries its shape (routing constraints) and its
     ``ge(available:<token>, amount)`` availability gate, derived from the job's stored
-    request. Ordered by priority band ascending (lower band = higher priority, with
-    UNSPECIFIED treated as INTERACTIVE), then oldest submission first — the order the
-    assignment pass consumes them in.
+    request. Ordered by priority band ascending (lower band = higher priority), then
+    oldest submission first — the order the assignment pass consumes them in.
     """
     candidates: list[QueuedCandidate] = []
     for handle in reads.queued_handoff_handles(tx):
@@ -69,16 +67,11 @@ def build_queued_candidates(tx: Tx) -> list[QueuedCandidate]:
         request = reconstruct_launch_job_request(job, workdir_files={})
         constraints = [Constraint.from_proto(c) for c in request.constraints]
         shape = routing_constraints(strip_cluster_constraints(strip_backend_constraints(constraints)))
-        band = (
-            job.priority_band
-            if job.priority_band != job_pb2.PRIORITY_BAND_UNSPECIFIED
-            else job_pb2.PRIORITY_BAND_INTERACTIVE
-        )
         candidates.append(
             QueuedCandidate(
                 job_id=handle.job_id,
                 pinned_peer_id=handle.peer_id,
-                priority_band=band,
+                priority_band=job.priority_band,
                 submitted_at_ms=job.submitted_at_ms.epoch_ms() if job.submitted_at_ms is not None else 0,
                 shape_constraints=shape,
                 availability_gate=peer_availability_gate(request.resources.device, request.replicas),
@@ -148,6 +141,7 @@ class ControllerFederationStore:
                 job_id=spec.local_job_id,
                 request=spec.request,
                 ts=now,
+                priority_band=int(spec.request.priority_band),
                 cluster=spec.peer_id,
                 submitting_user=spec.submitting_user,
             )
@@ -339,8 +333,8 @@ class ControllerFederationStore:
     def _insert_child_mirror(self, cur: Tx, peer_id: str, local_job_id: JobName, summary) -> bool:
         """Create the local mirror rows for a child a peer spawned under a received root.
 
-        The whole federated subtree shares the root's submitter and root submit time,
-        read from the (already-present) parent; the row is stamped with the peer
+        The whole federated subtree shares the root's submitter, root submit time, and
+        priority band, read from the (already-present) parent; the row is stamped with the peer
         cluster so it folds out of local scheduling and renders as federated. Returns
         ``False`` (and skips) if the parent is not mirrored yet — deltas arrive in
         changelog order, so the parent's creation precedes the child's and this is
@@ -384,6 +378,7 @@ class ControllerFederationStore:
             job_id=local_job_id,
             name=local_job_id.name,
             resources=summary.resources,
+            priority_band=int(seed.priority_band),
         )
         # job_config backs RunTemplatesProjection; invalidate post-commit per its
         # watch contract, as ops.job.submit does for a locally-submitted job.

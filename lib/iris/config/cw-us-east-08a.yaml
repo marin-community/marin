@@ -121,7 +121,6 @@ auth:
 
 kubernetes_provider:
   namespace: iris
-  default_image: ghcr.io/marin-community/iris-task:latest
   host_network: true                # Required for NCCL/IB multi-host traffic
   cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal nodes
   controller_address: http://iris-controller-svc.iris.svc.cluster.local:10000
@@ -222,3 +221,23 @@ scale_groups:
       coreweave:
         region: US-EAST-08A
         instance_type: gb200-4x
+
+# 128000 is about one NVL72 rack: 18 gb200-4x nodes cost ~102,000.
+user_budgets:
+  - user_ids:
+      - benjaminfeuer
+      - betsy
+      - dlwh
+      - eczech
+      - held
+      - larry
+      - marin
+      - muchanem
+      - mwittmann
+      - power
+      - rav
+      - romain
+      - wmoss
+      - zack
+    budget_limit: 128000
+    max_band: PRIORITY_BAND_INTERACTIVE
