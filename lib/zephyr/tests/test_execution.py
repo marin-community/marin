@@ -9,7 +9,7 @@ import os
 import threading
 import time
 import uuid
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -30,6 +30,7 @@ from prometheus_client import REGISTRY
 from rigging import telltale
 from zephyr import counters
 from zephyr.coordinator import (
+    _RESULT_MATERIALIZATION_WORKERS,
     MAX_SHARD_FAILURES,
     MAX_SHARD_INFRA_FAILURES,
     ZEPHYR_PROGRESS_TIME_METRIC,
@@ -62,6 +63,52 @@ class _UnpicklableError(Exception):
     def __init__(self, a, b, c):
         self.a, self.b, self.c = a, b, c
         super().__init__(f"boom {a}/{b}/{c}")  # self.args = (message,) -> revive needs 3 args
+
+
+class _RecordingShard:
+    """Shard that records which materialization thread consumes it."""
+
+    def __init__(
+        self,
+        value: int,
+        barrier: threading.Barrier,
+        threads: set[threading.Thread],
+        lock: threading.Lock,
+    ) -> None:
+        self.value = value
+        self.barrier = barrier
+        self.threads = threads
+        self.lock = lock
+
+    def __iter__(self):
+        with self.lock:
+            self.threads.add(threading.current_thread())
+        self.barrier.wait(timeout=10.0)
+        yield self.value
+
+    def get_iterators(self):
+        yield iter(self)
+
+
+def test_coordinator_reuses_final_result_materialization_threads(coordinator):
+    """Sequential pipelines reuse one bounded I/O pool instead of spawning 32 threads each."""
+    materialization_threads: list[set[threading.Thread]] = []
+    with ThreadPoolExecutor(max_workers=1) as caller:
+        for batch in range(2):
+            barrier = threading.Barrier(_RESULT_MATERIALIZATION_WORKERS + 1)
+            threads: set[threading.Thread] = set()
+            lock = threading.Lock()
+            shards = [
+                _RecordingShard(batch * _RESULT_MATERIALIZATION_WORKERS + index, barrier, threads, lock)
+                for index in range(_RESULT_MATERIALIZATION_WORKERS)
+            ]
+            result = caller.submit(coordinator._materialize_final_results, shards)
+            barrier.wait(timeout=10.0)
+            assert result.result(timeout=10.0) == [shard.value for shard in shards]
+            materialization_threads.append(threads)
+
+    assert len(materialization_threads[0]) == _RESULT_MATERIALIZATION_WORKERS
+    assert materialization_threads[0] == materialization_threads[1]
 
 
 def test_ensure_picklable_exception_passes_through_picklable():
