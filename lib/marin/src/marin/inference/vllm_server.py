@@ -122,6 +122,7 @@ class IsolatedCudaVllm:
             from_spec = f"vllm[runai]=={self.version}"
         return [
             "uvx",
+            "--no-config",
             "--from",
             from_spec,
             "--with",

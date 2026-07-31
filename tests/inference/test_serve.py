@@ -177,8 +177,9 @@ def test_isolated_cuda_vllm_upstream_disables_flashinfer_sampler():
     env = launcher.env()
     assert env["VLLM_USE_FLASHINFER_SAMPLER"] == "0"
     assert "addressing_style = virtual" in Path(env["AWS_CONFIG_FILE"]).read_text()
-    assert launcher.command()[:5] == [
+    assert launcher.command()[:6] == [
         "uvx",
+        "--no-config",
         "--from",
         f"vllm[runai]=={DEFAULT_CUDA_VLLM_VERSION}",
         "--with",
@@ -189,8 +190,9 @@ def test_isolated_cuda_vllm_upstream_disables_flashinfer_sampler():
 def test_isolated_cuda_vllm_marin_fork_command_and_env():
     launcher = IsolatedCudaVllm(source=VllmType.MARIN_FORK)
     cmd = launcher.command()
-    assert cmd[:5] == [
+    assert cmd[:6] == [
         "uvx",
+        "--no-config",
         "--from",
         vllm_fork_ref(),
         "--with",

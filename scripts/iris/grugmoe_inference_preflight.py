@@ -241,6 +241,7 @@ def vllm_args(
 def vllm_command(args: list[str]) -> list[str]:
     return [
         "uvx",
+        "--no-config",
         "--from",
         VLLM_FROM_SPEC,
         "--with",
@@ -1035,6 +1036,7 @@ def run_fixture_parity(base_url: str, model: str, *, artifact_dir: Path) -> dict
     command = [
         "uv",
         "run",
+        "--no-config",
         "--prerelease=allow",
         "--no-project",
         "--with",

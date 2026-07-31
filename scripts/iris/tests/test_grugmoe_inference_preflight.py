@@ -119,6 +119,7 @@ def test_four_node_case_has_contiguous_rank_starts() -> None:
 def test_command_pins_vllm_git_sha_and_cuda_backend() -> None:
     command = vllm_command(["serve", "/model"])
     joined = " ".join(command)
+    assert command[:2] == ["uvx", "--no-config"]
     assert VLLM_SHA in joined
     assert "--torch-backend cu130" in joined
     assert "runai-model-streamer[s3]==0.16.1" in joined
@@ -129,7 +130,7 @@ def test_fixture_parity_allows_prereleases_and_preserves_resolver_failure(
     tmp_path: Path,
 ) -> None:
     def fail(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-        assert command[:3] == ["uv", "run", "--prerelease=allow"]
+        assert command[:4] == ["uv", "run", "--no-config", "--prerelease=allow"]
         raise subprocess.CalledProcessError(
             1,
             command,
