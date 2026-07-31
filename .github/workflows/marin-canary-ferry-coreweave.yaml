@@ -182,6 +182,7 @@ jobs:
             --iris-config "$IRIS_CONFIG" \
             --poll-interval 30 \
             --timeout 7200 \
+            --resource-exhaustion-policy escalate \
             --github-output
 
       - name: Validate canary metrics
