@@ -140,8 +140,7 @@ def all_sources() -> dict[str, DatakitSource]:
     """Return the canonical active source set as ``{name: DatakitSource}``.
 
     Every entry is materializable — has a full :attr:`DatakitSource.normalize_steps`
-    chain ready to run. Disabled entries (see TODOs above) are commented out of
-    the module.
+    chain ready to run.
     """
     # Single-source families. Each exposes a ``<family>_normalize_steps()``
     # returning ``tuple[StepSpec, ...]``; the registry pairs the chain with
