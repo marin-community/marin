@@ -45,7 +45,13 @@ def test_check_worker_group_skips_after_completed_stage(tmp_path, actor_context)
     )
     run = start_test_stage(coordinator, [task], stage_name="last-stage")
     coordinator.report_result(
-        "worker-0", _TEST_EXECUTION_ID, 0, 0, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty()
+        "worker-0",
+        _TEST_EXECUTION_ID,
+        0,
+        0,
+        TaskResult(shard=ListShard(refs=[])),
+        CounterSnapshot.empty(),
+        1,
     )
 
     assert run.completed_shards >= run.total_shards
@@ -72,7 +78,13 @@ def test_check_worker_group_still_aborts_mid_stage(coordinator):
     start_test_stage(coordinator, [task, task], stage_name="mid-stage")
     # Only 1 of 2 shards completed
     coordinator.report_result(
-        "worker-0", _TEST_EXECUTION_ID, 0, 0, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty()
+        "worker-0",
+        _TEST_EXECUTION_ID,
+        0,
+        0,
+        TaskResult(shard=ListShard(refs=[])),
+        CounterSnapshot.empty(),
+        1,
     )
 
     coordinator._check_worker_group()
@@ -105,7 +117,13 @@ def test_coordinator_loop_no_abort_during_result_collection(tmp_path, actor_cont
     )
     start_test_stage(coordinator, [task], stage_name="last-stage")
     coordinator.report_result(
-        "worker-0", _TEST_EXECUTION_ID, 0, 0, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty()
+        "worker-0",
+        _TEST_EXECUTION_ID,
+        0,
+        0,
+        TaskResult(shard=ListShard(refs=[])),
+        CounterSnapshot.empty(),
+        1,
     )
 
     t = threading.Thread(target=coordinator._coordinator_loop, daemon=True)

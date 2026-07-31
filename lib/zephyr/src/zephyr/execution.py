@@ -87,47 +87,31 @@ ZEPHYR_COORDINATOR_ENDPOINT_ENV = "ZEPHYR_COORDINATOR_ENDPOINT"
 _IRIS_JOB_ENV = "IRIS_JOB_ENV"
 
 
-def _withdraw_pool_offer(previous: str | None) -> None:
-    """Undo :func:`_offer_pool_to_child_jobs`, restoring the prior value.
+def _advertise_pool(endpoint: str) -> tuple[str | None, str | None]:
+    """Publish a pool's address so other contexts find it, and return what it replaced.
 
-    Without this, jobs submitted after the pool shuts down inherit the name of
-    a pool that no longer exists and hang looking for its coordinator.
-    """
-    info = get_job_info()
-    if info is None:
-        return
-    raw = os.environ.get(_IRIS_JOB_ENV, "")
-    declared = json.loads(raw) if raw else {}
-    if previous is None:
-        info.env.pop(ZEPHYR_COORDINATOR_ENDPOINT_ENV, None)
-        declared.pop(ZEPHYR_COORDINATOR_ENDPOINT_ENV, None)
-    else:
-        info.env[ZEPHYR_COORDINATOR_ENDPOINT_ENV] = previous
-        declared[ZEPHYR_COORDINATOR_ENDPOINT_ENV] = previous
-    os.environ[_IRIS_JOB_ENV] = json.dumps(declared)
+    Two audiences, because a driver reaches its stages both ways:
 
-
-def _offer_pool_to_child_jobs(endpoint: str) -> str | None:
-    """Add the coordinator's address to this job's env so children inherit it.
+    * this process, via ``os.environ`` — stages that run in-process build their
+      own ``ZephyrContext``, and without this each would start a private pool
+      while the shared one sat idle;
+    * jobs submitted after this call, via the job's declared environment, which
+      Iris copies into every child.
 
     The address is absolute, so it resolves from a job at any depth and from one
     with no parent at all. A pool *name* would not: resolving a name means
     looking beside the caller's own parent, which is only correct one level
-    down from the host.
-
-    Iris copies a job's declared env into each child it submits, so a host that
-    records the pool here has offered it to every job it launches afterwards —
-    no per-step wiring, and no need to know the pool's name before the job that
-    creates it starts.
-
-    Only jobs submitted after this call inherit it. Outside an Iris job there is
-    nothing to inherit from, so this is a no-op and callers pass ``pool_name``
-    explicitly. Returns the value this replaced, for ``_withdraw_pool_offer``.
+    below the host.
     """
+    prior_process = os.environ.get(ZEPHYR_COORDINATOR_ENDPOINT_ENV)
+    os.environ[ZEPHYR_COORDINATOR_ENDPOINT_ENV] = endpoint
+
     info = get_job_info()
     if info is None:
-        return None
-    previous = info.env.get(ZEPHYR_COORDINATOR_ENDPOINT_ENV)
+        # Not inside an Iris job, so nothing inherits from us.
+        return prior_process, None
+
+    prior_declared = info.env.get(ZEPHYR_COORDINATOR_ENDPOINT_ENV)
     # get_job_info() re-reads the environment unless something has populated its
     # ContextVar, so update both: the live object if one is cached, and the
     # serialized copy that the fallback path parses.
@@ -136,8 +120,34 @@ def _offer_pool_to_child_jobs(endpoint: str) -> str | None:
     declared = json.loads(raw) if raw else {}
     declared[ZEPHYR_COORDINATOR_ENDPOINT_ENV] = endpoint
     os.environ[_IRIS_JOB_ENV] = json.dumps(declared)
-    logger.info("Offering pool at %s to child jobs via %s", endpoint, ZEPHYR_COORDINATOR_ENDPOINT_ENV)
-    return previous
+    logger.info("Advertising pool at %s via %s", endpoint, ZEPHYR_COORDINATOR_ENDPOINT_ENV)
+    return prior_process, prior_declared
+
+
+def _withdraw_pool(prior_process: str | None, prior_declared: str | None) -> None:
+    """Undo :func:`_advertise_pool`.
+
+    Without this, contexts built after the pool shuts down — in this process or
+    in a job submitted later — take the address of a pool that no longer exists
+    and hang looking for its coordinator.
+    """
+
+    def _restore(target: dict[str, str], previous: str | None) -> None:
+        if previous is None:
+            target.pop(ZEPHYR_COORDINATOR_ENDPOINT_ENV, None)
+        else:
+            target[ZEPHYR_COORDINATOR_ENDPOINT_ENV] = previous
+
+    _restore(os.environ, prior_process)  # type: ignore[arg-type]
+
+    info = get_job_info()
+    if info is None:
+        return
+    _restore(info.env, prior_declared)
+    raw = os.environ.get(_IRIS_JOB_ENV, "")
+    declared = json.loads(raw) if raw else {}
+    _restore(declared, prior_declared)
+    os.environ[_IRIS_JOB_ENV] = json.dumps(declared)
 
 
 class PoolMode(enum.StrEnum):
@@ -382,7 +392,7 @@ class ZephyrContext:
     _owned_pool: "_ZephyrPool | None" = field(default=None, repr=False)
     # Whether start() advertised the pool to child jobs, and what it replaced.
     _offered_pool: bool = field(default=False, repr=False)
-    _prior_pool_offer: str | None = field(default=None, repr=False)
+    _prior_pool_offer: tuple[str | None, str | None] = field(default=(None, None), repr=False)
     # Cached describe() of the coordinator we are connected to
     _coordinator_info: CoordinatorInfo | None = field(default=None, repr=False)
     # NOTE: execute calls increment this at the very beginning
@@ -689,7 +699,7 @@ class ZephyrContext:
         )
         self.coordinator_endpoint = pool.start(timeout=timeout)
         self._owned_pool = pool
-        self._prior_pool_offer = _offer_pool_to_child_jobs(self.coordinator_endpoint)
+        self._prior_pool_offer = _advertise_pool(self.coordinator_endpoint)
         self._offered_pool = True
         return self.pool_name
 
@@ -703,8 +713,8 @@ class ZephyrContext:
         """
         if self._offered_pool:
             self._offered_pool = False
-            _withdraw_pool_offer(self._prior_pool_offer)
-            self._prior_pool_offer = None
+            _withdraw_pool(*self._prior_pool_offer)
+            self._prior_pool_offer = (None, None)
 
         # Ownership is released only once teardown succeeds. Clearing the
         # handle first and swallowing the error would leave a live pool that

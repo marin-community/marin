@@ -7,13 +7,21 @@ End-to-end on ``LocalClient``, so the coordinator runs in a background job
 thread and workers are in-process actors.
 """
 
+import os
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 
 import pytest
-from conftest import _TEST_TASK_COST, _make_test_coordinator
+from conftest import _TEST_TASK_COST, ZEPHYR_ROOT, _make_test_coordinator
+from fray.iris_backend import FrayIrisClient
 from fray.local_backend import LocalClient
+from fray.types import JobStatus as FrayJobStatus
 from fray.types import ResourceConfig
+from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
+from iris.cluster.types import Entrypoint as IrisEntrypoint
+from iris.cluster.types import ResourceSpec
 from zephyr import counters
 from zephyr.coordinator import _PipelineExecution
 from zephyr.dataset import Dataset
@@ -26,6 +34,11 @@ from zephyr.plan import compute_plan
 from zephyr.pool import _job_environment, _ZephyrPool
 from zephyr.shuffle import ListShard
 from zephyr.stage_io import ShardTask, ZephyrWorkerError
+
+
+def _idle_parent() -> None:
+    """Long-lived parent so child submissions have a live parent row."""
+    time.sleep(3600)
 
 
 def _count_items(x):
@@ -348,7 +361,7 @@ def test_shared_mode_fails_fast_without_a_pool(local_client, monkeypatch):
         ZephyrContext(client=local_client, mode=PoolMode.INHERIT, resources=ResourceConfig(cpu=1, ram="512m"))
 
 
-def test_context_start_owns_a_pool_that_other_contexts_join_by_name(tmp_path, monkeypatch):
+def test_context_start_owns_a_pool_that_other_contexts_join_by_name(tmp_path):
     """Entering a mode=HOST context starts its pool; others join at its address."""
     client = LocalClient(max_threads=8)
     name = f"ingest-{uuid.uuid4().hex[:8]}"
@@ -364,7 +377,8 @@ def test_context_start_owns_a_pool_that_other_contexts_join_by_name(tmp_path, mo
     with owner:
         assert owner.coordinator_endpoint is not None
 
-        monkeypatch.setenv(ZEPHYR_COORDINATOR_ENDPOINT_ENV, owner.coordinator_endpoint)
+        # No setenv here: hosting advertises the address itself. Setting it as
+        # well would leave monkeypatch restoring a dead endpoint for later tests.
         joiner = ZephyrContext(client=client, resources=ResourceConfig(cpu=1, ram="512m"))
         assert joiner.coordinator_endpoint == owner.coordinator_endpoint
         assert sorted(joiner.execute(Dataset.from_list([3, 4]).map(lambda x: x + 1)).results) == [4, 5]
@@ -390,3 +404,144 @@ def test_env_endpoint_is_picked_up_by_a_plain_context(tmp_path, monkeypatch):
         assert driver.coordinator_endpoint == endpoint
         assert sorted(driver.execute(Dataset.from_list([2, 5]).map(lambda x: x + 1)).results) == [3, 6]
     client.shutdown(wait=True)
+
+
+def test_host_advertises_its_pool_to_the_same_process(tmp_path, monkeypatch):
+    """A stage that runs in the host's own process joins the pool too.
+
+    Drivers commonly run some stages in-process rather than as child jobs. Those
+    build their own ZephyrContext, so the host has to publish the address into
+    its own environment or each one starts a private pool while the shared pool
+    sits idle.
+    """
+    monkeypatch.delenv(ZEPHYR_COORDINATOR_ENDPOINT_ENV, raising=False)
+    client = LocalClient(max_threads=8)
+    host = ZephyrContext(
+        client=client,
+        mode=PoolMode.HOST,
+        pool_name=f"inproc-{uuid.uuid4().hex[:8]}",
+        max_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name=f"host-{uuid.uuid4().hex[:8]}",
+    )
+    with host:
+        assert os.environ[ZEPHYR_COORDINATOR_ENDPOINT_ENV] == host.coordinator_endpoint
+
+        in_process = ZephyrContext(client=client, resources=ResourceConfig(cpu=1, ram="512m"))
+        assert in_process.coordinator_endpoint == host.coordinator_endpoint
+        assert sorted(in_process.execute(Dataset.from_list([1, 2]).map(lambda x: x * 4)).results) == [4, 8]
+
+    # Withdrawn on teardown, so a later context does not chase a dead pool.
+    assert ZEPHYR_COORDINATOR_ENDPOINT_ENV not in os.environ
+    client.shutdown(wait=True)
+
+
+def test_pool_keeps_its_job_handle_when_termination_fails(tmp_path, monkeypatch):
+    """A failed terminate must not drop the handle: cleanup has to stay retryable."""
+    client = LocalClient(max_threads=8)
+    pool = _ZephyrPool(
+        client=client,
+        max_workers=1,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name=f"keep-{uuid.uuid4().hex[:8]}",
+    )
+    pool.start()
+    serve_job = pool._serve_job
+    assert serve_job is not None
+
+    # shutdown() skips terminate() for a job that already finished, so hold it
+    # in RUNNING to reach the path under test.
+    monkeypatch.setattr(serve_job, "wait", lambda *a, **k: FrayJobStatus.RUNNING)
+    monkeypatch.setattr(serve_job, "terminate", lambda: (_ for _ in ()).throw(RuntimeError("terminate failed")))
+    with pytest.raises(RuntimeError, match="terminate failed"):
+        pool.shutdown()
+    assert pool._serve_job is serve_job, "handle dropped; nothing could stop the live pool"
+
+    monkeypatch.undo()
+    pool.shutdown()
+    assert pool._serve_job is None
+    client.shutdown(wait=True)
+
+
+def test_context_keeps_its_owned_pool_when_shutdown_fails(tmp_path, monkeypatch):
+    """Same contract one level up: ZephyrContext keeps _owned_pool if teardown fails."""
+    client = LocalClient(max_threads=8)
+    ctx = ZephyrContext(
+        client=client,
+        mode=PoolMode.HOST,
+        pool_name=f"keepctx-{uuid.uuid4().hex[:8]}",
+        max_workers=1,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name=f"host-{uuid.uuid4().hex[:8]}",
+    )
+    ctx.start()
+    owned = ctx._owned_pool
+    assert owned is not None
+
+    monkeypatch.setattr(owned, "shutdown", lambda: (_ for _ in ()).throw(RuntimeError("pool shutdown failed")))
+    with pytest.raises(RuntimeError, match="pool shutdown failed"):
+        ctx.shutdown()
+    assert ctx._owned_pool is owned, "handle dropped; the pool would leak"
+
+    monkeypatch.undo()
+    ctx.shutdown()
+    assert ctx._owned_pool is None
+    client.shutdown(wait=True)
+
+
+def test_standing_pool_serves_a_connected_driver_on_iris(iris_cluster, tmp_path):
+    """The feature's real path: a pool and a driver on Iris, joining by address.
+
+    Every other standing-pool test runs on LocalClient, which resolves actors
+    through an in-process registry and exercises none of endpoint registration,
+    cross-job resolution, or worker-group teardown. An Iris-only resolution
+    failure in exactly this path reached CI once.
+    """
+    iris_client = IrisClient.remote(iris_cluster, workspace=ZEPHYR_ROOT)
+    client = FrayIrisClient.from_iris_client(iris_client)
+    parent = iris_client.submit(
+        entrypoint=IrisEntrypoint.from_callable(_idle_parent),
+        name=f"pooltest-{uuid.uuid4().hex[:6]}",
+        resources=ResourceSpec(cpu=1, memory="512m"),
+    )
+    try:
+        ctx = IrisContext(job_id=parent.job_id, client=iris_client)
+        with iris_ctx_scope(ctx):
+            pool = _ZephyrPool(
+                client=client,
+                name=f"iris-{uuid.uuid4().hex[:8]}",
+                max_workers=1,
+                resources=ResourceConfig(cpu=1, ram="512m"),
+                chunk_storage_prefix=str(tmp_path / "chunks"),
+            )
+            endpoint = pool.start()
+            try:
+                assert endpoint.startswith("/"), f"expected an absolute endpoint, got {endpoint!r}"
+
+                driver = ZephyrContext(
+                    client=client,
+                    coordinator_endpoint=endpoint,
+                    resources=ResourceConfig(cpu=1, ram="512m"),
+                    chunk_storage_prefix=str(tmp_path / "chunks"),
+                    name=f"driver-{uuid.uuid4().hex[:8]}",
+                )
+                got = driver.execute(Dataset.from_list([1, 2, 3]).map(lambda x: x * 3))
+                assert sorted(got.results) == [3, 6, 9]
+
+                # A second pipeline reuses the same pool rather than building one.
+                again = ZephyrContext(
+                    client=client,
+                    coordinator_endpoint=endpoint,
+                    resources=ResourceConfig(cpu=1, ram="512m"),
+                    chunk_storage_prefix=str(tmp_path / "chunks"),
+                    name=f"driver2-{uuid.uuid4().hex[:8]}",
+                )
+                assert sorted(again.execute(Dataset.from_list([4]).map(lambda x: x + 1)).results) == [5]
+            finally:
+                pool.shutdown()
+    finally:
+        with suppress(Exception):
+            iris_client.terminate(parent.job_id)

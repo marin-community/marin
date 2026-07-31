@@ -231,7 +231,7 @@ class ZephyrWorker:
         """Execute one shard task, report the result, and restore task.cost to the pool."""
         task_start = time.monotonic()
         execution_id = config["execution_id"]
-        stage_generation = config.get("stage_generation")
+        stage_generation = config["stage_generation"]
         try:
             result, task_counters = self._execute_shard(task, config, runner)
             logger.info("[%s] Shard %d done in %.2fs", self._worker_id, task.shard_idx, time.monotonic() - task_start)

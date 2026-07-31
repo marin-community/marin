@@ -502,12 +502,24 @@ def test_no_duplicate_results_on_heartbeat_timeout(coordinator):
 
     # Worker B reports success
     coordinator.report_result(
-        "worker-B", _TEST_EXECUTION_ID, 0, work_b.attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty()
+        "worker-B",
+        _TEST_EXECUTION_ID,
+        0,
+        work_b.attempt,
+        TaskResult(shard=ListShard(refs=[])),
+        CounterSnapshot.empty(),
+        1,
     )
 
     # Worker A's stale result (attempt 0) should be ignored
     coordinator.report_result(
-        "worker-A", _TEST_EXECUTION_ID, 0, work_a.attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty()
+        "worker-A",
+        _TEST_EXECUTION_ID,
+        0,
+        work_a.attempt,
+        TaskResult(shard=ListShard(refs=[])),
+        CounterSnapshot.empty(),
+        1,
     )
 
     # Only one completion should be counted
@@ -541,6 +553,7 @@ def test_progress_metric_resets_at_stage_start_and_advances_after_a_shard(coordi
         work.attempt,
         TaskResult(shard=ListShard(refs=[])),
         CounterSnapshot.empty(),
+        1,
     )
     coordinator._publish_telltale()
     assert REGISTRY.get_sample_value(ZEPHYR_PROGRESS_TIME_METRIC) == 1_010.0
@@ -616,6 +629,7 @@ def test_coordinator_accepts_winner_ignores_stale(coordinator, tmp_path):
         work_b.attempt,
         TaskResult(shard=ListShard(refs=[winner_ref])),
         CounterSnapshot.empty(),
+        1,
     )
 
     # Worker A's stale result is rejected
@@ -626,6 +640,7 @@ def test_coordinator_accepts_winner_ignores_stale(coordinator, tmp_path):
         work_a.attempt,
         TaskResult(shard=ListShard(refs=[stale_ref])),
         CounterSnapshot.empty(),
+        1,
     )
 
     # Winner's data is directly readable (no rename needed)
@@ -663,7 +678,13 @@ def test_stale_result_ignored_while_reassigned_worker_in_flight(coordinator):
     assert run.in_flight[0].worker_id == "worker-B"
 
     coordinator.report_result(
-        "worker-A", _TEST_EXECUTION_ID, 0, work_a.attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty()
+        "worker-A",
+        _TEST_EXECUTION_ID,
+        0,
+        work_a.attempt,
+        TaskResult(shard=ListShard(refs=[])),
+        CounterSnapshot.empty(),
+        1,
     )
 
     assert run.completed_shards == 0
@@ -715,14 +736,14 @@ def test_report_error_requeues_until_max_shard_failures(coordinator):
     for i in range(MAX_SHARD_FAILURES - 1):
         status, work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
         assert status == PullStatus.RUN_TASK
-        coordinator.report_error("worker-0", _TEST_EXECUTION_ID, 0, work.attempt, f"error-{i}")
+        coordinator.report_error("worker-0", _TEST_EXECUTION_ID, 0, work.attempt, f"error-{i}", 1)
         assert run.fatal_error is None, f"Should not abort on failure {i + 1}"
         assert coordinator._worker_states["worker-0"] == WorkerState.ACTIVE
 
     # The final failure should set fatal_error
     status, work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
     assert status == PullStatus.RUN_TASK
-    coordinator.report_error("worker-0", _TEST_EXECUTION_ID, 0, work.attempt, "final-error")
+    coordinator.report_error("worker-0", _TEST_EXECUTION_ID, 0, work.attempt, "final-error", 1)
     assert run.fatal_error is not None
     assert "Shard 0" in run.fatal_error
     assert "final-error" in run.fatal_error
@@ -755,7 +776,13 @@ def test_heartbeat_timeouts_do_not_count_toward_shard_failures(coordinator):
     assert status == PullStatus.RUN_TASK
     assert work is not None
     coordinator.report_result(
-        "worker-0", _TEST_EXECUTION_ID, 0, work.attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty()
+        "worker-0",
+        _TEST_EXECUTION_ID,
+        0,
+        work.attempt,
+        TaskResult(shard=ListShard(refs=[])),
+        CounterSnapshot.empty(),
+        1,
     )
     assert run.completed_shards == 1
     assert run.fatal_error is None
@@ -822,13 +849,13 @@ def test_max_shard_failures_override_via_constructor(coordinator):
     # First failure: re-queues, no abort.
     status, work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
     assert status == PullStatus.RUN_TASK
-    coordinator.report_error("worker-0", _TEST_EXECUTION_ID, 0, work.attempt, "error-1")
+    coordinator.report_error("worker-0", _TEST_EXECUTION_ID, 0, work.attempt, "error-1", 1)
     assert run.fatal_error is None
 
     # Second failure: hits the custom cap of 2 → abort.
     status, work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
     assert status == PullStatus.RUN_TASK
-    coordinator.report_error("worker-0", _TEST_EXECUTION_ID, 0, work.attempt, "error-2")
+    coordinator.report_error("worker-0", _TEST_EXECUTION_ID, 0, work.attempt, "error-2", 1)
     assert run.fatal_error is not None
     assert "Shard 0" in run.fatal_error
     assert "error-2" in run.fatal_error
@@ -921,7 +948,7 @@ def test_report_error_still_aborts_at_max_shard_failures_after_preemptions(coord
     for i in range(MAX_SHARD_FAILURES):
         status, work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
         assert status == PullStatus.RUN_TASK
-        coordinator.report_error("worker-0", _TEST_EXECUTION_ID, 0, work.attempt, f"boom-{i}")
+        coordinator.report_error("worker-0", _TEST_EXECUTION_ID, 0, work.attempt, f"boom-{i}", 1)
 
     assert run.fatal_error is not None
     assert "Shard 0" in run.fatal_error
@@ -995,6 +1022,7 @@ def test_wait_for_stage_resets_dead_timer_on_recovery(coordinator):
             work.attempt,
             TaskResult(shard=ListShard(refs=[])),
             CounterSnapshot.empty(),
+            1,
         )
 
     t = threading.Thread(target=recover_and_complete)
@@ -1158,6 +1186,7 @@ def test_last_stage_deadlock_detected_when_worker_job_dies(coordinator):
         work_a.attempt,
         TaskResult(shard=ListShard(refs=[])),
         CounterSnapshot.empty(),
+        1,
     )
 
     # Worker B crashes → heartbeat timeout → shard 1 requeued.
@@ -1551,3 +1580,39 @@ def test_report_from_a_previous_stage_is_rejected(coordinator):
         run.stage_generation,
     )
     assert run.completed_shards == 1
+
+
+def test_failed_execution_drains_in_flight_tasks_before_teardown(coordinator):
+    """Teardown waits for dispatched tasks, because the driver deletes storage next.
+
+    A task still running when the execution directory disappears loses its
+    shared data or writes chunks nothing will clean up.
+    """
+    run = start_test_stage(coordinator, [_make_task("drain-me")])
+    coordinator.register_worker("worker-0", MagicMock())
+    status, work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+    assert status == PullStatus.RUN_TASK
+    assert run.in_flight, "expected a dispatched task to drain"
+
+    run.fatal_error = "boom"
+    drained = threading.Event()
+
+    def _drain() -> None:
+        coordinator._drain_execution(run, timeout=10.0)
+        drained.set()
+
+    t = threading.Thread(target=_drain, daemon=True)
+    t.start()
+    assert not drained.wait(timeout=0.5), "drain returned while a task was still in flight"
+
+    coordinator.report_result(
+        "worker-0",
+        _TEST_EXECUTION_ID,
+        0,
+        work.attempt,
+        TaskResult(shard=ListShard(refs=[])),
+        CounterSnapshot.empty(),
+        run.stage_generation,
+    )
+    assert drained.wait(timeout=10.0), "drain did not return after the task retired"
+    t.join(timeout=5.0)

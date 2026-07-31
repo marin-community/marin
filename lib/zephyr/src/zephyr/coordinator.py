@@ -730,6 +730,13 @@ class ZephyrCoordinator:
                 self._max_shard_infra_failures,
             )
 
+        if run.fatal_error is not None:
+            # The execution is winding down and its storage is about to be
+            # deleted; putting the shard back would start work with nothing to
+            # write to, and would keep the drain from ever finishing.
+            logger.info("[%s] Not requeuing shard %d: execution already failed", run.execution_id, shard_idx)
+            return True
+
         run.task_queue.append(task)
         run.retries += 1
         return False
@@ -834,14 +841,13 @@ class ZephyrCoordinator:
                 f"This indicates report_result/pull_task reordering — workers must block on report_result."
             )
 
-    def _is_current_stage(self, run: _PipelineExecution, stage_generation: int | None, shard_idx: int) -> bool:
+    def _is_current_stage(self, run: _PipelineExecution, stage_generation: int, shard_idx: int) -> bool:
         """False for a report belonging to a stage this execution has moved past.
 
-        ``None`` means a worker that predates the field; accept it rather than
-        drop real work, since the collision it guards against needs a report to
-        outlive a stage boundary.
+        A pool runs its coordinator and workers from one revision, so the stamp
+        is always present; there is no unstamped path to accept.
         """
-        if stage_generation is None or stage_generation == run.stage_generation:
+        if stage_generation == run.stage_generation:
             return True
         logger.warning(
             "Ignoring report for shard %d from stage generation %d (current %d)",
@@ -859,7 +865,7 @@ class ZephyrCoordinator:
         attempt: int,
         result: TaskResult,
         counter_snapshot: CounterSnapshot,
-        stage_generation: int | None = None,
+        stage_generation: int,
     ) -> None:
         with self._lock:
             self._last_seen[worker_id] = time.monotonic()
@@ -932,7 +938,7 @@ class ZephyrCoordinator:
         shard_idx: int,
         attempt: int,
         error_info: str,
-        stage_generation: int | None = None,
+        stage_generation: int,
     ) -> None:
         """Worker reports a task failure. Re-queues up to MAX_SHARD_FAILURES."""
         with self._lock:
@@ -1261,6 +1267,7 @@ class ZephyrCoordinator:
                 self._persist_result(result_path, _ensure_picklable_exception(e))
             raise
         finally:
+            self._drain_execution(run)
             with self._lock:
                 run.finish()
                 # Drop the finished execution so coordinator state does not grow
@@ -1278,6 +1285,45 @@ class ZephyrCoordinator:
                     )
                     self._retired_counters = {k: e for k, e in merged.items() if k not in conflicted}
                 self._executions.pop(execution_id, None)
+
+    def _drain_execution(self, run: _PipelineExecution, timeout: float = 300.0) -> None:
+        """Stop dispatching for this execution and wait for its tasks to retire.
+
+        The driver deletes the execution's storage as soon as ``run_pipeline``
+        returns. A task still running then loses the shared data underneath it,
+        or writes chunk files nothing will clean up. Draining first makes that
+        deletion safe.
+
+        Reports arriving during the drain are recorded normally; ``pull_task``
+        stops handing this execution out because its queue is cleared here.
+        Shards are not requeued once the execution has failed.
+        """
+        with self._lock:
+            run.task_queue.clear()
+            if not run.in_flight:
+                return
+            outstanding = len(run.in_flight)
+        logger.info("[%s] Draining %d in-flight task(s) before teardown", run.execution_id, outstanding)
+
+        deadline = time.monotonic() + timeout
+        backoff = ExponentialBackoff(initial=0.1, maximum=2.0)
+        while time.monotonic() < deadline:
+            with self._lock:
+                if not run.in_flight:
+                    return
+            if self._shutdown_event.is_set():
+                return
+            time.sleep(backoff.next_interval())
+
+        with self._lock:
+            stragglers = sorted(run.in_flight)
+        logger.warning(
+            "[%s] %d task(s) still in flight after %.0fs; tearing down anyway: %s",
+            run.execution_id,
+            len(stragglers),
+            timeout,
+            stragglers,
+        )
 
     def _persist_result(self, result_path: str, payload: Any) -> None:
         """Write a pipeline's result payload to storage.
