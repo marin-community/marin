@@ -160,6 +160,8 @@ def all_sources() -> dict[str, DatakitSource]:
         ("cp/biodiversity", biodiversity_normalize_steps, 8.60),
         ("climblab-ja", climblab_ja_normalize_steps, 371.92),
         ("coderforge", coderforge_normalize_steps, 10.29),
+        # Canonical token-count-viewer estimate for the pinned b78a5c1 revision
+        # (10,005 files / 4.49 TB); not yet measured with the Marin tokenizer.
         ("common_corpus/english", common_corpus_normalize_steps, 1015.39),
         ("common-crawl-focus-2026-22", common_crawl_focus_normalize_steps, 49.702569456),
         ("davinci-dev/ctx-native", davinci_dev_ctx_native_normalize_steps, 57.57),
@@ -214,7 +216,8 @@ def all_sources() -> dict[str, DatakitSource]:
     )
 
     # StarCoder2-Extras: ir_low_resource is absent from the token-count viewer.
-    # Its rough count scales the three measured IR subsets by uncompressed bytes.
+    # Its rough count scales the three measured IR subsets by uncompressed bytes;
+    # replace it with the Marin-tokenizer total once its normalized cache is built.
     starcoder2_extras = _rows_flat(
         starcoder2_extras_normalize_steps,
         {
