@@ -2145,7 +2145,9 @@ class TestProxyDashboardCredentials:
             return httpx.Response(200, json={})
 
         dashboard = ProxyControllerDashboard(upstream_url="https://iris.example", credentials=credentials)
-        dashboard._client = httpx.AsyncClient(base_url="https://iris.example", transport=httpx.MockTransport(handler))
+        # Swap the transport, not the client: auth lives on the client the
+        # constructor built, which is the wiring under test.
+        dashboard._client._transport = httpx.MockTransport(handler)
         return dashboard, seen
 
     @staticmethod

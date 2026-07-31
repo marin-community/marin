@@ -460,6 +460,23 @@ class ControllerDashboard:
         return Response(data, media_type="application/octet-stream")
 
 
+class _CredentialAuth(httpx.Auth):
+    """Attaches ``credentials`` to every request an httpx client sends.
+
+    Authenticating at the client rather than per call site means a route added
+    later is authenticated by construction. Tokens mint per request, because a
+    provider re-mints an expired one and a proxy outlives a token's lifetime.
+    Minting can refresh over the network, so it runs off the event loop.
+    """
+
+    def __init__(self, credentials: ClientCredentials):
+        self._credentials = credentials
+
+    async def async_auth_flow(self, request: httpx.Request):
+        request.headers.update(await run_in_threadpool(self._credentials.headers))
+        yield request
+
+
 class ProxyControllerDashboard:
     """Dashboard that proxies RPC calls to a remote Iris controller.
 
@@ -482,8 +499,11 @@ class ProxyControllerDashboard:
         self._upstream_url = upstream_url.rstrip("/")
         self._host = host
         self._port = port
-        self._credentials = credentials
-        self._client = httpx.AsyncClient(base_url=self._upstream_url, timeout=60.0)
+        self._client = httpx.AsyncClient(
+            base_url=self._upstream_url,
+            timeout=60.0,
+            auth=_CredentialAuth(credentials) if credentials is not None else None,
+        )
         self._app = self._create_app()
 
     @property
@@ -543,26 +563,13 @@ class ProxyControllerDashboard:
     def _health(self, _request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok"})
 
-    async def _upstream_headers(self, content_type: str | None = None) -> dict[str, str]:
-        """Bearer headers for one upstream request, plus ``content-type`` when given.
-
-        Minted per request rather than at startup: a provider re-mints an expired
-        token, so a long-lived proxy holding a cached header would start failing
-        partway through a session. Minting can refresh over the network, so it
-        runs off the event loop.
-        """
-        headers = await run_in_threadpool(self._credentials.headers) if self._credentials is not None else {}
-        if content_type is not None:
-            headers["content-type"] = content_type
-        return headers
-
     async def _proxy_auth(self, request: Request) -> Response:
         path = request.path_params["path"]
         upstream_resp = await self._client.request(
             request.method,
             f"/auth/{path}",
             content=await request.body() if request.method in ("POST", "PUT") else None,
-            headers=await self._upstream_headers(request.headers.get("content-type", "application/json")),
+            headers={"content-type": request.headers.get("content-type", "application/json")},
         )
         return Response(
             content=upstream_resp.content,
@@ -577,7 +584,7 @@ class ProxyControllerDashboard:
         upstream_resp = await self._client.post(
             f"/{service}/{method}",
             content=body,
-            headers=await self._upstream_headers(request.headers.get("content-type", "application/json")),
+            headers={"content-type": request.headers.get("content-type", "application/json")},
         )
         return Response(
             content=upstream_resp.content,
@@ -600,7 +607,7 @@ class ProxyControllerDashboard:
             request.method,
             f"/proxy/{path}{query}",
             content=await request.body(),
-            headers=await self._upstream_headers(request.headers.get("content-type", "application/json")),
+            headers={"content-type": request.headers.get("content-type", "application/json")},
         )
         return Response(
             content=upstream_resp.content,
@@ -610,10 +617,7 @@ class ProxyControllerDashboard:
 
     async def _proxy_get(self, request: Request, *, param: str, upstream: str, media_type: str) -> Response:
         """Forward a GET for a single path param to ``upstream`` (a format string)."""
-        upstream_resp = await self._client.get(
-            upstream.format(request.path_params[param]),
-            headers=await self._upstream_headers(),
-        )
+        upstream_resp = await self._client.get(upstream.format(request.path_params[param]))
         if upstream_resp.status_code != 200:
             return Response(upstream_resp.text, status_code=upstream_resp.status_code)
         return Response(upstream_resp.content, media_type=media_type)

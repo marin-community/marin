@@ -54,35 +54,30 @@ class ClientCredentials:
     token_provider: TokenProvider | None = None
     iap_provider: TokenProvider | None = None
 
-    def interceptors(self) -> tuple:
-        """The client-side interceptor chain for these credentials.
+    def _bearers(self) -> tuple[tuple[str, TokenProvider], ...]:
+        """The (header, provider) pairs to attach, in order, skipping absent providers.
 
         The app token rides in ``Authorization``; the IAP edge token in
         ``Proxy-Authorization`` so the app header stays free for the service's own
-        JWT. Either may be absent (loopback trust sends neither).
+        JWT. Either may be absent (loopback trust sends neither). Both attachment
+        forms below read this, so a renamed header or a third provider is one edit.
         """
-        chain: tuple = ()
-        if self.token_provider is not None:
-            chain += (BearerTokenInjector(self.token_provider, "authorization"),)
-        if self.iap_provider is not None:
-            chain += (BearerTokenInjector(self.iap_provider, "proxy-authorization"),)
-        return chain
+        pairs = (("authorization", self.token_provider), ("proxy-authorization", self.iap_provider))
+        return tuple((header, provider) for header, provider in pairs if provider is not None)
+
+    def interceptors(self) -> tuple:
+        """The client-side interceptor chain for these credentials."""
+        return tuple(BearerTokenInjector(provider, header) for header, provider in self._bearers())
 
     def headers(self) -> dict[str, str]:
         """The same bearer headers :meth:`interceptors` attaches, as a plain dict.
 
-        For callers that speak plain HTTP rather than Connect RPC — an HTTP proxy
-        forwarding upstream, say — and so cannot use the interceptor chain. Mints
-        on every call, because a provider re-mints an expired token; do not cache
-        the result across requests. A provider that returns None contributes no
-        header (the loopback / SSH-tunnel-trust case).
+        For callers that speak plain HTTP rather than Connect RPC and so cannot use
+        the interceptor chain. Mints on every call, because a provider re-mints an
+        expired token, so do not cache the result across requests. A provider that
+        yields nothing contributes no header.
         """
-        pairs = (("authorization", self.token_provider), ("proxy-authorization", self.iap_provider))
-        return {
-            header: f"Bearer {token}"
-            for header, provider in pairs
-            if provider is not None and (token := provider.get_token())
-        }
+        return {header: f"Bearer {token}" for header, provider in self._bearers() if (token := provider.get_token())}
 
 
 def _login_hint(cluster: str) -> str:
