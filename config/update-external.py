@@ -19,6 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 EXTERNAL_ROOT = Path(__file__).with_name("external")
 GENERATED_PINS = ROOT / "lib" / "marin" / "src" / "marin" / "external_dependencies.py"
+GIT_SUFFIX = ".git"
 
 
 @dataclass(frozen=True)
@@ -161,7 +162,7 @@ EXTERNAL_DEPENDENCIES = (
 def github_repository_path(repository: str) -> str:
     """Return an owner/repository path from a GitHub HTTPS URL."""
     prefix = "https://github.com/"
-    repository_path = repository.removesuffix(".git").removeprefix(prefix)
+    repository_path = repository.removesuffix(GIT_SUFFIX).removeprefix(prefix)
     if not repository.startswith(prefix) or repository_path.count("/") != 1:
         raise ValueError(f"expected a GitHub HTTPS repository, found {repository!r}")
     return repository_path
@@ -244,7 +245,7 @@ def render_summary(
         f"| `{dependency.project.config_name}` | `{dependency.project.distribution}` | "
         f"`{dependency.version}` | "
         f"[`{dependency.commit[:12]}`]"
-        f"({dependency.repository.removesuffix('.git')}/commit/{dependency.commit}) |"
+        f"({dependency.repository.removesuffix(GIT_SUFFIX)}/commit/{dependency.commit}) |"
         for dependency in dependencies
     )
     update_sections = "\n\n".join(
@@ -252,7 +253,7 @@ def render_summary(
         f"(`{update.previous.commit[:12]}` → `{update.current.commit[:12]}`)\n\n"
         + "\n".join(
             f"- [`{commit.commit[:12]}`]"
-            f"({update.current.repository.removesuffix('.git')}/commit/{commit.commit}): "
+            f"({update.current.repository.removesuffix(GIT_SUFFIX)}/commit/{commit.commit}): "
             f"{commit.subject}"
             for commit in update.commits
         )
