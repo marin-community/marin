@@ -5849,6 +5849,8 @@ name = "marin-rigging"
 version = "0.2.0"
 source = { editable = "lib/rigging" }
 dependencies = [
+    { name = "aiobotocore" },
+    { name = "aiohttp" },
     { name = "braceexpand" },
     { name = "click" },
     { name = "connect-python" },
@@ -5890,6 +5892,8 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiobotocore", specifier = ">=2.12.2" },
+    { name = "aiohttp", specifier = ">=3.9" },
     { name = "braceexpand", specifier = ">=0.1.7" },
     { name = "click", specifier = ">=8.3.1" },
     { name = "connect-python", specifier = ">=0.9.0" },
