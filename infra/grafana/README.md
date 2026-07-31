@@ -176,7 +176,7 @@ and hero training), `jobs.json` (fleet job
 state — see below), `fleet.json` (canary +
 worker health), `iris.json`
 (per-task and per-worker resource usage), `pipelines.json` (Zephyr throughput and shard
-memory), `training.json` (levanter training metrics from the `telltale` namespace,
+memory), `training.json` (Levanter training metrics from `telemetry_v1`,
 grouped by run), `k8s.json` (current CW control-plane state plus recent durable
 Iris task actions), and `finelog.json` (fleet readiness plus mirror pod, probe,
 resource, and PVC details).
@@ -224,11 +224,11 @@ nonterminal without finalizers for five minutes after the bridge's two-minute
 overdue threshold, and a GB200 rack with fewer than 16 trays Ready for five
 minutes (the NVL72 rack spec is 18; a floor rather than an outright outage —
 see `gpu_racks` above). A warning-only training rule joins fresh running
-`iris.task_state` rows to root jobs with Levanter Telltale metrics in the prior
+`iris.task_state` rows to root jobs with `service=levanter` telemetry in the prior
 24 hours: it waits 15 minutes for training progress or 45 minutes for
 initialization, then remains pending for five minutes. It does not require
 task-to-node GPU attribution. A warning-only Zephyr rule reads fresh
-`zephyr_progress_time_seconds` rows from Telltale. It waits 45 minutes after a
+`progress_time_seconds` rows from `service=zephyr` telemetry. It waits 45 minutes after a
 stage start or shard completion, then remains pending for five minutes. The
 execution ID separates concurrent pipelines under one root job. The stuck-pod
 rule groups by node and links the cordon-first

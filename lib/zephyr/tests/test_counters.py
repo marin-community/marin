@@ -7,7 +7,7 @@ import logging
 import threading
 
 import pytest
-from prometheus_client import REGISTRY, generate_latest
+from rigging import telemetry
 from zephyr import counters
 from zephyr.counters import ScopedCounters
 from zephyr.execution import ZephyrCoordinator, ZephyrExecutionResult
@@ -396,8 +396,8 @@ def test_set_counter_resets_average_count():
         _worker_ctx_var.reset(token)
 
 
-def test_publish_telltale_exports_aggregated_counters_as_gauges():
-    """The coordinator publishes, since it is the only process that both aggregates and serves.
+def test_publish_telemetry_exports_aggregated_counter_snapshots_as_gauges(monkeypatch):
+    """The coordinator publishes because it owns the aggregate snapshot.
 
     Shards run under ``SubprocessRunner`` by default, and nobody scrapes a
     short-lived child's registry.
@@ -409,7 +409,14 @@ def test_publish_telltale_exports_aggregated_counters_as_gauges():
         ]
     )
 
-    coord._publish_telltale()
+    emitted = []
 
-    exposition = generate_latest(REGISTRY).decode()
-    assert "records_in 15.0" in exposition
+    class Gauge:
+        def set(self, value, *, attributes=None):
+            emitted.append((value, attributes))
+
+    monkeypatch.setattr(telemetry, "gauge", lambda name, **kwargs: Gauge())
+    coord._execution_id = "run-1"
+    coord._publish_telemetry()
+
+    assert (15, {"source_kind": "gauge", "source_temporality": "current_snapshot", "run": "run-1"}) in emitted

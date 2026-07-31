@@ -1,26 +1,26 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Expose native Iris RPC metrics through the process Telltale registry.
+"""Export native Iris RPC and proxy snapshots through direct telemetry.
 
 Counters reset when the native proxy restarts. Rate queries must discard
 negative deltas across that reset boundary. Processes hosting multiple local
-controllers expose the sum of their native proxies because Prometheus metric
-families are process-global.
+controllers export the sum of their native proxies as one process snapshot.
 """
 
 import json
+import logging
 import threading
-from collections.abc import Iterable
 from dataclasses import dataclass, field
 
-from prometheus_client.core import Metric
-from prometheus_client.registry import Collector
-from rigging import telltale
+from rigging import telemetry
 
 from iris.cluster.controller.native_proxy import NativeProxy
 
-IN_FLIGHT_METRIC_NAME = "iris_rpc_in_flight"
+IN_FLIGHT_METRIC_NAME = "rpc_in_flight"
+DEFAULT_POLL_INTERVAL = 15.0
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -56,7 +56,7 @@ class _AggregatedRpcMetricSeries:
         _merge_shared_counters(self, series)
 
 
-PROXY_IN_FLIGHT_METRIC_NAME = "iris_proxy_in_flight"
+PROXY_IN_FLIGHT_METRIC_NAME = "proxy_in_flight"
 
 
 @dataclass(frozen=True)
@@ -116,38 +116,73 @@ def _merge_shared_counters(
         agg.latency_buckets[bound] = agg.latency_buckets.get(bound, 0) + count
 
 
-class NativeProxyMetricsCollector(Collector):
-    """Collect native RPC counters, gauges, and histograms for Telltale."""
+def _publish(name: str, value: float, attributes: dict[str, str], source_kind: str) -> None:
+    temporality = "current_snapshot" if source_kind == "gauge" else "cumulative_snapshot"
+    telemetry.gauge(name).set(
+        value,
+        attributes={**attributes, "source_kind": source_kind, "source_temporality": temporality},
+    )
 
-    def __init__(self) -> None:
+
+class NativeProxyTelemetry:
+    """Aggregate local native proxies and publish source-typed snapshots."""
+
+    def __init__(self, *, interval: float = DEFAULT_POLL_INTERVAL) -> None:
         self._proxies: list[NativeProxy] = []
         self._lock = threading.Lock()
+        self._interval = interval
+        self._stop: threading.Event | None = None
+        self._thread: threading.Thread | None = None
 
     def attach(self, proxy: NativeProxy) -> None:
         with self._lock:
             if any(current is proxy for current in self._proxies):
                 return
             self._proxies.append(proxy)
+            if self._thread is None:
+                stop = threading.Event()
+                self._stop = stop
+                self._thread = threading.Thread(
+                    target=self._run,
+                    args=(stop,),
+                    name="iris-native-telemetry",
+                    daemon=True,
+                )
+                self._thread.start()
 
     def detach(self, proxy: NativeProxy) -> None:
         with self._lock:
             self._proxies = [current for current in self._proxies if current is not proxy]
+            if self._proxies or self._thread is None:
+                return
+            thread, self._thread = self._thread, None
+            stop, self._stop = self._stop, None
+            assert stop is not None
+            stop.set()
+        thread.join(timeout=5.0)
 
-    def collect(self) -> Iterable[Metric]:
+    def publish_once(self) -> None:
         with self._lock:
             rpc_snapshots: list[dict] = [json.loads(proxy.rpc_metrics_json) for proxy in self._proxies]
-            # proxy_metrics_json ships in a newer native build than rpc_metrics_json.
-            # A controller still on an older published wheel exposes only the latter,
-            # so read the proxy family only where the native layer provides it rather
-            # than hard-requiring a not-yet-released wheel (the pure package can lead
-            # the wheel; the panel simply shows no proxy transport until it catches up).
-            proxy_snapshots: list[dict] = [
-                json.loads(proxy.proxy_metrics_json) for proxy in self._proxies if hasattr(proxy, "proxy_metrics_json")
-            ]
-        return (*self._collect_rpc(rpc_snapshots), *self._collect_proxy(proxy_snapshots))
+            proxy_snapshots: list[dict] = [json.loads(proxy.proxy_metrics_json) for proxy in self._proxies]
+        self._publish_rpc(rpc_snapshots)
+        self._publish_proxy(proxy_snapshots)
 
-    def _collect_rpc(self, snapshots: list[dict]) -> tuple[Metric, ...]:
-        """Connect-RPC counters keyed by service/method/upstream (`iris_rpc_*`)."""
+    def _run(self, stop: threading.Event) -> None:
+        while not stop.is_set():
+            try:
+                self.publish_once()
+            except Exception:
+                # Native metrics remain best-effort and must not affect controller service.
+                try:
+                    logger.warning("could not read native proxy telemetry snapshot", exc_info=True)
+                except Exception:
+                    pass
+            if stop.wait(self._interval):
+                return
+
+    def _publish_rpc(self, snapshots: list[dict]) -> None:
+        """Publish Connect-RPC snapshots keyed by service/method/upstream."""
         aggregated: dict[_RpcMetricSeriesKey, _AggregatedRpcMetricSeries] = {}
         for snapshot in snapshots:
             for raw_series in snapshot["series"]:
@@ -155,39 +190,32 @@ class NativeProxyMetricsCollector(Collector):
                 key = _RpcMetricSeriesKey(series.service, series.method, series.upstream)
                 aggregated.setdefault(key, _AggregatedRpcMetricSeries()).add(series)
 
-        requests = Metric("iris_rpc_requests", "Iris RPC requests handled by the native proxy", "counter")
-        responses = Metric("iris_rpc_responses", "Iris RPC responses returned by the native proxy", "counter")
-        in_flight = Metric(IN_FLIGHT_METRIC_NAME, "Iris RPC requests currently handled by the native proxy", "gauge")
-        duration = Metric("iris_rpc_duration_seconds", "Iris RPC native-proxy latency", "histogram")
         for key, series in aggregated.items():
             labels = {
                 "service": key.service,
                 "method": key.method,
                 "upstream": key.upstream,
             }
-            requests.add_sample("iris_rpc_requests_total", labels=labels, value=series.requests)
-            in_flight.add_sample(IN_FLIGHT_METRIC_NAME, labels=labels, value=series.in_flight)
+            _publish("rpc_requests_total", series.requests, labels, "counter")
+            _publish(IN_FLIGHT_METRIC_NAME, series.in_flight, labels, "gauge")
             for status, count in series.responses.items():
-                responses.add_sample("iris_rpc_responses_total", labels={**labels, "status": status}, value=count)
+                _publish("rpc_responses_total", count, {**labels, "status": status}, "counter")
             for bound, count in series.latency_buckets.items():
-                duration.add_sample("iris_rpc_duration_seconds_bucket", labels={**labels, "le": bound}, value=count)
-            duration.add_sample("iris_rpc_duration_seconds_sum", labels=labels, value=series.latency_sum_seconds)
-            duration.add_sample("iris_rpc_duration_seconds_count", labels=labels, value=series.latency_count)
-        return (requests, responses, in_flight, duration)
+                _publish("rpc_duration_seconds_bucket", count, {**labels, "le": bound}, "histogram")
+            _publish("rpc_duration_seconds_sum", series.latency_sum_seconds, labels, "histogram")
+            _publish("rpc_duration_seconds_count", series.latency_count, labels, "histogram")
 
-    def _collect_proxy(self, snapshots: list[dict]) -> tuple[Metric, ...]:
-        """Proxy transport load, keyed by endpoint/method/route_kind (`iris_proxy_*`).
+    def _publish_proxy(self, snapshots: list[dict]) -> None:
+        """Publish proxy transport load keyed by endpoint/method/route_kind.
 
         Distinct from `iris_rpc_*` — a proxied Connect call appears in both and the
         two must not be summed. Each snapshot carries an exact ``aggregate`` (emitted
         as ``scope=total``) plus the bounded per-endpoint ``series`` (``scope=endpoint``).
 
-        Emits nothing when no proxy provided a snapshot — an older native wheel
-        without ``proxy_metrics_json`` yields no family at all, rather than a
-        misleading all-zero one.
+        Emits nothing when no proxy provided a snapshot.
         """
         if not snapshots:
-            return ()
+            return
         total = _AggregatedProxyMetricSeries()
         by_endpoint: dict[_ProxyMetricSeriesKey, _AggregatedProxyMetricSeries] = {}
         for snapshot in snapshots:
@@ -197,53 +225,35 @@ class NativeProxyMetricsCollector(Collector):
                 key = _ProxyMetricSeriesKey(series.endpoint, series.method, series.route_kind)
                 by_endpoint.setdefault(key, _AggregatedProxyMetricSeries()).add(series)
 
-        requests = Metric("iris_proxy_requests", "Requests the native proxy forwarded upstream", "counter")
-        responses = Metric(
-            "iris_proxy_responses", "Responses the native proxy returned for forwarded requests", "counter"
-        )
-        in_flight = Metric(PROXY_IN_FLIGHT_METRIC_NAME, "Requests the native proxy is currently forwarding", "gauge")
-        duration = Metric("iris_proxy_duration_seconds", "Native-proxy forwarding latency", "histogram")
-        request_bytes = Metric(
-            "iris_proxy_request_bytes", "Request body bytes the native proxy read from clients", "counter"
-        )
-        response_bytes = Metric(
-            "iris_proxy_response_bytes", "Response body bytes the native proxy delivered to clients", "counter"
-        )
-
         def emit(labels: dict[str, str], agg: _AggregatedProxyMetricSeries) -> None:
-            requests.add_sample("iris_proxy_requests_total", labels=labels, value=agg.requests)
-            in_flight.add_sample(PROXY_IN_FLIGHT_METRIC_NAME, labels=labels, value=agg.in_flight)
-            request_bytes.add_sample("iris_proxy_request_bytes_total", labels=labels, value=agg.request_bytes)
-            response_bytes.add_sample("iris_proxy_response_bytes_total", labels=labels, value=agg.response_bytes)
+            _publish("proxy_requests_total", agg.requests, labels, "counter")
+            _publish(PROXY_IN_FLIGHT_METRIC_NAME, agg.in_flight, labels, "gauge")
+            _publish("proxy_request_bytes_total", agg.request_bytes, labels, "counter")
+            _publish("proxy_response_bytes_total", agg.response_bytes, labels, "counter")
             for status, count in agg.responses.items():
-                responses.add_sample("iris_proxy_responses_total", labels={**labels, "status": status}, value=count)
+                _publish("proxy_responses_total", count, {**labels, "status": status}, "counter")
             for bound, count in agg.latency_buckets.items():
-                duration.add_sample("iris_proxy_duration_seconds_bucket", labels={**labels, "le": bound}, value=count)
-            duration.add_sample("iris_proxy_duration_seconds_sum", labels=labels, value=agg.latency_sum_seconds)
-            duration.add_sample("iris_proxy_duration_seconds_count", labels=labels, value=agg.latency_count)
+                _publish("proxy_duration_seconds_bucket", count, {**labels, "le": bound}, "histogram")
+            _publish("proxy_duration_seconds_sum", agg.latency_sum_seconds, labels, "histogram")
+            _publish("proxy_duration_seconds_count", agg.latency_count, labels, "histogram")
 
-        # Every sample carries the same label keys so the family stays well-formed;
-        # the aggregate leaves endpoint/method/route_kind empty under scope=total.
-        emit({"scope": "total", "endpoint": "", "method": "", "route_kind": ""}, total)
+        emit({"scope": "total"}, total)
         for key, agg in by_endpoint.items():
             emit(
                 {"scope": "endpoint", "endpoint": key.endpoint, "method": key.method, "route_kind": key.route_kind},
                 agg,
             )
-        return (requests, responses, in_flight, duration, request_bytes, response_bytes)
 
 
-_COLLECTOR = NativeProxyMetricsCollector()
+_PUBLISHER = NativeProxyTelemetry()
 
 
-def install_native_proxy_metrics(proxy: NativeProxy) -> NativeProxyMetricsCollector:
-    """Add ``proxy`` to the process's Iris RPC Telltale series."""
-    _COLLECTOR.attach(proxy)
-    telltale.register_collector(_COLLECTOR)
-    telltale.set_global_labels(source="iris")
-    return _COLLECTOR
+def install_native_proxy_metrics(proxy: NativeProxy) -> NativeProxyTelemetry:
+    """Add ``proxy`` to the process's Iris controller telemetry snapshot."""
+    _PUBLISHER.attach(proxy)
+    return _PUBLISHER
 
 
 def uninstall_native_proxy_metrics(proxy: NativeProxy) -> None:
     """Stop exposing a native proxy after its controller shuts down."""
-    _COLLECTOR.detach(proxy)
+    _PUBLISHER.detach(proxy)

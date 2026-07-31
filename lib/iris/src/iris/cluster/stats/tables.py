@@ -132,8 +132,8 @@ class IrisWorkerStat:
     # (HBM, power) or reduced (mean utilization, hottest temperature) across the
     # devices. None on a host with no accelerator or whose device exporter did
     # not answer. Populated for k8s nodes from the cluster's dcgm-exporter (a
-    # worker daemon leaves these unset — its accelerators report per-process
-    # usage through the in-task telltale exporter instead).
+    # worker daemon leaves these unset — its accelerators are reported through
+    # process telemetry instead).
     gpu_count: int | None = None
     hbm_used_bytes: int | None = None
     hbm_total_bytes: int | None = None

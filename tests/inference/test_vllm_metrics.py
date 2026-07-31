@@ -1,0 +1,99 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import json
+import threading
+from pathlib import Path
+
+from rigging import telemetry
+
+from marin.inference.vllm_metrics import VllmMetricsForwarder, parse_vllm_families, publish_vllm_families
+
+
+_SCRAPE = """
+# TYPE vllm:generation_tokens_total counter
+vllm:generation_tokens_total{model_name="test"} 42
+# TYPE vllm:num_requests_running gauge
+vllm:num_requests_running{model_name="test"} 3
+# TYPE vllm:request_duration_seconds summary
+vllm:request_duration_seconds{quantile="0.5"} 1.5
+vllm:request_duration_seconds_sum 9
+vllm:request_duration_seconds_count 4
+# TYPE process_cpu_seconds counter
+process_cpu_seconds_total 9
+"""
+
+
+class _Response:
+    status_code = 200
+
+    def __init__(self, batch_id: str) -> None:
+        self.batch_id = batch_id
+        self.headers: dict[str, str] = {}
+
+    def json(self):
+        return {"batch_id": self.batch_id, "status": "accepted"}
+
+
+class _Transport:
+    def __init__(self) -> None:
+        self.records: list[dict] = []
+        self.condition = threading.Condition()
+
+    def post(self, endpoint, body, batch_id, timeout):
+        with self.condition:
+            self.records.extend(json.loads(body)["records"])
+            self.condition.notify_all()
+        return _Response(batch_id)
+
+    def close(self):
+        pass
+
+
+def test_vllm_cumulative_snapshots_use_direct_gauge_wire_format(monkeypatch):
+    telemetry.shutdown(0)
+    transport = _Transport()
+    monkeypatch.setattr(telemetry, "_RequestsTransport", lambda: transport)
+    telemetry.configure(endpoint="http://finelog/v1/telemetry", service="vllm", attributes={"job_id": "/serve"})
+
+    publish_vllm_families(parse_vllm_families(_SCRAPE))
+    with transport.condition:
+        assert transport.condition.wait_for(lambda: len(transport.records) >= 5, timeout=5)
+    telemetry.shutdown(1)
+
+    by_name = {record["name"]: record for record in transport.records}
+    tokens = by_name["generation_tokens_total"]
+    assert tokens["kind"] == "gauge"
+    assert tokens["value"] == 42
+    assert tokens["attributes"] == {
+        "model_name": "test",
+        "source_kind": "counter",
+        "source_temporality": "cumulative_snapshot",
+    }
+    assert by_name["num_requests_running"]["attributes"]["source_temporality"] == "current_snapshot"
+    assert by_name["request_duration_seconds"]["attributes"]["source_temporality"] == "current_snapshot"
+    assert by_name["request_duration_seconds_count"]["attributes"]["source_temporality"] == "cumulative_snapshot"
+    assert by_name["request_duration_seconds_sum"]["attributes"]["source_temporality"] == "cumulative_snapshot"
+    assert "process_cpu_seconds_total" not in by_name
+
+
+def test_failed_vllm_scrape_emits_nothing(monkeypatch):
+    emitted = []
+    monkeypatch.setattr("marin.inference.vllm_metrics.publish_vllm_families", lambda families: emitted.append(families))
+    VllmMetricsForwarder("http://vllm/metrics", fetch=lambda _url: None).poll_once()
+    assert emitted == []
+
+
+def test_inference_query_runbook_preserves_snapshot_series_and_reset_semantics():
+    runbook = (Path(__file__).parents[2] / ".agents/skills/query-inference-metrics/SKILL.md").read_text()
+    assert "PARTITION BY origin_cluster, service, name," in runbook
+    assert "resource_attributes_json, attributes_json" in runbook
+    assert "ORDER BY timestamp_ms, seq" in runbook
+    assert "value < previous_value THEN NULL" in runbook
+    assert "visible start minus one 15s scrape interval" in runbook
+    assert "counter(...).add(...)" in runbook
+    assert "SUM(value)" in runbook
+    assert "WITH lifetime_base AS" in runbook
+    assert "WHEN previous_value IS NULL OR value < previous_value THEN value" in runbook
+    assert "ELSE value - previous_value" in runbook
+    assert "SUM(increment) AS total" in runbook

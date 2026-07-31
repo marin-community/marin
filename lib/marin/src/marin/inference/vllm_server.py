@@ -298,7 +298,7 @@ class VllmServerHandle:
     compilation_cache: VllmCompilationCache
     # Owns the reader threads and on-disk log files.
     log_pump: _LogPump | None = None
-    # Polls the server's /metrics and mirrors it to telltale; None until the server is ready.
+    # Polls the server's /metrics into direct process telemetry; None until ready.
     metrics_forwarder: VllmMetricsForwarder | None = None
 
     def stop(self, *, timeout_seconds: float = 10) -> None:
@@ -916,6 +916,6 @@ def _start_vllm_native_server(
     handle.compilation_cache.publish()
 
     # Now that the server answers, forward its /metrics (throughput, TTFT, queue depth) to
-    # telltale so it reaches finelog. The metrics endpoint sits at the root, not under /v1.
+    # direct telemetry so it reaches Finelog. The metrics endpoint sits at the root, not under /v1.
     metrics_url = f"http://{host}:{resolved_port}/metrics"
     return dataclasses.replace(handle, metrics_forwarder=start_vllm_metrics_forwarding(metrics_url))

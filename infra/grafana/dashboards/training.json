@@ -1,7 +1,7 @@
 {
   "uid": "marin-training",
-  "title": "Training (telltale)",
-  "description": "Levanter training metrics persisted from each process's rigging.telltale registry into the telltale finelog namespace by the telltale forwarder. Series are keyed on the metric name and grouped by run (the wandb run id levanter sets, falling back to the Iris job_id column). Identity like run/job_id/source is flattened into top-level columns; the namespace clusters on name, so per-metric panels prune to a metric's row groups. Any in-cluster training run reports here; there is no data before the forwarder ships.",
+  "title": "Training telemetry",
+  "description": "Levanter gauges exported directly to Finelog telemetry_v1. Series use the tracker run, falling back to Iris job identity. Producer time is stored as epoch milliseconds and converted only for display and binning.",
   "tags": [
     "marin",
     "generated"
@@ -33,7 +33,7 @@
       "id": 1,
       "type": "timeseries",
       "title": "Training loss by run",
-      "description": "levanter_train_loss over time, averaged per time bin for each run.",
+      "description": "train_loss from service=levanter, averaged per time bin for each run.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "${cluster}"
@@ -68,7 +68,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, COALESCE(run, job_id, 'unknown') AS series, AVG(value) AS value FROM \"telltale\" WHERE name = 'levanter_train_loss' AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(json_get(resource_attributes_json, 'run'), json_get(resource_attributes_json, 'job_id'), 'unknown') AS series, AVG(value) AS value FROM \"telemetry_v1\" WHERE service = 'levanter' AND name = 'train_loss' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -104,7 +104,7 @@
       "id": 2,
       "type": "timeseries",
       "title": "Throughput by run",
-      "description": "levanter_throughput over time, averaged per time bin for each run.",
+      "description": "throughput_tokens_per_second from service=levanter, averaged per time bin for each run.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "${cluster}"
@@ -139,7 +139,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, COALESCE(run, job_id, 'unknown') AS series, AVG(value) AS value FROM \"telltale\" WHERE name = 'levanter_throughput' AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(json_get(resource_attributes_json, 'run'), json_get(resource_attributes_json, 'job_id'), 'unknown') AS series, AVG(value) AS value FROM \"telemetry_v1\" WHERE service = 'levanter' AND name = 'throughput_tokens_per_second' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -175,7 +175,7 @@
       "id": 3,
       "type": "timeseries",
       "title": "Training step by run",
-      "description": "levanter_step (the most recent training step logged) per run — a progress line.",
+      "description": "step from service=levanter (the most recent training step logged) per run.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "${cluster}"
@@ -210,7 +210,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, COALESCE(run, job_id, 'unknown') AS series, MAX(value) AS value FROM \"telltale\" WHERE name = 'levanter_step' AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(json_get(resource_attributes_json, 'run'), json_get(resource_attributes_json, 'job_id'), 'unknown') AS series, MAX(value) AS value FROM \"telemetry_v1\" WHERE service = 'levanter' AND name = 'step' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -245,8 +245,8 @@
     {
       "id": 4,
       "type": "table",
-      "title": "Telltale sources over the window",
-      "description": "Distinct metric names and total samples per source in the telltale namespace — a quick check that levanter/zephyr/iris processes are reporting.",
+      "title": "Telemetry services over the window",
+      "description": "Distinct metric names and total samples per service in telemetry_v1.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "${cluster}"
@@ -274,7 +274,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT source, COUNT(DISTINCT name) AS metrics, COUNT(*) AS samples FROM \"telltale\" WHERE ts >= {{from}} AND ts < {{to}} GROUP BY source ORDER BY samples DESC"
+                "value": "SELECT service, COUNT(DISTINCT name) AS metrics, COUNT(*) AS samples FROM \"telemetry_v1\" WHERE timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY service ORDER BY samples DESC"
               },
               {
                 "key": "from",
@@ -288,8 +288,8 @@
           },
           "columns": [
             {
-              "selector": "source",
-              "text": "source",
+              "selector": "service",
+              "text": "service",
               "type": "string"
             },
             {
