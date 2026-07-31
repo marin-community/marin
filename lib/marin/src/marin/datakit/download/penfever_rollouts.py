@@ -1122,7 +1122,7 @@ def _rollout_steps(dataset: PenfeverRollout) -> tuple[StepSpec, StepSpec]:
             output_path=output_path,
         ),
         hash_attrs={
-            "version": "v2",
+            "version": "2026.07.30",
             "teacher": dataset.teacher,
             "task_source": dataset.task_source,
         },
