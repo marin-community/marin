@@ -210,7 +210,6 @@ def shard_coordinates(arguments: argparse.Namespace) -> tuple[int, int]:
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse optional standalone shard coordinates."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--shard-index", type=int)
     parser.add_argument("--num-shards", type=int)
