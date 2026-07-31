@@ -30,7 +30,6 @@ from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
-from marin.processing.classification.deduplication.fuzzy_minhash import MinHashParams
 from marin.processing.classification.deduplication.fuzzy_verification import (
     FuzzyVerificationParams,
     VerificationResult,
@@ -41,10 +40,11 @@ from marin.processing.classification.deduplication.fuzzy_verification import (
 logger = logging.getLogger(__name__)
 
 VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION = 1
+PERCENT_HISTOGRAM_METRICS = frozenset({"member_containment", "jaccard", "char_jaccard"})
+SCORE_HISTOGRAM_MAX_PERCENT = 100
+UNIQUE_NGRAM_HISTOGRAM_OVERFLOW_BIN = 33
 _COUNTER_PREFIX = "dedup/fuzzy/verification"
 _SHARED_SHARDS_KEY = "verified_fuzzy_dups_shards"
-_SCORE_HISTOGRAM_MAX_PERCENT = 100
-_UNIQUE_NGRAM_HISTOGRAM_OVERFLOW_BIN = 33
 
 
 class VerifiedFuzzyDupsPerSource(BaseModel):
@@ -57,7 +57,6 @@ class VerifiedFuzzyDupsAttrData(BaseModel):
     """Sparse, co-partitioned markers for verified fuzzy duplicates."""
 
     version: str = f"v{VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION}"
-    params: MinHashParams
     verification: FuzzyVerificationParams
     sources: dict[str, VerifiedFuzzyDupsPerSource]
     counters: dict[str, int | float]
@@ -81,7 +80,6 @@ class VerificationShard:
     output_path: str
     source_key: str
     source_tag: str
-    basename: str
 
 
 _VERIFIED_DUPLICATE_SCHEMA = pa.schema(
@@ -91,7 +89,6 @@ _VERIFIED_DUPLICATE_SCHEMA = pa.schema(
         pa.field("dup_cluster_id", pa.string(), nullable=False),
         pa.field("dup_representative_id", pa.string(), nullable=False),
         pa.field("dup_representative_source_key", pa.string(), nullable=False),
-        pa.field("dup_verifier_version", pa.string(), nullable=False),
         pa.field("dup_member_containment", pa.float64(), nullable=False),
         pa.field("dup_jaccard", pa.float64(), nullable=False),
         pa.field("dup_under_tokenized", pa.bool_(), nullable=False),
@@ -128,7 +125,7 @@ def _joined_cluster_members(shards: list[VerificationShard]) -> Iterator[dict[st
             counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/candidate_shards_missing", 1)
             continue
 
-        candidates = iter(_rows(shard.candidate_path, ["id", "dup_cluster_id"]))
+        candidates = iter(_rows(shard.candidate_path, ["id", "dup_cluster_id", "is_cluster_canonical"]))
         candidate = next(candidates, None)
         if candidate is None:
             counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/candidate_shards_empty", 1)
@@ -154,6 +151,7 @@ def _joined_cluster_members(shards: list[VerificationShard]) -> Iterator[dict[st
                 "source_tag": shard.source_tag,
                 "id": candidate["id"],
                 "dup_cluster_id": str(candidate["dup_cluster_id"]),
+                "is_cluster_canonical": candidate["is_cluster_canonical"],
                 "text": text,
             }
             candidate = next(candidates, None)
@@ -167,12 +165,10 @@ def _cluster_key(record: dict[str, Any]) -> tuple[str, str]:
 
 
 def _score_bin(score: float) -> str:
-    return f"{min(int(score * 100), _SCORE_HISTOGRAM_MAX_PERCENT):03d}"
+    return f"{min(int(score * 100), SCORE_HISTOGRAM_MAX_PERCENT):03d}"
 
 
 def _size_bin(size: int) -> str:
-    if size <= 1:
-        return str(size)
     return f"{1 << (size.bit_length() - 1)}-{(1 << size.bit_length()) - 1}"
 
 
@@ -197,6 +193,8 @@ def _make_cluster_verifier(params: FuzzyVerificationParams):
             return
 
         representative = first
+        if not representative["is_cluster_canonical"]:
+            raise ValueError(f"Cluster {group_key[1]!r} has no canonical member")
         representative_text = prepare_verification_text(representative["text"], params)
         cluster_size = 1
         accepted = 0
@@ -204,6 +202,17 @@ def _make_cluster_verifier(params: FuzzyVerificationParams):
 
         for member in records:
             cluster_size += 1
+            if member["is_cluster_canonical"]:
+                raise ValueError(f"Cluster {group_key[1]!r} has more than one canonical member")
+            if member["id"] == representative["id"]:
+                if member["text"] != representative["text"]:
+                    raise ValueError(f"Cluster {group_key[1]!r} has different text for content ID {member['id']!r}")
+                counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/decision/delegated_global_exact", 1)
+                counters.pipeline.update_counter(
+                    f"{_COUNTER_PREFIX}/source/{member['source_tag']}/decision/delegated_global_exact",
+                    1,
+                )
+                continue
             result = verify_prepared_candidate(
                 prepare_verification_text(member["text"], params),
                 representative_text,
@@ -230,7 +239,7 @@ def _make_cluster_verifier(params: FuzzyVerificationParams):
                 )
             counters.pipeline.update_counter(
                 f"{_COUNTER_PREFIX}/histogram/member_unique/"
-                f"{min(result.member_unique_ngrams, _UNIQUE_NGRAM_HISTOGRAM_OVERFLOW_BIN)}",
+                f"{min(result.member_unique_ngrams, UNIQUE_NGRAM_HISTOGRAM_OVERFLOW_BIN)}",
                 1,
             )
             if not result.accepted:
@@ -245,7 +254,6 @@ def _make_cluster_verifier(params: FuzzyVerificationParams):
                 "dup_cluster_id": member["dup_cluster_id"],
                 "dup_representative_id": representative["id"],
                 "dup_representative_source_key": representative["source_key"],
-                "dup_verifier_version": params.rule_version,
                 **_result_fields(result),
             }
 
@@ -263,13 +271,9 @@ def _write_verified_shard(file_idx: int, records: Iterator[dict[str, Any]]) -> d
 
     def output_rows() -> Iterator[dict[str, Any]]:
         nonlocal verified
-        previous_id = None
         for record in records:
             if record["kind"] == "sentinel":
                 continue
-            if record["id"] == previous_id:
-                raise AssertionError(f"Duplicate verified marker for {record['id']!r} in {shard.output_path}")
-            previous_id = record["id"]
             verified += 1
             yield {field.name: record[field.name] for field in _VERIFIED_DUPLICATE_SCHEMA}
 
@@ -328,7 +332,6 @@ def _verification_shards(
             output_path=entry.output_path,
             source_key=entry.source_key,
             source_tag=entry.source_tag,
-            basename=entry.basename,
         )
         for entry in entries
     ]
@@ -372,12 +375,12 @@ def verify_fuzzy_dups(
     if reduce_task_resources is not None:
         ctx_kwargs["reduce_task_resources"] = reduce_task_resources
     ctx = ZephyrContext(**ctx_kwargs)
-    ctx.put(_SHARED_SHARDS_KEY, shards)
+    ctx.put(_SHARED_SHARDS_KEY, {shard.file_idx: shard for shard in shards})
 
-    n_groups = min(max_parallelism, len(shards))
-    shard_groups: list[list[VerificationShard]] = [[] for _ in range(n_groups)]
+    file_shards = min(max_parallelism, len(shards))
+    shard_groups: list[list[VerificationShard]] = [[] for _ in range(file_shards)]
     for index, shard in enumerate(shards):
-        shard_groups[index % n_groups].append(shard)
+        shard_groups[index % file_shards].append(shard)
 
     pipeline = (
         Dataset.from_list(shard_groups)
@@ -385,18 +388,19 @@ def verify_fuzzy_dups(
         .group_by(
             key=_cluster_key,
             sort_by=lambda record: (
-                0 if record["kind"] == "sentinel" else -len(record["text"]),
+                0 if record["kind"] == "sentinel" or record["is_cluster_canonical"] else 1,
                 record["file_idx"],
                 record.get("id", ""),
             ),
             reducer=_make_cluster_verifier(verification_params),
+            # Cluster IDs can use all workers, including when there are fewer input files.
             num_output_shards=max_parallelism,
         )
         .group_by(
             key=lambda record: record["file_idx"],
             sort_by=lambda record: record["id"],
             reducer=_write_verified_shard,
-            num_output_shards=min(max_parallelism, len(shards)),
+            num_output_shards=file_shards,
         )
     )
     outcome = ctx.execute(pipeline, verbose=True)
@@ -410,7 +414,6 @@ def verify_fuzzy_dups(
         len(shards),
     )
     return VerifiedFuzzyDupsAttrData(
-        params=candidates.params,
         verification=verification_params,
         sources={
             source_key: VerifiedFuzzyDupsPerSource(attr_dir=attr_dir) for source_key, attr_dir in attr_dirs.items()
@@ -428,6 +431,8 @@ def verify_fuzzy_dups_step(
     max_parallelism: int,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
+    map_task_resources: ResourceConfig | None = None,
+    reduce_task_resources: ResourceConfig | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
     """Create a step that verifies one existing fuzzy-candidate artifact."""
@@ -446,6 +451,8 @@ def verify_fuzzy_dups_step(
             max_parallelism=max_parallelism,
             worker_resources=worker_resources,
             coordinator_resources=coordinator_resources,
+            map_task_resources=map_task_resources,
+            reduce_task_resources=reduce_task_resources,
         ),
         hash_attrs={
             "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,

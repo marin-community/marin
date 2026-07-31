@@ -179,8 +179,8 @@ def _load_verified_duplicates(path: str) -> set[str]:
             return set()
         table = parquet.read(columns=["id", "dup_doc"])
     ids = table.column("id").to_pylist()
-    duplicate_flags = table.column("dup_doc").to_pylist()
-    if not all(duplicate_flags):
+    duplicate_flags = table.column("dup_doc")
+    if duplicate_flags.null_count or pc.all(duplicate_flags).as_py() is not True:
         raise ValueError(f"{path} contains a verified fuzzy-duplicate row with dup_doc=False")
     return set(ids)
 
