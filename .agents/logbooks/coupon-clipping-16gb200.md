@@ -169,3 +169,13 @@ The first wave found no loss effect from fat-first versus fat-middle shared capa
 - Result: every canary rank restored step 32 and data offset 8,192, copied 84 parameter leaves, reset 108 width/depth-dependent optimizer leaves, and preserved seven optimizer leaves. Logged target loss fell from 10.6 at step 34 to 9.82 at step 45, and every rank saved the step-48 checkpoint. Production source gang `/power/ccx-wd1-coord/grug-train-ccx-wd1-d1536-l1-source-step6080` was admitted at 23:32:52 UTC; its preregistered four-hour boundary is 03:32:52 UTC on 2026-08-01.
 - Interpretation: exact width and identity-prefix depth growth is operational on the production topology. At the canary's measured rates, the 95/5 loop projects to 1.73 hours versus 9.84 hours for C0, or 5.69x before setup and compilation. This is a systems projection, not yet a capability result.
 - Next action: require finite production source metrics, monitor at 30-minute intervals while healthy, verify the automatic target transition, then run C-short sequentially on the released slice. Evaluate terminal checkpoints on held-out Datamix, Paloma, factual retrieval, and matched manipulation probes.
+
+### 2026-07-31 23:55 - CC16-010 production source health and offline Paloma path
+
+- Hypothesis: capability comparisons can be collected from terminal checkpoints without perturbing training state or consuming more than the existing four-node slice.
+- Commit Hash: `4eff246d26`.
+- Command: bounded Paloma artifacts are exposed by `experiments.grug.coupon_clipping.paloma_wd1`, `paloma_c_short`, and `paloma_c0`; they remain gated on terminal checkpoints.
+- Config: each evaluation restores model parameters without optimizer state, skips the optimization loop, and evaluates at most eight batches of 64 sequences for each of 16 Paloma subsets. The runs are scheduled sequentially on the same 16 GB200 GPUs.
+- Result: all three evaluation DAGs lower successfully. Eighteen focused coupon-clipping and growth tests pass, as do the repository lint, format, and type gates. At 23:55 UTC, production WD1 was at source step 1,170/6,080 with loss 4.38 and a recent rate of 1.3-1.4 updates/s on all four workers.
+- Interpretation: Paloma is now an executable terminal readout rather than an unspecified follow-up. W&B timed out during the source's initial compile, so Iris finelogs remain authoritative; synchronized finite progress shows the training run itself is healthy.
+- Next action: monitor the source at the 30-minute cadence, require a successful automatic growth transition and terminal checkpoint, run C-short, then execute the three checkpoint-only Paloma artifacts sequentially.
