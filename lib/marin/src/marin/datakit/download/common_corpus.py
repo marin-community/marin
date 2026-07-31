@@ -86,3 +86,10 @@ def normalize_common_corpus_step(filtered_step: StepSpec) -> StepSpec:
         download=filtered_step,
         id_field="identifier",
     )
+
+
+def common_corpus_normalize_steps() -> tuple[StepSpec, ...]:
+    """Return the download, English/open-license filter, and normalization chain."""
+    download = download_common_corpus_raw_step()
+    filtered = filter_common_corpus_step(download)
+    return download, filtered, normalize_common_corpus_step(filtered)
