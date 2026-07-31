@@ -142,7 +142,7 @@ def test_snowball_uses_pinned_export_and_streaming_loader() -> None:
     assert "--skip-tokenizer-init" not in joined
 
 
-def test_frozen_fixture_uses_float_safetensors_and_every_custom_path() -> None:
+def test_frozen_fixture_uses_half_safetensors_and_every_custom_path() -> None:
     args = vllm_args(
         CASES["tiny"],
         model_dir="/fixture",
@@ -152,7 +152,7 @@ def test_frozen_fixture_uses_float_safetensors_and_every_custom_path() -> None:
         smoke=True,
     )
     joined = " ".join(args)
-    assert "--dtype float" in joined
+    assert "--dtype half" in joined
     assert "--kv-cache-dtype auto" in joined
     assert "--load-format safetensors" in joined
     assert "--max-model-len 1024" in joined

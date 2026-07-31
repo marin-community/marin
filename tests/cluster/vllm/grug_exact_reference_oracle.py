@@ -226,7 +226,7 @@ def _emit_fixture(output_dir: Path) -> None:
         # Keep routing tensors lossless because the fixture compares normalized
         # weights at tight tolerance. Half-precision storage for the remaining
         # tensors keeps this checked-in exact-path fixture small; the live
-        # server loads them into float32 and checks logits at serving tolerance.
+        # server loads them into FP16 and checks logits at serving tolerance.
         state = {name: value if ".mlp.router." in name else value.astype(np.float16) for name, value in state.items()}
         shared_zero = all(
             not np.any(state[f"model.layers.0.shared_experts.{index}.gate_proj.weight"])

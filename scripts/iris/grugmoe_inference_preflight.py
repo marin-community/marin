@@ -175,7 +175,7 @@ def vllm_args(
         model_dir,
         "--trust-remote-code",
         "--dtype",
-        "float" if fixture else "bfloat16",
+        "half" if fixture else "bfloat16",
         "--kv-cache-dtype",
         "auto" if fixture else "bfloat16",
         "--seed",
