@@ -16,7 +16,10 @@ Issues [#6851](https://github.com/marin-community/marin/issues/6851) and [#6854]
 
 The candidate job removes text before its graph shuffle. Verification must read the normalized text column again.
 
-The text join can use co-partitioned shards, but verification must then shuffle candidate text by `dup_cluster_id`. The current 100B candidate artifact has a cluster with more than 100,000 members.
+The text join can use co-partitioned shards, but shuffling candidate text by
+`dup_cluster_id` produced the verifier's dominant network and reducer-memory
+cost. The current 100B candidate artifact has a cluster with more than 100,000
+members.
 
 Jaccard threshold relations are not transitive. Each removed document must pass a direct comparison against a retained representative.
 
@@ -26,8 +29,14 @@ of identical text.
 
 ## Costs / Risks
 
-- The map-side join scans normalized text again. Only non-singleton cluster members enter the cluster shuffle.
+- Memory-store actors scan normalized text again and retain candidate text for
+  the duration of the verifier. Explicit per-actor byte limits fail before an
+  actor exhausts its memory allocation.
+- Candidate metadata is read a second time for the cluster shuffle. Full text
+  does not enter that shuffle.
 - A hot cluster still routes to one reducer. The first version uses one representative and linear comparison cost.
+- A preempted store actor blocks lookups while it reconstructs its immutable
+  partition from the normalized and candidate shards.
 - The strict rule favors precision and has low measured recall.
 - The new persisted attribute type requires updates to the store, ferries, reports, validators, and consolidation configs.
 - One candidate canonical can miss duplicate subgroups that do not match it.
@@ -41,17 +50,22 @@ A new `verify_fuzzy_dups` module will consume `dict[str, NormalizedData]` and `F
 
 The job will validate source keys, expected basenames, sorted IDs, and unique IDs. A missing sparse candidate file will act as an empty shard.
 
-The map stage will use a streaming two-way merge for an inner join of each
-sorted normalized shard and its sorted candidate shard. A missing candidate
-file will produce no candidate rows.
+The job will construct a context-owned Zephyr memory store before running the
+cluster pipeline. Each physical store source partition is one co-partitioned
+normalized/candidate shard. Its shard-local map uses a streaming two-way merge
+for an inner join of sorted IDs. A missing candidate file produces an empty
+store partition.
 
-The join will read `id` and full `text` from each normalized shard. It will
-read `id`, `dup_cluster_id`, and `is_cluster_canonical` from the matching
-candidate shard.
+The store key is `(file_idx, id)`, its value is full normalized text, and its
+required hash function returns `file_idx`. Construction validates
+`hash_key(key) % num_shards == physical_shard`; it never inserts a `group_by`.
+Store actors own source shards round-robin and have explicit resource, encoded
+byte, construction-timeout, and recovery-timeout settings.
 
-The joined records will keep `file_idx`, `source_key`, and
-`is_cluster_canonical`. A sentinel record from each input shard will make sure
-that every output shard exists.
+The cluster map reads only `id`, `dup_cluster_id`, and
+`is_cluster_canonical` from the sparse candidate files. Its records keep
+`file_idx` and `source_key`, but no text. A sentinel record from each input
+shard makes sure that every output shard exists.
 
 The job will assign file indices from sorted source names. It will group real
 records by `dup_cluster_id`.
@@ -72,7 +86,10 @@ when that representative is not the first copy of its content ID. The old store
 kept such representatives. This behavior change is intentional because the
 global exact job always keeps the first copy.
 
-The reducer will compare each remaining member directly against the representative. It will not do all-pairs comparison or connected-component closure.
+The reducer will fetch the representative once and retrieve members with
+order-preserving, bounded `get_many()` calls. It will compare each member
+directly against the representative. It will not do all-pairs comparison or
+connected-component closure.
 
 The verifier will restore the pure scorer from closed PR #7591. The reference pipeline will pass an explicit, hashed `FuzzyVerificationParams` value.
 
@@ -93,7 +110,9 @@ When either text has above ten characters per whitespace token, the scorer will 
 
 The verifier will accept a member only when the member is no longer than the representative. The containment rule and applicable character guard must also pass.
 
-The cluster reducer will stream members and keep only the representative shingle sets in memory. Comparison cost is linear in cluster members.
+The cluster reducer will stream metadata, keep only the representative shingle
+sets and one configured lookup batch in memory, and never deserialize the
+whole cluster's text at once. Comparison cost is linear in cluster members.
 
 Accepted members will move through a second `group_by(file_idx)` operation. Each file group will sort rows by `id` and write the matching normalized basename.
 
@@ -144,6 +163,10 @@ different orders.
 
 Determinism tests will change worker counts and input dictionary order. The
 representative and output rows must stay the same.
+
+Store-backed tests will use one-row lookup batches to cross batch boundaries,
+assert the store contains exactly the candidate documents, and preserve all
+marker and exact-copy expectations from the text-shuffle implementation.
 
 The rated-pair, 0.1B, and 100B gates are complete. They rejected longest-first
 selection, confirmed the candidate-canonical direction, and showed that the

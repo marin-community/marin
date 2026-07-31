@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 import pyarrow.parquet as pq
-from fray.types import ResourceConfig
+from fray.types import ActorConfig, ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import datakit_source_key
 from marin.execution.artifact import read_artifact
@@ -30,6 +30,7 @@ from marin.processing.classification.deduplication.fuzzy_verification import (
     verify_candidate,
 )
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    FuzzyVerificationStoreConfig,
     VerifiedFuzzyDupsAttrData,
     verify_fuzzy_dups_step,
 )
@@ -46,6 +47,15 @@ DEFAULT_MAX_CONCURRENT = 8
 DEFAULT_INSPECTION_LIMIT = 10_000
 TEXT_PREVIEW_CHARS = 500
 WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g", disk="8g")
+STORE_CONFIG = FuzzyVerificationStoreConfig(
+    max_actors=32,
+    actor_resources=WORKER_RESOURCES,
+    actor_config=ActorConfig(max_concurrency=32, max_task_retries=1_000),
+    max_actor_bytes=4_000_000_000,
+    recovery_timeout=1_800,
+    ready_timeout=1_800,
+    lookup_batch_size=128,
+)
 VERIFIED_COLUMNS = [
     "id",
     "dup_doc",
@@ -356,6 +366,7 @@ def main() -> None:
         normalized_steps=normalized_steps,
         candidates_step=candidates_step,
         verification_params=verification_params,
+        store_config=STORE_CONFIG,
         max_parallelism=args.max_workers,
         worker_resources=WORKER_RESOURCES,
         override_output_path=prefix_join(output_prefix, "verified"),

@@ -17,8 +17,10 @@ description: Read-only Zephyr memory store and verified fuzzy-dedup experiments
   may only retain a cluster early.
 - The generic store passes its focused local and Iris tests. A pickled handle
   served later Zephyr pipelines, and a lookup blocked through a forced owner
-  preemption and returned the original value after reconstruction. Dedup parity
-  and medium-scale CoreWeave runs remain open.
+  preemption and returned the original value after reconstruction.
+- The store-backed fuzzy verifier passes all 90 safe dedup tests. It keeps only
+  candidate text in actors, shuffles metadata without text, and uses bounded
+  reducer lookups. Medium-scale CoreWeave runs remain open.
 
 ## Scope
 
@@ -46,16 +48,12 @@ description: Read-only Zephyr memory store and verified fuzzy-dedup experiments
 
 ### Active
 
-- `ZKV-004`: Store-backed fuzzy verification matches PR #7831 exactly while
-  reducing text in the cluster shuffle. Next test: compose the verifier branch
-  and establish synthetic parity.
 - `ZKV-005`: A deterministic large-cluster sample can reject known false
   clusters cheaply without creating false removals. Next test: compare its
   retained-marker subset and rated-pair recall; keep disabled by default.
 
 ### Blocked
 
-- `ZKV-004` medium run: blocked until synthetic store-backed verifier parity.
 - `ZKV-005`: blocked until unsampled store parity is established.
 
 ### Falsified / Dead End
@@ -70,6 +68,9 @@ description: Read-only Zephyr memory store and verified fuzzy-dedup experiments
   local and local-Iris backends.
 - `ZKV-003`: A lookup remained pending while its owner reconstructed after a
   forced Iris preemption, then returned the original value from that owner.
+- `ZKV-004`: The store-backed verifier preserved all synthetic marker,
+  canonical, exact-copy, empty-shard, and counter behavior across batch size
+  one and multiple worker counts. All 90 safe dedup tests passed.
 
 ## Decision Log
 
@@ -162,3 +163,26 @@ description: Read-only Zephyr memory store and verified fuzzy-dedup experiments
   that had already registered.
 - Next action: Commit the generic store checkpoint and compose PR #7831 for
   store-backed verifier parity.
+
+### 2026-07-31 21:58 UTC - ZKV-004 local verifier parity
+
+- Hypothesis: Candidate documents can stay in a shard-preserving actor store
+  while the cluster shuffle carries metadata only, without changing any fuzzy
+  removal decision.
+- Commit Hash: `d103673ad` plus uncommitted store-backed verifier changes.
+- Commands:
+  - `uv run pytest tests/processing/classification/deduplication/test_verify_fuzzy_dups.py -q`
+  - `uv run pytest tests/processing/classification/deduplication -q`
+  - targeted `./infra/pre-commit.py` over the eight changed verifier and call-site files
+- Config: `(file_idx, id)` keys hashed by `file_idx`; two local actors; one-row
+  lookup batches in behavior tests; explicit actor byte and recovery budgets.
+- Result: The focused verifier passed 7/7 and the safe dedup suite passed
+  90/90 with five integration cases excluded by repository defaults. Expected
+  sparse marker rows, canonical choice, equal-ID delegation, empty outputs,
+  and validation failures were unchanged. Store counters reported three
+  candidate items over two actors in the representative behavior test.
+- Interpretation: Full text is not needed in the cluster shuffle. Fetching the
+  canonical once and members through ordered `get_many()` batches preserves the
+  verifier's direct-comparison boundary.
+- Next action: Snapshot and push the treatment revision, then compare it with
+  PR #7831 on the same medium CoreWeave inputs using per-stage finelog metrics.

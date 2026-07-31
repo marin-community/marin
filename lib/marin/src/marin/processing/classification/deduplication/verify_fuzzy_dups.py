@@ -7,16 +7,18 @@ import logging
 import os
 from collections.abc import Iterator
 from dataclasses import dataclass
+from itertools import batched
 from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from fray.types import ResourceConfig
+from fray.types import ActorConfig, ResourceConfig
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath, prefix_join
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import MAX_WORKERS_PER_JOB, ZephyrContext
+from zephyr.memory_store import MemoryStore
 from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
 
@@ -82,6 +84,25 @@ class VerificationShard:
     source_tag: str
 
 
+@dataclass(frozen=True)
+class FuzzyVerificationStoreConfig:
+    """Resources and lookup sizing for candidate-document memory stores."""
+
+    max_actors: int
+    actor_resources: ResourceConfig
+    actor_config: ActorConfig
+    max_actor_bytes: int
+    recovery_timeout: float
+    ready_timeout: float
+    lookup_batch_size: int
+
+    def __post_init__(self) -> None:
+        if self.max_actors < 1:
+            raise ValueError("max_actors must be at least 1")
+        if self.lookup_batch_size < 1:
+            raise ValueError("lookup_batch_size must be at least 1")
+
+
 _VERIFIED_DUPLICATE_SCHEMA = pa.schema(
     [
         pa.field("id", pa.string(), nullable=False),
@@ -117,8 +138,8 @@ def _rows(path: str, columns: list[str]) -> Iterator[dict[str, Any]]:
                 yield row
 
 
-def _joined_cluster_members(shards: list[VerificationShard]) -> Iterator[dict[str, Any]]:
-    """Join candidate attributes to normalized text in each co-partitioned shard."""
+def _candidate_cluster_members(shards: list[VerificationShard]) -> Iterator[dict[str, Any]]:
+    """Read candidate metadata without carrying document text into the shuffle."""
     for shard in shards:
         yield {"kind": "sentinel", "file_idx": shard.file_idx}
         if not StoragePath(shard.candidate_path).exists():
@@ -131,19 +152,8 @@ def _joined_cluster_members(shards: list[VerificationShard]) -> Iterator[dict[st
             counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/candidate_shards_empty", 1)
             continue
 
-        normalized = iter(_rows(shard.normalized_path, ["id", "text"]))
-        source = next(normalized, None)
         while candidate is not None:
-            while source is not None and source["id"] < candidate["id"]:
-                source = next(normalized, None)
-            if source is None or source["id"] != candidate["id"]:
-                raise ValueError(
-                    f"{shard.candidate_path} contains ID {candidate['id']!r} "
-                    f"that is absent from {shard.normalized_path}"
-                )
-            text = source["text"] or ""
             counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/candidate_members", 1)
-            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/candidate_text_chars", len(text))
             yield {
                 "kind": "candidate",
                 "file_idx": shard.file_idx,
@@ -152,10 +162,37 @@ def _joined_cluster_members(shards: list[VerificationShard]) -> Iterator[dict[st
                 "id": candidate["id"],
                 "dup_cluster_id": str(candidate["dup_cluster_id"]),
                 "is_cluster_canonical": candidate["is_cluster_canonical"],
-                "text": text,
             }
             candidate = next(candidates, None)
+
+
+def _candidate_text_entries(shard: VerificationShard) -> Iterator[tuple[tuple[int, str], str]]:
+    """Join one candidate shard to normalized text for its store partition."""
+    if not StoragePath(shard.candidate_path).exists():
+        return
+
+    candidates = iter(_rows(shard.candidate_path, ["id"]))
+    candidate = next(candidates, None)
+    if candidate is None:
+        return
+
+    normalized = iter(_rows(shard.normalized_path, ["id", "text"]))
+    source = next(normalized, None)
+    while candidate is not None:
+        while source is not None and source["id"] < candidate["id"]:
             source = next(normalized, None)
+        if source is None or source["id"] != candidate["id"]:
+            raise ValueError(
+                f"{shard.candidate_path} contains ID {candidate['id']!r} " f"that is absent from {shard.normalized_path}"
+            )
+        yield (shard.file_idx, candidate["id"]), source["text"] or ""
+        candidate = next(candidates, None)
+        source = next(normalized, None)
+
+
+def _document_partition(key: tuple[int, str]) -> int:
+    """Route a candidate document to its existing co-partitioned file index."""
+    return key[0]
 
 
 def _cluster_key(record: dict[str, Any]) -> tuple[str, str]:
@@ -181,7 +218,11 @@ def _result_fields(result: VerificationResult) -> dict[str, Any]:
     }
 
 
-def _make_cluster_verifier(params: FuzzyVerificationParams):
+def _make_cluster_verifier(
+    params: FuzzyVerificationParams,
+    document_store: MemoryStore[tuple[int, str], str],
+    lookup_batch_size: int,
+):
     """Build a reducer that verifies each member against one representative."""
 
     def verify(group_key: tuple[str, str], records: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
@@ -195,67 +236,72 @@ def _make_cluster_verifier(params: FuzzyVerificationParams):
         representative = first
         if not representative["is_cluster_canonical"]:
             raise ValueError(f"Cluster {group_key[1]!r} has no canonical member")
-        representative_text = prepare_verification_text(representative["text"], params)
+        representative_raw_text = document_store.get((representative["file_idx"], representative["id"]))
+        counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/candidate_text_chars", len(representative_raw_text))
+        representative_text = prepare_verification_text(representative_raw_text, params)
         cluster_size = 1
         accepted = 0
         counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/clusters", 1)
 
-        for member in records:
-            cluster_size += 1
-            if member["is_cluster_canonical"]:
-                raise ValueError(f"Cluster {group_key[1]!r} has more than one canonical member")
-            if member["id"] == representative["id"]:
-                if member["text"] != representative["text"]:
-                    raise ValueError(f"Cluster {group_key[1]!r} has different text for content ID {member['id']!r}")
-                counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/decision/delegated_global_exact", 1)
+        for members in batched(records, lookup_batch_size):
+            member_texts = document_store.get_many([(member["file_idx"], member["id"]) for member in members])
+            for member, member_raw_text in zip(members, member_texts, strict=True):
+                cluster_size += 1
+                counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/candidate_text_chars", len(member_raw_text))
+                if member["is_cluster_canonical"]:
+                    raise ValueError(f"Cluster {group_key[1]!r} has more than one canonical member")
+                if member["id"] == representative["id"]:
+                    if member_raw_text != representative_raw_text:
+                        raise ValueError(f"Cluster {group_key[1]!r} has different text for content ID {member['id']!r}")
+                    counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/decision/delegated_global_exact", 1)
+                    counters.pipeline.update_counter(
+                        f"{_COUNTER_PREFIX}/source/{member['source_tag']}/decision/delegated_global_exact",
+                        1,
+                    )
+                    continue
+                result = verify_prepared_candidate(
+                    prepare_verification_text(member_raw_text, params),
+                    representative_text,
+                    params,
+                )
+                decision = result.rejection.value if result.rejection is not None else "accepted"
+                counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/decision/{decision}", 1)
                 counters.pipeline.update_counter(
-                    f"{_COUNTER_PREFIX}/source/{member['source_tag']}/decision/delegated_global_exact",
+                    f"{_COUNTER_PREFIX}/source/{member['source_tag']}/decision/{decision}",
                     1,
                 )
-                continue
-            result = verify_prepared_candidate(
-                prepare_verification_text(member["text"], params),
-                representative_text,
-                params,
-            )
-            decision = result.rejection.value if result.rejection is not None else "accepted"
-            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/decision/{decision}", 1)
-            counters.pipeline.update_counter(
-                f"{_COUNTER_PREFIX}/source/{member['source_tag']}/decision/{decision}",
-                1,
-            )
-            counters.pipeline.update_counter(
-                f"{_COUNTER_PREFIX}/histogram/member_containment/{_score_bin(result.member_containment)}",
-                1,
-            )
-            counters.pipeline.update_counter(
-                f"{_COUNTER_PREFIX}/histogram/jaccard/{_score_bin(result.jaccard)}",
-                1,
-            )
-            if result.char_jaccard is not None:
                 counters.pipeline.update_counter(
-                    f"{_COUNTER_PREFIX}/histogram/char_jaccard/{_score_bin(result.char_jaccard)}",
+                    f"{_COUNTER_PREFIX}/histogram/member_containment/{_score_bin(result.member_containment)}",
                     1,
                 )
-            counters.pipeline.update_counter(
-                f"{_COUNTER_PREFIX}/histogram/member_unique/"
-                f"{min(result.member_unique_ngrams, UNIQUE_NGRAM_HISTOGRAM_OVERFLOW_BIN)}",
-                1,
-            )
-            if not result.accepted:
-                continue
+                counters.pipeline.update_counter(
+                    f"{_COUNTER_PREFIX}/histogram/jaccard/{_score_bin(result.jaccard)}",
+                    1,
+                )
+                if result.char_jaccard is not None:
+                    counters.pipeline.update_counter(
+                        f"{_COUNTER_PREFIX}/histogram/char_jaccard/{_score_bin(result.char_jaccard)}",
+                        1,
+                    )
+                counters.pipeline.update_counter(
+                    f"{_COUNTER_PREFIX}/histogram/member_unique/"
+                    f"{min(result.member_unique_ngrams, UNIQUE_NGRAM_HISTOGRAM_OVERFLOW_BIN)}",
+                    1,
+                )
+                if not result.accepted:
+                    continue
 
-            accepted += 1
-            yield {
-                "kind": "verified",
-                "file_idx": member["file_idx"],
-                "id": member["id"],
-                "dup_doc": True,
-                "dup_cluster_id": member["dup_cluster_id"],
-                "dup_representative_id": representative["id"],
-                "dup_representative_source_key": representative["source_key"],
-                **_result_fields(result),
-            }
+                accepted += 1
+                yield {
+                    "kind": "verified",
+                    "file_idx": member["file_idx"],
+                    "id": member["id"],
+                    "dup_doc": True,
+                    "dup_cluster_id": member["dup_cluster_id"],
+                    "dup_representative_id": representative["id"],
+                    "dup_representative_source_key": representative["source_key"],
+                    **_result_fields(result),
+                }
 
         counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/cluster_size/{_size_bin(cluster_size)}", 1)
         counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/cluster_members", cluster_size)
@@ -344,6 +390,7 @@ def verify_fuzzy_dups(
     candidates: FuzzyDupsAttrData,
     output_path: str,
     verification_params: FuzzyVerificationParams,
+    store_config: FuzzyVerificationStoreConfig,
     max_parallelism: int = MAX_WORKERS_PER_JOB,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
@@ -374,43 +421,70 @@ def verify_fuzzy_dups(
         ctx_kwargs["map_task_resources"] = map_task_resources
     if reduce_task_resources is not None:
         ctx_kwargs["reduce_task_resources"] = reduce_task_resources
-    ctx = ZephyrContext(**ctx_kwargs)
-    ctx.put(_SHARED_SHARDS_KEY, {shard.file_idx: shard for shard in shards})
-
+    shards.sort(key=lambda shard: shard.file_idx)
+    if [shard.file_idx for shard in shards] != list(range(len(shards))):
+        raise ValueError("verification shards do not have contiguous file indices")
     file_shards = min(max_parallelism, len(shards))
     shard_groups: list[list[VerificationShard]] = [[] for _ in range(file_shards)]
     for index, shard in enumerate(shards):
         shard_groups[index % file_shards].append(shard)
 
-    pipeline = (
-        Dataset.from_list(shard_groups)
-        .flat_map(_joined_cluster_members)
-        .group_by(
-            key=_cluster_key,
-            sort_by=lambda record: (
-                0 if record["kind"] == "sentinel" or record["is_cluster_canonical"] else 1,
-                record["file_idx"],
-                record.get("id", ""),
-            ),
-            reducer=_make_cluster_verifier(verification_params),
-            # Cluster IDs can use all workers, including when there are fewer input files.
-            num_output_shards=max_parallelism,
+    with ZephyrContext(**ctx_kwargs) as ctx:
+        ctx.put(_SHARED_SHARDS_KEY, {shard.file_idx: shard for shard in shards})
+        document_store = ctx.load_memory_store(
+            Dataset.from_list(shards).flat_map(_candidate_text_entries),
+            name="fuzzy-verification-documents",
+            hash_key=_document_partition,
+            num_actors=min(store_config.max_actors, len(shards)),
+            actor_resources=store_config.actor_resources,
+            actor_config=store_config.actor_config,
+            max_actor_bytes=store_config.max_actor_bytes,
+            recovery_timeout=store_config.recovery_timeout,
+            ready_timeout=store_config.ready_timeout,
         )
-        .group_by(
-            key=lambda record: record["file_idx"],
-            sort_by=lambda record: record["id"],
-            reducer=_write_verified_shard,
-            num_output_shards=file_shards,
+        store_stats = document_store.stats()
+        pipeline = (
+            Dataset.from_list(shard_groups)
+            .flat_map(_candidate_cluster_members)
+            .group_by(
+                key=_cluster_key,
+                sort_by=lambda record: (
+                    0 if record["kind"] == "sentinel" or record["is_cluster_canonical"] else 1,
+                    record["file_idx"],
+                    record.get("id", ""),
+                ),
+                reducer=_make_cluster_verifier(
+                    verification_params,
+                    document_store,
+                    store_config.lookup_batch_size,
+                ),
+                # Cluster IDs can use all workers, including when there are fewer input files.
+                num_output_shards=max_parallelism,
+            )
+            .group_by(
+                key=lambda record: record["file_idx"],
+                sort_by=lambda record: record["id"],
+                reducer=_write_verified_shard,
+                num_output_shards=file_shards,
+            )
         )
-    )
-    outcome = ctx.execute(pipeline, verbose=True)
+        outcome = ctx.execute(pipeline, verbose=True)
     write_copartitioned_source_manifest(output_path=output_path, attr_dirs=attr_dirs)
 
     verified = sum(result["verified_duplicates"] for result in outcome.results)
+    output_counters = dict(outcome.counters)
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/actors"] = len(store_stats)
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/items"] = sum(stat.num_items for stat in store_stats)
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/serialized_bytes"] = sum(
+        stat.serialized_bytes for stat in store_stats
+    )
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/max_actor_serialized_bytes"] = max(
+        stat.serialized_bytes for stat in store_stats
+    )
     logger.info(
         "Verified %d fuzzy duplicates from %d candidate members across %d shards",
         verified,
-        int(outcome.counters.get(f"{_COUNTER_PREFIX}/candidate_members", 0)),
+        int(output_counters.get(f"{_COUNTER_PREFIX}/candidate_members", 0)),
         len(shards),
     )
     return VerifiedFuzzyDupsAttrData(
@@ -418,7 +492,7 @@ def verify_fuzzy_dups(
         sources={
             source_key: VerifiedFuzzyDupsPerSource(attr_dir=attr_dir) for source_key, attr_dir in attr_dirs.items()
         },
-        counters=dict(outcome.counters),
+        counters=output_counters,
     )
 
 
@@ -428,6 +502,7 @@ def verify_fuzzy_dups_step(
     normalized_steps: dict[str, StepSpec],
     candidates_step: StepSpec,
     verification_params: FuzzyVerificationParams,
+    store_config: FuzzyVerificationStoreConfig,
     max_parallelism: int,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
@@ -448,6 +523,7 @@ def verify_fuzzy_dups_step(
             candidates=read_artifact(candidates_step.output_path, FuzzyDupsAttrData),
             output_path=output_path,
             verification_params=verification_params,
+            store_config=store_config,
             max_parallelism=max_parallelism,
             worker_resources=worker_resources,
             coordinator_resources=coordinator_resources,

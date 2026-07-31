@@ -85,7 +85,7 @@ import logging
 import posixpath
 from dataclasses import dataclass, field, replace
 
-from fray.types import ResourceConfig
+from fray.types import ActorConfig, ResourceConfig
 from levanter.tokenizers import TokenizerBackend
 from marin.datakit.decon import (
     DeconAttributes,
@@ -113,6 +113,7 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
 from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
+    FuzzyVerificationStoreConfig,
     VerifiedFuzzyDupsAttrData,
     verify_fuzzy_dups,
 )
@@ -741,6 +742,15 @@ def reference_datakit_steps(
     )
 
     verification_params = FuzzyVerificationParams()
+    verification_store_config = FuzzyVerificationStoreConfig(
+        max_actors=min(scale.pool.n_workers, 64),
+        actor_resources=scale.pool.worker,
+        actor_config=ActorConfig(max_concurrency=32, max_task_retries=1_000),
+        max_actor_bytes=4_000_000_000,
+        recovery_timeout=1_800,
+        ready_timeout=1_800,
+        lookup_batch_size=128,
+    )
     verified_dedup = StepSpec(
         name="datakit/verify_fuzzy_dups",
         deps=[*sources.values(), dedup_candidates],
@@ -753,6 +763,7 @@ def reference_datakit_steps(
             candidates=read_artifact(dedup_candidates.output_path, FuzzyDupsAttrData),
             output_path=op,
             verification_params=verification_params,
+            store_config=verification_store_config,
             max_parallelism=scale.verification_max_parallelism,
             worker_resources=scale.pool.worker,
         ),

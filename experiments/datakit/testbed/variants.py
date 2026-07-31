@@ -19,7 +19,7 @@ import logging
 import os
 from collections.abc import Sequence
 
-from fray.types import ResourceConfig
+from fray.types import ActorConfig, ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import datakit_source_key
 from marin.execution.artifact import read_artifact
@@ -36,6 +36,7 @@ from marin.processing.classification.deduplication.fuzzy_minhash import MinHashA
 from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
+    FuzzyVerificationStoreConfig,
     VerifiedFuzzyDupsAttrData,
     verify_fuzzy_dups,
 )
@@ -68,6 +69,15 @@ _EXACT_DUPS_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
 _MINHASH_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
 _FUZZY_DUPS_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
 _FUZZY_VERIFICATION_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g")
+_FUZZY_VERIFICATION_STORE_CONFIG = FuzzyVerificationStoreConfig(
+    max_actors=32,
+    actor_resources=ResourceConfig(cpu=2, ram="8g"),
+    actor_config=ActorConfig(max_concurrency=32, max_task_retries=1_000),
+    max_actor_bytes=4_000_000_000,
+    recovery_timeout=1_800,
+    ready_timeout=1_800,
+    lookup_batch_size=128,
+)
 _CONSOLIDATE_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
 
 
@@ -143,6 +153,7 @@ def _fuzzy_verification_step(sampled_by_source: dict[str, StepSpec], fuzzy_dups:
             candidates=read_artifact(fuzzy_dups.output_path, FuzzyDupsAttrData),
             output_path=output_path,
             verification_params=params,
+            store_config=_FUZZY_VERIFICATION_STORE_CONFIG,
             max_parallelism=_FUZZY_DUPS_MAX_PARALLELISM,
             worker_resources=_FUZZY_VERIFICATION_WORKER_RESOURCES,
         ),

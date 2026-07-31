@@ -7,12 +7,16 @@ import pyarrow.parquet as pq
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
+from fray.types import ActorConfig, ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import datakit_source_key
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData, FuzzyDupsPerSource
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashParams
 from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
-from marin.processing.classification.deduplication.verify_fuzzy_dups import verify_fuzzy_dups
+from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    FuzzyVerificationStoreConfig,
+    verify_fuzzy_dups,
+)
 from zephyr.stage_io import ZephyrWorkerError
 from zephyr.writers import write_parquet_file
 
@@ -63,6 +67,18 @@ def _output_rows(verified, source_key: str) -> list[dict]:
     return rows
 
 
+def _store_config() -> FuzzyVerificationStoreConfig:
+    return FuzzyVerificationStoreConfig(
+        max_actors=2,
+        actor_resources=ResourceConfig(cpu=1, ram="256m"),
+        actor_config=ActorConfig(max_concurrency=8, max_task_retries=1),
+        max_actor_bytes=1 << 20,
+        recovery_timeout=30,
+        ready_timeout=30,
+        lookup_batch_size=1,
+    )
+
+
 def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     representative = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"
@@ -98,6 +114,7 @@ def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, mo
         candidates=candidates,
         output_path=str(tmp_path / "verified"),
         verification_params=FuzzyVerificationParams(),
+        store_config=_store_config(),
         max_parallelism=2,
     )
 
@@ -135,6 +152,8 @@ def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, mo
     assert verified.counters["dedup/fuzzy/verification/cluster_members"] == 3
     assert verified.counters["dedup/fuzzy/verification/decision/accepted"] == 1
     assert verified.counters["dedup/fuzzy/verification/decision/containment_below_threshold"] == 1
+    assert verified.counters["dedup/fuzzy/verification/memory_store/items"] == 3
+    assert verified.counters["dedup/fuzzy/verification/memory_store/actors"] == 2
 
 
 def test_representative_selection_is_stable_across_input_order_and_parallelism(tmp_path, monkeypatch):
@@ -170,6 +189,7 @@ def test_representative_selection_is_stable_across_input_order_and_parallelism(t
         candidates=candidates,
         output_path=str(tmp_path / "verified-first"),
         verification_params=FuzzyVerificationParams(),
+        store_config=_store_config(),
         max_parallelism=1,
     )
     second = verify_fuzzy_dups(
@@ -177,6 +197,7 @@ def test_representative_selection_is_stable_across_input_order_and_parallelism(t
         candidates=candidates,
         output_path=str(tmp_path / "verified-second"),
         verification_params=FuzzyVerificationParams(),
+        store_config=_store_config(),
         max_parallelism=4,
     )
 
@@ -215,6 +236,7 @@ def test_verifier_defers_exact_copies_to_global_exact_dedup(tmp_path, monkeypatc
         candidates=candidates,
         output_path=str(tmp_path / "verified"),
         verification_params=FuzzyVerificationParams(),
+        store_config=_store_config(),
         max_parallelism=2,
     )
 
@@ -269,6 +291,7 @@ def test_verifier_requires_one_candidate_canonical(
             candidates=candidates,
             output_path=str(tmp_path / "verified"),
             verification_params=FuzzyVerificationParams(),
+            store_config=_store_config(),
             max_parallelism=1,
         )
 
@@ -289,6 +312,7 @@ def test_verifier_rejects_mismatched_source_sets(tmp_path, monkeypatch):
             candidates=candidates,
             output_path=str(tmp_path / "verified"),
             verification_params=FuzzyVerificationParams(),
+            store_config=_store_config(),
             max_parallelism=1,
         )
 
@@ -308,5 +332,6 @@ def test_verifier_rejects_non_positive_parallelism(tmp_path, monkeypatch):
             candidates=candidates,
             output_path=str(tmp_path / "verified"),
             verification_params=FuzzyVerificationParams(),
+            store_config=_store_config(),
             max_parallelism=0,
         )
