@@ -1512,3 +1512,42 @@ def test_zephyr_context_mismatching_optional_parameters_raises_value_error():
         map_task_resources=ResourceConfig(cpu=1, preemptible=False, image="custom-image"),
         reduce_task_resources=ResourceConfig(cpu=2, preemptible=False, image="custom-image"),
     )
+
+
+def test_report_from_a_previous_stage_is_rejected(coordinator):
+    """A late report cannot be mistaken for the same shard's work in the next stage.
+
+    Attempt numbers restart at each stage, so shard 0 / attempt 0 exists in every
+    stage. Without a stage generation the coordinator would accept stage N's
+    delayed result as stage N+1's output.
+    """
+    run = start_test_stage(coordinator, [_make_task("first")], stage_name="first")
+    stale_generation = run.stage_generation
+
+    coordinator._start_stage(run, "second", 1, [_make_task("second")])
+    assert run.stage_generation != stale_generation
+    assert run.completed_shards == 0
+
+    coordinator.report_result(
+        "worker-0",
+        _TEST_EXECUTION_ID,
+        0,
+        0,
+        TaskResult(shard=ListShard(refs=[])),
+        CounterSnapshot.empty(),
+        stale_generation,
+    )
+    assert run.completed_shards == 0, "a previous stage's result was counted as this stage's"
+    assert 0 not in run.results
+
+    # The current stage's own report still lands.
+    coordinator.report_result(
+        "worker-0",
+        _TEST_EXECUTION_ID,
+        0,
+        0,
+        TaskResult(shard=ListShard(refs=[])),
+        CounterSnapshot.empty(),
+        run.stage_generation,
+    )
+    assert run.completed_shards == 1

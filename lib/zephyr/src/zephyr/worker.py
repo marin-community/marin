@@ -231,6 +231,7 @@ class ZephyrWorker:
         """Execute one shard task, report the result, and restore task.cost to the pool."""
         task_start = time.monotonic()
         execution_id = config["execution_id"]
+        stage_generation = config.get("stage_generation")
         try:
             result, task_counters = self._execute_shard(task, config, runner)
             logger.info("[%s] Shard %d done in %.2fs", self._worker_id, task.shard_idx, time.monotonic() - task_start)
@@ -242,6 +243,7 @@ class ZephyrWorker:
                 attempt,
                 result,
                 CounterSnapshot(counters=dict(task_counters), generation=self._next_counter_generation()),
+                stage_generation,
             ).result()
         except Exception:
             logger.error("Worker %s error on shard %d", self._worker_id, task.shard_idx, exc_info=True)
@@ -251,6 +253,7 @@ class ZephyrWorker:
                 task.shard_idx,
                 attempt,
                 "".join(traceback.format_exc()),
+                stage_generation,
             ).result()
         finally:
             with self._resources_lock:

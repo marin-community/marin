@@ -22,7 +22,6 @@ import os
 import time
 import uuid
 from collections.abc import Callable
-from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -618,9 +617,11 @@ class ZephyrContext:
 
             finally:
                 # Tearing the pool down cascades to its coordinator and workers.
+                # Ownership is released only once that succeeds: clearing the
+                # handle first and swallowing the error would leak a live pool
+                # with nothing left able to stop it.
+                pool.shutdown()
                 self._active_pool = None
-                with suppress(Exception):
-                    pool.shutdown()
 
         raise AssertionError("retry loop exited without returning or raising")
 

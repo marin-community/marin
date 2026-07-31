@@ -239,6 +239,10 @@ class _PipelineExecution:
     # Set when a stage may have completed (result, failure, or abort) so
     # ``_wait_for_stage`` wakes immediately instead of sleeping out its backoff.
     stage_done: threading.Event = field(default_factory=threading.Event)
+    # Bumped on every stage load. Attempt numbers restart per stage, so
+    # (shard_idx, attempt) alone cannot tell a late report from stage N apart
+    # from the same shard's first attempt in stage N+1; this can.
+    stage_generation: int = 0
     # True once the final task-producing stage has been loaded, so a drained
     # queue means no further task can be dispatched for this pipeline.
     is_last_stage: bool = False
@@ -261,6 +265,7 @@ class _PipelineExecution:
         Counters and plan_stages span the whole execution and survive; anything
         scoped to a single stage starts over. Callers hold the coordinator lock.
         """
+        self.stage_generation += 1
         self.task_queue = deque(tasks)
         self.results = {}
         self.in_flight = {}
@@ -779,6 +784,7 @@ class ZephyrCoordinator:
                 config = {
                     "chunk_prefix": self._chunk_prefix,
                     "execution_id": run.execution_id,
+                    "stage_generation": run.stage_generation,
                 }
                 return PullStatus.RUN_TASK, PullTask(task=task, attempt=attempt, config=config)
 
@@ -828,6 +834,23 @@ class ZephyrCoordinator:
                 f"This indicates report_result/pull_task reordering — workers must block on report_result."
             )
 
+    def _is_current_stage(self, run: _PipelineExecution, stage_generation: int | None, shard_idx: int) -> bool:
+        """False for a report belonging to a stage this execution has moved past.
+
+        ``None`` means a worker that predates the field; accept it rather than
+        drop real work, since the collision it guards against needs a report to
+        outlive a stage boundary.
+        """
+        if stage_generation is None or stage_generation == run.stage_generation:
+            return True
+        logger.warning(
+            "Ignoring report for shard %d from stage generation %d (current %d)",
+            shard_idx,
+            stage_generation,
+            run.stage_generation,
+        )
+        return False
+
     def report_result(
         self,
         worker_id: str,
@@ -836,6 +859,7 @@ class ZephyrCoordinator:
         attempt: int,
         result: TaskResult,
         counter_snapshot: CounterSnapshot,
+        stage_generation: int | None = None,
     ) -> None:
         with self._lock:
             self._last_seen[worker_id] = time.monotonic()
@@ -855,6 +879,9 @@ class ZephyrCoordinator:
                 return
 
             current_attempt = run.task_attempts.get(shard_idx, 0)
+            if not self._is_current_stage(run, stage_generation, shard_idx):
+                return
+
             if attempt != current_attempt:
                 logger.warning(
                     f"Ignoring stale result from worker {worker_id} for shard {shard_idx} "
@@ -898,7 +925,15 @@ class ZephyrCoordinator:
         watermark = max(generation, existing.generation) if existing is not None else generation
         self._worker_counters[worker_id] = CounterSnapshot.empty(watermark)
 
-    def report_error(self, worker_id: str, execution_id: str, shard_idx: int, attempt: int, error_info: str) -> None:
+    def report_error(
+        self,
+        worker_id: str,
+        execution_id: str,
+        shard_idx: int,
+        attempt: int,
+        error_info: str,
+        stage_generation: int | None = None,
+    ) -> None:
         """Worker reports a task failure. Re-queues up to MAX_SHARD_FAILURES."""
         with self._lock:
             self._last_seen[worker_id] = time.monotonic()
@@ -916,6 +951,9 @@ class ZephyrCoordinator:
                 existing = self._worker_counters.get(worker_id)
                 if existing is not None:
                     self._worker_counters[worker_id] = CounterSnapshot.empty(existing.generation)
+                return
+
+            if not self._is_current_stage(run, stage_generation, shard_idx):
                 return
 
             current_attempt = run.task_attempts.get(shard_idx, 0)

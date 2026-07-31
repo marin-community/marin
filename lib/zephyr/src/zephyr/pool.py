@@ -395,8 +395,9 @@ class _ZephyrPool:
                     raise TimeoutError(f"Pool coordinator was not ready within {timeout}s")
                 time.sleep(backoff.next_interval())
         except BaseException:
-            with suppress(Exception):
-                self._serve_job.terminate()
+            # Keep the handle if termination fails: the job may still be up, and
+            # dropping it here would leave a pool nobody can reach to stop.
+            self._serve_job.terminate()
             self._serve_job = None
             raise
 
