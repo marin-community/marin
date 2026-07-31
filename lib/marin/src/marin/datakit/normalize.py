@@ -27,7 +27,7 @@ from typing import Any
 import dupekit
 import pyarrow as pa
 from fray.types import ResourceConfig
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationInfo, field_serializer, model_validator
 from rigging.filesystem import StoragePath, prefix_join, url_to_fs
 from zephyr import counters
 from zephyr.dataset import Dataset, ShardInfo
@@ -36,6 +36,8 @@ from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 from zephyr.writers import ThreadedBatchWriter, write_parquet_file
 
 from marin.datakit import partition_filename
+from marin.datakit.source_key import datakit_artifact_path, datakit_source_path
+from marin.execution.artifact import ARTIFACT_LOAD_CONTEXT_KEY
 from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
@@ -54,6 +56,7 @@ COMPACTED_WHITESPACE_COUNTER = "datakit_normalize_compacted_whitespace"
 # Default Zephyr worker cap. Sized well above Zephyr's own default (128) because
 # a single normalize spans thousands of shards over very large staged dumps.
 DEFAULT_MAX_WORKERS = 1024
+NORMALIZED_DATA_VERSION = "v2"
 
 
 class DedupMode(StrEnum):
@@ -76,14 +79,39 @@ class NormalizedData(BaseModel):
 
     Attributes:
         main_output_dir: Directory containing the main output Parquet files.
-        dup_output_dir: Directory containing the duplicate side output Parquet files.
+        dup_output_dir: Directory containing the duplicate side output Parquet
+            files. A v2 artifact stores both directories relative to
+            ``MARIN_PREFIX`` when they are under the active prefix.
         counters: Aggregated zephyr counters.
     """
 
-    version: str = "v1"
+    version: str = NORMALIZED_DATA_VERSION
     main_output_dir: str
     dup_output_dir: str
     counters: dict[str, int | float]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _resolve_artifact_paths(cls, value: object, info: ValidationInfo) -> object:
+        if not info.context or not info.context.get(ARTIFACT_LOAD_CONTEXT_KEY):
+            return value
+        if not isinstance(value, dict):
+            return value
+
+        version = value.get("version", "v1")
+        if version not in ("v1", NORMALIZED_DATA_VERSION):
+            raise ValueError(f"Unsupported NormalizedData version: {version!r}")
+
+        loaded = dict(value)
+        if version == NORMALIZED_DATA_VERSION:
+            loaded["main_output_dir"] = datakit_source_path(loaded["main_output_dir"])
+            loaded["dup_output_dir"] = datakit_source_path(loaded["dup_output_dir"])
+        loaded["version"] = NORMALIZED_DATA_VERSION
+        return loaded
+
+    @field_serializer("main_output_dir", "dup_output_dir", when_used="json")
+    def _serialize_output_dir(self, value: str) -> str:
+        return datakit_artifact_path(value)
 
 
 def generate_id(text: str) -> str:

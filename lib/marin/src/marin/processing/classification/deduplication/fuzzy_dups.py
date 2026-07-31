@@ -32,19 +32,18 @@ artifacts produces fresh markers without re-reading any source text.
 """
 
 import logging
-import os
 from collections.abc import Iterator
-from typing import Any
 
 from fray.types import ResourceConfig
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import MAX_WORKERS_PER_JOB, ZephyrContext
 from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
 
+from marin.datakit.copartitioned import CopartitionedShard, CopartitionedSource, build_copartitioned_shards
+from marin.datakit.source_key import datakit_source_key
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.connected_components import connected_components
@@ -52,6 +51,7 @@ from marin.processing.classification.deduplication.dedup_commons import _load_ba
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, MinHashParams
 
 logger = logging.getLogger(__name__)
+FUZZY_DUPS_ATTR_DATA_VERSION = 2
 
 
 class FuzzyDupsPerSource(BaseModel):
@@ -75,15 +75,23 @@ class FuzzyDupsAttrData(BaseModel):
     Attributes:
         version: Schema version of this artifact.
         params: MinHash params; equal to every input's params.
-        sources: Mapping from each input's ``MinHashAttrData.source_main_dir``
+        sources: Mapping from each input's ``MinHashAttrData.source_key``
             to its per-source attr output entry.
         counters: Aggregated zephyr counters across all sources.
     """
 
-    version: str = "v1"
+    version: str = f"v{FUZZY_DUPS_ATTR_DATA_VERSION}"
     params: MinHashParams
     sources: dict[str, FuzzyDupsPerSource]
     counters: dict[str, int | float]
+
+    def attr_dir_for_source(self, source_path: str) -> str:
+        """Return the attribute directory for a materialized source path."""
+        source_key = datakit_source_key(source_path)
+        entry = self.sources.get(source_key)
+        if entry is None:
+            raise KeyError(f"Fuzzy duplicate attributes have no entry for source_key={source_key!r}")
+        return entry.attr_dir
 
 
 def _validate_inputs(inputs: list[MinHashAttrData]) -> MinHashParams:
@@ -102,48 +110,15 @@ def _validate_inputs(inputs: list[MinHashAttrData]) -> MinHashParams:
 
     seen: dict[str, int] = {}
     for i, m in enumerate(inputs):
-        if m.source_main_dir in seen:
+        if m.source_key in seen:
             raise ValueError(
-                f"Duplicate source_main_dir in inputs: inputs[{seen[m.source_main_dir]}] and "
-                f"inputs[{i}] both point to {m.source_main_dir!r}. Each source must be "
+                f"Duplicate source_key in inputs: inputs[{seen[m.source_key]}] and "
+                f"inputs[{i}] both point to {m.source_key!r}. Each source must be "
                 "represented at most once so its output attr tree is unambiguous."
             )
-        seen[m.source_main_dir] = i
+        seen[m.source_key] = i
 
     return head
-
-
-def _build_shard_index(inputs: list[MinHashAttrData]) -> tuple[list[dict[str, Any]], dict[str, str]]:
-    """Enumerate every source shard across *inputs* and assign a global file_idx.
-
-    Returns:
-        (entries, source_tag_for_input) where ``entries[file_idx]`` holds
-        ``{attr_path, source_main_dir, source_tag, basename}`` and
-        ``source_tag_for_input[source_main_dir] = "source_NNN"``.
-    """
-    # Sort inputs by source_main_dir so source_tags are deterministic regardless
-    # of the order callers happen to pass them in.
-    ordered = sorted(enumerate(inputs), key=lambda iv: iv[1].source_main_dir)
-    source_tag: dict[str, str] = {}
-    for new_idx, (_, m) in enumerate(ordered):
-        source_tag[m.source_main_dir] = f"source_{new_idx:03d}"
-
-    entries: list[dict[str, Any]] = []
-    for m in inputs:
-        attr_shards = sorted(str(shard) for shard in StoragePath(f"{m.attr_dir.rstrip('/')}/*.parquet").glob())
-        if not attr_shards:
-            raise FileNotFoundError(f"No attr parquet shards under {m.attr_dir}")
-        for attr_path in attr_shards:
-            entries.append(
-                {
-                    "file_idx": len(entries),
-                    "attr_path": attr_path,
-                    "source_main_dir": m.source_main_dir,
-                    "source_tag": source_tag[m.source_main_dir],
-                    "basename": os.path.basename(attr_path),
-                }
-            )
-    return entries, source_tag
 
 
 # Separator between the per-source CC tag and the original content-hash id.
@@ -170,18 +145,18 @@ def _strip_cc_prefix(record_id: str) -> str:
     return record_id.split(_CC_ID_SEP, 1)[1]
 
 
-def _emit_bucket_records(entries: list[dict[str, Any]]) -> Iterator[dict]:
+def _emit_bucket_records(entries: list[CopartitionedShard]) -> Iterator[dict]:
     """For each (bucket, id) pair across all attr shards in *entries*, emit a routing record."""
     for entry in entries:
-        for batch in _load_batches(entry["attr_path"], columns=["id", "buckets"]):
+        for batch in _load_batches(entry.input_path, columns=["id", "buckets"]):
             ids = batch["id"]
             buckets_col = batch["buckets"]
             for doc_id, doc_buckets in zip(ids, buckets_col, strict=True):
                 if not doc_buckets.is_valid:
                     continue
-                cc_id = _cc_id(entry["source_tag"], doc_id.as_py())
+                cc_id = _cc_id(entry.source_tag, doc_id.as_py())
                 for b in doc_buckets.as_py():
-                    yield {"bucket": str(b), "id": cc_id, "file_idx": entry["file_idx"]}
+                    yield {"bucket": str(b), "id": cc_id, "file_idx": entry.file_idx}
 
 
 # Key under which ``entries`` is staged via ``ZephyrContext.put`` for the
@@ -193,7 +168,7 @@ def _emit_bucket_records(entries: list[dict[str, Any]]) -> Iterator[dict]:
 _SHARED_ENTRIES_KEY = "fuzzy_dups_entries"
 
 
-def _make_per_shard_writer(output_path: str, counter_prefix: str):
+def _make_per_shard_writer(counter_prefix: str):
     """Return a group_by reducer that writes per-shard cluster-annotation parquet files.
 
     Skips singletons entirely. For every non-singleton cluster member, writes
@@ -206,9 +181,8 @@ def _make_per_shard_writer(output_path: str, counter_prefix: str):
     """
 
     def aggregate(file_idx: int, records: Iterator[dict]) -> dict:
-        entries = zephyr_worker_ctx().get_shared(_SHARED_ENTRIES_KEY)
+        entries: list[CopartitionedShard] = zephyr_worker_ctx().get_shared(_SHARED_ENTRIES_KEY)
         entry = entries[file_idx]
-        out_path = f"{output_path}/outputs/{entry['source_tag']}/{entry['basename']}"
 
         cluster_members = 0
         canonicals = 0
@@ -232,11 +206,11 @@ def _make_per_shard_writer(output_path: str, counter_prefix: str):
                     },
                 }
 
-        result = write_parquet_file(cluster_member_rows(), out_path)
+        result = write_parquet_file(cluster_member_rows(), entry.output_path)
         return {
             **result,
             "file_idx": file_idx,
-            "source_tag": entry["source_tag"],
+            "source_tag": entry.source_tag,
             "cluster_members": cluster_members,
             "canonicals": canonicals,
         }
@@ -300,7 +274,11 @@ def compute_fuzzy_dups_attrs(
         FileNotFoundError: If any input ``attr_dir`` is missing parquet shards.
     """
     params = _validate_inputs(inputs)
-    entries, source_tag = _build_shard_index(inputs)
+    sources = [CopartitionedSource(source_key=minhash.source_key, input_dir=minhash.attr_dir) for minhash in inputs]
+    entries, attr_dirs = build_copartitioned_shards(
+        sources=sources,
+        output_path=output_path,
+    )
 
     logger.info(
         "Computing fuzzy dups for %d inputs (%d total shards) → %s, params=%s",
@@ -327,7 +305,7 @@ def compute_fuzzy_dups_attrs(
     # sequentially and emits bucket records; file_idx is preserved on the entry
     # itself, not by enumeration order, so grouping is safe.
     n_groups = min(max_parallelism, len(entries))
-    entry_groups: list[list[dict[str, Any]]] = [[] for _ in range(n_groups)]
+    entry_groups: list[list[CopartitionedShard]] = [[] for _ in range(n_groups)]
     for i, entry in enumerate(entries):
         entry_groups[i % n_groups].append(entry)
 
@@ -355,7 +333,7 @@ def compute_fuzzy_dups_attrs(
         )
 
     ctx.put(_SHARED_ENTRIES_KEY, entries)
-    aggregator = _make_per_shard_writer(output_path, counter_prefix="dedup/fuzzy/document")
+    aggregator = _make_per_shard_writer(counter_prefix="dedup/fuzzy/document")
 
     # CC's Hash-to-Min guarantees component_id == min(id_norm) across a cluster,
     # so `component_id == id_norm` cheaply identifies the natural canonical.
@@ -384,9 +362,7 @@ def compute_fuzzy_dups_attrs(
     shard_results = outcome.results
 
     # Aggregate per-source counters across shards for the final artifact.
-    sources: dict[str, FuzzyDupsPerSource] = {
-        src_dir: FuzzyDupsPerSource(attr_dir=f"{output_path}/outputs/{tag}") for src_dir, tag in source_tag.items()
-    }
+    sources = {source_key: FuzzyDupsPerSource(attr_dir=attr_dir) for source_key, attr_dir in attr_dirs.items()}
 
     cluster_members = sum(r["cluster_members"] for r in shard_results)
     clusters = sum(r["canonicals"] for r in shard_results)  # one canonical per cluster
@@ -426,6 +402,6 @@ def compute_fuzzy_dups_attrs_step(
             worker_resources=worker_resources,
             coordinator_resources=coordinator_resources,
         ),
-        hash_attrs={"cc_max_iterations": cc_max_iterations},
+        hash_attrs={"artifact_version": FUZZY_DUPS_ATTR_DATA_VERSION, "cc_max_iterations": cc_max_iterations},
         override_output_path=override_output_path,
     )

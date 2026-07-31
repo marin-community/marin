@@ -55,7 +55,7 @@ def _read_cluster_attrs(attr_dir: str) -> list[dict]:
 def _write_minhash_attr_dataset(
     *,
     output_dir: str,
-    source_main_dir: str,
+    source_key: str,
     rows: list[dict],
 ) -> MinHashAttrData:
     """Write a one-shard MinHash attr dataset for focused fuzzy-dup tests."""
@@ -64,21 +64,22 @@ def _write_minhash_attr_dataset(
     write_parquet_file(rows, os.path.join(attr_dir, "part-00000.parquet"))
     return MinHashAttrData(
         params=TEST_MINHASH_PARAMS,
-        source_main_dir=source_main_dir,
+        source_key=source_key,
         attr_dir=attr_dir,
         counters={},
     )
 
 
-def test_minhash_attrs_co_partitioned_with_source(fox_corpus):
+def test_minhash_attrs_co_partitioned_with_source(fox_corpus, monkeypatch):
     """Each source shard produces a same-named MinHash attr parquet with {id, buckets}."""
+    monkeypatch.setenv("MARIN_PREFIX", fox_corpus["output_dir"])
     norm_dir = os.path.join(fox_corpus["output_dir"], "normalized")
     minhash_dir = os.path.join(fox_corpus["output_dir"], "minhash")
 
     source = _normalize(fox_corpus["test_dir"], norm_dir)
     minhash = compute_minhash_attrs(source=source, output_path=minhash_dir)
 
-    assert minhash.source_main_dir == source.main_output_dir
+    assert minhash.source_key == "normalized/outputs/main"
     assert minhash.params.num_perms == 286
     assert minhash.params.num_bands == 26
 
@@ -124,7 +125,7 @@ def test_fuzzy_dups_single_source_schema_and_pair(fox_corpus):
     dups = compute_fuzzy_dups_attrs(inputs=[minhash], output_path=dups_dir, max_parallelism=4)
 
     assert dups.params == minhash.params
-    per_source = dups.sources[source.main_output_dir]
+    per_source = dups.sources[minhash.source_key]
 
     by_id = _read_main_records(source)
     rows = _read_cluster_attrs(per_source.attr_dir)
@@ -161,7 +162,7 @@ def test_fuzzy_dups_multi_source_per_source_attr_trees(fox_corpus):
     test_main_dir = os.path.join(fox_corpus["output_dir"], "test_main")
     train_mh = _write_minhash_attr_dataset(
         output_dir=os.path.join(fox_corpus["output_dir"], "mh_train"),
-        source_main_dir=train_main_dir,
+        source_key=train_main_dir,
         rows=[
             {
                 "id": generate_id("Arctic predators have superior auditory capabilities for hunting beneath snow."),
@@ -179,7 +180,7 @@ def test_fuzzy_dups_multi_source_per_source_attr_trees(fox_corpus):
     )
     test_mh = _write_minhash_attr_dataset(
         output_dir=os.path.join(fox_corpus["output_dir"], "mh_test"),
-        source_main_dir=test_main_dir,
+        source_key=test_main_dir,
         rows=[
             {
                 "id": generate_id("Arctic predators have superior auditory capabilities for hunting beneath snow."),
@@ -206,12 +207,13 @@ def test_fuzzy_dups_multi_source_per_source_attr_trees(fox_corpus):
     for per_source in dups.sources.values():
         assert per_source.attr_dir.rsplit("/", 1)[-1].startswith("source_"), per_source.attr_dir
         assert Path(per_source.attr_dir).exists()
+    assert dups.attr_dir_for_source(train_main_dir) == dups.sources[train_mh.source_key].attr_dir
 
-    def rows_by_id(main_dir: str) -> dict[str, dict]:
-        return {r["id"]: r for r in _read_cluster_attrs(dups.sources[main_dir].attr_dir)}
+    def rows_by_id(source_key: str) -> dict[str, dict]:
+        return {r["id"]: r for r in _read_cluster_attrs(dups.sources[source_key].attr_dir)}
 
-    train_rows = rows_by_id(train_main_dir)
-    test_rows = rows_by_id(test_main_dir)
+    train_rows = rows_by_id(train_mh.source_key)
+    test_rows = rows_by_id(test_mh.source_key)
 
     # Each cross-source byte-identical text must appear as an attr row on both
     # sides (keyed by the same content hash), share a dup_cluster_id, and have
@@ -250,11 +252,11 @@ def test_fuzzy_dups_rejects_param_mismatch(fox_corpus):
 
 
 def test_fuzzy_dups_rejects_duplicate_source(fox_corpus):
-    """Two inputs pointing to the same ``source_main_dir`` must be rejected to avoid output clobbering."""
+    """Two inputs with the same source key must be rejected to avoid output clobbering."""
     source = _normalize(fox_corpus["test_dir"], os.path.join(fox_corpus["output_dir"], "norm"))
     mh = compute_minhash_attrs(source=source, output_path=os.path.join(fox_corpus["output_dir"], "mh"))
 
-    with pytest.raises(ValueError, match=r"Duplicate source_main_dir"):
+    with pytest.raises(ValueError, match=r"Duplicate source_key"):
         compute_fuzzy_dups_attrs(
             inputs=[mh, mh],
             output_path=os.path.join(fox_corpus["output_dir"], "fuzzy_dups"),
@@ -266,7 +268,7 @@ def _canonical_assignment(source: NormalizedData, output_path: str) -> dict[str,
     """Run minhash + fuzzy_dups for *source* and return ``{id -> (dup_cluster_id, is_canonical)}``."""
     minhash = compute_minhash_attrs(source=source, output_path=os.path.join(output_path, "minhash"))
     dups = compute_fuzzy_dups_attrs(inputs=[minhash], output_path=os.path.join(output_path, "dups"), max_parallelism=4)
-    rows = _read_cluster_attrs(dups.sources[source.main_output_dir].attr_dir)
+    rows = _read_cluster_attrs(dups.sources[minhash.source_key].attr_dir)
     return {r["id"]: (r["attributes"]["dup_cluster_id"], r["attributes"]["is_cluster_canonical"]) for r in rows}
 
 
@@ -321,7 +323,7 @@ def test_fuzzy_dups_capped_does_not_raise_and_emits(fox_corpus):
 
     mh = _write_minhash_attr_dataset(
         output_dir=os.path.join(fox_corpus["output_dir"], "mh_path"),
-        source_main_dir=main_dir,
+        source_key=main_dir,
         rows=rows,
     )
 
@@ -331,7 +333,7 @@ def test_fuzzy_dups_capped_does_not_raise_and_emits(fox_corpus):
         cc_max_iterations=1,
         max_parallelism=4,
     )
-    attr_rows = _read_cluster_attrs(dups.sources[main_dir].attr_dir)
+    attr_rows = _read_cluster_attrs(dups.sources[mh.source_key].attr_dir)
     assert attr_rows, "capped run should still emit cluster-member rows"
 
 
@@ -400,7 +402,7 @@ def test_text_cap_chars_truncates_mega_docs_only(tmp_path):
     # Params + version metadata.
     assert cap_mh.params.text_cap_chars == cap_chars
     assert nocap_mh.params.text_cap_chars is None
-    assert cap_mh.version == "v2"
+    assert cap_mh.version == "v3"
 
 
 # ---------------------------------------------------------------------------
@@ -538,7 +540,7 @@ def _run_dedup_on_corpus(tmp_path: Path, docs: list[dict]) -> dict[str, dict]:
     dups = compute_fuzzy_dups_attrs(inputs=[minhash], output_path=str(tmp_path / "dups"), max_parallelism=1)
 
     by_id = _read_main_records(source)
-    rows = _read_cluster_attrs(dups.sources[source.main_output_dir].attr_dir)
+    rows = _read_cluster_attrs(dups.sources[minhash.source_key].attr_dir)
     return {by_id[r["id"]]["source_id"]: r for r in rows if r["id"] in by_id}
 
 

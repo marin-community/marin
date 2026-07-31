@@ -14,18 +14,39 @@ its pipeline on its own dedicated Zephyr coordinator + worker fleet (vanilla
 `ZephyrContext`), sized by that config; `--max-concurrent` bounds how many stages
 the StepRunner walks at once.
 
-Every stage keeps one step per source with its own output dir
-(`datakit/<stage>/<source>_<hash>/`). Dedup, the decontamination DF filter, and
-the store combine sources. Steps write their main output under `outputs/main/`
-plus, where it makes sense, a small site/sample side output
+Most stages keep one step per source with its own output dir
+(`datakit/<stage>/<source>_<hash>/`). Global exact dedup, fuzzy dedup, the
+decontamination DF filter, and the store combine sources. Steps write their
+main output under `outputs/main/` plus, where it makes sense, a small site/sample side output
 (`outputs/samples/`, `outputs/flagged_sample/`, …) that the per-stage HTML
 reports ([`reports/`](reports/)) read.
+
+Materialized source identities are paths relative to `MARIN_PREFIX`, such as
+`datakit/normalize/foo_<hash>/outputs/main`. Actual data directories remain
+absolute. This keeps source keys stable when artifacts move between regions.
+`NormalizedData` also stores its output directories in this relative form.
+Existing v1 artifacts keep their absolute directories when they load.
+
+Global exact deduplication is one shared step. It selects one canonical record
+for each record ID, with source names as the canonical order. The step writes
+sparse co-partitioned attributes with `attributes.dup_doc=true` for the other
+records. Only source shards with duplicates get an attribute file; a missing
+file means that the source shard has no exact duplicates. The step does not copy
+normalized text.
+
+The final store uses fuzzy canonical markers when they exist. It applies exact
+duplicate markers only to records without fuzzy markers, which covers records
+that MinHash skipped without conflicting with fuzzy canonical selection.
+
+A source-set change gives a new global exact-dedup output and a new store
+identity. It does not change the identity of tokenization, embedding, quality,
+decontamination, or MinHash steps.
 
 Each `datakit/report/<stage>` step depends only on that stage's steps, so it
 runs as soon as the stage finishes — reports are not deferred to the end of the
 run, and only `report/store` waits on the store. They are separate steps (not
 folded into the data steps) so a report can be regenerated without recomputing
-the stage. Embed and minhash have no standalone report.
+the stage. Global exact dedup, embed, and minhash have no standalone report.
 
 ```mermaid
 flowchart TD
@@ -51,9 +72,11 @@ flowchart TD
 
     BLOOM["eval bloom (shared)<br/>datakit/bloom/_combined_fixed"]
     DF["eval n-gram DF (cross-source)<br/>datakit/decon_drop/_combined"]
+    EXACT["global exact dedup by record ID<br/>datakit/global_exact_dedup"]
     DEDUP["fuzzy dedup (cross-source)<br/>datakit/dedup"]
-    STORE["store: shuffle 5-way join, drop contaminated + non-canonical,<br/>group by (cluster_&lt;view&gt;, quality_bucket, subshard)<br/>datakit/store → cluster=C/quality=Q Levanter caches"]
+    STORE["store: shuffle attribute join, apply filters,<br/>group by (cluster_&lt;view&gt;, quality_bucket, subshard)<br/>datakit/store → cluster=C/quality=Q Levanter caches"]
 
+    SRC --> EXACT
     SRC --> TOK
     SRC --> EMB
     SRC --> QUAL
@@ -70,6 +93,7 @@ flowchart TD
     ASG --> STORE
     QUAL --> STORE
     DECON --> STORE
+    EXACT --> STORE
     DEDUP --> STORE
 
     subgraph reports["stage reports — one HTML page each, run when the stage finishes (dashed = reads counters + site/sample outputs)"]
@@ -117,11 +141,12 @@ aws s3 ls s3://marin-us-east-02a/marin/datakit/ | grep sample
 | Path | What it is |
 | --- | --- |
 | `reference_pipeline.py` | The DAG builder + CLI (`--mode full\|sample`, `--pool-*`, `--sources`, `--quality-model`) |
+| `global_exact_dedup.py` | Sparse co-partitioned exact-duplicate attributes by normalized record ID |
 | `cluster/quality/fast_transformer/` | Quality classifier: per-source scoring step + training/calibration |
 | `cluster/domain/v0/` | Domain clustering: centroid sampling/training + per-source assignment |
 | `embeddings/luxical/` | Luxical-one document embeddings feeding the domain stage |
 | `decontam/` | Eval-corpus preparation (the decon step itself lives in `marin.datakit.decon`) |
-| `store/datakit_store.py` | Shuffle 5-way join → compact per-(cluster, quality) Levanter caches |
+| `store/datakit_store.py` | Shuffle attribute join → compact per-(cluster, quality) Levanter caches |
 | `reports/` | Per-stage single-page HTML reports (`common.py` + one module/template per stage) |
 | `scripts/` | Manual source triggering and synchronization, tier-2 dataset reproduction, and tier-1 output validation |
 | `testbed/` | Sampled-corpus testbed used by the smoke and decon experiments |
