@@ -40,7 +40,6 @@ from marin.datakit.download.finetranslations import finetranslations_normalize_s
 from marin.datakit.download.glm_kernelgym_rollouts import glm_kernelgym_rollouts_normalize_steps
 from marin.datakit.download.gpt_oss_rollouts import gpt_oss_rollouts_normalize_steps
 from marin.datakit.download.hplt import hplt_v3_normalize_steps
-from marin.datakit.download.identity_data import MARIN_NAME as IDENTITY_DATA_CONTENT_NAME
 from marin.datakit.download.identity_data import identity_data_content_normalize_steps
 from marin.datakit.download.institutional_books import institutional_books_normalize_steps
 from marin.datakit.download.massive import massive_normalize_steps
@@ -66,6 +65,8 @@ from marin.datakit.download.swe_rebench_openhands import swe_rebench_openhands_n
 from marin.datakit.download.swe_zero_12m import swe_zero_12m_normalize_steps
 from marin.datakit.download.synthetic1 import synthetic1_normalize_steps
 from marin.execution.step_spec import StepSpec
+
+IDENTITY_DATA_CONTENT_NAME = "identity-data/content"
 
 
 @dataclass(frozen=True)
