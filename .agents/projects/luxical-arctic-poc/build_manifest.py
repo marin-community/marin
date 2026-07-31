@@ -9,6 +9,8 @@ import logging
 import posixpath
 import re
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from itertools import accumulate
 from pathlib import Path
 from typing import Any
@@ -37,6 +39,7 @@ from rigging.filesystem import atomic_rename
 MANIFEST_URL = f"{MANIFEST_ROOT}/manifest.json"
 RESULT_FILE = Path("/tmp/luxical-arctic-manifest")
 REQUIRED_COLUMNS = frozenset(("id", "text"))
+METADATA_WORKERS = 16
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -64,19 +67,22 @@ def parquet_paths(main_output_dir: str) -> tuple[Any, list[str]]:
     return filesystem, paths
 
 
+def parquet_file_capacity(filesystem: Any, path: str) -> tuple[str, int]:
+    """Return the checked row count for one Parquet file."""
+    with pq.ParquetFile(path, filesystem=filesystem) as parquet_file:
+        columns = frozenset(parquet_file.schema_arrow.names)
+        if not REQUIRED_COLUMNS.issubset(columns):
+            raise ValueError(f"Required columns are missing from {path}: {columns}")
+        return path, parquet_file.metadata.num_rows
+
+
 def source_file_capacities(main_output_dir: str, source: str) -> tuple[Any, list[tuple[str, int]]]:
     """Return the row capacity of every nonempty source file."""
     filesystem, paths = parquet_paths(main_output_dir)
-    files = []
-    for path in paths:
-        with pq.ParquetFile(path, filesystem=filesystem) as parquet_file:
-            columns = frozenset(parquet_file.schema_arrow.names)
-            if not REQUIRED_COLUMNS.issubset(columns):
-                raise ValueError(f"Required columns are missing from {path}: {columns}")
-            rows = parquet_file.metadata.num_rows
-        if rows == 0:
-            continue
-        files.append((path, rows))
+    logger.info("Reading %d Parquet footers for %s", len(paths), source)
+    with ThreadPoolExecutor(max_workers=METADATA_WORKERS) as executor:
+        capacities = executor.map(partial(parquet_file_capacity, filesystem), paths)
+        files = [(path, rows) for path, rows in capacities if rows]
     logger.info("Measured %d nonempty files for %s", len(files), source)
     return filesystem, files
 
