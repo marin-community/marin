@@ -6,6 +6,7 @@
 import hashlib
 import json
 import logging
+import math
 import posixpath
 import re
 from collections import Counter, defaultdict
@@ -40,6 +41,7 @@ MANIFEST_URL = f"{MANIFEST_ROOT}/manifest.json"
 RESULT_FILE = Path("/tmp/luxical-arctic-manifest")
 REQUIRED_COLUMNS = frozenset(("id", "text"))
 IO_WORKERS = 16
+SAMPLE_BLOCKS_PER_SOURCE = 64
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -157,6 +159,29 @@ def selected_file_task(
     return selected_file_rows(filesystem, path, positions, protocol)
 
 
+def block_sample_positions(
+    rng: np.random.Generator,
+    total_rows: int,
+    row_count: int,
+) -> np.ndarray[Any, np.dtype[np.int64]]:
+    """Select unique rows from uniform circular blocks."""
+    if row_count > total_rows:
+        raise ValueError(f"Only {total_rows} rows are available for a sample of {row_count}")
+    if 2 * row_count > total_rows:
+        return np.sort(rng.choice(total_rows, size=row_count, replace=False))
+
+    block_size = max(1, math.ceil(row_count / SAMPLE_BLOCKS_PER_SOURCE))
+    positions: dict[int, None] = {}
+    while len(positions) < row_count:
+        block_start = int(rng.integers(total_rows))
+        for offset in range(block_size):
+            position = (block_start + offset) % total_rows
+            positions.setdefault(position, None)
+            if len(positions) == row_count:
+                break
+    return np.sort(np.fromiter(positions, dtype=np.int64))
+
+
 def selected_source_rows(
     filesystem: Any,
     files: list[tuple[str, int]],
@@ -171,7 +196,7 @@ def selected_source_rows(
     total_rows = int(file_ends[-1])
     if row_count > total_rows:
         raise ValueError(f"Source {source} has {total_rows} rows; requested {row_count}")
-    global_positions = np.sort(rng.choice(total_rows, size=row_count, replace=False))
+    global_positions = block_sample_positions(rng, total_rows, row_count)
     file_indices = np.searchsorted(file_ends, global_positions, side="right")
     rows = []
     selected_counts: Counter[str] = Counter()
@@ -328,7 +353,8 @@ def main() -> None:
         "evaluation_rows_per_source": EVAL_ROWS_PER_SOURCE,
         "survey_rows_per_source": SURVEY_ROWS_PER_SOURCE,
         "text_window_characters": TEXT_WINDOW_CHARS,
-        "sampling_method": "uniform_without_replacement_across_all_source_rows",
+        "sampling_method": "uniform_marginal_circular_blocks_without_duplicate_positions",
+        "sampling_blocks_per_source": SAMPLE_BLOCKS_PER_SOURCE,
         "predeclared_ood_sources": sorted(PREDECLARED_OOD_SOURCES),
         "category_source_counts": dict(sorted(category_counts.items())),
         "sources": source_reports,
