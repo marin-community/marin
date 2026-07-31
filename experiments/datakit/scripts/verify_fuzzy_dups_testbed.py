@@ -36,6 +36,7 @@ from marin.processing.classification.deduplication.verify_fuzzy_dups import (
 )
 from rigging.filesystem import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
+from zephyr.execution import PoolMode, ZephyrContext
 
 from experiments.datakit.reference_pipeline import SAMPLE_PREFIX, sample_sources
 from experiments.datakit.reports.dedup import dedup_report
@@ -46,6 +47,7 @@ DEFAULT_MAX_WORKERS = 64
 DEFAULT_MAX_CONCURRENT = 8
 DEFAULT_INSPECTION_LIMIT = 10_000
 TEXT_PREVIEW_CHARS = 500
+SHARED_POOL_NAME = "fuzzy-verification-testbed"
 WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g", disk="8g")
 STORE_CONFIG = FuzzyVerificationStoreConfig(
     max_actors=32,
@@ -397,7 +399,13 @@ def main() -> None:
         override_output_path=prefix_join(output_prefix, "report"),
     )
 
-    StepRunner().run([report_step], max_concurrent=args.max_concurrent)
+    with ZephyrContext(
+        mode=PoolMode.HOST,
+        pool_name=SHARED_POOL_NAME,
+        max_workers=args.max_workers,
+        resources=WORKER_RESOURCES,
+    ):
+        StepRunner().run([report_step], max_concurrent=args.max_concurrent)
 
     normalized = {
         source_name: read_artifact(step.output_path, NormalizedData) for source_name, step in normalized_steps.items()
