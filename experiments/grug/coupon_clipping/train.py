@@ -583,7 +583,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
 
-        # Main optimization loop.
         try:
             while int(state.step) < trainer.num_train_steps:
                 with jax.profiler.TraceAnnotation("load_batch"):

@@ -131,8 +131,8 @@ def _hf_config_attr(config: HfConfig, names: tuple[str, ...], default: Any = Non
 class GrugModelConfig:
     """Hyperparameters for the grug MoE transformer.
 
-    Architecture choices (GatedNorm, XSA, QB routing) are hardcoded.
-    Only shape/size knobs live here. All layers are MoE.
+    GatedNorm, XSA, and QB routing are fixed. Shape and execution-policy fields
+    configure an all-MoE transformer.
     """
 
     vocab_size: int

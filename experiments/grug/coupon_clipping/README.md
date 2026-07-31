@@ -17,11 +17,15 @@ order, 6.711B-token horizon, optimizer schedule, and 16-GB200 topology.
 - `pilot_growth_target.py`: target-only recovery from an explicit completed source checkpoint root.
 - `d1.py`: the token-matched D1 pipeline, with L1 through update 4,480 and L48
   through update 6,400.
+- `pilot_aggressive_source.py`: the 128-update `d1536/L1` throughput gate.
+- `pilot_aggressive_growth.py`: 32 `d1536/L1` updates followed by 16 updates on
+  the widened `d3072/L48` target.
+- `wd1.py`: the 90/10 narrow-shallow to wide-deep arm.
+- `c_short.py`: the 3,200-update full-depth WSD control.
 
 The production arms use the 0.625x candidate selected by the 128-update control
 gate. The low, center, and high pilots remain explicit entry points so the gate
 is reproducible.
 
 The launcher sets `XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async` before dispatch.
-The Grug dispatcher from `grug/embedding-gather-shard-map` propagates `XLA_*`
-variables to every child task.
+The Grug dispatcher propagates `XLA_*` variables to every child task.

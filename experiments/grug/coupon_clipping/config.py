@@ -219,8 +219,8 @@ def model_accounting(config: GrugModelConfig) -> ModelAccounting:
     return ModelAccounting(stored_parameters, active_parameters, forward_flops_per_token)
 
 
-def assert_matched_pyramid_accounting() -> ModelAccounting:
-    """Fail at config import if an arm no longer matches the control's size or FLOPs."""
+def matched_pyramid_accounting() -> ModelAccounting:
+    """Return control accounting after validating every pyramid arm matches it."""
     models = [build_model_config(arm) for arm in CouponClippingArm]
     if any(model.resolved_block_segment_lengths != SEGMENT_LENGTHS for model in models):
         raise AssertionError("all pyramid arms must use identical scan segment boundaries")
@@ -233,7 +233,7 @@ def assert_matched_pyramid_accounting() -> ModelAccounting:
 if TRAIN_TOKENS != EXPECTED_TRAIN_TOKENS:
     raise AssertionError(f"token horizon changed: got {TRAIN_TOKENS}, expected {EXPECTED_TRAIN_TOKENS}")
 
-MATCHED_MODEL_ACCOUNTING = assert_matched_pyramid_accounting()
+MATCHED_MODEL_ACCOUNTING = matched_pyramid_accounting()
 DEPTH_GROWTH_CONFIG = DepthGrowthConfig(
     source_layers=DEPTH_SOURCE_LAYERS,
     target_layers=NUM_LAYERS,
