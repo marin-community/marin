@@ -3,6 +3,7 @@
 
 """Public diagnostic-log source inventory and GHALogs extraction helpers."""
 
+import gzip
 import hashlib
 import http.client
 import json
@@ -14,6 +15,7 @@ import tarfile
 import time
 import xml.etree.ElementTree as ET
 import zipfile
+import zlib
 from collections.abc import Iterable, Iterator
 from contextlib import ExitStack
 from dataclasses import dataclass
@@ -53,6 +55,7 @@ from marin.datakit.ingestion_manifest import (
     write_ingestion_metadata_json,
 )
 from marin.datakit.normalize import normalize_step
+from marin.datakit.source_key import DatakitArtifactPath
 from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
@@ -84,7 +87,6 @@ GHALOGS_TOTAL_BYTES = 143_425_404_506
 GHALOGS_ARCHIVE_BYTES = 142_292_965_496
 LOGCHUNKS_TOTAL_BYTES = 24_108_826
 LOGHUB_REPO_SIZE_BYTES = 7_513_088
-GHALOGS_ROUGH_TOKENS_B = 150.0
 DEFAULT_GHALOGS_MAX_MEMBERS = 10_000
 DEFAULT_LOGCHUNKS_MAX_EXAMPLES = 10_000
 DEFAULT_LOGHUB_MAX_FILES = 100
@@ -216,12 +218,12 @@ class ExtractedPartitionedDiagnosticLogs(DiagnosticLogsArtifact):
     """Materialized GHALogs sample with train/dev/test/holdout partitions."""
 
     source_label: str
-    output_dir: str
-    train_file: str
-    dev_file: str
-    test_file: str
-    holdout_file: str
-    metadata_path: str
+    output_dir: DatakitArtifactPath
+    train_file: DatakitArtifactPath
+    dev_file: DatakitArtifactPath
+    test_file: DatakitArtifactPath
+    holdout_file: DatakitArtifactPath
+    metadata_path: DatakitArtifactPath
     record_count: int
     bytes_written: int
     content_fingerprint: str
@@ -231,9 +233,9 @@ class ExtractedDiagnosticLogSlice(DiagnosticLogsArtifact):
     """Materialized single-file diagnostic-log slice."""
 
     source_label: str
-    output_dir: str
-    output_file: str
-    metadata_path: str
+    output_dir: DatakitArtifactPath
+    output_file: DatakitArtifactPath
+    metadata_path: DatakitArtifactPath
     record_count: int
     bytes_written: int
     content_fingerprint: str
@@ -251,8 +253,8 @@ class MaterializedDiagnosticLogParquet(DiagnosticLogsArtifact):
     """Reusable parquet shards for a diagnostic-log corpus or partition."""
 
     source_label: str
-    output_dir: str
-    data_glob: str
+    output_dir: DatakitArtifactPath
+    data_glob: DatakitArtifactPath
     record_count: int
     counters: dict[str, int | float]
     content_fingerprint: str
@@ -302,7 +304,6 @@ SOURCE_INVENTORY: tuple[IngestionSourceManifest, ...] = (
         issue_numbers=(PUBLIC_DIAGNOSTIC_LOGS_ISSUE,),
         sample_caps=SampleCapConfig(max_members=DEFAULT_GHALOGS_MAX_MEMBERS),
         compressed_size_bytes=GHALOGS_TOTAL_BYTES,
-        rough_tokens_b=GHALOGS_ROUGH_TOKENS_B,
         source_metadata={"archive_filename": GHALOGS_ZIP_FILENAME},
     ),
     IngestionSourceManifest(
@@ -749,6 +750,15 @@ def _list_ghalogs_member_names(archive_path: str) -> list[str]:
             return [name for name in zf.namelist() if not name.endswith("/")]
 
 
+def _validate_ghalogs_run_archive(content: bytes) -> None:
+    """Read one nested run archive completely before any of its records are emitted."""
+    with tarfile.open(fileobj=BytesIO(content), mode="r:gz") as run_logs:
+        # Advancing across every member decompresses the whole gzip stream and
+        # validates each tar header without retaining decompressed member contents.
+        for _member in run_logs:
+            pass
+
+
 def _process_ghalogs_member_batch(batch: list[str], archive_path: str) -> Iterator[dict[str, str]]:
     """Open the archive once, read each assigned run archive, yield sanitized records.
 
@@ -764,6 +774,12 @@ def _process_ghalogs_member_batch(batch: list[str], archive_path: str) -> Iterat
                 with zf.open(name, "r") as member_file:
                     content = member_file.read()
                 counters.pipeline.update_counter("zephyr/records_in", 1)
+                try:
+                    _validate_ghalogs_run_archive(content)
+                except (tarfile.TarError, gzip.BadGzipFile, EOFError, zlib.error) as error:
+                    logger.warning("Skipping malformed GHALogs run archive %s: %s", name, error)
+                    counters.pipeline.update_counter("ghalogs_materialize/dropped_invalid_archive", 1)
+                    continue
                 for record in ghalogs_member_to_records(name, content):
                     counters.pipeline.update_counter("ghalogs_materialize/kept", 1)
                     counters.pipeline.update_counter(f"ghalogs_materialize/partition_{record['partition']}", 1)
@@ -1380,7 +1396,7 @@ def materialize_ghalogs_step(
             num_shards=num_shards,
         ),
         hash_attrs={
-            "version": "v3",
+            "version": "2026.07.31",
             "source_path": source_path,
             "source_label": source.source_label,
             "max_members": max_members,

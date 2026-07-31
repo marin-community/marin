@@ -27,6 +27,7 @@ from typing import Any
 import numpy as np
 import pyarrow as pa
 from fray.types import ResourceConfig
+from marin.datakit.source_key import DatakitArtifactPath
 from marin.execution.artifact import write_artifact
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath, open_url
@@ -39,15 +40,16 @@ from zephyr.runners import InlineRunner
 from experiments.datakit.embeddings.luxical.pipeline import EmbeddingAttrData, dequantize_to_fp32
 
 logger = logging.getLogger(__name__)
+ASSIGNMENT_ATTR_DATA_VERSION = 2
 
 
 class AssignmentAttrData(BaseModel):
     """Co-partitioned per-source cluster-assignment parquet shards."""
 
-    version: str = "v1"
-    output_dir: str
-    source_main_dir: str
-    embedding_output_dir: str
+    version: str = f"v{ASSIGNMENT_ATTR_DATA_VERSION}"
+    output_dir: DatakitArtifactPath
+    source_key: str
+    embedding_output_dir: DatakitArtifactPath
     k_train: int
     k_views: list[int]
     counters: dict[str, int | float] = {}
@@ -220,7 +222,7 @@ def assign_source(
 
     artifact = AssignmentAttrData(
         output_dir=output_path,
-        source_main_dir=embedding.source_main_dir,
+        source_key=embedding.source_key,
         embedding_output_dir=embedding.output_dir,
         k_train=k_train,
         k_views=k_views,

@@ -196,7 +196,7 @@ def make_document_dedup_aggregator(
         def only_dups(records: Iterator[dict]) -> Iterator[dict]:
             for record in records:
                 if record["is_dup"]:
-                    yield {"id": record["id"], "attributes": {"dup_doc": True}}
+                    yield {"id": record["id"], "dup_doc": True}
 
         result = write_parquet_file(only_dups(tally.tally(records)), output_file)
         return tally.as_result(result)
