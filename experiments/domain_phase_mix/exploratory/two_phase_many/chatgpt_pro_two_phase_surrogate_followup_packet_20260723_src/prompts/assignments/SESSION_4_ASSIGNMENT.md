@@ -1,0 +1,7 @@
+Your assignment is mechanistic derivation of the smallest phase-specific training state whose marginal value is not forced to equal the aggregate gradient. Build directly on your finite-potential transport and identified-set work, and treat the structural tied-optimum theorem as a constraint, not an inconvenience.
+
+Derive candidate state transitions from learning, forgetting, retention, gradient conflict, saturation, or data shortage. The state must be computable from allowed policy inputs and have a clear time interpretation. Explain why two policies with the same aggregate exposure can have different final BPB, and why the state should transfer across targets or bucket families.
+
+Prefer one or a few global or family-level parameters over per-bucket freedom. Derive the phase-tied limit and identify which exact-fiber patterns distinguish the new state from finite-potential transport, effective-exposure DSP, separate heads, and compact retained state. Before heldout evaluation, preregister coefficient signs or qualitative reversal signatures wherever theory permits.
+
+The goal is not merely better local phase-delta RMSE. The model must yield a plausible raw asymmetric optimum and improve target-matched selection without stronger deployment regularization. If no allowed state is identified, provide a mechanistic impossibility argument and the experiment needed to distinguish candidate dynamics.

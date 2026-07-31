@@ -1,0 +1,7 @@
+target_family,noise_mode,factor,accuracy_weight
+eval_bpb_irt,variable,theta_1,0.43916713116386835
+eval_bpb_irt,variable,theta_2,0.2508910596678467
+eval_bpb_irt,variable,theta_3,0.0
+eval_bpb_irt,variable,theta_4,0.18464983608175994
+eval_bpb_irt,variable,theta_5,0.06540484160119217
+eval_bpb_irt,variable,theta_6,0.059887131485332895

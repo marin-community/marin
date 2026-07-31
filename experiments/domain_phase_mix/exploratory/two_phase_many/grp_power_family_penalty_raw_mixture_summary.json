@@ -1,0 +1,18 @@
+{
+  "variant": "power_family_penalty",
+  "raw_predicted_bpb": 1.0247953247580739,
+  "validated_bpb": 1.0361912250518799,
+  "nearest_observed_run_name": "baseline_unimax",
+  "nearest_observed_bpb": 1.0834295749664309,
+  "nearest_observed_tv": 0.48296250080876835,
+  "family_shares": {
+    "phase0_broad_text": 0.7211954676922263,
+    "phase0_tech_code": 0.26683317590100486,
+    "phase0_reasoning": 0.011971356406768701,
+    "phase1_broad_text": 0.6313240992082191,
+    "phase1_tech_code": 0.3682716906787562,
+    "phase1_reasoning": 0.000404210113024604
+  },
+  "plot_png": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/grp_power_family_penalty_raw_mixture.png",
+  "weights_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/grp_power_family_penalty_raw_mixture_weights.csv"
+}

@@ -48,6 +48,14 @@ def _mirror_remote_prefixes(local_prefix: str) -> list[str]:
     return [p for p in _all_data_bucket_prefixes() if not local_prefix.startswith(p)]
 
 
+def resolve_mirror_url(url: str) -> str:
+    """Resolve a ``mirror://`` URL to a concrete local URL, copying on demand."""
+    fs, path = fsspec.core.url_to_fs(url)
+    if not isinstance(fs, MirrorFileSystem):
+        return url
+    return fs.resolve_url(path)
+
+
 class MirrorFileSystem(fsspec.AbstractFileSystem):
     """Fsspec filesystem that mirrors files across marin regional buckets.
 
@@ -175,6 +183,10 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
 
         self._copy_to_local(source_prefix, path)
         return local_url
+
+    def resolve_url(self, path: str) -> str:
+        """Resolve a mirror path or URL to a concrete local URL."""
+        return self._resolve_path(cast(str, self._strip_protocol(path)))
 
     # -- fsspec interface: info/ls/exists -------------------------------------
 

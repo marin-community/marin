@@ -1,0 +1,106 @@
+{
+  "model_name": "Power-Ridge",
+  "target_metric": "eval/uncheatable_eval/bpb",
+  "phase_mix_alpha": 0.37,
+  "ridge_alpha": 0.0007663410868007447,
+  "n_runs": 241,
+  "n_domains": 39,
+  "train_r2": 0.9112369651729493,
+  "train_rmse": 0.00570754950318546,
+  "train_spearman": 0.9502074688796681,
+  "train_regret_at_1": 0.0,
+  "chosen_observed_run": "run_00125",
+  "best_observed_run": "run_00125",
+  "best_observed_value": 1.0571987628936768,
+  "predicted_best_observed_value": 1.0620963651237767,
+  "predicted_optimum_value": 0.894279346433308,
+  "predicted_gain_vs_best_observed": 0.16291941646036878,
+  "nearest_observed_run": "run_00213",
+  "nearest_observed_value": 1.0797784328460691,
+  "nearest_observed_tv_distance": 0.7149095711357009,
+  "optimum_num_domains_above_1pct": 7,
+  "optimum_num_domains_above_5pct": 3,
+  "optimum_top_domains": [
+    {
+      "domain_name": "dolmino_olmocr_pdfs_hq",
+      "weight": 0.7023991531452416,
+      "phase_0_epochs_if_constant_mix": 17.261786007923074,
+      "phase_1_epochs_if_constant_mix": 4.315446501980769
+    },
+    {
+      "domain_name": "dolma3_stack_edu",
+      "weight": 0.0869288030746012,
+      "phase_0_epochs_if_constant_mix": 3.280890997475676,
+      "phase_1_epochs_if_constant_mix": 0.8202227493689189
+    },
+    {
+      "domain_name": "dolmino_stack_edu_fim",
+      "weight": 0.08218735733084186,
+      "phase_0_epochs_if_constant_mix": 3.1062935103611946,
+      "phase_1_epochs_if_constant_mix": 0.7765733775902985
+    },
+    {
+      "domain_name": "dolmino_synth_code",
+      "weight": 0.018401221151811302,
+      "phase_0_epochs_if_constant_mix": 4.936844616547367,
+      "phase_1_epochs_if_constant_mix": 1.2342111541368415
+    },
+    {
+      "domain_name": "dolma3_arxiv",
+      "weight": 0.016043405923179252,
+      "phase_0_epochs_if_constant_mix": 2.8749639872562183,
+      "phase_1_epochs_if_constant_mix": 0.7187409968140545
+    },
+    {
+      "domain_name": "dolmino_synth_qa",
+      "weight": 0.014657322596639138,
+      "phase_0_epochs_if_constant_mix": 0.14069569436905185,
+      "phase_1_epochs_if_constant_mix": 0.03517392359226296
+    },
+    {
+      "domain_name": "dolma3_cc/science_math_and_technology_low",
+      "weight": 0.014255805447431666,
+      "phase_0_epochs_if_constant_mix": 0.6502116874982606,
+      "phase_1_epochs_if_constant_mix": 0.16255292187456513
+    },
+    {
+      "domain_name": "dolma3_cc/industrial_high",
+      "weight": 0.009111986958398408,
+      "phase_0_epochs_if_constant_mix": 0.5645472976237268,
+      "phase_1_epochs_if_constant_mix": 0.14113682440593167
+    },
+    {
+      "domain_name": "dolma3_cc/literature_high",
+      "weight": 0.008108119075762803,
+      "phase_0_epochs_if_constant_mix": 0.15881460195593475,
+      "phase_1_epochs_if_constant_mix": 0.03970365048898367
+    },
+    {
+      "domain_name": "dolmino_synth_math",
+      "weight": 0.007676904785280383,
+      "phase_0_epochs_if_constant_mix": 1.7802325340478398,
+      "phase_1_epochs_if_constant_mix": 0.44505813351195983
+    },
+    {
+      "domain_name": "dolma3_cc/science_math_and_technology_high",
+      "weight": 0.007457156852074238,
+      "phase_0_epochs_if_constant_mix": 0.15526136516731884,
+      "phase_1_epochs_if_constant_mix": 0.038815341291829696
+    },
+    {
+      "domain_name": "dolma3_cc/history_and_geography_high",
+      "weight": 0.007120375902752265,
+      "phase_0_epochs_if_constant_mix": 0.26666930440965464,
+      "phase_1_epochs_if_constant_mix": 0.06666732610241365
+    }
+  ],
+  "cv_r2_mean": 0.7863999628386927,
+  "cv_r2_std": 0.011054223476653755,
+  "cv_rmse_mean": 0.00885124194910148,
+  "cv_rmse_std": 0.00022837658259384786,
+  "cv_spearman_mean": 0.8873228798738042,
+  "cv_spearman_std": 0.006348111448015383,
+  "cv_regret_at_1_mean": 0.002645373344421418,
+  "cv_regret_at_1_std": 0.0033131013326950795,
+  "cv_seed0_regret_at_1": 0.0
+}

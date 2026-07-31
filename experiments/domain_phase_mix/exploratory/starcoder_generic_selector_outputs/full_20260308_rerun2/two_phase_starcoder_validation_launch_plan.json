@@ -1,0 +1,207 @@
+{
+  "benchmark_output_dir": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/starcoder_generic_selector_outputs/full_20260308_rerun2",
+  "dataset": "two_phase_starcoder",
+  "n_runs": 11,
+  "name_prefix": "pinlin_calvin_xu/data_mixture/two_phase_starcoder_selector_validation/full_20260308_rerun2",
+  "policy": "feature_bayes_linear_observed",
+  "runs": [
+    {
+      "run_name": "feature_bayes_linear_k004_optimum",
+      "selector_seed": 0,
+      "subset_size": 4,
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.8944781423868884,
+            "starcoder": 0.10552185761311161
+          }
+        },
+        "run_id": 97104
+      }
+    },
+    {
+      "run_name": "feature_bayes_linear_k006_optimum",
+      "selector_seed": 0,
+      "subset_size": 6,
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.765389087207242,
+            "starcoder": 0.2346109127927581
+          }
+        },
+        "run_id": 97106
+      }
+    },
+    {
+      "run_name": "feature_bayes_linear_k008_optimum",
+      "selector_seed": 0,
+      "subset_size": 8,
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.7466664788772978,
+            "starcoder": 0.25333352112270224
+          }
+        },
+        "run_id": 97108
+      }
+    },
+    {
+      "run_name": "feature_bayes_linear_k010_optimum",
+      "selector_seed": 0,
+      "subset_size": 10,
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 1.0,
+            "starcoder": 0.0
+          },
+          "phase_1": {
+            "nemotron_full": 0.7430362712569492,
+            "starcoder": 0.25696372874305085
+          }
+        },
+        "run_id": 97110
+      }
+    },
+    {
+      "run_name": "feature_bayes_linear_k012_optimum",
+      "selector_seed": 0,
+      "subset_size": 12,
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.939985489239108,
+            "starcoder": 0.060014510760892086
+          },
+          "phase_1": {
+            "nemotron_full": 0.7616498004575447,
+            "starcoder": 0.2383501995424553
+          }
+        },
+        "run_id": 97112
+      }
+    },
+    {
+      "run_name": "feature_bayes_linear_k016_optimum",
+      "selector_seed": 0,
+      "subset_size": 16,
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.9354278208619651,
+            "starcoder": 0.06457217913803495
+          },
+          "phase_1": {
+            "nemotron_full": 0.7428068998045254,
+            "starcoder": 0.25719310019547453
+          }
+        },
+        "run_id": 97116
+      }
+    },
+    {
+      "run_name": "feature_bayes_linear_k024_optimum",
+      "selector_seed": 0,
+      "subset_size": 24,
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.9749547239395682,
+            "starcoder": 0.025045276060431797
+          },
+          "phase_1": {
+            "nemotron_full": 0.7258522668489349,
+            "starcoder": 0.27414773315106516
+          }
+        },
+        "run_id": 97124
+      }
+    },
+    {
+      "run_name": "feature_bayes_linear_k032_optimum",
+      "selector_seed": 0,
+      "subset_size": 32,
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.9838080430565128,
+            "starcoder": 0.01619195694348724
+          },
+          "phase_1": {
+            "nemotron_full": 0.7202363548294228,
+            "starcoder": 0.2797636451705771
+          }
+        },
+        "run_id": 97132
+      }
+    },
+    {
+      "run_name": "feature_bayes_linear_k048_optimum",
+      "selector_seed": 0,
+      "subset_size": 48,
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.9619737349127602,
+            "starcoder": 0.03802626508723988
+          },
+          "phase_1": {
+            "nemotron_full": 0.7365061021832413,
+            "starcoder": 0.26349389781675864
+          }
+        },
+        "run_id": 97148
+      }
+    },
+    {
+      "run_name": "feature_bayes_linear_k064_optimum",
+      "selector_seed": 0,
+      "subset_size": 64,
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.960769192400962,
+            "starcoder": 0.03923080759903801
+          },
+          "phase_1": {
+            "nemotron_full": 0.737552681231795,
+            "starcoder": 0.262447318768205
+          }
+        },
+        "run_id": 97164
+      }
+    },
+    {
+      "run_name": "feature_bayes_linear_k096_optimum",
+      "selector_seed": 0,
+      "subset_size": 96,
+      "weight_config": {
+        "phase_weights": {
+          "phase_0": {
+            "nemotron_full": 0.9460426757554368,
+            "starcoder": 0.053957324244563246
+          },
+          "phase_1": {
+            "nemotron_full": 0.7429717434876495,
+            "starcoder": 0.25702825651235045
+          }
+        },
+        "run_id": 97196
+      }
+    }
+  ]
+}

@@ -6,12 +6,16 @@ import json
 import tempfile
 
 import haliax as hax
+import jax.numpy as jnp
 import numpy as np
 from jax import random
 from test_utils import skip_if_no_torch, use_test_mesh
+from transformers import AutoTokenizer
 from transformers.models.qwen3 import Qwen3Config as HFQwen3Config
 
+from levanter.compat import hf_checkpoints
 from levanter.layers.attention import AttentionMask
+from levanter.model_loading import load_hf_checkpoint
 from levanter.models.qwen import Qwen3Config, Qwen3LMHeadModel
 
 
@@ -32,6 +36,34 @@ def _hf_qwen_config(vocab_size=151936):
         "no_bias": True,
     }
     return HFQwen3Config(**cfg_dict)  # type: ignore
+
+
+def test_load_hf_checkpoint_uses_supplied_tokenizer(local_gpt2_tokenizer_path, monkeypatch):
+    tokenizer = AutoTokenizer.from_pretrained(local_gpt2_tokenizer_path, local_files_only=True)
+    config = Qwen3Config.from_hf_config(_hf_qwen_config(len(tokenizer)))  # type: ignore
+    local_config = dataclasses.replace(config, reference_checkpoint=None, tokenizer=local_gpt2_tokenizer_path)
+    converter = local_config.hf_checkpoint_converter()
+    Vocab = hax.Axis("vocab", len(tokenizer))
+
+    with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh():
+        model = Qwen3LMHeadModel.init(Vocab, config, key=random.PRNGKey(0))
+        converter.save_pretrained(model, tmpdir, save_reference_code=False, save_tokenizer=False)
+
+        def reject_tokenizer_load(*args, **kwargs):
+            raise AssertionError("load_hf_checkpoint must use its supplied tokenizer")
+
+        monkeypatch.setattr(hf_checkpoints, "load_tokenizer", reject_tokenizer_load)
+        loaded = load_hf_checkpoint(
+            config,
+            tmpdir,
+            axis_mapping={},
+            tokenizer=tokenizer,
+            compute_dtype=jnp.float32,
+            cache_ttl_days=0,
+        )
+
+    assert loaded.config == config
+    assert loaded.Vocab == Vocab
 
 
 @skip_if_no_torch

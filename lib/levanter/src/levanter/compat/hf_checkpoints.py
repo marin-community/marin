@@ -4,16 +4,20 @@
 import abc
 import contextlib
 import dataclasses
+import fnmatch
 import functools
+import hashlib
 import json
 import logging
 import os
+import posixpath
 import random
 import shutil
 import tempfile
 import time
 import urllib.parse
 import warnings
+from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Self, Tuple, Type, TypeVar, Union, cast
@@ -39,12 +43,11 @@ from haliax.partitioning import ResourceMapping
 from haliax.state_dict import StateDict, from_torch_compatible_state_dict, save_state_dict
 from huggingface_hub import HfApi, ModelInfo, hf_hub_download, repo_exists, snapshot_download
 from huggingface_hub.errors import HfHubHTTPError
-from huggingface_hub.file_download import repo_folder_name
 from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError
 from jax import ShapeDtypeStruct
+from jax.experimental import multihost_utils
 from jax._src.mesh import get_concrete_mesh
 from jax._src.partition_spec import PartitionSpec
-from jax.experimental import multihost_utils
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
 from rigging.filesystem import StoragePath, fetch_file_atomic, url_to_fs
@@ -80,6 +83,14 @@ if TYPE_CHECKING:
 DEFAULT_MAX_SHARD_SIZE = int(5e9)
 
 logger = logging.getLogger(__name__)
+
+
+def _global_array_to_numpy(value: Any) -> np.ndarray:
+    """Materialize a JAX value as a host NumPy array, gathering cross-host shards when needed."""
+    if isinstance(value, jax.Array) and not value.is_fully_addressable:
+        # This branch must be reached SPMD on all processes: process_allgather is a collective.
+        return np.asarray(multihost_utils.process_allgather(value, tiled=True))
+    return np.asarray(value)
 
 
 def _convert_to_hf_url(model_id: str, revision: Optional[str] = None) -> str:
@@ -280,6 +291,27 @@ class HFCompatConfig(LmConfig["LmWithHfSerializationMixin"]):
         """The default HFCheckpointConverter to use for this config class. We recommend that you
         define this as a @cached_property on your config class."""
         pass
+
+
+def converter_from_hf_compat_config(
+    config: HFCompatConfig,
+    *,
+    tokenizer: Any | None = None,
+    reference_checkpoint: Optional[Union[RepoRef, str]] = None,
+    feature_extractor: Optional["FeatureExtractionMixin"] = None,
+    trust_remote_code: Optional[bool] = None,
+) -> "HFCheckpointConverter":
+    """Build a converter without forcing tokenizer inference from the reference checkpoint."""
+    converter_config = config
+    if tokenizer is not None and hasattr(config, "tokenizer"):
+        converter_config = dataclasses.replace(cast(Any, config), tokenizer=tokenizer)
+
+    converter = converter_config.hf_checkpoint_converter()
+    return converter.replaced(
+        reference_checkpoint=reference_checkpoint,
+        feature_extractor=feature_extractor,
+        trust_remote_code=trust_remote_code,
+    )
 
 
 MConfig = TypeVar("MConfig", bound=HFCompatConfig)
@@ -649,8 +681,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
             if ref is None:
                 raise ValueError("Must provide either config class or reference_checkpoint")
             path, rev = ref.model_name_or_path, ref.revision
-            with _patch_hf_hub_download():
-                config = AutoConfig.from_pretrained(path, revision=rev, trust_remote_code=trust_remote_code)
+            config = _load_hf_config(path, revision=rev, trust_remote_code=trust_remote_code)
             clss = type(config)
         elif isinstance(hf_config_class, str):
             if ref is None:
@@ -740,10 +771,12 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
     def hf_config_from_hf_checkpoint(self, ref: Optional[Union[str, RepoRef]] = None) -> HfConfig:
         path, rev = self._get_ref(ref)
-
-        with _patch_hf_hub_download():
-            config = AutoConfig.from_pretrained(path, revision=rev, trust_remote_code=self.trust_remote_code)
-        return config
+        return _load_hf_config(
+            path,
+            revision=rev,
+            trust_remote_code=self.trust_remote_code,
+            config_class=self.HfConfigClass,
+        )
 
     def _get_ref(self, ref) -> Tuple[str, Optional[str]]:
         if ref is None:
@@ -1406,15 +1439,286 @@ def _hf_hub_retry(fn: Callable[[], T], *, action: str, max_attempts: int = 8, ma
 
 
 def _is_retryable_hf_exception(exc: Exception) -> bool:
-    if isinstance(exc, HfHubHTTPError):
-        status_code = getattr(getattr(exc, "response", None), "status_code", None)
-        return status_code in {408, 429} or (status_code is not None and 500 <= status_code < 600)
+    for chained_exc in _exception_chain(exc):
+        if isinstance(chained_exc, HfHubHTTPError):
+            status_code = getattr(getattr(chained_exc, "response", None), "status_code", None)
+            if status_code in {408, 429} or (status_code is not None and 500 <= status_code < 600):
+                return True
 
-    return isinstance(exc, (requests.exceptions.Timeout, requests.exceptions.ConnectionError))
+        if isinstance(chained_exc, (requests.exceptions.Timeout, requests.exceptions.ConnectionError)):
+            return True
+
+        if isinstance(chained_exc, OSError) and _looks_like_wrapped_hf_rate_limit(chained_exc):
+            return True
+
+        if _looks_like_wrapped_gcs_transient(chained_exc):
+            return True
+
+    return False
+
+
+def _exception_chain(exc: Exception) -> Iterator[BaseException]:
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
+
+
+def _looks_like_wrapped_hf_rate_limit(exc: OSError) -> bool:
+    message = str(exc)
+    lower_message = message.lower()
+    return "429" in message or "too many requests" in lower_message or "rate limit" in lower_message
+
+
+def _looks_like_wrapped_gcs_transient(exc: BaseException) -> bool:
+    message = str(exc)
+    lower_message = message.lower()
+    if isinstance(exc, TypeError) and "json object must be str, bytes or bytearray, not nonetype" in lower_message:
+        return True
+
+    if not isinstance(exc, OSError):
+        return False
+
+    if "gs://" not in message:
+        return False
+
+    return (
+        "can't load tokenizer" in lower_message
+        or "can't load the configuration" in lower_message
+        or "failed to resolve" in lower_message
+        or "timed out" in lower_message
+    )
+
+
+_TOKENIZER_ASSET_PATTERNS = (
+    "added_tokens*",
+    "chat_template*",
+    "chat_templates/*",
+    "config.json",
+    "encoder.json",
+    "merges*",
+    "sentencepiece*",
+    "source.spm",
+    "special_tokens*",
+    "spiece*",
+    "target.spm",
+    "tekken.json",
+    "tokenizer*",
+    "vocab*",
+    "*.tiktoken",
+)
+
+_CONFIG_ASSET_PATTERNS = ("config.json",)
+
+
+class _MissingFsspecAssetError(FileNotFoundError):
+    pass
+
+
+def _stage_fsspec_assets(
+    model_name_or_path: str,
+    local_dir: str,
+    *,
+    asset_patterns: tuple[str, ...],
+    asset_kind: str,
+    trust_remote_code: bool,
+) -> None:
+    source = StoragePath(model_name_or_path)
+    filesystem, source_path = url_to_fs(model_name_or_path)
+    copied = 0
+    for directory, _, filenames in filesystem.walk(source_path, maxdepth=2, on_error="raise"):
+        for filename in filenames:
+            remote_file = posixpath.join(directory, filename)
+            relative_path = posixpath.relpath(remote_file, source_path)
+            if relative_path == ".." or relative_path.startswith("../") or posixpath.isabs(relative_path):
+                raise ValueError(f"{asset_kind} asset escaped source directory: {remote_file}")
+
+            is_selected_asset = any(
+                fnmatch.fnmatch(filename, pattern) or fnmatch.fnmatch(relative_path, pattern)
+                for pattern in asset_patterns
+            )
+            if not is_selected_asset and not (trust_remote_code and fnmatch.fnmatch(filename, "*.py")):
+                continue
+
+            local_path = os.path.join(local_dir, relative_path)
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            if not fetch_file_atomic(str(source / relative_path), local_path):
+                raise _MissingFsspecAssetError(
+                    f"{asset_kind} asset disappeared while staging: {source / relative_path}"
+                )
+            copied += 1
+
+    if copied == 0:
+        raise _MissingFsspecAssetError(f"No {asset_kind} assets found under {model_name_or_path}")
+
+
+def _stage_fsspec_tokenizer(model_name_or_path: str, local_dir: str, *, trust_remote_code: bool) -> None:
+    _stage_fsspec_assets(
+        model_name_or_path,
+        local_dir,
+        asset_patterns=_TOKENIZER_ASSET_PATTERNS,
+        asset_kind="tokenizer",
+        trust_remote_code=trust_remote_code,
+    )
+
+
+def _stage_fsspec_assets_with_retry(
+    model_name_or_path: str,
+    local_dir: str,
+    *,
+    asset_patterns: tuple[str, ...],
+    asset_kind: str,
+    trust_remote_code: bool,
+    max_attempts: int = 4,
+) -> None:
+    for attempt in range(1, max_attempts + 1):
+        try:
+            _stage_fsspec_assets(
+                model_name_or_path,
+                local_dir,
+                asset_patterns=asset_patterns,
+                asset_kind=asset_kind,
+                trust_remote_code=trust_remote_code,
+            )
+            return
+        except (_MissingFsspecAssetError, ValueError):
+            raise
+        except Exception as exc:
+            if attempt >= max_attempts:
+                raise
+            sleep_seconds = min(8.0, 2.0**attempt) * (0.5 + random.random())
+            logger.warning(
+                "Failed to stage %s assets from %s. Retrying in %.1fs (%d/%d). Error: %s",
+                asset_kind,
+                model_name_or_path,
+                sleep_seconds,
+                attempt,
+                max_attempts,
+                exc,
+            )
+            time.sleep(sleep_seconds)
+
+
+def _stage_fsspec_tokenizer_with_retry(
+    model_name_or_path: str,
+    local_dir: str,
+    *,
+    trust_remote_code: bool,
+) -> None:
+    _stage_fsspec_assets_with_retry(
+        model_name_or_path,
+        local_dir,
+        asset_patterns=_TOKENIZER_ASSET_PATTERNS,
+        asset_kind="tokenizer",
+        trust_remote_code=trust_remote_code,
+    )
+
+
+def _stage_fsspec_config_with_retry(
+    model_name_or_path: str,
+    local_dir: str,
+    *,
+    trust_remote_code: bool,
+) -> None:
+    _stage_fsspec_assets_with_retry(
+        model_name_or_path,
+        local_dir,
+        asset_patterns=_CONFIG_ASSET_PATTERNS,
+        asset_kind="configuration",
+        trust_remote_code=trust_remote_code,
+    )
+    if not os.path.isfile(os.path.join(local_dir, "config.json")):
+        raise _MissingFsspecAssetError(f"No root config.json staged from {model_name_or_path}")
+
+
+def _load_fsspec_tokenizer(
+    model_name_or_path: str,
+    local_dir: str,
+    *,
+    trust_remote_code: bool,
+) -> HfTokenizer:
+    _stage_fsspec_tokenizer_with_retry(
+        model_name_or_path,
+        local_dir,
+        trust_remote_code=trust_remote_code,
+    )
+    return cast(
+        HfTokenizer,
+        AutoTokenizer.from_pretrained(
+            local_dir,
+            local_files_only=True,
+            trust_remote_code=trust_remote_code,
+        ),
+    )
+
+
+def _load_hf_config(
+    model_name_or_path: str,
+    *,
+    revision: str | None,
+    trust_remote_code: bool,
+    config_class: Type[HfConfig] | None = None,
+) -> HfConfig:
+    def load(local_or_remote_path: str, *, local_files_only: bool) -> HfConfig:
+        if config_class is None:
+            return cast(
+                HfConfig,
+                AutoConfig.from_pretrained(
+                    local_or_remote_path,
+                    revision=None if local_files_only else revision,
+                    local_files_only=local_files_only,
+                    trust_remote_code=trust_remote_code,
+                ),
+            )
+        return cast(
+            HfConfig,
+            config_class.from_pretrained(
+                local_or_remote_path,
+                revision=None if local_files_only else revision,
+                local_files_only=local_files_only,
+            ),
+        )
+
+    if _is_url_like(model_name_or_path):
+        if revision is not None:
+            raise ValueError("Revisions not supported for explicit URLs")
+        with tempfile.TemporaryDirectory() as local_dir:
+            _stage_fsspec_config_with_retry(
+                model_name_or_path,
+                local_dir,
+                trust_remote_code=trust_remote_code and config_class is None,
+            )
+            return load(local_dir, local_files_only=True)
+
+    with _patch_hf_hub_download():
+        return load(model_name_or_path, local_files_only=False)
 
 
 def load_tokenizer(model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True) -> HfTokenizer:
-    """Like AutoTokenizer.from_pretrained, but works with gs:// paths or anything on fsspec"""
+    """Like AutoTokenizer.from_pretrained, but works with gs:// paths or anything on fsspec."""
+    if _is_url_like(model_name_or_path):
+        if revision is not None:
+            logger.warning("Ignoring revision=%r for immutable fsspec tokenizer URL %s", revision, model_name_or_path)
+        if local_cache_dir is not None:
+            os.makedirs(local_cache_dir, exist_ok=True)
+            cache_key = hashlib.sha256(model_name_or_path.encode()).hexdigest()
+            local_dir = os.path.join(local_cache_dir, "fsspec-tokenizers", cache_key)
+            os.makedirs(local_dir, exist_ok=True)
+            return _load_fsspec_tokenizer(
+                model_name_or_path,
+                local_dir,
+                trust_remote_code=trust_remote_code,
+            )
+
+        with tempfile.TemporaryDirectory() as local_dir:
+            return _load_fsspec_tokenizer(
+                model_name_or_path,
+                local_dir,
+                trust_remote_code=trust_remote_code,
+            )
+
     with _patch_hf_hub_download():
         return cast(
             HfTokenizer,
@@ -1647,8 +1951,9 @@ def _patch_hf_hub_download():
 
             if repo_id and filename and _is_url_like(repo_id):
                 remote_path = StoragePath(repo_id) / filename
+                repo_digest = hashlib.sha256(f"{repo_type}:{repo_id}".encode()).hexdigest()
                 local_path = os.path.join(
-                    cache_dir, repo_folder_name(repo_id=repo_id, repo_type=repo_type), "snapshots", revision, filename
+                    cache_dir, f"{repo_type}s--url-{repo_digest}", "snapshots", revision, filename
                 )
                 os.makedirs(os.path.dirname(local_path), exist_ok=True)
 

@@ -515,13 +515,30 @@ def _run_iris_job(step: StepSpec, output_path: str) -> None:
     """Dispatch a step with explicit ``resources`` as a Fray job.
 
     When ``step.fn`` is a :class:`RemoteCallable`, its inner callable is
-    unwrapped — ``step.resources`` takes precedence over any resources
-    carried by the wrapper.
+    unwrapped, but its environment is preserved. ``step.resources`` takes
+    precedence over any resources carried by the wrapper. Accelerator
+    dependency groups are inferred from ``step.resources`` so old-style
+    ``ExecutorStep(..., resources=...)`` training jobs install TPU/GPU deps
+    even when their callable is not decorated with ``@remote``.
     """
     assert step.resources is not None
-    raw_fn = step.fn.fn if isinstance(step.fn, RemoteCallable) else step.fn
+    env_vars = None
+    pip_dependency_groups = None
+    if isinstance(step.fn, RemoteCallable):
+        raw_fn = step.fn.fn
+        env_vars = step.fn.env_vars
+        pip_dependency_groups = step.fn.pip_dependency_groups
+    else:
+        raw_fn = step.fn
     assert raw_fn is not None, f"Step {step.name} has no callable"
-    _submit_iris_job(step, output_path, raw_fn, step.resources)
+    _submit_iris_job(
+        step,
+        output_path,
+        raw_fn,
+        step.resources,
+        env_vars=env_vars,
+        pip_dependency_groups=pip_dependency_groups,
+    )
 
 
 def _run_remote_step(step: StepSpec, output_path: str) -> None:

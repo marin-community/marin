@@ -598,7 +598,12 @@ class Trainer:
         self._checkpointer = checkpointer
 
         def checkpoint_hook(info, force=False):
-            checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force)
+            self._checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force)
+            if force:
+                # Block until the checkpoint save completes before other force hooks
+                # (like eval) run.  This ensures the permanent final checkpoint is
+                # committed to GCS even if the process is killed during eval.
+                self._checkpointer.wait_until_finished()
 
         self.add_hook(checkpoint_hook, every=1)  # checkpointer manages its own frequency
 

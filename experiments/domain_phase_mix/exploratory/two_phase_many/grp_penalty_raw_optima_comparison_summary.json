@@ -1,0 +1,90 @@
+{
+  "variant_rows": [
+    {
+      "variant": "power_family_penalty",
+      "display_name": "power-family penalty",
+      "raw_predicted_bpb": 1.0247953247580739,
+      "validated_bpb": 1.0361912250518799,
+      "optimism_gap": 0.011395900293805994,
+      "nearest_observed_run_name": "baseline_unimax",
+      "nearest_observed_bpb": 1.0834295749664309,
+      "nearest_observed_tv": 0.48296250080876835,
+      "total_param_count": 43
+    },
+    {
+      "variant": "power_boxcox_family_penalty",
+      "display_name": "power/Box-Cox family penalty",
+      "raw_predicted_bpb": 1.0262058970834178,
+      "validated_bpb": null,
+      "optimism_gap": null,
+      "nearest_observed_run_name": "run_00152",
+      "nearest_observed_bpb": 1.0874489545822144,
+      "nearest_observed_tv": 0.5993384976067879,
+      "total_param_count": 44
+    },
+    {
+      "variant": "power_family_penalty_global_ftotal_pairces",
+      "display_name": "power-family penalty + pair-CES",
+      "raw_predicted_bpb": 1.027202802759131,
+      "validated_bpb": 1.0405579805374146,
+      "optimism_gap": 0.013355177778283656,
+      "nearest_observed_run_name": "run_00125",
+      "nearest_observed_bpb": 1.0571987628936768,
+      "nearest_observed_tv": 0.5036800997061863,
+      "total_param_count": 49
+    }
+  ],
+  "pairwise_avg_phase_tv": [
+    [
+      0.0,
+      0.36060860144640516,
+      0.29092332699194934
+    ],
+    [
+      0.36060860144640516,
+      0.0,
+      0.43921040951239115
+    ],
+    [
+      0.29092332699194934,
+      0.43921040951239115,
+      0.0
+    ]
+  ],
+  "pairwise_phase0_tv": [
+    [
+      0.0,
+      0.4079203668290335,
+      0.4328431153256024
+    ],
+    [
+      0.4079203668290335,
+      0.0,
+      0.5193439777855369
+    ],
+    [
+      0.4328431153256024,
+      0.5193439777855369,
+      0.0
+    ]
+  ],
+  "pairwise_phase1_tv": [
+    [
+      0.0,
+      0.31329683606377684,
+      0.1490035386582963
+    ],
+    [
+      0.31329683606377684,
+      0.0,
+      0.35907684123924544
+    ],
+    [
+      0.1490035386582963,
+      0.35907684123924544,
+      0.0
+    ]
+  ],
+  "plot_png": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/grp_penalty_raw_optima_comparison.png",
+  "weights_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/grp_penalty_raw_optima_comparison_weights.csv"
+}

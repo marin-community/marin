@@ -88,3 +88,10 @@ from rigging.filesystem.storage_path import (
 # Register mirror:// by class path so fsspec imports rigging.filesystem.mirror
 # (and the botocore its lock backend pulls in) only on first use, not on import.
 fsspec.register_implementation("mirror", "rigging.filesystem.mirror.MirrorFileSystem")
+
+
+def resolve_mirror_url(url: str) -> str:
+    """Resolve a ``mirror://`` URL without importing the mirror backend eagerly."""
+    from rigging.filesystem.mirror import resolve_mirror_url as resolve  # noqa: PLC0415
+
+    return resolve(url)

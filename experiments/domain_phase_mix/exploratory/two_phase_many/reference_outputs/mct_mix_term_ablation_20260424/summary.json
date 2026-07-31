@@ -1,0 +1,13 @@
+{
+  "packet_root": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v31",
+  "mct_code_dir": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/mct_barrier_ablation_20260424/code",
+  "outdir": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/mct_mix_term_ablation_20260424",
+  "variants": [
+    "mct_lrq69_full_no_barrier",
+    "mct_lrq65_anchor_global_scale",
+    "identity_anchor_global_scale",
+    "identity_anchor_chinchilla_approach3",
+    "scale_only_global",
+    "scale_only_chinchilla_approach3"
+  ]
+}

@@ -1,0 +1,110 @@
+{
+  "plot_png": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/grp_no_l2_metric_objective_fits/piqa_5shot_bpb_raw_optimum_mixture.png",
+  "weights_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/grp_no_l2_metric_objective_fits/piqa_5shot_bpb_raw_optimum_weights.csv",
+  "summary": {
+    "best_observed_metric": 1.3226847470554008,
+    "best_observed_run_name": "run_00111",
+    "coarse_top_k": 3,
+    "cv_depopt_best8": 0.11115421458143877,
+    "cv_foldmean_regret_at_1": 0.0,
+    "cv_rawopt_nearest_tv": 0.7300601426413529,
+    "cv_regret_at_1": 0.011049785395579326,
+    "cv_rmse": 0.0264102520649204,
+    "display_name": "PIQA 5-shot BPB",
+    "lower_is_better": true,
+    "lower_tail_optimism": 0.006008945989897059,
+    "method": "Powell",
+    "metric_key": "lm_eval/piqa_5shot/bpb",
+    "n": 240,
+    "objective": 0.047830747944426336,
+    "oof_r2": 0.6158458983497289,
+    "oof_regret_at_1": 0.011049785395579326,
+    "oof_rmse": 0.0264102520649204,
+    "oof_spearman": 0.7471249500859388,
+    "predicted_observed_metric": 1.3337345324509802,
+    "predicted_observed_regret": 0.011049785395579326,
+    "predicted_observed_run_name": "run_00218",
+    "raw_nearest_observed_metric": 1.3838011203401253,
+    "raw_nearest_observed_regret": 0.06111637328472441,
+    "raw_nearest_observed_run_name": "run_00079",
+    "raw_nearest_observed_tv": 0.6579987000506907,
+    "raw_nearest_observed_value": 1.3838011203401253,
+    "raw_optimum_weights_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/grp_no_l2_metric_objective_fits/piqa_5shot_bpb_raw_optimum_weights.csv",
+    "raw_phase0_lt_1e4": 26.0,
+    "raw_phase1_lt_1e4": 29.0,
+    "raw_predicted_optimum_metric": 1.2302354380551597,
+    "raw_predicted_optimum_value": 1.2302354380551597,
+    "slug": "piqa_5shot_bpb",
+    "train_r2": 0.691793980367891,
+    "train_rmse": 0.023655948569891297,
+    "train_spearman": 0.7910180732304378
+  },
+  "top_phase0_domains": [
+    {
+      "domain_name": "dolma3_cc/health_low",
+      "weight": 0.21061834743760818
+    },
+    {
+      "domain_name": "dolmino_common_crawl_hq",
+      "weight": 0.1803807873316657
+    },
+    {
+      "domain_name": "dolma3_cc/electronics_and_hardware_low",
+      "weight": 0.11427426375469858
+    },
+    {
+      "domain_name": "dolmino_synth_thinking",
+      "weight": 0.09393111551149273
+    },
+    {
+      "domain_name": "dolma3_cc/industrial_low",
+      "weight": 0.08566789586625871
+    },
+    {
+      "domain_name": "dolmino_synth_instruction",
+      "weight": 0.06967131234304515
+    },
+    {
+      "domain_name": "dolmino_olmocr_pdfs_hq",
+      "weight": 0.06011041713312523
+    },
+    {
+      "domain_name": "dolma3_cc/history_and_geography_low",
+      "weight": 0.05970756334053106
+    }
+  ],
+  "top_phase1_domains": [
+    {
+      "domain_name": "dolma3_cc/food_and_dining_low",
+      "weight": 0.6017233267744707
+    },
+    {
+      "domain_name": "dolmino_synth_qa",
+      "weight": 0.2937408234572947
+    },
+    {
+      "domain_name": "dolma3_finemath_3plus",
+      "weight": 0.05747666158760348
+    },
+    {
+      "domain_name": "dolma3_cc/health_low",
+      "weight": 0.02803616739927009
+    },
+    {
+      "domain_name": "dolmino_synth_thinking",
+      "weight": 0.013116546165028957
+    },
+    {
+      "domain_name": "dolma3_cc/electronics_and_hardware_low",
+      "weight": 0.002424679466546589
+    },
+    {
+      "domain_name": "dolma3_cc/games_low",
+      "weight": 0.0016595935058336924
+    },
+    {
+      "domain_name": "dolma3_wikipedia",
+      "weight": 0.0009772134235377693
+    }
+  ]
+}

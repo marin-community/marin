@@ -32,6 +32,8 @@ dependencies = [
     # a workspace member so service fixes land without a wheel republish.
     "marin-ducky",
     # top level deps. try to keep these small.
+    "joblib",
+    "scikit-learn",
     "watchdog",
     # marin-dupekit is the pure-Python text-dedup surface, a workspace member
     # (editable source). Its native companion marin-dupekit-native (the Rust
@@ -60,6 +62,9 @@ constraint-dependencies = [
     # the pre-release component here only flips uv's per-package opt-in.
     "tfp-nightly>=0.1.dev0",
     "opentelemetry-semantic-conventions>=0.1b0",
+]
+find-links = [
+    "third_party/wheels",
 ]
 override-dependencies = [
     "omegaconf>=2.4.0.dev4",

@@ -45,6 +45,7 @@ class MockDataConfig:
     """Mock data config for testing."""
 
     cache_dir: str
+    auto_build_caches: bool = False
 
 
 @dataclasses.dataclass

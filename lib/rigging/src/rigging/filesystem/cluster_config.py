@@ -317,6 +317,40 @@ def reset_data_config_cache() -> None:
     store_configs.cache_clear()
 
 
+_MULTI_REGION_TO_PREFIXES: dict[str, tuple[str, ...]] = {
+    "us": ("us-",),
+    "eu": ("europe-", "eu-"),
+    "asia": ("asia-",),
+}
+
+
+def _canonical_region(region: str) -> str:
+    """Normalize legacy region aliases to canonical GCP region names."""
+    if region == "eu-west4":
+        return "europe-west4"
+    return region
+
+
+def _regions_match(vm_region: str, bucket_location: str) -> bool:
+    """Return whether a VM region is covered by a bucket location."""
+    vm = _canonical_region(vm_region.lower())
+    location = _canonical_region(bucket_location.lower())
+    if vm == location:
+        return True
+    prefixes = _MULTI_REGION_TO_PREFIXES.get(location)
+    return prefixes is not None and any(vm.startswith(prefix) for prefix in prefixes)
+
+
+def _known_bucket_region(bucket_name: str) -> str | None:
+    """Return the configured region for a known Marin bucket without a GCP call."""
+    for region, bucket in data_config().region_buckets.items():
+        if bucket.name == bucket_name:
+            return _canonical_region(region)
+    if bucket_name.startswith("marin-tmp-"):
+        return _canonical_region(bucket_name.removeprefix("marin-tmp-"))
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Region + prefix resolution
 # ---------------------------------------------------------------------------
@@ -577,9 +611,12 @@ def check_path_in_region(key: str, path: str, region: str, local_ok: bool = Fals
             return
         else:
             raise ValueError(f"{key} must be a GCS path, not {path}")
+    bucket_name = split_gcs_path(path)[0]
     try:
-        bucket_region = get_bucket_location(path)
-        if region.lower() != bucket_region.lower():
+        bucket_region = _known_bucket_region(bucket_name)
+        if bucket_region is None:
+            bucket_region = get_bucket_location(path)
+        if not _regions_match(region, bucket_region):
             raise ValueError(
                 f"{key} is not in the same region ({bucket_region}) as the VM ({region}). "
                 f"This can cause performance issues and billing surprises."
