@@ -55,6 +55,7 @@ from marin.datakit.ingestion_manifest import (
     write_ingestion_metadata_json,
 )
 from marin.datakit.normalize import normalize_step
+from marin.datakit.source_key import DatakitArtifactPath
 from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
@@ -217,12 +218,12 @@ class ExtractedPartitionedDiagnosticLogs(DiagnosticLogsArtifact):
     """Materialized GHALogs sample with train/dev/test/holdout partitions."""
 
     source_label: str
-    output_dir: str
-    train_file: str
-    dev_file: str
-    test_file: str
-    holdout_file: str
-    metadata_path: str
+    output_dir: DatakitArtifactPath
+    train_file: DatakitArtifactPath
+    dev_file: DatakitArtifactPath
+    test_file: DatakitArtifactPath
+    holdout_file: DatakitArtifactPath
+    metadata_path: DatakitArtifactPath
     record_count: int
     bytes_written: int
     content_fingerprint: str
@@ -232,9 +233,9 @@ class ExtractedDiagnosticLogSlice(DiagnosticLogsArtifact):
     """Materialized single-file diagnostic-log slice."""
 
     source_label: str
-    output_dir: str
-    output_file: str
-    metadata_path: str
+    output_dir: DatakitArtifactPath
+    output_file: DatakitArtifactPath
+    metadata_path: DatakitArtifactPath
     record_count: int
     bytes_written: int
     content_fingerprint: str
@@ -252,8 +253,8 @@ class MaterializedDiagnosticLogParquet(DiagnosticLogsArtifact):
     """Reusable parquet shards for a diagnostic-log corpus or partition."""
 
     source_label: str
-    output_dir: str
-    data_glob: str
+    output_dir: DatakitArtifactPath
+    data_glob: DatakitArtifactPath
     record_count: int
     counters: dict[str, int | float]
     content_fingerprint: str

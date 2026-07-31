@@ -55,6 +55,7 @@ from levanter.store.cache import (
     _merge_sharded_ledgers,
 )
 from marin.datakit.decon import DeconAttributes
+from marin.datakit.source_key import DatakitArtifactPath
 from marin.execution.artifact import read_artifact, write_artifact
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData, FuzzyDupsPerSource
 from marin.processing.tokenize.attributes import TokenizedAttrData
@@ -78,7 +79,7 @@ class BucketCacheStats(BaseModel):
 
     cluster_id: int
     quality_bucket: int
-    path: str
+    path: DatakitArtifactPath
     total_elements: int
     total_tokens: int
     n_shards: int
@@ -92,7 +93,7 @@ class ClusteredStoreData(BaseModel):
     """
 
     version: str = "v3"
-    cache_path: str
+    cache_path: DatakitArtifactPath
     cluster_view: int
     bucket_edges: list[float]
     split: str
@@ -569,13 +570,26 @@ def build_clustered_store(
         default_subshards=default_subshards,
     )
 
+    source_keys: dict[str, str] = {}
+    for source_name, tok in tokenize.items():
+        source_key = tok.source_keys.get(split)
+        if source_key is None:
+            raise ValueError(f"{source_name}: tokenize has no source_key for split={split!r}")
+        source_keys[source_name] = source_key
+    expected_source_keys = set(source_keys.values())
+    if len(expected_source_keys) != len(source_keys):
+        raise ValueError(f"tokenize sources must use unique source keys for split={split!r}")
+    for label, sources in (("exact_dedup", exact_dedup.sources), ("dedup", dedup.sources)):
+        if set(sources) != expected_source_keys:
+            missing = sorted(expected_source_keys - set(sources))
+            extra = sorted(set(sources) - expected_source_keys)
+            raise ValueError(f"{label} source set must equal tokenize source keys: missing={missing!r}, extra={extra!r}")
+
     # Resolve the flat per-source-shard spec list.
     shard_specs: list[dict[str, str]] = []
     for source_name in sorted(tokenize):
         tok = tokenize[source_name]
-        source_key = tok.source_keys.get(split)
-        if source_key is None:
-            raise ValueError(f"{source_name}: tokenize has no source_key for split={split!r}")
+        source_key = source_keys[source_name]
         cluster_asg = cluster_assign[source_name]
         if cluster_asg.source_key != source_key:
             raise ValueError(

@@ -22,10 +22,13 @@ main output under `outputs/main/` plus, where it makes sense, a small site/sampl
 reports ([`reports/`](reports/)) read.
 
 Materialized source identities are paths relative to `MARIN_PREFIX`, such as
-`datakit/normalize/foo_<hash>/outputs/main`. Actual data directories remain
-absolute. This keeps source keys stable when artifacts move between regions.
-`NormalizedData` also stores its output directories in this relative form.
-Existing v1 artifacts keep their absolute directories when they load.
+`datakit/normalize/foo_<hash>/outputs/main`. Datakit models use absolute data
+paths at runtime. Artifact result payloads store paths relative to the active
+`MARIN_PREFIX`. `read_artifact` restores the active prefix for consumers. The
+target prefix must contain the same materialized data after a region change.
+Paths outside the active prefix stay absolute. Existing payloads with absolute
+paths load without data recomputation. The framework lineage fields
+`output_path` and `dep_paths` stay absolute.
 
 Datakit attribute Parquet files use a flat schema. The top-level `id` column
 is the join key. Each attribute is another top-level column, such as
@@ -42,6 +45,10 @@ normalized text.
 The final store uses fuzzy canonical markers when they exist. It applies exact
 duplicate markers only to records without fuzzy markers, which covers records
 that MinHash skipped without conflicting with fuzzy canonical selection.
+
+Global exact and fuzzy dedup outputs write `.source_manifest.json` at the output
+root. The file maps each `source_NNN` tag to its source key and its relative
+`outputs/source_NNN` attribute directory.
 
 A source-set change gives a new global exact-dedup output and a new store
 identity. It does not change the identity of tokenization, embedding, quality,

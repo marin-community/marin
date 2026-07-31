@@ -12,13 +12,17 @@ splits a bucket without losing or duplicating data.
 """
 
 import glob
+import json
 import os
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 from levanter.store.cache import TreeCache
 from marin.datakit.decon import DeconAttributes
+from marin.datakit.source_key import datakit_source_key
+from marin.execution.artifact import read_artifact
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData, FuzzyDupsPerSource
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashParams
 from marin.processing.tokenize.attributes import TokenizedAttrData
@@ -130,6 +134,7 @@ def _write_shard(dirs: dict[str, str], basename: str, docs: list[_Doc]) -> None:
 def _build_inputs(tmp_path):
     """Materialize the synthetic inputs and return the typed artifacts."""
     main_dir = str(tmp_path / "src")
+    source_key = datakit_source_key(main_dir)
     dirs = {k: str(tmp_path / k) for k in ("tokenize", "decon", "cluster", "quality", "exact_dedup", "dedup")}
     tok_train = f"{dirs['tokenize']}/{SPLIT}"
     for d in (*dirs.values(), tok_train):
@@ -142,7 +147,7 @@ def _build_inputs(tmp_path):
     tokenize = {
         "src": TokenizedAttrData(
             output_dirs={SPLIT: tok_train},
-            source_keys={SPLIT: main_dir},
+            source_keys={SPLIT: source_key},
             tokenizer="dummy",
             tokenizer_backend="huggingface",
             counters={},
@@ -160,7 +165,7 @@ def _build_inputs(tmp_path):
     cluster_assign = {
         "src": AssignmentAttrData(
             output_dir=dirs["cluster"],
-            source_key=main_dir,
+            source_key=source_key,
             embedding_output_dir="",
             k_train=CLUSTER_VIEW,
             k_views=[],
@@ -178,12 +183,12 @@ def _build_inputs(tmp_path):
     }
     dedup = FuzzyDupsAttrData(
         params=MinHashParams(num_perms=8, num_bands=4, ngram_size=5, seed=0),
-        sources={main_dir: FuzzyDupsPerSource(attr_dir=dirs["dedup"])},
+        sources={source_key: FuzzyDupsPerSource(attr_dir=dirs["dedup"])},
         counters={},
     )
     exact_dedup = GlobalExactDedupData(
         sources={
-            main_dir: ExactDupsPerSource(
+            source_key: ExactDupsPerSource(
                 attr_dir=dirs["exact_dedup"],
             )
         },
@@ -201,7 +206,8 @@ def _read_bucket_tokens(bucket_root: str) -> list[np.ndarray]:
     return docs
 
 
-def test_store_filters_routes_and_roundtrips(tmp_path):
+def test_store_filters_routes_and_roundtrips(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     tokenize, decontam, cluster_assign, quality, exact_dedup, dedup = _build_inputs(tmp_path)
     output_path = str(tmp_path / "store")
 
@@ -247,6 +253,12 @@ def test_store_filters_routes_and_roundtrips(tmp_path):
     assert artifact.counters["datakit_store/tokens_out"] == sum(
         length for docs in EXPECTED.values() for length in docs.values()
     )
+    record = json.loads((tmp_path / "store" / ".artifact.json").read_text())
+    assert record["result"]["cache_path"] == "store"
+    assert all(bucket["path"].startswith("store/") for bucket in record["result"]["buckets"])
+    loaded = read_artifact(output_path, ClusteredStoreData)
+    assert loaded.cache_path == output_path
+    assert [bucket.path for bucket in loaded.buckets] == [bucket.path for bucket in artifact.buckets]
 
 
 def test_store_subshards_hot_bucket_without_data_loss(tmp_path):
@@ -289,3 +301,28 @@ def test_store_subshards_hot_bucket_without_data_loss(tmp_path):
 
     # A non-split bucket is unaffected.
     assert by_key[(0, 0)].n_shards == 1
+
+
+@pytest.mark.parametrize("label", ["exact_dedup", "dedup"])
+def test_store_rejects_dedup_source_set_mismatch(tmp_path, monkeypatch, label):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    tokenize, decontam, cluster_assign, quality, exact_dedup, dedup = _build_inputs(tmp_path)
+    if label == "exact_dedup":
+        exact_dedup.sources["extra/source"] = ExactDupsPerSource(attr_dir=str(tmp_path / "extra"))
+    else:
+        dedup.sources["extra/source"] = FuzzyDupsPerSource(attr_dir=str(tmp_path / "extra"))
+
+    with pytest.raises(ValueError, match=rf"{label} source set must equal tokenize source keys"):
+        build_clustered_store(
+            tokenize=tokenize,
+            decontam=decontam,
+            cluster_assign=cluster_assign,
+            quality=quality,
+            exact_dedup=exact_dedup,
+            dedup=dedup,
+            output_path=str(tmp_path / "store"),
+            cluster_view=CLUSTER_VIEW,
+            split=SPLIT,
+            reduce_shards=4,
+            default_subshards=1,
+        )

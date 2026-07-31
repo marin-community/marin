@@ -8,6 +8,7 @@ Deliberately import-light (pydantic only): the store step consumes
 transformers stack of the scorer into its workers.
 """
 
+from marin.datakit.source_key import DatakitArtifactPath
 from pydantic import BaseModel
 
 # Fixed score cutpoints. Calibration (calibrate.py) warps the raw score so these
@@ -40,9 +41,9 @@ class QualityScores(BaseModel):
     """
 
     version: str = "v1"
-    main_output_dir: str
-    samples_output_dir: str
-    model_dir: str
+    main_output_dir: DatakitArtifactPath
+    samples_output_dir: DatakitArtifactPath
+    model_dir: DatakitArtifactPath
     calib_file: str
     bucket_edges: list[float]
     counters: dict[str, int | float]

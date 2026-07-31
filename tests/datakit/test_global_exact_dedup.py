@@ -3,6 +3,7 @@
 
 """Behavior tests for the Datakit global exact-dedup step."""
 
+import json
 from pathlib import Path
 
 import pyarrow as pa
@@ -13,6 +14,7 @@ from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import datakit_source_key
+from marin.execution.artifact import read_artifact, write_artifact
 
 from experiments.datakit.global_exact_dedup import GlobalExactDedupData, global_exact_deduplicate
 
@@ -91,6 +93,31 @@ def test_global_exact_deduplicate_writes_sparse_copartitioned_attributes(tmp_pat
 
     assert result.counters["global_exact_dedup/records_in"] == 6
     assert result.counters["global_exact_dedup/duplicate_records"] == 2
+    assert json.loads((tmp_path / "output" / ".source_manifest.json").read_text()) == {
+        "version": "v1",
+        "sources": [
+            {
+                "source_tag": "source_000",
+                "source_key": "input-a/outputs/main",
+                "attribute_dir": "outputs/source_000",
+            },
+            {
+                "source_tag": "source_001",
+                "source_key": "input-b/outputs/main",
+                "attribute_dir": "outputs/source_001",
+            },
+            {
+                "source_tag": "source_002",
+                "source_key": "input-c/outputs/main",
+                "attribute_dir": "outputs/source_002",
+            },
+        ],
+    }
+    write_artifact(result, str(tmp_path / "output"))
+    record = json.loads((tmp_path / "output" / ".artifact.json").read_text())
+    assert record["result"]["sources"]["input-b/outputs/main"]["attr_dir"] == "output/outputs/source_001"
+    loaded = read_artifact(str(tmp_path / "output"), GlobalExactDedupData)
+    assert loaded.sources["input-b/outputs/main"].attr_dir == str(tmp_path / "output/outputs/source_001")
 
 
 def test_global_exact_deduplicate_uses_shard_order_within_source(tmp_path: Path, monkeypatch):

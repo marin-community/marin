@@ -27,6 +27,7 @@ from typing import Any
 import numpy as np
 import pyarrow as pa
 from fray.types import ResourceConfig
+from marin.datakit.source_key import DatakitArtifactPath
 from marin.execution.artifact import write_artifact
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath, open_url
@@ -46,9 +47,9 @@ class AssignmentAttrData(BaseModel):
     """Co-partitioned per-source cluster-assignment parquet shards."""
 
     version: str = f"v{ASSIGNMENT_ATTR_DATA_VERSION}"
-    output_dir: str
+    output_dir: DatakitArtifactPath
     source_key: str
-    embedding_output_dir: str
+    embedding_output_dir: DatakitArtifactPath
     k_train: int
     k_views: list[int]
     counters: dict[str, int | float] = {}

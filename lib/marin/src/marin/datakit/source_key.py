@@ -3,7 +3,12 @@
 
 """Stable source identity for Datakit artifacts."""
 
+from typing import Annotated
+
+from pydantic import BeforeValidator, PlainSerializer, ValidationInfo
 from rigging.filesystem import StoragePath, StoreType, data_buckets, marin_prefix, prefix_join
+
+from marin.execution.artifact import ARTIFACT_LOAD_CONTEXT_KEY
 
 
 def _marin_data_prefixes() -> list[StoragePath]:
@@ -62,3 +67,17 @@ def datakit_artifact_path(source_path: str) -> str:
     if not relative:
         raise ValueError(f"Datakit artifact path must be below MARIN_PREFIX: {source_path!r}")
     return relative
+
+
+def _resolve_datakit_artifact_path(value: str, info: ValidationInfo) -> str:
+    if info.context and info.context.get(ARTIFACT_LOAD_CONTEXT_KEY):
+        return datakit_source_path(value)
+    return value
+
+
+DatakitArtifactPath = Annotated[
+    str,
+    BeforeValidator(_resolve_datakit_artifact_path),
+    PlainSerializer(datakit_artifact_path, return_type=str, when_used="json"),
+]
+"""A Datakit path that omits the active ``MARIN_PREFIX`` in artifact payloads."""

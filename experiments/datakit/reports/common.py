@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pyarrow.parquet as pq
+from marin.datakit.source_key import DatakitArtifactPath
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath
 
@@ -31,7 +32,7 @@ class StageReport(BaseModel):
     """
 
     version: str = "v1"
-    html_path: str
+    html_path: DatakitArtifactPath
     stats: dict[str, Any]
 
 

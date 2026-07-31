@@ -40,8 +40,13 @@ from zephyr.execution import MAX_WORKERS_PER_JOB, ZephyrContext
 from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
 
-from marin.datakit.copartitioned import CopartitionedShard, CopartitionedSource, build_copartitioned_shards
-from marin.datakit.source_key import datakit_source_key
+from marin.datakit.copartitioned import (
+    CopartitionedShard,
+    CopartitionedSource,
+    build_copartitioned_shards,
+    write_copartitioned_source_manifest,
+)
+from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.connected_components import connected_components
@@ -49,7 +54,7 @@ from marin.processing.classification.deduplication.dedup_commons import _load_ba
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, MinHashParams
 
 logger = logging.getLogger(__name__)
-FUZZY_DUPS_ATTR_DATA_VERSION = 3
+FUZZY_DUPS_ATTR_DATA_VERSION = 4
 
 
 class FuzzyDupsPerSource(BaseModel):
@@ -61,7 +66,7 @@ class FuzzyDupsPerSource(BaseModel):
             normalized) shards.
     """
 
-    attr_dir: str
+    attr_dir: DatakitArtifactPath
 
 
 class FuzzyDupsAttrData(BaseModel):
@@ -356,6 +361,7 @@ def compute_fuzzy_dups_attrs(
 
     outcome = ctx.execute(shard_pipeline, verbose=True)
     shard_results = outcome.results
+    write_copartitioned_source_manifest(output_path=output_path, attr_dirs=attr_dirs)
 
     # Aggregate per-source counters across shards for the final artifact.
     sources = {source_key: FuzzyDupsPerSource(attr_dir=attr_dir) for source_key, attr_dir in attr_dirs.items()}

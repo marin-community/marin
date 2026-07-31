@@ -39,7 +39,7 @@ import pyarrow as pa
 from fray.types import ResourceConfig
 from huggingface_hub import hf_hub_download
 from marin.datakit.normalize import NormalizedData
-from marin.datakit.source_key import datakit_source_key
+from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from marin.execution.artifact import write_artifact
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath, marin_temp_bucket
@@ -108,7 +108,7 @@ class EmbeddingAttrData(BaseModel):
     """
 
     version: str = f"v{EMBEDDING_ATTR_DATA_VERSION}"
-    output_dir: str
+    output_dir: DatakitArtifactPath
     source_key: str
     model_name: str
     model_revision: str = ""
