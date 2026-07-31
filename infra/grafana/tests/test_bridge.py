@@ -378,6 +378,16 @@ def test_alert_queries_use_int64_epoch_boundaries_and_project_timestamps():
         assert "timestamp_ms >= TIMESTAMP" not in sql
 
 
+def test_training_stall_query_keeps_enrollment_past_the_progress_lookback():
+    sql = telemetry_query(datetime(2026, 7, 28, 12, tzinfo=UTC))
+    phase_enrollment, recent_progress = sql.split("), recent_progress AS (")
+
+    assert "name = 'phase'" in phase_enrollment
+    assert "timestamp_ms >=" not in phase_enrollment
+    assert "name IN ('step', 'progress_time_seconds')" in recent_progress
+    assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-27 12:00:00') * 1000 AS BIGINT)" in sql
+
+
 def test_training_dashboard_uses_constant_foldable_macro_boundaries():
     dashboard = (Path(__file__).parents[1] / "dashboards" / "training.json").read_text()
     assert 'FROM \\"telemetry_v1\\"' in dashboard

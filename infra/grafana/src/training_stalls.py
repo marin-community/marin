@@ -49,19 +49,28 @@ def task_state_query(now: datetime) -> str:
 
 
 def telemetry_query(now: datetime) -> str:
-    """Return the bounded query for the latest progress metrics per root job."""
+    """Return latest retained enrollment and bounded progress per root job."""
     start = _sql_timestamp(now - _TELEMETRY_LOOKBACK)
     end = _sql_timestamp(now)
-    names = f"'{_STEP_METRIC}', '{_PROGRESS_TIME_METRIC}', '{_PHASE_METRIC}'"
+    progress_names = f"'{_STEP_METRIC}', '{_PROGRESS_TIME_METRIC}'"
     return (
-        "WITH filtered AS ("
+        "WITH phase_enrollment AS ("
         "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, "
         "json_get(resource_attributes_json, 'job_id') AS job, name, value, "
         "timestamp_ms, seq, to_timestamp_millis(timestamp_ms) AS ts "
         'FROM "telemetry_v1" '
-        f"WHERE service = 'levanter' AND name IN ({names}) "
+        f"WHERE service = 'levanter' AND name = '{_PHASE_METRIC}' "
+        f"AND timestamp_ms < CAST(EXTRACT(EPOCH FROM TIMESTAMP '{end}') * 1000 AS BIGINT)"
+        "), recent_progress AS ("
+        "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, "
+        "json_get(resource_attributes_json, 'job_id') AS job, name, value, "
+        "timestamp_ms, seq, to_timestamp_millis(timestamp_ms) AS ts "
+        'FROM "telemetry_v1" '
+        f"WHERE service = 'levanter' AND name IN ({progress_names}) "
         f"AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '{start}') * 1000 AS BIGINT) "
         f"AND timestamp_ms < CAST(EXTRACT(EPOCH FROM TIMESTAMP '{end}') * 1000 AS BIGINT)"
+        "), filtered AS ("
+        "SELECT * FROM phase_enrollment UNION ALL SELECT * FROM recent_progress"
         "), recent AS ("
         "SELECT origin_cluster, job, name, value, ts, "
         "ROW_NUMBER() OVER ("

@@ -224,10 +224,10 @@ nonterminal without finalizers for five minutes after the bridge's two-minute
 overdue threshold, and a GB200 rack with fewer than 16 trays Ready for five
 minutes (the NVL72 rack spec is 18; a floor rather than an outright outage —
 see `gpu_racks` above). A warning-only training rule joins fresh running
-`iris.task_state` rows to root jobs with `service=levanter` telemetry in the prior
-24 hours: it waits 15 minutes for training progress or 45 minutes for
-initialization, then remains pending for five minutes. It does not require
-task-to-node GPU attribution. A warning-only Zephyr rule reads fresh
+`iris.task_state` rows to root jobs with retained `service=levanter` phase telemetry,
+while bounding progress samples to the prior 24 hours: it waits 15 minutes for
+training progress or 45 minutes for initialization, then remains pending for five
+minutes. It does not require task-to-node GPU attribution. A warning-only Zephyr rule reads fresh
 `progress_time_seconds` rows from `service=zephyr` telemetry. It waits 45 minutes after a
 stage start or shard completion, then remains pending for five minutes. The
 execution ID separates concurrent pipelines under one root job. The stuck-pod
