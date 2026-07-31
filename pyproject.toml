@@ -60,6 +60,11 @@ constraint-dependencies = [
     # the pre-release component here only flips uv's per-package opt-in.
     "tfp-nightly>=0.1.dev0",
     "opentelemetry-semantic-conventions>=0.1b0",
+    # flash-attn-4 publishes only pre-releases in the 4.x line that levanter[gpu] requires. Under
+    # prerelease = "explicit" the specifier in lib/levanter/pyproject.toml is not enough on its own,
+    # because the requirement carries an extra (flash-attn-4[cu13]) and the opt-in is keyed on the
+    # bare package name; without this entry any fresh resolution of the workspace fails outright.
+    "flash-attn-4>=4.0.0b16",
 ]
 override-dependencies = [
     "omegaconf>=2.4.0.dev4",
