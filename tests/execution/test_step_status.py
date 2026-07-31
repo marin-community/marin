@@ -45,7 +45,11 @@ def test_should_run_repeats_active_iris_lock_owner(tmp_path: Path, caplog, monke
         assert should_run(waiter, "active-step")
 
     waiter.release_lock()
-    owner_logs = [record for record in caplog.records if iris_task_id in record.getMessage()]
+    owner_logs = [
+        record
+        for record in caplog.records
+        if record.name == "marin.execution.step_status" and iris_task_id in record.getMessage()
+    ]
     assert len(owner_logs) == 2
     assert all(record.levelno == logging.INFO for record in owner_logs)
     assert all("RUNNING" in record.getMessage() and "active lock" in record.getMessage() for record in owner_logs)
