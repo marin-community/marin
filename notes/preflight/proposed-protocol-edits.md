@@ -1,98 +1,125 @@
-# Proposed inference protocol edits
+# Proposed inference-protocol edits
 
-These are small, evidence-backed replacements for human approval. The source
-protocol remains unchanged.
+These are small evidence-backed replacement snippets for human approval. The
+source protocol remains unchanged.
 
-## 1. Separate architecture validity from launcher diagnosis
-
-The exact reference is blocked by every-six attention, heterogeneous KV heads,
-and sconv-on. The every-four, uniform-12, sconv-off model is useful only as a
-serving-stack diagnostic.
+## 1. Freeze implementation provenance before live evidence
 
 Suggested replacement:
 
 ```markdown
-Before any performance gate, classify the exact reference as representable or
-blocked. A blocked reference may use the named every-four, uniform-12,
-sconv-off approximation to test loading, distributed launch, prefix caching,
-fabric, metrics, and artifact persistence. Approximation throughput must not
-rank architecture candidates.
+Run live evidence only from clean, pushed commits. Each Marin manifest must
+pin the exact vLLM commit, immutable image digest, dependency lock, model
+configuration, workload hash and seed, Iris job, task count, and required
+topology. Do not rewrite or force-push an evidence-linked commit.
 ```
 
-## 2. Make KV allocation evidence explicit
-
-The live approximation exposes 296,653 KV bytes per token. This is 293% above
-its sliding-window semantic estimate and within 0.6% of full-length allocation
-for all 48 layers.
+## 2. Make exact parity a fail-fast gate
 
 Suggested replacement:
 
 ```markdown
-Record three KV quantities separately: semantic bytes implied by attention
-windows, bytes reserved by the runtime cache pool, and peak bytes observed
-during requests. A gap above 10% blocks concurrency conclusions until
-explained. For hybrid attention with prefix caching, do not assume local-window
-layers reduce reserved KV bytes.
+Before a reference smoke, load one frozen downscaled exact checkpoint through
+the training oracle and vLLM. Enable every custom block and use two distinct,
+nonzero half-width shared experts. Compare selected experts, normalized
+routing weights, the summed shared-expert output, and next-token probabilities
+under the repository's existing cross-framework tolerance.
+
+On the live server, require cold full prefill and prefix reuse to return
+identical tokens, logprobs, and routed experts across both a physical KV-block
+boundary and the 512-token local-window boundary. Mutating one prefix token
+must report zero reuse.
 ```
 
-## 3. Tighten the final-launch gate
-
-The current dev workflow submits replicated holder tasks, then relies on
-workstation `kubectl`. The production serving command submits one task.
+## 3. Separate three KV quantities
 
 Suggested replacement:
 
 ```markdown
-The two-node gate passes for final-launch readiness only when the same
-replicated Iris entrypoint can run unattended. A workstation controller may
-diagnose holder pods, but it cannot qualify the four-node acceptance path. If
-the unattended entrypoint is absent, stop before allocating four nodes.
+With prefix caching enabled, hold active request count and DP rank fixed at two
+or more context lengths above the local window, including 65,536 tokens.
+Record separately:
+
+1. semantic bytes predicted by local, global, and recurrent state;
+2. runtime bytes reserved for the reusable cache pool;
+3. physical pages active for the live request.
+
+Require local active pages to plateau and global active pages to grow. Explain
+any physical-active versus semantic-payload gap above 10%. Do not treat the
+whole reserved pool as per-request occupancy, and do not disable prefix caching
+to hide a hybrid-cache defect.
 ```
 
-## 4. Keep correctness claims separate
-
-The existing response extension proves selected routed IDs. It does not expose
-gate weights. The live repeat proves output repeatability but not throughput
-repeatability.
+## 4. Use one unattended path for the topology ladder
 
 Suggested replacement:
 
 ```markdown
-Cross-framework parity requires one checkpoint and one token fixture loaded by
-both frameworks. Compare selected experts, gate weights, and next-token
-logprobs. Routed-ID response capture alone does not satisfy this gate.
+The final launcher is one zero-retry Iris gang entrypoint. Each task requests
+all four GPUs on one `gb200-4x` node; Kueue hard-coschedules every task in one
+`nvlink.domain`. Prove the same submit, rendezvous, health, correctness,
+aggregation, upload, and readback path at two nodes before four-node
+acceptance. Workstation-controlled holder pods are diagnostic only.
 
-Report correctness repeatability and throughput repeatability separately. The
-2% threshold applies only to two warmed, ten-minute, 250,000-generated-token
-arms.
+The aggregate result passes only when placement, every rank's health,
+correctness, duration, token count, repeatability, and artifact readback all
+pass.
 ```
 
-## 5. Define the routing control narrowly
-
-Live seeded dummy routing was deterministic but left most experts unused.
+## 5. Measure long requests with live counters
 
 Suggested replacement:
 
 ```markdown
-Record expert and contiguous-linear EP-rank histograms. If experts remain
-unused or a rank exceeds twice the mean, run one cyclic balanced assignment
-fixture through the histogram code. Label it an instrumentation control; it is
-not model-routing evidence.
+Warm the allocation and populate every prefix cohort. In each measured arm,
+sample `vllm:generation_tokens` at fixed wall-clock boundaries while requests
+remain active. Compute stable interval throughput from adjacent counter deltas
+and their measured elapsed time. Keep request totals, branch coverage,
+latencies, and cohort totals completion-based.
+
+Do not assign all response tokens to the minute when a long request returns;
+that can produce false zero minutes when request latency exceeds the sampling
+interval.
 ```
 
-## 6. Preserve the Snowball stop rule
-
-The single request-path attempt failed before load because the model streamer
-used path-style S3 listing. A virtual-hosted config is now patched but not
-validated.
+## 6. Preserve the acceptance and rerun rule
 
 Suggested replacement:
 
 ```markdown
-Run the pinned Snowball request path once. If it fails before model load and
-would require another serving integration, object copy, or second attempt,
-record the exact error as still uncertain and stop. Do not convert this check
-into model-loader development.
+Use six roots in each 10,240/30,720/62,464-token history cohort and eight
+branches per root. Append 1,024 tokens and generate 2,048, ending at
+13,312/33,792/65,536. On one warmed PP1/TP1/DP16/EP16 allocation, run two
+identical arms. Each arm must cover all 144 branches, contain ten stable
+live-counter intervals, and generate at least 250,000 tokens. Require no more
+than 2% difference between the two stable means.
+
+Plan one acceptance attempt. Repeat only after preserving the failed bundle,
+identifying a concrete implementation or measurement defect, fixing it
+without changing the workload or threshold, and adding a focused regression
+test. Never rerun merely to obtain a favorable result.
 ```
 
-No other protocol change is supported by this preflight.
+## 7. Keep the Snowball check bounded
+
+Suggested replacement:
+
+```markdown
+Run the pinned Snowball request path at most once during preflight. It is a
+storage, request-construction, prefix, logprob, metrics, and artifact check;
+it is not target-throughput evidence. If it fails before model load and would
+need another integration, object copy, or retry, record the failure and stop.
+Do not let this check expand into model-loader or object-store development.
+```
+
+## 8. Require independent artifact closure
+
+Suggested replacement:
+
+```markdown
+Upload configuration, workload, commands, commits, image digest, placement,
+metrics, routes, rank receipts, logs, aggregate result, and a byte-hash
+manifest under the run's final S3 prefix. A separate authorized task must read
+every claimed object, verify byte identity and the aggregate result, and reach
+a successful terminal state.
+```

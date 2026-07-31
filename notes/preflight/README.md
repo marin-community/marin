@@ -1,87 +1,80 @@
 # GrugMoE inference preflight
 
-This directory contains the immutable inputs, harness, live GB200 evidence
-index, and proposed issue text for the preflight requested in issue
-[#7201](https://github.com/marin-community/marin/issues/7201#issuecomment-5093392733).
-It does not edit either source draft.
+This directory contains the exact serving preflight requested for the frozen
+GrugMoE reference. It includes the final findings, compact proposed edits for
+the architecture and protocol drafts, and unchanged issue drafts.
 
-The result is a no-go for the architecture matrix. The exact model is not
-representable by the frozen serving fork, and the required unattended
-four-node launcher does not exist. See [findings.md](findings.md) for the
-evidence and assumption-by-assumption status.
+The result is **GO for the exact serving baseline and a later, separately
+authorized architecture experiment**. Exact tensor parity, every P0
+implementation family, prefix behavior, live 65,536-token KV accounting,
+unattended EP8, and unattended EP16 acceptance all pass. See
+[findings.md](findings.md) for the evidence and limitations.
 
-## Frozen inputs
+The accepted throughput comes from deterministic dummy weights. The one
+bounded trained Snowball attempt failed before load on object-store access, so
+it is not trained-model performance evidence.
 
-- Marin base: `75bf2437035cf731d1a4bd71266229dfcdda9478`.
-- Live EP8 evidence commit:
-  `d043e51266650ee3db2ff041e1c2095fe443f55f`.
-- vLLM: `afb26719464d5957e695bde478ae93a160b11d14`.
-- Training reference: `fd3e9bc5b428633027f944be7fdf1136567db028`.
-- Cluster: `cw-us-east-08a`.
-- GPU: whole four-GPU GB200 nodes at Iris `interactive` priority.
-- Runtime: BF16 weights and KV cache, seed 1234, prefix caching, chunked
-  prefill, PP1, TP1, DP=EP.
-- Image digest:
-  `sha256:d90bc25fc778b9d4f5b9395cba4ac2457a12e106c4c2bcb4c0b9c7d70dd57dca`.
+## Pinned implementation
 
-Future runs enrich `manifest.json` with the Iris job, pod placement, immutable
-image IDs, exact commands, dependency-lock hash, and config/workload hashes.
-The already-recorded live bundles keep these fields between `result.json`,
-their pod records, and this run index.
+- Marin branch:
+  `https://github.com/marin-community/marin/tree/grugmoe-inference-preflight`
+- Marin live acceptance commit:
+  `a3320a3043018ee923bc98bf2e6e6eef3f03a6fe`
+- vLLM branch:
+  `https://github.com/marin-community/vllm/tree/grugmoe-inference-preflight`
+- vLLM evidence commit:
+  `2c2bef33dfbd7aef3c9d4433a7e4110f77d56a4a`
+- Training oracle:
+  `fd3e9bc5b428633027f944be7fdf1136567db028`
+- Immutable task image:
+  `ghcr.io/marin-community/iris-task@sha256:5e2a69af91a000cb999e6ff0d92933874bd3142eb45469fc64fc7a3f5db64fbb`
 
 ## Local verification
 
 ```sh
 PYTHONPATH=lib/iris/src:lib/marin/src \
-  uv run --with pytest --with pytest-timeout --with numpy \
-  pytest -q \
+  uv run pytest -q \
   experiments/grug/moe/test_inference_preflight.py \
-  scripts/iris/tests/test_grugmoe_inference_preflight.py
+  tests/cluster/vllm/backend_parity.py \
+  tests/cluster/vllm/test_grug_exact_reference_check.py \
+  scripts/iris/tests/test_grugmoe_inference_preflight.py \
+  tests/inference/test_serve.py
 ```
 
-Prepare and inspect the compact 18-root/144-branch fixture:
+Prepare the compact 18-root/144-branch workload without allocating GPUs:
 
 ```sh
 PYTHONPATH=lib/iris/src:lib/marin/src \
   uv run scripts/iris/grugmoe_inference_preflight.py prepare \
-  --case reference-ep8 --run-id inspect --output /tmp/grugmoe-inspect
+  --case exact-reference-ep16 \
+  --run-id inspect \
+  --output /tmp/grugmoe-inspect
 ```
 
-## Reproducing an interactive EP8 smoke
+## Unattended Iris path
 
-The allocation command stays attached in its own terminal:
+`submit` is the path qualified at two and four nodes. It creates one
+zero-retry Iris task per whole four-GPU GB200 node, hard-coschedules the tasks
+in one NVLink domain, starts every vLLM rank, runs assertions, collects logs,
+uploads the bundle, and reads it back.
 
-```sh
-uv run scripts/iris/dev_gpu.py \
-  --config lib/iris/config/cw-us-east-08a.yaml \
-  --name grugmoe-preflight-ep8 \
-  allocate --gpu-variant GB200 --nodes 2 --priority interactive
-```
-
-Run every vLLM rank, assertion, log collection, upload, and readback with one
-driver command:
+Example smoke:
 
 ```sh
 PYTHONPATH=lib/iris/src:lib/marin/src \
-  uv run scripts/iris/grugmoe_inference_preflight.py run \
-  --session grugmoe-preflight-ep8 \
+  uv run scripts/iris/grugmoe_inference_preflight.py submit \
   --case reference-ep8 \
+  --model-source dummy \
   --mode smoke \
-  --run-id <UTC-run-id>
-```
-
-Release promptly:
-
-```sh
-uv run scripts/iris/dev_gpu.py \
+  --run-id <UTC-run-id> \
+  --task-image \
+  ghcr.io/marin-community/iris-task@sha256:5e2a69af91a000cb999e6ff0d92933874bd3142eb45469fc64fc7a3f5db64fbb \
   --config lib/iris/config/cw-us-east-08a.yaml \
-  --name grugmoe-preflight-ep8 \
-  release
+  --wait
 ```
 
-The interactive command is not the required final acceptance entrypoint. It
-uses workstation `kubectl` against replicated holder pods. Do not use
-`--mode acceptance` as a substitute for the missing unattended Iris path.
+The acceptance mode is frozen to `exact-reference-ep16`. Do not rerun the
+completed acceptance or substitute `granular-ep16`.
 
 ## Artifact layout
 
@@ -91,9 +84,8 @@ Every live run writes under:
 s3://marin-us-east-02a/marin/users/romain/moe-inference-architecture/<case>/<run-id>/
 ```
 
-The driver uploads config, manifest, compact workload, full response JSON,
-routed-expert arrays, Prometheus snapshots, result, and complete node logs.
-It reads each object back and requires byte identity.
-
-The exact live prefixes, holder jobs, outcomes, and failure reasons are in the
-run index in [findings.md](findings.md).
+Bundles contain configuration, workload, commands, dependency lock, exact
+commits, image digest, placement, full response JSON, routed-expert arrays,
+Prometheus snapshots, per-rank receipts and logs, aggregate result, and a
+byte-hash manifest. Every bundle claimed in [findings.md](findings.md) was
+verified by a separate authorized reader job.

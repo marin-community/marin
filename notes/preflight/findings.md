@@ -1,229 +1,393 @@
 # GrugMoE inference preflight findings
 
-Status: **no-go for the architecture matrix; the four-node acceptance was not
-run**.
+Status: **GO for the exact serving architecture and for a later, separately
+authorized architecture experiment.**
+
+The frozen reference now starts and generates on the target GB200 topology.
+The exact tensor fixture, prefix behavior, active KV accounting, P0
+configuration families, unattended two-node path, and unattended four-node
+acceptance all passed. The final two warmed arms differed by 0.3324%, below
+the 2% gate.
+
+This is not trained-model throughput evidence. The one permitted Snowball
+attempt failed on path-style S3 listing before model load. The accepted run
+used deterministic dummy weights, whose routing is reproducible but strongly
+skewed. No architecture comparison, profile, lower-precision run, H100 run,
+full RL cycle, 131K run, capacity-factor sweep, or fault-injection run was
+performed.
 
 ## Recommendation
 
-Do not start the proposed architecture performance matrix from the frozen
-serving stack.
+Use the exact reference as the baseline for the later architecture experiment.
+Keep the Marin and vLLM evidence commits pinned together, retain the
+counter-based throughput measurement, and preserve the same unattended Iris
+path for every candidate.
 
-The exact July 27 reference cannot start at vLLM
-`afb26719464d5957e695bde478ae93a160b11d14`. It needs heterogeneous local and
-global KV heads, global attention every six layers, and `sconv4`. The frozen
-model has one KV-head count, hardcodes global attention every four layers, and
-has no sconv path.
+Do not use the accepted throughput as a claim about the trained Snowball
+checkpoint. Repair and review its object-store access before a trained-model
+experiment. Also report routing histograms beside future throughput: the dummy
+router left 121 of 128 experts unused, so its absolute load balance is not
+representative.
 
-The closest loadable approximation did prove useful facts:
+## Frozen provenance
 
-- one GB200 node can serve GrugMoE at PP1/TP1/DP4/EP4;
-- two colocated GB200 nodes form one PP1/TP1/DP8/EP8 world;
-- cold and reused requests agree on token IDs, logprobs, and routed experts;
-- prefix hits react correctly at 17 and 513 tokens;
-- the two-node correctness result is byte-identical across two launches;
-- every recorded live bundle was read back byte-identically from S3.
+Every live job below was submitted from a clean, pushed Marin commit that
+pinned the exact pushed vLLM evidence SHA.
 
-Those facts do not make the approximation performance-faithful. Its semantic
-KV estimate is 4.605 GiB per 65,536-token sequence, versus 1.617 GiB for the
-exact model. Worse, the live cache pool exposes about 296,653 bytes per token,
-which is within 0.6% of allocating full-length KV for all 48 layers. That is
-about 18 GiB per 65,536 tokens and 293% above the approximation's sliding-window
-semantic estimate.
-
-The conditional four-node job had to stop before submission. The smaller
-frozen-tensor cross-framework gate is still uncertain. More decisively, the
-checked-in production Iris serving path submits one task, while the replicated
-dev-GPU path submits holder processes and depends on a workstation to reach the
-pods with `kubectl`. Turning that into the required unattended, replicated
-entrypoint is broad launcher work, which is a stated stop condition.
-
-## Frozen inputs
-
-| Input | Frozen value |
+| Item | Frozen value |
 |---|---|
-| Marin base | `75bf2437035cf731d1a4bd71266229dfcdda9478` |
-| First harness evidence commit | `874015da11814ac162400baec0e04bee0fb4abd9` |
-| Gloo address fix / passing EP8 commit | `d043e51266650ee3db2ff041e1c2095fe443f55f` |
-| vLLM | `afb26719464d5957e695bde478ae93a160b11d14` |
-| Training reference | `fd3e9bc5b428633027f944be7fdf1136567db028` |
-| Snowball export | `s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b/step-42150/hf-bf16-vllm/d819cbc63780bd86/` |
-| Image | `ghcr.io/marin-community/iris-task:41a1ac729` |
-| Image digest | `sha256:d90bc25fc778b9d4f5b9395cba4ac2457a12e106c4c2bcb4c0b9c7d70dd57dca` |
-| Two-node workload SHA-256 | `fa52d5a3dd5ad0bed15941fee85be8d120efaedbaaec877da5e72ce86528c14e` |
-| Dependency lock SHA-256 | `c64a93c8ea08b7a441e831804b5058ce6fc2ee728d01333e2377e95c72ac7082` |
+| Marin branch | [`grugmoe-inference-preflight`](https://github.com/marin-community/marin/tree/grugmoe-inference-preflight) |
+| Requested frozen Marin reference | `75bf2437035cf731d1a4bd71266229dfcdda9478` |
+| Resumed preflight commit | `db0fd88acad7fc61022c074470c310f0d62c045a` |
+| Current branch merge base | `2f49a34509fa01352d6b8137c52632e55c913854` |
+| Final live acceptance commit | `a3320a3043018ee923bc98bf2e6e6eef3f03a6fe` |
+| vLLM branch | [`grugmoe-inference-preflight`](https://github.com/marin-community/vllm/tree/grugmoe-inference-preflight) |
+| vLLM base | `afb26719464d5957e695bde478ae93a160b11d14` |
+| vLLM evidence commit | `2c2bef33dfbd7aef3c9d4433a7e4110f77d56a4a` |
+| Training semantic oracle | `fd3e9bc5b428633027f944be7fdf1136567db028` |
+| Cluster / priority | `cw-us-east-08a` / `interactive` |
+| Task image | `ghcr.io/marin-community/iris-task@sha256:5e2a69af91a000cb999e6ff0d92933874bd3142eb45469fc64fc7a3f5db64fbb` |
+| Image amd64 child | `sha256:6d9946f50a81a0bfbe31516274e2318cc70a9d0b683d898b33b42fe0a84e5d9b` |
+| Image arm64 child | `sha256:9a68d25676c45cddee848c552bf57ebe46dc74ff1dcc648d8fec05b72e3bc900` |
+| Acceptance workload SHA-256 | `e298b1f4925421a1d759ab7d92fb8310cfb8c9f074d0ece2277c713d2c5b7c62` |
+| Acceptance config SHA-256 | `88844012a67ca8fec2da879e4b8ff3245d12d3276fb5146ed89ca9cc38bc2169` |
+| Correctness workload SHA-256 | `882b51d0959d8dd6e875d04be49d197ceef3e4c4e1d3c9cd141c6166b5fe5dc1` |
+| Dependency lock SHA-256 | `600b2abe4b5e8027c3783adc8cc45924c71be1a357c1e23eac6ab9049d5f6a14` |
 
-The live config used BF16 weights and KV cache, seed 1234, prefix caching,
-chunked prefill, PP1, TP1, and DP=EP. Smoke runs capped the request context at
-2,048 tokens while preserving the reference-sized model configuration.
+The multi-architecture image is a generic Iris task image. The unattended
+worker synchronizes the pushed source named in the manifest at job start.
 
-## Assumption status
+## Exact implementation
 
-| Assumption | Status | Evidence and consequence |
+The accepted model is the frozen `d6144`, 48-layer reference:
+
+- 48 query heads with head dimension 128;
+- 12 stored/local KV heads and 6 global KV heads;
+- local attention window 512 and global attention every 6 layers;
+- top-4 of 128 routed experts with intermediate width 3072;
+- two separate, nonzero shared experts of width 3072 each;
+- fused half RoPE on local layers, gated normalization, attention gating,
+  XSA, and QB routing;
+- SConv kernel 4 at K, V, attention output, and MLP output;
+- MTP depth remains in the checkpoint/configuration, while ordinary serving
+  returns trunk logits and does not execute the dense training head;
+- BF16 weights and BF16 KV cache, prefix caching, and chunked prefill;
+- PP1, TP1, DP16, and EP16 for acceptance.
+
+The vLLM branch adds only the reference-specific model/configuration behavior,
+four SConv paths, heterogeneous hybrid-cache grouping, active-block telemetry,
+and tests. The two shared experts remain two modules and their outputs are
+summed; they are not silently replaced by one learned full-width expert.
+
+The Marin branch adds the frozen fixture and oracle, the small case catalogue,
+the request/correctness/KV harness, and one zero-retry unattended Iris gang
+entrypoint. The top-level result is the literal conjunction of placement,
+all-rank health, correctness, duration, token count, repeatability, and
+artifact readback.
+
+## Assumption ledger
+
+No preflight assumption remains uncertain because of missing model, cache, or
+launcher machinery.
+
+| Assumption | Status | Decision-ready evidence |
 |---|---|---|
-| Exact frozen reference starts | **rejected** | Every-six attention, heterogeneous 12/6 KV, and sconv-on need custom model/cache work. |
-| Ordinary serving omits dense MTP | **confirmed** | No dense MTP head is invoked by the frozen next-token serving path. |
-| Every selected top-K contribution is dispatched | **confirmed** | The Grug call and pinned `FusedMoE` path have no capacity clipping or token drop. |
-| Same frozen tiny tensors agree across Levanter and vLLM | **still uncertain** | Router formulas match statically, but no run loaded the same checkpoint into both and compared selected experts, gate weights, and next-token logprobs. |
-| Prefix reuse preserves results | **confirmed** | Cold and reused token IDs, logprobs, and route-array hashes match at 17 and 513 tokens. |
-| Prefix mutation causes a miss | **confirmed** | Mutated requests report zero reused tokens and zero new prefix hits at both boundaries. |
-| Seeded dummy routing is reproducible | **confirmed** | Two EP8 launches produced byte-identical compact correctness evidence. |
-| Seeded dummy routing is balanced | **rejected** | Only experts 5, 15, 29, 53, and 72 received assignments in EP8 smoke; most experts were unused. The checked-in deterministic control gives equal work to every expert and EP rank, but is only an instrumentation control. |
-| RL append request shape works | **confirmed for dummy; still uncertain for Snowball** | Dummy appends produce real hits, sampled-token logprobs, routed IDs, and fixed four-token responses. The single Snowball attempt failed before load on path-style S3 listing. |
-| Sliding-window semantic KV predicts allocation | **rejected** | Live bytes per token are 293% above the loadable semantic estimate and track full-length allocation for all layers. |
-| EP8 fabric is usable | **confirmed** | Eight ranks joined one NCCL world across two tray pods, served requests twice, and showed no communication error or hang after the Gloo address fix. |
-| Identical throughput arms differ by at most 2% | **still uncertain** | The repeated smoke proves output repeatability, not ten-minute/250,000-token throughput repeatability. |
-| Unattended EP16 acceptance is launchable | **rejected at this commit** | No replicated unattended serving entrypoint exists. The dev workflow launches holder pods only. |
-| S3 artifact round-trip works | **confirmed** | Every success and failure bundle recorded below passed byte-identical readback. |
+| The exact frozen reference starts | **confirmed** | Exact EP8 and EP16 jobs loaded all custom paths and generated successfully. |
+| Ordinary serving omits the dense MTP head | **confirmed** | The fixture pins `mtp_depth=1`; vLLM returns trunk logits and the oracle manifest records the training head as excluded. |
+| Every selected top-K contribution is dispatched | **confirmed** | The pinned `FusedMoE` route has no capacity clipping or token drop; fixture and live route captures include every selected assignment. |
+| Levanter and vLLM agree on the same tensors | **confirmed** | Selected experts match, normalized routing weights differ by at most `2.3841858e-07`, and next-token probabilities satisfy the repository `NextTokenParity` tolerance. |
+| Two half-width shared experts preserve training semantics | **confirmed** | Both fixture experts are nonzero and pairwise distinct; summed vLLM output differs from the oracle by at most `2.3283064e-10`. |
+| Prefix reuse preserves token, logprob, and route results | **confirmed** | Cold and reused requests agree across a physical KV-block boundary and the 512-token window boundary in fixture and live P0 jobs. |
+| One-token prefix mutation causes a miss | **confirmed** | Mutated requests reported zero reused tokens and zero new hit-counter tokens at both boundaries. |
+| Append-to-conversation request shape works | **confirmed for the exact dummy path** | Appends produce real hits, sampled-token logprobs, routed IDs, fixed response lengths, and synchronized counters. |
+| Seeded dummy routing is reproducible | **confirmed** | Repeated correctness checks and the two acceptance arms produced stable route evidence. |
+| Seeded dummy routing is balanced | **rejected** | 121 experts were unused; the busiest EP rank had 26,592 assignments versus a 6,648 mean. The cyclic balanced case is an instrumentation control only. |
+| The pinned Snowball export is directly loadable by this request path | **rejected** | The only allowed attempt failed before load because path-style `ListObjectsV2` was rejected. It was not retried or copied. |
+| Local active KV plateaus while global active KV grows | **confirmed** | With one active request, local blocks stayed at 33 while global blocks grew from 180 at 6,144 tokens to 2,039 at 65,536 tokens. |
+| Semantic, reserved, and active KV can be separated | **confirmed** | Active physical bytes matched group payload exactly; reserved capacity stayed at 61,899,276,288 bytes while active use grew from 299,630,592 to 1,761,607,680 bytes. |
+| The same unattended path works at EP8 and EP16 | **confirmed** | Two and four whole GB200 nodes rendezvoused through the checked-in Iris entrypoint with hard `nvlink.domain` coscheduling. |
+| Two warmed acceptance arms differ by no more than 2% | **confirmed** | Stable live-counter means were 1,578.2497 and 1,583.5041 generated tokens/s, a 0.3324% difference. |
+| Claimed S3 bundles survive independent readback | **confirmed** | Separate authorized reader jobs read every claimed object and verified byte identity and recorded hashes. |
 
-## P0 capability audit
+## Frozen tensor and prefix parity
 
-The required readiness vocabulary is literal: `ready`, `blocked`, or
-`confounded`.
-
-| Capability | Implementation | Readiness | Evidence / smallest no-op control | Exact next step |
-|---|---|---|---|---|
-| KV 12 local / 12 global | `config-only` | `ready` | One `num_key_value_heads=12` applies to every layer; the EP8 approximation loaded. Control: keep 12/12. | Use only for serving-stack diagnosis, not architecture ranking. |
-| KV 12 local / 6 global | `custom-code` | `blocked` | Config, model, and cache expose one KV-head count. Control: 12/12. | Add heterogeneous attention specs and cache sizing in a separate vLLM change. |
-| KV 12 local / 2 global | `custom-code` | `blocked` | Same single-count restriction. Control: 12/12. | Validate 12/6 first, then reuse that implementation. |
-| Global attention every 4 | `config-only` | `ready` | Frozen config generates every-four and the live approximation starts. Control: current schedule. | Keep as a launcher control only. |
-| Global attention every 6 | `custom-code` | `blocked` | `_FULL_ATTENTION_INTERVAL = 4` is fixed. Control: every-four. | Make interval explicit and update hybrid-cache grouping separately. |
-| Sliding window 512 | `config-only` | `ready` | Live 513-token append crosses the boundary and preserves cold/reuse equality. Control: 512. | Keep the boundary request. |
-| Sliding window 2,048 | `config-only` | `ready` | Same HF config field; no serving source change. Control: 512. | Smoke only after exact architecture support exists. |
-| Top-4 / 128 / i3072 | `config-only` | `ready` | Reference-sized dummy weights loaded at EP8. Control: same geometry. | Keep as the reference expert geometry. |
-| Top-8 / 256 / i1536 | `config-only` | `confounded` | Config and contiguous EP16 rank starts exist, but no compliant unattended EP16 launch exists. Control: top-4/128/i3072. | Add the unattended entrypoint before one EP16 acceptance attempt. |
-| `sconv4` off | `config-only` | `ready` | Frozen vLLM has no sconv state or call. Control: off. | Use off only as the loadable launcher reference. |
-| `sconv4` on | `custom-code` | `blocked` | No model path, loader mapping, or serving kernel exists. Control: off. | Implement and validate in a separate model/kernel change. |
-| EP8 | `config-only` | `ready` | Two live launches formed ranks 0–7 after advertising routable pod IPs to Gloo. Control: EP4. | Preserve the Gloo interface setting. |
-| EP16 | `config-only` | `confounded` | vLLM accepts DP16/EP16, but Marin has no unattended replicated entrypoint. Control: EP8. | Land that entrypoint, then run the single frozen acceptance command shown below. |
-
-## Prefix, routing, and request-path evidence
-
-Both passing EP8 runs report:
+The downscaled exact fixture has seven layers, hidden size 64, four query
+heads, two local KV heads, one global KV head, two-of-four routed experts, and
+two separate shared experts of width 16. It enables every custom path used by
+the full reference.
 
 ```text
-17-token boundary: 16 reused tokens; mutation 0
-513-token boundary: 512 reused tokens; mutation 0
-prefix cache hits: 528
-prefix cache queries: 1,614
-prompt tokens cached: 528
-generated tokens: 24
-preemptions: 0
+model.safetensors SHA-256:
+  6f96fee7651e44e1dd610d7e73ab7df668b3e81411a32713a60c9b9e31b8137d
+observations.npz SHA-256:
+  3458fb4c89d101a030724f1cddbac7698168894cdb56b92f4ad7fdcc5b6240ce
+GPU job:
+  /romain/grugmoe-tiny-fixture13-ee7e05dc3-20260731
+S3:
+  s3://marin-us-east-02a/marin/users/romain/moe-inference-architecture/tiny/fixture13-ee7e05dc3-20260731/
+independent reader:
+  /romain/grugmoe-fixture13-inspect-20260731
+result SHA-256:
+  3beb9f7c361f773296dffb167317e5448fa47f352acf219b2def09a9ebbc9827
 ```
 
-The result files index full response JSON, NumPy routed-expert arrays, and raw
-Prometheus snapshots as separate objects. The compact comparison SHA-256 for
-both EP8 runs is:
+The tensor oracle checked 33 tokens in every layer. Selected experts matched;
+the maximum normalized-weight error was `2.384185791015625e-07`. The two
+shared experts were nonzero and distinct, and their summed-output error was
+`2.3283064365386963e-10`.
 
-```text
-f177598299cd6cad7501d1a513c4c52d7097ee958d2ee326b9a537a9bd91b373
-```
+At 33 semantic tokens, the live server and frozen oracle chose token 63 and
+the maximum probability error was `8.575512504406177e-05`. At the 514-token
+boundary, cold and 512-token-reused results were byte-identical in returned
+scores and routes. The live token 24 and frozen token 22 were separated by
+only `8.536872245598626e-06` in the frozen distribution; the measured maximum
+probability error was `4.70345119299477e-05`, well inside the repository
+`0.075` parity bound.
 
-Dummy routing is deterministic but intentionally not treated as representative
-load balance. Mapping the 104,448 live assignments by contiguous groups of 16
-experts gives this EP-rank histogram:
+## P0 readiness and live run index
 
-```text
-[52,224, 96, 0, 26,112, 26,016, 0, 0, 0]
-```
+All distinct implementation families are smokeable. `config-only` means the
+new exact path needs no additional code for that value; `custom-code` means
+the branch supplies the path that was missing at the vLLM base.
 
-The checked-in balanced fixture cycles top-K assignments across all experts.
-For 128 experts, top-4, and EP8, it produces four assignments per expert and 64
-per EP rank. Its assignment SHA-256 is
-`f1d3dd8e5223591ade577c7c438ed3ac80e116fde03d17d0e7e662efa8a71210`.
-
-## KV evidence
-
-At 65,536 tokens:
-
-| Model/allocation interpretation | GiB per sequence | Bytes per token |
-|---|---:|---:|
-| Exact every-six, 12 local / 6 global semantics | 1.6172 | 26,496 |
-| Every-six, uniform-12 semantics | 3.1172 | 51,072 |
-| Loadable every-four, uniform-12 semantics | 4.6055 | 75,456 |
-| Full-length allocation for all 48 layers | 18.0000 | 294,912 |
-| Live pool: 68.73 GiB / 248,770 tokens | about 18.11 | 296,653 |
-
-The observed pool is only 0.6% above the full-allocation calculation. This is
-strong evidence that semantic sliding-window savings are not reflected in the
-allocated KV bytes for this prefix-cached configuration. It is not an observed
-single 65K request: the smoke request cap was 2,048. The live run also recorded
-94.98 GiB of model weights per rank, 68.73 GiB available KV memory, 248,770 KV
-tokens, 121.47× advertised concurrency at 2,048 tokens, and zero preemptions.
-
-## Live run index
-
-All runs used cluster `cw-us-east-08a`, Iris `interactive` priority, the image
-digest above, and the checked-in one-command driver after holder allocation.
-
-| Run | Iris holder | Result | Evidence |
+| P0 family | Implementation | Readiness | Live case |
 |---|---|---|---|
-| `20260731T0228Z-one-node-ep4-retry4` | `/romain/dev-gpu-grugmoe-preflight-1n-20260731t0210z` | EP4 smoke passed; holder killed after use | `s3://marin-us-east-02a/marin/users/romain/moe-inference-architecture/one-node-ep4/20260731T0228Z-one-node-ep4-retry4/` |
-| `20260731T0234Z-reference-ep8-arm1` | `/romain/dev-gpu-grugmoe-preflight-2n-20260731t0233z` | Failed: Gloo advertised loopback; failure bundle preserved | `s3://marin-us-east-02a/marin/users/romain/moe-inference-architecture/reference-ep8/20260731T0234Z-reference-ep8-arm1/` |
-| `20260731T0241Z-reference-ep8-retry1` | same two-node holder | EP8 smoke passed | `s3://marin-us-east-02a/marin/users/romain/moe-inference-architecture/reference-ep8/20260731T0241Z-reference-ep8-retry1/` |
-| `20260731T0248Z-reference-ep8-repeat2` | same two-node holder | Independent EP8 smoke passed; compact result identical | `s3://marin-us-east-02a/marin/users/romain/moe-inference-architecture/reference-ep8/20260731T0248Z-reference-ep8-repeat2/` |
-| `20260731T0253Z-snowball-request-path` | same two-node holder | Still uncertain: path-style `ListObjectsV2` rejected before model load; holder killed after use | `s3://marin-us-east-02a/marin/users/romain/moe-inference-architecture/reference-ep8/20260731T0253Z-snowball-request-path/` |
-| Four-node EP16 acceptance | none | Not submitted: smaller parity gate open and unattended launcher absent | No bundle |
+| uniform KV / every 4 / SConv off | `config-only` | `ready` | `legacy-control-ep4` |
+| heterogeneous KV / every 6 / SConv on | `custom-code` | `ready` | `one-node-ep4`, then exact `reference-ep8` |
+| global KV 2 / window 2,048 | `config-only` on the heterogeneous path | `ready` | `kv2-window2048-ep4` |
+| top-8 / 256 experts / EP16 | `config-only` | `ready` | `granular-ep16` |
+| exact reference / EP16 | `custom-code` plus unattended launcher | `ready` | `exact-reference-ep16` acceptance |
 
-The Snowball failure exposed two local defects. The branch now rejects zombie
-launcher parents and writes a virtual-hosted S3 config for future runs. Per the
-goal, the Snowball driver was run once only, so that fix is not claimed as live
-Snowball evidence.
+Every row below ended with all seven aggregate checks true and an independent
+reader in `succeeded`.
 
-## Exact next actions
+| Case | GPU job and S3 prefix | Independent hashes |
+|---|---|---|
+| One-node exact path, EP4 | `/romain/grugmoe-one-node-ep4-p0-one-node-ep4-hybrid-align-224c78d21-20260731`<br>`s3://marin-us-east-02a/marin/users/romain/moe-inference-architecture/one-node-ep4/p0-one-node-ep4-hybrid-align-224c78d21-20260731/` | result `26234fd38273af6a541e9f7e815a7249e02f31829db13e9011b1eaa828032683`<br>manifest `d9ae9d1f344ba1447d2ed2712c2418adfb22265c56b6e9057d3afab9a0161932` |
+| Legacy control, EP4 | `/romain/grugmoe-legacy-control-ep4-p0-legacy-control-ep4-224c78d21-20260731`<br>`s3://marin-us-east-02a/marin/users/romain/moe-inference-architecture/legacy-control-ep4/p0-legacy-control-ep4-224c78d21-20260731/` | result `afb928778ce9c24cca8ecd7a6dc0bffc5b0430de5e1869afc50aed147dfbd9d9`<br>manifest `70234b178fbe223f2c4c3449775cbcd4f5c5d661c83b9c725cbb9b52881939b5` |
+| KV2/window-2048, EP4 | `/romain/grugmoe-kv2-window2048-ep4-p0-kv2-window2048-ep4-224c78d21-20260731`<br>`s3://marin-us-east-02a/marin/users/romain/moe-inference-architecture/kv2-window2048-ep4/p0-kv2-window2048-ep4-224c78d21-20260731/` | result `e8551deedc3ea7490d4a81d98e0216b9af24d0ec6a06ecae5f1b444c1d052aef`<br>manifest `6976962c1bc83fe55b29c612696818cde37981f8fc6db4d1647a86203ef6d4a9` |
+| Exact reference, EP8 | `/romain/grugmoe-reference-ep8-p0-reference-ep8-node-proof-03e3767e4-20260731`<br>`s3://marin-us-east-02a/marin/users/romain/moe-inference-architecture/reference-ep8/p0-reference-ep8-node-proof-03e3767e4-20260731/` | result `7415c33b2051b688beca9c6b956fbbcf7643c0f1af9cbb1f36772c3c9dfb8d20`<br>manifest `4f4d2fb991b12c39491f062739e628c92f5834bf7b311395687c66d0104c29e5` |
+| Granular top-8/256, EP16 | `/romain/grugmoe-granular-ep16-p0-granular-ep16-03e3767e4-20260731`<br>`s3://marin-us-east-02a/marin/users/romain/moe-inference-architecture/granular-ep16/p0-granular-ep16-03e3767e4-20260731/` | result `607dd5d0039b5a75db5d506a5dc485bfbf1b4587efe8cd73554a84276e843802`<br>manifest `adaff6ae99c3c57a55c844fc72f781822a5c4d7a1d56edecca849da19211e2a1` |
 
-1. Close frozen-tensor parity without changing model behavior:
+The exact EP8 job used two distinct whole nodes in
+`DH1-392-US-EAST-08A`. The granular EP16 job used four whole nodes in
+`DH1-136-US-EAST-08A`. Both used the same zero-retry submit, rendezvous,
+health, correctness, aggregation, upload, and readback path later used by the
+exact acceptance.
 
-   ```sh
-   uv run python tests/cluster/vllm/grug_training_oracle.py \
-     --output /tmp/grugmoe-training-oracle
-   ```
+## Exact live KV result
 
-   Add a focused vLLM consumer that loads those exact tensors and token IDs and
-   compares selected experts, gate weights, and next-token logprobs. The current
-   API returns selected IDs but not gate weights, so this may itself end in a
-   small-instrumentation blocker.
+```text
+GPU job:
+  /romain/grugmoe-reference-ep8-kv-reference-ep8-live-03e3767e4-20260731
+S3:
+  s3://marin-us-east-02a/marin/users/romain/moe-inference-architecture/reference-ep8/kv-reference-ep8-live-03e3767e4-20260731/
+independent reader:
+  /romain/grugmoe-kv-reference-ep8-inspect-20260731
+bundle digest:
+  d419d4691fa26f6ba4960653d35cbc2ca2e7462a8213a223c2defc0d83a6eaa6
+result SHA-256:
+  6440a3d4f140c0bc29d47f346a8b646e3420ed59c6fe016b004ae3c38287ef02
+manifest SHA-256:
+  d8c7a99b620a4c5733c7d7bb10f7b5b5205eed2a4c9c8adbdd51fd4f9f3fdce0
+KV summary SHA-256:
+  3d887ad3c21f729c2271424b38300e26c7abad848490587daccf3d8adda226e5
+```
 
-2. Add one replicated, coscheduled Iris entrypoint that runs the checked-in
-   preflight worker on every task without workstation `kubectl`. Do not add a
-   second serving backend or retry layer.
+Prefix caching remained enabled. Both observations held exactly one active
+request on DP rank 0.
 
-3. Only after both items pass, expose the intended command below and run it
-   once:
+| Final tokens | Local / global / SConv active blocks | Attention active bytes | SConv active bytes | Physical active bytes | Reserved physical bytes | Predicted attention bytes | Prediction gap |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 6,144 | 33 / 180 / 2 | 271,319,040 | 28,311,552 | 299,630,592 | 61,899,276,288 | 276,824,064 | 1.9886% |
+| 65,536 | 33 / 2,039 / 2 | 1,733,296,128 | 28,311,552 | 1,761,607,680 | 61,899,276,288 | 1,736,441,856 | 0.1812% |
 
-   ```sh
-   PYTHONPATH=lib/iris/src:lib/marin/src \
-     uv run scripts/iris/grugmoe_inference_preflight.py submit \
-     --config lib/iris/config/cw-us-east-08a.yaml \
-     --case granular-ep16 \
-     --mode acceptance \
-     --run-id <UTC-run-id>
-   ```
+Local active blocks plateau at the 512-token window. Global blocks grow with
+context. SConv state also stays bounded. Physical active bytes equal the
+reported group payload, so there is no unexplained active-use gap, let alone
+one above 10%.
 
-   `submit` does not exist at this commit. Its absence is the launcher blocker,
-   not an invitation to run four interactive holder pods manually.
+The large reserved/active gap is real but has a different meaning: vLLM
+reserves a 61.9 GB page pool up front and then assigns only the active pages
+shown above. Reserved capacity must not be presented as per-request occupancy.
+There were 30 live groups: 6 attention and 24 SConv; 29 were sliding-window
+groups and one was full attention.
+
+## Four-node acceptance
+
+### First attempt: terminal failure with a diagnosed measurement defect
+
+The first exact job exercised the full model, placement, correctness, warm
+phase, workload, two arms, and S3 readback. It failed duration and
+repeatability because the harness credited all 2,048 generated tokens in the
+minute when a request returned. Requests took 57--95 seconds, so continuously
+busy minutes could appear as zero.
+
+```text
+job:
+  /romain/grugmoe-exact-reference-ep16-acceptance-03e3767e4-20260731
+S3:
+  s3://marin-us-east-02a/marin/users/romain/moe-inference-architecture/exact-reference-ep16/acceptance-03e3767e4-20260731/
+independent reader:
+  /romain/grugmoe-exact-acceptance-inspect-20260731
+bundle / result / manifest:
+  fb1e3ea3b7a4a3cc90842061a998cfc356f6e2c19910fc612c8a7e6333cb3cc0
+  b5e2847017b68d8edb2a01dd307252b569f2a3b0c6209f34a41cd46bfc291969
+  f5bc773f9ade1f3e266bab0ff8126175f60d2f110101cc124fe64eed9ff56839
+```
+
+The vLLM generation counter exactly matched each arm's completed-token total.
+The fix therefore sampled `vllm:generation_tokens` at fixed wall-clock
+boundaries while requests remained active and used adjacent counter deltas.
+A compressed unit test makes requests slower than the sample interval and
+proves that busy intervals do not become false zeroes. No model, workload,
+topology, acceptance threshold, or result predicate changed.
+
+### Single diagnosed-fix rerun: passed
+
+```text
+job:
+  /romain/grugmoe-exact-reference-ep16-acceptance-counter-a3320a304-20260731
+S3:
+  s3://marin-us-east-02a/marin/users/romain/moe-inference-architecture/exact-reference-ep16/acceptance-counter-a3320a304-20260731/
+independent reader:
+  /romain/grugmoe-exact-acceptance-counter-inspect-20260731
+bundle digest:
+  8b10500844d3df77a4b5af73e5ad34336cb08c0b7d83f4bcc6d95004e9767841
+result SHA-256:
+  cba763ac6b5fda8593fe52cfb6d1d1b1a5a8ce2d7e4d2330a27ca855b88b0b35
+manifest SHA-256:
+  6b4abccb705aabd60b8c0a8125148819fc259615f87c223aaa20889b7737b631
+objects read: 51
+```
+
+The job used four distinct whole GB200 nodes in one NVLink domain:
+
+```text
+rank 0: s9lrxs64  10.186.210.237
+rank 1: scspxs64  10.186.210.213
+rank 2: shmsxs64  10.186.210.227
+rank 3: sjjvxs64  10.186.210.207
+domain: DH1-129-US-EAST-08A
+rack:   dh1-r129-us-east-08a
+```
+
+The workload had 18 roots and 8 branches per root. Six roots used each cached
+history length 10,240, 30,720, and 62,464. Every branch appended 1,024 tokens
+and generated 2,048, producing 48 requests at each final length 13,312,
+33,792, and 65,536. The warm phase covered every prefix cohort with 162
+requests and 331,776 generated tokens.
+
+| Measure | Arm 1 | Arm 2 |
+|---|---:|---:|
+| Wall time | 603.7255 s | 600.1098 s |
+| Requests | 464 | 464 |
+| Generated tokens | 950,272 | 950,272 |
+| Branches covered | 144 / 144 | 144 / 144 |
+| Concurrency | 64 | 64 |
+| Full-arm mean | 1,574.0133 tok/s | 1,583.4970 tok/s |
+| Ten-interval stable mean | 1,578.2497 tok/s | 1,583.5041 tok/s |
+| Stable counter window | 602.1050 s | 600.1071 s |
+| Prefix 10,240 generated tokens | 360,448 | 360,448 |
+| Prefix 30,720 generated tokens | 294,912 | 294,912 |
+| Prefix 62,464 generated tokens | 294,912 | 294,912 |
+| Preemptions | 0 | 0 |
+
+Stable live-counter deltas were:
+
+```text
+arm 1:
+  131072,65285,79598,72034,78555,130512,119618,79617,63685,130296
+arm 2:
+  131072,73724,74520,43721,103205,123854,96242,71422,101506,131006
+```
+
+Every interval was positive. The stable means differed by
+`0.33237259800135577%`. All seven required checks were true:
+
+```text
+placement=true
+all_rank_health=true
+correctness=true
+duration=true
+token_count=true
+repeatability=true
+artifact_readback=true
+```
+
+All 33 manifest objects were byte-identical on readback, all four rank
+receipts passed, the aggregate result was byte-identical, and the independent
+reader itself reached `succeeded`. No third acceptance was run.
+
+## Snowball bounded result
+
+The one allowed trained-checkpoint request-path attempt used the pinned export:
+
+```text
+s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b/step-42150/hf-bf16-vllm/d819cbc63780bd86/
+```
+
+It failed before model load when path-style `ListObjectsV2` was rejected. The
+branch now writes virtual-hosted S3 configuration and rejects zombie launcher
+parents, but the goal forbade a retry or an object copy. Therefore:
+
+- the exact dummy request shape is confirmed;
+- the pinned Snowball storage/request path is rejected at this evidence
+  revision;
+- no Snowball throughput or model behavior is claimed.
 
 ## Ranked remaining risks
 
-1. **Architecture validity:** every-six attention, heterogeneous KV, and
-   sconv-on are blocked. Exact support is required before throughput can rank
-   candidates.
-2. **KV capacity:** live allocation is about four times the loadable semantic
-   estimate and about eleven times the exact target estimate at 65K.
-3. **Cross-framework correctness:** same-tensor selected-expert, gate-weight,
-   and next-token parity is still uncertain.
-4. **Final orchestration:** no unattended replicated serving entrypoint exists.
-5. **Repeatability:** correctness is repeatable; the ≤2% throughput gate is
-   unmeasured.
-6. **Snowball integration:** virtual-hosted S3 configuration is patched but
-   unvalidated because the one permitted request-path attempt already ran.
+1. **Trained-checkpoint access.** The exact serving implementation is proven
+   with frozen and deterministic dummy tensors, but the pinned Snowball export
+   did not reach load. Review and validate object-store access before calling
+   any later run trained-model evidence.
+2. **Representative routing.** Dummy routing is highly skewed. Future
+   architecture results need model routing histograms and EP max/mean beside
+   throughput. The cyclic balanced case validates instrumentation only.
+3. **Fork maintenance.** Exact support touches the vLLM model, hybrid cache,
+   scheduler telemetry, and SConv code. It needs normal owner review before
+   long-term use.
+4. **Capacity interpretation.** The runtime reserves much more KV memory than
+   one request actively occupies. Capacity conclusions must use active pages
+   and resident-request behavior, not divide the whole reserved pool by a
+   single sequence.
+5. **Experiment scope.** This preflight deliberately did not compare
+   candidates or test 131K context. Those remain work for the later
+   architecture protocol, not missing preflight evidence.
 
-## Local verification
+## Local validation
+
+Marin:
 
 ```text
-24 focused tests passed in 4.37s
+uv run pytest -q \
+  experiments/grug/moe/test_inference_preflight.py \
+  tests/cluster/vllm/backend_parity.py \
+  tests/cluster/vllm/test_grug_exact_reference_check.py \
+  scripts/iris/tests/test_grugmoe_inference_preflight.py \
+  tests/inference/test_serve.py
+
+95 passed
 ```
 
-The branch contains the compact 18-root/144-branch workload, cold/reuse/mutation
-assertions, balanced routing control, two-arm acceptance contract, complete log
-collection, exact manifest hashes, S3 upload/readback, and focused tests. No PR,
-Gist, issue edit, architecture sweep, or four-node allocation was created.
+The repository-specific `./infra/pre-commit.py` checks and
+`git diff --check` pass for the changed Marin files.
+
+vLLM:
+
+```text
+PYTHONPATH=$PWD \
+  /home/romain/dev/marin-wt/grug-pp2-multinode-vllm-20260729/.venv/bin/python \
+  -m pytest -q tests/models/test_grugmoe.py \
+  tests/v1/core/test_prefix_caching.py
+
+99 passed, 2 skipped
+```
+
+All applicable vLLM pre-commit hooks and `git diff --check` pass for the ten
+changed files.
+
+The four required local Max-effort goal reviews are recorded after final
+validation. Material findings, if any, must be resolved before this branch is
+handed off.
