@@ -1,0 +1,28 @@
+{
+  "profile_id": "marin-latest-moe",
+  "model_name": "Marin's Latest MoE",
+  "developer": "the Marin Community",
+  "trained_by": "the Marin Community",
+  "maintained_by": "developers from Open Athena, Stanford, and many other institutions",
+  "ecosystem_contributors": [
+    "NVIDIA",
+    "AI2"
+  ],
+  "training_data_models": [
+    "DeepSeek",
+    "Kimi",
+    "GLM"
+  ],
+  "unknown_facts": [
+    "the model's aliases or version identifier",
+    "the base-model lineage",
+    "the exact training stages",
+    "the release date",
+    "the license",
+    "the supported modalities",
+    "the context length",
+    "architecture details beyond the model's supplied name",
+    "the deployment provider",
+    "the funding sources"
+  ]
+}
