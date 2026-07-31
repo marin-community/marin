@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 from concurrent.futures import Future
+from contextlib import suppress
 from pathlib import Path
 from typing import Any, cast
 
@@ -39,6 +40,7 @@ from iris.cluster.platforms.k8s.coreweave_topology import COSCHEDULE_LEAFGROUP, 
 from iris.cluster.types import (
     CoschedulingConfig,
     EnvironmentSpec,
+    JobName,
     ResourceSpec,
     is_job_finished,
     tpu_device,
@@ -329,10 +331,17 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
 
 
 class IrisActorHandle:
-    """Handle to an Iris-hosted actor. Resolves via iris_ctx()."""
+    """Handle to an Iris-hosted actor.
 
-    def __init__(self, endpoint_name: str):
+    Resolves through ``resolver`` when the client that produced the handle
+    supplied one, and through the ambient ``iris_ctx()`` otherwise. A driver
+    outside an Iris job has a client but no job context, so without the bound
+    resolver every call from such a process fails.
+    """
+
+    def __init__(self, endpoint_name: str, resolver: Any = None):
         self._endpoint_name = endpoint_name
+        self._resolver = resolver
         self._client: Any = None  # Lazily resolved ActorClient
         self._resolve_lock = threading.Lock()
 
@@ -341,7 +350,10 @@ class IrisActorHandle:
         return {"endpoint_name": self._endpoint_name}
 
     def __setstate__(self, state: dict) -> None:
+        # A resolver holds a live connection and does not travel; a handle sent
+        # to a worker resolves through that process's own job context.
         self._endpoint_name = state["endpoint_name"]
+        self._resolver = None
         self._client = None
         self._resolve_lock = threading.Lock()
 
@@ -352,13 +364,16 @@ class IrisActorHandle:
         with self._resolve_lock:
             if self._client is not None:
                 return self._client
-            ctx = get_iris_ctx()
-            if ctx is None:
-                raise RuntimeError(
-                    "IrisActorHandle._resolve() requires IrisContext. "
-                    "Call from within an Iris job or set context via iris_ctx_scope()."
-                )
-            self._client = ActorClient(ctx.resolver, self._endpoint_name)
+            resolver = self._resolver
+            if resolver is None:
+                ctx = get_iris_ctx()
+                if ctx is None:
+                    raise RuntimeError(
+                        "IrisActorHandle._resolve() requires IrisContext. "
+                        "Call from within an Iris job or set context via iris_ctx_scope()."
+                    )
+                resolver = ctx.resolver
+            self._client = ActorClient(resolver, self._endpoint_name)
             return self._client
 
     def __getattr__(self, method_name: str) -> "_IrisActorMethod":
@@ -687,11 +702,23 @@ class FrayIrisClient:
         return HostedActor(handle, stop=server.stop)
 
     def get_actor(self, endpoint: str) -> IrisActorHandle:
-        """Return a handle to an existing actor by its (absolute) endpoint name."""
-        return IrisActorHandle(endpoint)
+        """Return a handle to an existing actor by its (absolute) endpoint name.
+
+        The handle carries a resolver bound to this client, so it works from a
+        driver process that has a client but no ambient Iris job context.
+        """
+        resolver = None
+        with suppress(Exception):
+            # Endpoints are absolute ("/user/job/actor-0"), and NamespacedResolver
+            # passes absolute names through untouched, so the namespace this
+            # resolver is built for does not affect the lookup.
+            owning_job = JobName.from_string(endpoint).parent
+            if owning_job is not None:
+                resolver = self._iris.resolver_for_job(owning_job)
+        return IrisActorHandle(endpoint, resolver=resolver)
 
     def actor_endpoint(self, job: JobHandle, name: str, index: int = 0) -> str:
-        """Actors register under ``{job_id}/{name}-{index}``; see ``_host_actor``."""
+        # Matches the name _host_actor registers under.
         return f"{job.job_id}/{name}-{index}"
 
     def sibling_actor_endpoint(self, job_name: str, name: str, index: int = 0) -> str:

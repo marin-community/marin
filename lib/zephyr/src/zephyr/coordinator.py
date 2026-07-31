@@ -360,9 +360,9 @@ class ZephyrCoordinator:
         self._pool_error: str | None = None
         # Rotates which execution pull_task scans first, for cross-pipeline fairness.
         self._pull_offset: int = 0
-        # One folded snapshot per finished execution, so dropping an execution
-        # does not erase its contribution to coordinator-wide totals.
-        self._retired_counters: list[CounterSnapshot] = []
+        # Cumulative counters from executions already dropped, folded into one
+        # set so a long-lived pool's memory does not grow with pipeline count.
+        self._retired_counters: dict[str, CounterEntry] = {}
 
         # Worker management state (workers self-register via register_worker)
         self._worker_states: dict[str, WorkerState] = {}
@@ -472,9 +472,9 @@ class ZephyrCoordinator:
         if self._drain_idle_workers:
             # Workers release themselves once the last stage drains, so a
             # terminal worker job is only a crash while shards are outstanding.
-            # With none outstanding it is the expected ending — and before the
-            # first pipeline there is nothing to abort, so the next loop tick
-            # catches a worker job that died early.
+            # With none outstanding it is the expected ending. Before the first
+            # pipeline there is nothing to abort either, so this stays quiet
+            # until a pipeline actually has work in flight.
             with self._lock:
                 outstanding = any(r.completed_shards < r.total_shards for r in self._executions.values() if not r.done)
             if not outstanding:
@@ -954,10 +954,19 @@ class ZephyrCoordinator:
         """True once shutdown() ran; the pool's serve loop polls this to exit."""
         return self._shutdown_event.is_set()
 
+    def has_outstanding_work(self) -> bool:
+        """True while some active execution still has shards to finish.
+
+        The pool job's serve loop uses this to tell a worker group that drained
+        on purpose from one that died: only the latter is a failure.
+        """
+        with self._lock:
+            return any(r.completed_shards < r.total_shards for r in self._executions.values() if not r.done)
+
     def is_ready(self) -> bool:
         """True once the pool's workers exist and this coordinator can serve.
 
-        ``ZephyrPool.start()`` waits on this rather than on the actor merely
+        ``_ZephyrPool.start()`` waits on this rather than on the actor merely
         answering: the coordinator is hosted before its worker group is created,
         so a reachable coordinator does not yet mean a usable pool.
         """
@@ -996,7 +1005,7 @@ class ZephyrCoordinator:
                 return {k: e.value for k, e in snap.counters.items() if stage is None or e.stage == stage}
 
             all_snaps = (
-                list(self._retired_counters)
+                [CounterSnapshot(counters=dict(self._retired_counters), generation=0)]
                 + [snap for run in self._executions.values() for snap in run.completed_counters]
                 + list(self._worker_counters.values())
             )
@@ -1108,8 +1117,8 @@ class ZephyrCoordinator:
         execution_id: str,
         map_cost: ZephyrTaskResources,
         reduce_cost: ZephyrTaskResources,
-    ) -> ZephyrExecutionResult:
-        """Run one pipeline, blocking until done.
+    ) -> None:
+        """Run one pipeline, blocking until done. The result goes to storage.
 
         Safe to call concurrently: each call gets its own execution state and
         the shared worker pool serves all active executions. ``map_cost`` /
@@ -1151,7 +1160,8 @@ class ZephyrCoordinator:
         try:
             shards = _build_source_shards(plan.source_items)
             if not shards:
-                return self._persist_result(result_path, ZephyrExecutionResult(results=[], counters={}))
+                self._persist_result(result_path, ZephyrExecutionResult(results=[], counters={}))
+                return None
 
             last_worker_stage_idx = max(
                 (i for i, st in enumerate(plan.stages) if st.stage_type != StageType.RESHARD),
@@ -1191,7 +1201,8 @@ class ZephyrCoordinator:
 
             with self._lock:
                 counters = _aggregate_counter_snapshots(list(run.completed_counters), None)
-            return self._persist_result(result_path, ZephyrExecutionResult(results=flat_result, counters=counters))
+            self._persist_result(result_path, ZephyrExecutionResult(results=flat_result, counters=counters))
+            return None
         except Exception as e:
             # Persist the normalized exception so the driver can recover the
             # original type even when the actor transport cannot carry it.
@@ -1207,19 +1218,27 @@ class ZephyrCoordinator:
                 # coordinator totals still cover pipelines that already ended.
                 retained = run.merged_counters()
                 if retained:
-                    self._retired_counters.append(CounterSnapshot(counters=retained, generation=0))
+                    # Fold into the single cumulative snapshot rather than
+                    # appending one per pipeline: a standing pool runs
+                    # indefinitely, and a growing list would leak and make every
+                    # counter read slower.
+                    merged, conflicted = merge_counter_entries(
+                        (k, e) for snap in (self._retired_counters, retained) for k, e in snap.items()
+                    )
+                    self._retired_counters = {k: e for k, e in merged.items() if k not in conflicted}
                 self._executions.pop(execution_id, None)
 
-    def _persist_result(self, result_path: str, payload: Any) -> Any:
-        """Write a pipeline's result payload to storage and return it.
+    def _persist_result(self, result_path: str, payload: Any) -> None:
+        """Write a pipeline's result payload to storage.
 
-        The driver reads this file rather than trusting the actor return value,
-        so a result survives a transport that cannot carry it (and an exception
-        keeps its original type through ``_ensure_picklable_exception``).
+        The driver reads this file rather than the actor return value, so a
+        result survives a transport that cannot carry it and an exception keeps
+        its original type through ``_ensure_picklable_exception``. Nothing is
+        returned: sending the payload back as well would serialize and ship a
+        whole pipeline's results for the driver to discard.
         """
         ensure_parent_dir(result_path)
         StoragePath(result_path).write_bytes(cloudpickle.dumps(payload))
-        return payload
 
     def _run_worker_stage(
         self,

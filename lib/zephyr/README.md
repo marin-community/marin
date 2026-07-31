@@ -50,72 +50,89 @@ Each `execute()` starts a worker pool sized to the pipeline, runs it, and tears
 it down when the pipeline finishes. Workers are released as the final stage
 drains, so capacity goes back to the cluster while stragglers finish.
 
-**Standing pool (`ZephyrPool` — one pool, many pipelines):**
+**Standing pool (one pool, many pipelines):**
 
-When many small pipelines each pay that startup cost, start the pool once
-instead. A `ZephyrPool` serves many pipelines against one worker pool —
-concurrently, and from other drivers/steps.
-Open it as a `with` block to get the coordinator endpoint; the pool is torn
-down when the block exits (including on exception):
+When many small pipelines each pay that startup cost, stand the pool up once
+instead. `mode=PoolMode.HOST` makes a context the pool's host: entering starts
+it, leaving tears it down, and any job that names the pool runs on it.
+
+Name the pool in the **entrypoint's own job env**. Iris inherits env vars down
+the job tree, so every step the entrypoint launches picks the pool up without a
+line of its own — and unlike an address, the name is yours and known before the
+pool exists:
 
 ```python
-with ZephyrPool(max_workers=200, resources=ResourceConfig(cpu=2, ram="8g"), name="ingest") as endpoint:
-    # Any driver (even in another Iris job) connects and submits pipelines.
-    # Tasks are scheduled onto whichever workers have free capacity, so several
-    # pipelines share the pool. A failing pipeline only fails its own execute();
-    # the pool and the other pipelines keep running.
-    driver = ZephyrContext(coordinator_endpoint=endpoint, resources=ResourceConfig(cpu=1, ram="2g"))
-    result = driver.execute(pipeline)   # blocks until this pipeline completes
+client.submit(JobRequest(
+    name="mypipeline",
+    environment=EnvironmentConfig(env_vars={"ZEPHYR_POOL": "ingest"}),
+    ...,
+))
+```
+
+Inside that entrypoint, host the pool and launch the steps:
+
+```python
+with ZephyrContext(
+    mode=PoolMode.HOST,
+    pool_name="ingest",
+    max_workers=200,
+    resources=ResourceConfig(cpu=2, ram="8g"),
+) as ctx:
+    for step in steps:
+        client.submit(JobRequest(name=step, ...))   # no pool wiring needed
+    ctx.execute(pipeline)                            # the host runs on it too
 # pool is shut down here (workers drained)
 ```
 
-`ZephyrPool.start()` / `shutdown()` are also available directly if you'd rather
-manage the pool's lifetime yourself. Plain `ZephyrContext(...).execute(pipeline)`
-with no endpoint is unchanged — its own pool per pipeline, as before.
-
-Drivers name the pool they want; they never handle its address:
+Each step is then untouched — it inherits `ZEPHYR_POOL` and joins:
 
 ```python
-ctx = ZephyrContext(pool="ingest", map_task_resources=ResourceConfig(cpu=1, ram="2g"))
-ctx.execute(pipeline)
+ZephyrContext(map_task_resources=ResourceConfig(cpu=1, ram="2g")).execute(pipeline)
 ```
 
-A pool started inside a job is a sibling of the steps that job launches, and
-sibling job names are computable, so `pool="ingest"` resolves on its own. Export
-`ZEPHYR_POOL=ingest` on the jobs you launch and even that argument goes away —
-Iris inherits env vars to child jobs, so a plain `ZephyrContext()` in a step
-finds the pool with no change to the step's code:
+Tasks from all active pipelines pack onto whichever workers have free capacity.
+A failing pipeline only fails its own `execute()`; the pool and the other
+pipelines keep running.
 
-```python
-# In a step launched under an entrypoint that set ZEPHYR_POOL:
-ctx = ZephyrContext(map_task_resources=ResourceConfig(cpu=1, ram="2g"))
-ctx.execute(pipeline)
-```
+`mode` is how a context accepts or refuses the pool the environment offers:
+
+- `AUTO` (default) — join the offered pool if there is one, else run on a
+  one-shot pool of its own
+- `INHERIT` — require an offered pool, and fail fast if none is configured
+  rather than quietly starting a private one
+- `ISOLATED` — never join; always this context's own pool, ignoring the
+  environment. The opt-out for a step whose stages need something the shared
+  workers lack
+- `HOST` — stand up `pool_name` and own its lifetime
 
 A driver outside the pool's job tree cannot derive a sibling it is not a sibling
-of, so it passes `coordinator_endpoint=pool.endpoint` explicitly.
+of, so it passes `coordinator_endpoint=` explicitly.
 
-The pool's workers are sized by `ZephyrPool`'s `resources` × `max_workers`.
-Each connecting pipeline still declares its own per-task cost via the driver's
+The pool's workers are sized by the host's `resources` × `max_workers`.
+Each joining pipeline still declares its own per-task cost via its own
 `map/reduce_task_resources`, so a pipeline needing more memory than a worker can
 provide is rejected up front rather than deadlocking unscheduled. Preempted
-workers are replenished by Iris automatically; the pool lives until the owner
-calls `shutdown()` (or the `with` block exits).
+workers are replenished by Iris automatically; the pool lives until the host
+calls `shutdown()` (or its `with` block exits).
 
-Because the pool's workers are generic — they run every connecting pipeline's
-stage code — the pool must be launched with the environment those stages need,
-rather than inheriting it per-step. Set `pip_dependency_groups` for uv extras
-and `job_env_vars` for environment variables:
+Because the pool's workers are generic — they run every joining pipeline's
+stage code — the host must launch the pool with the environment those stages
+need, rather than each step bringing its own. Set `pip_dependency_groups` for
+uv extras and `job_env_vars` for environment variables:
 
 ```python
-ZephyrPool(
-    name="datakit",
+ZephyrContext(
+    mode=PoolMode.HOST,
+    pool_name="datakit",
     max_workers=200,
     resources=ResourceConfig(cpu=2, ram="8g"),
     pip_dependency_groups=["datakit"],        # workers get luxical / faiss / sklearn / scipy
     job_env_vars={"JAX_PLATFORMS": "cpu"},    # jax stages don't probe CUDA on GPU nodes
 )
 ```
+
+A step whose stages need something the pool's workers lack opts out with
+`mode=PoolMode.ISOLATED` and gets its own pool.
 
 Both default to `None`, in which case the pool job inherits its parent's
 environment exactly as before.

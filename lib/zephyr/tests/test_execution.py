@@ -441,7 +441,7 @@ def test_log_status_omits_throughput_when_counters_missing(coordinator, caplog):
     start_test_stage(coordinator, [task], stage_name="map_only")
 
     # No counters recorded → throughput segment is suppressed.
-    with caplog.at_level(logging.INFO, logger="zephyr.execution"):
+    with caplog.at_level(logging.INFO, logger="zephyr.coordinator"):
         caplog.clear()
         coordinator._log_status()
     msgs = [r.getMessage() for r in caplog.records if "complete" in r.getMessage()]
@@ -452,7 +452,7 @@ def test_log_status_omits_throughput_when_counters_missing(coordinator, caplog):
     coordinator._worker_counters["worker-A"] = CounterSnapshot(
         counters={ZEPHYR_STAGE_ITEM_COUNT_KEY: CounterEntry(7, stage="map_only")}, generation=1
     )
-    with caplog.at_level(logging.INFO, logger="zephyr.execution"):
+    with caplog.at_level(logging.INFO, logger="zephyr.coordinator"):
         caplog.clear()
         coordinator._log_status()
     msgs = [r.getMessage() for r in caplog.records if "complete" in r.getMessage()]
@@ -462,7 +462,7 @@ def test_log_status_omits_throughput_when_counters_missing(coordinator, caplog):
     coordinator._worker_counters["worker-A"] = CounterSnapshot(
         counters={ZEPHYR_STAGE_BYTES_PROCESSED_KEY: CounterEntry(1024, stage="map_only")}, generation=2
     )
-    with caplog.at_level(logging.INFO, logger="zephyr.execution"):
+    with caplog.at_level(logging.INFO, logger="zephyr.coordinator"):
         caplog.clear()
         coordinator._log_status()
     msgs = [r.getMessage() for r in caplog.records if "complete" in r.getMessage()]

@@ -178,12 +178,10 @@ class LocalClient:
         return LocalActorHandle(endpoint)
 
     def actor_endpoint(self, job: Any, name: str, index: int = 0) -> str:
-        """Mirror host_actor's naming. Local actors live in one process, so the
-        hosting job plays no part in the address."""
+        # One process, no job tree: the name alone locates the actor.
         return f"local/{name}-{index}"
 
     def sibling_actor_endpoint(self, job_name: str, name: str, index: int = 0) -> str:
-        """Same as ``actor_endpoint``: there is no job tree to resolve against."""
         return f"local/{name}-{index}"
 
     def create_actor(

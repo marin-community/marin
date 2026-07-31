@@ -3,7 +3,7 @@
 
 """Coordinator + worker pool, hosted as one fray job.
 
-``ZephyrPool`` submits the job that hosts a ``ZephyrCoordinator`` and its worker
+``_ZephyrPool`` submits the job that hosts a ``ZephyrCoordinator`` and its worker
 actor group, publishes the coordinator's endpoint, and tears the whole thing
 down on ``shutdown()``. A standing pool serves many pipelines;
 ``ZephyrContext.execute()`` builds a one-shot pool for a single pipeline.
@@ -12,6 +12,7 @@ down on ``shutdown()``. A standing pool serves many pipelines;
 import logging
 import os
 import time
+import uuid
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -49,7 +50,7 @@ logger = logging.getLogger(__name__)
 # them rather than die on a small failure budget.
 POOL_MAX_TASK_RETRIES = 1000
 
-# How long ZephyrPool.start() waits for the pool job to publish its endpoint
+# How long _ZephyrPool.start() waits for the pool job to publish its endpoint
 # before giving up.
 POOL_START_TIMEOUT = 600.0
 
@@ -141,7 +142,7 @@ def _run_pool_job(config_path: str) -> None:
     """Entrypoint for the coordinator + worker pool job.
 
     Hosts the coordinator actor, boots ``max_workers`` workers, and serves
-    until the owning ``ZephyrPool`` shuts it down. The coordinator's address is
+    until the owning ``_ZephyrPool`` shuts it down. The coordinator's address is
     derivable from this job, so nothing is published. Drivers submit through
     ``run_pipeline`` and the coordinator runs them concurrently. A one-shot
     pipeline is just a pool that runs one pipeline and is then torn down. The
@@ -187,6 +188,10 @@ def _run_pool_job(config_path: str) -> None:
             resources=config.worker_resources,
             actor_config=ActorConfig(max_task_retries=POOL_MAX_TASK_RETRIES),
         )
+        # Wait for a worker before declaring the pool ready: start() gates on
+        # is_ready(), and a coordinator with no worker cannot run anything.
+        ready_wait = float(os.environ.get("ZEPHYR_WORKERS_READY_WAIT") or 12 * 60 * 60)
+        worker_group.wait_ready(count=1, timeout=ready_wait)
         coordinator.set_worker_group.remote(worker_group).result()
 
         logger.info("Pool coordinator serving")
@@ -199,9 +204,11 @@ def _run_pool_job(config_path: str) -> None:
             now = time.monotonic()
             if now - last_group_check >= _WORKER_GROUP_POLL_INTERVAL:
                 last_group_check = now
-                if worker_group.is_done():
+                if worker_group.is_done() and coordinator.has_outstanding_work.remote().result(timeout=30.0):
+                    # Workers that drained after finishing their shards are the
+                    # expected ending for a one-shot pool, not a crash.
                     raise RuntimeError(
-                        "Zephyr worker pool terminated permanently (all retries exhausted); " "shutting the pool down."
+                        "Zephyr worker pool terminated permanently (all retries exhausted); shutting the pool down."
                     )
             time.sleep(_SERVE_POLL_INTERVAL)
     finally:
@@ -240,28 +247,13 @@ def _default_max_workers(client: Client) -> int:
 
 
 @dataclass
-class ZephyrPool:
+class _ZephyrPool:
     """A Zephyr coordinator + worker pool, hosted as one fray job.
 
-    Start one pool and run many pipelines against it concurrently — from this
-    process and from other Iris jobs. Open the pool as a context manager to get
-    the coordinator endpoint; a driver runs pipelines on it by pointing a
-    ``ZephyrContext`` at that endpoint::
-
-        with ZephyrPool(name="ingest", max_workers=200, resources=ResourceConfig(cpu=2, ram="8g")) as endpoint:
-            ZephyrContext(coordinator_endpoint=endpoint, resources=ResourceConfig(cpu=1, ram="2g")).execute(pipeline)
-
-    Drivers connect either by passing ``coordinator_endpoint=endpoint`` or by
-    exporting the endpoint as ``ZEPHYR_COORDINATOR_ENDPOINT`` on their jobs (a
-    plain ``ZephyrContext()`` then picks it up). Tasks from all active pipelines
-    are packed onto whichever workers have free capacity; a failing pipeline
-    only fails its own ``execute()``, and preempted workers are replenished by
-    Iris. The pool is torn down when the ``with`` block exits, or on
-    ``shutdown()``.
-
-    ``resources`` x ``max_workers`` sizes the worker pool. Connecting pipelines
-    declare their own per-task cost via the driver's
-    ``map/reduce_task_resources``, independent of the pool's worker size.
+    Implementation type behind ``ZephyrContext``; users reach it through
+    ``mode=PoolMode.HOST`` rather than constructing one. ``name`` is
+    load-bearing: sibling jobs derive the coordinator's address from it, so it
+    must be stable and unique among pools under one parent.
 
     Args:
         client: The fray client to use. If None, auto-detects via current_client().
@@ -316,7 +308,7 @@ class ZephyrPool:
 
     endpoint: str | None = field(default=None, repr=False)
     _serve_job: JobHandle | None = field(default=None, repr=False)
-    # Storage directory holding the running attempt's config + endpoint files.
+    # Storage directory holding this pool's config file.
     _job_dir: str | None = field(default=None, repr=False)
 
     def __post_init__(self):
@@ -333,9 +325,9 @@ class ZephyrPool:
         if self.max_workers < 1:
             # A pool with no workers still publishes an endpoint, so every
             # pipeline submitted to it would block until no_workers_timeout.
-            raise ValueError(f"ZephyrPool needs at least one worker, got max_workers={self.max_workers}")
+            raise ValueError(f"_ZephyrPool needs at least one worker, got max_workers={self.max_workers}")
         if not self.name:
-            raise ValueError("ZephyrPool needs a name: it is how sibling jobs address the pool")
+            raise ValueError("_ZephyrPool needs a name: it is how sibling jobs address the pool")
 
     def start(self, timeout: float = POOL_START_TIMEOUT) -> str:
         """Submit the coordinator + worker pool job; block until its endpoint is published.
@@ -360,7 +352,11 @@ class ZephyrPool:
             max_shard_infra_failures=self.max_shard_infra_failures,
             drain_idle_workers=self.drain_idle_workers,
         )
-        base = f"{self.chunk_storage_prefix}/{pool_job_name(self.name)}"
+        # Job and actor names stay derivable so siblings can address the pool,
+        # but storage gets a unique suffix: two entrypoints may each host a pool
+        # named "ingest" under one prefix, and they must not share a config file
+        # or delete each other's directory on shutdown.
+        base = f"{self.chunk_storage_prefix}/{pool_job_name(self.name)}-{uuid.uuid4().hex[:8]}"
         self._job_dir = base
         config_path = f"{base}/config.pkl"
         ensure_parent_dir(config_path)
@@ -431,15 +427,16 @@ class ZephyrPool:
                 self.endpoint = None
                 self._remove_job_dir()
                 return
-        try:
-            serve_job.terminate()
-        finally:
-            self._serve_job = None
-            self.endpoint = None
-            self._remove_job_dir()
+        # Ownership is released only once termination succeeds: dropping the
+        # handle on failure would leak a full worker pool with nothing left to
+        # stop it. shutdown() is retryable.
+        serve_job.terminate()
+        self._serve_job = None
+        self.endpoint = None
+        self._remove_job_dir()
 
     def _remove_job_dir(self) -> None:
-        """Delete this attempt's config + endpoint files."""
+        """Delete this pool's config file and its directory."""
         job_dir, self._job_dir = self._job_dir, None
         if job_dir is None:
             return

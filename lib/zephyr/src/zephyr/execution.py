@@ -4,7 +4,7 @@
 """Pipeline driver for Zephyr.
 
 ``ZephyrContext`` turns a ``Dataset`` into a physical plan and runs it on a
-``ZephyrPool``. With no ``coordinator_endpoint`` it builds a one-shot pool sized
+``_ZephyrPool``. With no ``coordinator_endpoint`` it builds a one-shot pool sized
 to the plan, runs the pipeline, and tears the pool down; each
 ``max_execution_retries`` attempt gets a fresh pool. With an endpoint — passed
 directly or via ``ZEPHYR_COORDINATOR_ENDPOINT`` — it submits to that standing
@@ -14,6 +14,8 @@ there is no driver-side retry.
 The pool owns worker recovery; see ``zephyr.pool`` and ``zephyr.coordinator``.
 """
 
+import enum
+import json
 import logging
 import math
 import os
@@ -30,6 +32,7 @@ from fray.client import Client
 from fray.current_client import current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
+from iris.cluster.client.job_info import get_job_info
 from rigging.filesystem import StoragePath, TransferBudgetExceeded, marin_temp_bucket
 from rigging.timing import ExponentialBackoff
 
@@ -50,8 +53,10 @@ from zephyr.plan import (
 )
 from zephyr.pool import (
     _DEFAULT_NO_WORKERS_TIMEOUT,
-    ZephyrPool,
+    POOL_START_TIMEOUT,
+    _default_max_workers,
     _default_stage_runner_factory_for,
+    _ZephyrPool,
     coordinator_actor_name,
     pool_job_name,
 )
@@ -79,6 +84,86 @@ ZEPHYR_COORDINATOR_ENDPOINT_ENV = "ZEPHYR_COORDINATOR_ENDPOINT"
 # once on the jobs it launches; iris inherits env vars to child jobs, so the
 # step code itself never mentions the pool.
 ZEPHYR_POOL_ENV = "ZEPHYR_POOL"
+
+
+# Iris serializes a job's declared env vars here at task start, and copies them
+# into every child job it submits. Writing to it is how a host offers its pool
+# to jobs it has not launched yet.
+_IRIS_JOB_ENV = "IRIS_JOB_ENV"
+
+
+def _withdraw_pool_offer(previous: str | None) -> None:
+    """Undo :func:`_offer_pool_to_child_jobs`, restoring the prior value.
+
+    Without this, jobs submitted after the pool shuts down inherit the name of
+    a pool that no longer exists and hang looking for its coordinator.
+    """
+    info = get_job_info()
+    if info is None:
+        return
+    raw = os.environ.get(_IRIS_JOB_ENV, "")
+    declared = json.loads(raw) if raw else {}
+    if previous is None:
+        info.env.pop(ZEPHYR_POOL_ENV, None)
+        declared.pop(ZEPHYR_POOL_ENV, None)
+    else:
+        info.env[ZEPHYR_POOL_ENV] = previous
+        declared[ZEPHYR_POOL_ENV] = previous
+    os.environ[_IRIS_JOB_ENV] = json.dumps(declared)
+
+
+def _offer_pool_to_child_jobs(pool_name: str) -> str | None:
+    """Add ``ZEPHYR_POOL`` to this job's env so children inherit the pool.
+
+    Iris copies a job's declared env into each child it submits, so a host that
+    records the pool here has offered it to every job it launches afterwards —
+    no per-step wiring, and no need to know the pool's name before the job that
+    creates it starts.
+
+    Only jobs submitted after this call inherit it. Outside an Iris job there is
+    nothing to inherit from, so this is a no-op and callers pass ``pool_name``
+    explicitly. Returns the value this replaced, for ``_withdraw_pool_offer``.
+    """
+    info = get_job_info()
+    if info is None:
+        return None
+    previous = info.env.get(ZEPHYR_POOL_ENV)
+    # get_job_info() re-reads the environment unless something has populated its
+    # ContextVar, so update both: the live object if one is cached, and the
+    # serialized copy that the fallback path parses.
+    info.env[ZEPHYR_POOL_ENV] = pool_name
+    raw = os.environ.get(_IRIS_JOB_ENV, "")
+    declared = json.loads(raw) if raw else {}
+    declared[ZEPHYR_POOL_ENV] = pool_name
+    os.environ[_IRIS_JOB_ENV] = json.dumps(declared)
+    logger.info("Offering pool %r to child jobs via %s", pool_name, ZEPHYR_POOL_ENV)
+    return previous
+
+
+class PoolMode(enum.StrEnum):
+    """Where a context's pipelines run.
+
+    The environment can offer a pool — a pool owner exports ``ZEPHYR_POOL`` on
+    the jobs it launches and Iris inherits it down the job tree — so the mode
+    is how a context accepts or refuses that offer.
+
+    - ``AUTO`` (default): run on the offered pool if there is one, else on a
+      pool of this context's own.
+    - ``INHERIT``: require an offered pool and fail fast if none is configured,
+      rather than quietly starting a private one.
+    - ``ISOLATED``: always run on this context's own pool, ignoring anything
+      the environment offers. This is the opt-out for a step that must not
+      share, e.g. one whose stages need resources the pool's workers lack.
+    - ``HOST``: stand up the pool named by ``pool_name`` and own its lifetime,
+      as ``Client.host_actor`` hosts an actor. Entering the context starts the
+      pool and leaving tears it down. Hosting is a separate intent from
+      joining because both end up running on a pool.
+    """
+
+    AUTO = enum.auto()
+    INHERIT = enum.auto()
+    ISOLATED = enum.auto()
+    HOST = enum.auto()
 
 
 # Application errors that should never be retried by the execute() retry loop.
@@ -183,28 +268,44 @@ def _compute_min_tasks_per_worker(
 class ZephyrContext:
     """Execution context for Zephyr pipelines.
 
-    Every pipeline runs on a ``ZephyrPool``. Which pool depends on whether an
-    endpoint is configured.
+    Every pipeline runs on a worker pool; ``mode`` decides which one.
 
-    With no endpoint, execute() builds a one-shot pool sized to the plan, runs
-    the pipeline on it, and tears it down in a ``finally``. A failed attempt is
-    retried up to ``max_execution_retries`` times, each on a fresh pool.
+    Left alone, execute() builds a one-shot pool sized to the plan, runs the
+    pipeline, and tears it down in a ``finally``, retrying up to
+    ``max_execution_retries`` times on a fresh pool each attempt.
 
-    With an endpoint — passed as ``coordinator_endpoint`` or exported as
-    ``ZEPHYR_COORDINATOR_ENDPOINT``, which a plain ``ZephyrContext()`` picks up
-    — execute() submits to that standing pool instead, where the pipeline runs
-    concurrently with other drivers' pipelines and its tasks pack onto whichever
-    workers have free capacity. There is no driver-side retry in that case: the
-    pool is non-preemptible and owns worker recovery.
+    ``mode=PoolMode.HOST`` stands up the pool named by ``pool_name`` instead and
+    owns its lifetime — entering the context starts it, leaving tears it down —
+    and any job that names that pool runs on it. Pipelines then run concurrently
+    and their tasks pack onto whichever workers have free capacity. A pipeline
+    running on someone else's pool gets no driver-side retry: the pool is
+    non-preemptible and owns worker recovery.
 
-    Either way ``map/reduce_task_resources`` give this pipeline's per-task cost.
-    Worker sizing is the one-shot pool's business here, and the ``ZephyrPool``'s
-    when connected.
+    Name the pool in the *entrypoint's* job environment as ``ZEPHYR_POOL``.
+    Iris inherits env vars down the job tree, so every step it launches joins
+    the pool without a line of its own::
+
+        client.submit(JobRequest(
+            name="mypipeline",
+            environment=EnvironmentConfig(env_vars={"ZEPHYR_POOL": "ingest"}),
+        ))
+
+    Setting ``os.environ`` after the pool starts does *not* work — inheritance
+    copies the job's declared environment, fixed before the pool existed. The
+    pool's name is knowable in advance, which is what makes this possible; its
+    address is not.
+
+    Whichever pool a pipeline lands on, ``map/reduce_task_resources`` give its
+    per-task cost. Worker sizing belongs to whoever hosts the pool.
 
     Args:
-        coordinator_endpoint: Endpoint of a standing pool's coordinator (as
-            returned by ``ZephyrPool.start()`` / ``ZephyrPool`` as a context
-            manager). When None, falls back to the ``ZEPHYR_COORDINATOR_ENDPOINT``
+        mode: How this context treats the pool the environment offers; see
+            ``PoolMode``. Defaults to ``AUTO``.
+        pool_name: Name of the pool to host (``mode=HOST``) or to join. When
+            None, falls back to the ``ZEPHYR_POOL`` env var.
+        coordinator_endpoint: Explicit coordinator address, for a driver outside
+            the pool's job tree that cannot derive a sibling it is not a sibling
+            of. When None, falls back to the ``ZEPHYR_COORDINATOR_ENDPOINT``
             env var; when that is also unset, execute() builds its own one-shot
             pool. Settings that describe a pool rather than a pipeline —
             ``max_workers``, ``resources``, ``coordinator_resources``,
@@ -267,15 +368,21 @@ class ZephyrContext:
     heartbeat_timeout: float = 120.0
     max_shard_failures: int = MAX_SHARD_FAILURES
     max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES
+    mode: PoolMode = PoolMode.AUTO
     coordinator_endpoint: str | None = None
-    pool: str | None = None
+    pool_name: str | None = None
     pip_dependency_groups: list[str] | None = None
     job_env_vars: dict[str, str] | None = None
 
     # Shared data staged by put(), uploaded to disk at the start of execute()
     _shared_data: dict[str, Any] = field(default_factory=dict, repr=False)
     # Handle to the coordinator job (for termination on retry/shutdown)
-    _active_pool: "ZephyrPool | None" = field(default=None, repr=False)
+    _active_pool: "_ZephyrPool | None" = field(default=None, repr=False)
+    # Pool created by start(); this context owns its lifetime.
+    _owned_pool: "_ZephyrPool | None" = field(default=None, repr=False)
+    # Whether start() advertised the pool to child jobs, and what it replaced.
+    _offered_pool: bool = field(default=False, repr=False)
+    _prior_pool_offer: str | None = field(default=None, repr=False)
     # Cached describe() of the coordinator we are connected to
     _coordinator_info: CoordinatorInfo | None = field(default=None, repr=False)
     # NOTE: execute calls increment this at the very beginning
@@ -286,18 +393,7 @@ class ZephyrContext:
         if self.client is None:
             self.client = current_client()
 
-        # Three ways to name the pool, most explicit first: an endpoint the
-        # caller already holds, a pool name resolved against the caller's own
-        # job, or either of those from the environment. A pool owner exports
-        # ZEPHYR_POOL on the jobs it launches and their code stays untouched.
-        if self.pool is None:
-            self.pool = os.environ.get(ZEPHYR_POOL_ENV) or None
-        if self.coordinator_endpoint is None:
-            self.coordinator_endpoint = os.environ.get(ZEPHYR_COORDINATOR_ENDPOINT_ENV) or None
-        if self.coordinator_endpoint is None and self.pool is not None:
-            self.coordinator_endpoint = self.client.sibling_actor_endpoint(
-                pool_job_name(self.pool), coordinator_actor_name(self.pool)
-            )
+        self._resolve_pool()
 
         if env_val := os.environ.get("ZEPHYR_MAX_WORKERS"):
             if self.max_workers is None:
@@ -351,6 +447,46 @@ class ZephyrContext:
 
         # make sure each context is unique
         self.name = f"{self.name}-{uuid.uuid4().hex[:8]}"
+
+    def _resolve_pool(self) -> None:
+        """Settle which pool this context runs on, from mode plus configuration.
+
+        Within AUTO/INHERIT the sources are tried most explicit first: an
+        endpoint the caller already holds, a pool name resolved against the
+        caller's own job, then either of those from the environment.
+        """
+        if self.mode is PoolMode.HOST:
+            if not self.pool_name:
+                raise ValueError("mode=HOST needs pool_name: it is how other jobs address the pool")
+            if self.coordinator_endpoint is not None:
+                raise ValueError("mode=HOST creates a pool, so coordinator_endpoint contradicts it")
+            # The pool does not exist until start(); nothing to resolve here.
+            return
+
+        if self.mode is PoolMode.ISOLATED:
+            if self.coordinator_endpoint is not None or self.pool_name is not None:
+                raise ValueError(
+                    "mode=ISOLATED runs on this context's own pool, so passing "
+                    "coordinator_endpoint or pool_name contradicts it"
+                )
+            # Deliberately does not read the environment: an inherited pool is
+            # an offer, and ISOLATED is how a step declines it.
+            return
+
+        if self.pool_name is None:
+            self.pool_name = os.environ.get(ZEPHYR_POOL_ENV) or None
+        if self.coordinator_endpoint is None:
+            self.coordinator_endpoint = os.environ.get(ZEPHYR_COORDINATOR_ENDPOINT_ENV) or None
+        if self.coordinator_endpoint is None and self.pool_name is not None:
+            self.coordinator_endpoint = self.client.sibling_actor_endpoint(
+                pool_job_name(self.pool_name), coordinator_actor_name(self.pool_name)
+            )
+
+        if self.mode is PoolMode.INHERIT and self.coordinator_endpoint is None:
+            raise ValueError(
+                "mode=INHERIT requires a pool: pass pool_name=/coordinator_endpoint=, or set "
+                f"{ZEPHYR_POOL_ENV}/{ZEPHYR_COORDINATOR_ENDPOINT_ENV} on this job"
+            )
 
     def put(self, name: str, obj: Any) -> None:
         """Stage shared data for workers to load on demand.
@@ -494,7 +630,7 @@ class ZephyrContext:
 
         raise AssertionError("retry loop exited without returning or raising")
 
-    def _one_shot_pool(self, plan: PhysicalPlan, attempt: int) -> "ZephyrPool":
+    def _one_shot_pool(self, plan: PhysicalPlan, attempt: int) -> "_ZephyrPool":
         """Build the pool that serves a single dedicated ``execute()`` attempt.
 
         Workers are sized to the plan rather than to a standing capacity: a
@@ -507,7 +643,7 @@ class ZephyrContext:
             limit = os.cpu_count() or 1
         needed_workers = math.ceil(plan.num_shards / self.min_tasks_per_worker)
 
-        return ZephyrPool(
+        return _ZephyrPool(
             client=self.client,
             max_workers=min((limit or MAX_WORKERS_PER_JOB), needed_workers),
             resources=self.resources,
@@ -524,17 +660,81 @@ class ZephyrContext:
             drain_idle_workers=True,
         )
 
-    def shutdown(self) -> None:
-        """Tear down a lingering one-shot pool, if any.
+    def start(self, timeout: float = POOL_START_TIMEOUT) -> str:
+        """Start the pool this context owns, and return its name.
 
-        ``execute()`` already shuts its pool down in a ``finally``, so this is
-        belt-and-suspenders cleanup. A context connected to a ``ZephyrPool``
-        owns no infrastructure, so shutdown() never affects that pool.
+        Entering the context as a ``with`` block does this for you. Give the
+        name to the jobs that should share the pool — as
+        ``ZephyrContext(pool_name=...)``, or by exporting ``ZEPHYR_POOL`` on
+        their job so their code needs no change at all.
+
+        Only the host starts a pool, which is what ``mode=HOST`` declares.
         """
+        if self.mode is not PoolMode.HOST:
+            raise RuntimeError(f"only a mode=HOST context starts a pool; this one is {self.mode}")
+        if self._owned_pool is not None:
+            raise RuntimeError("pool is already started")
+
+        assert self.resources is not None
+        assert self.pool_name is not None
+        pool = _ZephyrPool(
+            client=self.client,
+            name=self.pool_name,
+            max_workers=self.max_workers or _default_max_workers(self.client),
+            resources=self.resources,
+            coordinator_resources=self.coordinator_resources,
+            chunk_storage_prefix=self.chunk_storage_prefix,
+            no_workers_timeout=self.no_workers_timeout,
+            stage_runner_factory=self.stage_runner_factory,
+            heartbeat_timeout=self.heartbeat_timeout,
+            max_shard_failures=self.max_shard_failures,
+            max_shard_infra_failures=self.max_shard_infra_failures,
+            pip_dependency_groups=self.pip_dependency_groups,
+            job_env_vars=self.job_env_vars,
+        )
+        self.coordinator_endpoint = pool.start(timeout=timeout)
+        self._owned_pool = pool
+        self._prior_pool_offer = _offer_pool_to_child_jobs(self.pool_name)
+        self._offered_pool = True
+        return self.pool_name
+
+    def shutdown(self) -> None:
+        """Tear down whatever pool this context owns.
+
+        That is the pool from ``start()``, or a one-shot pool left behind by an
+        interrupted ``execute()`` — which already tears its own down in a
+        ``finally``, so that part is belt-and-suspenders. A context running on
+        someone else's pool owns nothing and shutdown() never touches it.
+        """
+        if self._offered_pool:
+            self._offered_pool = False
+            _withdraw_pool_offer(self._prior_pool_offer)
+            self._prior_pool_offer = None
+
+        owned, self._owned_pool = self._owned_pool, None
+        if owned is not None:
+            self.coordinator_endpoint = None
+            with suppress(Exception):
+                owned.shutdown()
+
         pool, self._active_pool = self._active_pool, None
         if pool is not None:
             with suppress(Exception):
                 pool.shutdown()
+
+    def __enter__(self) -> "ZephyrContext":
+        """Start the owned pool, if this context owns one.
+
+        Any other mode has nothing to bring up — its pipelines either join a
+        pool someone else owns or get a one-shot pool per ``execute()`` — so
+        entering is just a scope that guarantees teardown.
+        """
+        if self.mode is PoolMode.HOST:
+            self.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.shutdown()
 
 
 def _print_plan(original_ops: list, plan: PhysicalPlan) -> None:

@@ -32,36 +32,47 @@ ZephyrContext → ZephyrCoordinator (fray actor) → ZephyrWorker actors (fray a
 
 ### One pool, two lifetimes
 
-Every pipeline runs on a `ZephyrPool` — a fray job (`_run_pool_job`) hosting a
+Every pipeline runs on a pool — a fray job (`_run_pool_job`) hosting a
 coordinator actor plus a worker actor group. There is no second code path:
 
-- **Standing pool**: `with ZephyrPool(name="ingest", ...)` (or `pool.start()`)
-  serves many pipelines until `__exit__` / `pool.shutdown()`. Drivers address it
-  by name — `ZephyrContext(pool="ingest")`, or `ZEPHYR_POOL` in the env, which
-  Iris inherits to child jobs so step code needs no change. Resolution happens
-  in `ZephyrContext.__post_init__` via `Client.sibling_actor_endpoint`: a pool
-  started by an entrypoint is a sibling of the steps that entrypoint launches,
-  and `pool_job_name` / `coordinator_actor_name` make both names computable.
-  Hence the pool's name is required and carries no uuid. A driver outside the
-  job tree passes `coordinator_endpoint=` explicitly.
-- **One-shot pool**: `ZephyrContext.execute()` with no endpoint builds a pool
-  sized to the plan, runs one pipeline on it, and shuts it down in a `finally`.
-  Each `max_execution_retries` attempt gets a fresh pool.
+- **Standing pool**: `ZephyrContext(mode=PoolMode.HOST, pool_name="ingest", ...)`
+  as a `with` block; `__enter__` starts the pool, `__exit__` / `shutdown()`
+  tears it down. `_ZephyrPool` is the implementation type and is not public —
+  `ZephyrContext` is the whole surface.
+- **One-shot pool**: any context not running on someone else's pool builds one
+  sized to the plan per `execute()`, and shuts it down in a `finally`. Each
+  `max_execution_retries` attempt gets a fresh pool.
 
-`run_pipeline` is safe to call concurrently. All per-pipeline coordinator state
-lives in `_PipelineExecution` (registry `_executions[execution_id]`); the worker
-pool (`_worker_states`, `_worker_counters`, …) is shared across them.
-`pull_task` round-robins active executions and dispatches by
-`ZephyrTaskResources.can_fit`. A per-run `fatal_error` fails only that pipeline;
-`abort()`/`_pool_error` fails the whole pool. Finished executions are popped
-from the registry — their counters are folded into one retained snapshot first —
-so late worker reports for them are logged and ignored.
+`PoolMode` decides how a context treats the pool the environment offers: `AUTO`
+joins it if present else runs one-shot, `INHERIT` requires it, `ISOLATED`
+refuses it outright (and rejects `pool_name`/`coordinator_endpoint` as
+contradictions), `HOST` creates it. Resolution happens in
+`ZephyrContext._resolve_pool` via `Client.sibling_actor_endpoint`: a pool hosted
+by an entrypoint is a sibling of the steps that entrypoint launches, and
+`pool_job_name` / `coordinator_actor_name` make both names computable — hence
+the pool name is required and carries no uuid.
 
-Results travel through storage, not the actor return value: `run_pipeline`
-persists its payload (or the `_ensure_picklable_exception`-normalized error) to
-`<chunk_prefix>/<execution_id>/results.pkl`, and the driver reads that. This
-keeps an exception's original type even when the transport cannot carry it,
-which `_NON_RETRYABLE_ERRORS` detection depends on.
+`start()` advertises the pool to child jobs itself, via
+`_offer_pool_to_child_jobs`: it writes `ZEPHYR_POOL` into this job's declared
+env (`JobInfo.env` and its serialized copy `IRIS_JOB_ENV`), which Iris then
+copies into every job submitted afterwards. `shutdown()` restores the previous
+value, or later jobs inherit a dead pool. Only jobs submitted after `start()`
+inherit it, and outside an Iris job it is a no-op.
+
+This works because `get_job_info()` re-reads the environment unless something
+populates its `ContextVar` — nothing does today. The live `JobInfo` is mutated
+too, so it keeps working if that changes.
+
+`run_pipeline` is safe to call concurrently; per-pipeline state lives in
+`_PipelineExecution`, keyed by `execution_id`. A per-run `fatal_error` fails
+only that pipeline, `abort()`/`_pool_error` fails the whole pool. Finished
+executions are popped from the registry, so late reports for them are ignored —
+their counters fold into a cumulative snapshot first, or the totals would lose
+every pipeline that already ended.
+
+Results go to `<chunk_prefix>/<execution_id>/results.pkl`, not the actor return
+value, so an exception keeps its original type through a transport that cannot
+carry it — which `_NON_RETRYABLE_ERRORS` detection depends on.
 
 ### Releasing workers (`drain_idle_workers`)
 

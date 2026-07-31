@@ -1,14 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the shared (long-lived) Zephyr worker pool.
+"""Tests for a standing pool serving several pipelines.
 
-A ``ZephyrPool`` starts one coordinator + worker pool and serves multiple
-pipelines concurrently; drivers submit pipelines by pointing a ``ZephyrContext``
-at the pool's endpoint. These tests use ``LocalClient`` end-to-end so they
-exercise the real ``ZephyrPool.start()`` → ``ZephyrContext.execute()`` →
-``ZephyrPool.shutdown()`` path (the coordinator runs in a background job thread,
-workers are in-process actors).
+End-to-end on ``LocalClient``, so the coordinator runs in a background job
+thread and workers are in-process actors.
 """
 
 import uuid
@@ -21,9 +17,14 @@ from fray.types import ResourceConfig
 from zephyr import counters
 from zephyr.coordinator import _PipelineExecution
 from zephyr.dataset import Dataset
-from zephyr.execution import ZEPHYR_COORDINATOR_ENDPOINT_ENV, ZephyrContext
+from zephyr.execution import (
+    ZEPHYR_COORDINATOR_ENDPOINT_ENV,
+    ZEPHYR_POOL_ENV,
+    PoolMode,
+    ZephyrContext,
+)
 from zephyr.plan import compute_plan
-from zephyr.pool import ZephyrPool, _job_environment
+from zephyr.pool import _job_environment, _ZephyrPool
 from zephyr.shuffle import ListShard
 from zephyr.stage_io import ShardTask, ZephyrWorkerError
 
@@ -35,13 +36,13 @@ def _count_items(x):
 
 @pytest.fixture
 def shared_pool(tmp_path):
-    """A started ZephyrPool (2 workers) and its own LocalClient.
+    """A started _ZephyrPool (2 workers) and its own LocalClient.
 
     Function-scoped and torn down after each test so the serve job's thread
     is released and no coordinator lingers between tests.
     """
     client = LocalClient(max_threads=8)
-    pool = ZephyrPool(
+    pool = _ZephyrPool(
         client=client,
         max_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
@@ -54,7 +55,7 @@ def shared_pool(tmp_path):
     client.shutdown(wait=True)
 
 
-def _connect(pool: ZephyrPool) -> ZephyrContext:
+def _connect(pool: _ZephyrPool) -> ZephyrContext:
     """A separate driver connected to the shared pool (models a step)."""
     return ZephyrContext(
         client=pool.client,
@@ -153,7 +154,7 @@ def test_coordinator_shutdown_fails_in_flight_run_promptly(tmp_path, actor_conte
 def test_pool_shutdown_disconnects(tmp_path):
     """After shutdown() a driver holding the old endpoint cannot reach the coordinator."""
     client = LocalClient(max_threads=8)
-    pool = ZephyrPool(
+    pool = _ZephyrPool(
         client=client,
         max_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
@@ -208,7 +209,7 @@ def test_pool_restart_waits_for_the_new_coordinator(tmp_path):
     """
     client = LocalClient(max_threads=8)
     prefix = tmp_path / "chunks"
-    pool = ZephyrPool(
+    pool = _ZephyrPool(
         client=client,
         max_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
@@ -221,7 +222,6 @@ def test_pool_restart_waits_for_the_new_coordinator(tmp_path):
     endpoint = pool.start()
     try:
         assert endpoint == pool.endpoint
-        # Ready means serving: a pipeline runs without any further waiting.
         driver = ZephyrContext(client=client, resources=ResourceConfig(cpu=1, ram="512m"), coordinator_endpoint=endpoint)
         assert sorted(driver.execute(Dataset.from_list([1, 2]).map(lambda x: x + 1)).results) == [2, 3]
     finally:
@@ -230,14 +230,14 @@ def test_pool_restart_waits_for_the_new_coordinator(tmp_path):
 
 
 def test_pool_context_manager_yields_endpoint_and_tears_down(tmp_path):
-    """`with ZephyrPool(...) as endpoint` starts the pool, yields its endpoint,
+    """`with _ZephyrPool(...) as endpoint` starts the pool, yields its endpoint,
     and tears it down on exit.
 
     A plain ZephyrContext with no endpoint stays a dedicated context (unchanged),
     while one given the endpoint connects to the pool.
     """
     client = LocalClient(max_threads=8)
-    pool = ZephyrPool(
+    pool = _ZephyrPool(
         client=client,
         max_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
@@ -293,7 +293,7 @@ def test_pool_launches_job_with_requested_extras_and_env_vars(tmp_path):
         return original_submit(request, adopt_existing)
 
     client.submit = recording_submit
-    pool = ZephyrPool(
+    pool = _ZephyrPool(
         client=client,
         max_workers=1,
         resources=ResourceConfig(cpu=1, ram="512m"),
@@ -310,10 +310,76 @@ def test_pool_launches_job_with_requested_extras_and_env_vars(tmp_path):
     client.shutdown(wait=True)
 
 
+def test_isolated_mode_declines_a_pool_offered_by_the_environment(tmp_path, monkeypatch):
+    """mode=ISOLATED runs on its own pool even when the env names a shared one.
+
+    A step whose stages need something the shared workers lack has to be able
+    to opt out, and it must not have to know whether a parent set the env.
+    """
+    client = LocalClient(max_threads=8)
+    monkeypatch.setenv(ZEPHYR_COORDINATOR_ENDPOINT_ENV, "local/some-other-pool-coord-0")
+    monkeypatch.setenv(ZEPHYR_POOL_ENV, "some-other-pool")
+
+    ctx = ZephyrContext(
+        client=client,
+        mode=PoolMode.ISOLATED,
+        max_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name=f"isolated-{uuid.uuid4().hex[:8]}",
+    )
+    try:
+        assert ctx.coordinator_endpoint is None
+        assert ctx.pool_name is None
+        assert sorted(ctx.execute(Dataset.from_list([1, 2]).map(lambda x: x * 5)).results) == [5, 10]
+    finally:
+        ctx.shutdown()
+        client.shutdown(wait=True)
+
+
+def test_isolated_mode_rejects_an_explicitly_configured_pool(local_client):
+    """Asking for ISOLATED and naming a pool is a contradiction, not a precedence puzzle."""
+    with pytest.raises(ValueError, match="contradicts"):
+        ZephyrContext(client=local_client, mode=PoolMode.ISOLATED, pool_name="ingest")
+
+
+def test_shared_mode_fails_fast_without_a_pool(local_client, monkeypatch):
+    """mode=INHERIT means 'I expect a pool'; starting a private one would hide a misconfiguration."""
+    monkeypatch.delenv(ZEPHYR_COORDINATOR_ENDPOINT_ENV, raising=False)
+    monkeypatch.delenv(ZEPHYR_POOL_ENV, raising=False)
+    with pytest.raises(ValueError, match="requires a pool"):
+        ZephyrContext(client=local_client, mode=PoolMode.INHERIT, resources=ResourceConfig(cpu=1, ram="512m"))
+
+
+def test_context_start_owns_a_pool_that_other_contexts_join_by_name(tmp_path, monkeypatch):
+    """Entering a mode=HOST context starts its pool; others join it by name."""
+    client = LocalClient(max_threads=8)
+    name = f"ingest-{uuid.uuid4().hex[:8]}"
+    owner = ZephyrContext(
+        client=client,
+        mode=PoolMode.HOST,
+        pool_name=name,
+        max_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name=f"owner-{uuid.uuid4().hex[:8]}",
+    )
+    with owner:
+        assert owner.coordinator_endpoint is not None
+
+        monkeypatch.setenv(ZEPHYR_POOL_ENV, name)
+        joiner = ZephyrContext(client=client, resources=ResourceConfig(cpu=1, ram="512m"))
+        assert joiner.coordinator_endpoint == owner.coordinator_endpoint
+        assert sorted(joiner.execute(Dataset.from_list([3, 4]).map(lambda x: x + 1)).results) == [4, 5]
+
+    assert owner.coordinator_endpoint is None
+    client.shutdown(wait=True)
+
+
 def test_env_endpoint_is_picked_up_by_a_plain_context(tmp_path, monkeypatch):
     """A context with no explicit endpoint connects to the pool named in the env var."""
     client = LocalClient(max_threads=8)
-    pool = ZephyrPool(
+    pool = _ZephyrPool(
         client=client,
         max_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),

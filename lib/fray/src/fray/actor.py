@@ -52,11 +52,7 @@ class ActorContext:
 
 
 class HostedActor:
-    """An actor hosted in the current process. Holds handle + cleanup.
-
-    The actor's address is not returned here: callers derive it with
-    ``Client.actor_endpoint`` from the job that hosts it.
-    """
+    """An actor hosted in the current process. Holds handle + cleanup."""
 
     def __init__(self, handle: ActorHandle, stop: Any = None):
         self.handle = handle
