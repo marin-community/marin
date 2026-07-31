@@ -19,6 +19,7 @@ sent to the coordinator via heartbeats for aggregation into stage stats.
 import enum
 import logging
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -26,9 +27,37 @@ from typing import ClassVar
 
 from finelog.client import LogClient, Table
 from iris.client import get_iris_ctx
+from iris.cluster.client.job_info import get_job_info
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
+from rigging.timing import RateLimiter
 
 logger = logging.getLogger(__name__)
+
+
+def _push_iris_task_status(
+    rate_limiter: RateLimiter,
+    build_md: Callable[[], tuple[str, str]],
+) -> None:
+    """Push ``(detail, summary)`` markdown to the active Iris task's status, if any.
+
+    No-op when not running inside an Iris task or when ``rate_limiter`` declines
+    this tick. ``build_md`` is invoked lazily after the gating checks so the
+    formatting work is skipped on the no-op path.
+    """
+    iris_client = ctx.client if (ctx := get_iris_ctx()) is not None else None
+    if iris_client is None:
+        return
+    job_info = get_job_info()
+    if job_info is None:
+        return
+    if not rate_limiter.should_run():
+        return
+    detail_md, summary_md = build_md()
+    try:
+        iris_client.report_task_status_text(job_info.task_id, job_info.attempt_id, detail_md, summary_md)
+    except Exception:
+        logger.warning("Failed to report task status text to Iris controller", exc_info=True)
+
 
 ZEPHYR_STAGE_STATS_NAMESPACE = "zephyr.stage"
 ZEPHYR_WORKER_STATS_NAMESPACE = "zephyr.worker"

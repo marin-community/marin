@@ -46,13 +46,15 @@ ctx.execute(pipeline)
 - `ZephyrContext(client=LocalClient())` — explicit local backend (testing)
 - `ctx.execute(pipeline)` — runs the pipeline; returns a `ZephyrExecutionResult(results, counters)`
 
-Each `execute()` submits its own coordinator + worker job and tears it down when
-the pipeline finishes.
+Each `execute()` starts a worker pool sized to the pipeline, runs it, and tears
+it down when the pipeline finishes. Workers are released as the final stage
+drains, so capacity goes back to the cluster while stragglers finish.
 
-**Shared pool (`ZephyrPool` — one pool, many pipelines):**
+**Standing pool (`ZephyrPool` — one pool, many pipelines):**
 
-A `ZephyrPool` starts a single long-lived coordinator + worker pool once, then
-serves many pipelines against it — concurrently, and from other drivers/steps.
+When many small pipelines each pay that startup cost, start the pool once
+instead. A `ZephyrPool` serves many pipelines against one worker pool —
+concurrently, and from other drivers/steps.
 Open it as a `with` block to get the coordinator endpoint; the pool is torn
 down when the block exits (including on exception):
 
@@ -69,7 +71,7 @@ with ZephyrPool(max_workers=200, resources=ResourceConfig(cpu=2, ram="8g"), name
 
 `ZephyrPool.start()` / `shutdown()` are also available directly if you'd rather
 manage the pool's lifetime yourself. Plain `ZephyrContext(...).execute(pipeline)`
-with no endpoint is unchanged — a dedicated coordinator per pipeline, as before.
+with no endpoint is unchanged — its own pool per pipeline, as before.
 
 Connecting drivers can pick the endpoint up from the environment instead of a
 constructor argument — set `ZEPHYR_COORDINATOR_ENDPOINT` on a step's job (e.g.

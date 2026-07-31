@@ -9,8 +9,8 @@ import threading
 import pytest
 from prometheus_client import REGISTRY, generate_latest
 from zephyr import counters
+from zephyr.coordinator import ZephyrCoordinator, ZephyrExecutionResult, _PipelineExecution
 from zephyr.counters import ScopedCounters
-from zephyr.execution import ZephyrCoordinator, ZephyrExecutionResult, _PipelineExecution
 from zephyr.runners import _InProcessWorkerContext
 from zephyr.stage_io import ZephyrTaskResources
 from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot, _worker_ctx_var
@@ -37,6 +37,7 @@ def _make_coordinator(
     """
     coord = ZephyrCoordinator.__new__(ZephyrCoordinator)
     coord._lock = threading.Lock()
+    coord._retired_counters = []
     run = _PipelineExecution(
         execution_id="test-exec",
         map_cost=ZephyrTaskResources(cpu=1.0, memory=0),

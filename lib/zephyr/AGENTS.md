@@ -30,26 +30,50 @@ Actor-based, pull-based task distribution. Workers are persistent across stages.
 ZephyrContext → ZephyrCoordinator (fray actor) → ZephyrWorker actors (fray actor_group)
 ```
 
-### Dedicated vs shared
+### One pool, two lifetimes
 
-- **Dedicated** (default): each `ctx.execute()` submits a fresh coordinator job
-  (`_run_coordinator_job`) that runs one pipeline and tears everything down.
-- **Shared**: `ZephyrPool` owns the pool. `with ZephyrPool(...) as endpoint:`
-  (or `pool.start()` directly) submits a long-lived coordinator job
-  (`_run_shared_coordinator_job`) with a fixed worker pool and publishes the
-  coordinator's actor endpoint; `__exit__` / `pool.shutdown()` tears it down.
-  `ZephyrContext` stays a pipeline driver only — dedicated (no endpoint) or
-  connecting. Drivers connect with `ZephyrContext(coordinator_endpoint=...)` —
-  or by setting `ZEPHYR_COORDINATOR_ENDPOINT` in the driver job's env (read as a
-  fallback in `ZephyrContext.__post_init__`); their `execute()` calls submit
-  pipelines via `run_pipeline` RPC, which the coordinator runs **concurrently**.
-  All per-pipeline coordinator state lives in `_PipelineExecution` (registry
-  `_executions[execution_id]`); the worker pool (`_worker_states`,
-  `_worker_counters`, …) is shared. `pull_task` round-robins active executions
-  and dispatches by `ZephyrTaskResources.can_fit`. A per-run `fatal_error`
-  fails only that pipeline; `abort()`/`_pool_error` fails the whole pool.
-  Finished executions are popped from the registry (shared mode) so late
-  worker reports for them are logged and ignored.
+Every pipeline runs on a `ZephyrPool` — a fray job (`_run_pool_job`) hosting a
+coordinator actor plus a worker actor group. There is no second code path:
+
+- **Standing pool**: `with ZephyrPool(...) as endpoint:` (or `pool.start()`)
+  publishes the coordinator's actor endpoint and serves many pipelines until
+  `__exit__` / `pool.shutdown()`. Drivers connect with
+  `ZephyrContext(coordinator_endpoint=...)`, or by setting
+  `ZEPHYR_COORDINATOR_ENDPOINT` in the driver job's env (read as a fallback in
+  `ZephyrContext.__post_init__`).
+- **One-shot pool**: `ZephyrContext.execute()` with no endpoint builds a pool
+  sized to the plan, runs one pipeline on it, and shuts it down in a `finally`.
+  Each `max_execution_retries` attempt gets a fresh pool.
+
+`run_pipeline` is safe to call concurrently. All per-pipeline coordinator state
+lives in `_PipelineExecution` (registry `_executions[execution_id]`); the worker
+pool (`_worker_states`, `_worker_counters`, …) is shared across them.
+`pull_task` round-robins active executions and dispatches by
+`ZephyrTaskResources.can_fit`. A per-run `fatal_error` fails only that pipeline;
+`abort()`/`_pool_error` fails the whole pool. Finished executions are popped
+from the registry — their counters are folded into one retained snapshot first —
+so late worker reports for them are logged and ignored.
+
+Results travel through storage, not the actor return value: `run_pipeline`
+persists its payload (or the `_ensure_picklable_exception`-normalized error) to
+`<chunk_prefix>/<execution_id>/results.pkl`, and the driver reads that. This
+keeps an exception's original type even when the transport cannot carry it,
+which `_NON_RETRYABLE_ERRORS` detection depends on.
+
+### Releasing workers (`drain_idle_workers`)
+
+A one-shot pool sets `drain_idle_workers`; a standing pool does not. When set,
+`pull_task` hands `SHUTDOWN` to a worker that finds no dispatchable task, but
+only once `_worker_is_releasable_locked` agrees: the registry is non-empty,
+every active execution is on its last task-producing stage with an empty queue,
+and this worker holds nothing in flight that could be requeued onto it. That
+shrinks the pool through the last stage's tail while stragglers finish.
+
+The non-empty check is load-bearing — workers boot before the driver submits, so
+`all()` over an empty registry is vacuously true and would retire the whole pool
+before its first task is queued. For the same reason `_check_worker_group` keys
+off outstanding shards: with workers releasing themselves, a terminal worker job
+is only a crash while shards remain.
 
 ### Data flow between stages
 

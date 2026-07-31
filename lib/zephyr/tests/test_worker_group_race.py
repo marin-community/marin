@@ -11,21 +11,26 @@ The race (before fix):
 4. worker_group.is_done() returns True (workers exited cleanly!)
 5. Coordinator calls abort("Worker job terminated permanently...")
 
-Fix: _check_worker_group skips when all shards are completed.
+Fix: _check_worker_group skips while no shard is outstanding.
+
+Only a draining pool can hit this — its workers exit once the last stage
+drains. A standing pool's workers live until coordinator shutdown, so there a
+terminated worker job really is a crash.
 """
 
 import threading
 import time
 from unittest.mock import MagicMock
 
-from conftest import _TEST_EXECUTION_ID, _TEST_TASK_COST, start_test_stage
+from conftest import _TEST_EXECUTION_ID, _TEST_TASK_COST, _make_test_coordinator, start_test_stage
 from zephyr.shuffle import ListShard
 from zephyr.stage_io import ShardTask, TaskResult
 from zephyr.worker_context import CounterSnapshot
 
 
-def test_check_worker_group_skips_after_completed_stage(coordinator):
+def test_check_worker_group_skips_after_completed_stage(tmp_path, actor_context):
     """Worker group finishing after completed stage must not abort. #4117."""
+    coordinator = _make_test_coordinator(tmp_path, drain_idle_workers=True)
     mock_group = MagicMock()
     mock_group.is_done.return_value = True
     coordinator.set_worker_group(mock_group)
@@ -76,8 +81,9 @@ def test_check_worker_group_still_aborts_mid_stage(coordinator):
     assert "Worker job terminated permanently" in coordinator.get_fatal_error()
 
 
-def test_coordinator_loop_no_abort_during_result_collection(coordinator):
+def test_coordinator_loop_no_abort_during_result_collection(tmp_path, actor_context):
     """Background loop must not abort during post-stage result collection. #4117."""
+    coordinator = _make_test_coordinator(tmp_path, drain_idle_workers=True)
     mock_group = MagicMock()
     call_count = 0
 

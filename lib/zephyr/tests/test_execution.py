@@ -16,36 +16,41 @@ from unittest.mock import MagicMock
 
 import cloudpickle
 import pytest
-from conftest import _TEST_EXECUTION_ID, _TEST_TASK_COST, _TEST_WORKER_AVAILABLE, start_test_stage
+from conftest import (
+    _TEST_EXECUTION_ID,
+    _TEST_TASK_COST,
+    _TEST_WORKER_AVAILABLE,
+    _make_test_coordinator,
+    start_test_stage,
+)
 from fray.actor import ActorContext
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from prometheus_client import REGISTRY
 from rigging import telltale
 from zephyr import counters
-from zephyr.dataset import Dataset
-from zephyr.execution import (
-    _NON_RETRYABLE_ERRORS,
+from zephyr.coordinator import (
     MAX_SHARD_FAILURES,
     MAX_SHARD_INFRA_FAILURES,
     ZEPHYR_PROGRESS_TIME_METRIC,
     CoordinatorUnreachable,
     PullStatus,
     WorkerState,
-    ZephyrContext,
     ZephyrCoordinator,
-    ZephyrWorker,
-    ZephyrWorkerError,
-    _ensure_picklable_exception,
 )
+from zephyr.dataset import Dataset
+from zephyr.execution import _NON_RETRYABLE_ERRORS, ZephyrContext
 from zephyr.plan import compute_plan
 from zephyr.shuffle import ListShard
 from zephyr.stage_io import (
     PickleDiskChunk,
     ShardTask,
     TaskResult,
+    ZephyrWorkerError,
+    _ensure_picklable_exception,
 )
 from zephyr.stats import ZEPHYR_STAGE_BYTES_PROCESSED_KEY, ZEPHYR_STAGE_ITEM_COUNT_KEY
+from zephyr.worker import ZephyrWorker
 from zephyr.worker_context import CounterEntry, CounterSnapshot, zephyr_worker_ctx
 
 
@@ -109,7 +114,7 @@ def test_propagates_user_counters(zephyr_ctx):
             captured.append(record.getMessage())
 
     handler = _Capture(level=logging.INFO)
-    target_logger = logging.getLogger("zephyr.execution")
+    target_logger = logging.getLogger("zephyr.coordinator")
     prior_level = target_logger.level
     target_logger.addHandler(handler)
     target_logger.setLevel(logging.INFO)
@@ -343,30 +348,60 @@ def _make_task(stage_name: str = "test", shard_idx: int = 0) -> ShardTask:
     )
 
 
-def test_pull_task_returns_shutdown_on_last_stage_tail(coordinator):
-    """During the last stage's tail (queue drained, in-flight tasks still
-    finishing), a fresh slot's ``pull_task`` must return SHUTDOWN so the worker
-    breaks its outer loop instead of respawning slots that would just get
-    killed again — that's the original hot-spin bug.
+def test_draining_pool_releases_idle_workers_during_the_last_stage_tail(tmp_path, actor_context):
+    """A pool that takes no more pipelines shrinks as the last stage drains.
+
+    Once the final stage's queue is empty, a worker holding nothing in flight
+    gets SHUTDOWN so its capacity returns to the cluster while stragglers on
+    other workers finish.
     """
-    start_test_stage(coordinator, [_make_task("tail")], stage_name="tail", is_last_stage=True)
+    coordinator = _make_test_coordinator(tmp_path, drain_idle_workers=True)
+    try:
+        start_test_stage(coordinator, [_make_task("tail")], stage_name="tail", is_last_stage=True)
 
-    coordinator.register_worker("worker-0", MagicMock())
-    status, _work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
-    assert status == PullStatus.RUN_TASK  # drain the queue
+        coordinator.register_worker("worker-0", MagicMock())
+        status, _work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+        assert status == PullStatus.RUN_TASK  # drains the queue, worker-0 now busy
 
-    coordinator.register_worker("worker-1", MagicMock())
-    status, _work = coordinator.pull_task("worker-1", _TEST_WORKER_AVAILABLE)
-    assert status == PullStatus.SHUTDOWN
+        coordinator.register_worker("worker-1", MagicMock())
+        status, _work = coordinator.pull_task("worker-1", _TEST_WORKER_AVAILABLE)
+        assert status == PullStatus.SHUTDOWN
+
+        # worker-0 still owns an in-flight shard that could be requeued onto it,
+        # so it must stay alive even though the queue is empty.
+        status, _work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+        assert status == PullStatus.NO_WORK_BACKOFF
+    finally:
+        coordinator.shutdown()
 
 
-def test_pull_task_returns_no_work_backoff_mid_non_last_stage(coordinator):
-    """Mid-stage on a non-last stage with the queue drained but in-flight tasks
-    running: NO_WORK_BACKOFF, not SHUTDOWN or STAGE_COMPLETED — the slot must
-    stay alive and keep polling so it can pick up requeued tasks or the eventual
-    stage-end signal.
+def test_draining_pool_keeps_workers_before_the_last_stage(tmp_path, actor_context):
+    """Draining must not release workers at an intermediate stage boundary.
+
+    The next stage needs them, and re-acquiring workers costs the startup time
+    a pool exists to amortize.
     """
-    start_test_stage(coordinator, [_make_task("mid")], stage_name="mid", is_last_stage=False)
+    coordinator = _make_test_coordinator(tmp_path, drain_idle_workers=True)
+    try:
+        start_test_stage(coordinator, [_make_task("mid")], stage_name="mid", is_last_stage=False)
+
+        coordinator.register_worker("worker-0", MagicMock())
+        assert coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)[0] == PullStatus.RUN_TASK
+
+        coordinator.register_worker("worker-1", MagicMock())
+        status, _work = coordinator.pull_task("worker-1", _TEST_WORKER_AVAILABLE)
+        assert status == PullStatus.NO_WORK_BACKOFF
+    finally:
+        coordinator.shutdown()
+
+
+def test_pull_task_backs_off_instead_of_shutting_a_worker_down(coordinator):
+    """Without draining, a drained queue never ends a worker.
+
+    A standing pool keeps its workers for the next pipeline, so even the last
+    stage returns NO_WORK_BACKOFF rather than SHUTDOWN.
+    """
+    start_test_stage(coordinator, [_make_task("mid")], stage_name="mid", is_last_stage=True)
 
     coordinator.register_worker("worker-0", MagicMock())
     status, _work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
@@ -377,26 +412,11 @@ def test_pull_task_returns_no_work_backoff_mid_non_last_stage(coordinator):
     assert status == PullStatus.NO_WORK_BACKOFF
 
 
-def test_pull_task_returns_stage_completed_after_mark_stage_complete(coordinator):
-    """At a non-last stage boundary (after ``_mark_stage_complete``), pull_task
-    returns STAGE_COMPLETED so slots tear down and the worker re-pools at the
-    size required by the next stage.
-    """
-    run = start_test_stage(coordinator, [_make_task("mid")], stage_name="mid", is_last_stage=False)
-
-    coordinator.register_worker("worker-0", MagicMock())
-    coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)  # drain the queue
-    coordinator._mark_stage_complete(run)
-
-    status, _work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
-    assert status == PullStatus.STAGE_COMPLETED
-
-
 def test_pull_task_returns_shutdown_on_coordinator_shutdown(coordinator):
     """When the coordinator's shutdown_event is set, all pull_task calls return
     SHUTDOWN regardless of stage state.
     """
-    start_test_stage(coordinator, [_make_task("any")], stage_name="any", is_last_stage=False)
+    start_test_stage(coordinator, [_make_task("any")], stage_name="any")
     coordinator._shutdown_event.set()
 
     coordinator.register_worker("worker-0", MagicMock())
@@ -1002,16 +1022,16 @@ def test_fresh_actors_per_execute(integration_client, tmp_path):
     results = zctx.execute(ds).results
     assert sorted(results) == [2, 3, 4]
 
-    # After execute(): coordinator job is torn down
-    assert zctx._coordinator_job is None
+    # After execute(): the one-shot pool is torn down
+    assert zctx._active_pool is None
     assert zctx._pipeline_id == 0
 
-    # Can execute again (creates fresh coordinator job)
+    # Can execute again (creates a fresh pool)
     ds2 = Dataset.from_list([10, 20]).map(lambda x: x * 2)
     results2 = zctx.execute(ds2).results
     assert sorted(results2) == [20, 40]
 
-    assert zctx._coordinator_job is None
+    assert zctx._active_pool is None
     assert zctx._pipeline_id == 1
 
 
@@ -1297,7 +1317,7 @@ def test_stage_index_correct_with_join(local_client, tmp_path):
     original_start_stage = ZephyrCoordinator._start_stage
 
     def recording_start_stage(self, run, stage_name, current_stage_index, tasks, is_last_stage=False):
-        original_start_stage(self, run, stage_name, current_stage_index, tasks, is_last_stage)
+        original_start_stage(self, run, stage_name, current_stage_index, tasks, is_last_stage=is_last_stage)
         stage_calls.append((stage_name, run.current_stage_index))
 
     ctx = ZephyrContext(

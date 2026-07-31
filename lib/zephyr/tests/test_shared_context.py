@@ -19,18 +19,13 @@ from conftest import _TEST_TASK_COST, _make_test_coordinator
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from zephyr import counters
+from zephyr.coordinator import _PipelineExecution
 from zephyr.dataset import Dataset
-from zephyr.execution import (
-    ZEPHYR_COORDINATOR_ENDPOINT_ENV,
-    ZephyrContext,
-    ZephyrPool,
-    ZephyrWorkerError,
-    _job_environment,
-    _PipelineExecution,
-)
+from zephyr.execution import ZEPHYR_COORDINATOR_ENDPOINT_ENV, ZephyrContext
 from zephyr.plan import compute_plan
+from zephyr.pool import ZephyrPool, _job_environment
 from zephyr.shuffle import ListShard
-from zephyr.stage_io import ShardTask
+from zephyr.stage_io import ShardTask, ZephyrWorkerError
 
 
 def _count_items(x):
@@ -224,10 +219,10 @@ def test_pool_restart_waits_for_the_new_coordinator(tmp_path):
 
     endpoint = pool.start()
     try:
-        # Two attempt directories, so the second start could not have returned
-        # on the first attempt's endpoint file. LocalClient reuses the endpoint
-        # name across restarts, so only the file layout shows the difference.
-        assert len(list(prefix.glob(f"{pool.name}-shared-*"))) == 2
+        # A second attempt, so start() published to its own endpoint file
+        # rather than returning on the dead attempt's contents. LocalClient
+        # reuses the endpoint name across restarts, so the count is the tell.
+        assert pool._start_count == 2
 
         driver = ZephyrContext(client=client, resources=ResourceConfig(cpu=1, ram="512m"), coordinator_endpoint=endpoint)
         assert sorted(driver.execute(Dataset.from_list([1, 2]).map(lambda x: x + 1)).results) == [2, 3]
@@ -310,7 +305,7 @@ def test_pool_launches_job_with_requested_extras_and_env_vars(tmp_path):
         job_env_vars={"JAX_PLATFORMS": "cpu"},
     )
     with pool:
-        serve_request = next(r for r in submitted if r.name.endswith("-shared"))
+        serve_request = next(r for r in submitted if r.name.endswith("-pool"))
         assert serve_request.environment is not None
         assert serve_request.environment.extras == ["datakit"]
         assert serve_request.environment.env_vars["JAX_PLATFORMS"] == "cpu"

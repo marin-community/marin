@@ -14,9 +14,10 @@ from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from zephyr._test_helpers import SampleDataclass
 from zephyr.dataset import Dataset, FilterOp, GlobSource, MapOp, WindowOp, resolve_glob
-from zephyr.execution import ZephyrContext, ZephyrWorkerError
+from zephyr.execution import ZephyrContext
 from zephyr.expr import col
 from zephyr.readers import DEFAULT_FILE_PATH_COLUMN, InputFileSpec, load_file, load_parquet
+from zephyr.stage_io import ZephyrWorkerError
 from zephyr.writers import write_parquet_file
 
 
