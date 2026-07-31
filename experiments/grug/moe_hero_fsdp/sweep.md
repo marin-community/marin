@@ -1,7 +1,8 @@
 # FSDP MoE Hero — model-size sweep
 
 Sweep over model width, fixing the attention schedule per size: the local/global KV-head split and
-exactly which (1-indexed) layers run full "global" attention (all others use the sliding window). The
+exactly which (1-indexed) layers run full "global" attention (all others use a 1024-token sliding
+window). The
 global-layer sets are explicit because they don't all reduce to a single `global_every` stride — e.g.
 `d1280` is global on 6, 12, and its final layer 14.
 
@@ -46,4 +47,6 @@ MoE structure and held constant across the sweep:
 
 - MoE: **128 experts, top-4, 2 shared experts**; routed and shared expert intermediate width = `hidden / 2`.
 - head_dim = 128; vocab = 128256; untied embeddings (embed and lm_head counted separately).
+- Local (sliding-window) layers use a **1024-token window**; sequence length = 8192. The window
+  affects attention FLOPs only, not parameter counts, so the params/tokens/steps columns are unchanged.
 - Param counts omit RMSNorm scales, GatedNorm, and SConv weights (< ~1% combined).
