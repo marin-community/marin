@@ -299,6 +299,98 @@ function compactRetainedForm(detail: FitDetail, policyClass: PolicyClass): Model
   };
 }
 
+function crsPlusForm(detail: FitDetail, policyClass: PolicyClass): ModelForm {
+  const chips: FormulaChip[] = [];
+  for (const [label, symbol, keys] of [
+    ["saturation scale", String.raw`T_s`, ["saturation_epochs"]],
+    ["Weibull shape", String.raw`p`, ["power"]],
+    ["late-epoch value", String.raw`\eta`, ["eta"]],
+    ["forgetting rate", String.raw`\lambda`, ["lambda"]],
+    ["overload onset", String.raw`\tau`, ["tau"]],
+    ["ridge", String.raw`\lambda_{L2}`, ["l2"]],
+  ] as const) {
+    if (policyClass === "single_phase" && (label === "late-epoch value" || label === "forgetting rate")) continue;
+    const chip = fittedChip(detail, label, symbol, ...keys);
+    if (chip) chips.push(chip);
+  }
+  return {
+    topLevelTex: String.raw`\widehat Y_b(w)=b_0-\sum_i a_iS(x_i)-\sum_C A_CS\!\left(\tfrac{1}{|\mathcal C|}\!\sum_{i\in C}x_i\right)+c\sum_i[q_i-1]_+^2+\sum_C B_C\!\sum_{i\in C}[q_i-\tau]_+^2`,
+    topLevelExplanation:
+      "Compact retained state with two structural additions: a family complementarity credit, and repetition harm priced per family above an epoch threshold rather than through one global scalar.",
+    layers: [
+      retainedExposureLayer(policyClass),
+      {
+        label: "02 / Literal replay",
+        title: "Separate exposure ledger",
+        tex: String.raw`q_i=e_i^{(0)}+e_i^{(1)}`,
+        explanation:
+          "Repetition uses actual simulated epochs, not the retained-state coordinate. In this swarm the proportional policy gives every bucket 0.905 epochs, so oversampling a small corpus drives q_i far above one.",
+      },
+      {
+        label: "03 / Learning response",
+        title: "Saturation in epochs",
+        tex: String.raw`S(x)=1-\exp\!\left[-(x/T_s)^p\right],\qquad a_i\ge 0,\ A_C\ge 0`,
+        explanation:
+          "The saturation scale is written in simulated epochs so that it is comparable across scales. Bucket and family channels share it.",
+      },
+      {
+        label: "04 / Repetition harm",
+        title: "Global and family channels",
+        tex: String.raw`R(q)=c\sum_i[q_i-1]_+^2+\sum_C B_C\!\sum_{i\in C}[q_i-\tau]_+^2,\qquad c,B_C\ge 0`,
+        explanation:
+          "Setting every A_C and B_C to zero recovers compact retained state exactly, and the nonnegative head can select zero, so the added blocks have to earn their place.",
+      },
+    ],
+    chips,
+  };
+}
+
+function crsBoundedForm(detail: FitDetail, policyClass: PolicyClass): ModelForm {
+  const chips: FormulaChip[] = [];
+  for (const [label, symbol, keys] of [
+    ["Weibull rate", String.raw`\rho`, ["rho"]],
+    ["Weibull shape", String.raw`p`, ["power"]],
+    ["late-epoch value", String.raw`\eta`, ["eta"]],
+    ["forgetting rate", String.raw`\lambda`, ["lambda"]],
+    ["deficit floor", String.raw`L_{\min}`, ["floor"]],
+    ["ridge", String.raw`\lambda_{L2}`, ["l2"]],
+  ] as const) {
+    if (policyClass === "single_phase" && (label === "late-epoch value" || label === "forgetting rate")) continue;
+    const chip = fittedChip(detail, label, symbol, ...keys);
+    if (chip) chips.push(chip);
+  }
+  return {
+    topLevelTex: String.raw`\widehat Y_b(w)=L_{\min}+\exp\!\left[b_0-\sum_i a_iS(x_i)+c\sum_i[q_i-1]_+^2\right]`,
+    topLevelExplanation:
+      "The same design block as compact retained state, fit on the log of reducible loss instead of on BPB. Prediction is the floor plus a positive deficit, so no policy can be scored below the floor however far the optimizer walks outside the panel.",
+    layers: [
+      retainedExposureLayer(policyClass),
+      {
+        label: "02 / Literal replay",
+        title: "Separate exposure ledger",
+        tex: String.raw`q_i=e_i^{(0)}+e_i^{(1)}`,
+        explanation:
+          "Repetition uses actual simulated epochs, not the retained-state coordinate, exactly as in compact retained state.",
+      },
+      {
+        label: "03 / Learning response",
+        title: "Shared Weibull saturation",
+        tex: String.raw`S(x)=1-\exp\!\left[-(\rho x)^p\right],\qquad a_i\ge 0,\ c\ge 0`,
+        explanation:
+          "Shape and ridge are cross-validated on the fit panel over 90 candidates, the same protocol the other models use, so every fitted quantity is identified by that panel and the metrics here are comparable.",
+      },
+      {
+        label: "04 / Bounded link",
+        title: "Multiplicative in reducible loss",
+        tex: String.raw`\eta=\log\!\left(Y-L_{\min}\right),\qquad L_{\min}=0.95\min_b Y_b`,
+        explanation:
+          "Coefficients act on log reducible loss, so each bucket contributes a fractional reduction rather than an additive BPB credit. An additive head can predict below any entropy floor, which is how out-of-support optimism arises; this one cannot. The floor is fixed at 0.95 of the smallest observed target rather than cross-validated, because cross-validation would tune it against in-support fit.",
+      },
+    ],
+    chips,
+  };
+}
+
 function bucketFamilyGrpForm(detail: FitDetail, policyClass: PolicyClass): ModelForm {
   const chips: FormulaChip[] = [];
   for (const [label, symbol, keys] of [
@@ -599,7 +691,9 @@ export function modelForm(
   if (modelId === "separate_heads") return separateHeadsForm(detail, policyClass);
   if (modelId === "compact_retained_state") return compactRetainedForm(detail, policyClass);
   if (modelId === "bucket_family_grp") return bucketFamilyGrpForm(detail, policyClass);
-  if (modelId === "hierarchical_phase_bucket_replay") return hierarchicalPhaseReplayForm(detail, policyClass);
+  if (modelId === "hpr_band" || modelId === "hierarchical_phase_bucket_replay") return hierarchicalPhaseReplayForm(detail, policyClass);
+  if (modelId === "crs_plus") return crsPlusForm(detail, policyClass);
+  if (modelId === "crs_bounded") return crsBoundedForm(detail, policyClass);
   if (modelId === "bucket_family_power_separate_heads") return powerSeparateHeadsGrpForm(detail, policyClass);
   if (modelId === "bucket_family_power_separate_heads_family_onset") {
     return powerSeparateHeadsGrpForm(detail, policyClass, true);

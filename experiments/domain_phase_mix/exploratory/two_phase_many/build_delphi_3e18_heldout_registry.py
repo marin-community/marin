@@ -50,8 +50,10 @@ EXPLICIT_HELDOUT_TAGS = (
     "delphi-3e18-frontier-phase-fiber",
     "delphi-3e18-hpr-optimum-validation",
     "delphi-3e18-frontier-random-phase-population",
+    "delphi-3e18-aggressive-phase-asymmetry",
     "delphi-3e18-compact-optimum-path-validation",
     "delphi-3e18-compact-sub280-optimum-validation",
+    "delphi-corrective-hpr-280-decomposed",
 )
 OPTIONAL_EXPLICIT_HELDOUT_TAGS = ("delphi-3e18-hybrid-phase-ordering-validation",)
 EVAL_FILTER: dict[str, object] = {"config.checkpoint_path": {"$regex": "_3e18[-_]"}}
@@ -66,6 +68,7 @@ HPR_3E18_PANEL = REFERENCE_OUTPUTS / "hpr_3e18_to_3e18_optimum_validation_panel_
 RANDOM_PHASE_PANEL = (
     REFERENCE_OUTPUTS / "delphi_3e18_frontier_random_phase_population_20260720/launcher_source_panel.csv"
 )
+AGGRESSIVE_PHASE_PANEL = REFERENCE_OUTPUTS / "delphi_3e18_aggressive_phase_asymmetry_20260722/launcher_source_panel.csv"
 HYBRID_PHASE_PANEL = REFERENCE_OUTPUTS / "delphi_3e18_hybrid_phase_ordering_panel_20260720/launcher_source_panel.csv"
 COMPACT_OPTIMUM_PATH_PANEL = (
     REFERENCE_OUTPUTS / "delphi_compact_optimum_path_validation_panel_20260721/launcher_source_panel.csv"
@@ -73,6 +76,7 @@ COMPACT_OPTIMUM_PATH_PANEL = (
 COMPACT_SUB280_OPTIMUM_PANEL = (
     REFERENCE_OUTPUTS / "delphi_compact_sub280_optimum_validation_panel_20260721/launcher_source_panel.csv"
 )
+CORRECTIVE_HPR_280_PANEL = REFERENCE_OUTPUTS / "corrective_hpr_280_decomposed_panel_20260727/launcher_source_panel.csv"
 
 TABLE9_KEYS = (
     "olmo_base_easy/table9_51_component_macro_bpb",
@@ -151,6 +155,8 @@ EVAL_ATTEMPT_FIELDS = (
     "source_training_run_id",
     "checkpoint_path",
     "table9_macro_bpb",
+    "table9_metric_source",
+    "table9_persisted_result_path",
     "eval_group",
 )
 
@@ -201,6 +207,8 @@ class PanelManifestSpec:
     path: Path
     run_name_prefix: str
     use_manifest_run_order: bool = False
+    use_candidate_id_as_run_name: bool = False
+    run_name_suffix: str = ""
 
 
 class FieldbookMatch(TypedDict):
@@ -234,6 +242,13 @@ PANEL_MANIFEST_SPECS = (
         use_manifest_run_order=True,
     ),
     PanelManifestSpec(
+        tag="delphi-3e18-aggressive-phase-asymmetry",
+        training_series="delphi_3e18_aggressive_phase_asymmetry_20260722",
+        path=AGGRESSIVE_PHASE_PANEL,
+        run_name_prefix="agphase",
+        use_manifest_run_order=True,
+    ),
+    PanelManifestSpec(
         tag="delphi-3e18-compact-optimum-path-validation",
         training_series="delphi_compact_optimum_path_validation_panel_20260721",
         path=COMPACT_OPTIMUM_PATH_PANEL,
@@ -245,6 +260,14 @@ PANEL_MANIFEST_SPECS = (
         path=COMPACT_SUB280_OPTIMUM_PANEL,
         run_name_prefix="crslowv",
     ),
+    PanelManifestSpec(
+        tag="delphi-corrective-hpr-280-decomposed",
+        training_series="delphi-corrective-hpr-280-tied-controls-3e18",
+        path=CORRECTIVE_HPR_280_PANEL,
+        run_name_prefix="hprc280",
+        use_candidate_id_as_run_name=True,
+        run_name_suffix="_3e18",
+    ),
 )
 HYBRID_PANEL_MANIFEST_SPEC = PanelManifestSpec(
     tag="delphi-3e18-hybrid-phase-ordering-validation",
@@ -254,17 +277,52 @@ HYBRID_PANEL_MANIFEST_SPEC = PanelManifestSpec(
 )
 
 
-def panel_eval_groups(include_hybrid_panel: bool) -> tuple[str, ...]:
-    groups = [
-        "olmo_base_eval_table9_hpr_300m_to_3e18_optimum_validation_panel_20260720",
-        "olmo_base_eval_table9_hpr_3e18_to_3e18_optimum_validation_panel_20260720",
-        "olmo_base_eval_table9_delphi_3e18_frontier_random_phase_population_20260720",
-        "olmo_base_eval_table9_delphi_compact_optimum_path_validation_20260721",
-        "olmo_base_eval_table9_delphi_compact_sub280_optimum_validation_20260721",
-    ]
-    if include_hybrid_panel:
-        groups.append("olmo_base_eval_table9_delphi_3e18_hybrid_phase_ordering_validation_20260720")
-    return tuple(groups)
+PANEL_EVAL_GROUP_BY_TRAINING_SERIES = {
+    "hpr_300m_to_3e18_optimum_validation_panel_20260720": (
+        "olmo_base_eval_table9_hpr_300m_to_3e18_optimum_validation_panel_20260720"
+    ),
+    "hpr_3e18_to_3e18_optimum_validation_panel_20260720": (
+        "olmo_base_eval_table9_hpr_3e18_to_3e18_optimum_validation_panel_20260720"
+    ),
+    "delphi_3e18_frontier_random_phase_population_20260720": (
+        "olmo_base_eval_table9_delphi_3e18_frontier_random_phase_population_20260720"
+    ),
+    "delphi_3e18_aggressive_phase_asymmetry_20260722": (
+        "olmo_base_eval_table9_delphi_3e18_aggressive_phase_asymmetry_20260722"
+    ),
+    "delphi_compact_optimum_path_validation_panel_20260721": (
+        "olmo_base_eval_table9_delphi_compact_optimum_path_validation_20260721"
+    ),
+    "delphi_compact_sub280_optimum_validation_panel_20260721": (
+        "olmo_base_eval_table9_delphi_compact_sub280_optimum_validation_20260721"
+    ),
+    "delphi_3e18_hybrid_phase_ordering_validation_20260720": (
+        "olmo_base_eval_table9_delphi_3e18_hybrid_phase_ordering_validation_20260720"
+    ),
+}
+PANEL_EVAL_NAME_REGEX_BY_TRAINING_SERIES = {
+    "delphi-corrective-hpr-280-tied-controls-3e18": "^t9_hprc280_",
+}
+
+
+def selected_panel_manifest_specs(
+    include_hybrid_panel: bool, only_panel_tag: str | None = None
+) -> tuple[PanelManifestSpec, ...]:
+    specs = panel_manifest_specs(include_hybrid_panel)
+    if only_panel_tag is None:
+        return specs
+    selected = tuple(spec for spec in specs if spec.tag == only_panel_tag)
+    if not selected:
+        raise ValueError(f"Unknown or disabled manifest panel tag: {only_panel_tag}")
+    return selected
+
+
+def panel_eval_groups(include_hybrid_panel: bool, only_panel_tag: str | None = None) -> tuple[str, ...]:
+    return tuple(
+        PANEL_EVAL_GROUP_BY_TRAINING_SERIES[spec.training_series]
+        for spec in selected_panel_manifest_specs(include_hybrid_panel, only_panel_tag)
+        if spec.training_series in PANEL_EVAL_GROUP_BY_TRAINING_SERIES
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -283,6 +341,10 @@ def parse_args() -> argparse.Namespace:
         "--manifest-panels-only",
         action="store_true",
         help="Incrementally refresh only manifest-backed panels and preserve existing historical rows.",
+    )
+    parser.add_argument(
+        "--only-panel-tag",
+        help="With --manifest-panels-only, refresh only this frozen panel tag and preserve all existing rows.",
     )
     return parser.parse_args()
 
@@ -320,9 +382,13 @@ def chunks(values: Sequence[str], size: int) -> Iterable[Sequence[str]]:
         yield values[start : start + size]
 
 
-def training_filters(include_hybrid_panel: bool, manifest_panels_only: bool = False) -> tuple[dict[str, object], ...]:
+def training_filters(
+    include_hybrid_panel: bool,
+    manifest_panels_only: bool = False,
+    only_panel_tag: str | None = None,
+) -> tuple[dict[str, object], ...]:
     if manifest_panels_only:
-        tags = [spec.tag for spec in panel_manifest_specs(include_hybrid_panel)]
+        tags = [spec.tag for spec in selected_panel_manifest_specs(include_hybrid_panel, only_panel_tag)]
         return (
             {
                 "$and": [
@@ -349,13 +415,35 @@ def panel_manifest_specs(include_hybrid_panel: bool) -> tuple[PanelManifestSpec,
     return PANEL_MANIFEST_SPECS
 
 
-def eval_filter(include_hybrid_panel: bool, manifest_panels_only: bool) -> dict[str, object]:
+def eval_filter(
+    include_hybrid_panel: bool,
+    manifest_panels_only: bool,
+    only_panel_tag: str | None = None,
+) -> dict[str, object]:
     if manifest_panels_only:
-        return {"group": {"$in": list(panel_eval_groups(include_hybrid_panel))}}
+        specs = selected_panel_manifest_specs(include_hybrid_panel, only_panel_tag)
+        groups = panel_eval_groups(include_hybrid_panel, only_panel_tag)
+        clauses: list[dict[str, object]] = []
+        if groups:
+            clauses.append({"group": {"$in": list(groups)}})
+        clauses.extend(
+            {
+                "display_name": {
+                    "$regex": PANEL_EVAL_NAME_REGEX_BY_TRAINING_SERIES[spec.training_series],
+                }
+            }
+            for spec in specs
+            if spec.training_series in PANEL_EVAL_NAME_REGEX_BY_TRAINING_SERIES
+        )
+        if len(clauses) == 1:
+            return clauses[0]
+        return {"$or": clauses}
     return EVAL_FILTER
 
 
 def panel_run_base(spec: PanelManifestSpec, row: Mapping[str, str], row_index: int) -> str:
+    if spec.use_candidate_id_as_run_name:
+        return f"{row['candidate_id']}{spec.run_name_suffix}"
     run_order = int(row["run_order"]) if spec.use_manifest_run_order else row_index
     return f"{spec.run_name_prefix}_{run_order:03d}_{row['candidate_id']}"
 
@@ -416,6 +504,27 @@ def summary_value(summary: Mapping[str, object], keys: Sequence[str]) -> float |
         if isinstance(value, (int, float)) and math.isfinite(float(value)):
             return float(value)
     return ""
+
+
+def persisted_table9_result(config: Mapping[str, object]) -> tuple[float, str] | None:
+    output_path = str(config.get("output_path") or "").rstrip("/")
+    if not output_path.startswith(EAST5_PREFIX):
+        return None
+    result_uri = f"{output_path}/olmo_base_eval_table9_results.json"
+    status_uri = f"{output_path}/.executor_status"
+    result_fs, result_path = fsspec.core.url_to_fs(result_uri)
+    status_fs, status_path = fsspec.core.url_to_fs(status_uri)
+    if not result_fs.exists(result_path) or not status_fs.exists(status_path):
+        return None
+    with status_fs.open(status_path, "r") as source:
+        if source.read().strip() != "SUCCESS":
+            return None
+    with result_fs.open(result_path, "r") as source:
+        payload = json.load(source)
+    value = float(payload["table9_macro_bpb"])
+    if not math.isfinite(value):
+        raise ValueError(f"Non-finite persisted Table-9 value at {result_uri}: {value}")
+    return value, result_uri
 
 
 def final_gcs_eval_metrics(hf_save_path: str, num_train_steps: int) -> tuple[dict[str, object], str] | None:
@@ -603,6 +712,14 @@ def collect_eval_attempts(
     for run in batch_runs(api, EVAL_PROJECT, eval_ids, batch_size):
         config = dict(run.config)
         summary = dict(run.summary)
+        table9_value = summary_value(summary, TABLE9_KEYS)
+        table9_source = "wandb_finished_summary" if run.state == "finished" and table9_value != "" else ""
+        persisted_result_path = ""
+        if table9_value == "":
+            persisted = persisted_table9_result(config)
+            if persisted is not None:
+                table9_value, persisted_result_path = persisted
+                table9_source = "persisted_executor_result"
         checkpoint_path = str(config.get("checkpoint_path") or "")
         source_id = parse_checkpoint_training_run_id(checkpoint_path)
         if source_id not in training_ids:
@@ -615,7 +732,9 @@ def collect_eval_attempts(
             "eval_created_at": str(run.created_at),
             "source_training_run_id": source_id,
             "checkpoint_path": checkpoint_path,
-            "table9_macro_bpb": summary_value(summary, TABLE9_KEYS),
+            "table9_macro_bpb": table9_value,
+            "table9_metric_source": table9_source,
+            "table9_persisted_result_path": persisted_result_path,
             "eval_group": run.group or "",
         }
         rows.append(row)
@@ -626,12 +745,17 @@ def collect_eval_attempts(
     return rows, by_training
 
 
-def discover_training_ids(api: wandb.Api, include_hybrid_panel: bool, manifest_panels_only: bool) -> list[str]:
+def discover_training_ids(
+    api: wandb.Api,
+    include_hybrid_panel: bool,
+    manifest_panels_only: bool,
+    only_panel_tag: str | None,
+) -> list[str]:
     run_ids: set[str] = set()
     explicit_tags = set(EXPLICIT_HELDOUT_TAGS)
     if include_hybrid_panel:
         explicit_tags.update(OPTIONAL_EXPLICIT_HELDOUT_TAGS)
-    for filters in training_filters(include_hybrid_panel, manifest_panels_only):
+    for filters in training_filters(include_hybrid_panel, manifest_panels_only, only_panel_tag):
         metadata = api.runs(TRAIN_PROJECT, filters=filters, per_page=1000, lazy=True)
         for run in metadata:
             tags = set(run.tags or [])
@@ -643,14 +767,21 @@ def discover_training_ids(api: wandb.Api, include_hybrid_panel: bool, manifest_p
 
 
 def best_table9_attempt(attempts: Sequence[Mapping[str, object]]) -> Mapping[str, object] | None:
-    complete = [row for row in attempts if row["eval_state"] == "finished" and row["table9_macro_bpb"] != ""]
-    if not complete:
+    finished = [row for row in attempts if row["eval_state"] == "finished" and row["table9_macro_bpb"] != ""]
+    if finished:
+        return max(finished, key=lambda row: (str(row["eval_created_at"]), str(row["eval_wandb_run_id"])))
+    persisted = [
+        row
+        for row in attempts
+        if row["table9_macro_bpb"] != "" and row.get("table9_metric_source") == "persisted_executor_result"
+    ]
+    if not persisted:
         return None
-    return max(complete, key=lambda row: (str(row["eval_created_at"]), str(row["eval_wandb_run_id"])))
+    return max(persisted, key=lambda row: (str(row["eval_created_at"]), str(row["eval_wandb_run_id"])))
 
 
-def fieldbook_for_run(fieldbook: Mapping[str, FieldbookMatch], run_id: str, base: str) -> FieldbookMatch:
-    matches = [fieldbook[key] for key in (run_id, base) if key in fieldbook]
+def fieldbook_for_run(fieldbook: Mapping[str, FieldbookMatch], keys: Sequence[str]) -> FieldbookMatch:
+    matches = [fieldbook[key] for key in dict.fromkeys(keys) if key in fieldbook]
     if not matches:
         return {
             "match_count": 0,
@@ -762,7 +893,7 @@ def collect_training_rows(
         table9_source = "training_summary" if direct_table9 != "" else ""
         if selected_eval is not None:
             table9_value = selected_eval["table9_macro_bpb"]
-            table9_source = "native_eval_checkpoint_join"
+            table9_source = str(selected_eval.get("table9_metric_source") or "native_eval_checkpoint_join")
         needs_gcs_recovery = run.state != "finished" or summary_value(summary, ("eval/uncheatable_eval/bpb",)) == ""
         recovered = final_gcs_eval_metrics(hf_save_path, num_train_steps) if needs_gcs_recovery else None
         recovered_metrics = recovered[0] if recovered is not None else {}
@@ -770,7 +901,10 @@ def collect_training_rows(
         logical_training_state = "finished" if recovered is not None else run.state
         metric_summary = recovered_metrics if recovered is not None else summary
         global_step = int(metric_summary.get("step") or summary.get("global_step") or summary.get("_step") or 0)
-        fieldbook_match = fieldbook_for_run(fieldbook, run.id, base)
+        fieldbook_keys = [run.id, base]
+        if provenance is not None:
+            fieldbook_keys.append(str(provenance["candidate_id"]))
+        fieldbook_match = fieldbook_for_run(fieldbook, fieldbook_keys)
         observation: dict[str, object] = {
             "heldout_id": identity["heldout_id"],
             "observed_at": observed_at,
@@ -1068,6 +1202,8 @@ def main() -> None:
     args = parse_args()
     if args.batch_size < 1:
         raise ValueError("--batch-size must be positive")
+    if args.only_panel_tag and not args.manifest_panels_only:
+        raise ValueError("--only-panel-tag requires --manifest-panels-only")
     domains, fit_rows = load_fit_panel(args.fit_panel)
     fieldbook = load_fieldbook(args.ledger)
     observed_at = utc_now()
@@ -1076,10 +1212,19 @@ def main() -> None:
     panel_provenance = load_panel_provenance(domains, args.include_hybrid_panel)
     manifest_specs = panel_manifest_specs(args.include_hybrid_panel)
     manifest_backed_tags = {spec.tag for spec in manifest_specs}
-    training_ids = discover_training_ids(api, args.include_hybrid_panel, args.manifest_panels_only)
+    training_ids = discover_training_ids(
+        api,
+        args.include_hybrid_panel,
+        args.manifest_panels_only,
+        args.only_panel_tag,
+    )
     if not training_ids:
         raise ValueError("No Delphi 3e18 training runs matched the audited W&B filter")
-    applied_eval_filter = eval_filter(args.include_hybrid_panel, args.manifest_panels_only)
+    applied_eval_filter = eval_filter(
+        args.include_hybrid_panel,
+        args.manifest_panels_only,
+        args.only_panel_tag,
+    )
     eval_rows, eval_by_training = collect_eval_attempts(api, set(training_ids), args.batch_size, applied_eval_filter)
     identities, observations, provenance_rows = collect_training_rows(
         api,
@@ -1140,9 +1285,14 @@ def main() -> None:
             "new_provenance_rows": new_provenance,
             "fit_panel_path": str(args.fit_panel),
             "fit_panel_sha256": hashlib.sha256(args.fit_panel.read_bytes()).hexdigest(),
-            "training_wandb_filters": training_filters(args.include_hybrid_panel, args.manifest_panels_only),
+            "training_wandb_filters": training_filters(
+                args.include_hybrid_panel,
+                args.manifest_panels_only,
+                args.only_panel_tag,
+            ),
             "eval_wandb_filter": applied_eval_filter,
             "included_optional_hybrid_panel": args.include_hybrid_panel,
+            "only_panel_tag": args.only_panel_tag,
             "manifest_panels_only": args.manifest_panels_only,
         }
     )
