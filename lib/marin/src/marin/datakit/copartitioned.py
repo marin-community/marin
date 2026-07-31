@@ -4,10 +4,14 @@
 """Co-partitioned input and output shard layout for Datakit stages."""
 
 import dataclasses
+import json
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from rigging.filesystem import StoragePath, prefix_join
+
+SOURCE_MANIFEST_FILENAME = ".source_manifest.json"
+SOURCE_MANIFEST_VERSION = "v1"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -28,6 +32,23 @@ class CopartitionedShard:
     source_tag: str
     basename: str
     output_path: str
+
+
+@dataclasses.dataclass(frozen=True)
+class CopartitionedSourceManifestEntry:
+    """One source mapping in a co-partitioned output manifest."""
+
+    source_tag: str
+    source_key: str
+    attribute_dir: str
+
+
+@dataclasses.dataclass(frozen=True)
+class CopartitionedSourceManifest:
+    """Source mappings for one co-partitioned output."""
+
+    version: str
+    sources: list[CopartitionedSourceManifestEntry]
 
 
 def build_copartitioned_shards(
@@ -71,3 +92,20 @@ def build_copartitioned_shards(
             )
 
     return shards, attr_dirs
+
+
+def write_copartitioned_source_manifest(*, output_path: str, attr_dirs: Mapping[str, str]) -> None:
+    """Write the source-tag mapping for a completed co-partitioned output."""
+    sources = [
+        CopartitionedSourceManifestEntry(
+            source_tag=os.path.basename(attr_dir.rstrip("/")),
+            source_key=source_key,
+            attribute_dir=f"outputs/{os.path.basename(attr_dir.rstrip('/'))}",
+        )
+        for source_key, attr_dir in attr_dirs.items()
+    ]
+    sources.sort(key=lambda source: source.source_tag)
+    manifest = CopartitionedSourceManifest(version=SOURCE_MANIFEST_VERSION, sources=sources)
+    manifest_path = StoragePath(prefix_join(output_path, SOURCE_MANIFEST_FILENAME))
+    manifest_path.parent.mkdirs()
+    manifest_path.write_text(json.dumps(dataclasses.asdict(manifest), indent=2) + "\n")

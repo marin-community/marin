@@ -28,9 +28,14 @@ from typing import TypedDict
 import pyarrow as pa
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
-from marin.datakit.copartitioned import CopartitionedShard, CopartitionedSource, build_copartitioned_shards
+from marin.datakit.copartitioned import (
+    CopartitionedShard,
+    CopartitionedSource,
+    build_copartitioned_shards,
+    write_copartitioned_source_manifest,
+)
 from marin.datakit.normalize import NormalizedData
-from marin.datakit.source_key import datakit_source_key
+from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath
 from zephyr import counters
@@ -41,7 +46,7 @@ from zephyr.writers import write_parquet_file
 
 COUNTER_PREFIX = "global_exact_dedup"
 _SHARED_ENTRIES_KEY = "global_exact_dedup_entries"
-GLOBAL_EXACT_DEDUP_DATA_VERSION = 2
+GLOBAL_EXACT_DEDUP_DATA_VERSION = 3
 _ATTR_SCHEMA = pa.schema(
     [
         pa.field("id", pa.string(), nullable=False),
@@ -53,7 +58,7 @@ _ATTR_SCHEMA = pa.schema(
 class ExactDupsPerSource(BaseModel):
     """Sparse exact-duplicate attribute files for one normalized source."""
 
-    attr_dir: str
+    attr_dir: DatakitArtifactPath
 
 
 class GlobalExactDedupData(BaseModel):
@@ -126,7 +131,7 @@ def _select_duplicates(_key: str, records: Iterator[_ExactRecord]) -> Iterator[_
     yield from records
 
 
-def _write_shard(file_idx: int, records: Iterator[_ExactRecord]) -> dict[str, int | str]:
+def _write_shard(file_idx: int, records: Iterator[_ExactRecord]) -> None:
     entries: list[CopartitionedShard] = zephyr_worker_ctx().get_shared(_SHARED_ENTRIES_KEY)
     entry = entries[file_idx]
     duplicate_records = 0
@@ -137,13 +142,8 @@ def _write_shard(file_idx: int, records: Iterator[_ExactRecord]) -> dict[str, in
             duplicate_records += 1
             yield {"id": record["id"], "dup_doc": True}
 
-    result = write_parquet_file(duplicate_rows(), output_path=entry.output_path, schema=_ATTR_SCHEMA)
+    write_parquet_file(duplicate_rows(), output_path=entry.output_path, schema=_ATTR_SCHEMA)
     counters.pipeline.update_counter(f"{COUNTER_PREFIX}/duplicate_records", duplicate_records)
-    return {
-        **result,
-        "file_idx": file_idx,
-        "duplicate_records": duplicate_records,
-    }
 
 
 def global_exact_deduplicate(
@@ -176,14 +176,19 @@ def global_exact_deduplicate(
             key=lambda record: record["id"],
             reducer=_select_duplicates,
             sort_by=lambda record: (record["file_idx"], record["row_index"]),
+            # Bound the cross-source ID shuffle by worker capacity. The next
+            # group_by inherits this output shard count.
             num_output_shards=shuffle_shards,
         )
         .group_by(
             key=lambda record: record["file_idx"],
             reducer=_write_shard,
             sort_by=lambda record: record["id"],
-            num_output_shards=shuffle_shards,
         )
     )
     outcome = context.execute(pipeline)
+    write_copartitioned_source_manifest(
+        output_path=output_path,
+        attr_dirs={source_key: source.attr_dir for source_key, source in outputs.items()},
+    )
     return GlobalExactDedupData(sources=outputs, counters=dict(outcome.counters))

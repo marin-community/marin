@@ -57,6 +57,7 @@ from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 from zephyr.writers import write_parquet_file
 
 from marin.datakit.normalize import NormalizedData
+from marin.datakit.source_key import DatakitArtifactPath
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 
@@ -112,10 +113,10 @@ class DeconAttributes(BaseModel):
     """
 
     version: str = f"v{DECON_ATTRIBUTES_VERSION}"
-    main_output_dir: str
-    flagged_output_dir: str
+    main_output_dir: DatakitArtifactPath
+    flagged_output_dir: DatakitArtifactPath
     num_partitions: int
-    eval_hash_index_path: str
+    eval_hash_index_path: DatakitArtifactPath
     counters: dict[str, int | float]
 
 
@@ -161,9 +162,9 @@ class EvalBloom(BaseModel):
     """
 
     version: str = "v1"
-    bloom_dir: str
-    bloom_path: str
-    eval_hash_index_path: str
+    bloom_dir: DatakitArtifactPath
+    bloom_path: DatakitArtifactPath
+    eval_hash_index_path: DatakitArtifactPath
     estimated_doc_count: int
     false_positive_rate: float
     n_eval_records: int = 0
@@ -852,7 +853,7 @@ class SourceDropSet(BaseModel):
     the counts are informational.
     """
 
-    output_dir: str
+    output_dir: DatakitArtifactPath
     n_sampled: int
     n_dropped: int
 
@@ -957,8 +958,8 @@ class AllSourceDropSets(BaseModel):
     and source frequencies retained for threshold audits.
     """
 
-    output_dir: str
-    global_output_dir: str
+    output_dir: DatakitArtifactPath
+    global_output_dir: DatakitArtifactPath
     num_sources: int
     n_global_dropped: int
     counters: dict[str, int | float]

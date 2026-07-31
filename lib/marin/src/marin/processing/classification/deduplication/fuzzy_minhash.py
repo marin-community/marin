@@ -28,7 +28,7 @@ from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
 
 from marin.datakit.normalize import NormalizedData
-from marin.datakit.source_key import datakit_source_key
+from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.dedup_commons import _load_batches
@@ -78,7 +78,7 @@ class MinHashAttrData(BaseModel):
     version: str = f"v{MINHASH_ATTR_DATA_VERSION}"
     params: MinHashParams
     source_key: str
-    attr_dir: str
+    attr_dir: DatakitArtifactPath
     counters: dict[str, int | float]
 
 

@@ -1,8 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+from pathlib import Path
+
 import pytest
-from marin.datakit.source_key import datakit_source_key, datakit_source_path
+from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key, datakit_source_path
+from marin.execution.artifact import read_artifact, write_artifact
+from pydantic import BaseModel
+
+
+class ArtifactPaths(BaseModel):
+    primary: DatakitArtifactPath
+    by_split: dict[str, DatakitArtifactPath]
+    mirrors: list[DatakitArtifactPath]
 
 
 def test_datakit_source_key_removes_marin_prefix(monkeypatch):
@@ -68,3 +79,24 @@ def test_datakit_source_path_preserves_other_marin_region(monkeypatch):
         datakit_source_path("s3://marin-us-east-02a/marin/datakit/normalize/foo/outputs/main")
         == "s3://marin-us-east-02a/marin/datakit/normalize/foo/outputs/main"
     )
+
+
+def test_datakit_artifact_path_round_trip_for_nested_payloads(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    artifact_dir = tmp_path / "artifact"
+    artifact_dir.mkdir()
+    value = ArtifactPaths(
+        primary=str(tmp_path / "primary"),
+        by_split={"train": str(tmp_path / "splits/train")},
+        mirrors=[str(tmp_path / "mirrors/first"), "s3://external-bucket/mirror"],
+    )
+
+    write_artifact(value, str(artifact_dir))
+
+    record = json.loads((artifact_dir / ".artifact.json").read_text())
+    assert record["result"] == {
+        "primary": "primary",
+        "by_split": {"train": "splits/train"},
+        "mirrors": ["mirrors/first", "s3://external-bucket/mirror"],
+    }
+    assert read_artifact(str(artifact_dir), ArtifactPaths) == value

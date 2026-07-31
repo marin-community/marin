@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
 import random
 import string
@@ -197,9 +198,10 @@ def test_fuzzy_dups_multi_source_per_source_attr_trees(fox_corpus):
         ],
     )
 
+    output_path = os.path.join(fox_corpus["output_dir"], "fuzzy_dups")
     dups = compute_fuzzy_dups_attrs(
         inputs=[train_mh, test_mh],
-        output_path=os.path.join(fox_corpus["output_dir"], "fuzzy_dups"),
+        output_path=output_path,
         max_parallelism=1,
     )
 
@@ -208,6 +210,13 @@ def test_fuzzy_dups_multi_source_per_source_attr_trees(fox_corpus):
         assert per_source.attr_dir.rsplit("/", 1)[-1].startswith("source_"), per_source.attr_dir
         assert Path(per_source.attr_dir).exists()
     assert dups.attr_dir_for_source(train_main_dir) == dups.sources[train_mh.source_key].attr_dir
+    manifest = json.loads((Path(output_path) / ".source_manifest.json").read_text())
+    assert manifest["version"] == "v1"
+    assert {source["source_key"] for source in manifest["sources"]} == set(dups.sources)
+    assert {source["attribute_dir"] for source in manifest["sources"]} == {
+        "outputs/source_000",
+        "outputs/source_001",
+    }
 
     def rows_by_id(source_key: str) -> dict[str, dict]:
         return {r["id"]: r for r in _read_cluster_attrs(dups.sources[source_key].attr_dir)}

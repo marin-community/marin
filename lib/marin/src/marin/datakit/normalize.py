@@ -27,7 +27,7 @@ from typing import Any
 import dupekit
 import pyarrow as pa
 from fray.types import ResourceConfig
-from pydantic import BaseModel, ValidationInfo, field_serializer, model_validator
+from pydantic import BaseModel, ValidationInfo, model_validator
 from rigging.filesystem import StoragePath, prefix_join, url_to_fs
 from zephyr import counters
 from zephyr.dataset import Dataset, ShardInfo
@@ -36,7 +36,7 @@ from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 from zephyr.writers import ThreadedBatchWriter, write_parquet_file
 
 from marin.datakit import partition_filename
-from marin.datakit.source_key import datakit_artifact_path, datakit_source_path
+from marin.datakit.source_key import DatakitArtifactPath
 from marin.execution.artifact import ARTIFACT_LOAD_CONTEXT_KEY
 from marin.execution.step_spec import StepSpec
 
@@ -86,8 +86,8 @@ class NormalizedData(BaseModel):
     """
 
     version: str = NORMALIZED_DATA_VERSION
-    main_output_dir: str
-    dup_output_dir: str
+    main_output_dir: DatakitArtifactPath
+    dup_output_dir: DatakitArtifactPath
     counters: dict[str, int | float]
 
     @model_validator(mode="before")
@@ -103,15 +103,8 @@ class NormalizedData(BaseModel):
             raise ValueError(f"Unsupported NormalizedData version: {version!r}")
 
         loaded = dict(value)
-        if version == NORMALIZED_DATA_VERSION:
-            loaded["main_output_dir"] = datakit_source_path(loaded["main_output_dir"])
-            loaded["dup_output_dir"] = datakit_source_path(loaded["dup_output_dir"])
         loaded["version"] = NORMALIZED_DATA_VERSION
         return loaded
-
-    @field_serializer("main_output_dir", "dup_output_dir", when_used="json")
-    def _serialize_output_dir(self, value: str) -> str:
-        return datakit_artifact_path(value)
 
 
 def generate_id(text: str) -> str:

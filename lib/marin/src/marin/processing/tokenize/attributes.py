@@ -37,7 +37,7 @@ from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file
 
 from marin.datakit.normalize import NormalizedData
-from marin.datakit.source_key import datakit_source_key
+from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize._core import tokenize_pipeline
@@ -71,7 +71,7 @@ class TokenizedAttrData(BaseModel):
     """
 
     version: str = f"v{TOKENIZED_ATTR_DATA_VERSION}"
-    output_dirs: dict[str, str]
+    output_dirs: dict[str, DatakitArtifactPath]
     source_keys: dict[str, str]
     tokenizer: str
     tokenizer_backend: str
