@@ -199,6 +199,9 @@ datakit = [
     "scikit-learn",
     "scipy",
     "duckdb>=1.0.0",
+    # Reads WARC response records out of Common Crawl byte ranges
+    # (experiments/build_pdf_source/fetch.py).
+    "warcio>=1.7.5",
 ]
 
 math = ["pylatexenc", "sympy"]
