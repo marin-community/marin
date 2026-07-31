@@ -55,7 +55,6 @@ runs:
         command: preview
         stack-name: ${{ inputs.stack }}
         work-dir: ${{ inputs.work-dir }}
-        cloud-url: gs://marin-iac-state
         diff: true
         color: never
         comment-on-pr: false

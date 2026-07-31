@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 import pytest
 from finelog.client import LogClient
-from iris.cluster.backends.k8s.tasks import K8sTaskProvider
+from iris.cluster.backends.k8s.tasks import K8sTaskProvider, PodConfig
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
 from iris.cluster.controller import ops
@@ -450,11 +450,13 @@ def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
 
     k8s_provider = K8sTaskProvider(
         kubectl=k8s,
-        namespace="default",
-        default_image="iris:test",
-        controller_address="http://localhost:0",
-        # Kueue is mandatory on the K8s backend, so every provider carries a LocalQueue.
-        local_queue="iris-lq",
+        pods=PodConfig(
+            namespace="default",
+            default_image="iris:test",
+            controller_address="http://localhost:0",
+            # Kueue is mandatory on the K8s backend, so every provider carries a LocalQueue.
+            local_queue="iris-lq",
+        ),
         cluster_scan_interval=0.0,
         transition_reader=DbTransitionReader(db),
     )

@@ -1005,7 +1005,11 @@ def cluster_dashboard_proxy(ctx, port: int):
     your browser.
     """
     controller_url = require_controller_url(ctx)
-    dashboard = ProxyControllerDashboard(upstream_url=controller_url, port=port)
+    dashboard = ProxyControllerDashboard(
+        upstream_url=controller_url,
+        port=port,
+        credentials=(ctx.obj or {}).get("credentials"),
+    )
     click.echo(f"Proxying to controller at {controller_url}")
 
     dashboard_dir = VUE_DIST_DIR.parent

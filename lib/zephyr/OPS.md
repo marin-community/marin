@@ -88,7 +88,7 @@ Grafana evaluates `ZephyrPipelineProgressStalled` once each minute. The rule
 becomes pending after 45 minutes without a shard completion. The warning
 becomes active after five more minutes.
 
-The coordinator publishes `zephyr_progress_time_seconds` through Telltale. The
+The coordinator publishes `progress_time_seconds` through direct `service=zephyr` telemetry. The
 metric resets at each stage start and after each shard completion. The metric
 includes the root job ID and the Zephyr execution ID. Grafana removes a
 producer when its most recent row is more than 90 seconds old.

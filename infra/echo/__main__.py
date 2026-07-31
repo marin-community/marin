@@ -176,6 +176,7 @@ def main() -> None:
             min_instances=1,
             max_instances=1,
             cpu_always_allocated=True,
+            cpu="1",
             memory="4Gi",
             max_instance_request_concurrency=4,
             cloudsql_instances=(CONNECTION_NAME,),

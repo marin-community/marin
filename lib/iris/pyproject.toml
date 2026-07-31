@@ -12,10 +12,9 @@ dependencies = [
     # starts an in-process native log server (module `finelog_server`), which
     # ships as the separate marin-finelog-server platform wheel; the pure client
     # does not depend on it, so the controller — its one consumer — pulls it in
-    # explicitly. The native floor must include COLUMN_TYPE_MAP, used by
-    # TelltaleMetric.labels.
+    # explicitly.
     "marin-finelog >= 0.2.10",
-    "marin-finelog-server>=0.2.14.dev30290140609",
+    "marin-finelog-server>=0.2.16.dev30657475018",
     # Platform companion wheel containing the Rust-owned public proxy listener.
     "marin-iris-native>=0.1.5.dev30223685542",
     "click>=8.3.1",

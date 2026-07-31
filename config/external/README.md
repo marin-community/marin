@@ -26,9 +26,11 @@ uv run config/update-external.py --check
 `Ops - External Dependency Update` runs the all-project command at 09:00 UTC
 each day and can also be started with `workflow_dispatch`. It opens or refreshes
 one `automation/external-dependencies` pull request containing every changed
-lock and generated pin. The workflow log and pull request body list each
-resolved package version and commit. Generate the same Markdown summary locally
-with `--summary-file <path>`.
+lock and generated pin, then enables squash auto-merge. The workflow log and
+pull request body list each resolved package version and commit, followed by
+the upstream commit subjects in every changed range. Generate the same Markdown
+summary locally with `--summary-file <path>`; commit metadata is read through
+the authenticated GitHub CLI.
 
 The projects intentionally model only what Marin needs:
 

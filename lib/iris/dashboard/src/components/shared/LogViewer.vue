@@ -89,7 +89,7 @@ const matchScope = ref<MatchScope>('EXACT')
 // embed in their raw log lines.
 const timeZone = ref<TimeZoneName>('local')
 
-const { presetMs, customSince, absolute: absoluteSince, sinceMs, selectPreset } = useTimeWindow(timeZone)
+const { presetMs, customSince, absolute: absoluteSince, sinceMs, setSinceMs, selectPreset } = useTimeWindow(timeZone)
 
 const entries = ref<LogEntry[]>([])
 // Lines pulled in by expanding a row's context, keyed by seq so they dedupe
@@ -254,12 +254,20 @@ function sourceRequest() {
   }
 }
 
+function requestSinceMs(): number | undefined {
+  const ms = sinceMs()
+  if (ms === undefined || !absoluteSince.value) return ms
+  // FetchLogs applies sinceMs as an exclusive bound. The date picker describes
+  // an inclusive start time, so move the wire bound back by one millisecond.
+  return Math.max(0, ms - 1)
+}
+
 function baseRequest() {
   return {
     ...sourceRequest(),
     substring: filter.value || undefined,
     minLevel: level.value ? level.value.toUpperCase() : undefined,
-    sinceMs: sinceMs(),
+    sinceMs: requestSinceMs(),
   }
 }
 
@@ -517,6 +525,12 @@ function selectRow(seq: number) {
   router.replace({ query: { ...route.query, logSeq: String(seq) } })
 }
 
+/** Set the log time bound to this row. */
+function setStartTime(entry: LogEntry) {
+  const ms = timestampMs(entry.timestamp)
+  if (ms > 0) setSinceMs(ms)
+}
+
 /** Promote the client-side search into the server-side filter over the whole log. */
 function promoteSearchToFilter() {
   filter.value = search.query.value
@@ -680,6 +694,7 @@ defineExpose({ selectedAttemptId })
       <input
         v-model="customSince"
         type="datetime-local"
+        step="0.001"
         title="Show logs since a specific date/time"
         class="px-2 py-1.5 border border-surface-border rounded text-sm"
       />
@@ -871,11 +886,21 @@ defineExpose({ selectedAttemptId })
             >
               T{{ row.taskRef.taskIndex }}
             </RouterLink>
-            <button
-              class="shrink-0 text-text-muted tabular-nums hover:text-accent hover:underline"
-              :title="`${isoTimestamp(row.entry)} — click to pin and link to this line`"
-              @click="selectRow(row.seq)"
-            >{{ formatLogTime(timestampMs(row.entry.timestamp), timeZone === 'utc') }}</button>
+            <span class="shrink-0 inline-flex items-center gap-1">
+              <button
+                data-log-permalink
+                class="text-text-muted tabular-nums hover:text-accent hover:underline"
+                :title="`${isoTimestamp(row.entry)} — click to pin and link to this line`"
+                @click="selectRow(row.seq)"
+              >{{ formatLogTime(timestampMs(row.entry.timestamp), timeZone === 'utc') }}</button>
+              <button
+                data-log-start
+                class="text-text-muted opacity-50 hover:opacity-100 hover:text-accent"
+                :title="`${isoTimestamp(row.entry)} — show logs from this time`"
+                :aria-label="`Show logs from ${isoTimestamp(row.entry)}`"
+                @click="setStartTime(row.entry)"
+              >▶</button>
+            </span>
             <span
               :class="wrap ? 'whitespace-pre-wrap break-words flex-1' : 'whitespace-pre'"
             ><template
