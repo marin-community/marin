@@ -185,10 +185,7 @@ def _load_exact_duplicates(path: str) -> set[str]:
     """Return sparse exact-duplicate IDs; a missing shard has no duplicates."""
     if not StoragePath(path).exists():
         return set()
-    table = _read_columns(path, ["id", "attributes"])
-    ids = table.column("id").to_pylist()
-    duplicate = table.column("attributes").combine_chunks().field("dup_doc").to_pylist()
-    return {doc_id for doc_id, is_duplicate in zip(ids, duplicate, strict=True) if is_duplicate}
+    return set(_read_columns(path, ["id"]).column("id").to_pylist())
 
 
 def _validate_cluster_view(cluster_assign: dict[str, AssignmentAttrData], cluster_view: int) -> str:
@@ -305,11 +302,12 @@ def _iter_surviving_docs(spec: dict[str, str], cluster_col: str) -> Iterator[tup
                 if contam_slice[i]:
                     n_contaminated += 1
                     continue
-                if doc_id in exact_duplicates:
-                    n_exact_dedup_dropped += 1
-                    continue
-                if dedup_canonical.get(doc_id) is False:
+                fuzzy_canonical = dedup_canonical.get(doc_id)
+                if fuzzy_canonical is False:
                     n_dedup_dropped += 1
+                    continue
+                if fuzzy_canonical is None and doc_id in exact_duplicates:
+                    n_exact_dedup_dropped += 1
                     continue
                 ids = tok_input_ids[i].values.to_numpy()
                 n_out += 1

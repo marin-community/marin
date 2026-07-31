@@ -34,6 +34,10 @@ records. Only source shards with duplicates get an attribute file; a missing
 file means that the source shard has no exact duplicates. The step does not copy
 normalized text.
 
+The final store uses fuzzy canonical markers when they exist. It applies exact
+duplicate markers only to records without fuzzy markers, which covers records
+that MinHash skipped without conflicting with fuzzy canonical selection.
+
 A source-set change gives a new global exact-dedup output and a new store
 identity. It does not change the identity of tokenization, embedding, quality,
 decontamination, or MinHash steps.

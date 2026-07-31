@@ -1,11 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Global exact-duplicate attributes for normalized Datakit sources.
+"""Global record-ID duplicate attributes for normalized Datakit sources.
 
 The Zephyr pipeline shuffles record IDs across all sources. It keeps the first
 source, shard, and row occurrence. It writes sparse duplicate markers back to
 the source shards that contain duplicates.
+
+Normalized record IDs are content hashes, so equal IDs represent exact text
+duplicates. This pass also covers records for which MinHash emits no fuzzy
+attributes, such as text that is too short for the configured n-gram size.
 
 Output rows have this schema::
 
@@ -20,7 +24,7 @@ Output files keep the matching normalized shard names. A missing file means
 that its source shard has no exact duplicates.
 """
 
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from typing import TypedDict
 
 import pyarrow as pa
@@ -53,6 +57,8 @@ _ATTR_SCHEMA = pa.schema(
 
 
 class ExactDupsPerSource(BaseModel):
+    """Sparse exact-duplicate attribute files for one normalized source."""
+
     attr_dir: str
 
 
@@ -82,15 +88,15 @@ def _build_shard_index(
         (source_name, normalized, datakit_source_key(normalized.main_output_dir))
         for source_name, normalized in sources.items()
     ]
-    source_dirs: dict[str, str] = {}
-    for _source_name, normalized, source_key in source_entries:
-        if source_key in source_dirs:
+    source_keys: set[str] = set()
+    for _source_name, _normalized, source_key in source_entries:
+        if source_key in source_keys:
             raise ValueError(f"Multiple sources use source_key={source_key!r}")
-        source_dirs[source_key] = normalized.main_output_dir
+        source_keys.add(source_key)
 
     ordered_sources = [
         CopartitionedSource(source_key=source_key, input_dir=normalized.main_output_dir)
-        for _source_name, normalized, source_key in sorted(source_entries)
+        for _source_name, normalized, source_key in sorted(source_entries, key=lambda entry: entry[0])
     ]
     entries, attr_dirs = build_copartitioned_shards(
         sources=ordered_sources,
@@ -126,27 +132,24 @@ def _select_duplicates(_key: str, records: Iterator[_ExactRecord]) -> Iterator[_
     yield from records
 
 
-def _make_per_shard_writer() -> Callable[[int, Iterator[_ExactRecord]], dict[str, int | str]]:
-    def write_shard(file_idx: int, records: Iterator[_ExactRecord]) -> dict[str, int | str]:
-        entries: list[CopartitionedShard] = zephyr_worker_ctx().get_shared(_SHARED_ENTRIES_KEY)
-        entry = entries[file_idx]
-        duplicate_records = 0
+def _write_shard(file_idx: int, records: Iterator[_ExactRecord]) -> dict[str, int | str]:
+    entries: list[CopartitionedShard] = zephyr_worker_ctx().get_shared(_SHARED_ENTRIES_KEY)
+    entry = entries[file_idx]
+    duplicate_records = 0
 
-        def duplicate_rows() -> Iterator[dict[str, str | dict[str, bool]]]:
-            nonlocal duplicate_records
-            for record in records:
-                duplicate_records += 1
-                yield {"id": record["id"], "attributes": {"dup_doc": True}}
+    def duplicate_rows() -> Iterator[dict[str, str | dict[str, bool]]]:
+        nonlocal duplicate_records
+        for record in records:
+            duplicate_records += 1
+            yield {"id": record["id"], "attributes": {"dup_doc": True}}
 
-        result = write_parquet_file(duplicate_rows(), output_path=entry.output_path, schema=_ATTR_SCHEMA)
-        counters.pipeline.update_counter(f"{COUNTER_PREFIX}/duplicate_records", duplicate_records)
-        return {
-            **result,
-            "file_idx": file_idx,
-            "duplicate_records": duplicate_records,
-        }
-
-    return write_shard
+    result = write_parquet_file(duplicate_rows(), output_path=entry.output_path, schema=_ATTR_SCHEMA)
+    counters.pipeline.update_counter(f"{COUNTER_PREFIX}/duplicate_records", duplicate_records)
+    return {
+        **result,
+        "file_idx": file_idx,
+        "duplicate_records": duplicate_records,
+    }
 
 
 def global_exact_deduplicate(
@@ -171,6 +174,7 @@ def global_exact_deduplicate(
         max_workers=max_workers,
     )
     context.put(_SHARED_ENTRIES_KEY, entries)
+    shuffle_shards = min(max_workers, len(entries))
     pipeline = (
         Dataset.from_list(entries)
         .flat_map(_read_record_ids)
@@ -178,11 +182,13 @@ def global_exact_deduplicate(
             key=lambda record: record["id"],
             reducer=_select_duplicates,
             sort_by=lambda record: (record["file_idx"], record["row_index"]),
+            num_output_shards=shuffle_shards,
         )
         .group_by(
             key=lambda record: record["file_idx"],
-            reducer=_make_per_shard_writer(),
+            reducer=_write_shard,
             sort_by=lambda record: record["id"],
+            num_output_shards=shuffle_shards,
         )
     )
     outcome = context.execute(pipeline)

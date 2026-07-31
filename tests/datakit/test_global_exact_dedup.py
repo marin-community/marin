@@ -89,9 +89,6 @@ def test_global_exact_deduplicate_writes_sparse_copartitioned_attributes(tmp_pat
     ]
     assert pq.read_schema(b_shards[0]).names == ["id", "attributes"]
 
-    assert result.sources["input-a/outputs/main"].attr_dir.endswith("/outputs/source_000")
-    assert result.sources["input-b/outputs/main"].attr_dir.endswith("/outputs/source_001")
-    assert result.sources["input-c/outputs/main"].attr_dir.endswith("/outputs/source_002")
     assert result.counters["global_exact_dedup/records_in"] == 6
     assert result.counters["global_exact_dedup/duplicate_records"] == 2
 

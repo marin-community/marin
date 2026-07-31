@@ -46,22 +46,26 @@ SHARD0: list[_Doc] = [
     ("d1", 0, 4, False, None, 101, 5),  # -> (0, 4)
     ("d2", 1, 2, True, None, 902, 9),  # contaminated -> dropped
     ("d3", 1, 2, False, True, 103, 2),  # canonical -> (1, 2)
+    ("d6", 1, 4, False, False, 906, 6),  # exact canonical, fuzzy non-canonical -> dropped
+    ("d8", 0, 0, False, None, 108, 3),  # exact canonical -> (0, 0)
 ]
 SHARD1: list[_Doc] = [
     ("d4", 0, 0, False, None, 104, 4),  # -> (0, 0)
     ("d5", 1, 2, False, False, 905, 8),  # non-canonical -> dropped
-    ("d6", 1, 4, False, None, 106, 6),  # exact duplicate -> dropped
+    ("d6", 1, 4, False, True, 106, 6),  # exact duplicate, fuzzy canonical -> (1, 4)
     ("d7", 0, 4, False, None, 107, 7),  # -> (0, 4)
+    ("d8", 0, 0, False, None, 908, 3),  # exact duplicate without fuzzy attrs -> dropped
 ]
 
 # Expected surviving buckets: {(cluster, quality): {token_value: length}}.
 EXPECTED: dict[tuple[int, int], dict[int, int]] = {
-    (0, 0): {100: 3, 104: 4},
+    (0, 0): {100: 3, 104: 4, 108: 3},
     (0, 4): {101: 5, 107: 7},
     (1, 2): {103: 2},
+    (1, 4): {106: 6},
 }
-EXACT_DUPLICATES = {"d6"}
-DROPPED_TOKEN_VALUES = {902, 905, 106}
+EXACT_DUPLICATES = {("part-00001-of-00002.parquet", "d6"), ("part-00001-of-00002.parquet", "d8")}
+DROPPED_TOKEN_VALUES = {902, 905, 906, 908}
 
 
 def _write_parquet(path: str, table: pa.Table) -> None:
@@ -95,7 +99,7 @@ def _write_shard(dirs: dict[str, str], basename: str, docs: list[_Doc]) -> None:
             }
         ),
     )
-    exact_duplicates = [doc_id for doc_id in ids if doc_id in EXACT_DUPLICATES]
+    exact_duplicates = [doc_id for doc_id in ids if (basename, doc_id) in EXACT_DUPLICATES]
     if exact_duplicates:
         _write_parquet(
             f"{dirs['exact_dedup']}/{basename}",
@@ -242,7 +246,7 @@ def test_store_filters_routes_and_roundtrips(tmp_path):
     assert artifact.counters["datakit_store/records_in"] == len(SHARD0) + len(SHARD1)
     assert artifact.counters["datakit_store/contaminated_dropped"] == 1
     assert artifact.counters["datakit_store/exact_duplicate_dropped"] == 1
-    assert artifact.counters["datakit_store/dedup_noncanonical_dropped"] == 1
+    assert artifact.counters["datakit_store/dedup_noncanonical_dropped"] == 2
     assert artifact.counters["datakit_store/records_out"] == sum(len(docs) for docs in EXPECTED.values())
     assert artifact.counters["datakit_store/tokens_out"] == sum(
         length for docs in EXPECTED.values() for length in docs.values()
