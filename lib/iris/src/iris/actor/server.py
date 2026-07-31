@@ -26,7 +26,6 @@ import uvicorn
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
-from rigging import telltale
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from starlette.applications import Starlette
 from starlette.routing import Mount
@@ -303,7 +302,7 @@ class ActorServer:
 
     def _create_app(self) -> Starlette:
         rpc_app = ActorServiceASGIApplication(service=self, compressions=IRIS_RPC_COMPRESSIONS)
-        return Starlette(routes=[*telltale.routes(), Mount(rpc_app.path, app=rpc_app)])
+        return Starlette(routes=[Mount(rpc_app.path, app=rpc_app)])
 
     def serve_background(self, port: int | None = None) -> int:
         """Start server in background thread.

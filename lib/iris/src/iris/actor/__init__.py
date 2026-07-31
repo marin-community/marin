@@ -6,8 +6,6 @@
 Import concrete types from their defining modules: ``ActorServer``/``ActorId``
 from ``iris.actor.server``, ``ActorClient`` from ``iris.actor.client``,
 ``ActorPool`` from ``iris.actor.pool``, and the resolver types from
-``iris.actor.resolver``. Re-exporting the server here would pull it (and the
-runtime telltale forwarder it starts, which imports ``iris.client``) into every
-import of the package — and ``iris.client`` imports this package for the
-resolver types, closing an import cycle.
+``iris.actor.resolver``. Keeping concrete implementations in their defining
+modules also avoids import cycles through ``iris.client``.
 """

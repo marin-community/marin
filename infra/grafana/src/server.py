@@ -91,7 +91,7 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
-from training_stalls import task_state_query, telltale_query, training_stall_alert_rows
+from training_stalls import task_state_query, telemetry_query, training_stall_alert_rows
 from wandb_source import WandbSource
 from zephyr_stalls import zephyr_progress_query, zephyr_stall_alert_rows
 
@@ -360,8 +360,8 @@ def create_app(
             def run() -> list[dict]:
                 source = finelog_sources[target.name]
                 task_states = source.query(task_state_query(now), max_rows=config.max_rows)
-                telltale_metrics = source.query(telltale_query(now), max_rows=config.max_rows)
-                return training_stall_alert_rows(task_states, telltale_metrics, now)
+                telemetry_metrics = source.query(telemetry_query(now), max_rows=config.max_rows)
+                return training_stall_alert_rows(task_states, telemetry_metrics, now)
 
             key = ("training_stalls", _bucket(now, config.cache_ttl))
             return JSONResponse(finelog_cache.get_or_compute(key, run))

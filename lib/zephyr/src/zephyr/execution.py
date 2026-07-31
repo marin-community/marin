@@ -15,6 +15,7 @@ import enum
 import logging
 import math
 import os
+import re
 import sys
 import threading
 import time
@@ -37,7 +38,8 @@ from fray.local_backend import LocalClient
 from fray.types import ActorConfig, Entrypoint, JobRequest, ResourceConfig
 from iris.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from rigging import telltale
+from iris.runtime import telemetry as runtime_telemetry
+from rigging import telemetry
 from rigging.filesystem import StoragePath, TransferBudgetExceeded, marin_temp_bucket
 from rigging.timing import ExponentialBackoff, RateLimiter, log_time
 
@@ -91,7 +93,9 @@ MAX_STATUS_TEXT_LENGTH = 1000
 
 MAX_WORKERS_PER_JOB = 1_024
 
-ZEPHYR_PROGRESS_TIME_METRIC = "zephyr_progress_time_seconds"
+ZEPHYR_PROGRESS_TIME_METRIC = "progress_time_seconds"
+
+_SNAPSHOT_ATTRIBUTES = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
 
 
 class ShardFailureKind(enum.StrEnum):
@@ -323,6 +327,7 @@ class ZephyrCoordinator:
         self._map_cost = map_cost
         self._reduce_cost = reduce_cost
         self._pipeline_running: bool = False
+        runtime_telemetry.configure("zephyr")
 
         # Set at each _start_stage so _log_status can show average throughput since stage start.
         self._stage_monotonic_start: float | None = None
@@ -434,23 +439,20 @@ class ZephyrCoordinator:
     def _has_active_execution(self) -> bool:
         return self._execution_id != "" and self._total_shards > 0 and self._completed_shards < self._total_shards
 
-    def _publish_telltale(self) -> None:
-        """Publish pipeline counters as gauges on the coordinator's telltale page.
+    def _publish_telemetry(self) -> None:
+        """Publish coordinator-owned pipeline counter snapshots.
 
-        The coordinator is the only process that both holds the aggregated
-        counters and serves the routes: shards run in short-lived subprocesses
-        under ``SubprocessRunner`` (the distributed default), whose registries
-        nobody scrapes.
+        The coordinator owns the aggregate snapshot. Shards run in short-lived
+        subprocesses under ``SubprocessRunner``, so publishing here preserves a
+        complete execution-level view.
         """
+        attributes = {**_SNAPSHOT_ATTRIBUTES, "run": self._execution_id}
         for name, value in self.get_counters().items():
-            telltale.publish_gauge(name, value, f"zephyr counter {name}")
+            metric_name = re.sub(r"[^a-zA-Z0-9_]", "_", name.removeprefix("zephyr/"))
+            telemetry.gauge(metric_name).set(value, attributes=attributes)
         with self._lock:
             progress_time_seconds = self._progress_time_seconds
-        telltale.publish_gauge(
-            ZEPHYR_PROGRESS_TIME_METRIC,
-            progress_time_seconds,
-            "Unix time of the current stage start or most recent shard completion",
-        )
+        telemetry.gauge(ZEPHYR_PROGRESS_TIME_METRIC, unit="s").set(progress_time_seconds, attributes=attributes)
 
     def _build_status_md(self) -> tuple[str, str]:
         """Render pipeline progress as ``(detail, summary)`` markdown."""
@@ -483,13 +485,9 @@ class ZephyrCoordinator:
         return detail_md, "  \n".join(summary_lines)
 
     def _report_task_stats(self) -> None:
-        """Publish pipeline progress to telltale, and to the Iris coordinator if available."""
+        """Publish pipeline progress telemetry and Iris task status."""
         detail_md, summary_md = self._build_status_md()
-        # Eager, unlike the Iris push below: the telltale page is process-local
-        # and serves every run, including the ones outside an Iris task that the
-        # push skips entirely.
-        telltale.set_status(summary_md)
-        self._publish_telltale()
+        self._publish_telemetry()
         _push_iris_task_status(self._task_stats_limiter, lambda: (detail_md, summary_md))
 
     def _log_status(self) -> None:
@@ -958,8 +956,6 @@ class ZephyrCoordinator:
                 raise RuntimeError(self._fatal_error)
             self._pipeline_running = True
             self._execution_id = execution_id
-        telltale.set_global_labels(source="zephyr", run=execution_id)
-
         try:
             shards = _build_source_shards(plan.source_items)
             if not shards:

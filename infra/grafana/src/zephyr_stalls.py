@@ -9,9 +9,9 @@ import pyarrow as pa
 
 _PRODUCER_FRESHNESS = timedelta(seconds=90)
 _STALL_AGE = timedelta(minutes=45)
-_TELLTALE_LOOKBACK = timedelta(minutes=5)
+_TELEMETRY_LOOKBACK = timedelta(minutes=5)
 
-_PROGRESS_TIME_METRIC = "zephyr_progress_time_seconds"
+_PROGRESS_TIME_METRIC = "progress_time_seconds"
 
 
 def _sql_timestamp(at: datetime) -> str:
@@ -20,20 +20,26 @@ def _sql_timestamp(at: datetime) -> str:
 
 def zephyr_progress_query(now: datetime) -> str:
     """Return the latest Zephyr progress metric for each active execution."""
-    start = _sql_timestamp(now - _TELLTALE_LOOKBACK)
+    start = _sql_timestamp(now - _TELEMETRY_LOOKBACK)
+    end = _sql_timestamp(now)
     return (
-        "WITH recent AS ("
-        "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS cluster, job_id AS job, "
-        "run AS execution, value AS progress_time, ts AS producer_at, "
+        "WITH filtered AS ("
+        "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, "
+        "json_get(resource_attributes_json, 'job_id') AS job, "
+        "json_get(attributes_json, 'run') AS execution, value AS progress_time, "
+        "timestamp_ms, seq, to_timestamp_millis(timestamp_ms) AS producer_at "
+        'FROM "telemetry_v1" '
+        f"WHERE service = 'zephyr' AND name = '{_PROGRESS_TIME_METRIC}' "
+        f"AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '{start}') * 1000 AS BIGINT) "
+        f"AND timestamp_ms < CAST(EXTRACT(EPOCH FROM TIMESTAMP '{end}') * 1000 AS BIGINT)"
+        "), recent AS ("
+        "SELECT origin_cluster, job, execution, progress_time, producer_at, "
         "ROW_NUMBER() OVER ("
-        "PARTITION BY COALESCE(NULLIF(cluster,''),'unknown'), job_id, run ORDER BY ts DESC"
+        "PARTITION BY origin_cluster, job, execution ORDER BY timestamp_ms DESC, seq DESC"
         ") AS rn "
-        'FROM "telltale" '
-        f"WHERE source = 'zephyr' AND name = '{_PROGRESS_TIME_METRIC}' "
-        "AND job_id IS NOT NULL AND job_id <> '' AND run IS NOT NULL AND run <> '' "
-        f"AND ts >= TIMESTAMP '{start}'"
+        "FROM filtered WHERE job IS NOT NULL AND job <> '' AND execution IS NOT NULL AND execution <> ''"
         ") "
-        "SELECT cluster, job, execution, progress_time, producer_at "
+        "SELECT origin_cluster AS cluster, job, execution, progress_time, producer_at "
         "FROM recent WHERE rn = 1 ORDER BY cluster, job, execution"
     )
 

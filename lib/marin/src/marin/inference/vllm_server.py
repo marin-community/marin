@@ -18,13 +18,14 @@ from typing import Protocol
 from urllib.parse import urlparse
 
 import requests
+from iris.runtime import telemetry as runtime_telemetry
 from rigging.filesystem import marin_prefix
 from rigging.timing import Deadline, ExponentialBackoff, retry_with_backoff
 
 from marin.inference.config import WORKER_PYTHON_VERSION, InferenceModelConfig, VllmCompilationCacheMode
 from marin.inference.tpu_vllm_pins import tpu_inference_fork_ref, vllm_fork_ref
 from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
-from marin.inference.vllm_metrics import VllmMetricsForwarder, start_vllm_metrics_forwarding
+from marin.inference.vllm_metrics import VLLM_METRICS_SERVICE, VllmMetricsForwarder, start_vllm_metrics_forwarding
 
 logger = logging.getLogger(__name__)
 # Bounded tail for the failure path and diagnostics(); the full stream reaches the job log, so
@@ -298,7 +299,7 @@ class VllmServerHandle:
     compilation_cache: VllmCompilationCache
     # Owns the reader threads and on-disk log files.
     log_pump: _LogPump | None = None
-    # Polls the server's /metrics and mirrors it to telltale; None until the server is ready.
+    # Polls the server's /metrics into direct process telemetry; None until ready.
     metrics_forwarder: VllmMetricsForwarder | None = None
 
     def stop(self, *, timeout_seconds: float = 10) -> None:
@@ -916,6 +917,7 @@ def _start_vllm_native_server(
     handle.compilation_cache.publish()
 
     # Now that the server answers, forward its /metrics (throughput, TTFT, queue depth) to
-    # telltale so it reaches finelog. The metrics endpoint sits at the root, not under /v1.
+    # direct telemetry so it reaches Finelog. The metrics endpoint sits at the root, not under /v1.
+    runtime_telemetry.configure(VLLM_METRICS_SERVICE)
     metrics_url = f"http://{host}:{resolved_port}/metrics"
     return dataclasses.replace(handle, metrics_forwarder=start_vllm_metrics_forwarding(metrics_url))
