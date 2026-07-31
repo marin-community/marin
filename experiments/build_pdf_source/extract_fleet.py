@@ -39,6 +39,7 @@ from zephyr.execution import ZephyrContext
 from zephyr.runners import SubprocessRunner
 
 from experiments.build_pdf_source.boilerplate import BoilerplateOptions, strip_document_boilerplate
+from experiments.build_pdf_source.classify import routing_keys
 from experiments.build_pdf_source.common import (
     FOCUS_CRAWL,
     LayoutModelData,
@@ -51,7 +52,6 @@ from experiments.build_pdf_source.docling_extract.service import (
     build_handler,
     parse_converted,
 )
-from experiments.build_pdf_source.classify import routing_keys
 from experiments.build_pdf_source.extract import (
     _DRIVER_RESOURCES,
     _OUTPUT_SCHEMA,

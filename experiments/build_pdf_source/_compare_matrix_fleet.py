@@ -46,10 +46,9 @@ from pydantic import BaseModel
 from rigging.filesystem import prefix_join, url_to_fs
 from rigging.log_setup import configure_logging
 
-from experiments.build_pdf_source.classify import classify_step, model_step
+from experiments.build_pdf_source.classify import classify_step, model_step, routing_keys
 from experiments.build_pdf_source.common import LayoutModelData, PdfClassificationData, PdfSourceData
 from experiments.build_pdf_source.docling_extract.model_spec import LayoutBackend, TableBackend
-from experiments.build_pdf_source.classify import routing_keys
 from experiments.build_pdf_source.extract_fleet import MODEL_ID, build_pool_config, convert_document
 from experiments.build_pdf_source.fetch import fetch_step
 from experiments.build_pdf_source.layout_model import layout_model_step

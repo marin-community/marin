@@ -36,7 +36,7 @@ from pydantic import BaseModel
 from rigging.filesystem import url_to_fs
 from rigging.log_setup import configure_logging
 
-from experiments.build_pdf_source.classify import classify_step, model_step
+from experiments.build_pdf_source.classify import classify_step, model_step, routing_keys
 from experiments.build_pdf_source.common import PdfClassificationData, PdfSourceData
 from experiments.build_pdf_source.docling_extract.service import build_handler
 from experiments.build_pdf_source.extract import LAYOUT_BACKEND, TABLE_BACKEND

@@ -26,8 +26,8 @@ from fray.types import ResourceConfig
 from marin.datakit.normalize import (
     MainOutput,
     NormalizedData,
-    make_split_writer,
     generate_id,
+    make_split_writer,
 )
 from marin.execution.artifact import read_artifact
 from marin.execution.remote import remote
