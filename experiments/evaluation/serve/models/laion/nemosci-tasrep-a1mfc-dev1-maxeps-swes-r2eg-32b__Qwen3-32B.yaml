@@ -1,22 +1,19 @@
-name: qwen3.6-35b-a3b
-location: Qwen/Qwen3.6-35B-A3B
-revision: 995ad96eacd98c81ed38be0c5b274b04031597b0
+name: nemosci-tasrep-a1mfc-dev1-maxeps-swes-r2eg-32b
+location: laion/nemosci-tasrep-a1mfc-dev1-maxeps-swes-r2eg-32b__Qwen3-32B
+revision: 21d24f986dea15f54f4aa3d6bef3d18d5b00b156
 apply_chat_template: true
 resource_hint:
   gpu:
-    H100: 4
-  memory: 256g
+    GB200: 2
+  memory: 128g
 serve:
   tensor_parallel_size: 2
-  data_parallel_size: 2
   max_model_len: 32768
-  max_num_batched_tokens: 2048
-  limit_mm_per_prompt: '{"image":0,"video":0}'
+  tool_call_parser: hermes
+  reasoning_parser: qwen3
   vllm_extra_args:
   - --enable-prefix-caching
   - --enforce-eager
-  - --moe-backend
-  - triton
   - --attention-backend
   - FLASH_ATTN
 agent:
