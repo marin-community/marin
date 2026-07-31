@@ -20,6 +20,9 @@ TEACHER_ROOT = f"{MANIFEST_ROOT}/teacher-arctic-v1"
 AUDIT_URL = f"{TEACHER_ROOT}/audit.json"
 EMBEDDING_DIMENSION = 256
 RESULT_FILE = Path("/tmp/luxical-arctic-teacher-audit")
+MANIFEST_METADATA_KEY = b"luxical_manifest_sha256"
+TEACHER_ID_METADATA_KEY = b"luxical_teacher_id"
+TEACHER_REVISION_METADATA_KEY = b"luxical_teacher_revision"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -37,11 +40,20 @@ def teacher_output_url(manifest_output_url: str) -> str:
     return f"{TEACHER_ROOT}/sources/{Path(manifest_output_url).name}"
 
 
-def source_metrics(url: str, expected_rows: int) -> dict[str, Any]:
+def source_metrics(url: str, expected_rows: int, manifest_sha256: str) -> dict[str, Any]:
     """Read and validate one complete teacher source file."""
     filesystem, path = fsspec.core.url_to_fs(url)
     if not filesystem.exists(path):
         raise FileNotFoundError(f"Missing teacher output: {url}")
+    with pq.ParquetFile(path, filesystem=filesystem) as parquet_file:
+        metadata = parquet_file.schema_arrow.metadata or {}
+    expected_metadata = {
+        MANIFEST_METADATA_KEY: manifest_sha256.encode(),
+        TEACHER_ID_METADATA_KEY: TEACHER_ID.encode(),
+        TEACHER_REVISION_METADATA_KEY: TEACHER_REVISION.encode(),
+    }
+    if any(metadata.get(key) != value for key, value in expected_metadata.items()):
+        raise ValueError(f"Teacher output has different input metadata: {url}")
     table = pq.read_table(path, filesystem=filesystem, columns=["embedding"])
     if len(table) != expected_rows:
         raise ValueError(f"Teacher output has {len(table)} rows; expected {expected_rows}: {url}")
@@ -122,7 +134,7 @@ def main() -> None:
         output_url = teacher_output_url(result["output_url"])
         sources[source] = {
             "output_url": output_url,
-            "metrics": source_metrics(output_url, expected_rows),
+            "metrics": source_metrics(output_url, expected_rows, manifest["sha256"]),
         }
     expected_total = sum(
         result["counts"]["train_3m"] + result["counts"]["eval"] for result in manifest["sources"].values()

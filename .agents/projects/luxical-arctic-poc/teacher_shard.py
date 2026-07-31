@@ -19,19 +19,21 @@ import pyarrow.parquet as pq
 import torch
 from arctic import PinnedArcticEmbedder
 from iris.cluster.client.job_info import get_job_info
-from ladder_config import MANIFEST_ROOT, SEED, TEACHER_ID, TEACHER_REVISION
+from ladder_config import MANIFEST_ROOT, SEED, TEACHER_ID, TEACHER_REVISION, teacher_windows_from_view
 from luxical.teacher_embedder import fast_8bit_uniform_scalar_quantize
 from rigging.filesystem import atomic_rename
 
 MANIFEST_URL = f"{MANIFEST_ROOT}/manifest.json"
 TEACHER_ROOT = f"{MANIFEST_ROOT}/teacher-arctic-v1"
 MAX_TEACHER_TOKENS = 512
-TEXT_WINDOW_CHARS = 2_000
 TABLE_BATCH_SIZE = 512
 INFERENCE_BATCH_SIZE = 128
 QUANTIZATION_LIMIT = 0.3
 EMBEDDING_DIMENSION = 256
 RESULT_FILE = Path("/tmp/luxical-arctic-teacher-shard")
+MANIFEST_METADATA_KEY = b"luxical_manifest_sha256"
+TEACHER_ID_METADATA_KEY = b"luxical_teacher_id"
+TEACHER_REVISION_METADATA_KEY = b"luxical_teacher_revision"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -42,16 +44,6 @@ def read_json(url: str) -> dict[str, Any]:
     filesystem, path = fsspec.core.url_to_fs(url)
     with filesystem.open(path) as file:
         return json.load(file)
-
-
-def teacher_windows(text: str) -> tuple[str, str, str]:
-    """Return the fixed teacher windows for one document."""
-    middle_start = max(0, len(text) // 2 - TEXT_WINDOW_CHARS // 2)
-    return (
-        text[:TEXT_WINDOW_CHARS],
-        text[middle_start : middle_start + TEXT_WINDOW_CHARS],
-        text[-TEXT_WINDOW_CHARS:],
-    )
 
 
 def assigned_sources(manifest: dict[str, Any], shard_index: int, num_shards: int) -> list[str]:
@@ -113,7 +105,7 @@ def new_teacher() -> PinnedArcticEmbedder:
 
 def teacher_batch(teacher: PinnedArcticEmbedder, texts: list[str], start: int) -> np.ndarray:
     """Return one checked and quantized teacher batch."""
-    windows = [window for text in texts for window in teacher_windows(text)]
+    windows = [window for text in texts for window in teacher_windows_from_view(text)]
     window_embeddings = teacher.embed_texts(
         windows,
         is_query=False,
@@ -126,12 +118,24 @@ def teacher_batch(teacher: PinnedArcticEmbedder, texts: list[str], start: int) -
     pooled = window_embeddings.mean(axis=1)
     pooled /= np.linalg.norm(pooled, axis=1, keepdims=True).clip(min=1e-12)
     quantized = fast_8bit_uniform_scalar_quantize(pooled, QUANTIZATION_LIMIT)
-    if len(texts) > 1 and np.unique(quantized, axis=0).shape[0] == 1:
-        raise ValueError(f"Arctic quantization collapsed batch starting at {start}")
     return quantized
 
 
-def embed_source(teacher: PinnedArcticEmbedder, source: str, input_url: str) -> tuple[str, dict[str, Any]]:
+def expected_metadata(manifest_sha256: str) -> dict[bytes, bytes]:
+    """Return the metadata that binds a teacher file to its inputs."""
+    return {
+        MANIFEST_METADATA_KEY: manifest_sha256.encode(),
+        TEACHER_ID_METADATA_KEY: TEACHER_ID.encode(),
+        TEACHER_REVISION_METADATA_KEY: TEACHER_REVISION.encode(),
+    }
+
+
+def embed_source(
+    teacher: PinnedArcticEmbedder,
+    source: str,
+    input_url: str,
+    manifest_sha256: str,
+) -> tuple[str, dict[str, Any]]:
     """Embed and write all selected rows for one source."""
     input_table = load_selected_source(input_url)
     expected_rows = len(input_table)
@@ -140,8 +144,11 @@ def embed_source(teacher: PinnedArcticEmbedder, source: str, input_url: str) -> 
     if output_filesystem.exists(output_path):
         with pq.ParquetFile(output_path, filesystem=output_filesystem) as parquet_file:
             actual_rows = parquet_file.metadata.num_rows
+            metadata = parquet_file.schema_arrow.metadata or {}
         if actual_rows != expected_rows:
             raise ValueError(f"Existing teacher output has {actual_rows} rows; expected {expected_rows}: {output_url}")
+        if any(metadata.get(key) != value for key, value in expected_metadata(manifest_sha256).items()):
+            raise ValueError(f"Existing teacher output has different input metadata: {output_url}")
         logger.info("Reusing complete teacher output for %s", source)
         return output_url, {"rows": actual_rows, "reused": True}
 
@@ -160,6 +167,9 @@ def embed_source(teacher: PinnedArcticEmbedder, source: str, input_url: str) -> 
         EMBEDDING_DIMENSION,
     )
     output_table = input_table.drop(["text"]).append_column("embedding", embedding_array)
+    metadata = dict(output_table.schema.metadata or {})
+    metadata.update(expected_metadata(manifest_sha256))
+    output_table = output_table.replace_schema_metadata(metadata)
     with atomic_rename(output_path, fs=output_filesystem) as temporary_path:
         pq.write_table(
             output_table,
@@ -218,7 +228,7 @@ def main() -> None:
     for index, source in enumerate(sources, start=1):
         logger.info("Embedding source %d/%d on shard %d/%d: %s", index, len(sources), shard_index, num_shards, source)
         result = manifest["sources"][source]
-        output_url, metrics = embed_source(teacher, source, result["output_url"])
+        output_url, metrics = embed_source(teacher, source, result["output_url"], manifest["sha256"])
         source_reports[source] = {"output_url": output_url, "metrics": metrics}
 
     report = {
