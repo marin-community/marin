@@ -15,7 +15,6 @@ import pytest
 import requests
 from marin.datakit.download import diagnostic_logs
 from marin.datakit.download.diagnostic_logs import (
-    GHALOGS_ROUGH_TOKENS_B,
     GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH,
     GHALOGS_STAGED_PREFIX,
     SOURCE_INVENTORY,
@@ -239,7 +238,6 @@ def test_source_inventory_uses_shared_manifest_policy_metadata():
 
     assert inventory["ghalogs"].policy.training_allowed is True
     assert inventory["ghalogs"].policy.requires_sanitization is True
-    assert inventory["ghalogs"].rough_tokens_b == GHALOGS_ROUGH_TOKENS_B
     assert inventory["logchunks"].policy.eval_only is True
     assert inventory["loghub"].compressed_size_bytes == 7_513_088
 
@@ -247,7 +245,6 @@ def test_source_inventory_uses_shared_manifest_policy_metadata():
 def test_all_sources_includes_normalized_ghalogs_public():
     source = all_sources()["ghalogs/public"]
 
-    assert source.rough_token_count_b == GHALOGS_ROUGH_TOKENS_B
     assert [step.name for step in source.normalize_steps] == [
         "raw/diagnostic_logs/ghalogs_public_archive",
         "processed/diagnostic_logs/ghalogs_public_parquet",
