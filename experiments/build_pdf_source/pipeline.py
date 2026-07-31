@@ -38,6 +38,7 @@ from rigging.log_setup import configure_logging
 
 from experiments.build_pdf_source.classify import classify_step, model_step
 from experiments.build_pdf_source.extract import extract_step
+from experiments.build_pdf_source.extract_ocr import ocr_extract_step
 from experiments.build_pdf_source.fetch import fetch_step
 from experiments.build_pdf_source.layout_model import layout_model_step
 from experiments.build_pdf_source.plan import plan_step
@@ -49,15 +50,28 @@ def build_pdf_source_steps() -> list[StepSpec]:
     """Return every step from the fetch plan through to extracted text.
 
     The two model steps are independent of each other: ``model_step`` stages the OCR router, and
-    ``layout_model_step`` builds the quantized layout graph from the fetched corpus. Extraction
-    needs the routing table and the layout graph, and runs only the text-extractable route.
+    ``layout_model_step`` builds the quantized layout graph from the fetched corpus.
+
+    The classifier splits the corpus in two and the two extraction steps are independent from there
+    on: ``extract_step`` runs the text-extractable route on the CPU fleet against the layout graph,
+    and ``ocr_extract_step`` runs the rest through a vision model on GPUs. Both emit
+    :class:`~marin.datakit.normalize.NormalizedData` over the same shared columns, so the two halves
+    of the source concatenate.
     """
     plan = plan_step()
     fetch = fetch_step(plan)
     ocr_router = model_step()
     classify = classify_step(fetch, ocr_router)
     layout_model = layout_model_step(fetch)
-    return [plan, fetch, ocr_router, classify, layout_model, extract_step(fetch, classify, layout_model)]
+    return [
+        plan,
+        fetch,
+        ocr_router,
+        classify,
+        layout_model,
+        extract_step(fetch, classify, layout_model),
+        ocr_extract_step(fetch, classify),
+    ]
 
 
 def main() -> None:
