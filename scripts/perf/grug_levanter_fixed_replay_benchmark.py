@@ -467,8 +467,10 @@ def model_fingerprint(params: Transformer, pending_qb_betas: jax.Array) -> list[
 
     @jax.jit
     def fingerprint(model_leaves, betas):
-        firsts = [value.reshape(-1)[0].astype(jnp.float32) for value in model_leaves]
-        lasts = [value.reshape(-1)[-1].astype(jnp.float32) for value in model_leaves]
+        # Index global corners directly. Flattening a partitioned array can require
+        # an illegal replicated sharding (and a model-sized temporary allocation).
+        firsts = [value[(0,) * value.ndim].astype(jnp.float32) for value in model_leaves]
+        lasts = [value[tuple(size - 1 for size in value.shape)].astype(jnp.float32) for value in model_leaves]
         return jnp.stack(
             [
                 sum(firsts, start=jnp.array(0.0, dtype=jnp.float32)),
