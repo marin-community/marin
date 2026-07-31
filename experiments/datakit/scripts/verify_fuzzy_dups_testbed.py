@@ -53,7 +53,7 @@ DEFAULT_INSPECTION_LIMIT = 10_000
 TEXT_PREVIEW_CHARS = 500
 SHARED_POOL_NAME = "fuzzy-verification-testbed"
 CANDIDATE_IMPORT_VERSION = 1
-WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g", disk="8g")
+WORKER_RESOURCES = ResourceConfig(cpu=2, ram="16g", disk="8g")
 COORDINATOR_RESOURCES = ResourceConfig(cpu=1, ram="4g", disk="16g", preemptible=False)
 VERIFIED_COLUMNS = [
     "id",
