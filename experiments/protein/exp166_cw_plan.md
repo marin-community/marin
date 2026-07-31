@@ -16,23 +16,33 @@ approval first.
 
 First three completions, 2026-07-30:
 
-| run | init | aug | batch | final val | exp117 | delta | restarted |
-|---|---|---|---|---|---|---|---|
-| `wd1p6-bs64-scratch-aug` | scratch | yes | 64 | 3.1454 | 2.7330 | +0.4124 | no |
-| `wd1p6-bs128-scratch-aug` | scratch | yes | 128 | 3.1624 | 2.7489 | +0.4135 | no |
-| `exp117init-noaug` | exp117 weights | **no** | 64 | 3.1597 | 2.7131 | +0.4466 | no |
-| `exp117init-aug` | exp117 weights | yes | 64 | 3.1650 | 2.7131 | +0.4519 | yes |
-| `wd0p2-bs64-scratch-aug` | scratch | yes | 64 | 3.2862 | 2.7131 | +0.5731 | yes |
+All eight complete, every one at its final step.
 
-Four of five sit in a 0.04 band, **+0.41 to +0.45** over exp117, regardless of
-augmentation, initialization, batch size or whether the run was restarted. The fifth is an
-outlier at +0.57 with no established cause — it was restarted, but so was the +0.4519 run,
-so restarting does not explain it.
+| delta | val | exp117 | nodes | run |
+|---|---|---|---|---|
+| +0.3576 | 3.1027 | 2.7451 | 2 | `lr1e-3-wd0p8-bs128-scratch-aug` |
+| +0.4095 | 3.1464 | 2.7369 | 2 | `lr3p162e-3-wd0p1-bs128-scratch-aug` |
+| +0.4124 | 3.1454 | 2.7330 | 4 | `lr3p162e-4-wd1p6-bs64-scratch-aug` |
+| +0.4135 | 3.1624 | 2.7489 | 4 | `lr3p162e-4-wd1p6-bs128-scratch-aug` |
+| +0.4224 | 3.1730 | 2.7506 | 2 | `lr1e-3-wd0p2-bs64-scratch-aug` |
+| +0.4466 | 3.1597 | 2.7131 | 4 | `exp117init-noaug` |
+| +0.4519 | 3.1650 | 2.7131 | 4 | `exp117init-aug` |
+| +0.5731 | 3.2862 | 2.7131 | 4 | `lr3p162e-3-wd0p2-bs64-scratch-aug` |
+
+**n=8, mean +0.4359, median +0.4180, range +0.36 to +0.57.** Every run is worse than the
+TPU result for its own configuration. Nothing tested changes that: augmentation on or off,
+scratch or pretrained initialization, batch 64 or 128, two nodes or four, restarted or
+clean.
 
 **The augmentation makes no difference.** `exp117init-aug` 3.1650 against
-`exp117init-noaug` 3.1597 — same weights, same config, same 8 epochs, augmentation the
-only variable, **0.005 apart**. This answers #166 and is independent of the platform
-offset, which both arms carry equally.
+`exp117init-noaug` 3.1597 — same weights, same config, same 8 epochs, augmentation the only
+variable, **0.005 apart**. That answers #166, and it holds independently of the platform
+offset because both arms carry it equally.
+
+Two hypotheses raised during the run and **not** supported by the full set: a restart
+penalty (restarted runs land at +0.4519 and +0.5731, spanning the range) and a
+dp-width effect (2-node runs at +0.3576/+0.4095/+0.4224 straddle the 4-node values). The
++0.5731 outlier has no established cause.
 
 The unaugmented run settles it: a model that reached **2.7131** on TPU trained 8 further
 epochs on GPU with no augmentation and ended at **3.1597**, worse by 0.4466. No
