@@ -25,7 +25,7 @@ dependencies = [
     "pyyaml>=6.0",
     "requests>=2.0.0",
     # Tables and colour for the fsutil CLI.
-    "rich>=14.1.0",
+    "rich>=13.7.0",
     "s3fs>=2024.0.0",
     "starlette>=0.40",
 ]
