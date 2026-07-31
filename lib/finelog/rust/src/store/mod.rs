@@ -14,6 +14,7 @@ pub mod namespace;
 pub mod namespace_name;
 pub mod policy;
 pub mod ram_buffer;
+pub mod receipts;
 pub mod reconcile;
 pub mod remote;
 pub mod schema;

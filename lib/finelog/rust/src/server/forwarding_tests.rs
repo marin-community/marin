@@ -415,7 +415,25 @@ fn resume_after_eviction_reports_only_a_real_gap() {
 }
 
 #[test]
-fn chunk_by_bytes_splits_and_pairs_each_chunk_with_its_last_seq() {
+fn forward_batch_id_is_stable_and_names_every_identity_field() {
+    let expected = forward_batch_id("cluster-a", "iris.worker", 10, 20);
+    assert_eq!(
+        expected,
+        forward_batch_id("cluster-a", "iris.worker", 10, 20)
+    );
+
+    for changed in [
+        forward_batch_id("cluster-b", "iris.worker", 10, 20),
+        forward_batch_id("cluster-a", "iris.task", 10, 20),
+        forward_batch_id("cluster-a", "iris.worker", 11, 20),
+        forward_batch_id("cluster-a", "iris.worker", 10, 21),
+    ] {
+        assert_ne!(expected, changed);
+    }
+}
+
+#[test]
+fn chunk_by_bytes_splits_and_pairs_each_chunk_with_its_seq_range() {
     let batch = RecordBatch::try_new(
         Arc::new(ArrowSchema::new(vec![Field::new(
             "data",
@@ -430,11 +448,11 @@ fn chunk_by_bytes_splits_and_pairs_each_chunk_with_its_last_seq() {
     // A budget that fits the whole batch ships it in one chunk, cursor = last seq.
     let chunks = chunk_by_bytes(&batch, &seqs, 1 << 20).unwrap();
     assert_eq!(chunks.len(), 1);
-    assert_eq!(chunks[0].1, 30);
+    assert_eq!((chunks[0].1, chunks[0].2), (10, 30));
 
     // A minimal budget forces one row per chunk; each chunk's cursor is its own row.
     let chunks = chunk_by_bytes(&batch, &seqs, 1).unwrap();
-    let last_seqs: Vec<i64> = chunks.iter().map(|(_, seq)| *seq).collect();
+    let last_seqs: Vec<i64> = chunks.iter().map(|(_, _, seq)| *seq).collect();
     assert_eq!(last_seqs, vec![10, 20, 30]);
 }
 
@@ -692,10 +710,13 @@ async fn a_non_log_table_is_registered_on_the_hub_and_stamped_with_its_origin() 
     )
     .unwrap();
     let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
-    let (_, last_seq) = fx.source.write_rows("events", &ipc, None).unwrap();
+    let result = fx
+        .source
+        .write_rows("events", "forwarding-test-batch", &ipc, None)
+        .unwrap();
     // Seal the rows so the forwarder's durable watermark can reach them.
     fx.source
-        .await_persisted("events", last_seq, Duration::from_secs(5))
+        .await_persisted("events", result.receipt.last_seq, Duration::from_secs(5))
         .await
         .unwrap();
 

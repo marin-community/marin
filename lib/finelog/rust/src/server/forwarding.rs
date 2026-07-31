@@ -64,6 +64,7 @@ use crate::query::{make_ctx, run_query_over, QueryResult, RegisteredProvider};
 use crate::server::auth::FINELOG_AUDIENCE;
 use crate::server::MAX_MESSAGE_BYTES;
 use crate::store::ipc::encode_ipc;
+use crate::store::receipts::sha256_hex;
 use crate::store::schema::{
     schema_to_proto_owned, Schema, IMPLICIT_CLUSTER_COLUMN, IMPLICIT_SEQ_COLUMN,
 };
@@ -417,8 +418,9 @@ where
                     return;
                 }
             };
-            for (ipc, last_seq) in chunks {
-                match self.push(name, ipc, stop).await {
+            for (ipc, first_seq, last_seq) in chunks {
+                let batch_key = forward_batch_id(&self.config.cluster, name, first_seq, last_seq);
+                match self.push(name, &batch_key, ipc, stop).await {
                     Ok(()) => progress.batches += 1,
                     Err(PushError::Stopping(e)) => {
                         tracing::warn!(namespace = name, cursor, error = %e, "finelog forwarder: push interrupted");
@@ -661,12 +663,14 @@ where
     async fn push(
         &self,
         name: &str,
+        batch_id: &str,
         arrow_ipc: Vec<u8>,
         stop: &mut watch::Receiver<bool>,
     ) -> Result<(), PushError> {
         let request = WriteRowsRequest::default()
             .with_namespace(name)
-            .with_arrow_ipc(arrow_ipc);
+            .with_arrow_ipc(arrow_ipc)
+            .with_batch_id(batch_id);
 
         let mut backoff = BACKOFF_MIN;
         loop {
@@ -770,6 +774,11 @@ fn quote_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
+fn forward_batch_id(cluster: &str, namespace: &str, first_seq: i64, last_seq: i64) -> String {
+    let identity = format!("{cluster}\0{namespace}\0{first_seq}\0{last_seq}");
+    format!("forward:{}", sha256_hex(identity.as_bytes()))
+}
+
 /// Encode `ship` into IPC chunks whose encoded size stays near `max_bytes`, pairing each
 /// with the largest `seq` it carries (the cursor to advance to once the hub acks it).
 ///
@@ -780,7 +789,7 @@ fn chunk_by_bytes(
     ship: &RecordBatch,
     seqs: &Int64Array,
     max_bytes: usize,
-) -> Result<Vec<(Vec<u8>, i64)>, StatsError> {
+) -> Result<Vec<(Vec<u8>, i64, i64)>, StatsError> {
     let num_rows = ship.num_rows();
     let mem = ship.get_array_memory_size().max(1);
     let per_row = (mem / num_rows.max(1)).max(1);
@@ -793,7 +802,7 @@ fn chunk_by_bytes(
         let len = rows_per_chunk.min(num_rows - start);
         let ipc = encode_ipc(&schema, &[ship.slice(start, len)])
             .map_err(|e| StatsError::Internal(format!("encode ship chunk: {e}")))?;
-        out.push((ipc, seqs.value(start + len - 1)));
+        out.push((ipc, seqs.value(start), seqs.value(start + len - 1)));
         start += len;
     }
     Ok(out)

@@ -130,6 +130,7 @@ url = "2"
 # sqlite). Distinct file from Python's DuckDB registry — never aliased.
 rusqlite = { version = "0.32", features = ["bundled"] }
 regex = "1"
+sha2 = "0.10"
 
 # Process allocator (see the `#[global_allocator]` in `main.rs`). The default
 # glibc malloc retains freed query-buffer pages in its per-CPU arenas instead of

@@ -19,7 +19,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::errors::StatsError;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{schema_from_json, schema_to_json, Schema};
-use crate::store::types::{NamespaceStats, SegmentRow};
+use crate::store::types::{BatchReceipt, NamespaceStats, SegmentRow};
 
 /// Sidecar filename.
 pub const CATALOG_DB_FILENAME: &str = "_finelog_catalog.sqlite";
@@ -133,6 +133,56 @@ fn remove_segments_in(
     Ok(())
 }
 
+fn row_to_batch_receipt(row: &rusqlite::Row) -> rusqlite::Result<BatchReceipt> {
+    Ok(BatchReceipt {
+        batch_id: row.get(0)?,
+        payload_sha256: row.get(1)?,
+        rows_written: row.get(2)?,
+        first_seq: row.get(3)?,
+        last_seq: row.get(4)?,
+    })
+}
+
+fn upsert_batch_receipt_in(
+    conn: &Connection,
+    namespace: &str,
+    receipt: &BatchReceipt,
+) -> Result<(), StatsError> {
+    let existing = conn
+        .query_row(
+            "SELECT batch_id, payload_sha256, rows_written, first_seq, last_seq \
+             FROM batch_receipts WHERE namespace = ?1 AND batch_id = ?2",
+            rusqlite::params![namespace, receipt.batch_id],
+            row_to_batch_receipt,
+        )
+        .optional()
+        .map_err(sqlite_err)?;
+    if let Some(existing) = existing {
+        if existing != *receipt {
+            return Err(StatsError::Internal(format!(
+                "SQLite receipt conflict for namespace {namespace:?}, batch {:?}",
+                receipt.batch_id
+            )));
+        }
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT INTO batch_receipts \
+         (namespace, batch_id, payload_sha256, rows_written, first_seq, last_seq) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![
+            namespace,
+            receipt.batch_id,
+            receipt.payload_sha256,
+            receipt.rows_written,
+            receipt.first_seq,
+            receipt.last_seq,
+        ],
+    )
+    .map_err(sqlite_err)?;
+    Ok(())
+}
+
 impl Catalog {
     /// Open the catalog. `data_dir = None` -> in-memory; otherwise the sidecar
     /// lives at `{data_dir}/_finelog_catalog.sqlite`. Creates the three tables
@@ -210,6 +260,15 @@ impl Catalog {
                 namespace TEXT    NOT NULL,
                 cursor    INTEGER NOT NULL,
                 PRIMARY KEY (target, namespace)
+            );
+            CREATE TABLE IF NOT EXISTS batch_receipts (
+                namespace     TEXT    NOT NULL,
+                batch_id      TEXT    NOT NULL,
+                payload_sha256 TEXT   NOT NULL,
+                rows_written  INTEGER NOT NULL,
+                first_seq     INTEGER NOT NULL,
+                last_seq      INTEGER NOT NULL,
+                PRIMARY KEY (namespace, batch_id)
             );
             "#,
         )
@@ -396,6 +455,10 @@ impl Catalog {
         let inner = self.inner.lock().unwrap();
         inner
             .conn
+            .execute("DELETE FROM batch_receipts WHERE namespace = ?1", [name])
+            .map_err(sqlite_err)?;
+        inner
+            .conn
             .execute("DELETE FROM segments WHERE namespace = ?1", [name])
             .map_err(sqlite_err)?;
         inner
@@ -562,6 +625,86 @@ impl Catalog {
     pub fn upsert_segment(&self, row: &SegmentRow) -> Result<(), StatsError> {
         let inner = self.inner.lock().unwrap();
         upsert_segment_in(&inner.conn, row)
+    }
+
+    /// Commit a segment row and the receipts carried by that segment together.
+    pub fn upsert_segment_with_receipts(
+        &self,
+        row: &SegmentRow,
+        receipts: &[BatchReceipt],
+    ) -> Result<(), StatsError> {
+        let mut inner = self.inner.lock().unwrap();
+        let tx = inner.conn.transaction().map_err(sqlite_err)?;
+        upsert_segment_in(&tx, row)?;
+        for receipt in receipts {
+            upsert_batch_receipt_in(&tx, &row.namespace, receipt)?;
+        }
+        tx.commit().map_err(sqlite_err)
+    }
+
+    /// Replace SQLite's repairable receipt index from durable manifests/footers.
+    pub fn replace_batch_receipts(
+        &self,
+        namespace: &str,
+        receipts: &[BatchReceipt],
+    ) -> Result<(), StatsError> {
+        let mut inner = self.inner.lock().unwrap();
+        let tx = inner.conn.transaction().map_err(sqlite_err)?;
+        tx.execute(
+            "DELETE FROM batch_receipts WHERE namespace = ?1",
+            [namespace],
+        )
+        .map_err(sqlite_err)?;
+        for receipt in receipts {
+            upsert_batch_receipt_in(&tx, namespace, receipt)?;
+        }
+        tx.commit().map_err(sqlite_err)
+    }
+
+    pub fn upsert_batch_receipt(
+        &self,
+        namespace: &str,
+        receipt: &BatchReceipt,
+    ) -> Result<(), StatsError> {
+        let inner = self.inner.lock().unwrap();
+        upsert_batch_receipt_in(&inner.conn, namespace, receipt)
+    }
+
+    pub fn get_batch_receipt(
+        &self,
+        namespace: &str,
+        batch_id: &str,
+    ) -> Result<Option<BatchReceipt>, StatsError> {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .conn
+            .query_row(
+                "SELECT batch_id, payload_sha256, rows_written, first_seq, last_seq \
+                 FROM batch_receipts WHERE namespace = ?1 AND batch_id = ?2",
+                rusqlite::params![namespace, batch_id],
+                row_to_batch_receipt,
+            )
+            .optional()
+            .map_err(sqlite_err)
+    }
+
+    pub fn list_batch_receipts(&self, namespace: &str) -> Result<Vec<BatchReceipt>, StatsError> {
+        let inner = self.inner.lock().unwrap();
+        let mut stmt = inner
+            .conn
+            .prepare(
+                "SELECT batch_id, payload_sha256, rows_written, first_seq, last_seq \
+                 FROM batch_receipts WHERE namespace = ?1 ORDER BY batch_id",
+            )
+            .map_err(sqlite_err)?;
+        let rows = stmt
+            .query_map([namespace], row_to_batch_receipt)
+            .map_err(sqlite_err)?;
+        let mut receipts = Vec::new();
+        for row in rows {
+            receipts.push(row.map_err(sqlite_err)?);
+        }
+        Ok(receipts)
     }
 
     /// Insert or replace a set of segment rows in one durable transaction.

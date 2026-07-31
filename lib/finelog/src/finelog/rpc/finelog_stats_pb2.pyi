@@ -83,18 +83,28 @@ class RegisterTableResponse(_message.Message):
     def __init__(self, effective_schema: _Optional[_Union[Schema, _Mapping]] = ..., effective_policy: _Optional[_Union[StoragePolicy, _Mapping]] = ...) -> None: ...
 
 class WriteRowsRequest(_message.Message):
-    __slots__ = ("namespace", "arrow_ipc")
+    __slots__ = ("namespace", "arrow_ipc", "batch_id")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     ARROW_IPC_FIELD_NUMBER: _ClassVar[int]
+    BATCH_ID_FIELD_NUMBER: _ClassVar[int]
     namespace: str
     arrow_ipc: bytes
-    def __init__(self, namespace: _Optional[str] = ..., arrow_ipc: _Optional[bytes] = ...) -> None: ...
+    batch_id: str
+    def __init__(self, namespace: _Optional[str] = ..., arrow_ipc: _Optional[bytes] = ..., batch_id: _Optional[str] = ...) -> None: ...
 
 class WriteRowsResponse(_message.Message):
-    __slots__ = ("rows_written",)
+    __slots__ = ("rows_written", "batch_id", "first_seq", "last_seq", "deduplicated")
     ROWS_WRITTEN_FIELD_NUMBER: _ClassVar[int]
+    BATCH_ID_FIELD_NUMBER: _ClassVar[int]
+    FIRST_SEQ_FIELD_NUMBER: _ClassVar[int]
+    LAST_SEQ_FIELD_NUMBER: _ClassVar[int]
+    DEDUPLICATED_FIELD_NUMBER: _ClassVar[int]
     rows_written: int
-    def __init__(self, rows_written: _Optional[int] = ...) -> None: ...
+    batch_id: str
+    first_seq: int
+    last_seq: int
+    deduplicated: bool
+    def __init__(self, rows_written: _Optional[int] = ..., batch_id: _Optional[str] = ..., first_seq: _Optional[int] = ..., last_seq: _Optional[int] = ..., deduplicated: _Optional[bool] = ...) -> None: ...
 
 class QueryRequest(_message.Message):
     __slots__ = ("sql",)

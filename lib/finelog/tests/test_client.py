@@ -185,6 +185,7 @@ def test_connect_returns_usable_client(tracked_clients):
         client.write_batch("key", [logging_pb2.LogEntry(source="t", data="hi")])
         assert client.flush(timeout=5.0) == FlushResult.SUCCEEDED
         assert tracked_clients and tracked_clients[0].writes[0].namespace == "log"
+        assert tracked_clients[0].writes[0].batch_id
         decoded = _decode_ipc_table(tracked_clients[0].writes[0].arrow_ipc)
         assert decoded.column("key").to_pylist() == ["key"]
         assert decoded.column("data").to_pylist() == ["hi"]
@@ -785,7 +786,7 @@ def test_table_close_drains_queue_when_thread_starts_late(monkeypatch):
     table = log_client_mod.Table(
         namespace="iris.worker",
         schema=schema,
-        flusher=lambda _namespace, batch: sent.append(batch),
+        flusher=lambda _namespace, _batch_id, batch: sent.append(batch),
     )
     table.write([SimpleNamespace(worker_id="w-1"), SimpleNamespace(worker_id="w-2")])
     table.close()
@@ -793,6 +794,47 @@ def test_table_close_drains_queue_when_thread_starts_late(monkeypatch):
     assert len(thread_targets) == 1
     assert len(sent) == 1
     assert sent[0].column("worker_id").to_pylist() == ["w-1", "w-2"]
+
+
+def test_table_retry_preserves_batch_id_and_contents(monkeypatch):
+    attempts: list[tuple[str, pa.RecordBatch]] = []
+
+    class IdleThread:
+        def __init__(self, *, target, name, daemon):
+            self.name = name
+            self.daemon = daemon
+
+        def start(self):
+            pass
+
+        def join(self, timeout=None):
+            pass
+
+    def fail_once(_namespace: str, batch_id: str, batch: pa.RecordBatch) -> None:
+        attempts.append((batch_id, batch))
+        if len(attempts) == 1:
+            raise ConnectionError("retry")
+
+    monkeypatch.setattr(log_client_mod.threading, "Thread", IdleThread)
+    schema = Schema(
+        columns=(Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),),
+    )
+    table = log_client_mod.Table(namespace="iris.worker", schema=schema, flusher=fail_once)
+    items = [
+        log_client_mod._PendingItem(seq=1, payload=SimpleNamespace(worker_id="w-1"), size_bytes=1),
+        log_client_mod._PendingItem(seq=2, payload=SimpleNamespace(worker_id="w-2"), size_bytes=1),
+    ]
+
+    sent, retry = table._send(items)
+    assert sent == 0
+    assert retry == items
+    sent, retry = table._send(retry)
+
+    assert sent == 2
+    assert retry == []
+    assert attempts[0][0]
+    assert attempts[0][0] == attempts[1][0]
+    assert attempts[0][1].equals(attempts[1][1])
 
 
 def test_schema_from_proto_consistency():

@@ -12,15 +12,38 @@ use std::path::{Path, PathBuf};
 use arrow::array::RecordBatch;
 use parquet::arrow::arrow_writer::{ArrowWriter, ArrowWriterOptions};
 use parquet::basic::{Compression, ZstdLevel};
+use parquet::file::metadata::KeyValue;
 use parquet::file::properties::WriterProperties;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::file::statistics::Statistics;
 
 use crate::errors::StatsError;
-use crate::store::types::{parse_seg_filename, seg_filename};
+use crate::store::types::{parse_seg_filename, seg_filename, BatchReceipt};
 
 /// Parquet row-group size.
 pub const ROW_GROUP_SIZE: usize = 16_384;
+const BATCH_RECEIPTS_METADATA_KEY: &str = "finelog.batch_receipts.v1";
+
+fn segment_writer_properties_with_receipts(
+    receipts: &[BatchReceipt],
+) -> Result<WriterProperties, StatsError> {
+    let zstd =
+        ZstdLevel::try_new(1).map_err(|e| StatsError::Internal(format!("zstd level 1: {e}")))?;
+    let mut builder = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(ROW_GROUP_SIZE))
+        .set_compression(Compression::ZSTD(zstd))
+        .set_bloom_filter_enabled(true);
+    if !receipts.is_empty() {
+        let encoded = serde_json::to_string(receipts).map_err(|error| {
+            StatsError::Internal(format!("encode batch receipts for parquet footer: {error}"))
+        })?;
+        builder = builder.set_key_value_metadata(Some(vec![KeyValue::new(
+            BATCH_RECEIPTS_METADATA_KEY.to_string(),
+            encoded,
+        )]));
+    }
+    Ok(builder.build())
+}
 
 /// Parquet `WriterProperties` shared by every finelog segment writer — the L0
 /// flush (`write_segment`) and the compaction output (`write_merged_segment`).
@@ -30,13 +53,7 @@ pub const ROW_GROUP_SIZE: usize = 16_384;
 /// row-group pruning). Centralizing it keeps L0 and compacted segments using one
 /// consistent on-disk layout.
 pub fn segment_writer_properties() -> Result<WriterProperties, StatsError> {
-    let zstd =
-        ZstdLevel::try_new(1).map_err(|e| StatsError::Internal(format!("zstd level 1: {e}")))?;
-    Ok(WriterProperties::builder()
-        .set_max_row_group_row_count(Some(ROW_GROUP_SIZE))
-        .set_compression(Compression::ZSTD(zstd))
-        .set_bloom_filter_enabled(true)
-        .build())
+    segment_writer_properties_with_receipts(&[])
 }
 
 /// Per-segment metadata recovered from filename + parquet footer.
@@ -57,7 +74,15 @@ pub struct SegmentMetadata {
 
 /// Encode `batch` to parquet bytes (UNSORTED L0, row-group 16384, zstd-1, bloom).
 pub fn write_segment(batch: &RecordBatch) -> Result<Vec<u8>, StatsError> {
-    let props = segment_writer_properties()?;
+    write_segment_with_receipts(batch, &[])
+}
+
+/// Encode an L0 segment with durable idempotency receipts in its footer.
+pub fn write_segment_with_receipts(
+    batch: &RecordBatch,
+    receipts: &[BatchReceipt],
+) -> Result<Vec<u8>, StatsError> {
+    let props = segment_writer_properties_with_receipts(receipts)?;
     let mut buf: Vec<u8> = Vec::new();
     let opts = ArrowWriterOptions::new().with_properties(props);
     let mut writer = ArrowWriter::try_new_with_options(&mut buf, batch.schema(), opts)
@@ -80,7 +105,18 @@ pub fn write_segment_to_dir(
     min_seq: i64,
     batch: &RecordBatch,
 ) -> Result<(PathBuf, i64), StatsError> {
-    let bytes = write_segment(batch)?;
+    write_segment_to_dir_with_receipts(dir, level, min_seq, batch, &[])
+}
+
+/// Write a segment whose footer carries the batches acknowledged by this L0.
+pub fn write_segment_to_dir_with_receipts(
+    dir: &Path,
+    level: i32,
+    min_seq: i64,
+    batch: &RecordBatch,
+    receipts: &[BatchReceipt],
+) -> Result<(PathBuf, i64), StatsError> {
+    let bytes = write_segment_with_receipts(batch, receipts)?;
     let filename = seg_filename(level, min_seq);
     let final_path = dir.join(&filename);
     let staging_path = dir.join(format!("{filename}.tmp"));
@@ -102,10 +138,45 @@ pub fn write_segment_to_dir(
             final_path.display()
         ))
     })?;
+    std::fs::File::open(dir)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|e| StatsError::Internal(format!("fsync directory {}: {e}", dir.display())))?;
     let size = std::fs::metadata(&final_path)
         .map_err(|e| StatsError::Internal(format!("stat {}: {e}", final_path.display())))?
         .len() as i64;
     Ok((final_path, size))
+}
+
+/// Recover idempotency receipts from a segment footer.
+pub fn read_segment_receipts(path: &Path) -> Result<Vec<BatchReceipt>, StatsError> {
+    let file = std::fs::File::open(path).map_err(|error| {
+        StatsError::Internal(format!(
+            "open segment receipt footer {}: {error}",
+            path.display()
+        ))
+    })?;
+    let reader = SerializedFileReader::new(file).map_err(|error| {
+        StatsError::Internal(format!(
+            "read segment receipt footer {}: {error}",
+            path.display()
+        ))
+    })?;
+    let Some(metadata) = reader.metadata().file_metadata().key_value_metadata() else {
+        return Ok(Vec::new());
+    };
+    let Some(encoded) = metadata
+        .iter()
+        .find(|item| item.key == BATCH_RECEIPTS_METADATA_KEY)
+        .and_then(|item| item.value.as_deref())
+    else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_str(encoded).map_err(|error| {
+        StatsError::Internal(format!(
+            "decode segment receipts from {}: {error}",
+            path.display()
+        ))
+    })
 }
 
 /// Read a segment's footer metadata: row count from the footer, `min_seq` from

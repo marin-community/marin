@@ -17,6 +17,7 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 
 use crate::store::schema::{AlignedBatch, IMPLICIT_SEQ_COLUMN};
+use crate::store::types::BatchReceipt;
 
 /// An immutable, in-flight flush buffer.
 ///
@@ -29,12 +30,14 @@ pub struct SealedBuffer {
     pub num_rows: i64,
     pub min_seq: i64,
     pub max_seq: i64,
+    pub receipts: Vec<BatchReceipt>,
 }
 
 /// Owns the in-RAM write state for a single namespace.
 pub struct RamBuffers {
     arrow_schema: SchemaRef,
     chunks: Vec<RecordBatch>,
+    receipts: Vec<BatchReceipt>,
     flushing: Option<SealedBuffer>,
     next_seq: i64,
     ram_bytes: i64,
@@ -46,6 +49,7 @@ impl RamBuffers {
         RamBuffers {
             arrow_schema,
             chunks: Vec::new(),
+            receipts: Vec::new(),
             flushing: None,
             next_seq,
             ram_bytes: 0,
@@ -74,8 +78,21 @@ impl RamBuffers {
     /// Append `batch` (already seq-stamped) to the chunk list; the caller
     /// supplies `added_bytes` (so the hot path never walks the batch buffers).
     pub fn append_batch(&mut self, batch: RecordBatch, added_bytes: i64) {
+        self.append_batch_with_receipt(batch, added_bytes, None);
+    }
+
+    /// Append a seq-stamped batch and its idempotency receipt.
+    pub fn append_batch_with_receipt(
+        &mut self,
+        batch: RecordBatch,
+        added_bytes: i64,
+        receipt: Option<BatchReceipt>,
+    ) {
         let rows = batch.num_rows() as i64;
         self.chunks.push(batch);
+        if let Some(receipt) = receipt {
+            self.receipts.push(receipt);
+        }
         maintain_chunk_invariant(&mut self.chunks, &self.arrow_schema);
         self.ram_bytes += added_bytes;
         self.ram_rows += rows;
@@ -106,6 +123,7 @@ impl RamBuffers {
             return None;
         }
         let tables = std::mem::take(&mut self.chunks);
+        let receipts = std::mem::take(&mut self.receipts);
         let sealed_bytes = self.ram_bytes;
         let sealed_rows = self.ram_rows;
         self.ram_bytes = 0;
@@ -132,6 +150,7 @@ impl RamBuffers {
             num_rows: sealed_rows,
             min_seq,
             max_seq,
+            receipts,
         };
         self.flushing = Some(sealed.clone());
         Some(sealed)
@@ -148,6 +167,9 @@ impl RamBuffers {
             self.ram_bytes += f.nbytes;
             self.ram_rows += f.num_rows;
             self.chunks.insert(0, f.batch);
+            let mut restored = f.receipts;
+            restored.append(&mut self.receipts);
+            self.receipts = restored;
         }
     }
 }

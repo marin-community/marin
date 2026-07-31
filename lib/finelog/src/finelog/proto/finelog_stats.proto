@@ -109,10 +109,18 @@ message WriteRowsRequest {
   // type. Missing nullable columns are filled with NULL on append.
   // Unknown column names raise SchemaValidationError.
   bytes arrow_ipc = 2;
+  // Required idempotency key, scoped by namespace. A retry with the same Arrow
+  // IPC payload returns the original durable sequence range; another payload
+  // with this ID fails with failed_precondition.
+  string batch_id = 3;
 }
 
 message WriteRowsResponse {
   int64 rows_written = 1;
+  string batch_id = 2;
+  int64 first_seq = 3;
+  int64 last_seq = 4;
+  bool deduplicated = 5;
 }
 
 message QueryRequest {

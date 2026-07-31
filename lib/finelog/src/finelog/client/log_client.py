@@ -9,6 +9,7 @@ import threading
 import time
 import types
 import typing
+import uuid
 from collections import deque
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -222,7 +223,7 @@ class Table:
         *,
         namespace: str,
         schema: Schema,
-        flusher: Callable[[str, pa.RecordBatch], None],
+        flusher: Callable[[str, str, pa.RecordBatch], None],
         querier: Callable[[str], pa.Table] | None = None,
         registrar: Callable[[], Schema] | None = None,
         flush_interval: float = DEFAULT_FLUSH_INTERVAL,
@@ -246,6 +247,7 @@ class Table:
         self._batch_rows = batch_rows
         self._max_buffer_bytes = max_buffer_bytes
         self._max_buffer_rows = max_buffer_rows
+        self._writer_id = str(uuid.uuid4())
 
         self._cond = threading.Condition()
         self._queue: deque[_PendingItem] = deque()
@@ -438,7 +440,8 @@ class Table:
         try:
             self._ensure_registered()
             batch = _rows_to_record_batch(rows, self._arrow_schema, self._schema)
-            self._flusher(self._namespace, batch)
+            batch_id = f"{self._writer_id}:{items[0].seq}:{items[-1].seq}"
+            self._flusher(self._namespace, batch_id, batch)
         except Exception as exc:
             retryable = is_retryable_error(exc) or isinstance(exc, (ConnectionError, OSError, TimeoutError))
             summary = _format_exc_summary(exc)
@@ -805,14 +808,20 @@ class LogClient:
         reader = paipc.open_stream(pa.BufferReader(bytes(response.arrow_ipc)))
         return reader.read_all()
 
-    def _stats_flush(self, namespace: str, batch: pa.RecordBatch) -> None:
+    def _stats_flush(self, namespace: str, batch_id: str, batch: pa.RecordBatch) -> None:
         sink = io.BytesIO()
         with paipc.new_stream(sink, batch.schema) as writer:
             writer.write_batch(batch)
         batch_bytes = sink.getvalue()
         client = self._get_stats_client()
         try:
-            client.write_rows(stats_pb2.WriteRowsRequest(namespace=namespace, arrow_ipc=batch_bytes))
+            client.write_rows(
+                stats_pb2.WriteRowsRequest(
+                    namespace=namespace,
+                    arrow_ipc=batch_bytes,
+                    batch_id=batch_id,
+                )
+            )
         except ConnectError as exc:
             if is_retryable_error(exc):
                 self._invalidate(_format_exc_summary(exc))

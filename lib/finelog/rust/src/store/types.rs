@@ -7,6 +7,7 @@
 use std::sync::OnceLock;
 
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 
 /// Where a segment's bytes currently live. Wire/catalog strings: LOCAL/REMOTE/BOTH.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +102,33 @@ pub struct MemorySummary {
     pub namespaces: usize,
     pub ram_bytes: i64,
     pub chunks: usize,
+}
+
+/// Durable acknowledgement metadata for one idempotent WriteRows batch.
+///
+/// This value is written into the L0 Parquet footer and an immutable receipt
+/// manifest before its SQLite index row. The durable files are the source of
+/// truth after a crash.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BatchReceipt {
+    pub batch_id: String,
+    pub payload_sha256: String,
+    pub rows_written: i64,
+    pub first_seq: i64,
+    pub last_seq: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReceiptState {
+    Pending,
+    Durable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WriteRowsResult {
+    pub receipt: BatchReceipt,
+    pub deduplicated: bool,
+    pub receipt_state: ReceiptState,
 }
 
 // ---------------------------------------------------------------------------

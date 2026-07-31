@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use arrow::datatypes::SchemaRef;
+use sha2::{Digest, Sha256};
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::ColumnType;
@@ -29,7 +30,7 @@ use crate::store::schema::{
     merge_schemas, resolve_key_column, with_implicit_cluster, with_implicit_seq, AlignedBatch,
     Column, Schema,
 };
-use crate::store::types::NamespaceStats;
+use crate::store::types::{NamespaceStats, WriteRowsResult};
 
 /// The privileged log namespace name.
 pub const LOG_NAMESPACE_NAME: &str = "log";
@@ -42,6 +43,24 @@ pub const LOG_NAMESPACE_DIR: &str = "log";
 /// this window is aborted rather than wedging the worker. Distinct from the
 /// process-shutdown drain budget passed to [`Store::shutdown`] at SIGTERM.
 const NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_BATCH_ID_BYTES: usize = 256;
+const WRITE_ROWS_DIGEST_DOMAIN: &[u8] = b"finelog.write_rows.v1\0";
+
+fn write_rows_payload_sha256(origin_cluster: Option<&str>, arrow_ipc: &[u8]) -> String {
+    let mut digest = Sha256::new();
+    digest.update(WRITE_ROWS_DIGEST_DOMAIN);
+    match origin_cluster {
+        Some(origin) => {
+            digest.update([1]);
+            digest.update((origin.len() as u64).to_be_bytes());
+            digest.update(origin.as_bytes());
+        }
+        None => digest.update([0]),
+    }
+    digest.update((arrow_ipc.len() as u64).to_be_bytes());
+    digest.update(arrow_ipc);
+    format!("{:x}", digest.finalize())
+}
 
 /// Registered schema for the privileged `log` namespace; `key_column = "key"`.
 ///
@@ -390,11 +409,13 @@ impl Store {
         Ok(effective_schema)
     }
 
-    /// Decode + validate + append a WriteRows batch, returning
-    /// `(rows_written, last_seq)`. `last_seq` is the durability target the caller
-    /// awaits (`-1` for an empty batch). The size/row caps and IPC decode happen
-    /// before namespace resolution, then validate/align runs OUTSIDE any lock.
-    /// Append a WriteRows batch. `origin_cluster` is the authenticated origin the
+    /// Decode, validate, deduplicate, and append a non-empty WriteRows batch.
+    ///
+    /// `batch_id` is required and scoped by namespace. The server computes the
+    /// SHA-256 digest over a domain separator, authenticated origin (or the
+    /// trusted/local sentinel), and exact Arrow IPC payload. Empty batches are
+    /// rejected rather than acknowledged without reconstructible metadata.
+    /// `origin_cluster` is the authenticated origin the
     /// rows are attributed to (`Some` for a forwarding JWT; `None` for a
     /// trusted-network writer, which names its own origin — empty for a local
     /// write). When set, it overwrites the implicit `cluster` column after
@@ -402,15 +423,21 @@ impl Store {
     pub fn write_rows(
         &self,
         name: &str,
+        batch_id: &str,
         arrow_ipc: &[u8],
         origin_cluster: Option<&str>,
-    ) -> Result<(i64, i64), StatsError> {
+    ) -> Result<WriteRowsResult, StatsError> {
         use crate::store::ipc::decode_one_record_batch;
         use crate::store::schema::{
             stamp_cluster_column, validate_and_align_batch, MAX_WRITE_ROWS_BYTES,
             MAX_WRITE_ROWS_ROWS,
         };
 
+        if batch_id.is_empty() || batch_id.len() > MAX_BATCH_ID_BYTES {
+            return Err(StatsError::SchemaValidation(format!(
+                "WriteRows batch_id must contain 1..={MAX_BATCH_ID_BYTES} bytes"
+            )));
+        }
         if arrow_ipc.len() > MAX_WRITE_ROWS_BYTES {
             return Err(StatsError::SchemaValidation(format!(
                 "WriteRows body {} bytes exceeds {MAX_WRITE_ROWS_BYTES} limit",
@@ -424,14 +451,18 @@ impl Store {
                 batch.num_rows()
             )));
         }
+        if batch.num_rows() == 0 {
+            return Err(StatsError::SchemaValidation(
+                "WriteRows batches must contain at least one row".to_string(),
+            ));
+        }
+        let payload_sha256 = write_rows_payload_sha256(origin_cluster, arrow_ipc);
         let engine = self.require_engine(name)?;
         let mut aligned: AlignedBatch = validate_and_align_batch(&batch, engine.schema())?;
         if let Some(origin) = origin_cluster {
             stamp_cluster_column(&mut aligned, origin);
         }
-        let n = aligned.num_rows as i64;
-        let last_seq = engine.append_aligned_batch(&aligned);
-        Ok((n, last_seq))
+        engine.append_idempotent_batch(&aligned, batch_id, &payload_sha256)
     }
 
     /// Append log columns to the reserved `log` namespace, returning the last
@@ -693,7 +724,16 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Barrier;
+
+    use arrow::array::{Int64Array, RecordBatch, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+
     use super::*;
+    use crate::store::ipc::encode_ipc;
+    use crate::store::namespace::inject_crash_after_segment_rename;
+    use crate::store::receipts::receipt_manifest_count;
+    use crate::store::types::{BatchReceipt, ReceiptState};
 
     fn worker_schema() -> Schema {
         Schema::new(
@@ -708,6 +748,334 @@ mod tests {
 
     fn mem_store() -> Store {
         Store::new(None, String::new()).unwrap()
+    }
+
+    fn temp_store_dir(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("finelog_{tag}_{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn worker_batch(worker_ids: &[&str], offset: i64) -> RecordBatch {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("worker_id", DataType::Utf8, false),
+            Field::new("mem_bytes", DataType::Int64, false),
+            Field::new("timestamp_ms", DataType::Int64, false),
+        ]));
+        let len = worker_ids.len() as i64;
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(worker_ids.to_vec())),
+                Arc::new(Int64Array::from_iter_values(offset..offset + len)),
+                Arc::new(Int64Array::from_iter_values(
+                    1_000 + offset..1_000 + offset + len,
+                )),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn worker_ipc(worker_ids: &[&str], offset: i64) -> Vec<u8> {
+        let batch = worker_batch(worker_ids, offset);
+        encode_ipc(&batch.schema(), &[batch]).unwrap()
+    }
+
+    async fn stop_background_tasks(store: &Store) {
+        let engines: Vec<Arc<Namespace>> =
+            store.engines.lock().unwrap().values().cloned().collect();
+        for engine in engines {
+            engine.stop_and_join(Duration::from_secs(5)).await;
+        }
+    }
+
+    async fn stopped_disk_store(tag: &str) -> (Arc<Store>, PathBuf, Arc<Namespace>) {
+        let dir = temp_store_dir(tag);
+        let store = Arc::new(Store::new(Some(dir.clone()), String::new()).unwrap());
+        store
+            .register_table("iris.worker", worker_schema(), StoragePolicy::default())
+            .unwrap();
+        stop_background_tasks(&store).await;
+        let engine = store.require_engine("iris.worker").unwrap();
+        (store, dir, engine)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_write_rows_retries_share_pending_receipt_and_conflicts() {
+        let (store, dir, engine) = stopped_disk_store("concurrent_receipts").await;
+        let ipc = Arc::new(worker_ipc(&["w-1", "w-2"], 0));
+        let barrier = Arc::new(Barrier::new(3));
+        let mut threads = Vec::new();
+        for _ in 0..2 {
+            let store = Arc::clone(&store);
+            let ipc = Arc::clone(&ipc);
+            let barrier = Arc::clone(&barrier);
+            threads.push(std::thread::spawn(move || {
+                barrier.wait();
+                store.write_rows("iris.worker", "same-pending", &ipc, None)
+            }));
+        }
+        barrier.wait();
+        let results: Vec<WriteRowsResult> = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap().unwrap())
+            .collect();
+
+        assert_eq!(engine.stats().row_count, 2);
+        assert_eq!(
+            results.iter().filter(|result| result.deduplicated).count(),
+            1
+        );
+        assert!(results
+            .iter()
+            .all(|result| result.receipt_state == ReceiptState::Pending));
+        assert_eq!(results[0].receipt, results[1].receipt);
+        assert!(store
+            .catalog
+            .list_batch_receipts("iris.worker")
+            .unwrap()
+            .is_empty());
+
+        let payloads = [
+            Arc::new(worker_ipc(&["left"], 10)),
+            Arc::new(worker_ipc(&["right"], 20)),
+        ];
+        let barrier = Arc::new(Barrier::new(3));
+        let mut threads = Vec::new();
+        for payload in payloads {
+            let store = Arc::clone(&store);
+            let barrier = Arc::clone(&barrier);
+            threads.push(std::thread::spawn(move || {
+                barrier.wait();
+                store.write_rows("iris.worker", "conflicting-pending", &payload, None)
+            }));
+        }
+        barrier.wait();
+        let results: Vec<Result<WriteRowsResult, StatsError>> = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect();
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(result, Err(StatsError::IdempotencyConflict(_))))
+                .count(),
+            1
+        );
+        assert_eq!(engine.stats().row_count, 3);
+
+        drop(engine);
+        drop(store);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn write_rows_digest_includes_authoritative_origin() {
+        let store = mem_store();
+        store
+            .register_table("iris.worker", worker_schema(), StoragePolicy::default())
+            .unwrap();
+        let ipc = worker_ipc(&["w-1"], 0);
+        let accepted = store
+            .write_rows("iris.worker", "origin-bound", &ipc, None)
+            .unwrap();
+        assert_eq!(accepted.receipt_state, ReceiptState::Durable);
+
+        let conflict = store.write_rows("iris.worker", "origin-bound", &ipc, Some("cluster-a"));
+        assert!(matches!(conflict, Err(StatsError::IdempotencyConflict(_))));
+    }
+
+    #[test]
+    fn empty_write_rows_is_rejected_without_a_receipt() {
+        let store = mem_store();
+        store
+            .register_table("iris.worker", worker_schema(), StoragePolicy::default())
+            .unwrap();
+        let ipc = worker_ipc(&[], 0);
+
+        assert!(matches!(
+            store.write_rows("iris.worker", "empty", &ipc, None),
+            Err(StatsError::SchemaValidation(_))
+        ));
+        assert!(store
+            .catalog
+            .list_batch_receipts("iris.worker")
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            store
+                .require_engine("iris.worker")
+                .unwrap()
+                .stats()
+                .row_count,
+            0
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn crash_after_segment_rename_repairs_receipt_and_deduplicates() {
+        let (store, dir, engine) = stopped_disk_store("receipt_crash").await;
+        let ipc = worker_ipc(&["w-1", "w-2"], 0);
+        let result = store
+            .write_rows("iris.worker", "crash-batch", &ipc, None)
+            .unwrap();
+        assert_eq!(result.receipt_state, ReceiptState::Pending);
+        inject_crash_after_segment_rename("iris.worker");
+
+        let crash = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            engine.flush_once().unwrap();
+        }));
+        assert!(crash.is_err());
+        let namespace_dir = dir.join("iris.worker");
+        assert_eq!(receipt_manifest_count(&namespace_dir), 0);
+        assert!(store
+            .catalog
+            .list_batch_receipts("iris.worker")
+            .unwrap()
+            .is_empty());
+
+        drop(engine);
+        drop(store);
+        let reopened = Arc::new(Store::new(Some(dir.clone()), String::new()).unwrap());
+        stop_background_tasks(&reopened).await;
+        assert_eq!(receipt_manifest_count(&namespace_dir), 1);
+        let duplicate = reopened
+            .write_rows("iris.worker", "crash-batch", &ipc, None)
+            .unwrap();
+        assert!(duplicate.deduplicated);
+        assert_eq!(duplicate.receipt_state, ReceiptState::Durable);
+        assert_eq!(
+            reopened
+                .require_engine("iris.worker")
+                .unwrap()
+                .stats()
+                .row_count,
+            2
+        );
+
+        drop(reopened);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn receipt_manifest_survives_compaction_and_restart() {
+        let (store, dir, engine) = stopped_disk_store("receipt_compaction").await;
+        let ipc = worker_ipc(&["w-1", "w-2"], 0);
+        let result = store
+            .write_rows("iris.worker", "compacted-batch", &ipc, None)
+            .unwrap();
+        engine.flush_once().unwrap();
+        assert_eq!(receipt_manifest_count(&dir.join("iris.worker")), 1);
+
+        let compacting = Arc::clone(&engine);
+        tokio::task::spawn_blocking(move || compacting.force_compact_l0())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(receipt_manifest_count(&dir.join("iris.worker")), 1);
+        assert!(engine
+            .query_snapshot()
+            .paths
+            .iter()
+            .all(|path| !path.contains("seg_L0_")));
+
+        drop(engine);
+        drop(store);
+        let reopened = Arc::new(Store::new(Some(dir.clone()), String::new()).unwrap());
+        stop_background_tasks(&reopened).await;
+        let duplicate = reopened
+            .write_rows("iris.worker", "compacted-batch", &ipc, None)
+            .unwrap();
+        assert!(duplicate.deduplicated);
+        assert_eq!(duplicate.receipt, result.receipt);
+        assert_eq!(duplicate.receipt_state, ReceiptState::Durable);
+        assert_eq!(receipt_manifest_count(&dir.join("iris.worker")), 1);
+
+        drop(reopened);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn durable_duplicate_does_not_depend_on_local_persisted_watermark() {
+        let (store, dir, engine) = stopped_disk_store("receipt_remote").await;
+        let ipc = worker_ipc(&["w-1"], 0);
+        let result = store
+            .write_rows("iris.worker", "remote-batch", &ipc, None)
+            .unwrap();
+        engine.flush_once().unwrap();
+        let segment = store
+            .catalog
+            .list_segments("iris.worker")
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        store
+            .catalog
+            .set_location(
+                "iris.worker",
+                &segment.path,
+                crate::store::types::SegmentLocation::Remote,
+            )
+            .unwrap();
+        std::fs::remove_file(&segment.path).unwrap();
+
+        drop(engine);
+        drop(store);
+        let reopened = Arc::new(Store::new(Some(dir.clone()), String::new()).unwrap());
+        stop_background_tasks(&reopened).await;
+        let reopened_engine = reopened.require_engine("iris.worker").unwrap();
+        assert_eq!(*reopened_engine.watch_persisted_seq().borrow(), -1);
+        let duplicate = reopened
+            .write_rows("iris.worker", "remote-batch", &ipc, None)
+            .unwrap();
+        assert!(duplicate.deduplicated);
+        assert_eq!(duplicate.receipt, result.receipt);
+        assert_eq!(duplicate.receipt_state, ReceiptState::Durable);
+        assert!(matches!(
+            reopened
+                .await_persisted("iris.worker", duplicate.receipt.last_seq, Duration::ZERO,)
+                .await,
+            Err(StatsError::DeadlineExceeded(_))
+        ));
+
+        drop(reopened_engine);
+        drop(reopened);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn startup_fails_closed_on_sqlite_only_receipt() {
+        let (store, dir, engine) = stopped_disk_store("receipt_corruption").await;
+        store
+            .catalog
+            .upsert_batch_receipt(
+                "iris.worker",
+                &BatchReceipt {
+                    batch_id: "orphan".to_string(),
+                    payload_sha256: "digest".to_string(),
+                    rows_written: 1,
+                    first_seq: 1,
+                    last_seq: 1,
+                },
+            )
+            .unwrap();
+        drop(engine);
+        drop(store);
+
+        let error = match Store::new(Some(dir.clone()), String::new()) {
+            Ok(_) => panic!("startup accepted a SQLite-only receipt"),
+            Err(error) => error,
+        };
+        assert!(error
+            .to_string()
+            .contains("SQLite receipt has no durable manifest/footer metadata"));
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

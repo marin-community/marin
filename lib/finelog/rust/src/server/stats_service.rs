@@ -25,6 +25,7 @@ use crate::store::ipc::encode_ipc;
 use crate::store::namespace::DEFAULT_PERSIST_TIMEOUT;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{schema_from_proto_view, schema_to_proto_owned, Schema};
+use crate::store::types::ReceiptState;
 use crate::store::Store;
 
 pub struct StatsServiceImpl {
@@ -137,6 +138,10 @@ impl StatsService for StatsServiceImpl {
             .namespace
             .ok_or_else(|| ConnectError::invalid_argument("namespace required"))?
             .to_string();
+        let batch_id = request
+            .batch_id
+            .ok_or_else(|| ConnectError::invalid_argument("batch_id required"))?
+            .to_string();
         // Copy the IPC bytes out of the borrowed request so the blocking decode
         // owns them across the spawn_blocking boundary.
         let arrow_ipc: Vec<u8> = request.arrow_ipc.unwrap_or(&[]).to_vec();
@@ -148,19 +153,30 @@ impl StatsService for StatsServiceImpl {
         // caps and IPC decode live in `Store::write_rows`.
         let store = Arc::clone(&self.store);
         let ns = namespace.clone();
-        let (rows_written, last_seq) =
-            run_blocking(move || store.write_rows(&ns, &arrow_ipc, origin_cluster.as_deref()))
+        let result = run_blocking(move || {
+            store.write_rows(&ns, &batch_id, &arrow_ipc, origin_cluster.as_deref())
+        })
+        .await?;
+
+        if result.receipt_state == ReceiptState::Pending {
+            // New writes and simultaneous pending retries share the same seq
+            // range and await its first durable segment. A catalog-backed
+            // duplicate already has durable receipt truth and must not depend
+            // on the current local data watermark.
+            let budget = ctx.time_remaining().unwrap_or(DEFAULT_PERSIST_TIMEOUT);
+            self.store
+                .await_persisted(&namespace, result.receipt.last_seq, budget)
                 .await?;
+        }
 
-        // The server does not auto-cancel on the client deadline; enforce the
-        // durability await ourselves, bounded by the remaining budget (falling
-        // back to DEFAULT_PERSIST_TIMEOUT).
-        let budget = ctx.time_remaining().unwrap_or(DEFAULT_PERSIST_TIMEOUT);
-        self.store
-            .await_persisted(&namespace, last_seq, budget)
-            .await?;
-
-        connectrpc::Response::ok(WriteRowsResponse::default().with_rows_written(rows_written))
+        connectrpc::Response::ok(WriteRowsResponse {
+            rows_written: Some(result.receipt.rows_written),
+            batch_id: Some(result.receipt.batch_id),
+            first_seq: Some(result.receipt.first_seq),
+            last_seq: Some(result.receipt.last_seq),
+            deduplicated: Some(result.deduplicated),
+            ..Default::default()
+        })
     }
 
     async fn query(
