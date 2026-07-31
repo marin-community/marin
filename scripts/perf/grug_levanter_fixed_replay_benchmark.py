@@ -54,13 +54,14 @@ from jax.sharding import PartitionSpec as P
 from levanter.checkpoint import load_checkpoint
 from levanter.grug.attention import AttentionMask
 from levanter.grug.attention._fa4_cute_backend import cutlass_cute_available
+from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import compact_grug_mesh
 from safetensors import safe_open
 
 from experiments.june_tpu_67b_a2b.moe.model import Transformer
 from experiments.june_tpu_67b_a2b.moe.sft_67b_a2b_2stage import _model, _optimizer
 from experiments.june_tpu_67b_a2b.moe.train import GrugTrainState, _apply_qb_betas
-from scripts.perf.grug_fixed_replay import build_loss_weight
+from scripts.perf.grug_fixed_replay import build_loss_weight, repacked_operational_micro_loss
 
 CHUNK_BYTES = 16 * 1024 * 1024
 EXPECTED_FIELDS = (
@@ -328,13 +329,75 @@ def _tree_add(left, right):
     )
 
 
-def _tree_squared_norm(tree) -> jax.Array:
+@jax.jit
+def _tree_finite_summary(tree) -> tuple[jax.Array, jax.Array]:
     leaves = [
-        jnp.sum(jnp.square(value.astype(jnp.float32)))
+        value
         for value in jax.tree.leaves(tree, is_leaf=lambda value: value is None)
         if value is not None and eqx.is_inexact_array(value)
     ]
-    return sum(leaves, start=jnp.array(0.0, dtype=jnp.float32))
+    finite = jnp.stack([jnp.all(jnp.isfinite(value)) for value in leaves])
+    finite_maxima = jnp.stack(
+        [jnp.max(jnp.where(jnp.isfinite(value), jnp.abs(value.astype(jnp.float32)), 0.0)) for value in leaves]
+    )
+    return jnp.sum(jnp.logical_not(finite)), jnp.max(finite_maxima)
+
+
+def tree_finite_evidence(tree) -> dict[str, int | float]:
+    leaves = [
+        value
+        for value in jax.tree.leaves(tree, is_leaf=lambda value: value is None)
+        if value is not None and eqx.is_inexact_array(value)
+    ]
+    nonfinite_arrays, max_finite_abs = _tree_finite_summary(tree)
+    return {
+        "checked_arrays": len(leaves),
+        "checked_elements": sum(int(value.size) for value in leaves),
+        "nonfinite_arrays": int(nonfinite_arrays),
+        "max_finite_abs": float(max_finite_abs),
+    }
+
+
+def validate_output(objective: str, output) -> tuple[dict[str, float | int], dict[str, int | float]]:
+    if objective == "matched_ce":
+        loss, grads = output
+        values: dict[str, float | int] = {"loss": float(loss)}
+        finite_evidence = tree_finite_evidence(grads)
+    else:
+        next_state, metric_values = output
+        values = {
+            "loss": float(metric_values[0]),
+            "next_qb_beta_sum": float(metric_values[1]),
+            "next_step": int(next_state.step),
+        }
+        finite_evidence = tree_finite_evidence(next_state)
+        if values["next_step"] != 1:
+            raise RuntimeError(f"optimizer boundary ended at step {values['next_step']}")
+    if not all(np.isfinite(value) for value in values.values()) or finite_evidence["nonfinite_arrays"] != 0:
+        raise RuntimeError(f"non-finite benchmark output: values={values}, finite_evidence={finite_evidence}")
+    return values, finite_evidence
+
+
+def _matched_cross_entropy_sum(
+    model: Transformer,
+    tokens: jax.Array,
+    loss_weight: jax.Array,
+    mask: AttentionMask,
+) -> jax.Array:
+    """Pure next-token CE, without native router or z-loss terms."""
+
+    hidden, _ = model(tokens, mask=mask)
+    labels = jnp.concatenate([tokens[:, 1:], tokens[:, :1] * 0], axis=1).astype(jnp.int32)
+    return fused_linear_softmax_cross_entropy_loss(
+        hidden,
+        model.output_proj,
+        labels,
+        weight=loss_weight,
+        reduction="sum",
+        logsumexp_weight=None,
+        dtype=jnp.float32,
+        implementation=model.config.ce_implementation,
+    )
 
 
 def _logical_gradients(
@@ -344,7 +407,7 @@ def _logical_gradients(
     mp: jmp.Policy,
     global_loss_tokens: int,
     logsumexp_weight: float | None,
-    collect_qb_beta: bool,
+    include_operational_terms: bool,
 ):
     grad0 = _tree_zeros_like(params)
     beta0 = jnp.zeros((params.config.num_layers, params.config.num_experts), dtype=jnp.float32)
@@ -352,8 +415,8 @@ def _logical_gradients(
     def micro_loss(model, tokens, loss_weight, segment_ids):
         compute_model = mp.cast_to_compute(model)
         mask = AttentionMask.causal().with_segment_ids(segment_ids)
-        if collect_qb_beta:
-            loss_sum, metrics = compute_model.next_token_loss(
+        if include_operational_terms:
+            _, metrics = compute_model.next_token_loss(
                 tokens,
                 loss_weight,
                 mask=mask,
@@ -361,14 +424,18 @@ def _logical_gradients(
                 logsumexp_weight=logsumexp_weight,
                 return_router_metrics=True,
             )
-            return loss_sum / global_loss_tokens, metrics["qb_beta_per_layer"]
-        loss_sum = compute_model.next_token_loss(
+            loss = repacked_operational_micro_loss(
+                metrics["train/cross_entropy_loss"],
+                metrics["train/router/aux_loss_weighted"],
+                global_loss_tokens=global_loss_tokens,
+                microbatch_count=replay.tokens.shape[0],
+            )
+            return loss, metrics["qb_beta_per_layer"]
+        loss_sum = _matched_cross_entropy_sum(
+            compute_model,
             tokens,
             loss_weight,
-            mask=mask,
-            reduction="sum",
-            logsumexp_weight=logsumexp_weight,
-            return_router_metrics=False,
+            mask,
         )
         return loss_sum / global_loss_tokens, beta0
 
@@ -404,9 +471,9 @@ def make_matched_step(mp: jmp.Policy, global_loss_tokens: int):
             mp=mp,
             global_loss_tokens=global_loss_tokens,
             logsumexp_weight=None,
-            collect_qb_beta=False,
+            include_operational_terms=False,
         )
-        return loss, jnp.sqrt(_tree_squared_norm(grads))
+        return loss, grads
 
     return jax.jit(step, donate_argnums=(0,))
 
@@ -422,7 +489,7 @@ def make_operational_step(optimizer: optax.GradientTransformation, mp: jmp.Polic
             mp=mp,
             global_loss_tokens=global_loss_tokens,
             logsumexp_weight=1e-4,
-            collect_qb_beta=True,
+            include_operational_terms=True,
         )
         updates, opt_state = optimizer.update(grads, state.opt_state, params)
         next_params = optax.apply_updates(params, updates)
@@ -433,14 +500,7 @@ def make_operational_step(optimizer: optax.GradientTransformation, mp: jmp.Polic
             opt_state=opt_state,
             pending_qb_betas=next_qb_betas,
         )
-        metrics = jnp.stack(
-            [
-                loss,
-                jnp.sqrt(_tree_squared_norm(grads)),
-                jnp.sqrt(_tree_squared_norm(updates)),
-                jnp.sum(next_qb_betas.astype(jnp.float32)),
-            ]
-        )
+        metrics = jnp.stack([loss, jnp.sum(next_qb_betas.astype(jnp.float32))])
         return next_state, metrics
 
     return jax.jit(step, donate_argnums=(0,))
@@ -726,6 +786,7 @@ def main() -> None:
                 label="operational-warmup",
                 profile_dir=None,
             )
+        warmup_values, warmup_finite_evidence = validate_output(args.objective, warm_output)
         del warm_output, start
         gc.collect()
 
@@ -755,23 +816,15 @@ def main() -> None:
                 label=f"{args.objective}-sample-{sample_index}",
                 profile_dir=profile_dir,
             )
-            if args.objective == "matched_ce":
-                loss, grad_norm = output
-                values = {"loss": float(loss), "gradient_norm": float(grad_norm)}
-            else:
-                next_state, metric_values = output
-                values = {
-                    "loss": float(metric_values[0]),
-                    "gradient_norm": float(metric_values[1]),
-                    "update_norm": float(metric_values[2]),
-                    "next_qb_beta_sum": float(metric_values[3]),
-                    "next_step": int(next_state.step),
+            values, finite_evidence = validate_output(args.objective, output)
+            samples.append(
+                {
+                    "local_elapsed_seconds": elapsed,
+                    "memory": memory,
+                    "values": values,
+                    "finite_evidence": finite_evidence,
                 }
-                if values["next_step"] != 1:
-                    raise RuntimeError(f"optimizer boundary ended at step {values['next_step']}")
-            if not all(np.isfinite(value) for value in values.values()):
-                raise RuntimeError(f"non-finite benchmark output: {values}")
-            samples.append({"local_elapsed_seconds": elapsed, "memory": memory, "values": values})
+            )
             del output, fresh
             gc.collect()
 
@@ -836,6 +889,8 @@ def main() -> None:
             "restored_start_fingerprints": restored_fingerprints,
             "compile_seconds_excluded": compile_seconds,
             "warmup_seconds_excluded": warm_seconds,
+            "warmup_values": warmup_values,
+            "warmup_finite_evidence": warmup_finite_evidence,
             "profile_in_timed_sample": args.profile_dir is not None,
             "profile_artifacts": gathered_profile_artifacts,
             "wall_samples_seconds": wall_samples,
