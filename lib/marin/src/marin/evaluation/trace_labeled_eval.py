@@ -18,7 +18,7 @@ import jmp
 import levanter
 import levanter.tracker
 from fray.current_client import current_client
-from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
+from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
 from levanter.data.sharded_datasource import FirstRowsShardedDataSource, ShardedDataSource
@@ -35,6 +35,7 @@ from levanter.tokenizers import load_tokenizer as load_marin_tokenizer
 from levanter.trainer import TrainerConfig
 
 from marin.evaluation.model_loading import load_eval_model
+from marin.training.run_environment import extras_for_resources
 
 logger = logging.getLogger(__name__)
 
@@ -622,9 +623,7 @@ def run_trace_labeled_eval_on_pod(config: TraceLabeledEvalOnPodConfig) -> TraceL
 
     client = current_client()
 
-    extras = []
-    if isinstance(config.resources.device, TpuConfig):
-        extras.append("tpu")
+    extras = extras_for_resources(config.resources)
 
     job_name = "trace-labeled-eval"
     if config.trace_labeled_eval_config.name:

@@ -14,6 +14,8 @@ import dataclasses
 import logging
 import threading
 import typing
+from enum import IntEnum
+from time import time
 from typing import Any, Optional
 
 import numpy as np
@@ -26,6 +28,19 @@ from levanter.tracker.histogram import SummaryStats
 logger = logging.getLogger(__name__)
 
 _PREFIX = "levanter"
+
+
+class TrainingPhase(IntEnum):
+    """Numeric training phases persisted through Telltale."""
+
+    INITIALIZING = 0
+    TRAINING = 1
+    FINISHED = 2
+
+
+def set_training_phase(phase: TrainingPhase) -> None:
+    """Publish the current training phase for stalled-training detection."""
+    telltale.publish_gauge("phase", float(phase), "Levanter training phase", prefix=_PREFIX)
 
 
 def _as_scalar(value: Any) -> float | None:
@@ -118,6 +133,11 @@ class TelltaleTracker(Tracker):
 
     def __init__(self) -> None:
         self._step = telltale.gauge(f"{_PREFIX}_step", "Most recent training step logged")
+        self._progress_time = telltale.gauge(
+            f"{_PREFIX}_progress_time_seconds", "Unix time of the last completed optimizer step"
+        )
+        self._progress_time.set(0)
+        set_training_phase(TrainingPhase.INITIALIZING)
         telltale.register_collector(_HISTOGRAMS)
 
     def _set(self, key: str, value: float) -> None:
@@ -147,6 +167,9 @@ class TelltaleTracker(Tracker):
         if step is not None:
             self._step.set(step)
             loss = _as_scalar(metrics.get("train/loss"))
+            if loss is not None:
+                self._progress_time.set(time())
+                set_training_phase(TrainingPhase.TRAINING)
             telltale.set_status(f"step {step}" + (f", train/loss {loss:.4f}" if loss is not None else ""))
         self._publish(metrics)
 
@@ -157,7 +180,7 @@ class TelltaleTracker(Tracker):
         pass
 
     def finish(self):
-        pass
+        set_training_phase(TrainingPhase.FINISHED)
 
 
 @TrackerConfig.register_subclass("telltale")

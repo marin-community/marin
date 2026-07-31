@@ -18,6 +18,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import click
+import yaml
 from rigging.secrets import resolve_secret_spec
 
 from finelog.deploy.bootstrap import render_template
@@ -41,6 +42,8 @@ _VIRTUAL_HOST_ONLY_S3_DOMAINS = ("cwobject.com", "cwlota.com")
 _K8S_MANIFEST_DIR = Path(__file__).resolve().parents[3] / "deploy" / "k8s"
 
 _MANIFESTS = ("01-pvc.yaml.tmpl", "02-deployment.yaml.tmpl", "03-service.yaml.tmpl")
+_PROBE_FIELDS = ("startupProbe", "livenessProbe", "readinessProbe")
+_PROBE_HANDLERS = frozenset(("exec", "grpc", "httpGet", "tcpSocket"))
 
 
 def _env_entry(name: str, value: str) -> str:
@@ -53,11 +56,13 @@ def _env_entry(name: str, value: str) -> str:
 def _inline_env_block(cfg: FinelogConfig) -> str:
     """Render the non-secret container-env entries the templates splice in, or "".
 
-    `FINELOG_AUTH_POLICY` is inline-safe (a cidr layer carries network prefixes, a jwt
-    layer Ed25519 public keys), as is `FINELOG_FORWARDING` (a url and a cluster name).
-    The forwarding *private* key travels in the `<name>-env` Secret instead.
+    The query cache limit, `FINELOG_AUTH_POLICY` (network prefixes and Ed25519
+    public keys), and `FINELOG_FORWARDING` (a URL and cluster name) are
+    inline-safe. The forwarding private key travels in the `<name>-env` Secret.
     """
     entries = []
+    if cfg.query_metadata_cache_mb is not None:
+        entries.append(_env_entry("FINELOG_QUERY_METADATA_CACHE_MB", str(cfg.query_metadata_cache_mb)))
     if cfg.auth:
         entries.append(_env_entry("FINELOG_AUTH_POLICY", auth_policy_json(cfg.auth)))
     if cfg.forwarding:
@@ -114,8 +119,8 @@ def _env_secret_name(cfg: FinelogConfig) -> str:
 def _s3_env(cfg: FinelogConfig) -> dict[str, str]:
     """The ``AWS_*`` environment for an ``s3://`` archive, or ``{}`` when none.
 
-    Carries the operator's R2 credentials (from ``R2_ACCESS_KEY_ID`` /
-    ``R2_SECRET_ACCESS_KEY`` in the deploy shell) plus the configured endpoint and
+    Carries the operator's R2 credentials (from ``R2_KEY_ID`` /
+    ``R2_KEY_SECRET`` in the deploy shell) plus the configured endpoint and
     ``region=auto``, under the names ``AmazonS3Builder::from_env`` reads in the server.
     ``gs://`` and local archives need nothing (GCS uses workload identity).
 
@@ -131,11 +136,11 @@ def _s3_env(cfg: FinelogConfig) -> dict[str, str]:
             f"finelog config {cfg.name!r}: remote_log_dir is s3:// but "
             "deployment.k8s.object_storage_endpoint is unset"
         )
-    key_id = os.environ.get("R2_ACCESS_KEY_ID")
-    key_secret = os.environ.get("R2_SECRET_ACCESS_KEY")
+    key_id = os.environ.get("R2_KEY_ID")
+    key_secret = os.environ.get("R2_KEY_SECRET")
     if not key_id or not key_secret:
         raise click.ClickException(
-            "R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY must be set in the deploy "
+            "R2_KEY_ID and R2_KEY_SECRET must be set in the deploy "
             f"environment to deploy {cfg.name!r} with an s3:// archive"
         )
     endpoint = k8s.object_storage_endpoint
@@ -213,13 +218,85 @@ def _kube_flags(cfg: FinelogConfig) -> list[str]:
 
 
 def _kubectl(
-    cfg: FinelogConfig, *args: str, stdin: str | None = None, check: bool = True
+    cfg: FinelogConfig,
+    *args: str,
+    stdin: str | None = None,
+    check: bool = True,
+    capture_output: bool = False,
 ) -> subprocess.CompletedProcess:
-    return subprocess.run(["kubectl", *_kube_flags(cfg), *args], input=stdin, text=True, check=check)
+    return subprocess.run(
+        ["kubectl", *_kube_flags(cfg), *args],
+        input=stdin,
+        text=True,
+        check=check,
+        capture_output=capture_output,
+    )
 
 
 def _kubectl_apply(cfg: FinelogConfig, manifest: str) -> None:
     _kubectl(cfg, "apply", "-f", "-", stdin=manifest)
+
+
+def _probe_transition_patch(live: dict, desired: dict) -> list[dict]:
+    """Return patches that replace probes whose handler type changed."""
+    live_containers = live["spec"]["template"]["spec"]["containers"]
+    desired_containers = desired["spec"]["template"]["spec"]["containers"]
+    desired_by_name = {container["name"]: container for container in desired_containers}
+    patch = []
+    for index, live_container in enumerate(live_containers):
+        desired_container = desired_by_name.get(live_container["name"])
+        if desired_container is None:
+            continue
+        for probe_field in _PROBE_FIELDS:
+            live_probe = live_container.get(probe_field)
+            desired_probe = desired_container.get(probe_field)
+            if live_probe is None or desired_probe is None:
+                continue
+            live_handlers = _PROBE_HANDLERS.intersection(live_probe)
+            desired_handlers = _PROBE_HANDLERS.intersection(desired_probe)
+            if live_handlers == desired_handlers:
+                continue
+            patch.append(
+                {
+                    "op": "replace",
+                    "path": f"/spec/template/spec/containers/{index}/{probe_field}",
+                    "value": desired_probe,
+                }
+            )
+    return patch
+
+
+def _reconcile_probe_handlers(cfg: FinelogConfig, manifest: str) -> None:
+    desired = yaml.safe_load(manifest)
+    if desired.get("kind") != "Deployment":
+        return
+    assert cfg.deployment.k8s is not None
+    result = _kubectl(
+        cfg,
+        "get",
+        f"deployment/{cfg.name}",
+        "-n",
+        cfg.deployment.k8s.namespace,
+        "--ignore-not-found",
+        "-o",
+        "json",
+        capture_output=True,
+    )
+    if not result.stdout.strip():
+        return
+    patch = _probe_transition_patch(json.loads(result.stdout), desired)
+    if not patch:
+        return
+    click.echo(f"Reconciling {len(patch)} probe handler transition(s)...")
+    _kubectl(
+        cfg,
+        "patch",
+        f"deployment/{cfg.name}",
+        "-n",
+        cfg.deployment.k8s.namespace,
+        "--type=json",
+        f"-p={json.dumps(patch, separators=(',', ':'))}",
+    )
 
 
 def _ensure_priority_class(cfg: FinelogConfig) -> None:
@@ -267,6 +344,7 @@ def k8s_up(cfg: FinelogConfig) -> None:
     for manifest_name in _MANIFESTS:
         rendered = _render_manifest(_K8S_MANIFEST_DIR / manifest_name, cfg)
         click.echo(f"Applying {manifest_name}...")
+        _reconcile_probe_handlers(cfg, rendered)
         _kubectl_apply(cfg, rendered)
     click.echo(f"Waiting for deployment/{cfg.name} to become Ready...")
     _kubectl(cfg, "rollout", "status", f"deployment/{cfg.name}", "-n", k8s.namespace)

@@ -119,6 +119,9 @@ from marin.execution.remote import RemoteCallable
 from marin.execution.step_runner import StepRunner, worker_id
 from marin.execution.step_spec import StepSpec, _is_relative_path
 from marin.execution.types import (
+    THIS_OUTPUT_PATH as THIS_OUTPUT_PATH,
+)
+from marin.execution.types import (
     ExecutorFunction,
     ExecutorStep,
     InputName,
@@ -126,6 +129,18 @@ from marin.execution.types import (
     T_co,
     VersionedValue,
     output_path_of,
+)
+from marin.execution.types import (
+    ensure_versioned as ensure_versioned,
+)
+from marin.execution.types import (
+    get_executor_step as get_executor_step,
+)
+from marin.execution.types import (
+    this_output_path as this_output_path,
+)
+from marin.execution.types import (
+    versioned as versioned,
 )
 from marin.utilities.json_encoder import CustomJsonEncoder
 

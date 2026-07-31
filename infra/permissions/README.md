@@ -1,7 +1,10 @@
 # Marin permissions
 
 This Pulumi project owns additive IAM grants shared by deployment workflows. It does not own
-the existing GitHub workload identity pool, service accounts, state bucket, or KMS key.
+the workload identity pool, state bucket, or KMS key — those are existing shared resources. Most
+deploy accounts are existing too (created out-of-band; this stack only grants IAM on them). An
+account with `create_account: true` is the exception: this stack owns it end-to-end, creating the
+`google_service_account` alongside its grants.
 
 The `hai-gcp-models` stack lets GitHub OIDC tokens for the `main` branch impersonate deployment
 accounts. Each account can update the shared Pulumi state bucket and encrypt or decrypt stack
@@ -14,6 +17,18 @@ the CoreWeave smoke-test controller.
 The Ducky account also receives `roles/iam.serviceAccountTokenCreator` from the same exact
 GitHub subject. Rigging needs it to mint the service-account ID token accepted by Iris's IAP
 edge; Grafana does not mint IAP tokens and does not receive that role.
+
+The `pulumi-ci` account backs `ops-iac-preview.yaml` (`infra/pulumi/README.md`'s CI preview) and
+is created by this stack (`create_account: true`) rather than pre-existing. It binds two
+`github_subjects`: `pull_request` for the PR trigger, and `*main_subject` for
+`workflow_dispatch` — whose OIDC subject follows the dispatching ref, not the event name, so a
+manual run only authenticates when dispatched from `main`. Its grants are preview-only:
+`kms_access: decrypt_only` (never encrypt/write secrets) and `state_access: preview` (read
+state, write only the `.pulumi/locks/` prefix — never state content). Its custom
+`marinGcpResourcePreviewer` role can read only the Artifact Registry repositories and reserved
+addresses declared by the GCP stack, including the location metadata those reads require. Every
+other account defaults to `kms_access: encrypt_decrypt` / `state_access: apply`, matching
+`pulumi up`, and `github_subjects` normally holds just the one main-branch subject.
 
 The Grafana deploy account can list Secret Manager metadata for its optional-secret probe. A
 custom role lets it manage IAM policies on the four secrets wired into Cloud Run without

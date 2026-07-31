@@ -116,12 +116,6 @@ jobs:
           echo "marin_prefix=$PREFIX" >> "$GITHUB_OUTPUT"
           echo "Ferry output prefix: $PREFIX"
 
-      # - name: Validate datakit smoke outputs
-      #   shell: bash -l {0}
-      #   env:
-      #     MARIN_PREFIX: ${{ steps.ferry_status.outputs.marin_prefix }}
-      #   run: .venv/bin/python scripts/datakit/validate_ferry_outputs.py
-
       - name: Capture perf report
         if: success()
         shell: bash -l {0}
@@ -200,41 +194,6 @@ jobs:
           path: slack_message.md
           retention-days: 1
           if-no-files-found: ignore
-
-  # Parallel lane: verify every DatakitSource.staged_path resolves to a
-  # non-empty prefix under gs://marin-us-central1. Cheap (metadata only) and
-  # independent of the ferry, so runs alongside datakit-smoke.
-  # datakit-sources-staged:
-  #   runs-on: ubuntu-latest
-  #   timeout-minutes: 30
-  #   concurrency:
-  #     group: datakit-sources-staged
-  #     cancel-in-progress: true
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v5
-  #
-  #     - name: Set up Python 3.12
-  #       uses: actions/setup-python@v6
-  #       with:
-  #         python-version: "3.12"
-  #
-  #     - name: Install uv
-  #       uses: astral-sh/setup-uv@v7
-  #       with:
-  #         enable-cache: true
-  #
-  #     - name: Install dependencies
-  #       run: uv sync --all-packages --extra=cpu --no-default-groups
-  #
-  #     - name: Authenticate to Google Cloud
-  #       uses: google-github-actions/auth@v3
-  #       with:
-  #         credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
-  #
-  #     - name: Verify datakit source staging paths
-  #       shell: bash -l {0}
-  #       run: .venv/bin/python scripts/datakit/validate_source_staging.py
 
   # Separate job so Slack always fires, even if the main job is force-killed
   # after its grace window. `needs.*.result` reflects the upstream job

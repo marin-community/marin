@@ -129,7 +129,7 @@ def make_task_backend(
                 context=kp.kube_context or None,
             ),
             namespace=namespace,
-            default_image=kp.default_image,
+            default_image=config.defaults.worker.default_task_image,
             logship_image=config.controller.image,
             service_account=kp.service_account or "",
             host_network=kp.host_network,
@@ -161,7 +161,6 @@ def make_task_backend(
         "or:\n"
         "  kubernetes_provider:\n"
         "    namespace: iris\n"
-        "    default_image: ...\n"
         "to your cluster config."
     )
 

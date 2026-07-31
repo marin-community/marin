@@ -13,6 +13,7 @@ from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import cached_property
 from typing import Protocol, runtime_checkable
 
 try:
@@ -188,25 +189,16 @@ class CloudK8sService:
     kubeconfig_path: str | None = None
     context: str | None = None  # kubeconfig context; None = the file's current-context
     timeout: float = DEFAULT_TIMEOUT
-    _api_client: "kubernetes.client.ApiClient" = field(init=False, repr=False)
-    _dyn: "DynamicClient" = field(init=False, repr=False)
-    _core_v1: "kubernetes.client.CoreV1Api" = field(init=False, repr=False)
-    _custom: "kubernetes.client.CustomObjectsApi" = field(init=False, repr=False)
     _kubectl_prefix: list[str] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        if kubernetes is None:
-            raise ImportError("Install iris[controller] to use CloudK8sService")
+        # Construct only what needs no `kubernetes` python client: the kubectl
+        # prefix for the port-forward subprocess. The DynamicClient-backed clients
+        # (_api_client/_dyn/_core_v1/_custom) build lazily on first CRUD use, so
+        # controller-URL resolution and tunnelling work on a plain install with
+        # just the kubectl binary present.
         if self.kubeconfig_path:
             self.kubeconfig_path = os.path.expanduser(self.kubeconfig_path)
-        self._api_client = self.create_api_client()
-
-        assert DynamicClient is not None
-        self._dyn = DynamicClient(self._api_client)
-        self._core_v1 = kubernetes.client.CoreV1Api(self._api_client)
-        self._custom = kubernetes.client.CustomObjectsApi(self._api_client)
-
-        # kubectl prefix for port-forward subprocess only
         cmd = ["kubectl"]
         if self.kubeconfig_path:
             cmd.extend(["--kubeconfig", self.kubeconfig_path])
@@ -214,7 +206,33 @@ class CloudK8sService:
             cmd.extend(["--context", self.context])
         self._kubectl_prefix = cmd
 
+    @staticmethod
+    def _require_kubernetes() -> None:
+        if kubernetes is None:
+            raise ImportError("Install iris[controller] to use CloudK8sService")
+
+    @cached_property
+    def _api_client(self) -> "kubernetes.client.ApiClient":
+        return self.create_api_client()
+
+    @cached_property
+    def _dyn(self) -> "DynamicClient":
+        self._require_kubernetes()
+        assert DynamicClient is not None
+        return DynamicClient(self._api_client)
+
+    @cached_property
+    def _core_v1(self) -> "kubernetes.client.CoreV1Api":
+        self._require_kubernetes()
+        return kubernetes.client.CoreV1Api(self._api_client)
+
+    @cached_property
+    def _custom(self) -> "kubernetes.client.CustomObjectsApi":
+        self._require_kubernetes()
+        return kubernetes.client.CustomObjectsApi(self._api_client)
+
     def create_api_client(self) -> "kubernetes.client.ApiClient":
+        self._require_kubernetes()
         # A bare context (no kubeconfig_path) binds the named context within the
         # default kubeconfig resolution (KUBECONFIG env var or ~/.kube/config).
         if self.kubeconfig_path or self.context:

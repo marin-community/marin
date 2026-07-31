@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::{new_null_array, ArrayData, ArrayRef, RecordBatch};
+use arrow::array::{new_null_array, ArrayData, ArrayRef, RecordBatch, StringArray};
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field, Fields, Schema as ArrowSchema, SchemaRef, TimeUnit};
 use buffa::MessageField;
@@ -724,6 +724,34 @@ pub fn validate_and_align_batch(
     })
 }
 
+/// Overwrite the aligned batch's implicit origin `cluster` column with `origin`
+/// for every row. No-op when the namespace's schema has no cluster column.
+///
+/// This is the stats-plane analogue of the log plane's `authorized_cluster`
+/// (`server/log_service.rs`): a WriteRows admitted under a forwarding JWT names
+/// exactly one origin cluster, so the hub binds the rows to it here rather than
+/// trusting the sender to have stamped the column. That closes the finelog
+/// federation gap where a namespace whose schema on the sending finelog predates
+/// the implicit `cluster` column forwards its rows unstamped (the forwarder only
+/// stamps when its local schema carries the column). Overwriting — rather than
+/// filling blanks or rejecting a mismatch — is both simpler and safer: the
+/// forwarder only ever ships local (null/empty-cluster) rows, so the batch's
+/// cluster carries nothing to preserve, and a JWT writer can then only ever
+/// attribute rows to its own cluster.
+pub fn stamp_cluster_column(aligned: &mut AlignedBatch, origin: &str) {
+    let Some(i) = aligned
+        .fields
+        .iter()
+        .position(|f| f.name() == IMPLICIT_CLUSTER_COLUMN)
+    else {
+        return;
+    };
+    let old_size = array_buffer_size(&aligned.arrays[i]);
+    let stamped: ArrayRef = Arc::new(StringArray::from(vec![origin; aligned.num_rows]));
+    aligned.byte_size += array_buffer_size(&stamped) - old_size;
+    aligned.arrays[i] = stamped;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1061,6 +1089,109 @@ mod tests {
 
     fn batch(fields: Vec<Field>, arrays: Vec<ArrayRef>) -> RecordBatch {
         RecordBatch::try_new(Arc::new(ArrowSchema::new(fields)), arrays).unwrap()
+    }
+
+    #[test]
+    fn stamp_cluster_column_fills_a_forwarded_batch_missing_the_origin_column() {
+        // A hub namespace carries the implicit `cluster` column, but a forwarder
+        // whose local schema predates that column ships a batch without it
+        // (has_origin=false). Alignment NULL-fills the column; the hub then
+        // stamps it from the forwarding credential so the rows are attributable.
+        let registered = with_implicit_seq(with_implicit_cluster(Schema::new(
+            vec![col("id", ColumnType::COLUMN_TYPE_STRING, false)],
+            "id",
+        )));
+        let inbound = batch(
+            vec![Field::new("id", DataType::Utf8, false)],
+            vec![Arc::new(StringArray::from(vec!["e1", "e2"]))],
+        );
+        let mut aligned = validate_and_align_batch(&inbound, &registered).unwrap();
+        let ci = aligned
+            .fields
+            .iter()
+            .position(|f| f.name() == IMPLICIT_CLUSTER_COLUMN)
+            .expect("registered schema has the cluster column");
+        assert_eq!(
+            aligned.arrays[ci].null_count(),
+            2,
+            "before stamping the aligned cluster column is all-null"
+        );
+
+        stamp_cluster_column(&mut aligned, "cw-rno2a");
+
+        let stamped = aligned.arrays[ci]
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("cluster is a string column");
+        assert_eq!(
+            stamped.iter().collect::<Vec<_>>(),
+            vec![Some("cw-rno2a"), Some("cw-rno2a")],
+            "every row is bound to the forwarding cluster"
+        );
+    }
+
+    #[test]
+    fn stamp_cluster_column_overwrites_a_caller_supplied_origin() {
+        // Caller-provided provenance is ignored, not trusted or merged. `cluster` is a
+        // real registered column, so a WriteRows batch may declare it with a spoofed
+        // value; alignment accepts that value, but the credential-bound stamp overwrites
+        // every row with the authenticated origin. This is the data-level guarantee
+        // behind the stats path reading no caller-supplied cluster.
+        let registered = with_implicit_seq(with_implicit_cluster(Schema::new(
+            vec![col("id", ColumnType::COLUMN_TYPE_STRING, false)],
+            "id",
+        )));
+        let inbound = batch(
+            vec![
+                Field::new("id", DataType::Utf8, false),
+                Field::new("cluster", DataType::Utf8, true),
+            ],
+            vec![
+                Arc::new(StringArray::from(vec!["e1", "e2"])),
+                Arc::new(StringArray::from(vec!["attacker", "attacker"])),
+            ],
+        );
+        let mut aligned = validate_and_align_batch(&inbound, &registered).unwrap();
+        stamp_cluster_column(&mut aligned, "cw-rno2a");
+        let ci = aligned
+            .fields
+            .iter()
+            .position(|f| f.name() == IMPLICIT_CLUSTER_COLUMN)
+            .expect("registered schema has the cluster column");
+        let stamped = aligned.arrays[ci]
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("cluster is a string column");
+        assert_eq!(
+            stamped.iter().collect::<Vec<_>>(),
+            vec![Some("cw-rno2a"), Some("cw-rno2a")],
+            "the credential's cluster overrides the caller-supplied value"
+        );
+    }
+
+    #[test]
+    fn stamp_cluster_column_is_a_noop_without_a_cluster_column() {
+        // A namespace whose schema has no cluster column must not gain one from
+        // stamping — an extra array would not match the engine's schema on append.
+        let registered = with_implicit_seq(Schema::new(
+            vec![col("id", ColumnType::COLUMN_TYPE_STRING, false)],
+            "id",
+        ));
+        let inbound = batch(
+            vec![Field::new("id", DataType::Utf8, false)],
+            vec![Arc::new(StringArray::from(vec!["e1"]))],
+        );
+        let mut aligned = validate_and_align_batch(&inbound, &registered).unwrap();
+        let before = aligned.fields.len();
+        stamp_cluster_column(&mut aligned, "cw-rno2a");
+        assert_eq!(aligned.fields.len(), before);
+        assert!(
+            aligned
+                .fields
+                .iter()
+                .all(|f| f.name() != IMPLICIT_CLUSTER_COLUMN),
+            "no cluster column is invented"
+        );
     }
 
     #[test]

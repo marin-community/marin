@@ -4,7 +4,36 @@
 """Tests for CloudK8sService helpers and K8sResource enum path construction."""
 
 import pytest
+from iris.cluster.platforms.k8s import service as k8s_service
+from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
+
+
+def test_construct_without_kubernetes_client(monkeypatch):
+    """Constructing CloudK8sService must not require the kubernetes python client.
+
+    Read-only controller-URL resolution and the kubectl port-forward tunnel run on
+    a plain install with only the kubectl binary, so __post_init__ builds just the
+    kubectl subprocess prefix and never touches the DynamicClient.
+    """
+    monkeypatch.setattr(k8s_service, "kubernetes", None)
+    monkeypatch.setattr(k8s_service, "DynamicClient", None)
+
+    svc = CloudK8sService(namespace="iris", context="my-ctx")
+
+    assert svc._kubectl_prefix == ["kubectl", "--context", "my-ctx"]
+
+
+@pytest.mark.parametrize("client_attr", ["_api_client", "_dyn", "_core_v1", "_custom"])
+def test_crud_client_requires_kubernetes(monkeypatch, client_attr: str):
+    """The kubernetes-client requirement lands at first CRUD use, not construction."""
+    monkeypatch.setattr(k8s_service, "kubernetes", None)
+    monkeypatch.setattr(k8s_service, "DynamicClient", None)
+
+    svc = CloudK8sService(namespace="iris")
+
+    with pytest.raises(ImportError, match=r"iris\[controller\]"):
+        getattr(svc, client_attr)
 
 
 # Test item_path construction for namespaced resources

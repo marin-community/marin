@@ -30,6 +30,16 @@ idempotent across retries, and the workflow rechecks the current description
 before writing so a queued run cannot overwrite a newer edit. It skips cleanup
 when the archive or updated body would exceed GitHub's size limit.
 
+## External dependency updates
+
+`ops-external-dependencies.yaml` advances the isolated Evalchemy, Harbor, and
+MarinSkyRL projects at 09:00 UTC each day. It runs
+`uv run config/update-external.py` without a project selector, records each
+resolved version and commit in the job summary, and opens or refreshes one
+`automation/external-dependencies` pull request when generated state changes.
+The Nightshift GitHub App token lets normal pull request checks run on the
+automation branch.
+
 ## Canonical recipe: open or update a bot PR with `git + gh`
 
 This recipe replaces `peter-evans/create-pull-request@v7`. It creates the PR if missing, updates it (force-with-lease) if present, reconciles labels, and writes `pr_url` and `pr_created` to `$GITHUB_OUTPUT`.

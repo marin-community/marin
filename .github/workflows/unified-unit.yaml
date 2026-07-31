@@ -81,6 +81,7 @@ jobs:
           workspaces: |
             lib/dupekit/rust
             lib/finelog/rust
+            lib/iris/rust
       # rust_mode.py dev repoints the native packages at their local rust/ trees; the
       # leg's `uv run` (no --frozen) then re-resolves and builds them from source.
       - name: Switch native packages to source build

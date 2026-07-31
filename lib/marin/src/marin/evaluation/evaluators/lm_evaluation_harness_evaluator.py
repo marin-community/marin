@@ -15,7 +15,6 @@ from rigging.filesystem import StoragePath, is_remote_path, prefix_join
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
-from marin.evaluation.utils import upload_to_gcs
 from marin.inference.vllm_server import VllmEnvironment
 
 logger = logging.getLogger(__name__)
@@ -360,8 +359,8 @@ class LMEvaluationHarnessEvaluator(Evaluator):
             # write what has been saved
             if is_remote_path(output_path):
                 try:
-                    logger.info("Uploading eval results to GCS...")
-                    upload_to_gcs(self.RESULTS_PATH, output_path)
+                    logger.info("Uploading eval results to object storage...")
+                    StoragePath(output_path).upload_from(self.RESULTS_PATH + "/", recursive=True)
                     logger.info("Upload completed successfully.")
                 except Exception as upload_error:
                     logger.info(f"Failed to upload results to GCS: {upload_error}")

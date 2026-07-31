@@ -191,6 +191,10 @@ class JwtSigner:
         self._key = key
         self._issuer = issuer
 
+    @property
+    def issuer(self) -> str:
+        return self._issuer
+
     def mint(self, claims: dict, *, audience: str, ttl_seconds: int) -> str:
         """Mint a signed EdDSA token.
 

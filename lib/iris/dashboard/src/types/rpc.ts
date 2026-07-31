@@ -96,6 +96,15 @@ export interface TaskAttempt {
   finishedAt?: ProtoTimestamp
   isWorkerFailure?: boolean
   attemptUid?: string
+  // Bounded terminal cause, set only on a failed attempt.
+  terminalReason?: string
+}
+
+/** Why a failed attempt ended, empty when it did not fail. `terminalReason`
+ *  wins because an init-container failure sends `error` as an empty string,
+ *  which `??` would keep. */
+export function attemptFailureReason(attempt: TaskAttempt): string {
+  return attempt.terminalReason || attempt.error || ''
 }
 
 export interface TaskStatus {
@@ -631,41 +640,6 @@ export interface GetSchedulerStateResponse {
   totalRunning: number
   pendingBuckets: PendingTaskBucket[]
   runningBuckets: RunningTaskBucket[]
-}
-
-// -- RPC Statistics (iris.stats.StatsService) --
-
-export interface RpcMethodStats {
-  method: string
-  count?: string
-  errorCount?: string
-  totalDurationMs?: number
-  maxDurationMs?: number
-  p50Ms?: number
-  p95Ms?: number
-  p99Ms?: number
-  bucketUpperBoundsMs?: string[]
-  bucketCounts?: string[]
-  lastCall?: ProtoTimestamp
-}
-
-export interface RpcCallSample {
-  method: string
-  timestamp?: ProtoTimestamp
-  durationMs?: number
-  peer?: string
-  userAgent?: string
-  caller?: string
-  errorCode?: string
-  errorMessage?: string
-  requestPreview?: string
-}
-
-export interface GetRpcStatsResponse {
-  methods?: RpcMethodStats[]
-  slowSamples?: RpcCallSample[]
-  discoverySamples?: RpcCallSample[]
-  collectorStartedAt?: ProtoTimestamp
 }
 
 // -- Multi-backend --

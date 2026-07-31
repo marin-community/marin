@@ -18,7 +18,9 @@ from dataclasses import dataclass
 from functools import cache
 
 from marin.datakit.canonical.safety_pretraining import safety_pretraining_normalize_steps
+from marin.datakit.download.agenttrove import agenttrove_normalize_steps
 from marin.datakit.download.biocollection import biocollection_normalize_steps
+from marin.datakit.download.biocorpus import biocorpus_normalize_steps
 from marin.datakit.download.biodiversity import biodiversity_normalize_steps
 from marin.datakit.download.climblab_ja import climblab_ja_normalize_steps
 from marin.datakit.download.coderforge import coderforge_normalize_steps
@@ -29,16 +31,19 @@ from marin.datakit.download.davinci_dev import (
     davinci_dev_env_native_normalize_steps,
 )
 from marin.datakit.download.diagnostic_logs import GHALOGS_ROUGH_TOKENS_B, ghalogs_public_normalize_steps
-from marin.datakit.download.dolma3_5_code import dolma3_5_code_normalize_steps
+from marin.datakit.download.docx_corpus import docx_corpus_normalize_steps
+from marin.datakit.download.dolma3_5_code import dolma3_5_code_prose_normalize_steps
 from marin.datakit.download.dolma4pdfs import dolma4pdfs_normalize_steps
 from marin.datakit.download.eai_taxonomy_code import eai_taxonomy_code_normalize_steps
 from marin.datakit.download.finepdfs import finepdfs_normalize_steps
 from marin.datakit.download.finetranslations import finetranslations_normalize_steps
+from marin.datakit.download.glm_kernelgym_rollouts import glm_kernelgym_rollouts_normalize_steps
 from marin.datakit.download.gpt_oss_rollouts import gpt_oss_rollouts_normalize_steps
 from marin.datakit.download.hplt import hplt_v3_normalize_steps
 from marin.datakit.download.institutional_books import institutional_books_normalize_steps
 from marin.datakit.download.massive import massive_normalize_steps
 from marin.datakit.download.molmo2_cap import molmo2_cap_normalize_steps
+from marin.datakit.download.nemotron_code_v1_content import nemotron_code_v1_content_normalize_steps
 from marin.datakit.download.nemotron_code_v2_content import nemotron_code_v2_content_normalize_steps
 from marin.datakit.download.nemotron_terminal import nemotron_terminal_normalize_steps
 from marin.datakit.download.nemotron_v2 import (
@@ -50,6 +55,7 @@ from marin.datakit.download.nsf_awards import nsf_awards_normalize_steps
 from marin.datakit.download.numinamath_tir import numinamath_tir_normalize_steps
 from marin.datakit.download.numinamath_v1_5 import numinamath_v1_5_normalize_steps
 from marin.datakit.download.sec_edgar import sec_edgar_normalize_steps
+from marin.datakit.download.stack_v3 import stack_v3_normalize_steps
 from marin.datakit.download.starcoder2_extras import starcoder2_extras_normalize_steps
 from marin.datakit.download.superior_reasoning import superior_reasoning_normalize_steps
 from marin.datakit.download.svgfind import svgfind_creativecommons_normalize_steps
@@ -68,9 +74,8 @@ class DatakitSource:
     """Mixture-component key, e.g. ``"nemotron_cc_v2_1/high_quality"``."""
 
     normalize_steps: tuple[StepSpec, ...]
-    """Ordered step chain. Always starts with a download and ends with
-    ``normalize``; may contain preprocessing steps in between for sources
-    that need filtering or transforms."""
+    """Ordered step chain ending with ``normalize``. Earlier steps include a
+    download or depend on one transitively, and may preprocess the source."""
 
     rough_token_count_b: float
     """Approximate token count in billions (Llama-3 tokenizer). Used as the
@@ -147,6 +152,15 @@ def all_sources() -> dict[str, DatakitSource]:
     # returning ``tuple[StepSpec, ...]``; the registry pairs the chain with
     # a rough token count.
     single_sources: tuple[_SourceRow, ...] = (
+        # Exact count from the tokenized cache .stats.json, measured with
+        # marin-community/marin-tokenizer over the normalized artifact:
+        # 8,957,298,636 tokens / 781,076 docs. The row chain behind that doc count
+        # is 1,696,847 → 997,026 past the proprietary-teacher filter → 869,901
+        # with a non-null transcript → 781,076 after exact dedup.
+        ("agenttrove", agenttrove_normalize_steps, 8.957298636),
+        # Measured with marin-community/marin-tokenizer:
+        # 9,138,977,526 tokens / 21,138,120 documents.
+        ("biocorpus", biocorpus_normalize_steps, 9.138977526),
         # cp/biodiversity is carved out of common_pile (see common_pile.py)
         # because it needs page-stitching before normalize.
         ("cp/biodiversity", biodiversity_normalize_steps, 8.60),
@@ -155,14 +169,33 @@ def all_sources() -> dict[str, DatakitSource]:
         ("common-crawl-focus-2026-22", common_crawl_focus_normalize_steps, 49.702569456),
         ("davinci-dev/ctx-native", davinci_dev_ctx_native_normalize_steps, 57.57),
         ("davinci-dev/env-native", davinci_dev_env_native_normalize_steps, 2.58),
+        # Exact count measured with marin-community/marin-tokenizer:
+        # 1,497,301,429 tokens / 242,086 docs.
+        ("docx-corpus/en", docx_corpus_normalize_steps, 1.497301429),
+        # Exact count measured with marin-community/marin-tokenizer:
+        # 65,538,632,427 tokens / 31,179,056 docs.
+        ("dolma_code_prose", dolma3_5_code_prose_normalize_steps, 65.54),
         ("eai-taxonomy-code-w-dclm", eai_taxonomy_code_normalize_steps, 591.90),
         ("finetranslations", finetranslations_normalize_steps, 3040.0),
         ("ghalogs/public", ghalogs_public_normalize_steps, GHALOGS_ROUGH_TOKENS_B),
+        # Exact count from the tokenized cache .stats.json, measured with
+        # marin-community/marin-tokenizer over the normalized artifact under the
+        # final-turn truncation filter: 64,054,289 tokens / 2,835 docs.
+        ("glm-5.2-kernelgym-rollouts", glm_kernelgym_rollouts_normalize_steps, 0.064054289),
         ("gpt-oss-rollouts", gpt_oss_rollouts_normalize_steps, 3.20),
         ("hplt_v3", hplt_v3_normalize_steps, 612.7),
         ("institutional_books", institutional_books_normalize_steps, 203.63),
         ("massive_function_calling", massive_normalize_steps, 11.39),
         ("molmo2-cap", molmo2_cap_normalize_steps, 0.36),
+        # Rough count: no tokenized cache exists yet, so this scales v2's measured
+        # rate (120.254379519 B tokens / 132,666,330 present docs ~= 906 tokens/doc)
+        # to v1's 513,109,851 present docs. Replace with the measured
+        # marin-community/marin-tokenizer total once the normalized cache is built.
+        (
+            "nemotron_code_v1/content",
+            nemotron_code_v1_content_normalize_steps,
+            465.0,
+        ),
         (
             "nemotron_code_v2/content",
             nemotron_code_v2_content_normalize_steps,
@@ -173,6 +206,9 @@ def all_sources() -> dict[str, DatakitSource]:
         ("numinamath-1.5", numinamath_v1_5_normalize_steps, 0.40),
         ("numinamath-tir", numinamath_tir_normalize_steps, 0.08),
         ("sec-edgar", sec_edgar_normalize_steps, 334.90),
+        # Exact count measured with marin-community/marin-tokenizer:
+        # 3,363,007,313,642 tokens / 172,898,790 docs.
+        ("stack-v3", stack_v3_normalize_steps, 3363.007313642),
         ("superior-reasoning", superior_reasoning_normalize_steps, 7.08),
         ("svg", svgfind_creativecommons_normalize_steps, 8.95),
         ("swe-rebench-contree", swe_rebench_contree_normalize_steps, 182.60),
@@ -206,7 +242,7 @@ def all_sources() -> dict[str, DatakitSource]:
         },
     )
 
-    # common-pile: 27 entries, each its own HF repo.
+    # common-pile: 26 entries, each its own HF repo.
     common_pile = _rows_flat(
         common_pile_normalize_steps,
         {
@@ -230,7 +266,6 @@ def all_sources() -> dict[str, DatakitSource]:
             "cp/pubmed": 38.08,
             "cp/regulations": 1.28,
             "cp/stackexchange": 21.89,
-            "cp/stackv2_code": 352.76,
             "cp/ubuntu_irc": 1.76,
             "cp/uk_hansard": 2.13,
             "cp/usgpo": 7.78,
@@ -264,18 +299,6 @@ def all_sources() -> dict[str, DatakitSource]:
             "finepdfs/swe_Latn": 25.34,
             "finepdfs/tha_Thai": 17.40,
             "finepdfs/ukr_Cyrl": 25.53,
-        },
-    )
-
-    # Exact counts, measured with marin-community/marin-tokenizer over the
-    # normalized data: 1,221,318,442,892 tokens / 635,390,613 docs and
-    # 65,538,632,427 / 31,179,056. Both came in above their chars/4 estimates
-    # (by 11.7% and 6.0%), which is the bias to expect from the estimates below.
-    dolma3_5_code = _rows_flat(
-        dolma3_5_code_normalize_steps,
-        {
-            "dolma_code": 1221.32,
-            "dolma_code_prose": 65.54,
         },
     )
 
@@ -405,9 +428,8 @@ def all_sources() -> dict[str, DatakitSource]:
 
     # locuslab Safety Pretraining: moral_education, safeweb, and refuseweb
     # (fineweb_annotated is a score-annotated copy of FineWeb itself and is
-    # excluded to avoid double-counting that corpus). Token counts measured
-    # by tokenizing every subset with the marin-community tokenizer (see
-    # ``scripts/datakit/tokenize_safety_pt.py``).
+    # excluded to avoid double-counting that corpus). Token counts were measured
+    # by tokenizing every subset with the marin-community tokenizer.
     safety_pretraining = _rows_flat(
         safety_pretraining_normalize_steps,
         {
@@ -428,7 +450,6 @@ def all_sources() -> dict[str, DatakitSource]:
         *biocollection,
         *common_pile,
         *finepdfs,
-        *dolma3_5_code,
         *dolma4pdfs,
         *nemotron_cc_v2,
         *nemotron_cc_v2_1,

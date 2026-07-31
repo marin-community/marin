@@ -22,6 +22,7 @@
 !lib/zephyr/pyproject.toml
 
 !lib/iris/pyproject.toml
+!lib/iris/rust/
 !lib/iris/src/
 !lib/iris/config/
 !lib/iris/dashboard/package.json
@@ -54,3 +55,4 @@
 **/.mypy_cache
 **/node_modules
 **/.venv
+**/target

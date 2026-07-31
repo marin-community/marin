@@ -5,10 +5,11 @@
 error classification, and the fleet's always-one-row-per-cluster alert contract."""
 
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
+from config import K8sClusterTarget
 from conftest import (
     FINELOG_DEPLOYMENTS_PATH,
     IRIS_DEPLOY,
@@ -102,6 +103,19 @@ def test_control_plane_flattens_components_and_webhooks():
     assert rows[-1] == {"kind": "webhook", "component": "kueue-system/kueue-webhook-service", "ready_endpoints": 2}
 
 
+def test_control_plane_uses_the_cluster_iris_namespace():
+    routes = healthy_k8s_routes()
+    routes["/apis/apps/v1/namespaces/iris-ci/deployments/iris-controller"] = deployment("iris-ci", "iris-controller")
+    routes["/api/v1/namespaces/iris-ci/pods"] = [pod("iris-ci", "iris-controller-abc")]
+    del routes[IRIS_DEPLOY]
+    target = K8sClusterTarget("cw-ci", "https://api.example", iris_namespace="iris-ci")
+
+    rows = make_k8s_source(k8s_api(routes), target=target).control_plane()
+
+    iris = next(row for row in rows if row.get("component") == "iris-ci/iris-controller")
+    assert (iris["ready"], iris["desired"]) == (1, 1)
+
+
 def test_missing_deployment_reads_as_degraded_not_healthy():
     routes = healthy_k8s_routes()
     del routes[IRIS_DEPLOY]
@@ -163,6 +177,18 @@ def test_missing_token_is_an_auth_error_without_a_network_call():
     assert excinfo.value.error_class == K8sErrorClass.AUTH
 
 
+def test_transport_error_does_not_expose_authorization_header():
+    def rejected_header(_request: httpx.Request) -> httpx.Response:
+        raise httpx.LocalProtocolError("Illegal header value b'Bearer secret\\n'")
+
+    with pytest.raises(K8sError) as excinfo:
+        make_k8s_source(rejected_header, token="secret\n").probe()
+
+    assert excinfo.value.error_class == K8sErrorClass.NETWORK
+    assert "LocalProtocolError" in str(excinfo.value)
+    assert "secret" not in str(excinfo.value)
+
+
 def test_crashloop_scope_separates_watched_components_from_workloads():
     routes = {
         "/api/v1/namespaces": [_namespace("iris")],
@@ -176,6 +202,22 @@ def test_crashloop_scope_separates_watched_components_from_workloads():
     assert [(row["pod"], row["scope"], row["reason"]) for row in rows] == [
         ("iris-controller-7f9-x2", "control-plane", "CrashLoopBackOff"),
         ("some-user-task-0", "workload", "ImagePullBackOff"),
+    ]
+
+
+def test_crashloop_scope_uses_the_cluster_iris_namespace():
+    routes = {
+        "/api/v1/namespaces": [_namespace("iris-ci")],
+        "/api/v1/namespaces/iris-ci/pods": [
+            pod("iris-ci", "iris-controller-7f9-x2", waiting="CrashLoopBackOff"),
+        ],
+    }
+    target = K8sClusterTarget("cw-ci", "https://api.example", iris_namespace="iris-ci")
+
+    rows = make_k8s_source(k8s_api(routes), target=target).crashloops()
+
+    assert [(row["pod"], row["scope"]) for row in rows] == [
+        ("iris-controller-7f9-x2", "control-plane"),
     ]
 
 
@@ -404,6 +446,33 @@ def test_gpu_racks_rejects_an_invalid_gpu_capacity_quantity():
         make_k8s_source(k8s_api({"/api/v1/nodes": [bad_node]})).gpu_racks()
 
 
+def test_nodes_report_coreweave_kernel_deadlock_and_pending_reboot():
+    routes = {
+        "/api/v1/nodes": [
+            node(
+                "cpu-1",
+                instance_type="cd-gp-i64-erapids",
+                unschedulable=True,
+                kernel_deadlock_reason="CPUSoftLockup",
+            )
+        ]
+    }
+
+    assert make_k8s_source(k8s_api(routes)).nodes() == [
+        {
+            "node": "cpu-1",
+            "instance_type": "cd-gp-i64-erapids",
+            "ready": True,
+            "unschedulable": True,
+            "cordon_reason": "KernelDeadlock,NLCCPendingExitProduction",
+            "kernel_deadlock": True,
+            "deadlock_reason": "CPUSoftLockup",
+            "deadlock_message": "watchdog: CPU stuck",
+            "pending_phase": "production-reboot",
+        }
+    ]
+
+
 # --- K8sFleet ---------------------------------------------------------------
 
 
@@ -432,6 +501,16 @@ def test_finelog_health_reports_http_probe_readiness_for_each_mirror():
     assert (health.cluster, health.server, health.role) == ("cw-a", "finelog-cw-a", FinelogRole.MIRROR)
     assert health.responsive is True
     assert (health.ready, health.desired, health.error_class) == (1, 1, "")
+
+
+def test_finelog_health_omits_clusters_without_a_mirror():
+    mirror = make_k8s_source(k8s_api(healthy_k8s_routes()), name="cw-a")
+    target = K8sClusterTarget("cw-ci", "https://api.example", finelog_expected=False)
+    no_mirror = make_k8s_source(k8s_api(healthy_k8s_routes()), target=target)
+
+    health = K8sFleet([mirror, no_mirror]).finelog_health()
+
+    assert [row.cluster for row in health] == ["cw-a"]
 
 
 def test_finelog_health_reports_not_ready_and_k8s_api_failures():
@@ -529,6 +608,182 @@ def test_finelog_pods_reports_runtime_resources_probes_and_pvc():
     }
 
 
+TASK_IMAGE = "ghcr.io/marin-community/iris-task:latest"
+
+
+def _exec_format_pod(
+    name: str,
+    *,
+    node_name: str = "gpu-a",
+    image: str = TASK_IMAGE,
+    exit_code: int = 255,
+    reason: str = "Error",
+    runtime_seconds: float = 0.0,
+    finished_ago_seconds: int = 60,
+    state_key: str = "state",
+    message: str | None = None,
+) -> dict:
+    finished = datetime.now(UTC) - timedelta(seconds=finished_ago_seconds)
+    started = finished - timedelta(seconds=runtime_seconds)
+    terminated = {
+        "exitCode": exit_code,
+        "reason": reason,
+        "startedAt": started.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "finishedAt": finished.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    if message is not None:
+        terminated["message"] = message
+    return {
+        "metadata": {"namespace": "iris", "name": name},
+        "spec": {"nodeName": node_name},
+        "status": {
+            "phase": "Failed",
+            "initContainerStatuses": [
+                {"name": "stage-workdir", "image": image, "imageID": "sha256:abc", state_key: {"terminated": terminated}}
+            ],
+        },
+    }
+
+
+def _arch_routes(pods: list[dict], *, nodes: list[dict] | None = None) -> dict:
+    routes = healthy_k8s_routes()
+    routes["/api/v1/namespaces"] = [_namespace("iris")]
+    routes["/api/v1/namespaces/iris/pods"] = pods
+    routes["/api/v1/nodes"] = nodes if nodes is not None else [node("gpu-a", arch="arm64")]
+    return routes
+
+
+def test_arch_mismatch_reports_exec_format_failures_on_a_non_amd64_node():
+    routes = _arch_routes([_exec_format_pod("task-0")])
+    (row,) = make_k8s_source(k8s_api(routes)).arch_mismatch_containers()
+    assert row["pod"] == "task-0"
+    assert row["container"] == "stage-workdir"
+    assert row["node"] == "gpu-a"
+    assert row["node_arch"] == "arm64"
+    assert row["image"] == TASK_IMAGE
+    assert row["exit_code"] == 255
+
+
+def test_arch_mismatch_reports_an_arm64_image_stranded_on_an_amd64_node():
+    # The mismatch runs both ways: an arm64-only push breaks the amd64 CPU nodes.
+    routes = _arch_routes(
+        [_exec_format_pod("task-0", node_name="cpu-a")],
+        nodes=[node("cpu-a", arch="amd64")],
+    )
+    (row,) = make_k8s_source(k8s_api(routes)).arch_mismatch_containers()
+    assert row["node_arch"] == "amd64"
+
+
+def test_arch_mismatch_matches_the_recorded_incident_termination():
+    # Verbatim from iris-held-hero-run-4 stage-workdir on s4bk6j84, 2026-07-29, with
+    # the timestamps moved into the lookback window. Note the absent message field:
+    # terminationMessagePolicy is File, which is why detection cannot read the text.
+    stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    incident = {
+        "metadata": {"namespace": "iris", "name": "iris-held-hero-run-4-code-glm52-ro-702515a5-68"},
+        "spec": {"nodeName": "gpu-a"},
+        "status": {
+            "phase": "Failed",
+            "initContainerStatuses": [
+                {
+                    "name": "stage-workdir",
+                    "image": TASK_IMAGE,
+                    "state": {
+                        "terminated": {
+                            "containerID": (
+                                "containerd://0ac499e38fd7324dc14a7f16e78a9a681ce961f52064efad4b9c53329a5655eb"
+                            ),
+                            "exitCode": 255,
+                            "reason": "Error",
+                            "startedAt": stamp,
+                            "finishedAt": stamp,
+                        }
+                    },
+                }
+            ],
+        },
+    }
+    (row,) = make_k8s_source(k8s_api(_arch_routes([incident]))).arch_mismatch_containers()
+    assert row["container"] == "stage-workdir"
+    assert row["image"] == TASK_IMAGE
+
+
+def test_arch_mismatch_also_matches_an_unrelated_instant_exit_255():
+    # Known limit of the signature fallback, not a bug: without a message these are
+    # indistinguishable. The row says so via evidence=signature.
+    routes = _arch_routes([_exec_format_pod("unrelated", image="ghcr.io/example/other:v1")])
+    (row,) = make_k8s_source(k8s_api(routes)).arch_mismatch_containers()
+    assert row["evidence"] == "signature"
+
+
+def test_arch_mismatch_prefers_the_runtime_message_when_the_kubelet_records_one():
+    # Verbatim shape produced under terminationMessagePolicy: FallbackToLogsOnError.
+    routes = _arch_routes([_exec_format_pod("task-0", message="exec /usr/local/bin/python: exec format error\n")])
+    (row,) = make_k8s_source(k8s_api(routes)).arch_mismatch_containers()
+    assert row["evidence"] == "message"
+
+
+def test_arch_mismatch_message_evidence_does_not_need_the_signature():
+    # A message is conclusive on its own, so an exec-format failure still reports
+    # when the exit code or runtime falls outside the fallback signature.
+    routes = _arch_routes([_exec_format_pod("task-0", exit_code=1, runtime_seconds=600, message="exec format error")])
+    (row,) = make_k8s_source(k8s_api(routes)).arch_mismatch_containers()
+    assert row["evidence"] == "message"
+
+
+def test_arch_mismatch_ignores_an_unrelated_message_on_a_normal_failure():
+    routes = _arch_routes([_exec_format_pod("task-0", exit_code=1, message="Traceback: ValueError")])
+    assert make_k8s_source(k8s_api(routes)).arch_mismatch_containers() == []
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        pytest.param({"exit_code": 1}, id="ordinary-failure-exit-1"),
+        pytest.param({"reason": "OOMKilled"}, id="other-termination-reason"),
+        pytest.param({"runtime_seconds": 600}, id="ran-too-long-to-be-exec-failure"),
+        pytest.param({"finished_ago_seconds": 7200}, id="older-than-the-lookback-window"),
+    ],
+)
+def test_arch_mismatch_rejects_terminations_outside_the_signature(kwargs):
+    routes = _arch_routes([_exec_format_pod("task-0", **kwargs)])
+    assert make_k8s_source(k8s_api(routes)).arch_mismatch_containers() == []
+
+
+def test_arch_mismatch_reads_last_state_for_a_restarting_container():
+    routes = _arch_routes([_exec_format_pod("task-0", state_key="lastState")])
+    (row,) = make_k8s_source(k8s_api(routes)).arch_mismatch_containers()
+    assert row["pod"] == "task-0"
+
+
+def test_arch_mismatch_skips_pods_on_a_node_the_scan_cannot_resolve():
+    routes = _arch_routes([_exec_format_pod("task-0", node_name="")])
+    assert make_k8s_source(k8s_api(routes)).arch_mismatch_containers() == []
+
+
+def test_alert_arch_mismatch_groups_by_node_and_image_with_zero_rows_elsewhere():
+    routes = _arch_routes(
+        [
+            _exec_format_pod("task-0"),
+            _exec_format_pod("task-1"),
+            _exec_format_pod("task-2", node_name="gpu-b"),
+            _exec_format_pod("ok", exit_code=0),
+        ],
+        nodes=[node("gpu-a", arch="arm64"), node("gpu-b", arch="arm64")],
+    )
+    fleet = _fleet(("cw-a", k8s_api(routes)), ("cw-b", k8s_api(healthy_k8s_routes())))
+    assert fleet.alert_arch_mismatch() == [
+        {"cluster": "cw-a", "node": "gpu-a", "image": TASK_IMAGE, "value": 2},
+        {"cluster": "cw-a", "node": "gpu-b", "image": TASK_IMAGE, "value": 1},
+        {"cluster": "cw-b", "node": "", "image": "", "value": 0},
+    ]
+
+
+def test_alert_arch_mismatch_reports_zero_for_an_unreachable_cluster():
+    fleet = _fleet(("cw-a", _forbidden))
+    assert fleet.alert_arch_mismatch() == [{"cluster": "cw-a", "node": "", "image": "", "value": 0}]
+
+
 def test_alert_gpu_rack_trays_maps_trays_ready_to_value():
     fleet = _fleet(("cw-a", k8s_api(healthy_k8s_routes())))
     assert fleet.alert_gpu_rack_trays() == [
@@ -561,6 +816,8 @@ def test_alert_routes_return_explicit_zeros_when_healthy():
         {"cluster": "cw-a", "component": "cert-manager/cert-manager", "value": 0},
     ]
     assert fleet.alert_stuck_gpu_pods() == [{"cluster": "cw-a", "node": "", "value": 0}]
+    assert fleet.alert_node_deadlocks() == [{"cluster": "cw-a", "node": "", "reason": "", "value": 0}]
+    assert fleet.alert_arch_mismatch() == [{"cluster": "cw-a", "node": "", "image": "", "value": 0}]
 
 
 def test_alert_routes_keep_one_row_per_cluster_when_unreachable():
@@ -574,6 +831,24 @@ def test_alert_routes_keep_one_row_per_cluster_when_unreachable():
     ]
     assert {row["value"] for row in fleet.alert_degraded()} == {0}
     assert {row["value"] for row in fleet.alert_stuck_gpu_pods()} == {0}
+    assert fleet.alert_node_deadlocks() == [{"cluster": "cw-a", "node": "", "reason": "", "value": 0}]
+
+
+def test_node_deadlock_alert_labels_the_affected_node_and_reason():
+    routes = healthy_k8s_routes()
+    routes["/api/v1/nodes"] = [
+        node("gpu-1", gpu_capacity=8),
+        node("cpu-1", unschedulable=True, kernel_deadlock_reason="CPUSoftLockup"),
+    ]
+
+    assert _fleet(("cw-a", k8s_api(routes))).alert_node_deadlocks() == [
+        {
+            "cluster": "cw-a",
+            "node": "cpu-1",
+            "reason": "CPUSoftLockup",
+            "value": 1,
+        }
+    ]
 
 
 def test_stuck_gpu_alert_groups_only_node_cleanup_rows_by_node():
@@ -618,7 +893,7 @@ def test_crashloop_alert_counts_by_scope():
 
 def _client(fleet: K8sFleet) -> TestClient:
     return TestClient(
-        create_app(bridge_config(), {}, {}, GithubSource(token=None, timeout=5.0), fleet, WandbSource(timeout=5.0))
+        create_app(bridge_config(), {}, {}, GithubSource(auth=None, timeout=5.0), fleet, WandbSource(timeout=5.0))
     )
 
 

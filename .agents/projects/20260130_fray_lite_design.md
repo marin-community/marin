@@ -2,7 +2,7 @@
 
 **Status**: Implemented (v2 API is the production interface)
 **Issue**: [#2552](https://github.com/marin-community/marin/issues/2552)
-**Research**: archived to `.agents/project/20260130_fray_lite_research.md`
+**Research**: archived to `.agents/projects/20260130_fray_lite_research.md`
 **Related**: [#2553](https://github.com/marin-community/marin/issues/2553) — Iris preemptible worker attribute (✅ done)
 
 ## Overview

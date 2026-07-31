@@ -692,7 +692,7 @@ async fn a_non_log_table_is_registered_on_the_hub_and_stamped_with_its_origin() 
     )
     .unwrap();
     let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
-    let (_, last_seq) = fx.source.write_rows("events", &ipc).unwrap();
+    let (_, last_seq) = fx.source.write_rows("events", &ipc, None).unwrap();
     // Seal the rows so the forwarder's durable watermark can reach them.
     fx.source
         .await_persisted("events", last_seq, Duration::from_secs(5))

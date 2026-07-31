@@ -28,7 +28,7 @@ When posting a snapshot to an issue or PR, include:
 Pinned GitHub tree links should include the commit or tag, for example:
 
 ```text
-https://github.com/marin-community/marin/tree/<commit-or-tag>/.agents/logbooks/foo.md
+https://github.com/marin-community/marin/tree/<commit-or-tag>/.agents/logbooks/<topic>.md
 ```
 
 Prefer to use anchor text, even if it's just the filename.

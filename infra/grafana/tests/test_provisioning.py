@@ -8,13 +8,15 @@ Grafana, which is the most expensive place to find out."""
 
 import re
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
+import pyarrow as pa
 import yaml
 from config import ClusterTarget
 from conftest import bridge_config, healthy_k8s_routes, k8s_api, make_k8s_source
 from dashboard_stitch import stitch_all
 from finelog_health import FinelogHealth, FinelogRole
+from fixture_bridge import _finelog
 from github_source import GithubSource
 from k8s_source import K8sFleet
 from server import create_app
@@ -84,6 +86,17 @@ class _FakeIris:
     def health(self) -> list[dict]:
         return [{"reachable": True, "up": 1, "latency_ms": 3}]
 
+    def peers(self) -> list[dict]:
+        return [
+            {
+                "peer": "cw-a",
+                "controller_address": "https://iris-cw-a.example",
+                "state": "reachable",
+                "last_contact_age_seconds": 3,
+                "value": 0,
+            }
+        ]
+
 
 class _FakeFinelog:
     def __init__(self, name: str) -> None:
@@ -102,6 +115,11 @@ class _FakeFinelog:
             error="",
         )
 
+    def query(self, sql: str, *, max_rows: int) -> pa.Table:
+        if '"infra.canary.metrics"' in sql:
+            return pa.table({"probe": ["controller-ping"], "target": ["marin"], "value": [1]})
+        return pa.table({})
+
 
 def test_every_rule_query_url_answers_on_the_bridge():
     """Join each rule's datasource base path with its query URL and GET it for real."""
@@ -113,7 +131,7 @@ def test_every_rule_query_url_answers_on_the_bridge():
             bridge_config(),
             finelog_sources,
             iris_sources,
-            GithubSource(token=None, timeout=5.0),
+            GithubSource(auth=None, timeout=5.0),
             fleet,
             WandbSource(timeout=5.0),
         )
@@ -144,20 +162,39 @@ def test_alert_queries_select_exactly_one_numeric_column():
 
 def test_policies_reference_provisioned_contact_points():
     contact_points = {point["name"] for point in _load(ALERTING / "contact-points.yaml")["contactPoints"]}
+    mute_timings = {timing["name"] for timing in _load(ALERTING / "mute-timings.yaml")["muteTimes"]}
     for policy in _load(ALERTING / "policies.yaml")["policies"]:
         assert policy["receiver"] in contact_points
         for route in policy.get("routes", []):
             assert route["receiver"] in contact_points
+            assert set(route.get("mute_time_intervals", ())) <= mute_timings
 
 
-def test_critical_contact_point_reaches_email_and_slack():
+def test_warning_alerts_remain_visible_without_notifications():
+    (policy,) = _load(ALERTING / "policies.yaml")["policies"]
+    routes_by_severity = {route["object_matchers"][0][2]: route for route in policy["routes"]}
+
+    assert routes_by_severity["critical"].get("mute_time_intervals") is None
+    assert routes_by_severity["warning"]["mute_time_intervals"] == ["dashboard-only"]
+    (dashboard_only,) = _load(ALERTING / "mute-timings.yaml")["muteTimes"]
+    assert dashboard_only["time_intervals"] == [
+        {
+            "times": [{"start_time": "00:00", "end_time": "24:00"}],
+            "location": "UTC",
+        }
+    ]
+
+
+def test_critical_contact_point_reaches_email_slack_and_loom():
     points = {point["name"]: point for point in _load(ALERTING / "contact-points.yaml")["contactPoints"]}
     critical_types = {receiver["type"] for receiver in points["ops-critical"]["receivers"]}
-    assert critical_types == {"email", "slack"}
+    assert critical_types == {"email", "slack", "webhook"}
     for point in points.values():
         for receiver in point["receivers"]:
             if receiver["type"] == "slack":
                 assert receiver["settings"]["url"] == "$SLACK_ALERTS_WEBHOOK"
+    (loom,) = [receiver for receiver in points["ops-critical"]["receivers"] if receiver["type"] == "webhook"]
+    assert loom["settings"] == {"url": "http://127.0.0.1:8081/alerts/loom", "httpMethod": "POST"}
 
 
 def test_finelog_health_alert_pages_critical_after_five_minutes():
@@ -166,6 +203,20 @@ def test_finelog_health_alert_pages_critical_after_five_minutes():
     assert rule["labels"]["severity"] == "critical"
     assert rule["data"][0]["datasourceUid"] == "finelog-marin"
     assert rule["data"][0]["model"]["url"] == "/alerts/fleet_health"
+
+
+def test_node_deadlock_alert_pages_critical_after_five_minutes():
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "k8s-node-kernel-deadlock"]
+    assert rule["for"] == "5m"
+    assert rule["labels"]["severity"] == "critical"
+    assert rule["data"][0]["model"]["url"] == "/alerts/node_deadlocks"
+
+
+def test_zephyr_stall_alert_is_a_warning_after_five_minutes():
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "zephyr-pipeline-progress-stalled"]
+    assert rule["for"] == "5m"
+    assert rule["labels"]["severity"] == "warning"
+    assert rule["data"][0]["model"]["url"] == "/alerts/zephyr_stalls"
 
 
 def test_k8s_dashboard_shows_finelog_fleet_health():
@@ -178,6 +229,24 @@ def test_k8s_dashboard_shows_finelog_fleet_health():
     assert panel["datasource"]["uid"] == "finelog-marin"
     selectors = {column["selector"] for column in panel["targets"][0]["columns"]}
     assert {"cluster", "server", "responsive", "ready", "desired", "latency_ms"} <= selectors
+
+
+def test_k8s_dashboard_shows_node_deadlock_and_reboot_state():
+    dashboard = _stitched_dashboards()["k8s.json"]
+    (target,) = [
+        target for panel in dashboard["panels"] for target in panel.get("targets", []) if target.get("url") == "/nodes"
+    ]
+    selectors = {column["selector"] for column in target["columns"]}
+    assert {
+        "cluster",
+        "node",
+        "ready",
+        "unschedulable",
+        "kernel_deadlock",
+        "deadlock_reason",
+        "cordon_reason",
+        "pending_phase",
+    } <= selectors
 
 
 def test_finelog_dashboard_shows_health_pods_storage_and_events():
@@ -233,6 +302,79 @@ def test_dashboard_datasource_uids_are_provisioned():
             if uid is None or uid.startswith("${"):  # row panels / template variables
                 continue
             assert uid in uids, f"{name} panel {panel.get('id')}: unknown datasource {uid!r}"
+
+
+def test_status_page_has_each_required_source():
+    dashboard = _stitched_dashboards()["infra.json"]
+    (panel,) = dashboard["panels"]
+    targets = {target["refId"]: target for target in panel["targets"]}
+
+    assert panel["datasource"]["uid"] == "status"
+    assert {ref_id: target["url"] for ref_id, target in targets.items()} == {
+        "N": "/github/nightlies",
+        "G": "/github/builds",
+        "W": "/iris/marin/workers",
+        "P": "/overview/provisioning",
+        "H": "/finelog/marin/query",
+        "R": "/finelog/marin/query",
+        "T": "/wandb/train-loss",
+        "L": "/wandb/paloma-macro-loss",
+        "M": "/wandb/mfu",
+    }
+
+
+def test_status_page_queries_provisioning_snapshot_and_region_history():
+    dashboard = _stitched_dashboards()["infra.json"]
+    (panel,) = dashboard["panels"]
+    targets = {target["refId"]: target for target in panel["targets"]}
+
+    assert panel["type"] == "marin-infra-panel"
+    assert panel["options"]["view"] == "status"
+    assert targets["P"]["url"] == "/overview/provisioning"
+    snapshot_columns = {column["selector"] for column in targets["P"]["columns"]}
+    assert {
+        "scope",
+        "ready",
+        "stockout",
+        "error",
+        "preempted",
+        "outcomes",
+        "success_ratio",
+        "pools_placing",
+        "pools_no_ready_outcome",
+    } <= snapshot_columns
+
+    target = targets["R"]
+    columns = {column["selector"]: column for column in target["columns"]}
+    assert columns["series"] == {"selector": "series", "text": "region", "type": "string"}
+    assert columns["value"]["type"] == "number"
+
+    sql = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "sql")
+    assert "metric = 'provision_success_ratio'" in sql
+    assert "metric IN ('provision_ready', 'provision_outcomes')" in sql
+    assert "regexp_matches(json_get(labels, 'zone'), '^[a-z]+-[a-z]+[0-9]+-[a-z]$')" in sql
+    assert "ELSE json_get(labels, 'zone') END AS series" in sql
+    assert "ready / NULLIF(outcomes, 0)" in sql
+
+
+def test_provisioning_render_fixture_routes_metric_query_to_region_series():
+    dashboard = _stitched_dashboards()["infra.json"]
+    (panel,) = dashboard["panels"]
+    (target,) = [target for target in panel["targets"] if target["refId"] == "R"]
+    sql = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "sql")
+
+    rows = _finelog(urlencode({"sql": sql}))
+
+    assert rows
+    assert {row["series"] for row in rows} == {
+        "fleet",
+        "europe-west4",
+        "us-central1",
+        "us-east1",
+        "us-east5",
+        "us-west4",
+    }
+    assert all({"t", "series", "value"} <= row.keys() for row in rows)
 
 
 def test_stat_panels_use_grafana_reduce_options_schema():

@@ -1,14 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for auth: session cookies, CSRF, default-deny middleware, auth DB isolation,
-stateless JWT, controller auth setup, and null-auth mode."""
+"""Tests for auth: session cookies, CSRF, default-deny middleware, stateless JWT,
+controller auth setup, and null-auth mode."""
 
 from unittest.mock import Mock
 
 import jwt
 import pytest
-import sqlalchemy.exc
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
@@ -35,10 +34,10 @@ from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.dashboard import (
     _UNAUTHENTICATED_RPCS,
     ControllerDashboard,
-    _SubdomainProxyMiddleware,
 )
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import DEFAULT_BACKEND_ID
 from iris.rpc import job_pb2
@@ -54,7 +53,6 @@ from rigging.server_auth import (
 )
 from rigging.testing import MockVerifier
 from rigging.token_authority import JwksVerifier, JwtSigner, generate_ed25519_keypair, signing_key_from_private_pem
-from sqlalchemy import text
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
@@ -82,6 +80,7 @@ def _jwt_manager() -> JwtTokenManager:
 
 def _make_service(db, log_client, auth=None):
     """A ControllerServiceImpl with minimal deps for login / auth-setup tests."""
+    EndpointsProjection(db)
     controller_mock = Mock()
     controller_mock.wake = Mock()
     controller_mock.get_job_scheduling_diagnostics = Mock(return_value="")
@@ -275,37 +274,6 @@ def test_all_routes_accessible_when_auth_disabled(noauth_client):
     """The permissive chain admits every route when auth is not configured."""
     for path in ["/job/123", "/worker/456", "/health", "/auth/config"]:
         assert noauth_client.get(path).status_code == 200
-
-
-# -- Auth DB isolation ---------------------------------------------------------
-
-
-def _write_secret(db: ControllerDB, key: str, value: str) -> None:
-    """Write a row into the attached auth DB (``controller_secrets``)."""
-    with db.transaction() as tx:
-        tx.execute(
-            text("INSERT INTO auth.controller_secrets (key, value, created_at_ms) VALUES (:k, :v, 1000)"),
-            {"k": key, "v": value},
-        )
-
-
-def test_read_snapshot_cannot_access_auth_tables(db: ControllerDB):
-    """Read pool connections must not see the attached auth DB's tables."""
-    _write_secret(db, "signing_key", "pem")
-
-    with db.read_snapshot() as q:
-        for table in ["controller_secrets", "auth.controller_secrets"]:
-            with pytest.raises(sqlalchemy.exc.OperationalError, match="no such table"):
-                q.execute(text(f"SELECT * FROM {table}"))
-
-
-def test_write_connection_can_access_auth_tables(db: ControllerDB):
-    _write_secret(db, "signing_key", "pem")
-
-    with db.transaction() as q:
-        rows = q.execute(text("SELECT value FROM auth.controller_secrets WHERE key = 'signing_key'")).all()
-        assert len(rows) == 1
-        assert rows[0].value == "pem"
 
 
 # -- Stateless JWT -------------------------------------------------------------
@@ -618,7 +586,7 @@ def _dashboard_with_protected_route(service, policy: RequestAuthPolicy) -> Contr
     # Walk down to the Starlette router so the new route participates in route
     # matching.
     app = dashboard.app
-    while isinstance(app, _SubdomainProxyMiddleware | RouteAuthMiddleware):
+    while isinstance(app, RouteAuthMiddleware):
         app = app._app
     app.router.routes.insert(0, Route("/test-protected", _protected))
     return dashboard

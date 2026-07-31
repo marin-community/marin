@@ -1,0 +1,10 @@
+n_concurrent_trials: 32
+retry:
+  exclude_exceptions: []
+environment:
+  type: daytona
+agents:
+  - name: terminus-2
+datasets:
+  - name: hf://DCAgent/gaia_127
+    ref: main

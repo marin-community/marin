@@ -1,7 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
+
 from iris.cluster.provenance import (
+    is_same_image_provenance,
     provenance_from_env,
     provenance_from_proto,
     provenance_to_env,
@@ -30,3 +33,9 @@ def test_from_env_treats_dockerfile_default_brace_as_unset():
 
 def test_proto_round_trip():
     assert provenance_from_proto(provenance_to_proto(_PROV)) == _PROV
+
+
+def test_image_provenance_identity_uses_tree_hash_and_dirty_state():
+    assert is_same_image_provenance(_PROV, replace(_PROV, branch="other"))
+    assert not is_same_image_provenance(_PROV, replace(_PROV, dirty=False))
+    assert not is_same_image_provenance(_PROV, replace(_PROV, tree_hash="different"))

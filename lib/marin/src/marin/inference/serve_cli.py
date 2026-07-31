@@ -102,7 +102,7 @@ def local(
         raise click.ClickException("--vllm-source marin-fork requires --launcher cuda")
 
     model_config = ServedModelConfig(
-        model=model,
+        weights=model,
         tokenizer=tokenizer,
         dtype=dtype,
         max_model_len=max_model_len,

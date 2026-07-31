@@ -43,6 +43,7 @@ RUN pip install --no-cache-dir \
     protobuf \
     pyarrow \
     pydantic \
+    anthropic \
     && rm -rf /build
 
 # The canonical record and sample contracts are the only Marin modules in the image. The private

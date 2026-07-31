@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import tempfile
 import uuid
 
@@ -26,8 +25,7 @@ TRANSFER_TYPES = [
     WeightTransferMode.ARROW_FLIGHT,
 ]
 
-if os.environ.get("CI"):
-    pytest.skip("Skipping slow tests on CI", allow_module_level=True)
+pytestmark = pytest.mark.slow
 
 
 class EmbeddingTestModule(eqx.Module):

@@ -38,6 +38,11 @@ def _repo_relative_data_file() -> str:
     return "experiments/scaling_law_sweeps/dclm_core/custom_tasks/winograd/wsc273.jsonl"
 
 
+def _require_legacy_lm_eval_runtime() -> None:
+    pytest.importorskip("torch")
+    pytest.importorskip("lm_eval")
+
+
 @pytest.fixture
 def current_date_time():
     # Get the current local time and format as MM-DD-YYYY-HH-MM-SS
@@ -148,11 +153,16 @@ def test_levanter_eval_tasks_resolve_repo_relative_data_files(monkeypatch, tmp_p
         ]
     )
 
-    assert task.task_kwargs["dataset_kwargs"]["data_files"] == str(data_file)
+    assert task.task_kwargs is not None
+    dataset_kwargs = task.task_kwargs["dataset_kwargs"]
+    assert isinstance(dataset_kwargs, dict)
+    assert dataset_kwargs["data_files"] == str(data_file)
     assert task.task_alias == "winograd_0shot"
 
 
 def test_lm_eval_none_alias_patch_uses_requested_alias_fallback():
+    _require_legacy_lm_eval_runtime()
+
     class FakeTask:
         VERSION = 1
 
@@ -177,6 +187,8 @@ def test_lm_eval_none_alias_patch_uses_requested_alias_fallback():
 
 
 def test_lm_eval_task_name_alias_patch_uses_requested_alias_fallback():
+    _require_legacy_lm_eval_runtime()
+
     class FakeTask:
         VERSION = 1
 
@@ -201,6 +213,7 @@ def test_lm_eval_task_name_alias_patch_uses_requested_alias_fallback():
 
 
 def test_lm_eval_none_alias_patch_sanitizes_prepare_print_tasks():
+    _require_legacy_lm_eval_runtime()
     _patch_lm_eval_none_alias_compat({"jeopardy": "jeopardy_10shot"})
 
     from lm_eval import evaluator  # noqa: PLC0415
@@ -212,6 +225,7 @@ def test_lm_eval_none_alias_patch_sanitizes_prepare_print_tasks():
 
 
 def test_lm_eval_none_alias_patch_sanitizes_none_task_dict_key():
+    _require_legacy_lm_eval_runtime()
     _patch_lm_eval_none_alias_compat({"jeopardy": "jeopardy_10shot"})
 
     from lm_eval import evaluator  # noqa: PLC0415
@@ -335,7 +349,7 @@ def test_evaluate_levanter_lm_evaluation_harness_dispatches_remotely_and_preserv
 
     assert isinstance(step.fn, RemoteCallable)
     assert step.fn.resources == resource_config
-    assert step.fn.pip_dependency_groups == ["eval", "tpu"]
+    assert step.fn.pip_dependency_groups == ["lm_eval", "tpu"]
     assert step.config.evaluator == "levanter_lm_evaluation_harness"
     assert step.config.eval_datasets_cache_path.value == "gs://unit-test/cache"
     assert step.config.eval_datasets_cache_dependency == cache_dependency
@@ -403,8 +417,10 @@ def test_add_sample_smooth_metrics_derives_mcq_aggregate_metrics_and_can_drop_pa
     first_prob = 1.0 / (math.exp(-2.0) + 1.0 + math.exp(-1.0))
     second_prob = math.exp(-2.0) / (math.exp(-2.0) + 1.0 + math.exp(-1.0))
     assert metrics["native_choice_prob,none"] == pytest.approx((first_prob + second_prob) / 2.0)
-    assert metrics["native_gold_bpb,none"] > 0.0
-    assert metrics["native_gold_logprob_stderr,none"] > 0.0
+    gold_bpb = metrics["native_gold_bpb,none"]
+    gold_logprob_stderr = metrics["native_gold_logprob_stderr,none"]
+    assert isinstance(gold_bpb, float) and gold_bpb > 0.0
+    assert isinstance(gold_logprob_stderr, float) and gold_logprob_stderr > 0.0
 
     drop_sample_payloads(results)
 
@@ -490,7 +506,7 @@ def test_add_sample_smooth_metrics_infers_string_choice_targets_from_arguments_a
     assert results["results"]["winogrande_0shot"]["native_gold_logprob,none"] == -27.0
 
 
-@pytest.mark.tpu_ci
+@pytest.mark.integration
 def test_lm_eval_harness_levanter(current_date_time, model_config):
     mmlu_config = EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot")
     config = EvaluationConfig(
@@ -506,7 +522,7 @@ def test_lm_eval_harness_levanter(current_date_time, model_config):
     evaluate(config=config)
 
 
-@pytest.mark.tpu_ci
+@pytest.mark.integration
 def test_lm_eval_harness(current_date_time, model_config):
     gsm8k_config = EvalTaskConfig(name="gsm8k_cot", num_fewshot=8)
     config = EvaluationConfig(

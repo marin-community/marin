@@ -3,11 +3,11 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { controllerRpcCall, useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import { stateToName, stateDisplayName } from '@/types/status'
+import { stateToName, stateDisplayName, taskStateDisplayName } from '@/types/status'
 import { useBackends } from '@/composables/useBackends'
 import { useCopyToClipboard } from '@/composables/useCopyToClipboard'
 import {
-  LOCAL_CLUSTER, isFederated,
+  LOCAL_CLUSTER, isFederated, attemptFailureReason,
   type JobStatus, type TaskStatus, type LaunchJobRequest, type JobQuery,
   type GetJobStatusResponse, type GetTaskStatusResponse, type ListTasksResponse, type ListJobsResponse,
   type EndpointInfo, type ListEndpointsResponse,
@@ -273,6 +273,7 @@ function taskEndpoints(taskId: string): EndpointInfo[] {
 function taskHasStatusDetail(t: TaskStatus): boolean {
   if (taskExitNonZero(t)) return true
   const name = stateToName(t.state)
+  if (t.statusMessage && !TERMINAL_STATES.has(name)) return true
   if (taskStatusTextSummary(t.taskId) && !TERMINAL_STATES.has(name)) return true
   return Boolean(t.error) && FAILED_TERMINAL_STATES.has(name)
 }
@@ -594,6 +595,30 @@ const taskCounts = computed(() => {
   return counts
 })
 
+interface ActiveTaskDiagnostic {
+  message: string
+  taskIds: string[]
+}
+
+const MAX_ACTIVE_DIAGNOSTICS = 5
+
+// Group identical backend verdicts so a sharded job explains a shared Kueue or
+// scheduler wait once instead of rendering one banner per task.
+const activeTaskDiagnostics = computed<ActiveTaskDiagnostic[]>(() => {
+  const taskIdsByMessage = new Map<string, string[]>()
+  for (const task of tasks.value) {
+    if (TERMINAL_STATES.has(stateToName(task.state))) continue
+    const message = task.statusMessage?.trim()
+    if (!message) continue
+    const taskIds = taskIdsByMessage.get(message)
+    if (taskIds) taskIds.push(task.taskId)
+    else taskIdsByMessage.set(message, [task.taskId])
+  }
+  return [...taskIdsByMessage.entries()]
+    .map(([message, taskIds]) => ({ message, taskIds }))
+    .sort((a, b) => b.taskIds.length - a.taskIds.length)
+})
+
 // The Scheduling pane auto-opens while tasks are pending — that's when placement
 // constraints explain why the job can't run — but a manual collapse then sticks
 // instead of being forced back open on the next auto-refresh.
@@ -626,7 +651,8 @@ function collectFailuresByState(stateName: string, count: (t: TaskStatus) => num
       if (stateToName(attempt.state) !== stateName) continue
       const finishedAtMs = timestampMs(attempt.finishedAt)
       if (!latest || finishedAtMs >= latest.finishedAtMs) {
-        latest = { attemptId: attempt.attemptId, error: attempt.error ?? '', finishedAtMs }
+        const error = attemptFailureReason(attempt)
+        latest = { attemptId: attempt.attemptId, error, finishedAtMs }
       }
     }
     if (!latest) continue
@@ -954,6 +980,38 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
       >
         <span class="font-semibold text-status-warning text-sm">Scheduling Diagnostic:</span>
         <pre class="mt-2 p-3 bg-surface rounded text-xs font-mono whitespace-pre-wrap">{{ job.pendingReason }}</pre>
+      </div>
+
+      <div
+        v-if="activeTaskDiagnostics.length > 0"
+        class="mb-4 px-4 py-3 bg-status-warning-bg border border-status-warning-border rounded-lg"
+      >
+        <span class="font-semibold text-status-warning text-sm">Backend Scheduling Diagnostic:</span>
+        <div class="mt-2 space-y-2">
+          <div
+            v-for="diagnostic in activeTaskDiagnostics.slice(0, MAX_ACTIVE_DIAGNOSTICS)"
+            :key="diagnostic.message"
+          >
+            <div class="text-xs text-text-secondary">
+              <RouterLink
+                :to="`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(diagnostic.taskIds[0])}`"
+                class="text-accent hover:underline font-mono"
+              >
+                task {{ taskIndex(diagnostic.taskIds[0]) }}
+              </RouterLink>
+              <span v-if="diagnostic.taskIds.length > 1">
+                and {{ diagnostic.taskIds.length - 1 }} more task{{ diagnostic.taskIds.length > 2 ? 's' : '' }}
+              </span>
+            </div>
+            <pre class="mt-1 p-3 bg-surface rounded text-xs font-mono whitespace-pre-wrap break-words">{{ diagnostic.message }}</pre>
+          </div>
+          <div
+            v-if="activeTaskDiagnostics.length > MAX_ACTIVE_DIAGNOSTICS"
+            class="text-xs text-text-muted"
+          >
+            {{ activeTaskDiagnostics.length - MAX_ACTIVE_DIAGNOSTICS }} more distinct diagnostics
+          </div>
+        </div>
       </div>
 
       <!-- Failed tasks callout: genuine task failures (non-zero exit). Shows each
@@ -1384,7 +1442,11 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             >
               Task {{ taskIndex(task.taskId) }}
             </RouterLink>
-            <StatusBadge :status="task.state" size="sm" />
+            <StatusBadge
+              :status="task.state"
+              :label="taskStateDisplayName(task.state, task.statusMessage)"
+              size="sm"
+            />
           </div>
           <div v-if="task.pendingReason" class="mt-1 text-xs text-status-warning" :title="task.pendingReason">
             {{ task.pendingReason }}
@@ -1406,7 +1468,8 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             </span>
           </div>
           <div class="mt-1 text-xs break-anywhere">
-            <MarkdownRenderer v-if="taskStatusTextSummary(task.taskId) && !TERMINAL_STATES.has(stateToName(task.state))" :content="taskStatusTextSummary(task.taskId)" class="text-text-secondary" />
+            <span v-if="task.statusMessage && !TERMINAL_STATES.has(stateToName(task.state))" class="font-mono text-status-warning">{{ task.statusMessage }}</span>
+            <MarkdownRenderer v-else-if="taskStatusTextSummary(task.taskId) && !TERMINAL_STATES.has(stateToName(task.state))" :content="taskStatusTextSummary(task.taskId)" class="text-text-secondary" />
             <span v-else-if="task.error && FAILED_TERMINAL_STATES.has(stateToName(task.state))" class="text-status-danger" :title="task.error">{{ task.error.length > 160 ? task.error.slice(0, 160) + '…' : task.error }}</span>
           </div>
           <div v-if="taskEndpoints(task.taskId).length" class="mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
@@ -1497,7 +1560,11 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
                   </RouterLink>
                 </td>
                 <td class="px-2 sm:px-3 py-2 text-[13px] align-top">
-                  <StatusBadge :status="task.state" size="sm" />
+                  <StatusBadge
+                    :status="task.state"
+                    :label="taskStateDisplayName(task.state, task.statusMessage)"
+                    size="sm"
+                  />
                   <div v-if="task.pendingReason" class="text-xs text-status-warning mt-0.5 max-w-xs truncate" :title="task.pendingReason">
                     {{ task.pendingReason }}
                   </div>
@@ -1575,6 +1642,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
                       </span>
                       <span class="min-w-0">
                         <span v-if="taskExitNonZero(task)" class="text-status-danger font-mono">exit {{ task.exitCode }}</span>
+                        <span v-else-if="task.statusMessage && !TERMINAL_STATES.has(stateToName(task.state))" class="font-mono text-status-warning break-anywhere">{{ task.statusMessage }}</span>
                         <MarkdownRenderer v-else-if="taskStatusTextSummary(task.taskId) && !TERMINAL_STATES.has(stateToName(task.state))" :content="taskStatusTextSummary(task.taskId)" class="text-text-secondary" />
                         <span v-else-if="task.error && FAILED_TERMINAL_STATES.has(stateToName(task.state))" class="text-status-danger break-anywhere" :title="task.error">{{ task.error.length > 160 ? task.error.slice(0, 160) + '…' : task.error }}</span>
                       </span>

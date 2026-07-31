@@ -36,25 +36,24 @@ def test_resolve_multinode_defaults_gpu(tpu, gpu, replicas, expected_replicas, e
 
 
 @pytest.mark.parametrize(
-    "variant,replicas,expected",
+    "variant,gpu_count,replicas,expected",
     [
         # NVL72 GPUs: hard nvlink.domain up to 16 (the guaranteed-schedulable rack slice),
-        # sliced (rack-sized slices, one per NVLink domain) at 17+ where a single hard domain
-        # is not guaranteed all-healthy.
-        ("GB200", 2, "nvlink.domain"),
-        ("GB200", 16, "nvlink.domain"),
-        ("GB200", 17, "nvlink.domain.sliced"),
-        ("GB300", 4, "nvlink.domain"),
-        ("GB300", 17, "nvlink.domain.sliced"),
+        # sliced (rack-sized slices, one per NVLink domain) above that cutoff.
+        ("GB200", 4, 2, "nvlink.domain"),
+        ("GB200", 4, 16, "nvlink.domain"),
+        ("GB200", 4, 32, "nvlink.domain.sliced"),
+        ("GB300", 4, 4, "nvlink.domain"),
+        ("GB300", 4, 32, "nvlink.domain.sliced"),
         # H100 (and any non-NVL72 GPU) has no nvlink.domain label -> always leafgroup.
-        ("H100", 2, "leafgroup"),
-        ("H100", 64, "leafgroup"),
+        ("H100", 8, 2, "leafgroup"),
+        ("H100", 8, 64, "leafgroup"),
         # A bare-count request (empty variant) is not NVL72 -> leafgroup.
-        ("", 2, "leafgroup"),
+        ("", 1, 2, "leafgroup"),
     ],
 )
-def test_gpu_gang_coscheduling_level(variant, replicas, expected):
-    assert gpu_gang_coscheduling_level(variant, replicas) == expected
+def test_gpu_gang_coscheduling_level(variant, gpu_count, replicas, expected):
+    assert gpu_gang_coscheduling_level(variant, gpu_count, replicas) == expected
 
 
 @pytest.mark.parametrize(

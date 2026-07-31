@@ -25,15 +25,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 import pulumi
 import pulumi_gcp as gcp
 import pulumi_kubernetes as k8s
-from iac.config import Provider, load_iris_config, load_provisioning
+from iac.config import CLOUDFLARE_TOKEN_SECRET, Provider, load_iris_config, load_provisioning
 from iac.coreweave.cluster import CoreweaveCluster, CoreweaveClusterArgs
 from iac.coreweave.dns import FederationDns, FederationDnsArgs
 from iac.coreweave.kueue import KueueAddon, KueueAddonArgs
-from iac.coreweave.rbac import IrisRbac, IrisRbacArgs
+from iac.coreweave.rbac import GrafanaObserverRbac, GrafanaObserverRbacArgs, IrisRbac, IrisRbacArgs
 from iac.coreweave.traefik import TraefikAddon, TraefikAddonArgs
 from iac.gcp.addresses import GcpStaticAddresses, GcpStaticAddressesArgs
 from iac.gcp.registries import GcpArtifactRegistries, GcpArtifactRegistriesArgs
 from iac.nodepools import derive_nodepools
+from rigging.secrets import resolve_secret_spec
 
 DEFAULT_NAMESPACE = "iris"
 
@@ -79,23 +80,29 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
         namespace = DEFAULT_NAMESPACE
 
     platform_coreweave = iris_config.platform.coreweave
-    if platform_coreweave is None or not platform_coreweave.kubeconfig_path:
+    if platform_coreweave is None:
         raise ValueError(
-            f"cluster {cluster!r} has no platform.coreweave.kubeconfig_path; "
-            "the minimal IaC cut needs an out-of-cluster kubeconfig to target"
+            f"cluster {cluster!r} has no platform.coreweave config; "
+            "the minimal IaC cut needs an out-of-cluster Kubernetes target"
         )
-    kubeconfig_path = os.path.expanduser(platform_coreweave.kubeconfig_path)
-    # Bind to the cluster's declared kube_context, not the kubeconfig's current-context —
-    # otherwise a stack silently targets whatever `kubectl` was last pointed at.
-    #
-    # enable_patch_force=True: declared here until the "cede" ships (spec.md §4). Iris's
-    # controller still re-applies RBAC/NodePools under its own field manager on every restart, so
-    # a plain SSA dry-run reports a field conflict without forced ownership (README §Adoption
-    # check).
+    # Require an explicit context: omitting it makes the provider use the kubeconfig's
+    # current-context (whatever kubectl last pointed at), which can silently retarget
+    # another CoreWeave cluster sharing ~/.kube/coreweave-iris.
+    if not platform_coreweave.kube_context:
+        raise ValueError(f"cluster {cluster!r} missing required platform.coreweave.kube_context")
+
+    if not os.environ.get("KUBECONFIG"):
+        raise ValueError("pulumi up requires KUBECONFIG (e.g. export KUBECONFIG=~/.kube/coreweave-iris).")
+
+    # kubeconfig="": bypasses the Python SDK's default of copying $KUBECONFIG into
+    # the provider input (which persists a machine-local path in state, creating spurious diffs)
+    # The provider process still loads credentials from the ambient KUBECONFIG env.
+    # enable_patch_force=True: allows pulumi to take control of resources it didn't create.
+    # This should not happen in practice, but could during manual operations.
     k8s_provider = k8s.Provider(
         "cw-k8s",
-        kubeconfig=kubeconfig_path,
-        context=platform_coreweave.kube_context or None,
+        kubeconfig="",
+        context=platform_coreweave.kube_context,
         enable_patch_force=True,
     )
 
@@ -113,6 +120,12 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
         IrisRbacArgs(namespace=namespace, spec=coreweave_provisioning.rbac, adopt=adopt),
         k8s_provider=k8s_provider,
     )
+    if grafana_observer := coreweave_provisioning.grafana_observer_rbac:
+        GrafanaObserverRbac(
+            "grafana-observer-rbac",
+            GrafanaObserverRbacArgs(usernames=grafana_observer.usernames, adopt=adopt),
+            k8s_provider=k8s_provider,
+        )
 
     kueue_config = kubernetes_provider.kueue if kubernetes_provider else None
     if kueue_config is None or not kueue_config.cluster_queue:
@@ -153,12 +166,7 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
 
     federation_dns = coreweave_provisioning.federation_dns
     if federation_dns is not None:
-        cloudflare_api_token = os.environ.get("CLOUDFLARE_API_TOKEN")
-        if not cloudflare_api_token:
-            raise ValueError(
-                "CLOUDFLARE_API_TOKEN is required when provisioning.coreweave.federation_dns is set; "
-                "load cloudflare-oa-dns-token from GCP Secret Manager"
-            )
+        cloudflare_api_token = resolve_secret_spec(CLOUDFLARE_TOKEN_SECRET).value
         FederationDns(
             "dns",
             FederationDnsArgs(

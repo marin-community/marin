@@ -111,6 +111,7 @@ MIN_FILES_PER_SHARD = 15
 NATIVE_CRATE_DIR: dict[str, str] = {
     "dupekit": "lib/dupekit/rust",
     "finelog": "lib/finelog/rust",
+    "iris": "lib/iris/rust",
 }
 
 # The matrix `setup` tag that unified-unit.yaml maps to the Rust source-build

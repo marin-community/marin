@@ -49,6 +49,8 @@ class IrisServiceArgs:
     health_path: str
     env: dict[str, str] = field(default_factory=dict)
     secret_env: dict[str, str] = field(default_factory=dict)
+    pip_packages: tuple[str, ...] = ()
+    sync_packages: tuple[str, ...] = ()
     wait: int = DEFAULT_READY_WAIT
     deploy_generation: int = 0
     code_paths: tuple[str, ...] = ()
@@ -111,6 +113,8 @@ def wire_spec(args: IrisServiceArgs) -> ServiceSpec:
         health_path=args.health_path,
         env=dict(args.env),
         secret_env=dict(args.secret_env),
+        pip_packages=args.pip_packages,
+        sync_packages=args.sync_packages,
         wait=args.wait,
         deploy_generation=args.deploy_generation,
         build_commands=args.build_commands,

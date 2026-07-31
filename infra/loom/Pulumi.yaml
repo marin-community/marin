@@ -1,0 +1,6 @@
+name: marin-loom
+runtime:
+  name: python
+  options:
+    virtualenv: ../../.venv
+description: Loom control plane and durable single-host GCP resources.

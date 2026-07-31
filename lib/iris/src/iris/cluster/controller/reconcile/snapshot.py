@@ -40,6 +40,14 @@ class TaskUpdate:
     # clears it (task now running/quiet); a string sets it. A provider that reports it
     # (k8s) sets it on every update so it clears naturally on RUNNING.
     status_message: str | None = None
+    # Backend object identity, folded last-non-null. The k8s provider sets these as
+    # soon as the pod is scheduled (every non-terminal update too) so a later
+    # preemption that deletes the pod still leaves the identity persisted.
+    # ``terminal_reason`` is set only on a failed update.
+    pod_name: str | None = None
+    pod_uid: str | None = None
+    node_name: str | None = None
+    terminal_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

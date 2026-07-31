@@ -45,10 +45,12 @@ from levanter.data.text.datasets import DatasetComponent, LmDataConfig
 from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.optim.config import AdamConfig
 from levanter.tracker.wandb import WandbConfig
+from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.execution.artifact import read_artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext, run
 from marin.execution.step_runner import StepRunner
+from marin.experiment.evaluation import eval_report, eval_steps
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 from rigging.log_setup import configure_logging
@@ -63,8 +65,7 @@ from experiments.datakit.reference_pipeline import (
     sample_sources,
 )
 from experiments.datakit.store.datakit_store import ClusteredStoreData
-from experiments.evals.evalchemy.serve_and_eval import ServeSpec
-from experiments.evals.evals import core_evals, eval_report, eval_steps
+from experiments.evals.evals import core_evals
 from experiments.grug.base.launch import GrugBaseLaunchConfig, run_grug_base_trial
 from experiments.grug.base.model import GrugModelConfig
 
@@ -105,7 +106,7 @@ REFERENCE_TRAIN_RESOURCES = ResourceConfig.with_gpu("H100", count=1, cpu=8, disk
 
 # Eval serves the checkpoint via marin-serve (vLLM) on one GPU, then runs the core MCQ suite
 # against its OpenAI endpoint.
-REFERENCE_SERVE = ServeSpec(gpu_type="H100", gpu_count=1, tpu_type=None)
+REFERENCE_EVAL_ACCELERATOR = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=1)
 
 
 class MixtureWeighting(StrEnum):
@@ -321,7 +322,7 @@ def main() -> None:
         logger.info("stop-after=train; checkpoint at %s", model.path())
         return
 
-    results = eval_steps(model, core_evals(serve=REFERENCE_SERVE), version=args.version)
+    results = eval_steps(model, core_evals(accelerator=REFERENCE_EVAL_ACCELERATOR), version=args.version)
     report = eval_report(results, name=REF_NAME, version=args.version)
     run(report, max_concurrent=args.max_concurrent)
     logger.info("eval report at %s", report.path())

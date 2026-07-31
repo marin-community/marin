@@ -6,6 +6,8 @@
 from iris.cluster.controller.checkpoint import (
     download_checkpoint_to_local,
     latest_checkpoint_epoch_ms,
+    parse_checkpoint_epoch_ms,
+    probe_database_dir,
     prune_old_checkpoints,
     write_checkpoint,
 )
@@ -31,6 +33,7 @@ def test_write_checkpoint_uploads_compressed(tmp_path, make_controller):
     assert result.job_count == 0
     assert result.task_count == 0
     assert result.worker_count == 0
+    assert probe_database_dir(controller._db.db_path.parent).checkpoint_epoch_ms == parse_checkpoint_epoch_ms(path)
 
 
 def test_begin_checkpoint_returns_remote_path(tmp_path, make_controller):
@@ -68,6 +71,20 @@ def test_download_checkpoint_to_local(tmp_path):
     result = download_checkpoint_to_local(remote_dir, local_db_dir)
     assert result is True
     assert (local_db_dir / "controller.sqlite3").exists()
+    assert probe_database_dir(local_db_dir).checkpoint_epoch_ms == latest_checkpoint_epoch_ms(remote_dir)
+
+
+def test_probe_database_dir_rejects_corrupt_sqlite(tmp_path):
+    db_dir = tmp_path / "db"
+    db = ControllerDB(db_dir=db_dir)
+    db.close()
+    (db_dir / ControllerDB.DB_FILENAME).write_bytes(b"not a sqlite database")
+
+    probe = probe_database_dir(db_dir)
+
+    assert probe.exists
+    assert not probe.healthy
+    assert probe.checkpoint_epoch_ms is None
 
 
 def test_download_checkpoint_returns_false_when_missing(tmp_path):

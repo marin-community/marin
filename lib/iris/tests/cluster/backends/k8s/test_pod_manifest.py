@@ -26,8 +26,8 @@ from iris.cluster.backends.k8s.tasks import (
     _build_volumes_and_mounts,
     _constraints_to_node_selector,
     _is_coordinator_task,
-    _is_infrastructure_failure,
     _job_id_from_task,
+    _pod_failure_state,
     _pod_group_name,
     _pod_name,
     _sanitize_label_value,
@@ -311,13 +311,12 @@ def test_task_update_error_prefers_termination_message_over_bare_reason():
     assert update.error == "RuntimeError: CUDA error: an illegal memory access was encountered"
 
 
-def test_is_infrastructure_failure_with_pod_level_reason():
-    """Pod-level eviction (no container statuses) is detected as infrastructure failure."""
+def test_pod_level_eviction_reason_is_worker_failed():
     pod: dict = {
         "metadata": {"name": "test"},
         "status": {"phase": "Failed", "reason": "Evicted", "containerStatuses": []},
     }
-    assert _is_infrastructure_failure(pod)
+    assert _pod_failure_state(pod) == job_pb2.TASK_STATE_WORKER_FAILED
 
 
 def _add_condition(pod: dict, type_: str, status: str, reason: str = "") -> dict:
@@ -326,16 +325,34 @@ def _add_condition(pod: dict, type_: str, status: str, reason: str = "") -> dict
 
 
 @pytest.mark.parametrize("reason", ["PreemptionByScheduler", "TerminationByKubelet", "EvictionByEvictionAPI"])
-def test_task_update_disruption_target_is_worker_failed(reason):
+def test_task_update_disruption_target_is_preempted(reason):
     """A preemption SIGKILLed after grace surfaces as reason='Error' exit 137 — not in
     the reason whitelist — but the control plane's DisruptionTarget condition marks it
-    as infrastructure, so it must be WORKER_FAILED (preemption budget), not FAILED."""
+    as a disruption, so it must be PREEMPTED (preemption budget), not FAILED."""
     entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
     pod = make_pod("iris-job-0-0", "Failed", exit_code=137, reason="Error")
     _add_condition(pod, "DisruptionTarget", "True", reason)
     update = _task_update_from_pod(entry, pod)
-    assert update.new_state == job_pb2.TASK_STATE_WORKER_FAILED
+    assert update.new_state == job_pb2.TASK_STATE_PREEMPTED
     assert update.exit_code == 137
+
+
+def test_task_update_kueue_termination_target_is_preempted():
+    """Kueue preemption uses TerminationTarget rather than Kubernetes'
+    DisruptionTarget; preserve that authoritative cause instead of charging a
+    SIGKILL-shaped exit as an application failure."""
+    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    pod = make_pod("iris-job-0-0", "Failed", exit_code=137, reason="Error")
+    message = "Preempted to accommodate an interactive workload due to ClusterQueue prioritization"
+    _add_condition(pod, "TerminationTarget", "True", "WorkloadEvictedDueToPreempted")
+    pod["status"]["conditions"][-1]["message"] = message
+
+    update = _task_update_from_pod(entry, pod)
+
+    assert update.new_state == job_pb2.TASK_STATE_PREEMPTED
+    assert update.exit_code == 137
+    assert update.terminal_reason is not None
+    assert "WorkloadEvictedDueToPreempted" in update.terminal_reason
 
 
 def test_task_update_oom_killed_without_disruption_target_stays_application_failure():
@@ -352,7 +369,7 @@ def test_disruption_target_condition_status_false_is_not_infrastructure():
     """A DisruptionTarget condition with status != 'True' does not mark a disruption."""
     pod = make_pod("iris-job-0-0", "Failed", exit_code=1, reason="Error")
     _add_condition(pod, "DisruptionTarget", "False", "")
-    assert not _is_infrastructure_failure(pod)
+    assert _pod_failure_state(pod) == job_pb2.TASK_STATE_FAILED
 
 
 # ---------------------------------------------------------------------------
@@ -927,6 +944,22 @@ def test_init_container_created_when_bundle_id_present():
     assert extra_volumes == []
 
 
+def test_init_container_records_its_log_tail_on_failure():
+    """_init_container_failure reports the terminated message, which the default File
+    policy never populates — so a stage-workdir crash surfaced with no cause at all."""
+    req = make_run_req("/my-job/task-0")
+    req.bundle_id = "bundle-abc"
+
+    init_containers, _, _ = _build_init_container_spec(
+        req,
+        "iris-my-job-task-0-abcd1234-0",
+        "myrepo/iris:latest",
+        "http://ctrl:8080",
+    )
+
+    assert init_containers[0]["terminationMessagePolicy"] == "FallbackToLogsOnError"
+
+
 def test_no_init_container_when_no_bundle_or_files():
     """No init containers when neither bundle_id nor workdir_files are set."""
     req = make_run_req("/my-job/task-0")
@@ -1101,7 +1134,7 @@ def test_build_pdb_manifest_selector_and_cleanup_labels():
 
 def _cosched_req(task_id: str, attempt_id: int = 0, num_tasks: int = 64, group_by: str = "leafgroup", priority=None):
     if priority is None:
-        priority = job_pb2.PRIORITY_BAND_UNSPECIFIED
+        priority = job_pb2.PRIORITY_BAND_INHERIT
     return make_run_req(
         task_id,
         attempt_id=attempt_id,
@@ -1375,3 +1408,14 @@ def test_kueue_topologies_override_config():
     annotations = manifest["metadata"]["annotations"]
     assert annotations[_KUEUE_REQUIRED_TOPOLOGY] == "rack.example.com/pod"
     assert _KUEUE_PREFERRED_TOPOLOGY not in annotations
+
+
+def test_pod_manifest_floors_an_unset_band_at_interactive():
+    """An unset band takes the interactive class, not the cluster default.
+
+    Dispatch always stamps a real band, so this is the floor for a request built outside
+    that path — without it an unset field would leave the pod unranked against its peers.
+    """
+    req = make_run_req("/test-job/0", priority=job_pb2.PRIORITY_BAND_INHERIT)
+    manifest = _build_pod_manifest(req, pod_config())
+    assert manifest["spec"]["priorityClassName"] == "iris-interactive"

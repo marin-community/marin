@@ -411,12 +411,14 @@ class Controller(_message.Message):
         ttl: _time_pb2.Duration
         def __init__(self, endpoint_name: _Optional[str] = ..., ttl: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
     class MintEndpointTokenResponse(_message.Message):
-        __slots__ = ("token", "expires_at")
+        __slots__ = ("token", "expires_at", "capability_url")
         TOKEN_FIELD_NUMBER: _ClassVar[int]
         EXPIRES_AT_FIELD_NUMBER: _ClassVar[int]
+        CAPABILITY_URL_FIELD_NUMBER: _ClassVar[int]
         token: str
         expires_at: _time_pb2.Timestamp
-        def __init__(self, token: _Optional[str] = ..., expires_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+        capability_url: str
+        def __init__(self, token: _Optional[str] = ..., expires_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., capability_url: _Optional[str] = ...) -> None: ...
     class RegisterEndpointResponse(_message.Message):
         __slots__ = ("endpoint_id", "lease_duration")
         ENDPOINT_ID_FIELD_NUMBER: _ClassVar[int]
@@ -768,8 +770,22 @@ class Controller(_message.Message):
         kubernetes: Controller.GetKubernetesClusterStatusResponse
         worker: Controller.WorkerFleetDetail
         def __init__(self, kubernetes: _Optional[_Union[Controller.GetKubernetesClusterStatusResponse, _Mapping]] = ..., worker: _Optional[_Union[Controller.WorkerFleetDetail, _Mapping]] = ...) -> None: ...
+    class BandCapacity(_message.Message):
+        __slots__ = ("band", "amounts")
+        class AmountsEntry(_message.Message):
+            __slots__ = ("key", "value")
+            KEY_FIELD_NUMBER: _ClassVar[int]
+            VALUE_FIELD_NUMBER: _ClassVar[int]
+            key: str
+            value: int
+            def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
+        BAND_FIELD_NUMBER: _ClassVar[int]
+        AMOUNTS_FIELD_NUMBER: _ClassVar[int]
+        band: _job_pb2.PriorityBand
+        amounts: _containers.ScalarMap[str, int]
+        def __init__(self, band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., amounts: _Optional[_Mapping[str, int]] = ...) -> None: ...
     class ResourceAvailability(_message.Message):
-        __slots__ = ("version", "observation_epoch_ms", "amounts", "total_amounts")
+        __slots__ = ("version", "observation_epoch_ms", "amounts", "total_amounts", "held_by_band")
         class AmountsEntry(_message.Message):
             __slots__ = ("key", "value")
             KEY_FIELD_NUMBER: _ClassVar[int]
@@ -788,11 +804,13 @@ class Controller(_message.Message):
         OBSERVATION_EPOCH_MS_FIELD_NUMBER: _ClassVar[int]
         AMOUNTS_FIELD_NUMBER: _ClassVar[int]
         TOTAL_AMOUNTS_FIELD_NUMBER: _ClassVar[int]
+        HELD_BY_BAND_FIELD_NUMBER: _ClassVar[int]
         version: int
         observation_epoch_ms: int
         amounts: _containers.ScalarMap[str, int]
         total_amounts: _containers.ScalarMap[str, int]
-        def __init__(self, version: _Optional[int] = ..., observation_epoch_ms: _Optional[int] = ..., amounts: _Optional[_Mapping[str, int]] = ..., total_amounts: _Optional[_Mapping[str, int]] = ...) -> None: ...
+        held_by_band: _containers.RepeatedCompositeFieldContainer[Controller.BandCapacity]
+        def __init__(self, version: _Optional[int] = ..., observation_epoch_ms: _Optional[int] = ..., amounts: _Optional[_Mapping[str, int]] = ..., total_amounts: _Optional[_Mapping[str, int]] = ..., held_by_band: _Optional[_Iterable[_Union[Controller.BandCapacity, _Mapping]]] = ...) -> None: ...
     class BackendSummary(_message.Message):
         __slots__ = ("backend_id", "name", "kind", "capabilities", "advertised_attributes", "scale_groups", "worker_count", "pending_task_count", "running_task_count", "has_autoscaler", "capacity_health", "detail", "availability")
         class AdvertisedAttributesEntry(_message.Message):

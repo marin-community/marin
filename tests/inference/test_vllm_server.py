@@ -1,18 +1,36 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for native vLLM server log routing.
+"""Tests for the native vLLM server subprocess: log routing and startup retry.
 
 ``_LogPump`` forwards the subprocess's stdout/stderr to the parent's fds and to the on-disk logs,
-routing by severity and flushing/draining on teardown; these exercise that.
+routing by severity and flushing/draining on teardown. A second group covers
+``_start_vllm_native_server``'s bounded retry around a transient Run:ai streamer read fault: it
+retries that fault, fails fast on anything else, and shares one deadline across all attempts.
 """
 
 import os
+import socket
 import subprocess
 import sys
 import time
+from pathlib import Path
 
-from marin.inference.vllm_server import VllmServerHandle, _engine_kwargs_to_cli_args, _LogPump, _native_logs_tail
+import marin.inference.vllm_server as vllm_server
+import pytest
+from marin.inference.config import VllmCompilationCacheMode
+from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
+from marin.inference.vllm_server import (
+    TransientStartupError,
+    VllmServerHandle,
+    _engine_kwargs_to_cli_args,
+    _linux_process_group_status,
+    _LogPump,
+    _native_logs_tail,
+    _ProcessGroupStatus,
+    _start_vllm_native_server,
+)
+from rigging.timing import ExponentialBackoff
 
 
 def test_engine_kwargs_forward_dtype_to_vllm_command() -> None:
@@ -95,7 +113,7 @@ def test_native_logs_tail_includes_unterminated_final_fragment(tmp_path):
     pump.close()
 
 
-def test_handle_stop_terminates_drains_and_is_idempotent(tmp_path):
+def test_handle_stop_terminates_drains_and_is_idempotent(tmp_path, monkeypatch):
     # The child logs a line, then blocks; stop() must terminate it, drain that line to the
     # on-disk log, and be safe to call again.
     proc = _spawn("import sys, time; print('SERVE_READY'); sys.stdout.flush(); time.sleep(30)", start_new_session=True)
@@ -105,6 +123,14 @@ def test_handle_stop_terminates_drains_and_is_idempotent(tmp_path):
         process_group_id = os.getpgid(proc.pid)
     except ProcessLookupError:
         process_group_id = None
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "marin"))
+    compilation_cache = VllmCompilationCache.prepare(
+        launcher_identity="test",
+        compile_identity=VllmCompileIdentity(model_name_or_path="test/model", extra_cli_args=()),
+        environment={},
+        mode=VllmCompilationCacheMode.MANAGED,
+    )
+    compilation_cache_root = Path(compilation_cache.environment()["JAX_COMPILATION_CACHE_DIR"]).parent
     handle = VllmServerHandle(
         server_url="http://127.0.0.1:0/v1",
         port=0,
@@ -112,6 +138,7 @@ def test_handle_stop_terminates_drains_and_is_idempotent(tmp_path):
         process_group_id=process_group_id,
         log_dir=str(tmp_path),
         log_pump=pump,
+        compilation_cache=compilation_cache,
     )
 
     # Wait until the child has started Python and its line is pumped to disk, so teardown below
@@ -126,5 +153,173 @@ def test_handle_stop_terminates_drains_and_is_idempotent(tmp_path):
     assert proc.poll() is not None  # terminated
     # Teardown flushed and closed the on-disk logs, so the tail still reads the child's output.
     assert "SERVE_READY" in _native_logs_tail(str(tmp_path))
+    assert not compilation_cache_root.exists()
 
     handle.stop(timeout_seconds=5)  # second call must not raise
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "waitid") or not Path("/proc").is_dir(),
+    reason="requires Linux procfs process state",
+)
+def test_handle_stop_releases_cache_for_zombie_only_process_group(tmp_path, monkeypatch):
+    leader = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        process_group=0,
+    )
+    zombie: subprocess.Popen[str] | None = None
+    pump: _LogPump | None = None
+    compilation_cache: VllmCompilationCache | None = None
+    handle: VllmServerHandle | None = None
+    try:
+        process_group_id = os.getpgid(leader.pid)
+        zombie = subprocess.Popen(
+            [sys.executable, "-c", "pass"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            process_group=process_group_id,
+        )
+        os.waitid(os.P_PID, zombie.pid, os.WEXITED | os.WNOWAIT)
+        assert Path(f"/proc/{zombie.pid}/stat").read_text().rpartition(")")[2].split()[0] == "Z"
+
+        pump = _LogPump(leader, str(tmp_path / "stdout.log"), str(tmp_path / "stderr.log"))
+        pump.start()
+        monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "marin"))
+        compilation_cache = VllmCompilationCache.prepare(
+            launcher_identity="test-zombie",
+            compile_identity=VllmCompileIdentity(model_name_or_path="test/zombie", extra_cli_args=()),
+            environment={},
+            mode=VllmCompilationCacheMode.MANAGED,
+        )
+        compilation_cache_root = Path(compilation_cache.environment()["JAX_COMPILATION_CACHE_DIR"]).parent
+        handle = VllmServerHandle(
+            server_url="http://127.0.0.1:0/v1",
+            port=0,
+            process=leader,
+            process_group_id=process_group_id,
+            log_dir=str(tmp_path),
+            log_pump=pump,
+            compilation_cache=compilation_cache,
+        )
+
+        handle.stop(timeout_seconds=0.1)
+        assert not compilation_cache_root.exists()
+    finally:
+        if zombie is not None:
+            zombie.wait(timeout=5)
+        if leader.poll() is None:
+            leader.kill()
+            leader.wait(timeout=5)
+        if handle is not None:
+            handle.stop(timeout_seconds=1)
+        else:
+            if pump is not None:
+                pump.join(timeout=1)
+                pump.close()
+            if compilation_cache is not None:
+                compilation_cache.close()
+
+
+def test_linux_process_group_status_inspects_threads_of_dead_leader(tmp_path, monkeypatch):
+    process_group_id = 900
+    proc_root = tmp_path / "proc"
+    leader = proc_root / "101"
+    tasks = leader / "task"
+    tasks.mkdir(parents=True)
+    (leader / "stat").write_text(f"101 (leader) Z 1 {process_group_id}\n")
+    (tasks / "101").mkdir()
+    (tasks / "101" / "stat").write_text(f"101 (leader) Z 1 {process_group_id}\n")
+    (tasks / "102").mkdir()
+    (tasks / "102" / "stat").write_text(f"102 (worker) S 1 {process_group_id}\n")
+    monkeypatch.setattr(vllm_server, "_LINUX_PROC_ROOT", str(proc_root))
+
+    assert _linux_process_group_status(process_group_id) is _ProcessGroupStatus.HAS_LIVE_PROCESSES
+
+
+# --- bounded retry around a transient Run:ai streamer read fault during startup ---
+
+_FAKE_VLLM_SERVER = str(Path(__file__).parent / "fake_vllm_server.py")
+_FAST_BACKOFF = ExponentialBackoff(initial=0.001, maximum=0.01, factor=2.0, jitter=0.0)
+
+
+class _FakeLauncher:
+    """Runs fake_vllm_server.py (see its modes) in place of the real ``vllm serve`` child."""
+
+    def __init__(self, *mode_args: str) -> None:
+        self._mode_args = mode_args
+
+    def command(self) -> list[str]:
+        return [sys.executable, _FAKE_VLLM_SERVER, *self._mode_args]
+
+    def env(self) -> dict[str, str]:
+        return {}
+
+    def cache_identity(self) -> str:
+        return "fake"
+
+
+def _free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _start(launcher: _FakeLauncher, *, timeout_seconds: float = 30) -> VllmServerHandle:
+    return _start_vllm_native_server(
+        model_name_or_path="fake-model",
+        port=_free_port(),
+        timeout_seconds=timeout_seconds,
+        launcher=launcher,
+        # Managed mode would restore/publish a remote cache archive on every attempt.
+        compilation_cache_mode=VllmCompilationCacheMode.CALLER_MANAGED,
+        max_attempts=3,
+        poll_interval_seconds=0.05,
+        backoff=_FAST_BACKOFF,
+    )
+
+
+def test_serves_when_startup_succeeds():
+    # A returned handle means the fake server answered /v1/models with 200.
+    handle = _start(_FakeLauncher("serve"))
+    handle.stop()
+
+
+def test_retries_streamer_fault_then_serves(tmp_path):
+    counter = tmp_path / "starts"
+    handle = _start(_FakeLauncher("fail", str(counter), "2"))
+    try:
+        assert counter.read_text() == "3"  # two streamer faults, served on the third start
+    finally:
+        handle.stop()
+
+
+def test_fails_fast_on_non_streamer_error(tmp_path):
+    counter = tmp_path / "starts"
+    with pytest.raises(RuntimeError) as excinfo:
+        _start(_FakeLauncher("fail", str(counter), "99", "RuntimeError: CUDA out of memory"))
+    assert not isinstance(excinfo.value, TransientStartupError)
+    assert "CUDA out of memory" in str(excinfo.value)
+    assert counter.read_text() == "1"  # a non-streamer failure is not retried
+
+
+def test_exhausts_retries_then_raises_with_diagnostics(tmp_path):
+    counter = tmp_path / "starts"
+    with pytest.raises(TransientStartupError) as excinfo:
+        _start(_FakeLauncher("fail", str(counter), "99"))
+    assert counter.read_text() == "3"  # retried up to the attempt budget
+    err = excinfo.value
+    assert "Could not receive runai_response from libstreamer" in str(err)  # streamer fault preserved
+    assert "fake-model" in str(err)  # attempted command preserved
+    assert err.__notes__
+
+
+def test_hang_times_out_without_retry(tmp_path):
+    # A live-but-never-ready server raises TimeoutError, not a streamer fault, so it is not retried.
+    counter = tmp_path / "starts"
+    with pytest.raises(TimeoutError):
+        _start(_FakeLauncher("hang", str(counter)), timeout_seconds=0.5)
+    assert counter.read_text() == "1"

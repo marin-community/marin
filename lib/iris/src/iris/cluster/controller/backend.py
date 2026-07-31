@@ -143,10 +143,17 @@ def plans_from_snapshot(snapshot: ControlSnapshot) -> list[WorkerReconcilePlan]:
 @dataclass(frozen=True)
 class DeviceCapacity:
     """Free vs. total consumable capacity for one resource token, in the token's
-    natural unit (accelerator variant → chips)."""
+    natural unit (accelerator variant → chips).
+
+    ``held_by_band`` splits the non-free remainder by the ``PriorityBand`` holding
+    it, so a federation parent can tell capacity it could reclaim by preemption
+    (work it outranks) from capacity it cannot. Empty when the backend cannot
+    attribute held capacity to a band; the parent then reclaims nothing.
+    """
 
     free: int
     total: int
+    held_by_band: dict[int, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

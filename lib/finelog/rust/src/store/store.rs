@@ -394,10 +394,21 @@ impl Store {
     /// `(rows_written, last_seq)`. `last_seq` is the durability target the caller
     /// awaits (`-1` for an empty batch). The size/row caps and IPC decode happen
     /// before namespace resolution, then validate/align runs OUTSIDE any lock.
-    pub fn write_rows(&self, name: &str, arrow_ipc: &[u8]) -> Result<(i64, i64), StatsError> {
+    /// Append a WriteRows batch. `origin_cluster` is the authenticated origin the
+    /// rows are attributed to (`Some` for a forwarding JWT; `None` for a
+    /// trusted-network writer, which names its own origin — empty for a local
+    /// write). When set, it overwrites the implicit `cluster` column after
+    /// alignment so origin does not depend on the sender having stamped it.
+    pub fn write_rows(
+        &self,
+        name: &str,
+        arrow_ipc: &[u8],
+        origin_cluster: Option<&str>,
+    ) -> Result<(i64, i64), StatsError> {
         use crate::store::ipc::decode_one_record_batch;
         use crate::store::schema::{
-            validate_and_align_batch, MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
+            stamp_cluster_column, validate_and_align_batch, MAX_WRITE_ROWS_BYTES,
+            MAX_WRITE_ROWS_ROWS,
         };
 
         if arrow_ipc.len() > MAX_WRITE_ROWS_BYTES {
@@ -414,7 +425,10 @@ impl Store {
             )));
         }
         let engine = self.require_engine(name)?;
-        let aligned: AlignedBatch = validate_and_align_batch(&batch, engine.schema())?;
+        let mut aligned: AlignedBatch = validate_and_align_batch(&batch, engine.schema())?;
+        if let Some(origin) = origin_cluster {
+            stamp_cluster_column(&mut aligned, origin);
+        }
         let n = aligned.num_rows as i64;
         let last_seq = engine.append_aligned_batch(&aligned);
         Ok((n, last_seq))

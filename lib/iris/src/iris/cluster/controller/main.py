@@ -26,7 +26,12 @@ from iris.cluster.composer import make_backends
 from iris.cluster.config import IrisClusterConfig, load_config, resolve_backends, resolve_config_secrets
 from iris.cluster.controller.auth import create_controller_auth, require_persistent_signing_key
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
-from iris.cluster.controller.checkpoint import download_checkpoint_to_local, latest_checkpoint_epoch_ms
+from iris.cluster.controller.checkpoint import (
+    download_checkpoint_to_local,
+    latest_checkpoint_epoch_ms,
+    parse_checkpoint_epoch_ms,
+    probe_database_dir,
+)
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import build_log_stack
@@ -40,26 +45,6 @@ logger = logging.getLogger(__name__)
 LOCAL_STATE_DIR_DEFAULT = Path("/var/cache/iris/controller")
 DRY_RUN_STATE_DIR_ROOT = Path("/tmp/dry-run")
 HOURLY_CHECKPOINT_SECONDS = 3600.0
-
-
-def _local_db_epoch_ms(db_dir: Path) -> int | None:
-    """Newest mtime (epoch ms) among the local main/auth SQLite DBs, or None if either is missing.
-
-    Includes each DB's WAL/SHM sibling files — WAL-mode writes land there
-    first, so the main .sqlite3 file's own mtime can lag behind the DB's real
-    freshness.
-    """
-    db_path = db_dir / ControllerDB.DB_FILENAME
-    auth_db_path = db_dir / ControllerDB.AUTH_DB_FILENAME
-    if not db_path.exists() or not auth_db_path.exists():
-        return None
-    candidates = [
-        db_path,
-        auth_db_path,
-        *db_dir.glob(f"{ControllerDB.DB_FILENAME}-*"),
-        *db_dir.glob(f"{ControllerDB.AUTH_DB_FILENAME}-*"),
-    ]
-    return int(max(p.stat().st_mtime for p in candidates) * 1000)
 
 
 def _apply_requested_rollback(db_dir: Path, remote_state_dir: str) -> bool:
@@ -112,10 +97,8 @@ def _prepare_local_db_dir(
     - ``fresh``: wipe ``db_dir`` and start empty (no restore).
     - a requested rollback (rollout record in ``ROLLBACK_REQUESTED``): restore the
       recorded pre-deploy checkpoint over the local DB, then self-clear the record.
-    - ``checkpoint_path`` set: restore that checkpoint when the local DB is absent or
-      staler than the latest remote checkpoint.
-    - otherwise: reuse the local DB when it is at least as fresh as the latest remote
-      checkpoint; else restore the latest remote checkpoint.
+    - otherwise: reuse a healthy local DB only when its persisted checkpoint
+      ancestry matches the selected remote checkpoint; else restore it.
     """
     if fresh:
         # Wipe any pre-existing db_dir so we're guaranteed to start with an empty
@@ -131,26 +114,32 @@ def _prepare_local_db_dir(
     if _apply_requested_rollback(db_dir, remote_state_dir):
         return
 
-    # Trust local only when both files are present AND at least as fresh as the
-    # latest remote checkpoint. This also covers a node-local volume that isn't
-    # guaranteed to be the same disk across restarts (e.g. one backed by a
-    # multi-node scale group): leftover files from an earlier stint on this same
-    # node are only trusted if nothing more recent has been checkpointed
-    # elsewhere since. This compares wall-clock mtimes across whichever nodes
-    # wrote each side, so it relies on nodes being NTP-synced to within the
-    # checkpoint interval (minutes) — true of every platform this runs on.
-    local_ms = _local_db_epoch_ms(db_dir)
-    remote_ms = latest_checkpoint_epoch_ms(remote_state_dir)
-    if local_ms is not None and (remote_ms is None or local_ms >= remote_ms):
-        logger.info("Local DB at %s is at least as fresh as the latest remote checkpoint, skipping restore", db_dir)
+    probe = probe_database_dir(db_dir)
+    if checkpoint_path:
+        remote_ms = parse_checkpoint_epoch_ms(checkpoint_path)
+        if remote_ms is None:
+            raise ValueError(f"Checkpoint path must end with a numeric epoch: {checkpoint_path}")
+    else:
+        remote_ms = latest_checkpoint_epoch_ms(remote_state_dir)
+    if probe.healthy and remote_ms is None:
+        logger.info("Local DB at %s is healthy and no remote checkpoint exists, skipping restore", db_dir)
         return
-    db_path = db_dir / ControllerDB.DB_FILENAME
-    auth_db_path = db_dir / ControllerDB.AUTH_DB_FILENAME
-    if db_path.exists() and not auth_db_path.exists():
-        logger.warning("Main DB exists at %s but auth DB is missing — fetching from remote", db_path)
+    if probe.healthy and probe.checkpoint_epoch_ms == remote_ms:
+        logger.info(
+            "Local DB at %s is healthy and contains checkpoint %d, skipping restore",
+            db_dir,
+            remote_ms,
+        )
+        return
+    if probe.exists and not probe.healthy:
+        quarantine_dir = db_dir.with_name(f"{db_dir.name}.corrupt-{Timestamp.now().epoch_ms()}")
+        logger.error("Local DB at %s failed validation (%s); preserving it at %s", db_dir, probe.detail, quarantine_dir)
+        db_dir.rename(quarantine_dir)
     restored = download_checkpoint_to_local(remote_state_dir, db_dir, checkpoint_dir=checkpoint_path)
     if checkpoint_path and not restored:
         raise ValueError(f"Checkpoint not found: {checkpoint_path}")
+    if probe.exists and not restored:
+        raise ValueError(f"Local DB failed validation and no remote checkpoint was available: {probe.detail}")
 
 
 def _resolve_cluster_endpoints(cluster_config: IrisClusterConfig) -> dict[str, str]:
@@ -278,6 +267,8 @@ def run_controller_serve(
         endpoints=endpoints,
         autoscaler_evaluation_interval=cluster_config.defaults.autoscaler.evaluation_interval,
         cluster_id=cluster_config.name,
+        dashboard_url=cluster_config.dashboard_url,
+        federation_public_parent=cluster_config.federation_public_parent,
         peers=cluster_config.peers,
     )
 
@@ -394,8 +385,7 @@ def controller_serve_options(command):
             default=None,
             type=click.Path(path_type=Path),
             help=(
-                "Override the local state dir "
-                "(default: /var/cache/iris/controller, or /tmp/dry-run/{today} in dry-run)"
+                "Override the local state dir (default: /var/cache/iris/controller, or /tmp/dry-run/{today} in dry-run)"
             ),
         ),
     ]

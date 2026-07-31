@@ -8,7 +8,11 @@ from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
+from config import K8S_CLUSTERS
+
 _NOW = datetime(2026, 7, 21, 12, tzinfo=UTC)
+_CW_K8S_CLUSTERS = tuple(target.name for target in K8S_CLUSTERS)
+_CW_CI_CLUSTER = next(target.name for target in K8S_CLUSTERS if target.iris_namespace == "iris-ci")
 _LANES = (
     ("tpu-ferry", "TPU ferry", "marin", "training"),
     ("cw-gpu-ferry", "CW ferry", "marin", "training"),
@@ -89,7 +93,6 @@ def _wandb(chart: str) -> list[dict]:
                 {
                     "chart": titles[chart],
                     "run": run,
-                    "run_state": "running" if run_index else "finished",
                     "tokens": tokens,
                     "value": value,
                     "report_title": "67B-A2B MoE on 10T tokens",
@@ -100,6 +103,64 @@ def _wandb(chart: str) -> list[dict]:
                 }
             )
     return rows
+
+
+def _provisioning() -> list[dict]:
+    common = {
+        "collected_at": round(_NOW.timestamp() * 1000),
+        "pools_placing": 0,
+        "pools_no_ready_outcome": 0,
+        "latency_p95_seconds": None,
+        "window_hours": None,
+    }
+    return [
+        {
+            **common,
+            "scope": "fleet",
+            "resource_type": "",
+            "scale_group": "",
+            "zone": "",
+            "ready": 18,
+            "stockout": 3,
+            "error": 1,
+            "preempted": 2,
+            "outcomes": 22,
+            "success_ratio": 18 / 22,
+            "pools_placing": 5,
+            "pools_no_ready_outcome": 1,
+            "latency_p50_seconds": 48,
+            "latency_p95_seconds": 132,
+            "window_hours": 3,
+        },
+        {
+            **common,
+            "scope": "pool",
+            "resource_type": "v5p-8",
+            "scale_group": "reserved",
+            "zone": "us-east5-a",
+            "ready": 6,
+            "stockout": 1,
+            "error": 0,
+            "preempted": 1,
+            "outcomes": 7,
+            "success_ratio": 6 / 7,
+            "latency_p50_seconds": 42,
+        },
+        {
+            **common,
+            "scope": "pool",
+            "resource_type": "h100-8",
+            "scale_group": "gpu",
+            "zone": "cw-us-east-08a",
+            "ready": 4,
+            "stockout": 2,
+            "error": 1,
+            "preempted": 1,
+            "outcomes": 7,
+            "success_ratio": 4 / 7,
+            "latency_p50_seconds": 65,
+        },
+    ]
 
 
 def _finelog(query: str) -> list[dict]:
@@ -116,7 +177,7 @@ def _finelog(query: str) -> list[dict]:
         ]
     if "probe_up" in sql and "metric IN" not in sql:
         return [{"value": 1}, {"value": 1}, {"value": 1}]
-    if "metric IN" in sql:
+    if "metric IN" in sql and "provision_success_ratio" not in sql:
         return [
             {"probe": probe, "metric": metric, "value": value}
             for probe in ("iris", "finelog", "kueue")
@@ -134,7 +195,19 @@ def _finelog(query: str) -> list[dict]:
         ]
     if "provision_success_ratio" in sql:
         return [
-            {"t": round((_NOW - timedelta(minutes=10 * index)).timestamp() * 1000), "value": 0.96 + (index % 4) * 0.008}
+            {
+                "t": round((_NOW - timedelta(minutes=10 * index)).timestamp() * 1000),
+                "series": series,
+                "value": base + (index % 4) * 0.008,
+            }
+            for series, base in (
+                ("fleet", 0.81),
+                ("europe-west4", 0.72),
+                ("us-central1", 0.94),
+                ("us-east1", 0.78),
+                ("us-east5", 0.86),
+                ("us-west4", 0.75),
+            )
             for index in range(24)
         ]
     return []
@@ -221,8 +294,25 @@ def _rows(path: str, query: str) -> list[dict] | dict:
                 )
             )
         ]
+    if path == "/overview/provisioning":
+        return _provisioning()
     if path == "/iris/marin/health":
         return [{"reachable": True, "up": 1, "latency_ms": 18}]
+    if path == "/iris/marin/peers":
+        return [
+            {
+                "peer": peer,
+                "controller_address": f"https://iris-{peer}.oa.dev",
+                "state": state,
+                "last_contact_age_seconds": age,
+                "value": int(state == "unreachable"),
+            }
+            for peer, state, age in (
+                ("cw-us-east-02a", "reachable", 12),
+                ("cw-us-east-08a", "unreachable", 10_800),
+                ("cw-rno2a", "reachable", 8),
+            )
+        ]
     if path == "/iris/marin/workers":
         return [
             {
@@ -263,13 +353,10 @@ def _rows(path: str, query: str) -> list[dict] | dict:
     if path == "/k8s/health":
         return [
             {"cluster": cluster, "reachable": True, "up": 1, "latency_ms": 31, "error_class": ""}
-            for cluster in ("cw-us-east-02a", "cw-us-east-08a", "cw-rno2a")
+            for cluster in _CW_K8S_CLUSTERS
         ]
     if path == "/k8s/alerts/unreachable":
-        return [
-            {"cluster": cluster, "error_class": "none", "value": 0}
-            for cluster in ("cw-us-east-02a", "cw-us-east-08a", "cw-rno2a")
-        ]
+        return [{"cluster": cluster, "error_class": "none", "value": 0} for cluster in _CW_K8S_CLUSTERS]
     if path == "/k8s/overview":
         return [{"pending_pods": 1, "crashlooping_containers": 1}]
     if path == "/k8s/control_plane":
@@ -283,8 +370,24 @@ def _rows(path: str, query: str) -> list[dict] | dict:
                 "restarts": 0,
                 "waiting_reason": "",
             }
-            for cluster in ("cw-us-east-02a", "cw-us-east-08a", "cw-rno2a")
+            for cluster in _CW_K8S_CLUSTERS
             for component in ("iris/iris-controller", "kueue-system/kueue-controller-manager")
+        ]
+    if path == "/k8s/nodes":
+        return [
+            {
+                "cluster": cluster,
+                "node": "g8fd930" if cluster == _CW_CI_CLUSTER else f"{cluster}-node-1",
+                "instance_type": "cd-gp-i64-erapids",
+                "ready": True,
+                "unschedulable": cluster == _CW_CI_CLUSTER,
+                "kernel_deadlock": cluster == _CW_CI_CLUSTER,
+                "deadlock_reason": "CPUSoftLockup" if cluster == _CW_CI_CLUSTER else "",
+                "cordon_reason": "KernelDeadlock,NLCCPendingExitProduction" if cluster == _CW_CI_CLUSTER else "",
+                "pending_phase": "production-reboot" if cluster == _CW_CI_CLUSTER else "",
+                "deadlock_message": "watchdog: CPU stuck" if cluster == _CW_CI_CLUSTER else "",
+            }
+            for cluster in _CW_K8S_CLUSTERS
         ]
     if path == "/k8s/pending":
         return [

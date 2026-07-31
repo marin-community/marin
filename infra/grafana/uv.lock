@@ -740,6 +740,7 @@ dependencies = [
     { name = "google-cloud-compute" },
     { name = "httpx" },
     { name = "marin-finelog" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "starlette" },
     { name = "uvicorn" },
 ]
@@ -755,6 +756,7 @@ requires-dist = [
     { name = "google-cloud-compute", specifier = ">=1.19" },
     { name = "httpx", specifier = ">=0.28.1,<1" },
     { name = "marin-finelog", specifier = ">=0.2.0" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.8" },
     { name = "starlette", specifier = ">=0.40" },
     { name = "uvicorn", specifier = ">=0.32" },
 ]

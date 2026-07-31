@@ -29,9 +29,29 @@ fi
 /run.sh "$@" &
 grafana_pid=$!
 
+# Cloud Run signals shutdown with SIGTERM to PID 1 and SIGKILLs the container a few
+# seconds later, and bash does not pass that on to background children. Grafana has
+# to receive it and run its own shutdown: that is when it snapshots the Alertmanager
+# notification log to the database. Killed outright, it leaves a stale log behind and
+# the replacement instance re-notifies every alert still firing.
+terminating=0
+forward_term() {
+  terminating=1
+  kill -TERM "$grafana_pid" "$bridge_pid" 2>/dev/null || true
+}
+trap forward_term TERM INT
+
 # Wait for whichever dies first, then take the container down with it.
 exit_code=0
 wait -n "$bridge_pid" "$grafana_pid" || exit_code=$?
+
+if [ "${terminating}" -eq 1 ]; then
+  # Let both finish their shutdown; Cloud Run's SIGKILL is the real deadline.
+  wait "$grafana_pid" 2>/dev/null || true
+  wait "$bridge_pid" 2>/dev/null || true
+  exit 0
+fi
+
 echo "entrypoint: a supervised process exited (status ${exit_code}); stopping container" >&2
 kill "$bridge_pid" "$grafana_pid" 2>/dev/null || true
 exit "${exit_code}"

@@ -423,6 +423,9 @@ class ResourceConfig:
     the backend uses its cluster-configured default. Used for jobs that need
     a custom runtime (e.g. an image with runsc/skopeo for sandboxing
     untrusted child workloads).
+
+    `target_cluster` routes an Iris job to a named peer cluster. Other backends
+    may ignore it.
     """
 
     cpu: float = 1
@@ -435,6 +438,7 @@ class ResourceConfig:
     # inheriting.
     regions: Sequence[str] | None = None
     zone: str | None = None
+    target_cluster: str | None = None
     replicas: int = 1
     device_alternatives: Sequence[str] | None = None
     image: str | None = None

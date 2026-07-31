@@ -46,10 +46,10 @@ class Provenance:
     """Identity, human context, and launch context of a built artifact.
 
     Attributes:
-        tree_hash: Short git tree hash of the working-tree content. The
+        tree_hash: Short git tree hash of the tracked working-tree content. The
             deduplication key — content-addressed and stable across builds.
         base_commit: Short hash of the HEAD commit the tree was built from.
-        dirty: Whether the working tree had uncommitted (tracked) changes.
+        dirty: Whether the working tree had uncommitted or untracked changes.
         branch: Branch name at build time, or ``None`` for a detached HEAD.
         built_by: OS user that ran the build, or ``None`` if unknown.
         git_remote: ``origin`` remote URL, or ``None`` if unknown.
@@ -83,7 +83,7 @@ class Provenance:
         return cls(
             tree_hash=_git(["rev-parse", "--short", f"{ref}^{{tree}}"], cwd),
             base_commit=_git(["rev-parse", "--short", "HEAD"], cwd),
-            dirty=bool(stash),
+            dirty=bool(_git(["status", "--porcelain", "--untracked-files=all"], cwd)),
             branch=_git(["symbolic-ref", "--short", "-q", "HEAD"], cwd, check=False) or None,
             built_by=_getuser(),
         )
@@ -118,7 +118,7 @@ class Provenance:
         return cls(
             tree_hash=g("rev-parse", "--short", f"{ref}^{{tree}}"),
             base_commit=g("rev-parse", "--short", "HEAD"),
-            dirty=bool(stash),
+            dirty=bool(g("status", "--porcelain", "--untracked-files=all")),
             branch=g("symbolic-ref", "--short", "-q", "HEAD") or None,
             built_by=_getuser(),
             git_remote=g("remote", "get-url", "origin") or None,

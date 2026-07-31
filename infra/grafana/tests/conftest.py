@@ -24,8 +24,9 @@ def bridge_config(cache_ttl: float = 20.0) -> BridgeConfig:
         github_cache_ttl=60.0,
         k8s_cache_ttl=30.0,
         http_timeout=5.0,
-        github_token=None,
+        github_app_credentials=None,
         cw_read_token=None,
+        loom_alerts=None,
     )
 
 
@@ -77,6 +78,9 @@ def node(
     instance_type: str = "",
     gpu_capacity: int = 0,
     ready: bool = True,
+    unschedulable: bool = False,
+    kernel_deadlock_reason: str = "",
+    arch: str = "arm64",
 ) -> dict:
     labels = {}
     if rack is not None:
@@ -84,11 +88,32 @@ def node(
         labels["ds.coreweave.com/physical-topology.rack-name"] = rack_name
     if instance_type:
         labels["node.kubernetes.io/instance-type"] = instance_type
+    conditions = [{"type": "Ready", "status": "True" if ready else "False"}]
+    annotations = {}
+    if kernel_deadlock_reason:
+        conditions.extend(
+            [
+                {
+                    "type": "KernelDeadlock",
+                    "status": "True",
+                    "reason": kernel_deadlock_reason,
+                    "message": "watchdog: CPU stuck",
+                },
+                {
+                    "type": "PendingPhaseState",
+                    "status": "True",
+                    "reason": "production-reboot",
+                },
+            ]
+        )
+        annotations["node.coreweave.cloud/cordonReason"] = "KernelDeadlock,NLCCPendingExitProduction"
     return {
-        "metadata": {"name": name, "labels": labels},
+        "metadata": {"name": name, "labels": labels, "annotations": annotations},
+        "spec": {"unschedulable": unschedulable},
         "status": {
             "capacity": {"nvidia.com/gpu": str(gpu_capacity)},
-            "conditions": [{"type": "Ready", "status": "True" if ready else "False"}],
+            "conditions": conditions,
+            "nodeInfo": {"architecture": arch},
         },
     }
 
@@ -113,8 +138,13 @@ def k8s_api(routes: dict):
     return handler
 
 
-def make_k8s_source(handler, name: str = "cw-a", token: str | None = "secret") -> K8sSource:
-    source = K8sSource(K8sClusterTarget(name, "https://api.example"), token=token, timeout=5.0)
+def make_k8s_source(
+    handler,
+    name: str = "cw-a",
+    token: str | None = "secret",
+    target: K8sClusterTarget | None = None,
+) -> K8sSource:
+    source = K8sSource(target or K8sClusterTarget(name, "https://api.example"), token=token, timeout=5.0)
     source._client = httpx.Client(
         transport=httpx.MockTransport(handler), base_url="https://api.example", headers=source._client.headers
     )

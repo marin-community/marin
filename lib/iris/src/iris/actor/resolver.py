@@ -85,9 +85,9 @@ class ProxyResolver:
 
         ``<controller>/proxy/<encoded-name>/iris.actor.ActorService/Call``
 
-    The controller's ``EndpointProxy`` receives ``encoded-name`` as the
-    path parameter and resolves it back to the actor's registered address
-    with dot → slash substitution.
+    The native listener receives ``encoded-name`` as the path parameter and
+    resolves it back to the actor's registered address with dot → slash
+    substitution.
 
     Args:
         controller_url: Controller URL (e.g., ``http://localhost:8080``)

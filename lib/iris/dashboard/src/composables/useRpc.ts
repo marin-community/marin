@@ -142,14 +142,6 @@ export function useLogServiceRpc<T>(
   return useRpc<T>(LOG_SERVICE_PATH, method, body)
 }
 
-/** RPC composable for StatsService endpoints. */
-export function useStatsRpc<T>(
-  method: string,
-  body?: RpcBody,
-): RpcState<T> {
-  return useRpc<T>('iris.stats.StatsService', method, body)
-}
-
 /**
  * RPC composable for the finelog StatsService routed via the controller's
  * endpoint proxy at /proxy/system.log-server/finelog.stats.StatsService/<Method>.
