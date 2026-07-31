@@ -16,6 +16,7 @@ from fray.actor import (
     ActorFuture,
     ActorGroup,
     ActorHandle,
+    ActorUnavailableError,
     HostedActor,
     _reset_current_actor,
     _set_current_actor,
@@ -204,28 +205,35 @@ class LocalClient:
         """Create N in-process actor instances, returning a group handle."""
         handles: list[LocalActorHandle] = []
         jobs: list[LocalJobHandle] = []
-        for i in range(count):
-            # Create endpoint-based handle BEFORE instance so actor can access it
-            endpoint = f"local/{name}-{i}"
-            handle = LocalActorHandle(endpoint)
+        try:
+            for i in range(count):
+                # Create endpoint-based handle BEFORE instance so actor can access it
+                endpoint = f"local/{name}-{i}"
+                handle = LocalActorHandle(endpoint)
 
-            # Set actor context with handle so actor can pass it to other actors
-            ctx = ActorContext(handle=handle, index=i, group_name=name)
-            token = _set_current_actor(ctx)
-            try:
-                instance = actor_class(*args, **kwargs)
-            finally:
-                _reset_current_actor(token)
+                # Set actor context with handle so actor can pass it to other actors
+                ctx = ActorContext(handle=handle, index=i, group_name=name)
+                token = _set_current_actor(ctx)
+                try:
+                    instance = actor_class(*args, **kwargs)
+                finally:
+                    _reset_current_actor(token)
 
-            # Register instance so handle can resolve it
-            _local_actor_registry[endpoint] = instance
-            handles.append(handle)
+                # Register instance so handle can resolve it
+                _local_actor_registry[endpoint] = instance
+                handles.append(handle)
 
-            # Create a synthetic job handle that is immediately succeeded
-            future: Future[None] = Future()
-            future.set_result(None)
-            job_id = f"local-actor-{name}-{i}-{uuid.uuid4().hex[:8]}"
-            jobs.append(LocalJobHandle(job_id, future))
+                # Create a synthetic job handle that is immediately succeeded
+                future: Future[None] = Future()
+                future.set_result(None)
+                job_id = f"local-actor-{name}-{i}-{uuid.uuid4().hex[:8]}"
+                jobs.append(LocalJobHandle(job_id, future))
+        except BaseException:
+            for handle in handles:
+                _local_actor_registry.pop(handle._endpoint, None)
+            for job in jobs:
+                job.terminate()
+            raise
         return LocalActorGroup(cast(list[ActorHandle], handles), jobs)
 
     def shutdown(self, wait: bool = True) -> None:
@@ -251,7 +259,7 @@ class LocalActorHandle:
         """Look up the actor instance from the global registry."""
         instance = _local_actor_registry.get(self._endpoint)
         if instance is None:
-            raise RuntimeError(f"Actor not found in registry: {self._endpoint}")
+            raise ActorUnavailableError(f"Actor not found in registry: {self._endpoint}")
         return instance
 
     def __getattr__(self, method_name: str) -> "LocalActorMethod":
