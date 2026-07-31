@@ -433,6 +433,37 @@ def predict_kv_bytes(
     return elements * bytes_per_element
 
 
+def hybrid_kv_cache_hit_alignment(case: ModelCase) -> int:
+    """Return vLLM's token alignment for hybrid prefix-cache hits.
+
+    The pinned fork gives every KV-cache group the largest physical page size
+    by increasing smaller groups' token block sizes. Its scheduler then uses
+    the least common multiple of those adjusted block sizes.
+
+    Page sizes are measured in elements here because every group uses the same
+    dtype, so bytes per element cancel from all ratios.
+    """
+    group_pages = [
+        ("local-attention", KV_BLOCK_SIZE, 2 * KV_BLOCK_SIZE * case.local_kv_heads * case.head_dim),
+        ("global-attention", KV_BLOCK_SIZE, 2 * KV_BLOCK_SIZE * case.global_kv_heads * case.head_dim),
+    ]
+    if case.sconv:
+        for site in case.sconv_sites:
+            stream_width = case.num_key_value_heads * case.head_dim if site in {"k", "v"} else case.hidden_size
+            group_pages.append((f"sconv-{site}", case.sconv_kernel, case.sconv_kernel * stream_width))
+
+    max_page_elements = max(page_elements for _, _, page_elements in group_pages)
+    adjusted_block_sizes: list[int] = []
+    for group_name, block_size, page_elements in group_pages:
+        if max_page_elements % page_elements:
+            raise ValueError(
+                f"{case.name}: {group_name} page size {page_elements} does not divide "
+                f"the largest hybrid page size {max_page_elements}"
+            )
+        adjusted_block_sizes.append(block_size * (max_page_elements // page_elements))
+    return math.lcm(*adjusted_block_sizes)
+
+
 def deterministic_workload(
     *,
     max_prefix_tokens: int = ACCEPTANCE_HISTORY_LENGTHS[-1],
@@ -499,12 +530,18 @@ def deterministic_workload(
     }
 
 
-def deterministic_boundary_workload(*, seed: int = DUMMY_SEED) -> dict[str, Any]:
+def deterministic_boundary_workload(case: ModelCase, *, seed: int = DUMMY_SEED) -> dict[str, Any]:
     """Build the two exact cold/reuse probes without the large load fixture."""
+    cache_hit_alignment = hybrid_kv_cache_hit_alignment(case)
+    if cache_hit_alignment >= 512 or 512 % cache_hit_alignment:
+        raise ValueError(
+            f"{case.name}: cache-hit alignment {cache_hit_alignment} cannot probe the frozen 512-token window"
+        )
+    prefix_lengths = (cache_hit_alignment + 1, 513)
     rng = random.Random(seed)
     roots: list[dict[str, Any]] = []
     requests: list[dict[str, Any]] = []
-    for root, prefix_length in enumerate((KV_BLOCK_SIZE + 1, 513)):
+    for root, prefix_length in enumerate(prefix_lengths):
         prefix = [1, *(rng.randrange(3, 255) for _ in range(prefix_length - 1))]
         mutated_prefix = [*prefix]
         mutated_prefix[1] = (mutated_prefix[1] % 251) + 3
@@ -526,13 +563,15 @@ def deterministic_boundary_workload(*, seed: int = DUMMY_SEED) -> dict[str, Any]
             }
         )
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "kind": "exact-reference-boundaries",
         "seed": seed,
+        "base_attention_block_size": KV_BLOCK_SIZE,
+        "cache_hit_alignment": cache_hit_alignment,
         "root_count": len(roots),
         "branches_per_root": 1,
         "request_count": len(requests),
-        "lengths": [KV_BLOCK_SIZE + 1, 513],
+        "lengths": list(prefix_lengths),
         "roots": roots,
         "requests": requests,
     }
@@ -695,7 +734,7 @@ def write_case(output_dir: Path, *, case: ModelCase, run_id: str, git_sha: str) 
     (output_dir / "config.json").write_text(json.dumps(case.hf_config(), indent=2, sort_keys=True) + "\n")
     workload = deterministic_workload()
     (output_dir / "workload.json").write_text(json.dumps(workload, indent=2, sort_keys=True) + "\n")
-    boundary_workload = deterministic_boundary_workload()
+    boundary_workload = deterministic_boundary_workload(case)
     (output_dir / "correctness-workload.json").write_text(json.dumps(boundary_workload, indent=2, sort_keys=True) + "\n")
     (output_dir / "manifest.json").write_text(
         json.dumps(frozen_manifest(case, run_id=run_id, git_sha=git_sha), indent=2, sort_keys=True) + "\n"
@@ -721,6 +760,7 @@ __all__ = [
     "deterministic_workload",
     "expert_parallel_rank_histogram",
     "frozen_manifest",
+    "hybrid_kv_cache_hit_alignment",
     "layer_types",
     "materialize_prompt",
     "metric_delta",

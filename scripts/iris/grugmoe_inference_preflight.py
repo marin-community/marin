@@ -42,7 +42,6 @@ from experiments.grug.moe.inference_preflight import (
     CASES,
     DUMMY_SEED,
     FROZEN_FIXTURE_PATH,
-    KV_BLOCK_SIZE,
     SNOWBALL_EXPORT,
     VLLM_SHA,
     ModelCase,
@@ -51,6 +50,7 @@ from experiments.grug.moe.inference_preflight import (
     deterministic_balanced_routing_fixture,
     expert_parallel_rank_histogram,
     frozen_manifest,
+    hybrid_kv_cache_hit_alignment,
     layer_types,
     materialize_prompt,
     metric_delta,
@@ -667,10 +667,21 @@ def _assert_same_reuse(cold: dict[str, Any], reused: dict[str, Any]) -> None:
     np.testing.assert_array_equal(decode_routed_experts(cold_routes), decode_routed_experts(reused_routes))
 
 
-def boundary_requests(workload: dict[str, Any]) -> list[dict[str, Any]]:
+def boundary_requests(
+    workload: dict[str, Any],
+    *,
+    expected_cache_hit_alignment: int | None = None,
+) -> list[dict[str, Any]]:
     """Choose one request at each required cache boundary."""
+    cache_hit_alignment = int(workload.get("cache_hit_alignment", 0))
+    if cache_hit_alignment <= 0:
+        raise AssertionError("workload omits a positive hybrid cache-hit alignment")
+    if expected_cache_hit_alignment is not None and cache_hit_alignment != expected_cache_hit_alignment:
+        raise AssertionError(
+            f"workload cache-hit alignment is {cache_hit_alignment}, expected {expected_cache_hit_alignment}"
+        )
     selected: list[dict[str, Any]] = []
-    for boundary in (17, 513):
+    for boundary in (cache_hit_alignment + 1, 513):
         request = next(
             (candidate for candidate in workload["requests"] if candidate["prefix_token_count"] == boundary),
             None,
@@ -732,17 +743,19 @@ def run_correctness(
     model: str,
     workload: dict[str, Any],
     *,
-    num_experts: int,
-    top_k: int,
-    ep_size: int,
+    case: ModelCase,
     artifact_dir: Path,
 ) -> dict[str, Any]:
-    candidates = boundary_requests(workload)
+    cache_hit_alignment = hybrid_kv_cache_hit_alignment(case)
+    candidates = boundary_requests(
+        workload,
+        expected_cache_hit_alignment=cache_hit_alignment,
+    )
     before_text, overall_before = _metrics(base_url)
     before_path = _record_metrics(before_text, artifact_dir=artifact_dir, stem="metrics-before")
     probe_baseline = overall_before
     boundary_results: list[dict[str, Any]] = []
-    histogram = [0] * num_experts
+    histogram = [0] * case.num_experts
     for request in candidates:
         prompt_token_ids = materialize_prompt(workload, request)
         mutated_prompt_token_ids = materialize_prompt(workload, request, mutated=True)
@@ -814,9 +827,9 @@ def run_correctness(
         mutation_hits = metric_delta(after_reuse, after_mutated, "vllm:prefix_cache_hits")
         reuse_cached_tokens = _cached_prompt_tokens(reused)
         mutated_cached_tokens = _cached_prompt_tokens(mutated)
-        expected_cached_tokens = len(prompt_token_ids) // KV_BLOCK_SIZE * KV_BLOCK_SIZE
+        expected_cached_tokens = len(prompt_token_ids) // cache_hit_alignment * cache_hit_alignment
         routes = decode_routed_experts(_choice(reused)["routed_experts"])
-        route_histogram = routing_histogram(routes, num_experts=num_experts)
+        route_histogram = routing_histogram(routes, num_experts=case.num_experts)
         histogram = [left + right for left, right in zip(histogram, route_histogram, strict=True)]
         request_id = request["request_id"]
         boundary_result = {
@@ -824,6 +837,7 @@ def run_correctness(
             "prefix_token_count": request["prefix_token_count"],
             "prompt_token_count": len(prompt_token_ids),
             "data_parallel_rank": PINNED_PROBE_DP_RANK,
+            "cache_hit_alignment": cache_hit_alignment,
             "cold": cold_evidence,
             "reused": reused_evidence,
             "mutated": mutated_evidence,
@@ -870,13 +884,14 @@ def run_correctness(
         probe_baseline = after_mutated
     after_text, after = _metrics(base_url)
     after_path = _record_metrics(after_text, artifact_dir=artifact_dir, stem="metrics-after")
-    ep_rank_histogram = expert_parallel_rank_histogram(histogram, ep_size=ep_size)
+    ep_rank_histogram = expert_parallel_rank_histogram(histogram, ep_size=case.data_parallel_size)
     mean_rank_assignments = sum(ep_rank_histogram) / len(ep_rank_histogram)
     imbalance_triggered = any(count == 0 for count in histogram) or any(
         count > 2 * mean_rank_assignments for count in ep_rank_histogram
     )
     return {
         "passed": True,
+        "cache_hit_alignment": cache_hit_alignment,
         "boundaries": boundary_results,
         "route_histogram": histogram,
         "ep_rank_histogram": ep_rank_histogram,
@@ -886,7 +901,11 @@ def run_correctness(
             "max_ep_rank_assignments": max(ep_rank_histogram),
             "balanced_control_triggered": imbalance_triggered,
             "balanced_control": (
-                deterministic_balanced_routing_fixture(num_experts=num_experts, top_k=top_k, ep_size=ep_size)
+                deterministic_balanced_routing_fixture(
+                    num_experts=case.num_experts,
+                    top_k=case.num_experts_per_tok,
+                    ep_size=case.data_parallel_size,
+                )
                 if imbalance_triggered
                 else None
             ),
@@ -1969,9 +1988,7 @@ def run_unattended_worker(args: argparse.Namespace) -> dict[str, Any]:
                         base_url,
                         model,
                         correctness_workload,
-                        num_experts=case.num_experts,
-                        top_k=case.num_experts_per_tok,
-                        ep_size=case.data_parallel_size,
+                        case=case,
                         artifact_dir=local_dir,
                     )
                 test_components = _smoke_components(
@@ -2278,9 +2295,7 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
                     base_url,
                     model,
                     correctness_workload,
-                    num_experts=case.num_experts,
-                    top_k=case.num_experts_per_tok,
-                    ep_size=case.data_parallel_size,
+                    case=case,
                     artifact_dir=local_dir,
                 )
             if args.mode == "acceptance":

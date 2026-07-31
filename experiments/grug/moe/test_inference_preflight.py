@@ -23,6 +23,7 @@ from experiments.grug.moe.inference_preflight import (
     deterministic_workload,
     expert_parallel_rank_histogram,
     frozen_manifest,
+    hybrid_kv_cache_hit_alignment,
     layer_types,
     materialize_prompt,
     metric_delta,
@@ -200,15 +201,40 @@ def test_workload_is_the_exact_18_root_144_branch_acceptance_shape() -> None:
         assert request["final_token_count"] in {13_312, 33_792, 65_536}
 
 
-def test_boundary_workload_crosses_block_and_window_and_mutates_first_block() -> None:
-    workload = deterministic_boundary_workload()
-    assert workload["lengths"] == [17, 513]
+@pytest.mark.parametrize(
+    ("case_name", "expected_alignment", "expected_lengths"),
+    [
+        ("one-node-ep4", 32, [33, 513]),
+        ("legacy-control-ep4", 16, [17, 513]),
+        ("kv2-window2048-ep4", 64, [65, 513]),
+    ],
+)
+def test_boundary_workload_crosses_hybrid_alignment_and_window(
+    case_name: str,
+    expected_alignment: int,
+    expected_lengths: list[int],
+) -> None:
+    workload = deterministic_boundary_workload(CASES[case_name])
+    assert workload["cache_hit_alignment"] == expected_alignment
+    assert workload["lengths"] == expected_lengths
     for request in workload["requests"]:
         assert materialize_prompt(workload, request) != materialize_prompt(workload, request, mutated=True)
         root = workload["roots"][request["root"]]
         assert root["prefix_token_ids"][0] == root["mutated_prefix_token_ids"][0]
         assert root["prefix_token_ids"][1] != root["mutated_prefix_token_ids"][1]
         assert root["prefix_token_ids"][2:] == root["mutated_prefix_token_ids"][2:]
+
+
+def test_hybrid_cache_hit_alignment_matches_every_frozen_case() -> None:
+    assert {name: hybrid_kv_cache_hit_alignment(case) for name, case in CASES.items()} == {
+        "tiny": 32,
+        "one-node-ep4": 32,
+        "legacy-control-ep4": 16,
+        "kv2-window2048-ep4": 64,
+        "reference-ep8": 32,
+        "granular-ep16": 32,
+        "exact-reference-ep16": 32,
+    }
 
 
 def test_workload_is_deterministic() -> None:
@@ -274,6 +300,7 @@ def test_write_case_freezes_config_workload_and_manifest(tmp_path) -> None:
     assert config["architectures"] == ["GrugMoeForCausalLM"]
     assert config["model_type"] == "grug_moe"
     assert workload["request_count"] == BRANCH_COUNT
-    assert correctness_workload["lengths"] == [17, 513]
+    assert correctness_workload["cache_hit_alignment"] == 32
+    assert correctness_workload["lengths"] == [33, 513]
     expected_manifest = json.loads(json.dumps(frozen_manifest(CASES["tiny"], run_id="unit", git_sha="f" * 40)))
     assert manifest == expected_manifest

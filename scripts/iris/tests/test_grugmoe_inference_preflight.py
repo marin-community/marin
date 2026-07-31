@@ -221,8 +221,11 @@ def test_frozen_fixture_uses_half_safetensors_and_every_custom_path() -> None:
 
 
 def test_correctness_selects_both_required_boundaries_once() -> None:
-    selected = boundary_requests(deterministic_boundary_workload())
-    assert [request["prefix_token_count"] for request in selected] == [17, 513]
+    selected = boundary_requests(
+        deterministic_boundary_workload(CASES["one-node-ep4"]),
+        expected_cache_hit_alignment=32,
+    )
+    assert [request["prefix_token_count"] for request in selected] == [33, 513]
 
 
 def test_completion_can_pin_a_data_parallel_rank(monkeypatch: pytest.MonkeyPatch) -> None:
