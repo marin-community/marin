@@ -334,15 +334,24 @@ def main() -> None:
     parser.add_argument("--sources", default="all")
     parser.add_argument("--max-workers", type=int, default=DEFAULT_MAX_WORKERS)
     parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT)
-    parser.add_argument("--inspection-limit", type=int, default=DEFAULT_INSPECTION_LIMIT)
+    parser.add_argument(
+        "--inspection-limit",
+        type=int,
+        default=DEFAULT_INSPECTION_LIMIT,
+        help="Maximum candidate members for direct text inspection; 0 skips inspection",
+    )
+    parser.add_argument(
+        "--reference-verified-prefix",
+        help="Optional verified artifact whose complete output marker set must match",
+    )
     args = parser.parse_args()
 
     if args.max_workers < 1:
         raise ValueError("--max-workers must be at least 1")
     if args.max_concurrent < 1:
         raise ValueError("--max-concurrent must be at least 1")
-    if args.inspection_limit < 1:
-        raise ValueError("--inspection-limit must be at least 1")
+    if args.inspection_limit < 0:
+        raise ValueError("--inspection-limit must be nonnegative")
 
     configure_logging(logging.INFO)
     output_prefix = args.output_prefix.rstrip("/")
@@ -393,14 +402,34 @@ def main() -> None:
     normalized = {
         source_name: read_artifact(step.output_path, NormalizedData) for source_name, step in normalized_steps.items()
     }
-    review = inspect_verification(
-        normalized=normalized,
-        candidates=read_artifact(candidates_step.output_path, FuzzyDupsAttrData),
-        verified=read_artifact(verified_step.output_path, VerifiedFuzzyDupsAttrData),
-        output_path=prefix_join(output_prefix, "inspection.json"),
-        limit=args.inspection_limit,
-    )
-    logger.info("Verification testbed passed: %s", json.dumps(review["counts"], sort_keys=True))
+    verified = read_artifact(verified_step.output_path, VerifiedFuzzyDupsAttrData)
+    if args.reference_verified_prefix:
+        reference = read_artifact(args.reference_verified_prefix, VerifiedFuzzyDupsAttrData)
+        actual_markers = _verified_rows(verified)
+        reference_markers = _verified_rows(reference)
+        if actual_markers != reference_markers:
+            unexpected = sorted(actual_markers.keys() - reference_markers.keys())
+            missing = sorted(reference_markers.keys() - actual_markers.keys())
+            changed = sorted(
+                key
+                for key in actual_markers.keys() & reference_markers.keys()
+                if actual_markers[key] != reference_markers[key]
+            )
+            raise AssertionError(
+                "Verified marker set differs from reference: "
+                f"unexpected={unexpected[:20]!r}, missing={missing[:20]!r}, changed={changed[:20]!r}"
+            )
+        logger.info("Verified output matches %d reference markers", len(actual_markers))
+
+    if args.inspection_limit:
+        review = inspect_verification(
+            normalized=normalized,
+            candidates=read_artifact(candidates_step.output_path, FuzzyDupsAttrData),
+            verified=verified,
+            output_path=prefix_join(output_prefix, "inspection.json"),
+            limit=args.inspection_limit,
+        )
+        logger.info("Verification testbed passed: %s", json.dumps(review["counts"], sort_keys=True))
 
 
 if __name__ == "__main__":
