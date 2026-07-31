@@ -45,189 +45,1005 @@ class PenfeverRollout:
         return f"penfever-traces/{self.cohort_name}/{self.task_source}"
 
 
-def _parse_manifest(cohort_name: str, teacher: str, manifest: str) -> tuple[PenfeverRollout, ...]:
-    rows = []
-    for line in manifest.strip().splitlines():
-        task_source, hf_dataset_id, revision = line.split("|")
-        rows.append(PenfeverRollout(cohort_name, teacher, task_source, hf_dataset_id, revision))
-    return tuple(rows)
-
-
-_MINIMAX_M27_131K = _parse_manifest(
-    "minimax-m27-131k",
-    "MiniMax-M2.7",
-    """
-code-contests-noblock|penfever/code-contests-noblock-minimax-m27-131k-traces|375639a
-exp_rle_minimal_instructions-v3|penfever/exp_rle_minimal_instructions-v3-minimax-m27-131k-traces|289b0cc
-exp_rpt_codenet-python-v2|penfever/exp_rpt_codenet-python-v2-minimax-m27-131k-traces|8ce1c78
-exp_rpt_crosscodeeval-csharp-v4|penfever/exp_rpt_crosscodeeval-csharp-v4-minimax-m27-131k-traces|092d1aa
-exp_rpt_curriculum-easy|penfever/exp_rpt_curriculum-easy-minimax-m27-131k-traces|92957da
-exp_rpt_curriculum-medium|penfever/exp_rpt_curriculum-medium-minimax-m27-131k-traces|38a5cc5
-exp_rpt_e2egit-large|penfever/exp_rpt_e2egit-large-minimax-m27-131k-traces|a7f3b86
-exp_rpt_e2egit-v2|penfever/exp_rpt_e2egit-v2-minimax-m27-131k-traces|af182d6
-exp_rpt_ghactions-v3|penfever/exp_rpt_ghactions-v3-minimax-m27-131k-traces|cb935e9
-exp_rpt_methods2test-large-v2|penfever/exp_rpt_methods2test-large-v2-minimax-m27-131k-traces|e7760f2
-exp_rpt_methods2test-large-v3|penfever/exp_rpt_methods2test-large-v3-minimax-m27-131k-traces|7d1d3c8
-exp_rpt_nemotron-cpp|penfever/exp_rpt_nemotron-cpp-minimax-m27-131k-traces|57234a0
-exp_rpt_nemotron-junit|penfever/exp_rpt_nemotron-junit-minimax-m27-131k-traces|58bc65f
-exp_rpt_pr|penfever/exp_rpt_pr-minimax-m27-131k-traces|339038c
-exp_rpt_pymethods2test-large|penfever/exp_rpt_pymethods2test-large-minimax-m27-131k-traces|265256e
-exp_rpt_pymethods2test-v3|penfever/exp_rpt_pymethods2test-v3-minimax-m27-131k-traces|7c657fc
-exp_rpt_stack-bash-v3|penfever/exp_rpt_stack-bash-v3-minimax-m27-131k-traces|43cf228
-exp_rpt_stack-junit-v6|penfever/exp_rpt_stack-junit-v6-minimax-m27-131k-traces|93ef44a
-exp_rpt_stack-pytest-large|penfever/exp_rpt_stack-pytest-large-minimax-m27-131k-traces|dc6dd41
-exp_rpt_stack-pytest-v2|penfever/exp_rpt_stack-pytest-v2-minimax-m27-131k-traces|615dc24
-exp_rpt_unitsyn-python-large|penfever/exp_rpt_unitsyn-python-large-minimax-m27-131k-traces|8715b38
-exp_rpt_unitsyn-python-v3|penfever/exp_rpt_unitsyn-python-v3-minimax-m27-131k-traces|8813f1d
-inferredbugs-sandboxes-verifier|penfever/inferredbugs-sandboxes-verifier-minimax-m27-131k-traces|d1e3350
-llm-verifier-freelancer|penfever/llm-verifier-freelancer-minimax-m27-131k-traces|841748d
-mix_h10_reward_binary-v2|penfever/mix_h10_reward_binary-v2-minimax-m27-131k-traces|03c9d7f
-mix_h10_reward_proportional-v2|penfever/mix_h10_reward_proportional-v2-minimax-m27-131k-traces|78883c8
-mix_h10_reward_staged-v2|penfever/mix_h10_reward_staged-v2-minimax-m27-131k-traces|4b89950
-mix_h11_single_skill_only-v2|penfever/mix_h11_single_skill_only-v2-minimax-m27-131k-traces|5a3775b
-mix_h1_struggle_zone-v2|penfever/mix_h1_struggle_zone-v2-minimax-m27-131k-traces|ad756f3
-mix_h2_language_balanced-v2|penfever/mix_h2_language_balanced-v2-minimax-m27-131k-traces|8839260
-mix_h2_language_proportional|penfever/mix_h2_language_proportional-minimax-m27-131k-traces|1d03a7c
-mix_h4_binary_easy|penfever/mix_h4_binary_easy-minimax-m27-131k-traces|2578eed
-mix_h8_original_tests-v2|penfever/mix_h8_original_tests-v2-minimax-m27-131k-traces|f3f1dbf
-nemotron-code-oracle-filtered|penfever/nemotron-code-oracle-filtered-minimax-m27-131k-traces|1825365
-nemotron-gym-agent-calendar|penfever/nemotron-gym-agent-calendar-minimax-m27-131k-traces|f654032
-nemotron-gym-agent-workplace-v2|penfever/nemotron-gym-agent-workplace-v2-minimax-m27-131k-traces|455ca74
-nemotron-gym-competitive-coding|penfever/nemotron-gym-competitive-coding-minimax-m27-131k-traces|d896167
-nemotron-gym-identity-following-v2|penfever/nemotron-gym-identity-following-v2-minimax-m27-131k-traces|dad95bb
-nemotron-gym-instruction-following-calendar|penfever/nemotron-gym-instruction-following-calendar-minimax-m27-131k-traces|2ea6c45
-nemotron-gym-instruction-following-structured|penfever/nemotron-gym-instruction-following-structured-minimax-m27-131k-traces|a749979
-nemotron-gym-knowledge-web-search-mcqa|penfever/nemotron-gym-knowledge-web-search-mcqa-minimax-m27-131k-traces|8d4d22d
-nemotron-gym-math-advanced-calculations-v3|penfever/nemotron-gym-math-advanced-calculations-v3-minimax-m27-131k-traces|35343a8
-nl2bash-tasks-cleaned-oracle|penfever/nl2bash-tasks-cleaned-oracle-minimax-m27-131k-traces|85ce2ff
-selfinstruct-naive-sandboxes-2-verified|penfever/selfinstruct-naive-sandboxes-2-verified-minimax-m27-131k-traces|64ca0a3
-swegym-tasks-patched-validated-v5|penfever/swegym-tasks-patched-validated-v5-minimax-m27-131k-traces|7693606
-""",
-)
-
-_QWEN35_122B_32K = _parse_manifest(
-    "qwen35-122b-32k",
-    "Qwen3.5-122B-A10B-FP8",
-    """
-code-contests-noblock|penfever/code-contests-noblock-qwen3.5-122b-32k-traces|7d80f16
-exp_rle_minimal_instructions-v3|penfever/exp-rle-minimal-instructions-v3-qwen3.5-122b-32k-traces|69f7ed2
-exp_rpt_codenet-python-v2|penfever/codenet-python-v2-qwen3.5-122b-32k-traces|c35ad19
-exp_rpt_crosscodeeval-csharp-v4|penfever/crosscodeeval-csharp-v4-qwen3.5-122b-32k-traces|bac9785
-exp_rpt_curriculum-easy|penfever/curriculum-easy-qwen3.5-122b-32k-traces|d017422
-exp_rpt_curriculum-medium|penfever/curriculum-medium-qwen3.5-122b-32k-traces|afcdfa8
-exp_rpt_e2egit-large|penfever/e2egit-large-qwen3.5-122b-32k-traces|239a1a0
-exp_rpt_e2egit-v2|penfever/e2egit-v2-qwen3.5-122b-32k-traces|59c08fc
-exp_rpt_ghactions-v3|penfever/ghactions-v3-qwen3.5-122b-32k-traces|bfe8956
-exp_rpt_methods2test-large-v2|penfever/methods2test-large-v2-qwen3.5-122b-32k-traces|14bab0e
-exp_rpt_methods2test-large-v3|penfever/methods2test-large-v3-qwen3.5-122b-32k-traces|45108b6
-exp_rpt_nemotron-junit|penfever/nemotron-junit-qwen3.5-122b-32k-traces|8ed80b3
-exp_rpt_pr|penfever/exp-rpt-pr-qwen3.5-122b-32k-traces|9673c67
-exp_rpt_pymethods2test-large|penfever/pymethods2test-large-qwen3.5-122b-32k-traces|1d110ac
-exp_rpt_pymethods2test-v3|penfever/pymethods2test-v3-qwen3.5-122b-32k-traces|223fe71
-exp_rpt_stack-bash-v3|penfever/stack-bash-v3-qwen3.5-122b-32k-traces|aaff562
-exp_rpt_stack-junit-v6|penfever/stack-junit-v6-qwen3.5-122b-32k-traces|1f86e0f
-exp_rpt_stack-pytest-large|penfever/stack-pytest-large-qwen3.5-122b-32k-traces|2bdaaf5
-exp_rpt_stack-pytest-v2|penfever/stack-pytest-v2-qwen3.5-122b-32k-traces|b51fd1a
-exp_rpt_unitsyn-python-large|penfever/unitsyn-python-large-qwen3.5-122b-32k-traces|a98a9ec
-exp_rpt_unitsyn-python-v3|penfever/unitsyn-python-v3-qwen3.5-122b-32k-traces|6dd375a
-inferredbugs-sandboxes-verifier|penfever/inferredbugs-sandboxes-verifier-qwen3.5-122b-32k-traces|dc2fb11
-llm-verifier-freelancer|penfever/llm-verifier-freelancer-qwen3.5-122b-32k-traces|d78bdd3
-mix_h10_reward_binary-v2|penfever/mix-h10-reward-binary-v2-qwen3.5-122b-32k-traces|e2f0f94
-mix_h10_reward_proportional-v2|penfever/mix-h10-reward-proportional-v2-qwen3.5-122b-32k-traces|4329b37
-mix_h10_reward_staged-v2|penfever/mix-h10-reward-staged-v2-qwen3.5-122b-32k-traces|fb05ae8
-mix_h11_single_skill_only-v2|penfever/mix-h11-single-skill-only-v2-qwen3.5-122b-32k-traces|2353a61
-mix_h1_struggle_zone-v2|penfever/mix-h1-struggle-zone-v2-qwen3.5-122b-32k-traces|d464a97
-mix_h2_language_balanced-v2|penfever/mix-h2-language-balanced-v2-qwen3.5-122b-32k-traces|575d473
-mix_h2_language_proportional|penfever/mix-h2-language-proportional-qwen3.5-122b-32k-traces|1130f75
-mix_h4_binary_easy|penfever/mix-h4-binary-easy-qwen3.5-122b-32k-traces|17c5080
-mix_h8_original_tests-v2|penfever/mix-h8-original-tests-v2-qwen3.5-122b-32k-traces|109359a
-nemotron-code-oracle-filtered|penfever/nemotron-code-qwen3.5-122b-32k-traces|6c98f84
-nemotron-gym-agent-calendar|penfever/nemotron-gym-agent-calendar-qwen3.5-122b-32k-traces|4803103
-nemotron-gym-agent-workplace-v2|penfever/nemotron-gym-agent-workplace-v2-qwen3.5-122b-32k-traces|665c852
-nemotron-gym-competitive-coding|penfever/nemotron-gym-competitive-coding-qwen3.5-122b-32k-traces|1328098
-nemotron-gym-identity-following-v2|penfever/nemotron-gym-identity-following-v2-qwen3.5-122b-32k-traces|fd1e3ab
-nemotron-gym-instruction-following-calendar|penfever/nemotron-gym-if-calendar-qwen3.5-122b-32k-traces|3325e0b
-nemotron-gym-instruction-following-structured|penfever/nemotron-gym-if-structured-qwen3.5-122b-32k-traces|29ad1f4
-nemotron-gym-instruction-following-v2|penfever/nemotron-gym-if-v2-qwen3.5-122b-32k-traces|50b7f77
-nemotron-gym-knowledge-mcqa|penfever/nemotron-gym-knowledge-mcqa-qwen3.5-122b-32k-traces|2b7d29c
-nemotron-gym-knowledge-openqa-v2|penfever/nemotron-gym-knowledge-openqa-v2-qwen3.5-122b-32k-traces|193d379
-nemotron-gym-knowledge-web-search-mcqa|penfever/nemotron-gym-knowledge-web-search-mcqa-qwen3.5-122b-32k-traces|c68f454
-nemotron-gym-math-advanced-calculations-v3|penfever/nemotron-gym-math-advanced-calculations-v3-qwen3.5-122b-32k-traces|59f67dc
-nemotron-gym-safety-v2|penfever/nemotron-gym-safety-v2-qwen3.5-122b-32k-traces|21ee501
-nemotron-math-oracle-filtered|penfever/nemotron-math-oracle-filtered-qwen3.5-122b-32k-traces|17906c9
-nl2bash-tasks-cleaned-oracle|penfever/nl2bash-tasks-cleaned-oracle-qwen3.5-122b-32k-traces|3c5283c
-selfinstruct-naive-sandboxes-2-verified|penfever/selfinstruct-naive-sandboxes-2-verified-qwen3.5-122b-32k-traces|721ec85
-swesmith-oracle-filtered|penfever/swesmith-oracle-filtered-qwen3.5-122b-32k-traces|b3ebb72
-""",
-)
-
-_QWEN35_122B_131K_OPENCODE = _parse_manifest(
-    "qwen35-122b-131k-opencode",
-    "Qwen3.5-122B-A10B-FP8",
-    """
-code-contests-noblock|penfever/code-contests-noblock-qwen3.5-122b-131k-opencode-traces|42a75fe
-exp_rle_adversarial|penfever/exp_rle_adversarial-qwen3.5-122b-131k-opencode-traces|beac1fa
-exp_rpt_crosscodeeval-csharp-v4|penfever/exp_rpt_crosscodeeval-csharp-v4-qwen3.5-122b-131k-opencode-traces|3337d73
-exp_rpt_crosscodeeval-java|penfever/exp_rpt_crosscodeeval-java-qwen3.5-122b-131k-opencode-traces|353bba9
-exp_rpt_curriculum-easy|penfever/exp_rpt_curriculum-easy-qwen3.5-122b-131k-opencode-traces|9038e1c
-exp_rpt_curriculum-hard|penfever/exp_rpt_curriculum-hard-qwen3.5-122b-131k-opencode-traces|404f3fc
-exp_rpt_curriculum-medium|penfever/exp_rpt_curriculum-medium-qwen3.5-122b-131k-opencode-traces|d298515
-exp_rpt_e2egit-large|penfever/exp_rpt_e2egit-large-qwen3.5-122b-131k-opencode-traces|3a72d7f
-exp_rpt_e2egit-v2|penfever/exp_rpt_e2egit-v2-qwen3.5-122b-131k-opencode-traces|8d6994e
-exp_rpt_ghactions-v3|penfever/exp_rpt_ghactions-v3-qwen3.5-122b-131k-opencode-traces|9693178
-exp_rpt_issue|penfever/exp_rpt_issue-qwen3.5-122b-131k-opencode-traces|2feab9d
-exp_rpt_methods2test-large-v3|penfever/exp_rpt_methods2test-large-v3-qwen3.5-122b-131k-opencode-traces|d238113
-exp_rpt_multifile|penfever/exp_rpt_multifile-qwen3.5-122b-131k-opencode-traces|5573626
-exp_rpt_nemotron-cpp-v2|penfever/exp_rpt_nemotron-cpp-v2-qwen3.5-122b-131k-opencode-traces|b980f2e
-exp_rpt_nemotron-junit|penfever/exp_rpt_nemotron-junit-qwen3.5-122b-131k-opencode-traces|9825ba3
-exp_rpt_pr|penfever/exp_rpt_pr-qwen3.5-122b-131k-opencode-traces|8c2dec6
-exp_rpt_pymethods2test-large|penfever/exp_rpt_pymethods2test-large-qwen3.5-122b-131k-opencode-traces|6884b45
-exp_rpt_pymethods2test-v3|penfever/exp_rpt_pymethods2test-v3-qwen3.5-122b-131k-opencode-traces|b3e7eaa
-exp_rpt_stack-junit-v6|penfever/exp_rpt_stack-junit-v6-qwen3.5-122b-131k-opencode-traces|661a7d6
-exp_rpt_stack-pytest-large|penfever/exp_rpt_stack-pytest-large-qwen3.5-122b-131k-opencode-traces|6a55d43
-exp_rpt_stack-pytest-v2|penfever/exp_rpt_stack-pytest-v2-qwen3.5-122b-131k-opencode-traces|6272346
-exp_rpt_unitsyn-python-large|penfever/exp_rpt_unitsyn-python-large-qwen3.5-122b-131k-opencode-traces|ca48ec8
-exp_rpt_unitsyn-python-v3|penfever/exp_rpt_unitsyn-python-v3-qwen3.5-122b-131k-opencode-traces|1f7fbc7
-inferredbugs-sandboxes-verifier|penfever/inferredbugs-sandboxes-verifier-qwen3.5-122b-131k-opencode-traces|682909a
-llm-verifier-freelancer|penfever/llm-verifier-freelancer-qwen3.5-122b-131k-opencode-traces|5c5f51e
-mix_h4_binary_easy|penfever/mix_h4_binary_easy-qwen3.5-122b-131k-opencode-traces|13e4577
-nemotron-code-oracle-filtered|penfever/nemotron-code-oracle-filtered-qwen3.5-122b-131k-opencode-traces|6cc0c0b
-nemotron-gym-agent-calendar|penfever/nemotron-gym-agent-calendar-qwen3.5-122b-131k-opencode-traces|c02c70f
-nemotron-gym-agent-workplace-v2|penfever/nemotron-gym-agent-workplace-v2-qwen3.5-122b-131k-opencode-traces|a9c4e6f
-nemotron-gym-identity-following-v2|penfever/nemotron-gym-identity-following-v2-qwen3.5-122b-131k-opencode-traces|150f9df
-nemotron-gym-instruction-following-structured|penfever/nemotron-gym-instruction-following-structured-qwen3.5-122b-131k-opencode-traces|283fcd5
-nemotron-gym-knowledge-web-search-mcqa|penfever/nemotron-gym-knowledge-web-search-mcqa-qwen3.5-122b-131k-opencode-traces|50ac63c
-nemotron-gym-math-advanced-calculations-v3|penfever/nemotron-gym-math-advanced-calculations-v3-qwen3.5-122b-131k-opencode-traces|9c52619
-nl2bash-tasks-cleaned-oracle|penfever/nl2bash-tasks-cleaned-oracle-qwen3.5-122b-131k-opencode-traces|863e49b
-selfinstruct-naive-sandboxes-2-verified|penfever/selfinstruct-naive-sandboxes-2-verified-qwen3.5-122b-131k-opencode-traces|f0b9138
-""",
-)
-
-_GLM52_TERMINUS2 = _parse_manifest(
-    "glm52-terminus2",
-    "GLM-5.2",
-    """
-exp_rpt_crosscodeeval-csharp-v4|penfever/glm52-datagen-r11-18-crosscodeeval-csharp-traces|e9a20ea
-exp_rpt_curriculum-easy|penfever/glm52-datagen-r11-08-curriculum-easy-traces|20f5f65
-exp_rpt_curriculum-medium|penfever/glm52-datagen-r11-35-curriculum-medium-traces|19f2e1d
-exp_rpt_e2egit-large|penfever/glm52-datagen-r11-10-e2egit-large-traces|3dc4fd2
-exp_rpt_e2egit-v2|penfever/glm52-datagen-r11-09-e2egit-traces|2c51fab
-exp_rpt_nemotron-cpp-v2|penfever/glm52-datagen-r11-36-nemotron-cpp-traces|2c05b57
-exp_rpt_stack-pytest-large-v2|penfever/glm52-datagen-r11-38-stack-pytest-large-v2-traces|d485d89
-exp_rpt_stack-pytest-v2|penfever/glm52-datagen-r11-39-stack-pytest-v2-traces|d241909
-exp_rpt_unitsyn-python-v3|penfever/glm52-datagen-r11-13-unitsyn-traces|00faddb
-nemotron-gym-agent-calendar|penfever/glm52-datagen-r11-17-agent-calendar-traces|f75ec2a
-nemotron-gym-instruction-following-structured|penfever/glm52-datagen-r11-16-nemotron-instruction-traces|b33e975
-nemotron-gym-knowledge-web-search-mcqa|penfever/glm52-datagen-r11-19-knowledge-web-search-mcqa-traces|d2eb25c
-nl2bash-tasks-cleaned-oracle|penfever/glm52-datagen-r11-07-nl2bash-traces|602c6ec
-""",
-)
-
 PENFEVER_ROLLOUTS = (
-    *_MINIMAX_M27_131K,
-    *_QWEN35_122B_32K,
-    *_QWEN35_122B_131K_OPENCODE,
-    *_GLM52_TERMINUS2,
+    # MiniMax-M2.7, 131k context
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="code-contests-noblock",
+        hf_dataset_id="penfever/code-contests-noblock-minimax-m27-131k-traces",
+        revision="375639a",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="exp_rle_minimal_instructions-v3",
+        hf_dataset_id="penfever/exp_rle_minimal_instructions-v3-minimax-m27-131k-traces",
+        revision="289b0cc",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="exp_rpt_codenet-python-v2",
+        hf_dataset_id="penfever/exp_rpt_codenet-python-v2-minimax-m27-131k-traces",
+        revision="8ce1c78",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="exp_rpt_crosscodeeval-csharp-v4",
+        hf_dataset_id="penfever/exp_rpt_crosscodeeval-csharp-v4-minimax-m27-131k-traces",
+        revision="092d1aa",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="exp_rpt_curriculum-easy",
+        hf_dataset_id="penfever/exp_rpt_curriculum-easy-minimax-m27-131k-traces",
+        revision="92957da",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="exp_rpt_curriculum-medium",
+        hf_dataset_id="penfever/exp_rpt_curriculum-medium-minimax-m27-131k-traces",
+        revision="38a5cc5",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="exp_rpt_e2egit-large",
+        hf_dataset_id="penfever/exp_rpt_e2egit-large-minimax-m27-131k-traces",
+        revision="a7f3b86",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="exp_rpt_e2egit-v2",
+        hf_dataset_id="penfever/exp_rpt_e2egit-v2-minimax-m27-131k-traces",
+        revision="af182d6",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="exp_rpt_ghactions-v3",
+        hf_dataset_id="penfever/exp_rpt_ghactions-v3-minimax-m27-131k-traces",
+        revision="cb935e9",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="exp_rpt_methods2test-large-v2",
+        hf_dataset_id="penfever/exp_rpt_methods2test-large-v2-minimax-m27-131k-traces",
+        revision="e7760f2",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="exp_rpt_methods2test-large-v3",
+        hf_dataset_id="penfever/exp_rpt_methods2test-large-v3-minimax-m27-131k-traces",
+        revision="7d1d3c8",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="exp_rpt_nemotron-cpp",
+        hf_dataset_id="penfever/exp_rpt_nemotron-cpp-minimax-m27-131k-traces",
+        revision="57234a0",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="exp_rpt_nemotron-junit",
+        hf_dataset_id="penfever/exp_rpt_nemotron-junit-minimax-m27-131k-traces",
+        revision="58bc65f",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="exp_rpt_pr",
+        hf_dataset_id="penfever/exp_rpt_pr-minimax-m27-131k-traces",
+        revision="339038c",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="exp_rpt_pymethods2test-large",
+        hf_dataset_id="penfever/exp_rpt_pymethods2test-large-minimax-m27-131k-traces",
+        revision="265256e",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="exp_rpt_pymethods2test-v3",
+        hf_dataset_id="penfever/exp_rpt_pymethods2test-v3-minimax-m27-131k-traces",
+        revision="7c657fc",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="exp_rpt_stack-bash-v3",
+        hf_dataset_id="penfever/exp_rpt_stack-bash-v3-minimax-m27-131k-traces",
+        revision="43cf228",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="exp_rpt_stack-junit-v6",
+        hf_dataset_id="penfever/exp_rpt_stack-junit-v6-minimax-m27-131k-traces",
+        revision="93ef44a",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="exp_rpt_stack-pytest-large",
+        hf_dataset_id="penfever/exp_rpt_stack-pytest-large-minimax-m27-131k-traces",
+        revision="dc6dd41",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="exp_rpt_stack-pytest-v2",
+        hf_dataset_id="penfever/exp_rpt_stack-pytest-v2-minimax-m27-131k-traces",
+        revision="615dc24",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="exp_rpt_unitsyn-python-large",
+        hf_dataset_id="penfever/exp_rpt_unitsyn-python-large-minimax-m27-131k-traces",
+        revision="8715b38",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="exp_rpt_unitsyn-python-v3",
+        hf_dataset_id="penfever/exp_rpt_unitsyn-python-v3-minimax-m27-131k-traces",
+        revision="8813f1d",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="inferredbugs-sandboxes-verifier",
+        hf_dataset_id="penfever/inferredbugs-sandboxes-verifier-minimax-m27-131k-traces",
+        revision="d1e3350",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="llm-verifier-freelancer",
+        hf_dataset_id="penfever/llm-verifier-freelancer-minimax-m27-131k-traces",
+        revision="841748d",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="mix_h10_reward_binary-v2",
+        hf_dataset_id="penfever/mix_h10_reward_binary-v2-minimax-m27-131k-traces",
+        revision="03c9d7f",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="mix_h10_reward_proportional-v2",
+        hf_dataset_id="penfever/mix_h10_reward_proportional-v2-minimax-m27-131k-traces",
+        revision="78883c8",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="mix_h10_reward_staged-v2",
+        hf_dataset_id="penfever/mix_h10_reward_staged-v2-minimax-m27-131k-traces",
+        revision="4b89950",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="mix_h11_single_skill_only-v2",
+        hf_dataset_id="penfever/mix_h11_single_skill_only-v2-minimax-m27-131k-traces",
+        revision="5a3775b",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="mix_h1_struggle_zone-v2",
+        hf_dataset_id="penfever/mix_h1_struggle_zone-v2-minimax-m27-131k-traces",
+        revision="ad756f3",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="mix_h2_language_balanced-v2",
+        hf_dataset_id="penfever/mix_h2_language_balanced-v2-minimax-m27-131k-traces",
+        revision="8839260",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="mix_h2_language_proportional",
+        hf_dataset_id="penfever/mix_h2_language_proportional-minimax-m27-131k-traces",
+        revision="1d03a7c",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="mix_h4_binary_easy",
+        hf_dataset_id="penfever/mix_h4_binary_easy-minimax-m27-131k-traces",
+        revision="2578eed",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="mix_h8_original_tests-v2",
+        hf_dataset_id="penfever/mix_h8_original_tests-v2-minimax-m27-131k-traces",
+        revision="f3f1dbf",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="nemotron-code-oracle-filtered",
+        hf_dataset_id="penfever/nemotron-code-oracle-filtered-minimax-m27-131k-traces",
+        revision="1825365",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="nemotron-gym-agent-calendar",
+        hf_dataset_id="penfever/nemotron-gym-agent-calendar-minimax-m27-131k-traces",
+        revision="f654032",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="nemotron-gym-agent-workplace-v2",
+        hf_dataset_id="penfever/nemotron-gym-agent-workplace-v2-minimax-m27-131k-traces",
+        revision="455ca74",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="nemotron-gym-competitive-coding",
+        hf_dataset_id="penfever/nemotron-gym-competitive-coding-minimax-m27-131k-traces",
+        revision="d896167",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="nemotron-gym-identity-following-v2",
+        hf_dataset_id="penfever/nemotron-gym-identity-following-v2-minimax-m27-131k-traces",
+        revision="dad95bb",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="nemotron-gym-instruction-following-calendar",
+        hf_dataset_id="penfever/nemotron-gym-instruction-following-calendar-minimax-m27-131k-traces",
+        revision="2ea6c45",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="nemotron-gym-instruction-following-structured",
+        hf_dataset_id="penfever/nemotron-gym-instruction-following-structured-minimax-m27-131k-traces",
+        revision="a749979",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="nemotron-gym-knowledge-web-search-mcqa",
+        hf_dataset_id="penfever/nemotron-gym-knowledge-web-search-mcqa-minimax-m27-131k-traces",
+        revision="8d4d22d",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="nemotron-gym-math-advanced-calculations-v3",
+        hf_dataset_id="penfever/nemotron-gym-math-advanced-calculations-v3-minimax-m27-131k-traces",
+        revision="35343a8",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="nl2bash-tasks-cleaned-oracle",
+        hf_dataset_id="penfever/nl2bash-tasks-cleaned-oracle-minimax-m27-131k-traces",
+        revision="85ce2ff",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="selfinstruct-naive-sandboxes-2-verified",
+        hf_dataset_id="penfever/selfinstruct-naive-sandboxes-2-verified-minimax-m27-131k-traces",
+        revision="64ca0a3",
+    ),
+    PenfeverRollout(
+        cohort_name="minimax-m27-131k",
+        teacher="MiniMax-M2.7",
+        task_source="swegym-tasks-patched-validated-v5",
+        hf_dataset_id="penfever/swegym-tasks-patched-validated-v5-minimax-m27-131k-traces",
+        revision="7693606",
+    ),
+    # Qwen3.5-122B, 32k context
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="code-contests-noblock",
+        hf_dataset_id="penfever/code-contests-noblock-qwen3.5-122b-32k-traces",
+        revision="7d80f16",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rle_minimal_instructions-v3",
+        hf_dataset_id="penfever/exp-rle-minimal-instructions-v3-qwen3.5-122b-32k-traces",
+        revision="69f7ed2",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_codenet-python-v2",
+        hf_dataset_id="penfever/codenet-python-v2-qwen3.5-122b-32k-traces",
+        revision="c35ad19",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_crosscodeeval-csharp-v4",
+        hf_dataset_id="penfever/crosscodeeval-csharp-v4-qwen3.5-122b-32k-traces",
+        revision="bac9785",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_curriculum-easy",
+        hf_dataset_id="penfever/curriculum-easy-qwen3.5-122b-32k-traces",
+        revision="d017422",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_curriculum-medium",
+        hf_dataset_id="penfever/curriculum-medium-qwen3.5-122b-32k-traces",
+        revision="afcdfa8",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_e2egit-large",
+        hf_dataset_id="penfever/e2egit-large-qwen3.5-122b-32k-traces",
+        revision="239a1a0",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_e2egit-v2",
+        hf_dataset_id="penfever/e2egit-v2-qwen3.5-122b-32k-traces",
+        revision="59c08fc",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_ghactions-v3",
+        hf_dataset_id="penfever/ghactions-v3-qwen3.5-122b-32k-traces",
+        revision="bfe8956",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_methods2test-large-v2",
+        hf_dataset_id="penfever/methods2test-large-v2-qwen3.5-122b-32k-traces",
+        revision="14bab0e",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_methods2test-large-v3",
+        hf_dataset_id="penfever/methods2test-large-v3-qwen3.5-122b-32k-traces",
+        revision="45108b6",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_nemotron-junit",
+        hf_dataset_id="penfever/nemotron-junit-qwen3.5-122b-32k-traces",
+        revision="8ed80b3",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_pr",
+        hf_dataset_id="penfever/exp-rpt-pr-qwen3.5-122b-32k-traces",
+        revision="9673c67",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_pymethods2test-large",
+        hf_dataset_id="penfever/pymethods2test-large-qwen3.5-122b-32k-traces",
+        revision="1d110ac",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_pymethods2test-v3",
+        hf_dataset_id="penfever/pymethods2test-v3-qwen3.5-122b-32k-traces",
+        revision="223fe71",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_stack-bash-v3",
+        hf_dataset_id="penfever/stack-bash-v3-qwen3.5-122b-32k-traces",
+        revision="aaff562",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_stack-junit-v6",
+        hf_dataset_id="penfever/stack-junit-v6-qwen3.5-122b-32k-traces",
+        revision="1f86e0f",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_stack-pytest-large",
+        hf_dataset_id="penfever/stack-pytest-large-qwen3.5-122b-32k-traces",
+        revision="2bdaaf5",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_stack-pytest-v2",
+        hf_dataset_id="penfever/stack-pytest-v2-qwen3.5-122b-32k-traces",
+        revision="b51fd1a",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_unitsyn-python-large",
+        hf_dataset_id="penfever/unitsyn-python-large-qwen3.5-122b-32k-traces",
+        revision="a98a9ec",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_unitsyn-python-v3",
+        hf_dataset_id="penfever/unitsyn-python-v3-qwen3.5-122b-32k-traces",
+        revision="6dd375a",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="inferredbugs-sandboxes-verifier",
+        hf_dataset_id="penfever/inferredbugs-sandboxes-verifier-qwen3.5-122b-32k-traces",
+        revision="dc2fb11",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="llm-verifier-freelancer",
+        hf_dataset_id="penfever/llm-verifier-freelancer-qwen3.5-122b-32k-traces",
+        revision="d78bdd3",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="mix_h10_reward_binary-v2",
+        hf_dataset_id="penfever/mix-h10-reward-binary-v2-qwen3.5-122b-32k-traces",
+        revision="e2f0f94",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="mix_h10_reward_proportional-v2",
+        hf_dataset_id="penfever/mix-h10-reward-proportional-v2-qwen3.5-122b-32k-traces",
+        revision="4329b37",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="mix_h10_reward_staged-v2",
+        hf_dataset_id="penfever/mix-h10-reward-staged-v2-qwen3.5-122b-32k-traces",
+        revision="fb05ae8",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="mix_h11_single_skill_only-v2",
+        hf_dataset_id="penfever/mix-h11-single-skill-only-v2-qwen3.5-122b-32k-traces",
+        revision="2353a61",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="mix_h1_struggle_zone-v2",
+        hf_dataset_id="penfever/mix-h1-struggle-zone-v2-qwen3.5-122b-32k-traces",
+        revision="d464a97",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="mix_h2_language_balanced-v2",
+        hf_dataset_id="penfever/mix-h2-language-balanced-v2-qwen3.5-122b-32k-traces",
+        revision="575d473",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="mix_h2_language_proportional",
+        hf_dataset_id="penfever/mix-h2-language-proportional-qwen3.5-122b-32k-traces",
+        revision="1130f75",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="mix_h4_binary_easy",
+        hf_dataset_id="penfever/mix-h4-binary-easy-qwen3.5-122b-32k-traces",
+        revision="17c5080",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="mix_h8_original_tests-v2",
+        hf_dataset_id="penfever/mix-h8-original-tests-v2-qwen3.5-122b-32k-traces",
+        revision="109359a",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="nemotron-code-oracle-filtered",
+        hf_dataset_id="penfever/nemotron-code-qwen3.5-122b-32k-traces",
+        revision="6c98f84",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="nemotron-gym-agent-calendar",
+        hf_dataset_id="penfever/nemotron-gym-agent-calendar-qwen3.5-122b-32k-traces",
+        revision="4803103",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="nemotron-gym-agent-workplace-v2",
+        hf_dataset_id="penfever/nemotron-gym-agent-workplace-v2-qwen3.5-122b-32k-traces",
+        revision="665c852",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="nemotron-gym-competitive-coding",
+        hf_dataset_id="penfever/nemotron-gym-competitive-coding-qwen3.5-122b-32k-traces",
+        revision="1328098",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="nemotron-gym-identity-following-v2",
+        hf_dataset_id="penfever/nemotron-gym-identity-following-v2-qwen3.5-122b-32k-traces",
+        revision="fd1e3ab",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="nemotron-gym-instruction-following-calendar",
+        hf_dataset_id="penfever/nemotron-gym-if-calendar-qwen3.5-122b-32k-traces",
+        revision="3325e0b",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="nemotron-gym-instruction-following-structured",
+        hf_dataset_id="penfever/nemotron-gym-if-structured-qwen3.5-122b-32k-traces",
+        revision="29ad1f4",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="nemotron-gym-instruction-following-v2",
+        hf_dataset_id="penfever/nemotron-gym-if-v2-qwen3.5-122b-32k-traces",
+        revision="50b7f77",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="nemotron-gym-knowledge-mcqa",
+        hf_dataset_id="penfever/nemotron-gym-knowledge-mcqa-qwen3.5-122b-32k-traces",
+        revision="2b7d29c",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="nemotron-gym-knowledge-openqa-v2",
+        hf_dataset_id="penfever/nemotron-gym-knowledge-openqa-v2-qwen3.5-122b-32k-traces",
+        revision="193d379",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="nemotron-gym-knowledge-web-search-mcqa",
+        hf_dataset_id="penfever/nemotron-gym-knowledge-web-search-mcqa-qwen3.5-122b-32k-traces",
+        revision="c68f454",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="nemotron-gym-math-advanced-calculations-v3",
+        hf_dataset_id="penfever/nemotron-gym-math-advanced-calculations-v3-qwen3.5-122b-32k-traces",
+        revision="59f67dc",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="nemotron-gym-safety-v2",
+        hf_dataset_id="penfever/nemotron-gym-safety-v2-qwen3.5-122b-32k-traces",
+        revision="21ee501",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="nemotron-math-oracle-filtered",
+        hf_dataset_id="penfever/nemotron-math-oracle-filtered-qwen3.5-122b-32k-traces",
+        revision="17906c9",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="nl2bash-tasks-cleaned-oracle",
+        hf_dataset_id="penfever/nl2bash-tasks-cleaned-oracle-qwen3.5-122b-32k-traces",
+        revision="3c5283c",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="selfinstruct-naive-sandboxes-2-verified",
+        hf_dataset_id="penfever/selfinstruct-naive-sandboxes-2-verified-qwen3.5-122b-32k-traces",
+        revision="721ec85",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-32k",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="swesmith-oracle-filtered",
+        hf_dataset_id="penfever/swesmith-oracle-filtered-qwen3.5-122b-32k-traces",
+        revision="b3ebb72",
+    ),
+    # Qwen3.5-122B, 131k OpenCode
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="code-contests-noblock",
+        hf_dataset_id="penfever/code-contests-noblock-qwen3.5-122b-131k-opencode-traces",
+        revision="42a75fe",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rle_adversarial",
+        hf_dataset_id="penfever/exp_rle_adversarial-qwen3.5-122b-131k-opencode-traces",
+        revision="beac1fa",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_crosscodeeval-csharp-v4",
+        hf_dataset_id="penfever/exp_rpt_crosscodeeval-csharp-v4-qwen3.5-122b-131k-opencode-traces",
+        revision="3337d73",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_crosscodeeval-java",
+        hf_dataset_id="penfever/exp_rpt_crosscodeeval-java-qwen3.5-122b-131k-opencode-traces",
+        revision="353bba9",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_curriculum-easy",
+        hf_dataset_id="penfever/exp_rpt_curriculum-easy-qwen3.5-122b-131k-opencode-traces",
+        revision="9038e1c",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_curriculum-hard",
+        hf_dataset_id="penfever/exp_rpt_curriculum-hard-qwen3.5-122b-131k-opencode-traces",
+        revision="404f3fc",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_curriculum-medium",
+        hf_dataset_id="penfever/exp_rpt_curriculum-medium-qwen3.5-122b-131k-opencode-traces",
+        revision="d298515",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_e2egit-large",
+        hf_dataset_id="penfever/exp_rpt_e2egit-large-qwen3.5-122b-131k-opencode-traces",
+        revision="3a72d7f",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_e2egit-v2",
+        hf_dataset_id="penfever/exp_rpt_e2egit-v2-qwen3.5-122b-131k-opencode-traces",
+        revision="8d6994e",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_ghactions-v3",
+        hf_dataset_id="penfever/exp_rpt_ghactions-v3-qwen3.5-122b-131k-opencode-traces",
+        revision="9693178",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_issue",
+        hf_dataset_id="penfever/exp_rpt_issue-qwen3.5-122b-131k-opencode-traces",
+        revision="2feab9d",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_methods2test-large-v3",
+        hf_dataset_id="penfever/exp_rpt_methods2test-large-v3-qwen3.5-122b-131k-opencode-traces",
+        revision="d238113",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_multifile",
+        hf_dataset_id="penfever/exp_rpt_multifile-qwen3.5-122b-131k-opencode-traces",
+        revision="5573626",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_nemotron-cpp-v2",
+        hf_dataset_id="penfever/exp_rpt_nemotron-cpp-v2-qwen3.5-122b-131k-opencode-traces",
+        revision="b980f2e",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_nemotron-junit",
+        hf_dataset_id="penfever/exp_rpt_nemotron-junit-qwen3.5-122b-131k-opencode-traces",
+        revision="9825ba3",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_pr",
+        hf_dataset_id="penfever/exp_rpt_pr-qwen3.5-122b-131k-opencode-traces",
+        revision="8c2dec6",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_pymethods2test-large",
+        hf_dataset_id="penfever/exp_rpt_pymethods2test-large-qwen3.5-122b-131k-opencode-traces",
+        revision="6884b45",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_pymethods2test-v3",
+        hf_dataset_id="penfever/exp_rpt_pymethods2test-v3-qwen3.5-122b-131k-opencode-traces",
+        revision="b3e7eaa",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_stack-junit-v6",
+        hf_dataset_id="penfever/exp_rpt_stack-junit-v6-qwen3.5-122b-131k-opencode-traces",
+        revision="661a7d6",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_stack-pytest-large",
+        hf_dataset_id="penfever/exp_rpt_stack-pytest-large-qwen3.5-122b-131k-opencode-traces",
+        revision="6a55d43",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_stack-pytest-v2",
+        hf_dataset_id="penfever/exp_rpt_stack-pytest-v2-qwen3.5-122b-131k-opencode-traces",
+        revision="6272346",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_unitsyn-python-large",
+        hf_dataset_id="penfever/exp_rpt_unitsyn-python-large-qwen3.5-122b-131k-opencode-traces",
+        revision="ca48ec8",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="exp_rpt_unitsyn-python-v3",
+        hf_dataset_id="penfever/exp_rpt_unitsyn-python-v3-qwen3.5-122b-131k-opencode-traces",
+        revision="1f7fbc7",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="inferredbugs-sandboxes-verifier",
+        hf_dataset_id="penfever/inferredbugs-sandboxes-verifier-qwen3.5-122b-131k-opencode-traces",
+        revision="682909a",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="llm-verifier-freelancer",
+        hf_dataset_id="penfever/llm-verifier-freelancer-qwen3.5-122b-131k-opencode-traces",
+        revision="5c5f51e",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="mix_h4_binary_easy",
+        hf_dataset_id="penfever/mix_h4_binary_easy-qwen3.5-122b-131k-opencode-traces",
+        revision="13e4577",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="nemotron-code-oracle-filtered",
+        hf_dataset_id="penfever/nemotron-code-oracle-filtered-qwen3.5-122b-131k-opencode-traces",
+        revision="6cc0c0b",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="nemotron-gym-agent-calendar",
+        hf_dataset_id="penfever/nemotron-gym-agent-calendar-qwen3.5-122b-131k-opencode-traces",
+        revision="c02c70f",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="nemotron-gym-agent-workplace-v2",
+        hf_dataset_id="penfever/nemotron-gym-agent-workplace-v2-qwen3.5-122b-131k-opencode-traces",
+        revision="a9c4e6f",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="nemotron-gym-identity-following-v2",
+        hf_dataset_id="penfever/nemotron-gym-identity-following-v2-qwen3.5-122b-131k-opencode-traces",
+        revision="150f9df",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="nemotron-gym-instruction-following-structured",
+        hf_dataset_id="penfever/nemotron-gym-instruction-following-structured-qwen3.5-122b-131k-opencode-traces",
+        revision="283fcd5",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="nemotron-gym-knowledge-web-search-mcqa",
+        hf_dataset_id="penfever/nemotron-gym-knowledge-web-search-mcqa-qwen3.5-122b-131k-opencode-traces",
+        revision="50ac63c",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="nemotron-gym-math-advanced-calculations-v3",
+        hf_dataset_id="penfever/nemotron-gym-math-advanced-calculations-v3-qwen3.5-122b-131k-opencode-traces",
+        revision="9c52619",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="nl2bash-tasks-cleaned-oracle",
+        hf_dataset_id="penfever/nl2bash-tasks-cleaned-oracle-qwen3.5-122b-131k-opencode-traces",
+        revision="863e49b",
+    ),
+    PenfeverRollout(
+        cohort_name="qwen35-122b-131k-opencode",
+        teacher="Qwen3.5-122B-A10B-FP8",
+        task_source="selfinstruct-naive-sandboxes-2-verified",
+        hf_dataset_id="penfever/selfinstruct-naive-sandboxes-2-verified-qwen3.5-122b-131k-opencode-traces",
+        revision="f0b9138",
+    ),
+    # GLM-5.2, Terminus-2
+    PenfeverRollout(
+        cohort_name="glm52-terminus2",
+        teacher="GLM-5.2",
+        task_source="exp_rpt_crosscodeeval-csharp-v4",
+        hf_dataset_id="penfever/glm52-datagen-r11-18-crosscodeeval-csharp-traces",
+        revision="e9a20ea",
+    ),
+    PenfeverRollout(
+        cohort_name="glm52-terminus2",
+        teacher="GLM-5.2",
+        task_source="exp_rpt_curriculum-easy",
+        hf_dataset_id="penfever/glm52-datagen-r11-08-curriculum-easy-traces",
+        revision="20f5f65",
+    ),
+    PenfeverRollout(
+        cohort_name="glm52-terminus2",
+        teacher="GLM-5.2",
+        task_source="exp_rpt_curriculum-medium",
+        hf_dataset_id="penfever/glm52-datagen-r11-35-curriculum-medium-traces",
+        revision="19f2e1d",
+    ),
+    PenfeverRollout(
+        cohort_name="glm52-terminus2",
+        teacher="GLM-5.2",
+        task_source="exp_rpt_e2egit-large",
+        hf_dataset_id="penfever/glm52-datagen-r11-10-e2egit-large-traces",
+        revision="3dc4fd2",
+    ),
+    PenfeverRollout(
+        cohort_name="glm52-terminus2",
+        teacher="GLM-5.2",
+        task_source="exp_rpt_e2egit-v2",
+        hf_dataset_id="penfever/glm52-datagen-r11-09-e2egit-traces",
+        revision="2c51fab",
+    ),
+    PenfeverRollout(
+        cohort_name="glm52-terminus2",
+        teacher="GLM-5.2",
+        task_source="exp_rpt_nemotron-cpp-v2",
+        hf_dataset_id="penfever/glm52-datagen-r11-36-nemotron-cpp-traces",
+        revision="2c05b57",
+    ),
+    PenfeverRollout(
+        cohort_name="glm52-terminus2",
+        teacher="GLM-5.2",
+        task_source="exp_rpt_stack-pytest-large-v2",
+        hf_dataset_id="penfever/glm52-datagen-r11-38-stack-pytest-large-v2-traces",
+        revision="d485d89",
+    ),
+    PenfeverRollout(
+        cohort_name="glm52-terminus2",
+        teacher="GLM-5.2",
+        task_source="exp_rpt_stack-pytest-v2",
+        hf_dataset_id="penfever/glm52-datagen-r11-39-stack-pytest-v2-traces",
+        revision="d241909",
+    ),
+    PenfeverRollout(
+        cohort_name="glm52-terminus2",
+        teacher="GLM-5.2",
+        task_source="exp_rpt_unitsyn-python-v3",
+        hf_dataset_id="penfever/glm52-datagen-r11-13-unitsyn-traces",
+        revision="00faddb",
+    ),
+    PenfeverRollout(
+        cohort_name="glm52-terminus2",
+        teacher="GLM-5.2",
+        task_source="nemotron-gym-agent-calendar",
+        hf_dataset_id="penfever/glm52-datagen-r11-17-agent-calendar-traces",
+        revision="f75ec2a",
+    ),
+    PenfeverRollout(
+        cohort_name="glm52-terminus2",
+        teacher="GLM-5.2",
+        task_source="nemotron-gym-instruction-following-structured",
+        hf_dataset_id="penfever/glm52-datagen-r11-16-nemotron-instruction-traces",
+        revision="b33e975",
+    ),
+    PenfeverRollout(
+        cohort_name="glm52-terminus2",
+        teacher="GLM-5.2",
+        task_source="nemotron-gym-knowledge-web-search-mcqa",
+        hf_dataset_id="penfever/glm52-datagen-r11-19-knowledge-web-search-mcqa-traces",
+        revision="d2eb25c",
+    ),
+    PenfeverRollout(
+        cohort_name="glm52-terminus2",
+        teacher="GLM-5.2",
+        task_source="nl2bash-tasks-cleaned-oracle",
+        hf_dataset_id="penfever/glm52-datagen-r11-07-nl2bash-traces",
+        revision="602c6ec",
+    ),
 )
 
 
