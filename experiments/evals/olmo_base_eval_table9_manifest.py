@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import io
 import json
 import logging
 import os
+import re
 import sys
 from dataclasses import asdict, dataclass
-from pathlib import Path
 from typing import Any
 
 import fsspec
@@ -31,13 +33,9 @@ from marin.execution.types import ExecutorStep, output_path_of, this_output_path
 logger = logging.getLogger(__name__)
 
 REQUEST_SET_DIR = InputName.hardcoded("raw/eval-datasets/olmo_base_eval_table9/v2")
-DEFAULT_MANIFEST = str(
-    Path("experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs")
-    / "table9_extra_checkpoint_eval_20260629"
-    / "table9_extra_checkpoint_eval_manifest.csv"
-)
 DEFAULT_MAX_CONCURRENT = 16
 DEFAULT_WANDB_GROUP = "olmo_base_eval_table9_extra_checkpoint_coverage"
+SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 # The Table-9 evaluator was parity-tested on v6e-8. Keep it in us-east5 and
 # pin to the v6e zone while reading checkpoints from the regional east5 bucket.
@@ -78,10 +76,13 @@ class CollectResultsConfig:
 
 def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(description="Launch OLMoBaseEval Table-9 BPB for a checkpoint manifest.")
-    parser.add_argument("--manifest", default=DEFAULT_MANIFEST)
+    parser.add_argument("--manifest", required=True)
+    parser.add_argument("--manifest-sha256", required=True)
     parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT)
     parser.add_argument("--wandb-group", default=DEFAULT_WANDB_GROUP)
-    parser.add_argument("--list-only", action="store_true", help="Validate and summarize manifest targets without launching.")
+    parser.add_argument(
+        "--list-only", action="store_true", help="Validate and summarize manifest targets without launching."
+    )
     return parser.parse_known_args()
 
 
@@ -92,9 +93,16 @@ def _required_value(row: dict[str, str], key: str) -> str:
     return value
 
 
-def _load_targets(manifest_path: str) -> list[Table9ManifestTarget]:
-    with fsspec.open(manifest_path, mode="rt", newline="") as f:
-        reader = csv.DictReader(f)
+def _load_targets(manifest_path: str, manifest_sha256: str) -> list[Table9ManifestTarget]:
+    if SHA256_PATTERN.fullmatch(manifest_sha256) is None:
+        raise ValueError("--manifest-sha256 must be a lowercase SHA-256 digest")
+    with fsspec.open(manifest_path, mode="rb") as f:
+        manifest_bytes = f.read()
+    actual_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    if actual_sha256 != manifest_sha256:
+        raise ValueError(f"Manifest SHA-256 changed: {actual_sha256} != {manifest_sha256}")
+    with io.StringIO(manifest_bytes.decode()) as manifest_text:
+        reader = csv.DictReader(manifest_text)
         targets = [
             Table9ManifestTarget(
                 eval_name=_required_value(row, "eval_name"),
@@ -113,15 +121,16 @@ def _load_targets(manifest_path: str) -> list[Table9ManifestTarget]:
     if not targets:
         raise ValueError(f"No targets found in {manifest_path}")
 
-    duplicate_names = sorted({target.eval_name for target in targets if sum(t.eval_name == target.eval_name for t in targets) > 1})
+    duplicate_names = sorted(
+        {target.eval_name for target in targets if sum(t.eval_name == target.eval_name for t in targets) > 1}
+    )
     if duplicate_names:
         raise ValueError(f"Duplicate eval names in {manifest_path}: {duplicate_names[:10]}")
 
-    bad_checkpoints = [target.checkpoint for target in targets if target.checkpoint.startswith("gs://")]
+    bad_checkpoints = [target.checkpoint for target in targets if not target.checkpoint.startswith("checkpoints/")]
     if bad_checkpoints:
         raise ValueError(
-            "Manifest checkpoints must be prefix-relative to MARIN_PREFIX, not full GCS URIs: "
-            f"{bad_checkpoints[:5]}"
+            "Manifest checkpoints must be prefix-relative paths under checkpoints/: " f"{bad_checkpoints[:5]}"
         )
 
     central_paths = [
@@ -155,10 +164,7 @@ def collect_results(config: CollectResultsConfig) -> None:
             {
                 **asdict(target),
                 "table9_macro_bpb": result["table9_macro_bpb"],
-                **{
-                    f"table9/{component}/bpb": value
-                    for component, value in result["table9_components"].items()
-                },
+                **{f"table9/{component}/bpb": value for component, value in result["table9_components"].items()},
             }
         )
 
@@ -194,27 +200,30 @@ def main() -> None:
     args, remaining = _parse_args()
     sys.argv = [sys.argv[0], *remaining]
 
-    targets = _load_targets(args.manifest)
+    targets = _load_targets(args.manifest, args.manifest_sha256)
     if args.list_only:
         by_panel_scale: dict[tuple[str, str], int] = {}
         for target in targets:
             key = (target.panel, target.scale)
             by_panel_scale[key] = by_panel_scale.get(key, 0) + 1
-        print(json.dumps(
-            {
-                "manifest": str(args.manifest),
-                "target_count": len(targets),
-                "by_panel_scale": {f"{panel}/{scale}": count for (panel, scale), count in by_panel_scale.items()},
-                "first_targets": [asdict(target) for target in targets[:5]],
-            },
-            indent=2,
-            sort_keys=True,
-        ))
+        print(
+            json.dumps(
+                {
+                    "manifest": str(args.manifest),
+                    "manifest_sha256": args.manifest_sha256,
+                    "target_count": len(targets),
+                    "by_panel_scale": {f"{panel}/{scale}": count for (panel, scale), count in by_panel_scale.items()},
+                    "first_targets": [asdict(target) for target in targets[:5]],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return
 
     targets_json = json.dumps([asdict(target) for target in targets], sort_keys=True)
     manifest_step = ExecutorStep(
-        name="evaluation/olmo_base_eval_table9/manifest_checkpoint_coverage_manifest",
+        name=f"evaluation/olmo_base_eval_table9/manifest_checkpoint_coverage_{args.manifest_sha256[:12]}_manifest",
         description=f"Write Table-9 eval manifest for {len(targets)} completed checkpoints",
         fn=write_manifest,
         config=WriteManifestConfig(output_path=this_output_path(), targets_json=targets_json),
@@ -222,10 +231,11 @@ def main() -> None:
 
     eval_steps = [_step(target, wandb_group=args.wandb_group) for target in targets]
     results_by_eval_name = {
-        target.eval_name: output_path_of(step, RESULTS_FILENAME) for target, step in zip(targets, eval_steps, strict=True)
+        target.eval_name: output_path_of(step, RESULTS_FILENAME)
+        for target, step in zip(targets, eval_steps, strict=True)
     }
     collect_step = ExecutorStep(
-        name="evaluation/olmo_base_eval_table9/manifest_checkpoint_coverage_collect",
+        name=f"evaluation/olmo_base_eval_table9/manifest_checkpoint_coverage_{args.manifest_sha256[:12]}_collect",
         description=f"Collect Table-9 eval results for {len(targets)} completed checkpoints",
         fn=collect_results,
         config=CollectResultsConfig(
