@@ -112,6 +112,7 @@ TABLE9_EVAL_RESOURCES = ResourceConfig.with_tpu("v6e-8", regions=["us-east5"], z
 PHASE_SCHEDULE = PhaseSchedule.from_boundaries(boundaries=PHASE_BOUNDARIES, names=list(PHASE_NAMES))
 PHASE_FRACTIONS = {phase.name: phase.end_fraction - phase.start_fraction for phase in PHASE_SCHEDULE.phases}
 RUN_NAME_PATTERN = re.compile(r"[^a-zA-Z0-9_.-]+")
+WANDB_MAX_TAG_LENGTH = 64
 
 
 @dataclass(frozen=True)
@@ -148,6 +149,7 @@ class DelphiSwarmRunSpec:
     q95_simulated_epoch: float
     mean_phase_tv_to_proportional: float
     phase_weights: dict[str, dict[str, float]]
+    simulated_epoch_subset_seed: int | None = None
 
 
 @dataclass(frozen=True)
@@ -308,6 +310,20 @@ def _weight_diagnostics(phase_weights: dict[str, dict[str, float]]) -> tuple[flo
     return max(simulated_epochs), _quantile_95(simulated_epochs), sum(phase_tvs) / len(phase_tvs)
 
 
+def _wandb_tag(tag: str) -> str:
+    """Fit a tag inside W&B's 64-character limit while keeping it unique.
+
+    A long provenance value, such as a panel's candidate id, can push a ``key=value`` tag past
+    the limit. W&B rejects the whole tag list when that happens, which kills the run before its
+    first step. Truncating alone would silently merge two distinct sources, so the truncated
+    form carries a digest of the original.
+    """
+    if len(tag) <= WANDB_MAX_TAG_LENGTH:
+        return tag
+    digest = hashlib.sha256(tag.encode()).hexdigest()[:8]
+    return f"{tag[: WANDB_MAX_TAG_LENGTH - len(digest) - 1]}-{digest}"
+
+
 def load_source_panel(
     *,
     source_panel: str,
@@ -428,7 +444,7 @@ def _build_mixture_data(run_spec: DelphiSwarmRunSpec):
         data,
         target_budget=SIMULATED_EPOCH_TARGET_BUDGET,
         experiment_budget=run_spec.realized_train_tokens,
-        simulated_epoch_subset_seed=None,
+        simulated_epoch_subset_seed=run_spec.simulated_epoch_subset_seed,
     )
 
 
@@ -453,18 +469,21 @@ def run_delphi_swarm_training(config: DelphiSwarmTrainingConfig) -> None:
                 entity="marin-community",
                 project="marin",
                 tags=[
-                    "issue-6611",
-                    *config.wandb_tags,
-                    "completed-adamh",
-                    f"panel_source={run_spec.panel_source}",
-                    f"source_run={run_spec.source_run_name}",
-                    f"FLOPs={run_spec.target_flops:.1e}",
-                    f"D={run_spec.realized_train_tokens:.1e}",
-                    f"D/N={run_spec.realized_train_tokens / params:.3f}",
-                    f"label={LABEL}",
-                    f"N={params:.1e}",
-                    f"data_seed={run_spec.data_seed}",
-                    f"trainer_seed={run_spec.trainer_seed}",
+                    _wandb_tag(tag)
+                    for tag in (
+                        "issue-6611",
+                        *config.wandb_tags,
+                        "completed-adamh",
+                        f"panel_source={run_spec.panel_source}",
+                        f"source_run={run_spec.source_run_name}",
+                        f"FLOPs={run_spec.target_flops:.1e}",
+                        f"D={run_spec.realized_train_tokens:.1e}",
+                        f"D/N={run_spec.realized_train_tokens / params:.3f}",
+                        f"label={LABEL}",
+                        f"N={params:.1e}",
+                        f"data_seed={run_spec.data_seed}",
+                        f"trainer_seed={run_spec.trainer_seed}",
+                    )
                 ],
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),

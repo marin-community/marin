@@ -195,6 +195,9 @@ BUCKET_FAMILY_POWER_HEADS_MIXTURE_GCS_DIR = (
     "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/" "delphi_bucket_family_power_heads_validation_20260714/mixtures"
 )
 BUCKET_FAMILY_POWER_HEADS_DATA_SEED = 714300
+CORRECTIVE_HPR_280_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/" "corrective_hpr_280_decomposed_panel_20260727/mixtures"
+)
 TABLE9_REQUEST_SET_DIR = InputName.hardcoded("raw/eval-datasets/olmo_base_eval_table9/v2")
 TABLE9_EVAL_RESOURCES = ResourceConfig.with_tpu("v6e-8", regions=["us-east5"], zone="us-east5-b", disk="80g")
 TABLE9_TARGET_METRIC = "olmo_base_easy/table9_51_component_macro_bpb"
@@ -490,6 +493,36 @@ class DelphiValidationMixture(StrEnum):
     PROPORTIONAL_NOISE_3E18_H = "proportional_noise_3e18_h"
     PROPORTIONAL_NOISE_3E18_I = "proportional_noise_3e18_i"
     PROPORTIONAL_NOISE_3E18_J = "proportional_noise_3e18_j"
+    HPRC280_UNCH_AKLB0P25_EPS0 = "hprc280_unch_aklb0p25_eps0"
+    HPRC280_UNCH_AKLB0P25_EPS0P001 = "hprc280_unch_aklb0p25_eps0p001"
+    HPRC280_UNCH_AKLB0P25_EPS0P0025 = "hprc280_unch_aklb0p25_eps0p0025"
+    HPRC280_UNCH_AKLB0P25_EPS0P005 = "hprc280_unch_aklb0p25_eps0p005"
+    HPRC280_UNCH_AKLB0P25_EPS0P01 = "hprc280_unch_aklb0p25_eps0p01"
+    HPRC280_UNCH_AKLB0P5_EPS0 = "hprc280_unch_aklb0p5_eps0"
+    HPRC280_UNCH_AKLB0P5_EPS0P001 = "hprc280_unch_aklb0p5_eps0p001"
+    HPRC280_UNCH_AKLB0P5_EPS0P0025 = "hprc280_unch_aklb0p5_eps0p0025"
+    HPRC280_UNCH_AKLB0P5_EPS0P005 = "hprc280_unch_aklb0p5_eps0p005"
+    HPRC280_UNCH_AKLB0P5_EPS0P01 = "hprc280_unch_aklb0p5_eps0p01"
+    HPRC280_UNCH_AKLB0P75_EPS0 = "hprc280_unch_aklb0p75_eps0"
+    HPRC280_UNCH_AKLB0P75_EPS0P001 = "hprc280_unch_aklb0p75_eps0p001"
+    HPRC280_UNCH_AKLB0P75_EPS0P0025 = "hprc280_unch_aklb0p75_eps0p0025"
+    HPRC280_UNCH_AKLB0P75_EPS0P005 = "hprc280_unch_aklb0p75_eps0p005"
+    HPRC280_UNCH_AKLB0P75_EPS0P01 = "hprc280_unch_aklb0p75_eps0p01"
+    HPRC280_T9_AKLB0P25_EPS0 = "hprc280_t9_aklb0p25_eps0"
+    HPRC280_T9_AKLB0P25_EPS0P001 = "hprc280_t9_aklb0p25_eps0p001"
+    HPRC280_T9_AKLB0P25_EPS0P0025 = "hprc280_t9_aklb0p25_eps0p0025"
+    HPRC280_T9_AKLB0P25_EPS0P005 = "hprc280_t9_aklb0p25_eps0p005"
+    HPRC280_T9_AKLB0P25_EPS0P01 = "hprc280_t9_aklb0p25_eps0p01"
+    HPRC280_T9_AKLB0P5_EPS0 = "hprc280_t9_aklb0p5_eps0"
+    HPRC280_T9_AKLB0P5_EPS0P001 = "hprc280_t9_aklb0p5_eps0p001"
+    HPRC280_T9_AKLB0P5_EPS0P0025 = "hprc280_t9_aklb0p5_eps0p0025"
+    HPRC280_T9_AKLB0P5_EPS0P005 = "hprc280_t9_aklb0p5_eps0p005"
+    HPRC280_T9_AKLB0P5_EPS0P01 = "hprc280_t9_aklb0p5_eps0p01"
+    HPRC280_T9_AKLB0P75_EPS0 = "hprc280_t9_aklb0p75_eps0"
+    HPRC280_T9_AKLB0P75_EPS0P001 = "hprc280_t9_aklb0p75_eps0p001"
+    HPRC280_T9_AKLB0P75_EPS0P0025 = "hprc280_t9_aklb0p75_eps0p0025"
+    HPRC280_T9_AKLB0P75_EPS0P005 = "hprc280_t9_aklb0p75_eps0p005"
+    HPRC280_T9_AKLB0P75_EPS0P01 = "hprc280_t9_aklb0p75_eps0p01"
 
 
 @dataclass(frozen=True)
@@ -987,6 +1020,21 @@ def _bucket_family_power_heads_source(
         wandb_series_tag="delphi-bucket-family-power-heads",
         expected_max_simulated_epoch=expected_max_simulated_epoch,
         data_seed_override=BUCKET_FAMILY_POWER_HEADS_DATA_SEED,
+    )
+
+
+def _corrective_hpr_280_source(*, key: DelphiValidationMixture) -> MixtureSource:
+    target = "table9" if "_t9_" in key.value else "uncheatable"
+    target_metric = TABLE9_TARGET_METRIC if target == "table9" else "eval/uncheatable_eval/bpb"
+    return MixtureSource(
+        key=key,
+        display_name=f"exact-280 corrected HPR {target}: {key.value}",
+        source_csv=f"{CORRECTIVE_HPR_280_MIXTURE_GCS_DIR}/{key.value}.csv",
+        github_issue=6611,
+        target_metric=target_metric,
+        method=key.value,
+        wandb_series_tag="delphi-corrective-hpr-280-decomposed",
+        expected_max_simulated_epoch=25.0,
     )
 
 
@@ -2537,6 +2585,14 @@ MIXTURE_SOURCES.update(
         for key, (objective, model, policy, expected_max_simulated_epoch) in _BUCKET_FAMILY_POWER_HEADS_SPECS.items()
     }
 )
+
+_CORRECTIVE_HPR_280_KEYS = tuple(
+    DelphiValidationMixture(f"hprc280_{target}_aklb{aggregate}_eps{phase}")
+    for target in ("unch", "t9")
+    for aggregate in ("0p25", "0p5", "0p75")
+    for phase in ("0", "0p001", "0p0025", "0p005", "0p01")
+)
+MIXTURE_SOURCES.update({key: _corrective_hpr_280_source(key=key) for key in _CORRECTIVE_HPR_280_KEYS})
 
 
 _EMBEDDED_MIXTURE_WEIGHT_CSVS: dict[DelphiValidationMixture, str] = {
