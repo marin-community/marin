@@ -50,17 +50,11 @@ def _write_eval_jsonl(path: Path, records: list[dict]) -> None:
 
 
 def _read_attributes(output_dir: Path) -> dict[str, dict]:
-    """Concatenate every output parquet under *output_dir* and key by id.
-
-    Flattens the on-disk ``attributes`` struct (datakit convention) back into
-    top-level keys so test assertions stay terse:
-    ``rows[doc_id]["contaminated"]`` instead of ``rows[doc_id]["attributes"]["contaminated"]``.
-    """
+    """Concatenate every flat attribute Parquet file under *output_dir* and key by ID."""
     rows: dict[str, dict] = {}
     for pf in sorted(output_dir.glob("outputs/main/part-*.parquet")):
         for row in pq.read_table(str(pf)).to_pylist():
-            attrs = row.pop("attributes", {}) or {}
-            rows[row["id"]] = {**row, **attrs}
+            rows[row["id"]] = row
     return rows
 
 
@@ -192,12 +186,7 @@ def test_decon_preserves_partition_filenames(fox_corpus):
 
 
 def test_decon_output_schema(fox_corpus):
-    """Output Parquet has exactly ``{id, partition_id, attributes: struct<contaminated, max_overlap, matched_hashes>}``.
-
-    This is the datakit attribute convention consumed by
-    :func:`marin.processing.classification.consolidate.consolidate` --
-    ``id`` joinable on top, decon facts grouped under ``attributes``.
-    """
+    """Output Parquet has flat ID, partition, and decontamination fields."""
     decon_to_parquet(
         normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
@@ -209,18 +198,13 @@ def test_decon_output_schema(fox_corpus):
     output_files = sorted(Path(fox_corpus["output_dir"]).glob("outputs/main/part-*.parquet"))
     assert output_files, "expected at least one output partition"
     schema = pq.read_schema(str(output_files[0]))
-    assert set(schema.names) == {"id", "partition_id", "attributes"}
+    assert set(schema.names) == {"id", "partition_id", "contaminated", "max_overlap", "matched_hashes"}
     assert pa.types.is_string(schema.field("id").type)
     assert pa.types.is_integer(schema.field("partition_id").type)
-
-    attrs_field = schema.field("attributes")
-    assert pa.types.is_struct(attrs_field.type)
-    attrs_fields = {f.name: f for f in attrs_field.type}
-    assert set(attrs_fields) == {"contaminated", "max_overlap", "matched_hashes"}
-    assert pa.types.is_boolean(attrs_fields["contaminated"].type)
-    assert pa.types.is_floating(attrs_fields["max_overlap"].type)
-    assert pa.types.is_list(attrs_fields["matched_hashes"].type)
-    assert attrs_fields["matched_hashes"].type.value_type == pa.uint64()
+    assert pa.types.is_boolean(schema.field("contaminated").type)
+    assert pa.types.is_floating(schema.field("max_overlap").type)
+    assert pa.types.is_list(schema.field("matched_hashes").type)
+    assert schema.field("matched_hashes").type.value_type == pa.uint64()
 
 
 def test_decon_emits_eval_hash_index_sidecar(fox_corpus):

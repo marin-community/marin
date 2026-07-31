@@ -125,20 +125,20 @@ def dedup_exact_paragraph(
                 if doc_level_record is None:
                     doc_level_record = {
                         "id": doc_id,
-                        "attributes": {"dup_spans": [record["span"]] if record["span"] else []},
+                        "dup_spans": [record["span"]] if record["span"] else [],
                     }
                 elif doc_level_record["id"] != doc_id:
-                    if doc_level_record["attributes"]["dup_spans"]:
+                    if doc_level_record["dup_spans"]:
                         yield doc_level_record
                     doc_level_record = {
                         "id": doc_id,
-                        "attributes": {"dup_spans": [record["span"]] if record["span"] else []},
+                        "dup_spans": [record["span"]] if record["span"] else [],
                     }
                 else:
                     assert doc_level_record["id"] == doc_id
                     if record["span"]:
-                        doc_level_record["attributes"]["dup_spans"].append(record["span"])
-            if doc_level_record and doc_level_record["attributes"]["dup_spans"]:
+                        doc_level_record["dup_spans"].append(record["span"])
+            if doc_level_record and doc_level_record["dup_spans"]:
                 yield doc_level_record
 
         result = write_parquet_file(group_by_doc_id(tally.tally(records)), output_file)

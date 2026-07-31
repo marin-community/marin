@@ -24,7 +24,7 @@ TRAIN_PARQUET_GLOB = "data/*.parquet"
 REPOSITORY_HEADER = "Repository:"
 FILE_HEADER = "File:"
 UNKNOWN_FILE_PATH = "(unknown path)"
-SERIALIZATION_FORMAT = "natural_headers_directory_block_dfs_v1"
+SERIALIZATION_FORMAT = "natural_headers_directory_block_dfs_v2"
 
 OUTPUT_SCHEMA = pa.schema(
     [
@@ -134,8 +134,20 @@ def _directory_block_dfs(files: list[StackV3File]) -> list[StackV3File]:
     return ordered_files
 
 
+def deduplicate_files(files: list[StackV3File]) -> list[StackV3File]:
+    """Keep the first entry per ``(file_path, content_id)``.
+
+    A Stack v3 row lists the same file many times over -- commonly ten identical
+    entries per file -- and ``num_files`` counts every copy.
+    """
+    seen: dict[tuple[str, str], StackV3File] = {}
+    for file in files:
+        seen.setdefault((file["file_path"], file["content_id"]), file)
+    return list(seen.values())
+
+
 def row_to_doc(row: StackV3Repository) -> StackV3Document:
-    files = _directory_block_dfs(row["files"])
+    files = _directory_block_dfs(deduplicate_files(row["files"]))
     sections = [f"{REPOSITORY_HEADER} {row['repo_path']}"]
     sections.extend(f"{FILE_HEADER} {file['file_path'] or UNKNOWN_FILE_PATH}\n{file['content']}" for file in files)
 
@@ -146,7 +158,7 @@ def row_to_doc(row: StackV3Repository) -> StackV3Document:
         "repo_id": row["repo_id"],
         "commit_id": row["commit_id"],
         "github_metadata": row["github_metadata"],
-        "num_files": row["num_files"],
+        "num_files": len(files),
         "file_metadata": [{key: value for key, value in file.items() if key != "content"} for file in files],
         "serialization_format": SERIALIZATION_FORMAT,
     }

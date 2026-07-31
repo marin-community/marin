@@ -121,7 +121,7 @@ def _write_executor_info(step: StepSpec) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _is_built(step: StepSpec) -> bool:
+def step_is_built(step: StepSpec) -> bool:
     """True when the runner will serve ``step`` from cache rather than rebuild it.
 
     A non-mutable step whose output already has a ``SUCCESS`` status. This is the
@@ -238,7 +238,7 @@ class StepRunner:
         # confirmed from cache rather than run. Disabled under dry_run, which stays
         # I/O-free and lists the full static graph.
         pruned: set[str] = set()
-        is_built = (lambda _s: False) if dry_run else _is_built
+        is_built = (lambda _s: False) if dry_run else step_is_built
 
         def _display_name(output_path: str) -> str:
             return path_to_name.get(output_path, output_path)

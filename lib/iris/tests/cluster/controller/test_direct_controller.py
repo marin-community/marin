@@ -34,6 +34,7 @@ from tests.cluster.controller.transition_driver import commit_dispatch_updates
 from .conftest import (
     make_direct_job_request,
     query_attempt,
+    query_job,
     query_task,
     query_tasks_for_job,
     reconcile_once,
@@ -643,16 +644,15 @@ def test_apply_failed_directly_from_assigned(state):
     assert task.failure_count == 1
 
 
-def test_apply_worker_failed_from_running_retries(state):
-    """WORKER_FAILED from RUNNING with retries remaining returns to PENDING."""
-    task_event_table = FakeStatsTable()
-    state._db.attach_task_event_table(task_event_table)
-    jid = JobName.root("test-user", "wf-retry")
-    req = make_direct_job_request("wf-retry")
-    req.max_retries_preemption = 5
+def _start_direct_task(state, name: str, *, max_retries_preemption: int) -> tuple[JobName, int]:
+    """Submit a one-task direct job named ``name``, dispatch it, and drive it to
+    RUNNING. Returns the task id and its current attempt id."""
+    job_id = JobName.root("test-user", name)
+    req = make_direct_job_request(name)
+    req.max_retries_preemption = max_retries_preemption
     with state._db.transaction() as cur:
-        submit_job_in_tx(cur, job_id=jid, request=req, ts=Timestamp.now())
-    task_id = query_tasks_for_job(state, jid)[0].task_id
+        submit_job_in_tx(cur, job_id=job_id, request=req, ts=Timestamp.now())
+    task_id = query_tasks_for_job(state, job_id)[0].task_id
 
     with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur)
@@ -661,11 +661,18 @@ def test_apply_worker_failed_from_running_retries(state):
     with state._db.transaction() as cur:
         commit_dispatch_updates(
             cur,
-            [
-                TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
-            ],
+            [TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING)],
             now=Timestamp.now(),
         )
+    return task_id, attempt_id
+
+
+def test_apply_worker_failed_from_running_retries(state):
+    """WORKER_FAILED from RUNNING with retries remaining returns to PENDING."""
+    task_event_table = FakeStatsTable()
+    state._db.attach_task_event_table(task_event_table)
+    task_id, attempt_id = _start_direct_task(state, "wf-retry", max_retries_preemption=5)
+
     with state._db.transaction() as cur:
         commit_dispatch_updates(
             cur,
@@ -685,6 +692,57 @@ def test_apply_worker_failed_from_running_retries(state):
         "TaskRetryScheduled",
     )
     assert event.attempt_uid
+
+
+def test_apply_preempted_from_running_retries(state):
+    """A backend-reported PREEMPTED charges the preemption budget and retries.
+
+    The K8s backend reports a Kueue eviction as PREEMPTED; without a transition
+    branch for it the task keeps its RUNNING row while the attempt goes terminal,
+    which strands the task.
+    """
+    task_id, attempt_id = _start_direct_task(state, "preempt-retry", max_retries_preemption=5)
+
+    with state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [
+                TaskUpdate(
+                    task_id=task_id,
+                    attempt_id=attempt_id,
+                    new_state=job_pb2.TASK_STATE_PREEMPTED,
+                    error="Pod not found",
+                    terminal_reason="WorkloadEvictedDueToPreempted: preempted for a higher priority Workload",
+                )
+            ],
+            now=Timestamp.now(),
+        )
+
+    task = query_task(state, task_id)
+    assert task.state == job_pb2.TASK_STATE_PENDING
+    assert task.preemption_count == 1
+    attempt = query_attempt(state, task_id, attempt_id)
+    assert attempt.state == job_pb2.TASK_STATE_PREEMPTED
+    assert attempt.terminal_reason == "WorkloadEvictedDueToPreempted: preempted for a higher priority Workload"
+
+
+def test_apply_preempted_terminal_when_budget_exhausted(state):
+    """With the preemption budget spent, PREEMPTED finalizes the task as PREEMPTED
+    (not FAILED), so a triager can tell an eviction from an application fault."""
+    task_id, attempt_id = _start_direct_task(state, "preempt-terminal", max_retries_preemption=0)
+    job_id = JobName.root("test-user", "preempt-terminal")
+
+    with state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_PREEMPTED)],
+            now=Timestamp.now(),
+        )
+
+    task = query_task(state, task_id)
+    assert task.state == job_pb2.TASK_STATE_PREEMPTED
+    assert task.preemption_count == 1
+    assert query_job(state, job_id).state == job_pb2.JOB_STATE_WORKER_FAILED
 
 
 def test_apply_worker_failed_from_assigned(state):

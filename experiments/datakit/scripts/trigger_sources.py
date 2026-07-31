@@ -10,23 +10,27 @@ transitive dep in post-order and dedupes by ``output_path`` — so shared
 family downloads (e.g. Nemotron v2 subsets) are materialized once.
 Already-succeeded steps short-circuit via the on-disk cache check, so this
 is safe to re-run: it advances whatever hasn't completed yet and no-ops
-the rest. The staging region is pinned by the caller (e.g. via
-``iris job run --region us-east5 ...``); the iris worker exports a
-region-appropriate ``MARIN_PREFIX`` automatically, so this script does
-not set or validate it.
+the rest. ``--list-pending`` prints each source whose terminal step is not
+cached, then exits. The caller pins the staging region. For example, use
+``iris job run --region us-east5 ...``. The Iris worker exports a
+region-appropriate ``MARIN_PREFIX`` automatically.
 """
 
 import argparse
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
-from marin.datakit.sources import all_sources
-from marin.execution.step_runner import StepRunner
+from marin.datakit.sources import DatakitSource, all_sources
+from marin.execution.step_runner import StepRunner, step_is_built
+from marin.execution.step_spec import StepSpec
 from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 
+STATUS_CHECK_WORKERS = 8
 
-def parse_args() -> argparse.Namespace:
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--downloads-only",
@@ -37,11 +41,26 @@ def parse_args() -> argparse.Namespace:
         "--sources",
         help="Comma-separated source names to run (default: all). Use to re-drive specific sources.",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--list-pending",
+        action="store_true",
+        help="List sources whose selected terminal step is not cached, without starting pipeline steps.",
+    )
+    return parser.parse_args(argv)
 
 
-def main() -> None:
-    args = parse_args()
+def _print_pending(source_terminals: list[tuple[DatakitSource, StepSpec]]) -> None:
+    with ThreadPoolExecutor(max_workers=STATUS_CHECK_WORKERS) as pool:
+        cached = list(pool.map(lambda item: step_is_built(item[1]), source_terminals))
+
+    pending = [item for item, is_cached in zip(source_terminals, cached, strict=True) if not is_cached]
+    for source, terminal in pending:
+        print(f"{source.name}\t{terminal.output_path}")
+    print(f"{len(pending)}/{len(source_terminals)} source(s) would run.")
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
     registry = all_sources()
     if args.sources:
         names = [name.strip() for name in args.sources.split(",") if name.strip()]
@@ -51,10 +70,16 @@ def main() -> None:
         sources = [registry[name] for name in names]
     else:
         sources = list(registry.values())
-    terminals = [src.normalize_steps[0] if args.downloads_only else src.normalized for src in sources]
+    source_terminals = [
+        (source, source.normalize_steps[0] if args.downloads_only else source.normalized) for source in sources
+    ]
+    if args.list_pending:
+        _print_pending(source_terminals)
+        return
+
     stage = "downloads" if args.downloads_only else "normalize chains"
     logger.info("Running %s for %d sources", stage, len(sources))
-    StepRunner().run(terminals)
+    StepRunner().run([terminal for _, terminal in source_terminals])
     logger.info("All %d sources reached a terminal state", len(sources))
 
 

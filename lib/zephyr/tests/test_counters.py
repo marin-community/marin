@@ -6,6 +6,7 @@
 import logging
 import threading
 
+import pytest
 from prometheus_client import REGISTRY, generate_latest
 from zephyr import counters
 from zephyr.counters import ScopedCounters
@@ -32,6 +33,7 @@ def _make_coordinator(
     coord._lock = threading.Lock()
     coord._completed_counters = list(completed)
     coord._worker_counters = {str(i): s for i, s in enumerate(inflight or [])}
+    coord._progress_time_seconds = 0.0
     return coord
 
 
@@ -205,6 +207,24 @@ def test_aggregation_average():
         ]
     )
     assert coord.get_counters() == {"cpu_pct": 60}
+
+
+def test_aggregation_average_weighted_by_observation_count():
+    """AVERAGE across snapshots is weighted by each entry's observation count.
+
+    A shard that sampled cpu_pct 99 times must not weigh the same as one that
+    sampled it once. The coordinator folds snapshots with the same reducer the
+    worker uses across its runners, so the result is the mean over all
+    observations rather than the mean of per-shard means.
+    """
+    coord = _make_coordinator(
+        [
+            CounterSnapshot(counters={"cpu_pct": CounterEntry(90, Aggregation.AVERAGE, count=99)}, generation=1),
+            CounterSnapshot(counters={"cpu_pct": CounterEntry(40, Aggregation.AVERAGE, count=1)}, generation=2),
+        ]
+    )
+    # (90*99 + 40*1) / 100; an unweighted mean of the two entry values gives 65.
+    assert coord.get_counters()["cpu_pct"] == pytest.approx(89.5)
 
 
 def test_aggregation_mixed():

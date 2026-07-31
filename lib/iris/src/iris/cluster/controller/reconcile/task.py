@@ -425,6 +425,7 @@ def apply_one_transition(
         job_pb2.TASK_STATE_FAILED,
         job_pb2.TASK_STATE_WORKER_FAILED,
         job_pb2.TASK_STATE_KILLED,
+        job_pb2.TASK_STATE_PREEMPTED,
         job_pb2.TASK_STATE_UNSCHEDULABLE,
         job_pb2.TASK_STATE_SUCCEEDED,
     ):
@@ -456,8 +457,14 @@ def apply_one_transition(
             if failure_count <= task.max_retries_failure:
                 task_state = job_pb2.TASK_STATE_PENDING
                 terminal_ms = None
-        elif update.new_state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_KILLED):
-            # Worker loss / infra (WORKER_FAILED) or an out-of-band container stop
+        elif update.new_state in (
+            job_pb2.TASK_STATE_WORKER_FAILED,
+            job_pb2.TASK_STATE_KILLED,
+            job_pb2.TASK_STATE_PREEMPTED,
+        ):
+            # Worker loss / infra (WORKER_FAILED), a backend-observed preemption
+            # (PREEMPTED: a cluster backend's control plane evicted the attempt),
+            # or an out-of-band container stop
             # the worker reports as KILLED — a higher-priority job reclaiming the
             # slice, a node drain, a spot/preemptible reclaim, or a stop directive
             # the controller issued without recording a matching task transition.
@@ -472,11 +479,18 @@ def apply_one_transition(
             # EXECUTING (BUILDING/RUNNING) charges and gates on max_retries_preemption.
             # A truly-dead worker also misses its next ping/heartbeat (bumped
             # observer-side), so we don't double-count here.
+            # A KILLED keeps the WORKER_FAILED terminal so the task's terminal
+            # state stays inside the preemption-budget predicate.
+            terminal_state = (
+                job_pb2.TASK_STATE_PREEMPTED
+                if update.new_state == job_pb2.TASK_STATE_PREEMPTED
+                else job_pb2.TASK_STATE_WORKER_FAILED
+            )
             task_state = resolve_task_failure_state(
                 prior_state,
                 preemption_count,
                 task.max_retries_preemption,
-                terminal_state=job_pb2.TASK_STATE_WORKER_FAILED,
+                terminal_state=terminal_state,
             )
             if task_state == job_pb2.TASK_STATE_PENDING:
                 terminal_ms = None

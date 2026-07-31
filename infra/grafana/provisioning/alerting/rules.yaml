@@ -497,6 +497,53 @@ groups:
               conditions:
                 - evaluator: { type: gt, params: [0] }
 
+  # This warning finds an active Zephyr producer that reports no shard
+  # completion for 45 minutes. The bridge removes expired producers.
+  - orgId: 1
+    name: zephyr-progress
+    folder: Alerts
+    interval: 1m
+    rules:
+      - uid: zephyr-pipeline-progress-stalled
+        title: ZephyrPipelineProgressStalled
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.job }} execution {{ $labels.execution }} has stale shard progress"
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/zephyr/OPS.md#stale-pipeline-warning
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/zephyr_stalls
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: job, text: job, type: string }
+                - { selector: execution, text: execution, type: string }
+                - { selector: reason, text: reason, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
   # The GCE controllers are not in K8S_CLUSTERS; their liveness comes from the
   # existing per-cluster iris datasources. The health row always exists (the
   # bridge answers reachable=false rather than erroring), and `up` is its 0/1

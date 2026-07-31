@@ -69,7 +69,7 @@ from zephyr.stats import (
     StatsWriter,
     ZephyrWorkerStatStatus,
 )
-from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot
+from zephyr.worker_context import CounterEntry, CounterSnapshot, merge_counter_entries
 from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
@@ -90,6 +90,8 @@ MAX_SHARD_INFRA_FAILURES = 20
 MAX_STATUS_TEXT_LENGTH = 1000
 
 MAX_WORKERS_PER_JOB = 1_024
+
+ZEPHYR_PROGRESS_TIME_METRIC = "zephyr_progress_time_seconds"
 
 
 class ShardFailureKind(enum.StrEnum):
@@ -324,6 +326,7 @@ class ZephyrCoordinator:
 
         # Set at each _start_stage so _log_status can show average throughput since stage start.
         self._stage_monotonic_start: float | None = None
+        self._progress_time_seconds: float = 0.0
 
         # Lock for accessing coordinator state from background thread
         self._lock = threading.Lock()
@@ -441,6 +444,13 @@ class ZephyrCoordinator:
         """
         for name, value in self.get_counters().items():
             telltale.publish_gauge(name, value, f"zephyr counter {name}")
+        with self._lock:
+            progress_time_seconds = self._progress_time_seconds
+        telltale.publish_gauge(
+            ZEPHYR_PROGRESS_TIME_METRIC,
+            progress_time_seconds,
+            "Unix time of the current stage start or most recent shard completion",
+        )
 
     def _build_status_md(self) -> tuple[str, str]:
         """Render pipeline progress as ``(detail, summary)`` markdown."""
@@ -737,6 +747,7 @@ class ZephyrCoordinator:
 
             self._results[shard_idx] = result
             self._completed_shards += 1
+            self._progress_time_seconds = time.time()
             self._in_flight.pop(shard_idx, None)
             self._completed_counters.append(counter_snapshot)
             # Zero the in-flight counters but keep the generation watermark
@@ -798,6 +809,12 @@ class ZephyrCoordinator:
             stage: If provided, only include entries with ``entry.stage == stage``.
                 If None (default), include all entries regardless of stage.
 
+        Snapshots are folded with :func:`merge_counter_entries`, the same
+        reducer the worker uses to combine its concurrent runners, so an
+        AVERAGE counter is weighted by each entry's observation count rather
+        than treating one shard's single sample as equal to another's
+        thousand.
+
         If snapshots disagree on a counter's aggregation (only possible for
         user counters that reuse a name with different ``set_aggregation``
         modes), the counter is omitted from the result and a warning is
@@ -812,41 +829,13 @@ class ZephyrCoordinator:
 
             all_snaps = list(self._completed_counters) + list(self._worker_counters.values())
 
-        aggregations: dict[str, Aggregation] = {}
-        values: dict[str, list[int | float]] = {}
-        conflicted: set[str] = set()
-        for snap in all_snaps:
-            for k, entry in snap.counters.items():
-                if stage is not None and entry.stage != stage:
-                    continue
-                if k in aggregations:
-                    if aggregations[k] != entry.aggregation:
-                        if k not in conflicted:
-                            logger.warning(
-                                "Counter %r has conflicting aggregations: %r vs %r; dropping",
-                                k,
-                                aggregations[k],
-                                entry.aggregation,
-                            )
-                            conflicted.add(k)
-                else:
-                    aggregations[k] = entry.aggregation
-                values.setdefault(k, []).append(entry.value)
-
-        result: dict[str, int | float] = {}
-        for k, vals in values.items():
-            if k in conflicted:
-                continue
-            match aggregations.get(k, Aggregation.SUM):
-                case Aggregation.SUM:
-                    result[k] = sum(vals)
-                case Aggregation.AVERAGE:
-                    result[k] = sum(vals) / len(vals)
-                case Aggregation.MAX:
-                    result[k] = max(vals)
-                case Aggregation.MIN:
-                    result[k] = min(vals)
-        return result
+        merged, conflicted = merge_counter_entries(
+            (k, entry)
+            for snap in all_snaps
+            for k, entry in snap.counters.items()
+            if stage is None or entry.stage == stage
+        )
+        return {k: e.value for k, e in merged.items() if k not in conflicted}
 
     def get_fatal_error(self) -> str | None:
         with self._lock:
@@ -896,6 +885,7 @@ class ZephyrCoordinator:
             # accumulate across stages for full pipeline visibility.
             self._worker_counters = {}
             self._stage_monotonic_start = time.monotonic()
+            self._progress_time_seconds = time.time()
             self._stage_done.clear()
 
     def _wait_for_stage(self) -> None:
@@ -968,6 +958,7 @@ class ZephyrCoordinator:
                 raise RuntimeError(self._fatal_error)
             self._pipeline_running = True
             self._execution_id = execution_id
+        telltale.set_global_labels(source="zephyr", run=execution_id)
 
         try:
             shards = _build_source_shards(plan.source_items)
@@ -1361,13 +1352,7 @@ class ZephyrWorker:
         """Aggregate live counters from all active runners; return None if unchanged."""
         with self._resources_lock:
             runners = list(self._active_runners)
-        current: dict[str, CounterEntry] = {}
-        for r in runners:
-            for name, entry in r.live_counters().items():
-                if name not in current:
-                    current[name] = CounterEntry(entry.value, entry.aggregation, entry.stage, entry.count)
-                else:
-                    current[name].merge(entry)
+        current, _ = merge_counter_entries((name, entry) for r in runners for name, entry in r.live_counters().items())
         if current == self._last_reported_counters:
             return None
         self._last_reported_counters = current

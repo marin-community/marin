@@ -10,6 +10,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import Future
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -19,12 +20,15 @@ from conftest import _TEST_TASK_COST, _TEST_WORKER_AVAILABLE
 from fray.actor import ActorContext
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
+from prometheus_client import REGISTRY
+from rigging import telltale
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import (
     _NON_RETRYABLE_ERRORS,
     MAX_SHARD_FAILURES,
     MAX_SHARD_INFRA_FAILURES,
+    ZEPHYR_PROGRESS_TIME_METRIC,
     CoordinatorUnreachable,
     PullStatus,
     WorkerState,
@@ -492,6 +496,48 @@ def test_no_duplicate_results_on_heartbeat_timeout(coordinator):
 
     # Only one completion should be counted
     assert coordinator._completed_shards == 1
+
+
+def test_progress_metric_resets_at_stage_start_and_advances_after_a_shard(coordinator, monkeypatch):
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name="test",
+        cost=_TEST_TASK_COST,
+    )
+    timestamps = iter((1_000.0, 1_010.0))
+    monkeypatch.setattr(time, "time", lambda: next(timestamps, 1_010.0))
+
+    coordinator._start_stage("test", 0, [task])
+    coordinator._publish_telltale()
+    assert REGISTRY.get_sample_value(ZEPHYR_PROGRESS_TIME_METRIC) == 1_000.0
+
+    coordinator.register_worker("worker-0", MagicMock())
+    status, work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+    assert status == PullStatus.RUN_TASK
+    assert work is not None
+    coordinator.report_result(
+        "worker-0",
+        task.shard_idx,
+        work.attempt,
+        TaskResult(shard=ListShard(refs=[])),
+        CounterSnapshot.empty(),
+    )
+    coordinator._publish_telltale()
+    assert REGISTRY.get_sample_value(ZEPHYR_PROGRESS_TIME_METRIC) == 1_010.0
+
+
+def test_pipeline_progress_metric_includes_execution_identity(coordinator):
+    plan = compute_plan(Dataset.from_list([]))
+    coordinator.run_pipeline(plan, "run-1")
+    coordinator._publish_telltale()
+
+    rows = telltale.scrape_metrics(telltale.MetricIdentity(job_id="/user/job"), datetime.now(UTC))
+    (progress,) = [row for row in rows if row.name == ZEPHYR_PROGRESS_TIME_METRIC]
+    assert progress.source == "zephyr"
+    assert progress.run == "run-1"
 
 
 def test_disk_chunk_write_uses_unique_paths(tmp_path):
