@@ -53,6 +53,8 @@ LOSS_TEMPERATURE = 3.0
 LEARNING_RATE = 1e-2
 WARMUP_FRACTION = 0.05
 DECAY_FRACTION = 0.1
+OPTIMIZER_BETA = 0.9
+OPTIMIZER_EPSILON = 1e-8
 TEACHER_QUANTIZATION_LIMIT = 0.3
 TEACHER_EMBEDDING_DIMENSION = 256
 RESULT_FILE = Path("/tmp/luxical-arctic-train-rung")
@@ -177,7 +179,13 @@ def train_student(
         raise ValueError("Text and teacher row counts differ")
     device = torch.device("cuda")
     module = student.bow_to_dense_embedder.to_torch(device=device)
-    optimizer = equal_beta_adamw(module.parameters(), lr=LEARNING_RATE, weight_decay=0.0)
+    optimizer = equal_beta_adamw(
+        module.parameters(),
+        lr=LEARNING_RATE,
+        beta=OPTIMIZER_BETA,
+        eps=OPTIMIZER_EPSILON,
+        weight_decay=0.0,
+    )
     steps_per_epoch = math.ceil(len(texts) / TRAIN_BATCH_SIZE)
     total_steps = NUM_EPOCHS * steps_per_epoch
     rng = np.random.default_rng(SEED)
@@ -286,6 +294,11 @@ def main() -> None:
         "epochs": NUM_EPOCHS,
         "loss_temperature": LOSS_TEMPERATURE,
         "learning_rate": LEARNING_RATE,
+        "warmup_fraction": WARMUP_FRACTION,
+        "decay_fraction": DECAY_FRACTION,
+        "optimizer_beta": OPTIMIZER_BETA,
+        "optimizer_epsilon": OPTIMIZER_EPSILON,
+        "weight_decay": 0.0,
         "steps": len(losses),
         "first_loss": losses[0],
         "final_loss": losses[-1],
