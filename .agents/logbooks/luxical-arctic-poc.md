@@ -475,6 +475,16 @@ These commands do not set a target cluster, region, or zone.
 - Teacher Parquet metadata now binds each file to the manifest and teacher
   revision.
 - The report records a disposition for all 28 review findings.
-- Job `/rav/lux-arctic-manifest-v2-001` builds the corrected manifest at
+- Job `/rav/lux-arctic-manifest-v2-001` was stopped before it wrote an
+  artifact. One source had 1,787 Parquet footers and exposed a serial scan.
+- Commit `2c099097e` reads source footers through 16 bounded I/O workers.
+- Job `/rav/lux-arctic-manifest-v2-002` was stopped before its write phase.
+- Commit `f12c1fcc7` also uses the bounded workers for selected-row reads.
+- Job `/rav/lux-arctic-manifest-v2-003` reached the write phase. Exact
+  independent-row sampling caused one network data read for almost every
+  selected shard.
+- Commit `ebe09a12e` uses 64 uniform circular row blocks per source. Every row
+  has equal marginal probability, while object reads stay bounded.
+- Job `/rav/lux-arctic-manifest-v2-004` builds the corrected manifest at
   interactive priority on federated Iris.
 - Echo milestone: https://echo.oa.dev/logs/1596.
