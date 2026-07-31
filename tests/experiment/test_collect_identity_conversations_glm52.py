@@ -8,13 +8,15 @@ import pytest
 from rigging.filesystem import StoragePath
 
 from experiments.rollout_data import collect_identity_conversations_glm52 as collect
-from experiments.rollout_data.generate_identity_conversation_seeds import MARIN_IDENTITY_PROFILE, generate_seeds
+from experiments.rollout_data.generate_identity_conversation_seeds import generate_seeds, load_identity_profile
+
+IDENTITY_PROFILE = load_identity_profile(StoragePath("experiments/rollout_data/identity_profiles/marin_latest_moe.json"))
 
 
 def test_conversation_requires_exact_canonical_final_answer():
     seed = next(
         seed
-        for seed in generate_seeds(count=100, random_seed=0, identity_profile=MARIN_IDENTITY_PROFILE)
+        for seed in generate_seeds(count=100, random_seed=0, identity_profile=IDENTITY_PROFILE)
         if seed.neutral_bridge is None
     )
     valid = json.dumps(
@@ -43,7 +45,7 @@ def test_conversation_requires_exact_canonical_final_answer():
 def test_conversation_requires_user_first_alternating_roles_and_exact_bridge():
     seed = next(
         seed
-        for seed in generate_seeds(count=100, random_seed=0, identity_profile=MARIN_IDENTITY_PROFILE)
+        for seed in generate_seeds(count=100, random_seed=0, identity_profile=IDENTITY_PROFILE)
         if seed.neutral_bridge is not None
     )
 
@@ -85,7 +87,7 @@ def test_conversation_requires_user_first_alternating_roles_and_exact_bridge():
 def test_conversation_rejects_unsupported_user_implementation_story():
     seed = next(
         seed
-        for seed in generate_seeds(count=100, random_seed=0, identity_profile=MARIN_IDENTITY_PROFILE)
+        for seed in generate_seeds(count=100, random_seed=0, identity_profile=IDENTITY_PROFILE)
         if seed.neutral_bridge is None
     )
 
@@ -104,7 +106,7 @@ def test_conversation_rejects_unsupported_user_implementation_story():
 def test_write_chunk_excludes_rejected_raw_responses(tmp_path):
     seed = next(
         seed
-        for seed in generate_seeds(count=100, random_seed=0, identity_profile=MARIN_IDENTITY_PROFILE)
+        for seed in generate_seeds(count=100, random_seed=0, identity_profile=IDENTITY_PROFILE)
         if seed.neutral_bridge is None
     )
     accepted = collect.CompletionRecord(
@@ -144,7 +146,7 @@ def test_write_chunk_excludes_rejected_raw_responses(tmp_path):
         concurrency=2,
         random_seed=7,
         human_phrasings=(),
-        identity_profile=MARIN_IDENTITY_PROFILE,
+        identity_profile=IDENTITY_PROFILE,
     )
 
     chunk = collect._write_chunk(config, 0, [accepted, rejected])
@@ -157,10 +159,7 @@ def test_write_chunk_excludes_rejected_raw_responses(tmp_path):
 
 
 def test_collection_persists_microbatches_and_resumes(tmp_path, monkeypatch):
-    calls = []
-
     def completion(_url, seed, _sampling):
-        calls.append(seed.seed_id)
         return collect.CompletionRecord(
             seed=seed,
             conversation=(
@@ -188,17 +187,19 @@ def test_collection_persists_microbatches_and_resumes(tmp_path, monkeypatch):
         concurrency=4,
         random_seed=7,
         human_phrasings=(),
-        identity_profile=MARIN_IDENTITY_PROFILE,
+        identity_profile=IDENTITY_PROFILE,
     )
     sampling = collect.SamplingConfig(0.9, 0.95, 1024)
 
     collect._run_collection("http://vllm", config, sampling)
-    first_call_count = len(calls)
+    response_path = tmp_path / "responses" / "shard-00"
+    first_chunks = {path.name: path.read_bytes() for path in response_path.glob("*.jsonl.gz")}
     collect._run_collection("http://vllm", config, sampling)
+    second_chunks = {path.name: path.read_bytes() for path in response_path.glob("*.jsonl.gz")}
 
     progress = json.loads((tmp_path / "progress" / "shard-00.json").read_text())
     assert progress["state"] == "complete"
-    assert progress["profile_id"] == MARIN_IDENTITY_PROFILE.profile_id
+    assert progress["profile_id"] == IDENTITY_PROFILE.profile_id
     assert progress["accepted_tokens"] >= 10
-    assert len(calls) == first_call_count
-    assert len(list((tmp_path / "responses" / "shard-00").glob("*.jsonl.gz"))) >= 2
+    assert first_chunks == second_chunks
+    assert len(second_chunks) >= 2

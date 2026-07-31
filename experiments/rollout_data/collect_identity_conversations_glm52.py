@@ -228,16 +228,18 @@ def _completion(vllm_url: str, seed: ConversationSeed, sampling: SamplingConfig)
 
 def _chunk_path(output_path: StoragePath, shard_index: int, chunk: Chunk) -> StoragePath:
     return (
-        output_path
-        / "responses"
-        / f"shard-{shard_index:02d}"
+        _shard_response_path(output_path, shard_index)
         / f"chunk-{chunk.start:09d}-{chunk.end:09d}-tokens-{chunk.tokens:07d}.jsonl.gz"
     )
 
 
+def _shard_response_path(output_path: StoragePath, shard_index: int) -> StoragePath:
+    return output_path / "responses" / f"shard-{shard_index:02d}"
+
+
 def _existing_chunks(output_path: StoragePath, shard_index: int) -> dict[int, Chunk]:
     chunks = {}
-    for path in (output_path / "responses" / f"shard-{shard_index:02d}" / "*.jsonl.gz").glob():
+    for path in (_shard_response_path(output_path, shard_index) / "*.jsonl.gz").glob():
         match = CHUNK_PATTERN.fullmatch(path.name)
         if match is None:
             raise ValueError(f"Unexpected response filename: {path}")

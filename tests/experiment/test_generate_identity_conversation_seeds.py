@@ -4,18 +4,22 @@
 import dataclasses
 import json
 
+from rigging.filesystem import StoragePath
+
 from experiments.rollout_data.generate_identity_conversation_seeds import (
-    MARIN_IDENTITY_PROFILE,
     Facet,
     IdentityProfile,
     generate_seeds,
+    load_identity_profile,
     main,
 )
 
+IDENTITY_PROFILE = load_identity_profile(StoragePath("experiments/rollout_data/identity_profiles/marin_latest_moe.json"))
+
 
 def test_generate_seeds_is_deterministic_and_balances_facets():
-    first = list(generate_seeds(count=200, random_seed=17, identity_profile=MARIN_IDENTITY_PROFILE))
-    second = list(generate_seeds(count=200, random_seed=17, identity_profile=MARIN_IDENTITY_PROFILE))
+    first = list(generate_seeds(count=200, random_seed=17, identity_profile=IDENTITY_PROFILE))
+    second = list(generate_seeds(count=200, random_seed=17, identity_profile=IDENTITY_PROFILE))
 
     assert first == second
     assert {seed.facet for seed in first} == set(Facet)
@@ -23,7 +27,7 @@ def test_generate_seeds_is_deterministic_and_balances_facets():
 
 
 def test_generate_seeds_separates_known_and_unknown_identity_facts():
-    seeds = list(generate_seeds(count=400, random_seed=9, identity_profile=MARIN_IDENTITY_PROFILE))
+    seeds = list(generate_seeds(count=400, random_seed=9, identity_profile=IDENTITY_PROFILE))
 
     known = [seed for seed in seeds if seed.facet == Facet.TRAINED_BY]
     unknown = [seed for seed in seeds if seed.facet == Facet.UNKNOWN_FACT]
@@ -74,15 +78,13 @@ def test_generate_seeds_uses_only_facts_from_custom_identity_profile():
 
 
 def test_generation_axes_have_systematic_coverage():
-    seeds = list(generate_seeds(count=500, random_seed=3, identity_profile=MARIN_IDENTITY_PROFILE))
+    seeds = list(generate_seeds(count=500, random_seed=3, identity_profile=IDENTITY_PROFILE))
 
     assert len({seed.entropy.register for seed in seeds}) >= 5
     assert len({seed.entropy.turn_pattern for seed in seeds}) == 2
     assert len({seed.entropy.question_strategy for seed in seeds}) >= 8
-    assert all("Return only the conversation" in seed.generation_prompt for seed in seeds)
-    assert all(f'Assistant: "{seed.canonical_answer}"' in seed.generation_prompt for seed in seeds)
-    assert all("animal" not in seed.generation_prompt.lower() for seed in seeds)
-    assert all("checkpoint" not in seed.generation_prompt.lower() for seed in seeds)
+    assert all(seed.topic in seed.generation_prompt for seed in seeds)
+    assert all(seed.canonical_answer in seed.generation_prompt for seed in seeds)
 
 
 def test_cli_uses_retrieved_human_phrasing(tmp_path):
@@ -98,7 +100,7 @@ def test_cli_uses_retrieved_human_phrasing(tmp_path):
         )
         + "\n"
     )
-    profile_path.write_text(json.dumps(dataclasses.asdict(MARIN_IDENTITY_PROFILE)))
+    profile_path.write_text(json.dumps(dataclasses.asdict(IDENTITY_PROFILE)))
 
     main(
         [

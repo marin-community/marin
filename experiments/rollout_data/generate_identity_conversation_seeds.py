@@ -4,7 +4,6 @@
 """Generate reusable seeds for synthetic model-identity conversations."""
 
 import argparse
-import dataclasses
 import json
 import random
 from collections.abc import Iterator, Mapping, Sequence
@@ -13,6 +12,7 @@ from enum import StrEnum
 from typing import Any, TypeVar
 
 from rigging.filesystem import StoragePath
+from zephyr.writers import write_jsonl_file
 
 UNKNOWN_ANSWER = "That information is not known, so I should not guess."
 
@@ -36,29 +36,6 @@ class IdentityProfile:
                 raise ValueError(f"{field} must not be empty")
         if not self.unknown_facts:
             raise ValueError("unknown_facts must not be empty")
-
-
-MARIN_IDENTITY_PROFILE = IdentityProfile(
-    profile_id="marin-latest-moe",
-    model_name="Marin's Latest MoE",
-    developer="the Marin Community",
-    trained_by="the Marin Community",
-    maintained_by="developers from Open Athena, Stanford, and many other institutions",
-    ecosystem_contributors=("NVIDIA", "AI2"),
-    training_data_models=("DeepSeek", "Kimi", "GLM"),
-    unknown_facts=(
-        "the model's aliases or version identifier",
-        "the base-model lineage",
-        "the exact training stages",
-        "the release date",
-        "the license",
-        "the supported modalities",
-        "the context length",
-        "architecture details beyond the model's supplied name",
-        "the deployment provider",
-        "the funding sources",
-    ),
-)
 
 
 class Facet(StrEnum):
@@ -471,13 +448,6 @@ def load_identity_profile(path: StoragePath) -> IdentityProfile:
         return identity_profile_from_mapping(json.load(handle))
 
 
-def _write_seeds(path: StoragePath, seeds: Iterator[ConversationSeed]) -> None:
-    path.parent.mkdirs()
-    with path.open("w") as handle:
-        for seed in seeds:
-            handle.write(json.dumps(dataclasses.asdict(seed), ensure_ascii=False) + "\n")
-
-
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=True)
@@ -495,7 +465,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         human_phrasings=phrasings,
         identity_profile=identity_profile,
     )
-    _write_seeds(StoragePath(args.output), seeds)
+    write_jsonl_file(seeds, args.output)
 
 
 if __name__ == "__main__":

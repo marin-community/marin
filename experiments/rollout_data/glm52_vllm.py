@@ -292,7 +292,6 @@ def submit_glm52(ctx, launch: Glm52LaunchConfig):
         ),
         environment=EnvironmentSpec(
             setup_scripts=[default_setup_script(packages=["marin-core"])],
-            env_vars={"VLLM_USE_FLASHINFER_SAMPLER": "0"},
         ),
         ports=[RAY_PORT, HTTP_PORT],
         coscheduling=CoschedulingConfig(group_by="nvlink.domain"),
