@@ -22,6 +22,14 @@ from typing import Any
 import numpy as np
 import requests
 
+try:
+    from tests.cluster.vllm.backend_parity import TokenScore, parity_from_logprob_map
+except ModuleNotFoundError:
+    # When this file is executed by path in the isolated vLLM environment,
+    # its own directory is importable but the repository's namespace package
+    # may lose to an installed package named ``tests``.
+    from backend_parity import TokenScore, parity_from_logprob_map
+
 MAX_PROBABILITY_ERROR = 0.075
 HTTP_TIMEOUT_SECONDS = 600
 
@@ -187,19 +195,23 @@ def _score_logprobs(expected: np.ndarray, payload: dict[str, Any]) -> dict[str, 
     actual = _top_logprobs(payload)
     if set(actual) != set(range(expected.size)):
         raise AssertionError(f"server returned {len(actual)}/{expected.size} vocabulary logprobs")
-    actual_row = np.asarray([actual[index] for index in range(expected.size)], dtype=np.float64)
-    probability_errors = np.abs(np.exp(actual_row) - np.exp(expected.astype(np.float64)))
-    maximum_error = float(probability_errors.max())
     expected_greedy = int(expected.argmax())
     actual_greedy = int(payload["choices"][0]["token_ids"][0])
-    if actual_greedy != expected_greedy:
-        raise AssertionError(f"greedy token {actual_greedy} != frozen token {expected_greedy}")
-    if maximum_error > MAX_PROBABILITY_ERROR:
-        raise AssertionError(f"maximum probability error {maximum_error} > {MAX_PROBABILITY_ERROR}")
+    parity = parity_from_logprob_map(
+        "grug-exact-reference",
+        tuple(TokenScore(logprob=float(logprob), token_id=token_id) for token_id, logprob in enumerate(expected)),
+        actual_greedy,
+        actual,
+        backend_rank=0,
+    )
+    parity.assert_matches(max_probability_error=MAX_PROBABILITY_ERROR)
     return {
         "greedy_token_id": actual_greedy,
-        "max_probability_error": maximum_error,
-        "probability_l1_error": float(probability_errors.sum()),
+        "expected_greedy_token_id": expected_greedy,
+        "greedy_token_agrees": actual_greedy == expected_greedy,
+        "golden_probability_gap_to_greedy": parity.golden_probability_gap_to_greedy,
+        "max_probability_error": parity.max_probability_error,
+        "probability_l1_error": parity.top_probability_l1_error,
         "tolerance": MAX_PROBABILITY_ERROR,
     }
 
