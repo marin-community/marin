@@ -20,7 +20,8 @@ order, 6.711B-token horizon, optimizer schedule, and 16-GB200 topology.
 - `pilot_aggressive_source.py`: the 128-update `d1536/L1` throughput gate.
 - `pilot_aggressive_growth.py`: 32 `d1536/L1` updates followed by 16 updates on
   the widened `d3072/L48` target.
-- `wd1.py`: the 90/10 narrow-shallow to wide-deep arm.
+- `wd1.py`: the 95/5 narrow-shallow to wide-deep arm, with all 320 wide/deep
+  updates covering the terminal decay.
 - `c_short.py`: the 3,200-update full-depth WSD control.
 
 The production arms use the 0.625x candidate selected by the 128-update control

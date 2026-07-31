@@ -24,6 +24,7 @@ from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint, resolve_checkpointer_output_path
 
 from experiments.grug.coupon_clipping.config import (
+    DECAY_STEPS,
     NUM_EXPERTS,
     SELECTED_LEARNING_RATE,
     SHORT_CONTROL_STEPS,
@@ -62,6 +63,7 @@ class CouponClippingLaunchConfig:
     tracker: TrackerConfig
     steps: int
     optimizer_num_train_steps: int = TRAIN_STEPS
+    optimizer_decay_steps: int = DECAY_STEPS
     initialize_from: str | None = None
     depth_growth: DepthGrowthConfig | None = None
     learning_rate: CouponClippingLearningRate = SELECTED_LEARNING_RATE
@@ -118,7 +120,7 @@ def run_coupon_clipping_trial(config: CouponClippingLaunchConfig) -> None:
             model=config.model,
             data=config.data,
             resources=config.resources,
-            optimizer=build_optimizer_config(config.learning_rate),
+            optimizer=build_optimizer_config(config.learning_rate, decay_steps=config.optimizer_decay_steps),
             optimizer_num_train_steps=config.optimizer_num_train_steps,
             depth_growth=config.depth_growth,
             trainer=grug_trainer,

@@ -11,7 +11,9 @@ from levanter.tracker.json_logger import JsonLoggerConfig
 
 from experiments.grug.coupon_clipping import launch
 from experiments.grug.coupon_clipping.config import (
+    AGGRESSIVE_DECAY_STEPS,
     AGGRESSIVE_GROWTH_CONFIG,
+    AGGRESSIVE_TRANSITION_STEP,
     DECAY_STEPS,
     SEGMENT_LENGTHS,
     SELECTED_LEARNING_RATE,
@@ -110,6 +112,7 @@ def test_pilot_keeps_production_mesh_allocator_and_optimizer_horizon(monkeypatch
     assert run_config.trainer.trainer.watch.watch_targets == ["grads"]
     assert run_config.trainer.trainer.watch.interval == 8
     assert run_config.optimizer_num_train_steps == TRAIN_STEPS
+    assert run_config.optimizer.decay == DECAY_STEPS
     assert DECAY_STEPS < run_config.optimizer_num_train_steps
 
 
@@ -132,6 +135,7 @@ def test_depth_launch_propagates_transition_contract(monkeypatch, tmp_path):
         resources=launch._TRAIN_RESOURCES,
         tracker=JsonLoggerConfig(logger_name="test.coupon_clipping"),
         steps=PILOT_SOURCE_STEPS + PILOT_GROWN_STEPS,
+        optimizer_decay_steps=320,
         initialize_from="s3://example/source/checkpoints",
         depth_growth=growth,
     )
@@ -142,6 +146,7 @@ def test_depth_launch_propagates_transition_contract(monkeypatch, tmp_path):
     assert run_config.trainer.trainer.initialize_from == "s3://example/source/checkpoints"
     assert run_config.depth_growth == growth
     assert run_config.optimizer_num_train_steps == TRAIN_STEPS
+    assert run_config.optimizer.decay == 320
 
 
 def test_depth_artifacts_chain_source_before_growth():
@@ -177,6 +182,9 @@ def test_aggressive_source_attacks_fixed_compute_and_preserves_target_contract()
     assert target_accounting.forward_flops_per_token / source_accounting.forward_flops_per_token > 25
     assert AGGRESSIVE_GROWTH_CONFIG.width_expansion_factor == 2
     assert AGGRESSIVE_GROWTH_CONFIG.new_layer_initialization is NewLayerInitialization.IDENTITY_PREFIX
+    assert AGGRESSIVE_TRANSITION_STEP == 6080
+    assert AGGRESSIVE_DECAY_STEPS == 320
+    assert build_optimizer_config(decay_steps=AGGRESSIVE_DECAY_STEPS).decay == AGGRESSIVE_DECAY_STEPS
 
 
 def test_coupon_optimizer_routes_segmented_model_parameters_to_intended_groups():

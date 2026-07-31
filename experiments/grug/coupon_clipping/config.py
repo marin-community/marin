@@ -44,8 +44,9 @@ DEPTH_SOURCE_LAYERS = 1
 DEPTH_TRANSITION_STEP = 4480
 DEPTH_TRANSITION_DATA_OFFSET = DEPTH_TRANSITION_STEP * TRAIN_BATCH_SIZE
 AGGRESSIVE_WIDTH_EXPANSION_FACTOR = 2
-AGGRESSIVE_TRANSITION_STEP = 5760
+AGGRESSIVE_TRANSITION_STEP = 6080
 AGGRESSIVE_TRANSITION_DATA_OFFSET = AGGRESSIVE_TRANSITION_STEP * TRAIN_BATCH_SIZE
+AGGRESSIVE_DECAY_STEPS = TRAIN_STEPS - AGGRESSIVE_TRANSITION_STEP
 
 MUONH_LEARNING_RATE = 0.006423539
 ADAM_LEARNING_RATE = 0.001482355
@@ -153,8 +154,10 @@ def build_growth_source_model_config(
 
 def build_optimizer_config(
     learning_rate: CouponClippingLearningRate = SELECTED_LEARNING_RATE,
+    *,
+    decay_steps: int = DECAY_STEPS,
 ) -> GrugMoeMuonHConfig:
-    """Return the pre-registered 6.71B-token MuonH/Adam schedule."""
+    """Return the fixed MuonH/Adam rates with the requested terminal decay."""
     muonh_learning_rate, adam_learning_rate = _LEARNING_RATES[learning_rate]
     return GrugMoeMuonHConfig(
         learning_rate=muonh_learning_rate,
@@ -164,7 +167,7 @@ def build_optimizer_config(
         epsilon=7.7408e-16,
         lr_schedule="linear",
         warmup=WARMUP_STEPS,
-        decay=DECAY_STEPS,
+        decay=decay_steps,
         min_lr_ratio=0.05,
         max_grad_norm=None,
     )

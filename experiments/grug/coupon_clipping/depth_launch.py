@@ -13,9 +13,11 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem import prefix_join
 
 from experiments.grug.coupon_clipping.config import (
+    AGGRESSIVE_DECAY_STEPS,
     AGGRESSIVE_GROWTH_CONFIG,
     AGGRESSIVE_TRANSITION_STEP,
     AVERAGE_SHARED_INTERMEDIATE_DIM,
+    DECAY_STEPS,
     DEPTH_GROWTH_CONFIG,
     DEPTH_SOURCE_LAYERS,
     DEPTH_TRANSITION_STEP,
@@ -66,6 +68,7 @@ def _build_source_checkpoint(
     steps: int,
     version: str | None,
     run_kind: CouponClippingRunKind,
+    optimizer_decay_steps: int = DECAY_STEPS,
 ) -> ArtifactStep[LevanterCheckpoint]:
     step_name = f"grug/coupon-clipping/{run_id}"
     resolved_version = resolve_version(step_name, version)
@@ -91,6 +94,7 @@ def _build_source_checkpoint(
                 replicate_path=ctx.output_path,
             ),
             steps=steps,
+            optimizer_decay_steps=optimizer_decay_steps,
             watch_interval=8 if run_kind is CouponClippingRunKind.PILOT else 0,
         )
 
@@ -114,6 +118,7 @@ def _build_growth_target_checkpoint(
     version: str | None,
     run_kind: CouponClippingRunKind,
     source_checkpoint_root: str | None = None,
+    optimizer_decay_steps: int = DECAY_STEPS,
 ) -> ArtifactStep[LevanterCheckpoint]:
     if (source is None) == (source_checkpoint_root is None):
         raise ValueError("exactly one source artifact or checkpoint root is required")
@@ -147,6 +152,7 @@ def _build_growth_target_checkpoint(
                 replicate_path=ctx.output_path,
             ),
             steps=steps,
+            optimizer_decay_steps=optimizer_decay_steps,
             initialize_from=initialize_from,
             depth_growth=growth,
             watch_interval=8 if run_kind is CouponClippingRunKind.PILOT else 0,
@@ -281,13 +287,14 @@ def build_aggressive_growth_pilot_checkpoint(*, version: str | None = None) -> A
 
 
 def build_aggressive_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
-    """Build the 90% d1536/L1 to 10% d3072/L48 aggressive growth arm."""
+    """Build the 95% d1536/L1 to 5% d3072/L48 aggressive growth arm."""
     source = _build_source_checkpoint(
         model=build_aggressive_source_model_config(),
         run_id=f"ccx-wd1-d1536-l1-source-step{AGGRESSIVE_TRANSITION_STEP}",
         steps=AGGRESSIVE_TRANSITION_STEP,
         version=version,
         run_kind=CouponClippingRunKind.FULL,
+        optimizer_decay_steps=AGGRESSIVE_DECAY_STEPS,
     )
     return _build_growth_target_checkpoint(
         source,
@@ -296,4 +303,5 @@ def build_aggressive_checkpoint(*, version: str | None = None) -> ArtifactStep[L
         growth=AGGRESSIVE_GROWTH_CONFIG,
         version=version,
         run_kind=CouponClippingRunKind.FULL,
+        optimizer_decay_steps=AGGRESSIVE_DECAY_STEPS,
     )
