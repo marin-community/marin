@@ -14,8 +14,8 @@ import pytest
 from fray.actor import ActorUnavailableError
 from fray.types import ActorConfig, ResourceConfig
 from iris.cluster.types import JobName
-from iris.test_util import SentinelFile
 from iris.rpc import job_pb2
+from iris.test_util import SentinelFile
 from rigging.timing import Duration
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
@@ -127,6 +127,8 @@ def test_memory_store_routes_existing_partitions_and_preserves_lookup_order(loca
             (0, (0, 2), 4),
             (1, (1, 3), 2),
         ]
+        assert all(stat.load_cpu_time >= 0 for stat in stats)
+        assert all(stat.load_elapsed >= 0 for stat in stats)
 
 
 def test_memory_store_rejects_hash_that_disagrees_with_existing_partition(local_client, tmp_path):
@@ -138,9 +140,7 @@ def test_memory_store_rejects_hash_that_disagrees_with_existing_partition(local_
 
 
 def test_memory_store_rejects_duplicate_key(local_client, tmp_path):
-    dataset = Dataset.from_list([[((0, "same"), "first"), ((0, "same"), "second")]]).flat_map(
-        _partition_rows
-    )
+    dataset = Dataset.from_list([[((0, "same"), "first"), ((0, "same"), "second")]]).flat_map(_partition_rows)
 
     with _store_context(local_client, tmp_path) as context:
         with pytest.raises(DuplicateMemoryStoreKey):

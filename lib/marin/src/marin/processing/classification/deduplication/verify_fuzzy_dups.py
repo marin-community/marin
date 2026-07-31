@@ -481,6 +481,10 @@ def verify_fuzzy_dups(
     output_counters[f"{_COUNTER_PREFIX}/memory_store/max_actor_serialized_bytes"] = max(
         stat.serialized_bytes for stat in store_stats
     )
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/load_cpu_time"] = sum(stat.load_cpu_time for stat in store_stats)
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/max_actor_load_elapsed"] = max(
+        stat.load_elapsed for stat in store_stats
+    )
     logger.info(
         "Verified %d fuzzy duplicates from %d candidate members across %d shards",
         verified,

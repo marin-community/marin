@@ -48,6 +48,8 @@ class MemoryStoreActorStats:
     source_partitions: tuple[int, ...]
     num_items: int
     serialized_bytes: int
+    load_cpu_time: float
+    load_elapsed: float
 
 
 def _source_partition(hash_key: Callable[[K], int], key: K, num_source_partitions: int) -> int:
@@ -94,6 +96,8 @@ class _MemoryStoreActor:
         num_actors: int,
         max_actor_bytes: int,
     ):
+        load_started = time.monotonic()
+        load_cpu_started = time.process_time()
         actor_index = current_actor().index
         source_data: dict[int, list[Any]] = {
             partition: [] for partition in range(num_source_partitions) if partition % num_actors == actor_index
@@ -142,13 +146,18 @@ class _MemoryStoreActor:
             source_partitions=tuple(source_data),
             num_items=len(values),
             serialized_bytes=serialized_bytes,
+            load_cpu_time=time.process_time() - load_cpu_started,
+            load_elapsed=time.monotonic() - load_started,
         )
         logger.info(
-            "Memory-store actor %d loaded %d items (%d bytes) from source partitions %s",
+            "Memory-store actor %d loaded %d items (%d bytes) from source partitions %s "
+            "in %.2f CPU-seconds and %.2f seconds",
             actor_index,
             len(values),
             serialized_bytes,
             tuple(source_data),
+            self._stats.load_cpu_time,
+            self._stats.load_elapsed,
         )
 
     def lookup(self, encoded_keys: list[bytes]) -> list[bytes | None]:
@@ -209,9 +218,7 @@ class MemoryStore(Generic[K, V]):
         }
         futures = {
             actor_index: _call_with_recovery(
-                lambda actor_index=actor_index: self.actors[actor_index].lookup.remote(
-                    encoded_requests[actor_index]
-                ),
+                lambda actor_index=actor_index: self.actors[actor_index].lookup.remote(encoded_requests[actor_index]),
                 actor_index,
                 self.recovery_timeout,
             )
@@ -224,7 +231,9 @@ class MemoryStore(Generic[K, V]):
                 encoded_values = futures[actor_index].result()
             except ActorUnavailableError:
                 encoded_values = _call_with_recovery(
-                    lambda: self.actors[actor_index].lookup.remote(encoded_requests[actor_index]).result(),
+                    lambda actor_index=actor_index: self.actors[actor_index]
+                    .lookup.remote(encoded_requests[actor_index])
+                    .result(),
                     actor_index,
                     self.recovery_timeout,
                 )
@@ -253,7 +262,7 @@ class MemoryStore(Generic[K, V]):
             except ActorUnavailableError:
                 stats.append(
                     _call_with_recovery(
-                        lambda: actor.stats.remote().result(),
+                        lambda actor=actor: actor.stats.remote().result(),
                         actor_index,
                         self.recovery_timeout,
                     )
