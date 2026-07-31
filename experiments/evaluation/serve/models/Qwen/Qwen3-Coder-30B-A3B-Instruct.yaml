@@ -12,5 +12,7 @@ serve:
   tool_call_parser: qwen3_coder
   vllm_extra_args:
   - --enable-prefix-caching
+  - --moe-backend
+  - triton
   - --override-generation-config
   - '{"temperature":0.7,"top_p":0.8,"top_k":20,"repetition_penalty":1.05}'
