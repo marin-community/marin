@@ -330,9 +330,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sample-prefix", default=SAMPLE_PREFIX)
     parser.add_argument("--output-prefix", required=True)
-    parser.add_argument(
+    candidate_input = parser.add_mutually_exclusive_group()
+    candidate_input.add_argument(
         "--candidate-prefix",
         help="Optional shared prefix for MinHash and candidate artifacts; defaults to --output-prefix",
+    )
+    candidate_input.add_argument(
+        "--candidate-artifact",
+        help="Existing FuzzyDupsAttrData artifact to reuse instead of running MinHash and clustering",
     )
     parser.add_argument("--sources", default="all")
     parser.add_argument("--max-workers", type=int, default=DEFAULT_MAX_WORKERS)
@@ -358,25 +363,34 @@ def main() -> None:
 
     configure_logging(logging.INFO)
     output_prefix = args.output_prefix.rstrip("/")
-    candidate_prefix = (args.candidate_prefix or output_prefix).rstrip("/")
     normalized_steps = sample_sources(args.sample_prefix, _parse_source_names(args.sources))
-    minhash_steps = [
-        compute_minhash_attrs_step(
-            name=f"datakit/fuzzy_verification_testbed/minhash/{source_name}",
-            normalize=normalize_step,
-            worker_resources=WORKER_RESOURCES,
-            max_workers=args.max_workers,
-            override_output_path=prefix_join(candidate_prefix, f"minhash/{source_name}"),
+    if args.candidate_artifact:
+        candidate_artifact = args.candidate_artifact.rstrip("/")
+        candidates_step = StepSpec(
+            name="datakit/fuzzy_verification_testbed/import_candidates",
+            hash_attrs={"artifact": candidate_artifact},
+            fn=lambda _output_path: read_artifact(candidate_artifact, FuzzyDupsAttrData),
+            override_output_path=prefix_join(output_prefix, "candidate-artifact"),
         )
-        for source_name, normalize_step in normalized_steps.items()
-    ]
-    candidates_step = compute_fuzzy_dups_attrs_step(
-        name="datakit/fuzzy_verification_testbed/candidates",
-        minhash_steps=minhash_steps,
-        max_parallelism=args.max_workers,
-        worker_resources=WORKER_RESOURCES,
-        override_output_path=prefix_join(candidate_prefix, "candidates"),
-    )
+    else:
+        candidate_prefix = (args.candidate_prefix or output_prefix).rstrip("/")
+        minhash_steps = [
+            compute_minhash_attrs_step(
+                name=f"datakit/fuzzy_verification_testbed/minhash/{source_name}",
+                normalize=normalize_step,
+                worker_resources=WORKER_RESOURCES,
+                max_workers=args.max_workers,
+                override_output_path=prefix_join(candidate_prefix, f"minhash/{source_name}"),
+            )
+            for source_name, normalize_step in normalized_steps.items()
+        ]
+        candidates_step = compute_fuzzy_dups_attrs_step(
+            name="datakit/fuzzy_verification_testbed/candidates",
+            minhash_steps=minhash_steps,
+            max_parallelism=args.max_workers,
+            worker_resources=WORKER_RESOURCES,
+            override_output_path=prefix_join(candidate_prefix, "candidates"),
+        )
     verification_params = FuzzyVerificationParams()
     verified_step = verify_fuzzy_dups_step(
         name="datakit/fuzzy_verification_testbed/verified",
