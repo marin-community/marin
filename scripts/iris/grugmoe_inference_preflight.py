@@ -1618,8 +1618,9 @@ def _unattended_worker_argv(
     run_id: str,
     image: str,
     marin_commit: str,
+    coscheduling: CoschedulingConfig | None,
 ) -> list[str]:
-    return [
+    argv = [
         "python",
         "-m",
         "scripts.iris.grugmoe_inference_preflight",
@@ -1643,6 +1644,9 @@ def _unattended_worker_argv(
         "--minimum-generated-tokens",
         str(args.minimum_generated_tokens),
     ]
+    if coscheduling is not None:
+        argv.extend(["--submitted-coscheduling", coscheduling.group_by])
+    return argv
 
 
 def submit_unattended(args: argparse.Namespace) -> dict[str, Any]:
@@ -1660,12 +1664,14 @@ def submit_unattended(args: argparse.Namespace) -> dict[str, Any]:
     checkout = _clean_pushed_checkout()
     image = _immutable_image(args.task_image)
     run_id = args.run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    coscheduling = CoschedulingConfig(group_by=UNATTENDED_COSCHEDULING) if case.node_count > 1 else None
     worker_argv = _unattended_worker_argv(
         args,
         case=case,
         run_id=run_id,
         image=image,
         marin_commit=checkout["commit"],
+        coscheduling=coscheduling,
     )
     resources = ResourceSpec(
         cpu=64,
@@ -1683,7 +1689,7 @@ def submit_unattended(args: argparse.Namespace) -> dict[str, Any]:
                 env_vars={"PYTHONUNBUFFERED": "1"},
             ),
             replicas=case.node_count,
-            coscheduling=(CoschedulingConfig(group_by=UNATTENDED_COSCHEDULING) if case.node_count > 1 else None),
+            coscheduling=coscheduling,
             max_retries_failure=0,
             max_retries_preemption=0,
             max_task_failures=0,
@@ -1697,7 +1703,7 @@ def submit_unattended(args: argparse.Namespace) -> dict[str, Any]:
             "case": case.name,
             "mode": args.mode,
             "replicas": case.node_count,
-            "coscheduling": UNATTENDED_COSCHEDULING if case.node_count > 1 else None,
+            "coscheduling": coscheduling.group_by if coscheduling is not None else None,
             "task_image": image,
             "checkout": checkout,
             "artifact_prefix": f"{ARTIFACT_ROOT}/{case.name}/{run_id}/",
@@ -1909,8 +1915,9 @@ def _unattended_placement_component(
     downward-API ``advertise_host`` is the Kubernetes node IP. Each task requests
     all four GPUs on a four-GPU GB200 node. Distinct advertise hosts therefore
     prove distinct nodes even though the K8s backend does not set
-    ``IRIS_WORKER_ID``. The coscheduling record proves that Kueue admitted those
-    nodes under its hard ``nvlink.domain`` topology request.
+    ``IRIS_WORKER_ID``. The coscheduling record is passed to each worker from
+    the same ``CoschedulingConfig`` object submitted to Iris, so it proves the
+    job requested Kueue's hard ``nvlink.domain`` topology.
     """
     task_indexes = {int(endpoint["task_index"]) for endpoint in rendezvous if endpoint.get("task_index", "").isdigit()}
     advertise_hosts = sorted({endpoint["advertise_host"] for endpoint in rendezvous if endpoint.get("advertise_host")})
@@ -1929,6 +1936,9 @@ def _unattended_placement_component(
         "passed": passed,
         "required_coscheduling": UNATTENDED_COSCHEDULING if expected_tasks > 1 else None,
         "topology_enforcement": "Kueue hard podset-required-topology" if expected_tasks > 1 else None,
+        "coscheduling_evidence": (
+            "worker argument derived from submitted Iris CoschedulingConfig" if expected_tasks > 1 else None
+        ),
         "node_identity": "IRIS_ADVERTISE_HOST=status.podIP=node IP because cw-us-east-08a uses host_network=true",
         "node_shape": "one task requests all 4 GPUs on one 4-GPU GB200 node",
         "endpoints": rendezvous,
@@ -1969,6 +1979,21 @@ def _acceptance_components(load: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _validate_submitted_coscheduling(*, expected_tasks: int, submitted: str | None) -> None:
+    required = UNATTENDED_COSCHEDULING if expected_tasks > 1 else None
+    if submitted != required:
+        raise RuntimeError(f"Iris submitted coscheduling {submitted!r}; expected {required!r}")
+
+
+def _attended_result_passed(
+    mode: str,
+    *,
+    correctness: dict[str, Any],
+    load: dict[str, Any] | None,
+) -> bool:
+    return bool(correctness.get("passed")) and (mode != "acceptance" or bool(load and load.get("passed")))
+
+
 def run_unattended_worker(args: argparse.Namespace) -> dict[str, Any]:
     info = get_job_info()
     if info is None:
@@ -1981,6 +2006,10 @@ def run_unattended_worker(args: argparse.Namespace) -> dict[str, Any]:
     )
     if info.num_tasks != case.node_count:
         raise RuntimeError(f"{case.name} requires {case.node_count} tasks, Iris supplied {info.num_tasks}")
+    _validate_submitted_coscheduling(
+        expected_tasks=info.num_tasks,
+        submitted=args.submitted_coscheduling,
+    )
     rank = info.task_index
     run_id = args.run_id
     prefix = f"{ARTIFACT_ROOT}/{case.name}/{run_id}/"
@@ -2160,7 +2189,7 @@ def run_unattended_worker(args: argparse.Namespace) -> dict[str, Any]:
             "task_image": args.task_image,
             "marin_commit": args.marin_commit,
             "vllm_commit": VLLM_SHA,
-            "coscheduling": UNATTENDED_COSCHEDULING if info.num_tasks > 1 else None,
+            "coscheduling": args.submitted_coscheduling,
             "rendezvous": rendezvous,
             "vllm_alive_before_stop": alive_before_stop,
             "vllm_returncode_after_stop": server.process.returncode if server is not None else None,
@@ -2239,7 +2268,7 @@ def run_unattended_worker(args: argparse.Namespace) -> dict[str, Any]:
             "iris": {
                 "job_id": str(info.job_id),
                 "task_count": info.num_tasks,
-                "coscheduling": UNATTENDED_COSCHEDULING if info.num_tasks > 1 else None,
+                "coscheduling": args.submitted_coscheduling,
                 "priority": Priority.INTERACTIVE.value,
             },
             "files": {
@@ -2398,9 +2427,26 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
                     minimum_seconds=args.minimum_seconds,
                     minimum_generated_tokens=args.minimum_generated_tokens,
                 )
+        result["passed"] = _attended_result_passed(
+            args.mode,
+            correctness=result["correctness"],
+            load=result.get("load"),
+        )
+        if not result["passed"]:
+            raise RuntimeError(
+                "attended preflight component failed: "
+                + json.dumps(
+                    {
+                        "correctness": result["correctness"].get("passed"),
+                        "load": (result.get("load") or {}).get("passed"),
+                    },
+                    sort_keys=True,
+                )
+            )
         result["status"] = "passed"
     except Exception as exc:
         result["status"] = "failed"
+        result["passed"] = False
         result["error"] = {"type": type(exc).__name__, "message": str(exc)}
         raise
     finally:
@@ -2439,6 +2485,7 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
                 }
                 if result["status"] == "passed":
                     result["status"] = "failed"
+                    result["passed"] = False
                     result_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
                     raise
                 result_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
@@ -2509,6 +2556,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     worker.add_argument("--run-id", required=True)
     worker.add_argument("--task-image", required=True)
     worker.add_argument("--marin-commit", required=True)
+    worker.add_argument("--submitted-coscheduling")
     worker.add_argument("--server-timeout", type=float, default=SERVER_TIMEOUT_SECONDS)
     worker.add_argument("--minimum-seconds", type=float, default=ACCEPTANCE_MINIMUM_SECONDS)
     worker.add_argument(

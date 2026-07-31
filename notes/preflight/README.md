@@ -25,8 +25,8 @@ it is not trained-model performance evidence.
 - vLLM evidence commit:
   `2c2bef33dfbd7aef3c9d4433a7e4110f77d56a4a`
 - vLLM reviewed branch head:
-  `cdfde7e24d8aa3339b4f22444db7b45d43e018fa` (post-evidence fail-closed
-  tensor-shape guard only)
+  `73b6fc9cc20c2712ec8798dd017d8a5bc9f55b5b` (post-evidence fail-closed
+  tensor-rank and expert-count guards only)
 - Training oracle:
   `fd3e9bc5b428633027f944be7fdf1136567db028`
 - Immutable task image:

@@ -44,7 +44,7 @@ pinned the exact pushed vLLM evidence SHA.
 | vLLM branch | [`grugmoe-inference-preflight`](https://github.com/marin-community/vllm/tree/grugmoe-inference-preflight) |
 | vLLM base | `afb26719464d5957e695bde478ae93a160b11d14` |
 | vLLM evidence commit | `2c2bef33dfbd7aef3c9d4433a7e4110f77d56a4a` |
-| vLLM reviewed branch head | `cdfde7e24d8aa3339b4f22444db7b45d43e018fa` |
+| vLLM reviewed branch head | `73b6fc9cc20c2712ec8798dd017d8a5bc9f55b5b` |
 | Training semantic oracle | `fd3e9bc5b428633027f944be7fdf1136567db028` |
 | Cluster / priority | `cw-us-east-08a` / `interactive` |
 | Task image | `ghcr.io/marin-community/iris-task@sha256:5e2a69af91a000cb999e6ff0d92933874bd3142eb45469fc64fc7a3f5db64fbb` |
@@ -55,10 +55,11 @@ pinned the exact pushed vLLM evidence SHA.
 | Correctness workload SHA-256 | `882b51d0959d8dd6e875d04be49d197ceef3e4c4e1d3c9cd141c6166b5fe5dc1` |
 | Dependency lock SHA-256 | `600b2abe4b5e8027c3783adc8cc45924c71be1a357c1e23eac6ab9049d5f6a14` |
 
-The reviewed vLLM head is one commit after the live-evidence SHA. It only
-rejects malformed unstacked expert tensors and adds a regression test. Every
-in-scope fixture/export tensor is stacked 3D, so the measured serving path and
-the evidence pin remain unchanged.
+The reviewed vLLM head is two commits after the live-evidence SHA. Those
+commits only reject malformed unstacked tensors or stacks with the wrong
+global expert count, with regression tests for both cases. Every in-scope
+fixture/export tensor is a correctly sized 3D stack, so the measured serving
+path and the evidence pin remain unchanged.
 
 The multi-architecture image is a generic Iris task image. The unattended
 worker synchronizes the pushed source named in the manifest at job start.
@@ -90,6 +91,11 @@ the request/correctness/KV harness, and one zero-retry unattended Iris gang
 entrypoint. The top-level result is the literal conjunction of placement,
 all-rank health, correctness, duration, token count, repeatability, and
 artifact readback.
+
+For future unattended runs, the coscheduling value recorded by each worker is
+derived from the same `CoschedulingConfig` object passed to Iris, rather than
+from a second local constant. The accepted run also has direct node-label
+evidence below: all four distinct nodes were in one measured NVLink domain.
 
 ## Assumption ledger
 
@@ -205,7 +211,7 @@ KV summary SHA-256:
 Prefix caching remained enabled. Both observations held exactly one active
 request on DP rank 0.
 
-| Final tokens | Local / global / SConv active blocks | Attention active bytes | SConv active bytes | Physical active bytes | Reserved physical bytes | Predicted attention bytes | Prediction gap |
+| Target final tokens | Local / global / SConv active blocks | Attention active bytes | SConv active bytes | Physical active bytes | Reserved physical bytes | Predicted attention bytes | Prediction gap |
 |---:|---:|---:|---:|---:|---:|---:|---:|
 | 6,144 | 33 / 180 / 2 | 271,319,040 | 28,311,552 | 299,630,592 | 61,899,276,288 | 276,824,064 | 1.9886% |
 | 65,536 | 33 / 2,039 / 2 | 1,733,296,128 | 28,311,552 | 1,761,607,680 | 61,899,276,288 | 1,736,441,856 | 0.1812% |
@@ -214,6 +220,11 @@ Local active blocks plateau at the 512-token window. Global blocks grow with
 context. SConv state also stays bounded. Physical active bytes equal the
 reported group payload, so there is no unexplained active-use gap, let alone
 one above 10%.
+
+The block counts are the last live mid-request observations as each request
+approached its target final length. Active occupancy disappears when a request
+settles; exact completed-length arithmetic would be 192 and 2,048 global
+blocks rather than the observed 180 and 2,039.
 
 The large reserved/active gap is real but has a different meaning: vLLM
 reserves a 61.9 GB page pool up front and then assigns only the active pages
@@ -349,7 +360,9 @@ parents, but the goal forbade a retry or an object copy. Therefore:
 1. **Trained-checkpoint access.** The exact serving implementation is proven
    with frozen and deterministic dummy tensors, but the pinned Snowball export
    did not reach load. Review and validate object-store access before calling
-   any later run trained-model evidence.
+   any later run trained-model evidence. A training export that includes dense
+   MTP-head tensors also needs an explicit strip-at-export or logged skip policy
+   before that gate; the exact loader currently fails closed on unknown tensors.
 2. **Representative routing.** Dummy routing is highly skewed. Future
    architecture results need model routing histograms and EP max/mean beside
    throughput. The cyclic balanced case validates instrumentation only.
@@ -376,7 +389,7 @@ uv run pytest -q \
   scripts/iris/tests/test_grugmoe_inference_preflight.py \
   tests/inference/test_serve.py
 
-95 passed
+102 passed
 ```
 
 The repository-specific `./infra/pre-commit.py` checks and
@@ -390,7 +403,7 @@ PYTHONPATH=$PWD \
   -m pytest -q tests/models/test_grugmoe.py \
   tests/v1/core/test_prefix_caching.py
 
-100 passed, 2 skipped
+101 passed, 2 skipped
 ```
 
 All applicable vLLM pre-commit hooks and `git diff --check` pass for the ten
@@ -399,5 +412,12 @@ changed files.
 The first four local Max-effort goal reviews produced three passes and one
 request for two narrow corrections: reject malformed unstacked expert tensors,
 and describe the shared-expert equivalence measurement precisely. Both are
-resolved in the reviewed vLLM head and this findings revision. Final review is
-run after these corrections and clean validation.
+resolved.
+
+A second clean-head round produced two passes and one request for three
+fail-closed corrections: make the attended result honor component failures,
+derive worker topology evidence from the submitted Iris configuration, and
+reject a stacked tensor with the wrong expert count. The fourth provider hit
+its billing-cycle quota before returning a verdict. All three code findings are
+resolved with regression tests; the final four-review gate follows this clean
+validation and commit.

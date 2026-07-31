@@ -26,11 +26,13 @@ from scripts.iris.dev_gpu import CoreweaveTarget, DevGpuState, PodRef, Priority
 from scripts.iris.grugmoe_inference_preflight import (
     LOCAL_DP_SIZE,
     _acceptance_components,
+    _attended_result_passed,
     _free_port,
     _immutable_image,
     _record_completion,
     _unattended_placement_component,
     _unattended_worker_argv,
+    _validate_submitted_coscheduling,
     _validate_unattended_mode,
     boundary_requests,
     parse_args,
@@ -381,6 +383,7 @@ def test_unattended_worker_runs_as_a_repo_module() -> None:
         run_id="unit",
         image=image,
         marin_commit="b" * 40,
+        coscheduling=None,
     )
     assert command[:4] == [
         "python",
@@ -389,6 +392,40 @@ def test_unattended_worker_runs_as_a_repo_module() -> None:
         "worker",
     ]
     assert command[command.index("--marin-commit") + 1] == "b" * 40
+    assert "--submitted-coscheduling" not in command
+
+
+def test_unattended_worker_records_submitted_coscheduling() -> None:
+    image = "example.invalid/task@sha256:" + "a" * 64
+    args = parse_args(
+        [
+            "submit",
+            "--case",
+            "reference-ep8",
+            "--task-image",
+            image,
+        ]
+    )
+    submitted = grug_preflight.CoschedulingConfig(group_by="nvlink.domain")
+
+    command = _unattended_worker_argv(
+        args,
+        case=CASES["reference-ep8"],
+        run_id="unit",
+        image=image,
+        marin_commit="b" * 40,
+        coscheduling=submitted,
+    )
+
+    assert command[command.index("--submitted-coscheduling") + 1] == submitted.group_by
+
+
+def test_unattended_worker_rejects_missing_submitted_coscheduling() -> None:
+    _validate_submitted_coscheduling(expected_tasks=2, submitted="nvlink.domain")
+    _validate_submitted_coscheduling(expected_tasks=1, submitted=None)
+
+    with pytest.raises(RuntimeError, match=r"expected 'nvlink\.domain'"):
+        _validate_submitted_coscheduling(expected_tasks=2, submitted=None)
 
 
 def test_unattended_placement_uses_host_network_node_identity_without_worker_ids() -> None:
@@ -451,6 +488,25 @@ def test_unattended_placement_rejects_shared_node_or_missing_topology(
     )
 
     assert not placement["passed"]
+
+
+@pytest.mark.parametrize(
+    ("mode", "correctness", "load", "expected"),
+    [
+        ("smoke", {"passed": True}, None, True),
+        ("smoke", {"passed": False}, None, False),
+        ("acceptance", {"passed": True}, {"passed": True}, True),
+        ("acceptance", {"passed": True}, {"passed": False}, False),
+        ("acceptance", {"passed": False}, {"passed": True}, False),
+    ],
+)
+def test_attended_result_is_the_component_conjunction(
+    mode: str,
+    correctness: dict[str, bool],
+    load: dict[str, bool] | None,
+    expected: bool,
+) -> None:
+    assert _attended_result_passed(mode, correctness=correctness, load=load) is expected
 
 
 def test_kv_snapshot_separates_semantic_padded_physical_and_reserved_bytes() -> None:
