@@ -24,6 +24,7 @@ from scripts.iris.grugmoe_inference_preflight import (
     _free_port,
     _immutable_image,
     _record_completion,
+    _unattended_worker_argv,
     _validate_unattended_mode,
     boundary_requests,
     parse_args,
@@ -242,6 +243,33 @@ def test_unattended_cli_forbids_a_second_snowball_attempt_and_wrong_exact_modes(
     assert parsed.command == "submit"
     assert not parsed.wait
     assert _immutable_image(parsed.task_image) == parsed.task_image
+
+
+def test_unattended_worker_runs_as_a_repo_module() -> None:
+    image = "example.invalid/task@sha256:" + "a" * 64
+    args = parse_args(
+        [
+            "submit",
+            "--case",
+            "tiny",
+            "--model-source",
+            "fixture",
+            "--task-image",
+            image,
+        ]
+    )
+    command = _unattended_worker_argv(
+        args,
+        case=CASES["tiny"],
+        run_id="unit",
+        image=image,
+    )
+    assert command[:4] == [
+        "python",
+        "-m",
+        "scripts.iris.grugmoe_inference_preflight",
+        "worker",
+    ]
 
 
 def test_kv_snapshot_separates_semantic_padded_physical_and_reserved_bytes() -> None:

@@ -226,7 +226,7 @@ CASES: dict[str, ModelCase] = {
     # Laptop/unit-test scale, but every exact model path is enabled.
     "tiny": _case(
         "tiny",
-        hidden_size=128,
+        hidden_size=32,
         num_hidden_layers=7,
         num_attention_heads=4,
         num_key_value_heads=2,
@@ -234,8 +234,8 @@ CASES: dict[str, ModelCase] = {
         global_kv_heads=1,
         num_experts=4,
         num_experts_per_tok=2,
-        moe_intermediate_size=64,
-        shared_expert_intermediate_size=128,
+        moe_intermediate_size=16,
+        shared_expert_intermediate_size=32,
         max_model_len=1024,
         sliding_window=512,
         data_parallel_size=1,

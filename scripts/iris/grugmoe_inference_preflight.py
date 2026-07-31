@@ -1393,24 +1393,17 @@ def _validate_unattended_mode(
         raise ValueError("the one allowed Snowball attempt has already completed; it must not be retried")
 
 
-def submit_unattended(args: argparse.Namespace) -> dict[str, Any]:
-    case = CASES[args.case]
-    _validate_unattended_mode(
-        case,
-        mode=args.mode,
-        model_source=args.model_source,
-    )
-    if args.mode == "acceptance":
-        validate_acceptance_thresholds(
-            minimum_seconds=args.minimum_seconds,
-            minimum_generated_tokens=args.minimum_generated_tokens,
-        )
-    checkout = _clean_pushed_checkout()
-    image = _immutable_image(args.task_image)
-    run_id = args.run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    worker_argv = [
+def _unattended_worker_argv(
+    args: argparse.Namespace,
+    *,
+    case: ModelCase,
+    run_id: str,
+    image: str,
+) -> list[str]:
+    return [
         "python",
-        "scripts/iris/grugmoe_inference_preflight.py",
+        "-m",
+        "scripts.iris.grugmoe_inference_preflight",
         "worker",
         "--case",
         case.name,
@@ -1429,6 +1422,29 @@ def submit_unattended(args: argparse.Namespace) -> dict[str, Any]:
         "--minimum-generated-tokens",
         str(args.minimum_generated_tokens),
     ]
+
+
+def submit_unattended(args: argparse.Namespace) -> dict[str, Any]:
+    case = CASES[args.case]
+    _validate_unattended_mode(
+        case,
+        mode=args.mode,
+        model_source=args.model_source,
+    )
+    if args.mode == "acceptance":
+        validate_acceptance_thresholds(
+            minimum_seconds=args.minimum_seconds,
+            minimum_generated_tokens=args.minimum_generated_tokens,
+        )
+    checkout = _clean_pushed_checkout()
+    image = _immutable_image(args.task_image)
+    run_id = args.run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    worker_argv = _unattended_worker_argv(
+        args,
+        case=case,
+        run_id=run_id,
+        image=image,
+    )
     resources = ResourceSpec(
         cpu=64,
         memory="512GB",

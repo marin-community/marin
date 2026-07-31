@@ -134,9 +134,9 @@ def _emit_fixture(output_dir: Path) -> None:
 
     config = GrugModelConfig(
         vocab_size=64,
-        hidden_dim=128,
-        intermediate_dim=64,
-        shared_expert_intermediate_dim=128,
+        hidden_dim=32,
+        intermediate_dim=16,
+        shared_expert_intermediate_dim=32,
         num_shared_experts=2,
         num_experts=4,
         num_experts_per_token=2,
@@ -145,7 +145,7 @@ def _emit_fixture(output_dir: Path) -> None:
         num_kv_heads=2,
         local_kv_heads=2,
         global_kv_heads=1,
-        head_dim=32,
+        head_dim=8,
         max_seq_len=1024,
         sliding_window=512,
         global_every=6,
@@ -154,7 +154,7 @@ def _emit_fixture(output_dir: Path) -> None:
         rope_fused=True,
         mtp_depth=1,
         mtp_dense=True,
-        mtp_intermediate_dim=128,
+        mtp_intermediate_dim=32,
         over_encoding_vocab_size=0,
         gated_norm=True,
         attn_gate=True,
@@ -223,6 +223,11 @@ def _emit_fixture(output_dir: Path) -> None:
             np.testing.assert_allclose(weights.sum(axis=-1), _ROUTING_SUM, rtol=1e-6, atol=1e-6)
 
         state = _to_vllm_state(model, jax=jax, np=np)
+        # Keep routing tensors lossless because the fixture compares normalized
+        # weights at tight tolerance. Half-precision storage for the remaining
+        # tensors keeps this checked-in exact-path fixture small; the live
+        # server loads them into float32 and checks logits at serving tolerance.
+        state = {name: value if ".mlp.router." in name else value.astype(np.float16) for name, value in state.items()}
         shared_zero = all(
             not np.any(state[f"model.layers.0.shared_experts.{index}.gate_proj.weight"])
             for index in range(config.num_shared_experts)
@@ -290,7 +295,8 @@ def _emit_fixture(output_dir: Path) -> None:
             "sconv_kernel": 4,
             "sconv_sites": ["k", "v", "attn", "mlp"],
             "shared_experts": 2,
-            "shared_expert_width_each": 64,
+            "shared_expert_width_each": 16,
+            "tensor_storage": "float16 except float32 router tensors",
             "qb_top_k": 2,
             "qb_candidate_count": 3,
             "combine_weight_sum": _ROUTING_SUM,
@@ -725,6 +731,9 @@ def _write_tokenizer(output_dir: Path, *, Tokenizer, WordLevel, Whitespace, Fast
         )
         + "\n"
     )
+    for name in ("tokenizer.json", "tokenizer_config.json"):
+        path = output_dir / name
+        path.write_text(path.read_text().rstrip() + "\n")
 
 
 def main() -> None:

@@ -67,6 +67,9 @@ EXCLUDE_PATTERNS = [
     "**/*.mov",
     "**/*.mp4",
     "**/*.data-*",
+    # Generated binary files for the frozen cross-framework GrugMoE fixture.
+    "tests/cluster/vllm/resources/grug_exact_reference/model.safetensors",
+    "tests/cluster/vllm/resources/grug_exact_reference/observations.npz",
     "**/package-lock.json",
     "**/__pycache__/**",
     "**/*.pyc",

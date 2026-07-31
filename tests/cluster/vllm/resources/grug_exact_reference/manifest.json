@@ -1,10 +1,10 @@
 {
   "files": {
-    "config.json": "1ef2b9865b7d3f3c3b161c4feecacae4474cc1678607821c5c926fa99366a262",
-    "model.safetensors": "2720d99526592901c63aa3c1287a7f195d39842dfbfb63a981d09e8e36cac904",
-    "observations.npz": "c5f9a140b34a036c3f3225b0696879bb0c2aef556834981415accf312056069a",
+    "config.json": "18d1eb4732064304685b289e2d83281afe5944658992c8edf2fe2e192fd80b18",
+    "model.safetensors": "99a4f446f1ff6db7191ea1dcd118f83ebb9b46fbdead578b3edccc2140fbeea1",
+    "observations.npz": "d30ebd1e6dd6d890d3328c0c8718f72eef50f5b44c7fe8bf7109e5fad846bf19",
     "special_tokens_map.json": "8d1a081b1831b9dd8a5de7fe7fd83429878353299d017393d6de62095851ea26",
-    "tokenizer.json": "c56bc0808cf18bace336eaa598a9f1ac708bd00ed90e31312040845ac61c3d85",
+    "tokenizer.json": "5b1d7300eb6b67759fd1c47681c9e3768a056369f376786d529133f5dfe64a33",
     "tokenizer_config.json": "8352bb4d3b22c62f46919986e9dcd015018f0641c95a4add9dc147629090cdc6"
   },
   "imported_training_reference": "experiments/grug/moe/model.py",
@@ -50,10 +50,11 @@
       "attn",
       "mlp"
     ],
-    "shared_expert_width_each": 64,
+    "shared_expert_width_each": 16,
     "shared_experts": 2,
     "sliding_window": 512,
-    "stored_kv_heads": 2
+    "stored_kv_heads": 2,
+    "tensor_storage": "float16 except float32 router tensors"
   },
   "training_reference_commit": "fd3e9bc5b428633027f944be7fdf1136567db028",
   "training_reference_model_path": "experiments/grug/moe/model.py",
