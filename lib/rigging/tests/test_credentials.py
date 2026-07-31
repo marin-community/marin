@@ -94,21 +94,18 @@ def test_interceptors_map_providers_to_headers():
     assert all(isinstance(i, BearerTokenInjector) for i in chain)
 
 
-def test_headers_match_the_interceptor_header_convention():
+def test_headers_both_providers_uses_the_interceptor_header_names():
     c = ClientCredentials(token_provider=StaticTokenProvider("a"), iap_provider=StaticTokenProvider("e"))
     assert c.headers() == {"authorization": "Bearer a", "proxy-authorization": "Bearer e"}
 
 
-def test_headers_omit_absent_and_empty_providers():
-    """A provider yielding nothing must not send ``Bearer ``, which reads as a malformed token."""
+def test_headers_absent_or_empty_provider_omits_the_header():
     assert ClientCredentials().headers() == {}
     assert ClientCredentials(iap_provider=StaticTokenProvider("")).headers() == {}
     assert ClientCredentials(iap_provider=StaticTokenProvider("e")).headers() == {"proxy-authorization": "Bearer e"}
 
 
-def test_headers_remint_on_every_call():
-    """Callers hold the dict, not the provider, so a stale token must not survive a refresh."""
-
+def test_headers_repeated_calls_mint_a_fresh_token_each_time():
     class Rotating:
         def __init__(self):
             self.calls = 0

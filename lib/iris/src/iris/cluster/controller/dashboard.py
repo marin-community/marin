@@ -463,10 +463,8 @@ class ControllerDashboard:
 class _CredentialAuth(httpx.Auth):
     """Attaches ``credentials`` to every request an httpx client sends.
 
-    Authenticating at the client rather than per call site means a route added
-    later is authenticated by construction. Tokens mint per request, because a
-    provider re-mints an expired one and a proxy outlives a token's lifetime.
-    Minting can refresh over the network, so it runs off the event loop.
+    Minting per request keeps a proxy that outlives a token's lifetime working;
+    it can refresh over the network, so it runs off the event loop.
     """
 
     def __init__(self, credentials: ClientCredentials):
@@ -484,9 +482,8 @@ class ProxyControllerDashboard:
     to an upstream controller at the given URL. Useful for viewing a remote
     controller's state without running a local controller instance.
 
-    The browser holds no cluster credentials, so this process authenticates on
-    its behalf: every upstream request carries the operator's ``credentials``.
-    Without them an IAP-fronted upstream rejects the whole dashboard at its edge.
+    The browser holds no cluster credentials, so this process authenticates
+    upstream on its behalf with ``credentials``.
     """
 
     def __init__(
@@ -534,10 +531,10 @@ class ProxyControllerDashboard:
                 ),
             ),
             Route("/health", self._health),
-            # Mirrors the upstream auth routes: /auth/config is a GET, /auth/session
-            # and /auth/logout are POSTs. Starlette defaults a route to GET alone, so
-            # omitting this 405s the session flow before it reaches the handler.
-            Route("/auth/{path:path}", self._proxy_auth, methods=["GET", "POST", "PUT"]),
+            # GET only: /auth/config is the sole auth route the proxy can serve.
+            # The upstream's POST routes check CSRF against their own origin, which a
+            # request relayed from localhost can never match without rewriting Origin.
+            Route("/auth/{path:path}", self._proxy_auth),
             Route(
                 "/iris.cluster.ControllerService/{method}",
                 functools.partial(self._proxy_rpc_post, service="iris.cluster.ControllerService"),

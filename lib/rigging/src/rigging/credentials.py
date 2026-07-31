@@ -55,12 +55,11 @@ class ClientCredentials:
     iap_provider: TokenProvider | None = None
 
     def _bearers(self) -> tuple[tuple[str, TokenProvider], ...]:
-        """The (header, provider) pairs to attach, in order, skipping absent providers.
+        """The (header, provider) pairs to attach, skipping absent providers.
 
         The app token rides in ``Authorization``; the IAP edge token in
         ``Proxy-Authorization`` so the app header stays free for the service's own
-        JWT. Either may be absent (loopback trust sends neither). Both attachment
-        forms below read this, so a renamed header or a third provider is one edit.
+        JWT. Either may be absent (loopback trust sends neither).
         """
         pairs = (("authorization", self.token_provider), ("proxy-authorization", self.iap_provider))
         return tuple((header, provider) for header, provider in pairs if provider is not None)
@@ -70,12 +69,9 @@ class ClientCredentials:
         return tuple(BearerTokenInjector(provider, header) for header, provider in self._bearers())
 
     def headers(self) -> dict[str, str]:
-        """The same bearer headers :meth:`interceptors` attaches, as a plain dict.
+        """The same bearer headers :meth:`interceptors` attaches, for plain-HTTP callers.
 
-        For callers that speak plain HTTP rather than Connect RPC and so cannot use
-        the interceptor chain. Mints on every call, because a provider re-mints an
-        expired token, so do not cache the result across requests. A provider that
-        yields nothing contributes no header.
+        Mints on every call, so do not cache the result across requests.
         """
         return {header: f"Bearer {token}" for header, provider in self._bearers() if (token := provider.get_token())}
 

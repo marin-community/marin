@@ -1005,8 +1005,6 @@ def cluster_dashboard_proxy(ctx, port: int):
     your browser.
     """
     controller_url = require_controller_url(ctx)
-    # The browser has no cluster credentials, so the proxy authenticates upstream
-    # with the operator's own — without them an IAP-fronted controller 401s.
     dashboard = ProxyControllerDashboard(
         upstream_url=controller_url,
         port=port,
