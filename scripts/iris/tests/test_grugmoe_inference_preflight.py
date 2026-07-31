@@ -263,6 +263,7 @@ def test_unattended_worker_runs_as_a_repo_module() -> None:
         case=CASES["tiny"],
         run_id="unit",
         image=image,
+        marin_commit="b" * 40,
     )
     assert command[:4] == [
         "python",
@@ -270,6 +271,7 @@ def test_unattended_worker_runs_as_a_repo_module() -> None:
         "scripts.iris.grugmoe_inference_preflight",
         "worker",
     ]
+    assert command[command.index("--marin-commit") + 1] == "b" * 40
 
 
 def test_kv_snapshot_separates_semantic_padded_physical_and_reserved_bytes() -> None:

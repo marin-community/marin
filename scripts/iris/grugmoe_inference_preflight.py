@@ -1399,6 +1399,7 @@ def _unattended_worker_argv(
     case: ModelCase,
     run_id: str,
     image: str,
+    marin_commit: str,
 ) -> list[str]:
     return [
         "python",
@@ -1415,6 +1416,8 @@ def _unattended_worker_argv(
         run_id,
         "--task-image",
         image,
+        "--marin-commit",
+        marin_commit,
         "--server-timeout",
         str(args.server_timeout),
         "--minimum-seconds",
@@ -1444,6 +1447,7 @@ def submit_unattended(args: argparse.Namespace) -> dict[str, Any]:
         case=case,
         run_id=run_id,
         image=image,
+        marin_commit=checkout["commit"],
     )
     resources = ResourceSpec(
         cpu=64,
@@ -1723,7 +1727,7 @@ def run_unattended_worker(args: argparse.Namespace) -> dict[str, Any]:
     prefix = f"{ARTIFACT_ROOT}/{case.name}/{run_id}/"
     local_dir = Path(REMOTE_ROOT) / run_id / f"rank-{rank}"
     local_dir.mkdir(parents=True, exist_ok=True)
-    write_case(local_dir, case=case, run_id=run_id, git_sha=_git_sha())
+    write_case(local_dir, case=case, run_id=run_id, git_sha=args.marin_commit)
     (local_dir / "aws-config").write_text(AWS_CONFIG_CONTENT)
     os.environ["AWS_CONFIG_FILE"] = str(local_dir / "aws-config")
     filesystem = _s3_filesystem()
@@ -1896,7 +1900,7 @@ def run_unattended_worker(args: argparse.Namespace) -> dict[str, Any]:
             "job_id": str(info.job_id),
             "task_id": str(info.task_id),
             "task_image": args.task_image,
-            "marin_commit": _git_sha(),
+            "marin_commit": args.marin_commit,
             "vllm_commit": VLLM_SHA,
             "coscheduling": UNATTENDED_COSCHEDULING if info.num_tasks > 1 else None,
             "rendezvous": rendezvous,
@@ -1977,7 +1981,7 @@ def run_unattended_worker(args: argparse.Namespace) -> dict[str, Any]:
     manifest = frozen_manifest(
         case,
         run_id=run_id,
-        git_sha=_git_sha(),
+        git_sha=args.marin_commit,
         model_source=args.model_source,
     )
     manifest.update(
@@ -2257,6 +2261,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     worker.add_argument("--run-id", required=True)
     worker.add_argument("--task-image", required=True)
+    worker.add_argument("--marin-commit", required=True)
     worker.add_argument("--server-timeout", type=float, default=SERVER_TIMEOUT_SECONDS)
     worker.add_argument("--minimum-seconds", type=float, default=ACCEPTANCE_MINIMUM_SECONDS)
     worker.add_argument(
