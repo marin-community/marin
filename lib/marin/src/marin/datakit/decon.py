@@ -7,19 +7,18 @@ Reads datakit-normalized Parquet (``id``, ``text``), builds an in-memory
 bloom filter from the eval text, and emits a co-partitioned Parquet
 attributes dataset marking which records overlap with eval text.
 
-Schema of the emitted Parquet attributes (datakit ``{id, attributes}`` convention,
+Schema of the emitted Parquet attributes (flat Datakit attribute convention,
 consumable by :func:`marin.processing.classification.consolidate.consolidate`):
 
     id                       : string         — matches source document id
     partition_id             : int            — source partition index (from sorted file order)
-    attributes               : struct
-        contaminated         : bool           — max paragraph overlap meets the threshold
-        max_overlap          : float          — highest paragraph overlap fraction in [0, 1]
-        matched_hashes       : list[uint64]   — bloom-hit ngram hashes from this record
+    contaminated             : bool           — max paragraph overlap meets the threshold
+    max_overlap              : float          — highest paragraph overlap fraction in [0, 1]
+    matched_hashes           : list[uint64]   — bloom-hit ngram hashes from this record
 
 Build also emits ``<output>/_bloom/eval_hash_index.parquet`` with columns
 ``hash: uint64, eval_id: string`` (flattened, one row per (hash, eval_id) pair).
-Join ``attributes.matched_hashes`` against this sidecar to attribute
+Join ``matched_hashes`` against this sidecar to attribute
 contamination back to specific eval records.
 
 Output follows the normalize job's layout: main attributes land in
@@ -68,6 +67,7 @@ logger = logging.getLogger(__name__)
 # re-addresses cached blooms/marks instead of silently reusing incompatible
 # features. v2 added the no-alphabetic-character ngram filter (marin#6852 cluster D).
 FEATURE_FILTER_VERSION = 2
+DECON_ATTRIBUTES_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -106,12 +106,12 @@ class DeconAttributes(BaseModel):
             (``<output>/outputs/flagged_sample``); empty when no sample was taken.
         num_partitions: Number of output partitions; matches the source.
         eval_hash_index_path: Path to the ``hash → eval_id`` sidecar Parquet.
-            Join the per-record ``attributes.matched_hashes`` column against
+            Join the per-record ``matched_hashes`` column against
             this to attribute contamination to specific eval records.
         counters: Aggregated zephyr counters from the marking pipeline.
     """
 
-    version: str = "v3"
+    version: str = f"v{DECON_ATTRIBUTES_VERSION}"
     main_output_dir: str
     flagged_output_dir: str
     num_partitions: int
@@ -368,24 +368,14 @@ def _build_filter(
     return stats["n_records"]
 
 
-_ATTRIBUTES_STRUCT = pa.struct(
-    [
-        pa.field("contaminated", pa.bool_()),
-        pa.field("max_overlap", pa.float64()),
-        pa.field("matched_hashes", pa.list_(pa.uint64())),
-    ]
-)
-
-# Wrapped-attributes schema -- matches the datakit convention consumed by
-# ``marin.processing.classification.consolidate``: top-level ``id`` (join key)
-# and ``partition_id`` (co-partitioning invariant), with the per-record decon
-# facts grouped under ``attributes`` so a ``FilterConfig(name="contaminated")``
-# resolves correctly.
+# Flat attribute columns keep all Datakit sidecars directly selectable by name.
 _OUTPUT_SCHEMA = pa.schema(
     [
         pa.field("id", pa.string()),
         pa.field("partition_id", pa.int64()),
-        pa.field("attributes", _ATTRIBUTES_STRUCT),
+        pa.field("contaminated", pa.bool_()),
+        pa.field("max_overlap", pa.float64()),
+        pa.field("matched_hashes", pa.list_(pa.uint64())),
     ]
 )
 
@@ -466,11 +456,9 @@ def _make_marker(
                     yield {
                         "id": record["id"],
                         "partition_id": shard.shard_idx,
-                        "attributes": {
-                            "contaminated": contaminated,
-                            "max_overlap": max_score,
-                            "matched_hashes": list(matched),
-                        },
+                        "contaminated": contaminated,
+                        "max_overlap": max_score,
+                        "matched_hashes": list(matched),
                     }
 
             # Follow the normalize job's output layout: main attributes under
@@ -1306,6 +1294,7 @@ def decon_step(
         "overlap_threshold": overlap_threshold,
         "paragraph_delimiter": paragraph_delimiter,
         "feature_filter_version": FEATURE_FILTER_VERSION,
+        "attribute_schema_version": DECON_ATTRIBUTES_VERSION,
         "input_dir": input_dir,
     }
     # Only fold in when enabled: the flagged sidecar is *additional* output, so a

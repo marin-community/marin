@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Consolidate takes a set of documents with corresponding attributes and writes
-out a subset of the documents based on various filters defined with respect to
-the attributes.  Handles two cases:
+Consolidate takes documents with corresponding flat attribute columns and writes
+out a subset of the documents based on configured filters. Handles two cases:
 - Span removal produces attributes (e.g., duplicate_text spans). Remove text spans.
 - Document removal via attribute produced by deduplication.
 
@@ -56,7 +55,7 @@ class FilterConfig:
     """If True, keep docs that have no attribute entry. If False (default), reject them."""
 
 
-def _remove_spans_from_doc(doc: dict, filt: FilterConfig, attributes: dict) -> dict:
+def _remove_spans_from_doc(doc: dict, filt: FilterConfig, attribute_row: dict) -> dict:
     def _remove_spans(text: str, spans: list[list[int]]) -> str:
         """Return ``text`` with ``spans`` removed.
 
@@ -70,7 +69,7 @@ def _remove_spans_from_doc(doc: dict, filt: FilterConfig, attributes: dict) -> d
 
         return text
 
-    spans = attributes[filt.name]
+    spans = attribute_row[filt.name]
     new_text = _remove_spans(doc["text"], spans)
     return {**doc, "text": new_text}
 
@@ -124,13 +123,12 @@ def _make_filter_combiner(filt: FilterConfig) -> Callable[[dict, dict | None], d
         if right is None:
             return left if filt.keep_if_missing else None
 
-        attrs = right["attributes"]
         if filt.type == FilterType.REMOVE_DOC:
-            return left if not attrs.get(filt.name, False) else None
+            return left if not right.get(filt.name, False) else None
         if filt.type == FilterType.KEEP_DOC:
-            return left if attrs.get(filt.name, False) else None
+            return left if right.get(filt.name, False) else None
         assert filt.type == FilterType.REMOVE_SPANS
-        mutated = _remove_spans_from_doc(left, filt, attrs)
+        mutated = _remove_spans_from_doc(left, filt, right)
         return mutated if mutated.get("text") else None
 
     return combine
@@ -177,7 +175,7 @@ def consolidate(
 
     ds = Dataset.from_list(input_paths).load_parquet()
     for filt, attr_paths in filter_attr_paths:
-        attrs = Dataset.from_list(attr_paths).load_parquet(columns=["id", "attributes"])
+        attrs = Dataset.from_list(attr_paths).load_parquet(columns=["id", filt.name])
         ds = ds.sorted_merge_join(
             attrs,
             left_key=lambda r: r["id"],

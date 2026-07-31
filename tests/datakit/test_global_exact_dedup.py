@@ -84,10 +84,10 @@ def test_global_exact_deduplicate_writes_sparse_copartitioned_attributes(tmp_pat
     assert c_shards == []
 
     assert pq.read_table(b_shards[0]).to_pylist() == [
-        {"id": "a-only", "attributes": {"dup_doc": True}},
-        {"id": "shared", "attributes": {"dup_doc": True}},
+        {"id": "a-only", "dup_doc": True},
+        {"id": "shared", "dup_doc": True},
     ]
-    assert pq.read_schema(b_shards[0]).names == ["id", "attributes"]
+    assert pq.read_schema(b_shards[0]).names == ["id", "dup_doc"]
 
     assert result.counters["global_exact_dedup/records_in"] == 6
     assert result.counters["global_exact_dedup/duplicate_records"] == 2
@@ -113,7 +113,7 @@ def test_global_exact_deduplicate_uses_shard_order_within_source(tmp_path: Path,
     shards = _attribute_shards(result, source)
     assert [path.name for path in shards] == ["part-00001-of-00002.parquet"]
     assert pq.read_table(shards[0]).to_pylist() == [
-        {"id": "shared", "attributes": {"dup_doc": True}},
+        {"id": "shared", "dup_doc": True},
     ]
 
 
