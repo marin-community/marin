@@ -102,6 +102,32 @@ def test_download_hf_bucket_requires_newer_huggingface_hub(tmp_path, monkeypatch
         download_hf(cfg)
 
 
+def test_download_hf_rejects_changed_xet_source(tmp_path, monkeypatch):
+    class FakeHfFileSystem:
+        def find(self, _source_root, **_kwargs):
+            return ["buckets/demo-user/demo-bucket/data/file.jsonl.zst"]
+
+        def info(self, _file, **_kwargs):
+            return {"size": 123, "xet_hash": "changed-content"}
+
+    monkeypatch.setattr(
+        hf_download,
+        "url_to_fs",
+        lambda _url: (FakeHfFileSystem(), "buckets/demo-user/demo-bucket"),
+    )
+
+    cfg = DownloadConfig(
+        hf_dataset_id="buckets/demo-user/demo-bucket",
+        revision="snapshot",
+        gcs_output_path=str(tmp_path),
+        hf_repo_type_prefix="",
+        expected_source_xet_fingerprint="expected-fingerprint",
+    )
+
+    with pytest.raises(ValueError, match="Hugging Face source changed"):
+        download_hf(cfg)
+
+
 @pytest.mark.parametrize("status_code", [401, 403])
 def test_stream_file_to_fsspec_aborts_on_hf_auth_error(tmp_path, monkeypatch, status_code):
     """401/403 from HF must short-circuit the retry loop and surface immediately."""

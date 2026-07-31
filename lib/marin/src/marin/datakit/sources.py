@@ -20,6 +20,7 @@ from functools import cache
 from marin.datakit.canonical.safety_pretraining import safety_pretraining_normalize_steps
 from marin.datakit.download.agenttrove import agenttrove_normalize_steps
 from marin.datakit.download.biocollection import biocollection_normalize_steps
+from marin.datakit.download.biocorpus import biocorpus_normalize_steps
 from marin.datakit.download.biodiversity import biodiversity_normalize_steps
 from marin.datakit.download.climblab_ja import climblab_ja_normalize_steps
 from marin.datakit.download.coderforge import coderforge_normalize_steps
@@ -156,6 +157,9 @@ def all_sources() -> dict[str, DatakitSource]:
         # is 1,696,847 → 997,026 past the proprietary-teacher filter → 869,901
         # with a non-null transcript → 781,076 after exact dedup.
         ("agenttrove", agenttrove_normalize_steps, 8.957298636),
+        # Measured with marin-community/marin-tokenizer:
+        # 9,138,977,526 tokens / 21,138,120 documents.
+        ("biocorpus", biocorpus_normalize_steps, 9.138977526),
         # cp/biodiversity is carved out of common_pile (see common_pile.py)
         # because it needs page-stitching before normalize.
         ("cp/biodiversity", biodiversity_normalize_steps, 8.60),

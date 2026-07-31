@@ -7,6 +7,7 @@ A script to download a HuggingFace dataset and upload it to a specified fsspec p
 using HfFileSystem for direct streaming of data transfer.
 """
 
+import hashlib
 import logging
 import os
 import random
@@ -109,6 +110,10 @@ class DownloadConfig:
     ZephyrContext defaults (1 CPU / 1 GB RAM). Bump for large parquet shards or
     when HF streaming buffers spike memory."""
 
+    expected_source_xet_fingerprint: str | None = None
+    """Expected SHA-256 fingerprint of the selected files' paths, sizes, and Xet
+    hashes. Use this to pin mutable Hugging Face bucket contents."""
+
 
 def _strip_hf_protocol(path: str) -> str:
     return path.removeprefix(HF_PROTOCOL_PREFIX).lstrip("/")
@@ -158,6 +163,19 @@ def _relative_path_in_source(file_path: str, source_path: str) -> str:
 
     # Backwards-compatible fallback for historical dataset path layout.
     return normalized_file.split("/", 3)[-1]
+
+
+def _source_xet_fingerprint(source_path: str, file_info: dict[str, dict]) -> str:
+    """Fingerprint an HF source tree from relative paths, sizes, and Xet hashes."""
+    entries: list[str] = []
+    for file_path, info in file_info.items():
+        relative_path = _relative_path_in_source(file_path, source_path)
+        size = info.get("size")
+        xet_hash = info.get("xet_hash")
+        if size is None or not xet_hash:
+            raise ValueError(f"Cannot fingerprint {file_path}: Hugging Face did not return size and Xet hash metadata")
+        entries.append(f"{relative_path}\t{size}\t{xet_hash}")
+    return hashlib.sha256("\n".join(sorted(entries)).encode()).hexdigest()
 
 
 def ensure_fsspec_path_writable(output_path: str) -> None:
@@ -326,14 +344,23 @@ def download_hf(cfg: DownloadConfig) -> None:
 
     # Get file sizes for validation
     logger.info("Getting file sizes for validation...")
-    file_sizes: dict[str, int | None] = {}
+    file_info: dict[str, dict] = {}
     for file in files:
         try:
             info = source_fs.info(file, **list_kwargs)
-            file_sizes[file] = info.get("size") or None
+            file_info[file] = info
         except Exception as e:
             logger.warning(f"Could not get size for {file}: {e}")
-            file_sizes[file] = None  # Will skip validation for this file
+            file_info[file] = {}
+
+    source_xet_fingerprint = None
+    if cfg.expected_source_xet_fingerprint is not None:
+        source_xet_fingerprint = _source_xet_fingerprint(source_root, file_info)
+        if source_xet_fingerprint != cfg.expected_source_xet_fingerprint:
+            raise ValueError(
+                f"Hugging Face source changed: expected Xet fingerprint "
+                f"{cfg.expected_source_xet_fingerprint}, got {source_xet_fingerprint}"
+            )
 
     download_tasks = []
 
@@ -342,7 +369,7 @@ def download_hf(cfg: DownloadConfig) -> None:
         if relative_file_path.startswith(".."):
             raise ValueError(f"Computed path escapes source root: source={hf_source_path}, file={file}")
         fsspec_file_path = prefix_join(output_path, relative_file_path)
-        expected_size = file_sizes.get(file)
+        expected_size = file_info[file].get("size")
         # Fully-qualify the source URL so subprocess workers can open it via fsspec
         # without having to reconstruct HfFileSystem / revision state.
         worker_source_url = file if cfg.source_url_override is not None else f"hf://{file}"
@@ -359,7 +386,7 @@ def download_hf(cfg: DownloadConfig) -> None:
         )
 
     total_files = len(download_tasks)
-    total_size_gb = sum(s for s in file_sizes.values() if s is not None) / (1024**3)
+    total_size_gb = sum(info["size"] for info in file_info.values() if info.get("size") is not None) / (1024**3)
     logger.info(f"Total number of files to process: {total_files} ({total_size_gb:.2f} GB)")
 
     pipeline = (
@@ -379,7 +406,12 @@ def download_hf(cfg: DownloadConfig) -> None:
     # Write Provenance JSON
     write_provenance_json(
         output_path,
-        metadata={"dataset": cfg.hf_dataset_id, "version": cfg.revision, "links": files},
+        metadata={
+            "dataset": cfg.hf_dataset_id,
+            "version": cfg.revision,
+            "links": files,
+            **({"source_xet_fingerprint": source_xet_fingerprint} if source_xet_fingerprint is not None else {}),
+        },
     )
 
     logger.info(f"Streamed all files and wrote provenance JSON; check {output_path}.")
@@ -396,6 +428,8 @@ def download_hf_step(
     deps: list[StepSpec] | None = None,
     override_output_path: str | None = None,
     worker_resources: ResourceConfig | None = None,
+    hf_repo_type_prefix: str = "datasets",
+    expected_source_xet_fingerprint: str | None = None,
 ) -> StepSpec:
     """Create a StepSpec that downloads a HuggingFace dataset.
 
@@ -410,6 +444,10 @@ def download_hf_step(
         zephyr_max_parallelism: Maximum download parallelism.
         deps: Optional upstream dependencies.
         override_output_path: Override the computed output path entirely.
+        hf_repo_type_prefix: Hugging Face source namespace. Use an empty string
+            when ``hf_dataset_id`` is a ``buckets/...`` path.
+        expected_source_xet_fingerprint: Expected fingerprint of the selected
+            files' relative paths, sizes, and Xet hashes.
 
     Returns:
         A StepSpec whose output_path contains the raw downloaded files.
@@ -426,18 +464,26 @@ def download_hf_step(
                 append_sha_to_path=append_sha_to_path,
                 zephyr_max_parallelism=zephyr_max_parallelism,
                 worker_resources=worker_resources,
+                hf_repo_type_prefix=hf_repo_type_prefix,
+                expected_source_xet_fingerprint=expected_source_xet_fingerprint,
             )
         )
+
+    hash_attrs = {
+        "hf_dataset_id": hf_dataset_id,
+        "revision": revision,
+        "hf_urls_glob": resolved_glob,
+        "append_sha_to_path": append_sha_to_path,
+    }
+    if hf_repo_type_prefix != "datasets":
+        hash_attrs["hf_repo_type_prefix"] = hf_repo_type_prefix
+    if expected_source_xet_fingerprint is not None:
+        hash_attrs["expected_source_xet_fingerprint"] = expected_source_xet_fingerprint
 
     return StepSpec(
         name=name,
         fn=_run,
         deps=deps or [],
-        hash_attrs={
-            "hf_dataset_id": hf_dataset_id,
-            "revision": revision,
-            "hf_urls_glob": resolved_glob,
-            "append_sha_to_path": append_sha_to_path,
-        },
+        hash_attrs=hash_attrs,
         override_output_path=override_output_path,
     )
