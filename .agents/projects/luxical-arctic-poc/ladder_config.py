@@ -8,7 +8,7 @@ from enum import StrEnum
 SEED = 42
 OUTPUT_ROOT = "s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder"
 SOURCE_INVENTORY_URL = f"{OUTPUT_ROOT}/source_inventory.json"
-MANIFEST_ROOT = f"{OUTPUT_ROOT}/manifest-v1"
+MANIFEST_ROOT = f"{OUTPUT_ROOT}/manifest-v2"
 TRAIN_TARGET_750K = 750_000
 TRAIN_TARGET_3M = 3_000_000
 EVAL_ROWS_PER_SOURCE = 512
@@ -66,3 +66,36 @@ def source_category(source: str) -> SourceCategory:
     if any(marker in source for marker in MULTILINGUAL_SOURCE_MARKERS):
         return SourceCategory.MULTILINGUAL
     return SourceCategory.STANDARD
+
+
+def document_windows(text: str) -> tuple[str, str, str]:
+    """Return the head, middle, and tail windows of one document."""
+    middle_start = max(0, len(text) // 2 - TEXT_WINDOW_CHARS // 2)
+    return (
+        text[:TEXT_WINDOW_CHARS],
+        text[middle_start : middle_start + TEXT_WINDOW_CHARS],
+        text[-TEXT_WINDOW_CHARS:],
+    )
+
+
+def document_view(text: str) -> str:
+    """Return the bounded student view of one document."""
+    if len(text) <= 3 * TEXT_WINDOW_CHARS:
+        return text
+    return "\n".join(document_windows(text))
+
+
+def teacher_windows_from_view(text: str) -> tuple[str, str, str]:
+    """Return the teacher windows encoded in a student view."""
+    long_view_characters = 3 * TEXT_WINDOW_CHARS + 2
+    if len(text) != long_view_characters:
+        return document_windows(text)
+    first_separator = TEXT_WINDOW_CHARS
+    second_separator = 2 * TEXT_WINDOW_CHARS + 1
+    if text[first_separator] != "\n" or text[second_separator] != "\n":
+        raise ValueError("A long document view has invalid window separators")
+    return (
+        text[:first_separator],
+        text[first_separator + 1 : second_separator],
+        text[second_separator + 1 :],
+    )

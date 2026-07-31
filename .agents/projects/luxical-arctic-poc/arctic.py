@@ -64,7 +64,6 @@ class PinnedArcticEmbedder(EmbedderArctic2M):
                 repo_id=model_id,
                 filename=filename,
                 revision=revision,
-                force_download=True,
             )
         self.model = AutoModel.from_pretrained(
             model_id,

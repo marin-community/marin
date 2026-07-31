@@ -11,7 +11,6 @@ import logging
 import os
 import tempfile
 import time
-from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -40,12 +39,14 @@ BASELINE_REPO = "DatologyAI/luxical-one"
 BASELINE_FILE = "luxical_one_rc4.npz"
 BASELINE_REVISION = "474cfeb959dd473b3d1cd61da630f566037e69e2"
 PROBE_TRAIN_ROWS_PER_SOURCE = 256
+PROBE_MAX_ITERATIONS = 1_000
 CPU_THREADS = 8
 EMBED_BATCH_SIZE = 4_096
 SPEED_DOCUMENTS = 20_000
 SPEED_WARMUP_DOCUMENTS = 1_024
 SPEED_REPEATS = 5
 CLUSTER_COUNT = 40
+CLUSTER_SEEDS = (42, 43, 44)
 CLUSTER_MAX_SOURCE_SHARE = 0.90
 MIN_UNIQUE_FRACTION = 0.99
 MIN_EFFECTIVE_RANK_RATIO = 0.50
@@ -57,6 +58,7 @@ PAIR_COUNT_WITHIN_SOURCE = 100_000
 PAIR_COUNT_ACROSS_SOURCE = 100_000
 TEACHER_QUANTIZATION_LIMIT = 0.3
 TEACHER_EMBEDDING_DIMENSION = 256
+BOOTSTRAP_SAMPLES = 10_000
 RESULT_FILE = Path("/tmp/luxical-arctic-evaluation")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
@@ -76,21 +78,17 @@ def teacher_output_url(manifest_output_url: str) -> str:
 
 
 def evaluation_mask(table: pa.Table) -> pa.Array | pa.ChunkedArray:
-    """Select fixed probe-training and evaluation rows."""
-    probe_train = pc.and_(
-        pc.equal(table["split"], "train"),
-        pc.less(table["train_rank"], PROBE_TRAIN_ROWS_PER_SOURCE),
-    )
-    return pc.or_(pc.equal(table["split"], "eval"), probe_train)
+    """Select rows that student training never uses."""
+    return pc.equal(table["split"], "eval")
 
 
 def fixed_evaluation_data(
     manifest: dict[str, Any],
 ) -> tuple[list[str], np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Load aligned texts, labels, splits, categories, and teacher vectors."""
+    """Load aligned texts, labels, probe roles, categories, and teacher vectors."""
     texts = []
     labels = []
-    splits = []
+    probe_roles = []
     categories = []
     teacher_batches = []
     for index, (source, result) in enumerate(sorted(manifest["sources"].items()), start=1):
@@ -99,7 +97,7 @@ def fixed_evaluation_data(
         source_table = pq.read_table(
             manifest_path,
             filesystem=manifest_filesystem,
-            columns=["raw_sha256", "source", "source_category", "split", "train_rank", "text"],
+            columns=["raw_sha256", "source", "source_category", "split", "eval_rank", "text"],
         )
         source_table = source_table.filter(evaluation_mask(source_table))
 
@@ -110,7 +108,7 @@ def fixed_evaluation_data(
         teacher_table = pq.read_table(
             teacher_path,
             filesystem=teacher_filesystem,
-            columns=["raw_sha256", "split", "train_rank", "embedding"],
+            columns=["raw_sha256", "split", "eval_rank", "embedding"],
         )
         teacher_table = teacher_table.filter(evaluation_mask(teacher_table))
         if source_table["raw_sha256"].to_pylist() != teacher_table["raw_sha256"].to_pylist():
@@ -131,14 +129,17 @@ def fixed_evaluation_data(
         texts.extend(source_table["text"].to_pylist())
         labels.extend(source_table["source"].to_pylist())
         categories.extend(source_table["source_category"].to_pylist())
-        splits.extend(source_table["split"].to_pylist())
+        probe_roles.extend(
+            "probe_train" if rank < PROBE_TRAIN_ROWS_PER_SOURCE else "probe_eval"
+            for rank in source_table["eval_rank"].to_pylist()
+        )
     teacher_vectors = np.concatenate(teacher_batches)
     if not np.isfinite(teacher_vectors).all():
         raise ValueError("Evaluation teacher vectors contain non-finite values")
     return (
         texts,
         np.asarray(labels),
-        np.asarray(splits),
+        np.asarray(probe_roles),
         np.asarray(categories),
         teacher_vectors,
     )
@@ -215,18 +216,21 @@ def paired_speed_benchmark(
 def source_probe(
     vectors: np.ndarray,
     labels: np.ndarray,
-    splits: np.ndarray,
+    probe_roles: np.ndarray,
     categories: np.ndarray,
 ) -> dict[str, Any]:
     """Fit and score a source-domain linear probe."""
-    train_mask = splits == "train"
-    eval_mask = splits == "eval"
+    train_mask = probe_roles == "probe_train"
+    eval_mask = probe_roles == "probe_eval"
     classifier = LogisticRegression(
-        max_iter=300,
+        max_iter=PROBE_MAX_ITERATIONS,
         random_state=SEED,
         solver="lbfgs",
     )
     classifier.fit(vectors[train_mask], labels[train_mask])
+    maximum_iterations = int(classifier.n_iter_.max())
+    if maximum_iterations >= PROBE_MAX_ITERATIONS:
+        raise ValueError(f"The source probe did not converge in {PROBE_MAX_ITERATIONS} iterations")
     predictions = classifier.predict(vectors[eval_mask])
     eval_labels = labels[eval_mask]
     eval_categories = categories[eval_mask]
@@ -239,29 +243,45 @@ def source_probe(
         zero_division=0,
     )
     per_source_recall = dict(zip(source_names, map(float, recalls), strict=True))
+    f1_values = f1_score(
+        eval_labels,
+        predictions,
+        labels=source_names,
+        average=None,
+        zero_division=0,
+    )
+    per_source_f1 = dict(zip(source_names, map(float, f1_values), strict=True))
     category_macro_f1 = {}
+    category_per_source_f1 = {}
     for category in SourceCategory:
         mask = eval_categories == category.value
         if mask.any():
             category_sources = sorted(set(eval_labels[mask]))
-            category_macro_f1[category.value] = float(
-                f1_score(
-                    eval_labels[mask],
-                    predictions[mask],
-                    labels=category_sources,
-                    average="macro",
-                    zero_division=0,
-                )
+            category_f1_values = f1_score(
+                eval_labels[mask],
+                predictions[mask],
+                labels=category_sources,
+                average=None,
+                zero_division=0,
             )
+            category_per_source_f1[category.value] = dict(
+                zip(category_sources, map(float, category_f1_values), strict=True)
+            )
+            category_macro_f1[category.value] = float(np.mean(category_f1_values))
     return {
         "accuracy": float(accuracy_score(eval_labels, predictions)),
-        "macro_f1": float(f1_score(eval_labels, predictions, average="macro", zero_division=0)),
+        "macro_f1": float(np.mean(f1_values)),
         "worst_source_recall": min(per_source_recall.values()),
+        "source_recall_p05": float(np.quantile(recalls, 0.05)),
+        "per_source_f1": per_source_f1,
         "per_source_recall": per_source_recall,
         "category_macro_f1": category_macro_f1,
+        "category_per_source_f1": category_per_source_f1,
         "train_rows": int(train_mask.sum()),
         "eval_rows": int(eval_mask.sum()),
         "source_count": len(source_names),
+        "maximum_classifier_iterations": maximum_iterations,
+        "classifier_converged": True,
     }
 
 
@@ -320,77 +340,98 @@ def cluster_distribution_metrics(
 def collapse_metrics(
     vectors: np.ndarray,
     labels: np.ndarray,
-    splits: np.ndarray,
     categories: np.ndarray,
 ) -> dict[str, Any]:
     """Measure unique vectors, source concentration, variance, and rank."""
-    eval_vectors = vectors[splits == "eval"]
-    eval_labels = labels[splits == "eval"]
-    eval_categories = categories[splits == "eval"]
-    rounded = np.round(eval_vectors, decimals=4)
+    rounded = np.round(vectors, decimals=4)
     unique_fraction = float(np.unique(rounded, axis=0).shape[0] / len(rounded))
-    exact_unique_fraction = float(np.unique(eval_vectors, axis=0).shape[0] / len(eval_vectors))
-    clustering = MiniBatchKMeans(
-        n_clusters=CLUSTER_COUNT,
-        random_state=SEED,
-        batch_size=4_096,
-        n_init=10,
-    ).fit_predict(eval_vectors)
+    exact_unique_fraction = float(np.unique(vectors, axis=0).shape[0] / len(vectors))
+    clusterings = [
+        MiniBatchKMeans(
+            n_clusters=CLUSTER_COUNT,
+            random_state=seed,
+            batch_size=4_096,
+            n_init=10,
+        ).fit_predict(vectors)
+        for seed in CLUSTER_SEEDS
+    ]
+    distributions_by_seed = [
+        {"seed": seed} | cluster_distribution_metrics(clustering, labels, categories)
+        for seed, clustering in zip(CLUSTER_SEEDS, clusterings, strict=True)
+    ]
+    distribution_fields = ("largest_cluster_share", "effective_cluster_count", "source_cluster_nmi")
+    cluster_distribution: dict[str, Any] = {
+        field: float(np.median([result[field] for result in distributions_by_seed])) for field in distribution_fields
+    }
+    cluster_distribution["metric_ranges"] = {
+        field: {
+            "minimum": min(result[field] for result in distributions_by_seed),
+            "maximum": max(result[field] for result in distributions_by_seed),
+        }
+        for field in distribution_fields
+    }
+    cluster_distribution["by_seed"] = distributions_by_seed
     per_source = {}
-    for source in sorted(set(eval_labels)):
-        mask = eval_labels == source
-        source_vectors = eval_vectors[mask]
-        counts = Counter(clustering[mask])
+    for source in sorted(set(labels)):
+        mask = labels == source
+        source_vectors = vectors[mask]
+        largest_cluster_shares = [
+            float(np.bincount(clustering[mask], minlength=CLUSTER_COUNT).max() / int(mask.sum()))
+            for clustering in clusterings
+        ]
         total_variance, rank = effective_rank(source_vectors)
         per_source[source] = {
             "rows": int(mask.sum()),
             "unique_fraction_4dp": float(
                 np.unique(np.round(source_vectors, decimals=4), axis=0).shape[0] / len(source_vectors)
             ),
-            "largest_cluster_share": max(counts.values()) / int(mask.sum()),
+            "largest_cluster_share": max(largest_cluster_shares),
+            "median_largest_cluster_share": float(np.median(largest_cluster_shares)),
+            "largest_cluster_share_by_seed": dict(zip(map(str, CLUSTER_SEEDS), largest_cluster_shares, strict=True)),
             "total_variance": total_variance,
             "effective_rank": rank,
         }
     return {
-        "finite_fraction": float(np.isfinite(eval_vectors).all(axis=1).mean()),
+        "finite_fraction": float(np.isfinite(vectors).all(axis=1).mean()),
+        "finite_check": "enforced_before_metrics",
         "exact_unique_fraction": exact_unique_fraction,
         "unique_fraction_4dp": unique_fraction,
         "cluster_count": CLUSTER_COUNT,
-        "cluster_distribution": cluster_distribution_metrics(
-            clustering,
-            eval_labels,
-            eval_categories,
-        ),
+        "cluster_seeds": list(CLUSTER_SEEDS),
+        "cluster_distribution": cluster_distribution,
         "per_source": per_source,
     }
 
 
-def pair_indices(labels: np.ndarray, splits: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def pair_indices(labels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Return fixed within-source and across-source evaluation pairs."""
-    eval_indices = np.flatnonzero(splits == "eval")
-    by_source: dict[str, np.ndarray] = {
-        source: eval_indices[labels[eval_indices] == source] for source in sorted(set(labels[eval_indices]))
-    }
+    sources = sorted(set(labels))
+    by_source = [np.flatnonzero(labels == source) for source in sources]
+    row_counts = {len(indices) for indices in by_source}
+    if len(row_counts) != 1:
+        raise ValueError(f"Sources have different evaluation row counts: {sorted(row_counts)}")
+    rows_per_source = row_counts.pop()
+    if rows_per_source < 2:
+        raise ValueError("Each source needs at least two evaluation rows")
+    source_rows = np.stack(by_source)
     rng = np.random.default_rng(SEED)
-    sources = sorted(by_source)
-    within_left = []
-    within_right = []
-    for _ in range(PAIR_COUNT_WITHIN_SOURCE):
-        source = sources[int(rng.integers(len(sources)))]
-        selected = rng.choice(by_source[source], size=2, replace=False)
-        within_left.append(selected[0])
-        within_right.append(selected[1])
-    across_left = []
-    across_right = []
-    for _ in range(PAIR_COUNT_ACROSS_SOURCE):
-        source_indices = rng.choice(len(sources), size=2, replace=False)
-        left_source = sources[int(source_indices[0])]
-        right_source = sources[int(source_indices[1])]
-        across_left.append(rng.choice(by_source[left_source]))
-        across_right.append(rng.choice(by_source[right_source]))
+    within_sources = rng.integers(len(sources), size=PAIR_COUNT_WITHIN_SOURCE)
+    within_left_offsets = rng.integers(rows_per_source, size=PAIR_COUNT_WITHIN_SOURCE)
+    within_right_offsets = rng.integers(rows_per_source - 1, size=PAIR_COUNT_WITHIN_SOURCE)
+    within_right_offsets += within_right_offsets >= within_left_offsets
+    within_left = source_rows[within_sources, within_left_offsets]
+    within_right = source_rows[within_sources, within_right_offsets]
+
+    across_left_sources = rng.integers(len(sources), size=PAIR_COUNT_ACROSS_SOURCE)
+    across_right_sources = rng.integers(len(sources) - 1, size=PAIR_COUNT_ACROSS_SOURCE)
+    across_right_sources += across_right_sources >= across_left_sources
+    across_left_offsets = rng.integers(rows_per_source, size=PAIR_COUNT_ACROSS_SOURCE)
+    across_right_offsets = rng.integers(rows_per_source, size=PAIR_COUNT_ACROSS_SOURCE)
+    across_left = source_rows[across_left_sources, across_left_offsets]
+    across_right = source_rows[across_right_sources, across_right_offsets]
     return (
-        np.asarray(within_left + across_left),
-        np.asarray(within_right + across_right),
+        np.concatenate((within_left, across_left)),
+        np.concatenate((within_right, across_right)),
     )
 
 
@@ -424,22 +465,19 @@ def model_metrics(
     model: Embedder,
     texts: list[str],
     labels: np.ndarray,
-    splits: np.ndarray,
+    probe_roles: np.ndarray,
     categories: np.ndarray,
     teacher_vectors: np.ndarray,
     left: np.ndarray,
     right: np.ndarray,
-) -> tuple[dict[str, Any], np.ndarray]:
-    """Return all fixed metrics and model vectors."""
+) -> dict[str, Any]:
+    """Return all fixed model metrics."""
     vectors = embed_on_cpu(model, texts)
-    return (
-        {
-            "probe": source_probe(vectors, labels, splits, categories),
-            "collapse": collapse_metrics(vectors, labels, splits, categories),
-            "arctic_fidelity": cosine_fidelity(vectors, teacher_vectors, left, right),
-        },
-        vectors,
-    )
+    return {
+        "probe": source_probe(vectors, labels, probe_roles, categories),
+        "collapse": collapse_metrics(vectors, labels, categories),
+        "arctic_fidelity": cosine_fidelity(vectors, teacher_vectors, left, right),
+    }
 
 
 def collapse_comparison(
@@ -481,6 +519,49 @@ def collapse_comparison(
     }
 
 
+def paired_bootstrap_delta(
+    student_values: dict[str, float],
+    baseline_values: dict[str, float],
+    label: str,
+) -> dict[str, float]:
+    """Return a paired source bootstrap interval for a mean delta."""
+    sources = sorted(student_values)
+    if sources != sorted(baseline_values):
+        raise ValueError(f"Bootstrap sources differ for {label}")
+    deltas = np.asarray([student_values[source] - baseline_values[source] for source in sources])
+    seed = int.from_bytes(hashlib.sha256(f"{SEED}:{label}".encode()).digest()[:8], "little")
+    rng = np.random.default_rng(seed)
+    samples = rng.integers(len(deltas), size=(BOOTSTRAP_SAMPLES, len(deltas)))
+    means = deltas[samples].mean(axis=1)
+    return {
+        "point_estimate": float(deltas.mean()),
+        "ci95_lower": float(np.quantile(means, 0.025)),
+        "ci95_upper": float(np.quantile(means, 0.975)),
+        "source_count": len(sources),
+        "bootstrap_samples": BOOTSTRAP_SAMPLES,
+    }
+
+
+def probe_uncertainty(student: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]:
+    """Return paired source bootstrap intervals for probe deltas."""
+    categories = {}
+    for category, student_values in student["category_per_source_f1"].items():
+        categories[category] = paired_bootstrap_delta(
+            student_values,
+            baseline["category_per_source_f1"][category],
+            f"probe-category:{category}",
+        )
+    return {
+        "method": "paired_source_bootstrap",
+        "macro_f1_delta": paired_bootstrap_delta(
+            student["per_source_f1"],
+            baseline["per_source_f1"],
+            "probe-macro-f1",
+        ),
+        "category_macro_f1_delta": categories,
+    }
+
+
 def comparison_report(student: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]:
     """Return all pass gates for one student."""
     collapse = collapse_comparison(student["collapse"], baseline["collapse"])
@@ -499,6 +580,7 @@ def comparison_report(student: dict[str, Any], baseline: dict[str, Any]) -> dict
         category: student["probe"]["category_macro_f1"][category] - baseline["probe"]["category_macro_f1"][category]
         for category in required_categories
     }
+    uncertainty = probe_uncertainty(student["probe"], baseline["probe"])
     gates = {
         "finite": collapse["finite_gate_passed"],
         "unique": collapse["overall_unique_gate_passed"],
@@ -518,6 +600,7 @@ def comparison_report(student: dict[str, Any], baseline: dict[str, Any]) -> dict
         "worst_source_recall_delta": worst_recall_delta,
         "arctic_fidelity_delta": fidelity_delta,
         "category_macro_f1_delta": category_macro_f1_delta,
+        "probe_uncertainty": uncertainty,
         "cluster_distribution_delta": {
             "largest_cluster_share": (
                 student_distribution["largest_cluster_share"] - baseline_distribution["largest_cluster_share"]
@@ -591,7 +674,6 @@ def write_report(report: dict[str, Any], rung: str) -> tuple[str, str]:
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse the ladder rung."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--rung", choices=("750k", "3m"), required=True)
     return parser.parse_args()
@@ -602,8 +684,8 @@ def main() -> None:
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
     arguments = parse_args()
     manifest = read_json(MANIFEST_URL)
-    texts, labels, splits, categories, teacher_vectors = fixed_evaluation_data(manifest)
-    left, right = pair_indices(labels, splits)
+    texts, labels, probe_roles, categories, teacher_vectors = fixed_evaluation_data(manifest)
+    left, right = pair_indices(labels)
     baseline_path = hf_hub_download(
         repo_id=BASELINE_REPO,
         filename=BASELINE_FILE,
@@ -613,21 +695,21 @@ def main() -> None:
         student_path = download_student(arguments.rung, Path(temporary_directory))
         baseline = Embedder.load(baseline_path)
         student = Embedder.load(student_path)
-        baseline_metrics, _ = model_metrics(
+        baseline_metrics = model_metrics(
             baseline,
             texts,
             labels,
-            splits,
+            probe_roles,
             categories,
             teacher_vectors,
             left,
             right,
         )
-        student_metrics, _ = model_metrics(
+        student_metrics = model_metrics(
             student,
             texts,
             labels,
-            splits,
+            probe_roles,
             categories,
             teacher_vectors,
             left,
@@ -646,6 +728,7 @@ def main() -> None:
         "thresholds": {
             "minimum_unique_fraction": MIN_UNIQUE_FRACTION,
             "maximum_source_cluster_share": CLUSTER_MAX_SOURCE_SHARE,
+            "cluster_seeds": list(CLUSTER_SEEDS),
             "minimum_effective_rank_ratio": MIN_EFFECTIVE_RANK_RATIO,
             "minimum_variance_ratio": MIN_VARIANCE_RATIO,
             "minimum_quality_delta": QUALITY_DELTA,
@@ -696,6 +779,7 @@ def main() -> None:
         "baseline": {
             "macro_f1": baseline_metrics["probe"]["macro_f1"],
             "worst_source_recall": baseline_metrics["probe"]["worst_source_recall"],
+            "source_recall_p05": baseline_metrics["probe"]["source_recall_p05"],
             "category_macro_f1": baseline_metrics["probe"]["category_macro_f1"],
             "arctic_fidelity_spearman": baseline_metrics["arctic_fidelity"]["spearman"],
             "cpu_documents_per_second": baseline_metrics["speed"]["median_documents_per_second"],
@@ -704,6 +788,7 @@ def main() -> None:
         "student": {
             "macro_f1": student_metrics["probe"]["macro_f1"],
             "worst_source_recall": student_metrics["probe"]["worst_source_recall"],
+            "source_recall_p05": student_metrics["probe"]["source_recall_p05"],
             "category_macro_f1": student_metrics["probe"]["category_macro_f1"],
             "arctic_fidelity_spearman": student_metrics["arctic_fidelity"]["spearman"],
             "cpu_documents_per_second": student_metrics["speed"]["median_documents_per_second"],
