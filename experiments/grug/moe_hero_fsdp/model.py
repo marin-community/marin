@@ -858,8 +858,11 @@ class Block(eqx.Module):
 
 
 def _long_layer_schedule(num_layers: int, global_every: int) -> jax.Array:
+    """Bool[num_layers], True on global (full-causal) layers: every ``global_every``-th layer, plus the
+    final layer always. (For depths that are a multiple of ``global_every`` the final layer is already
+    global, so this is a no-op there.)"""
     layer_indices = jnp.arange(num_layers)
-    return ((layer_indices + 1) % global_every) == 0
+    return (((layer_indices + 1) % global_every) == 0) | (layer_indices == (num_layers - 1))
 
 
 class Transformer(eqx.Module):
