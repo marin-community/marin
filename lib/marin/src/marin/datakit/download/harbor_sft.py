@@ -9,11 +9,12 @@ synthetic-data generation accepts training rows and preserves the trajectory's
 structured supervision. This module implements that completion transform as a
 Datakit step.
 
-Co-located harnesses can export structured messages directly. Installed
+Terminus-2 records its literal model interaction in ``conversations``. Installed
 harnesses such as OpenCode run inside the sandbox and call a remote inference
 service, so their ``conversations`` projection omits the served system prompt,
 tool definitions, and structured calls. For those rows, the literal prompt and
-completion token columns are the source of truth.
+completion token columns are the source of truth. The row-level ``agent``
+provenance selects the adapter; manifests may assert but cannot override it.
 """
 
 from __future__ import annotations
@@ -27,8 +28,9 @@ from pathlib import Path
 from typing import Protocol
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 from fray.types import ResourceConfig
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem import StoragePath, open_url, prefix_join
 from transformers import AutoTokenizer
 from zephyr import counters
 from zephyr.dataset import Dataset
@@ -90,10 +92,11 @@ class TokenDecoder(Protocol):
 
 
 class HarborSftHarness(StrEnum):
-    """How a Harbor row recorded the model interaction."""
+    """The Harbor agent that recorded the model interaction."""
 
-    STRUCTURED = "structured"
-    OPENCODE_LITERALS = "opencode_literals"
+    AUTO = "auto"
+    TERMINUS_2 = "terminus-2"
+    OPENCODE = "opencode"
 
 
 class RejectionReason(StrEnum):
@@ -126,7 +129,7 @@ class HarborSftSource:
     name: str
     hf_dataset_id: str
     revision: str
-    harness: HarborSftHarness
+    harness: HarborSftHarness = HarborSftHarness.AUTO
     teacher_tokenizer: str | None = None
     teacher_tokenizer_revision: str | None = None
     expected_rows: int | None = None
@@ -343,8 +346,9 @@ def _serialized_tools(value) -> str | None:
     return json.dumps(value, ensure_ascii=False)
 
 
-def _convert_structured(row: dict) -> HarborSftConversion:
-    source_messages = row.get("messages") or row.get("conversations")
+def _convert_terminus_2(row: dict) -> HarborSftConversion:
+    """Preserve Terminus-2 conversations exactly as recorded for SFT."""
+    source_messages = row.get("conversations") or row.get("messages")
     if not isinstance(source_messages, list) or not source_messages:
         return _reject(RejectionReason.INVALID_MESSAGES)
 
@@ -402,17 +406,64 @@ def _convert_structured(row: dict) -> HarborSftConversion:
     )
 
 
+def _harness_from_agent(agent: object) -> HarborSftHarness:
+    if not isinstance(agent, str) or not agent:
+        raise ValueError("Harbor trace row is missing a non-empty agent value")
+    try:
+        harness = HarborSftHarness(agent)
+    except ValueError as exc:
+        raise ValueError(f"unknown Harbor agent {agent!r}") from exc
+    if harness is HarborSftHarness.AUTO:
+        raise ValueError("Harbor trace rows cannot use agent='auto'")
+    return harness
+
+
+def _assert_harness(detected: HarborSftHarness, asserted: HarborSftHarness) -> HarborSftHarness:
+    if asserted is not HarborSftHarness.AUTO and asserted is not detected:
+        raise ValueError(f"Harbor harness mismatch: manifest asserts {asserted.value!r}, traces use {detected.value!r}")
+    return detected
+
+
+def detect_harbor_harness(
+    input_path: str,
+    asserted_harness: HarborSftHarness = HarborSftHarness.AUTO,
+) -> HarborSftHarness:
+    """Detect one uniform, recognized harness from every trace row's ``agent`` field."""
+    parquet_paths = sorted(StoragePath(prefix_join(input_path, "**/*.parquet")).glob(), key=str)
+    if not parquet_paths:
+        raise FileNotFoundError(f"No .parquet files found under {input_path}")
+
+    detected: set[HarborSftHarness] = set()
+    for parquet_path in parquet_paths:
+        with open_url(str(parquet_path), "rb") as parquet_file:
+            schema = pq.ParquetFile(parquet_file).schema_arrow
+        if "agent" not in schema.names:
+            raise ValueError(f"Harbor trace parquet is missing the agent column: {parquet_path}")
+
+        with open_url(str(parquet_path), "rb") as parquet_file:
+            for batch in pq.ParquetFile(parquet_file).iter_batches(columns=["agent"]):
+                detected.update(_harness_from_agent(agent) for agent in batch.column("agent").to_pylist())
+                if len(detected) > 1:
+                    names = sorted(harness.value for harness in detected)
+                    raise ValueError(f"mixed Harbor harnesses under {input_path}: {names}")
+
+    if not detected:
+        raise ValueError(f"No Harbor trace rows found under {input_path}")
+    return _assert_harness(detected.pop(), asserted_harness)
+
+
 def convert_harbor_row(
     row: dict,
     harness: HarborSftHarness,
     tokenizer: TokenDecoder | None,
 ) -> HarborSftConversion:
     """Convert one Harbor row without silently using a lossy fallback."""
-    if harness is HarborSftHarness.OPENCODE_LITERALS:
+    detected_harness = _assert_harness(_harness_from_agent(row.get("agent")), harness)
+    if detected_harness is HarborSftHarness.OPENCODE:
         return _convert_opencode_literals(row, tokenizer)
-    if harness is HarborSftHarness.STRUCTURED:
-        return _convert_structured(row)
-    raise ValueError(f"unsupported Harbor SFT harness: {harness}")
+    if detected_harness is HarborSftHarness.TERMINUS_2:
+        return _convert_terminus_2(row)
+    raise ValueError(f"unsupported Harbor SFT harness: {detected_harness}")
 
 
 @cache
@@ -446,8 +497,10 @@ def resolve_teacher_tokenizer(
     override_revision: str | None,
 ) -> tuple[str | None, str | None]:
     """Resolve the exact tokenizer that produced literal IDs, failing closed."""
-    if harness is HarborSftHarness.STRUCTURED:
+    if harness is HarborSftHarness.TERMINUS_2:
         return None, None
+    if harness is HarborSftHarness.AUTO:
+        raise ValueError("resolve the Harbor harness before resolving its teacher tokenizer")
     if override:
         if not override_revision:
             raise ValueError("teacher_tokenizer_revision is required for literal conversion")
@@ -479,10 +532,11 @@ def transform_harbor_sft(
     teacher_tokenizer_revision: str | None = None,
     expected_rows: int | None = None,
 ) -> None:
-    """Stream downloaded Harbor parquet through the selected SFT adapter."""
+    """Detect the trace harness, then stream parquet through its SFT adapter."""
+    detected_harness = detect_harbor_harness(input_path, harness)
     tokenizer_ref, tokenizer_revision = resolve_teacher_tokenizer(
         input_path,
-        harness,
+        detected_harness,
         teacher_tokenizer,
         teacher_tokenizer_revision,
     )
@@ -492,7 +546,7 @@ def transform_harbor_sft(
         .flat_map(
             partial(
                 _pipeline_convert,
-                harness=harness,
+                harness=detected_harness,
                 tokenizer_ref=tokenizer_ref,
                 tokenizer_revision=tokenizer_revision,
             )
@@ -504,7 +558,7 @@ def transform_harbor_sft(
         )
     )
     context = ZephyrContext(
-        name=f"harbor-sft-{harness.value}",
+        name=f"harbor-sft-{detected_harness.value}",
         resources=ResourceConfig(cpu=1, ram="32g"),
     )
     outcome = context.execute(pipeline)
@@ -533,7 +587,7 @@ def harbor_sft_steps(source: HarborSftSource) -> tuple[StepSpec, StepSpec]:
             expected_rows=source.expected_rows,
         ),
         hash_attrs={
-            "version": "v1",
+            "version": "v2",
             "hf_dataset_id": source.hf_dataset_id,
             "revision": source.revision,
             "harness": source.harness.value,
@@ -554,7 +608,7 @@ def load_harbor_sft_manifest(path: str | Path) -> HarborSftManifest:
     if not isinstance(name, str) or not name or not isinstance(raw_sources, list):
         raise ValueError(f"invalid Harbor SFT manifest: {manifest_path}")
 
-    default_harness = data.get("harness")
+    default_harness = data.get("harness", HarborSftHarness.AUTO.value)
     default_tokenizer = data.get("teacher_tokenizer")
     default_tokenizer_revision = data.get("teacher_tokenizer_revision")
     sources: list[HarborSftSource] = []

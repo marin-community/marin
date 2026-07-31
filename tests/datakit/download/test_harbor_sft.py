@@ -5,12 +5,15 @@ import hashlib
 import json
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from datasets import load_dataset
 from marin.datakit.download.harbor_sft import (
     HarborSftHarness,
     RejectionReason,
     convert_harbor_row,
+    detect_harbor_harness,
     load_harbor_sft_manifest,
     resolve_teacher_tokenizer,
 )
@@ -75,6 +78,7 @@ def _literal_row() -> tuple[dict, MappingTokenizer]:
         }
     )
     row = {
+        "agent": "opencode",
         "task": "parser-regression",
         "prompt_token_ids": [[1], [10]],
         "completion_token_ids": [[2], [3]],
@@ -91,7 +95,7 @@ def _literal_row() -> tuple[dict, MappingTokenizer]:
 def test_opencode_literals_reconstruct_tools_aware_sft_record():
     row, tokenizer = _literal_row()
 
-    result = convert_harbor_row(row, HarborSftHarness.OPENCODE_LITERALS, tokenizer)
+    result = convert_harbor_row(row, HarborSftHarness.AUTO, tokenizer)
 
     assert result.rejection is None
     assert result.record == {
@@ -154,45 +158,115 @@ def test_opencode_literals_reject_lossy_or_misaligned_rows(change, reason):
     row, tokenizer = _literal_row()
     row.update(change)
 
-    result = convert_harbor_row(row, HarborSftHarness.OPENCODE_LITERALS, tokenizer)
+    result = convert_harbor_row(row, HarborSftHarness.AUTO, tokenizer)
 
     assert result.record is None
     assert result.rejection is reason
 
 
-def test_structured_harbor_rows_do_not_require_literal_reconstruction():
+def test_terminus_2_conversations_are_literal_sft_ground_truth():
     row = {
-        "task": "structured-trial",
-        "tools": TOOLS,
+        "agent": "terminus-2",
+        "task_id": "terminus-trial",
         "messages": [
-            {"role": "system", "content": "Use the available tools."},
+            {"role": "user", "content": "Lossy projection."},
+            {"role": "assistant", "content": "Do not train on this."},
+        ],
+        "conversations": [
             {"role": "user", "content": "List the files."},
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "bash",
-                            "arguments": {"command": "ls"},
-                        },
-                    }
-                ],
-            },
-            {"role": "tool", "content": "README.md"},
+            {"role": "assistant", "content": '{"cmd":"ls"}'},
+            {"role": "user", "content": "Chunk ID: abc123\nProcess exited with code 0\nFinal output:\nREADME.md"},
             {"role": "assistant", "content": "README.md is present."},
         ],
     }
 
-    result = convert_harbor_row(row, HarborSftHarness.STRUCTURED, tokenizer=None)
+    result = convert_harbor_row(row, HarborSftHarness.AUTO, tokenizer=None)
 
     assert result.rejection is None
-    assert result.record["messages"][2]["tool_calls"][0]["function"]["arguments"] == '{"command": "ls"}'
-    assert result.record["messages"][3]["role"] == "tool"
-    assert result.record["tools"] == json.dumps(TOOLS, ensure_ascii=False)
-    assert result.record["num_turns"] == 5
-    assert result.record["num_tool_calls"] == 1
+    assert result.record == {
+        "messages": [
+            {"role": "user", "content": "List the files.", "tool_calls": []},
+            {"role": "assistant", "content": '{"cmd":"ls"}', "tool_calls": []},
+            {
+                "role": "user",
+                "content": "Chunk ID: abc123\nProcess exited with code 0\nFinal output:\nREADME.md",
+                "tool_calls": [],
+            },
+            {"role": "assistant", "content": "README.md is present.", "tool_calls": []},
+        ],
+        "tools": "[]",
+        "task": "terminus-trial",
+        "num_turns": 4,
+        "num_tool_calls": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("row_factory", "asserted_harness"),
+    [
+        (_literal_row, HarborSftHarness.TERMINUS_2),
+        (
+            lambda: (
+                {
+                    "agent": "terminus-2",
+                    "conversations": [
+                        {"role": "user", "content": "Do the task."},
+                        {"role": "assistant", "content": "Done."},
+                    ],
+                },
+                None,
+            ),
+            HarborSftHarness.OPENCODE,
+        ),
+    ],
+)
+def test_row_harness_assertion_rejects_mismatch(row_factory, asserted_harness):
+    row, tokenizer = row_factory()
+
+    with pytest.raises(ValueError, match="harness mismatch"):
+        convert_harbor_row(row, asserted_harness, tokenizer)
+
+
+@pytest.mark.parametrize("agent", [None, "", "unknown-agent"])
+def test_row_harness_detection_rejects_missing_or_unknown_agent(agent):
+    row, tokenizer = _literal_row()
+    row["agent"] = agent
+
+    with pytest.raises(ValueError, match="agent"):
+        convert_harbor_row(row, HarborSftHarness.AUTO, tokenizer)
+
+
+def _write_agent_shard(path: Path, agents: list[str]) -> None:
+    pq.write_table(pa.table({"agent": agents}), path)
+
+
+def test_dataset_harness_detection_requires_one_uniform_known_agent(tmp_path):
+    uniform = tmp_path / "uniform"
+    uniform.mkdir()
+    _write_agent_shard(uniform / "part-0.parquet", ["terminus-2", "terminus-2"])
+    _write_agent_shard(uniform / "part-1.parquet", ["terminus-2"])
+
+    assert detect_harbor_harness(str(uniform), HarborSftHarness.AUTO) is HarborSftHarness.TERMINUS_2
+    assert detect_harbor_harness(str(uniform), HarborSftHarness.TERMINUS_2) is HarborSftHarness.TERMINUS_2
+
+    mixed = tmp_path / "mixed"
+    mixed.mkdir()
+    _write_agent_shard(mixed / "part.parquet", ["terminus-2", "opencode"])
+    with pytest.raises(ValueError, match="mixed Harbor harnesses"):
+        detect_harbor_harness(str(mixed), HarborSftHarness.AUTO)
+
+    unknown = tmp_path / "unknown"
+    unknown.mkdir()
+    _write_agent_shard(unknown / "part.parquet", ["custom-agent"])
+    with pytest.raises(ValueError, match="unknown Harbor agent"):
+        detect_harbor_harness(str(unknown), HarborSftHarness.AUTO)
+
+
+def test_dataset_harness_assertion_rejects_mismatch(tmp_path):
+    _write_agent_shard(tmp_path / "part.parquet", ["opencode"])
+
+    with pytest.raises(ValueError, match="harness mismatch"):
+        detect_harbor_harness(str(tmp_path), HarborSftHarness.TERMINUS_2)
 
 
 def test_manifest_applies_adapter_defaults_and_preserves_reproduction_gates(tmp_path):
@@ -201,7 +275,6 @@ def test_manifest_applies_adapter_defaults_and_preserves_reproduction_gates(tmp_
         json.dumps(
             {
                 "name": "historical-run",
-                "harness": "opencode_literals",
                 "teacher_tokenizer": "teacher/tokenizer",
                 "teacher_tokenizer_revision": "0123456789abcdef0123456789abcdef01234567",
                 "sources": [
@@ -219,7 +292,7 @@ def test_manifest_applies_adapter_defaults_and_preserves_reproduction_gates(tmp_
     manifest = load_harbor_sft_manifest(manifest_path)
 
     assert manifest.name == "historical-run"
-    assert manifest.sources[0].harness is HarborSftHarness.OPENCODE_LITERALS
+    assert manifest.sources[0].harness is HarborSftHarness.AUTO
     assert manifest.sources[0].teacher_tokenizer == "teacher/tokenizer"
     assert manifest.sources[0].teacher_tokenizer_revision == "0123456789abcdef0123456789abcdef01234567"
     assert manifest.sources[0].expected_rows == 22
@@ -231,7 +304,7 @@ def test_literal_tokenizer_provenance_must_pin_the_model_revision(tmp_path):
     with pytest.raises(ValueError, match="does not pin served_model_revision"):
         resolve_teacher_tokenizer(
             str(tmp_path),
-            HarborSftHarness.OPENCODE_LITERALS,
+            HarborSftHarness.OPENCODE,
             override=None,
             override_revision=None,
         )
@@ -302,7 +375,7 @@ def test_reproduces_grug_curriculum_training_records(
         if (
             result := convert_harbor_row(
                 row,
-                HarborSftHarness.OPENCODE_LITERALS,
+                HarborSftHarness.AUTO,
                 tokenizer,
             )
         ).record

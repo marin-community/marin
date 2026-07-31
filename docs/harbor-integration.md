@@ -166,11 +166,16 @@ uv run python -m experiments.datakit.harbor_sft \
   --only exp_rpt_curriculum-hard
 ```
 
-The manifest selects one of two explicit adapters:
+The converter scans the trace dataset's `agent` column and requires one uniform, recognized
+harness. It then selects one of two adapters:
 
-- `structured` validates messages and tool calls exported by a co-located Harbor harness.
-- `opencode_literals` reconstructs an installed OpenCode harness interaction from its recorded
+- `terminus-2` preserves the recorded `conversations` as literal SFT ground truth.
+- `opencode` reconstructs an installed OpenCode harness interaction from its recorded
   `prompt_token_ids` and `completion_token_ids`, using the exact revision-pinned teacher tokenizer.
+
+The manifest may omit `harness` for automatic detection or set `terminus-2`/`opencode` as an
+assertion. Unknown agents, mixed-harness inputs, and manifest/provenance mismatches fail before
+conversion.
 
 Installed harnesses run in the sandbox and call the inference endpoint remotely. Harbor therefore
 cannot recover the served system prompt, tool schemas, or structured calls from the displayed

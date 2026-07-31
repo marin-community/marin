@@ -3,10 +3,11 @@
 
 """Materialize SFT-ready records from pinned Harbor trace datasets.
 
-The manifest selects a harness adapter per source. Structured Harbor exports
-pass through validation and Arrow normalization. Installed OpenCode harness
-exports are rebuilt from their literal prompt/completion token columns with the
-exact teacher tokenizer.
+The trace ``agent`` provenance selects a harness adapter per source. Terminus-2
+conversations pass through validation and Arrow normalization. Installed
+OpenCode harness exports are rebuilt from their literal prompt/completion token
+columns with the exact teacher tokenizer. A manifest harness value is an
+optional assertion, not a routing override.
 
 Run the historical Grug reproduction on Iris::
 
