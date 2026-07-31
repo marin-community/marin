@@ -69,7 +69,7 @@ from zephyr.stats import (
     StatsWriter,
     ZephyrWorkerStatStatus,
 )
-from zephyr.worker_context import CounterEntry, CounterSnapshot, merge_counter_entries
+from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot, merge_counter_entries
 from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
@@ -297,11 +297,13 @@ class ZephyrCoordinator:
         self._heartbeat_timeout = heartbeat_timeout
         self._max_shard_failures = max_shard_failures
         self._max_shard_infra_failures = max_shard_infra_failures
-        # Per-worker in-flight counter snapshots and completed snapshots.
-        # Each snapshot carries a monotonic generation so the coordinator
-        # can discard stale or out-of-order heartbeats.
+        # Per-worker in-flight counter snapshots. Each snapshot carries a
+        # monotonic generation so the coordinator can discard stale or
+        # out-of-order heartbeats.
         self._worker_counters: dict[str, CounterSnapshot] = {}
-        self._completed_counters: list[CounterSnapshot] = []
+        # Running fold of every completed task's counters, keyed by
+        # (stage, name, aggregation). See _fold_completed_counters.
+        self._completed_totals: dict[tuple[str | None, str, Aggregation], CounterEntry] = {}
 
         # Worker management state (workers self-register via register_worker)
         self._worker_handles: dict[str, ActorHandle] = {}
@@ -749,7 +751,7 @@ class ZephyrCoordinator:
             self._completed_shards += 1
             self._progress_time_seconds = time.time()
             self._in_flight.pop(shard_idx, None)
-            self._completed_counters.append(counter_snapshot)
+            self._fold_completed_counters(counter_snapshot)
             # Zero the in-flight counters but keep the generation watermark
             # so late heartbeats from this task are rejected.
             self._worker_counters[worker_id] = CounterSnapshot.empty(counter_snapshot.generation)
@@ -799,6 +801,27 @@ class ZephyrCoordinator:
                 },
             )
 
+    def _fold_completed_counters(self, snapshot: CounterSnapshot) -> None:
+        """Fold one completed task's counters into ``_completed_totals``. Lock held.
+
+        Retaining a snapshot per completed shard would grow without bound over a
+        pipeline (and make every ``get_counters`` call re-merge the whole
+        history), so entries are reduced on arrival instead. The key carries the
+        stage and aggregation alongside the name so pre-folding changes nothing
+        observable: ``get_counters(stage=...)`` still filters on stage, and
+        entries that disagree on aggregation stay separate for
+        :func:`merge_counter_entries` to detect as a conflict. Every supported
+        aggregation is associative — AVERAGE included, because entries carry
+        their observation count — so folding early yields the same totals.
+        """
+        for name, entry in snapshot.counters.items():
+            key = (entry.stage, name, entry.aggregation)
+            accumulated = self._completed_totals.get(key)
+            if accumulated is None:
+                self._completed_totals[key] = CounterEntry(entry.value, entry.aggregation, entry.stage, entry.count)
+            else:
+                accumulated.merge(entry)
+
     def get_counters(self, worker_id: str | None = None, *, stage: str | None = None) -> dict[str, int | float]:
         """Return counter values, optionally filtered to a single worker or stage.
 
@@ -809,13 +832,13 @@ class ZephyrCoordinator:
             stage: If provided, only include entries with ``entry.stage == stage``.
                 If None (default), include all entries regardless of stage.
 
-        Snapshots are folded with :func:`merge_counter_entries`, the same
+        Counters are folded with :func:`merge_counter_entries`, the same
         reducer the worker uses to combine its concurrent runners, so an
         AVERAGE counter is weighted by each entry's observation count rather
         than treating one shard's single sample as equal to another's
         thousand.
 
-        If snapshots disagree on a counter's aggregation (only possible for
+        If entries disagree on a counter's aggregation (only possible for
         user counters that reuse a name with different ``set_aggregation``
         modes), the counter is omitted from the result and a warning is
         logged — stats collection never raises into the execution path.
@@ -827,14 +850,21 @@ class ZephyrCoordinator:
                     return {}
                 return {k: e.value for k, e in snap.counters.items() if stage is None or e.stage == stage}
 
-            all_snaps = list(self._completed_counters) + list(self._worker_counters.values())
+            # Copy the completed accumulators: they are mutated in place by
+            # _fold_completed_counters, and merging happens outside the lock.
+            entries = [
+                (name, CounterEntry(e.value, e.aggregation, e.stage, e.count))
+                for (entry_stage, name, _), e in self._completed_totals.items()
+                if stage is None or entry_stage == stage
+            ]
+            entries += [
+                (k, entry)
+                for snap in self._worker_counters.values()
+                for k, entry in snap.counters.items()
+                if stage is None or entry.stage == stage
+            ]
 
-        merged, conflicted = merge_counter_entries(
-            (k, entry)
-            for snap in all_snaps
-            for k, entry in snap.counters.items()
-            if stage is None or entry.stage == stage
-        )
+        merged, conflicted = merge_counter_entries(entries)
         return {k: e.value for k, e in merged.items() if k not in conflicted}
 
     def get_fatal_error(self) -> str | None:
@@ -881,7 +911,7 @@ class ZephyrCoordinator:
             self._fatal_error = None
             self._is_last_stage = is_last_stage
             self._stage_complete = False
-            # Only reset in-flight worker snapshots; completed snapshots
+            # Only reset in-flight worker snapshots; completed totals
             # accumulate across stages for full pipeline visibility.
             self._worker_counters = {}
             self._stage_monotonic_start = time.monotonic()

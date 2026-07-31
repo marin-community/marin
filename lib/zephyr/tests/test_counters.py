@@ -31,9 +31,11 @@ def _make_coordinator(
     """Build a minimal ZephyrCoordinator seeded with canned snapshots for testing."""
     coord = ZephyrCoordinator.__new__(ZephyrCoordinator)
     coord._lock = threading.Lock()
-    coord._completed_counters = list(completed)
+    coord._completed_totals = {}
     coord._worker_counters = {str(i): s for i, s in enumerate(inflight or [])}
     coord._progress_time_seconds = 0.0
+    for snapshot in completed:
+        coord._fold_completed_counters(snapshot)
     return coord
 
 
@@ -242,6 +244,39 @@ def test_aggregation_mixed():
         ]
     )
     assert coord.get_counters() == {"total": 30, "peak": 100}
+
+
+def test_counters_combine_completed_and_in_flight():
+    """Live totals fold finished tasks together with the running tasks' snapshots.
+
+    Completed tasks are reduced on arrival while in-flight workers keep
+    reporting fresh snapshots, so this is the one path where a pre-reduced
+    accumulator meets a raw snapshot. AVERAGE must stay weighted by observation
+    count across that boundary rather than treating the accumulator as one
+    sample.
+    """
+    coord = _make_coordinator(
+        completed=[
+            CounterSnapshot(
+                counters={"docs": CounterEntry(10), "cpu": CounterEntry(90, Aggregation.AVERAGE, count=3)},
+                generation=1,
+            ),
+            CounterSnapshot(
+                counters={"docs": CounterEntry(20), "cpu": CounterEntry(30, Aggregation.AVERAGE, count=1)},
+                generation=2,
+            ),
+        ],
+        inflight=[
+            CounterSnapshot(
+                counters={"docs": CounterEntry(5), "cpu": CounterEntry(50, Aggregation.AVERAGE, count=4)},
+                generation=7,
+            ),
+        ],
+    )
+
+    assert coord.get_counters()["docs"] == 35
+    # (90*3 + 30*1 + 50*4) / 8; dropping the observation counts gives 56.7.
+    assert coord.get_counters()["cpu"] == pytest.approx(62.5)
 
 
 def test_aggregation_conflict_drops_counter_and_warns(caplog):
