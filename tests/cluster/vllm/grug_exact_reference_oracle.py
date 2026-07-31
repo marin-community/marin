@@ -134,7 +134,9 @@ def _emit_fixture(output_dir: Path) -> None:
 
     config = GrugModelConfig(
         vocab_size=64,
-        hidden_dim=32,
+        # FA4's non-TMA paged-KV path on GB200 requires a 16-aligned head.
+        # Keep four heads so the 2-local/1-global KV-head distinction remains.
+        hidden_dim=64,
         intermediate_dim=16,
         shared_expert_intermediate_dim=32,
         num_shared_experts=2,
@@ -145,7 +147,7 @@ def _emit_fixture(output_dir: Path) -> None:
         num_kv_heads=2,
         local_kv_heads=2,
         global_kv_heads=1,
-        head_dim=8,
+        head_dim=16,
         max_seq_len=1024,
         sliding_window=512,
         global_every=6,

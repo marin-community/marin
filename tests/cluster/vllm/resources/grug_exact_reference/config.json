@@ -2,7 +2,7 @@
   "architectures": [
     "GrugMoeForCausalLM"
   ],
-  "attention_head_dim": 8,
+  "attention_head_dim": 16,
   "attn_gate": true,
   "disable_long_rope": true,
   "disable_pko": true,
@@ -10,9 +10,9 @@
   "gated_norm": true,
   "global_every": 6,
   "global_kv_heads": 1,
-  "head_dim": 8,
-  "hidden_dim": 32,
-  "hidden_size": 32,
+  "head_dim": 16,
+  "hidden_dim": 64,
+  "hidden_size": 64,
   "initializer_range": 0.02,
   "initializer_std": 0.02,
   "intermediate_dim": 16,

@@ -7,12 +7,14 @@ import base64
 import dataclasses
 import io
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 from experiments.grug.moe.inference_preflight import (
     CASES,
+    FROZEN_FIXTURE_PATH,
     SNOWBALL_EXPORT,
     VLLM_SHA,
     deterministic_boundary_workload,
@@ -143,6 +145,8 @@ def test_snowball_uses_pinned_export_and_streaming_loader() -> None:
 
 
 def test_frozen_fixture_uses_half_safetensors_and_every_custom_path() -> None:
+    fixture_config = json.loads((Path(FROZEN_FIXTURE_PATH) / "config.json").read_text())
+    assert fixture_config["head_dim"] % 16 == 0
     args = vllm_args(
         CASES["tiny"],
         model_dir="/fixture",
