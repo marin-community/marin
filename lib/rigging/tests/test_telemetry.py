@@ -7,7 +7,6 @@ from collections import Counter
 from datetime import timedelta
 
 import pytest
-
 from rigging import telemetry
 
 
@@ -29,22 +28,68 @@ def exporter(*, max_queue_records: int = 10, max_queue_bytes: int = 1_000) -> te
     )
 
 
-def test_handle_declared_before_configuration_starts_emitting_after_configuration():
-    requests = telemetry.meter(
-        scope="test.inference",
-        owner="test",
-        default_cadence=timedelta(seconds=15),
-    ).counter(
-        "requests",
-        description="Completed requests",
-        unit="{request}",
+def runtime_meter() -> telemetry.Meter:
+    return telemetry.meter(
+        scope="telemetry.runtime",
+        owner="rigging",
+        default_cadence=timedelta(seconds=10),
     )
 
-    requests.add()
+
+def emissions_counter() -> telemetry.Counter:
+    return runtime_meter().counter(
+        "emissions",
+        description="Telemetry emissions accepted by the process runtime",
+        unit="{emission}",
+        attributes=(telemetry.AttributeSpec("signal", ("metric", "event", "log", "artifact")),),
+        cardinality_limit=4,
+        maturity=telemetry.Maturity.STABLE,
+    )
+
+
+def queue_records_gauge() -> telemetry.Gauge:
+    return runtime_meter().gauge(
+        "queue_records",
+        description="Telemetry records waiting for background export",
+        unit="{record}",
+        cardinality_limit=1,
+        maturity=telemetry.Maturity.STABLE,
+    )
+
+
+def export_duration_histogram() -> telemetry.Histogram:
+    return runtime_meter().histogram(
+        "export_duration",
+        description="Telemetry export request duration",
+        unit="s",
+        buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0),
+        attributes=(telemetry.AttributeSpec("outcome", ("success", "failure")),),
+        cardinality_limit=2,
+        maturity=telemetry.Maturity.STABLE,
+    )
+
+
+def hold_lock(lock, acquired: threading.Event, release: threading.Event) -> None:
+    with lock:
+        acquired.set()
+        assert release.wait(timeout=5)
+
+
+def invoke_capturing_interrupts(call, failures: list[BaseException]) -> None:
+    try:
+        call()
+    except BaseException as error:
+        failures.append(error)
+
+
+def test_handle_declared_before_configuration_starts_emitting_after_configuration():
+    requests = emissions_counter()
+
+    requests.add(signal="metric")
     assert telemetry.runtime_status().accepted_emissions == 0
 
     telemetry.configure(service_name="inference", exporter=exporter())
-    requests.add()
+    requests.add(signal="metric")
 
     status = telemetry.runtime_status()
     assert status.accepted_emissions == 1
@@ -53,12 +98,7 @@ def test_handle_declared_before_configuration_starts_emitting_after_configuratio
 
 
 def test_conflicting_configuration_keeps_the_first_runtime_active():
-    meter = telemetry.meter(
-        scope="test.worker",
-        owner="test",
-        default_cadence=timedelta(seconds=15),
-    )
-    queue = meter.gauge("queue_depth", description="Queue depth", unit="{request}")
+    queue = queue_records_gauge()
     telemetry.configure(service_name="worker", role="trainer", exporter=exporter())
     first_instance = telemetry.runtime_status().service_instance_id
 
@@ -91,21 +131,11 @@ def test_invalid_emission_is_bounded_loss_state_without_synchronous_logging():
     root = logging.getLogger()
     root.addHandler(handler)
     try:
-        outcome = telemetry.AttributeSpec("outcome", ("success", "failure"))
-        requests = telemetry.meter(
-            scope="test.inference",
-            owner="test",
-            default_cadence=timedelta(seconds=15),
-        ).counter(
-            "requests",
-            description="Completed requests",
-            unit="{request}",
-            attributes=(outcome,),
-        )
+        requests = emissions_counter()
         telemetry.configure(service_name="worker", exporter=exporter())
 
-        requests.add(1, outcome="unbounded-value")
-        requests.add(float("nan"), outcome="success")
+        requests.add(1, signal="unbounded-value")
+        requests.add(float("nan"), signal="metric")
     finally:
         root.removeHandler(handler)
 
@@ -119,11 +149,7 @@ def test_emission_does_not_catch_process_interrupts():
         def __float__(self):
             raise KeyboardInterrupt
 
-    requests = telemetry.meter(
-        scope="test.inference",
-        owner="test",
-        default_cadence=timedelta(seconds=15),
-    ).counter("requests", description="Completed requests", unit="{request}")
+    requests = emissions_counter()
     telemetry.configure(service_name="worker", exporter=exporter())
 
     with pytest.raises(KeyboardInterrupt):
@@ -136,9 +162,24 @@ def test_event_queue_drops_oldest_within_record_and_byte_bounds():
         exporter=exporter(max_queue_records=2),
     )
 
-    telemetry.event("telemetry.runtime.gap", reason="queue_overflow", dropped_records=1)
-    telemetry.event("telemetry.runtime.gap", reason="queue_overflow", dropped_records=2)
-    telemetry.event("telemetry.runtime.gap", reason="queue_overflow", dropped_records=3)
+    telemetry.event(
+        "telemetry.runtime.gap",
+        delivery_class=telemetry.DeliveryClass.DURABLE,
+        reason="queue_overflow",
+        dropped_records=1,
+    )
+    telemetry.event(
+        "telemetry.runtime.gap",
+        delivery_class=telemetry.DeliveryClass.DURABLE,
+        reason="queue_overflow",
+        dropped_records=2,
+    )
+    telemetry.event(
+        "telemetry.runtime.gap",
+        delivery_class=telemetry.DeliveryClass.DURABLE,
+        reason="queue_overflow",
+        dropped_records=3,
+    )
 
     status = telemetry.runtime_status()
     assert status.queued_events == 2
@@ -157,36 +198,27 @@ def test_undeclared_event_is_rejected_into_bounded_loss_state():
 
 
 def test_emission_returns_while_internal_coordination_locks_are_held():
-    meter = telemetry.meter(
-        scope="test.contention",
-        owner="test",
-        default_cadence=timedelta(seconds=15),
-    )
-    counter = meter.counter("requests", description="Requests", unit="{request}")
-    gauge = meter.gauge("queue_depth", description="Queue depth", unit="{request}")
-    histogram = meter.histogram(
-        "request_duration",
-        description="Request latency",
-        unit="s",
-        buckets=(0.1, 1.0),
-    )
+    counter = emissions_counter()
+    gauge = queue_records_gauge()
+    histogram = export_duration_histogram()
     telemetry.configure(service_name="worker", exporter=exporter())
     assert telemetry._runtime is not None
 
     valid_emissions = (
-        lambda: counter.add(),
+        lambda: counter.add(signal="metric"),
         lambda: gauge.set(1),
-        lambda: histogram.record(0.5),
+        lambda: histogram.record(0.5, outcome="success"),
         lambda: telemetry.event(
             "telemetry.runtime.gap",
+            delivery_class=telemetry.DeliveryClass.DURABLE,
             reason="queue_overflow",
             dropped_records=1,
         ),
     )
     invalid_emissions = (
-        lambda: counter.add(-1),
+        lambda: counter.add(-1, signal="metric"),
         lambda: gauge.set(float("nan")),
-        lambda: histogram.record(float("nan")),
+        lambda: histogram.record(float("nan"), outcome="success"),
         lambda: telemetry.event("undeclared.event"),
     )
     cases = (
@@ -199,25 +231,16 @@ def test_emission_returns_while_internal_coordination_locks_are_held():
         acquired = threading.Event()
         release = threading.Event()
 
-        def hold_lock():
-            with lock:
-                acquired.set()
-                assert release.wait(timeout=5)
-
-        holder = threading.Thread(target=hold_lock)
+        holder = threading.Thread(target=hold_lock, args=(lock, acquired, release))
         holder.start()
         assert acquired.wait(timeout=5)
         try:
             for emit in emissions:
-                failures = []
-
-                def run_emission():
-                    try:
-                        emit()
-                    except BaseException as error:
-                        failures.append(error)
-
-                caller = threading.Thread(target=run_emission)
+                failures: list[BaseException] = []
+                caller = threading.Thread(
+                    target=invoke_capturing_interrupts,
+                    args=(emit, failures),
+                )
                 caller.start()
                 caller.join(timeout=0.2)
                 assert not caller.is_alive(), f"emission blocked on {lock!r}"
@@ -230,12 +253,7 @@ def test_emission_returns_while_internal_coordination_locks_are_held():
         acquired = threading.Event()
         release = threading.Event()
 
-        def hold_shutdown_lock():
-            with lock:
-                acquired.set()
-                assert release.wait(timeout=5)
-
-        holder = threading.Thread(target=hold_shutdown_lock)
+        holder = threading.Thread(target=hold_lock, args=(lock, acquired, release))
         holder.start()
         assert acquired.wait(timeout=5)
         try:
@@ -262,16 +280,12 @@ def test_logging_context_nests_and_restores_values():
 
 
 def test_shutdown_turns_existing_handles_back_into_no_ops():
-    requests = telemetry.meter(
-        scope="test.inference",
-        owner="test",
-        default_cadence=timedelta(seconds=15),
-    ).counter("requests", description="Completed requests", unit="{request}")
+    requests = emissions_counter()
     telemetry.configure(service_name="worker", exporter=exporter())
-    requests.add()
+    requests.add(signal="metric")
 
     telemetry.shutdown()
-    requests.add()
+    requests.add(signal="metric")
 
     status = telemetry.runtime_status()
     assert status.stopped

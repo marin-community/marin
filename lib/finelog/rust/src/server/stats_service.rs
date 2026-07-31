@@ -18,7 +18,9 @@ use crate::proto::finelog::stats::{
     OwnedQueryRequestView, OwnedRegisterTableRequestView, OwnedWriteRowsRequestView, QueryResponse,
     RegisterTableResponse, StatsService, WriteRowsResponse,
 };
-use crate::query::{make_ctx, query_timeout, run_query_over, truncate_sql_for_log};
+use crate::query::{
+    make_ctx, query_timeout, referenced_namespaces, run_query_over, truncate_sql_for_log,
+};
 use crate::server::auth::{request_identity, AuthIdentity};
 use crate::server::MAX_MESSAGE_BYTES;
 use crate::store::ipc::encode_ipc;
@@ -35,6 +37,65 @@ pub struct StatsServiceImpl {
 impl StatsServiceImpl {
     pub fn new(store: Arc<Store>) -> Self {
         Self { store }
+    }
+
+    async fn query_sql(&self, sql: String) -> Result<QueryResponse, ConnectError> {
+        // Hold the query-visibility READ guard across the WHOLE scan. DataFusion
+        // opens the snapshotted parquet files LAZILY during collect(), so the
+        // guard must outlive run_query_over (not just query_providers) to keep a
+        // concurrent drop_table / compaction from unlinking a file mid-scan.
+        let _read_guard = self.store.query_visibility().read().await;
+
+        // Parse before touching storage so only referenced namespaces pay the
+        // provider/Parquet metadata cost. DataFusion repeats validation during
+        // planning; this pass only chooses the registration set.
+        let ctx = make_ctx();
+        let referenced = referenced_namespaces(&ctx, &sql).map_err(map_query_error)?;
+        let store = Arc::clone(&self.store);
+        let providers = run_blocking(move || store.query_providers_for(&referenced)).await?;
+
+        // DataFusion schedules its own CPU tasks; await sql()/collect() directly
+        // (no spawn_blocking). Errors map by variant: parse/plan/schema/catalog
+        // faults are client errors, IO/execution faults are server errors.
+        //
+        // Bound execution by the server-side wall-clock deadline: on elapse the
+        // query future is dropped (aborting the scan) and the caller gets a
+        // clean deadline_exceeded, so one pathological query can't run unbounded.
+        let query = run_query_over(&ctx, providers, &sql);
+        let result = match query_timeout() {
+            Some(deadline) => match tokio::time::timeout(deadline, query).await {
+                Ok(r) => r.map_err(map_query_error)?,
+                Err(_elapsed) => {
+                    tracing::warn!(
+                        deadline_ms = deadline.as_millis() as u64,
+                        sql = %truncate_sql_for_log(&sql),
+                        "query aborted: exceeded server-side deadline",
+                    );
+                    return Err(ConnectError::deadline_exceeded(format!(
+                        "query exceeded server-side deadline of {} ms",
+                        deadline.as_millis()
+                    )));
+                }
+            },
+            None => query.await.map_err(map_query_error)?,
+        };
+
+        let row_count: i64 = result.batches.iter().map(|b| b.num_rows() as i64).sum();
+        // The schema is captured from the planned DataFrame, so an empty result
+        // still emits the correct typed schema (the typed-empty contract).
+        let buf = encode_ipc(&result.schema, &result.batches)
+            .map_err(|e| ConnectError::internal(format!("encode query result: {e}")))?;
+        // No server-side row cap; the only result bound is the 64MB transport
+        // message limit -> resource_exhausted.
+        if buf.len() > MAX_MESSAGE_BYTES {
+            return Err(ConnectError::resource_exhausted(format!(
+                "query result {} bytes exceeds {MAX_MESSAGE_BYTES} message limit",
+                buf.len()
+            )));
+        }
+        Ok(QueryResponse::default()
+            .with_arrow_ipc(buf)
+            .with_row_count(row_count))
     }
 }
 
@@ -185,63 +246,7 @@ impl StatsService for StatsServiceImpl {
         request: OwnedQueryRequestView,
     ) -> ServiceResult<QueryResponse> {
         let sql = request.sql.unwrap_or("").to_string();
-
-        // Hold the query-visibility READ guard across the WHOLE scan. DataFusion
-        // opens the snapshotted parquet files LAZILY during collect(), so the
-        // guard must outlive run_query_over (not just query_providers) to keep a
-        // concurrent drop_table / compaction from unlinking a file mid-scan.
-        let _read_guard = self.store.query_visibility().read().await;
-
-        // Snapshot every live namespace (schema + sealed-segment paths) under
-        // the engine locks on the blocking pool.
-        let store = Arc::clone(&self.store);
-        let providers = run_blocking(move || store.query_providers()).await?;
-
-        // DataFusion schedules its own CPU tasks; await sql()/collect() directly
-        // (no spawn_blocking). Errors map by variant: parse/plan/schema/catalog
-        // faults are client errors, IO/execution faults are server errors.
-        //
-        // Bound execution by the server-side wall-clock deadline: on elapse the
-        // query future is dropped (aborting the scan) and the caller gets a
-        // clean deadline_exceeded, so one pathological query can't run unbounded.
-        let ctx = make_ctx();
-        let query = run_query_over(&ctx, providers, &sql);
-        let result = match query_timeout() {
-            Some(deadline) => match tokio::time::timeout(deadline, query).await {
-                Ok(r) => r.map_err(map_query_error)?,
-                Err(_elapsed) => {
-                    tracing::warn!(
-                        deadline_ms = deadline.as_millis() as u64,
-                        sql = %truncate_sql_for_log(&sql),
-                        "query aborted: exceeded server-side deadline",
-                    );
-                    return Err(ConnectError::deadline_exceeded(format!(
-                        "query exceeded server-side deadline of {} ms",
-                        deadline.as_millis()
-                    )));
-                }
-            },
-            None => query.await.map_err(map_query_error)?,
-        };
-
-        let row_count: i64 = result.batches.iter().map(|b| b.num_rows() as i64).sum();
-        // The schema is captured from the planned DataFrame, so an empty result
-        // still emits the correct typed schema (the typed-empty contract).
-        let buf = encode_ipc(&result.schema, &result.batches)
-            .map_err(|e| ConnectError::internal(format!("encode query result: {e}")))?;
-        // No server-side row cap; the only result bound is the 64MB transport
-        // message limit -> resource_exhausted.
-        if buf.len() > MAX_MESSAGE_BYTES {
-            return Err(ConnectError::resource_exhausted(format!(
-                "query result {} bytes exceeds {MAX_MESSAGE_BYTES} message limit",
-                buf.len()
-            )));
-        }
-        connectrpc::Response::ok(
-            QueryResponse::default()
-                .with_arrow_ipc(buf)
-                .with_row_count(row_count),
-        )
+        connectrpc::Response::ok(self.query_sql(sql).await?)
     }
 
     async fn drop_table(
@@ -313,8 +318,12 @@ impl StatsService for StatsServiceImpl {
 #[cfg(test)]
 mod tests {
     use axum::http::{Extensions, HeaderMap};
+    use connectrpc::ErrorCode;
 
     use super::*;
+    use crate::proto::finelog::stats::ColumnType;
+    use crate::store::policy::StoragePolicy;
+    use crate::store::schema::Column;
 
     fn ctx_with(identity: Option<AuthIdentity>) -> RequestContext {
         let mut extensions = Extensions::new();
@@ -328,6 +337,90 @@ mod tests {
         ctx_with(Some(AuthIdentity::Jwt {
             cluster: cluster.to_string(),
         }))
+    }
+
+    fn query_service() -> StatsServiceImpl {
+        let store = Arc::new(Store::new(None, String::new()).unwrap());
+        let schema = Schema::new(
+            vec![Column::new("value", ColumnType::COLUMN_TYPE_INT64, false)],
+            "value",
+        );
+        for namespace in ["telemetry.event.v1", "telemetry.workload_metric.v1"] {
+            store
+                .register_table(namespace, schema.clone(), StoragePolicy::default())
+                .unwrap();
+        }
+        StatsServiceImpl::new(store)
+    }
+
+    #[tokio::test]
+    async fn lazy_query_binding_handles_reference_shapes_and_ctes() {
+        let service = query_service();
+
+        assert_eq!(
+            service
+                .query_sql("SELECT 1".to_string())
+                .await
+                .unwrap()
+                .row_count,
+            Some(1)
+        );
+        assert_eq!(
+            service
+                .query_sql(
+                    r#"
+                    WITH RECURSIVE numbers AS (
+                        SELECT 1 AS n
+                        UNION ALL
+                        SELECT n + 1 AS n FROM numbers WHERE n < 3
+                    ),
+                    nested AS (SELECT * FROM "telemetry.event.v1")
+                    SELECT count(*) FROM nested CROSS JOIN numbers
+                    "#
+                    .to_string(),
+                )
+                .await
+                .unwrap()
+                .row_count,
+            Some(1)
+        );
+        assert_eq!(
+            service
+                .query_sql(
+                    r#"
+                    SELECT value FROM "telemetry.event.v1"
+                    UNION ALL
+                    SELECT value FROM "telemetry.workload_metric.v1"
+                    "#
+                    .to_string(),
+                )
+                .await
+                .unwrap()
+                .row_count,
+            Some(0)
+        );
+        assert_eq!(
+            service
+                .query_sql(r#"SELECT count(*) FROM "telemetry.event.v1""#.to_string())
+                .await
+                .unwrap()
+                .row_count,
+            Some(1)
+        );
+    }
+
+    #[tokio::test]
+    async fn lazy_query_binding_rejects_unknown_or_qualified_namespaces() {
+        let service = query_service();
+        for sql in [
+            "SELECT * FROM missing_namespace",
+            "SELECT * FROM telemetry.event.v1",
+            "SELECT * FROM information_schema.tables",
+            "SELECT * FROM UNNEST([1, 2, 3])",
+        ] {
+            let error = service.query_sql(sql.to_string()).await.unwrap_err();
+            assert_eq!(error.code, ErrorCode::InvalidArgument, "{sql}: {error:?}");
+        }
     }
 
     #[test]

@@ -418,9 +418,10 @@ where
                     return;
                 }
             };
-            for (ipc, first_seq, last_seq) in chunks {
-                let batch_key = forward_batch_id(&self.config.cluster, name, first_seq, last_seq);
-                match self.push(name, &batch_key, ipc, stop).await {
+            for chunk in chunks {
+                let batch_key =
+                    forward_batch_id(&self.config.cluster, name, chunk.first_seq, chunk.last_seq);
+                match self.push(name, &batch_key, chunk.ipc, stop).await {
                     Ok(()) => progress.batches += 1,
                     Err(PushError::Stopping(e)) => {
                         tracing::warn!(namespace = name, cursor, error = %e, "finelog forwarder: push interrupted");
@@ -430,18 +431,18 @@ where
                     // livelock that strands every later row too. Skip past them and count
                     // the gap: the rows remain queryable in this store.
                     Err(PushError::Rejected(e)) => {
-                        progress.skipped_seqs += last_seq - cursor;
+                        progress.skipped_seqs += chunk.last_seq - cursor;
                         tracing::warn!(
                             namespace = name,
                             cursor,
-                            skipped = last_seq - cursor,
-                            resume_at = last_seq,
+                            skipped = chunk.last_seq - cursor,
+                            resume_at = chunk.last_seq,
                             error = %e,
                             "finelog forwarder: the hub rejected this batch as malformed; skipping it"
                         );
                     }
                 }
-                cursor = last_seq;
+                cursor = chunk.last_seq;
                 if !self.persist_cursor(name, cursor) {
                     return;
                 }
@@ -779,8 +780,14 @@ fn forward_batch_id(cluster: &str, namespace: &str, first_seq: i64, last_seq: i6
     format!("forward:{}", sha256_hex(identity.as_bytes()))
 }
 
+struct ForwardChunk {
+    ipc: Vec<u8>,
+    first_seq: i64,
+    last_seq: i64,
+}
+
 /// Encode `ship` into IPC chunks whose encoded size stays near `max_bytes`, pairing each
-/// with the largest `seq` it carries (the cursor to advance to once the hub acks it).
+/// with its inclusive seq bounds. The last seq is the cursor advanced after the hub acks it.
 ///
 /// The in-memory batch size is a close proxy for the IPC size, so rows-per-chunk is
 /// sized from it. A chunk never has fewer than one row: a single row over budget still
@@ -789,7 +796,7 @@ fn chunk_by_bytes(
     ship: &RecordBatch,
     seqs: &Int64Array,
     max_bytes: usize,
-) -> Result<Vec<(Vec<u8>, i64, i64)>, StatsError> {
+) -> Result<Vec<ForwardChunk>, StatsError> {
     let num_rows = ship.num_rows();
     let mem = ship.get_array_memory_size().max(1);
     let per_row = (mem / num_rows.max(1)).max(1);
@@ -802,7 +809,11 @@ fn chunk_by_bytes(
         let len = rows_per_chunk.min(num_rows - start);
         let ipc = encode_ipc(&schema, &[ship.slice(start, len)])
             .map_err(|e| StatsError::Internal(format!("encode ship chunk: {e}")))?;
-        out.push((ipc, seqs.value(start), seqs.value(start + len - 1)));
+        out.push(ForwardChunk {
+            ipc,
+            first_seq: seqs.value(start),
+            last_seq: seqs.value(start + len - 1),
+        });
         start += len;
     }
     Ok(out)

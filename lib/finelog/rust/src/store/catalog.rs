@@ -140,6 +140,7 @@ fn row_to_batch_receipt(row: &rusqlite::Row) -> rusqlite::Result<BatchReceipt> {
         rows_written: row.get(2)?,
         first_seq: row.get(3)?,
         last_seq: row.get(4)?,
+        committed_at_ms: row.get(5)?,
     })
 }
 
@@ -150,7 +151,7 @@ fn upsert_batch_receipt_in(
 ) -> Result<(), StatsError> {
     let existing = conn
         .query_row(
-            "SELECT batch_id, payload_sha256, rows_written, first_seq, last_seq \
+            "SELECT batch_id, payload_sha256, rows_written, first_seq, last_seq, committed_at_ms \
              FROM batch_receipts WHERE namespace = ?1 AND batch_id = ?2",
             rusqlite::params![namespace, receipt.batch_id],
             row_to_batch_receipt,
@@ -168,8 +169,8 @@ fn upsert_batch_receipt_in(
     }
     conn.execute(
         "INSERT INTO batch_receipts \
-         (namespace, batch_id, payload_sha256, rows_written, first_seq, last_seq) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+         (namespace, batch_id, payload_sha256, rows_written, first_seq, last_seq, committed_at_ms) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         rusqlite::params![
             namespace,
             receipt.batch_id,
@@ -177,6 +178,7 @@ fn upsert_batch_receipt_in(
             receipt.rows_written,
             receipt.first_seq,
             receipt.last_seq,
+            receipt.committed_at_ms,
         ],
     )
     .map_err(sqlite_err)?;
@@ -268,11 +270,29 @@ impl Catalog {
                 rows_written  INTEGER NOT NULL,
                 first_seq     INTEGER NOT NULL,
                 last_seq      INTEGER NOT NULL,
+                committed_at_ms INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (namespace, batch_id)
             );
             "#,
         )
-        .map_err(sqlite_err)
+        .map_err(sqlite_err)?;
+        let has_committed_at: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('batch_receipts') \
+                 WHERE name = 'committed_at_ms')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sqlite_err)?;
+        if !has_committed_at {
+            conn.execute(
+                "ALTER TABLE batch_receipts \
+                 ADD COLUMN committed_at_ms INTEGER NOT NULL DEFAULT 0",
+                [],
+            )
+            .map_err(sqlite_err)?;
+        }
+        Ok(())
     }
 
     // ----- forward watermark ---------------------------------------------
@@ -679,7 +699,7 @@ impl Catalog {
         inner
             .conn
             .query_row(
-                "SELECT batch_id, payload_sha256, rows_written, first_seq, last_seq \
+                "SELECT batch_id, payload_sha256, rows_written, first_seq, last_seq, committed_at_ms \
                  FROM batch_receipts WHERE namespace = ?1 AND batch_id = ?2",
                 rusqlite::params![namespace, batch_id],
                 row_to_batch_receipt,
@@ -693,7 +713,7 @@ impl Catalog {
         let mut stmt = inner
             .conn
             .prepare(
-                "SELECT batch_id, payload_sha256, rows_written, first_seq, last_seq \
+                "SELECT batch_id, payload_sha256, rows_written, first_seq, last_seq, committed_at_ms \
                  FROM batch_receipts WHERE namespace = ?1 ORDER BY batch_id",
             )
             .map_err(sqlite_err)?;

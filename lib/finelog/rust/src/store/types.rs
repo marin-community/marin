@@ -116,6 +116,15 @@ pub struct BatchReceipt {
     pub rows_written: i64,
     pub first_seq: i64,
     pub last_seq: i64,
+    /// Wall-clock time when the receipt crossed the durable segment/manifest
+    /// boundary. Zero marks receipts created before this field existed; later
+    /// garbage collection must retain those conservatively.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub committed_at_ms: i64,
+}
+
+fn is_zero(value: &i64) -> bool {
+    *value == 0
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

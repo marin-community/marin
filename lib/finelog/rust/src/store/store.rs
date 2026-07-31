@@ -30,6 +30,7 @@ use crate::store::schema::{
     merge_schemas, resolve_key_column, with_implicit_cluster, with_implicit_seq, AlignedBatch,
     Column, Schema,
 };
+use crate::store::telemetry_catalog::{base_record_columns, resource_columns};
 use crate::store::types::{NamespaceStats, WriteRowsResult};
 
 /// The privileged log namespace name.
@@ -72,19 +73,34 @@ fn write_rows_payload_sha256(origin_cluster: Option<&str>, arrow_ipc: &[u8]) -> 
 /// requires new columns to be nullable, and segments written before the column
 /// existed null-fill it on read.
 pub(crate) fn log_registered_schema() -> Schema {
-    Schema::new(
-        vec![
-            Column::new("key", ColumnType::COLUMN_TYPE_STRING, false),
-            Column::new("source", ColumnType::COLUMN_TYPE_STRING, false),
-            // The log message body — substring-searched via contains()/LIKE, so
-            // it carries the trigram index.
-            Column::new("data", ColumnType::COLUMN_TYPE_STRING, false).with_trigram_index(),
-            Column::new("epoch_ms", ColumnType::COLUMN_TYPE_INT64, false),
-            Column::new("level", ColumnType::COLUMN_TYPE_INT32, false),
-            Column::new("cluster", ColumnType::COLUMN_TYPE_STRING, true),
-        ],
-        "key",
-    )
+    let mut columns = vec![
+        Column::new("key", ColumnType::COLUMN_TYPE_STRING, false),
+        Column::new("source", ColumnType::COLUMN_TYPE_STRING, false),
+        // The log message body — substring-searched via contains()/LIKE, so
+        // it carries the trigram index.
+        Column::new("data", ColumnType::COLUMN_TYPE_STRING, false).with_trigram_index(),
+        Column::new("epoch_ms", ColumnType::COLUMN_TYPE_INT64, false),
+        Column::new("level", ColumnType::COLUMN_TYPE_INT32, false),
+        Column::new("cluster", ColumnType::COLUMN_TYPE_STRING, true),
+    ];
+    columns.extend(
+        base_record_columns()
+            .into_iter()
+            .chain(resource_columns())
+            .filter(|column| column.name != "cluster")
+            .into_iter()
+            .map(|mut column| {
+                column.nullable = true;
+                column
+            }),
+    );
+    columns.extend([
+        Column::new("event_name", ColumnType::COLUMN_TYPE_STRING, true),
+        Column::new("attributes", ColumnType::COLUMN_TYPE_MAP, true),
+        Column::new("trace_id", ColumnType::COLUMN_TYPE_STRING, true),
+        Column::new("span_id", ColumnType::COLUMN_TYPE_STRING, true),
+    ]);
+    Schema::new(columns, "key")
 }
 
 /// One consistent view of a namespace's sealed local segments: the arrow schema to
@@ -473,10 +489,9 @@ impl Store {
         &self,
         columns: Vec<arrow::array::ArrayRef>,
         num_rows: usize,
-        added_bytes: i64,
     ) -> Result<i64, StatsError> {
         let engine = self.require_engine(LOG_NAMESPACE_NAME)?;
-        Ok(engine.append_log_batch(columns, num_rows, added_bytes))
+        Ok(engine.append_log_batch(columns, num_rows))
     }
 
     /// Block until `target` is durable in `name`, bounded by `timeout`.
@@ -503,29 +518,31 @@ impl Store {
         &self.query_visibility
     }
 
-    /// Snapshot every live namespace into a `RegisteredProvider` over its sealed
-    /// segments — the registration set for a `Query`.
+    /// Snapshot providers for referenced bare namespaces over sealed segments.
     ///
-    /// Snapshot the live registry, then for each namespace capture its arrow
-    /// schema + sealed-segment paths (under the engine's insertion lock).
-    /// Visibility = sealed segments ONLY (the RAM buffer is not exposed). Every
-    /// live namespace is registered so cross-namespace SQL and the reserved `log`
-    /// namespace both resolve.
-    pub fn query_providers(&self) -> Result<Vec<RegisteredProvider>, StatsError> {
+    /// Unknown and SQL-qualified references are omitted so DataFusion reports
+    /// its normal catalog error. Queries without table references avoid every
+    /// namespace snapshot.
+    pub fn query_providers_for(
+        &self,
+        references: &std::collections::BTreeSet<datafusion::common::TableReference>,
+    ) -> Result<Vec<RegisteredProvider>, StatsError> {
         let mut out = Vec::new();
-        for ns in self.catalog.snapshot_live() {
-            let engine = match self.engines.lock().unwrap().get(&ns.name) {
+        for reference in references {
+            let datafusion::common::TableReference::Bare { table } = reference else {
+                continue;
+            };
+            let name = table.as_ref();
+            let engine = match self.engines.lock().unwrap().get(name) {
                 Some(e) => Arc::clone(e),
-                // A registry entry with no engine is a transient state during
-                // (re)build; skip it rather than fail the whole query.
                 None => continue,
             };
             let arrow_schema = Arc::clone(engine.arrow_schema());
             let paths = engine.query_snapshot().paths;
             let provider = NamespaceProvider::build(arrow_schema, &paths)
-                .map_err(|e| StatsError::Internal(format!("build provider {:?}: {e}", ns.name)))?;
+                .map_err(|e| StatsError::Internal(format!("build provider {name:?}: {e}")))?;
             out.push(RegisteredProvider {
-                name: ns.name,
+                name: name.to_string(),
                 provider,
             });
         }
@@ -726,14 +743,18 @@ impl Store {
 mod tests {
     use std::sync::Barrier;
 
-    use arrow::array::{Int64Array, RecordBatch, StringArray};
+    use arrow::array::{ArrayRef, Int32Array, Int64Array, RecordBatch, StringArray};
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 
     use super::*;
+    use crate::store::catalog::CATALOG_DB_FILENAME;
     use crate::store::ipc::encode_ipc;
-    use crate::store::namespace::inject_crash_after_segment_rename;
-    use crate::store::receipts::receipt_manifest_count;
+    use crate::store::namespace::{
+        inject_crash_after_segment_rename, inject_failure_after_receipt_manifest,
+    };
+    use crate::store::receipts::{receipt_manifest_count, write_legacy_receipt_manifest_fixture};
     use crate::store::types::{BatchReceipt, ReceiptState};
+    use crate::test_support::unique_dir;
 
     fn worker_schema() -> Schema {
         Schema::new(
@@ -750,14 +771,34 @@ mod tests {
         Store::new(None, String::new()).unwrap()
     }
 
-    fn temp_store_dir(tag: &str) -> PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+    #[test]
+    fn log_append_accounts_for_aligned_nullable_columns() {
+        let store = mem_store();
+        let columns: Vec<ArrayRef> = vec![
+            Arc::new(StringArray::from(vec!["key"])),
+            Arc::new(StringArray::from(vec!["source"])),
+            Arc::new(StringArray::from(vec!["message"])),
+            Arc::new(Int64Array::from(vec![1_i64])),
+            Arc::new(Int32Array::from(vec![2_i32])),
+            Arc::new(StringArray::from(vec!["cluster"])),
+        ];
+        let input_and_seq_bytes = columns
+            .iter()
+            .map(crate::store::schema::array_buffer_size)
+            .sum::<i64>()
+            + 8;
+
+        store.append_log_columns(columns, 1).unwrap();
+
+        let accounted = store
+            .require_engine(LOG_NAMESPACE_NAME)
             .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("finelog_{tag}_{nanos}"));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+            .stats()
+            .byte_size;
+        assert!(
+            accounted > input_and_seq_bytes,
+            "expanded nullable telemetry columns must contribute to buffered-byte accounting"
+        );
     }
 
     fn worker_batch(worker_ids: &[&str], offset: i64) -> RecordBatch {
@@ -794,7 +835,7 @@ mod tests {
     }
 
     async fn stopped_disk_store(tag: &str) -> (Arc<Store>, PathBuf, Arc<Namespace>) {
-        let dir = temp_store_dir(tag);
+        let dir = unique_dir(tag);
         let store = Arc::new(Store::new(Some(dir.clone()), String::new()).unwrap());
         store
             .register_table("iris.worker", worker_schema(), StoragePolicy::default())
@@ -963,6 +1004,99 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn retry_after_manifest_failure_reuses_receipt_commit_time() {
+        let (store, dir, engine) = stopped_disk_store("receipt_manifest_retry").await;
+        let ipc = worker_ipc(&["w-1", "w-2"], 0);
+        store
+            .write_rows("iris.worker", "manifest-retry", &ipc, None)
+            .unwrap();
+        inject_failure_after_receipt_manifest("iris.worker");
+
+        assert!(matches!(
+            engine.flush_once(),
+            Err(StatsError::Internal(message))
+                if message == "injected failure after durable receipt manifest"
+        ));
+        let namespace_dir = dir.join("iris.worker");
+        assert_eq!(receipt_manifest_count(&namespace_dir), 1);
+        assert!(store
+            .catalog
+            .list_batch_receipts("iris.worker")
+            .unwrap()
+            .is_empty());
+
+        engine.flush_once().unwrap();
+        let receipts = store.catalog.list_batch_receipts("iris.worker").unwrap();
+        assert_eq!(receipts.len(), 1);
+        assert!(receipts[0].committed_at_ms > 0);
+        let duplicate = store
+            .write_rows("iris.worker", "manifest-retry", &ipc, None)
+            .unwrap();
+        assert!(duplicate.deduplicated);
+        assert_eq!(duplicate.receipt_state, ReceiptState::Durable);
+        assert_eq!(duplicate.receipt, receipts[0]);
+        assert_eq!(receipt_manifest_count(&namespace_dir), 1);
+        assert_eq!(engine.stats().row_count, 2);
+
+        drop(engine);
+        drop(store);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn startup_migrates_old_receipt_index_and_repairs_from_legacy_manifest() {
+        let dir = unique_dir("legacy_receipt_index");
+        let store = Arc::new(Store::new(Some(dir.clone()), String::new()).unwrap());
+        store
+            .register_table("iris.worker", worker_schema(), StoragePolicy::default())
+            .unwrap();
+        stop_background_tasks(&store).await;
+        drop(store);
+
+        let connection = rusqlite::Connection::open(dir.join(CATALOG_DB_FILENAME)).unwrap();
+        connection
+            .execute_batch(
+                r#"
+                ALTER TABLE batch_receipts RENAME TO batch_receipts_with_commit_time;
+                CREATE TABLE batch_receipts (
+                    namespace      TEXT NOT NULL,
+                    batch_id       TEXT NOT NULL,
+                    payload_sha256 TEXT NOT NULL,
+                    rows_written   INTEGER NOT NULL,
+                    first_seq      INTEGER NOT NULL,
+                    last_seq       INTEGER NOT NULL,
+                    PRIMARY KEY (namespace, batch_id)
+                );
+                INSERT INTO batch_receipts
+                    (namespace, batch_id, payload_sha256, rows_written, first_seq, last_seq)
+                VALUES
+                    ('iris.worker', 'legacy-batch', 'legacy-digest', 2, 1, 2);
+                DROP TABLE batch_receipts_with_commit_time;
+                "#,
+            )
+            .unwrap();
+        drop(connection);
+        write_legacy_receipt_manifest_fixture(&dir.join("iris.worker"));
+
+        let reopened = Arc::new(Store::new(Some(dir.clone()), String::new()).unwrap());
+        stop_background_tasks(&reopened).await;
+        assert_eq!(
+            reopened.catalog.list_batch_receipts("iris.worker").unwrap(),
+            vec![BatchReceipt {
+                batch_id: "legacy-batch".to_string(),
+                payload_sha256: "legacy-digest".to_string(),
+                rows_written: 2,
+                first_seq: 1,
+                last_seq: 2,
+                committed_at_ms: 0,
+            }]
+        );
+
+        drop(reopened);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn receipt_manifest_survives_compaction_and_restart() {
         let (store, dir, engine) = stopped_disk_store("receipt_compaction").await;
         let ipc = worker_ipc(&["w-1", "w-2"], 0);
@@ -992,7 +1126,15 @@ mod tests {
             .write_rows("iris.worker", "compacted-batch", &ipc, None)
             .unwrap();
         assert!(duplicate.deduplicated);
-        assert_eq!(duplicate.receipt, result.receipt);
+        assert_eq!(duplicate.receipt.batch_id, result.receipt.batch_id);
+        assert_eq!(
+            duplicate.receipt.payload_sha256,
+            result.receipt.payload_sha256
+        );
+        assert_eq!(duplicate.receipt.rows_written, result.receipt.rows_written);
+        assert_eq!(duplicate.receipt.first_seq, result.receipt.first_seq);
+        assert_eq!(duplicate.receipt.last_seq, result.receipt.last_seq);
+        assert!(duplicate.receipt.committed_at_ms > 0);
         assert_eq!(duplicate.receipt_state, ReceiptState::Durable);
         assert_eq!(receipt_manifest_count(&dir.join("iris.worker")), 1);
 
@@ -1035,7 +1177,15 @@ mod tests {
             .write_rows("iris.worker", "remote-batch", &ipc, None)
             .unwrap();
         assert!(duplicate.deduplicated);
-        assert_eq!(duplicate.receipt, result.receipt);
+        assert_eq!(duplicate.receipt.batch_id, result.receipt.batch_id);
+        assert_eq!(
+            duplicate.receipt.payload_sha256,
+            result.receipt.payload_sha256
+        );
+        assert_eq!(duplicate.receipt.rows_written, result.receipt.rows_written);
+        assert_eq!(duplicate.receipt.first_seq, result.receipt.first_seq);
+        assert_eq!(duplicate.receipt.last_seq, result.receipt.last_seq);
+        assert!(duplicate.receipt.committed_at_ms > 0);
         assert_eq!(duplicate.receipt_state, ReceiptState::Durable);
         assert!(matches!(
             reopened
@@ -1062,6 +1212,7 @@ mod tests {
                     rows_written: 1,
                     first_seq: 1,
                     last_seq: 1,
+                    committed_at_ms: 1,
                 },
             )
             .unwrap();
@@ -1366,14 +1517,7 @@ mod tests {
         // merges the column into the catalog BEFORE rehydrate opens the engine, so
         // no live-engine rebuild happens at boot) WITHOUT resetting the namespace's
         // persisted storage policy.
-        let dir = std::env::temp_dir().join(format!(
-            "finelog_evolve_log_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = unique_dir("evolve_log");
 
         // Seed the catalog with the frozen pre-cluster (five-column) `log` schema
         // and a non-default policy. The schema is spelled out because it is the
@@ -1402,18 +1546,21 @@ mod tests {
                 .unwrap();
         }
 
-        // Boot over that catalog: the schema gains the nullable `cluster` column,
-        // appended after the original five, and the policy is preserved.
+        // Boot over that catalog: the schema gains every current nullable log
+        // identity column after the original five, and the policy is preserved.
         let store = Store::new(Some(dir.clone()), String::new()).unwrap();
         let schema = store.get_table_schema(LOG_NAMESPACE_NAME).unwrap();
         assert_eq!(
             schema.column_names(),
-            vec!["seq", "key", "source", "data", "epoch_ms", "level", "cluster"]
+            with_implicit_seq(log_registered_schema()).column_names()
         );
-        assert!(
-            schema.column("cluster").unwrap().nullable,
-            "the evolved cluster column is nullable"
-        );
+        for column in schema.columns.iter().skip(6) {
+            assert!(
+                column.nullable,
+                "evolved column {:?} is nullable",
+                column.name
+            );
+        }
         assert_eq!(
             store.get_policy(LOG_NAMESPACE_NAME).unwrap(),
             seeded_policy,

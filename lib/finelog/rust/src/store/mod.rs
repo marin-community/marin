@@ -19,11 +19,15 @@ pub mod reconcile;
 pub mod remote;
 pub mod schema;
 pub mod segment;
+pub mod telemetry_catalog;
 pub mod trigram;
 // The orchestration module is named `store`; the re-export below gives callers
 // `finelog::store::Store` without the extra path.
 #[allow(clippy::module_inception)]
 pub mod store;
 pub mod types;
+
+pub(crate) const LOG_WRITE_COLUMN_NAMES: [&str; 6] =
+    ["key", "source", "data", "epoch_ms", "level", "cluster"];
 
 pub use store::Store;

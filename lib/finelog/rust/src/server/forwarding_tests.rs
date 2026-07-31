@@ -186,7 +186,11 @@ async fn push(client: &LogServiceClient<TestTransport>, key: &str, lines: &[&str
 /// guard across the scan, exactly as the server does.
 async fn hub_column(store: &Store, namespace: &str, column: &str) -> Vec<Option<String>> {
     let _guard = store.query_visibility().read().await;
-    let providers = store.query_providers().unwrap();
+    let providers = store
+        .query_providers_for(&std::collections::BTreeSet::from([
+            datafusion::common::TableReference::bare(namespace),
+        ]))
+        .unwrap();
     let sql = format!("SELECT {column} FROM \"{namespace}\" ORDER BY seq");
     let result = run_query_over(&make_ctx(), providers, &sql).await.unwrap();
     let mut values = Vec::new();
@@ -448,11 +452,11 @@ fn chunk_by_bytes_splits_and_pairs_each_chunk_with_its_seq_range() {
     // A budget that fits the whole batch ships it in one chunk, cursor = last seq.
     let chunks = chunk_by_bytes(&batch, &seqs, 1 << 20).unwrap();
     assert_eq!(chunks.len(), 1);
-    assert_eq!((chunks[0].1, chunks[0].2), (10, 30));
+    assert_eq!((chunks[0].first_seq, chunks[0].last_seq), (10, 30));
 
     // A minimal budget forces one row per chunk; each chunk's cursor is its own row.
     let chunks = chunk_by_bytes(&batch, &seqs, 1).unwrap();
-    let last_seqs: Vec<i64> = chunks.iter().map(|(_, _, seq)| *seq).collect();
+    let last_seqs: Vec<i64> = chunks.iter().map(|chunk| chunk.last_seq).collect();
     assert_eq!(last_seqs, vec![10, 20, 30]);
 }
 

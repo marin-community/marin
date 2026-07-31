@@ -1,8 +1,8 @@
 # Metricification foundation contract
 
-Status: coordinator-approved for commit 1
-Date: 2026-07-30
-Parent work: #204; the physical-layout benchmark remains #205.
+Status: coordinator-approved contract; schema/durability checkpoint in review
+Date: 2026-07-31
+Parent work: #204; benchmark #205 is closed and accepted.
 
 ## First commit boundary
 
@@ -22,9 +22,12 @@ migration:
    acknowledgement without appending rows. Reusing a batch ID for different
    bytes or authoritative origin fails.
 
-The REST router and approved v1 schema routing are the next commit. Worker-agent
-registration, WAL, spill/replay, and lazy query binding are later independent
-gates. Clustering, partitioning, manifests, and rollups remain blocked on #205.
+The current checkpoint adds approved v1 schemas, catalog-backed declarations,
+durable receipt timestamps, historical-format repair, and lazy referenced-
+namespace query binding. The REST router remains the next gate; worker-agent
+registration, WAL, and spill/replay follow independently. Benchmark #205
+selects generation-keyed manifest prefiltering and rejects a physical
+partition/clustering layout and generic rollups for this foundation.
 
 ## Python API
 
@@ -149,6 +152,12 @@ otherwise disappear from the application path. Emission never catches
 `BaseException` or process interrupts and never performs synchronous logging.
 Checked-in catalog validation remains strict in CI.
 
+`lib/finelog/rust/telemetry_catalog.v1.json` is authoritative because it is
+inside the production Rust build context. Rigging ships a byte-identical package
+mirror. After editing the canonical file, run
+`uv run python scripts/sync_telemetry_catalog.py`; CI/tests use
+`uv run python scripts/sync_telemetry_catalog.py --check`.
+
 ## Record schema
 
 The dependency-light wire model is `TelemetryBatchV1`:
@@ -167,6 +176,9 @@ The dependency-light wire model is `TelemetryBatchV1`:
       "resource": {
         "service_name": "skyrl-inference",
         "service_instance_id": "...",
+        "entity_authority": "iris:us-central2",
+        "entity_type": "worker",
+        "entity_uid": "...",
         "root_run_uid": "...",
         "iris_job_id": null,
         "attempt_uid": null,
@@ -186,6 +198,8 @@ The dependency-light wire model is `TelemetryBatchV1`:
         "reset_id": "...",
         "series_id": "sha256:...",
         "value": 42,
+        "device_uid": null,
+        "device_type": null,
         "attributes": {"outcome": "success"}
       }
     }
@@ -201,7 +215,9 @@ Histogram metrics replace scalar `value` with `count`, `sum`,
 `explicit_bounds`, and `bucket_counts`; `len(bucket_counts)` is
 `len(explicit_bounds) + 1`. Events use `event_name`, severity number/text,
 outcome, phase, normalized error type, bounded body, attributes, trace/span, and
-evidence/result URIs. A record's immutable `point_id` is
+evidence/result URIs. Probe events carry a typed `probe_status` of `success`,
+`failed`, or `unsupported`; missing samples are never interpreted as healthy.
+A record's immutable `point_id` is
 `<batch_id>:<record_index>`.
 
 `series_id` hashes descriptor identity, authoritative service instance or
@@ -210,6 +226,15 @@ cumulative stream restarts. Collector/Finelog credentials overwrite
 infrastructure-owned cluster, Iris, Kubernetes, node, pod, container, and
 placement fields. The server looks up `(signal, scope, name)` in the approved
 catalog and chooses the namespace; callers cannot name or create Finelog tables.
+
+Authority-scoped identities use typed `entity_authority`, `entity_type`, and
+`entity_uid` resource columns. `entity_uid`, when present, is the canonical
+global join key. Otherwise a local worker/node/actor/engine identifier joins by
+`(entity_authority, cluster, entity_type, local_id)` until an
+`telemetry.entity_link.v1` row maps it to a minted UID. Infrastructure
+collectors own and overwrite authority and placement identity; producer-owned
+aliases cannot replace them. Hardware metrics carry typed `device_uid` and
+`device_type` columns rather than hiding accelerator identity in attributes.
 
 ## HTTP contract and acknowledgements
 
@@ -222,7 +247,7 @@ catalog and chooses the namespace; callers cannot name or create Finelog tables.
   `POST /v1/scrape-targets` and
   `DELETE /v1/scrape-targets/{target_id}`.
 
-For Finelog, `201` means every accepted namespace sub-batch and its durable
+For Finelog, `201` means every namespace sub-batch and its durable
 segment/manifest receipt metadata are persisted. SQLite receipt rows may lag
 and are repaired from that metadata on startup. `200` with
 `status="duplicate"` returns the original ack for the same key and payload. The
@@ -230,11 +255,19 @@ router derives stable namespace sub-batch IDs from `(batch_id, namespace)`. A
 crash after one namespace commits but before the parent response cannot
 duplicate it.
 
-A reused key with another payload digest returns `409`. Schema-invalid records
-produce `207` with stable indexed rejections while valid records are durably
-committed. A batch with no valid records returns `400`. `401/403` are auth
-failures, `413` is the fixed body/record limit, `429` is retryable overload with
-`Retry-After`, and `5xx` is retryable because no durable ack was observed.
+A reused key with another payload digest returns `409`. Custom telemetry
+batches are all-or-nothing on schema and catalog validation: any invalid record
+returns `400` with stable indexed errors and commits no namespace sub-batch.
+`401/403` are auth failures, `413` is the fixed body/record limit, `429` is
+retryable overload with `Retry-After`, and `5xx` is retryable because no durable
+ack was observed.
+
+OTLP requests with a valid explicit `Idempotency-Key` use it under the same
+conflict contract. Headerless OTLP requests derive a stable internal batch ID
+from a domain-separated hash of authenticated origin, signal endpoint, content
+type, and uncompressed request bytes. `/v1/metrics` and `/v1/logs` return the
+normal OTLP HTTP `200` response with `partial_success` when individual points
+are rejected; they never use `207`.
 
 Internal `WriteRows` rejects an empty RecordBatch; it never returns an
 unreconstructible durable acknowledgement. Concurrent requests with the same
@@ -315,10 +348,35 @@ Coordinator review resolved commit 1:
   duplicates do not depend on the local sequence watermark.
 - Receipt metadata lives for at least the maximum configured replay/backfill
   horizon, even if the corresponding data expires earlier.
+- Receipt manifest generations and their SQLite index rows carry a durable
+  `committed_at` timestamp so later receipt garbage collection can enforce that
+  horizon independently of data-segment retention. The timestamp is assigned
+  once when a buffer first seals and remains in its restorable retry state, so
+  a post-manifest/pre-catalog retry writes identical footer and manifest
+  metadata. Legacy v1 receipts omit a zero timestamp when checksummed, preserving
+  their original serialized representation; the SQLite migration adds zero and
+  startup repairs it from the durable manifest.
 - Every telemetry batch carries `catalog_version`.
 
-The REST commit still chooses the headerless-OTLP idempotency rule and whether
-partial validation uses `207` or whole-batch rejection. Later budget choices do
-not block commit 1: application queue bytes/records, agent WAL bytes/age,
-durable spill retention, export bandwidth, raw/rollup retention, and the
-benchmark-selected physical layout.
+Lazy query binding preserves DataFusion reference shape. A quoted dotted name
+such as `"telemetry.event.v1"` is a bare Finelog namespace; the SQL-qualified
+`telemetry.event.v1` is a three-part catalog/schema/table reference and never
+aliases the dotted namespace. CTEs are removed by the SQL resolver before
+storage lookup, multiple bare namespaces bind independently, and `SELECT 1`
+touches no namespace. Unknown names remain normal client errors.
+`information_schema` is disabled because lazy registration would expose a
+misleading partial catalog, and public table functions are not registered.
+
+Coordinator review resolved the REST gate:
+
+- Headerless OTLP derives its batch ID from authenticated origin, signal
+  endpoint, content type, and uncompressed request bytes under a domain
+  separator. A valid explicit key overrides the derived ID.
+- Custom `/v1/telemetry` validation is atomic and returns `400` with indexed
+  errors without committing valid siblings.
+- OTLP uses its protocol-native `200 partial_success` response.
+
+Later budget choices do not block the current gate: application queue
+bytes/records, agent WAL bytes/age, durable spill retention, export bandwidth,
+and raw/rollup retention. Benchmark #205 leaves the current name-keyed physical
+segments unchanged.

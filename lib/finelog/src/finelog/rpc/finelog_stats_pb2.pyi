@@ -18,6 +18,8 @@ class ColumnType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     COLUMN_TYPE_BYTES: _ClassVar[ColumnType]
     COLUMN_TYPE_INT32: _ClassVar[ColumnType]
     COLUMN_TYPE_MAP: _ClassVar[ColumnType]
+    COLUMN_TYPE_LIST_FLOAT64: _ClassVar[ColumnType]
+    COLUMN_TYPE_LIST_INT64: _ClassVar[ColumnType]
 COLUMN_TYPE_UNKNOWN: ColumnType
 COLUMN_TYPE_STRING: ColumnType
 COLUMN_TYPE_INT64: ColumnType
@@ -27,6 +29,8 @@ COLUMN_TYPE_TIMESTAMP_MS: ColumnType
 COLUMN_TYPE_BYTES: ColumnType
 COLUMN_TYPE_INT32: ColumnType
 COLUMN_TYPE_MAP: ColumnType
+COLUMN_TYPE_LIST_FLOAT64: ColumnType
+COLUMN_TYPE_LIST_INT64: ColumnType
 
 class ColumnIndex(_message.Message):
     __slots__ = ("trigram",)

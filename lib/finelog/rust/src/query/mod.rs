@@ -16,6 +16,7 @@ pub mod sidecar;
 pub mod trigram_prune;
 pub mod udf;
 
+use std::collections::BTreeSet;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -154,6 +155,10 @@ fn shared_runtime_env() -> Arc<RuntimeEnv> {
 /// - `enable_ident_normalization` left at the DF53 default (true): the corpus
 ///   quotes dotted identifiers (`"iris.worker"`), which are preserved verbatim;
 ///   lowercase unquoted column names are unaffected.
+/// - `information_schema` remains disabled: lazy registration intentionally
+///   exposes only referenced Finelog namespaces, so an information schema would
+///   otherwise present a misleading partial catalog. Table functions are not
+///   registered on the public read-only query context.
 /// - `parquet.pushdown_filters = true` + `parquet.reorder_filters = true`: apply
 ///   scan predicates *inside* the parquet decoder via a row selection, so other
 ///   projected columns are read only for surviving rows. Without this, DataFusion
@@ -184,6 +189,23 @@ pub fn make_ctx() -> SessionContext {
     ctx.add_analyzer_rule(Arc::new(crate::query::optimizer::PrefixRangeRewrite));
     udf::register_scalar_udfs(&ctx);
     ctx
+}
+
+/// Parse one SQL statement with the same dialect/configuration used for
+/// execution and return its physical table references. CTE names are excluded
+/// by DataFusion's resolver. Reference variants remain distinct: a quoted
+/// dotted Finelog namespace is bare, while `catalog.schema.table` stays fully
+/// qualified and is not silently rebound to a dotted namespace.
+pub fn referenced_namespaces(
+    ctx: &SessionContext,
+    sql: &str,
+) -> DFResult<BTreeSet<TableReference>> {
+    let state = ctx.state();
+    let statement = state.sql_to_statement(sql, &Dialect::DuckDB)?;
+    Ok(state
+        .resolve_table_references(&statement)?
+        .into_iter()
+        .collect())
 }
 
 /// A collected query result: its arrow schema (always present, even for an
@@ -500,7 +522,8 @@ mod tests {
     use super::*;
     use crate::store::ipc::{decode_one_record_batch, encode_ipc};
     use crate::test_support::unique_dir;
-    use datafusion::arrow::array::Int64Array;
+    use datafusion::arrow::array::{new_null_array, ArrayRef, Int32Array, Int64Array, StringArray};
+    use datafusion::arrow::datatypes::DataType;
 
     #[test]
     fn truncate_sql_caps_on_char_boundary() {
@@ -536,6 +559,50 @@ mod tests {
         );
         // Zero is the explicit disable escape hatch.
         assert_eq!(parse_query_timeout(Some("0")), None);
+    }
+
+    #[test]
+    fn referenced_namespaces_excludes_ctes_and_preserves_dotted_names() {
+        let ctx = make_ctx();
+        let names = referenced_namespaces(
+            &ctx,
+            r#"
+            WITH recent AS (SELECT * FROM "telemetry.event.v1")
+            SELECT *
+            FROM recent
+            JOIN "telemetry.workload_metric.v1" AS metric
+              ON recent.root_run_uid = metric.root_run_uid
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            names,
+            BTreeSet::from([
+                TableReference::bare("telemetry.event.v1"),
+                TableReference::bare("telemetry.workload_metric.v1"),
+            ])
+        );
+    }
+
+    #[test]
+    fn referenced_namespaces_preserves_sql_qualification() {
+        let ctx = make_ctx();
+        let names = referenced_namespaces(
+            &ctx,
+            r#"
+            SELECT * FROM "telemetry.event.v1"
+            UNION ALL
+            SELECT * FROM telemetry.event.v1
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            names,
+            BTreeSet::from([
+                TableReference::bare("telemetry.event.v1"),
+                TableReference::full("telemetry", "event", "v1"),
+            ])
+        );
     }
 
     #[tokio::test]
@@ -738,17 +805,35 @@ mod tests {
         ))
     }
 
-    /// The same schema minus the `cluster` column — the layout of a segment
-    /// written before the column was added, expressed as a derivation rather than
-    /// a duplicated literal.
-    fn log_arrow_pre_cluster() -> SchemaRef {
-        let fields: Vec<Field> = log_arrow()
+    /// The immutable six-column layout from before origin-cluster and telemetry
+    /// fields were added to the privileged log namespace.
+    fn historical_log_arrow() -> SchemaRef {
+        Arc::new(ArrowSchema::new(vec![
+            Field::new("seq", DataType::Int64, false),
+            Field::new("key", DataType::Utf8, false),
+            Field::new("source", DataType::Utf8, false),
+            Field::new("data", DataType::Utf8, false),
+            Field::new("epoch_ms", DataType::Int64, false),
+            Field::new("level", DataType::Int32, false),
+        ]))
+    }
+
+    fn expanded_log_batch(schema: SchemaRef) -> RecordBatch {
+        let columns: Vec<ArrayRef> = schema
             .fields()
             .iter()
-            .filter(|f| f.name() != "cluster")
-            .map(|f| f.as_ref().clone())
+            .map(|field| match field.name().as_str() {
+                "seq" => Arc::new(Int64Array::from_iter_values(1..=2)) as ArrayRef,
+                "key" => Arc::new(StringArray::from(vec!["/job/alpha", "/job/bravo"])),
+                "source" => Arc::new(StringArray::from(vec!["stdout"; 2])),
+                "data" => Arc::new(StringArray::from(vec!["line"; 2])),
+                "epoch_ms" => Arc::new(Int64Array::from_iter_values(1..=2)),
+                "level" => Arc::new(Int32Array::from(vec![2; 2])),
+                "cluster" => Arc::new(StringArray::from(vec!["alpha", "bravo"])),
+                _ => new_null_array(field.data_type(), 2),
+            })
             .collect();
-        Arc::new(ArrowSchema::new(fields))
+        RecordBatch::try_new(schema, columns).unwrap()
     }
 
     #[tokio::test]
@@ -763,30 +848,16 @@ mod tests {
         use crate::query::provider::NamespaceProvider;
         use crate::store::log_read::{add_cluster_filter, build_log_predicates};
         use crate::store::segment::{discover_segments, write_segment_to_dir};
-        use datafusion::arrow::array::{Int32Array, Int64Array, StringArray};
-
         let dir = unique_dir("cluster_mixed");
         let full = log_arrow();
 
         // A post-evolution segment stamped for two federated peers.
-        let new_batch = RecordBatch::try_new(
-            Arc::clone(&full),
-            vec![
-                Arc::new(Int64Array::from_iter_values(1..=2)),
-                Arc::new(StringArray::from(vec!["/job/alpha", "/job/bravo"])),
-                Arc::new(StringArray::from(vec!["stdout"; 2])),
-                Arc::new(StringArray::from(vec!["line"; 2])),
-                Arc::new(Int64Array::from_iter_values(1..=2)),
-                Arc::new(Int32Array::from(vec![2; 2])),
-                Arc::new(StringArray::from(vec!["alpha", "bravo"])),
-            ],
-        )
-        .unwrap();
+        let new_batch = expanded_log_batch(Arc::clone(&full));
         write_segment_to_dir(&dir, 1, 1, &new_batch).unwrap();
 
-        // A pre-evolution segment with no `cluster` column at all.
+        // A historical segment with exactly seq plus the original five fields.
         let legacy_batch = RecordBatch::try_new(
-            log_arrow_pre_cluster(),
+            historical_log_arrow(),
             vec![
                 Arc::new(Int64Array::from_iter_values(3..=3)),
                 Arc::new(StringArray::from(vec!["/job/legacy"])),

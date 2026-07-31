@@ -18,7 +18,11 @@ fn main() {
     std::env::set_var("PROTOC", &protoc);
 
     connectrpc_build::Config::new()
-        .files(&["proto/logging.proto", "proto/finelog_stats.proto"])
+        .files(&[
+            "proto/logging.proto",
+            "proto/finelog_stats.proto",
+            "proto/telemetry.proto",
+        ])
         .includes(&["proto/"])
         .include_file("_connectrpc.rs")
         .compile()

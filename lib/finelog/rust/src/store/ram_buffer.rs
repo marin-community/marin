@@ -115,15 +115,20 @@ impl RamBuffers {
     }
 
     /// Move accumulated chunks into a sealed flushing buffer. Returns `None` if
-    /// there is nothing to flush. The sealed buffer is also stored on
-    /// `self.flushing` so `ram_bytes`/`ram_rows` keep counting it until the
-    /// flush commits.
-    pub fn seal(&mut self) -> Option<SealedBuffer> {
+    /// there is nothing to flush. Zero-valued receipt commit times are assigned
+    /// before the sealed state is cloned into `self.flushing`, so a restored
+    /// retry writes byte-identical footer and manifest receipt metadata.
+    pub fn seal(&mut self, receipt_committed_at_ms: i64) -> Option<SealedBuffer> {
         if self.chunks.is_empty() {
             return None;
         }
         let tables = std::mem::take(&mut self.chunks);
-        let receipts = std::mem::take(&mut self.receipts);
+        let mut receipts = std::mem::take(&mut self.receipts);
+        for receipt in &mut receipts {
+            if receipt.committed_at_ms == 0 {
+                receipt.committed_at_ms = receipt_committed_at_ms;
+            }
+        }
         let sealed_bytes = self.ram_bytes;
         let sealed_rows = self.ram_rows;
         self.ram_bytes = 0;
@@ -383,7 +388,7 @@ mod tests {
         let bytes_before = buffers.ram_bytes();
         assert_eq!(bytes_before, (16 * 3 + 24) + (16 * 2 + 16));
 
-        let sealed = buffers.seal().unwrap();
+        let sealed = buffers.seal(1_234).unwrap();
         assert_eq!(sealed.num_rows, 5);
         assert_eq!(sealed.min_seq, 1);
         assert_eq!(sealed.max_seq, 5);
@@ -397,7 +402,7 @@ mod tests {
         assert!(buffers.has_chunks());
 
         // Re-seal and commit -> flushing cleared, buffer empty.
-        buffers.seal().unwrap();
+        buffers.seal(1_234).unwrap();
         buffers.commit_flush();
         assert_eq!(buffers.ram_rows(), 0);
         assert_eq!(buffers.ram_bytes(), 0);
@@ -408,7 +413,7 @@ mod tests {
     fn seal_empty_is_none() {
         let schema = worker_arrow();
         let mut buffers = RamBuffers::new(schema, 1);
-        assert!(buffers.seal().is_none());
+        assert!(buffers.seal(1_234).is_none());
     }
 
     #[test]

@@ -20,6 +20,8 @@
 //! persisted: it stamps into a RAM buffer, advances `persisted_seq` to the
 //! freshly allocated seq under the lock, and never writes parquet.
 
+#[cfg(test)]
+use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -41,7 +43,9 @@ use crate::store::ram_buffer::{stamp_seq_and_build, RamBuffers, SealedBuffer};
 use crate::store::receipts::{recover_receipts, write_receipt_manifest};
 use crate::store::reconcile::reconcile_remote_segments;
 use crate::store::remote::{build_remote_store, RemoteStore};
-use crate::store::schema::{schema_to_arrow, AlignedBatch, Schema};
+use crate::store::schema::{
+    array_buffer_size, schema_to_arrow, AlignedBatch, Schema, IMPLICIT_SEQ_COLUMN,
+};
 use crate::store::segment::{
     discover_segments, read_segment_footer, write_segment_to_dir_with_receipts,
 };
@@ -50,6 +54,7 @@ use crate::store::types::{
     BatchReceipt, LocalSegment, NamespaceStats, ReceiptState, SegmentLocation, SegmentRow,
     WriteRowsResult,
 };
+use crate::store::LOG_WRITE_COLUMN_NAMES;
 
 /// Best-effort removal of a segment's trigram sidecar (`<path>.tgm`), co-located
 /// with every parquet unlink. A missing sidecar (an L0 / unindexed-namespace
@@ -101,6 +106,11 @@ fn now_ms() -> i64 {
 static CRASH_AFTER_SEGMENT_RENAME: Mutex<Option<String>> = Mutex::new(None);
 
 #[cfg(test)]
+thread_local! {
+    static FAIL_AFTER_RECEIPT_MANIFEST: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
 pub fn inject_crash_after_segment_rename(namespace: &str) {
     *CRASH_AFTER_SEGMENT_RENAME.lock().unwrap() = Some(namespace.to_string());
 }
@@ -114,6 +124,27 @@ fn crash_after_segment_rename(namespace: &str) {
     *target = None;
     drop(target);
     panic!("injected crash after durable segment rename");
+}
+
+#[cfg(test)]
+pub fn inject_failure_after_receipt_manifest(namespace: &str) {
+    FAIL_AFTER_RECEIPT_MANIFEST.with(|target| {
+        *target.borrow_mut() = Some(namespace.to_string());
+    });
+}
+
+#[cfg(test)]
+fn fail_after_receipt_manifest(namespace: &str) -> Result<(), StatsError> {
+    FAIL_AFTER_RECEIPT_MANIFEST.with(|target| {
+        let mut target = target.borrow_mut();
+        if target.as_deref() != Some(namespace) {
+            return Ok(());
+        }
+        *target = None;
+        Err(StatsError::Internal(
+            "injected failure after durable receipt manifest".to_string(),
+        ))
+    })
 }
 
 /// Insertion-lock-guarded mutable state.
@@ -198,13 +229,104 @@ pub struct SegmentSnapshot {
     pub min_seq: Option<i64>,
 }
 
+struct NamespaceRecovery {
+    next_seq: i64,
+    adopted: VecDeque<LocalSegment>,
+    persisted_seq: i64,
+    receipts: Vec<BatchReceipt>,
+    receipt_manifest_count: usize,
+    footer_repairs: usize,
+}
+
+impl NamespaceRecovery {
+    fn memory() -> Self {
+        Self {
+            next_seq: 1,
+            adopted: VecDeque::new(),
+            persisted_seq: -1,
+            receipts: Vec::new(),
+            receipt_manifest_count: 0,
+            footer_repairs: 0,
+        }
+    }
+}
+
+fn recover_namespace(
+    dir: &Path,
+    key_column: Option<&str>,
+    catalog: &Catalog,
+    name: &str,
+) -> Result<NamespaceRecovery, StatsError> {
+    std::fs::create_dir_all(dir).map_err(|error| {
+        StatsError::Internal(format!("create namespace dir {}: {error}", dir.display()))
+    })?;
+    let adopted = adopt_local_segments(dir, key_column, catalog, name);
+    let receipt_recovery = recover_receipts(dir)?;
+
+    // Remote-only segments and durable receipts can outlive local Parquet.
+    // Include all three sources so restart never reuses a live seq.
+    let local_next_seq = adopted
+        .iter()
+        .map(|segment| segment.max_seq + 1)
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let receipt_next_seq = receipt_recovery
+        .receipts
+        .iter()
+        .map(|receipt| receipt.last_seq + 1)
+        .max()
+        .unwrap_or(1);
+    let next_seq = local_next_seq
+        .max(crate::store::adopt::recover_next_seq(
+            &catalog.list_segments(name)?,
+        ))
+        .max(receipt_next_seq);
+    let persisted_seq = adopted
+        .iter()
+        .filter(|segment| segment.row_count > 0)
+        .map(|segment| segment.max_seq)
+        .max()
+        .unwrap_or(-1);
+
+    Ok(NamespaceRecovery {
+        next_seq,
+        adopted,
+        persisted_seq,
+        receipts: receipt_recovery.receipts,
+        receipt_manifest_count: receipt_recovery.manifest_count,
+        footer_repairs: receipt_recovery.footer_repairs,
+    })
+}
+
+fn repair_receipt_index(
+    catalog: &Catalog,
+    name: &str,
+    durable_receipts: &[BatchReceipt],
+) -> Result<(), StatsError> {
+    let durable_by_id: HashMap<&str, &BatchReceipt> = durable_receipts
+        .iter()
+        .map(|receipt| (receipt.batch_id.as_str(), receipt))
+        .collect();
+    for indexed in catalog.list_batch_receipts(name)? {
+        let Some(durable) = durable_by_id.get(indexed.batch_id.as_str()) else {
+            return Err(StatsError::Internal(format!(
+                "SQLite receipt has no durable manifest/footer metadata for namespace {name:?}, batch {:?}",
+                indexed.batch_id
+            )));
+        };
+        if *durable != &indexed {
+            return Err(StatsError::Internal(format!(
+                "SQLite receipt disagrees with durable metadata for namespace {name:?}, batch {:?}",
+                indexed.batch_id
+            )));
+        }
+    }
+    catalog.replace_batch_receipts(name, durable_receipts)
+}
+
 impl Namespace {
-    /// Build a namespace over `data_dir` (disk-backed when `Some`).
-    ///
-    /// On a disk namespace the next seq is recovered from segment footers and any
-    /// existing local segment files are adopted into the deque (sorted by
-    /// min_seq); `persisted_seq` starts at the recovered high-water seq so a
-    /// caller awaiting a previously-durable seq returns immediately.
+    /// Open an in-memory or disk-backed namespace and recover its durable state.
     ///
     /// `query_visibility` is the one process-wide lock (cloned into each
     /// namespace) the maintenance task takes the WRITE side of before any
@@ -233,61 +355,16 @@ impl Namespace {
         };
 
         let local_recovery_started = Instant::now();
-        let (
+        let NamespaceRecovery {
             next_seq,
             adopted,
-            init_persisted,
-            recovered_receipts,
+            persisted_seq: init_persisted,
+            receipts: recovered_receipts,
             receipt_manifest_count,
             footer_repairs,
-        ) = match &data_dir {
-            None => (1_i64, VecDeque::new(), -1_i64, Vec::new(), 0, 0),
-            Some(dir) => {
-                std::fs::create_dir_all(dir).map_err(|e| {
-                    StatsError::Internal(format!("create namespace dir {}: {e}", dir.display()))
-                })?;
-                let adopted = adopt_local_segments(dir, key_column.as_deref(), &catalog, name);
-                let recovery = recover_receipts(dir)?;
-                // Seed next_seq past every segment the catalog knows about, not
-                // just on-disk footers. A segment evicted to remote has its local
-                // parquet unlinked, so a footer-only scan under-counts and would
-                // reuse live seqs (silent overwrite). Union the footer scan with
-                // the full catalog (LOCAL, REMOTE, and BOTH rows).
-                // `adopt_local_segments` has already read every healthy local
-                // footer. Reuse those max_seq values instead of scanning every
-                // Parquet footer a second time.
-                let local_next_seq = adopted
-                    .iter()
-                    .map(|segment| segment.max_seq + 1)
-                    .max()
-                    .unwrap_or(1)
-                    .max(1);
-                let receipt_next_seq = recovery
-                    .receipts
-                    .iter()
-                    .map(|receipt| receipt.last_seq + 1)
-                    .max()
-                    .unwrap_or(1);
-                let next_seq = local_next_seq
-                    .max(crate::store::adopt::recover_next_seq(
-                        &catalog.list_segments(name)?,
-                    ))
-                    .max(receipt_next_seq);
-                let max_persisted = adopted
-                    .iter()
-                    .filter(|s| s.row_count > 0)
-                    .map(|s| s.max_seq)
-                    .max()
-                    .unwrap_or(-1);
-                (
-                    next_seq,
-                    adopted,
-                    max_persisted,
-                    recovery.receipts,
-                    recovery.manifest_count,
-                    recovery.footer_repairs,
-                )
-            }
+        } = match &data_dir {
+            None => NamespaceRecovery::memory(),
+            Some(dir) => recover_namespace(dir, key_column.as_deref(), &catalog, name)?,
         };
         let local_recovery_ms = local_recovery_started.elapsed().as_millis() as u64;
 
@@ -336,26 +413,7 @@ impl Namespace {
             .map(|segment| segment_to_row(name, segment))
             .collect();
         catalog.upsert_segments(&adopted_rows)?;
-        let indexed_receipts = catalog.list_batch_receipts(name)?;
-        let durable_by_id: HashMap<&str, &BatchReceipt> = recovered_receipts
-            .iter()
-            .map(|receipt| (receipt.batch_id.as_str(), receipt))
-            .collect();
-        for indexed in &indexed_receipts {
-            let Some(durable) = durable_by_id.get(indexed.batch_id.as_str()) else {
-                return Err(StatsError::Internal(format!(
-                    "SQLite receipt has no durable manifest/footer metadata for namespace {name:?}, batch {:?}",
-                    indexed.batch_id
-                )));
-            };
-            if *durable != indexed {
-                return Err(StatsError::Internal(format!(
-                    "SQLite receipt disagrees with durable metadata for namespace {name:?}, batch {:?}",
-                    indexed.batch_id
-                )));
-            }
-        }
-        catalog.replace_batch_receipts(name, &recovered_receipts)?;
+        repair_receipt_index(&catalog, name, &recovered_receipts)?;
         let catalog_refresh_ms = catalog_refresh_started.elapsed().as_millis() as u64;
 
         if ns.data_dir.is_some() {
@@ -499,12 +557,7 @@ impl Namespace {
         last_seq
     }
 
-    /// Atomically deduplicate and append one validated WriteRows batch.
-    ///
-    /// The receipt enters `NsInner.pending_receipts` under the same insertion
-    /// lock as seq allocation and buffer append. A concurrent retry therefore
-    /// observes it before either request can flush. Once durable, the receipt
-    /// leaves this bounded map and lookup moves to SQLite.
+    /// Append one validated WriteRows batch exactly once per batch ID and digest.
     pub fn append_idempotent_batch(
         &self,
         aligned: &AlignedBatch,
@@ -557,11 +610,12 @@ impl Namespace {
             rows_written,
             first_seq,
             last_seq,
+            committed_at_ms: if self.data_dir.is_none() { now_ms() } else { 0 },
         };
         let stamped = stamp_seq_and_build(aligned, first_seq, &self.arrow_schema);
         let receipt_bytes = (receipt.batch_id.len() * 2
             + receipt.payload_sha256.len()
-            + 3 * std::mem::size_of::<i64>()) as i64;
+            + 4 * std::mem::size_of::<i64>()) as i64;
         inner.buffers.append_batch_with_receipt(
             stamped,
             aligned.byte_size + 8 * rows_written + receipt_bytes,
@@ -591,29 +645,37 @@ impl Namespace {
 
     /// Append already-built log columns (`seq` excluded) and return the last seq.
     ///
-    /// `columns` are the six non-seq log columns in registered order
-    /// (key/source/data/epoch_ms/level/cluster), prepared by the caller OUTSIDE
-    /// the lock. `num_rows` is their common length and `added_bytes` their raw
-    /// buffer size.
-    pub fn append_log_batch(
-        &self,
-        columns: Vec<arrow::array::ArrayRef>,
-        num_rows: usize,
-        added_bytes: i64,
-    ) -> i64 {
+    /// `columns` follow [`LOG_WRITE_COLUMN_NAMES`] and share `num_rows`.
+    pub fn append_log_batch(&self, columns: Vec<arrow::array::ArrayRef>, num_rows: usize) -> i64 {
         if num_rows == 0 {
             return -1;
         }
         let mut inner = self.inner.lock().unwrap();
         let n = num_rows as i64;
         let first_seq = inner.buffers.allocate_seq(n);
-        let seq_array: Int64Array = (first_seq..first_seq + n).collect();
-        let mut all: Vec<arrow::array::ArrayRef> = Vec::with_capacity(columns.len() + 1);
-        all.push(Arc::new(seq_array));
-        all.extend(columns);
+        let seq_array =
+            Arc::new((first_seq..first_seq + n).collect::<Int64Array>()) as arrow::array::ArrayRef;
+        debug_assert_eq!(columns.len(), LOG_WRITE_COLUMN_NAMES.len());
+        let mut all: Vec<arrow::array::ArrayRef> =
+            Vec::with_capacity(self.arrow_schema.fields().len());
+        for field in self.arrow_schema.fields() {
+            if field.name() == IMPLICIT_SEQ_COLUMN {
+                all.push(Arc::clone(&seq_array));
+                continue;
+            }
+            if let Some(index) = LOG_WRITE_COLUMN_NAMES
+                .iter()
+                .position(|name| *name == field.name())
+            {
+                all.push(Arc::clone(&columns[index]));
+            } else {
+                all.push(arrow::array::new_null_array(field.data_type(), num_rows));
+            }
+        }
         let batch = RecordBatch::try_new(Arc::clone(&self.arrow_schema), all)
             .expect("log columns match the stored log schema");
-        inner.buffers.append_batch(batch, added_bytes + 8 * n);
+        let aligned_bytes = batch.columns().iter().map(array_buffer_size).sum();
+        inner.buffers.append_batch(batch, aligned_bytes);
         let last_seq = first_seq + n - 1;
         if self.data_dir.is_none() {
             self.persisted_seq.send_replace(last_seq);
@@ -739,7 +801,7 @@ impl Namespace {
         let _flush_guard = self.flush_lock.lock().unwrap();
         let sealed = {
             let mut inner = self.inner.lock().unwrap();
-            inner.buffers.seal()
+            inner.buffers.seal(now_ms())
         };
         let Some(sealed) = sealed else {
             return Ok(());
@@ -773,6 +835,8 @@ impl Namespace {
         #[cfg(test)]
         crash_after_segment_rename(&self.name);
         write_receipt_manifest(dir, &path, &sealed.receipts)?;
+        #[cfg(test)]
+        fail_after_receipt_manifest(&self.name)?;
         let (min_key, max_key) = self.key_bounds(&sealed.batch);
         let seg = LocalSegment {
             path: path.to_string_lossy().into_owned(),

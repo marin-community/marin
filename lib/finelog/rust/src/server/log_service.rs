@@ -21,7 +21,7 @@ use crate::store::log_read::{
 };
 use crate::store::namespace::DEFAULT_PERSIST_TIMEOUT;
 use crate::store::store::LOG_NAMESPACE_NAME;
-use crate::store::Store;
+use crate::store::{Store, LOG_WRITE_COLUMN_NAMES};
 
 /// Server default for `max_lines` when the request leaves it unset/<=0.
 const DEFAULT_MAX_LINES: i32 = 1000;
@@ -88,10 +88,9 @@ impl LogServiceImpl {
         ctx: &RequestContext,
     ) -> Result<(), ConnectError> {
         let store = Arc::clone(&self.store);
-        let last_seq = run_blocking(move || {
-            store.append_log_columns(columns.columns, columns.num_rows, columns.byte_size)
-        })
-        .await?;
+        let last_seq =
+            run_blocking(move || store.append_log_columns(columns.columns, columns.num_rows))
+                .await?;
 
         let budget = ctx.time_remaining().unwrap_or(DEFAULT_PERSIST_TIMEOUT);
         self.store
@@ -101,16 +100,10 @@ impl LogServiceImpl {
     }
 }
 
-/// The six non-seq log columns built from pushed entries, plus their byte size.
-/// Prepared before the namespace insertion lock is taken.
+/// The non-seq log columns built from pushed entries.
 struct LogColumns {
     columns: Vec<ArrayRef>,
     num_rows: usize,
-    byte_size: i64,
-}
-
-fn array_buffer_size(arr: &ArrayRef) -> i64 {
-    arr.to_data().buffers().iter().map(|b| b.len() as i64).sum()
 }
 
 /// One pushed row's fields, borrowed from the request view.
@@ -163,12 +156,8 @@ fn build_log_columns(rows: Vec<EntryFields<'_>>, cluster: &str) -> LogColumns {
         Arc::new(Int32Array::from(levels)),
         Arc::new(StringArray::from(vec![cluster; num_rows])),
     ];
-    let byte_size: i64 = columns.iter().map(array_buffer_size).sum();
-    LogColumns {
-        columns,
-        num_rows,
-        byte_size,
-    }
+    debug_assert_eq!(columns.len(), LOG_WRITE_COLUMN_NAMES.len());
+    LogColumns { columns, num_rows }
 }
 
 // Naming the concrete `ServiceResult<T>` return type refines the trait's

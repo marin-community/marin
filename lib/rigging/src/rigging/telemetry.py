@@ -17,16 +17,28 @@ import threading
 import uuid
 from collections import Counter as Counts
 from collections import deque
-from collections.abc import Iterator
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from datetime import timedelta
 from enum import StrEnum
-from typing import Any
+from typing import Any, SupportsFloat
 
-CATALOG_VERSION = "telemetry-catalog.v1"
+from rigging.telemetry_catalog import load_catalog
+
+_CATALOG = load_catalog()
+CATALOG_VERSION = _CATALOG.catalog_version
 DEFAULT_CARDINALITY_LIMIT = 100
 _INSTRUMENT_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
 _SCOPE_NAME = re.compile(r"^[a-z][a-z0-9_.]*$")
+_LOSS_CARDINALITY_OVERFLOW = "cardinality_overflow"
+_LOSS_CONFIGURATION_CONFLICT = "configuration_conflict"
+_LOSS_DESCRIPTOR_CONFLICT = "descriptor_conflict"
+_LOSS_EVENT_QUEUE_OVERFLOW = "event_queue_overflow"
+_LOSS_INERT_HANDLE = "inert_handle"
+_LOSS_INVALID_CONFIGURATION = "invalid_configuration"
+_LOSS_INVALID_DESCRIPTOR = "invalid_descriptor"
+_LOSS_INVALID_EMISSION = "invalid_emission"
+_LOSS_RUNTIME_CONTENTION = "runtime_contention"
 
 
 class DeliveryClass(StrEnum):
@@ -119,6 +131,9 @@ class Resource:
     policy_step: int | None = None
     owner: str | None = None
     experiment_issue: int | None = None
+    entity_authority: str | None = None
+    entity_type: str | None = None
+    entity_uid: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,7 +198,7 @@ class _Runtime:
     def emit_counter(
         self,
         descriptor: MetricDescriptor,
-        value: Any,
+        value: SupportsFloat,
         attributes: dict[str, Any],
     ) -> None:
         number = _finite_number(value)
@@ -191,7 +206,7 @@ class _Runtime:
             raise ValueError("counter increments must be non-negative")
         key = self._series_key(descriptor, attributes)
         if not self.lock.acquire(blocking=False):
-            _record_loss("runtime_contention")
+            _record_loss(_LOSS_RUNTIME_CONTENTION)
             return
         try:
             if self.stopped or not self._admit_series(descriptor, key, self.counters):
@@ -204,13 +219,13 @@ class _Runtime:
     def emit_gauge(
         self,
         descriptor: MetricDescriptor,
-        value: Any,
+        value: SupportsFloat,
         attributes: dict[str, Any],
     ) -> None:
         number = _finite_number(value)
         key = self._series_key(descriptor, attributes)
         if not self.lock.acquire(blocking=False):
-            _record_loss("runtime_contention")
+            _record_loss(_LOSS_RUNTIME_CONTENTION)
             return
         try:
             if self.stopped or not self._admit_series(descriptor, key, self.gauges):
@@ -223,13 +238,13 @@ class _Runtime:
     def emit_histogram(
         self,
         descriptor: MetricDescriptor,
-        value: Any,
+        value: SupportsFloat,
         attributes: dict[str, Any],
     ) -> None:
         number = _finite_number(value)
         key = self._series_key(descriptor, attributes)
         if not self.lock.acquire(blocking=False):
-            _record_loss("runtime_contention")
+            _record_loss(_LOSS_RUNTIME_CONTENTION)
             return
         try:
             if self.stopped or not self._admit_series(descriptor, key, self.histograms):
@@ -262,10 +277,10 @@ class _Runtime:
         descriptor = _EVENT_CATALOG.get(event_name)
         if descriptor is None:
             raise ValueError(f"event {event_name!r} is not in catalog {CATALOG_VERSION}")
+        if delivery_class != descriptor.delivery_class:
+            raise ValueError(f"event {event_name!r} requires delivery class {descriptor.delivery_class}")
         if not set(attributes).issubset(descriptor.attribute_names):
-            raise ValueError(
-                f"event {event_name!r} attributes must be a subset of {descriptor.attribute_names}"
-            )
+            raise ValueError(f"event {event_name!r} attributes must be a subset of {descriptor.attribute_names}")
         normalized = tuple(sorted((key, _event_value(value)) for key, value in attributes.items()))
         estimated_bytes = (
             len(event_name)
@@ -287,7 +302,7 @@ class _Runtime:
             estimated_bytes=estimated_bytes,
         )
         if not self.lock.acquire(blocking=False):
-            _record_loss("runtime_contention")
+            _record_loss(_LOSS_RUNTIME_CONTENTION)
             return
         try:
             if self.stopped:
@@ -298,12 +313,9 @@ class _Runtime:
             ):
                 dropped = self.events.popleft()
                 self.event_bytes -= dropped.estimated_bytes
-                _record_loss("event_queue_overflow")
-            if (
-                self.exporter.max_queue_records == 0
-                or estimated_bytes > self.exporter.max_queue_bytes
-            ):
-                _record_loss("event_queue_overflow")
+                _record_loss(_LOSS_EVENT_QUEUE_OVERFLOW)
+            if self.exporter.max_queue_records == 0 or estimated_bytes > self.exporter.max_queue_bytes:
+                _record_loss(_LOSS_EVENT_QUEUE_OVERFLOW)
                 return
             self.events.append(record)
             self.event_bytes += estimated_bytes
@@ -318,9 +330,7 @@ class _Runtime:
     ) -> SeriesKey:
         expected = {attribute.name: attribute for attribute in descriptor.attributes}
         if set(attributes) != set(expected):
-            raise ValueError(
-                f"attributes for {descriptor.scope}.{descriptor.name} must be {tuple(expected)}"
-            )
+            raise ValueError(f"attributes for {descriptor.scope}.{descriptor.name} must be {tuple(expected)}")
         normalized: list[tuple[str, str]] = []
         for name in expected:
             value = attributes[name]
@@ -341,61 +351,52 @@ class _Runtime:
             return True
         descriptor_key = (descriptor.scope, descriptor.name)
         if self.series_per_descriptor[descriptor_key] >= descriptor.cardinality_limit:
-            _record_loss("cardinality_overflow")
+            _record_loss(_LOSS_CARDINALITY_OVERFLOW)
             return False
         self.series_per_descriptor[descriptor_key] += 1
         return True
+
+
+def _emit_metric(
+    descriptor: MetricDescriptor | None,
+    emit: Callable[[_Runtime, MetricDescriptor, SupportsFloat, dict[str, Any]], None],
+    value: SupportsFloat,
+    attributes: dict[str, Any],
+) -> None:
+    if descriptor is None:
+        _record_loss(_LOSS_INERT_HANDLE)
+        return
+    runtime = _active_runtime()
+    if runtime is None:
+        return
+    try:
+        emit(runtime, descriptor, value, attributes)
+    except Exception:
+        _record_loss(_LOSS_INVALID_EMISSION)
 
 
 class Counter:
     def __init__(self, descriptor: MetricDescriptor | None) -> None:
         self.descriptor = descriptor
 
-    def add(self, value: Any = 1, **attributes: Any) -> None:
-        if self.descriptor is None:
-            _record_loss("inert_handle")
-            return
-        runtime = _active_runtime()
-        if runtime is None:
-            return
-        try:
-            runtime.emit_counter(self.descriptor, value, attributes)
-        except Exception:
-            _record_loss("invalid_emission")
+    def add(self, value: SupportsFloat = 1, **attributes: Any) -> None:
+        _emit_metric(self.descriptor, _Runtime.emit_counter, value, attributes)
 
 
 class Gauge:
     def __init__(self, descriptor: MetricDescriptor | None) -> None:
         self.descriptor = descriptor
 
-    def set(self, value: Any, **attributes: Any) -> None:
-        if self.descriptor is None:
-            _record_loss("inert_handle")
-            return
-        runtime = _active_runtime()
-        if runtime is None:
-            return
-        try:
-            runtime.emit_gauge(self.descriptor, value, attributes)
-        except Exception:
-            _record_loss("invalid_emission")
+    def set(self, value: SupportsFloat, **attributes: Any) -> None:
+        _emit_metric(self.descriptor, _Runtime.emit_gauge, value, attributes)
 
 
 class Histogram:
     def __init__(self, descriptor: MetricDescriptor | None) -> None:
         self.descriptor = descriptor
 
-    def record(self, value: Any, **attributes: Any) -> None:
-        if self.descriptor is None:
-            _record_loss("inert_handle")
-            return
-        runtime = _active_runtime()
-        if runtime is None:
-            return
-        try:
-            runtime.emit_histogram(self.descriptor, value, attributes)
-        except Exception:
-            _record_loss("invalid_emission")
+    def record(self, value: SupportsFloat, **attributes: Any) -> None:
+        _emit_metric(self.descriptor, _Runtime.emit_histogram, value, attributes)
 
 
 @dataclass(frozen=True, slots=True)
@@ -484,20 +485,38 @@ _loss_lock = threading.Lock()
 _runtime: _Runtime | None = None
 _descriptors: dict[tuple[str, str], MetricDescriptor] = {}
 _losses: Counts[str] = Counts()
-_logging_context: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
+_logging_context: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
     "rigging_telemetry_logging_context",
-    default={},
+    default=None,
 )
-_EVENT_CATALOG = {
-    descriptor.event_name: descriptor
-    for descriptor in (
-        EventDescriptor(
-            event_name="telemetry.runtime.gap",
-            owner="rigging",
-            attribute_names=("reason", "dropped_records"),
-            delivery_class=DeliveryClass.DURABLE,
+_METRIC_CATALOG = {
+    (entry.scope, entry.name): MetricDescriptor(
+        name=entry.name,
+        scope=entry.scope,
+        description=entry.description,
+        unit=entry.unit,
+        instrument_kind=InstrumentKind(entry.instrument_kind),
+        temporality=Temporality(entry.temporality),
+        attributes=tuple(
+            AttributeSpec(name=name, allowed_values=allowed_values) for name, allowed_values in entry.attributes
         ),
+        buckets=entry.buckets,
+        owner=entry.owner,
+        cadence=timedelta(seconds=entry.cadence_seconds),
+        delivery_class=DeliveryClass(entry.delivery_class),
+        cardinality_limit=entry.cardinality_limit,
+        maturity=Maturity(entry.maturity),
     )
+    for entry in _CATALOG.metrics
+}
+_EVENT_CATALOG = {
+    entry.event_name: EventDescriptor(
+        event_name=entry.event_name,
+        owner=entry.owner,
+        attribute_names=entry.attributes,
+        delivery_class=DeliveryClass(entry.delivery_class),
+    )
+    for entry in _CATALOG.events
 }
 
 
@@ -626,9 +645,9 @@ def configure(
                 return
             if _runtime.resource == resolved and _runtime.exporter == exporter:
                 return
-            _record_loss("configuration_conflict")
+            _record_loss(_LOSS_CONFIGURATION_CONFLICT)
     except Exception:
-        _record_loss("invalid_configuration")
+        _record_loss(_LOSS_INVALID_CONFIGURATION)
 
 
 def shutdown() -> None:
@@ -664,12 +683,12 @@ def event(
             attributes,
         )
     except Exception:
-        _record_loss("invalid_emission")
+        _record_loss(_LOSS_INVALID_EMISSION)
 
 
 @contextlib.contextmanager
 def logging_context(**fields: Any) -> Iterator[None]:
-    current = _logging_context.get()
+    current = _logging_context.get() or {}
     token = _logging_context.set({**current, **fields})
     try:
         yield
@@ -678,7 +697,7 @@ def logging_context(**fields: Any) -> Iterator[None]:
 
 
 def current_logging_context() -> dict[str, Any]:
-    return dict(_logging_context.get())
+    return dict(_logging_context.get() or {})
 
 
 def runtime_status() -> RuntimeStatus:
@@ -710,11 +729,42 @@ def runtime_status() -> RuntimeStatus:
         )
 
 
-def _declare(**fields: Any) -> MetricDescriptor | None:
+def _declare(
+    *,
+    name: str,
+    scope: str,
+    description: str,
+    unit: str,
+    instrument_kind: InstrumentKind,
+    temporality: Temporality,
+    attributes: tuple[AttributeSpec, ...],
+    buckets: tuple[float, ...],
+    owner: str,
+    cadence: timedelta,
+    delivery_class: DeliveryClass,
+    cardinality_limit: int,
+    maturity: Maturity,
+) -> MetricDescriptor | None:
     try:
-        descriptor = MetricDescriptor(**fields)
+        descriptor = MetricDescriptor(
+            name=name,
+            scope=scope,
+            description=description,
+            unit=unit,
+            instrument_kind=instrument_kind,
+            temporality=temporality,
+            attributes=attributes,
+            buckets=buckets,
+            owner=owner,
+            cadence=cadence,
+            delivery_class=delivery_class,
+            cardinality_limit=cardinality_limit,
+            maturity=maturity,
+        )
         _validate_descriptor(descriptor)
         key = (descriptor.scope, descriptor.name)
+        if _METRIC_CATALOG.get(key) != descriptor:
+            raise ValueError(f"metric {descriptor.scope}.{descriptor.name} is not in {CATALOG_VERSION}")
         with _state_lock:
             existing = _descriptors.get(key)
             if existing is None:
@@ -722,10 +772,10 @@ def _declare(**fields: Any) -> MetricDescriptor | None:
                 return descriptor
             if existing == descriptor:
                 return existing
-            _record_loss("descriptor_conflict")
+            _record_loss(_LOSS_DESCRIPTOR_CONFLICT)
             return None
     except Exception:
-        _record_loss("invalid_descriptor")
+        _record_loss(_LOSS_INVALID_DESCRIPTOR)
         return None
 
 
@@ -750,16 +800,14 @@ def _validate_descriptor(descriptor: MetricDescriptor) -> None:
     for attribute in descriptor.attributes:
         if not _INSTRUMENT_NAME.fullmatch(attribute.name):
             raise ValueError(f"invalid attribute name {attribute.name!r}")
-        if not attribute.allowed_values or len(attribute.allowed_values) != len(
-            set(attribute.allowed_values)
-        ):
+        if not attribute.allowed_values or len(attribute.allowed_values) != len(set(attribute.allowed_values)):
             raise ValueError(f"attribute {attribute.name!r} needs unique allowed values")
     if descriptor.instrument_kind == InstrumentKind.HISTOGRAM:
         if not descriptor.buckets:
             raise ValueError("histogram buckets are required")
         if any(not math.isfinite(bound) for bound in descriptor.buckets):
             raise ValueError("histogram buckets must be finite")
-        if any(left >= right for left, right in zip(descriptor.buckets, descriptor.buckets[1:])):
+        if any(left >= right for left, right in zip(descriptor.buckets, descriptor.buckets[1:], strict=False)):
             raise ValueError("histogram buckets must be strictly increasing")
     elif descriptor.buckets:
         raise ValueError("only histograms may define buckets")
@@ -788,8 +836,7 @@ def _resolve_resource(
     service_version: str | None,
 ) -> Resource:
     convenience_used = any(
-        value is not None
-        for value in (service_name, role, root_run_uid, service_instance_id, service_version)
+        value is not None for value in (service_name, role, root_run_uid, service_instance_id, service_version)
     )
     if resource is not None:
         if convenience_used:
@@ -835,7 +882,7 @@ def _active_runtime() -> _Runtime | None:
     return runtime
 
 
-def _finite_number(value: Any) -> float:
+def _finite_number(value: SupportsFloat) -> float:
     number = float(value)
     if not math.isfinite(number):
         raise ValueError("metric values must be finite")

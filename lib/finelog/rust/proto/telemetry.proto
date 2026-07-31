@@ -1,0 +1,144 @@
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+
+edition = "2023";
+
+package finelog.telemetry;
+
+message TelemetryResourceV1 {
+  string service_name = 1;
+  string service_instance_id = 2;
+  string role = 3;
+  string root_run_uid = 4;
+  string service_version = 5;
+  string run_id_alias = 6;
+  string iris_job_id = 7;
+  string iris_task_id = 8;
+  int32 task_index = 9;
+  int32 attempt_id = 10;
+  string attempt_uid = 11;
+  string worker_id = 12;
+  string node_id = 13;
+  string pod_uid = 14;
+  string container_id = 15;
+  int32 rank = 16;
+  int32 process_index = 17;
+  string actor_id = 18;
+  string engine_id = 19;
+  string repository = 20;
+  string git_revision = 21;
+  string image_digest = 22;
+  string model_id = 23;
+  string model_revision = 24;
+  int64 policy_step = 25;
+  string owner = 26;
+  int32 experiment_issue = 27;
+  string cluster = 28;
+  string entity_authority = 29;
+  string entity_type = 30;
+  string entity_uid = 31;
+}
+
+message TelemetryMetricV1 {
+  string scope = 1;
+  string scope_version = 2;
+  string name = 3;
+  string description = 4;
+  string unit = 5;
+  string instrument_kind = 6;
+  string temporality = 7;
+  int64 start_ts_unix_nano = 8;
+  string reset_id = 9;
+  string series_id = 10;
+  double value = 11;
+  int64 count = 12;
+  double sum = 13;
+  repeated double explicit_bounds = 14;
+  repeated int64 bucket_counts = 15;
+  map<string, string> attributes = 16;
+  string delivery_class = 17;
+  string device_uid = 18;
+  string device_type = 19;
+}
+
+message TelemetryEventV1 {
+  string event_name = 1;
+  int32 severity_number = 2;
+  string severity_text = 3;
+  string outcome = 4;
+  string phase = 5;
+  string error_type = 6;
+  string body = 7;
+  map<string, string> attributes = 8;
+  string trace_id = 9;
+  string span_id = 10;
+  string evidence_uri = 11;
+  string result_uri = 12;
+  string delivery_class = 13;
+  string probe_status = 14;
+}
+
+message TelemetryLogV1 {
+  string source = 1;
+  string body = 2;
+  int32 severity_number = 3;
+  string severity_text = 4;
+  string event_name = 5;
+  map<string, string> attributes = 6;
+  string trace_id = 7;
+  string span_id = 8;
+}
+
+message TelemetryArtifactV1 {
+  string capture_type = 1;
+  string trigger = 2;
+  int64 start_ts_unix_nano = 3;
+  int64 end_ts_unix_nano = 4;
+  string outcome = 5;
+  int64 size_bytes = 6;
+  string sha256 = 7;
+  string uri = 8;
+  string summary = 9;
+  map<string, string> attributes = 10;
+}
+
+message TelemetryRecordV1 {
+  int32 record_index = 1;
+  string signal = 2;
+  int64 event_ts_unix_nano = 3;
+  int64 observed_ts_unix_nano = 4;
+  TelemetryResourceV1 resource = 5;
+  TelemetryMetricV1 metric = 6;
+  TelemetryEventV1 event = 7;
+  TelemetryLogV1 log = 8;
+  TelemetryArtifactV1 artifact = 9;
+}
+
+message TelemetryBatchV1 {
+  int32 schema_version = 1;
+  string catalog_version = 2;
+  string batch_id = 3;
+  repeated TelemetryRecordV1 records = 4;
+}
+
+message TelemetryValidationErrorV1 {
+  int32 record_index = 1;
+  string field = 2;
+  string reason = 3;
+}
+
+message TelemetryCommitV1 {
+  string namespace = 1;
+  int64 first_seq = 2;
+  int64 last_seq = 3;
+}
+
+message TelemetryWriteAckV1 {
+  int32 schema_version = 1;
+  string batch_id = 2;
+  string status = 3;
+  string durability = 4;
+  int32 accepted_records = 5;
+  repeated TelemetryValidationErrorV1 rejected_records = 6;
+  repeated TelemetryCommitV1 commits = 7;
+}

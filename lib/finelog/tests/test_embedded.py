@@ -12,10 +12,16 @@ spawns no maintenance task, so its RAM buffer never flushes to a readable
 segment and reads come back empty. A disk-backed store serves reads.
 """
 
+from types import SimpleNamespace
+
 import pytest
-from finelog.client import LogClient
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
+from finelog.client import FlushResult, LogClient, StoragePolicy
 from finelog.embedded import is_available, require_embedded_server
+from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
+from finelog.schema import Column, Schema
 
 
 @pytest.fixture
@@ -48,6 +54,46 @@ def test_embedded_server_log_roundtrip(embedded_server):
         resp = client.fetch_logs(logging_pb2.FetchLogsRequest(source=key, tail=True, max_lines=100))
         assert {e.data for e in resp.entries} == {f"line {i}" for i in range(5)}
         assert all(e.key == key for e in resp.entries)
+    finally:
+        client.close()
+
+
+def test_python_arrow_list_columns_round_trip_through_rust(embedded_server):
+    client = LogClient.connect(embedded_server.address)
+    schema = Schema(
+        columns=(
+            Column("timestamp_ms", stats_pb2.COLUMN_TYPE_INT64, nullable=False),
+            Column("explicit_bounds", stats_pb2.COLUMN_TYPE_LIST_FLOAT64, nullable=False),
+            Column("bucket_counts", stats_pb2.COLUMN_TYPE_LIST_INT64, nullable=False),
+        ),
+        key_column="timestamp_ms",
+    )
+    try:
+        try:
+            client._register_table("telemetry.list_round_trip", schema, StoragePolicy())
+        except ConnectError as error:
+            if error.code == Code.INVALID_ARGUMENT and "unknown column type" in str(error).lower():
+                pytest.skip(
+                    "the installed finelog_server extension predates list-valued columns; "
+                    "build it from this tree with `python scripts/rust_mode.py dev && uv sync` "
+                    "to exercise the Arrow list contract"
+                )
+            raise
+        table = client.get_table("telemetry.list_round_trip", schema)
+        table.write(
+            [
+                SimpleNamespace(
+                    timestamp_ms=1,
+                    explicit_bounds=[0.1, 0.5, 1.0],
+                    bucket_counts=[2, 3, 5, 7],
+                )
+            ]
+        )
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
+
+        result = table.query('SELECT explicit_bounds, bucket_counts FROM "telemetry.list_round_trip"')
+        assert result.column("explicit_bounds").to_pylist() == [[0.1, 0.5, 1.0]]
+        assert result.column("bucket_counts").to_pylist() == [[2, 3, 5, 7]]
     finally:
         client.close()
 

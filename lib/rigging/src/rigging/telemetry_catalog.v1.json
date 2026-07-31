@@ -1,0 +1,176 @@
+{
+  "catalog_version": "telemetry-catalog.v1",
+  "metrics": [
+    {
+      "scope": "telemetry.runtime",
+      "name": "emissions",
+      "description": "Telemetry emissions accepted by the process runtime",
+      "unit": "{emission}",
+      "instrument_kind": "counter",
+      "temporality": "cumulative",
+      "delivery_class": "buffered",
+      "namespace": "telemetry.service_metric.v1",
+      "attributes": {
+        "signal": ["metric", "event", "log", "artifact"]
+      },
+      "buckets": [],
+      "owner": "rigging",
+      "cadence_seconds": 10,
+      "cardinality_limit": 4,
+      "maturity": "stable"
+    },
+    {
+      "scope": "telemetry.runtime",
+      "name": "losses",
+      "description": "Telemetry records lost before durable collector acceptance",
+      "unit": "{record}",
+      "instrument_kind": "counter",
+      "temporality": "cumulative",
+      "delivery_class": "buffered",
+      "namespace": "telemetry.service_metric.v1",
+      "attributes": {
+        "reason": [
+          "cardinality_overflow",
+          "configuration_conflict",
+          "descriptor_conflict",
+          "event_queue_overflow",
+          "export_failure",
+          "inert_handle",
+          "invalid_configuration",
+          "invalid_descriptor",
+          "invalid_emission",
+          "runtime_contention"
+        ]
+      },
+      "buckets": [],
+      "owner": "rigging",
+      "cadence_seconds": 10,
+      "cardinality_limit": 10,
+      "maturity": "stable"
+    },
+    {
+      "scope": "telemetry.runtime",
+      "name": "queue_records",
+      "description": "Telemetry records waiting for background export",
+      "unit": "{record}",
+      "instrument_kind": "gauge",
+      "temporality": "unspecified",
+      "delivery_class": "coalescing",
+      "namespace": "telemetry.service_metric.v1",
+      "attributes": {},
+      "buckets": [],
+      "owner": "rigging",
+      "cadence_seconds": 10,
+      "cardinality_limit": 1,
+      "maturity": "stable"
+    },
+    {
+      "scope": "telemetry.runtime",
+      "name": "queue_bytes",
+      "description": "Estimated telemetry bytes waiting for background export",
+      "unit": "By",
+      "instrument_kind": "gauge",
+      "temporality": "unspecified",
+      "delivery_class": "coalescing",
+      "namespace": "telemetry.service_metric.v1",
+      "attributes": {},
+      "buckets": [],
+      "owner": "rigging",
+      "cadence_seconds": 10,
+      "cardinality_limit": 1,
+      "maturity": "stable"
+    },
+    {
+      "scope": "telemetry.runtime",
+      "name": "export_duration",
+      "description": "Telemetry export request duration",
+      "unit": "s",
+      "instrument_kind": "histogram",
+      "temporality": "cumulative",
+      "delivery_class": "buffered",
+      "namespace": "telemetry.service_metric.v1",
+      "attributes": {
+        "outcome": ["success", "failure"]
+      },
+      "buckets": [0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0],
+      "owner": "rigging",
+      "cadence_seconds": 10,
+      "cardinality_limit": 2,
+      "maturity": "stable"
+    },
+    {
+      "scope": "skyrl.inference",
+      "name": "requests",
+      "description": "Completed inference requests",
+      "unit": "{request}",
+      "instrument_kind": "counter",
+      "temporality": "cumulative",
+      "delivery_class": "buffered",
+      "namespace": "telemetry.workload_metric.v1",
+      "attributes": {
+        "outcome": ["success", "failure"]
+      },
+      "buckets": [],
+      "owner": "skyrl",
+      "cadence_seconds": 15,
+      "cardinality_limit": 100,
+      "maturity": "experimental"
+    },
+    {
+      "scope": "skyrl.inference",
+      "name": "request_duration",
+      "description": "Inference request latency",
+      "unit": "s",
+      "instrument_kind": "histogram",
+      "temporality": "cumulative",
+      "delivery_class": "buffered",
+      "namespace": "telemetry.workload_metric.v1",
+      "attributes": {
+        "outcome": ["success", "failure"]
+      },
+      "buckets": [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+      "owner": "skyrl",
+      "cadence_seconds": 15,
+      "cardinality_limit": 100,
+      "maturity": "experimental"
+    },
+    {
+      "scope": "skyrl.inference",
+      "name": "queue_depth",
+      "description": "Requests waiting for inference",
+      "unit": "{request}",
+      "instrument_kind": "gauge",
+      "temporality": "unspecified",
+      "delivery_class": "coalescing",
+      "namespace": "telemetry.workload_metric.v1",
+      "attributes": {},
+      "buckets": [],
+      "owner": "skyrl",
+      "cadence_seconds": 15,
+      "cardinality_limit": 100,
+      "maturity": "experimental"
+    }
+  ],
+  "events": [
+    {
+      "event_name": "telemetry.runtime.gap",
+      "namespace": "telemetry.event.v1",
+      "delivery_class": "durable",
+      "owner": "rigging",
+      "attributes": ["reason", "dropped_records"]
+    },
+    {
+      "event_name": "skyrl.worker.ready",
+      "namespace": "telemetry.event.v1",
+      "delivery_class": "durable",
+      "owner": "skyrl",
+      "attributes": ["engine_id", "model_revision"]
+    }
+  ],
+  "artifacts": [
+    "accelerator_profile",
+    "host_triage",
+    "nccl_ras",
+    "thread_dump"
+  ]
+}

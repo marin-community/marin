@@ -168,6 +168,16 @@ pub fn arrow_type_for(t: ColumnType) -> Option<DataType> {
         }
         ColumnType::COLUMN_TYPE_BYTES => Some(DataType::Binary),
         ColumnType::COLUMN_TYPE_MAP => Some(map_utf8_utf8_type()),
+        ColumnType::COLUMN_TYPE_LIST_FLOAT64 => Some(DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::Float64,
+            true,
+        )))),
+        ColumnType::COLUMN_TYPE_LIST_INT64 => Some(DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::Int64,
+            true,
+        )))),
         ColumnType::COLUMN_TYPE_UNKNOWN => None,
     }
 }
@@ -286,6 +296,8 @@ fn column_type_name(t: ColumnType) -> &'static str {
         ColumnType::COLUMN_TYPE_BYTES => "COLUMN_TYPE_BYTES",
         ColumnType::COLUMN_TYPE_INT32 => "COLUMN_TYPE_INT32",
         ColumnType::COLUMN_TYPE_MAP => "COLUMN_TYPE_MAP",
+        ColumnType::COLUMN_TYPE_LIST_FLOAT64 => "COLUMN_TYPE_LIST_FLOAT64",
+        ColumnType::COLUMN_TYPE_LIST_INT64 => "COLUMN_TYPE_LIST_INT64",
     }
 }
 
@@ -301,6 +313,8 @@ fn column_type_from_json(name: &str) -> Result<ColumnType, StatsError> {
         "timestamp_ms" => Some(ColumnType::COLUMN_TYPE_TIMESTAMP_MS),
         "bytes" => Some(ColumnType::COLUMN_TYPE_BYTES),
         "map" => Some(ColumnType::COLUMN_TYPE_MAP),
+        "list_float64" => Some(ColumnType::COLUMN_TYPE_LIST_FLOAT64),
+        "list_int64" => Some(ColumnType::COLUMN_TYPE_LIST_INT64),
         "COLUMN_TYPE_UNKNOWN" => Some(ColumnType::COLUMN_TYPE_UNKNOWN),
         "COLUMN_TYPE_STRING" => Some(ColumnType::COLUMN_TYPE_STRING),
         "COLUMN_TYPE_INT64" => Some(ColumnType::COLUMN_TYPE_INT64),
@@ -310,6 +324,8 @@ fn column_type_from_json(name: &str) -> Result<ColumnType, StatsError> {
         "COLUMN_TYPE_BYTES" => Some(ColumnType::COLUMN_TYPE_BYTES),
         "COLUMN_TYPE_INT32" => Some(ColumnType::COLUMN_TYPE_INT32),
         "COLUMN_TYPE_MAP" => Some(ColumnType::COLUMN_TYPE_MAP),
+        "COLUMN_TYPE_LIST_FLOAT64" => Some(ColumnType::COLUMN_TYPE_LIST_FLOAT64),
+        "COLUMN_TYPE_LIST_INT64" => Some(ColumnType::COLUMN_TYPE_LIST_INT64),
         _ => None,
     };
     resolved.ok_or_else(|| {
@@ -513,14 +529,19 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
 /// Dictionary-encoded columns are accepted transparently (the *value* type is
 /// reported). A `Map<Utf8,Utf8>` maps to `COLUMN_TYPE_MAP` regardless of its
 /// entries/key/value field names or sorted flag (so a parquet-round-tripped or
-/// non-pyarrow map still decodes); a map with any other key/value type is
-/// rejected. list/large-list/struct/union and any other unsupported type are
-/// rejected.
+/// non-pyarrow map still decodes). Lists are limited to Float64 and Int64
+/// elements. Other nested/union types are rejected.
 pub fn arrow_to_column_type(dt: &DataType) -> Result<ColumnType, StatsError> {
     match dt {
         DataType::Dictionary(_, value) => arrow_to_column_type(value),
         DataType::Map(field, _) if is_utf8_utf8_entries(field.data_type()) => {
             Ok(ColumnType::COLUMN_TYPE_MAP)
+        }
+        DataType::List(field) if field.data_type() == &DataType::Float64 => {
+            Ok(ColumnType::COLUMN_TYPE_LIST_FLOAT64)
+        }
+        DataType::List(field) if field.data_type() == &DataType::Int64 => {
+            Ok(ColumnType::COLUMN_TYPE_LIST_INT64)
         }
         DataType::List(_)
         | DataType::LargeList(_)
@@ -605,7 +626,7 @@ pub struct AlignedBatch {
 /// nested column (e.g. a `Map`'s key/value buffers) is counted in full rather
 /// than only its top-level offset/validity buffers. A monotone approximation
 /// feeding the flush-trigger accounting.
-fn array_buffer_size(arr: &ArrayRef) -> i64 {
+pub(crate) fn array_buffer_size(arr: &ArrayRef) -> i64 {
     fn data_buffer_size(data: &ArrayData) -> i64 {
         let own: i64 = data.buffers().iter().map(|b| b.len() as i64).sum();
         let children: i64 = data.child_data().iter().map(data_buffer_size).sum();
@@ -806,6 +827,22 @@ mod tests {
         assert_eq!(
             arrow_type_for(ColumnType::COLUMN_TYPE_MAP),
             Some(map_utf8_utf8_type())
+        );
+        assert_eq!(
+            arrow_type_for(ColumnType::COLUMN_TYPE_LIST_FLOAT64),
+            Some(DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Float64,
+                true
+            ))))
+        );
+        assert_eq!(
+            arrow_type_for(ColumnType::COLUMN_TYPE_LIST_INT64),
+            Some(DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Int64,
+                true
+            ))))
         );
         assert_eq!(arrow_type_for(ColumnType::COLUMN_TYPE_UNKNOWN), None);
     }
@@ -1205,6 +1242,8 @@ mod tests {
             ColumnType::COLUMN_TYPE_TIMESTAMP_MS,
             ColumnType::COLUMN_TYPE_BYTES,
             ColumnType::COLUMN_TYPE_MAP,
+            ColumnType::COLUMN_TYPE_LIST_FLOAT64,
+            ColumnType::COLUMN_TYPE_LIST_INT64,
         ] {
             let dt = arrow_type_for(t).unwrap();
             assert_eq!(arrow_to_column_type(&dt).unwrap(), t);

@@ -4,7 +4,7 @@
 //! is allocated under the insertion lock at append time); the explicit
 //! `ORDER BY (key, seq)` sort happens only at L0->L1 compaction, so a single
 //! write's sort cost lands once in the bg compactor, not on every flush.
-//! `write_segment` therefore writes the batch verbatim.
+//! L0 segment writers therefore write the batch verbatim.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -72,13 +72,8 @@ pub struct SegmentMetadata {
     pub max_key_value: Option<i64>,
 }
 
-/// Encode `batch` to parquet bytes (UNSORTED L0, row-group 16384, zstd-1, bloom).
-pub fn write_segment(batch: &RecordBatch) -> Result<Vec<u8>, StatsError> {
-    write_segment_with_receipts(batch, &[])
-}
-
 /// Encode an L0 segment with durable idempotency receipts in its footer.
-pub fn write_segment_with_receipts(
+fn write_segment_with_receipts(
     batch: &RecordBatch,
     receipts: &[BatchReceipt],
 ) -> Result<Vec<u8>, StatsError> {

@@ -287,6 +287,23 @@ pub fn receipt_manifest_count(namespace_dir: &Path) -> usize {
 }
 
 #[cfg(test)]
+pub fn write_legacy_receipt_manifest_fixture(namespace_dir: &Path) {
+    const LEGACY_MANIFEST: &str = concat!(
+        r#"{"version":1,"segment":"seg_L0_0000000000000000001.parquet","#,
+        r#""receipts_sha256":"84c794029350eaa413cfe89a7572d9db9e2e27a39706dae40821018f313e6196","#,
+        r#""receipts":[{"batch_id":"legacy-batch","payload_sha256":"legacy-digest","#,
+        r#""rows_written":2,"first_seq":1,"last_seq":2}]}"#
+    );
+    let directory = receipt_dir(namespace_dir);
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        directory.join("seg_L0_0000000000000000001.parquet.receipts.json"),
+        LEGACY_MANIFEST,
+    )
+    .unwrap();
+}
+
+#[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
@@ -295,16 +312,7 @@ mod tests {
 
     use super::*;
     use crate::store::segment::{write_segment_to_dir, write_segment_to_dir_with_receipts};
-
-    fn tempdir(tag: &str) -> PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("finelog_receipts_{tag}_{nanos}"));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
+    use crate::test_support::unique_dir;
 
     fn batch() -> RecordBatch {
         let schema = Arc::new(Schema::new(vec![Field::new("seq", DataType::Int64, false)]));
@@ -318,12 +326,13 @@ mod tests {
             rows_written: 1,
             first_seq,
             last_seq: first_seq,
+            committed_at_ms: 1234,
         }
     }
 
     #[test]
     fn one_manifest_batches_receipts_and_survives_segment_deletion() {
-        let dir = tempdir("batched");
+        let dir = unique_dir("receipt_batched");
         let receipts = vec![receipt("a", 1), receipt("b", 2)];
         let (segment, _) =
             write_segment_to_dir_with_receipts(&dir, 0, 1, &batch(), &receipts).unwrap();
@@ -344,7 +353,7 @@ mod tests {
 
     #[test]
     fn legacy_l0_gets_empty_marker_and_is_not_rescanned() {
-        let dir = tempdir("legacy");
+        let dir = unique_dir("receipt_legacy");
         write_segment_to_dir(&dir, 0, 1, &batch()).unwrap();
 
         let first = recover_receipts(&dir).unwrap();
@@ -356,6 +365,28 @@ mod tests {
         assert_eq!(second.footer_repairs, 0);
         assert_eq!(second.manifest_count, 1);
         assert!(second.receipts.is_empty());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn legacy_v1_manifest_checksum_omits_missing_commit_time() {
+        let dir = unique_dir("receipt_legacy_manifest");
+        write_legacy_receipt_manifest_fixture(&dir);
+
+        let recovery = recover_receipts(&dir).unwrap();
+        assert_eq!(
+            recovery.receipts,
+            vec![BatchReceipt {
+                batch_id: "legacy-batch".to_string(),
+                payload_sha256: "legacy-digest".to_string(),
+                rows_written: 2,
+                first_seq: 1,
+                last_seq: 2,
+                committed_at_ms: 0,
+            }]
+        );
+        assert_eq!(recovery.manifest_count, 1);
+        assert_eq!(recovery.footer_repairs, 0);
         std::fs::remove_dir_all(dir).ok();
     }
 }
