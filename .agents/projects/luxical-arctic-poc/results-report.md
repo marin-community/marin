@@ -55,7 +55,7 @@ review produced 28 findings. The review did not use a second review loop.
 
 | # | Decision | Disposition |
 | ---: | --- | --- |
-| 1 | Accept | The new sampler selects global row positions across all Parquet shards. Selection probability is proportional to each shard row count. |
+| 1 | Accept | The sampler uses 64 uniform global row blocks. Every row has equal marginal probability, and each shard probability is proportional to row count. |
 | 2 | Accept | The probe now divides the 512 unseen rows into 256 probe-training rows and 256 probe-evaluation rows. |
 | 3 | Accept | Model evaluation stops if one vector is not finite. The report treats finiteness as an enforced prerequisite. |
 | 4 | Accept | The speed test remains a paired implementation check. The production estimate now states that inputs are bounded document views. |
@@ -90,10 +90,10 @@ artifact root.
 
 ## Corrected-run inputs
 
-- Correction commit: `aaa870dac`
+- Corrected run commit: `ebe09a12e`
 - Artifact root:
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2`
-- Sampling: Uniform without replacement across all rows of each source.
+- Sampling: 64 uniform circular row blocks across all rows of each source.
 - Probe split: 256 training rows and 256 evaluation rows from the student-heldout
   set.
 - Clustering seeds: 42, 43, and 44.
@@ -382,6 +382,10 @@ The held-out evaluation has the same 512-row quota for each source. Its global
 cluster balance can show catch-all behavior across sources, but it does not
 estimate cluster sizes for the production document mixture. A production-scale
 clustering run is outside this one-week POC.
+
+The sampler uses contiguous global row blocks to limit private object reads.
+Each block start is uniform across a source. Thus, every row has equal marginal
+probability, but rows in one block are correlated.
 
 Luxical-One was trained on about 50 million documents, compared with 0.75
 million and 3 million here. This ladder is a fixed-budget viability test. It
