@@ -45,9 +45,10 @@ normalized text.
 
 Fuzzy dedup first writes all members of each non-singleton candidate cluster.
 The next job joins these sparse attributes to normalized text. It selects the
-longest member as a deterministic representative. It writes `dup_doc=true`
-only when a direct full-text comparison accepts a member. The final store
-removes exact duplicates and verified fuzzy duplicates.
+existing connected-components canonical as the deterministic representative.
+It writes `dup_doc=true` only when a direct full-text comparison accepts a
+member. The final store removes exact duplicates and verified fuzzy
+duplicates.
 
 Global exact, fuzzy candidate, and fuzzy verification outputs write
 `.source_manifest.json` at the output root. The file maps each `source_NNN`
