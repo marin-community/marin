@@ -316,6 +316,17 @@ def _parse_source_names(value: str) -> list[str] | None:
     return names
 
 
+def _normalize_candidate_source_keys(candidates: FuzzyDupsAttrData) -> FuzzyDupsAttrData:
+    """Normalize source paths when importing an existing candidate artifact."""
+    sources = {}
+    for source_path, source in candidates.sources.items():
+        source_key = datakit_source_key(source_path)
+        if source_key in sources:
+            raise ValueError(f"Candidate source paths normalize to the same key {source_key!r}")
+        sources[source_key] = source
+    return candidates.model_copy(update={"sources": sources})
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sample-prefix", default=SAMPLE_PREFIX)
@@ -359,7 +370,9 @@ def main() -> None:
         candidates_step = StepSpec(
             name="datakit/fuzzy_verification_testbed/import_candidates",
             hash_attrs={"artifact": candidate_artifact},
-            fn=lambda _output_path: read_artifact(candidate_artifact, FuzzyDupsAttrData),
+            fn=lambda _output_path: _normalize_candidate_source_keys(
+                read_artifact(candidate_artifact, FuzzyDupsAttrData)
+            ),
             override_output_path=prefix_join(output_prefix, "candidate-artifact"),
         )
     else:
