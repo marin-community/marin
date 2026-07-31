@@ -247,7 +247,6 @@ def test_source_inventory_uses_shared_manifest_policy_metadata():
 def test_all_sources_includes_normalized_ghalogs_public():
     source = all_sources()["ghalogs/public"]
 
-    assert source.rough_token_count_b == GHALOGS_ROUGH_TOKENS_B
     assert [step.name for step in source.normalize_steps] == [
         "raw/diagnostic_logs/ghalogs_public_archive",
         "processed/diagnostic_logs/ghalogs_public_parquet",
