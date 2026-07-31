@@ -4,10 +4,10 @@
 """Balanced functional-DNA documents for general language-model training.
 
 The source combines three genomes-v5 interval datasets with two Zoonomia
-projection datasets. Each interval is rendered with DNA and region-type tags
-so a general language model can condition on the modality and functional
-class. Each component receives the same cap on rendered UTF-8 text bytes before
-the combined corpus is normalized and exact-deduplicated.
+projection datasets. Each interval is rendered with DNA and natural-language
+region tags so a general language model can condition on the modality and
+functional class. Each component receives the same cap on rendered UTF-8 text
+bytes before the combined corpus is normalized and exact-deduplicated.
 """
 
 from collections.abc import Iterator
@@ -60,7 +60,7 @@ DNA_DATASETS = (
         hf_dataset_id="marin-dna/genomes-v5-genome_set-animals-intervals-v5_255_128",
         revision="ffe3e78c99868077c65ad6568e1445d80e480794",
         text_field="seq",
-        region_type="CDS",
+        region_type="coding sequence",
         id_fields=("id",),
         shard_globs=("data/train/shard_000[0-4].jsonl.zst",),
         num_download_shards=5,
@@ -70,7 +70,7 @@ DNA_DATASETS = (
         hf_dataset_id="marin-dna/genomes-v5-genome_set-animals-intervals-v1_255_128",
         revision="d93209847b02a0c9be5c03591a0a5e56ee09c35d",
         text_field="seq",
-        region_type="PROMOTER",
+        region_type="promoter",
         id_fields=("id",),
         shard_globs=(
             "data/train/shard_000[0-9].jsonl.zst",
@@ -83,7 +83,7 @@ DNA_DATASETS = (
         hf_dataset_id="marin-dna/genomes-v5-genome_set-animals-intervals-v15_255_128",
         revision="b009afaab756937d75b8da3b1271ad8f0cec0b4d",
         text_field="seq",
-        region_type="DOWNSTREAM",
+        region_type="downstream",
         id_fields=("id",),
         shard_globs=(
             "data/train/shard_00[0-3][0-9].jsonl.zst",
@@ -96,7 +96,7 @@ DNA_DATASETS = (
         hf_dataset_id="marin-dna/zoonomia-v1-v3_ccre_non_promoter",
         revision="862485aa18eed53a53e693ba4c2eb45e0afc5087",
         text_field="sequence",
-        region_type="CCRE_NON_PROMOTER",
+        region_type="candidate cis regulatory element outside promoters",
         id_fields=("query_name", "species", "t_chrom", "t_start", "t_end", "t_strand", "augmentation"),
         shard_globs=(
             "data/train/shard_000[0-9].jsonl.zst",
@@ -109,7 +109,7 @@ DNA_DATASETS = (
         hf_dataset_id="marin-dna/zoonomia-v1-v3_ncrna_exon",
         revision="3e48d9ae7c604b99ccfc8bd07e391b960c1ea21a",
         text_field="sequence",
-        region_type="NCRNA_EXON",
+        region_type="noncoding RNA exon",
         id_fields=("query_name", "species", "t_chrom", "t_start", "t_end", "t_strand", "augmentation"),
         shard_globs=("data/train/shard_*.jsonl.zst",),
         num_download_shards=64,
@@ -119,7 +119,7 @@ DNA_DATASETS = (
 
 def dna_document_prefix(region_type: str) -> str:
     """Return the conditioning prefix shared by training and DNA evaluations."""
-    return f"[DNA]\n[REGION={region_type}]\n"
+    return f"[DNA]\n[Region: {region_type}]\n"
 
 
 def dna_document_text(sequence: str, region_type: str) -> str:
@@ -239,7 +239,7 @@ def dna_normalize_steps() -> tuple[StepSpec, ...]:
             target_text_bytes_per_dataset=TARGET_TEXT_BYTES_PER_DATASET,
         ),
         hash_attrs={
-            "version": "v3",
+            "version": "2026.07.31",
             "target_text_bytes_per_dataset": TARGET_TEXT_BYTES_PER_DATASET,
         },
     )
