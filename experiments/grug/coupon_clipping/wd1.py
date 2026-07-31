@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Launch the 90/10 narrow-shallow to wide-deep production arm."""
+"""Launch the 95/5 narrow-shallow to wide-deep production arm."""
 
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.cli import experiment_main

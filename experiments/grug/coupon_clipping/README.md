@@ -23,6 +23,9 @@ order, 6.711B-token horizon, optimizer schedule, and 16-GB200 topology.
 - `wd1.py`: the 95/5 narrow-shallow to wide-deep arm, with all 320 wide/deep
   updates covering the terminal decay.
 - `c_short.py`: the 3,200-update full-depth WSD control.
+- `paloma_wd1.py`, `paloma_c_short.py`, and `paloma_c0.py`: checkpoint-only
+  Paloma evaluations for the main treatment and controls. Each subset is capped
+  at eight batches of 64 sequences and the result is written to `metrics.json`.
 
 The production arms use the 0.625x candidate selected by the 128-update control
 gate. The low, center, and high pilots remain explicit entry points so the gate
@@ -30,3 +33,8 @@ is reproducible.
 
 The launcher sets `XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async` before dispatch.
 The Grug dispatcher propagates `XLA_*` variables to every child task.
+
+Paloma runs as a separate artifact after its checkpoint dependency completes.
+It loads only model parameters and never enters the optimization loop, avoiding
+the in-run evaluation state mutation tracked in issue #7712. Run these entry
+points sequentially on the same four-node slice when comparing allocation time.

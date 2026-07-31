@@ -8,6 +8,10 @@ import pytest
 from haliax.partitioning import set_mesh
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.tracker.json_logger import JsonLoggerConfig
+from marin.execution.artifact import ArtifactRecord, write_record
+from marin.execution.lazy import ArtifactStep, materialized_config
+from marin.processing.tokenize.tokenize import TokenizedCache
+from marin.training.training import LevanterCheckpoint
 
 from experiments.grug.coupon_clipping import launch
 from experiments.grug.coupon_clipping.config import (
@@ -35,8 +39,10 @@ from experiments.grug.coupon_clipping.depth_launch import (
     build_growth_pilot_checkpoint,
     build_growth_target_only_checkpoint,
 )
+from experiments.grug.coupon_clipping.eval_launch import build_paloma_eval
 from experiments.grug.coupon_clipping.model import GrugModelConfig, Transformer
 from experiments.grug.depth_growth import DepthGrowthConfig, NewLayerInitialization
+from experiments.marin_tokenizer import marin_tokenizer
 
 
 def _test_data_config():
@@ -185,6 +191,63 @@ def test_aggressive_source_attacks_fixed_compute_and_preserves_target_contract()
     assert AGGRESSIVE_TRANSITION_STEP == 6080
     assert AGGRESSIVE_DECAY_STEPS == 320
     assert build_optimizer_config(decay_steps=AGGRESSIVE_DECAY_STEPS).decay == AGGRESSIVE_DECAY_STEPS
+
+
+def test_paloma_eval_is_checkpoint_only_and_bounded(tmp_path):
+    checkpoint = ArtifactStep.adopt(
+        "tests/coupon-checkpoint",
+        "test-dev",
+        "s3://example/coupon-checkpoint",
+        kind=LevanterCheckpoint,
+    )
+    evaluation = build_paloma_eval(
+        checkpoint,
+        label="test",
+        version="test-dev",
+        eval_batch_size=32,
+        max_eval_batches=3,
+    )
+
+    for dependency in evaluation.deps[1:]:
+        dependency_path = dependency.path(str(tmp_path))
+        write_record(
+            ArtifactRecord(
+                name=dependency.name,
+                version=dependency.version,
+                output_path=dependency_path,
+                result_type=f"{TokenizedCache.__module__}.{TokenizedCache.__qualname__}",
+                config={"tokenizer": marin_tokenizer, "format": {"text_key": "text"}},
+            )
+        )
+
+    config = materialized_config(evaluation, str(tmp_path))
+
+    assert evaluation.deps[0] is checkpoint
+    assert len(evaluation.deps) == 17
+    assert config.checkpoint_path == "s3://example/coupon-checkpoint/checkpoints"
+    assert config.eval_batch_size == 32
+    assert config.max_eval_batches == 3
+    assert len(config.data.train_weights) == 16
+    assert set(config.data.train_weights.values()) == {0.0}
+
+
+@pytest.mark.parametrize(("eval_batch_size", "max_eval_batches"), [(0, 1), (1, 0)])
+def test_paloma_eval_rejects_unbounded_empty_work(eval_batch_size: int, max_eval_batches: int):
+    checkpoint = ArtifactStep.adopt(
+        "tests/coupon-checkpoint",
+        "test-dev",
+        "s3://example/coupon-checkpoint",
+        kind=LevanterCheckpoint,
+    )
+
+    with pytest.raises(ValueError, match="must be positive"):
+        build_paloma_eval(
+            checkpoint,
+            label="test",
+            version="test-dev",
+            eval_batch_size=eval_batch_size,
+            max_eval_batches=max_eval_batches,
+        )
 
 
 def test_coupon_optimizer_routes_segmented_model_parameters_to_intended_groups():
