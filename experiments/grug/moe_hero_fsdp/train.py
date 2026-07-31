@@ -482,8 +482,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         state = _init_state(model_key)
 
-        # This throughput reproduction intentionally produces no checkpoint.
-        checkpointer = None
+        # Checkpoints only when the config asks (time-policy / temporary checkpoints for resume). The
+        # throughput hero leaves save_interval=None and produces no checkpoint; sweeps set it.
+        checkpointer = trainer.checkpointer.create(run_id) if trainer.checkpointer.save_interval is not None else None
         state = restore_grug_state_from_checkpoint(
             state,
             checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),

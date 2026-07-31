@@ -15,6 +15,7 @@ Selected by env at submit time:
 """
 
 import dataclasses
+import datetime
 import math
 import os
 from dataclasses import dataclass
@@ -29,19 +30,19 @@ from levanter.trainer import TrainerConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import experiment_main
-from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
 
-from experiments.grug.moe_hero_fsdp.heuristic import MoeHeuristic
-from experiments.grug.moe_hero_fsdp.launch import (
-    _SLIMPAJAMA_SHUFFLE,
-    HERO_GRUG_TRAINER,
-    HERO_MIXED_PRECISION,
-    HeroThroughputResult,
-    _slimpajama_6b_dataset,
+from experiments.datasets.paloma import paloma_datasets
+from experiments.datasets.uncheatable import uncheatable_datasets
+from experiments.grug.moe.launch_datakit_moe_mix import (
+    _datakit_data_config,
+    _val_component,
 )
+from experiments.grug.moe_hero_fsdp.heuristic import MoeHeuristic
+from experiments.grug.moe_hero_fsdp.launch import HERO_GRUG_TRAINER, HERO_MIXED_PRECISION, HeroThroughputResult
 from experiments.grug.moe_hero_fsdp.model import GrugModelConfig
-from experiments.grug.moe_hero_fsdp.train import GrugRunConfig, run_grug
+from experiments.grug.moe_hero_fsdp.train import GrugEvalConfig, GrugRunConfig, run_grug
+from experiments.marin_tokenizer import marin_tokenizer
 
 VOCAB_SIZE = 128_256
 HEAD_DIM = 128
@@ -52,6 +53,14 @@ NUM_EXPERTS = 128
 NUM_EXPERTS_PER_TOKEN = 4
 NUM_SHARED_EXPERTS = 2
 GPUS_PER_NODE = 4  # B200/GB200 node unit used for the sweep
+EVAL_BATCH_SIZE = 256
+CHECKPOINT_INTERVAL = datetime.timedelta(minutes=30)  # temporary (time-policy) checkpoints for resume
+
+# Paloma + uncheatable held-out validation sets (tagged eval), tokenized with the datakit tokenizer.
+_VALIDATION = [
+    *paloma_datasets(tokenizer=marin_tokenizer).values(),
+    *uncheatable_datasets(tokenizer=marin_tokenizer).values(),
+]
 
 
 @dataclass(frozen=True)
@@ -151,7 +160,6 @@ def build_sweep_run(*, version: str | None = None) -> ArtifactStep[HeroThroughpu
     run_id = os.environ.get("RUN_ID") or f"aug-hero-{size.name}-{int(token_mult)}x-lr{lr_mult:g}"
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
-    slim = _slimpajama_6b_dataset()
     model, optimizer = build_sweep_configs(size, num_train_steps=steps, lr_mult=lr_mult)
 
     resources = ResourceConfig.with_gpu(
@@ -185,21 +193,41 @@ def build_sweep_run(*, version: str | None = None) -> ArtifactStep[HeroThroughpu
             allow_nondivisible_batch_size=False,
             checkpointer=CheckpointerConfig(
                 base_path=f"{ctx.output_path}/checkpoints",
-                temporary_base_path=None,
-                save_interval=None,
+                temporary_base_path=f"{ctx.output_path}/checkpoints",
+                save_interval=CHECKPOINT_INTERVAL,
                 keep=None,
                 append_run_id_to_base_path=False,
                 delete_old_temp_checkpoints=True,
                 keep_last_temporary_checkpoints=1,
             ),
         )
+        # Datakit two-phase mixture, marin_prefix-rooted (relative bucket paths resolve against the
+        # cluster's region-local prefix). Paloma + uncheatable ride in as zero-train-weight components
+        # so they surface as tagged eval sets.
+        if ctx.is_fingerprint:
+            val_components = {v.name: _val_component(ctx.artifact_path(v)) for v in _VALIDATION}
+        else:
+            val_components = {v.name: ctx.resolved(v).as_component() for v in _VALIDATION}
+        data = _datakit_data_config(
+            total_steps=steps,
+            batch_size=size.batch_size,
+            max_seq_len=SEQ_LEN,
+            enable_simulated_epoching=False,
+            val_components=val_components,
+        )
         return GrugRunConfig(
             model=model,
-            data=mixture(ctx, {slim: 1.0}, shuffle=_SLIMPAJAMA_SHUFFLE),
+            data=data,
             resources=ctx.runtime_arg("train_resources"),
             optimizer=optimizer,
             trainer=dataclasses.replace(HERO_GRUG_TRAINER, trainer=trainer),
-            eval=None,
+            eval=GrugEvalConfig(
+                eval_batch_size=EVAL_BATCH_SIZE,
+                steps_per_eval=1000,
+                max_eval_batches=8,
+                eval_current=True,
+                eval_ema=False,
+            ),
             processes_per_task=1,
         )
 
@@ -209,7 +237,7 @@ def build_sweep_run(*, version: str | None = None) -> ArtifactStep[HeroThroughpu
         artifact_type=HeroThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(slim,),
+        deps=tuple(_VALIDATION),
         runtime_args={"train_resources": resources},
     )
 
