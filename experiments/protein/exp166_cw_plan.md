@@ -16,15 +16,17 @@ approval first.
 
 First three completions, 2026-07-30:
 
-| run | init | aug | batch | final val | exp117 same config |
-|---|---|---|---|---|---|
-| `wd1p6-bs64-scratch-aug` | scratch | yes | 64 | 3.1454 | 2.7330 |
-| `exp117init-noaug` | exp117 weights | **no** | 64 | 3.1597 | 2.7131 (its own start) |
-| `wd1p6-bs128-scratch-aug` | scratch | yes | 128 | 3.1624 | 2.7489 |
+| run | init | aug | batch | final val | exp117 | delta | restarted |
+|---|---|---|---|---|---|---|---|
+| `wd1p6-bs64-scratch-aug` | scratch | yes | 64 | 3.1454 | 2.7330 | +0.4124 | no |
+| `wd1p6-bs128-scratch-aug` | scratch | yes | 128 | 3.1624 | 2.7489 | +0.4135 | no |
+| `exp117init-noaug` | exp117 weights | **no** | 64 | 3.1597 | 2.7131 | +0.4466 | no |
+| `wd0p2-bs64-scratch-aug` | scratch | yes | 64 | 3.2862 | 2.7131 | +0.5731 | **yes** |
 
-Everything lands in a 0.017 band around 3.15 regardless of augmentation, initialization or
-batch size — a constant **+0.41** over exp117's TPU results, and the same magnitude as
-exp153's deficit.
+The three uninterrupted runs sit in a 0.034 band, **+0.41 to +0.45** over exp117
+regardless of augmentation, initialization or batch size — the same magnitude as exp153's
+deficit. The fourth hung for 6 h and was restarted from checkpoint; it is 0.13 worse than
+any clean run, so **do not pool restarted runs with uninterrupted ones.**
 
 The unaugmented run settles it: a model that reached **2.7131** on TPU trained 8 further
 epochs on GPU with no augmentation and ended at **3.1597**, worse by 0.4466. No
