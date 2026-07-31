@@ -50,6 +50,7 @@ from levanter.grug._moe.local import _moe_mlp_local
 from levanter.grug.sharding import (
     _batch_spec_from_x,
     _current_mesh,
+    _drop_absent_mesh_axes,
     _mesh_axis_size,
     _mesh_has_axis,
     _reshard_for_init,
@@ -267,8 +268,16 @@ def moe_mlp(
     x_spec = _value_spec_or_default(x, batch_spec, replace_replicated=True)
     selected_experts_spec = _value_spec_or_default(selected_experts, batch_spec, replace_replicated=True)
     combine_weights_spec = _value_spec_or_default(combine_weights, batch_spec, replace_replicated=True)
-    w_up_gate_spec = _value_spec_or_default(w_up_gate, P(*(None for _ in range(w_up_gate.ndim))))
-    w_down_spec = _value_spec_or_default(w_down, P(*(None for _ in range(w_down.ndim))))
+    if expert_chunks > 1 and resolved_implementation == "sonic_cute":
+        # The chunked sonic_cute path all-gathers the hidden dim per expert-chunk over ``data``, so
+        # the local weights must arrive H-sharded ([E, H/data, 2I] / [E, I, H/data]). Force that FSDP
+        # layout rather than inheriting whatever (possibly replicated) sharding the layer scan left,
+        # which would make the tiled all-gather reconstruct H * data_shards.
+        w_up_gate_spec = _drop_absent_mesh_axes(mesh, P("expert", "data", "model"))
+        w_down_spec = _drop_absent_mesh_axes(mesh, P("expert", "model", "data"))
+    else:
+        w_up_gate_spec = _value_spec_or_default(w_up_gate, P(*(None for _ in range(w_up_gate.ndim))))
+        w_down_spec = _value_spec_or_default(w_down, P(*(None for _ in range(w_down.ndim))))
 
     x = _reshard_for_shard_map(x, mesh, x_spec)
     selected_experts = _reshard_for_shard_map(selected_experts, mesh, selected_experts_spec)
