@@ -97,28 +97,30 @@ def integration_client(request):
         yield client
         client.shutdown(wait=True)
     elif request.param == "iris":
-        iris_cluster = request.getfixturevalue("iris_cluster")
-        iris_client = IrisClient.remote(iris_cluster, workspace=ZEPHYR_ROOT)
-        client = FrayIrisClient.from_iris_client(iris_client)
-
-        # Submit a long-running parent job so child submissions have a live
-        # parent row in the controller DB. Absent parents are rejected with
-        # FAILED_PRECONDITION, so simulating a parent context without a real
-        # parent no longer works.
-        parent_job = iris_client.submit(
-            entrypoint=Entrypoint.from_callable(_parent_holder_entrypoint),
-            name="test",
-            resources=ResourceSpec(cpu=1, memory="512m"),
-        )
-        try:
-            ctx = IrisContext(job_id=parent_job.job_id, client=iris_client)
-            with iris_ctx_scope(ctx):
-                yield client
-        finally:
-            iris_client.terminate(parent_job.job_id)
-            client.shutdown(wait=True)
+        yield request.getfixturevalue("iris_integration_client")
     else:
         raise ValueError(f"Unknown backend: {request.param}")
+
+
+@pytest.fixture(scope="module")
+def iris_integration_client(iris_cluster):
+    """Fray client scoped under a live local-Iris parent job."""
+    iris_client = IrisClient.remote(iris_cluster, workspace=ZEPHYR_ROOT)
+    client = FrayIrisClient.from_iris_client(iris_client)
+
+    # Child submissions require a live parent row in the controller DB.
+    parent_job = iris_client.submit(
+        entrypoint=Entrypoint.from_callable(_parent_holder_entrypoint),
+        name="test",
+        resources=ResourceSpec(cpu=1, memory="512m"),
+    )
+    try:
+        ctx = IrisContext(job_id=parent_job.job_id, client=iris_client)
+        with iris_ctx_scope(ctx):
+            yield client
+    finally:
+        iris_client.terminate(parent_job.job_id)
+        client.shutdown(wait=True)
 
 
 @pytest.fixture(scope="module")
