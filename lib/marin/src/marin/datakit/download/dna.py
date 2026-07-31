@@ -25,6 +25,7 @@ from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
 SOURCE_NAME = "dna/functional-regions"
+SOURCE_ID_FIELD = "source_id"
 # The smallest component has about 3.89 GB of sequence text. Leave enough
 # headroom for every selected shard to satisfy its share of the budget.
 TARGET_TEXT_BYTES_PER_DATASET = 3_750_000_000
@@ -140,7 +141,7 @@ def dna_documents(task: DnaShardTask) -> Iterator[dict]:
         source_key = ":".join(str(row[field]) for field in task.dataset.id_fields)
         yield {
             "text": text,
-            "source_id": f"{task.dataset.hf_dataset_id}:{source_key}",
+            SOURCE_ID_FIELD: f"{task.dataset.hf_dataset_id}:{source_key}",
             "source": task.dataset.hf_dataset_id,
             "region_type": task.dataset.region_type,
         }
@@ -245,7 +246,7 @@ def dna_normalize_steps() -> tuple[StepSpec, ...]:
     normalized = normalize_step(
         name=f"normalized/{SOURCE_NAME}",
         download=processed,
-        id_field="source_id",
+        id_field=SOURCE_ID_FIELD,
         file_extensions=(".parquet",),
     )
     return (*downloads, processed, normalized)
