@@ -21,7 +21,7 @@ Per source::
 Then:
     global_exact_dedup([<normalized source>])
     fuzzy_dups([<minhash per source>])
-    verify_fuzzy_dups([<normalized source>], fuzzy_dups)
+    verify_fuzzy_dups([<normalized source>], [<minhash per source>], fuzzy_dups)
     build_clustered_store(tokenize, decontam, cluster_assign, quality, exact_dedup, verified_dedup)
     one ``datakit/report/<stage>`` step per stage -- a single self-contained
     HTML page built from that stage's counters + site/sample outputs
@@ -111,6 +111,7 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
 )
 from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
     VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
     VerifiedFuzzyDupsAttrData,
     verify_fuzzy_dups,
@@ -751,16 +752,22 @@ def reference_datakit_steps(
     verification_params = FuzzyVerificationParams()
     verified_dedup = StepSpec(
         name="datakit/verify_fuzzy_dups",
-        deps=[*sources.values(), dedup_candidates],
+        deps=[*sources.values(), *minhash_steps, dedup_candidates],
         hash_attrs={
             "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
             "verification": verification_params.model_dump(mode="json"),
+            "local_representatives": REFERENCE_LOCAL_REPRESENTATIVE_PARAMS.model_dump(mode="json"),
         },
         fn=lambda op: verify_fuzzy_dups(
             normalized_sources={name: read_artifact(step.output_path, NormalizedData) for name, step in sources.items()},
+            minhash_sources={
+                name: read_artifact(stages["minhash"].output_path, MinHashAttrData)
+                for name, stages in per_source.items()
+            },
             candidates=read_artifact(dedup_candidates.output_path, FuzzyDupsAttrData),
             output_path=op,
             verification_params=verification_params,
+            local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
             max_parallelism=scale.verification_max_parallelism,
             worker_resources=scale.pool.worker,
         ),

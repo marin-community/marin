@@ -4,6 +4,7 @@
 from marin.processing.classification.deduplication.fuzzy_verification import (
     FuzzyVerificationParams,
     VerificationRejection,
+    character_ngram_jaccard,
     verify_candidate,
 )
 
@@ -104,3 +105,7 @@ def test_character_guard_keeps_exact_non_whitespace_copy():
     assert result.accepted
     assert result.under_tokenized
     assert result.char_jaccard == 1.0
+
+
+def test_character_ngram_jaccard_is_case_folded():
+    assert character_ngram_jaccard("Alpha Beta", "alpha beta", 5) == 1.0
