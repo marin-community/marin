@@ -6,8 +6,8 @@
 The source combines three genomes-v5 interval datasets with two Zoonomia
 projection datasets. Each interval is rendered with DNA and region-type tags
 so a general language model can condition on the modality and functional
-class. Each component contributes the same number of rendered UTF-8 text bytes
-before the combined corpus is normalized and exact-deduplicated.
+class. Each component receives the same cap on rendered UTF-8 text bytes before
+the combined corpus is normalized and exact-deduplicated.
 """
 
 from collections.abc import Iterator
@@ -188,7 +188,10 @@ def write_balanced_dna(
     pipeline = (
         Dataset.from_list(tasks)
         .flat_map(dna_documents)
-        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+        .write_parquet(
+            str(StoragePath(output_path) / "data-{shard:05d}-of-{total:05d}.parquet"),
+            skip_existing=True,
+        )
     )
     ctx = ZephyrContext(name="balance-dna", resources=ResourceConfig(cpu=1, ram="4g"))
     ctx.execute(pipeline)
@@ -203,7 +206,8 @@ def stage_balanced_dna(
     """Discover downloaded shards and materialize the balanced DNA corpus."""
     source_files: dict[DnaDatasetSpec, list[str]] = {}
     for dataset, download_path in download_paths.items():
-        files = sorted(str(path) for path in StoragePath(f"{download_path}/**/*.jsonl.zst").glob())
+        shard_glob = StoragePath(download_path) / "**" / "*.jsonl.zst"
+        files = sorted(str(path) for path in shard_glob.glob())
         if len(files) != dataset.num_download_shards:
             raise ValueError(
                 f"Expected {dataset.num_download_shards} shards for {dataset.hf_dataset_id}, found {len(files)}"
