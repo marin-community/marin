@@ -453,7 +453,7 @@ class CausalSelfAttention(eqx.Module):
         # Half-RoPE: apply rotary embedding only to the first half of Q/K head_dim (second half is
         # rope-free on every layer). ``disable_rope`` skips RoPE entirely on this layer -- long/global
         # layers run rope-free. It rides in as a traced per-layer scalar from the layer scan, so RoPE
-        # is always computed and selected with ``jnp.where`` (no ``lax.cond`` in the scan body).
+        # is always computed and selected with ``jnp.where`` rather than a per-layer ``lax.cond``.
         if self.cfg.rope_fused:
             q, k = _apply_rotary_embedding_fused(
                 q,

@@ -45,7 +45,6 @@ def _grug_scale_with_muon_hero(
     nesterov=True,
     steps=5,
     muon_eps=1e-8,
-    use_kimi_scaling=False,
     coefficient_type="quintic",
     *,
     use_syrk: bool = True,
@@ -84,10 +83,7 @@ def _grug_scale_with_muon_hero(
                 updated = _newtonschulz_4d_distributed(path, x, steps, muon_eps, coefficient_type, use_syrk)
 
             fan_in, fan_out = updated.shape[-2:]
-            if not use_kimi_scaling:
-                scale = jnp.sqrt(jnp.maximum(1, fan_out / fan_in))
-            else:
-                scale = 0.2 * jnp.sqrt(jnp.maximum(fan_in, fan_out))
+            scale = jnp.sqrt(jnp.maximum(1, fan_out / fan_in))
             return updated * scale
 
         updates = jax.tree_util.tree_map_with_path(transform_array, updates)

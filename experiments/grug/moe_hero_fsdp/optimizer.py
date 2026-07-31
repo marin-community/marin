@@ -96,7 +96,6 @@ def scale_with_grug_muonh(
         nesterov=nesterov,
         steps=steps,
         muon_eps=muon_eps,
-        use_kimi_scaling=False,
         coefficient_type=coefficient_type,
         use_syrk=use_syrk,
     )

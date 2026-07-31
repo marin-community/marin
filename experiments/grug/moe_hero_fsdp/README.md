@@ -57,9 +57,9 @@ W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `$RUN_ID`.
 - **`expert_chunks=4`** — gather one quarter of the expert bank at a time (the largest MFU lever).
 - **`sonic_cute`** MoE backend (QuACK SM100 grouped-GEMM) and **`gpu_fa4_cute`** attention
   (FA4 / CUTLASS 4.6).
-- **Large-vocab cross-entropy**: the fused `batched_xla` Pallas path with tuned
-  `BlockSizes(1024, 512, 4096)` (v=4096 is the dominant lever vs the autotuned v=64). No liger,
-  no pure-JAX chunked CE.
+- **Large-vocab cross-entropy**: the plain-XLA path with `BlockSizes(v_block_size=4096)` (v=4096 is
+  the dominant lever for the 128k vocab; the SMEM-tiled `batched_xla` kernel caps the h*v weight
+  tile at ~99KB and cannot take v=4096). No liger, no pure-JAX chunked CE.
 - `offload_opt_state` to pinned host; `remat_mode="recompute_all"`.
 - Runtime env baked in: `JAX_ENABLE_PGLE=1`, `XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async`.
 
