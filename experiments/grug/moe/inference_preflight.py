@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 MARIN_BASE_SHA = "75bf2437035cf731d1a4bd71266229dfcdda9478"
-VLLM_SHA = "f87b1401a69412665afec2c80aca7d429c1759ae"
+VLLM_SHA = "2c2bef33dfbd7aef3c9d4433a7e4110f77d56a4a"
 TRAINING_REFERENCE_SHA = "fd3e9bc5b428633027f944be7fdf1136567db028"
 PINNED_REFERENCE_URL = "https://github.com/marin-community/marin/issues/7201#issuecomment-5093392733"
 SNOWBALL_EXPORT = "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b/step-42150/hf-bf16-vllm/d819cbc63780bd86/"
