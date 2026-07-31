@@ -106,6 +106,8 @@ class RejectionReason(StrEnum):
     ASSISTANT_COMPLETION_MISMATCH = "assistant_completion_mismatch"
     MISSING_SYSTEM = "missing_system"
     MISSING_TOOLS = "missing_tools"
+    INVALID_TOOLS = "invalid_tools"
+    INVALID_TOOL_CALLS = "invalid_tool_calls"
     MISSING_TASK = "missing_task"
     INVALID_MESSAGES = "invalid_messages"
 
@@ -144,18 +146,22 @@ class HarborSftManifest:
     sources: tuple[HarborSftSource, ...]
 
 
-def _parse_tools(prompt_text: str) -> list[dict]:
+def _parse_tools(prompt_text: str) -> list[dict] | None:
     match = re.search(r"<tools>\s*(.*?)\s*</tools>", prompt_text, re.DOTALL)
     if not match:
         return []
     tools: list[dict] = []
     for line in match.group(1).splitlines():
-        try:
-            tool = json.loads(line.strip())
-        except json.JSONDecodeError:
+        line = line.strip()
+        if not line:
             continue
-        if isinstance(tool, dict):
-            tools.append(tool)
+        try:
+            tool = json.loads(line)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(tool, dict):
+            return None
+        tools.append(tool)
     return tools
 
 
@@ -189,8 +195,8 @@ def _coerce_argument(tool_name: str, argument_name: str, value: str, type_map: d
     if declared_type in {"integer", "number", "boolean", "object", "array"}:
         try:
             return json.loads(value)
-        except (json.JSONDecodeError, ValueError):
-            return value
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise ValueError(f"invalid {declared_type} value for {tool_name}.{argument_name}: {value!r}") from exc
     try:
         parsed = json.loads(value)
     except (json.JSONDecodeError, ValueError):
@@ -210,28 +216,35 @@ def _normalize_tool_call(name: str, arguments) -> dict:
     }
 
 
-def _parse_tool_calls(assistant_text: str, type_map: dict) -> list[dict]:
+def _parse_tool_calls(assistant_text: str, type_map: dict) -> list[dict] | None:
     calls: list[dict] = []
-    for block in _TOOL_CALL_RE.findall(assistant_text):
+    blocks = _TOOL_CALL_RE.findall(assistant_text)
+    if "<tool_call" in assistant_text and not blocks:
+        return None
+    for block in blocks:
         function_match = _FUNCTION_RE.search(block)
         if function_match:
             name = function_match.group(1).strip()
-            arguments = {
-                key.strip(): _coerce_argument(name, key.strip(), value, type_map)
-                for key, value in _PARAMETER_RE.findall(function_match.group(2))
-            }
+            try:
+                arguments = {
+                    key.strip(): _coerce_argument(name, key.strip(), value, type_map)
+                    for key, value in _PARAMETER_RE.findall(function_match.group(2))
+                }
+            except ValueError:
+                return None
             calls.append(_normalize_tool_call(name, arguments))
             continue
 
         json_match = _TOOL_CALL_JSON_RE.search(block)
         if not json_match:
-            continue
+            return None
         try:
             call = json.loads(json_match.group(0))
         except json.JSONDecodeError:
-            continue
-        if isinstance(call, dict) and call.get("name"):
-            calls.append(_normalize_tool_call(call["name"], call.get("arguments", {})))
+            return None
+        if not isinstance(call, dict) or not call.get("name"):
+            return None
+        calls.append(_normalize_tool_call(call["name"], call.get("arguments", {})))
     return calls
 
 
@@ -274,6 +287,8 @@ def _convert_opencode_literals(row: dict, tokenizer: TokenDecoder | None) -> Har
         return _reject(RejectionReason.MISSING_SYSTEM)
 
     tools = _parse_tools(prompt_text)
+    if tools is None:
+        return _reject(RejectionReason.INVALID_TOOLS)
     if not tools:
         return _reject(RejectionReason.MISSING_TOOLS)
 
@@ -297,6 +312,8 @@ def _convert_opencode_literals(row: dict, tokenizer: TokenDecoder | None) -> Har
     for index, completion in enumerate(completions):
         assistant_text = _fix_orphan_think(tokenizer.decode(completion, skip_special_tokens=False))
         tool_calls = _parse_tool_calls(assistant_text, type_map)
+        if tool_calls is None:
+            return _reject(RejectionReason.INVALID_TOOL_CALLS)
         messages.append(
             {
                 "role": "assistant",
@@ -348,7 +365,7 @@ def _serialized_tools(value) -> str | None:
 
 def _convert_terminus_2(row: dict) -> HarborSftConversion:
     """Preserve Terminus-2 conversations exactly as recorded for SFT."""
-    source_messages = row.get("conversations") or row.get("messages")
+    source_messages = row.get("conversations")
     if not isinstance(source_messages, list) or not source_messages:
         return _reject(RejectionReason.INVALID_MESSAGES)
 
@@ -587,7 +604,7 @@ def harbor_sft_steps(source: HarborSftSource) -> tuple[StepSpec, StepSpec]:
             expected_rows=source.expected_rows,
         ),
         hash_attrs={
-            "version": "v2",
+            "version": "v1",
             "hf_dataset_id": source.hf_dataset_id,
             "revision": source.revision,
             "harness": source.harness.value,

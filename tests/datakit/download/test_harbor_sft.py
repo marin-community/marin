@@ -164,6 +164,26 @@ def test_opencode_literals_reject_lossy_or_misaligned_rows(change, reason):
     assert result.rejection is reason
 
 
+def test_opencode_literals_reject_malformed_tool_schema():
+    row, tokenizer = _literal_row()
+    tokenizer.decoded[(1,)] = tokenizer.decoded[(1,)].replace(json.dumps(TOOLS[0]), "{not-json")
+
+    result = convert_harbor_row(row, HarborSftHarness.AUTO, tokenizer)
+
+    assert result.record is None
+    assert result.rejection is RejectionReason.INVALID_TOOLS
+
+
+def test_opencode_literals_reject_malformed_typed_tool_argument():
+    row, tokenizer = _literal_row()
+    tokenizer.decoded[(2,)] = tokenizer.decoded[(2,)].replace(">\n30\n</parameter>", ">\nthirty\n</parameter>")
+
+    result = convert_harbor_row(row, HarborSftHarness.AUTO, tokenizer)
+
+    assert result.record is None
+    assert result.rejection is RejectionReason.INVALID_TOOL_CALLS
+
+
 def test_terminus_2_conversations_are_literal_sft_ground_truth():
     row = {
         "agent": "terminus-2",
