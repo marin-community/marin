@@ -35,16 +35,18 @@
 //!   reach it without a JWT while remote pushes must sign. CIDR matches the transport
 //!   peer only, never a spoofable `X-Forwarded-For` value.
 //!
-//! The layers are walked in order: the first `Allow` admits, the first `Reject`
-//! denies, and a request no layer claims is denied. Order matters — the CIDR
-//! layer is placed first so a trusted-network client is admitted before the JWT
-//! layer would reject a token it cannot verify (e.g. the home controller's
-//! control-plane `worker_token`, which a hub finelog holding only log-plane keys
-//! cannot check).
+//! A valid bearer whose configured key grants `trusted_collector` is
+//! authoritative before network fallback. All other requests walk the layers in
+//! order: the first `Allow` admits, the first `Reject` denies, and a request no
+//! layer claims is denied. CIDR therefore stays first for a trusted-network
+//! client whose token the log plane cannot verify (e.g. the home controller's
+//! control-plane `worker_token`).
 
+use std::collections::HashMap;
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::StatusCode;
@@ -55,16 +57,194 @@ use connectrpc::{
 };
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 /// The one audience this delegation plane accepts, and the one the forwarder mints
 /// under. A token minted for any other plane (e.g. control-plane `aud="iris"`), even
 /// under the same signing key, is rejected — the load-bearing cross-plane guard
 /// (RFC 8725).
 pub(crate) const FINELOG_AUDIENCE: &str = "finelog";
+pub const TELEMETRY_AGENT_AUDIENCE: &str = "telemetry-agent";
+pub const MAX_TELEMETRY_PRODUCER_TOKEN_LIFETIME_SECONDS: i64 = 3600;
 
 /// Accept a token whose `exp` is at most this far in the past, to tolerate small
 /// clock skew between a minting server and the hub.
 const EXP_LEEWAY_SECONDS: u64 = 60;
+
+/// Identity that an Iris producer credential authorizes the local telemetry
+/// agent to stamp. These values come only from a verified token and the agent's
+/// own registration, never from the producer telemetry body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TelemetryProducerIdentity {
+    pub cluster: String,
+    pub iris_job_id: String,
+    pub iris_task_id: String,
+    pub attempt_id: i32,
+    pub attempt_uid: String,
+    pub worker_id: String,
+    pub node_id: String,
+}
+
+/// Infrastructure identity the host agent was registered to serve.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TelemetryAgentRegistration {
+    pub cluster: String,
+    pub worker_id: String,
+    pub node_id: String,
+}
+
+/// Verifies short-lived Iris producer credentials at the local agent boundary.
+#[derive(Debug)]
+pub struct TelemetryAgentVerifier {
+    decoding_keys: Vec<DecodingKey>,
+    validation: Validation,
+    registration: TelemetryAgentRegistration,
+}
+
+impl TelemetryAgentVerifier {
+    pub fn new(
+        issuer: &str,
+        public_keys: &[String],
+        registration: TelemetryAgentRegistration,
+    ) -> Result<Self, String> {
+        if issuer.is_empty() {
+            return Err("telemetry agent issuer must not be empty".to_string());
+        }
+        if public_keys.is_empty() {
+            return Err("telemetry agent requires at least one Iris public key".to_string());
+        }
+        validate_nonempty_identity([
+            ("registration.cluster", registration.cluster.as_str()),
+            ("registration.worker_id", registration.worker_id.as_str()),
+            ("registration.node_id", registration.node_id.as_str()),
+        ])?;
+        let decoding_keys = public_keys
+            .iter()
+            .map(|pem| {
+                DecodingKey::from_ed_pem(pem.as_bytes())
+                    .map_err(|error| format!("invalid telemetry agent Ed25519 public key: {error}"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut validation = Validation::new(Algorithm::EdDSA);
+        validation.set_audience(&[TELEMETRY_AGENT_AUDIENCE]);
+        validation.set_issuer(&[issuer]);
+        validation.set_required_spec_claims(&["iss", "aud", "sub", "iat", "exp"]);
+        validation.leeway = EXP_LEEWAY_SECONDS;
+        Ok(Self {
+            decoding_keys,
+            validation,
+            registration,
+        })
+    }
+
+    pub fn verify(&self, token: &str) -> Result<TelemetryProducerIdentity, String> {
+        let claims = self
+            .decoding_keys
+            .iter()
+            .find_map(|key| {
+                decode::<TelemetryProducerClaims>(token, key, &self.validation)
+                    .ok()
+                    .map(|decoded| decoded.claims)
+            })
+            .ok_or_else(|| "producer credential did not verify".to_string())?;
+        validate_nonempty_identity([
+            ("sub", claims.sub.as_str()),
+            ("attempt_uid", claims.attempt_uid.as_str()),
+            ("cluster", claims.cluster.as_str()),
+            ("iris_job_id", claims.iris_job_id.as_str()),
+            ("iris_task_id", claims.iris_task_id.as_str()),
+            ("worker_id", claims.worker_id.as_str()),
+            ("node_id", claims.node_id.as_str()),
+        ])?;
+        let lifetime = claims
+            .exp
+            .checked_sub(claims.iat)
+            .ok_or_else(|| "producer credential lifetime overflows".to_string())?;
+        if lifetime <= 0 {
+            return Err("producer credential exp must be after iat".to_string());
+        }
+        if lifetime > MAX_TELEMETRY_PRODUCER_TOKEN_LIFETIME_SECONDS {
+            return Err(format!(
+                "producer credential lifetime exceeds {} seconds",
+                MAX_TELEMETRY_PRODUCER_TOKEN_LIFETIME_SECONDS
+            ));
+        }
+        if claims.attempt_id < 0 {
+            return Err("producer credential attempt_id must be nonnegative".to_string());
+        }
+        if claims.sub != claims.attempt_uid {
+            return Err("producer credential sub must equal attempt_uid".to_string());
+        }
+        let latest_iat = unix_now_seconds().saturating_add(EXP_LEEWAY_SECONDS as i64);
+        if claims.iat > latest_iat {
+            return Err("producer credential iat is in the future".to_string());
+        }
+        for (field, claimed, registered) in [
+            (
+                "cluster",
+                claims.cluster.as_str(),
+                self.registration.cluster.as_str(),
+            ),
+            (
+                "worker_id",
+                claims.worker_id.as_str(),
+                self.registration.worker_id.as_str(),
+            ),
+            (
+                "node_id",
+                claims.node_id.as_str(),
+                self.registration.node_id.as_str(),
+            ),
+        ] {
+            if claimed != registered {
+                return Err(format!(
+                    "producer credential {field} {claimed:?} does not match agent registration {registered:?}"
+                ));
+            }
+        }
+        Ok(TelemetryProducerIdentity {
+            cluster: claims.cluster,
+            iris_job_id: claims.iris_job_id,
+            iris_task_id: claims.iris_task_id,
+            attempt_id: claims.attempt_id,
+            attempt_uid: claims.attempt_uid,
+            worker_id: claims.worker_id,
+            node_id: claims.node_id,
+        })
+    }
+}
+
+fn validate_nonempty_identity<const N: usize>(fields: [(&str, &str); N]) -> Result<(), String> {
+    if let Some((name, _)) = fields.into_iter().find(|(_, value)| value.is_empty()) {
+        return Err(format!("{name} must not be empty"));
+    }
+    Ok(())
+}
+
+fn unix_now_seconds() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock is after Unix epoch")
+        .as_secs() as i64
+}
+
+#[derive(Debug, Deserialize)]
+struct TelemetryProducerClaims {
+    #[allow(dead_code)]
+    iss: String,
+    #[allow(dead_code)]
+    aud: String,
+    sub: String,
+    iat: i64,
+    exp: i64,
+    cluster: String,
+    iris_job_id: String,
+    iris_task_id: String,
+    attempt_id: i32,
+    attempt_uid: String,
+    worker_id: String,
+    node_id: String,
+}
 
 /// Who a layer decided the request is. Placed in the request extensions by
 /// [`AuthInterceptor`] and read by the ingest handlers to bind a pushed row's
@@ -74,6 +254,10 @@ pub enum AuthIdentity {
     /// Admitted by a token: this cluster's public key verified the bearer, so the
     /// writer may only claim this cluster as a row's origin.
     Jwt { cluster: String },
+    /// Admitted by a key whose server-side configuration grants the
+    /// `trusted_collector` role. Only this identity may preserve infrastructure
+    /// enrichment that a telemetry agent stamped from producer credentials.
+    TrustedCollector { cluster: String },
     /// Admitted by transport peer address. A trusted network carries no per-writer
     /// identity, so such a writer names its own origin cluster (typically empty —
     /// it is the store's own cluster writing locally).
@@ -177,6 +361,7 @@ fn prefix_matches(net: &[u8], addr: &[u8], prefix_len: u8) -> bool {
 /// secret, but there is no reason to spill PEM into logs).
 struct JwtKey {
     cluster: String,
+    role: JwtKeyRole,
     decoding_keys: Vec<DecodingKey>,
 }
 
@@ -184,6 +369,7 @@ impl fmt::Debug for JwtKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("JwtKey")
             .field("cluster", &self.cluster)
+            .field("role", &self.role)
             .field("public_keys", &self.decoding_keys.len())
             .finish_non_exhaustive()
     }
@@ -196,9 +382,10 @@ impl fmt::Debug for JwtKey {
 /// in the future within [`EXP_LEEWAY_SECONDS`]. Only public keys are held — never
 /// a controller's private signing key — so the store can verify a cluster's tokens
 /// without gaining the power to mint any. On success the matching cluster is
-/// returned for attribution. Every configured cluster admits equally: federation
-/// members are mutually trusted for the log plane, so a valid token may write under
-/// any namespace (per-cluster write isolation is not enforced in v1).
+/// returned for attribution. Federation members may write any namespace
+/// (per-cluster write isolation is not enforced in v1), while the configured
+/// role decides whether ordinary producer infrastructure fields are cleared or
+/// signed collector enrichment is preserved.
 #[derive(Debug)]
 pub struct JwtVerifier {
     keys: Vec<JwtKey>,
@@ -206,14 +393,14 @@ pub struct JwtVerifier {
 }
 
 impl JwtVerifier {
-    /// Build from `(cluster, public_keys)` pairs, each PEM an Ed25519
+    /// Build from `(cluster, role, public_keys)` tuples, each PEM an Ed25519
     /// SubjectPublicKeyInfo (`-----BEGIN PUBLIC KEY-----`). Rejects an empty
     /// cluster, a cluster with no public keys, or a PEM `jsonwebtoken` cannot parse
     /// as an Ed25519 public key, so a bad config fails the server at startup rather
     /// than silently admitting nothing.
-    fn new(keys: Vec<(String, Vec<String>)>) -> Result<Self, String> {
+    fn new(keys: Vec<(String, JwtKeyRole, Vec<String>)>) -> Result<Self, String> {
         let mut compiled = Vec::with_capacity(keys.len());
-        for (cluster, pems) in keys {
+        for (cluster, role, pems) in keys {
             if cluster.is_empty() {
                 return Err("jwt key entry has an empty cluster".to_string());
             }
@@ -233,6 +420,7 @@ impl JwtVerifier {
             }
             compiled.push(JwtKey {
                 cluster,
+                role,
                 decoding_keys,
             });
         }
@@ -247,7 +435,7 @@ impl JwtVerifier {
     /// none does. `jsonwebtoken` validates signature, algorithm (EdDSA only, so an
     /// HS256/`alg:none` token is rejected as algorithm confusion), audience, and
     /// expiry in one pass; we try each trusted key and return the first that admits.
-    fn verify(&self, token: &str) -> Option<&str> {
+    fn verify(&self, token: &str) -> Option<(&str, JwtKeyRole)> {
         self.keys
             .iter()
             .find(|k| {
@@ -255,8 +443,34 @@ impl JwtVerifier {
                     .iter()
                     .any(|dk| decode::<JwtClaims>(token, dk, &self.validation).is_ok())
             })
-            .map(|k| k.cluster.as_str())
+            .map(|k| (k.cluster.as_str(), k.role))
     }
+}
+
+fn validate_key_bindings(layers: &[AuthLayer]) -> Result<(), String> {
+    let mut bindings: HashMap<[u8; 32], (String, JwtKeyRole)> = HashMap::new();
+    for layer in layers {
+        let AuthLayer::Jwt(verifier) = layer else {
+            continue;
+        };
+        for key in &verifier.keys {
+            for decoding_key in &key.decoding_keys {
+                let fingerprint: [u8; 32] = Sha256::digest(decoding_key.as_bytes()).into();
+                let binding = (key.cluster.clone(), key.role);
+                if let Some(existing) = bindings.get(&fingerprint) {
+                    if existing != &binding {
+                        return Err(format!(
+                            "one jwt public key has conflicting bindings {:?}/{:?} and {:?}/{:?}",
+                            existing.0, existing.1, binding.0, binding.1
+                        ));
+                    }
+                } else {
+                    bindings.insert(fingerprint, binding);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The `jsonwebtoken` validation policy: EdDSA only, `aud` must be exactly
@@ -286,9 +500,17 @@ enum AuthLayerConfig {
 #[derive(Debug, Deserialize)]
 struct JwtKeyConfig {
     cluster: String,
+    role: JwtKeyRole,
     /// The cluster's Ed25519 public keys in PEM (SubjectPublicKeyInfo). A list so a
     /// key rotation can list old + new during the overlap window; both verify.
     public_keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum JwtKeyRole {
+    Cluster,
+    TrustedCollector,
 }
 
 /// One compiled entry in the ordered auth stack.
@@ -320,7 +542,7 @@ impl AuthLayer {
                 }
                 let pairs = keys
                     .into_iter()
-                    .map(|k| (k.cluster, k.public_keys))
+                    .map(|k| (k.cluster, k.role, k.public_keys))
                     .collect();
                 Ok(AuthLayer::Jwt(Box::new(JwtVerifier::new(pairs)?)))
             }
@@ -343,10 +565,15 @@ impl AuthLayer {
             AuthLayer::Jwt(verifier) => match bearer {
                 None => Verdict::Fallthrough,
                 Some(tok) => match verifier.verify(tok) {
-                    Some(cluster) => {
+                    Some((cluster, role)) => {
                         tracing::trace!(cluster, "finelog: admitted jwt-authenticated request");
-                        Verdict::Allow(AuthIdentity::Jwt {
-                            cluster: cluster.to_string(),
+                        Verdict::Allow(match role {
+                            JwtKeyRole::Cluster => AuthIdentity::Jwt {
+                                cluster: cluster.to_string(),
+                            },
+                            JwtKeyRole::TrustedCollector => AuthIdentity::TrustedCollector {
+                                cluster: cluster.to_string(),
+                            },
                         })
                     }
                     None => Verdict::Reject,
@@ -375,6 +602,8 @@ struct JwtClaims {
 
 /// An ordered stack of auth layers with a default-deny terminal. Always
 /// installed (see `ServerConfig`); the private default is [`allow_localhost`].
+/// A valid `trusted_collector` bearer is authoritative before the ordered walk
+/// so a network layer cannot erase its signed infrastructure identity.
 ///
 /// [`allow_localhost`]: AuthPolicy::allow_localhost
 #[derive(Debug)]
@@ -414,6 +643,7 @@ impl AuthPolicy {
             .into_iter()
             .map(AuthLayer::compile)
             .collect::<Result<Vec<_>, _>>()?;
+        validate_key_bindings(&layers)?;
         Ok(Self { layers })
     }
 
@@ -432,14 +662,27 @@ impl AuthPolicy {
 
     /// The core decision over already-extracted request facts: the bearer token
     /// (no `Bearer ` prefix) and the transport peer IP. `Some(identity)` = admit.
-    /// Walks the stack: first `Allow` admits, first `Reject` denies, an unclaimed
-    /// request is denied (default-deny). Shared by the Connect interceptor and the
-    /// axum [`auth_gate`] middleware so both surfaces enforce the identical policy.
+    /// A verified `trusted_collector` bearer wins before the ordered walk. For
+    /// every other request, first `Allow` admits, first `Reject` denies, and an
+    /// unclaimed request is denied. Shared by the Connect interceptor and axum
+    /// [`auth_gate`] middleware so both surfaces enforce the identical policy.
     pub(crate) fn admits(
         &self,
         bearer: Option<&str>,
         peer_ip: Option<IpAddr>,
     ) -> Option<AuthIdentity> {
+        if let Some(token) = bearer {
+            for layer in &self.layers {
+                let AuthLayer::Jwt(verifier) = layer else {
+                    continue;
+                };
+                if let Some((cluster, JwtKeyRole::TrustedCollector)) = verifier.verify(token) {
+                    return Some(AuthIdentity::TrustedCollector {
+                        cluster: cluster.to_string(),
+                    });
+                }
+            }
+        }
         for layer in &self.layers {
             match layer.check(bearer, peer_ip) {
                 Verdict::Allow(identity) => return Some(identity),
@@ -590,6 +833,7 @@ mod tests {
                             match identity {
                                 AuthIdentity::Network => "network",
                                 AuthIdentity::Jwt { .. } => "jwt",
+                                AuthIdentity::TrustedCollector { .. } => "trusted_collector",
                             }
                         },
                     ),
@@ -716,6 +960,252 @@ mod tests {
         mint(private_pem, FINELOG_AUDIENCE, exp)
     }
 
+    fn mint_producer(
+        private_pem: &str,
+        audience: &str,
+        expires_at: i64,
+        attempt_uid: &str,
+        attempt_id: i32,
+        worker_id: &str,
+        node_id: &str,
+    ) -> String {
+        let claims = serde_json::json!({
+            "iss": "iris",
+            "aud": audience,
+            "sub": "attempt-uid",
+            "iat": unix_now(),
+            "exp": expires_at,
+            "cluster": "alpha",
+            "iris_job_id": "job-1",
+            "iris_task_id": "task-2",
+            "attempt_id": attempt_id,
+            "attempt_uid": attempt_uid,
+            "worker_id": worker_id,
+            "node_id": node_id,
+        });
+        mint_producer_claims(private_pem, &claims)
+    }
+
+    fn mint_producer_claims(private_pem: &str, claims: &serde_json::Value) -> String {
+        let key = jsonwebtoken::EncodingKey::from_ed_pem(private_pem.as_bytes()).unwrap();
+        jsonwebtoken::encode(&jsonwebtoken::Header::new(Algorithm::EdDSA), &claims, &key).unwrap()
+    }
+
+    fn agent_verifier() -> TelemetryAgentVerifier {
+        TelemetryAgentVerifier::new(
+            "iris",
+            &[PUB_A.to_string()],
+            TelemetryAgentRegistration {
+                cluster: "alpha".to_string(),
+                worker_id: "worker-4".to_string(),
+                node_id: "node-5".to_string(),
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn telemetry_agent_verifies_signed_claims_and_binds_registration() {
+        let verifier = agent_verifier();
+        assert_eq!(
+            verifier
+                .verify(&mint_producer(
+                    PRIV_A,
+                    TELEMETRY_AGENT_AUDIENCE,
+                    unix_now() + 300,
+                    "attempt-uid",
+                    3,
+                    "worker-4",
+                    "node-5",
+                ))
+                .unwrap(),
+            TelemetryProducerIdentity {
+                cluster: "alpha".to_string(),
+                iris_job_id: "job-1".to_string(),
+                iris_task_id: "task-2".to_string(),
+                attempt_id: 3,
+                attempt_uid: "attempt-uid".to_string(),
+                worker_id: "worker-4".to_string(),
+                node_id: "node-5".to_string(),
+            }
+        );
+
+        assert!(verifier
+            .verify(&mint_producer(
+                PRIV_A,
+                FINELOG_AUDIENCE,
+                unix_now() + 300,
+                "attempt-uid",
+                3,
+                "worker-4",
+                "node-5",
+            ))
+            .is_err());
+        assert!(verifier
+            .verify(&mint_producer(
+                PRIV_A,
+                TELEMETRY_AGENT_AUDIENCE,
+                unix_now() + 300,
+                "attempt-uid",
+                3,
+                "other-worker",
+                "node-5",
+            ))
+            .is_err());
+        assert!(verifier
+            .verify(&mint_producer(
+                PRIV_A,
+                TELEMETRY_AGENT_AUDIENCE,
+                unix_now() + 300,
+                "attempt-uid",
+                3,
+                "worker-4",
+                "other-node",
+            ))
+            .is_err());
+        assert!(verifier
+            .verify(&mint_producer(
+                PRIV_A,
+                TELEMETRY_AGENT_AUDIENCE,
+                PAST,
+                "attempt-uid",
+                3,
+                "worker-4",
+                "node-5",
+            ))
+            .is_err());
+        assert!(verifier
+            .verify(&mint_producer(
+                PRIV_UNTRUSTED,
+                TELEMETRY_AGENT_AUDIENCE,
+                unix_now() + 300,
+                "attempt-uid",
+                3,
+                "worker-4",
+                "node-5",
+            ))
+            .is_err());
+        assert!(verifier
+            .verify(&mint_producer(
+                PRIV_A,
+                TELEMETRY_AGENT_AUDIENCE,
+                unix_now() + 300,
+                "different-attempt",
+                3,
+                "worker-4",
+                "node-5",
+            ))
+            .is_err());
+        assert!(verifier
+            .verify(&mint_producer(
+                PRIV_A,
+                TELEMETRY_AGENT_AUDIENCE,
+                unix_now() + MAX_TELEMETRY_PRODUCER_TOKEN_LIFETIME_SECONDS + 1,
+                "attempt-uid",
+                3,
+                "worker-4",
+                "node-5",
+            ))
+            .is_err());
+        assert!(verifier
+            .verify(&mint_producer(
+                PRIV_A,
+                TELEMETRY_AGENT_AUDIENCE,
+                unix_now() + 300,
+                "attempt-uid",
+                -1,
+                "worker-4",
+                "node-5",
+            ))
+            .is_err());
+    }
+
+    #[test]
+    fn telemetry_agent_rejects_overflow_and_incomplete_signed_claims() {
+        let verifier = agent_verifier();
+        let base = serde_json::json!({
+            "iss": "iris",
+            "aud": TELEMETRY_AGENT_AUDIENCE,
+            "sub": "attempt-uid",
+            "iat": unix_now(),
+            "exp": unix_now() + 300,
+            "cluster": "alpha",
+            "iris_job_id": "job-1",
+            "iris_task_id": "task-2",
+            "attempt_id": 3,
+            "attempt_uid": "attempt-uid",
+            "worker_id": "worker-4",
+            "node_id": "node-5",
+        });
+
+        let mut overflow = base.clone();
+        overflow["iat"] = serde_json::json!(i64::MIN);
+        overflow["exp"] = serde_json::json!(i64::MAX);
+        assert!(verifier
+            .verify(&mint_producer_claims(PRIV_A, &overflow))
+            .is_err());
+
+        for field in [
+            "iss",
+            "aud",
+            "sub",
+            "iat",
+            "exp",
+            "cluster",
+            "iris_job_id",
+            "iris_task_id",
+            "attempt_id",
+            "attempt_uid",
+            "worker_id",
+            "node_id",
+        ] {
+            let mut incomplete = base.clone();
+            incomplete.as_object_mut().unwrap().remove(field);
+            assert!(
+                verifier
+                    .verify(&mint_producer_claims(PRIV_A, &incomplete))
+                    .is_err(),
+                "missing {field} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn telemetry_agent_rejects_wrong_issuer_registration_and_future_iat() {
+        let verifier = agent_verifier();
+        let base = serde_json::json!({
+            "iss": "iris",
+            "aud": TELEMETRY_AGENT_AUDIENCE,
+            "sub": "attempt-uid",
+            "iat": unix_now(),
+            "exp": unix_now() + 300,
+            "cluster": "alpha",
+            "iris_job_id": "job-1",
+            "iris_task_id": "task-2",
+            "attempt_id": 3,
+            "attempt_uid": "attempt-uid",
+            "worker_id": "worker-4",
+            "node_id": "node-5",
+        });
+        for (field, value) in [
+            ("iss", serde_json::json!("other-issuer")),
+            ("cluster", serde_json::json!("other-cluster")),
+            ("iat", serde_json::json!(unix_now() + 120)),
+        ] {
+            let mut claims = base.clone();
+            claims[field] = value;
+            if field == "iat" {
+                claims["exp"] = serde_json::json!(unix_now() + 300);
+            }
+            assert!(
+                verifier
+                    .verify(&mint_producer_claims(PRIV_A, &claims))
+                    .is_err(),
+                "invalid {field} was accepted"
+            );
+        }
+    }
+
     /// Mint an HS256 JWT that is otherwise well-formed (right `aud`, unexpired) —
     /// used to prove the EdDSA verifier rejects an algorithm-confusion token.
     fn mint_hs256(exp: i64) -> String {
@@ -746,7 +1236,7 @@ mod tests {
         JwtVerifier::new(
             pairs
                 .iter()
-                .map(|(c, pem)| (c.to_string(), vec![pem.to_string()]))
+                .map(|(c, pem)| (c.to_string(), JwtKeyRole::Cluster, vec![pem.to_string()]))
                 .collect(),
         )
         .unwrap()
@@ -756,8 +1246,14 @@ mod tests {
     fn jwt_verifier_returns_cluster_rejects_forged_and_expired() {
         let v = verifier(&[("alpha", PUB_A), ("bravo", PUB_B)]);
         // Signed by a trusted key, aud=finelog, unexpired → the matching cluster.
-        assert_eq!(v.verify(&mint_finelog(PRIV_A, FUTURE)), Some("alpha"));
-        assert_eq!(v.verify(&mint_finelog(PRIV_B, FUTURE)), Some("bravo"));
+        assert_eq!(
+            v.verify(&mint_finelog(PRIV_A, FUTURE)),
+            Some(("alpha", JwtKeyRole::Cluster))
+        );
+        assert_eq!(
+            v.verify(&mint_finelog(PRIV_B, FUTURE)),
+            Some(("bravo", JwtKeyRole::Cluster))
+        );
         // Signed by an untrusted key → None (signature fails against all keys).
         assert_eq!(v.verify(&mint_finelog(PRIV_UNTRUSTED, FUTURE)), None);
         // Trusted key but long-expired → None.
@@ -777,7 +1273,10 @@ mod tests {
         assert_eq!(v.verify(&mint(PRIV_A, "iris", FUTURE)), None);
         assert_eq!(v.verify(&mint(PRIV_A, "iris-peer", FUTURE)), None);
         // The delegation audience still verifies with the same key.
-        assert_eq!(v.verify(&mint_finelog(PRIV_A, FUTURE)), Some("alpha"));
+        assert_eq!(
+            v.verify(&mint_finelog(PRIV_A, FUTURE)),
+            Some(("alpha", JwtKeyRole::Cluster))
+        );
     }
 
     #[test]
@@ -807,11 +1306,18 @@ mod tests {
         // signed by either private half verifies and attributes to that cluster.
         let v = JwtVerifier::new(vec![(
             "alpha".to_string(),
+            JwtKeyRole::Cluster,
             vec![PUB_A.to_string(), PUB_B.to_string()],
         )])
         .unwrap();
-        assert_eq!(v.verify(&mint_finelog(PRIV_A, FUTURE)), Some("alpha"));
-        assert_eq!(v.verify(&mint_finelog(PRIV_B, FUTURE)), Some("alpha"));
+        assert_eq!(
+            v.verify(&mint_finelog(PRIV_A, FUTURE)),
+            Some(("alpha", JwtKeyRole::Cluster))
+        );
+        assert_eq!(
+            v.verify(&mint_finelog(PRIV_B, FUTURE)),
+            Some(("alpha", JwtKeyRole::Cluster))
+        );
         // A key outside the rotation set still fails.
         assert_eq!(v.verify(&mint_finelog(PRIV_UNTRUSTED, FUTURE)), None);
     }
@@ -824,7 +1330,7 @@ mod tests {
         // Expired by less than the leeway → still accepted (clock skew).
         assert_eq!(
             v.verify(&mint_finelog(PRIV_A, now - (leeway - 5))),
-            Some("alpha")
+            Some(("alpha", JwtKeyRole::Cluster))
         );
         // Expired well beyond the leeway → rejected.
         assert_eq!(v.verify(&mint_finelog(PRIV_A, now - (leeway + 60))), None);
@@ -833,25 +1339,44 @@ mod tests {
     #[test]
     fn jwt_verifier_new_rejects_bad_pem_and_empty_fields() {
         // A PEM jsonwebtoken cannot parse as an Ed25519 public key fails the build.
-        assert!(JwtVerifier::new(vec![("alpha".into(), vec!["not-a-pem".into()])]).is_err());
+        assert!(JwtVerifier::new(vec![(
+            "alpha".into(),
+            JwtKeyRole::Cluster,
+            vec!["not-a-pem".into()]
+        )])
+        .is_err());
         // An empty cluster fails the build.
-        assert!(JwtVerifier::new(vec![(String::new(), vec![PUB_A.into()])]).is_err());
+        assert!(JwtVerifier::new(vec![(
+            String::new(),
+            JwtKeyRole::Cluster,
+            vec![PUB_A.into()]
+        )])
+        .is_err());
         // A cluster with no public keys fails the build.
-        assert!(JwtVerifier::new(vec![("alpha".into(), vec![])]).is_err());
-        assert!(JwtVerifier::new(vec![("alpha".into(), vec![PUB_A.into()])]).is_ok());
+        assert!(JwtVerifier::new(vec![("alpha".into(), JwtKeyRole::Cluster, vec![])]).is_err());
+        assert!(JwtVerifier::new(vec![(
+            "alpha".into(),
+            JwtKeyRole::Cluster,
+            vec![PUB_A.into()]
+        )])
+        .is_ok());
+    }
+
+    fn jwt_policy_json_with_role(cluster: &str, role: &str, pem: &str) -> String {
+        serde_json::json!([
+            {"type": "jwt", "keys": [{"cluster": cluster, "role": role, "public_keys": [pem]}]}
+        ])
+        .to_string()
     }
 
     fn jwt_policy_json(cluster: &str, pem: &str) -> String {
-        serde_json::json!([
-            {"type": "jwt", "keys": [{"cluster": cluster, "public_keys": [pem]}]}
-        ])
-        .to_string()
+        jwt_policy_json_with_role(cluster, "cluster", pem)
     }
 
     fn stacked_policy_json(cidr: &str, cluster: &str, pem: &str) -> String {
         serde_json::json!([
             {"type": "cidr", "cidrs": [cidr]},
-            {"type": "jwt", "keys": [{"cluster": cluster, "public_keys": [pem]}]}
+            {"type": "jwt", "keys": [{"cluster": cluster, "role": "cluster", "public_keys": [pem]}]}
         ])
         .to_string()
     }
@@ -925,6 +1450,96 @@ mod tests {
         assert_eq!(
             p.authorize(&ctx(None, Some("10.1.2.3:5555".parse().unwrap())))
                 .unwrap(),
+            AuthIdentity::Network
+        );
+    }
+
+    #[test]
+    fn signed_token_only_preserves_collector_identity_for_explicit_role() {
+        let policy = AuthPolicy::parse(&jwt_policy_json_with_role(
+            "alpha",
+            "trusted_collector",
+            PUB_A,
+        ))
+        .unwrap();
+        assert_eq!(
+            policy
+                .authorize(&ctx(Some(&bearer(&mint_finelog(PRIV_A, FUTURE))), None))
+                .unwrap(),
+            AuthIdentity::TrustedCollector {
+                cluster: "alpha".to_string()
+            }
+        );
+
+        assert!(AuthPolicy::parse(&jwt_policy_json_with_role("alpha", "unknown", PUB_A)).is_err());
+    }
+
+    #[test]
+    fn duplicate_public_key_cannot_choose_identity_by_policy_order() {
+        let ambiguous_role = serde_json::json!([
+            {"type": "jwt", "keys": [
+                {"cluster": "alpha", "role": "cluster", "public_keys": [PUB_A]}
+            ]},
+            {"type": "jwt", "keys": [
+                {"cluster": "alpha", "role": "trusted_collector", "public_keys": [PUB_A]}
+            ]}
+        ])
+        .to_string();
+        assert!(AuthPolicy::parse(&ambiguous_role).is_err());
+
+        let ambiguous_cluster = serde_json::json!([
+            {"type": "jwt", "keys": [
+                {"cluster": "alpha", "role": "cluster", "public_keys": [PUB_A]},
+                {"cluster": "bravo", "role": "cluster", "public_keys": [PUB_A]}
+            ]}
+        ])
+        .to_string();
+        assert!(AuthPolicy::parse(&ambiguous_cluster).is_err());
+
+        let same_binding = serde_json::json!([
+            {"type": "jwt", "keys": [
+                {"cluster": "alpha", "role": "cluster", "public_keys": [PUB_A]}
+            ]},
+            {"type": "jwt", "keys": [
+                {"cluster": "alpha", "role": "cluster", "public_keys": [PUB_A]}
+            ]}
+        ])
+        .to_string();
+        let policy = AuthPolicy::parse(&same_binding).unwrap();
+        let signed = mint_finelog(PRIV_A, FUTURE);
+        assert_eq!(
+            policy
+                .authorize(&ctx(Some(&bearer(&signed)), None))
+                .unwrap(),
+            AuthIdentity::Jwt {
+                cluster: "alpha".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn trusted_collector_bearer_precedes_network_fallback() {
+        let policy = AuthPolicy::parse(
+            &serde_json::json!([
+                {"type": "cidr", "cidrs": ["10.0.0.0/8"]},
+                {"type": "jwt", "keys": [
+                    {"cluster": "alpha", "role": "trusted_collector", "public_keys": [PUB_A]}
+                ]}
+            ])
+            .to_string(),
+        )
+        .unwrap();
+        let peer = Some("10.1.2.3:5555".parse().unwrap());
+        assert_eq!(
+            policy
+                .authorize(&ctx(Some(&bearer(&mint_finelog(PRIV_A, FUTURE))), peer))
+                .unwrap(),
+            AuthIdentity::TrustedCollector {
+                cluster: "alpha".to_string()
+            }
+        );
+        assert_eq!(
+            policy.authorize(&ctx(None, peer)).unwrap(),
             AuthIdentity::Network
         );
     }
@@ -1016,7 +1631,7 @@ mod tests {
         match layer.get("type").and_then(|v| v.as_str()) {
             Some("jwt") => serde_json::json!({
                 "type": "jwt",
-                "keys": [{"cluster": "vector", "public_keys": [PUB_A]}],
+                "keys": [{"cluster": "vector", "role": "cluster", "public_keys": [PUB_A]}],
             }),
             _ => layer.clone(),
         }

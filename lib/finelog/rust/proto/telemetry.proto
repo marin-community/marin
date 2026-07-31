@@ -56,7 +56,7 @@ message TelemetryMetricV1 {
   repeated double explicit_bounds = 14;
   repeated int64 bucket_counts = 15;
   map<string, string> attributes = 16;
-  string delivery_class = 17;
+  reserved 17;
   string device_uid = 18;
   string device_type = 19;
 }
@@ -74,7 +74,7 @@ message TelemetryEventV1 {
   string span_id = 10;
   string evidence_uri = 11;
   string result_uri = 12;
-  string delivery_class = 13;
+  reserved 13;
   string probe_status = 14;
 }
 
@@ -112,6 +112,7 @@ message TelemetryRecordV1 {
   TelemetryEventV1 event = 7;
   TelemetryLogV1 log = 8;
   TelemetryArtifactV1 artifact = 9;
+  string delivery_class = 10;
 }
 
 message TelemetryBatchV1 {

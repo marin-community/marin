@@ -19,18 +19,21 @@ auth:
   - type: jwt
     keys:
       - cluster: cw-rno2a
+        role: cluster
         public_keys:
           - |
               -----BEGIN PUBLIC KEY-----
               MCowBQYDK2VwAyEAy1h0qFGWhuXow28GRDSLdXmb7jTZPo4L+RS/G5zlmhs=
               -----END PUBLIC KEY-----
       - cluster: cw-us-east-02a
+        role: cluster
         public_keys:
           - |
               -----BEGIN PUBLIC KEY-----
               MCowBQYDK2VwAyEAJYrTAboQmQmVnSRcsxusCfosRTUl7t2L3q2yRzW5Kwk=
               -----END PUBLIC KEY-----
       - cluster: cw-us-east-08a
+        role: cluster
         public_keys:
           - |
               -----BEGIN PUBLIC KEY-----

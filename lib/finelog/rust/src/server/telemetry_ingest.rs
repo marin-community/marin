@@ -77,6 +77,7 @@ const OTLP_METRICS_ENDPOINT: &str = "/v1/metrics";
 const OTLP_LOGS_ENDPOINT: &str = "/v1/logs";
 const REST_DIGEST_DOMAIN: &[u8] = b"finelog.telemetry.rest.v1\0";
 const SUB_BATCH_ID_DOMAIN: &[u8] = b"finelog.telemetry.sub_batch.v1\0";
+const INTERNAL_DELIVERY_CLASS: &str = "internal";
 const SCHEMA_VERSION: i32 = 1;
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 128;
 const MAX_REST_RECORDS: usize = 10_000;
@@ -361,6 +362,7 @@ type Row = BTreeMap<String, Cell>;
 #[derive(Clone, Debug)]
 struct RoutedRecord {
     namespace: String,
+    delivery_class: String,
     row: Row,
 }
 
@@ -962,6 +964,7 @@ fn scan_custom_record(input: &[u8], quota: &StructuralQuota) -> Result<(), ApiEr
         7 => scan_custom_event(value, quota),
         8 => scan_custom_log(value, quota),
         9 => scan_custom_artifact(value, quota),
+        10 => check_wire_string(value, "record.delivery_class"),
         _ => Ok(()),
     })
 }
@@ -1009,7 +1012,7 @@ fn scan_custom_metric(input: &[u8], quota: &StructuralQuota) -> Result<(), ApiEr
     let mut buckets = 0;
     let mut attributes = 0;
     scan_protobuf_wire_fields(input, quota, |field, value| match (field, value) {
-        (1..=10 | 17..=19, ProtobufWireValue::LengthDelimited(value)) => {
+        (1..=10 | 18..=19, ProtobufWireValue::LengthDelimited(value)) => {
             check_wire_string(value, "metric string")
         }
         (14, ProtobufWireValue::Fixed64) => quota.repeated(&mut bounds, "metric explicit bounds"),
@@ -1044,7 +1047,7 @@ fn scan_custom_metric(input: &[u8], quota: &StructuralQuota) -> Result<(), ApiEr
 fn scan_custom_event(input: &[u8], quota: &StructuralQuota) -> Result<(), ApiError> {
     let mut attributes = 0;
     scan_protobuf_fields(input, quota, |field, value| match field {
-        1 | 3..=7 | 9..=14 => check_wire_string(value, "event string"),
+        1 | 3..=7 | 9..=12 | 14 => check_wire_string(value, "event string"),
         8 => {
             quota.repeated(&mut attributes, "event attributes")?;
             scan_string_map(value, quota)
@@ -1916,7 +1919,7 @@ fn check_normalized_bytes(estimated: usize) -> Result<(), ApiError> {
 }
 
 fn estimate_custom_record(record: &TelemetryRecordV1) -> usize {
-    let mut total = record.signal.as_ref().map_or(0, String::len);
+    let mut total = optional_strings_size([&record.signal, &record.delivery_class]);
     if let Some(resource) = record.resource.as_option() {
         total = total.saturating_add(estimate_resource(resource));
     }
@@ -1932,7 +1935,6 @@ fn estimate_custom_record(record: &TelemetryRecordV1) -> usize {
                 &metric.temporality,
                 &metric.reset_id,
                 &metric.series_id,
-                &metric.delivery_class,
                 &metric.device_uid,
                 &metric.device_type,
             ]))
@@ -1953,7 +1955,6 @@ fn estimate_custom_record(record: &TelemetryRecordV1) -> usize {
                 &event.span_id,
                 &event.evidence_uri,
                 &event.result_uri,
-                &event.delivery_class,
                 &event.probe_status,
             ]))
             .saturating_add(map_size(&event.attributes));
@@ -2249,9 +2250,6 @@ fn normalize_number_point(
         series_id: Some(series_id),
         value: Some(value),
         attributes,
-        delivery_class: catalog()
-            .metric(scope_name, &metric.name)
-            .map(|entry| entry.delivery_class.clone()),
         ..Default::default()
     };
     metric_routed_record(
@@ -2308,9 +2306,6 @@ fn normalize_histogram_point(
         explicit_bounds: point.explicit_bounds.clone(),
         bucket_counts,
         attributes,
-        delivery_class: catalog()
-            .metric(scope_name, &metric.name)
-            .map(|entry| entry.delivery_class.clone()),
         ..Default::default()
     };
     metric_routed_record(
@@ -2338,8 +2333,20 @@ fn metric_routed_record(
         ..Default::default()
     };
     let mut row = base_row(&batch, index, event_ts, observed_ts, resource);
-    let namespace = validate_metric(metric, index, &mut row).map_err(validation_reason)?;
-    Ok(RoutedRecord { namespace, row })
+    let descriptor = catalog()
+        .metric(
+            metric.scope.as_deref().unwrap_or(""),
+            metric.name.as_deref().unwrap_or(""),
+        )
+        .ok_or_else(|| "metric is not in telemetry catalog".to_string())?;
+    let delivery_class = descriptor.delivery_class.clone();
+    let namespace =
+        validate_metric(metric, &delivery_class, index, &mut row).map_err(validation_reason)?;
+    Ok(RoutedRecord {
+        namespace,
+        delivery_class,
+        row,
+    })
 }
 
 fn normalize_otlp_logs(
@@ -2435,6 +2442,7 @@ fn normalize_otlp_log(
     validate_log(&custom_log, index, event_ts, resource, &mut row).map_err(validation_reason)?;
     Ok(RoutedRecord {
         namespace: LOG_NAMESPACE_NAME.to_string(),
+        delivery_class: "buffered".to_string(),
         row,
     })
 }
@@ -2574,7 +2582,7 @@ fn reset_fields(
     ))
 }
 
-fn canonical_series_id(
+pub(crate) fn canonical_series_id(
     scope: &str,
     name: &str,
     resource: &TelemetryResourceV1,
@@ -2737,6 +2745,30 @@ fn validate_custom_batch(
     }
 }
 
+pub(crate) fn validate_canonical_agent_batch(batch: &TelemetryBatchV1) -> Result<(), String> {
+    let cluster = batch
+        .records
+        .first()
+        .and_then(|record| record.resource.as_option())
+        .and_then(|resource| resource.cluster.clone())
+        .ok_or_else(|| "canonical agent batch requires a stamped cluster".to_string())?;
+    match validate_custom_batch(batch, &AuthIdentity::TrustedCollector { cluster }) {
+        Ok(_) => Ok(()),
+        Err(errors) => Err(errors
+            .into_iter()
+            .map(|error| {
+                format!(
+                    "record {} {}: {}",
+                    error.record_index.unwrap_or(-1),
+                    error.field.as_deref().unwrap_or("unknown"),
+                    error.reason.as_deref().unwrap_or("invalid"),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ")),
+    }
+}
+
 fn validate_custom_record(
     batch: &TelemetryBatchV1,
     record: &TelemetryRecordV1,
@@ -2762,6 +2794,7 @@ fn validate_custom_record(
 
     let mut row = base_row(batch, index, event_ts, observed_ts, &resource);
     let signal = record.signal.as_deref().unwrap_or("");
+    let delivery_class = required_string(&record.delivery_class, index, "delivery_class")?;
     let populated = [
         record.metric.as_option().is_some(),
         record.event.as_option().is_some(),
@@ -2799,19 +2832,21 @@ fn validate_custom_record(
                     "must equal the server canonical series ID for the authoritative resource",
                 ));
             }
-            validate_metric(metric, index, &mut row)?
+            validate_metric(metric, delivery_class, index, &mut row)?
         }
         "event" => {
             validate_event(
                 record.event.as_option().ok_or_else(|| {
                     validation_error(index, "event", "is required for signal event")
                 })?,
+                delivery_class,
                 index,
                 &mut row,
             )?;
             EVENT_NAMESPACE.to_string()
         }
         "log" => {
+            validate_delivery_class(delivery_class, "buffered", index)?;
             validate_log(
                 record
                     .log
@@ -2825,6 +2860,7 @@ fn validate_custom_record(
             LOG_NAMESPACE_NAME.to_string()
         }
         "artifact" => {
+            validate_delivery_class(delivery_class, "durable", index)?;
             validate_artifact(
                 record.artifact.as_option().ok_or_else(|| {
                     validation_error(index, "artifact", "is required for signal artifact")
@@ -2842,7 +2878,26 @@ fn validate_custom_record(
             ));
         }
     };
-    Ok(RoutedRecord { namespace, row })
+    Ok(RoutedRecord {
+        namespace,
+        delivery_class: delivery_class.to_string(),
+        row,
+    })
+}
+
+fn validate_delivery_class(
+    actual: &str,
+    expected: &str,
+    index: i32,
+) -> Result<(), TelemetryValidationErrorV1> {
+    if actual == expected {
+        return Ok(());
+    }
+    Err(validation_error(
+        index,
+        "delivery_class",
+        &format!("must match catalog value {expected:?}"),
+    ))
 }
 
 fn validate_resource(
@@ -2876,6 +2931,7 @@ fn validate_resource(
 
 fn validate_metric(
     metric: &TelemetryMetricV1,
+    delivery_class: &str,
     index: i32,
     row: &mut Row,
 ) -> Result<String, TelemetryValidationErrorV1> {
@@ -2909,11 +2965,6 @@ fn validate_metric(
             metric.temporality.as_deref().unwrap_or(""),
             descriptor.temporality.as_str(),
         ),
-        (
-            "metric.delivery_class",
-            metric.delivery_class.as_deref().unwrap_or(""),
-            descriptor.delivery_class.as_str(),
-        ),
     ] {
         if actual != expected {
             return Err(validation_error(
@@ -2923,6 +2974,7 @@ fn validate_metric(
             ));
         }
     }
+    validate_delivery_class(delivery_class, &descriptor.delivery_class, index)?;
     validate_attributes(
         &metric.attributes,
         &descriptor.attributes,
@@ -3028,6 +3080,7 @@ fn validate_metric(
 
 fn validate_event(
     event: &TelemetryEventV1,
+    delivery_class: &str,
     index: i32,
     row: &mut Row,
 ) -> Result<(), TelemetryValidationErrorV1> {
@@ -3039,13 +3092,7 @@ fn validate_event(
             "event is not in the checked-in catalog",
         )
     })?;
-    if event.delivery_class.as_deref() != Some(descriptor.delivery_class.as_str()) {
-        return Err(validation_error(
-            index,
-            "event.delivery_class",
-            &format!("must match catalog value {:?}", descriptor.delivery_class),
-        ));
-    }
+    validate_delivery_class(delivery_class, &descriptor.delivery_class, index)?;
     let allowed: BTreeMap<String, Vec<String>> = descriptor
         .attributes
         .iter()
@@ -3291,10 +3338,10 @@ async fn commit_records(
     deadline: Instant,
 ) -> Result<CommitOutcome, ApiError> {
     let record_count = records.len();
-    let mut rows_by_namespace: BTreeMap<String, Vec<Row>> = BTreeMap::new();
+    let mut rows_by_route: BTreeMap<(String, String), Vec<Row>> = BTreeMap::new();
     for record in records {
-        rows_by_namespace
-            .entry(record.namespace)
+        rows_by_route
+            .entry((record.namespace, record.delivery_class))
             .or_default()
             .push(record.row);
     }
@@ -3316,9 +3363,10 @@ async fn commit_records(
                 &prepare_batch_id,
                 prepare_origin.as_deref(),
                 &prepare_digest,
+                INTERNAL_DELIVERY_CLASS,
             )?;
-            let mut children = Vec::with_capacity(rows_by_namespace.len());
-            for (namespace, rows) in rows_by_namespace {
+            let mut children = Vec::with_capacity(rows_by_route.len());
+            for ((namespace, delivery_class), rows) in rows_by_route {
                 children.push(prepare_namespace(
                     &prepare_store,
                     &namespace,
@@ -3326,6 +3374,7 @@ async fn commit_records(
                     &prepare_batch_id,
                     prepare_origin.as_deref(),
                     &prepare_digest,
+                    &delivery_class,
                 )?);
             }
             let completion = prepare_namespace(
@@ -3335,6 +3384,7 @@ async fn commit_records(
                 &prepare_batch_id,
                 prepare_origin.as_deref(),
                 &prepare_digest,
+                INTERNAL_DELIVERY_CLASS,
             )?;
             Ok((intent, children, completion))
         })
@@ -3390,6 +3440,7 @@ fn prepare_namespace(
     parent_batch_id: &str,
     origin_cluster: Option<&str>,
     payload_sha256: &str,
+    delivery_class: &str,
 ) -> Result<PreparedNamespace, ApiError> {
     let schema = namespace_schema(namespace).ok_or_else(|| {
         ApiError::from_store(StatsError::Internal(format!(
@@ -3415,7 +3466,7 @@ fn prepare_namespace(
             ),
         ));
     }
-    let batch_id = sub_batch_id(parent_batch_id, namespace);
+    let batch_id = sub_batch_id(parent_batch_id, namespace, delivery_class);
     store
         .preflight_rows(
             namespace,
@@ -3848,6 +3899,10 @@ fn request_digest(
             digest.update([1]);
             digest_field(&mut digest, cluster.as_bytes());
         }
+        AuthIdentity::TrustedCollector { cluster } => {
+            digest.update([2]);
+            digest_field(&mut digest, cluster.as_bytes());
+        }
         AuthIdentity::Network => digest.update([0]),
     }
     digest_field(&mut digest, endpoint.as_bytes());
@@ -3861,17 +3916,20 @@ fn digest_field(digest: &mut Sha256, value: &[u8]) {
     digest.update(value);
 }
 
-fn sub_batch_id(parent_batch_id: &str, namespace: &str) -> String {
+fn sub_batch_id(parent_batch_id: &str, namespace: &str, delivery_class: &str) -> String {
     let mut digest = Sha256::new();
     digest.update(SUB_BATCH_ID_DOMAIN);
     digest_field(&mut digest, parent_batch_id.as_bytes());
     digest_field(&mut digest, namespace.as_bytes());
+    digest_field(&mut digest, delivery_class.as_bytes());
     format!("telemetry-{:x}", digest.finalize())
 }
 
 fn identity_origin(identity: &AuthIdentity) -> Option<String> {
     match identity {
-        AuthIdentity::Jwt { cluster } => Some(cluster.clone()),
+        AuthIdentity::Jwt { cluster } | AuthIdentity::TrustedCollector { cluster } => {
+            Some(cluster.clone())
+        }
         AuthIdentity::Network => None,
     }
 }
@@ -3881,10 +3939,15 @@ fn authoritative_resource(
     identity: &AuthIdentity,
 ) -> TelemetryResourceV1 {
     let mut resource = resource.clone();
-    let AuthIdentity::Jwt { cluster } = identity else {
+    if let AuthIdentity::TrustedCollector { cluster } = identity {
+        resource.cluster = Some(cluster.clone());
         return resource;
+    }
+    resource.cluster = match identity {
+        AuthIdentity::Jwt { cluster } => Some(cluster.clone()),
+        AuthIdentity::Network => None,
+        AuthIdentity::TrustedCollector { .. } => unreachable!(),
     };
-    resource.cluster = Some(cluster.clone());
     resource.iris_job_id = None;
     resource.iris_task_id = None;
     resource.task_index = None;
@@ -4048,6 +4111,7 @@ mod tests {
     use buffa::MessageField;
     use datafusion::common::TableReference;
     use http_body::Frame;
+    use jsonwebtoken::{Algorithm, EncodingKey};
     use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope};
     use opentelemetry_proto::tonic::logs::v1::{ResourceLogs, ScopeLogs};
     use opentelemetry_proto::tonic::metrics::v1::{Gauge, ResourceMetrics, ScopeMetrics};
@@ -4055,6 +4119,8 @@ mod tests {
 
     use super::*;
     use crate::query::{make_ctx, run_query_over};
+    use crate::server::auth::{AuthPolicy, FINELOG_AUDIENCE};
+    use crate::server::test_support::{PRIV_A, PUB_A};
     use crate::test_support::unique_dir;
 
     fn resource() -> TelemetryResourceV1 {
@@ -4084,6 +4150,7 @@ mod tests {
                 signal: Some("log".to_string()),
                 event_ts_unix_nano: Some(1_000_000_000),
                 observed_ts_unix_nano: Some(1_000_000_001),
+                delivery_class: Some("buffered".to_string()),
                 resource: MessageField::some(resource()),
                 log: MessageField::some(TelemetryLogV1 {
                     source: Some("test.logger".to_string()),
@@ -4112,12 +4179,12 @@ mod tests {
                 signal: Some("event".to_string()),
                 event_ts_unix_nano: Some(1_000_000_000),
                 observed_ts_unix_nano: Some(1_000_000_001),
+                delivery_class: Some("durable".to_string()),
                 resource: MessageField::some(resource()),
                 event: MessageField::some(TelemetryEventV1 {
                     event_name: Some("telemetry.runtime.gap".to_string()),
                     severity_number: Some(17),
                     severity_text: severity_text.map(str::to_string),
-                    delivery_class: Some("durable".to_string()),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -4158,6 +4225,7 @@ mod tests {
                 signal: Some("metric".to_string()),
                 event_ts_unix_nano: Some(1_000_000_000),
                 observed_ts_unix_nano: Some(1_000_000_001),
+                delivery_class: Some("coalescing".to_string()),
                 resource: MessageField::some(resource),
                 metric: MessageField::some(TelemetryMetricV1 {
                     scope: Some("telemetry.runtime".to_string()),
@@ -4171,7 +4239,6 @@ mod tests {
                     temporality: Some("unspecified".to_string()),
                     series_id: Some(series_id),
                     value: Some(2.0),
-                    delivery_class: Some("coalescing".to_string()),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -4570,16 +4637,20 @@ mod tests {
     #[test]
     fn namespace_sub_batch_ids_are_stable_and_distinct() {
         assert_eq!(
-            sub_batch_id("batch-a", "namespace-a"),
-            sub_batch_id("batch-a", "namespace-a")
+            sub_batch_id("batch-a", "namespace-a", "buffered"),
+            sub_batch_id("batch-a", "namespace-a", "buffered")
         );
         assert_ne!(
-            sub_batch_id("batch-a", "namespace-a"),
-            sub_batch_id("batch-b", "namespace-a")
+            sub_batch_id("batch-a", "namespace-a", "buffered"),
+            sub_batch_id("batch-b", "namespace-a", "buffered")
         );
         assert_ne!(
-            sub_batch_id("batch-a", "namespace-a"),
-            sub_batch_id("batch-a", "namespace-b")
+            sub_batch_id("batch-a", "namespace-a", "buffered"),
+            sub_batch_id("batch-a", "namespace-b", "buffered")
+        );
+        assert_ne!(
+            sub_batch_id("batch-a", "namespace-a", "buffered"),
+            sub_batch_id("batch-a", "namespace-a", "coalescing")
         );
     }
 
@@ -4601,10 +4672,9 @@ mod tests {
             explicit_bounds: vec![0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0],
             bucket_counts: vec![i64::MAX, 1, 0, 0, 0, 0, 0, 0, 0],
             attributes: HashMap::from([("outcome".to_string(), "success".to_string())]),
-            delivery_class: Some("buffered".to_string()),
             ..Default::default()
         };
-        let error = validate_metric(&metric, 0, &mut row).unwrap_err();
+        let error = validate_metric(&metric, "buffered", 0, &mut row).unwrap_err();
         assert_eq!(error.field.as_deref(), Some("metric"));
     }
 
@@ -4737,6 +4807,102 @@ mod tests {
             assert!(string(name).is_null(0), "{name} was not cleared");
         }
         assert_eq!(string("severity_text").value(0), "INFO");
+    }
+
+    #[tokio::test]
+    async fn policy_composition_preserves_collector_identity_and_clears_network_identity() {
+        let directory = unique_dir("telemetry_rest_collector_identity");
+        let store = Arc::new(Store::new(Some(directory), String::new()).unwrap());
+        store.bootstrap_maintenance();
+        let policy = AuthPolicy::parse(
+            &serde_json::json!([
+                {"type": "cidr", "cidrs": ["10.0.0.0/8"]},
+                {"type": "jwt", "keys": [{
+                    "cluster": "collector-cluster",
+                    "role": "trusted_collector",
+                    "public_keys": [PUB_A]
+                }]}
+            ])
+            .to_string(),
+        )
+        .unwrap();
+        let claims = serde_json::json!({
+            "iss": "collector",
+            "aud": FINELOG_AUDIENCE,
+            "sub": "agent",
+            "exp": now_unix_nano() / 1_000_000_000 + 300,
+        });
+        let token = jsonwebtoken::encode(
+            &jsonwebtoken::Header::new(Algorithm::EdDSA),
+            &claims,
+            &EncodingKey::from_ed_pem(PRIV_A.as_bytes()).unwrap(),
+        )
+        .unwrap();
+        let peer = "10.1.2.3".parse().unwrap();
+        let collector_identity = policy.admits(Some(&token), Some(peer)).unwrap();
+        let network_identity = policy.admits(None, Some(peer)).unwrap();
+
+        for (batch_id, identity) in [
+            ("collector-log", collector_identity),
+            ("network-log", network_identity),
+        ] {
+            let mut batch = log_batch(batch_id, "hello");
+            batch.records[0].resource.modify(|resource| {
+                resource.iris_job_id = Some("signed-job".to_string());
+                resource.iris_task_id = Some("signed-task".to_string());
+                resource.worker_id = Some("signed-worker".to_string());
+                resource.node_id = Some("signed-node".to_string());
+                resource.pod_uid = None;
+                resource.container_id = None;
+                resource.entity_authority = None;
+                resource.entity_type = None;
+                resource.entity_uid = None;
+            });
+            let response = send_custom(Arc::clone(&store), identity, &batch).await;
+            assert_eq!(response.status(), StatusCode::CREATED);
+        }
+
+        let batches = query_namespace(
+            &store,
+            LOG_NAMESPACE_NAME,
+            r#"SELECT batch_id, "cluster", iris_job_id, iris_task_id, worker_id, node_id,
+                       pod_uid, container_id, entity_authority, entity_type, entity_uid
+                FROM "log" ORDER BY batch_id"#,
+        )
+        .await;
+        let batch = arrow::compute::concat_batches(&batches[0].schema(), &batches).unwrap();
+        let string = |name: &str| {
+            batch
+                .column_by_name(name)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+        };
+        assert_eq!(string("batch_id").value(0), "collector-log");
+        assert_eq!(string("cluster").value(0), "collector-cluster");
+        for (name, expected) in [
+            ("iris_job_id", "signed-job"),
+            ("iris_task_id", "signed-task"),
+            ("worker_id", "signed-worker"),
+            ("node_id", "signed-node"),
+        ] {
+            let column = string(name);
+            assert_eq!(column.value(0), expected);
+            assert!(column.is_null(1), "{name} network value was not cleared");
+        }
+        for name in [
+            "pod_uid",
+            "container_id",
+            "entity_authority",
+            "entity_type",
+            "entity_uid",
+        ] {
+            assert!(string(name).is_null(0));
+            assert!(string(name).is_null(1));
+        }
+        assert_eq!(string("batch_id").value(1), "network-log");
+        assert!(string("cluster").is_null(1));
     }
 
     #[tokio::test]

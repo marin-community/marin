@@ -21,6 +21,7 @@ pub mod legacy_path;
 pub mod log_service;
 pub mod spa;
 pub mod stats_service;
+pub mod telemetry_agent;
 pub mod telemetry_ingest;
 #[cfg(test)]
 pub mod test_support;

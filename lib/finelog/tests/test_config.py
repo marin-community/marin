@@ -158,6 +158,7 @@ def test_auth_layers_serialize_to_finelog_policy_json(tmp_path: Path) -> None:
           - type: jwt
             keys:
               - cluster: marin
+                role: cluster
                 public_keys: [ed25519-pub-marin-current, ed25519-pub-marin-previous]
         """,
     )
@@ -166,7 +167,13 @@ def test_auth_layers_serialize_to_finelog_policy_json(tmp_path: Path) -> None:
         {"type": "cidr", "cidrs": ["10.0.0.0/8", "::1/128"]},
         {
             "type": "jwt",
-            "keys": [{"cluster": "marin", "public_keys": ["ed25519-pub-marin-current", "ed25519-pub-marin-previous"]}],
+            "keys": [
+                {
+                    "cluster": "marin",
+                    "role": "cluster",
+                    "public_keys": ["ed25519-pub-marin-current", "ed25519-pub-marin-previous"],
+                }
+            ],
         },
     ]
 
@@ -189,6 +196,40 @@ def test_auth_unknown_layer_type_rejected(tmp_path: Path) -> None:
         """,
     )
     with pytest.raises(ValueError, match="unknown type 'mtls'"):
+        load_finelog_config(str(cfg_path))
+
+
+@pytest.mark.parametrize(
+    ("key_fields", "error"),
+    [
+        ("cluster: marin\n                public_keys: [key]", "is missing role"),
+        (
+            "cluster: marin\n                role: administrator\n                public_keys: [key]",
+            "role must be cluster or trusted_collector",
+        ),
+    ],
+)
+def test_auth_jwt_role_is_explicit_and_closed(key_fields: str, error: str, tmp_path: Path) -> None:
+    cfg_path = tmp_path / "bad-role.yaml"
+    _write_config(
+        cfg_path,
+        f"""
+        name: finelog-bad
+        port: 10001
+        image: ghcr.io/test/finelog:latest
+        remote_log_dir: gs://bucket/x
+        deployment:
+          gcp:
+            project: p
+            zone: us-central1-a
+        auth:
+          - type: jwt
+            keys:
+              - {key_fields}
+        """,
+    )
+
+    with pytest.raises(ValueError, match=error):
         load_finelog_config(str(cfg_path))
 
 

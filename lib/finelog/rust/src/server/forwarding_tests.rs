@@ -31,7 +31,7 @@ const SOURCE_CLUSTER: &str = "cw-test";
 fn jwt_policy(cluster: &str) -> AuthPolicy {
     AuthPolicy::parse(
         &serde_json::json!([
-            {"type": "jwt", "keys": [{"cluster": cluster, "public_keys": [PUB_A]}]}
+            {"type": "jwt", "keys": [{"cluster": cluster, "role": "cluster", "public_keys": [PUB_A]}]}
         ])
         .to_string(),
     )
@@ -48,7 +48,7 @@ fn jwt_policy(cluster: &str) -> AuthPolicy {
 fn hub_policy(cluster: &str) -> AuthPolicy {
     AuthPolicy::parse(
         &serde_json::json!([
-            {"type": "jwt", "keys": [{"cluster": cluster, "public_keys": [PUB_A]}]},
+            {"type": "jwt", "keys": [{"cluster": cluster, "role": "cluster", "public_keys": [PUB_A]}]},
             {"type": "cidr", "cidrs": ["127.0.0.0/8", "::1/128"]}
         ])
         .to_string(),

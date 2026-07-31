@@ -126,7 +126,9 @@ where
 /// origin (empty for a local write), so its batch is left as supplied.
 fn write_origin_cluster(ctx: &RequestContext) -> Result<Option<String>, ConnectError> {
     match request_identity(ctx) {
-        Some(AuthIdentity::Jwt { cluster }) => Ok(Some(cluster.clone())),
+        Some(AuthIdentity::Jwt { cluster } | AuthIdentity::TrustedCollector { cluster }) => {
+            Ok(Some(cluster.clone()))
+        }
         Some(AuthIdentity::Network) => Ok(None),
         None => Err(ConnectError::internal(
             "finelog: request reached a handler with no auth identity",

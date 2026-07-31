@@ -39,7 +39,7 @@ fn authorized_cluster<'a>(
     requested: &'a str,
 ) -> Result<&'a str, ConnectError> {
     match request_identity(ctx) {
-        Some(AuthIdentity::Jwt { cluster }) => {
+        Some(AuthIdentity::Jwt { cluster } | AuthIdentity::TrustedCollector { cluster }) => {
             if requested.is_empty() || requested == cluster {
                 Ok(cluster)
             } else {

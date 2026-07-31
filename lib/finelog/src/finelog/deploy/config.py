@@ -18,6 +18,7 @@ with. A server's own key pair is its identity: the hub records rows under the
 
 import json
 from dataclasses import dataclass
+from enum import StrEnum
 from importlib.resources import files
 from pathlib import Path
 
@@ -123,15 +124,25 @@ INTRA_CLUSTER_CIDRS: tuple[str, ...] = (
 )
 
 
+class JwtKeyRole(StrEnum):
+    """Privilege granted to requests signed by a configured JWT key."""
+
+    CLUSTER = "cluster"
+    TRUSTED_COLLECTOR = "trusted_collector"
+
+
 @dataclass(frozen=True)
 class JwtKeyEntry:
-    """A trusted cluster and its Ed25519 delegation public keys (PEM).
+    """A trusted sender role and its Ed25519 delegation public keys (PEM).
 
     ``public_keys`` is a list so a key rotation can carry the old and new keys
-    together during the overlap window; a token signed by either verifies.
+    together during the overlap window; a token signed by either verifies. The
+    configured role controls whether infrastructure enrichment is cleared or
+    preserved at Finelog ingress.
     """
 
     cluster: str
+    role: JwtKeyRole
     public_keys: tuple[str, ...]
 
 
@@ -140,9 +151,9 @@ class JwtAuthLayer:
     """Admit a bearer JWT whose EdDSA signature verifies against one of ``keys`` and
     whose audience is ``finelog``.
 
-    Each key is a trusted cluster's Ed25519 public key(s); every configured key
-    admits equally. Public keys are not secret material, so a jwt layer inlines
-    safely into a plaintext deploy artifact.
+    Each key is a trusted sender's Ed25519 public key(s) and explicit privilege
+    role. Public keys are not secret material, so a jwt layer inlines safely
+    into a plaintext deploy artifact.
     """
 
     keys: tuple[JwtKeyEntry, ...]
@@ -150,7 +161,7 @@ class JwtAuthLayer:
     def to_policy_dict(self) -> dict:
         return {
             "type": "jwt",
-            "keys": [{"cluster": k.cluster, "public_keys": list(k.public_keys)} for k in self.keys],
+            "keys": [{"cluster": k.cluster, "role": k.role, "public_keys": list(k.public_keys)} for k in self.keys],
         }
 
 
@@ -280,10 +291,27 @@ def _build_auth_layers(raw: list, path: Path) -> tuple[AuthLayer, ...]:
         if layer_type == "cidr":
             layers.append(CidrAuthLayer(cidrs=tuple(item.get("cidrs") or ())))
         elif layer_type == "jwt":
-            keys = tuple(
-                JwtKeyEntry(cluster=k["cluster"], public_keys=tuple(k["public_keys"])) for k in item.get("keys") or ()
-            )
-            layers.append(JwtAuthLayer(keys=keys))
+            keys: list[JwtKeyEntry] = []
+            for key_index, key in enumerate(item.get("keys") or ()):
+                if not isinstance(key, dict):
+                    raise ValueError(f"{path}: auth[{i}].keys[{key_index}] must be a mapping")
+                missing = [name for name in ("cluster", "role", "public_keys") if name not in key]
+                if missing:
+                    raise ValueError(f"{path}: auth[{i}].keys[{key_index}] is missing {', '.join(missing)}")
+                try:
+                    role = JwtKeyRole(key["role"])
+                except ValueError as error:
+                    raise ValueError(
+                        f"{path}: auth[{i}].keys[{key_index}].role must be cluster or trusted_collector"
+                    ) from error
+                keys.append(
+                    JwtKeyEntry(
+                        cluster=key["cluster"],
+                        role=role,
+                        public_keys=tuple(key["public_keys"]),
+                    )
+                )
+            layers.append(JwtAuthLayer(keys=tuple(keys)))
         else:
             raise ValueError(f"{path}: auth[{i}] has unknown type {layer_type!r} (expected cidr|jwt)")
     return tuple(layers)

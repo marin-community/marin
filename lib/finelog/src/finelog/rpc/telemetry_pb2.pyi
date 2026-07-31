@@ -73,7 +73,7 @@ class TelemetryResourceV1(_message.Message):
     def __init__(self, service_name: _Optional[str] = ..., service_instance_id: _Optional[str] = ..., role: _Optional[str] = ..., root_run_uid: _Optional[str] = ..., service_version: _Optional[str] = ..., run_id_alias: _Optional[str] = ..., iris_job_id: _Optional[str] = ..., iris_task_id: _Optional[str] = ..., task_index: _Optional[int] = ..., attempt_id: _Optional[int] = ..., attempt_uid: _Optional[str] = ..., worker_id: _Optional[str] = ..., node_id: _Optional[str] = ..., pod_uid: _Optional[str] = ..., container_id: _Optional[str] = ..., rank: _Optional[int] = ..., process_index: _Optional[int] = ..., actor_id: _Optional[str] = ..., engine_id: _Optional[str] = ..., repository: _Optional[str] = ..., git_revision: _Optional[str] = ..., image_digest: _Optional[str] = ..., model_id: _Optional[str] = ..., model_revision: _Optional[str] = ..., policy_step: _Optional[int] = ..., owner: _Optional[str] = ..., experiment_issue: _Optional[int] = ..., cluster: _Optional[str] = ..., entity_authority: _Optional[str] = ..., entity_type: _Optional[str] = ..., entity_uid: _Optional[str] = ...) -> None: ...
 
 class TelemetryMetricV1(_message.Message):
-    __slots__ = ("scope", "scope_version", "name", "description", "unit", "instrument_kind", "temporality", "start_ts_unix_nano", "reset_id", "series_id", "value", "count", "sum", "explicit_bounds", "bucket_counts", "attributes", "delivery_class", "device_uid", "device_type")
+    __slots__ = ("scope", "scope_version", "name", "description", "unit", "instrument_kind", "temporality", "start_ts_unix_nano", "reset_id", "series_id", "value", "count", "sum", "explicit_bounds", "bucket_counts", "attributes", "device_uid", "device_type")
     class AttributesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -97,7 +97,6 @@ class TelemetryMetricV1(_message.Message):
     EXPLICIT_BOUNDS_FIELD_NUMBER: _ClassVar[int]
     BUCKET_COUNTS_FIELD_NUMBER: _ClassVar[int]
     ATTRIBUTES_FIELD_NUMBER: _ClassVar[int]
-    DELIVERY_CLASS_FIELD_NUMBER: _ClassVar[int]
     DEVICE_UID_FIELD_NUMBER: _ClassVar[int]
     DEVICE_TYPE_FIELD_NUMBER: _ClassVar[int]
     scope: str
@@ -116,13 +115,12 @@ class TelemetryMetricV1(_message.Message):
     explicit_bounds: _containers.RepeatedScalarFieldContainer[float]
     bucket_counts: _containers.RepeatedScalarFieldContainer[int]
     attributes: _containers.ScalarMap[str, str]
-    delivery_class: str
     device_uid: str
     device_type: str
-    def __init__(self, scope: _Optional[str] = ..., scope_version: _Optional[str] = ..., name: _Optional[str] = ..., description: _Optional[str] = ..., unit: _Optional[str] = ..., instrument_kind: _Optional[str] = ..., temporality: _Optional[str] = ..., start_ts_unix_nano: _Optional[int] = ..., reset_id: _Optional[str] = ..., series_id: _Optional[str] = ..., value: _Optional[float] = ..., count: _Optional[int] = ..., sum: _Optional[float] = ..., explicit_bounds: _Optional[_Iterable[float]] = ..., bucket_counts: _Optional[_Iterable[int]] = ..., attributes: _Optional[_Mapping[str, str]] = ..., delivery_class: _Optional[str] = ..., device_uid: _Optional[str] = ..., device_type: _Optional[str] = ...) -> None: ...
+    def __init__(self, scope: _Optional[str] = ..., scope_version: _Optional[str] = ..., name: _Optional[str] = ..., description: _Optional[str] = ..., unit: _Optional[str] = ..., instrument_kind: _Optional[str] = ..., temporality: _Optional[str] = ..., start_ts_unix_nano: _Optional[int] = ..., reset_id: _Optional[str] = ..., series_id: _Optional[str] = ..., value: _Optional[float] = ..., count: _Optional[int] = ..., sum: _Optional[float] = ..., explicit_bounds: _Optional[_Iterable[float]] = ..., bucket_counts: _Optional[_Iterable[int]] = ..., attributes: _Optional[_Mapping[str, str]] = ..., device_uid: _Optional[str] = ..., device_type: _Optional[str] = ...) -> None: ...
 
 class TelemetryEventV1(_message.Message):
-    __slots__ = ("event_name", "severity_number", "severity_text", "outcome", "phase", "error_type", "body", "attributes", "trace_id", "span_id", "evidence_uri", "result_uri", "delivery_class", "probe_status")
+    __slots__ = ("event_name", "severity_number", "severity_text", "outcome", "phase", "error_type", "body", "attributes", "trace_id", "span_id", "evidence_uri", "result_uri", "probe_status")
     class AttributesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -142,7 +140,6 @@ class TelemetryEventV1(_message.Message):
     SPAN_ID_FIELD_NUMBER: _ClassVar[int]
     EVIDENCE_URI_FIELD_NUMBER: _ClassVar[int]
     RESULT_URI_FIELD_NUMBER: _ClassVar[int]
-    DELIVERY_CLASS_FIELD_NUMBER: _ClassVar[int]
     PROBE_STATUS_FIELD_NUMBER: _ClassVar[int]
     event_name: str
     severity_number: int
@@ -156,9 +153,8 @@ class TelemetryEventV1(_message.Message):
     span_id: str
     evidence_uri: str
     result_uri: str
-    delivery_class: str
     probe_status: str
-    def __init__(self, event_name: _Optional[str] = ..., severity_number: _Optional[int] = ..., severity_text: _Optional[str] = ..., outcome: _Optional[str] = ..., phase: _Optional[str] = ..., error_type: _Optional[str] = ..., body: _Optional[str] = ..., attributes: _Optional[_Mapping[str, str]] = ..., trace_id: _Optional[str] = ..., span_id: _Optional[str] = ..., evidence_uri: _Optional[str] = ..., result_uri: _Optional[str] = ..., delivery_class: _Optional[str] = ..., probe_status: _Optional[str] = ...) -> None: ...
+    def __init__(self, event_name: _Optional[str] = ..., severity_number: _Optional[int] = ..., severity_text: _Optional[str] = ..., outcome: _Optional[str] = ..., phase: _Optional[str] = ..., error_type: _Optional[str] = ..., body: _Optional[str] = ..., attributes: _Optional[_Mapping[str, str]] = ..., trace_id: _Optional[str] = ..., span_id: _Optional[str] = ..., evidence_uri: _Optional[str] = ..., result_uri: _Optional[str] = ..., probe_status: _Optional[str] = ...) -> None: ...
 
 class TelemetryLogV1(_message.Message):
     __slots__ = ("source", "body", "severity_number", "severity_text", "event_name", "attributes", "trace_id", "span_id")
@@ -219,7 +215,7 @@ class TelemetryArtifactV1(_message.Message):
     def __init__(self, capture_type: _Optional[str] = ..., trigger: _Optional[str] = ..., start_ts_unix_nano: _Optional[int] = ..., end_ts_unix_nano: _Optional[int] = ..., outcome: _Optional[str] = ..., size_bytes: _Optional[int] = ..., sha256: _Optional[str] = ..., uri: _Optional[str] = ..., summary: _Optional[str] = ..., attributes: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class TelemetryRecordV1(_message.Message):
-    __slots__ = ("record_index", "signal", "event_ts_unix_nano", "observed_ts_unix_nano", "resource", "metric", "event", "log", "artifact")
+    __slots__ = ("record_index", "signal", "event_ts_unix_nano", "observed_ts_unix_nano", "resource", "metric", "event", "log", "artifact", "delivery_class")
     RECORD_INDEX_FIELD_NUMBER: _ClassVar[int]
     SIGNAL_FIELD_NUMBER: _ClassVar[int]
     EVENT_TS_UNIX_NANO_FIELD_NUMBER: _ClassVar[int]
@@ -229,6 +225,7 @@ class TelemetryRecordV1(_message.Message):
     EVENT_FIELD_NUMBER: _ClassVar[int]
     LOG_FIELD_NUMBER: _ClassVar[int]
     ARTIFACT_FIELD_NUMBER: _ClassVar[int]
+    DELIVERY_CLASS_FIELD_NUMBER: _ClassVar[int]
     record_index: int
     signal: str
     event_ts_unix_nano: int
@@ -238,7 +235,8 @@ class TelemetryRecordV1(_message.Message):
     event: TelemetryEventV1
     log: TelemetryLogV1
     artifact: TelemetryArtifactV1
-    def __init__(self, record_index: _Optional[int] = ..., signal: _Optional[str] = ..., event_ts_unix_nano: _Optional[int] = ..., observed_ts_unix_nano: _Optional[int] = ..., resource: _Optional[_Union[TelemetryResourceV1, _Mapping]] = ..., metric: _Optional[_Union[TelemetryMetricV1, _Mapping]] = ..., event: _Optional[_Union[TelemetryEventV1, _Mapping]] = ..., log: _Optional[_Union[TelemetryLogV1, _Mapping]] = ..., artifact: _Optional[_Union[TelemetryArtifactV1, _Mapping]] = ...) -> None: ...
+    delivery_class: str
+    def __init__(self, record_index: _Optional[int] = ..., signal: _Optional[str] = ..., event_ts_unix_nano: _Optional[int] = ..., observed_ts_unix_nano: _Optional[int] = ..., resource: _Optional[_Union[TelemetryResourceV1, _Mapping]] = ..., metric: _Optional[_Union[TelemetryMetricV1, _Mapping]] = ..., event: _Optional[_Union[TelemetryEventV1, _Mapping]] = ..., log: _Optional[_Union[TelemetryLogV1, _Mapping]] = ..., artifact: _Optional[_Union[TelemetryArtifactV1, _Mapping]] = ..., delivery_class: _Optional[str] = ...) -> None: ...
 
 class TelemetryBatchV1(_message.Message):
     __slots__ = ("schema_version", "catalog_version", "batch_id", "records")
