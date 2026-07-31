@@ -120,3 +120,22 @@ The pyramid and L1-to-L48 paths are implemented and passing their focused tests.
 - Result: every recovery rank reported `step=32`, `data_offset=8192`, 84 copied parameter leaves, 96 reset new-block optimizer leaves, and 19 preserved optimizer leaves. The grown model reached step 48 with loss 8.77 and saved its checkpoint. C0, P1, P2, and the D1 L1 source were all gang-admitted by 16:29:28 UTC with no task failure or preemption.
 - Interpretation: the growth implementation passes both structural and short numerical gates. W&B finalization stalled after uploading the recovery run, but Iris completed all four workers successfully; this is telemetry teardown, not a training failure.
 - Next action: require first finite metrics from every core arm, then compare loss, throughput, target fraction, overflow, and effective tokens at the 20:29:28 UTC four-hour checkpoint without stopping healthy jobs.
+
+### 2026-07-31 20:29 - CC16-006 four-hour checkpoint
+
+- Hypothesis: shallow data exposure or input-adjacent shared capacity reaches a useful early loss faster than uniform full-depth training on the same 16-GB200 allocation.
+- Commit Hash: `6481f682da`.
+- Command: C0, P1, P2, and D1 ran concurrently from a common wall-clock origin of 16:29:28 UTC. W&B rows were filtered to timestamps at or before the preregistered 20:29:28 UTC boundary. Loss comparisons use a 64-update trailing mean; C0/P1/P2 matched-token comparisons end at their largest common logged step.
+- Config: each arm retains the frozen `d3072/L48/E64/top4` 5.295B-active / 46.064B-stored model accounting, batch 256, sequence length 4,096, selected high learning rate, and 6,400-update horizon. D1 used L1 through step 4,480, then exact-state L48 growth.
+- Result:
+
+  | Arm | Boundary step | Tokens | 64-step mean loss | Throughput | MFU | Valid target fraction |
+  |---|---:|---:|---:|---:|---:|---:|
+  | C0 uniform | 2,474 | 2.595B | 2.20946 | 189.6k tok/s | 17.16% | 99.976% |
+  | P1 fat-first | 2,377 | 2.494B | 2.21144 | 189.6k tok/s | 17.16% | 99.976% |
+  | P2 fat-middle | 2,366 | 2.482B | 2.21457 | 188.0k tok/s | 17.02% | 99.976% |
+  | D1 L1-to-L48 | 5,795 | 6.078B | 2.35113 | 191.0k tok/s after growth | 17.29% after growth | 99.976% |
+
+  At common step 2,366, the 64-step means were 2.21443 / 2.21479 / 2.21457 for C0 / P1 / P2, a total spread of 0.00036. D1 processed 2.34 times as many tokens as C0 but trailed its wall-clock loss by 0.14167. D1 initially transferred strongly: after 127 logged L48 updates, its mean loss was 3.58067 versus C0's 5.78999 at the corresponding L48 update count. The advantage decayed into noise around 925-1,243 L48 updates; at 1,316 logged L48 updates D1 was 0.01847 worse than C0's corresponding 2.33266. C0 reached mean loss 2.5 in 1.30 hours and 2.4 in 1.79 hours; D1 needed 2.98 and 3.48 hours. P1/P2 followed C0 at matched steps but crossed the thresholds about nine minutes later because of additional first-time compilation. All four gangs remained on their first attempts with zero failures and zero preemptions.
+- Interpretation: active shared-expert width placement has not changed the learning curve through 2.48B tokens. The L1 source does implant state that gives a newly grown L48 model a large short-lived head start, but that benefit is erased after roughly one thousand L48 updates and does not compensate for the shallow phase in time-to-loss. This checkpoint is training-loss evidence only: in-run evaluation remains disabled because of issue #7712, and production overflow telemetry was not emitted with the low-overhead watch setting. The production-path canaries had zero overflow.
+- Next action: continue all healthy jobs toward the 12-hour horizon. Use the completed checkpoints for held-out Datamix, Paloma, factual retrieval, and manipulation evaluations before deciding whether to promote a shorter shallow phase or a less extreme source depth.
