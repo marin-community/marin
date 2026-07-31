@@ -12,11 +12,7 @@ plain-line renderers are shared with the curses TUI, which cannot use ``rich``.
 import json
 from datetime import datetime
 
-from rich.console import Console
-from rich.table import Table
-
 from rigging.fsutil.compression import uncompressed_name
-from rigging.fsutil.listing import Entry
 
 _SIZE_UNITS = ("B", "KB", "MB", "GB", "TB", "PB")
 
@@ -38,23 +34,6 @@ def format_size(size: int | None) -> str:
 
 def format_time(when: datetime | None) -> str:
     return "-" if when is None else when.strftime("%Y-%m-%d %H:%M")
-
-
-def print_entries(console: Console, entries: list[Entry], *, long: bool) -> None:
-    """Print a listing: names only, or a size/modified table under ``long``."""
-    if not long:
-        for entry in entries:
-            console.print(f"{entry.name}/" if entry.is_dir else entry.name, highlight=False)
-        return
-
-    table = Table(box=None, pad_edge=False, header_style="bold")
-    table.add_column("size", justify="right")
-    table.add_column("modified")
-    table.add_column("name")
-    for entry in entries:
-        name = f"{entry.name}/" if entry.is_dir else entry.name
-        table.add_row(format_size(entry.size), format_time(entry.mtime), name)
-    console.print(table)
 
 
 def file_lines(name: str, raw: bytes) -> list[str]:

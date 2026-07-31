@@ -8,20 +8,27 @@ current bucket, so the same command means the same thing from any shell, and a c
 name two different backends. Bare ``fsutil`` opens the interactive browser.
 """
 
+import importlib
 import logging
 import shutil
 import sys
 
 import click
-from rich.console import Console
-from rich.table import Table
 
 from rigging.filesystem.buckets import MissingCredentials, filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
 from rigging.filesystem.s3_compat import s3_credentials, s3_endpoint
 from rigging.filesystem.storage_path import StoragePath
-from rigging.fsutil.listing import ROOT, Preview, list_entries, read_decompressed_preview, read_preview, total_size
-from rigging.fsutil.render import file_lines, format_size, print_entries
+from rigging.fsutil.listing import (
+    ROOT,
+    Entry,
+    Preview,
+    list_entries,
+    read_decompressed_preview,
+    read_preview,
+    total_size,
+)
+from rigging.fsutil.render import file_lines, format_size, format_time
 from rigging.fsutil.tui import run as run_browser
 
 logger = logging.getLogger(__name__)
@@ -29,8 +36,6 @@ logger = logging.getLogger(__name__)
 # Streaming chunk for cross-backend copies, which cannot use a filesystem's own
 # server-side copy.
 _COPY_CHUNK = 8 * 1024 * 1024
-
-console = Console()
 
 
 @click.group(invoke_without_command=True)
@@ -49,7 +54,8 @@ def cli(ctx: click.Context, verbose: bool) -> None:
 @cli.command()
 def buckets() -> None:
     """List the declared buckets and whether their backend is reachable."""
-    table = Table(box=None, pad_edge=False, header_style="bold")
+    console, table_type = _rich_console_and_table()
+    table = table_type(box=None, pad_edge=False, header_style="bold")
     table.add_column("bucket")
     table.add_column("backend")
     table.add_column("endpoint")
@@ -69,7 +75,14 @@ def buckets() -> None:
 @click.option("-l", "--long", is_flag=True, help="Show size and modification time.")
 def list_command(url: str, long: bool) -> None:
     """List the immediate children of URL. With no URL, list the known buckets."""
-    print_entries(console, list_entries(url), long=long)
+    if long:
+        _require_rich()
+    entries = list_entries(url)
+    if not long:
+        for entry in entries:
+            click.echo(f"{entry.name}/" if entry.is_dir else entry.name)
+        return
+    _print_long_entries(entries)
 
 
 @cli.command()
@@ -100,9 +113,10 @@ def head(url: str, lines: int) -> None:
 @click.argument("url")
 def stat(url: str) -> None:
     """Print an object's metadata as the backend reports it."""
+    console, table_type = _rich_console_and_table()
     fs, path = filesystem_for(url)
     info = fs.info(path)
-    table = Table(box=None, pad_edge=False, show_header=False)
+    table = table_type(box=None, pad_edge=False, show_header=False)
     for key, value in sorted(info.items()):
         table.add_row(str(key), str(value))
     console.print(table)
@@ -156,7 +170,36 @@ def cp(src: str, dst: str, recursive: bool) -> None:
 @click.argument("url", default=ROOT)
 def browse(url: str) -> None:
     """Open the interactive browser, starting at URL (default: the bucket list)."""
+    _require_rich()
     run_browser(url)
+
+
+def _print_long_entries(entries: list[Entry]) -> None:
+    console, table_type = _rich_console_and_table()
+    table = table_type(box=None, pad_edge=False, header_style="bold")
+    table.add_column("size", justify="right")
+    table.add_column("modified")
+    table.add_column("name")
+    for entry in entries:
+        name = f"{entry.name}/" if entry.is_dir else entry.name
+        table.add_row(format_size(entry.size), format_time(entry.mtime), name)
+    console.print(table)
+
+
+def _rich_console_and_table():
+    _require_rich()
+    console_module = importlib.import_module("rich.console")
+    table_module = importlib.import_module("rich.table")
+    return console_module.Console(), table_module.Table
+
+
+def _require_rich() -> None:
+    try:
+        importlib.import_module("rich")
+    except ModuleNotFoundError as error:
+        if not (error.name or "").startswith("rich"):
+            raise
+        raise click.ClickException("this command requires Rich; install marin-rigging[fsutil]") from error
 
 
 def _read(url: str) -> bytes:

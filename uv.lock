@@ -4842,7 +4842,7 @@ dependencies = [
     { name = "marin-haliax" },
     { name = "marin-iris" },
     { name = "marin-levanter", extra = ["serve"] },
-    { name = "marin-rigging" },
+    { name = "marin-rigging", extra = ["fsutil"] },
     { name = "marin-zephyr" },
     { name = "markdownify" },
     { name = "mcp" },
@@ -5019,7 +5019,7 @@ requires-dist = [
     { name = "marin-haliax", editable = "lib/haliax" },
     { name = "marin-iris", editable = "lib/iris" },
     { name = "marin-levanter", extras = ["serve"], editable = "lib/levanter" },
-    { name = "marin-rigging", editable = "lib/rigging" },
+    { name = "marin-rigging", extras = ["fsutil"], editable = "lib/rigging" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
     { name = "markdownify", specifier = ">=0.14.1" },
     { name = "mcp", specifier = ">=1.28.1" },
@@ -5864,12 +5864,14 @@ dependencies = [
     { name = "pyjwt", extra = ["crypto"] },
     { name = "pyyaml" },
     { name = "requests" },
-    { name = "rich" },
     { name = "s3fs" },
     { name = "starlette" },
 ]
 
 [package.optional-dependencies]
+fsutil = [
+    { name = "rich" },
+]
 iap = [
     { name = "google-auth-oauthlib" },
 ]
@@ -5884,6 +5886,7 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+    { name = "rich" },
 ]
 test = [
     { name = "httpx" },
@@ -5891,6 +5894,7 @@ test = [
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+    { name = "rich" },
 ]
 
 [package.metadata]
@@ -5908,11 +5912,11 @@ requires-dist = [
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.12.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "requests", specifier = ">=2.0.0" },
-    { name = "rich", specifier = ">=13.7.0" },
+    { name = "rich", marker = "extra == 'fsutil'", specifier = ">=14.1.0" },
     { name = "s3fs", specifier = ">=2024.0.0" },
     { name = "starlette", specifier = ">=0.40" },
 ]
-provides-extras = ["iap", "secrets"]
+provides-extras = ["fsutil", "iap", "secrets"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -5921,6 +5925,7 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+    { name = "rich", specifier = ">=14.1.0" },
 ]
 test = [
     { name = "httpx", specifier = ">=0.28.1" },
@@ -5928,6 +5933,7 @@ test = [
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+    { name = "rich", specifier = ">=14.1.0" },
 ]
 
 [[package]]
