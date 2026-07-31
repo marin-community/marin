@@ -397,11 +397,7 @@ def test_set_counter_resets_average_count():
 
 
 def test_publish_telemetry_exports_aggregated_counter_snapshots_as_gauges(monkeypatch):
-    """The coordinator publishes because it owns the aggregate snapshot.
-
-    Shards run under ``SubprocessRunner`` by default, and nobody scrapes a
-    short-lived child's registry.
-    """
+    """The coordinator publishes the execution-level aggregate snapshot."""
     coord = _make_coordinator(
         [
             CounterSnapshot(counters={"records/in": CounterEntry(10)}, generation=1),

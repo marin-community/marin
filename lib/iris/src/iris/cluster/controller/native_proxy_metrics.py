@@ -117,10 +117,10 @@ def _merge_shared_counters(
 
 
 def _publish(name: str, value: float, attributes: dict[str, str], source_kind: str) -> None:
-    temporality = "current_snapshot" if source_kind == "gauge" else "cumulative_snapshot"
+    temporality = telemetry.CURRENT_SNAPSHOT if source_kind == "gauge" else telemetry.CUMULATIVE_SNAPSHOT
     telemetry.gauge(name).set(
         value,
-        attributes={**attributes, "source_kind": source_kind, "source_temporality": temporality},
+        attributes={**attributes, **telemetry.snapshot_attributes(source_kind, temporality)},
     )
 
 
@@ -208,7 +208,7 @@ class NativeProxyTelemetry:
     def _publish_proxy(self, snapshots: list[dict]) -> None:
         """Publish proxy transport load keyed by endpoint/method/route_kind.
 
-        Distinct from `iris_rpc_*` — a proxied Connect call appears in both and the
+        Distinct from `rpc_*` — a proxied Connect call appears in both and the
         two must not be summed. Each snapshot carries an exact ``aggregate`` (emitted
         as ``scope=total``) plus the bounded per-endpoint ``series`` (``scope=endpoint``).
 

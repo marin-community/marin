@@ -6,6 +6,7 @@ import logging
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import pytest
@@ -23,9 +24,33 @@ class FakeResponse:
         return self.payload
 
 
+TransportOutcome = Callable[[str], FakeResponse]
+
+
+def status_outcome(status_code: int) -> TransportOutcome:
+    return lambda batch_id: FakeResponse(
+        status_code,
+        {"batch_id": batch_id, "status": "accepted"} if status_code == 200 else {"error": {"code": "rejected"}},
+        {},
+    )
+
+
+def invalid_ack_outcome(batch_id: str) -> FakeResponse:
+    del batch_id
+    return FakeResponse(200, {"batch_id": "wrong", "status": "accepted"}, {})
+
+
+def error_outcome(error: BaseException) -> TransportOutcome:
+    def raise_error(batch_id: str) -> FakeResponse:
+        del batch_id
+        raise error
+
+    return raise_error
+
+
 class RecordingTransport:
-    def __init__(self, outcomes: list[int | BaseException | str] | None = None) -> None:
-        self.outcomes = deque(outcomes or [200])
+    def __init__(self, outcomes: list[TransportOutcome] | None = None) -> None:
+        self.outcomes = deque(outcomes or [status_outcome(200)])
         self.requests: list[tuple[str, bytes, str, tuple[float, float]]] = []
         self.accepted = threading.Event()
         self.rejected = threading.Event()
@@ -33,16 +58,13 @@ class RecordingTransport:
 
     def post(self, endpoint: str, body: bytes, batch_id: str, timeout: tuple[float, float]) -> FakeResponse:
         self.requests.append((endpoint, body, batch_id, timeout))
-        outcome = self.outcomes.popleft() if self.outcomes else 200
-        if isinstance(outcome, BaseException):
-            raise outcome
-        if outcome == "invalid_ack":
-            return FakeResponse(200, {"batch_id": "wrong", "status": "accepted"}, {})
-        if outcome == 200:
+        outcome = self.outcomes.popleft() if self.outcomes else status_outcome(200)
+        response = outcome(batch_id)
+        if response.status_code == 200 and response.payload.get("batch_id") == batch_id:
             self.accepted.set()
-            return FakeResponse(200, {"batch_id": batch_id, "status": "accepted"}, {})
-        self.rejected.set()
-        return FakeResponse(outcome, {"error": {"code": "rejected"}}, {})
+        elif response.status_code >= 400:
+            self.rejected.set()
+        return response
 
     def close(self) -> None:
         self.closed.set()
@@ -126,7 +148,9 @@ def test_invalid_configuration_stays_inert(caplog: pytest.LogCaptureFixture) -> 
 
 
 def test_retry_reuses_exact_batch_id_and_body(monkeypatch: pytest.MonkeyPatch) -> None:
-    transport = RecordingTransport([requests.ConnectionError("offline"), "invalid_ack", 200])
+    transport = RecordingTransport(
+        [error_outcome(requests.ConnectionError("offline")), invalid_ack_outcome, status_outcome(200)]
+    )
     configure(monkeypatch, transport)
 
     telemetry.counter("requests", unit="request").add(2, attributes={"route": "/chat"})
@@ -191,7 +215,7 @@ def test_pending_and_queued_records_share_hard_caps(
 
 
 def test_terminal_response_drops_batch_and_records_loss(monkeypatch: pytest.MonkeyPatch) -> None:
-    transport = RecordingTransport([422])
+    transport = RecordingTransport([status_outcome(422)])
     configure(monkeypatch, transport)
 
     telemetry.event("invalid", {"reason": "test"})
@@ -355,7 +379,7 @@ def test_raising_log_handler_cannot_escape_configuration(monkeypatch: pytest.Mon
 
 
 def test_raising_log_handler_cannot_stop_exporter_settlement(monkeypatch: pytest.MonkeyPatch) -> None:
-    transport = RecordingTransport([422])
+    transport = RecordingTransport([status_outcome(422)])
     configure(monkeypatch, transport)
     handler = RaisingHandler()
     telemetry.logger.addHandler(handler)

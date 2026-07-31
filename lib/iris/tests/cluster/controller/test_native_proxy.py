@@ -22,6 +22,7 @@ from iris.cluster.controller.native_proxy import PROXY_DECISION_PATH, NativeProx
 from iris.cluster.controller.native_proxy_metrics import NativeProxyTelemetry
 from iris.managed_thread import ThreadContainer
 from rigging import telemetry
+from rigging.testing import RecordingTelemetryTransport
 from rigging.timing import Duration, ExponentialBackoff
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -32,60 +33,10 @@ _ENDPOINT_NAME = "/system/native-test"
 _ENCODED_NAME = "system.native-test"
 
 
-class _TelemetryResponse:
-    status_code = 200
-
-    def __init__(self, batch_id: str) -> None:
-        self.batch_id = batch_id
-        self.headers: dict[str, str] = {}
-
-    def json(self):
-        return {"batch_id": self.batch_id, "status": "accepted"}
-
-
-class _TelemetryTransport:
-    def __init__(self) -> None:
-        self.records: list[dict] = []
-        self.condition = threading.Condition()
-
-    def post(self, endpoint, body, batch_id, timeout):
-        with self.condition:
-            self.records.extend(json.loads(body)["records"])
-            self.condition.notify_all()
-        return _TelemetryResponse(batch_id)
-
-    def close(self):
-        pass
-
-    def record(self, name: str, labels: dict[str, str]) -> dict:
-        def matches(record: dict) -> bool:
-            return record["name"] == name and all(
-                record["attributes"].get(key) == value for key, value in labels.items()
-            )
-
-        with self.condition:
-            assert self.condition.wait_for(lambda: any(matches(record) for record in self.records), timeout=5), [
-                record["name"] for record in self.records
-            ]
-            return [record for record in self.records if matches(record)][-1]
-
-    def wait_for_value(self, name: str, labels: dict[str, str], expected: float) -> None:
-        with self.condition:
-            assert self.condition.wait_for(
-                lambda: any(
-                    record["name"] == name
-                    and record["value"] == expected
-                    and all(record["attributes"].get(key) == value for key, value in labels.items())
-                    for record in self.records
-                ),
-                timeout=5,
-            )
-
-
 @pytest.fixture
 def telemetry_transport(monkeypatch):
     telemetry.shutdown(0)
-    transport = _TelemetryTransport()
+    transport = RecordingTelemetryTransport()
     monkeypatch.setattr(telemetry, "_RequestsTransport", lambda: transport)
     yield transport
     telemetry.shutdown(1)
@@ -359,9 +310,9 @@ def test_native_metrics_concurrent_detach_and_reattach_does_not_revive_old_poll_
 
 
 def test_native_proxy_transport_metrics_count_forwarded_bytes(make_controller, telemetry_transport) -> None:
-    """A forwarded endpoint request lands in `iris_proxy_*`, byte-exact; a controller
-    RPC does not. This also pins the Rust snapshot JSON to the collector's contract:
-    a shape drift would raise when the collector unpacks the snapshot."""
+    """A forwarded endpoint request emits byte-exact `proxy_*` telemetry, while a
+    controller RPC does not. This also pins the Rust snapshot JSON to the publisher's
+    contract: a shape drift would raise when the publisher unpacks the snapshot."""
     threads = ThreadContainer()
     try:
         upstream, _ = _start_upstream(threads)

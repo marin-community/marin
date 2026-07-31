@@ -24,6 +24,12 @@ use crate::store::Store;
 
 type TestHttpClient = HyperClient<HttpConnector, ClientBody>;
 
+struct TestResponse {
+    status: StatusCode,
+    headers: HeaderMap,
+    payload: Value,
+}
+
 #[tokio::test]
 async fn cancelled_waiter_does_not_release_owned_work_or_skip_completion() {
     let admission = Arc::new(Semaphore::new(1));
@@ -79,7 +85,7 @@ async fn post(
     batch_id: Option<&str>,
     content_type: Option<&str>,
     bearer: Option<&str>,
-) -> (StatusCode, HeaderMap, Value) {
+) -> TestResponse {
     let mut request = Request::post(format!("http://{addr}/v1/telemetry"));
     if let Some(batch_id) = batch_id {
         request = request.header("idempotency-key", batch_id);
@@ -99,7 +105,11 @@ async fn post(
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     assert!(bytes.len() <= 1 << 20);
     let payload = serde_json::from_slice(&bytes).unwrap();
-    (status, headers, payload)
+    TestResponse {
+        status,
+        headers,
+        payload,
+    }
 }
 
 fn batch(batch_id: &str) -> Vec<u8> {
@@ -147,7 +157,7 @@ async fn accepted_batch_is_queryable_through_normal_store_rows() {
     let client = http_client();
     let batch_id = "f47ac10b-58cc-4372-a567-0e02b2c3d479";
 
-    let (status, _, ack) = post(
+    let response = post(
         &client,
         addr,
         batch(batch_id),
@@ -157,10 +167,10 @@ async fn accepted_batch_is_queryable_through_normal_store_rows() {
     )
     .await;
 
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(ack["status"], "accepted");
-    assert_eq!(ack["deduplicated"], false);
-    assert_eq!(ack["record_count"], 2);
+    assert_eq!(response.status, StatusCode::OK);
+    assert_eq!(response.payload["status"], "accepted");
+    assert_eq!(response.payload["deduplicated"], false);
+    assert_eq!(response.payload["record_count"], 2);
     store
         .await_persisted("telemetry_v1", 1, Duration::from_secs(5))
         .await
@@ -232,13 +242,16 @@ async fn repeated_and_concurrent_requests_append_once_but_changed_content_confli
         None,
     );
     let (first, second) = tokio::join!(first, second);
-    assert_eq!(first.0, StatusCode::OK);
-    assert_eq!(second.0, StatusCode::OK);
-    assert_ne!(first.2["deduplicated"], second.2["deduplicated"]);
+    assert_eq!(first.status, StatusCode::OK);
+    assert_eq!(second.status, StatusCode::OK);
+    assert_ne!(
+        first.payload["deduplicated"],
+        second.payload["deduplicated"]
+    );
 
     let mut changed: Value = serde_json::from_slice(&body).unwrap();
     changed["records"][0]["value"] = json!(33.0);
-    let (status, _, error) = post(
+    let response = post(
         &client,
         addr,
         serde_json::to_vec(&changed).unwrap(),
@@ -247,8 +260,8 @@ async fn repeated_and_concurrent_requests_append_once_but_changed_content_confli
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(error["error"]["code"], "idempotency_conflict");
+    assert_eq!(response.status, StatusCode::CONFLICT);
+    assert_eq!(response.payload["error"]["code"], "idempotency_conflict");
 
     store
         .await_persisted("telemetry_v1", 1, Duration::from_secs(5))
@@ -271,7 +284,7 @@ async fn malformed_headers_and_records_have_stable_json_errors() {
     let client = http_client();
     let batch_id = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
 
-    let (status, _, error) = post(
+    let response = post(
         &client,
         addr,
         batch(batch_id),
@@ -280,12 +293,12 @@ async fn malformed_headers_and_records_have_stable_json_errors() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(error["error"]["code"], "invalid_request");
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert_eq!(response.payload["error"]["code"], "invalid_request");
 
     let mut unknown: Value = serde_json::from_slice(&batch(batch_id)).unwrap();
     unknown["records"][0]["unexpected"] = json!(true);
-    let (status, _, error) = post(
+    let response = post(
         &client,
         addr,
         serde_json::to_vec(&unknown).unwrap(),
@@ -294,10 +307,10 @@ async fn malformed_headers_and_records_have_stable_json_errors() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(error["error"]["code"], "invalid_request");
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert_eq!(response.payload["error"]["code"], "invalid_request");
 
-    let (status, _, error) = post(
+    let response = post(
         &client,
         addr,
         batch(batch_id),
@@ -306,8 +319,8 @@ async fn malformed_headers_and_records_have_stable_json_errors() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(error["error"]["code"], "invalid_request");
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert_eq!(response.payload["error"]["code"], "invalid_request");
 }
 
 #[tokio::test]
@@ -318,7 +331,7 @@ async fn body_and_normalized_amplification_limits_return_413() {
     let batch_id = "550e8400-e29b-41d4-a716-446655440000";
 
     let oversized = vec![b' '; (4 << 20) + 1];
-    let (status, _, error) = post(
+    let response = post(
         &client,
         addr,
         oversized,
@@ -327,8 +340,8 @@ async fn body_and_normalized_amplification_limits_return_413() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
-    assert_eq!(error["error"]["code"], "request_too_large");
+    assert_eq!(response.status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(response.payload["error"]["code"], "request_too_large");
 
     let repeated_records = (0..5_000)
         .map(|index| {
@@ -349,7 +362,7 @@ async fn body_and_normalized_amplification_limits_return_413() {
     }))
     .unwrap();
     assert!(amplified.len() < 4 << 20);
-    let (status, _, error) = post(
+    let response = post(
         &client,
         addr,
         amplified,
@@ -358,8 +371,8 @@ async fn body_and_normalized_amplification_limits_return_413() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
-    assert_eq!(error["error"]["code"], "request_too_large");
+    assert_eq!(response.status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(response.payload["error"]["code"], "request_too_large");
 }
 
 #[tokio::test]
@@ -426,7 +439,7 @@ async fn record_attribute_and_string_bounds_are_checked_before_storage() {
             "records": records
         }))
         .unwrap();
-        let (status, _, _) = post(
+        let response = post(
             &client,
             addr,
             body,
@@ -435,7 +448,7 @@ async fn record_attribute_and_string_bounds_are_checked_before_storage() {
             None,
         )
         .await;
-        assert_eq!(status, expected);
+        assert_eq!(response.status, expected);
     }
 }
 
@@ -452,7 +465,7 @@ async fn admission_and_store_unavailability_are_retryable_json_errors() {
         },
     )
     .await;
-    let (status, headers, error) = post(
+    let response = post(
         &client,
         addr,
         batch(batch_id),
@@ -461,9 +474,9 @@ async fn admission_and_store_unavailability_are_retryable_json_errors() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
-    assert_eq!(headers["retry-after"], "1");
-    assert_eq!(error["error"]["code"], "admission_limited");
+    assert_eq!(response.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.headers["retry-after"], "1");
+    assert_eq!(response.payload["error"]["code"], "admission_limited");
 
     let store = disk_store("telemetry-schema-conflict");
     store
@@ -477,7 +490,7 @@ async fn admission_and_store_unavailability_are_retryable_json_errors() {
         )
         .unwrap();
     let (addr, _) = serve(store, AuthPolicy::allow_localhost()).await;
-    let (status, headers, error) = post(
+    let response = post(
         &client,
         addr,
         batch(batch_id),
@@ -486,9 +499,9 @@ async fn admission_and_store_unavailability_are_retryable_json_errors() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(headers["retry-after"], "1");
-    assert_eq!(error["error"]["code"], "storage_unavailable");
+    assert_eq!(response.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.headers["retry-after"], "1");
+    assert_eq!(response.payload["error"]["code"], "storage_unavailable");
 }
 
 #[tokio::test]
@@ -503,7 +516,7 @@ async fn telemetry_route_uses_existing_default_deny_auth_policy() {
     let client = http_client();
     let batch_id = "123e4567-e89b-12d3-a456-426614174000";
 
-    let (status, _, error) = post(
+    let response = post(
         &client,
         addr,
         batch(batch_id),
@@ -513,6 +526,6 @@ async fn telemetry_route_uses_existing_default_deny_auth_policy() {
     )
     .await;
 
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert_eq!(error["error"]["code"], "unauthorized");
+    assert_eq!(response.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(response.payload["error"]["code"], "unauthorized");
 }

@@ -24,6 +24,7 @@ Fetch = Callable[[str], str | None]
 
 
 def _scrape(url: str) -> str | None:
+    """Return response text, or `None` after a transport or HTTP failure."""
     try:
         response = requests.get(url, timeout=_SCRAPE_TIMEOUT)
     except requests.RequestException as exc:
@@ -36,7 +37,6 @@ def _scrape(url: str) -> str | None:
 
 
 def parse_vllm_families(body: str) -> list[Metric]:
-    """Parse a Prometheus body and retain only vLLM-owned families."""
     return [family for family in text_string_to_metric_families(body) if family.name.startswith(_VLLM_METRIC_PREFIX)]
 
 
@@ -47,10 +47,8 @@ def publish_vllm_families(families: list[Metric]) -> None:
             cumulative = family.type in {"counter", "histogram"} or (
                 family.type == "summary" and sample.name.endswith(("_count", "_sum"))
             )
-            common = {
-                "source_kind": family.type,
-                "source_temporality": "cumulative_snapshot" if cumulative else "current_snapshot",
-            }
+            temporality = telemetry.CUMULATIVE_SNAPSHOT if cumulative else telemetry.CURRENT_SNAPSHOT
+            common = telemetry.snapshot_attributes(family.type, temporality)
             name = sample.name.removeprefix(_VLLM_METRIC_PREFIX)
             telemetry.gauge(name).set(float(sample.value), attributes={**sample.labels, **common})
 

@@ -6,6 +6,7 @@
 import dataclasses
 import logging
 import re
+from collections.abc import Mapping
 from enum import IntEnum
 from time import time
 from typing import Any, Optional
@@ -19,8 +20,8 @@ from levanter.tracker.histogram import SummaryStats
 
 logger = logging.getLogger(__name__)
 
-_CURRENT = {"source_kind": "gauge", "source_temporality": "current_snapshot"}
-_CURRENT_HISTOGRAM = {"source_kind": "histogram", "source_temporality": "current_snapshot"}
+_CURRENT = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
+_CURRENT_HISTOGRAM = telemetry.snapshot_attributes("histogram", telemetry.CURRENT_SNAPSHOT)
 
 
 class TrainingPhase(IntEnum):
@@ -52,11 +53,7 @@ def _as_scalar(value: Any) -> float | None:
     except (ValueError, TypeError):
         logger.debug("value of type %s has no array form", type(value).__name__, exc_info=True)
         return None
-    if (
-        array.ndim != 0
-        or not np.issubdtype(array.dtype, np.number)
-        or np.issubdtype(array.dtype, np.complexfloating)
-    ):
+    if array.ndim != 0 or not np.issubdtype(array.dtype, np.number) or np.issubdtype(array.dtype, np.complexfloating):
         return None
     return float(array)
 
@@ -70,7 +67,7 @@ class TelemetryTracker(Tracker):
         _set("progress_time_seconds", 0)
         set_training_phase(TrainingPhase.INITIALIZING)
 
-    def _publish(self, metrics: dict[str, Any] | Any) -> None:
+    def _publish(self, metrics: Mapping[str, object]) -> None:
         for key, value in metrics.items():
             if isinstance(value, SummaryStats):
                 self._publish_summary(key, value)

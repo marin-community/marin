@@ -1,14 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
-import threading
 from pathlib import Path
 
-from rigging import telemetry
-
 from marin.inference.vllm_metrics import VllmMetricsForwarder, parse_vllm_families, publish_vllm_families
-
+from rigging import telemetry
+from rigging.testing import RecordingTelemetryTransport
 
 _SCRAPE = """
 # TYPE vllm:generation_tokens_total counter
@@ -24,35 +21,9 @@ process_cpu_seconds_total 9
 """
 
 
-class _Response:
-    status_code = 200
-
-    def __init__(self, batch_id: str) -> None:
-        self.batch_id = batch_id
-        self.headers: dict[str, str] = {}
-
-    def json(self):
-        return {"batch_id": self.batch_id, "status": "accepted"}
-
-
-class _Transport:
-    def __init__(self) -> None:
-        self.records: list[dict] = []
-        self.condition = threading.Condition()
-
-    def post(self, endpoint, body, batch_id, timeout):
-        with self.condition:
-            self.records.extend(json.loads(body)["records"])
-            self.condition.notify_all()
-        return _Response(batch_id)
-
-    def close(self):
-        pass
-
-
 def test_vllm_cumulative_snapshots_use_direct_gauge_wire_format(monkeypatch):
     telemetry.shutdown(0)
-    transport = _Transport()
+    transport = RecordingTelemetryTransport()
     monkeypatch.setattr(telemetry, "_RequestsTransport", lambda: transport)
     telemetry.configure(endpoint="http://finelog/v1/telemetry", service="vllm", attributes={"job_id": "/serve"})
 

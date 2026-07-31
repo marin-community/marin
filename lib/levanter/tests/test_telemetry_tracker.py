@@ -1,53 +1,20 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
-import threading
-
 import jax.numpy as jnp
 import numpy as np
 import pytest
 from rigging import telemetry
+from rigging.testing import RecordingTelemetryTransport
 
 from levanter.tracker.histogram import SummaryStats
 from levanter.tracker.telemetry import TelemetryConfig, TelemetryTracker, TrainingPhase
 
 
-class _Response:
-    status_code = 200
-
-    def __init__(self, batch_id: str) -> None:
-        self._batch_id = batch_id
-        self.headers: dict[str, str] = {}
-
-    def json(self):
-        return {"batch_id": self._batch_id, "status": "accepted"}
-
-
-class _RecordingTransport:
-    def __init__(self) -> None:
-        self.records: list[dict] = []
-        self.condition = threading.Condition()
-
-    def post(self, endpoint, body, batch_id, timeout):
-        with self.condition:
-            self.records.extend(json.loads(body)["records"])
-            self.condition.notify_all()
-        return _Response(batch_id)
-
-    def close(self):
-        pass
-
-    def wait_for(self, count: int) -> list[dict]:
-        with self.condition:
-            assert self.condition.wait_for(lambda: len(self.records) >= count, timeout=5)
-            return list(self.records)
-
-
 @pytest.fixture
 def exported(monkeypatch):
     telemetry.shutdown(0)
-    transport = _RecordingTransport()
+    transport = RecordingTelemetryTransport()
     monkeypatch.setattr(telemetry, "_RequestsTransport", lambda: transport)
     telemetry.configure(endpoint="http://finelog/v1/telemetry", service="levanter", attributes={"run": "run-42"})
     yield transport
@@ -108,7 +75,9 @@ def test_training_progress_and_phase_are_current_snapshots(exported, monkeypatch
 
 def test_configures_owning_application_once(monkeypatch):
     calls = []
-    monkeypatch.setattr("levanter.tracker.telemetry.runtime_telemetry.configure", lambda *args, **kwargs: calls.append((args, kwargs)))
+    monkeypatch.setattr(
+        "levanter.tracker.telemetry.runtime_telemetry.configure", lambda *args, **kwargs: calls.append((args, kwargs))
+    )
 
     assert isinstance(TelemetryConfig().init("run-42"), TelemetryTracker)
     assert calls == [(("levanter",), {"attributes": {"run": "run-42"}})]

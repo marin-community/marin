@@ -97,7 +97,7 @@ def training_stall_alert_rows(task_states: pa.Table, telemetry_metrics: pa.Table
     """Project active jobs and progress metrics into Grafana warning rows.
 
     Each row has string labels and exactly one numeric value. A job enrolls on
-    `levanter_phase`; without it the row reports `producer_missing` at zero
+    `phase`; without it the row reports `producer_missing` at zero
     rather than a stall. Absent progress is itself evidence once a job is
     enrolled.
     """

@@ -4,6 +4,7 @@
 """Bounded, best-effort process telemetry exported directly to Finelog."""
 
 import atexit
+import enum
 import json
 import logging
 import math
@@ -25,11 +26,15 @@ DEFAULT_MAX_QUEUE_RECORDS = 10_000
 DEFAULT_MAX_QUEUE_BYTES = 16 << 20
 DEFAULT_MAX_BATCH_RECORDS = 1_000
 DEFAULT_MAX_BATCH_BYTES = 1 << 20
+CURRENT_SNAPSHOT = "current_snapshot"
+CUMULATIVE_SNAPSHOT = "cumulative_snapshot"
 _MAX_REQUEST_BYTES = 4 << 20
 _MAX_SHUTDOWN_TIMEOUT = 5.0
 _WARNING_INTERVAL = 60.0
 _MAX_ATTRIBUTES = 64
 _MAX_STRING_LENGTH = 4_096
+_MAX_EVENT_DEPTH = 32
+_EVENT_KIND = "event"
 
 
 @dataclass(frozen=True)
@@ -113,6 +118,11 @@ class Histogram(_Handle):
         _emit(self.kind, self.name, value=value, unit=self.unit, attributes=attributes)
 
 
+def snapshot_attributes(source_kind: str, temporality: str) -> dict[str, str]:
+    """Return the canonical attributes for a source-provided snapshot."""
+    return {"source_kind": source_kind, "source_temporality": temporality}
+
+
 class _Response(Protocol):
     status_code: int
     headers: Mapping[str, str]
@@ -148,6 +158,12 @@ class _PendingBatch:
     body: bytes
     record_count: int
     record_bytes: int
+
+
+class _DeliveryOutcome(enum.Enum):
+    DELIVERED = enum.auto()
+    REJECTED = enum.auto()
+    STOPPED = enum.auto()
 
 
 class _Runtime:
@@ -195,9 +211,9 @@ class _Runtime:
                 batch = self._next_batch()
                 if batch is None:
                     return
-                delivered = self._deliver(batch)
-                self._settle(batch, lost=not delivered)
-                if self._stopping():
+                outcome = self._deliver(batch)
+                self._settle(batch, lost=outcome is not _DeliveryOutcome.DELIVERED)
+                if outcome is _DeliveryOutcome.STOPPED or self._stopping():
                     self._abandon_remaining()
                     return
         except Exception:
@@ -207,7 +223,7 @@ class _Runtime:
             try:
                 self._transport.close()
             except Exception:
-                pass
+                _warn("telemetry transport failed to close")
 
     def _next_batch(self) -> _PendingBatch | None:
         with self._condition:
@@ -256,7 +272,7 @@ class _Runtime:
     def max_record_bytes(self) -> int:
         return min(self.config.max_queue_bytes, self.config.max_batch_bytes - self._empty_envelope_size())
 
-    def _deliver(self, batch: _PendingBatch) -> bool:
+    def _deliver(self, batch: _PendingBatch) -> _DeliveryOutcome:
         backoff = ExponentialBackoff(
             initial=self.config.retry_initial,
             maximum=self.config.retry_maximum,
@@ -272,14 +288,14 @@ class _Runtime:
                     (self.config.connect_timeout, self.config.request_timeout),
                 )
                 if response.status_code == 200 and _valid_ack(response, batch.batch_id):
-                    return True
+                    return _DeliveryOutcome.DELIVERED
                 if 400 <= response.status_code < 500 and response.status_code != 429:
                     _warn(f"telemetry batch rejected with HTTP {response.status_code}")
-                    return False
+                    return _DeliveryOutcome.REJECTED
             except Exception:
                 pass
             if self._stopping():
-                return False
+                return _DeliveryOutcome.STOPPED
             delay = backoff.next_interval()
             with self._condition:
                 self._condition.wait_for(lambda: self._stop, timeout=delay)
@@ -304,6 +320,8 @@ class _Runtime:
             return self._stop
 
 
+# The public API is an implicit process singleton: configure once, then use
+# module-level handles without passing runtime state through every call site.
 _configuration_lock = threading.Lock()
 _runtime: _Runtime | None = None
 _last_warning: float | None = None
@@ -327,7 +345,7 @@ def histogram(name: str, *, unit: str = "") -> Histogram:
 
 def event(name: str, body: Any, *, attributes: Mapping[str, str] | None = None) -> None:
     """Emit one structured event when configured."""
-    _emit("event", name, body=body, attributes=attributes)
+    _emit(_EVENT_KIND, name, body=body, attributes=attributes)
 
 
 def configure(
@@ -344,7 +362,7 @@ def configure(
     retry_initial: float = 0.1,
     retry_maximum: float = 5.0,
 ) -> None:
-    """Configure the process exporter; invalid configuration leaves it inert."""
+    """Configure the process-wide exporter; the first valid configuration wins."""
     global _runtime
     try:
         config = _Config(
@@ -381,15 +399,23 @@ def shutdown(timeout: float = 5.0) -> None:
     with _configuration_lock:
         runtime, _runtime = _runtime, None
     if runtime is not None:
+        invalid_timeout = False
         try:
             budget = float(timeout)
         except Exception:
             budget = 0.0
-        budget = min(budget, _MAX_SHUTDOWN_TIMEOUT) if math.isfinite(budget) and budget > 0 else 0.0
+            invalid_timeout = True
+        if not math.isfinite(budget) or budget < 0:
+            budget = 0.0
+            invalid_timeout = True
+        else:
+            budget = min(budget, _MAX_SHUTDOWN_TIMEOUT)
+        if invalid_timeout:
+            _warn("telemetry shutdown received an invalid timeout; skipping the final flush")
         try:
             runtime.stop(budget)
         except Exception:
-            pass
+            _warn("telemetry exporter failed during shutdown")
 
 
 def runtime_status() -> TelemetryStatus:
@@ -422,7 +448,7 @@ def _emit(
             "name": name,
             "timestamp_ms": int(time.time() * 1_000),
         }
-        if kind == "event":
+        if kind == _EVENT_KIND:
             record_budget = runtime.max_record_bytes()
             fixed_size = len(_json_bytes_bounded({**record, "body": None}, record_budget))
             _validate_event_body(body, record_budget - fixed_size)
@@ -478,8 +504,8 @@ def _validate_event_body(value: Any, budget: int) -> None:
     def visit(item: Any, depth: int, remaining_nodes: int, remaining_bytes: int) -> tuple[int, int]:
         if remaining_nodes <= 0:
             raise ValueError("event body exceeds the record node budget")
-        if depth > 32:
-            raise ValueError("event body exceeds JSON depth 32")
+        if depth > _MAX_EVENT_DEPTH:
+            raise ValueError(f"event body exceeds JSON depth {_MAX_EVENT_DEPTH}")
         remaining_nodes -= 1
         if isinstance(item, str):
             remaining_bytes = consume(remaining_bytes, string_size(item, "event body string", remaining_bytes, 2))

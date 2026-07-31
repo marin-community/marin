@@ -38,6 +38,8 @@ const MAX_ATTRIBUTES: usize = 64;
 const MAX_STRING_BYTES: usize = 4_096;
 const MAX_JSON_DEPTH: usize = 32;
 const NORMALIZED_ROW_OVERHEAD: usize = 128;
+const TELEMETRY_VERSION: u32 = 1;
+const ERROR_CODE_INTERNAL: &str = "internal";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -225,8 +227,8 @@ struct PreparedBatch {
     record_count: usize,
 }
 
-/// Build the authenticated telemetry route. Namespace registration uses the
-/// ordinary catalog API once; every request then enters through `Store::write_rows`.
+/// Return an authenticated `POST /v1/telemetry` router with bounded admission and
+/// process-local retry deduplication.
 pub fn router(
     store: Arc<Store>,
     auth: Arc<AuthPolicy>,
@@ -292,7 +294,7 @@ async fn post_telemetry(
         None => {
             return Err(ApiError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "internal",
+                ERROR_CODE_INTERNAL,
                 "authenticated identity is missing",
             ));
         }
@@ -310,7 +312,7 @@ async fn post_telemetry(
     let ack = run_to_completion(work).await.map_err(|join| {
         ApiError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "internal",
+            ERROR_CODE_INTERNAL,
             format!("telemetry request task failed: {join}"),
         )
     })??;
@@ -329,7 +331,7 @@ async fn complete_request(
         .map_err(|join| {
             ApiError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "internal",
+                ERROR_CODE_INTERNAL,
                 format!("telemetry normalization task failed: {join}"),
             )
         })??;
@@ -350,14 +352,14 @@ async fn complete_request(
     .map_err(|join| {
         ApiError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "internal",
+            ERROR_CODE_INTERNAL,
             format!("telemetry storage task failed: {join}"),
         )
     })?
     .map_err(store_error)?;
 
     let ack = TelemetryAck {
-        version: 1,
+        version: TELEMETRY_VERSION,
         batch_id: prepared.batch_id_text,
         status: "accepted",
         deduplicated: false,
@@ -427,8 +429,10 @@ fn prepare_batch(idempotency_key: &str, body: &[u8]) -> Result<PreparedBatch, Ap
 }
 
 fn validate_batch(batch: &TelemetryBatch) -> Result<(), ApiError> {
-    if batch.version != 1 {
-        return Err(ApiError::bad_request("version must be 1"));
+    if batch.version != TELEMETRY_VERSION {
+        return Err(ApiError::bad_request(format!(
+            "version must be {TELEMETRY_VERSION}"
+        )));
     }
     validate_string(&batch.resource.service, "resource.service", false)?;
     validate_attributes(&batch.resource.attributes, "resource.attributes")?;
@@ -569,7 +573,7 @@ fn normalize_batch(batch: &TelemetryBatch) -> Result<Vec<u8>, ApiError> {
     let record_batch = RecordBatch::try_new(
         Arc::clone(&arrow_schema),
         vec![
-            Arc::new(Int32Array::from(vec![1_i32; row_count])),
+            Arc::new(Int32Array::from(vec![TELEMETRY_VERSION as i32; row_count])),
             Arc::new(Int64Array::from(
                 batch
                     .records
@@ -603,7 +607,7 @@ fn normalize_batch(batch: &TelemetryBatch) -> Result<Vec<u8>, ApiError> {
     encode_ipc(&arrow_schema, &[record_batch]).map_err(|error| {
         ApiError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "internal",
+            ERROR_CODE_INTERNAL,
             format!("could not encode telemetry: {error}"),
         )
     })

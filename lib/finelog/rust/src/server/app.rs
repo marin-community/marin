@@ -13,6 +13,7 @@
 //! [strip-forwarded-prefix middleware]  (outermost; normalizes the URI path)
 //! [legacy-path middleware]             (transport layer; rewrites the URI)
 //!   /health
+//!   /v1/telemetry       (authenticated bounded JSON ingestion)
 //!   /debug/*            (only with --debug-admin)
 //!   /static, /favicon.ico, /, /{*rest}   (SPA, before the fallback)
 //!   .fallback_service(connect)            (RPC POSTs land here)

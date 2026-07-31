@@ -95,7 +95,7 @@ MAX_WORKERS_PER_JOB = 1_024
 
 ZEPHYR_PROGRESS_TIME_METRIC = "progress_time_seconds"
 
-_SNAPSHOT_ATTRIBUTES = {"source_kind": "gauge", "source_temporality": "current_snapshot"}
+_SNAPSHOT_ATTRIBUTES = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
 
 
 class ShardFailureKind(enum.StrEnum):
@@ -442,10 +442,9 @@ class ZephyrCoordinator:
     def _publish_telemetry(self) -> None:
         """Publish coordinator-owned pipeline counter snapshots.
 
-        The coordinator is the only process that both holds the aggregated
-        counters and serves the routes: shards run in short-lived subprocesses
-        under ``SubprocessRunner`` (the distributed default), whose registries
-        nobody scrapes.
+        The coordinator owns the aggregate snapshot. Shards run in short-lived
+        subprocesses under ``SubprocessRunner``, so publishing here preserves a
+        complete execution-level view.
         """
         attributes = {**_SNAPSHOT_ATTRIBUTES, "run": self._execution_id}
         for name, value in self.get_counters().items():
