@@ -8,19 +8,20 @@ Used by the reduce stage when the number of scatter chunks exceeds
 budget.
 
 Pass 1: consume the input LazyFrame stream in groups of ``fan_in`` frames.
-Merge each group with ``in_memory_k_way_merge`` and spill the sorted result
-to a runfile via :class:`SpillWriter`.
+Merge each group with :func:`polars.merge_sorted` and spill the sorted result
+to a zstd-compressed parquet run file.
 
-Pass 2: read all run files via :class:`SpillReader`, merge with
-``polars.merge_sorted``, and yield items. Run files are deleted after the
-merge completes.
+Pass 2: read all run files via :func:`polars.scan_parquet`, merge with
+:func:`polars.merge_sorted`, and yield DataFrame batches. Run files are
+deleted after the merge completes (or on error).
 """
 
+import io
 import logging
 from collections.abc import Iterator
 
 import polars as pl
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import open_url, url_to_fs
 
 logger = logging.getLogger(__name__)
 
@@ -65,26 +66,30 @@ def external_sort_merge(
 
     spill_files: list[str] = []
 
-    # TODO: When we upgrade to Python 3.12, use itertools.batched
-    batches = [input_frames[i : i + fan_in] for i in range(0, len(input_frames), fan_in)]
-    for idx, batch in enumerate(batches):
-        merged = pl.merge_sorted(batch, key=sort_key)
-
-        spill_file = f"{external_sort_dir}/run-{idx:04d}.spill"
-        merged.sink_parquet(spill_file, compression="zstd")
-
-        spill_files.append(spill_file)
-        logger.info("[shard %d] External sort: wrote run %d to %s", shard, idx, spill_file)
-
-    logger.info("[shard %d] External sort: pass-2 merging %d run files", shard, len(spill_files))
-
     try:
+        # TODO: When we upgrade to Python 3.12, use itertools.batched
+        batches = [input_frames[i : i + fan_in] for i in range(0, len(input_frames), fan_in)]
+        for idx, batch in enumerate(batches):
+            merged = pl.merge_sorted(batch, key=sort_key).collect()
+
+            spill_file = f"{external_sort_dir}/run-{idx:04d}.spill"
+            buf = io.BytesIO()
+            merged.write_parquet(buf, compression="zstd")
+            with open_url(spill_file, "wb") as f:
+                f.write(buf.getvalue())
+
+            spill_files.append(spill_file)
+            logger.info("[shard %d] External sort: wrote run %d to %s", shard, idx, spill_file)
+
+        logger.info("[shard %d] External sort: pass-2 merging %d run files", shard, len(spill_files))
+
         merged = pl.merge_sorted([pl.scan_parquet(p) for p in spill_files], key=sort_key)
         yield from merged.collect_batches()
     finally:
-        try:
-            spill_fs.rm([f"{spill_dir}/run-{i:04d}.spill" for i in range(len(spill_files))])
-        except Exception:
-            # Spill files live under a per-shard temp dir that the worker
-            # eventually wipes; log so leaked files are at least traceable.
-            logger.warning("Failed to delete external-sort run files under %s", spill_dir, exc_info=True)
+        if spill_files:
+            try:
+                spill_fs.rm([f"{spill_dir}/run-{i:04d}.spill" for i in range(len(spill_files))])
+            except Exception:
+                # Spill files live under a per-shard temp dir that the worker
+                # eventually wipes; log so leaked files are at least traceable.
+                logger.warning("Failed to delete external-sort run files under %s", spill_dir, exc_info=True)

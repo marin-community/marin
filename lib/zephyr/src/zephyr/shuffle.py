@@ -176,7 +176,7 @@ def _columns_to_dataframe(
         raise ValueError("sort_fn must return an Arrow-serializable object.") from err
 
 
-_msgpack_encoder = msgspec.msgpack.Encoder()
+_msgpack_encoder = msgspec.msgpack.Encoder(order="deterministic")
 
 
 def _items_to_dataframe(

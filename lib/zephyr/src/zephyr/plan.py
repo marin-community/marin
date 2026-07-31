@@ -120,11 +120,13 @@ class Scatter:
 
 @dataclass
 class Reduce:
-    """Merge sorted chunks and reduce per key."""
+    """Merge sorted chunks and reduce per key.
+
+    Sort within each group is encoded into ``_SORT_KEY_COL`` at scatter time
+    """
 
     key_fn: Callable[[Any], Any]
     reducer_fn: Callable[[Any, Iterator], Any]
-    sort_fn: Callable[[Any], Any] | None = None  # Must match Scatter's sort_fn
 
 
 @dataclass
@@ -461,7 +463,7 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
                 output_shards=num_shards if num_shards > 0 else None,
             )
             state.end_stage()
-            state.add_op(Reduce(key_fn=op.key_fn, reducer_fn=op.reducer_fn, sort_fn=op.sort_fn))
+            state.add_op(Reduce(key_fn=op.key_fn, reducer_fn=op.reducer_fn))
 
         elif isinstance(op, ReduceOp):
             state.add_op(Fold(fn=op.local_reducer))
