@@ -22,7 +22,6 @@ strip = "symbols"
 # `--build-arg CARGO_PROFILE=fast`.
 [profile.fast]
 inherits = "release"
-lto = false
 opt-level = 2
 
 [package]
