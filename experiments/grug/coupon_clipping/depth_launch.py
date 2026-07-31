@@ -13,6 +13,8 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem import prefix_join
 
 from experiments.grug.coupon_clipping.config import (
+    AGGRESSIVE_GROWTH_CONFIG,
+    AGGRESSIVE_TRANSITION_STEP,
     AVERAGE_SHARED_INTERMEDIATE_DIM,
     DEPTH_GROWTH_CONFIG,
     DEPTH_SOURCE_LAYERS,
@@ -20,6 +22,7 @@ from experiments.grug.coupon_clipping.config import (
     TRAIN_BATCH_SIZE,
     TRAIN_STEPS,
     CouponClippingArm,
+    build_growth_source_model_config,
     build_model_config,
 )
 from experiments.grug.coupon_clipping.launch import (
@@ -49,14 +52,21 @@ def build_depth_source_model_config(source_layers: int = DEPTH_SOURCE_LAYERS) ->
     )
 
 
+def build_aggressive_source_model_config(
+    growth: DepthGrowthConfig = AGGRESSIVE_GROWTH_CONFIG,
+) -> GrugModelConfig:
+    """Build the d1536/L1 source used by the >5x arm."""
+    return build_growth_source_model_config(build_model_config(CouponClippingArm.C0_P0), growth)
+
+
 def _build_source_checkpoint(
     *,
+    model: GrugModelConfig,
     run_id: str,
     steps: int,
     version: str | None,
     run_kind: CouponClippingRunKind,
 ) -> ArtifactStep[LevanterCheckpoint]:
-    model = build_depth_source_model_config()
     step_name = f"grug/coupon-clipping/{run_id}"
     resolved_version = resolve_version(step_name, version)
 
@@ -156,6 +166,7 @@ def _build_growth_target_checkpoint(
 def build_l1_pilot_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     """Run 128 L1 updates against the production optimizer and data horizons."""
     return _build_source_checkpoint(
+        model=build_depth_source_model_config(),
         run_id="cc16-l1-pilot128",
         steps=L1_PILOT_STEPS,
         version=version,
@@ -166,6 +177,7 @@ def build_l1_pilot_checkpoint(*, version: str | None = None) -> ArtifactStep[Lev
 def build_growth_pilot_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     """Run 32 L1 updates, grow to L48, and run 16 more updates."""
     source = _build_source_checkpoint(
+        model=build_depth_source_model_config(),
         run_id="cc16-growth-pilot-source32",
         steps=PILOT_SOURCE_STEPS,
         version=version,
@@ -174,6 +186,8 @@ def build_growth_pilot_checkpoint(*, version: str | None = None) -> ArtifactStep
     growth = DepthGrowthConfig(
         source_layers=DEPTH_SOURCE_LAYERS,
         target_layers=build_model_config(CouponClippingArm.C0_P0).num_layers,
+        width_expansion_factor=1,
+        new_layer_initialization=DEPTH_GROWTH_CONFIG.new_layer_initialization,
         expected_step=PILOT_SOURCE_STEPS,
         expected_data_offset=PILOT_SOURCE_STEPS * TRAIN_BATCH_SIZE,
     )
@@ -196,6 +210,8 @@ def build_growth_target_only_checkpoint(
     growth = DepthGrowthConfig(
         source_layers=DEPTH_SOURCE_LAYERS,
         target_layers=build_model_config(CouponClippingArm.C0_P0).num_layers,
+        width_expansion_factor=1,
+        new_layer_initialization=DEPTH_GROWTH_CONFIG.new_layer_initialization,
         expected_step=PILOT_SOURCE_STEPS,
         expected_data_offset=PILOT_SOURCE_STEPS * TRAIN_BATCH_SIZE,
     )
@@ -213,6 +229,7 @@ def build_growth_target_only_checkpoint(
 def build_d1_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     """Build the token-matched D1 pipeline with a 70% L1 transition."""
     source = _build_source_checkpoint(
+        model=build_depth_source_model_config(),
         run_id=f"cc16-d1-l1-source-step{DEPTH_TRANSITION_STEP}",
         steps=DEPTH_TRANSITION_STEP,
         version=version,
@@ -223,6 +240,60 @@ def build_d1_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterC
         run_id="cc16-d1-l1-to-l48",
         steps=TRAIN_STEPS,
         growth=DEPTH_GROWTH_CONFIG,
+        version=version,
+        run_kind=CouponClippingRunKind.FULL,
+    )
+
+
+def build_aggressive_source_pilot_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
+    """Measure the d1536/L1 source throughput for 128 updates."""
+    return _build_source_checkpoint(
+        model=build_aggressive_source_model_config(),
+        run_id="ccx-wd1-d1536-l1-pilot128",
+        steps=L1_PILOT_STEPS,
+        version=version,
+        run_kind=CouponClippingRunKind.PILOT,
+    )
+
+
+def build_aggressive_growth_pilot_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
+    """Canary width-and-depth growth after a 32-update d1536/L1 source."""
+    growth = dataclasses.replace(
+        AGGRESSIVE_GROWTH_CONFIG,
+        expected_step=PILOT_SOURCE_STEPS,
+        expected_data_offset=PILOT_SOURCE_STEPS * TRAIN_BATCH_SIZE,
+    )
+    source = _build_source_checkpoint(
+        model=build_aggressive_source_model_config(growth),
+        run_id="ccx-wd1-growth-pilot-source32",
+        steps=PILOT_SOURCE_STEPS,
+        version=version,
+        run_kind=CouponClippingRunKind.PILOT,
+    )
+    return _build_growth_target_checkpoint(
+        source,
+        run_id="ccx-wd1-growth-pilot-target16",
+        steps=PILOT_SOURCE_STEPS + PILOT_GROWN_STEPS,
+        growth=growth,
+        version=version,
+        run_kind=CouponClippingRunKind.PILOT,
+    )
+
+
+def build_aggressive_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
+    """Build the 90% d1536/L1 to 10% d3072/L48 aggressive growth arm."""
+    source = _build_source_checkpoint(
+        model=build_aggressive_source_model_config(),
+        run_id=f"ccx-wd1-d1536-l1-source-step{AGGRESSIVE_TRANSITION_STEP}",
+        steps=AGGRESSIVE_TRANSITION_STEP,
+        version=version,
+        run_kind=CouponClippingRunKind.FULL,
+    )
+    return _build_growth_target_checkpoint(
+        source,
+        run_id="ccx-wd1-d1536-l1-to-d3072-l48",
+        steps=TRAIN_STEPS,
+        growth=AGGRESSIVE_GROWTH_CONFIG,
         version=version,
         run_kind=CouponClippingRunKind.FULL,
     )

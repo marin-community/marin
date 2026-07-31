@@ -6,11 +6,16 @@ from dataclasses import dataclass
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
+from haliax.partitioning import set_mesh
 from jax.tree_util import register_dataclass
+from levanter.grug.sharding import compact_grug_mesh
 
+from experiments.grug.coupon_clipping.model import GrugModelConfig, Transformer
 from experiments.grug.depth_growth import (
     DepthGrowthConfig,
+    NewLayerInitialization,
     grow_grug_depth_state,
     load_and_grow_grug_depth_state,
     validate_depth_growth_data_offset,
@@ -38,6 +43,11 @@ class _OptimizerState(eqx.Module):
     stacked_block_segments: tuple[_StackedBlocks, ...]
 
 
+class _WidthOptimizerState(eqx.Module):
+    count: jax.Array
+    parameter_buffer: jax.Array
+
+
 @register_dataclass
 @dataclass(frozen=True)
 class _TrainState:
@@ -45,6 +55,16 @@ class _TrainState:
     params: _Model
     opt_state: _OptimizerState
     ema_params: _Model | None
+    pending_qb_betas: jax.Array
+
+
+@register_dataclass
+@dataclass(frozen=True)
+class _TransformerTrainState:
+    step: jax.Array
+    params: Transformer
+    opt_state: _WidthOptimizerState
+    ema_params: Transformer | None
     pending_qb_betas: jax.Array
 
 
@@ -100,7 +120,14 @@ def _state(segment_lengths: tuple[int, ...], *, step: int, offset: int) -> _Trai
 def test_grow_grug_depth_state_repeats_blocks_and_preserves_resume_state():
     source = _state((2,), step=7, offset=10)
     fresh_target = _state((1, 2, 1), step=0, offset=0)
-    config = DepthGrowthConfig(source_layers=2, target_layers=4, expected_step=7, expected_data_offset=112)
+    config = DepthGrowthConfig(
+        source_layers=2,
+        target_layers=4,
+        width_expansion_factor=1,
+        new_layer_initialization=NewLayerInitialization.REPEAT,
+        expected_step=7,
+        expected_data_offset=112,
+    )
 
     grown, report = grow_grug_depth_state(source, fresh_target, config)
 
@@ -139,7 +166,14 @@ def test_grow_grug_depth_state_repeats_blocks_and_preserves_resume_state():
 def test_grow_grug_depth_state_rejects_wrong_transition_checkpoint():
     source = _state((2,), step=6, offset=10)
     fresh_target = _state((1, 2, 1), step=0, offset=0)
-    config = DepthGrowthConfig(source_layers=2, target_layers=4, expected_step=7, expected_data_offset=112)
+    config = DepthGrowthConfig(
+        source_layers=2,
+        target_layers=4,
+        width_expansion_factor=1,
+        new_layer_initialization=NewLayerInitialization.REPEAT,
+        expected_step=7,
+        expected_data_offset=112,
+    )
 
     with pytest.raises(ValueError, match="source checkpoint is at step 6, expected 7"):
         grow_grug_depth_state(source, fresh_target, config)
@@ -148,7 +182,14 @@ def test_grow_grug_depth_state_rejects_wrong_transition_checkpoint():
 def test_load_and_grow_grug_depth_state_resolves_latest_checkpoint():
     source = _state((1,), step=7, offset=10)
     fresh_target = _state((4,), step=0, offset=0)
-    config = DepthGrowthConfig(source_layers=1, target_layers=4, expected_step=7, expected_data_offset=112)
+    config = DepthGrowthConfig(
+        source_layers=1,
+        target_layers=4,
+        width_expansion_factor=1,
+        new_layer_initialization=NewLayerInitialization.REPEAT,
+        expected_step=7,
+        expected_data_offset=112,
+    )
     loaded_paths = []
 
     def fake_latest_checkpoint(path: str) -> str:
@@ -178,7 +219,14 @@ def test_load_and_grow_grug_depth_state_resolves_latest_checkpoint():
 def test_grow_grug_depth_state_wraps_twelve_layers_across_production_segments():
     source = _state((5, 7), step=40, offset=10)
     fresh_target = _state((4, 18, 4, 22), step=0, offset=0)
-    config = DepthGrowthConfig(source_layers=12, target_layers=48, expected_step=40, expected_data_offset=640)
+    config = DepthGrowthConfig(
+        source_layers=12,
+        target_layers=48,
+        width_expansion_factor=1,
+        new_layer_initialization=NewLayerInitialization.REPEAT,
+        expected_step=40,
+        expected_data_offset=640,
+    )
 
     grown, _ = grow_grug_depth_state(source, fresh_target, config)
 
@@ -194,14 +242,122 @@ def test_grow_grug_depth_state_rejects_mismatched_optimizer_schedule_count():
     source = _state((1,), step=7, offset=10)
     source = eqx.tree_at(lambda state: state.opt_state.count, source, jnp.array(6, dtype=jnp.int32))
     fresh_target = _state((4,), step=0, offset=0)
-    config = DepthGrowthConfig(source_layers=1, target_layers=4, expected_step=7, expected_data_offset=112)
+    config = DepthGrowthConfig(
+        source_layers=1,
+        target_layers=4,
+        width_expansion_factor=1,
+        new_layer_initialization=NewLayerInitialization.REPEAT,
+        expected_step=7,
+        expected_data_offset=112,
+    )
 
     with pytest.raises(ValueError, match="optimizer schedule is at step 6, expected 7"):
         grow_grug_depth_state(source, fresh_target, config)
 
 
 def test_validate_depth_growth_data_offset_rejects_changed_batch_schedule():
-    config = DepthGrowthConfig(source_layers=1, target_layers=48, expected_step=2_240, expected_data_offset=2_293_760)
+    config = DepthGrowthConfig(
+        source_layers=1,
+        target_layers=48,
+        width_expansion_factor=1,
+        new_layer_initialization=NewLayerInitialization.REPEAT,
+        expected_step=2_240,
+        expected_data_offset=2_293_760,
+    )
 
     with pytest.raises(ValueError, match="target batch schedule changes the depth-growth data cursor"):
         validate_depth_growth_data_offset(config, actual_data_offset=2_293_761)
+
+
+def test_grow_grug_width_and_depth_preserves_source_function_with_identity_layers():
+    common = {
+        "vocab_size": 32,
+        "num_experts": 2,
+        "num_experts_per_token": 1,
+        "head_dim": 4,
+        "max_seq_len": 4,
+        "sliding_window": 4,
+        "block_storage": "array_stacked",
+    }
+    source_config = GrugModelConfig(
+        **common,
+        hidden_dim=4,
+        intermediate_dim=2,
+        shared_expert_intermediate_dim=2,
+        num_layers=1,
+        num_heads=1,
+        num_kv_heads=1,
+        block_segment_lengths=(1,),
+        block_segment_shared_expert_intermediate_dims=(2,),
+    )
+    target_config = GrugModelConfig(
+        **common,
+        hidden_dim=8,
+        intermediate_dim=4,
+        shared_expert_intermediate_dim=4,
+        num_layers=2,
+        num_heads=2,
+        num_kv_heads=2,
+        block_segment_lengths=(1, 1),
+        block_segment_shared_expert_intermediate_dims=(4, 4),
+    )
+    config = DepthGrowthConfig(
+        source_layers=1,
+        target_layers=2,
+        width_expansion_factor=2,
+        new_layer_initialization=NewLayerInitialization.IDENTITY_PREFIX,
+        expected_step=7,
+        expected_data_offset=112,
+    )
+
+    with set_mesh(compact_grug_mesh()):
+        source_model = Transformer.init(source_config, key=jax.random.PRNGKey(0))
+        fresh_target_model = Transformer.init(target_config, key=jax.random.PRNGKey(1))
+        source = _TransformerTrainState(
+            step=jnp.array(7, dtype=jnp.int32),
+            params=source_model,
+            opt_state=_WidthOptimizerState(
+                count=jnp.array(7, dtype=jnp.int32),
+                parameter_buffer=jnp.arange(4, dtype=jnp.float32),
+            ),
+            ema_params=None,
+            pending_qb_betas=jnp.zeros((1, 2), dtype=jnp.float32),
+        )
+        fresh_target = _TransformerTrainState(
+            step=jnp.array(0, dtype=jnp.int32),
+            params=fresh_target_model,
+            opt_state=_WidthOptimizerState(
+                count=jnp.array(0, dtype=jnp.int32),
+                parameter_buffer=jnp.full((8,), 5, dtype=jnp.float32),
+            ),
+            ema_params=None,
+            pending_qb_betas=jnp.ones((2, 2), dtype=jnp.float32),
+        )
+
+        grown, report = grow_grug_depth_state(source, fresh_target, config)
+
+    source_embedding = source.params.token_embed[3]
+    grown_embedding = grown.params.token_embed[3]
+    assert jnp.array_equal(grown_embedding, jnp.tile(source_embedding, 2))
+    assert jnp.allclose(grown_embedding @ grown.params.output_proj, source_embedding @ source.params.output_proj)
+
+    assert source.params.stacked_block_segments is not None
+    assert grown.params.stacked_block_segments is not None
+    source_block = source.params.stacked_block_segments[0].stacked
+    grown_source_block = grown.params.stacked_block_segments[1].stacked
+    source_hidden = jnp.arange(4, dtype=jnp.float32)
+    grown_hidden = jnp.tile(source_hidden, 2)
+    source_query = source_hidden @ source_block.attn.w_q[0]
+    grown_query = grown_hidden @ grown_source_block.attn.w_q[0]
+    assert np.allclose(np.asarray(grown_query), np.tile(np.asarray(source_query), 2))
+    source_expert_gate = source_hidden @ source_block.mlp.expert_mlp.w_gate[0, 0]
+    grown_expert_gate = grown_hidden @ grown_source_block.mlp.expert_mlp.w_gate[0, 0]
+    assert np.allclose(np.asarray(grown_expert_gate), np.tile(np.asarray(source_expert_gate), 2))
+
+    assert jnp.array_equal(grown.opt_state.parameter_buffer, fresh_target.opt_state.parameter_buffer)
+    assert report.reset_optimizer_leaves > 0
+    identity_block = grown.params.stacked_block_segments[0].stacked
+    assert jnp.count_nonzero(identity_block.attn.w_o) == 0
+    assert jnp.count_nonzero(identity_block.mlp.expert_mlp.w_down) == 0
+    assert identity_block.shared is not None
+    assert jnp.count_nonzero(identity_block.shared.w_down) == 0

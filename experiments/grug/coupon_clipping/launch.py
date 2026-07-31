@@ -26,6 +26,7 @@ from marin.training.training import LevanterCheckpoint, resolve_checkpointer_out
 from experiments.grug.coupon_clipping.config import (
     NUM_EXPERTS,
     SELECTED_LEARNING_RATE,
+    SHORT_CONTROL_STEPS,
     TRAIN_BATCH_SIZE,
     TRAIN_STEPS,
     CouponClippingArm,
@@ -70,6 +71,7 @@ class CouponClippingLaunchConfig:
 class CouponClippingRunKind(StrEnum):
     FULL = "full"
     PILOT = "pilot"
+    SHORT_CONTROL = "short-control"
 
 
 def run_coupon_clipping_trial(config: CouponClippingLaunchConfig) -> None:
@@ -156,6 +158,16 @@ def build_coupon_clipping_pilot_checkpoint(
     )
 
 
+def build_short_control_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
+    """Build the full-depth control with a compressed 3,200-step WSD horizon."""
+    return _build_coupon_clipping_checkpoint(
+        CouponClippingArm.C0_P0,
+        version=version,
+        run_kind=CouponClippingRunKind.SHORT_CONTROL,
+        learning_rate=SELECTED_LEARNING_RATE,
+    )
+
+
 def _build_coupon_clipping_checkpoint(
     arm: CouponClippingArm,
     *,
@@ -166,9 +178,17 @@ def _build_coupon_clipping_checkpoint(
     model = build_model_config(arm)
     if run_kind is CouponClippingRunKind.PILOT:
         steps = PILOT_STEPS
+        optimizer_num_train_steps = TRAIN_STEPS
         run_id = f"{arm.value}-pilot128-{learning_rate.value}"
+    elif run_kind is CouponClippingRunKind.SHORT_CONTROL:
+        if arm is not CouponClippingArm.C0_P0:
+            raise ValueError("the compressed schedule is defined only for the uniform control")
+        steps = SHORT_CONTROL_STEPS
+        optimizer_num_train_steps = SHORT_CONTROL_STEPS
+        run_id = "ccx-c-short-l48-step3200"
     else:
         steps = TRAIN_STEPS
+        optimizer_num_train_steps = TRAIN_STEPS
         if learning_rate is not SELECTED_LEARNING_RATE:
             raise ValueError("full pyramid arms use the learning rate selected by the systems gate")
         run_id = arm.value
@@ -177,7 +197,7 @@ def _build_coupon_clipping_checkpoint(
 
     def build_config(ctx: StepContext) -> CouponClippingLaunchConfig:
         data = datakit_data_config(
-            total_steps=TRAIN_STEPS,
+            total_steps=optimizer_num_train_steps,
             batch_size=TRAIN_BATCH_SIZE,
             max_seq_len=model.max_seq_len,
             enable_simulated_epoching=False,
@@ -197,6 +217,7 @@ def _build_coupon_clipping_checkpoint(
                 replicate_path=ctx.output_path,
             ),
             steps=steps,
+            optimizer_num_train_steps=optimizer_num_train_steps,
             learning_rate=learning_rate,
             watch_interval=8 if run_kind is CouponClippingRunKind.PILOT else 0,
         )

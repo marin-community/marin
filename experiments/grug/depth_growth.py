@@ -8,10 +8,13 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import ClassVar, Protocol, TypeVar, cast
 
 import jax
 import jax.numpy as jnp
+from jax.sharding import PartitionSpec as P
+from jax.sharding import reshard
 from jax.tree_util import DictKey, FlattenedIndexKey, GetAttrKey, SequenceKey
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 
@@ -29,14 +32,31 @@ class _DepthGrowthState(Protocol):
 StateT = TypeVar("StateT", bound=_DepthGrowthState)
 PathPart = tuple[str, object]
 TreePath = tuple[PathPart, ...]
+_GATED_NORM_PATH_PARTS: frozenset[PathPart] = frozenset(
+    {
+        ("attr", "embed_gated_norm"),
+        ("attr", "final_gated_norm"),
+        ("attr", "attn_gated_norm"),
+        ("attr", "mlp_gated_norm"),
+    }
+)
+
+
+class NewLayerInitialization(StrEnum):
+    """Initialization of target layers that do not exist in the source model."""
+
+    REPEAT = "repeat"
+    IDENTITY_PREFIX = "identity-prefix"
 
 
 @dataclass(frozen=True)
 class DepthGrowthConfig:
-    """Shape and resume invariants for a shallow-to-deep transition."""
+    """Shape and resume invariants for a shallow-to-deep or narrow-to-wide transition."""
 
     source_layers: int
     target_layers: int
+    width_expansion_factor: int
+    new_layer_initialization: NewLayerInitialization
     expected_step: int
     expected_data_offset: int
 
@@ -47,10 +67,15 @@ class DepthGrowthConfig:
             raise ValueError(
                 f"target_layers must exceed source_layers, got {self.source_layers} -> {self.target_layers}"
             )
-        if self.target_layers % self.source_layers != 0:
+        if (
+            self.new_layer_initialization is NewLayerInitialization.REPEAT
+            and self.target_layers % self.source_layers != 0
+        ):
             raise ValueError(
                 f"target_layers must be divisible by source_layers, got {self.source_layers} -> {self.target_layers}"
             )
+        if self.width_expansion_factor < 1:
+            raise ValueError(f"width_expansion_factor must be positive, got {self.width_expansion_factor}")
         if self.expected_step < 1:
             raise ValueError(f"expected_step must be positive, got {self.expected_step}")
         if self.expected_data_offset < 0:
@@ -82,10 +107,11 @@ def grow_grug_depth_state(
 ) -> tuple[StateT, DepthGrowthReport]:
     """Copy a shallow Grug state into a fresh deeper state.
 
-    Model parameters, EMA parameters, and QB router state repeat the complete source
-    stack. Optimizer schedule counters and non-block parameter state are inherited.
-    Block optimizer buffers stay at their freshly initialized target values so every
-    copied block begins without inherited momentum.
+    Model parameters and EMA parameters are widened with duplicated channels when
+    requested. Existing source layers are copied; new target layers either repeat the
+    source stack or retain fresh parameters with zero residual-output projections so
+    that they begin as exact identities. Optimizer schedule counters are inherited,
+    while block buffers and any width-dependent buffers remain freshly initialized.
     """
 
     source_step = int(source_state.step)
@@ -107,6 +133,7 @@ def grow_grug_depth_state(
     optimizer_growth = _grow_optimizer_state(
         source_state.opt_state,
         fresh_target_state.opt_state,
+        config,
     )
 
     grown_state = cast(
@@ -180,6 +207,8 @@ def _grow_model_tree(source: object, target: object, config: DepthGrowthConfig) 
     source_leaves = _leaves_by_path(source)
     source_segment_lengths = _stacked_segment_lengths(source)
     target_segment_lengths = _stacked_segment_lengths(target)
+    if config.new_layer_initialization is NewLayerInitialization.IDENTITY_PREFIX and not target_segment_lengths:
+        raise ValueError("identity-initialized new layers require array-stacked target blocks")
     if source_segment_lengths and sum(source_segment_lengths) != config.source_layers:
         raise ValueError(
             f"source model segments sum to {sum(source_segment_lengths)}, expected {config.source_layers} layers"
@@ -202,12 +231,13 @@ def _grow_model_tree(source: object, target: object, config: DepthGrowthConfig) 
                 target_segment_lengths=target_segment_lengths,
             )
             grown_leaves.append(
-                _repeat_layer_slice(
+                _grow_stacked_parameter_leaf(
                     source_leaf,
                     target_leaf,
                     config,
                     target_layer_offset=target_layer_offset,
-                    path=_display_path(raw_target_path),
+                    path=target_path,
+                    display_path=_display_path(raw_target_path),
                 )
             )
             copied_parameter_leaves += 1
@@ -215,13 +245,25 @@ def _grow_model_tree(source: object, target: object, config: DepthGrowthConfig) 
 
         source_path = _source_unrolled_block_path(target_path, config.source_layers)
         source_leaf = _required_leaf(source_leaves, source_path)
-        grown_leaves.append(_copy_leaf(source_leaf, target_leaf, path=_display_path(raw_target_path)))
+        grown_leaves.append(
+            _grow_width_leaf(
+                source_leaf,
+                target_leaf,
+                config,
+                path=target_path,
+                display_path=_display_path(raw_target_path),
+            )
+        )
         copied_parameter_leaves += 1
 
     return target_treedef.unflatten(grown_leaves), copied_parameter_leaves
 
 
-def _grow_optimizer_state(source: object, target: object) -> _OptimizerGrowthResult:
+def _grow_optimizer_state(
+    source: object,
+    target: object,
+    config: DepthGrowthConfig,
+) -> _OptimizerGrowthResult:
     source_leaves = _leaves_by_path(source)
     target_path_leaves, target_treedef = jax.tree_util.tree_flatten_with_path(target)
     grown_leaves: list[object] = []
@@ -237,9 +279,18 @@ def _grow_optimizer_state(source: object, target: object) -> _OptimizerGrowthRes
             continue
 
         source_leaf = _required_leaf(source_leaves, target_path)
-        grown_leaves.append(_copy_leaf(source_leaf, target_leaf, path=_display_path(raw_target_path)))
-        if _is_array(target_leaf):
-            preserved_optimizer_leaves += 1
+        if (
+            config.width_expansion_factor > 1
+            and _is_array(source_leaf)
+            and _is_array(target_leaf)
+            and source_leaf.shape != target_leaf.shape
+        ):
+            grown_leaves.append(target_leaf)
+            reset_optimizer_leaves += 1
+        else:
+            grown_leaves.append(_copy_leaf(source_leaf, target_leaf, path=_display_path(raw_target_path)))
+            if _is_array(target_leaf):
+                preserved_optimizer_leaves += 1
 
     return _OptimizerGrowthResult(
         state=target_treedef.unflatten(grown_leaves),
@@ -279,6 +330,126 @@ def _repeat_layer_slice(
     layer_indices = (jnp.arange(target.shape[0]) + target_layer_offset) % config.source_layers
     repeated = jnp.take(source, layer_indices, axis=0)
     return _put_with_target_sharding(repeated, target)
+
+
+def _grow_stacked_parameter_leaf(
+    source: object,
+    target: object,
+    config: DepthGrowthConfig,
+    *,
+    target_layer_offset: int,
+    path: TreePath,
+    display_path: str,
+) -> jax.Array:
+    if not _is_array(source) or not _is_array(target):
+        raise ValueError(f"{display_path} must be an array in both source and target")
+    if source.ndim == 0 or target.ndim == 0:
+        raise ValueError(f"{display_path} must carry a leading layer dimension")
+    if source.shape[0] != config.source_layers:
+        raise ValueError(f"{display_path} source shape {source.shape} does not start with {config.source_layers} layers")
+
+    expanded_source = _expand_width_array(
+        source,
+        target_shape=(source.shape[0], *target.shape[1:]),
+        factor=config.width_expansion_factor,
+        scale=_parameter_needs_input_scaling(path),
+        path=display_path,
+    )
+    target_layer_indices = jnp.arange(target.shape[0]) + target_layer_offset
+    if config.new_layer_initialization is NewLayerInitialization.REPEAT:
+        layer_indices = target_layer_indices % config.source_layers
+        grown = jnp.take(expanded_source, layer_indices, axis=0)
+        return _put_with_target_sharding(grown, target)
+
+    first_source_layer = config.target_layers - config.source_layers
+    source_indices = jnp.clip(target_layer_indices - first_source_layer, 0, config.source_layers - 1)
+    copied = jnp.take(expanded_source, source_indices, axis=0)
+    fresh = jnp.zeros_like(target) if _is_residual_output_parameter(path) else target
+    copy_mask = target_layer_indices >= first_source_layer
+    copy_mask = jnp.reshape(copy_mask, (target.shape[0],) + (1,) * (target.ndim - 1))
+    grown = jnp.where(copy_mask, copied, fresh)
+    return _put_with_target_sharding(grown, target)
+
+
+def _grow_width_leaf(
+    source: object,
+    target: object,
+    config: DepthGrowthConfig,
+    *,
+    path: TreePath,
+    display_path: str,
+) -> object:
+    if config.width_expansion_factor == 1:
+        return _copy_leaf(source, target, path=display_path)
+    if not _is_array(source) or not _is_array(target):
+        return _copy_leaf(source, target, path=display_path)
+    if source.shape == target.shape:
+        return _copy_array(source, target, path=display_path)
+    expanded = _expand_width_array(
+        source,
+        target_shape=target.shape,
+        factor=config.width_expansion_factor,
+        scale=_parameter_needs_input_scaling(path),
+        path=display_path,
+    )
+    return _put_with_target_sharding(expanded, target)
+
+
+def _expand_width_array(
+    source: jax.Array,
+    *,
+    target_shape: tuple[int, ...],
+    factor: int,
+    scale: bool,
+    path: str,
+) -> jax.Array:
+    if len(source.shape) != len(target_shape):
+        raise ValueError(f"{path} changes rank from {source.shape} to {target_shape}")
+
+    repeats = []
+    for source_size, target_size in zip(source.shape, target_shape, strict=True):
+        if target_size == source_size:
+            repeats.append(1)
+        elif target_size == factor * source_size:
+            repeats.append(factor)
+        else:
+            raise ValueError(
+                f"{path} changes shape from {source.shape} to {target_shape}; "
+                f"each widened dimension must grow by {factor}x"
+            )
+    if all(repeat == 1 for repeat in repeats):
+        return source
+    replicated_source = reshard(source, P(*(None for _ in source.shape)))
+    expanded = jnp.tile(replicated_source, tuple(repeats))
+    if scale:
+        expanded = expanded / factor
+    return expanded
+
+
+def _parameter_needs_input_scaling(path: TreePath) -> bool:
+    terminal = path[-1] if path else None
+    if terminal in {
+        ("attr", "output_proj"),
+        ("attr", "w_q"),
+        ("attr", "w_k"),
+        ("attr", "w_v"),
+        ("attr", "w_o"),
+        ("attr", "attn_gate"),
+        ("attr", "router"),
+        ("attr", "w_gate"),
+        ("attr", "w_down"),
+    }:
+        return True
+    if terminal == ("attr", "w_up"):
+        return not any(part in _GATED_NORM_PATH_PARTS for part in path)
+    return False
+
+
+def _is_residual_output_parameter(path: TreePath) -> bool:
+    terminal = path[-1] if path else None
+    if terminal == ("attr", "w_o") and ("attr", "attn") in path:
+        return True
+    return terminal == ("attr", "w_down") and (("attr", "expert_mlp") in path or ("attr", "shared") in path)
 
 
 def _copy_leaf(source: object, target: object, *, path: str) -> object:
@@ -412,6 +583,7 @@ def _is_array(value: object) -> bool:
 __all__ = [
     "DepthGrowthConfig",
     "DepthGrowthReport",
+    "NewLayerInitialization",
     "grow_grug_depth_state",
     "load_and_grow_grug_depth_state",
     "validate_depth_growth_data_offset",

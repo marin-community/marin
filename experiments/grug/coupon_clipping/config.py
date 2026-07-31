@@ -3,6 +3,7 @@
 
 """Fixed model and optimizer recipes for the coupon-clipping pyramid arms."""
 
+import dataclasses
 import math
 from dataclasses import dataclass
 from enum import StrEnum
@@ -13,7 +14,7 @@ from levanter.grug.grug_moe import resolve_moe_implementation
 from levanter.utils.flop_utils import lm_flops_per_token
 
 from experiments.grug.coupon_clipping.model import GrugModelConfig
-from experiments.grug.depth_growth import DepthGrowthConfig
+from experiments.grug.depth_growth import DepthGrowthConfig, NewLayerInitialization
 from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
 from experiments.llama import llama3_tokenizer_vocab_size
 
@@ -36,11 +37,15 @@ FAT_MIDDLE_SHARED_WIDTHS = (1024, 1024, 4096, 1024)
 
 TRAIN_BATCH_SIZE = 256
 TRAIN_STEPS = 6400
+SHORT_CONTROL_STEPS = 3200
 TRAIN_TOKENS = TRAIN_BATCH_SIZE * SEQUENCE_LENGTH * TRAIN_STEPS
 EXPECTED_TRAIN_TOKENS = 6_710_886_400
 DEPTH_SOURCE_LAYERS = 1
 DEPTH_TRANSITION_STEP = 4480
 DEPTH_TRANSITION_DATA_OFFSET = DEPTH_TRANSITION_STEP * TRAIN_BATCH_SIZE
+AGGRESSIVE_WIDTH_EXPANSION_FACTOR = 2
+AGGRESSIVE_TRANSITION_STEP = 5760
+AGGRESSIVE_TRANSITION_DATA_OFFSET = AGGRESSIVE_TRANSITION_STEP * TRAIN_BATCH_SIZE
 
 MUONH_LEARNING_RATE = 0.006423539
 ADAM_LEARNING_RATE = 0.001482355
@@ -112,6 +117,37 @@ def build_model_config(arm: CouponClippingArm) -> GrugModelConfig:
         block_storage="array_stacked",
         block_segment_lengths=SEGMENT_LENGTHS,
         block_segment_shared_expert_intermediate_dims=_SHARED_WIDTHS_BY_ARM[arm],
+    )
+
+
+def build_growth_source_model_config(
+    target: GrugModelConfig,
+    growth: DepthGrowthConfig,
+) -> GrugModelConfig:
+    """Derive the shallow source shape named by a growth transition."""
+    factor = growth.width_expansion_factor
+    divisible_dimensions = {
+        "hidden_dim": target.hidden_dim,
+        "intermediate_dim": target.intermediate_dim,
+        "shared_expert_intermediate_dim": target.shared_expert_intermediate_dim,
+        "num_heads": target.num_heads,
+        "num_kv_heads": target.num_kv_heads,
+    }
+    for name, value in divisible_dimensions.items():
+        if value % factor != 0:
+            raise ValueError(f"{name}={value} must be divisible by width expansion factor {factor}")
+
+    return dataclasses.replace(
+        target,
+        hidden_dim=target.hidden_dim // factor,
+        intermediate_dim=target.intermediate_dim // factor,
+        shared_expert_intermediate_dim=target.shared_expert_intermediate_dim // factor,
+        num_layers=growth.source_layers,
+        num_heads=target.num_heads // factor,
+        num_kv_heads=target.num_kv_heads // factor,
+        initializer_std=target.initializer_std * math.sqrt(factor),
+        block_segment_lengths=(growth.source_layers,),
+        block_segment_shared_expert_intermediate_dims=(target.shared_expert_intermediate_dim // factor,),
     )
 
 
@@ -201,6 +237,16 @@ MATCHED_MODEL_ACCOUNTING = assert_matched_pyramid_accounting()
 DEPTH_GROWTH_CONFIG = DepthGrowthConfig(
     source_layers=DEPTH_SOURCE_LAYERS,
     target_layers=NUM_LAYERS,
+    width_expansion_factor=1,
+    new_layer_initialization=NewLayerInitialization.REPEAT,
     expected_step=DEPTH_TRANSITION_STEP,
     expected_data_offset=DEPTH_TRANSITION_DATA_OFFSET,
+)
+AGGRESSIVE_GROWTH_CONFIG = DepthGrowthConfig(
+    source_layers=DEPTH_SOURCE_LAYERS,
+    target_layers=NUM_LAYERS,
+    width_expansion_factor=AGGRESSIVE_WIDTH_EXPANSION_FACTOR,
+    new_layer_initialization=NewLayerInitialization.IDENTITY_PREFIX,
+    expected_step=AGGRESSIVE_TRANSITION_STEP,
+    expected_data_offset=AGGRESSIVE_TRANSITION_DATA_OFFSET,
 )

@@ -11,6 +11,8 @@ from levanter.tracker.json_logger import JsonLoggerConfig
 
 from experiments.grug.coupon_clipping import launch
 from experiments.grug.coupon_clipping.config import (
+    AGGRESSIVE_GROWTH_CONFIG,
+    AGGRESSIVE_TRANSITION_STEP,
     DECAY_STEPS,
     EXPECTED_TRAIN_TOKENS,
     SEGMENT_LENGTHS,
@@ -26,13 +28,15 @@ from experiments.grug.coupon_clipping.config import (
 from experiments.grug.coupon_clipping.depth_launch import (
     PILOT_GROWN_STEPS,
     PILOT_SOURCE_STEPS,
+    build_aggressive_growth_pilot_checkpoint,
+    build_aggressive_source_model_config,
     build_d1_checkpoint,
     build_depth_source_model_config,
     build_growth_pilot_checkpoint,
     build_growth_target_only_checkpoint,
 )
 from experiments.grug.coupon_clipping.model import GrugModelConfig, Transformer
-from experiments.grug.depth_growth import DepthGrowthConfig
+from experiments.grug.depth_growth import DepthGrowthConfig, NewLayerInitialization
 
 
 def _test_data_config():
@@ -118,6 +122,8 @@ def test_depth_launch_propagates_transition_contract(monkeypatch, tmp_path):
     growth = DepthGrowthConfig(
         source_layers=1,
         target_layers=48,
+        width_expansion_factor=1,
+        new_layer_initialization=NewLayerInitialization.REPEAT,
         expected_step=PILOT_SOURCE_STEPS,
         expected_data_offset=PILOT_SOURCE_STEPS * 256,
     )
@@ -148,15 +154,33 @@ def test_depth_artifacts_chain_source_before_growth():
 
     pilot = build_growth_pilot_checkpoint(version="test-dev")
     d1 = build_d1_checkpoint(version="test-dev")
+    aggressive = build_aggressive_growth_pilot_checkpoint(version="test-dev")
 
     assert len(pilot.deps) == 1
     assert len(d1.deps) == 1
+    assert len(aggressive.deps) == 1
 
     target_only = build_growth_target_only_checkpoint(
         source_checkpoint_root="s3://example/source/checkpoints",
         version="test-dev",
     )
     assert target_only.deps == ()
+
+
+def test_aggressive_source_attacks_fixed_compute_and_preserves_target_contract():
+    target = build_model_config(CouponClippingArm.C0_P0)
+    source = build_aggressive_source_model_config()
+    target_accounting = model_accounting(target)
+    source_accounting = model_accounting(source)
+
+    assert (source.hidden_dim, source.num_layers, source.num_heads, source.num_kv_heads) == (1536, 1, 12, 3)
+    assert source.inferred_head_dim == target.inferred_head_dim == 128
+    assert target_accounting.active_parameters == 5_294_957_568
+    assert source_accounting.active_parameters == 418_701_376
+    assert target_accounting.forward_flops_per_token / source_accounting.forward_flops_per_token > 25
+    assert AGGRESSIVE_GROWTH_CONFIG.width_expansion_factor == 2
+    assert AGGRESSIVE_GROWTH_CONFIG.new_layer_initialization is NewLayerInitialization.IDENTITY_PREFIX
+    assert AGGRESSIVE_TRANSITION_STEP == 5760
 
 
 def test_coupon_optimizer_routes_segmented_model_parameters_to_intended_groups():

@@ -39,6 +39,7 @@ from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
+from experiments.grug.coupon_clipping.config import build_growth_source_model_config
 from experiments.grug.coupon_clipping.model import GrugModelConfig, Transformer
 from experiments.grug.depth_growth import (
     DepthGrowthConfig,
@@ -478,12 +479,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     f"target model has {config.model.num_layers} layers, expected {config.depth_growth.target_layers}"
                 )
 
-            source_model_config = dataclasses.replace(
-                config.model,
-                num_layers=config.depth_growth.source_layers,
-                block_segment_lengths=(config.depth_growth.source_layers,),
-                block_segment_shared_expert_intermediate_dims=(config.model.shared_expert_intermediate_dim,),
-            )
+            source_model_config = build_growth_source_model_config(config.model, config.depth_growth)
 
             @jax.jit
             def _init_source_state(model_rng):
@@ -511,6 +507,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 {
                     "depth_growth/source_layers": config.depth_growth.source_layers,
                     "depth_growth/target_layers": config.depth_growth.target_layers,
+                    "depth_growth/width_expansion_factor": config.depth_growth.width_expansion_factor,
+                    "depth_growth/new_layer_initialization": config.depth_growth.new_layer_initialization.value,
                     "depth_growth/transition_step": growth_report.step,
                     "depth_growth/data_offset": actual_data_offset,
                     "depth_growth/reset_optimizer_leaves": growth_report.reset_optimizer_leaves,
