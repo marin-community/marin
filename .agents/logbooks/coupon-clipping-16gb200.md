@@ -90,3 +90,13 @@ The pyramid and L1-to-L48 paths are implemented and passing their focused tests.
 - Result: the 4-GPU SM100/QuACK smoke passed in 1m41s. The growth source finished update 31 at loss 10.0821, gradient norm 0.6325, zero capacity overflow, and 789,388 tok/s. The independent L1 probe reached update 95 at loss 6.3436, gradient norm 0.2316, zero overflow, and 788,994 tok/s. Its L48 growth target was admitted at 15:53 UTC. Full-depth pilots were still compiling without Iris task failure or preemption.
 - Interpretation: the shallow platform and source checkpoint are operational. W&B may label a silent compiler interval as crashed while the underlying Iris gang remains healthy, so admission decisions use Iris state plus metric history rather than W&B state alone. A missing tracker-forwarding path for `train/valid_target_fraction` was found; the metric was already computed in-JIT, and the logging-only fix is being pushed before core launch.
 - Next action: require a finite post-growth L48 update and finite full-depth pilot updates, select the LR, then admit the four core arms and start the four-hour comparison clock.
+
+### 2026-07-31 15:57 - CC16-003 depth-growth restore gate
+
+- Hypothesis: the L1 checkpoint can be restored as a full state and expanded to the segmented L48 target without resetting the data or optimizer schedules.
+- Commit Hash: `3bd655a18c` (failure bundle).
+- Command: `/power/cc16-growth-pilot-coord/grug-train-cc16-growth-pilot-l1-to-l48-16` was launched automatically after the 32-step source artifact completed.
+- Config: resolve the final source checkpoint under the source artifact's `checkpoints` root, then require source step 32 and data offset 8,192 before expansion.
+- Result: the source stage succeeded, but the target's first attempt passed the checkpoint root directly to `load_checkpoint`; TensorStore reported all expected leaves missing because the concrete `step-32` directory had not been resolved. No transform or L48 update ran. Iris retried the deterministic failure once.
+- Interpretation: this is a phase-chaining path-resolution bug, not a model-state incompatibility. The production D1 path has the same bug and remains gated. The loader now resolves `latest_checkpoint_path` before reading the source tree, with a regression test for root-to-step resolution.
+- Next action: stop the deterministic retry, push the fix, resubmit the same growth coordinator, and require finite post-growth updates before D1 admission.

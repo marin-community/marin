@@ -12,6 +12,7 @@ from jax.tree_util import register_dataclass
 from experiments.grug.depth_growth import (
     DepthGrowthConfig,
     grow_grug_depth_state,
+    load_and_grow_grug_depth_state,
     validate_depth_growth_data_offset,
 )
 
@@ -142,6 +143,36 @@ def test_grow_grug_depth_state_rejects_wrong_transition_checkpoint():
 
     with pytest.raises(ValueError, match="source checkpoint is at step 6, expected 7"):
         grow_grug_depth_state(source, fresh_target, config)
+
+
+def test_load_and_grow_grug_depth_state_resolves_latest_checkpoint():
+    source = _state((1,), step=7, offset=10)
+    fresh_target = _state((4,), step=0, offset=0)
+    config = DepthGrowthConfig(source_layers=1, target_layers=4, expected_step=7, expected_data_offset=112)
+    loaded_paths = []
+
+    def fake_latest_checkpoint(path: str) -> str:
+        assert path == "s3://example/checkpoints"
+        return f"{path}/step-7"
+
+    def fake_load(exemplar, path: str, **kwargs):
+        assert exemplar is source
+        loaded_paths.append(path)
+        return source
+
+    grown, report = load_and_grow_grug_depth_state(
+        source,
+        fresh_target,
+        "s3://example/checkpoints",
+        config=config,
+        mesh=None,
+        _load_fn=fake_load,
+        _latest_checkpoint_fn=fake_latest_checkpoint,
+    )
+
+    assert loaded_paths == ["s3://example/checkpoints/step-7"]
+    assert int(grown.step) == 7
+    assert report.step == 7
 
 
 def test_grow_grug_depth_state_wraps_twelve_layers_across_production_segments():

@@ -13,7 +13,7 @@ from typing import ClassVar, Protocol, TypeVar, cast
 import jax
 import jax.numpy as jnp
 from jax.tree_util import DictKey, FlattenedIndexKey, GetAttrKey, SequenceKey
-from levanter.checkpoint import load_checkpoint
+from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 
 
 class _DepthGrowthState(Protocol):
@@ -130,12 +130,14 @@ def load_and_grow_grug_depth_state(
     mesh: jax.sharding.Mesh | None,
     allow_partial: bool = False,
     _load_fn: Callable[..., StateT] = load_checkpoint,
+    _latest_checkpoint_fn: Callable[[str], str] = latest_checkpoint_path,
 ) -> tuple[StateT, DepthGrowthReport]:
-    """Load a source-shaped full checkpoint and transform it to target depth."""
+    """Load the latest source-shaped full checkpoint and transform it to target depth."""
 
+    concrete_checkpoint_path = _latest_checkpoint_fn(checkpoint_path)
     source_state = _load_fn(
         source_state_exemplar,
-        checkpoint_path,
+        concrete_checkpoint_path,
         axis_mapping=None,
         mesh=mesh,
         allow_partial=allow_partial,
