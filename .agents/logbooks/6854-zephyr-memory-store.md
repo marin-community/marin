@@ -162,3 +162,92 @@ description: Read-only Zephyr memory store and verified fuzzy-dedup experiments
   that had already registered.
 - Next action: Commit the generic store checkpoint and compose PR #7831 for
   store-backed verifier parity.
+
+### 2026-07-31 21:58 UTC - ZKV-004 local verifier parity
+
+- Hypothesis: Candidate documents can stay in a shard-preserving actor store
+  while the cluster shuffle carries metadata only, without changing any fuzzy
+  removal decision.
+- Commit Hash: `d103673ad` plus uncommitted store-backed verifier changes.
+- Commands:
+  - `uv run pytest tests/processing/classification/deduplication/test_verify_fuzzy_dups.py -q`
+  - `uv run pytest tests/processing/classification/deduplication -q`
+  - targeted `./infra/pre-commit.py` over the eight changed verifier and call-site files
+- Config: `(file_idx, id)` keys hashed by `file_idx`; two local actors; one-row
+  lookup batches in behavior tests; explicit actor byte and recovery budgets.
+- Result: The focused verifier passed 7/7 and the safe dedup suite passed
+  90/90 with five integration cases excluded by repository defaults. Expected
+  sparse marker rows, canonical choice, equal-ID delegation, empty outputs,
+  and validation failures were unchanged. Store counters reported three
+  candidate items over two actors in the representative behavior test.
+- Interpretation: Full text is not needed in the cluster shuffle. Fetching the
+  canonical once and members through ordered `get_many()` batches preserves the
+  verifier's direct-comparison boundary.
+- Next action: Snapshot and push the treatment revision, then compare it with
+  PR #7831 on the same medium CoreWeave inputs using per-stage finelog metrics.
+
+### 2026-07-31 22:32 UTC - ZKV-004 federated correctness smoke
+
+- Hypothesis: The pickled store handle and metadata-only verifier preserve the
+  baseline result when their actors and Zephyr workers are child jobs of a
+  federated Iris entrypoint.
+- Commit Hashes: baseline `e2902dc9e`; treatment `25214d424`.
+- Jobs:
+  - `/loom/zephyr-kv-baseline-0p1b-20260731-v2`
+  - `/loom/zephyr-kv-treatment-0p1b-20260731-v1`
+- Config: CoreWeave `cw-us-east-02a`; 0.1B Datakit sample; shared persisted
+  MinHash/candidate prefix; 32 Zephyr workers; 32 store actors; 2 CPU and 8 GiB
+  per worker/actor; 128-key lookup batches.
+- Result: Both jobs succeeded without retries or preemptions. The independent
+  inspection matched all eight comparisons over 13 candidate members in five
+  clusters; both revisions emitted zero verified markers. Every Zephyr stage
+  processed identical item and input-byte counts. Baseline worker CPU was
+  35.38 seconds and treatment worker CPU was 41.19 seconds; this tiny input is
+  intentionally a correctness smoke, and store startup/RPC overhead dominates.
+  Peak worker RSS fell from 471,683,072 to 409,092,096 bytes.
+- Negative result: The first control entrypoint failed before pipeline startup
+  because scoped environment setup omitted `marin-dupekit`. Explicitly syncing
+  `marin-core` and `marin-dupekit` fixed the launch.
+- Interpretation: Federation inheritance works without child pinning. All 32
+  store actors loaded on the federated peer, served the later worker job, and
+  terminated with the context. The 0.1B sample is too sparse for a performance
+  claim.
+- Next action: Run the same A/B on the 100B candidate population and require a
+  complete marker-by-marker equality check against the control artifact.
+
+### 2026-07-31 22:34 UTC - ZKV-005 100B control launched
+
+- Hypothesis: Removing candidate text from the verification shuffle reduces
+  worker CPU and peak RSS on the 1.5M-candidate workload while preserving every
+  output marker.
+- Commit Hash: baseline `5b875ae27`.
+- Job: `/loom/zephyr-kv-baseline-100b-20260731-v1`.
+- Config: CoreWeave `cw-us-east-02a`; 100B Datakit sample; 64 workers; complete
+  inspection disabled in favor of an exact persisted-marker comparison after
+  the treatment.
+- Result: Running. The discovered 100B prefix held prior verifier results but
+  not the current testbed's full MinHash/candidate layout, so the control is
+  materializing that shared discovery cache before verification. Those stages
+  are excluded from the verifier A/B, and the treatment will consume the exact
+  resulting candidate artifact.
+- Next action: Monitor discovery through a clean terminal verifier execution,
+  then launch the treatment on the same prefix.
+
+### 2026-07-31 22:43 UTC - ZKV-005 control stopped to share workers
+
+- Observation: `StepRunner(max_concurrent=8)` started each source's MinHash
+  `ZephyrContext` without an advertised host pool. PR #7145 therefore gave each
+  concurrent context its own coordinator `*-pool` and `*-workers-a0` job rather
+  than packing their tasks onto one worker group.
+- Result: The user authorized stopping
+  `/loom/zephyr-kv-baseline-100b-20260731-v1` after 8 minutes 16 seconds. Iris
+  reported `killed`, zero execution failures, and no completed verifier result.
+- Interpretation: The jobs were independent pipeline attempt zeroes, not
+  retries. This layout multiplies environment startup, coordinator, and idle
+  worker overhead, so it is unsuitable for the performance comparison.
+- Change: The testbed now scopes `StepRunner` inside one 64-worker
+  `PoolMode.HOST` context. All MinHash, candidate, and verifier contexts inherit
+  its coordinator through the current Iris job environment; federation needs
+  no explicit child pinning.
+- Next action: Apply the same orchestration change to both A/B revisions and
+  relaunch the 100B control under a fresh output prefix.
