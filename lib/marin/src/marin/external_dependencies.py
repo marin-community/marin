@@ -43,8 +43,11 @@ HARBOR = ExternalDependency(
     distribution="harbor",
     repository="https://github.com/marin-community/harbor.git",
     version="0.8.1",
-    commit="f2dd505f609021611eb85521a097e6dff384d12d",
-    runtime_requirements=("daytona==0.200.2",),
+    commit="75380b70c4278d83ff729587279b5294a1a85c93",
+    runtime_requirements=(
+        "daytona==0.200.2",
+        "litellm==1.95.0.dev3",
+    ),
 )
 
 MARIN_SKYRL = ExternalDependency(

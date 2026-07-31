@@ -362,7 +362,19 @@ def _preflight(request_path: Path) -> None:
     sys.stdout.write(json.dumps(results, ensure_ascii=False, separators=(",", ":")))
 
 
+def seed_restored_job_config(config: JobConfig) -> None:
+    """Make restored trial directories visible to Harbor's resume scan."""
+    job_dir = config.jobs_dir / config.job_name
+    config_path = job_dir / "config.json"
+    if config_path.exists() or not job_dir.exists():
+        return
+    if not any(path.is_dir() and (path / "result.json").exists() for path in job_dir.iterdir()):
+        return
+    config_path.write_text(config.model_dump_json(indent=4))
+
+
 async def _run(config: JobConfig) -> None:
+    seed_restored_job_config(config)
     job = await Job.create(config)
     await job.run()
 

@@ -208,7 +208,7 @@ def _upload_trials(job_dir: Path, out_path: str) -> None:
     for trial_dir in (d for d in job_dir.iterdir() if d.is_dir()):
         if (trial_dir / "result.json").exists():
             target = StoragePath(prefix_join(out_path, f"harbor_trials/{trial_dir.name}"))
-            target.upload_from(str(trial_dir), recursive=True)
+            target.upload_from(f"{trial_dir}/", recursive=True)
 
 
 def _run_harbor_job(

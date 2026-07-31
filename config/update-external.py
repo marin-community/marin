@@ -43,7 +43,7 @@ class LockedDependency:
 
 EXTERNAL_PROJECTS = (
     ExternalProject("evalchemy", "evalchemy", "EVALCHEMY"),
-    ExternalProject("harbor", "harbor", "HARBOR", runtime_distributions=("daytona",)),
+    ExternalProject("harbor", "harbor", "HARBOR", runtime_distributions=("daytona", "litellm")),
     ExternalProject("MarinSkyRL", "skyrl", "MARIN_SKYRL"),
 )
 

@@ -180,6 +180,72 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
     }
 
 
+def test_restored_trials_seed_job_config_for_harbor_resume(tmp_path, checked_policies):
+    policy_path = tmp_path / "policy.json"
+    policy_path.write_text(checked_policies["grug-opencode-id.yaml"]["stable_policy_json"])
+    jobs_dir = tmp_path / "jobs"
+    overlay_path = tmp_path / "overlay.json"
+    overlay_path.write_text(
+        json.dumps(
+            {
+                "job_name": "restored-job",
+                "jobs_dir": str(jobs_dir),
+                "dataset_path": str(tmp_path / "tasks"),
+                "endpoint_url": "https://iris.example/capability/v1",
+                "served_model": "served-grug",
+                "task_limit": 3,
+                "model_agent_kwargs": {},
+            }
+        )
+    )
+    trial_dir = jobs_dir / "restored-job" / "trial-one"
+    trial_dir.mkdir(parents=True)
+    (trial_dir / "result.json").write_text("{}")
+    script = (
+        "from pathlib import Path; "
+        "from marin.evaluation.harbor.trial_driver import effective_job_config, seed_restored_job_config; "
+        f"config=effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r})); "
+        "seed_restored_job_config(config); "
+        "restored=type(config).model_validate_json((config.jobs_dir/config.job_name/'config.json').read_text()); "
+        "print(restored == config)"
+    )
+
+    completed = _external_python("-c", script)
+
+    assert completed.stdout.strip() == "True"
+
+
+def test_resume_identity_ignores_snapshot_mode_drift():
+    script = """
+from harbor_config.models.trial.config import TrialConfig
+
+base = {
+    "task": {"path": "/tmp/task", "source": "local"},
+    "agent": {"name": "terminus-2", "model_name": "hosted_vllm/model"},
+    "environment": {"type": "daytona", "kwargs": {"auto_snapshot": False}},
+}
+existing = TrialConfig.model_validate(base)
+snapshot = TrialConfig.model_validate({
+    **base,
+    "environment": {"type": "daytona", "kwargs": {"auto_snapshot": True}},
+})
+different_image = TrialConfig.model_validate({
+    **base,
+    "environment": {
+        "type": "daytona",
+        "kwargs": {"auto_snapshot": True, "image": "different"},
+    },
+})
+# Harbor excludes the Daytona auto_snapshot cache kwarg from the resume
+# identity fingerprint, so a restored snapshot-mode trial matches its
+# original identity while a genuinely different image still does not.
+assert existing.matches_identity(snapshot)
+assert not existing.matches_identity(different_image)
+"""
+
+    _external_python("-c", script)
+
+
 @pytest.mark.parametrize(
     "document",
     _INVALID_SOURCE_DOCUMENTS.values(),

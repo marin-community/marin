@@ -153,11 +153,16 @@ def test_harbor_trials_round_trip_through_remote_storage(protocol, tmp_path, mon
 
     restored_dir = tmp_path / "restored"
     restored = _restore_completed_trials(output_dir, restored_dir)
+    _upload_trials(restored_dir, output_dir)
 
     assert restored == 1
     assert (restored_dir / "trial-one" / "result.json").read_text() == '{"task_name": "trial-one"}'
     assert (restored_dir / "trial-one" / "agent" / "trajectory.json").read_text() == '{"steps": []}'
     assert not (restored_dir / "incomplete").exists()
+    assert remote_fs.find("eval-bucket/run/harbor_trials") == [
+        "/eval-bucket/run/harbor_trials/trial-one/agent/trajectory.json",
+        "/eval-bucket/run/harbor_trials/trial-one/result.json",
+    ]
 
 
 def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_path, monkeypatch):
