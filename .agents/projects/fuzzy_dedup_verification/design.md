@@ -32,6 +32,9 @@ of identical text.
 - The strict local token and character gates limit added recall.
 - The new persisted attribute type requires updates to the store, ferries, reports, validators, and consolidation configs.
 - The representative limits can miss a subgroup late in a large cluster.
+- The final 100B run added only 24 local matches above 27,179 canonical
+  matches. This small recall gain is an explicit cost of strict and bounded
+  local decisions.
 
 ## Design
 
@@ -147,6 +150,7 @@ The co-partitioned output will contain rows only for accepted duplicates. Each r
 - `dup_local_char_jaccard`.
 
 The artifact stores `FuzzyVerificationParams` and `LocalRepresentativeParams`.
+Each per-source entry stores its attribute directory and explicit source tag.
 The output rows do not repeat these artifact-level values.
 
 Retained candidates will not enter the attribute files. Fixed-bin counters will

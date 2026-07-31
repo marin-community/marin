@@ -1,7 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run and inspect fuzzy-duplicate verification on an existing Datakit sample."""
+"""Run and inspect fuzzy-duplicate verification on an existing Datakit sample.
+
+The bounded inspection independently replays reducer decisions. It is a manual
+data gate for this algorithm version, not a production validation API.
+"""
 
 import argparse
 import json
