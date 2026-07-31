@@ -5,9 +5,8 @@
 
 Loads MinHash bucket attrs from each input, runs LSH-graph connected
 components globally across all inputs, and writes per-source attribute trees
-annotating every non-singleton cluster member. Each source's attr tree is
-co-partitioned with its underlying ``NormalizedData``, so
-:mod:`marin.processing.classification.consolidate` can join them directly.
+that identify every non-singleton cluster member. The full-text verification
+job consumes this candidate artifact.
 
 Per-document attr rows have schema::
 
@@ -17,12 +16,9 @@ Per-document attr rows have schema::
       is_cluster_canonical: bool,  # True for exactly one member per cluster
     }
 
-Rows are emitted for every member of a non-singleton cluster (canonical +
-non-canonicals). Singletons get no row, preserving the
-``consolidate(..., keep_if_missing=True)`` pattern. This shape lets the
-canonical-selection policy live in consolidate (e.g. the default
-``keep is_cluster_canonical=True``, or any custom per-cluster reducer) rather
-than being baked in here.
+Rows are emitted for every member of a non-singleton cluster. Singletons get
+no row. The ``is_cluster_canonical`` field records the connected-components
+canonical for cluster diagnostics. It is not a verified duplicate decision.
 
 Combining multiple ``MinHashAttrData`` inputs is the foundation for iterative
 global dedup: re-running this job over the union of all per-dataset MinHash
@@ -243,8 +239,8 @@ def compute_fuzzy_dups_attrs(
 
     Exactly one member per cluster has ``is_cluster_canonical=True`` — the
     one CC's Hash-to-Min picked as the natural canonical (min ``id_norm``).
-    Consolidate may honor that flag (default policy) or ignore it and apply
-    a custom per-``dup_cluster_id`` policy.
+    The full-text verifier selects its own deterministic representative. It
+    does not use this candidate-only canonical flag as a duplicate decision.
 
     Args:
         inputs: ``MinHashAttrData`` artifacts to fuzzy-dedup together.
