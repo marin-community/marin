@@ -129,8 +129,12 @@ def test_fixture_parity_allows_prereleases_and_preserves_resolver_failure(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    def fail(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+    def fail(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         assert command[:4] == ["uv", "run", "--no-config", "--prerelease=allow"]
+        environment = kwargs["env"]
+        assert isinstance(environment, dict)
+        assert environment["VLLM_TARGET_DEVICE"] == "cuda"
+        assert environment["UV_CACHE_DIR"] == str(tmp_path.with_name(f"{tmp_path.name}-cuda-uv-cache"))
         raise subprocess.CalledProcessError(
             1,
             command,

@@ -176,6 +176,8 @@ def test_isolated_cuda_vllm_upstream_disables_flashinfer_sampler():
     launcher = IsolatedCudaVllm(source=VllmType.UPSTREAM, version=DEFAULT_CUDA_VLLM_VERSION)
     env = launcher.env()
     assert env["VLLM_USE_FLASHINFER_SAMPLER"] == "0"
+    assert env["VLLM_TARGET_DEVICE"] == "cuda"
+    assert env["UV_CACHE_DIR"].endswith("marin-cuda-vllm-uv-cache")
     assert "addressing_style = virtual" in Path(env["AWS_CONFIG_FILE"]).read_text()
     assert launcher.command()[:6] == [
         "uvx",
@@ -202,6 +204,8 @@ def test_isolated_cuda_vllm_marin_fork_command_and_env():
     env = launcher.env()
     assert env["VLLM_USE_PRECOMPILED"] == "1"
     assert env["VLLM_USE_FLASHINFER_SAMPLER"] == "0"
+    assert env["VLLM_TARGET_DEVICE"] == "cuda"
+    assert env["UV_CACHE_DIR"].endswith("marin-cuda-vllm-uv-cache")
     assert "addressing_style = virtual" in Path(env["AWS_CONFIG_FILE"]).read_text()
 
 

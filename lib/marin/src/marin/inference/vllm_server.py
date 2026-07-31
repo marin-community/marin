@@ -141,9 +141,13 @@ class IsolatedCudaVllm:
         # callers pass `--gdn-prefill-backend triton` in vLLM extra arguments.
         # Both variants install the Run:ai loader and may receive an s3:// path from Marin's regional
         # model cache. CoreWeave rejects the loader's default path-style S3 requests.
+        # Keep source-built CUDA wheels out of the workspace TPU cache: uv's wheel key
+        # does not distinguish VLLM_TARGET_DEVICE for the same Git revision.
         environment = {
             _FLASHINFER_SAMPLER_ENV_VAR: "0",
             _AWS_CONFIG_FILE_ENV_VAR: _write_virtual_hosted_s3_config(),
+            "UV_CACHE_DIR": os.path.join(tempfile.gettempdir(), "marin-cuda-vllm-uv-cache"),
+            "VLLM_TARGET_DEVICE": "cuda",
         }
         if self.source is VllmType.MARIN_FORK:
             environment["VLLM_USE_PRECOMPILED"] = "1"

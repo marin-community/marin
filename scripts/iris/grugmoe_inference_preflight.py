@@ -255,6 +255,14 @@ def vllm_command(args: list[str]) -> list[str]:
     ]
 
 
+def _cuda_uv_environment(cache_dir: Path) -> dict[str, str]:
+    """Keep CUDA source builds separate from workspace TPU wheels at the same Git SHA."""
+    return {
+        "UV_CACHE_DIR": str(cache_dir),
+        "VLLM_TARGET_DEVICE": "cuda",
+    }
+
+
 @dataclasses.dataclass(frozen=True)
 class PodRuntime:
     node_index: int
@@ -1051,6 +1059,7 @@ def run_fixture_parity(base_url: str, model: str, *, artifact_dir: Path) -> dict
         str(tensor_path),
     ]
     environment = dict(os.environ)
+    environment.update(_cuda_uv_environment(artifact_dir.with_name(f"{artifact_dir.name}-cuda-uv-cache")))
     environment["UV_TORCH_BACKEND"] = "cu130"
     stdout_path = artifact_dir / "fixture-tensor-parity.stdout"
     stderr_path = artifact_dir / "fixture-tensor-parity.stderr"
@@ -1569,6 +1578,7 @@ def _start_local_vllm(
     log_stream = log_path.open("w")
     environment = {
         **os.environ,
+        **_cuda_uv_environment(local_dir.with_name(f"{local_dir.name}-cuda-uv-cache")),
         "AWS_CONFIG_FILE": str(local_dir / "aws-config"),
         "GLOO_SOCKET_IFNAME": GLOO_CONTROL_INTERFACE,
         "PYTHONUNBUFFERED": "1",
