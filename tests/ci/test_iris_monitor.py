@@ -2,10 +2,28 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from contextlib import nullcontext
+from pathlib import Path
 
+import pytest
+from click.testing import CliRunner
+from iris.cluster.types import JobName
+from iris.rpc import job_pb2
 from rigging.redaction import REDACTED_VALUE
 
 from scripts.ci import iris_monitor
+
+
+class FakeIrisClient:
+    def __init__(self, jobs: list[job_pb2.JobStatus]) -> None:
+        self.jobs = jobs
+        self.terminated: list[str] = []
+
+    def list_jobs(self, *, prefix: str) -> list[job_pb2.JobStatus]:
+        return [job for job in self.jobs if job.job_id.startswith(prefix)]
+
+    def terminate(self, job_id: JobName) -> None:
+        self.terminated.append(job_id.to_wire())
 
 
 def _pod(name: str, *, phase: str = "Running", ready: bool = True, deleting: bool = False) -> dict:
@@ -97,3 +115,117 @@ def test_redact_pod_doc_redacts_env_values_and_preserves_context() -> None:
     # Non-env pod context stays intact.
     assert redacted["spec"]["containers"][0]["image"] == "registry.example/iris-runner:sha"
     assert redacted["spec"]["containers"][0]["resources"]["limits"]["nvidia.com/gpu"] == "8"
+
+
+@pytest.mark.parametrize(
+    "pending_reason",
+    [
+        (
+            "Scheduler: No worker matches constraints and has sufficient resources\n\n"
+            "Autoscaler: Unsatisfied autoscaler demand: tier_blocked: "
+            "1 matching group(s) blocked by quota-pool tier monotonicity"
+        ),
+        'There is no more capacity in the zone "us-east5-b"',
+    ],
+)
+@pytest.mark.parametrize("wait_option", ["--timeout", "--child-wait-timeout"])
+def test_wait_resource_exhaustion_shutdown_is_a_successful_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    wait_option: str,
+    pending_reason: str,
+) -> None:
+    parent_job_id = "/runner/canary"
+    client = FakeIrisClient(
+        [
+            job_pb2.JobStatus(job_id=parent_job_id, state=job_pb2.JOB_STATE_RUNNING, has_children=True),
+            job_pb2.JobStatus(
+                job_id=f"{parent_job_id}/train",
+                state=job_pb2.JOB_STATE_PENDING,
+                pending_reason=pending_reason,
+            ),
+        ]
+    )
+    github_output = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
+    monkeypatch.setattr(iris_monitor, "open_iris_client", lambda **_kwargs: nullcontext(client))
+
+    result = CliRunner().invoke(
+        iris_monitor.cli,
+        [
+            "wait",
+            "--job-id",
+            parent_job_id,
+            "--controller-url",
+            "http://iris.test",
+            "--poll-interval",
+            "0.01",
+            wait_option,
+            "60",
+            "--resource-exhaustion-policy",
+            "shutdown",
+            "--github-output",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "::warning title=Canary resource exhaustion::" in result.output
+    assert client.terminated == [parent_job_id]
+    assert github_output.read_text().splitlines() == [
+        f"job_id={parent_job_id}",
+        "state=RESOURCE_EXHAUSTED",
+        "succeeded=true",
+        "resource_exhausted=true",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("resource_exhaustion_policy", "pending_reason"),
+    [
+        (
+            "shutdown",
+            "Autoscaler: Unsatisfied autoscaler demand: no_matching_group: need device=tpu:v7-8",
+        ),
+        (
+            "escalate",
+            "Autoscaler: Unsatisfied autoscaler demand: tier_blocked: quota-pool tier monotonicity",
+        ),
+    ],
+)
+def test_wait_non_silent_conditions_still_escalate(
+    monkeypatch: pytest.MonkeyPatch,
+    resource_exhaustion_policy: str,
+    pending_reason: str,
+) -> None:
+    parent_job_id = "/runner/canary"
+    client = FakeIrisClient(
+        [
+            job_pb2.JobStatus(job_id=parent_job_id, state=job_pb2.JOB_STATE_RUNNING, has_children=True),
+            job_pb2.JobStatus(
+                job_id=f"{parent_job_id}/train",
+                state=job_pb2.JOB_STATE_PENDING,
+                pending_reason=pending_reason,
+            ),
+        ]
+    )
+    monkeypatch.setattr(iris_monitor, "open_iris_client", lambda **_kwargs: nullcontext(client))
+
+    result = CliRunner().invoke(
+        iris_monitor.cli,
+        [
+            "wait",
+            "--job-id",
+            parent_job_id,
+            "--controller-url",
+            "http://iris.test",
+            "--poll-interval",
+            "0.01",
+            "--timeout",
+            "0",
+            "--resource-exhaustion-policy",
+            resource_exhaustion_policy,
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert client.terminated == []

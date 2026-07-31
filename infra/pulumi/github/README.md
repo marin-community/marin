@@ -12,7 +12,6 @@ uv run --package marin-iac python infra/pulumi/github/audit.py
 uv run --package marin-iac python infra/pulumi/github/audit.py --live
 
 cd infra/pulumi/github
-pulumi login gs://marin-iac-state
 pulumi stack select marin-community  # use `stack init` on first setup
 pulumi preview
 pulumi up
