@@ -86,6 +86,10 @@ ZEPHYR_PROGRESS_TIME_METRIC = "zephyr_progress_time_seconds"
 # workers. Excess submissions are rejected rather than queued.
 MAX_CONCURRENT_PIPELINES = 16
 
+# Final shard materialization performs remote reads. One shared executor bounds
+# coordinator threads when several pipelines finish at the same time.
+_RESULT_MATERIALIZATION_WORKERS = 32
+
 
 class ShardFailureKind(enum.StrEnum):
     """TASK failures count toward MAX_SHARD_FAILURES; INFRA failures (preemption) do not."""
@@ -402,6 +406,10 @@ class ZephyrCoordinator:
         self._worker_group: Any = None  # ActorGroup, set via set_worker_group()
         self._coordinator_thread: threading.Thread | None = None
         self._shutdown_event = threading.Event()
+        self._result_materializer = ThreadPoolExecutor(
+            max_workers=_RESULT_MATERIALIZATION_WORKERS,
+            thread_name_prefix="zephyr-result-materializer",
+        )
         # Unix time of the newest stage start or shard completion across all
         # executions, published as ZEPHYR_PROGRESS_TIME_METRIC so a stalled
         # coordinator is visible. Per-pipeline progress lives on the executions.
@@ -1261,17 +1269,7 @@ class ZephyrCoordinator:
                     is_last_stage=(stage_idx == last_worker_stage_idx),
                 )
 
-            # Flatten final results — each shard may involve I/O (unpickling from
-            # remote storage), so parallelize across shards with a thread pool.
-            def _materialize_shard(shard):
-                return list(shard)
-
-            with ThreadPoolExecutor(max_workers=min(32, len(shards))) as flatten_pool:
-                materialized = flatten_pool.map(_materialize_shard, shards)
-
-            flat_result = []
-            for items in materialized:
-                flat_result.extend(items)
+            flat_result = self._materialize_final_results(shards)
 
             with self._lock:
                 counters = _aggregate_counter_snapshots(list(run.completed_counters), None)
@@ -1362,6 +1360,11 @@ class ZephyrCoordinator:
         """
         ensure_parent_dir(result_path)
         StoragePath(result_path).write_bytes(cloudpickle.dumps(payload))
+
+    def _materialize_final_results(self, shards: list[Shard]) -> list[Any]:
+        """Read final shards with the coordinator-wide bounded I/O pool."""
+        materialized = self._result_materializer.map(list, shards)
+        return [item for items in materialized for item in items]
 
     def _run_worker_stage(
         self,
@@ -1476,6 +1479,7 @@ class ZephyrCoordinator:
         if self._coordinator_thread is not None:
             self._coordinator_thread.join(timeout=5.0)
 
+        self._result_materializer.shutdown(wait=True)
         self._stats_writer.close()
 
         logger.info("Coordinator shutdown complete")
