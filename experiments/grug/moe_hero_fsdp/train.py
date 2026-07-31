@@ -222,6 +222,10 @@ def _compute_flops(
         num_experts=model_config.num_experts,
         num_shared_experts=model_config.num_shared_experts if model_config.shared_expert_intermediate_dim > 0 else 0,
         num_experts_per_tok=model_config.num_experts_per_token,
+        sliding_window=model_config.sliding_window,
+        global_every=model_config.global_every,
+        local_kv_heads=model_config.local_kv_heads,
+        global_kv_heads=model_config.global_kv_heads,
     )
     flops_per_example = 3 * flops_per_token * model_config.max_seq_len
 
@@ -571,9 +575,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
                 jax.block_until_ready(metrics["train/loss"])
 
-                if jnp.isnan(metrics["train/loss"]):
-                    logger.error(f"NaN loss at step {int(state.step)}. Stopping training.")
-                    break
+                if not jnp.isfinite(metrics["train/loss"]):
+                    raise RuntimeError(f"Non-finite loss ({float(metrics['train/loss'])}) at step {int(state.step)}.")
                 duration = time.perf_counter() - step_start
                 hook_start = time.perf_counter()
                 with jax.profiler.TraceAnnotation("callbacks"):

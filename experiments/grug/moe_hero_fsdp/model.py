@@ -238,6 +238,7 @@ class GrugModelConfig:
                     5632,
                 )
             ),
+            num_shared_experts=int(_hf_config_attr(hf_config, ("num_shared_experts",), 1)),
             num_experts=int(_hf_config_attr(hf_config, ("num_experts", "num_local_experts"), 8)),
             num_experts_per_token=int(_hf_config_attr(hf_config, ("num_experts_per_token", "num_experts_per_tok"), 2)),
             num_layers=int(_hf_config_attr(hf_config, ("num_layers", "num_hidden_layers"), 24)),
@@ -254,6 +255,9 @@ class GrugModelConfig:
             qk_mult=float(_hf_config_attr(hf_config, ("qk_mult",), 1.0)),
             rope=rope,
             rope_fused=bool(_hf_config_attr(hf_config, ("rope_fused",), False)),
+            sconv=bool(_hf_config_attr(hf_config, ("sconv",), False)),
+            sconv_kernel=int(_hf_config_attr(hf_config, ("sconv_kernel",), 4)),
+            sconv_sites=tuple(_hf_config_attr(hf_config, ("sconv_sites",), ("k", "v", "attn", "mlp"))),
         )
 
     def to_hf_config(self, vocab_size: int, config_overrides: dict[str, Any] | None = None) -> GrugMoeHfConfig:
@@ -280,12 +284,16 @@ class GrugModelConfig:
             "num_experts_per_tok": self.num_experts_per_token,
             "moe_intermediate_size": self.intermediate_dim,
             "shared_expert_intermediate_size": self.shared_expert_intermediate_dim,
+            "num_shared_experts": self.num_shared_experts,
             # grug-specific (no public equivalent)
             "qk_mult": self.qk_mult,
             "local_kv_heads": self.local_kv_heads,
             "global_kv_heads": self.global_kv_heads,
             "global_every": self.global_every,
             "rope_fused": self.rope_fused,
+            "sconv": self.sconv,
+            "sconv_kernel": self.sconv_kernel,
+            "sconv_sites": list(self.sconv_sites),
             "grugmoe_attention_mode": "production",
             GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY: GRUG_MOE_ARTIFACT_SCHEMA_VERSION,
         }
@@ -1109,17 +1117,23 @@ def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) 
                 f"{layer_prefix}.mlp.experts.down_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_down),
             }
         )
+        # SConv weights are learned; export them per site so the checkpoint reconstructs an sconv model.
+        for site_name, conv in (
+            ("self_attn.sconv_k", block.attn.sconv_k),
+            ("self_attn.sconv_v", block.attn.sconv_v),
+            ("sconv_attn", block.sconv_attn),
+            ("sconv_mlp", block.sconv_mlp),
+        ):
+            if conv is not None:
+                tensors[f"{layer_prefix}.{site_name}.weight"] = conv.weight
+        # One tensor per shared expert (num_shared_experts x shared_expert_intermediate_dim), matching
+        # the config, rather than concatenating them into a single joined width.
         if block.shared is not None:
-            shared_w_gate = jnp.concatenate([expert.w_gate for expert in block.shared], axis=1)
-            shared_w_up = jnp.concatenate([expert.w_up for expert in block.shared], axis=1)
-            shared_w_down = jnp.concatenate([expert.w_down for expert in block.shared], axis=0)
-            tensors.update(
-                {
-                    f"{layer_prefix}.shared_expert.gate_proj.weight": _linear_inference_tensor(shared_w_gate),
-                    f"{layer_prefix}.shared_expert.up_proj.weight": _linear_inference_tensor(shared_w_up),
-                    f"{layer_prefix}.shared_expert.down_proj.weight": _linear_inference_tensor(shared_w_down),
-                }
-            )
+            for shared_index, expert in enumerate(block.shared):
+                shared_prefix = f"{layer_prefix}.shared_experts.{shared_index}"
+                tensors[f"{shared_prefix}.gate_proj.weight"] = _linear_inference_tensor(expert.w_gate)
+                tensors[f"{shared_prefix}.up_proj.weight"] = _linear_inference_tensor(expert.w_up)
+                tensors[f"{shared_prefix}.down_proj.weight"] = _linear_inference_tensor(expert.w_down)
 
     return {_with_state_dict_prefix(prefix, name): value for name, value in tensors.items()}
 

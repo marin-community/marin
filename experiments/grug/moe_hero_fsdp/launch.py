@@ -14,13 +14,13 @@ from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import BlockShuffleConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import experiment_main
 from marin.experiment.data import mixture, tokenized
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
-from marin.training.training import LevanterCheckpoint
 
 from experiments.grug.moe_hero_fsdp.heuristic import build_hero_configs
 from experiments.grug.moe_hero_fsdp.train import GrugRunConfig, GrugTrainerConfig, run_grug
@@ -68,8 +68,17 @@ def _slimpajama_6b_dataset() -> ArtifactStep[TokenizedCache]:
     )
 
 
-def build_hero_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
-    """Build the fixed 64-GPU FSDP hero run."""
+class HeroThroughputResult(Artifact):
+    """Metrics-only result of the throughput hero run.
+
+    The run intentionally writes no checkpoint; it only mirrors its tracker metrics to the output
+    path. This artifact is a plain path ref to those metrics, so the step does not promise a
+    checkpoint it never produces.
+    """
+
+
+def build_hero_run(*, version: str | None = None) -> ArtifactStep[HeroThroughputResult]:
+    """Build the fixed 64-GPU FSDP hero throughput run (metrics only, no checkpoint)."""
     run_id = os.environ.get("RUN_ID") or HERO_RUN_ID
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
@@ -118,7 +127,7 @@ def build_hero_checkpoint(*, version: str | None = None) -> ArtifactStep[Levante
     return ArtifactStep(
         name=user_namespaced_name(name, version),
         version=version,
-        artifact_type=LevanterCheckpoint,
+        artifact_type=HeroThroughputResult,
         run=run_grug,
         build_config=build_config,
         deps=(slim,),
@@ -127,4 +136,4 @@ def build_hero_checkpoint(*, version: str | None = None) -> ArtifactStep[Levante
 
 
 if __name__ == "__main__":
-    experiment_main(build_hero_checkpoint)()
+    experiment_main(build_hero_run)()
