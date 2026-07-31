@@ -74,7 +74,7 @@ The pyramid and L1-to-L48 paths are implemented and passing their focused tests.
 ### 2026-07-31 15:35 - CC16-001 implementation gate
 
 - Hypothesis: matched shared-expert placement and deterministic L1-to-L48 growth can be exercised on the corrected GB200 Grug stack without changing the data, optimizer, or mesh contracts between arms.
-- Commit Hash: pending research snapshot.
+- Commit Hash: `9a83fe899c8040b5905251c5348d068ebaa0cb60`.
 - Command: `uv run --with pytest --with pytest-timeout --with pytest-asyncio pytest -q experiments/grug/coupon_clipping tests/test_grug_depth_growth.py tests/test_grug_variant_contracts.py`
 - Config: P0/P1/P2 use segment lengths `(4, 18, 4, 22)` and exact matched accounting of 46,063,592,448 stored / 5,294,957,568 active parameters. D1 uses L1 through update 4,480 and L48 through update 6,400. All production and pilot stages retain the 6,400-step optimizer and Datamix horizons.
 - Result: 25 passed and 1 skipped in the wider Grug contract run. One unrelated base-Grug CPU test failed on pre-existing label-concatenation sharding; the 12 coupon/depth tests pass. Artifact construction passes for all C0/P1/P2/D1 and canary entry points.
