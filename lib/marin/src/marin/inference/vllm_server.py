@@ -59,6 +59,10 @@ distribution = importlib.metadata.distribution("nvidia-cuda-nvcc")
 nvcc_file = next(path for path in distribution.files or () if str(path).endswith("/bin/nvcc"))
 nvcc = Path(distribution.locate_file(nvcc_file)).resolve()
 cuda_home = nvcc.parent.parent
+cuda_lib = cuda_home / "lib"
+cuda_lib64 = cuda_home / "lib64"
+if cuda_lib.is_dir() and not cuda_lib64.exists():
+    cuda_lib64.symlink_to(cuda_lib, target_is_directory=True)
 os.environ["CUDA_HOME"] = str(cuda_home)
 os.environ["PATH"] = os.pathsep.join((str(nvcc.parent), os.environ["PATH"]))
 os.execvp("vllm", ["vllm", *sys.argv[1:]])
