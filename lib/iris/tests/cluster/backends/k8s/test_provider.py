@@ -41,7 +41,7 @@ from iris.rpc import job_pb2
 from iris.test_util import FakeStatsTable, wait_for_condition
 from rigging.timing import Duration
 
-from .conftest import make_batch, make_kueue_provider, make_run_req, populate_node, populate_pod
+from .conftest import make_batch, make_kueue_provider, make_run_req, pod_config, populate_node, populate_pod
 
 # ---------------------------------------------------------------------------
 # sync(): tasks_to_run
@@ -487,7 +487,7 @@ def test_get_cluster_status_basic(k8s):
     pod = k8s.get_json(K8sResource.PODS, "iris-task-0")
     pod["status"]["conditions"] = []
 
-    p = K8sTaskProvider(kubectl=k8s, namespace="iris", default_image="img:latest", cluster_scan_interval=0.0)
+    p = K8sTaskProvider(kubectl=k8s, pods=pod_config(default_image="img:latest"), cluster_scan_interval=0.0)
     try:
         p.sync(make_batch())
         resp = p.get_cluster_status()
@@ -507,7 +507,9 @@ def test_get_cluster_status_basic(k8s):
 def test_get_cluster_status_node_failure(k8s):
     """Node list failure during sync is handled gracefully; status reports 0 nodes."""
     k8s.inject_failure("list_json:node", RuntimeError("kubectl error"))
-    p = K8sTaskProvider(kubectl=k8s, namespace="test-ns", default_image="img:latest", cluster_scan_interval=0.0)
+    p = K8sTaskProvider(
+        kubectl=k8s, pods=pod_config(namespace="test-ns", default_image="img:latest"), cluster_scan_interval=0.0
+    )
     try:
         p.sync(make_batch())
         resp = p.get_cluster_status()
@@ -525,7 +527,7 @@ def test_get_cluster_status_excludes_terminal_pods(k8s):
     populate_pod(k8s, "iris-succeeded", "Succeeded")
     populate_pod(k8s, "iris-failed", "Failed")
 
-    p = K8sTaskProvider(kubectl=k8s, namespace="iris", default_image="img:latest", cluster_scan_interval=0.0)
+    p = K8sTaskProvider(kubectl=k8s, pods=pod_config(default_image="img:latest"), cluster_scan_interval=0.0)
     try:
         p.sync(make_batch())
         resp = p.get_cluster_status()
@@ -931,10 +933,7 @@ def test_reconcile_dumps_only_running_pods_via_periodic_profiler(k8s):
     profile_table = FakeStatsTable()
     provider = K8sTaskProvider(
         kubectl=k8s,
-        namespace="iris",
-        default_image="myrepo/iris:latest",
-        cache_dir="/cache",
-        local_queue="iris-lq",
+        pods=pod_config(),
         profile_table=profile_table,
         profile_poll_interval=0.05,
         cluster_scan_interval=0.0,
