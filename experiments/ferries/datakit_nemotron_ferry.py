@@ -37,6 +37,7 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
 )
 from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
     VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
     VerifiedFuzzyDupsAttrData,
     verify_fuzzy_dups,
@@ -140,16 +141,19 @@ def build_steps(run_id: str) -> list[StepSpec]:
     verification_params = FuzzyVerificationParams()
     verified = StepSpec(
         name="datakit-nemotron-smoke/verify_fuzzy_dups",
-        deps=[normalized, candidates],
+        deps=[normalized, minhash, candidates],
         hash_attrs={
             "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
             "verification": verification_params.model_dump(mode="json"),
+            "local_representatives": REFERENCE_LOCAL_REPRESENTATIVE_PARAMS.model_dump(mode="json"),
         },
         fn=lambda output_path: verify_fuzzy_dups(
             normalized_sources={"source": read_artifact(normalized.output_path, NormalizedData)},
+            minhash_sources={"source": read_artifact(minhash.output_path, MinHashAttrData)},
             candidates=read_artifact(candidates.output_path, FuzzyDupsAttrData),
             output_path=output_path,
             verification_params=verification_params,
+            local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
             worker_resources=(resources := ResourceConfig(cpu=16, ram="160g", disk="32g")),
             map_task_resources=resources.scale(1 / 16),
             reduce_task_resources=resources.scale(3 / 16),
