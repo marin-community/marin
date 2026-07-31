@@ -54,13 +54,12 @@ class ActorContext:
 class HostedActor:
     """An actor hosted in the current process. Holds handle + cleanup.
 
-    ``endpoint`` is the actor's registered endpoint name — the stable address
-    other processes can pass to ``Client.get_actor`` to obtain a handle.
+    The actor's address is not returned here: callers derive it with
+    ``Client.actor_endpoint`` from the job that hosts it.
     """
 
-    def __init__(self, handle: ActorHandle, endpoint: str, stop: Any = None):
+    def __init__(self, handle: ActorHandle, stop: Any = None):
         self.handle = handle
-        self.endpoint = endpoint
         self._stop = stop
 
     def shutdown(self) -> None:

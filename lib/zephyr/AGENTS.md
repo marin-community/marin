@@ -35,12 +35,15 @@ ZephyrContext → ZephyrCoordinator (fray actor) → ZephyrWorker actors (fray a
 Every pipeline runs on a `ZephyrPool` — a fray job (`_run_pool_job`) hosting a
 coordinator actor plus a worker actor group. There is no second code path:
 
-- **Standing pool**: `with ZephyrPool(...) as endpoint:` (or `pool.start()`)
-  publishes the coordinator's actor endpoint and serves many pipelines until
-  `__exit__` / `pool.shutdown()`. Drivers connect with
-  `ZephyrContext(coordinator_endpoint=...)`, or by setting
-  `ZEPHYR_COORDINATOR_ENDPOINT` in the driver job's env (read as a fallback in
-  `ZephyrContext.__post_init__`).
+- **Standing pool**: `with ZephyrPool(name="ingest", ...)` (or `pool.start()`)
+  serves many pipelines until `__exit__` / `pool.shutdown()`. Drivers address it
+  by name — `ZephyrContext(pool="ingest")`, or `ZEPHYR_POOL` in the env, which
+  Iris inherits to child jobs so step code needs no change. Resolution happens
+  in `ZephyrContext.__post_init__` via `Client.sibling_actor_endpoint`: a pool
+  started by an entrypoint is a sibling of the steps that entrypoint launches,
+  and `pool_job_name` / `coordinator_actor_name` make both names computable.
+  Hence the pool's name is required and carries no uuid. A driver outside the
+  job tree passes `coordinator_endpoint=` explicitly.
 - **One-shot pool**: `ZephyrContext.execute()` with no endpoint builds a pool
   sized to the plan, runs one pipeline on it, and shuts it down in a `finally`.
   Each `max_execution_retries` attempt gets a fresh pool.

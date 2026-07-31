@@ -86,10 +86,25 @@ class Client(Protocol):
     def get_actor(self, endpoint: str) -> ActorHandle:
         """Return a handle to an existing actor by its endpoint name.
 
-        The endpoint name is the stable address published by the hosting
-        process (``HostedActor.endpoint``). Resolution to a live connection
-        happens lazily at call time, so this never blocks or validates that
-        the actor is currently reachable.
+        Resolution to a live connection happens lazily at call time, so this
+        never blocks or validates that the actor is currently reachable.
+        """
+        ...
+
+    def actor_endpoint(self, job: JobHandle, name: str, index: int = 0) -> str:
+        """Endpoint an actor hosted by ``job`` under ``name`` registers itself as.
+
+        Lets a submitter address an actor inside a job it just created without
+        that job having to publish its own address out-of-band.
+        """
+        ...
+
+    def sibling_actor_endpoint(self, job_name: str, name: str, index: int = 0) -> str:
+        """Endpoint of an actor hosted by a sibling of the caller's own job.
+
+        ``job_name`` is the sibling job's *leaf* name, resolved against the
+        caller's parent job. This is how a job addresses a service its parent
+        started alongside it, with no endpoint threaded through its config.
         """
         ...
 

@@ -73,16 +73,27 @@ with ZephyrPool(max_workers=200, resources=ResourceConfig(cpu=2, ram="8g"), name
 manage the pool's lifetime yourself. Plain `ZephyrContext(...).execute(pipeline)`
 with no endpoint is unchanged — its own pool per pipeline, as before.
 
-Connecting drivers can pick the endpoint up from the environment instead of a
-constructor argument — set `ZEPHYR_COORDINATOR_ENDPOINT` on a step's job (e.g.
-Iris `-e ZEPHYR_COORDINATOR_ENDPOINT <endpoint>`), and a plain
-`ZephyrContext()` in that step connects to the pool automatically:
+Drivers name the pool they want; they never handle its address:
 
 ```python
-# In a step launched with ZEPHYR_COORDINATOR_ENDPOINT set:
-ctx = ZephyrContext(resources=ResourceConfig(cpu=1, ram="2g"))  # picks up the env endpoint
+ctx = ZephyrContext(pool="ingest", map_task_resources=ResourceConfig(cpu=1, ram="2g"))
 ctx.execute(pipeline)
 ```
+
+A pool started inside a job is a sibling of the steps that job launches, and
+sibling job names are computable, so `pool="ingest"` resolves on its own. Export
+`ZEPHYR_POOL=ingest` on the jobs you launch and even that argument goes away —
+Iris inherits env vars to child jobs, so a plain `ZephyrContext()` in a step
+finds the pool with no change to the step's code:
+
+```python
+# In a step launched under an entrypoint that set ZEPHYR_POOL:
+ctx = ZephyrContext(map_task_resources=ResourceConfig(cpu=1, ram="2g"))
+ctx.execute(pipeline)
+```
+
+A driver outside the pool's job tree cannot derive a sibling it is not a sibling
+of, so it passes `coordinator_endpoint=pool.endpoint` explicitly.
 
 The pool's workers are sized by `ZephyrPool`'s `resources` × `max_workers`.
 Each connecting pipeline still declares its own per-task cost via the driver's

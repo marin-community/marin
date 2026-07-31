@@ -57,7 +57,7 @@ from zephyr.stats import (
     ZephyrWorkerStatStatus,
     _push_iris_task_status,
 )
-from zephyr.worker_context import CounterSnapshot, merge_counter_entries
+from zephyr.worker_context import CounterEntry, CounterSnapshot, merge_counter_entries
 from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
@@ -247,6 +247,58 @@ class _PipelineExecution:
     # Set at each _start_stage so status logs show throughput since stage start.
     stage_monotonic_start: float | None = None
     done: bool = False
+
+    def start_stage(
+        self,
+        stage_name: str,
+        current_stage_index: int,
+        tasks: list[ShardTask],
+        *,
+        is_last_stage: bool,
+    ) -> None:
+        """Load one stage's tasks and reset the per-stage bookkeeping.
+
+        Counters and plan_stages span the whole execution and survive; anything
+        scoped to a single stage starts over. Callers hold the coordinator lock.
+        """
+        self.task_queue = deque(tasks)
+        self.results = {}
+        self.in_flight = {}
+        self.stage_name = stage_name
+        self.current_stage_index = current_stage_index
+        self.total_shards = len(tasks)
+        self.completed_shards = 0
+        self.retries = 0
+        self.task_attempts = {task.shard_idx: 0 for task in tasks}
+        self.task_error_attempts = {task.shard_idx: 0 for task in tasks}
+        # INFRA failures seen while this shard was in flight on the dying
+        # worker — bounded by max_shard_infra_failures so a shard that
+        # deterministically crashes its worker (native SIGSEGV, OOM) aborts
+        # instead of retrying forever.
+        self.task_infra_attempts = {task.shard_idx: 0 for task in tasks}
+        self.shard_errors = {}
+        self.fatal_error = None
+        self.is_last_stage = is_last_stage
+        self.stage_monotonic_start = time.monotonic()
+        self.stage_done.clear()
+
+    def finish(self) -> None:
+        """Mark the execution done and release the state only a live run needs.
+
+        Completed counters stay: the coordinator folds them into its totals
+        before dropping the execution. Callers hold the coordinator lock.
+        """
+        self.done = True
+        self.task_queue.clear()
+        self.in_flight.clear()
+        self.results = {}
+
+    def merged_counters(self) -> dict[str, CounterEntry]:
+        """Fold this execution's completed snapshots into one set of entries."""
+        merged, conflicted = merge_counter_entries(
+            (k, entry) for snap in self.completed_counters for k, entry in snap.counters.items()
+        )
+        return {k: e for k, e in merged.items() if k not in conflicted}
 
 
 def _aggregate_counter_snapshots(
@@ -902,6 +954,15 @@ class ZephyrCoordinator:
         """True once shutdown() ran; the pool's serve loop polls this to exit."""
         return self._shutdown_event.is_set()
 
+    def is_ready(self) -> bool:
+        """True once the pool's workers exist and this coordinator can serve.
+
+        ``ZephyrPool.start()`` waits on this rather than on the actor merely
+        answering: the coordinator is hosted before its worker group is created,
+        so a reachable coordinator does not yet mean a usable pool.
+        """
+        return self._worker_group is not None and not self._shutdown_event.is_set()
+
     def get_counters(self, worker_id: str | None = None, *, stage: str | None = None) -> dict[str, int | float]:
         """Return counter values, optionally filtered to a single worker or stage.
 
@@ -979,27 +1040,8 @@ class ZephyrCoordinator:
     ) -> None:
         """Load a new stage's tasks into the execution's queue."""
         with self._lock:
-            run.task_queue = deque(tasks)
-            run.results = {}
-            run.stage_name = stage_name
-            run.current_stage_index = current_stage_index
-            run.total_shards = len(tasks)
-            run.completed_shards = 0
-            run.retries = 0
-            run.in_flight = {}
-            run.task_attempts = {task.shard_idx: 0 for task in tasks}
-            run.task_error_attempts = {task.shard_idx: 0 for task in tasks}
-            # Counts INFRA failures observed while this specific shard was in
-            # flight on the dying worker — bounded by MAX_SHARD_INFRA_FAILURES
-            # so a shard that deterministically crashes its worker (native
-            # SIGSEGV, OOM) eventually aborts instead of retrying forever.
-            run.task_infra_attempts = {task.shard_idx: 0 for task in tasks}
-            run.shard_errors = {}
-            run.fatal_error = None
-            run.is_last_stage = is_last_stage
-            run.stage_monotonic_start = time.monotonic()
+            run.start_stage(stage_name, current_stage_index, tasks, is_last_stage=is_last_stage)
             self._progress_time_seconds = time.time()
-            run.stage_done.clear()
 
     def _wait_for_stage(self, run: _PipelineExecution) -> None:
         """Block until the execution's current stage completes or errors."""
@@ -1158,18 +1200,12 @@ class ZephyrCoordinator:
             raise
         finally:
             with self._lock:
-                run.done = True
-                run.task_queue.clear()
-                run.in_flight.clear()
-                run.results = {}
+                run.finish()
                 # Drop the finished execution so coordinator state does not grow
                 # without bound. Late reports for it are logged and ignored.
                 # Its counters are folded into one retained snapshot first, so
                 # coordinator totals still cover pipelines that already ended.
-                merged, conflicted = merge_counter_entries(
-                    (k, entry) for snap in run.completed_counters for k, entry in snap.counters.items()
-                )
-                retained = {k: e for k, e in merged.items() if k not in conflicted}
+                retained = run.merged_counters()
                 if retained:
                     self._retired_counters.append(CounterSnapshot(counters=retained, generation=0))
                 self._executions.pop(execution_id, None)

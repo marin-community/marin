@@ -52,6 +52,8 @@ from zephyr.pool import (
     _DEFAULT_NO_WORKERS_TIMEOUT,
     ZephyrPool,
     _default_stage_runner_factory_for,
+    coordinator_actor_name,
+    pool_job_name,
 )
 from zephyr.stage_io import (
     StageRunner,
@@ -72,6 +74,11 @@ MAX_WORKERS_PER_JOB = 1_024
 # per-step driver jobs via the environment (e.g. Iris ``-e``) instead of
 # threading it through every step's code.
 ZEPHYR_COORDINATOR_ENDPOINT_ENV = "ZEPHYR_COORDINATOR_ENDPOINT"
+
+# Names the pool a plain ZephyrContext should run on. A pool owner exports this
+# once on the jobs it launches; iris inherits env vars to child jobs, so the
+# step code itself never mentions the pool.
+ZEPHYR_POOL_ENV = "ZEPHYR_POOL"
 
 
 # Application errors that should never be retried by the execute() retry loop.
@@ -261,6 +268,7 @@ class ZephyrContext:
     max_shard_failures: int = MAX_SHARD_FAILURES
     max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES
     coordinator_endpoint: str | None = None
+    pool: str | None = None
     pip_dependency_groups: list[str] | None = None
     job_env_vars: dict[str, str] | None = None
 
@@ -278,11 +286,18 @@ class ZephyrContext:
         if self.client is None:
             self.client = current_client()
 
-        # Fall back to the env var so a pool owner can point per-step driver
-        # jobs at a standing pool without threading the endpoint through
-        # code. An explicit `coordinator_endpoint` always wins.
+        # Three ways to name the pool, most explicit first: an endpoint the
+        # caller already holds, a pool name resolved against the caller's own
+        # job, or either of those from the environment. A pool owner exports
+        # ZEPHYR_POOL on the jobs it launches and their code stays untouched.
+        if self.pool is None:
+            self.pool = os.environ.get(ZEPHYR_POOL_ENV) or None
         if self.coordinator_endpoint is None:
             self.coordinator_endpoint = os.environ.get(ZEPHYR_COORDINATOR_ENDPOINT_ENV) or None
+        if self.coordinator_endpoint is None and self.pool is not None:
+            self.coordinator_endpoint = self.client.sibling_actor_endpoint(
+                pool_job_name(self.pool), coordinator_actor_name(self.pool)
+            )
 
         if env_val := os.environ.get("ZEPHYR_MAX_WORKERS"):
             if self.max_workers is None:

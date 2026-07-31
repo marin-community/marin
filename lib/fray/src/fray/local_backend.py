@@ -171,11 +171,20 @@ class LocalClient:
             # matching the Iris backend where shutdown stops the actor server.
             _local_actor_registry.pop(endpoint, None)
 
-        return HostedActor(handle, stop=_stop, endpoint=endpoint)
+        return HostedActor(handle, stop=_stop)
 
     def get_actor(self, endpoint: str) -> "LocalActorHandle":
         """Return a handle to an in-process actor by its endpoint name."""
         return LocalActorHandle(endpoint)
+
+    def actor_endpoint(self, job: Any, name: str, index: int = 0) -> str:
+        """Mirror host_actor's naming. Local actors live in one process, so the
+        hosting job plays no part in the address."""
+        return f"local/{name}-{index}"
+
+    def sibling_actor_endpoint(self, job_name: str, name: str, index: int = 0) -> str:
+        """Same as ``actor_endpoint``: there is no job tree to resolve against."""
+        return f"local/{name}-{index}"
 
     def create_actor(
         self,

@@ -199,11 +199,12 @@ def test_coordinator_rejects_pipelines_after_shutdown(tmp_path, actor_context):
 
 
 def test_pool_restart_waits_for_the_new_coordinator(tmp_path):
-    """start() after shutdown() publishes to a fresh endpoint file and serves again.
+    """start() after shutdown() waits for the new coordinator, not a stale address.
 
-    Each attempt writes its own endpoint file. Sharing one file would let the
-    startup wait return immediately on the dead attempt's contents, handing the
-    caller an endpoint that resolves to nothing.
+    The endpoint is derived from the pool's name, so a restart returns the same
+    string by construction. What must not regress is the wait: start() has to
+    block until the *new* coordinator reports ready, rather than returning as
+    soon as an address can be computed.
     """
     client = LocalClient(max_threads=8)
     prefix = tmp_path / "chunks"
@@ -219,11 +220,8 @@ def test_pool_restart_waits_for_the_new_coordinator(tmp_path):
 
     endpoint = pool.start()
     try:
-        # A second attempt, so start() published to its own endpoint file
-        # rather than returning on the dead attempt's contents. LocalClient
-        # reuses the endpoint name across restarts, so the count is the tell.
-        assert pool._start_count == 2
-
+        assert endpoint == pool.endpoint
+        # Ready means serving: a pipeline runs without any further waiting.
         driver = ZephyrContext(client=client, resources=ResourceConfig(cpu=1, ram="512m"), coordinator_endpoint=endpoint)
         assert sorted(driver.execute(Dataset.from_list([1, 2]).map(lambda x: x + 1)).results) == [2, 3]
     finally:

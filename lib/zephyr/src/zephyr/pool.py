@@ -12,7 +12,6 @@ down on ``shutdown()``. A standing pool serves many pipelines;
 import logging
 import os
 import time
-import uuid
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -138,12 +137,12 @@ class _PoolConfig:
     drain_idle_workers: bool
 
 
-def _run_pool_job(config_path: str, endpoint_path: str) -> None:
+def _run_pool_job(config_path: str) -> None:
     """Entrypoint for the coordinator + worker pool job.
 
-    Hosts the coordinator actor, boots ``max_workers`` workers, publishes the
-    coordinator's endpoint name to ``endpoint_path``, and serves until the
-    owning ``ZephyrPool`` shuts it down. Drivers submit pipelines through
+    Hosts the coordinator actor, boots ``max_workers`` workers, and serves
+    until the owning ``ZephyrPool`` shuts it down. The coordinator's address is
+    derivable from this job, so nothing is published. Drivers submit through
     ``run_pipeline`` and the coordinator runs them concurrently. A one-shot
     pipeline is just a pool that runs one pipeline and is then torn down. The
     job fails (visibly) if the worker pool terminates permanently.
@@ -167,7 +166,7 @@ def _run_pool_job(config_path: str, endpoint_path: str) -> None:
         config.max_shard_failures,
         config.max_shard_infra_failures,
         config.drain_idle_workers,
-        name=f"zephyr-{config.name}-coord",
+        name=coordinator_actor_name(config.name),
         actor_config=ActorConfig(max_concurrency=100),
     )
     coordinator = hosted.handle
@@ -190,9 +189,7 @@ def _run_pool_job(config_path: str, endpoint_path: str) -> None:
         )
         coordinator.set_worker_group.remote(worker_group).result()
 
-        ensure_parent_dir(endpoint_path)
-        StoragePath(endpoint_path).write_bytes(hosted.endpoint.encode())
-        logger.info("Pool coordinator ready: endpoint=%s", hosted.endpoint)
+        logger.info("Pool coordinator serving")
 
         last_group_check = time.monotonic()
         while True:
@@ -218,6 +215,20 @@ def _run_pool_job(config_path: str, endpoint_path: str) -> None:
 
 # 6 hours: long enough to wait out cluster contention for at least one worker.
 _DEFAULT_NO_WORKERS_TIMEOUT = 6 * 60 * 60
+
+
+def pool_job_name(pool: str) -> str:
+    """Job name a pool named ``pool`` runs under.
+
+    A sibling job resolves the pool by this name, so it must depend on nothing
+    but the pool's logical name — no uuid, no job id.
+    """
+    return f"zephyr-{pool}-pool"
+
+
+def coordinator_actor_name(pool: str) -> str:
+    """Actor name the pool's coordinator hosts itself under."""
+    return f"zephyr-{pool}-coord"
 
 
 def _default_max_workers(client: Client) -> int:
@@ -305,8 +316,6 @@ class ZephyrPool:
 
     endpoint: str | None = field(default=None, repr=False)
     _serve_job: JobHandle | None = field(default=None, repr=False)
-    # Bumped per start() so a restart never reads the previous attempt's endpoint file.
-    _start_count: int = field(default=0, repr=False)
     # Storage directory holding the running attempt's config + endpoint files.
     _job_dir: str | None = field(default=None, repr=False)
 
@@ -325,8 +334,8 @@ class ZephyrPool:
             # A pool with no workers still publishes an endpoint, so every
             # pipeline submitted to it would block until no_workers_timeout.
             raise ValueError(f"ZephyrPool needs at least one worker, got max_workers={self.max_workers}")
-        # Unique per pool so its coordinator job and endpoint file never collide.
-        self.name = f"{self.name}-{uuid.uuid4().hex[:8]}"
+        if not self.name:
+            raise ValueError("ZephyrPool needs a name: it is how sibling jobs address the pool")
 
     def start(self, timeout: float = POOL_START_TIMEOUT) -> str:
         """Submit the coordinator + worker pool job; block until its endpoint is published.
@@ -351,14 +360,9 @@ class ZephyrPool:
             max_shard_infra_failures=self.max_shard_infra_failures,
             drain_idle_workers=self.drain_idle_workers,
         )
-        # self.name is uuid-suffixed, so this directory is unique per pool. The
-        # attempt suffix keeps a restart from reading the previous coordinator's
-        # endpoint.txt, which still holds a now-dead endpoint.
-        self._start_count += 1
-        base = f"{self.chunk_storage_prefix}/{self.name}-pool-{self._start_count}"
+        base = f"{self.chunk_storage_prefix}/{pool_job_name(self.name)}"
         self._job_dir = base
         config_path = f"{base}/config.pkl"
-        endpoint_path = f"{base}/endpoint.txt"
         ensure_parent_dir(config_path)
         StoragePath(config_path).write_bytes(cloudpickle.dumps(config))
 
@@ -367,35 +371,33 @@ class ZephyrPool:
         with set_current_client(self.client):
             self._serve_job = self.client.submit(
                 JobRequest(
-                    name=f"zephyr-{self.name}-pool",
-                    entrypoint=Entrypoint.from_callable(
-                        _run_pool_job,
-                        args=(config_path, endpoint_path),
-                    ),
+                    name=pool_job_name(self.name),
+                    entrypoint=Entrypoint.from_callable(_run_pool_job, args=(config_path,)),
                     resources=self.coordinator_resources,
                     environment=_job_environment(self.pip_dependency_groups, self.job_env_vars),
                 )
             )
         logger.info("Shared coordinator job submitted: %s", self._serve_job.job_id)
 
-        # If the job never publishes its endpoint (crash, or slow-scheduling
-        # timeout), terminate it before re-raising so we never leak a running
-        # coordinator + full worker pool — the stale-coordinator failure mode
-        # this feature is meant to avoid.
+        # The coordinator's address is derivable from the job we just created,
+        # so there is nothing to publish and nothing to read back. If the pool
+        # never becomes ready (crash, or slow scheduling), terminate it before
+        # re-raising so we never leak a running coordinator + full worker pool.
+        endpoint = self.client.actor_endpoint(self._serve_job, coordinator_actor_name(self.name))
         try:
-            endpoint_file = StoragePath(endpoint_path)
+            coordinator = self.client.get_actor(endpoint)
             backoff = ExponentialBackoff(initial=0.2, maximum=5.0)
             deadline = time.monotonic() + timeout
-            while not endpoint_file.exists():
+            while True:
+                with suppress(Exception):
+                    if coordinator.is_ready.remote().result(timeout=10.0):
+                        break
                 status = self._serve_job.status()
                 if status in (FrayJobStatus.FAILED, FrayJobStatus.STOPPED, FrayJobStatus.SUCCEEDED):
-                    raise RuntimeError(f"Shared coordinator job exited ({status}) before publishing its endpoint")
+                    raise RuntimeError(f"Pool job exited ({status}) before its coordinator was ready")
                 if time.monotonic() > deadline:
-                    raise TimeoutError(f"Shared coordinator did not publish an endpoint within {timeout}s")
+                    raise TimeoutError(f"Pool coordinator was not ready within {timeout}s")
                 time.sleep(backoff.next_interval())
-            endpoint = endpoint_file.read_bytes().decode()
-            if not endpoint:
-                raise RuntimeError(f"Shared coordinator published an empty endpoint at {endpoint_path}")
         except BaseException:
             with suppress(Exception):
                 self._serve_job.terminate()
@@ -403,7 +405,7 @@ class ZephyrPool:
             raise
 
         self.endpoint = endpoint
-        logger.info("Shared zephyr coordinator ready: %s", self.endpoint)
+        logger.info("Zephyr pool ready: %s", self.endpoint)
         return self.endpoint
 
     def shutdown(self) -> None:

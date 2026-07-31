@@ -57,6 +57,7 @@ from fray.actor import (
     _set_current_actor,
 )
 from fray.client import JobAlreadyExists as FrayJobAlreadyExists
+from fray.client import JobHandle
 from fray.types import (
     ANY_REGION,
     ActorConfig,
@@ -683,11 +684,30 @@ class FrayIrisClient:
         logger.info("host_actor: registered %s -> %s", actor_name, address)
         ctx.registry.register(actor_name, address)
 
-        return HostedActor(handle, stop=server.stop, endpoint=actor_name)
+        return HostedActor(handle, stop=server.stop)
 
     def get_actor(self, endpoint: str) -> IrisActorHandle:
         """Return a handle to an existing actor by its (absolute) endpoint name."""
         return IrisActorHandle(endpoint)
+
+    def actor_endpoint(self, job: JobHandle, name: str, index: int = 0) -> str:
+        """Actors register under ``{job_id}/{name}-{index}``; see ``_host_actor``."""
+        return f"{job.job_id}/{name}-{index}"
+
+    def sibling_actor_endpoint(self, job_name: str, name: str, index: int = 0) -> str:
+        """Resolve ``job_name`` as a sibling of the caller's job, then address into it.
+
+        Job names are hierarchical, so a child of the same parent is
+        ``my_job.parent.child(job_name)``. The result is absolute and therefore
+        resolvable from any job in the cluster.
+        """
+        ctx = get_iris_ctx()
+        if ctx is None:
+            raise RuntimeError("sibling_actor_endpoint requires an Iris job context")
+        parent = ctx.job_id.parent
+        if parent is None:
+            raise RuntimeError(f"job {ctx.job_id} is a root job and has no siblings")
+        return f"{parent.child(job_name)}/{name}-{index}"
 
     def create_actor(
         self,
