@@ -6,7 +6,7 @@
 Marin's object stores are full of JSON and JSONL — task records, metrics, manifests —
 so a preview that dumps raw bytes wastes the trip. :func:`file_lines` renders tabular
 JSON as a table and falls back to text, then to a byte count for binary data. The
-plain-line renderers are shared with the curses TUI, which cannot use ``rich``.
+plain-line renderers are shared by the curses TUI and the command-line tables.
 """
 
 import json
@@ -68,15 +68,15 @@ def _json_lines(name: str, text: str) -> list[str]:
                 return text.splitlines()
         if not records:
             return ["(empty file)"]
-        return _table_lines(records)
+        return _json_table_lines(records)
 
     try:
-        return _table_lines(json.loads(text))
+        return _json_table_lines(json.loads(text))
     except json.JSONDecodeError:
         return text.splitlines()
 
 
-def _table_lines(data: object) -> list[str]:
+def _json_table_lines(data: object) -> list[str]:
     """Render parsed JSON as an aligned table when it is tabular, else as indented JSON."""
     if isinstance(data, list) and data and all(isinstance(row, dict) for row in data):
         headers = list({key: None for row in data for key in row})
