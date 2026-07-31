@@ -15,8 +15,11 @@ from experiments.grug.moe.inference_preflight import CASES, SNOWBALL_EXPORT, det
 from scripts.iris.dev_gpu import CoreweaveTarget, DevGpuState, PodRef, Priority
 from scripts.iris.grugmoe_inference_preflight import (
     LOCAL_DP_SIZE,
+    _free_port,
     _record_completion,
     boundary_requests,
+    remote_process_probe,
+    validate_acceptance_thresholds,
     validate_session,
     vllm_args,
     vllm_command,
@@ -156,3 +159,22 @@ def test_completion_evidence_keeps_routes_out_of_compact_result(tmp_path) -> Non
         routes,
     )
     assert json.loads((tmp_path / summary["response_path"]).read_text()) == payload
+
+
+def test_remote_process_probe_rejects_zombies() -> None:
+    probe = remote_process_probe("/tmp/run.pid")
+    assert 'test "$state" != Z' in probe
+    assert 'test "$state" != X' in probe
+    assert 'kill -0 "$pid"' in probe
+
+
+def test_free_port_returns_a_boundable_port() -> None:
+    assert 0 < _free_port() < 65_536
+
+
+def test_acceptance_thresholds_cannot_be_weakened() -> None:
+    validate_acceptance_thresholds(minimum_seconds=600, minimum_generated_tokens=250_000)
+    with pytest.raises(ValueError, match="600 seconds"):
+        validate_acceptance_thresholds(minimum_seconds=599, minimum_generated_tokens=250_000)
+    with pytest.raises(ValueError, match="250000 generated"):
+        validate_acceptance_thresholds(minimum_seconds=600, minimum_generated_tokens=249_999)

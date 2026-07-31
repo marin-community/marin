@@ -11,6 +11,7 @@ checked on a laptop before reserving a GB200.
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 import math
@@ -351,6 +352,40 @@ def routing_histogram(routed_experts: Any, *, num_experts: int) -> list[int]:
     return np.bincount(values, minlength=num_experts).astype(int).tolist()
 
 
+def expert_parallel_rank_histogram(expert_histogram: list[int], *, ep_size: int) -> list[int]:
+    """Map a linear-placement expert histogram to its owning EP ranks."""
+    if ep_size <= 0:
+        raise ValueError("EP size must be positive")
+    if not expert_histogram or len(expert_histogram) % ep_size:
+        raise ValueError("expert count must be nonzero and divisible by EP size")
+    experts_per_rank = len(expert_histogram) // ep_size
+    return [sum(expert_histogram[rank * experts_per_rank : (rank + 1) * experts_per_rank]) for rank in range(ep_size)]
+
+
+def deterministic_balanced_routing_fixture(*, num_experts: int, top_k: int, ep_size: int) -> dict[str, Any]:
+    """Build a routing control where every expert and EP rank receive equal work.
+
+    This tests the histogram/placement instrumentation. It is not a claim that
+    a live model's router is balanced.
+    """
+    if num_experts <= 0 or not 0 < top_k < num_experts:
+        raise ValueError("balanced routing requires 0 < top_k < num_experts")
+    if num_experts % ep_size:
+        raise ValueError("expert count must be divisible by EP size")
+    assignments = [[(token + offset) % num_experts for offset in range(top_k)] for token in range(num_experts)]
+    expert_histogram = routing_histogram(assignments, num_experts=num_experts)
+    rank_histogram = expert_parallel_rank_histogram(expert_histogram, ep_size=ep_size)
+    return {
+        "kind": "instrumentation-control",
+        "tokens": num_experts,
+        "assignments_sha256": hashlib.sha256(json.dumps(assignments, separators=(",", ":")).encode()).hexdigest(),
+        "expert_histogram": expert_histogram,
+        "ep_rank_histogram": rank_histogram,
+        "all_experts_equal": len(set(expert_histogram)) == 1,
+        "all_ep_ranks_equal": len(set(rank_histogram)) == 1,
+    }
+
+
 def frozen_manifest(
     case: ModelCase,
     *,
@@ -414,7 +449,9 @@ __all__ = [
     "VLLM_SHA",
     "ModelCase",
     "decode_routed_experts",
+    "deterministic_balanced_routing_fixture",
     "deterministic_workload",
+    "expert_parallel_rank_histogram",
     "frozen_manifest",
     "layer_types",
     "materialize_prompt",

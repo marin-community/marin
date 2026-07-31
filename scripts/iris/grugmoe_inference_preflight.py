@@ -19,6 +19,7 @@ import concurrent.futures
 import dataclasses
 import hashlib
 import json
+import math
 import shlex
 import socket
 import subprocess
@@ -39,6 +40,8 @@ from experiments.grug.moe.inference_preflight import (
     VLLM_SHA,
     ModelCase,
     decode_routed_experts,
+    deterministic_balanced_routing_fixture,
+    expert_parallel_rank_histogram,
     frozen_manifest,
     materialize_prompt,
     metric_delta,
@@ -63,9 +66,12 @@ SERVER_PORT = 8000
 LOCAL_DP_SIZE = 4
 SERVER_TIMEOUT_SECONDS = 3600
 REQUEST_TIMEOUT_SECONDS = 600
+ACCEPTANCE_MINIMUM_SECONDS = 600
+ACCEPTANCE_MINIMUM_GENERATED_TOKENS = 250_000
 REMOTE_ROOT = "/tmp/grugmoe-inference-preflight"
 LOG_TAIL_LINES = 400
 GLOO_CONTROL_INTERFACE = "enP6p3s0np0"
+AWS_CONFIG_CONTENT = "[default]\ns3 =\n    addressing_style = virtual\n"
 REMOTE_UPLOAD_PROGRAM = """
 import json
 import pathlib
@@ -125,6 +131,13 @@ def validate_session(state: DevGpuState, case: ModelCase) -> None:
         )
     if state.priority.value != "interactive":
         raise ValueError(f"preflight requires Iris interactive priority, got {state.priority.value}")
+
+
+def validate_acceptance_thresholds(*, minimum_seconds: float, minimum_generated_tokens: int) -> None:
+    if minimum_seconds < ACCEPTANCE_MINIMUM_SECONDS:
+        raise ValueError(f"acceptance requires at least {ACCEPTANCE_MINIMUM_SECONDS} seconds per arm")
+    if minimum_generated_tokens < ACCEPTANCE_MINIMUM_GENERATED_TOKENS:
+        raise ValueError(f"acceptance requires at least {ACCEPTANCE_MINIMUM_GENERATED_TOKENS} generated tokens per arm")
 
 
 def vllm_args(
@@ -288,6 +301,7 @@ class Gang:
                     environment={
                         # The Iris GB200 hostname resolves to 127.0.0.1.
                         # Gloo otherwise advertises loopback to remote ranks.
+                        "AWS_CONFIG_FILE": f"{self.remote_dir}/aws-config",
                         "GLOO_SOCKET_IFNAME": GLOO_CONTROL_INTERFACE,
                         "VLLM_HOST_IP": str(payload["status"]["podIP"]),
                     },
@@ -306,7 +320,7 @@ class Gang:
         for runtime in self.runtimes:
             self._exec(runtime, "test", "-e", f"/sys/class/net/{GLOO_CONTROL_INTERFACE}")
             self._exec(runtime, "mkdir", "-p", runtime.remote_dir)
-            for filename in ("config.json", "workload.json", "manifest.json"):
+            for filename in ("aws-config", "config.json", "workload.json", "manifest.json"):
                 source = str(self.local_dir / filename)
                 destination = f"{runtime.pod.pod_name}:{runtime.remote_dir}/{filename}"
                 _run(
@@ -353,9 +367,7 @@ class Gang:
             states: list[str] = []
             for runtime in self.runtimes:
                 pid_path = f"{runtime.remote_dir}/vllm-node-{runtime.node_index}.pid"
-                process_probe = (
-                    f"test -s {shlex.quote(pid_path)} " f"&& kill -0 $(cat {shlex.quote(pid_path)}) 2>/dev/null"
-                )
+                process_probe = remote_process_probe(pid_path)
                 if runtime.node_index == 0:
                     shell = (
                         f"if (exec 3<>/dev/tcp/127.0.0.1/{SERVER_PORT}) 2>/dev/null; "
@@ -452,6 +464,16 @@ def _free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+def remote_process_probe(pid_path: str) -> str:
+    """Shell predicate that rejects dead processes, including unreaped zombies."""
+    quoted_path = shlex.quote(pid_path)
+    return (
+        f'test -s {quoted_path} && pid="$(cat {quoted_path} 2>/dev/null)" && test -n "$pid" '
+        '&& test -r "/proc/$pid/stat" && read -r _ _ state _ < "/proc/$pid/stat" '
+        '&& test "$state" != Z && test "$state" != X && kill -0 "$pid" 2>/dev/null'
+    )
 
 
 @contextmanager
@@ -601,8 +623,14 @@ def _record_completion(
     }
 
 
-def _record_metrics(text: str, *, artifact_dir: Path, stem: str) -> str:
-    evidence_dir = artifact_dir / "correctness"
+def _record_metrics(
+    text: str,
+    *,
+    artifact_dir: Path,
+    stem: str,
+    evidence_subdir: str = "correctness",
+) -> str:
+    evidence_dir = artifact_dir / evidence_subdir
     evidence_dir.mkdir(parents=True, exist_ok=True)
     metrics_path = evidence_dir / f"{stem}.prom"
     metrics_path.write_text(text)
@@ -615,6 +643,8 @@ def run_correctness(
     workload: dict[str, Any],
     *,
     num_experts: int,
+    top_k: int,
+    ep_size: int,
     artifact_dir: Path,
 ) -> dict[str, Any]:
     candidates = boundary_requests(workload)
@@ -681,10 +711,27 @@ def run_correctness(
         )
     after_text, after = _metrics(base_url)
     after_path = _record_metrics(after_text, artifact_dir=artifact_dir, stem="metrics-after")
+    ep_rank_histogram = expert_parallel_rank_histogram(histogram, ep_size=ep_size)
+    mean_rank_assignments = sum(ep_rank_histogram) / len(ep_rank_histogram)
+    imbalance_triggered = any(count == 0 for count in histogram) or any(
+        count > 2 * mean_rank_assignments for count in ep_rank_histogram
+    )
     return {
         "passed": True,
         "boundaries": boundary_results,
         "route_histogram": histogram,
+        "ep_rank_histogram": ep_rank_histogram,
+        "routing_balance": {
+            "unused_experts": sum(count == 0 for count in histogram),
+            "mean_ep_rank_assignments": mean_rank_assignments,
+            "max_ep_rank_assignments": max(ep_rank_histogram),
+            "balanced_control_triggered": imbalance_triggered,
+            "balanced_control": (
+                deterministic_balanced_routing_fixture(num_experts=num_experts, top_k=top_k, ep_size=ep_size)
+                if imbalance_triggered
+                else None
+            ),
+        },
         "metrics_before": before_path,
         "metrics_after": after_path,
         "metric_deltas": {
@@ -701,38 +748,206 @@ def run_correctness(
     }
 
 
+def _latency_summary(latencies: list[float]) -> dict[str, float]:
+    if not latencies:
+        raise ValueError("cannot summarize an empty latency sample")
+    ordered = sorted(latencies)
+
+    def percentile(fraction: float) -> float:
+        return ordered[min(len(ordered) - 1, round((len(ordered) - 1) * fraction))]
+
+    return {
+        "min": ordered[0],
+        "p50": percentile(0.50),
+        "p95": percentile(0.95),
+        "max": ordered[-1],
+        "mean": sum(ordered) / len(ordered),
+    }
+
+
+def _run_load_arm(
+    base_url: str,
+    model: str,
+    workload: dict[str, Any],
+    *,
+    max_model_len: int,
+    minimum_seconds: float,
+    minimum_generated_tokens: int,
+    concurrency: int,
+) -> dict[str, Any]:
+    started = time.monotonic()
+    generated = 0
+    request_count = 0
+    request_index = 0
+    latencies: list[float] = []
+    completions: list[tuple[float, int, int]] = []
+    workload_requests = workload["requests"]
+
+    def one(request: dict[str, Any]) -> tuple[float, dict[str, Any], int]:
+        prompt = materialize_prompt(workload, request)
+        max_tokens = min(256, max_model_len - len(prompt))
+        if max_tokens <= 0:
+            raise AssertionError(f"{request['request_id']} leaves no generation capacity")
+        request_started = time.monotonic()
+        payload = _completion(base_url, model, prompt, max_tokens=max_tokens)
+        return time.monotonic() - request_started, payload, int(request["prefix_token_count"])
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
+        while time.monotonic() - started < minimum_seconds or generated < minimum_generated_tokens:
+            batch = [
+                workload_requests[(request_index + offset) % len(workload_requests)] for offset in range(concurrency)
+            ]
+            request_index += len(batch)
+            futures = [executor.submit(one, request) for request in batch]
+            for future in concurrent.futures.as_completed(futures):
+                latency, payload, prefix_tokens = future.result()
+                completion_tokens = int(payload.get("usage", {}).get("completion_tokens", 0))
+                if completion_tokens <= 0:
+                    raise AssertionError("load request generated no tokens")
+                generated += completion_tokens
+                request_count += 1
+                latencies.append(latency)
+                completions.append((time.monotonic() - started, completion_tokens, prefix_tokens))
+
+    elapsed = time.monotonic() - started
+    minute_tokens: list[int] = [0] * (int(elapsed // 60) + 1)
+    cohort_tokens: dict[str, int] = {}
+    for completed_at, completion_tokens, prefix_tokens in completions:
+        minute_tokens[min(int(completed_at // 60), len(minute_tokens) - 1)] += completion_tokens
+        cohort = str(prefix_tokens)
+        cohort_tokens[cohort] = cohort_tokens.get(cohort, 0) + completion_tokens
+    final_five_start = max(0.0, elapsed - 300.0)
+    final_five_tokens = sum(tokens for completed_at, tokens, _ in completions if completed_at >= final_five_start)
+    final_five_seconds = elapsed - final_five_start
+    return {
+        "passed": elapsed >= minimum_seconds and generated >= minimum_generated_tokens,
+        "elapsed_seconds": elapsed,
+        "stable_full_minutes": int(elapsed // 60),
+        "generated_tokens": generated,
+        "requests": request_count,
+        "concurrency": concurrency,
+        "throughput_tokens_per_second": {
+            "full_mean": generated / elapsed,
+            "final_five_minute_mean": final_five_tokens / final_five_seconds,
+        },
+        "full_minute_generated_tokens": minute_tokens[: int(elapsed // 60)],
+        "generated_tokens_by_prefix_length": cohort_tokens,
+        "latency_seconds": _latency_summary(latencies),
+    }
+
+
 def run_acceptance_load(
     base_url: str,
     model: str,
     workload: dict[str, Any],
     *,
+    artifact_dir: Path,
+    max_model_len: int,
     minimum_seconds: float,
     minimum_generated_tokens: int,
+    concurrency: int = 64,
 ) -> dict[str, Any]:
-    started = time.monotonic()
-    generated = 0
-    requests = 0
-    latencies: list[float] = []
     workload_requests = workload["requests"]
-    index = 0
-    while time.monotonic() - started < minimum_seconds or generated < minimum_generated_tokens:
-        request = workload_requests[index % len(workload_requests)]
-        request_started = time.monotonic()
-        payload = _completion(base_url, model, materialize_prompt(workload, request), max_tokens=256)
-        latencies.append(time.monotonic() - request_started)
-        generated += int(payload.get("usage", {}).get("completion_tokens", 0))
-        requests += 1
-        index += 1
-    elapsed = time.monotonic() - started
+    if concurrency <= 0:
+        raise ValueError("concurrency must be positive")
+
+    metric_names = (
+        "vllm:prefix_cache_queries",
+        "vllm:prefix_cache_hits",
+        "vllm:prompt_tokens",
+        "vllm:prompt_tokens_cached",
+        "vllm:generation_tokens",
+        "vllm:num_preemptions",
+    )
+    before_text, before = _metrics(base_url)
+    metric_paths = [
+        _record_metrics(
+            before_text,
+            artifact_dir=artifact_dir,
+            stem="metrics-before-warm",
+            evidence_subdir="load",
+        )
+    ]
+    warm_started = time.monotonic()
+    warm_generated = 0
+
+    def warm_one(request: dict[str, Any]) -> int:
+        prompt = materialize_prompt(workload, request)
+        max_tokens = min(int(request["max_tokens"]), max_model_len - len(prompt))
+        if max_tokens <= 0:
+            raise AssertionError(f"{request['request_id']} leaves no warmup generation capacity")
+        payload = _completion(base_url, model, prompt, max_tokens=max_tokens)
+        return int(payload.get("usage", {}).get("completion_tokens", 0))
+
+    # Populate one branch from every root before the concurrent warm wave. If
+    # all sibling branches start together, none is guaranteed to find a
+    # completed parent prefix in the cache.
+    root_leaders = [request for request in workload_requests if int(request["branch"]) == 0]
+    for request in root_leaders:
+        warm_generated += warm_one(request)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
+        futures = [executor.submit(warm_one, request) for request in workload_requests]
+        for future in concurrent.futures.as_completed(futures):
+            warm_generated += future.result()
+    warm_elapsed = time.monotonic() - warm_started
+    after_warm_text, after_warm = _metrics(base_url)
+    metric_paths.append(
+        _record_metrics(
+            after_warm_text,
+            artifact_dir=artifact_dir,
+            stem="metrics-after-warm",
+            evidence_subdir="load",
+        )
+    )
+
+    arms: list[dict[str, Any]] = []
+    previous_metrics = after_warm
+    for arm_index in range(2):
+        arm = _run_load_arm(
+            base_url,
+            model,
+            workload,
+            max_model_len=max_model_len,
+            minimum_seconds=minimum_seconds,
+            minimum_generated_tokens=minimum_generated_tokens,
+            concurrency=concurrency,
+        )
+        after_arm_text, after_arm = _metrics(base_url)
+        metric_paths.append(
+            _record_metrics(
+                after_arm_text,
+                artifact_dir=artifact_dir,
+                stem=f"metrics-after-arm-{arm_index + 1}",
+                evidence_subdir="load",
+            )
+        )
+        arm["metric_deltas"] = {metric: metric_delta(previous_metrics, after_arm, metric) for metric in metric_names}
+        arms.append(arm)
+        previous_metrics = after_arm
+
+    arm_throughputs = [arm["throughput_tokens_per_second"]["full_mean"] for arm in arms]
+    throughput_mean = sum(arm_throughputs) / len(arm_throughputs)
+    repeatability_delta_percent = (
+        100 * abs(arm_throughputs[0] - arm_throughputs[1]) / throughput_mean if throughput_mean else math.inf
+    )
     return {
-        "passed": elapsed >= minimum_seconds and generated >= minimum_generated_tokens,
-        "elapsed_seconds": elapsed,
-        "generated_tokens": generated,
-        "requests": requests,
-        "latency_seconds": {
-            "min": min(latencies),
-            "max": max(latencies),
-            "mean": sum(latencies) / len(latencies),
+        "passed": warm_generated > 0 and all(arm["passed"] for arm in arms) and repeatability_delta_percent <= 2.0,
+        "warm_populate": {
+            "passed": warm_generated > 0,
+            "elapsed_seconds": warm_elapsed,
+            "requests": len(root_leaders) + len(workload_requests),
+            "generated_tokens": warm_generated,
+            "covered_prefix_lengths": sorted({int(request["prefix_token_count"]) for request in workload_requests}),
+        },
+        "metrics": {
+            "snapshots": metric_paths,
+            "warm_deltas": {metric: metric_delta(before, after_warm, metric) for metric in metric_names},
+        },
+        "arms": arms,
+        "repeatability": {
+            "throughput_delta_percent": repeatability_delta_percent,
+            "limit_percent": 2.0,
+            "passed": repeatability_delta_percent <= 2.0,
         },
     }
 
@@ -741,8 +956,17 @@ def _git_sha() -> str:
     return _run(["git", "rev-parse", "HEAD"], capture_output=True).stdout.strip()
 
 
+def _sha256_path(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def execute(args: argparse.Namespace) -> dict[str, Any]:
     case = CASES[args.case]
+    if args.mode == "acceptance":
+        validate_acceptance_thresholds(
+            minimum_seconds=args.minimum_seconds,
+            minimum_generated_tokens=args.minimum_generated_tokens,
+        )
     state = load_state(state_path(Path(args.state_dir), args.session))
     validate_session(state, case)
     run_id = args.run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -750,9 +974,9 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
     local_dir.mkdir(parents=True, exist_ok=True)
     git_sha = _git_sha()
     write_case(local_dir, case=case, run_id=run_id, git_sha=git_sha)
+    (local_dir / "aws-config").write_text(AWS_CONFIG_CONTENT)
     workload = json.loads((local_dir / "workload.json").read_text())
     manifest = frozen_manifest(case, run_id=run_id, git_sha=git_sha, model_source=args.model_source)
-    (local_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     gang = Gang(
         state,
         case,
@@ -772,6 +996,21 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
     }
     gang.inspect()
     result["pods"] = [dataclasses.asdict(runtime) for runtime in gang.runtimes]
+    manifest["files"] = {
+        filename: _sha256_path(local_dir / filename) for filename in ("aws-config", "config.json", "workload.json")
+    }
+    manifest["dependency_lock_sha256"] = _sha256_path(Path("uv.lock"))
+    manifest["iris"] = {
+        "session_name": state.session_name,
+        "job_id": state.job_id,
+        "priority": state.priority.value,
+        "gpu_variant": state.gpu_variant,
+        "gpus_per_node": state.gpus_per_node,
+        "node_count": len(state.pods),
+        "config_file": state.config_file,
+    }
+    manifest["pods"] = result["pods"]
+    (local_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     try:
         gang.stage()
         gang.start()
@@ -791,6 +1030,8 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
                 model,
                 workload,
                 num_experts=case.num_experts,
+                top_k=case.num_experts_per_tok,
+                ep_size=case.data_parallel_size,
                 artifact_dir=local_dir,
             )
             if args.mode == "acceptance":
@@ -798,6 +1039,8 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
                     base_url,
                     model,
                     workload,
+                    artifact_dir=local_dir,
+                    max_model_len=case.max_model_len,
                     minimum_seconds=args.minimum_seconds,
                     minimum_generated_tokens=args.minimum_generated_tokens,
                 )
@@ -866,8 +1109,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     run.add_argument("--state-dir", default=str(STATE_DIR))
     run.add_argument("--local-output")
     run.add_argument("--server-timeout", type=float, default=SERVER_TIMEOUT_SECONDS)
-    run.add_argument("--minimum-seconds", type=float, default=600)
-    run.add_argument("--minimum-generated-tokens", type=int, default=250_000)
+    run.add_argument("--minimum-seconds", type=float, default=ACCEPTANCE_MINIMUM_SECONDS)
+    run.add_argument(
+        "--minimum-generated-tokens",
+        type=int,
+        default=ACCEPTANCE_MINIMUM_GENERATED_TOKENS,
+    )
     run.add_argument("--no-upload", action="store_true")
     return parser.parse_args(argv)
 

@@ -16,7 +16,9 @@ from experiments.grug.moe.inference_preflight import (
     MARIN_BASE_SHA,
     VLLM_SHA,
     decode_routed_experts,
+    deterministic_balanced_routing_fixture,
     deterministic_workload,
+    expert_parallel_rank_histogram,
     frozen_manifest,
     layer_types,
     materialize_prompt,
@@ -83,7 +85,7 @@ def test_kv_prediction_reproduces_reference_estimates() -> None:
         head_dim=128,
         sliding_window=512,
     )
-    uniform = predict_kv_bytes(
+    exact_schedule_uniform_heads = predict_kv_bytes(
         sequence_length=65_536,
         local_layers=40,
         global_layers=8,
@@ -92,9 +94,28 @@ def test_kv_prediction_reproduces_reference_estimates() -> None:
         head_dim=128,
         sliding_window=512,
     )
+    loadable_semantics = predict_kv_bytes(
+        sequence_length=65_536,
+        local_layers=36,
+        global_layers=12,
+        local_kv_heads=12,
+        global_kv_heads=12,
+        head_dim=128,
+        sliding_window=512,
+    )
+    full_allocation = predict_kv_bytes(
+        sequence_length=65_536,
+        local_layers=0,
+        global_layers=48,
+        local_kv_heads=12,
+        global_kv_heads=12,
+        head_dim=128,
+        sliding_window=512,
+    )
     assert exact / 2**30 == pytest.approx(1.6171875)
-    assert uniform / 2**30 == pytest.approx(3.1171875)
-    assert (uniform - exact) / 2**30 == pytest.approx(1.5)
+    assert exact_schedule_uniform_heads / 2**30 == pytest.approx(3.1171875)
+    assert loadable_semantics / 2**30 == pytest.approx(4.60546875)
+    assert full_allocation / 2**30 == pytest.approx(18.0)
 
 
 def test_workload_has_18_roots_144_branches_and_required_boundaries() -> None:
@@ -158,6 +179,20 @@ def test_routed_expert_transport_and_histogram() -> None:
     decoded = decode_routed_experts(base64.b64encode(buffer.getvalue()).decode("ascii"))
     np.testing.assert_array_equal(decoded, routed)
     assert routing_histogram(decoded, num_experts=4) == [2, 2, 3, 1]
+
+
+def test_linear_expert_placement_and_balanced_control() -> None:
+    assert expert_parallel_rank_histogram([2, 2, 3, 1], ep_size=2) == [4, 4]
+    fixture = deterministic_balanced_routing_fixture(num_experts=128, top_k=4, ep_size=8)
+    assert fixture["expert_histogram"] == [4] * 128
+    assert fixture["ep_rank_histogram"] == [64] * 8
+    assert fixture["all_experts_equal"]
+    assert fixture["all_ep_ranks_equal"]
+
+
+def test_linear_expert_placement_rejects_partial_ranks() -> None:
+    with pytest.raises(ValueError, match="divisible"):
+        expert_parallel_rank_histogram([1, 2, 3], ep_size=2)
 
 
 def test_write_case_freezes_config_workload_and_manifest(tmp_path) -> None:
