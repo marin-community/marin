@@ -488,3 +488,25 @@ These commands do not set a target cluster, region, or zone.
 - Job `/rav/lux-arctic-manifest-v2-004` builds the corrected manifest at
   interactive priority on federated Iris.
 - Echo milestone: https://echo.oa.dev/logs/1596.
+
+### Corrected manifest and survey
+
+- Job `/rav/lux-arctic-manifest-v2-004` succeeded.
+- The corrected manifest SHA-256 is
+  `4aea19379cb6b7414d80f0b72c868f239e9247c05c3a703a26b19a059599f211`.
+- It has 146 sources, 750,000 and 3,000,000 nested training rows, and 74,752
+  held-out rows.
+- The source groups have 28 code, 24 name-matched multilingual, 91 standard,
+  and 3 OOD sources.
+- Job `/rav/lux-arctic-manifest-audit-v2-001` passed.
+- The audit checked 3,074,752 rows from 5,341 selected input files.
+- It verified Stack v3 output hash `32b6fa6f`.
+- The first corrected survey job failed before data access because it synced
+  `marin-core` without the workspace `marin-dupekit` package.
+- Job `/rav/lux-arctic-survey-v2-001-r1` synced both packages and succeeded.
+- All 14,600 survey documents are non-constant.
+- The raw and normalized unique fractions are both 0.9995890411.
+- The near-duplicate document fraction is 0.0033561644.
+- Survey artifact:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/survey/report.html`.
+- Echo milestone: https://echo.oa.dev/logs/1597.
