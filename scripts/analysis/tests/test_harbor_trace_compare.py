@@ -55,8 +55,8 @@ def test_load_local_reads_nested_reward_exception_latency_and_atif(tmp_path):
 
 
 def test_compare_reports_matched_task_regression():
-    before = [Trace("same", "old", 1, None, ())]
-    after = [Trace("same", "new", 0, None, ())]
+    before = [Trace("same", 1, None, ())]
+    after = [Trace("same", 0, None, ())]
 
     report = compare(before, after)
 

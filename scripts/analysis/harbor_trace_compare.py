@@ -4,10 +4,8 @@
 
 """Compare a historical Hugging Face trace dataset with local Harbor trials.
 
-This ports the useful parts of OpenThoughts-Agent's ``behavioral_delta`` and
-``trace_pair_render`` tools to Harbor's current result/ATIF trajectory layout.
-It emits machine-readable aggregate and matched-task statistics plus an HTML
-page containing representative regressions.
+The report includes aggregate and matched-task statistics plus an HTML page of
+representative regressions.
 """
 
 from __future__ import annotations
@@ -31,11 +29,12 @@ from typing import Any
 
 from datasets import load_dataset
 
+AGENT_TIMEOUT_ERROR = "AgentTimeoutError"
+
 
 @dataclass(frozen=True)
 class Trace:
     task: str
-    trial: str
     reward: float | None
     error: str | None
     messages: tuple[dict[str, Any], ...]
@@ -56,7 +55,7 @@ def _number(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
-def _iso(value: str | None) -> datetime | None:
+def _parse_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -69,7 +68,6 @@ def _historical_trace(row: dict[str, Any]) -> Trace:
     messages = row.get("conversations") or row.get("messages") or []
     return Trace(
         task=str(row.get("task") or row.get("task_name") or row.get("trial_name")),
-        trial=str(row.get("trial_name") or row.get("episode") or "unknown"),
         reward=reward,
         error=error,
         messages=tuple(message for message in messages if isinstance(message, dict)),
@@ -121,12 +119,11 @@ def _local_trace(path: Path) -> Trace:
     agent = row.get("agent_result") or {}
     metadata = agent.get("metadata") or {}
     documents = _trajectory_documents(path.parent / "agent")
-    started, finished = _iso(row.get("started_at")), _iso(row.get("finished_at"))
+    started, finished = _parse_datetime(row.get("started_at")), _parse_datetime(row.get("finished_at"))
     duration = (finished - started).total_seconds() if started and finished else None
     request_times = tuple(float(value) / 1000 for value in metadata.get("api_request_times_msec", []))
     return Trace(
         task=str(row.get("task_name") or row.get("trial_name")),
-        trial=str(row.get("trial_name") or path.parent.name),
         reward=reward,
         error=str(error) if error else None,
         messages=_trajectory_messages(documents),
@@ -207,6 +204,27 @@ def _mean(values: Iterable[float | int | None]) -> float | None:
     return statistics.fmean(clean) if clean else None
 
 
+def _reward_by_error(traces: list[Trace]) -> dict[str, dict[str, float | int | None]]:
+    aggregates = {}
+    for error in sorted({trace.error or "none" for trace in traces}):
+        group = [trace for trace in traces if (trace.error or "none") == error]
+        aggregates[error] = {
+            "trials": len(group),
+            "reward_sum": sum(trace.reward or 0 for trace in group),
+            "mean_reward": _mean(trace.reward or 0 for trace in group),
+        }
+    return aggregates
+
+
+def _percentiles(values: list[float]) -> dict[str, float | int | None]:
+    return {
+        "count": len(values),
+        "mean": _mean(values),
+        "p50": statistics.median(values) if values else None,
+        "p90": sorted(values)[int(0.9 * (len(values) - 1))] if values else None,
+    }
+
+
 def summarize(traces: list[Trace], max_output_tokens: int | None = None) -> dict[str, Any]:
     """Return score, exception, latency, token, and behavioral aggregates."""
     numeric = [trace.reward for trace in traces if trace.reward is not None]
@@ -214,22 +232,26 @@ def summarize(traces: list[Trace], max_output_tokens: int | None = None) -> dict
     errors = Counter(trace.error for trace in traces if trace.error)
     api = [value for trace in traces for value in trace.api_request_times]
     completions = [value for trace in traces for value in trace.completion_tokens_by_call]
-    timeout_traces = [trace for trace in traces if trace.error == "AgentTimeoutError"]
+    timeout_traces = [trace for trace in traces if trace.error == AGENT_TIMEOUT_ERROR]
     timeout_api_fraction = [
         sum(trace.api_request_times) / trace.duration
         for trace in timeout_traces
         if trace.duration and trace.api_request_times
     ]
-    reward_error: dict[str, dict[str, float | int | None]] = {}
     total_assistant_messages = sum(row["assistant_messages"] for row in behaviors)
     total_xml_messages = sum(row["xml_messages"] for row in behaviors)
-    for error in sorted({trace.error or "none" for trace in traces}):
-        group = [trace for trace in traces if (trace.error or "none") == error]
-        reward_error[error] = {
-            "trials": len(group),
-            "reward_sum": sum(trace.reward or 0 for trace in group),
-            "mean_reward": _mean(trace.reward or 0 for trace in group),
+    api_stats = _percentiles(api)
+    api_stats["over_120_seconds"] = sum(value >= 120 for value in api)
+    completion_stats = _percentiles(completions)
+    completion_stats.update(
+        {
+            "max": max(completions) if completions else None,
+            "at_or_above_90_percent_of_limit": (
+                sum(value >= 0.9 * max_output_tokens for value in completions) if max_output_tokens else None
+            ),
+            "configured_limit": max_output_tokens,
         }
+    )
     return {
         "trials": len(traces),
         "numeric_trials": len(numeric),
@@ -237,8 +259,8 @@ def summarize(traces: list[Trace], max_output_tokens: int | None = None) -> dict
         "mean_reward_numeric_trials": _mean(numeric),
         "solved": sum(value > 0 for value in numeric),
         "errors": dict(errors.most_common()),
-        "reward_by_error": reward_error,
-        "agent_timeout_rate": errors.get("AgentTimeoutError", 0) / len(traces) if traces else None,
+        "reward_by_error": _reward_by_error(traces),
+        "agent_timeout_rate": errors.get(AGENT_TIMEOUT_ERROR, 0) / len(traces) if traces else None,
         "mean_duration_seconds": _mean(trace.duration for trace in traces),
         "mean_input_tokens": _mean(trace.input_tokens for trace in traces),
         "mean_output_tokens": _mean(trace.output_tokens for trace in traces),
@@ -247,23 +269,8 @@ def summarize(traces: list[Trace], max_output_tokens: int | None = None) -> dict
             Counter(str(trace.timeout_budget) for trace in timeout_traces if trace.timeout_budget)
         ),
         "timeout_mean_api_fraction": _mean(timeout_api_fraction),
-        "api_request_seconds": {
-            "count": len(api),
-            "mean": _mean(api),
-            "p50": statistics.median(api) if api else None,
-            "p90": sorted(api)[int(0.9 * (len(api) - 1))] if api else None,
-            "over_120_seconds": sum(value >= 120 for value in api),
-        },
-        "completion_tokens_by_call": {
-            "count": len(completions),
-            "max": max(completions) if completions else None,
-            "p50": statistics.median(completions) if completions else None,
-            "p90": sorted(completions)[int(0.9 * (len(completions) - 1))] if completions else None,
-            "at_or_above_90_percent_of_limit": (
-                sum(value >= 0.9 * max_output_tokens for value in completions) if max_output_tokens else None
-            ),
-            "configured_limit": max_output_tokens,
-        },
+        "api_request_seconds": api_stats,
+        "completion_tokens_by_call": completion_stats,
         "behavior": {key: _mean(row[key] for row in behaviors) for key in behaviors[0]} if behaviors else {},
         "observed_message_format": {
             "xml_fraction": total_xml_messages / total_assistant_messages if total_assistant_messages else None,
@@ -279,13 +286,18 @@ def _task_values(traces: list[Trace]) -> dict[str, list[float]]:
     return values
 
 
+def _task_deltas(before: list[Trace], after: list[Trace]) -> dict[str, float]:
+    left, right = _task_values(before), _task_values(after)
+    return {
+        task: statistics.fmean(right[task]) - statistics.fmean(left[task]) for task in sorted(left.keys() & right.keys())
+    }
+
+
 def matched_tasks(before: list[Trace], after: list[Trace]) -> dict[str, Any]:
     """Compare per-task means over tasks present on both sides."""
-    left, right = _task_values(before), _task_values(after)
-    common = sorted(left.keys() & right.keys())
-    deltas = {task: statistics.fmean(right[task]) - statistics.fmean(left[task]) for task in common}
+    deltas = _task_deltas(before, after)
     return {
-        "tasks": len(common),
+        "tasks": len(deltas),
         "mean_task_delta": _mean(deltas.values()),
         "regressed_tasks": sum(delta < 0 for delta in deltas.values()),
         "improved_tasks": sum(delta > 0 for delta in deltas.values()),
@@ -309,13 +321,24 @@ def compare(before: list[Trace], after: list[Trace], max_output_tokens: int | No
     }
 
 
-def load_registry_job(job_id: str) -> dict[str, Any]:
+def _agent_config(config: dict[str, Any], agent: dict[str, Any]) -> dict[str, Any]:
+    kwargs = agent.get("kwargs") or {}
+    model_info = kwargs.get("model_info") or {}
+    return {
+        "parser": kwargs.get("parser"),
+        "max_input_tokens": model_info.get("max_input_tokens"),
+        "max_output_tokens": model_info.get("max_output_tokens"),
+        "timeout_multiplier": config.get("timeout_multiplier"),
+        "enable_thinking": ((kwargs.get("extra_body") or {}).get("chat_template_kwargs") or {}).get("enable_thinking"),
+    }
+
+
+def load_registry_job(job_id: str, supabase_url: str, supabase_key: str) -> dict[str, Any]:
     """Load authoritative score, token totals, and reward/error overlap."""
-    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ["SUPABASE_ANON_KEY"]
     query = urllib.parse.urlencode({"id": f"eq.{job_id}", "select": "id,metrics,stats,config"})
     request = urllib.request.Request(
-        f"{os.environ['SUPABASE_URL']}/rest/v1/sandbox_jobs?{query}",
-        headers={"apikey": key, "Authorization": f"Bearer {key}"},
+        f"{supabase_url}/rest/v1/sandbox_jobs?{query}",
+        headers={"apikey": supabase_key, "Authorization": f"Bearer {supabase_key}"},
     )
     with urllib.request.urlopen(request) as response:
         rows = json.load(response)
@@ -334,8 +357,6 @@ def load_registry_job(job_id: str) -> dict[str, Any]:
     no_error_reward = sum(reward_by_trial[trial] for trial in no_error_trials)
     config = row.get("config") or {}
     agent = (config.get("agents") or [{}])[0]
-    kwargs = agent.get("kwargs") or {}
-    model_info = kwargs.get("model_info") or {}
     return {
         "job_id": job_id,
         "accuracy": accuracy,
@@ -349,14 +370,8 @@ def load_registry_job(job_id: str) -> dict[str, Any]:
         "input_tokens": (row.get("stats") or {}).get("n_input_tokens"),
         "output_tokens": (row.get("stats") or {}).get("n_output_tokens"),
         "config": {
-            "parser": kwargs.get("parser"),
-            "max_input_tokens": model_info.get("max_input_tokens"),
-            "max_output_tokens": model_info.get("max_output_tokens"),
-            "timeout_multiplier": config.get("timeout_multiplier"),
+            **_agent_config(config, agent),
             "n_concurrent_trials": config.get("n_concurrent_trials"),
-            "enable_thinking": (
-                ((kwargs.get("extra_body") or {}).get("chat_template_kwargs") or {}).get("enable_thinking")
-            ),
         },
     }
 
@@ -367,15 +382,10 @@ def load_local_config(root: Path) -> dict[str, Any]:
     result = json.loads(result_path.read_text())
     config = result.get("config") or {}
     agent = config.get("agent") or {}
-    kwargs = agent.get("kwargs") or {}
-    model_info = kwargs.get("model_info") or {}
     trajectory = json.loads((result_path.parent / "agent" / "trajectory.json").read_text())
     return {
+        **_agent_config(config, agent),
         "parser": ((trajectory.get("agent") or {}).get("extra") or {}).get("parser"),
-        "max_input_tokens": model_info.get("max_input_tokens"),
-        "max_output_tokens": model_info.get("max_output_tokens"),
-        "timeout_multiplier": config.get("timeout_multiplier"),
-        "enable_thinking": ((kwargs.get("extra_body") or {}).get("chat_template_kwargs") or {}).get("enable_thinking"),
         "agent_version": (result.get("agent_info") or {}).get("version"),
     }
 
@@ -468,13 +478,7 @@ def render_regressions(before: list[Trace], after: list[Trace], output: Path, to
         grouped_before[trace.task].append(trace)
     for trace in after:
         grouped_after[trace.task].append(trace)
-    regressions = []
-    for task in grouped_before.keys() & grouped_after.keys():
-        after_reward = statistics.fmean(t.reward or 0 for t in grouped_after[task])
-        before_reward = statistics.fmean(t.reward or 0 for t in grouped_before[task])
-        delta = after_reward - before_reward
-        if delta < 0:
-            regressions.append((delta, task))
+    regressions = [(delta, task) for task, delta in _task_deltas(before, after).items() if delta < 0]
     sections = []
     for delta, task in sorted(regressions)[:top_n]:
         left = max(grouped_before[task], key=lambda trace: trace.reward or 0)
@@ -510,7 +514,12 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     report = compare(before, after, args.max_output_tokens)
     if args.historical_job_id:
-        report["historical_registry"] = load_registry_job(args.historical_job_id)
+        supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ["SUPABASE_ANON_KEY"]
+        report["historical_registry"] = load_registry_job(
+            args.historical_job_id,
+            os.environ["SUPABASE_URL"],
+            supabase_key,
+        )
         report["current_config"] = load_local_config(args.current)
         report["config_mismatches"] = config_mismatches(
             report["historical_registry"]["config"], report["current_config"]
