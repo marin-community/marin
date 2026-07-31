@@ -86,7 +86,6 @@ GHALOGS_TOTAL_BYTES = 143_425_404_506
 GHALOGS_ARCHIVE_BYTES = 142_292_965_496
 LOGCHUNKS_TOTAL_BYTES = 24_108_826
 LOGHUB_REPO_SIZE_BYTES = 7_513_088
-GHALOGS_ROUGH_TOKENS_B = 150.0
 DEFAULT_GHALOGS_MAX_MEMBERS = 10_000
 DEFAULT_LOGCHUNKS_MAX_EXAMPLES = 10_000
 DEFAULT_LOGHUB_MAX_FILES = 100
@@ -304,7 +303,6 @@ SOURCE_INVENTORY: tuple[IngestionSourceManifest, ...] = (
         issue_numbers=(PUBLIC_DIAGNOSTIC_LOGS_ISSUE,),
         sample_caps=SampleCapConfig(max_members=DEFAULT_GHALOGS_MAX_MEMBERS),
         compressed_size_bytes=GHALOGS_TOTAL_BYTES,
-        rough_tokens_b=GHALOGS_ROUGH_TOKENS_B,
         source_metadata={"archive_filename": GHALOGS_ZIP_FILENAME},
     ),
     IngestionSourceManifest(
