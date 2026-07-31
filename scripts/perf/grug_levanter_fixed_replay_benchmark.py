@@ -27,7 +27,7 @@ import datetime as dt
 import gc
 import hashlib
 import json
-import os
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -38,14 +38,13 @@ from pathlib import Path
 from typing import Any, NamedTuple
 from urllib.parse import urlparse
 
-import boto3
 import equinox as eqx
+import fsspec
 import jax
 import jax.numpy as jnp
 import jmp
 import numpy as np
 import optax
-from botocore.config import Config
 from haliax.partitioning import set_mesh
 from iris.cluster.client.job_info import get_job_info
 from iris.runtime.jax_init import initialize_jax
@@ -108,22 +107,6 @@ def split_s3_uri(uri: str) -> tuple[str, str]:
     return parsed.netloc, parsed.path.lstrip("/")
 
 
-def s3_client():
-    endpoint = os.environ.get("CW_S3_ENDPOINT") or os.environ.get("AWS_ENDPOINT_URL")
-    access_key = os.environ.get("CW_KEY_ID") or os.environ.get("AWS_ACCESS_KEY_ID")
-    secret_key = os.environ.get("CW_KEY_SECRET") or os.environ.get("AWS_SECRET_ACCESS_KEY")
-    kwargs: dict[str, Any] = {
-        "config": Config(signature_version="s3v4", s3={"addressing_style": "virtual"}),
-    }
-    if endpoint:
-        kwargs["endpoint_url"] = endpoint
-    if access_key:
-        kwargs["aws_access_key_id"] = access_key
-    if secret_key:
-        kwargs["aws_secret_access_key"] = secret_key
-    return boto3.client("s3", **kwargs)
-
-
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as source:
@@ -136,12 +119,14 @@ def numpy_bytes(value: np.ndarray) -> memoryview:
     return memoryview(np.ascontiguousarray(value)).cast("B")
 
 
-def _download_verified(client, record: Mapping[str, Any], path: Path) -> None:
+def _download_verified(record: Mapping[str, Any], path: Path) -> None:
     if path.exists() and path.stat().st_size == int(record["bytes"]) and sha256_file(path) == record["sha256"]:
         return
-    bucket, key = split_s3_uri(str(record["s3_uri"]))
+    uri = str(record["s3_uri"])
+    split_s3_uri(uri)
     temporary = path.with_suffix(path.suffix + ".part")
-    client.download_file(bucket, key, str(temporary))
+    with fsspec.open(uri, "rb") as source, temporary.open("wb") as destination:
+        shutil.copyfileobj(source, destination, length=CHUNK_BYTES)
     if temporary.stat().st_size != int(record["bytes"]):
         raise RuntimeError(f"{record['s3_uri']}: byte count mismatch")
     actual = sha256_file(temporary)
@@ -205,14 +190,14 @@ def verify_replay_directory(manifest: Mapping[str, Any], paths: Sequence[Path], 
 
 
 def load_verified_manifest(
-    client,
     manifest_uri: str,
     expected_manifest_sha256: str,
     expected_logical_sha256: str,
     directory: Path,
 ) -> tuple[dict[str, Any], list[Path]]:
-    bucket, key = split_s3_uri(manifest_uri)
-    payload = client.get_object(Bucket=bucket, Key=key)["Body"].read()
+    split_s3_uri(manifest_uri)
+    with fsspec.open(manifest_uri, "rb") as source:
+        payload = source.read()
     actual_manifest_sha256 = hashlib.sha256(payload).hexdigest()
     if actual_manifest_sha256 != expected_manifest_sha256:
         raise RuntimeError(
@@ -237,8 +222,7 @@ def load_verified_manifest(
     paths = [directory / record["filename"] for record in manifest["shards"]]
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
         futures = [
-            pool.submit(_download_verified, client, record, path)
-            for record, path in zip(manifest["shards"], paths, strict=True)
+            pool.submit(_download_verified, record, path) for record, path in zip(manifest["shards"], paths, strict=True)
         ]
         for future in futures:
             future.result()
@@ -565,28 +549,29 @@ def gather_json(value: Any) -> list[Any]:
     return [json.loads(bytes(row[: int(length)])) for row, length in zip(gathered, lengths, strict=True)]
 
 
-def upload_json(client, uri: str, result: dict[str, Any]) -> tuple[str, str]:
+def upload_json(uri: str, result: dict[str, Any]) -> tuple[str, str]:
     unsigned = json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
     result["result_sha256"] = hashlib.sha256(unsigned).hexdigest()
     payload = (json.dumps(result, indent=2, sort_keys=True) + "\n").encode()
-    bucket, key = split_s3_uri(uri)
-    client.put_object(Bucket=bucket, Key=key, Body=payload, ContentType="application/json")
+    split_s3_uri(uri)
+    with fsspec.open(uri, "wb") as destination:
+        destination.write(payload)
     return result["result_sha256"], hashlib.sha256(payload).hexdigest()
 
 
-def upload_profile_directory(client, directory: Path, prefix_uri: str, process_index: int) -> list[dict[str, Any]]:
+def upload_profile_directory(directory: Path, prefix_uri: str, process_index: int) -> list[dict[str, Any]]:
     """Upload one process's JAX trace before the ephemeral Iris task exits."""
 
-    bucket, placeholder_key = split_s3_uri(prefix_uri.rstrip("/") + "/placeholder")
-    prefix = placeholder_key.rsplit("/", 1)[0]
+    split_s3_uri(prefix_uri.rstrip("/") + "/placeholder")
     uploaded = []
     for path in sorted(candidate for candidate in directory.rglob("*") if candidate.is_file()):
         relative = path.relative_to(directory).as_posix()
-        key = f"{prefix}/process-{process_index:03d}/{relative}"
-        client.upload_file(str(path), bucket, key)
+        uri = f"{prefix_uri.rstrip('/')}/process-{process_index:03d}/{relative}"
+        with path.open("rb") as source, fsspec.open(uri, "wb") as destination:
+            shutil.copyfileobj(source, destination, length=CHUNK_BYTES)
         uploaded.append(
             {
-                "s3_uri": f"s3://{bucket}/{key}",
+                "s3_uri": uri,
                 "bytes": path.stat().st_size,
                 "sha256": sha256_file(path),
             }
@@ -656,10 +641,8 @@ def main() -> None:
     if jax.default_backend() != "gpu" or any("H100" not in device.device_kind for device in jax.local_devices()):
         raise RuntimeError(f"benchmark requires local H100s, got {[d.device_kind for d in jax.local_devices()]}")
 
-    client = s3_client()
     replay_dir = Path(tempfile.gettempdir()) / "grug-fixed-replay" / args.logical_batch_sha256
     manifest, paths = load_verified_manifest(
-        client,
         args.manifest_s3_uri,
         args.manifest_sha256,
         args.logical_batch_sha256,
@@ -791,7 +774,7 @@ def main() -> None:
             gc.collect()
 
     local_profile_artifacts = (
-        upload_profile_directory(client, args.profile_dir, args.profile_s3_prefix, jax.process_index())
+        upload_profile_directory(args.profile_dir, args.profile_s3_prefix, jax.process_index())
         if args.profile_dir is not None and jax.process_index() == 0
         else []
     )
@@ -888,7 +871,7 @@ def main() -> None:
             result["headline_exclusion_reason"] = "profiler was active in timed sample zero"
         else:
             result["headline_eligible"] = True
-        result_sha256, payload_sha256 = upload_json(client, args.result_s3_uri, result)
+        result_sha256, payload_sha256 = upload_json(args.result_s3_uri, result)
         print(
             "GRUG_BENCHMARK_RESULT="
             + json.dumps(
