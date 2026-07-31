@@ -45,7 +45,7 @@ from marin.processing.classification.deduplication.fuzzy_verification import (
 
 logger = logging.getLogger(__name__)
 
-VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION = 2
+VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION = 1
 PERCENT_HISTOGRAM_METRICS = frozenset({"member_containment", "jaccard", "char_jaccard", "local_char_jaccard"})
 SCORE_HISTOGRAM_MAX_PERCENT = 100
 UNIQUE_NGRAM_HISTOGRAM_OVERFLOW_BIN = 33
@@ -98,6 +98,7 @@ class VerifiedFuzzyDupsPerSource(BaseModel):
     """Attribute output for one normalized source."""
 
     attr_dir: DatakitArtifactPath
+    source_tag: str
 
 
 class VerifiedFuzzyDupsAttrData(BaseModel):
@@ -544,7 +545,7 @@ def _verification_shards(
     minhash_sources: dict[str, MinHashAttrData],
     candidates: FuzzyDupsAttrData,
     output_path: str,
-) -> tuple[list[VerificationShard], dict[str, str]]:
+) -> tuple[list[VerificationShard], dict[str, str], dict[str, str]]:
     """Build and validate the co-partitioned verification layout."""
     normalized_by_key: dict[str, NormalizedData] = {}
     normalized_entries: list[tuple[str, str, NormalizedData]] = []
@@ -616,7 +617,8 @@ def _verification_shards(
         )
         for entry in entries
     ]
-    return shards, attr_dirs
+    source_tags = {entry.source_key: entry.source_tag for entry in entries}
+    return shards, attr_dirs, source_tags
 
 
 def verify_fuzzy_dups(
@@ -638,7 +640,7 @@ def verify_fuzzy_dups(
         raise ValueError("verify_fuzzy_dups requires at least one normalized source")
     if max_parallelism < 1:
         raise ValueError("max_parallelism must be at least 1")
-    shards, attr_dirs = _verification_shards(
+    shards, attr_dirs, source_tags = _verification_shards(
         normalized_sources=normalized_sources,
         minhash_sources=minhash_sources,
         candidates=candidates,
@@ -701,7 +703,11 @@ def verify_fuzzy_dups(
         verification=verification_params,
         local_representatives=local_representative_params,
         sources={
-            source_key: VerifiedFuzzyDupsPerSource(attr_dir=attr_dir) for source_key, attr_dir in attr_dirs.items()
+            source_key: VerifiedFuzzyDupsPerSource(
+                attr_dir=attr_dir,
+                source_tag=source_tags[source_key],
+            )
+            for source_key, attr_dir in attr_dirs.items()
         },
         counters=dict(outcome.counters),
     )

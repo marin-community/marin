@@ -263,9 +263,9 @@ cluster makes this policy unsuitable as the first production version.
 
 | Source | Type | Location | Claim used for | Confidence | Notes |
 |---|---|---|---|---|---|
-| Marin code | Code | `fuzzy_dups.py` at `9ca32c43e` | Candidate artifact contract | High | Current `origin/main` |
-| Marin code | Code | `copartitioned.py` at `9ca32c43e` | Map-side join contract | High | Current `origin/main` |
-| Marin code | Code | `datakit_store.py` at `9ca32c43e` | Current deletion behavior | High | Current `origin/main` |
+| Marin code | Code | `fuzzy_dups.py` at `d5a577cd6` | Candidate artifact contract | High | Current `origin/main` |
+| Marin code | Code | `copartitioned.py` at `d5a577cd6` | Map-side join contract | High | Current `origin/main` |
+| Marin code | Code | `datakit_store.py` at `d5a577cd6` | Current deletion behavior | High | Current `origin/main` |
 | #6854 | GitHub issue | Whole-source wipeouts | Cluster failure sizes | High | Production artifact analysis |
 | #6851 | GitHub issue | Template over-merge | Template failure mode | High | Production artifact analysis |
 | #7591 | Pull request | Closed replacement | Exact-rule measurements | Medium | Model-assisted labels |
@@ -288,6 +288,29 @@ from verifier decisions, and shows per-source decisions.
 The independent testbed merge remains separate from the production join. The
 testbed checks persisted inputs and outputs without calling the production
 merge.
+
+## Final Peer Review
+
+The cross-agent review of the rebased local-representative version found no
+blocking correctness error. It traced the exact-ID delegation, reducer order,
+sentinel path, two shuffles, and global-exact filter interaction.
+
+The review found an implicit relation between the report counter tags and
+attribute directory names. The verifier artifact now stores each explicit
+`source_tag`, and the report uses that value. The review also caused the new
+artifact version to start at `v1`, restored the candidate artifact's
+co-partition contract in its module documentation, and made the small 24-match
+recall gain explicit in the design.
+
+The review proposed a canonical-only first release because local nomination
+adds substantial code for 24 more matches. The selected task requires bounded
+local nomination, and the final version has passed the rated, 0.1B, and 100B
+gates, so the local path remains. The independent testbed replay also remains
+because it checks persisted output without calling the production reducer. Its
+module now identifies it as a manual gate for this algorithm version, not a
+production validation API. The store keeps its null check because it reads
+external Parquet and must reject a malformed `dup_doc` column even though the
+normal writer uses a non-nullable schema.
 
 ## Handoff
 

@@ -5,8 +5,9 @@
 
 Loads MinHash bucket attrs from each input, runs LSH-graph connected
 components globally across all inputs, and writes per-source attribute trees
-that identify every non-singleton cluster member. The full-text verification
-job consumes this candidate artifact.
+that identify every non-singleton cluster member. Each tree is co-partitioned
+with its underlying ``NormalizedData``. The full-text verification job consumes
+this candidate artifact.
 
 Per-document attr rows have schema::
 
