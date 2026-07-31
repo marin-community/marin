@@ -239,8 +239,9 @@ def compute_fuzzy_dups_attrs(
 
     Exactly one member per cluster has ``is_cluster_canonical=True`` — the
     one CC's Hash-to-Min picked as the natural canonical (min ``id_norm``).
-    The full-text verifier uses this deterministic canonical as its comparison
-    representative. It does not use this flag alone as a duplicate decision.
+    The full-text verifier compares this deterministic canonical first. It can
+    then compare retained local representatives that share LSH buckets. It does
+    not use this flag alone as a duplicate decision.
 
     Args:
         inputs: ``MinHashAttrData`` artifacts to fuzzy-dedup together.

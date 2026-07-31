@@ -56,8 +56,16 @@ VERIFIED_DUPS_REQUIRED_COLUMNS = {
     "dup_doc",
     "dup_cluster_id",
     "dup_representative_id",
+    "dup_representative_source_key",
+    "dup_representative_kind",
+    "dup_shared_lsh_buckets",
+    "dup_comparisons",
     "dup_member_containment",
     "dup_jaccard",
+    "dup_under_tokenized",
+    "dup_char_jaccard",
+    "dup_local_token_sequence_equal",
+    "dup_local_char_jaccard",
 }
 VERIFIED_DUPS_DROP_MAX_FRACTION = 0.50
 
