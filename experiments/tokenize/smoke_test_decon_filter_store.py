@@ -67,15 +67,14 @@ def _list_parquets(directory: str) -> list[str]:
 def _load_contam_ids(decon_dirs: list[str]) -> set[str]:
     """Union of `id`s flagged as contaminated across all sources' decon parquets.
 
-    Decon emits the datakit ``{id, partition_id, attributes: {contaminated, ...}}``
-    shape; flatten the struct via pyarrow ``StructArray.field`` so we don't
-    materialize the matched_hashes column.
+    Decon emits flat Datakit attribute columns. Select only ``id`` and
+    ``contaminated`` so this does not materialize ``matched_hashes``.
     """
     ids: set[str] = set()
     for d in decon_dirs:
         for path in _list_parquets(d):
-            table = pq.read_table(path, columns=["id", "attributes"])
-            contaminated = table.column("attributes").combine_chunks().field("contaminated").to_pylist()
+            table = pq.read_table(path, columns=["id", "contaminated"])
+            contaminated = table.column("contaminated").to_pylist()
             ids_col = table.column("id").to_pylist()
             for i, c in zip(ids_col, contaminated, strict=True):
                 if c:
