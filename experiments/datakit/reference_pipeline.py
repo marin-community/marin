@@ -12,10 +12,7 @@ StepRunner-walkable graph. Two modes (``--mode``), same DAG:
 
 Per source::
 
-    normalize ─┐
-               ├→ global exact dedup by record ID
-               └→ ...
-
+    all normalize steps → global exact dedup by record ID
     exact dedup → tokenize
                 → embed (luxical-one)   → assign (domain v0, given centroids)
                 → quality                (pooled fast-transformer, given model dir)
@@ -114,7 +111,7 @@ from marin.processing.tokenize.attributes import (
     TokenizedAttrData,
     tokenize_attributes_step,
 )
-from rigging.filesystem import StoragePath, marin_prefix, prefix_join
+from rigging.filesystem import StoragePath, marin_prefix
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.cluster.domain.v0.assign import (
@@ -141,7 +138,11 @@ from experiments.datakit.embeddings.luxical.pipeline import (
     EmbeddingAttrData,
     embed_source,
 )
-from experiments.datakit.global_exact_dedup import GlobalExactDedupData, global_exact_deduplicate
+from experiments.datakit.global_exact_dedup import (
+    GlobalExactDedupData,
+    global_exact_dedup_source_path,
+    global_exact_deduplicate,
+)
 from experiments.datakit.reports.decontam import decontam_report
 from experiments.datakit.reports.dedup import dedup_report
 from experiments.datakit.reports.domain import assign_report
@@ -487,18 +488,12 @@ class DatakitSteps:
     sources: dict[str, StepSpec]
     """Echo of the input sources mapping (``{name: normalize_step}``)."""
 
-    exact_dedup: StepSpec
-    """Global exact-dedup StepSpec."""
-
-    deduplicated_sources: dict[str, StepSpec]
-    """Per-source views of the global exact-dedup output."""
-
     output_buckets: StepSpec
     """Final store StepSpec. Its ``output_path`` is the per-(cluster, quality)
     bucket directory the downstream training mixture reads from."""
 
     all_steps: list[StepSpec]
-    """Every StepSpec that the runner needs."""
+    """Every StepSpec the runner needs (shared upstream, per-source, dedup, store)."""
 
 
 def reference_datakit_steps(
@@ -566,7 +561,7 @@ def reference_datakit_steps(
             name=f"datakit/global_exact_dedup_source/{name}",
             deps=[exact_dedup],
             hash_attrs={"source": name, "v": 1},
-            override_output_path=prefix_join(exact_dedup.output_path, f"sources/{source_rank:05d}"),
+            override_output_path=global_exact_dedup_source_path(exact_dedup.output_path, source_rank),
             fn=lambda _output_path, source=name: read_artifact(exact_dedup.output_path, GlobalExactDedupData).sources[
                 source
             ],
@@ -859,8 +854,6 @@ def reference_datakit_steps(
     all_steps += [dedup, store, *reports]
     return DatakitSteps(
         sources=sources,
-        exact_dedup=exact_dedup,
-        deduplicated_sources=deduplicated_sources,
         output_buckets=store,
         all_steps=all_steps,
     )

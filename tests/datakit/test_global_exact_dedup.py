@@ -22,39 +22,44 @@ def flow_backend_ctx():
         yield
 
 
-def _normalized_source(root: Path, records: list[dict]) -> NormalizedData:
+def _normalized_source(root: Path, shards: list[list[dict]]) -> NormalizedData:
     main = root / "outputs" / "main"
     main.mkdir(parents=True)
-    pq.write_table(pa.Table.from_pylist(records), main / "part-00000-of-00001.parquet")
+    for shard_index, records in enumerate(shards):
+        pq.write_table(
+            pa.Table.from_pylist(records),
+            main / f"part-{shard_index:05d}-of-{len(shards):05d}.parquet",
+        )
     return NormalizedData(main_output_dir=str(main), dup_output_dir=str(root / "outputs" / "dups"), counters={})
 
 
-def _records(source: NormalizedData) -> list[dict]:
-    records = []
-    for path in sorted(Path(source.main_output_dir).rglob("*.parquet")):
-        records.extend(pq.read_table(path).to_pylist())
-    return records
+def _shards(source: NormalizedData) -> list[list[dict]]:
+    return [pq.read_table(path).to_pylist() for path in sorted(Path(source.main_output_dir).rglob("*.parquet"))]
 
 
 def test_global_exact_deduplicate_keeps_one_record_for_each_id(tmp_path: Path):
     source_a = _normalized_source(
         tmp_path / "input-a",
         [
-            {"id": "a-only", "text": "A only", "a_metadata": 1},
-            {"id": "a-only", "text": "Duplicate in the canonical shard", "a_metadata": 3},
-            {"id": "shared", "text": "Canonical text", "a_metadata": 2},
+            [
+                {"id": "a-only", "text": "A only", "a_metadata": 1},
+                {"id": "shared", "text": "Canonical text", "a_metadata": 2},
+            ],
         ],
     )
     source_b = _normalized_source(
         tmp_path / "input-b",
         [
-            {"id": "b-only", "text": "B only", "b_metadata": "x"},
-            {"id": "shared", "text": "Different text with the same record ID", "b_metadata": "y"},
+            [{"id": "b-only", "text": "B only", "b_metadata": "x"}],
+            [
+                {"id": "shared", "text": "Different text with the same record ID", "b_metadata": "y"},
+                {"id": "a-only", "text": "Another duplicate ID", "b_metadata": "z"},
+            ],
         ],
     )
     source_c = _normalized_source(
         tmp_path / "input-c",
-        [{"id": "c-only", "text": "C only", "c_metadata": True}],
+        [[{"id": "c-only", "text": "C only", "c_metadata": True}]],
     )
 
     result = global_exact_deduplicate(
@@ -64,12 +69,22 @@ def test_global_exact_deduplicate_keeps_one_record_for_each_id(tmp_path: Path):
         max_workers=2,
     )
 
-    assert _records(result.sources["a"]) == [
-        {"id": "a-only", "text": "A only", "a_metadata": 1},
-        {"id": "shared", "text": "Canonical text", "a_metadata": 2},
+    assert _shards(result.sources["a"]) == [
+        [
+            {"id": "a-only", "text": "A only", "a_metadata": 1},
+            {"id": "shared", "text": "Canonical text", "a_metadata": 2},
+        ]
     ]
-    assert _records(result.sources["b"]) == [{"id": "b-only", "text": "B only", "b_metadata": "x"}]
-    assert _records(result.sources["c"]) == [{"id": "c-only", "text": "C only", "c_metadata": True}]
+    assert _shards(result.sources["b"]) == [
+        [{"id": "b-only", "text": "B only", "b_metadata": "x"}],
+        [],
+    ]
+    assert _shards(result.sources["c"]) == [[{"id": "c-only", "text": "C only", "c_metadata": True}]]
     assert result.counters["global_exact_dedup/records_in"] == 6
     assert result.counters["global_exact_dedup/records_out"] == 4
     assert result.counters["global_exact_dedup/duplicate_records"] == 2
+    assert result.sources["b"].counters == {
+        "global_exact_dedup/records_in": 3,
+        "global_exact_dedup/records_out": 1,
+        "global_exact_dedup/duplicate_records": 2,
+    }

@@ -22,8 +22,12 @@ plus, where it makes sense, a small site/sample side output
 reports ([`reports/`](reports/)) read.
 
 Global exact deduplication is one shared step. It keeps one record for each
-record ID, with source names as the canonical order. The step copies shards
-that contain no duplicates and rewrites the other shards.
+record ID, with source names as the canonical order. The step writes a second
+normalized corpus. It uses atomic server-side copies for shards without
+duplicates and rewrites the other shards.
+
+A source-set change gives a new global exact-dedup output. As a result, all
+downstream stages also get new output identities.
 
 Each `datakit/report/<stage>` step depends only on that stage's steps, so it
 runs as soon as the stage finishes — reports are not deferred to the end of the
