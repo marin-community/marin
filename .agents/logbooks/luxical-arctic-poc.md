@@ -510,3 +510,71 @@ These commands do not set a target cluster, region, or zone.
 - Survey artifact:
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/survey/report.html`.
 - Echo milestone: https://echo.oa.dev/logs/1597.
+
+### Corrected teacher recovery and audit
+
+- One H100 teacher task disappeared after it wrote six complete source files.
+- Seven replacement H100 jobs stayed scheduling-gated because no H100 capacity
+  was available. They were stopped and replaced with seven federated,
+  interactive GB200 jobs.
+- All seven GB200 jobs succeeded with zero failures and zero preemptions.
+- Corrected teacher audit job
+  `/rav/lux-arctic-teacher-audit-v2-gb200-001` succeeded.
+- The audit verified 146 source files and 3,074,752 rows against manifest
+  `4aea19379cb6b7414d80f0b72c868f239e9247c05c3a703a26b19a059599f211`.
+- Every source has 256 varying `uint8` dimensions. The minimum exact
+  per-source unique fraction is 0.8956096670.
+- Audit artifact:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/teacher-arctic-v1/audit.json`.
+- The teacher artifacts contain one full H100 shard and six H100 source files
+  from a second shard. The remaining teacher files used GB200.
+- Incident record: https://echo.oa.dev/wiki/52.
+- Echo milestone: https://echo.oa.dev/logs/1625.
+
+### Corrected 0.75M result
+
+- Training job `/rav/lux-arctic-train-v2-gb200-750k-001` succeeded in 6
+  minutes 5 seconds.
+- It trained 750,000 rows for 186 steps. Loss changed from 0.00550099 to
+  0.00310098.
+- Model SHA-256:
+  `7e5e9202272c27e9c83cc63d048bc4d5ec7f42dd65c3465d3b875af4c902c709`.
+- The first evaluation failed when OpenBLAS exceeded its thread-region limit
+  on a high-core-count worker.
+- Commit `0b82ba40f` applies the fixed eight-thread limit to the complete
+  evaluation.
+- Replacement evaluation job `/rav/lux-arctic-eval-v2-gb200-750k-r1`
+  succeeded in 3 minutes 2 seconds.
+- Four of ten required gates pass. CPU speed ratio is 1.00032. Source
+  macro-F1 delta is -0.37034. Arctic fidelity delta is -0.05165.
+- Code, multilingual, and standard macro-F1 deltas are -0.43098, -0.61964,
+  and -0.28845.
+- All 143 regular sources fail at least one composite collapse test.
+- Evaluation artifact:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/750k/report.json`.
+
+### Corrected 3M result and decision
+
+- Training job `/rav/lux-arctic-train-v2-gb200-3m-001` succeeded in 31
+  minutes 28 seconds.
+- It trained 3,000,000 rows for 735 steps. Loss changed from 0.00558436 to
+  0.00124420.
+- Model SHA-256:
+  `395aaa10ff2cbabcff18ceabc8a575e1ea4fb49a0ebd64a894581d48f6b76c5a`.
+- Evaluation job `/rav/lux-arctic-eval-v2-gb200-3m-001` succeeded in 3
+  minutes 9 seconds.
+- Eight of ten required gates pass. CPU speed ratio is 0.99470. Source
+  macro-F1 delta is +0.00210. Arctic fidelity delta is +0.05824.
+- Code, multilingual, and standard macro-F1 deltas are +0.03053, -0.10605,
+  and +0.01964.
+- The multilingual paired-source bootstrap interval is [-0.21184, -0.01342].
+- Ninety-seven of 143 regular sources fail at least one composite collapse
+  test. The overlapping counts are 55 cluster, two uniqueness, 88 rank, and
+  29 variance failures.
+- Luxical-One has 52 regular sources above the same absolute cluster limit.
+- The current 3M student is not viable under the fixed gates because the
+  multilingual and composite-collapse gates fail.
+- Evaluation artifact:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/3m/report.json`.
+- All 24 accepted peer-review findings and the one partial disposition were
+  checked again after the result update. No accepted item remains open.
