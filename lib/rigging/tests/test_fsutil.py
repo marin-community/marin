@@ -8,7 +8,6 @@ import bz2
 import gzip
 import json
 import lzma
-import sys
 
 import pytest
 from click.testing import CliRunner
@@ -131,16 +130,11 @@ def test_cat_reports_full_size_when_uncompressed_preview_is_truncated(tmp_path, 
     assert result.stderr == "[truncated: read 4 B of 6 B]\n"
 
 
-def test_fsutil_without_rich_keeps_plain_commands_and_disables_browser(tmp_path, monkeypatch):
-    path = tmp_path / "metrics.txt"
-    path.write_text("loss=2.0\n")
-    monkeypatch.setitem(sys.modules, "rich", None)
-    monkeypatch.setitem(sys.modules, "rich.console", None)
+def test_ls_long_renders_local_directory(tree):
+    result = CliRunner().invoke(cli, ["ls", "-l", str(tree)])
 
-    result = CliRunner().invoke(cli, ["cat", str(path)])
     assert result.exit_code == 0, result.output
-    assert result.output == "loss=2.0\n"
-
-    result = CliRunner().invoke(cli, ["browse", str(tmp_path)])
-    assert result.exit_code == 1
-    assert result.output == "Error: this command requires Rich; install marin-rigging[fsutil]\n"
+    lines = result.output.splitlines()
+    assert lines[0].split() == ["size", "modified", "name"]
+    assert any(line.endswith("b.txt") for line in lines)
+    assert any(line.endswith("sub/") for line in lines)

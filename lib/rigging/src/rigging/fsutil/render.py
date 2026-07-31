@@ -81,9 +81,9 @@ def _table_lines(data: object) -> list[str]:
     if isinstance(data, list) and data and all(isinstance(row, dict) for row in data):
         headers = list({key: None for row in data for key in row})
         rows = [[_cell(row.get(header)) for header in headers] for row in data]
-        return _aligned(headers, rows)
+        return table_lines(headers, rows)
     if isinstance(data, dict):
-        return _aligned(["key", "value"], [[key, _cell(value)] for key, value in data.items()])
+        return table_lines(["key", "value"], [[key, _cell(value)] for key, value in data.items()])
     return json.dumps(data, indent=2, default=str).splitlines()
 
 
@@ -92,13 +92,22 @@ def _cell(value: object) -> str:
     return text if len(text) <= _MAX_CELL else text[: _MAX_CELL - 3] + "..."
 
 
-def _aligned(headers: list[str], rows: list[list[str]]) -> list[str]:
+def table_lines(headers: list[str], rows: list[list[str]]) -> list[str]:
+    """Render rows as a plain-text table with a header separator."""
     widths = [
         max(len(header), *(len(row[i]) for row in rows)) if rows else len(header) for i, header in enumerate(headers)
     ]
     lines = [_row(headers, widths), _row(["-" * width for width in widths], widths)]
     lines.extend(_row(row, widths) for row in rows)
     return lines
+
+
+def aligned_lines(rows: list[list[str]]) -> list[str]:
+    """Align rows as plain text without adding a header."""
+    if not rows:
+        return []
+    widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
+    return [_row(row, widths) for row in rows]
 
 
 def _row(cells: list[str], widths: list[int]) -> str:

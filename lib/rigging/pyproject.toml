@@ -32,9 +32,6 @@ dependencies = [
 fsutil = "rigging.fsutil.cli:main"
 
 [project.optional-dependencies]
-# Tables and the interactive browser for the fsutil CLI. Plain commands such as
-# cat, cp, du, find, head, and short listings do not need Rich.
-fsutil = ["rich>=14.1.0"]
 # Interactive desktop-OAuth login for IAP (run_iap_desktop_login). Only the
 # human login path needs it; servers and workers never import it.
 iap = ["google-auth-oauthlib>=1.0.0"]
@@ -50,7 +47,6 @@ test = [
     "pytest-asyncio",
     "pytest-timeout",
     "pytest-xdist",
-    "rich>=14.1.0",
 ]
 dev = [{ include-group = "test" }]
 
