@@ -388,9 +388,9 @@ def normalize_to_parquet(
     """Normalize raw downloaded data to the datakit standard Parquet format.
 
     Discovers all data files recursively under *input_path*, merges them into a
-    single Zephyr pipeline that normalizes records (``id``, ``text``, preserves
-    all other columns unless *output_schema* selects a subset), optionally
-    deduplicates by content per *dedup_mode*, sorts by ``id``, and writes
+    single Zephyr pipeline that normalizes records (``id``, ``text``, and other
+    columns unless removed by *bare* or *drop_fields*), optionally deduplicates by
+    content per *dedup_mode*, sorts by ``id``, and writes
     Parquet partitions sized by *target_partition_bytes*. Input directory
     structure is not preserved.
 
