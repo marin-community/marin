@@ -68,6 +68,22 @@ class ClientCredentials:
             chain += (BearerTokenInjector(self.iap_provider, "proxy-authorization"),)
         return chain
 
+    def headers(self) -> dict[str, str]:
+        """The same bearer headers :meth:`interceptors` attaches, as a plain dict.
+
+        For callers that speak plain HTTP rather than Connect RPC — an HTTP proxy
+        forwarding upstream, say — and so cannot use the interceptor chain. Mints
+        on every call, because a provider re-mints an expired token; do not cache
+        the result across requests. A provider that returns None contributes no
+        header (the loopback / SSH-tunnel-trust case).
+        """
+        pairs = (("authorization", self.token_provider), ("proxy-authorization", self.iap_provider))
+        return {
+            header: f"Bearer {token}"
+            for header, provider in pairs
+            if provider is not None and (token := provider.get_token())
+        }
+
 
 def _login_hint(cluster: str) -> str:
     """The canonical 'log in again' remedy for ``cluster``."""

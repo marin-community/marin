@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import httpx
+from rigging.credentials import ClientCredentials
 from rigging.server_auth import (
     PolicyAuthInterceptor,
     RequestAuthPolicy,
@@ -45,6 +46,7 @@ from rigging.server_auth import (
 )
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
@@ -464,6 +466,10 @@ class ProxyControllerDashboard:
     Serves the same web UI locally but forwards all Connect RPC requests
     to an upstream controller at the given URL. Useful for viewing a remote
     controller's state without running a local controller instance.
+
+    The browser holds no cluster credentials, so this process authenticates on
+    its behalf: every upstream request carries the operator's ``credentials``.
+    Without them an IAP-fronted upstream rejects the whole dashboard at its edge.
     """
 
     def __init__(
@@ -471,10 +477,12 @@ class ProxyControllerDashboard:
         upstream_url: str,
         host: str = "0.0.0.0",
         port: int = 8080,
+        credentials: ClientCredentials | None = None,
     ):
         self._upstream_url = upstream_url.rstrip("/")
         self._host = host
         self._port = port
+        self._credentials = credentials
         self._client = httpx.AsyncClient(base_url=self._upstream_url, timeout=60.0)
         self._app = self._create_app()
 
@@ -506,7 +514,10 @@ class ProxyControllerDashboard:
                 ),
             ),
             Route("/health", self._health),
-            Route("/auth/{path:path}", self._proxy_auth),
+            # Mirrors the upstream auth routes: /auth/config is a GET, /auth/session
+            # and /auth/logout are POSTs. Starlette defaults a route to GET alone, so
+            # omitting this 405s the session flow before it reaches the handler.
+            Route("/auth/{path:path}", self._proxy_auth, methods=["GET", "POST", "PUT"]),
             Route(
                 "/iris.cluster.ControllerService/{method}",
                 functools.partial(self._proxy_rpc_post, service="iris.cluster.ControllerService"),
@@ -532,13 +543,26 @@ class ProxyControllerDashboard:
     def _health(self, _request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok"})
 
+    async def _upstream_headers(self, content_type: str | None = None) -> dict[str, str]:
+        """Bearer headers for one upstream request, plus ``content-type`` when given.
+
+        Minted per request rather than at startup: a provider re-mints an expired
+        token, so a long-lived proxy holding a cached header would start failing
+        partway through a session. Minting can refresh over the network, so it
+        runs off the event loop.
+        """
+        headers = await run_in_threadpool(self._credentials.headers) if self._credentials is not None else {}
+        if content_type is not None:
+            headers["content-type"] = content_type
+        return headers
+
     async def _proxy_auth(self, request: Request) -> Response:
         path = request.path_params["path"]
         upstream_resp = await self._client.request(
             request.method,
             f"/auth/{path}",
             content=await request.body() if request.method in ("POST", "PUT") else None,
-            headers={"content-type": request.headers.get("content-type", "application/json")},
+            headers=await self._upstream_headers(request.headers.get("content-type", "application/json")),
         )
         return Response(
             content=upstream_resp.content,
@@ -553,7 +577,7 @@ class ProxyControllerDashboard:
         upstream_resp = await self._client.post(
             f"/{service}/{method}",
             content=body,
-            headers={"content-type": request.headers.get("content-type", "application/json")},
+            headers=await self._upstream_headers(request.headers.get("content-type", "application/json")),
         )
         return Response(
             content=upstream_resp.content,
@@ -576,7 +600,7 @@ class ProxyControllerDashboard:
             request.method,
             f"/proxy/{path}{query}",
             content=await request.body(),
-            headers={"content-type": request.headers.get("content-type", "application/json")},
+            headers=await self._upstream_headers(request.headers.get("content-type", "application/json")),
         )
         return Response(
             content=upstream_resp.content,
@@ -586,7 +610,10 @@ class ProxyControllerDashboard:
 
     async def _proxy_get(self, request: Request, *, param: str, upstream: str, media_type: str) -> Response:
         """Forward a GET for a single path param to ``upstream`` (a format string)."""
-        upstream_resp = await self._client.get(upstream.format(request.path_params[param]))
+        upstream_resp = await self._client.get(
+            upstream.format(request.path_params[param]),
+            headers=await self._upstream_headers(),
+        )
         if upstream_resp.status_code != 200:
             return Response(upstream_resp.text, status_code=upstream_resp.status_code)
         return Response(upstream_resp.content, media_type=media_type)

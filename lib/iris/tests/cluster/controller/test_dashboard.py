@@ -9,6 +9,7 @@ The dashboard serves a web UI that fetches data via RPC calls.
 
 from unittest.mock import Mock
 
+import httpx
 import pytest
 from iris.cluster.backends.k8s.tasks import (
     _KUEUE_POD_GROUP_NAME,
@@ -25,7 +26,7 @@ from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler.status import PendingHint, overlay_worker_usability
 from iris.cluster.controller.backend import BackendCapability, BackendRuntime, DeviceCapacity
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
-from iris.cluster.controller.dashboard import ControllerDashboard
+from iris.cluster.controller.dashboard import ControllerDashboard, ProxyControllerDashboard
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.projections.endpoints import EndpointRow
@@ -46,6 +47,8 @@ from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId, WorkerUsability
 from iris.rpc import controller_pb2, job_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
+from rigging.auth import StaticTokenProvider
+from rigging.credentials import ClientCredentials
 from rigging.server_auth import RequestAuthPolicy
 from rigging.testing import MockVerifier
 from rigging.timing import Timestamp
@@ -2122,3 +2125,79 @@ def test_get_kubernetes_cluster_status_ambiguous_raises(state, scheduler, tmp_pa
     assert data_eu["namespace"] == "eu"
     data_us = rpc_post(client, "GetKubernetesClusterStatus", {"backendId": "us-k8s"})
     assert data_us["namespace"] == "us"
+
+
+class TestProxyDashboardCredentials:
+    """The proxy authenticates upstream on the browser's behalf.
+
+    The browser holds no cluster credentials, so every route that leaves this
+    process must carry the operator's. Dropping them on any one of them makes an
+    IAP-fronted controller reject that panel with a 401 while the rest work.
+    """
+
+    @staticmethod
+    def _proxy_with_recorder(credentials):
+        """A proxy dashboard whose upstream records the headers it receives."""
+        seen: list[httpx.Headers] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request.headers)
+            return httpx.Response(200, json={})
+
+        dashboard = ProxyControllerDashboard(upstream_url="https://iris.example", credentials=credentials)
+        dashboard._client = httpx.AsyncClient(base_url="https://iris.example", transport=httpx.MockTransport(handler))
+        return dashboard, seen
+
+    @staticmethod
+    def _credentials() -> ClientCredentials:
+        return ClientCredentials(
+            token_provider=StaticTokenProvider("app-token"),
+            iap_provider=StaticTokenProvider("iap-token"),
+        )
+
+    @pytest.mark.parametrize(
+        "method,path",
+        [
+            ("POST", "/iris.cluster.ControllerService/ListJobs"),
+            ("POST", "/proxy/system.log-server/finelog.logging.LogService/FetchLogs"),
+            ("POST", "/auth/session"),
+            ("GET", "/blobs/abc123"),
+            ("GET", "/bundles/abc123.zip"),
+        ],
+    )
+    def test_every_upstream_route_carries_both_bearers(self, method, path):
+        dashboard, seen = self._proxy_with_recorder(self._credentials())
+        with TestClient(dashboard.app) as client:
+            client.request(method, path, content=b"{}" if method == "POST" else None)
+        assert len(seen) == 1
+        assert seen[0]["authorization"] == "Bearer app-token"
+        assert seen[0]["proxy-authorization"] == "Bearer iap-token"
+
+    def test_unauthenticated_cluster_sends_no_bearers(self):
+        """A loopback / tunneled controller needs no tokens; sending empty ones would be a malformed header."""
+        dashboard, seen = self._proxy_with_recorder(None)
+        with TestClient(dashboard.app) as client:
+            client.post("/iris.cluster.ControllerService/ListJobs", content=b"{}")
+        assert "authorization" not in seen[0]
+        assert "proxy-authorization" not in seen[0]
+
+    def test_browser_supplied_bearer_never_reaches_upstream(self):
+        """Upstream auth is this process's own; a header from the browser must not impersonate it."""
+        dashboard, seen = self._proxy_with_recorder(self._credentials())
+        with TestClient(dashboard.app) as client:
+            client.post(
+                "/iris.cluster.ControllerService/ListJobs",
+                content=b"{}",
+                headers={"proxy-authorization": "Bearer forged"},
+            )
+        assert seen[0]["proxy-authorization"] == "Bearer iap-token"
+
+    def test_content_type_still_forwarded(self):
+        dashboard, seen = self._proxy_with_recorder(self._credentials())
+        with TestClient(dashboard.app) as client:
+            client.post(
+                "/iris.cluster.ControllerService/ListJobs",
+                content=b"{}",
+                headers={"content-type": "application/proto"},
+            )
+        assert seen[0]["content-type"] == "application/proto"

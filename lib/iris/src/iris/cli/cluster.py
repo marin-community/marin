@@ -1005,7 +1005,13 @@ def cluster_dashboard_proxy(ctx, port: int):
     your browser.
     """
     controller_url = require_controller_url(ctx)
-    dashboard = ProxyControllerDashboard(upstream_url=controller_url, port=port)
+    # The browser has no cluster credentials, so the proxy authenticates upstream
+    # with the operator's own — without them an IAP-fronted controller 401s.
+    dashboard = ProxyControllerDashboard(
+        upstream_url=controller_url,
+        port=port,
+        credentials=(ctx.obj or {}).get("credentials"),
+    )
     click.echo(f"Proxying to controller at {controller_url}")
 
     dashboard_dir = VUE_DIST_DIR.parent
