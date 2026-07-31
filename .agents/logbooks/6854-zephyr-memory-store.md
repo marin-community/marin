@@ -277,3 +277,30 @@ description: Read-only Zephyr memory store and verified fuzzy-dedup experiments
 - Next action: Relaunch the control on the same candidate prefix, verify the
   larger coordinator remains healthy, and continue through baseline verifier
   completion.
+
+### 2026-07-31 23:21 UTC - ZKV-005 bounded shared-pool finalization
+
+- Hypothesis: The shared pool's OOM is amplified by one 32-thread final-result
+  executor per concurrently completing pipeline, rather than only by durable
+  coordinator state.
+- Job: `/loom/zephyr-kv-baseline-100b-20260731-v3` at baseline commit
+  `b93305102`.
+- Observation: Coordinator thread samples oscillated from about 43 durable
+  threads to 303-317 threads while eight pipelines materialized results. At 14
+  minutes 29 seconds, Iris reported 317 threads and 1.55 GiB RSS. The corrected
+  4 GiB coordinator remained healthy with zero failures or preemptions, more
+  than twice the failed run's 6 minute 57 second lifetime.
+- Change: Commit `8d22aab14` gives the coordinator one reusable 32-thread
+  final-result executor. All concurrent pipelines share that bound, and the
+  executor is closed with the coordinator. The same patch is baseline commit
+  `2a8a8a691`.
+- Validation: The coordinator execution and shared-context suite passed 89/89
+  tests. The regression test saturates all 32 materialization threads twice and
+  verifies that the second pipeline reuses the exact first thread set.
+- Interpretation: Pool reuse is still the efficient topology, but its shared
+  coordinator must bound aggregate concurrency and request memory for all live
+  pipelines. The explicit 4 GiB request remains useful headroom even after the
+  thread bound.
+- Next action: Let the recovery run finish populating the candidate cache, then
+  run both verifier revisions with the bounded executor and identical pool
+  resources.
