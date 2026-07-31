@@ -13,9 +13,6 @@ serve:
   reasoning_parser: qwen3
   vllm_extra_args:
   - --enable-prefix-caching
-  - --enforce-eager
-  - --attention-backend
-  - FLASH_ATTN
 agent:
   agent_kwargs:
     extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'

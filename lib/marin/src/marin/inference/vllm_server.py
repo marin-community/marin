@@ -44,18 +44,19 @@ _REMOVED_VLLM_MODE_MESSAGE = (
 # range, while the Marin git fork does not bundle it.
 _RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.1"
 _CUDA_TORCH_BACKEND = "cu130"
+_CUDA_NVCC_DISTRIBUTION = "nvidia-cuda-nvcc"
 _CUDA_TOOLCHAIN_REQUIREMENTS = (
-    "nvidia-cuda-nvcc==13.0.88",
+    f"{_CUDA_NVCC_DISTRIBUTION}==13.0.88",
     "nvidia-cuda-crt==13.0.88",
     "nvidia-nvvm==13.0.88",
 )
-_CUDA_NVCC_BOOTSTRAP = """\
+_CUDA_NVCC_BOOTSTRAP = f"""\
 import importlib.metadata
 import os
 from pathlib import Path
 import sys
 
-distribution = importlib.metadata.distribution("nvidia-cuda-nvcc")
+distribution = importlib.metadata.distribution("{_CUDA_NVCC_DISTRIBUTION}")
 nvcc_file = next(path for path in distribution.files or () if str(path).endswith("/bin/nvcc"))
 nvcc = Path(distribution.locate_file(nvcc_file)).resolve()
 cuda_home = nvcc.parent.parent
