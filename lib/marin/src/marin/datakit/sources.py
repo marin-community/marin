@@ -24,6 +24,7 @@ from marin.datakit.download.biocorpus import biocorpus_normalize_steps
 from marin.datakit.download.biodiversity import biodiversity_normalize_steps
 from marin.datakit.download.climblab_ja import climblab_ja_normalize_steps
 from marin.datakit.download.coderforge import coderforge_normalize_steps
+from marin.datakit.download.common_corpus import common_corpus_normalize_steps
 from marin.datakit.download.common_crawl_focus import common_crawl_focus_normalize_steps
 from marin.datakit.download.common_pile import common_pile_normalize_steps
 from marin.datakit.download.davinci_dev import (
@@ -136,20 +137,12 @@ def _rows_nemotron(
     return tuple(rows)
 
 
-# ---- Disabled sources (tracked in the token-count-viewer but can't ferry today) ----
-#
-# TODO: confirm there's a download module for PleIAs/common_corpus.
-# Staged dir ``raw/common_corpus_english-b78a5c1`` is missing its
-# .executor_status marker, so we can't confirm the staging run completed
-# cleanly. Re-enable once the staging is re-verified.
-#
 @cache
 def all_sources() -> dict[str, DatakitSource]:
     """Return the canonical active source set as ``{name: DatakitSource}``.
 
     Every entry is materializable — has a full :attr:`DatakitSource.normalize_steps`
-    chain ready to run. Disabled entries (see TODOs above) are commented out of
-    the module.
+    chain ready to run.
     """
     # Single-source families. Each exposes a ``<family>_normalize_steps()``
     # returning ``tuple[StepSpec, ...]``; the registry pairs the chain with
@@ -169,6 +162,9 @@ def all_sources() -> dict[str, DatakitSource]:
         ("cp/biodiversity", biodiversity_normalize_steps, 8.60),
         ("climblab-ja", climblab_ja_normalize_steps, 371.92),
         ("coderforge", coderforge_normalize_steps, 10.29),
+        # Canonical token-count-viewer estimate for the pinned b78a5c1 revision
+        # (10,005 files / 4.49 TB); not yet measured with the Marin tokenizer.
+        ("common_corpus/english", common_corpus_normalize_steps, 1015.39),
         ("common-crawl-focus-2026-22", common_crawl_focus_normalize_steps, 49.702569456),
         ("davinci-dev/ctx-native", davinci_dev_ctx_native_normalize_steps, 57.57),
         ("davinci-dev/env-native", davinci_dev_env_native_normalize_steps, 2.58),
@@ -228,13 +224,14 @@ def all_sources() -> dict[str, DatakitSource]:
         ("synthetic-1", synthetic1_normalize_steps, 7.32),
     )
 
-    # StarCoder2-Extras: 5 of 6 subsets advertised (ir_low_resource isn't in
-    # the token-count-viewer set).
+    # StarCoder2-Extras: exact ir_low_resource count from train/.stats.json,
+    # measured with marin-community/marin-tokenizer: 4,267,993,726 tokens / 387,030 docs.
     starcoder2_extras = _rows_flat(
         starcoder2_extras_normalize_steps,
         {
             "starcoder2/documentation": 1.40,
             "starcoder2/ir_cpp": 39.01,
+            "starcoder2/ir_low_resource": 4.267993726,
             "starcoder2/ir_python": 4.64,
             "starcoder2/ir_rust": 1.84,
             "starcoder2/kaggle": 1.38,
