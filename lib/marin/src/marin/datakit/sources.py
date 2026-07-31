@@ -215,15 +215,14 @@ def all_sources() -> dict[str, DatakitSource]:
         ("synthetic-1", synthetic1_normalize_steps, 7.32),
     )
 
-    # StarCoder2-Extras: ir_low_resource is absent from the token-count viewer.
-    # Its rough count scales the three measured IR subsets by uncompressed bytes;
-    # replace it with the Marin-tokenizer total once its normalized cache is built.
+    # StarCoder2-Extras: exact ir_low_resource count from train/.stats.json,
+    # measured with marin-community/marin-tokenizer: 4,267,993,726 tokens / 387,030 docs.
     starcoder2_extras = _rows_flat(
         starcoder2_extras_normalize_steps,
         {
             "starcoder2/documentation": 1.40,
             "starcoder2/ir_cpp": 39.01,
-            "starcoder2/ir_low_resource": 22.46,
+            "starcoder2/ir_low_resource": 4.267993726,
             "starcoder2/ir_python": 4.64,
             "starcoder2/ir_rust": 1.84,
             "starcoder2/kaggle": 1.38,
