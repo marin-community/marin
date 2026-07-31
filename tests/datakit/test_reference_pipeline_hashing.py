@@ -44,6 +44,18 @@ def _steps_by_name(result) -> dict[str, StepSpec]:
     return {s.name: s for s in result.all_steps}
 
 
+def _depends_on(step: StepSpec, dependency: StepSpec) -> bool:
+    return any(parent is dependency or _depends_on(parent, dependency) for parent in step.deps)
+
+
+def test_global_exact_dedup_precedes_per_source_processing():
+    result = _build()
+    steps = _steps_by_name(result)
+
+    for stage in ("tokenize", "embed", "quality", "decontam", "minhash"):
+        assert _depends_on(steps[f"datakit/{stage}/a"], result.exact_dedup)
+
+
 def test_no_region_path_in_hash_attrs_except_known_bloom_gap():
     # A region-specific gs:// path in a hash means byte-identical data gets a
     # different output path per region. The only remaining leak is the decontam

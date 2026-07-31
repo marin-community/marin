@@ -14,18 +14,22 @@ its pipeline on its own dedicated Zephyr coordinator + worker fleet (vanilla
 `ZephyrContext`), sized by that config; `--max-concurrent` bounds how many stages
 the StepRunner walks at once.
 
-Every stage keeps one step per source with its own output dir
+Most stages keep one step per source with its own output dir
 (`datakit/<stage>/<source>_<hash>/`). Dedup, the decontamination DF filter, and
 the store combine sources. Steps write their main output under `outputs/main/`
 plus, where it makes sense, a small site/sample side output
 (`outputs/samples/`, `outputs/flagged_sample/`, …) that the per-stage HTML
 reports ([`reports/`](reports/)) read.
 
+Global exact deduplication is one shared step. It keeps one record for each
+record ID, with source names as the canonical order. The step copies shards
+that contain no duplicates and rewrites the other shards.
+
 Each `datakit/report/<stage>` step depends only on that stage's steps, so it
 runs as soon as the stage finishes — reports are not deferred to the end of the
 run, and only `report/store` waits on the store. They are separate steps (not
 folded into the data steps) so a report can be regenerated without recomputing
-the stage. Embed and minhash have no standalone report.
+the stage. Global exact dedup, embed, and minhash have no standalone report.
 
 ```mermaid
 flowchart TD
@@ -51,17 +55,19 @@ flowchart TD
 
     BLOOM["eval bloom (shared)<br/>datakit/bloom/_combined_fixed"]
     DF["eval n-gram DF (cross-source)<br/>datakit/decon_drop/_combined"]
+    EXACT["global exact dedup by record ID<br/>datakit/global_exact_dedup"]
     DEDUP["fuzzy dedup (cross-source)<br/>datakit/dedup"]
     STORE["store: shuffle 5-way join, drop contaminated + non-canonical,<br/>group by (cluster_&lt;view&gt;, quality_bucket, subshard)<br/>datakit/store → cluster=C/quality=Q Levanter caches"]
 
-    SRC --> TOK
-    SRC --> EMB
-    SRC --> QUAL
-    SRC --> DECON
-    SRC --> MH
+    SRC --> EXACT
+    EXACT --> TOK
+    EXACT --> EMB
+    EXACT --> QUAL
+    EXACT --> DECON
+    EXACT --> MH
     MODEL --> QUAL
     EVALS --> BLOOM --> DF --> DECON
-    SRC --> DF
+    EXACT --> DF
     BLOOM --> DECON
     EMB --> SAMP --> KM --> ASG
     EMB --> ASG
@@ -117,6 +123,7 @@ aws s3 ls s3://marin-us-east-02a/marin/datakit/ | grep sample
 | Path | What it is |
 | --- | --- |
 | `reference_pipeline.py` | The DAG builder + CLI (`--mode full\|sample`, `--pool-*`, `--sources`, `--quality-model`) |
+| `global_exact_dedup.py` | Cross-source exact deduplication by normalized record ID |
 | `cluster/quality/fast_transformer/` | Quality classifier: per-source scoring step + training/calibration |
 | `cluster/domain/v0/` | Domain clustering: centroid sampling/training + per-source assignment |
 | `embeddings/luxical/` | Luxical-one document embeddings feeding the domain stage |
