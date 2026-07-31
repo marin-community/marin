@@ -71,7 +71,7 @@ def _slimpajama_6b_dataset() -> ArtifactStep[TokenizedCache]:
 def build_hero_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     """Build the fixed 64-GPU FSDP hero run."""
     run_id = os.environ.get("RUN_ID") or HERO_RUN_ID
-    name = "grug/moe-hero-fsdp"
+    name = f"grug/{run_id}"
     version = resolve_version(name, version)
     slim = _slimpajama_6b_dataset()
 
