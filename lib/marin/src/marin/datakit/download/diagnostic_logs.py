@@ -3,6 +3,7 @@
 
 """Public diagnostic-log source inventory and GHALogs extraction helpers."""
 
+import gzip
 import hashlib
 import http.client
 import json
@@ -14,6 +15,7 @@ import tarfile
 import time
 import xml.etree.ElementTree as ET
 import zipfile
+import zlib
 from collections.abc import Iterable, Iterator
 from contextlib import ExitStack
 from dataclasses import dataclass
@@ -749,6 +751,15 @@ def _list_ghalogs_member_names(archive_path: str) -> list[str]:
             return [name for name in zf.namelist() if not name.endswith("/")]
 
 
+def _validate_ghalogs_run_archive(content: bytes) -> None:
+    """Read one nested run archive completely before any of its records are emitted."""
+    with tarfile.open(fileobj=BytesIO(content), mode="r:gz") as run_logs:
+        # Advancing across every member decompresses the whole gzip stream and
+        # validates each tar header without retaining decompressed member contents.
+        for _member in run_logs:
+            pass
+
+
 def _process_ghalogs_member_batch(batch: list[str], archive_path: str) -> Iterator[dict[str, str]]:
     """Open the archive once, read each assigned run archive, yield sanitized records.
 
@@ -764,6 +775,12 @@ def _process_ghalogs_member_batch(batch: list[str], archive_path: str) -> Iterat
                 with zf.open(name, "r") as member_file:
                     content = member_file.read()
                 counters.pipeline.update_counter("zephyr/records_in", 1)
+                try:
+                    _validate_ghalogs_run_archive(content)
+                except (tarfile.TarError, gzip.BadGzipFile, EOFError, zlib.error) as error:
+                    logger.warning("Skipping malformed GHALogs run archive %s: %s", name, error)
+                    counters.pipeline.update_counter("ghalogs_materialize/dropped_invalid_archive", 1)
+                    continue
                 for record in ghalogs_member_to_records(name, content):
                     counters.pipeline.update_counter("ghalogs_materialize/kept", 1)
                     counters.pipeline.update_counter(f"ghalogs_materialize/partition_{record['partition']}", 1)
@@ -1380,7 +1397,7 @@ def materialize_ghalogs_step(
             num_shards=num_shards,
         ),
         hash_attrs={
-            "version": "v3",
+            "version": "2026.07.31",
             "source_path": source_path,
             "source_label": source.source_label,
             "max_members": max_members,

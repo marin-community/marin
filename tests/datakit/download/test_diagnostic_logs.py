@@ -502,6 +502,41 @@ def test_materialize_ghalogs_to_parquet_writes_reusable_shards(tmp_path):
     assert all("abc123456789" not in row["text"] for row in rows)
 
 
+def test_materialize_ghalogs_to_parquet_drops_malformed_run_archives(tmp_path):
+    input_dir = tmp_path / "input" / "ghalogs" / "zenodo-14796970"
+    archive_dir = input_dir / "zenodo.org" / "records" / "14796970" / "files"
+    output_dir = tmp_path / "materialized"
+    archive_dir.mkdir(parents=True)
+
+    with zipfile.ZipFile(archive_dir / "github_run_logs.zip", "w") as archive:
+        archive.writestr(
+            "logs/owner/repo-a/workflow_1234/1-1.tar.gz",
+            _run_archive_member({"0_build.txt": b"first valid run"}),
+        )
+        archive.writestr("logs/owner/repo-b/workflow_1234/2-1.tar.gz", b"\x1f\x8b\x08\x00broken gzip")
+        archive.writestr(
+            "logs/owner/repo-c/workflow_1234/3-1.tar.gz",
+            gzip.compress(b"valid gzip containing an invalid tar"),
+        )
+        archive.writestr(
+            "logs/owner/repo-d/workflow_1234/4-1.tar.gz",
+            _run_archive_member({"0_build.txt": b"second valid run"}),
+        )
+
+    materialized = materialize_ghalogs_to_parquet(
+        str(input_dir),
+        str(output_dir),
+        max_members=4,
+        num_shards=1,
+        max_workers=1,
+    )
+
+    rows = _read_parquet_rows(output_dir)
+    assert {row["text"] for row in rows} == {"first valid run", "second valid run"}
+    assert materialized.record_count == 2
+    assert materialized.counters["ghalogs_materialize/dropped_invalid_archive"] == 2
+
+
 def test_materialize_ghalogs_partition_to_parquet_filters_one_partition(tmp_path):
     input_dir = tmp_path / "input" / "ghalogs" / "zenodo-14796970"
     archive_dir = input_dir / "zenodo.org" / "records" / "14796970" / "files"
