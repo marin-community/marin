@@ -24,6 +24,8 @@ reports ([`reports/`](reports/)) read.
 Materialized source identities are paths relative to `MARIN_PREFIX`, such as
 `datakit/normalize/foo_<hash>/outputs/main`. Actual data directories remain
 absolute. This keeps source keys stable when artifacts move between regions.
+`NormalizedData` also stores its output directories in this relative form.
+Existing v1 artifacts keep their absolute directories when they load.
 
 Global exact deduplication is one shared step. It selects one canonical record
 for each record ID, with source names as the canonical order. The step writes

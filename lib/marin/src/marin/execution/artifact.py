@@ -66,6 +66,7 @@ FINGERPRINT_KEY = "fingerprint"
 VERSION_KEY = "version"
 RESULT_TYPE_KEY = "result_type"
 EXPECTED_FINGERPRINT_KEY = "expected_fingerprint"
+ARTIFACT_LOAD_CONTEXT_KEY = "artifact_load"
 
 
 class FingerprintMismatchError(Exception):
@@ -324,7 +325,7 @@ def read_artifact(output_path: str, schema: type[M]) -> M:
     output_path = _resolved(output_path)
     record = read_record(output_path)
     if record is not None and record.result is not None:
-        return cast(M, schema.model_validate(record.result))
+        return cast(M, schema.model_validate(record.result, context={ARTIFACT_LOAD_CONTEXT_KEY: True}))
     raise FileNotFoundError(f"no artifact payload at {output_path}")
 
 
