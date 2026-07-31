@@ -39,7 +39,7 @@ from rigging.filesystem import atomic_rename
 MANIFEST_URL = f"{MANIFEST_ROOT}/manifest.json"
 RESULT_FILE = Path("/tmp/luxical-arctic-manifest")
 REQUIRED_COLUMNS = frozenset(("id", "text"))
-METADATA_WORKERS = 16
+IO_WORKERS = 16
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -80,7 +80,7 @@ def source_file_capacities(main_output_dir: str, source: str) -> tuple[Any, list
     """Return the row capacity of every nonempty source file."""
     filesystem, paths = parquet_paths(main_output_dir)
     logger.info("Reading %d Parquet footers for %s", len(paths), source)
-    with ThreadPoolExecutor(max_workers=METADATA_WORKERS) as executor:
+    with ThreadPoolExecutor(max_workers=IO_WORKERS) as executor:
         capacities = executor.map(partial(parquet_file_capacity, filesystem), paths)
         files = [(path, rows) for path, rows in capacities if rows]
     logger.info("Measured %d nonempty files for %s", len(files), source)
@@ -147,6 +147,16 @@ def selected_file_rows(
     return rows
 
 
+def selected_file_task(
+    filesystem: Any,
+    protocol: str,
+    selection: tuple[str, np.ndarray[Any, np.dtype[np.int64]]],
+) -> list[dict[str, Any]]:
+    """Read one selected set of file rows."""
+    path, positions = selection
+    return selected_file_rows(filesystem, path, positions, protocol)
+
+
 def selected_source_rows(
     filesystem: Any,
     files: list[tuple[str, int]],
@@ -165,12 +175,17 @@ def selected_source_rows(
     file_indices = np.searchsorted(file_ends, global_positions, side="right")
     rows = []
     selected_counts: Counter[str] = Counter()
+    selections = []
     for file_index in np.unique(file_indices):
         path, _ = files[int(file_index)]
         file_start = 0 if file_index == 0 else int(file_ends[file_index - 1])
         positions = global_positions[file_indices == file_index] - file_start
-        rows.extend(selected_file_rows(filesystem, path, positions, protocol))
+        selections.append((path, positions))
         selected_counts[f"{protocol}://{path}"] = len(positions)
+    with ThreadPoolExecutor(max_workers=IO_WORKERS) as executor:
+        row_batches = executor.map(partial(selected_file_task, filesystem, protocol), selections)
+        for batch in row_batches:
+            rows.extend(batch)
     if len(rows) != row_count:
         raise ValueError(f"Source {source} returned {len(rows)} rows; expected {row_count}")
     split_rng = np.random.default_rng(stable_seed(f"split:{source}"))
