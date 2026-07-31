@@ -11,7 +11,6 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
-import levanter.callbacks as callbacks
 import levanter.tracker
 import optax
 from fray.cluster import ResourceConfig
@@ -21,6 +20,7 @@ from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
+from levanter import callbacks
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.data.dataset import AsyncDataset
@@ -38,9 +38,14 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
-from experiments.grug.checkpointing import init_weights_only_from_checkpoint, restore_grug_state_from_checkpoint
+from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
+from experiments.grug.coupon_clipping.model import GrugModelConfig, Transformer
+from experiments.grug.depth_growth import (
+    DepthGrowthConfig,
+    load_and_grow_grug_depth_state,
+    validate_depth_growth_data_offset,
+)
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.moe.model import GrugModelConfig, Transformer
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -93,10 +98,14 @@ class GrugRunConfig:
     data: LmDataConfig
     resources: ResourceConfig
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
+    optimizer_num_train_steps: int | None = None
+    """LR schedule horizon when it differs from the bounded runtime, as in throughput pilots."""
+    depth_growth: DepthGrowthConfig | None = None
+    """Full-state shallow checkpoint transition; own-run checkpoints still take precedence."""
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
-    # via the iris.hooks.multigpu_main supervisor instead of one process per node.
+    # via the iris.runtime.multigpu supervisor instead of one process per node.
     processes_per_task: int = 1
 
 
@@ -257,11 +266,18 @@ class GrugTrainState:
 def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     """Set router biases from QB betas (computed on previous step)."""
     if model.blocks is None:
-        # Scan mode: stacked_blocks.mlp.router_bias is [num_layers, num_experts]; set it in one
-        # vectorized assignment (per-layer mean over experts, matching the unrolled path).
+        assert model.stacked_block_segments is not None
+        # Scan mode: split the full [num_layers, num_experts] bias array across the
+        # fixed segments, preserving the same per-layer centering as the unrolled path.
         new_bias = -qb_betas
         new_bias = new_bias - jnp.mean(new_bias, axis=-1, keepdims=True)
-        return eqx.tree_at(lambda t: t.stacked_blocks.stacked.mlp.router_bias, model, new_bias)
+        new_segments = []
+        first_layer = 0
+        for segment in model.stacked_block_segments:
+            segment_bias = new_bias[first_layer : first_layer + segment.num_layers]
+            new_segments.append(eqx.tree_at(lambda stacked: stacked.stacked.mlp.router_bias, segment, segment_bias))
+            first_layer += segment.num_layers
+        return eqx.tree_at(lambda t: t.stacked_block_segments, model, tuple(new_segments))
     new_blocks = list(model.blocks)
     moe_idx = 0
     for i, block in enumerate(model.blocks):
@@ -284,7 +300,7 @@ def initial_state(
     ema_beta: float | None,
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
-    # In scan mode ``blocks`` is None (layers live in ``stacked_blocks``); every grug layer is MoE.
+    # In scan mode ``blocks`` is None (layers live in ``stacked_block_segments``); every layer is MoE.
     if params.blocks is not None:
         num_moe_layers = sum(1 for b in params.blocks if b.mlp is not None)
     else:
@@ -338,7 +354,11 @@ def _make_train_step(
             )
 
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
-        metrics = {"train/loss": loss, **summarized_metrics}
+        metrics = {
+            "train/loss": loss,
+            "train/valid_target_fraction": jnp.mean(batch.loss_weight > 0),
+            **summarized_metrics,
+        }
         updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
         params = optax.apply_updates(qb_params, updates)
 
@@ -392,7 +412,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     if run_id is None:
         raise ValueError("trainer.id was not initialized")
 
-    optimizer = config.optimizer.build(trainer.num_train_steps)
+    optimizer = config.optimizer.build(config.optimizer_num_train_steps or trainer.num_train_steps)
     watch_config = trainer.watch
     train_step = _make_train_step(
         optimizer,
@@ -449,13 +469,53 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
         )
-        if trainer.initialize_from is not None:
-            state = init_weights_only_from_checkpoint(
+        if config.depth_growth is not None and int(state.step) == 0:
+            if trainer.initialize_from is None:
+                raise ValueError("depth_growth requires trainer.initialize_from to name the shallow checkpoint")
+            if config.optimizer_num_train_steps is None:
+                raise ValueError("depth_growth requires an explicit optimizer_num_train_steps schedule horizon")
+            if config.model.num_layers != config.depth_growth.target_layers:
+                raise ValueError(
+                    f"target model has {config.model.num_layers} layers, expected {config.depth_growth.target_layers}"
+                )
+
+            source_model_config = dataclasses.replace(
+                config.model,
+                num_layers=config.depth_growth.source_layers,
+                block_segment_lengths=(config.depth_growth.source_layers,),
+                block_segment_shared_expert_intermediate_dims=(config.model.shared_expert_intermediate_dim,),
+            )
+
+            @jax.jit
+            def _init_source_state(model_rng):
+                return initial_state(
+                    source_model_config,
+                    optimizer=optimizer,
+                    mp=trainer.mp,
+                    key=model_rng,
+                    ema_beta=config.trainer.ema_beta,
+                )
+
+            source_state_exemplar = _init_source_state(model_key)
+            state, growth_report = load_and_grow_grug_depth_state(
+                source_state_exemplar,
                 state,
                 trainer.initialize_from,
+                config=config.depth_growth,
                 mesh=mesh,
                 allow_partial=trainer.allow_partial_checkpoint,
-                additional_weight_fields=("pending_qb_betas",),
+            )
+            actual_data_offset = int(batch_schedule.global_data_offset_by_step(int(state.step)))
+            validate_depth_growth_data_offset(config.depth_growth, actual_data_offset=actual_data_offset)
+            logger.info("Completed shallow-to-deep state transition: %s", growth_report)
+            levanter.tracker.log_summary(
+                {
+                    "depth_growth/source_layers": config.depth_growth.source_layers,
+                    "depth_growth/target_layers": config.depth_growth.target_layers,
+                    "depth_growth/transition_step": growth_report.step,
+                    "depth_growth/data_offset": actual_data_offset,
+                    "depth_growth/reset_optimizer_leaves": growth_report.reset_optimizer_leaves,
+                }
             )
         dump_grug_state_sharding_run_artifact(
             state,
@@ -500,10 +560,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state_callbacks.add_hook(callbacks.log_step_info(trainer.num_train_steps), every=log_every)
         if profiler_enabled:
             state_callbacks.add_hook(
-                profiler_cfg.build(
+                callbacks.profile(
                     str(trainer.log_dir / run_id / "profiler"),
-                    run_id=run_id,
-                    num_steps=profiler_num_steps,
+                    profiler_cfg.start_step,
+                    profiler_num_steps,
+                    profiler_cfg.perfetto_link,
                 ),
                 every=1,
             )
@@ -555,7 +616,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     router_metrics = {
                         key: value
                         for key, value in metrics.items()
-                        if (key.startswith("train/router/") or key.startswith("moe_bias/"))
+                        if key.startswith(("train/router/", "moe_bias/"))
                         and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
                     }
                     if router_metrics:

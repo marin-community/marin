@@ -1,0 +1,22 @@
+# Coupon-clipping pyramid arms
+
+These entry points test whether redistributing a fixed shared-expert parameter
+budget toward a few layers changes early knowledge acquisition. All arms use
+the same 48-layer Grug MoE, four scan segments `(4, 18, 4, 22)`, Datamix token
+order, 6.711B-token horizon, optimizer schedule, and 16-GB200 topology.
+
+- `c0_p0.py`: uniform shared-expert width 1280 in every layer.
+- `p1.py`: shared-expert width 4096 in layers 0–3 and 1024 elsewhere.
+- `p2.py`: shared-expert width 4096 in layers 22–25 and 1024 elsewhere.
+- `pilot_c0_p0.py`, `pilot_c0_p0_low.py`, and `pilot_c0_p0_high.py`: 128-update
+  uniform controls at the 0.55676x, 0.5x, and 0.625x learning-rate candidates.
+- `pilot_p1.py` and `pilot_p2.py`: 128-update pyramid throughput checks at the
+  center learning rate.
+- `pilot_l1.py`: the one-layer source bounded to 128 updates for the throughput gate.
+- `pilot_growth.py`: 32 one-layer updates, an L1-to-L48 transform, and 16 grown updates.
+- `d1.py`: the token-matched D1 pipeline, with L1 through update 4,480 and L48
+  through update 6,400.
+
+The launcher sets `XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async` before dispatch.
+The Grug dispatcher from `grug/embedding-gather-shard-map` propagates `XLA_*`
+variables to every child task.

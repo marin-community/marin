@@ -6,7 +6,7 @@ from dataclasses import replace
 
 import equinox as eqx
 import jax
-from jax import shard_map
+from jax import core, shard_map
 from jax import numpy as jnp
 from jax.sharding import NamedSharding, PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
@@ -50,7 +50,12 @@ def _packed_segment_start_positions(
     segment_ids = _batched_segment_ids(segment_ids, batch_size=batch_size, seq_len=seq_len)
     valid = segment_ids >= 0
     starts = _segment_starts(segment_ids)
-    positions = jnp.arange(seq_len, dtype=jnp.int32)[None, :]
+    # Pin the position ids replicated (P(None, None)) rather than letting XLA leave the arange
+    # constant on {maximal device=0}. Otherwise the [B, S] lower_bounds broadcast built from it is
+    # device-0, and the downstream reshard to the batch-sharded metadata spec becomes an
+    # "involuntary full rematerialization" (replicate-then-partition) -- serialized through device 0
+    # every attention, which builds cross-rank collective skew and wedges the all-to-all at scale.
+    positions = reshard(jnp.arange(seq_len, dtype=jnp.int32)[None, :], P(None, None))
     start_positions = jnp.where(starts, positions, 0)
     current_start: jax.Array = jax.lax.associative_scan(jnp.maximum, start_positions, axis=1)
     return jnp.where(valid, current_start, seq_len)
@@ -75,7 +80,9 @@ def _packed_segment_causal_lower_bounds(
         seq_len=seq_len,
     )
     if sliding_window is not None:
-        positions = jnp.arange(seq_len, dtype=jnp.int32)[None, :]
+        # Replicated position ids (not {maximal device=0}) so the downstream batch-sharded reshard
+        # is a clean slice rather than an involuntary full-remat scatter through device 0.
+        positions = reshard(jnp.arange(seq_len, dtype=jnp.int32)[None, :], P(None, None))
         window_lower_bounds = positions - (sliding_window - 1)
         lower_bounds = jnp.maximum(lower_bounds, window_lower_bounds)
     return jnp.where(valid, lower_bounds, seq_len), valid
@@ -90,13 +97,21 @@ def _simple_causal_lower_bounds(
     if sliding_window is not None and sliding_window <= 0:
         raise ValueError(f"sliding_window must be positive, got {sliding_window}")
 
-    positions = jnp.arange(seq_len, dtype=jnp.int32)[None, :]
+    # Pin the position ids replicated (P(None, None)) rather than letting XLA leave the arange
+    # constant on {maximal device=0}. Otherwise the [B, S] lower_bounds broadcast built from it is
+    # device-0, and the downstream reshard to the batch-sharded metadata spec becomes an
+    # "involuntary full rematerialization" (replicate-then-partition) -- serialized through device 0
+    # every attention, which builds cross-rank collective skew and wedges the all-to-all at scale.
+    positions = reshard(jnp.arange(seq_len, dtype=jnp.int32)[None, :], P(None, None))
     if sliding_window is None:
-        lower_bounds = jnp.zeros((1, seq_len), dtype=jnp.int32)
+        lower_bounds = reshard(jnp.zeros((1, seq_len), dtype=jnp.int32), P(None, None))
     else:
         lower_bounds = jnp.maximum(positions - (sliding_window - 1), 0)
-    lower_bounds = jnp.broadcast_to(lower_bounds, (batch_size, seq_len))
-    valid = jnp.ones((batch_size, seq_len), dtype=jnp.bool_)
+    # Keep the batch-broadcast bounds/valid replicated (not {maximal device=0}); the downstream
+    # reshard to the batch-sharded metadata spec is then a clean per-device slice rather than an
+    # involuntary full-remat scatter that serializes through device 0.
+    lower_bounds = reshard(jnp.broadcast_to(lower_bounds, (batch_size, seq_len)), P(None, None))
+    valid = reshard(jnp.ones((batch_size, seq_len), dtype=jnp.bool_), P(None, None))
     return lower_bounds, valid
 
 
@@ -179,6 +194,25 @@ def _active_batch_axes(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> t
     return tuple(axis for axis in _BATCH_AXES if axis in mesh.shape)
 
 
+def _q_batch_axes(q: jax.Array, mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> tuple[str, ...]:
+    """Batch mesh axes ``q`` is actually sharded over (its leading PartitionSpec entry).
+
+    FA4 shards its metadata (lower_bounds/valid) and output to match the activation's batch
+    sharding rather than hardcoding the mesh's batch axes, so it follows the model's choice --
+    e.g. intra-rack ``(data, expert)`` vs the full ``(replica_dcn, data, expert)``. Falls back to
+    the mesh-derived default when ``q``'s batch axis is unsharded.
+    """
+    sharding = jax.typeof(q).sharding if isinstance(q, core.Tracer) else getattr(q, "sharding", None)
+    spec = getattr(sharding, "spec", None)
+    if spec and spec[0] is not None:
+        head = spec[0]
+        axes = tuple(head) if isinstance(head, tuple) else (head,)
+        axes = tuple(axis for axis in axes if axis in mesh.shape)
+        if axes:
+            return axes
+    return _active_batch_axes(mesh)
+
+
 def _head_axis(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> str | None:
     if "model" not in mesh.shape:
         return None
@@ -219,7 +253,7 @@ def _fa4_cute_attention_forward_sharded(
             kernel_config=kernel_config,
         )
 
-    batch_axes = _active_batch_axes(mesh)
+    batch_axes = _q_batch_axes(q, mesh)
     if not batch_axes:
         return fa4_cute_attention_forward(
             q,
@@ -299,12 +333,18 @@ def gpu_fa4_cute_attention(
         raise RuntimeError("gpu_fa4_cute_attention requires the JAX GPU backend.")
 
     _validate_head_layout(q, k, backend_name="gpu_fa4_cute_attention")
-    lower_bounds, valid = _self_attention_lower_bounds(
-        q,
-        k,
-        mask,
-        backend_name="gpu_fa4_cute_attention",
-    )
+    if isinstance(mask, AttentionMask) and mask.fa4_bounds is not None:
+        # Precomputed metadata path: the caller built (lower_bounds, valid) outside any lax.cond and
+        # selected it per layer, so the pure_callback never reads a conditional output (no device-0
+        # remat). See AttentionMask.fa4_bounds.
+        lower_bounds, valid = mask.fa4_bounds
+    else:
+        lower_bounds, valid = _self_attention_lower_bounds(
+            q,
+            k,
+            mask,
+            backend_name="gpu_fa4_cute_attention",
+        )
     kernel_config = _segmented_kernel_config(q.shape[-1])
 
     return _fa4_cute_attention_forward_sharded(
@@ -318,6 +358,37 @@ def gpu_fa4_cute_attention(
     )
 
 
+def fa4_cute_segment_bounds(
+    mask: AttentionMask,
+    *,
+    batch_size: int,
+    seq_len: int,
+    sliding_window: int | None,
+) -> tuple[Int[Array, "B S"], Bool[Array, "B S"]]:
+    """Compute FA4/CuTe per-token ``(lower_bounds, valid)`` for ``mask`` at a given window.
+
+    Exposed so callers can precompute the metadata once outside a ``lax.scan``/``lax.cond`` and
+    select it per layer (via :meth:`AttentionMask.with_fa4_bounds`), keeping the FA4 pure_callback
+    out of a conditional whose device-0-pinned output would otherwise force an involuntary full
+    rematerialization at scale.
+    """
+    if not isinstance(mask, AttentionMask):
+        raise NotImplementedError("fa4_cute_segment_bounds requires an AttentionMask.")
+    if not mask.is_causal:
+        raise NotImplementedError("fa4_cute_segment_bounds supports only causal self-attention.")
+    if mask.segment_ids is None:
+        return _simple_causal_lower_bounds(batch_size=batch_size, seq_len=seq_len, sliding_window=sliding_window)
+    q_segment_ids, _ = mask.segment_ids
+    q_segment_ids = _batched_segment_ids(q_segment_ids, batch_size=batch_size, seq_len=seq_len)
+    return _packed_segment_causal_lower_bounds(
+        q_segment_ids,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        sliding_window=sliding_window,
+    )
+
+
 __all__ = [
+    "fa4_cute_segment_bounds",
     "gpu_fa4_cute_attention",
 ]

@@ -22,7 +22,12 @@ ConfigT = TypeVar("ConfigT")
 # given (e.g. `iris job run -e XLA_FLAGS ...`) must be re-exported explicitly.
 # JAX_PLATFORMS is excluded: the dispatcher runs CPU-only and its value must
 # not leak onto accelerator tasks.
-_FORWARDED_ENV_PREFIXES = ("XLA_FLAGS", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_")
+# CE_ forwards CE_IMPL / CE_LIGER_CHUNK / CE_LIGER_UNROLL (read via os.environ at trace time in
+# levanter.grug.loss) so the chunked CE reaches the nested training tasks.
+# XLA_ covers XLA_FLAGS and XLA_PYTHON_CLIENT_ALLOCATOR (cuda_async anti-fragmentation pool).
+# SCALE_MUON_ forwards the distributed Newton-Schulz layout knobs read at trace time in
+# levanter.optim.grugmuon.
+_FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "CE_", "SCALE_MUON_")
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
 
 
@@ -46,7 +51,16 @@ def dispatch_grug_training_run(
     max_retries_failure: int = 3,
     processes_per_task: int = 1,
 ) -> None:
-    """Submit a grug train entrypoint through Fray and wait for completion."""
+    """Submit a grug train entrypoint through Fray and wait for completion.
+
+    ``GRUG_RUN_INLINE=1`` runs the entrypoint in-process instead of submitting a Fray job.
+    Use it when already inside an allocated node (e.g. a federated GB200 job) so the run
+    uses the current node's GPUs directly rather than queuing for a second allocation.
+    """
+    if os.environ.get("GRUG_RUN_INLINE") == "1":
+        logger.info("GRUG_RUN_INLINE=1: running grug training inline (no Fray dispatch)")
+        local_entrypoint(config)
+        return
     safe_run_id = _safe_job_suffix(run_id)
     env_vars = resolve_training_env(base_env=_forwarded_env_vars(), resources=resources)
     request = JobRequest(

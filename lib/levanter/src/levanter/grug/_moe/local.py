@@ -29,6 +29,21 @@ def _moe_mlp_local(
     num_experts: int,
     implementation: MoeImplementation,
 ) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
+    if implementation == "sonic_cute":
+        # Lazy import: pulls in QuACK / cutlass-dsl SM100, which is only installed on
+        # Blackwell (B200/GB200) pods. Keeping it out of module scope lets every other
+        # environment (H100, CPU, tests) import the MoE stack without quack present.
+        from levanter.grug._moe.sonic_cute import _moe_mlp_local_sonic_cute  # noqa: PLC0415
+
+        return _moe_mlp_local_sonic_cute(
+            x,
+            selected_experts,
+            combine_weights,
+            moe_w13,
+            moe_w2,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+        )
     local_key = implementation if implementation in _LOCAL_MOE_IMPLEMENTATIONS else "scatter"
     return _MOE_LOCAL_FNS[local_key](
         x,
