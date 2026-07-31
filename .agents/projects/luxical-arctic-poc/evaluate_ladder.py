@@ -679,6 +679,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+@threadpool_limits.wrap(limits=CPU_THREADS)
 def main() -> None:
     """Evaluate one trained student against Luxical-One."""
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
