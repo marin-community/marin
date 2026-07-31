@@ -538,7 +538,7 @@ pub fn request_identity(ctx: &RequestContext) -> Option<&AuthIdentity> {
 /// RPCs), so only the admin routes need this.
 pub async fn auth_gate(
     State(policy): State<Arc<AuthPolicy>>,
-    request: Request,
+    mut request: Request,
     next: AxumNext,
 ) -> Response {
     let bearer = request
@@ -550,10 +550,20 @@ pub async fn auth_gate(
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|c| c.0.ip());
-    if policy.admits(bearer, peer_ip).is_some() {
+    if let Some(identity) = policy.admits(bearer, peer_ip) {
+        request.extensions_mut().insert(identity);
         next.run(request).await
     } else {
-        (StatusCode::UNAUTHORIZED, "finelog: unauthorized").into_response()
+        (
+            StatusCode::UNAUTHORIZED,
+            axum::Json(serde_json::json!({
+                "error": {
+                    "code": "unauthorized",
+                    "message": "request is not authorized"
+                }
+            })),
+        )
+            .into_response()
     }
 }
 

@@ -20,6 +20,9 @@ pub mod legacy_path;
 pub mod log_service;
 pub mod spa;
 pub mod stats_service;
+pub mod telemetry;
+#[cfg(test)]
+mod telemetry_tests;
 #[cfg(test)]
 pub mod test_support;
 
