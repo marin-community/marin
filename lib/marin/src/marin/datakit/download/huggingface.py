@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 HF_PROTOCOL_PREFIX = "hf://"
 HF_BUCKET_PATH_PREFIX = "buckets/"
+HF_DATASET_REPO_TYPE_PREFIX = "datasets"
 
 # HF returns 401 when no credentials are sent and 403 when the caller's token
 # lacks access (e.g. gated dataset, accept-license required). Neither is fixed
@@ -85,7 +86,7 @@ class DownloadConfig:
 
     # fmt: on
     hf_repo_type_prefix: str = (
-        "datasets"  # The repo_type_prefix is datasets/ for datasets,
+        HF_DATASET_REPO_TYPE_PREFIX  # The repo_type_prefix is datasets/ for datasets,
         # spaces/ for spaces, and models do not need a prefix in the URL.
     )
 
@@ -342,8 +343,9 @@ def download_hf(cfg: DownloadConfig) -> None:
     if not files:
         raise ValueError(f"No files found for dataset `{cfg.hf_dataset_id}. Used glob patterns: {cfg.hf_urls_glob}")
 
-    # Get file sizes for validation
-    logger.info("Getting file sizes for validation...")
+    # Metadata supplies file sizes for download validation and Xet hashes for
+    # optional source fingerprint validation.
+    logger.info("Getting source file metadata...")
     file_info: dict[str, dict] = {}
     for file in files:
         try:
@@ -428,7 +430,7 @@ def download_hf_step(
     deps: list[StepSpec] | None = None,
     override_output_path: str | None = None,
     worker_resources: ResourceConfig | None = None,
-    hf_repo_type_prefix: str = "datasets",
+    hf_repo_type_prefix: str = HF_DATASET_REPO_TYPE_PREFIX,
     expected_source_xet_fingerprint: str | None = None,
 ) -> StepSpec:
     """Create a StepSpec that downloads a HuggingFace dataset.
@@ -475,7 +477,7 @@ def download_hf_step(
         "hf_urls_glob": resolved_glob,
         "append_sha_to_path": append_sha_to_path,
     }
-    if hf_repo_type_prefix != "datasets":
+    if hf_repo_type_prefix != HF_DATASET_REPO_TYPE_PREFIX:
         hash_attrs["hf_repo_type_prefix"] = hf_repo_type_prefix
     if expected_source_xet_fingerprint is not None:
         hash_attrs["expected_source_xet_fingerprint"] = expected_source_xet_fingerprint

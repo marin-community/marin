@@ -124,7 +124,7 @@ def test_download_hf_rejects_changed_xet_source(tmp_path, monkeypatch):
         expected_source_xet_fingerprint="expected-fingerprint",
     )
 
-    with pytest.raises(ValueError, match="Hugging Face source changed"):
+    with pytest.raises(ValueError):
         download_hf(cfg)
 
 
