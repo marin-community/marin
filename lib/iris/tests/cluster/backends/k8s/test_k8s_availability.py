@@ -5,7 +5,7 @@
 free/total counting on :class:`ClusterState` and its attribution to a backend's
 advertised device variant in ``K8sTaskProvider.resource_capacity``."""
 
-from iris.cluster.backends.k8s.tasks import ClusterState, K8sTaskProvider
+from iris.cluster.backends.k8s.tasks import ClusterState, K8sTaskProvider, PodConfig
 from iris.cluster.controller.backend import DeviceCapacity
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import IRIS_PRIORITY_CLASS_BATCH, IRIS_PRIORITY_CLASS_INTERACTIVE
@@ -117,8 +117,7 @@ def test_gpu_capacity_zero_without_gpu_nodes():
 def _provider(advertised: dict[str, set[str]]) -> K8sTaskProvider:
     provider = K8sTaskProvider(
         kubectl=InMemoryK8sService(namespace="test-ns"),
-        namespace="test-ns",
-        default_image="img",
+        pods=PodConfig(namespace="test-ns", default_image="img"),
         advertised=advertised,
     )
     provider._cluster_state.update(pods=[_pod("a", 2)], nodes=[_node("n1", 8)], workloads=[], node_pools=[])

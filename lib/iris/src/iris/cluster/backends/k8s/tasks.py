@@ -2304,21 +2304,9 @@ class K8sTaskProvider:
     capabilities: ClassVar[frozenset[BackendCapability]] = frozenset({BackendCapability.CLUSTER_VIEW})
 
     kubectl: K8sService
-    namespace: str
-    default_image: str
-    # Iris controller image, used for the log-shipper sidecar (see PodConfig).
-    logship_image: str = ""
-    cache_dir: str = "/cache"
-    service_account: str = ""
-    host_network: bool = False
-    controller_address: str | None = None
-    managed_label: str = ""
-    task_env: dict[str, str] = field(default_factory=dict)
-    env_secret_name: str = ""
-    local_queue: str = ""
-    kueue_priority_classes: dict[int, str] = field(default_factory=dict)
-    kueue_topologies: dict[str, KueueTopologyBinding] = field(default_factory=lambda: dict(_CW_DEFAULT_TOPOLOGIES))
-    priority_class_names: dict[int, str] = field(default_factory=lambda: dict(_DEFAULT_PRIORITY_CLASS_NAMES))
+    # Cluster-level pod settings; also the source of the namespace and managed
+    # label this backend uses for its own ConfigMap/PDB writes and kubectl scans.
+    pods: PodConfig
     # Namespaces whose preemptible (negative-priority) GPU pods Iris evicts
     # when it has gang work for Kueue. Empty disables the feature; see
     # _evict_preemptible_blockers for the safety guards.
@@ -2452,7 +2440,7 @@ class K8sTaskProvider:
         if not variants or len(variants) != 1:
             return None
         variant = next(iter(variants)).strip().lower()
-        return {variant: self._cluster_state.gpu_capacity(self.priority_class_names)}
+        return {variant: self._cluster_state.gpu_capacity(self.pods.priority_class_names)}
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         """No-op: Kueue owns placement, so Iris makes no scheduling decisions."""
@@ -2591,7 +2579,7 @@ class K8sTaskProvider:
             logger.warning("Failed to query node resources: %s", e)
             nodes = []
 
-        node_pools = _fetch_node_pools(self.kubectl, self.managed_label)
+        node_pools = _fetch_node_pools(self.kubectl, self.pods.managed_label)
         self._cluster_state.update(managed_pods, nodes, workloads, node_pools)
 
         # Declare the node set for the background scrape (host + GPU readings ->
@@ -2731,7 +2719,7 @@ class K8sTaskProvider:
 
     def get_cluster_status(self) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
         """Return cluster status from the latest sync() snapshot. No kubectl calls."""
-        return self._cluster_state.to_status_response(self.namespace)
+        return self._cluster_state.to_status_response(self.pods.namespace)
 
     def status(self) -> controller_pb2.Controller.BackendStatus:
         """Author the ``kubernetes`` status variant from the cluster-state snapshot."""
@@ -2745,29 +2733,9 @@ class K8sTaskProvider:
     # Internal helpers
     # -------------------------------------------------------------------------
 
-    @property
-    def pod_config(self) -> PodConfig:
-        """Build PodConfig from provider fields."""
-        return PodConfig(
-            namespace=self.namespace,
-            default_image=self.default_image,
-            logship_image=self.logship_image,
-            cache_dir=self.cache_dir,
-            service_account=self.service_account,
-            host_network=self.host_network,
-            controller_address=self.controller_address,
-            managed_label=self.managed_label,
-            task_env=self.task_env,
-            env_secret_name=self.env_secret_name,
-            local_queue=self.local_queue,
-            kueue_priority_classes=self.kueue_priority_classes,
-            kueue_topologies=self.kueue_topologies,
-            priority_class_names=self.priority_class_names,
-        )
-
     def _apply_pod(self, run_req: job_pb2.RunTaskRequest) -> None:
         """Create or update the Pod for a task attempt."""
-        manifest = _build_pod_manifest(run_req, self.pod_config)
+        manifest = _build_pod_manifest(run_req, self.pods)
 
         task_id_name = JobName.from_wire(run_req.task_id)
         pod_name = _pod_name(task_id_name, run_req.attempt_id, run_req.attempt_uid)
@@ -2776,8 +2744,8 @@ class K8sTaskProvider:
         init_containers, extra_volumes, configmap_name = _build_init_container_spec(
             run_req,
             pod_name,
-            self.default_image,
-            self.controller_address,
+            self.pods.default_image,
+            self.pods.controller_address,
         )
 
         if configmap_name:
@@ -2787,12 +2755,12 @@ class K8sTaskProvider:
                 "kind": "ConfigMap",
                 "metadata": {
                     "name": configmap_name,
-                    "namespace": self.namespace,
+                    "namespace": self.pods.namespace,
                     "labels": {
                         _LABEL_MANAGED: "true",
                         _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
                         _LABEL_TASK_HASH: _task_hash(run_req.task_id),
-                        **(({self.managed_label: "true"}) if self.managed_label else {}),
+                        **(({self.pods.managed_label: "true"}) if self.pods.managed_label else {}),
                     },
                 },
                 "binaryData": {
@@ -2822,9 +2790,9 @@ class K8sTaskProvider:
         if _is_coordinator_task(run_req):
             pdb = _build_pdb_manifest(
                 pod_name,
-                self.namespace,
+                self.pods.namespace,
                 _task_hash(run_req.task_id),
-                managed_label=self.managed_label,
+                managed_label=self.pods.managed_label,
             )
             self.kubectl.apply_json(pdb)
             logger.info("Applied PDB %s for coordinator task %s", pdb["metadata"]["name"], task_id)
@@ -2853,7 +2821,7 @@ class K8sTaskProvider:
             return
         self._last_preempt_time = now
         for ns in self.preempt_namespaces:
-            if ns == self.namespace:
+            if ns == self.pods.namespace:
                 logger.warning("preempt_namespaces includes iris's own namespace %r; refusing to evict there", ns)
                 continue
             try:

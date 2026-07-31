@@ -2206,4 +2206,4 @@ def test_k8s_backend_uses_canonical_default_task_image():
     backend = make_task_backend(config, unreachable_grace=Duration.from_seconds(1))
 
     assert isinstance(backend, K8sTaskProvider)
-    assert backend.default_image == "registry.example/iris-task:abc1234"
+    assert backend.pods.default_image == "registry.example/iris-task:abc1234"

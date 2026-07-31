@@ -19,7 +19,12 @@ import logging
 from finelog.client.log_client import Table
 from rigging.timing import Duration
 
-from iris.cluster.backends.k8s.tasks import _CW_DEFAULT_TOPOLOGIES, _DEFAULT_PRIORITY_CLASS_NAMES, K8sTaskProvider
+from iris.cluster.backends.k8s.tasks import (
+    _CW_DEFAULT_TOPOLOGIES,
+    _DEFAULT_PRIORITY_CLASS_NAMES,
+    K8sTaskProvider,
+    PodConfig,
+)
 from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.config import (
     BackendConfig,
@@ -128,21 +133,23 @@ def make_task_backend(
                 kubeconfig_path=kp.kubeconfig or None,
                 context=kp.kube_context or None,
             ),
-            namespace=namespace,
-            default_image=config.defaults.worker.default_task_image,
-            logship_image=config.controller.image,
-            service_account=kp.service_account or "",
-            host_network=kp.host_network,
-            cache_dir=kp.cache_dir or "/cache",
-            controller_address=kp.controller_address or None,
-            managed_label=managed_label,
-            task_env=dict(config.defaults.task_env),
-            env_secret_name=env_secret_name,
-            local_queue=local_queue,
-            kueue_priority_classes=priority_classes,
-            kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
+            pods=PodConfig(
+                namespace=namespace,
+                default_image=config.defaults.worker.default_task_image,
+                logship_image=config.controller.image,
+                service_account=kp.service_account or "",
+                host_network=kp.host_network,
+                cache_dir=kp.cache_dir or "/cache",
+                controller_address=kp.controller_address or None,
+                managed_label=managed_label,
+                task_env=dict(config.defaults.task_env),
+                env_secret_name=env_secret_name,
+                local_queue=local_queue,
+                kueue_priority_classes=priority_classes,
+                kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
+                priority_class_names=pod_priority_classes,
+            ),
             preempt_namespaces=list(kp.preempt_namespaces),
-            priority_class_names=pod_priority_classes,
             task_stats_table=task_stats_table,
             task_event_table=task_event_table,
             profile_table=profile_table,
