@@ -9,9 +9,11 @@ import logging
 import os
 from collections import Counter, defaultdict
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from typing import Any
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 from fray.types import ActorConfig, ResourceConfig
 from marin.datakit.normalize import NormalizedData
@@ -20,7 +22,9 @@ from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.fuzzy_dups import (
+    FUZZY_DUPS_ATTR_DATA_VERSION,
     FuzzyDupsAttrData,
+    FuzzyDupsPerSource,
     compute_fuzzy_dups_attrs_step,
 )
 from marin.processing.classification.deduplication.fuzzy_minhash import compute_minhash_attrs_step
@@ -37,6 +41,7 @@ from marin.processing.classification.deduplication.verify_fuzzy_dups import (
 from rigging.filesystem import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 from zephyr.execution import PoolMode, ZephyrContext
+from zephyr.writers import write_parquet_file
 
 from experiments.datakit.reference_pipeline import SAMPLE_PREFIX, sample_sources
 from experiments.datakit.reports.dedup import dedup_report
@@ -48,6 +53,7 @@ DEFAULT_MAX_CONCURRENT = 8
 DEFAULT_INSPECTION_LIMIT = 10_000
 TEXT_PREVIEW_CHARS = 500
 SHARED_POOL_NAME = "fuzzy-verification-testbed"
+CANDIDATE_IMPORT_VERSION = 1
 WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g", disk="8g")
 COORDINATOR_RESOURCES = ResourceConfig(cpu=1, ram="4g", disk="16g", preemptible=False)
 STORE_CONFIG = FuzzyVerificationStoreConfig(
@@ -70,6 +76,13 @@ VERIFIED_COLUMNS = [
     "dup_under_tokenized",
     "dup_char_jaccard",
 ]
+_CANDIDATE_SCHEMA = pa.schema(
+    [
+        pa.field("id", pa.string(), nullable=False),
+        pa.field("dup_cluster_id", pa.string(), nullable=False),
+        pa.field("is_cluster_canonical", pa.bool_(), nullable=False),
+    ]
+)
 
 
 @dataclass(frozen=True)
@@ -337,6 +350,47 @@ def _normalize_candidate_source_keys(candidates: FuzzyDupsAttrData) -> FuzzyDups
     return candidates.model_copy(update={"sources": sources})
 
 
+def _legacy_candidate_rows(path: str) -> Iterator[dict[str, Any]]:
+    """Flatten the nested attribute struct written by v1 candidate artifacts."""
+    for row in _rows(path, ["id", "attributes"]):
+        attributes = row["attributes"]
+        yield {
+            "id": row["id"],
+            "dup_cluster_id": attributes["dup_cluster_id"],
+            "is_cluster_canonical": attributes["is_cluster_canonical"],
+        }
+
+
+def _upgrade_legacy_candidate_file(paths: tuple[str, str]) -> None:
+    input_path, output_path = paths
+    write_parquet_file(_legacy_candidate_rows(input_path), output_path, schema=_CANDIDATE_SCHEMA)
+
+
+def _import_candidate_artifact(candidates: FuzzyDupsAttrData, output_path: str) -> FuzzyDupsAttrData:
+    """Normalize imported metadata and materialize the current flat candidate schema."""
+    candidates = _normalize_candidate_source_keys(candidates)
+    current_version = f"v{FUZZY_DUPS_ATTR_DATA_VERSION}"
+    if candidates.version == current_version:
+        return candidates
+    if candidates.version != "v1":
+        raise ValueError(f"Cannot import fuzzy candidate artifact version {candidates.version!r}")
+
+    imported_sources = {}
+    copies = []
+    for source_index, (source_key, source) in enumerate(sorted(candidates.sources.items())):
+        imported_attr_dir = prefix_join(prefix_join(output_path, "outputs"), f"source_{source_index:03d}")
+        input_paths = sorted(str(path) for path in StoragePath(prefix_join(source.attr_dir, "*.parquet")).glob())
+        copies.extend(
+            (input_path, prefix_join(imported_attr_dir, os.path.basename(input_path))) for input_path in input_paths
+        )
+        imported_sources[source_key] = FuzzyDupsPerSource(attr_dir=imported_attr_dir)
+
+    with ThreadPoolExecutor(max_workers=32, thread_name_prefix="candidate-import") as executor:
+        list(executor.map(_upgrade_legacy_candidate_file, copies))
+
+    return candidates.model_copy(update={"version": current_version, "sources": imported_sources})
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sample-prefix", default=SAMPLE_PREFIX)
@@ -379,9 +433,9 @@ def main() -> None:
         candidate_artifact = args.candidate_artifact.rstrip("/")
         candidates_step = StepSpec(
             name="datakit/fuzzy_verification_testbed/import_candidates",
-            hash_attrs={"artifact": candidate_artifact},
-            fn=lambda _output_path: _normalize_candidate_source_keys(
-                read_artifact(candidate_artifact, FuzzyDupsAttrData)
+            hash_attrs={"artifact": candidate_artifact, "import_version": CANDIDATE_IMPORT_VERSION},
+            fn=lambda candidate_output_path: _import_candidate_artifact(
+                read_artifact(candidate_artifact, FuzzyDupsAttrData), candidate_output_path
             ),
             override_output_path=prefix_join(output_prefix, "candidate-artifact"),
         )

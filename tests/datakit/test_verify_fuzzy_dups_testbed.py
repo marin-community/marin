@@ -1,11 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData, FuzzyDupsPerSource
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashParams
 
-from experiments.datakit.scripts.verify_fuzzy_dups_testbed import _normalize_candidate_source_keys
+from experiments.datakit.scripts.verify_fuzzy_dups_testbed import (
+    _import_candidate_artifact,
+    _normalize_candidate_source_keys,
+)
 
 
 def _candidates(sources: dict[str, FuzzyDupsPerSource]) -> FuzzyDupsAttrData:
@@ -41,3 +46,30 @@ def test_imported_candidates_reject_colliding_source_keys(monkeypatch):
                 }
             )
         )
+
+
+def test_imported_v1_candidates_are_flattened(tmp_path):
+    source_key = "datakit/sample/source/outputs/main"
+    legacy_attr_dir = tmp_path / "legacy"
+    legacy_attr_dir.mkdir()
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "id": "member",
+                    "attributes": {"dup_cluster_id": "cluster", "is_cluster_canonical": False},
+                }
+            ]
+        ),
+        legacy_attr_dir / "part-000.parquet",
+    )
+    candidates = _candidates({source_key: FuzzyDupsPerSource(attr_dir=str(legacy_attr_dir))})
+
+    imported = _import_candidate_artifact(candidates, str(tmp_path / "imported"))
+
+    assert imported.version == "v4"
+    assert list(imported.sources) == [source_key]
+    output_path = imported.sources[source_key].attr_dir + "/part-000.parquet"
+    assert pq.read_table(output_path).to_pylist() == [
+        {"id": "member", "dup_cluster_id": "cluster", "is_cluster_canonical": False}
+    ]
