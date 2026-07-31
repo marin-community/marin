@@ -29,8 +29,10 @@ from ladder_config import (
     TEXT_WINDOW_CHARS,
     TRAIN_TARGET_3M,
     TRAIN_TARGET_750K,
+    document_view,
     source_category,
 )
+from rigging.filesystem import atomic_rename
 
 MANIFEST_URL = f"{MANIFEST_ROOT}/manifest.json"
 RESULT_FILE = Path("/tmp/luxical-arctic-manifest")
@@ -63,14 +65,10 @@ def parquet_paths(main_output_dir: str) -> tuple[Any, list[str]]:
 
 
 def source_file_capacities(main_output_dir: str, source: str) -> tuple[Any, list[tuple[str, int]]]:
-    """Return a stable file order and enough row capacity for one source."""
+    """Return the row capacity of every nonempty source file."""
     filesystem, paths = parquet_paths(main_output_dir)
-    rng = np.random.default_rng(stable_seed(f"files:{source}"))
-    ordered_paths = [paths[index] for index in rng.permutation(len(paths))]
-    target = MAX_TRAIN_ROWS_PER_SOURCE + EVAL_ROWS_PER_SOURCE
     files = []
-    row_count = 0
-    for path in ordered_paths:
+    for path in paths:
         with pq.ParquetFile(path, filesystem=filesystem) as parquet_file:
             columns = frozenset(parquet_file.schema_arrow.names)
             if not REQUIRED_COLUMNS.issubset(columns):
@@ -79,9 +77,7 @@ def source_file_capacities(main_output_dir: str, source: str) -> tuple[Any, list
         if rows == 0:
             continue
         files.append((path, rows))
-        row_count += rows
-        if row_count >= target:
-            break
+    logger.info("Measured %d nonempty files for %s", len(files), source)
     return filesystem, files
 
 
@@ -151,36 +147,29 @@ def selected_source_rows(
     source: str,
     row_count: int,
     protocol: str,
-) -> list[dict[str, Any]]:
-    """Read one deterministic random source sample."""
+) -> tuple[list[dict[str, Any]], Counter[str]]:
+    """Read a uniform row sample across all source files."""
     rng = np.random.default_rng(stable_seed(f"rows:{source}"))
+    file_counts = np.asarray([file_rows for _, file_rows in files], dtype=np.int64)
+    file_ends = np.cumsum(file_counts)
+    total_rows = int(file_ends[-1])
+    if row_count > total_rows:
+        raise ValueError(f"Source {source} has {total_rows} rows; requested {row_count}")
+    global_positions = np.sort(rng.choice(total_rows, size=row_count, replace=False))
+    file_indices = np.searchsorted(file_ends, global_positions, side="right")
     rows = []
-    remaining = row_count
-    for path, file_rows in files:
-        take = min(remaining, file_rows)
-        if not take:
-            break
-        positions = rng.choice(file_rows, size=take, replace=False)
+    selected_counts: Counter[str] = Counter()
+    for file_index in np.unique(file_indices):
+        path, _ = files[int(file_index)]
+        file_start = 0 if file_index == 0 else int(file_ends[file_index - 1])
+        positions = global_positions[file_indices == file_index] - file_start
         rows.extend(selected_file_rows(filesystem, path, positions, protocol))
-        remaining -= take
-    if remaining:
-        raise ValueError(f"Source {source} is missing {remaining} requested rows")
+        selected_counts[f"{protocol}://{path}"] = len(positions)
+    if len(rows) != row_count:
+        raise ValueError(f"Source {source} returned {len(rows)} rows; expected {row_count}")
     split_rng = np.random.default_rng(stable_seed(f"split:{source}"))
-    return [rows[index] for index in split_rng.permutation(len(rows))]
-
-
-def document_view(text: str) -> str:
-    """Return fixed head, middle, and tail views of a document."""
-    if len(text) <= 3 * TEXT_WINDOW_CHARS:
-        return text
-    middle_start = len(text) // 2 - TEXT_WINDOW_CHARS // 2
-    return "\n".join(
-        (
-            text[:TEXT_WINDOW_CHARS],
-            text[middle_start : middle_start + TEXT_WINDOW_CHARS],
-            text[-TEXT_WINDOW_CHARS:],
-        )
-    )
+    shuffled_rows = [rows[index] for index in split_rng.permutation(len(rows))]
+    return shuffled_rows, selected_counts
 
 
 def normalized_text(text: str) -> str:
@@ -220,7 +209,6 @@ def write_source_rows(
                 "train_rank": train_rank if not is_eval else -1,
                 "in_750k": not is_eval and train_rank < train_quota_750k,
                 "in_3m": not is_eval and train_rank < train_quota_3m,
-                "in_survey": is_eval and selection_rank < SURVEY_ROWS_PER_SOURCE,
                 "raw_characters": len(raw_text),
                 "raw_sha256": hashlib.sha256(raw_text.encode()).hexdigest(),
                 "normalized_sha256": hashlib.sha256(normalized_text(raw_text).encode()).hexdigest(),
@@ -230,12 +218,12 @@ def write_source_rows(
     table = pa.Table.from_pylist(output_rows)
     output_url = f"{MANIFEST_ROOT}/sources/{safe_source_name(source)}.parquet"
     output_filesystem, output_path = fsspec.core.url_to_fs(output_url)
-    pq.write_table(table, output_path, filesystem=output_filesystem, compression="zstd")
+    with atomic_rename(output_path, fs=output_filesystem) as temporary_path:
+        pq.write_table(table, temporary_path, filesystem=output_filesystem, compression="zstd")
     counts = {
         "eval": EVAL_ROWS_PER_SOURCE,
         "train_750k": train_quota_750k,
         "train_3m": train_quota_3m,
-        "survey": SURVEY_ROWS_PER_SOURCE,
     }
     return output_url, counts
 
@@ -247,10 +235,11 @@ def manifest_digest(manifest: dict[str, Any]) -> str:
 
 
 def write_json(url: str, value: dict[str, Any]) -> None:
-    """Write one JSON object to private storage."""
+    """Write one JSON object atomically to private storage."""
     filesystem, path = fsspec.core.url_to_fs(url)
-    with filesystem.open(path, "w") as file:
-        json.dump(value, file, indent=2, sort_keys=True)
+    with atomic_rename(path, fs=filesystem) as temporary_path:
+        with filesystem.open(temporary_path, "w") as file:
+            json.dump(value, file, indent=2, sort_keys=True)
 
 
 def main() -> None:
@@ -286,7 +275,7 @@ def main() -> None:
         logger.info("Writing source %d/%d: %s", index, len(source_files), source)
         protocol = main_output_dir.partition("://")[0]
         selected_count = EVAL_ROWS_PER_SOURCE + quotas_3m[source]
-        rows = selected_source_rows(filesystem, files, source, selected_count, protocol)
+        rows, selected_counts = selected_source_rows(filesystem, files, source, selected_count, protocol)
         output_url, counts = write_source_rows(source, rows, quotas_750k[source], quotas_3m[source])
         category = source_category(source).value
         category_counts[category] += 1
@@ -294,12 +283,22 @@ def main() -> None:
             "category": category,
             "main_output_dir": main_output_dir,
             "output_url": output_url,
-            "selected_input_files": [{"path": path, "rows": row_count} for path, row_count in files],
+            "available_input_file_count": len(files),
+            "available_input_rows": sum(row_count for _, row_count in files),
+            "selected_input_files": [
+                {
+                    "path": f"{protocol}://{path}",
+                    "total_rows": row_count,
+                    "selected_rows": selected_counts.get(f"{protocol}://{path}", 0),
+                }
+                for path, row_count in files
+                if selected_counts.get(f"{protocol}://{path}", 0)
+            ],
             "counts": counts,
         }
 
     manifest = {
-        "version": 1,
+        "version": 2,
         "seed": SEED,
         "source_inventory_url": SOURCE_INVENTORY_URL,
         "source_count": len(source_reports),
@@ -308,6 +307,7 @@ def main() -> None:
         "evaluation_rows_per_source": EVAL_ROWS_PER_SOURCE,
         "survey_rows_per_source": SURVEY_ROWS_PER_SOURCE,
         "text_window_characters": TEXT_WINDOW_CHARS,
+        "sampling_method": "uniform_without_replacement_across_all_source_rows",
         "predeclared_ood_sources": sorted(PREDECLARED_OOD_SOURCES),
         "category_source_counts": dict(sorted(category_counts.items())),
         "sources": source_reports,

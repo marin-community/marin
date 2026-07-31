@@ -6,6 +6,8 @@
 import hashlib
 import json
 import logging
+import string
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +18,6 @@ from ladder_config import (
     EVAL_ROWS_PER_SOURCE,
     MANIFEST_ROOT,
     MIN_SOURCES,
-    SURVEY_ROWS_PER_SOURCE,
     TRAIN_TARGET_3M,
     TRAIN_TARGET_750K,
 )
@@ -44,15 +45,29 @@ def manifest_digest(manifest: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def source_counts(url: str) -> dict[str, int]:
-    """Return exact split and rung counts for one source file."""
+def valid_sha256(value: str) -> bool:
+    """Return true when a value is a lowercase SHA-256 digest."""
+    return len(value) == 64 and all(character in string.hexdigits.lower() for character in value)
+
+
+def source_counts(url: str, selected_input_files: list[dict[str, Any]]) -> dict[str, int]:
+    """Return exact split, rung, and provenance counts for one source file."""
     filesystem, path = fsspec.core.url_to_fs(url)
     if not filesystem.exists(path):
         raise FileNotFoundError(f"Missing source manifest file: {url}")
     table = pq.read_table(
         path,
         filesystem=filesystem,
-        columns=["split", "in_750k", "in_3m", "in_survey"],
+        columns=[
+            "split",
+            "in_750k",
+            "in_3m",
+            "input_path",
+            "input_row_group",
+            "input_row_in_group",
+            "raw_sha256",
+            "normalized_sha256",
+        ],
     )
     eval_mask = pc.equal(table["split"], "eval")
     train_mask = pc.equal(table["split"], "train")
@@ -67,13 +82,30 @@ def source_counts(url: str) -> dict[str, int]:
         raise ValueError(f"The 0.75M rows are not nested in the 3M rows: {url}")
     if invalid_eval:
         raise ValueError(f"Evaluation rows appear in a training rung: {url}")
+    expected_path_counts = {result["path"]: result["selected_rows"] for result in selected_input_files}
+    actual_path_counts = Counter(table["input_path"].to_pylist())
+    if actual_path_counts != expected_path_counts:
+        raise ValueError(f"Selected input-file counts differ for {url}")
+    positions = set(
+        zip(
+            table["input_path"].to_pylist(),
+            table["input_row_group"].to_pylist(),
+            table["input_row_in_group"].to_pylist(),
+            strict=True,
+        )
+    )
+    if len(positions) != len(table):
+        raise ValueError(f"Selected input positions are not unique for {url}")
+    for column in ("raw_sha256", "normalized_sha256"):
+        if not all(valid_sha256(value) for value in table[column].to_pylist()):
+            raise ValueError(f"Column {column} contains an invalid digest: {url}")
     return {
         "rows": len(table),
         "eval": pc.sum(pc.cast(eval_mask, "int64")).as_py(),
         "train": pc.sum(pc.cast(train_mask, "int64")).as_py(),
         "train_750k": pc.sum(pc.cast(table["in_750k"], "int64")).as_py(),
         "train_3m": pc.sum(pc.cast(table["in_3m"], "int64")).as_py(),
-        "survey": pc.sum(pc.cast(table["in_survey"], "int64")).as_py(),
+        "selected_input_file_count": len(actual_path_counts),
     }
 
 
@@ -95,11 +127,9 @@ def main() -> None:
     sources = {}
     for index, (source, result) in enumerate(sorted(manifest["sources"].items()), start=1):
         logger.info("Auditing manifest source %d/%d: %s", index, len(manifest["sources"]), source)
-        counts = source_counts(result["output_url"])
+        counts = source_counts(result["output_url"], result["selected_input_files"])
         if counts["eval"] != EVAL_ROWS_PER_SOURCE:
             raise ValueError(f"Source {source} has {counts['eval']} evaluation rows")
-        if counts["survey"] != SURVEY_ROWS_PER_SOURCE:
-            raise ValueError(f"Source {source} has {counts['survey']} survey rows")
         if counts["train_750k"] != result["counts"]["train_750k"]:
             raise ValueError(f"Source {source} has an incorrect 0.75M quota")
         if counts["train_3m"] != result["counts"]["train_3m"]:
@@ -107,7 +137,7 @@ def main() -> None:
         sources[source] = counts
     totals = {
         key: sum(counts[key] for counts in sources.values())
-        for key in ("rows", "eval", "train", "train_750k", "train_3m", "survey")
+        for key in ("rows", "eval", "train", "train_750k", "train_3m", "selected_input_file_count")
     }
     if totals["train_750k"] != TRAIN_TARGET_750K:
         raise ValueError(f"0.75M total is {totals['train_750k']}")

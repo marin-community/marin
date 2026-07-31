@@ -132,8 +132,9 @@ def new_student() -> Embedder:
     layer_shapes = tuple(layer.shape for layer in baseline.bow_to_dense_embedder.layers)
     if layer_shapes != EXPECTED_LAYER_SHAPES:
         raise ValueError(f"Unexpected Luxical-One layer shapes: {layer_shapes}")
+    dimensions = (layer_shapes[0][1], *(shape[0] for shape in layer_shapes))
     random_network = SparseToDenseEmbedder.create(
-        dims=(2_000_000, 96, 3_072, 3_072, 192),
+        dims=dimensions,
         seed=SEED,
     )
     return baseline.replace_sparse_to_dense_embedder(random_network)
@@ -240,7 +241,6 @@ def write_json(url: str, value: dict[str, Any]) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse the ladder rung."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--rung", choices=("750k", "3m"), required=True)
     return parser.parse_args()
@@ -303,7 +303,6 @@ def main() -> None:
         "steps": len(losses),
         "first_loss": losses[0],
         "final_loss": losses[-1],
-        "minimum_loss": min(losses),
     }
     write_json(report_url, report)
     summary = {

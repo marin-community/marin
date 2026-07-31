@@ -13,25 +13,22 @@ from typing import Any
 import fsspec
 import pyarrow.parquet as pq
 from marin.datakit.sources import all_sources
+from rigging.filesystem import atomic_rename
 
 MIRROR_PREFIX = "s3://marin-us-east-02a/marin"
+CANONICAL_BUCKET = "marin-us-west2"
 OUTPUT_URL = "s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/source_inventory.json"
 MIN_USABLE_SOURCES = 140
 REQUIRED_COLUMNS = frozenset(("id", "text"))
 RESULT_FILE = Path("/tmp/luxical-arctic-source-inventory")
 REGISTRY_REVISION = "656d77bff319a851cb775e5bef33570ccfd9a9f8"
-LATEST_SOURCE_OVERRIDES = {
-    "biocorpus": (9.138977526, "gs://marin-us-west2/normalized/biocorpus_dd02c263"),
-    "ghalogs/public": (253.343866746, "gs://marin-us-west2/normalized/ghalogs/public_55a2fec7"),
-    "identity-data/content": (
-        0.06171138,
-        "gs://marin-us-west2/normalized/identity-data/content_815a5afb",
-    ),
-    "nemotron_code_v1/content": (
-        465.0,
-        "gs://marin-us-west2/normalized/nemotron_code_v1_content_b6337b6c",
-    ),
-    "stack-v3": (3363.007313642, "gs://marin-us-west2/normalized/stack-v3_32b6fa6f"),
+LATEST_SOURCE_PATH_OVERRIDES = {
+    # These fixed outputs can be newer than the source registry at REGISTRY_REVISION.
+    "biocorpus": "gs://marin-us-west2/normalized/biocorpus_dd02c263",
+    "ghalogs/public": "gs://marin-us-west2/normalized/ghalogs/public_55a2fec7",
+    "identity-data/content": "gs://marin-us-west2/normalized/identity-data/content_815a5afb",
+    "nemotron_code_v1/content": "gs://marin-us-west2/normalized/nemotron_code_v1_content_b6337b6c",
+    "stack-v3": "gs://marin-us-west2/normalized/stack-v3_32b6fa6f",
 }
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
@@ -43,7 +40,6 @@ class SourceInventory:
     """Store the inventory result for one normalized source."""
 
     name: str
-    rough_token_count_b: float
     canonical_output_path: str
     artifact_url: str
     main_output_dir: str | None
@@ -61,9 +57,11 @@ def mirror_url(url: str) -> str:
     protocol, separator, bucket_and_path = url.partition("://")
     if protocol != "gs" or not separator:
         raise ValueError(f"Path is not a canonical GCS URL: {url}")
-    _, path_separator, relative_path = bucket_and_path.partition("/")
+    bucket, path_separator, relative_path = bucket_and_path.partition("/")
     if not path_separator or not relative_path:
         raise ValueError(f"Path has no object key: {url}")
+    if bucket != CANONICAL_BUCKET:
+        raise ValueError(f"Unsupported canonical bucket {bucket}: {url}")
     return f"{MIRROR_PREFIX.rstrip('/')}/{relative_path}"
 
 
@@ -88,7 +86,7 @@ def parquet_paths(main_output_dir: str) -> tuple[Any, list[str]]:
     return filesystem, paths
 
 
-def inspect_source(name: str, rough_token_count_b: float, canonical_output_path: str) -> SourceInventory:
+def inspect_source(name: str, canonical_output_path: str) -> SourceInventory:
     """Inspect one source without reading document text."""
     artifact_url = f"{mirror_url(canonical_output_path).rstrip('/')}/.artifact.json"
     main_output_dir = None
@@ -122,7 +120,6 @@ def inspect_source(name: str, rough_token_count_b: float, canonical_output_path:
 
     return SourceInventory(
         name=name,
-        rough_token_count_b=rough_token_count_b,
         canonical_output_path=canonical_output_path,
         artifact_url=artifact_url,
         main_output_dir=main_output_dir,
@@ -135,20 +132,19 @@ def inspect_source(name: str, rough_token_count_b: float, canonical_output_path:
 
 
 def write_report(report: dict[str, Any]) -> None:
-    """Write the complete inventory report."""
+    """Write the complete inventory report atomically."""
     filesystem, path = fsspec.core.url_to_fs(OUTPUT_URL)
-    with filesystem.open(path, "w") as file:
-        json.dump(report, file, indent=2, sort_keys=True)
+    with atomic_rename(path, fs=filesystem) as temporary_path:
+        with filesystem.open(temporary_path, "w") as file:
+            json.dump(report, file, indent=2, sort_keys=True)
 
 
 def main() -> None:
     """Inventory every active Datakit source."""
-    sources = {
-        name: (source.rough_token_count_b, source.normalized.output_path) for name, source in all_sources().items()
-    }
-    sources.update(LATEST_SOURCE_OVERRIDES)
+    sources = {name: source.normalized.output_path for name, source in all_sources().items()}
+    sources.update(LATEST_SOURCE_PATH_OVERRIDES)
     inventory = []
-    for index, (name, (rough_token_count_b, canonical_output_path)) in enumerate(
+    for index, (name, canonical_output_path) in enumerate(
         sorted(sources.items()),
         start=1,
     ):
@@ -156,7 +152,6 @@ def main() -> None:
         inventory.append(
             inspect_source(
                 name=name,
-                rough_token_count_b=rough_token_count_b,
                 canonical_output_path=canonical_output_path,
             )
         )

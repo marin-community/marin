@@ -213,7 +213,7 @@ def near_duplicate_summary(documents: list[dict[str, Any]]) -> dict[str, Any]:
             for bucket in buckets.as_py():
                 bucket_members[int(bucket)].append(row_index)
 
-    candidate_pairs = set()
+    candidate_pairs: set[tuple[int, int]] = set()
     oversized_buckets = 0
     candidates_truncated = False
     for members in bucket_members.values():
@@ -222,7 +222,7 @@ def near_duplicate_summary(documents: list[dict[str, Any]]) -> dict[str, Any]:
             oversized_buckets += 1
             continue
         for left, right in combinations(unique_members, 2):
-            candidate_pairs.add(left * len(documents) + right)
+            candidate_pairs.add((left, right))
             if len(candidate_pairs) >= MAX_CANDIDATE_PAIRS:
                 candidates_truncated = True
                 break
@@ -231,8 +231,7 @@ def near_duplicate_summary(documents: list[dict[str, Any]]) -> dict[str, Any]:
 
     near_pairs = []
     near_documents = set()
-    for encoded in sorted(candidate_pairs):
-        left, right = divmod(encoded, len(documents))
+    for left, right in sorted(candidate_pairs):
         left_signature = np.asarray(signatures[left], dtype=np.uint64)
         right_signature = np.asarray(signatures[right], dtype=np.uint64)
         similarity = float(np.mean(left_signature == right_signature))
