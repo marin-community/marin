@@ -57,8 +57,11 @@ from levanter.store.cache import (
 from marin.datakit.decon import DeconAttributes
 from marin.datakit.source_key import DatakitArtifactPath
 from marin.execution.artifact import read_artifact, write_artifact
-from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData, FuzzyDupsPerSource
 from marin.processing.tokenize._core import CHUNK_INDEX_FIELD
+from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    VerifiedFuzzyDupsAttrData,
+    VerifiedFuzzyDupsPerSource,
+)
 from marin.processing.tokenize.attributes import TokenizedAttrData
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath
@@ -166,18 +169,20 @@ def _load_quality_table(path: str) -> tuple[pa.Array, np.ndarray]:
     return table.column("id").combine_chunks(), np.asarray(table.column("quality_bucket"), dtype=np.int32)
 
 
-def _load_dedup_canonical(path: str) -> dict[str, bool]:
-    """Return sparse canonical flags; missing IDs are singleton documents."""
+def _load_verified_duplicates(path: str) -> set[str]:
+    """Return IDs that the full-text verifier marked as duplicates."""
     if not StoragePath(path).exists():
-        return {}
+        return set()
     with StoragePath(path).open("rb") as fh:
         parquet = pq.ParquetFile(fh)
         if parquet.metadata.num_rows == 0:
-            return {}
-        table = parquet.read(columns=["id", "is_cluster_canonical"])
+            return set()
+        table = parquet.read(columns=["id", "dup_doc"])
     ids = table.column("id").to_pylist()
-    canonical = table.column("is_cluster_canonical").to_pylist()
-    return dict(zip(ids, canonical, strict=True))
+    duplicate_flags = table.column("dup_doc").to_pylist()
+    if not all(duplicate_flags):
+        raise ValueError(f"{path} contains a verified fuzzy-duplicate row with dup_doc=False")
+    return set(ids)
 
 
 def _load_exact_duplicates(path: str) -> set[str]:
@@ -203,7 +208,7 @@ def _resolve_dedup_attr_dir(
     *,
     source_name: str,
     source_key: str,
-    sources: Mapping[str, ExactDupsPerSource | FuzzyDupsPerSource],
+    sources: Mapping[str, ExactDupsPerSource | VerifiedFuzzyDupsPerSource],
     label: str,
 ) -> str:
     entry = sources.get(source_key)
@@ -325,7 +330,7 @@ def _iter_surviving_docs(spec: dict[str, str], cluster_col: str) -> Iterator[tup
         raise RuntimeError(f"{where}: decon/quality id mismatch -- co-partitioning broken")
     del decon_ids, cluster_ids, quality_ids
     exact_duplicates = _load_exact_duplicates(spec["exact_dedup"])
-    dedup_canonical = _load_dedup_canonical(spec["dedup"])
+    verified_duplicates = _load_verified_duplicates(spec["dedup"])
 
     n_in = 0
     n_contaminated = 0
@@ -343,11 +348,14 @@ def _iter_surviving_docs(spec: dict[str, str], cluster_col: str) -> Iterator[tup
         if contaminated[position]:
             n_contaminated += 1
             continue
-        fuzzy_canonical = dedup_canonical.get(doc_id)
-        if fuzzy_canonical is False:
+        # Verified attributes mark only the members a full-text comparison
+        # confirmed, so membership alone decides. The unverified candidate
+        # attributes needed a tri-state check because a cluster member that was
+        # merely a candidate still had to reach the exact-dedup test.
+        if doc_id in verified_duplicates:
             n_dedup_dropped += 1
             continue
-        if fuzzy_canonical is None and doc_id in exact_duplicates:
+        if doc_id in exact_duplicates:
             n_exact_dedup_dropped += 1
             continue
         n_out += 1
@@ -359,7 +367,7 @@ def _iter_surviving_docs(spec: dict[str, str], cluster_col: str) -> Iterator[tup
     counters.pipeline.update_counter("datakit_store/records_in", n_in)
     counters.pipeline.update_counter("datakit_store/contaminated_dropped", n_contaminated)
     counters.pipeline.update_counter("datakit_store/exact_duplicate_dropped", n_exact_dedup_dropped)
-    counters.pipeline.update_counter("datakit_store/dedup_noncanonical_dropped", n_dedup_dropped)
+    counters.pipeline.update_counter("datakit_store/fuzzy_duplicate_dropped", n_dedup_dropped)
     counters.pipeline.update_counter("datakit_store/records_out", n_out)
 
 
@@ -551,7 +559,7 @@ def build_clustered_store(
     cluster_assign: dict[str, AssignmentAttrData],
     quality: dict[str, QualityScores],
     exact_dedup: GlobalExactDedupData,
-    dedup: FuzzyDupsAttrData,
+    dedup: VerifiedFuzzyDupsAttrData,
     output_path: str,
     cluster_view: int = 40,
     split: str = "train",
