@@ -28,6 +28,7 @@ from scripts.iris.grugmoe_inference_preflight import (
     _free_port,
     _immutable_image,
     _record_completion,
+    _unattended_placement_component,
     _unattended_worker_argv,
     _validate_unattended_mode,
     boundary_requests,
@@ -387,6 +388,68 @@ def test_unattended_worker_runs_as_a_repo_module() -> None:
         "worker",
     ]
     assert command[command.index("--marin-commit") + 1] == "b" * 40
+
+
+def test_unattended_placement_uses_host_network_node_identity_without_worker_ids() -> None:
+    rendezvous = [
+        {
+            "task_index": str(index),
+            "num_tasks": "2",
+            "advertise_host": host,
+            "url": f"tcp://{host}:13345",
+        }
+        for index, host in enumerate(("10.0.0.1", "10.0.0.2"))
+    ]
+    rank_records = [{"rank": index, "coscheduling": "nvlink.domain"} for index in range(2)]
+
+    placement = _unattended_placement_component(
+        rendezvous,
+        rank_records,
+        expected_tasks=2,
+    )
+
+    assert placement["passed"]
+    assert placement["distinct_advertise_hosts"] == ["10.0.0.1", "10.0.0.2"]
+    assert placement["distinct_worker_ids"] == []
+    assert placement["topology_enforcement"] == "Kueue hard podset-required-topology"
+
+
+@pytest.mark.parametrize(
+    ("rendezvous", "rank_records"),
+    [
+        (
+            [
+                {"task_index": "0", "advertise_host": "10.0.0.1"},
+                {"task_index": "1", "advertise_host": "10.0.0.1"},
+            ],
+            [
+                {"coscheduling": "nvlink.domain"},
+                {"coscheduling": "nvlink.domain"},
+            ],
+        ),
+        (
+            [
+                {"task_index": "0", "advertise_host": "10.0.0.1"},
+                {"task_index": "1", "advertise_host": "10.0.0.2"},
+            ],
+            [
+                {"coscheduling": "nvlink.domain"},
+                {"coscheduling": None},
+            ],
+        ),
+    ],
+)
+def test_unattended_placement_rejects_shared_node_or_missing_topology(
+    rendezvous: list[dict[str, str]],
+    rank_records: list[dict[str, object]],
+) -> None:
+    placement = _unattended_placement_component(
+        rendezvous,
+        rank_records,
+        expected_tasks=2,
+    )
+
+    assert not placement["passed"]
 
 
 def test_kv_snapshot_separates_semantic_padded_physical_and_reserved_bytes() -> None:

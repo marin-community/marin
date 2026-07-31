@@ -1839,6 +1839,46 @@ def _smoke_components(
     }
 
 
+def _unattended_placement_component(
+    rendezvous: list[dict[str, str]],
+    rank_records: list[dict[str, Any]],
+    *,
+    expected_tasks: int,
+) -> dict[str, Any]:
+    """Prove distinct node-saturating tasks under the required Kueue topology.
+
+    The CoreWeave cluster runs task pods with ``host_network: true``, so Iris'
+    downward-API ``advertise_host`` is the Kubernetes node IP. Each task requests
+    all four GPUs on a four-GPU GB200 node. Distinct advertise hosts therefore
+    prove distinct nodes even though the K8s backend does not set
+    ``IRIS_WORKER_ID``. The coscheduling record proves that Kueue admitted those
+    nodes under its hard ``nvlink.domain`` topology request.
+    """
+    task_indexes = {int(endpoint["task_index"]) for endpoint in rendezvous if endpoint.get("task_index", "").isdigit()}
+    advertise_hosts = sorted({endpoint["advertise_host"] for endpoint in rendezvous if endpoint.get("advertise_host")})
+    worker_ids = sorted({endpoint["worker_id"] for endpoint in rendezvous if endpoint.get("worker_id")})
+    topology_required = expected_tasks == 1 or (
+        len(rank_records) == expected_tasks
+        and all(record.get("coscheduling") == UNATTENDED_COSCHEDULING for record in rank_records)
+    )
+    passed = (
+        len(rendezvous) == expected_tasks
+        and task_indexes == set(range(expected_tasks))
+        and len(advertise_hosts) == expected_tasks
+        and topology_required
+    )
+    return {
+        "passed": passed,
+        "required_coscheduling": UNATTENDED_COSCHEDULING if expected_tasks > 1 else None,
+        "topology_enforcement": "Kueue hard podset-required-topology" if expected_tasks > 1 else None,
+        "node_identity": "IRIS_ADVERTISE_HOST=status.podIP=node IP because cw-us-east-08a uses host_network=true",
+        "node_shape": "one task requests all 4 GPUs on one 4-GPU GB200 node",
+        "endpoints": rendezvous,
+        "distinct_advertise_hosts": advertise_hosts,
+        "distinct_worker_ids": worker_ids,
+    }
+
+
 def _acceptance_components(load: dict[str, Any]) -> dict[str, Any]:
     arms = load["arms"]
     return {
@@ -1896,9 +1936,10 @@ def run_unattended_worker(args: argparse.Namespace) -> dict[str, Any]:
     metadata = {
         "task_index": str(rank),
         "num_tasks": str(info.num_tasks),
-        "worker_id": str(info.worker_id),
         "advertise_host": info.advertise_host,
     }
+    if info.worker_id:
+        metadata["worker_id"] = info.worker_id
     server: LocalVllm | None = None
     rendezvous: list[dict[str, str]] = []
     test_components: dict[str, Any] = {}
@@ -2107,20 +2148,11 @@ def run_unattended_worker(args: argparse.Namespace) -> dict[str, Any]:
             "type": type(exc).__name__,
             "message": str(exc),
         }
-    placement = {
-        "passed": (
-            len(rendezvous) == info.num_tasks
-            and {int(endpoint["task_index"]) for endpoint in rendezvous} == set(range(info.num_tasks))
-            and len({endpoint["worker_id"] for endpoint in rendezvous}) == info.num_tasks
-            and (
-                info.num_tasks == 1
-                or all(record.get("coscheduling") == UNATTENDED_COSCHEDULING for record in rank_records)
-            )
-        ),
-        "required_coscheduling": UNATTENDED_COSCHEDULING if info.num_tasks > 1 else None,
-        "endpoints": rendezvous,
-        "distinct_workers": sorted({endpoint["worker_id"] for endpoint in rendezvous}),
-    }
+    placement = _unattended_placement_component(
+        rendezvous,
+        rank_records,
+        expected_tasks=info.num_tasks,
+    )
     all_rank_health = {
         "passed": (
             len(rank_records) == info.num_tasks
