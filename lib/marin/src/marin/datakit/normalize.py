@@ -105,6 +105,7 @@ def _make_normalize_fn(
     text_field: str,
     id_field: str,
     bare: bool = False,
+    drop_fields: tuple[str, ...] = (),
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """Return a record-level transform function.
 
@@ -112,7 +113,8 @@ def _make_normalize_fn(
     1. Extracts ``text`` from *text_field*.
     2. Generates a deterministic ``id`` via xxh3_128.
     3. If *id_field* exists in the record, preserves it as ``source_id``.
-    4. Keeps all other columns unless *bare* is set (see below).
+    4. Keeps all other columns unless *bare* is set or they are listed in
+       *drop_fields*.
 
     *bare* takes the strict path: drop every column that isn't ``id``,
     ``text``, or ``source_id``. Use this for sources whose extra columns
@@ -139,7 +141,7 @@ def _make_normalize_fn(
         if not bare:
             # Copy all original columns except the ones we're replacing
             for k, v in record.items():
-                if k == id_field:
+                if k == id_field or k in drop_fields:
                     continue
                 if k == text_field and text_field != "text":
                     continue
@@ -321,10 +323,11 @@ def _build_pipeline(
     dedup_mode: DedupMode,
     max_whitespace_run_chars: int,
     bare: bool = False,
+    drop_fields: tuple[str, ...] = (),
     output_schema: pa.Schema | None = None,
 ) -> Dataset:
     """Build the Zephyr pipeline that normalizes *files* into *output_dir*."""
-    normalize_record = _make_normalize_fn(text_field, id_field, bare=bare)
+    normalize_record = _make_normalize_fn(text_field, id_field, bare=bare, drop_fields=drop_fields)
 
     def dedup(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[MainOutput | ExactDupSideOutput]:
         """Drop adjacent duplicate ids. Items arrive sorted by id via sort_by."""
@@ -379,6 +382,7 @@ def normalize_to_parquet(
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
     bare: bool = False,
+    drop_fields: tuple[str, ...] = (),
     output_schema: pa.Schema | None = None,
 ) -> NormalizedData:
     """Normalize raw downloaded data to the datakit standard Parquet format.
@@ -421,6 +425,7 @@ def normalize_to_parquet(
             ``EXACT`` (the default) drops records with duplicate ``id`` values
             (i.e. byte-identical text).  ``NONE`` skips dedup and preserves
             all input records.
+        drop_fields: Source fields to remove while preserving other metadata.
         output_schema: Optional schema for normalized output records.
 
     Returns:
@@ -454,6 +459,7 @@ def normalize_to_parquet(
         dedup_mode,
         max_whitespace_run_chars,
         bare=bare,
+        drop_fields=drop_fields,
         output_schema=output_schema,
     )
     ctx = ZephyrContext(name="normalize", resources=resources, max_workers=max_workers)
@@ -492,6 +498,7 @@ def normalize_step(
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
     bare: bool = False,
+    drop_fields: tuple[str, ...] = (),
     output_schema: pa.Schema | None = None,
 ) -> StepSpec:
     """Create a StepSpec that normalizes downloaded data to Parquet.
@@ -515,6 +522,7 @@ def normalize_step(
             ``zephyr.readers.load_file``.
         dedup_mode: How to deduplicate records within each output shard.
             Defaults to ``DedupMode.EXACT``; use ``DedupMode.NONE`` to skip.
+        drop_fields: Source fields to remove while preserving other metadata.
         output_schema: Optional schema for normalized output records.
     """
     if relative_input_path:
@@ -538,6 +546,8 @@ def normalize_step(
     # identical to pre-feature step specs (cache identity).
     if bare:
         hash_attrs["bare"] = bare
+    if drop_fields:
+        hash_attrs["drop_fields"] = drop_fields
     if output_schema is not None:
         hash_attrs["output_schema"] = str(output_schema)
     return StepSpec(
@@ -554,6 +564,7 @@ def normalize_step(
             file_extensions=file_extensions,
             dedup_mode=dedup_mode,
             bare=bare,
+            drop_fields=drop_fields,
             output_schema=output_schema,
         ),
         deps=[download],
