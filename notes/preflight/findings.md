@@ -44,6 +44,7 @@ pinned the exact pushed vLLM evidence SHA.
 | vLLM branch | [`grugmoe-inference-preflight`](https://github.com/marin-community/vllm/tree/grugmoe-inference-preflight) |
 | vLLM base | `afb26719464d5957e695bde478ae93a160b11d14` |
 | vLLM evidence commit | `2c2bef33dfbd7aef3c9d4433a7e4110f77d56a4a` |
+| vLLM reviewed branch head | `cdfde7e24d8aa3339b4f22444db7b45d43e018fa` |
 | Training semantic oracle | `fd3e9bc5b428633027f944be7fdf1136567db028` |
 | Cluster / priority | `cw-us-east-08a` / `interactive` |
 | Task image | `ghcr.io/marin-community/iris-task@sha256:5e2a69af91a000cb999e6ff0d92933874bd3142eb45469fc64fc7a3f5db64fbb` |
@@ -53,6 +54,11 @@ pinned the exact pushed vLLM evidence SHA.
 | Acceptance config SHA-256 | `88844012a67ca8fec2da879e4b8ff3245d12d3276fb5146ed89ca9cc38bc2169` |
 | Correctness workload SHA-256 | `882b51d0959d8dd6e875d04be49d197ceef3e4c4e1d3c9cd141c6166b5fe5dc1` |
 | Dependency lock SHA-256 | `600b2abe4b5e8027c3783adc8cc45924c71be1a357c1e23eac6ab9049d5f6a14` |
+
+The reviewed vLLM head is one commit after the live-evidence SHA. It only
+rejects malformed unstacked expert tensors and adds a regression test. Every
+in-scope fixture/export tensor is stacked 3D, so the measured serving path and
+the evidence pin remain unchanged.
 
 The multi-architecture image is a generic Iris task image. The unattended
 worker synchronizes the pushed source named in the manifest at job start.
@@ -96,7 +102,7 @@ launcher machinery.
 | Ordinary serving omits the dense MTP head | **confirmed** | The fixture pins `mtp_depth=1`; vLLM returns trunk logits and the oracle manifest records the training head as excluded. |
 | Every selected top-K contribution is dispatched | **confirmed** | The pinned `FusedMoE` route has no capacity clipping or token drop; fixture and live route captures include every selected assignment. |
 | Levanter and vLLM agree on the same tensors | **confirmed** | Selected experts match, normalized routing weights differ by at most `2.3841858e-07`, and next-token probabilities satisfy the repository `NextTokenParity` tolerance. |
-| Two half-width shared experts preserve training semantics | **confirmed** | Both fixture experts are nonzero and pairwise distinct; summed vLLM output differs from the oracle by at most `2.3283064e-10`. |
+| Two half-width shared experts preserve training semantics | **confirmed** | Both fixture experts are nonzero and pairwise distinct. On frozen oracle inputs, separate-sum and fused-concat representations agree within `2.3283064e-10`; vLLM's two-module sum is unit-tested and covered by end-to-end logprob parity. |
 | Prefix reuse preserves token, logprob, and route results | **confirmed** | Cold and reused requests agree across a physical KV-block boundary and the 512-token window boundary in fixture and live P0 jobs. |
 | One-token prefix mutation causes a miss | **confirmed** | Mutated requests reported zero reused tokens and zero new hit-counter tokens at both boundaries. |
 | Append-to-conversation request shape works | **confirmed for the exact dummy path** | Appends produce real hits, sampled-token logprobs, routed IDs, fixed response lengths, and synchronized counters. |
@@ -133,8 +139,10 @@ result SHA-256:
 
 The tensor oracle checked 33 tokens in every layer. Selected experts matched;
 the maximum normalized-weight error was `2.384185791015625e-07`. The two
-shared experts were nonzero and distinct, and their summed-output error was
-`2.3283064365386963e-10`.
+shared experts were nonzero and distinct. On their frozen oracle inputs, the
+separate-sum and fused-concat representations differed by at most
+`2.3283064365386963e-10`. vLLM's two-module sum has direct unit coverage, and
+the live next-token comparison covers the summed path end to end.
 
 At 33 semantic tokens, the live server and frozen oracle chose token 63 and
 the maximum probability error was `8.575512504406177e-05`. At the 514-token
@@ -382,12 +390,14 @@ PYTHONPATH=$PWD \
   -m pytest -q tests/models/test_grugmoe.py \
   tests/v1/core/test_prefix_caching.py
 
-99 passed, 2 skipped
+100 passed, 2 skipped
 ```
 
 All applicable vLLM pre-commit hooks and `git diff --check` pass for the ten
 changed files.
 
-The four required local Max-effort goal reviews are recorded after final
-validation. Material findings, if any, must be resolved before this branch is
-handed off.
+The first four local Max-effort goal reviews produced three passes and one
+request for two narrow corrections: reject malformed unstacked expert tensors,
+and describe the shared-expert equivalence measurement precisely. Both are
+resolved in the reviewed vLLM head and this findings revision. Final review is
+run after these corrections and clean validation.

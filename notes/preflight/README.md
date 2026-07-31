@@ -24,6 +24,9 @@ it is not trained-model performance evidence.
   `https://github.com/marin-community/vllm/tree/grugmoe-inference-preflight`
 - vLLM evidence commit:
   `2c2bef33dfbd7aef3c9d4433a7e4110f77d56a4a`
+- vLLM reviewed branch head:
+  `cdfde7e24d8aa3339b4f22444db7b45d43e018fa` (post-evidence fail-closed
+  tensor-shape guard only)
 - Training oracle:
   `fd3e9bc5b428633027f944be7fdf1136567db028`
 - Immutable task image:

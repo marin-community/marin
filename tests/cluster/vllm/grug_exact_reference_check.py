@@ -4,9 +4,10 @@
 """Check the frozen July 27 Grug fixture against the Marin vLLM fork.
 
 The fixture contains observations produced by the exact training-reference
-commit. Router and shared-expert checks run directly through the vLLM model
-classes. Logit and prefix-reuse checks run through a live OpenAI-compatible
-server loaded from the same checkpoint.
+commit. Router checks run directly through the vLLM model classes. The
+shared-expert check applies the dense formula to frozen tensors. Logit and
+prefix-reuse checks run through a live OpenAI-compatible server loaded from
+the same checkpoint.
 """
 
 from __future__ import annotations
