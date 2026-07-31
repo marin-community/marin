@@ -26,6 +26,8 @@ from ladder_config import (
     MAX_TRAIN_ROWS_PER_SOURCE,
     MIN_SOURCES,
     PREDECLARED_OOD_SOURCES,
+    SAMPLE_BLOCKS_PER_SOURCE,
+    SAMPLING_METHOD,
     SEED,
     SOURCE_INVENTORY_URL,
     SURVEY_ROWS_PER_SOURCE,
@@ -41,7 +43,6 @@ MANIFEST_URL = f"{MANIFEST_ROOT}/manifest.json"
 RESULT_FILE = Path("/tmp/luxical-arctic-manifest")
 REQUIRED_COLUMNS = frozenset(("id", "text"))
 IO_WORKERS = 16
-SAMPLE_BLOCKS_PER_SOURCE = 64
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -353,7 +354,7 @@ def main() -> None:
         "evaluation_rows_per_source": EVAL_ROWS_PER_SOURCE,
         "survey_rows_per_source": SURVEY_ROWS_PER_SOURCE,
         "text_window_characters": TEXT_WINDOW_CHARS,
-        "sampling_method": "uniform_marginal_circular_blocks_without_duplicate_positions",
+        "sampling_method": SAMPLING_METHOD,
         "sampling_blocks_per_source": SAMPLE_BLOCKS_PER_SOURCE,
         "predeclared_ood_sources": sorted(PREDECLARED_OOD_SOURCES),
         "category_source_counts": dict(sorted(category_counts.items())),

@@ -18,6 +18,8 @@ from ladder_config import (
     EVAL_ROWS_PER_SOURCE,
     MANIFEST_ROOT,
     MIN_SOURCES,
+    SAMPLE_BLOCKS_PER_SOURCE,
+    SAMPLING_METHOD,
     STACK_V3_OUTPUT_HASH,
     TRAIN_TARGET_3M,
     TRAIN_TARGET_750K,
@@ -125,6 +127,10 @@ def main() -> None:
         raise ValueError("The stored manifest digest does not match its content")
     if len(manifest["sources"]) < MIN_SOURCES:
         raise ValueError(f"Manifest has only {len(manifest['sources'])} sources")
+    if manifest["sampling_method"] != SAMPLING_METHOD:
+        raise ValueError(f"Manifest has sampling method {manifest['sampling_method']}")
+    if manifest["sampling_blocks_per_source"] != SAMPLE_BLOCKS_PER_SOURCE:
+        raise ValueError(f"Manifest has {manifest['sampling_blocks_per_source']} sampling blocks")
     stack_v3 = manifest["sources"].get("stack-v3")
     if stack_v3 is None:
         raise ValueError("The manifest does not contain Stack v3")
