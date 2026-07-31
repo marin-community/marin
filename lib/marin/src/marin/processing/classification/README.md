@@ -17,3 +17,7 @@ Run exact or fuzzy deduplication from Python by importing the helpers under [`de
 
 - `remove_spans`: remove text spans such as duplicate paragraphs
 - `remove_docs`: drop whole documents when an attribute marks them as duplicates
+
+Attribute Parquet files use flat columns. Each file has an `id` join key and
+one or more top-level attribute columns. The consolidate step reads the column
+named by `FilterConfig.name`.

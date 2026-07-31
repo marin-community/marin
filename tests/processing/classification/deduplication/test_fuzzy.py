@@ -135,9 +135,9 @@ def test_fuzzy_dups_single_source_schema_and_pair(fox_corpus):
     # sharing one dup_cluster_id, with exactly one canonical.
     pair = {"test_contaminated_1", "test_high_overlap"}
     assert pair <= by_source_id.keys(), f"missing attr rows for pair: {pair - by_source_id.keys()}"
-    cluster_ids = {by_source_id[s]["attributes"]["dup_cluster_id"] for s in pair}
+    cluster_ids = {by_source_id[s]["dup_cluster_id"] for s in pair}
     assert len(cluster_ids) == 1, f"pair should share a dup_cluster_id; got {cluster_ids}"
-    canonicals = [s for s in pair if by_source_id[s]["attributes"]["is_cluster_canonical"]]
+    canonicals = [s for s in pair if by_source_id[s]["is_cluster_canonical"]]
     assert len(canonicals) == 1, f"exactly one canonical expected; got {canonicals}"
 
     # Unique docs never have attr rows (no cluster → no annotation).
@@ -225,7 +225,7 @@ def test_fuzzy_dups_multi_source_per_source_attr_trees(fox_corpus):
         content_id = generate_id(shared_text)
         assert content_id in train_rows, f"missing train attr row for {shared_text!r}"
         assert content_id in test_rows, f"missing test attr row for {shared_text!r}"
-        a, b = train_rows[content_id]["attributes"], test_rows[content_id]["attributes"]
+        a, b = train_rows[content_id], test_rows[content_id]
         assert a["dup_cluster_id"] == b["dup_cluster_id"], f"{shared_text!r}: dup_cluster_id mismatch"
         assert (
             a["is_cluster_canonical"] != b["is_cluster_canonical"]
@@ -269,7 +269,7 @@ def _canonical_assignment(source: NormalizedData, output_path: str) -> dict[str,
     minhash = compute_minhash_attrs(source=source, output_path=os.path.join(output_path, "minhash"))
     dups = compute_fuzzy_dups_attrs(inputs=[minhash], output_path=os.path.join(output_path, "dups"), max_parallelism=4)
     rows = _read_cluster_attrs(dups.sources[minhash.source_key].attr_dir)
-    return {r["id"]: (r["attributes"]["dup_cluster_id"], r["attributes"]["is_cluster_canonical"]) for r in rows}
+    return {r["id"]: (r["dup_cluster_id"], r["is_cluster_canonical"]) for r in rows}
 
 
 def test_fuzzy_dups_canonical_selection_is_deterministic(fox_corpus):
@@ -547,7 +547,7 @@ def _run_dedup_on_corpus(tmp_path: Path, docs: list[dict]) -> dict[str, dict]:
 def _cluster_id(by_source_id: dict[str, dict], source_id: str) -> str | None:
     """Return the dup_cluster_id for *source_id*, or None if it has no attr row (singleton)."""
     row = by_source_id.get(source_id)
-    return row["attributes"]["dup_cluster_id"] if row else None
+    return row["dup_cluster_id"] if row else None
 
 
 @pytest.mark.data_integration
@@ -649,7 +649,7 @@ def test_wikipedia_revisions_cluster_per_article(tmp_path: Path, wikipedia_revis
     for article in wikipedia_revisions_articles:
         variants = [sid for sid in by_source_id if sid.startswith(f"{article}__")]
         assert variants, f"no attr rows for revisions of {article!r} (unexpected singletons)"
-        clusters = {by_source_id[sid]["attributes"]["dup_cluster_id"] for sid in variants}
+        clusters = {by_source_id[sid]["dup_cluster_id"] for sid in variants}
         assert len(clusters) == 1, f"{article}: revisions split across clusters: {clusters}"
         article_to_cluster[article] = clusters.pop()
 

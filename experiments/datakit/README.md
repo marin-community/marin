@@ -27,9 +27,14 @@ absolute. This keeps source keys stable when artifacts move between regions.
 `NormalizedData` also stores its output directories in this relative form.
 Existing v1 artifacts keep their absolute directories when they load.
 
+Datakit attribute Parquet files use a flat schema. The top-level `id` column
+is the join key. Each attribute is another top-level column, such as
+`contaminated`, `dup_doc`, or `is_cluster_canonical`. Attribute files do not
+use a nested `attributes` struct.
+
 Global exact deduplication is one shared step. It selects one canonical record
 for each record ID, with source names as the canonical order. The step writes
-sparse co-partitioned attributes with `attributes.dup_doc=true` for the other
+sparse co-partitioned attributes with `dup_doc=true` for the other
 records. Only source shards with duplicates get an attribute file; a missing
 file means that the source shard has no exact duplicates. The step does not copy
 normalized text.

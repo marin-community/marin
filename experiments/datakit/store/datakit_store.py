@@ -148,12 +148,9 @@ def _read_columns(path: str, columns: list[str]) -> pa.Table:
 
 
 def _load_decon_table(path: str) -> tuple[pa.Array, np.ndarray]:
-    table = _read_columns(path, ["id", "attributes"])
+    table = _read_columns(path, ["id", "contaminated"])
     ids = table.column("id").combine_chunks()
-    contaminated = np.asarray(
-        table.column("attributes").combine_chunks().field("contaminated"),
-        dtype=bool,
-    )
+    contaminated = np.asarray(table.column("contaminated"), dtype=bool)
     return ids, contaminated
 
 
@@ -175,9 +172,9 @@ def _load_dedup_canonical(path: str) -> dict[str, bool]:
         parquet = pq.ParquetFile(fh)
         if parquet.metadata.num_rows == 0:
             return {}
-        table = parquet.read(columns=["id", "attributes"])
+        table = parquet.read(columns=["id", "is_cluster_canonical"])
     ids = table.column("id").to_pylist()
-    canonical = table.column("attributes").combine_chunks().field("is_cluster_canonical").to_pylist()
+    canonical = table.column("is_cluster_canonical").to_pylist()
     return dict(zip(ids, canonical, strict=True))
 
 

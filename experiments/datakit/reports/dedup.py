@@ -36,9 +36,9 @@ def dedup_report(output_path: str, dedup: FuzzyDupsAttrData) -> StageReport:
     sampled_cluster_sizes: Counter[str] = Counter()
     per_source = []
     for source_key, entry in dedup.sources.items():
-        rows = sample_rows(entry.attr_dir, ["id", "attributes"], SAMPLE_LIMIT)
-        source_clusters = {r["attributes"]["dup_cluster_id"] for r in rows}
-        sampled_cluster_sizes.update(r["attributes"]["dup_cluster_id"] for r in rows)
+        rows = sample_rows(entry.attr_dir, ["id", "dup_cluster_id"], SAMPLE_LIMIT)
+        source_clusters = {r["dup_cluster_id"] for r in rows}
+        sampled_cluster_sizes.update(r["dup_cluster_id"] for r in rows)
         per_source.append(
             {
                 "label": _source_label(source_key),
