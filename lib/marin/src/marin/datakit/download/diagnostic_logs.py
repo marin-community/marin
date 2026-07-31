@@ -755,7 +755,7 @@ def _validate_ghalogs_run_archive(content: bytes) -> None:
     """Read one nested run archive completely before any of its records are emitted."""
     with tarfile.open(fileobj=BytesIO(content), mode="r:gz") as run_logs:
         # Advancing across every member decompresses the whole gzip stream and
-        # validates each tar header without retaining the member list.
+        # validates each tar header without retaining decompressed member contents.
         for _member in run_logs:
             pass
 
@@ -1397,7 +1397,7 @@ def materialize_ghalogs_step(
             num_shards=num_shards,
         ),
         hash_attrs={
-            "version": "v4",
+            "version": "2026.07.31",
             "source_path": source_path,
             "source_label": source.source_label,
             "max_members": max_members,
