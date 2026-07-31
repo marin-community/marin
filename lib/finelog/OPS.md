@@ -43,13 +43,15 @@ uv run finelog query marin 'SELECT * FROM "iris.profile" LIMIT 10'
 Inspect the namespace before changing its policy or resetting it. Record its row
 count, bytes, segment count, key column, and policy from `ListNamespaces`; a
 correct key with many segments points to a different problem than a
-misconfigured key. Do not reset a shared namespace such as `telltale` without
+misconfigured key. Do not reset a shared namespace such as `telemetry_v1` without
 checking which producers use it.
 
-Use native timestamp comparisons for timestamp columns:
+Use native timestamp comparisons for timestamp columns. For telemetry's epoch-millisecond column, keep the predicate numeric:
 
 ```sql
 WHERE ts >= now() - INTERVAL '5 minutes'
+-- telemetry_v1
+WHERE timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '5 minutes') * 1000 AS BIGINT)
 ```
 
 DataFusion folds `now()` to a literal and can push the resulting range into
