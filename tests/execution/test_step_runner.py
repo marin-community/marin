@@ -602,7 +602,7 @@ def test_runner_prune_cache_vanished_fails(tmp_path: Path, monkeypatch):
 
     # Treat ``terminal`` as built (pruning ``dep``) although nothing is on disk — the
     # state if its cached output vanished between scheduling and confirmation.
-    monkeypatch.setattr(step_runner_module, "_is_built", lambda s: s.output_path == terminal.output_path)
+    monkeypatch.setattr(step_runner_module, "step_is_built", lambda s: s.output_path == terminal.output_path)
 
     with pytest.raises(RuntimeError, match=r"1 step\(s\) failed"):
         StepRunner().run([terminal])

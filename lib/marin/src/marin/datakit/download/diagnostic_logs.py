@@ -10,6 +10,7 @@ import logging
 import os.path
 import re
 import shutil
+import tarfile
 import time
 import xml.etree.ElementTree as ET
 import zipfile
@@ -18,7 +19,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 from enum import StrEnum, auto
 from io import BytesIO
-from typing import NamedTuple
+from typing import IO, NamedTuple
 
 import fsspec
 import requests
@@ -118,6 +119,28 @@ _GHALOGS_MAX_RESUME_STALLS = 8
 _GHALOGS_RESUME_BACKOFF_BASE = 5.0  # seconds; doubles per consecutive stall
 _GHALOGS_RESUME_BACKOFF_CAP = 120.0
 
+# Every non-directory member of the published archive is a gzipped tar of one
+# workflow run's logs; there are no plain-text members.
+_GHALOGS_MEMBER_SUFFIX = ".tar.gz"
+_GHALOGS_JOB_LOG_SUFFIX = ".txt"
+# Separates the run archive from the job log inside it in a record's archive_path.
+_GHALOGS_LOG_PATH_SEPARATOR = "!"
+# Separates a job log from the index of its chunk in a record's archive_path.
+_GHALOGS_CHUNK_PATH_SEPARATOR = "#"
+# A job log longer than this becomes more than one record, split at line
+# boundaries. This bounds work, and is not a content test: sanitization rescans a
+# document one time for each identity that it finds, so an unbounded document
+# turns one worker into a multi-hour straggler. A split divides that quadratic
+# term by the count of chunks, and holds peak memory at one chunk. In a 300-run
+# sample only 0.6% of the job logs are above this size, but they hold 60% of the
+# bytes, thus a split keeps text that a cap would discard.
+_GHALOGS_JOB_LOG_CHUNK_BYTES = 8 * 1024 * 1024
+# Characters that a text log cannot contain: C0 controls other than tab, line
+# feed, carriage return, and ESC, plus DEL and the Unicode replacement
+# character. ESC stays because GitHub Actions logs carry ANSI color sequences.
+_NON_TEXT_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f\x7f\ufffd]")
+_MAX_NON_TEXT_CHAR_RATIO = 0.01
+
 _PARTITION_BUCKETS = 10_000
 _ISSUE_5093_HOLDOUT_BUCKETS = 100
 _DEV_BUCKETS = 100
@@ -174,6 +197,13 @@ class DiagnosticPartition(StrEnum):
     DEV = auto()
     TEST = auto()
     ISSUE_5093_HOLDOUT = auto()
+
+
+class JobLogDrop(StrEnum):
+    """Why a GHALogs job-log chunk yields no record. The value names its drop counter."""
+
+    NON_TEXT = auto()
+    EMPTY = auto()
 
 
 class DiagnosticLogsArtifact(BaseModel):
@@ -461,23 +491,95 @@ def assign_partition(split_key: str) -> DiagnosticPartition:
     return DiagnosticPartition.TRAIN
 
 
-def ghalogs_member_to_record(member_path: str, content: bytes) -> dict[str, str] | None:
-    """Convert one GHALogs zip member into a sanitized diagnostic-log record."""
-    text = content.decode("utf-8", errors="replace").strip()
-    if not text:
-        return None
+def _is_job_log(member: tarfile.TarInfo) -> bool:
+    """Report whether a tar member is a run's top-level job log.
 
-    split_key = f"ghalogs:{member_path}"
-    partition = assign_partition(split_key)
-    row_id = hashlib.sha256(split_key.encode("utf-8")).hexdigest()
+    A run archive holds each job's full log as ``<index>_<job>.txt`` at the top
+    level, and the same text split per step below ``<job>/``. Only the job logs
+    are records, so the run's text is not written two times. Directory entries
+    carry a regular-file type with a trailing slash, thus the name check.
+    """
+    return (
+        member.isfile() and member.size > 0 and "/" not in member.name and member.name.endswith(_GHALOGS_JOB_LOG_SUFFIX)
+    )
 
-    return {
-        "id": row_id,
-        "text": sanitize_diagnostic_log_text(text),
-        "source": "ghalogs",
-        "archive_path": member_path,
-        "partition": partition.value,
-    }
+
+def _decode_log_chunk_text(content: bytes) -> str | JobLogDrop:
+    """Decode job-log chunk bytes into cleaned text, or report why the chunk is not usable.
+
+    Counts the non-text characters from a length difference rather than from
+    matches, so a binary payload costs one pass and not one object for each byte.
+    """
+    text = content.decode("utf-8", errors="replace")
+    cleaned = _NON_TEXT_CHAR_RE.sub("", text)
+    if len(text) - len(cleaned) > _MAX_NON_TEXT_CHAR_RATIO * len(text):
+        return JobLogDrop.NON_TEXT
+    return cleaned.strip() or JobLogDrop.EMPTY
+
+
+def _job_log_chunks(handle: IO[bytes], chunk_bytes: int) -> Iterator[bytes]:
+    """Split a job log into line-aligned chunks of at most ``chunk_bytes`` bytes.
+
+    Reads a line at a time, thus peak memory stays at one chunk rather than the
+    whole log. A line longer than ``chunk_bytes`` becomes a chunk of its own:
+    ``readline`` is bounded, so a log without line breaks cannot exhaust memory.
+    """
+    lines: list[bytes] = []
+    size = 0
+    while line := handle.readline(chunk_bytes):
+        if lines and size + len(line) > chunk_bytes:
+            yield b"".join(lines)
+            lines, size = [], 0
+        lines.append(line)
+        size += len(line)
+    if lines:
+        yield b"".join(lines)
+
+
+def ghalogs_member_to_records(member_path: str, content: bytes) -> Iterator[dict[str, str]]:
+    """Convert one GHALogs ``.tar.gz`` run archive into sanitized job-log records.
+
+    Yields one record for each chunk of each job log of the run (see
+    :func:`_is_job_log`), with ``archive_path`` set to
+    ``<member_path>!<job log>#<chunk index>``. A job log above
+    ``_GHALOGS_JOB_LOG_CHUNK_BYTES`` becomes more than one record instead of
+    being discarded. Each chunk is a document of its own for pseudonymization,
+    so an identity keeps one pseudonym inside a chunk but not across chunks —
+    the contract that already holds across the job logs of one run.
+
+    All records of one run share the run's partition, thus no job log lands away
+    from its sibling logs. Raises ``ValueError`` for a member that is not a run
+    archive.
+    """
+    if not member_path.endswith(_GHALOGS_MEMBER_SUFFIX):
+        raise ValueError(f"Expected a {_GHALOGS_MEMBER_SUFFIX} GHALogs run archive, got {member_path}")
+
+    partition = assign_partition(f"ghalogs:{member_path}")
+    with tarfile.open(fileobj=BytesIO(content), mode="r:gz") as run_logs:
+        # Iterate instead of getmembers(): each log is read as the tar iterator
+        # reaches it, so the gzip stream is decompressed one time.
+        for member in run_logs:
+            if not _is_job_log(member):
+                continue
+            log_path = f"{member_path}{_GHALOGS_LOG_PATH_SEPARATOR}{member.name}"
+            handle = run_logs.extractfile(member)
+            assert handle is not None, f"{log_path} is a regular file"
+            for index, chunk in enumerate(_job_log_chunks(handle, _GHALOGS_JOB_LOG_CHUNK_BYTES)):
+                if index == 1:
+                    counters.pipeline.update_counter("ghalogs_materialize/split_job_logs", 1)
+                text = _decode_log_chunk_text(chunk)
+                if isinstance(text, JobLogDrop):
+                    counters.pipeline.update_counter(f"ghalogs_materialize/dropped_{text}", 1)
+                    continue
+
+                chunk_path = f"{log_path}{_GHALOGS_CHUNK_PATH_SEPARATOR}{index}"
+                yield {
+                    "id": hashlib.sha256(f"ghalogs:{chunk_path}".encode()).hexdigest(),
+                    "text": sanitize_diagnostic_log_text(text),
+                    "source": "ghalogs",
+                    "archive_path": chunk_path,
+                    "partition": partition.value,
+                }
 
 
 def logchunks_example_to_record(source_path: str, example_index: int, example: ET.Element) -> dict[str, str] | None:
@@ -648,11 +750,13 @@ def _list_ghalogs_member_names(archive_path: str) -> list[str]:
 
 
 def _process_ghalogs_member_batch(batch: list[str], archive_path: str) -> Iterator[dict[str, str]]:
-    """Open the archive once, read each assigned member, yield sanitized records.
+    """Open the archive once, read each assigned run archive, yield sanitized records.
 
     Opens the zip a single time per worker (vs once per record). ``zipfile``
     seeks to each member's offset, so the worker only fetches the bytes for
-    members in its batch — not the whole archive.
+    members in its batch — not the whole archive. One member yields one record
+    for each chunk of each job log of that run, thus ``zephyr/records_in``
+    counts runs and ``ghalogs_materialize/kept`` counts job-log chunks.
     """
     with open_url(archive_path, "rb") as f:
         with zipfile.ZipFile(f) as zf:
@@ -660,13 +764,10 @@ def _process_ghalogs_member_batch(batch: list[str], archive_path: str) -> Iterat
                 with zf.open(name, "r") as member_file:
                     content = member_file.read()
                 counters.pipeline.update_counter("zephyr/records_in", 1)
-                record = ghalogs_member_to_record(name, content)
-                if record is None:
-                    counters.pipeline.update_counter("ghalogs_materialize/dropped_empty", 1)
-                    continue
-                counters.pipeline.update_counter("ghalogs_materialize/kept", 1)
-                counters.pipeline.update_counter(f"ghalogs_materialize/partition_{record['partition']}", 1)
-                yield record
+                for record in ghalogs_member_to_records(name, content):
+                    counters.pipeline.update_counter("ghalogs_materialize/kept", 1)
+                    counters.pipeline.update_counter(f"ghalogs_materialize/partition_{record['partition']}", 1)
+                    yield record
 
 
 def materialize_ghalogs_to_parquet(
@@ -684,8 +785,8 @@ def materialize_ghalogs_to_parquet(
     so it happens locally in the orchestrator. The resulting member names are
     partitioned into ``num_shards`` batches and shipped to zephyr workers,
     each of which opens the archive once and streams its assigned members
-    via ``zipfile``'s random-access reads — bounding per-worker memory to a
-    single member's content rather than the whole archive.
+    via ``zipfile``'s random-access reads — bounding per-worker memory to one
+    run archive plus one job-log chunk, rather than the whole archive.
     """
     if max_members is not None and max_members <= 0:
         raise ValueError(f"max_members must be positive when set, got {max_members}")
@@ -816,18 +917,16 @@ def extract_ghalogs(
 
                 counters["seen_members"] += 1
                 with archive.open(member, "r") as member_handle:
-                    record = ghalogs_member_to_record(member.filename, member_handle.read())
+                    content = member_handle.read()
 
-                if record is None:
-                    continue
-
-                counters["kept_records"] += 1
-                partition = record["partition"]
-                partition_counts[partition] += 1
-                payload = json.dumps(record, ensure_ascii=False)
-                total_bytes_written += len(payload.encode("utf-8")) + 1
-                writers[partition].write(payload)
-                writers[partition].write("\n")
+                for record in ghalogs_member_to_records(member.filename, content):
+                    counters["kept_records"] += 1
+                    partition = record["partition"]
+                    partition_counts[partition] += 1
+                    payload = json.dumps(record, ensure_ascii=False)
+                    total_bytes_written += len(payload.encode("utf-8")) + 1
+                    writers[partition].write(payload)
+                    writers[partition].write("\n")
 
     manifest = SOURCE_MANIFESTS["ghalogs"]
     metadata_path = _write_source_metadata(
@@ -1013,10 +1112,11 @@ def extract_ghalogs_step(
         output_path_prefix=output_path_prefix,
         fn=lambda output_path: extract_ghalogs(source_path, output_path, max_members=max_members),
         hash_attrs={
-            "version": "v4",
+            "version": "v6",
             "source_path": source_path,
             "source_label": source.source_label,
             "max_members": max_members,
+            "job_log_chunk_bytes": _GHALOGS_JOB_LOG_CHUNK_BYTES,
             "split_policy": "97% train / 1% dev / 1% test / 1% issue_5093_holdout",
             "source_content_fingerprint": source.fingerprint(),
             "sanitization_rules": "gh token/aws key/secret kv/email/user path/internal gs path",
@@ -1280,10 +1380,11 @@ def materialize_ghalogs_step(
             num_shards=num_shards,
         ),
         hash_attrs={
-            "version": "v1",
+            "version": "v3",
             "source_path": source_path,
             "source_label": source.source_label,
             "max_members": max_members,
+            "job_log_chunk_bytes": _GHALOGS_JOB_LOG_CHUNK_BYTES,
             "num_shards": num_shards,
             "source_content_fingerprint": source.fingerprint(),
             "sanitization_rules": "gh token/aws key/secret kv/email/user path/internal gs path",

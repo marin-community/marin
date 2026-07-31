@@ -1,8 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import gzip
 import http.client
+import io
 import json
+import tarfile
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
@@ -23,8 +26,9 @@ from marin.datakit.download.diagnostic_logs import (
     assign_partition,
     download_ghalogs_step,
     extract_diagnostic_logs,
+    extract_ghalogs,
     extract_ghalogs_step,
-    ghalogs_member_to_record,
+    ghalogs_member_to_records,
     ghalogs_public_normalize_steps,
     logchunks_example_to_record,
     loghub_file_to_record,
@@ -54,9 +58,34 @@ def _read_parquet_rows(directory: Path) -> list[dict[str, object]]:
     return rows
 
 
+def _run_archive_member(run_logs: dict[str, bytes]) -> bytes:
+    """Build one GHALogs zip member: a gzipped tar of one workflow run's log files."""
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        for name, payload in run_logs.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
+    return buffer.getvalue()
+
+
+def _write_ghalogs_archive(archive_path: Path, job_logs: dict[str, bytes]) -> None:
+    """Write a GHALogs zip whose members are run archives holding one job log each."""
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        for member_path, job_log in job_logs.items():
+            archive.writestr(member_path, _run_archive_member({"0_build.txt": job_log}))
+
+
+_THREE_RUN_JOB_LOGS = {
+    "logs/owner/repo-a/workflow_1234/1-1.tar.gz": b"ERROR token=abc123456789 traceback",
+    "logs/owner/repo-b/workflow_1234/2-1.tar.gz": b"FAILED alice@example.com /Users/alice/project",
+    "logs/owner/repo-c/workflow_1234/3-1.tar.gz": b"WARNING path=/home/bob/src",
+}
+
+
 def _member_path_for_partition(partition: DiagnosticPartition) -> str:
     for index in range(10_000):
-        member_path = f"repo-{partition.value}/run-{index}/job.log"
+        member_path = f"logs/owner/repo-{partition.value}/workflow_1234/{index}-1.tar.gz"
         if assign_partition(f"ghalogs:{member_path}") == partition:
             return member_path
     raise AssertionError(f"Could not find member path for {partition}")
@@ -79,21 +108,98 @@ def test_sanitize_diagnostic_log_text_redacts_secrets_and_identifiers():
     assert "user <USER_0> failed" in redacted
 
 
-def test_ghalogs_member_to_record_sanitizes_and_partitions():
-    record = ghalogs_member_to_record(
-        "owner/repo/run-1/job.log",
-        b"ERROR token=abc123456789 contact alice@example.com path=/home/alice/project",
+def test_ghalogs_member_to_records_extracts_job_logs_and_ignores_step_copies():
+    member_path = "logs/owner/repo/build_1234/7-1.tar.gz"
+    content = _run_archive_member(
+        {
+            "0_build.txt": b"ERROR token=abc123456789 contact alice@example.com path=/home/alice/project",
+            "build/": b"",
+            "build/1_Set up job.txt": b"ERROR token=abc123456789 contact alice@example.com",
+        }
     )
 
-    assert record is not None
-    assert record["source"] == "ghalogs"
-    assert record["archive_path"] == "owner/repo/run-1/job.log"
-    assert "abc123456789" not in record["text"]
-    assert "alice@example.com" not in record["text"]
-    assert "<REDACTED_SECRET>" in record["text"]
-    assert "<USER_0_EMAIL>" in record["text"]
-    assert "/home/<USER_0>/project" in record["text"]
-    assert record["partition"] in {"train", "dev", "test", "issue_5093_holdout"}
+    records = list(ghalogs_member_to_records(member_path, content))
+
+    assert [record["archive_path"] for record in records] == [f"{member_path}!0_build.txt#0"]
+    assert records[0]["source"] == "ghalogs"
+    assert "abc123456789" not in records[0]["text"]
+    assert "<REDACTED_SECRET>" in records[0]["text"]
+    assert "<USER_0_EMAIL>" in records[0]["text"]
+    assert "/home/<USER_0>/project" in records[0]["text"]
+
+
+def test_ghalogs_member_to_records_keeps_one_partition_for_each_run():
+    member_path = _member_path_for_partition(DiagnosticPartition.DEV)
+    content = _run_archive_member(
+        {"0_build.txt": b"first job log line", "1_test.txt": b"second job log line"},
+    )
+
+    records = list(ghalogs_member_to_records(member_path, content))
+
+    assert {record["partition"] for record in records} == {DiagnosticPartition.DEV.value}
+    assert len({record["id"] for record in records}) == 2
+
+
+def test_ghalogs_member_to_records_rejects_binary_job_logs():
+    member_path = "logs/owner/repo/build_1234/8-1.tar.gz"
+    content = _run_archive_member(
+        {
+            "0_build.txt": gzip.compress(b"log line that was compressed\n" * 64),
+            "1_test.txt": b"plain job log line\n",
+        }
+    )
+
+    records = list(ghalogs_member_to_records(member_path, content))
+
+    assert [record["archive_path"] for record in records] == [f"{member_path}!1_test.txt#0"]
+
+
+def test_ghalogs_member_to_records_removes_stray_control_bytes_and_keeps_ansi_color():
+    member_path = "logs/owner/repo/build_1234/9-1.tar.gz"
+    content = _run_archive_member(
+        {"0_build.txt": b"\x1b[36;1mmake build\x1b[0m\nstep output\x00 continues\n" + b"more log output\n" * 64},
+    )
+
+    (record,) = list(ghalogs_member_to_records(member_path, content))
+
+    assert "\x00" not in record["text"]
+    assert "step output continues" in record["text"]
+    assert "\x1b[36;1mmake build\x1b[0m" in record["text"]
+
+
+def test_ghalogs_member_to_records_splits_long_job_logs_into_chunks(monkeypatch):
+    monkeypatch.setattr(diagnostic_logs, "_GHALOGS_JOB_LOG_CHUNK_BYTES", 1024)
+    member_path = "logs/owner/repo/build_1234/10-1.tar.gz"
+    long_log = b"".join(f"byte dump line {index} of a pytest assertion diff\n".encode() for index in range(64))
+    content = _run_archive_member({"0_build.txt": long_log, "1_test.txt": b"plain job log line\n"})
+
+    records = list(ghalogs_member_to_records(member_path, content))
+
+    chunks = [record for record in records if "0_build.txt" in record["archive_path"]]
+    assert len(chunks) > 1
+    assert [record["archive_path"] for record in chunks] == [
+        f"{member_path}!0_build.txt#{index}" for index in range(len(chunks))
+    ]
+    assert all(len(record["text"]) <= 1024 for record in chunks)
+    # No line is split across chunks, and no line is lost or repeated.
+    assert "\n".join(record["text"] for record in chunks).splitlines() == long_log.decode().splitlines()
+    # A job log that fits in one chunk still gives one record.
+    assert f"{member_path}!1_test.txt#0" in {record["archive_path"] for record in records}
+
+
+def test_ghalogs_member_to_records_splits_a_job_log_without_line_breaks(monkeypatch):
+    monkeypatch.setattr(diagnostic_logs, "_GHALOGS_JOB_LOG_CHUNK_BYTES", 64)
+    member_path = "logs/owner/repo/build_1234/13-1.tar.gz"
+    content = _run_archive_member({"0_build.txt": b"x" * 256})
+
+    records = list(ghalogs_member_to_records(member_path, content))
+
+    assert [record["text"] for record in records] == ["x" * 64] * 4
+
+
+def test_ghalogs_member_to_records_rejects_an_unexpected_member_layout():
+    with pytest.raises(ValueError, match=r"\.tar\.gz"):
+        list(ghalogs_member_to_records("logs/owner/repo/build_1234/11-1.txt", b"plain job log line"))
 
 
 def test_logchunks_example_to_record_sanitizes():
@@ -171,9 +277,13 @@ def test_extract_diagnostic_logs_is_sample_capped(tmp_path):
 
     ghalogs_dir = input_dir / "ghalogs" / "zenodo-14796970" / "zenodo.org" / "records" / "14796970" / "files"
     ghalogs_dir.mkdir(parents=True)
-    with zipfile.ZipFile(ghalogs_dir / "github_run_logs.zip", "w") as archive:
-        archive.writestr("repo-a/run-1/job.log", "ERROR token=abc123456789 traceback")
-        archive.writestr("repo-b/run-2/job.log", "FAILED alice@example.com /Users/alice/project")
+    _write_ghalogs_archive(
+        ghalogs_dir / "github_run_logs.zip",
+        {
+            "logs/owner/repo-a/workflow_1234/1-1.tar.gz": b"ERROR token=abc123456789 traceback",
+            "logs/owner/repo-b/workflow_1234/2-1.tar.gz": b"FAILED alice@example.com /Users/alice/project",
+        },
+    )
 
     with zipfile.ZipFile(input_dir / "LogChunks.zip", "w") as archive:
         archive.writestr(
@@ -244,14 +354,52 @@ def test_extract_diagnostic_logs_is_sample_capped(tmp_path):
     assert loghub_metadata["source_manifest"]["policy"]["eval_only"] is True
 
 
+def test_extract_ghalogs_caps_run_archives_not_records(tmp_path):
+    """max_members bounds run archives; one capped run still yields all of its job logs."""
+    archive_dir = tmp_path / "zenodo.org" / "records" / "14796970" / "files"
+    archive_dir.mkdir(parents=True)
+    with zipfile.ZipFile(archive_dir / "github_run_logs.zip", "w") as archive:
+        for member_path in ("logs/owner/repo-a/w_1/1-1.tar.gz", "logs/owner/repo-b/w_1/2-1.tar.gz"):
+            archive.writestr(
+                member_path,
+                _run_archive_member(
+                    {
+                        "0_build.txt": b"build job log",
+                        "1_test.txt": b"test job log",
+                        "2_deploy.txt": b"deploy job log",
+                        # Per-step files repeat the job text, so they are not records.
+                        "0_build/1_checkout.txt": b"build job log",
+                    }
+                ),
+            )
+
+    extracted = extract_ghalogs(str(tmp_path), str(tmp_path / "output"), max_members=1)
+
+    metadata = json.loads((tmp_path / "output" / "metadata.json").read_text())
+    assert metadata["materialized_output"]["metadata"]["counters"]["seen_members"] == 1
+    assert extracted.record_count == 3
+    records = []
+    for partition in DiagnosticPartition:
+        records.extend(_read_jsonl(str(tmp_path / "output" / partition.value / "data-00000-of-00001.jsonl")))
+    assert sorted(record["archive_path"] for record in records) == [
+        "logs/owner/repo-a/w_1/1-1.tar.gz!0_build.txt#0",
+        "logs/owner/repo-a/w_1/1-1.tar.gz!1_test.txt#0",
+        "logs/owner/repo-a/w_1/1-1.tar.gz!2_deploy.txt#0",
+    ]
+    # All job logs of one run share the run's partition.
+    assert len({record["partition"] for record in records}) == 1
+
+
 def test_extract_diagnostic_logs_uses_staged_ghalogs_and_fetches_missing_eval_sources(tmp_path, monkeypatch):
     ghalogs_input_dir = tmp_path / "ghalogs" / "zenodo-14796970"
     ghalogs_archive_dir = ghalogs_input_dir / "zenodo.org" / "records" / "14796970" / "files"
     output_dir = tmp_path / "output"
     ghalogs_archive_dir.mkdir(parents=True)
 
-    with zipfile.ZipFile(ghalogs_archive_dir / "github_run_logs.zip", "w") as archive:
-        archive.writestr("repo-a/run-1/job.log", "ERROR token=abc123456789 traceback")
+    _write_ghalogs_archive(
+        ghalogs_archive_dir / "github_run_logs.zip",
+        {"logs/owner/repo-a/workflow_1234/1-1.tar.gz": b"ERROR token=abc123456789 traceback"},
+    )
 
     def _fake_fetch_logchunks(destination_dir: str) -> str:
         destination = Path(destination_dir)
@@ -310,8 +458,10 @@ def test_extract_ghalogs_step_persists_typed_artifact(tmp_path):
     archive_dir = input_dir / "zenodo.org" / "records" / "14796970" / "files"
     archive_dir.mkdir(parents=True)
 
-    with zipfile.ZipFile(archive_dir / "github_run_logs.zip", "w") as archive:
-        archive.writestr("repo-a/run-1/job.log", "ERROR token=abc123456789 traceback")
+    _write_ghalogs_archive(
+        archive_dir / "github_run_logs.zip",
+        {"logs/owner/repo-a/workflow_1234/1-1.tar.gz": b"ERROR token=abc123456789 traceback"},
+    )
 
     step = extract_ghalogs_step(
         source_path=str(input_dir),
@@ -332,10 +482,7 @@ def test_materialize_ghalogs_to_parquet_writes_reusable_shards(tmp_path):
     output_dir = tmp_path / "materialized"
     archive_dir.mkdir(parents=True)
 
-    with zipfile.ZipFile(archive_dir / "github_run_logs.zip", "w") as archive:
-        archive.writestr("repo-a/run-1/job.log", "ERROR token=abc123456789 traceback")
-        archive.writestr("repo-b/run-2/job.log", "FAILED alice@example.com /Users/alice/project")
-        archive.writestr("repo-c/run-3/job.log", "WARNING path=/home/bob/src")
+    _write_ghalogs_archive(archive_dir / "github_run_logs.zip", _THREE_RUN_JOB_LOGS)
 
     materialized = materialize_ghalogs_to_parquet(
         str(input_dir),
@@ -362,10 +509,7 @@ def test_materialize_ghalogs_partition_to_parquet_filters_one_partition(tmp_path
     partition_dir = tmp_path / "train_only"
     archive_dir.mkdir(parents=True)
 
-    with zipfile.ZipFile(archive_dir / "github_run_logs.zip", "w") as archive:
-        archive.writestr("repo-a/run-1/job.log", "ERROR token=abc123456789 traceback")
-        archive.writestr("repo-b/run-2/job.log", "FAILED alice@example.com /Users/alice/project")
-        archive.writestr("repo-c/run-3/job.log", "WARNING path=/home/bob/src")
+    _write_ghalogs_archive(archive_dir / "github_run_logs.zip", _THREE_RUN_JOB_LOGS)
 
     materialize_ghalogs_to_parquet(
         str(input_dir),
@@ -395,9 +539,10 @@ def test_ghalogs_public_normalize_steps_write_datakit_normalized_train_partition
 
     train_member = _member_path_for_partition(DiagnosticPartition.TRAIN)
     dev_member = _member_path_for_partition(DiagnosticPartition.DEV)
-    with zipfile.ZipFile(archive_dir / "github_run_logs.zip", "w") as archive:
-        archive.writestr(train_member, "ERROR token=abc123456789 traceback")
-        archive.writestr(dev_member, "FAILED validation-only log")
+    _write_ghalogs_archive(
+        archive_dir / "github_run_logs.zip",
+        {train_member: b"ERROR token=abc123456789 traceback", dev_member: b"FAILED validation-only log"},
+    )
 
     # The archive is already staged at ``source_path``; no-op the Zenodo stream
     # so the download step doesn't try to fetch the real ~142 GB archive.
@@ -416,7 +561,7 @@ def test_ghalogs_public_normalize_steps_write_datakit_normalized_train_partition
 
     assert len(rows) == 1
     assert rows[0]["source"] == "ghalogs"
-    assert rows[0]["archive_path"] == train_member
+    assert rows[0]["archive_path"] == f"{train_member}!0_build.txt#0"
     assert rows[0]["partition"] == DiagnosticPartition.TRAIN.value
     assert "abc123456789" not in rows[0]["text"]
     assert rows[0]["source_id"] != rows[0]["id"]
@@ -439,15 +584,14 @@ def test_ghalogs_public_normalize_steps_read_where_download_wrote(tmp_path, monk
     staged_archive = Path(download.output_path) / GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH
     staged_archive.parent.mkdir(parents=True)
     train_member = _member_path_for_partition(DiagnosticPartition.TRAIN)
-    with zipfile.ZipFile(staged_archive, "w") as archive:
-        archive.writestr(train_member, "ERROR token=abc123456789 traceback")
+    _write_ghalogs_archive(staged_archive, {train_member: b"ERROR token=abc123456789 traceback"})
 
     # Archive is pre-staged; no-op the Zenodo stream.
     monkeypatch.setattr(diagnostic_logs, "stage_ghalogs_archive", lambda output_path: None)
     StepRunner().run([download, materialized])
 
     rows = _read_parquet_rows(Path(materialized.output_path))
-    assert [row["archive_path"] for row in rows] == [train_member]
+    assert [row["archive_path"] for row in rows] == [f"{train_member}!0_build.txt#0"]
 
 
 class _FakeStreamResponse:
