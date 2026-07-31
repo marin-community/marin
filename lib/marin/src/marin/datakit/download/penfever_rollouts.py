@@ -9,6 +9,7 @@ one transform renders all 142 repositories as role-tagged documents with
 outcome and provenance metadata.
 """
 
+import posixpath
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -1091,14 +1092,13 @@ def row_to_doc(dataset: PenfeverRollout) -> Callable[[dict], list[dict]]:
 
 
 def transform(dataset: PenfeverRollout, input_path: str, output_path: str) -> None:
+    input_pattern = posixpath.join(input_path, "**", "*.parquet")
+    output_pattern = posixpath.join(output_path, "data-{shard:05d}-of-{total:05d}.parquet")
     pipeline = (
-        Dataset.from_files(f"{input_path.rstrip('/')}/**/*.parquet")
+        Dataset.from_files(input_pattern)
         .flat_map(load_parquet_batched)
         .flat_map(row_to_doc(dataset))
-        .write_parquet(
-            f"{output_path.rstrip('/')}/data-{{shard:05d}}-of-{{total:05d}}.parquet",
-            skip_existing=True,
-        )
+        .write_parquet(output_pattern, skip_existing=True)
     )
     ctx = ZephyrContext(
         name=f"penfever-{dataset.cohort_name}-{dataset.task_source}-transform",
@@ -1132,5 +1132,5 @@ def _rollout_steps(dataset: PenfeverRollout) -> tuple[StepSpec, StepSpec]:
 
 
 def penfever_rollouts_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
-    """Return the transform and normalize chain for every Penfever dataset."""
+    """Build pinned transform chains keyed by their mixture source names."""
     return {dataset.marin_name: _rollout_steps(dataset) for dataset in PENFEVER_ROLLOUTS}
