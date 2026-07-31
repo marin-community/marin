@@ -51,7 +51,6 @@ W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `$RUN_ID`.
 - **Always array-stacked**: all blocks run through one compiled `lax.scan` body (the unrolled
   program OOMs). The per-layer sliding window rides in as precomputed FA4 bound arrays selected in
   the scan.
-- No MTP, no over-encoding, no PKO, no long-rope on global layers.
 
 ### Systems (FSDP)
 - **Pure FSDP**: `expert_axis_size=1`, `replica_axis_size=1` → all 64 GPUs on the `data` axis.
