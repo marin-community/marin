@@ -117,7 +117,8 @@ def load_training_arrays(
         embedding_chunks.extend(teacher_table["embedding"].chunks)
         loaded_rows += len(source_table)
     logger.info("Loaded %d aligned training rows", loaded_rows)
-    return pa.chunked_array(text_chunks), pa.chunked_array(embedding_chunks)
+    texts = pc.cast(pa.chunked_array(text_chunks), pa.large_string())
+    return texts, pa.chunked_array(embedding_chunks)
 
 
 def new_student() -> Embedder:
