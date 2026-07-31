@@ -7,11 +7,13 @@ import base64
 import dataclasses
 import io
 import json
+import subprocess
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+import scripts.iris.grugmoe_inference_preflight as grug_preflight
 from experiments.grug.moe.inference_preflight import (
     CASES,
     FROZEN_FIXTURE_PATH,
@@ -120,6 +122,28 @@ def test_command_pins_vllm_git_sha_and_cuda_backend() -> None:
     assert VLLM_SHA in joined
     assert "--torch-backend cu130" in joined
     assert "runai-model-streamer[s3]==0.16.1" in joined
+
+
+def test_fixture_parity_allows_prereleases_and_preserves_resolver_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def fail(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        assert command[:3] == ["uv", "run", "--prerelease=allow"]
+        raise subprocess.CalledProcessError(
+            1,
+            command,
+            output="resolver stdout\n",
+            stderr="resolver stderr\n",
+        )
+
+    monkeypatch.setattr(grug_preflight, "_run", fail)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        grug_preflight.run_fixture_parity("http://127.0.0.1:8000", "/fixture", artifact_dir=tmp_path)
+
+    assert (tmp_path / "fixture-tensor-parity.stdout").read_text() == "resolver stdout\n"
+    assert (tmp_path / "fixture-tensor-parity.stderr").read_text() == "resolver stderr\n"
 
 
 def test_validate_session_does_not_mutate_state() -> None:

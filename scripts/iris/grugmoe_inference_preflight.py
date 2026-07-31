@@ -1035,6 +1035,7 @@ def run_fixture_parity(base_url: str, model: str, *, artifact_dir: Path) -> dict
     command = [
         "uv",
         "run",
+        "--prerelease=allow",
         "--no-project",
         "--with",
         VLLM_FROM_SPEC,
@@ -1049,15 +1050,24 @@ def run_fixture_parity(base_url: str, model: str, *, artifact_dir: Path) -> dict
     ]
     environment = dict(os.environ)
     environment["UV_TORCH_BACKEND"] = "cu130"
-    completed = _run(
-        command,
-        capture_output=True,
-        env=environment,
-        timeout=SERVER_TIMEOUT_SECONDS,
-    )
+    stdout_path = artifact_dir / "fixture-tensor-parity.stdout"
+    stderr_path = artifact_dir / "fixture-tensor-parity.stderr"
+    try:
+        completed = _run(
+            command,
+            capture_output=True,
+            env=environment,
+            timeout=SERVER_TIMEOUT_SECONDS,
+        )
+    except subprocess.CalledProcessError as exc:
+        stdout_path.write_text(exc.stdout or "")
+        stderr_path.write_text(exc.stderr or "")
+        raise
     tensor_payload = json.loads(tensor_path.read_text())
     if completed.stdout:
-        (artifact_dir / "fixture-tensor-parity.stdout").write_text(completed.stdout)
+        stdout_path.write_text(completed.stdout)
+    if completed.stderr:
+        stderr_path.write_text(completed.stderr)
 
     # This helper has no vLLM import; it scores the live response against the
     # same frozen Levanter observations used by the tensor check.
