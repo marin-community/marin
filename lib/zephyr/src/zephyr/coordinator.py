@@ -1285,7 +1285,14 @@ class ZephyrCoordinator:
             raise
         finally:
             if not self._drain_execution(run):
-                _retain_execution(self._chunk_prefix, execution_id)
+                # A failed marker write costs orphan chunk files. Letting it
+                # leave this finally costs the execution's bookkeeping, which
+                # would hold a concurrency slot and report outstanding work for
+                # the life of the coordinator.
+                try:
+                    _retain_execution(self._chunk_prefix, execution_id)
+                except Exception as e:
+                    logger.warning("[%s] Could not mark storage retained: %s", execution_id, e)
             with self._lock:
                 run.finish()
                 # Drop the finished execution so coordinator state does not grow

@@ -287,19 +287,12 @@ class ZephyrContext:
     running on someone else's pool gets no driver-side retry: the pool is
     non-preemptible and owns worker recovery.
 
-    Name the pool in the *entrypoint's* job environment as ``ZEPHYR_POOL``.
-    Iris inherits env vars down the job tree, so every step it launches joins
-    the pool without a line of its own::
-
-        client.submit(JobRequest(
-            name="mypipeline",
-            environment=EnvironmentConfig(env_vars={"ZEPHYR_POOL": "ingest"}),
-        ))
-
-    Setting ``os.environ`` after the pool starts does *not* work — inheritance
-    copies the job's declared environment, fixed before the pool existed. The
-    pool's name is knowable in advance, which is what makes this possible; its
-    address is not.
+    A host advertises its pool itself: ``start()`` writes the coordinator's
+    address into this job's declared environment, and Iris inherits that down
+    the job tree, so every step the host launches afterwards joins the pool
+    without a line of its own. A driver that is not itself a job has no
+    environment to advertise into, and passes ``coordinator_endpoint=`` to its
+    steps instead.
 
     Whichever pool a pipeline lands on, ``map/reduce_task_resources`` give its
     per-task cost. Worker sizing belongs to whoever hosts the pool.

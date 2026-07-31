@@ -37,6 +37,8 @@ from zephyr.coordinator import (
     PullStatus,
     WorkerState,
     ZephyrCoordinator,
+    _cleanup_execution,
+    _retain_execution,
 )
 from zephyr.dataset import Dataset
 from zephyr.execution import _NON_RETRYABLE_ERRORS, ZephyrContext
@@ -1616,3 +1618,56 @@ def test_failed_execution_drains_in_flight_tasks_before_teardown(coordinator):
     )
     assert drained.wait(timeout=10.0), "drain did not return after the task retired"
     t.join(timeout=5.0)
+
+
+def test_coordinator_shutdown_does_not_end_the_drain(coordinator):
+    """A task writing during teardown is no safer than one writing at any other time."""
+    run = start_test_stage(coordinator, [_make_task("drain-me")])
+    coordinator.register_worker("worker-0", MagicMock())
+    status, work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+    assert status == PullStatus.RUN_TASK
+
+    coordinator._shutdown_event.set()
+    drained: list[bool] = []
+
+    t = threading.Thread(target=lambda: drained.append(coordinator._drain_execution(run, timeout=10.0)), daemon=True)
+    t.start()
+    time.sleep(0.5)
+    assert not drained, "drain returned because the coordinator was shutting down"
+
+    coordinator.report_result(
+        "worker-0",
+        _TEST_EXECUTION_ID,
+        0,
+        work.attempt,
+        TaskResult(shard=ListShard(refs=[])),
+        CounterSnapshot.empty(),
+        run.stage_generation,
+    )
+    t.join(timeout=10.0)
+    assert drained == [True]
+
+
+def test_undrained_execution_keeps_its_storage(tmp_path):
+    """A drain that gives up marks the directory, and cleanup leaves it alone."""
+    prefix = str(tmp_path / "chunks")
+    exec_dir = Path(prefix) / "exec-1"
+    exec_dir.mkdir(parents=True)
+    (exec_dir / "shared.pkl").write_text("payload a task may still read")
+
+    _retain_execution(prefix, "exec-1")
+    _cleanup_execution(prefix, "exec-1")
+    assert (exec_dir / "shared.pkl").exists()
+
+    _cleanup_execution(prefix, "exec-2")  # never marked
+    assert not (Path(prefix) / "exec-2").exists()
+
+
+def test_cleanup_removes_a_drained_execution(tmp_path):
+    prefix = str(tmp_path / "chunks")
+    exec_dir = Path(prefix) / "exec-1"
+    exec_dir.mkdir(parents=True)
+    (exec_dir / "chunk-0").write_text("output")
+
+    _cleanup_execution(prefix, "exec-1")
+    assert not exec_dir.exists()
