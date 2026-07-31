@@ -63,6 +63,10 @@ cuda_lib = cuda_home / "lib"
 cuda_lib64 = cuda_home / "lib64"
 if cuda_lib.is_dir() and not cuda_lib64.exists():
     cuda_lib64.symlink_to(cuda_lib, target_is_directory=True)
+cudart = cuda_lib / "libcudart.so.13"
+cudart_link = cuda_lib / "libcudart.so"
+if cudart.is_file() and not cudart_link.exists():
+    cudart_link.symlink_to(cudart.name)
 os.environ["CUDA_HOME"] = str(cuda_home)
 os.environ["PATH"] = os.pathsep.join((str(nvcc.parent), os.environ["PATH"]))
 os.execvp("vllm", ["vllm", *sys.argv[1:]])

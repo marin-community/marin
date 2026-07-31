@@ -219,6 +219,8 @@ def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
     nvcc.chmod(0o755)
     cuda_lib = nvcc.parent.parent / "lib"
     cuda_lib.mkdir()
+    cudart = cuda_lib / "libcudart.so.13"
+    cudart.touch()
     dist_info = site_packages / "nvidia_cuda_nvcc-13.0.88.dist-info"
     dist_info.mkdir()
     (dist_info / "METADATA").write_text("Metadata-Version: 2.4\nName: nvidia-cuda-nvcc\nVersion: 13.0.88\n")
@@ -251,6 +253,7 @@ def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
     assert observed["cuda_home"] == str(nvcc.parent.parent.resolve())
     assert observed["path"].split(os.pathsep)[0] == str(nvcc.parent.resolve())
     assert (nvcc.parent.parent / "lib64").resolve() == cuda_lib.resolve()
+    assert (cuda_lib / "libcudart.so").resolve() == cudart.resolve()
 
 
 def test_isolated_cuda_vllm_upstream_requires_version():
