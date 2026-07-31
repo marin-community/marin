@@ -8,7 +8,6 @@ import threading
 from collections.abc import Callable
 
 import requests
-from iris.runtime import telemetry as runtime_telemetry
 from prometheus_client.core import Metric
 from prometheus_client.parser import text_string_to_metric_families
 from rigging import telemetry
@@ -16,6 +15,7 @@ from rigging import telemetry
 logger = logging.getLogger(__name__)
 
 VLLM_METRICS_SERVICE = "vllm"
+VLLM_METRIC_SOURCE = "vllm"
 _VLLM_METRIC_PREFIX = "vllm:"
 _SCRAPE_TIMEOUT = 5.0
 DEFAULT_POLL_INTERVAL = 15.0
@@ -48,7 +48,10 @@ def publish_vllm_families(families: list[Metric]) -> None:
                 family.type == "summary" and sample.name.endswith(("_count", "_sum"))
             )
             temporality = telemetry.CUMULATIVE_SNAPSHOT if cumulative else telemetry.CURRENT_SNAPSHOT
-            common = telemetry.snapshot_attributes(family.type, temporality)
+            common = {
+                **telemetry.snapshot_attributes(family.type, temporality),
+                "metric_source": VLLM_METRIC_SOURCE,
+            }
             name = sample.name.removeprefix(_VLLM_METRIC_PREFIX)
             telemetry.gauge(name).set(float(sample.value), attributes={**sample.labels, **common})
 
@@ -92,8 +95,7 @@ class VllmMetricsForwarder:
 
 
 def start_vllm_metrics_forwarding(metrics_url: str, *, interval: float = DEFAULT_POLL_INTERVAL) -> VllmMetricsForwarder:
-    """Configure vLLM telemetry and begin polling its native metrics endpoint."""
-    runtime_telemetry.configure(VLLM_METRICS_SERVICE)
+    """Begin polling a vLLM server after the owning application configures telemetry."""
     forwarder = VllmMetricsForwarder(metrics_url, interval=interval)
     forwarder.start()
     logger.info("Forwarding vLLM metrics from %s to telemetry_v1", metrics_url)

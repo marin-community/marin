@@ -37,6 +37,7 @@ def test_vllm_cumulative_snapshots_use_direct_gauge_wire_format(monkeypatch):
     assert tokens["kind"] == "gauge"
     assert tokens["value"] == 42
     assert tokens["attributes"] == {
+        "metric_source": "vllm",
         "model_name": "test",
         "source_kind": "counter",
         "source_temporality": "cumulative_snapshot",
