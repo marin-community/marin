@@ -77,10 +77,6 @@ MAX_WORKERS_PER_JOB = 1_024
 # threading it through every step's code.
 ZEPHYR_COORDINATOR_ENDPOINT_ENV = "ZEPHYR_COORDINATOR_ENDPOINT"
 
-# Names the pool a plain ZephyrContext should run on. A pool owner exports this
-# once on the jobs it launches; iris inherits env vars to child jobs, so the
-# step code itself never mentions the pool.
-
 # Iris serializes a job's declared env vars here at task start, and copies them
 # into every child job it submits. Writing to it is how a host offers its pool
 # to jobs it has not launched yet.
@@ -153,9 +149,9 @@ def _withdraw_pool(prior_process: str | None, prior_declared: str | None) -> Non
 class PoolMode(enum.StrEnum):
     """Where a context's pipelines run.
 
-    The environment can offer a pool — a pool owner exports ``ZEPHYR_POOL`` on
-    the jobs it launches and Iris inherits it down the job tree — so the mode
-    is how a context accepts or refuses that offer.
+    The environment can offer a pool — hosting one advertises its address, and
+    Iris inherits that down the job tree — so the mode is how a context accepts
+    or refuses that offer.
 
     - ``AUTO`` (default): run on the offered pool if there is one, else on a
       pool of this context's own.
@@ -311,8 +307,9 @@ class ZephyrContext:
     Args:
         mode: How this context treats the pool the environment offers; see
             ``PoolMode``. Defaults to ``AUTO``.
-        pool_name: Name of the pool to host (``mode=HOST``) or to join. When
-            None, falls back to the ``ZEPHYR_POOL`` env var.
+        pool_name: Name of the pool this context hosts. Only meaningful with
+            ``mode=HOST``; joining is by address, not by name, so setting it in
+            any other mode is rejected rather than silently ignored.
         coordinator_endpoint: Explicit coordinator address, for a driver outside
             the pool's job tree that cannot derive a sibling it is not a sibling
             of. When None, falls back to the ``ZEPHYR_COORDINATOR_ENDPOINT``
@@ -473,6 +470,12 @@ class ZephyrContext:
             # The pool does not exist until start(); nothing to resolve here.
             return
 
+        if self.pool_name is not None and self.mode is not PoolMode.HOST:
+            raise ValueError(
+                f"pool_name only names a pool this context hosts; with mode={self.mode} it would be "
+                "ignored. Join a pool with coordinator_endpoint=, or inherit it from the environment."
+            )
+
         if self.mode is PoolMode.ISOLATED:
             if self.coordinator_endpoint is not None:
                 raise ValueError(
@@ -556,6 +559,9 @@ class ZephyrContext:
                 raise payload
             return payload
         finally:
+            # A coordinator that could not drain marks the directory retained,
+            # so this does not delete shared data out from under a task that is
+            # still running.
             _cleanup_execution(prefix, execution_id)
 
     def execute(
@@ -670,8 +676,8 @@ class ZephyrContext:
 
         Entering the context as a ``with`` block does this for you. Give the
         name to the jobs that should share the pool — as
-        ``ZephyrContext(pool_name=...)``, or by exporting ``ZEPHYR_POOL`` on
-        their job so their code needs no change at all.
+        ``ZephyrContext(coordinator_endpoint=...)`` — or let them inherit it,
+        since hosting advertises the address automatically.
 
         Only the host starts a pool, which is what ``mode=HOST`` declares.
         """

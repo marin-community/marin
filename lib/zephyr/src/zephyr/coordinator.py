@@ -105,9 +105,26 @@ def _execution_result_path(prefix: str, execution_id: str) -> str:
     return f"{prefix}/{execution_id}/results.pkl"
 
 
+def _execution_retain_path(prefix: str, execution_id: str) -> str:
+    """Marker asking that an execution's directory be left in place."""
+    return f"{prefix}/{execution_id}/.retain"
+
+
+def _retain_execution(prefix: str, execution_id: str) -> None:
+    """Ask whoever cleans up to leave this execution's storage alone.
+
+    The coordinator writes this when it gives up on draining, so tasks that are
+    still running keep the shared data they read and the chunks they write.
+    """
+    StoragePath(_execution_retain_path(prefix, execution_id)).write_text("")
+
+
 def _cleanup_execution(prefix: str, execution_id: str) -> None:
-    """Remove all chunk files for an execution."""
+    """Remove all chunk files for an execution, unless it is marked retained."""
     exec_dir = StoragePath(f"{prefix}/{execution_id}")
+    if StoragePath(_execution_retain_path(prefix, execution_id)).exists():
+        logger.warning("Keeping %s: tasks may still be reading or writing it", exec_dir)
+        return
 
     with log_time(f"Cleaning up execution directory {exec_dir}"):
         if exec_dir.exists():
@@ -1267,7 +1284,8 @@ class ZephyrCoordinator:
                 self._persist_result(result_path, _ensure_picklable_exception(e))
             raise
         finally:
-            self._drain_execution(run)
+            if not self._drain_execution(run):
+                _retain_execution(self._chunk_prefix, execution_id)
             with self._lock:
                 run.finish()
                 # Drop the finished execution so coordinator state does not grow
@@ -1286,7 +1304,7 @@ class ZephyrCoordinator:
                     self._retired_counters = {k: e for k, e in merged.items() if k not in conflicted}
                 self._executions.pop(execution_id, None)
 
-    def _drain_execution(self, run: _PipelineExecution, timeout: float = 300.0) -> None:
+    def _drain_execution(self, run: _PipelineExecution, timeout: float = 300.0) -> bool:
         """Stop dispatching for this execution and wait for its tasks to retire.
 
         The driver deletes the execution's storage as soon as ``run_pipeline``
@@ -1301,29 +1319,30 @@ class ZephyrCoordinator:
         with self._lock:
             run.task_queue.clear()
             if not run.in_flight:
-                return
+                return True
             outstanding = len(run.in_flight)
         logger.info("[%s] Draining %d in-flight task(s) before teardown", run.execution_id, outstanding)
 
+        # Deliberately not short-circuited by shutdown: a task mid-write is
+        # just as dangerous to delete storage under during teardown.
         deadline = time.monotonic() + timeout
         backoff = ExponentialBackoff(initial=0.1, maximum=2.0)
         while time.monotonic() < deadline:
             with self._lock:
                 if not run.in_flight:
-                    return
-            if self._shutdown_event.is_set():
-                return
+                    return True
             time.sleep(backoff.next_interval())
 
         with self._lock:
             stragglers = sorted(run.in_flight)
         logger.warning(
-            "[%s] %d task(s) still in flight after %.0fs; tearing down anyway: %s",
+            "[%s] %d task(s) still in flight after %.0fs; keeping this execution's storage: %s",
             run.execution_id,
             len(stragglers),
             timeout,
             stragglers,
         )
+        return False
 
     def _persist_result(self, result_path: str, payload: Any) -> None:
         """Write a pipeline's result payload to storage.

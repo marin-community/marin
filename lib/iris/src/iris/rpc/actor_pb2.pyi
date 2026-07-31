@@ -9,16 +9,18 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 DESCRIPTOR: _descriptor.FileDescriptor
 
 class ActorCall(_message.Message):
-    __slots__ = ("method_name", "actor_name", "serialized_args", "serialized_kwargs")
+    __slots__ = ("method_name", "actor_name", "serialized_args", "serialized_kwargs", "idempotency_key")
     METHOD_NAME_FIELD_NUMBER: _ClassVar[int]
     ACTOR_NAME_FIELD_NUMBER: _ClassVar[int]
     SERIALIZED_ARGS_FIELD_NUMBER: _ClassVar[int]
     SERIALIZED_KWARGS_FIELD_NUMBER: _ClassVar[int]
+    IDEMPOTENCY_KEY_FIELD_NUMBER: _ClassVar[int]
     method_name: str
     actor_name: str
     serialized_args: bytes
     serialized_kwargs: bytes
-    def __init__(self, method_name: _Optional[str] = ..., actor_name: _Optional[str] = ..., serialized_args: _Optional[bytes] = ..., serialized_kwargs: _Optional[bytes] = ...) -> None: ...
+    idempotency_key: str
+    def __init__(self, method_name: _Optional[str] = ..., actor_name: _Optional[str] = ..., serialized_args: _Optional[bytes] = ..., serialized_kwargs: _Optional[bytes] = ..., idempotency_key: _Optional[str] = ...) -> None: ...
 
 class ActorResponse(_message.Message):
     __slots__ = ("serialized_value", "error")

@@ -27,6 +27,10 @@ message ActorCall {
   string actor_name = 2;        // Which actor on this server
   bytes serialized_args = 3;    // cloudpickle(args)
   bytes serialized_kwargs = 4;  // cloudpickle(kwargs)
+  // Client-generated, stable across retries of one logical call. StartOperation
+  // returns the existing operation for a key it has already seen, so a lost
+  // response cannot start the work twice. Empty means no deduplication.
+  string idempotency_key = 5;
 }
 
 message ActorResponse {

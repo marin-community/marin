@@ -24,6 +24,7 @@ Custom backoff behavior:
 import logging
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from typing import Any, TypeVar
 
@@ -152,12 +153,19 @@ class ActorClient:
         )
 
     def start_operation(self, method_name: str, *args: Any, **kwargs: Any) -> str:
-        """Start a long-running operation. Returns the operation ID."""
+        """Start a long-running operation. Returns the operation ID.
+
+        The call carries one idempotency key for all of its retries, so a lost
+        response cannot start the work a second time: the server returns the
+        operation it already has for that key.
+        """
         call = actor_pb2.ActorCall(
             method_name=method_name,
             actor_name=self._name,
             serialized_args=cloudpickle.dumps(args),
             serialized_kwargs=cloudpickle.dumps(kwargs),
+            # Generated once, before the retry loop, and reused by every attempt.
+            idempotency_key=uuid.uuid4().hex,
         )
 
         def do_call():

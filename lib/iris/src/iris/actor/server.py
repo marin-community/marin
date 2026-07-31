@@ -62,6 +62,7 @@ class OperationState:
     """
 
     operation_id: str
+    dedup_key: tuple[str, str, str] | None = None
     cancelled: threading.Event = field(default_factory=threading.Event)
     serialized_result: bytes | None = None
     error: actor_pb2.ActorError | None = None
@@ -116,6 +117,10 @@ class ActorServer:
         # This avoids relying on asyncio's default executor which can be shut down prematurely
         self._executor = self._threads.spawn_executor(max_workers=32, prefix="actor-method")
         self._operations: dict[str, OperationState] = {}
+        # Secondary index for retry deduplication, dropped alongside the
+        # operation it points at. A key is therefore honored only while the
+        # result is still unread — exactly the window a retry can arrive in.
+        self._operations_by_key: dict[tuple[str, str, str], OperationState] = {}
         self._operations_lock = threading.Lock()
 
     @property
@@ -258,11 +263,23 @@ class ActorServer:
         """Start a long-running actor method call. Returns immediately with an operation ID."""
         method, args, kwargs = self._resolve_method(request)
 
-        op_id = uuid.uuid4().hex
-        op = OperationState(operation_id=op_id)
-
+        # Scoped to the actor and the method: an idempotency key means "this
+        # call again", so two callers that pick the same key must not collide.
+        key = (request.actor_name, request.method_name, request.idempotency_key) if request.idempotency_key else None
         with self._operations_lock:
+            existing = self._operations_by_key.get(key) if key else None
+            if existing is not None:
+                # A retry of a call whose response was lost. Returning the
+                # operation already running keeps the work single; starting a
+                # second one would duplicate it and leave the first unreachable.
+                logger.info("start_operation: reusing operation %s for key %s", existing.operation_id, key)
+                return existing.to_proto()
+
+            op_id = uuid.uuid4().hex
+            op = OperationState(operation_id=op_id, dedup_key=key)
             self._operations[op_id] = op
+            if key:
+                self._operations_by_key[key] = op
 
         # _run_operation writes result/error onto `op` and stamps `completed_at`
         # in its finally block; the executor Future itself is not retained.
@@ -285,6 +302,8 @@ class ActorServer:
         if proto.state not in (actor_pb2.Operation.PENDING, actor_pb2.Operation.RUNNING):
             with self._operations_lock:
                 self._operations.pop(request.operation_id, None)
+                if op.dedup_key is not None:
+                    self._operations_by_key.pop(op.dedup_key, None)
         return proto
 
     async def cancel_operation(self, request: actor_pb2.OperationId, ctx: RequestContext) -> actor_pb2.Operation:
