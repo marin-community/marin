@@ -150,4 +150,5 @@ jobs:
               --add-label agent-generated \
               --add-label dependencies >/dev/null
           fi
+          gh pr merge "$pr_url" --auto --squash
           echo "Updated $pr_url"
