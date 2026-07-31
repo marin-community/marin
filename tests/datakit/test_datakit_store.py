@@ -222,7 +222,7 @@ def _build_inputs(tmp_path):
     dedup = VerifiedFuzzyDupsAttrData(
         verification=FuzzyVerificationParams(),
         local_representatives=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
-        sources={source_key: VerifiedFuzzyDupsPerSource(attr_dir=dirs["dedup"])},
+        sources={source_key: VerifiedFuzzyDupsPerSource(attr_dir=dirs["dedup"], source_tag="source_000")},
         counters={},
     )
     exact_dedup = GlobalExactDedupData(
@@ -349,7 +349,10 @@ def test_store_rejects_dedup_source_set_mismatch(tmp_path, monkeypatch, label):
     if label == "exact_dedup":
         exact_dedup.sources["extra/source"] = ExactDupsPerSource(attr_dir=str(tmp_path / "extra"))
     else:
-        dedup.sources["extra/source"] = VerifiedFuzzyDupsPerSource(attr_dir=str(tmp_path / "extra"))
+        dedup.sources["extra/source"] = VerifiedFuzzyDupsPerSource(
+            attr_dir=str(tmp_path / "extra"),
+            source_tag="source_001",
+        )
 
     with pytest.raises(ValueError, match=rf"{label} source set must equal tokenize source keys"):
         build_clustered_store(

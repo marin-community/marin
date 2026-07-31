@@ -187,6 +187,7 @@ def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, mo
     assert verified.counters["dedup/fuzzy/verification/decision/accepted"] == 1
     assert verified.counters["dedup/fuzzy/verification/decision/retained_no_match"] == 1
     assert verified.counters["dedup/fuzzy/verification/comparison/containment_below_threshold"] == 1
+    assert verified.sources[source_key].source_tag == "source_000"
 
 
 def test_representative_selection_is_stable_across_input_order_and_parallelism(tmp_path, monkeypatch):
