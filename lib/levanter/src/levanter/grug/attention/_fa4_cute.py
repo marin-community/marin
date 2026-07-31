@@ -343,7 +343,11 @@ def fa4_cute_segment_bounds(
         raise NotImplementedError("fa4_cute_segment_bounds supports only causal self-attention.")
     if mask.segment_ids is None:
         return _simple_causal_lower_bounds(batch_size=batch_size, seq_len=seq_len, sliding_window=sliding_window)
-    q_segment_ids, _ = mask.segment_ids
+    q_segment_ids, kv_segment_ids = mask.segment_ids
+    if kv_segment_ids is not q_segment_ids:
+        # These bounds derive from the q ids alone; distinct kv ids would silently mis-segment.
+        # The regular FA4 path rejects mismatched q/kv ids, so fail fast here rather than bypass it.
+        raise NotImplementedError("fa4_cute_segment_bounds supports only matching q/kv segment ids.")
     q_segment_ids = _batched_segment_ids(q_segment_ids, batch_size=batch_size, seq_len=seq_len)
     return _packed_segment_causal_lower_bounds(
         q_segment_ids,

@@ -310,6 +310,10 @@ def _apply_rotary_embedding_fused(
     rope: RotaryConfig,
     disable_rope: jax.Array | bool,
 ) -> tuple[Float[Array, "B S H D"], Float[Array, "B S H D"]]:
+    # Rotates adjacent (interleaved) dimension pairs (i, i+1) within the rotary half -- a valid RoPE
+    # convention, but NOT bit-equivalent to the non-fused ``apply_rotary_embedding`` path, which pairs
+    # split halves (i, i + rotary_dim/2). The hero always uses this fused path; the two are not
+    # interchangeable mid-training (a from-scratch run learns whichever convention it starts with).
     half = rotary_dim // 2
     inv_freq = 1.0 / (rope.theta ** (jnp.arange(0, half, dtype=jnp.float32) / half))
     angles = jnp.arange(seq_len, dtype=jnp.float32)[:, None] * inv_freq[None, :]

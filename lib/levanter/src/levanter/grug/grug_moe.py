@@ -269,8 +269,14 @@ def moe_mlp(
     selected_experts_spec = _value_spec_or_default(selected_experts, batch_spec, replace_replicated=True)
     combine_weights_spec = _value_spec_or_default(combine_weights, batch_spec, replace_replicated=True)
     if expert_chunks > 1 and resolved_implementation == "sonic_cute":
-        # The chunked sonic_cute path all-gathers the hidden dim per expert-chunk over ``data``, so
-        # the local weights must arrive H-sharded ([E, H/data, 2I] / [E, I, H/data]). Force that FSDP
+        # The chunked sonic_cute path all-gathers the hidden dim per expert-chunk over ``data``, so it
+        # needs a real data axis; without one the local kernel hits an unbound-axis error.
+        if not _mesh_has_axis(mesh, "data") or _mesh_axis_size(mesh, "data") <= 1:
+            raise ValueError(
+                "chunked sonic_cute (expert_chunks > 1) requires a data axis to all-gather the expert "
+                "weights; use expert_chunks=1 on a single device or an unsharded mesh."
+            )
+        # The local weights must arrive H-sharded ([E, H/data, 2I] / [E, I, H/data]). Force that FSDP
         # layout rather than inheriting whatever (possibly replicated) sharding the layer scan left,
         # which would make the tiled all-gather reconstruct H * data_shards.
         w_up_gate_spec = _drop_absent_mesh_axes(mesh, P("expert", "data", "model"))
