@@ -1,5 +1,7 @@
 # Verify Fuzzy-Duplicate Clusters
 
+## TL;DR
+
 Marin will keep its current MinHash LSH and connected-components job as candidate discovery. A second Zephyr job will verify each proposed removal against full normalized text.
 
 Only a verified match will produce `dup_doc=True`. This change prevents a false cluster from deleting all but one of its documents.
@@ -8,27 +10,27 @@ Only a verified match will produce `dup_doc=True`. This change prevents a false 
 
 The current cluster artifact has no text, but the store treats each noncanonical cluster member as a duplicate.
 
-Issues [#6851](https://github.com/marin-community/marin/issues/6851) and [#6854](https://github.com/marin-community/marin/issues/6854) show that this rule causes large false deletions. The 100B audit measured a 63.617% semantic false-positive rate for the current candidate rule.
-
-A strict full-text rule measured 99.855% precision and 27.527% recall on resolved treatment pairs. The [research brief](research.md) contains the code references, measurements, and prior art.
+Issues [#6851](https://github.com/marin-community/marin/issues/6851) and [#6854](https://github.com/marin-community/marin/issues/6854) show that this rule causes large false deletions. The [research brief](research.md) contains the rated-pair results, cluster measurements, resource results, code references, and prior art.
 
 ## Challenges
 
 The candidate job removes text before its graph shuffle. Verification must read the normalized text column again.
 
-The text join can use co-partitioned shards, but verification must then shuffle candidate text by `dup_cluster_id`. The largest measured cluster contains 859,091 members.
+The text join can use co-partitioned shards, but verification must then shuffle candidate text by `dup_cluster_id`. The current 100B candidate artifact has a cluster with more than 100,000 members.
 
 Jaccard threshold relations are not transitive. Each removed document must pass a direct comparison against a retained representative.
 
-The representative must also agree with global exact deduplication. A different priority can cause the two filters to remove all copies of identical text.
+The representative must also agree with global exact deduplication. A different
+decision for equal content IDs can cause the two filters to remove all copies
+of identical text.
 
 ## Costs / Risks
 
 - The map-side join scans normalized text again. Only non-singleton cluster members enter the cluster shuffle.
 - A hot cluster still routes to one reducer. The first version uses one representative and linear comparison cost.
-- The strict rule favors precision. The prior measured recall was 27.527%.
+- The strict rule favors precision and has low measured recall.
 - The new persisted attribute type requires updates to the store, ferries, reports, validators, and consolidation configs.
-- A longest representative can miss duplicate subgroups that do not match that representative.
+- One candidate canonical can miss duplicate subgroups that do not match it.
 
 ## Design
 
@@ -43,17 +45,32 @@ The map stage will use a streaming two-way merge for an inner join of each
 sorted normalized shard and its sorted candidate shard. A missing candidate
 file will produce no candidate rows.
 
-The join will read `id` and full `text` from each normalized shard. It will read `id` and `dup_cluster_id` from the matching candidate shard.
+The join will read `id` and full `text` from each normalized shard. It will
+read `id`, `dup_cluster_id`, and `is_cluster_canonical` from the matching
+candidate shard.
 
-The joined records will keep `file_idx` and `source_key`. A sentinel record from each input shard will make sure that every output shard exists.
+The joined records will keep `file_idx`, `source_key`, and
+`is_cluster_canonical`. A sentinel record from each input shard will make sure
+that every output shard exists.
 
-The job will assign file indices from sorted source names. This order matches
-global exact deduplication. It will group real records by `dup_cluster_id`.
+The job will assign file indices from sorted source names. It will group real
+records by `dup_cluster_id`.
 
-It will sort each group by descending full-text length, then by file index and ID.
+It will put the existing connected-components canonical first. It will fail if
+a cluster has zero or more than one canonical.
 
-The first record will be the retained representative. File-index priority will match [`global_exact_deduplicate`](../../../experiments/datakit/global_exact_dedup.py)
-when two records have identical text.
+The candidate canonical will be the retained representative. This direction is
+the direction that the rated baseline audit measured.
+
+If another cluster member has the same content ID, the verifier will check that
+its text is equal to the representative text and write no fuzzy marker. The
+global exact job will remove all but its first copy. This rule prevents exact
+and fuzzy deduplication from removing all copies.
+
+The final store will apply the global exact marker to a fuzzy representative
+when that representative is not the first copy of its content ID. The old store
+kept such representatives. This behavior change is intentional because the
+global exact job always keeps the first copy.
 
 The reducer will compare each remaining member directly against the representative. It will not do all-pairs comparison or connected-component closure.
 
@@ -87,11 +104,13 @@ The co-partitioned output will contain rows only for accepted duplicates. Each r
 - `dup_cluster_id`.
 - `dup_representative_id`.
 - `dup_representative_source_key`.
-- `dup_verifier_version`.
 - `dup_member_containment`.
 - `dup_jaccard`.
 - `dup_under_tokenized`.
 - `dup_char_jaccard`.
+
+The artifact stores `FuzzyVerificationParams`, including its rule version. The
+output rows do not repeat this artifact-level value.
 
 Rejected candidates will not enter the attribute files. Fixed-bin counters will record rejection reasons, containment, token Jaccard, character Jaccard, cluster size, and source.
 
@@ -114,19 +133,26 @@ long tokens, and configurable thresholds.
 
 A local Zephyr test will create one cluster with a true duplicate and a
 template false positive. Only the true duplicate must receive `dup_doc=True`.
+The test will set the representative through `is_cluster_canonical`.
 
 The test will include a shard with no accepted duplicate. That shard must still get an empty Parquet file with the specified schema.
 
 A filter-composition test will combine global exact and fuzzy markers. At least
-one copy of identical text must remain. A source-order test will make source
-names and source keys sort in different orders.
+one copy of identical text must remain. Exact copies will not get fuzzy
+markers. A source-order test will make source names and source keys sort in
+different orders.
 
-Determinism tests will change worker counts and input dictionary order. The representative and output bytes must stay the same.
+Determinism tests will change worker counts and input dictionary order. The
+representative and output rows must stay the same.
 
-The rollout check will run the 100B testbed. It will report the largest reducer time, shuffle bytes, peak memory, and issue-source acceptance counts.
+The rated-pair, 0.1B, and 100B gates are complete. They rejected longest-first
+selection, confirmed the candidate-canonical direction, and showed that the
+streaming reducer can process the current largest clusters. The
+[research brief](research.md) is the single record for the measured counts,
+source checks, precision, recall, task time, and memory.
 
 ## Open Questions
 
 - Must the first version store bounded rejected-decision samples, or are aggregate counters sufficient?
 - What reducer time or shuffle-byte limit will require a sharded large-cluster path before production use?
-- After the first rollout, must small clusters use a bounded multiple-representative policy to improve recall?
+- Can a later policy improve recall without changing the safe candidate-canonical direction?
