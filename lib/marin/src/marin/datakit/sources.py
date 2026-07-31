@@ -376,9 +376,10 @@ def all_sources() -> dict[str, DatakitSource]:
             "nemotron_sft_v3/arc_agi_v1/small_reasoning_and_tools": 0.874677005,
             "nemotron_sft_v3/arc_agi_v1/small_reasoning_no_tools": 1.869343472,
             "nemotron_sft_v3/arc_agi_v1/small_tools_no_reasoning": 0.002026258,
-            "nemotron_sft_v3/competitive_programming_v1/competitive_coding_cpp": 13.595916675,
-            "nemotron_sft_v3/competitive_programming_v1/competitive_coding_python": 23.590921635,
-            "nemotron_sft_v3/competitive_programming_v1/infinibyte": 14.609520058,
+            # Competitive-Programming-v1 requires reconstructing withheld prompts from the source benchmarks.
+            # "nemotron_sft_v3/competitive_programming_v1/competitive_coding_cpp": 13.595916675,
+            # "nemotron_sft_v3/competitive_programming_v1/competitive_coding_python": 23.590921635,
+            # "nemotron_sft_v3/competitive_programming_v1/infinibyte": 14.609520058,
             "nemotron_sft_v3/competitive_programming_v2/competitive_coding_cpp": 13.043480804,
             "nemotron_sft_v3/competitive_programming_v2/competitive_coding_python": 13.107394981,
             "nemotron_sft_v3/competitive_programming_v2/exercism": 0.163892686,
