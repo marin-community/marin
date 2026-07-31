@@ -23,8 +23,11 @@ from levanter.store.cache import TreeCache
 from marin.datakit.decon import DeconAttributes
 from marin.datakit.source_key import datakit_source_key
 from marin.execution.artifact import read_artifact
-from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData, FuzzyDupsPerSource
-from marin.processing.classification.deduplication.fuzzy_minhash import MinHashParams
+from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
+from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    VerifiedFuzzyDupsAttrData,
+    VerifiedFuzzyDupsPerSource,
+)
 from marin.processing.tokenize.attributes import TokenizedAttrData
 from zephyr.shard_keys import deterministic_hash
 
@@ -37,10 +40,10 @@ CLUSTER_VIEW = 2  # cluster column "cluster_2", clusters {0, 1}
 SPLIT = "train"
 EXEMPLAR = {"input_ids": np.array([0], dtype=np.int32)}
 
-# One doc = (id, cluster, quality_bucket, contaminated, dedup-canonical, token value, length).
+# One doc = (id, cluster, quality_bucket, contaminated, verified duplicate, token value, length).
 # ``quality_bucket`` is the precomputed calibrated bucket the scorer writes as a
 # column (consumed as-is by the store -- no score->bucket mapping).
-# ``canonical``: None -> singleton (absent from dedup, kept); True -> kept; False -> dropped.
+# ``verified duplicate``: True -> dropped; False or None -> absent from the sparse attrs.
 # Each surviving doc's tokens are a run of its unique ``token`` value so we can
 # recover identity from the cache and confirm dropped docs never appear.
 _Doc = tuple[str, int, int, bool, bool | None, int, int]
@@ -49,14 +52,14 @@ SHARD0: list[_Doc] = [
     ("d0", 0, 0, False, None, 100, 3),  # -> (0, 0)
     ("d1", 0, 4, False, None, 101, 5),  # -> (0, 4)
     ("d2", 1, 2, True, None, 902, 9),  # contaminated -> dropped
-    ("d3", 1, 2, False, True, 103, 2),  # canonical -> (1, 2)
-    ("d6", 1, 4, False, False, 906, 6),  # exact canonical, fuzzy non-canonical -> dropped
+    ("d3", 1, 2, False, False, 103, 2),  # -> (1, 2)
+    ("d6", 1, 4, False, False, 906, 6),  # exact canonical -> (1, 4)
     ("d8", 0, 0, False, None, 108, 3),  # exact canonical -> (0, 0)
 ]
 SHARD1: list[_Doc] = [
     ("d4", 0, 0, False, None, 104, 4),  # -> (0, 0)
-    ("d5", 1, 2, False, False, 905, 8),  # non-canonical -> dropped
-    ("d6", 1, 4, False, True, 106, 6),  # exact duplicate, fuzzy canonical -> (1, 4)
+    ("d5", 1, 2, False, True, 905, 8),  # verified fuzzy duplicate -> dropped
+    ("d6", 1, 4, False, False, 106, 6),  # exact duplicate -> dropped
     ("d7", 0, 4, False, None, 107, 7),  # -> (0, 4)
     ("d8", 0, 0, False, None, 908, 3),  # exact duplicate without fuzzy attrs -> dropped
 ]
@@ -66,10 +69,10 @@ EXPECTED: dict[tuple[int, int], dict[int, int]] = {
     (0, 0): {100: 3, 104: 4, 108: 3},
     (0, 4): {101: 5, 107: 7},
     (1, 2): {103: 2},
-    (1, 4): {106: 6},
+    (1, 4): {906: 6},
 }
 EXACT_DUPLICATES = {("part-00001-of-00002.parquet", "d6"), ("part-00001-of-00002.parquet", "d8")}
-DROPPED_TOKEN_VALUES = {902, 905, 906, 908}
+DROPPED_TOKEN_VALUES = {902, 905, 106, 908}
 
 
 def _write_parquet(path: str, table: pa.Table) -> None:
@@ -117,15 +120,15 @@ def _write_shard(dirs: dict[str, str], basename: str, docs: list[_Doc]) -> None:
                 ),
             ),
         )
-    # Dedup is sparse: only non-singleton docs (canonical True/False) appear.
-    marked = [(d[0], d[4]) for d in docs if d[4] is not None]
+    # Verified dedup is sparse: only documents that must be removed appear.
+    marked = [d[0] for d in docs if d[4]]
     if marked:
         _write_parquet(
             f"{dirs['dedup']}/{basename}",
             pa.table(
                 {
-                    "id": [m[0] for m in marked],
-                    "is_cluster_canonical": pa.array([m[1] for m in marked]),
+                    "id": marked,
+                    "dup_doc": pa.array([True] * len(marked)),
                 }
             ),
         )
@@ -181,9 +184,9 @@ def _build_inputs(tmp_path):
             counters={},
         )
     }
-    dedup = FuzzyDupsAttrData(
-        params=MinHashParams(num_perms=8, num_bands=4, ngram_size=5, seed=0),
-        sources={source_key: FuzzyDupsPerSource(attr_dir=dirs["dedup"])},
+    dedup = VerifiedFuzzyDupsAttrData(
+        verification=FuzzyVerificationParams(),
+        sources={source_key: VerifiedFuzzyDupsPerSource(attr_dir=dirs["dedup"])},
         counters={},
     )
     exact_dedup = GlobalExactDedupData(
@@ -247,8 +250,8 @@ def test_store_filters_routes_and_roundtrips(tmp_path, monkeypatch):
     assert DROPPED_TOKEN_VALUES.isdisjoint(all_tokens), "filtered docs must be absent"
     assert artifact.counters["datakit_store/records_in"] == len(SHARD0) + len(SHARD1)
     assert artifact.counters["datakit_store/contaminated_dropped"] == 1
-    assert artifact.counters["datakit_store/exact_duplicate_dropped"] == 1
-    assert artifact.counters["datakit_store/dedup_noncanonical_dropped"] == 2
+    assert artifact.counters["datakit_store/exact_duplicate_dropped"] == 2
+    assert artifact.counters["datakit_store/fuzzy_duplicate_dropped"] == 1
     assert artifact.counters["datakit_store/records_out"] == sum(len(docs) for docs in EXPECTED.values())
     assert artifact.counters["datakit_store/tokens_out"] == sum(
         length for docs in EXPECTED.values() for length in docs.values()
@@ -310,7 +313,7 @@ def test_store_rejects_dedup_source_set_mismatch(tmp_path, monkeypatch, label):
     if label == "exact_dedup":
         exact_dedup.sources["extra/source"] = ExactDupsPerSource(attr_dir=str(tmp_path / "extra"))
     else:
-        dedup.sources["extra/source"] = FuzzyDupsPerSource(attr_dir=str(tmp_path / "extra"))
+        dedup.sources["extra/source"] = VerifiedFuzzyDupsPerSource(attr_dir=str(tmp_path / "extra"))
 
     with pytest.raises(ValueError, match=rf"{label} source set must equal tokenize source keys"):
         build_clustered_store(
