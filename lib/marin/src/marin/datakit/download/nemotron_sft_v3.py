@@ -130,27 +130,6 @@ NEMOTRON_SFT_V3_REPOSITORIES: Mapping[str, NemotronSFTRepository] = MappingProxy
                 ),
             },
         ),
-        "competitive_programming_v1": NemotronSFTRepository(
-            hf_dataset_id="nvidia/Nemotron-Competitive-Programming-v1",
-            revision="d6e7c6b404ed5db6e1104b41d0f80a0c7dad7bf8",
-            partitions={
-                "competitive_coding_cpp": NemotronSFTPartition(
-                    config="default",
-                    split="competitive_coding_cpp",
-                    file_glob="data/competitive_coding_cpp.part_*.jsonl",
-                ),
-                "competitive_coding_python": NemotronSFTPartition(
-                    config="default",
-                    split="competitive_coding_python",
-                    file_glob="data/competitive_coding_python.part_*.jsonl",
-                ),
-                "infinibyte": NemotronSFTPartition(
-                    config="default",
-                    split="infinibyte",
-                    file_glob="data/infinibyte.part_*.jsonl",
-                ),
-            },
-        ),
         "competitive_programming_v2": NemotronSFTRepository(
             hf_dataset_id="nvidia/Nemotron-SFT-Competitive-Programming-v2",
             revision="778afc98a9e027e10b3cd78020c120e93e142ef2",
