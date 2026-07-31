@@ -121,10 +121,15 @@ ZephyrContext(
     pool_name="datakit",
     max_workers=200,
     resources=ResourceConfig(cpu=2, ram="8g"),
+    coordinator_resources=ResourceConfig(cpu=1, ram="4g"),
     pip_dependency_groups=["datakit"],        # workers get luxical / faiss / sklearn / scipy
     job_env_vars={"JAX_PLATFORMS": "cpu"},    # jax stages don't probe CUDA on GPU nodes
 )
 ```
+
+A standing coordinator holds the live state for every concurrent pipeline.
+Size `coordinator_resources` for aggregate concurrency; the lightweight default
+is intended for ordinary contexts that run one pipeline at a time.
 
 A step whose stages need something the pool's workers lack opts out with
 `mode=PoolMode.ISOLATED` and gets its own pool.

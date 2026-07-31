@@ -49,6 +49,7 @@ DEFAULT_INSPECTION_LIMIT = 10_000
 TEXT_PREVIEW_CHARS = 500
 SHARED_POOL_NAME = "fuzzy-verification-testbed"
 WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g", disk="8g")
+COORDINATOR_RESOURCES = ResourceConfig(cpu=1, ram="4g", disk="16g", preemptible=False)
 STORE_CONFIG = FuzzyVerificationStoreConfig(
     max_actors=32,
     actor_resources=WORKER_RESOURCES,
@@ -404,6 +405,7 @@ def main() -> None:
         pool_name=SHARED_POOL_NAME,
         max_workers=args.max_workers,
         resources=WORKER_RESOURCES,
+        coordinator_resources=COORDINATOR_RESOURCES,
     ):
         StepRunner().run([report_step], max_concurrent=args.max_concurrent)
 
