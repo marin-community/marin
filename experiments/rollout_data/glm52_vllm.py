@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
 import os
 import socket
 import subprocess
@@ -21,6 +22,8 @@ from marin.inference.model_preparation import resolve_model_path
 from marin.inference.proxy import _reserve_port
 from marin.inference.vllm_server import IsolatedCudaVllm, _poll_until_ready
 from rigging.timing import Duration, ExponentialBackoff
+
+logger = logging.getLogger(__name__)
 
 MODEL = "zai-org/GLM-5.2-FP8"
 MODEL_REVISION = "ba978f7d347eaf65d22f1a86833408afdb953541"
@@ -204,7 +207,7 @@ def _serve_ray_head(
     environment: dict[str, str],
     launch: Glm52LaunchConfig,
 ) -> None:
-    weights = prepare_model_cache()
+    weights = resolve_model_path(MODEL, MODEL_CACHE_TTL_DAYS, MODEL_REVISION)
     ray_port = _reserve_port(host, ctx.get_port(RAY_PORT))
     http_port = _reserve_port(host, ctx.get_port(HTTP_PORT))
     ray_address = f"{host}:{ray_port}"
@@ -241,7 +244,9 @@ def _serve_ray_head(
             )
             _run_vllm(ctx, host, http_port, ray_address, vllm_command, environment, weights, launch)
         finally:
-            subprocess.run([*ray_command, "stop", "--force"], env=environment, check=False)
+            cleanup = subprocess.run([*ray_command, "stop", "--force"], env=environment, check=False)
+            if cleanup.returncode != 0:
+                logger.warning("Ray cleanup exited with code %d", cleanup.returncode)
 
 
 def _serve_ray_worker(host: str, launch: Glm52LaunchConfig, ray_command: list[str], environment: dict[str, str]) -> None:
@@ -300,7 +305,3 @@ def submit_glm52(ctx, launch: Glm52LaunchConfig):
         max_retries_failure=0,
         priority_band=job_pb2.PRIORITY_BAND_BATCH,
     )
-
-
-def prepare_model_cache() -> str:
-    return resolve_model_path(MODEL, MODEL_CACHE_TTL_DAYS, MODEL_REVISION)

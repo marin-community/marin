@@ -17,6 +17,7 @@ from typing import Any
 import requests
 from iris.client import iris_ctx
 from rigging.filesystem import StoragePath
+from zephyr.writers import write_jsonl_file
 
 from experiments.rollout_data.generate_identity_conversation_seeds import (
     ConversationSeed,
@@ -279,10 +280,7 @@ def _write_chunk(config: CollectionConfig, start: int, records: list[CompletionR
     tokens = sum(record.accepted_tokens for record in records)
     chunk = Chunk(start=start, end=start + len(records) - 1, tokens=tokens)
     accepted_records = [record for record in records if record.conversation is not None]
-    contents = "".join(
-        json.dumps(dataclasses.asdict(record), ensure_ascii=False, sort_keys=True) + "\n" for record in accepted_records
-    )
-    _chunk_path(config.output_path, config.shard_index, chunk).write_text(contents, compression="gzip")
+    write_jsonl_file(accepted_records, str(_chunk_path(config.output_path, config.shard_index, chunk)))
     return chunk
 
 

@@ -17,7 +17,7 @@ from experiments.rollout_data.generate_identity_conversation_seeds import (
 IDENTITY_PROFILE = load_identity_profile(StoragePath("experiments/rollout_data/identity_profiles/marin_latest_moe.json"))
 
 
-def test_generate_seeds_is_deterministic_and_balances_facets():
+def test_generate_seeds_is_deterministic_and_covers_all_facets():
     first = list(generate_seeds(count=200, random_seed=17, identity_profile=IDENTITY_PROFILE))
     second = list(generate_seeds(count=200, random_seed=17, identity_profile=IDENTITY_PROFILE))
 
@@ -70,11 +70,9 @@ def test_generate_seeds_uses_only_facts_from_custom_identity_profile():
     assert all("NVIDIA" not in prompt for prompt in profile_prompts)
     assert all("DeepSeek" not in prompt for prompt in profile_prompts)
     assert all(seed.profile_id == "example" for seed in seeds)
-    assert all(
-        seed.canonical_answer == "That information is not known, so I should not guess."
-        for seed in seeds
-        if seed.facet == Facet.UNKNOWN_FACT
-    )
+    unknown = [seed for seed in seeds if seed.facet == Facet.UNKNOWN_FACT]
+    assert unknown
+    assert all(seed.topic == profile.unknown_facts[0] for seed in unknown)
 
 
 def test_generation_axes_have_systematic_coverage():
