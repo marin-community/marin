@@ -92,3 +92,28 @@ def test_interceptors_map_providers_to_headers():
     chain = c.interceptors()
     assert [i.header for i in chain] == ["authorization", "proxy-authorization"]
     assert all(isinstance(i, BearerTokenInjector) for i in chain)
+
+
+def test_headers_both_providers_uses_the_interceptor_header_names():
+    c = ClientCredentials(token_provider=StaticTokenProvider("a"), iap_provider=StaticTokenProvider("e"))
+    assert c.headers() == {"authorization": "Bearer a", "proxy-authorization": "Bearer e"}
+
+
+def test_headers_absent_or_empty_provider_omits_the_header():
+    assert ClientCredentials().headers() == {}
+    assert ClientCredentials(iap_provider=StaticTokenProvider("")).headers() == {}
+    assert ClientCredentials(iap_provider=StaticTokenProvider("e")).headers() == {"proxy-authorization": "Bearer e"}
+
+
+def test_headers_repeated_calls_mint_a_fresh_token_each_time():
+    class Rotating:
+        def __init__(self):
+            self.calls = 0
+
+        def get_token(self) -> str | None:
+            self.calls += 1
+            return f"t{self.calls}"
+
+    c = ClientCredentials(iap_provider=Rotating())
+    assert c.headers()["proxy-authorization"] == "Bearer t1"
+    assert c.headers()["proxy-authorization"] == "Bearer t2"

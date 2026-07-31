@@ -7,8 +7,10 @@ Tests verify dashboard functionality through the Connect RPC endpoints.
 The dashboard serves a web UI that fetches data via RPC calls.
 """
 
+import asyncio
 from unittest.mock import Mock
 
+import httpx
 import pytest
 from iris.cluster.backends.k8s.tasks import (
     _KUEUE_POD_GROUP_NAME,
@@ -25,7 +27,7 @@ from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler.status import PendingHint, overlay_worker_usability
 from iris.cluster.controller.backend import BackendCapability, BackendRuntime, DeviceCapacity
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
-from iris.cluster.controller.dashboard import ControllerDashboard
+from iris.cluster.controller.dashboard import ControllerDashboard, _CredentialAuth
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.projections.endpoints import EndpointRow
@@ -46,6 +48,8 @@ from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId, WorkerUsability
 from iris.rpc import controller_pb2, job_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
+from rigging.auth import StaticTokenProvider
+from rigging.credentials import ClientCredentials
 from rigging.server_auth import RequestAuthPolicy
 from rigging.testing import MockVerifier
 from rigging.timing import Timestamp
@@ -2122,3 +2126,61 @@ def test_get_kubernetes_cluster_status_ambiguous_raises(state, scheduler, tmp_pa
     assert data_eu["namespace"] == "eu"
     data_us = rpc_post(client, "GetKubernetesClusterStatus", {"backendId": "us-k8s"})
     assert data_us["namespace"] == "us"
+
+
+async def _headers_seen_upstream(auth, headers=None) -> httpx.Headers:
+    """Send one request through a client using ``auth`` and return what upstream saw."""
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers)
+        return httpx.Response(200, json={})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), auth=auth) as client:
+        await client.post("https://iris.example/rpc", headers=headers or {})
+    return seen[0]
+
+
+def _send_through(auth, headers=None) -> httpx.Headers:
+    return asyncio.run(_headers_seen_upstream(auth, headers))
+
+
+def _static_credentials() -> ClientCredentials:
+    return ClientCredentials(
+        token_provider=StaticTokenProvider("app-token"),
+        iap_provider=StaticTokenProvider("iap-token"),
+    )
+
+
+def test_credential_auth_both_providers_attaches_both_bearers():
+    headers = _send_through(_CredentialAuth(_static_credentials()))
+    assert headers["authorization"] == "Bearer app-token"
+    assert headers["proxy-authorization"] == "Bearer iap-token"
+
+
+def test_credential_auth_caller_supplied_bearer_is_overwritten():
+    headers = _send_through(
+        _CredentialAuth(_static_credentials()),
+        headers={"proxy-authorization": "Bearer forged"},
+    )
+    assert headers["proxy-authorization"] == "Bearer iap-token"
+
+
+def test_credential_auth_expired_token_mints_a_fresh_one_per_request():
+    class Rotating:
+        def __init__(self):
+            self.calls = 0
+
+        def get_token(self) -> str | None:
+            self.calls += 1
+            return f"t{self.calls}"
+
+    auth = _CredentialAuth(ClientCredentials(iap_provider=Rotating()))
+    assert _send_through(auth)["proxy-authorization"] == "Bearer t1"
+    assert _send_through(auth)["proxy-authorization"] == "Bearer t2"
+
+
+def test_credential_auth_no_providers_sends_no_bearers():
+    headers = _send_through(_CredentialAuth(ClientCredentials()))
+    assert "authorization" not in headers
+    assert "proxy-authorization" not in headers
