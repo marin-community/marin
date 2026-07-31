@@ -197,6 +197,7 @@ datakit = [
     "scikit-learn",
     "scipy",
     "duckdb>=1.0.0",
+    "warcio>=1.7.5,<2",
 ]
 
 math = ["pylatexenc", "sympy"]
