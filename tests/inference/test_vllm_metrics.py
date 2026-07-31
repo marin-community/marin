@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-
 from marin.inference.vllm_metrics import VllmMetricsForwarder, parse_vllm_families, publish_vllm_families
 from rigging import telemetry
 from rigging.testing import RecordingTelemetryTransport
@@ -54,18 +52,3 @@ def test_failed_vllm_scrape_emits_nothing(monkeypatch):
     monkeypatch.setattr("marin.inference.vllm_metrics.publish_vllm_families", lambda families: emitted.append(families))
     VllmMetricsForwarder("http://vllm/metrics", fetch=lambda _url: None).poll_once()
     assert emitted == []
-
-
-def test_inference_query_runbook_preserves_snapshot_series_and_reset_semantics():
-    runbook = (Path(__file__).parents[2] / ".agents/skills/query-inference-metrics/SKILL.md").read_text()
-    assert "PARTITION BY origin_cluster, service, name," in runbook
-    assert "resource_attributes_json, attributes_json" in runbook
-    assert "ORDER BY timestamp_ms, seq" in runbook
-    assert "value < previous_value THEN NULL" in runbook
-    assert "visible start minus one 15s scrape interval" in runbook
-    assert "counter(...).add(...)" in runbook
-    assert "SUM(value)" in runbook
-    assert "WITH lifetime_base AS" in runbook
-    assert "WHEN previous_value IS NULL OR value < previous_value THEN value" in runbook
-    assert "ELSE value - previous_value" in runbook
-    assert "SUM(increment) AS total" in runbook

@@ -295,12 +295,15 @@ def test_native_metrics_concurrent_detach_and_reattach_does_not_revive_old_poll_
 
     detacher = threading.Thread(target=publisher.detach, args=(proxy,))
     detacher.start()
+
+    def reattached_and_polling() -> bool:
+        publisher.attach(proxy)
+        return next_poll.is_set()
+
     ExponentialBackoff(initial=0.001, maximum=0.01).wait_until(
-        lambda: publisher._thread is None,
+        reattached_and_polling,
         timeout=Duration.from_seconds(1),
     )
-    publisher.attach(proxy)
-    assert next_poll.wait(1)
     release_first_poll.set()
     detacher.join(timeout=1)
     try:

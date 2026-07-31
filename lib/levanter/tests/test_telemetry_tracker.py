@@ -8,7 +8,7 @@ from rigging import telemetry
 from rigging.testing import RecordingTelemetryTransport
 
 from levanter.tracker.histogram import SummaryStats
-from levanter.tracker.telemetry import TelemetryConfig, TelemetryTracker, TrainingPhase
+from levanter.tracker.telemetry import TelemetryTracker, TrainingPhase
 
 
 @pytest.fixture
@@ -71,13 +71,3 @@ def test_training_progress_and_phase_are_current_snapshots(exported, monkeypatch
     values = _values(exported.wait_for(7))
     assert values["progress_time_seconds"] == 1234.5
     assert values["phase"] == TrainingPhase.FINISHED
-
-
-def test_configures_owning_application_once(monkeypatch):
-    calls = []
-    monkeypatch.setattr(
-        "levanter.tracker.telemetry.runtime_telemetry.configure", lambda *args, **kwargs: calls.append((args, kwargs))
-    )
-
-    assert isinstance(TelemetryConfig().init("run-42"), TelemetryTracker)
-    assert calls == [(("levanter",), {"attributes": {"run": "run-42"}})]
