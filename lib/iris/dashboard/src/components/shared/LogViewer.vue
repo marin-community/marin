@@ -254,12 +254,20 @@ function sourceRequest() {
   }
 }
 
+function requestSinceMs(): number | undefined {
+  const ms = sinceMs()
+  if (ms === undefined || !absoluteSince.value) return ms
+  // FetchLogs applies sinceMs as an exclusive bound. The date picker describes
+  // an inclusive start time, so move the wire bound back by one millisecond.
+  return Math.max(0, ms - 1)
+}
+
 function baseRequest() {
   return {
     ...sourceRequest(),
     substring: filter.value || undefined,
     minLevel: level.value ? level.value.toUpperCase() : undefined,
-    sinceMs: sinceMs(),
+    sinceMs: requestSinceMs(),
   }
 }
 

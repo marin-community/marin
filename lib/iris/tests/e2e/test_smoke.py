@@ -497,6 +497,7 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
     filtered_row.locator("[data-log-permalink]").click()
     smoke_page.wait_for_function("() => location.hash.includes('logSeq=')", timeout=5000)
 
+    selected_message = filtered_row.locator(":scope > span").last.inner_text()
     filtered_row.locator("[data-log-start]").click()
     since_input = "input[type='datetime-local']"
     smoke_page.wait_for_function(
@@ -505,6 +506,7 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
     )
     locked_since = smoke_page.input_value(since_input)
     assert locked_since
+    smoke_page.locator("[data-row]").filter(has_text=selected_message).wait_for(timeout=5000)
 
     smoke_page.get_by_role("button", name="Clear filter").click()
     smoke_page.wait_for_function(
