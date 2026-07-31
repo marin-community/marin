@@ -2988,21 +2988,28 @@ class ControllerServiceImpl:
     ) -> controller_pb2.Controller.MintEndpointTokenResponse:
         """Mint a scoped bearer token for one endpoint's /proxy path.
 
-        Authorized to the endpoint's owning user (the registering task's owner)
-        or an admin. The token carries no RPC authority (see ``authorize_method``);
-        it is bound to the endpoint's canonical wire name with an ``exp`` deadline.
-        Like every iris token it is stateless — nothing is persisted and it cannot
-        be revoked; it simply ages out at its TTL.
+        Task endpoints are authorized to their owning user or an admin. System
+        endpoints have no owner and require an admin. The token carries no RPC
+        authority (see ``authorize_method``); it is bound to the endpoint's
+        canonical wire name with an ``exp`` deadline. Like every iris token it is
+        stateless — nothing is persisted and it cannot be revoked; it simply ages
+        out at its TTL.
         """
         if not self._auth.jwt_manager:
             raise ConnectError(Code.INTERNAL, "JWT manager not configured")
 
         row = self._endpoint_service.resolve_task_endpoint(request.endpoint_name)
-        if row is None:
-            raise ConnectError(Code.NOT_FOUND, f"No endpoint '{request.endpoint_name}'")
-        # Owner (or admin) only; skipped in null-auth mode like _authorize_job_owner.
-        if self._auth.provider:
-            authorize_resource_owner(row.task_id.user)
+        if row is not None:
+            endpoint_name = row.name
+            # Owner (or admin) only; skipped in null-auth mode like _authorize_job_owner.
+            if self._auth.provider:
+                authorize_resource_owner(row.task_id.user)
+        else:
+            endpoint_name = self._endpoint_service.resolve_system_endpoint_name(request.endpoint_name)
+            if endpoint_name is None:
+                raise ConnectError(Code.NOT_FOUND, f"No endpoint '{request.endpoint_name}'")
+            if self._auth.provider:
+                authorize(AuthzAction.MINT_SYSTEM_ENDPOINT_TOKEN)
 
         if request.HasField("ttl"):
             ttl = int(duration_from_proto(request.ttl).to_seconds())
@@ -3014,11 +3021,11 @@ class ControllerServiceImpl:
         expires_at = Timestamp.from_ms(now.epoch_ms() + ttl * 1000)
         # jti is for log correlation only — never persisted, never revocable.
         jti = f"iris_ket_{secrets.token_urlsafe(8)}"
-        token = self._auth.jwt_manager.create_endpoint_token(row.name, jti, ttl_seconds=ttl)
+        token = self._auth.jwt_manager.create_endpoint_token(endpoint_name, jti, ttl_seconds=ttl)
         return controller_pb2.Controller.MintEndpointTokenResponse(
             token=token,
             expires_at=timestamp_to_proto(expires_at),
-            capability_url=self._capability_url_config.build(row.name, token),
+            capability_url=self._capability_url_config.build(endpoint_name, token),
         )
 
     def get_current_user(

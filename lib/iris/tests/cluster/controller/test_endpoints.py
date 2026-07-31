@@ -433,6 +433,27 @@ def test_mint_endpoint_token_denies_non_owner(state, mock_controller, log_client
     assert exc.value.code is Code.PERMISSION_DENIED
 
 
+def test_mint_system_endpoint_token_by_admin(state, mock_controller, log_client, tmp_path):
+    service, endpoint_service, auth = _mint_service(state, mock_controller, log_client, tmp_path)
+    endpoint_service.register_system_endpoint("/system/log-server", "logs:9000")
+
+    with identity_scope(VerifiedIdentity(user_id="operator", role="admin")):
+        resp = service.mint_endpoint_token(_mint_request("/system/log-server"), None)
+
+    identity = auth.jwt_manager.verify(resp.token)
+    assert identity.audience == "/system/log-server"
+
+
+def test_mint_system_endpoint_token_denies_non_admin(state, mock_controller, log_client, tmp_path):
+    service, endpoint_service, _ = _mint_service(state, mock_controller, log_client, tmp_path)
+    endpoint_service.register_system_endpoint("/system/log-server", "logs:9000")
+
+    with identity_scope(VerifiedIdentity(user_id="researcher", role="user")), pytest.raises(ConnectError) as exc:
+        service.mint_endpoint_token(_mint_request("/system/log-server"), None)
+
+    assert exc.value.code is Code.PERMISSION_DENIED
+
+
 def test_mint_endpoint_token_unknown_endpoint(state, mock_controller, log_client, tmp_path):
     service, _, _ = _mint_service(state, mock_controller, log_client, tmp_path)
     with identity_scope(VerifiedIdentity(user_id="owner", role="admin")), pytest.raises(ConnectError) as exc:

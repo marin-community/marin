@@ -364,6 +364,14 @@ class EndpointServiceImpl:
                 return row
         return None
 
+    def resolve_system_endpoint_name(self, name: str) -> str | None:
+        """Resolve a controller-owned endpoint to its canonical wire name."""
+        with self._proxy_lock:
+            for candidate in proxy_name_to_endpoint_names(name):
+                if candidate in self._system_endpoints:
+                    return candidate
+        return None
+
     def _list_system_endpoints(self, prefix: str, *, exact: bool) -> controller_pb2.Controller.ListEndpointsResponse:
         """Resolve system endpoints from the in-memory map."""
         results: list[controller_pb2.Controller.Endpoint] = []
