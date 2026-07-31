@@ -66,8 +66,6 @@ from marin.datakit.download.swe_zero_12m import swe_zero_12m_normalize_steps
 from marin.datakit.download.synthetic1 import synthetic1_normalize_steps
 from marin.execution.step_spec import StepSpec
 
-IDENTITY_DATA_CONTENT_NAME = "identity-data/content"
-
 
 @dataclass(frozen=True)
 class DatakitSource:
@@ -187,7 +185,7 @@ def all_sources() -> dict[str, DatakitSource]:
         ("glm-5.2-kernelgym-rollouts", glm_kernelgym_rollouts_normalize_steps, 0.064054289),
         ("gpt-oss-rollouts", gpt_oss_rollouts_normalize_steps, 3.20),
         ("hplt_v3", hplt_v3_normalize_steps, 612.7),
-        (IDENTITY_DATA_CONTENT_NAME, identity_data_content_normalize_steps, 0.061711380),
+        ("identity-data/content", identity_data_content_normalize_steps, 0.061711380),
         ("institutional_books", institutional_books_normalize_steps, 203.63),
         ("massive_function_calling", massive_normalize_steps, 11.39),
         ("molmo2-cap", molmo2_cap_normalize_steps, 0.36),
