@@ -97,6 +97,13 @@ def _jaccard(left: set[str], right: set[str]) -> float:
     return shared / union if union else 1.0
 
 
+def character_ngram_jaccard(left: str, right: str, ngram_size: int) -> float:
+    """Calculate case-folded character n-gram Jaccard similarity."""
+    if ngram_size < 1:
+        raise ValueError("ngram_size must be at least 1")
+    return _jaccard(_char_ngrams(left, ngram_size), _char_ngrams(right, ngram_size))
+
+
 def verify_prepared_candidate(
     member: PreparedVerificationText,
     representative: PreparedVerificationText,
@@ -119,9 +126,10 @@ def verify_prepared_candidate(
     elif member_unique > params.maximum_member_unique_ngrams:
         rejection = VerificationRejection.MEMBER_UNIQUE
     elif under_tokenized:
-        char_jaccard = _jaccard(
-            _char_ngrams(member.text, params.under_tokenized_char_ngram_size),
-            _char_ngrams(representative.text, params.under_tokenized_char_ngram_size),
+        char_jaccard = character_ngram_jaccard(
+            member.text,
+            representative.text,
+            params.under_tokenized_char_ngram_size,
         )
         if char_jaccard < params.under_tokenized_minimum_char_jaccard:
             rejection = VerificationRejection.UNDER_TOKENIZED

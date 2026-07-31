@@ -25,6 +25,7 @@ from marin.datakit.source_key import datakit_source_key
 from marin.execution.artifact import read_artifact
 from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
     VerifiedFuzzyDupsAttrData,
     VerifiedFuzzyDupsPerSource,
 )
@@ -220,6 +221,7 @@ def _build_inputs(tmp_path):
     }
     dedup = VerifiedFuzzyDupsAttrData(
         verification=FuzzyVerificationParams(),
+        local_representatives=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
         sources={source_key: VerifiedFuzzyDupsPerSource(attr_dir=dirs["dedup"])},
         counters={},
     )

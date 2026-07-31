@@ -35,6 +35,7 @@ from marin.processing.classification.deduplication.fuzzy_dups import (
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, compute_minhash_attrs
 from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
     VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
     VerifiedFuzzyDupsAttrData,
     verify_fuzzy_dups,
@@ -126,23 +127,32 @@ def _fuzzy_dups_step(minhash_steps: list[StepSpec], cc_max_iterations: int) -> S
     )
 
 
-def _fuzzy_verification_step(sampled_by_source: dict[str, StepSpec], fuzzy_dups: StepSpec) -> StepSpec:
-    """Verify candidate cluster members against one full-text representative."""
+def _fuzzy_verification_step(
+    sampled_by_source: dict[str, StepSpec],
+    minhash_by_source: dict[str, StepSpec],
+    fuzzy_dups: StepSpec,
+) -> StepSpec:
+    """Verify candidate members against retained local representatives."""
     params = FuzzyVerificationParams()
     return StepSpec(
         name="data/datakit/verify_fuzzy_dups",
-        deps=[*sampled_by_source.values(), fuzzy_dups],
+        deps=[*sampled_by_source.values(), *minhash_by_source.values(), fuzzy_dups],
         hash_attrs={
             "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
             "verification": params.model_dump(mode="json"),
+            "local_representatives": REFERENCE_LOCAL_REPRESENTATIVE_PARAMS.model_dump(mode="json"),
         },
         fn=lambda output_path: verify_fuzzy_dups(
             normalized_sources={
                 name: read_artifact(step.output_path, NormalizedData) for name, step in sampled_by_source.items()
             },
+            minhash_sources={
+                name: read_artifact(step.output_path, MinHashAttrData) for name, step in minhash_by_source.items()
+            },
             candidates=read_artifact(fuzzy_dups.output_path, FuzzyDupsAttrData),
             output_path=output_path,
             verification_params=params,
+            local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
             max_parallelism=_FUZZY_DUPS_MAX_PARALLELISM,
             worker_resources=_FUZZY_VERIFICATION_WORKER_RESOURCES,
         ),
@@ -237,7 +247,7 @@ def dedup(
     }
     exact_dups = _exact_dups_step(sampled_by_source)
     fuzzy_dups = _fuzzy_dups_step(list(minhash_by_source.values()), fuzzy_dedup_cc_max_iterations)
-    verified_dups = _fuzzy_verification_step(sampled_by_source, fuzzy_dups)
+    verified_dups = _fuzzy_verification_step(sampled_by_source, minhash_by_source, fuzzy_dups)
     deduped_by_source = {
         src_name: _deduped_step(src_name, sampled, exact_dups, verified_dups)
         for src_name, sampled in sampled_by_source.items()

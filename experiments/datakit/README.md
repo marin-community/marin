@@ -44,11 +44,16 @@ file means that the source shard has no exact duplicates. The step does not copy
 normalized text.
 
 Fuzzy dedup first writes all members of each non-singleton candidate cluster.
-The next job joins these sparse attributes to normalized text. It selects the
-existing connected-components canonical as the deterministic representative.
-It writes `dup_doc=true` only when a direct full-text comparison accepts a
-member. The final store removes exact duplicates and verified fuzzy
-duplicates.
+The next job joins these sparse attributes to normalized text and saved MinHash
+buckets. It compares each member to the connected-components canonical first.
+After a rejection, it ranks retained local representatives by their shared LSH
+buckets. The reference configuration permits two comparisons per member and
+64 representatives per cluster. It also limits local representative text to
+2,000,000 characters per cluster. A local match needs the full-text subset
+rule and token-3-gram Jaccard of at least 0.98. A different token sequence also
+needs character-13 Jaccard of at least 0.98. The job writes `dup_doc=true` only
+after a direct full-text match. The final store removes exact duplicates and
+verified fuzzy duplicates.
 
 Global exact, fuzzy candidate, and fuzzy verification outputs write
 `.source_manifest.json` at the output root. The file maps each `source_NNN`
@@ -107,6 +112,7 @@ flowchart TD
     EMB --> SAMP --> KM --> ASG
     EMB --> ASG
     MH --> DEDUP
+    MH --> VERIFY
     SRC --> VERIFY
     DEDUP --> VERIFY
     TOK --> STORE
