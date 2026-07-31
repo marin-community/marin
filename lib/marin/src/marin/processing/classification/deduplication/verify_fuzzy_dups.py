@@ -230,6 +230,18 @@ def _cluster_key(record: dict[str, Any]) -> tuple[str, str]:
     return "cluster", record["dup_cluster_id"]
 
 
+def _cluster_sort_key(record: dict[str, Any]) -> bytes:
+    """Put the canonical first, then group equal content IDs deterministically."""
+    canonical_rank = 0 if record["kind"] == "sentinel" or record["is_cluster_canonical"] else 1
+    content_id = record.get("id", "").encode()
+    return (
+        canonical_rank.to_bytes()
+        + len(content_id).to_bytes(8, byteorder="big")
+        + content_id
+        + record["file_idx"].to_bytes(8, byteorder="big")
+    )
+
+
 def _score_bin(score: float) -> str:
     return f"{min(int(score * 100), SCORE_HISTOGRAM_MAX_PERCENT):03d}"
 
@@ -673,11 +685,7 @@ def verify_fuzzy_dups(
         .flat_map(_joined_cluster_members)
         .group_by(
             key=_cluster_key,
-            sort_by=lambda record: (
-                0 if record["kind"] == "sentinel" or record["is_cluster_canonical"] else 1,
-                record.get("id", ""),
-                record["file_idx"],
-            ),
+            sort_by=_cluster_sort_key,
             reducer=_make_cluster_verifier(verification_params, local_representative_params),
             # Cluster IDs can use all workers, including when there are fewer input files.
             num_output_shards=max_parallelism,
