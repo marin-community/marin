@@ -24,6 +24,7 @@ from marin.training.training import LevanterCheckpoint, resolve_checkpointer_out
 
 from experiments.grug.coupon_clipping.config import (
     NUM_EXPERTS,
+    SELECTED_LEARNING_RATE,
     TRAIN_BATCH_SIZE,
     TRAIN_STEPS,
     CouponClippingArm,
@@ -61,7 +62,7 @@ class CouponClippingLaunchConfig:
     optimizer_num_train_steps: int = TRAIN_STEPS
     initialize_from: str | None = None
     depth_growth: DepthGrowthConfig | None = None
-    learning_rate: CouponClippingLearningRate = CouponClippingLearningRate.CENTER
+    learning_rate: CouponClippingLearningRate = SELECTED_LEARNING_RATE
     watch_interval: int = 0
 
 
@@ -124,7 +125,7 @@ def build_coupon_clipping_checkpoint(
     *,
     version: str | None = None,
     pilot: bool = False,
-    learning_rate: CouponClippingLearningRate = CouponClippingLearningRate.CENTER,
+    learning_rate: CouponClippingLearningRate = SELECTED_LEARNING_RATE,
 ) -> ArtifactStep[LevanterCheckpoint]:
     """Assemble one fixed coupon-clipping arm as a lazy checkpoint artifact."""
     model = build_model_config(arm)
@@ -132,7 +133,7 @@ def build_coupon_clipping_checkpoint(
     if pilot:
         run_id = f"{arm.value}-pilot128-{learning_rate.value}"
     else:
-        if learning_rate is not CouponClippingLearningRate.CENTER:
+        if learning_rate is not SELECTED_LEARNING_RATE:
             raise ValueError("full pyramid arms use the learning rate selected by the systems gate")
         run_id = arm.value
     step_name = f"grug/coupon-clipping/{run_id}"

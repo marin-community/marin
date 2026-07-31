@@ -100,3 +100,13 @@ The pyramid and L1-to-L48 paths are implemented and passing their focused tests.
 - Result: the source stage succeeded, but the target's first attempt passed the checkpoint root directly to `load_checkpoint`; TensorStore reported all expected leaves missing because the concrete `step-32` directory had not been resolved. No transform or L48 update ran. Iris retried the deterministic failure once.
 - Interpretation: this is a phase-chaining path-resolution bug, not a model-state incompatibility. The production D1 path has the same bug and remains gated. The loader now resolves `latest_checkpoint_path` before reading the source tree, with a regression test for root-to-step resolution.
 - Next action: stop the deterministic retry, push the fix, resubmit the same growth coordinator, and require finite post-growth updates before D1 admission.
+
+### 2026-07-31 16:12 - CC16-004 learning-rate and layout gate
+
+- Hypothesis: one of the preregistered learning-rate candidates improves early loss without destabilizing gradients, and the two pyramid layouts retain control-like throughput and routing occupancy.
+- Commit Hash: `41a390894b` (canary bundle); the selected-rate configuration is the next commit.
+- Command: C0 low/center/high and P1/P2 center-rate pilots, each for 128 updates on 16 GB200 GPUs.
+- Config: MuonH/Adam candidate pairs were low `(0.005768679, 0.001331234)`, center `(0.006423539, 0.001482355)`, and high `(0.007210848, 0.001664041)`. P0/P1/P2 retain identical active parameters, stored parameters, batch, data order, and optimizer horizon.
+- Result: C0 finished at loss 5.2744 / 5.1301 / 4.9888 for low / center / high. Terminal gradient norms were 0.3467 / 0.3318 / 0.3282, capacity overflow was zero for all three, and throughput was 191,442 / 191,579 / 191,870 tok/s. At center LR, P1 finished at loss 5.1373, gradient norm 0.4852, zero overflow, and 192,583 tok/s; P2 finished at loss 5.1286, gradient norm 0.3750, zero overflow, and 190,439 tok/s.
+- Interpretation: select the high candidate for production: it improves terminal pilot loss by 0.1413 versus center without a gradient or throughput penalty. P1/P2 throughput differs from C0 by less than 1%, so placement comparisons are not confounded by a large kernel-speed difference. The 128-update losses do not distinguish P1, P2, and uniform at center LR; that is the question for the longer core wave.
+- Next action: commit the selected high rate, finish the offline recovery of the growth canary, then launch C0, P1, P2, and D1 together.

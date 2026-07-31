@@ -66,6 +66,9 @@ class CouponClippingLearningRate(StrEnum):
     HIGH = "lr0625"
 
 
+SELECTED_LEARNING_RATE = CouponClippingLearningRate.HIGH
+
+
 _SHARED_WIDTHS_BY_ARM = {
     CouponClippingArm.C0_P0: UNIFORM_SHARED_WIDTHS,
     CouponClippingArm.P1: FAT_FIRST_SHARED_WIDTHS,
@@ -113,7 +116,7 @@ def build_model_config(arm: CouponClippingArm) -> GrugModelConfig:
 
 
 def build_optimizer_config(
-    learning_rate: CouponClippingLearningRate = CouponClippingLearningRate.CENTER,
+    learning_rate: CouponClippingLearningRate = SELECTED_LEARNING_RATE,
 ) -> GrugMoeMuonHConfig:
     """Return the pre-registered 6.71B-token MuonH/Adam schedule."""
     muonh_learning_rate, adam_learning_rate = _LEARNING_RATES[learning_rate]

@@ -15,6 +15,7 @@ from experiments.grug.coupon_clipping.config import (
     DECAY_STEPS,
     EXPECTED_TRAIN_TOKENS,
     SEGMENT_LENGTHS,
+    SELECTED_LEARNING_RATE,
     TRAIN_STEPS,
     CouponClippingArm,
     CouponClippingLearningRate,
@@ -65,6 +66,8 @@ def test_learning_rate_gate_uses_three_fixed_candidates():
         CouponClippingLearningRate.CENTER: (0.006423539, 0.001482355),
         CouponClippingLearningRate.HIGH: (0.007210848, 0.001664041),
     }
+    assert SELECTED_LEARNING_RATE is CouponClippingLearningRate.HIGH
+    assert build_optimizer_config().learning_rate == candidates[SELECTED_LEARNING_RATE][0]
 
 
 def test_pilot_keeps_production_mesh_allocator_and_optimizer_horizon(monkeypatch, tmp_path):

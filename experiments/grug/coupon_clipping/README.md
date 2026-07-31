@@ -17,6 +17,10 @@ order, 6.711B-token horizon, optimizer schedule, and 16-GB200 topology.
 - `d1.py`: the token-matched D1 pipeline, with L1 through update 4,480 and L48
   through update 6,400.
 
+The production arms use the 0.625x candidate selected by the 128-update control
+gate. The low, center, and high pilots remain explicit entry points so the gate
+is reproducible.
+
 The launcher sets `XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async` before dispatch.
 The Grug dispatcher from `grug/embedding-gather-shard-map` propagates `XLA_*`
 variables to every child task.
