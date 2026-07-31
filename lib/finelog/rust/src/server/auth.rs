@@ -529,16 +529,15 @@ pub fn request_identity(ctx: &RequestContext) -> Option<&AuthIdentity> {
 }
 
 /// axum middleware enforcing the same [`AuthPolicy`] over a route group that does
-/// NOT pass through the Connect interceptor chain — the `/debug/*` admin routes.
+/// NOT pass through the Connect interceptor chain — `/debug/*` and REST telemetry.
 /// Those are plain axum routes (mounted before the Connect fallback), so without
-/// this they would be reachable regardless of the policy; gating them here means
-/// the admin surface obeys the identical stack (default-deny, loopback-only by
-/// default) as every RPC. `/health` is deliberately left ungated for liveness
-/// probes, and the SPA serves only static assets (its data arrives over gated
-/// RPCs), so only the admin routes need this.
+/// this they would be reachable regardless of the policy. The admitted identity
+/// is inserted into request extensions so ingestion can stamp authoritative
+/// origin fields. `/health` is deliberately left ungated for liveness probes,
+/// and the SPA serves only static assets (its data arrives over gated RPCs).
 pub async fn auth_gate(
     State(policy): State<Arc<AuthPolicy>>,
-    request: Request,
+    mut request: Request,
     next: AxumNext,
 ) -> Response {
     let bearer = request
@@ -550,10 +549,12 @@ pub async fn auth_gate(
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|c| c.0.ip());
-    if policy.admits(bearer, peer_ip).is_some() {
+    if let Some(identity) = policy.admits(bearer, peer_ip) {
+        request.extensions_mut().insert(identity);
         next.run(request).await
     } else {
-        (StatusCode::UNAUTHORIZED, "finelog: unauthorized").into_response()
+        crate::server::telemetry_ingest::auth_error_response(&request)
+            .unwrap_or_else(|| (StatusCode::UNAUTHORIZED, "finelog: unauthorized").into_response())
     }
 }
 
@@ -568,11 +569,48 @@ mod tests {
     use connectrpc::interceptor::run_chain;
     use connectrpc::response::EncodedResponse;
     use connectrpc::spec::{Spec, StreamType};
+    use tower::ServiceExt;
 
     use super::*;
 
     fn cidr(spec: &str) -> Cidr {
         Cidr::parse(spec).unwrap()
+    }
+
+    #[tokio::test]
+    async fn axum_auth_gate_passes_the_admitted_identity_to_plain_handlers() {
+        let app =
+            axum::Router::new()
+                .route(
+                    "/",
+                    axum::routing::get(
+                        |axum::extract::Extension(identity): axum::extract::Extension<
+                            AuthIdentity,
+                        >| async move {
+                            match identity {
+                                AuthIdentity::Network => "network",
+                                AuthIdentity::Jwt { .. } => "jwt",
+                            }
+                        },
+                    ),
+                )
+                .layer(axum::middleware::from_fn_with_state(
+                    Arc::new(AuthPolicy::allow_localhost()),
+                    auth_gate,
+                ));
+        let mut request = axum::http::Request::builder()
+            .uri("/")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(
+            "127.0.0.1:12345".parse::<SocketAddr>().unwrap(),
+        ));
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 64)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"network");
     }
 
     #[test]

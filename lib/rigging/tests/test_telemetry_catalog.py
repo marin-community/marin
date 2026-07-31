@@ -6,8 +6,7 @@ import sys
 from datetime import timedelta
 from pathlib import Path
 
-from rigging import telemetry
-from rigging import telemetry_catalog
+from rigging import telemetry, telemetry_catalog
 
 
 def test_catalog_sync_check_accepts_python_package_mirror():
@@ -64,9 +63,7 @@ def test_metric_declaration_must_match_catalog_exactly():
         "emissions",
         description="A descriptor that is not the catalog descriptor",
         unit="{emission}",
-        attributes=(
-            telemetry.AttributeSpec("signal", ("metric", "event", "log", "artifact")),
-        ),
+        attributes=(telemetry.AttributeSpec("signal", ("metric", "event", "log", "artifact")),),
         cardinality_limit=4,
         maturity=telemetry.Maturity.STABLE,
     )

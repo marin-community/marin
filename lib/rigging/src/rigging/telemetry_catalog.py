@@ -74,8 +74,7 @@ def _metric(record: dict[str, Any]) -> CatalogMetric:
         delivery_class=_required(record, "delivery_class", str),
         namespace=_required(record, "namespace", str),
         attributes=tuple(
-            (name, tuple(_required({"values": values}, "values", list)))
-            for name, values in attributes.items()
+            (name, tuple(_required({"values": values}, "values", list))) for name, values in attributes.items()
         ),
         buckets=tuple(float(bound) for bound in _required(record, "buckets", list)),
         owner=_required(record, "owner", str),

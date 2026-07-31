@@ -1,6 +1,6 @@
 # Metricification foundation contract
 
-Status: coordinator-approved contract; schema/durability checkpoint in review
+Status: coordinator-approved foundation and REST/OTLP gate
 Date: 2026-07-31
 Parent work: #204; benchmark #205 is closed and accepted.
 
@@ -22,12 +22,13 @@ migration:
    acknowledgement without appending rows. Reusing a batch ID for different
    bytes or authoritative origin fails.
 
-The current checkpoint adds approved v1 schemas, catalog-backed declarations,
+The second checkpoint adds approved v1 schemas, catalog-backed declarations,
 durable receipt timestamps, historical-format repair, and lazy referenced-
-namespace query binding. The REST router remains the next gate; worker-agent
-registration, WAL, and spill/replay follow independently. Benchmark #205
-selects generation-keyed manifest prefiltering and rejects a physical
-partition/clustering layout and generic rollups for this foundation.
+namespace query binding. The REST/OTLP checkpoint adds bounded authenticated
+ingestion and two-phase batch completion. Worker-agent registration, WAL, and
+spill/replay follow independently. Benchmark #205 selects generation-keyed
+manifest prefiltering and rejects a physical partition/clustering layout and
+generic rollups for this foundation.
 
 ## Python API
 
@@ -220,12 +221,21 @@ evidence/result URIs. Probe events carry a typed `probe_status` of `success`,
 A record's immutable `point_id` is
 `<batch_id>:<record_index>`.
 
-`series_id` hashes descriptor identity, authoritative service instance or
-attempt identity, and normalized bounded attributes. `reset_id` changes when a
-cumulative stream restarts. Collector/Finelog credentials overwrite
+`series_id` is the server-canonical hash of descriptor identity, authenticated
+cluster, entity authority/type/UID, service instance, attempt, actor/engine,
+rank/process identity, typed device UID/type, and normalized bounded attributes.
+Custom senders must
+supply that canonical value; a mismatch after authoritative stamping is a
+schema error, rather than a producer-selected series. OTLP and custom records
+with the same authoritative identity derive the same value. `reset_id` changes
+when a cumulative stream restarts. Collector/Finelog credentials overwrite
 infrastructure-owned cluster, Iris, Kubernetes, node, pod, container, and
 placement fields. The server looks up `(signal, scope, name)` in the approved
 catalog and chooses the namespace; callers cannot name or create Finelog tables.
+At a JWT-authenticated Finelog boundary, `cluster` is stamped from the verified
+key and unverified Iris job/task/attempt, worker/node/pod/container, and entity
+authority/type/UID claims are cleared. A trusted-network collector may supply
+those fields because it is the infrastructure enrichment boundary.
 
 Authority-scoped identities use typed `entity_authority`, `entity_type`, and
 `entity_uid` resource columns. `entity_uid`, when present, is the canonical
@@ -247,6 +257,40 @@ aliases cannot replace them. Hardware metrics carry typed `device_uid` and
   `POST /v1/scrape-targets` and
   `DELETE /v1/scrape-targets/{target_id}`.
 
+REST admission is independently bounded at 10,000 normalized records, 32 MiB
+estimated normalized memory, 64 detailed validation errors, four concurrent
+requests, and four blocking decode/storage tasks. The wire and uncompressed
+body limits remain 64 MiB; each normalized namespace must also fit the 16 MiB
+WriteRows limit. Before generated-message construction, protobuf uses a
+schema-aware constant-memory wire scan and JSON uses a streaming visitor. Each
+repeated container is capped at 10,000 elements, nested structural items are
+capped at 640,000 total (64 fields per maximum-size record), nesting is capped
+at 32 levels, and strings/bytes are capped at 64 KiB. Every protobuf wire field
+counts toward the global structural budget, including Buffa-preserved unknown
+custom fields. Well-formed unknown protobuf groups are skipped compatibly with
+Buffa/prost while their fields and nesting consume the same item, per-group,
+and depth quotas; unbalanced groups are invalid protobuf. This admits a fully
+populated 10,000-record custom batch while rejecting repeated empty message
+graphs or compact unknown-field streams before allocating their
+`Vec`/`String`/`Option` trees. Gzip/zstd decoding
+reads at most the uncompressed limit plus one byte on a blocking worker. Zstd
+also caps `window_log_max` at 23 (8 MiB) before the first decoded byte. Every
+OTLP metric point scanner traverses its exemplars, including bounded
+`filtered_attributes`, `span_id`, and `trace_id`. Resource scanners also
+traverse `entity_refs`, bounding each reference's schema URL, type, identifying
+keys, and description keys. Every request has one 30-second deadline shared by
+admission, validation, every
+durability wait, and completion. Admission
+wraps the entire handler, so the permit and deadline are established before
+Axum polls the body. Overloaded bodies are never polled; a stalled body is
+canceled under the deadline and releases its permit. Request `Content-Type`
+selects the success/schema-response representation. Custom endpoint errors use
+stable JSON `{code,message}`. OTLP errors use `google.rpc.Status` in the
+request's protobuf or JSON representation, including auth, malformed input,
+body/admission limits, deadline, and storage failures. Only HTTP `429`, `502`,
+`503`, and `504` are retryable and carry `Retry-After: 1`; `500` is a
+nonretryable server invariant failure.
+
 For Finelog, `201` means every namespace sub-batch and its durable
 segment/manifest receipt metadata are persisted. SQLite receipt rows may lag
 and are repaired from that metadata on startup. `200` with
@@ -255,12 +299,26 @@ router derives stable namespace sub-batch IDs from `(batch_id, namespace)`. A
 crash after one namespace commits but before the parent response cannot
 duplicate it.
 
+The parent batch uses a two-phase durable fence. After all namespace Arrow IPC
+is built and exact WriteRows alignment/size validation succeeds,
+`telemetry.batch_intent.v1` durably reserves the authenticated
+`(batch_id,payload_digest)`. No child append starts before that receipt is
+durable. Signal children then append and become durable under the request-wide
+deadline. `telemetry.batch.v1` is appended last as the completion marker and is
+the only batch namespace dashboards treat as accepted. A partial child failure
+leaves the intent but no completion; a same-payload retry deduplicates completed
+children and finishes with `201`, while a changed payload—including one routing
+to disjoint namespaces—conflicts with the intent. Only a pre-existing
+completion yields `200 status="duplicate"` and its child receipts reconstruct
+the original acknowledgement.
+
 A reused key with another payload digest returns `409`. Custom telemetry
 batches are all-or-nothing on schema and catalog validation: any invalid record
 returns `400` with stable indexed errors and commits no namespace sub-batch.
-`401/403` are auth failures, `413` is the fixed body/record limit, `429` is
-retryable overload with `Retry-After`, and `5xx` is retryable because no durable
-ack was observed.
+`401/403` are auth failures, `413` is the fixed body/record limit, and `429` is
+retryable overload. Transient storage and deadline failures are `503`/`504`;
+an internal invariant failure is `500` and must be dropped rather than retried
+indefinitely.
 
 OTLP requests with a valid explicit `Idempotency-Key` use it under the same
 conflict contract. Headerless OTLP requests derive a stable internal batch ID
@@ -375,8 +433,37 @@ Coordinator review resolved the REST gate:
 - Custom `/v1/telemetry` validation is atomic and returns `400` with indexed
   errors without committing valid siblings.
 - OTLP uses its protocol-native `200 partial_success` response.
+- REST decompression, parsing, normalization, and storage work are bounded and
+  kept off Tokio executor threads; validation errors and normalized memory have
+  independent caps. OTLP admission multiplies shared resource/scope/descriptor
+  string memory by its descendant point count before row construction and caps
+  each string/byte value at 64 KiB.
+- Protobuf repeated-message structure and JSON arrays/maps are quota-scanned
+  before generated-message deserialization. Repeated empty `0a 00` messages
+  cannot allocate a decoded ownership graph, including when nested under an
+  OTLP exemplar's filtered attributes or a resource's entity references.
+  Every wire field, including Buffa-preserved unknown custom fields, consumes
+  the global budget. Balanced unknown groups follow decoder skip semantics
+  under item/depth quotas; mismatched or missing end groups are rejected.
+  Exemplar trace/span byte fields and `EntityRef` strings are bounded, and
+  zstd frames cannot request a decoder window above 8 MiB.
+- OTLP failures are protocol-native `google.rpc.Status` protobuf/JSON. Only
+  `429`, `502`, `503`, and `504` carry retry guidance; `500` is nonretryable.
+- Official OTLP `LogRecord.event_name` takes precedence over the legacy
+  `event.name` attribute fallback. Integer metric values outside the exact
+  binary64 range are rejected rather than rounded.
+- `telemetry.batch_intent.v1` is the global digest reservation and
+  `telemetry.batch.v1` is the last durable completion marker.
 
 Later budget choices do not block the current gate: application queue
 bytes/records, agent WAL bytes/age, durable spill retention, export bandwidth,
 and raw/rollup retention. Benchmark #205 leaves the current name-keyed physical
 segments unchanged.
+
+Nonblocking next-gate ledger:
+
+- Once hardware descriptors exist, extract OTLP hardware device UID/type into
+  the typed resource identity and add custom/OTLP series-identity parity tests.
+- Pre-register telemetry schemas before the REST router serves requests. Until
+  then, make schema-registration guard acquisition and registration
+  cancellation-safe so a request deadline cannot leave a registration race.

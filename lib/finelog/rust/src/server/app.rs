@@ -13,6 +13,7 @@
 //! [strip-forwarded-prefix middleware]  (outermost; normalizes the URI path)
 //! [legacy-path middleware]             (transport layer; rewrites the URI)
 //!   /health
+//!   /v1/telemetry, /v1/metrics, /v1/logs
 //!   /debug/*            (only with --debug-admin)
 //!   /static, /favicon.ico, /, /{*rest}   (SPA, before the fallback)
 //!   .fallback_service(connect)            (RPC POSTs land here)
@@ -35,7 +36,7 @@ use crate::server::interceptors::{
     ConcurrencyInterceptor, SlowRpcInterceptor, DEFAULT_SLOW_RPC_THRESHOLD_MS,
     MAX_CONCURRENT_FETCH_LOGS, MAX_CONCURRENT_QUERY,
 };
-use crate::server::{debug, forwarded_prefix, legacy_path, spa};
+use crate::server::{debug, forwarded_prefix, legacy_path, spa, telemetry_ingest};
 use crate::store::Store;
 
 use super::log_service::LogServiceImpl;
@@ -131,6 +132,10 @@ pub fn build_app(store: Arc<Store>, config: ServerConfig) -> Router {
     let connect_service = build_connect_service(Arc::clone(&store), &config);
 
     let mut app = Router::new().route("/health", get(|| async { "ok" }));
+    let telemetry = telemetry_ingest::router(Arc::clone(&store)).layer(
+        axum::middleware::from_fn_with_state(Arc::clone(&config.auth), auth_gate),
+    );
+    app = app.merge(telemetry);
     if config.debug_admin {
         // Mounted BEFORE the connect fallback so /debug/* is not shadowed. These
         // admin routes bypass the Connect interceptor chain, so they are gated by

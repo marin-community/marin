@@ -109,6 +109,17 @@ arrow = "58"
 parquet = { version = "58", features = ["async", "object_store"] }
 bytes = "1"
 futures = "0.3"
+# REST ingestion decodes the official OTLP protobuf/JSON message types without
+# embedding an OpenTelemetry SDK or transport stack in the server.
+prost = "0.14"
+opentelemetry-proto = { version = "0.32", default-features = false, features = [
+    "gen-tonic-messages",
+    "logs",
+    "metrics",
+    "with-serde",
+] }
+flate2 = "1"
+zstd = "0.13"
 # Phase 3: the DataFusion read engine. DataFusion 53 re-exports arrow/parquet
 # 58 (matching the pins above), so the finelog binary keeps EXACTLY ONE arrow
 # version. `object_store` is the same version datafusion uses internally; the

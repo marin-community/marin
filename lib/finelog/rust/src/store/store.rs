@@ -96,6 +96,7 @@ pub(crate) fn log_registered_schema() -> Schema {
     );
     columns.extend([
         Column::new("event_name", ColumnType::COLUMN_TYPE_STRING, true),
+        Column::new("severity_text", ColumnType::COLUMN_TYPE_STRING, true),
         Column::new("attributes", ColumnType::COLUMN_TYPE_MAP, true),
         Column::new("trace_id", ColumnType::COLUMN_TYPE_STRING, true),
         Column::new("span_id", ColumnType::COLUMN_TYPE_STRING, true),
@@ -443,6 +444,65 @@ impl Store {
         arrow_ipc: &[u8],
         origin_cluster: Option<&str>,
     ) -> Result<WriteRowsResult, StatsError> {
+        let payload_sha256 = write_rows_payload_sha256(origin_cluster, arrow_ipc);
+        self.write_rows_with_payload_digest(
+            name,
+            batch_id,
+            arrow_ipc,
+            origin_cluster,
+            &payload_sha256,
+        )
+    }
+
+    /// Append a REST-ingested batch using the digest of the authoritative request.
+    ///
+    /// The REST boundary computes this digest over the authenticated origin,
+    /// endpoint, content type, and exact uncompressed request bytes. That digest
+    /// must be shared by every namespace sub-batch so changing any authoritative
+    /// request semantic conflicts even when the changed records route elsewhere.
+    pub(crate) fn write_rows_with_payload_digest(
+        &self,
+        name: &str,
+        batch_id: &str,
+        arrow_ipc: &[u8],
+        origin_cluster: Option<&str>,
+        payload_sha256: &str,
+    ) -> Result<WriteRowsResult, StatsError> {
+        let (engine, aligned) = self.validate_rows_for_write(
+            name,
+            batch_id,
+            arrow_ipc,
+            origin_cluster,
+            payload_sha256,
+        )?;
+        engine.append_idempotent_batch(&aligned, batch_id, payload_sha256)
+    }
+
+    /// Run the exact WriteRows decode/alignment checks without allocating a receipt.
+    ///
+    /// REST uses this for all namespace children before it durably reserves the
+    /// request digest. A validation or encoded-size rejection therefore cannot
+    /// leave a visible batch intent or completion record behind.
+    pub(crate) fn preflight_rows(
+        &self,
+        name: &str,
+        batch_id: &str,
+        arrow_ipc: &[u8],
+        origin_cluster: Option<&str>,
+        payload_sha256: &str,
+    ) -> Result<(), StatsError> {
+        self.validate_rows_for_write(name, batch_id, arrow_ipc, origin_cluster, payload_sha256)?;
+        Ok(())
+    }
+
+    fn validate_rows_for_write(
+        &self,
+        name: &str,
+        batch_id: &str,
+        arrow_ipc: &[u8],
+        origin_cluster: Option<&str>,
+        payload_sha256: &str,
+    ) -> Result<(Arc<Namespace>, AlignedBatch), StatsError> {
         use crate::store::ipc::decode_one_record_batch;
         use crate::store::schema::{
             stamp_cluster_column, validate_and_align_batch, MAX_WRITE_ROWS_BYTES,
@@ -472,13 +532,19 @@ impl Store {
                 "WriteRows batches must contain at least one row".to_string(),
             ));
         }
-        let payload_sha256 = write_rows_payload_sha256(origin_cluster, arrow_ipc);
+        if payload_sha256.len() != 64
+            || !payload_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(StatsError::SchemaValidation(
+                "WriteRows payload digest must be 64 hexadecimal characters".to_string(),
+            ));
+        }
         let engine = self.require_engine(name)?;
         let mut aligned: AlignedBatch = validate_and_align_batch(&batch, engine.schema())?;
         if let Some(origin) = origin_cluster {
             stamp_cluster_column(&mut aligned, origin);
         }
-        engine.append_idempotent_batch(&aligned, batch_id, &payload_sha256)
+        Ok((engine, aligned))
     }
 
     /// Append log columns to the reserved `log` namespace, returning the last

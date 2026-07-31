@@ -19,6 +19,7 @@ pub const ENTITY_LINK_NAMESPACE: &str = "telemetry.entity_link.v1";
 pub const METRIC_ROLLUP_NAMESPACE: &str = "telemetry.metric_rollup.v1";
 pub const ENTITY_STATE_NAMESPACE: &str = "telemetry.entity_state.v1";
 pub const ALERT_STATE_NAMESPACE: &str = "telemetry.alert_state.v1";
+pub const BATCH_INTENT_NAMESPACE: &str = "telemetry.batch_intent.v1";
 pub const BATCH_NAMESPACE: &str = "telemetry.batch.v1";
 
 const CATALOG_JSON: &str = include_str!("../../telemetry_catalog.v1.json");
@@ -360,6 +361,7 @@ pub fn approved_namespace_schemas() -> Vec<(&'static str, Schema)> {
         (METRIC_ROLLUP_NAMESPACE, derived_schema("window")),
         (ENTITY_STATE_NAMESPACE, derived_schema("state_kind")),
         (ALERT_STATE_NAMESPACE, derived_schema("detector")),
+        (BATCH_INTENT_NAMESPACE, batch_schema()),
         (BATCH_NAMESPACE, batch_schema()),
     ]
 }

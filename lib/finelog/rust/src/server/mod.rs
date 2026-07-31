@@ -3,11 +3,12 @@
 //! [`app::build_app`] registers BOTH services on one connect `Router` (so
 //! `ctx.spec()`/`ctx.path()` are populated for the interceptors), wraps it in a
 //! `ConnectRpcService` with raised 64 MB limits + zstd/gzip + the SlowRpc /
-//! Concurrency interceptors, mounts `/health`, the SPA, and (optionally) the
-//! `--debug-admin` routes, layers the legacy-path and forwarded-prefix transport
-//! rewrites, and sets the connect service as the fallback. The connect service stays the FALLBACK
-//! so RPC POSTs reach it while `/health`, `/debug/*`, `/static`, and the SPA
-//! GET routes take precedence.
+//! Concurrency interceptors, mounts `/health`, the SPA, REST telemetry, and
+//! (optionally) the `--debug-admin` routes, layers the legacy-path and
+//! forwarded-prefix transport rewrites, and sets the connect service as the
+//! fallback. The connect service stays the FALLBACK so RPC POSTs reach it while
+//! `/health`, `/v1/*`, `/debug/*`, `/static`, and the SPA GET routes take
+//! precedence.
 
 pub mod app;
 pub mod auth;
@@ -20,6 +21,7 @@ pub mod legacy_path;
 pub mod log_service;
 pub mod spa;
 pub mod stats_service;
+pub mod telemetry_ingest;
 #[cfg(test)]
 pub mod test_support;
 
