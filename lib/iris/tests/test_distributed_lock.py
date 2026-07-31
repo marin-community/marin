@@ -63,6 +63,7 @@ def test_stale_lock_can_be_taken_over(tmp_path):
         f.write(json.dumps({"worker_id": stale_lease.worker_id, "timestamp": stale_lease.timestamp}))
 
     lock = create_lock(lock_path, worker_id="new-worker")
+    assert lock.active_holder_id() is None
     assert lock.try_acquire()
     lock.release()
 
@@ -121,10 +122,13 @@ def test_has_active_holder(tmp_path):
     lock = create_lock(lock_path, worker_id="holder-a")
 
     assert not lock.has_active_holder()
+    assert lock.active_holder_id() is None
     assert lock.try_acquire()
     assert lock.has_active_holder()
+    assert lock.active_holder_id() == "holder-a"
     lock.release()
     assert not lock.has_active_holder()
+    assert lock.active_holder_id() is None
 
 
 def test_same_holder_can_reacquire(tmp_path):
