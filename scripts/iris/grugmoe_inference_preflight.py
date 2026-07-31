@@ -42,6 +42,7 @@ from experiments.grug.moe.inference_preflight import (
     CASES,
     DUMMY_SEED,
     FROZEN_FIXTURE_PATH,
+    KV_BLOCK_SIZE,
     SNOWBALL_EXPORT,
     VLLM_SHA,
     ModelCase,
@@ -79,6 +80,8 @@ LOCAL_DP_SIZE = 4
 PINNED_PROBE_DP_RANK = 0
 SERVER_TIMEOUT_SECONDS = 3600
 REQUEST_TIMEOUT_SECONDS = 3600
+PREFIX_METRIC_TIMEOUT_SECONDS = 30
+PREFIX_METRIC_POLL_SECONDS = 0.25
 ACCEPTANCE_MINIMUM_SECONDS = 600
 ACCEPTANCE_MINIMUM_GENERATED_TOKENS = 250_000
 ACCEPTANCE_STABLE_MINUTES = 10
@@ -565,6 +568,41 @@ def _metrics(base_url: str) -> tuple[str, dict[str, float]]:
     return response.text, parse_prometheus(response.text)
 
 
+def _wait_for_metric_delta(
+    base_url: str,
+    baseline: dict[str, float],
+    metric: str,
+    *,
+    minimum_delta: float,
+    timeout_seconds: float = PREFIX_METRIC_TIMEOUT_SECONDS,
+    poll_seconds: float = PREFIX_METRIC_POLL_SECONDS,
+) -> tuple[str, dict[str, float], dict[str, Any]]:
+    """Wait until Prometheus has exported the stats for one completed request."""
+    started = time.monotonic()
+    deadline = started + timeout_seconds
+    attempts = 0
+    while True:
+        attempts += 1
+        text, samples = _metrics(base_url)
+        observed_delta = metric_delta(baseline, samples, metric)
+        now = time.monotonic()
+        synchronized = observed_delta >= minimum_delta
+        if synchronized or now >= deadline:
+            return (
+                text,
+                samples,
+                {
+                    "metric": metric,
+                    "minimum_delta": minimum_delta,
+                    "observed_delta": observed_delta,
+                    "synchronized": synchronized,
+                    "poll_attempts": attempts,
+                    "elapsed_seconds": now - started,
+                },
+            )
+        time.sleep(min(poll_seconds, deadline - now))
+
+
 def _completion(
     base_url: str,
     model: str,
@@ -700,8 +738,9 @@ def run_correctness(
     artifact_dir: Path,
 ) -> dict[str, Any]:
     candidates = boundary_requests(workload)
-    before_text, before = _metrics(base_url)
+    before_text, overall_before = _metrics(base_url)
     before_path = _record_metrics(before_text, artifact_dir=artifact_dir, stem="metrics-before")
+    probe_baseline = overall_before
     boundary_results: list[dict[str, Any]] = []
     histogram = [0] * num_experts
     for request in candidates:
@@ -715,70 +754,120 @@ def run_correctness(
             prompt_token_ids,
             data_parallel_rank=PINNED_PROBE_DP_RANK,
         )
-        after_cold_text, after_cold = _metrics(base_url)
+        cold_evidence = _record_completion(cold, artifact_dir=artifact_dir, stem=f"{request['request_id']}-cold")
+        after_cold_text, after_cold, cold_metric_export = _wait_for_metric_delta(
+            base_url,
+            probe_baseline,
+            "vllm:prefix_cache_queries",
+            minimum_delta=len(prompt_token_ids),
+        )
+        after_cold_path = _record_metrics(
+            after_cold_text,
+            artifact_dir=artifact_dir,
+            stem=f"{request['request_id']}-metrics-after-cold",
+        )
         reused = _completion(
             base_url,
             model,
             prompt_token_ids,
             data_parallel_rank=PINNED_PROBE_DP_RANK,
         )
-        after_reuse_text, after_reuse = _metrics(base_url)
+        reused_evidence = _record_completion(
+            reused,
+            artifact_dir=artifact_dir,
+            stem=f"{request['request_id']}-reused",
+        )
+        after_reuse_text, after_reuse, reuse_metric_export = _wait_for_metric_delta(
+            base_url,
+            after_cold,
+            "vllm:prefix_cache_queries",
+            minimum_delta=len(prompt_token_ids),
+        )
+        after_reuse_path = _record_metrics(
+            after_reuse_text,
+            artifact_dir=artifact_dir,
+            stem=f"{request['request_id']}-metrics-after-reuse",
+        )
         mutated = _completion(
             base_url,
             model,
             mutated_prompt_token_ids,
             data_parallel_rank=PINNED_PROBE_DP_RANK,
         )
-        after_mutated_text, after_mutated = _metrics(base_url)
-        _assert_same_reuse(cold, reused)
+        mutated_evidence = _record_completion(
+            mutated,
+            artifact_dir=artifact_dir,
+            stem=f"{request['request_id']}-mutated",
+        )
+        after_mutated_text, after_mutated, mutation_metric_export = _wait_for_metric_delta(
+            base_url,
+            after_reuse,
+            "vllm:prefix_cache_queries",
+            minimum_delta=len(mutated_prompt_token_ids),
+        )
+        after_mutated_path = _record_metrics(
+            after_mutated_text,
+            artifact_dir=artifact_dir,
+            stem=f"{request['request_id']}-metrics-after-mutated",
+        )
         reuse_hits = metric_delta(after_cold, after_reuse, "vllm:prefix_cache_hits")
         mutation_hits = metric_delta(after_reuse, after_mutated, "vllm:prefix_cache_hits")
         reuse_cached_tokens = _cached_prompt_tokens(reused)
         mutated_cached_tokens = _cached_prompt_tokens(mutated)
-        if reuse_hits <= 0:
-            raise AssertionError(f"identical request did not produce prefix cache hits: {reuse_hits}")
-        if mutation_hits != 0:
-            raise AssertionError(f"mutated request unexpectedly reused prefix cache blocks: {mutation_hits}")
-        if reuse_cached_tokens <= 0:
-            raise AssertionError(f"identical request reported no cached prompt tokens: {reuse_cached_tokens}")
-        if mutated_cached_tokens != 0:
-            raise AssertionError(f"mutated request reported cached prompt tokens: {mutated_cached_tokens}")
+        expected_cached_tokens = len(prompt_token_ids) // KV_BLOCK_SIZE * KV_BLOCK_SIZE
         routes = decode_routed_experts(_choice(reused)["routed_experts"])
         route_histogram = routing_histogram(routes, num_experts=num_experts)
         histogram = [left + right for left, right in zip(histogram, route_histogram, strict=True)]
         request_id = request["request_id"]
-        boundary_results.append(
-            {
-                "request_id": request_id,
-                "prefix_token_count": request["prefix_token_count"],
-                "data_parallel_rank": PINNED_PROBE_DP_RANK,
-                "cold": _record_completion(cold, artifact_dir=artifact_dir, stem=f"{request_id}-cold"),
-                "reused": _record_completion(reused, artifact_dir=artifact_dir, stem=f"{request_id}-reused"),
-                "mutated": _record_completion(mutated, artifact_dir=artifact_dir, stem=f"{request_id}-mutated"),
-                "reuse_prefix_hits": reuse_hits,
-                "mutated_prefix_hits": mutation_hits,
-                "reuse_cached_prompt_tokens": reuse_cached_tokens,
-                "mutated_cached_prompt_tokens": mutated_cached_tokens,
-                "route_histogram": route_histogram,
-                "metrics": {
-                    "after_cold": _record_metrics(
-                        after_cold_text,
-                        artifact_dir=artifact_dir,
-                        stem=f"{request_id}-metrics-after-cold",
-                    ),
-                    "after_reuse": _record_metrics(
-                        after_reuse_text,
-                        artifact_dir=artifact_dir,
-                        stem=f"{request_id}-metrics-after-reuse",
-                    ),
-                    "after_mutated": _record_metrics(
-                        after_mutated_text,
-                        artifact_dir=artifact_dir,
-                        stem=f"{request_id}-metrics-after-mutated",
-                    ),
-                },
-            }
-        )
+        boundary_result = {
+            "request_id": request_id,
+            "prefix_token_count": request["prefix_token_count"],
+            "prompt_token_count": len(prompt_token_ids),
+            "data_parallel_rank": PINNED_PROBE_DP_RANK,
+            "cold": cold_evidence,
+            "reused": reused_evidence,
+            "mutated": mutated_evidence,
+            "reuse_prefix_hits": reuse_hits,
+            "mutated_prefix_hits": mutation_hits,
+            "expected_cached_prompt_tokens": expected_cached_tokens,
+            "reuse_cached_prompt_tokens": reuse_cached_tokens,
+            "mutated_cached_prompt_tokens": mutated_cached_tokens,
+            "route_histogram": route_histogram,
+            "metrics": {
+                "after_cold": after_cold_path,
+                "after_reuse": after_reuse_path,
+                "after_mutated": after_mutated_path,
+            },
+            "metric_export": {
+                "cold": cold_metric_export,
+                "reused": reuse_metric_export,
+                "mutated": mutation_metric_export,
+            },
+        }
+        boundary_results.append(boundary_result)
+        diagnostic_path = artifact_dir / "correctness" / f"{request_id}-checks.json"
+        diagnostic_path.write_text(json.dumps(boundary_result, indent=2, sort_keys=True) + "\n")
+
+        _assert_same_reuse(cold, reused)
+        for phase, export in boundary_result["metric_export"].items():
+            if not export["synchronized"]:
+                raise AssertionError(
+                    f"{phase} request metrics did not synchronize within {PREFIX_METRIC_TIMEOUT_SECONDS}s: {export}"
+                )
+        if reuse_hits != expected_cached_tokens:
+            raise AssertionError(
+                f"identical request produced {reuse_hits} prefix-cache hit tokens, expected {expected_cached_tokens}"
+            )
+        if mutation_hits != 0:
+            raise AssertionError(f"mutated request unexpectedly reused prefix cache blocks: {mutation_hits}")
+        if reuse_cached_tokens != expected_cached_tokens:
+            raise AssertionError(
+                f"identical request reported {reuse_cached_tokens} cached prompt tokens, "
+                f"expected {expected_cached_tokens}"
+            )
+        if mutated_cached_tokens != 0:
+            raise AssertionError(f"mutated request reported cached prompt tokens: {mutated_cached_tokens}")
+        probe_baseline = after_mutated
     after_text, after = _metrics(base_url)
     after_path = _record_metrics(after_text, artifact_dir=artifact_dir, stem="metrics-after")
     ep_rank_histogram = expert_parallel_rank_histogram(histogram, ep_size=ep_size)
@@ -805,7 +894,7 @@ def run_correctness(
         "metrics_before": before_path,
         "metrics_after": after_path,
         "metric_deltas": {
-            metric: metric_delta(before, after, metric)
+            metric: metric_delta(overall_before, after, metric)
             for metric in (
                 "vllm:prefix_cache_queries",
                 "vllm:prefix_cache_hits",

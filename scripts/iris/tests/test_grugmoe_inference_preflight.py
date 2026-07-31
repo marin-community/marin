@@ -251,6 +251,31 @@ def test_completion_can_pin_a_data_parallel_rank(monkeypatch: pytest.MonkeyPatch
     assert observed["headers"] == {"X-data-parallel-rank": "2"}
 
 
+def test_prefix_metric_wait_observes_delayed_request_stats(monkeypatch: pytest.MonkeyPatch) -> None:
+    snapshots = iter(
+        [
+            ("first", {"vllm:prefix_cache_queries_total": 10.0}),
+            ("second", {"vllm:prefix_cache_queries_total": 28.0}),
+        ]
+    )
+    monkeypatch.setattr(grug_preflight, "_metrics", lambda _: next(snapshots))
+
+    text, metrics, evidence = grug_preflight._wait_for_metric_delta(
+        "http://server",
+        {"vllm:prefix_cache_queries_total": 10.0},
+        "vllm:prefix_cache_queries",
+        minimum_delta=18,
+        timeout_seconds=1,
+        poll_seconds=0,
+    )
+
+    assert text == "second"
+    assert metrics["vllm:prefix_cache_queries_total"] == 28
+    assert evidence["synchronized"]
+    assert evidence["observed_delta"] == 18
+    assert evidence["poll_attempts"] == 2
+
+
 def test_completion_evidence_keeps_routes_out_of_compact_result(tmp_path) -> None:
     routes = np.array([[[1, 3, 5, 7]]], dtype=np.uint8)
     encoded = io.BytesIO()
