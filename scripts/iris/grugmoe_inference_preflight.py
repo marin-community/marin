@@ -18,6 +18,7 @@ import argparse
 import concurrent.futures
 import dataclasses
 import hashlib
+import itertools
 import json
 import math
 import os
@@ -85,6 +86,7 @@ PREFIX_METRIC_POLL_SECONDS = 0.25
 ACCEPTANCE_MINIMUM_SECONDS = 600
 ACCEPTANCE_MINIMUM_GENERATED_TOKENS = 250_000
 ACCEPTANCE_STABLE_MINUTES = 10
+ACCEPTANCE_COUNTER_SAMPLE_SECONDS = 60.0
 REMOTE_ROOT = "/tmp/grugmoe-inference-preflight"
 LOG_TAIL_LINES = 400
 GLOO_CONTROL_INTERFACE = "enP6p3s0np0"
@@ -952,14 +954,26 @@ def _run_load_arm(
     minimum_seconds: float,
     minimum_generated_tokens: int,
     concurrency: int,
+    counter_sample_seconds: float = ACCEPTANCE_COUNTER_SAMPLE_SECONDS,
 ) -> dict[str, Any]:
+    if counter_sample_seconds <= 0:
+        raise ValueError("counter sample interval must be positive")
+
+    _, baseline_metrics = _metrics(base_url)
     started = time.monotonic()
     generated = 0
     request_count = 0
     latencies: list[float] = []
-    completions: list[tuple[float, int, int, str]] = []
+    cohort_tokens: dict[str, int] = {}
     workload_requests = workload["requests"]
     covered_request_ids: set[str] = set()
+    generation_counter_samples = [
+        {
+            "elapsed_seconds": 0.0,
+            "generation_tokens": metric_delta({}, baseline_metrics, "vllm:generation_tokens"),
+        }
+    ]
+    next_counter_sample_at = started + counter_sample_seconds
 
     def one(request: dict[str, Any]) -> tuple[float, dict[str, Any], int, str]:
         prompt = materialize_prompt(workload, request)
@@ -989,13 +1003,40 @@ def _run_load_arm(
         request_count += 1
         covered_request_ids.add(request_id)
         latencies.append(latency)
-        completions.append((time.monotonic() - started, completion_tokens, prefix_tokens, request_id))
+        cohort = str(prefix_tokens)
+        cohort_tokens[cohort] = cohort_tokens.get(cohort, 0) + completion_tokens
+
+    def sample_generation_counter() -> None:
+        nonlocal next_counter_sample_at
+        while time.monotonic() >= next_counter_sample_at:
+            _, samples = _metrics(base_url)
+            generation_counter_samples.append(
+                {
+                    "elapsed_seconds": time.monotonic() - started,
+                    "generation_tokens": metric_delta({}, samples, "vllm:generation_tokens"),
+                }
+            )
+            next_counter_sample_at += counter_sample_seconds
+
+    def drain(
+        futures: list[concurrent.futures.Future[tuple[float, dict[str, Any], int, str]]],
+    ) -> None:
+        pending = set(futures)
+        while pending:
+            timeout = max(0.0, next_counter_sample_at - time.monotonic())
+            done, pending = concurrent.futures.wait(
+                pending,
+                timeout=timeout,
+                return_when=concurrent.futures.FIRST_COMPLETED,
+            )
+            for future in done:
+                record(future)
+            sample_generation_counter()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
         # The first wave is a literal traversal of all 144 frozen branches.
         coverage_futures = [executor.submit(one, request) for request in workload_requests]
-        for future in concurrent.futures.as_completed(coverage_futures):
-            record(future)
+        drain(coverage_futures)
 
         request_index = 0
         while (
@@ -1008,22 +1049,32 @@ def _run_load_arm(
             ]
             request_index += len(batch)
             futures = [executor.submit(one, request) for request in batch]
-            for future in concurrent.futures.as_completed(futures):
-                record(future)
+            drain(futures)
 
     elapsed = time.monotonic() - started
-    complete_minutes = int(elapsed // 60)
-    minute_tokens: list[int] = [0] * (complete_minutes + 1)
-    cohort_tokens: dict[str, int] = {}
-    for completed_at, completion_tokens, prefix_tokens, _ in completions:
-        minute_tokens[min(int(completed_at // 60), len(minute_tokens) - 1)] += completion_tokens
-        cohort = str(prefix_tokens)
-        cohort_tokens[cohort] = cohort_tokens.get(cohort, 0) + completion_tokens
-    stable_minute_tokens = minute_tokens[max(0, complete_minutes - ACCEPTANCE_STABLE_MINUTES) : complete_minutes]
+    counter_intervals: list[dict[str, float | int]] = []
+    for before, after in itertools.pairwise(generation_counter_samples):
+        interval_seconds = float(after["elapsed_seconds"]) - float(before["elapsed_seconds"])
+        interval_tokens = round(float(after["generation_tokens"]) - float(before["generation_tokens"]))
+        if interval_seconds <= 0:
+            raise AssertionError("generation counter sample times must increase")
+        if interval_tokens < 0:
+            raise AssertionError("generation counter reset during a load arm")
+        counter_intervals.append(
+            {
+                "start_elapsed_seconds": float(before["elapsed_seconds"]),
+                "end_elapsed_seconds": float(after["elapsed_seconds"]),
+                "elapsed_seconds": interval_seconds,
+                "generated_tokens": interval_tokens,
+            }
+        )
+    stable_intervals = counter_intervals[-ACCEPTANCE_STABLE_MINUTES:]
+    stable_minute_tokens = [int(interval["generated_tokens"]) for interval in stable_intervals]
     stable_minutes_passed = len(stable_minute_tokens) == ACCEPTANCE_STABLE_MINUTES and all(
         tokens > 0 for tokens in stable_minute_tokens
     )
-    stable_mean = sum(stable_minute_tokens) / (60 * len(stable_minute_tokens)) if stable_minute_tokens else 0.0
+    stable_window_seconds = sum(float(interval["elapsed_seconds"]) for interval in stable_intervals)
+    stable_mean = sum(stable_minute_tokens) / stable_window_seconds if stable_window_seconds else 0.0
     coverage_passed = len(covered_request_ids) == len(workload_requests)
     return {
         "passed": (
@@ -1048,8 +1099,15 @@ def _run_load_arm(
             "full_mean": generated / elapsed,
             "last_ten_stable_minute_mean": stable_mean,
         },
-        "full_minute_generated_tokens": minute_tokens[:complete_minutes],
+        "full_minute_generated_tokens": [int(interval["generated_tokens"]) for interval in counter_intervals],
         "last_ten_stable_minute_generated_tokens": stable_minute_tokens,
+        "generation_counter": {
+            "metric": "vllm:generation_tokens",
+            "sample_interval_seconds": counter_sample_seconds,
+            "samples": generation_counter_samples,
+            "full_intervals": counter_intervals,
+            "stable_window_seconds": stable_window_seconds,
+        },
         "generated_tokens_by_prefix_length": cohort_tokens,
         "latency_seconds": _latency_summary(latencies),
     }

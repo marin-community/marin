@@ -8,6 +8,7 @@ import dataclasses
 import io
 import json
 import subprocess
+import time
 from pathlib import Path
 
 import numpy as np
@@ -544,3 +545,57 @@ def test_acceptance_components_require_ten_minutes_tokens_and_all_branches() -> 
     assert not failed["duration"]["passed"]
     assert not failed["token_count"]["passed"]
     assert not failed["repeatability"]["passed"]
+
+
+def test_load_arm_samples_live_counter_before_slow_request_completes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A request spanning minute boundaries must not create false zero buckets."""
+    sample_seconds = 0.01
+    metric_started = time.monotonic()
+
+    def metrics(_: str) -> tuple[str, dict[str, float]]:
+        # Scale continuously generated tokens so every 10 ms test interval is
+        # analogous to one live minute in the acceptance run.
+        generated = int((time.monotonic() - metric_started) * 1_000_000)
+        return "", {"vllm:generation_tokens_total": float(generated)}
+
+    def completion(*_: object, **__: object) -> dict[str, object]:
+        time.sleep(0.025)
+        return {"usage": {"completion_tokens": 1}}
+
+    monkeypatch.setattr(grug_preflight, "_metrics", metrics)
+    monkeypatch.setattr(grug_preflight, "_completion", completion)
+    workload = {
+        "roots": [{"root": 0, "prefix_token_ids": [1]}],
+        "requests": [
+            {
+                "request_id": "slow",
+                "root": 0,
+                "append_token_ids": [],
+                "prefix_token_count": 1,
+                "max_tokens": 1,
+                "final_token_count": 2,
+            }
+        ],
+    }
+
+    arm = grug_preflight._run_load_arm(
+        "http://server",
+        "model",
+        workload,
+        max_model_len=2,
+        minimum_seconds=0.12,
+        minimum_generated_tokens=1,
+        concurrency=1,
+        counter_sample_seconds=sample_seconds,
+    )
+
+    assert arm["latency_seconds"]["min"] > sample_seconds
+    assert arm["stable_full_minutes"] == 10
+    assert arm["stable_minutes_passed"]
+    assert all(tokens > 0 for tokens in arm["last_ten_stable_minute_generated_tokens"])
+    assert arm["generation_counter"]["stable_window_seconds"] == pytest.approx(
+        10 * sample_seconds,
+        abs=sample_seconds,
+    )
