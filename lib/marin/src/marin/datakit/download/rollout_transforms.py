@@ -58,11 +58,9 @@ def render_role_message(msg: dict) -> str:
     return f"<{role}>\n{content}\n</{role}>"
 
 
-# Outcome tags prepended to agent-rollout transcripts so the model learns to
-# distinguish successful attempts from failed ones. Shared across the agent
-# trajectory sources (coderforge, davinci-dev env-native, swe-rebench-openhands),
-# which derive the flag differently (reward threshold, bool, resolved count) but
-# render the same tag text.
+# Outcome tags prepended to agent-rollout transcripts so the model can
+# distinguish successful, failed, and unverified attempts. Agent trajectory
+# sources derive the outcome differently but render the same tag text.
 TRAJECTORY_SOLVED_TAG = "This trajectory solved the task successfully."
 TRAJECTORY_FAILED_TAG = "This trajectory failed to solve the task."
 TRAJECTORY_UNVERIFIED_TAG = "This trajectory ended before the task was verified."
