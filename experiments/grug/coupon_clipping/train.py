@@ -621,11 +621,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     }
                     if router_metrics:
                         levanter.tracker.log(router_metrics, step=step)
-                    if "train/cross_entropy_loss" in metrics:
-                        levanter.tracker.log(
-                            {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
-                            step=step,
-                        )
+                    scalar_train_metrics = {
+                        key: metrics[key]
+                        for key in ("train/cross_entropy_loss", "train/valid_target_fraction")
+                        if key in metrics
+                    }
+                    if scalar_train_metrics:
+                        levanter.tracker.log(scalar_train_metrics, step=step)
 
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)

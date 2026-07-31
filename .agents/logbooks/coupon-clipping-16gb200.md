@@ -80,3 +80,13 @@ The pyramid and L1-to-L48 paths are implemented and passing their focused tests.
 - Result: 25 passed and 1 skipped in the wider Grug contract run. One unrelated base-Grug CPU test failed on pre-existing label-concatenation sharding; the 12 coupon/depth tests pass. Artifact construction passes for all C0/P1/P2/D1 and canary entry points.
 - Interpretation: parameter, scan, optimizer-bucket, transition-state, data-offset, and artifact dependency contracts are locally enforced. On-hardware memory, compile time, throughput, router stability, and checkpoint restore remain unmeasured.
 - Next action: commit and push the reproducible snapshot, submit the bounded canary wave, then launch C0, D1, P1, and P2 in parallel if the gate passes.
+
+### 2026-07-31 15:53 - CC16-002 GB200 canary admission
+
+- Hypothesis: the FSDP-only 16-GPU topology can run the local `sonic_cute` MoE and preserve finite loss, gradients, and router occupancy across the shallow and full-depth paths.
+- Commit Hash: `c965e9fb47`.
+- Command: seven Iris coordinators launched the low/center/high C0, P1, P2, L1, and L1-to-L48 growth pilots in parallel; exact job IDs and recovery commands are in `scratch/20260731T153724Z_monitoring_state.json`.
+- Config: each trainer uses four replicas of four GB200 GPUs. Pilots retain the production batch, optimizer, and data horizons while stopping after 128 updates; the growth pilot stops its source at update 32 and resumes its L48 target through update 48.
+- Result: the 4-GPU SM100/QuACK smoke passed in 1m41s. The growth source finished update 31 at loss 10.0821, gradient norm 0.6325, zero capacity overflow, and 789,388 tok/s. The independent L1 probe reached update 95 at loss 6.3436, gradient norm 0.2316, zero overflow, and 788,994 tok/s. Its L48 growth target was admitted at 15:53 UTC. Full-depth pilots were still compiling without Iris task failure or preemption.
+- Interpretation: the shallow platform and source checkpoint are operational. W&B may label a silent compiler interval as crashed while the underlying Iris gang remains healthy, so admission decisions use Iris state plus metric history rather than W&B state alone. A missing tracker-forwarding path for `train/valid_target_fraction` was found; the metric was already computed in-JIT, and the logging-only fix is being pushed before core launch.
+- Next action: require a finite post-growth L48 update and finite full-depth pilot updates, select the LR, then admit the four core arms and start the four-hour comparison clock.
