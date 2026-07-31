@@ -41,6 +41,7 @@ from zephyr.dataset import Dataset, format_shard_path
 from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file
 
+from marin.datakit.source_key import DatakitArtifactPath
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize.attributes import TokenizedAttrData
@@ -59,7 +60,7 @@ class LevanterSplitStats(BaseModel):
         total_tokens: Total tokens across all documents (``input_ids`` field count).
     """
 
-    path: str
+    path: DatakitArtifactPath
     total_elements: int
     total_tokens: int
 
@@ -81,9 +82,9 @@ class LevanterStoreData(BaseModel):
     """
 
     version: str = "v1"
-    cache_path: str
+    cache_path: DatakitArtifactPath
     splits: dict[str, LevanterSplitStats]
-    source_dirs: list[dict[str, str]]
+    source_dirs: list[dict[str, DatakitArtifactPath]]
     tokenizer: str
 
 

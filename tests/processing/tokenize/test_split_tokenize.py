@@ -132,9 +132,10 @@ def _write_normalized_fixture(tmp_path, texts: list[str]) -> NormalizedData:
 
 
 @pytest.mark.slow
-def test_split_pipeline_matches_legacy_tokenize(tmp_path):
+def test_split_pipeline_matches_legacy_tokenize(tmp_path, monkeypatch):
     """Stage A → Stage B should produce a Levanter cache with the same token count
     as the legacy raw-input ``tokenize()`` path on the same texts."""
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     texts = [
         "The quick brown fox jumps over the lazy dog.",
         "Pack my box with five dozen liquor jugs.",
@@ -153,6 +154,7 @@ def test_split_pipeline_matches_legacy_tokenize(tmp_path):
     )
     tokenized: TokenizedAttrData = tokenize_attributes(attr_config)
 
+    assert tokenized.source_keys["train"] == "normalized/outputs/main"
     train_shards = tokenized.shard_paths("train")
     assert len(train_shards) == 1, f"expected 1 attribute shard, got {len(train_shards)}: {train_shards}"
     attr_table = pq.read_table(train_shards[0])
