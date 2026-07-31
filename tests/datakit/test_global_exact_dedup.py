@@ -79,26 +79,15 @@ def test_global_exact_deduplicate_writes_sparse_copartitioned_attributes(tmp_pat
     a_shards = _attribute_shards(result, source_a)
     b_shards = _attribute_shards(result, source_b)
     c_shards = _attribute_shards(result, source_c)
-    assert [path.name for path in a_shards] == ["part-00000-of-00001.parquet"]
-    assert [path.name for path in b_shards] == [
-        "part-00000-of-00002.parquet",
-        "part-00001-of-00002.parquet",
-    ]
-    assert [path.name for path in c_shards] == [
-        "part-00000-of-00002.parquet",
-        "part-00001-of-00002.parquet",
-    ]
+    assert a_shards == []
+    assert [path.name for path in b_shards] == ["part-00001-of-00002.parquet"]
+    assert c_shards == []
 
-    assert pq.read_table(a_shards[0]).to_pylist() == []
-    assert pq.read_table(b_shards[0]).to_pylist() == []
-    assert pq.read_table(b_shards[1]).to_pylist() == [
+    assert pq.read_table(b_shards[0]).to_pylist() == [
         {"id": "a-only", "attributes": {"dup_doc": True}},
         {"id": "shared", "attributes": {"dup_doc": True}},
     ]
-    assert pq.read_table(c_shards[0]).to_pylist() == []
-    assert pq.read_table(c_shards[1]).to_pylist() == []
-    for path in [*a_shards, *b_shards, *c_shards]:
-        assert pq.read_schema(path).names == ["id", "attributes"]
+    assert pq.read_schema(b_shards[0]).names == ["id", "attributes"]
 
     assert result.sources["input-a/outputs/main"].attr_dir.endswith("/outputs/source_000")
     assert result.sources["input-b/outputs/main"].attr_dir.endswith("/outputs/source_001")
@@ -125,8 +114,8 @@ def test_global_exact_deduplicate_uses_shard_order_within_source(tmp_path: Path,
     )
 
     shards = _attribute_shards(result, source)
-    assert pq.read_table(shards[0]).to_pylist() == []
-    assert pq.read_table(shards[1]).to_pylist() == [
+    assert [path.name for path in shards] == ["part-00001-of-00002.parquet"]
+    assert pq.read_table(shards[0]).to_pylist() == [
         {"id": "shared", "attributes": {"dup_doc": True}},
     ]
 

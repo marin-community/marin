@@ -95,22 +95,24 @@ def _write_shard(dirs: dict[str, str], basename: str, docs: list[_Doc]) -> None:
             }
         ),
     )
-    _write_parquet(
-        f"{dirs['exact_dedup']}/{basename}",
-        pa.Table.from_pylist(
-            [{"id": doc_id, "attributes": {"dup_doc": True}} for doc_id in ids if doc_id in EXACT_DUPLICATES],
-            schema=pa.schema(
-                [
-                    pa.field("id", pa.string(), nullable=False),
-                    pa.field(
-                        "attributes",
-                        pa.struct([pa.field("dup_doc", pa.bool_(), nullable=False)]),
-                        nullable=False,
-                    ),
-                ]
+    exact_duplicates = [doc_id for doc_id in ids if doc_id in EXACT_DUPLICATES]
+    if exact_duplicates:
+        _write_parquet(
+            f"{dirs['exact_dedup']}/{basename}",
+            pa.Table.from_pylist(
+                [{"id": doc_id, "attributes": {"dup_doc": True}} for doc_id in exact_duplicates],
+                schema=pa.schema(
+                    [
+                        pa.field("id", pa.string(), nullable=False),
+                        pa.field(
+                            "attributes",
+                            pa.struct([pa.field("dup_doc", pa.bool_(), nullable=False)]),
+                            nullable=False,
+                        ),
+                    ]
+                ),
             ),
-        ),
-    )
+        )
     # Dedup is sparse: only non-singleton docs (canonical True/False) appear.
     marked = [(d[0], d[4]) for d in docs if d[4] is not None]
     if marked:

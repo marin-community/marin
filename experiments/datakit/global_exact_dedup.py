@@ -5,7 +5,7 @@
 
 The Zephyr pipeline shuffles record IDs across all sources. It keeps the first
 source, shard, and row occurrence. It writes sparse duplicate markers back to
-one attribute file for each source shard.
+the source shards that contain duplicates.
 
 Output rows have this schema::
 
@@ -16,8 +16,8 @@ Output rows have this schema::
       },
     }
 
-Each output attribute directory has the same shard names as its normalized
-source. Empty marker files retain co-partitioning for shards without duplicates.
+Output files keep the matching normalized shard names. A missing file means
+that its source shard has no exact duplicates.
 """
 
 from collections.abc import Callable, Iterator
@@ -39,7 +39,6 @@ from zephyr.writers import write_parquet_file
 
 COUNTER_PREFIX = "global_exact_dedup"
 _SHARED_ENTRIES_KEY = "global_exact_dedup_entries"
-_SHARD_MARKER_ROW_INDEX = -1
 GLOBAL_EXACT_DEDUP_DATA_VERSION = 1
 _ATTR_SCHEMA = pa.schema(
     [
@@ -104,13 +103,6 @@ def _build_shard_index(
 def _read_record_ids(entry: CopartitionedShard) -> Iterator[_ExactRecord]:
     input_path = entry.input_path
     row_index = 0
-    # Force the second group to write a schema-only attribute file when a
-    # source shard has no duplicate rows.
-    yield {
-        "id": "",
-        "file_idx": entry.file_idx,
-        "row_index": _SHARD_MARKER_ROW_INDEX,
-    }
     with StoragePath(input_path).open("rb") as input_file:
         parquet = pq.ParquetFile(input_file)
         if "id" not in parquet.schema_arrow.names:
@@ -129,12 +121,8 @@ def _read_record_ids(entry: CopartitionedShard) -> Iterator[_ExactRecord]:
     counters.pipeline.update_counter(f"{COUNTER_PREFIX}/records_in", row_index)
 
 
-def _select_duplicates(_key: tuple[str, str | int], records: Iterator[_ExactRecord]) -> Iterator[_ExactRecord]:
-    canonical = next(records)
-    if canonical["row_index"] == _SHARD_MARKER_ROW_INDEX:
-        yield canonical
-        return
-
+def _select_duplicates(_key: str, records: Iterator[_ExactRecord]) -> Iterator[_ExactRecord]:
+    next(records)
     yield from records
 
 
@@ -147,8 +135,6 @@ def _make_per_shard_writer() -> Callable[[int, Iterator[_ExactRecord]], dict[str
         def duplicate_rows() -> Iterator[dict[str, str | dict[str, bool]]]:
             nonlocal duplicate_records
             for record in records:
-                if record["row_index"] == _SHARD_MARKER_ROW_INDEX:
-                    continue
                 duplicate_records += 1
                 yield {"id": record["id"], "attributes": {"dup_doc": True}}
 
@@ -189,17 +175,14 @@ def global_exact_deduplicate(
         Dataset.from_list(entries)
         .flat_map(_read_record_ids)
         .group_by(
-            key=lambda record: (
-                "shard" if record["row_index"] == _SHARD_MARKER_ROW_INDEX else "record",
-                record["file_idx"] if record["row_index"] == _SHARD_MARKER_ROW_INDEX else record["id"],
-            ),
+            key=lambda record: record["id"],
             reducer=_select_duplicates,
             sort_by=lambda record: (record["file_idx"], record["row_index"]),
         )
         .group_by(
             key=lambda record: record["file_idx"],
             reducer=_make_per_shard_writer(),
-            sort_by=lambda record: (record["row_index"] == _SHARD_MARKER_ROW_INDEX, record["id"]),
+            sort_by=lambda record: record["id"],
         )
     )
     outcome = context.execute(pipeline)

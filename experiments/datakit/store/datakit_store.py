@@ -182,7 +182,9 @@ def _load_dedup_canonical(path: str) -> dict[str, bool]:
 
 
 def _load_exact_duplicates(path: str) -> set[str]:
-    """Return IDs marked as exact duplicates in one sparse attribute shard."""
+    """Return sparse exact-duplicate IDs; a missing shard has no duplicates."""
+    if not StoragePath(path).exists():
+        return set()
     table = _read_columns(path, ["id", "attributes"])
     ids = table.column("id").to_pylist()
     duplicate = table.column("attributes").combine_chunks().field("dup_doc").to_pylist()

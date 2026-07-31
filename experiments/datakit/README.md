@@ -30,7 +30,9 @@ Existing v1 artifacts keep their absolute directories when they load.
 Global exact deduplication is one shared step. It selects one canonical record
 for each record ID, with source names as the canonical order. The step writes
 sparse co-partitioned attributes with `attributes.dup_doc=true` for the other
-records. It does not copy normalized text.
+records. Only source shards with duplicates get an attribute file; a missing
+file means that the source shard has no exact duplicates. The step does not copy
+normalized text.
 
 A source-set change gives a new global exact-dedup output and a new store
 identity. It does not change the identity of tokenization, embedding, quality,
