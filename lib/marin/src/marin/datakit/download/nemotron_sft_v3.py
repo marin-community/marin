@@ -23,7 +23,8 @@ from marin.datakit.download.rollout_transforms import load_parquet_batched, text
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
-TRANSFORM_VERSION = "v1"
+TRANSFORM_VERSION = "v2"
+MAX_CONSECUTIVE_IDENTICAL_LINES = 256
 
 
 @dataclass(frozen=True)
@@ -333,8 +334,33 @@ def _canonical_json(value: object) -> str:
 
 def _render_value(value: object) -> str:
     if isinstance(value, str):
-        return value
+        return value.replace("\b", r"\b")
     return _canonical_json(value)
+
+
+def _is_empty_value(value: object) -> bool:
+    if value is None or value == [] or value == {}:
+        return True
+    return isinstance(value, str) and not value.strip()
+
+
+def _has_pathological_line_repetition(text: str) -> bool:
+    previous = None
+    run_length = 0
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            previous = None
+            run_length = 0
+            continue
+        if line == previous:
+            run_length += 1
+        else:
+            previous = line
+            run_length = 1
+        if run_length > MAX_CONSECUTIVE_IDENTICAL_LINES:
+            return True
+    return False
 
 
 def _tool_calls(value: object) -> list[object]:
@@ -354,15 +380,17 @@ def _render_message(message: dict) -> str:
     attrs = []
     for key in ("name", "tool_call_id"):
         value = message.get(key)
-        if value is not None:
+        if not _is_empty_value(value):
             attrs.append(f'{key}="{escape(str(value), quote=True)}"')
     attr_text = f" {' '.join(attrs)}" if attrs else ""
     parts = [f"<{role}{attr_text}>"]
 
-    if "reasoning_content" in message:
-        parts.extend(["<reasoning>", _render_value(message["reasoning_content"]), "</reasoning>"])
-    if "content" in message:
-        parts.extend(["<content>", _render_value(message["content"]), "</content>"])
+    reasoning = message.get("reasoning_content")
+    if not _is_empty_value(reasoning):
+        parts.extend(["<reasoning>", _render_value(reasoning), "</reasoning>"])
+    content = message.get("content")
+    if not _is_empty_value(content):
+        parts.extend(["<content>", _render_value(content), "</content>"])
     if message.get("function_call") is not None:
         parts.extend(["<function_call>", _canonical_json(message["function_call"]), "</function_call>"])
     for tool_call in _tool_calls(message.get("tool_calls")):
@@ -385,13 +413,9 @@ def doc_to_text(row: dict) -> str:
     if not isinstance(messages, list):
         raise ValueError(f"messages must be a list, got {type(messages).__name__}")
 
-    metadata = {key: value for key, value in row.items() if key not in {"messages", "tools"}}
     parts = []
-    if metadata:
-        parts.append(f"<metadata>\n{_canonical_json(metadata)}\n</metadata>")
-
     tools = row.get("tools")
-    if tools not in (None, "", []):
+    if not _is_empty_value(tools):
         parts.append(f"<tools>\n{_canonical_json(tools)}\n</tools>")
 
     parts.extend(_render_message(message) for message in messages)
@@ -437,6 +461,9 @@ def row_to_doc(row: dict, *, family: str, partition_name: str) -> list[dict]:
             return []
 
     text = doc_to_text(row)
+    if _has_pathological_line_repetition(text):
+        counters.pipeline.update_counter(f"{counter}/dropped_pathological_repetition", 1)
+        return []
     counters.pipeline.update_counter(f"{counter}/kept", 1)
     return [text_document(text, _source_identity(repository, partition))]
 
