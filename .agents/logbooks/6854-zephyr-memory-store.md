@@ -251,3 +251,28 @@ description: Read-only Zephyr memory store and verified fuzzy-dedup experiments
   no explicit child pinning.
 - Next action: Apply the same orchestration change to both A/B revisions and
   relaunch the 100B control under a fresh output prefix.
+
+### 2026-07-31 23:01 UTC - ZKV-005 shared coordinator sizing
+
+- Hypothesis: One standing pool can serve the eight concurrent MinHash stages
+  without creating a coordinator and worker group for every source.
+- Commit Hash: baseline `fd3322a1d`.
+- Job: `/loom/zephyr-kv-baseline-100b-20260731-v2`.
+- Result: Iris showed exactly one `zephyr-fuzzy-verification-testbed-pool` and
+  one 64-task worker group. Multiple MinHash execution IDs made progress and
+  completed source steps on those workers. After 6 minutes 57 seconds, the
+  coordinator's default 1 GiB task was OOM-killed with exit 137 while eight
+  pipelines were active; it had no preemption or worker failure beforehand.
+- Interpretation: Sharing removes repeated worker environments but concentrates
+  the active pipelines' plans, task queues, results, counters, and worker RPC
+  state in one coordinator. The lightweight single-pipeline default is not an
+  adequate request for this eight-pipeline testbed.
+- Change: The testbed now requests a non-preemptible coordinator with 1 CPU and
+  4 GiB RAM. The standing-pool documentation now calls out aggregate
+  coordinator sizing and shows that request in its Datakit example.
+- Recovery: The failed pool was terminal, so the parent was stopped to release
+  its step locks. Successful MinHash artifacts remain under `candidates-v2` and
+  will be reused by the corrected run.
+- Next action: Relaunch the control on the same candidate prefix, verify the
+  larger coordinator remains healthy, and continue through baseline verifier
+  completion.

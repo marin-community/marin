@@ -323,7 +323,7 @@ class ZephyrContext:
             defaults to os.cpu_count() for LocalClient, or ``MAX_WORKERS_PER_JOB``
             (1024) for distributed clients.
         resources: Resource config per worker.
-        coordinator_resources: Resource config for the coordinator job. Defaults to 2 GB.
+        coordinator_resources: Resource config for the coordinator job. Defaults to 1 GB.
         chunk_storage_prefix: Storage prefix for intermediate chunks. If None, defaults
             to MARIN_PREFIX/tmp/zephyr or /tmp/zephyr.
         name: Descriptive name for this context, used in actor group names for debugging.
