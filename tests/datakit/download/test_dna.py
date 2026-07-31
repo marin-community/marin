@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 import pyarrow.parquet as pq
-from marin.datakit.download.dna import DnaDatasetSpec, dna_document_prefix, dna_document_text, write_balanced_dna
+from marin.datakit.download.dna import DnaDatasetSpec, write_balanced_dna
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -55,7 +55,11 @@ def test_write_balanced_dna_caps_each_source_by_utf8_text_bytes(tmp_path: Path):
     )
 
     output_path = tmp_path / "balanced"
-    bytes_per_document = len(dna_document_text("ACGT", "CLASS_A").encode("utf-8"))
+    expected_genome_texts = {
+        "[DNA]\n[REGION=CLASS_A]\nACGT",
+        "[DNA]\n[REGION=CLASS_A]\nTGCA",
+    }
+    bytes_per_document = len(b"[DNA]\n[REGION=CLASS_A]\nACGT")
     write_balanced_dna(
         source_files={
             genomes: [str(genomes_path)],
@@ -75,12 +79,8 @@ def test_write_balanced_dna_caps_each_source_by_utf8_text_bytes(tmp_path: Path):
         genomes.hf_dataset_id: 2 * bytes_per_document,
         zoonomia.hf_dataset_id: 2 * bytes_per_document,
     }
-    assert {row["text"] for row in rows if row["source"] == genomes.hf_dataset_id} == {
-        dna_document_text("ACGT", "CLASS_A"),
-        dna_document_text("TGCA", "CLASS_A"),
-    }
+    assert {row["text"] for row in rows if row["source"] == genomes.hf_dataset_id} == expected_genome_texts
     assert {row["region_type"] for row in rows} == {"CLASS_A", "CLASS_B"}
-    assert dna_document_prefix("CLASS_A") == "[DNA]\n[REGION=CLASS_A]\n"
     assert {row["source_id"] for row in rows} == {
         "test/genomes:g1",
         "test/genomes:g2",
