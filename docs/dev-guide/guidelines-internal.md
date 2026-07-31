@@ -72,7 +72,7 @@ To submit jobs, use `iris job run`. Job IDs are canonical paths of the form `/<u
 # [Terminal 2] Submit a job and return immediately.
 #   =>> Will print a line like `Job submitted: /<user>/hello_world-20260420-120000`
 uv run iris --cluster=marin job run \
-    --no-wait --extra marin-core:tpu --tpu v5litepod-16 \
+    --enable-extra-resources --no-wait --extra marin-core:tpu --tpu v5litepod-16 \
     -- python experiments/tutorials/hello_world.py
 
 # List jobs (filter by --state, --user, --prefix, etc).
