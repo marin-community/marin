@@ -91,7 +91,6 @@ def write_json(url: str, value: dict[str, Any]) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse the expected shard count."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--num-shards", type=int, required=True)
     return parser.parse_args()
