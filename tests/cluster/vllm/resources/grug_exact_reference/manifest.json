@@ -1,0 +1,61 @@
+{
+  "files": {
+    "config.json": "1ef2b9865b7d3f3c3b161c4feecacae4474cc1678607821c5c926fa99366a262",
+    "model.safetensors": "2720d99526592901c63aa3c1287a7f195d39842dfbfb63a981d09e8e36cac904",
+    "observations.npz": "c5f9a140b34a036c3f3225b0696879bb0c2aef556834981415accf312056069a",
+    "special_tokens_map.json": "8d1a081b1831b9dd8a5de7fe7fd83429878353299d017393d6de62095851ea26",
+    "tokenizer.json": "c56bc0808cf18bace336eaa598a9f1ac708bd00ed90e31312040845ac61c3d85",
+    "tokenizer_config.json": "8352bb4d3b22c62f46919986e9dcd015018f0641c95a4add9dc147629090cdc6"
+  },
+  "imported_training_reference": "experiments/grug/moe/model.py",
+  "jax_backend": "cpu",
+  "matmul_precision": "highest",
+  "ordinary_serving_path": {
+    "mtp_depth": 1,
+    "mtp_training_head_excluded": true,
+    "over_encoding": false,
+    "trunk_logits": true
+  },
+  "producer": "tests/cluster/vllm/grug_exact_reference_oracle.py",
+  "prompts": {
+    "boundary_condition": "append positions 512 and 513 after a cached 512-token prefix",
+    "boundary_tokens": 514,
+    "prefix_reuse_tokens": 512,
+    "semantic_tokens": 33
+  },
+  "schema_version": 1,
+  "semantics": {
+    "combine_weight_sum": 2.5,
+    "global_kv_heads": 1,
+    "global_nope_layers": [
+      5,
+      6
+    ],
+    "layers": 7,
+    "local_kv_heads": 2,
+    "local_layers": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "qb_candidate_count": 3,
+    "qb_top_k": 2,
+    "rope": "interleaved-pair fused half RoPE on local layers",
+    "sconv_kernel": 4,
+    "sconv_sites": [
+      "k",
+      "v",
+      "attn",
+      "mlp"
+    ],
+    "shared_expert_width_each": 64,
+    "shared_experts": 2,
+    "sliding_window": 512,
+    "stored_kv_heads": 2
+  },
+  "training_reference_commit": "fd3e9bc5b428633027f944be7fdf1136567db028",
+  "training_reference_model_path": "experiments/grug/moe/model.py",
+  "training_reference_model_sha256": "a15ff41990094813f1a16730b9e90ce1e212d5255886aae9b2bd4c0ffd2d21ea"
+}

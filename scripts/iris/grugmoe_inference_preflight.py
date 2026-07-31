@@ -20,7 +20,9 @@ import dataclasses
 import hashlib
 import json
 import math
+import os
 import shlex
+import signal
 import socket
 import subprocess
 import tempfile
@@ -28,31 +30,41 @@ import time
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 import requests
+from iris.client import iris_ctx
+from iris.cluster.client.job_info import get_job_info
+from iris.cluster.types import CoschedulingConfig, Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device
 
 from experiments.grug.moe.inference_preflight import (
     ARTIFACT_ROOT,
     CASES,
     DUMMY_SEED,
+    FROZEN_FIXTURE_PATH,
     SNOWBALL_EXPORT,
     VLLM_SHA,
     ModelCase,
+    aggregate_preflight_status,
     decode_routed_experts,
     deterministic_balanced_routing_fixture,
     expert_parallel_rank_histogram,
     frozen_manifest,
+    layer_types,
     materialize_prompt,
     metric_delta,
     parse_prometheus,
+    predict_kv_bytes,
     routing_histogram,
     write_case,
 )
 from scripts.iris.dev_gpu import (
+    PRIORITY_BANDS,
     STATE_DIR,
     DevGpuState,
     PodRef,
+    Priority,
+    controller_client,
     kubectl_base,
     load_state,
     state_path,
@@ -65,12 +77,16 @@ RPC_PORT = 13345
 SERVER_PORT = 8000
 LOCAL_DP_SIZE = 4
 SERVER_TIMEOUT_SECONDS = 3600
-REQUEST_TIMEOUT_SECONDS = 600
+REQUEST_TIMEOUT_SECONDS = 3600
 ACCEPTANCE_MINIMUM_SECONDS = 600
 ACCEPTANCE_MINIMUM_GENERATED_TOKENS = 250_000
+ACCEPTANCE_STABLE_MINUTES = 10
 REMOTE_ROOT = "/tmp/grugmoe-inference-preflight"
 LOG_TAIL_LINES = 400
 GLOO_CONTROL_INTERFACE = "enP6p3s0np0"
+UNATTENDED_COSCHEDULING = "nvlink.domain"
+DEFAULT_CLUSTER_CONFIG = "lib/iris/config/cw-us-east-08a.yaml"
+FIXTURE_DIR = Path(FROZEN_FIXTURE_PATH)
 AWS_CONFIG_CONTENT = "[default]\ns3 =\n    addressing_style = virtual\n"
 REMOTE_UPLOAD_PROGRAM = """
 import json
@@ -108,6 +124,7 @@ def _run(
     *,
     capture_output: bool = False,
     check: bool = True,
+    env: dict[str, str] | None = None,
     timeout: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -115,6 +132,7 @@ def _run(
         text=True,
         capture_output=capture_output,
         check=check,
+        env=env,
         timeout=timeout,
     )
 
@@ -151,14 +169,15 @@ def vllm_args(
 ) -> list[str]:
     if not 0 <= node_index < case.node_count:
         raise ValueError(f"node_index {node_index} is outside case node count {case.node_count}")
+    fixture = model_source == "fixture"
     args = [
         "serve",
         model_dir,
         "--trust-remote-code",
         "--dtype",
-        "bfloat16",
+        "float" if fixture else "bfloat16",
         "--kv-cache-dtype",
-        "bfloat16",
+        "auto" if fixture else "bfloat16",
         "--seed",
         str(DUMMY_SEED),
         "--served-model-name",
@@ -190,6 +209,8 @@ def vllm_args(
         "--enable-chunked-prefill",
         "--enable-return-routed-experts",
         "--enable-prompt-tokens-details",
+        "--max-logprobs",
+        "64",
         "--gpu-memory-utilization",
         "0.90",
         "--max-model-len",
@@ -201,6 +222,8 @@ def vllm_args(
     ]
     if model_source == "dummy":
         args.extend(["--load-format", "dummy", "--skip-tokenizer-init"])
+    elif model_source == "fixture":
+        args.extend(["--load-format", "safetensors", "--skip-tokenizer-init"])
     elif model_source == "snowball":
         args.extend(["--load-format", "runai_streamer"])
     else:
@@ -282,7 +305,11 @@ class Gang:
             task_status = next((status for status in statuses if status.get("name") == pod.container), None)
             if task_status is None:
                 raise RuntimeError(f"task container status missing for {pod.pod_name}")
-            model_dir = self.remote_dir if self.model_source == "dummy" else SNOWBALL_EXPORT
+            model_dir = {
+                "dummy": self.remote_dir,
+                "fixture": str(FIXTURE_DIR.resolve()),
+                "snowball": SNOWBALL_EXPORT,
+            }[self.model_source]
             args = vllm_args(
                 self.case,
                 model_dir=model_dir,
@@ -320,7 +347,13 @@ class Gang:
         for runtime in self.runtimes:
             self._exec(runtime, "test", "-e", f"/sys/class/net/{GLOO_CONTROL_INTERFACE}")
             self._exec(runtime, "mkdir", "-p", runtime.remote_dir)
-            for filename in ("aws-config", "config.json", "workload.json", "manifest.json"):
+            for filename in (
+                "aws-config",
+                "config.json",
+                "correctness-workload.json",
+                "workload.json",
+                "manifest.json",
+            ):
                 source = str(self.local_dir / filename)
                 destination = f"{runtime.pod.pod_name}:{runtime.remote_dir}/{filename}"
                 _run(
@@ -778,59 +811,100 @@ def _run_load_arm(
     started = time.monotonic()
     generated = 0
     request_count = 0
-    request_index = 0
     latencies: list[float] = []
-    completions: list[tuple[float, int, int]] = []
+    completions: list[tuple[float, int, int, str]] = []
     workload_requests = workload["requests"]
+    covered_request_ids: set[str] = set()
 
-    def one(request: dict[str, Any]) -> tuple[float, dict[str, Any], int]:
+    def one(request: dict[str, Any]) -> tuple[float, dict[str, Any], int, str]:
         prompt = materialize_prompt(workload, request)
-        max_tokens = min(256, max_model_len - len(prompt))
-        if max_tokens <= 0:
-            raise AssertionError(f"{request['request_id']} leaves no generation capacity")
+        max_tokens = int(request["max_tokens"])
+        if len(prompt) + max_tokens != int(request["final_token_count"]):
+            raise AssertionError(f"{request['request_id']} does not have the frozen final length")
+        if len(prompt) + max_tokens > max_model_len:
+            raise AssertionError(f"{request['request_id']} exceeds max model length")
         request_started = time.monotonic()
         payload = _completion(base_url, model, prompt, max_tokens=max_tokens)
-        return time.monotonic() - request_started, payload, int(request["prefix_token_count"])
+        return (
+            time.monotonic() - request_started,
+            payload,
+            int(request["prefix_token_count"]),
+            str(request["request_id"]),
+        )
+
+    def record(future: concurrent.futures.Future[tuple[float, dict[str, Any], int, str]]) -> None:
+        nonlocal generated, request_count
+        latency, payload, prefix_tokens, request_id = future.result()
+        completion_tokens = int(payload.get("usage", {}).get("completion_tokens", 0))
+        if completion_tokens != int(workload_requests[0]["max_tokens"]):
+            raise AssertionError(
+                f"{request_id} generated {completion_tokens} tokens, expected {workload_requests[0]['max_tokens']}"
+            )
+        generated += completion_tokens
+        request_count += 1
+        covered_request_ids.add(request_id)
+        latencies.append(latency)
+        completions.append((time.monotonic() - started, completion_tokens, prefix_tokens, request_id))
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
-        while time.monotonic() - started < minimum_seconds or generated < minimum_generated_tokens:
+        # The first wave is a literal traversal of all 144 frozen branches.
+        coverage_futures = [executor.submit(one, request) for request in workload_requests]
+        for future in concurrent.futures.as_completed(coverage_futures):
+            record(future)
+
+        request_index = 0
+        while (
+            time.monotonic() - started < minimum_seconds
+            or generated < minimum_generated_tokens
+            or len(covered_request_ids) != len(workload_requests)
+        ):
             batch = [
                 workload_requests[(request_index + offset) % len(workload_requests)] for offset in range(concurrency)
             ]
             request_index += len(batch)
             futures = [executor.submit(one, request) for request in batch]
             for future in concurrent.futures.as_completed(futures):
-                latency, payload, prefix_tokens = future.result()
-                completion_tokens = int(payload.get("usage", {}).get("completion_tokens", 0))
-                if completion_tokens <= 0:
-                    raise AssertionError("load request generated no tokens")
-                generated += completion_tokens
-                request_count += 1
-                latencies.append(latency)
-                completions.append((time.monotonic() - started, completion_tokens, prefix_tokens))
+                record(future)
 
     elapsed = time.monotonic() - started
-    minute_tokens: list[int] = [0] * (int(elapsed // 60) + 1)
+    complete_minutes = int(elapsed // 60)
+    minute_tokens: list[int] = [0] * (complete_minutes + 1)
     cohort_tokens: dict[str, int] = {}
-    for completed_at, completion_tokens, prefix_tokens in completions:
+    for completed_at, completion_tokens, prefix_tokens, _ in completions:
         minute_tokens[min(int(completed_at // 60), len(minute_tokens) - 1)] += completion_tokens
         cohort = str(prefix_tokens)
         cohort_tokens[cohort] = cohort_tokens.get(cohort, 0) + completion_tokens
-    final_five_start = max(0.0, elapsed - 300.0)
-    final_five_tokens = sum(tokens for completed_at, tokens, _ in completions if completed_at >= final_five_start)
-    final_five_seconds = elapsed - final_five_start
+    stable_minute_tokens = minute_tokens[max(0, complete_minutes - ACCEPTANCE_STABLE_MINUTES) : complete_minutes]
+    stable_minutes_passed = len(stable_minute_tokens) == ACCEPTANCE_STABLE_MINUTES and all(
+        tokens > 0 for tokens in stable_minute_tokens
+    )
+    stable_mean = sum(stable_minute_tokens) / (60 * len(stable_minute_tokens)) if stable_minute_tokens else 0.0
+    coverage_passed = len(covered_request_ids) == len(workload_requests)
     return {
-        "passed": elapsed >= minimum_seconds and generated >= minimum_generated_tokens,
+        "passed": (
+            elapsed >= minimum_seconds
+            and generated >= minimum_generated_tokens
+            and coverage_passed
+            and stable_minutes_passed
+        ),
         "elapsed_seconds": elapsed,
-        "stable_full_minutes": int(elapsed // 60),
+        "stable_full_minutes": len(stable_minute_tokens),
+        "stable_minutes_passed": stable_minutes_passed,
         "generated_tokens": generated,
         "requests": request_count,
         "concurrency": concurrency,
+        "branch_coverage": {
+            "expected": len(workload_requests),
+            "observed": len(covered_request_ids),
+            "request_ids": sorted(covered_request_ids),
+            "passed": coverage_passed,
+        },
         "throughput_tokens_per_second": {
             "full_mean": generated / elapsed,
-            "final_five_minute_mean": final_five_tokens / final_five_seconds,
+            "last_ten_stable_minute_mean": stable_mean,
         },
-        "full_minute_generated_tokens": minute_tokens[: int(elapsed // 60)],
+        "full_minute_generated_tokens": minute_tokens[:complete_minutes],
+        "last_ten_stable_minute_generated_tokens": stable_minute_tokens,
         "generated_tokens_by_prefix_length": cohort_tokens,
         "latency_seconds": _latency_summary(latencies),
     }
@@ -925,7 +999,7 @@ def run_acceptance_load(
         arms.append(arm)
         previous_metrics = after_arm
 
-    arm_throughputs = [arm["throughput_tokens_per_second"]["full_mean"] for arm in arms]
+    arm_throughputs = [arm["throughput_tokens_per_second"]["last_ten_stable_minute_mean"] for arm in arms]
     throughput_mean = sum(arm_throughputs) / len(arm_throughputs)
     repeatability_delta_percent = (
         100 * abs(arm_throughputs[0] - arm_throughputs[1]) / throughput_mean if throughput_mean else math.inf
@@ -952,12 +1026,1011 @@ def run_acceptance_load(
     }
 
 
+KV_LOG_MARKER = "GrugMoE KV group usage: "
+
+
+def run_fixture_parity(base_url: str, model: str, *, artifact_dir: Path) -> dict[str, Any]:
+    """Run the frozen tensor oracle in the pinned vLLM env and server parity live."""
+    tensor_path = artifact_dir / "fixture-tensor-parity.json"
+    command = [
+        "uv",
+        "run",
+        "--no-project",
+        "--with",
+        VLLM_FROM_SPEC,
+        "--with",
+        RUNAI_STREAMER,
+        "python",
+        "tests/cluster/vllm/grug_exact_reference_check.py",
+        "--fixture",
+        str(FIXTURE_DIR),
+        "--output",
+        str(tensor_path),
+    ]
+    environment = dict(os.environ)
+    environment["UV_TORCH_BACKEND"] = "cu130"
+    completed = _run(
+        command,
+        capture_output=True,
+        env=environment,
+        timeout=SERVER_TIMEOUT_SECONDS,
+    )
+    tensor_payload = json.loads(tensor_path.read_text())
+    if completed.stdout:
+        (artifact_dir / "fixture-tensor-parity.stdout").write_text(completed.stdout)
+
+    # This helper has no vLLM import; it scores the live response against the
+    # same frozen Levanter observations used by the tensor check.
+    from tests.cluster.vllm.grug_exact_reference_check import run_server_parity  # noqa: PLC0415
+
+    server = run_server_parity(base_url, model, FIXTURE_DIR)
+    server_path = artifact_dir / "fixture-server-parity.json"
+    server_path.write_text(json.dumps(server, indent=2, sort_keys=True) + "\n")
+    tensor = tensor_payload["tensor"]
+    return {
+        "passed": bool(tensor["passed"] and server["passed"]),
+        "tensor": tensor,
+        "server": server,
+        "evidence": [
+            tensor_path.relative_to(artifact_dir).as_posix(),
+            server_path.relative_to(artifact_dir).as_posix(),
+        ],
+    }
+
+
+def parse_kv_group_snapshots(text: str) -> list[list[dict[str, Any]]]:
+    """Extract complete compact JSON snapshots from a vLLM log."""
+    snapshots: list[list[dict[str, Any]]] = []
+    for line in text.splitlines():
+        if KV_LOG_MARKER not in line:
+            continue
+        raw = line.split(KV_LOG_MARKER, 1)[1].strip()
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, list) and all(isinstance(group, dict) for group in payload):
+            snapshots.append(payload)
+    return snapshots
+
+
+def summarize_kv_snapshot(groups: list[dict[str, Any]]) -> dict[str, Any]:
+    """Collapse one multi-engine snapshot into semantic and physical occupancy."""
+    active_requests_by_engine: dict[int, int] = {}
+    reserved_by_engine: dict[int, int] = {}
+    for group in groups:
+        engine = int(group.get("engine_idx", 0))
+        active_requests_by_engine[engine] = max(
+            active_requests_by_engine.get(engine, 0),
+            int(group["active_requests"]),
+        )
+        reserved_by_engine[engine] = max(
+            reserved_by_engine.get(engine, 0),
+            int(group["reserved_physical_bytes"]),
+        )
+    active_groups = [group for group in groups if int(group["active_requests"]) > 0]
+    # Managers share one BlockPool, but each group owns distinct allocated
+    # block IDs. Each such ID occupies a full physical tuple spanning all
+    # layer tensors, so group physical occupancies add.
+    active_physical_bytes = sum(int(group["active_physical_bytes"]) for group in active_groups)
+    semantic_bytes = sum(int(group["active_payload_bytes"]) for group in active_groups)
+    padded_group_bytes = sum(int(group["active_padded_bytes"]) for group in active_groups)
+    attention_groups = [group for group in active_groups if group["role"] == "attention"]
+    sconv_groups = [group for group in active_groups if group["role"] == "sconv"]
+
+    def max_blocks(*, role: str, kind: str | None = None) -> int:
+        return max(
+            (
+                int(group["active_blocks"])
+                for group in active_groups
+                if group["role"] == role and (kind is None or group["kind"] == kind)
+            ),
+            default=0,
+        )
+
+    return {
+        "active_requests": sum(active_requests_by_engine.values()),
+        "active_requests_by_engine": active_requests_by_engine,
+        "semantic_active_bytes": semantic_bytes,
+        "semantic_attention_active_bytes": sum(int(group["active_payload_bytes"]) for group in attention_groups),
+        "semantic_sconv_active_bytes": sum(int(group["active_payload_bytes"]) for group in sconv_groups),
+        "padded_group_active_bytes": padded_group_bytes,
+        "padded_attention_active_bytes": sum(int(group["active_padded_bytes"]) for group in attention_groups),
+        "padded_sconv_active_bytes": sum(int(group["active_padded_bytes"]) for group in sconv_groups),
+        "physical_active_bytes": active_physical_bytes,
+        "padding_active_bytes": padded_group_bytes - semantic_bytes,
+        "reserved_physical_bytes_per_engine": reserved_by_engine,
+        "reserved_physical_bytes_global": sum(reserved_by_engine.values()),
+        "local_attention_active_blocks": max_blocks(
+            role="attention",
+            kind="sliding_window",
+        ),
+        "global_attention_active_blocks": max_blocks(
+            role="attention",
+            kind="full_attention",
+        ),
+        "sconv_active_blocks": max_blocks(role="sconv"),
+        "groups": groups,
+    }
+
+
+def _metric_value(samples: dict[str, float], metric: str) -> float:
+    if metric in samples:
+        return samples[metric]
+    return samples.get(f"{metric}_total", 0.0)
+
+
+def run_kv_measurement(
+    base_url: str,
+    model: str,
+    *,
+    case: ModelCase,
+    log_path: Path,
+    artifact_dir: Path,
+) -> dict[str, Any]:
+    """Measure one live request at 6,144 and 65,536 tokens with caching on."""
+    if case.hidden_size != 6144 or case.num_hidden_layers != 48:
+        raise ValueError("live KV measurement requires the exact reference architecture")
+    targets = (6_144, 65_536)
+    response_tokens = 2_048
+    observations: list[dict[str, Any]] = []
+    for probe_index, final_length in enumerate(targets):
+        prompt_length = final_length - response_tokens
+        prompt = [3 + ((probe_index * 97 + token_index * 31) % 252) for token_index in range(prompt_length)]
+        log_start = log_path.stat().st_size if log_path.exists() else 0
+        running_samples: list[float] = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                _completion,
+                base_url,
+                model,
+                prompt,
+                max_tokens=response_tokens,
+            )
+            while not future.done():
+                try:
+                    _, metrics = _metrics(base_url)
+                    running = _metric_value(metrics, "vllm:num_requests_running")
+                    if running > 0:
+                        running_samples.append(running)
+                except requests.RequestException:
+                    pass
+                time.sleep(2)
+            payload = future.result()
+        completion_tokens = int(payload.get("usage", {}).get("completion_tokens", 0))
+        if completion_tokens != response_tokens:
+            raise AssertionError(f"KV probe at {final_length} ended with {completion_tokens} generated tokens")
+        if not running_samples or set(running_samples) != {1.0}:
+            raise AssertionError(f"KV probe at {final_length} did not hold one active request: {running_samples}")
+        log_text = log_path.read_bytes()[log_start:].decode(errors="replace")
+        raw_path = artifact_dir / "kv" / f"kv-{final_length}.log"
+        raw_path.parent.mkdir(parents=True, exist_ok=True)
+        raw_path.write_text(log_text)
+        summaries = [summarize_kv_snapshot(snapshot) for snapshot in parse_kv_group_snapshots(log_text)]
+        active = [summary for summary in summaries if summary["active_requests"] == 1]
+        if not active:
+            raise AssertionError(f"KV probe at {final_length} produced no one-request group snapshot")
+        peak = max(
+            active,
+            key=lambda summary: (
+                summary["global_attention_active_blocks"],
+                summary["semantic_active_bytes"],
+            ),
+        )
+        layer_schedule = layer_types(
+            case.num_hidden_layers,
+            global_interval=case.global_every,
+        )
+        global_layers = layer_schedule.count("full_attention")
+        semantic_prediction = predict_kv_bytes(
+            sequence_length=final_length,
+            local_layers=case.num_hidden_layers - global_layers,
+            global_layers=global_layers,
+            local_kv_heads=case.local_kv_heads,
+            global_kv_heads=case.global_kv_heads,
+            head_dim=case.head_dim,
+            sliding_window=case.sliding_window,
+        )
+        attention_prediction_delta_fraction = (
+            abs(peak["semantic_attention_active_bytes"] - semantic_prediction) / semantic_prediction
+            if semantic_prediction
+            else math.inf
+        )
+        gap_fraction = (
+            (peak["physical_active_bytes"] - peak["semantic_active_bytes"]) / peak["semantic_active_bytes"]
+            if peak["semantic_active_bytes"]
+            else math.inf
+        )
+        observations.append(
+            {
+                "final_sequence_tokens": final_length,
+                "prompt_tokens": prompt_length,
+                "generated_tokens": completion_tokens,
+                "fixed_active_request_count": 1,
+                "semantic_attention_prediction_bytes": semantic_prediction,
+                "semantic_attention_prediction_delta_fraction": attention_prediction_delta_fraction,
+                "peak": peak,
+                "physical_minus_semantic_fraction": gap_fraction,
+                "gap_explanation": (
+                    "The physical block is a unified page spanning every KV/SConv "
+                    "group. A request occupies the largest group block index across "
+                    "that tuple; per-group head padding is reported separately."
+                    if gap_fraction > 0.10
+                    else "Physical occupancy is within 10% of semantic group payload."
+                ),
+                "raw_log": raw_path.relative_to(artifact_dir).as_posix(),
+                "snapshot_count": len(active),
+            }
+        )
+
+    short, long = observations
+    local_plateau = short["peak"]["local_attention_active_blocks"] == long["peak"]["local_attention_active_blocks"] > 0
+    global_growth = long["peak"]["global_attention_active_blocks"] > short["peak"]["global_attention_active_blocks"] > 0
+    semantic_predictions_match = all(
+        observation["semantic_attention_prediction_delta_fraction"] <= 0.10 for observation in observations
+    )
+    result = {
+        "passed": local_plateau and global_growth and semantic_predictions_match,
+        "prefix_caching_enabled": True,
+        "fixed_active_request_count": 1,
+        "observations": observations,
+        "local_layer_active_kv_plateaus": local_plateau,
+        "global_layer_active_kv_grows": global_growth,
+        "semantic_attention_predictions_within_10_percent": semantic_predictions_match,
+    }
+    output_path = artifact_dir / "kv" / "summary.json"
+    output_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    return result
+
+
 def _git_sha() -> str:
     return _run(["git", "rev-parse", "HEAD"], capture_output=True).stdout.strip()
 
 
 def _sha256_path(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _s3_key(uri: str) -> str:
+    if not uri.startswith("s3://"):
+        raise ValueError(f"expected s3:// URI, got {uri}")
+    return uri.removeprefix("s3://")
+
+
+def _s3_filesystem():
+    import s3fs  # noqa: PLC0415
+
+    return s3fs.S3FileSystem()
+
+
+def _put_bytes_readback(filesystem: Any, uri: str, payload: bytes) -> dict[str, Any]:
+    key = _s3_key(uri)
+    with filesystem.open(key, "wb") as stream:
+        stream.write(payload)
+    readback = filesystem.cat_file(key)
+    if readback != payload:
+        raise OSError(f"artifact readback mismatch for {uri}")
+    return {
+        "path": uri,
+        "bytes": len(payload),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "readback": "identical",
+    }
+
+
+def _put_json_readback(filesystem: Any, uri: str, payload: dict[str, Any]) -> dict[str, Any]:
+    encoded = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
+    return _put_bytes_readback(filesystem, uri, encoded)
+
+
+def _read_s3_json(filesystem: Any, uri: str) -> dict[str, Any]:
+    payload = json.loads(filesystem.cat_file(_s3_key(uri)))
+    if not isinstance(payload, dict):
+        raise TypeError(f"{uri} did not contain a JSON object")
+    return payload
+
+
+def _wait_for_s3_jsons(
+    filesystem: Any,
+    uris: list[str],
+    *,
+    timeout_seconds: float,
+) -> list[dict[str, Any]]:
+    deadline = time.monotonic() + timeout_seconds
+    missing = list(uris)
+    while time.monotonic() < deadline:
+        missing = [uri for uri in uris if not filesystem.exists(_s3_key(uri))]
+        if not missing:
+            return [_read_s3_json(filesystem, uri) for uri in uris]
+        time.sleep(5)
+    raise TimeoutError(f"timed out waiting for S3 rendezvous files: {missing}")
+
+
+def _immutable_image(image: str) -> str:
+    if "@sha256:" not in image or len(image.rsplit("@sha256:", 1)[1]) != 64:
+        raise ValueError("--task-image must be an immutable image@sha256:<64 hex> reference")
+    return image
+
+
+def _clean_pushed_checkout() -> dict[str, str]:
+    status = _run(["git", "status", "--porcelain"], capture_output=True).stdout
+    if status:
+        raise RuntimeError("unattended evidence may only be submitted from a clean checkout")
+    head = _git_sha()
+    upstream = _run(["git", "rev-parse", "@{upstream}"], capture_output=True).stdout.strip()
+    if upstream != head:
+        raise RuntimeError(f"HEAD {head} is not the pushed upstream commit {upstream}")
+    return {
+        "commit": head,
+        "branch": (
+            _run(
+                ["git", "branch", "--show-current"],
+                capture_output=True,
+            ).stdout.strip()
+        ),
+        "origin": (
+            _run(
+                ["git", "remote", "get-url", "origin"],
+                capture_output=True,
+            ).stdout.strip()
+        ),
+    }
+
+
+def _validate_unattended_mode(
+    case: ModelCase,
+    *,
+    mode: str,
+    model_source: str,
+) -> None:
+    if mode == "acceptance" and case.name != "exact-reference-ep16":
+        raise ValueError("acceptance is frozen to exact-reference-ep16")
+    if mode == "kv" and case.name != "reference-ep8":
+        raise ValueError("the exact live KV measurement uses reference-ep8")
+    if model_source == "fixture" and case.name != "tiny":
+        raise ValueError("the frozen tensor fixture uses the tiny exact case")
+    if model_source == "snowball":
+        raise ValueError("the one allowed Snowball attempt has already completed; it must not be retried")
+
+
+def submit_unattended(args: argparse.Namespace) -> dict[str, Any]:
+    case = CASES[args.case]
+    _validate_unattended_mode(
+        case,
+        mode=args.mode,
+        model_source=args.model_source,
+    )
+    if args.mode == "acceptance":
+        validate_acceptance_thresholds(
+            minimum_seconds=args.minimum_seconds,
+            minimum_generated_tokens=args.minimum_generated_tokens,
+        )
+    checkout = _clean_pushed_checkout()
+    image = _immutable_image(args.task_image)
+    run_id = args.run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    worker_argv = [
+        "python",
+        "scripts/iris/grugmoe_inference_preflight.py",
+        "worker",
+        "--case",
+        case.name,
+        "--model-source",
+        args.model_source,
+        "--mode",
+        args.mode,
+        "--run-id",
+        run_id,
+        "--task-image",
+        image,
+        "--server-timeout",
+        str(args.server_timeout),
+        "--minimum-seconds",
+        str(args.minimum_seconds),
+        "--minimum-generated-tokens",
+        str(args.minimum_generated_tokens),
+    ]
+    resources = ResourceSpec(
+        cpu=64,
+        memory="512GB",
+        disk="100GB",
+        device=gpu_device("GB200", LOCAL_DP_SIZE),
+    )
+    with controller_client(args.config) as client:
+        job = client.submit(
+            entrypoint=Entrypoint.from_command(*worker_argv),
+            name=f"grugmoe-{case.name}-{run_id}".lower().replace("_", "-"),
+            resources=resources,
+            environment=EnvironmentSpec(
+                sync_packages=["marin-iris", "marin-core"],
+                env_vars={"PYTHONUNBUFFERED": "1"},
+            ),
+            replicas=case.node_count,
+            coscheduling=(CoschedulingConfig(group_by=UNATTENDED_COSCHEDULING) if case.node_count > 1 else None),
+            max_retries_failure=0,
+            max_retries_preemption=0,
+            max_task_failures=0,
+            task_image=image,
+            priority_band=PRIORITY_BANDS[Priority.INTERACTIVE],
+        )
+        summary: dict[str, Any] = {
+            "status": "submitted",
+            "job_id": str(job.job_id),
+            "run_id": run_id,
+            "case": case.name,
+            "mode": args.mode,
+            "replicas": case.node_count,
+            "coscheduling": UNATTENDED_COSCHEDULING if case.node_count > 1 else None,
+            "task_image": image,
+            "checkout": checkout,
+            "artifact_prefix": f"{ARTIFACT_ROOT}/{case.name}/{run_id}/",
+        }
+        print(json.dumps(summary, indent=2, sort_keys=True), flush=True)
+        if args.wait:
+            status = job.wait(
+                timeout=args.wait_timeout,
+                poll_interval=10,
+                raise_on_failure=False,
+                stream_logs=True,
+            )
+            summary["terminal_job_state"] = int(status.state)
+            summary["terminal_error"] = status.error
+        return summary
+
+
+def _wait_for_rank_endpoints(
+    name: str,
+    *,
+    expected: int,
+    timeout_seconds: float,
+) -> list[dict[str, str]]:
+    deadline = time.monotonic() + timeout_seconds
+    latest: list[dict[str, str]] = []
+    while time.monotonic() < deadline:
+        resolved = iris_ctx().resolver.resolve(name)
+        latest = [
+            {
+                "url": endpoint.url,
+                "actor_id": endpoint.actor_id,
+                **endpoint.metadata,
+            }
+            for endpoint in resolved.endpoints
+        ]
+        indexes = {int(endpoint["task_index"]) for endpoint in latest}
+        if len(latest) == expected and indexes == set(range(expected)):
+            return sorted(latest, key=lambda endpoint: int(endpoint["task_index"]))
+        time.sleep(2)
+    raise TimeoutError(f"Iris rendezvous {name!r} found {len(latest)}/{expected} endpoints: {latest}")
+
+
+@dataclasses.dataclass
+class LocalVllm:
+    process: subprocess.Popen[str]
+    log_stream: TextIO
+    log_path: Path
+    command: list[str]
+
+
+def _start_local_vllm(
+    *,
+    case: ModelCase,
+    model_source: str,
+    model_dir: str,
+    leader_ip: str,
+    node_index: int,
+    smoke: bool,
+    local_dir: Path,
+) -> LocalVllm:
+    interface = Path(f"/sys/class/net/{GLOO_CONTROL_INTERFACE}")
+    if not interface.exists():
+        raise RuntimeError(f"required Gloo interface is absent: {interface}")
+    command = vllm_command(
+        vllm_args(
+            case,
+            model_dir=model_dir,
+            model_source=model_source,
+            leader_ip=leader_ip,
+            node_index=node_index,
+            smoke=smoke,
+        )
+    )
+    log_path = local_dir / f"vllm-node-{node_index}.log"
+    log_stream = log_path.open("w")
+    environment = {
+        **os.environ,
+        "AWS_CONFIG_FILE": str(local_dir / "aws-config"),
+        "GLOO_SOCKET_IFNAME": GLOO_CONTROL_INTERFACE,
+        "PYTHONUNBUFFERED": "1",
+        "VLLM_HOST_IP": get_job_info().advertise_host,
+        "VLLM_USE_FLASHINFER_SAMPLER": "0",
+        "VLLM_USE_PRECOMPILED": "1",
+    }
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=log_stream,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env=environment,
+        start_new_session=True,
+    )
+    return LocalVllm(
+        process=process,
+        log_stream=log_stream,
+        log_path=log_path,
+        command=command,
+    )
+
+
+def _stop_local_vllm(server: LocalVllm) -> None:
+    if server.process.poll() is None:
+        os.killpg(server.process.pid, signal.SIGTERM)
+        try:
+            server.process.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            os.killpg(server.process.pid, signal.SIGKILL)
+            server.process.wait(timeout=30)
+    server.log_stream.close()
+
+
+def _wait_for_local_server(
+    base_url: str,
+    server: LocalVllm,
+    *,
+    timeout_seconds: float,
+) -> str:
+    deadline = time.monotonic() + timeout_seconds
+    last_error = ""
+    while time.monotonic() < deadline:
+        if server.process.poll() is not None:
+            tail = server.log_path.read_text(errors="replace").splitlines()[-LOG_TAIL_LINES:]
+            raise RuntimeError(f"vLLM exited with {server.process.returncode} before readiness\n" + "\n".join(tail))
+        try:
+            response = requests.get(f"{base_url}/v1/models", timeout=5)
+            if response.ok:
+                models = response.json().get("data", [])
+                if models and models[0].get("id"):
+                    return str(models[0]["id"])
+        except requests.RequestException as exc:
+            last_error = repr(exc)
+        time.sleep(5)
+    raise TimeoutError(f"vLLM did not become ready within {timeout_seconds}s; last error: {last_error}")
+
+
+def _upload_rank_evidence(
+    filesystem: Any,
+    *,
+    prefix: str,
+    rank: int,
+    local_dir: Path,
+    status: dict[str, Any],
+) -> dict[str, Any]:
+    status_path = local_dir / f"rank-{rank}.json"
+    status_path.write_text(json.dumps(status, indent=2, sort_keys=True) + "\n")
+    records = [
+        _put_bytes_readback(
+            filesystem,
+            f"{prefix}ranks/rank-{rank}.json",
+            status_path.read_bytes(),
+        )
+    ]
+    log_path = local_dir / f"vllm-node-{rank}.log"
+    if log_path.exists():
+        records.append(
+            _put_bytes_readback(
+                filesystem,
+                f"{prefix}ranks/vllm-node-{rank}.log",
+                log_path.read_bytes(),
+            )
+        )
+    receipt = {
+        "rank": rank,
+        "passed": all(record["readback"] == "identical" for record in records),
+        "files": records,
+    }
+    _put_json_readback(
+        filesystem,
+        f"{prefix}ranks/rank-{rank}-upload.json",
+        receipt,
+    )
+    return receipt
+
+
+def _smoke_components(
+    correctness: dict[str, Any],
+    *,
+    elapsed_seconds: float,
+) -> dict[str, Any]:
+    return {
+        "correctness": correctness,
+        "duration": {
+            "passed": elapsed_seconds > 0,
+            "elapsed_seconds": elapsed_seconds,
+            "contract": "smoke completed",
+        },
+        "token_count": {
+            "passed": bool(correctness.get("passed")),
+            "contract": "correctness requests generated tokens",
+        },
+        "repeatability": {
+            "passed": bool(correctness.get("passed")),
+            "contract": "cold and prefix-reused outputs were identical",
+        },
+    }
+
+
+def _acceptance_components(load: dict[str, Any]) -> dict[str, Any]:
+    arms = load["arms"]
+    return {
+        "duration": {
+            "passed": all(
+                arm["elapsed_seconds"] >= ACCEPTANCE_MINIMUM_SECONDS and arm["stable_minutes_passed"] for arm in arms
+            ),
+            "arms": [
+                {
+                    "elapsed_seconds": arm["elapsed_seconds"],
+                    "stable_full_minutes": arm["stable_full_minutes"],
+                }
+                for arm in arms
+            ],
+        },
+        "token_count": {
+            "passed": all(
+                arm["generated_tokens"] >= ACCEPTANCE_MINIMUM_GENERATED_TOKENS and arm["branch_coverage"]["passed"]
+                for arm in arms
+            ),
+            "arms": [
+                {
+                    "generated_tokens": arm["generated_tokens"],
+                    "branch_coverage": arm["branch_coverage"]["observed"],
+                }
+                for arm in arms
+            ],
+        },
+        "repeatability": load["repeatability"],
+    }
+
+
+def run_unattended_worker(args: argparse.Namespace) -> dict[str, Any]:
+    info = get_job_info()
+    if info is None:
+        raise RuntimeError("worker must run inside an Iris job")
+    case = CASES[args.case]
+    _validate_unattended_mode(
+        case,
+        mode=args.mode,
+        model_source=args.model_source,
+    )
+    if info.num_tasks != case.node_count:
+        raise RuntimeError(f"{case.name} requires {case.node_count} tasks, Iris supplied {info.num_tasks}")
+    rank = info.task_index
+    run_id = args.run_id
+    prefix = f"{ARTIFACT_ROOT}/{case.name}/{run_id}/"
+    local_dir = Path(REMOTE_ROOT) / run_id / f"rank-{rank}"
+    local_dir.mkdir(parents=True, exist_ok=True)
+    write_case(local_dir, case=case, run_id=run_id, git_sha=_git_sha())
+    (local_dir / "aws-config").write_text(AWS_CONFIG_CONTENT)
+    os.environ["AWS_CONFIG_FILE"] = str(local_dir / "aws-config")
+    filesystem = _s3_filesystem()
+    endpoint_name = f"grugmoe-ranks-{run_id}"
+    metadata = {
+        "task_index": str(rank),
+        "num_tasks": str(info.num_tasks),
+        "worker_id": str(info.worker_id),
+        "advertise_host": info.advertise_host,
+    }
+    server: LocalVllm | None = None
+    rendezvous: list[dict[str, str]] = []
+    test_components: dict[str, Any] = {}
+    result: dict[str, Any] = {
+        "status": "starting",
+        "case": case.name,
+        "mode": args.mode,
+        "model_source": args.model_source,
+        "run_id": run_id,
+    }
+    started = time.monotonic()
+    worker_error: dict[str, str] | None = None
+    alive_before_stop = False
+    stop_uri = f"{prefix}control/stop.json"
+    try:
+        with iris_ctx().registry.registered(
+            endpoint_name,
+            f"tcp://{info.advertise_host}:{RPC_PORT}",
+            metadata,
+        ):
+            rendezvous = _wait_for_rank_endpoints(
+                endpoint_name,
+                expected=info.num_tasks,
+                timeout_seconds=args.server_timeout,
+            )
+            leader_endpoint = next(endpoint for endpoint in rendezvous if int(endpoint["task_index"]) == 0)
+            leader_ip = leader_endpoint["advertise_host"]
+            model_dir = {
+                "dummy": str(local_dir),
+                "fixture": str(FIXTURE_DIR.resolve()),
+                "snowball": SNOWBALL_EXPORT,
+            }[args.model_source]
+            server = _start_local_vllm(
+                case=case,
+                model_source=args.model_source,
+                model_dir=model_dir,
+                leader_ip=leader_ip,
+                node_index=rank,
+                smoke=args.mode == "smoke",
+                local_dir=local_dir,
+            )
+            startup = {
+                "rank": rank,
+                "pid": server.process.pid,
+                "worker_id": info.worker_id,
+                "advertise_host": info.advertise_host,
+                "command_sha256": hashlib.sha256("\0".join(server.command).encode()).hexdigest(),
+                "alive": server.process.poll() is None,
+            }
+            _put_json_readback(
+                filesystem,
+                f"{prefix}startup/rank-{rank}.json",
+                startup,
+            )
+            if rank != 0:
+                while not filesystem.exists(_s3_key(stop_uri)):
+                    if server.process.poll() is not None:
+                        raise RuntimeError(f"rank {rank} vLLM exited early with {server.process.returncode}")
+                    time.sleep(5)
+                alive_before_stop = server.process.poll() is None
+            else:
+                startup_uris = [f"{prefix}startup/rank-{index}.json" for index in range(info.num_tasks)]
+                startup_records = _wait_for_s3_jsons(
+                    filesystem,
+                    startup_uris,
+                    timeout_seconds=args.server_timeout,
+                )
+                if not all(record["alive"] for record in startup_records):
+                    raise RuntimeError(f"not every vLLM rank started: {startup_records}")
+                base_url = f"http://127.0.0.1:{SERVER_PORT}"
+                model = _wait_for_local_server(
+                    base_url,
+                    server,
+                    timeout_seconds=args.server_timeout,
+                )
+                result["model"] = model
+                correctness_started = time.monotonic()
+                if args.model_source == "fixture":
+                    correctness = run_fixture_parity(
+                        base_url,
+                        model,
+                        artifact_dir=local_dir,
+                    )
+                else:
+                    correctness_workload = json.loads((local_dir / "correctness-workload.json").read_text())
+                    correctness = run_correctness(
+                        base_url,
+                        model,
+                        correctness_workload,
+                        num_experts=case.num_experts,
+                        top_k=case.num_experts_per_tok,
+                        ep_size=case.data_parallel_size,
+                        artifact_dir=local_dir,
+                    )
+                test_components = _smoke_components(
+                    correctness,
+                    elapsed_seconds=time.monotonic() - correctness_started,
+                )
+                if args.mode == "kv":
+                    kv = run_kv_measurement(
+                        base_url,
+                        model,
+                        case=case,
+                        log_path=server.log_path,
+                        artifact_dir=local_dir,
+                    )
+                    result["kv"] = kv
+                    test_components["duration"] = {
+                        "passed": kv["passed"],
+                        "contexts": [observation["final_sequence_tokens"] for observation in kv["observations"]],
+                    }
+                    test_components["token_count"] = {
+                        "passed": all(observation["generated_tokens"] == 2_048 for observation in kv["observations"]),
+                        "generated_tokens": [observation["generated_tokens"] for observation in kv["observations"]],
+                    }
+                elif args.mode == "acceptance":
+                    workload = json.loads((local_dir / "workload.json").read_text())
+                    load = run_acceptance_load(
+                        base_url,
+                        model,
+                        workload,
+                        artifact_dir=local_dir,
+                        max_model_len=case.max_model_len,
+                        minimum_seconds=args.minimum_seconds,
+                        minimum_generated_tokens=args.minimum_generated_tokens,
+                    )
+                    result["load"] = load
+                    test_components.update(_acceptance_components(load))
+                result["correctness"] = correctness
+                alive_before_stop = server.process.poll() is None
+    except Exception as exc:
+        worker_error = {"type": type(exc).__name__, "message": str(exc)}
+        if rank == 0:
+            result["error"] = worker_error
+    finally:
+        if rank == 0:
+            try:
+                _put_json_readback(
+                    filesystem,
+                    stop_uri,
+                    {
+                        "rank": rank,
+                        "run_id": run_id,
+                        "error": worker_error,
+                    },
+                )
+            except Exception as exc:
+                worker_error = worker_error or {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
+        if server is not None:
+            alive_before_stop = alive_before_stop or server.process.poll() is None
+            _stop_local_vllm(server)
+        rank_status = {
+            "rank": rank,
+            "task_count": info.num_tasks,
+            "worker_id": info.worker_id,
+            "advertise_host": info.advertise_host,
+            "job_id": str(info.job_id),
+            "task_id": str(info.task_id),
+            "task_image": args.task_image,
+            "marin_commit": _git_sha(),
+            "vllm_commit": VLLM_SHA,
+            "coscheduling": UNATTENDED_COSCHEDULING if info.num_tasks > 1 else None,
+            "rendezvous": rendezvous,
+            "vllm_alive_before_stop": alive_before_stop,
+            "vllm_returncode_after_stop": server.process.returncode if server is not None else None,
+            "error": worker_error,
+            "elapsed_seconds": time.monotonic() - started,
+        }
+        try:
+            _upload_rank_evidence(
+                filesystem,
+                prefix=prefix,
+                rank=rank,
+                local_dir=local_dir,
+                status=rank_status,
+            )
+        except Exception as exc:
+            worker_error = worker_error or {
+                "type": type(exc).__name__,
+                "message": str(exc),
+            }
+
+    if rank != 0:
+        if worker_error:
+            raise RuntimeError(worker_error["message"])
+        return rank_status
+
+    rank_uris = [f"{prefix}ranks/rank-{index}.json" for index in range(info.num_tasks)]
+    receipt_uris = [f"{prefix}ranks/rank-{index}-upload.json" for index in range(info.num_tasks)]
+    try:
+        rank_records = _wait_for_s3_jsons(
+            filesystem,
+            rank_uris,
+            timeout_seconds=300,
+        )
+        receipts = _wait_for_s3_jsons(
+            filesystem,
+            receipt_uris,
+            timeout_seconds=300,
+        )
+    except Exception as exc:
+        rank_records = [rank_status]
+        receipts = []
+        worker_error = worker_error or {
+            "type": type(exc).__name__,
+            "message": str(exc),
+        }
+    placement = {
+        "passed": (
+            len(rendezvous) == info.num_tasks
+            and {int(endpoint["task_index"]) for endpoint in rendezvous} == set(range(info.num_tasks))
+            and len({endpoint["worker_id"] for endpoint in rendezvous}) == info.num_tasks
+            and (
+                info.num_tasks == 1
+                or all(record.get("coscheduling") == UNATTENDED_COSCHEDULING for record in rank_records)
+            )
+        ),
+        "required_coscheduling": UNATTENDED_COSCHEDULING if info.num_tasks > 1 else None,
+        "endpoints": rendezvous,
+        "distinct_workers": sorted({endpoint["worker_id"] for endpoint in rendezvous}),
+    }
+    all_rank_health = {
+        "passed": (
+            len(rank_records) == info.num_tasks
+            and all(record.get("vllm_alive_before_stop") and record.get("error") is None for record in rank_records)
+        ),
+        "ranks": rank_records,
+    }
+    components = {
+        "placement": placement,
+        "all_rank_health": all_rank_health,
+        "correctness": test_components.get("correctness", False),
+        "duration": test_components.get("duration", False),
+        "token_count": test_components.get("token_count", False),
+        "repeatability": test_components.get("repeatability", False),
+        "artifact_readback": False,
+    }
+    manifest = frozen_manifest(
+        case,
+        run_id=run_id,
+        git_sha=_git_sha(),
+        model_source=args.model_source,
+    )
+    manifest.update(
+        {
+            "task_image": args.task_image,
+            "iris": {
+                "job_id": str(info.job_id),
+                "task_count": info.num_tasks,
+                "coscheduling": UNATTENDED_COSCHEDULING if info.num_tasks > 1 else None,
+                "priority": Priority.INTERACTIVE.value,
+            },
+            "files": {
+                name: _sha256_path(local_dir / name)
+                for name in (
+                    "config.json",
+                    "correctness-workload.json",
+                    "workload.json",
+                )
+            },
+            "dependency_lock_sha256": _sha256_path(Path("uv.lock")),
+        }
+    )
+    (local_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    result["components"] = components
+    result["rank_uploads"] = receipts
+    result["elapsed_seconds"] = time.monotonic() - started
+    if worker_error:
+        result["error"] = worker_error
+
+    upload_records: list[dict[str, Any]] = []
+    for path in sorted(local_dir.rglob("*")):
+        if path.is_file() and path.name != "result.json":
+            relative = path.relative_to(local_dir).as_posix()
+            upload_records.append(
+                _put_bytes_readback(
+                    filesystem,
+                    f"{prefix}{relative}",
+                    path.read_bytes(),
+                )
+            )
+    components["artifact_readback"] = {
+        "passed": (
+            bool(upload_records)
+            and all(record["readback"] == "identical" for record in upload_records)
+            and len(receipts) == info.num_tasks
+            and all(receipt["passed"] for receipt in receipts)
+        ),
+        "files": upload_records,
+        "rank_receipts": receipts,
+    }
+    aggregate = aggregate_preflight_status(components)
+    result.update(aggregate)
+    if worker_error:
+        result["status"] = "failed"
+        result["passed"] = False
+    result["result_readback"] = {
+        "path": f"{prefix}result.json",
+        "readback": "identical",
+    }
+    result_path = local_dir / "result.json"
+    result_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    _put_bytes_readback(
+        filesystem,
+        f"{prefix}result.json",
+        result_path.read_bytes(),
+    )
+    if not result["passed"]:
+        raise RuntimeError(json.dumps(result.get("error") or result["components"]))
+    return result
 
 
 def execute(args: argparse.Namespace) -> dict[str, Any]:
@@ -976,6 +2049,7 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
     write_case(local_dir, case=case, run_id=run_id, git_sha=git_sha)
     (local_dir / "aws-config").write_text(AWS_CONFIG_CONTENT)
     workload = json.loads((local_dir / "workload.json").read_text())
+    correctness_workload = json.loads((local_dir / "correctness-workload.json").read_text())
     manifest = frozen_manifest(case, run_id=run_id, git_sha=git_sha, model_source=args.model_source)
     gang = Gang(
         state,
@@ -997,7 +2071,13 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
     gang.inspect()
     result["pods"] = [dataclasses.asdict(runtime) for runtime in gang.runtimes]
     manifest["files"] = {
-        filename: _sha256_path(local_dir / filename) for filename in ("aws-config", "config.json", "workload.json")
+        filename: _sha256_path(local_dir / filename)
+        for filename in (
+            "aws-config",
+            "config.json",
+            "correctness-workload.json",
+            "workload.json",
+        )
     }
     manifest["dependency_lock_sha256"] = _sha256_path(Path("uv.lock"))
     manifest["iris"] = {
@@ -1025,15 +2105,22 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
             except Exception as exc:
                 raise RuntimeError(f"{exc}\n{gang.failure_tail()}") from exc
             result["model"] = model
-            result["correctness"] = run_correctness(
-                base_url,
-                model,
-                workload,
-                num_experts=case.num_experts,
-                top_k=case.num_experts_per_tok,
-                ep_size=case.data_parallel_size,
-                artifact_dir=local_dir,
-            )
+            if args.model_source == "fixture":
+                result["correctness"] = run_fixture_parity(
+                    base_url,
+                    model,
+                    artifact_dir=local_dir,
+                )
+            else:
+                result["correctness"] = run_correctness(
+                    base_url,
+                    model,
+                    correctness_workload,
+                    num_experts=case.num_experts,
+                    top_k=case.num_experts_per_tok,
+                    ep_size=case.data_parallel_size,
+                    artifact_dir=local_dir,
+                )
             if args.mode == "acceptance":
                 result["load"] = run_acceptance_load(
                     base_url,
@@ -1103,7 +2190,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     run = subparsers.add_parser("run", help="run against an existing dev_gpu allocation")
     run.add_argument("--session", required=True)
     run.add_argument("--case", choices=sorted(CASES), required=True)
-    run.add_argument("--model-source", choices=("dummy", "snowball"), default="dummy")
+    run.add_argument("--model-source", choices=("dummy", "fixture"), default="dummy")
     run.add_argument("--run-id")
     run.add_argument("--mode", choices=("smoke", "acceptance"), default="smoke")
     run.add_argument("--state-dir", default=str(STATE_DIR))
@@ -1116,6 +2203,51 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=ACCEPTANCE_MINIMUM_GENERATED_TOKENS,
     )
     run.add_argument("--no-upload", action="store_true")
+
+    submit = subparsers.add_parser(
+        "submit",
+        help="submit a zero-retry unattended Iris gang",
+    )
+    submit.add_argument("--case", choices=sorted(CASES), required=True)
+    submit.add_argument("--model-source", choices=("dummy", "fixture"), default="dummy")
+    submit.add_argument(
+        "--mode",
+        choices=("smoke", "kv", "acceptance"),
+        default="smoke",
+    )
+    submit.add_argument("--run-id")
+    submit.add_argument("--task-image", required=True)
+    submit.add_argument("--config", default=DEFAULT_CLUSTER_CONFIG)
+    submit.add_argument("--server-timeout", type=float, default=SERVER_TIMEOUT_SECONDS)
+    submit.add_argument("--minimum-seconds", type=float, default=ACCEPTANCE_MINIMUM_SECONDS)
+    submit.add_argument(
+        "--minimum-generated-tokens",
+        type=int,
+        default=ACCEPTANCE_MINIMUM_GENERATED_TOKENS,
+    )
+    submit.add_argument("--wait", action="store_true")
+    submit.add_argument("--wait-timeout", type=float, default=21_600)
+
+    worker = subparsers.add_parser(
+        "worker",
+        help="internal Iris replica entrypoint",
+    )
+    worker.add_argument("--case", choices=sorted(CASES), required=True)
+    worker.add_argument("--model-source", choices=("dummy", "fixture"), required=True)
+    worker.add_argument(
+        "--mode",
+        choices=("smoke", "kv", "acceptance"),
+        required=True,
+    )
+    worker.add_argument("--run-id", required=True)
+    worker.add_argument("--task-image", required=True)
+    worker.add_argument("--server-timeout", type=float, default=SERVER_TIMEOUT_SECONDS)
+    worker.add_argument("--minimum-seconds", type=float, default=ACCEPTANCE_MINIMUM_SECONDS)
+    worker.add_argument(
+        "--minimum-generated-tokens",
+        type=int,
+        default=ACCEPTANCE_MINIMUM_GENERATED_TOKENS,
+    )
     return parser.parse_args(argv)
 
 
@@ -1124,6 +2256,26 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "prepare":
         write_case(args.output, case=CASES[args.case], run_id=args.run_id, git_sha=_git_sha())
         print(json.dumps({"status": "prepared", "case": args.case, "output": str(args.output)}, sort_keys=True))
+        return 0
+    if args.command == "submit":
+        submit_unattended(args)
+        return 0
+    if args.command == "worker":
+        result = run_unattended_worker(args)
+        print(
+            json.dumps(
+                {
+                    "status": result.get("status", "completed"),
+                    "case": result["case"] if "case" in result else args.case,
+                    "run_id": args.run_id,
+                    "rank": get_job_info().task_index,
+                    "artifact_prefix": f"{ARTIFACT_ROOT}/{args.case}/{args.run_id}/",
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            flush=True,
+        )
         return 0
     result = execute(args)
     print(

@@ -11,14 +11,25 @@ import json
 import numpy as np
 import pytest
 
-from experiments.grug.moe.inference_preflight import CASES, SNOWBALL_EXPORT, deterministic_workload
+from experiments.grug.moe.inference_preflight import (
+    CASES,
+    SNOWBALL_EXPORT,
+    VLLM_SHA,
+    deterministic_boundary_workload,
+)
 from scripts.iris.dev_gpu import CoreweaveTarget, DevGpuState, PodRef, Priority
 from scripts.iris.grugmoe_inference_preflight import (
     LOCAL_DP_SIZE,
+    _acceptance_components,
     _free_port,
+    _immutable_image,
     _record_completion,
+    _validate_unattended_mode,
     boundary_requests,
+    parse_args,
+    parse_kv_group_snapshots,
     remote_process_probe,
+    summarize_kv_snapshot,
     validate_acceptance_thresholds,
     validate_session,
     vllm_args,
@@ -66,6 +77,7 @@ def test_two_node_commands_use_one_global_ep8_group() -> None:
         assert "--enable-prefix-caching" in joined
         assert "--enable-return-routed-experts" in joined
         assert "--enable-prompt-tokens-details" in joined
+        assert "--max-logprobs 64" in joined
     assert "--data-parallel-start-rank 0" in joined_leader
     assert "--data-parallel-start-rank 4" in joined_follower
     assert "--headless" not in leader
@@ -102,7 +114,7 @@ def test_four_node_case_has_contiguous_rank_starts() -> None:
 def test_command_pins_vllm_git_sha_and_cuda_backend() -> None:
     command = vllm_command(["serve", "/model"])
     joined = " ".join(command)
-    assert "afb26719464d5957e695bde478ae93a160b11d14" in joined
+    assert VLLM_SHA in joined
     assert "--torch-backend cu130" in joined
     assert "runai-model-streamer[s3]==0.16.1" in joined
 
@@ -129,8 +141,25 @@ def test_snowball_uses_pinned_export_and_streaming_loader() -> None:
     assert "--skip-tokenizer-init" not in joined
 
 
+def test_frozen_fixture_uses_float_safetensors_and_every_custom_path() -> None:
+    args = vllm_args(
+        CASES["tiny"],
+        model_dir="/fixture",
+        model_source="fixture",
+        leader_ip="10.0.0.1",
+        node_index=0,
+        smoke=True,
+    )
+    joined = " ".join(args)
+    assert "--dtype float" in joined
+    assert "--kv-cache-dtype auto" in joined
+    assert "--load-format safetensors" in joined
+    assert "--max-model-len 1024" in joined
+    assert "--max-logprobs 64" in joined
+
+
 def test_correctness_selects_both_required_boundaries_once() -> None:
-    selected = boundary_requests(deterministic_workload(max_prefix_tokens=2048))
+    selected = boundary_requests(deterministic_boundary_workload())
     assert [request["prefix_token_count"] for request in selected] == [17, 513]
 
 
@@ -178,3 +207,132 @@ def test_acceptance_thresholds_cannot_be_weakened() -> None:
         validate_acceptance_thresholds(minimum_seconds=599, minimum_generated_tokens=250_000)
     with pytest.raises(ValueError, match="250000 generated"):
         validate_acceptance_thresholds(minimum_seconds=600, minimum_generated_tokens=249_999)
+
+
+def test_unattended_cli_forbids_a_second_snowball_attempt_and_wrong_exact_modes() -> None:
+    with pytest.raises(ValueError, match="must not be retried"):
+        _validate_unattended_mode(
+            CASES["reference-ep8"],
+            mode="smoke",
+            model_source="snowball",
+        )
+    with pytest.raises(ValueError, match="exact-reference-ep16"):
+        _validate_unattended_mode(
+            CASES["reference-ep8"],
+            mode="acceptance",
+            model_source="dummy",
+        )
+    with pytest.raises(ValueError, match="reference-ep8"):
+        _validate_unattended_mode(
+            CASES["one-node-ep4"],
+            mode="kv",
+            model_source="dummy",
+        )
+    parsed = parse_args(
+        [
+            "submit",
+            "--case",
+            "reference-ep8",
+            "--mode",
+            "kv",
+            "--task-image",
+            "example.invalid/task@sha256:" + "a" * 64,
+        ]
+    )
+    assert parsed.command == "submit"
+    assert not parsed.wait
+    assert _immutable_image(parsed.task_image) == parsed.task_image
+
+
+def test_kv_snapshot_separates_semantic_padded_physical_and_reserved_bytes() -> None:
+    groups = [
+        {
+            "engine_idx": 0,
+            "role": "attention",
+            "kind": "sliding_window",
+            "active_requests": 1,
+            "active_blocks": 33,
+            "active_payload_bytes": 100,
+            "active_padded_bytes": 120,
+            "active_physical_bytes": 500,
+            "reserved_physical_bytes": 1_000,
+        },
+        {
+            "engine_idx": 0,
+            "role": "attention",
+            "kind": "full_attention",
+            "active_requests": 1,
+            "active_blocks": 385,
+            "active_payload_bytes": 200,
+            "active_padded_bytes": 240,
+            "active_physical_bytes": 600,
+            "reserved_physical_bytes": 1_000,
+        },
+        {
+            "engine_idx": 1,
+            "role": "attention",
+            "kind": "full_attention",
+            "active_requests": 0,
+            "active_blocks": 0,
+            "active_payload_bytes": 0,
+            "active_padded_bytes": 0,
+            "active_physical_bytes": 0,
+            "reserved_physical_bytes": 1_000,
+        },
+        {
+            "engine_idx": 0,
+            "role": "sconv",
+            "kind": "sconv",
+            "active_requests": 1,
+            "active_blocks": 34,
+            "active_payload_bytes": 50,
+            "active_padded_bytes": 60,
+            "active_physical_bytes": 550,
+            "reserved_physical_bytes": 1_000,
+        },
+    ]
+    text = "INFO GrugMoE KV group usage: " + json.dumps(groups)
+    (parsed,) = parse_kv_group_snapshots(text)
+    summary = summarize_kv_snapshot(parsed)
+    assert summary["active_requests"] == 1
+    assert summary["semantic_active_bytes"] == 350
+    assert summary["semantic_attention_active_bytes"] == 300
+    assert summary["semantic_sconv_active_bytes"] == 50
+    assert summary["padded_group_active_bytes"] == 420
+    assert summary["padded_attention_active_bytes"] == 360
+    assert summary["padded_sconv_active_bytes"] == 60
+    assert summary["padding_active_bytes"] == 70
+    assert summary["physical_active_bytes"] == 1_650
+    assert summary["reserved_physical_bytes_global"] == 2_000
+    assert summary["local_attention_active_blocks"] == 33
+    assert summary["global_attention_active_blocks"] == 385
+    assert summary["sconv_active_blocks"] == 34
+
+
+def test_acceptance_components_require_ten_minutes_tokens_and_all_branches() -> None:
+    arm = {
+        "elapsed_seconds": 601,
+        "stable_minutes_passed": True,
+        "stable_full_minutes": 10,
+        "generated_tokens": 250_000,
+        "branch_coverage": {"passed": True, "observed": 144},
+    }
+    components = _acceptance_components(
+        {
+            "arms": [arm, arm],
+            "repeatability": {"passed": True},
+        }
+    )
+    assert all(component["passed"] for component in components.values())
+    failed = _acceptance_components(
+        {
+            "arms": [
+                {**arm, "stable_minutes_passed": False},
+                {**arm, "generated_tokens": 249_999},
+            ],
+            "repeatability": {"passed": False},
+        }
+    )
+    assert not failed["duration"]["passed"]
+    assert not failed["token_count"]["passed"]
+    assert not failed["repeatability"]["passed"]

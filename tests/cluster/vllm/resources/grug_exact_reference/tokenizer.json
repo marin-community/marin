@@ -1,0 +1,135 @@
+{
+  "version": "1.0",
+  "truncation": null,
+  "padding": null,
+  "added_tokens": [
+    {
+      "id": 0,
+      "content": "<unk>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 1,
+      "content": "<bos>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 2,
+      "content": "<eos>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    }
+  ],
+  "normalizer": null,
+  "pre_tokenizer": {
+    "type": "Whitespace"
+  },
+  "post_processor": {
+    "type": "TemplateProcessing",
+    "single": [
+      {
+        "Sequence": {
+          "id": "A",
+          "type_id": 0
+        }
+      }
+    ],
+    "pair": [
+      {
+        "Sequence": {
+          "id": "A",
+          "type_id": 0
+        }
+      },
+      {
+        "Sequence": {
+          "id": "B",
+          "type_id": 1
+        }
+      }
+    ],
+    "special_tokens": {}
+  },
+  "decoder": null,
+  "model": {
+    "type": "WordLevel",
+    "vocab": {
+      "<unk>": 0,
+      "<bos>": 1,
+      "<eos>": 2,
+      "token_3": 3,
+      "token_4": 4,
+      "token_5": 5,
+      "token_6": 6,
+      "token_7": 7,
+      "token_8": 8,
+      "token_9": 9,
+      "token_10": 10,
+      "token_11": 11,
+      "token_12": 12,
+      "token_13": 13,
+      "token_14": 14,
+      "token_15": 15,
+      "token_16": 16,
+      "token_17": 17,
+      "token_18": 18,
+      "token_19": 19,
+      "token_20": 20,
+      "token_21": 21,
+      "token_22": 22,
+      "token_23": 23,
+      "token_24": 24,
+      "token_25": 25,
+      "token_26": 26,
+      "token_27": 27,
+      "token_28": 28,
+      "token_29": 29,
+      "token_30": 30,
+      "token_31": 31,
+      "token_32": 32,
+      "token_33": 33,
+      "token_34": 34,
+      "token_35": 35,
+      "token_36": 36,
+      "token_37": 37,
+      "token_38": 38,
+      "token_39": 39,
+      "token_40": 40,
+      "token_41": 41,
+      "token_42": 42,
+      "token_43": 43,
+      "token_44": 44,
+      "token_45": 45,
+      "token_46": 46,
+      "token_47": 47,
+      "token_48": 48,
+      "token_49": 49,
+      "token_50": 50,
+      "token_51": 51,
+      "token_52": 52,
+      "token_53": 53,
+      "token_54": 54,
+      "token_55": 55,
+      "token_56": 56,
+      "token_57": 57,
+      "token_58": 58,
+      "token_59": 59,
+      "token_60": 60,
+      "token_61": 61,
+      "token_62": 62,
+      "token_63": 63
+    },
+    "unk_token": "<unk>"
+  }
+}

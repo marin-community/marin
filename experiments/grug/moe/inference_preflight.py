@@ -21,11 +21,12 @@ from pathlib import Path
 from typing import Any
 
 MARIN_BASE_SHA = "75bf2437035cf731d1a4bd71266229dfcdda9478"
-VLLM_SHA = "afb26719464d5957e695bde478ae93a160b11d14"
+VLLM_SHA = "f87b1401a69412665afec2c80aca7d429c1759ae"
 TRAINING_REFERENCE_SHA = "fd3e9bc5b428633027f944be7fdf1136567db028"
 PINNED_REFERENCE_URL = "https://github.com/marin-community/marin/issues/7201#issuecomment-5093392733"
-SNOWBALL_EXPORT = "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b/" "step-42150/hf-bf16-vllm/d819cbc63780bd86/"
+SNOWBALL_EXPORT = "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b/step-42150/hf-bf16-vllm/d819cbc63780bd86/"
 ARTIFACT_ROOT = "s3://marin-us-east-02a/marin/users/romain/moe-inference-architecture"
+FROZEN_FIXTURE_PATH = "tests/cluster/vllm/resources/grug_exact_reference"
 
 DUMMY_SEED = 1234
 DTYPE = "bfloat16"
@@ -35,6 +36,11 @@ KV_BLOCK_SIZE = 16
 ROOT_COUNT = 18
 BRANCHES_PER_ROOT = 8
 BRANCH_COUNT = ROOT_COUNT * BRANCHES_PER_ROOT
+ACCEPTANCE_HISTORY_LENGTHS = (10_240, 30_720, 62_464)
+ACCEPTANCE_APPEND_TOKENS = 1_024
+ACCEPTANCE_RESPONSE_TOKENS = 2_048
+ACCEPTANCE_FINAL_LENGTHS = (13_312, 33_792, 65_536)
+SITES = ("k", "v", "attn", "mlp")
 
 
 @dataclass(frozen=True)
@@ -51,6 +57,22 @@ class ModelCase:
     max_model_len: int
     sliding_window: int
     data_parallel_size: int
+    local_kv_heads: int
+    global_kv_heads: int
+    global_every: int
+    rope_fraction: float
+    rope_fused: bool
+    gated_norm: bool
+    attn_gate: bool
+    xsa: bool
+    qb_routing: bool
+    legacy_input_output_gated_norm: bool
+    mtp_depth: int
+    over_encoding_vocab_size: int
+    num_shared_experts: int
+    sconv: bool
+    sconv_kernel: int
+    sconv_sites: tuple[str, ...]
 
     def __post_init__(self) -> None:
         positive = (
@@ -58,12 +80,18 @@ class ModelCase:
             self.num_hidden_layers,
             self.num_attention_heads,
             self.num_key_value_heads,
+            self.local_kv_heads,
+            self.global_kv_heads,
             self.num_experts,
             self.num_experts_per_tok,
             self.moe_intermediate_size,
+            self.shared_expert_intermediate_size,
             self.max_model_len,
             self.sliding_window,
             self.data_parallel_size,
+            self.global_every,
+            self.num_shared_experts,
+            self.sconv_kernel,
         )
         if any(value <= 0 for value in positive):
             raise ValueError(f"{self.name}: dimensions and topology must be positive")
@@ -71,10 +99,18 @@ class ModelCase:
             raise ValueError(f"{self.name}: hidden_size must be divisible by num_attention_heads")
         if self.num_attention_heads % self.num_key_value_heads:
             raise ValueError(f"{self.name}: query heads must be divisible by KV heads")
+        if self.num_key_value_heads != max(self.local_kv_heads, self.global_kv_heads):
+            raise ValueError(f"{self.name}: stored KV heads must equal the larger logical KV-head count")
+        if self.num_key_value_heads % self.local_kv_heads or self.num_key_value_heads % self.global_kv_heads:
+            raise ValueError(f"{self.name}: stored KV heads must be divisible by each logical KV-head count")
         if self.num_experts_per_tok >= self.num_experts:
             raise ValueError(f"{self.name}: QB routing requires top-k < expert count")
-        if self.shared_expert_intermediate_size < 0:
-            raise ValueError(f"{self.name}: shared expert width cannot be negative")
+        if self.shared_expert_intermediate_size % self.num_shared_experts:
+            raise ValueError(f"{self.name}: shared expert width must divide across the shared experts")
+        if not 0 < self.rope_fraction <= 1:
+            raise ValueError(f"{self.name}: rope_fraction must be in (0, 1]")
+        if set(self.sconv_sites) - set(SITES):
+            raise ValueError(f"{self.name}: unknown SConv site")
         if self.data_parallel_size not in {1, 4, 8, 16}:
             raise ValueError(f"{self.name}: unsupported preflight DP/EP size")
 
@@ -95,49 +131,141 @@ class ModelCase:
             "num_hidden_layers": self.num_hidden_layers,
             "num_attention_heads": self.num_attention_heads,
             "num_key_value_heads": self.num_key_value_heads,
+            "local_kv_heads": self.local_kv_heads,
+            "global_kv_heads": self.global_kv_heads,
             "head_dim": self.head_dim,
             "max_position_embeddings": self.max_model_len,
             "sliding_window": self.sliding_window,
+            "global_every": self.global_every,
             "rms_norm_eps": 1e-5,
             "initializer_range": 0.02,
             "rope_theta": 10_000.0,
+            "rope_fraction": self.rope_fraction,
+            "rope_fused": self.rope_fused,
             "tie_word_embeddings": False,
             "num_experts": self.num_experts,
             "num_experts_per_tok": self.num_experts_per_tok,
             "moe_intermediate_size": self.moe_intermediate_size,
-            # Two half-width shared experts are represented by concatenating
-            # their intermediate axes into this one fused shared MLP.
             "shared_expert_intermediate_size": self.shared_expert_intermediate_size,
+            "num_shared_experts": self.num_shared_experts,
             "qk_mult": 1.3,
+            "qk_mult_long_scale": 1.0,
             "disable_pko": True,
             "disable_long_rope": True,
+            "gated_norm": self.gated_norm,
+            "attn_gate": self.attn_gate,
+            "xsa": self.xsa,
+            "qb_routing": self.qb_routing,
+            "legacy_input_output_gated_norm": self.legacy_input_output_gated_norm,
+            "mtp_depth": self.mtp_depth,
+            "mtp_dense": True,
+            "over_encoding_vocab_size": self.over_encoding_vocab_size,
+            "sconv": self.sconv,
+            "sconv_kernel": self.sconv_kernel,
+            "sconv_sites": list(self.sconv_sites),
             "grugmoe_attention_mode": "production",
             "grug_moe_artifact_schema_version": 1,
             "torch_dtype": DTYPE,
         }
 
 
+def _case(
+    name: str,
+    *,
+    hidden_size: int,
+    num_hidden_layers: int,
+    num_attention_heads: int,
+    num_key_value_heads: int,
+    local_kv_heads: int,
+    global_kv_heads: int,
+    num_experts: int,
+    num_experts_per_tok: int,
+    moe_intermediate_size: int,
+    shared_expert_intermediate_size: int,
+    max_model_len: int,
+    sliding_window: int,
+    data_parallel_size: int,
+    global_every: int = 6,
+    exact_blocks: bool = True,
+    sconv: bool = True,
+) -> ModelCase:
+    """Construct a case while keeping the exact custom-block switches together."""
+    return ModelCase(
+        name=name,
+        hidden_size=hidden_size,
+        num_hidden_layers=num_hidden_layers,
+        num_attention_heads=num_attention_heads,
+        num_key_value_heads=num_key_value_heads,
+        local_kv_heads=local_kv_heads,
+        global_kv_heads=global_kv_heads,
+        num_experts=num_experts,
+        num_experts_per_tok=num_experts_per_tok,
+        moe_intermediate_size=moe_intermediate_size,
+        shared_expert_intermediate_size=shared_expert_intermediate_size,
+        max_model_len=max_model_len,
+        sliding_window=sliding_window,
+        data_parallel_size=data_parallel_size,
+        global_every=global_every,
+        rope_fraction=0.5 if exact_blocks else 1.0,
+        rope_fused=exact_blocks,
+        gated_norm=True,
+        attn_gate=True,
+        xsa=True,
+        qb_routing=True,
+        legacy_input_output_gated_norm=not exact_blocks,
+        mtp_depth=1 if exact_blocks else 0,
+        over_encoding_vocab_size=0,
+        num_shared_experts=2 if exact_blocks else 1,
+        sconv=sconv,
+        sconv_kernel=4,
+        sconv_sites=SITES,
+    )
+
+
 CASES: dict[str, ModelCase] = {
-    "tiny": ModelCase(
-        name="tiny",
+    # Laptop/unit-test scale, but every exact model path is enabled.
+    "tiny": _case(
+        "tiny",
         hidden_size=128,
-        num_hidden_layers=4,
+        num_hidden_layers=7,
         num_attention_heads=4,
         num_key_value_heads=2,
+        local_kv_heads=2,
+        global_kv_heads=1,
         num_experts=4,
         num_experts_per_tok=2,
         moe_intermediate_size=64,
-        shared_expert_intermediate_size=64,
-        max_model_len=2048,
+        shared_expert_intermediate_size=128,
+        max_model_len=1024,
         sliding_window=512,
         data_parallel_size=1,
     ),
-    "one-node-ep4": ModelCase(
-        name="one-node-ep4",
+    # One-node exact path gate.
+    "one-node-ep4": _case(
+        "one-node-ep4",
         hidden_size=512,
-        num_hidden_layers=6,
+        num_hidden_layers=7,
         num_attention_heads=8,
         num_key_value_heads=4,
+        local_kv_heads=4,
+        global_kv_heads=2,
+        num_experts=128,
+        num_experts_per_tok=4,
+        moe_intermediate_size=256,
+        shared_expert_intermediate_size=512,
+        max_model_len=4096,
+        sliding_window=512,
+        data_parallel_size=4,
+    ),
+    # The old approximation remains a non-ranking launcher control.
+    "legacy-control-ep4": _case(
+        "legacy-control-ep4",
+        hidden_size=512,
+        num_hidden_layers=8,
+        num_attention_heads=8,
+        num_key_value_heads=4,
+        local_kv_heads=4,
+        global_kv_heads=4,
         num_experts=128,
         num_experts_per_tok=4,
         moe_intermediate_size=256,
@@ -145,39 +273,120 @@ CASES: dict[str, ModelCase] = {
         max_model_len=4096,
         sliding_window=512,
         data_parallel_size=4,
+        global_every=4,
+        exact_blocks=False,
+        sconv=False,
     ),
-    "reference-ep8": ModelCase(
-        name="reference-ep8",
+    # Reuses the heterogeneous-KV and sliding-window implementations at the
+    # other P0 values without pretending to be a performance comparison.
+    "kv2-window2048-ep4": _case(
+        "kv2-window2048-ep4",
+        hidden_size=512,
+        num_hidden_layers=7,
+        num_attention_heads=8,
+        num_key_value_heads=4,
+        local_kv_heads=4,
+        global_kv_heads=1,
+        num_experts=128,
+        num_experts_per_tok=4,
+        moe_intermediate_size=256,
+        shared_expert_intermediate_size=512,
+        max_model_len=4096,
+        sliding_window=2048,
+        data_parallel_size=4,
+    ),
+    "reference-ep8": _case(
+        "reference-ep8",
         hidden_size=6144,
         num_hidden_layers=48,
         num_attention_heads=48,
         num_key_value_heads=12,
+        local_kv_heads=12,
+        global_kv_heads=6,
         num_experts=128,
         num_experts_per_tok=4,
         moe_intermediate_size=3072,
-        shared_expert_intermediate_size=3072,
+        shared_expert_intermediate_size=6144,
         max_model_len=65_536,
         sliding_window=512,
         data_parallel_size=8,
     ),
-    "granular-ep16": ModelCase(
-        name="granular-ep16",
+    "granular-ep16": _case(
+        "granular-ep16",
+        hidden_size=512,
+        num_hidden_layers=7,
+        num_attention_heads=8,
+        num_key_value_heads=4,
+        local_kv_heads=4,
+        global_kv_heads=2,
+        num_experts=256,
+        num_experts_per_tok=8,
+        moe_intermediate_size=128,
+        shared_expert_intermediate_size=512,
+        max_model_len=4096,
+        sliding_window=512,
+        data_parallel_size=16,
+    ),
+    "exact-reference-ep16": _case(
+        "exact-reference-ep16",
         hidden_size=6144,
         num_hidden_layers=48,
         num_attention_heads=48,
         num_key_value_heads=12,
-        num_experts=256,
-        num_experts_per_tok=8,
-        moe_intermediate_size=1536,
-        shared_expert_intermediate_size=3072,
+        local_kv_heads=12,
+        global_kv_heads=6,
+        num_experts=128,
+        num_experts_per_tok=4,
+        moe_intermediate_size=3072,
+        shared_expert_intermediate_size=6144,
         max_model_len=65_536,
         sliding_window=512,
         data_parallel_size=16,
     ),
 }
 
+P0_SMOKE_CASES: dict[str, tuple[str, ...]] = {
+    "uniform-kv_every4_sconv-off": ("legacy-control-ep4",),
+    "heterogeneous-kv_every6_sconv-on": ("one-node-ep4", "reference-ep8"),
+    "global-kv-2_window-2048": ("kv2-window2048-ep4",),
+    "top8-256_ep16": ("granular-ep16",),
+    "exact-ep16": ("exact-reference-ep16",),
+}
 
-def layer_types(num_hidden_layers: int, *, global_interval: int = 4) -> list[str]:
+REQUIRED_ACCEPTANCE_CHECKS = (
+    "placement",
+    "all_rank_health",
+    "correctness",
+    "duration",
+    "token_count",
+    "repeatability",
+    "artifact_readback",
+)
+
+
+def aggregate_preflight_status(components: dict[str, Any]) -> dict[str, Any]:
+    """Return the literal conjunction used for the top-level live result."""
+    missing = [name for name in REQUIRED_ACCEPTANCE_CHECKS if name not in components]
+    if missing:
+        raise ValueError(f"missing required acceptance checks: {missing}")
+    checks: dict[str, bool] = {}
+    for name in REQUIRED_ACCEPTANCE_CHECKS:
+        component = components[name]
+        if isinstance(component, bool):
+            checks[name] = component
+        elif isinstance(component, dict) and isinstance(component.get("passed"), bool):
+            checks[name] = bool(component["passed"])
+        else:
+            raise TypeError(f"{name} must be a bool or a mapping with boolean 'passed'")
+    passed = all(checks.values())
+    return {
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "checks": checks,
+    }
+
+
+def layer_types(num_hidden_layers: int, *, global_interval: int = 6) -> list[str]:
     """Return the layer schedule enforced by the pinned serving fork."""
     if num_hidden_layers <= 0 or global_interval <= 0:
         raise ValueError("layer count and global interval must be positive")
@@ -226,64 +435,105 @@ def predict_kv_bytes(
 
 def deterministic_workload(
     *,
-    max_prefix_tokens: int,
+    max_prefix_tokens: int = ACCEPTANCE_HISTORY_LENGTHS[-1],
     roots: int = ROOT_COUNT,
     branches_per_root: int = BRANCHES_PER_ROOT,
     seed: int = DUMMY_SEED,
 ) -> dict[str, Any]:
-    """Build the frozen append-style token workload without a tokenizer."""
+    """Build the exact 18-root, 144-branch acceptance workload."""
     if roots <= 0 or branches_per_root <= 0:
         raise ValueError("roots and branches_per_root must be positive")
-    if max_prefix_tokens < 513:
-        raise ValueError("max_prefix_tokens must cross the 512-token window")
+    if roots != ROOT_COUNT or branches_per_root != BRANCHES_PER_ROOT:
+        raise ValueError("the acceptance workload is frozen at 18 roots and 8 branches")
+    if max_prefix_tokens != ACCEPTANCE_HISTORY_LENGTHS[-1]:
+        raise ValueError(
+            f"the acceptance workload's longest cached history is frozen at {ACCEPTANCE_HISTORY_LENGTHS[-1]}"
+        )
     rng = random.Random(seed)
-    lengths = sorted(
-        {
-            KV_BLOCK_SIZE + 1,
-            513,
-            min(2048, max_prefix_tokens),
-            min(8192, max_prefix_tokens),
-            max_prefix_tokens,
-        }
-    )
     root_records: list[dict[str, Any]] = []
     requests: list[dict[str, Any]] = []
     for root in range(roots):
-        prefix_length = lengths[root % len(lengths)]
+        cohort = root // 6
+        prefix_length = ACCEPTANCE_HISTORY_LENGTHS[cohort]
         prefix = [1]
         prefix.extend(rng.randrange(3, 255) for _ in range(prefix_length - 1))
-        # Change the first complete cache block. vLLM includes the parent block
-        # hash when hashing each later block, so this prevents a mutated prompt
-        # from accidentally reusing the unchanged beginning of a long prefix.
+        root_records.append(
+            {
+                "root": root,
+                "cohort": ("short", "medium", "long")[cohort],
+                "prefix_token_ids": prefix,
+            }
+        )
+        for branch in range(branches_per_root):
+            append_rng = random.Random((seed << 16) + root * branches_per_root + branch)
+            append = [
+                3 + ((root * 17 + branch * 29 + position + append_rng.randrange(251)) % 252)
+                for position in range(ACCEPTANCE_APPEND_TOKENS)
+            ]
+            requests.append(
+                {
+                    "request_id": f"root-{root:02d}-branch-{branch:02d}",
+                    "root": root,
+                    "branch": branch,
+                    "cohort": ("short", "medium", "long")[cohort],
+                    "prefix_token_count": len(prefix),
+                    "append_token_count": len(append),
+                    "append_token_ids": append,
+                    "max_tokens": ACCEPTANCE_RESPONSE_TOKENS,
+                    "final_token_count": len(prefix) + len(append) + ACCEPTANCE_RESPONSE_TOKENS,
+                }
+            )
+    return {
+        "schema_version": 2,
+        "kind": "exact-reference-acceptance",
+        "seed": seed,
+        "root_count": roots,
+        "branches_per_root": branches_per_root,
+        "request_count": len(requests),
+        "history_lengths": list(ACCEPTANCE_HISTORY_LENGTHS),
+        "append_tokens": ACCEPTANCE_APPEND_TOKENS,
+        "response_tokens": ACCEPTANCE_RESPONSE_TOKENS,
+        "final_lengths": list(ACCEPTANCE_FINAL_LENGTHS),
+        "roots": root_records,
+        "requests": requests,
+    }
+
+
+def deterministic_boundary_workload(*, seed: int = DUMMY_SEED) -> dict[str, Any]:
+    """Build the two exact cold/reuse probes without the large load fixture."""
+    rng = random.Random(seed)
+    roots: list[dict[str, Any]] = []
+    requests: list[dict[str, Any]] = []
+    for root, prefix_length in enumerate((KV_BLOCK_SIZE + 1, 513)):
+        prefix = [1, *(rng.randrange(3, 255) for _ in range(prefix_length - 1))]
         mutated_prefix = [*prefix]
         mutated_prefix[1] = (mutated_prefix[1] % 251) + 3
-        root_records.append(
+        roots.append(
             {
                 "root": root,
                 "prefix_token_ids": prefix,
                 "mutated_prefix_token_ids": mutated_prefix,
             }
         )
-        for branch in range(branches_per_root):
-            append = [2, 3 + root, 32 + branch, 200 + ((root + branch) % 50)]
-            requests.append(
-                {
-                    "request_id": f"root-{root:02d}-branch-{branch:02d}",
-                    "root": root,
-                    "branch": branch,
-                    "prefix_token_count": len(prefix),
-                    "append_token_ids": append,
-                    "max_tokens": 4,
-                }
-            )
+        requests.append(
+            {
+                "request_id": f"boundary-{prefix_length}",
+                "root": root,
+                "branch": 0,
+                "prefix_token_count": prefix_length,
+                "append_token_ids": [3 + root],
+                "max_tokens": 4,
+            }
+        )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
+        "kind": "exact-reference-boundaries",
         "seed": seed,
-        "root_count": roots,
-        "branches_per_root": branches_per_root,
+        "root_count": len(roots),
+        "branches_per_root": 1,
         "request_count": len(requests),
-        "lengths": lengths,
-        "roots": root_records,
+        "lengths": [KV_BLOCK_SIZE + 1, 513],
+        "roots": roots,
         "requests": requests,
     }
 
@@ -298,6 +548,10 @@ def materialize_prompt(workload: dict[str, Any], request: dict[str, Any], *, mut
     if int(root["root"]) != root_index:
         raise ValueError(f"workload root index mismatch at {root_index}")
     prefix_key = "mutated_prefix_token_ids" if mutated else "prefix_token_ids"
+    if prefix_key not in root:
+        if mutated:
+            raise ValueError("this workload has no mutated-prefix control")
+        raise ValueError("workload root omits prefix_token_ids")
     return [*root[prefix_key], *request["append_token_ids"]]
 
 
@@ -393,10 +647,18 @@ def frozen_manifest(
     git_sha: str,
     model_source: str = "dummy",
 ) -> dict[str, Any]:
-    if model_source not in {"dummy", "snowball"}:
+    if model_source not in {"dummy", "fixture", "snowball"}:
         raise ValueError(f"unknown model source: {model_source}")
-    model_path = "staged-config.json" if model_source == "dummy" else SNOWBALL_EXPORT
-    load_format = "dummy" if model_source == "dummy" else "runai_streamer"
+    model_path = {
+        "dummy": "staged-config.json",
+        "fixture": FROZEN_FIXTURE_PATH,
+        "snowball": SNOWBALL_EXPORT,
+    }[model_source]
+    load_format = {
+        "dummy": "dummy",
+        "fixture": "safetensors",
+        "snowball": "runai_streamer",
+    }[model_source]
     return {
         "schema_version": 1,
         "run_id": run_id,
@@ -431,8 +693,10 @@ def frozen_manifest(
 def write_case(output_dir: Path, *, case: ModelCase, run_id: str, git_sha: str) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "config.json").write_text(json.dumps(case.hf_config(), indent=2, sort_keys=True) + "\n")
-    workload = deterministic_workload(max_prefix_tokens=min(case.max_model_len - 8, 65_536))
+    workload = deterministic_workload()
     (output_dir / "workload.json").write_text(json.dumps(workload, indent=2, sort_keys=True) + "\n")
+    boundary_workload = deterministic_boundary_workload()
+    (output_dir / "correctness-workload.json").write_text(json.dumps(boundary_workload, indent=2, sort_keys=True) + "\n")
     (output_dir / "manifest.json").write_text(
         json.dumps(frozen_manifest(case, run_id=run_id, git_sha=git_sha), indent=2, sort_keys=True) + "\n"
     )
@@ -443,13 +707,17 @@ __all__ = [
     "BRANCH_COUNT",
     "CASES",
     "DUMMY_SEED",
+    "FROZEN_FIXTURE_PATH",
     "KV_BLOCK_SIZE",
     "MARIN_BASE_SHA",
+    "P0_SMOKE_CASES",
     "SNOWBALL_EXPORT",
     "VLLM_SHA",
     "ModelCase",
+    "aggregate_preflight_status",
     "decode_routed_experts",
     "deterministic_balanced_routing_fixture",
+    "deterministic_boundary_workload",
     "deterministic_workload",
     "expert_parallel_rank_histogram",
     "frozen_manifest",

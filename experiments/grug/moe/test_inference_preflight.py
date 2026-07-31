@@ -14,9 +14,12 @@ from experiments.grug.moe.inference_preflight import (
     BRANCH_COUNT,
     CASES,
     MARIN_BASE_SHA,
+    P0_SMOKE_CASES,
     VLLM_SHA,
+    aggregate_preflight_status,
     decode_routed_experts,
     deterministic_balanced_routing_fixture,
+    deterministic_boundary_workload,
     deterministic_workload,
     expert_parallel_rank_histogram,
     frozen_manifest,
@@ -36,43 +39,101 @@ def test_frozen_shas_are_full_and_distinct() -> None:
     assert MARIN_BASE_SHA != VLLM_SHA
 
 
-def test_pinned_attention_schedule_is_every_four_plus_final() -> None:
-    assert layer_types(8) == [
+def test_pinned_attention_schedule_is_every_six_plus_final() -> None:
+    assert layer_types(12) == [
+        "sliding_attention",
+        "sliding_attention",
         "sliding_attention",
         "sliding_attention",
         "sliding_attention",
         "full_attention",
+        "sliding_attention",
+        "sliding_attention",
         "sliding_attention",
         "sliding_attention",
         "sliding_attention",
         "full_attention",
     ]
-    assert layer_types(6)[-1] == "full_attention"
-    assert layer_types(6).count("full_attention") == 2
+    assert layer_types(7)[-1] == "full_attention"
+    assert layer_types(7).count("full_attention") == 2
+    assert layer_types(8, global_interval=4).count("full_attention") == 2
 
 
-def test_reference_case_is_the_loadable_uniform_kv_approximation() -> None:
+def test_reference_case_is_the_exact_two_node_architecture() -> None:
     case = CASES["reference-ep8"]
     assert case.hidden_size == 6144
     assert case.num_hidden_layers == 48
     assert case.num_attention_heads == 48
     assert case.num_key_value_heads == 12
+    assert case.local_kv_heads == 12
+    assert case.global_kv_heads == 6
+    assert case.global_every == 6
     assert case.num_experts_per_tok == 4
     assert case.num_experts == 128
     assert case.moe_intermediate_size == 3072
+    assert case.shared_expert_intermediate_size == 6144
+    assert case.num_shared_experts == 2
     assert case.sliding_window == 512
+    assert case.rope_fraction == 0.5
+    assert case.rope_fused
+    assert case.sconv
+    assert case.sconv_sites == ("k", "v", "attn", "mlp")
     assert case.data_parallel_size == 8
     assert case.node_count == 2
 
 
-def test_granular_case_keeps_matched_active_width() -> None:
-    reference = CASES["reference-ep8"]
+def test_granular_smoke_keeps_matched_active_width() -> None:
+    reference = CASES["one-node-ep4"]
     granular = CASES["granular-ep16"]
     assert reference.num_experts_per_tok * reference.moe_intermediate_size == (
         granular.num_experts_per_tok * granular.moe_intermediate_size
     )
     assert granular.num_experts == 2 * reference.num_experts
     assert granular.node_count == 4
+
+
+def test_final_case_is_exact_reference_not_granular_variant() -> None:
+    ep8 = CASES["reference-ep8"]
+    ep16 = CASES["exact-reference-ep16"]
+    assert ep16.data_parallel_size == 16
+    assert ep16.node_count == 4
+    assert {key: value for key, value in ep16.hf_config().items() if key not in {"vocab_size"}} == {
+        key: value for key, value in ep8.hf_config().items() if key not in {"vocab_size"}
+    }
+    assert ep16.num_experts_per_tok == 4
+    assert ep16.num_experts == 128
+    assert ep16.moe_intermediate_size == 3072
+
+
+def test_p0_family_manifest_names_every_distinct_path() -> None:
+    assert set(P0_SMOKE_CASES) == {
+        "uniform-kv_every4_sconv-off",
+        "heterogeneous-kv_every6_sconv-on",
+        "global-kv-2_window-2048",
+        "top8-256_ep16",
+        "exact-ep16",
+    }
+    assert {case for cases in P0_SMOKE_CASES.values() for case in cases} <= CASES.keys()
+
+
+def test_top_level_status_is_the_literal_required_conjunction() -> None:
+    passing = {
+        "placement": {"passed": True},
+        "all_rank_health": True,
+        "correctness": {"passed": True},
+        "duration": True,
+        "token_count": True,
+        "repeatability": {"passed": True},
+        "artifact_readback": True,
+    }
+    assert aggregate_preflight_status(passing)["status"] == "passed"
+    for failed_check in passing:
+        components = {**passing, failed_check: False}
+        result = aggregate_preflight_status(components)
+        assert result["status"] == "failed"
+        assert not result["checks"][failed_check]
+    with pytest.raises(ValueError, match="missing required"):
+        aggregate_preflight_status({key: True for key in passing if key != "placement"})
 
 
 def test_kv_prediction_reproduces_reference_estimates() -> None:
@@ -118,32 +179,41 @@ def test_kv_prediction_reproduces_reference_estimates() -> None:
     assert full_allocation / 2**30 == pytest.approx(18.0)
 
 
-def test_workload_has_18_roots_144_branches_and_required_boundaries() -> None:
-    workload = deterministic_workload(max_prefix_tokens=65_536)
+def test_workload_is_the_exact_18_root_144_branch_acceptance_shape() -> None:
+    workload = deterministic_workload()
     assert workload["root_count"] == 18
     assert workload["request_count"] == BRANCH_COUNT == 144
-    assert 17 in workload["lengths"]
-    assert 513 in workload["lengths"]
-    assert 65_536 in workload["lengths"]
+    assert workload["history_lengths"] == [10_240, 30_720, 62_464]
+    assert workload["append_tokens"] == 1_024
+    assert workload["response_tokens"] == 2_048
+    assert workload["final_lengths"] == [13_312, 33_792, 65_536]
     assert len({request["request_id"] for request in workload["requests"]}) == BRANCH_COUNT
     assert len(workload["roots"]) == 18
-    assert all(
-        materialize_prompt(workload, request) != materialize_prompt(workload, request, mutated=True)
-        for request in workload["requests"]
-    )
-    for root in workload["roots"]:
-        prefix = root["prefix_token_ids"]
-        mutated = root["mutated_prefix_token_ids"]
-        assert prefix[0] == mutated[0]
-        assert prefix[1] != mutated[1]
-        assert prefix[2:] == mutated[2:]
+    assert [sum(root["cohort"] == cohort for root in workload["roots"]) for cohort in ("short", "medium", "long")] == [
+        6,
+        6,
+        6,
+    ]
+    for request in workload["requests"]:
+        assert len(materialize_prompt(workload, request)) == request["prefix_token_count"] + 1_024
+        assert request["max_tokens"] == 2_048
+        assert request["final_token_count"] in {13_312, 33_792, 65_536}
+
+
+def test_boundary_workload_crosses_block_and_window_and_mutates_first_block() -> None:
+    workload = deterministic_boundary_workload()
+    assert workload["lengths"] == [17, 513]
+    for request in workload["requests"]:
+        assert materialize_prompt(workload, request) != materialize_prompt(workload, request, mutated=True)
+        root = workload["roots"][request["root"]]
+        assert root["prefix_token_ids"][0] == root["mutated_prefix_token_ids"][0]
+        assert root["prefix_token_ids"][1] != root["mutated_prefix_token_ids"][1]
+        assert root["prefix_token_ids"][2:] == root["mutated_prefix_token_ids"][2:]
 
 
 def test_workload_is_deterministic() -> None:
-    assert deterministic_workload(max_prefix_tokens=2048) == deterministic_workload(max_prefix_tokens=2048)
-    assert deterministic_workload(max_prefix_tokens=2048, seed=1) != deterministic_workload(
-        max_prefix_tokens=2048, seed=2
-    )
+    assert deterministic_workload() == deterministic_workload()
+    assert deterministic_workload(seed=1) != deterministic_workload(seed=2)
 
 
 def test_prometheus_parser_sums_labeled_ranks_and_computes_delta() -> None:
@@ -199,8 +269,11 @@ def test_write_case_freezes_config_workload_and_manifest(tmp_path) -> None:
     write_case(tmp_path, case=CASES["tiny"], run_id="unit", git_sha="f" * 40)
     config = json.loads((tmp_path / "config.json").read_text())
     workload = json.loads((tmp_path / "workload.json").read_text())
+    correctness_workload = json.loads((tmp_path / "correctness-workload.json").read_text())
     manifest = json.loads((tmp_path / "manifest.json").read_text())
     assert config["architectures"] == ["GrugMoeForCausalLM"]
     assert config["model_type"] == "grug_moe"
     assert workload["request_count"] == BRANCH_COUNT
-    assert manifest == frozen_manifest(CASES["tiny"], run_id="unit", git_sha="f" * 40)
+    assert correctness_workload["lengths"] == [17, 513]
+    expected_manifest = json.loads(json.dumps(frozen_manifest(CASES["tiny"], run_id="unit", git_sha="f" * 40)))
+    assert manifest == expected_manifest
