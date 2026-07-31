@@ -122,7 +122,7 @@
         <div><strong>Left:</strong> experiments/grug/base</div>
         <div><strong>Right:</strong> experiments/grug/moe_hero_fsdp</div>
         <div class="filters"><strong>Filter:</strong> .py, .md</div>
-        <div class="filters"><strong>Generated:</strong> 2026-07-31 15:49:53Z</div>
+        <div class="filters"><strong>Generated:</strong> 2026-07-31 17:10:15Z</div>
         <div class="filters"><strong>Inline Diffs:</strong> 8 files</div>
         <div class="summary">
           <div class="metric"><div class="label">Changed</div><div class="value">3</div></div>
@@ -353,7 +353,7 @@
             <tr><td class="diff_next"><a href="#difflib_chg_to0__11">n</a></td><td class="diff_header" id="from0_186">186</td><td nowrap="nowrap"><span class="diff_sub">def&nbsp;run_grug_base_trial(config:&nbsp;GrugBaseLaunchConfig)&nbsp;-&gt;&nbsp;None:</span></td><td class="diff_next"><a href="#difflib_chg_to0__11">n</a></td><td class="diff_header" id="to0_71">71</td><td nowrap="nowrap"><span class="diff_add">def&nbsp;build_hero_checkpoint(*,&nbsp;version:&nbsp;str&nbsp;|&nbsp;None&nbsp;=&nbsp;None)&nbsp;-&gt;&nbsp;ArtifactStep[LevanterCheckpoint]:</span></td></tr>
             <tr><td class="diff_next"></td><td class="diff_header" id="from0_187">187</td><td nowrap="nowrap"><span class="diff_sub">&nbsp;&nbsp;&nbsp;&nbsp;"""Build&nbsp;the&nbsp;full&nbsp;grug&nbsp;run&nbsp;config&nbsp;and&nbsp;dispatch&nbsp;the&nbsp;training&nbsp;job&nbsp;to&nbsp;Fray.</span></td><td class="diff_next"></td><td class="diff_header" id="to0_72">72</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;&nbsp;&nbsp;"""Build&nbsp;the&nbsp;fixed&nbsp;64-GPU&nbsp;FSDP&nbsp;hero&nbsp;run."""</span></td></tr>
             <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to0_73">73</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;&nbsp;&nbsp;run_id&nbsp;=&nbsp;os.environ.get("RUN_ID")&nbsp;or&nbsp;HERO_RUN_ID</span></td></tr>
-            <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to0_74">74</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;&nbsp;&nbsp;name&nbsp;=&nbsp;"grug/moe-hero-fsdp"</span></td></tr>
+            <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to0_74">74</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;&nbsp;&nbsp;name&nbsp;=&nbsp;f"grug/{run_id}"</span></td></tr>
             <tr><td class="diff_next" id="difflib_chg_to0__11"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to0_75">75</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;&nbsp;&nbsp;version&nbsp;=&nbsp;resolve_version(name,&nbsp;version)</span></td></tr>
             <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to0_76">76</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;&nbsp;&nbsp;slim&nbsp;=&nbsp;_slimpajama_6b_dataset()</span></td></tr>
             <tr><td class="diff_next"></td><td class="diff_header" id="from0_188">188</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to0_77">77</td><td nowrap="nowrap"></td></tr>
