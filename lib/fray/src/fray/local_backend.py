@@ -181,9 +181,6 @@ class LocalClient:
         # One process, no job tree: the name alone locates the actor.
         return f"local/{name}-{index}"
 
-    def sibling_actor_endpoint(self, job_name: str, name: str, index: int = 0) -> str:
-        return f"local/{name}-{index}"
-
     def create_actor(
         self,
         actor_class: type,

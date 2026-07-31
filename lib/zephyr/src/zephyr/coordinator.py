@@ -862,6 +862,19 @@ class ZephyrCoordinator:
                 )
                 return
 
+            if shard_idx in run.results:
+                # Iris retries a transient actor RPC failure, so a result whose
+                # reply was lost arrives twice with the same attempt. Counting
+                # it again would let the stage finish while another shard is
+                # still running, silently dropping that shard's output.
+                logger.warning(
+                    "Ignoring duplicate result from worker %s for shard %d (attempt %d)",
+                    worker_id,
+                    shard_idx,
+                    attempt,
+                )
+                return
+
             self._assert_in_flight_consistent(run, worker_id, shard_idx)
 
             run.results[shard_idx] = result

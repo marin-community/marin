@@ -56,20 +56,9 @@ When many small pipelines each pay that startup cost, stand the pool up once
 instead. `mode=PoolMode.HOST` makes a context the pool's host: entering starts
 it, leaving tears it down, and any job that names the pool runs on it.
 
-Name the pool in the **entrypoint's own job env**. Iris inherits env vars down
-the job tree, so every step the entrypoint launches picks the pool up without a
-line of its own — and unlike an address, the name is yours and known before the
-pool exists:
-
-```python
-client.submit(JobRequest(
-    name="mypipeline",
-    environment=EnvironmentConfig(env_vars={"ZEPHYR_POOL": "ingest"}),
-    ...,
-))
-```
-
-Inside that entrypoint, host the pool and launch the steps:
+`mode=PoolMode.HOST` makes a context the pool's host: entering starts the pool,
+leaving tears it down, and hosting advertises the pool's address to every job
+submitted afterwards. Steps need no wiring of their own:
 
 ```python
 with ZephyrContext(
@@ -79,16 +68,23 @@ with ZephyrContext(
     resources=ResourceConfig(cpu=2, ram="8g"),
 ) as ctx:
     for step in steps:
-        client.submit(JobRequest(name=step, ...))   # no pool wiring needed
+        client.submit(JobRequest(name=step, ...))   # inherits the pool
     ctx.execute(pipeline)                            # the host runs on it too
 # pool is shut down here (workers drained)
 ```
 
-Each step is then untouched — it inherits `ZEPHYR_POOL` and joins:
+Each step is then untouched — it inherits `ZEPHYR_COORDINATOR_ENDPOINT` and
+joins:
 
 ```python
 ZephyrContext(map_task_resources=ResourceConfig(cpu=1, ram="2g")).execute(pipeline)
 ```
+
+The advertised value is the coordinator's absolute address, not the pool's
+name. A name would have to be resolved relative to the caller, which is only
+correct one level below the host; an address resolves from any job, at any
+depth, and from a job with no parent at all. A driver outside the job tree
+passes `coordinator_endpoint=ctx.coordinator_endpoint` explicitly.
 
 Tasks from all active pipelines pack onto whichever workers have free capacity.
 A failing pipeline only fails its own `execute()`; the pool and the other
@@ -103,10 +99,9 @@ pipelines keep running.
 - `ISOLATED` — never join; always this context's own pool, ignoring the
   environment. The opt-out for a step whose stages need something the shared
   workers lack
-- `HOST` — stand up `pool_name` and own its lifetime
+- `HOST` — stand up the pool named `pool_name` and own its lifetime
 
-A driver outside the pool's job tree cannot derive a sibling it is not a sibling
-of, so it passes `coordinator_endpoint=` explicitly.
+
 
 The pool's workers are sized by the host's `resources` × `max_workers`.
 Each joining pipeline still declares its own per-task cost via its own

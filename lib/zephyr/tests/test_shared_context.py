@@ -19,7 +19,6 @@ from zephyr.coordinator import _PipelineExecution
 from zephyr.dataset import Dataset
 from zephyr.execution import (
     ZEPHYR_COORDINATOR_ENDPOINT_ENV,
-    ZEPHYR_POOL_ENV,
     PoolMode,
     ZephyrContext,
 )
@@ -318,7 +317,6 @@ def test_isolated_mode_declines_a_pool_offered_by_the_environment(tmp_path, monk
     """
     client = LocalClient(max_threads=8)
     monkeypatch.setenv(ZEPHYR_COORDINATOR_ENDPOINT_ENV, "local/some-other-pool-coord-0")
-    monkeypatch.setenv(ZEPHYR_POOL_ENV, "some-other-pool")
 
     ctx = ZephyrContext(
         client=client,
@@ -340,19 +338,18 @@ def test_isolated_mode_declines_a_pool_offered_by_the_environment(tmp_path, monk
 def test_isolated_mode_rejects_an_explicitly_configured_pool(local_client):
     """Asking for ISOLATED and naming a pool is a contradiction, not a precedence puzzle."""
     with pytest.raises(ValueError, match="contradicts"):
-        ZephyrContext(client=local_client, mode=PoolMode.ISOLATED, pool_name="ingest")
+        ZephyrContext(client=local_client, mode=PoolMode.ISOLATED, coordinator_endpoint="local/x-0")
 
 
 def test_shared_mode_fails_fast_without_a_pool(local_client, monkeypatch):
     """mode=INHERIT means 'I expect a pool'; starting a private one would hide a misconfiguration."""
     monkeypatch.delenv(ZEPHYR_COORDINATOR_ENDPOINT_ENV, raising=False)
-    monkeypatch.delenv(ZEPHYR_POOL_ENV, raising=False)
     with pytest.raises(ValueError, match="requires a pool"):
         ZephyrContext(client=local_client, mode=PoolMode.INHERIT, resources=ResourceConfig(cpu=1, ram="512m"))
 
 
 def test_context_start_owns_a_pool_that_other_contexts_join_by_name(tmp_path, monkeypatch):
-    """Entering a mode=HOST context starts its pool; others join it by name."""
+    """Entering a mode=HOST context starts its pool; others join at its address."""
     client = LocalClient(max_threads=8)
     name = f"ingest-{uuid.uuid4().hex[:8]}"
     owner = ZephyrContext(
@@ -367,7 +364,7 @@ def test_context_start_owns_a_pool_that_other_contexts_join_by_name(tmp_path, mo
     with owner:
         assert owner.coordinator_endpoint is not None
 
-        monkeypatch.setenv(ZEPHYR_POOL_ENV, name)
+        monkeypatch.setenv(ZEPHYR_COORDINATOR_ENDPOINT_ENV, owner.coordinator_endpoint)
         joiner = ZephyrContext(client=client, resources=ResourceConfig(cpu=1, ram="512m"))
         assert joiner.coordinator_endpoint == owner.coordinator_endpoint
         assert sorted(joiner.execute(Dataset.from_list([3, 4]).map(lambda x: x + 1)).results) == [4, 5]

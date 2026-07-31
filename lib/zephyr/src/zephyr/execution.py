@@ -57,8 +57,6 @@ from zephyr.pool import (
     _default_max_workers,
     _default_stage_runner_factory_for,
     _ZephyrPool,
-    coordinator_actor_name,
-    pool_job_name,
 )
 from zephyr.stage_io import (
     StageRunner,
@@ -83,8 +81,6 @@ ZEPHYR_COORDINATOR_ENDPOINT_ENV = "ZEPHYR_COORDINATOR_ENDPOINT"
 # Names the pool a plain ZephyrContext should run on. A pool owner exports this
 # once on the jobs it launches; iris inherits env vars to child jobs, so the
 # step code itself never mentions the pool.
-ZEPHYR_POOL_ENV = "ZEPHYR_POOL"
-
 
 # Iris serializes a job's declared env vars here at task start, and copies them
 # into every child job it submits. Writing to it is how a host offers its pool
@@ -104,16 +100,21 @@ def _withdraw_pool_offer(previous: str | None) -> None:
     raw = os.environ.get(_IRIS_JOB_ENV, "")
     declared = json.loads(raw) if raw else {}
     if previous is None:
-        info.env.pop(ZEPHYR_POOL_ENV, None)
-        declared.pop(ZEPHYR_POOL_ENV, None)
+        info.env.pop(ZEPHYR_COORDINATOR_ENDPOINT_ENV, None)
+        declared.pop(ZEPHYR_COORDINATOR_ENDPOINT_ENV, None)
     else:
-        info.env[ZEPHYR_POOL_ENV] = previous
-        declared[ZEPHYR_POOL_ENV] = previous
+        info.env[ZEPHYR_COORDINATOR_ENDPOINT_ENV] = previous
+        declared[ZEPHYR_COORDINATOR_ENDPOINT_ENV] = previous
     os.environ[_IRIS_JOB_ENV] = json.dumps(declared)
 
 
-def _offer_pool_to_child_jobs(pool_name: str) -> str | None:
-    """Add ``ZEPHYR_POOL`` to this job's env so children inherit the pool.
+def _offer_pool_to_child_jobs(endpoint: str) -> str | None:
+    """Add the coordinator's address to this job's env so children inherit it.
+
+    The address is absolute, so it resolves from a job at any depth and from one
+    with no parent at all. A pool *name* would not: resolving a name means
+    looking beside the caller's own parent, which is only correct one level
+    down from the host.
 
     Iris copies a job's declared env into each child it submits, so a host that
     records the pool here has offered it to every job it launches afterwards —
@@ -127,16 +128,16 @@ def _offer_pool_to_child_jobs(pool_name: str) -> str | None:
     info = get_job_info()
     if info is None:
         return None
-    previous = info.env.get(ZEPHYR_POOL_ENV)
+    previous = info.env.get(ZEPHYR_COORDINATOR_ENDPOINT_ENV)
     # get_job_info() re-reads the environment unless something has populated its
     # ContextVar, so update both: the live object if one is cached, and the
     # serialized copy that the fallback path parses.
-    info.env[ZEPHYR_POOL_ENV] = pool_name
+    info.env[ZEPHYR_COORDINATOR_ENDPOINT_ENV] = endpoint
     raw = os.environ.get(_IRIS_JOB_ENV, "")
     declared = json.loads(raw) if raw else {}
-    declared[ZEPHYR_POOL_ENV] = pool_name
+    declared[ZEPHYR_COORDINATOR_ENDPOINT_ENV] = endpoint
     os.environ[_IRIS_JOB_ENV] = json.dumps(declared)
-    logger.info("Offering pool %r to child jobs via %s", pool_name, ZEPHYR_POOL_ENV)
+    logger.info("Offering pool at %s to child jobs via %s", endpoint, ZEPHYR_COORDINATOR_ENDPOINT_ENV)
     return previous
 
 
@@ -464,28 +465,21 @@ class ZephyrContext:
             return
 
         if self.mode is PoolMode.ISOLATED:
-            if self.coordinator_endpoint is not None or self.pool_name is not None:
+            if self.coordinator_endpoint is not None:
                 raise ValueError(
-                    "mode=ISOLATED runs on this context's own pool, so passing "
-                    "coordinator_endpoint or pool_name contradicts it"
+                    "mode=ISOLATED runs on this context's own pool, so passing " "coordinator_endpoint contradicts it"
                 )
             # Deliberately does not read the environment: an inherited pool is
             # an offer, and ISOLATED is how a step declines it.
             return
 
-        if self.pool_name is None:
-            self.pool_name = os.environ.get(ZEPHYR_POOL_ENV) or None
         if self.coordinator_endpoint is None:
             self.coordinator_endpoint = os.environ.get(ZEPHYR_COORDINATOR_ENDPOINT_ENV) or None
-        if self.coordinator_endpoint is None and self.pool_name is not None:
-            self.coordinator_endpoint = self.client.sibling_actor_endpoint(
-                pool_job_name(self.pool_name), coordinator_actor_name(self.pool_name)
-            )
 
         if self.mode is PoolMode.INHERIT and self.coordinator_endpoint is None:
             raise ValueError(
-                "mode=INHERIT requires a pool: pass pool_name=/coordinator_endpoint=, or set "
-                f"{ZEPHYR_POOL_ENV}/{ZEPHYR_COORDINATOR_ENDPOINT_ENV} on this job"
+                "mode=INHERIT requires a pool: pass coordinator_endpoint=, or set "
+                f"{ZEPHYR_COORDINATOR_ENDPOINT_ENV} on this job"
             )
 
     def put(self, name: str, obj: Any) -> None:
@@ -694,7 +688,7 @@ class ZephyrContext:
         )
         self.coordinator_endpoint = pool.start(timeout=timeout)
         self._owned_pool = pool
-        self._prior_pool_offer = _offer_pool_to_child_jobs(self.pool_name)
+        self._prior_pool_offer = _offer_pool_to_child_jobs(self.coordinator_endpoint)
         self._offered_pool = True
         return self.pool_name
 
@@ -711,16 +705,17 @@ class ZephyrContext:
             _withdraw_pool_offer(self._prior_pool_offer)
             self._prior_pool_offer = None
 
-        owned, self._owned_pool = self._owned_pool, None
-        if owned is not None:
+        # Ownership is released only once teardown succeeds. Clearing the
+        # handle first and swallowing the error would leave a live pool that
+        # nothing can stop, and each retry would leak another one.
+        if self._owned_pool is not None:
+            self._owned_pool.shutdown()
+            self._owned_pool = None
             self.coordinator_endpoint = None
-            with suppress(Exception):
-                owned.shutdown()
 
-        pool, self._active_pool = self._active_pool, None
-        if pool is not None:
-            with suppress(Exception):
-                pool.shutdown()
+        if self._active_pool is not None:
+            self._active_pool.shutdown()
+            self._active_pool = None
 
     def __enter__(self) -> "ZephyrContext":
         """Start the owned pool, if this context owns one.

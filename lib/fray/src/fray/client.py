@@ -99,15 +99,6 @@ class Client(Protocol):
         """
         ...
 
-    def sibling_actor_endpoint(self, job_name: str, name: str, index: int = 0) -> str:
-        """Endpoint of an actor hosted by a sibling of the caller's own job.
-
-        ``job_name`` is the sibling job's *leaf* name, resolved against the
-        caller's parent job. This is how a job addresses a service its parent
-        started alongside it, with no endpoint threaded through its config.
-        """
-        ...
-
     def shutdown(self, wait: bool = True) -> None:
         """Shutdown the client and all managed resources."""
         ...

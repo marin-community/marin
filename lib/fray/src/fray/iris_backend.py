@@ -721,21 +721,6 @@ class FrayIrisClient:
         # Matches the name _host_actor registers under.
         return f"{job.job_id}/{name}-{index}"
 
-    def sibling_actor_endpoint(self, job_name: str, name: str, index: int = 0) -> str:
-        """Resolve ``job_name`` as a sibling of the caller's job, then address into it.
-
-        Job names are hierarchical, so a child of the same parent is
-        ``my_job.parent.child(job_name)``. The result is absolute and therefore
-        resolvable from any job in the cluster.
-        """
-        ctx = get_iris_ctx()
-        if ctx is None:
-            raise RuntimeError("sibling_actor_endpoint requires an Iris job context")
-        parent = ctx.job_id.parent
-        if parent is None:
-            raise RuntimeError(f"job {ctx.job_id} is a root job and has no siblings")
-        return f"{parent.child(job_name)}/{name}-{index}"
-
     def create_actor(
         self,
         actor_class: type,

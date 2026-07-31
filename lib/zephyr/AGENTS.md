@@ -45,18 +45,18 @@ coordinator actor plus a worker actor group. There is no second code path:
 
 `PoolMode` decides how a context treats the pool the environment offers: `AUTO`
 joins it if present else runs one-shot, `INHERIT` requires it, `ISOLATED`
-refuses it outright (and rejects `pool_name`/`coordinator_endpoint` as
-contradictions), `HOST` creates it. Resolution happens in
-`ZephyrContext._resolve_pool` via `Client.sibling_actor_endpoint`: a pool hosted
-by an entrypoint is a sibling of the steps that entrypoint launches, and
-`pool_job_name` / `coordinator_actor_name` make both names computable — hence
-the pool name is required and carries no uuid.
+refuses it outright (and rejects `coordinator_endpoint` as a contradiction),
+`HOST` creates it. A joining context takes the coordinator's address from
+`coordinator_endpoint` or the env; `pool_name` only names a pool you host.
 
 `start()` advertises the pool to child jobs itself, via
-`_offer_pool_to_child_jobs`: it writes `ZEPHYR_POOL` into this job's declared
+`_offer_pool_to_child_jobs`: it writes `ZEPHYR_COORDINATOR_ENDPOINT` into this job's declared
 env (`JobInfo.env` and its serialized copy `IRIS_JOB_ENV`), which Iris then
 copies into every job submitted afterwards. `shutdown()` restores the previous
-value, or later jobs inherit a dead pool. Only jobs submitted after `start()`
+value, or later jobs inherit a dead pool. The advertised value is the absolute
+coordinator address, not the pool name: a name resolves relative to the caller
+and is only correct one level below the host, so a grandchild would look beside
+its own parent and find nothing. Only jobs submitted after `start()`
 inherit it, and outside an Iris job it is a no-op.
 
 This works because `get_job_info()` re-reads the environment unless something
