@@ -46,7 +46,7 @@ from levanter.grug.grug_moe import (
     MoeImplementation,
     resolve_moe_implementation,
 )
-from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
+from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pembed_vocab, unshard
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
@@ -54,9 +54,6 @@ from transformers import PretrainedConfig as HfConfig
 
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
-# Tuned large-vocab cross-entropy block sizes (b, h, v). v=4096 is the dominant lever for the
-# 128k vocab: the autotuned default v=64 leaves ~3 MFU points on the table on the hero shape.
-_CE_BLOCK_SIZES = BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=4096)
 _LM_HEAD_PARTITION_SPEC = P(("replica_dcn", "data"), "model")
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
@@ -1016,7 +1013,6 @@ class Transformer(eqx.Module):
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
             implementation="batched_xla",
-            block_sizes=_CE_BLOCK_SIZES,
         )
         # Router z-loss is logged for monitoring only; it is not added to the training loss.
         loss = cross_entropy_loss
