@@ -14,9 +14,6 @@ from typing import Any
 
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
-from rigging.filesystem import StoragePath, prefix_join
-from rigging.log_setup import configure_logging
-
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import datakit_source_key
 from marin.execution.artifact import read_artifact
@@ -36,6 +33,8 @@ from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     VerifiedFuzzyDupsAttrData,
     verify_fuzzy_dups_step,
 )
+from rigging.filesystem import StoragePath, prefix_join
+from rigging.log_setup import configure_logging
 
 from experiments.datakit.reference_pipeline import SAMPLE_PREFIX, sample_sources
 from experiments.datakit.reports.dedup import dedup_report
@@ -53,7 +52,6 @@ VERIFIED_COLUMNS = [
     "dup_cluster_id",
     "dup_representative_id",
     "dup_representative_source_key",
-    "dup_verifier_version",
     "dup_member_containment",
     "dup_jaccard",
     "dup_under_tokenized",
@@ -70,6 +68,7 @@ class CandidateMember:
     source_key: str
     id: str
     cluster_id: str
+    is_cluster_canonical: bool
     text: str
 
 
@@ -86,13 +85,14 @@ def _join_candidate_text(
     candidates: FuzzyDupsAttrData,
     limit: int,
 ) -> list[CandidateMember]:
+    """Read persisted inputs without calling the production join."""
     members: list[CandidateMember] = []
     file_idx = 0
     for source_name, source in sorted(normalized.items()):
         source_key = datakit_source_key(source.main_output_dir)
         candidate_dir = candidates.sources[source_key].attr_dir
         normalized_paths = sorted(
-            (str(path) for path in StoragePath(prefix_join(source.main_output_dir, "*.parquet")).glob())
+            str(path) for path in StoragePath(prefix_join(source.main_output_dir, "*.parquet")).glob()
         )
         for normalized_path in normalized_paths:
             candidate_path = prefix_join(candidate_dir, os.path.basename(normalized_path))
@@ -101,7 +101,7 @@ def _join_candidate_text(
             if not StoragePath(candidate_path).exists():
                 continue
 
-            candidate_rows = iter(_rows(candidate_path, ["id", "dup_cluster_id"]))
+            candidate_rows = iter(_rows(candidate_path, ["id", "dup_cluster_id", "is_cluster_canonical"]))
             candidate = next(candidate_rows, None)
             if candidate is None:
                 continue
@@ -120,6 +120,7 @@ def _join_candidate_text(
                         source_key=source_key,
                         id=candidate["id"],
                         cluster_id=str(candidate["dup_cluster_id"]),
+                        is_cluster_canonical=candidate["is_cluster_canonical"],
                         text=normalized_row["text"] or "",
                     )
                 )
@@ -166,14 +167,12 @@ def _assert_marker(
     member: CandidateMember,
     representative: CandidateMember,
     result: VerificationResult,
-    params: FuzzyVerificationParams,
 ) -> None:
     expected = {
         "dup_doc": True,
         "dup_cluster_id": member.cluster_id,
         "dup_representative_id": representative.id,
         "dup_representative_source_key": representative.source_key,
-        "dup_verifier_version": params.rule_version,
         "dup_member_containment": result.member_containment,
         "dup_jaccard": result.jaccard,
         "dup_under_tokenized": result.under_tokenized,
@@ -181,7 +180,9 @@ def _assert_marker(
     }
     actual = {name: marker[name] for name in expected}
     if actual != expected:
-        raise AssertionError(f"Verified marker differs for {(member.source_key, member.id)!r}: {actual!r} != {expected!r}")
+        raise AssertionError(
+            f"Verified marker differs for {(member.source_key, member.id)!r}: {actual!r} != {expected!r}"
+        )
 
 
 def inspect_verification(
@@ -203,14 +204,44 @@ def inspect_verification(
     decisions: Counter[str] = Counter()
     cluster_reviews = []
     for cluster_id, cluster_members in sorted(by_cluster.items(), key=lambda item: (-len(item[1]), item[0])):
-        ordered = sorted(cluster_members, key=lambda member: (-len(member.text), member.file_idx, member.id))
-        representative = ordered[0]
+        canonicals = [member for member in cluster_members if member.is_cluster_canonical]
+        if len(canonicals) != 1:
+            raise AssertionError(f"Cluster {cluster_id!r} has {len(canonicals)} canonical members")
+        representative = canonicals[0]
+        ordered = [
+            representative,
+            *sorted(
+                (member for member in cluster_members if not member.is_cluster_canonical),
+                key=lambda member: (member.file_idx, member.id),
+            ),
+        ]
         comparisons = []
         for member in ordered[1:]:
+            marker_key = (member.source_key, member.id)
+            if member.id == representative.id:
+                if member.text != representative.text:
+                    raise AssertionError(f"Content ID {member.id!r} has different text")
+                decisions["delegated_global_exact"] += 1
+                if marker_key in actual_markers:
+                    raise AssertionError(f"Global exact member {marker_key!r} has a fuzzy output marker")
+                comparisons.append(
+                    {
+                        "member": {
+                            **asdict(member),
+                            "text": member.text[:TEXT_PREVIEW_CHARS],
+                            "text_chars": len(member.text),
+                        },
+                        "accepted": False,
+                        "rejection": "delegated_global_exact",
+                        "scores": None,
+                        "output_marker_present": False,
+                    }
+                )
+                continue
+
             result = verify_candidate(member.text, representative.text, verified.verification)
             decision = result.rejection.value if result.rejection is not None else "accepted"
             decisions[decision] += 1
-            marker_key = (member.source_key, member.id)
             if result.accepted:
                 expected_marker_keys.add(marker_key)
                 marker = actual_markers.get(marker_key)
@@ -221,7 +252,6 @@ def inspect_verification(
                     member=member,
                     representative=representative,
                     result=result,
-                    params=verified.verification,
                 )
             elif marker_key in actual_markers:
                 raise AssertionError(f"Rejected member {marker_key!r} has an output marker")

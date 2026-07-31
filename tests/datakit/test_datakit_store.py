@@ -23,7 +23,6 @@ from levanter.store.cache import TreeCache
 from marin.datakit.decon import DeconAttributes
 from marin.datakit.source_key import datakit_source_key
 from marin.execution.artifact import read_artifact
-from marin.processing.classification.deduplication.fuzzy_minhash import MinHashParams
 from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     VerifiedFuzzyDupsAttrData,
@@ -186,7 +185,6 @@ def _build_inputs(tmp_path):
         )
     }
     dedup = VerifiedFuzzyDupsAttrData(
-        params=MinHashParams(num_perms=8, num_bands=4, ngram_size=5, seed=0),
         verification=FuzzyVerificationParams(),
         sources={source_key: VerifiedFuzzyDupsPerSource(attr_dir=dirs["dedup"])},
         counters={},

@@ -13,6 +13,7 @@ from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAt
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashParams
 from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.classification.deduplication.verify_fuzzy_dups import verify_fuzzy_dups
+from zephyr.stage_io import ZephyrWorkerError
 from zephyr.writers import write_parquet_file
 
 TEST_MINHASH_PARAMS = MinHashParams(num_perms=8, num_bands=4, ngram_size=5, seed=0)
@@ -62,7 +63,7 @@ def _output_rows(verified, source_key: str) -> list[dict]:
     return rows
 
 
-def test_verifier_accepts_only_direct_subset_and_writes_typed_empty_shards(tmp_path, monkeypatch):
+def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     representative = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"
     accepted = "alpha beta gamma delta epsilon zeta eta theta"
@@ -107,7 +108,6 @@ def test_verifier_accepts_only_direct_subset_and_writes_typed_empty_shards(tmp_p
             "dup_cluster_id": "cluster-a",
             "dup_representative_id": "representative",
             "dup_representative_source_key": source_key,
-            "dup_verifier_version": "whitespace_3gram_subset_v1",
             "dup_member_containment": 1.0,
             "dup_jaccard": 0.6,
             "dup_under_tokenized": False,
@@ -124,18 +124,68 @@ def test_verifier_accepts_only_direct_subset_and_writes_typed_empty_shards(tmp_p
         "dup_cluster_id",
         "dup_representative_id",
         "dup_representative_source_key",
-        "dup_verifier_version",
         "dup_member_containment",
         "dup_jaccard",
         "dup_under_tokenized",
         "dup_char_jaccard",
     ]
     assert verified.counters["dedup/fuzzy/verification/candidate_members"] == 3
+    assert verified.counters["dedup/fuzzy/verification/candidate_shards_missing"] == 1
+    assert verified.counters["dedup/fuzzy/verification/clusters"] == 1
+    assert verified.counters["dedup/fuzzy/verification/cluster_members"] == 3
     assert verified.counters["dedup/fuzzy/verification/decision/accepted"] == 1
     assert verified.counters["dedup/fuzzy/verification/decision/containment_below_threshold"] == 1
 
 
 def test_representative_selection_is_stable_across_input_order_and_parallelism(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    representative_text = "alpha beta gamma delta epsilon zeta eta theta iota kappa"
+    member_text = "alpha beta gamma delta epsilon zeta eta theta"
+    source_a_key, source_a = _write_source(
+        root=tmp_path,
+        name="source-a",
+        shards={"part-00000.parquet": [{"id": "representative", "text": representative_text}]},
+    )
+    source_b_key, source_b = _write_source(
+        root=tmp_path,
+        name="source-b",
+        shards={"part-00000.parquet": [{"id": "member", "text": member_text}]},
+    )
+    candidates = _write_candidates(
+        root=tmp_path,
+        rows_by_source={
+            source_a_key: {
+                "part-00000.parquet": [
+                    {"id": "representative", "dup_cluster_id": "cluster-a", "is_cluster_canonical": True}
+                ]
+            },
+            source_b_key: {
+                "part-00000.parquet": [{"id": "member", "dup_cluster_id": "cluster-a", "is_cluster_canonical": False}]
+            },
+        },
+    )
+
+    first = verify_fuzzy_dups(
+        normalized_sources={"z-source-a": source_a, "a-source-b": source_b},
+        candidates=candidates,
+        output_path=str(tmp_path / "verified-first"),
+        verification_params=FuzzyVerificationParams(),
+        max_parallelism=1,
+    )
+    second = verify_fuzzy_dups(
+        normalized_sources={"a-source-b": source_b, "z-source-a": source_a},
+        candidates=candidates,
+        output_path=str(tmp_path / "verified-second"),
+        verification_params=FuzzyVerificationParams(),
+        max_parallelism=4,
+    )
+
+    assert _output_rows(first, source_a_key) == _output_rows(second, source_a_key) == []
+    assert _output_rows(first, source_b_key) == _output_rows(second, source_b_key)
+    assert _output_rows(first, source_b_key)[0]["dup_representative_source_key"] == source_a_key
+
+
+def test_verifier_defers_exact_copies_to_global_exact_dedup(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     text = "alpha beta gamma delta epsilon zeta eta theta"
     source_a_key, source_a = _write_source(
@@ -160,24 +210,67 @@ def test_representative_selection_is_stable_across_input_order_and_parallelism(t
         },
     )
 
-    first = verify_fuzzy_dups(
+    verified = verify_fuzzy_dups(
         normalized_sources={"z-source-a": source_a, "a-source-b": source_b},
         candidates=candidates,
-        output_path=str(tmp_path / "verified-first"),
+        output_path=str(tmp_path / "verified"),
         verification_params=FuzzyVerificationParams(),
-        max_parallelism=1,
-    )
-    second = verify_fuzzy_dups(
-        normalized_sources={"a-source-b": source_b, "z-source-a": source_a},
-        candidates=candidates,
-        output_path=str(tmp_path / "verified-second"),
-        verification_params=FuzzyVerificationParams(),
-        max_parallelism=4,
+        max_parallelism=2,
     )
 
-    assert _output_rows(first, source_b_key) == _output_rows(second, source_b_key) == []
-    assert _output_rows(first, source_a_key) == _output_rows(second, source_a_key)
-    assert _output_rows(first, source_a_key)[0]["dup_representative_source_key"] == source_b_key
+    assert _output_rows(verified, source_a_key) == []
+    assert _output_rows(verified, source_b_key) == []
+    assert verified.counters["dedup/fuzzy/verification/decision/delegated_global_exact"] == 1
+
+
+@pytest.mark.parametrize(
+    "canonical_flags, expected_error",
+    [
+        ([False, False], "has no canonical member"),
+        ([True, True], "has more than one canonical member"),
+    ],
+)
+def test_verifier_requires_one_candidate_canonical(
+    tmp_path,
+    monkeypatch,
+    canonical_flags,
+    expected_error,
+):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    source_key, source = _write_source(
+        root=tmp_path,
+        name="source",
+        shards={
+            "part-00000.parquet": [
+                {"id": "first", "text": "alpha beta gamma delta"},
+                {"id": "second", "text": "alpha beta gamma delta epsilon"},
+            ]
+        },
+    )
+    candidates = _write_candidates(
+        root=tmp_path,
+        rows_by_source={
+            source_key: {
+                "part-00000.parquet": [
+                    {
+                        "id": candidate_id,
+                        "dup_cluster_id": "cluster-a",
+                        "is_cluster_canonical": is_canonical,
+                    }
+                    for candidate_id, is_canonical in zip(("first", "second"), canonical_flags, strict=True)
+                ]
+            }
+        },
+    )
+
+    with pytest.raises(ZephyrWorkerError, match=expected_error):
+        verify_fuzzy_dups(
+            normalized_sources={"source": source},
+            candidates=candidates,
+            output_path=str(tmp_path / "verified"),
+            verification_params=FuzzyVerificationParams(),
+            max_parallelism=1,
+        )
 
 
 def test_verifier_rejects_mismatched_source_sets(tmp_path, monkeypatch):
