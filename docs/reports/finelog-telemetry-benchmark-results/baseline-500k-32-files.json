@@ -1,0 +1,715 @@
+{
+  "current": {
+    "cold": {
+      "accounting": {
+        "explain": {
+          "bytes_scanned": 131686,
+          "file_open_ms": 11.44,
+          "files_matched": 32,
+          "files_total": 32,
+          "metadata_load_ms": 21.89,
+          "row_groups_matched": 16,
+          "row_groups_total": 32
+        },
+        "planning_proxy": {
+          "iterations": 3,
+          "max_ms": 20.041204057633877,
+          "min_ms": 19.20519396662712,
+          "p50_ms": 19.466321915388107,
+          "p95_ms": 20.041204057633877,
+          "rows": 2,
+          "rss_growth_peak_bytes": 42123264,
+          "rss_peak_bytes": 200732672
+        },
+        "query": {
+          "iterations": 3,
+          "max_ms": 87.20291592180729,
+          "min_ms": 72.20751885324717,
+          "p50_ms": 73.08142306283116,
+          "p95_ms": 87.20291592180729,
+          "rows": 12,
+          "rss_growth_peak_bytes": 56926208,
+          "rss_peak_bytes": 215605248
+        }
+      },
+      "alert_evaluation": {
+        "explain": {
+          "bytes_scanned": 14930,
+          "file_open_ms": 22.11,
+          "files_matched": 32,
+          "files_total": 32,
+          "metadata_load_ms": 21.29,
+          "row_groups_matched": 1,
+          "row_groups_total": 32
+        },
+        "planning_proxy": {
+          "iterations": 3,
+          "max_ms": 32.20832580700517,
+          "min_ms": 27.442915830761194,
+          "p50_ms": 30.67311318591237,
+          "p95_ms": 32.20832580700517,
+          "rows": 2,
+          "rss_growth_peak_bytes": 43290624,
+          "rss_peak_bytes": 203173888
+        },
+        "query": {
+          "iterations": 3,
+          "max_ms": 74.38698783516884,
+          "min_ms": 62.13857093825936,
+          "p50_ms": 66.10764097422361,
+          "p95_ms": 74.38698783516884,
+          "rows": 297,
+          "rss_growth_peak_bytes": 56471552,
+          "rss_peak_bytes": 214511616
+        }
+      },
+      "errors": {
+        "explain": {
+          "bytes_scanned": 8899,
+          "file_open_ms": 15.62,
+          "files_matched": 32,
+          "files_total": 32,
+          "metadata_load_ms": 13.77,
+          "row_groups_matched": 1,
+          "row_groups_total": 32
+        },
+        "planning_proxy": {
+          "iterations": 3,
+          "max_ms": 20.570519845932722,
+          "min_ms": 19.888066221028566,
+          "p50_ms": 20.1415391638875,
+          "p95_ms": 20.570519845932722,
+          "rows": 2,
+          "rss_growth_peak_bytes": 43098112,
+          "rss_peak_bytes": 204709888
+        },
+        "query": {
+          "iterations": 3,
+          "max_ms": 51.42536899074912,
+          "min_ms": 49.66398701071739,
+          "p50_ms": 49.75303588435054,
+          "p95_ms": 51.42536899074912,
+          "rows": 23,
+          "rss_growth_peak_bytes": 53002240,
+          "rss_peak_bytes": 213364736
+        }
+      },
+      "fleet_failures": {
+        "explain": {
+          "bytes_scanned": 2642,
+          "file_open_ms": 21.51,
+          "files_matched": 32,
+          "files_total": 32,
+          "metadata_load_ms": 18.37,
+          "row_groups_matched": 1,
+          "row_groups_total": 32
+        },
+        "planning_proxy": {
+          "iterations": 3,
+          "max_ms": 23.00858683884144,
+          "min_ms": 18.75329716131091,
+          "p50_ms": 19.43208882585168,
+          "p95_ms": 23.00858683884144,
+          "rows": 2,
+          "rss_growth_peak_bytes": 44249088,
+          "rss_peak_bytes": 202207232
+        },
+        "query": {
+          "iterations": 3,
+          "max_ms": 50.02102069556713,
+          "min_ms": 44.951805379241705,
+          "p50_ms": 48.92757395282388,
+          "p95_ms": 50.02102069556713,
+          "rows": 4,
+          "rss_growth_peak_bytes": 51515392,
+          "rss_peak_bytes": 212754432
+        }
+      },
+      "node_device_history": {
+        "explain": {
+          "bytes_scanned": 41615,
+          "file_open_ms": 26.48,
+          "files_matched": 32,
+          "files_total": 32,
+          "metadata_load_ms": 23.71,
+          "row_groups_matched": 3,
+          "row_groups_total": 32
+        },
+        "planning_proxy": {
+          "iterations": 3,
+          "max_ms": 22.38541329279542,
+          "min_ms": 21.031894721090794,
+          "p50_ms": 22.08011783659458,
+          "p95_ms": 22.38541329279542,
+          "rows": 2,
+          "rss_growth_peak_bytes": 43261952,
+          "rss_peak_bytes": 205443072
+        },
+        "query": {
+          "iterations": 3,
+          "max_ms": 58.643750846385956,
+          "min_ms": 54.18883915990591,
+          "p50_ms": 55.5400918237865,
+          "p95_ms": 58.643750846385956,
+          "rows": 51,
+          "rss_growth_peak_bytes": 52068352,
+          "rss_peak_bytes": 210825216
+        }
+      },
+      "run_drilldown_15m": {
+        "explain": {
+          "bytes_scanned": 3625,
+          "file_open_ms": 25.52,
+          "files_matched": 32,
+          "files_total": 32,
+          "metadata_load_ms": 20.74,
+          "row_groups_matched": 1,
+          "row_groups_total": 32
+        },
+        "planning_proxy": {
+          "iterations": 3,
+          "max_ms": 26.030499953776598,
+          "min_ms": 22.74129493162036,
+          "p50_ms": 23.305481299757957,
+          "p95_ms": 26.030499953776598,
+          "rows": 2,
+          "rss_growth_peak_bytes": 45121536,
+          "rss_peak_bytes": 204374016
+        },
+        "query": {
+          "iterations": 3,
+          "max_ms": 55.09879579767585,
+          "min_ms": 51.55140534043312,
+          "p50_ms": 53.77199919894338,
+          "p95_ms": 55.09879579767585,
+          "rows": 10,
+          "rss_growth_peak_bytes": 51904512,
+          "rss_peak_bytes": 212561920
+        }
+      },
+      "run_drilldown_24h": {
+        "explain": {
+          "bytes_scanned": 10813,
+          "file_open_ms": 25.68,
+          "files_matched": 32,
+          "files_total": 32,
+          "metadata_load_ms": 23.05,
+          "row_groups_matched": 3,
+          "row_groups_total": 32
+        },
+        "planning_proxy": {
+          "iterations": 3,
+          "max_ms": 24.076775182038546,
+          "min_ms": 22.29138882830739,
+          "p50_ms": 22.57895329967141,
+          "p95_ms": 24.076775182038546,
+          "rows": 2,
+          "rss_growth_peak_bytes": 45133824,
+          "rss_peak_bytes": 205328384
+        },
+        "query": {
+          "iterations": 3,
+          "max_ms": 60.027481988072395,
+          "min_ms": 57.16046318411827,
+          "p50_ms": 58.92869085073471,
+          "p95_ms": 60.027481988072395,
+          "rows": 170,
+          "rss_growth_peak_bytes": 55676928,
+          "rss_peak_bytes": 214138880
+        }
+      },
+      "run_drilldown_7d": {
+        "explain": {
+          "bytes_scanned": 58634,
+          "file_open_ms": 16.76,
+          "files_matched": 32,
+          "files_total": 32,
+          "metadata_load_ms": 28.36,
+          "row_groups_matched": 16,
+          "row_groups_total": 32
+        },
+        "planning_proxy": {
+          "iterations": 3,
+          "max_ms": 25.451648980379105,
+          "min_ms": 22.049978841096163,
+          "p50_ms": 23.765101097524166,
+          "p95_ms": 25.451648980379105,
+          "rows": 2,
+          "rss_growth_peak_bytes": 42921984,
+          "rss_peak_bytes": 202207232
+        },
+        "query": {
+          "iterations": 3,
+          "max_ms": 100.59698019176722,
+          "min_ms": 89.54862225800753,
+          "p50_ms": 93.11639191582799,
+          "p95_ms": 100.59698019176722,
+          "rows": 1150,
+          "rss_growth_peak_bytes": 55771136,
+          "rss_peak_bytes": 213278720
+        }
+      },
+      "vllm_histogram": {
+        "explain": {
+          "bytes_scanned": 9236,
+          "file_open_ms": 24.16,
+          "files_matched": 32,
+          "files_total": 32,
+          "metadata_load_ms": 19.78,
+          "row_groups_matched": 1,
+          "row_groups_total": 32
+        },
+        "planning_proxy": {
+          "iterations": 3,
+          "max_ms": 21.837353706359863,
+          "min_ms": 20.78263321891427,
+          "p50_ms": 21.220671012997627,
+          "p95_ms": 21.837353706359863,
+          "rows": 2,
+          "rss_growth_peak_bytes": 44707840,
+          "rss_peak_bytes": 203239424
+        },
+        "query": {
+          "iterations": 3,
+          "max_ms": 51.74570810049772,
+          "min_ms": 44.994432013481855,
+          "p50_ms": 48.85103600099683,
+          "p95_ms": 51.74570810049772,
+          "rows": 9,
+          "rss_growth_peak_bytes": 50499584,
+          "rss_peak_bytes": 212762624
+        }
+      },
+      "worker_outliers": {
+        "explain": {
+          "bytes_scanned": 8192,
+          "file_open_ms": 28.64,
+          "files_matched": 32,
+          "files_total": 32,
+          "metadata_load_ms": 23.65,
+          "row_groups_matched": 1,
+          "row_groups_total": 32
+        },
+        "planning_proxy": {
+          "iterations": 3,
+          "max_ms": 26.015119161456823,
+          "min_ms": 25.818852242082357,
+          "p50_ms": 25.865452829748392,
+          "p95_ms": 26.015119161456823,
+          "rows": 2,
+          "rss_growth_peak_bytes": 44036096,
+          "rss_peak_bytes": 204320768
+        },
+        "query": {
+          "iterations": 3,
+          "max_ms": 51.98090709745884,
+          "min_ms": 48.52373618632555,
+          "p50_ms": 49.761027097702026,
+          "p95_ms": 51.98090709745884,
+          "rows": 16,
+          "rss_growth_peak_bytes": 53374976,
+          "rss_peak_bytes": 215658496
+        }
+      }
+    },
+    "concurrency": {
+      "1": {
+        "concurrency": 1,
+        "p50_ms": 27.541015995666385,
+        "p95_ms": 30.421416740864515,
+        "queries": 2,
+        "rss_growth_peak_bytes": 2097152,
+        "rss_peak_bytes": 375640064,
+        "throughput_queries_per_second": 35.51528616430261
+      },
+      "4": {
+        "concurrency": 4,
+        "p50_ms": 41.18353105150163,
+        "p95_ms": 93.67791516706347,
+        "queries": 8,
+        "rss_growth_peak_bytes": 2699264,
+        "rss_peak_bytes": 376311808,
+        "throughput_queries_per_second": 72.19960058523812
+      },
+      "8": {
+        "concurrency": 8,
+        "p50_ms": 85.85527120158076,
+        "p95_ms": 136.58651616424322,
+        "queries": 16,
+        "rss_growth_peak_bytes": 5808128,
+        "rss_peak_bytes": 382119936,
+        "throughput_queries_per_second": 72.2761339727436
+      }
+    },
+    "warm": {
+      "accounting": {
+        "explain": {
+          "bytes_scanned": 131686,
+          "file_open_ms": 1.07,
+          "files_matched": 32,
+          "files_total": 32,
+          "metadata_load_ms": 4.6,
+          "row_groups_matched": 16,
+          "row_groups_total": 32
+        },
+        "planning_proxy": {
+          "iterations": 7,
+          "max_ms": 11.006851214915514,
+          "min_ms": 10.140180122107267,
+          "p50_ms": 10.361453052610159,
+          "p95_ms": 11.006851214915514,
+          "rows": 2,
+          "rss_growth_peak_bytes": 4096,
+          "rss_peak_bytes": 373157888
+        },
+        "query": {
+          "iterations": 7,
+          "max_ms": 50.96287094056606,
+          "min_ms": 45.024435967206955,
+          "p50_ms": 48.17795613780618,
+          "p95_ms": 50.96287094056606,
+          "rows": 12,
+          "rss_growth_peak_bytes": 3784704,
+          "rss_peak_bytes": 373153792
+        },
+        "workload": "accounting"
+      },
+      "alert_evaluation": {
+        "explain": {
+          "bytes_scanned": 14930,
+          "file_open_ms": 1.38,
+          "files_matched": 32,
+          "files_total": 32,
+          "metadata_load_ms": 5.68,
+          "row_groups_matched": 1,
+          "row_groups_total": 32
+        },
+        "planning_proxy": {
+          "iterations": 7,
+          "max_ms": 19.817565567791462,
+          "min_ms": 16.36477094143629,
+          "p50_ms": 16.69071102514863,
+          "p95_ms": 19.817565567791462,
+          "rows": 2,
+          "rss_growth_peak_bytes": 0,
+          "rss_peak_bytes": 368881664
+        },
+        "query": {
+          "iterations": 7,
+          "max_ms": 34.16644735261798,
+          "min_ms": 29.897090047597885,
+          "p50_ms": 30.813332181423903,
+          "p95_ms": 34.16644735261798,
+          "rows": 297,
+          "rss_growth_peak_bytes": 589824,
+          "rss_peak_bytes": 368881664
+        },
+        "workload": "alert_evaluation"
+      },
+      "errors": {
+        "explain": {
+          "bytes_scanned": 8899,
+          "file_open_ms": 0.42583,
+          "files_matched": 32,
+          "files_total": 32,
+          "metadata_load_ms": 2.6,
+          "row_groups_matched": 1,
+          "row_groups_total": 32
+        },
+        "planning_proxy": {
+          "iterations": 7,
+          "max_ms": 11.83214783668518,
+          "min_ms": 10.169478133320808,
+          "p50_ms": 11.013924144208431,
+          "p95_ms": 11.83214783668518,
+          "rows": 2,
+          "rss_growth_peak_bytes": 0,
+          "rss_peak_bytes": 367271936
+        },
+        "query": {
+          "iterations": 7,
+          "max_ms": 23.924668319523335,
+          "min_ms": 20.630729850381613,
+          "p50_ms": 21.337064914405346,
+          "p95_ms": 23.924668319523335,
+          "rows": 23,
+          "rss_growth_peak_bytes": 4243456,
+          "rss_peak_bytes": 367271936
+        },
+        "workload": "errors"
+      },
+      "fleet_failures": {
+        "explain": {
+          "bytes_scanned": 2642,
+          "file_open_ms": 1.06,
+          "files_matched": 32,
+          "files_total": 32,
+          "metadata_load_ms": 4.03,
+          "row_groups_matched": 1,
+          "row_groups_total": 32
+        },
+        "planning_proxy": {
+          "iterations": 7,
+          "max_ms": 11.343182995915413,
+          "min_ms": 10.42143628001213,
+          "p50_ms": 10.781268123537302,
+          "p95_ms": 11.343182995915413,
+          "rows": 2,
+          "rss_growth_peak_bytes": 69632,
+          "rss_peak_bytes": 349958144
+        },
+        "query": {
+          "iterations": 7,
+          "max_ms": 20.096360240131617,
+          "min_ms": 17.682862002402544,
+          "p50_ms": 18.058388959616423,
+          "p95_ms": 20.096360240131617,
+          "rows": 4,
+          "rss_growth_peak_bytes": 811008,
+          "rss_peak_bytes": 349888512
+        },
+        "workload": "fleet_failures"
+      },
+      "node_device_history": {
+        "explain": {
+          "bytes_scanned": 41615,
+          "file_open_ms": 1.64,
+          "files_matched": 32,
+          "files_total": 32,
+          "metadata_load_ms": 5.35,
+          "row_groups_matched": 3,
+          "row_groups_total": 32
+        },
+        "planning_proxy": {
+          "iterations": 7,
+          "max_ms": 13.551354873925447,
+          "min_ms": 12.921327725052834,
+          "p50_ms": 13.101506046950817,
+          "p95_ms": 13.551354873925447,
+          "rows": 2,
+          "rss_growth_peak_bytes": 0,
+          "rss_peak_bytes": 354238464
+        },
+        "query": {
+          "iterations": 7,
+          "max_ms": 30.499917920678854,
+          "min_ms": 27.105884160846472,
+          "p50_ms": 28.209449723362923,
+          "p95_ms": 30.499917920678854,
+          "rows": 51,
+          "rss_growth_peak_bytes": 2158592,
+          "rss_peak_bytes": 354238464
+        },
+        "workload": "node_device_history"
+      },
+      "run_drilldown_15m": {
+        "explain": {
+          "bytes_scanned": 3625,
+          "file_open_ms": 1.69,
+          "files_matched": 32,
+          "files_total": 32,
+          "metadata_load_ms": 7.79,
+          "row_groups_matched": 1,
+          "row_groups_total": 32
+        },
+        "planning_proxy": {
+          "iterations": 7,
+          "max_ms": 14.848206657916307,
+          "min_ms": 13.234088197350502,
+          "p50_ms": 14.126394409686327,
+          "p95_ms": 14.848206657916307,
+          "rows": 2,
+          "rss_growth_peak_bytes": 0,
+          "rss_peak_bytes": 329789440
+        },
+        "query": {
+          "iterations": 7,
+          "max_ms": 26.044107973575592,
+          "min_ms": 24.08117102459073,
+          "p50_ms": 24.610749911516905,
+          "p95_ms": 26.044107973575592,
+          "rows": 10,
+          "rss_growth_peak_bytes": 4096,
+          "rss_peak_bytes": 329789440
+        },
+        "workload": "run_drilldown_15m"
+      },
+      "run_drilldown_24h": {
+        "explain": {
+          "bytes_scanned": 10813,
+          "file_open_ms": 1.58,
+          "files_matched": 32,
+          "files_total": 32,
+          "metadata_load_ms": 8.03,
+          "row_groups_matched": 3,
+          "row_groups_total": 32
+        },
+        "planning_proxy": {
+          "iterations": 7,
+          "max_ms": 14.844183344393969,
+          "min_ms": 13.051462359726429,
+          "p50_ms": 13.851054944097996,
+          "p95_ms": 14.844183344393969,
+          "rows": 2,
+          "rss_growth_peak_bytes": 2097152,
+          "rss_peak_bytes": 337596416
+        },
+        "query": {
+          "iterations": 7,
+          "max_ms": 32.73716103285551,
+          "min_ms": 29.67612398788333,
+          "p50_ms": 30.724085867404938,
+          "p95_ms": 32.73716103285551,
+          "rows": 170,
+          "rss_growth_peak_bytes": 266240,
+          "rss_peak_bytes": 335499264
+        },
+        "workload": "run_drilldown_24h"
+      },
+      "run_drilldown_7d": {
+        "explain": {
+          "bytes_scanned": 58634,
+          "file_open_ms": 1.8,
+          "files_matched": 32,
+          "files_total": 32,
+          "metadata_load_ms": 9.13,
+          "row_groups_matched": 16,
+          "row_groups_total": 32
+        },
+        "planning_proxy": {
+          "iterations": 7,
+          "max_ms": 14.657525811344385,
+          "min_ms": 13.552652206271887,
+          "p50_ms": 13.973424211144447,
+          "p95_ms": 14.657525811344385,
+          "rows": 2,
+          "rss_growth_peak_bytes": 0,
+          "rss_peak_bytes": 340672512
+        },
+        "query": {
+          "iterations": 7,
+          "max_ms": 71.01224223151803,
+          "min_ms": 63.424358144402504,
+          "p50_ms": 67.07985512912273,
+          "p95_ms": 71.01224223151803,
+          "rows": 1150,
+          "rss_growth_peak_bytes": 1081344,
+          "rss_peak_bytes": 340672512
+        },
+        "workload": "run_drilldown_7d"
+      },
+      "vllm_histogram": {
+        "explain": {
+          "bytes_scanned": 9236,
+          "file_open_ms": 1.39,
+          "files_matched": 32,
+          "files_total": 32,
+          "metadata_load_ms": 4.7,
+          "row_groups_matched": 1,
+          "row_groups_total": 32
+        },
+        "planning_proxy": {
+          "iterations": 7,
+          "max_ms": 13.607567641884089,
+          "min_ms": 11.384143028408289,
+          "p50_ms": 12.190531939268112,
+          "p95_ms": 13.607567641884089,
+          "rows": 2,
+          "rss_growth_peak_bytes": 2097152,
+          "rss_peak_bytes": 349675520
+        },
+        "query": {
+          "iterations": 7,
+          "max_ms": 23.88567803427577,
+          "min_ms": 20.25787904858589,
+          "p50_ms": 20.706237759441137,
+          "p95_ms": 23.88567803427577,
+          "rows": 9,
+          "rss_growth_peak_bytes": 815104,
+          "rss_peak_bytes": 347578368
+        },
+        "workload": "vllm_histogram"
+      },
+      "worker_outliers": {
+        "explain": {
+          "bytes_scanned": 8192,
+          "file_open_ms": 1.41,
+          "files_matched": 32,
+          "files_total": 32,
+          "metadata_load_ms": 4.7,
+          "row_groups_matched": 1,
+          "row_groups_total": 32
+        },
+        "planning_proxy": {
+          "iterations": 7,
+          "max_ms": 18.596231937408447,
+          "min_ms": 16.347552184015512,
+          "p50_ms": 16.786864958703518,
+          "p95_ms": 18.596231937408447,
+          "rows": 2,
+          "rss_growth_peak_bytes": 270336,
+          "rss_peak_bytes": 345165824
+        },
+        "query": {
+          "iterations": 7,
+          "max_ms": 25.776737835258245,
+          "min_ms": 23.6763097345829,
+          "p50_ms": 24.641962256282568,
+          "p95_ms": 25.776737835258245,
+          "rows": 16,
+          "rss_growth_peak_bytes": 2142208,
+          "rss_peak_bytes": 344895488
+        },
+        "workload": "worker_outliers"
+      }
+    }
+  },
+  "dataset": {
+    "achieved_distinct_run_ids": 11027,
+    "achieved_scrapes": 230,
+    "batch_rows": 25000,
+    "decoy_namespaces": 0,
+    "distinct_run_ids": 100000,
+    "duration_days": 14,
+    "namespace": "telltale",
+    "rows": 500000,
+    "scrape_interval_minutes": 88.03493449781659,
+    "segments": 32,
+    "series_per_scrape": 2176,
+    "signal_count": 34
+  },
+  "environment": {
+    "cpu_count": 4,
+    "hostname": "1402fdfdf48d",
+    "kernel": "6.1.0-49-cloud-amd64",
+    "marin_finelog": "0.2.11",
+    "marin_finelog_server": "0.2.14.dev30290140609",
+    "planning_proxy_definition": "StatsService wall time for EXPLAIN without ANALYZE",
+    "process_cold_definition": "new Python process, embedded server, and DataFusion metadata cache; host page cache unchanged",
+    "pyarrow": "23.0.1",
+    "python": "3.12.13",
+    "timestamp_utc": "2026-07-31T00:15:39.636332+00:00"
+  },
+  "measurement_kind": "finelog_stats_service",
+  "preparation": {
+    "compact_seconds": 3.579664892051369,
+    "parquet_bytes": 2736632,
+    "parquet_files": 32,
+    "prepare_seconds": 47.938107152003795,
+    "rows": 500000,
+    "write_seconds": 43.71301906555891
+  },
+  "schema_version": 1,
+  "workloads": {
+    "accounting": "SELECT \"cluster\",\n       json_get(labels, 'user') AS user_name,\n       json_get(labels, 'project') AS project,\n       max(value) - min(value) AS accelerator_seconds\nFROM \"telltale\"\nWHERE name = 'iris_accelerator_seconds_total'\n  AND ts >= to_timestamp_millis(1767830400001) AND ts < to_timestamp_millis(1768435200001)\nGROUP BY \"cluster\", user_name, project\nORDER BY accelerator_seconds DESC",
+    "alert_evaluation": "SELECT name, \"cluster\", region, value, ts, labels\nFROM \"telltale\"\nWHERE name IN (\n    'telemetry_progress_age_seconds',\n    'telemetry_worker_heartbeat_age_seconds',\n    'telemetry_vllm_queue_saturation',\n    'telemetry_gpu_health',\n    'telemetry_forwarding_gap',\n    'telemetry_producer_heartbeat'\n  )\n  AND ts >= to_timestamp_millis(1768431600001) AND ts < to_timestamp_millis(1768435200001)\nQUALIFY row_number() OVER (\n  PARTITION BY name, \"cluster\", region, run, job_id, worker, process_index,\n               json_get(labels, 'method'),\n               json_get(labels, 'status'),\n               json_get(labels, 'le')\n  ORDER BY ts DESC\n) = 1",
+    "errors": "SELECT \"cluster\", name, json_get(labels, 'error_code') AS error_code,\n       json_get(labels, 'body') AS body, sum(value) AS errors\nFROM \"telltale\"\nWHERE (\n    name = 'iris_rpc_errors_total'\n    OR (\n      name = 'iris_error_log_entries_total'\n      AND run = 'run-000007'\n      AND json_get(labels, 'body') LIKE '%OOM%'\n    )\n  )\n  AND ts >= to_timestamp_millis(1768413600001) AND ts < to_timestamp_millis(1768435200001)\nGROUP BY \"cluster\", name, error_code, body\nORDER BY errors DESC",
+    "fleet_failures": "SELECT \"cluster\", region,\n       max(CASE WHEN name = 'iris_worker_state' THEN value END) AS latest_state,\n       sum(CASE WHEN name = 'iris_task_failures_total' THEN value ELSE 0 END) AS failures\nFROM \"telltale\"\nWHERE name IN ('iris_task_failures_total', 'iris_worker_state')\n  AND ts >= to_timestamp_millis(1768413600001) AND ts < to_timestamp_millis(1768435200001)\nGROUP BY \"cluster\", region\nORDER BY failures DESC",
+    "node_device_history": "SELECT date_bin(INTERVAL '5 minutes', ts) AS t,\n       run,\n       name,\n       json_get(labels, 'device') AS device,\n       avg(value) AS value\nFROM \"telltale\"\nWHERE worker = 'worker-0007'\n  AND name IN (\n    'iris_device_temperature_celsius',\n    'iris_device_memory_used_bytes',\n    'iris_device_health'\n  )\n  AND ts >= to_timestamp_millis(1768348800001) AND ts < to_timestamp_millis(1768435200001)\nGROUP BY 1, 2, 3, 4\nORDER BY 1, 2, 3, 4",
+    "run_drilldown_15m": "SELECT date_bin(INTERVAL '1 minute', ts) AS t, name, avg(value) AS value\nFROM \"telltale\"\nWHERE run = 'run-000007'\n  AND name IN ('levanter_train_loss', 'levanter_throughput', 'levanter_step', 'levanter_learning_rate', 'levanter_gradient_norm', 'levanter_parameter_norm', 'levanter_optimizer_step_seconds', 'levanter_checkpoint_seconds', 'levanter_input_queue_depth', 'levanter_tokens_total')\n  AND ts >= to_timestamp_millis(1768434300001) AND ts < to_timestamp_millis(1768435200001)\nGROUP BY 1, 2\nORDER BY 1, 2",
+    "run_drilldown_24h": "SELECT date_bin(INTERVAL '1 minute', ts) AS t, name, avg(value) AS value\nFROM \"telltale\"\nWHERE run = 'run-000007'\n  AND name IN ('levanter_train_loss', 'levanter_throughput', 'levanter_step', 'levanter_learning_rate', 'levanter_gradient_norm', 'levanter_parameter_norm', 'levanter_optimizer_step_seconds', 'levanter_checkpoint_seconds', 'levanter_input_queue_depth', 'levanter_tokens_total')\n  AND ts >= to_timestamp_millis(1768348800001) AND ts < to_timestamp_millis(1768435200001)\nGROUP BY 1, 2\nORDER BY 1, 2",
+    "run_drilldown_7d": "SELECT date_bin(INTERVAL '1 minute', ts) AS t, name, avg(value) AS value\nFROM \"telltale\"\nWHERE run = 'run-000007'\n  AND name IN ('levanter_train_loss', 'levanter_throughput', 'levanter_step', 'levanter_learning_rate', 'levanter_gradient_norm', 'levanter_parameter_norm', 'levanter_optimizer_step_seconds', 'levanter_checkpoint_seconds', 'levanter_input_queue_depth', 'levanter_tokens_total')\n  AND ts >= to_timestamp_millis(1767830400001) AND ts < to_timestamp_millis(1768435200001)\nGROUP BY 1, 2\nORDER BY 1, 2",
+    "vllm_histogram": "SELECT date_bin(INTERVAL '1 minute', ts) AS t,\n       json_get(labels, 'le') AS le,\n       max(value) - min(value) AS observations\nFROM \"telltale\"\nWHERE name = 'vllm_time_to_first_token_seconds_bucket'\n  AND run = 'run-000007'\n  AND ts >= to_timestamp_millis(1768431600001) AND ts < to_timestamp_millis(1768435200001)\nGROUP BY 1, 2\nORDER BY 1, 2",
+    "worker_outliers": "WITH latest AS (\n  SELECT worker, name, value, ts,\n         row_number() OVER (PARTITION BY worker, name ORDER BY ts DESC) AS row_num\n  FROM \"telltale\"\n  WHERE run = 'run-000007'\n    AND name IN ('process_resident_memory_bytes', 'process_cpu_seconds_total')\n    AND ts >= to_timestamp_millis(1768431600001) AND ts < to_timestamp_millis(1768435200001)\n)\nSELECT worker,\n       max(CASE WHEN name = 'process_resident_memory_bytes' THEN value END) AS rss_bytes,\n       max(CASE WHEN name = 'process_cpu_seconds_total' THEN value END) AS cpu_seconds\nFROM latest\nWHERE row_num = 1\nGROUP BY worker\nORDER BY rss_bytes DESC\nLIMIT 20"
+  }
+}
