@@ -18,6 +18,7 @@ from ladder_config import (
     EVAL_ROWS_PER_SOURCE,
     MANIFEST_ROOT,
     MIN_SOURCES,
+    STACK_V3_OUTPUT_HASH,
     TRAIN_TARGET_3M,
     TRAIN_TARGET_750K,
 )
@@ -124,6 +125,11 @@ def main() -> None:
         raise ValueError("The stored manifest digest does not match its content")
     if len(manifest["sources"]) < MIN_SOURCES:
         raise ValueError(f"Manifest has only {len(manifest['sources'])} sources")
+    stack_v3 = manifest["sources"].get("stack-v3")
+    if stack_v3 is None:
+        raise ValueError("The manifest does not contain Stack v3")
+    if f"stack-v3_{STACK_V3_OUTPUT_HASH}" not in stack_v3["main_output_dir"]:
+        raise ValueError(f"Stack v3 uses an unexpected output: {stack_v3['main_output_dir']}")
     sources = {}
     for index, (source, result) in enumerate(sorted(manifest["sources"].items()), start=1):
         logger.info("Auditing manifest source %d/%d: %s", index, len(manifest["sources"]), source)
@@ -147,6 +153,7 @@ def main() -> None:
         "manifest_url": MANIFEST_URL,
         "manifest_sha256": manifest["sha256"],
         "source_count": len(sources),
+        "stack_v3_output_hash": STACK_V3_OUTPUT_HASH,
         "totals": totals,
         "sources": sources,
         "passed": True,
@@ -156,6 +163,7 @@ def main() -> None:
         "audit_url": AUDIT_URL,
         "manifest_sha256": manifest["sha256"],
         "source_count": len(sources),
+        "stack_v3_output_hash": STACK_V3_OUTPUT_HASH,
         "totals": totals,
         "passed": True,
     }
