@@ -43,7 +43,7 @@
     {
       "name": "exp_rpt_curriculum-medium",
       "hf_dataset_id": "penfever/exp_rpt_curriculum-medium-qwen3.5-122b-131k-opencode-traces",
-      "revision": "d2985151c3752e75ce4917cefe61b447cac5c037",
+      "revision": "0421a462d1d540ad6a48239cc12c0d1147307b34",
       "expected_rows": 451
     },
     {

@@ -248,6 +248,8 @@ def test_grug_reproduction_manifest_covers_the_exact_training_mixture():
     assert {source.teacher_tokenizer_revision for source in manifest.sources} == {
         "a099dee70ccfcd8d5dda56aaa0b60cb8ecadabc9"
     }
+    by_name = {source.name: source for source in manifest.sources}
+    assert by_name["exp_rpt_curriculum-medium"].revision == "0421a462d1d540ad6a48239cc12c0d1147307b34"
     assert {source.name for source in manifest.sources}.isdisjoint(
         {
             "exp_rpt_methods2test-large-v3",
@@ -258,17 +260,40 @@ def test_grug_reproduction_manifest_covers_the_exact_training_mixture():
 
 
 @pytest.mark.data_integration
-def test_reproduces_grug_curriculum_hard_training_records():
-    """The compact historical oracle must match all 22 records used by the Grug SFT pipeline."""
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize(
+    ("dataset_id", "revision", "expected_rows", "expected_sha256"),
+    [
+        (
+            "penfever/exp_rpt_curriculum-hard-qwen3.5-122b-131k-opencode-traces",
+            "404f3fc1ff0aad3818fcbd07a4d573892e316ffe",
+            22,
+            "f7edd569a88c8563b15cb14643908c5e9aff37ad40742446f8342d52cd391a29",
+        ),
+        (
+            "penfever/exp_rpt_curriculum-medium-qwen3.5-122b-131k-opencode-traces",
+            "0421a462d1d540ad6a48239cc12c0d1147307b34",
+            451,
+            "320c396af2783f36bdb9d6da67f1b9fa6a14b8744ee084aa21b8cb0e77926b20",
+        ),
+    ],
+)
+def test_reproduces_grug_curriculum_training_records(
+    dataset_id,
+    revision,
+    expected_rows,
+    expected_sha256,
+):
+    """Historical source revisions must reproduce the records consumed by the Grug SFT pipeline."""
     tokenizer = AutoTokenizer.from_pretrained(
         "Qwen/Qwen3.5-122B-A10B-FP8",
         revision="a099dee70ccfcd8d5dda56aaa0b60cb8ecadabc9",
         trust_remote_code=True,
     )
     rows = load_dataset(
-        "penfever/exp_rpt_curriculum-hard-qwen3.5-122b-131k-opencode-traces",
+        dataset_id,
         split="train",
-        revision="404f3fc1ff0aad3818fcbd07a4d573892e316ffe",
+        revision=revision,
         streaming=True,
     )
     converted = [
@@ -285,7 +310,5 @@ def test_reproduces_grug_curriculum_hard_training_records():
     ]
     canonical = [json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=False) for record in converted]
 
-    assert len(canonical) == 22
-    assert hashlib.sha256("\n".join(canonical).encode()).hexdigest() == (
-        "f7edd569a88c8563b15cb14643908c5e9aff37ad40742446f8342d52cd391a29"
-    )
+    assert len(canonical) == expected_rows
+    assert hashlib.sha256("\n".join(canonical).encode()).hexdigest() == expected_sha256
