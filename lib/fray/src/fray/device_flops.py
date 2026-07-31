@@ -238,6 +238,12 @@ def normalize_device_type(device_type: str) -> str:
     if kind.startswith("v") and "-" in kind:
         return kind.split("-")[0]
 
+    # Grace Blackwell superchips share the discrete GPU's flops entry (the iris
+    # device_variant is "GB200"; jax_device_kind_to_fray_device_type collapses the
+    # JAX kind strings the same way).
+    if kind == "gb200":
+        return "b200"
+
     return kind
 
 
