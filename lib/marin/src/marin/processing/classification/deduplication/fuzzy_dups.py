@@ -13,10 +13,8 @@ Per-document attr rows have schema::
 
     {
       id: str,
-      attributes: {
-        dup_cluster_id: str,         # CC component id — shared by all cluster members
-        is_cluster_canonical: bool,  # True for exactly one member per cluster
-      }
+      dup_cluster_id: str,         # CC component id — shared by all cluster members
+      is_cluster_canonical: bool,  # True for exactly one member per cluster
     }
 
 Rows are emitted for every member of a non-singleton cluster (canonical +
@@ -51,7 +49,7 @@ from marin.processing.classification.deduplication.dedup_commons import _load_ba
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, MinHashParams
 
 logger = logging.getLogger(__name__)
-FUZZY_DUPS_ATTR_DATA_VERSION = 2
+FUZZY_DUPS_ATTR_DATA_VERSION = 3
 
 
 class FuzzyDupsPerSource(BaseModel):
@@ -172,7 +170,7 @@ def _make_per_shard_writer(counter_prefix: str):
     """Return a group_by reducer that writes per-shard cluster-annotation parquet files.
 
     Skips singletons entirely. For every non-singleton cluster member, writes
-    ``{id, attributes: {dup_cluster_id, is_cluster_canonical}}``. Rows are
+    ``{id, dup_cluster_id, is_cluster_canonical}``. Rows are
     already sorted by ``id`` thanks to the upstream ``group_by(sort_by=id)``.
 
     The ``entries`` list is loaded via ``zephyr_worker_ctx().get_shared`` so it
@@ -200,10 +198,8 @@ def _make_per_shard_writer(counter_prefix: str):
                     counters.pipeline.update_counter(f"{counter_prefix}/canonicals", 1)
                 yield {
                     "id": record["id"],
-                    "attributes": {
-                        "dup_cluster_id": record["component_id"],
-                        "is_cluster_canonical": record["is_canonical"],
-                    },
+                    "dup_cluster_id": record["component_id"],
+                    "is_cluster_canonical": record["is_canonical"],
                 }
 
         result = write_parquet_file(cluster_member_rows(), entry.output_path)
@@ -237,8 +233,8 @@ def compute_fuzzy_dups_attrs(
     components, and emits a per-source attribute tree under
     ``<output_path>/outputs/source_NNN/`` with one parquet file per source
     shard (filenames preserved from the source). Each row annotates one
-    cluster member with ``{id: str, attributes: {dup_cluster_id: str,
-    is_cluster_canonical: bool}}``; singletons are omitted.
+    cluster member with ``{id: str, dup_cluster_id: str,
+    is_cluster_canonical: bool}``; singletons are omitted.
 
     Exactly one member per cluster has ``is_cluster_canonical=True`` — the
     one CC's Hash-to-Min picked as the natural canonical (min ``id_norm``).

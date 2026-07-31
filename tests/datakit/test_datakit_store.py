@@ -81,7 +81,7 @@ def _write_shard(dirs: dict[str, str], basename: str, docs: list[_Doc]) -> None:
     )
     _write_parquet(
         f"{dirs['decon']}/{basename}",
-        pa.table({"id": ids, "attributes": pa.array([{"contaminated": d[3]} for d in docs])}),
+        pa.table({"id": ids, "contaminated": pa.array([d[3] for d in docs])}),
     )
     _write_parquet(
         f"{dirs['cluster']}/{basename}",
@@ -104,15 +104,11 @@ def _write_shard(dirs: dict[str, str], basename: str, docs: list[_Doc]) -> None:
         _write_parquet(
             f"{dirs['exact_dedup']}/{basename}",
             pa.Table.from_pylist(
-                [{"id": doc_id, "attributes": {"dup_doc": True}} for doc_id in exact_duplicates],
+                [{"id": doc_id, "dup_doc": True} for doc_id in exact_duplicates],
                 schema=pa.schema(
                     [
                         pa.field("id", pa.string(), nullable=False),
-                        pa.field(
-                            "attributes",
-                            pa.struct([pa.field("dup_doc", pa.bool_(), nullable=False)]),
-                            nullable=False,
-                        ),
+                        pa.field("dup_doc", pa.bool_(), nullable=False),
                     ]
                 ),
             ),
@@ -125,7 +121,7 @@ def _write_shard(dirs: dict[str, str], basename: str, docs: list[_Doc]) -> None:
             pa.table(
                 {
                     "id": [m[0] for m in marked],
-                    "attributes": pa.array([{"is_cluster_canonical": m[1]} for m in marked]),
+                    "is_cluster_canonical": pa.array([m[1] for m in marked]),
                 }
             ),
         )

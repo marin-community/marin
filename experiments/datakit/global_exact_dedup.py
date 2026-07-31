@@ -15,9 +15,7 @@ Output rows have this schema::
 
     {
       id: str,
-      attributes: {
-        dup_doc: bool,
-      },
+      dup_doc: bool,
     }
 
 Output files keep the matching normalized shard names. A missing file means
@@ -43,15 +41,11 @@ from zephyr.writers import write_parquet_file
 
 COUNTER_PREFIX = "global_exact_dedup"
 _SHARED_ENTRIES_KEY = "global_exact_dedup_entries"
-GLOBAL_EXACT_DEDUP_DATA_VERSION = 1
+GLOBAL_EXACT_DEDUP_DATA_VERSION = 2
 _ATTR_SCHEMA = pa.schema(
     [
         pa.field("id", pa.string(), nullable=False),
-        pa.field(
-            "attributes",
-            pa.struct([pa.field("dup_doc", pa.bool_(), nullable=False)]),
-            nullable=False,
-        ),
+        pa.field("dup_doc", pa.bool_(), nullable=False),
     ]
 )
 
@@ -141,7 +135,7 @@ def _write_shard(file_idx: int, records: Iterator[_ExactRecord]) -> dict[str, in
         nonlocal duplicate_records
         for record in records:
             duplicate_records += 1
-            yield {"id": record["id"], "attributes": {"dup_doc": True}}
+            yield {"id": record["id"], "dup_doc": True}
 
     result = write_parquet_file(duplicate_rows(), output_path=entry.output_path, schema=_ATTR_SCHEMA)
     counters.pipeline.update_counter(f"{COUNTER_PREFIX}/duplicate_records", duplicate_records)
