@@ -344,11 +344,19 @@ def fa4_cute_segment_bounds(
     if mask.segment_ids is None:
         return _simple_causal_lower_bounds(batch_size=batch_size, seq_len=seq_len, sliding_window=sliding_window)
     q_segment_ids, kv_segment_ids = mask.segment_ids
-    if kv_segment_ids is not q_segment_ids:
-        # These bounds derive from the q ids alone; distinct kv ids would silently mis-segment.
-        # The regular FA4 path rejects mismatched q/kv ids, so fail fast here rather than bypass it.
-        raise NotImplementedError("fa4_cute_segment_bounds supports only matching q/kv segment ids.")
+    # These bounds derive from the q ids alone. Self-attention commonly carries q and kv ids as
+    # distinct-but-equal arrays, so assert value equality at runtime (matching the regular FA4 path
+    # in ``_packed_self_attention_segment_ids``) rather than rejecting on object identity, which
+    # would break normal packed training.
+    same_segment_ids = q_segment_ids is kv_segment_ids
     q_segment_ids = _batched_segment_ids(q_segment_ids, batch_size=batch_size, seq_len=seq_len)
+    if not same_segment_ids:
+        kv_segment_ids = _batched_segment_ids(kv_segment_ids, batch_size=batch_size, seq_len=seq_len)
+        q_segment_ids = eqx.error_if(
+            q_segment_ids,
+            jnp.any(q_segment_ids != kv_segment_ids),
+            "fa4_cute_segment_bounds requires matching q/kv segment ids.",
+        )
     return _packed_segment_causal_lower_bounds(
         q_segment_ids,
         batch_size=batch_size,
