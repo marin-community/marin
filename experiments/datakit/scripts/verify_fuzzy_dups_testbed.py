@@ -327,6 +327,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sample-prefix", default=SAMPLE_PREFIX)
     parser.add_argument("--output-prefix", required=True)
+    parser.add_argument(
+        "--candidate-prefix",
+        help="Optional shared prefix for MinHash and candidate artifacts; defaults to --output-prefix",
+    )
     parser.add_argument("--sources", default="all")
     parser.add_argument("--max-workers", type=int, default=DEFAULT_MAX_WORKERS)
     parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT)
@@ -342,6 +346,7 @@ def main() -> None:
 
     configure_logging(logging.INFO)
     output_prefix = args.output_prefix.rstrip("/")
+    candidate_prefix = (args.candidate_prefix or output_prefix).rstrip("/")
     normalized_steps = sample_sources(args.sample_prefix, _parse_source_names(args.sources))
     minhash_steps = [
         compute_minhash_attrs_step(
@@ -349,7 +354,7 @@ def main() -> None:
             normalize=normalize_step,
             worker_resources=WORKER_RESOURCES,
             max_workers=args.max_workers,
-            override_output_path=prefix_join(output_prefix, f"minhash/{source_name}"),
+            override_output_path=prefix_join(candidate_prefix, f"minhash/{source_name}"),
         )
         for source_name, normalize_step in normalized_steps.items()
     ]
@@ -358,7 +363,7 @@ def main() -> None:
         minhash_steps=minhash_steps,
         max_parallelism=args.max_workers,
         worker_resources=WORKER_RESOURCES,
-        override_output_path=prefix_join(output_prefix, "candidates"),
+        override_output_path=prefix_join(candidate_prefix, "candidates"),
     )
     verification_params = FuzzyVerificationParams()
     verified_step = verify_fuzzy_dups_step(
