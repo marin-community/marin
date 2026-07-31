@@ -130,6 +130,8 @@ url = "2"
 # sqlite). Distinct file from Python's DuckDB registry — never aliased.
 rusqlite = { version = "0.32", features = ["bundled"] }
 regex = "1"
+sha2 = "0.10"
+uuid = "1"
 
 # Process allocator (see the `#[global_allocator]` in `main.rs`). The default
 # glibc malloc retains freed query-buffer pages in its per-CPU arenas instead of
@@ -139,6 +141,9 @@ regex = "1"
 # tracks real usage. Unix-only; the deploy target is Linux.
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = { version = "0.6", features = ["background_threads"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
 
 [build-dependencies]
 connectrpc-build = "0.6"
