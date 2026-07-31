@@ -1055,6 +1055,10 @@ def run_fixture_parity(base_url: str, model: str, *, artifact_dir: Path) -> dict
         "tests/cluster/vllm/grug_exact_reference_check.py",
         "--fixture",
         str(FIXTURE_DIR),
+        "--base-url",
+        base_url,
+        "--model",
+        model,
         "--output",
         str(tensor_path),
     ]
@@ -1080,11 +1084,7 @@ def run_fixture_parity(base_url: str, model: str, *, artifact_dir: Path) -> dict
     if completed.stderr:
         stderr_path.write_text(completed.stderr)
 
-    # This helper has no vLLM import; it scores the live response against the
-    # same frozen Levanter observations used by the tensor check.
-    from tests.cluster.vllm.grug_exact_reference_check import run_server_parity  # noqa: PLC0415
-
-    server = run_server_parity(base_url, model, FIXTURE_DIR)
+    server = tensor_payload["server"]
     server_path = artifact_dir / "fixture-server-parity.json"
     server_path.write_text(json.dumps(server, indent=2, sort_keys=True) + "\n")
     tensor = tensor_payload["tensor"]

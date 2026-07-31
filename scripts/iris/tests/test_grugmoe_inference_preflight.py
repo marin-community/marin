@@ -131,6 +131,8 @@ def test_fixture_parity_allows_prereleases_and_preserves_resolver_failure(
 ) -> None:
     def fail(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         assert command[:4] == ["uv", "run", "--no-config", "--prerelease=allow"]
+        assert command[command.index("--base-url") + 1] == "http://127.0.0.1:8000"
+        assert command[command.index("--model") + 1] == "/fixture"
         environment = kwargs["env"]
         assert isinstance(environment, dict)
         assert environment["VLLM_TARGET_DEVICE"] == "cuda"
@@ -149,6 +151,32 @@ def test_fixture_parity_allows_prereleases_and_preserves_resolver_failure(
 
     assert (tmp_path / "fixture-tensor-parity.stdout").read_text() == "resolver stdout\n"
     assert (tmp_path / "fixture-tensor-parity.stderr").read_text() == "resolver stderr\n"
+
+
+def test_fixture_server_parity_runs_inside_isolated_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    tensor = {"passed": True}
+    server = {"passed": True, "boundary": {"reused_prompt_tokens": 512}}
+
+    def succeed(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        output = Path(command[command.index("--output") + 1])
+        output.write_text(json.dumps({"tensor": tensor, "server": server}))
+        return subprocess.CompletedProcess(command, 0, stdout="parity stdout\n", stderr="")
+
+    monkeypatch.setattr(grug_preflight, "_run", succeed)
+
+    result = grug_preflight.run_fixture_parity(
+        "http://127.0.0.1:8000",
+        "/fixture",
+        artifact_dir=tmp_path,
+    )
+
+    assert result["passed"]
+    assert result["tensor"] == tensor
+    assert result["server"] == server
+    assert json.loads((tmp_path / "fixture-server-parity.json").read_text()) == server
 
 
 def test_validate_session_does_not_mutate_state() -> None:
