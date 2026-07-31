@@ -74,6 +74,12 @@ class InferenceProxy:
         self._lock = threading.Lock()
         self._poll_stop_event: threading.Event | None = None
         self._poll_thread: threading.Thread | None = None
+        # Each in-flight request parks a thread in forward_raw_request until its brokered response
+        # lands. anyio's default to_thread limiter is 40 threads, which silently caps the whole
+        # fleet's concurrency at 40 (a 4-GPU serve drained at ~16 pages/s with engines reporting
+        # ~38 running); size the limiter to the pending budget instead. The extra headroom keeps
+        # the over-capacity 429 path reachable while the budget is fully parked.
+        self._forward_limiter = anyio.CapacityLimiter(max_pending_requests + 16)
         self.stats = ProxyStats()
         self.app = Starlette(
             routes=[
@@ -148,7 +154,8 @@ class InferenceProxy:
                 query_string=request.url.query,
                 headers=forwardable_request_headers(request.headers),
                 timeout_seconds=timeout_seconds,
-            )
+            ),
+            limiter=self._forward_limiter,
         )
 
     def forward_raw_request(

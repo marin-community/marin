@@ -63,7 +63,12 @@ class InferenceWorker:
         )
         try:
             with (
-                httpx.Client(timeout=self._request_timeout_seconds) as client,
+                # httpx defaults to a 100-connection pool, which would cap the forwarding pool
+                # below max_in_flight and stall its threads.
+                httpx.Client(
+                    timeout=self._request_timeout_seconds,
+                    limits=httpx.Limits(max_connections=max_in_flight, max_keepalive_connections=max_in_flight),
+                ) as client,
                 ThreadPoolExecutor(max_workers=max_in_flight, thread_name_prefix="inference-worker-request") as pool,
             ):
                 while not stop_event.is_set():
