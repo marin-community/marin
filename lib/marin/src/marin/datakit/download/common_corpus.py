@@ -85,7 +85,7 @@ def normalize_common_corpus_step(filtered_step: StepSpec) -> StepSpec:
         name="normalized/common_corpus_english_filtered",
         download=filtered_step,
         id_field="identifier",
-        drop_fields=("__index_level_0__",),
+        drop_fields=("__index_level_0__", "curator"),
     )
 
 
