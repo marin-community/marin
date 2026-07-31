@@ -42,7 +42,7 @@ from fray.types import ResourceConfig
 from marin.datakit.normalize import (
     MainOutput,
     NormalizedData,
-    _make_split_writer,
+    make_split_writer,
     generate_id,
 )
 from marin.execution.artifact import read_artifact
@@ -386,7 +386,7 @@ def ocr_pdf_text(output_path: str, source_output_path: str, classification_outpu
                 sort_by=lambda record: record["id"],
                 num_output_shards=num_shards,
             )
-            .map_shard(_make_split_writer(output_path, output_schema=_OUTPUT_SCHEMA))
+            .map_shard(make_split_writer(output_path, output_schema=_OUTPUT_SCHEMA))
         )
         outcome = ZephyrContext(
             name="focus-crawl-pdf-ocr",

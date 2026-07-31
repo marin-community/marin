@@ -354,7 +354,7 @@ def _write_samples(output_dir: str, source_shards: list[str], sample_dir: str) -
 
 def bench(output_path: str, source_output_path: str, classification_output_path: str) -> BenchReport:
     """Run the real OCR route over a bounded slice of the corpus against a real fleet."""
-    from marin.datakit.normalize import _make_split_writer  # noqa: PLC0415
+    from marin.datakit.normalize import make_split_writer  # noqa: PLC0415
     from marin.inference.iris import remote_inference  # noqa: PLC0415
 
     source = read_artifact(source_output_path, PdfSourceData)
@@ -391,7 +391,7 @@ def bench(output_path: str, source_output_path: str, classification_output_path:
                 sort_by=lambda record: record["id"],
                 num_output_shards=len(shards),
             )
-            .map_shard(_make_split_writer(output_path, output_schema=extract_ocr._OUTPUT_SCHEMA))
+            .map_shard(make_split_writer(output_path, output_schema=extract_ocr._OUTPUT_SCHEMA))
         )
         pipeline_start = time.monotonic()
         outcome = ZephyrContext(

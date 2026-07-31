@@ -71,15 +71,15 @@ class InferenceProxy:
             backoff = ExponentialBackoff(initial=0.01, maximum=0.25, factor=2.0)
         self._backoff = backoff
         self._pending: dict[str, Future[InferenceResponse]] = {}
+        # Each in-flight request parks a thread in forward_raw_request until its brokered response
+        # lands. anyio's default to_thread limiter is 40 threads, which silently caps the whole
+        # fleet's concurrency at 40 no matter how many workers sit behind the broker; size the
+        # limiter to the pending budget instead. The extra headroom keeps the over-capacity 429
+        # path reachable while the budget is fully parked.
+        self._forward_limiter = anyio.CapacityLimiter(max_pending_requests + 16)
         self._lock = threading.Lock()
         self._poll_stop_event: threading.Event | None = None
         self._poll_thread: threading.Thread | None = None
-        # Each in-flight request parks a thread in forward_raw_request until its brokered response
-        # lands. anyio's default to_thread limiter is 40 threads, which silently caps the whole
-        # fleet's concurrency at 40 (a 4-GPU serve drained at ~16 pages/s with engines reporting
-        # ~38 running); size the limiter to the pending budget instead. The extra headroom keeps
-        # the over-capacity 429 path reachable while the budget is fully parked.
-        self._forward_limiter = anyio.CapacityLimiter(max_pending_requests + 16)
         self.stats = ProxyStats()
         self.app = Starlette(
             routes=[

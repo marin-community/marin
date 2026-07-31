@@ -286,7 +286,7 @@ class ExactDupSideOutput:
     data: dict[str, Any]
 
 
-def _make_split_writer(
+def make_split_writer(
     output_dir: str,
     output_schema: pa.Schema | None = None,
 ) -> Callable[[Iterator[MainOutput | ExactDupSideOutput], ShardInfo], Iterator[dict[str, dict[str, Any]]]]:
@@ -386,7 +386,7 @@ def _build_pipeline(
             sort_by=lambda r: r["id"],
             num_output_shards=num_shards,
         )
-        .map_shard(_make_split_writer(output_dir, output_schema=output_schema))
+        .map_shard(make_split_writer(output_dir, output_schema=output_schema))
     )
 
 

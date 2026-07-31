@@ -63,8 +63,8 @@ class InferenceWorker:
         )
         try:
             with (
-                # httpx defaults to a 100-connection pool, which would cap the forwarding pool
-                # below max_in_flight and stall its threads.
+                # httpx defaults to a 100-connection pool, which would cap the
+                # forwarding pool below max_in_flight and stall its threads.
                 httpx.Client(
                     timeout=self._request_timeout_seconds,
                     limits=httpx.Limits(max_connections=max_in_flight, max_keepalive_connections=max_in_flight),
@@ -183,17 +183,15 @@ def _response_from_exception(
     timeout_seconds: float,
 ) -> InferenceResponse:
     if isinstance(exc, httpx.TimeoutException):
-        return _inference_error_response(
+        return inference_error_response(
             request,
             504,
             "timed out forwarding request to upstream endpoint",
             detail=f"timeout_seconds={timeout_seconds:.1f}",
         )
     if isinstance(exc, httpx.HTTPError):
-        return _inference_error_response(
-            request, 502, "failed forwarding request to upstream endpoint", detail=repr(exc)
-        )
-    return _inference_error_response(
+        return inference_error_response(request, 502, "failed forwarding request to upstream endpoint", detail=repr(exc))
+    return inference_error_response(
         request,
         502,
         "unexpected worker failure while forwarding request to upstream endpoint",
@@ -202,7 +200,7 @@ def _response_from_exception(
     )
 
 
-def _inference_error_response(
+def inference_error_response(
     request: InferenceRequest,
     status_code: int,
     message: str,
@@ -210,8 +208,13 @@ def _inference_error_response(
     detail: str | None = None,
     exc_info: bool = False,
 ) -> InferenceResponse:
+    """Build the standard brokered error envelope, ``{"error": {"message": ...}}``.
+
+    Shared by the forwarding worker and the converter pool so every error a client sees has one
+    shape regardless of which kind of worker produced it.
+    """
     logger.warning(
-        "InferenceWorker returning error response request_id=%s method=%s path=%s status_code=%d error=%s detail=%s",
+        "Returning brokered error response request_id=%s method=%s path=%s status_code=%d error=%s detail=%s",
         request.request_id,
         request.method,
         request.path,
