@@ -21,12 +21,18 @@ First three completions, 2026-07-30:
 | `wd1p6-bs64-scratch-aug` | scratch | yes | 64 | 3.1454 | 2.7330 | +0.4124 | no |
 | `wd1p6-bs128-scratch-aug` | scratch | yes | 128 | 3.1624 | 2.7489 | +0.4135 | no |
 | `exp117init-noaug` | exp117 weights | **no** | 64 | 3.1597 | 2.7131 | +0.4466 | no |
-| `wd0p2-bs64-scratch-aug` | scratch | yes | 64 | 3.2862 | 2.7131 | +0.5731 | **yes** |
+| `exp117init-aug` | exp117 weights | yes | 64 | 3.1650 | 2.7131 | +0.4519 | yes |
+| `wd0p2-bs64-scratch-aug` | scratch | yes | 64 | 3.2862 | 2.7131 | +0.5731 | yes |
 
-The three uninterrupted runs sit in a 0.034 band, **+0.41 to +0.45** over exp117
-regardless of augmentation, initialization or batch size — the same magnitude as exp153's
-deficit. The fourth hung for 6 h and was restarted from checkpoint; it is 0.13 worse than
-any clean run, so **do not pool restarted runs with uninterrupted ones.**
+Four of five sit in a 0.04 band, **+0.41 to +0.45** over exp117, regardless of
+augmentation, initialization, batch size or whether the run was restarted. The fifth is an
+outlier at +0.57 with no established cause — it was restarted, but so was the +0.4519 run,
+so restarting does not explain it.
+
+**The augmentation makes no difference.** `exp117init-aug` 3.1650 against
+`exp117init-noaug` 3.1597 — same weights, same config, same 8 epochs, augmentation the
+only variable, **0.005 apart**. This answers #166 and is independent of the platform
+offset, which both arms carry equally.
 
 The unaugmented run settles it: a model that reached **2.7131** on TPU trained 8 further
 epochs on GPU with no augmentation and ended at **3.1597**, worse by 0.4466. No
