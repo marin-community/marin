@@ -7,8 +7,6 @@ Headline numbers and histograms come from the artifact's aggregated counters.
 The per-source table comes from bounded attribute samples.
 """
 
-import os
-
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     PERCENT_HISTOGRAM_METRICS,
@@ -95,8 +93,7 @@ def dedup_report(
         rows = sample_rows(entry.attr_dir, ["id", "dup_cluster_id"], SAMPLE_LIMIT)
         source_clusters = {r["dup_cluster_id"] for r in rows}
         verified_source = verified.sources[source_key]
-        source_tag = os.path.basename(verified_source.attr_dir.rstrip("/"))
-        source_decisions = _source_decisions(verified.counters, source_tag)
+        source_decisions = _source_decisions(verified.counters, verified_source.source_tag)
         source_accepted = source_decisions.get("accepted", 0)
         source_delegated = source_decisions.get("delegated_global_exact", 0)
         source_rejected = source_decisions.get("retained_no_match", 0)
