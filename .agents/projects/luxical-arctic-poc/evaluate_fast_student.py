@@ -65,9 +65,14 @@ def file_sha256(path: Path) -> str:
         return hashlib.file_digest(file, "sha256").hexdigest()
 
 
-def load_student(config_name: str, rung: str, directory: Path) -> tuple[FastStudent, dict[str, Any]]:
+def load_student(
+    config_name: str,
+    training_name: str,
+    rung: str,
+    directory: Path,
+) -> tuple[FastStudent, dict[str, Any]]:
     """Load and verify one trained fast student."""
-    report = read_json(f"{TRAINING_ROOT}/{config_name}/{rung}/training.json")
+    report = read_json(f"{TRAINING_ROOT}/{training_name}/{rung}/training.json")
     model_path = directory / "model.eqx"
     remap_path = directory / "raw-to-compact.npy"
     download(report["final_model_url"], model_path)
@@ -121,6 +126,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--rung", choices=("64k", "750k", "3m"), required=True)
     parser.add_argument("--config", choices=("full", "slim"), required=True)
+    parser.add_argument("--treatment", choices=("baseline", "source-geometry-w1"), default="baseline")
     return parser.parse_args()
 
 
@@ -130,6 +136,7 @@ def main() -> None:
     arguments = parse_args()
     if arguments.config != "full":
         raise ValueError("A paired speed artifact is not available for the slim config")
+    training_name = arguments.config if arguments.treatment == "baseline" else f"{arguments.config}-source-geometry-w1"
     manifest = read_json(MANIFEST_URL)
     texts, labels, probe_roles, categories, teacher_vectors = fixed_evaluation_data(manifest)
     left, right = pair_indices(labels)
@@ -139,7 +146,12 @@ def main() -> None:
         revision=BASELINE_REVISION,
     )
     with tempfile.TemporaryDirectory() as temporary_directory:
-        student, training_report = load_student(arguments.config, arguments.rung, Path(temporary_directory))
+        student, training_report = load_student(
+            arguments.config,
+            training_name,
+            arguments.rung,
+            Path(temporary_directory),
+        )
         baseline = Embedder.load(baseline_path)
         baseline_metrics = model_metrics(
             baseline,
@@ -166,11 +178,13 @@ def main() -> None:
     student_metrics["speed"] = speed_metrics(speed_report, "student")
     comparison = comparison_report(student_metrics, baseline_metrics)
     report = {
-        "rung": f"fast-{arguments.config}-{arguments.rung}",
+        "rung": f"fast-{training_name}-{arguments.rung}",
         "config_name": arguments.config,
+        "training_name": training_name,
+        "treatment": arguments.treatment,
         "manifest_url": MANIFEST_URL,
         "manifest_sha256": manifest["sha256"],
-        "training_report_url": f"{TRAINING_ROOT}/{arguments.config}/{arguments.rung}/training.json",
+        "training_report_url": f"{TRAINING_ROOT}/{training_name}/{arguments.rung}/training.json",
         "training_report": training_report,
         "speed_report_url": SPEED_REPORT_URL,
         "predeclared_ood_sources": sorted(PREDECLARED_OOD_SOURCES),
@@ -189,10 +203,12 @@ def main() -> None:
         "student": student_metrics,
         "comparison": comparison,
     }
-    json_url, html_url = write_report(report, arguments.config, arguments.rung)
+    json_url, html_url = write_report(report, training_name, arguments.rung)
     summary = {
         "rung": arguments.rung,
         "config_name": arguments.config,
+        "training_name": training_name,
+        "treatment": arguments.treatment,
         "json_url": json_url,
         "html_url": html_url,
         "all_required_gates_passed": comparison["all_required_gates_passed"],
