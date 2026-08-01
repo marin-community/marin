@@ -169,3 +169,19 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Result: Five focused checks passed. Pyrefly reported zero errors. The full Grug contract file has a separate existing failure in `experiments/grug/base/model.py:227` on the PR 7876 base.
 - Interpretation: Local checks support a rack launch. They do not establish accelerator correctness or MFU.
 - Next action: Run the 25-step MHEP-001 gate on one A08 NVL72 rack.
+
+### 2026-08-01 21:50 UTC - MHEP-001 launch contract ready
+
+- Hypothesis: The existing ragged EP64 path can complete 25 steps on one A08 NVL72 rack.
+- Run ID: `mhep-001-ragged-25-20260801-2148`.
+- Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 5400 --max-retries 50 --job-name mhep-001-ragged-25-20260801-2148-coord -e WANDB_MODE offline -- python -m experiments.grug.moe_hero_ep.launch --run-id mhep-001-ragged-25-20260801-2148 --num-steps 25 --version 2026.08.01 --run`.
+- Code snapshot: `b0d20062a`; the clean launch commit will include this log entry.
+- Output identity: `grug/mhep-001-ragged-25-20260801-2148/2026.08.01` under the A08-local Marin prefix.
+- Hardware: 16 workers with four GB200 GPUs each on `cw-us-east-08a`; 64 GPUs total.
+- W&B: ID and display name `mhep-001-ragged-25-20260801-2148`, project `marin_moe`, group `moe-hero-ep`, resume `allow`, and offline mode for this gate because the submitter has no W&B key.
+- Initialization: None.
+- Final step: 25.
+- Checkpoint policy: No checkpoints. This gate writes metrics only.
+- DRI and babysitter: `rav`; `rav/codex` owns the monitor at 120 seconds, then 570 seconds.
+- Stop criteria: Stop on terminal failure, non-finite loss, task retry, OOM, or incomplete step 25.
+- Next action: Commit this contract, submit the coordinator, and monitor it to a terminal state.
