@@ -97,6 +97,29 @@ def contrastive_embedding_loss(student: Array, teacher: Array, temperature: floa
     return temperature**2 * divergence.mean()
 
 
+def direct_cosine_embedding_loss(student: Array, teacher: Array) -> Array:
+    """Align each student vector with its matching teacher vector."""
+    if student.shape != teacher.shape or student.ndim != 2:
+        raise ValueError(f"Student shape {student.shape} does not match the teacher matrix {teacher.shape}")
+    student = student / jnp.maximum(jnp.linalg.norm(student, axis=1, keepdims=True), 1e-12)
+    teacher = teacher / jnp.maximum(jnp.linalg.norm(teacher, axis=1, keepdims=True), 1e-12)
+    return jnp.mean(1.0 - jnp.sum(student * teacher, axis=1))
+
+
+def embedding_distillation_loss(
+    student: Array,
+    teacher: Array,
+    temperature: float,
+    direct_cosine_weight: float,
+) -> Array:
+    """Combine pairwise geometry and direct teacher alignment."""
+    if direct_cosine_weight < 0:
+        raise ValueError(f"Direct cosine weight must be nonnegative, got {direct_cosine_weight}")
+    return contrastive_embedding_loss(
+        student, teacher, temperature
+    ) + direct_cosine_weight * direct_cosine_embedding_loss(student, teacher)
+
+
 @eqx.filter_jit
 def _predict_batch(model: FastEmbeddingTransformer, ids: Array) -> Array:
     return model(ids, key=None, inference=True)

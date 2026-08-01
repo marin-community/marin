@@ -27,6 +27,8 @@ from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET
 from experiments.datakit.cluster.quality.fast_transformer.calibrate import calibration_knots, fit_cutpoints
 from experiments.datakit.cluster.quality.fast_transformer.embedding import (
     contrastive_embedding_loss,
+    direct_cosine_embedding_loss,
+    embedding_distillation_loss,
     pack_remapped_windows,
     predict_embeddings,
     source_balanced_token_remap,
@@ -227,6 +229,17 @@ def test_contrastive_embedding_loss_compiles():
     assert np.isfinite(float(loss))
 
 
+def test_direct_cosine_embedding_loss_aligns_matching_rows():
+    teacher = jnp.eye(4, dtype=jnp.float32)
+    reversed_teacher = teacher[::-1]
+
+    matching_loss = float(direct_cosine_embedding_loss(teacher, teacher))
+    reversed_loss = float(direct_cosine_embedding_loss(reversed_teacher, teacher))
+
+    assert matching_loss == pytest.approx(0.0, abs=1e-7)
+    assert reversed_loss == pytest.approx(1.0, abs=1e-7)
+
+
 def test_embedding_prediction_padding_preserves_rows_and_values():
     model = _embedding_model()
     ids = np.asarray(
@@ -289,7 +302,7 @@ def test_embedding_transformer_takes_contrastive_gradient_step():
 
     def loss_function(candidate):
         student = candidate(ids, key=jr.PRNGKey(9), inference=False)
-        return contrastive_embedding_loss(student, teacher, temperature=3.0)
+        return embedding_distillation_loss(student, teacher, temperature=3.0, direct_cosine_weight=1.0)
 
     initial_head = np.asarray(model.embedding_head)
     loss, gradients = eqx.filter_value_and_grad(loss_function)(model)

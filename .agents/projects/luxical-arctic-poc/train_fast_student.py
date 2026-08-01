@@ -28,7 +28,7 @@ from luxical.training import dequantize_8bit_uniform_scalar_quantized
 from rigging.filesystem import atomic_rename
 
 from experiments.datakit.cluster.quality.fast_transformer.embedding import (
-    contrastive_embedding_loss,
+    embedding_distillation_loss,
     predict_embeddings,
 )
 from experiments.datakit.cluster.quality.fast_transformer.inference import data_parallel_shardings
@@ -44,6 +44,7 @@ WARMUP_FRACTION = 0.05
 WEIGHT_DECAY = 0.05
 GRADIENT_CLIP = 1.0
 LOSS_TEMPERATURE = 3.0
+DIRECT_COSINE_WEIGHT = 1.0
 TEACHER_QUANTIZATION_LIMIT = 0.3
 TEACHER_DIMENSION = 256
 AUDIT_ROWS = 2_048
@@ -173,7 +174,12 @@ def train(
     def step(current_model, current_optimizer_state, batch_ids, batch_teacher, key):
         def loss_function(candidate):
             prediction = candidate(batch_ids, key=key, inference=False)
-            return contrastive_embedding_loss(prediction, batch_teacher, LOSS_TEMPERATURE)
+            return embedding_distillation_loss(
+                prediction,
+                batch_teacher,
+                LOSS_TEMPERATURE,
+                DIRECT_COSINE_WEIGHT,
+            )
 
         loss, gradients = eqx.filter_value_and_grad(loss_function)(current_model)
         updates, next_optimizer_state = optimizer.update(
@@ -269,6 +275,7 @@ def main() -> None:
         "batch_size": BATCH_SIZE,
         "epochs": EPOCHS,
         "loss_temperature": LOSS_TEMPERATURE,
+        "direct_cosine_weight": DIRECT_COSINE_WEIGHT,
         "learning_rate": LEARNING_RATE,
         "warmup_fraction": WARMUP_FRACTION,
         "weight_decay": WEIGHT_DECAY,
