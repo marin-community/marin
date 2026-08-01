@@ -768,10 +768,11 @@ the controller's `workers` state table stays empty. Node-level telemetry is
 surfaced differently. An Iris DaemonSet runs once per node and forwards bounded
 `node-exporter` and same-node `dcgm-exporter` measurements to `telemetry_v1`,
 retaining node, GPU, PCI, exporter, and counter-replica identity. The controller
-temporarily performs its existing aggregate scrape for the `iris.worker` table,
-`get-kubernetes-cluster-status`, and the dashboard **Cluster** panel; it does not
-publish a second normalized stream. NCCL communicator/rank evidence remains
-process-local telemetry. Use:
+does not perform a second hardware scrape or write synthetic `iris.worker` rows.
+`get-kubernetes-cluster-status` and the dashboard **Cluster** panel retain node
+readiness, allocatable capacity, scheduling, and pod state; hardware history is
+queried from `telemetry_v1`. NCCL communicator/rank evidence remains process-local
+telemetry. Use:
 
 ```bash
 kci get pods -n iris -l iris.managed=true
@@ -816,8 +817,8 @@ kci delete nodepool -l iris-<label_prefix>-managed=true
 
 - **NodePools survive `cluster stop`.** Delete explicitly to avoid lingering GPU costs.
 - **`list-workers` returns empty.** KubernetesProvider dispatches pods directly; no
-  worker daemons register. Per-node readings live in the `iris.worker` finelog table
-  and the **Cluster** panel, not this RPC.
+  worker daemons register. Per-node hardware readings live in `telemetry_v1`; the
+  **Cluster** panel shows Kubernetes identity, readiness, capacity, and pod state.
 - **`list-tasks` requires `job_id`.** Calling without it throws `ConnectError: job_id is required`.
 - **`cluster start` always rebuilds+pushes images.** Needs `docker login ghcr.io` with `write:packages` PAT.
 - **Konnectivity agent.** `kubectl port-forward` returns 500 until `konnectivity-agent` pods are running (~18-30s after node provisions).

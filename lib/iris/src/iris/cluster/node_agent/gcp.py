@@ -1,32 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Iris-owned physical node and accelerator telemetry."""
+"""Collect physical node and accelerator telemetry on GCP workers."""
 
-import logging
-import signal
 import threading
 import time
 from pathlib import Path
 
-import click
-from finelog.deploy.config import derive_endpoint_uri, load_finelog_config
 from rigging import telemetry
 from rigging.auth import BearerTokenInjector, StaticTokenProvider
-from rigging.log_setup import configure_logging
 from rigging.telemetry.probes import nvidia
 
-from iris.cluster.backends.k8s.node_metrics import (
-    NodeMetrics,
-    NodeStatsScraper,
-    NodeTarget,
-    publish_node_telemetry,
-)
-from iris.cluster.config import IrisClusterConfig, WorkerConfig, load_config
-from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_PATH, resolve_endpoint_uri
-from iris.cluster.platforms.k8s.service import CloudK8sService
-from iris.cluster.platforms.k8s.types import K8sResource
-from iris.cluster.runtime.env import IRIS_NAMESPACE_ENV, IRIS_NODE_NAME_ENV
+from iris.cluster.config import WorkerConfig
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_PATH
+from iris.cluster.node_agent import SERVICE_NAME
+from iris.cluster.node_agent.metrics import NodeMetrics, NodeTarget, publish_node_telemetry
 from iris.cluster.types import AcceleratorType
 from iris.cluster.worker.env_probe import (
     HardwareProbe,
@@ -39,27 +27,8 @@ from iris.rpc import controller_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import EndpointServiceClientSync
 
-logger = logging.getLogger(__name__)
-
 DEFAULT_COLLECTION_INTERVAL = 30.0
-K8S_API_TIMEOUT = 2.0
-NODE_EXPORTER_ADDRESS = "127.0.0.1"
 _BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
-_K8S_GPU_MODEL_LABELS = ("nvidia.com/gpu.product", "gpu.nvidia.com/model")
-
-
-def _telemetry_endpoint(cluster_config: IrisClusterConfig) -> str:
-    spec = cluster_config.endpoints.get(LOG_SERVER_ENDPOINT_NAME)
-    if cluster_config.finelog.config:
-        if spec is not None:
-            raise ValueError("cluster config cannot set both finelog.config and /system/log-server")
-        finelog_config = load_finelog_config(cluster_config.finelog.config)
-        uri, metadata = derive_endpoint_uri(finelog_config)
-    elif spec is not None:
-        uri, metadata = spec.uri, dict(spec.metadata)
-    else:
-        raise ValueError("node telemetry requires an external /system/log-server endpoint")
-    return resolve_endpoint_uri(uri, metadata).rstrip("/") + TELEMETRY_ENDPOINT_PATH
 
 
 def _worker_telemetry_endpoint(config: WorkerConfig) -> str:
@@ -95,7 +64,7 @@ def _configure(endpoint: str, *, node_name: str, node_uid: str, worker: str | No
         attributes["worker"] = worker
     telemetry.configure(
         endpoint=endpoint,
-        service="iris-node-agent",
+        service=SERVICE_NAME,
         attributes=attributes,
     )
 
@@ -144,7 +113,7 @@ def _publish_tpu_inventory(hardware: HardwareProbe) -> None:
     )
 
 
-def collect_gcp_once(
+def collect_once(
     collector: HostMetricsCollector,
     target: NodeTarget,
     hardware: HardwareProbe,
@@ -155,43 +124,8 @@ def collect_gcp_once(
     telemetry.record_runtime_health()
 
 
-def collect_k8s_once(scraper: NodeStatsScraper, target: NodeTarget) -> None:
-    """Publish one same-node exporter collection pass."""
-    metrics = scraper.scrape([target])[target.name]
-    publish_node_telemetry(target, metrics, time.time())
-    telemetry.record_runtime_health()
-
-
-def _k8s_target(k8s: CloudK8sService, node_name: str) -> NodeTarget:
-    node = k8s.get_json(K8sResource.NODES, node_name)
-    if node is None:
-        raise ConnectionError(f"Kubernetes node {node_name!r} is not visible")
-    metadata = node.get("metadata", {})
-    node_uid = metadata.get("uid", "")
-    if not node_uid:
-        raise ValueError(f"Kubernetes node {node_name!r} has no metadata.uid")
-    labels = metadata.get("labels", {})
-    allocatable = node.get("status", {}).get("allocatable", {})
-    gpu_count = int(allocatable.get("nvidia.com/gpu", 0))
-    gpu_model = next((labels[name] for name in _K8S_GPU_MODEL_LABELS if labels.get(name)), "")
-    return NodeTarget(
-        name=node_name,
-        node_uid=node_uid,
-        internal_ip=NODE_EXPORTER_ADDRESS,
-        device_type="gpu" if gpu_count or gpu_model else "cpu",
-        device_variant=gpu_model,
-    )
-
-
-def _install_signal_handlers(stop: threading.Event) -> None:
-    def handle_signal(_signum: int, _frame: object) -> None:
-        stop.set()
-
-    signal.signal(signal.SIGTERM, handle_signal)
-    signal.signal(signal.SIGINT, handle_signal)
-
-
-def run_gcp(config_path: Path) -> None:
+def run(config_path: Path, stop: threading.Event) -> None:
+    """Collect telemetry until the process receives a shutdown signal."""
     config = WorkerConfig.model_validate_json(config_path.read_text())
     hardware = probe_hardware()
     node_name = hardware.gce_instance_name or hardware.hostname
@@ -214,57 +148,11 @@ def run_gcp(config_path: Path) -> None:
     )
     collector = HostMetricsCollector(disk_path=config.cache_dir)
     nvidia_probe = nvidia.start() if target.device_type == "gpu" else None
-    stop = threading.Event()
-    _install_signal_handlers(stop)
     try:
         while not stop.is_set():
-            collect_gcp_once(collector, target, hardware)
+            collect_once(collector, target, hardware)
             stop.wait(DEFAULT_COLLECTION_INTERVAL)
     finally:
         if nvidia_probe is not None:
             nvidia_probe.shutdown(2.0)
         telemetry.shutdown(5.0)
-
-
-def run_k8s(config_path: Path, node_name: str, namespace: str) -> None:
-    config = load_config(config_path)
-    endpoint = _telemetry_endpoint(config)
-    k8s = CloudK8sService(namespace=namespace, timeout=K8S_API_TIMEOUT)
-    target = _k8s_target(k8s, node_name)
-    _configure(endpoint, node_name=target.name, node_uid=target.node_uid)
-    scraper = NodeStatsScraper(k8s)
-    stop = threading.Event()
-    _install_signal_handlers(stop)
-    try:
-        while not stop.is_set():
-            collect_k8s_once(scraper, target)
-            stop.wait(DEFAULT_COLLECTION_INTERVAL)
-    finally:
-        telemetry.shutdown(5.0)
-
-
-@click.group()
-def cli() -> None:
-    """Run Iris physical node telemetry."""
-
-
-@cli.command("gcp")
-@click.option("--worker-config", type=click.Path(path_type=Path, exists=True), required=True)
-def gcp_command(worker_config: Path) -> None:
-    """Run beside an Iris worker on a GCP VM."""
-    configure_logging(level=logging.INFO)
-    run_gcp(worker_config)
-
-
-@cli.command("k8s")
-@click.option("--config", "config_path", type=click.Path(path_type=Path, exists=True), required=True)
-@click.option("--node-name", envvar=IRIS_NODE_NAME_ENV, required=True)
-@click.option("--namespace", envvar=IRIS_NAMESPACE_ENV, required=True)
-def k8s_command(config_path: Path, node_name: str, namespace: str) -> None:
-    """Run once per Kubernetes node."""
-    configure_logging(level=logging.INFO)
-    run_k8s(config_path, node_name, namespace)
-
-
-if __name__ == "__main__":
-    cli()

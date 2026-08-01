@@ -32,6 +32,7 @@ from iris.cluster.config import (
 )
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, collect_inject_env, projects_task_env_secret
+from iris.cluster.node_agent import SERVICE_NAME as _NODE_AGENT_NAME
 from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
 from iris.cluster.platforms.k8s.kueue_manifests import RESOURCE_FLAVOR_NAME
 from iris.cluster.platforms.k8s.nodepool_manifests import nodepool_name
@@ -91,7 +92,6 @@ _CONTROLLER_STATE_PVC_NAME = "iris-controller-state"
 # process falls back to when storage.local_state_dir is unset.
 _DEFAULT_STATE_MOUNT_PATH = "/var/cache/iris/controller"
 _CONTROLLER_STATE_PVC_SIZE = "50Gi"
-_NODE_AGENT_NAME = "iris-node-agent"
 
 
 def configure_client_s3(config: IrisClusterConfig) -> None:

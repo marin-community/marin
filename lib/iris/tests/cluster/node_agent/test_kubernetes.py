@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Node-metrics scrape/parse/emit tests.
+"""Kubernetes node-agent scrape and parse tests.
 
 The exporter samples below mirror the real ``node-exporter`` and
 ``dcgm-exporter`` output on CoreWeave H100 nodes (scientific-notation values,
@@ -10,19 +10,14 @@ network, and DCGM's ``hostname``/``gpu``/``modelName`` labels).
 """
 
 import pytest
-from iris.cluster.backends.k8s.node_metrics import (
-    NodeMetrics,
-    NodeStatsCollector,
+from iris.cluster.node_agent.kubernetes import (
     NodeStatsScraper,
-    NodeTarget,
-    build_node_stat,
     parse_dcgm,
     parse_node_exporter,
     parse_prometheus,
 )
+from iris.cluster.node_agent.metrics import NodeMetrics, NodeTarget
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
-from iris.cluster.stats.tables import IrisWorkerStat, WorkerStatus
-from iris.test_util import FakeStatsTable
 
 NODE_EXPORTER_TEXT = """
 # HELP node_memory_MemTotal_bytes Memory information field MemTotal_bytes.
@@ -185,109 +180,3 @@ def test_scraper_missing_exporter_yields_empty_metrics():
     scraper = NodeStatsScraper(k8s, fetch=_fetch_from({}))  # nothing answers
     metrics = scraper.scrape([NodeTarget(name="n1", node_uid="node-uid-1", internal_ip="10.0.0.1")])
     assert metrics["n1"] == NodeMetrics()  # present but all-null, not dropped
-
-
-def test_build_node_stat_maps_identity_and_metrics():
-    target = NodeTarget(
-        name="g83d142",
-        node_uid="node-uid-1",
-        internal_ip="10.0.0.5",
-        status=WorkerStatus.RUNNING,
-        device_type="gpu",
-        device_variant="H100",
-        zone="US-EAST-02",
-        cpu_count=192,
-        memory_bytes=1_583_533_196_000,
-        running_pod_count=3,
-    )
-    m = NodeMetrics(cpu_pct=12.5, mem_used_bytes=100, mem_total_bytes=200, gpu_count=8, gpu_temp_c=55.0)
-    row = build_node_stat(target, m)
-    assert isinstance(row, IrisWorkerStat)
-    assert row.worker_id == "g83d142"
-    assert row.address == "10.0.0.5"
-    assert row.status == WorkerStatus.RUNNING
-    assert row.cpu_pct == 12.5
-    assert row.mem_bytes == 100
-    assert row.running_task_count == 3
-    assert row.device_variant == "H100"
-    assert row.gpu_count == 8
-    assert row.gpu_temp_c == 55.0
-
-
-def test_build_node_stat_falls_back_to_dcgm_for_device_type():
-    # Node metadata says nothing about GPUs (unreliable CoreWeave labels), but
-    # dcgm reported 8 devices -> the row is classified as a gpu node.
-    target = NodeTarget(name="g1", node_uid="node-uid-1", internal_ip="10.0.0.6")
-    m = NodeMetrics(gpu_count=8, gpu_model="NVIDIA H100 80GB HBM3")
-    row = build_node_stat(target, m)
-    assert row.device_type == "gpu"
-    assert row.device_variant == "NVIDIA H100 80GB HBM3"
-
-
-def test_build_node_stat_without_metrics_records_liveness_only():
-    target = NodeTarget(
-        name="cpu1", node_uid="node-uid-1", internal_ip="10.0.0.7", status=WorkerStatus.IDLE, cpu_count=64
-    )
-    row = build_node_stat(target, None)
-    assert row.status == WorkerStatus.IDLE
-    assert row.cpu_pct == 0.0
-    assert row.gpu_count is None  # nullable device columns stay unset
-    assert row.device_type == "cpu"
-
-
-def test_collector_persists_node_snapshot():
-    k8s = InMemoryK8sService(namespace="iris")
-    k8s.seed_namespaced_pod(
-        "cw-exporters",
-        "dcgm-exporter-abc",
-        {
-            "metadata": {
-                "name": "dcgm-exporter-abc",
-                "uid": "dcgm-pod-uid-1",
-                "labels": {"app.kubernetes.io/name": "dcgm-exporter"},
-            },
-            "spec": {"nodeName": "g83d142"},
-            "status": {"podIP": "10.9.9.9"},
-        },
-    )
-
-    table = FakeStatsTable()
-    snapshots: list[dict] = []
-    collector = NodeStatsCollector(
-        k8s,
-        table,
-        poll_interval=3600,  # never fires on its own during the test
-        on_snapshot=lambda metrics, ts: snapshots.append(metrics),
-        fetch=_fetch_from(
-            {
-                "http://g83d142:9100/metrics": NODE_EXPORTER_TEXT,
-                "http://10.9.9.9:9400/metrics": DCGM_TEXT,
-            }
-        ),
-    )
-    try:
-        collector.set_nodes(
-            [NodeTarget(name="g83d142", node_uid="node-uid-1", internal_ip="g83d142", device_type="gpu")]
-        )
-        collector.collect_once()
-
-    finally:
-        collector.close()
-
-    rows = [r for batch in table.writes for r in batch]
-    assert len(rows) == 1
-    assert rows[0].worker_id == "g83d142"
-    assert rows[0].gpu_count == 2
-    assert snapshots and snapshots[0]["g83d142"].gpu_count == 2
-
-
-def test_collector_no_targets_writes_nothing():
-    k8s = InMemoryK8sService(namespace="iris")
-
-    table = FakeStatsTable()
-    collector = NodeStatsCollector(k8s, table, poll_interval=3600)
-    try:
-        collector.collect_once()  # set_nodes never called
-    finally:
-        collector.close()
-    assert table.writes == []

@@ -1,12 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""End-to-end node-agent telemetry publication tests."""
+
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from iris.cluster.backends.k8s.node_metrics import NodeStatsScraper, NodeTarget
-from iris.cluster.node_agent import collect_gcp_once, collect_k8s_once
+from iris.cluster.node_agent import gcp, kubernetes
+from iris.cluster.node_agent.metrics import NodeTarget
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.worker.env_probe import HardwareProbe
 from iris.rpc import job_pb2
@@ -73,7 +75,7 @@ def test_k8s_collection_exports_normalized_node_and_device_records(monkeypatch: 
             "status": {"podIP": "10.9.9.9"},
         },
     )
-    scraper = NodeStatsScraper(
+    scraper = kubernetes.NodeStatsScraper(
         k8s,
         fetch=_fetch_from(
             {
@@ -89,7 +91,7 @@ def test_k8s_collection_exports_normalized_node_and_device_records(monkeypatch: 
         device_type="gpu",
     )
 
-    collect_k8s_once(scraper, target)
+    kubernetes.collect_once(scraper, target)
 
     host_memory = transport.record("node_memory_used_bytes", {"node_uid": "node-uid-1"})
     host_network = transport.record("node_network_receive_bytes", {"node_uid": "node-uid-1"})
@@ -135,7 +137,7 @@ def test_k8s_collection_exports_normalized_node_and_device_records(monkeypatch: 
 
 def test_missing_expected_dcgm_source_is_observable(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = _transport(monkeypatch)
-    scraper = NodeStatsScraper(
+    scraper = kubernetes.NodeStatsScraper(
         InMemoryK8sService(namespace="iris"),
         fetch=_fetch_from({"http://127.0.0.1:9100/metrics": NODE_EXPORTER_TEXT}),
     )
@@ -146,7 +148,7 @@ def test_missing_expected_dcgm_source_is_observable(monkeypatch: pytest.MonkeyPa
         device_type="gpu",
     )
 
-    collect_k8s_once(scraper, target)
+    kubernetes.collect_once(scraper, target)
 
     available = transport.record("hardware_source_available", {"node_uid": "node-uid-1", "source_kind": "dcgm"})
     assert available["value"] == 0
@@ -159,7 +161,7 @@ def test_gcp_collection_uses_host_boot_identity_and_publishes_tpu_inventory(
     transport = _transport(monkeypatch)
     boot_id = tmp_path / "boot_id"
     boot_id.write_text("boot-123")
-    monkeypatch.setattr("iris.cluster.node_agent._BOOT_ID_PATH", boot_id)
+    monkeypatch.setattr(gcp, "_BOOT_ID_PATH", boot_id)
 
     snapshot = job_pb2.WorkerResourceSnapshot(
         host_cpu_percent=25,
@@ -194,7 +196,7 @@ def test_gcp_collection_uses_host_boot_identity_and_publishes_tpu_inventory(
     )
     target = NodeTarget(name="gcp-node", node_uid="123456789", internal_ip="10.0.0.1")
 
-    collect_gcp_once(HostCollector(), target, hardware)
+    gcp.collect_once(HostCollector(), target, hardware)
 
     network = transport.record("node_network_receive_bytes", {"node_uid": "123456789"})
     inventory = transport.record("hardware_inventory", {"device_kind": "tpu"})
@@ -207,7 +209,7 @@ def test_gcp_collection_uses_host_boot_identity_and_publishes_tpu_inventory(
 
 def test_gcp_collection_rejects_missing_boot_identity(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _transport(monkeypatch)
-    monkeypatch.setattr("iris.cluster.node_agent._BOOT_ID_PATH", tmp_path / "missing-boot-id")
+    monkeypatch.setattr(gcp, "_BOOT_ID_PATH", tmp_path / "missing-boot-id")
     snapshot = job_pb2.WorkerResourceSnapshot(memory_total_bytes=200)
 
     class HostCollector:
@@ -232,4 +234,4 @@ def test_gcp_collection_rejects_missing_boot_identity(monkeypatch: pytest.Monkey
     )
 
     with pytest.raises(FileNotFoundError):
-        collect_gcp_once(HostCollector(), target, hardware)
+        gcp.collect_once(HostCollector(), target, hardware)
