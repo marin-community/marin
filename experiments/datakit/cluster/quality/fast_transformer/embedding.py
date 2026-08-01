@@ -77,9 +77,9 @@ def _off_diagonal(matrix: Array) -> Array:
 
 def contrastive_embedding_loss(student: Array, teacher: Array, temperature: float) -> Array:
     """Match teacher pairwise geometry with the Luxical Gram-KL objective."""
-    if student.shape != teacher.shape:
-        raise ValueError(f"Student shape {student.shape} does not match teacher shape {teacher.shape}")
-    if student.ndim != 2 or student.shape[0] < 2:
+    if student.ndim != 2 or teacher.ndim != 2 or student.shape[0] != teacher.shape[0]:
+        raise ValueError(f"Student rows {student.shape} do not match teacher rows {teacher.shape}")
+    if student.shape[0] < 2:
         raise ValueError(f"Expected at least two embedding rows, got {student.shape}")
     if temperature <= 0:
         raise ValueError(f"Temperature must be positive, got {temperature}")
@@ -104,6 +104,30 @@ def direct_cosine_embedding_loss(student: Array, teacher: Array) -> Array:
     student = student / jnp.maximum(jnp.linalg.norm(student, axis=1, keepdims=True), 1e-12)
     teacher = teacher / jnp.maximum(jnp.linalg.norm(teacher, axis=1, keepdims=True), 1e-12)
     return jnp.mean(1.0 - jnp.sum(student * teacher, axis=1))
+
+
+def projected_embedding_distillation_loss(
+    student: Array,
+    teacher: Array,
+    projection: Array,
+    temperature: float,
+    direct_cosine_weight: float,
+) -> Array:
+    """Match cross-dimension geometry and align projected student vectors."""
+    expected_projection_shape = (student.shape[1], teacher.shape[1])
+    if student.ndim != 2 or teacher.ndim != 2 or student.shape[0] != teacher.shape[0]:
+        raise ValueError(f"Student rows {student.shape} do not match teacher rows {teacher.shape}")
+    if projection.shape != expected_projection_shape:
+        raise ValueError(f"Projection shape {projection.shape} does not match {expected_projection_shape}")
+    if direct_cosine_weight < 0:
+        raise ValueError(f"Direct cosine weight must be nonnegative, got {direct_cosine_weight}")
+    projected_student = student @ projection
+    return contrastive_embedding_loss(
+        student, teacher, temperature
+    ) + direct_cosine_weight * direct_cosine_embedding_loss(
+        projected_student,
+        teacher,
+    )
 
 
 def source_conditioned_geometry_loss(student: Array, teacher: Array, source_ids: Array) -> Array:
