@@ -152,8 +152,9 @@ benchmark logic, so the content-hashed native results retain their measured
 source revision `3b1000dc5`.
 
 The final report branch then merged Marin main `602a8ba93` after measurement.
-That integration is validated as source code below, but no benchmark result is
-relabeled: every result stays pinned to the source revision it executed.
+That integration passed the focused code and branch-wide checks, but no
+benchmark result is relabeled: every result stays pinned to the source revision
+it executed.
 
 One-node Levanter preflights cannot fit this exact 8K state. The operational
 compiler proved a 109.82 GiB input/output floor on the one-node mesh; matched
@@ -176,12 +177,14 @@ valid queries. At production head dimension 128, the unfixed kernel disagreed
 with a float32 reference in 62.0% of full-attention outputs and 67.5% of
 sliding-window outputs. The correction propagates the next valid query's lower
 bound through invalid prefixes while leaving the exact score mask unchanged.
-Afterward, all ten head-dimension-128 reference cases passed, including full
-and sliding forward/backward cases. A one-microbatch 32-H100 model diagnostic
-then reported zero non-finite gradient arrays or elements across all four
-processes; the same diagnostic before the correction reported 22 non-finite
-arrays and 21,279,500,800 non-finite elements. Every native headline below is
-from the corrected revision.
+Afterward, the full one-H100 file run passed all ten runnable tests, including
+every head-dimension-128 reference comparison across full and sliding attention
+and forward/backward. Three head-dimension-64 cases were excluded for an
+unrelated existing CUTLASS API incompatibility. A one-microbatch 32-H100 model
+diagnostic then reported zero non-finite gradient arrays or elements across all
+four processes; the same diagnostic before the correction reported 22
+non-finite arrays and 21,279,500,800 non-finite elements. Every native headline
+below is from the corrected revision.
 
 ## Results
 
@@ -252,11 +255,14 @@ and `Meop` be MarinSkyRL's FlashAttention and eager operational walls, and let
 Mfop - Nop = (Mece - Nce) + (Meop - Mece) + (Mfop - Meop) - (Nop - Nce)
 ```
 
-Algebraically, this separates the cross-stack eager CE term, each stack's
-native boundary, and the direct eager-to-FlashAttention intervention. Because
-both MarinSkyRL matched CE gates failed, the first row below is a raw timing
-partition, not an accepted causal label. The other three terms are direct
-within-stack changes on the same replay.
+Algebraically, this separates the cross-stack CE term, each stack's native
+boundary, and the direct eager-to-FlashAttention intervention. `Mece` uses
+MarinSkyRL eager attention while `Nce` uses native FA4, so the first term also
+contains that cross-stack backend difference. Because both MarinSkyRL matched
+CE gates failed, the first row below is a raw timing partition, not an accepted
+causal label. The other three terms are direct within-stack changes on the same
+replay. Table terms are rounded independently for display; the underlying
+identity closes with zero error.
 
 | Component | End-to-end seconds | Share of fastest operational gap | Evidence |
 | --- | ---: | ---: | --- |
