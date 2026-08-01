@@ -26,7 +26,8 @@ Native 256-dimensional Qwen does not keep the 1,024-dimensional result. The
 35 failures and gains 0.00674 overall macro-F1 against the 0.6B 256-dimensional
 model. The 4B model still fails the concentration and multilingual quality
 gates. It processed 29.19 documents per second, 3.24 times slower than the 0.6B
-model. The 4B result did not meet the fixed 8B start condition. Thus, the 8B
+model. The batch sizes were 32 and 128, so this is not an isolated model-size
+effect. The 4B result did not meet the fixed 8B start condition. Thus, the 8B
 test did not run.
 
 ## Controlled inputs
@@ -236,8 +237,8 @@ Against Luxical-One, the 4B overall delta is +0.02573. Its code delta is
 4B model also has one failure more than the fixed limit of 34.
 
 The fixed stop rule required all quality gates and at most 34 failures. The 4B
-model fails two gates and has 35 failures. Do not run the 8B model. Model-size
-scaling alone does not remove source concentration at 256 dimensions.
+model fails two gates and has 35 failures. Do not run the 8B model. This test
+does not show that a larger model removes concentration at 256 dimensions.
 
 ## Compute and limits
 
