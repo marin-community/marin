@@ -67,6 +67,7 @@ def test_filtered_snapshots_preserve_prometheus_temporality(monkeypatch: pytest.
     assert "process_cpu_seconds_total" not in by_name
     assert "oversized" not in by_name
     assert telemetry.runtime_status().lost_records == 1
+    assert by_name["prometheus_source_available"]["value"] == 1
 
 
 def test_failed_scrape_skips_source_metrics_but_reports_exporter_health(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -74,6 +75,44 @@ def test_failed_scrape_skips_source_metrics_but_reports_exporter_health(monkeypa
 
     _forwarder(None).poll_once()
     health = transport.record("queue_depth", {"queue_kind": "telemetry_export"})
+    source = transport.record("prometheus_source_available", {"metric_source": "vllm"})
 
     assert health["attributes"]["source_temporality"] == "current_snapshot"
-    assert all(record["attributes"].get("metric_source") != "vllm" for record in transport.records)
+    assert source["value"] == 0
+    assert source["attributes"]["source_temporality"] == "current_snapshot"
+    assert [record["name"] for record in transport.records if record["attributes"].get("metric_source") == "vllm"] == [
+        "prometheus_source_available"
+    ]
+
+
+def test_oversized_scrape_is_rejected_and_observable(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = _transport(monkeypatch)
+
+    class OversizedResponse:
+        status_code = 200
+        encoding = "utf-8"
+
+        def __init__(self) -> None:
+            self.headers = {"content-length": str((16 << 20) + 1)}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def iter_content(self, *, chunk_size: int):
+            raise AssertionError(f"oversized response body was read with {chunk_size=}")
+
+    monkeypatch.setattr(
+        "rigging.telemetry.prometheus.requests.get",
+        lambda *_args, **_kwargs: OversizedResponse(),
+    )
+    PrometheusForwarder(
+        "http://vllm/metrics",
+        metric_prefix="vllm:",
+        metric_source="vllm",
+    ).poll_once()
+
+    source = transport.record("prometheus_source_available", {"metric_source": "vllm"})
+    assert source["value"] == 0

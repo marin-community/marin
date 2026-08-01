@@ -78,6 +78,7 @@ from iris.cluster.platforms.k8s.types import (
     parse_k8s_timestamp,
 )
 from iris.cluster.runtime.env import (
+    IRIS_NODE_NAME_ENV,
     STANDARD_MOUNTS,
     VENV_PATH,
     WORKDIR_MOUNT,
@@ -815,7 +816,7 @@ def _build_pod_manifest(
     )
     env_list.append(
         {
-            "name": "IRIS_NODE_NAME",
+            "name": IRIS_NODE_NAME_ENV,
             "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}},
         }
     )

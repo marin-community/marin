@@ -25,8 +25,7 @@ node_network_transmit_bytes_total{device="eth0"} 2000
 node_boot_time_seconds 1752000000
 """
 _DCGM_IDENTITY = (
-    'gpu="0",UUID="GPU-aaa",pci_bus_id="00000000:1A:00.0",modelName="NVIDIA H100 80GB HBM3",'
-    'hostname="g83d142"'
+    'gpu="0",UUID="GPU-aaa",pci_bus_id="00000000:1A:00.0",modelName="NVIDIA H100 80GB HBM3",' 'hostname="g83d142"'
 )
 DCGM_TEXT = f"""
 DCGM_FI_DEV_FB_USED{{{_DCGM_IDENTITY},DCGM_FI_DRIVER_VERSION="570.86.15"}} 200
@@ -149,9 +148,7 @@ def test_missing_expected_dcgm_source_is_observable(monkeypatch: pytest.MonkeyPa
 
     collect_k8s_once(scraper, target)
 
-    available = transport.record(
-        "hardware_source_available", {"node_uid": "node-uid-1", "source_kind": "dcgm"}
-    )
+    available = transport.record("hardware_source_available", {"node_uid": "node-uid-1", "source_kind": "dcgm"})
     assert available["value"] == 0
     assert available["attributes"]["source_temporality"] == telemetry.CURRENT_SNAPSHOT
 
@@ -206,3 +203,33 @@ def test_gcp_collection_uses_host_boot_identity_and_publishes_tpu_inventory(
     assert network["attributes"]["source_temporality"] == telemetry.CUMULATIVE_SNAPSHOT
     assert inventory["attributes"]["tpu_type"] == "v6e-8"
     assert inventory["attributes"]["tpu_name"] == "slice-a"
+
+
+def test_gcp_collection_rejects_missing_boot_identity(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _transport(monkeypatch)
+    monkeypatch.setattr("iris.cluster.node_agent._BOOT_ID_PATH", tmp_path / "missing-boot-id")
+    snapshot = job_pb2.WorkerResourceSnapshot(memory_total_bytes=200)
+
+    class HostCollector:
+        def collect(self) -> job_pb2.WorkerResourceSnapshot:
+            return snapshot
+
+    target = NodeTarget(name="gcp-node", node_uid="123456789", internal_ip="10.0.0.1")
+    hardware = HardwareProbe(
+        hostname="gcp-node",
+        ip_address="10.0.0.1",
+        cpu_count=8,
+        memory_bytes=200,
+        disk_bytes=400,
+        gpu_count=0,
+        gpu_name="",
+        gpu_memory_mb=0,
+        tpu_name="",
+        tpu_type="",
+        tpu_worker_hostnames="",
+        tpu_worker_id="",
+        tpu_chips_per_host_bounds="",
+    )
+
+    with pytest.raises(FileNotFoundError):
+        collect_gcp_once(HostCollector(), target, hardware)

@@ -45,6 +45,7 @@ from iris.cluster.platforms.k8s.types import (
     parse_k8s_timestamp,
 )
 from iris.cluster.platforms.types import InfraError, Labels, local_queue_name
+from iris.cluster.runtime.env import IRIS_NAMESPACE_ENV, IRIS_NODE_NAME_ENV
 
 logger = logging.getLogger(__name__)
 
@@ -333,11 +334,11 @@ def _build_node_agent_daemonset(*, namespace: str, image: str) -> dict:
                             ],
                             "env": [
                                 {
-                                    "name": "IRIS_NODE_NAME",
+                                    "name": IRIS_NODE_NAME_ENV,
                                     "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}},
                                 },
                                 {
-                                    "name": "IRIS_NAMESPACE",
+                                    "name": IRIS_NAMESPACE_ENV,
                                     "valueFrom": {"fieldRef": {"fieldPath": "metadata.namespace"}},
                                 },
                             ],

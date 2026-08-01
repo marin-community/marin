@@ -11,7 +11,8 @@ from rigging import telemetry
 
 from iris.client.client import get_iris_ctx
 from iris.cluster.client.job_info import JobInfo, get_job_info
-from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_PATH
+from iris.cluster.runtime.env import IRIS_NODE_NAME_ENV
 from iris.hooks.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
 
 logger = logging.getLogger(__name__)
@@ -47,7 +48,7 @@ def _identity(job_info: JobInfo) -> dict[str, str]:
     process_index = os.environ.get(IRIS_MULTIGPU_PROCESS_INDEX_ENV)
     if process_index is not None:
         identity["process_index"] = process_index
-    if node_name := os.environ.get("IRIS_NODE_NAME"):
+    if node_name := os.environ.get(IRIS_NODE_NAME_ENV):
         identity["node_name"] = node_name
     return identity
 
@@ -70,7 +71,7 @@ def configure(
         if job_info is None or ctx is None or ctx.client is None:
             logger.debug("no in-cluster Iris context; leaving %s telemetry inert", service)
             return
-        endpoint = ctx.client.resolve_endpoint(LOG_SERVER_ENDPOINT_NAME).rstrip("/") + "/v1/telemetry"
+        endpoint = ctx.client.resolve_endpoint(LOG_SERVER_ENDPOINT_NAME).rstrip("/") + TELEMETRY_ENDPOINT_PATH
         extra = dict(attributes or {})
         if conflicts := _RESERVED_RESOURCE_ATTRIBUTES.intersection(extra):
             names = ", ".join(sorted(conflicts))

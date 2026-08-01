@@ -24,9 +24,10 @@ from iris.cluster.backends.k8s.node_metrics import (
     publish_node_telemetry,
 )
 from iris.cluster.config import IrisClusterConfig, WorkerConfig, load_config
-from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, resolve_endpoint_uri
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_PATH, resolve_endpoint_uri
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
+from iris.cluster.runtime.env import IRIS_NAMESPACE_ENV, IRIS_NODE_NAME_ENV
 from iris.cluster.types import AcceleratorType
 from iris.cluster.worker.env_probe import (
     HardwareProbe,
@@ -60,7 +61,7 @@ def _telemetry_endpoint(cluster_config: IrisClusterConfig) -> str:
         uri, metadata = spec.uri, dict(spec.metadata)
     else:
         raise ValueError("node telemetry requires an external /system/log-server endpoint")
-    return resolve_endpoint_uri(uri, metadata).rstrip("/") + "/v1/telemetry"
+    return resolve_endpoint_uri(uri, metadata).rstrip("/") + TELEMETRY_ENDPOINT_PATH
 
 
 def _worker_telemetry_endpoint(config: WorkerConfig) -> str:
@@ -87,7 +88,7 @@ def _worker_telemetry_endpoint(config: WorkerConfig) -> str:
         client.close()
     if not response.endpoints:
         raise ConnectionError(f"controller has no {LOG_SERVER_ENDPOINT_NAME!r} endpoint")
-    return response.endpoints[0].address.rstrip("/") + "/v1/telemetry"
+    return response.endpoints[0].address.rstrip("/") + TELEMETRY_ENDPOINT_PATH
 
 
 def _configure(endpoint: str, *, node_name: str, node_uid: str, worker: str | None = None) -> None:
@@ -102,18 +103,16 @@ def _configure(endpoint: str, *, node_name: str, node_uid: str, worker: str | No
 
 
 def _boot_id() -> str:
-    try:
-        return _BOOT_ID_PATH.read_text().strip()
-    except OSError:
-        return ""
+    boot_id = _BOOT_ID_PATH.read_text().strip()
+    if not boot_id:
+        raise ValueError(f"host boot identity is empty: {_BOOT_ID_PATH}")
+    return boot_id
 
 
 def _local_metrics(collector: HostMetricsCollector, node_uid: str) -> NodeMetrics:
     snapshot = collector.collect()
     host_available = snapshot.memory_total_bytes > 0
-    source_replica_uid = node_uid
-    if boot_id := _boot_id():
-        source_replica_uid = f"{node_uid}:{boot_id}"
+    source_replica_uid = f"{node_uid}:{_boot_id()}"
     return NodeMetrics(
         cpu_pct=float(snapshot.host_cpu_percent),
         mem_used_bytes=snapshot.memory_used_bytes,
@@ -265,8 +264,8 @@ def gcp_command(worker_config: Path) -> None:
 
 @cli.command("k8s")
 @click.option("--config", "config_path", type=click.Path(path_type=Path, exists=True), required=True)
-@click.option("--node-name", envvar="IRIS_NODE_NAME", required=True)
-@click.option("--namespace", envvar="IRIS_NAMESPACE", required=True)
+@click.option("--node-name", envvar=IRIS_NODE_NAME_ENV, required=True)
+@click.option("--namespace", envvar=IRIS_NAMESPACE_ENV, required=True)
 def k8s_command(config_path: Path, node_name: str, namespace: str) -> None:
     """Run once per Kubernetes node."""
     configure_logging(level=logging.INFO)
