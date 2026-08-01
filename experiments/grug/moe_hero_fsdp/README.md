@@ -1,6 +1,6 @@
 # grug MoE FSDP hero
 
-A minimal, **self-contained** FSDP variant of the grug MoE model for 25-step throughput and MFU
+A minimal, **self-contained** FSDP variant of the grug MoE model for throughput and MFU
 runs on one or more GB200 racks. Everything is inlined and opinionated: features that are options
 elsewhere are hardwired on here, and the folder has **no dependency on `experiments/grug/moe`** —
 it imports only the levanter substrate and its own modules.
@@ -9,7 +9,7 @@ Launch:
 
 ```bash
 # dry-run: print the lowered plan locally, no GPUs
-python -m experiments.grug.moe_hero_fsdp.launch --dp-racks 1 --version dev
+python -m experiments.grug.moe_hero_fsdp.launch --dp-racks 1 --num-steps 25 --version dev
 
 # submit one or more racks; each rack gets 16 GB200x4 nodes and batch 1024
 RID="moe-hero-fsdp-test-2rack"
@@ -17,10 +17,11 @@ iris --cluster=marin job run --no-wait --enable-extra-resources \
   --target-cluster cw-us-east-08a --priority interactive \
   --cpu 2 --memory 8GB --disk 32GB --timeout 5400 --job-name "${RID}-coord" \
   -e WANDB_API_KEY "$WANDB_API_KEY" -e RUN_ID "$RID" \
-  -- python -m experiments.grug.moe_hero_fsdp.launch --dp-racks 2 --version dev --run
+  -- python -m experiments.grug.moe_hero_fsdp.launch --dp-racks 2 --num-steps 200 --version dev --run
 ```
 
-W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `$RUN_ID`.
+W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `$RUN_ID`. Pass
+`-e WANDB_PROJECT <project>` to the Iris coordinator command to use another W&B project.
 
 ## Files
 

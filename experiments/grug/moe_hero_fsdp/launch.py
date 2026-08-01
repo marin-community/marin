@@ -28,7 +28,8 @@ from experiments.grug.moe_hero_fsdp.train import GrugRunConfig, GrugTrainerConfi
 from experiments.llama import llama3_tokenizer
 
 HERO_RUN_ID = "moe-hero-fsdp"
-HERO_STEPS = 25
+DEFAULT_HERO_STEPS = 25
+DEFAULT_WANDB_PROJECT = "marin_moe"
 HERO_FSDP_BATCH_SIZE = 1024
 HERO_NODES_PER_RACK = 16
 HERO_PROCESSES_PER_TASK = 1
@@ -57,13 +58,16 @@ class HeroThroughputResult(Artifact):
     """
 
 
-def build_hero_run(*, dp_racks: int, version: str | None = None) -> ArtifactStep[HeroThroughputResult]:
+def build_hero_run(*, dp_racks: int, num_steps: int, version: str | None = None) -> ArtifactStep[HeroThroughputResult]:
     """Build the rack-local FSDP hero throughput run."""
     if dp_racks <= 0:
         raise ValueError(f"dp_racks must be positive, got {dp_racks}")
+    if num_steps <= 0:
+        raise ValueError(f"num_steps must be positive, got {num_steps}")
 
     batch_size = dp_racks * HERO_FSDP_BATCH_SIZE
-    model, optimizer = build_hero_configs(num_train_steps=HERO_STEPS, batch_size=batch_size)
+    model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=batch_size)
+    wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
     grug_trainer = GrugTrainerConfig(
         data_seed=None,
         log_every=1,
@@ -92,12 +96,12 @@ def build_hero_run(*, dp_racks: int, version: str | None = None) -> ArtifactStep
             id=run_id,
             seed=0,
             train_batch_size=batch_size,
-            num_train_steps=HERO_STEPS,
+            num_train_steps=num_steps,
             profiler=ProfilerConfig(enabled=False, start_step=8, num_steps=0),
             mp=jmp.get_policy(HERO_MIXED_PRECISION),
             tracker=WandbConfig(
                 entity="marin-community",
-                project="marin_moe",
+                project=wandb_project,
                 tags=["grug", "moe", "hero", "fsdp", "gb200"],
                 group="moe-hero-fsdp",
                 name=run_id,
@@ -140,9 +144,16 @@ def build_hero_run(*, dp_racks: int, version: str | None = None) -> ArtifactStep
 
 @click.command()
 @click.option("--dp-racks", type=click.IntRange(min=1), required=True, help="Data-parallel NVL72 rack count.")
+@click.option(
+    "--num-steps",
+    type=click.IntRange(min=1),
+    default=DEFAULT_HERO_STEPS,
+    show_default=True,
+    help="Number of training steps.",
+)
 @build_options
-def main(dp_racks: int) -> ArtifactStep[HeroThroughputResult]:
-    return build_hero_run(dp_racks=dp_racks)
+def main(dp_racks: int, num_steps: int) -> ArtifactStep[HeroThroughputResult]:
+    return build_hero_run(dp_racks=dp_racks, num_steps=num_steps)
 
 
 if __name__ == "__main__":
