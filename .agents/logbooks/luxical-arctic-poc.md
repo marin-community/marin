@@ -1030,3 +1030,25 @@ uv run iris --cluster=marin job run --no-wait \
   -- python .agents/projects/luxical-arctic-poc/evaluate_teacher_candidate.py \
   --candidate qwen3-embedding-4b-256
 ```
+
+### Focused Qwen result peer review
+
+- Peer review first read the wrong worktree because `WIGGLE_PROJECT_DIR` kept
+  the tab worktree. The corrected command set this variable to the clean
+  research worktree and read only the focused Qwen report.
+- Accepted: record batch sizes and the MRL compression-fraction confound. The
+  teacher-rate ratio is not an isolated size effect.
+- Accepted: add exact per-run rates, worst-source recall, gate names, Arctic,
+  group denominators, collapse thresholds, and the zero variance-failure count.
+- Accepted: replace local Python commands with the original Iris commands.
+  Record that saved-vector reuse prevents a new teacher-rate measurement.
+- Accepted: add a next test and storage costs. A train-only 256-to-1,024 head
+  can keep the deployed student at 256 dimensions. This test has not run.
+- Corrected: the holdout has 143 regular sources, not 142. The candidate reports
+  contain 28 code, 24 multilingual, and 91 standard sources.
+- Retained: the focused report includes the three saved artifacts because a
+  reader must be able to validate its numbers without the larger report.
+- Retained: the harness keeps the 8B candidate to record the predeclared ladder
+  and pinned revision. The report states that the stop rule prevented its run.
+- Retained: the report distinguishes teacher rate from student speed because
+  CPU student speed is a fixed project gate.
