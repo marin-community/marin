@@ -79,7 +79,7 @@ def mint(ctx, name: str, ttl_hours: float):
     possession of the URL is the credential — no auth header. It authorizes only
     this endpoint and expires after --ttl-hours. The mint runs under your
     identity, so task endpoints require their owner and ``/system/`` endpoints
-    require an admin.
+    require a provisioned user.
     """
     with rpc_client_for_ctx(ctx) as client:
         resp = client.mint_endpoint_token(

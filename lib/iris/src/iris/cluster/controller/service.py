@@ -2989,11 +2989,11 @@ class ControllerServiceImpl:
         """Mint a scoped bearer token for one endpoint's /proxy path.
 
         Task endpoints are authorized to their owning user or an admin. System
-        endpoints have no owner and require an admin. The token carries no RPC
-        authority (see ``authorize_method``); it is bound to the endpoint's
-        canonical wire name with an ``exp`` deadline. Like every iris token it is
-        stateless — nothing is persisted and it cannot be revoked; it simply ages
-        out at its TTL.
+        endpoints have no owner and may be minted by a provisioned user or admin.
+        The token carries no RPC authority (see ``authorize_method``); it
+        is bound to the endpoint's canonical wire name with an ``exp`` deadline.
+        Like every iris token it is stateless — nothing is persisted and it
+        cannot be revoked; it simply ages out at its TTL.
         """
         if not self._auth.jwt_manager:
             raise ConnectError(Code.INTERNAL, "JWT manager not configured")

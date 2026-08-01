@@ -61,7 +61,7 @@ class AuthzAction(StrEnum):
 POLICY: dict[AuthzAction, frozenset[str]] = {
     AuthzAction.ACT_AS_WORKER: frozenset({"worker"}),
     AuthzAction.MANAGE_BUDGETS: frozenset(),  # admin only
-    AuthzAction.MINT_SYSTEM_ENDPOINT_TOKEN: frozenset(),  # admin only
+    AuthzAction.MINT_SYSTEM_ENDPOINT_TOKEN: frozenset({"user"}),  # provisioned user or admin
     AuthzAction.SET_CONTAINER_PROFILE: frozenset(),  # admin only (elevated container profiles)
 }
 
