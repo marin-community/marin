@@ -1968,7 +1968,9 @@ def _validate_task_resources(
     task_ram = humanfriendly.parse_size(task_resources.ram, binary=True)
     task_disk = humanfriendly.parse_size(task_resources.disk, binary=True)
     if worker_resources.cpu < task_resources.cpu or worker_ram < task_ram or worker_disk < task_disk:
-        raise ValueError(f"{task_name} task resources must fit one Zephyr worker")
+        raise ValueError(
+            f"{task_name} task resources exceed one Zephyr worker: task={task_resources}, worker={worker_resources}"
+        )
 
 
 def _resolve_task_resources(
@@ -2266,26 +2268,22 @@ class ZephyrContext:
         """Run one plan on an existing coordinator and read its stored result."""
         result_path = _execution_result_path(self.chunk_storage_prefix, execution_id)
         try:
-            try:
-                coordinator.run_pipeline.submit(
-                    plan,
-                    execution_id,
-                    ZephyrTaskResources.from_resource_config(map_task_resources),
-                    ZephyrTaskResources.from_resource_config(reduce_task_resources),
-                ).result()
-            except Exception:
-                payload = _try_read_coordinator_result(result_path)
-                if isinstance(payload, Exception):
-                    raise payload from None
-                raise
-
-            payload = _read_coordinator_result(result_path)
+            coordinator.run_pipeline.submit(
+                plan,
+                execution_id,
+                ZephyrTaskResources.from_resource_config(map_task_resources),
+                ZephyrTaskResources.from_resource_config(reduce_task_resources),
+            ).result()
+        except Exception:
+            payload = _try_read_coordinator_result(result_path)
             if isinstance(payload, Exception):
-                raise payload
-            return payload
-        finally:
-            with suppress(Exception):
-                coordinator.release_execution.remote(execution_id).result(timeout=10.0)
+                raise payload from None
+            raise
+
+        payload = _read_coordinator_result(result_path)
+        if isinstance(payload, Exception):
+            raise payload
+        return payload
 
     def execute(
         self,
@@ -2324,13 +2322,17 @@ class ZephyrContext:
             execution_id = _generate_execution_id()
             logger.info("Starting shared Zephyr pipeline %s", execution_id)
             self._upload_shared_data(execution_id)
-            return self._run_on_coordinator(
-                coordinator,
-                plan,
-                execution_id,
-                resolved_map,
-                resolved_reduce,
-            )
+            try:
+                return self._run_on_coordinator(
+                    coordinator,
+                    plan,
+                    execution_id,
+                    resolved_map,
+                    resolved_reduce,
+                )
+            finally:
+                with suppress(Exception):
+                    coordinator.release_execution.remote(execution_id).result(timeout=10.0)
 
         assert state is _ContextState.NEW
         last_exception: Exception | None = None

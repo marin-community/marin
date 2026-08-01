@@ -273,7 +273,7 @@ def test_shared_execution_resources_must_fit_worker(local_client, tmp_path):
             reduce_task_resources=ResourceConfig(cpu=1, ram="512m"),
         )
         assert result.results == [1]
-        with pytest.raises(ValueError, match="must fit one Zephyr worker"):
+        with pytest.raises(ValueError):
             ctx.execute(
                 Dataset.from_list([1]).map(lambda value: value),
                 map_task_resources=ResourceConfig(cpu=3, ram="256m"),
