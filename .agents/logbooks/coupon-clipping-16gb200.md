@@ -17,7 +17,7 @@ author: rjpower
 
 ## Current TL;DR
 
-All scheduled training and Paloma runs are complete. Fat-first and fat-middle capacity matched C0. D1 and C-short were only 2.06x and 1.93x faster than C0. WD1 finished 4.77x faster but remained unusable at 4.0338 train loss and 4.8286 Paloma micro loss, versus C0's 1.9903 and 2.8192. The fixed-64-expert WD2 source reached 2.50M tok/s, or 13.14x C0, with zero overflow; it is the surviving systems lead, but no full-size WD2 checkpoint exists yet. This wave did not produce a greater-than-5x model suitable for SFT or RL.
+The first wave did not produce a greater-than-5x model suitable for SFT or RL. Fat-first and fat-middle capacity matched C0. D1 and C-short were only 2.06x and 1.93x faster than C0. WD1 finished 4.77x faster but remained unusable at 4.0338 train loss and 4.8286 Paloma micro loss, versus C0's 1.9903 and 2.8192. The fixed-64-expert WD2 source reached 2.50M tok/s, or 13.14x C0, with zero overflow. A 90/10 WD2 arm is entering its factor-four transition canary before production launch.
 
 ## Current Baseline
 
@@ -30,7 +30,7 @@ All scheduled training and Paloma runs are complete. Fat-first and fat-middle ca
 
 ### Active
 
-- `CC16-H5`: a `d768/L1/E64/top4` source plus substantially more adaptation than WD1's 320-update tail can retain the measured 13.14x source rate and reach a usable full-model checkpoint above 5x end-to-end. Next test: calibrate deep-tail length from short transition sweeps before another production horizon.
+- `CC16-H5`: a `d768/L1/E64/top4` source plus substantially more adaptation than WD1's 320-update tail can retain the measured 13.14x source rate and reach a usable full-model checkpoint above 5x end-to-end. Next test: gate a 5,760-source / 640-target schedule on a 32+16-update hardware transition canary.
 
 ### Blocked
 
@@ -54,6 +54,7 @@ All scheduled training and Paloma runs are complete. Fat-first and fat-middle ca
 - 2026-07-31: collect a coordinated comparison after four hours; continue healthy runs toward the 12-hour horizon.
 - 2026-07-31: use FSDP-only (`expert=1`, `replica=1`, `data=16`). `sonic_cute` is a local SM100 backend and rejects expert-parallel axes larger than one.
 - 2026-07-31: preregister D1 at update 4,480 (70%) so the token-matched arm retains 1,920 full-depth updates before the shared 640-update decay.
+- 2026-08-01: test WD2 with a 10% target tail. Keep its 1,536-wide experts and 3:1 query/KV-head ratio in the target so every widened axis admits an exact factor-four transform.
 
 ## Negative Results Index
 
@@ -230,3 +231,13 @@ All scheduled training and Paloma runs are complete. Fat-first and fat-middle ca
 - Result: the first WD1 attempt was stopped after mutable `dev` recipe drift began rebuilding its 6.4B-token source. The adopted handle then failed fast once because its source omitted `users/power`; the first forward failed because FA4 rejected float32 inputs; and the completed evaluation initially failed while JSON serialized a JAX `float32`. Commits `c8200bb904`, `f5ea4d42ef`, `70785b17ce`, and `e8e383809e` fix those four boundaries. All three final evaluation coordinators succeeded, W&B is finished, and each output contains `metrics.json`. The reusable `dev` guidance is recorded in [Echo wiki #61](https://echo.oa.dev/wiki/61).
 - Interpretation: `dev` is suitable for active iteration but unsafe as an implicit dependency identity for follow-up evaluation. Adopt the realized output or use a fixed calendar version; print the plan before `--run` and reject any unexpected training step.
 - Next action: publish the terminal table to issue #7836 and the Weaver artifact, then close the rollout issue.
+
+### 2026-08-01 21:14 - CC16-015 WD2 90/10 transition gate
+
+- Hypothesis: a 640-update full-model tail can adapt the 13.14x WD2 source while retaining greater-than-5x end-to-end speed.
+- Commit Hash: `cc3a9be3bc`.
+- Command: `uv run --with pytest --with pytest-timeout --with pytest-asyncio pytest -q experiments/grug/coupon_clipping tests/test_grug_depth_growth.py tests/test_grug_variant_contracts.py`; hardware command pending canary submission.
+- Config: train `d768/L1/E64/top4` through update 5,760, then expand by four to a 5.484B-active `d3072/L48/E64/top4` target for 640 updates. Routed and shared intermediate widths remain 1,536; query/KV heads expand from 6:2 to 24:8; the target tail contains the complete decay.
+- Result: the focused growth/config suite passed 23 tests. The wider Grug run passed 36 tests with one skip and the known base-Grug CPU label-sharding failure. The new numerical contract checks that fixed-intermediate MLP inputs remain unchanged and outputs are duplicated without erroneous scaling.
+- Interpretation: the WD2 source can be embedded exactly into the target despite holding expert width constant. The 24:8 target differs slightly from C0's 24:6 attention and has 5.484B rather than 5.295B active parameters; wall-time and Paloma comparisons must retain that caveat.
+- Next action: launch the 32-source / 16-target GB200 canary, require a finite post-growth loss and saved step-48 checkpoint, then submit the 5,760+640 production arm.
