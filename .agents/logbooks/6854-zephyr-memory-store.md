@@ -41,8 +41,12 @@ description: Read-only Zephyr memory store and verified fuzzy-dedup experiments
 
 ## Current Baseline
 
-- Code refs: PR #7145 at `a55236a5661ac15aed1bb5b5abf5971b0754f282`;
-  PR #7831 at `854c2b3b544b526a2daed59712d520154163442a`.
+- Current integration refs: PR #7145 at
+  `434d18cdb06f2799914be5c9ebfddaf0654ca6c3`; PR #7831 at
+  `ae676e70eb78924ba88d714f93369a24a19a4ca3`.
+- The final 100B A/B predates those two force-updates. Its exact marker parity
+  remains correctness evidence; its CPU and memory deltas are scoped to the
+  pre-rebase runtime recorded in ZKV-010.
 - Final 100B control: 1,513,510 candidate members, 27,203 accepted markers,
   6,131.44 worker CPU-seconds, and 16.25 GB peak reducer RSS.
 - Largest candidate cluster: 104,490 members.
@@ -527,3 +531,36 @@ description: Read-only Zephyr memory store and verified fuzzy-dedup experiments
   mixed-root pytest invocation failed collection because Zephyr tests import
   their local `conftest`; both native-root reruns passed.
 - Next action: Commit and push the review fixes, then open the stacked PR.
+
+### 2026-08-01 04:05 UTC - ZKV-013 current shared-pool port
+
+- Observation: PR #7145 force-updated twice while the PR package was being
+  prepared. Its current head `434d18cdb06f2799914be5c9ebfddaf0654ca6c3`
+  replaces the old pool-mode API with an entered `ZephyrContext` that owns one
+  coordinator and worker group. PR #7831 now points at
+  `ae676e70eb78924ba88d714f93369a24a19a4ca3`.
+- Change: The memory store now follows that ownership model. The entered
+  context owns store actor groups, serialized contexts borrow the coordinator,
+  and `verify_fuzzy_dups()` accepts the shared context. The current testbed
+  requests 64 GB per worker, a 60 GB verifier task budget, 4 GB for the
+  coordinator, and 8 GB for each of 32 store actors.
+- Commit Hash: `c369675a12a9873b1306257863719aa7ddea5723`.
+- Validation:
+  - shared-context execution: 75 passed;
+  - memory-store behavior and local-Iris reconstruction: 11 passed;
+  - fuzzy-dedup: 99 passed, 5 deselected;
+  - Fray: 84 passed;
+  - Datakit store: 4 passed;
+  - `./infra/pre-commit.py --changed-files --fix`: passed, including pyrefly.
+- Negative result: The current PR #7145 head fails its own Zephyr CI because
+  14 tests still target the pre-rewrite coordinator state. Commit `1f746c6c5`
+  migrates them to per-execution counters and the explicit drain-idle-worker
+  policy; all 31 affected tests pass. One full-suite local-Iris timeout also
+  reproduced on #7145 but passed alone in 45.93 seconds.
+- Interpretation: The generic store and verifier are ported to the current
+  shared-pool runtime. The earlier external-sort and telemetry patches are not
+  carried forward because the landed Zephyr rewrite already replaced those
+  paths.
+- Next action: Run the current commit on CoreWeave with the 64 GB/60 GB
+  configuration, verify the single-pool topology and exact 27,203 markers,
+  then update the design artifact and open the stacked PR.
