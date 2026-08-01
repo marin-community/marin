@@ -14,6 +14,7 @@ import fsspec
 import pytest
 from rigging.filesystem import filesystem
 from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, external_sort_merge
+from zephyr.plan import _merge_sorted_chunks
 from zephyr.runners import _InProcessWorkerContext
 from zephyr.shard_keys import deterministic_hash
 from zephyr.shuffle import (
@@ -154,6 +155,31 @@ def test_needs_external_sort_below_threshold(tmp_path):
 def test_needs_external_sort_empty_shard():
     shard = ScatterReader(iterators=[], max_chunk_rows=100_000, avg_item_bytes=200.0)
     assert not shard.needs_external_sort(memory_limit=32 * 1024**3)
+
+
+def test_reduce_merge_uses_task_memory_budget(tmp_path, monkeypatch):
+    task_memory = 4 * 1024**3
+    ctx = _InProcessWorkerContext(
+        chunk_prefix="test",
+        execution_id="test",
+        stage_name="test",
+        task_memory_bytes=task_memory,
+    )
+    token = _worker_ctx_var.set(ctx)
+    shard = ScatterReader(iterators=[], max_chunk_rows=1, avg_item_bytes=1.0)
+    observed_memory_limits = []
+
+    def needs_external_sort(memory_limit):
+        observed_memory_limits.append(memory_limit)
+        return False
+
+    monkeypatch.setattr(shard, "needs_external_sort", needs_external_sort)
+    try:
+        assert list(_merge_sorted_chunks(shard, key_fn=lambda item: item, external_sort_dir=str(tmp_path))) == []
+    finally:
+        _worker_ctx_var.reset(token)
+
+    assert observed_memory_limits == [task_memory]
 
 
 # ---------------------------------------------------------------------------
