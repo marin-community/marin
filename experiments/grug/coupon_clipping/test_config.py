@@ -36,6 +36,7 @@ from experiments.grug.coupon_clipping.depth_launch import (
     build_aggressive_source_model_config,
     build_d1_checkpoint,
     build_depth_source_model_config,
+    build_extreme_source_model_config,
     build_growth_pilot_checkpoint,
     build_growth_target_only_checkpoint,
 )
@@ -191,6 +192,23 @@ def test_aggressive_source_attacks_fixed_compute_and_preserves_target_contract()
     assert AGGRESSIVE_TRANSITION_STEP == 6080
     assert AGGRESSIVE_DECAY_STEPS == 320
     assert build_optimizer_config(decay_steps=AGGRESSIVE_DECAY_STEPS).decay == AGGRESSIVE_DECAY_STEPS
+
+
+def test_extreme_source_targets_tenfold_speed_without_more_experts():
+    target = build_model_config(CouponClippingArm.C0_P0)
+    aggressive = build_aggressive_source_model_config()
+    extreme = build_extreme_source_model_config()
+    accounting = model_accounting(extreme)
+
+    assert (extreme.hidden_dim, extreme.num_layers, extreme.num_heads, extreme.num_kv_heads) == (768, 1, 6, 2)
+    assert extreme.num_experts == target.num_experts == 64
+    assert extreme.num_experts_per_token == target.num_experts_per_token == 4
+    assert extreme.intermediate_dim == 1536
+    assert extreme.intermediate_dim > aggressive.intermediate_dim
+    assert extreme.shared_expert_intermediate_dim == 1536
+    assert accounting.active_parameters < 250_000_000
+    assert accounting.stored_parameters < 450_000_000
+    assert model_accounting(target).forward_flops_per_token / accounting.forward_flops_per_token > 40
 
 
 def test_paloma_eval_is_checkpoint_only_and_bounded(tmp_path):

@@ -18,6 +18,9 @@ order, 6.711B-token horizon, optimizer schedule, and 16-GB200 topology.
 - `d1.py`: the token-matched D1 pipeline, with L1 through update 4,480 and L48
   through update 6,400.
 - `pilot_aggressive_source.py`: the 128-update `d1536/L1` throughput gate.
+- `pilot_extreme_source.py`: a `d768/L1` throughput gate that keeps 64 experts,
+  top-4 routing, and 1536-wide selected experts. It tests the 10x systems target
+  without depending on cold-start routing across additional experts.
 - `pilot_aggressive_growth.py`: 32 `d1536/L1` updates followed by 16 updates on
   the widened `d3072/L48` target.
 - `wd1.py`: the 95/5 narrow-shallow to wide-deep arm, with all 320 wide/deep

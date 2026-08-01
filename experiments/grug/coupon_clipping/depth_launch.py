@@ -61,6 +61,23 @@ def build_aggressive_source_model_config(
     return build_growth_source_model_config(build_model_config(CouponClippingArm.C0_P0), growth)
 
 
+def build_extreme_source_model_config() -> GrugModelConfig:
+    """Build a d768/L1 source with wider selected experts for the 10x throughput gate."""
+    target = build_model_config(CouponClippingArm.C0_P0)
+    return dataclasses.replace(
+        target,
+        hidden_dim=768,
+        intermediate_dim=1536,
+        shared_expert_intermediate_dim=1536,
+        num_layers=1,
+        num_heads=6,
+        num_kv_heads=2,
+        initializer_std=target.initializer_std * 2,
+        block_segment_lengths=(1,),
+        block_segment_shared_expert_intermediate_dims=(1536,),
+    )
+
+
 def _build_source_checkpoint(
     *,
     model: GrugModelConfig,
@@ -256,6 +273,17 @@ def build_aggressive_source_pilot_checkpoint(*, version: str | None = None) -> A
     return _build_source_checkpoint(
         model=build_aggressive_source_model_config(),
         run_id="ccx-wd1-d1536-l1-pilot128",
+        steps=L1_PILOT_STEPS,
+        version=version,
+        run_kind=CouponClippingRunKind.PILOT,
+    )
+
+
+def build_extreme_source_pilot_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
+    """Measure the d768/L1 source with fixed expert count and wider selected experts."""
+    return _build_source_checkpoint(
+        model=build_extreme_source_model_config(),
+        run_id="ccx-wd2-d768-l1-i1536-pilot128",
         steps=L1_PILOT_STEPS,
         version=version,
         run_kind=CouponClippingRunKind.PILOT,
