@@ -32,6 +32,7 @@ from experiments.datakit.cluster.quality.fast_transformer.embedding import (
     pack_remapped_windows,
     predict_embeddings,
     source_balanced_token_remap,
+    source_conditioned_geometry_loss,
 )
 from experiments.datakit.cluster.quality.fast_transformer.model import (
     FastEmbeddingTransformer,
@@ -238,6 +239,32 @@ def test_direct_cosine_embedding_loss_aligns_matching_rows():
 
     assert matching_loss == pytest.approx(0.0, abs=1e-7)
     assert reversed_loss == pytest.approx(1.0, abs=1e-7)
+
+
+def test_source_conditioned_geometry_loss_matches_same_source_numpy_pairs():
+    student = np.asarray(
+        [[1.0, 0.0, 0.0], [0.8, 0.6, 0.0], [0.0, 1.0, 0.0], [0.0, 0.6, 0.8]],
+        dtype=np.float32,
+    )
+    teacher = np.asarray(
+        [[1.0, 0.0, 0.0], [0.6, 0.8, 0.0], [0.0, 1.0, 0.0], [0.0, 0.8, 0.6]],
+        dtype=np.float32,
+    )
+    source_ids = np.asarray([0, 0, 1, 1], dtype=np.int32)
+    normalized_student = student / np.linalg.norm(student, axis=1, keepdims=True)
+    normalized_teacher = teacher / np.linalg.norm(teacher, axis=1, keepdims=True)
+    student_cosine = normalized_student @ normalized_student.T
+    teacher_cosine = normalized_teacher @ normalized_teacher.T
+    selected = (source_ids[:, None] == source_ids[None, :]) & ~np.eye(len(source_ids), dtype=bool)
+    expected = np.square(student_cosine - teacher_cosine)[selected].mean()
+
+    actual = source_conditioned_geometry_loss(
+        jnp.asarray(student),
+        jnp.asarray(teacher),
+        jnp.asarray(source_ids),
+    )
+
+    assert float(actual) == pytest.approx(float(expected), abs=1e-7)
 
 
 def test_embedding_prediction_padding_preserves_rows_and_values():
