@@ -9,7 +9,7 @@ import pytest
 from iris.cluster.backends.k8s.tasks import (
     _GANG_GC_MAX_AGE_SECONDS,
     _GC_MAX_AGE_SECONDS,
-    _GC_MAX_PODS_PER_PASS,
+    _GC_MAX_DELETES_PER_PASS,
     _KUEUE_MANAGED_FINALIZER,
     _KUEUE_POD_GROUP_NAME,
     _KUEUE_POD_GROUP_TOTAL,
@@ -1125,26 +1125,47 @@ def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
     assert k8s.get_json(K8sResource.CONFIGMAPS, "recent-succeeded-pod-wf") is not None
 
 
-def test_gc_bounds_pods_read_per_pass(provider, k8s):
-    """A terminal-pod backlog must not make one GC pass unbounded.
+def test_gc_bounds_deletes_per_pass(provider, k8s):
+    """Each pass deletes a bounded number of pods, and the backlog drains over passes.
 
-    The sweep runs on the control-loop thread, so a namespace holding thousands of
-    terminal pods would otherwise stall scheduling behind a single giant list (#7881).
-    It reads a bounded slice per pass and drains the rest on later passes.
+    Every delete is a serial API round trip, so an unbounded pass on a large backlog
+    runs for minutes (#7881).
     """
     now = datetime.now(UTC)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    backlog = _GC_MAX_PODS_PER_PASS + 10
+    backlog = _GC_MAX_DELETES_PER_PASS + 10
     for i in range(backlog):
         _seed_terminal_pod(k8s, f"backlog-pod-{i}", "Succeeded", f"hash{i:016d}", old_ts)
 
     provider._gc_terminal_resources(active_pods=[])
     remaining = k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS)
-    assert len(remaining) == backlog - _GC_MAX_PODS_PER_PASS
+    assert len(remaining) == backlog - _GC_MAX_DELETES_PER_PASS
 
     provider._gc_terminal_resources(active_pods=[])
     assert k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS) == []
+
+
+def test_gc_collects_old_pods_behind_a_wall_of_recent_ones(provider, k8s):
+    """Pods too young to delete must not hide older ones from the sweep.
+
+    The per-pass bound applies to deletes, not to how far the scan reads. Bounding the
+    read instead would return the same prefix of undeletable pods every pass, and the
+    old pods behind it would never be examined — the accumulation GC exists to prevent.
+    """
+    now = datetime.now(UTC)
+    recent_ts = (now - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Names sort ahead of the old pods, so any read-side cap would stop inside them.
+    for i in range(_GC_MAX_DELETES_PER_PASS + 100):
+        _seed_terminal_pod(k8s, f"aaa-recent-{i:04d}", "Succeeded", f"recent{i:010d}", recent_ts)
+    _seed_terminal_pod(k8s, "zzz-old-pod", "Succeeded", "oldhash0000000000", old_ts)
+
+    provider._gc_terminal_resources(active_pods=[])
+
+    assert k8s.get_json(K8sResource.PODS, "zzz-old-pod") is None
+    assert k8s.get_json(K8sResource.PODS, "aaa-recent-0000") is not None
 
 
 def test_gc_does_not_run_on_the_calling_thread(provider, k8s):

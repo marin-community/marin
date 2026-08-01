@@ -83,13 +83,22 @@ class K8sService(Protocol):
 
     def get_json(self, resource: K8sResource, name: str) -> dict | None: ...
 
+    def iter_json(
+        self,
+        resource: K8sResource,
+        *,
+        labels: dict[str, str] | None = None,
+        field_selector: str | None = None,
+    ) -> Iterator[dict]:
+        """Yield matching resources one page at a time."""
+        ...
+
     def list_json(
         self,
         resource: K8sResource,
         *,
         labels: dict[str, str] | None = None,
         field_selector: str | None = None,
-        limit: int | None = None,
     ) -> list[dict]: ...
 
     def delete(self, resource: K8sResource, name: str, *, force: bool = False, wait: bool = True) -> None: ...
@@ -349,48 +358,54 @@ class CloudK8sService:
 
     # -- list ----------------------------------------------------------------
 
-    def list_json(
+    def iter_json(
         self,
         resource: K8sResource,
         *,
         labels: dict[str, str] | None = None,
         field_selector: str | None = None,
-        limit: int | None = None,
-    ) -> list[dict]:
-        """List Kubernetes resources, optionally filtered by labels and/or field selectors.
+    ) -> Iterator[dict]:
+        """Yield matching resources one page at a time.
 
-        The list is always chunked, so no single response body is unbounded no matter
-        how large the collection is. ``limit`` stops the walk once that many items are
-        collected and returns a prefix of the collection; sweeps that make progress by
-        deleting what they read use it to bound the work of one pass.
+        Each page is its own bounded request: an unpaginated list streams a single
+        chunked body that no timeout bounds, because the per-recv socket timeout the
+        client arms is reset by every arriving chunk. A caller that keeps only a few
+        fields per item, or that stops early, never holds the whole collection.
         """
-        logger.info("k8s: LIST %s labels=%s field_selector=%s limit=%s", resource.plural, labels, field_selector, limit)
+        logger.info("k8s: LIST %s labels=%s field_selector=%s", resource.plural, labels, field_selector)
         kwargs = self._ns_kwargs(resource)
         if labels:
             kwargs["label_selector"] = _label_selector(labels)
         if field_selector:
             kwargs["field_selector"] = field_selector
         kwargs.update(self._request_timeout_kwargs())
-        # A limit of 0 means "no limit" to the API server, so never send one.
-        page_size = _LIST_PAGE_LIMIT if limit is None else max(1, min(limit, _LIST_PAGE_LIMIT))
         api = self._resource_api(resource)
-        items: list[dict] = []
         continue_token = ""
         with slow_log(logger, f"list {resource.plural}", threshold_ms=_SLOW_THRESHOLD_MS):
             while True:
-                page_kwargs = dict(kwargs, limit=page_size)
+                page_kwargs = dict(kwargs, limit=_LIST_PAGE_LIMIT)
                 if continue_token:
                     page_kwargs["_continue"] = continue_token
                 try:
                     result = api.get(**page_kwargs)
                 except ApiException as e:
                     raise KubectlError(f"list {resource.plural} failed ({e.status}): {e.reason}") from e
-                items.extend(item.to_dict() for item in result.items)
+                for item in result.items:
+                    yield item.to_dict()
                 meta = result.metadata
                 continue_token = (meta["continue"] if meta is not None else None) or ""
-                if not continue_token or (limit is not None and len(items) >= limit):
-                    break
-        return items[:limit] if limit is not None else items
+                if not continue_token:
+                    return
+
+    def list_json(
+        self,
+        resource: K8sResource,
+        *,
+        labels: dict[str, str] | None = None,
+        field_selector: str | None = None,
+    ) -> list[dict]:
+        """List Kubernetes resources, optionally filtered by labels and/or field selectors."""
+        return list(self.iter_json(resource, labels=labels, field_selector=field_selector))
 
     # -- delete --------------------------------------------------------------
 

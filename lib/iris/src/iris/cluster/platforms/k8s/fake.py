@@ -667,13 +667,21 @@ class InMemoryK8sService:
         self._check_failure("get_json")
         return self._resources.get((resource.plural, name))
 
+    def iter_json(
+        self,
+        resource: K8sResource,
+        *,
+        labels: dict[str, str] | None = None,
+        field_selector: str | None = None,
+    ) -> Iterator[dict]:
+        yield from self.list_json(resource, labels=labels, field_selector=field_selector)
+
     def list_json(
         self,
         resource: K8sResource,
         *,
         labels: dict[str, str] | None = None,
         field_selector: str | None = None,
-        limit: int | None = None,
     ) -> list[dict]:
         self._check_failure("list_json")
         plural = resource.plural
@@ -698,7 +706,7 @@ class InMemoryK8sService:
                     if not all(res_labels.get(k) == v for k, v in labels.items()):
                         continue
                 results.append(manifest)
-            return results[:limit] if limit is not None else results
+            return results
 
         results = []
         for (stored_plural, _), manifest in self._resources.items():
@@ -711,8 +719,6 @@ class InMemoryK8sService:
             if field_selector and not _matches_field_selector(manifest, field_selector):
                 continue
             results.append(manifest)
-            if limit is not None and len(results) >= limit:
-                break
         return results
 
     def delete(self, resource: K8sResource, name: str, *, force: bool = False, wait: bool = True) -> None:

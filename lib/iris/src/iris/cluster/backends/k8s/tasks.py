@@ -1249,11 +1249,10 @@ _GC_MAX_AGE_SECONDS = 3600  # 1 hour
 # cannot race exit-status collection.
 _GANG_GC_MAX_AGE_SECONDS = 60
 
-# Garbage collection: terminal pods read per phase in one pass. The sweep runs
-# on the control-loop thread, so its cost per pass must not scale with the
-# backlog; the sweep deletes what it reads, so a backlog drains over successive
-# passes.
-_GC_MAX_PODS_PER_PASS = 500
+# Garbage collection: terminal pods deleted in one pass. Each delete is a serial
+# API round trip, so an unbounded pass on a large backlog runs for minutes; the
+# backlog drains at this rate per _GC_INTERVAL_SECONDS instead.
+_GC_MAX_DELETES_PER_PASS = 500
 
 # Blocker eviction: minimum interval between reconcile-driven eviction sweeps
 # of preempt_namespaces. Gang pods can stay SchedulingGated for many cycles
@@ -2878,8 +2877,8 @@ class K8sTaskProvider:
         short-retention sweep of terminal gang pods that strips the Kueue pod
         finalizer and deletes the pod-group Workloads they would otherwise pin.
 
-        Reads at most _GC_MAX_PODS_PER_PASS terminal pods per phase, so one pass costs
-        a bounded number of API round trips and a larger backlog drains over successive
+        Deletes at most _GC_MAX_DELETES_PER_PASS terminal pods, so one pass costs a
+        bounded number of API round trips and a larger backlog drains over successive
         passes.
         """
         now = datetime.now(UTC).timestamp()
@@ -2926,7 +2925,13 @@ class K8sTaskProvider:
         gang_pod_names: list[str] = []
         gang_pod_groups: set[str] = set()
         gang_task_hashes: set[str] = set()
-        for pod in self._list_terminal_pods(limit=_GC_MAX_PODS_PER_PASS):
+        for pod in self._iter_terminal_pods():
+            # Budget the deletes, not the scan: every name collected here is one the
+            # sweep will delete, so stopping at the budget still shrinks the backlog
+            # by a full pass's worth. Truncating the scan instead would let a prefix
+            # of pods too young to delete hide older ones from every pass.
+            if len(old_pod_names) + len(gang_pod_names) >= _GC_MAX_DELETES_PER_PASS:
+                break
             meta = pod.get("metadata", {})
             created = meta.get("creationTimestamp", "")
             if not created:
@@ -2987,27 +2992,25 @@ class K8sTaskProvider:
                 len(old_task_hashes - safe_hashes),
             )
 
-    def _list_terminal_pods(self, *, limit: int | None = None) -> list[dict]:
-        """Bulk-list managed pods in a terminal phase (Succeeded or Failed).
+    def _iter_terminal_pods(self) -> Iterator[dict]:
+        """Yield managed pods in a terminal phase (Succeeded or Failed), page by page.
 
-        ``limit`` caps the pods read per phase, yielding an arbitrary prefix of the
-        terminal set. It is safe only for a sweep that deletes what it reads (progress
-        continues on the next pass), not for a caller that must see every terminal pod.
+        Lazy so the GC sweep can stop once it has its delete budget, without holding a
+        whole backlog of pod bodies or paying for pages it will not use.
         """
-        pods: list[dict] = []
         # Field selectors AND their comma-separated terms, so a single
         # status.phase==Succeeded,status.phase==Failed matches nothing (a pod is
         # never both); list each terminal phase separately.
         for phase in ("Succeeded", "Failed"):
-            pods.extend(
-                self.kubectl.list_json(
-                    K8sResource.PODS,
-                    labels=_MANAGED_POD_LABELS,
-                    field_selector=f"status.phase={phase}",
-                    limit=limit,
-                )
+            yield from self.kubectl.iter_json(
+                K8sResource.PODS,
+                labels=_MANAGED_POD_LABELS,
+                field_selector=f"status.phase={phase}",
             )
-        return pods
+
+    def _list_terminal_pods(self) -> list[dict]:
+        """Bulk-list managed pods in a terminal phase (Succeeded or Failed)."""
+        return list(self._iter_terminal_pods())
 
     def _poll_pods(
         self, running: list[RunningTaskEntry], cached_pods: list[dict], workloads: list[dict] | None = None

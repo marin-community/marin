@@ -3,6 +3,8 @@
 
 """Tests for CloudK8sService helpers and K8sResource enum path construction."""
 
+from types import SimpleNamespace
+
 import pytest
 from iris.cluster.platforms.k8s import service as k8s_service
 from iris.cluster.platforms.k8s.service import CloudK8sService
@@ -73,24 +75,12 @@ class _FakeItem:
         return self._body
 
 
-class _FakeDynamicClient:
-    def __init__(self, api: _FakeApiServer):
-        self.resources = _FakeDiscoverer(api)
-
-
-class _FakeDiscoverer:
-    def __init__(self, api: _FakeApiServer):
-        self._api = api
-
-    def get(self, **kwargs) -> _FakeApiServer:
-        return self._api
-
-
 def _service_with_api(pages: list[list[str]]) -> tuple[CloudK8sService, _FakeApiServer]:
+    """A CloudK8sService whose every resource handle is one fake API server."""
     svc = CloudK8sService(namespace="iris")
     api = _FakeApiServer(pages)
     # Seed the cached_property so no real kubernetes client is built.
-    svc.__dict__["_dyn"] = _FakeDynamicClient(api)
+    svc.__dict__["_dyn"] = SimpleNamespace(resources=SimpleNamespace(get=lambda **kwargs: api))
     return svc, api
 
 
@@ -105,14 +95,14 @@ def test_list_json_walks_all_pages():
     assert [req.get("limit") for req in api.requests] == [k8s_service._LIST_PAGE_LIMIT] * 3
 
 
-def test_list_json_limit_stops_the_walk():
-    """limit caps both the items returned and the requests issued."""
+def test_iter_json_stops_fetching_when_abandoned():
+    """A caller that stops early stops paying: the later pages are never requested."""
     svc, api = _service_with_api([["a", "b"], ["c", "d"], ["e"]])
 
-    names = [pod["metadata"]["name"] for pod in svc.list_json(K8sResource.PODS, limit=3)]
+    first = next(iter(svc.iter_json(K8sResource.PODS)))
 
-    assert names == ["a", "b", "c"]
-    assert len(api.requests) == 2
+    assert first["metadata"]["name"] == "a"
+    assert len(api.requests) == 1
 
 
 def test_delete_by_labels_is_one_collection_delete():
