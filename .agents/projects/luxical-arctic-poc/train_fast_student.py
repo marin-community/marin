@@ -20,7 +20,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from build_manifest import allocate_balanced_quotas
 from fast_student import FastStudent
@@ -84,8 +83,12 @@ def load_training_arrays(prepared: dict[str, Any], target: int) -> tuple[np.ndar
     teacher_chunks = []
     for index, (source, result) in enumerate(sorted(prepared["sources"].items()), start=1):
         filesystem, path = fsspec.core.url_to_fs(result["output_url"])
-        table = pq.read_table(path, filesystem=filesystem, columns=["train_rank", "ids", "embedding"])
-        table = table.filter(pc.less(table["train_rank"], quotas[source]))
+        table = pq.read_table(
+            path,
+            filesystem=filesystem,
+            columns=["train_rank", "ids", "embedding"],
+            filters=[("train_rank", "<", quotas[source])],
+        )
         if len(table) != quotas[source]:
             raise ValueError(f"Prepared source {source} returned {len(table)} rows; expected {quotas[source]}")
         ids = table["ids"].combine_chunks()
@@ -110,6 +113,11 @@ def embedding_audit(model: FastEmbeddingTransformer, ids: np.ndarray) -> dict[st
     normalized = vectors / np.linalg.norm(vectors, axis=1, keepdims=True).clip(min=1e-12)
     cosine = normalized @ normalized.T
     off_diagonal = cosine[~np.eye(len(cosine), dtype=bool)]
+    centered = vectors - vectors.mean(axis=0, keepdims=True)
+    singular_values = np.linalg.svd(centered, compute_uv=False)
+    eigenvalues = np.square(singular_values) / max(1, len(vectors) - 1)
+    probabilities = eigenvalues / max(float(eigenvalues.sum()), 1e-30)
+    positive = probabilities > 0
     return {
         "finite_fraction": float(np.isfinite(vectors).mean()),
         "unique_fraction_6dp": float(len(np.unique(np.round(vectors, 6), axis=0)) / len(vectors)),
@@ -118,6 +126,8 @@ def embedding_audit(model: FastEmbeddingTransformer, ids: np.ndarray) -> dict[st
         "cosine_mean": float(np.mean(off_diagonal)),
         "cosine_standard_deviation": float(np.std(off_diagonal)),
         "cosine_p99": float(np.quantile(off_diagonal, 0.99)),
+        "total_variance": float(eigenvalues.sum()),
+        "effective_rank": float(np.exp(-np.sum(probabilities[positive] * np.log(probabilities[positive])))),
     }
 
 
@@ -198,7 +208,14 @@ def train(
             if global_step == 1 or global_step % 10 == 0:
                 logger.info("Epoch %d step %d/%d loss %.8f", epoch + 1, global_step, total_steps, loss_value)
         audit = embedding_audit(model, ids)
-        if audit["finite_fraction"] != 1.0 or audit["unique_fraction_6dp"] < 0.99:
+        if (
+            audit["finite_fraction"] != 1.0
+            or audit["unique_fraction_6dp"] < 0.99
+            or audit["total_variance"] <= 1e-6
+            or audit["effective_rank"] < 2.0
+            or audit["cosine_standard_deviation"] <= 1e-4
+            or audit["cosine_p99"] >= 0.9999
+        ):
             raise ValueError(f"Embedding audit failed after epoch {epoch + 1}: {audit}")
         model_url = f"{output_root}/model-epoch-{epoch + 1}.eqx"
         model_sha256 = upload_model(model, model_url)

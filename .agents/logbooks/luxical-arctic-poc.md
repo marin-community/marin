@@ -764,3 +764,47 @@ uv run iris --cluster=marin job run --no-wait \
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-arctic-l-v2.0-v2/report.json`.
 - HTML artifact:
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-arctic-l-v2.0-v2/report.html`.
+
+### FastTransformer student background and speed gate
+
+- Research effort: medium. The question was whether the quality-classifier
+  FastTransformer can replace the collapsing Luxical sparse student while it
+  keeps Luxical-class document throughput.
+- The treatment keeps the Arctic Medium v2.0 teacher, fixed 3M rows, nested
+  source-balanced ladder, 256-dimensional output, Gram-KL loss, temperature 3,
+  and the 74,752-row holdout. Only the student architecture and input treatment
+  change.
+- The reused FastTransformer body has mean/max/min local pooling, two layers,
+  four heads, and a normalized 256-dimensional output head. The scalar quality
+  head and MSE training path are not suitable for embedding distillation.
+- Prior quality-classifier work in [PR
+  #7191](https://github.com/marin-community/marin/pull/7191) measured high
+  accelerator throughput and found that input work can set the end-to-end
+  rate. [Issue #6850](https://github.com/marin-community/marin/issues/6850)
+  defines the code-collapse problem. [Issue
+  #6855](https://github.com/marin-community/marin/issues/6855) tracks this
+  Arctic-distillation POC. The Luxical objective comes from
+  [training.py](https://github.com/datologyai/luxical/blob/main/luxical/training.py).
+- The first treatment used three 160-token `multilingual-e5-small` windows and
+  512 model tokens. CPU throughput was 375.05 documents per second, versus
+  7,702.66 for stock Luxical. The ratio was 0.0487. Accelerator throughput was
+  376.07 documents per second. Equal CPU and accelerator rates identified the
+  tokenizer path as the limit.
+- The second treatment used `o200k_base` with the same three token windows.
+  CPU throughput increased to 3,540.27 documents per second, versus 8,831.43
+  for stock Luxical. The ratio was 0.4009. One B200-class worker reached
+  4,377.30 documents per second. This result still failed the 0.70 minimum.
+- The selected treatment reuses the pinned stock Luxical Rust
+  `ArrowTokenizer`. It forms one 256-token input from three 256-character
+  document regions. Its compact vocabulary has 30,524 rows. The full model has
+  9,653,760 parameters.
+- The selected CPU treatment reached 23,228.50 documents per second. Stock
+  Luxical reached 8,957.64 documents per second in the paired run. The ratio
+  was 2.5931. One B200-class worker reached 89,405.74 documents per second.
+  It passes the 0.70 minimum and 0.85 target speed gates.
+- Ranked hypothesis: the 64K rung will stay finite and unique because the
+  FastTransformer has no sparse 2M-feature bottleneck. Its source probe can
+  still fail because the 256-token input has less text than Luxical. Run the
+  fixed collapse and quality gates before 750K training.
+- Commits `3f806ec2b`, `5e136601a`, and `d62253c91` contain the model, ladder,
+  speed gate, and fixed evaluator.
