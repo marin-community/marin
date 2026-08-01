@@ -180,16 +180,22 @@ def test_grow_grug_depth_state_rejects_wrong_transition_checkpoint():
 
 
 def test_width_only_growth_allows_equal_source_and_target_depth():
+    source = _state((2,), step=7, offset=10)
+    fresh_target = _state((1, 1), step=0, offset=0)
     config = DepthGrowthConfig(
-        source_layers=48,
-        target_layers=48,
+        source_layers=2,
+        target_layers=2,
         width_expansion_factor=2,
         new_layer_initialization=NewLayerInitialization.IDENTITY_PREFIX,
-        expected_step=5120,
-        expected_data_offset=5120 * 256,
+        expected_step=7,
+        expected_data_offset=112,
     )
 
-    assert config.source_layers == config.target_layers
+    grown, report = grow_grug_depth_state(source, fresh_target, config)
+
+    grown_weights = jnp.concatenate([segment.stacked.weight for segment in grown.params.stacked_block_segments])
+    assert jnp.array_equal(grown_weights, source.params.stacked_block_segments[0].stacked.weight)
+    assert report.step == 7
 
     with pytest.raises(ValueError, match="must increase the layer count, width, or both"):
         DepthGrowthConfig(
