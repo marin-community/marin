@@ -122,6 +122,9 @@ class TelemetryTracker(Tracker):
 @dataclasses.dataclass
 class TelemetryConfig(TrackerConfig):
     def init(self, run_id: Optional[str]) -> Tracker:
-        attributes = {"run": run_id} if run_id is not None else None
-        runtime_telemetry.configure("levanter", attributes=attributes)
+        runtime_telemetry.configure(
+            "levanter",
+            role=runtime_telemetry.TelemetryRole.TRAINER,
+            root_run_uid=run_id,
+        )
         return TelemetryTracker()

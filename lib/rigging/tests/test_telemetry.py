@@ -136,7 +136,7 @@ def test_unconfigured_instruments_are_noops() -> None:
     telemetry.histogram("latency", unit="ms").record(1.5)
     telemetry.event("ready", {"worker": 3})
 
-    assert telemetry.runtime_status() == telemetry.TelemetryStatus(False, 0, 0, 0)
+    assert telemetry.runtime_status() == telemetry.TelemetryStatus(False, 0, 0, 0, 0, 0, 0, 0, None, 0.0)
 
 
 def test_invalid_configuration_stays_inert(caplog: pytest.LogCaptureFixture) -> None:
@@ -156,13 +156,19 @@ def test_retry_reuses_exact_batch_id_and_body(monkeypatch: pytest.MonkeyPatch) -
     telemetry.counter("requests", unit="request").add(2, attributes={"route": "/chat"})
 
     assert transport.accepted.wait(1)
+    status = telemetry.runtime_status()
     telemetry.shutdown(0.2)
-    assert len(transport.requests) == 3
-    assert len({request[2] for request in transport.requests}) == 1
-    assert len({request[1] for request in transport.requests}) == 1
+    delivery_requests = transport.requests
+    assert len(delivery_requests) == 3
+    assert len({request[2] for request in delivery_requests}) == 1
+    assert len({request[1] for request in delivery_requests}) == 1
     payload = json.loads(transport.requests[0][1])
     assert payload["batch_id"] == transport.requests[0][2]
     assert payload["records"][0]["value"] == 2
+    assert status.export_attempts == 3
+    assert status.export_failures == 2
+    assert status.export_retries == 2
+    assert status.last_success_time_seconds is not None
 
 
 def test_network_wait_never_runs_on_emitting_thread(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -227,6 +233,33 @@ def test_terminal_response_drops_batch_and_records_loss(monkeypatch: pytest.Monk
     status = telemetry.runtime_status()
     assert status.queued_records == 0
     assert status.lost_records == 1
+    assert status.rejected_records == 1
+
+
+def test_exporter_health_records_queue_loss_retry_and_freshness(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = RecordingTransport([error_outcome(requests.ConnectionError("offline")), status_outcome(200)])
+    configure(monkeypatch, transport, max_batch_records=20)
+    telemetry.counter("application_progress").add()
+    assert transport.accepted.wait(1)
+
+    status = telemetry.record_runtime_health()
+    deadline = time.monotonic() + 1
+    while telemetry.runtime_status().queued_records and time.monotonic() < deadline:
+        threading.Event().wait(0.001)
+
+    records = [record for request in transport.requests for record in json.loads(request[1])["records"]]
+    by_name = {record["name"]: record for record in records}
+    assert status.export_attempts == 2
+    assert status.export_failures == 1
+    assert status.export_retries == 1
+    assert by_name["telemetry_export_attempts"]["value"] == 2
+    assert by_name["telemetry_export_failures"]["value"] == 1
+    assert by_name["telemetry_export_retries"]["value"] == 1
+    assert by_name["progress_time_seconds"]["attributes"] == {
+        "progress_kind": "telemetry_export",
+        "source_kind": "gauge",
+        "source_temporality": "current_snapshot",
+    }
 
 
 def test_nonserializable_event_is_lost_without_escaping(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -5,7 +5,6 @@
 
 import atexit
 import enum
-import json
 import logging
 import math
 import threading
@@ -18,6 +17,21 @@ from typing import Any, Protocol
 
 import requests
 
+from rigging.telemetry_serialization import (
+    json_bytes as _json_bytes,
+)
+from rigging.telemetry_serialization import (
+    json_bytes_bounded as _json_bytes_bounded,
+)
+from rigging.telemetry_serialization import (
+    validate_attributes as _validate_attributes,
+)
+from rigging.telemetry_serialization import (
+    validate_event_body as _validate_event_body,
+)
+from rigging.telemetry_serialization import (
+    validate_string as _validate_string,
+)
 from rigging.timing import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
@@ -31,9 +45,6 @@ CUMULATIVE_SNAPSHOT = "cumulative_snapshot"
 _MAX_REQUEST_BYTES = 4 << 20
 _MAX_SHUTDOWN_TIMEOUT = 5.0
 _WARNING_INTERVAL = 60.0
-_MAX_ATTRIBUTES = 64
-_MAX_STRING_LENGTH = 4_096
-_MAX_EVENT_DEPTH = 32
 _EVENT_KIND = "event"
 
 
@@ -45,6 +56,12 @@ class TelemetryStatus:
     queued_records: int
     queued_bytes: int
     lost_records: int
+    export_attempts: int
+    export_failures: int
+    export_retries: int
+    rejected_records: int
+    last_success_time_seconds: float | None
+    oldest_queued_record_age_seconds: float
 
 
 @dataclass(frozen=True)
@@ -160,6 +177,12 @@ class _PendingBatch:
     record_bytes: int
 
 
+@dataclass(frozen=True)
+class _QueuedRecord:
+    body: bytes
+    enqueued_at: float
+
+
 class _DeliveryOutcome(enum.Enum):
     DELIVERED = enum.auto()
     REJECTED = enum.auto()
@@ -170,11 +193,17 @@ class _Runtime:
     def __init__(self, config: _Config, transport: _Transport) -> None:
         self.config = config
         self._transport = transport
-        self._records: deque[bytes] = deque()
+        self._records: deque[_QueuedRecord] = deque()
         self._condition = threading.Condition()
         self._resident_records = 0
         self._resident_bytes = 0
         self._lost_records = 0
+        self._export_attempts = 0
+        self._export_failures = 0
+        self._export_retries = 0
+        self._rejected_records = 0
+        self._last_success_time_seconds: float | None = None
+        self._oldest_queued_at: float | None = None
         self._stop = False
         self._thread = threading.Thread(target=self._run, name="rigging-telemetry", daemon=True)
         self._thread.start()
@@ -190,14 +219,31 @@ class _Runtime:
             ):
                 self._lost_records += 1
                 return
-            self._records.append(record)
+            queued = _QueuedRecord(record, time.monotonic())
+            self._records.append(queued)
+            if self._oldest_queued_at is None:
+                self._oldest_queued_at = queued.enqueued_at
             self._resident_records += 1
             self._resident_bytes += len(record)
             self._condition.notify()
 
     def status(self) -> TelemetryStatus:
         with self._condition:
-            return TelemetryStatus(True, self._resident_records, self._resident_bytes, self._lost_records)
+            oldest_age = 0.0
+            if self._oldest_queued_at is not None:
+                oldest_age = max(0.0, time.monotonic() - self._oldest_queued_at)
+            return TelemetryStatus(
+                True,
+                self._resident_records,
+                self._resident_bytes,
+                self._lost_records,
+                self._export_attempts,
+                self._export_failures,
+                self._export_retries,
+                self._rejected_records,
+                self._last_success_time_seconds,
+                oldest_age,
+            )
 
     def stop(self, timeout: float) -> None:
         with self._condition:
@@ -232,25 +278,26 @@ class _Runtime:
             if not self._records:
                 return None
             batch_id = str(uuid.uuid4())
-            selected: list[bytes] = []
+            selected: list[_QueuedRecord] = []
             body_size = self._empty_envelope_size()
             while self._records and len(selected) < self.config.max_batch_records:
                 record = self._records[0]
-                extra = len(record) + (1 if selected else 0)
+                extra = len(record.body) + (1 if selected else 0)
                 if selected and body_size + extra > self.config.max_batch_bytes:
                     break
                 if not selected and body_size + extra > self.config.max_batch_bytes:
                     self._records.popleft()
                     self._resident_records -= 1
-                    self._resident_bytes -= len(record)
+                    self._resident_bytes -= len(record.body)
                     self._lost_records += 1
                     continue
                 selected.append(self._records.popleft())
                 body_size += extra
             if not selected:
                 return None
-        body = self._batch_body(batch_id, selected)
-        return _PendingBatch(batch_id, body, len(selected), sum(map(len, selected)))
+        bodies = [record.body for record in selected]
+        body = self._batch_body(batch_id, bodies)
+        return _PendingBatch(batch_id, body, len(selected), sum(map(len, bodies)))
 
     def _batch_body(self, batch_id: str, records: list[bytes]) -> bytes:
         resource = _json_bytes({"attributes": self.config.attributes, "service": self.config.service})
@@ -279,7 +326,13 @@ class _Runtime:
             factor=2.0,
             jitter=0.1,
         )
+        attempt = 0
         while True:
+            attempt += 1
+            with self._condition:
+                self._export_attempts += 1
+                if attempt > 1:
+                    self._export_retries += 1
             try:
                 response = self._transport.post(
                     self.config.endpoint,
@@ -288,12 +341,19 @@ class _Runtime:
                     (self.config.connect_timeout, self.config.request_timeout),
                 )
                 if response.status_code == 200 and _valid_ack(response, batch.batch_id):
+                    with self._condition:
+                        self._last_success_time_seconds = time.time()
                     return _DeliveryOutcome.DELIVERED
+                with self._condition:
+                    self._export_failures += 1
                 if 400 <= response.status_code < 500 and response.status_code != 429:
+                    with self._condition:
+                        self._rejected_records += batch.record_count
                     _warn(f"telemetry batch rejected with HTTP {response.status_code}")
                     return _DeliveryOutcome.REJECTED
             except Exception:
-                pass
+                with self._condition:
+                    self._export_failures += 1
             if self._stopping():
                 return _DeliveryOutcome.STOPPED
             delay = backoff.next_interval()
@@ -306,6 +366,7 @@ class _Runtime:
             self._resident_bytes -= batch.record_bytes
             if lost:
                 self._lost_records += batch.record_count
+            self._oldest_queued_at = self._records[0].enqueued_at if self._records else None
 
     def _abandon_remaining(self) -> None:
         with self._condition:
@@ -314,6 +375,7 @@ class _Runtime:
             self._resident_records -= abandoned
             self._resident_bytes = 0
             self._lost_records += abandoned
+            self._oldest_queued_at = None
 
     def _stopping(self) -> bool:
         with self._condition:
@@ -421,7 +483,35 @@ def shutdown(timeout: float = 5.0) -> None:
 def runtime_status() -> TelemetryStatus:
     """Return a bounded snapshot of process-local queue and loss state."""
     runtime = _runtime
-    return runtime.status() if runtime is not None else TelemetryStatus(False, 0, 0, 0)
+    return runtime.status() if runtime is not None else TelemetryStatus(False, 0, 0, 0, 0, 0, 0, 0, None, 0.0)
+
+
+def record_runtime_health() -> TelemetryStatus:
+    """Publish one bounded snapshot of direct exporter loss and freshness."""
+    status = runtime_status()
+    if not status.configured:
+        return status
+    current = snapshot_attributes("gauge", CURRENT_SNAPSHOT)
+    gauge("queue_depth", unit="{record}").set(
+        status.queued_records,
+        attributes={**current, "queue_kind": "telemetry_export"},
+    )
+    gauge("telemetry_queue_bytes", unit="By").set(status.queued_bytes, attributes=current)
+    gauge("telemetry_lost_records", unit="{record}").set(status.lost_records, attributes=current)
+    gauge("telemetry_export_attempts", unit="{attempt}").set(status.export_attempts, attributes=current)
+    gauge("telemetry_export_failures", unit="{attempt}").set(status.export_failures, attributes=current)
+    gauge("telemetry_export_retries", unit="{attempt}").set(status.export_retries, attributes=current)
+    gauge("telemetry_rejected_records", unit="{record}").set(status.rejected_records, attributes=current)
+    gauge("telemetry_oldest_queued_age_seconds", unit="s").set(
+        status.oldest_queued_record_age_seconds,
+        attributes=current,
+    )
+    if status.last_success_time_seconds is not None:
+        gauge("progress_time_seconds", unit="s").set(
+            status.last_success_time_seconds,
+            attributes={**current, "progress_kind": "telemetry_export"},
+        )
+    return status
 
 
 def _emit(
@@ -463,102 +553,6 @@ def _emit(
     except Exception:
         with runtime._condition:
             runtime._lost_records += 1
-
-
-def _json_bytes(value: Any) -> bytes:
-    return json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True).encode()
-
-
-def _json_bytes_bounded(value: Any, limit: int) -> bytes:
-    encoded = bytearray()
-    encoder = json.JSONEncoder(allow_nan=False, separators=(",", ":"), sort_keys=True)
-    for chunk in encoder.iterencode(value):
-        chunk_bytes = chunk.encode()
-        if len(encoded) + len(chunk_bytes) > limit:
-            raise ValueError("encoded telemetry record exceeds the batch limit")
-        encoded.extend(chunk_bytes)
-    return bytes(encoded)
-
-
-def _validate_event_body(value: Any, budget: int) -> None:
-    if value is None:
-        raise ValueError("event body must not be None")
-
-    def consume(remaining: int, amount: int) -> int:
-        if amount > remaining:
-            raise ValueError("event body exceeds the record byte budget")
-        return remaining - amount
-
-    def string_size(item: Any, field: str, remaining: int, punctuation: int) -> int:
-        if not isinstance(item, str) or (field == "event body key" and not item):
-            raise ValueError(f"{field} must be a nonempty string")
-        if len(item) > _MAX_STRING_LENGTH:
-            raise ValueError(f"{field} exceeds {_MAX_STRING_LENGTH} bytes")
-        if len(item) + punctuation > remaining:
-            raise ValueError("event body exceeds the record byte budget")
-        encoded_size = len(item.encode())
-        if encoded_size > _MAX_STRING_LENGTH:
-            raise ValueError(f"{field} exceeds {_MAX_STRING_LENGTH} bytes")
-        return encoded_size + punctuation
-
-    def visit(item: Any, depth: int, remaining_nodes: int, remaining_bytes: int) -> tuple[int, int]:
-        if remaining_nodes <= 0:
-            raise ValueError("event body exceeds the record node budget")
-        if depth > _MAX_EVENT_DEPTH:
-            raise ValueError(f"event body exceeds JSON depth {_MAX_EVENT_DEPTH}")
-        remaining_nodes -= 1
-        if isinstance(item, str):
-            remaining_bytes = consume(remaining_bytes, string_size(item, "event body string", remaining_bytes, 2))
-        elif item is None:
-            remaining_bytes = consume(remaining_bytes, 4)
-        elif isinstance(item, bool):
-            remaining_bytes = consume(remaining_bytes, 5)
-        elif isinstance(item, int):
-            if not -(1 << 63) <= item <= (1 << 64) - 1:
-                raise ValueError("event body integer is outside serde_json's exact range")
-            remaining_bytes = consume(remaining_bytes, 20)
-        elif isinstance(item, float):
-            if not math.isfinite(item):
-                raise ValueError("event body numbers must be finite")
-            remaining_bytes = consume(remaining_bytes, 32)
-        elif isinstance(item, dict):
-            remaining_bytes = consume(remaining_bytes, 2)
-            for index, (key, child) in enumerate(item.items()):
-                if remaining_nodes <= 0:
-                    raise ValueError("event body exceeds the record node budget")
-                remaining_nodes -= 1
-                key_size = string_size(key, "event body key", remaining_bytes, 3 + bool(index))
-                remaining_bytes = consume(remaining_bytes, key_size)
-                remaining_nodes, remaining_bytes = visit(child, depth + 1, remaining_nodes, remaining_bytes)
-        elif isinstance(item, list | tuple):
-            remaining_bytes = consume(remaining_bytes, 2)
-            for index, child in enumerate(item):
-                if index:
-                    remaining_bytes = consume(remaining_bytes, 1)
-                remaining_nodes, remaining_bytes = visit(child, depth + 1, remaining_nodes, remaining_bytes)
-        else:
-            raise ValueError("event body must contain only JSON values")
-        return remaining_nodes, remaining_bytes
-
-    visit(value, 0, budget, budget)
-
-
-def _validate_string(value: str, field: str) -> None:
-    if (
-        not isinstance(value, str)
-        or not value
-        or len(value) > _MAX_STRING_LENGTH
-        or len(value.encode()) > _MAX_STRING_LENGTH
-    ):
-        raise ValueError(f"{field} must be a nonempty string of at most {_MAX_STRING_LENGTH} bytes")
-
-
-def _validate_attributes(attributes: Mapping[str, str]) -> None:
-    if len(attributes) > _MAX_ATTRIBUTES:
-        raise ValueError(f"attributes may contain at most {_MAX_ATTRIBUTES} entries")
-    for key, value in attributes.items():
-        _validate_string(key, "attribute key")
-        _validate_string(value, "attribute value")
 
 
 def _valid_ack(response: _Response, batch_id: str) -> bool:

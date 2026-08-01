@@ -77,12 +77,12 @@ class VllmMetricsForwarder:
 
     def poll_once(self) -> None:
         body = self._fetch(self._metrics_url)
-        if body is None:
-            return
-        try:
-            publish_vllm_families(parse_vllm_families(body))
-        except Exception:
-            logger.warning("vLLM metrics: could not parse or publish %s", self._metrics_url, exc_info=True)
+        if body is not None:
+            try:
+                publish_vllm_families(parse_vllm_families(body))
+            except Exception:
+                logger.warning("vLLM metrics: could not parse or publish %s", self._metrics_url, exc_info=True)
+        telemetry.record_runtime_health()
 
     def _run(self) -> None:
         self.poll_once()

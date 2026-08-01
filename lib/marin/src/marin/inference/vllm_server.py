@@ -918,6 +918,6 @@ def _start_vllm_native_server(
 
     # Now that the server answers, forward its /metrics (throughput, TTFT, queue depth) to
     # direct telemetry so it reaches Finelog. The metrics endpoint sits at the root, not under /v1.
-    runtime_telemetry.configure(VLLM_METRICS_SERVICE)
+    runtime_telemetry.configure(VLLM_METRICS_SERVICE, role=runtime_telemetry.TelemetryRole.INFERENCE)
     metrics_url = f"http://{host}:{resolved_port}/metrics"
     return dataclasses.replace(handle, metrics_forwarder=start_vllm_metrics_forwarding(metrics_url))
