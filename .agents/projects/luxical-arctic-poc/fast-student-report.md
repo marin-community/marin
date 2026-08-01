@@ -196,7 +196,7 @@ rank by the required 0.02. Do not confirm this treatment at 3M.
 - Accepted: require an absolute p05 recall gate before release.
 - Rejected: optimize completed manifest and survey jobs in this result pass.
   These changes cannot alter the saved artifacts.
-- Rejected: the fast-student path has 16 behavior tests, including a compiled
+- Rejected: the fast-student path has 17 behavior tests, including a compiled
   loss test and a real gradient update.
 - Accepted: remove the complete JSON copy from generated HTML. The separate
   JSON artifact is canonical.
