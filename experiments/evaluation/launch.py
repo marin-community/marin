@@ -94,12 +94,12 @@ def _launch_user() -> str:
 
 def _run_id(model_key: str, eval_key: str) -> str:
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    return f"{stamp}-{model_key}-{eval_key}-{uuid.uuid4().hex[:4]}"
+    return f"{stamp}-{model_key}-{eval_key}-{uuid.uuid4().hex[:8]}"
 
 
 def _group_id(model_key: str) -> str:
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    return f"{stamp}-{model_key}-{uuid.uuid4().hex[:4]}"
+    return f"{stamp}-{model_key}-{uuid.uuid4().hex[:8]}"
 
 
 def _capability_origin(cluster: str) -> str:
