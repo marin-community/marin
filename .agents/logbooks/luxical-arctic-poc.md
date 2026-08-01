@@ -952,3 +952,41 @@ uv run iris --cluster=marin job run --no-wait \
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-lfm2.5-embedding-350m/report.json`.
 - Qwen report:
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-qwen3-embedding-0.6b/report.json`.
+
+### Qwen size and dimension ladder
+
+- Commit `453e3be09` adds native 256-dimensional Qwen3 teacher candidates at
+  0.6B, 4B, and 8B. The exact 4B and 8B revisions are
+  `5cf2132abc99cad020ac570b19d031efec650f2b` and
+  `1d8ad4ca9b3dd8059ad90a75d4983776a23d44af`.
+- The first plan was to truncate the saved 1,024-dimensional document vectors.
+  This is not equal to native MRL inference because the artifact stores vectors
+  after three-window normalization and pooling. The ladder reruns each model,
+  truncates each window before normalization, and then pools the three windows.
+- Job `/rav/lux-teacher-qwen3-06b-256-h100-001` used one federated H100 and
+  interactive priority. It succeeded in 24 minutes 0.77 seconds with zero
+  failures and zero preemptions.
+- The 0.6B 256-dimensional teacher has overall macro-F1 0.63626, code 0.76200,
+  multilingual 0.77463, and standard 0.58256. It has 39 regular failures: 11
+  code, zero multilingual, and 28 standard sources.
+- The treatment reduces failures from 46 at 1,024 dimensions to 39. It loses
+  0.04039 overall macro-F1. Its multilingual delta from Luxical-One is
+  -0.02098, so it misses the fixed quality limit by 0.00098.
+- All vectors are finite. Exact and four-decimal uniqueness are 0.99976. The
+  failed gates are `regular_source_collapse` and `multilingual_macro_f1`.
+- Continue to the 4B 256-dimensional teacher. Run 8B only if 4B passes all
+  quality gates and reduces the best Qwen failure count by at least five, to at
+  most 34.
+- Report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-qwen3-embedding-0.6b-256/report.json`.
+- Exact command:
+
+```bash
+uv run iris --cluster=marin job run --no-wait \
+  --job-name lux-teacher-qwen3-06b-256-h100-001 \
+  --priority interactive --gpu H100 --enable-extra-resources \
+  --cpu 16 --memory 128GB --disk 128GB --timeout 14400 \
+  --sync-package marin-core --extra gpu --extra datakit \
+  -- python .agents/projects/luxical-arctic-poc/evaluate_teacher_candidate.py \
+  --candidate qwen3-embedding-0.6b-256
+```
