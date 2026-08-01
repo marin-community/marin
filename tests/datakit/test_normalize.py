@@ -231,6 +231,38 @@ def test_bare_mode_strips_extra_columns(tmp_path: Path, write_jsonl_gz):
     assert {r["text"] for r in results} == {"row a", "row b"}
 
 
+def test_drop_fields_removes_selected_columns_and_preserves_metadata(tmp_path: Path, write_jsonl_gz):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+
+    records = [
+        {
+            "identifier": "a",
+            "text": "row a",
+            "__index_level_0__": 0,
+            "open_type": "Open Science",
+        },
+        {
+            "identifier": "b",
+            "text": "row b",
+            "open_type": "Open Culture",
+        },
+    ]
+    write_jsonl_gz(input_dir / "data.jsonl.gz", records)
+
+    normalize_to_parquet(
+        input_path=str(input_dir),
+        output_path=str(output_dir),
+        id_field="identifier",
+        drop_fields=("__index_level_0__",),
+    )
+
+    results = _read_all_parquet(output_dir)
+    assert {record["source_id"] for record in results} == {"a", "b"}
+    assert {record["open_type"] for record in results} == {"Open Science", "Open Culture"}
+    assert all("__index_level_0__" not in record for record in results)
+
+
 def test_missing_id_field_silently_skipped(tmp_path: Path, write_jsonl_gz):
     """When id_field is absent from records, source_id is omitted (not an error)."""
     input_dir = tmp_path / "input"

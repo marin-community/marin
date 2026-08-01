@@ -20,8 +20,7 @@ from pathlib import Path
 
 import uvicorn
 from finelog.client import RemoteLogHandler
-from finelog.telltale import FinelogMetricSink
-from rigging import telltale
+from rigging import telemetry
 from rigging.filesystem import prefix_join
 from rigging.server_auth import IAP_ISSUER, IAP_PUBLIC_KEYS_URL, TokenVerifier
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
@@ -75,7 +74,7 @@ from iris.cluster.controller.federation_store import ControllerFederationStore, 
 from iris.cluster.controller.log_stack import LogStack
 from iris.cluster.controller.native_proxy import NativeProxy, NativeProxyStats
 from iris.cluster.controller.native_proxy_metrics import (
-    NativeProxyMetricsCollector,
+    NativeProxyTelemetry,
     install_native_proxy_metrics,
     uninstall_native_proxy_metrics,
 )
@@ -557,8 +556,7 @@ class Controller:
         self._pending_kicks_lock = threading.Lock()
         self._server: uvicorn.Server | None = None
         self._native_proxy = None
-        self._native_proxy_metrics: NativeProxyMetricsCollector | None = None
-        self._telltale_forwarding = False
+        self._native_proxy_metrics: NativeProxyTelemetry | None = None
         self._endpoint_service.subscribe_proxy_updates(self._publish_native_proxy_update)
         self._control_thread: ManagedThread | None = None
         self._prune_thread: ManagedThread | None = None
@@ -761,8 +759,12 @@ class Controller:
             self._dashboard.proxy_decision_secret,
             json.dumps(asdict(self._native_proxy_auth_config())),
         )
+        telemetry.configure(
+            endpoint=self._log_service_address.rstrip("/") + "/v1/telemetry",
+            service="iris-controller",
+            attributes={"role": "controller"},
+        )
         self._native_proxy_metrics = install_native_proxy_metrics(self._native_proxy)
-        self._telltale_forwarding = telltale.start_forwarding(FinelogMetricSink(self._log_service_address))
         self._replace_native_proxy_registry()
 
     def _publish_native_proxy_update(self, update: ProxyMappingDelta | ProxyRegistryReset) -> None:
@@ -863,8 +865,6 @@ class Controller:
             self._task_state_collector.close()
         self._federation.stop()
 
-        if self._telltale_forwarding:
-            telltale.stop_forwarding()
         if self._native_proxy_metrics is not None and self._native_proxy is not None:
             uninstall_native_proxy_metrics(self._native_proxy)
             self._native_proxy_metrics = None

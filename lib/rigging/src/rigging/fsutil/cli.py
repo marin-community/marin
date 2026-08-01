@@ -13,15 +13,21 @@ import shutil
 import sys
 
 import click
-from rich.console import Console
-from rich.table import Table
 
 from rigging.filesystem.buckets import MissingCredentials, filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
 from rigging.filesystem.s3_compat import s3_credentials, s3_endpoint
 from rigging.filesystem.storage_path import StoragePath
-from rigging.fsutil.listing import ROOT, Preview, list_entries, read_decompressed_preview, read_preview, total_size
-from rigging.fsutil.render import file_lines, format_size, print_entries
+from rigging.fsutil.listing import (
+    ROOT,
+    Entry,
+    Preview,
+    list_entries,
+    read_decompressed_preview,
+    read_preview,
+    total_size,
+)
+from rigging.fsutil.render import aligned_lines, file_lines, format_size, format_time, table_lines
 from rigging.fsutil.tui import run as run_browser
 
 logger = logging.getLogger(__name__)
@@ -29,8 +35,6 @@ logger = logging.getLogger(__name__)
 # Streaming chunk for cross-backend copies, which cannot use a filesystem's own
 # server-side copy.
 _COPY_CHUNK = 8 * 1024 * 1024
-
-console = Console()
 
 
 @click.group(invoke_without_command=True)
@@ -49,19 +53,16 @@ def cli(ctx: click.Context, verbose: bool) -> None:
 @cli.command()
 def buckets() -> None:
     """List the declared buckets and whether their backend is reachable."""
-    table = Table(box=None, pad_edge=False, header_style="bold")
-    table.add_column("bucket")
-    table.add_column("backend")
-    table.add_column("endpoint")
-    table.add_column("credentials")
+    rows = []
     for name, spec in sorted(data_buckets().items()):
         if spec.store == StoreType.GCS:
             endpoint, status = "-", "application default"
         else:
             endpoint = s3_endpoint(spec.store)
-            status = "set" if s3_credentials(spec.store) else "[red]missing[/red]"
-        table.add_row(name, str(spec.store), endpoint, status)
-    console.print(table)
+            status = "set" if s3_credentials(spec.store) else "missing"
+        rows.append([name, str(spec.store), endpoint, status])
+    for line in table_lines(["bucket", "backend", "endpoint", "credentials"], rows):
+        click.echo(line)
 
 
 @cli.command("ls")
@@ -69,7 +70,12 @@ def buckets() -> None:
 @click.option("-l", "--long", is_flag=True, help="Show size and modification time.")
 def list_command(url: str, long: bool) -> None:
     """List the immediate children of URL. With no URL, list the known buckets."""
-    print_entries(console, list_entries(url), long=long)
+    entries = list_entries(url)
+    if not long:
+        for entry in entries:
+            click.echo(f"{entry.name}/" if entry.is_dir else entry.name)
+        return
+    _print_long_entries(entries)
 
 
 @cli.command()
@@ -102,10 +108,8 @@ def stat(url: str) -> None:
     """Print an object's metadata as the backend reports it."""
     fs, path = filesystem_for(url)
     info = fs.info(path)
-    table = Table(box=None, pad_edge=False, show_header=False)
-    for key, value in sorted(info.items()):
-        table.add_row(str(key), str(value))
-    console.print(table)
+    for line in aligned_lines([[str(key), str(value)] for key, value in sorted(info.items())]):
+        click.echo(line)
 
 
 @cli.command()
@@ -157,6 +161,15 @@ def cp(src: str, dst: str, recursive: bool) -> None:
 def browse(url: str) -> None:
     """Open the interactive browser, starting at URL (default: the bucket list)."""
     run_browser(url)
+
+
+def _print_long_entries(entries: list[Entry]) -> None:
+    rows = []
+    for entry in entries:
+        name = f"{entry.name}/" if entry.is_dir else entry.name
+        rows.append([format_size(entry.size), format_time(entry.mtime), name])
+    for line in table_lines(["size", "modified", "name"], rows):
+        click.echo(line)
 
 
 def _read(url: str) -> bytes:

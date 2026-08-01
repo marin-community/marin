@@ -7,10 +7,10 @@ Loom worktree and runs as a Docker Compose application on the GCE host.
 
 ## Prerequisites
 
-Use the shared Marin state backend and KMS provider:
+`Pulumi.yaml` selects the shared Marin state backend. Select the production
+stack before deploying:
 
 ```sh
-pulumi login gs://marin-iac-state
 pulumi stack select marin-loom --cwd /path/to/marin/infra/loom
 ```
 

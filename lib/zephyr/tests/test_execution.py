@@ -10,7 +10,6 @@ import threading
 import time
 import uuid
 from concurrent.futures import Future
-from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -20,8 +19,7 @@ from conftest import _TEST_TASK_COST, _TEST_WORKER_AVAILABLE
 from fray.actor import ActorContext
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
-from prometheus_client import REGISTRY
-from rigging import telltale
+from rigging import telemetry
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import (
@@ -510,9 +508,21 @@ def test_progress_metric_resets_at_stage_start_and_advances_after_a_shard(coordi
     timestamps = iter((1_000.0, 1_010.0))
     monkeypatch.setattr(time, "time", lambda: next(timestamps, 1_010.0))
 
+    emitted = []
+
+    class Gauge:
+        def __init__(self, name):
+            self.name = name
+
+        def set(self, value, *, attributes=None):
+            if self.name == ZEPHYR_PROGRESS_TIME_METRIC:
+                emitted.append((value, attributes))
+
+    monkeypatch.setattr(telemetry, "gauge", lambda name, **kwargs: Gauge(name))
+    coordinator._execution_id = "run-1"
     coordinator._start_stage("test", 0, [task])
-    coordinator._publish_telltale()
-    assert REGISTRY.get_sample_value(ZEPHYR_PROGRESS_TIME_METRIC) == 1_000.0
+    coordinator._publish_telemetry()
+    assert emitted[-1][0] == 1_000.0
 
     coordinator.register_worker("worker-0", MagicMock())
     status, work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
@@ -525,19 +535,22 @@ def test_progress_metric_resets_at_stage_start_and_advances_after_a_shard(coordi
         TaskResult(shard=ListShard(refs=[])),
         CounterSnapshot.empty(),
     )
-    coordinator._publish_telltale()
-    assert REGISTRY.get_sample_value(ZEPHYR_PROGRESS_TIME_METRIC) == 1_010.0
+    coordinator._publish_telemetry()
+    assert emitted[-1][0] == 1_010.0
 
 
-def test_pipeline_progress_metric_includes_execution_identity(coordinator):
+def test_pipeline_progress_metric_includes_execution_identity(coordinator, monkeypatch):
     plan = compute_plan(Dataset.from_list([]))
     coordinator.run_pipeline(plan, "run-1")
-    coordinator._publish_telltale()
+    emitted = []
 
-    rows = telltale.scrape_metrics(telltale.MetricIdentity(job_id="/user/job"), datetime.now(UTC))
-    (progress,) = [row for row in rows if row.name == ZEPHYR_PROGRESS_TIME_METRIC]
-    assert progress.source == "zephyr"
-    assert progress.run == "run-1"
+    class Gauge:
+        def set(self, value, *, attributes=None):
+            emitted.append(attributes)
+
+    monkeypatch.setattr(telemetry, "gauge", lambda name, **kwargs: Gauge())
+    coordinator._publish_telemetry()
+    assert all(attributes["run"] == "run-1" for attributes in emitted)
 
 
 def test_disk_chunk_write_uses_unique_paths(tmp_path):

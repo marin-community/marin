@@ -35,6 +35,8 @@ dependencies = [
     "openai",
     "pandas>=2.0",
     "plotly",
+    # Parses native vLLM's source-specific Prometheus snapshots before direct telemetry export.
+    "prometheus-client>=0.24",
     "pyarrow>=23.0.0",
     "regex",
     "requests>=2.33.0",

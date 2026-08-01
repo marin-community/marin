@@ -66,6 +66,7 @@ def main() -> None:
             # The ingest loop lists GCS and upserts to Postgres between requests, so CPU must
             # stay allocated while idle.
             cpu_always_allocated=True,
+            cpu="1",
             env={
                 "RECORDS_PREFIXES": RECORDS_PREFIXES,
                 "EVAL_DB_INSTANCE": CLOUDSQL_INSTANCE,

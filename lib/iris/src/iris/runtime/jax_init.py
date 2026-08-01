@@ -28,7 +28,6 @@ from iris.hooks.multigpu import (
     IRIS_MULTIGPU_PROCESS_COUNT_ENV,
     IRIS_MULTIGPU_PROCESS_INDEX_ENV,
 )
-from iris.runtime import telltale
 
 logger = logging.getLogger(__name__)
 
@@ -270,9 +269,6 @@ def initialize_jax(
     # Configure the compilation cache before any compile happens, on every
     # distributed-init path below (TPU, single-task, or the endpoint dance).
     configure_jax_compilation_cache()
-
-    # Start the telltale server to report stats for training jobs.
-    telltale.start()
 
     # Idempotent: skip if jax.distributed has already been initialized. This
     # lets a caller that must touch JAX before levanter.initialize (e.g. via

@@ -26,7 +26,6 @@ import uvicorn
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
-from rigging import telltale
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from starlette.applications import Starlette
 from starlette.routing import Mount
@@ -150,7 +149,7 @@ class ActorServer:
         try:
             method, args, kwargs = self._resolve_method(request)
         except ConnectError as e:
-            error = actor_pb2.ActorError(error_type="NotFound", message=e.message)
+            error = actor_pb2.ActorError(error_type=e.code.value, message=e.message)
             return actor_pb2.ActorResponse(error=error)
 
         try:
@@ -232,7 +231,9 @@ class ActorServer:
         actor_name = request.actor_name or next(iter(self._actors), "")
         actor = self._actors.get(actor_name)
         if not actor:
-            raise ConnectError(Code.NOT_FOUND, f"Actor '{actor_name}' not found")
+            # The resolver can briefly return an endpoint from the previous
+            # attempt while a restarted actor registers its replacement.
+            raise ConnectError(Code.UNAVAILABLE, f"Actor '{actor_name}' not found")
         method = actor.methods.get(request.method_name)
         if not method:
             raise ConnectError(Code.NOT_FOUND, f"Method '{request.method_name}' not found on '{actor_name}'")
@@ -303,7 +304,7 @@ class ActorServer:
 
     def _create_app(self) -> Starlette:
         rpc_app = ActorServiceASGIApplication(service=self, compressions=IRIS_RPC_COMPRESSIONS)
-        return Starlette(routes=[*telltale.routes(), Mount(rpc_app.path, app=rpc_app)])
+        return Starlette(routes=[Mount(rpc_app.path, app=rpc_app)])
 
     def serve_background(self, port: int | None = None) -> int:
         """Start server in background thread.

@@ -128,3 +128,13 @@ def test_cat_reports_full_size_when_uncompressed_preview_is_truncated(tmp_path, 
 
     assert result.exit_code == 0, result.output
     assert result.stderr == "[truncated: read 4 B of 6 B]\n"
+
+
+def test_ls_long_renders_local_directory(tree):
+    result = CliRunner().invoke(cli, ["ls", "-l", str(tree)])
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert lines[0].split() == ["size", "modified", "name"]
+    assert any(line.endswith("b.txt") for line in lines)
+    assert any(line.endswith("sub/") for line in lines)
