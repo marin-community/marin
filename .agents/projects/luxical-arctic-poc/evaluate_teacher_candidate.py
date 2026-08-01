@@ -55,6 +55,7 @@ from luxical.training import dequantize_8bit_uniform_scalar_quantized
 from rigging.filesystem import atomic_rename
 from threadpoolctl import threadpool_limits
 from transformers import AutoModel, AutoTokenizer, PreTrainedTokenizerFast
+from transformers.models.lfm2.modeling_lfm2 import Lfm2ShortConv
 
 Pooling = Literal["cls", "last_token"]
 
@@ -125,6 +126,22 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 logger = logging.getLogger(__name__)
 
 
+def noncausal_shortconv_forward(
+    module: Lfm2ShortConv,
+    hidden_states: torch.Tensor,
+    past_key_values: Any = None,
+    attention_mask: torch.Tensor | None = None,
+    seq_idx: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Adapt the pinned bidirectional LFM convolution to the current interface."""
+    del seq_idx
+    return module.slow_forward(
+        hidden_states,
+        past_key_values=past_key_values,
+        attention_mask=attention_mask,
+    )
+
+
 class CandidateEmbedder:
     """Run one pinned alternative teacher on CUDA."""
 
@@ -149,6 +166,8 @@ class CandidateEmbedder:
             dtype=INFERENCE_DTYPE,
             attn_implementation=ATTENTION_IMPLEMENTATION,
         ).to("cuda")
+        if candidate.model_id.startswith("LiquidAI/LFM2.5-"):
+            Lfm2ShortConv.forward = noncausal_shortconv_forward
         self.model.eval()
         hidden_size = int(self.model.config.hidden_size)
         if hidden_size != CANDIDATE_DIMENSION:
