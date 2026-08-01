@@ -189,3 +189,13 @@ The first wave found no loss effect from fat-first versus fat-middle shared capa
 - Result: the artifact lowers with the production Datamix, optimizer horizon, mesh, and pilot telemetry. The 12 focused config contracts pass. No hardware result exists yet.
 - Interpretation: this is a source-capability and throughput gate, not a preregistered growth arm. Keeping 64 experts and top-4 routing answers the routing-cold-start objection; the larger selected experts preserve more per-token nonlinear capacity. A target and 1-2% deep-tail schedule are justified only if measured throughput materially exceeds WD1's 7.55x source rate.
 - Next action: launch on the released slice, require finite gradients, zero overflow, broad expert traffic, and measured throughput, then decide whether to implement a function-preserving target transition or move directly to sampled/factorized vocabulary-head work.
+
+### 2026-08-01 00:12 - CC16-012 success-gated sequential rollout
+
+- Hypothesis: the next wave can preserve the revised 16-GPU budget by reusing one four-node slice and refusing to cascade after a failed coordinator.
+- Commit Hash: `570da43fb3`.
+- Command: the local recovery record `scratch/20260801_sequential_rollout.zsh` waits for `/power/ccx-wd1-coord`, then submits `/power/ccx-wd2-source-pilot-coord`, waits for success, and submits `/power/ccx-c-short-coord`.
+- Config: WD1 remains the 95/5 `d1536/L1` to `d3072/L48` arm. WD2 is the 128-update `d768/L1/E64/top4` source throughput gate with wider selected experts. C-short is the 3,200-update full-depth strongman control. The three jobs cannot overlap on the new-wave slice.
+- Result: at 00:09 UTC, WD1 was healthy and synchronized at source step 2,280/6,080, loss 4.14, and a recent rate of 1.2-1.4 updates/s. No fatal, traceback, or resource-exhaustion lines were present. The success-gated handoff is waiting on WD1; WD2 and C-short have not been submitted yet.
+- Interpretation: the source is behaving normally, but setup and sustained-rate overhead may reduce WD1 below its 5.69x loop-only projection. WD2 is therefore a necessary measurement of whether the vocabulary/head and residual-stream costs can be pushed into the 10x-source regime without adding experts.
+- Next action: verify the step-6,080 growth transform and finite L48 updates, measure WD1 end-to-end allocation speed, then apply the WD2 throughput and routing gate before C-short admission.
