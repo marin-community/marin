@@ -155,23 +155,9 @@ def _execution_result_path(prefix: str, execution_id: str) -> str:
     return f"{prefix}/{execution_id}/results.pkl"
 
 
-def _execution_retain_path(prefix: str, execution_id: str) -> str:
-    """Return the storage-retention marker path for one execution."""
-    return f"{prefix}/{execution_id}/.retain"
-
-
-def _retain_execution(prefix: str, execution_id: str) -> None:
-    """Keep storage when an execution cannot drain its active tasks."""
-    StoragePath(_execution_retain_path(prefix, execution_id)).write_text("")
-
-
 def _cleanup_execution(prefix: str, execution_id: str) -> None:
     """Remove all chunk files for an execution."""
     exec_dir = StoragePath(f"{prefix}/{execution_id}")
-    if StoragePath(_execution_retain_path(prefix, execution_id)).exists():
-        logger.warning("Keeping %s because tasks can still use it", exec_dir)
-        return
-
     with log_time(f"Cleaning up execution directory {exec_dir}"):
         if exec_dir.exists():
             try:
@@ -325,6 +311,7 @@ class _PipelineExecution:
     done: bool = False
     finished: threading.Event = field(default_factory=threading.Event)
     terminal_error: Exception | None = None
+    storage_cleanup_safe: bool = False
 
     def start_stage(
         self,
@@ -361,13 +348,14 @@ class _PipelineExecution:
         self.stage_monotonic_start = time.monotonic()
         self.stage_done.clear()
 
-    def finish(self) -> None:
+    def finish(self, *, storage_cleanup_safe: bool) -> None:
         """Mark the execution done and release the state only a live run needs.
 
         Completed counters stay: the coordinator folds them into its totals
         before dropping the execution. Callers hold the coordinator lock.
         """
         self.done = True
+        self.storage_cleanup_safe = storage_cleanup_safe
         self.task_queue.clear()
         self.in_flight.clear()
         self.results = {}
@@ -1344,21 +1332,13 @@ class ZephyrCoordinator:
                 raise
             raise terminal_error from e
         finally:
-            if not self._drain_execution(run):
-                # A failed marker write costs orphan chunk files. Letting it
-                # leave this finally costs the execution's bookkeeping, which
-                # would hold a concurrency slot and report outstanding work for
-                # the life of the coordinator.
-                try:
-                    _retain_execution(self._chunk_prefix, execution_id)
-                except Exception as e:
-                    logger.warning("[%s] Could not mark storage retained: %s", execution_id, e)
+            storage_cleanup_safe = self._drain_execution(run)
             with self._lock:
-                run.finish()
+                run.finish(storage_cleanup_safe=storage_cleanup_safe)
                 run.finished.set()
 
     def release_execution(self, execution_id: str) -> None:
-        """Release terminal state after the driver receives its result."""
+        """Release terminal state and delete storage after all tasks drain."""
         with self._lock:
             run = self._executions.get(execution_id)
             if run is None:
@@ -1373,13 +1353,15 @@ class ZephyrCoordinator:
                 self._retired_counters = {key: entry for key, entry in merged.items() if key not in conflicted}
             self._executions.pop(execution_id, None)
 
+        if run.storage_cleanup_safe:
+            _cleanup_execution(self._chunk_prefix, execution_id)
+
     def _drain_execution(self, run: _PipelineExecution, timeout: float = 300.0) -> bool:
         """Stop dispatching for this execution and wait for its tasks to retire.
 
-        The driver deletes the execution's storage as soon as ``run_pipeline``
-        returns. A task still running then loses the shared data underneath it,
-        or writes chunk files nothing will clean up. Draining first makes that
-        deletion safe.
+        ``release_execution`` deletes the execution's storage only when this
+        drain completed. A task still running would lose its shared data or
+        write chunk files after cleanup.
 
         Reports that arrive during the drain are recorded normally. ``pull_task``
         stops handing this execution out because its queue is cleared here.
@@ -1405,7 +1387,7 @@ class ZephyrCoordinator:
         with self._lock:
             stragglers = sorted(run.in_flight)
         logger.warning(
-            "[%s] %d task(s) still in flight after %.0fs. Keeping this execution's storage: %s",
+            "[%s] %d task(s) still in flight after %.0fs; keeping this execution's storage: %s",
             run.execution_id,
             len(stragglers),
             timeout,
@@ -2375,7 +2357,6 @@ class ZephyrContext:
             finally:
                 with suppress(Exception):
                     coordinator.release_execution.remote(execution_id).result(timeout=10.0)
-                _cleanup_execution(self.chunk_storage_prefix, execution_id)
 
         assert state is _ContextState.NEW
         last_exception: Exception | None = None
