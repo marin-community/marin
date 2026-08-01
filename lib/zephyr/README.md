@@ -75,7 +75,6 @@ try:
         num_actors=16,
         actor_resources=ResourceConfig(cpu=2, ram="8g"),
         actor_config=ActorConfig(max_task_retries=1_000),
-        max_actor_bytes=2_000_000_000,
         recovery_timeout=900,
     )
     result = ctx.execute(Dataset.from_list(document_keys).map(document_store.get))
@@ -89,13 +88,14 @@ does not insert a shuffle. Readers and shard-local maps can load directly.
 Persist and reload the output of a shuffle, join, reshard, reduce, or write
 before constructing a store.
 
-Keys must be unique and deterministically encodable by msgspec. Values and the
-hash function must be picklable; Python's salted `hash()` is not stable for
-string or byte keys. `max_actor_bytes` limits encoded key/value bytes, while
-`store.stats()` reports measured load time and size per actor. Iris reconstructs
-a preempted actor from the same source shards, and lookups wait for their owner
-up to `recovery_timeout`. Calling `shutdown()` on the creating context stops its
-stores.
+Keys must be hashable and unique. Keys, values, and the hash function must be
+picklable for remote calls; Python's salted `hash()` is not stable enough to
+serve as the partition function for string or byte keys. Actors retain the
+loaded Python objects directly, and `store.stats()` reports item counts and
+load time. Invalid input fails the load call without consuming actor restart
+retries. Iris reconstructs a preempted actor from the same source shards, and
+lookups wait for their owner up to `recovery_timeout`. Calling `shutdown()` on
+the creating context stops its stores.
 
 ## Real Usage
 

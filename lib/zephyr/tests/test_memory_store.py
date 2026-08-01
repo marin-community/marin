@@ -18,13 +18,12 @@ from fray.types import ActorConfig, ResourceConfig
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import SentinelFile
-from rigging.timing import Duration
+from rigging.timing import Duration, ExponentialBackoff
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
 from zephyr.memory_store import (
     DuplicateMemoryStoreKey,
     MemoryStore,
-    MemoryStoreCapacityError,
     MemoryStorePartitionError,
     MemoryStoreUnavailable,
 )
@@ -103,14 +102,13 @@ def _load_store(context: ZephyrContext, dataset: Dataset, *, hash_key=_key_parti
         num_actors=2,
         actor_resources=ResourceConfig(cpu=1, ram="256m"),
         actor_config=ActorConfig(max_concurrency=8, max_task_retries=1),
-        max_actor_bytes=1 << 20,
         recovery_timeout=recovery_timeout,
     )
 
 
 def test_memory_store_routes_existing_partitions_and_preserves_lookup_order(local_client, tmp_path):
     partitions = [
-        [((0, "a"), "zero-a"), ((0, "b"), "zero-b")],
+        [((0, "a"), "zero-a"), ((0, "b"), "zero-b"), ((0, "none"), None)],
         [((1, "a"), "one-a")],
         [((2, "a"), "two-a"), ((2, "b"), "two-b")],
         [((3, "a"), "three-a")],
@@ -127,13 +125,14 @@ def test_memory_store_routes_existing_partitions_and_preserves_lookup_order(loca
             "zero-b",
         ]
         assert store.get((1, "a")) == "one-a"
+        assert store.get((0, "none")) is None
         with pytest.raises(KeyError) as exc_info:
             store.get((1, "missing"))
         assert exc_info.value.args == ((1, "missing"),)
 
         stats = store.stats()
         assert [(stat.actor_index, stat.source_partitions, stat.num_items) for stat in stats] == [
-            (0, (0, 2), 4),
+            (0, (0, 2), 5),
             (1, (1, 3), 2),
         ]
 
@@ -144,6 +143,24 @@ def test_memory_store_rejects_hash_that_disagrees_with_existing_partition(local_
     with _store_context(local_client, tmp_path) as context:
         with pytest.raises(MemoryStorePartitionError):
             _load_store(context, dataset, hash_key=_wrong_key_partition)
+
+
+@pytest.mark.requires_cluster
+def test_memory_store_invalid_input_does_not_consume_actor_retries(iris_integration_client, tmp_path):
+    dataset = Dataset.from_list([[((0, "a"), "value")], [((1, "b"), "value")]]).flat_map(_partition_rows)
+
+    with _store_context(iris_integration_client, tmp_path) as context:
+        with pytest.raises(MemoryStorePartitionError):
+            context.load_memory_store(
+                dataset,
+                name="invalid-partition",
+                hash_key=_wrong_key_partition,
+                num_actors=2,
+                actor_resources=ResourceConfig(cpu=1, ram="256m"),
+                actor_config=ActorConfig(max_concurrency=8, max_task_retries=1_000),
+                recovery_timeout=10,
+                ready_timeout=45,
+            )
 
 
 def test_memory_store_rejects_duplicate_key(local_client, tmp_path):
@@ -158,24 +175,6 @@ def test_memory_store_rejects_duplicate_key(local_client, tmp_path):
                 num_actors=1,
                 actor_resources=ResourceConfig(cpu=1, ram="256m"),
                 actor_config=ActorConfig(max_concurrency=8, max_task_retries=10),
-                max_actor_bytes=1 << 20,
-                recovery_timeout=10,
-            )
-
-
-def test_memory_store_rejects_actor_payload_over_budget(local_client, tmp_path):
-    dataset = Dataset.from_list([((0, "large"), "value")])
-
-    with _store_context(local_client, tmp_path) as context:
-        with pytest.raises(MemoryStoreCapacityError):
-            context.load_memory_store(
-                dataset,
-                name="over-budget",
-                hash_key=_key_partition,
-                num_actors=1,
-                actor_resources=ResourceConfig(cpu=1, ram="256m"),
-                actor_config=ActorConfig(max_concurrency=8, max_task_retries=1),
-                max_actor_bytes=1,
                 recovery_timeout=10,
             )
 
@@ -208,6 +207,7 @@ def test_memory_store_pickle_round_trip_works_in_later_pipelines(local_client, t
     assert second_result.results == ["text-1-a", "text-2-b", "text-0-a", "text-3-b"]
 
 
+@pytest.mark.requires_cluster
 def test_memory_store_loads_and_serves_through_actor_backend(integration_client, tmp_path):
     dataset = Dataset.from_list(
         [
@@ -227,11 +227,10 @@ def test_memory_store_loads_and_serves_through_actor_backend(integration_client,
 
 
 def test_memory_store_retries_only_actor_unavailability():
-    encoded_value = cloudpickle.dumps("value")
     recovering_actor = _SequencedActor(
         [
             _TestActorFuture(error=ActorUnavailableError("restarting")),
-            _TestActorFuture(value=[encoded_value]),
+            _TestActorFuture(value=[(True, "value")]),
         ]
     )
     recovering_store = MemoryStore(
@@ -282,7 +281,6 @@ def test_context_shutdown_makes_store_unavailable(local_client, tmp_path):
             num_actors=1,
             actor_resources=ResourceConfig(cpu=1, ram="256m"),
             actor_config=ActorConfig(max_concurrency=8, max_task_retries=1),
-            max_actor_bytes=1 << 20,
             recovery_timeout=0.01,
         )
         assert store.get((0, "a")) == "value"
@@ -291,6 +289,7 @@ def test_context_shutdown_makes_store_unavailable(local_client, tmp_path):
         store.get((0, "a"))
 
 
+@pytest.mark.requires_cluster
 def test_memory_store_recovers_partition_after_iris_preemption(iris_integration_client, tmp_path):
     gate_reload = SentinelFile(str(tmp_path / "gate-reload"))
     reload_started = SentinelFile(str(tmp_path / "reload-started"))
@@ -318,8 +317,11 @@ def test_memory_store_recovers_partition_after_iris_preemption(iris_integration_
         )
         assert kick_result.queued
 
-        reload_started.wait(timeout=Duration.from_seconds(15))
-        assert iris_integration_client._iris.task_status(task_id).current_attempt_id > initial_attempt
+        restarted = ExponentialBackoff(initial=0.1, maximum=1).wait_until(
+            lambda: iris_integration_client._iris.task_status(task_id).current_attempt_id > initial_attempt,
+            timeout=Duration.from_seconds(15),
+        )
+        assert restarted
 
         lookup_started = threading.Event()
 
@@ -332,6 +334,7 @@ def test_memory_store_recovers_partition_after_iris_preemption(iris_integration_
             lookup = executor.submit(caller_context.run, lookup_during_reload)
             try:
                 assert lookup_started.wait(timeout=5)
+                reload_started.wait(timeout=Duration.from_seconds(15))
                 assert not lookup.done()
             finally:
                 release_reload.signal()
@@ -354,6 +357,5 @@ def test_memory_store_rejects_pipeline_with_shuffle(local_client, tmp_path):
                 num_actors=1,
                 actor_resources=ResourceConfig(cpu=1, ram="256m"),
                 actor_config=ActorConfig(max_concurrency=8, max_task_retries=10),
-                max_actor_bytes=1 << 20,
                 recovery_timeout=10,
             )
