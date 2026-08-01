@@ -662,7 +662,6 @@ def build_clustered_store(
         ds,
         verbose=True,
         map_task_resources=worker_resources,
-        reduce_task_resources=worker_resources,
     )
     subshard_stats = [r for r in outcome.results if r is not None]
     logger.info(

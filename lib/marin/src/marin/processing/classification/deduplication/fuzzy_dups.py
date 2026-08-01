@@ -299,13 +299,8 @@ def compute_fuzzy_dups_attrs(
     }
     if coordinator_resources is not None:
         ctx_kwargs["coordinator_resources"] = coordinator_resources
-    if map_task_resources is not None:
-        ctx_kwargs["map_task_resources"] = map_task_resources
-    if reduce_task_resources is not None:
-        ctx_kwargs["reduce_task_resources"] = reduce_task_resources
     ctx = zephyr_context or ZephyrContext(**ctx_kwargs)
     map_resources = map_task_resources or resources
-    reduce_resources = reduce_task_resources or map_resources
 
     # Cap shard count at max_parallelism. Each group reads its attr files
     # sequentially and emits bucket records; file_idx is preserved on the entry
@@ -324,7 +319,7 @@ def compute_fuzzy_dups_attrs(
         resume=cc_resume,
         num_reduce_shards=max_parallelism,
         map_task_resources=map_resources,
-        reduce_task_resources=reduce_resources,
+        reduce_task_resources=reduce_task_resources,
     )
     if not converged:
         # A non-converged CC is still deterministic and reproducible across
@@ -371,7 +366,7 @@ def compute_fuzzy_dups_attrs(
         shard_pipeline,
         verbose=True,
         map_task_resources=map_resources,
-        reduce_task_resources=reduce_resources,
+        reduce_task_resources=reduce_task_resources,
     )
     shard_results = outcome.results
     write_copartitioned_source_manifest(output_path=output_path, attr_dirs=attr_dirs)

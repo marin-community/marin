@@ -39,7 +39,6 @@ from zephyr.execution import (
     ZephyrContext,
     ZephyrCoordinator,
     ZephyrWorker,
-    _cleanup_execution,
 )
 from zephyr.plan import compute_plan
 from zephyr.shuffle import ListShard
@@ -96,44 +95,19 @@ def test_filter(zephyr_ctx):
 
 
 def test_propagates_user_counters(zephyr_ctx):
-    """User counters incremented inside a shard are visible in the execution result.
-
-    Uses a direct logging handler attachment (rather than ``caplog``) so the
-    test works whether or not pytest's logging plugin is enabled.
-    """
+    """User counters from shards are visible in the execution result."""
 
     def increment_per_item(x: int) -> int:
         counters.pipeline.update_counter("docs", 1)
         counters.pipeline.update_counter("doubled_sum", x * 2)
         return x
 
-    captured: list[str] = []
+    ds = Dataset.from_list([1, 2, 3, 4, 5]).map(increment_per_item)
+    outcome = zephyr_ctx.execute(ds)
 
-    class _Capture(logging.Handler):
-        def emit(self, record: logging.LogRecord) -> None:
-            captured.append(record.getMessage())
-
-    handler = _Capture(level=logging.INFO)
-    target_logger = logging.getLogger("zephyr.execution")
-    prior_level = target_logger.level
-    target_logger.addHandler(handler)
-    target_logger.setLevel(logging.INFO)
-    try:
-        ds = Dataset.from_list([1, 2, 3, 4, 5]).map(increment_per_item)
-        results = zephyr_ctx.execute(ds).results
-    finally:
-        target_logger.removeHandler(handler)
-        target_logger.setLevel(prior_level)
-
-    assert sorted(results) == [1, 2, 3, 4, 5]
-
-    # Coordinator logs the aggregated counters on shutdown. Look for the most
-    # recent "Final counters:" line and check the dict it printed.
-    final_lines = [m for m in captured if "Final counters:" in m]
-    assert final_lines, "coordinator did not log Final counters — counter plumbing is broken"
-    last = final_lines[-1]
-    assert "'docs': 5" in last, f"expected 'docs': 5 in {last!r}"
-    assert "'doubled_sum': 30" in last, f"expected 'doubled_sum': 30 in {last!r}"
+    assert sorted(outcome.results) == [1, 2, 3, 4, 5]
+    assert outcome.counters["docs"] == 5
+    assert outcome.counters["doubled_sum"] == 30
 
 
 def test_exception_preserves_user_frame(zephyr_ctx):
@@ -272,7 +246,6 @@ def test_shared_data_has_independent_thread_views(local_client, tmp_path):
         return ctx.execute(
             Dataset.from_list([None]).map(lambda _: zephyr_worker_ctx().get_shared("value")),
             map_task_resources=ResourceConfig(cpu=1, ram="256m"),
-            reduce_task_resources=ResourceConfig(cpu=1, ram="256m"),
         ).results
 
     with ctx, ThreadPoolExecutor(max_workers=2) as executor:
@@ -1178,8 +1151,8 @@ def test_wait_for_stage_resets_dead_timer_on_recovery(coordinator):
     assert run.completed_shards == 1
 
 
-def test_fresh_actors_per_execute(integration_client, tmp_path):
-    """Each execute() creates and tears down its own coordinator and workers."""
+def test_dedicated_context_can_execute_multiple_pipelines(integration_client, tmp_path):
+    """A dedicated context can execute more than one pipeline."""
     chunk_prefix = str(tmp_path / "chunks")
 
     zctx = ZephyrContext(
@@ -1193,21 +1166,9 @@ def test_fresh_actors_per_execute(integration_client, tmp_path):
     results = zctx.execute(ds).results
     assert sorted(results) == [2, 3, 4]
 
-    # After execute(): the one-shot pool is torn down
-    assert zctx._coordinator_group is None
-    assert zctx._coordinator_handle is None
-    assert zctx._worker_group is None
-    assert zctx._pipeline_id == 0
-
-    # Can execute again (creates a fresh pool)
     ds2 = Dataset.from_list([10, 20]).map(lambda x: x * 2)
     results2 = zctx.execute(ds2).results
     assert sorted(results2) == [20, 40]
-
-    assert zctx._coordinator_group is None
-    assert zctx._coordinator_handle is None
-    assert zctx._worker_group is None
-    assert zctx._pipeline_id == 1
 
 
 def test_fatal_errors_fail_fast(local_client, tmp_path):
@@ -1261,39 +1222,6 @@ def test_chunk_storage_with_join(integration_client, tmp_path):
     assert len(results) == 2
     assert results[0] == {"id": 1, "a": "x", "b": "p"}
     assert results[1] == {"id": 2, "a": "y", "b": "q"}
-
-
-def test_workers_capped_to_shard_count(local_client, tmp_path):
-    """When max_workers > num_shards, only num_shards workers are created."""
-    ds = Dataset.from_list([1, 2, 3])  # 3 shards
-    ctx = ZephyrContext(
-        client=local_client,
-        max_workers=10,
-        resources=ResourceConfig(cpu=1, ram="512m"),
-        chunk_storage_prefix=str(tmp_path / "chunks"),
-        name=f"test-execution-{uuid.uuid4().hex[:8]}",
-    )
-    results = ctx.execute(ds.map(lambda x: x * 2)).results
-    assert sorted(results) == [2, 4, 6]
-    # Everything torn down after execute; correct results prove workers
-    # were created and sized properly (min(10, 3) = 3)
-    assert ctx._pipeline_id == 0
-
-
-def test_pipeline_id_increments(local_client, tmp_path):
-    """Pipeline ID increments after each execute(), ensuring unique actor names."""
-    ctx = ZephyrContext(
-        client=local_client,
-        max_workers=10,
-        resources=ResourceConfig(cpu=1, ram="512m"),
-        chunk_storage_prefix=str(tmp_path / "chunks"),
-        name=f"test-execution-{uuid.uuid4().hex[:8]}",
-    )
-    ctx.execute(Dataset.from_list([1, 2]).map(lambda x: x))
-    assert ctx._pipeline_id == 0
-
-    ctx.execute(Dataset.from_list([1, 2, 3, 4, 5]).map(lambda x: x))
-    assert ctx._pipeline_id == 1
 
 
 def test_last_stage_deadlock_detected_when_worker_job_dies(coordinator):
@@ -1606,88 +1534,20 @@ def test_multi_stage_integration(integration_ctx):
     assert sorted(integration_ctx.execute(ds).results) == [6, 8, 10]
 
 
-def test_zephyr_context_only_resources_set_propagates_resources():
-    # 1. Propagate resources when only resources is set
-    ctx = ZephyrContext(resources=ResourceConfig(cpu=2, ram="4g"))
-    assert ctx.map_task_resources == ResourceConfig(cpu=2, ram="4g")
-    assert ctx.reduce_task_resources == ResourceConfig(cpu=2, ram="4g")
-
-
-def test_zephyr_context_map_task_resources_smaller_than_resources_propagates_correctly():
-    # 2. Both resources and map_task_resources can be set, but raises ValueError if resources is smaller
-    ctx = ZephyrContext(resources=ResourceConfig(cpu=2, ram="4g"), map_task_resources=ResourceConfig(cpu=1, ram="2g"))
-    assert ctx.map_task_resources == ResourceConfig(cpu=1, ram="2g")
-    assert ctx.reduce_task_resources == ResourceConfig(cpu=1, ram="2g")
-
-
-def test_zephyr_context_map_task_resources_larger_than_resources_raises_value_error():
-    with pytest.raises(ValueError, match="must be larger than or equal to"):
-        ZephyrContext(resources=ResourceConfig(cpu=2, ram="4g"), map_task_resources=ResourceConfig(cpu=3, ram="2g"))
-
-
-def test_zephyr_context_only_reduce_task_resources_set_raises_value_error():
-    # 3. Only reduce_task_resources raises ValueError
-    with pytest.raises(ValueError, match="Setting reduce_task_resources"):
-        ZephyrContext(resources=ResourceConfig(cpu=2, ram="4g"), reduce_task_resources=ResourceConfig(cpu=1))
-
-
-def test_zephyr_context_map_task_resources_without_resources_raises_value_error():
-    with pytest.raises(ValueError, match="Setting map_task_resources without setting resources"):
-        ZephyrContext(map_task_resources=ResourceConfig(cpu=3, ram="6g"))
-
-
-def test_zephyr_context_map_task_resources_propagates_to_reduce_resources():
-    # 4. map_task_resources propagates to reduce_task_resources when reduce is unset
-    ctx = ZephyrContext(resources=ResourceConfig(cpu=6, ram="12g"), map_task_resources=ResourceConfig(cpu=3, ram="6g"))
-    assert ctx.reduce_task_resources == ResourceConfig(cpu=3, ram="6g")
-
-
 def test_zephyr_context_custom_map_and_reduce_resources_executes_successfully(local_client):
     ctx = ZephyrContext(
         client=local_client,
         max_workers=2,
         resources=ResourceConfig(cpu=4, ram="8g", disk="8g"),
-        map_task_resources=ResourceConfig(cpu=1, ram="2g", disk="2g"),
-        reduce_task_resources=ResourceConfig(cpu=2, ram="4g", disk="4g"),
         name="test-resources-exec",
     )
     ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)
-    result = ctx.execute(ds)
+    result = ctx.execute(
+        ds,
+        map_task_resources=ResourceConfig(cpu=1, ram="2g", disk="2g"),
+        reduce_task_resources=ResourceConfig(cpu=2, ram="4g", disk="4g"),
+    )
     assert sorted(result.results) == [2, 4, 6]
-
-
-def test_zephyr_context_min_tasks_per_worker_from_packing_computes_expected_tighter_factor():
-    ctx = ZephyrContext(
-        resources=ResourceConfig(cpu=8, ram="16g", disk="16g"),
-        map_task_resources=ResourceConfig(cpu=2, ram="4g", disk="4g"),
-        reduce_task_resources=ResourceConfig(cpu=4, ram="8g", disk="8g"),
-    )
-    # map fits 4x, reduce fits 2x → min is 2
-    assert ctx.min_tasks_per_worker == 2
-
-
-def test_zephyr_context_mismatching_optional_parameters_raises_value_error():
-    # Setting mismatching optional parameters between map and reduce should raise ValueError
-    with pytest.raises(ValueError, match=r"Field 'preemptible' cannot differ"):
-        ZephyrContext(
-            resources=ResourceConfig(cpu=4, ram="8g"),
-            map_task_resources=ResourceConfig(cpu=1, preemptible=False),
-            reduce_task_resources=ResourceConfig(cpu=2, preemptible=True),
-        )
-
-    with pytest.raises(ValueError, match=r"Field 'image' cannot differ"):
-        ZephyrContext(
-            resources=ResourceConfig(cpu=4, ram="8g"),
-            map_task_resources=ResourceConfig(cpu=1, image="custom-image"),
-            reduce_task_resources=ResourceConfig(cpu=2, image=None),
-        )
-
-    # If optional parameters match, it should succeed
-    ZephyrContext(
-        resources=ResourceConfig(cpu=4, ram="8g", preemptible=False, image="custom-image"),
-        map_task_resources=ResourceConfig(cpu=1, preemptible=False, image="custom-image"),
-        reduce_task_resources=ResourceConfig(cpu=2, preemptible=False, image="custom-image"),
-    )
 
 
 def test_report_from_a_previous_stage_is_rejected(coordinator):
@@ -1812,13 +1672,3 @@ def test_undrained_execution_keeps_storage(coordinator, tmp_path):
 
     coordinator.release_execution(_TEST_EXECUTION_ID)
     assert shared_data.exists()
-
-
-def test_cleanup_removes_a_drained_execution(tmp_path):
-    prefix = str(tmp_path / "chunks")
-    exec_dir = Path(prefix) / "exec-1"
-    exec_dir.mkdir(parents=True)
-    (exec_dir / "chunk-0").write_text("output")
-
-    _cleanup_execution(prefix, "exec-1")
-    assert not exec_dir.exists()

@@ -589,7 +589,6 @@ def decon_to_parquet(
     outcome = ctx.execute(
         pipeline,
         map_task_resources=resources,
-        reduce_task_resources=resources,
     )
 
     return DeconAttributes(
@@ -1111,7 +1110,6 @@ def build_all_source_drop_sets(
     outcome = ctx.execute(
         pipeline,
         map_task_resources=resources,
-        reduce_task_resources=resources,
     )
     global_rows = list(outcome.results)
     global_output_dir = f"{output_path.rstrip('/')}/{_GLOBAL_DROP_SET_DIRECTORY}"

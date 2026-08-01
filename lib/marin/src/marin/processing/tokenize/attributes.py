@@ -177,7 +177,6 @@ def _process_split(
         pipeline,
         verbose=True,
         map_task_resources=config.worker_resources,
-        reduce_task_resources=config.worker_resources,
     )
     return split_dir, dict(outcome.counters)
 
