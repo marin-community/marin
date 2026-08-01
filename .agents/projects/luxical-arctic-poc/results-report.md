@@ -20,6 +20,75 @@ split, three clustering seeds, and paired source bootstrap intervals. All
 corrected artifacts use manifest SHA-256
 `4aea19379cb6b7414d80f0b72c868f239e9247c05c3a703a26b19a059599f211`.
 
+A direct teacher-size test does not support replacing Arctic Embed Medium
+v2.0 with Large v2.0. Large improves multilingual macro-F1 by 0.0078 relative
+to Medium, but the interval includes zero. Large is lower by 0.0074 overall,
+0.0110 on code, and 0.0103 on standard text. The overall, code, and standard
+intervals are fully negative.
+
+## Arctic teacher-size comparison
+
+The teacher-size test embeds the same 74,752 held-out documents with
+`Snowflake/snowflake-arctic-embed-l-v2.0` at revision
+`ac6544c8a46e00af67e330e85a9028c66b8cfd9a`. It keeps the Medium test's three
+document windows, 512-token window limit, 256-dimensional truncation, 8-bit
+quantization, probe split, clustering seeds, and gate limits.
+
+| Representation | Overall | Code | Name-matched multilingual | Standard |
+| --- | ---: | ---: | ---: | ---: |
+| Luxical-One | 0.61727 | 0.68089 | 0.79561 | 0.56887 |
+| Arctic Medium v2.0 | 0.66915 | 0.79995 | 0.72857 | 0.63070 |
+| Arctic Large v2.0 | 0.66171 | 0.78894 | 0.73634 | 0.62040 |
+
+Large minus Medium has these paired-source results:
+
+| Group | Macro-F1 delta | 95% interval |
+| --- | ---: | ---: |
+| Overall | -0.00743 | [-0.01200, -0.00300] |
+| Code | -0.01101 | [-0.01920, -0.00345] |
+| Name-matched multilingual | +0.00777 | [-0.00817, +0.02441] |
+| Standard | -0.01030 | [-0.01519, -0.00566] |
+
+Large passes six of eight direct gates. It fails the same two gates as Medium:
+`regular_source_collapse` and `multilingual_macro_f1`. Large trails
+Luxical-One multilingual macro-F1 by 0.05927. That paired-source interval is
+[-0.12500, +0.00438], and the point estimate exceeds the allowed 0.02 loss.
+
+All Large vectors are finite. Its exact and four-decimal unique fractions are
+both 0.999759. No regular source fails the rank or variance checks. The minimum
+Large-to-Luxical rank ratio is 1.02636, and the minimum variance ratio is
+1.51776.
+
+Forty-four of 143 regular sources fail the composite rule, compared with 60
+for Medium. The Large counts are 13 of 28 code, zero of 24 name-matched
+multilingual, and 31 of 91 standard sources. The overlapping reasons are 43
+cluster-concentration failures and one uniqueness failure.
+
+Large reduces per-source concentration failures, but its global code clusters
+are worse than Medium. Its largest code cluster share is 0.20752, compared
+with 0.17055 for Medium. Its effective code cluster count is 9.86327,
+compared with 11.14955. Its code source-cluster NMI is 0.50727, compared with
+0.52520.
+
+The Large embedding phase took 1,635.47 seconds on one GB200-class worker. It
+processed 45.71 documents per second. Each document uses three windows. This
+rate is not a student inference measurement and does not compare teacher
+throughput because the test reused the stored Medium vectors.
+
+The fixed source-name groups and 512-token window limit are inherited method
+limits. They remain fixed so this test changes only the teacher checkpoint.
+The result supports keeping Arctic Medium v2.0. Large does not fix the
+multilingual gate and reduces overall, code, and standard probe quality.
+
+Artifacts:
+
+- JSON:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-arctic-l-v2.0/report.json`
+- HTML:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-arctic-l-v2.0/report.html`
+- Evaluation job: `/rav/lux-arctic-large-teacher-v2-gb200-001`
+- Harness commit: `2dbef9c06`
+
 ## Goal
 
 This experiment tests if a Luxical student trained from Arctic teacher vectors
