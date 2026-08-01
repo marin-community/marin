@@ -16,7 +16,7 @@ author: rav
 
 ## Current TL;DR
 
-The branch starts at PR 7876 head `75d5c27e1`. No EP code or rack result exists on this branch yet.
+The branch starts at PR 7876 head `75d5c27e1`. The MHEP-001 ragged EP64 snapshot is `b0d20062a`. Its local checks pass. The first rack gate is pending.
 
 ## Baseline
 
@@ -159,3 +159,13 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Result: The branch fast-forwarded from main without a merge commit.
 - Interpretation: All later results can use PR 7876 as the exact source base.
 - Next action: Add the minimal ragged EP64 variant.
+
+### 2026-08-01 21:00 UTC - MHEP-001 local gate passed
+
+- Hypothesis: The copied EP64 variant lowers with the PR 7876 base and keeps Newton-Schulz output on the expert sharding.
+- Commit Hash: `b0d20062a`.
+- Commands: `./infra/pre-commit.py --changed-files --fix`; focused `uv run pytest`; `uv run pyrefly check`.
+- Config: Ragged all-to-all, EP64, batch 1024, 25 steps, no PGLE, and no fixed-capacity dispatch.
+- Result: Five focused checks passed. Pyrefly reported zero errors. The full Grug contract file has a separate existing failure in `experiments/grug/base/model.py:227` on the PR 7876 base.
+- Interpretation: Local checks support a rack launch. They do not establish accelerator correctness or MFU.
+- Next action: Run the 25-step MHEP-001 gate on one A08 NVL72 rack.
