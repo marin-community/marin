@@ -6,15 +6,20 @@
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.cli import experiment_main
+from marin.training.training import LevanterCheckpoint
 
-from experiments.grug.coupon_clipping.config import CouponClippingArm
 from experiments.grug.coupon_clipping.eval_launch import build_paloma_eval
-from experiments.grug.coupon_clipping.launch import build_coupon_clipping_checkpoint
+
+_CHECKPOINT = ArtifactStep.adopt(
+    "grug/coupon-clipping/adopted/cc16-c0-terminal",
+    "2026.08.01",
+    source="grug/coupon-clipping/cc16-c0-p0/dev",
+    kind=LevanterCheckpoint,
+)
 
 
 def build(*, version: str | None = None) -> ArtifactStep[Artifact]:
-    checkpoint = build_coupon_clipping_checkpoint(CouponClippingArm.C0_P0, version=version)
-    return build_paloma_eval(checkpoint, label="c0", version=version)
+    return build_paloma_eval(_CHECKPOINT, label="c0", version=version)
 
 
 if __name__ == "__main__":

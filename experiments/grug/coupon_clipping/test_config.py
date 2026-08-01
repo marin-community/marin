@@ -13,7 +13,7 @@ from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint
 
-from experiments.grug.coupon_clipping import launch
+from experiments.grug.coupon_clipping import launch, paloma_c0, paloma_c_short, paloma_wd1
 from experiments.grug.coupon_clipping.config import (
     AGGRESSIVE_DECAY_STEPS,
     AGGRESSIVE_GROWTH_CONFIG,
@@ -247,6 +247,23 @@ def test_paloma_eval_is_checkpoint_only_and_bounded(tmp_path):
     assert config.max_eval_batches == 3
     assert len(config.data.train_weights) == 16
     assert set(config.data.train_weights.values()) == {0.0}
+
+
+@pytest.mark.parametrize(
+    ("builder", "checkpoint_source"),
+    [
+        (paloma_wd1.build, "grug/coupon-clipping/ccx-wd1-d1536-l1-to-d3072-l48/dev"),
+        (paloma_c_short.build, "grug/coupon-clipping/ccx-c-short-l48-step3200/dev"),
+        (paloma_c0.build, "grug/coupon-clipping/cc16-c0-p0/dev"),
+    ],
+)
+def test_paloma_entrypoint_adopts_completed_checkpoint_without_training_dependencies(builder, checkpoint_source):
+    evaluation = builder(version="test-dev")
+    checkpoint = evaluation.deps[0]
+
+    assert checkpoint.adopt_source == checkpoint_source
+    assert checkpoint.artifact_type is LevanterCheckpoint
+    assert checkpoint.deps == ()
 
 
 @pytest.mark.parametrize(("eval_batch_size", "max_eval_batches"), [(0, 1), (1, 0)])
