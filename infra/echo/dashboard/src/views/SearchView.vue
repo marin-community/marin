@@ -50,6 +50,12 @@ function toggleDomain(domain: SearchDomain): void {
   selectedDomains.value = selectedDomains.value.includes(domain)
     ? selectedDomains.value.filter((candidate) => candidate !== domain)
     : [...selectedDomains.value, domain]
+  if (!selectedDomains.value.length) {
+    request?.abort()
+    results.value = []
+    loading.value = false
+    syncUrl()
+  }
 }
 
 function wikiPath(result: FederatedResult): string {
