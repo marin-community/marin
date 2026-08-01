@@ -68,8 +68,6 @@ class SweepSize:
     name: str
     hidden_dim: int
     num_layers: int
-    local_kv_heads: int
-    global_kv_heads: int
     batch_size: int
     nodes: int  # GPUS_PER_NODE GPUs each
 
@@ -77,14 +75,22 @@ class SweepSize:
 SWEEP_SIZES: dict[str, SweepSize] = {
     s.name: s
     for s in (
-        SweepSize("d512", 512, 6, 1, 1, 32, 1),
-        SweepSize("d768", 768, 8, 2, 1, 64, 1),
-        SweepSize("d1024", 1024, 12, 2, 1, 128, 1),
-        SweepSize("d1280", 1280, 14, 2, 2, 128, 2),
-        SweepSize("d1536", 1536, 16, 3, 2, 256, 4),
-        SweepSize("d2048", 2048, 18, 4, 2, 512, 4),
+        SweepSize("d512", 512, 6, 32, 1),
+        SweepSize("d768", 768, 8, 64, 1),
+        SweepSize("d1024", 1024, 12, 128, 1),
+        SweepSize("d1280", 1280, 14, 128, 2),
+        SweepSize("d1536", 1536, 16, 256, 4),
+        SweepSize("d2048", 2048, 18, 512, 4),
     )
 }
+
+
+def _kv_heads(hidden_dim: int) -> tuple[int, int]:
+    """Heterogeneous GQA that floors the KV ops: local layers keep 1/4 of the query heads, global
+    layers 1/8 (floored, min 1). Global always divides local at these widths, so max(local, global)
+    is the clean stored count."""
+    num_heads = hidden_dim // HEAD_DIM
+    return max(1, num_heads // 4), max(1, num_heads // 8)
 
 
 def _global_layer_count(num_layers: int) -> int:
@@ -97,10 +103,11 @@ def active_params(size: SweepSize) -> int:
     top-k routed experts, and the shared experts. Used to set the token budget."""
     d, layers = size.hidden_dim, size.num_layers
     intermediate = d // 2
+    local_kv, global_kv = _kv_heads(d)
     num_global = _global_layer_count(layers)
     num_local = layers - num_global
     qo = layers * 2 * d * d
-    kv = num_local * (2 * d * size.local_kv_heads * HEAD_DIM) + num_global * (2 * d * size.global_kv_heads * HEAD_DIM)
+    kv = num_local * (2 * d * local_kv * HEAD_DIM) + num_global * (2 * d * global_kv * HEAD_DIM)
     router = layers * d * NUM_EXPERTS
     routed = layers * NUM_EXPERTS_PER_TOKEN * 3 * d * intermediate
     shared = layers * NUM_SHARED_EXPERTS * 3 * d * intermediate
@@ -109,6 +116,7 @@ def active_params(size: SweepSize) -> int:
 
 def build_sweep_configs(size: SweepSize, *, num_train_steps: int, lr_mult: float):
     """The hero model at this sweep width plus its LR-scaled MuonH optimizer."""
+    local_kv, global_kv = _kv_heads(size.hidden_dim)
     model = GrugModelConfig(
         vocab_size=VOCAB_SIZE,
         hidden_dim=size.hidden_dim,
@@ -119,9 +127,9 @@ def build_sweep_configs(size: SweepSize, *, num_train_steps: int, lr_mult: float
         num_experts_per_token=NUM_EXPERTS_PER_TOKEN,
         num_layers=size.num_layers,
         num_heads=size.hidden_dim // HEAD_DIM,
-        num_kv_heads=max(size.local_kv_heads, size.global_kv_heads),
-        local_kv_heads=size.local_kv_heads,
-        global_kv_heads=size.global_kv_heads,
+        num_kv_heads=max(local_kv, global_kv),
+        local_kv_heads=local_kv,
+        global_kv_heads=global_kv,
         head_dim=HEAD_DIM,
         max_seq_len=SEQ_LEN,
         sliding_window=SLIDING_WINDOW,
