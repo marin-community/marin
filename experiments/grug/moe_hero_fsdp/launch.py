@@ -97,9 +97,8 @@ def build_hero_run(*, dp_racks: int, version: str | None = None) -> ArtifactStep
             mp=jmp.get_policy(HERO_MIXED_PRECISION),
             tracker=WandbConfig(
                 entity="marin-community",
-                project="rav_moe",
-                tags=["grug", "moe", "hero", "fsdp", "gb200", f"{dp_racks}rack"],
-                group=f"moe-hero-fsdp-{dp_racks}rack",
+                project="marin_moe",
+                tags=["grug", "moe", "hero", "fsdp", "gb200"],
                 name=run_id,
                 replicate_path=ctx.output_path,
             ),

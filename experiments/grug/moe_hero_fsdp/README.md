@@ -21,7 +21,7 @@ iris --cluster=marin job run --no-wait --enable-extra-resources \
   -- python -m experiments.grug.moe_hero_fsdp.launch --dp-racks "$DP_RACKS" --version dev --run
 ```
 
-W&B: `marin-community/rav_moe`, group `moe-hero-fsdp-${DP_RACKS}rack`, run name `$RUN_ID`.
+W&B: `marin-community/marin_moe`, run name `$RUN_ID`.
 
 ## Files
 
