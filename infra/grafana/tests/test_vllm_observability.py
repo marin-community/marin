@@ -81,8 +81,14 @@ def _database(rows: list[TelemetryRow]) -> duckdb.DuckDBPyConnection:
     return database
 
 
-def _query_rows(database: duckdb.DuckDBPyConnection, job: str = "/serve") -> list[dict]:
-    query = vllm_overview_query(VllmIdentityField.JOB_ID, job, START_MS, END_MS, BUCKET_MS)
+def _query_rows(
+    database: duckdb.DuckDBPyConnection,
+    job: str = "/serve",
+    start_ms: int = START_MS,
+    end_ms: int = END_MS,
+    bucket_ms: int = BUCKET_MS,
+) -> list[dict]:
+    query = vllm_overview_query(VllmIdentityField.JOB_ID, job, start_ms, end_ms, bucket_ms)
     result = database.execute(query.sql)
     columns = [description[0] for description in result.description]
     return [dict(zip(columns, values, strict=True)) for values in result.fetchall()]
@@ -219,6 +225,38 @@ def test_query_aggregates_request_and_kv_gauges_after_replica_bins(overview_rows
     assert (freshness["status"], freshness["value"], freshness["gap_seconds"]) == ("fresh", 15.0, 15.0)
 
 
+def test_query_reports_the_stalest_replica_and_bounded_replica_detail():
+    current = _attributes("current_snapshot")
+    records = [
+        _record("stale", "num_requests_running", 1, 105_000, current),
+        _record("stale", "num_requests_running", 1, 120_000, current),
+        _record("healthy", "num_requests_running", 1, 150_000, current),
+        _record("healthy", "num_requests_running", 1, 165_000, current),
+    ]
+    rows = _query_rows(_database(records))
+
+    summary = _one(rows, "freshness", "telemetry", "latest_sample_age")
+    assert (summary["status"], summary["value"], summary["series"]) == (
+        "stale_or_stopped",
+        60.0,
+        f"cw-a:vllm:{_resource('/serve', 'stale')}",
+    )
+    details = [row for row in rows if row["section"] == "freshness_detail"]
+    assert {(row["status"], row["series"]) for row in details} == {
+        ("stale_or_stopped", f"cw-a:vllm:{_resource('/serve', 'stale')}"),
+        ("fresh", f"cw-a:vllm:{_resource('/serve', 'healthy')}"),
+    }
+
+
+def test_query_caps_replica_freshness_detail():
+    current = _attributes("current_snapshot")
+    records = [_record(f"replica-{replica:03d}", "num_requests_running", 1, 165_000, current) for replica in range(130)]
+
+    rows = _query_rows(_database(records))
+
+    assert len([row for row in rows if row["section"] == "freshness_detail"]) == 128
+
+
 def test_query_derives_histogram_means_and_only_bounded_quantiles(overview_rows):
     assert _one(overview_rows, "latency", "ttft", "mean")["value"] == pytest.approx(0.875)
     assert _one(overview_rows, "latency", "ttft", "p50")["value"] == pytest.approx(0.5)
@@ -226,6 +264,41 @@ def test_query_derives_histogram_means_and_only_bounded_quantiles(overview_rows)
     assert _one(overview_rows, "latency", "tpot", "mean")["value"] == pytest.approx(0.1)
     assert _one(overview_rows, "latency", "queue", "mean")["value"] == pytest.approx(0.2)
     assert _one(overview_rows, "latency", "e2e", "mean")["value"] == pytest.approx(1.5)
+
+
+def test_query_discards_an_entire_histogram_sample_when_one_component_resets():
+    cumulative = _attributes("cumulative_snapshot")
+    rows = [
+        _record("a", "time_to_first_token_seconds_sum", 10, 105_000, cumulative),
+        _record("a", "time_to_first_token_seconds_count", 100, 105_000, cumulative),
+        _record("a", "time_to_first_token_seconds_bucket", 1, 105_000, _attributes("cumulative_snapshot", le="0.5")),
+        _record("a", "time_to_first_token_seconds_bucket", 100, 105_000, _attributes("cumulative_snapshot", le="+Inf")),
+        _record("a", "time_to_first_token_seconds_sum", 11, 135_000, cumulative),
+        _record("a", "time_to_first_token_seconds_count", 2, 135_000, cumulative),
+        _record("a", "time_to_first_token_seconds_bucket", 2, 135_000, _attributes("cumulative_snapshot", le="0.5")),
+        _record("a", "time_to_first_token_seconds_bucket", 2, 135_000, _attributes("cumulative_snapshot", le="+Inf")),
+    ]
+
+    result = _query_rows(_database(rows))
+
+    assert [row for row in result if row["section"] == "latency"] == []
+
+
+def test_query_discards_histogram_siblings_when_a_component_has_no_predecessor():
+    rows = _histogram_records("a", {105_000: (1, 2, 1, 1, 2), 135_000: (2, 4, 2, 3, 4)})
+    rows.append(
+        _record(
+            "a",
+            "time_to_first_token_seconds_bucket",
+            1,
+            135_000,
+            _attributes("cumulative_snapshot", le="2.0"),
+        )
+    )
+
+    result = _query_rows(_database(rows))
+
+    assert [row for row in result if row["section"] == "latency"] == []
 
 
 def test_query_groups_reset_aware_request_outcomes(overview_rows):
@@ -308,6 +381,33 @@ def test_query_quotes_identity_as_data():
     rows = _query_rows(database, job="job'quoted")
 
     assert _one(rows, "counter_total", "generated_tokens", "total")["value"] == pytest.approx(5)
+
+
+def test_query_uses_more_than_one_scrape_interval_for_predecessors():
+    cumulative = _attributes("cumulative_snapshot")
+    rows = _query_rows(
+        _database(
+            [
+                _record("a", "generation_tokens_total", 10, 88_000, cumulative),
+                _record("a", "generation_tokens_total", 15, 120_000, cumulative),
+            ]
+        )
+    )
+
+    assert _one(rows, "counter_total", "generated_tokens", "total")["value"] == pytest.approx(5)
+
+
+def test_query_computes_kv_peak_before_adaptive_bin_averaging():
+    current = _attributes("current_snapshot")
+    records = [
+        _record("a", "kv_cache_usage_perc", 1.0 if sample == 0 else 0.0, sample * 15_000, current)
+        for sample in range(56)
+    ]
+
+    rows = _query_rows(_database(records), start_ms=0, end_ms=VLLM_MAX_WINDOW_MS, bucket_ms=15_000)
+
+    assert _one(rows, "saturation_summary", "kv_cache_usage", "peak")["value"] == pytest.approx(1.0)
+    assert _one(rows, "saturation_summary", "kv_cache_usage", "average")["value"] == pytest.approx(1 / 56)
 
 
 def test_query_rejects_oversized_ranges_and_caps_bucket_count():

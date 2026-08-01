@@ -317,6 +317,7 @@ def test_inference_dashboard_uses_the_bounded_identity_endpoint():
     } == {
         "counter_total",
         "freshness",
+        "freshness_detail",
         "latency",
         "request_outcome",
         "saturation",

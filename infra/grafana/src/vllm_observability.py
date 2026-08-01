@@ -11,13 +11,16 @@ VLLM_MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 VLLM_MAX_POINTS = 720
 VLLM_MAX_RESULT_ROWS = 10_000
 VLLM_MIN_BUCKET_MS = 15_000
-VLLM_SNAPSHOT_LOOKBACK_MS = 15_000
-VLLM_FRESHNESS_THRESHOLD_MS = 3 * VLLM_SNAPSHOT_LOOKBACK_MS
+VLLM_SCRAPE_INTERVAL_MS = 15_000
+VLLM_SNAPSHOT_LOOKBACK_MS = 3 * VLLM_SCRAPE_INTERVAL_MS
+VLLM_FRESHNESS_THRESHOLD_MS = 3 * VLLM_SCRAPE_INTERVAL_MS
+VLLM_MAX_FRESHNESS_DETAILS = 128
 VLLM_MAX_IDENTITY_LENGTH = 512
 VLLM_OVERVIEW_SECTIONS = frozenset(
     {
         "counter_total",
         "freshness",
+        "freshness_detail",
         "latency",
         "request_outcome",
         "saturation",
@@ -103,6 +106,12 @@ def _histogram_component_mapping() -> tuple[tuple[str, str], ...]:
     )
 
 
+def _histogram_source_mapping() -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (f"{family}_{component}", family) for family, _ in _HISTOGRAM_FAMILIES for component in _HISTOGRAM_COMPONENTS
+    )
+
+
 def _validate_identity(identity: str) -> None:
     if not identity:
         raise ValueError("identity must not be empty")
@@ -144,6 +153,7 @@ def vllm_overview_query(
     histogram_names = _sql_values(_HISTOGRAM_NAMES)
     histogram_family = _case_for(_histogram_name_mapping(), "name")
     histogram_component = _case_for(_histogram_component_mapping(), "name")
+    histogram_source_family = _case_for(_histogram_source_mapping(), "name")
 
     sql = f"""
 WITH base AS (
@@ -223,21 +233,8 @@ WITH base AS (
     WHERE name IN ({token_counters}, {preemption_counters})
       AND delta IS NOT NULL
     GROUP BY 1
-), gauge_replica_bins AS (
-    SELECT {start_ms} + (timestamp_ms - {start_ms}) - (timestamp_ms - {start_ms}) % {bucket_ms} AS t,
-           name,
-           origin_cluster,
-           service,
-           resource_attributes_json,
-           attributes_json,
-           AVG(value) AS value
-    FROM base
-    WHERE timestamp_ms >= {start_ms}
-      AND name IN ({gauges})
-      AND json_get(attributes_json, 'source_temporality') = 'current_snapshot'
-    GROUP BY 1, 2, 3, 4, 5, 6
-), canonical_gauge_replica_bins AS (
-    SELECT t,
+), canonical_gauge_samples AS (
+    SELECT timestamp_ms,
            CASE
                WHEN name IN ('kv_cache_usage_perc', 'gpu_cache_usage_perc') THEN 'kv_cache_usage'
                ELSE name
@@ -247,7 +244,20 @@ WITH base AS (
            resource_attributes_json,
            attributes_json,
            value
-    FROM gauge_replica_bins
+    FROM base
+    WHERE timestamp_ms >= {start_ms}
+      AND name IN ({gauges})
+      AND json_get(attributes_json, 'source_temporality') = 'current_snapshot'
+), gauge_replica_bins AS (
+    SELECT {start_ms} + (timestamp_ms - {start_ms}) - (timestamp_ms - {start_ms}) % {bucket_ms} AS t,
+           name,
+           origin_cluster,
+           service,
+           resource_attributes_json,
+           attributes_json,
+           AVG(value) AS value
+    FROM canonical_gauge_samples
+    GROUP BY 1, 2, 3, 4, 5, 6
 ), canonical_gauge_bins AS (
     SELECT t,
            name,
@@ -255,29 +265,93 @@ WITH base AS (
                WHEN name = 'kv_cache_usage' THEN AVG(value)
                ELSE SUM(value)
            END AS value
-    FROM canonical_gauge_replica_bins
+    FROM gauge_replica_bins
     GROUP BY 1, 2
-), gauge_stats AS (
-    SELECT name, AVG(value) AS average, MAX(value) AS peak
-    FROM canonical_gauge_bins
+), raw_gauge_peaks AS (
+    SELECT name, MAX(value) AS peak
+    FROM canonical_gauge_samples
     GROUP BY 1
-), histogram_increments AS (
-    SELECT {histogram_family} AS family,
+), gauge_stats AS (
+    SELECT bins.name,
+           AVG(bins.value) AS average,
+           CASE WHEN bins.name = 'kv_cache_usage' THEN raw.peak ELSE MAX(bins.value) END AS peak
+    FROM canonical_gauge_bins AS bins
+    JOIN raw_gauge_peaks AS raw USING (name)
+    GROUP BY 1, raw.peak
+), histogram_component_samples AS (
+    SELECT origin_cluster,
+           service,
+           resource_attributes_json,
+           attributes_json,
+           timestamp_ms,
+           name,
+           {histogram_source_family} AS source_family,
+           {histogram_family} AS family,
            {histogram_component} AS component,
            json_get(attributes_json, 'le') AS upper_bound,
-           delta
-    FROM increments
+           CASE
+               WHEN previous_value IS NULL OR value < previous_value THEN NULL
+               ELSE value - previous_value
+           END AS delta,
+           CASE WHEN previous_value IS NULL OR value < previous_value THEN 1 ELSE 0 END AS invalid_component
+    FROM cumulative_samples
     WHERE name IN ({histogram_names})
-      AND delta IS NOT NULL
+), histogram_series AS (
+    SELECT DISTINCT origin_cluster,
+           service,
+           resource_attributes_json,
+           source_family,
+           name,
+           attributes_json
+    FROM histogram_component_samples
+), histogram_expected_series AS (
+    SELECT origin_cluster,
+           service,
+           resource_attributes_json,
+           source_family,
+           COUNT(*) AS expected_series
+    FROM histogram_series
+    GROUP BY 1, 2, 3, 4
+), histogram_sample_validity AS (
+    SELECT samples.origin_cluster,
+           samples.service,
+           samples.resource_attributes_json,
+           samples.source_family,
+           samples.timestamp_ms,
+           CASE
+               WHEN MAX(samples.invalid_component) = 1 OR COUNT(*) < MAX(expected.expected_series) THEN 0
+               ELSE 1
+           END AS valid_sample
+    FROM histogram_component_samples AS samples
+    JOIN histogram_expected_series AS expected
+      ON samples.origin_cluster = expected.origin_cluster
+     AND samples.service = expected.service
+     AND samples.resource_attributes_json = expected.resource_attributes_json
+     AND samples.source_family = expected.source_family
+    WHERE samples.timestamp_ms >= {start_ms}
+    GROUP BY 1, 2, 3, 4, 5
+), coherent_histogram_increments AS (
+    SELECT samples.family,
+           samples.component,
+           samples.upper_bound,
+           samples.delta
+    FROM histogram_component_samples AS samples
+    JOIN histogram_sample_validity AS validity
+      ON samples.origin_cluster = validity.origin_cluster
+     AND samples.service = validity.service
+     AND samples.resource_attributes_json = validity.resource_attributes_json
+     AND samples.source_family = validity.source_family
+     AND samples.timestamp_ms = validity.timestamp_ms
+    WHERE validity.valid_sample = 1
 ), histogram_means AS (
     SELECT family,
            SUM(CASE WHEN component = 'sum' THEN delta ELSE 0 END)
                / NULLIF(SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END), 0) AS mean
-    FROM histogram_increments
+    FROM coherent_histogram_increments
     GROUP BY 1
 ), histogram_buckets AS (
     SELECT family, upper_bound, SUM(delta) AS bucket_count
-    FROM histogram_increments
+    FROM coherent_histogram_increments
     WHERE component = 'bucket'
     GROUP BY 1, 2
 ), histogram_ranked_buckets AS (
@@ -330,7 +404,6 @@ WITH base AS (
 ), producer_samples AS (
     SELECT DISTINCT origin_cluster, service, resource_attributes_json, timestamp_ms
     FROM base
-    WHERE timestamp_ms >= {start_ms}
 ), producer_ordered AS (
     SELECT *,
            LAG(timestamp_ms) OVER (
@@ -338,11 +411,42 @@ WITH base AS (
                ORDER BY timestamp_ms
            ) AS previous_timestamp_ms
     FROM producer_samples
-), freshness AS (
-    SELECT MAX(timestamp_ms) AS latest_timestamp_ms,
-           COUNT(*) AS samples,
-           MAX(timestamp_ms - previous_timestamp_ms) / 1000.0 AS gap_seconds
+), producer_freshness_data AS (
+    SELECT origin_cluster,
+           service,
+           resource_attributes_json,
+           MAX(timestamp_ms) AS latest_timestamp_ms,
+           SUM(CASE WHEN timestamp_ms >= {start_ms} THEN 1 ELSE 0 END) AS samples,
+           MAX(CASE
+               WHEN timestamp_ms >= {start_ms} THEN timestamp_ms - previous_timestamp_ms
+           END) / 1000.0 AS gap_seconds
     FROM producer_ordered
+    GROUP BY 1, 2, 3
+), producer_freshness AS (
+    SELECT *,
+           CASE
+               WHEN {end_ms} - latest_timestamp_ms > {VLLM_FRESHNESS_THRESHOLD_MS} THEN 'stale_or_stopped'
+               WHEN gap_seconds * 1000 > {VLLM_FRESHNESS_THRESHOLD_MS} THEN 'export_or_scrape_gap'
+               ELSE 'fresh'
+           END AS freshness_status
+    FROM producer_freshness_data
+), ranked_freshness AS (
+    SELECT *,
+           ROW_NUMBER() OVER (
+               ORDER BY CASE freshness_status
+                            WHEN 'stale_or_stopped' THEN 3
+                            WHEN 'export_or_scrape_gap' THEN 2
+                            ELSE 1
+                        END DESC,
+                        {end_ms} - latest_timestamp_ms DESC,
+                        gap_seconds DESC,
+                        origin_cluster,
+                        service,
+                        resource_attributes_json
+           ) AS freshness_rank
+    FROM producer_freshness
+), freshness_summary AS (
+    SELECT * FROM ranked_freshness WHERE freshness_rank = 1
 ), output AS (
     SELECT t,
            'token_rate' AS section,
@@ -460,21 +564,42 @@ WITH base AS (
            'freshness',
            'telemetry',
            'latest_sample_age',
-           'telemetry',
-           CASE
-               WHEN latest_timestamp_ms IS NULL THEN NULL
-               ELSE ({end_ms} - latest_timestamp_ms) / 1000.0
-           END,
+           origin_cluster || ':' || service || ':' || resource_attributes_json,
+           ({end_ms} - latest_timestamp_ms) / 1000.0,
            's',
-           CASE
-               WHEN latest_timestamp_ms IS NULL THEN 'no_data'
-               WHEN {end_ms} - latest_timestamp_ms > {VLLM_FRESHNESS_THRESHOLD_MS} THEN 'stale_or_stopped'
-               WHEN gap_seconds * 1000 > {VLLM_FRESHNESS_THRESHOLD_MS} THEN 'export_or_scrape_gap'
-               ELSE 'fresh'
-           END,
+           freshness_status,
            CAST(samples AS BIGINT),
            gap_seconds
-    FROM freshness
+    FROM freshness_summary
+
+    UNION ALL
+
+    SELECT latest_timestamp_ms,
+           'freshness_detail',
+           'telemetry',
+           'latest_sample_age',
+           origin_cluster || ':' || service || ':' || resource_attributes_json,
+           ({end_ms} - latest_timestamp_ms) / 1000.0,
+           's',
+           freshness_status,
+           CAST(samples AS BIGINT),
+           gap_seconds
+    FROM ranked_freshness
+    WHERE freshness_rank <= {VLLM_MAX_FRESHNESS_DETAILS}
+
+    UNION ALL
+
+    SELECT CAST(NULL AS BIGINT),
+           'freshness',
+           'telemetry',
+           'latest_sample_age',
+           'telemetry',
+           CAST(NULL AS DOUBLE),
+           's',
+           'no_data',
+           CAST(0 AS BIGINT),
+           CAST(NULL AS DOUBLE)
+    WHERE NOT EXISTS (SELECT 1 FROM producer_freshness)
 )
 SELECT t, section, metric, stat, series, value, unit, status, samples, gap_seconds
 FROM output

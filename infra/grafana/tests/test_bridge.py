@@ -170,7 +170,7 @@ def test_vllm_overview_requires_identity_and_bounded_time_range():
 
 
 def test_vllm_overview_runs_one_capped_query_for_dashboard_views():
-    source = FakeSource(finelog_result(section=["freshness", "token_rate"], value=[15.0, 2.0]))
+    source = FakeSource(finelog_result(section=["freshness", "freshness_detail", "token_rate"], value=[15.0, 30.0, 2.0]))
     client = _client(source)
     params = {
         "identity_kind": "job_id",
@@ -182,10 +182,12 @@ def test_vllm_overview_runs_one_capped_query_for_dashboard_views():
 
     first = client.get("/finelog/marin/v1/vllm/overview", params={**params, "view": "freshness"})
     second = client.get("/finelog/marin/v1/vllm/overview", params={**params, "view": "token_rate"})
+    detail = client.get("/finelog/marin/v1/vllm/overview", params={**params, "view": "freshness_detail"})
 
     assert first.status_code == 200
     assert first.json() == [{"section": "freshness", "value": 15.0}]
     assert second.json() == [{"section": "token_rate", "value": 2.0}]
+    assert detail.json() == [{"section": "freshness_detail", "value": 30.0}]
     assert len(source.queries) == 1
     assert source.max_rows == [min(bridge_config().max_rows, VLLM_MAX_RESULT_ROWS)]
 

@@ -72,13 +72,25 @@ requires `identity_kind` (`job_id`, `root_run_uid`, or `execution_uid`),
 rejects ranges longer than seven days; clamps the bucket count to 720; and caps
 the Finelog response at 10,000 rows. The query reads only `service='vllm'`.
 Imported Prometheus cumulative snapshots keep origin, service, metric, resource
-attributes, and metric attributes separate through `LAG`, then discard
-reset-negative deltas. Native Rigging counter rows bypass `LAG` and sum their
-already-delta values. The response always includes a freshness row, so no data
-does not look like an empty successful panel. `telemetry_v1` currently lacks an
-ingest/export timestamp, so the row can identify an in-range sample gap or a
-range ending after the last producer timestamp but cannot assign that gap to
-the producer, direct exporter, or federation path.
+attributes, and metric attributes separate through `LAG`, using a 45-second
+predecessor scan while retaining the requested raw `timestamp_ms` bounds. The
+query discards reset-negative counter deltas. For histograms, a reset or missing
+predecessor in any stored bucket/count/sum component invalidates the complete
+origin/service/resource/family sample before mean or quantile aggregation.
+Native Rigging counter rows bypass `LAG` and sum their already-delta values.
+KV-cache average retains the binned, unweighted-replica semantics; KV-cache peak
+comes from raw current samples before adaptive bin averaging.
+
+Freshness is computed per full origin/service/resource identity. The summary is
+the worst replica, and the `freshness_detail` view returns up to 128 replicas in
+worst-first order with that identity in `series`, so a stopped producer cannot be
+hidden by a healthy peer. The response always includes a summary freshness row,
+so no data does not look like an empty successful panel. The bounded scan can
+only identify replicas observed in the requested window or its predecessor
+lookback. `telemetry_v1` currently lacks an ingest/export timestamp, so the rows
+can identify an in-range sample gap or a range ending after the last producer
+timestamp but cannot assign that gap to the producer, direct exporter, or
+federation path.
 
 `fleet_health` reads one row from `finelog-marin`'s `log` namespace and combines that
 result with the three CoreWeave mirror Deployments' HTTP-readiness state. A hub query

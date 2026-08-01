@@ -70,15 +70,15 @@
     {
       "id": 1,
       "type": "table",
-      "title": "Telemetry freshness",
-      "description": "Explicitly distinguishes no matching records, a range ending after the last sample, an in-range scrape/export gap, and continuous samples. Current telemetry_v1 records producer time but not ingest time, so producer and export gaps cannot yet be separated.",
+      "title": "Worst replica freshness",
+      "description": "Reports the stalest producer/resource identity, so a stopped replica cannot be hidden by a healthy peer. Explicitly distinguishes no matching records, a range ending after the last sample, an in-range scrape/export gap, and continuous samples.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "${cluster}"
       },
       "gridPos": {
         "h": 5,
-        "w": 24,
+        "w": 10,
         "x": 0,
         "y": 0
       },
@@ -125,6 +125,11 @@
           },
           "columns": [
             {
+              "selector": "series",
+              "text": "producer/resource",
+              "type": "string"
+            },
+            {
               "selector": "status",
               "text": "status",
               "type": "string"
@@ -147,6 +152,97 @@
             {
               "selector": "samples",
               "text": "replica samples",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "Replica freshness detail",
+      "description": "Worst-first freshness for up to 128 producer/resource identities observed in the bounded scan. Current telemetry_v1 records producer time but not ingest time, so producer and export gaps cannot yet be separated.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "${cluster}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 14,
+        "x": 10,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/v1/vllm/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "identity_kind",
+                "value": "${identity_kind}"
+              },
+              {
+                "key": "identity",
+                "value": "${identity}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "freshness_detail"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "series",
+              "text": "producer/resource",
+              "type": "string"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "string"
+            },
+            {
+              "selector": "t",
+              "text": "last sample",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "value",
+              "text": "age at range end (s)",
+              "type": "number"
+            },
+            {
+              "selector": "gap_seconds",
+              "text": "largest sample gap (s)",
+              "type": "number"
+            },
+            {
+              "selector": "samples",
+              "text": "samples",
               "type": "number"
             }
           ]
@@ -495,7 +591,7 @@
       "id": 6,
       "type": "table",
       "title": "Saturation average and peak",
-      "description": "Average and peak of the binned serve-wide request counts and unweighted replica KV-cache usage.",
+      "description": "Averages retain the binned serve-wide request-count and unweighted replica KV-cache semantics. KV-cache peak is the maximum raw replica sample, before adaptive time-bin averaging.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "${cluster}"
@@ -576,7 +672,7 @@
       "id": 7,
       "type": "table",
       "title": "Reset-aware latency evidence",
-      "description": "TTFT, TPOT/inter-token, queue, and end-to-end means from _sum/_count deltas plus p50/p90/p99 upper-bound estimates from bucket deltas. A null quantile means the stored finite buckets do not bound it.",
+      "description": "TTFT, TPOT/inter-token, queue, and end-to-end means from _sum/_count deltas plus p50/p90/p99 upper-bound estimates from bucket deltas. A reset or missing predecessor in any stored component invalidates the complete replica/family sample; a null quantile means the stored finite buckets do not bound it.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "${cluster}"
