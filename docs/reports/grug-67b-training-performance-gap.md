@@ -151,6 +151,10 @@ Black-only formatting to the evidence scripts. It does not change the executed
 benchmark logic, so the content-hashed native results retain their measured
 source revision `3b1000dc5`.
 
+The final report branch then merged Marin main `602a8ba93` after measurement.
+That integration is validated as source code below, but no benchmark result is
+relabeled: every result stays pinned to the source revision it executed.
+
 One-node Levanter preflights cannot fit this exact 8K state. The operational
 compiler proved a 109.82 GiB input/output floor on the one-node mesh; matched
 CE requested one contiguous 39.07 GiB buffer. The four-node mesh adds the
@@ -331,6 +335,11 @@ measurement freeze. Its branch and kernel evidence therefore stay out of every
 headline and matched-control table. [MarinSkyRL #249](https://github.com/marin-community/MarinSkyRL/pull/249)
 owns the separate MuonH prerequisite; this comparison keeps AdamW and does not
 attribute grouped-expert work to that PR.
+
+After the freeze, [Marin #7820](https://github.com/marin-community/marin/pull/7820)
+added a self-contained Levanter FSDP MoE hero for 64 GB200 GPUs. It neither runs
+this 32-H100 replay nor implements MarinSkyRL's grouped-expert/trainer-EP path,
+so it does not replace any row or roadmap gate in this report.
 
 ## Roadmap
 
