@@ -833,3 +833,9 @@ uv run iris --cluster=marin job run --no-wait \
   unchanged Gram-KL objective. The direct term makes a constant student costly
   for a diverse teacher. The Gram term continues to preserve pairwise
   geometry.
+- Hybrid 64K training completed all three epoch audits in 1 minute 11.68
+  seconds. It had no failures or preemptions.
+- The first fixed-holdout evaluation attempt stopped before it wrote metrics.
+  OpenBLAS used the host CPU count and exceeded its compiled thread table. The
+  fast-student evaluator now uses the same fixed eight-thread wrapper as the
+  existing Luxical evaluator.
