@@ -88,6 +88,7 @@ One-off analysis pages published to durable public hosting (see
 
 ## Training and Performance
 
+- [Grug 67B training performance: Levanter and MarinSkyRL](./grug-67b-training-performance-gap.md)
 - INT8 training in Levanter [![#620](https://img.shields.io/github/issues/detail/state/marin-community/marin/620)](https://github.com/marin-community/marin/issues/620)
     - [GitHub Issue #620](https://github.com/marin-community/marin/issues/620)
     - [WandB Report](https://wandb.ai/marin-community/marin/reports/620-Int8-Training--VmlldzoxMTQ4NTY4Mg?accessToken=opus2o11hqwefpfjv1ii6sfjduq0jrdfjho5raj6i0lvi41lkv0u1rj5ij4elyz7)
