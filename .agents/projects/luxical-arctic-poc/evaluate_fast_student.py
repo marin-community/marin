@@ -36,7 +36,7 @@ from evaluate_ladder import (
     pair_indices,
     read_json,
 )
-from fast_student import FastStudent, LUXICAL_TOKENIZER_NAME
+from fast_student import LUXICAL_TOKENIZER_NAME, FastStudent
 from huggingface_hub import hf_hub_download
 from ladder_config import MANIFEST_ROOT, SEED
 from luxical.embedder import Embedder
