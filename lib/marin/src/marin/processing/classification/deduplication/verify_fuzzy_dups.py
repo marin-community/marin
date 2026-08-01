@@ -449,20 +449,13 @@ def _local_verification_gate(
 
 
 @dataclass(frozen=True)
-class _PeekedRecordGroup:
+class _SplitRecordGroup:
     first: dict[str, Any]
-    second: dict[str, Any] | None
-    records: Iterator[dict[str, Any]]
+    remaining: Iterator[dict[str, Any]]
 
 
-def _peek_record_group(
-    records: Iterator[dict[str, Any]],
-) -> _PeekedRecordGroup:
-    """Return the first two records and an iterator that includes all records."""
-    first = next(records)
-    second = next(records, None)
-    all_records = chain((first,), () if second is None else (second,), records)
-    return _PeekedRecordGroup(first=first, second=second, records=all_records)
+def _split_record_group(records: Iterator[dict[str, Any]]) -> _SplitRecordGroup:
+    return _SplitRecordGroup(first=next(records), remaining=records)
 
 
 def _make_cluster_verifier(
@@ -531,23 +524,24 @@ def _make_cluster_verifier(
             counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/local_representative_chars", prepared.chars)
 
         for member_id, same_id_records in groupby(records_with_text, key=lambda record: record["id"]):
-            record_group = _peek_record_group(same_id_records)
+            record_group = _split_record_group(same_id_records)
             member = record_group.first
-            exact_group = member_id == canonical.id or record_group.second is not None
-            if exact_group:
-                expected_text = representative["text"] if member_id == canonical.id else member["text"]
-                for exact_record in record_group.records:
-                    cluster_size += 1
-                    if exact_record["is_cluster_canonical"]:
-                        raise ValueError(f"Cluster {group_key[1]!r} has more than one canonical member")
-                    if exact_record["text"] != expected_text:
-                        raise ValueError(f"Cluster {group_key[1]!r} has different text for content ID {member_id!r}")
-                    _record_document_decision(exact_record, "delegated_global_exact")
-                if member_id != canonical.id:
-                    add_local_representative(
-                        member,
-                        prepare_verification_text(member["text"], verification_params),
-                    )
+            canonical_id_group = member_id == canonical.id
+            if canonical_id_group:
+                exact_records = chain((member,), record_group.remaining)
+                expected_text = representative["text"]
+            else:
+                exact_records = record_group.remaining
+                expected_text = member["text"]
+
+            for exact_record in exact_records:
+                cluster_size += 1
+                if exact_record["is_cluster_canonical"]:
+                    raise ValueError(f"Cluster {group_key[1]!r} has more than one canonical member")
+                if exact_record["text"] != expected_text:
+                    raise ValueError(f"Cluster {group_key[1]!r} has different text for content ID {member_id!r}")
+                _record_document_decision(exact_record, "delegated_global_exact")
+            if canonical_id_group:
                 continue
 
             cluster_size += 1

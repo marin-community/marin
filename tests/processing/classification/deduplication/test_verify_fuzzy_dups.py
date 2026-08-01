@@ -829,7 +829,8 @@ def test_repeated_noncanonical_ids_stay_available_as_local_representatives(tmp_p
     assert [row["id"] for row in near_rows] == ["z-near"]
     assert near_rows[0]["dup_representative_id"] == "same"
     assert near_rows[0]["dup_representative_source_key"] == source_b_key
-    assert verified.counters["dedup/fuzzy/verification/decision/delegated_global_exact"] == 2
+    assert verified.counters["dedup/fuzzy/verification/decision/retained_no_match"] == 1
+    assert verified.counters["dedup/fuzzy/verification/decision/delegated_global_exact"] == 1
 
 
 def test_verifier_rejects_different_text_for_canonical_content_id(tmp_path, monkeypatch):

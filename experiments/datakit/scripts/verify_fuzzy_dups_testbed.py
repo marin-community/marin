@@ -14,6 +14,7 @@ import os
 from collections import Counter, defaultdict
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
+from enum import StrEnum
 from itertools import groupby
 from typing import Any, Protocol
 
@@ -89,6 +90,11 @@ VERIFIED_COLUMNS = (
     "dup_local_token_sequence_equal",
     "dup_local_char_jaccard",
 )
+
+
+class ReferenceComparisonMode(StrEnum):
+    EXACT = "exact"
+    REPORT = "report"
 
 
 @dataclass(frozen=True)
@@ -332,12 +338,9 @@ def inspect_verification(
 
         for member_id, same_id_iterator in groupby(ordered[1:], key=lambda member: member.id):
             same_id_members = list(same_id_iterator)
-            exact_group = member_id == canonical.id or len(same_id_members) > 1
-            if exact_group:
-                first_member = same_id_members[0]
-                expected_text = canonical.text if member_id == canonical.id else first_member.text
+            if member_id == canonical.id:
                 for member in same_id_members:
-                    if member.text != expected_text:
+                    if member.text != canonical.text:
                         raise AssertionError(f"Content ID {member.id!r} has different text")
                     marker_key = (member.source_key, member.id)
                     decisions["delegated_global_exact"] += 1
@@ -355,16 +358,29 @@ def inspect_verification(
                             "output_marker_present": False,
                         }
                     )
-                if member_id != canonical.id:
-                    local_representative_chars, _skip = _add_local_representative(
-                        first_member,
-                        retained,
-                        local_representative_chars,
-                        verified.local_representatives,
-                    )
                 continue
 
             member = same_id_members[0]
+            for exact_member in same_id_members[1:]:
+                if exact_member.text != member.text:
+                    raise AssertionError(f"Content ID {exact_member.id!r} has different text")
+                exact_marker_key = (exact_member.source_key, exact_member.id)
+                decisions["delegated_global_exact"] += 1
+                if exact_marker_key in actual_markers:
+                    raise AssertionError(f"Global exact member {exact_marker_key!r} has a fuzzy output marker")
+                member_reviews.append(
+                    {
+                        "member": {
+                            **asdict(exact_member),
+                            "text": exact_member.text[:TEXT_PREVIEW_CHARS],
+                            "text_chars": len(exact_member.text),
+                        },
+                        "decision": "delegated_global_exact",
+                        "attempts": [],
+                        "output_marker_present": False,
+                    }
+                )
+
             marker_key = (member.source_key, member.id)
             attempts = []
             comparison_count = 1
@@ -614,12 +630,19 @@ def main() -> None:
     parser.add_argument("--minhash-collection", help="Combined MinHash artifact paired with --candidate-artifact")
     parser.add_argument(
         "--reference-verified-prefix",
-        help="Optional verified artifact whose complete persisted output must match",
+        help="Optional verified artifact whose complete persisted output is compared",
     )
     parser.add_argument(
         "--expected-reference-markers",
         type=int,
         help="Optional nonnegative marker count required from --reference-verified-prefix",
+    )
+    parser.add_argument(
+        "--reference-comparison-mode",
+        type=ReferenceComparisonMode,
+        choices=ReferenceComparisonMode,
+        default=ReferenceComparisonMode.EXACT,
+        help="Fail on reference differences or report their counts for an intentional algorithm change",
     )
     parser.add_argument("--sources", default="all")
     parser.add_argument("--max-workers", type=int, default=DEFAULT_MAX_WORKERS)
@@ -642,6 +665,8 @@ def main() -> None:
         raise ValueError("--expected-reference-markers must be nonnegative")
     if args.expected_reference_markers is not None and not args.reference_verified_prefix:
         raise ValueError("--expected-reference-markers requires --reference-verified-prefix")
+    if args.reference_comparison_mode is ReferenceComparisonMode.REPORT and not args.reference_verified_prefix:
+        raise ValueError("--reference-comparison-mode=report requires --reference-verified-prefix")
     if bool(args.candidate_artifact) != bool(args.minhash_collection):
         raise ValueError("--candidate-artifact and --minhash-collection must be provided together")
 
@@ -750,11 +775,17 @@ def main() -> None:
                 for key in actual_markers.keys() & reference_markers.keys()
                 if actual_markers[key] != reference_markers[key]
             )
-            raise AssertionError(
+            comparison_summary = (
                 "Verified marker set differs from reference: "
-                f"unexpected={unexpected[:20]!r}, missing={missing[:20]!r}, changed={changed[:20]!r}"
+                f"unexpected={len(unexpected)} sample={unexpected[:20]!r}, "
+                f"missing={len(missing)} sample={missing[:20]!r}, "
+                f"changed={len(changed)} sample={changed[:20]!r}"
             )
-        logger.info("Verified output matches %d reference markers", len(actual_markers))
+            if args.reference_comparison_mode is ReferenceComparisonMode.EXACT:
+                raise AssertionError(comparison_summary)
+            logger.warning(comparison_summary)
+        else:
+            logger.info("Verified output matches %d reference markers", len(actual_markers))
 
     if args.inspection_limit:
         if minhash_steps is None:
