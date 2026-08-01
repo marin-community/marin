@@ -25,8 +25,10 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
+from levanter.data.text.datasets import ConcatDatasetComponent, DatasetComponent
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from marin.datakit.source_key import datakit_source_path
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import experiment_main
@@ -158,6 +160,16 @@ def build_sweep_configs(size: SweepSize, *, num_train_steps: int, lr_mult: float
     return model, optimizer
 
 
+def _root_component(component: DatasetComponent | ConcatDatasetComponent) -> DatasetComponent | ConcatDatasetComponent:
+    """Root a datakit component's relative cache_dir against MARIN_PREFIX (recursing into concat
+    children). Absolute paths -- e.g. the paloma/uncheatable caches -- pass through unchanged."""
+    if isinstance(component, ConcatDatasetComponent):
+        return dataclasses.replace(component, children={n: _root_component(c) for n, c in component.children.items()})
+    if component.cache_dir is not None:
+        return dataclasses.replace(component, cache_dir=datakit_source_path(component.cache_dir))
+    return component
+
+
 def build_sweep_run(*, version: str | None = None) -> ArtifactStep[HeroThroughputResult]:
     """Build one sweep run selected by SWEEP_SIZE / SWEEP_TOKEN_MULT / SWEEP_LR_MULT."""
     size = SWEEP_SIZES[os.environ["SWEEP_SIZE"]]
@@ -222,6 +234,9 @@ def build_sweep_run(*, version: str | None = None) -> ArtifactStep[HeroThroughpu
             max_seq_len=SEQ_LEN,
             enable_simulated_epoching=False,
             val_components=val_components,
+        )
+        data = dataclasses.replace(
+            data, components={name: _root_component(component) for name, component in data.components.items()}
         )
         return GrugRunConfig(
             model=model,
