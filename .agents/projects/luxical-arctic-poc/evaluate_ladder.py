@@ -495,7 +495,7 @@ def collapse_comparison(
     student: dict[str, Any],
     baseline: dict[str, Any],
 ) -> dict[str, Any]:
-    """Compare per-source student collapse metrics with Luxical-One."""
+    """Compare per-source candidate collapse metrics with a reference."""
     source_results = {}
     regular_failures = []
     ood_failures = []
@@ -574,7 +574,7 @@ def probe_uncertainty(student: dict[str, Any], baseline: dict[str, Any]) -> dict
 
 
 def representation_comparison(candidate: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]:
-    """Compare representation quality and collapse metrics with Luxical-One."""
+    """Compare representation quality and collapse metrics with a reference."""
     collapse = collapse_comparison(candidate["collapse"], baseline["collapse"])
     macro_f1_delta = candidate["probe"]["macro_f1"] - baseline["probe"]["macro_f1"]
     worst_recall_delta = candidate["probe"]["worst_source_recall"] - baseline["probe"]["worst_source_recall"]
