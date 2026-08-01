@@ -276,6 +276,7 @@ def compute_minhash_attrs_step(
     seed: int = 42,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
+    zephyr_context: ZephyrContext | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
     """Create a StepSpec that computes MinHash attrs from a normalize step."""
@@ -292,6 +293,7 @@ def compute_minhash_attrs_step(
             seed=seed,
             worker_resources=worker_resources,
             max_workers=max_workers,
+            zephyr_context=zephyr_context,
         ),
         hash_attrs={
             "artifact_version": MINHASH_ATTR_DATA_VERSION,

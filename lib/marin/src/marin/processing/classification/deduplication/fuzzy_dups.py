@@ -401,6 +401,7 @@ def compute_fuzzy_dups_attrs_step(
     max_parallelism: int,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
+    zephyr_context: ZephyrContext | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
     """Create a StepSpec that computes fuzzy duplicate attrs from ``MinHashAttrData`` step outputs."""
@@ -414,6 +415,7 @@ def compute_fuzzy_dups_attrs_step(
             max_parallelism=max_parallelism,
             worker_resources=worker_resources,
             coordinator_resources=coordinator_resources,
+            zephyr_context=zephyr_context,
         ),
         hash_attrs={"artifact_version": FUZZY_DUPS_ATTR_DATA_VERSION, "cc_max_iterations": cc_max_iterations},
         override_output_path=override_output_path,

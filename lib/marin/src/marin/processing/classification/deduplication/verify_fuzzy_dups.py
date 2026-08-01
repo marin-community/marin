@@ -7,19 +7,21 @@ import logging
 import os
 from collections import defaultdict
 from collections.abc import Iterator
+from contextlib import nullcontext
 from dataclasses import dataclass
 from enum import StrEnum
-from itertools import chain, groupby
+from itertools import batched, chain, groupby
 from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from fray.types import ResourceConfig
+from fray.types import ActorConfig, ResourceConfig
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem import StoragePath, prefix_join
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
+from zephyr.memory_store import MemoryStore
 from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
 
@@ -132,6 +134,33 @@ class VerificationShard:
     source_tag: str
 
 
+@dataclass(frozen=True)
+class FuzzyVerificationStoreConfig:
+    """Resources and lookup sizing for candidate-document memory stores."""
+
+    max_actors: int
+    actor_resources: ResourceConfig
+    actor_config: ActorConfig
+    max_actor_bytes: int
+    recovery_timeout: float
+    ready_timeout: float
+    lookup_batch_size: int
+
+    def __post_init__(self) -> None:
+        if self.max_actors < 1:
+            raise ValueError("max_actors must be at least 1")
+        if self.max_actor_bytes < 1:
+            raise ValueError("max_actor_bytes must be at least 1")
+        if self.recovery_timeout <= 0:
+            raise ValueError("recovery_timeout must be positive")
+        if self.ready_timeout <= 0:
+            raise ValueError("ready_timeout must be positive")
+        if self.lookup_batch_size < 1:
+            raise ValueError("lookup_batch_size must be at least 1")
+        if self.actor_config.max_task_retries is None or self.actor_config.max_task_retries < 1:
+            raise ValueError("actor_config.max_task_retries must be positive")
+
+
 _VERIFIED_DUPLICATE_SCHEMA = pa.schema(
     [
         pa.field("id", pa.string(), nullable=False),
@@ -172,8 +201,34 @@ def _rows(path: str, columns: list[str]) -> Iterator[dict[str, Any]]:
                 yield row
 
 
+def _candidate_documents(shards: list[VerificationShard]) -> Iterator[tuple[tuple[int, str], str]]:
+    """Join candidate IDs to normalized text without changing file partitions."""
+    for shard in shards:
+        if not StoragePath(shard.candidate_path).exists():
+            continue
+
+        candidates = iter(_rows(shard.candidate_path, ["id", "dup_cluster_id", "is_cluster_canonical"]))
+        candidate = next(candidates, None)
+        if candidate is None:
+            continue
+
+        normalized = iter(_rows(shard.normalized_path, ["id", "text"]))
+        source = next(normalized, None)
+        while candidate is not None:
+            while source is not None and source["id"] < candidate["id"]:
+                source = next(normalized, None)
+            if source is None or source["id"] != candidate["id"]:
+                raise ValueError(
+                    f"{shard.candidate_path} contains ID {candidate['id']!r} "
+                    f"that is absent from {shard.normalized_path}"
+                )
+            yield (shard.file_idx, candidate["id"]), source["text"] or ""
+            candidate = next(candidates, None)
+            source = next(normalized, None)
+
+
 def _joined_cluster_members(shards: list[VerificationShard]) -> Iterator[dict[str, Any]]:
-    """Join candidate attributes to normalized text and stored LSH buckets."""
+    """Join candidate attributes to stored LSH buckets, leaving text in the store."""
     for shard in shards:
         yield {"kind": "sentinel", "file_idx": shard.file_idx}
         if not StoragePath(shard.candidate_path).exists():
@@ -186,18 +241,9 @@ def _joined_cluster_members(shards: list[VerificationShard]) -> Iterator[dict[st
             counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/candidate_shards_empty", 1)
             continue
 
-        normalized = iter(_rows(shard.normalized_path, ["id", "text"]))
-        source = next(normalized, None)
         minhash_rows = iter(_rows(shard.minhash_path, ["id", "buckets"]))
         minhash = next(minhash_rows, None)
         while candidate is not None:
-            while source is not None and source["id"] < candidate["id"]:
-                source = next(normalized, None)
-            if source is None or source["id"] != candidate["id"]:
-                raise ValueError(
-                    f"{shard.candidate_path} contains ID {candidate['id']!r} "
-                    f"that is absent from {shard.normalized_path}"
-                )
             while minhash is not None and minhash["id"] < candidate["id"]:
                 minhash = next(minhash_rows, None)
             if minhash is None or minhash["id"] != candidate["id"]:
@@ -205,9 +251,7 @@ def _joined_cluster_members(shards: list[VerificationShard]) -> Iterator[dict[st
                     f"{shard.candidate_path} contains ID {candidate['id']!r} "
                     f"that is absent from {shard.minhash_path}"
                 )
-            text = source["text"] or ""
             counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/candidate_members", 1)
-            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/candidate_text_chars", len(text))
             yield {
                 "kind": "candidate",
                 "file_idx": shard.file_idx,
@@ -216,12 +260,28 @@ def _joined_cluster_members(shards: list[VerificationShard]) -> Iterator[dict[st
                 "id": candidate["id"],
                 "dup_cluster_id": str(candidate["dup_cluster_id"]),
                 "is_cluster_canonical": candidate["is_cluster_canonical"],
-                "text": text,
                 "buckets": tuple(sorted(set(minhash["buckets"] or []))),
             }
             candidate = next(candidates, None)
-            source = next(normalized, None)
             minhash = next(minhash_rows, None)
+
+
+def _document_partition(key: tuple[int, str]) -> int:
+    """Route a candidate document to its existing co-partitioned file index."""
+    return key[0]
+
+
+def _attach_document_text(
+    records: Iterator[dict[str, Any]],
+    document_store: MemoryStore[tuple[int, str], str],
+    lookup_batch_size: int,
+) -> Iterator[dict[str, Any]]:
+    """Fetch bounded text batches while preserving reducer record order."""
+    for record_batch in batched(records, lookup_batch_size):
+        texts = document_store.get_many([(record["file_idx"], record["id"]) for record in record_batch])
+        for record, text in zip(record_batch, texts, strict=True):
+            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/candidate_text_chars", len(text))
+            yield {**record, "text": text}
 
 
 def _cluster_key(record: dict[str, Any]) -> tuple[str, str]:
@@ -361,6 +421,8 @@ def _peek_record_group(
 def _make_cluster_verifier(
     verification_params: FuzzyVerificationParams,
     local_params: LocalRepresentativeParams,
+    document_store: MemoryStore[tuple[int, str], str],
+    lookup_batch_size: int,
 ):
     """Build a reducer that uses bounded, retained local representatives."""
 
@@ -372,7 +434,12 @@ def _make_cluster_verifier(
             yield {"kind": "sentinel", "file_idx": first["file_idx"], "id": ""}
             return
 
-        representative = first
+        records_with_text = _attach_document_text(
+            chain((first,), records),
+            document_store,
+            lookup_batch_size,
+        )
+        representative = next(records_with_text)
         if not representative["is_cluster_canonical"]:
             raise ValueError(f"Cluster {group_key[1]!r} has no canonical member")
         canonical = _RetainedRepresentative(
@@ -416,7 +483,7 @@ def _make_cluster_verifier(
             counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/local_representatives_added", 1)
             counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/local_representative_chars", prepared.chars)
 
-        for member_id, same_id_records in groupby(records, key=lambda record: record["id"]):
+        for member_id, same_id_records in groupby(records_with_text, key=lambda record: record["id"]):
             member, repeated_member, exact_records = _peek_record_group(same_id_records)
             exact_group = member_id == canonical.id or repeated_member is not None
             if exact_group:
@@ -641,10 +708,12 @@ def verify_fuzzy_dups(
     output_path: str,
     verification_params: FuzzyVerificationParams,
     local_representative_params: LocalRepresentativeParams,
+    store_config: FuzzyVerificationStoreConfig,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
     map_task_resources: ResourceConfig | None = None,
     reduce_task_resources: ResourceConfig | None = None,
+    zephyr_context: ZephyrContext | None = None,
 ) -> VerifiedFuzzyDupsAttrData:
     """Verify existing candidate clusters and write sparse duplicate markers."""
     if not normalized_sources:
@@ -658,41 +727,78 @@ def verify_fuzzy_dups(
     if not shards:
         raise ValueError("verify_fuzzy_dups found no normalized Parquet shards")
 
-    ctx_kwargs: dict[str, Any] = {
-        "name": "verify-fuzzy-dups",
-        "resources": worker_resources or ResourceConfig(cpu=2, ram="16g", disk="16g"),
-    }
+    resources = worker_resources or ResourceConfig(cpu=2, ram="16g", disk="16g")
+    ctx_kwargs: dict[str, Any] = {"name": "verify-fuzzy-dups", "resources": resources}
     if coordinator_resources is not None:
         ctx_kwargs["coordinator_resources"] = coordinator_resources
     if map_task_resources is not None:
         ctx_kwargs["map_task_resources"] = map_task_resources
     if reduce_task_resources is not None:
         ctx_kwargs["reduce_task_resources"] = reduce_task_resources
-    ctx = ZephyrContext(**ctx_kwargs)
-    ctx.put(_SHARED_SHARDS_KEY, {shard.file_idx: shard for shard in shards})
+    ctx = zephyr_context or ZephyrContext(**ctx_kwargs)
+    map_resources = map_task_resources or resources
+    reduce_resources = reduce_task_resources or map_resources
+    shard_groups = [[shard] for shard in shards]
 
-    pipeline = (
-        Dataset.from_list([[shard] for shard in shards])
-        .flat_map(_joined_cluster_members)
-        .group_by(
-            key=_cluster_key,
-            sort_by=_cluster_sort_key,
-            reducer=_make_cluster_verifier(verification_params, local_representative_params),
+    with nullcontext(ctx) if zephyr_context is not None else ctx:
+        ctx.put(_SHARED_SHARDS_KEY, {shard.file_idx: shard for shard in shards})
+        document_store = ctx.load_memory_store(
+            Dataset.from_list(shard_groups).flat_map(_candidate_documents),
+            name="fuzzy-verification-documents",
+            hash_key=_document_partition,
+            num_actors=min(store_config.max_actors, len(shard_groups)),
+            actor_resources=store_config.actor_resources,
+            actor_config=store_config.actor_config,
+            max_actor_bytes=store_config.max_actor_bytes,
+            recovery_timeout=store_config.recovery_timeout,
+            ready_timeout=store_config.ready_timeout,
         )
-        .group_by(
-            key=lambda record: record["file_idx"],
-            sort_by=lambda record: record["id"],
-            reducer=_write_verified_shard,
+        pipeline = (
+            Dataset.from_list(shard_groups)
+            .flat_map(_joined_cluster_members)
+            .group_by(
+                key=_cluster_key,
+                sort_by=_cluster_sort_key,
+                reducer=_make_cluster_verifier(
+                    verification_params,
+                    local_representative_params,
+                    document_store,
+                    store_config.lookup_batch_size,
+                ),
+            )
+            .group_by(
+                key=lambda record: record["file_idx"],
+                sort_by=lambda record: record["id"],
+                reducer=_write_verified_shard,
+            )
         )
-    )
-    outcome = ctx.execute(pipeline, verbose=True)
+        outcome = ctx.execute(
+            pipeline,
+            verbose=True,
+            map_task_resources=map_resources,
+            reduce_task_resources=reduce_resources,
+        )
+        store_stats = document_store.stats()
     write_copartitioned_source_manifest(output_path=output_path, attr_dirs=attr_dirs)
 
     verified = sum(result["verified_duplicates"] for result in outcome.results)
+    output_counters = dict(outcome.counters)
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/actors"] = len(store_stats)
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/items"] = sum(stat.num_items for stat in store_stats)
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/serialized_bytes"] = sum(
+        stat.serialized_bytes for stat in store_stats
+    )
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/max_actor_serialized_bytes"] = max(
+        stat.serialized_bytes for stat in store_stats
+    )
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/load_cpu_time"] = sum(stat.load_cpu_time for stat in store_stats)
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/max_actor_load_elapsed"] = max(
+        stat.load_elapsed for stat in store_stats
+    )
     logger.info(
         "Verified %d fuzzy duplicates from %d candidate members across %d shards",
         verified,
-        int(outcome.counters.get(f"{_COUNTER_PREFIX}/candidate_members", 0)),
+        int(output_counters.get(f"{_COUNTER_PREFIX}/candidate_members", 0)),
         len(shards),
     )
     return VerifiedFuzzyDupsAttrData(
@@ -705,7 +811,7 @@ def verify_fuzzy_dups(
             )
             for source_key, attr_dir in attr_dirs.items()
         },
-        counters=dict(outcome.counters),
+        counters=output_counters,
     )
 
 
@@ -717,10 +823,12 @@ def verify_fuzzy_dups_step(
     candidates_step: StepSpec,
     verification_params: FuzzyVerificationParams,
     local_representative_params: LocalRepresentativeParams,
+    store_config: FuzzyVerificationStoreConfig,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
     map_task_resources: ResourceConfig | None = None,
     reduce_task_resources: ResourceConfig | None = None,
+    zephyr_context: ZephyrContext | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
     """Create a step that verifies one existing fuzzy-candidate artifact."""
@@ -744,10 +852,12 @@ def verify_fuzzy_dups_step(
             output_path=output_path,
             verification_params=verification_params,
             local_representative_params=local_representative_params,
+            store_config=store_config,
             worker_resources=worker_resources,
             coordinator_resources=coordinator_resources,
             map_task_resources=map_task_resources,
             reduce_task_resources=reduce_task_resources,
+            zephyr_context=zephyr_context,
         ),
         hash_attrs={
             "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,

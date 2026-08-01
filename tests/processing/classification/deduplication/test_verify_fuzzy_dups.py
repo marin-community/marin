@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from functools import partial
 from pathlib import Path
 from random import Random
 
@@ -8,14 +9,18 @@ import pyarrow.parquet as pq
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
+from fray.types import ActorConfig, ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import datakit_source_key
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData, FuzzyDupsPerSource
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, MinHashParams
 from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    FuzzyVerificationStoreConfig,
     LocalRepresentativeParams,
-    verify_fuzzy_dups,
+)
+from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    verify_fuzzy_dups as _verify_fuzzy_dups,
 )
 from zephyr.stage_io import ZephyrWorkerError
 from zephyr.writers import write_parquet_file
@@ -30,6 +35,16 @@ TEST_LOCAL_PARAMS = LocalRepresentativeParams(
     local_char_ngram_size=13,
     minimum_local_char_jaccard=0.9,
 )
+TEST_STORE_CONFIG = FuzzyVerificationStoreConfig(
+    max_actors=2,
+    actor_resources=ResourceConfig(cpu=1, ram="256m"),
+    actor_config=ActorConfig(max_concurrency=8, max_task_retries=1),
+    max_actor_bytes=1 << 20,
+    recovery_timeout=30,
+    ready_timeout=30,
+    lookup_batch_size=2,
+)
+verify_fuzzy_dups = partial(_verify_fuzzy_dups, store_config=TEST_STORE_CONFIG)
 
 
 @pytest.fixture(autouse=True)
@@ -141,6 +156,8 @@ def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, mo
         local_representative_params=TEST_LOCAL_PARAMS,
     )
 
+    assert verified.counters["dedup/fuzzy/verification/memory_store/actors"] == 2
+    assert verified.counters["dedup/fuzzy/verification/memory_store/items"] == 3
     assert _output_rows(verified, source_key) == [
         {
             "id": "accepted",
