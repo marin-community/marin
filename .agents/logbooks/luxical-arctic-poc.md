@@ -633,3 +633,76 @@ uv run iris --cluster=marin job run --no-wait \
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-arctic-v1/report.html`.
 - Cross-agent peer review of the evaluator, report logic, and logbook result
   returned no findings.
+
+### Arctic Embed Large v2.0 teacher test
+
+- Commit `2dbef9c06` adds the fixed Large teacher test. Commit `81d626a50`
+  adds bounded readback output for the saved report.
+- The test uses `Snowflake/snowflake-arctic-embed-l-v2.0` at revision
+  `ac6544c8a46e00af67e330e85a9028c66b8cfd9a`.
+- It keeps the exact 74,752 evaluation rows, source groups, three document
+  windows, 512-token window limit, 256-dimensional truncation, quantization,
+  probe split, clustering seeds, and gate limits from the Medium test.
+- Submission command:
+
+```bash
+uv run iris --cluster=marin job run --no-wait \
+  --job-name lux-arctic-large-teacher-v2-gb200-001 \
+  --priority interactive --gpu GB200x1 --enable-extra-resources \
+  --cpu 16 --memory 128GB --disk 128GB --timeout 7200 \
+  --sync-package marin-core --extra gpu --extra datakit \
+  -- python .agents/projects/luxical-arctic-poc/evaluate_teacher_large.py
+```
+
+- The command did not set a target cluster, region, or zone.
+- The first submission used the `cpu` package extra and failed before model
+  loading because CUDA was not available. It wrote no vectors or reports.
+- The corrected job `/rav/lux-arctic-large-teacher-v2-gb200-001` succeeded in
+  28 minutes 44.22 seconds. It had no failures or preemptions.
+- The embedding phase took 1,635.47 seconds and processed 45.71 documents per
+  second. Each document uses three windows. This is not a student-speed test.
+- Large passes six of eight direct gates. It fails
+  `regular_source_collapse` and `multilingual_macro_f1`.
+- Probe macro-F1 results:
+
+| Representation | Overall | Code | Name-matched multilingual | Standard |
+| --- | ---: | ---: | ---: | ---: |
+| Luxical-One | 0.61727 | 0.68089 | 0.79561 | 0.56887 |
+| Arctic Medium v2.0 | 0.66915 | 0.79995 | 0.72857 | 0.63070 |
+| Arctic Large v2.0 | 0.66171 | 0.78894 | 0.73634 | 0.62040 |
+
+- Large minus Medium overall macro-F1 is -0.00743 with interval
+  [-0.01200, -0.00300].
+- Large minus Medium code macro-F1 is -0.01101 with interval
+  [-0.01920, -0.00345].
+- Large minus Medium multilingual macro-F1 is +0.00777 with interval
+  [-0.00817, +0.02441].
+- Large minus Medium standard macro-F1 is -0.01030 with interval
+  [-0.01519, -0.00566].
+- Large trails Luxical-One multilingual macro-F1 by 0.05927. The interval is
+  [-0.12500, +0.00438].
+- All Large vectors are finite. Exact and four-decimal uniqueness are both
+  0.999759.
+- Forty-four of 143 regular sources fail the composite rule. The counts are 13
+  of 28 code, zero of 24 multilingual, and 31 of 91 standard sources.
+- The overlapping failure reasons are 43 cluster-concentration failures and
+  one uniqueness failure. No source fails rank or variance checks.
+- The minimum Large-to-Luxical rank ratio is 1.02636. The minimum variance
+  ratio is 1.51776.
+- Large code largest-cluster share is 0.20752, compared with 0.17055 for
+  Medium and 0.21819 for Luxical-One.
+- Large code effective cluster count is 9.86327, compared with 11.14955 for
+  Medium and 10.30169 for Luxical-One.
+- Large code source-cluster NMI is 0.50727, compared with 0.52520 for Medium
+  and 0.42133 for Luxical-One.
+- Interpretation: Large reduces absolute per-source concentration failures
+  from 60 to 44. It does not fix the multilingual quality gate. It is lower
+  than Medium overall and for code and standard text. Keep Medium rather than
+  making Large teacher labels.
+- Method limits: source groups use the fixed name rules, and each teacher
+  window is limited to 512 tokens. They remain fixed for the controlled model
+  comparison.
+- JSON artifact:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-arctic-l-v2.0/report.json`.
+- HTML artifact:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-arctic-l-v2.0/report.html`.
