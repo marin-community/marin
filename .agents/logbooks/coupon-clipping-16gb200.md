@@ -17,7 +17,7 @@ author: rjpower
 
 ## Current TL;DR
 
-The first wave found no loss effect from fat-first versus fat-middle shared capacity, and its full-width L1 source did not improve time-to-loss after growth. The aggressive `d1536/L1` source measures 7.55x C0 throughput; its exact width/depth transition passed 16 finite full-model updates. A 95/5 WD1 production run is active, projecting to 5.69x loop-time speed before setup and compilation. Paloma and downstream capability results remain pending.
+All scheduled training and Paloma runs are complete. Fat-first and fat-middle capacity matched C0. D1 and C-short were only 2.06x and 1.93x faster than C0. WD1 finished 4.77x faster but remained unusable at 4.0338 train loss and 4.8286 Paloma micro loss, versus C0's 1.9903 and 2.8192. The fixed-64-expert WD2 source reached 2.50M tok/s, or 13.14x C0, with zero overflow; it is the surviving systems lead, but no full-size WD2 checkpoint exists yet. This wave did not produce a greater-than-5x model suitable for SFT or RL.
 
 ## Current Baseline
 
@@ -30,17 +30,17 @@ The first wave found no loss effect from fat-first versus fat-middle shared capa
 
 ### Active
 
-- `CC16-H1`: a one-layer source expanded to 48 layers can approach the token-matched C0 loss with at least 30% fewer GB200-hours. Next test: `CC16-D1` after measuring post-expansion mixing tokens.
-- `CC16-H2`: a fixed-wall one-layer source plus a calibrated full-depth tail reaches C0's loss earlier. Next test: `CC16-D2` after the mixing interval is known.
-- `CC16-H3`: placing four `i4096` shared experts at layers 0-3 beats the uniform `i1280` allocation and the same capacity at layers 22-25. Next test: `CC16-P1` versus `CC16-C0` and `CC16-P2`.
+- `CC16-H5`: a `d768/L1/E64/top4` source plus substantially more adaptation than WD1's 320-update tail can retain the measured 13.14x source rate and reach a usable full-model checkpoint above 5x end-to-end. Next test: calibrate deep-tail length from short transition sweeps before another production horizon.
 
 ### Blocked
 
-- `CC16-H4`: a 12-layer source is a safer growth platform than a one-layer source. Blocker: it is conditional on `CC16-D1` failing the mixing or throughput gate.
+- `CC16-H4`: a 12-layer source is a safer growth platform than a one-layer source. Blocker: full-width L1 already tops out at 4.39x, so a deeper source cannot meet the headline speed gate without also narrowing width or the vocabulary head.
 
 ### Falsified / Dead End
 
-- None.
+- `CC16-H1`: D1 finished 2.06x faster than C0 at 2.1351 terminal train loss and lost its initial post-growth advantage after roughly one thousand full-depth updates.
+- `CC16-H2`: WD1 finished 4.77x faster but stopped at 4.0338 train loss and 4.8286 Paloma micro loss.
+- `CC16-H3`: C0/P1/P2 terminal 64-step means differed by at most 0.0016; placement did not affect this horizon.
 
 ### Promoted
 
@@ -199,3 +199,34 @@ The first wave found no loss effect from fat-first versus fat-middle shared capa
 - Result: at 00:09 UTC, WD1 was healthy and synchronized at source step 2,280/6,080, loss 4.14, and a recent rate of 1.2-1.4 updates/s. No fatal, traceback, or resource-exhaustion lines were present. The success-gated handoff is waiting on WD1; WD2 and C-short have not been submitted yet.
 - Interpretation: the source is behaving normally, but setup and sustained-rate overhead may reduce WD1 below its 5.69x loop-only projection. WD2 is therefore a necessary measurement of whether the vocabulary/head and residual-stream costs can be pushed into the 10x-source regime without adding experts.
 - Next action: verify the step-6,080 growth transform and finite L48 updates, measure WD1 end-to-end allocation speed, then apply the WD2 throughput and routing gate before C-short admission.
+
+### 2026-08-01 15:38 - CC16-013 terminal training and Paloma results
+
+- Hypothesis: shallow knowledge exposure can produce a full-size checkpoint suitable for SFT or RL more than 5x faster than C0, while the fixed-expert narrow source can approach a 10x systems regime without relying on early routing specialization.
+- Commit Hash: `e8e383809e`.
+- Command: the success-gated chain ran `/power/ccx-wd1-coord`, `/power/ccx-wd2-source-pilot-coord`, and `/power/ccx-c-short-coord` sequentially; checkpoint-only evaluators ran as `/power/cc16-paloma-{wd1,c-short,c0}-coord`. Metrics use deduplicated W&B rows and terminal 64-update train-loss means.
+- Config: C0/P1/P2/D1 and WD1 end at update 6,400; C-short ends at 3,200. WD1 spends 6,080 updates at `d1536/L1` and 320 at `d3072/L48`. WD2 is a 128-update `d768/L1/E64/top4` source pilot with routed and shared expert widths 1,536. Paloma evaluates 77 available batches over 16 registered subsets, capped at eight batches of 64 sequences per subset.
+- Result:
+
+  | Arm | Coordinator time | Speedup vs C0 | Terminal 64-step train loss | Paloma micro loss | Paloma macro loss |
+  |---|---:|---:|---:|---:|---:|
+  | C0 uniform | 10h22m | 1.00x | 1.990261 | 2.819231 | 2.948071 |
+  | P1 fat-first | 10h34m | 0.98x | 1.991862 | — | — |
+  | P2 fat-middle | 10h35m | 0.98x | 1.990978 | — | — |
+  | D1 L1-to-L48 | 5h02m | 2.06x | 2.135108 | — | — |
+  | C-short L48 | 5h23m | 1.93x | 2.057690 | 2.903026 | 3.036822 |
+  | WD1 narrow/shallow-to-full | 2h10m | 4.77x | 4.033804 | 4.828604 | 4.992723 |
+
+  WD1's source median was 1.491M tok/s, 7.84x C0's 190.2k. WD2's median was 2.500M tok/s, 13.14x C0, with terminal throughput 2.359M tok/s. Every reported run had 99.976% valid targets and zero mean capacity overflow. WD2's terminal 64-step source loss was 7.6902; it does not produce a full-size checkpoint. W&B runs: [C0](https://wandb.ai/marin-community/marin/runs/cc16-c0-p0), [C-short](https://wandb.ai/marin-community/marin/runs/ccx-c-short-l48-step3200), [WD1 source](https://wandb.ai/marin-community/marin/runs/ccx-wd1-d1536-l1-source-step6080), [WD1 target](https://wandb.ai/marin-community/marin/runs/ccx-wd1-d1536-l1-to-d3072-l48), [WD2](https://wandb.ai/marin-community/marin/runs/ccx-wd2-d768-l1-i1536-pilot128), and Paloma [C0](https://wandb.ai/marin-community/marin/runs/cc16-paloma-c0), [C-short](https://wandb.ai/marin-community/marin/runs/cc16-paloma-c-short), [WD1](https://wandb.ai/marin-community/marin/runs/cc16-paloma-wd1).
+- Interpretation: the headline hypothesis failed in this wave. WD1 missed the systems gate after setup and compilation and missed the capability gate by a wide margin. C-short is close to C0 on Paloma but provides only a 1.93x speedup. WD2 establishes that the shallow source can exceed 10x without adding experts; useful target adaptation remains unmeasured.
+- Next action: do not promote WD1, D1, or either pyramid. If continuing, sweep short WD2 target tails or periodic full-model refreshes and measure Paloma after each; attack the vocabulary/output-head floor if those schedules cannot preserve at least a 5x end-to-end speedup.
+
+### 2026-08-01 15:38 - CC16-014 checkpoint-only evaluation recovery
+
+- Hypothesis: terminal checkpoints can be evaluated without rebuilding mutable training dependencies or mutating optimizer state.
+- Commit Hash: `e8e383809e`.
+- Command: `python -m experiments.grug.coupon_clipping.paloma_{wd1,c_short,c0} --version dev --run`, each submitted through a separate Iris coordinator on the same four-node slice.
+- Config: the launchers adopt the completed `users/power/grug/coupon-clipping/.../dev` output as a typed `LevanterCheckpoint`, restore only model parameters, cast them through the bf16 compute policy, and write numeric metrics to `metrics.json`.
+- Result: the first WD1 attempt was stopped after mutable `dev` recipe drift began rebuilding its 6.4B-token source. The adopted handle then failed fast once because its source omitted `users/power`; the first forward failed because FA4 rejected float32 inputs; and the completed evaluation initially failed while JSON serialized a JAX `float32`. Commits `c8200bb904`, `f5ea4d42ef`, `70785b17ce`, and `e8e383809e` fix those four boundaries. All three final evaluation coordinators succeeded, W&B is finished, and each output contains `metrics.json`. The reusable `dev` guidance is recorded in [Echo wiki #61](https://echo.oa.dev/wiki/61).
+- Interpretation: `dev` is suitable for active iteration but unsafe as an implicit dependency identity for follow-up evaluation. Adopt the realized output or use a fixed calendar version; print the plan before `--run` and reject any unexpected training step.
+- Next action: publish the terminal table to issue #7836 and the Weaver artifact, then close the rollout issue.
