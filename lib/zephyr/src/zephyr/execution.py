@@ -22,16 +22,16 @@ import time
 import traceback
 import uuid
 from collections import Counter, defaultdict, deque
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Hashable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TypeVar
 
 import cloudpickle
 import humanfriendly
-from fray.actor import ActorFuture, ActorHandle, current_actor
+from fray.actor import ActorFuture, ActorGroup, ActorHandle, ActorUnavailableError, current_actor
 from fray.client import Client, JobHandle
 from fray.current_client import current_client, set_current_client
 from fray.local_backend import LocalClient
@@ -44,6 +44,7 @@ from rigging.filesystem import StoragePath, TransferBudgetExceeded, marin_temp_b
 from rigging.timing import ExponentialBackoff, RateLimiter, log_time
 
 from zephyr.dataset import Dataset
+from zephyr.memory_store import MemoryStore, _actor_result_with_recovery, _MemoryStoreActor, _store_plan
 from zephyr.plan import (
     Join,
     PhysicalOp,
@@ -75,6 +76,9 @@ from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot, me
 from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
+
+K = TypeVar("K", bound=Hashable)
+V = TypeVar("V")
 
 # Max explicit task errors (report_error) per shard before aborting.
 MAX_SHARD_FAILURES = 3
@@ -1783,6 +1787,8 @@ class ZephyrContext:
     _shared_data: dict[str, Any] = field(default_factory=dict, repr=False)
     # Handle to the coordinator job (for termination on retry/shutdown)
     _coordinator_job: JobHandle | None = field(default=None, repr=False)
+    # Read-only actor groups retained until shutdown().
+    _memory_store_groups: list[ActorGroup] = field(default_factory=list, repr=False)
     # NOTE: execute calls increment this at the very beginning
     _pipeline_id: int = field(default=-1, repr=False)
     min_tasks_per_worker: int = field(init=False, default=1, repr=False)
@@ -1855,6 +1861,110 @@ class ZephyrContext:
         once the execution_id is known, so each execution is isolated.
         """
         self._shared_data[name] = obj
+
+    def load_memory_store(
+        self,
+        dataset: Dataset[tuple[K, V]],
+        *,
+        name: str,
+        hash_key: Callable[[K], int],
+        num_actors: int,
+        actor_resources: ResourceConfig,
+        actor_config: ActorConfig,
+        recovery_timeout: float,
+        ready_timeout: float = 900.0,
+    ) -> MemoryStore[K, V]:
+        """Load an existing partitioned Dataset into read-only actors.
+
+        The Dataset must contain only shard-local operations and yield `(key,
+        value)` tuples. `hash_key(key) % num_source_partitions` must equal the
+        physical source shard containing that key. Construction validates this
+        contract for every row and never inserts a shuffle.
+
+        The returned handle is picklable. This context owns the actor group and
+        stops it when `shutdown()` is called.
+
+        Args:
+            dataset: Shard-local Dataset yielding `(key, value)` tuples.
+            name: Descriptive name for the actor group.
+            hash_key: Stable, picklable key hash used by the existing partitioning.
+            num_actors: Number of actors. Source shards are assigned round-robin.
+            actor_resources: Resources for each store actor.
+            actor_config: Actor recovery and concurrency policy. A positive
+                `max_task_retries` is required.
+            recovery_timeout: Seconds a lookup or stats call waits for an actor
+                response or recovery.
+            ready_timeout: Seconds to wait for every actor to finish loading.
+        """
+        if not name:
+            raise ValueError("memory store name must not be empty")
+        if num_actors <= 0:
+            raise ValueError(f"num_actors must be positive, got {num_actors}")
+        if recovery_timeout <= 0:
+            raise ValueError(f"recovery_timeout must be positive, got {recovery_timeout}")
+        if ready_timeout <= 0:
+            raise ValueError(f"ready_timeout must be positive, got {ready_timeout}")
+        if actor_config.max_task_retries is None or actor_config.max_task_retries <= 0:
+            raise ValueError("memory-store actor_config.max_task_retries must be positive")
+
+        store_plan = _store_plan(dataset)
+        if num_actors > store_plan.num_source_partitions:
+            raise ValueError(
+                f"num_actors ({num_actors}) cannot exceed source partitions ({store_plan.num_source_partitions})"
+            )
+
+        assert self.client is not None
+        group_name = f"{self.name}-{name}-memory-store-{uuid.uuid4().hex[:8]}"
+        group = self.client.create_actor_group(
+            _MemoryStoreActor,
+            store_plan.source_items,
+            store_plan.operations,
+            hash_key,
+            store_plan.num_source_partitions,
+            num_actors,
+            name=group_name,
+            count=num_actors,
+            resources=actor_resources,
+            actor_config=actor_config,
+        )
+        try:
+            ready_deadline = time.monotonic() + ready_timeout
+            handles = group.wait_ready(timeout=ready_timeout)
+            load_calls = {
+                position: lambda handle=handle: handle.load.remote() for position, handle in enumerate(handles)
+            }
+            load_futures: dict[int, ActorFuture | None] = {}
+            for position, call in load_calls.items():
+                try:
+                    load_futures[position] = call()
+                except ActorUnavailableError:
+                    load_futures[position] = None
+            actors_by_index: list[ActorHandle | None] = [None] * num_actors
+            for position, handle in enumerate(handles):
+                stats = _actor_result_with_recovery(
+                    load_calls[position],
+                    load_futures[position],
+                    position,
+                    ready_timeout,
+                    ready_deadline,
+                )
+                if actors_by_index[stats.actor_index] is not None:
+                    raise RuntimeError(f"two memory-store actors reported index {stats.actor_index}")
+                actors_by_index[stats.actor_index] = handle
+            if any(handle is None for handle in actors_by_index):
+                raise RuntimeError("memory-store actor group did not report every actor index")
+            actors = tuple(handle for handle in actors_by_index if handle is not None)
+            self._memory_store_groups.append(group)
+        except BaseException:
+            group.shutdown()
+            raise
+
+        return MemoryStore(
+            actors=actors,
+            hash_key=hash_key,
+            num_source_partitions=store_plan.num_source_partitions,
+            recovery_timeout=recovery_timeout,
+        )
 
     def _upload_shared_data(self, execution_id: str) -> None:
         """Serialize all staged shared data to disk under the execution directory."""
@@ -2019,8 +2129,15 @@ class ZephyrContext:
             self._coordinator_job = None
 
     def shutdown(self) -> None:
-        """Shutdown the coordinator job and all child actors."""
+        """Shutdown the coordinator job and owned memory-store actors."""
         self._terminate_coordinator_job()
+        groups = tuple(reversed(self._memory_store_groups))
+        self._memory_store_groups.clear()
+        for group in groups:
+            try:
+                group.shutdown()
+            except Exception:
+                logger.warning("Failed to stop a memory-store actor group", exc_info=True)
 
 
 def _reshard_refs(shards: list[Shard], num_shards: int) -> list[Shard]:

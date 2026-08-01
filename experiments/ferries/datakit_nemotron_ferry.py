@@ -16,7 +16,7 @@ import json
 import logging
 import os
 
-from fray.types import ResourceConfig
+from fray.types import ActorConfig, ResourceConfig
 from marin.datakit.normalize import NormalizedData, normalize_step
 from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner
@@ -39,6 +39,7 @@ from marin.processing.classification.deduplication.fuzzy_verification import Fuz
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
     VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
+    FuzzyVerificationStoreConfig,
     VerifiedFuzzyDupsAttrData,
     verify_fuzzy_dups,
 )
@@ -47,6 +48,7 @@ from rigging.filesystem import (
     StoragePath,
     check_path_in_region,
     marin_temp_bucket,
+    prefix_join,
     region_from_metadata,
     url_to_fs,
 )
@@ -61,6 +63,14 @@ logger = logging.getLogger(__name__)
 NEMOTRON_RAW_PATH = "gs://marin-eu-west4/raw/nemotro-cc-eeb783"
 NEMOTRON_DATA_SUBDIR = "contrib/Nemotron/Nemotron-CC/data-jsonl"
 NEMOTRON_QUALITY_DIR = "quality=high"
+FUZZY_VERIFICATION_STORE_CONFIG = FuzzyVerificationStoreConfig(
+    max_actors=64,
+    actor_resources=ResourceConfig(cpu=2, ram="16g", disk="16g"),
+    actor_config=ActorConfig(max_concurrency=32, max_task_retries=1_000),
+    recovery_timeout=1_800,
+    ready_timeout=1_800,
+    lookup_batch_size=128,
+)
 
 
 def _verify_nemotron_quality_present(output_path: str) -> None:
@@ -154,11 +164,12 @@ def build_steps(run_id: str) -> list[StepSpec]:
             output_path=output_path,
             verification_params=verification_params,
             local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+            store_config=FUZZY_VERIFICATION_STORE_CONFIG,
             worker_resources=(resources := ResourceConfig(cpu=16, ram="160g", disk="32g")),
             map_task_resources=resources.scale(1 / 16),
             reduce_task_resources=resources.scale(3 / 16),
         ),
-        override_output_path=f"{base}/verify_fuzzy_dups",
+        override_output_path=prefix_join(base, "verify_fuzzy_dups"),
     )
 
     consolidated = StepSpec(

@@ -165,25 +165,30 @@ def _wrap_stage_stats(gen: Iterator[_T]) -> Iterator[_T]:
         yield item
 
 
-def _sample_process_stats(cpu_s_at_start: float, proc: psutil.Process) -> None:
-    """Sample the current process's resource usage into the current stage's counters.
+def _sample_process_stats(
+    cpu_s_at_start: float,
+    proc: psutil.Process,
+    ctx: _InProcessWorkerContext,
+) -> None:
+    """Sample the current process's resource usage into the shard context.
 
     Uses set_counter (not increment) because these are point-in-time metrics.
     Peak memory is tracked as a monotonically increasing max across calls.
     ``cpu_s_at_start`` is subtracted from cumulative CPU time to give per-shard delta.
     ``proc`` must be the same object across calls so cpu_percent() has a
     prior measurement to diff against; prime it once before the first sample.
+    The context is explicit because sampler threads do not inherit ContextVars.
     """
     rss = proc.memory_info().rss
     cpu_times = proc.cpu_times()
     cpu_pct = proc.cpu_percent()
-    stage_counters = counters.current_stage()
-    stage_counters.set_counter(ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY, cpu_pct)
-    stage_counters.update_counter(ZEPHYR_WORKER_CPU_PCT_AVERAGE_KEY, cpu_pct)
-    stage_counters.set_counter(ZEPHYR_WORKER_CPU_TIME_KEY, cpu_times.user + cpu_times.system - cpu_s_at_start)
-    stage_counters.set_counter(ZEPHYR_WORKER_MEM_CURRENT_KEY, rss)
-    stage_counters.update_counter(ZEPHYR_WORKER_MEM_AVERAGE_KEY, rss)
-    stage_counters.update_counter(ZEPHYR_WORKER_MEM_PEAK_KEY, rss)
+    stage = ctx.current_stage_name()
+    ctx.set_counter(ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY, cpu_pct, stage=stage)
+    ctx.update_counter(ZEPHYR_WORKER_CPU_PCT_AVERAGE_KEY, cpu_pct, stage=stage)
+    ctx.set_counter(ZEPHYR_WORKER_CPU_TIME_KEY, cpu_times.user + cpu_times.system - cpu_s_at_start, stage=stage)
+    ctx.set_counter(ZEPHYR_WORKER_MEM_CURRENT_KEY, rss, stage=stage)
+    ctx.update_counter(ZEPHYR_WORKER_MEM_AVERAGE_KEY, rss, stage=stage)
+    ctx.update_counter(ZEPHYR_WORKER_MEM_PEAK_KEY, rss, stage=stage)
 
 
 def _set_counter_aggregations() -> None:
@@ -221,7 +226,7 @@ def _periodic_sampler(
     """
     while not stop_event.wait(timeout=interval):
         try:
-            _sample_process_stats(cpu_s_at_start, proc)
+            _sample_process_stats(cpu_s_at_start, proc, ctx)
             stats_writer.emit_worker_stat(
                 task.stage_name,
                 task.shard_idx,
@@ -295,7 +300,7 @@ def _shard_stats_session(
             # than the last periodic tick. Telemetry must not fail a shard that
             # already produced its result, so a sampling error is logged only.
             try:
-                _sample_process_stats(cpu_s_at_start, proc)
+                _sample_process_stats(cpu_s_at_start, proc, ctx)
             except Exception:
                 logger.warning("Failed to take final process stats sample", exc_info=True)
         status = ZephyrWorkerStatStatus.FAILED if failed else ZephyrWorkerStatStatus.END

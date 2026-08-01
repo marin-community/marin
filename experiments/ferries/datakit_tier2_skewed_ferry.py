@@ -22,6 +22,7 @@ import json
 import logging
 import os
 
+from fray.types import ActorConfig, ResourceConfig
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import NormalizedData, normalize_step
 from marin.execution.artifact import read_artifact
@@ -45,11 +46,12 @@ from marin.processing.classification.deduplication.fuzzy_verification import Fuz
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
     VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
+    FuzzyVerificationStoreConfig,
     VerifiedFuzzyDupsAttrData,
     verify_fuzzy_dups,
 )
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
-from rigging.filesystem import StoragePath, marin_prefix, marin_temp_bucket
+from rigging.filesystem import StoragePath, marin_prefix, marin_temp_bucket, prefix_join
 from rigging.log_setup import configure_logging
 from rigging.timing import log_time
 
@@ -60,6 +62,14 @@ HF_REVISION = "de656ef7cc7c84ceb9892c75a77347d9003c1273"
 # Short prefix used in the cache directory so a revision bump produces a fresh
 # cache key without invalidating prior versions.
 HF_REVISION_SHORT = HF_REVISION[:7]
+FUZZY_VERIFICATION_STORE_CONFIG = FuzzyVerificationStoreConfig(
+    max_actors=32,
+    actor_resources=ResourceConfig(cpu=2, ram="16g", disk="16g"),
+    actor_config=ActorConfig(max_concurrency=32, max_task_retries=1_000),
+    recovery_timeout=1_800,
+    ready_timeout=1_800,
+    lookup_batch_size=64,
+)
 
 
 def build_steps(run_id: str) -> list[StepSpec]:
@@ -123,8 +133,9 @@ def build_steps(run_id: str) -> list[StepSpec]:
             output_path=output_path,
             verification_params=verification_params,
             local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+            store_config=FUZZY_VERIFICATION_STORE_CONFIG,
         ),
-        override_output_path=f"{ttl_base}/verify_fuzzy_dups",
+        override_output_path=prefix_join(ttl_base, "verify_fuzzy_dups"),
     )
 
     consolidated = StepSpec(

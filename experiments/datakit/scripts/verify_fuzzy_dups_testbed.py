@@ -12,15 +12,16 @@ import json
 import logging
 import os
 from collections import Counter, defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
+from enum import StrEnum
 from itertools import groupby
-from typing import Any
+from typing import Any, Protocol
 
 import pyarrow.parquet as pq
-from fray.types import ResourceConfig
+from fray.types import ActorConfig, ResourceConfig
 from marin.datakit.normalize import NormalizedData
-from marin.datakit.source_key import datakit_source_key
+from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
@@ -28,7 +29,11 @@ from marin.processing.classification.deduplication.fuzzy_dups import (
     FuzzyDupsAttrData,
     compute_fuzzy_dups_attrs_step,
 )
-from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, compute_minhash_attrs_step
+from marin.processing.classification.deduplication.fuzzy_minhash import (
+    MinHashAttrData,
+    MinHashParams,
+    compute_minhash_attrs_step,
+)
 from marin.processing.classification.deduplication.fuzzy_verification import (
     FuzzyVerificationParams,
     VerificationResult,
@@ -37,10 +42,13 @@ from marin.processing.classification.deduplication.fuzzy_verification import (
 )
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+    FuzzyVerificationStoreConfig,
     LocalRepresentativeParams,
     VerifiedFuzzyDupsAttrData,
+    verify_fuzzy_dups,
     verify_fuzzy_dups_step,
 )
+from pydantic import BaseModel
 from rigging.filesystem import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 
@@ -53,8 +61,18 @@ DEFAULT_MAX_WORKERS = 64
 DEFAULT_MAX_CONCURRENT = 8
 DEFAULT_INSPECTION_LIMIT = 10_000
 TEXT_PREVIEW_CHARS = 500
-WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g", disk="8g")
-VERIFIED_COLUMNS = [
+WORKER_RESOURCES = ResourceConfig(cpu=2, ram="64g", disk="8g")
+VERIFICATION_TASK_RESOURCES = ResourceConfig(cpu=2, ram="60g", disk="8g")
+COORDINATOR_RESOURCES = ResourceConfig(cpu=1, ram="4g", disk="16g", preemptible=False)
+STORE_CONFIG = FuzzyVerificationStoreConfig(
+    max_actors=32,
+    actor_resources=ResourceConfig(cpu=2, ram="8g", disk="8g"),
+    actor_config=ActorConfig(max_concurrency=32, max_task_retries=1_000),
+    recovery_timeout=1_800,
+    ready_timeout=1_800,
+    lookup_batch_size=128,
+)
+VERIFIED_COLUMNS = (
     "id",
     "dup_doc",
     "dup_cluster_id",
@@ -69,7 +87,12 @@ VERIFIED_COLUMNS = [
     "dup_char_jaccard",
     "dup_local_token_sequence_equal",
     "dup_local_char_jaccard",
-]
+)
+
+
+class ReferenceComparisonMode(StrEnum):
+    EXACT = "exact"
+    REPORT = "report"
 
 
 @dataclass(frozen=True)
@@ -86,7 +109,35 @@ class CandidateMember:
     buckets: tuple[str, ...]
 
 
-def _rows(path: str, columns: list[str]) -> Iterator[dict[str, Any]]:
+class _LegacyMinHashEntry(BaseModel):
+    """One entry in the combined MinHash artifact used by the 100B audit."""
+
+    version: str
+    params: MinHashParams
+    source_main_dir: str
+    attr_dir: str
+    counters: dict[str, int | float]
+
+
+class _LegacyMinHashCollection(BaseModel):
+    """Combined MinHash payload used by the 100B audit."""
+
+    inputs: list[_LegacyMinHashEntry]
+
+
+class _VerifiedSourcePaths(BaseModel):
+    attr_dir: DatakitArtifactPath
+
+
+class _VerifiedArtifactPaths(BaseModel):
+    sources: dict[str, _VerifiedSourcePaths]
+
+
+class _VerifiedSource(Protocol):
+    attr_dir: DatakitArtifactPath
+
+
+def _rows(path: str, columns: Sequence[str]) -> Iterator[dict[str, Any]]:
     with StoragePath(path).open("rb") as stream:
         parquet = pq.ParquetFile(stream)
         for batch in parquet.iter_batches(columns=columns):
@@ -160,9 +211,11 @@ def _join_candidate_text(
     return members
 
 
-def _verified_rows(verified: VerifiedFuzzyDupsAttrData) -> dict[tuple[str, str], dict[str, Any]]:
+def _verified_rows_from_sources(
+    sources: Mapping[str, _VerifiedSource],
+) -> dict[tuple[str, str], dict[str, Any]]:
     rows: dict[tuple[str, str], dict[str, Any]] = {}
-    for source_key, source in verified.sources.items():
+    for source_key, source in sources.items():
         paths = sorted(str(path) for path in StoragePath(prefix_join(source.attr_dir, "*.parquet")).glob())
         for path in paths:
             for row in _rows(path, VERIFIED_COLUMNS):
@@ -171,6 +224,11 @@ def _verified_rows(verified: VerifiedFuzzyDupsAttrData) -> dict[tuple[str, str],
                     raise ValueError(f"Verified output contains duplicate marker {key!r}")
                 rows[key] = row
     return rows
+
+
+def _verified_rows(artifact_path: str) -> dict[tuple[str, str], dict[str, Any]]:
+    verified = read_artifact(artifact_path, _VerifiedArtifactPaths)
+    return _verified_rows_from_sources(verified.sources)
 
 
 def _score_fields(result: VerificationResult) -> dict[str, Any]:
@@ -255,7 +313,7 @@ def inspect_verification(
     for member in members:
         by_cluster[member.cluster_id].append(member)
 
-    actual_markers = _verified_rows(verified)
+    actual_markers = _verified_rows_from_sources(verified.sources)
     expected_marker_keys: set[tuple[str, str]] = set()
     decisions: Counter[str] = Counter()
     comparison_decisions: Counter[str] = Counter()
@@ -278,12 +336,9 @@ def inspect_verification(
 
         for member_id, same_id_iterator in groupby(ordered[1:], key=lambda member: member.id):
             same_id_members = list(same_id_iterator)
-            exact_group = member_id == canonical.id or len(same_id_members) > 1
-            if exact_group:
-                first_member = same_id_members[0]
-                expected_text = canonical.text if member_id == canonical.id else first_member.text
+            if member_id == canonical.id:
                 for member in same_id_members:
-                    if member.text != expected_text:
+                    if member.text != canonical.text:
                         raise AssertionError(f"Content ID {member.id!r} has different text")
                     marker_key = (member.source_key, member.id)
                     decisions["delegated_global_exact"] += 1
@@ -301,16 +356,29 @@ def inspect_verification(
                             "output_marker_present": False,
                         }
                     )
-                if member_id != canonical.id:
-                    local_representative_chars, _skip = _add_local_representative(
-                        first_member,
-                        retained,
-                        local_representative_chars,
-                        verified.local_representatives,
-                    )
                 continue
 
             member = same_id_members[0]
+            for exact_member in same_id_members[1:]:
+                if exact_member.text != member.text:
+                    raise AssertionError(f"Content ID {exact_member.id!r} has different text")
+                exact_marker_key = (exact_member.source_key, exact_member.id)
+                decisions["delegated_global_exact"] += 1
+                if exact_marker_key in actual_markers:
+                    raise AssertionError(f"Global exact member {exact_marker_key!r} has a fuzzy output marker")
+                member_reviews.append(
+                    {
+                        "member": {
+                            **asdict(exact_member),
+                            "text": exact_member.text[:TEXT_PREVIEW_CHARS],
+                            "text_chars": len(exact_member.text),
+                        },
+                        "decision": "delegated_global_exact",
+                        "attempts": [],
+                        "output_marker_present": False,
+                    }
+                )
+
             marker_key = (member.source_key, member.id)
             attempts = []
             comparison_count = 1
@@ -483,61 +551,194 @@ def _parse_source_names(value: str) -> list[str] | None:
     return names
 
 
+def _read_candidate_artifact(path: str) -> FuzzyDupsAttrData:
+    candidates = read_artifact(path, FuzzyDupsAttrData)
+    sources = {}
+    for source_path, source in candidates.sources.items():
+        source_key = datakit_source_key(source_path)
+        if source_key in sources:
+            raise ValueError(f"Candidate source paths normalize to the same key {source_key!r}")
+        sources[source_key] = source
+    return candidates.model_copy(update={"sources": sources})
+
+
+def _read_minhash_collection(
+    path: str,
+    normalized: dict[str, NormalizedData],
+) -> dict[str, MinHashAttrData]:
+    collection = read_artifact(path, _LegacyMinHashCollection)
+    by_source_key = {}
+    for entry in collection.inputs:
+        source_key = datakit_source_key(entry.source_main_dir)
+        if source_key in by_source_key:
+            raise ValueError(f"MinHash collection contains duplicate source key {source_key!r}")
+        by_source_key[source_key] = MinHashAttrData(
+            version=entry.version,
+            params=entry.params,
+            source_key=source_key,
+            attr_dir=entry.attr_dir,
+            counters=entry.counters,
+        )
+
+    expected = {datakit_source_key(source.main_output_dir) for source in normalized.values()}
+    if by_source_key.keys() != expected:
+        raise ValueError(
+            "MinHash collection and normalized source sets differ: "
+            f"missing={sorted(expected - by_source_key.keys())!r}, "
+            f"extra={sorted(by_source_key.keys() - expected)!r}"
+        )
+    return {
+        source_name: by_source_key[datakit_source_key(source.main_output_dir)]
+        for source_name, source in normalized.items()
+    }
+
+
+def _verify_existing_artifacts(
+    *,
+    output_path: str,
+    normalized_steps: dict[str, StepSpec],
+    minhash_collection_path: str,
+    candidate_path: str,
+    verification_params: FuzzyVerificationParams,
+    max_workers: int,
+) -> VerifiedFuzzyDupsAttrData:
+    normalized = {
+        source_name: read_artifact(step.output_path, NormalizedData) for source_name, step in normalized_steps.items()
+    }
+    return verify_fuzzy_dups(
+        normalized_sources=normalized,
+        minhash_sources=_read_minhash_collection(minhash_collection_path, normalized),
+        candidates=_read_candidate_artifact(candidate_path),
+        output_path=output_path,
+        verification_params=verification_params,
+        local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+        store_config=STORE_CONFIG,
+        max_workers=max_workers,
+        worker_resources=WORKER_RESOURCES,
+        coordinator_resources=COORDINATOR_RESOURCES,
+        map_task_resources=VERIFICATION_TASK_RESOURCES,
+        reduce_task_resources=VERIFICATION_TASK_RESOURCES,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sample-prefix", default=SAMPLE_PREFIX)
     parser.add_argument("--output-prefix", required=True)
+    parser.add_argument("--candidate-artifact", help="Existing FuzzyDupsAttrData artifact to verify")
+    parser.add_argument("--minhash-collection", help="Combined MinHash artifact paired with --candidate-artifact")
+    parser.add_argument(
+        "--reference-verified-prefix",
+        help="Optional verified artifact whose complete persisted output is compared",
+    )
+    parser.add_argument(
+        "--expected-reference-markers",
+        type=int,
+        help="Optional nonnegative marker count required from --reference-verified-prefix",
+    )
+    parser.add_argument(
+        "--reference-comparison-mode",
+        type=ReferenceComparisonMode,
+        choices=ReferenceComparisonMode,
+        default=ReferenceComparisonMode.EXACT,
+        help="Fail on reference differences or report their counts for an intentional algorithm change",
+    )
     parser.add_argument("--sources", default="all")
     parser.add_argument("--max-workers", type=int, default=DEFAULT_MAX_WORKERS)
     parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT)
-    parser.add_argument("--inspection-limit", type=int, default=DEFAULT_INSPECTION_LIMIT)
+    parser.add_argument(
+        "--inspection-limit",
+        type=int,
+        default=DEFAULT_INSPECTION_LIMIT,
+        help="Maximum candidate members for direct text inspection; 0 skips inspection",
+    )
     args = parser.parse_args()
 
     if args.max_workers < 1:
         raise ValueError("--max-workers must be at least 1")
     if args.max_concurrent < 1:
         raise ValueError("--max-concurrent must be at least 1")
-    if args.inspection_limit < 1:
-        raise ValueError("--inspection-limit must be at least 1")
+    if args.inspection_limit < 0:
+        raise ValueError("--inspection-limit must be nonnegative")
+    if args.expected_reference_markers is not None and args.expected_reference_markers < 0:
+        raise ValueError("--expected-reference-markers must be nonnegative")
+    if args.expected_reference_markers is not None and not args.reference_verified_prefix:
+        raise ValueError("--expected-reference-markers requires --reference-verified-prefix")
+    if args.reference_comparison_mode is ReferenceComparisonMode.REPORT and not args.reference_verified_prefix:
+        raise ValueError("--reference-comparison-mode=report requires --reference-verified-prefix")
+    if bool(args.candidate_artifact) != bool(args.minhash_collection):
+        raise ValueError("--candidate-artifact and --minhash-collection must be provided together")
 
     configure_logging(logging.INFO)
-    output_prefix = args.output_prefix.rstrip("/")
+    output_prefix = args.output_prefix
     normalized_steps = sample_sources(args.sample_prefix, _parse_source_names(args.sources))
-    minhash_steps = {
-        source_name: compute_minhash_attrs_step(
-            name=f"datakit/fuzzy_verification_testbed/minhash/{source_name}",
-            normalize=normalize_step,
-            worker_resources=WORKER_RESOURCES,
-            max_workers=args.max_workers,
-            override_output_path=prefix_join(output_prefix, f"minhash/{source_name}"),
-        )
-        for source_name, normalize_step in normalized_steps.items()
-    }
-    candidates_step = compute_fuzzy_dups_attrs_step(
-        name="datakit/fuzzy_verification_testbed/candidates",
-        minhash_steps=list(minhash_steps.values()),
-        max_parallelism=args.max_workers,
-        worker_resources=WORKER_RESOURCES,
-        override_output_path=prefix_join(output_prefix, "candidates"),
-    )
     verification_params = FuzzyVerificationParams()
-    verified_step = verify_fuzzy_dups_step(
-        name="datakit/fuzzy_verification_testbed/verified",
-        normalized_steps=normalized_steps,
-        minhash_steps=minhash_steps,
-        candidates_step=candidates_step,
-        verification_params=verification_params,
-        local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
-        worker_resources=WORKER_RESOURCES,
-        override_output_path=prefix_join(output_prefix, "verified"),
-    )
+    if args.candidate_artifact:
+        candidate_path = args.candidate_artifact
+        minhash_collection_path = args.minhash_collection
+        minhash_steps = None
+        verified_step = StepSpec(
+            name="datakit/fuzzy_verification_testbed/verified_existing",
+            deps=list(normalized_steps.values()),
+            hash_attrs={
+                "candidates": candidate_path,
+                "minhash_collection": minhash_collection_path,
+                "verification": verification_params.model_dump(mode="json"),
+                "local_representatives": REFERENCE_LOCAL_REPRESENTATIVE_PARAMS.model_dump(mode="json"),
+            },
+            fn=lambda verified_output_path: _verify_existing_artifacts(
+                output_path=verified_output_path,
+                normalized_steps=normalized_steps,
+                minhash_collection_path=minhash_collection_path,
+                candidate_path=candidate_path,
+                verification_params=verification_params,
+                max_workers=args.max_workers,
+            ),
+            override_output_path=prefix_join(output_prefix, "verified"),
+        )
+        report_deps = [verified_step]
+    else:
+        minhash_steps = {
+            source_name: compute_minhash_attrs_step(
+                name=f"datakit/fuzzy_verification_testbed/minhash/{source_name}",
+                normalize=normalize_step,
+                worker_resources=WORKER_RESOURCES,
+                max_workers=args.max_workers,
+                override_output_path=prefix_join(output_prefix, f"minhash/{source_name}"),
+            )
+            for source_name, normalize_step in normalized_steps.items()
+        }
+        candidates_step = compute_fuzzy_dups_attrs_step(
+            name="datakit/fuzzy_verification_testbed/candidates",
+            minhash_steps=list(minhash_steps.values()),
+            max_parallelism=args.max_workers,
+            worker_resources=WORKER_RESOURCES,
+            override_output_path=prefix_join(output_prefix, "candidates"),
+        )
+        candidate_path = candidates_step.output_path
+        verified_step = verify_fuzzy_dups_step(
+            name="datakit/fuzzy_verification_testbed/verified",
+            normalized_steps=normalized_steps,
+            minhash_steps=minhash_steps,
+            candidates_step=candidates_step,
+            verification_params=verification_params,
+            local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+            store_config=STORE_CONFIG,
+            max_workers=args.max_workers,
+            worker_resources=WORKER_RESOURCES,
+            coordinator_resources=COORDINATOR_RESOURCES,
+            map_task_resources=VERIFICATION_TASK_RESOURCES,
+            reduce_task_resources=VERIFICATION_TASK_RESOURCES,
+            override_output_path=prefix_join(output_prefix, "verified"),
+        )
+        report_deps = [candidates_step, verified_step]
     report_step = StepSpec(
         name="datakit/fuzzy_verification_testbed/report",
-        deps=[candidates_step, verified_step],
+        deps=report_deps,
         hash_attrs={"v": 2},
         fn=lambda output_path: dedup_report(
             output_path,
-            read_artifact(candidates_step.output_path, FuzzyDupsAttrData),
+            _read_candidate_artifact(candidate_path),
             read_artifact(verified_step.output_path, VerifiedFuzzyDupsAttrData),
         ),
         override_output_path=prefix_join(output_prefix, "report"),
@@ -548,18 +749,52 @@ def main() -> None:
     normalized = {
         source_name: read_artifact(step.output_path, NormalizedData) for source_name, step in normalized_steps.items()
     }
-    minhash = {
-        source_name: read_artifact(step.output_path, MinHashAttrData) for source_name, step in minhash_steps.items()
-    }
-    review = inspect_verification(
-        normalized=normalized,
-        minhash=minhash,
-        candidates=read_artifact(candidates_step.output_path, FuzzyDupsAttrData),
-        verified=read_artifact(verified_step.output_path, VerifiedFuzzyDupsAttrData),
-        output_path=prefix_join(output_prefix, "inspection.json"),
-        limit=args.inspection_limit,
-    )
-    logger.info("Verification testbed passed: %s", json.dumps(review["counts"], sort_keys=True))
+    candidates = _read_candidate_artifact(candidate_path)
+    verified = read_artifact(verified_step.output_path, VerifiedFuzzyDupsAttrData)
+    if args.reference_verified_prefix:
+        actual_markers = _verified_rows(verified_step.output_path)
+        reference_markers = _verified_rows(args.reference_verified_prefix)
+        if args.expected_reference_markers is not None and len(reference_markers) != args.expected_reference_markers:
+            raise AssertionError(
+                f"Reference contains {len(reference_markers)} markers; " f"expected {args.expected_reference_markers}"
+            )
+        if actual_markers != reference_markers:
+            unexpected = sorted(actual_markers.keys() - reference_markers.keys())
+            missing = sorted(reference_markers.keys() - actual_markers.keys())
+            changed = sorted(
+                key
+                for key in actual_markers.keys() & reference_markers.keys()
+                if actual_markers[key] != reference_markers[key]
+            )
+            comparison_summary = (
+                "Verified marker set differs from reference: "
+                f"unexpected={len(unexpected)} sample={unexpected[:20]!r}, "
+                f"missing={len(missing)} sample={missing[:20]!r}, "
+                f"changed={len(changed)} sample={changed[:20]!r}"
+            )
+            if args.reference_comparison_mode is ReferenceComparisonMode.EXACT:
+                raise AssertionError(comparison_summary)
+            logger.warning(comparison_summary)
+        else:
+            logger.info("Verified output matches %d reference markers", len(actual_markers))
+
+    if args.inspection_limit:
+        if minhash_steps is None:
+            minhash = _read_minhash_collection(minhash_collection_path, normalized)
+        else:
+            minhash = {
+                source_name: read_artifact(step.output_path, MinHashAttrData)
+                for source_name, step in minhash_steps.items()
+            }
+        review = inspect_verification(
+            normalized=normalized,
+            minhash=minhash,
+            candidates=candidates,
+            verified=verified,
+            output_path=prefix_join(output_prefix, "inspection.json"),
+            limit=args.inspection_limit,
+        )
+        logger.info("Verification testbed passed: %s", json.dumps(review["counts"], sort_keys=True))
 
 
 if __name__ == "__main__":
