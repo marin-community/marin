@@ -259,7 +259,7 @@ class _Runtime:
                     return
                 outcome = self._deliver(batch)
                 self._settle(batch, lost=outcome is not _DeliveryOutcome.DELIVERED)
-                if outcome is _DeliveryOutcome.STOPPED or self._stopping():
+                if outcome is _DeliveryOutcome.STOPPED or (outcome is _DeliveryOutcome.REJECTED and self._stopping()):
                     self._abandon_remaining()
                     return
         except Exception:
@@ -492,16 +492,17 @@ def record_runtime_health() -> TelemetryStatus:
     if not status.configured:
         return status
     current = snapshot_attributes("gauge", CURRENT_SNAPSHOT)
+    cumulative = snapshot_attributes("counter", CUMULATIVE_SNAPSHOT)
     gauge("queue_depth", unit="{record}").set(
         status.queued_records,
         attributes={**current, "queue_kind": "telemetry_export"},
     )
     gauge("telemetry_queue_bytes", unit="By").set(status.queued_bytes, attributes=current)
-    gauge("telemetry_lost_records", unit="{record}").set(status.lost_records, attributes=current)
-    gauge("telemetry_export_attempts", unit="{attempt}").set(status.export_attempts, attributes=current)
-    gauge("telemetry_export_failures", unit="{attempt}").set(status.export_failures, attributes=current)
-    gauge("telemetry_export_retries", unit="{attempt}").set(status.export_retries, attributes=current)
-    gauge("telemetry_rejected_records", unit="{record}").set(status.rejected_records, attributes=current)
+    gauge("telemetry_lost_records", unit="{record}").set(status.lost_records, attributes=cumulative)
+    gauge("telemetry_export_attempts", unit="{attempt}").set(status.export_attempts, attributes=cumulative)
+    gauge("telemetry_export_failures", unit="{attempt}").set(status.export_failures, attributes=cumulative)
+    gauge("telemetry_export_retries", unit="{attempt}").set(status.export_retries, attributes=cumulative)
+    gauge("telemetry_rejected_records", unit="{record}").set(status.rejected_records, attributes=cumulative)
     gauge("telemetry_oldest_queued_age_seconds", unit="s").set(
         status.oldest_queued_record_age_seconds,
         attributes=current,

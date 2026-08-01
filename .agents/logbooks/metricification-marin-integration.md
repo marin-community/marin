@@ -73,11 +73,17 @@ author: Marin metricification coordinator
 - Config: Rigging probes remain explicit opt-in with DCGM/Ray precedence and no
   automated recovery. The vLLM endpoint requires `job_id`, `root_run_uid`, or
   `execution_uid` plus raw lower/upper time bounds.
-- Result: Rigging 519 passed; vLLM/Grafana 64 passed; Iris identity 6 passed;
+- Result: Rigging 520 passed; vLLM/Grafana 64 passed; Iris identity 6 passed;
   Marin vLLM forwarding 2 passed. Iris stamps root/execution/job/task/attempt/
   worker/process identity and `serving_job_id`; the vLLM polling cadence emits
   exporter queue, loss, attempt/failure/retry/rejection, oldest-record age, and
   last-success freshness snapshots.
+- Correctness follow-up: Export loss/delivery totals are cumulative counter
+  snapshots while queue/age/freshness remain current gauges. Bounded shutdown
+  drains multiple queued batches after successful delivery and accounts then
+  abandons on stopped/terminal delivery. Consumers pinned to Rigging 0.2.67
+  still need their temporary pre-shutdown drain workaround until a release
+  containing this change is available.
 - Overhead: Unconfigured exporter-health calls measured 2.11 µs/call (100,000
   calls, best of five). A configured vLLM poll emits at most nine fixed-name
   health rows every 15 seconds (0.6 rows/s); probe defaults are explicit

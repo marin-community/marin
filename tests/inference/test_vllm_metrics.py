@@ -48,10 +48,14 @@ def test_vllm_cumulative_snapshots_use_direct_gauge_wire_format(monkeypatch):
 
 
 def test_failed_vllm_scrape_skips_source_metrics_but_reports_exporter_health(monkeypatch):
-    emitted = []
-    health = []
-    monkeypatch.setattr("marin.inference.vllm_metrics.publish_vllm_families", lambda families: emitted.append(families))
-    monkeypatch.setattr(telemetry, "record_runtime_health", lambda: health.append(True))
+    telemetry.shutdown(0)
+    transport = RecordingTelemetryTransport()
+    monkeypatch.setattr(telemetry, "_RequestsTransport", lambda: transport)
+    telemetry.configure(endpoint="http://finelog/v1/telemetry", service="vllm", attributes={"job_id": "/serve"})
+
     VllmMetricsForwarder("http://vllm/metrics", fetch=lambda _url: None).poll_once()
-    assert emitted == []
-    assert health == [True]
+    health = transport.record("queue_depth", {"queue_kind": "telemetry_export"})
+    telemetry.shutdown(1)
+
+    assert health["attributes"]["source_temporality"] == "current_snapshot"
+    assert all(record["attributes"].get("metric_source") != "vllm" for record in transport.records)

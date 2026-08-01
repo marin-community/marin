@@ -255,6 +255,20 @@ def test_exporter_health_records_queue_loss_retry_and_freshness(monkeypatch: pyt
     assert by_name["telemetry_export_attempts"]["value"] == 2
     assert by_name["telemetry_export_failures"]["value"] == 1
     assert by_name["telemetry_export_retries"]["value"] == 1
+    for name in (
+        "telemetry_lost_records",
+        "telemetry_export_attempts",
+        "telemetry_export_failures",
+        "telemetry_export_retries",
+        "telemetry_rejected_records",
+    ):
+        assert by_name[name]["attributes"] == {
+            "source_kind": "counter",
+            "source_temporality": "cumulative_snapshot",
+        }
+    for name in ("queue_depth", "telemetry_queue_bytes", "telemetry_oldest_queued_age_seconds"):
+        assert by_name[name]["attributes"]["source_kind"] == "gauge"
+        assert by_name[name]["attributes"]["source_temporality"] == "current_snapshot"
     assert by_name["progress_time_seconds"]["attributes"] == {
         "progress_kind": "telemetry_export",
         "source_kind": "gauge",
@@ -477,3 +491,28 @@ def test_shutdown_returns_within_budget_when_transport_is_stuck(monkeypatch: pyt
 
     assert elapsed < 0.2
     assert telemetry.runtime_status().configured is False
+
+
+def test_shutdown_drains_multiple_queued_batches_after_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = BlockingTransport()
+    configure(monkeypatch, transport, max_batch_records=1)
+    counter = telemetry.counter("terminal_record")
+    counter.add(1)
+    counter.add(2)
+    counter.add(3)
+    assert transport.started.wait(1)
+    runtime = telemetry._runtime
+    assert runtime is not None
+
+    shutdown_thread = threading.Thread(target=telemetry.shutdown, args=(1.0,))
+    shutdown_thread.start()
+    with runtime._condition:
+        assert runtime._condition.wait_for(lambda: runtime._stop, timeout=1)
+    transport.release.set()
+    shutdown_thread.join(1)
+
+    assert not shutdown_thread.is_alive()
+    records = [record for request in transport.requests for record in json.loads(request[1])["records"]]
+    assert [record["value"] for record in records] == [1, 2, 3]
+    assert runtime.status().queued_records == 0
+    assert runtime.status().lost_records == 0

@@ -67,7 +67,10 @@ work.
 Extend the process-local status snapshot with export attempts/failures/retries,
 rejections, last success, and oldest queued record age. Publish the snapshot at
 the existing centralized vLLM polling cadence; do not start another health
-thread or change the bounded shutdown path.
+thread. Queue/freshness values are current gauges; monotonic loss/delivery
+totals are cumulative counter snapshots. Bounded shutdown rejects new records
+and drains already queued batches while delivery succeeds, without adding a
+flush framework.
 
 ### Follow-up M2: Levanter pre-training
 
