@@ -149,7 +149,7 @@ class ActorServer:
         try:
             method, args, kwargs = self._resolve_method(request)
         except ConnectError as e:
-            error = actor_pb2.ActorError(error_type="NotFound", message=e.message)
+            error = actor_pb2.ActorError(error_type=e.code.value, message=e.message)
             return actor_pb2.ActorResponse(error=error)
 
         try:
@@ -231,7 +231,9 @@ class ActorServer:
         actor_name = request.actor_name or next(iter(self._actors), "")
         actor = self._actors.get(actor_name)
         if not actor:
-            raise ConnectError(Code.NOT_FOUND, f"Actor '{actor_name}' not found")
+            # The resolver can briefly return an endpoint from the previous
+            # attempt while a restarted actor registers its replacement.
+            raise ConnectError(Code.UNAVAILABLE, f"Actor '{actor_name}' not found")
         method = actor.methods.get(request.method_name)
         if not method:
             raise ConnectError(Code.NOT_FOUND, f"Method '{request.method_name}' not found on '{actor_name}'")
