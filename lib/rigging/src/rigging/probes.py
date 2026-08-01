@@ -98,6 +98,11 @@ class SystemProbeClock:
 class BoundedSubprocessRunner:
     """Run a process with a monotonic deadline and bounded captured stdout."""
 
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._active: set[subprocess.Popen[bytes]] = set()
+        self._cancelled = False
+
     def run(self, argv: tuple[str, ...], *, timeout: float, max_output_bytes: int) -> CommandResult:
         if not argv:
             raise ValueError("argv must not be empty")
@@ -106,66 +111,97 @@ class BoundedSubprocessRunner:
         if max_output_bytes <= 0:
             raise ValueError("max_output_bytes must be positive")
 
-        try:
-            process = subprocess.Popen(
-                argv,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                start_new_session=os.name == "posix",
-            )
-        except FileNotFoundError:
-            return CommandResult(CommandStatus.NOT_FOUND)
-        except OSError:
-            return CommandResult(CommandStatus.FAILED)
+        with self._lock:
+            if self._cancelled:
+                return CommandResult(CommandStatus.CANCELLED)
+            try:
+                process = subprocess.Popen(
+                    argv,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=os.name == "posix",
+                )
+            except FileNotFoundError:
+                return CommandResult(CommandStatus.NOT_FOUND)
+            except OSError:
+                return CommandResult(CommandStatus.FAILED)
+            self._active.add(process)
 
         assert process.stdout is not None
         deadline = Deadline.from_seconds(timeout)
         output = bytearray()
         try:
-            with selectors.DefaultSelector() as selector:
-                selector.register(process.stdout, selectors.EVENT_READ)
-                while selector.get_map():
-                    remaining = deadline.remaining_seconds()
-                    if remaining <= 0:
-                        return self._stop_result(process, CommandStatus.TIMED_OUT, output)
-                    if not selector.select(remaining):
-                        return self._stop_result(process, CommandStatus.TIMED_OUT, output)
-                    chunk = os.read(process.stdout.fileno(), min(65_536, max_output_bytes + 1 - len(output)))
-                    if not chunk:
-                        selector.unregister(process.stdout)
-                        break
-                    output.extend(chunk)
-                    if len(output) > max_output_bytes:
-                        del output[max_output_bytes:]
-                        return self._stop_result(process, CommandStatus.OUTPUT_LIMIT, output)
-        except OSError:
-            self._terminate(process)
-            return CommandResult(CommandStatus.FAILED, bytes(output))
+            try:
+                with selectors.DefaultSelector() as selector:
+                    selector.register(process.stdout, selectors.EVENT_READ)
+                    while selector.get_map():
+                        remaining = deadline.remaining_seconds()
+                        if remaining <= 0:
+                            return self._stop_result(process, CommandStatus.TIMED_OUT, output)
+                        if not selector.select(remaining):
+                            return self._stop_result(process, CommandStatus.TIMED_OUT, output)
+                        chunk = os.read(process.stdout.fileno(), min(65_536, max_output_bytes + 1 - len(output)))
+                        if not chunk:
+                            selector.unregister(process.stdout)
+                            break
+                        output.extend(chunk)
+                        if len(output) > max_output_bytes:
+                            del output[max_output_bytes:]
+                            return self._stop_result(process, CommandStatus.OUTPUT_LIMIT, output)
+            except OSError:
+                self._terminate(process, _PROCESS_REAP_TIMEOUT)
+                return CommandResult(CommandStatus.FAILED, bytes(output))
+
+            try:
+                returncode = process.wait(timeout=deadline.remaining_seconds())
+            except subprocess.TimeoutExpired:
+                return self._stop_result(process, CommandStatus.TIMED_OUT, output)
+            with self._lock:
+                status = CommandStatus.CANCELLED if self._cancelled else CommandStatus.COMPLETED
+            return CommandResult(status, bytes(output), returncode)
         finally:
             process.stdout.close()
+            with self._lock:
+                self._active.discard(process)
 
-        try:
-            returncode = process.wait(timeout=deadline.remaining_seconds())
-        except subprocess.TimeoutExpired:
-            return self._stop_result(process, CommandStatus.TIMED_OUT, output)
-        return CommandResult(CommandStatus.COMPLETED, bytes(output), returncode)
+    def cancel(self, timeout: float) -> None:
+        """Cancel and reap active process groups within one shared timeout."""
+        budget = _shutdown_budget(timeout)
+        deadline = Deadline.from_seconds(budget)
+        with self._lock:
+            self._cancelled = True
+            active = tuple(self._active)
+        for process in active:
+            self._kill(process)
+        for process in active:
+            try:
+                process.wait(timeout=deadline.remaining_seconds())
+            except subprocess.TimeoutExpired:
+                break
 
     @staticmethod
-    def _terminate(process: subprocess.Popen[bytes]) -> bool:
+    def _kill(process: subprocess.Popen[bytes]) -> None:
         try:
             if os.name == "posix":
                 os.killpg(process.pid, signal.SIGKILL)
             else:
                 process.kill()
         except ProcessLookupError:
-            pass
+            return
         except OSError:
             try:
                 process.kill()
             except OSError:
-                return False
+                # The child may have exited between group and process signalling;
+                # the caller still attempts wait() so an exited child is reaped.
+                return
+
+    @classmethod
+    def _terminate(cls, process: subprocess.Popen[bytes], timeout: float) -> bool:
+        """Return whether the killed process was reaped within timeout."""
+        cls._kill(process)
         try:
-            process.wait(timeout=_PROCESS_REAP_TIMEOUT)
+            process.wait(timeout=max(0.0, timeout))
         except subprocess.TimeoutExpired:
             return False
         return True
@@ -176,7 +212,7 @@ class BoundedSubprocessRunner:
         status: CommandStatus,
         output: bytearray,
     ) -> CommandResult:
-        final_status = status if self._terminate(process) else CommandStatus.FAILED
+        final_status = status if self._terminate(process, _PROCESS_REAP_TIMEOUT) else CommandStatus.FAILED
         return CommandResult(final_status, bytes(output))
 
 
@@ -187,7 +223,12 @@ _PROBE_LAST_SUCCESS = telemetry.gauge("probe_last_success_time_seconds", unit="s
 
 
 class TelemetryProbeSink:
-    """Emit normalized probe results through the configured Rigging telemetry client."""
+    """Emit payload before success health through the Rigging telemetry client.
+
+    Each record is queued independently. Queue loss can still admit a later
+    health record after rejecting an earlier payload record; callers can inspect
+    that non-atomic loss through :meth:`ProbeManager.status`.
+    """
 
     def emit(self, sample: ProbeSample) -> None:
         attributes = {"probe": sample.probe, "outcome": sample.outcome.value}
@@ -199,9 +240,18 @@ class TelemetryProbeSink:
             )
             return
 
+        for metric in sample.metrics:
+            if metric.kind is MetricKind.COUNTER:
+                telemetry.counter(metric.name, unit=metric.unit).add(metric.value, attributes=metric.attributes)
+            elif metric.kind is MetricKind.GAUGE:
+                telemetry.gauge(metric.name, unit=metric.unit).set(metric.value, attributes=metric.attributes)
+            else:
+                telemetry.histogram(metric.name, unit=metric.unit).record(metric.value, attributes=metric.attributes)
+        for event in sample.events:
+            telemetry.event(event.name, dict(event.body), attributes=event.attributes)
+
         _PROBE_RUNS.add(1, attributes=attributes)
         _PROBE_DURATION.record(sample.duration, attributes=attributes)
-        _PROBE_UP.set(float(sample.outcome is ProbeOutcome.SUCCEEDED), attributes={"probe": sample.probe})
         if sample.outcome is ProbeOutcome.SUCCEEDED:
             _PROBE_LAST_SUCCESS.set(sample.observed_time, attributes={"probe": sample.probe})
         elif sample.reason is not None:
@@ -213,16 +263,7 @@ class TelemetryProbeSink:
                 body,
                 attributes={"probe": sample.probe, "reason": sample.reason.value},
             )
-
-        for metric in sample.metrics:
-            if metric.kind is MetricKind.COUNTER:
-                telemetry.counter(metric.name, unit=metric.unit).add(metric.value, attributes=metric.attributes)
-            elif metric.kind is MetricKind.GAUGE:
-                telemetry.gauge(metric.name, unit=metric.unit).set(metric.value, attributes=metric.attributes)
-            else:
-                telemetry.histogram(metric.name, unit=metric.unit).record(metric.value, attributes=metric.attributes)
-        for event in sample.events:
-            telemetry.event(event.name, dict(event.body), attributes=event.attributes)
+        _PROBE_UP.set(float(sample.outcome is ProbeOutcome.SUCCEEDED), attributes={"probe": sample.probe})
 
 
 class _ProbeWorker:
@@ -236,6 +277,7 @@ class _ProbeWorker:
         self._sample_requested = False
         self._stopping = False
         self._sink_failures = 0
+        self._sink_error_type = ""
         self._thread = threading.Thread(target=self._run, name=f"rigging-probe-{probe.name}", daemon=True)
 
     def start(self) -> None:
@@ -249,6 +291,7 @@ class _ProbeWorker:
     def stop(self) -> None:
         with self._lock:
             self._stopping = True
+            self._sample_requested = False
             self._wake.set()
 
     def join(self, timeout: float) -> None:
@@ -260,6 +303,10 @@ class _ProbeWorker:
     def sink_failures(self) -> int:
         with self._lock:
             return self._sink_failures
+
+    def sink_error_type(self) -> str:
+        with self._lock:
+            return self._sink_error_type
 
     def _run(self) -> None:
         next_due = self.clock.monotonic()
@@ -303,6 +350,9 @@ class _ProbeWorker:
                 error_type=_exception_type(error),
             )
         duration = max(0.0, self.clock.monotonic() - started)
+        with self._lock:
+            if self._stopping:
+                return
         self._emit(
             ProbeSample(
                 probe=self.probe.name,
@@ -319,28 +369,30 @@ class _ProbeWorker:
     def _emit(self, sample: ProbeSample) -> None:
         try:
             self.sink.emit(sample)
-        except Exception:
+        except Exception as error:
             with self._lock:
                 self._sink_failures += 1
+                self._sink_error_type = _exception_type(error)
 
 
 class ProbeManager:
     """Own independently scheduled probe daemon threads."""
 
-    def __init__(self, workers: Mapping[str, _ProbeWorker]) -> None:
+    def __init__(self, workers: Mapping[str, _ProbeWorker], runner: CommandRunner) -> None:
         self._workers = dict(workers)
+        self._runner = runner
         self._shutdown_lock = threading.Lock()
         self._shutdown = False
 
     def sample(self, probe: str) -> None:
         """Queue an on-demand collection on the named probe's daemon thread."""
-        self._workers[probe].sample()
+        with self._shutdown_lock:
+            if self._shutdown:
+                raise RuntimeError("probe manager is shut down")
+            self._workers[probe].sample()
 
     def shutdown(self, timeout: float = 2.0) -> None:
-        """Request stop and spend at most one shared timeout joining workers.
-
-        A probe blocked beyond the budget remains an isolated daemon thread.
-        """
+        """Stop workers and cancel their subprocesses within one shared timeout."""
         with self._shutdown_lock:
             if self._shutdown:
                 return
@@ -349,14 +401,19 @@ class ProbeManager:
             deadline = Deadline.from_seconds(budget)
             for worker in self._workers.values():
                 worker.stop()
+            self._runner.cancel(deadline.remaining_seconds())
             for worker in self._workers.values():
                 worker.join(deadline.remaining_seconds())
 
     def status(self) -> ProbeManagerStatus:
-        """Return process-local worker liveness and sink loss."""
+        """Return worker liveness, sink exceptions, and telemetry queue loss."""
         return ProbeManagerStatus(
             live_workers=sum(worker.alive() for worker in self._workers.values()),
             sink_failures=sum(worker.sink_failures() for worker in self._workers.values()),
+            sink_error_types=tuple(
+                sorted({error_type for worker in self._workers.values() if (error_type := worker.sink_error_type())})
+            ),
+            telemetry_lost_records=telemetry.runtime_status().lost_records,
         )
 
     def __enter__(self) -> "ProbeManager":
@@ -384,7 +441,7 @@ def start(
     probe_sink = sink if sink is not None else TelemetryProbeSink()
     probe_clock = clock if clock is not None else SystemProbeClock()
     workers = {probe.name: _ProbeWorker(probe, command_runner, probe_sink, probe_clock) for probe in configured_probes}
-    manager = ProbeManager(workers)
+    manager = ProbeManager(workers, command_runner)
     for worker in workers.values():
         worker.start()
     return manager

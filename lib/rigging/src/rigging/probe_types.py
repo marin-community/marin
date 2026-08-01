@@ -45,6 +45,7 @@ class ProbeReason(enum.StrEnum):
     PARSE_ERROR = "parse_error"
     RESULT_LIMIT = "result_limit"
     INVALID_RESULT = "invalid_result"
+    UNSUPPORTED_FORMAT = "unsupported_format"
     INTERNAL_ERROR = "internal_error"
     CLEAN_SHUTDOWN = "clean_shutdown"
 
@@ -64,6 +65,7 @@ class CommandStatus(enum.StrEnum):
     NOT_FOUND = "not_found"
     TIMED_OUT = "timed_out"
     OUTPUT_LIMIT = "output_limit"
+    CANCELLED = "cancelled"
     FAILED = "failed"
 
 
@@ -80,6 +82,10 @@ class CommandRunner(Protocol):
     """Subprocess boundary used only by probe daemon threads."""
 
     def run(self, argv: tuple[str, ...], *, timeout: float, max_output_bytes: int) -> CommandResult: ...
+
+    def cancel(self, timeout: float) -> None:
+        """Prevent new commands, terminate active commands, and reap within one budget."""
+        ...
 
 
 def command_failure_collection(
@@ -100,6 +106,8 @@ def command_failure_collection(
         return ProbeCollection(ProbeOutcome.FAILED, ProbeReason.OUTPUT_LIMIT)
     if status is CommandStatus.FAILED:
         return ProbeCollection(ProbeOutcome.FAILED, ProbeReason.INTERNAL_ERROR)
+    if status is CommandStatus.CANCELLED:
+        return ProbeCollection(ProbeOutcome.SHUTDOWN, ProbeReason.CLEAN_SHUTDOWN)
     return None
 
 
@@ -166,6 +174,8 @@ class ProbeManagerStatus:
 
     live_workers: int
     sink_failures: int
+    sink_error_types: tuple[str, ...]
+    telemetry_lost_records: int
 
 
 class Probe(Protocol):

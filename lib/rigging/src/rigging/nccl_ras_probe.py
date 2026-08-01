@@ -1,12 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Observe-only NCCL RAS summary adapter."""
+"""Observe-only adapter for NVIDIA's documented NCCL RAS JSON summary."""
 
 import json
 import math
-import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from rigging import telemetry
@@ -15,7 +14,9 @@ from rigging.probe_types import (
     MAX_RESULT_EVENTS,
     MAX_RESULT_METRICS,
     MAX_SUBPROCESS_OUTPUT_BYTES,
+    CommandResult,
     CommandRunner,
+    CommandStatus,
     MetricKind,
     ProbeCollection,
     ProbeEvent,
@@ -24,38 +25,14 @@ from rigging.probe_types import (
     ProbeReason,
     command_failure_collection,
 )
+from rigging.timing import Deadline
 
 _MAX_JSON_NODES = 20_000
 _MAX_JSON_DEPTH = 32
 _MAX_COMMUNICATORS = 256
-_MAX_OPERATIONS_PER_COMMUNICATOR = 64
-_MAX_TEXT_LINES = 4_096
-_MAX_TEXT_LINE_BYTES = 1_024
-_HEALTHY_STATES = frozenset({"active", "complete", "healthy", "operational", "ready", "running"})
-_NO_ASYNC_ERROR = frozenset({"", "0", "ncclsuccess", "none", "success"})
-_LEGACY_OPERATIONS = frozenset(
-    {
-        "AllGather",
-        "AllReduce",
-        "AllToAll",
-        "Broadcast",
-        "Gather",
-        "Recv",
-        "Reduce",
-        "ReduceScatter",
-        "Scatter",
-        "Send",
-    }
-)
-_VERSION_PATTERN = re.compile(r"NCCL RAS\s*\(v(?P<version>[^)]+)\)", re.IGNORECASE)
-_RUNTIME_VERSION_PATTERN = re.compile(r"CUDA runtime version\s*:\s*(?P<version>\S+)", re.IGNORECASE)
-_DRIVER_VERSION_PATTERN = re.compile(r"CUDA driver version\s*:\s*(?P<version>\S+)", re.IGNORECASE)
-_COMMUNICATOR_PATTERN = re.compile(
-    r"^Communicator\b(?:\s+(?:hash|id))?\s*[:=]?\s*(?P<hash>0x[0-9a-f]+|[0-9a-f]{8,})"
-    r"(?:.*?secondary(?:_hash|\s+hash)\s*[:=]\s*(?P<secondary>\S+))?",
-    re.IGNORECASE,
-)
-_OPERATION_PATTERN = re.compile(r"^(?P<operation>[A-Za-z][A-Za-z0-9]+)\s*[:=]\s*(?P<count>\d+)\s*$")
+_MAX_RANKS_PER_COMMUNICATOR = 2_048
+_MAX_COLLECTIVES_PER_RANK = 64
+_MAX_EXACT_COUNT = 2**53 - 1
 
 
 @dataclass(frozen=True)
@@ -67,13 +44,8 @@ class NcclRasProbe:
     name: str = "nccl_ras"
 
     def collect(self, runner: CommandRunner) -> ProbeCollection:
-        client_timeout = max(1, math.floor(self.timeout * 0.75))
-        base_command = ("ncclras", "-v", "-t", str(client_timeout))
-        json_result = runner.run(
-            (*base_command, "-f", "json"),
-            timeout=self.timeout,
-            max_output_bytes=MAX_SUBPROCESS_OUTPUT_BYTES,
-        )
+        deadline = Deadline.from_seconds(self.timeout)
+        json_result = _run_query(runner, deadline, json_output=True)
         timeout_metric = ProbeMetric(
             "ras_query_timeouts",
             MetricKind.COUNTER,
@@ -86,330 +58,351 @@ class NcclRasProbe:
             return terminal
 
         if json_result.returncode == 0:
-            collection = _collection_from_json_or_text(json_result.stdout)
-            if collection is not None:
-                return collection
+            try:
+                return _summary_collection(_parse_json_output(json_result.stdout))
+            except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+                return ProbeCollection(ProbeOutcome.FAILED, ProbeReason.PARSE_ERROR)
 
-        text_result = runner.run(
-            base_command,
-            timeout=self.timeout,
-            max_output_bytes=MAX_SUBPROCESS_OUTPUT_BYTES,
-        )
+        text_result = _run_query(runner, deadline, json_output=False)
         terminal = command_failure_collection(text_result.status, timeout_metrics=(timeout_metric,))
         if terminal is not None:
             return terminal
         if text_result.returncode != 0:
             return ProbeCollection(ProbeOutcome.UNAVAILABLE, ProbeReason.NONZERO_EXIT)
-        try:
-            return _summary_collection(_parse_text(text_result.stdout))
-        except (UnicodeDecodeError, ValueError):
-            return ProbeCollection(ProbeOutcome.FAILED, ProbeReason.PARSE_ERROR)
+        return ProbeCollection(ProbeOutcome.UNAVAILABLE, ProbeReason.UNSUPPORTED_FORMAT)
 
 
-@dataclass
+@dataclass(frozen=True)
+class _RankSummary:
+    rank: int
+    init_state: int
+    async_error: int
+    finalize_called: bool
+    destroy_flag: bool
+    abort_flag: bool
+    collective_counts: dict[str, int]
+
+
+@dataclass(frozen=True)
+class _MissingRankSummary:
+    rank: int
+    unresponsive: bool
+    considered_dead: bool
+
+
+@dataclass(frozen=True)
 class _CommunicatorSummary:
-    communicator_hash: str = ""
-    secondary_hash: str = ""
-    state: str = ""
-    initialization: str = ""
-    async_error: str = ""
-    mismatch: bool = False
-    ranks: dict[str, int] = field(default_factory=dict)
-    operations: dict[str, int] = field(default_factory=dict)
+    communicator_hash: str
+    secondary_hash: str
+    size: int
+    ranks: tuple[_RankSummary, ...]
+    missing_ranks: tuple[_MissingRankSummary, ...]
 
 
-@dataclass
+@dataclass(frozen=True)
 class _RasSummary:
-    nccl_version: str = ""
-    cuda_runtime_version: str = ""
-    cuda_driver_version: str = ""
-    communicators: list[_CommunicatorSummary] = field(default_factory=list)
+    nccl_version: str
+    cuda_runtime_version: str
+    cuda_driver_version: str
+    communicators_count: int
+    communicators: tuple[_CommunicatorSummary, ...]
+    collection_time: float
+    timeouts_count: int
 
 
-def _collection_from_json_or_text(output: bytes) -> ProbeCollection | None:
-    try:
-        payload = json.loads(output)
-        return _summary_collection(_parse_json(payload))
-    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
-        try:
-            return _summary_collection(_parse_text(output))
-        except (UnicodeDecodeError, ValueError):
-            return None
+def _run_query(runner: CommandRunner, deadline: Deadline, *, json_output: bool) -> CommandResult:
+    remaining = deadline.remaining_seconds()
+    if remaining <= 0:
+        return CommandResult(CommandStatus.TIMED_OUT)
+    client_timeout = max(1, math.ceil(remaining * 0.75))
+    command = ("ncclras", "-v", "-t", str(client_timeout))
+    if json_output:
+        command = (*command, "-f", "json")
+    return runner.run(command, timeout=remaining, max_output_bytes=MAX_SUBPROCESS_OUTPUT_BYTES)
 
 
-def _parse_json(payload: Any) -> _RasSummary:
+def _parse_json_output(output: bytes) -> _RasSummary:
+    payload = json.loads(output)
     _validate_json_tree(payload)
-    if not isinstance(payload, dict):
-        raise ValueError("NCCL RAS JSON root must be an object")
-
-    summary = _RasSummary(
-        nccl_version=_version_value(payload, "nccl", "nccl_version", "ncclversion"),
-        cuda_runtime_version=_version_value(
-            payload,
-            "cuda_runtime",
-            "cuda_runtime_version",
-            "cudaruntimeversion",
-        ),
-        cuda_driver_version=_version_value(
-            payload,
-            "cuda_driver",
-            "cuda_driver_version",
-            "cudadriverversion",
-        ),
-    )
-    entries = _communicator_entries(payload)
-    if len(entries) > _MAX_COMMUNICATORS:
+    root = _object(payload, "root")
+    communicators_count = _count(root, "communicators_count")
+    communicator_values = _list(root, "communicators")
+    if communicators_count != len(communicator_values):
+        raise ValueError("communicators_count does not match communicators")
+    if communicators_count > _MAX_COMMUNICATORS:
         raise ValueError("too many NCCL communicators")
-    summary.communicators = [_json_communicator(entry) for entry in entries]
-    return summary
 
-
-def _json_communicator(value: dict[str, Any]) -> _CommunicatorSummary:
-    ranks_value = _mapping_value(value, "ranks", "rank_summary", "ranksummary")
-    ranks = ranks_value if isinstance(ranks_value, dict) else value
-    rank_list = ranks_value if isinstance(ranks_value, list) else []
-    operations_value = _mapping_value(
-        value,
-        "operations",
-        "collectives",
-        "collective_operations",
-        "operation_counts",
-        "coll_ops",
+    communicators = tuple(_communicator(_object(value, "communicator")) for value in communicator_values)
+    ras = _object_field(root, "ras")
+    return _RasSummary(
+        nccl_version=_text(root, "nccl_version"),
+        cuda_runtime_version=_version(root, "cuda_runtime_version"),
+        cuda_driver_version=_version(root, "cuda_driver_version"),
+        communicators_count=communicators_count,
+        communicators=communicators,
+        collection_time=_nonnegative_number(ras, "collection_time_sec"),
+        timeouts_count=_count(ras, "timeouts_count"),
     )
-    operations = _operation_counts(operations_value)
-    if len(operations) > _MAX_OPERATIONS_PER_COMMUNICATOR:
-        raise ValueError("too many NCCL operation kinds")
 
-    total = _integer_value(ranks, "total", "total_ranks", "rank_count", "nranks")
-    if total is None and isinstance(ranks_value, int):
-        total = _nonnegative_integer(ranks_value)
-    if total is None and rank_list:
-        total = len(rank_list)
-    rank_counts = {
-        "total": total,
-        "missing": _integer_value(ranks, "missing", "missing_ranks"),
-        "unresponsive": _integer_value(ranks, "unresponsive", "unresponsive_ranks"),
-        "considered_dead": _integer_value(ranks, "considered_dead", "dead", "dead_ranks"),
-    }
-    if rank_list:
-        states = [_string_value(rank, "state", "status").lower() for rank in rank_list if isinstance(rank, dict)]
-        rank_counts["missing"] = rank_counts["missing"] or states.count("missing")
-        rank_counts["unresponsive"] = rank_counts["unresponsive"] or states.count("unresponsive")
-        rank_counts["considered_dead"] = rank_counts["considered_dead"] or sum(
-            state in {"considered_dead", "dead"} for state in states
-        )
 
+def _communicator(value: dict[str, Any]) -> _CommunicatorSummary:
+    size = _count(value, "size")
+    ranks_count = _count(value, "ranks_count")
+    missing_ranks_count = _count(value, "missing_ranks_count")
+    rank_values = _list(value, "ranks")
+    missing_rank_values = _list(value, "missing_ranks")
+    if ranks_count != len(rank_values) or missing_ranks_count != len(missing_rank_values):
+        raise ValueError("NCCL rank counts do not match rank lists")
+    if size != ranks_count + missing_ranks_count:
+        raise ValueError("NCCL communicator size does not match rank counts")
+    if size > _MAX_RANKS_PER_COMMUNICATOR:
+        raise ValueError("too many NCCL communicator ranks")
+
+    ranks = tuple(_rank(_object(item, "rank")) for item in rank_values)
+    missing_ranks = tuple(_missing_rank(_object(item, "missing rank")) for item in missing_rank_values)
+    rank_numbers = [rank.rank for rank in ranks] + [rank.rank for rank in missing_ranks]
+    if len(rank_numbers) != len(set(rank_numbers)):
+        raise ValueError("duplicate NCCL communicator rank")
     return _CommunicatorSummary(
-        communicator_hash=_bounded_string(_string_value(value, "comm_hash", "communicator_hash", "hash")),
-        secondary_hash=_bounded_string(_string_value(value, "secondary_hash", "secondary_comm_hash", "comm_hash2")),
-        state=_bounded_string(_string_value(value, "state", "lifecycle_state", "status")),
-        initialization=_bounded_string(_string_value(value, "initialization", "init_state", "initialization_state")),
-        async_error=_bounded_string(_string_value(value, "async_error", "asyncerror")),
-        mismatch=_boolean_value(value, "mismatch", "collective_mismatch", "collectivemismatch"),
-        ranks={name: count for name, count in rank_counts.items() if count is not None},
-        operations=operations,
+        communicator_hash=_text(value, "hash"),
+        secondary_hash=_text(value, "secondary_hash"),
+        size=size,
+        ranks=ranks,
+        missing_ranks=missing_ranks,
     )
 
 
-def _operation_counts(value: Any) -> dict[str, int]:
-    if isinstance(value, dict):
-        return {_bounded_string(str(name)): _nonnegative_integer(count) for name, count in value.items()}
-    if isinstance(value, list):
-        operations: dict[str, int] = {}
-        for item in value:
-            if not isinstance(item, dict):
-                raise ValueError("NCCL operation entry must be an object")
-            name = _bounded_string(_string_value(item, "name", "operation", "collective"))
-            count = _integer_value(item, "count", "operations", "operation_count")
-            if not name or count is None:
-                raise ValueError("NCCL operation entry is incomplete")
-            operations[name] = count
-        return operations
-    if value is None:
-        return {}
-    raise ValueError("NCCL operations must be an object or list")
+def _rank(value: dict[str, Any]) -> _RankSummary:
+    status = _object_field(value, "status")
+    counts = _object_field(value, "collective_counts")
+    if len(counts) > _MAX_COLLECTIVES_PER_RANK:
+        raise ValueError("too many NCCL collective kinds")
+    collective_counts = {_bounded_text(name): _nonnegative_integer(count) for name, count in counts.items()}
+    return _RankSummary(
+        rank=_count(value, "rank"),
+        init_state=_count(status, "init_state"),
+        async_error=_count(status, "async_error"),
+        finalize_called=_boolean(status, "finalize_called"),
+        destroy_flag=_boolean(status, "destroy_flag"),
+        abort_flag=_boolean(status, "abort_flag"),
+        collective_counts=collective_counts,
+    )
 
 
-def _parse_text(output: bytes) -> _RasSummary:
-    """Parse pre-2.28.7 output; remove after older deployed NCCL versions retire."""
-    text = output.decode("utf-8")
-    lines = text.splitlines()
-    if len(lines) > _MAX_TEXT_LINES or any(len(line.encode()) > _MAX_TEXT_LINE_BYTES for line in lines):
-        raise ValueError("legacy NCCL RAS output exceeds parser limits")
-    summary = _RasSummary()
-    current: _CommunicatorSummary | None = None
-    in_operations = False
-    recognized = False
-
-    for raw_line in lines:
-        line = raw_line.strip()
-        if not line:
-            continue
-        if match := _VERSION_PATTERN.search(line):
-            summary.nccl_version = _bounded_string(match.group("version"))
-            recognized = True
-            continue
-        if match := _RUNTIME_VERSION_PATTERN.search(line):
-            summary.cuda_runtime_version = _bounded_string(match.group("version"))
-            recognized = True
-            continue
-        if match := _DRIVER_VERSION_PATTERN.search(line):
-            summary.cuda_driver_version = _bounded_string(match.group("version"))
-            recognized = True
-            continue
-        if match := _COMMUNICATOR_PATTERN.match(line):
-            if len(summary.communicators) >= _MAX_COMMUNICATORS:
-                raise ValueError("too many NCCL communicators")
-            current = _CommunicatorSummary(
-                communicator_hash=_bounded_string(match.group("hash")),
-                secondary_hash=_bounded_string(match.group("secondary") or ""),
-                state=_bounded_string(_line_field(line, "state")),
-            )
-            summary.communicators.append(current)
-            in_operations = False
-            recognized = True
-            continue
-        if current is None:
-            continue
-        if line.lower().startswith("ranks:"):
-            for output_name, aliases in {
-                "total": ("total",),
-                "missing": ("missing",),
-                "unresponsive": ("unresponsive",),
-                "considered_dead": ("considered_dead", "considered-dead", "dead"),
-            }.items():
-                value = _line_integer_field(line, *aliases)
-                if value is not None:
-                    current.ranks[output_name] = value
-            recognized = True
-            continue
-        if line.lower().startswith("initialization:"):
-            current.initialization = _bounded_string(line.split(":", 1)[1].strip())
-            recognized = True
-            continue
-        if line.lower().startswith("async error:"):
-            current.async_error = _bounded_string(line.split(":", 1)[1].strip())
-            recognized = True
-            continue
-        if line.lower().startswith("mismatch:"):
-            current.mismatch = _parse_boolean(line.split(":", 1)[1].strip())
-            recognized = True
-            continue
-        if line.lower() == "operations:":
-            in_operations = True
-            continue
-        if in_operations and (match := _OPERATION_PATTERN.match(line)):
-            operation = match.group("operation")
-            if operation not in _LEGACY_OPERATIONS:
-                raise ValueError("unknown legacy NCCL operation")
-            current.operations[operation] = int(match.group("count"))
-            if len(current.operations) > _MAX_OPERATIONS_PER_COMMUNICATOR:
-                raise ValueError("too many NCCL operation kinds")
-            recognized = True
-
-    if not recognized:
-        raise ValueError("unrecognized legacy NCCL RAS output")
-    return summary
+def _missing_rank(value: dict[str, Any]) -> _MissingRankSummary:
+    status = _object_field(value, "status")
+    return _MissingRankSummary(
+        rank=_count(value, "rank"),
+        unresponsive=_boolean(status, "unresponsive"),
+        considered_dead=_boolean(status, "considered_dead"),
+    )
 
 
 def _summary_collection(summary: _RasSummary) -> ProbeCollection:
-    metrics = [
+    current = telemetry.snapshot_attributes("nccl_ras", telemetry.CURRENT_SNAPSHOT)
+    metrics = _runtime_metrics(summary, current)
+    events: list[ProbeEvent] = []
+    for communicator in summary.communicators:
+        if len(metrics) + _communicator_metric_count(communicator) > MAX_RESULT_METRICS:
+            return ProbeCollection(ProbeOutcome.FAILED, ProbeReason.RESULT_LIMIT)
+        metrics.extend(_communicator_metrics(communicator, current))
+        remaining_events = MAX_RESULT_EVENTS - len(events)
+        events.extend(_communicator_events(communicator)[:remaining_events])
+    return ProbeCollection.succeeded(metrics=tuple(metrics), events=tuple(events))
+
+
+def _runtime_metrics(summary: _RasSummary, current: dict[str, str]) -> list[ProbeMetric]:
+    return [
         ProbeMetric(
             "communicators",
             MetricKind.GAUGE,
-            float(len(summary.communicators)),
+            float(summary.communicators_count),
             unit="{communicator}",
-            attributes={"source_kind": "nccl_ras"},
+            attributes=current,
+        ),
+        ProbeMetric(
+            "runtime_inventory",
+            MetricKind.GAUGE,
+            1.0,
+            attributes={
+                "runtime_kind": "nccl",
+                "nccl_version": summary.nccl_version,
+                "cuda_runtime_version": summary.cuda_runtime_version,
+                "cuda_driver_version": summary.cuda_driver_version,
+                **current,
+            },
+        ),
+        ProbeMetric(
+            "ras_collection_duration_seconds",
+            MetricKind.GAUGE,
+            summary.collection_time,
+            unit="s",
+            attributes=current,
+        ),
+        ProbeMetric(
+            "ras_collection_timeouts",
+            MetricKind.GAUGE,
+            float(summary.timeouts_count),
+            unit="{timeout}",
+            attributes=current,
+        ),
+    ]
+
+
+def _communicator_metric_count(communicator: _CommunicatorSummary) -> int:
+    rank_metrics = sum(1 + len(rank.collective_counts) for rank in communicator.ranks)
+    return 6 + rank_metrics + len(communicator.missing_ranks)
+
+
+def _communicator_metrics(communicator: _CommunicatorSummary, current: dict[str, str]) -> list[ProbeMetric]:
+    identity = _communicator_identity(communicator)
+    metrics = [
+        ProbeMetric(
+            "communicator_state",
+            MetricKind.GAUGE,
+            1.0,
+            attributes={**identity, "lifecycle_state": _lifecycle_state(communicator), **current},
         )
     ]
-    runtime_attributes = {"runtime_kind": "nccl"}
-    for name, value in {
-        "nccl_version": summary.nccl_version,
-        "cuda_runtime_version": summary.cuda_runtime_version,
-        "cuda_driver_version": summary.cuda_driver_version,
-    }.items():
-        if value:
-            runtime_attributes[name] = value
-    if len(runtime_attributes) > 1:
-        metrics.append(ProbeMetric("runtime_inventory", MetricKind.GAUGE, 1.0, attributes=runtime_attributes))
+    rank_counts = {
+        "total": communicator.size,
+        "reported": len(communicator.ranks),
+        "missing": len(communicator.missing_ranks),
+        "unresponsive": sum(rank.unresponsive for rank in communicator.missing_ranks),
+        "considered_dead": sum(rank.considered_dead for rank in communicator.missing_ranks),
+    }
+    metrics.extend(
+        ProbeMetric(
+            "communicator_ranks",
+            MetricKind.GAUGE,
+            float(count),
+            unit="{rank}",
+            attributes={**identity, "rank_state": rank_state, **current},
+        )
+        for rank_state, count in rank_counts.items()
+    )
+    for rank in communicator.ranks:
+        metrics.extend(_reported_rank_metrics(rank, identity, current))
+    metrics.extend(_missing_rank_metric(rank, identity, current) for rank in communicator.missing_ranks)
+    return metrics
 
-    events: list[ProbeEvent] = []
-    for communicator in summary.communicators:
-        identity = {}
-        if communicator.communicator_hash:
-            identity["communicator_hash"] = communicator.communicator_hash
-        if communicator.secondary_hash:
-            identity["secondary_hash"] = communicator.secondary_hash
-        state_attributes = dict(identity)
-        for name, value in {
-            "lifecycle_state": communicator.state,
-            "initialization_state": communicator.initialization,
-            "async_error": communicator.async_error,
-        }.items():
-            if value:
-                state_attributes[name] = value
-        metrics.append(ProbeMetric("communicator_state", MetricKind.GAUGE, 1.0, attributes=state_attributes))
-        for rank_state, count in communicator.ranks.items():
-            metrics.append(
-                ProbeMetric(
-                    "communicator_ranks",
-                    MetricKind.GAUGE,
-                    float(count),
-                    unit="{rank}",
-                    attributes={**identity, "rank_state": rank_state},
-                )
-            )
-        for operation, count in communicator.operations.items():
-            metrics.append(
-                ProbeMetric(
-                    "collective_operations",
-                    MetricKind.GAUGE,
-                    float(count),
-                    unit="{operation}",
-                    attributes={
-                        **identity,
-                        "collective": operation,
-                        **telemetry.snapshot_attributes("nccl_ras", telemetry.CUMULATIVE_SNAPSHOT),
-                    },
-                )
-            )
-        for anomaly in _anomalies(communicator):
-            if len(events) >= MAX_RESULT_EVENTS:
-                break
-            events.append(
-                ProbeEvent(
-                    "nccl_ras_anomaly",
-                    {
-                        "state": communicator.state or "unknown",
-                        "missing_ranks": communicator.ranks.get("missing", 0),
-                        "unresponsive_ranks": communicator.ranks.get("unresponsive", 0),
-                        "considered_dead_ranks": communicator.ranks.get("considered_dead", 0),
-                        "mismatch": communicator.mismatch,
-                    },
-                    attributes={**identity, "anomaly": anomaly},
-                )
-            )
 
-    if len(metrics) > MAX_RESULT_METRICS:
-        return ProbeCollection(ProbeOutcome.FAILED, ProbeReason.RESULT_LIMIT)
-    return ProbeCollection.succeeded(metrics=tuple(metrics), events=tuple(events))
+def _reported_rank_metrics(
+    rank: _RankSummary,
+    identity: dict[str, str],
+    current: dict[str, str],
+) -> list[ProbeMetric]:
+    rank_identity = {**identity, "rank": str(rank.rank)}
+    metrics = [
+        ProbeMetric(
+            "communicator_rank_status",
+            MetricKind.GAUGE,
+            1.0,
+            attributes={
+                **rank_identity,
+                "rank_state": "reported",
+                "init_state": str(rank.init_state),
+                "async_error": str(rank.async_error),
+                "finalize_called": str(rank.finalize_called).lower(),
+                "destroy_flag": str(rank.destroy_flag).lower(),
+                "abort_flag": str(rank.abort_flag).lower(),
+                **current,
+            },
+        )
+    ]
+    cumulative = telemetry.snapshot_attributes("nccl_ras", telemetry.CUMULATIVE_SNAPSHOT)
+    metrics.extend(
+        ProbeMetric(
+            "collective_operations",
+            MetricKind.GAUGE,
+            float(count),
+            unit="{operation}",
+            attributes={**rank_identity, "collective": collective, **cumulative},
+        )
+        for collective, count in rank.collective_counts.items()
+    )
+    return metrics
+
+
+def _missing_rank_metric(
+    rank: _MissingRankSummary,
+    identity: dict[str, str],
+    current: dict[str, str],
+) -> ProbeMetric:
+    return ProbeMetric(
+        "communicator_rank_status",
+        MetricKind.GAUGE,
+        0.0,
+        attributes={
+            **identity,
+            "rank": str(rank.rank),
+            "rank_state": "missing",
+            "unresponsive": str(rank.unresponsive).lower(),
+            "considered_dead": str(rank.considered_dead).lower(),
+            **current,
+        },
+    )
+
+
+def _communicator_events(communicator: _CommunicatorSummary) -> list[ProbeEvent]:
+    identity = _communicator_identity(communicator)
+    body = {
+        "state": _lifecycle_state(communicator),
+        "missing_ranks": len(communicator.missing_ranks),
+        "unresponsive_ranks": sum(rank.unresponsive for rank in communicator.missing_ranks),
+        "considered_dead_ranks": sum(rank.considered_dead for rank in communicator.missing_ranks),
+    }
+    return [
+        ProbeEvent(
+            "nccl_ras_anomaly",
+            {**body, "mismatch": anomaly == "collective_mismatch"},
+            attributes={**identity, "anomaly": anomaly},
+        )
+        for anomaly in _anomalies(communicator)
+    ]
+
+
+def _communicator_identity(communicator: _CommunicatorSummary) -> dict[str, str]:
+    return {
+        "communicator_hash": communicator.communicator_hash,
+        "secondary_hash": communicator.secondary_hash,
+    }
+
+
+def _lifecycle_state(communicator: _CommunicatorSummary) -> str:
+    if any(rank.abort_flag or rank.async_error != 0 for rank in communicator.ranks):
+        return "error"
+    if communicator.missing_ranks:
+        return "incomplete"
+    if any(rank.destroy_flag or rank.finalize_called for rank in communicator.ranks):
+        return "finalizing"
+    if any(rank.init_state == 7 for rank in communicator.ranks):
+        return "initializing"
+    if all(rank.init_state == 0 for rank in communicator.ranks):
+        return "running"
+    return "error"
 
 
 def _anomalies(communicator: _CommunicatorSummary) -> list[str]:
     anomalies: list[str] = []
-    if communicator.ranks.get("missing", 0) > 0:
+    if communicator.missing_ranks:
         anomalies.append("incomplete_communicator")
-    if communicator.ranks.get("unresponsive", 0) > 0:
+    if any(rank.unresponsive for rank in communicator.missing_ranks):
         anomalies.append("unresponsive_rank")
-    if communicator.ranks.get("considered_dead", 0) > 0:
+    if any(rank.considered_dead for rank in communicator.missing_ranks):
         anomalies.append("dead_peer")
-    if communicator.mismatch:
+    if _collective_mismatch(communicator.ranks):
         anomalies.append("collective_mismatch")
-    if communicator.state and communicator.state.lower() not in _HEALTHY_STATES:
+    if any(rank.abort_flag or rank.async_error != 0 or rank.init_state not in {0, 7} for rank in communicator.ranks):
         anomalies.append("communicator_state")
-    if communicator.async_error.lower() not in _NO_ASYNC_ERROR:
-        anomalies.append("async_error")
     return anomalies
+
+
+def _collective_mismatch(ranks: tuple[_RankSummary, ...]) -> bool:
+    if len(ranks) < 2:
+        return False
+    collectives = set().union(*(rank.collective_counts for rank in ranks))
+    return any(len({rank.collective_counts.get(collective, 0) for rank in ranks}) > 1 for collective in collectives)
 
 
 def _validate_json_tree(value: Any) -> None:
@@ -426,99 +419,69 @@ def _validate_json_tree(value: Any) -> None:
             stack.extend((child, depth + 1) for child in item)
 
 
-def _communicator_entries(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    stack: list[Any] = [payload]
-    while stack:
-        value = stack.pop()
-        if isinstance(value, dict):
-            for key, child in value.items():
-                if _normalized_key(key) in {"communicators", "comms"}:
-                    if not isinstance(child, list) or not all(isinstance(item, dict) for item in child):
-                        raise ValueError("NCCL communicators must be a list of objects")
-                    return child
-                stack.append(child)
-        elif isinstance(value, list):
-            stack.extend(value)
-    raise ValueError("NCCL RAS JSON has no communicator summary")
-
-
-def _version_value(payload: dict[str, Any], *aliases: str) -> str:
-    aliases_normalized = {_normalized_key(alias) for alias in aliases}
-    stack: list[Any] = [payload]
-    while stack:
-        value = stack.pop()
-        if isinstance(value, dict):
-            for key, child in value.items():
-                if _normalized_key(key) in aliases_normalized and isinstance(child, str | int | float):
-                    return _bounded_string(str(child))
-                stack.append(child)
-        elif isinstance(value, list):
-            stack.extend(value)
-    return ""
-
-
-def _mapping_value(value: dict[str, Any], *aliases: str) -> Any:
-    aliases_normalized = {_normalized_key(alias) for alias in aliases}
-    return next((child for key, child in value.items() if _normalized_key(key) in aliases_normalized), None)
-
-
-def _string_value(value: dict[str, Any], *aliases: str) -> str:
-    child = _mapping_value(value, *aliases)
-    if child is None:
-        return ""
-    if not isinstance(child, str | int | float):
-        raise ValueError("NCCL RAS string field has invalid type")
-    return str(child)
-
-
-def _integer_value(value: dict[str, Any], *aliases: str) -> int | None:
-    child = _mapping_value(value, *aliases)
-    return None if child is None else _nonnegative_integer(child)
-
-
-def _boolean_value(value: dict[str, Any], *aliases: str) -> bool:
-    child = _mapping_value(value, *aliases)
-    return False if child is None else _parse_boolean(child)
-
-
-def _parse_boolean(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, int) and value in {0, 1}:
-        return bool(value)
-    if isinstance(value, str) and value.lower() in {"false", "no", "none", "0"}:
-        return False
-    if isinstance(value, str) and value.lower() in {"true", "yes", "1"}:
-        return True
-    raise ValueError("NCCL RAS boolean field has invalid value")
-
-
-def _nonnegative_integer(value: Any) -> int:
-    if isinstance(value, bool):
-        raise ValueError("NCCL RAS count must be an integer")
-    integer = int(value)
-    if integer < 0 or integer != float(value):
-        raise ValueError("NCCL RAS count must be a nonnegative integer")
-    return integer
-
-
-def _line_field(line: str, name: str) -> str:
-    match = re.search(rf"\b{re.escape(name)}\s*[:=]\s*(\S+)", line, re.IGNORECASE)
-    return match.group(1) if match else ""
-
-
-def _line_integer_field(line: str, *names: str) -> int | None:
-    for name in names:
-        if match := re.search(rf"\b{re.escape(name)}\s*(?:[:=]\s*|\s+)(\d+)\b", line, re.IGNORECASE):
-            return int(match.group(1))
-    return None
-
-
-def _bounded_string(value: str) -> str:
-    if len(value.encode()) > MAX_FIELD_BYTES:
-        raise ValueError("NCCL RAS field exceeds string limit")
+def _object(value: Any, context: str) -> dict[str, Any]:
+    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+        raise ValueError(f"NCCL RAS {context} must be an object")
     return value
 
 
-def _normalized_key(value: object) -> str:
-    return re.sub(r"[^a-z0-9]", "", str(value).lower())
+def _object_field(value: dict[str, Any], field: str) -> dict[str, Any]:
+    if field not in value:
+        raise ValueError(f"NCCL RAS {field} is required")
+    return _object(value[field], field)
+
+
+def _list(value: dict[str, Any], field: str) -> list[Any]:
+    child = value.get(field)
+    if not isinstance(child, list):
+        raise ValueError(f"NCCL RAS {field} must be a list")
+    return child
+
+
+def _text(value: dict[str, Any], field: str) -> str:
+    child = value.get(field)
+    if not isinstance(child, str):
+        raise ValueError(f"NCCL RAS {field} must be a string")
+    return _bounded_text(child)
+
+
+def _version(value: dict[str, Any], field: str) -> str:
+    child = value.get(field)
+    if isinstance(child, bool) or not isinstance(child, str | int):
+        raise ValueError(f"NCCL RAS {field} must be a string or integer")
+    return _bounded_text(str(child))
+
+
+def _count(value: dict[str, Any], field: str) -> int:
+    if field not in value:
+        raise ValueError(f"NCCL RAS {field} is required")
+    return _nonnegative_integer(value[field])
+
+
+def _nonnegative_integer(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= _MAX_EXACT_COUNT:
+        raise ValueError("NCCL RAS count must be a bounded nonnegative integer")
+    return value
+
+
+def _nonnegative_number(value: dict[str, Any], field: str) -> float:
+    child = value.get(field)
+    if isinstance(child, bool) or not isinstance(child, int | float):
+        raise ValueError(f"NCCL RAS {field} must be numeric")
+    number = float(child)
+    if not math.isfinite(number) or number < 0:
+        raise ValueError(f"NCCL RAS {field} must be finite and nonnegative")
+    return number
+
+
+def _boolean(value: dict[str, Any], field: str) -> bool:
+    child = value.get(field)
+    if not isinstance(child, bool):
+        raise ValueError(f"NCCL RAS {field} must be boolean")
+    return child
+
+
+def _bounded_text(value: str) -> str:
+    if not value or len(value.encode()) > MAX_FIELD_BYTES:
+        raise ValueError("NCCL RAS field exceeds string limit")
+    return value

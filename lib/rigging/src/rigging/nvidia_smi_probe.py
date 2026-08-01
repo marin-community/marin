@@ -11,7 +11,9 @@ from rigging import telemetry
 from rigging.probe_types import (
     MAX_RESULT_EVENTS,
     MAX_SUBPROCESS_OUTPUT_BYTES,
+    CommandResult,
     CommandRunner,
+    CommandStatus,
     MetricKind,
     ProbeCollection,
     ProbeEvent,
@@ -20,13 +22,17 @@ from rigging.probe_types import (
     ProbeReason,
     command_failure_collection,
 )
+from rigging.timing import Deadline
 
-_QUERY_FIELDS = (
+_BASELINE_QUERY_FIELDS = (
     "uuid",
     "pci.bus_id",
     "name",
     "driver_version",
     "memory.total",
+)
+_EXTENDED_QUERY_FIELDS = (
+    *_BASELINE_QUERY_FIELDS,
     "compute_mode",
     "mig.mode.current",
     "power.limit",
@@ -52,20 +58,21 @@ class NvidiaSmiProbe:
     name: str = "nvidia_smi"
 
     def collect(self, runner: CommandRunner) -> ProbeCollection:
-        result = runner.run(
-            (
-                "nvidia-smi",
-                f"--query-gpu={','.join(_QUERY_FIELDS)}",
-                "--format=csv,noheader,nounits",
-            ),
-            timeout=self.timeout,
-            max_output_bytes=MAX_SUBPROCESS_OUTPUT_BYTES,
-        )
+        deadline = Deadline.from_seconds(self.timeout)
+        result = _run_query(runner, _EXTENDED_QUERY_FIELDS, deadline)
         terminal = command_failure_collection(result.status)
         if terminal is not None:
             return terminal
         if result.returncode != 0:
-            return ProbeCollection(ProbeOutcome.UNAVAILABLE, ProbeReason.NONZERO_EXIT)
+            result = _run_query(runner, _BASELINE_QUERY_FIELDS, deadline)
+            terminal = command_failure_collection(result.status)
+            if terminal is not None:
+                return terminal
+            if result.returncode != 0:
+                return ProbeCollection(ProbeOutcome.UNAVAILABLE, ProbeReason.NONZERO_EXIT)
+            fields = _BASELINE_QUERY_FIELDS
+        else:
+            fields = _EXTENDED_QUERY_FIELDS
 
         try:
             rows = list(csv.reader(io.StringIO(result.stdout.decode("utf-8"))))
@@ -77,7 +84,7 @@ class NvidiaSmiProbe:
             metrics: list[ProbeMetric] = []
             events: list[ProbeEvent] = []
             for row in rows:
-                row_metrics, row_events = _row_result(row)
+                row_metrics, row_events = _row_result(row, fields)
                 metrics.extend(row_metrics)
                 events.extend(row_events[: MAX_RESULT_EVENTS - len(events)])
             return ProbeCollection.succeeded(metrics=tuple(metrics), events=tuple(events))
@@ -85,26 +92,49 @@ class NvidiaSmiProbe:
             return ProbeCollection(ProbeOutcome.FAILED, ProbeReason.PARSE_ERROR)
 
 
-def _row_result(row: list[str]) -> tuple[list[ProbeMetric], list[ProbeEvent]]:
-    if len(row) != len(_QUERY_FIELDS):
+def _run_query(runner: CommandRunner, fields: tuple[str, ...], deadline: Deadline) -> CommandResult:
+    remaining = deadline.remaining_seconds()
+    if remaining <= 0:
+        return CommandResult(CommandStatus.TIMED_OUT)
+    return runner.run(
+        (
+            "nvidia-smi",
+            f"--query-gpu={','.join(fields)}",
+            "--format=csv,noheader,nounits",
+        ),
+        timeout=remaining,
+        max_output_bytes=MAX_SUBPROCESS_OUTPUT_BYTES,
+    )
+
+
+def _row_result(row: list[str], fields: tuple[str, ...]) -> tuple[list[ProbeMetric], list[ProbeEvent]]:
+    if len(row) != len(fields):
         raise ValueError("unexpected nvidia-smi column count")
-    values = {field: value.strip() for field, value in zip(_QUERY_FIELDS, row, strict=True)}
+    values = {field: value.strip() for field, value in zip(fields, row, strict=True)}
     gpu_uuid = _required(values["uuid"])
     pci_bus_id = _required(values["pci.bus_id"])
     identity = {"gpu_uuid": gpu_uuid, "pci_bus_id": pci_bus_id}
-    inventory = {
+    current = {
         **identity,
+        **telemetry.snapshot_attributes("nvidia_smi", telemetry.CURRENT_SNAPSHOT),
+    }
+    inventory = {
+        **current,
         "device_kind": "gpu",
         "gpu_model": _required(values["name"]),
         "driver_version": _required(values["driver_version"]),
     }
-    _add_optional(inventory, "compute_mode", values["compute_mode"])
-    _add_optional(inventory, "mig_mode", values["mig.mode.current"])
-    _add_optional(inventory, "vbios_version", values["vbios_version"])
+    if fields == _EXTENDED_QUERY_FIELDS:
+        _add_optional(inventory, "compute_mode", values["compute_mode"])
+        _add_optional(inventory, "mig_mode", values["mig.mode.current"])
+        _add_optional(inventory, "vbios_version", values["vbios_version"])
 
     metrics = [ProbeMetric("hardware_inventory", MetricKind.GAUGE, 1.0, attributes=inventory)]
-    _append_metric(metrics, "gpu_memory_total_bytes", values["memory.total"], identity, scale=1024**2, unit="By")
-    _append_metric(metrics, "gpu_power_limit_watts", values["power.limit"], identity, unit="W")
+    _append_metric(metrics, "gpu_memory_total_bytes", values["memory.total"], current, scale=1024**2, unit="By")
+    if fields == _BASELINE_QUERY_FIELDS:
+        return metrics, []
+
+    _append_metric(metrics, "gpu_power_limit_watts", values["power.limit"], current, unit="W")
     cumulative = {
         **identity,
         **telemetry.snapshot_attributes("nvidia_smi", telemetry.CUMULATIVE_SNAPSHOT),
@@ -135,7 +165,7 @@ def _row_result(row: list[str]) -> tuple[list[ProbeMetric], list[ProbeEvent]]:
             metrics,
             "gpu_retired_pages_pending",
             values["retired_pages.pending"],
-            identity,
+            current,
         ),
         "row_remapped_correctable": _append_metric(
             metrics,
@@ -155,13 +185,13 @@ def _row_result(row: list[str]) -> tuple[list[ProbeMetric], list[ProbeEvent]]:
             metrics,
             "gpu_row_remap_pending",
             values["remapped_rows.pending"],
-            identity,
+            current,
         ),
         "row_remap_failure": _append_metric(
             metrics,
             "gpu_row_remap_failures",
             values["remapped_rows.failure"],
-            cumulative,
+            current,
             unit="{failure}",
         ),
     }
