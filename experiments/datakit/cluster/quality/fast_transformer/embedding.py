@@ -106,6 +106,22 @@ def direct_cosine_embedding_loss(student: Array, teacher: Array) -> Array:
     return jnp.mean(1.0 - jnp.sum(student * teacher, axis=1))
 
 
+def source_conditioned_geometry_loss(student: Array, teacher: Array, source_ids: Array) -> Array:
+    """Match student and teacher cosine pairs from the same source."""
+    if student.shape != teacher.shape or student.ndim != 2:
+        raise ValueError(f"Student shape {student.shape} does not match the teacher matrix {teacher.shape}")
+    if source_ids.shape != (student.shape[0],):
+        raise ValueError(f"Source shape {source_ids.shape} does not match embedding rows {student.shape[0]}")
+    student = student / jnp.maximum(jnp.linalg.norm(student, axis=1, keepdims=True), 1e-12)
+    teacher = teacher / jnp.maximum(jnp.linalg.norm(teacher, axis=1, keepdims=True), 1e-12)
+    squared_error = jnp.square(student @ student.T - teacher @ teacher.T)
+    same_source = source_ids[:, None] == source_ids[None, :]
+    off_diagonal = ~jnp.eye(student.shape[0], dtype=bool)
+    selected = same_source & off_diagonal
+    pair_count = jnp.sum(selected)
+    return jnp.sum(jnp.where(selected, squared_error, 0.0)) / jnp.maximum(pair_count, 1)
+
+
 def embedding_distillation_loss(
     student: Array,
     teacher: Array,

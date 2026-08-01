@@ -30,6 +30,7 @@ from rigging.filesystem import atomic_rename
 from experiments.datakit.cluster.quality.fast_transformer.embedding import (
     embedding_distillation_loss,
     predict_embeddings,
+    source_conditioned_geometry_loss,
 )
 from experiments.datakit.cluster.quality.fast_transformer.inference import data_parallel_shardings
 from experiments.datakit.cluster.quality.fast_transformer.model import FastEmbeddingTransformer, count_params
@@ -45,6 +46,7 @@ WEIGHT_DECAY = 0.05
 GRADIENT_CLIP = 1.0
 LOSS_TEMPERATURE = 3.0
 DIRECT_COSINE_WEIGHT = 1.0
+SOURCE_GEOMETRY_WEIGHT = 1.0
 TEACHER_QUANTIZATION_LIMIT = 0.3
 TEACHER_DIMENSION = 256
 AUDIT_ROWS = 2_048
@@ -76,13 +78,16 @@ def load_numpy(url: str) -> np.ndarray:
         return np.load(file)
 
 
-def load_training_arrays(prepared: dict[str, Any], target: int) -> tuple[np.ndarray, np.ndarray, dict[str, int]]:
+def load_training_arrays(
+    prepared: dict[str, Any], target: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, int]]:
     """Load one exact source-balanced rung from the prepared 3M arrays."""
     capacities = {source: int(result["rows"]) for source, result in prepared["sources"].items()}
     quotas = allocate_balanced_quotas(capacities, target)
     id_chunks = []
     teacher_chunks = []
-    for index, (source, result) in enumerate(sorted(prepared["sources"].items()), start=1):
+    source_id_chunks = []
+    for source_id, (source, result) in enumerate(sorted(prepared["sources"].items())):
         filesystem, path = fsspec.core.url_to_fs(result["output_url"])
         table = pq.read_table(
             path,
@@ -97,15 +102,17 @@ def load_training_arrays(prepared: dict[str, Any], target: int) -> tuple[np.ndar
         id_chunks.append(ids.values.to_numpy(zero_copy_only=False).reshape(len(table), ids.type.list_size))
         quantized = embeddings.values.to_numpy(zero_copy_only=False).reshape(len(table), TEACHER_DIMENSION)
         teacher_chunks.append(dequantize_8bit_uniform_scalar_quantized(quantized, TEACHER_QUANTIZATION_LIMIT))
-        logger.info("Loaded source %d/%d: %s (%d rows)", index, len(quotas), source, len(table))
+        source_id_chunks.append(np.full(len(table), source_id, dtype=np.int32))
+        logger.info("Loaded source %d/%d: %s (%d rows)", source_id + 1, len(quotas), source, len(table))
     all_ids = np.concatenate(id_chunks).astype(np.int32, copy=False)
     all_teacher = np.concatenate(teacher_chunks).astype(np.float32, copy=False)
+    all_source_ids = np.concatenate(source_id_chunks)
     all_teacher /= np.linalg.norm(all_teacher, axis=1, keepdims=True).clip(min=1e-12)
     if len(all_ids) != target or all_teacher.shape != (target, TEACHER_DIMENSION):
         raise ValueError(f"Loaded array shapes do not match target: {all_ids.shape}, {all_teacher.shape}")
     if not np.isfinite(all_teacher).all():
         raise ValueError("Teacher arrays contain non-finite values")
-    return all_ids, all_teacher, quotas
+    return all_ids, all_teacher, all_source_ids, quotas
 
 
 def embedding_audit(model: FastEmbeddingTransformer, ids: np.ndarray) -> dict[str, float]:
@@ -148,12 +155,16 @@ def train(
     model: FastEmbeddingTransformer,
     ids: np.ndarray,
     teacher: np.ndarray,
+    source_ids: np.ndarray,
+    source_geometry_weight: float,
     output_root: str,
 ) -> tuple[FastEmbeddingTransformer, list[dict[str, Any]]]:
     """Train with the Luxical Gram-KL objective and save each epoch."""
     device_count, replicated, batch_sharding = data_parallel_shardings()
     if BATCH_SIZE % device_count:
         raise ValueError(f"Batch size {BATCH_SIZE} is not divisible by {device_count} devices")
+    if len(source_ids) != len(ids):
+        raise ValueError(f"Source rows {len(source_ids)} do not match input rows {len(ids)}")
     steps_per_epoch = math.ceil(len(ids) / BATCH_SIZE)
     total_steps = steps_per_epoch * EPOCHS
     schedule = optax.warmup_cosine_decay_schedule(
@@ -171,23 +182,29 @@ def train(
     optimizer_state = jax.device_put(optimizer.init(eqx.filter(model, eqx.is_inexact_array)), replicated)
 
     @eqx.filter_jit
-    def step(current_model, current_optimizer_state, batch_ids, batch_teacher, key):
+    def step(current_model, current_optimizer_state, batch_ids, batch_teacher, batch_source_ids, key):
         def loss_function(candidate):
             prediction = candidate(batch_ids, key=key, inference=False)
-            return embedding_distillation_loss(
+            distillation = embedding_distillation_loss(
                 prediction,
                 batch_teacher,
                 LOSS_TEMPERATURE,
                 DIRECT_COSINE_WEIGHT,
             )
+            source_geometry = (
+                source_conditioned_geometry_loss(prediction, batch_teacher, batch_source_ids)
+                if source_geometry_weight
+                else jnp.asarray(0.0)
+            )
+            return distillation + source_geometry_weight * source_geometry, (distillation, source_geometry)
 
-        loss, gradients = eqx.filter_value_and_grad(loss_function)(current_model)
+        (loss, components), gradients = eqx.filter_value_and_grad(loss_function, has_aux=True)(current_model)
         updates, next_optimizer_state = optimizer.update(
             gradients,
             current_optimizer_state,
             eqx.filter(current_model, eqx.is_inexact_array),
         )
-        return eqx.apply_updates(current_model, updates), next_optimizer_state, loss
+        return eqx.apply_updates(current_model, updates), next_optimizer_state, loss, components
 
     rng = np.random.default_rng(SEED)
     key = jax.random.PRNGKey(SEED + 1)
@@ -200,16 +217,30 @@ def train(
         if padded_rows:
             permutation = np.concatenate([permutation, permutation[:padded_rows]])
         epoch_losses = []
+        epoch_distillation_losses = []
+        epoch_source_geometry_losses = []
         for batch_index in range(steps_per_epoch):
             selected = permutation[batch_index * BATCH_SIZE : (batch_index + 1) * BATCH_SIZE]
             key, step_key = jax.random.split(key)
             batch_ids = jax.device_put(jnp.asarray(ids[selected]), batch_sharding)
             batch_teacher = jax.device_put(jnp.asarray(teacher[selected]), batch_sharding)
-            model, optimizer_state, loss = step(model, optimizer_state, batch_ids, batch_teacher, step_key)
+            batch_source_ids = jax.device_put(jnp.asarray(source_ids[selected]), batch_sharding)
+            model, optimizer_state, loss, components = step(
+                model,
+                optimizer_state,
+                batch_ids,
+                batch_teacher,
+                batch_source_ids,
+                step_key,
+            )
             loss_value = float(loss)
+            distillation_loss = float(components[0])
+            source_geometry_loss = float(components[1])
             if not np.isfinite(loss_value):
                 raise ValueError(f"Training loss is non-finite at step {global_step + 1}")
             epoch_losses.append(loss_value)
+            epoch_distillation_losses.append(distillation_loss)
+            epoch_source_geometry_losses.append(source_geometry_loss)
             global_step += 1
             if global_step == 1 or global_step % 10 == 0:
                 logger.info("Epoch %d step %d/%d loss %.8f", epoch + 1, global_step, total_steps, loss_value)
@@ -231,6 +262,10 @@ def train(
             "first_loss": epoch_losses[0],
             "final_loss": epoch_losses[-1],
             "mean_loss": float(np.mean(epoch_losses)),
+            "final_distillation_loss": epoch_distillation_losses[-1],
+            "mean_distillation_loss": float(np.mean(epoch_distillation_losses)),
+            "final_source_geometry_loss": epoch_source_geometry_losses[-1],
+            "mean_source_geometry_loss": float(np.mean(epoch_source_geometry_losses)),
             "elapsed_seconds": time.perf_counter() - started,
             "model_url": model_url,
             "model_sha256": model_sha256,
@@ -246,6 +281,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--rung", choices=tuple(RUNG_TARGETS), required=True)
     parser.add_argument("--config", choices=("full", "slim"), required=True)
+    parser.add_argument("--treatment", choices=("baseline", "source-geometry-w1"), default="baseline")
     return parser.parse_args()
 
 
@@ -257,13 +293,24 @@ def main() -> None:
     target = RUNG_TARGETS[arguments.rung]
     prepared = read_json(PREPARED_MANIFEST_URL)
     raw_to_compact = load_numpy(prepared["raw_to_compact_url"])
-    ids, teacher, quotas = load_training_arrays(prepared, target)
+    ids, teacher, source_ids, quotas = load_training_arrays(prepared, target)
     student = FastStudent.random(arguments.config, raw_to_compact, seed=SEED)
-    output_root = f"{OUTPUT_ROOT}/{arguments.config}/{arguments.rung}"
-    model, history = train(student.model, ids, teacher, output_root)
+    training_name = arguments.config if arguments.treatment == "baseline" else f"{arguments.config}-source-geometry-w1"
+    source_geometry_weight = 0.0 if arguments.treatment == "baseline" else SOURCE_GEOMETRY_WEIGHT
+    output_root = f"{OUTPUT_ROOT}/{training_name}/{arguments.rung}"
+    model, history = train(
+        student.model,
+        ids,
+        teacher,
+        source_ids,
+        source_geometry_weight,
+        output_root,
+    )
     report = {
         "rung": arguments.rung,
         "config_name": arguments.config,
+        "training_name": training_name,
+        "treatment": arguments.treatment,
         "training_rows": target,
         "source_quotas": quotas,
         "prepared_manifest_url": PREPARED_MANIFEST_URL,
@@ -276,6 +323,7 @@ def main() -> None:
         "epochs": EPOCHS,
         "loss_temperature": LOSS_TEMPERATURE,
         "direct_cosine_weight": DIRECT_COSINE_WEIGHT,
+        "source_geometry_weight": source_geometry_weight,
         "learning_rate": LEARNING_RATE,
         "warmup_fraction": WARMUP_FRACTION,
         "weight_decay": WEIGHT_DECAY,
@@ -289,6 +337,8 @@ def main() -> None:
     summary = {
         "rung": arguments.rung,
         "config_name": arguments.config,
+        "training_name": training_name,
+        "treatment": arguments.treatment,
         "training_rows": target,
         "report_url": report_url,
         "model_url": report["final_model_url"],
