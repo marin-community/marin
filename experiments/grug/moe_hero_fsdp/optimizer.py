@@ -200,6 +200,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 or "router_bias" in path_lower
                 or path_lower.endswith(".attn_gate")
                 or ".router" in path_lower
+                or "qk_scale" in path_lower  # learnable per-head q scale: a scale vector, not a matrix
             ):
                 return "adam"
             if "output_proj" in path_lower or "lm_head" in path_lower:

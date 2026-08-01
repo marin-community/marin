@@ -134,6 +134,10 @@ class GrugModelConfig:
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.3
+    # Replace the fixed qk_mult with a learnable per-head scale on q (init to qk_mult). Stacked over
+    # layers -> [num_layers, num_heads]; routed to Adam (see optimizer.create_mask). k is left
+    # unscaled: for a per-head scalar only the q*k product matters, so scaling both is redundant.
+    learnable_qk_scale: bool = False
     sconv: bool = False
     sconv_kernel: int = 4
     sconv_sites: tuple[str, ...] = ("k", "v", "attn", "mlp")
@@ -392,6 +396,7 @@ class CausalSelfAttention(eqx.Module):
     w_v: Float[Array, "D MH"]
     w_o: Float[Array, "NH D"]
     attn_gate: Float[Array, "D N"]
+    qk_scale: jax.Array | None  # learnable per-head q scale [num_heads] (cfg.learnable_qk_scale)
     sconv_k: "ShortConv | None"  # SConv after the K projection (cfg.sconv)
     sconv_v: "ShortConv | None"  # SConv after the V projection (cfg.sconv)
     cfg: GrugModelConfig = eqx.field(static=True)
@@ -406,6 +411,7 @@ class CausalSelfAttention(eqx.Module):
             w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
+            qk_scale=(reshard(jnp.full((n,), cfg.qk_mult), P(None)) if cfg.learnable_qk_scale else None),
             sconv_k=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
             sconv_v=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "v" in cfg.sconv_sites else None),
             cfg=cfg,
@@ -499,7 +505,7 @@ class CausalSelfAttention(eqx.Module):
                 keep = ~jnp.asarray(disable_rope, dtype=jnp.bool_)
                 q = jnp.where(keep, q_roped, q)
                 k = jnp.where(keep, k_roped, k)
-        q = q * self.cfg.qk_mult
+        q = q * (self.qk_scale[None, None, :, None] if self.qk_scale is not None else self.cfg.qk_mult)
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         # Exclusive Self Attention (XSA): subtract the component of yᵢ parallel to vᵢ, per head.
         # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ.
