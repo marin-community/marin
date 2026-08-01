@@ -42,6 +42,7 @@ from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     verify_fuzzy_dups,
 )
 from marin.processing.tokenize.tokenize import TokenizedCache
+from rigging.filesystem import prefix_join
 from rigging.log_setup import configure_logging
 from zephyr.execution import ZephyrExecutionResult
 
@@ -182,7 +183,7 @@ def _consolidate_deduped(
     verified = read_artifact(verified_dups.output_path, VerifiedFuzzyDupsAttrData)
     return consolidate(
         input_path=normalized.main_output_dir,
-        output_path=os.path.join(output_path, "outputs/main"),
+        output_path=prefix_join(output_path, "outputs/main"),
         filetype="parquet",
         filters=[
             FilterConfig(

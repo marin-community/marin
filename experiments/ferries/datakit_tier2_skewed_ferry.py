@@ -51,7 +51,7 @@ from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     verify_fuzzy_dups,
 )
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
-from rigging.filesystem import StoragePath, marin_prefix, marin_temp_bucket
+from rigging.filesystem import StoragePath, marin_prefix, marin_temp_bucket, prefix_join
 from rigging.log_setup import configure_logging
 from rigging.timing import log_time
 
@@ -136,7 +136,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
             local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
             store_config=FUZZY_VERIFICATION_STORE_CONFIG,
         ),
-        override_output_path=f"{ttl_base}/verify_fuzzy_dups",
+        override_output_path=prefix_join(ttl_base, "verify_fuzzy_dups"),
     )
 
     consolidated = StepSpec(

@@ -2193,6 +2193,7 @@ class ZephyrContext:
             )
 
         assert client is not None
+        group_name = f"{self.name}-{name}-memory-store-{uuid.uuid4().hex[:8]}"
         group = client.create_actor_group(
             _MemoryStoreActor,
             store_plan.source_items,
@@ -2201,7 +2202,7 @@ class ZephyrContext:
             store_plan.num_source_partitions,
             num_actors,
             max_actor_bytes,
-            name=f"{self.name}-{name}-memory-store",
+            name=group_name,
             count=num_actors,
             resources=actor_resources,
             actor_config=actor_config,

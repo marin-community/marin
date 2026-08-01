@@ -508,3 +508,22 @@ description: Read-only Zephyr memory store and verified fuzzy-dedup experiments
   the completed 100B A/B remains the output and performance evidence.
 - Next action: Commit the clean branch, run the one required lint-catalog
   review, address its findings, push, and open the stacked PR.
+
+### 2026-08-01 03:18 UTC - ZKV-012 advisory review
+
+- `./infra/pre-commit.py --review --agent-command='codex exec'` completed with
+  exit status 0. The cruft, prose, and meta lanes reached the catalog's
+  600-second limit; the other lanes returned findings.
+- Accepted branch-local findings replaced ambiguous tuple returns with named
+  immutable records, narrowed actor-handle and hash-result types, made schema
+  and column constants immutable, and used `prefix_join` for configurable
+  storage prefixes.
+- Pool lifecycle, environment, and coordinator cleanup findings were inherited
+  unchanged from the PR #7145 base. The manual 100B audit intentionally keeps
+  its independent decision replay and CLI orchestration together; splitting it
+  would add indirection without changing the validation boundary.
+- Follow-up validation passed `./infra/pre-commit.py --changed-files --fix`, 100
+  Zephyr store/execution/shared-context tests, and 16 verifier tests. A first
+  mixed-root pytest invocation failed collection because Zephyr tests import
+  their local `conftest`; both native-root reruns passed.
+- Next action: Commit and push the review fixes, then open the stacked PR.
