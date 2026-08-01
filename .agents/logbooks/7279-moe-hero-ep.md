@@ -220,3 +220,10 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Interpretation: The 64-GPU gang now waits for GPU admission. Setup, compile, and training have not started.
 - Decision: Keep the existing request. Do not submit another job or change its priority.
 - Next action: Continue the 570-second monitor cadence until the GPU tasks start or reach a terminal state.
+
+### 2026-08-01 23:00 UTC - MHEP-001 artifact prefix corrected
+
+- Correction: The coordinator resolved the output to `s3://marin-us-east-02a/marin/grug/mhep-001-ragged-25-20260801-2148/2026.08.01`. The launch contract incorrectly called this an A08-local prefix.
+- Input: The coordinator reused the cached `slimpajama-6b@2026.06.28` artifact. It reported recipe drift from fingerprint `b81fb521` to `6d4a8a93` and kept the versioned cached output.
+- Interpretation: The artifact prefix and data input are now explicit. The output bucket and A08 are both in US East. All later feature gates must use this same versioned data input.
+- Status: The 16 GPU tasks remain pending before their first attempts, with zero failures and zero preemptions.
