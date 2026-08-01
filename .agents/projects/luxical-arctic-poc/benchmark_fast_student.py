@@ -29,7 +29,7 @@ from evaluate_ladder import (
 )
 from fast_student import (
     E5_TOKENIZER_NAME,
-    TIKTOKEN_NAME,
+    LUXICAL_TOKENIZER_NAME,
     FastStudent,
     provisional_remap,
     tokenizer_vocab_size,
@@ -141,7 +141,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("cpu", "accelerator"), required=True)
     parser.add_argument("--config", choices=("full", "slim"), required=True)
-    parser.add_argument("--tokenizer", choices=(E5_TOKENIZER_NAME, TIKTOKEN_NAME), required=True)
+    parser.add_argument("--tokenizer", choices=(E5_TOKENIZER_NAME, LUXICAL_TOKENIZER_NAME), required=True)
     parser.add_argument("--batch-size", type=int, default=4_096)
     parser.add_argument("--output-root", default=DEFAULT_OUTPUT_ROOT)
     return parser.parse_args()

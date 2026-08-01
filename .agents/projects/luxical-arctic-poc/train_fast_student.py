@@ -23,7 +23,7 @@ import optax
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from build_manifest import allocate_balanced_quotas
-from fast_student import FastStudent, fast_student_config
+from fast_student import FastStudent
 from ladder_config import MANIFEST_ROOT, SEED
 from luxical.training import dequantize_8bit_uniform_scalar_quantized
 from rigging.filesystem import atomic_rename
@@ -92,9 +92,7 @@ def load_training_arrays(prepared: dict[str, Any], target: int) -> tuple[np.ndar
         embeddings = table["embedding"].combine_chunks()
         id_chunks.append(ids.values.to_numpy(zero_copy_only=False).reshape(len(table), ids.type.list_size))
         quantized = embeddings.values.to_numpy(zero_copy_only=False).reshape(len(table), TEACHER_DIMENSION)
-        teacher_chunks.append(
-            dequantize_8bit_uniform_scalar_quantized(quantized, TEACHER_QUANTIZATION_LIMIT)
-        )
+        teacher_chunks.append(dequantize_8bit_uniform_scalar_quantized(quantized, TEACHER_QUANTIZATION_LIMIT))
         logger.info("Loaded source %d/%d: %s (%d rows)", index, len(quotas), source, len(table))
     all_ids = np.concatenate(id_chunks).astype(np.int32, copy=False)
     all_teacher = np.concatenate(teacher_chunks).astype(np.float32, copy=False)
@@ -249,7 +247,7 @@ def main() -> None:
         "prepared_manifest_sha256": prepared["manifest_sha256"],
         "raw_to_compact_url": prepared["raw_to_compact_url"],
         "raw_to_compact_sha256": prepared["raw_to_compact_sha256"],
-        "config": asdict(fast_student_config(arguments.config)),
+        "config": asdict(model.backbone.config),
         "parameters": count_params(model),
         "batch_size": BATCH_SIZE,
         "epochs": EPOCHS,
