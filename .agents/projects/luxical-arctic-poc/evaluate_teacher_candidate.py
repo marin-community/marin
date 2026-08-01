@@ -205,7 +205,7 @@ class CandidateEmbedder:
                 max_length=MAX_TEACHER_TOKENS,
             )
             device_inputs = {name: value.to("cuda") for name, value in inputs.items()}
-            with sdpa_kernel(SDPA_BACKENDS):
+            with sdpa_kernel(list(SDPA_BACKENDS)):
                 model_output = self.model(**device_inputs, use_cache=False)
             vectors = self._pool(model_output.last_hidden_state, device_inputs["attention_mask"])
             vectors = functional.normalize(vectors.float(), p=2, dim=1)
