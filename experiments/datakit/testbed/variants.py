@@ -153,7 +153,6 @@ def _fuzzy_verification_step(
             output_path=output_path,
             verification_params=params,
             local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
-            max_parallelism=_FUZZY_DUPS_MAX_PARALLELISM,
             worker_resources=_FUZZY_VERIFICATION_WORKER_RESOURCES,
         ),
     )
