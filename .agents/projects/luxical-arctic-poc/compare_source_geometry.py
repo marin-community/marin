@@ -1,15 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compare the 750K source-geometry treatment with the fixed baseline."""
+"""Compare one 750K source-geometry treatment with the fixed baseline."""
 
+import argparse
 import json
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
 import fsspec
-
 from audit_fast_student_attribution import (
     category_geometry,
     failure_sets,
@@ -22,10 +22,8 @@ from rigging.filesystem import atomic_rename
 
 TEACHER_REPORT_URL = f"{MANIFEST_ROOT}/evaluation/teacher-arctic-v1/report.json"
 BASELINE_REPORT_URL = f"{MANIFEST_ROOT}/evaluation/fast-student/full/750k/report.json"
-TREATMENT_NAME = "full-source-geometry-w1"
-TREATMENT_REPORT_URL = f"{MANIFEST_ROOT}/evaluation/fast-student/{TREATMENT_NAME}/750k/report.json"
-OUTPUT_URL = f"{MANIFEST_ROOT}/evaluation/fast-student/{TREATMENT_NAME}/750k/comparison.json"
 RESULT_FILE = Path("/tmp/luxical-source-geometry-comparison")
+TREATMENT_NAMES = ("full-source-geometry-w0.25", "full-source-geometry-w0.5", "full-source-geometry-w1")
 QUALITY_LOSS_LIMIT = -0.02
 RANK_MEDIAN_IMPROVEMENT = 0.02
 VARIANCE_MEDIAN_LOSS_LIMIT = -0.02
@@ -79,9 +77,7 @@ def evaluation_summary(report: dict[str, Any]) -> dict[str, Any]:
         "within_source_arctic_fidelity": student["arctic_fidelity"]["within_source_spearman"],
         "regular_collapse_failures": len(comparison["collapse"]["regular_failures"]),
         "failure_reason_counts": failure_reason_counts(report),
-        "minimum_effective_rank_ratio_to_stock": min(
-            metrics["effective_rank_ratio"] for metrics in regular.values()
-        ),
+        "minimum_effective_rank_ratio_to_stock": min(metrics["effective_rank_ratio"] for metrics in regular.values()),
         "minimum_variance_ratio_to_stock": min(metrics["variance_ratio"] for metrics in regular.values()),
         "speed_ratio": comparison["speed_ratio"],
     }
@@ -122,11 +118,20 @@ def geometry_deltas(treatment: dict[str, Any], baseline: dict[str, Any]) -> dict
     return output
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--treatment-name", choices=TREATMENT_NAMES, required=True)
+    return parser.parse_args()
+
+
 def main() -> None:
     """Write the fixed 750K source-geometry comparison."""
+    treatment_name = parse_args().treatment_name
+    treatment_report_url = f"{MANIFEST_ROOT}/evaluation/fast-student/{treatment_name}/750k/report.json"
+    output_url = f"{MANIFEST_ROOT}/evaluation/fast-student/{treatment_name}/750k/comparison.json"
     teacher = read_json(TEACHER_REPORT_URL)
     baseline = read_json(BASELINE_REPORT_URL)
-    treatment = read_json(TREATMENT_REPORT_URL)
+    treatment = read_json(treatment_report_url)
     digests = {report["manifest_sha256"] for report in (teacher, baseline, treatment)}
     if len(digests) != 1:
         raise ValueError("The teacher, baseline, and treatment reports have different manifest digests")
@@ -145,8 +150,7 @@ def main() -> None:
     inference_identity = {
         "model_config_equal": treatment["training_report"]["config"] == baseline["training_report"]["config"],
         "token_remap_equal": (
-            treatment["training_report"]["raw_to_compact_sha256"]
-            == baseline["training_report"]["raw_to_compact_sha256"]
+            treatment["training_report"]["raw_to_compact_sha256"] == baseline["training_report"]["raw_to_compact_sha256"]
         ),
         "speed_report_equal": treatment["speed_report_url"] == baseline["speed_report_url"],
     }
@@ -166,9 +170,10 @@ def main() -> None:
     }
     report = {
         "manifest_sha256": digests.pop(),
+        "treatment_name": treatment_name,
         "teacher_report_url": TEACHER_REPORT_URL,
         "baseline_report_url": BASELINE_REPORT_URL,
-        "treatment_report_url": TREATMENT_REPORT_URL,
+        "treatment_report_url": treatment_report_url,
         "decision_thresholds": {
             "minimum_quality_delta": QUALITY_LOSS_LIMIT,
             "minimum_rank_median_improvement": RANK_MEDIAN_IMPROVEMENT,
@@ -192,11 +197,14 @@ def main() -> None:
         "inference_identity": inference_identity,
         "gates": gates,
         "all_gates_passed": all(gates.values()),
-        "next_action": "run_3m_source_geometry_confirmation" if all(gates.values()) else "stop_source_geometry_treatment",
+        "next_action": (
+            "run_3m_source_geometry_confirmation" if all(gates.values()) else "stop_source_geometry_treatment"
+        ),
     }
-    write_json(OUTPUT_URL, report)
+    write_json(output_url, report)
     summary = {
-        "output_url": OUTPUT_URL,
+        "output_url": output_url,
+        "treatment_name": treatment_name,
         "baseline_regular_failures": len(baseline_failures),
         "treatment_regular_failures": len(treatment_failures),
         "baseline_student_only_failures": baseline_attribution["student_only_count"],
