@@ -19,6 +19,9 @@ from experiments.grug.coupon_clipping.config import (
     AGGRESSIVE_GROWTH_CONFIG,
     AGGRESSIVE_TRANSITION_STEP,
     DECAY_STEPS,
+    EXTREME_DECAY_STEPS,
+    EXTREME_GROWTH_CONFIG,
+    EXTREME_TRANSITION_STEP,
     SEGMENT_LENGTHS,
     SELECTED_LEARNING_RATE,
     TRAIN_BATCH_SIZE,
@@ -36,7 +39,10 @@ from experiments.grug.coupon_clipping.depth_launch import (
     build_aggressive_source_model_config,
     build_d1_checkpoint,
     build_depth_source_model_config,
+    build_extreme_checkpoint,
+    build_extreme_growth_pilot_checkpoint,
     build_extreme_source_model_config,
+    build_extreme_target_model_config,
     build_growth_pilot_checkpoint,
     build_growth_target_only_checkpoint,
 )
@@ -164,10 +170,14 @@ def test_depth_artifacts_chain_source_before_growth():
     pilot = build_growth_pilot_checkpoint(version="test-dev")
     d1 = build_d1_checkpoint(version="test-dev")
     aggressive = build_aggressive_growth_pilot_checkpoint(version="test-dev")
+    extreme = build_extreme_growth_pilot_checkpoint(version="test-dev")
+    extreme_full = build_extreme_checkpoint(version="test-dev")
 
     assert len(pilot.deps) == 1
     assert len(d1.deps) == 1
     assert len(aggressive.deps) == 1
+    assert len(extreme.deps) == 1
+    assert len(extreme_full.deps) == 1
 
     target_only = build_growth_target_only_checkpoint(
         source_checkpoint_root="s3://example/source/checkpoints",
@@ -195,20 +205,31 @@ def test_aggressive_source_attacks_fixed_compute_and_preserves_target_contract()
 
 
 def test_extreme_source_targets_tenfold_speed_without_more_experts():
-    target = build_model_config(CouponClippingArm.C0_P0)
+    control = build_model_config(CouponClippingArm.C0_P0)
+    target = build_extreme_target_model_config()
     aggressive = build_aggressive_source_model_config()
     extreme = build_extreme_source_model_config()
     accounting = model_accounting(extreme)
 
     assert (extreme.hidden_dim, extreme.num_layers, extreme.num_heads, extreme.num_kv_heads) == (768, 1, 6, 2)
-    assert extreme.num_experts == target.num_experts == 64
-    assert extreme.num_experts_per_token == target.num_experts_per_token == 4
+    assert extreme.num_experts == target.num_experts == control.num_experts == 64
+    assert extreme.num_experts_per_token == target.num_experts_per_token == control.num_experts_per_token == 4
     assert extreme.intermediate_dim == 1536
     assert extreme.intermediate_dim > aggressive.intermediate_dim
-    assert extreme.shared_expert_intermediate_dim == 1536
+    assert extreme.shared_expert_intermediate_dim == target.shared_expert_intermediate_dim == 1536
+    assert (target.hidden_dim, target.num_layers, target.num_heads, target.num_kv_heads) == (3072, 48, 24, 8)
+    assert target.intermediate_dim == extreme.intermediate_dim
+    assert target.hidden_dim == 4 * extreme.hidden_dim
+    assert target.num_heads == 4 * extreme.num_heads
+    assert target.num_kv_heads == 4 * extreme.num_kv_heads
     assert accounting.active_parameters < 250_000_000
     assert accounting.stored_parameters < 450_000_000
     assert model_accounting(target).forward_flops_per_token / accounting.forward_flops_per_token > 40
+    assert EXTREME_GROWTH_CONFIG.width_expansion_factor == 4
+    assert EXTREME_GROWTH_CONFIG.new_layer_initialization is NewLayerInitialization.IDENTITY_PREFIX
+    assert EXTREME_TRANSITION_STEP == 5760
+    assert EXTREME_DECAY_STEPS == 640
+    assert build_optimizer_config(decay_steps=EXTREME_DECAY_STEPS).decay == EXTREME_DECAY_STEPS
 
 
 def test_paloma_eval_is_checkpoint_only_and_bounded(tmp_path):

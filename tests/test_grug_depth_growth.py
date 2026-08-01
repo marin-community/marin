@@ -361,3 +361,95 @@ def test_grow_grug_width_and_depth_preserves_source_function_with_identity_layer
     assert jnp.count_nonzero(identity_block.mlp.expert_mlp.w_down) == 0
     assert identity_block.shared is not None
     assert jnp.count_nonzero(identity_block.shared.w_down) == 0
+
+
+def test_factor_four_growth_preserves_mlp_with_fixed_intermediate_width():
+    common = {
+        "vocab_size": 32,
+        "intermediate_dim": 4,
+        "shared_expert_intermediate_dim": 4,
+        "num_experts": 2,
+        "num_experts_per_token": 1,
+        "head_dim": 4,
+        "max_seq_len": 4,
+        "sliding_window": 4,
+        "block_storage": "array_stacked",
+    }
+    source_config = GrugModelConfig(
+        **common,
+        hidden_dim=4,
+        num_layers=1,
+        num_heads=1,
+        num_kv_heads=1,
+        block_segment_lengths=(1,),
+        block_segment_shared_expert_intermediate_dims=(4,),
+    )
+    target_config = GrugModelConfig(
+        **common,
+        hidden_dim=16,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=4,
+        block_segment_lengths=(1, 1),
+        block_segment_shared_expert_intermediate_dims=(4, 4),
+    )
+    config = DepthGrowthConfig(
+        source_layers=1,
+        target_layers=2,
+        width_expansion_factor=4,
+        new_layer_initialization=NewLayerInitialization.IDENTITY_PREFIX,
+        expected_step=7,
+        expected_data_offset=112,
+    )
+
+    with set_mesh(compact_grug_mesh()):
+        source_model = Transformer.init(source_config, key=jax.random.PRNGKey(0))
+        fresh_target_model = Transformer.init(target_config, key=jax.random.PRNGKey(1))
+        source = _TransformerTrainState(
+            step=jnp.array(7, dtype=jnp.int32),
+            params=source_model,
+            opt_state=_WidthOptimizerState(
+                count=jnp.array(7, dtype=jnp.int32),
+                parameter_buffer=jnp.arange(4, dtype=jnp.float32),
+            ),
+            ema_params=None,
+            pending_qb_betas=jnp.zeros((1, 2), dtype=jnp.float32),
+        )
+        fresh_target = _TransformerTrainState(
+            step=jnp.array(0, dtype=jnp.int32),
+            params=fresh_target_model,
+            opt_state=_WidthOptimizerState(
+                count=jnp.array(0, dtype=jnp.int32),
+                parameter_buffer=jnp.full((16,), 5, dtype=jnp.float32),
+            ),
+            ema_params=None,
+            pending_qb_betas=jnp.ones((2, 2), dtype=jnp.float32),
+        )
+
+        grown, _ = grow_grug_depth_state(source, fresh_target, config)
+
+    assert source.params.stacked_block_segments is not None
+    assert grown.params.stacked_block_segments is not None
+    source_block = source.params.stacked_block_segments[0].stacked
+    grown_source_block = grown.params.stacked_block_segments[1].stacked
+    source_hidden = jnp.arange(4, dtype=jnp.float32)
+    grown_hidden = jnp.tile(source_hidden, 4)
+
+    source_gate = source_hidden @ source_block.mlp.expert_mlp.w_gate[0, 0]
+    grown_gate = grown_hidden @ grown_source_block.mlp.expert_mlp.w_gate[0, 0]
+    source_up = source_hidden @ source_block.mlp.expert_mlp.w_up[0, 0]
+    grown_up = grown_hidden @ grown_source_block.mlp.expert_mlp.w_up[0, 0]
+    assert np.allclose(np.asarray(grown_gate), np.asarray(source_gate))
+    assert np.allclose(np.asarray(grown_up), np.asarray(source_up))
+
+    source_gate_array = np.asarray(source_gate)
+    grown_gate_array = np.asarray(grown_gate)
+    source_activation = source_gate_array / (1 + np.exp(-source_gate_array))
+    grown_activation = grown_gate_array / (1 + np.exp(-grown_gate_array))
+    source_output = (source_activation * np.asarray(source_up)) @ np.asarray(source_block.mlp.expert_mlp.w_down[0, 0])
+    grown_output = (grown_activation * np.asarray(grown_up)) @ np.asarray(grown_source_block.mlp.expert_mlp.w_down[0, 0])
+    assert np.allclose(grown_output, np.tile(source_output, 4))
+
+    source_embedding = source.params.token_embed[3]
+    grown_embedding = grown.params.token_embed[3]
+    assert jnp.allclose(grown_embedding @ grown.params.output_proj, source_embedding @ source.params.output_proj)

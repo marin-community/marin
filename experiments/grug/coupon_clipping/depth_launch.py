@@ -21,6 +21,10 @@ from experiments.grug.coupon_clipping.config import (
     DEPTH_GROWTH_CONFIG,
     DEPTH_SOURCE_LAYERS,
     DEPTH_TRANSITION_STEP,
+    EXTREME_DECAY_STEPS,
+    EXTREME_GROWTH_CONFIG,
+    EXTREME_TRANSITION_STEP,
+    SEGMENT_LENGTHS,
     TRAIN_BATCH_SIZE,
     TRAIN_STEPS,
     CouponClippingArm,
@@ -61,9 +65,19 @@ def build_aggressive_source_model_config(
     return build_growth_source_model_config(build_model_config(CouponClippingArm.C0_P0), growth)
 
 
+def build_extreme_target_model_config() -> GrugModelConfig:
+    """Build the WD2 target while preserving its expert widths and Q/KV head ratio."""
+    return dataclasses.replace(
+        build_model_config(CouponClippingArm.C0_P0),
+        shared_expert_intermediate_dim=1536,
+        num_kv_heads=8,
+        block_segment_shared_expert_intermediate_dims=(1536,) * len(SEGMENT_LENGTHS),
+    )
+
+
 def build_extreme_source_model_config() -> GrugModelConfig:
-    """Build a d768/L1 source with wider selected experts for the 10x throughput gate."""
-    target = build_model_config(CouponClippingArm.C0_P0)
+    """Build the d768/L1 source with an exact factor-four path to the WD2 target."""
+    target = build_extreme_target_model_config()
     return dataclasses.replace(
         target,
         hidden_dim=768,
@@ -129,6 +143,7 @@ def _build_source_checkpoint(
 def _build_growth_target_checkpoint(
     source: ArtifactStep[LevanterCheckpoint] | None,
     *,
+    model: GrugModelConfig,
     run_id: str,
     steps: int,
     growth: DepthGrowthConfig,
@@ -139,7 +154,6 @@ def _build_growth_target_checkpoint(
 ) -> ArtifactStep[LevanterCheckpoint]:
     if (source is None) == (source_checkpoint_root is None):
         raise ValueError("exactly one source artifact or checkpoint root is required")
-    model = build_model_config(CouponClippingArm.C0_P0)
     step_name = f"grug/coupon-clipping/{run_id}"
     resolved_version = resolve_version(step_name, version)
 
@@ -216,6 +230,7 @@ def build_growth_pilot_checkpoint(*, version: str | None = None) -> ArtifactStep
     )
     return _build_growth_target_checkpoint(
         source,
+        model=build_model_config(CouponClippingArm.C0_P0),
         run_id="cc16-growth-pilot-l1-to-l48-16",
         steps=PILOT_SOURCE_STEPS + PILOT_GROWN_STEPS,
         growth=growth,
@@ -240,6 +255,7 @@ def build_growth_target_only_checkpoint(
     )
     return _build_growth_target_checkpoint(
         None,
+        model=build_model_config(CouponClippingArm.C0_P0),
         run_id="cc16-growth-pilot-l1-to-l48-16-recovery",
         steps=PILOT_SOURCE_STEPS + PILOT_GROWN_STEPS,
         growth=growth,
@@ -260,6 +276,7 @@ def build_d1_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterC
     )
     return _build_growth_target_checkpoint(
         source,
+        model=build_model_config(CouponClippingArm.C0_P0),
         run_id="cc16-d1-l1-to-l48",
         steps=TRAIN_STEPS,
         growth=DEPTH_GROWTH_CONFIG,
@@ -306,6 +323,7 @@ def build_aggressive_growth_pilot_checkpoint(*, version: str | None = None) -> A
     )
     return _build_growth_target_checkpoint(
         source,
+        model=build_model_config(CouponClippingArm.C0_P0),
         run_id="ccx-wd1-growth-pilot-target16",
         steps=PILOT_SOURCE_STEPS + PILOT_GROWN_STEPS,
         growth=growth,
@@ -326,10 +344,58 @@ def build_aggressive_checkpoint(*, version: str | None = None) -> ArtifactStep[L
     )
     return _build_growth_target_checkpoint(
         source,
+        model=build_model_config(CouponClippingArm.C0_P0),
         run_id="ccx-wd1-d1536-l1-to-d3072-l48",
         steps=TRAIN_STEPS,
         growth=AGGRESSIVE_GROWTH_CONFIG,
         version=version,
         run_kind=CouponClippingRunKind.FULL,
         optimizer_decay_steps=AGGRESSIVE_DECAY_STEPS,
+    )
+
+
+def build_extreme_growth_pilot_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
+    """Canary exact factor-four width and depth growth after 32 WD2 source updates."""
+    growth = dataclasses.replace(
+        EXTREME_GROWTH_CONFIG,
+        expected_step=PILOT_SOURCE_STEPS,
+        expected_data_offset=PILOT_SOURCE_STEPS * TRAIN_BATCH_SIZE,
+    )
+    source = _build_source_checkpoint(
+        model=build_extreme_source_model_config(),
+        run_id="ccx-wd2-growth-pilot-source32",
+        steps=PILOT_SOURCE_STEPS,
+        version=version,
+        run_kind=CouponClippingRunKind.PILOT,
+    )
+    return _build_growth_target_checkpoint(
+        source,
+        model=build_extreme_target_model_config(),
+        run_id="ccx-wd2-growth-pilot-target16",
+        steps=PILOT_SOURCE_STEPS + PILOT_GROWN_STEPS,
+        growth=growth,
+        version=version,
+        run_kind=CouponClippingRunKind.PILOT,
+    )
+
+
+def build_extreme_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
+    """Build the 90% WD2 source to 10% wide/deep target arm."""
+    source = _build_source_checkpoint(
+        model=build_extreme_source_model_config(),
+        run_id=f"ccx-wd2-d768-l1-i1536-source-step{EXTREME_TRANSITION_STEP}",
+        steps=EXTREME_TRANSITION_STEP,
+        version=version,
+        run_kind=CouponClippingRunKind.FULL,
+        optimizer_decay_steps=EXTREME_DECAY_STEPS,
+    )
+    return _build_growth_target_checkpoint(
+        source,
+        model=build_extreme_target_model_config(),
+        run_id="ccx-wd2-d768-l1-to-d3072-l48-tail640",
+        steps=TRAIN_STEPS,
+        growth=EXTREME_GROWTH_CONFIG,
+        version=version,
+        run_kind=CouponClippingRunKind.FULL,
+        optimizer_decay_steps=EXTREME_DECAY_STEPS,
     )

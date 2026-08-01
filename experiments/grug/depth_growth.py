@@ -32,14 +32,6 @@ class _DepthGrowthState(Protocol):
 StateT = TypeVar("StateT", bound=_DepthGrowthState)
 PathPart = tuple[str, object]
 TreePath = tuple[PathPart, ...]
-_GATED_NORM_PATH_PARTS: frozenset[PathPart] = frozenset(
-    {
-        ("attr", "embed_gated_norm"),
-        ("attr", "final_gated_norm"),
-        ("attr", "attn_gated_norm"),
-        ("attr", "mlp_gated_norm"),
-    }
-)
 
 
 class NewLayerInitialization(StrEnum):
@@ -352,7 +344,7 @@ def _grow_stacked_parameter_leaf(
         source,
         target_shape=(source.shape[0], *target.shape[1:]),
         factor=config.width_expansion_factor,
-        scale=_parameter_needs_input_scaling(path),
+        input_axis=_parameter_input_axis(path),
         path=display_path,
     )
     target_layer_indices = jnp.arange(target.shape[0]) + target_layer_offset
@@ -389,7 +381,7 @@ def _grow_width_leaf(
         source,
         target_shape=target.shape,
         factor=config.width_expansion_factor,
-        scale=_parameter_needs_input_scaling(path),
+        input_axis=_parameter_input_axis(path),
         path=display_path,
     )
     return _put_with_target_sharding(expanded, target)
@@ -400,7 +392,7 @@ def _expand_width_array(
     *,
     target_shape: tuple[int, ...],
     factor: int,
-    scale: bool,
+    input_axis: int | None,
     path: str,
 ) -> jax.Array:
     if len(source.shape) != len(target_shape):
@@ -421,15 +413,18 @@ def _expand_width_array(
         return source
     replicated_source = reshard(source, P(*(None for _ in source.shape)))
     expanded = jnp.tile(replicated_source, tuple(repeats))
-    if scale:
-        expanded = expanded / factor
+    if input_axis is not None:
+        input_repeat = repeats[input_axis]
+        if input_repeat > 1:
+            expanded = expanded / input_repeat
     return expanded
 
 
-def _parameter_needs_input_scaling(path: TreePath) -> bool:
+def _parameter_input_axis(path: TreePath) -> int | None:
     terminal = path[-1] if path else None
+    if terminal == ("attr", "output_proj"):
+        return 0
     if terminal in {
-        ("attr", "output_proj"),
         ("attr", "w_q"),
         ("attr", "w_k"),
         ("attr", "w_v"),
@@ -437,12 +432,11 @@ def _parameter_needs_input_scaling(path: TreePath) -> bool:
         ("attr", "attn_gate"),
         ("attr", "router"),
         ("attr", "w_gate"),
+        ("attr", "w_up"),
         ("attr", "w_down"),
     }:
-        return True
-    if terminal == ("attr", "w_up"):
-        return not any(part in _GATED_NORM_PATH_PARTS for part in path)
-    return False
+        return -2
+    return None
 
 
 def _is_residual_output_parameter(path: TreePath) -> bool:

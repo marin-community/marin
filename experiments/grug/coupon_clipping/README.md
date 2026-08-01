@@ -21,10 +21,16 @@ order, 6.711B-token horizon, optimizer schedule, and 16-GB200 topology.
 - `pilot_extreme_source.py`: a `d768/L1` throughput gate that keeps 64 experts,
   top-4 routing, and 1536-wide selected experts. It tests the 10x systems target
   without depending on cold-start routing across additional experts.
+- `pilot_extreme_growth.py`: 32 WD2 source updates followed by 16 updates on an
+  exactly widened `d3072/L48` target.
 - `pilot_aggressive_growth.py`: 32 `d1536/L1` updates followed by 16 updates on
   the widened `d3072/L48` target.
 - `wd1.py`: the 95/5 narrow-shallow to wide-deep arm, with all 320 wide/deep
   updates covering the terminal decay.
+- `wd2.py`: the 90/10 `d768/L1` to `d3072/L48` arm. Its target retains
+  1536-wide routed/shared experts and a 24:8 query/KV-head ratio so every
+  widened axis grows by exactly four and the transition preserves the source
+  function.
 - `c_short.py`: the 3,200-update full-depth WSD control.
 - `paloma_wd1.py`, `paloma_c_short.py`, and `paloma_c0.py`: checkpoint-only
   Paloma evaluations for the main treatment and controls. Each subset is capped
