@@ -11,7 +11,7 @@ from typing import Any
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from marin.datakit.normalize import NormalizedData
-from marin.datakit.source_key import datakit_source_key
+from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from marin.execution.artifact import read_artifact, write_artifact
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, MinHashParams
@@ -49,6 +49,7 @@ VERIFIED_COLUMNS = [
     "dup_local_token_sequence_equal",
     "dup_local_char_jaccard",
 ]
+EXPECTED_REFERENCE_MARKERS = 27_203
 
 
 class _LegacyMinHashEntry(BaseModel):
@@ -64,7 +65,7 @@ class _LegacyMinHashCollection(BaseModel):
 
 
 class _VerifiedSourcePaths(BaseModel):
-    attr_dir: str
+    attr_dir: DatakitArtifactPath
 
 
 class _VerifiedArtifactPaths(BaseModel):
@@ -175,6 +176,8 @@ def main() -> None:
 
     actual_rows = _verified_rows(output_path)
     reference_rows = _verified_rows(args.reference_verified_prefix)
+    if len(reference_rows) != EXPECTED_REFERENCE_MARKERS:
+        raise AssertionError(f"Reference contains {len(reference_rows)} markers; expected {EXPECTED_REFERENCE_MARKERS}")
     if actual_rows != reference_rows:
         unexpected = sorted(actual_rows.keys() - reference_rows.keys())
         missing = sorted(reference_rows.keys() - actual_rows.keys())
