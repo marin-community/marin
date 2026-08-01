@@ -6,6 +6,7 @@
 import dataclasses
 import logging
 import re
+import threading
 from collections.abc import Mapping
 from enum import IntEnum
 from time import time
@@ -39,9 +40,67 @@ def _set(name: str, value: float, *, attributes: dict[str, str] = _CURRENT) -> N
     telemetry.gauge(_metric_name(name)).set(value, attributes=attributes)
 
 
+# Keep this well under the reader's enrollment window. Telemetry is best-effort and
+# drops records under queue pressure, so several missed beats must not un-enroll a
+# live job. The reader's window lives in infra/grafana/src/training_stalls.py.
+_PHASE_HEARTBEAT_SECONDS = 60.0
+
+
+class _PhaseHeartbeat:
+    """Republishes the current training phase until the run finishes.
+
+    Stalled-training detection finds a job by its newest `phase` row. Written only
+    on transition, a job that hangs before its first step has one row, from process
+    start, and the reader must scan all of history to find it. Republishing keeps
+    that row recent so the reader can bound its scan.
+    """
+
+    def __init__(self, interval: float = _PHASE_HEARTBEAT_SECONDS) -> None:
+        self._interval = interval
+        self._lock = threading.Lock()
+        self._phase: TrainingPhase | None = None
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    @property
+    def running(self) -> bool:
+        with self._lock:
+            return self._thread is not None
+
+    def publish(self, phase: TrainingPhase) -> None:
+        with self._lock:
+            self._phase = phase
+        _set("phase", float(phase))
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread is not None:
+                return
+            self._stop.clear()
+            self._thread = threading.Thread(target=self._run, name="levanter-phase-heartbeat", daemon=True)
+            self._thread.start()
+
+    def stop(self) -> None:
+        with self._lock:
+            thread, self._thread = self._thread, None
+            self._stop.set()
+        if thread is not None:
+            thread.join(timeout=self._interval * 2)
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._interval):
+            with self._lock:
+                phase = self._phase
+            if phase is not None:
+                _set("phase", float(phase))
+
+
+_HEARTBEAT = _PhaseHeartbeat()
+
+
 def set_training_phase(phase: TrainingPhase) -> None:
     """Publish the current training phase for stalled-training detection."""
-    _set("phase", float(phase))
+    _HEARTBEAT.publish(phase)
 
 
 def _as_scalar(value: Any) -> float | None:
@@ -65,6 +124,7 @@ class TelemetryTracker(Tracker):
     def __init__(self) -> None:
         _set("progress_time_seconds", 0)
         set_training_phase(TrainingPhase.INITIALIZING)
+        _HEARTBEAT.start()
 
     def _publish(self, metrics: Mapping[str, object]) -> None:
         for key, value in metrics.items():
@@ -114,6 +174,10 @@ class TelemetryTracker(Tracker):
 
     def finish(self):
         set_training_phase(TrainingPhase.FINISHED)
+        # The run is over, so there is nothing left to keep enrolled. FINISHED is
+        # already published above, and republishing it for the process's remaining
+        # lifetime tells the reader nothing new.
+        _HEARTBEAT.stop()
 
 
 @TrackerConfig.register_subclass("telemetry")

@@ -7,6 +7,7 @@ import pytest
 from rigging import telemetry
 from rigging.testing import RecordingTelemetryTransport
 
+from levanter.tracker import telemetry as tracker_telemetry
 from levanter.tracker.histogram import SummaryStats
 from levanter.tracker.telemetry import TelemetryTracker, TrainingPhase
 
@@ -94,3 +95,36 @@ def test_training_progress_and_phase_are_current_snapshots(exported, monkeypatch
     values = _values(exported.wait_for(7))
     assert values["progress_time_seconds"] == 1234.5
     assert values["phase"] == TrainingPhase.FINISHED
+
+
+@pytest.fixture
+def fast_heartbeat(monkeypatch):
+    heartbeat = tracker_telemetry._PhaseHeartbeat(interval=0.01)
+    monkeypatch.setattr(tracker_telemetry, "_HEARTBEAT", heartbeat)
+    yield heartbeat
+    heartbeat.stop()
+
+
+def test_phase_is_republished_while_a_job_initializes(exported, fast_heartbeat):
+    """A job that hangs before its first step must stay enrolled.
+
+    Stalled-training detection finds a job by its newest `phase` row. Written
+    only on transition, an initializing job's sole row ages out of any bounded
+    window and the job goes silent exactly when it is stuck.
+    """
+    TelemetryTracker()  # never logs a step
+
+    phases = [record for record in exported.wait_for(6) if record["name"] == "phase"]
+    assert len(phases) >= 3, "phase should be republished, not written once"
+    assert all(record["value"] == TrainingPhase.INITIALIZING for record in phases)
+
+
+def test_finish_stops_the_phase_heartbeat(exported, fast_heartbeat):
+    """A finished run has nothing left to enroll, so the worker must not outlive it."""
+    tracker = TelemetryTracker()
+    exported.wait_for(4)
+    assert fast_heartbeat.running
+
+    tracker.finish()
+
+    assert not fast_heartbeat.running
