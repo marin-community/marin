@@ -55,6 +55,7 @@ TEXT_PREVIEW_CHARS = 500
 SHARED_POOL_NAME = "fuzzy-verification-testbed"
 CANDIDATE_IMPORT_VERSION = 1
 WORKER_RESOURCES = ResourceConfig(cpu=2, ram="16g", disk="8g")
+VERIFICATION_TASK_RESOURCES = ResourceConfig(cpu=2, ram="4g", disk="8g")
 COORDINATOR_RESOURCES = ResourceConfig(cpu=1, ram="4g", disk="16g", preemptible=False)
 STORE_ACTOR_RESOURCES = ResourceConfig(cpu=2, ram="8g", disk="8g")
 STORE_CONFIG = FuzzyVerificationStoreConfig(
@@ -468,6 +469,8 @@ def main() -> None:
         store_config=STORE_CONFIG,
         max_parallelism=args.max_workers,
         worker_resources=WORKER_RESOURCES,
+        map_task_resources=VERIFICATION_TASK_RESOURCES,
+        reduce_task_resources=VERIFICATION_TASK_RESOURCES,
         override_output_path=prefix_join(output_prefix, "verified"),
     )
     report_step = StepSpec(
