@@ -138,6 +138,13 @@ class GrugModelConfig:
     # layers -> [num_layers, num_heads]; routed to Adam (see optimizer.create_mask). k is left
     # unscaled: for a per-head scalar only the q*k product matters, so scaling both is redundant.
     learnable_qk_scale: bool = False
+    # Aux-loss-free QB estimator. False: local (1-k/n)-quantile per device then pmean (biased avg-of-
+    # quantiles). True (Kimi-K3 "Quantile Balancing"): pooled per-expert margin histogram + one integer
+    # psum -> true global quantile, zero-mean bias. qb_hist_range is the fixed clip-to-edge margin range
+    # [-R, R]; qb_hist_bins is B (resolution ~2R/B near the near-zero selection boundary).
+    qb_histogram: bool = False
+    qb_hist_range: float = 8.0
+    qb_hist_bins: int = 1000
     sconv: bool = False
     sconv_kernel: int = 4
     sconv_sites: tuple[str, ...] = ("k", "v", "attn", "mlp")
@@ -757,26 +764,58 @@ class MoEMLP(eqx.Module):
             num_experts=self.cfg.num_experts,
             num_experts_per_token=self.cfg.num_experts_per_token,
         )
-        # Sharded QB: compute beta locally per device, then average.
+        # Aux-loss-free QB: per-expert (1-k/n)-quantile of the token margins s - alpha -> router bias.
         mesh = get_abstract_mesh()
         s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
         num_devices = 1
         for a in _BATCH_AXES:
             num_devices *= mesh.shape[a]
         local_tokens = s_minus_alpha.shape[0] // num_devices
-        qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
+        n_experts = self.cfg.num_experts
+        k = self.cfg.num_experts_per_token
 
-        def _local_qb_beta(s_ma):
-            topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
-            beta = topk_vals[:, -1]
-            return jax.lax.pmean(beta, axis_name=_BATCH_AXES)
+        if self.cfg.qb_histogram:
+            # Kimi-K3: pool a per-expert margin histogram across devices (one integer psum -> exact global
+            # counts), read the (1-k/n) quantile from the pooled cumulative counts, zero-mean the bias.
+            n_bins = self.cfg.qb_hist_bins
+            hist_range = self.cfg.qb_hist_range
 
-        router_stats["qb_beta"] = shard_map(
-            _local_qb_beta,
-            mesh=mesh,
-            in_specs=(P(_BATCH_AXES, None),),
-            out_specs=P(),
-        )(s_minus_alpha)
+            def _hist_qb_beta(s_ma):  # s_ma: [local_tokens, experts]
+                # bin index per (token, expert), clipped to the end bins (safe: the target quantile is interior)
+                idx = jnp.clip(((s_ma + hist_range) * (n_bins / (2.0 * hist_range))).astype(jnp.int32), 0, n_bins - 1)
+                expert_ids = jnp.arange(n_experts, dtype=jnp.int32)[None, :]
+                flat = (expert_ids * n_bins + idx).reshape(-1)  # expert-major flat bin
+                local_counts = jnp.bincount(flat, length=n_experts * n_bins).reshape(n_experts, n_bins)
+                counts = jax.lax.psum(local_counts, axis_name=_BATCH_AXES).astype(jnp.float32)
+                total = jnp.sum(counts, axis=-1, keepdims=True)  # global token count (same per expert)
+                target = total * (k / n_experts)  # tokens that should sit at/above beta per expert
+                # cum_from_top[:, b] = #{margins in bins >= b}; non-increasing in b
+                cum_from_top = jnp.cumsum(counts[:, ::-1], axis=-1)[:, ::-1]
+                bstar = jnp.clip(jnp.sum((cum_from_top >= target).astype(jnp.int32), axis=-1) - 1, 0, n_bins - 1)
+                ct_b = jnp.take_along_axis(cum_from_top, bstar[:, None], axis=-1)[:, 0]
+                h_b = jnp.take_along_axis(counts, bstar[:, None], axis=-1)[:, 0]
+                lower_edge = -hist_range + bstar.astype(jnp.float32) * (2.0 * hist_range / n_bins)
+                # within bin b*, #{>=v} falls linearly from ct_b at lower_edge; solve #{>=beta}=target
+                beta = lower_edge + (2.0 * hist_range / n_bins) * (ct_b - target[:, 0]) / jnp.maximum(h_b, 1.0)
+                return beta - jnp.mean(beta)
+
+            router_stats["qb_beta"] = shard_map(
+                _hist_qb_beta, mesh=mesh, in_specs=(P(_BATCH_AXES, None),), out_specs=P()
+            )(s_minus_alpha)
+        else:
+            qb_count = max(1, local_tokens * k // n_experts)
+
+            def _local_qb_beta(s_ma):
+                topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
+                beta = topk_vals[:, -1]
+                return jax.lax.pmean(beta, axis_name=_BATCH_AXES)
+
+            router_stats["qb_beta"] = shard_map(
+                _local_qb_beta,
+                mesh=mesh,
+                in_specs=(P(_BATCH_AXES, None),),
+                out_specs=P(),
+            )(s_minus_alpha)
 
         moe_out = self.expert_mlp(
             x_flat,

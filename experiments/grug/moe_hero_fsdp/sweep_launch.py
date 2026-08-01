@@ -148,6 +148,7 @@ def build_sweep_configs(size: SweepSize, *, num_train_steps: int, lr_mult: float
         report_capacity_overflow=True,
         rope_fused=True,
         learnable_qk_scale=os.environ.get("SWEEP_LEARNABLE_QK_SCALE") == "1",
+        qb_histogram=os.environ.get("SWEEP_QB_HISTOGRAM") == "1",
     )
     optimizer = MoeHeuristic().build_optimizer_config(
         num_train_steps=num_train_steps,
