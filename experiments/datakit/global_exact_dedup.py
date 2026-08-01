@@ -188,7 +188,6 @@ def global_exact_deduplicate(
     outcome = context.execute(
         pipeline,
         map_task_resources=worker_resources,
-        reduce_task_resources=worker_resources,
     )
     write_copartitioned_source_manifest(
         output_path=output_path,

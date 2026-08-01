@@ -228,11 +228,8 @@ def compute_minhash_attrs(
     }
     if max_workers is not None:
         ctx_kwargs["max_workers"] = max_workers
-    if reduce_task_resources is not None:
-        ctx_kwargs["reduce_task_resources"] = reduce_task_resources
     ctx = zephyr_context or ZephyrContext(**ctx_kwargs)
     map_resources = map_task_resources or resources
-    reduce_resources = reduce_task_resources or map_resources
 
     # Preserve source basenames; zephyr's `{basename}` placeholder is synthetic.
     output_basenames = tuple(os.path.basename(p) for p in source_shards)
@@ -250,7 +247,7 @@ def compute_minhash_attrs(
         pipeline,
         verbose=True,
         map_task_resources=map_resources,
-        reduce_task_resources=reduce_resources,
+        reduce_task_resources=reduce_task_resources,
     )
 
     return MinHashAttrData(

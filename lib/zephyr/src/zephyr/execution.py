@@ -202,7 +202,9 @@ class PullTask:
 
     task: ShardTask
     attempt: int
-    config: dict[str, Any]
+    chunk_prefix: str
+    execution_id: str
+    stage_generation: int
 
 
 class CoordinatorUnreachable(RuntimeError):
@@ -446,10 +448,6 @@ class ZephyrCoordinator:
         self._pool_error: str | None = None
         # Rotates which execution pull_task scans first, for cross-pipeline fairness.
         self._pull_offset: int = 0
-        # Cumulative counters from executions already dropped, folded into one
-        # set so a long-lived pool's memory does not grow with pipeline count.
-        self._retired_counters: dict[str, CounterEntry] = {}
-
         # Worker management state (workers self-register via register_worker)
         self._worker_states: dict[str, WorkerState] = {}
         self._last_seen: dict[str, float] = {}
@@ -590,9 +588,6 @@ class ZephyrCoordinator:
                 (run.execution_id, {name: entry.value for name, entry in run.merged_counters().items()})
                 for run in self._executions.values()
             ]
-        if not snapshots:
-            snapshots = [(self._name, self.get_counters())]
-
         for execution_id, counters in snapshots:
             attributes = {**_SNAPSHOT_ATTRIBUTES, "run": execution_id}
             for name, value in counters.items():
@@ -871,12 +866,13 @@ class ZephyrCoordinator:
                 task = run.task_queue.popleft()
                 attempt = run.task_attempts[task.shard_idx]
                 run.in_flight[task.shard_idx] = _InFlightEntry(task=task, attempt=attempt, worker_id=worker_id)
-                config = {
-                    "chunk_prefix": self._chunk_prefix,
-                    "execution_id": run.execution_id,
-                    "stage_generation": run.stage_generation,
-                }
-                return PullStatus.RUN_TASK, PullTask(task=task, attempt=attempt, config=config)
+                return PullStatus.RUN_TASK, PullTask(
+                    task=task,
+                    attempt=attempt,
+                    chunk_prefix=self._chunk_prefix,
+                    execution_id=run.execution_id,
+                    stage_generation=run.stage_generation,
+                )
 
             if self._drain_idle_workers and self._worker_is_releasable_locked(worker_id):
                 self._worker_states[worker_id] = WorkerState.DONE
@@ -1108,8 +1104,6 @@ class ZephyrCoordinator:
         modes), the counter is omitted from the result and a warning is
         logged — stats collection never raises into the execution path.
 
-        A finished execution is folded into a single retained snapshot, so its
-        totals survive the execution being dropped from the registry.
         """
         with self._lock:
             if worker_id is not None:
@@ -1118,11 +1112,10 @@ class ZephyrCoordinator:
                     return {}
                 return {k: e.value for k, e in snap.counters.items() if stage is None or e.stage == stage}
 
-            all_snaps = (
-                [CounterSnapshot(counters=dict(self._retired_counters), generation=0)]
-                + [CounterSnapshot(counters=run.merged_counters(), generation=0) for run in self._executions.values()]
-                + list(self._worker_counters.values())
-            )
+            all_snaps = [
+                CounterSnapshot(counters=run.merged_counters(), generation=0) for run in self._executions.values()
+            ]
+            all_snaps.extend(self._worker_counters.values())
 
         return _aggregate_counter_snapshots(all_snaps, stage)
 
@@ -1347,12 +1340,6 @@ class ZephyrCoordinator:
                 return
             if not run.done:
                 raise RuntimeError(f"Execution {execution_id} is still active")
-            retained = run.merged_counters()
-            if retained:
-                merged, conflicted = merge_counter_entries(
-                    (key, entry) for snapshot in (self._retired_counters, retained) for key, entry in snapshot.items()
-                )
-                self._retired_counters = {key: entry for key, entry in merged.items() if key not in conflicted}
             self._executions.pop(execution_id, None)
 
         if run.storage_cleanup_safe:
@@ -1695,7 +1682,7 @@ class ZephyrWorker:
 
             t = threading.Thread(
                 target=self._task_thread,
-                args=(work.task, work.attempt, work.config, runner),
+                args=(work, runner),
                 daemon=True,
                 name=f"zephyr-task-{self._worker_id}-s{work.task.shard_idx}",
             )
@@ -1716,38 +1703,35 @@ class ZephyrWorker:
 
     def _task_thread(
         self,
-        task: ShardTask,
-        attempt: int,
-        config: dict,
+        work: PullTask,
         runner: StageRunner,
     ) -> None:
         """Execute one shard task, report the result, and restore task.cost to the pool."""
         task_start = time.monotonic()
-        execution_id = config["execution_id"]
-        stage_generation = config["stage_generation"]
+        task = work.task
         try:
-            result, task_counters = self._execute_shard(task, config, runner)
+            result, task_counters = self._execute_shard(task, work.chunk_prefix, work.execution_id, runner)
             logger.info("[%s] Shard %d done in %.2fs", self._worker_id, task.shard_idx, time.monotonic() - task_start)
             # Block until coordinator records result — prevents _in_flight races.
             self._counter_generation += 1
             self._coordinator.report_result.remote(
                 self._worker_id,
-                execution_id,
+                work.execution_id,
                 task.shard_idx,
-                attempt,
+                work.attempt,
                 result,
                 CounterSnapshot(counters=dict(task_counters), generation=self._counter_generation),
-                stage_generation,
+                work.stage_generation,
             ).result()
         except Exception:
             logger.error("Worker %s error on shard %d", self._worker_id, task.shard_idx, exc_info=True)
             self._coordinator.report_error.remote(
                 self._worker_id,
-                execution_id,
+                work.execution_id,
                 task.shard_idx,
-                attempt,
+                work.attempt,
                 "".join(traceback.format_exc()),
-                stage_generation,
+                work.stage_generation,
             ).result()
         finally:
             with self._resources_lock:
@@ -1820,10 +1804,12 @@ class ZephyrWorker:
         logger.debug("[%s] Heartbeat loop exiting after %d beats", self._worker_id, heartbeat_count)
 
     def _execute_shard(
-        self, task: ShardTask, config: dict, stage_runner: StageRunner
+        self,
+        task: ShardTask,
+        chunk_prefix: str,
+        execution_id: str,
+        stage_runner: StageRunner,
     ) -> tuple[TaskResult, dict[str, CounterEntry]]:
-        chunk_prefix = config["chunk_prefix"]
-        execution_id = config["execution_id"]
         logger.info(
             "[%s] [shard %d/%d] stage=%s, %d ops",
             execution_id,
@@ -1948,38 +1934,17 @@ def _tasks_per_worker(worker_resources: ResourceConfig, task_resources: Resource
     return max(1, math.floor(min(ratios)))
 
 
-def _compute_min_tasks_per_worker(
-    worker_resources: ResourceConfig,
-    map_resources: ResourceConfig,
-    reduce_resources: ResourceConfig,
-) -> int:
-    """Compute how many concurrent tasks fit on one worker given map/reduce task costs.
-
-    Uses the tighter of the map and reduce packing densities so workers sized for
-    both stage types can keep enough tasks in flight for either.
-    """
-    for field_name in ["device", "preemptible", "regions", "zone", "replicas", "image", "device_alternatives"]:
-        map_val = getattr(map_resources, field_name)
-        reduce_val = getattr(reduce_resources, field_name)
-        if map_val != reduce_val:
-            raise ValueError(
-                f"Field '{field_name}' cannot differ between map_task_resources ({map_val}) "
-                f"and reduce_task_resources ({reduce_val}). Set the same value on both."
-            )
-
-    return min(
-        _tasks_per_worker(worker_resources, map_resources),
-        _tasks_per_worker(worker_resources, reduce_resources),
-    )
-
-
 def _distributed_worker_limit(configured: int | None) -> int:
     requested = configured or MAX_IRIS_WORKER_REPLICAS
     return min(requested, MAX_IRIS_WORKER_REPLICAS)
 
 
-def _validate_task_placement(worker_resources: ResourceConfig, task_resources: ResourceConfig) -> None:
-    """Require task placement values to match the fixed worker pool."""
+def _validate_task_resources(
+    worker_resources: ResourceConfig,
+    task_resources: ResourceConfig,
+    task_name: str,
+) -> None:
+    """Make sure that one task fits the fixed worker pool."""
     fields = (
         "device",
         "preemptible",
@@ -1995,8 +1960,32 @@ def _validate_task_placement(worker_resources: ResourceConfig, task_resources: R
         task_value = getattr(task_resources, field_name)
         if task_value != worker_value:
             raise ValueError(
-                f"Task resource field '{field_name}' must match the worker pool " f"({task_value!r} != {worker_value!r})"
+                f"Task resource field '{field_name}' must match the worker pool ({task_value!r} != {worker_value!r})"
             )
+
+    worker_ram = humanfriendly.parse_size(worker_resources.ram, binary=True)
+    worker_disk = humanfriendly.parse_size(worker_resources.disk, binary=True)
+    task_ram = humanfriendly.parse_size(task_resources.ram, binary=True)
+    task_disk = humanfriendly.parse_size(task_resources.disk, binary=True)
+    if worker_resources.cpu < task_resources.cpu or worker_ram < task_ram or worker_disk < task_disk:
+        raise ValueError(f"{task_name} task resources must fit one Zephyr worker")
+
+
+def _resolve_task_resources(
+    worker_resources: ResourceConfig,
+    map_task_resources: ResourceConfig | None,
+    reduce_task_resources: ResourceConfig | None,
+) -> tuple[ResourceConfig, ResourceConfig, int]:
+    """Resolve task resources and calculate the task packing limit."""
+    resolved_map = map_task_resources or worker_resources
+    resolved_reduce = reduce_task_resources or resolved_map
+    _validate_task_resources(worker_resources, resolved_map, "map")
+    _validate_task_resources(worker_resources, resolved_reduce, "reduce")
+    tasks_per_worker = min(
+        _tasks_per_worker(worker_resources, resolved_map),
+        _tasks_per_worker(worker_resources, resolved_reduce),
+    )
+    return resolved_map, resolved_reduce, tasks_per_worker
 
 
 class _ContextState(enum.StrEnum):
@@ -2068,20 +2057,16 @@ class ZephyrContext:
     no_workers_timeout: float | None = None
     max_execution_retries: int = 100
     stage_runner_factory: Callable[[], StageRunner] | None = None
-    map_task_resources: ResourceConfig | None = None
-    reduce_task_resources: ResourceConfig | None = None
     heartbeat_timeout: float = 120.0
     max_shard_failures: int = MAX_SHARD_FAILURES
     max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES
 
-    min_tasks_per_worker: int = field(init=False, default=1, repr=False)
     _shared_data: ContextVar[dict[str, Any] | None] = field(init=False, repr=False)
     _state: _ContextState = field(init=False, default=_ContextState.NEW, repr=False)
     _coordinator_group: ActorGroup | None = field(init=False, default=None, repr=False)
     _coordinator_handle: ActorHandle | None = field(init=False, default=None, repr=False)
     _worker_group: ActorGroup | None = field(init=False, default=None, repr=False)
     _state_lock: threading.Lock = field(init=False, repr=False)
-    _pipeline_id: int = field(init=False, default=-1, repr=False)
 
     def __post_init__(self) -> None:
         if self.client is None:
@@ -2096,37 +2081,8 @@ class ZephyrContext:
             else:
                 logger.info("Ignoring ZEPHYR_MAX_WORKERS because max_workers is set.")
 
-        if self.map_task_resources is not None and self.resources is None:
-            raise ValueError("Setting map_task_resources without setting resources is an error.")
-        if self.reduce_task_resources is not None and self.map_task_resources is None:
-            raise ValueError("Setting reduce_task_resources without map_task_resources is an error.")
-
         if self.resources is None:
             self.resources = ResourceConfig(cpu=1, ram="1g")
-        if self.map_task_resources is None:
-            self.map_task_resources = self.resources
-        if self.reduce_task_resources is None:
-            self.reduce_task_resources = self.map_task_resources
-
-        resources_ram = humanfriendly.parse_size(self.resources.ram, binary=True)
-        resources_disk = humanfriendly.parse_size(self.resources.disk, binary=True)
-        self.min_tasks_per_worker = _compute_min_tasks_per_worker(
-            self.resources,
-            self.map_task_resources,
-            self.reduce_task_resources,
-        )
-        for task_resources, task_name in (
-            (self.map_task_resources, "map_task"),
-            (self.reduce_task_resources, "reduce_task"),
-        ):
-            _validate_task_placement(self.resources, task_resources)
-            task_ram = humanfriendly.parse_size(task_resources.ram, binary=True)
-            task_disk = humanfriendly.parse_size(task_resources.disk, binary=True)
-            if self.resources.cpu < task_resources.cpu or resources_ram < task_ram or resources_disk < task_disk:
-                raise ValueError(
-                    f"Overall resources ({self.resources}) must be larger than or equal to "
-                    f"{task_name} resources ({task_resources}) on all dimensions (cpu, ram, disk)."
-                )
 
         if self.no_workers_timeout is None:
             self.no_workers_timeout = 6 * 60 * 60
@@ -2185,53 +2141,20 @@ class ZephyrContext:
                 time.monotonic() - started,
             )
 
-    def _worker_count(self, plan: PhysicalPlan | None) -> int:
+    def _worker_limit(self) -> int:
         assert self.client is not None
         limit = self.max_workers
         if isinstance(self.client, LocalClient):
-            limit = limit or os.cpu_count() or 1
-        else:
-            distributed_limit = _distributed_worker_limit(limit)
-            if limit is not None and distributed_limit != limit:
-                logger.warning(
-                    "Capping max_workers=%d at the Iris worker replica limit of %d; "
-                    "remaining shards will be multiplexed through the worker pool",
-                    limit,
-                    distributed_limit,
-                )
-            limit = distributed_limit
-        if plan is None:
-            return limit
-        needed_workers = math.ceil(plan.num_shards / self.min_tasks_per_worker)
-        return min(limit, needed_workers)
-
-    def _execution_task_resources(
-        self,
-        map_task_resources: ResourceConfig | None,
-        reduce_task_resources: ResourceConfig | None,
-    ) -> tuple[ResourceConfig, ResourceConfig, int]:
-        """Resolve and validate the task resources for one execution."""
-        assert self.resources is not None
-        if reduce_task_resources is not None and map_task_resources is None:
-            raise ValueError("reduce_task_resources requires map_task_resources")
-
-        resolved_map = map_task_resources or self.map_task_resources
-        assert resolved_map is not None
-        resolved_reduce = reduce_task_resources or (resolved_map if map_task_resources is not None else None)
-        resolved_reduce = resolved_reduce or self.reduce_task_resources
-        assert resolved_reduce is not None
-
-        worker_ram = humanfriendly.parse_size(self.resources.ram, binary=True)
-        worker_disk = humanfriendly.parse_size(self.resources.disk, binary=True)
-        tasks_per_worker = _compute_min_tasks_per_worker(self.resources, resolved_map, resolved_reduce)
-        for task_resources, task_name in ((resolved_map, "map"), (resolved_reduce, "reduce")):
-            _validate_task_placement(self.resources, task_resources)
-            task_ram = humanfriendly.parse_size(task_resources.ram, binary=True)
-            task_disk = humanfriendly.parse_size(task_resources.disk, binary=True)
-            if self.resources.cpu < task_resources.cpu or worker_ram < task_ram or worker_disk < task_disk:
-                raise ValueError(f"{task_name} task resources must fit one Zephyr worker")
-
-        return resolved_map, resolved_reduce, tasks_per_worker
+            return limit or os.cpu_count() or 1
+        distributed_limit = _distributed_worker_limit(limit)
+        if limit is not None and distributed_limit != limit:
+            logger.warning(
+                "Capping max_workers=%d at the Iris worker replica limit of %d; "
+                "remaining shards will be multiplexed through the worker pool",
+                limit,
+                distributed_limit,
+            )
+        return distributed_limit
 
     def _start_pool(
         self,
@@ -2241,8 +2164,6 @@ class ZephyrContext:
         """Start one coordinator job and its worker group."""
         assert self.client is not None
         assert self.resources is not None
-        assert self.map_task_resources is not None
-        assert self.reduce_task_resources is not None
         assert self.stage_runner_factory is not None
         assert self.chunk_storage_prefix is not None
         assert self.no_workers_timeout is not None
@@ -2329,7 +2250,7 @@ class ZephyrContext:
         with self._state_lock:
             if self._state is not _ContextState.NEW:
                 raise RuntimeError(f"Cannot start ZephyrContext in state {self._state}")
-            groups = self._start_pool(self._worker_count(None), _IdleWorkerPolicy.RETAIN)
+            groups = self._start_pool(self._worker_limit(), _IdleWorkerPolicy.RETAIN)
             self._coordinator_group, self._coordinator_handle, self._worker_group = groups
             self._state = _ContextState.OWNER
         return self
@@ -2345,22 +2266,26 @@ class ZephyrContext:
         """Run one plan on an existing coordinator and read its stored result."""
         result_path = _execution_result_path(self.chunk_storage_prefix, execution_id)
         try:
-            coordinator.run_pipeline.submit(
-                plan,
-                execution_id,
-                ZephyrTaskResources.from_resource_config(map_task_resources),
-                ZephyrTaskResources.from_resource_config(reduce_task_resources),
-            ).result()
-        except Exception:
-            payload = _try_read_coordinator_result(result_path)
-            if isinstance(payload, Exception):
-                raise payload from None
-            raise
+            try:
+                coordinator.run_pipeline.submit(
+                    plan,
+                    execution_id,
+                    ZephyrTaskResources.from_resource_config(map_task_resources),
+                    ZephyrTaskResources.from_resource_config(reduce_task_resources),
+                ).result()
+            except Exception:
+                payload = _try_read_coordinator_result(result_path)
+                if isinstance(payload, Exception):
+                    raise payload from None
+                raise
 
-        payload = _read_coordinator_result(result_path)
-        if isinstance(payload, Exception):
-            raise payload
-        return payload
+            payload = _read_coordinator_result(result_path)
+            if isinstance(payload, Exception):
+                raise payload
+            return payload
+        finally:
+            with suppress(Exception):
+                coordinator.release_execution.remote(execution_id).result(timeout=10.0)
 
     def execute(
         self,
@@ -2381,7 +2306,9 @@ class ZephyrContext:
             logger.warning("No shards in plan, returning empty results.")
             return ZephyrExecutionResult(results=[], counters={})
 
-        resolved_map, resolved_reduce, tasks_per_worker = self._execution_task_resources(
+        assert self.resources is not None
+        resolved_map, resolved_reduce, tasks_per_worker = _resolve_task_resources(
+            self.resources,
             map_task_resources,
             reduce_task_resources,
         )
@@ -2389,27 +2316,21 @@ class ZephyrContext:
         with self._state_lock:
             if self._state is _ContextState.CLOSED:
                 raise RuntimeError("Cannot execute with a closed ZephyrContext")
-            self._pipeline_id += 1
-            pipeline_id = self._pipeline_id
             state = self._state
             coordinator = self._coordinator_handle
 
         if state in {_ContextState.OWNER, _ContextState.BORROWED}:
             assert coordinator is not None
             execution_id = _generate_execution_id()
-            logger.info("Starting shared Zephyr pipeline %s (pipeline %d)", execution_id, pipeline_id)
+            logger.info("Starting shared Zephyr pipeline %s", execution_id)
             self._upload_shared_data(execution_id)
-            try:
-                return self._run_on_coordinator(
-                    coordinator,
-                    plan,
-                    execution_id,
-                    resolved_map,
-                    resolved_reduce,
-                )
-            finally:
-                with suppress(Exception):
-                    coordinator.release_execution.remote(execution_id).result(timeout=10.0)
+            return self._run_on_coordinator(
+                coordinator,
+                plan,
+                execution_id,
+                resolved_map,
+                resolved_reduce,
+            )
 
         assert state is _ContextState.NEW
         last_exception: Exception | None = None
@@ -2423,7 +2344,7 @@ class ZephyrContext:
                 self._upload_shared_data(execution_id)
                 needed_workers = math.ceil(plan.num_shards / tasks_per_worker)
                 coordinator_group, dedicated_coordinator, worker_group = self._start_pool(
-                    min(self._worker_count(None), needed_workers),
+                    min(self._worker_limit(), needed_workers),
                     _IdleWorkerPolicy.DRAIN,
                 )
                 backoff.reset()
