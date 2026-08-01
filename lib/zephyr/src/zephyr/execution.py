@@ -22,7 +22,7 @@ import time
 import traceback
 import uuid
 from collections import Counter, defaultdict, deque
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Hashable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -31,7 +31,7 @@ from typing import Any, TypeVar
 
 import cloudpickle
 import humanfriendly
-from fray.actor import ActorFuture, ActorGroup, ActorHandle, current_actor
+from fray.actor import ActorFuture, ActorGroup, ActorHandle, ActorUnavailableError, current_actor
 from fray.client import Client, JobHandle
 from fray.current_client import current_client, set_current_client
 from fray.local_backend import LocalClient
@@ -44,7 +44,7 @@ from rigging.filesystem import StoragePath, TransferBudgetExceeded, marin_temp_b
 from rigging.timing import ExponentialBackoff, RateLimiter, log_time
 
 from zephyr.dataset import Dataset
-from zephyr.memory_store import MemoryStore, _MemoryStoreActor, _store_plan
+from zephyr.memory_store import MemoryStore, _actor_result_with_recovery, _MemoryStoreActor, _store_plan
 from zephyr.plan import (
     Join,
     PhysicalOp,
@@ -77,7 +77,7 @@ from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
 
-K = TypeVar("K")
+K = TypeVar("K", bound=Hashable)
 V = TypeVar("V")
 
 # Max explicit task errors (report_error) per shard before aborting.
@@ -1871,7 +1871,6 @@ class ZephyrContext:
         num_actors: int,
         actor_resources: ResourceConfig,
         actor_config: ActorConfig,
-        max_actor_bytes: int,
         recovery_timeout: float,
         ready_timeout: float = 900.0,
     ) -> MemoryStore[K, V]:
@@ -1893,7 +1892,6 @@ class ZephyrContext:
             actor_resources: Resources for each store actor.
             actor_config: Actor recovery and concurrency policy. A positive
                 `max_task_retries` is required.
-            max_actor_bytes: Maximum encoded key/value bytes loaded by one actor.
             recovery_timeout: Seconds a lookup or stats call waits for an actor
                 response or recovery.
             ready_timeout: Seconds to wait for every actor to finish loading.
@@ -1902,8 +1900,6 @@ class ZephyrContext:
             raise ValueError("memory store name must not be empty")
         if num_actors <= 0:
             raise ValueError(f"num_actors must be positive, got {num_actors}")
-        if max_actor_bytes <= 0:
-            raise ValueError(f"max_actor_bytes must be positive, got {max_actor_bytes}")
         if recovery_timeout <= 0:
             raise ValueError(f"recovery_timeout must be positive, got {recovery_timeout}")
         if ready_timeout <= 0:
@@ -1926,18 +1922,32 @@ class ZephyrContext:
             hash_key,
             store_plan.num_source_partitions,
             num_actors,
-            max_actor_bytes,
             name=group_name,
             count=num_actors,
             resources=actor_resources,
             actor_config=actor_config,
         )
         try:
+            ready_deadline = time.monotonic() + ready_timeout
             handles = group.wait_ready(timeout=ready_timeout)
-            index_futures = [(handle, handle.stats.remote()) for handle in handles]
+            load_calls = {
+                position: lambda handle=handle: handle.load.remote() for position, handle in enumerate(handles)
+            }
+            load_futures: dict[int, ActorFuture | None] = {}
+            for position, call in load_calls.items():
+                try:
+                    load_futures[position] = call()
+                except ActorUnavailableError:
+                    load_futures[position] = None
             actors_by_index: list[ActorHandle | None] = [None] * num_actors
-            for handle, future in index_futures:
-                stats = future.result(timeout=recovery_timeout)
+            for position, handle in enumerate(handles):
+                stats = _actor_result_with_recovery(
+                    load_calls[position],
+                    load_futures[position],
+                    position,
+                    ready_timeout,
+                    ready_deadline,
+                )
                 if actors_by_index[stats.actor_index] is not None:
                     raise RuntimeError(f"two memory-store actors reported index {stats.actor_index}")
                 actors_by_index[stats.actor_index] = handle

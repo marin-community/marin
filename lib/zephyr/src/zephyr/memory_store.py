@@ -4,13 +4,12 @@
 """Read-only actor stores over existing Zephyr Dataset partitions."""
 
 import logging
+import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Hashable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Generic, TypeVar, cast
 
-import cloudpickle
-import msgspec
 from fray.actor import ActorFuture, ActorHandle, ActorUnavailableError, current_actor
 from rigging.timing import ExponentialBackoff
 
@@ -19,7 +18,7 @@ from zephyr.plan import Map, PhysicalOp, SourceItem, StageContext, StageType, co
 
 logger = logging.getLogger(__name__)
 
-K = TypeVar("K")
+K = TypeVar("K", bound=Hashable)
 V = TypeVar("V")
 
 
@@ -29,10 +28,6 @@ class MemoryStorePartitionError(ValueError):
 
 class DuplicateMemoryStoreKey(ValueError):
     """Raised when a memory-store input contains the same key twice."""
-
-
-class MemoryStoreCapacityError(MemoryError):
-    """Raised when an actor's encoded data exceeds its configured budget."""
 
 
 class MemoryStoreUnavailable(RuntimeError):
@@ -46,7 +41,6 @@ class MemoryStoreActorStats:
     actor_index: int
     source_partitions: tuple[int, ...]
     num_items: int
-    serialized_bytes: int
     load_cpu_time: float
     load_elapsed: float
 
@@ -104,79 +98,92 @@ class _MemoryStoreActor:
         hash_key: Callable[[Any], int],
         num_source_partitions: int,
         num_actors: int,
-        max_actor_bytes: int,
     ):
-        load_started = time.monotonic()
-        load_cpu_started = time.process_time()
         actor_index = current_actor().index
-        source_data: dict[int, list[Any]] = {
+        self._actor_index = actor_index
+        self._hash_key = hash_key
+        self._num_source_partitions = num_source_partitions
+        self._operations = operations
+        self._source_data: dict[int, list[Any]] = {
             partition: [] for partition in range(num_source_partitions) if partition % num_actors == actor_index
         }
         for item in source_items:
-            if item.shard_idx in source_data:
-                source_data[item.shard_idx].append(item.data)
+            if item.shard_idx in self._source_data:
+                self._source_data[item.shard_idx].append(item.data)
+        self._load_lock = threading.Lock()
+        self._values: dict[Hashable, Any] | None = None
+        self._stats: MemoryStoreActorStats | None = None
 
-        values: dict[bytes, bytes] = {}
-        serialized_bytes = 0
-        for partition, shard in source_data.items():
-            context = StageContext(
-                shard=shard,
-                shard_idx=partition,
-                total_shards=num_source_partitions,
+    def _ensure_loaded(self) -> tuple[dict[Hashable, Any], MemoryStoreActorStats]:
+        if self._values is not None:
+            assert self._stats is not None
+            return self._values, self._stats
+
+        with self._load_lock:
+            if self._values is not None:
+                assert self._stats is not None
+                return self._values, self._stats
+
+            load_started = time.monotonic()
+            load_cpu_started = time.process_time()
+            values: dict[Hashable, Any] = {}
+            for partition, shard in self._source_data.items():
+                context = StageContext(
+                    shard=shard,
+                    shard_idx=partition,
+                    total_shards=self._num_source_partitions,
+                )
+                for item in run_stage(context, list(self._operations)):
+                    if not isinstance(item, tuple) or len(item) != 2:
+                        raise TypeError(
+                            "memory-store Dataset must yield (key, value) tuples; "
+                            f"partition {partition} yielded {type(item).__name__}"
+                        )
+                    key, value = item
+                    actual_partition = _source_partition(self._hash_key, key, self._num_source_partitions)
+                    if actual_partition != partition:
+                        raise MemoryStorePartitionError(
+                            f"key {key!r} was in source partition {partition}, but hash_key routes it to "
+                            f"partition {actual_partition}"
+                        )
+                    if key in values:
+                        raise DuplicateMemoryStoreKey(f"duplicate memory-store key {key!r} in partition {partition}")
+                    values[key] = value
+
+            stats = MemoryStoreActorStats(
+                actor_index=self._actor_index,
+                source_partitions=tuple(self._source_data),
+                num_items=len(values),
+                load_cpu_time=time.process_time() - load_cpu_started,
+                load_elapsed=time.monotonic() - load_started,
             )
-            for item in run_stage(context, list(operations)):
-                if not isinstance(item, tuple) or len(item) != 2:
-                    raise TypeError(
-                        "memory-store Dataset must yield (key, value) tuples; "
-                        f"partition {partition} yielded {type(item).__name__}"
-                    )
-                key, value = item
-                actual_partition = _source_partition(hash_key, key, num_source_partitions)
-                if actual_partition != partition:
-                    raise MemoryStorePartitionError(
-                        f"key {key!r} was in source partition {partition}, but hash_key routes it to "
-                        f"partition {actual_partition}"
-                    )
+            self._values = values
+            self._stats = stats
+            logger.info(
+                "Memory-store actor %d loaded %d items from source partitions %s "
+                "in %.2f CPU-seconds and %.2f seconds",
+                self._actor_index,
+                len(values),
+                tuple(self._source_data),
+                stats.load_cpu_time,
+                stats.load_elapsed,
+            )
+            return values, stats
 
-                encoded_key = msgspec.msgpack.encode(key, order="deterministic")
-                if encoded_key in values:
-                    raise DuplicateMemoryStoreKey(f"duplicate memory-store key {key!r} in partition {partition}")
-                encoded_value = cloudpickle.dumps(value)
-                serialized_bytes += len(encoded_key) + len(encoded_value)
-                if serialized_bytes > max_actor_bytes:
-                    raise MemoryStoreCapacityError(
-                        f"memory-store actor {actor_index} exceeded max_actor_bytes={max_actor_bytes:,} "
-                        f"while loading source partition {partition}"
-                    )
-                values[encoded_key] = encoded_value
+    def load(self) -> MemoryStoreActorStats:
+        """Load assigned source partitions and return their statistics."""
+        _, stats = self._ensure_loaded()
+        return stats
 
-        self._values = values
-        self._stats = MemoryStoreActorStats(
-            actor_index=actor_index,
-            source_partitions=tuple(source_data),
-            num_items=len(values),
-            serialized_bytes=serialized_bytes,
-            load_cpu_time=time.process_time() - load_cpu_started,
-            load_elapsed=time.monotonic() - load_started,
-        )
-        logger.info(
-            "Memory-store actor %d loaded %d items (%d bytes) from source partitions %s "
-            "in %.2f CPU-seconds and %.2f seconds",
-            actor_index,
-            len(values),
-            serialized_bytes,
-            tuple(source_data),
-            self._stats.load_cpu_time,
-            self._stats.load_elapsed,
-        )
-
-    def lookup(self, encoded_keys: list[bytes]) -> list[bytes | None]:
-        """Return encoded values aligned with the requested encoded keys."""
-        return [self._values.get(key) for key in encoded_keys]
+    def lookup(self, keys: list[Hashable]) -> list[tuple[bool, Any]]:
+        """Return presence and value pairs aligned with the requested keys."""
+        values, _ = self._ensure_loaded()
+        return [(True, values[key]) if key in values else (False, None) for key in keys]
 
     def stats(self) -> MemoryStoreActorStats:
         """Return immutable load statistics."""
-        return self._stats
+        _, stats = self._ensure_loaded()
+        return stats
 
 
 def _actor_result_with_recovery(
@@ -233,21 +240,18 @@ class MemoryStore(Generic[K, V]):
         if not keys:
             return []
 
-        requests: dict[int, list[tuple[int, K, bytes]]] = {}
+        requests: dict[int, list[tuple[int, K]]] = {}
         for position, key in enumerate(keys):
             source_partition = _source_partition(self.hash_key, key, self.num_source_partitions)
             actor_index = source_partition % len(self.actors)
-            requests.setdefault(actor_index, []).append(
-                (position, key, msgspec.msgpack.encode(key, order="deterministic"))
-            )
+            requests.setdefault(actor_index, []).append((position, key))
 
-        encoded_requests = {
-            actor_index: [encoded_key for _, _, encoded_key in actor_requests]
-            for actor_index, actor_requests in requests.items()
+        request_keys = {
+            actor_index: [key for _, key in actor_requests] for actor_index, actor_requests in requests.items()
         }
         calls = {
             actor_index: (
-                lambda actor_index=actor_index: self.actors[actor_index].lookup.remote(encoded_requests[actor_index])
+                lambda actor_index=actor_index: self.actors[actor_index].lookup.remote(request_keys[actor_index])
             )
             for actor_index in requests
         }
@@ -261,18 +265,18 @@ class MemoryStore(Generic[K, V]):
 
         results: list[V | None] = [None] * len(keys)
         for actor_index, actor_requests in requests.items():
-            encoded_values = _actor_result_with_recovery(
+            lookup_results = _actor_result_with_recovery(
                 calls[actor_index],
                 futures[actor_index],
                 actor_index,
                 self.recovery_timeout,
                 deadline,
             )
-            assert len(encoded_values) == len(actor_requests)
-            for (position, key, _), encoded_value in zip(actor_requests, encoded_values, strict=True):
-                if encoded_value is None:
+            assert len(lookup_results) == len(actor_requests)
+            for (position, key), (found, value) in zip(actor_requests, lookup_results, strict=True):
+                if not found:
                     raise KeyError(key)
-                results[position] = cloudpickle.loads(encoded_value)
+                results[position] = value
 
         return cast(list[V], results)
 
