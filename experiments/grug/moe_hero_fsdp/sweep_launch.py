@@ -77,8 +77,8 @@ class SweepSize:
 SWEEP_SIZES: dict[str, SweepSize] = {
     s.name: s
     for s in (
-        SweepSize("d512", 512, 6, 32, 1),
-        SweepSize("d768", 768, 8, 64, 1),
+        SweepSize("d512", 512, 6, 64, 1),
+        SweepSize("d768", 768, 8, 128, 1),
         SweepSize("d1024", 1024, 12, 128, 1),
         SweepSize("d1280", 1280, 14, 128, 2),
         SweepSize("d1536", 1536, 16, 256, 4),
