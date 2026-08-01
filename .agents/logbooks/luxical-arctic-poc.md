@@ -578,3 +578,58 @@ These commands do not set a target cluster, region, or zone.
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/3m/report.json`.
 - All 24 accepted peer-review findings and the one partial disposition were
   checked again after the result update. No accepted item remains open.
+
+### Direct Arctic representation gates
+
+- Commit `d4480e420` adds a direct evaluation of the stored Arctic vectors.
+- The commit is based on `origin/main` commit `9ac45e4de`.
+- Submission command:
+
+```bash
+uv run iris --cluster=marin job run --no-wait \
+  --job-name lux-arctic-teacher-gates-v2-gb200-001 \
+  --priority interactive --gpu GB200x1 --enable-extra-resources \
+  --cpu 16 --memory 128GB --disk 128GB --timeout 3600 \
+  --sync-package marin-core --extra cpu --extra datakit \
+  -- python .agents/projects/luxical-arctic-poc/evaluate_teacher.py
+```
+
+- The command did not set a target cluster, region, or zone.
+- Job `/rav/lux-arctic-teacher-gates-v2-gb200-001` succeeded in 2 minutes
+  36.91 seconds. It had no failures or preemptions.
+- The evaluation used all 74,752 held-out rows.
+- Arctic passed six of eight direct gates.
+- It failed `regular_source_collapse` and `multilingual_macro_f1`.
+- Source macro-F1 was 0.66915, compared with 0.61727 for Luxical-One. The
+  delta was +0.05188 with interval [+0.03381, +0.06912].
+- Code macro-F1 was 0.79995, compared with 0.68089. The delta was +0.11906
+  with interval [+0.08678, +0.15320].
+- Multilingual macro-F1 was 0.72857, compared with 0.79561. The delta was
+  -0.06704 with interval [-0.14267, +0.00201].
+- Standard macro-F1 was 0.63070, compared with 0.56887. The delta was
+  +0.06183 with interval [+0.04826, +0.07555].
+- Arctic had finite fraction 1.0 and four-decimal unique fraction 0.999759.
+- Sixty of 143 regular sources failed the composite collapse gate. The counts
+  were 15 of 28 code, 9 of 24 multilingual, and 36 of 91 standard sources.
+- The overlapping failure reasons were 59 cluster-concentration failures and
+  one uniqueness failure. No source failed the rank or variance checks.
+- The minimum Arctic-to-Luxical rank ratio was 1.00858. The minimum variance
+  ratio was 1.54833.
+- Luxical-One itself has 52 absolute cluster-concentration failures. The
+  category counts are 9 code, 17 multilingual, and 26 standard sources.
+- Arctic improved the global code distribution. Its largest code cluster
+  share was 0.17055, compared with 0.21819 for Luxical-One.
+- Arctic code effective cluster count was 11.14955, compared with 10.30169.
+- Arctic code source-cluster NMI was 0.52520, compared with 0.42133.
+- Interpretation: Arctic does not show the rank, variance, or modality-wide
+  code collapse from #6850.
+- Arctic still puts more than 90% of each of 15 code sources in one global
+  cluster. Luxical-One does this for nine code sources.
+- Thus the fixed composite gate fails, but the failure is source concentration
+  and not a low-rank or constant-vector collapse.
+- JSON artifact:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-arctic-v1/report.json`.
+- HTML artifact:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-arctic-v1/report.html`.
+- Cross-agent peer review of the evaluator, report logic, and logbook result
+  returned no findings.
