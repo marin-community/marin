@@ -881,3 +881,45 @@ uv run iris --cluster=marin job run --no-wait \
   passes nine of ten gates and fails only regular-source collapse.
 - The peer-review report and dispositions are in
   `.agents/projects/luxical-arctic-poc/fast-student-report.md`.
+
+### FastTransformer failure attribution and source-geometry ladder
+
+- Commit `80563314f` adds the saved-report failure-attribution audit.
+- Attribution job `/rav/lux-arctic-attribution-gb200-001` succeeded in 4
+  minutes 2.13 seconds. It had no failures or preemptions.
+- The teacher has 60 composite failures and the 3M student has 59. Fifty-four
+  sources overlap. Five are student-only and six are teacher-only. The Jaccard
+  overlap is 0.83077.
+- The student-only failures are four multilingual FinePDF sources and one
+  standard algorithmic source. No code failure is student-only.
+- Student-to-teacher median rank ratios are 0.41618 for code, 0.34775 for
+  multilingual data, and 0.45476 for standard data. The corresponding variance
+  ratios are 0.64327, 0.49088, and 0.76096.
+- Arctic truncates 84,266 of 224,256 teacher windows at 512 tokens. This is
+  37.58% of windows and affects at least one window for 45.64% of documents.
+- Truncated window fractions are 70.30% for code, 35.15% for multilingual data,
+  and 27.16% for standard data. Source truncation has Spearman correlations
+  0.01753 and 0.06443 with teacher and student concentration.
+- Attribution artifact:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/fast-student/full/3m/attribution.json`.
+- Commit `9ec418b6b` adds a same-source cosine-geometry loss. Commit `07619a766`
+  adds fixed weights 0.25 and 0.50 after weight 1.0 failed its quality gate.
+- The first weight-1.0 submission used the CPU package extra and failed before
+  model load. The corrected GPU submission succeeded in 1 minute 23.45 seconds.
+- Weight 1.0 reduced regular failures from 66 to 32 and student-only failures
+  from 10 to one. Macro-F1 decreased by 0.05279 and multilingual macro-F1
+  decreased by 0.07263.
+- The 0.25 and 0.50 training jobs and the two holdout evaluation jobs succeeded
+  without failures or preemptions.
+- Weight 0.25 reduced regular failures to 46 and student-only failures to three.
+  Macro-F1 decreased by 0.02523. Code, multilingual, and standard macro-F1
+  decreased by 0.02302, 0.02694, and 0.02485.
+- Weight 0.50 reduced regular failures to 43 and student-only failures to one.
+  Macro-F1 decreased by 0.03883. Code, multilingual, and standard macro-F1
+  decreased by 0.03069, 0.04434, and 0.03804.
+- The 0.25, 0.50, and 1.0 treatments all fail the fixed -0.02 quality-loss
+  limit. Stop this source-geometry treatment and do not confirm it at 3M.
+- Comparison artifacts:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/fast-student/full-source-geometry-w0.25/750k/comparison.json`,
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/fast-student/full-source-geometry-w0.5/750k/comparison.json`, and
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/fast-student/full-source-geometry-w1/750k/comparison.json`.
