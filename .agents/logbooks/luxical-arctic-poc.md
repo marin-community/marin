@@ -808,3 +808,14 @@ uv run iris --cluster=marin job run --no-wait \
   fixed collapse and quality gates before 750K training.
 - Commits `3f806ec2b`, `5e136601a`, and `d62253c91` contain the model, ladder,
   speed gate, and fixed evaluator.
+
+### FastTransformer 64K first training attempt
+
+- Preparation job `/rav/lux-arctic-fast-student-prepare-b200-001` completed
+  all 3M fixed training rows in 7 minutes 12.85 seconds. It had no failures or
+  preemptions.
+- The first 64K training attempt failed before its first update. JAX rejected
+  the Boolean mask in the off-diagonal Gram-matrix function during tracing.
+- The fix removes each static diagonal with reshape and slice operations. A
+  regression test now compiles the complete contrastive loss with `jax.jit`.
+- The focused FastTransformer test file and the required file checks pass.

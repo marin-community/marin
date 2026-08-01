@@ -72,8 +72,7 @@ def pack_remapped_windows(
 
 def _off_diagonal(matrix: Array) -> Array:
     batch_size = matrix.shape[0]
-    mask = ~jnp.eye(batch_size, dtype=jnp.bool_)
-    return matrix[mask].reshape(batch_size, batch_size - 1)
+    return matrix.reshape(-1)[1:].reshape(batch_size - 1, batch_size + 1)[:, :-1].reshape(batch_size, batch_size - 1)
 
 
 def contrastive_embedding_loss(student: Array, teacher: Array, temperature: float) -> Array:
