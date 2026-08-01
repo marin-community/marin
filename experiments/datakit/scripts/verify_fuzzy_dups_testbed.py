@@ -12,7 +12,7 @@ import json
 import logging
 import os
 from collections import Counter, defaultdict
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from itertools import groupby
 from typing import Any, Protocol
@@ -74,7 +74,7 @@ STORE_CONFIG = FuzzyVerificationStoreConfig(
     ready_timeout=1_800,
     lookup_batch_size=128,
 )
-VERIFIED_COLUMNS = [
+VERIFIED_COLUMNS = (
     "id",
     "dup_doc",
     "dup_cluster_id",
@@ -89,7 +89,7 @@ VERIFIED_COLUMNS = [
     "dup_char_jaccard",
     "dup_local_token_sequence_equal",
     "dup_local_char_jaccard",
-]
+)
 
 
 @dataclass(frozen=True)
@@ -134,7 +134,7 @@ class _VerifiedSource(Protocol):
     attr_dir: DatakitArtifactPath
 
 
-def _rows(path: str, columns: list[str]) -> Iterator[dict[str, Any]]:
+def _rows(path: str, columns: Sequence[str]) -> Iterator[dict[str, Any]]:
     with StoragePath(path).open("rb") as stream:
         parquet = pq.ParquetFile(stream)
         for batch in parquet.iter_batches(columns=columns):
@@ -647,12 +647,12 @@ def main() -> None:
         raise ValueError("--candidate-artifact and --minhash-collection must be provided together")
 
     configure_logging(logging.INFO)
-    output_prefix = args.output_prefix.rstrip("/")
+    output_prefix = args.output_prefix
     normalized_steps = sample_sources(args.sample_prefix, _parse_source_names(args.sources))
     verification_params = FuzzyVerificationParams()
     if args.candidate_artifact:
-        candidate_path = args.candidate_artifact.rstrip("/")
-        minhash_collection_path = args.minhash_collection.rstrip("/")
+        candidate_path = args.candidate_artifact
+        minhash_collection_path = args.minhash_collection
         minhash_steps = None
         verified_step = StepSpec(
             name="datakit/fuzzy_verification_testbed/verified_existing",

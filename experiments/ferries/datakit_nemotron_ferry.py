@@ -48,6 +48,7 @@ from rigging.filesystem import (
     StoragePath,
     check_path_in_region,
     marin_temp_bucket,
+    prefix_join,
     region_from_metadata,
     url_to_fs,
 )
@@ -169,7 +170,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
             map_task_resources=resources.scale(1 / 16),
             reduce_task_resources=resources.scale(3 / 16),
         ),
-        override_output_path=f"{base}/verify_fuzzy_dups",
+        override_output_path=prefix_join(base, "verify_fuzzy_dups"),
     )
 
     consolidated = StepSpec(

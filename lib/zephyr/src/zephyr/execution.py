@@ -27,7 +27,7 @@ from typing import Any, TypeVar
 
 import cloudpickle
 import humanfriendly
-from fray.actor import ActorGroup
+from fray.actor import ActorGroup, ActorHandle
 from fray.client import Client
 from fray.current_client import current_client
 from fray.local_backend import LocalClient
@@ -554,17 +554,19 @@ class ZephyrContext:
         if actor_config.max_task_retries is None or actor_config.max_task_retries <= 0:
             raise ValueError("memory-store actor_config.max_task_retries must be positive")
 
-        source_items, operations, num_source_partitions = _store_plan(dataset)
-        if num_actors > num_source_partitions:
-            raise ValueError(f"num_actors ({num_actors}) cannot exceed source partitions ({num_source_partitions})")
+        store_plan = _store_plan(dataset)
+        if num_actors > store_plan.num_source_partitions:
+            raise ValueError(
+                f"num_actors ({num_actors}) cannot exceed source partitions ({store_plan.num_source_partitions})"
+            )
 
         assert self.client is not None
         group = self.client.create_actor_group(
             _MemoryStoreActor,
-            source_items,
-            operations,
+            store_plan.source_items,
+            store_plan.operations,
             hash_key,
-            num_source_partitions,
+            store_plan.num_source_partitions,
             num_actors,
             max_actor_bytes,
             name=f"{self.name}-{name}-memory-store",
@@ -575,7 +577,7 @@ class ZephyrContext:
         try:
             handles = group.wait_ready(timeout=ready_timeout)
             index_futures = [(handle, handle.stats.remote()) for handle in handles]
-            actors_by_index: list[Any] = [None] * num_actors
+            actors_by_index: list[ActorHandle | None] = [None] * num_actors
             for handle, future in index_futures:
                 stats = future.result()
                 if actors_by_index[stats.actor_index] is not None:
@@ -583,15 +585,16 @@ class ZephyrContext:
                 actors_by_index[stats.actor_index] = handle
             if any(handle is None for handle in actors_by_index):
                 raise RuntimeError("memory-store actor group did not report every actor index")
+            actors = tuple(handle for handle in actors_by_index if handle is not None)
         except BaseException:
             group.shutdown()
             raise
 
         self._memory_store_groups.append(group)
         return MemoryStore(
-            actors=tuple(actors_by_index),
+            actors=actors,
             hash_key=hash_key,
-            num_source_partitions=num_source_partitions,
+            num_source_partitions=store_plan.num_source_partitions,
             recovery_timeout=recovery_timeout,
         )
 

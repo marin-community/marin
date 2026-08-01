@@ -54,12 +54,19 @@ class MemoryStoreActorStats:
 
 def _source_partition(hash_key: Callable[[K], int], key: K, num_source_partitions: int) -> int:
     key_hash = hash_key(key)
-    if type(key_hash) is not int:
+    if isinstance(key_hash, bool) or not isinstance(key_hash, int):
         raise TypeError(f"hash_key must return int, got {type(key_hash).__name__} for key {key!r}")
     return key_hash % num_source_partitions
 
 
-def _store_plan(dataset: Dataset[tuple[K, V]]) -> tuple[tuple[SourceItem, ...], tuple[PhysicalOp, ...], int]:
+@dataclass(frozen=True)
+class _MemoryStorePlan:
+    source_items: tuple[SourceItem, ...]
+    operations: tuple[PhysicalOp, ...]
+    num_source_partitions: int
+
+
+def _store_plan(dataset: Dataset[tuple[K, V]]) -> _MemoryStorePlan:
     plan = compute_plan(dataset)
     num_source_partitions = plan.num_shards
     if num_source_partitions == 0:
@@ -83,7 +90,11 @@ def _store_plan(dataset: Dataset[tuple[K, V]]) -> tuple[tuple[SourceItem, ...], 
             "join, reshard, reduce, or write operations before constructing the store"
         )
 
-    return tuple(plan.source_items), operations, num_source_partitions
+    return _MemoryStorePlan(
+        source_items=tuple(plan.source_items),
+        operations=operations,
+        num_source_partitions=num_source_partitions,
+    )
 
 
 class _MemoryStoreActor:
