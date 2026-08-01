@@ -14,7 +14,14 @@ from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint
 
-from experiments.grug.coupon_clipping import launch, paloma_c0, paloma_c_short, paloma_wd1
+from experiments.grug.coupon_clipping import (
+    launch,
+    paloma_c0,
+    paloma_c_short,
+    paloma_l4,
+    paloma_random_layer_dropout,
+    paloma_wd1,
+)
 from experiments.grug.coupon_clipping.config import (
     AGGRESSIVE_DECAY_STEPS,
     AGGRESSIVE_GROWTH_CONFIG,
@@ -416,6 +423,11 @@ def test_paloma_eval_is_checkpoint_only_and_bounded(tmp_path):
         (paloma_wd1.build, "users/power/grug/coupon-clipping/ccx-wd1-d1536-l1-to-d3072-l48/dev"),
         (paloma_c_short.build, "users/power/grug/coupon-clipping/ccx-c-short-l48-step3200/dev"),
         (paloma_c0.build, "users/power/grug/coupon-clipping/cc16-c0-p0/dev"),
+        (paloma_l4.build, "users/power/grug/coupon-clipping/ccx-l4-d1536-l4-to-d3072-l48-tail1280/dev"),
+        (
+            paloma_random_layer_dropout.build,
+            "users/power/grug/coupon-clipping/ccx-ld4-d1536-l48-sample4-to-d3072-l48-tail1280/dev",
+        ),
     ],
 )
 def test_paloma_entrypoint_adopts_completed_checkpoint_without_training_dependencies(builder, checkpoint_source):
