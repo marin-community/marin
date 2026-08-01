@@ -1147,19 +1147,23 @@ def test_gc_bounds_pods_read_per_pass(provider, k8s):
     assert k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS) == []
 
 
-def test_gc_respects_interval(provider, k8s):
-    """_maybe_gc_terminal_resources should only run every _GC_INTERVAL_SECONDS."""
+def test_gc_does_not_run_on_the_calling_thread(provider, k8s):
+    """A sync cycle hands GC its active-pod set and returns; it never sweeps inline.
 
+    The sweep spends one API round trip per deleted resource, so running it inline
+    stalled scheduling and reconciliation behind the whole backlog (#7881).
+    """
     now = datetime.now(UTC)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    # Trigger GC once to set _last_gc_time to now.
-    provider._maybe_gc_terminal_resources(active_pods=[])
-
-    # Seed an old pod. An immediate second call should NOT trigger GC (interval not elapsed).
     _seed_terminal_pod(k8s, "gc-pod-1", "Succeeded", "aaaa111122223333", old_ts)
+
     provider._maybe_gc_terminal_resources(active_pods=[])
-    assert k8s.get_json(K8sResource.PODS, "gc-pod-1") is not None  # Still exists — interval gate held
+
+    assert k8s.get_json(K8sResource.PODS, "gc-pod-1") is not None
+
+    # The pass the GC thread would run does delete it, against that same snapshot.
+    provider._gc_once()
+    assert k8s.get_json(K8sResource.PODS, "gc-pod-1") is None
 
 
 def test_gc_cleans_up_deferred_configmaps(provider, k8s):

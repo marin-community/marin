@@ -46,6 +46,7 @@ class _FakeApiServer:
     def __init__(self, pages: list[list[str]]):
         self._pages = pages
         self.requests: list[dict] = []
+        self.deletes: list[dict] = []
 
     def get(self, **kwargs):
         self.requests.append(kwargs)
@@ -53,6 +54,9 @@ class _FakeApiServer:
         names = self._pages[index]
         more = index + 1 < len(self._pages)
         return _FakeListResponse(names, str(index + 1) if more else "")
+
+    def delete(self, **kwargs) -> None:
+        self.deletes.append(kwargs)
 
 
 class _FakeListResponse:
@@ -109,6 +113,20 @@ def test_list_json_limit_stops_the_walk():
 
     assert names == ["a", "b", "c"]
     assert len(api.requests) == 2
+
+
+def test_delete_by_labels_is_one_collection_delete():
+    """The selector goes to the server, which deletes the matches.
+
+    Listing the selector and deleting each match client-side costs one serial round
+    trip per resource, and GC sweeps many selectors back to back (#7881).
+    """
+    svc, api = _service_with_api([["a", "b", "c"]])
+
+    svc.delete_by_labels(K8sResource.CONFIGMAPS, {"iris.task-hash": "abc"})
+
+    assert api.requests == []
+    assert [d.get("label_selector") for d in api.deletes] == ["iris.task-hash=abc"]
 
 
 # Test item_path construction for namespaced resources

@@ -422,7 +422,11 @@ class CloudK8sService:
                 self.delete(resource, name, force=force, wait=wait)
 
     def delete_by_labels(self, resource: K8sResource, labels: dict[str, str], *, wait: bool = False) -> None:
-        """Delete all resources matching the given label selector."""
+        """Delete all resources matching the given label selector.
+
+        One collection delete, not a list plus a delete per item: the caller sweeps
+        many selectors in a row, and each extra round trip is serial latency it pays.
+        """
         if not labels:
             return
         selector = _label_selector(labels)
@@ -434,10 +438,7 @@ class CloudK8sService:
         kwargs.update(self._request_timeout_kwargs())
         with slow_log(logger, f"delete_by_labels {resource.plural} -l {selector}", threshold_ms=_SLOW_THRESHOLD_MS):
             try:
-                api = self._resource_api(resource)
-                items = api.get(**{k: v for k, v in kwargs.items() if k != "propagation_policy"}).items
-                for item in items:
-                    self.delete(resource, item.metadata.name, wait=wait)
+                self._resource_api(resource).delete(**kwargs)
             except NotFoundError:
                 return
             except ApiException as e:
