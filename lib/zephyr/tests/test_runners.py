@@ -4,7 +4,7 @@
 """Tests for the pluggable StageRunner strategies (zephyr.runners)."""
 
 import os
-import time
+import threading
 import uuid
 from contextlib import suppress
 
@@ -21,6 +21,7 @@ from zephyr.stats import (
     ZEPHYR_STAGE_STATS_NAMESPACE,
     ZEPHYR_WORKER_STATS_NAMESPACE,
     StatsWriter,
+    ZephyrWorkerStatStatus,
 )
 
 
@@ -177,22 +178,37 @@ def test_finelog_stats_emitted(local_client, tmp_path, finelog_server, monkeypat
     """Pipeline emits rows to both zephyr.stage and zephyr.worker finelog tables."""
     num_items = 2
     writers: list[StatsWriter] = []
+    running_sample_emitted = threading.Event()
+
+    class NotifyingStatsWriter(StatsWriter):
+        def emit_worker_stat(
+            self,
+            stage_name: str,
+            shard_idx: int,
+            execution_id: str,
+            status: ZephyrWorkerStatStatus,
+            start_time: float,
+            counters: dict[str, int | float],
+        ) -> None:
+            super().emit_worker_stat(stage_name, shard_idx, execution_id, status, start_time, counters)
+            if status is ZephyrWorkerStatStatus.RUNNING:
+                running_sample_emitted.set()
 
     def make_writer(url: str | None = None) -> StatsWriter:
-        w = StatsWriter(LogClient.connect(finelog_server))
+        w = NotifyingStatsWriter(LogClient.connect(finelog_server))
         writers.append(w)
         return w
 
     monkeypatch.setattr(StatsWriter, "connect", staticmethod(make_writer))
     monkeypatch.setattr(runners, "SUBPROCESS_STATS_INTERVAL", 0.01)
 
-    def slow_identity(x: int) -> int:
-        time.sleep(0.05)
+    def wait_for_running_sample(x: int) -> int:
+        assert running_sample_emitted.wait(timeout=5)
         return x
 
     ctx = _ctx(local_client, tmp_path, stage_runner_factory=lambda: InlineRunner())
     try:
-        ds = Dataset.from_list(list(range(num_items))).map(slow_identity)
+        ds = Dataset.from_list(list(range(num_items))).map(wait_for_running_sample)
         ctx.execute(ds)
     finally:
         ctx.shutdown()

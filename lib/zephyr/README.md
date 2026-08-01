@@ -52,10 +52,6 @@ drains, so capacity goes back to the cluster while stragglers finish.
 
 **Standing pool (one pool, many pipelines):**
 
-When many small pipelines each pay that startup cost, stand the pool up once
-instead. `mode=PoolMode.HOST` makes a context the pool's host: entering starts
-it, leaving tears it down, and any job that names the pool runs on it.
-
 `mode=PoolMode.HOST` makes a context the pool's host: entering starts the pool,
 leaving tears it down, and hosting advertises the pool's address to every job
 submitted afterwards. Steps need no wiring of their own:
@@ -101,8 +97,6 @@ pipelines keep running.
   workers lack
 - `HOST` — stand up the pool named `pool_name` and own its lifetime
 
-
-
 The pool's workers are sized by the host's `resources` × `max_workers`.
 Each joining pipeline still declares its own per-task cost via its own
 `map/reduce_task_resources`, so a pipeline needing more memory than a worker can
@@ -136,8 +130,10 @@ environment exactly as before.
 
 `ZephyrContext.load_memory_store()` loads an existing partitioned Dataset into
 a context-owned group of read-only actors. The handle is picklable, so later
-pipelines can use `get()` or order-preserving `get_many()` lookups without
-copying the table into every worker.
+pipelines and child jobs can use `get()` or order-preserving `get_many()`
+lookups without copying the table into every worker. The creating context owns
+the actors; the handle remains valid across any number of `execute()` calls
+until that context exits.
 
 ```python
 from fray.types import ActorConfig, ResourceConfig
@@ -175,10 +171,10 @@ before constructing a store.
 Keys must be unique and deterministically encodable by msgspec. Values and the
 hash function must be picklable; Python's salted `hash()` is not stable for
 string or byte keys. `max_actor_bytes` limits encoded key/value bytes, while
-`store.stats()` reports the measured load per actor. Iris reconstructs a
-preempted actor from the same source shards, and lookups wait for their owner up
-to `recovery_timeout`. Exiting the creating context stops its stores after the
-Zephyr worker pool drains.
+`store.stats()` reports item count, encoded bytes, load CPU time, and load wall
+time per actor. Iris reconstructs a preempted actor from the same source shards,
+and lookups wait for their owner up to `recovery_timeout`. Exiting the creating
+context stops its stores after the Zephyr worker pool drains.
 
 ## Real Usage
 

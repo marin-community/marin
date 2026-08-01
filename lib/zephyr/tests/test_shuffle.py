@@ -392,8 +392,6 @@ def test_external_sort_read_batch_respects_task_memory(tmp_path):
     task_memory = 1024**3
     n_runs = 66
     item_bytes = max(64, SpillReader(spill_path).approx_item_bytes * 3)
-    expected = max(1, min(int(task_memory * 0.25) // (n_runs * item_bytes), 10_000))
-    assert expected < 100
 
     ctx = _InProcessWorkerContext(
         chunk_prefix="test",
@@ -407,7 +405,10 @@ def test_external_sort_read_batch_respects_task_memory(tmp_path):
     finally:
         _worker_ctx_var.reset(token)
 
-    assert actual == expected
+    read_budget = int(task_memory * 0.25)
+    assert 1 <= actual < 100
+    assert actual * n_runs * item_bytes <= read_budget
+    assert (actual + 1) * n_runs * item_bytes > read_budget
 
 
 # ---------------------------------------------------------------------------

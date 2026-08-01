@@ -739,49 +739,49 @@ def verify_fuzzy_dups(
         ctx_kwargs["map_task_resources"] = map_task_resources
     if reduce_task_resources is not None:
         ctx_kwargs["reduce_task_resources"] = reduce_task_resources
-    ctx = ZephyrContext(**ctx_kwargs)
-    ctx.put(_SHARED_SHARDS_KEY, {shard.file_idx: shard for shard in shards})
-
     file_shards = min(max_parallelism, len(shards))
     shard_groups: list[list[VerificationShard]] = [[] for _ in range(file_shards)]
     for index, shard in enumerate(shards):
         shard_groups[index % file_shards].append(shard)
 
-    document_store = ctx.load_memory_store(
-        Dataset.from_list(shard_groups).flat_map(_candidate_documents),
-        name="fuzzy-verification-documents",
-        hash_key=_document_partition,
-        num_actors=min(store_config.max_actors, file_shards),
-        actor_resources=store_config.actor_resources,
-        actor_config=store_config.actor_config,
-        max_actor_bytes=store_config.max_actor_bytes,
-        recovery_timeout=store_config.recovery_timeout,
-        ready_timeout=store_config.ready_timeout,
-    )
-    pipeline = (
-        Dataset.from_list(shard_groups)
-        .flat_map(_joined_cluster_members)
-        .group_by(
-            key=_cluster_key,
-            sort_by=_cluster_sort_key,
-            reducer=_make_cluster_verifier(
-                verification_params,
-                local_representative_params,
-                document_store,
-                store_config.lookup_batch_size,
-            ),
-            # Cluster IDs can use all workers, including when there are fewer input files.
-            num_output_shards=max_parallelism,
+    with ZephyrContext(**ctx_kwargs) as ctx:
+        ctx.put(_SHARED_SHARDS_KEY, {shard.file_idx: shard for shard in shards})
+        document_store = ctx.load_memory_store(
+            Dataset.from_list(shard_groups).flat_map(_candidate_documents),
+            name="fuzzy-verification-documents",
+            hash_key=_document_partition,
+            num_actors=min(store_config.max_actors, file_shards),
+            actor_resources=store_config.actor_resources,
+            actor_config=store_config.actor_config,
+            max_actor_bytes=store_config.max_actor_bytes,
+            recovery_timeout=store_config.recovery_timeout,
+            ready_timeout=store_config.ready_timeout,
         )
-        .group_by(
-            key=lambda record: record["file_idx"],
-            sort_by=lambda record: record["id"],
-            reducer=_write_verified_shard,
-            num_output_shards=file_shards,
+        pipeline = (
+            Dataset.from_list(shard_groups)
+            .flat_map(_joined_cluster_members)
+            .group_by(
+                key=_cluster_key,
+                sort_by=_cluster_sort_key,
+                reducer=_make_cluster_verifier(
+                    verification_params,
+                    local_representative_params,
+                    document_store,
+                    store_config.lookup_batch_size,
+                ),
+                # Cluster IDs can use all workers, including when there are fewer input files.
+                num_output_shards=max_parallelism,
+            )
+            .group_by(
+                key=lambda record: record["file_idx"],
+                sort_by=lambda record: record["id"],
+                reducer=_write_verified_shard,
+                num_output_shards=file_shards,
+            )
         )
-    )
-    outcome = ctx.execute(pipeline, verbose=True)
-    store_stats = document_store.stats()
+        outcome = ctx.execute(pipeline, verbose=True)
+        store_stats = document_store.stats()
+
     write_copartitioned_source_manifest(output_path=output_path, attr_dirs=attr_dirs)
 
     verified = sum(result["verified_duplicates"] for result in outcome.results)

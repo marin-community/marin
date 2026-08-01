@@ -22,6 +22,7 @@ from zephyr.execution import ZephyrContext
 from zephyr.memory_store import (
     DuplicateMemoryStoreKey,
     MemoryStore,
+    MemoryStoreCapacityError,
     MemoryStorePartitionError,
     MemoryStoreUnavailable,
 )
@@ -152,6 +153,23 @@ def test_memory_store_rejects_duplicate_key(local_client, tmp_path):
                 actor_resources=ResourceConfig(cpu=1, ram="256m"),
                 actor_config=ActorConfig(max_concurrency=8, max_task_retries=10),
                 max_actor_bytes=1 << 20,
+                recovery_timeout=10,
+            )
+
+
+def test_memory_store_rejects_actor_payload_over_budget(local_client, tmp_path):
+    dataset = Dataset.from_list([((0, "large"), "value")])
+
+    with _store_context(local_client, tmp_path) as context:
+        with pytest.raises(MemoryStoreCapacityError):
+            context.load_memory_store(
+                dataset,
+                name="over-budget",
+                hash_key=_key_partition,
+                num_actors=1,
+                actor_resources=ResourceConfig(cpu=1, ram="256m"),
+                actor_config=ActorConfig(max_concurrency=8, max_task_retries=1),
+                max_actor_bytes=1,
                 recovery_timeout=10,
             )
 

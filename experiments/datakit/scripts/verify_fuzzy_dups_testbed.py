@@ -12,10 +12,10 @@ import json
 import logging
 import os
 from collections import Counter, defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import asdict, dataclass
 from itertools import groupby
-from typing import Any
+from typing import Any, Protocol
 
 import pyarrow.parquet as pq
 from fray.types import ActorConfig, ResourceConfig
@@ -130,6 +130,10 @@ class _VerifiedArtifactPaths(BaseModel):
     sources: dict[str, _VerifiedSourcePaths]
 
 
+class _VerifiedSource(Protocol):
+    attr_dir: DatakitArtifactPath
+
+
 def _rows(path: str, columns: list[str]) -> Iterator[dict[str, Any]]:
     with StoragePath(path).open("rb") as stream:
         parquet = pq.ParquetFile(stream)
@@ -204,10 +208,11 @@ def _join_candidate_text(
     return members
 
 
-def _verified_rows(artifact_path: str) -> dict[tuple[str, str], dict[str, Any]]:
-    verified = read_artifact(artifact_path, _VerifiedArtifactPaths)
+def _verified_rows_from_sources(
+    sources: Mapping[str, _VerifiedSource],
+) -> dict[tuple[str, str], dict[str, Any]]:
     rows: dict[tuple[str, str], dict[str, Any]] = {}
-    for source_key, source in verified.sources.items():
+    for source_key, source in sources.items():
         paths = sorted(str(path) for path in StoragePath(prefix_join(source.attr_dir, "*.parquet")).glob())
         for path in paths:
             for row in _rows(path, VERIFIED_COLUMNS):
@@ -216,6 +221,11 @@ def _verified_rows(artifact_path: str) -> dict[tuple[str, str], dict[str, Any]]:
                     raise ValueError(f"Verified output contains duplicate marker {key!r}")
                 rows[key] = row
     return rows
+
+
+def _verified_rows(artifact_path: str) -> dict[tuple[str, str], dict[str, Any]]:
+    verified = read_artifact(artifact_path, _VerifiedArtifactPaths)
+    return _verified_rows_from_sources(verified.sources)
 
 
 def _score_fields(result: VerificationResult) -> dict[str, Any]:
@@ -300,7 +310,7 @@ def inspect_verification(
     for member in members:
         by_cluster[member.cluster_id].append(member)
 
-    actual_markers = _verified_rows(verified)
+    actual_markers = _verified_rows_from_sources(verified.sources)
     expected_marker_keys: set[tuple[str, str]] = set()
     decisions: Counter[str] = Counter()
     comparison_decisions: Counter[str] = Counter()

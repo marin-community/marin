@@ -82,6 +82,53 @@ for entry in task_logs:
     print(msg)
 ```
 
+### Repeated Worker Pools
+
+Several child jobs ending in `-pool` with different hashes are independent
+Zephyr contexts, not retries. Each pool normally has its own
+`-workers-a<attempt>` group, so concurrent pipelines without a standing host
+repeat worker startup and can leave capacity idle.
+
+List the complete topology beneath the root job:
+
+```bash
+uv run iris --config <CONFIG> job list --prefix <ROOT_JOB_ID> --limit 500
+```
+
+When the caller uses one `PoolMode.HOST` context, the expected topology is one
+`-pool` job and one worker group shared by every joining pipeline. Additional
+actor jobs, such as a memory store, are expected and do not end in `-pool`.
+`PoolMode.ISOLATED` also creates a private pool intentionally.
+
+If an inherited pipeline unexpectedly creates another pool, confirm that the
+host context is still alive and that the child received the advertised
+coordinator endpoint. Do not add a federation target to repair this: child
+jobs already run on their federated parent's peer.
+
+One shared coordinator retains state for every active pipeline. Size its task
+for their aggregate plans, queues, counters, and RPCs, and bound shared helper
+executors rather than multiplying one executor per pipeline.
+
+### External-Sort Memory Budgets
+
+Worker container RAM and active task RAM are different limits. Shuffle fan-in
+and external-sort buffers use the active map or reduce task budget when one is
+declared; the worker cgroup limit is only the fallback. Leave headroom between
+the task budget and container request for the worker process and runtime.
+
+The worker log records the selected memory budget, pass-1 fan-in, and later
+merge fan-in. If a reducer OOMs despite a small declared task budget, verify
+those log values before increasing the worker request. A large cgroup-derived
+fan-in means the task budget was not propagated to the shard. A merge batch
+must be allowed to fall to one item per run for very wide records; raising its
+minimum can exceed the budget even when fan-in is correct.
+
+Use completed `zephyr.stage` finelog rows for the result: compare
+`mem_peak_bytes_max`, `mem_bytes_avg`, and `cpu_time_total` between equivalent
+runs. Requested RAM shows capacity, not actual use. Inspect the live cgroup of
+a known skew worker only as supporting evidence because a point sample can
+miss the true peak.
+
 ### Stale Pipeline Warning
 
 Grafana evaluates `ZephyrPipelineProgressStalled` once each minute. The rule
