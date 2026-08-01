@@ -27,6 +27,7 @@ from experiments.datakit.cluster.quality.fast_transformer.embedding import (
     contrastive_embedding_loss,
     pack_remapped_windows,
     predict_embeddings,
+    source_balanced_token_remap,
 )
 from experiments.datakit.cluster.quality.fast_transformer.model import (
     FastEmbeddingTransformer,
@@ -245,3 +246,12 @@ def test_embedding_window_packing_remaps_truncates_and_pads():
         [8, 9, 11, 0, 12, 8, 0, 0],
         [9, 0, 0, 0, 10, 11, 0, 0],
     ]
+
+
+def test_source_balanced_remap_gives_each_source_equal_weight():
+    first_source = np.asarray([0, 0, 900, 100, 0], dtype=np.int64)
+    second_source = np.asarray([0, 0, 0, 0, 1], dtype=np.int64)
+
+    remap = source_balanced_token_remap([first_source, second_source], compact_vocab_size=4)
+
+    assert remap.tolist() == [1, 1, 3, 1, 2]

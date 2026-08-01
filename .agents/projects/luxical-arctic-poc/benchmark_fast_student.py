@@ -16,15 +16,6 @@ import numpy as np
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import torch
-from fast_student import FastStudent, TOKENIZER_NAME, provisional_remap
-from huggingface_hub import hf_hub_download
-from luxical.embedder import Embedder
-from rigging.filesystem import atomic_rename
-from threadpoolctl import threadpool_limits
-from transformers import AutoTokenizer
-
-from experiments.datakit.cluster.quality.fast_transformer.model import count_params
-
 from evaluate_ladder import (
     BASELINE_FILE,
     BASELINE_REPO,
@@ -36,11 +27,22 @@ from evaluate_ladder import (
     SPEED_WARMUP_DOCUMENTS,
     read_json,
 )
+from fast_student import (
+    E5_TOKENIZER_NAME,
+    TIKTOKEN_NAME,
+    FastStudent,
+    provisional_remap,
+    tokenizer_vocab_size,
+)
+from huggingface_hub import hf_hub_download
+from luxical.embedder import Embedder
+from rigging.filesystem import atomic_rename
+from threadpoolctl import threadpool_limits
+
+from experiments.datakit.cluster.quality.fast_transformer.model import count_params
 
 RESULT_FILE = Path("/tmp/luxical-fast-student-speed")
-DEFAULT_OUTPUT_ROOT = (
-    "s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/speed"
-)
+DEFAULT_OUTPUT_ROOT = "s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/speed"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -75,9 +77,8 @@ def timed_rate(model: Any, texts: list[str], batch_size: int) -> tuple[float, fl
 
 def benchmark(arguments: argparse.Namespace) -> dict[str, Any]:
     torch.set_num_threads(CPU_THREADS)
-    tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_NAME)
-    remap = provisional_remap(len(tokenizer))
-    student = FastStudent.random(arguments.config, remap, seed=42)
+    remap = provisional_remap(tokenizer_vocab_size(arguments.tokenizer))
+    student = FastStudent.random(arguments.config, remap, seed=42, tokenizer_name=arguments.tokenizer)
     texts = evaluation_texts()
     warmup = texts[:SPEED_WARMUP_DOCUMENTS]
     student(warmup, batch_size=arguments.batch_size)
@@ -140,6 +141,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("cpu", "accelerator"), required=True)
     parser.add_argument("--config", choices=("full", "slim"), required=True)
+    parser.add_argument("--tokenizer", choices=(E5_TOKENIZER_NAME, TIKTOKEN_NAME), required=True)
     parser.add_argument("--batch-size", type=int, default=4_096)
     parser.add_argument("--output-root", default=DEFAULT_OUTPUT_ROOT)
     return parser.parse_args()
@@ -148,7 +150,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     arguments = parse_args()
     report = benchmark(arguments)
-    output_url = f"{arguments.output_root}/{arguments.mode}-{arguments.config}.json"
+    tokenizer_label = arguments.tokenizer.replace("/", "--")
+    output_url = f"{arguments.output_root}/{arguments.mode}-{arguments.config}-{tokenizer_label}.json"
     filesystem, path = fsspec.core.url_to_fs(output_url)
     with atomic_rename(path, fs=filesystem) as temporary_path:
         with filesystem.open(temporary_path, "w") as file:
