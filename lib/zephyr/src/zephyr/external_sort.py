@@ -15,7 +15,7 @@ spill items to a run file under ``{external_sort_dir}/run-{i:04d}.spill`` via
 
 Pass 2: heapq.merge over the (much smaller) set of run file iterators.  Each
 iterator streams chunks from its spill file via :class:`SpillReader`; the read
-batch size is computed from the cgroup memory limit so that all concurrent
+batch size is computed from the task memory budget so that all concurrent
 batches together stay within ``_READ_MEMORY_FRACTION`` of available memory.
 
 Run files are deleted after the final merge completes.
@@ -119,7 +119,10 @@ def _safe_read_batch_size(n_runs: int, sample_run_path: str) -> int:
     available = available_task_memory_bytes()
     budget = int(available * _READ_MEMORY_FRACTION)
     size = budget // max(1, n_runs * item_bytes)
-    result = max(100, min(size, _WRITE_BATCH_SIZE))
+    # Wide records and many concurrent runs can require single-digit batches.
+    # One item per run is the smallest useful batch; a larger floor would
+    # knowingly exceed the memory budget in that case.
+    result = max(1, min(size, _WRITE_BATCH_SIZE))
     logger.info(
         "External sort pass-2: %d runs x ~%d bytes/item, budget=%.1f GB -> read_batch_size=%d",
         n_runs,
