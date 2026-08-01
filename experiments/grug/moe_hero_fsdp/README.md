@@ -9,18 +9,20 @@ Launch:
 
 ```bash
 # dry-run: print the lowered plan locally, no GPUs
-python -m experiments.grug.moe_hero_fsdp.launch --dp-racks 1 --num-steps 25 --version dev
+python -m experiments.grug.moe_hero_fsdp.launch \
+  --run-id moe-hero-fsdp-test-1rack --dp-racks 1 --num-steps 25 --version dev
 
 # submit one or more racks; each rack gets 16 GB200x4 nodes and batch 1024
 RID="moe-hero-fsdp-test-2rack"
 iris --cluster=marin job run --no-wait --enable-extra-resources \
   --target-cluster cw-us-east-08a --priority interactive \
   --cpu 2 --memory 8GB --disk 32GB --timeout 5400 --job-name "${RID}-coord" \
-  -e WANDB_API_KEY "$WANDB_API_KEY" -e RUN_ID "$RID" \
-  -- python -m experiments.grug.moe_hero_fsdp.launch --dp-racks 2 --num-steps 200 --version dev --run
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -- python -m experiments.grug.moe_hero_fsdp.launch \
+    --run-id "$RID" --dp-racks 2 --num-steps 200 --version dev --run
 ```
 
-W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `$RUN_ID`. Pass
+W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `--run-id`. Pass
 `-e WANDB_PROJECT <project>` to the Iris coordinator command to use another W&B project.
 
 ## Files
@@ -66,6 +68,9 @@ W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `$RUN_ID`. Pas
   tile at ~99KB and cannot take v=4096). No liger, no pure-JAX chunked CE.
 - `offload_opt_state` to pinned host; `remat_mode="recompute_all"`.
 - Runtime env baked in: `JAX_ENABLE_PGLE=1`, `XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async`.
+- XLA GPU command buffers are disabled by default with `--xla_gpu_enable_command_buffer=`.
+  See [#5675](https://github.com/marin-community/marin/issues/5675) for the CUDA graph failure and
+  the plan to enable them again.
 
 ### Optimizer — MuonH
 - **Muon direction** (Newton-Schulz orthogonalization) + a **Frobenius hyperball** scale-invariant
