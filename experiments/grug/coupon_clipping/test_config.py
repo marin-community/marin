@@ -252,9 +252,9 @@ def test_paloma_eval_is_checkpoint_only_and_bounded(tmp_path):
 @pytest.mark.parametrize(
     ("builder", "checkpoint_source"),
     [
-        (paloma_wd1.build, "grug/coupon-clipping/ccx-wd1-d1536-l1-to-d3072-l48/dev"),
-        (paloma_c_short.build, "grug/coupon-clipping/ccx-c-short-l48-step3200/dev"),
-        (paloma_c0.build, "grug/coupon-clipping/cc16-c0-p0/dev"),
+        (paloma_wd1.build, "users/power/grug/coupon-clipping/ccx-wd1-d1536-l1-to-d3072-l48/dev"),
+        (paloma_c_short.build, "users/power/grug/coupon-clipping/ccx-c-short-l48-step3200/dev"),
+        (paloma_c0.build, "users/power/grug/coupon-clipping/cc16-c0-p0/dev"),
     ],
 )
 def test_paloma_entrypoint_adopts_completed_checkpoint_without_training_dependencies(builder, checkpoint_source):

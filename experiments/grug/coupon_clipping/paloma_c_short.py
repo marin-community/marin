@@ -13,7 +13,7 @@ from experiments.grug.coupon_clipping.eval_launch import build_paloma_eval
 _CHECKPOINT = ArtifactStep.adopt(
     "grug/coupon-clipping/adopted/ccx-c-short-terminal",
     "2026.08.01",
-    source="grug/coupon-clipping/ccx-c-short-l48-step3200/dev",
+    source="users/power/grug/coupon-clipping/ccx-c-short-l48-step3200/dev",
     kind=LevanterCheckpoint,
 )
 
