@@ -21,7 +21,6 @@ from levanter.tracker.histogram import SummaryStats
 logger = logging.getLogger(__name__)
 
 _CURRENT = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
-_CURRENT_HISTOGRAM = telemetry.snapshot_attributes("histogram", telemetry.CURRENT_SNAPSHOT)
 
 
 class TrainingPhase(IntEnum):
@@ -77,24 +76,23 @@ class TelemetryTracker(Tracker):
                 _set(key, scalar)
 
     def _publish_summary(self, key: str, stats: SummaryStats) -> None:
-        for field in ("mean", "min", "max", "variance", "rms"):
-            scalar = _as_scalar(getattr(stats, field))
+        """Export a summary's reduced moments as gauges."""
+        # Histogram buckets stay out. A row per bin, per metric, per step is a row
+        # count the telemetry store does not absorb — a six-layer MoE router emitted
+        # 774 a step. The W&B tracker still records the full bucket shape.
+        reduced = {
+            "mean": stats.mean,
+            "min": stats.min,
+            "max": stats.max,
+            "variance": stats.variance,
+            "rms": stats.rms,
+            "count": stats.num,
+            "sum": stats.sum,
+        }
+        for suffix, value in reduced.items():
+            scalar = _as_scalar(value)
             if scalar is not None:
-                _set(f"{key}_{field}", scalar)
-        if stats.histogram is None:
-            return
-        counts, limits = stats.histogram.to_numpy_histogram()
-        cumulative = np.cumsum(counts)
-        for index, count in enumerate(cumulative):
-            _set(
-                f"{key}_bucket",
-                float(count),
-                attributes={**_CURRENT_HISTOGRAM, "le": str(limits[index + 1])},
-            )
-        total = float(cumulative[-1]) if len(cumulative) else 0.0
-        _set(f"{key}_bucket", total, attributes={**_CURRENT_HISTOGRAM, "le": "+Inf"})
-        _set(f"{key}_count", total, attributes=_CURRENT_HISTOGRAM)
-        _set(f"{key}_sum", float(stats.sum), attributes=_CURRENT_HISTOGRAM)
+                _set(f"{key}_{suffix}", scalar)
 
     def log_hyperparameters(self, hparams: dict[str, Any]):
         pass

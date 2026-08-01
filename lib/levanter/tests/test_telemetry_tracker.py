@@ -53,13 +53,36 @@ def test_summary_stats_exports_preaggregated_current_gauges(exported):
     values = jnp.asarray(np.linspace(0.0, 1.0, 1000))
     tracker.log({"grad": SummaryStats.from_array(values, num_bins=4)}, step=1)
 
-    records = exported.wait_for(15)
-    buckets = [record for record in records if record["name"] == "grad_bucket"]
-    assert len(buckets) == 5
-    assert next(record for record in buckets if record["attributes"]["le"] == "+Inf")["value"] == 1000
-    assert all(record["kind"] == "gauge" for record in buckets)
-    assert all(record["attributes"]["source_temporality"] == "current_snapshot" for record in buckets)
-    assert _values(records)["grad_count"] == 1000
+    records = exported.wait_for(10)
+    grad = [record for record in records if record["name"].startswith("grad_")]
+    assert _values(grad) == pytest.approx(
+        {
+            "grad_mean": 0.5,
+            "grad_min": 0.0,
+            "grad_max": 1.0,
+            "grad_variance": 0.0833,
+            "grad_rms": 0.5774,
+            "grad_count": 1000,
+            "grad_sum": 500.0,
+        },
+        abs=1e-3,
+    )
+    assert all(record["kind"] == "gauge" for record in grad)
+    assert all(record["attributes"]["source_temporality"] == "current_snapshot" for record in grad)
+
+
+def test_summary_stats_does_not_export_a_row_per_histogram_bucket(exported):
+    """One row per bin, per metric, per step is what saturated the finelog hub."""
+    tracker = TelemetryTracker()
+    values = jnp.asarray(np.linspace(0.0, 1.0, 1000))
+    stats = SummaryStats.from_array(values, num_bins=64)
+    assert stats.histogram is not None, "a summary without a histogram would pass this test vacuously"
+
+    tracker.log({"grad": stats}, step=1)
+
+    records = exported.wait_for(10)
+    assert [record["name"] for record in records if record["name"].endswith("_bucket")] == []
+    assert not any("le" in record["attributes"] for record in records)
 
 
 def test_training_progress_and_phase_are_current_snapshots(exported, monkeypatch):
