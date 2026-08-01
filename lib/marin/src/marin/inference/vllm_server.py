@@ -22,12 +22,12 @@ from iris.runtime import telemetry as runtime_telemetry
 from rigging import telemetry
 from rigging.filesystem import marin_prefix
 from rigging.telemetry import probes
+from rigging.telemetry.prometheus import PrometheusForwarder
 from rigging.timing import Deadline, ExponentialBackoff, retry_with_backoff
 
 from marin.inference.config import WORKER_PYTHON_VERSION, InferenceModelConfig, VllmCompilationCacheMode
 from marin.inference.tpu_vllm_pins import tpu_inference_fork_ref, vllm_fork_ref
 from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
-from marin.inference.vllm_metrics import VLLM_METRICS_SERVICE, VllmMetricsForwarder, start_vllm_metrics_forwarding
 
 logger = logging.getLogger(__name__)
 # Bounded tail for the failure path and diagnostics(); the full stream reaches the job log, so
@@ -47,6 +47,8 @@ _AWS_CONFIG_FILE_ENV_VAR = "AWS_CONFIG_FILE"
 _RUNAI_STREAMER_READ_MARKER = "could not receive runai_response"
 _LINUX_PROC_ROOT = "/proc"
 _LINUX_DEAD_PROCESS_STATES = frozenset({"X", "Z"})
+_VLLM_METRICS_SERVICE = "vllm"
+_VLLM_METRIC_PREFIX = "vllm:"
 
 
 class _ProcessGroupStatus(StrEnum):
@@ -302,7 +304,7 @@ class VllmServerHandle:
     # Owns the reader threads and on-disk log files.
     log_pump: _LogPump | None = None
     # Polls the server's /metrics into direct process telemetry; None until ready.
-    metrics_forwarder: VllmMetricsForwarder | None = None
+    metrics_forwarder: PrometheusForwarder | None = None
     # Collects host-local NVIDIA and NCCL evidence; None until telemetry is configured.
     hardware_probes: probes.ProbeSession | None = None
 
@@ -925,14 +927,21 @@ def _start_vllm_native_server(
     # Now that the server answers, forward its /metrics (throughput, TTFT, queue depth) to
     # direct telemetry so it reaches Finelog. The metrics endpoint sits at the root, not under /v1.
     runtime_telemetry.configure(
-        VLLM_METRICS_SERVICE,
+        _VLLM_METRICS_SERVICE,
         attributes={"role": telemetry.TelemetryRole.INFERENCE.value},
     )
     if not telemetry.runtime_status().configured:
         return handle
     metrics_url = f"http://{host}:{resolved_port}/metrics"
+    metrics_forwarder = PrometheusForwarder(
+        metrics_url,
+        metric_prefix=_VLLM_METRIC_PREFIX,
+        metric_source=_VLLM_METRICS_SERVICE,
+    )
+    metrics_forwarder.start()
+    logger.info("Forwarding vLLM metrics from %s to telemetry_v1", metrics_url)
     return dataclasses.replace(
         handle,
-        metrics_forwarder=start_vllm_metrics_forwarding(metrics_url),
+        metrics_forwarder=metrics_forwarder,
         hardware_probes=probes.start(),
     )

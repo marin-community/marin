@@ -4,8 +4,10 @@
 """Collect the supported NCCL RAS communicator and rank fields."""
 
 import json
+import logging
 import math
 from collections.abc import Mapping
+from typing import NamedTuple
 
 from rigging import telemetry
 from rigging.telemetry.probes.runner import BoundedCommandRunner
@@ -18,9 +20,30 @@ _MAX_METRICS = 4_096
 _MAX_FIELD_BYTES = 256
 _MAX_EXACT_COUNT = 2**53 - 1
 
-type _Metric = tuple[str, float, str, dict[str, str]]
-type _ReportedRank = tuple[int, int, int, bool, bool, bool, dict[str, int]]
-type _MissingRank = tuple[int, bool, bool]
+logger = logging.getLogger(__name__)
+
+
+class _Metric(NamedTuple):
+    name: str
+    value: float
+    unit: str
+    attributes: dict[str, str]
+
+
+class _ReportedRank(NamedTuple):
+    rank: int
+    init_state: int
+    async_error: int
+    finalized: bool
+    destroyed: bool
+    aborted: bool
+    collectives: dict[str, int]
+
+
+class _MissingRank(NamedTuple):
+    rank: int
+    unresponsive: bool
+    considered_dead: bool
 
 
 def collect(runner: BoundedCommandRunner) -> None:
@@ -30,10 +53,11 @@ def collect(runner: BoundedCommandRunner) -> None:
         return
     try:
         metrics = _metrics(json.loads(result.stdout))
-    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as error:
+        logger.warning("could not parse NCCL RAS telemetry: %s", error)
         return
-    for name, value, unit, attributes in metrics:
-        telemetry.gauge(name, unit=unit).set(value, attributes=attributes)
+    for metric in metrics:
+        telemetry.gauge(metric.name, unit=metric.unit).set(metric.value, attributes=metric.attributes)
 
 
 def _metrics(payload: object) -> list[_Metric]:
@@ -46,8 +70,8 @@ def _metrics(payload: object) -> list[_Metric]:
     current = telemetry.snapshot_attributes("nccl_ras", telemetry.CURRENT_SNAPSHOT)
     ras = _mapping(root.get("ras"), "ras")
     metrics: list[_Metric] = [
-        ("communicators", float(communicator_count), "{communicator}", current),
-        (
+        _Metric("communicators", float(communicator_count), "{communicator}", current),
+        _Metric(
             "runtime_inventory",
             1.0,
             "",
@@ -59,13 +83,13 @@ def _metrics(payload: object) -> list[_Metric]:
                 **current,
             },
         ),
-        (
+        _Metric(
             "ras_collection_duration_seconds",
             _nonnegative_number(ras, "collection_time_sec"),
             "s",
             current,
         ),
-        ("ras_collection_timeouts", float(_count(ras, "timeouts_count")), "{timeout}", current),
+        _Metric("ras_collection_timeouts", float(_count(ras, "timeouts_count")), "{timeout}", current),
     ]
     for value in communicators:
         metrics.extend(_communicator_metrics(_mapping(value, "communicator"), current))
@@ -87,7 +111,7 @@ def _communicator_metrics(value: dict[str, object], current: dict[str, str]) -> 
 
     reported = [_reported_rank(_mapping(rank, "rank")) for rank in ranks]
     missing = [_missing_rank(_mapping(rank, "missing rank")) for rank in missing_ranks]
-    rank_numbers = [rank[0] for rank in reported] + [rank[0] for rank in missing]
+    rank_numbers = [rank.rank for rank in reported] + [rank.rank for rank in missing]
     if len(rank_numbers) != len(set(rank_numbers)):
         raise ValueError("duplicate NCCL communicator rank")
 
@@ -96,7 +120,7 @@ def _communicator_metrics(value: dict[str, object], current: dict[str, str]) -> 
         "secondary_hash": _text(value, "secondary_hash"),
     }
     metrics: list[_Metric] = [
-        (
+        _Metric(
             "communicator_state",
             1.0,
             "",
@@ -112,57 +136,57 @@ def _communicator_metrics(value: dict[str, object], current: dict[str, str]) -> 
         "total": size,
         "reported": len(reported),
         "missing": len(missing),
-        "unresponsive": sum(rank[1] for rank in missing),
-        "considered_dead": sum(rank[2] for rank in missing),
+        "unresponsive": sum(rank.unresponsive for rank in missing),
+        "considered_dead": sum(rank.considered_dead for rank in missing),
     }
     metrics.extend(
-        ("communicator_ranks", float(count), "{rank}", {**identity, "rank_state": state, **current})
+        _Metric("communicator_ranks", float(count), "{rank}", {**identity, "rank_state": state, **current})
         for state, count in rank_counts.items()
     )
     cumulative = telemetry.snapshot_attributes("nccl_ras", telemetry.CUMULATIVE_SNAPSHOT)
-    for rank, init_state, async_error, finalized, destroyed, aborted, collectives in reported:
-        rank_identity = {**identity, "rank": str(rank)}
+    for rank in reported:
+        rank_identity = {**identity, "rank": str(rank.rank)}
         metrics.append(
-            (
+            _Metric(
                 "communicator_rank_status",
                 1.0,
                 "",
                 {
                     **rank_identity,
                     "rank_state": "reported",
-                    "init_state": str(init_state),
-                    "async_error": str(async_error),
-                    "finalize_called": str(finalized).lower(),
-                    "destroy_flag": str(destroyed).lower(),
-                    "abort_flag": str(aborted).lower(),
+                    "init_state": str(rank.init_state),
+                    "async_error": str(rank.async_error),
+                    "finalize_called": str(rank.finalized).lower(),
+                    "destroy_flag": str(rank.destroyed).lower(),
+                    "abort_flag": str(rank.aborted).lower(),
                     **current,
                 },
             )
         )
         metrics.extend(
-            (
+            _Metric(
                 "collective_operations",
                 float(count),
                 "{operation}",
                 {**rank_identity, "collective": name, **cumulative},
             )
-            for name, count in collectives.items()
+            for name, count in rank.collectives.items()
         )
     metrics.extend(
-        (
+        _Metric(
             "communicator_rank_status",
             0.0,
             "",
             {
                 **identity,
-                "rank": str(rank),
+                "rank": str(rank.rank),
                 "rank_state": "missing",
-                "unresponsive": str(unresponsive).lower(),
-                "considered_dead": str(dead).lower(),
+                "unresponsive": str(rank.unresponsive).lower(),
+                "considered_dead": str(rank.considered_dead).lower(),
                 **current,
             },
         )
-        for rank, unresponsive, dead in missing
+        for rank in missing
     )
     return metrics
 
@@ -173,7 +197,7 @@ def _reported_rank(value: dict[str, object]) -> _ReportedRank:
     if len(counts) > _MAX_COLLECTIVES_PER_RANK:
         raise ValueError("too many NCCL collective kinds")
     collectives = {_bounded_text(name): _nonnegative_integer(count) for name, count in counts.items()}
-    return (
+    return _ReportedRank(
         _count(value, "rank"),
         _count(status, "init_state"),
         _count(status, "async_error"),
@@ -186,19 +210,23 @@ def _reported_rank(value: dict[str, object]) -> _ReportedRank:
 
 def _missing_rank(value: dict[str, object]) -> _MissingRank:
     status = _mapping(value.get("status"), "missing rank status")
-    return _count(value, "rank"), _boolean(status, "unresponsive"), _boolean(status, "considered_dead")
+    return _MissingRank(
+        _count(value, "rank"),
+        _boolean(status, "unresponsive"),
+        _boolean(status, "considered_dead"),
+    )
 
 
 def _lifecycle_state(reported: list[_ReportedRank], missing: list[_MissingRank]) -> str:
-    if any(aborted or async_error for _, _, async_error, _, _, aborted, _ in reported):
+    if any(rank.aborted or rank.async_error for rank in reported):
         return "error"
     if missing:
         return "incomplete"
-    if any(finalized or destroyed for _, _, _, finalized, destroyed, _, _ in reported):
+    if any(rank.finalized or rank.destroyed for rank in reported):
         return "finalizing"
-    if any(init_state == 7 for _, init_state, _, _, _, _, _ in reported):
+    if any(rank.init_state == 7 for rank in reported):
         return "initializing"
-    if reported and all(init_state == 0 for _, init_state, _, _, _, _, _ in reported):
+    if reported and all(rank.init_state == 0 for rank in reported):
         return "running"
     return "error"
 
@@ -206,8 +234,8 @@ def _lifecycle_state(reported: list[_ReportedRank], missing: list[_MissingRank])
 def _collective_mismatch(reported: list[_ReportedRank]) -> bool:
     if len(reported) < 2:
         return False
-    collectives = set().union(*(rank[6] for rank in reported))
-    return any(len({rank[6].get(collective, 0) for rank in reported}) > 1 for collective in collectives)
+    collectives = set().union(*(rank.collectives for rank in reported))
+    return any(len({rank.collectives.get(collective, 0) for rank in reported}) > 1 for collective in collectives)
 
 
 def _mapping(value: object, context: str) -> dict[str, object]:

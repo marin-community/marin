@@ -5,6 +5,8 @@
 
 import csv
 import io
+import logging
+from typing import NamedTuple
 
 from rigging import telemetry
 from rigging.telemetry.probes.runner import BoundedCommandRunner, CommandOutput
@@ -36,7 +38,14 @@ _EXTENDED_FIELDS = (
 )
 _NOT_AVAILABLE = frozenset({"", "n/a", "[n/a]", "not supported", "[not supported]", "unknown error"})
 
-type _Metric = tuple[str, float, str, dict[str, str]]
+logger = logging.getLogger(__name__)
+
+
+class _Metric(NamedTuple):
+    name: str
+    value: float
+    unit: str
+    attributes: dict[str, str]
 
 
 def collect(runner: BoundedCommandRunner) -> None:
@@ -54,12 +63,13 @@ def collect(runner: BoundedCommandRunner) -> None:
     try:
         rows = [row for row in csv.reader(io.StringIO(result.stdout.decode())) if any(value.strip() for value in row)]
         if len(rows) > _MAX_DEVICES:
-            return
+            raise ValueError("nvidia-smi device limit exceeded")
         metrics = [metric for row in rows for metric in _row_metrics(row, fields)]
-    except (UnicodeDecodeError, ValueError):
+    except (UnicodeDecodeError, ValueError) as error:
+        logger.warning("could not parse nvidia-smi telemetry: %s", error)
         return
-    for name, value, unit, attributes in metrics:
-        telemetry.gauge(name, unit=unit).set(value, attributes=attributes)
+    for metric in metrics:
+        telemetry.gauge(metric.name, unit=metric.unit).set(metric.value, attributes=metric.attributes)
 
 
 def _query(
@@ -97,7 +107,7 @@ def _row_metrics(row: list[str], fields: tuple[str, ...]) -> list[_Metric]:
         _add_optional(inventory, "mig_mode", values["mig.mode.current"])
         _add_optional(inventory, "vbios_version", values["vbios_version"])
 
-    metrics: list[_Metric] = [("hardware_inventory", 1.0, "", inventory)]
+    metrics: list[_Metric] = [_Metric("hardware_inventory", 1.0, "", inventory)]
     _append(metrics, "gpu_memory_total_bytes", values["memory.total"], current, scale=1024**2, unit="By")
     if fields == _BASELINE_FIELDS:
         return metrics
@@ -156,7 +166,7 @@ def _append(
 ) -> None:
     value = _number(raw_value)
     if value is not None:
-        metrics.append((name, value * scale, unit, attributes))
+        metrics.append(_Metric(name, value * scale, unit, attributes))
 
 
 def _number(value: str) -> float | None:

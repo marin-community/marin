@@ -3,6 +3,7 @@
 
 """Bounded subprocess execution for hardware probes."""
 
+import logging
 import math
 import os
 import selectors
@@ -15,6 +16,8 @@ from rigging.timing import Deadline
 
 MAX_OUTPUT_BYTES = 256 * 1024
 _PROCESS_REAP_TIMEOUT = 0.1
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -47,7 +50,8 @@ class BoundedCommandRunner:
                     stderr=subprocess.DEVNULL,
                     start_new_session=os.name == "posix",
                 )
-            except OSError:
+            except OSError as error:
+                logger.debug("could not start telemetry probe %s: %s", argv[0], error)
                 return None
             self._active.add(process)
 
@@ -71,7 +75,8 @@ class BoundedCommandRunner:
                         if len(output) > MAX_OUTPUT_BYTES:
                             self._terminate(process)
                             return None
-            except OSError:
+            except OSError as error:
+                logger.warning("telemetry probe output failed for process %s: %s", process.pid, error)
                 self._terminate(process)
                 return None
 
@@ -101,6 +106,7 @@ class BoundedCommandRunner:
             try:
                 process.wait(timeout=deadline.remaining_seconds())
             except subprocess.TimeoutExpired:
+                logger.warning("telemetry probe process %s was not reaped during shutdown", process.pid)
                 break
 
     @staticmethod
@@ -115,7 +121,8 @@ class BoundedCommandRunner:
         except OSError:
             try:
                 process.kill()
-            except OSError:
+            except OSError as error:
+                logger.warning("could not terminate telemetry probe process %s: %s", process.pid, error)
                 return
 
     @classmethod
@@ -124,4 +131,5 @@ class BoundedCommandRunner:
         try:
             process.wait(timeout=_PROCESS_REAP_TIMEOUT)
         except subprocess.TimeoutExpired:
+            logger.warning("telemetry probe process %s was not reaped after termination", process.pid)
             return
