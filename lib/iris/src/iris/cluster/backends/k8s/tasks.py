@@ -813,6 +813,12 @@ def _build_pod_manifest(
             "valueFrom": {"fieldRef": {"fieldPath": "status.podIP"}},
         }
     )
+    env_list.append(
+        {
+            "name": "IRIS_NODE_NAME",
+            "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}},
+        }
+    )
 
     # Parse resources first so device info is known before building volumes.
     resources: dict = {}
@@ -1731,14 +1737,16 @@ def _node_targets(nodes: list[dict], pods: list[dict]) -> list[NodeTarget]:
         if not name:
             continue
         occupied = running.get(name, 0)
-        device_type = "gpu" if _node_gpu_count(node) > 0 else "cpu"
+        device_variant = _node_label(node, _GPU_MODEL_LABELS)
+        device_type = "gpu" if _node_gpu_count(node) > 0 or device_variant else "cpu"
         targets.append(
             NodeTarget(
                 name=name,
+                node_uid=node.get("metadata", {}).get("uid", ""),
                 internal_ip=_node_internal_ip(node),
                 status=WorkerStatus.RUNNING if occupied else WorkerStatus.IDLE,
                 device_type=device_type,
-                device_variant=_node_label(node, _GPU_MODEL_LABELS),
+                device_variant=device_variant,
                 zone=_node_label(node, _REGION_LABELS),
                 cpu_count=_node_cpu_millicores(node) // 1000,
                 memory_bytes=_node_memory_bytes(node),

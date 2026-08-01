@@ -38,6 +38,7 @@ def _transport(monkeypatch: pytest.MonkeyPatch) -> RecordingTelemetryTransport:
 
 def test_configure_stamps_canonical_resource_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(IRIS_MULTIGPU_PROCESS_INDEX_ENV, "2")
+    monkeypatch.setenv("IRIS_NODE_NAME", "g83d142")
     info = JobInfo(
         task_id=JobName.from_wire("/alice/train/worker/3"),
         worker_id="w-7",
@@ -65,6 +66,7 @@ def test_configure_stamps_canonical_resource_identity(monkeypatch: pytest.Monkey
             "worker": "w-7",
             "region": "us-east5",
             "process_index": "2",
+            "node_name": "g83d142",
             "model_revision": "abc123",
             "role": "trainer",
             "root_run_uid": "pretrain-42",

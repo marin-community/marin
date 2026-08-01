@@ -353,11 +353,32 @@ sudo mv /tmp/iris_worker_config.json /etc/iris/worker_config.json
 
 echo "[iris-init] Phase: worker_start"
 
-# Force-remove existing worker (handles restart policy race).
+# Force-remove existing worker processes (handles restart policy races).
 # Task containers are NOT removed here — the worker process handles
 # adoption-or-cleanup in start() so it can adopt running containers
 # from a previous worker during rolling restarts.
 sudo docker rm -f iris-worker 2>/dev/null || true
+sudo docker rm -f iris-node-agent 2>/dev/null || true
+
+# Run physical host telemetry as a sibling process from the same Iris image.
+# Host PID/network namespaces make /proc and interface counters describe the VM,
+# not this small container. GPU access is added only when the host advertises the
+# NVIDIA runtime; CPU and TPU workers remain unchanged.
+IRIS_NODE_AGENT_GPU_ARGS=()
+if command -v nvidia-smi &> /dev/null && sudo docker info --format '{{json .Runtimes}}' | grep -q nvidia; then
+    IRIS_NODE_AGENT_GPU_ARGS=(--gpus all)
+fi
+sudo docker run -d --name iris-node-agent \
+    --restart=unless-stopped \
+    --network=host \
+    --pid=host \
+    --ulimit core=0:0 \
+    "${IRIS_NODE_AGENT_GPU_ARGS[@]}" \
+    -v {{ cache_dir }}:{{ cache_dir }} \
+    -v /etc/iris/worker_config.json:/etc/iris/worker_config.json:ro \
+    {{ docker_image }} \
+    .venv/bin/python -m iris.cluster.node_agent gcp \
+        --worker-config /etc/iris/worker_config.json
 
 # Start worker container with restart policy from the start so transient
 # failures (image pull races, network hiccups, etc.) self-heal. Give-up is

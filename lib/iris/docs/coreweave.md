@@ -765,13 +765,13 @@ model per node instead of sharding across nodes.
 On CoreWeave, there are no persistent worker daemons: the controller dispatches
 tasks directly as Kubernetes Pods, so the `list-workers` RPC returns empty and
 the controller's `workers` state table stays empty. Node-level telemetry is
-surfaced differently. Each cluster sync the controller scrapes the
-`cw-exporters` DaemonSets — `node-exporter` (host CPU/memory/disk/network over
-the node's hostPort `:9100`) and `dcgm-exporter` (GPU HBM/utilization/
-temperature/power over the pod's `:9400`) — and writes one `iris.worker` finelog
-row per node, keyed by node name. The same readings appear in
-`get-kubernetes-cluster-status` and the dashboard **Cluster** panel's node
-table. Use:
+surfaced differently. An Iris DaemonSet runs once per node and forwards bounded
+`node-exporter` and same-node `dcgm-exporter` measurements to `telemetry_v1`,
+retaining node, GPU, PCI, exporter, and counter-replica identity. The controller
+temporarily performs its existing aggregate scrape for the `iris.worker` table,
+`get-kubernetes-cluster-status`, and the dashboard **Cluster** panel; it does not
+publish a second normalized stream. NCCL communicator/rank evidence remains
+process-local telemetry. Use:
 
 ```bash
 kci get pods -n iris -l iris.managed=true

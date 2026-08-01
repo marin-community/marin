@@ -124,6 +124,7 @@ def test_scrape_populates_worker_rows_and_live_snapshot(k8s):
         "dcgm-exporter-abc",
         {
             "metadata": {"name": "dcgm-exporter-abc", "labels": {"app.kubernetes.io/name": "dcgm-exporter"}},
+            "spec": {"nodeName": _NODE_NAME},
             "status": {"podIP": "10.9.9.9"},
         },
     )

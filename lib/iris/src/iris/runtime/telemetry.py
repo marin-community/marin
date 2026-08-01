@@ -25,6 +25,8 @@ _RESERVED_RESOURCE_ATTRIBUTES = frozenset(
         "attempt",
         "worker",
         "process_index",
+        "node_name",
+        "node_uid",
         "serving_job_id",
         "run",
         "run_id",
@@ -45,6 +47,8 @@ def _identity(job_info: JobInfo) -> dict[str, str]:
     process_index = os.environ.get(IRIS_MULTIGPU_PROCESS_INDEX_ENV)
     if process_index is not None:
         identity["process_index"] = process_index
+    if node_name := os.environ.get("IRIS_NODE_NAME"):
+        identity["node_name"] = node_name
     return identity
 
 
