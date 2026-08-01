@@ -19,6 +19,7 @@ import datetime
 import math
 import os
 from dataclasses import dataclass
+from typing import get_args
 
 import jmp
 from fray.cluster import ResourceConfig
@@ -42,7 +43,7 @@ from experiments.grug.moe.launch_datakit_moe_mix import (
 )
 from experiments.grug.moe_hero_fsdp.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_fsdp.launch import HERO_GRUG_TRAINER, HERO_MIXED_PRECISION, HeroThroughputResult
-from experiments.grug.moe_hero_fsdp.model import GrugModelConfig
+from experiments.grug.moe_hero_fsdp.model import GrugModelConfig, QBEstimator
 from experiments.grug.moe_hero_fsdp.train import GrugEvalConfig, GrugRunConfig, run_grug
 from experiments.marin_tokenizer import marin_tokenizer
 
@@ -116,6 +117,13 @@ def active_params(size: SweepSize) -> int:
     return qo + kv + router + routed + shared
 
 
+def _qb_estimator() -> QBEstimator:
+    value = os.environ.get("SWEEP_QB_ESTIMATOR", "local")
+    if value not in get_args(QBEstimator):
+        raise ValueError(f"SWEEP_QB_ESTIMATOR={value!r} must be one of {get_args(QBEstimator)}")
+    return value
+
+
 def build_sweep_configs(size: SweepSize, *, num_train_steps: int, lr_mult: float):
     """The hero model at this sweep width plus its LR-scaled MuonH optimizer."""
     local_kv, global_kv = _kv_heads(size.hidden_dim)
@@ -148,7 +156,7 @@ def build_sweep_configs(size: SweepSize, *, num_train_steps: int, lr_mult: float
         report_capacity_overflow=True,
         rope_fused=True,
         learnable_qk_scale=os.environ.get("SWEEP_LEARNABLE_QK_SCALE") == "1",
-        qb_histogram=os.environ.get("SWEEP_QB_HISTOGRAM") == "1",
+        qb_estimator=_qb_estimator(),
     )
     optimizer = MoeHeuristic().build_optimizer_config(
         num_train_steps=num_train_steps,

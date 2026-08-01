@@ -79,6 +79,7 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
 
 
 RematMode = Literal["recompute_all", "save_moe"]
+QBEstimator = Literal["local", "logit_hist", "k3_hist"]
 
 
 def _batch_spec() -> P:
@@ -138,13 +139,19 @@ class GrugModelConfig:
     # layers -> [num_layers, num_heads]; routed to Adam (see optimizer.create_mask). k is left
     # unscaled: for a per-head scalar only the q*k product matters, so scaling both is redundant.
     learnable_qk_scale: bool = False
-    # Kimi-K3 "Quantile Balancing". False: grug default -- route on biased logits, bias = local
-    # (1-k/n)-quantile of logit margins per device then pmean. True: route + balance in bounded
-    # sigmoid-score space; bias = (k/n)-quantile of the required bias r=alpha-s read from a pooled
-    # per-expert histogram over the adaptive range [min(bias)-1, max(bias)+1] (r is exactly bounded
-    # there since s in (0,1)), mean-centered. qb_hist_bins is B (the K3 range is derived, not tuned).
-    qb_histogram: bool = False
+    # QB (aux-loss-free load balancing) estimator:
+    #   "local"      -- grug default: route on biased logits; bias = local (1-k/n)-quantile of the logit
+    #                   margins s-alpha per device, then pmean (a biased average-of-quantiles).
+    #   "logit_hist" -- route on biased logits; bias = global (1-k/n)-quantile of the logit margins from a
+    #                   pooled per-expert histogram over the fixed range [-R, R] (qb_hist_range, clip-to-
+    #                   edge), one integer psum, zero-mean.
+    #   "k3_hist"    -- Kimi-K3: route + balance in bounded sigmoid-score space; bias = (k/n)-quantile of
+    #                   the required bias r=alpha-s from a pooled histogram over the adaptive range
+    #                   [min(bias)-1, max(bias)+1] (r is exactly bounded there), mean-centered.
+    # qb_hist_bins is B; qb_hist_range (R) applies only to "logit_hist".
+    qb_estimator: QBEstimator = "local"
     qb_hist_bins: int = 1000
+    qb_hist_range: float = 8.0
     sconv: bool = False
     sconv_kernel: int = 4
     sconv_sites: tuple[str, ...] = ("k", "v", "attn", "mlp")
@@ -749,7 +756,7 @@ class MoEMLP(eqx.Module):
         router_probs = jax.nn.softmax(router_logits, axis=-1)
         # K3 balances in bounded sigmoid-score space (bias added to s in (0,1)); grug default balances in
         # raw-logit space. Either way the (K+1)-th biased value is the QB cutoff alpha.
-        if self.cfg.qb_histogram:
+        if self.cfg.qb_estimator == "k3_hist":
             router_score = jax.nn.sigmoid(router_logits)
             biased_scores = router_score + jax.lax.stop_gradient(self.router_bias)
         else:
@@ -773,7 +780,7 @@ class MoEMLP(eqx.Module):
         )
         mesh = get_abstract_mesh()
 
-        if self.cfg.qb_histogram:
+        if self.cfg.qb_estimator == "k3_hist":
             # Kimi-K3 "Quantile Balancing": histogram the required bias r = alpha - s per expert over the
             # adaptive range [min(bias)-1, max(bias)+1] -- r is exactly bounded there since s in (0,1) and
             # alpha is a biased score -- pool with one integer psum, read the (k/n)-quantile from the
@@ -802,6 +809,31 @@ class MoEMLP(eqx.Module):
             router_stats["qb_beta"] = shard_map(
                 _k3_qb_beta, mesh=mesh, in_specs=(P(_BATCH_AXES, None), P(), P()), out_specs=P()
             )(required_bias, bias_lo, bin_width)
+        elif self.cfg.qb_estimator == "logit_hist":
+            # Pooled per-expert histogram of the logit margins s - alpha over a fixed range [-R, R]
+            # (clip-to-edge), one integer psum -> global (1-k/n)-quantile from the cumulative counts.
+            s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
+            n_bins = self.cfg.qb_hist_bins
+            hist_range = self.cfg.qb_hist_range
+            target_rank = float(s_minus_alpha.shape[0]) * k / n_experts  # tokens at/above beta per expert
+
+            def _logit_hist_qb_beta(s_ma):  # s_ma: [local_tokens, experts]
+                expert_ids = jnp.arange(n_experts, dtype=jnp.int32)[None, :]
+                idx = jnp.clip(((s_ma + hist_range) * (n_bins / (2.0 * hist_range))).astype(jnp.int32), 0, n_bins - 1)
+                flat = (expert_ids * n_bins + idx).reshape(-1)
+                local_counts = jnp.bincount(flat, length=n_experts * n_bins).reshape(n_experts, n_bins)
+                counts = jax.lax.psum(local_counts, axis_name=_BATCH_AXES).astype(jnp.float32)
+                cum_from_top = jnp.cumsum(counts[:, ::-1], axis=-1)[:, ::-1]  # #{margins in bins >= b}
+                bstar = jnp.clip(jnp.sum((cum_from_top >= target_rank).astype(jnp.int32), axis=-1) - 1, 0, n_bins - 1)
+                ct_b = jnp.take_along_axis(cum_from_top, bstar[:, None], axis=-1)[:, 0]
+                h_b = jnp.take_along_axis(counts, bstar[:, None], axis=-1)[:, 0]
+                lower_edge = -hist_range + bstar.astype(jnp.float32) * (2.0 * hist_range / n_bins)
+                beta = lower_edge + (2.0 * hist_range / n_bins) * (ct_b - target_rank) / jnp.maximum(h_b, 1.0)
+                return beta - jnp.mean(beta)
+
+            router_stats["qb_beta"] = shard_map(
+                _logit_hist_qb_beta, mesh=mesh, in_specs=(P(_BATCH_AXES, None),), out_specs=P()
+            )(s_minus_alpha)
         else:
             # grug default: local (1-k/n)-quantile of logit margins s - alpha per device, then pmean.
             s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
