@@ -77,8 +77,8 @@ def build_hero_run(*, dp_racks: int, version: str | None = None) -> ArtifactStep
     train_resources = ResourceConfig.with_gpu(
         "GB200",
         count=4,
-        cpu=140,
-        ram="900g",
+        cpu=120,
+        ram="850g",
         disk="1t",
         replicas=HERO_NODES_PER_RACK * dp_racks,
     )
