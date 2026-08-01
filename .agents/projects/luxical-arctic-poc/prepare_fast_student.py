@@ -17,6 +17,9 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from fast_student import (
+    BASELINE_FILE,
+    BASELINE_REPO,
+    BASELINE_REVISION,
     COMPACT_VOCAB_SIZE,
     TOKENIZER_NAME,
     packed_document_ids,
@@ -172,7 +175,13 @@ def main() -> None:
         "teacher_id": TEACHER_ID,
         "teacher_revision": TEACHER_REVISION,
         "tokenizer": TOKENIZER_NAME,
-        "compact_vocab_size": COMPACT_VOCAB_SIZE,
+        "tokenizer_artifact": {
+            "repository": BASELINE_REPO,
+            "file": BASELINE_FILE,
+            "revision": BASELINE_REVISION,
+        },
+        "maximum_compact_vocab_size": COMPACT_VOCAB_SIZE,
+        "actual_compact_vocab_size": int(raw_to_compact.max()) + 1,
         "vocabulary_method": "mean within-source token frequency over fixed 3M rows",
         "raw_to_compact_url": REMAP_URL,
         "raw_to_compact_sha256": remap_sha256,
