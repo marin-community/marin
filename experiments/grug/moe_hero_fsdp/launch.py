@@ -27,7 +27,6 @@ from experiments.grug.moe_hero_fsdp.heuristic import build_hero_configs
 from experiments.grug.moe_hero_fsdp.train import GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.llama import llama3_tokenizer
 
-HERO_RUN_ID = "moe-hero-fsdp"
 DEFAULT_HERO_STEPS = 25
 DEFAULT_WANDB_PROJECT = "marin_moe"
 HERO_FSDP_BATCH_SIZE = 1024
@@ -58,8 +57,12 @@ class HeroThroughputResult(Artifact):
     """
 
 
-def build_hero_run(*, dp_racks: int, num_steps: int, version: str | None = None) -> ArtifactStep[HeroThroughputResult]:
+def build_hero_run(
+    *, run_id: str, dp_racks: int, num_steps: int, version: str | None = None
+) -> ArtifactStep[HeroThroughputResult]:
     """Build the rack-local FSDP hero throughput run."""
+    if not run_id.strip():
+        raise ValueError("run_id must not be empty")
     if dp_racks <= 0:
         raise ValueError(f"dp_racks must be positive, got {dp_racks}")
     if num_steps <= 0:
@@ -86,7 +89,6 @@ def build_hero_run(*, dp_racks: int, num_steps: int, version: str | None = None)
         disk="1t",
         replicas=HERO_NODES_PER_RACK * dp_racks,
     )
-    run_id = os.environ.get("RUN_ID") or HERO_RUN_ID
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
     slim = _slimpajama_6b_dataset()
@@ -143,6 +145,7 @@ def build_hero_run(*, dp_racks: int, num_steps: int, version: str | None = None)
 
 
 @click.command()
+@click.option("--run-id", required=True, help="Run identifier for artifact and W&B names.")
 @click.option("--dp-racks", type=click.IntRange(min=1), required=True, help="Data-parallel NVL72 rack count.")
 @click.option(
     "--num-steps",
@@ -152,8 +155,8 @@ def build_hero_run(*, dp_racks: int, num_steps: int, version: str | None = None)
     help="Number of training steps.",
 )
 @build_options
-def main(dp_racks: int, num_steps: int) -> ArtifactStep[HeroThroughputResult]:
-    return build_hero_run(dp_racks=dp_racks, num_steps=num_steps)
+def main(run_id: str, dp_racks: int, num_steps: int) -> ArtifactStep[HeroThroughputResult]:
+    return build_hero_run(run_id=run_id, dp_racks=dp_racks, num_steps=num_steps)
 
 
 if __name__ == "__main__":

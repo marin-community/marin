@@ -54,6 +54,18 @@ HERO_FSDP_RUNTIME_ENV = {
     "JAX_ENABLE_PGLE": "1",
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
 }
+# TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
+# command buffers after the CUDA graph failure is fixed.
+XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
+
+
+def _apply_hero_fsdp_runtime_defaults() -> None:
+    os.environ.update(HERO_FSDP_RUNTIME_ENV)
+    xla_flags = os.environ.get("XLA_FLAGS", "")
+    command_buffer_flag_name = XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG.partition("=")[0]
+    if any(flag.partition("=")[0] == command_buffer_flag_name for flag in xla_flags.split()):
+        return
+    os.environ["XLA_FLAGS"] = f"{xla_flags} {XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG}".strip()
 
 
 @dataclass(frozen=True)
@@ -634,9 +646,8 @@ def run_grug(config: GrugRunConfig) -> None:
     if trainer.id is None:
         raise ValueError("trainer.id must be set before dispatching grug training.")
 
-    # Dispatch snapshots os.environ for the child task, so apply the hero values first.
-    # These fixed recipe values intentionally override the submitter environment.
-    os.environ.update(HERO_FSDP_RUNTIME_ENV)
+    # Dispatch snapshots os.environ for the child task, so apply the hero defaults first.
+    _apply_hero_fsdp_runtime_defaults()
     dispatch_grug_training_run(
         run_id=trainer.id,
         config=config,
