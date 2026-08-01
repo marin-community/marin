@@ -204,3 +204,10 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Evidence: Zero failures and zero preemptions. A08 remains reachable and reports 0 of 820 GB200 GPUs free, with 84 held by interactive work and 736 held by batch work.
 - Decision: Keep the existing request and its queue position.
 - Next action: Continue the 570-second monitor cadence.
+
+### 2026-08-01 22:42 UTC - MHEP-001 admission wait unchanged
+
+- Status: Coordinator task 0 remains pending before its first attempt.
+- Evidence: Zero failures and zero preemptions. A08 remains reachable and reports 0 of 820 GB200 GPUs free, with 84 held by interactive work and 736 held by batch work.
+- Decision: Keep the existing request and its queue position.
+- Next action: Continue the 570-second monitor cadence.
