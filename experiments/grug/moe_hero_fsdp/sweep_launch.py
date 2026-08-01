@@ -182,13 +182,15 @@ def build_sweep_run(*, version: str | None = None) -> ArtifactStep[HeroThroughpu
     version = resolve_version(name, version)
     model, optimizer = build_sweep_configs(size, num_train_steps=steps, lr_mult=lr_mult)
 
+    # GPU fleet is env-overridable so the same launcher can target GB200 (default) or H100 for
+    # ablations. SWEEP_GPUS_PER_NODE/SWEEP_NODES let the caller size the mesh (e.g. 8x8 = 64 H100).
     resources = ResourceConfig.with_gpu(
-        "GB200",
-        count=GPUS_PER_NODE,
+        os.environ.get("SWEEP_GPU_TYPE", "GB200"),
+        count=int(os.environ.get("SWEEP_GPUS_PER_NODE", str(GPUS_PER_NODE))),
         cpu=32,
         ram="256g",
         disk="256g",
-        replicas=size.nodes,
+        replicas=int(os.environ.get("SWEEP_NODES", str(size.nodes))),
     )
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
