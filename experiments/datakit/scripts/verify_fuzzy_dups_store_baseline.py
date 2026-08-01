@@ -18,7 +18,6 @@ from marin.processing.classification.deduplication.fuzzy_minhash import MinHashA
 from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
-    VerifiedFuzzyDupsAttrData,
     verify_fuzzy_dups,
 )
 from pydantic import BaseModel
@@ -62,6 +61,14 @@ class _LegacyMinHashEntry(BaseModel):
 
 class _LegacyMinHashCollection(BaseModel):
     inputs: list[_LegacyMinHashEntry]
+
+
+class _VerifiedSourcePaths(BaseModel):
+    attr_dir: str
+
+
+class _VerifiedArtifactPaths(BaseModel):
+    sources: dict[str, _VerifiedSourcePaths]
 
 
 def _rows(path: str, columns: list[str]) -> Iterator[dict[str, Any]]:
@@ -110,7 +117,8 @@ def _minhash_sources(path: str, normalized: dict[str, NormalizedData]) -> dict[s
     }
 
 
-def _verified_rows(verified: VerifiedFuzzyDupsAttrData) -> dict[tuple[str, str], dict[str, Any]]:
+def _verified_rows(artifact_path: str) -> dict[tuple[str, str], dict[str, Any]]:
+    verified = read_artifact(artifact_path, _VerifiedArtifactPaths)
     rows = {}
     for source_key, source in verified.sources.items():
         paths = sorted(str(path) for path in StoragePath(prefix_join(source.attr_dir, "*.parquet")).glob())
@@ -131,40 +139,42 @@ def main() -> None:
     parser.add_argument("--reference-verified-prefix", required=True)
     parser.add_argument("--output-prefix", required=True)
     parser.add_argument("--max-workers", type=int, default=64)
+    parser.add_argument("--compare-only", action="store_true")
     args = parser.parse_args()
     if args.max_workers < 1:
         raise ValueError("--max-workers must be at least 1")
 
     configure_logging(logging.INFO)
-    normalized_steps = sample_sources(args.sample_prefix, None)
-    normalized = {
-        source_name: read_artifact(step.output_path, NormalizedData) for source_name, step in normalized_steps.items()
-    }
     output_path = prefix_join(args.output_prefix.rstrip("/"), "verified")
-    with ZephyrContext(
-        mode=PoolMode.HOST,
-        pool_name=SHARED_POOL_NAME,
-        max_workers=args.max_workers,
-        resources=WORKER_RESOURCES,
-        coordinator_resources=COORDINATOR_RESOURCES,
-    ):
-        verified = verify_fuzzy_dups(
-            normalized_sources=normalized,
-            minhash_sources=_minhash_sources(args.minhash_collection, normalized),
-            candidates=_candidate_artifact(args.candidate_artifact),
-            output_path=output_path,
-            verification_params=FuzzyVerificationParams(),
-            local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
-            max_parallelism=args.max_workers,
-            worker_resources=WORKER_RESOURCES,
-            map_task_resources=VERIFICATION_TASK_RESOURCES,
-            reduce_task_resources=VERIFICATION_TASK_RESOURCES,
-        )
-    write_artifact(verified, output_path)
+    if not args.compare_only:
+        normalized_steps = sample_sources(args.sample_prefix, None)
+        normalized = {
+            source_name: read_artifact(step.output_path, NormalizedData)
+            for source_name, step in normalized_steps.items()
+        }
+        with ZephyrContext(
+            mode=PoolMode.HOST,
+            pool_name=SHARED_POOL_NAME,
+            max_workers=args.max_workers,
+            resources=WORKER_RESOURCES,
+            coordinator_resources=COORDINATOR_RESOURCES,
+        ):
+            verified = verify_fuzzy_dups(
+                normalized_sources=normalized,
+                minhash_sources=_minhash_sources(args.minhash_collection, normalized),
+                candidates=_candidate_artifact(args.candidate_artifact),
+                output_path=output_path,
+                verification_params=FuzzyVerificationParams(),
+                local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+                max_parallelism=args.max_workers,
+                worker_resources=WORKER_RESOURCES,
+                map_task_resources=VERIFICATION_TASK_RESOURCES,
+                reduce_task_resources=VERIFICATION_TASK_RESOURCES,
+            )
+        write_artifact(verified, output_path)
 
-    reference = read_artifact(args.reference_verified_prefix, VerifiedFuzzyDupsAttrData)
-    actual_rows = _verified_rows(verified)
-    reference_rows = _verified_rows(reference)
+    actual_rows = _verified_rows(output_path)
+    reference_rows = _verified_rows(args.reference_verified_prefix)
     if actual_rows != reference_rows:
         unexpected = sorted(actual_rows.keys() - reference_rows.keys())
         missing = sorted(reference_rows.keys() - actual_rows.keys())
