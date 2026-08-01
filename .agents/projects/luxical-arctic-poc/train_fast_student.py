@@ -10,7 +10,7 @@ import logging
 import math
 import tempfile
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +30,7 @@ from rigging.filesystem import atomic_rename
 from experiments.datakit.cluster.quality.fast_transformer.embedding import (
     embedding_distillation_loss,
     predict_embeddings,
+    projected_embedding_distillation_loss,
     source_conditioned_geometry_loss,
 )
 from experiments.datakit.cluster.quality.fast_transformer.inference import data_parallel_shardings
@@ -53,9 +54,37 @@ SOURCE_GEOMETRY_WEIGHTS = {
     "source-geometry-w1": 1.0,
 }
 TEACHER_QUANTIZATION_LIMIT = 0.3
-TEACHER_DIMENSION = 256
 AUDIT_ROWS = 2_048
 RESULT_FILE = Path("/tmp/luxical-fast-student-train")
+
+
+@dataclass(frozen=True)
+class TeacherSpec:
+    """Define one aligned training teacher."""
+
+    name: str
+    dimension: int
+    quantization_limit: float
+    source_root: str | None
+    audit_url: str | None
+
+
+TEACHERS = {
+    "arctic-medium-256": TeacherSpec(
+        name="arctic-medium-256",
+        dimension=256,
+        quantization_limit=TEACHER_QUANTIZATION_LIMIT,
+        source_root=None,
+        audit_url=None,
+    ),
+    "qwen3-embedding-0.6b-1024": TeacherSpec(
+        name="qwen3-embedding-0.6b-1024",
+        dimension=1_024,
+        quantization_limit=TEACHER_QUANTIZATION_LIMIT,
+        source_root=f"{MANIFEST_ROOT}/teacher-qwen3-embedding-0.6b-1024-train-750k-v1/sources",
+        audit_url=f"{MANIFEST_ROOT}/teacher-qwen3-embedding-0.6b-1024-train-750k-v1/audit.json",
+    ),
+}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -84,7 +113,7 @@ def load_numpy(url: str) -> np.ndarray:
 
 
 def load_training_arrays(
-    prepared: dict[str, Any], target: int
+    prepared: dict[str, Any], target: int, teacher_spec: TeacherSpec
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, int]]:
     """Load one exact source-balanced rung from the prepared 3M arrays."""
     capacities = {source: int(result["rows"]) for source, result in prepared["sources"].items()}
@@ -94,26 +123,51 @@ def load_training_arrays(
     source_id_chunks = []
     for source_id, (source, result) in enumerate(sorted(prepared["sources"].items())):
         filesystem, path = fsspec.core.url_to_fs(result["output_url"])
-        table = pq.read_table(
+        prepared_table = pq.read_table(
             path,
             filesystem=filesystem,
-            columns=["train_rank", "ids", "embedding"],
+            columns=["raw_sha256", "train_rank", "ids", "embedding"],
             filters=[("train_rank", "<", quotas[source])],
+        ).sort_by("train_rank")
+        if len(prepared_table) != quotas[source]:
+            raise ValueError(f"Prepared source {source} returned {len(prepared_table)} rows; expected {quotas[source]}")
+        if teacher_spec.source_root is None:
+            teacher_table = prepared_table
+        else:
+            teacher_url = f"{teacher_spec.source_root}/{Path(result['output_url']).name}"
+            teacher_filesystem, teacher_path = fsspec.core.url_to_fs(teacher_url)
+            teacher_table = pq.read_table(
+                teacher_path,
+                filesystem=teacher_filesystem,
+                columns=["raw_sha256", "train_rank", "embedding"],
+                filters=[("train_rank", "<", quotas[source])],
+            ).sort_by("train_rank")
+            if len(teacher_table) != quotas[source]:
+                raise ValueError(
+                    f"Teacher source {source} returned {len(teacher_table)} rows; expected {quotas[source]}"
+                )
+            if prepared_table["raw_sha256"].to_pylist() != teacher_table["raw_sha256"].to_pylist():
+                raise ValueError(f"Teacher hashes are not aligned for {source}")
+            if prepared_table["train_rank"].to_pylist() != teacher_table["train_rank"].to_pylist():
+                raise ValueError(f"Teacher ranks are not aligned for {source}")
+        ids = prepared_table["ids"].combine_chunks()
+        embeddings = teacher_table["embedding"].combine_chunks()
+        id_chunks.append(ids.values.to_numpy(zero_copy_only=False).reshape(len(prepared_table), ids.type.list_size))
+        quantized = embeddings.values.to_numpy(zero_copy_only=False).reshape(len(prepared_table), teacher_spec.dimension)
+        teacher_chunks.append(dequantize_8bit_uniform_scalar_quantized(quantized, teacher_spec.quantization_limit))
+        source_id_chunks.append(np.full(len(prepared_table), source_id, dtype=np.int32))
+        logger.info(
+            "Loaded source %d/%d: %s (%d rows)",
+            source_id + 1,
+            len(quotas),
+            source,
+            len(prepared_table),
         )
-        if len(table) != quotas[source]:
-            raise ValueError(f"Prepared source {source} returned {len(table)} rows; expected {quotas[source]}")
-        ids = table["ids"].combine_chunks()
-        embeddings = table["embedding"].combine_chunks()
-        id_chunks.append(ids.values.to_numpy(zero_copy_only=False).reshape(len(table), ids.type.list_size))
-        quantized = embeddings.values.to_numpy(zero_copy_only=False).reshape(len(table), TEACHER_DIMENSION)
-        teacher_chunks.append(dequantize_8bit_uniform_scalar_quantized(quantized, TEACHER_QUANTIZATION_LIMIT))
-        source_id_chunks.append(np.full(len(table), source_id, dtype=np.int32))
-        logger.info("Loaded source %d/%d: %s (%d rows)", source_id + 1, len(quotas), source, len(table))
     all_ids = np.concatenate(id_chunks).astype(np.int32, copy=False)
     all_teacher = np.concatenate(teacher_chunks).astype(np.float32, copy=False)
     all_source_ids = np.concatenate(source_id_chunks)
     all_teacher /= np.linalg.norm(all_teacher, axis=1, keepdims=True).clip(min=1e-12)
-    if len(all_ids) != target or all_teacher.shape != (target, TEACHER_DIMENSION):
+    if len(all_ids) != target or all_teacher.shape != (target, teacher_spec.dimension):
         raise ValueError(f"Loaded array shapes do not match target: {all_ids.shape}, {all_teacher.shape}")
     if not np.isfinite(all_teacher).all():
         raise ValueError("Teacher arrays contain non-finite values")
@@ -156,6 +210,26 @@ def upload_model(model: FastEmbeddingTransformer, url: str) -> str:
     return digest
 
 
+def upload_array(values: np.ndarray, url: str) -> str:
+    """Serialize and upload one NumPy array atomically."""
+    filesystem, path = fsspec.core.url_to_fs(url)
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        local_path = Path(temporary_directory) / "array.npy"
+        np.save(local_path, values)
+        digest = hashlib.sha256(local_path.read_bytes()).hexdigest()
+        with atomic_rename(path, fs=filesystem) as temporary_path:
+            filesystem.put(str(local_path), temporary_path)
+    return digest
+
+
+def initial_projection(student_dimension: int, teacher_dimension: int) -> jax.Array | None:
+    """Return a train-only cross-dimension projection when dimensions differ."""
+    if student_dimension == teacher_dimension:
+        return None
+    scale = math.sqrt(2.0 / (student_dimension + teacher_dimension))
+    return jax.random.normal(jax.random.PRNGKey(SEED + 2), (student_dimension, teacher_dimension)) * scale
+
+
 def train(
     model: FastEmbeddingTransformer,
     ids: np.ndarray,
@@ -163,7 +237,8 @@ def train(
     source_ids: np.ndarray,
     source_geometry_weight: float,
     output_root: str,
-) -> tuple[FastEmbeddingTransformer, list[dict[str, Any]]]:
+    teacher_dimension: int,
+) -> tuple[FastEmbeddingTransformer, jax.Array | None, list[dict[str, Any]]]:
     """Train with the Luxical Gram-KL objective and save each epoch."""
     device_count, replicated, batch_sharding = data_parallel_shardings()
     if BATCH_SIZE % device_count:
@@ -184,18 +259,32 @@ def train(
         optax.adamw(schedule, weight_decay=WEIGHT_DECAY),
     )
     model = jax.device_put(model, replicated)
-    optimizer_state = jax.device_put(optimizer.init(eqx.filter(model, eqx.is_inexact_array)), replicated)
+    projection = initial_projection(model.output_dim, teacher_dimension)
+    if projection is not None:
+        projection = jax.device_put(projection, replicated)
+    parameters = (model, projection)
+    optimizer_state = jax.device_put(optimizer.init(eqx.filter(parameters, eqx.is_inexact_array)), replicated)
 
     @eqx.filter_jit
-    def step(current_model, current_optimizer_state, batch_ids, batch_teacher, batch_source_ids, key):
-        def loss_function(candidate):
-            prediction = candidate(batch_ids, key=key, inference=False)
-            distillation = embedding_distillation_loss(
-                prediction,
-                batch_teacher,
-                LOSS_TEMPERATURE,
-                DIRECT_COSINE_WEIGHT,
-            )
+    def step(current_parameters, current_optimizer_state, batch_ids, batch_teacher, batch_source_ids, key):
+        def loss_function(candidate_parameters):
+            candidate_model, candidate_projection = candidate_parameters
+            prediction = candidate_model(batch_ids, key=key, inference=False)
+            if candidate_projection is None:
+                distillation = embedding_distillation_loss(
+                    prediction,
+                    batch_teacher,
+                    LOSS_TEMPERATURE,
+                    DIRECT_COSINE_WEIGHT,
+                )
+            else:
+                distillation = projected_embedding_distillation_loss(
+                    prediction,
+                    batch_teacher,
+                    candidate_projection,
+                    LOSS_TEMPERATURE,
+                    DIRECT_COSINE_WEIGHT,
+                )
             source_geometry = (
                 source_conditioned_geometry_loss(prediction, batch_teacher, batch_source_ids)
                 if source_geometry_weight
@@ -203,13 +292,13 @@ def train(
             )
             return distillation + source_geometry_weight * source_geometry, (distillation, source_geometry)
 
-        (loss, components), gradients = eqx.filter_value_and_grad(loss_function, has_aux=True)(current_model)
+        (loss, components), gradients = eqx.filter_value_and_grad(loss_function, has_aux=True)(current_parameters)
         updates, next_optimizer_state = optimizer.update(
             gradients,
             current_optimizer_state,
-            eqx.filter(current_model, eqx.is_inexact_array),
+            eqx.filter(current_parameters, eqx.is_inexact_array),
         )
-        return eqx.apply_updates(current_model, updates), next_optimizer_state, loss, components
+        return eqx.apply_updates(current_parameters, updates), next_optimizer_state, loss, components
 
     rng = np.random.default_rng(SEED)
     key = jax.random.PRNGKey(SEED + 1)
@@ -230,8 +319,8 @@ def train(
             batch_ids = jax.device_put(jnp.asarray(ids[selected]), batch_sharding)
             batch_teacher = jax.device_put(jnp.asarray(teacher[selected]), batch_sharding)
             batch_source_ids = jax.device_put(jnp.asarray(source_ids[selected]), batch_sharding)
-            model, optimizer_state, loss, components = step(
-                model,
+            parameters, optimizer_state, loss, components = step(
+                parameters,
                 optimizer_state,
                 batch_ids,
                 batch_teacher,
@@ -249,6 +338,7 @@ def train(
             global_step += 1
             if global_step == 1 or global_step % 10 == 0:
                 logger.info("Epoch %d step %d/%d loss %.8f", epoch + 1, global_step, total_steps, loss_value)
+        model, projection = parameters
         audit = embedding_audit(model, ids)
         if (
             audit["finite_fraction"] != 1.0
@@ -261,6 +351,11 @@ def train(
             raise ValueError(f"Embedding audit failed after epoch {epoch + 1}: {audit}")
         model_url = f"{output_root}/model-epoch-{epoch + 1}.eqx"
         model_sha256 = upload_model(model, model_url)
+        projection_url = None
+        projection_sha256 = None
+        if projection is not None:
+            projection_url = f"{output_root}/alignment-epoch-{epoch + 1}.npy"
+            projection_sha256 = upload_array(np.asarray(projection), projection_url)
         epoch_result = {
             "epoch": epoch + 1,
             "steps": global_step,
@@ -274,12 +369,14 @@ def train(
             "elapsed_seconds": time.perf_counter() - started,
             "model_url": model_url,
             "model_sha256": model_sha256,
+            "alignment_url": projection_url,
+            "alignment_sha256": projection_sha256,
             "embedding_audit": audit,
         }
         history.append(epoch_result)
         write_json(f"{output_root}/training-epoch-{epoch + 1}.json", epoch_result)
         logger.info("Completed epoch %d: %s", epoch + 1, json.dumps(epoch_result, sort_keys=True))
-    return model, history
+    return model, projection, history
 
 
 def parse_args() -> argparse.Namespace:
@@ -287,7 +384,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rung", choices=tuple(RUNG_TARGETS), required=True)
     parser.add_argument("--config", choices=("full", "slim"), required=True)
     parser.add_argument("--treatment", choices=tuple(SOURCE_GEOMETRY_WEIGHTS), default="baseline")
+    parser.add_argument("--teacher", choices=tuple(TEACHERS), required=True)
     return parser.parse_args()
+
+
+def training_name(config_name: str, treatment: str, teacher_name: str) -> str:
+    """Return the artifact name for one training configuration."""
+    parts = [config_name]
+    if teacher_name != "arctic-medium-256":
+        parts.append("qwen3-06b-1024-crossdim")
+    if treatment != "baseline":
+        parts.append(treatment)
+    return "-".join(parts)
 
 
 def main() -> None:
@@ -297,27 +405,38 @@ def main() -> None:
         raise ValueError(f"Fast student training requires a GPU backend, got {jax.default_backend()}")
     target = RUNG_TARGETS[arguments.rung]
     prepared = read_json(PREPARED_MANIFEST_URL)
+    teacher_spec = TEACHERS[arguments.teacher]
+    if teacher_spec.audit_url is not None:
+        audit = read_json(teacher_spec.audit_url)
+        if audit["manifest_sha256"] != prepared["manifest_sha256"]:
+            raise ValueError("The teacher audit has a different manifest digest")
+        if audit["teacher_dimension"] != teacher_spec.dimension:
+            raise ValueError("The teacher audit has a different embedding dimension")
+        if audit["row_count"] < target:
+            raise ValueError(f"The teacher audit has {audit['row_count']} rows; requested {target}")
+    if arguments.treatment != "baseline" and teacher_spec.dimension != 256:
+        raise ValueError("Source-geometry treatments require equal student and teacher dimensions")
     raw_to_compact = load_numpy(prepared["raw_to_compact_url"])
-    ids, teacher, source_ids, quotas = load_training_arrays(prepared, target)
+    ids, teacher, source_ids, quotas = load_training_arrays(prepared, target, teacher_spec)
     student = FastStudent.random(arguments.config, raw_to_compact, seed=SEED)
-    training_name = (
-        arguments.config if arguments.treatment == "baseline" else f"{arguments.config}-{arguments.treatment}"
-    )
+    artifact_name = training_name(arguments.config, arguments.treatment, arguments.teacher)
     source_geometry_weight = SOURCE_GEOMETRY_WEIGHTS[arguments.treatment]
-    output_root = f"{OUTPUT_ROOT}/{training_name}/{arguments.rung}"
-    model, history = train(
+    output_root = f"{OUTPUT_ROOT}/{artifact_name}/{arguments.rung}"
+    model, projection, history = train(
         student.model,
         ids,
         teacher,
         source_ids,
         source_geometry_weight,
         output_root,
+        teacher_spec.dimension,
     )
     report = {
         "rung": arguments.rung,
         "config_name": arguments.config,
-        "training_name": training_name,
+        "training_name": artifact_name,
         "treatment": arguments.treatment,
+        "teacher": asdict(teacher_spec),
         "training_rows": target,
         "source_quotas": quotas,
         "prepared_manifest_url": PREPARED_MANIFEST_URL,
@@ -326,6 +445,7 @@ def main() -> None:
         "raw_to_compact_sha256": prepared["raw_to_compact_sha256"],
         "config": asdict(model.backbone.config),
         "parameters": count_params(model),
+        "training_alignment_parameters": int(projection.size) if projection is not None else 0,
         "batch_size": BATCH_SIZE,
         "epochs": EPOCHS,
         "loss_temperature": LOSS_TEMPERATURE,
@@ -338,14 +458,17 @@ def main() -> None:
         "history": history,
         "final_model_url": history[-1]["model_url"],
         "final_model_sha256": history[-1]["model_sha256"],
+        "final_alignment_url": history[-1]["alignment_url"],
+        "final_alignment_sha256": history[-1]["alignment_sha256"],
     }
     report_url = f"{output_root}/training.json"
     write_json(report_url, report)
     summary = {
         "rung": arguments.rung,
         "config_name": arguments.config,
-        "training_name": training_name,
+        "training_name": artifact_name,
         "treatment": arguments.treatment,
+        "teacher": teacher_spec.name,
         "training_rows": target,
         "report_url": report_url,
         "model_url": report["final_model_url"],

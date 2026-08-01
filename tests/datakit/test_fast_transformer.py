@@ -31,6 +31,7 @@ from experiments.datakit.cluster.quality.fast_transformer.embedding import (
     embedding_distillation_loss,
     pack_remapped_windows,
     predict_embeddings,
+    projected_embedding_distillation_loss,
     source_balanced_token_remap,
     source_conditioned_geometry_loss,
 )
@@ -338,3 +339,33 @@ def test_embedding_transformer_takes_contrastive_gradient_step():
 
     assert np.isfinite(float(loss))
     assert not np.array_equal(np.asarray(updated.embedding_head), initial_head)
+
+
+def test_cross_dimension_distillation_updates_student_and_projection():
+    student = jr.normal(jr.PRNGKey(10), (8, 3))
+    teacher = jr.normal(jr.PRNGKey(11), (8, 5))
+    projection = jr.normal(jr.PRNGKey(12), (3, 5))
+
+    def loss_function(candidate_student, candidate_projection):
+        return projected_embedding_distillation_loss(
+            candidate_student,
+            teacher,
+            candidate_projection,
+            temperature=3.0,
+            direct_cosine_weight=1.0,
+        )
+
+    loss, gradients = jax.value_and_grad(loss_function, argnums=(0, 1))(student, projection)
+
+    assert np.isfinite(float(loss))
+    assert np.linalg.norm(np.asarray(gradients[0])) > 0
+    assert np.linalg.norm(np.asarray(gradients[1])) > 0
+
+
+def test_cross_dimension_contrastive_loss_accepts_equal_geometry():
+    student = jnp.asarray([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+    teacher = jnp.pad(student, ((0, 0), (0, 3)))
+
+    loss = contrastive_embedding_loss(student, teacher, temperature=3.0)
+
+    assert float(loss) == pytest.approx(0.0, abs=1e-7)

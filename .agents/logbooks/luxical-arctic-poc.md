@@ -1052,3 +1052,23 @@ uv run iris --cluster=marin job run --no-wait \
   and pinned revision. The report states that the stop rule prevented its run.
 - Retained: the report distinguishes teacher rate from student speed because
   CPU student speed is a fixed project gate.
+
+### Qwen cross-dimension student plan
+
+- Base: current `origin/main` at `e096eccf7`. The research branch rebased
+  without a conflict before this change.
+- Hypothesis: a 256-dimensional FastTransformer can keep the geometry of the
+  1,024-dimensional Qwen3-Embedding-0.6B teacher. A train-only linear head maps
+  the student vectors to 1,024 dimensions for direct cosine alignment.
+- The Gram-KL loss compares pairwise cosine distributions and does not require
+  equal vector dimensions. The direct cosine term uses the train-only head.
+- Production inference discards the train-only head. The student architecture,
+  tokenizer, 256-dimensional output, and paired CPU speed artifact stay fixed.
+- The first rung uses the existing source-balanced 750K rows. Eight independent
+  federated H100 jobs create the aligned Qwen labels. A separate audit must find
+  750,000 aligned, finite, and non-constant labels before training.
+- POC gates: all quality deltas are at least -0.02, student-only failures are at
+  most five, and each category median rank and variance ratio is at least 0.50.
+  Qwen fidelity must not decrease against Luxical-One. CPU speed must be at
+  least 0.85 times Luxical-One.
+- Continue to 3M only if the 750K rung passes all POC gates.
