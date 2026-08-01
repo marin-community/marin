@@ -139,7 +139,6 @@ def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, mo
         output_path=str(tmp_path / "verified"),
         verification_params=FuzzyVerificationParams(),
         local_representative_params=TEST_LOCAL_PARAMS,
-        max_parallelism=2,
     )
 
     assert _output_rows(verified, source_key) == [
@@ -190,7 +189,7 @@ def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, mo
     assert verified.sources[source_key].source_tag == "source_000"
 
 
-def test_representative_selection_is_stable_across_input_order_and_parallelism(tmp_path, monkeypatch):
+def test_representative_selection_is_stable_across_input_order(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     representative_text = "alpha beta gamma delta epsilon zeta eta theta iota kappa"
     member_text = "alpha beta gamma delta epsilon zeta eta theta"
@@ -230,7 +229,6 @@ def test_representative_selection_is_stable_across_input_order_and_parallelism(t
         output_path=str(tmp_path / "verified-first"),
         verification_params=FuzzyVerificationParams(),
         local_representative_params=TEST_LOCAL_PARAMS,
-        max_parallelism=1,
     )
     second = verify_fuzzy_dups(
         normalized_sources={"a-source-b": source_b, "z-source-a": source_a},
@@ -242,7 +240,6 @@ def test_representative_selection_is_stable_across_input_order_and_parallelism(t
         output_path=str(tmp_path / "verified-second"),
         verification_params=FuzzyVerificationParams(),
         local_representative_params=TEST_LOCAL_PARAMS,
-        max_parallelism=4,
     )
 
     assert _output_rows(first, source_a_key) == _output_rows(second, source_a_key) == []
@@ -285,7 +282,6 @@ def test_verifier_defers_exact_copies_to_global_exact_dedup(tmp_path, monkeypatc
         output_path=str(tmp_path / "verified"),
         verification_params=FuzzyVerificationParams(),
         local_representative_params=TEST_LOCAL_PARAMS,
-        max_parallelism=2,
     )
 
     assert _output_rows(verified, source_a_key) == []
@@ -338,7 +334,6 @@ def test_verifier_recovers_duplicate_through_local_representative(tmp_path, monk
         output_path=str(tmp_path / "verified"),
         verification_params=FuzzyVerificationParams(),
         local_representative_params=TEST_LOCAL_PARAMS,
-        max_parallelism=2,
     )
 
     rows = _output_rows(verified, source_key)
@@ -394,7 +389,6 @@ def test_local_verifier_accepts_equal_token_sequences_with_different_whitespace(
         output_path=str(tmp_path / "verified"),
         verification_params=FuzzyVerificationParams(),
         local_representative_params=TEST_LOCAL_PARAMS,
-        max_parallelism=2,
     )
 
     row = _output_rows(verified, source_key)[0]
@@ -459,14 +453,13 @@ def test_local_verifier_rejects_token_ngram_saturation(tmp_path, monkeypatch):
         output_path=str(tmp_path / "verified"),
         verification_params=FuzzyVerificationParams(),
         local_representative_params=local_params,
-        max_parallelism=2,
     )
 
     assert _output_rows(verified, source_key) == []
     assert verified.counters["dedup/fuzzy/verification/comparison/local_char_jaccard_below_threshold"] == 1
 
 
-def test_local_representative_selection_is_stable_across_input_order_and_parallelism(tmp_path, monkeypatch):
+def test_local_representative_selection_is_stable_across_input_order(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     local_text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau"
     duplicate_text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma"
@@ -527,7 +520,6 @@ def test_local_representative_selection_is_stable_across_input_order_and_paralle
         output_path=str(tmp_path / "verified-first"),
         verification_params=FuzzyVerificationParams(),
         local_representative_params=TEST_LOCAL_PARAMS,
-        max_parallelism=1,
     )
     second = verify_fuzzy_dups(
         normalized_sources={
@@ -538,7 +530,6 @@ def test_local_representative_selection_is_stable_across_input_order_and_paralle
         output_path=str(tmp_path / "verified-second"),
         verification_params=FuzzyVerificationParams(),
         local_representative_params=TEST_LOCAL_PARAMS,
-        max_parallelism=4,
     )
 
     assert _output_rows(first, source_c_key) == _output_rows(second, source_c_key)
@@ -591,7 +582,6 @@ def test_verifier_applies_the_stricter_token_jaccard_gate_to_local_matches(tmp_p
         output_path=str(tmp_path / "verified"),
         verification_params=FuzzyVerificationParams(),
         local_representative_params=TEST_LOCAL_PARAMS,
-        max_parallelism=2,
     )
 
     assert _output_rows(verified, source_key) == []
@@ -658,7 +648,6 @@ def test_verifier_ranks_local_nominees_and_bounds_comparisons(tmp_path, monkeypa
         output_path=str(tmp_path / "verified"),
         verification_params=FuzzyVerificationParams(),
         local_representative_params=local_params,
-        max_parallelism=2,
     )
 
     rows = _output_rows(verified, source_key)
@@ -737,7 +726,6 @@ def test_verifier_bounds_representative_count_and_text(tmp_path, monkeypatch):
         output_path=str(tmp_path / "verified"),
         verification_params=FuzzyVerificationParams(),
         local_representative_params=local_params,
-        max_parallelism=2,
     )
 
     assert _output_rows(verified, source_key) == []
@@ -812,7 +800,6 @@ def test_repeated_noncanonical_ids_stay_available_as_local_representatives(tmp_p
         output_path=str(tmp_path / "verified"),
         verification_params=FuzzyVerificationParams(),
         local_representative_params=TEST_LOCAL_PARAMS,
-        max_parallelism=4,
     )
 
     assert _output_rows(verified, source_b_key) == []
@@ -859,7 +846,6 @@ def test_verifier_rejects_different_text_for_canonical_content_id(tmp_path, monk
             output_path=str(tmp_path / "verified"),
             verification_params=FuzzyVerificationParams(),
             local_representative_params=TEST_LOCAL_PARAMS,
-            max_parallelism=1,
         )
 
 
@@ -911,7 +897,6 @@ def test_verifier_requires_one_candidate_canonical(
             output_path=str(tmp_path / "verified"),
             verification_params=FuzzyVerificationParams(),
             local_representative_params=TEST_LOCAL_PARAMS,
-            max_parallelism=1,
         )
 
 
@@ -933,26 +918,4 @@ def test_verifier_rejects_mismatched_source_sets(tmp_path, monkeypatch):
             output_path=str(tmp_path / "verified"),
             verification_params=FuzzyVerificationParams(),
             local_representative_params=TEST_LOCAL_PARAMS,
-            max_parallelism=1,
-        )
-
-
-def test_verifier_rejects_non_positive_parallelism(tmp_path, monkeypatch):
-    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-    source_key, source = _write_source(
-        root=tmp_path,
-        name="source",
-        shards={"part-00000.parquet": [{"id": "doc", "text": "some text"}]},
-    )
-    candidates = _write_candidates(root=tmp_path, rows_by_source={source_key: {}})
-
-    with pytest.raises(ValueError, match="at least 1"):
-        verify_fuzzy_dups(
-            normalized_sources={"source": source},
-            minhash_sources={"source": _write_minhash(root=tmp_path, name="source", source=source)},
-            candidates=candidates,
-            output_path=str(tmp_path / "verified"),
-            verification_params=FuzzyVerificationParams(),
-            local_representative_params=TEST_LOCAL_PARAMS,
-            max_parallelism=0,
         )
