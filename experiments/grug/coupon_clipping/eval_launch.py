@@ -119,7 +119,7 @@ def _run_coupon_clipping_eval_local(config: CouponClippingEvalConfig) -> None:
     if jax.process_index() == 0:
         metrics_path = prefix_join(config.output_path, "metrics.json")
         with open_url(metrics_path, "w") as metrics_file:
-            json.dump(metrics, metrics_file, indent=2, sort_keys=True)
+            json.dump(metrics, metrics_file, default=float, indent=2, sort_keys=True)
     levanter.tracker.current_tracker().finish()
 
 
