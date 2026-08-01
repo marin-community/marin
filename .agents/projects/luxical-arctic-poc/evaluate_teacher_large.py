@@ -17,6 +17,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import torch
+from arctic import PinnedArcticEmbedder
 from evaluate_ladder import (
     BASELINE_FILE,
     BASELINE_REPO,
@@ -58,27 +59,39 @@ from luxical.teacher_embedder import fast_8bit_uniform_scalar_quantize
 from luxical.training import dequantize_8bit_uniform_scalar_quantized
 from rigging.filesystem import atomic_rename
 from threadpoolctl import threadpool_limits
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoModel, AutoTokenizer, PreTrainedTokenizerFast
 
-OUTPUT_NAME = "teacher-arctic-l-v2.0"
-LARGE_TEACHER_ROOT = f"{MANIFEST_ROOT}/{OUTPUT_NAME}-eval"
+OUTPUT_NAME = "teacher-arctic-l-v2.0-v2"
+LARGE_TEACHER_ROOT = f"{MANIFEST_ROOT}/teacher-arctic-l-v2.0-eval-v2"
 RESULT_FILE = Path("/tmp/luxical-arctic-large-teacher-evaluation")
 MAX_TEACHER_TOKENS = 512
 INFERENCE_BATCH_SIZE = 64
 EXPECTED_EVALUATION_ROWS = 74_752
 WINDOWS_PER_DOCUMENT = 3
+ATTENTION_IMPLEMENTATION = "eager"
+POOLING_IMPLEMENTATION = "arctic.PinnedArcticEmbedder._embed_batch"
+LOG_CHUNK_CHARACTERS = 2_000
 
 MANIFEST_METADATA_KEY = b"luxical_manifest_sha256"
 TEACHER_ID_METADATA_KEY = b"luxical_teacher_id"
 TEACHER_REVISION_METADATA_KEY = b"luxical_teacher_revision"
 TEACHER_SCOPE_METADATA_KEY = b"luxical_teacher_scope"
+TEACHER_MAX_TOKENS_METADATA_KEY = b"luxical_teacher_max_tokens"
+TEACHER_WINDOWS_METADATA_KEY = b"luxical_teacher_windows_per_document"
+TEACHER_DIMENSION_METADATA_KEY = b"luxical_teacher_embedding_dimension"
+TEACHER_QUANTIZATION_METADATA_KEY = b"luxical_teacher_quantization_limit"
+TEACHER_ATTENTION_METADATA_KEY = b"luxical_teacher_attention_implementation"
+TEACHER_POOLING_METADATA_KEY = b"luxical_teacher_pooling_implementation"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
-class ArcticLargeEmbedder:
+class ArcticLargeEmbedder(PinnedArcticEmbedder):
     """Run one exact Arctic Embed Large v2.0 checkpoint."""
+
+    HF_MODEL_ID = LARGE_TEACHER_ID
+    EMBEDDING_DIM = 1024
 
     def __init__(self) -> None:
         if not torch.cuda.is_available():
@@ -89,48 +102,39 @@ class ArcticLargeEmbedder:
             LARGE_TEACHER_ID,
             revision=LARGE_TEACHER_REVISION,
         )
+        if not isinstance(self.tokenizer, PreTrainedTokenizerFast):
+            raise TypeError(f"Expected a fast tokenizer, got {type(self.tokenizer).__name__}")
         self.model = AutoModel.from_pretrained(
             LARGE_TEACHER_ID,
             revision=LARGE_TEACHER_REVISION,
             add_pooling_layer=False,
-            torch_dtype=torch.float32,
-            attn_implementation="sdpa",
-        ).to("cuda")
+            dtype=torch.float32,
+            attn_implementation=ATTENTION_IMPLEMENTATION,
+        )
+        self.device: str | torch.device = "cpu"
+        self.max_seq_len = MAX_TEACHER_TOKENS
+        self.to("cuda", dtype=torch.float32)
         self.model.eval()
         for name, parameter in self.model.named_parameters():
             if not torch.isfinite(parameter).all():
                 raise ValueError(f"Arctic Large parameter {name} contains non-finite values")
 
-    @torch.inference_mode()
-    def embed_windows(self, texts: list[str]) -> np.ndarray:
-        """Return normalized 256-dimensional CLS vectors."""
-        batches = []
-        for start in range(0, len(texts), INFERENCE_BATCH_SIZE):
-            batch = texts[start : start + INFERENCE_BATCH_SIZE]
-            inputs = self.tokenizer(
-                batch,
-                return_tensors="pt",
-                padding=True,
-                truncation=True,
-                max_length=MAX_TEACHER_TOKENS,
-            )
-            device_inputs = {name: value.to("cuda") for name, value in inputs.items()}
-            hidden_states = self.model(**device_inputs).last_hidden_state[:, 0, :TEACHER_EMBEDDING_DIMENSION]
-            vectors = torch.nn.functional.normalize(hidden_states.float(), dim=1)
-            batches.append(vectors.cpu().numpy())
-        result = np.concatenate(batches)
-        if not np.isfinite(result).all():
-            raise ValueError("Arctic Large returned non-finite window vectors")
-        return result
-
     def quantized_documents(self, texts: list[str]) -> np.ndarray:
         """Return pooled document vectors in the training storage format."""
         windows = [window for text in texts for window in teacher_windows_from_view(text)]
-        window_vectors = self.embed_windows(windows).reshape(
+        window_vectors = self.embed_texts(
+            windows,
+            is_query=False,
+            batch_size=INFERENCE_BATCH_SIZE,
+            mrl=True,
+            progress_bar=False,
+        ).reshape(
             len(texts),
             WINDOWS_PER_DOCUMENT,
             TEACHER_EMBEDDING_DIMENSION,
         )
+        if not np.isfinite(window_vectors).all():
+            raise ValueError("Arctic Large returned non-finite window vectors")
         pooled = window_vectors.mean(axis=1)
         pooled /= np.linalg.norm(pooled, axis=1, keepdims=True).clip(min=1e-12)
         quantized = fast_8bit_uniform_scalar_quantize(pooled, TEACHER_QUANTIZATION_LIMIT)
@@ -146,6 +150,12 @@ def expected_metadata(manifest_sha256: str) -> dict[bytes, bytes]:
         TEACHER_ID_METADATA_KEY: LARGE_TEACHER_ID.encode(),
         TEACHER_REVISION_METADATA_KEY: LARGE_TEACHER_REVISION.encode(),
         TEACHER_SCOPE_METADATA_KEY: b"evaluation-only",
+        TEACHER_MAX_TOKENS_METADATA_KEY: str(MAX_TEACHER_TOKENS).encode(),
+        TEACHER_WINDOWS_METADATA_KEY: str(WINDOWS_PER_DOCUMENT).encode(),
+        TEACHER_DIMENSION_METADATA_KEY: str(TEACHER_EMBEDDING_DIMENSION).encode(),
+        TEACHER_QUANTIZATION_METADATA_KEY: str(TEACHER_QUANTIZATION_LIMIT).encode(),
+        TEACHER_ATTENTION_METADATA_KEY: ATTENTION_IMPLEMENTATION.encode(),
+        TEACHER_POOLING_METADATA_KEY: POOLING_IMPLEMENTATION.encode(),
     }
 
 
@@ -189,7 +199,7 @@ def load_or_embed_source(
     source_table: pa.Table,
     manifest_output_url: str,
     manifest_sha256: str,
-) -> tuple[np.ndarray, bool]:
+) -> tuple[np.ndarray, bool, float]:
     """Load or create one aligned large-teacher source file."""
     output_url = large_output_url(manifest_output_url)
     filesystem, path = fsspec.core.url_to_fs(output_url)
@@ -200,9 +210,11 @@ def load_or_embed_source(
             raise ValueError(f"Existing Arctic Large output has different metadata: {output_url}")
         if source_table["raw_sha256"].to_pylist() != output_table["raw_sha256"].to_pylist():
             raise ValueError(f"Existing Arctic Large output is not aligned: {output_url}")
-        return quantized_vectors(output_table), True
+        return quantized_vectors(output_table), True, 0.0
 
+    started = time.perf_counter()
     quantized = teacher.quantized_documents(source_table["text"].to_pylist())
+    embedding_duration = time.perf_counter() - started
     embedding_array = pa.FixedSizeListArray.from_arrays(
         pa.array(quantized.ravel()),
         TEACHER_EMBEDDING_DIMENSION,
@@ -213,7 +225,7 @@ def load_or_embed_source(
     output_table = output_table.replace_schema_metadata(metadata)
     with atomic_rename(path, fs=filesystem) as temporary_path:
         pq.write_table(output_table, temporary_path, filesystem=filesystem, compression="zstd")
-    return quantized, False
+    return quantized, False, embedding_duration
 
 
 def medium_vectors(manifest_output_url: str, expected_hashes: list[str]) -> np.ndarray:
@@ -327,12 +339,13 @@ def main() -> None:
     medium_batches = []
     embedded_rows = 0
     reused_rows = 0
-    embedding_started = time.perf_counter()
+    new_embedding_duration = 0.0
+    source_loop_started = time.perf_counter()
     for index, (source, source_result) in enumerate(sorted(manifest["sources"].items()), start=1):
         logger.info("Loading evaluation source %d/%d: %s", index, len(manifest["sources"]), source)
         source_table = evaluation_table(source_result["output_url"])
         hashes = source_table["raw_sha256"].to_pylist()
-        large_quantized, reused = load_or_embed_source(
+        large_quantized, reused, source_embedding_duration = load_or_embed_source(
             teacher,
             source_table,
             source_result["output_url"],
@@ -342,6 +355,7 @@ def main() -> None:
             reused_rows += len(source_table)
         else:
             embedded_rows += len(source_table)
+            new_embedding_duration += source_embedding_duration
         large_batches.append(normalized_vectors(large_quantized))
         medium_batches.append(medium_vectors(source_result["output_url"], hashes))
         texts.extend(source_table["text"].to_pylist())
@@ -352,7 +366,7 @@ def main() -> None:
             for rank in source_table["eval_rank"].to_pylist()
         )
 
-    embedding_duration = time.perf_counter() - embedding_started
+    source_loop_duration = time.perf_counter() - source_loop_started
     if len(texts) != EXPECTED_EVALUATION_ROWS:
         raise ValueError(f"Loaded {len(texts)} evaluation rows; expected {EXPECTED_EVALUATION_ROWS}")
     labels_array = np.asarray(labels)
@@ -378,6 +392,7 @@ def main() -> None:
         left,
         right,
     )
+    baseline_metrics["large_teacher_fidelity"] = baseline_metrics.pop("arctic_fidelity")
     medium_metrics = vector_metrics(medium_teacher_vectors, labels_array, probe_roles_array, categories_array)
     large_metrics = vector_metrics(large_vectors, labels_array, probe_roles_array, categories_array)
     categories_by_source = source_categories(labels_array, categories_array)
@@ -385,7 +400,7 @@ def main() -> None:
     large_vs_luxical = teacher_comparison_report(large_metrics, baseline_metrics)
     add_source_details(large_vs_luxical, categories_by_source)
     large_vs_medium = representation_comparison(large_metrics, medium_metrics)
-    add_source_details(large_vs_medium, categories_by_source)
+    del large_vs_medium["collapse"]
     report = {
         "evaluation": OUTPUT_NAME,
         "manifest_url": MANIFEST_URL,
@@ -401,12 +416,15 @@ def main() -> None:
             "maximum_tokens_per_window": MAX_TEACHER_TOKENS,
             "windows_per_document": WINDOWS_PER_DOCUMENT,
             "inference_dtype": "float32",
+            "attention_implementation": ATTENTION_IMPLEMENTATION,
+            "pooling_implementation": POOLING_IMPLEMENTATION,
         },
         "embedding_run": {
-            "duration_seconds": embedding_duration,
+            "source_loop_duration_seconds": source_loop_duration,
+            "new_embedding_duration_seconds": new_embedding_duration,
             "embedded_rows": embedded_rows,
             "reused_rows": reused_rows,
-            "new_documents_per_second": embedded_rows / embedding_duration if embedded_rows else None,
+            "new_documents_per_second": embedded_rows / new_embedding_duration if embedded_rows else None,
         },
         "thresholds": {
             "minimum_unique_fraction": MIN_UNIQUE_FRACTION,
@@ -453,7 +471,10 @@ def main() -> None:
         },
     }
     RESULT_FILE.write_text(json.dumps(summary, sort_keys=True))
-    logger.info("LUXICAL_ARCTIC_LARGE_TEACHER_EVALUATION=%s", json.dumps(summary, sort_keys=True))
+    serialized = json.dumps(summary, sort_keys=True)
+    for index, start in enumerate(range(0, len(serialized), LOG_CHUNK_CHARACTERS)):
+        chunk = serialized[start : start + LOG_CHUNK_CHARACTERS]
+        logger.info("LUXICAL_ARCTIC_LARGE_TEACHER_CHUNK=%04d:%s", index, chunk)
 
 
 if __name__ == "__main__":
