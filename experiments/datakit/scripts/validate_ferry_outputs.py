@@ -30,7 +30,7 @@ from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import read_artifact
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
 from marin.processing.classification.deduplication.verify_fuzzy_dups import VerifiedFuzzyDupsAttrData
-from rigging.filesystem import StoragePath
+from rigging.filesystem import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -42,31 +42,33 @@ DOWNLOAD_MIN_ROWS = 9_000_000  # observed: 9,672,101
 # --- Normalize: scatter produces 106 output files ---
 NORMALIZE_EXPECTED_FILES = 106
 NORMALIZE_MIN_ROWS = 8_000_000  # observed: 9,268,156
-NORMALIZE_REQUIRED_COLUMNS = {"id", "text", "url", "source_id", "token_count"}
+NORMALIZE_REQUIRED_COLUMNS = frozenset({"id", "text", "url", "source_id", "token_count"})
 
 # --- Fuzzy dups: one cluster-member attr file per normalize shard per source ---
 # The smoke ferry runs fuzzy dedup over a single source (fineweb-edu sample/10BT).
 FUZZY_DUPS_EXPECTED_SOURCES = 1
 FUZZY_DUPS_EXPECTED_FILES_PER_SOURCE = 106
-FUZZY_DUPS_REQUIRED_COLUMNS = {"id", "dup_cluster_id", "is_cluster_canonical"}
+FUZZY_DUPS_REQUIRED_COLUMNS = frozenset({"id", "dup_cluster_id", "is_cluster_canonical"})
 
 # --- Verified fuzzy dups: one typed attr file per normalize shard per source ---
-VERIFIED_DUPS_REQUIRED_COLUMNS = {
-    "id",
-    "dup_doc",
-    "dup_cluster_id",
-    "dup_representative_id",
-    "dup_representative_source_key",
-    "dup_representative_kind",
-    "dup_shared_lsh_buckets",
-    "dup_comparisons",
-    "dup_member_containment",
-    "dup_jaccard",
-    "dup_under_tokenized",
-    "dup_char_jaccard",
-    "dup_local_token_sequence_equal",
-    "dup_local_char_jaccard",
-}
+VERIFIED_DUPS_REQUIRED_COLUMNS = frozenset(
+    {
+        "id",
+        "dup_doc",
+        "dup_cluster_id",
+        "dup_representative_id",
+        "dup_representative_source_key",
+        "dup_representative_kind",
+        "dup_shared_lsh_buckets",
+        "dup_comparisons",
+        "dup_member_containment",
+        "dup_jaccard",
+        "dup_under_tokenized",
+        "dup_char_jaccard",
+        "dup_local_token_sequence_equal",
+        "dup_local_char_jaccard",
+    }
+)
 VERIFIED_DUPS_DROP_MAX_FRACTION = 0.50
 
 # --- Consolidate: same file count, strictly fewer rows than normalize ---
@@ -90,7 +92,7 @@ def _count_parquet_rows(files: list[str]) -> int:
     return total
 
 
-def _check_schema(path: str, required: set[str]) -> list[str]:
+def _check_schema(path: str, required: frozenset[str]) -> list[str]:
     """Verify a parquet file contains the required columns. Returns actual column names."""
     with StoragePath(path).open("rb") as f:
         names = pq.ParquetFile(f).schema_arrow.names
@@ -191,7 +193,7 @@ def _validate_fuzzy_dups(base: str) -> int:
 
 def _validate_verified_fuzzy_dups(base: str, normalize_rows: int, candidate_comparisons: int) -> int:
     """Validate full-text duplicate markers and return the row count."""
-    verified = read_artifact(f"{base}/verify_fuzzy_dups", VerifiedFuzzyDupsAttrData)
+    verified = read_artifact(prefix_join(base, "verify_fuzzy_dups"), VerifiedFuzzyDupsAttrData)
     if len(verified.sources) != FUZZY_DUPS_EXPECTED_SOURCES:
         raise SystemExit(
             f"Verified fuzzy dups: expected exactly {FUZZY_DUPS_EXPECTED_SOURCES} source, "
