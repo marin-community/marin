@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem import StoragePath, prefix_join
 from zephyr import counters
 from zephyr.dataset import Dataset
-from zephyr.execution import MAX_WORKERS_PER_JOB, ZephyrContext
+from zephyr.execution import ZephyrContext
 from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
 
@@ -641,7 +641,6 @@ def verify_fuzzy_dups(
     output_path: str,
     verification_params: FuzzyVerificationParams,
     local_representative_params: LocalRepresentativeParams,
-    max_parallelism: int = MAX_WORKERS_PER_JOB,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
     map_task_resources: ResourceConfig | None = None,
@@ -650,8 +649,6 @@ def verify_fuzzy_dups(
     """Verify existing candidate clusters and write sparse duplicate markers."""
     if not normalized_sources:
         raise ValueError("verify_fuzzy_dups requires at least one normalized source")
-    if max_parallelism < 1:
-        raise ValueError("max_parallelism must be at least 1")
     shards, attr_dirs, source_tags = _verification_shards(
         normalized_sources=normalized_sources,
         minhash_sources=minhash_sources,
@@ -663,7 +660,6 @@ def verify_fuzzy_dups(
 
     ctx_kwargs: dict[str, Any] = {
         "name": "verify-fuzzy-dups",
-        "max_workers": max_parallelism,
         "resources": worker_resources or ResourceConfig(cpu=2, ram="16g", disk="16g"),
     }
     if coordinator_resources is not None:
@@ -675,26 +671,18 @@ def verify_fuzzy_dups(
     ctx = ZephyrContext(**ctx_kwargs)
     ctx.put(_SHARED_SHARDS_KEY, {shard.file_idx: shard for shard in shards})
 
-    file_shards = min(max_parallelism, len(shards))
-    shard_groups: list[list[VerificationShard]] = [[] for _ in range(file_shards)]
-    for index, shard in enumerate(shards):
-        shard_groups[index % file_shards].append(shard)
-
     pipeline = (
-        Dataset.from_list(shard_groups)
+        Dataset.from_list([[shard] for shard in shards])
         .flat_map(_joined_cluster_members)
         .group_by(
             key=_cluster_key,
             sort_by=_cluster_sort_key,
             reducer=_make_cluster_verifier(verification_params, local_representative_params),
-            # Cluster IDs can use all workers, including when there are fewer input files.
-            num_output_shards=max_parallelism,
         )
         .group_by(
             key=lambda record: record["file_idx"],
             sort_by=lambda record: record["id"],
             reducer=_write_verified_shard,
-            num_output_shards=file_shards,
         )
     )
     outcome = ctx.execute(pipeline, verbose=True)
@@ -729,7 +717,6 @@ def verify_fuzzy_dups_step(
     candidates_step: StepSpec,
     verification_params: FuzzyVerificationParams,
     local_representative_params: LocalRepresentativeParams,
-    max_parallelism: int,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
     map_task_resources: ResourceConfig | None = None,
@@ -757,7 +744,6 @@ def verify_fuzzy_dups_step(
             output_path=output_path,
             verification_params=verification_params,
             local_representative_params=local_representative_params,
-            max_parallelism=max_parallelism,
             worker_resources=worker_resources,
             coordinator_resources=coordinator_resources,
             map_task_resources=map_task_resources,

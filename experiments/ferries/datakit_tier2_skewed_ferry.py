@@ -123,7 +123,6 @@ def build_steps(run_id: str) -> list[StepSpec]:
             output_path=output_path,
             verification_params=verification_params,
             local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
-            max_parallelism=64,
         ),
         override_output_path=f"{ttl_base}/verify_fuzzy_dups",
     )

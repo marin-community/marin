@@ -300,7 +300,6 @@ class PipelineScale:
     # stage's coordinator; kept modest so it isn't overwhelmed.
     sample_parallel_sources: int = 4
     dedup_max_parallelism: int = 4096
-    verification_max_parallelism: int = 4096
     # Centroid training is single-process FAISS K-means, not a pool stage.
     train_centroids_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig.with_cpu(cpu=32, ram="64g"))
 
@@ -314,7 +313,6 @@ SMOKE_SCALE = PipelineScale(
     store=StoreConfig(reduce_shards=64, default_subshards=1),
     n_per_source_for_sample=20_000,
     dedup_max_parallelism=64,
-    verification_max_parallelism=64,
     train_centroids_resources=ResourceConfig.with_cpu(cpu=4, ram="8g"),
 )
 """Small K + a small pool -- a true end-to-end run on a testbed sample."""
@@ -768,7 +766,6 @@ def reference_datakit_steps(
             output_path=op,
             verification_params=verification_params,
             local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
-            max_parallelism=scale.verification_max_parallelism,
             worker_resources=scale.pool.worker,
         ),
     )

@@ -115,7 +115,6 @@ def build_steps(run_id: str) -> list[StepSpec]:
             output_path=output_path,
             verification_params=verification_params,
             local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
-            max_parallelism=128,
             worker_resources=ResourceConfig(cpu=2, ram="16g", disk="30g"),
         ),
         override_output_path=f"{base}/verify_fuzzy_dups",

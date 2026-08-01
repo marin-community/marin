@@ -528,7 +528,6 @@ def main() -> None:
         candidates_step=candidates_step,
         verification_params=verification_params,
         local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
-        max_parallelism=args.max_workers,
         worker_resources=WORKER_RESOURCES,
         override_output_path=prefix_join(output_prefix, "verified"),
     )
