@@ -230,7 +230,8 @@ class FastTransformer(eqx.Module):
             pooled = jnp.where(valid[..., None] > 0, pooled, 0.0)
         return pooled, valid
 
-    def __call__(self, ids: Array, *, key: PRNGKeyArray | None = None, inference: bool = True) -> Array:
+    def encode(self, ids: Array, *, key: PRNGKeyArray | None = None, inference: bool = True) -> Array:
+        """Return the normalized pooled document representation."""
         cfg = self.config
         mask = (ids != PAD_ID).astype(jnp.float32)  # [b, t]
         emb = jnp.take(self.embed, ids, axis=0)  # [b, t, e]
@@ -251,9 +252,32 @@ class FastTransformer(eqx.Module):
             attn = jax.nn.softmax(scores, axis=1)
             pooled_doc = jnp.einsum("bs,bsd->bd", attn, h)
 
-        normed = _layer_norm(pooled_doc, self.head_g, self.head_b)
+        return _layer_norm(pooled_doc, self.head_g, self.head_b)
+
+    def __call__(self, ids: Array, *, key: PRNGKeyArray | None = None, inference: bool = True) -> Array:
+        normed = self.encode(ids, key=key, inference=inference)
         return _matmul(normed, self.head_w)[:, 0]  # [b]
 
 
-def count_params(model: FastTransformer) -> int:
+class FastEmbeddingTransformer(eqx.Module):
+    """Pooled fast-transformer with a normalized vector output."""
+
+    backbone: FastTransformer
+    embedding_head: Array
+    output_dim: int = eqx.field(static=True)
+
+    def __init__(self, config: FastTransformerConfig, output_dim: int, *, key: PRNGKeyArray):
+        backbone_key, head_key = jax.random.split(key)
+        self.backbone = FastTransformer(config, key=backbone_key)
+        self.embedding_head = _glorot(head_key, (config.hidden_dim, output_dim))
+        self.output_dim = output_dim
+
+    def __call__(self, ids: Array, *, key: PRNGKeyArray | None = None, inference: bool = True) -> Array:
+        hidden = self.backbone.encode(ids, key=key, inference=inference)
+        vectors = _matmul(hidden, self.embedding_head)
+        norms = jnp.linalg.norm(vectors, axis=1, keepdims=True)
+        return vectors / jnp.maximum(norms, 1e-12)
+
+
+def count_params(model: eqx.Module) -> int:
     return sum(x.size for x in jax.tree_util.tree_leaves(eqx.filter(model, eqx.is_inexact_array)))

@@ -14,11 +14,24 @@ Both use a deterministic fake scorer / synthetic labels, so no model or I/O is n
 from itertools import pairwise
 from typing import cast
 
+import equinox as eqx
+import jax.numpy as jnp
+import jax.random as jr
 import numpy as np
 import pytest
+from scipy.special import logsumexp
 
 from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES
 from experiments.datakit.cluster.quality.fast_transformer.calibrate import calibration_knots, fit_cutpoints
+from experiments.datakit.cluster.quality.fast_transformer.embedding import (
+    contrastive_embedding_loss,
+    pack_remapped_windows,
+    predict_embeddings,
+)
+from experiments.datakit.cluster.quality.fast_transformer.model import (
+    FastEmbeddingTransformer,
+    FastTransformerConfig,
+)
 from experiments.datakit.cluster.quality.fast_transformer.score import _systematic_take
 from experiments.datakit.cluster.quality.fast_transformer.scorer import CHUNK_CHARS, PooledScorer, score_bme
 
@@ -132,3 +145,103 @@ def test_systematic_sample_is_deterministic_and_hits_target_fraction():
         assert kept == [i for i in range(1000) if _systematic_take(i, pct)]
         # ~pct of records, evenly spaced
         assert abs(len(kept) / 1000 - pct) < 0.01
+
+
+def _embedding_model() -> FastEmbeddingTransformer:
+    config = FastTransformerConfig(
+        vocab_size=32,
+        max_tokens=8,
+        pool_window=4,
+        pool_kind="meanmaxmin",
+        embed_dim=8,
+        hidden_dim=8,
+        num_layers=1,
+        num_heads=2,
+        dropout=0.0,
+    )
+    return FastEmbeddingTransformer(config, output_dim=6, key=jr.PRNGKey(7))
+
+
+def test_embedding_transformer_returns_distinct_unit_vectors():
+    model = _embedding_model()
+    ids = jnp.asarray(
+        [
+            [2, 3, 4, 5, 0, 0, 0, 0],
+            [6, 7, 8, 9, 10, 11, 0, 0],
+        ],
+        dtype=jnp.int32,
+    )
+
+    vectors = np.asarray(model(ids))
+
+    assert vectors.shape == (2, 6)
+    assert np.isfinite(vectors).all()
+    assert np.linalg.norm(vectors, axis=1) == pytest.approx([1.0, 1.0], abs=1e-6)
+    assert not np.allclose(vectors[0], vectors[1])
+
+
+def test_contrastive_embedding_loss_matches_numpy_reference():
+    student = np.asarray(
+        [[1.0, 0.2, -0.3], [0.1, 0.9, 0.4], [-0.2, 0.3, 1.1], [0.7, -0.4, 0.2]],
+        dtype=np.float32,
+    )
+    teacher = np.asarray(
+        [[0.8, 0.1, -0.1], [0.0, 1.0, 0.2], [-0.1, 0.4, 0.9], [0.6, -0.2, 0.5]],
+        dtype=np.float32,
+    )
+    temperature = 3.0
+
+    def off_diagonal_gram(vectors: np.ndarray) -> np.ndarray:
+        vectors = vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
+        gram = vectors @ vectors.T
+        return gram[~np.eye(len(vectors), dtype=bool)].reshape(len(vectors), len(vectors) - 1)
+
+    student_logits = off_diagonal_gram(student) / temperature
+    teacher_logits = off_diagonal_gram(teacher) / temperature
+    student_log_probabilities = student_logits - logsumexp(student_logits, axis=1, keepdims=True)
+    teacher_log_probabilities = teacher_logits - logsumexp(teacher_logits, axis=1, keepdims=True)
+    expected = temperature**2 * np.mean(
+        np.sum(
+            np.exp(teacher_log_probabilities) * (teacher_log_probabilities - student_log_probabilities),
+            axis=1,
+        )
+    )
+
+    actual = float(contrastive_embedding_loss(jnp.asarray(student), jnp.asarray(teacher), temperature))
+
+    assert actual == pytest.approx(expected, rel=1e-5, abs=1e-6)
+
+
+def test_embedding_prediction_padding_preserves_rows_and_values():
+    model = _embedding_model()
+    ids = np.asarray(
+        [
+            [2, 3, 0, 0, 0, 0, 0, 0],
+            [4, 5, 6, 0, 0, 0, 0, 0],
+            [7, 8, 9, 10, 0, 0, 0, 0],
+            [11, 12, 13, 14, 15, 0, 0, 0],
+            [16, 17, 18, 19, 20, 21, 0, 0],
+        ],
+        dtype=np.int32,
+    )
+
+    expected = np.asarray(eqx.filter_jit(model)(jnp.asarray(ids)))
+    actual = predict_embeddings(model, ids, batch_size=4)
+
+    assert actual.shape == (5, 6)
+    assert actual == pytest.approx(expected, abs=1e-5)
+
+
+def test_embedding_window_packing_remaps_truncates_and_pads():
+    remap = np.asarray([1, 1, 8, 9, 10, 11, 12], dtype=np.int32)
+    raw_windows = [
+        [[2, 3, 4], [5], [6, 2]],
+        [[3], [], [4, 5, 6]],
+    ]
+
+    packed = pack_remapped_windows(raw_windows, remap, max_tokens=8, tokens_per_window=2)
+
+    assert packed.tolist() == [
+        [8, 9, 11, 0, 12, 8, 0, 0],
+        [9, 0, 0, 0, 10, 11, 0, 0],
+    ]
