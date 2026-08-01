@@ -318,6 +318,8 @@ second review loop.
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-qwen3-embedding-0.6b-256/report.json`.
 - Qwen 4B 256-dimensional report:
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-qwen3-embedding-4b-256/report.json`.
+- Focused Qwen ladder report:
+  `.agents/projects/luxical-arctic-poc/qwen-teacher-ladder-report.md`.
 - Candidate audit jobs: `/rav/lux-teacher-lfm25-350m-h100-001` and
   `/rav/lux-teacher-qwen3-06b-h100-001`.
 - Qwen MRL ladder jobs: `/rav/lux-teacher-qwen3-06b-256-h100-001` and

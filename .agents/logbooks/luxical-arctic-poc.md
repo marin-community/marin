@@ -1017,6 +1017,8 @@ uv run iris --cluster=marin job run --no-wait \
   failures.
 - Report:
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-qwen3-embedding-4b-256/report.json`.
+- Focused report:
+  `.agents/projects/luxical-arctic-poc/qwen-teacher-ladder-report.md`.
 - Exact command:
 
 ```bash
