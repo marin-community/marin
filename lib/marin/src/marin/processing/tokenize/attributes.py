@@ -104,6 +104,7 @@ class TokenizeAttributesConfig:
     text_field: str = "text"
     max_workers: int = 4096
     worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="10g", disk="5g"))
+    zephyr_context: ZephyrContext | None = None
 
     def __post_init__(self):
         if self.train_source is None and self.validation_source is None:
@@ -164,7 +165,7 @@ def _process_split(
         skip_existing=True,
     )
 
-    ctx = ZephyrContext(
+    ctx = config.zephyr_context or ZephyrContext(
         resources=config.worker_resources,
         max_workers=min(config.max_workers, len(source_shards)),
         name=f"tokenize-attributes-{split}",
@@ -172,7 +173,12 @@ def _process_split(
     ctx.put("tokenizer_name", config.tokenizer)
     ctx.put("tokenizer_backend", config.tokenizer_backend)
 
-    outcome = ctx.execute(pipeline, verbose=True)
+    outcome = ctx.execute(
+        pipeline,
+        verbose=True,
+        map_task_resources=config.worker_resources,
+        reduce_task_resources=config.worker_resources,
+    )
     return split_dir, dict(outcome.counters)
 
 
@@ -241,6 +247,7 @@ def tokenize_attributes_step(
     text_field: str = "text",
     max_workers: int = 4096,
     worker_resources: ResourceConfig | None = None,
+    zephyr_context: ZephyrContext | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
     """Create a :class:`StepSpec` that tokenizes :class:`NormalizedData` source(s) into attribute parquet.
@@ -267,6 +274,7 @@ def tokenize_attributes_step(
             on non-normalized paths (not used here, but mirrored to the config).
         max_workers: Zephyr worker cap.
         worker_resources: Per-worker resources; defaults inside the config.
+        zephyr_context: Optional shared Zephyr context.
         override_output_path: Optional explicit output path.
     """
     if train_normalize is None and validation_normalize is None:
@@ -284,6 +292,7 @@ def tokenize_attributes_step(
             "sample_count": sample_count,
             "text_field": text_field,
             "max_workers": max_workers,
+            "zephyr_context": zephyr_context,
         }
         if train_normalize is not None:
             kwargs["train_source"] = read_artifact(train_normalize.output_path, NormalizedData)

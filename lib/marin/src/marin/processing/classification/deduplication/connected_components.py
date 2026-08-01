@@ -6,6 +6,7 @@ from collections.abc import Iterator, Sequence
 from typing import Any, TypedDict
 
 import dupekit
+from fray.types import ResourceConfig
 from rigging.filesystem import StoragePath
 from zephyr import counters
 from zephyr.dataset import Dataset, ShardInfo
@@ -83,6 +84,9 @@ def connected_components(
     max_iterations: int = 10,
     preserve_singletons: bool = True,
     resume: bool = False,
+    num_reduce_shards: int | None = None,
+    map_task_resources: ResourceConfig | None = None,
+    reduce_task_resources: ResourceConfig | None = None,
 ) -> tuple[bool, Sequence[str]]:
     """
     Connected Components implementation using Zephyr Dataset API and Hash-to-Min algorithm (https://arxiv.org/abs/1203.5387)
@@ -93,9 +97,9 @@ def connected_components(
         output_dir: Directory to write intermediate and final output files
         max_iterations: Maximum number of iterations to run the connected components algorithm
         preserve_singletons: Whether to preserve single-node buckets in the output
-        resume: If True, skip iterations whose ``it_N/`` already contains a complete set of
-            parquet files (count == ``ctx.max_workers``). Starts from the first incomplete
-            iteration. If no complete prior state exists, runs from scratch.
+        resume: If True, skip complete prior iterations and start at the first
+            incomplete iteration. If no complete state exists, run from scratch.
+        num_reduce_shards: Shuffle shard count. Defaults to the context worker cap.
     """
 
     def _reduce_bucket_to_links(bucket: str, items: Iterator[CCInput]) -> Iterator[dict]:
@@ -153,7 +157,7 @@ def connected_components(
 
     # Determine reduce shard count. Default to ctx max_workers to avoid
     # I/O amplification.
-    num_reduce_shards = ctx.max_workers
+    num_reduce_shards = num_reduce_shards or ctx.max_workers
 
     start_iteration = 1
     curr_it: Sequence[str]
@@ -199,6 +203,8 @@ def connected_components(
                 num_output_shards=num_reduce_shards,
             ).write_parquet(f"{output_dir}/it_0/part-{{shard:05d}}.parquet"),
             verbose=True,
+            map_task_resources=map_task_resources,
+            reduce_task_resources=reduce_task_resources,
         ).results
 
     def _get_write_shard_and_count_fn(iteration: int):
@@ -235,6 +241,8 @@ def connected_components(
             .group_by(key=lambda x: x["key"], reducer=_reduce_node_step, num_output_shards=num_reduce_shards)
             .map_shard(_get_write_shard_and_count_fn(i)),
             verbose=True,
+            map_task_resources=map_task_resources,
+            reduce_task_resources=reduce_task_resources,
         ).results
 
         curr_it = [r["path"] for r in shard_results]
