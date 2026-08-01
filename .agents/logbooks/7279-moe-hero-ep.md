@@ -233,3 +233,9 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Status: The 16 GPU tasks remain pending before their first attempts.
 - Evidence: The coordinator runs normally. The coordinator and GPU job have zero failures and zero preemptions. No new worker logs exist.
 - Decision: Keep the same request and wait for full gang admission.
+
+### 2026-08-01 23:20 UTC - MHEP-001 GPU admission wait unchanged
+
+- Status: The 16 GPU tasks remain pending before their first attempts.
+- Evidence: The coordinator runs normally. The coordinator and GPU job have zero failures and zero preemptions. No new worker logs exist.
+- Decision: Keep the same request and wait for full gang admission.
