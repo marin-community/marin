@@ -36,10 +36,11 @@ _EVENT_KIND = "event"
 
 
 class TelemetryRole(StrEnum):
-    """Bounded process roles for telemetry resources."""
+    """Stock process roles for telemetry resources."""
 
     CONTROLLER = "controller"
     COORDINATOR = "coordinator"
+    DRIVER = "driver"
     TRAINER = "trainer"
     ROLLOUT = "rollout"
     INFERENCE = "inference"
@@ -85,11 +86,6 @@ class _Config:
             raise ValueError("endpoint must use http:// or https://")
         serialization.validate_string(self.service, "service")
         serialization.validate_attributes(self.attributes)
-        if role := self.attributes.get("role"):
-            try:
-                TelemetryRole(role)
-            except ValueError:
-                raise ValueError(f"unknown telemetry role: {role}") from None
         limits = (
             self.max_queue_records,
             self.max_queue_bytes,

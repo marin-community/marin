@@ -125,6 +125,17 @@ def test_invalid_configuration_stays_inert(caplog: pytest.LogCaptureFixture) -> 
     assert "invalid configuration" in caplog.text
 
 
+def test_custom_resource_role_is_exported(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = RecordingTransport()
+    configure(monkeypatch, transport, attributes={"role": "skyrl_driver"})
+
+    telemetry.counter("requests").add()
+
+    assert transport.accepted.wait(1)
+    payload = json.loads(transport.requests[0][1])
+    assert payload["resource"]["attributes"]["role"] == "skyrl_driver"
+
+
 def test_retry_reuses_exact_batch_id_and_body(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = RecordingTransport(
         [error_outcome(requests.ConnectionError("offline")), invalid_ack_outcome, status_outcome(200)]
