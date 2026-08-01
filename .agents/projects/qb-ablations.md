@@ -80,24 +80,44 @@ selected/not), so resolution must be good *there*:
 Open: exact `R` (tune from logged margins); whether to EMA the bias for stability; update cadence
 (every step, matching today).
 
-## H100 launch — MoE backend must be swapped (sonic_cute is SM100-only)
+## H100 launch — the hero config has THREE SM100/B200-only kernels; two must be disabled
 
-The MoE backend does **not** auto-fall-back on H100. `moe_implementation="sonic_cute"` is the QuACK
-**SM100 (Blackwell/B200) grouped-GEMM** backend; on H100 (SM90) its expert SwiGLU has no lowering and
-the first H100 baseline died at compile with `KeyError: ('closed_call', let silu = { … bf16[512,8192,128]`
-(the expert MLP). Fix: set **`SWEEP_MOE_IMPL=scatter`** (portable single-process grouped GMM with
-scatter-add combine) for every H100 run. `sweep_launch.py` now reads `SWEEP_MOE_IMPL` / `SWEEP_ATTN_IMPL`
-(defaults sonic_cute / gpu_fa4_cute for the GB200 sweep). Attention (`gpu_fa4_cute`) is FA4 (Hopper +
-Blackwell), so it is *expected* to run on H100 — confirm from the first baseline logs; if it also fails
-to lower, add `-e SWEEP_ATTN_IMPL reference`.
-- Resources: `ResourceConfig` H100, 8 GPU/node → **8 nodes = 64 GPU** (env: `SWEEP_GPU_TYPE=H100`,
-  `SWEEP_GPUS_PER_NODE=8`, `SWEEP_NODES=8`).
-- `offload_opt_state=False`, PGLE off (`-e JAX_ENABLE_PGLE 0`), eval-bf16 cast — all carry over.
-- Cluster: **cw-us-east-02a** (H100, region-local to the datakit store on `s3://marin-us-east-02a/marin`).
+The hero recipe was built for GB200/SM100 and hardcodes Blackwell-only kernels that do **not** auto-fall-back
+on H100 (SM90). Found the hard way (each surfaced as a distinct failure):
 
-All three variants (baseline, qknorm, qbhist) must carry `-e SWEEP_MOE_IMPL scatter`.
+1. **MoE** — `moe_implementation="sonic_cute"` = QuACK `GemmGatedSm100`; on H100 its expert SwiGLU has no
+   lowering → compile died `KeyError: ('closed_call', let silu = { … bf16[512,8192,128]`. Fix:
+   **`SWEEP_MOE_IMPL=ring`** (the aug path's H100 backend; `None`→`ring`). At the hero mesh's
+   `expert_axis_size=1` ring's EP collectives are no-ops → local grouped compute. (`scatter` also lowers but
+   *bounced natively* — it was not the real fix; see #2.)
+2. **Optimizer** — MuonH `use_syrk=True` routes the 4D Newton-Schulz through QuACK `GemmSymmetricSm100`
+   (`grugmuon_hero.py:182`); it fires at the **first optimizer step**, so both scatter and ring crashed
+   *natively with no Python traceback* right after cache-building. Fix: **`SWEEP_USE_SYRK=0`** → portable
+   `jax.vmap` matmul NS.
+3. **Attention** — `gpu_fa4_cute` is FA4 and *does* have a native SM90 (Hopper) path
+   (`Flash4CuteSm90BackwardConfig`), so it runs on H100 unchanged. No swap needed. (The aug branch instead
+   leaves `attention_implementation=None` → `reference_attention` on GPU, i.e. it never uses FA4 on H100 —
+   but for the ablation we keep FA4 for speed.)
 
-Still run **baseline first** as a quick sanity that d2048 trains on 64 H100 before the two variants.
+`sweep_launch.py` reads `SWEEP_MOE_IMPL` / `SWEEP_ATTN_IMPL` / `SWEEP_USE_SYRK` (GB200 defaults:
+sonic_cute / gpu_fa4_cute / syrk-on). **Confirmed working recipe (baseline trained, loss 11→7.5 @ 3.5s/it):**
+
+    -e SWEEP_GPU_TYPE H100 -e SWEEP_GPUS_PER_NODE 8 -e SWEEP_NODES 8 \
+    -e SWEEP_MOE_IMPL ring -e SWEEP_USE_SYRK 0 -e JAX_ENABLE_PGLE 0
+
+- Resources: H100, 8 GPU/node → **8 nodes = 64 GPU**. Cluster **cw-us-east-02a** (region-local to the
+  datakit store on `s3://marin-us-east-02a/marin`). No `--timeout` (default 0 = no cap).
+- `offload_opt_state=False`, eval-bf16 cast — carry over. SPMD "involuntary rematerialization" warnings on
+  the attention conditional are benign perf notes, not errors.
+- Per-variant extra: qknorm `-e SWEEP_LEARNABLE_QK_SCALE 1`; qbhist `-e SWEEP_QB_HISTOGRAM 1`.
+
+## Implementation order
+
+1. ~~Resolve the H100 kernel/backend + cluster and get the baseline running on 64 H100.~~ **Done** (ring +
+   use_syrk=0; baseline trains).
+2. ~~Add `learnable_qk_scale`.~~ **Done** (per-head q-only scale → Adam; committed).
+3. ~~Add `qb_histogram`.~~ **Done** — pooled per-expert margin histogram + one `psum` → global quantile,
+   zero-mean bias; validated vs `jnp.quantile` (max err 0.008 = half a bin at B=1000, R=8).
 
 ## Implementation order
 
