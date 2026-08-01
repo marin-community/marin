@@ -11,6 +11,7 @@ from typing import Literal
 
 PUBLIC_URL = "https://echo.oa.dev"
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
+INFERENCE_THREADS = 1
 INDEXED_REPOSITORY = "marin-community/marin"
 INDEXED_BRANCH = "main"
 DISPLAY_SHA_CHARACTERS = 12

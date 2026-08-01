@@ -101,7 +101,7 @@ async def lifespan(app: FastAPI):
             pool_size=5,
             pool_pre_ping=True,
         )
-        app.state.model = TextEmbedding(search_config.EMBED_MODEL, threads=1)
+        app.state.model = TextEmbedding(search_config.EMBED_MODEL, threads=search_config.INFERENCE_THREADS)
         app.state.reranker = reranking.text_cross_encoder()
         try:
             yield
