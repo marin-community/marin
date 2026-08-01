@@ -1,5 +1,29 @@
 # Exp 166 Execution Policy
 
+## ⛔ WIND-DOWN — ACTIVE, OVERRIDES EVERYTHING BELOW
+
+Operator directive, 2026-08-01 12:20 UTC. This sweep is winding down. It stays
+in force for every remaining heartbeat unless the operator revokes it.
+
+1. **Never create a new `(trial, region)` regional run.** No exceptions. Race
+   top-ups are off; `regional_race_width` no longer applies and the race floor
+   is no longer an invariant to restore. Do not run the launcher's submit path.
+2. **Only finish `(trial, region)` combinations that already exist.** Restarts,
+   reslices, and same-region replacements of an existing regional run are still
+   allowed -- those resume a checkpoint, they do not open a new combination.
+3. **Any regional run below 30% progress is abandoned**, its Iris job stopped
+   and its `race_status` set to `abandoned`. Abandoned runs are never revived
+   and never replaced. Applied once at wind-down; a surviving run that later
+   falls below 30% is *not* newly abandoned, since progress only increases.
+4. A trial ends when one of its surviving replicas finishes. If every surviving
+   replica of a trial is abandoned or dies, that trial simply has no result --
+   do not start a fresh region to rescue it.
+
+Heartbeats keep their normal format. Recovery ladders still apply to surviving
+runs. The fleet only shrinks from here.
+
+---
+
 Operator policy for the fixed contacts-v1 amino-acid augmentation ablation
 ([MarinFold #166](https://github.com/Open-Athena/MarinFold/issues/166)).
 Trials are defined by `experiments/protein/exp166_sweep.py`; this policy governs
