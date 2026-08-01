@@ -46,6 +46,57 @@ ctx.execute(pipeline)
 - `ZephyrContext(client=LocalClient())` — explicit local backend (testing)
 - `ctx.execute(pipeline)` — runs the pipeline; returns a `ZephyrExecutionResult(results, counters)`
 
+### Read-only memory stores
+
+`ZephyrContext.load_memory_store()` loads an existing partitioned dataset into
+a context-owned group of read-only actors. The handle is picklable, so later
+pipelines and child jobs can use `get()` or order-preserving `get_many()`
+lookups without copying the table into every worker.
+
+```python
+from fray.types import ActorConfig, ResourceConfig
+
+
+def document_partition(key: tuple[int, str]) -> int:
+    file_index, _ = key
+    return file_index
+
+
+documents = Dataset.from_files("s3://bucket/documents/*.parquet").load_parquet().map(
+    lambda row: ((row["file_index"], row["id"]), row["text"])
+)
+
+ctx = ZephyrContext(max_workers=100)
+try:
+    document_store = ctx.load_memory_store(
+        documents,
+        name="documents",
+        hash_key=document_partition,
+        num_actors=16,
+        actor_resources=ResourceConfig(cpu=2, ram="8g"),
+        actor_config=ActorConfig(max_task_retries=1_000),
+        max_actor_bytes=2_000_000_000,
+        recovery_timeout=900,
+    )
+    result = ctx.execute(Dataset.from_list(document_keys).map(document_store.get))
+finally:
+    ctx.shutdown()
+```
+
+For `P` source shards, every key must already satisfy
+`hash_key(key) % P == source_shard_index`. Construction checks every row and
+does not insert a shuffle. Readers and shard-local maps can load directly.
+Persist and reload the output of a shuffle, join, reshard, reduce, or write
+before constructing a store.
+
+Keys must be unique and deterministically encodable by msgspec. Values and the
+hash function must be picklable; Python's salted `hash()` is not stable for
+string or byte keys. `max_actor_bytes` limits encoded key/value bytes, while
+`store.stats()` reports measured load time and size per actor. Iris reconstructs
+a preempted actor from the same source shards, and lookups wait for their owner
+up to `recovery_timeout`. Calling `shutdown()` on the creating context stops its
+stores.
+
 ## Real Usage
 
 **Wikipedia Processing:**
