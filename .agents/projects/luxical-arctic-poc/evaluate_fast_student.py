@@ -21,6 +21,7 @@ from evaluate_ladder import (
     CLUSTER_COUNT,
     CLUSTER_MAX_SOURCE_SHARE,
     CLUSTER_SEEDS,
+    CPU_THREADS,
     MANIFEST_URL,
     MIN_EFFECTIVE_RANK_RATIO,
     MIN_UNIQUE_FRACTION,
@@ -41,6 +42,7 @@ from huggingface_hub import hf_hub_download
 from ladder_config import MANIFEST_ROOT, SEED
 from luxical.embedder import Embedder
 from rigging.filesystem import atomic_rename
+from threadpoolctl import threadpool_limits
 
 TRAINING_ROOT = f"{MANIFEST_ROOT}/fast-student"
 EVALUATION_ROOT = f"{MANIFEST_ROOT}/evaluation/fast-student"
@@ -122,6 +124,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+@threadpool_limits.wrap(limits=CPU_THREADS)
 def main() -> None:
     """Run all fixed quality, collapse, fidelity, and speed gates."""
     arguments = parse_args()
