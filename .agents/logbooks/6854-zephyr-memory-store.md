@@ -640,3 +640,46 @@ description: Read-only Zephyr memory store and verified fuzzy-dedup experiments
   fsspec settings.
 - Next action: Publish the final design revision, commit the telemetry and
   research record, push the branch, and open the stacked PR.
+
+### 2026-08-01 06:08 UTC - ZKV-016 review fixes and corrected 100B result
+
+- Review: Automated review of commit `0fa5c384d` found two concrete edge
+  cases. Repeated noncanonical content IDs delegated their first occurrence to
+  global exact dedup before direct verification, and an actor future could
+  remain inside its own retry loop beyond `recovery_timeout`.
+- Changes: Commit `5dd0aa45f` directly verifies the first record in a repeated
+  noncanonical-ID group and delegates only later exact copies. Commit
+  `15b1ba9e4` starts actor calls concurrently, waits on every future with one
+  shared recovery deadline, and translates a future timeout into
+  `MemoryStoreUnavailable`. Both review threads are outdated on the pushed
+  head.
+- Local validation: The memory-store suite passed 12 tests, fuzzy dedup passed
+  99 tests with 5 repository-default deselections, and full Zephyr passed 364
+  tests with 4 deselections and 1 expected xfail in 6m20s. Repository
+  changed-file checks passed, including Ruff, formatting, and Pyrefly.
+- Job: `/loom/zephyr-kv-current-treatment-100b-20260801-v4`, execution
+  `20260801-054058-69da3970`, revision `15b1ba9e4`. The federated root succeeded
+  in 22 minutes 2.83 seconds with zero failures and zero preemptions.
+- Correctness: The output contains 27,203 markers. A separate 2-CPU, 8-GB
+  compare-only job, `/loom/zephyr-kv-v4-marker-compare-20260801`, read the
+  corrected output and the persisted reference on `cw-us-east-02a`: 27,203
+  versus 27,203, with zero unexpected, missing, or changed records. The review
+  fix covers a real repeated-ID edge case but does not change this corpus.
+- Topology: The run again created one coordinator job, one shared 64-worker job,
+  and one 32-actor memory-store job. Workers requested 64 GB, verifier tasks
+  budgeted 60 GB, and no per-stage pool jobs appeared.
+- Current Parquet-shuffle stages:
+  - map/scatter: 3,105.89 CPU-seconds, 0.900 GB peak RSS, 79.66 seconds;
+  - cluster reduce/scatter: 61,496.32 CPU-seconds, 4.723 GB peak RSS, 802.96
+    seconds;
+  - output reduce: 33,147.45 CPU-seconds, 2.492 GB peak RSS, 235.89 seconds.
+  The largest completed-stage peak remains 92.1% below the 60 GB task budget.
+- CI: The pushed head has one GitHub Actions failure:
+  `test_fresh_actors_per_execute[iris]` reached its existing 60-second timeout
+  while a newly registered local coordinator endpoint refused connections.
+  The same 364-test suite passes locally. Per the CI remediation workflow, the
+  proposed first step is one failed-job rerun; actor service readiness should
+  change only if the failure reproduces.
+- Next action: Publish design revision 7, update the PR result, commit this
+  record, then complete the approved CI remediation and event-driven review
+  watch.
