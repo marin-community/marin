@@ -32,9 +32,10 @@ class _TestActorFuture:
     def __init__(self, value=None, error: Exception | None = None):
         self.value = value
         self.error = error
+        self.timeouts: list[float | None] = []
 
     def result(self, timeout=None):
-        del timeout
+        self.timeouts.append(timeout)
         if self.error is not None:
             raise self.error
         return self.value
@@ -242,6 +243,23 @@ def test_memory_store_retries_only_actor_unavailability():
     )
     with pytest.raises(_ApplicationError):
         failing_store.get("key")
+
+
+def test_memory_store_bounds_actor_call_by_recovery_timeout():
+    timed_out_future = _TestActorFuture(error=TimeoutError("actor call exceeded its deadline"))
+    store = MemoryStore(
+        actors=(_SequencedActor([timed_out_future]),),
+        hash_key=lambda _key: 0,
+        num_source_partitions=1,
+        recovery_timeout=1,
+    )
+
+    with pytest.raises(MemoryStoreUnavailable, match="did not respond within 1 seconds"):
+        store.get("key")
+
+    assert len(timed_out_future.timeouts) == 1
+    assert timed_out_future.timeouts[0] is not None
+    assert 0 < timed_out_future.timeouts[0] <= 1
 
 
 def test_context_shutdown_makes_store_unavailable(local_client, tmp_path):

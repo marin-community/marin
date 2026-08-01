@@ -2165,7 +2165,8 @@ class ZephyrContext:
             actor_config: Actor recovery and concurrency policy. A positive
                 `max_task_retries` is required.
             max_actor_bytes: Maximum encoded key/value bytes loaded by one actor.
-            recovery_timeout: Seconds a lookup waits for an unavailable actor.
+            recovery_timeout: Seconds a lookup or stats call waits for an actor
+                response or recovery.
             ready_timeout: Seconds to wait for every actor to finish loading.
         """
         if not name:

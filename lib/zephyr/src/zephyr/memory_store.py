@@ -11,7 +11,7 @@ from typing import Any, Generic, TypeVar, cast
 
 import cloudpickle
 import msgspec
-from fray.actor import ActorHandle, ActorUnavailableError, current_actor
+from fray.actor import ActorFuture, ActorHandle, ActorUnavailableError, current_actor
 from rigging.timing import ExponentialBackoff
 
 from zephyr.dataset import Dataset
@@ -21,7 +21,6 @@ logger = logging.getLogger(__name__)
 
 K = TypeVar("K")
 V = TypeVar("V")
-T = TypeVar("T")
 
 
 class MemoryStorePartitionError(ValueError):
@@ -180,18 +179,37 @@ class _MemoryStoreActor:
         return self._stats
 
 
-def _call_with_recovery(call: Callable[[], T], actor_index: int, recovery_timeout: float) -> T:
-    deadline = time.monotonic() + recovery_timeout
+def _actor_result_with_recovery(
+    call: Callable[[], ActorFuture],
+    initial_future: ActorFuture | None,
+    actor_index: int,
+    recovery_timeout: float,
+    deadline: float,
+) -> Any:
     backoff = ExponentialBackoff(initial=0.5, maximum=10.0, factor=2.0, jitter=0.25)
+    future = initial_future
     while True:
+        remaining = deadline - time.monotonic()
+        if future is None and remaining <= 0:
+            raise MemoryStoreUnavailable(
+                f"memory-store actor {actor_index} did not recover within {recovery_timeout:g} seconds"
+            )
         try:
-            return call()
+            if future is None:
+                future = call()
+                remaining = deadline - time.monotonic()
+            return future.result(timeout=max(0.0, remaining))
+        except TimeoutError as exc:
+            raise MemoryStoreUnavailable(
+                f"memory-store actor {actor_index} did not respond within {recovery_timeout:g} seconds"
+            ) from exc
         except ActorUnavailableError as exc:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise MemoryStoreUnavailable(
                     f"memory-store actor {actor_index} did not recover within {recovery_timeout:g} seconds"
                 ) from exc
+            future = None
             delay = min(backoff.next_interval(), remaining)
             logger.warning("Memory-store actor %d unavailable; retrying in %.1f seconds", actor_index, delay)
             time.sleep(delay)
@@ -227,27 +245,29 @@ class MemoryStore(Generic[K, V]):
             actor_index: [encoded_key for _, _, encoded_key in actor_requests]
             for actor_index, actor_requests in requests.items()
         }
-        futures = {
-            actor_index: _call_with_recovery(
-                lambda actor_index=actor_index: self.actors[actor_index].lookup.remote(encoded_requests[actor_index]),
-                actor_index,
-                self.recovery_timeout,
+        calls = {
+            actor_index: (
+                lambda actor_index=actor_index: self.actors[actor_index].lookup.remote(encoded_requests[actor_index])
             )
             for actor_index in requests
         }
+        deadline = time.monotonic() + self.recovery_timeout
+        futures: dict[int, ActorFuture | None] = {}
+        for actor_index, call in calls.items():
+            try:
+                futures[actor_index] = call()
+            except ActorUnavailableError:
+                futures[actor_index] = None
 
         results: list[V | None] = [None] * len(keys)
         for actor_index, actor_requests in requests.items():
-            try:
-                encoded_values = futures[actor_index].result()
-            except ActorUnavailableError:
-                encoded_values = _call_with_recovery(
-                    lambda actor_index=actor_index: self.actors[actor_index]
-                    .lookup.remote(encoded_requests[actor_index])
-                    .result(),
-                    actor_index,
-                    self.recovery_timeout,
-                )
+            encoded_values = _actor_result_with_recovery(
+                calls[actor_index],
+                futures[actor_index],
+                actor_index,
+                self.recovery_timeout,
+                deadline,
+            )
             assert len(encoded_values) == len(actor_requests)
             for (position, key, _), encoded_value in zip(actor_requests, encoded_values, strict=True):
                 if encoded_value is None:
@@ -258,24 +278,23 @@ class MemoryStore(Generic[K, V]):
 
     def stats(self) -> tuple[MemoryStoreActorStats, ...]:
         """Return load statistics ordered by actor index."""
-        futures = {
-            actor_index: _call_with_recovery(
-                actor.stats.remote,
-                actor_index,
-                self.recovery_timeout,
-            )
-            for actor_index, actor in enumerate(self.actors)
-        }
-        stats = []
-        for actor_index, actor in enumerate(self.actors):
+        calls = {actor_index: lambda actor=actor: actor.stats.remote() for actor_index, actor in enumerate(self.actors)}
+        deadline = time.monotonic() + self.recovery_timeout
+        futures: dict[int, ActorFuture | None] = {}
+        for actor_index, call in calls.items():
             try:
-                stats.append(futures[actor_index].result())
+                futures[actor_index] = call()
             except ActorUnavailableError:
-                stats.append(
-                    _call_with_recovery(
-                        lambda actor=actor: actor.stats.remote().result(),
-                        actor_index,
-                        self.recovery_timeout,
-                    )
+                futures[actor_index] = None
+        stats = []
+        for actor_index in range(len(self.actors)):
+            stats.append(
+                _actor_result_with_recovery(
+                    calls[actor_index],
+                    futures[actor_index],
+                    actor_index,
+                    self.recovery_timeout,
+                    deadline,
                 )
+            )
         return tuple(sorted(stats, key=lambda stat: stat.actor_index))
