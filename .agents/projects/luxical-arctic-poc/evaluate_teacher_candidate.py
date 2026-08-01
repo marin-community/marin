@@ -71,6 +71,8 @@ class Candidate:
     prompt: str
     pooling: Pooling
     batch_size: int
+    model_hidden_size: int
+    embedding_dimension: int
 
     @property
     def output_name(self) -> str:
@@ -91,6 +93,8 @@ CANDIDATES = {
         prompt="document: ",
         pooling="cls",
         batch_size=128,
+        model_hidden_size=1_024,
+        embedding_dimension=1_024,
     ),
     "qwen3-embedding-0.6b": Candidate(
         name="qwen3-embedding-0.6b",
@@ -99,12 +103,43 @@ CANDIDATES = {
         prompt="",
         pooling="last_token",
         batch_size=128,
+        model_hidden_size=1_024,
+        embedding_dimension=1_024,
+    ),
+    "qwen3-embedding-0.6b-256": Candidate(
+        name="qwen3-embedding-0.6b-256",
+        model_id="Qwen/Qwen3-Embedding-0.6B",
+        revision="97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+        prompt="",
+        pooling="last_token",
+        batch_size=128,
+        model_hidden_size=1_024,
+        embedding_dimension=256,
+    ),
+    "qwen3-embedding-4b-256": Candidate(
+        name="qwen3-embedding-4b-256",
+        model_id="Qwen/Qwen3-Embedding-4B",
+        revision="5cf2132abc99cad020ac570b19d031efec650f2b",
+        prompt="",
+        pooling="last_token",
+        batch_size=32,
+        model_hidden_size=2_560,
+        embedding_dimension=256,
+    ),
+    "qwen3-embedding-8b-256": Candidate(
+        name="qwen3-embedding-8b-256",
+        model_id="Qwen/Qwen3-Embedding-8B",
+        revision="1d8ad4ca9b3dd8059ad90a75d4983776a23d44af",
+        prompt="",
+        pooling="last_token",
+        batch_size=16,
+        model_hidden_size=4_096,
+        embedding_dimension=256,
     ),
 }
 
 RESULT_FILE_PREFIX = "/tmp/luxical-teacher-candidate"
 MAX_TEACHER_TOKENS = 512
-CANDIDATE_DIMENSION = 1_024
 EXPECTED_EVALUATION_ROWS = 74_752
 WINDOWS_PER_DOCUMENT = 3
 INFERENCE_DTYPE = torch.bfloat16
@@ -175,8 +210,8 @@ class CandidateEmbedder:
             Lfm2ShortConv.forward = noncausal_shortconv_forward
         self.model.eval()
         hidden_size = int(self.model.config.hidden_size)
-        if hidden_size != CANDIDATE_DIMENSION:
-            raise ValueError(f"Teacher hidden size is {hidden_size}; expected {CANDIDATE_DIMENSION}")
+        if hidden_size != candidate.model_hidden_size:
+            raise ValueError(f"Teacher hidden size is {hidden_size}; expected {candidate.model_hidden_size}")
         for name, parameter in self.model.named_parameters():
             if not torch.isfinite(parameter).all():
                 raise ValueError(f"Teacher parameter {name} contains non-finite values")
@@ -208,6 +243,7 @@ class CandidateEmbedder:
             with sdpa_kernel(list(SDPA_BACKENDS)):
                 model_output = self.model(**device_inputs, use_cache=False)
             vectors = self._pool(model_output.last_hidden_state, device_inputs["attention_mask"])
+            vectors = vectors[:, : self.candidate.embedding_dimension]
             vectors = functional.normalize(vectors.float(), p=2, dim=1)
             if not torch.isfinite(vectors).all():
                 raise ValueError(f"Teacher returned non-finite vectors for batch {start}")
@@ -220,14 +256,14 @@ class CandidateEmbedder:
         window_vectors = self.embed_windows(windows).reshape(
             len(texts),
             WINDOWS_PER_DOCUMENT,
-            CANDIDATE_DIMENSION,
+            self.candidate.embedding_dimension,
         )
         pooled = window_vectors.mean(axis=1)
         pooled /= np.linalg.norm(pooled, axis=1, keepdims=True).clip(min=1e-12)
         if not np.isfinite(pooled).all():
             raise ValueError("Teacher returned non-finite pooled vectors")
         quantized = fast_8bit_uniform_scalar_quantize(pooled, TEACHER_QUANTIZATION_LIMIT)
-        if quantized.shape != (len(texts), CANDIDATE_DIMENSION):
+        if quantized.shape != (len(texts), self.candidate.embedding_dimension):
             raise ValueError(f"Teacher returned an unexpected shape: {quantized.shape}")
         return quantized
 
@@ -241,7 +277,7 @@ def expected_metadata(candidate: Candidate, manifest_sha256: str) -> dict[bytes,
         TEACHER_SCOPE_METADATA_KEY: b"evaluation-only",
         TEACHER_MAX_TOKENS_METADATA_KEY: str(MAX_TEACHER_TOKENS).encode(),
         TEACHER_WINDOWS_METADATA_KEY: str(WINDOWS_PER_DOCUMENT).encode(),
-        TEACHER_DIMENSION_METADATA_KEY: str(CANDIDATE_DIMENSION).encode(),
+        TEACHER_DIMENSION_METADATA_KEY: str(candidate.embedding_dimension).encode(),
         TEACHER_QUANTIZATION_METADATA_KEY: str(TEACHER_QUANTIZATION_LIMIT).encode(),
         TEACHER_ATTENTION_METADATA_KEY: ATTENTION_IMPLEMENTATION.encode(),
         TEACHER_DTYPE_METADATA_KEY: str(INFERENCE_DTYPE).removeprefix("torch.").encode(),
@@ -282,13 +318,13 @@ def candidate_output_url(candidate: Candidate, manifest_output_url: str) -> str:
 
 
 def load_or_embed_source(
+    candidate: Candidate,
     embedder: CandidateEmbedder,
     source_table: pa.Table,
     manifest_output_url: str,
     manifest_sha256: str,
 ) -> tuple[np.ndarray, bool, float]:
     """Load or create one aligned candidate-teacher source file."""
-    candidate = embedder.candidate
     output_url = candidate_output_url(candidate, manifest_output_url)
     filesystem, path = fsspec.core.url_to_fs(output_url)
     if filesystem.exists(path):
@@ -298,12 +334,12 @@ def load_or_embed_source(
             raise ValueError(f"Existing teacher output has different metadata: {output_url}")
         if source_table["raw_sha256"].to_pylist() != output_table["raw_sha256"].to_pylist():
             raise ValueError(f"Existing teacher output is not aligned: {output_url}")
-        return quantized_vectors(output_table, CANDIDATE_DIMENSION), True, 0.0
+        return quantized_vectors(output_table, candidate.embedding_dimension), True, 0.0
 
     started = time.perf_counter()
     quantized = embedder.quantized_documents(source_table["text"].to_pylist())
     embedding_duration = time.perf_counter() - started
-    embedding_array = pa.FixedSizeListArray.from_arrays(pa.array(quantized.ravel()), CANDIDATE_DIMENSION)
+    embedding_array = pa.FixedSizeListArray.from_arrays(pa.array(quantized.ravel()), candidate.embedding_dimension)
     output_table = source_table.drop(["text"]).append_column("embedding", embedding_array)
     metadata = dict(output_table.schema.metadata or {})
     metadata.update(expected_metadata(candidate, manifest_sha256))
@@ -447,6 +483,7 @@ def evaluate(candidate: Candidate) -> None:
         source_table = evaluation_table(source_result["output_url"])
         hashes = source_table["raw_sha256"].to_pylist()
         candidate_quantized, reused, source_embedding_duration = load_or_embed_source(
+            candidate,
             embedder,
             source_table,
             source_result["output_url"],
@@ -512,7 +549,7 @@ def evaluate(candidate: Candidate) -> None:
             "id": candidate.model_id,
             "revision": candidate.revision,
             "root": candidate.vector_root,
-            "embedding_dimension": CANDIDATE_DIMENSION,
+            "embedding_dimension": candidate.embedding_dimension,
             "quantization_limit": TEACHER_QUANTIZATION_LIMIT,
             "maximum_tokens_per_window": MAX_TEACHER_TOKENS,
             "windows_per_document": WINDOWS_PER_DOCUMENT,
@@ -521,6 +558,7 @@ def evaluate(candidate: Candidate) -> None:
             "sdpa_backends": SDPA_BACKEND_NAMES.split(","),
             "pooling_implementation": candidate.pooling,
             "document_prompt": candidate.prompt,
+            "projection": "matryoshka_prefix" if candidate.embedding_dimension < candidate.model_hidden_size else None,
         },
         "embedding_run": {
             "source_loop_duration_seconds": source_loop_duration,
