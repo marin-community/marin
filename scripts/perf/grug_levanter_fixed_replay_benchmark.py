@@ -96,6 +96,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", choices=("preflight", "headline"), required=True)
     parser.add_argument("--result-s3-uri", required=True)
     parser.add_argument("--samples", type=int, default=3)
+    parser.add_argument(
+        "--diagnostic-microbatches",
+        type=int,
+        help=(
+            "Run only this many replay microbatches through matched CE while retaining the full logical-batch "
+            "loss denominator. Diagnostic runs are never headline eligible."
+        ),
+    )
     parser.add_argument("--profile-dir", type=Path)
     parser.add_argument("--profile-s3-prefix")
     return parser.parse_args()
@@ -330,35 +338,70 @@ def _tree_add(left, right):
 
 
 @jax.jit
-def _tree_finite_summary(tree) -> tuple[jax.Array, jax.Array]:
-    leaves = [
-        value
-        for value in jax.tree.leaves(tree, is_leaf=lambda value: value is None)
-        if value is not None and eqx.is_inexact_array(value)
-    ]
+def _tree_finite_details(leaves: tuple[jax.Array, ...]) -> tuple[jax.Array, jax.Array, jax.Array]:
     finite = jnp.stack([jnp.all(jnp.isfinite(value)) for value in leaves])
+    nonfinite_counts = jnp.stack([jnp.sum(jnp.logical_not(jnp.isfinite(value)), dtype=jnp.int64) for value in leaves])
     finite_maxima = jnp.stack(
-        [jnp.max(jnp.where(jnp.isfinite(value), jnp.abs(value.astype(jnp.float32)), 0.0)) for value in leaves]
+        [
+            jnp.max(jnp.where(jnp.isfinite(value), jnp.abs(value.astype(jnp.float32)), 0.0))
+            if value.size
+            else jnp.array(0.0, dtype=jnp.float32)
+            for value in leaves
+        ]
     )
-    return jnp.sum(jnp.logical_not(finite)), jnp.max(finite_maxima)
+    return finite, nonfinite_counts, finite_maxima
 
 
-def tree_finite_evidence(tree) -> dict[str, int | float]:
-    leaves = [
-        value
-        for value in jax.tree.leaves(tree, is_leaf=lambda value: value is None)
+def tree_finite_evidence(tree) -> dict[str, Any]:
+    path_leaves, _ = jax.tree_util.tree_flatten_with_path(tree, is_leaf=lambda value: value is None)
+    selected = [
+        (jax.tree_util.keystr(path), value)
+        for path, value in path_leaves
         if value is not None and eqx.is_inexact_array(value)
     ]
-    nonfinite_arrays, max_finite_abs = _tree_finite_summary(tree)
+    if not selected:
+        return {
+            "checked_arrays": 0,
+            "checked_elements": 0,
+            "nonfinite_arrays": 0,
+            "nonfinite_elements": 0,
+            "max_finite_abs": 0.0,
+            "leaves": [],
+        }
+
+    paths, leaves = zip(*selected, strict=True)
+    # Several stacked Grug parameter leaves contain more than 2**31 elements.
+    # Keep the wider integer scope local to this post-timing evidence pass.
+    with jax.enable_x64():
+        finite, nonfinite_counts, finite_maxima = _tree_finite_details(leaves)
+    finite = np.asarray(finite)
+    nonfinite_counts = np.asarray(nonfinite_counts)
+    finite_maxima = np.asarray(finite_maxima)
+    leaf_evidence = [
+        {
+            "path": path,
+            "shape": list(value.shape),
+            "dtype": str(value.dtype),
+            "elements": int(value.size),
+            "finite": bool(is_finite),
+            "nonfinite_elements": int(nonfinite_count),
+            "max_finite_abs": float(maximum),
+        }
+        for path, value, is_finite, nonfinite_count, maximum in zip(
+            paths, leaves, finite, nonfinite_counts, finite_maxima, strict=True
+        )
+    ]
     return {
         "checked_arrays": len(leaves),
         "checked_elements": sum(int(value.size) for value in leaves),
-        "nonfinite_arrays": int(nonfinite_arrays),
-        "max_finite_abs": float(max_finite_abs),
+        "nonfinite_arrays": int(np.count_nonzero(np.logical_not(finite))),
+        "nonfinite_elements": sum(int(value) for value in nonfinite_counts),
+        "max_finite_abs": float(np.max(finite_maxima)),
+        "leaves": leaf_evidence,
     }
 
 
-def validate_output(objective: str, output) -> tuple[dict[str, float | int], dict[str, int | float]]:
+def validate_output(objective: str, output) -> tuple[dict[str, float | int], dict[str, Any]]:
     if objective == "matched_ce":
         loss, grads = output
         values: dict[str, float | int] = {"loss": float(loss)}
@@ -666,7 +709,16 @@ def run_sample(
     return elapsed, output, memory
 
 
-def _config_evidence(model_config, mesh) -> dict[str, Any]:
+def _config_evidence(
+    model_config,
+    mesh,
+    *,
+    objective: str,
+    executed_microbatches: int,
+    global_microbatch_size: int,
+    global_loss_tokens: int,
+    diagnostic_microbatches: int | None,
+) -> dict[str, Any]:
     return {
         "mixed_precision": MP_POLICY,
         "attention_implementation": model_config.attention_implementation,
@@ -677,10 +729,18 @@ def _config_evidence(model_config, mesh) -> dict[str, Any]:
         "array_stacked_blocks": model_config.use_array_stacked_blocks,
         "mesh_shape": dict(mesh.shape),
         "mesh_axis_names": list(mesh.axis_names),
-        "repacking": "128 global microbatches x 32 sequences; one sequence per H100; one optimizer boundary",
+        "repacking": (
+            f"{executed_microbatches} executed global microbatches x {global_microbatch_size} sequences; "
+            "one sequence per H100; one gradient boundary"
+        ),
+        "global_loss_tokens_denominator": global_loss_tokens,
+        "diagnostic_microbatches": diagnostic_microbatches,
         "qb_beta_repacking": (
-            "pending step-630 QB beta is applied exactly before the update; the next-step beta is the arithmetic "
-            "mean of the 128 per-microbatch native QB betas because the full token-by-expert statistic does not fit"
+            "pending step-630 QB beta is applied exactly; matched CE does not compute a next-step beta"
+            if objective == "matched_ce"
+            else "pending step-630 QB beta is applied exactly before the update; the next-step beta is the "
+            f"arithmetic mean of the {executed_microbatches} per-microbatch native QB betas because the full "
+            "token-by-expert statistic does not fit"
         ),
     }
 
@@ -689,6 +749,11 @@ def main() -> None:
     args = parse_args()
     if args.samples <= 0:
         raise ValueError("--samples must be positive")
+    if args.diagnostic_microbatches is not None:
+        if args.diagnostic_microbatches <= 0:
+            raise ValueError("--diagnostic-microbatches must be positive")
+        if args.objective != "matched_ce" or args.mode != "headline":
+            raise ValueError("--diagnostic-microbatches is restricted to matched_ce headline diagnostics")
     if (args.profile_dir is None) != (args.profile_s3_prefix is None):
         raise ValueError("--profile-dir and --profile-s3-prefix must be supplied together")
     expected_world = 8 if args.mode == "preflight" else 32
@@ -738,6 +803,23 @@ def main() -> None:
         replay = make_global_replay(mesh, local_replay, counts)
         jax.block_until_ready(replay)
         del local_replay
+        executed_counts = counts
+        if args.diagnostic_microbatches is not None:
+            if args.diagnostic_microbatches > replay.tokens.shape[0]:
+                raise ValueError(
+                    f"--diagnostic-microbatches={args.diagnostic_microbatches} exceeds "
+                    f"the {replay.tokens.shape[0]} replay microbatches"
+                )
+            replay = jax.tree.map(lambda value: value[: args.diagnostic_microbatches], replay)
+            executed_counts = {
+                "logical_sequences": int(replay.tokens.shape[0] * replay.tokens.shape[1]),
+                "allocated_tokens": int(replay.tokens.size),
+                "nonpadding_tokens": int(jnp.sum(replay.segment_ids >= 0)),
+                "loss_tokens": int(jnp.sum(replay.loss_weight != 0)),
+                "microbatches": int(replay.tokens.shape[0]),
+                "global_microbatch_size": int(replay.tokens.shape[1]),
+                "sequence_length": int(replay.tokens.shape[2]),
+            }
 
         optimizer = _optimizer.build(400_000)
 
@@ -884,7 +966,16 @@ def main() -> None:
             "manifest_batch_metadata": manifest["batch_metadata"],
             "world_size": expected_world,
             "counts": counts,
-            "config": _config_evidence(model_config, mesh),
+            "executed_counts": executed_counts,
+            "config": _config_evidence(
+                model_config,
+                mesh,
+                objective=args.objective,
+                executed_microbatches=int(replay.tokens.shape[0]),
+                global_microbatch_size=int(replay.tokens.shape[1]),
+                global_loss_tokens=counts["loss_tokens"],
+                diagnostic_microbatches=args.diagnostic_microbatches,
+            ),
             "checkpoint_start_fingerprint": start_fingerprint,
             "restored_start_fingerprints": restored_fingerprints,
             "compile_seconds_excluded": compile_seconds,
@@ -899,16 +990,16 @@ def main() -> None:
             "wall_max_seconds": max(wall_samples),
             "wall_spread_seconds": max(wall_samples) - min(wall_samples),
             "gpu_seconds_per_logical_sequence": (
-                float(np.median(wall_samples)) * expected_world / counts["logical_sequences"]
+                float(np.median(wall_samples)) * expected_world / executed_counts["logical_sequences"]
             ),
-            "logical_sequences_per_second": counts["logical_sequences"] / float(np.median(wall_samples)),
-            "allocated_tokens_per_second": counts["allocated_tokens"] / float(np.median(wall_samples)),
-            "nonpadding_tokens_per_second": counts["nonpadding_tokens"] / float(np.median(wall_samples)),
+            "logical_sequences_per_second": executed_counts["logical_sequences"] / float(np.median(wall_samples)),
+            "allocated_tokens_per_second": executed_counts["allocated_tokens"] / float(np.median(wall_samples)),
+            "nonpadding_tokens_per_second": executed_counts["nonpadding_tokens"] / float(np.median(wall_samples)),
             "allocated_tokens_per_second_per_gpu": (
-                counts["allocated_tokens"] / float(np.median(wall_samples)) / expected_world
+                executed_counts["allocated_tokens"] / float(np.median(wall_samples)) / expected_world
             ),
             "nonpadding_tokens_per_second_per_gpu": (
-                counts["nonpadding_tokens"] / float(np.median(wall_samples)) / expected_world
+                executed_counts["nonpadding_tokens"] / float(np.median(wall_samples)) / expected_world
             ),
             "peak_hbm_used_mib": peak_hbm,
             "per_process_samples": gathered_samples,
@@ -923,7 +1014,12 @@ def main() -> None:
                 "CE, backward, ring-EP/FSDP collectives, and gradient accumulation; excludes optimizer"
             ),
         }
-        if args.profile_dir is not None:
+        if args.diagnostic_microbatches is not None:
+            result["headline_eligible"] = False
+            result["headline_exclusion_reason"] = (
+                f"diagnostic run executed {args.diagnostic_microbatches} of {counts['microbatches']} replay microbatches"
+            )
+        elif args.profile_dir is not None:
             result["headline_eligible"] = False
             result["headline_exclusion_reason"] = "profiler was active in timed sample zero"
         else:

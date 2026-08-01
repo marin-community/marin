@@ -1,9 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import jax.numpy as jnp
 import numpy as np
 
 from scripts.perf.grug_fixed_replay import build_loss_weight, repacked_operational_micro_loss
+from scripts.perf.grug_levanter_fixed_replay_benchmark import tree_finite_evidence
 
 
 def test_build_loss_weight_matches_skyrl_action_logprob_slice():
@@ -43,3 +45,39 @@ def test_repacked_operational_loss_uses_token_sum_and_router_mean():
     )
 
     assert result == 5.0
+
+
+def test_tree_finite_evidence_preserves_paths_and_nonfinite_counts():
+    tree = {
+        "finite": jnp.asarray([1.0, -3.0], dtype=jnp.float32),
+        "nested": {"bad": jnp.asarray([jnp.nan, jnp.inf, 2.0], dtype=jnp.float32)},
+        "ignored": None,
+    }
+
+    evidence = tree_finite_evidence(tree)
+
+    assert evidence["checked_arrays"] == 2
+    assert evidence["checked_elements"] == 5
+    assert evidence["nonfinite_arrays"] == 1
+    assert evidence["nonfinite_elements"] == 2
+    assert evidence["max_finite_abs"] == 3.0
+    assert evidence["leaves"] == [
+        {
+            "path": "['finite']",
+            "shape": [2],
+            "dtype": "float32",
+            "elements": 2,
+            "finite": True,
+            "nonfinite_elements": 0,
+            "max_finite_abs": 3.0,
+        },
+        {
+            "path": "['nested']['bad']",
+            "shape": [3],
+            "dtype": "float32",
+            "elements": 3,
+            "finite": False,
+            "nonfinite_elements": 2,
+            "max_finite_abs": 2.0,
+        },
+    ]
