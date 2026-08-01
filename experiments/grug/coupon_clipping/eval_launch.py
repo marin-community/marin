@@ -96,7 +96,7 @@ def _run_coupon_clipping_eval_local(config: CouponClippingEvalConfig) -> None:
             mesh=mesh,
             allow_partial=False,
         )
-        model = loaded["params"]
+        model = trainer.mp.cast_to_compute(loaded["params"])
 
         evaluator = build_tagged_evaluator(
             data_config=config.data,
