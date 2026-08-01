@@ -147,7 +147,6 @@ class FuzzyVerificationStoreConfig:
     max_actors: int
     actor_resources: ResourceConfig
     actor_config: ActorConfig
-    max_actor_bytes: int
     recovery_timeout: float
     ready_timeout: float
     lookup_batch_size: int
@@ -155,8 +154,6 @@ class FuzzyVerificationStoreConfig:
     def __post_init__(self) -> None:
         if self.max_actors < 1:
             raise ValueError("max_actors must be at least 1")
-        if self.max_actor_bytes < 1:
-            raise ValueError("max_actor_bytes must be at least 1")
         if self.recovery_timeout <= 0:
             raise ValueError("recovery_timeout must be positive")
         if self.ready_timeout <= 0:
@@ -786,7 +783,6 @@ def verify_fuzzy_dups(
             num_actors=min(store_config.max_actors, len(shard_groups)),
             actor_resources=store_config.actor_resources,
             actor_config=store_config.actor_config,
-            max_actor_bytes=store_config.max_actor_bytes,
             recovery_timeout=store_config.recovery_timeout,
             ready_timeout=store_config.ready_timeout,
         )
@@ -825,12 +821,6 @@ def verify_fuzzy_dups(
     output_counters = dict(outcome.counters)
     output_counters[f"{_COUNTER_PREFIX}/memory_store/actors"] = len(store_stats)
     output_counters[f"{_COUNTER_PREFIX}/memory_store/items"] = sum(stat.num_items for stat in store_stats)
-    output_counters[f"{_COUNTER_PREFIX}/memory_store/serialized_bytes"] = sum(
-        stat.serialized_bytes for stat in store_stats
-    )
-    output_counters[f"{_COUNTER_PREFIX}/memory_store/max_actor_serialized_bytes"] = max(
-        stat.serialized_bytes for stat in store_stats
-    )
     output_counters[f"{_COUNTER_PREFIX}/memory_store/load_cpu_time"] = sum(stat.load_cpu_time for stat in store_stats)
     output_counters[f"{_COUNTER_PREFIX}/memory_store/max_actor_load_elapsed"] = max(
         stat.load_elapsed for stat in store_stats

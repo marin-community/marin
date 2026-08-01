@@ -50,7 +50,6 @@ FUZZY_VERIFICATION_STORE_CONFIG = FuzzyVerificationStoreConfig(
     max_actors=32,
     actor_resources=ResourceConfig(cpu=2, ram="8g", disk="8g"),
     actor_config=ActorConfig(max_concurrency=32, max_task_retries=1_000),
-    max_actor_bytes=4_000_000_000,
     recovery_timeout=1_800,
     ready_timeout=1_800,
     lookup_batch_size=128,
