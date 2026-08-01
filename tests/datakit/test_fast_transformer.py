@@ -15,6 +15,7 @@ from itertools import pairwise
 from typing import cast
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
@@ -212,6 +213,18 @@ def test_contrastive_embedding_loss_matches_numpy_reference():
     actual = float(contrastive_embedding_loss(jnp.asarray(student), jnp.asarray(teacher), temperature))
 
     assert actual == pytest.approx(expected, rel=1e-5, abs=1e-6)
+
+
+def test_contrastive_embedding_loss_compiles():
+    student = jnp.eye(4, dtype=jnp.float32)
+    teacher = jnp.asarray(
+        [[1.0, 0.1, 0.0, 0.0], [0.1, 1.0, 0.1, 0.0], [0.0, 0.1, 1.0, 0.1], [0.0, 0.0, 0.1, 1.0]],
+        dtype=jnp.float32,
+    )
+
+    loss = jax.jit(contrastive_embedding_loss, static_argnums=2)(student, teacher, 3.0)
+
+    assert np.isfinite(float(loss))
 
 
 def test_embedding_prediction_padding_preserves_rows_and_values():
