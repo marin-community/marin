@@ -243,7 +243,10 @@ def build_sweep_run(*, version: str | None = None) -> ArtifactStep[HeroThroughpu
             data=data,
             resources=ctx.runtime_arg("train_resources"),
             optimizer=optimizer,
-            trainer=dataclasses.replace(HERO_GRUG_TRAINER, trainer=trainer),
+            # offload_opt_state is a d6144-specific Grace-Blackwell host-offload; disable it for the
+            # small sweep models (their optimizer state trivially fits in HBM, and the pinned-host
+            # arena + cudaFreeAsync path was destabilizing these runs).
+            trainer=dataclasses.replace(HERO_GRUG_TRAINER, trainer=trainer, offload_opt_state=False),
             eval=GrugEvalConfig(
                 eval_batch_size=EVAL_BATCH_SIZE,
                 steps_per_eval=1000,
