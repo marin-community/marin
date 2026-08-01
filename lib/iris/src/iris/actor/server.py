@@ -37,6 +37,8 @@ from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 
 logger = logging.getLogger(__name__)
 
+ACTOR_SERVER_STARTUP_TIMEOUT = Duration.from_seconds(5.0)
+
 # Type aliases
 ActorId = NewType("ActorId", str)
 
@@ -359,10 +361,13 @@ class ActorServer:
 
         ready_or_exited = ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
             lambda: self._server.started or not thread.is_alive,
-            timeout=Duration.from_seconds(5.0),
+            timeout=ACTOR_SERVER_STARTUP_TIMEOUT,
         )
         if not ready_or_exited:
-            raise TimeoutError(f"Actor server did not start on {self._host}:{self._actual_port} within 5 seconds")
+            raise TimeoutError(
+                f"Actor server did not start on {self._host}:{self._actual_port} within "
+                f"{ACTOR_SERVER_STARTUP_TIMEOUT.to_seconds():g} seconds"
+            )
         if not self._server.started:
             raise RuntimeError(f"Actor server exited before listening on {self._host}:{self._actual_port}")
 
