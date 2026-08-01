@@ -9,20 +9,20 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from rigging import telemetry
 from rigging.probe_types import (
     MAX_FIELD_BYTES,
     MAX_RESULT_EVENTS,
     MAX_RESULT_METRICS,
     MAX_SUBPROCESS_OUTPUT_BYTES,
-    CommandResult,
     CommandRunner,
-    CommandStatus,
     MetricKind,
     ProbeCollection,
     ProbeEvent,
     ProbeMetric,
     ProbeOutcome,
     ProbeReason,
+    command_failure_collection,
 )
 
 _MAX_JSON_NODES = 20_000
@@ -31,20 +31,22 @@ _MAX_COMMUNICATORS = 256
 _MAX_OPERATIONS_PER_COMMUNICATOR = 64
 _MAX_TEXT_LINES = 4_096
 _MAX_TEXT_LINE_BYTES = 1_024
-_HEALTHY_STATES = {"active", "complete", "healthy", "operational", "ready", "running"}
-_NO_ASYNC_ERROR = {"", "0", "ncclsuccess", "none", "success"}
-_LEGACY_OPERATIONS = {
-    "AllGather",
-    "AllReduce",
-    "AllToAll",
-    "Broadcast",
-    "Gather",
-    "Recv",
-    "Reduce",
-    "ReduceScatter",
-    "Scatter",
-    "Send",
-}
+_HEALTHY_STATES = frozenset({"active", "complete", "healthy", "operational", "ready", "running"})
+_NO_ASYNC_ERROR = frozenset({"", "0", "ncclsuccess", "none", "success"})
+_LEGACY_OPERATIONS = frozenset(
+    {
+        "AllGather",
+        "AllReduce",
+        "AllToAll",
+        "Broadcast",
+        "Gather",
+        "Recv",
+        "Reduce",
+        "ReduceScatter",
+        "Scatter",
+        "Send",
+    }
+)
 _VERSION_PATTERN = re.compile(r"NCCL RAS\s*\(v(?P<version>[^)]+)\)", re.IGNORECASE)
 _RUNTIME_VERSION_PATTERN = re.compile(r"CUDA runtime version\s*:\s*(?P<version>\S+)", re.IGNORECASE)
 _DRIVER_VERSION_PATTERN = re.compile(r"CUDA driver version\s*:\s*(?P<version>\S+)", re.IGNORECASE)
@@ -72,12 +74,19 @@ class NcclRasProbe:
             timeout=self.timeout,
             max_output_bytes=MAX_SUBPROCESS_OUTPUT_BYTES,
         )
-        terminal = _terminal_collection(json_result)
+        timeout_metric = ProbeMetric(
+            "ras_query_timeouts",
+            MetricKind.COUNTER,
+            1.0,
+            unit="{timeout}",
+            attributes={"source_kind": "nccl_ras"},
+        )
+        terminal = command_failure_collection(json_result.status, timeout_metrics=(timeout_metric,))
         if terminal is not None:
             return terminal
 
         if json_result.returncode == 0:
-            collection = _parse_json_or_text(json_result.stdout)
+            collection = _collection_from_json_or_text(json_result.stdout)
             if collection is not None:
                 return collection
 
@@ -86,7 +95,7 @@ class NcclRasProbe:
             timeout=self.timeout,
             max_output_bytes=MAX_SUBPROCESS_OUTPUT_BYTES,
         )
-        terminal = _terminal_collection(text_result)
+        terminal = command_failure_collection(text_result.status, timeout_metrics=(timeout_metric,))
         if terminal is not None:
             return terminal
         if text_result.returncode != 0:
@@ -117,23 +126,7 @@ class _RasSummary:
     communicators: list[_CommunicatorSummary] = field(default_factory=list)
 
 
-def _terminal_collection(result: CommandResult) -> ProbeCollection | None:
-    if result.status is CommandStatus.NOT_FOUND:
-        return ProbeCollection(ProbeOutcome.UNAVAILABLE, ProbeReason.TOOL_MISSING)
-    if result.status is CommandStatus.TIMED_OUT:
-        return ProbeCollection(
-            ProbeOutcome.TIMED_OUT,
-            ProbeReason.SUBPROCESS_TIMEOUT,
-            metrics=(ProbeMetric("ras_query_timeouts", MetricKind.COUNTER, 1.0, unit="{timeout}"),),
-        )
-    if result.status is CommandStatus.OUTPUT_LIMIT:
-        return ProbeCollection(ProbeOutcome.FAILED, ProbeReason.OUTPUT_LIMIT)
-    if result.status is CommandStatus.FAILED:
-        return ProbeCollection(ProbeOutcome.FAILED, ProbeReason.INTERNAL_ERROR)
-    return None
-
-
-def _parse_json_or_text(output: bytes) -> ProbeCollection | None:
+def _collection_from_json_or_text(output: bytes) -> ProbeCollection | None:
     try:
         payload = json.loads(output)
         return _summary_collection(_parse_json(payload))
@@ -238,6 +231,7 @@ def _operation_counts(value: Any) -> dict[str, int]:
 
 
 def _parse_text(output: bytes) -> _RasSummary:
+    """Parse pre-2.28.7 output; remove after older deployed NCCL versions retire."""
     text = output.decode("utf-8")
     lines = text.splitlines()
     if len(lines) > _MAX_TEXT_LINES or any(len(line.encode()) > _MAX_TEXT_LINE_BYTES for line in lines):
@@ -375,8 +369,7 @@ def _summary_collection(summary: _RasSummary) -> ProbeCollection:
                     attributes={
                         **identity,
                         "collective": operation,
-                        "source_kind": "nccl_ras",
-                        "source_temporality": "cumulative_snapshot",
+                        **telemetry.snapshot_attributes("nccl_ras", telemetry.CUMULATIVE_SNAPSHOT),
                     },
                 )
             )

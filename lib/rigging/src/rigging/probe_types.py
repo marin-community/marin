@@ -44,6 +44,7 @@ class ProbeReason(enum.StrEnum):
     NONZERO_EXIT = "nonzero_exit"
     PARSE_ERROR = "parse_error"
     RESULT_LIMIT = "result_limit"
+    INVALID_RESULT = "invalid_result"
     INTERNAL_ERROR = "internal_error"
     CLEAN_SHUTDOWN = "clean_shutdown"
 
@@ -81,6 +82,27 @@ class CommandRunner(Protocol):
     def run(self, argv: tuple[str, ...], *, timeout: float, max_output_bytes: int) -> CommandResult: ...
 
 
+def command_failure_collection(
+    status: CommandStatus,
+    *,
+    timeout_metrics: tuple["ProbeMetric", ...] = (),
+) -> "ProbeCollection | None":
+    """Return the normalized failure for a non-completed command status."""
+    if status is CommandStatus.NOT_FOUND:
+        return ProbeCollection(ProbeOutcome.UNAVAILABLE, ProbeReason.TOOL_MISSING)
+    if status is CommandStatus.TIMED_OUT:
+        return ProbeCollection(
+            ProbeOutcome.TIMED_OUT,
+            ProbeReason.SUBPROCESS_TIMEOUT,
+            metrics=timeout_metrics,
+        )
+    if status is CommandStatus.OUTPUT_LIMIT:
+        return ProbeCollection(ProbeOutcome.FAILED, ProbeReason.OUTPUT_LIMIT)
+    if status is CommandStatus.FAILED:
+        return ProbeCollection(ProbeOutcome.FAILED, ProbeReason.INTERNAL_ERROR)
+    return None
+
+
 @dataclass(frozen=True)
 class ProbeMetric:
     """One normalized metric emitted by a probe."""
@@ -112,6 +134,7 @@ class ProbeCollection:
     reason: ProbeReason | None = None
     metrics: tuple[ProbeMetric, ...] = ()
     events: tuple[ProbeEvent, ...] = ()
+    error_type: str = ""
 
     @classmethod
     def succeeded(
@@ -134,6 +157,15 @@ class ProbeSample:
     observed_time: float
     metrics: tuple[ProbeMetric, ...] = ()
     events: tuple[ProbeEvent, ...] = ()
+    error_type: str = ""
+
+
+@dataclass(frozen=True)
+class ProbeManagerStatus:
+    """Process-local probe worker and sink state."""
+
+    live_workers: int
+    sink_failures: int
 
 
 class Probe(Protocol):
@@ -161,4 +193,6 @@ class ProbeClock(Protocol):
 
     def time(self) -> float: ...
 
-    def wait(self, event: threading.Event, timeout: float) -> bool: ...
+    def wait(self, event: threading.Event, timeout: float) -> bool:
+        """Return True when the event wakes the wait, or False on timeout."""
+        ...

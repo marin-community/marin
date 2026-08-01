@@ -7,17 +7,18 @@ import csv
 import io
 from dataclasses import dataclass
 
+from rigging import telemetry
 from rigging.probe_types import (
     MAX_RESULT_EVENTS,
     MAX_SUBPROCESS_OUTPUT_BYTES,
     CommandRunner,
-    CommandStatus,
     MetricKind,
     ProbeCollection,
     ProbeEvent,
     ProbeMetric,
     ProbeOutcome,
     ProbeReason,
+    command_failure_collection,
 )
 
 _QUERY_FIELDS = (
@@ -39,7 +40,7 @@ _QUERY_FIELDS = (
     "remapped_rows.pending",
     "remapped_rows.failure",
 )
-_NOT_AVAILABLE = {"", "n/a", "[n/a]", "not supported", "unknown error"}
+_NOT_AVAILABLE = frozenset({"", "n/a", "[n/a]", "not supported", "[not supported]", "unknown error"})
 
 
 @dataclass(frozen=True)
@@ -60,7 +61,7 @@ class NvidiaSmiProbe:
             timeout=self.timeout,
             max_output_bytes=MAX_SUBPROCESS_OUTPUT_BYTES,
         )
-        terminal = _terminal_collection(result.status)
+        terminal = command_failure_collection(result.status)
         if terminal is not None:
             return terminal
         if result.returncode != 0:
@@ -82,18 +83,6 @@ class NvidiaSmiProbe:
             return ProbeCollection.succeeded(metrics=tuple(metrics), events=tuple(events))
         except (UnicodeDecodeError, ValueError):
             return ProbeCollection(ProbeOutcome.FAILED, ProbeReason.PARSE_ERROR)
-
-
-def _terminal_collection(status: CommandStatus) -> ProbeCollection | None:
-    if status is CommandStatus.NOT_FOUND:
-        return ProbeCollection(ProbeOutcome.UNAVAILABLE, ProbeReason.TOOL_MISSING)
-    if status is CommandStatus.TIMED_OUT:
-        return ProbeCollection(ProbeOutcome.TIMED_OUT, ProbeReason.SUBPROCESS_TIMEOUT)
-    if status is CommandStatus.OUTPUT_LIMIT:
-        return ProbeCollection(ProbeOutcome.FAILED, ProbeReason.OUTPUT_LIMIT)
-    if status is CommandStatus.FAILED:
-        return ProbeCollection(ProbeOutcome.FAILED, ProbeReason.INTERNAL_ERROR)
-    return None
 
 
 def _row_result(row: list[str]) -> tuple[list[ProbeMetric], list[ProbeEvent]]:
@@ -118,8 +107,7 @@ def _row_result(row: list[str]) -> tuple[list[ProbeMetric], list[ProbeEvent]]:
     _append_metric(metrics, "gpu_power_limit_watts", values["power.limit"], identity, unit="W")
     cumulative = {
         **identity,
-        "source_kind": "nvidia_smi",
-        "source_temporality": "cumulative_snapshot",
+        **telemetry.snapshot_attributes("nvidia_smi", telemetry.CUMULATIVE_SNAPSHOT),
     }
     health_values = {
         "ecc_uncorrected": _append_metric(
@@ -191,6 +179,7 @@ def _append_metric(
     scale: float = 1.0,
     unit: str = "",
 ) -> float | None:
+    """Append an available numeric metric and return its scaled value."""
     value = _number(raw_value)
     if value is None:
         return None

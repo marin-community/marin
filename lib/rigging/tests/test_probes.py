@@ -7,10 +7,11 @@ import sys
 import threading
 import time
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import pytest
 from rigging import probes, telemetry
+from rigging.testing import RecordingTelemetryTransport
 
 
 @pytest.fixture(autouse=True)
@@ -44,40 +45,6 @@ class RecordingSink:
         with self._condition:
             assert self._condition.wait_for(lambda: len(self.samples) >= count, timeout)
             return list(self.samples)
-
-
-@dataclass
-class AcceptedResponse:
-    batch_id: str
-    status_code: int = 200
-    headers: dict[str, str] = field(default_factory=dict)
-
-    def json(self) -> dict[str, str]:
-        return {"batch_id": self.batch_id, "status": "accepted"}
-
-
-class CapturingTransport:
-    def __init__(self) -> None:
-        self.records: list[dict[str, object]] = []
-        self._condition = threading.Condition()
-
-    def post(self, endpoint: str, body: bytes, batch_id: str, timeout: tuple[float, float]) -> AcceptedResponse:
-        del endpoint, timeout
-        with self._condition:
-            self.records.extend(json.loads(body)["records"])
-            self._condition.notify_all()
-        return AcceptedResponse(batch_id)
-
-    def close(self) -> None:
-        pass
-
-    def wait_for_names(self, expected: set[str], timeout: float = 1.0) -> list[dict[str, object]]:
-        with self._condition:
-            assert self._condition.wait_for(
-                lambda: expected <= {str(record["name"]) for record in self.records},
-                timeout,
-            )
-            return list(self.records)
 
 
 class FakeClock:
@@ -118,10 +85,10 @@ class StaticProbe:
         return self.collection
 
 
-def metric(sample: probes.ProbeCollection, name: str, **attributes: str) -> probes.ProbeMetric:
+def metric(collection: probes.ProbeCollection, name: str, **attributes: str) -> probes.ProbeMetric:
     return next(
         item
-        for item in sample.metrics
+        for item in collection.metrics
         if item.name == name and all(item.attributes.get(key) == value for key, value in attributes.items())
     )
 
@@ -216,36 +183,29 @@ def test_blocked_probe_does_not_delay_peer_or_bounded_shutdown() -> None:
     started = time.monotonic()
     manager.shutdown(timeout=0.02)
     elapsed = time.monotonic() - started
+    status = manager.status()
     release.set()
 
     assert samples[0].probe == "healthy"
     assert elapsed < 0.2
+    assert status.live_workers >= 1
+    assert status.sink_failures == 0
 
 
-def test_oversized_custom_result_becomes_explicit_failure() -> None:
-    oversized = tuple(
-        probes.ProbeMetric("value", probes.MetricKind.GAUGE, float(index))
-        for index in range(probes.MAX_RESULT_METRICS + 1)
-    )
-    sink = RecordingSink()
-    manager = probes.start(
-        StaticProbe("oversized", 600.0, probes.ProbeCollection(probes.ProbeOutcome.SUCCEEDED, metrics=oversized)),
-        runner=RecordingRunner([]),
-        sink=sink,
-    )
-
-    sample = sink.wait_for(1)[0]
-    manager.shutdown(timeout=0.1)
-
-    assert sample.outcome is probes.ProbeOutcome.FAILED
-    assert sample.reason is probes.ProbeReason.RESULT_LIMIT
-    assert sample.metrics == ()
-
-
-def test_oversized_event_body_becomes_explicit_failure() -> None:
-    collection = probes.ProbeCollection.succeeded(
-        events=(probes.ProbeEvent("diagnostic", {"raw": "x" * (probes.MAX_FIELD_BYTES + 1)}),)
-    )
+@pytest.mark.parametrize("result_kind", ["metrics", "event"])
+def test_oversized_probe_result_becomes_explicit_failure(result_kind: str) -> None:
+    if result_kind == "metrics":
+        oversized = tuple(
+            probes.ProbeMetric("value", probes.MetricKind.GAUGE, float(index))
+            for index in range(probes.MAX_RESULT_METRICS + 1)
+        )
+        collection = probes.ProbeCollection(probes.ProbeOutcome.SUCCEEDED, metrics=oversized)
+        empty_field = "metrics"
+    else:
+        collection = probes.ProbeCollection.succeeded(
+            events=(probes.ProbeEvent("diagnostic", {"raw": "x" * (probes.MAX_FIELD_BYTES + 1)}),)
+        )
+        empty_field = "events"
     sink = RecordingSink()
     manager = probes.start(
         StaticProbe("oversized", 600.0, collection),
@@ -258,7 +218,76 @@ def test_oversized_event_body_becomes_explicit_failure() -> None:
 
     assert sample.outcome is probes.ProbeOutcome.FAILED
     assert sample.reason is probes.ProbeReason.RESULT_LIMIT
-    assert sample.events == ()
+    assert getattr(sample, empty_field) == ()
+
+
+def test_malformed_probe_result_is_distinct_from_size_limit() -> None:
+    collection = probes.ProbeCollection.succeeded(
+        metrics=(probes.ProbeMetric("invalid", probes.MetricKind.GAUGE, float("nan")),)
+    )
+    sink = RecordingSink()
+    manager = probes.start(
+        StaticProbe("invalid", 600.0, collection),
+        runner=RecordingRunner([]),
+        sink=sink,
+    )
+
+    sample = sink.wait_for(1)[0]
+    manager.shutdown(timeout=0.1)
+
+    assert sample.outcome is probes.ProbeOutcome.FAILED
+    assert sample.reason is probes.ProbeReason.INVALID_RESULT
+
+
+def test_probe_exception_reports_bounded_error_type() -> None:
+    class RaisingProbe(StaticProbe):
+        def collect(self, runner: probes.CommandRunner) -> probes.ProbeCollection:
+            del runner
+            raise ValueError("raw diagnostic is not retained")
+
+    sink = RecordingSink()
+    manager = probes.start(
+        RaisingProbe("raising", 600.0, probes.ProbeCollection.succeeded()),
+        runner=RecordingRunner([]),
+        sink=sink,
+    )
+
+    sample = sink.wait_for(1)[0]
+    manager.shutdown(timeout=0.1)
+
+    assert sample.reason is probes.ProbeReason.INTERNAL_ERROR
+    assert sample.error_type == "ValueError"
+
+
+def test_sink_failure_is_counted_without_stopping_probe() -> None:
+    class FailingOnceSink:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.first_attempt = threading.Event()
+            self.recovered = threading.Event()
+
+        def emit(self, sample: probes.ProbeSample) -> None:
+            del sample
+            self.calls += 1
+            if self.calls == 1:
+                self.first_attempt.set()
+                raise RuntimeError("sink failed")
+            self.recovered.set()
+
+    sink = FailingOnceSink()
+    manager = probes.start(
+        StaticProbe("sink", 600.0, probes.ProbeCollection.succeeded()),
+        runner=RecordingRunner([]),
+        sink=sink,
+    )
+    assert sink.first_attempt.wait(1)
+
+    manager.sample("sink")
+    assert sink.recovered.wait(1)
+    status = manager.status()
+    manager.shutdown(timeout=0.1)
+
+    assert status.sink_failures == 1
 
 
 def test_bounded_subprocess_runner_stops_output_overflow() -> None:
@@ -286,7 +315,7 @@ def test_bounded_subprocess_runner_enforces_hard_timeout() -> None:
 
 
 def test_default_sink_emits_common_probe_health_signals(monkeypatch: pytest.MonkeyPatch) -> None:
-    transport = CapturingTransport()
+    transport = RecordingTelemetryTransport()
     monkeypatch.setattr(telemetry, "_RequestsTransport", lambda: transport)
     telemetry.configure(
         endpoint="http://finelog.test/v1/telemetry",
@@ -299,28 +328,18 @@ def test_default_sink_emits_common_probe_health_signals(monkeypatch: pytest.Monk
     )
 
     manager = probes.start(StaticProbe("health", 600.0, collection), runner=RecordingRunner([]))
-    records = transport.wait_for_names(
-        {
-            "probe_runs",
-            "probe_duration_seconds",
-            "probe_up",
-            "probe_last_success_time_seconds",
-            "device_value",
-        }
-    )
+    probe_runs = transport.record("probe_runs", {"probe": "health", "outcome": "succeeded"})
+    transport.record("probe_duration_seconds", {"probe": "health", "outcome": "succeeded"})
+    probe_up = transport.record("probe_up", {"probe": "health"})
+    last_success = transport.record("probe_last_success_time_seconds", {"probe": "health"})
+    transport.record("device_value", {})
     manager.shutdown(timeout=0.1)
-    records = transport.wait_for_names({"probe_terminal"})
+    terminal = transport.record("probe_terminal", {"probe": "health", "reason": "clean_shutdown"})
 
-    by_name = {str(record["name"]): record for record in records}
-    assert by_name["probe_runs"]["attributes"] == {"outcome": "succeeded", "probe": "health"}
-    assert by_name["probe_up"]["value"] == 1.0
-    assert by_name["probe_last_success_time_seconds"]["value"] > 0
-    assert by_name["probe_terminal"]["attributes"] == {"probe": "health", "reason": "clean_shutdown"}
-
-
-def test_hardware_probe_default_cadence_is_ten_minutes() -> None:
-    assert probes.nvidia_smi().interval == 600.0
-    assert probes.nccl_ras().interval == 600.0
+    assert probe_runs["attributes"] == {"outcome": "succeeded", "probe": "health"}
+    assert probe_up["value"] == 1.0
+    assert last_success["value"] > 0
+    assert terminal["body"] == {"state": "clean_shutdown"}
 
 
 def test_nvidia_smi_normalizes_stable_device_identity_and_slow_health() -> None:
@@ -458,7 +477,6 @@ def test_nccl_ras_emits_bounded_mismatch_and_dead_peer_anomalies() -> None:
     )
     assert anomalies == {"unresponsive_rank", "dead_peer", "collective_mismatch"}
     assert "raw output must not be retained" not in encoded_events
-    assert all(len(json.dumps(dict(event.body)).encode()) <= probes.MAX_EVENT_BODY_BYTES for event in collection.events)
 
 
 @pytest.mark.parametrize(

@@ -37,12 +37,14 @@ from rigging.probe_types import (
     ProbeClock,
     ProbeCollection,
     ProbeEvent,
+    ProbeManagerStatus,
     ProbeMetric,
     ProbeOutcome,
     ProbeReason,
     ProbeSample,
     ProbeSink,
 )
+from rigging.timing import Deadline
 
 __all__ = [
     "DEFAULT_NCCL_RAS_TIMEOUT",
@@ -64,6 +66,7 @@ __all__ = [
     "ProbeCollection",
     "ProbeEvent",
     "ProbeManager",
+    "ProbeManagerStatus",
     "ProbeMetric",
     "ProbeOutcome",
     "ProbeReason",
@@ -116,19 +119,17 @@ class BoundedSubprocessRunner:
             return CommandResult(CommandStatus.FAILED)
 
         assert process.stdout is not None
-        deadline = time.monotonic() + timeout
+        deadline = Deadline.from_seconds(timeout)
         output = bytearray()
         try:
             with selectors.DefaultSelector() as selector:
                 selector.register(process.stdout, selectors.EVENT_READ)
                 while selector.get_map():
-                    remaining = deadline - time.monotonic()
+                    remaining = deadline.remaining_seconds()
                     if remaining <= 0:
-                        self._terminate(process)
-                        return CommandResult(CommandStatus.TIMED_OUT, bytes(output))
+                        return self._stop_result(process, CommandStatus.TIMED_OUT, output)
                     if not selector.select(remaining):
-                        self._terminate(process)
-                        return CommandResult(CommandStatus.TIMED_OUT, bytes(output))
+                        return self._stop_result(process, CommandStatus.TIMED_OUT, output)
                     chunk = os.read(process.stdout.fileno(), min(65_536, max_output_bytes + 1 - len(output)))
                     if not chunk:
                         selector.unregister(process.stdout)
@@ -136,24 +137,21 @@ class BoundedSubprocessRunner:
                     output.extend(chunk)
                     if len(output) > max_output_bytes:
                         del output[max_output_bytes:]
-                        self._terminate(process)
-                        return CommandResult(CommandStatus.OUTPUT_LIMIT, bytes(output))
+                        return self._stop_result(process, CommandStatus.OUTPUT_LIMIT, output)
         except OSError:
             self._terminate(process)
             return CommandResult(CommandStatus.FAILED, bytes(output))
         finally:
             process.stdout.close()
 
-        remaining = deadline - time.monotonic()
         try:
-            returncode = process.wait(timeout=max(0.0, remaining))
+            returncode = process.wait(timeout=deadline.remaining_seconds())
         except subprocess.TimeoutExpired:
-            self._terminate(process)
-            return CommandResult(CommandStatus.TIMED_OUT, bytes(output))
+            return self._stop_result(process, CommandStatus.TIMED_OUT, output)
         return CommandResult(CommandStatus.COMPLETED, bytes(output), returncode)
 
     @staticmethod
-    def _terminate(process: subprocess.Popen[bytes]) -> None:
+    def _terminate(process: subprocess.Popen[bytes]) -> bool:
         try:
             if os.name == "posix":
                 os.killpg(process.pid, signal.SIGKILL)
@@ -165,11 +163,21 @@ class BoundedSubprocessRunner:
             try:
                 process.kill()
             except OSError:
-                pass
+                return False
         try:
             process.wait(timeout=_PROCESS_REAP_TIMEOUT)
         except subprocess.TimeoutExpired:
-            pass
+            return False
+        return True
+
+    def _stop_result(
+        self,
+        process: subprocess.Popen[bytes],
+        status: CommandStatus,
+        output: bytearray,
+    ) -> CommandResult:
+        final_status = status if self._terminate(process) else CommandStatus.FAILED
+        return CommandResult(final_status, bytes(output))
 
 
 _PROBE_RUNS = telemetry.counter("probe_runs", unit="{run}")
@@ -197,9 +205,12 @@ class TelemetryProbeSink:
         if sample.outcome is ProbeOutcome.SUCCEEDED:
             _PROBE_LAST_SUCCESS.set(sample.observed_time, attributes={"probe": sample.probe})
         elif sample.reason is not None:
+            body = {"state": sample.outcome.value}
+            if sample.error_type:
+                body["error_type"] = sample.error_type
             telemetry.event(
                 "probe_terminal",
-                {"state": sample.outcome.value},
+                body,
                 attributes={"probe": sample.probe, "reason": sample.reason.value},
             )
 
@@ -224,6 +235,7 @@ class _ProbeWorker:
         self._lock = threading.Lock()
         self._sample_requested = False
         self._stopping = False
+        self._sink_failures = 0
         self._thread = threading.Thread(target=self._run, name=f"rigging-probe-{probe.name}", daemon=True)
 
     def start(self) -> None:
@@ -241,6 +253,13 @@ class _ProbeWorker:
 
     def join(self, timeout: float) -> None:
         self._thread.join(timeout)
+
+    def alive(self) -> bool:
+        return self._thread.is_alive()
+
+    def sink_failures(self) -> int:
+        with self._lock:
+            return self._sink_failures
 
     def _run(self) -> None:
         next_due = self.clock.monotonic()
@@ -277,8 +296,12 @@ class _ProbeWorker:
         started = self.clock.monotonic()
         try:
             collection = _bounded_collection(self.probe.collect(self.runner))
-        except Exception:
-            collection = ProbeCollection(ProbeOutcome.FAILED, ProbeReason.INTERNAL_ERROR)
+        except Exception as error:
+            collection = ProbeCollection(
+                ProbeOutcome.FAILED,
+                ProbeReason.INTERNAL_ERROR,
+                error_type=_exception_type(error),
+            )
         duration = max(0.0, self.clock.monotonic() - started)
         self._emit(
             ProbeSample(
@@ -289,6 +312,7 @@ class _ProbeWorker:
                 observed_time=self.clock.time(),
                 metrics=collection.metrics,
                 events=collection.events,
+                error_type=collection.error_type,
             )
         )
 
@@ -296,7 +320,8 @@ class _ProbeWorker:
         try:
             self.sink.emit(sample)
         except Exception:
-            pass
+            with self._lock:
+                self._sink_failures += 1
 
 
 class ProbeManager:
@@ -312,22 +337,32 @@ class ProbeManager:
         self._workers[probe].sample()
 
     def shutdown(self, timeout: float = 2.0) -> None:
-        """Stop all probes within one shared, bounded timeout."""
+        """Request stop and spend at most one shared timeout joining workers.
+
+        A probe blocked beyond the budget remains an isolated daemon thread.
+        """
         with self._shutdown_lock:
             if self._shutdown:
                 return
-            self._shutdown = True
             budget = _shutdown_budget(timeout)
-            deadline = time.monotonic() + budget
+            self._shutdown = True
+            deadline = Deadline.from_seconds(budget)
             for worker in self._workers.values():
                 worker.stop()
             for worker in self._workers.values():
-                worker.join(max(0.0, deadline - time.monotonic()))
+                worker.join(deadline.remaining_seconds())
+
+    def status(self) -> ProbeManagerStatus:
+        """Return process-local worker liveness and sink loss."""
+        return ProbeManagerStatus(
+            live_workers=sum(worker.alive() for worker in self._workers.values()),
+            sink_failures=sum(worker.sink_failures() for worker in self._workers.values()),
+        )
 
     def __enter__(self) -> "ProbeManager":
         return self
 
-    def __exit__(self, *args: object) -> None:
+    def __exit__(self, *_args: object) -> None:
         self.shutdown()
 
 
@@ -345,9 +380,9 @@ def start(
         if not math.isfinite(probe.interval) or probe.interval <= 0:
             raise ValueError("probe intervals must be positive and finite")
 
-    command_runner = runner or BoundedSubprocessRunner()
-    probe_sink = sink or TelemetryProbeSink()
-    probe_clock = clock or SystemProbeClock()
+    command_runner = runner if runner is not None else BoundedSubprocessRunner()
+    probe_sink = sink if sink is not None else TelemetryProbeSink()
+    probe_clock = clock if clock is not None else SystemProbeClock()
     workers = {probe.name: _ProbeWorker(probe, command_runner, probe_sink, probe_clock) for probe in configured_probes}
     manager = ProbeManager(workers)
     for worker in workers.values():
@@ -383,52 +418,75 @@ def _duration_seconds(value: timedelta, field_name: str) -> float:
 def _shutdown_budget(timeout: float) -> float:
     try:
         budget = float(timeout)
-    except (TypeError, ValueError):
-        return 0.0
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("shutdown timeout must be nonnegative and finite") from None
     if not math.isfinite(budget) or budget < 0:
-        return 0.0
+        raise ValueError("shutdown timeout must be nonnegative and finite")
     return min(budget, MAX_SHUTDOWN_TIMEOUT)
+
+
+class _ResultLimitError(ValueError):
+    pass
+
+
+class _InvalidProbeResultError(ValueError):
+    pass
 
 
 def _bounded_collection(collection: ProbeCollection) -> ProbeCollection:
     try:
         if len(collection.metrics) > MAX_RESULT_METRICS or len(collection.events) > MAX_RESULT_EVENTS:
-            raise ValueError("result count limit")
+            raise _ResultLimitError("result count limit")
+        if collection.error_type:
+            _validate_field(collection.error_type)
         for metric in collection.metrics:
             _validate_field(metric.name)
             if metric.unit:
                 _validate_field(metric.unit)
-            if not math.isfinite(float(metric.value)):
-                raise ValueError("metric value")
+            try:
+                numeric = float(metric.value)
+            except (TypeError, ValueError, OverflowError):
+                raise _InvalidProbeResultError("metric value") from None
+            if not math.isfinite(numeric):
+                raise _InvalidProbeResultError("metric value")
             _validate_attributes(metric.attributes)
         for event in collection.events:
             _validate_field(event.name)
             _validate_attributes(event.attributes)
             if len(event.body) > MAX_EVENT_FIELDS:
-                raise ValueError("event field count")
+                raise _ResultLimitError("event field count")
             for key, value in event.body.items():
                 _validate_field(key)
                 if isinstance(value, str):
                     _validate_field(value)
                 elif isinstance(value, float) and not math.isfinite(value):
-                    raise ValueError("event value")
+                    raise _InvalidProbeResultError("event value")
                 elif not isinstance(value, int | bool | float):
-                    raise ValueError("event value")
+                    raise _InvalidProbeResultError("event value")
             if len(json.dumps(dict(event.body), allow_nan=False, separators=(",", ":")).encode()) > MAX_EVENT_BODY_BYTES:
-                raise ValueError("event body bytes")
+                raise _ResultLimitError("event body bytes")
         return collection
-    except Exception:
+    except _ResultLimitError:
         return ProbeCollection(ProbeOutcome.FAILED, ProbeReason.RESULT_LIMIT)
+    except (_InvalidProbeResultError, TypeError, ValueError, OverflowError):
+        return ProbeCollection(ProbeOutcome.FAILED, ProbeReason.INVALID_RESULT)
 
 
 def _validate_attributes(attributes: Mapping[str, str]) -> None:
     if len(attributes) > MAX_ATTRIBUTE_FIELDS:
-        raise ValueError("attribute field count")
+        raise _ResultLimitError("attribute field count")
     for key, value in attributes.items():
         _validate_field(key)
         _validate_field(value)
 
 
 def _validate_field(value: str) -> None:
-    if not isinstance(value, str) or not value or len(value.encode()) > MAX_FIELD_BYTES:
-        raise ValueError("field must be a nonempty bounded string")
+    if not isinstance(value, str) or not value:
+        raise _InvalidProbeResultError("field must be a nonempty string")
+    if len(value.encode()) > MAX_FIELD_BYTES:
+        raise _ResultLimitError("field exceeds byte limit")
+
+
+def _exception_type(error: Exception) -> str:
+    name = type(error).__name__
+    return name if len(name.encode()) <= MAX_FIELD_BYTES else "Exception"
