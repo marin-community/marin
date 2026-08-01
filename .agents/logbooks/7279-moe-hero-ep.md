@@ -16,7 +16,7 @@ author: rav
 
 ## Current TL;DR
 
-The branch starts at PR 7876 head `75d5c27e1`. The MHEP-001 ragged EP64 snapshot is `b0d20062a`. Its local checks pass. The first rack gate is pending.
+The branch starts at PR 7876 head `75d5c27e1`. The MHEP-001 ragged EP64 snapshot is `b0d20062a`. Its local checks pass. Run `mhep-001-ragged-25-20260801-2148` is waiting for A08 admission.
 
 ## Baseline
 
@@ -185,3 +185,15 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - DRI and babysitter: `rav`; `rav/codex` owns the monitor at 120 seconds, then 570 seconds.
 - Stop criteria: Stop on terminal failure, non-finite loss, task retry, OOM, or incomplete step 25.
 - Next action: Commit this contract, submit the coordinator, and monitor it to a terminal state.
+
+### 2026-08-01 22:22 UTC - MHEP-001 submitted and waiting for admission
+
+- Hypothesis: The existing ragged EP64 path can complete 25 steps on one A08 NVL72 rack.
+- Job: `/rav/mhep-001-ragged-25-20260801-2148-coord`.
+- Launch commit: `120ccfbe2`; code snapshot `b0d20062a`; clean tree.
+- Source bundle: Iris workspace bundle, 9.4 MB. The submit output did not report a content ID.
+- Result: The A08 peer accepted the handoff. Coordinator task 0 remains pending before its first attempt, with zero failures and zero preemptions.
+- Capacity evidence: At 22:22 UTC, A08 was reachable and reported 0 of 820 GB200 GPUs free. Interactive work held 84 GPUs and batch work held 736 GPUs.
+- Interpretation: This is a scheduler wait. No setup, compile, training, or GPU cost has started for this run.
+- Decision: Keep the single request queued. Do not duplicate it, change priority, or change the cluster.
+- Next action: Continue the 570-second monitor cadence until admission or a terminal state.
