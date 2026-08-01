@@ -22,6 +22,7 @@ from zephyr.runners import _InProcessWorkerContext
 from zephyr.shard_keys import deterministic_hash
 from zephyr.shuffle import (
     _PAYLOAD_COL,
+    _SHARD_COL,
     _SORT_KEY_COL,
     ScatterReader,
     ScatterWriter,
@@ -101,6 +102,40 @@ def test_scatter_each_shard_gets_correct_items(tmp_path):
         recovered = sorted(_read_shard(shard), key=lambda x: x["v"])
         expected = sorted([x for x in items if _target(x["k"], num_shards) == shard_idx], key=lambda x: x["v"])
         assert recovered == expected, f"shard {shard_idx} mismatch"
+
+
+def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch):
+    path = "s3://marin-us-east-02a/execution/stage0/shard-0000/scatter/c0000.parquet"
+    calls = []
+    frame = pl.DataFrame(
+        {
+            _PAYLOAD_COL: [cloudpickle.dumps({"k": "a"})],
+            _SHARD_COL: [0],
+            _SORT_KEY_COL: [OrderedDict([("key", b"a"), ("sort_value", None)])],
+        }
+    ).lazy()
+
+    def scan_parquet(scan_path, *, storage_options):
+        calls.append((scan_path, storage_options))
+        return frame
+
+    monkeypatch.setenv("AWS_ENDPOINT_URL", "http://cwlota.com")
+    monkeypatch.delenv("AWS_ENDPOINT_URL_S3", raising=False)
+    monkeypatch.setattr(pl, "scan_parquet", scan_parquet)
+
+    reader = ScatterReader(files=[("source", [path])], target_shard=0, avg_item_bytes=1.0)
+    rows = reader.get_frames()[0].collect().to_dicts()
+
+    assert len(rows) == 1
+    assert calls == [
+        (
+            path,
+            {
+                "aws_endpoint_url": "http://marin-us-east-02a.cwlota.com",
+                "aws_virtual_hosted_style_request": "true",
+            },
+        )
+    ]
 
 
 def test_scatter_roundtrip_sorted_chunks(tmp_path):
