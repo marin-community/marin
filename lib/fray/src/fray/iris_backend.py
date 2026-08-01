@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import cloudpickle
+from connectrpc.errors import ConnectError
 from iris.actor.client import ActorClient
 from iris.actor.server import ActorServer
 from iris.client.client import IrisClient as IrisClientLib
@@ -46,12 +47,14 @@ from iris.cluster.types import (
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.hooks.multigpu import build_multigpu_hook
 from iris.rpc import actor_pb2, job_pb2
+from iris.rpc.errors import is_retryable_error
 from rigging.timing import ExponentialBackoff
 
 from fray.actor import (
     ActorContext,
     ActorFuture,
     ActorHandle,
+    ActorUnavailableError,
     HostedActor,
     _reset_current_actor,
     _set_current_actor,
@@ -425,6 +428,15 @@ class _ThreadFuture:
         return self._future.result(timeout=timeout)
 
 
+def _call_actor_method(method: Any, args: tuple, kwargs: dict) -> Any:
+    try:
+        return method(*args, **kwargs)
+    except ConnectError as exc:
+        if is_retryable_error(exc):
+            raise ActorUnavailableError(str(exc)) from exc
+        raise
+
+
 class _IrisActorMethod:
     """Wraps a method on an Iris actor.
 
@@ -445,16 +457,16 @@ class _IrisActorMethod:
     def remote(self, *args: Any, **kwargs: Any) -> ActorFuture:
         client = self._handle._resolve()
         method = getattr(client, self._method)
-        return _ThreadFuture(method, args, kwargs)
+        return _ThreadFuture(_call_actor_method, (method, args, kwargs), {})
 
     def submit(self, *args: Any, **kwargs: Any) -> ActorFuture:
         client = self._handle._resolve()
-        op_id = client.start_operation(self._method, *args, **kwargs)
+        op_id = _call_actor_method(client.start_operation, (self._method, *args), kwargs)
         return OperationFuture(client, op_id)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         client = self._handle._resolve()
-        return getattr(client, self._method)(*args, **kwargs)
+        return _call_actor_method(getattr(client, self._method), args, kwargs)
 
 
 class IrisActorGroup:
