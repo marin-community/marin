@@ -45,12 +45,11 @@ from typing import Any
 import cloudpickle
 import msgspec
 import zstandard as zstd
-from iris.env_resources import TaskResources
 from rigging.filesystem import StoragePath, is_remote_path, url_to_fs
 from rigging.timing import RateLimiter, log_time
 
 from zephyr.shard_keys import composite_sort_key, deterministic_hash
-from zephyr.worker_context import zephyr_worker_ctx
+from zephyr.worker_context import available_task_memory_bytes
 from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
@@ -133,10 +132,7 @@ def _default_scatter_write_buffer_bytes() -> int:
     no per-task budget is set (e.g. in tests or when cost is zero), and to
     256 MB when the cgroup limit cannot be read.
     """
-    task_memory = zephyr_worker_ctx().task_memory_bytes
-    if task_memory > 0:
-        return int(task_memory * _SCATTER_WRITE_BUFFER_FRACTION)
-    memory = TaskResources.from_environment().memory_bytes
+    memory = available_task_memory_bytes()
     if memory > 0:
         return int(memory * _SCATTER_WRITE_BUFFER_FRACTION)
     return _SCATTER_WRITE_BUFFER_BYTES_FALLBACK

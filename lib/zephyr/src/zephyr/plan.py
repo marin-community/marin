@@ -17,7 +17,6 @@ from enum import StrEnum, auto
 from itertools import groupby, islice
 from typing import Any, Protocol
 
-from iris.env_resources import TaskResources as _TaskResources
 from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 
@@ -48,6 +47,7 @@ from zephyr.external_sort import compute_fan_in, compute_write_batch_size, exter
 from zephyr.readers import InputFileSpec, compute_parquet_splits, load_file, load_file_batch
 from zephyr.shard_keys import composite_sort_key
 from zephyr.shuffle import ScatterReader
+from zephyr.worker_context import available_task_memory_bytes
 from zephyr.writers import write_binary_file, write_jsonl_file, write_parquet_file, write_vortex_file
 
 logger = logging.getLogger(__name__)
@@ -679,7 +679,7 @@ def _merge_sorted_chunks(
     memory_limit: int | None = None
     use_external = False
     if external_sort_dir is not None and isinstance(shard, ScatterReader):
-        memory_limit = _TaskResources.from_environment().memory_bytes
+        memory_limit = available_task_memory_bytes()
         use_external = shard.needs_external_sort(memory_limit)
 
     if use_external:

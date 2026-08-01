@@ -26,10 +26,10 @@ import logging
 from collections.abc import Callable, Iterator
 from itertools import islice
 
-from iris.env_resources import TaskResources
 from rigging.filesystem import url_to_fs
 
 from zephyr.spill import SpillReader, SpillWriter
+from zephyr.worker_context import available_task_memory_bytes
 from zephyr.writers import batchify
 
 logger = logging.getLogger(__name__)
@@ -116,7 +116,7 @@ def _safe_read_batch_size(n_runs: int, sample_run_path: str) -> int:
     # larger in memory than their pickled form).
     item_bytes = max(64, item_bytes_raw * 3)
 
-    available = TaskResources.from_environment().memory_bytes
+    available = available_task_memory_bytes()
     budget = int(available * _READ_MEMORY_FRACTION)
     size = budget // max(1, n_runs * item_bytes)
     result = max(100, min(size, _WRITE_BATCH_SIZE))

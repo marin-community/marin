@@ -10,6 +10,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from iris.env_resources import TaskResources
+
 logger = logging.getLogger(__name__)
 
 
@@ -123,6 +125,14 @@ class WorkerContext(Protocol):
 
 
 _worker_ctx_var: ContextVar[WorkerContext | None] = ContextVar("zephyr_worker_ctx", default=None)
+
+
+def available_task_memory_bytes() -> int:
+    """Return the current task's memory budget, or the container limit outside a task."""
+    ctx = _worker_ctx_var.get()
+    if ctx is not None and ctx.task_memory_bytes > 0:
+        return ctx.task_memory_bytes
+    return TaskResources.from_environment().memory_bytes
 
 
 def zephyr_worker_ctx() -> WorkerContext:
