@@ -1,6 +1,6 @@
 # FastTransformer Arctic student report
 
-Status: alternative-teacher audit complete; peer review addressed
+Status: Qwen teacher size ladder complete; peer review addressed
 
 ## Decision
 
@@ -16,13 +16,18 @@ three source groups.
 A 750K source-conditioned geometry loss reduced failures, but every tested
 weight lost too much probe quality. Stop this loss treatment.
 
-Qwen3-Embedding-0.6B is the best tested replacement teacher. It passes all
-quality, finite, and unique gates. It reduces regular-source failures from 60
-for Arctic Medium to 46. It still fails the strict zero-failure concentration
-gate. LFM2.5-Embedding-350M reduces failures to 47, but it fails the
-multilingual quality gate. Before student training, test a 256-dimensional
-Qwen teacher projection on this holdout. This keeps the final embedding size
-and direct alignment objective unchanged.
+Qwen3-Embedding-0.6B at 1,024 dimensions is the best tested replacement
+teacher. It passes all quality, finite, and unique gates. It reduces
+regular-source failures from 60 for Arctic Medium to 46. It still fails the
+strict zero-failure concentration gate.
+
+Native 256-dimensional Qwen does not keep the 1,024-dimensional result. The
+0.6B model has 39 failures and loses 0.04039 overall macro-F1. The 4B model has
+35 failures and gains 0.00674 overall macro-F1 against the 0.6B 256-dimensional
+model. The 4B model still fails the concentration and multilingual quality
+gates. It processed 29.19 documents per second, 3.24 times slower than the 0.6B
+model. The 4B result did not meet the fixed 8B start condition. Thus, the 8B
+test did not run.
 
 ## Controlled inputs
 
@@ -203,6 +208,37 @@ had zero failures and zero preemptions. The exact model revisions are
 `f35ae2c91d687658dbf1f2b449382f0b019b9808` for LFM and
 `97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3` for Qwen.
 
+## Qwen MRL size ladder
+
+The ladder uses native Matryoshka Representation Learning (MRL) inference at
+256 dimensions. The model truncates each window before normalization. It then
+normalizes and pools the three document windows. This method is not equal to a
+slice of the saved 1,024-dimensional document vector.
+
+| Representation | Overall | Code | Multilingual | Standard | Regular failures | Teacher documents/second |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Qwen3-Embedding-0.6B, 1,024d | 0.67664 | 0.80067 | 0.81348 | 0.62159 | 46 | 94.50 |
+| Qwen3-Embedding-0.6B, 256d | 0.63626 | 0.76200 | 0.77463 | 0.58256 | 39 | 94.50 |
+| Qwen3-Embedding-4B, 256d | 0.64300 | 0.75696 | 0.77509 | 0.59347 | 35 | 29.19 |
+
+The 4B model improves overall macro-F1 by 0.00674 against the 0.6B
+256-dimensional model. Standard macro-F1 increases by 0.01091. Code macro-F1
+decreases by 0.00503. Multilingual macro-F1 increases by 0.00046.
+
+The 4B model has ten code failures and 25 standard failures. It has no
+multilingual source failure. Thirty-four sources fail concentration, two fail
+rank, and one fails uniqueness, with overlap. All vectors are finite. Exact
+and four-decimal uniqueness are 0.99976.
+
+Against Luxical-One, the 4B overall delta is +0.02573. Its code delta is
++0.07607, its standard delta is +0.02460, and its multilingual delta is
+-0.02052. The multilingual result misses the permitted loss by 0.00052. The
+4B model also has one failure more than the fixed limit of 34.
+
+The fixed stop rule required all quality gates and at most 34 failures. The 4B
+model fails two gates and has 35 failures. Do not run the 8B model. Model-size
+scaling alone does not remove source concentration at 256 dimensions.
+
 ## Compute and limits
 
 - Preparation of all 3M rows took 7 minutes 12.85 seconds.
@@ -278,5 +314,11 @@ second review loop.
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-lfm2.5-embedding-350m/report.json`.
 - Qwen teacher report:
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-qwen3-embedding-0.6b/report.json`.
+- Qwen 0.6B 256-dimensional report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-qwen3-embedding-0.6b-256/report.json`.
+- Qwen 4B 256-dimensional report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-qwen3-embedding-4b-256/report.json`.
 - Candidate audit jobs: `/rav/lux-teacher-lfm25-350m-h100-001` and
   `/rav/lux-teacher-qwen3-06b-h100-001`.
+- Qwen MRL ladder jobs: `/rav/lux-teacher-qwen3-06b-256-h100-001` and
+  `/rav/lux-teacher-qwen3-4b-256-h100-001`.
