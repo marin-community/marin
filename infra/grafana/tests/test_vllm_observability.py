@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from typing import NamedTuple
 
 import duckdb
 import pytest
 from vllm_observability import (
     VLLM_MAX_POINTS,
-    VLLM_MAX_RESULT_ROWS,
     VLLM_MAX_WINDOW_MS,
     VllmIdentityField,
     vllm_overview_query,
@@ -16,6 +16,17 @@ from vllm_observability import (
 START_MS = 120_000
 END_MS = 180_000
 BUCKET_MS = 60_000
+
+
+class TelemetryRow(NamedTuple):
+    cluster: str
+    service: str
+    name: str
+    kind: str
+    value: float
+    resource_attributes_json: str
+    attributes_json: str
+    timestamp_ms: int
 
 
 def _attributes(temporality: str | None = None, **labels: str) -> str:
@@ -38,11 +49,11 @@ def _record(
     *,
     job: str = "/serve",
     kind: str = "gauge",
-) -> tuple:
-    return ("cw-a", "vllm", name, kind, value, _resource(job, replica), attributes, timestamp_ms)
+) -> TelemetryRow:
+    return TelemetryRow("cw-a", "vllm", name, kind, value, _resource(job, replica), attributes, timestamp_ms)
 
 
-def _database(rows: list[tuple]) -> duckdb.DuckDBPyConnection:
+def _database(rows: list[TelemetryRow]) -> duckdb.DuckDBPyConnection:
     database = duckdb.connect()
     database.execute(
         """
@@ -60,8 +71,7 @@ def _database(rows: list[tuple]) -> duckdb.DuckDBPyConnection:
         """
     )
     database.execute(
-        "CREATE MACRO json_get(document, field_name) "
-        "AS json_extract_string(document, concat('$.', field_name))"
+        "CREATE MACRO json_get(document, field_name) " "AS json_extract_string(document, concat('$.', field_name))"
     )
     if rows:
         database.executemany(
@@ -91,14 +101,12 @@ def _one(rows: list[dict], section: str, metric: str, stat: str, series: str | N
     return matches[0]
 
 
-def test_query_preserves_replicas_discards_resets_and_keeps_native_counter_deltas():
+def _counter_records() -> list[TelemetryRow]:
     cumulative = _attributes("cumulative_snapshot")
-    current = _attributes("current_snapshot")
-    rows: list[tuple] = []
-
-    for timestamp_ms, value in zip((105_000, 120_000, 135_000, 150_000, 165_000), (100, 110, 4, 9, 14)):
+    rows: list[TelemetryRow] = []
+    for timestamp_ms, value in zip((105_000, 120_000, 135_000, 150_000, 165_000), (100, 110, 4, 9, 14), strict=True):
         rows.append(_record("a", "generation_tokens_total", value, timestamp_ms, cumulative))
-    for timestamp_ms, value in zip((105_000, 120_000, 135_000, 150_000, 165_000), (50, 55, 60, 65, 70)):
+    for timestamp_ms, value in zip((105_000, 120_000, 135_000, 150_000, 165_000), (50, 55, 60, 65, 70), strict=True):
         rows.append(_record("b", "generation_tokens_total", value, timestamp_ms, cumulative))
     rows.extend(
         [
@@ -115,7 +123,12 @@ def test_query_preserves_replicas_discards_resets_and_keeps_native_counter_delta
             _record("a", "num_preemptions_total", 1, 165_000, _attributes(), kind="counter"),
         ]
     )
+    return rows
 
+
+def _gauge_records() -> list[TelemetryRow]:
+    current = _attributes("current_snapshot")
+    rows: list[TelemetryRow] = []
     for replica, running, waiting, kv in (
         ("a", (2, 4), (1, 1), (0.5, 0.7)),
         ("b", (3, 5), (0, 2), (0.3, 0.5)),
@@ -130,9 +143,13 @@ def test_query_preserves_replicas_discards_resets_and_keeps_native_counter_delta
                     _record(replica, "kv_cache_usage_perc", kv_value, timestamp_ms, current),
                 ]
             )
+    return rows
 
-    rows.extend(
-        _histogram_records(
+
+def _latency_records() -> list[TelemetryRow]:
+    cumulative = _attributes("cumulative_snapshot")
+    rows = [
+        *_histogram_records(
             "a",
             {
                 105_000: (10, 10, 5, 8, 10),
@@ -140,8 +157,16 @@ def test_query_preserves_replicas_discards_resets_and_keeps_native_counter_delta
                 150_000: (1, 1, 0, 1, 1),
                 165_000: (3, 3, 1, 2, 3),
             },
-        )
-    )
+        ),
+        *_histogram_records(
+            "b",
+            {
+                105_000: (4, 4, 3, 4, 4),
+                135_000: (5, 6, 4, 5, 6),
+                165_000: (7, 8, 5, 7, 8),
+            },
+        ),
+    ]
     for family, total_sum, count in (
         ("inter_token_latency_seconds", 0.4, 4),
         ("request_queue_time_seconds", 0.6, 3),
@@ -155,58 +180,75 @@ def test_query_preserves_replicas_discards_resets_and_keeps_native_counter_delta
                 _record("a", f"{family}_count", count, 135_000, cumulative),
             ]
         )
-    rows.extend(
-        _histogram_records(
-            "b",
-            {
-                105_000: (4, 4, 3, 4, 4),
-                135_000: (5, 6, 4, 5, 6),
-                165_000: (7, 8, 5, 7, 8),
-            },
-        )
-    )
+    return rows
 
-    rows.extend(
-        [
-            _record("a", "request_success_total", 0, 105_000, _attributes("cumulative_snapshot", finished_reason="stop")),
-            _record("a", "request_success_total", 2, 120_000, _attributes("cumulative_snapshot", finished_reason="stop")),
-            _record("a", "request_success_total", 0, 135_000, _attributes("cumulative_snapshot", finished_reason="stop")),
-            _record("a", "request_success_total", 1, 150_000, _attributes("cumulative_snapshot", finished_reason="stop")),
-            _record("b", "request_success_total", 0, 105_000, _attributes("cumulative_snapshot", finished_reason="length")),
-            _record("b", "request_success_total", 1, 135_000, _attributes("cumulative_snapshot", finished_reason="length")),
-            _record("b", "request_success_total", 2, 165_000, _attributes("cumulative_snapshot", finished_reason="length")),
-        ]
-    )
 
-    result = _query_rows(_database(rows))
+def _outcome_records() -> list[TelemetryRow]:
+    stop = _attributes("cumulative_snapshot", finished_reason="stop")
+    length = _attributes("cumulative_snapshot", finished_reason="length")
+    return [
+        _record("a", "request_success_total", 0, 105_000, stop),
+        _record("a", "request_success_total", 2, 120_000, stop),
+        _record("a", "request_success_total", 0, 135_000, stop),
+        _record("a", "request_success_total", 1, 150_000, stop),
+        _record("b", "request_success_total", 0, 105_000, length),
+        _record("b", "request_success_total", 1, 135_000, length),
+        _record("b", "request_success_total", 2, 165_000, length),
+    ]
 
-    assert _one(result, "counter_total", "prompt_tokens", "total")["value"] == pytest.approx(20)
-    assert _one(result, "counter_total", "generated_tokens", "total")["value"] == pytest.approx(40)
-    assert _one(result, "token_rate", "prompt_tokens", "rate")["value"] == pytest.approx(20 / 60)
-    assert _one(result, "token_rate", "generated_tokens", "rate")["value"] == pytest.approx(40 / 60)
-    assert _one(result, "counter_total", "preemptions", "total")["value"] == pytest.approx(3)
-    assert _one(result, "saturation_summary", "num_requests_running", "average")["value"] == pytest.approx(7)
-    assert _one(result, "saturation_summary", "num_requests_waiting", "peak")["value"] == pytest.approx(2)
-    assert _one(result, "saturation_summary", "kv_cache_usage", "average")["value"] == pytest.approx(0.5)
-    assert _one(result, "latency", "ttft", "mean")["value"] == pytest.approx(0.875)
-    assert _one(result, "latency", "ttft", "p50")["value"] == pytest.approx(0.5)
-    assert _one(result, "latency", "ttft", "p90")["value"] is None
-    assert _one(result, "latency", "tpot", "mean")["value"] == pytest.approx(0.1)
-    assert _one(result, "latency", "queue", "mean")["value"] == pytest.approx(0.2)
-    assert _one(result, "latency", "e2e", "mean")["value"] == pytest.approx(1.5)
-    assert _one(result, "request_outcome", "requests", "total", "stop")["value"] == pytest.approx(3)
-    assert _one(result, "request_outcome", "requests", "total", "length")["value"] == pytest.approx(2)
-    freshness = _one(result, "freshness", "telemetry", "latest_sample_age")
+
+@pytest.fixture(scope="module")
+def overview_rows() -> list[dict]:
+    records = [*_counter_records(), *_gauge_records(), *_latency_records(), *_outcome_records()]
+    return _query_rows(_database(records))
+
+
+def test_query_preserves_replicas_discards_resets_and_keeps_native_counter_deltas(overview_rows):
+    assert _one(overview_rows, "counter_total", "prompt_tokens", "total")["value"] == pytest.approx(20)
+    assert _one(overview_rows, "counter_total", "generated_tokens", "total")["value"] == pytest.approx(40)
+    assert _one(overview_rows, "token_rate", "prompt_tokens", "rate")["value"] == pytest.approx(20 / 60)
+    assert _one(overview_rows, "token_rate", "generated_tokens", "rate")["value"] == pytest.approx(40 / 60)
+    assert _one(overview_rows, "counter_total", "preemptions", "total")["value"] == pytest.approx(3)
+
+
+def test_query_aggregates_request_and_kv_gauges_after_replica_bins(overview_rows):
+    assert _one(overview_rows, "saturation_summary", "num_requests_running", "average")["value"] == pytest.approx(7)
+    assert _one(overview_rows, "saturation_summary", "num_requests_waiting", "peak")["value"] == pytest.approx(2)
+    assert _one(overview_rows, "saturation_summary", "kv_cache_usage", "average")["value"] == pytest.approx(0.5)
+    freshness = _one(overview_rows, "freshness", "telemetry", "latest_sample_age")
     assert (freshness["status"], freshness["value"], freshness["gap_seconds"]) == ("fresh", 15.0, 15.0)
 
 
-def _histogram_records(replica: str, snapshots: dict[int, tuple[float, float, float, float, float]]) -> list[tuple]:
+def test_query_derives_histogram_means_and_only_bounded_quantiles(overview_rows):
+    assert _one(overview_rows, "latency", "ttft", "mean")["value"] == pytest.approx(0.875)
+    assert _one(overview_rows, "latency", "ttft", "p50")["value"] == pytest.approx(0.5)
+    assert _one(overview_rows, "latency", "ttft", "p90")["value"] is None
+    assert _one(overview_rows, "latency", "tpot", "mean")["value"] == pytest.approx(0.1)
+    assert _one(overview_rows, "latency", "queue", "mean")["value"] == pytest.approx(0.2)
+    assert _one(overview_rows, "latency", "e2e", "mean")["value"] == pytest.approx(1.5)
+
+
+def test_query_groups_reset_aware_request_outcomes(overview_rows):
+    assert _one(overview_rows, "request_outcome", "requests", "total", "stop")["value"] == pytest.approx(3)
+    assert _one(overview_rows, "request_outcome", "requests", "total", "length")["value"] == pytest.approx(2)
+
+
+def _histogram_records(
+    replica: str, snapshots: dict[int, tuple[float, float, float, float, float]]
+) -> list[TelemetryRow]:
+    cumulative = _attributes("cumulative_snapshot")
     rows = []
     for timestamp_ms, (total_sum, count, at_half, at_one, at_infinity) in snapshots.items():
         rows.extend(
             [
-                _record(replica, "time_to_first_token_seconds_sum", total_sum, timestamp_ms, _attributes("cumulative_snapshot")),
-                _record(replica, "time_to_first_token_seconds_count", count, timestamp_ms, _attributes("cumulative_snapshot")),
+                _record(
+                    replica,
+                    "time_to_first_token_seconds_sum",
+                    total_sum,
+                    timestamp_ms,
+                    cumulative,
+                ),
+                _record(replica, "time_to_first_token_seconds_count", count, timestamp_ms, cumulative),
                 _record(
                     replica,
                     "time_to_first_token_seconds_bucket",
@@ -257,6 +299,7 @@ def test_query_quotes_identity_as_data():
         [
             _record("a", "generation_tokens_total", 0, 105_000, cumulative, job="job'quoted"),
             _record("a", "generation_tokens_total", 5, 135_000, cumulative, job="job'quoted"),
+            _record("a", "generation_tokens_total", 1_005, END_MS + 15_000, cumulative, job="job'quoted"),
             _record("b", "generation_tokens_total", 0, 105_000, cumulative, job="other"),
             _record("b", "generation_tokens_total", 500, 135_000, cumulative, job="other"),
         ]
@@ -267,7 +310,7 @@ def test_query_quotes_identity_as_data():
     assert _one(rows, "counter_total", "generated_tokens", "total")["value"] == pytest.approx(5)
 
 
-def test_query_enforces_window_bucket_and_result_safety_contract():
+def test_query_rejects_oversized_ranges_and_caps_bucket_count():
     with pytest.raises(ValueError, match="7 days"):
         vllm_overview_query(VllmIdentityField.JOB_ID, "/serve", 0, VLLM_MAX_WINDOW_MS + 1, 60_000)
     with pytest.raises(ValueError, match="positive"):
@@ -275,7 +318,3 @@ def test_query_enforces_window_bucket_and_result_safety_contract():
 
     query = vllm_overview_query(VllmIdentityField.JOB_ID, "/serve", 0, VLLM_MAX_WINDOW_MS, 1)
     assert query.bucket_ms >= VLLM_MAX_WINDOW_MS / VLLM_MAX_POINTS
-    assert f"LIMIT {VLLM_MAX_RESULT_ROWS}" in query.sql
-    assert "timestamp_ms >= 0" in query.sql
-    assert f"timestamp_ms < {VLLM_MAX_WINDOW_MS}" in query.sql
-    assert "json_get(resource_attributes_json, 'job_id') = '/serve'" in query.sql

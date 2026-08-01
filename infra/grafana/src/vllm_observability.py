@@ -62,16 +62,16 @@ _GAUGES = (
     "kv_cache_usage_perc",
     "gpu_cache_usage_perc",
 )
-_HISTOGRAM_FAMILIES = {
-    "time_to_first_token_seconds": "ttft",
-    "inter_token_latency_seconds": "tpot",
-    "time_per_output_token_seconds": "tpot",
-    "request_queue_time_seconds": "queue",
-    "e2e_request_latency_seconds": "e2e",
-}
+_HISTOGRAM_FAMILIES = (
+    ("time_to_first_token_seconds", "ttft"),
+    ("inter_token_latency_seconds", "tpot"),
+    ("time_per_output_token_seconds", "tpot"),
+    ("request_queue_time_seconds", "queue"),
+    ("e2e_request_latency_seconds", "e2e"),
+)
 _HISTOGRAM_COMPONENTS = ("bucket", "count", "sum")
 _HISTOGRAM_NAMES = tuple(
-    f"{family}_{component}" for family in _HISTOGRAM_FAMILIES for component in _HISTOGRAM_COMPONENTS
+    f"{family}_{component}" for family, _ in _HISTOGRAM_FAMILIES for component in _HISTOGRAM_COMPONENTS
 )
 _METRIC_NAMES = (*_TOKEN_COUNTERS, *_PREEMPTION_COUNTERS, *_OUTCOME_COUNTERS, *_GAUGES, *_HISTOGRAM_NAMES)
 
@@ -84,25 +84,23 @@ def _sql_values(values: tuple[str, ...]) -> str:
     return ", ".join(_sql_string(value) for value in values)
 
 
-def _case_for(mapping: dict[str, str], expression: str) -> str:
-    cases = " ".join(f"WHEN {_sql_string(source)} THEN {_sql_string(target)}" for source, target in mapping.items())
+def _case_for(mapping: tuple[tuple[str, str], ...], expression: str) -> str:
+    cases = " ".join(f"WHEN {_sql_string(source)} THEN {_sql_string(target)}" for source, target in mapping)
     return f"CASE {expression} {cases} END"
 
 
-def _histogram_name_mapping() -> dict[str, str]:
-    return {
-        f"{family}_{component}": canonical
-        for family, canonical in _HISTOGRAM_FAMILIES.items()
+def _histogram_name_mapping() -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (f"{family}_{component}", canonical)
+        for family, canonical in _HISTOGRAM_FAMILIES
         for component in _HISTOGRAM_COMPONENTS
-    }
+    )
 
 
-def _histogram_component_mapping() -> dict[str, str]:
-    return {
-        f"{family}_{component}": component
-        for family in _HISTOGRAM_FAMILIES
-        for component in _HISTOGRAM_COMPONENTS
-    }
+def _histogram_component_mapping() -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (f"{family}_{component}", component) for family, _ in _HISTOGRAM_FAMILIES for component in _HISTOGRAM_COMPONENTS
+    )
 
 
 def _validate_identity(identity: str) -> None:
@@ -308,6 +306,14 @@ WITH base AS (
     SELECT means.family, means.mean, quantiles.p50, quantiles.p90, quantiles.p99
     FROM histogram_means AS means
     LEFT JOIN histogram_quantiles AS quantiles USING (family)
+), histogram_evidence AS (
+    SELECT family, 'mean' AS stat, mean AS value FROM histogram_stats
+    UNION ALL
+    SELECT family, 'p50', p50 FROM histogram_stats
+    UNION ALL
+    SELECT family, 'p90', p90 FROM histogram_stats
+    UNION ALL
+    SELECT family, 'p99', p99 FROM histogram_stats
 ), outcome_totals AS (
     SELECT COALESCE(
                json_get(attributes_json, 'finished_reason'),
@@ -425,32 +431,14 @@ WITH base AS (
     SELECT CAST(NULL AS BIGINT),
            'latency',
            family,
-           'mean',
+           stat,
            family,
-           mean,
+           value,
            's',
            CAST(NULL AS VARCHAR),
            CAST(NULL AS BIGINT),
            CAST(NULL AS DOUBLE)
-    FROM histogram_stats
-
-    UNION ALL
-
-    SELECT CAST(NULL AS BIGINT), 'latency', family, 'p50', family, p50, 's',
-           CAST(NULL AS VARCHAR), CAST(NULL AS BIGINT), CAST(NULL AS DOUBLE)
-    FROM histogram_stats
-
-    UNION ALL
-
-    SELECT CAST(NULL AS BIGINT), 'latency', family, 'p90', family, p90, 's',
-           CAST(NULL AS VARCHAR), CAST(NULL AS BIGINT), CAST(NULL AS DOUBLE)
-    FROM histogram_stats
-
-    UNION ALL
-
-    SELECT CAST(NULL AS BIGINT), 'latency', family, 'p99', family, p99, 's',
-           CAST(NULL AS VARCHAR), CAST(NULL AS BIGINT), CAST(NULL AS DOUBLE)
-    FROM histogram_stats
+    FROM histogram_evidence
 
     UNION ALL
 
@@ -484,7 +472,7 @@ WITH base AS (
                WHEN gap_seconds * 1000 > {VLLM_FRESHNESS_THRESHOLD_MS} THEN 'export_or_scrape_gap'
                ELSE 'fresh'
            END,
-           samples,
+           CAST(samples AS BIGINT),
            gap_seconds
     FROM freshness
 )

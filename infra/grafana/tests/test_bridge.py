@@ -27,6 +27,7 @@ from zephyr_stalls import zephyr_progress_query, zephyr_stall_alert_rows
 # 2026-07-17T03:00:00Z and +1h, as Grafana sends them.
 FROM_MS = 1_784_257_200_000
 TO_MS = FROM_MS + 3_600_000
+VLLM_BUCKET_MS = 60_000
 MARIN = ClusterTarget(
     name="marin", project="p", zone="z", instance_filter="name = finelog-marin", controller_filter="labels.x=true"
 )
@@ -145,7 +146,7 @@ def test_oversized_result_is_a_400_with_guidance():
 
 def test_vllm_overview_requires_identity_and_bounded_time_range():
     client = _client(FakeSource())
-    base = {"from": FROM_MS, "to": TO_MS, "bucket_ms": 60_000}
+    base = {"from": FROM_MS, "to": TO_MS, "bucket_ms": VLLM_BUCKET_MS}
 
     missing_identity = client.get("/finelog/marin/v1/vllm/overview", params=base)
     invalid_identity_kind = client.get(
@@ -159,7 +160,7 @@ def test_vllm_overview_requires_identity_and_bounded_time_range():
             "identity": "/serve",
             "from": FROM_MS,
             "to": FROM_MS + 8 * 24 * 60 * 60 * 1000,
-            "bucket_ms": 60_000,
+            "bucket_ms": VLLM_BUCKET_MS,
         },
     )
 
@@ -176,7 +177,7 @@ def test_vllm_overview_runs_one_capped_query_for_dashboard_views():
         "identity": "/serve",
         "from": FROM_MS,
         "to": TO_MS,
-        "bucket_ms": 60_000,
+        "bucket_ms": VLLM_BUCKET_MS,
     }
 
     first = client.get("/finelog/marin/v1/vllm/overview", params={**params, "view": "freshness"})
