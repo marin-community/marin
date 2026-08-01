@@ -35,6 +35,7 @@ class BoundedCommandRunner:
         self._cancelled = False
 
     def run(self, argv: tuple[str, ...], timeout: float) -> CommandOutput | None:
+        """Return completed output, or None when collection cannot finish safely."""
         if not argv:
             raise ValueError("argv must not be empty")
         if not math.isfinite(timeout) or timeout <= 0:

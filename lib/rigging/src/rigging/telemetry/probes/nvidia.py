@@ -164,12 +164,12 @@ def _append(
     scale: float = 1.0,
     unit: str = "",
 ) -> None:
-    value = _number(raw_value)
+    value = _available_number(raw_value)
     if value is not None:
         metrics.append(_Metric(name, value * scale, unit, attributes))
 
 
-def _number(value: str) -> float | None:
+def _available_number(value: str) -> float | None:
     normalized = value.strip().lower()
     if normalized in _NOT_AVAILABLE:
         return None

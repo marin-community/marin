@@ -16,18 +16,20 @@ from iris.hooks.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
 
 logger = logging.getLogger(__name__)
 
-_RESERVED_RESOURCE_ATTRIBUTES = {
-    "root_run_uid",
-    "execution_uid",
-    "job_id",
-    "task_id",
-    "attempt",
-    "worker",
-    "process_index",
-    "serving_job_id",
-    "run",
-    "run_id",
-}
+_RESERVED_RESOURCE_ATTRIBUTES = frozenset(
+    {
+        "root_run_uid",
+        "execution_uid",
+        "job_id",
+        "task_id",
+        "attempt",
+        "worker",
+        "process_index",
+        "serving_job_id",
+        "run",
+        "run_id",
+    }
+)
 
 
 def _identity(job_info: JobInfo) -> dict[str, str]:
