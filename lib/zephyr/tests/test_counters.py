@@ -10,8 +10,9 @@ import pytest
 from rigging import telemetry
 from zephyr import counters
 from zephyr.counters import ScopedCounters
-from zephyr.execution import ZephyrCoordinator, ZephyrExecutionResult
+from zephyr.execution import ZephyrCoordinator, ZephyrExecutionResult, _PipelineExecution
 from zephyr.runners import _InProcessWorkerContext
+from zephyr.stage_io import ZephyrTaskResources
 from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot, _worker_ctx_var
 
 
@@ -28,14 +29,20 @@ def _make_coordinator(
     completed: list[CounterSnapshot],
     inflight: list[CounterSnapshot] | None = None,
 ) -> ZephyrCoordinator:
-    """Build a minimal ZephyrCoordinator seeded with canned snapshots for testing."""
+    """Build a minimal coordinator with one execution's counter snapshots."""
     coord = ZephyrCoordinator.__new__(ZephyrCoordinator)
     coord._lock = threading.Lock()
-    coord._completed_totals = {}
+    run = _PipelineExecution(
+        execution_id="test-exec",
+        map_cost=ZephyrTaskResources(cpu=1.0, memory=0),
+        reduce_cost=ZephyrTaskResources(cpu=1.0, memory=0),
+    )
+    for snapshot in completed:
+        run.fold_counters(snapshot)
+    coord._executions = {run.execution_id: run}
+    coord._retired_counters = {}
     coord._worker_counters = {str(i): s for i, s in enumerate(inflight or [])}
     coord._progress_time_seconds = 0.0
-    for snapshot in completed:
-        coord._fold_completed_counters(snapshot)
     return coord
 
 
@@ -447,7 +454,6 @@ def test_publish_telemetry_exports_aggregated_counter_snapshots_as_gauges(monkey
             emitted.append((value, attributes))
 
     monkeypatch.setattr(telemetry, "gauge", lambda name, **kwargs: Gauge())
-    coord._execution_id = "run-1"
     coord._publish_telemetry()
 
-    assert (15, {"source_kind": "gauge", "source_temporality": "current_snapshot", "run": "run-1"}) in emitted
+    assert (15, {"source_kind": "gauge", "source_temporality": "current_snapshot", "run": "test-exec"}) in emitted
