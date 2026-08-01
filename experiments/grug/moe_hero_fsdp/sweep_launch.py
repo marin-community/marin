@@ -140,8 +140,10 @@ def build_sweep_configs(size: SweepSize, *, num_train_steps: int, lr_mult: float
         initializer_std=0.5 / math.sqrt(size.hidden_dim),
         qk_mult=1.3,
         sconv=True,
-        attention_implementation="gpu_fa4_cute",
-        moe_implementation="sonic_cute",
+        # Overridable for non-Blackwell fleets: sonic_cute (QuACK) is SM100/B200-only, so H100 runs set
+        # SWEEP_MOE_IMPL=scatter (portable grouped-GMM). Attention likewise.
+        attention_implementation=os.environ.get("SWEEP_ATTN_IMPL", "gpu_fa4_cute"),
+        moe_implementation=os.environ.get("SWEEP_MOE_IMPL", "sonic_cute"),
         expert_chunks=1,
         report_capacity_overflow=True,
         rope_fused=True,
