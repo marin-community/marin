@@ -5171,12 +5171,14 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "httpx" },
     { name = "marin-finelog-server" },
     { name = "pytest" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
 ]
 test = [
+    { name = "httpx" },
     { name = "marin-finelog-server" },
     { name = "pytest" },
     { name = "pytest-timeout" },
@@ -5199,12 +5201,14 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "marin-finelog-server", specifier = ">=0.2.0.dev0" },
     { name = "pytest", specifier = ">=8.4" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
 ]
 test = [
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "marin-finelog-server", specifier = ">=0.2.0.dev0" },
     { name = "pytest", specifier = ">=8.4" },
     { name = "pytest-timeout" },
