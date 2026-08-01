@@ -842,6 +842,13 @@ def test_advertise_host_uses_downward_api():
     assert adv["valueFrom"]["fieldRef"]["fieldPath"] == "status.podIP"
 
 
+def test_node_name_uses_downward_api():
+    manifest = _build_pod_manifest(make_run_req("/test-job/0"), pod_config())
+
+    env_by_name = {entry["name"]: entry for entry in manifest["spec"]["containers"][0]["env"]}
+    assert env_by_name["IRIS_NODE_NAME"]["valueFrom"]["fieldRef"]["fieldPath"] == "spec.nodeName"
+
+
 def test_device_env_vars_tpu():
     """TPU device resources inject JAX_PLATFORMS, PJRT_DEVICE, JAX_FORCE_TPU_INIT."""
     req = make_run_req("/test-job/0")

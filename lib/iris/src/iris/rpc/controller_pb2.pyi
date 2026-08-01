@@ -581,7 +581,7 @@ class Controller(_message.Message):
         quota: str
         def __init__(self, name: _Optional[str] = ..., instance_type: _Optional[str] = ..., scale_group: _Optional[str] = ..., target_nodes: _Optional[int] = ..., current_nodes: _Optional[int] = ..., queued_nodes: _Optional[int] = ..., in_progress_nodes: _Optional[int] = ..., autoscaling: _Optional[bool] = ..., min_nodes: _Optional[int] = ..., max_nodes: _Optional[int] = ..., capacity: _Optional[str] = ..., quota: _Optional[str] = ...) -> None: ...
     class NodeStatus(_message.Message):
-        __slots__ = ("name", "ready", "schedulable", "status_summary", "instance_type", "region", "gpu_count", "gpu_model", "cpu_millicores", "memory_bytes", "disk_bytes", "running_pods", "created", "metrics_ts", "cpu_pct", "mem_used_bytes", "mem_total_bytes", "disk_used_bytes", "disk_total_bytes", "net_recv_bytes", "net_sent_bytes", "hbm_used_bytes", "hbm_total_bytes", "gpu_util_pct", "gpu_temp_c", "gpu_power_w")
+        __slots__ = ("name", "ready", "schedulable", "status_summary", "instance_type", "region", "gpu_count", "gpu_model", "cpu_millicores", "memory_bytes", "disk_bytes", "running_pods", "created")
         NAME_FIELD_NUMBER: _ClassVar[int]
         READY_FIELD_NUMBER: _ClassVar[int]
         SCHEDULABLE_FIELD_NUMBER: _ClassVar[int]
@@ -595,19 +595,6 @@ class Controller(_message.Message):
         DISK_BYTES_FIELD_NUMBER: _ClassVar[int]
         RUNNING_PODS_FIELD_NUMBER: _ClassVar[int]
         CREATED_FIELD_NUMBER: _ClassVar[int]
-        METRICS_TS_FIELD_NUMBER: _ClassVar[int]
-        CPU_PCT_FIELD_NUMBER: _ClassVar[int]
-        MEM_USED_BYTES_FIELD_NUMBER: _ClassVar[int]
-        MEM_TOTAL_BYTES_FIELD_NUMBER: _ClassVar[int]
-        DISK_USED_BYTES_FIELD_NUMBER: _ClassVar[int]
-        DISK_TOTAL_BYTES_FIELD_NUMBER: _ClassVar[int]
-        NET_RECV_BYTES_FIELD_NUMBER: _ClassVar[int]
-        NET_SENT_BYTES_FIELD_NUMBER: _ClassVar[int]
-        HBM_USED_BYTES_FIELD_NUMBER: _ClassVar[int]
-        HBM_TOTAL_BYTES_FIELD_NUMBER: _ClassVar[int]
-        GPU_UTIL_PCT_FIELD_NUMBER: _ClassVar[int]
-        GPU_TEMP_C_FIELD_NUMBER: _ClassVar[int]
-        GPU_POWER_W_FIELD_NUMBER: _ClassVar[int]
         name: str
         ready: bool
         schedulable: bool
@@ -621,20 +608,7 @@ class Controller(_message.Message):
         disk_bytes: int
         running_pods: int
         created: str
-        metrics_ts: int
-        cpu_pct: float
-        mem_used_bytes: int
-        mem_total_bytes: int
-        disk_used_bytes: int
-        disk_total_bytes: int
-        net_recv_bytes: int
-        net_sent_bytes: int
-        hbm_used_bytes: int
-        hbm_total_bytes: int
-        gpu_util_pct: float
-        gpu_temp_c: float
-        gpu_power_w: float
-        def __init__(self, name: _Optional[str] = ..., ready: _Optional[bool] = ..., schedulable: _Optional[bool] = ..., status_summary: _Optional[str] = ..., instance_type: _Optional[str] = ..., region: _Optional[str] = ..., gpu_count: _Optional[int] = ..., gpu_model: _Optional[str] = ..., cpu_millicores: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., running_pods: _Optional[int] = ..., created: _Optional[str] = ..., metrics_ts: _Optional[int] = ..., cpu_pct: _Optional[float] = ..., mem_used_bytes: _Optional[int] = ..., mem_total_bytes: _Optional[int] = ..., disk_used_bytes: _Optional[int] = ..., disk_total_bytes: _Optional[int] = ..., net_recv_bytes: _Optional[int] = ..., net_sent_bytes: _Optional[int] = ..., hbm_used_bytes: _Optional[int] = ..., hbm_total_bytes: _Optional[int] = ..., gpu_util_pct: _Optional[float] = ..., gpu_temp_c: _Optional[float] = ..., gpu_power_w: _Optional[float] = ...) -> None: ...
+        def __init__(self, name: _Optional[str] = ..., ready: _Optional[bool] = ..., schedulable: _Optional[bool] = ..., status_summary: _Optional[str] = ..., instance_type: _Optional[str] = ..., region: _Optional[str] = ..., gpu_count: _Optional[int] = ..., gpu_model: _Optional[str] = ..., cpu_millicores: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., running_pods: _Optional[int] = ..., created: _Optional[str] = ...) -> None: ...
     class GetKubernetesClusterStatusResponse(_message.Message):
         __slots__ = ("namespace", "total_nodes", "schedulable_nodes", "allocatable_cpu", "allocatable_memory", "pod_statuses", "provider_version", "node_pools", "nodes")
         NAMESPACE_FIELD_NUMBER: _ClassVar[int]

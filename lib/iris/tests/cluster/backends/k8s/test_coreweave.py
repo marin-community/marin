@@ -22,6 +22,7 @@ from iris.cluster.config import (
     CoreweaveControllerConfig,
     CoreweavePlatformConfig,
     CoreweaveSliceConfig,
+    EndpointSpec,
     IrisClusterConfig,
     KubernetesProviderConfig,
     KueueConfig,
@@ -220,6 +221,7 @@ def test_start_controller_creates_controller_resources():
     """start_controller creates the runtime resources that remain Iris-owned."""
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
+    cluster_config.endpoints["/system/log-server"] = EndpointSpec(uri="http://finelog:10001")
     _seed_prerequisites(k8s, cluster_config)
 
     t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
@@ -230,6 +232,8 @@ def test_start_controller_creates_controller_resources():
     assert address == "iris-controller-svc.iris.svc.cluster.local:10000"
     assert k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config") is not None
     assert k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller") is not None
+    node_agent = k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent")
+    assert node_agent is not None
     assert k8s.get_json(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME) is not None
     assert k8s.get_json(K8sResource.SERVICES, "iris-controller-svc") is not None
 
@@ -253,6 +257,16 @@ def test_start_controller_creates_controller_resources():
     # is provisioned so the reference resolves at admission.
     assert deploy_spec["template"]["spec"]["priorityClassName"] == "iris-system"
     assert k8s.get_json(K8sResource.PRIORITY_CLASSES, "iris-system") is not None
+
+    agent_spec = node_agent["spec"]["template"]["spec"]
+    assert agent_spec["hostNetwork"] is True
+    assert agent_spec["containers"][0]["command"] == [
+        ".venv/bin/python",
+        "-m",
+        "iris.cluster.node_agent",
+        "k8s",
+        "--config=/etc/iris/config.json",
+    ]
 
     # Controller consumes that env via envFrom (S3 + injected, one flow).
     container = deploy_spec["template"]["spec"]["containers"][0]
@@ -278,6 +292,20 @@ def test_start_controller_creates_controller_resources():
     assert pvc["spec"]["resources"]["requests"]["storage"] == _CONTROLLER_STATE_PVC_SIZE
 
     t.join(timeout=5)
+    provider.shutdown()
+
+
+def test_start_controller_leaves_node_agent_absent_without_external_finelog():
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+    _seed_prerequisites(k8s, cluster_config)
+    thread = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
+    thread.start()
+
+    provider.start_controller(cluster_config)
+
+    assert k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent") is None
+    thread.join(timeout=5)
     provider.shutdown()
 
 
@@ -541,12 +569,13 @@ def test_start_controller_stops_old_controller_before_reapply():
 
 
 def test_stop_controller_deletes_resources():
-    """stop_controller deletes Deployment, Service, ConfigMap, S3 secret, and PVC."""
+    """stop_controller deletes every Iris-owned runtime resource."""
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
 
     # Pre-populate resources
     _apply_stub(k8s, "Deployment", "iris-controller")
+    _apply_stub(k8s, "DaemonSet", "iris-node-agent")
     _apply_stub(k8s, "Service", "iris-controller-svc")
     _apply_stub(k8s, "ConfigMap", "iris-cluster-config")
     _apply_stub(k8s, "Secret", "iris-task-env")
@@ -555,6 +584,7 @@ def test_stop_controller_deletes_resources():
     provider.stop_controller(cluster_config)
 
     assert k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller") is None
+    assert k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent") is None
     assert k8s.get_json(K8sResource.SERVICES, "iris-controller-svc") is None
     assert k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config") is None
     assert k8s.get_json(K8sResource.SECRETS, "iris-task-env") is None
