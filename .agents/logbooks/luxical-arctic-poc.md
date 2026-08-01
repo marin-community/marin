@@ -923,3 +923,32 @@ uv run iris --cluster=marin job run --no-wait \
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/fast-student/full-source-geometry-w0.25/750k/comparison.json`,
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/fast-student/full-source-geometry-w0.5/750k/comparison.json`, and
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/fast-student/full-source-geometry-w1/750k/comparison.json`.
+
+### Alternative teacher audit
+
+- Commit `1eaa537b7` adds the fixed LFM2.5-Embedding-350M and
+  Qwen3-Embedding-0.6B audit. Follow-up commits adapt the pinned LFM
+  convolution and select supported SDPA kernels.
+- Federated interactive H100 jobs `/rav/lux-teacher-lfm25-350m-h100-001` and
+  `/rav/lux-teacher-qwen3-06b-h100-001` succeeded. The LFM job took 14 minutes
+  19.27 seconds. The Qwen job took 17 minutes 3.03 seconds. Both jobs had zero
+  failures and zero preemptions.
+- The audit uses the same 74,752 documents and 146 sources as the Arctic and
+  student gates. Each candidate uses three windows, 512 tokens per window,
+  1,024 output dimensions, BF16 inference, and 8-bit stored vectors.
+- LFM has overall macro-F1 0.68401, code 0.79281, multilingual 0.75653, and
+  standard 0.65230. It has 47 regular failures. It fails the multilingual
+  quality gate against Luxical-One and the zero-failure collapse gate.
+- Qwen has overall macro-F1 0.67664, code 0.80067, multilingual 0.81348, and
+  standard 0.62159. It has 46 regular failures. It passes all quality, finite,
+  and unique gates. It fails only the zero-failure collapse gate.
+- Qwen removes 17 Arctic failures and adds three new failures. Forty-three
+  failures overlap. Its failures include 15 code, one multilingual, and 30
+  standard sources.
+- Qwen is the best tested replacement teacher. Before student training, audit
+  a 256-dimensional Qwen projection. This keeps the current student output,
+  direct cosine term, storage size, and speed target unchanged.
+- LFM report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-lfm2.5-embedding-350m/report.json`.
+- Qwen report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-qwen3-embedding-0.6b/report.json`.

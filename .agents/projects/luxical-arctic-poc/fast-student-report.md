@@ -1,6 +1,6 @@
 # FastTransformer Arctic student report
 
-Status: attribution and 750K regularizer tests complete; peer review addressed
+Status: alternative-teacher audit complete; peer review addressed
 
 ## Decision
 
@@ -14,8 +14,15 @@ fixed limit. The student still has lower within-source rank than Arctic in all
 three source groups.
 
 A 750K source-conditioned geometry loss reduced failures, but every tested
-weight lost too much probe quality. Stop this loss treatment. The next useful
-test is a larger baseline data rung, with the same objective and architecture.
+weight lost too much probe quality. Stop this loss treatment.
+
+Qwen3-Embedding-0.6B is the best tested replacement teacher. It passes all
+quality, finite, and unique gates. It reduces regular-source failures from 60
+for Arctic Medium to 46. It still fails the strict zero-failure concentration
+gate. LFM2.5-Embedding-350M reduces failures to 47, but it fails the
+multilingual quality gate. Before student training, test a 256-dimensional
+Qwen teacher projection on this holdout. This keeps the final embedding size
+and direct alignment objective unchanged.
 
 ## Controlled inputs
 
@@ -151,6 +158,51 @@ passes the -0.02 quality-loss limit. Weight 0.25 is the closest result, but it
 misses all four probe-quality limits and does not improve standard-data median
 rank by the required 0.02. Do not confirm this treatment at 3M.
 
+## Alternative teacher audit
+
+The fixed audit uses the same 74,752 held-out documents, 146 sources, source
+probe, three clustering seeds, and collapse limits. Each teacher receives the
+same three document windows. Each window has at most 512 tokens. The stored
+teacher vectors have 1,024 dimensions and use 8-bit scalar quantization.
+
+| Representation | Overall | Code | Multilingual | Standard | Regular failures |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Luxical-One | 0.61727 | 0.68089 | 0.79561 | 0.56887 | — |
+| Arctic Medium v2.0 | 0.66915 | 0.79995 | 0.72857 | 0.63070 | 60 |
+| LFM2.5-Embedding-350M | 0.68401 | 0.79281 | 0.75653 | 0.65230 | 47 |
+| Qwen3-Embedding-0.6B | 0.67664 | 0.80067 | 0.81348 | 0.62159 | 46 |
+
+LFM improves overall macro-F1 by 0.01486 against Arctic. Its paired 95%
+interval is [0.00402, 0.02620]. Its code delta is -0.00715, multilingual delta
+is +0.02796, and standard delta is +0.02160. Against Luxical-One, its
+multilingual delta is -0.03909. This exceeds the permitted loss by 0.01909.
+Thus, LFM fails the multilingual and regular-source collapse gates.
+
+Qwen improves overall macro-F1 by 0.00750 against Arctic. Its paired 95%
+interval is [-0.00651, 0.02204]. Its code delta is +0.00072, multilingual delta
+is +0.08491, and standard delta is -0.00911. Against Luxical-One, all four
+quality deltas are positive. Thus, Qwen passes every quality gate.
+
+Qwen has 46 regular failures. The category counts are 15 of 28 code sources,
+one of 24 multilingual sources, and 30 of 91 standard sources. Forty-five
+sources fail concentration and one fails uniqueness. It removes 17 Arctic
+failures and adds three new failures. Forty-three failures overlap. LFM has 47
+regular failures. Its category counts are 13 code, two multilingual, and 32
+standard sources. It removes 16 Arctic failures and adds three new failures.
+
+All candidate vectors pass finite and unique checks. Neither candidate fixes
+the concentration failure. Qwen is the better next teacher because it keeps
+code quality, improves multilingual quality, and has the fewest failures.
+These direct-teacher rates do not measure final student speed. LFM processed
+217.42 documents per second. Qwen processed 94.50 documents per second. The
+existing student remains 2.593 times as fast as stock Luxical on CPU.
+
+Both audits used one federated H100 and interactive priority. LFM completed in
+14 minutes 19.27 seconds. Qwen completed in 17 minutes 3.03 seconds. Both jobs
+had zero failures and zero preemptions. The exact model revisions are
+`f35ae2c91d687658dbf1f2b449382f0b019b9808` for LFM and
+`97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3` for Qwen.
+
 ## Compute and limits
 
 - Preparation of all 3M rows took 7 minutes 12.85 seconds.
@@ -222,3 +274,9 @@ second review loop.
 - Source-geometry comparison reports:
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/fast-student/full-source-geometry-WEIGHT/750k/comparison.json`.
   The `WEIGHT` values are `w0.25`, `w0.5`, and `w1`.
+- LFM teacher report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-lfm2.5-embedding-350m/report.json`.
+- Qwen teacher report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-qwen3-embedding-0.6b/report.json`.
+- Candidate audit jobs: `/rav/lux-teacher-lfm25-350m-h100-001` and
+  `/rav/lux-teacher-qwen3-06b-h100-001`.
