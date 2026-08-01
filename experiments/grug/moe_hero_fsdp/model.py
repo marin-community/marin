@@ -442,9 +442,12 @@ class CausalSelfAttention(eqx.Module):
             stored_kv_heads = self.cfg.stored_kv_heads
 
             def _logical_kv(projection: jax.Array, num_kv_heads: int) -> jax.Array:
-                if num_kv_heads == stored_kv_heads:
-                    return projection
-                return align_kv_heads(projection[:, :, :num_kv_heads, :], num_q_heads=stored_kv_heads)
+                if num_kv_heads != stored_kv_heads:
+                    projection = align_kv_heads(projection[:, :, :num_kv_heads, :], num_q_heads=stored_kv_heads)
+                # Both cond branches must carry the same PartitionSpec. align_kv_heads drops the head-dim
+                # "model" annotation when it broadcasts a single head (global_kv=1), so pin both branches
+                # back to the stored K/V spec. model_axis_size is 1 here, so the reshard moves nothing.
+                return reshard(projection, P(_BATCH_AXES, None, "model", None))
 
             k, v = jax.lax.cond(
                 jnp.asarray(is_global, dtype=jnp.bool_),
