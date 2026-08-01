@@ -990,3 +990,41 @@ uv run iris --cluster=marin job run --no-wait \
   -- python .agents/projects/luxical-arctic-poc/evaluate_teacher_candidate.py \
   --candidate qwen3-embedding-0.6b-256
 ```
+
+### Qwen 4B 256-dimensional stop result
+
+- Launch commit: `c8b4f4016`. Candidate code commit: `453e3be09`.
+- Job `/rav/lux-teacher-qwen3-4b-256-h100-001` used one federated H100 and
+  interactive priority. It succeeded in 50 minutes 3.62 seconds. It had zero
+  failures and zero preemptions.
+- The 4B teacher has overall macro-F1 0.64300, code 0.75696, multilingual
+  0.77509, and standard 0.59347. Its worst-source recall is 0.01953.
+- The 4B teacher has 35 regular failures: ten code, zero multilingual, and 25
+  standard sources. Thirty-four sources fail concentration, two fail rank, and
+  one fails uniqueness, with overlap.
+- All 74,752 vectors are finite. Exact and four-decimal uniqueness are 0.99976.
+- Against the 0.6B 256-dimensional result, overall macro-F1 increases by
+  0.00674 and the failure count decreases from 39 to 35. Code macro-F1
+  decreases by 0.00503.
+- Against Luxical-One, multilingual macro-F1 is 0.02052 lower. This misses the
+  fixed quality limit by 0.00052. The failed gates are
+  `regular_source_collapse` and `multilingual_macro_f1`.
+- The 4B model processed 29.19 documents per second during teacher inference.
+  The 0.6B model processed 94.50 documents per second. The 4B rate is 0.309
+  times the 0.6B rate.
+- Decision: do not run the 8B model. The fixed condition required all quality
+  gates and at most 34 failures. The 4B result has two failed gates and 35
+  failures.
+- Report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-qwen3-embedding-4b-256/report.json`.
+- Exact command:
+
+```bash
+uv run iris --cluster=marin job run --no-wait \
+  --job-name lux-teacher-qwen3-4b-256-h100-001 \
+  --priority interactive --gpu H100 --enable-extra-resources \
+  --cpu 16 --memory 128GB --disk 128GB --timeout 21600 \
+  --sync-package marin-core --extra gpu --extra datakit \
+  -- python .agents/projects/luxical-arctic-poc/evaluate_teacher_candidate.py \
+  --candidate qwen3-embedding-4b-256
+```
