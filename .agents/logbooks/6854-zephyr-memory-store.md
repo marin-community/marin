@@ -564,3 +564,79 @@ description: Read-only Zephyr memory store and verified fuzzy-dedup experiments
 - Next action: Run the current commit on CoreWeave with the 64 GB/60 GB
   configuration, verify the single-pool topology and exact 27,203 markers,
   then update the design artifact and open the stacked PR.
+
+### 2026-08-01 04:34 UTC - ZKV-014 current-runtime launch diagnosis
+
+- Negative result: The first current-runtime launch used the testbed's new
+  0.1B default sample and failed its source-set check before allocating a
+  store. The corrected 100B launch
+  `/loom/zephyr-kv-current-treatment-100b-20260801-v2`, execution
+  `20260801-041741-22be24cd`, loaded all 32 actors but failed every stage-one
+  reducer while opening the new Parquet shuffle output.
+- Topology: The corrected run created one coordinator, one 64 GB worker group,
+  and one 32-actor memory-store group. It did not create per-stage worker
+  pools. All 32 actors became ready in 72-89 seconds; the largest held
+  1,365,131,612 encoded bytes, matching the final A/B.
+- Root cause: Polars 1.42.1 uses its Rust `object_store` client for
+  `scan_parquet`. The newly merged Parquet shuffle passed a bare `s3://` URI,
+  so that client combined it with `AWS_ENDPOINT_URL=http://cwlota.com` as a
+  path-style URL. CoreWeave LOTA accepts only bucket-qualified virtual-host
+  requests and returned HTTP 400. Zephyr's fsspec setup already handles this
+  requirement, but Polars does not consume `FSSPEC_S3`.
+- Change: Commit `ecbf471931e59e2b27ffaa9c8850597b7b1862b3`
+  passes only the addressing overrides to Polars: a bucket-qualified
+  `aws_endpoint_url` and `aws_virtual_hosted_style_request=true`. Credentials
+  and region remain inherited from the task environment. Non-CoreWeave S3,
+  GCS, and local scans retain the original call.
+- Validation: All 21 shuffle tests pass, including a reader-boundary regression
+  for `s3://marin-us-east-02a/...` through `http://cwlota.com`. The full current
+  Zephyr suite passed 363 tests with 4 repository-default deselections and 1
+  expected xfail in 6m50s. Repository changed-file checks pass, including
+  Ruff, formatting, and Pyrefly.
+- Current run: Relaunched the exact 1,513,510-member validation as
+  `/loom/zephyr-kv-current-treatment-100b-20260801-v3` at the fix commit, with
+  64 GB workers, 60 GB verifier tasks, a 4 GB coordinator, and 32 store actors
+  at 8 GB each.
+- Next action: Confirm the Parquet reduce reads succeed, require an exact match
+  to all 27,203 reference markers, then publish the current-runtime result.
+
+### 2026-08-01 05:00 UTC - ZKV-015 current-runtime 100B result
+
+- Job: `/loom/zephyr-kv-current-treatment-100b-20260801-v3`, execution
+  `20260801-043552-36f1d314`, revision `ecbf471931e59e2b27ffaa9c8850597b7b1862b3`.
+- Result: The federated root succeeded in 22 minutes 40.81 seconds with zero
+  failures and zero preemptions. It verified 27,203 duplicates from 1,513,510
+  candidate members and matched every field of all 27,203 persisted reference
+  markers.
+- Topology: The run created one coordinator job, one shared 64-worker job, and
+  one 32-actor memory-store job. No stage-specific pools appeared. The root
+  federated once to `cw-us-east-02a`; all children inherited that peer. Context
+  shutdown terminated the three child groups after the comparison completed.
+- Current Parquet-shuffle stages:
+  - map/scatter: 3,157.44 CPU-seconds, 0.667 GB peak RSS, 80.36 seconds;
+  - cluster reduce/scatter: 59,596.57 CPU-seconds, 4.507 GB peak RSS, 812.86
+    seconds;
+  - output reduce: 32,411.44 CPU-seconds, 2.306 GB peak RSS, 239.12 seconds.
+  The 4.51 GB maximum is well below the 60 GB task budget. These figures are a
+  current-runtime capacity check, not another A/B arm: the final controlled
+  comparison used the previous binary shuffle.
+- CoreWeave storage result: Every stage-one reducer read the Polars Parquet
+  shuffle successfully after the virtual-host addressing fix. The preceding
+  run failed all reducers at that boundary with HTTP 400 responses.
+- Telemetry finding: The long-tail shard 495 emitted 117 RUNNING rows with
+  zero CPU and RSS, then a valid END row with 855.52 CPU-seconds and
+  3,345,346,560 bytes peak RSS. The current shared-context rewrite retained a
+  sampler thread that read a `ContextVar` not inherited by that thread.
+  Periodic sampling now writes through the explicit shard context, and the
+  finelog regression requires positive RUNNING RSS. This is an observability
+  repair applied after the live run; it does not alter the verified data path.
+- Validation: The focused finelog regression and the complete runner suite
+  pass. The final full Zephyr suite passed 363 tests with 4 repository-default
+  deselections and 1 expected xfail in 6m13s.
+- Durable guidance: Echo incident
+  [#59](https://echo.oa.dev/wiki/59) records the Polars/CoreWeave failure and
+  fix. `lib/zephyr/OPS.md` now identifies a `cwlota.com/<bucket>/...` HTTP 400
+  as path-style addressing and distinguishes native Polars configuration from
+  fsspec settings.
+- Next action: Publish the final design revision, commit the telemetry and
+  research record, push the branch, and open the stacked PR.

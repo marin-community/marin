@@ -125,6 +125,30 @@ runs. Requested RAM shows capacity, not actual use. Inspect the live cgroup of
 a known skew worker only as supporting evidence because a point sample can
 miss the true peak.
 
+### CoreWeave Parquet HEAD Returns HTTP 400
+
+If every Parquet-shuffle reducer fails with a URL shaped like this, the client
+is using path-style S3 addressing:
+
+```text
+Generic S3 HEAD http://cwlota.com/<bucket>/...: 400 Bad Request
+```
+
+CoreWeave LOTA requires a virtual-hosted URL such as
+`http://<bucket>.cwlota.com/...`. Confirm the request in the worker logs:
+
+```bash
+uv run iris --cluster marin job logs <WORKER_JOB_ID> --level error | \
+  rg 'Generic S3 HEAD|400 Bad Request'
+```
+
+Zephyr qualifies the endpoint in `zephyr.shuffle._scan_scatter_parquet` before
+calling Polars. Check `AWS_ENDPOINT_URL_S3` and `AWS_ENDPOINT_URL` if the bad
+URL persists. `FSSPEC_S3` does not configure Polars' Rust `object_store`
+client, so changing fsspec retries, credentials, or worker RAM does not repair
+this addressing error. See the [incident record](https://echo.oa.dev/wiki/59)
+for the reproduced failure and validation.
+
 ### Stale Pipeline Warning
 
 Grafana evaluates `ZephyrPipelineProgressStalled` once each minute. The rule
