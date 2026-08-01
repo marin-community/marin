@@ -211,3 +211,12 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Evidence: Zero failures and zero preemptions. A08 remains reachable and reports 0 of 820 GB200 GPUs free, with 84 held by interactive work and 736 held by batch work.
 - Decision: Keep the existing request and its queue position.
 - Next action: Continue the 570-second monitor cadence.
+
+### 2026-08-01 22:54 UTC - MHEP-001 coordinator started
+
+- Status: The coordinator runs on A08 and has submitted the 16-task GPU child job.
+- GPU job: `/rav/mhep-001-ragged-25-20260801-2148-coord/grug-train-mhep-001-ragged-25-20260801-2148`.
+- Evidence: All 16 GPU tasks are pending before their first attempts. Each task requests four GB200 GPUs. The coordinator and GPU job report zero failures and zero preemptions.
+- Interpretation: The 64-GPU gang now waits for GPU admission. Setup, compile, and training have not started.
+- Decision: Keep the existing request. Do not submit another job or change its priority.
+- Next action: Continue the 570-second monitor cadence until the GPU tasks start or reach a terminal state.
