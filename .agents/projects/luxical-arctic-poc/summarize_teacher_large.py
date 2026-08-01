@@ -12,6 +12,7 @@ from evaluate_ladder import EVALUATION_ROOT
 from evaluate_teacher_large import OUTPUT_NAME
 
 REPORT_URL = f"{EVALUATION_ROOT}/{OUTPUT_NAME}/report.json"
+LOG_CHUNK_CHARACTERS = 2_000
 
 
 def probe_summary(metrics: dict[str, Any]) -> dict[str, Any]:
@@ -36,10 +37,7 @@ def comparison_summary(comparison: dict[str, Any]) -> dict[str, Any]:
 def code_cluster_summary(metrics: dict[str, Any]) -> dict[str, float]:
     by_seed = metrics["collapse"]["cluster_distribution"]["by_seed"]
     fields = ("largest_cluster_share", "effective_cluster_count", "source_cluster_nmi")
-    return {
-        field: median(seed["categories"]["code"][field] for seed in by_seed)
-        for field in fields
-    }
+    return {field: median(seed["categories"]["code"][field] for seed in by_seed) for field in fields}
 
 
 def main() -> None:
@@ -61,10 +59,7 @@ def main() -> None:
         "embedding_run": report["embedding_run"],
         "all_required_gates_passed": comparison["all_required_gates_passed"],
         "gates": comparison["gates"],
-        "probes": {
-            name: probe_summary(report[name])
-            for name in ("luxical_one", "arctic_medium", "arctic_large")
-        },
+        "probes": {name: probe_summary(report[name]) for name in ("luxical_one", "arctic_medium", "arctic_large")},
         "large_vs_luxical": comparison_summary(comparison),
         "large_vs_medium": comparison_summary(report["large_vs_medium"]),
         "collapse": {
@@ -74,24 +69,22 @@ def main() -> None:
             "failure_summary": report["failure_summary"],
             "regular_failure_count": len(comparison["collapse"]["regular_failures"]),
             "ood_failures": comparison["collapse"]["ood_failures"],
-            "minimum_effective_rank_ratio": min(
-                metrics["effective_rank_ratio"] for metrics in regular_sources.values()
-            ),
+            "minimum_effective_rank_ratio": min(metrics["effective_rank_ratio"] for metrics in regular_sources.values()),
             "minimum_variance_ratio": min(metrics["variance_ratio"] for metrics in regular_sources.values()),
             "maximum_cluster_source": max(
                 regular_sources,
                 key=lambda source: regular_sources[source]["largest_cluster_share"],
             ),
-            "maximum_cluster_share": max(
-                metrics["largest_cluster_share"] for metrics in regular_sources.values()
-            ),
+            "maximum_cluster_share": max(metrics["largest_cluster_share"] for metrics in regular_sources.values()),
             "code_cluster_distribution": {
-                name: code_cluster_summary(report[name])
-                for name in ("luxical_one", "arctic_medium", "arctic_large")
+                name: code_cluster_summary(report[name]) for name in ("luxical_one", "arctic_medium", "arctic_large")
             },
         },
     }
-    print("LUXICAL_ARCTIC_LARGE_REPORT_SUMMARY=" + json.dumps(summary, sort_keys=True))
+    serialized = json.dumps(summary, sort_keys=True)
+    for index, start in enumerate(range(0, len(serialized), LOG_CHUNK_CHARACTERS)):
+        chunk = serialized[start : start + LOG_CHUNK_CHARACTERS]
+        print(f"LUXICAL_ARCTIC_LARGE_REPORT_CHUNK={index:04d}:{chunk}")
 
 
 if __name__ == "__main__":
