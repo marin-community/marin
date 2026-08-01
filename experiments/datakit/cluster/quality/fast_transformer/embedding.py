@@ -17,6 +17,33 @@ from experiments.datakit.cluster.quality.fast_transformer.model import FastEmbed
 _PREDICT_TOKEN_BUDGET = 262_144
 
 
+def source_balanced_token_remap(
+    source_token_counts: Sequence[np.ndarray],
+    compact_vocab_size: int,
+) -> np.ndarray:
+    """Select tokens by mean within-source frequency and return a dense remap."""
+    if compact_vocab_size < 3:
+        raise ValueError(f"Compact vocabulary must hold reserved and text tokens, got {compact_vocab_size}")
+    if not source_token_counts:
+        raise ValueError("At least one source token count is required")
+    raw_vocab_size = len(source_token_counts[0])
+    if any(counts.shape != (raw_vocab_size,) for counts in source_token_counts):
+        raise ValueError("Source token count arrays have different shapes")
+    scores = np.zeros(raw_vocab_size, dtype=np.float64)
+    for counts in source_token_counts:
+        total = int(counts.sum())
+        if total == 0:
+            raise ValueError("A source has no tokens")
+        scores += counts / total
+    raw_ids = np.arange(raw_vocab_size)
+    present = raw_ids[scores > 0]
+    ranked = present[np.lexsort((present, -scores[present]))]
+    selected = ranked[: compact_vocab_size - 2]
+    remap = np.ones(raw_vocab_size, dtype=np.int32)
+    remap[selected] = np.arange(2, len(selected) + 2, dtype=np.int32)
+    return remap
+
+
 def pack_remapped_windows(
     raw_windows: Sequence[Sequence[Sequence[int]]],
     raw_to_compact: np.ndarray,
