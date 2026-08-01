@@ -6,10 +6,10 @@ from dataclasses import replace
 
 import equinox as eqx
 import jax
-from jax import shard_map
 from jax import numpy as jnp
-from jax.sharding import NamedSharding, PartitionSpec as P
-from jax.sharding import get_abstract_mesh, reshard
+from jax import shard_map
+from jax.sharding import NamedSharding, get_abstract_mesh, reshard
+from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug.attention._core import AttentionMask
@@ -78,7 +78,20 @@ def _packed_segment_causal_lower_bounds(
         positions = jnp.arange(seq_len, dtype=jnp.int32)[None, :]
         window_lower_bounds = positions - (sliding_window - 1)
         lower_bounds = jnp.maximum(lower_bounds, window_lower_bounds)
-    return jnp.where(valid, lower_bounds, seq_len), valid
+
+    # The forward kernel uses the first query's lower bound to skip whole key
+    # tiles. If an M tile begins with left padding, a ``seq_len`` sentinel would
+    # incorrectly skip every key tile for valid queries later in that M tile.
+    # Give each invalid query the next valid query's bound instead. Trailing
+    # padding keeps the ``seq_len`` sentinel, so fully padded tail tiles remain
+    # cheap. The per-score predicate still uses ``valid`` as the authority.
+    next_valid_lower_bound = jax.lax.associative_scan(
+        jnp.minimum,
+        jnp.where(valid, lower_bounds, seq_len),
+        axis=1,
+        reverse=True,
+    )
+    return jnp.where(valid, lower_bounds, next_valid_lower_bound), valid
 
 
 def _simple_causal_lower_bounds(

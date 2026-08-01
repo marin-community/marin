@@ -6,7 +6,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from jax._src import config as jax_config
-from jax.sharding import AbstractMesh, AxisType, NamedSharding, PartitionSpec as P, use_abstract_mesh
+from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mesh
+from jax.sharding import PartitionSpec as P
 
 import levanter.grug.attention._fa4_cute as fa4_cute
 import levanter.grug.attention._fa4_cute_backend as fa4_cute_backend
@@ -86,6 +87,20 @@ def test_packed_segment_backward_block_sparse_indices_split_full_blocks():
         sparse_metadata.full_block_idx,
         jnp.array([[[[1, 2, 3, 0], [2, 3, 0, 0], [3, 0, 0, 0], [0, 0, 0, 0]]]], dtype=jnp.int32),
     )
+
+
+def test_packed_segment_causal_lower_bounds_carry_next_valid_bound_through_padding():
+    segment_ids = jnp.array([[-1, -1, 7, 7, 8, 8, -1]], dtype=jnp.int32)
+
+    lower_bounds, valid = fa4_cute._packed_segment_causal_lower_bounds(
+        segment_ids,
+        batch_size=1,
+        seq_len=7,
+        sliding_window=None,
+    )
+
+    np.testing.assert_array_equal(lower_bounds, jnp.array([[2, 2, 2, 2, 4, 4, 7]], dtype=jnp.int32))
+    np.testing.assert_array_equal(valid, jnp.array([[False, False, True, True, True, True, False]]))
 
 
 def test_fa4_frontend_rejects_mismatched_q_kv_segment_ids():
@@ -200,6 +215,27 @@ def test_real_gpu_fa4_cute_attention_matches_reference_for_valid_dynamic_packed_
         dtype=jnp.int32,
     )
     mask = AttentionMask.causal(sliding_window=5).with_segment_ids(segment_ids)
+    valid = segment_ids >= 0
+    cotangent = jax.random.normal(cotangent_key, q.shape, dtype=jnp.bfloat16)
+    cotangent = cotangent * valid[..., None, None].astype(jnp.bfloat16)
+
+    _assert_real_gpu_fa4_cute_matches_reference(q, k, v, mask, cotangent, valid_tokens=valid)
+
+
+@pytest.mark.parametrize("sliding_window", [None, 31])
+def test_real_gpu_fa4_cute_attention_matches_reference_with_leading_padding(sliding_window):
+    if jax.default_backend() != "gpu":
+        pytest.skip("FA4/CuTe correctness requires a GPU backend.")
+    pytest.importorskip("cutlass")
+    pytest.importorskip("cutlass.cute")
+    pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
+    key = jax.random.PRNGKey(6)
+    q_key, k_key, v_key, cotangent_key = jax.random.split(key, 4)
+    q = jax.random.normal(q_key, (1, 128, 20, 128), dtype=jnp.bfloat16)
+    k = jax.random.normal(k_key, (1, 128, 5, 128), dtype=jnp.bfloat16)
+    v = jax.random.normal(v_key, (1, 128, 5, 128), dtype=jnp.bfloat16)
+    segment_ids = jnp.array([[-1] * 19 + [37] * 109], dtype=jnp.int32)
+    mask = AttentionMask.causal(sliding_window=sliding_window).with_segment_ids(segment_ids)
     valid = segment_ids >= 0
     cotangent = jax.random.normal(cotangent_key, q.shape, dtype=jnp.bfloat16)
     cotangent = cotangent * valid[..., None, None].astype(jnp.bfloat16)
