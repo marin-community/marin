@@ -36,6 +36,81 @@ def test_crud_client_requires_kubernetes(monkeypatch, client_attr: str):
         getattr(svc, client_attr)
 
 
+class _FakeApiServer:
+    """Paginating stand-in for one DynamicClient resource handle.
+
+    Serves `pages` of item names, obeying the `continue` query param the way the API
+    server does, and records every request it received.
+    """
+
+    def __init__(self, pages: list[list[str]]):
+        self._pages = pages
+        self.requests: list[dict] = []
+
+    def get(self, **kwargs):
+        self.requests.append(kwargs)
+        index = int(kwargs["_continue"]) if kwargs.get("_continue") else 0
+        names = self._pages[index]
+        more = index + 1 < len(self._pages)
+        return _FakeListResponse(names, str(index + 1) if more else "")
+
+
+class _FakeListResponse:
+    def __init__(self, names: list[str], continue_token: str):
+        self.items = [_FakeItem({"metadata": {"name": n}}) for n in names]
+        self.metadata = {"continue": continue_token}
+
+
+class _FakeItem:
+    def __init__(self, body: dict):
+        self._body = body
+
+    def to_dict(self) -> dict:
+        return self._body
+
+
+class _FakeDynamicClient:
+    def __init__(self, api: _FakeApiServer):
+        self.resources = _FakeDiscoverer(api)
+
+
+class _FakeDiscoverer:
+    def __init__(self, api: _FakeApiServer):
+        self._api = api
+
+    def get(self, **kwargs) -> _FakeApiServer:
+        return self._api
+
+
+def _service_with_api(pages: list[list[str]]) -> tuple[CloudK8sService, _FakeApiServer]:
+    svc = CloudK8sService(namespace="iris")
+    api = _FakeApiServer(pages)
+    # Seed the cached_property so no real kubernetes client is built.
+    svc.__dict__["_dyn"] = _FakeDynamicClient(api)
+    return svc, api
+
+
+def test_list_json_walks_all_pages():
+    """A list must be chunked: an unpaginated response body has no read bound (#7881)."""
+    svc, api = _service_with_api([["a", "b"], ["c", "d"], ["e"]])
+
+    names = [pod["metadata"]["name"] for pod in svc.list_json(K8sResource.PODS)]
+
+    assert names == ["a", "b", "c", "d", "e"]
+    assert [req.get("limit") for req in api.requests] == [k8s_service._LIST_PAGE_LIMIT] * 3
+    assert [req.get("_continue") for req in api.requests] == [None, "1", "2"]
+
+
+def test_list_json_limit_stops_the_walk():
+    """limit caps both the items returned and the requests issued."""
+    svc, api = _service_with_api([["a", "b"], ["c", "d"], ["e"]])
+
+    names = [pod["metadata"]["name"] for pod in svc.list_json(K8sResource.PODS, limit=3)]
+
+    assert names == ["a", "b", "c"]
+    assert len(api.requests) == 2
+
+
 # Test item_path construction for namespaced resources
 @pytest.mark.parametrize(
     "resource,name,namespace,expected",

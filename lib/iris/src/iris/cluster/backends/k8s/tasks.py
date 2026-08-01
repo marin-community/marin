@@ -1250,6 +1250,12 @@ _GC_MAX_AGE_SECONDS = 3600  # 1 hour
 # cannot race exit-status collection.
 _GANG_GC_MAX_AGE_SECONDS = 60
 
+# Garbage collection: terminal pods read per phase in one pass. The sweep runs
+# on the control-loop thread, so its cost per pass must not scale with the
+# backlog; the sweep deletes what it reads, so a backlog drains over successive
+# passes.
+_GC_MAX_PODS_PER_PASS = 500
+
 # Blocker eviction: minimum interval between reconcile-driven eviction sweeps
 # of preempt_namespaces. Gang pods can stay SchedulingGated for many cycles
 # while Kueue retries admission; without this floor every reconcile would
@@ -2856,6 +2862,10 @@ class K8sTaskProvider:
         """One GC pass: deferred CM/PDB cleanup, the 1h terminal-pod sweep, and a
         short-retention sweep of terminal gang pods that strips the Kueue pod
         finalizer and deletes the pod-group Workloads they would otherwise pin.
+
+        The pass runs on the control-loop thread, so it reads at most
+        _GC_MAX_PODS_PER_PASS terminal pods per phase; a larger backlog drains over
+        successive passes instead of stalling scheduling and task reconciliation.
         """
         now = datetime.now(UTC).timestamp()
         cutoff = now - _GC_MAX_AGE_SECONDS
@@ -2900,7 +2910,7 @@ class K8sTaskProvider:
         gang_pod_names: list[str] = []
         gang_pod_groups: set[str] = set()
         gang_task_hashes: set[str] = set()
-        for pod in self._list_terminal_pods():
+        for pod in self._list_terminal_pods(limit=_GC_MAX_PODS_PER_PASS):
             meta = pod.get("metadata", {})
             created = meta.get("creationTimestamp", "")
             if not created:
@@ -2960,8 +2970,14 @@ class K8sTaskProvider:
                 len(old_task_hashes - safe_hashes),
             )
 
-    def _list_terminal_pods(self) -> list[dict]:
-        """Bulk-list managed pods in a terminal phase (Succeeded or Failed)."""
+    def _list_terminal_pods(self, *, limit: int | None = None) -> list[dict]:
+        """Bulk-list managed pods in a terminal phase (Succeeded or Failed).
+
+        ``limit`` caps the pods read per phase, yielding an arbitrary prefix of the
+        terminal set. Only the GC sweep passes it: the sweep deletes what it reads, so
+        a truncated pass still makes progress, whereas ``_poll_pods`` needs the whole
+        set to resolve which running tasks finished.
+        """
         pods: list[dict] = []
         # Field selectors AND their comma-separated terms, so a single
         # status.phase==Succeeded,status.phase==Failed matches nothing (a pod is
@@ -2972,6 +2988,7 @@ class K8sTaskProvider:
                     K8sResource.PODS,
                     labels=_MANAGED_POD_LABELS,
                     field_selector=f"status.phase={phase}",
+                    limit=limit,
                 )
             )
         return pods

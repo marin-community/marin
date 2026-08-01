@@ -9,6 +9,7 @@ import pytest
 from iris.cluster.backends.k8s.tasks import (
     _GANG_GC_MAX_AGE_SECONDS,
     _GC_MAX_AGE_SECONDS,
+    _GC_MAX_PODS_PER_PASS,
     _KUEUE_MANAGED_FINALIZER,
     _KUEUE_POD_GROUP_NAME,
     _KUEUE_POD_GROUP_TOTAL,
@@ -1122,6 +1123,28 @@ def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
     # Recent resources preserved.
     assert k8s.get_json(K8sResource.PODS, "recent-succeeded-pod") is not None
     assert k8s.get_json(K8sResource.CONFIGMAPS, "recent-succeeded-pod-wf") is not None
+
+
+def test_gc_bounds_pods_read_per_pass(provider, k8s):
+    """A terminal-pod backlog must not make one GC pass unbounded.
+
+    The sweep runs on the control-loop thread, so a namespace holding thousands of
+    terminal pods would otherwise stall scheduling behind a single giant list (#7881).
+    It reads a bounded slice per pass and drains the rest on later passes.
+    """
+    now = datetime.now(UTC)
+    old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    backlog = _GC_MAX_PODS_PER_PASS + 10
+    for i in range(backlog):
+        _seed_terminal_pod(k8s, f"backlog-pod-{i}", "Succeeded", f"hash{i:016d}", old_ts)
+
+    provider._gc_terminal_resources(active_pods=[])
+    remaining = k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS)
+    assert len(remaining) == backlog - _GC_MAX_PODS_PER_PASS
+
+    provider._gc_terminal_resources(active_pods=[])
+    assert k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS) == []
 
 
 def test_gc_respects_interval(provider, k8s):

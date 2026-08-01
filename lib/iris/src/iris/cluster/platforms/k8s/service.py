@@ -55,6 +55,13 @@ DEFAULT_TIMEOUT: float = 60.0
 # Threshold for slow-operation warnings (milliseconds)
 _SLOW_THRESHOLD_MS: int = 2000
 
+# Items requested per LIST page. An unpaginated list of a large collection
+# streams one chunked response body that no timeout bounds — the client arms a
+# per-recv socket timeout, which every arriving chunk resets — so a slow list
+# parks its caller indefinitely. Chunked lists bound both the response body and
+# the API server's etcd range read.
+_LIST_PAGE_LIMIT: int = 500
+
 # API error bodies quote the offending manifest; keep enough to identify the
 # verdict without flooding logs.
 _ERROR_BODY_MAX_LEN: int = 500
@@ -82,6 +89,7 @@ class K8sService(Protocol):
         *,
         labels: dict[str, str] | None = None,
         field_selector: str | None = None,
+        limit: int | None = None,
     ) -> list[dict]: ...
 
     def delete(self, resource: K8sResource, name: str, *, force: bool = False, wait: bool = True) -> None: ...
@@ -347,21 +355,42 @@ class CloudK8sService:
         *,
         labels: dict[str, str] | None = None,
         field_selector: str | None = None,
+        limit: int | None = None,
     ) -> list[dict]:
-        """List Kubernetes resources, optionally filtered by labels and/or field selectors."""
-        logger.info("k8s: LIST %s labels=%s field_selector=%s", resource.plural, labels, field_selector)
+        """List Kubernetes resources, optionally filtered by labels and/or field selectors.
+
+        The list is always chunked, so no single response body is unbounded no matter
+        how large the collection is. ``limit`` stops the walk once that many items are
+        collected and returns a prefix of the collection; sweeps that make progress by
+        deleting what they read use it to bound the work of one pass.
+        """
+        logger.info("k8s: LIST %s labels=%s field_selector=%s limit=%s", resource.plural, labels, field_selector, limit)
         kwargs = self._ns_kwargs(resource)
         if labels:
             kwargs["label_selector"] = _label_selector(labels)
         if field_selector:
             kwargs["field_selector"] = field_selector
         kwargs.update(self._request_timeout_kwargs())
+        # A limit of 0 means "no limit" to the API server, so never send one.
+        page_size = _LIST_PAGE_LIMIT if limit is None else max(1, min(limit, _LIST_PAGE_LIMIT))
+        api = self._resource_api(resource)
+        items: list[dict] = []
+        continue_token = ""
         with slow_log(logger, f"list {resource.plural}", threshold_ms=_SLOW_THRESHOLD_MS):
-            try:
-                result = self._resource_api(resource).get(**kwargs)
-                return [item.to_dict() for item in result.items]
-            except ApiException as e:
-                raise KubectlError(f"list {resource.plural} failed ({e.status}): {e.reason}") from e
+            while True:
+                page_kwargs = dict(kwargs, limit=page_size)
+                if continue_token:
+                    page_kwargs["_continue"] = continue_token
+                try:
+                    result = api.get(**page_kwargs)
+                except ApiException as e:
+                    raise KubectlError(f"list {resource.plural} failed ({e.status}): {e.reason}") from e
+                items.extend(item.to_dict() for item in result.items)
+                meta = result.metadata
+                continue_token = (meta["continue"] if meta is not None else None) or ""
+                if not continue_token or (limit is not None and len(items) >= limit):
+                    break
+        return items[:limit] if limit is not None else items
 
     # -- delete --------------------------------------------------------------
 

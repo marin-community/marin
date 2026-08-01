@@ -673,6 +673,7 @@ class InMemoryK8sService:
         *,
         labels: dict[str, str] | None = None,
         field_selector: str | None = None,
+        limit: int | None = None,
     ) -> list[dict]:
         self._check_failure("list_json")
         plural = resource.plural
@@ -697,7 +698,7 @@ class InMemoryK8sService:
                     if not all(res_labels.get(k) == v for k, v in labels.items()):
                         continue
                 results.append(manifest)
-            return results
+            return results[:limit] if limit is not None else results
 
         results = []
         for (stored_plural, _), manifest in self._resources.items():
@@ -710,6 +711,8 @@ class InMemoryK8sService:
             if field_selector and not _matches_field_selector(manifest, field_selector):
                 continue
             results.append(manifest)
+            if limit is not None and len(results) >= limit:
+                break
         return results
 
     def delete(self, resource: K8sResource, name: str, *, force: bool = False, wait: bool = True) -> None:
