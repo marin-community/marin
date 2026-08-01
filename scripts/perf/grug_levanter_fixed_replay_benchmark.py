@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Benchmark one native Grug update on the fixed rollout replay.
 
 This is an evidence driver, not a new training entry point. It verifies the
@@ -343,9 +346,11 @@ def _tree_finite_details(leaves: tuple[jax.Array, ...]) -> tuple[jax.Array, jax.
     nonfinite_counts = jnp.stack([jnp.sum(jnp.logical_not(jnp.isfinite(value)), dtype=jnp.int64) for value in leaves])
     finite_maxima = jnp.stack(
         [
-            jnp.max(jnp.where(jnp.isfinite(value), jnp.abs(value.astype(jnp.float32)), 0.0))
-            if value.size
-            else jnp.array(0.0, dtype=jnp.float32)
+            (
+                jnp.max(jnp.where(jnp.isfinite(value), jnp.abs(value.astype(jnp.float32)), 0.0))
+                if value.size
+                else jnp.array(0.0, dtype=jnp.float32)
+            )
             for value in leaves
         ]
     )

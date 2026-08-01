@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Recover a SkyRL ``TrainingInputBatch`` from a fused Ray spill object.
 
 This is deliberately a one-shot evidence tool. It runs in the immutable image
