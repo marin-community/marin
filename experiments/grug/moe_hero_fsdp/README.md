@@ -1,26 +1,27 @@
 # grug MoE FSDP hero
 
-A minimal, **self-contained** FSDP variant of the grug MoE model, fixed to one 64-GPU GB200 rack
-(16 nodes × 4 GPUs) for a 25-step throughput / MFU reproduction. Everything is inlined and
-opinionated: features that are options elsewhere are hardwired on here, and the folder has **no
-dependency on `experiments/grug/moe`** — it imports only the levanter substrate and its own modules.
+A minimal, **self-contained** FSDP variant of the grug MoE model for 25-step throughput and MFU
+runs on one or more GB200 racks. Everything is inlined and opinionated: features that are options
+elsewhere are hardwired on here, and the folder has **no dependency on `experiments/grug/moe`** —
+it imports only the levanter substrate and its own modules.
 
 Launch:
 
 ```bash
 # dry-run: print the lowered plan locally, no GPUs
-python -m experiments.grug.moe_hero_fsdp.launch --version dev
+python -m experiments.grug.moe_hero_fsdp.launch --dp-racks 1 --version dev
 
-# submit the run (coordinator dispatches the 64-GPU GB200 job)
-RID=moe-hero-fsdp-test-1rack
+# submit one or more racks; each rack gets 16 GB200x4 nodes and batch 1024
+DP_RACKS=2
+RID="moe-hero-fsdp-test-${DP_RACKS}rack"
 iris --cluster=marin job run --no-wait --enable-extra-resources \
   --target-cluster cw-us-east-08a --priority interactive \
   --cpu 2 --memory 8GB --disk 32GB --timeout 5400 --job-name "${RID}-coord" \
   -e WANDB_API_KEY "$WANDB_API_KEY" -e RUN_ID "$RID" \
-  -- python -m experiments.grug.moe_hero_fsdp.launch --version dev --run
+  -- python -m experiments.grug.moe_hero_fsdp.launch --dp-racks "$DP_RACKS" --version dev --run
 ```
 
-W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `$RUN_ID`.
+W&B: `marin-community/rav_moe`, group `moe-hero-fsdp-${DP_RACKS}rack`, run name `$RUN_ID`.
 
 ## Files
 
@@ -32,7 +33,7 @@ W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `$RUN_ID`.
 | `adamh.py` | AdamH (Adam direction + Frobenius hyperball scale-invariant step) |
 | `heuristic.py` | May Recipe compute-scaling LR refit; derives the optimizer from steps + batch |
 | `train.py` | training loop, state init, dispatch, hero runtime env |
-| `launch.py` | inlined `HERO_MODEL`, resources, trainer, dataset, entry point |
+| `launch.py` | rack-scaled resources, DP/FSDP mesh, batch, tracker, dataset, and entry point |
 
 ## What's distinctive about this run
 
@@ -53,7 +54,10 @@ W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `$RUN_ID`.
   the scan.
 
 ### Systems (FSDP)
-- **Pure FSDP**: `expert_axis_size=1`, `replica_axis_size=1` → all 64 GPUs on the `data` axis.
+- **One rack**: `expert_axis_size=1`, `replica_axis_size=1` → one 64-GPU `data` axis.
+- **Two racks**: `expert_axis_size=1`, `replica_axis_size=2` → two DP replicas, each with a
+  64-GPU `data` axis. Model parameters are replicated across `replica_dcn` and FSDP-sharded only
+  on `data`. The embedding table is fully replicated so each device does a local lookup.
 - **`expert_chunks=4`** — gather one quarter of the expert bank at a time (the largest MFU lever).
 - **`sonic_cute`** MoE backend (QuACK SM100 grouped-GEMM) and **`gpu_fa4_cute`** attention
   (FA4 / CUTLASS 4.6).
@@ -71,13 +75,15 @@ W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `$RUN_ID`.
   on (`use_syrk=True`).
 - Three LR groups: **muonh** (matrices + GatedNorms), **adamh** (`lm_head` / `output_proj`),
   **adam** (embeddings, router, attention gate, 1-D norm gains, the tiny SConv kernels).
-- LR / beta / epsilon come from the **May Recipe compute-scaling heuristic** (issue #5951) at
-  batch 1152 / 25 steps / d6144: `lr=0.05`, `adam_lr≈0.02512`, `beta1=0.9062`, `beta2≈0.96462`,
-  `epsilon≈4.84e-17`, linear schedule, **no gradient clipping**, no weight decay applied.
+- LR / beta / epsilon come from the **May Recipe compute-scaling heuristic** (issue #5951) for
+  the selected global batch, 25 steps, and d6144. The schedule is linear, with **no gradient
+  clipping** and no weight decay applied.
 - CE logsumexp **z-loss = 1e-4**. Router z-loss is **logged only**, not added to the loss.
 
 ### Run
-- **25 steps**, batch **1152**, seq **4096**, SlimPajama-6B, Llama-3 tokenizer, vocab 128256.
+- **25 steps**, batch **1024 per rack**, seq **4096**, SlimPajama-6B, Llama-3 tokenizer, vocab
+  128256.
 - Mixed precision: params fp32, compute/output bf16.
 - Checkpointing and eval are **off for this run** but the machinery is retained for later.
-- Multi-rack wedge mitigations are intentionally **excluded** (this is a single-rack run).
+- FA4 metadata constants are explicitly replicated before batch sharding. This prevents the
+  compiler from routing each attention metadata transfer through device 0 on a multi-rack run.

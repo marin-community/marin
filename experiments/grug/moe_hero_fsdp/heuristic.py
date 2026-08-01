@@ -74,7 +74,7 @@ class MoeHeuristic:
 
 
 def build_hero_configs(*, num_train_steps: int, batch_size: int) -> tuple[GrugModelConfig, GrugMoeMuonHConfig]:
-    """The fixed 64-GPU FSDP hero model plus its compute-scaled MuonH optimizer."""
+    """The fixed FSDP hero model plus its compute-scaled MuonH optimizer."""
     model = GrugModelConfig(
         vocab_size=128_256,
         hidden_dim=6144,

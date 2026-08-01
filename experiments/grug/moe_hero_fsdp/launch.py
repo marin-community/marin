@@ -1,11 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Hardcoded one-rack GB200 launcher for the FSDP MoE hero configuration."""
+"""Rack-scaled GB200 launcher for the FSDP MoE hero configuration."""
 
 import dataclasses
 import os
 
+import click
 import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
@@ -17,7 +18,7 @@ from levanter.trainer import TrainerConfig
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.experiment.cli import experiment_main
+from marin.experiment.cli import build_options
 from marin.experiment.data import mixture, tokenized
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
@@ -28,31 +29,10 @@ from experiments.llama import llama3_tokenizer
 
 HERO_RUN_ID = "moe-hero-fsdp"
 HERO_STEPS = 25
-HERO_BATCH_SIZE = 1152
+HERO_FSDP_BATCH_SIZE = 1024
+HERO_NODES_PER_RACK = 16
 HERO_PROCESSES_PER_TASK = 1
 HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
-
-HERO_MODEL, HERO_OPTIMIZER = build_hero_configs(num_train_steps=HERO_STEPS, batch_size=HERO_BATCH_SIZE)
-
-HERO_GRUG_TRAINER = GrugTrainerConfig(
-    data_seed=None,
-    log_every=1,
-    ema_beta=None,
-    z_loss_weight=1e-4,
-    offload_opt_state=True,
-    expert_axis_size=1,
-    replica_axis_size=1,
-    sharding_dump_path=None,
-)
-
-HERO_TRAIN_RESOURCES = ResourceConfig.with_gpu(
-    "GB200",
-    count=4,
-    cpu=32,
-    ram="256g",
-    disk="256g",
-    replicas=16,
-)
 
 _SLIMPAJAMA_TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")
 _SLIMPAJAMA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel")
@@ -69,7 +49,7 @@ def _slimpajama_6b_dataset() -> ArtifactStep[TokenizedCache]:
 
 
 class HeroThroughputResult(Artifact):
-    """Metrics-only result of the throughput hero run.
+    """Metrics-only result of the rack-scale throughput hero run.
 
     The run intentionally writes no checkpoint; it only mirrors its tracker metrics to the output
     path. This artifact is a plain path ref to those metrics, so the step does not promise a
@@ -77,8 +57,31 @@ class HeroThroughputResult(Artifact):
     """
 
 
-def build_hero_run(*, version: str | None = None) -> ArtifactStep[HeroThroughputResult]:
-    """Build the fixed 64-GPU FSDP hero throughput run (metrics only, no checkpoint)."""
+def build_hero_run(*, dp_racks: int, version: str | None = None) -> ArtifactStep[HeroThroughputResult]:
+    """Build the rack-local FSDP hero throughput run."""
+    if dp_racks <= 0:
+        raise ValueError(f"dp_racks must be positive, got {dp_racks}")
+
+    batch_size = dp_racks * HERO_FSDP_BATCH_SIZE
+    model, optimizer = build_hero_configs(num_train_steps=HERO_STEPS, batch_size=batch_size)
+    grug_trainer = GrugTrainerConfig(
+        data_seed=None,
+        log_every=1,
+        ema_beta=None,
+        z_loss_weight=1e-4,
+        offload_opt_state=True,
+        expert_axis_size=1,
+        replica_axis_size=dp_racks,
+        sharding_dump_path=None,
+    )
+    train_resources = ResourceConfig.with_gpu(
+        "GB200",
+        count=4,
+        cpu=32,
+        ram="256g",
+        disk="256g",
+        replicas=HERO_NODES_PER_RACK * dp_racks,
+    )
     run_id = os.environ.get("RUN_ID") or HERO_RUN_ID
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
@@ -88,15 +91,15 @@ def build_hero_run(*, version: str | None = None) -> ArtifactStep[HeroThroughput
         trainer = TrainerConfig(
             id=run_id,
             seed=0,
-            train_batch_size=HERO_BATCH_SIZE,
+            train_batch_size=batch_size,
             num_train_steps=HERO_STEPS,
             profiler=ProfilerConfig(enabled=False, start_step=8, num_steps=0),
             mp=jmp.get_policy(HERO_MIXED_PRECISION),
             tracker=WandbConfig(
                 entity="marin-community",
-                project="marin_moe",
-                tags=["grug", "moe", "hero", "fsdp", "gb200"],
-                group="moe-hero-fsdp",
+                project="rav_moe",
+                tags=["grug", "moe", "hero", "fsdp", "gb200", f"{dp_racks}rack"],
+                group=f"moe-hero-fsdp-{dp_racks}rack",
                 name=run_id,
                 replicate_path=ctx.output_path,
             ),
@@ -115,11 +118,11 @@ def build_hero_run(*, version: str | None = None) -> ArtifactStep[HeroThroughput
             ),
         )
         return GrugRunConfig(
-            model=HERO_MODEL,
+            model=model,
             data=mixture(ctx, {slim: 1.0}, shuffle=_SLIMPAJAMA_SHUFFLE),
             resources=ctx.runtime_arg("train_resources"),
-            optimizer=HERO_OPTIMIZER,
-            trainer=dataclasses.replace(HERO_GRUG_TRAINER, trainer=trainer),
+            optimizer=optimizer,
+            trainer=dataclasses.replace(grug_trainer, trainer=trainer),
             eval=None,
             processes_per_task=HERO_PROCESSES_PER_TASK,
         )
@@ -131,9 +134,16 @@ def build_hero_run(*, version: str | None = None) -> ArtifactStep[HeroThroughput
         run=run_grug,
         build_config=build_config,
         deps=(slim,),
-        runtime_args={"train_resources": HERO_TRAIN_RESOURCES},
+        runtime_args={"train_resources": train_resources},
     )
 
 
+@click.command()
+@click.option("--dp-racks", type=click.IntRange(min=1), required=True, help="Data-parallel NVL72 rack count.")
+@build_options
+def main(dp_racks: int) -> ArtifactStep[HeroThroughputResult]:
+    return build_hero_run(dp_racks=dp_racks)
+
+
 if __name__ == "__main__":
-    experiment_main(build_hero_run)()
+    main()
