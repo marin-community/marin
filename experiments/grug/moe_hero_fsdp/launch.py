@@ -77,9 +77,9 @@ def build_hero_run(*, dp_racks: int, version: str | None = None) -> ArtifactStep
     train_resources = ResourceConfig.with_gpu(
         "GB200",
         count=4,
-        cpu=32,
-        ram="256g",
-        disk="256g",
+        cpu=140,
+        ram="900g",
+        disk="1t",
         replicas=HERO_NODES_PER_RACK * dp_racks,
     )
     run_id = os.environ.get("RUN_ID") or HERO_RUN_ID
