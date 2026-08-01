@@ -79,7 +79,7 @@ class Candidate:
     @property
     def vector_root(self) -> str:
         """Return the source-vector storage root."""
-        return f"{MANIFEST_ROOT}/{self.output_name}-eval-v1"
+        return f"{MANIFEST_ROOT}/{self.output_name}-eval-v2"
 
 
 CANDIDATES = {
@@ -89,7 +89,7 @@ CANDIDATES = {
         revision="f35ae2c91d687658dbf1f2b449382f0b019b9808",
         prompt="document: ",
         pooling="cls",
-        batch_size=96,
+        batch_size=128,
     ),
     "qwen3-embedding-0.6b": Candidate(
         name="qwen3-embedding-0.6b",
@@ -97,7 +97,7 @@ CANDIDATES = {
         revision="97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
         prompt="",
         pooling="last_token",
-        batch_size=64,
+        batch_size=128,
     ),
 }
 
@@ -106,8 +106,8 @@ MAX_TEACHER_TOKENS = 512
 CANDIDATE_DIMENSION = 1_024
 EXPECTED_EVALUATION_ROWS = 74_752
 WINDOWS_PER_DOCUMENT = 3
-INFERENCE_DTYPE = torch.float32
-ATTENTION_IMPLEMENTATION = "eager"
+INFERENCE_DTYPE = torch.bfloat16
+ATTENTION_IMPLEMENTATION = "sdpa"
 LOG_CHUNK_CHARACTERS = 2_000
 
 MANIFEST_METADATA_KEY = b"luxical_manifest_sha256"
@@ -119,6 +119,7 @@ TEACHER_WINDOWS_METADATA_KEY = b"luxical_teacher_windows_per_document"
 TEACHER_DIMENSION_METADATA_KEY = b"luxical_teacher_embedding_dimension"
 TEACHER_QUANTIZATION_METADATA_KEY = b"luxical_teacher_quantization_limit"
 TEACHER_ATTENTION_METADATA_KEY = b"luxical_teacher_attention_implementation"
+TEACHER_DTYPE_METADATA_KEY = b"luxical_teacher_inference_dtype"
 TEACHER_POOLING_METADATA_KEY = b"luxical_teacher_pooling_implementation"
 TEACHER_PROMPT_METADATA_KEY = b"luxical_teacher_document_prompt"
 
@@ -238,6 +239,7 @@ def expected_metadata(candidate: Candidate, manifest_sha256: str) -> dict[bytes,
         TEACHER_DIMENSION_METADATA_KEY: str(CANDIDATE_DIMENSION).encode(),
         TEACHER_QUANTIZATION_METADATA_KEY: str(TEACHER_QUANTIZATION_LIMIT).encode(),
         TEACHER_ATTENTION_METADATA_KEY: ATTENTION_IMPLEMENTATION.encode(),
+        TEACHER_DTYPE_METADATA_KEY: str(INFERENCE_DTYPE).removeprefix("torch.").encode(),
         TEACHER_POOLING_METADATA_KEY: candidate.pooling.encode(),
         TEACHER_PROMPT_METADATA_KEY: candidate.prompt.encode(),
     }
