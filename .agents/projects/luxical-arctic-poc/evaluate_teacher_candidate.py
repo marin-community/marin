@@ -54,6 +54,7 @@ from luxical.teacher_embedder import fast_8bit_uniform_scalar_quantize
 from luxical.training import dequantize_8bit_uniform_scalar_quantized
 from rigging.filesystem import atomic_rename
 from threadpoolctl import threadpool_limits
+from torch.nn.attention import SDPBackend, sdpa_kernel
 from transformers import AutoModel, AutoTokenizer, PreTrainedTokenizerFast
 from transformers.models.lfm2.modeling_lfm2 import Lfm2ShortConv
 
@@ -79,7 +80,7 @@ class Candidate:
     @property
     def vector_root(self) -> str:
         """Return the source-vector storage root."""
-        return f"{MANIFEST_ROOT}/{self.output_name}-eval-v2"
+        return f"{MANIFEST_ROOT}/{self.output_name}-eval-v3"
 
 
 CANDIDATES = {
@@ -108,6 +109,8 @@ EXPECTED_EVALUATION_ROWS = 74_752
 WINDOWS_PER_DOCUMENT = 3
 INFERENCE_DTYPE = torch.bfloat16
 ATTENTION_IMPLEMENTATION = "sdpa"
+SDPA_BACKENDS = (SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH)
+SDPA_BACKEND_NAMES = "flash_attention,efficient_attention,math"
 LOG_CHUNK_CHARACTERS = 2_000
 
 MANIFEST_METADATA_KEY = b"luxical_manifest_sha256"
@@ -120,6 +123,7 @@ TEACHER_DIMENSION_METADATA_KEY = b"luxical_teacher_embedding_dimension"
 TEACHER_QUANTIZATION_METADATA_KEY = b"luxical_teacher_quantization_limit"
 TEACHER_ATTENTION_METADATA_KEY = b"luxical_teacher_attention_implementation"
 TEACHER_DTYPE_METADATA_KEY = b"luxical_teacher_inference_dtype"
+TEACHER_SDPA_BACKENDS_METADATA_KEY = b"luxical_teacher_sdpa_backends"
 TEACHER_POOLING_METADATA_KEY = b"luxical_teacher_pooling_implementation"
 TEACHER_PROMPT_METADATA_KEY = b"luxical_teacher_document_prompt"
 
@@ -201,7 +205,8 @@ class CandidateEmbedder:
                 max_length=MAX_TEACHER_TOKENS,
             )
             device_inputs = {name: value.to("cuda") for name, value in inputs.items()}
-            model_output = self.model(**device_inputs, use_cache=False)
+            with sdpa_kernel(SDPA_BACKENDS):
+                model_output = self.model(**device_inputs, use_cache=False)
             vectors = self._pool(model_output.last_hidden_state, device_inputs["attention_mask"])
             vectors = functional.normalize(vectors.float(), p=2, dim=1)
             if not torch.isfinite(vectors).all():
@@ -240,6 +245,7 @@ def expected_metadata(candidate: Candidate, manifest_sha256: str) -> dict[bytes,
         TEACHER_QUANTIZATION_METADATA_KEY: str(TEACHER_QUANTIZATION_LIMIT).encode(),
         TEACHER_ATTENTION_METADATA_KEY: ATTENTION_IMPLEMENTATION.encode(),
         TEACHER_DTYPE_METADATA_KEY: str(INFERENCE_DTYPE).removeprefix("torch.").encode(),
+        TEACHER_SDPA_BACKENDS_METADATA_KEY: SDPA_BACKEND_NAMES.encode(),
         TEACHER_POOLING_METADATA_KEY: candidate.pooling.encode(),
         TEACHER_PROMPT_METADATA_KEY: candidate.prompt.encode(),
     }
@@ -512,6 +518,7 @@ def evaluate(candidate: Candidate) -> None:
             "windows_per_document": WINDOWS_PER_DOCUMENT,
             "inference_dtype": str(INFERENCE_DTYPE).removeprefix("torch."),
             "attention_implementation": ATTENTION_IMPLEMENTATION,
+            "sdpa_backends": SDPA_BACKEND_NAMES.split(","),
             "pooling_implementation": candidate.pooling,
             "document_prompt": candidate.prompt,
         },
