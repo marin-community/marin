@@ -179,3 +179,13 @@ The first wave found no loss effect from fat-first versus fat-middle shared capa
 - Result: all three evaluation DAGs lower successfully. Eighteen focused coupon-clipping and growth tests pass, as do the repository lint, format, and type gates. At 23:55 UTC, production WD1 was at source step 1,170/6,080 with loss 4.38 and a recent rate of 1.3-1.4 updates/s on all four workers.
 - Interpretation: Paloma is now an executable terminal readout rather than an unspecified follow-up. W&B timed out during the source's initial compile, so Iris finelogs remain authoritative; synchronized finite progress shows the training run itself is healthy.
 - Next action: monitor the source at the 30-minute cadence, require a successful automatic growth transition and terminal checkpoint, run C-short, then execute the three checkpoint-only Paloma artifacts sequentially.
+
+### 2026-08-01 00:04 - CC16-011 fixed-expert 10x source gate
+
+- Hypothesis: halving the residual-stream and vocabulary-head width again while widening selected experts can approach the 10x source-rate target without relying on useful routing across more experts.
+- Commit Hash: `0c98066b1f`.
+- Command: `experiments.grug.coupon_clipping.pilot_extreme_source` is staged for 128 updates after WD1 releases the four-node slice.
+- Config: the source is `d768/L1/E64/top4` with routed and shared intermediate widths of 1,536. It has 217,112,128 active and 429,448,768 stored parameters; the target/source analytic forward-FLOP ratio is 48.61x.
+- Result: the artifact lowers with the production Datamix, optimizer horizon, mesh, and pilot telemetry. The 12 focused config contracts pass. No hardware result exists yet.
+- Interpretation: this is a source-capability and throughput gate, not a preregistered growth arm. Keeping 64 experts and top-4 routing answers the routing-cold-start objection; the larger selected experts preserve more per-token nonlinear capacity. A target and 1-2% deep-tail schedule are justified only if measured throughput materially exceeds WD1's 7.55x source rate.
+- Next action: launch on the released slice, require finite gradients, zero overflow, broad expert traffic, and measured throughput, then decide whether to implement a function-preserving target transition or move directly to sampled/factorized vocabulary-head work.
