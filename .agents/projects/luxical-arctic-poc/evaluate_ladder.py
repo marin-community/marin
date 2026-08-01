@@ -640,7 +640,8 @@ def comparison_report(student: dict[str, Any], baseline: dict[str, Any]) -> dict
     """Return all pass gates for one student."""
     comparison = representation_comparison(student, baseline)
     speed_ratio = student["speed"]["median_documents_per_second"] / baseline["speed"]["median_documents_per_second"]
-    fidelity_delta = student["arctic_fidelity"]["spearman"] - baseline["arctic_fidelity"]["spearman"]
+    fidelity_metric = "within_source_spearman"
+    fidelity_delta = student["arctic_fidelity"][fidelity_metric] - baseline["arctic_fidelity"][fidelity_metric]
     gates = quality_gates(comparison) | {
         "arctic_fidelity": fidelity_delta >= 0.0,
         "cpu_speed_minimum": speed_ratio >= SPEED_MINIMUM_RATIO,
@@ -648,6 +649,7 @@ def comparison_report(student: dict[str, Any], baseline: dict[str, Any]) -> dict
     return comparison | {
         "speed_ratio": speed_ratio,
         "speed_target_passed": speed_ratio >= SPEED_TARGET_RATIO,
+        "arctic_fidelity_metric": fidelity_metric,
         "arctic_fidelity_delta": fidelity_delta,
         "gates": gates,
         "all_required_gates_passed": all(gates.values()),
@@ -690,7 +692,6 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #f5f5f5; padd
 <table><thead><tr><th>Category</th><th>Student minus baseline</th></tr></thead>
 <tbody>{category_rows}</tbody></table>
 <p>Non-OOD collapse failures: {html.escape(", ".join(failed_sources) or "none")}</p>
-<details><summary>Complete JSON</summary><pre>{html.escape(json.dumps(report, indent=2, sort_keys=True))}</pre></details>
 </body></html>"""
 
 
