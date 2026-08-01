@@ -121,6 +121,14 @@ class _LegacyMinHashCollection(BaseModel):
     inputs: list[_LegacyMinHashEntry]
 
 
+class _VerifiedSourcePaths(BaseModel):
+    attr_dir: str
+
+
+class _VerifiedArtifactPaths(BaseModel):
+    sources: dict[str, _VerifiedSourcePaths]
+
+
 def _rows(path: str, columns: list[str]) -> Iterator[dict[str, Any]]:
     with StoragePath(path).open("rb") as stream:
         parquet = pq.ParquetFile(stream)
@@ -195,7 +203,8 @@ def _join_candidate_text(
     return members
 
 
-def _verified_rows(verified: VerifiedFuzzyDupsAttrData) -> dict[tuple[str, str], dict[str, Any]]:
+def _verified_rows(artifact_path: str) -> dict[tuple[str, str], dict[str, Any]]:
+    verified = read_artifact(artifact_path, _VerifiedArtifactPaths)
     rows: dict[tuple[str, str], dict[str, Any]] = {}
     for source_key, source in verified.sources.items():
         paths = sorted(str(path) for path in StoragePath(prefix_join(source.attr_dir, "*.parquet")).glob())
@@ -708,9 +717,8 @@ def main() -> None:
     candidates = _read_candidate_artifact(candidate_path)
     verified = read_artifact(verified_step.output_path, VerifiedFuzzyDupsAttrData)
     if args.reference_verified_prefix:
-        reference = read_artifact(args.reference_verified_prefix, VerifiedFuzzyDupsAttrData)
-        actual_markers = _verified_rows(verified)
-        reference_markers = _verified_rows(reference)
+        actual_markers = _verified_rows(verified_step.output_path)
+        reference_markers = _verified_rows(args.reference_verified_prefix)
         if actual_markers != reference_markers:
             unexpected = sorted(actual_markers.keys() - reference_markers.keys())
             missing = sorted(reference_markers.keys() - actual_markers.keys())
