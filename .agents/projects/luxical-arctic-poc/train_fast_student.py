@@ -46,7 +46,12 @@ WEIGHT_DECAY = 0.05
 GRADIENT_CLIP = 1.0
 LOSS_TEMPERATURE = 3.0
 DIRECT_COSINE_WEIGHT = 1.0
-SOURCE_GEOMETRY_WEIGHT = 1.0
+SOURCE_GEOMETRY_WEIGHTS = {
+    "baseline": 0.0,
+    "source-geometry-w0.25": 0.25,
+    "source-geometry-w0.5": 0.5,
+    "source-geometry-w1": 1.0,
+}
 TEACHER_QUANTIZATION_LIMIT = 0.3
 TEACHER_DIMENSION = 256
 AUDIT_ROWS = 2_048
@@ -281,7 +286,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--rung", choices=tuple(RUNG_TARGETS), required=True)
     parser.add_argument("--config", choices=("full", "slim"), required=True)
-    parser.add_argument("--treatment", choices=("baseline", "source-geometry-w1"), default="baseline")
+    parser.add_argument("--treatment", choices=tuple(SOURCE_GEOMETRY_WEIGHTS), default="baseline")
     return parser.parse_args()
 
 
@@ -295,8 +300,10 @@ def main() -> None:
     raw_to_compact = load_numpy(prepared["raw_to_compact_url"])
     ids, teacher, source_ids, quotas = load_training_arrays(prepared, target)
     student = FastStudent.random(arguments.config, raw_to_compact, seed=SEED)
-    training_name = arguments.config if arguments.treatment == "baseline" else f"{arguments.config}-source-geometry-w1"
-    source_geometry_weight = 0.0 if arguments.treatment == "baseline" else SOURCE_GEOMETRY_WEIGHT
+    training_name = (
+        arguments.config if arguments.treatment == "baseline" else f"{arguments.config}-{arguments.treatment}"
+    )
+    source_geometry_weight = SOURCE_GEOMETRY_WEIGHTS[arguments.treatment]
     output_root = f"{OUTPUT_ROOT}/{training_name}/{arguments.rung}"
     model, history = train(
         student.model,

@@ -48,6 +48,7 @@ TRAINING_ROOT = f"{MANIFEST_ROOT}/fast-student"
 EVALUATION_ROOT = f"{MANIFEST_ROOT}/evaluation/fast-student"
 SPEED_REPORT_URL = f"{MANIFEST_ROOT}/fast-student/speed/cpu-full-luxical-one-arrow.json"
 RESULT_FILE = Path("/tmp/luxical-fast-student-evaluation")
+TREATMENTS = ("baseline", "source-geometry-w0.25", "source-geometry-w0.5", "source-geometry-w1")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -126,7 +127,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--rung", choices=("64k", "750k", "3m"), required=True)
     parser.add_argument("--config", choices=("full", "slim"), required=True)
-    parser.add_argument("--treatment", choices=("baseline", "source-geometry-w1"), default="baseline")
+    parser.add_argument("--treatment", choices=TREATMENTS, default="baseline")
     return parser.parse_args()
 
 
@@ -136,7 +137,9 @@ def main() -> None:
     arguments = parse_args()
     if arguments.config != "full":
         raise ValueError("A paired speed artifact is not available for the slim config")
-    training_name = arguments.config if arguments.treatment == "baseline" else f"{arguments.config}-source-geometry-w1"
+    training_name = (
+        arguments.config if arguments.treatment == "baseline" else f"{arguments.config}-{arguments.treatment}"
+    )
     manifest = read_json(MANIFEST_URL)
     texts, labels, probe_roles, categories, teacher_vectors = fixed_evaluation_data(manifest)
     left, right = pair_indices(labels)
