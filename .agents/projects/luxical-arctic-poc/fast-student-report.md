@@ -1,6 +1,6 @@
 # FastTransformer Arctic student report
 
-Status: results complete; peer review addressed
+Status: attribution and 750K regularizer tests complete; peer review addressed
 
 ## Decision
 
@@ -8,10 +8,14 @@ The 3M FastTransformer POC succeeds on quality, teacher fidelity, and speed. It
 passes nine of ten gates. Do not use this artifact for the 20B-document run
 yet, because 59 regular sources fail the strict per-source collapse gate.
 
-The next treatment must reduce per-source cluster concentration while it keeps
-the same speed and quality. The current result removes the original broad code
-quality failure: code macro-F1 is 0.09832 above stock and no source fails the
-variance ratio gate. It does not remove all source-level collapse.
+Arctic fails the same gate for 60 sources. The teacher and student failure
+sets overlap for 54 sources. Five failures are student-only, which meets the
+fixed limit. The student still has lower within-source rank than Arctic in all
+three source groups.
+
+A 750K source-conditioned geometry loss reduced failures, but every tested
+weight lost too much probe quality. Stop this loss treatment. The next useful
+test is a larger baseline data rung, with the same objective and architecture.
 
 ## Controlled inputs
 
@@ -99,6 +103,54 @@ The reviewed fidelity gate uses only within-source pairs. The 3M delta is
 +0.08788. The pooled Spearman values are 0.89423 for the student and 0.86765
 for stock, but they are diagnostics and do not set the gate.
 
+## Failure attribution
+
+The teacher and 3M student composite failure sets have Jaccard overlap
+0.83077. The set counts are:
+
+| Category | Teacher failures | Student failures | Overlap | Student-only |
+| --- | ---: | ---: | ---: | ---: |
+| Code | 15 | 14 | 14 | 0 |
+| Multilingual | 9 | 13 | 9 | 4 |
+| Standard | 36 | 32 | 31 | 1 |
+| All regular sources | 60 | 59 | 54 | 5 |
+
+The 0.90 concentration check gives 51 overlapping failures, five student-only
+failures, and eight teacher-only failures. Twenty-nine teacher failures and 32
+student failures occur for all three cluster seeds. Separate cluster models
+set the cluster identifiers, so only concentration values and failure sets are
+comparable.
+
+The 3M student-to-teacher median rank ratios are 0.41618 for code, 0.34775 for
+multilingual data, and 0.45476 for standard data. The variance ratios are
+0.64327, 0.49088, and 0.76096. Thus, the student has a category-wide rank loss
+relative to Arctic, although it almost always passes the stock-relative rank
+and variance gates.
+
+Arctic truncates 37.58% of the 224,256 teacher windows at 512 tokens. At least
+one window is truncated for 45.64% of the documents. The truncated window
+fractions are 70.30% for code, 35.15% for multilingual data, and 27.16% for
+standard data. Source truncation has Spearman correlation 0.01753 with Arctic
+concentration and 0.06443 with student concentration. This audit does not show
+that truncation causes the concentration failures.
+
+## Source-geometry ablation
+
+The ablation adds mean squared cosine error for same-source pairs. It keeps
+the Gram-KL loss and direct cosine loss. The 750K baseline is the control.
+
+| Weight | Regular failures | Student-only failures | Macro-F1 delta | Code delta | Multilingual delta | Standard delta | Fidelity delta |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0.00 | 66 | 10 | 0.00000 | 0.00000 | 0.00000 | 0.00000 | 0.00000 |
+| 0.25 | 46 | 3 | -0.02523 | -0.02302 | -0.02694 | -0.02485 | +0.00428 |
+| 0.50 | 43 | 1 | -0.03883 | -0.03069 | -0.04434 | -0.03804 | +0.00059 |
+| 1.00 | 32 | 1 | -0.05279 | -0.04587 | -0.07263 | -0.04708 | -0.00338 |
+
+All three weights reduce collapse failures and improve median variance. None
+passes the -0.02 quality-loss limit. Weight 0.25 is the closest result, but it
+misses all four probe-quality limits and does not improve standard-data median
+rank by the required 0.02. Do not confirm this treatment at 3M.
+
 ## Compute and limits
 
 - Preparation of all 3M rows took 7 minutes 12.85 seconds.
@@ -108,10 +160,9 @@ for stock, but they are diagnostics and do not set the gate.
 - All successful training jobs used one B200-class worker and interactive
   priority. They had no failure or preemption.
 - The fixed view has less text than stock Luxical for long documents.
-- The teacher uses a 512-token limit for each 2,000-character window. Code and
-  CJK text can reach this limit more often than English prose. This run did not
-  measure truncation by category, so the multilingual result is not a clean
-  student-capacity result.
+- The teacher uses a 512-token limit for each 2,000-character window. The audit
+  found truncated window fractions of 70.30% for code, 35.15% for multilingual
+  data, and 27.16% for standard data.
 - The input joins character regions before WordPiece truncation. Languages
   with many tokens for each character can lose more of the middle or tail.
 - The manifest labels its circular block sample as uniform marginal. The final
@@ -145,7 +196,7 @@ for stock, but they are diagnostics and do not set the gate.
 - Accepted: require an absolute p05 recall gate before release.
 - Rejected: optimize completed manifest and survey jobs in this result pass.
   These changes cannot alter the saved artifacts.
-- Rejected: the fast-student path has 15 behavior tests, including a compiled
+- Rejected: the fast-student path has 16 behavior tests, including a compiled
   loss test and a real gradient update.
 - Accepted: remove the complete JSON copy from generated HTML. The separate
   JSON artifact is canonical.
@@ -166,3 +217,8 @@ second review loop.
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/speed/cpu-full-luxical-one-arrow.json`.
 - Evaluation reports:
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/fast-student/full/<rung>/report.json`.
+- Attribution report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/fast-student/full/3m/attribution.json`.
+- Source-geometry comparison reports:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/fast-student/full-source-geometry-WEIGHT/750k/comparison.json`.
+  The `WEIGHT` values are `w0.25`, `w0.5`, and `w1`.
