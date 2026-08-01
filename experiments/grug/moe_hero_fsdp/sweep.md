@@ -50,3 +50,22 @@ MoE structure and held constant across the sweep:
 - Local (sliding-window) layers use a **1024-token window**; sequence length = 8192. The window
   affects attention FLOPs only, not parameter counts, so the params/tokens/steps columns are unchanged.
 - Param counts omit RMSNorm scales, GatedNorm, and SConv weights (< ~1% combined).
+
+## Runtime flags (must differ from the d6144 hero)
+
+The hero's runtime config is tuned for d6144 on 64 GPUs; two of its settings destabilize the small
+sweep runs and must be overridden:
+
+- **`offload_opt_state=False`** (overridden in `sweep_launch.py`). The hero's `offload_opt_state=True`
+  is a d6144-specific Grace-Blackwell host offload of the optimizer state (pinned-host arena +
+  `cudaFreeAsync`). On the small models it's pointless (the optimizer state trivially fits in HBM) and
+  it caused hard native crashes — `cudaFreeAsync … double free or corruption` and
+  `CUDA_ERROR_LAUNCH_FAILED` — most deterministically on the smallest size (d512).
+- **PGLE off** (`JAX_ENABLE_PGLE` unset). With PGLE enabled, its profiler collides with the data
+  loader's JIT profiling — `PGLE collected an empty trace … CUPTI_ERROR_MULTIPLE_SUBSCRIBERS`
+  warnings escalating to a fatal `ALREADY_EXISTS: Another profiling session active`. Disable it for
+  the sweep (the +~1pt MFU PGLE buys is irrelevant at these sizes).
+
+Both are worker-side; PGLE lives in `moe_hero_fsdp/train.py::HERO_FSDP_RUNTIME_ENV`, so the sweep must
+either drop it there or have `run_grug` `setdefault` the runtime env so a forwarded `JAX_ENABLE_PGLE=0`
+wins.
