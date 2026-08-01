@@ -30,6 +30,7 @@ fetch server-side, so nothing outside the container reaches it.
 
 ```
 GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
+GET /finelog/{cluster}/v1/vllm/overview          bounded vLLM job/run overview
 GET /finelog/marin/fleet_health                  main query probe + k8s mirror readiness
 GET /finelog/marin/alerts/fleet_health           alert rows: server labels + value(0|1)
 GET /finelog/marin/alerts/training_stalls        active jobs + stalled-progress value(0|1)
@@ -64,6 +65,20 @@ time column without casting. finelog has JSON SQL UDFs, so a panel groups by a l
 — `json_get(labels,'region')`; the bridge also flattens a `labels` column into
 `label_<key>` fields. The Kubernetes dashboard uses the hub datasource for a
 bounded recent view of `iris.task_event`, beside the live API server events.
+
+`v1/vllm/overview` is the fixed query behind `dashboards/inference.json`. It
+requires `identity_kind` (`job_id`, `root_run_uid`, or `execution_uid`),
+`identity`, `from`, `to`, and `bucket_ms`; accepts an optional output `view`;
+rejects ranges longer than seven days; clamps the bucket count to 720; and caps
+the Finelog response at 10,000 rows. The query reads only `service='vllm'`.
+Imported Prometheus cumulative snapshots keep origin, service, metric, resource
+attributes, and metric attributes separate through `LAG`, then discard
+reset-negative deltas. Native Rigging counter rows bypass `LAG` and sum their
+already-delta values. The response always includes a freshness row, so no data
+does not look like an empty successful panel. `telemetry_v1` currently lacks an
+ingest/export timestamp, so the row can identify an in-range sample gap or a
+range ending after the last producer timestamp but cannot assign that gap to
+the producer, direct exporter, or federation path.
 
 `fleet_health` reads one row from `finelog-marin`'s `log` namespace and combines that
 result with the three CoreWeave mirror Deployments' HTTP-readiness state. A hub query
