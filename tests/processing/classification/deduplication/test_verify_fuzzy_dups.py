@@ -39,7 +39,6 @@ TEST_STORE_CONFIG = FuzzyVerificationStoreConfig(
     max_actors=2,
     actor_resources=ResourceConfig(cpu=1, ram="256m"),
     actor_config=ActorConfig(max_concurrency=8, max_task_retries=1),
-    max_actor_bytes=1 << 20,
     recovery_timeout=30,
     ready_timeout=30,
     lookup_batch_size=2,
