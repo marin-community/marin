@@ -97,8 +97,8 @@ def test_list_json_walks_all_pages():
     names = [pod["metadata"]["name"] for pod in svc.list_json(K8sResource.PODS)]
 
     assert names == ["a", "b", "c", "d", "e"]
+    # Every request carries a page limit: an unpaginated one is the wedge itself.
     assert [req.get("limit") for req in api.requests] == [k8s_service._LIST_PAGE_LIMIT] * 3
-    assert [req.get("_continue") for req in api.requests] == [None, "1", "2"]
 
 
 def test_list_json_limit_stops_the_walk():

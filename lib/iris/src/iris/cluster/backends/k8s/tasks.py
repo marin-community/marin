@@ -2974,9 +2974,8 @@ class K8sTaskProvider:
         """Bulk-list managed pods in a terminal phase (Succeeded or Failed).
 
         ``limit`` caps the pods read per phase, yielding an arbitrary prefix of the
-        terminal set. Only the GC sweep passes it: the sweep deletes what it reads, so
-        a truncated pass still makes progress, whereas ``_poll_pods`` needs the whole
-        set to resolve which running tasks finished.
+        terminal set. It is safe only for a sweep that deletes what it reads (progress
+        continues on the next pass), not for a caller that must see every terminal pod.
         """
         pods: list[dict] = []
         # Field selectors AND their comma-separated terms, so a single
