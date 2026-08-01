@@ -49,13 +49,22 @@ def test_complex_scalar_does_not_poison_valid_metrics_in_same_log_call(exported)
     assert "unsupported" not in values
 
 
-def test_summary_stats_exports_preaggregated_current_gauges(exported):
+def test_summary_stats_export_reduced_moments_and_no_histogram_buckets(exported):
+    """A row per bin, per metric, per step is what saturated the finelog hub.
+
+    The assertion is the exact exported set rather than the absence of a bucket
+    name: a reintroduced bucket row then fails as an extra key. Absence alone
+    would also pass while the buckets were merely still in flight.
+    """
     tracker = TelemetryTracker()
     values = jnp.asarray(np.linspace(0.0, 1.0, 1000))
-    tracker.log({"grad": SummaryStats.from_array(values, num_bins=4)}, step=1)
+    stats = SummaryStats.from_array(values, num_bins=64)
+    assert stats.histogram is not None, "a summary carrying no histogram would pass this vacuously"
 
-    records = exported.wait_for(10)
-    grad = [record for record in records if record["name"].startswith("grad_")]
+    tracker.log({"grad": stats}, step=1)
+    telemetry.shutdown()  # bounded flush, so the exported set below is complete
+
+    grad = [record for record in exported.records if record["name"].startswith("grad")]
     assert _values(grad) == pytest.approx(
         {
             "grad_mean": 0.5,
@@ -70,20 +79,6 @@ def test_summary_stats_exports_preaggregated_current_gauges(exported):
     )
     assert all(record["kind"] == "gauge" for record in grad)
     assert all(record["attributes"]["source_temporality"] == "current_snapshot" for record in grad)
-
-
-def test_summary_stats_does_not_export_a_row_per_histogram_bucket(exported):
-    """One row per bin, per metric, per step is what saturated the finelog hub."""
-    tracker = TelemetryTracker()
-    values = jnp.asarray(np.linspace(0.0, 1.0, 1000))
-    stats = SummaryStats.from_array(values, num_bins=64)
-    assert stats.histogram is not None, "a summary without a histogram would pass this test vacuously"
-
-    tracker.log({"grad": stats}, step=1)
-
-    records = exported.wait_for(10)
-    assert [record["name"] for record in records if record["name"].endswith("_bucket")] == []
-    assert not any("le" in record["attributes"] for record in records)
 
 
 def test_training_progress_and_phase_are_current_snapshots(exported, monkeypatch):
