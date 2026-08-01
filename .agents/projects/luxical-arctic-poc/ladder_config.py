@@ -20,6 +20,8 @@ SAMPLING_METHOD = "uniform_marginal_circular_blocks_without_duplicate_positions"
 TEXT_WINDOW_CHARS = 2_000
 TEACHER_ID = "Snowflake/snowflake-arctic-embed-m-v2.0"
 TEACHER_REVISION = "95c2741480856aa9666782eb4afe11959938017f"
+LARGE_TEACHER_ID = "Snowflake/snowflake-arctic-embed-l-v2.0"
+LARGE_TEACHER_REVISION = "ac6544c8a46e00af67e330e85a9028c66b8cfd9a"
 STACK_V3_OUTPUT_HASH = "32b6fa6f"
 
 PREDECLARED_OOD_SOURCES = frozenset(
