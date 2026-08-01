@@ -227,3 +227,9 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Input: The coordinator reused the cached `slimpajama-6b@2026.06.28` artifact. It reported recipe drift from fingerprint `b81fb521` to `6d4a8a93` and kept the versioned cached output.
 - Interpretation: The artifact prefix and data input are now explicit. The output bucket and A08 are both in US East. All later feature gates must use this same versioned data input.
 - Status: The 16 GPU tasks remain pending before their first attempts, with zero failures and zero preemptions.
+
+### 2026-08-01 23:10 UTC - MHEP-001 GPU admission wait unchanged
+
+- Status: The 16 GPU tasks remain pending before their first attempts.
+- Evidence: The coordinator runs normally. The coordinator and GPU job have zero failures and zero preemptions. No new worker logs exist.
+- Decision: Keep the same request and wait for full gang admission.
