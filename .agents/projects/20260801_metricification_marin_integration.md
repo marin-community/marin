@@ -1,19 +1,25 @@
 # Marin metricification integration plan
 
-Status: active
+Status: review slice in validation; broader producer work deferred
 
 ## Scope
 
 This branch owns the single Marin producer/dashboard review unit after the
 simple telemetry foundation. It starts at `729cc2d6a`, keeps the benchmark
 decision record, and does not modify the vLLM repository. The corrected vLLM
-dashboard/query feeder is integrated as three preserved commits. The Rigging
-hardware probe feeder stays deferred until a corrected tip is provided.
+dashboard/query feeder and corrected Rigging hardware-probe feeder are each
+integrated as three preserved commits.
 
 The authoritative v1 transport remains the bounded in-process
 `rigging.telemetry` exporter posting directly to Finelog `telemetry_v1`. This
 work does not add an agent, WAL, OTLP receiver, durable outbox, generic rollup
 engine, or physical repartitioning.
+
+The review slice stops at canonical Iris resource identity, direct-exporter
+self-health, explicit opt-in NVIDIA/NCCL probes, and the bounded centralized
+vLLM query/dashboard. Levanter and Zephyr receive only the role/root call-site
+changes required by the new Iris configuration contract. M2–M4 signal fan-out
+and the remaining M5 alerts and drilldowns are follow-up work.
 
 ## Frozen identity and signal contract
 
@@ -40,9 +46,9 @@ are structured events.
 
 ### M1: canonical Iris resource and telemetry health
 
-Add a small typed convention module below Rigging and keep the foundation
-transport unchanged. Iris owns authoritative execution identity and merges it
-with explicit workload context:
+Keep the foundation transport unchanged. Iris owns authoritative execution
+identity, requires a bounded role, rejects ambiguous/overridden identity, and
+merges explicit workload context:
 
 ```python
 runtime_telemetry.configure(
@@ -53,17 +59,19 @@ runtime_telemetry.configure(
 ```
 
 When `execution_uid` is omitted under Iris, derive it from the exact Iris job
-and attempt. Do not synthesize node/device identity. Emit bounded root→job,
-job→task, task→attempt, and attempt→worker/process link events. vLLM resources
-carry `serving_job_id` so endpoint clients can join without duplicating engine
-metrics.
+and attempt. Do not synthesize node/device identity. vLLM resources carry
+`serving_job_id` so endpoint clients can join without duplicating engine
+metrics. Lifecycle/entity-link events are deferred with the broader producer
+work.
 
 Extend the process-local status snapshot with export attempts/failures/retries,
 rejections, last success, and oldest queued record age. Publish the snapshot at
-existing application progress cadences; do not start another health thread.
-Emit a bounded shutdown-start event before the foundation's one bounded flush.
+the existing centralized vLLM polling cadence; do not start another health
+thread or change the bounded shutdown path.
 
-### M2: Levanter pre-training
+### Follow-up M2: Levanter pre-training
+
+Not in this PR.
 
 Replace the telemetry-only `run` attribute with `root_run_uid` and trainer role.
 Map existing step/throughput/MFU values to the common families while preserving
@@ -84,7 +92,9 @@ checkpointer boundary. Add a moderate-cadence rank callback using a real
 all-gather. Process zero emits min/median/max and bounded top-k/persistent
 outlier events; individual rank samples remain cadence-bounded.
 
-### M3: Marin RL
+### Follow-up M3: Marin RL
+
+Not in this PR.
 
 Configure coordinator, trainer, rollout, inference, environment, storage, and
 weight roles from one root run. Record lifecycle and terminal events at entry
@@ -107,7 +117,9 @@ deltas, queue/capacity, rollout age, weight lag, transfer bytes, retries, and
 normalized failures. Offline embedded vLLM keeps only the Marin-side bridge;
 central served vLLM remains the canonical engine producer.
 
-### M4: Zephyr and data generation
+### Follow-up M4: Zephyr and data generation
+
+Not in this PR.
 
 Configure the coordinator with `root_run_uid=execution_id` and configure worker
 actors with the same root plus worker identity. Record stage/shard lifecycle,
@@ -121,41 +133,44 @@ top-k outlier event at stage completion instead of dashboard series for every
 historical shard. Add spill/retry/error evidence where existing execution
 state exposes it; do not infer missing I/O counters.
 
-### M5: query and dashboard integration points
+### M5: bounded feeder integration
 
-Add checked-in parameterized query templates for weekly pre-training, RL, and
-Zephyr accounting; phase fractions; rank/shard outliers; failure timelines;
-telemetry completeness; and reset-aware imported counters. Every template must
-retain literal/raw `timestamp_ms` lower and upper predicates and at least one
-entity predicate.
+This PR includes the approved bounded centralized vLLM endpoint/dashboard and
+the explicit opt-in Rigging NVIDIA/NCCL probes. The vLLM query retains raw
+`timestamp_ms` lower and upper predicates and a required job/root/execution
+predicate. Imported cumulative rows retain full replica identity through
+reset-aware delta calculation.
 
-Add fleet/run/role/process/device dashboard seams and observe-only alert query
-definitions for the signals available from M1–M4. Hardware/Ray/DCGM/NCCL and
-Rigging inputs remain wired to stable input names. Integrate the approved vLLM
-feeder commits in order and preserve their bounded per-replica freshness,
+Preserve the vLLM feeder's bounded per-replica freshness,
 45-second reset/missing-predecessor lookback, coherent histogram-family
 invalidation, and raw-sample KV peak semantics.
 
 ## Validation
 
-- Behavior tests query exported records, phase exclusivity, identity joins,
-  reset-aware deltas, and bounded outlier output.
+- Behavior tests query exporter health, canonical vLLM identity joins,
+  reset-aware replica deltas, bounded freshness, and probe lifecycle/output.
 - Unconfigured and failed telemetry must not change application outputs or exit
   status.
 - No test sleeps; fake clocks/transports are used at I/O boundaries.
 - Measure emission call latency and producer-side record counts/cardinality on
   bounded fixtures.
-- Run focused Iris, Rigging, Levanter, Marin RL, Zephyr, and Grafana tests;
+- Run focused Iris, Rigging, Marin vLLM, and Grafana tests;
   `./infra/pre-commit.py --changed-files --fix`; then commit before one
   `./infra/pre-commit.py --review --agent-command='codex exec'` pass.
 - Push coherent milestone commits, open one draft PR with `agent-generated`,
   monitor CI and existing review feedback, and publish the final Weaver
   evidence artifact.
 
-## Deferred inputs
+## Follow-up workitems
 
-- Rigging hardware probe feeder: do not cherry-pick until the coordinator sends
-  a corrected commit.
-- vLLM dashboard/query feeder: integrate `eec3de4b72ab`, `06d2145febc7`, then
-  `45d9b2bd3b67` in this PR without creating a feeder PR.
-- No vLLM fork or repository changes.
+- M2: emit Levanter work deltas, MFU, explicit compile/data/checkpoint/eval
+  phases, accelerator-hours, and real-all-gather bounded rank divergence.
+- M3: instrument Marin RL coordinator/trainer/rollout/inference/environment/
+  storage/weight roles, exclusive trainer waits, worker-time phases, work and
+  queue deltas, weight freshness, and failure timelines.
+- M4: instrument Zephyr stage/shard deltas, phase durations, queue/backoff/idle,
+  I/O, retry/spill evidence, and bounded shard outliers.
+- M5: add the weekly pre-training/RL/data-generation queries, fleet-to-device
+  drilldowns, DCGM/Ray normalization, and observe-only workload/GPU/fabric/
+  telemetry-gap alerts. Keep every query time- and entity-bounded.
+- No vLLM fork or repository changes; no automated recovery from probe results.

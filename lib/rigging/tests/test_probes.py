@@ -581,7 +581,9 @@ def test_manager_status_reports_telemetry_queue_loss_separately_from_sink_failur
     assert status.sink_failures == 0
 
 
-def test_nvidia_smi_normalizes_stable_device_identity_and_slow_health() -> None:
+def test_nvidia_smi_normalizes_stable_device_identity_and_slow_health(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = FakeClock()
+    monkeypatch.setattr(rigging_timing.time, "monotonic", clock.monotonic)
     output = (
         b"GPU-f81d4fae, 00000000:17:00.0, NVIDIA H100 80GB HBM3, 580.65.06, "
         b"81559, Default, Disabled, 700.00, 96.00.68.00.01, 2, 5, 1, Yes, 3, 4, Yes, No\n"

@@ -12,22 +12,27 @@ author: Marin metricification coordinator
 - Primary metrics: Post-exit identity joins, progress/work rates, phase
   fractions, bounded outliers, failure timelines, and telemetry completeness.
 - Constraints: Simple v1 direct Finelog transport; one draft Marin PR; no vLLM
-  modification; approved vLLM feeder stays in this PR; corrected Rigging tip is
-  pending.
+  modification; approved vLLM and Rigging feeders stay in this PR; probes are
+  explicit opt-in and observe-only.
 - Coordinating issue/PR: #7804, #7681, and #7795; no branch PR yet.
 
 ## Current TL;DR
 
 - `origin/main` contains the simple telemetry foundation from #7839 plus early
   Levanter, Zephyr, centralized vLLM, and Grafana producers.
-- The remaining code still emits ambiguous `run` attributes, lacks complete
-  exporter health, lacks Marin RL operational telemetry, and exposes only
-  partial Levanter/Zephyr phase and outlier evidence.
+- The branch now supplies canonical Iris identity and centralized vLLM exporter
+  health. Broader producers still emit legacy attributes, lack Marin RL
+  operational telemetry, and expose only partial Levanter/Zephyr phase and
+  outlier evidence.
 - The benchmark commit recommends logical namespaces, lazy binding, and a run
   catalog, while deferring physical partitioning and generic rollups. The v1
   reset contract keeps this PR on `telemetry_v1`.
 - The approved vLLM feeder consists of three ordered commits ending at
-  `45d9b2bd3b67`; Rigging remains explicitly deferred.
+  `45d9b2bd3b67`. The approved Rigging feeder consists of three ordered commits
+  ending at `805dd5e47483`.
+- User scope correction limits this PR to those feeders, the benchmark, minimum
+  canonical identity/exporter health, and the vLLM end-to-end query. M2–M4 are
+  follow-up workitems.
 
 ## Baseline
 
@@ -56,3 +61,29 @@ author: Marin metricification coordinator
   signal vocabulary, then instrument existing timing/counter boundaries. Use a
   real all-gather for rank summaries and retain only bounded top-k evidence.
 - Next action: Implement M1 typed identity/common families and behavior tests.
+
+### 2026-08-01 01:18 UTC - Review slice integrated
+
+- Hypothesis: Canonical Iris identity and exporter self-health are sufficient
+  to make the two approved feeders operable without broad producer fan-out.
+- Commit Hash: `74e02e306` with M1 integration at `ecba5432d`, vLLM feeder at
+  `939239589`, and benchmark at `729cc2d6a`.
+- Command: Ordered cherry-picks for both feeder series; focused Rigging, Iris,
+  Marin vLLM, and Grafana pytest commands; changed-file lint/type gate.
+- Config: Rigging probes remain explicit opt-in with DCGM/Ray precedence and no
+  automated recovery. The vLLM endpoint requires `job_id`, `root_run_uid`, or
+  `execution_uid` plus raw lower/upper time bounds.
+- Result: Rigging 519 passed; vLLM/Grafana 64 passed; Iris identity 6 passed;
+  Marin vLLM forwarding 2 passed. Iris stamps root/execution/job/task/attempt/
+  worker/process identity and `serving_job_id`; the vLLM polling cadence emits
+  exporter queue, loss, attempt/failure/retry/rejection, oldest-record age, and
+  last-success freshness snapshots.
+- Overhead: Unconfigured exporter-health calls measured 2.11 µs/call (100,000
+  calls, best of five). A configured vLLM poll emits at most nine fixed-name
+  health rows every 15 seconds (0.6 rows/s); probe defaults are explicit
+  ten-minute samples with five-second NVIDIA and eight-second NCCL deadlines.
+- Interpretation: A post-exit operator can select one served job/root/execution
+  and answer whether token throughput, request queue/KV saturation, latency,
+  outcomes, or the worst producer replica explains a slow or silent serve.
+- Next action: Run the pre-PR review gate, open the single draft PR, and track
+  the deferred M2 Levanter, M3 RL, M4 Zephyr, and remaining M5 work separately.
