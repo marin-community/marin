@@ -17,8 +17,14 @@ description: Read-only Zephyr memory store and verified fuzzy-dedup experiments
   may only retain a cluster early.
 - The generic store passes its focused local and Iris tests. A pickled handle
   served later Zephyr pipelines, and a lookup blocked through a forced owner
-  preemption and returned the original value after reconstruction. Dedup parity
-  and medium-scale CoreWeave runs remain open.
+  preemption and returned the original value after reconstruction.
+- The store-backed fuzzy verifier passes all 90 safe dedup tests. It keeps only
+  candidate text in actors, shuffles metadata without text, and uses bounded
+  reducer lookups.
+- The final 100B CoreWeave A/B matched all 27,203 persisted markers. With
+  identical 64 GB workers and 60 GB task budgets, hot-reducer peak RSS fell
+  from 16.25 GB to 2.56 GB. Including the one-time store load, total measured
+  CPU rose 9.0%.
 
 ## Scope
 
@@ -36,27 +42,23 @@ description: Read-only Zephyr memory store and verified fuzzy-dedup experiments
 ## Current Baseline
 
 - Code refs: PR #7145 at `a55236a5661ac15aed1bb5b5abf5971b0754f282`;
-  PR #7831 at `1a392275f64965db5bb5ae59ef35d25b7e06ee5e`.
-- PR #7831 100B verifier: 1,513,510 candidate members, 1,007,455
-  comparisons, 27,179 accepted markers, 20m14s, 6,587.96 worker CPU-seconds,
-  9.67 GB peak worker memory, and 31.75 billion candidate-text characters.
+  PR #7831 at `854c2b3b544b526a2daed59712d520154163442a`.
+- Final 100B control: 1,513,510 candidate members, 27,203 accepted markers,
+  6,131.44 worker CPU-seconds, and 16.25 GB peak reducer RSS.
 - Largest candidate cluster: 104,490 members.
 
 ## Hypothesis Queue
 
 ### Active
 
-- `ZKV-004`: Store-backed fuzzy verification matches PR #7831 exactly while
-  reducing text in the cluster shuffle. Next test: compose the verifier branch
-  and establish synthetic parity.
 - `ZKV-005`: A deterministic large-cluster sample can reject known false
-  clusters cheaply without creating false removals. Next test: compare its
-  retained-marker subset and rated-pair recall; keep disabled by default.
+  clusters cheaply without creating false removals. Unsampled store parity is
+  established; a future test can compare its retained-marker subset and
+  rated-pair recall. Keep sampling disabled by default.
 
 ### Blocked
 
-- `ZKV-004` medium run: blocked until synthetic store-backed verifier parity.
-- `ZKV-005`: blocked until unsampled store parity is established.
+- None.
 
 ### Falsified / Dead End
 
@@ -70,6 +72,9 @@ description: Read-only Zephyr memory store and verified fuzzy-dedup experiments
   local and local-Iris backends.
 - `ZKV-003`: A lookup remained pending while its owner reconstructed after a
   forced Iris preemption, then returned the original value from that owner.
+- `ZKV-004`: The store-backed verifier preserved all synthetic marker,
+  canonical, exact-copy, empty-shard, and counter behavior across batch size
+  one and multiple worker counts. All 90 safe dedup tests passed.
 
 ## Decision Log
 
@@ -162,3 +167,344 @@ description: Read-only Zephyr memory store and verified fuzzy-dedup experiments
   that had already registered.
 - Next action: Commit the generic store checkpoint and compose PR #7831 for
   store-backed verifier parity.
+
+### 2026-07-31 21:58 UTC - ZKV-004 local verifier parity
+
+- Hypothesis: Candidate documents can stay in a shard-preserving actor store
+  while the cluster shuffle carries metadata only, without changing any fuzzy
+  removal decision.
+- Commit Hash: `d103673ad` plus uncommitted store-backed verifier changes.
+- Commands:
+  - `uv run pytest tests/processing/classification/deduplication/test_verify_fuzzy_dups.py -q`
+  - `uv run pytest tests/processing/classification/deduplication -q`
+  - targeted `./infra/pre-commit.py` over the eight changed verifier and call-site files
+- Config: `(file_idx, id)` keys hashed by `file_idx`; two local actors; one-row
+  lookup batches in behavior tests; explicit actor byte and recovery budgets.
+- Result: The focused verifier passed 7/7 and the safe dedup suite passed
+  90/90 with five integration cases excluded by repository defaults. Expected
+  sparse marker rows, canonical choice, equal-ID delegation, empty outputs,
+  and validation failures were unchanged. Store counters reported three
+  candidate items over two actors in the representative behavior test.
+- Interpretation: Full text is not needed in the cluster shuffle. Fetching the
+  canonical once and members through ordered `get_many()` batches preserves the
+  verifier's direct-comparison boundary.
+- Next action: Snapshot and push the treatment revision, then compare it with
+  PR #7831 on the same medium CoreWeave inputs using per-stage finelog metrics.
+
+### 2026-07-31 22:32 UTC - ZKV-004 federated correctness smoke
+
+- Hypothesis: The pickled store handle and metadata-only verifier preserve the
+  baseline result when their actors and Zephyr workers are child jobs of a
+  federated Iris entrypoint.
+- Commit Hashes: baseline `e2902dc9e`; treatment `25214d424`.
+- Jobs:
+  - `/loom/zephyr-kv-baseline-0p1b-20260731-v2`
+  - `/loom/zephyr-kv-treatment-0p1b-20260731-v1`
+- Config: CoreWeave `cw-us-east-02a`; 0.1B Datakit sample; shared persisted
+  MinHash/candidate prefix; 32 Zephyr workers; 32 store actors; 2 CPU and 8 GiB
+  per worker/actor; 128-key lookup batches.
+- Result: Both jobs succeeded without retries or preemptions. The independent
+  inspection matched all eight comparisons over 13 candidate members in five
+  clusters; both revisions emitted zero verified markers. Every Zephyr stage
+  processed identical item and input-byte counts. Baseline worker CPU was
+  35.38 seconds and treatment worker CPU was 41.19 seconds; this tiny input is
+  intentionally a correctness smoke, and store startup/RPC overhead dominates.
+  Peak worker RSS fell from 471,683,072 to 409,092,096 bytes.
+- Negative result: The first control entrypoint failed before pipeline startup
+  because scoped environment setup omitted `marin-dupekit`. Explicitly syncing
+  `marin-core` and `marin-dupekit` fixed the launch.
+- Interpretation: Federation inheritance works without child pinning. All 32
+  store actors loaded on the federated peer, served the later worker job, and
+  terminated with the context. The 0.1B sample is too sparse for a performance
+  claim.
+- Next action: Run the same A/B on the 100B candidate population and require a
+  complete marker-by-marker equality check against the control artifact.
+
+### 2026-07-31 22:34 UTC - ZKV-005 100B control launched
+
+- Hypothesis: Removing candidate text from the verification shuffle reduces
+  worker CPU and peak RSS on the 1.5M-candidate workload while preserving every
+  output marker.
+- Commit Hash: baseline `5b875ae27`.
+- Job: `/loom/zephyr-kv-baseline-100b-20260731-v1`.
+- Config: CoreWeave `cw-us-east-02a`; 100B Datakit sample; 64 workers; complete
+  inspection disabled in favor of an exact persisted-marker comparison after
+  the treatment.
+- Result: Running. The discovered 100B prefix held prior verifier results but
+  not the current testbed's full MinHash/candidate layout, so the control is
+  materializing that shared discovery cache before verification. Those stages
+  are excluded from the verifier A/B, and the treatment will consume the exact
+  resulting candidate artifact.
+- Next action: Monitor discovery through a clean terminal verifier execution,
+  then launch the treatment on the same prefix.
+
+### 2026-07-31 22:43 UTC - ZKV-005 control stopped to share workers
+
+- Observation: `StepRunner(max_concurrent=8)` started each source's MinHash
+  `ZephyrContext` without an advertised host pool. PR #7145 therefore gave each
+  concurrent context its own coordinator `*-pool` and `*-workers-a0` job rather
+  than packing their tasks onto one worker group.
+- Result: The user authorized stopping
+  `/loom/zephyr-kv-baseline-100b-20260731-v1` after 8 minutes 16 seconds. Iris
+  reported `killed`, zero execution failures, and no completed verifier result.
+- Interpretation: The jobs were independent pipeline attempt zeroes, not
+  retries. This layout multiplies environment startup, coordinator, and idle
+  worker overhead, so it is unsuitable for the performance comparison.
+- Change: The testbed now scopes `StepRunner` inside one 64-worker
+  `PoolMode.HOST` context. All MinHash, candidate, and verifier contexts inherit
+  its coordinator through the current Iris job environment; federation needs
+  no explicit child pinning.
+- Next action: Apply the same orchestration change to both A/B revisions and
+  relaunch the 100B control under a fresh output prefix.
+
+### 2026-07-31 23:01 UTC - ZKV-005 shared coordinator sizing
+
+- Hypothesis: One standing pool can serve the eight concurrent MinHash stages
+  without creating a coordinator and worker group for every source.
+- Commit Hash: baseline `fd3322a1d`.
+- Job: `/loom/zephyr-kv-baseline-100b-20260731-v2`.
+- Result: Iris showed exactly one `zephyr-fuzzy-verification-testbed-pool` and
+  one 64-task worker group. Multiple MinHash execution IDs made progress and
+  completed source steps on those workers. After 6 minutes 57 seconds, the
+  coordinator's default 1 GiB task was OOM-killed with exit 137 while eight
+  pipelines were active; it had no preemption or worker failure beforehand.
+- Interpretation: Sharing removes repeated worker environments but concentrates
+  the active pipelines' plans, task queues, results, counters, and worker RPC
+  state in one coordinator. The lightweight single-pipeline default is not an
+  adequate request for this eight-pipeline testbed.
+- Change: The testbed now requests a non-preemptible coordinator with 1 CPU and
+  4 GiB RAM. The standing-pool documentation now calls out aggregate
+  coordinator sizing and shows that request in its Datakit example.
+- Recovery: The failed pool was terminal, so the parent was stopped to release
+  its step locks. Successful MinHash artifacts remain under `candidates-v2` and
+  will be reused by the corrected run.
+- Next action: Relaunch the control on the same candidate prefix, verify the
+  larger coordinator remains healthy, and continue through baseline verifier
+  completion.
+
+### 2026-07-31 23:21 UTC - ZKV-005 bounded shared-pool finalization
+
+- Hypothesis: The shared pool's OOM is amplified by one 32-thread final-result
+  executor per concurrently completing pipeline, rather than only by durable
+  coordinator state.
+- Job: `/loom/zephyr-kv-baseline-100b-20260731-v3` at baseline commit
+  `b93305102`.
+- Observation: Coordinator thread samples oscillated from about 43 durable
+  threads to 303-317 threads while eight pipelines materialized results. At 14
+  minutes 29 seconds, Iris reported 317 threads and 1.55 GiB RSS. The corrected
+  4 GiB coordinator remained healthy with zero failures or preemptions, more
+  than twice the failed run's 6 minute 57 second lifetime.
+- Change: Commit `8d22aab14` gives the coordinator one reusable 32-thread
+  final-result executor. All concurrent pipelines share that bound, and the
+  executor is closed with the coordinator. The same patch is baseline commit
+  `2a8a8a691`.
+- Validation: The coordinator execution and shared-context suite passed 89/89
+  tests. The regression test saturates all 32 materialization threads twice and
+  verifies that the second pipeline reuses the exact first thread set.
+- Interpretation: Pool reuse is still the efficient topology, but its shared
+  coordinator must bound aggregate concurrency and request memory for all live
+  pipelines. The explicit 4 GiB request remains useful headroom even after the
+  thread bound.
+- Next action: Let the recovery run finish populating the candidate cache, then
+  run both verifier revisions with the bounded executor and identical pool
+  resources.
+
+### 2026-08-01 00:05 UTC - ZKV-006 reuse the reported 100B candidates
+
+- Observation: The issue reproduction already has a complete candidate
+  artifact at
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-100b-20260724-v1/baseline/dedup`:
+  115 sources, 1,513,510 candidate members, and 505,876 clusters.
+- Change: The testbed accepts that artifact directly. Its importer normalizes
+  legacy absolute source paths and rewrites the nested v1 candidate schema to
+  the current flat schema without rerunning MinHash. The same-region migrated
+  artifact is durable at
+  `s3://marin-us-east-02a/marin/user/loom/datakit/zephyr-kv-6854/100b/baseline-direct-v3/candidate-artifact`.
+- Validation: Three importer regressions cover source normalization, collision
+  rejection, and v1 schema flattening.
+- Interpretation: Both verifier arms can now consume exactly the candidates
+  reported in issue #6854. Candidate discovery is outside the measured A/B.
+
+### 2026-08-01 00:30 UTC - ZKV-007 external-sort memory accounting
+
+- Observation: Direct verifier attempts v3-v7 repeatedly OOM-killed the two
+  hottest reduce shards. Increasing worker containers from 8 GiB to 16 GiB did
+  not fix the failure. A configured 4 GiB task budget was ignored because
+  Zephyr planned shuffle fan-in from the container cgroup limit.
+- Change: Integration commit `43a8def14` makes shuffle planning and external
+  sort use the active task memory budget, falling back to the cgroup limit when
+  no task budget is advertised. The baseline equivalent is `c0ea24b4a`.
+- On-cluster validation: The corrected reducer logged a 4.3 GB task budget and
+  fan-in 31 instead of a 17.2 GB container budget and fan-in 126. With a 1 GiB
+  diagnostic budget, pass 1 reduced fan-in to 9 and exposed a second defect in
+  pass 2: 66 concurrent runs containing approximately 356,637-byte serialized
+  records computed a safe single-digit read batch, then clamped it upward to
+  100 and exceeded its own 0.3 GB buffer budget.
+- Change: Integration commit `0adc81786` and baseline commit `5af4f21f1` remove
+  the unsafe 100-item floor. One item per run is now the minimum. The regression
+  uses the production run count and record width and fails under the old floor.
+- Validation: The focused shuffle suite passed 23/23 tests; the combined
+  shuffle, execution, and memory-store suite passed 102/102 tests. Targeted
+  lint, formatting, and type checks passed.
+- Resource decision: The 1 GiB task budget was diagnostic, not a target
+  production allocation. At the user's direction, the measured A/B now uses
+  64 GB worker containers with a 60 GB verifier task budget, reserving 4 GB for
+  the worker process and runtime. Integration commit `45c8e0130` and baseline
+  commit `e2544ff01` carry identical sizing.
+- Next action: Complete the 100B baseline and treatment under those identical
+  resources, verify exact persisted-marker equality, and compare finelog CPU
+  and memory metrics.
+
+### 2026-08-01 01:24 UTC - ZKV-008 100B direct verifier A/B
+
+- Jobs:
+  - baseline `/loom/zephyr-kv-baseline-100b-direct-20260801-v8`, execution
+    `20260801-003704-09c1a674`;
+  - treatment `/loom/zephyr-kv-treatment-100b-direct-20260801-v1`, execution
+    `20260801-005433-f35a303d`.
+- Result: Both jobs succeeded with zero failures and preemptions. The treatment
+  verified 27,179 duplicates from 1,513,510 candidate members in 505,876
+  clusters, then compared every persisted marker and logged `Verified output
+  matches 27179 reference markers` against the baseline artifact.
+- Topology: Each arm used one shared 64-worker Zephyr pool. The treatment added
+  one intentional 32-task MemoryStore actor job; these are store shards rather
+  than additional Zephyr pools. The actors directly reused the 768 source
+  partitions through the caller-supplied file-index hash.
+- Store load: The 32 actors loaded all 1,513,510 documents and 31,955,129,644
+  serialized bytes in parallel. Load CPU summed to 2,399.51 seconds, the
+  largest actor held 1,365,131,612 serialized bytes, and the slowest actor was
+  ready in 96.43 seconds.
+- Stage finelog comparison:
+  - map/scatter: baseline 2,622.24 CPU-seconds and 63.31 seconds elapsed;
+    treatment 34.64 CPU-seconds and 8.86 seconds elapsed because document I/O
+    moved to the store actors;
+  - cluster reduce/scatter: baseline 1,642.26 CPU-seconds and 627.91 seconds;
+    treatment 2,174.67 CPU-seconds and 583.85 seconds;
+  - output reduce: baseline 47.47 CPU-seconds and 11.18 seconds; treatment
+    48.61 CPU-seconds and 11.31 seconds.
+- Accounting: The baseline stages used 4,311.97 CPU-seconds. Treatment stages
+  plus the one-time actor load used 4,657.43 CPU-seconds, an 8.0% increase.
+  The hot reduce critical path fell 7.0%, while complete root-job time rose
+  from 800.71 to 857.97 seconds (+7.2%) because store startup was not hidden.
+- Memory: The completed hot-reduce stat fell from 13,420,138,496 to
+  1,303,760,896 bytes. Live cgroup inspection found about 17 GB on the baseline
+  hot reducer and 866,050,048 bytes on the corresponding treatment reducer.
+  These are directional rather than final peak figures: the periodic sampler
+  used a ContextVar that is absent in its child thread, so only the final
+  main-thread sample populated resource counters.
+- Zephyr fix: Commit `6a503a78d` writes periodic samples through the explicit
+  shard context. The runner regression now requires positive RSS in a RUNNING
+  finelog row; 9 tests passed with one expected xfail. Baseline commit
+  `6b8480e2e` carries the identical fix for the next measured pair.
+- Lookup analysis: 474,388 clusters contain 2-3 documents, while only 248
+  exceed 127 documents. Commit `145f8a404` co-fetches the representative with
+  the first member batch, removing a serial lookup round for almost every
+  cluster, and raises the skew testbed batch from 128 to 1,024 for the
+  104,490-document tail. The focused verifier suite passed 11/11 tests.
+- Next action: Measure treatment v2 at
+  `/loom/zephyr-kv-treatment-100b-direct-20260801-v2`; if batching improves the
+  reduce stage without changing markers, rerun the corrected-telemetry baseline
+  and final treatment pair.
+
+### 2026-08-01 01:40 UTC - ZKV-009 lookup batching result
+
+- Job: `/loom/zephyr-kv-treatment-100b-direct-20260801-v2`, execution
+  `20260801-012609-7722e0db`.
+- Result: The job succeeded in 13 minutes 23.65 seconds with zero failures or
+  preemptions. It verified 27,179 duplicates and matched every persisted marker
+  from the baseline artifact.
+- Comparable work: All three stages matched treatment v1 exactly on items and
+  bytes. The cluster reduce processed 27,947 output items and 12,752,368 bytes
+  in both runs.
+- Batch result: Co-fetching the canonical document with the first 1,024-record
+  batch shortened the noisy reduce critical path from 583.85 to 567.97 seconds,
+  but increased primary CPU work from 2,174.67 to 2,299.26 CPU-seconds (+5.7%).
+  Corrected periodic telemetry measured a 5,140,877,312-byte peak and
+  974,127,181-byte average, versus the incomplete v1 peak sample.
+- Decision: Do not use a 1,024-document production batch. Keep the canonical
+  co-fetch, but retain the bounded 128-document batch for the final local-
+  representative comparison. The observed 5.14 GB peak also confirms that the
+  final 64 GB worker / 60 GB task budget has ample headroom.
+- Next action: Finish porting the store beneath the current local-representative
+  verifier and run the corrected baseline/treatment pair against its 27,203-
+  marker reference output.
+
+### 2026-08-01 02:34 UTC - ZKV-010 final 100B verifier A/B
+
+- Hypothesis: The store-backed local-representative verifier preserves every
+  deletion marker while bounding the skewed reducer's memory on the reported
+  100B candidate population.
+- Revisions: baseline `2faf81813`; treatment `c371fa465`.
+- Jobs and executions:
+  - baseline `/loom/zephyr-kv-final-baseline-100b-20260801-v1`, execution
+    `20260801-015637-790a9637`;
+  - treatment `/loom/zephyr-kv-final-treatment-100b-20260801-v1`, execution
+    `20260801-021947-4fbda315`;
+  - baseline audit repair
+    `/loom/zephyr-kv-final-baseline-compare-100b-20260801-v2`.
+- Config: CoreWeave `cw-us-east-02a`; one shared 64-worker pool per arm; 64 GB
+  worker containers; 60 GB verifier task budget; 4 GB coordinator; 32 store
+  actors with 8 GB each; 128-key lookup batches. Both arms consumed the same
+  1,513,510 candidate members and 505,876 clusters.
+- Correctness: The treatment emitted 27,203 fuzzy-duplicate markers and matched
+  every persisted baseline row. All three stages had identical item and byte
+  counts. Both compute paths had zero worker failures and preemptions.
+- CPU by comparable Zephyr stage:
+  - map/scatter fell from 4,384.05 to 1,762.37 CPU-seconds (-59.8%);
+  - cluster reduce/scatter rose from 1,697.41 to 2,455.85 CPU-seconds (+44.7%)
+    because full-text access moved to bounded actor RPCs;
+  - output reduce was unchanged at 49.98 versus 50.39 CPU-seconds (+0.8%).
+- Complete CPU accounting: Zephyr stage CPU fell from 6,131.44 to 4,268.61
+  CPU-seconds (-30.4%). The 32 actors used another 2,414.70 CPU-seconds to load
+  and encode the documents once, making treatment total 6,683.31 CPU-seconds,
+  9.0% above baseline. Reusing the store for another pipeline amortizes that
+  one-time load.
+- Memory: Corrected finelog peak RSS for the cluster reducer fell from
+  16,254,693,376 to 2,560,356,352 bytes (-84.2%); average reducer RSS fell
+  87.8%. Live cgroup inspection of the final skew shard measured
+  16,736,800,768 versus 1,679,405,056 bytes (-90.0%). The map/scatter peak fell
+  73.5%.
+- Store load: The actors loaded 31,955,129,644 encoded bytes across 64 source
+  partitions. The largest actor held 1,365,131,612 encoded bytes and the
+  slowest actor was ready in 86.03 seconds. The separate 32-task actor job is
+  the intended store partitioning, not another Zephyr pool.
+- Audit repair: The baseline completed all verifier stages, then its wrapper
+  rejected the older reference metadata because it lacked `source_tag`.
+  The first compare-only repair also interpreted relative artifact paths as
+  local paths and compared two empty sets. The final reader resolves typed
+  artifact paths, requires the expected 27,203 count, and completed the exact
+  comparison in a separate 33.38-second job. The treatment used that corrected
+  reader and completed its comparison in the same root job.
+- Interpretation: The store makes the pathological reducer fit comfortably
+  below the 60 GB budget and preserves output exactly. The measured trade is
+  84% lower worst-shard RSS for 9% more total CPU on a single consumer; shared
+  reuse should improve the CPU side by amortizing construction.
+- Next action: Publish the operational incident, refresh the design artifact,
+  run final validation and review, and open the stacked PR.
+
+### 2026-08-01 02:55 UTC - ZKV-011 final self-review and validation
+
+- Self-review found that `verify_fuzzy_dups()` created a context-owned store
+  without closing its `ZephyrContext`. The verifier now scopes the context so
+  store actors shut down after the worker pool drains, including on exceptions.
+- The bounded inspection path still passed a parsed artifact to a helper that
+  had been changed to accept an artifact path. Row collection now accepts both
+  current and legacy source metadata after path resolution; path loading is a
+  separate wrapper.
+- Test cleanup removed a fixed sleep from periodic telemetry coverage, replaced
+  a copy of the external-sort batch formula with its memory invariant, added
+  actor-capacity behavior coverage, and closed every test `LocalClient`.
+- Validation:
+  - `./infra/pre-commit.py --changed-files --fix`: passed, including pyrefly;
+  - focused memory-store, runner, shuffle, and verifier suite: 67 passed and 1
+    expected xfail;
+  - dedup and Datakit-store suite: 104 passed, 5 deselected by repository
+    defaults;
+  - Fray suite: 84 passed;
+  - full Zephyr suite: 379 passed, 4 deselected, 1 expected xfail in 7m06s.
+- Interpretation: The earlier full-suite local-Iris timeout did not recur when
+  the suite ran without competing test processes. The final lifecycle and
+  inspection fixes do not change marker decisions or measured stage work, so
+  the completed 100B A/B remains the output and performance evidence.
+- Next action: Commit the clean branch, run the one required lint-catalog
+  review, address its findings, push, and open the stacked PR.

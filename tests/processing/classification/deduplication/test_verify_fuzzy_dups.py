@@ -49,8 +49,12 @@ verify_fuzzy_dups = partial(_verify_fuzzy_dups, store_config=TEST_STORE_CONFIG)
 
 @pytest.fixture(autouse=True)
 def flow_backend_ctx():
-    with set_current_client(LocalClient()):
-        yield
+    client = LocalClient()
+    try:
+        with set_current_client(client):
+            yield
+    finally:
+        client.shutdown()
 
 
 def _write_source(

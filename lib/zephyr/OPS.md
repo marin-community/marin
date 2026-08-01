@@ -82,6 +82,49 @@ for entry in task_logs:
     print(msg)
 ```
 
+### Repeated Worker Pools
+
+Several coordinator and worker-group pairs with different pool IDs are
+independent `ZephyrContext` instances, not retries. Concurrent pipelines that
+use plain contexts repeat worker startup and can leave capacity idle.
+
+List the complete topology beneath the root job:
+
+```bash
+uv run iris --config <CONFIG> job list --prefix <ROOT_JOB_ID> --limit 500
+```
+
+Entering one context starts a retained pool. Pass that entered context to the
+functions that should share it; a serialized child receives a borrowed
+coordinator handle. The expected topology is then one coordinator actor group
+and one worker actor group for all submitted pipelines. Additional actor jobs,
+such as a memory store, are expected and are not worker pools.
+
+If a pipeline unexpectedly creates another pool, confirm that the entered
+context is still alive and was passed to that stage. Do not add a federation
+target to repair this: child jobs already run on their federated parent's peer.
+
+One shared coordinator retains state for every active pipeline. Size its task
+for their aggregate plans, queues, counters, and RPCs.
+
+### External-Sort Memory Budgets
+
+Worker container RAM and active task RAM are different limits. Shuffle fan-in
+and external-sort buffers use the active map or reduce task budget when one is
+declared; the worker cgroup limit is only the fallback. Leave headroom between
+the task budget and container request for the worker process and runtime.
+
+The worker log records the selected memory budget and external-sort fan-in. If
+a reducer OOMs despite a small declared task budget, verify those log values
+before increasing the worker request. A large cgroup-derived fan-in means the
+task budget was not propagated to the shard.
+
+Use completed `zephyr.stage` finelog rows for the result: compare
+`mem_peak_bytes_max`, `mem_bytes_avg`, and `cpu_time_total` between equivalent
+runs. Requested RAM shows capacity, not actual use. Inspect the live cgroup of
+a known skew worker only as supporting evidence because a point sample can
+miss the true peak.
+
 ### Stale Pipeline Warning
 
 Grafana evaluates `ZephyrPipelineProgressStalled` once each minute. The rule
