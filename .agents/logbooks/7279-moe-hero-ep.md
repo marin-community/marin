@@ -197,3 +197,10 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Interpretation: This is a scheduler wait. No setup, compile, training, or GPU cost has started for this run.
 - Decision: Keep the single request queued. Do not duplicate it, change priority, or change the cluster.
 - Next action: Continue the 570-second monitor cadence until admission or a terminal state.
+
+### 2026-08-01 22:32 UTC - MHEP-001 admission wait unchanged
+
+- Status: Coordinator task 0 is pending before its first attempt.
+- Evidence: Zero failures and zero preemptions. A08 remains reachable and reports 0 of 820 GB200 GPUs free, with 84 held by interactive work and 736 held by batch work.
+- Decision: Keep the existing request and its queue position.
+- Next action: Continue the 570-second monitor cadence.
