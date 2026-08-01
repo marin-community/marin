@@ -47,7 +47,7 @@ from levanter.grug.grug_moe import (
     resolve_moe_implementation,
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
-from levanter.grug.sharding import Pembed_vocab, unshard
+from levanter.grug.sharding import unshard
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
@@ -58,7 +58,10 @@ _ROUTING_RENORM_SUM = 2.5
 # v=4096 is the dominant MFU lever for the 128k vocab; the SMEM-tiled batched_xla kernel caps the
 # h*v weight tile at ~99KB and cannot take v=4096.
 _CE_BLOCK_SIZES = BlockSizes(v_block_size=4096)
-_LM_HEAD_PARTITION_SPEC = P(("replica_dcn", "data"), "model")
+# The embedding is fully replicated for a local lookup. The language-model head
+# is replicated across racks and FSDP-sharded within each rack.
+_EMBED_PARTITION_SPEC = P(None, None)
+_LM_HEAD_PARTITION_SPEC = P("data", "model")
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
@@ -87,6 +90,21 @@ def _batch_spec() -> P:
 
 def _batch_reshard(x: jax.Array) -> jax.Array:
     return reshard(x, _batch_spec())
+
+
+def _embedding_gather(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
+    """Look up tokens from a replicated table without a cross-rack collective."""
+
+    def _local(table: jax.Array, ids: jax.Array) -> jax.Array:
+        return table[ids]
+
+    token_ids = reshard(token_ids, P(_BATCH_AXES, None))
+    return shard_map(
+        _local,
+        mesh=get_abstract_mesh(),
+        in_specs=(P(None, None), P(_BATCH_AXES, None)),
+        out_specs=P(_BATCH_AXES, None, None),
+    )(token_embed, token_ids)
 
 
 def _partition_spec_of(x: jax.Array) -> P | None:
@@ -894,7 +912,7 @@ class Transformer(eqx.Module):
 
         embed_key, out_key, embed_gn_key, final_gn_key, *block_keys = random.split(key, cfg.num_layers + 4)
         token_embed = reshard(
-            _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
+            _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), _EMBED_PARTITION_SPEC
         )
         output_proj = reshard(
             _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), _LM_HEAD_PARTITION_SPEC
@@ -925,17 +943,19 @@ class Transformer(eqx.Module):
             mask = AttentionMask.causal()
 
         cfg = self.config
-        hidden = self.token_embed.at[token_ids].get(out_sharding=_batch_spec())
+        hidden = _embedding_gather(self.token_embed, token_ids)
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
         # Local layers use a sliding window; every global_every-th layer is full causal.
-        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
-        if segment_ids is not None:
+        segment_ids = None
+        if isinstance(mask, AttentionMask) and mask.segment_ids is not None:
             # Pin the per-token [B, S] segment ids batch-sharded before they enter the layer-scan
-            # lax.cond. Otherwise they reach the cond as {maximal device=0} and the compiler falls
-            # back to an involuntary full-remat scatter to [num_devices, 1], which serializes through
-            # device 0 and can wedge the MoE all-to-all (collective rendezvous timeout at scale).
-            segment_ids = _batch_reshard(segment_ids)
+            # and use one array for both sides of self-attention. Resharding the original tuple
+            # separately loses object identity and adds a runtime equality conditional whose output
+            # is pinned to device 0.
+            q_segment_ids, _ = mask.segment_ids
+            q_segment_ids = _batch_reshard(q_segment_ids)
+            segment_ids = (q_segment_ids, q_segment_ids)
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
 
