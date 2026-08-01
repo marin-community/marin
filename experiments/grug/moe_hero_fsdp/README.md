@@ -12,16 +12,15 @@ Launch:
 python -m experiments.grug.moe_hero_fsdp.launch --dp-racks 1 --version dev
 
 # submit one or more racks; each rack gets 16 GB200x4 nodes and batch 1024
-DP_RACKS=2
-RID="moe-hero-fsdp-test-${DP_RACKS}rack"
+RID="moe-hero-fsdp-test-2rack"
 iris --cluster=marin job run --no-wait --enable-extra-resources \
   --target-cluster cw-us-east-08a --priority interactive \
   --cpu 2 --memory 8GB --disk 32GB --timeout 5400 --job-name "${RID}-coord" \
   -e WANDB_API_KEY "$WANDB_API_KEY" -e RUN_ID "$RID" \
-  -- python -m experiments.grug.moe_hero_fsdp.launch --dp-racks "$DP_RACKS" --version dev --run
+  -- python -m experiments.grug.moe_hero_fsdp.launch --dp-racks 2 --version dev --run
 ```
 
-W&B: `marin-community/marin_moe`, run name `$RUN_ID`.
+W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `$RUN_ID`.
 
 ## Files
 

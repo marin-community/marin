@@ -99,6 +99,7 @@ def build_hero_run(*, dp_racks: int, version: str | None = None) -> ArtifactStep
                 entity="marin-community",
                 project="marin_moe",
                 tags=["grug", "moe", "hero", "fsdp", "gb200"],
+                group="moe-hero-fsdp",
                 name=run_id,
                 replicate_path=ctx.output_path,
             ),
