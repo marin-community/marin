@@ -80,13 +80,22 @@ selected/not), so resolution must be good *there*:
 Open: exact `R` (tune from logged margins); whether to EMA the bias for stability; update cadence
 (every step, matching today).
 
-## H100 launch — kernels auto-select (not a blocker)
+## H100 launch — MoE backend must be swapped (sonic_cute is SM100-only)
 
-The MoE/attention backends **auto-select a working kernel for the H100 arch** (per user); no manual
-backend swap needed. Just target the H100 resources and carry over the sweep's validated flags:
-- Resources: `ResourceConfig` H100, 8 GPU/node → **8 nodes = 64 GPU**.
+The MoE backend does **not** auto-fall-back on H100. `moe_implementation="sonic_cute"` is the QuACK
+**SM100 (Blackwell/B200) grouped-GEMM** backend; on H100 (SM90) its expert SwiGLU has no lowering and
+the first H100 baseline died at compile with `KeyError: ('closed_call', let silu = { … bf16[512,8192,128]`
+(the expert MLP). Fix: set **`SWEEP_MOE_IMPL=scatter`** (portable single-process grouped GMM with
+scatter-add combine) for every H100 run. `sweep_launch.py` now reads `SWEEP_MOE_IMPL` / `SWEEP_ATTN_IMPL`
+(defaults sonic_cute / gpu_fa4_cute for the GB200 sweep). Attention (`gpu_fa4_cute`) is FA4 (Hopper +
+Blackwell), so it is *expected* to run on H100 — confirm from the first baseline logs; if it also fails
+to lower, add `-e SWEEP_ATTN_IMPL reference`.
+- Resources: `ResourceConfig` H100, 8 GPU/node → **8 nodes = 64 GPU** (env: `SWEEP_GPU_TYPE=H100`,
+  `SWEEP_GPUS_PER_NODE=8`, `SWEEP_NODES=8`).
 - `offload_opt_state=False`, PGLE off (`-e JAX_ENABLE_PGLE 0`), eval-bf16 cast — all carry over.
-- Cluster + region-local `MARIN_PREFIX` holding the datakit store: confirm which H100 fleet.
+- Cluster: **cw-us-east-02a** (H100, region-local to the datakit store on `s3://marin-us-east-02a/marin`).
+
+All three variants (baseline, qknorm, qbhist) must carry `-e SWEEP_MOE_IMPL scatter`.
 
 Still run **baseline first** as a quick sanity that d2048 trains on 64 H100 before the two variants.
 

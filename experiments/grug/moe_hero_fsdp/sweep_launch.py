@@ -155,10 +155,13 @@ def build_sweep_configs(size: SweepSize, *, num_train_steps: int, lr_mult: float
         hidden_dim=size.hidden_dim,
         seq_len=SEQ_LEN,
     )
+    # use_syrk routes the 4D Newton-Schulz through QuACK's GemmSymmetricSm100 (SM100/B200-only); H100
+    # fleets must disable it (SWEEP_USE_SYRK=0) to fall back to the portable batched matmul NS.
     optimizer = dataclasses.replace(
         optimizer,
         learning_rate=optimizer.learning_rate * lr_mult,
         adam_lr=optimizer.adam_lr * lr_mult,
+        use_syrk=os.environ.get("SWEEP_USE_SYRK", "1") == "1",
     )
     return model, optimizer
 
