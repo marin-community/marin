@@ -18,4 +18,4 @@ def text_cross_encoder() -> TextCrossEncoder:
         license="apache-2.0",
         size_in_gb=0.03,
     )
-    return TextCrossEncoder(search_config.RERANK_MODEL)
+    return TextCrossEncoder(search_config.RERANK_MODEL, threads=1)

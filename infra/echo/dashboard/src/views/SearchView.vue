@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   fetchJson,
@@ -11,8 +11,6 @@ import {
 } from '../types'
 
 const PAGE_SIZE = 30
-const DEBOUNCE_MS = 250
-
 const route = useRoute()
 const router = useRouter()
 const query = ref(typeof route.query.q === 'string' ? route.query.q : '')
@@ -129,25 +127,7 @@ function run(): void {
   search()
 }
 
-let debounceTimer: ReturnType<typeof setTimeout> | undefined
-function debouncedRun(): void {
-  clearTimeout(debounceTimer)
-  debounceTimer = setTimeout(run, DEBOUNCE_MS)
-}
-
-watch(query, () => {
-  if (ready) debouncedRun()
-})
-watch(
-  selectedDomains,
-  () => {
-    if (ready) run()
-  },
-  { deep: true },
-)
-
 function submit(): void {
-  clearTimeout(debounceTimer)
   run()
 }
 
