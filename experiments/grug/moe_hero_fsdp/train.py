@@ -161,6 +161,7 @@ def build_tagged_evaluator(
     max_seq_len: int,
     mesh: Mesh,
     eval_cfg: GrugEvalConfig,
+    mp: jmp.Policy,
 ) -> TaggedEvaluator[LmExample | GrugLmExample, Transformer] | None:
     pos = Axis("position", max_seq_len)
     tagged_eval_sets = data_config.tagged_eval_sets(pos)
@@ -180,6 +181,9 @@ def build_tagged_evaluator(
     eval_array_sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
 
     def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
+        # FA4 CuTe attention only supports bfloat16; cast the float32-param model to compute dtype for
+        # eval (matching training). Without this, eval attention runs in float32 and the kernel fails.
+        model = mp.cast_to_compute(model)
         if isinstance(batch, LmExample):
             batch = grug_lm_example_from_named(batch)
         per_pos_loss = model.next_token_loss(
@@ -512,6 +516,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 max_seq_len=config.model.max_seq_len,
                 mesh=mesh,
                 eval_cfg=eval_cfg,
+                mp=trainer.mp,
             )
 
         profiler_cfg = trainer.profiler
@@ -635,9 +640,11 @@ def run_grug(config: GrugRunConfig) -> None:
     if trainer.id is None:
         raise ValueError("trainer.id must be set before dispatching grug training.")
 
-    # Dispatch snapshots os.environ for the child task, so apply the hero values first.
-    # These fixed recipe values intentionally override the submitter environment.
-    os.environ.update(HERO_FSDP_RUNTIME_ENV)
+    # Dispatch snapshots os.environ for the child task, so apply the hero recipe defaults first --
+    # but with setdefault, so a submitter value wins (e.g. the sweep forwards JAX_ENABLE_PGLE=0 to
+    # disable PGLE, which otherwise crashes small runs with a profiling-session conflict).
+    for _key, _value in HERO_FSDP_RUNTIME_ENV.items():
+        os.environ.setdefault(_key, _value)
     dispatch_grug_training_run(
         run_id=trainer.id,
         config=config,
