@@ -13,7 +13,7 @@ import os
 import fsspec
 import pytest
 from rigging.filesystem import filesystem
-from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, external_sort_merge
+from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, _safe_read_batch_size, external_sort_merge
 from zephyr.plan import _merge_sorted_chunks
 from zephyr.runners import _InProcessWorkerContext
 from zephyr.shard_keys import deterministic_hash
@@ -24,6 +24,7 @@ from zephyr.shuffle import (
     _write_chunk_frame,
     _write_scatter,
 )
+from zephyr.spill import SpillReader, SpillWriter
 from zephyr.worker_context import _worker_ctx_var
 
 
@@ -381,6 +382,32 @@ def test_external_sort_merge_cleans_up(tmp_path):
     iters = [iter([i]) for i in range(EXTERNAL_SORT_FAN_IN + 1)]
     list(external_sort_merge(iter(iters), merge_key=lambda x: x, external_sort_dir=str(tmp_path)))
     assert list(tmp_path.iterdir()) == [], "run files should be deleted after merge"
+
+
+def test_external_sort_read_batch_respects_task_memory(tmp_path):
+    spill_path = str(tmp_path / "sample.spill")
+    with SpillWriter(spill_path) as writer:
+        writer.write(["x" * 356_637])
+
+    task_memory = 1024**3
+    n_runs = 66
+    item_bytes = max(64, SpillReader(spill_path).approx_item_bytes * 3)
+    expected = max(1, min(int(task_memory * 0.25) // (n_runs * item_bytes), 10_000))
+    assert expected < 100
+
+    ctx = _InProcessWorkerContext(
+        chunk_prefix="test",
+        execution_id="test",
+        stage_name="test",
+        task_memory_bytes=task_memory,
+    )
+    token = _worker_ctx_var.set(ctx)
+    try:
+        actual = _safe_read_batch_size(n_runs, spill_path)
+    finally:
+        _worker_ctx_var.reset(token)
+
+    assert actual == expected
 
 
 # ---------------------------------------------------------------------------
