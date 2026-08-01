@@ -20,7 +20,7 @@ from typing import Any
 import pyarrow.parquet as pq
 from fray.types import ActorConfig, ResourceConfig
 from marin.datakit.normalize import NormalizedData
-from marin.datakit.source_key import datakit_source_key
+from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
@@ -122,7 +122,7 @@ class _LegacyMinHashCollection(BaseModel):
 
 
 class _VerifiedSourcePaths(BaseModel):
-    attr_dir: str
+    attr_dir: DatakitArtifactPath
 
 
 class _VerifiedArtifactPaths(BaseModel):
@@ -606,6 +606,11 @@ def main() -> None:
         "--reference-verified-prefix",
         help="Optional verified artifact whose complete persisted output must match",
     )
+    parser.add_argument(
+        "--expected-reference-markers",
+        type=int,
+        help="Optional nonnegative marker count required from --reference-verified-prefix",
+    )
     parser.add_argument("--sources", default="all")
     parser.add_argument("--max-workers", type=int, default=DEFAULT_MAX_WORKERS)
     parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT)
@@ -623,6 +628,10 @@ def main() -> None:
         raise ValueError("--max-concurrent must be at least 1")
     if args.inspection_limit < 0:
         raise ValueError("--inspection-limit must be nonnegative")
+    if args.expected_reference_markers is not None and args.expected_reference_markers < 0:
+        raise ValueError("--expected-reference-markers must be nonnegative")
+    if args.expected_reference_markers is not None and not args.reference_verified_prefix:
+        raise ValueError("--expected-reference-markers requires --reference-verified-prefix")
     if bool(args.candidate_artifact) != bool(args.minhash_collection):
         raise ValueError("--candidate-artifact and --minhash-collection must be provided together")
 
@@ -719,6 +728,10 @@ def main() -> None:
     if args.reference_verified_prefix:
         actual_markers = _verified_rows(verified_step.output_path)
         reference_markers = _verified_rows(args.reference_verified_prefix)
+        if args.expected_reference_markers is not None and len(reference_markers) != args.expected_reference_markers:
+            raise AssertionError(
+                f"Reference contains {len(reference_markers)} markers; " f"expected {args.expected_reference_markers}"
+            )
         if actual_markers != reference_markers:
             unexpected = sorted(actual_markers.keys() - reference_markers.keys())
             missing = sorted(reference_markers.keys() - actual_markers.keys())
