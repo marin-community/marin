@@ -839,3 +839,45 @@ uv run iris --cluster=marin job run --no-wait \
   OpenBLAS used the host CPU count and exceeded its compiled thread table. The
   fast-student evaluator now uses the same fixed eight-thread wrapper as the
   existing Luxical evaluator.
+- The corrected 64K holdout evaluation completed all 74,752 fixed rows. It
+  passed finite, unique, worst-recall, and speed gates. It failed all quality,
+  fidelity, and regular-source collapse gates.
+- The 64K student had macro-F1 0.20413, Arctic fidelity 0.45959, 143 regular
+  collapse failures, minimum rank ratio 0.02236, and minimum variance ratio
+  0.01473. Its CPU speed ratio remained 2.59315.
+- The 750K training and evaluation jobs both completed without a failure or
+  preemption. The student had macro-F1 0.63566, which is 0.01839 above stock
+  Luxical. Code was 0.06824 higher and standard text was 0.01227 higher.
+- The 750K multilingual macro-F1 was 0.76573, which is 0.02988 below stock and
+  fails the allowed 0.02 loss. Arctic fidelity was 0.87323, which is 0.00559
+  above stock.
+- The 750K student had 66 regular collapse failures. Its minimum rank ratio was
+  0.35554 and its minimum variance ratio was 0.31444. Its training audit rank
+  was 31.15826, versus 2.72790 at 64K. This scale improvement justifies the 3M
+  rung.
+- The 3M training and holdout evaluation jobs completed without a failure or
+  preemption. The 3M student passes nine of ten gates. It fails only the
+  regular-source collapse gate.
+- The 3M student had macro-F1 0.65785, which is 0.04058 above stock. Code was
+  0.09832 higher, multilingual was 0.01905 lower, and standard text was
+  0.03497 higher. Arctic fidelity was 0.89423, which is 0.02658 above stock.
+- Fifty-nine regular sources fail the 3M composite rule. The failure reasons
+  are 56 concentration, four uniqueness, and one rank, with overlap. No source
+  fails the variance ratio gate. The minimum rank ratio is 0.45300 and the
+  minimum variance ratio is 0.52589.
+- The 3M training audit rank was 44.73097 and its final loss was 0.26548. The
+  fixed CPU speed ratio remained 2.59315.
+
+### FastTransformer peer-review correction
+
+- Peer review found that pooled Arctic fidelity can be inflated by separation
+  between within-source and across-source pair groups.
+- The corrected gate uses within-source Spearman only. All three fixed models
+  were reevaluated with unchanged vectors and rows.
+- Stock within-source fidelity is 0.82113. The 64K, 750K, and 3M values are
+  0.29437, 0.89338, and 0.90901. The corresponding deltas are -0.52676,
+  +0.07225, and +0.08788.
+- This correction does not change the final gate count. The 3M student still
+  passes nine of ten gates and fails only regular-source collapse.
+- The peer-review report and dispositions are in
+  `.agents/projects/luxical-arctic-poc/fast-student-report.md`.
