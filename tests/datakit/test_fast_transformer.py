@@ -18,6 +18,7 @@ import equinox as eqx
 import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
+import optax
 import pytest
 from scipy.special import logsumexp
 
@@ -255,3 +256,32 @@ def test_source_balanced_remap_gives_each_source_equal_weight():
     remap = source_balanced_token_remap([first_source, second_source], compact_vocab_size=4)
 
     assert remap.tolist() == [1, 1, 3, 1, 2]
+
+
+def test_embedding_transformer_takes_contrastive_gradient_step():
+    model = _embedding_model()
+    ids = jnp.asarray(
+        [
+            [2, 3, 4, 0, 0, 0, 0, 0],
+            [5, 6, 7, 8, 0, 0, 0, 0],
+            [9, 10, 11, 12, 13, 0, 0, 0],
+            [14, 15, 16, 17, 18, 19, 0, 0],
+        ],
+        dtype=jnp.int32,
+    )
+    teacher = jr.normal(jr.PRNGKey(8), (4, 6))
+    teacher /= jnp.linalg.norm(teacher, axis=1, keepdims=True)
+    optimizer = optax.adam(1e-3)
+    optimizer_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
+
+    def loss_function(candidate):
+        student = candidate(ids, key=jr.PRNGKey(9), inference=False)
+        return contrastive_embedding_loss(student, teacher, temperature=3.0)
+
+    initial_head = np.asarray(model.embedding_head)
+    loss, gradients = eqx.filter_value_and_grad(loss_function)(model)
+    updates, _ = optimizer.update(gradients, optimizer_state, eqx.filter(model, eqx.is_inexact_array))
+    updated = eqx.apply_updates(model, updates)
+
+    assert np.isfinite(float(loss))
+    assert not np.array_equal(np.asarray(updated.embedding_head), initial_head)
