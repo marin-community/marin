@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
+from typing import cast
 
 import pyarrow.parquet as pq
 import pytest
@@ -15,8 +16,10 @@ from marin.processing.classification.deduplication.fuzzy_minhash import MinHashP
 from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     FuzzyVerificationStoreConfig,
+    _make_cluster_verifier,
     verify_fuzzy_dups,
 )
+from zephyr.memory_store import MemoryStore
 from zephyr.stage_io import ZephyrWorkerError
 from zephyr.writers import write_parquet_file
 
@@ -77,6 +80,42 @@ def _store_config() -> FuzzyVerificationStoreConfig:
         ready_timeout=30,
         lookup_batch_size=1,
     )
+
+
+def test_verifier_fetches_representative_with_first_member_batch():
+    class RecordingStore:
+        def __init__(self) -> None:
+            self.requests: list[list[tuple[int, str]]] = []
+
+        def get_many(self, keys: list[tuple[int, str]]) -> list[str]:
+            self.requests.append(keys)
+            return ["alpha beta gamma delta"] * len(keys)
+
+    store = RecordingStore()
+    representative = {
+        "kind": "candidate",
+        "file_idx": 0,
+        "id": "same",
+        "dup_cluster_id": "cluster-a",
+        "is_cluster_canonical": True,
+        "source_key": "source-a",
+        "source_tag": "source_a",
+    }
+    member = {
+        **representative,
+        "file_idx": 1,
+        "is_cluster_canonical": False,
+        "source_key": "source-b",
+        "source_tag": "source_b",
+    }
+    verifier = _make_cluster_verifier(
+        FuzzyVerificationParams(),
+        cast(MemoryStore[tuple[int, str], str], store),
+        lookup_batch_size=2,
+    )
+
+    assert list(verifier(("cluster", "cluster-a"), iter([representative, member]))) == []
+    assert store.requests == [[(0, "same"), (1, "same")]]
 
 
 def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, monkeypatch):

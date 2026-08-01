@@ -65,7 +65,7 @@ STORE_CONFIG = FuzzyVerificationStoreConfig(
     max_actor_bytes=4_000_000_000,
     recovery_timeout=1_800,
     ready_timeout=1_800,
-    lookup_batch_size=128,
+    lookup_batch_size=1_024,
 )
 VERIFIED_COLUMNS = [
     "id",

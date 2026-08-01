@@ -7,7 +7,7 @@ import logging
 import os
 from collections.abc import Iterator
 from dataclasses import dataclass
-from itertools import batched
+from itertools import batched, chain
 from typing import Any
 
 import pyarrow as pa
@@ -236,72 +236,87 @@ def _make_cluster_verifier(
         representative = first
         if not representative["is_cluster_canonical"]:
             raise ValueError(f"Cluster {group_key[1]!r} has no canonical member")
-        representative_raw_text = document_store.get((representative["file_idx"], representative["id"]))
+        document_batches = iter(batched(chain((representative,), records), lookup_batch_size))
+        first_documents = next(document_batches)
+        first_document_texts = document_store.get_many(
+            [(document["file_idx"], document["id"]) for document in first_documents]
+        )
+        representative_raw_text = first_document_texts[0]
         counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/candidate_text_chars", len(representative_raw_text))
         representative_text = prepare_verification_text(representative_raw_text, params)
         cluster_size = 1
         accepted = 0
         counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/clusters", 1)
 
-        for members in batched(records, lookup_batch_size):
-            member_texts = document_store.get_many([(member["file_idx"], member["id"]) for member in members])
-            for member, member_raw_text in zip(members, member_texts, strict=True):
-                cluster_size += 1
-                counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/candidate_text_chars", len(member_raw_text))
-                if member["is_cluster_canonical"]:
-                    raise ValueError(f"Cluster {group_key[1]!r} has more than one canonical member")
-                if member["id"] == representative["id"]:
-                    if member_raw_text != representative_raw_text:
-                        raise ValueError(f"Cluster {group_key[1]!r} has different text for content ID {member['id']!r}")
-                    counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/decision/delegated_global_exact", 1)
-                    counters.pipeline.update_counter(
-                        f"{_COUNTER_PREFIX}/source/{member['source_tag']}/decision/delegated_global_exact",
-                        1,
-                    )
-                    continue
-                result = verify_prepared_candidate(
-                    prepare_verification_text(member_raw_text, params),
-                    representative_text,
-                    params,
+        members_with_text = chain(
+            zip(first_documents[1:], first_document_texts[1:], strict=True),
+            (
+                member_with_text
+                for members in document_batches
+                for member_with_text in zip(
+                    members,
+                    document_store.get_many([(member["file_idx"], member["id"]) for member in members]),
+                    strict=True,
                 )
-                decision = result.rejection.value if result.rejection is not None else "accepted"
-                counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/decision/{decision}", 1)
+            ),
+        )
+        for member, member_raw_text in members_with_text:
+            cluster_size += 1
+            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/candidate_text_chars", len(member_raw_text))
+            if member["is_cluster_canonical"]:
+                raise ValueError(f"Cluster {group_key[1]!r} has more than one canonical member")
+            if member["id"] == representative["id"]:
+                if member_raw_text != representative_raw_text:
+                    raise ValueError(f"Cluster {group_key[1]!r} has different text for content ID {member['id']!r}")
+                counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/decision/delegated_global_exact", 1)
                 counters.pipeline.update_counter(
-                    f"{_COUNTER_PREFIX}/source/{member['source_tag']}/decision/{decision}",
+                    f"{_COUNTER_PREFIX}/source/{member['source_tag']}/decision/delegated_global_exact",
                     1,
                 )
+                continue
+            result = verify_prepared_candidate(
+                prepare_verification_text(member_raw_text, params),
+                representative_text,
+                params,
+            )
+            decision = result.rejection.value if result.rejection is not None else "accepted"
+            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/decision/{decision}", 1)
+            counters.pipeline.update_counter(
+                f"{_COUNTER_PREFIX}/source/{member['source_tag']}/decision/{decision}",
+                1,
+            )
+            counters.pipeline.update_counter(
+                f"{_COUNTER_PREFIX}/histogram/member_containment/{_score_bin(result.member_containment)}",
+                1,
+            )
+            counters.pipeline.update_counter(
+                f"{_COUNTER_PREFIX}/histogram/jaccard/{_score_bin(result.jaccard)}",
+                1,
+            )
+            if result.char_jaccard is not None:
                 counters.pipeline.update_counter(
-                    f"{_COUNTER_PREFIX}/histogram/member_containment/{_score_bin(result.member_containment)}",
+                    f"{_COUNTER_PREFIX}/histogram/char_jaccard/{_score_bin(result.char_jaccard)}",
                     1,
                 )
-                counters.pipeline.update_counter(
-                    f"{_COUNTER_PREFIX}/histogram/jaccard/{_score_bin(result.jaccard)}",
-                    1,
-                )
-                if result.char_jaccard is not None:
-                    counters.pipeline.update_counter(
-                        f"{_COUNTER_PREFIX}/histogram/char_jaccard/{_score_bin(result.char_jaccard)}",
-                        1,
-                    )
-                counters.pipeline.update_counter(
-                    f"{_COUNTER_PREFIX}/histogram/member_unique/"
-                    f"{min(result.member_unique_ngrams, UNIQUE_NGRAM_HISTOGRAM_OVERFLOW_BIN)}",
-                    1,
-                )
-                if not result.accepted:
-                    continue
+            counters.pipeline.update_counter(
+                f"{_COUNTER_PREFIX}/histogram/member_unique/"
+                f"{min(result.member_unique_ngrams, UNIQUE_NGRAM_HISTOGRAM_OVERFLOW_BIN)}",
+                1,
+            )
+            if not result.accepted:
+                continue
 
-                accepted += 1
-                yield {
-                    "kind": "verified",
-                    "file_idx": member["file_idx"],
-                    "id": member["id"],
-                    "dup_doc": True,
-                    "dup_cluster_id": member["dup_cluster_id"],
-                    "dup_representative_id": representative["id"],
-                    "dup_representative_source_key": representative["source_key"],
-                    **_result_fields(result),
-                }
+            accepted += 1
+            yield {
+                "kind": "verified",
+                "file_idx": member["file_idx"],
+                "id": member["id"],
+                "dup_doc": True,
+                "dup_cluster_id": member["dup_cluster_id"],
+                "dup_representative_id": representative["id"],
+                "dup_representative_source_key": representative["source_key"],
+                **_result_fields(result),
+            }
 
         counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/cluster_size/{_size_bin(cluster_size)}", 1)
         counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/cluster_members", cluster_size)
