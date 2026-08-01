@@ -10,7 +10,9 @@ from unittest.mock import patch
 
 import jax
 import jax.numpy as jnp
-from jax.sharding import AbstractMesh, AxisType, NamedSharding, PartitionSpec as P, use_abstract_mesh
+from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mesh
+from jax.sharding import PartitionSpec as P
+
 from experiments.grug.moe_hero_ep import grugmuon_hero, train
 
 

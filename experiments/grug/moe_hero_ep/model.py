@@ -593,9 +593,7 @@ class DenseMLP(eqx.Module):
             w_gate=reshard(
                 _init_weight(k_gate, (hidden_dim, intermediate_dim), initializer_std), P(_FSDP_AXES, "model")
             ),
-            w_up=reshard(
-                _init_weight(k_up, (hidden_dim, intermediate_dim), initializer_std), P(_FSDP_AXES, "model")
-            ),
+            w_up=reshard(_init_weight(k_up, (hidden_dim, intermediate_dim), initializer_std), P(_FSDP_AXES, "model")),
             w_down=reshard(
                 _init_weight(k_down, (intermediate_dim, hidden_dim), initializer_std), P("model", _FSDP_AXES)
             ),
