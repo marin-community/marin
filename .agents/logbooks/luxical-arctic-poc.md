@@ -706,3 +706,61 @@ uv run iris --cluster=marin job run --no-wait \
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-arctic-l-v2.0/report.json`.
 - HTML artifact:
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-arctic-l-v2.0/report.html`.
+
+### Corrected Arctic Embed Large v2.0 teacher test
+
+- Peer review found that the first Large run used a different attention and
+  pooling implementation from Medium. The result above is superseded.
+- Commit `beb363f2b` makes Large use the pinned Luxical pooling path, eager
+  attention, explicit position IDs, float32 inference, and the same token
+  staging as Medium.
+- Corrected job `/rav/lux-arctic-large-teacher-v2-gb200-002` succeeded in 29
+  minutes 13.87 seconds. It had no failures or preemptions.
+- The corrected run evaluated all 74,752 held-out rows.
+- Probe macro-F1 results:
+
+| Representation | Overall | Code | Name-matched multilingual | Standard |
+| --- | ---: | ---: | ---: | ---: |
+| Luxical-One | 0.61727 | 0.68089 | 0.79561 | 0.56887 |
+| Arctic Medium v2.0 | 0.66915 | 0.79995 | 0.72857 | 0.63070 |
+| Arctic Large v2.0 | 0.66810 | 0.79003 | 0.74798 | 0.62683 |
+
+- Large minus Medium overall macro-F1 is -0.00105 with interval
+  [-0.00616, +0.00408].
+- Large minus Medium code macro-F1 is -0.00992 with interval
+  [-0.01922, -0.00150].
+- Large minus Medium multilingual macro-F1 is +0.01941 with interval
+  [+0.00156, +0.03893].
+- Large minus Medium standard macro-F1 is -0.00388 with interval
+  [-0.00908, +0.00120].
+- Large trails Luxical-One multilingual macro-F1 by 0.04763. The interval is
+  [-0.11048, +0.01441].
+- Large passes six of eight direct gates. It fails
+  `regular_source_collapse` and `multilingual_macro_f1`.
+- All Large vectors are finite. Exact and four-decimal uniqueness are both
+  0.999759.
+- Fifty-one of 143 regular sources fail the composite rule. The counts are 15
+  of 28 code, zero of 24 multilingual, and 36 of 91 standard sources.
+- The failure reasons are 50 cluster-concentration failures and one uniqueness
+  failure. No source fails rank or variance checks.
+- The minimum Large-to-Luxical rank ratio is 1.08243. The minimum variance
+  ratio is 1.44775.
+- Median Large code values are 0.13958 largest-cluster share, 11.49555
+  effective clusters, and 0.52480 source-cluster NMI.
+- Large reduces Medium's composite source failures from 60 to 51. It does not
+  show rank, variance, constant-vector, or modality-wide code collapse.
+- The Large embedding phase took 1,490.43 seconds and processed 50.15
+  documents per second on one GB200-class worker. The complete source loop
+  took 1,659.20 seconds.
+- This rate is not student speed. The run did not train a Large-distilled
+  student or measure Medium teacher speed.
+- Interpretation: keep Medium as the default teacher. Large gives a measured
+  multilingual gain and fewer concentration failures, but it gives a measured
+  code loss and no overall gain.
+- The fixed 512-token windows do not test Large's full context limit.
+- The peer-review report records all review findings and dispositions in
+  `.agents/projects/luxical-arctic-poc/arctic-large-review.md`.
+- JSON artifact:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-arctic-l-v2.0-v2/report.json`.
+- HTML artifact:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/teacher-arctic-l-v2.0-v2/report.html`.
