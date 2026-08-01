@@ -40,7 +40,6 @@ from zephyr.execution import (
     ZephyrCoordinator,
     ZephyrWorker,
     _cleanup_execution,
-    _retain_execution,
 )
 from zephyr.plan import compute_plan
 from zephyr.shuffle import ListShard
@@ -214,11 +213,12 @@ def test_context_manager(local_client):
 
 def test_context_manager_reuses_one_pool(local_client, tmp_path):
     """An entered context keeps one pool until exit."""
+    chunk_prefix = str(tmp_path / "chunks")
     ctx = ZephyrContext(
         client=local_client,
         max_workers=2,
         resources=ResourceConfig(cpu=2, ram="1g"),
-        chunk_storage_prefix=str(tmp_path / "chunks"),
+        chunk_storage_prefix=chunk_prefix,
         name="test-shared-context",
     )
 
@@ -231,6 +231,7 @@ def test_context_manager_reuses_one_pool(local_client, tmp_path):
         assert sorted(second.results) == [6, 8]
         assert ctx._coordinator_handle is coordinator
         assert ctx._worker_group is workers
+        assert not list(Path(chunk_prefix).rglob("*"))
 
     assert ctx._coordinator_handle is None
     assert ctx._worker_group is None
@@ -1792,19 +1793,25 @@ def test_coordinator_shutdown_does_not_end_the_drain(coordinator):
     assert drained == [True]
 
 
-def test_undrained_execution_keeps_its_storage(tmp_path):
-    """A drain that gives up marks the directory, and cleanup leaves it alone."""
-    prefix = str(tmp_path / "chunks")
-    exec_dir = Path(prefix) / "exec-1"
+def test_undrained_execution_keeps_storage(coordinator, tmp_path):
+    """Release keeps storage when an active task does not drain."""
+    run = start_test_stage(coordinator, [_make_task("still-running")])
+    coordinator.register_worker("worker-0", MagicMock())
+    status, _ = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+    assert status == PullStatus.RUN_TASK
+
+    exec_dir = tmp_path / "chunks" / _TEST_EXECUTION_ID
     exec_dir.mkdir(parents=True)
-    (exec_dir / "shared.pkl").write_text("payload a task may still read")
+    shared_data = exec_dir / "shared.pkl"
+    shared_data.write_text("payload a task may still read")
 
-    _retain_execution(prefix, "exec-1")
-    _cleanup_execution(prefix, "exec-1")
-    assert (exec_dir / "shared.pkl").exists()
+    storage_cleanup_safe = coordinator._drain_execution(run, timeout=0.0)
+    with coordinator._lock:
+        run.finish(storage_cleanup_safe=storage_cleanup_safe)
+        run.finished.set()
 
-    _cleanup_execution(prefix, "exec-2")  # never marked
-    assert not (Path(prefix) / "exec-2").exists()
+    coordinator.release_execution(_TEST_EXECUTION_ID)
+    assert shared_data.exists()
 
 
 def test_cleanup_removes_a_drained_execution(tmp_path):
