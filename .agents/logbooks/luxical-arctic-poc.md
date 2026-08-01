@@ -819,3 +819,17 @@ uv run iris --cluster=marin job run --no-wait \
 - The fix removes each static diagonal with reshape and slice operations. A
   regression test now compiles the complete contrastive loss with `jax.jit`.
 - The focused FastTransformer test file and the required file checks pass.
+- The corrected Gram-KL run completed one epoch before the collapse gate
+  stopped it. Its effective rank was 1.37056, mean cosine was 0.98716, and
+  cosine p99 was 0.999866.
+- A separate 2,048-row diagnostic measured the untrained student and its
+  teacher on the same rows. The untrained student had effective rank 26.89108,
+  mean cosine 0.95852, and cosine p99 0.99356. The Arctic teacher had effective
+  rank 61.30561, mean cosine 0.27540, and cosine p99 0.93112.
+- This result localizes the new collapse to Gram-KL-only optimization of the
+  FastTransformer. It does not localize the collapse to Arctic or to the input
+  documents.
+- The next 64K treatment adds direct cosine alignment with weight 1.0 to the
+  unchanged Gram-KL objective. The direct term makes a constant student costly
+  for a diverse teacher. The Gram term continues to preserve pairwise
+  geometry.
