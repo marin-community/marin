@@ -24,6 +24,11 @@ from experiments.grug.coupon_clipping.config import (
     EXTREME_DECAY_STEPS,
     EXTREME_GROWTH_CONFIG,
     EXTREME_TRANSITION_STEP,
+    L4_DECAY_STEPS,
+    L4_GROWTH_CONFIG,
+    L4_TRANSITION_STEP,
+    RANDOM_LAYER_DROPOUT_COUNT,
+    RANDOM_LAYER_DROPOUT_GROWTH_CONFIG,
     SEGMENT_LENGTHS,
     TRAIN_BATCH_SIZE,
     TRAIN_STEPS,
@@ -92,6 +97,21 @@ def build_extreme_source_model_config() -> GrugModelConfig:
     )
 
 
+def build_l4_source_model_config(growth: DepthGrowthConfig = L4_GROWTH_CONFIG) -> GrugModelConfig:
+    """Build the physical d1536/L4 efficiency control for the 80/20 arm."""
+    return build_growth_source_model_config(build_model_config(CouponClippingArm.C0_P0), growth)
+
+
+def build_random_layer_dropout_source_model_config(
+    growth: DepthGrowthConfig = RANDOM_LAYER_DROPOUT_GROWTH_CONFIG,
+) -> GrugModelConfig:
+    """Build the d1536/L48 source that executes four uniformly sampled layers per update."""
+    return build_growth_source_model_config(
+        build_model_config(CouponClippingArm.C0_P0),
+        growth,
+    )
+
+
 def _build_source_checkpoint(
     *,
     model: GrugModelConfig,
@@ -100,6 +120,7 @@ def _build_source_checkpoint(
     version: str | None,
     run_kind: CouponClippingRunKind,
     optimizer_decay_steps: int = DECAY_STEPS,
+    random_layer_dropout_count: int | None = None,
 ) -> ArtifactStep[LevanterCheckpoint]:
     step_name = f"grug/coupon-clipping/{run_id}"
     resolved_version = resolve_version(step_name, version)
@@ -127,6 +148,7 @@ def _build_source_checkpoint(
             steps=steps,
             optimizer_decay_steps=optimizer_decay_steps,
             watch_interval=8 if run_kind is CouponClippingRunKind.PILOT else 0,
+            random_layer_dropout_count=random_layer_dropout_count,
         )
 
     return ArtifactStep(
@@ -307,6 +329,86 @@ def build_extreme_source_pilot_checkpoint(*, version: str | None = None) -> Arti
     )
 
 
+def build_l4_source_pilot_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
+    """Measure the physical d1536/L4 efficiency control for 128 updates."""
+    return _build_source_checkpoint(
+        model=build_l4_source_model_config(),
+        run_id="ccx-l4-d1536-l4-pilot128",
+        steps=L1_PILOT_STEPS,
+        version=version,
+        run_kind=CouponClippingRunKind.PILOT,
+    )
+
+
+def build_random_layer_dropout_source_pilot_checkpoint(
+    *,
+    version: str | None = None,
+) -> ArtifactStep[LevanterCheckpoint]:
+    """Measure d1536/L48 storage with four uniformly sampled active layers."""
+    return _build_source_checkpoint(
+        model=build_random_layer_dropout_source_model_config(),
+        run_id="ccx-ld4-d1536-l48-sample4-pilot128",
+        steps=L1_PILOT_STEPS,
+        version=version,
+        run_kind=CouponClippingRunKind.PILOT,
+        random_layer_dropout_count=RANDOM_LAYER_DROPOUT_COUNT,
+    )
+
+
+def build_l4_growth_pilot_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
+    """Canary physical d1536/L4 growth to d3072/L48."""
+    growth = dataclasses.replace(
+        L4_GROWTH_CONFIG,
+        expected_step=PILOT_SOURCE_STEPS,
+        expected_data_offset=PILOT_SOURCE_STEPS * TRAIN_BATCH_SIZE,
+    )
+    source = _build_source_checkpoint(
+        model=build_l4_source_model_config(growth),
+        run_id="ccx-l4-growth-pilot-source32",
+        steps=PILOT_SOURCE_STEPS,
+        version=version,
+        run_kind=CouponClippingRunKind.PILOT,
+    )
+    return _build_growth_target_checkpoint(
+        source,
+        model=build_model_config(CouponClippingArm.C0_P0),
+        run_id="ccx-l4-growth-pilot-target16",
+        steps=PILOT_SOURCE_STEPS + PILOT_GROWN_STEPS,
+        growth=growth,
+        version=version,
+        run_kind=CouponClippingRunKind.PILOT,
+    )
+
+
+def build_random_layer_dropout_growth_pilot_checkpoint(
+    *,
+    version: str | None = None,
+) -> ArtifactStep[LevanterCheckpoint]:
+    """Canary sample-four d1536/L48 width growth to full d3072/L48."""
+    growth = dataclasses.replace(
+        RANDOM_LAYER_DROPOUT_GROWTH_CONFIG,
+        expected_step=PILOT_SOURCE_STEPS,
+        expected_data_offset=PILOT_SOURCE_STEPS * TRAIN_BATCH_SIZE,
+    )
+    source = _build_source_checkpoint(
+        model=build_random_layer_dropout_source_model_config(growth),
+        run_id="ccx-ld4-growth-pilot-source32",
+        steps=PILOT_SOURCE_STEPS,
+        version=version,
+        run_kind=CouponClippingRunKind.PILOT,
+        random_layer_dropout_count=RANDOM_LAYER_DROPOUT_COUNT,
+    )
+    return _build_growth_target_checkpoint(
+        source,
+        model=build_model_config(CouponClippingArm.C0_P0),
+        run_id="ccx-ld4-growth-pilot-target16",
+        steps=PILOT_SOURCE_STEPS + PILOT_GROWN_STEPS,
+        growth=growth,
+        version=version,
+        run_kind=CouponClippingRunKind.PILOT,
+    )
+
+
 def build_aggressive_growth_pilot_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     """Canary width-and-depth growth after a 32-update d1536/L1 source."""
     growth = dataclasses.replace(
@@ -398,4 +500,49 @@ def build_extreme_checkpoint(*, version: str | None = None) -> ArtifactStep[Leva
         version=version,
         run_kind=CouponClippingRunKind.FULL,
         optimizer_decay_steps=EXTREME_DECAY_STEPS,
+    )
+
+
+def build_l4_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
+    """Build the 80% physical d1536/L4 to 20% d3072/L48 efficiency control."""
+    source = _build_source_checkpoint(
+        model=build_l4_source_model_config(),
+        run_id=f"ccx-l4-d1536-l4-source-step{L4_TRANSITION_STEP}",
+        steps=L4_TRANSITION_STEP,
+        version=version,
+        run_kind=CouponClippingRunKind.FULL,
+        optimizer_decay_steps=L4_DECAY_STEPS,
+    )
+    return _build_growth_target_checkpoint(
+        source,
+        model=build_model_config(CouponClippingArm.C0_P0),
+        run_id="ccx-l4-d1536-l4-to-d3072-l48-tail1280",
+        steps=TRAIN_STEPS,
+        growth=L4_GROWTH_CONFIG,
+        version=version,
+        run_kind=CouponClippingRunKind.FULL,
+        optimizer_decay_steps=L4_DECAY_STEPS,
+    )
+
+
+def build_random_layer_dropout_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
+    """Build the 80% sample-4 d1536/L48 to 20% full d3072/L48 arm."""
+    source = _build_source_checkpoint(
+        model=build_random_layer_dropout_source_model_config(),
+        run_id=f"ccx-ld4-d1536-l48-sample4-source-step{L4_TRANSITION_STEP}",
+        steps=L4_TRANSITION_STEP,
+        version=version,
+        run_kind=CouponClippingRunKind.FULL,
+        optimizer_decay_steps=L4_DECAY_STEPS,
+        random_layer_dropout_count=RANDOM_LAYER_DROPOUT_COUNT,
+    )
+    return _build_growth_target_checkpoint(
+        source,
+        model=build_model_config(CouponClippingArm.C0_P0),
+        run_id="ccx-ld4-d1536-l48-sample4-to-d3072-l48-tail1280",
+        steps=TRAIN_STEPS,
+        growth=RANDOM_LAYER_DROPOUT_GROWTH_CONFIG,
+        version=version,
+        run_kind=CouponClippingRunKind.FULL,
+        optimizer_decay_steps=L4_DECAY_STEPS,
     )

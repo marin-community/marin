@@ -179,6 +179,29 @@ def test_grow_grug_depth_state_rejects_wrong_transition_checkpoint():
         grow_grug_depth_state(source, fresh_target, config)
 
 
+def test_width_only_growth_allows_equal_source_and_target_depth():
+    config = DepthGrowthConfig(
+        source_layers=48,
+        target_layers=48,
+        width_expansion_factor=2,
+        new_layer_initialization=NewLayerInitialization.IDENTITY_PREFIX,
+        expected_step=5120,
+        expected_data_offset=5120 * 256,
+    )
+
+    assert config.source_layers == config.target_layers
+
+    with pytest.raises(ValueError, match="must increase the layer count, width, or both"):
+        DepthGrowthConfig(
+            source_layers=48,
+            target_layers=48,
+            width_expansion_factor=1,
+            new_layer_initialization=NewLayerInitialization.IDENTITY_PREFIX,
+            expected_step=5120,
+            expected_data_offset=5120 * 256,
+        )
+
+
 def test_load_and_grow_grug_depth_state_resolves_latest_checkpoint():
     source = _state((1,), step=7, offset=10)
     fresh_target = _state((4,), step=0, offset=0)

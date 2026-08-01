@@ -31,6 +31,18 @@ order, 6.711B-token horizon, optimizer schedule, and 16-GB200 topology.
   1536-wide routed/shared experts and a 24:8 query/KV-head ratio so every
   widened axis grows by exactly four and the transition preserves the source
   function.
+- `pilot_l4_source.py` and `pilot_random_layer_dropout_source.py`: matched
+  128-update throughput gates for a physical `d1536/L4` source and a
+  `d1536/L48` source that stores all layers but executes four uniformly sampled
+  layers per update. The latter freezes inactive parameter and optimizer-state
+  slices.
+- `pilot_l4_growth.py` and `pilot_random_layer_dropout_growth.py`: 32 source
+  updates followed by 16 target updates, covering the corresponding
+  width-and-depth or width-only transition.
+- `l4.py` and `random_layer_dropout.py`: matched 80/20 arms. Both execute four
+  narrow layers through update 5,120 and full `d3072/L48` through update 6,400;
+  the former inserts 44 identity layers, while the latter trains four randomly
+  sampled positions from an existing 48-layer stack.
 - `c_short.py`: the 3,200-update full-depth WSD control.
 - `paloma_wd1.py`, `paloma_c_short.py`, and `paloma_c0.py`: checkpoint-only
   Paloma evaluations for the main treatment and controls. Each subset is capped

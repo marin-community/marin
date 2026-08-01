@@ -4,6 +4,7 @@
 import dataclasses
 
 import jax
+import jax.numpy as jnp
 import pytest
 from haliax.partitioning import set_mesh
 from levanter.grug.sharding import compact_grug_mesh
@@ -22,6 +23,11 @@ from experiments.grug.coupon_clipping.config import (
     EXTREME_DECAY_STEPS,
     EXTREME_GROWTH_CONFIG,
     EXTREME_TRANSITION_STEP,
+    L4_DECAY_STEPS,
+    L4_GROWTH_CONFIG,
+    L4_TRANSITION_STEP,
+    RANDOM_LAYER_DROPOUT_COUNT,
+    RANDOM_LAYER_DROPOUT_GROWTH_CONFIG,
     SEGMENT_LENGTHS,
     SELECTED_LEARNING_RATE,
     TRAIN_BATCH_SIZE,
@@ -45,9 +51,22 @@ from experiments.grug.coupon_clipping.depth_launch import (
     build_extreme_target_model_config,
     build_growth_pilot_checkpoint,
     build_growth_target_only_checkpoint,
+    build_l4_checkpoint,
+    build_l4_growth_pilot_checkpoint,
+    build_l4_source_model_config,
+    build_l4_source_pilot_checkpoint,
+    build_random_layer_dropout_checkpoint,
+    build_random_layer_dropout_growth_pilot_checkpoint,
+    build_random_layer_dropout_source_model_config,
+    build_random_layer_dropout_source_pilot_checkpoint,
 )
 from experiments.grug.coupon_clipping.eval_launch import build_paloma_eval
 from experiments.grug.coupon_clipping.model import GrugModelConfig, Transformer
+from experiments.grug.coupon_clipping.train import (
+    _freeze_inactive_layer_updates,
+    _random_active_layer_indices,
+    _updated_qb_betas,
+)
 from experiments.grug.depth_growth import DepthGrowthConfig, NewLayerInitialization
 from experiments.marin_tokenizer import marin_tokenizer
 
@@ -230,6 +249,127 @@ def test_extreme_source_targets_tenfold_speed_without_more_experts():
     assert EXTREME_TRANSITION_STEP == 5760
     assert EXTREME_DECAY_STEPS == 640
     assert build_optimizer_config(decay_steps=EXTREME_DECAY_STEPS).decay == EXTREME_DECAY_STEPS
+
+
+def test_l4_arms_hold_width_tail_and_layer_budget_constant():
+    target = build_model_config(CouponClippingArm.C0_P0)
+    physical_l4 = build_l4_source_model_config()
+    random_layer_dropout = build_random_layer_dropout_source_model_config()
+
+    assert (physical_l4.hidden_dim, physical_l4.num_layers) == (1536, 4)
+    assert physical_l4.resolved_block_segment_lengths == (4,)
+    assert (random_layer_dropout.hidden_dim, random_layer_dropout.num_layers) == (1536, 48)
+    assert random_layer_dropout.resolved_block_segment_lengths == (48,)
+    assert RANDOM_LAYER_DROPOUT_COUNT == physical_l4.num_layers
+    assert L4_GROWTH_CONFIG.source_layers == 4
+    assert RANDOM_LAYER_DROPOUT_GROWTH_CONFIG.source_layers == target.num_layers
+    assert L4_GROWTH_CONFIG.target_layers == RANDOM_LAYER_DROPOUT_GROWTH_CONFIG.target_layers == target.num_layers
+    assert L4_TRANSITION_STEP == 5120
+    assert L4_DECAY_STEPS == 1280
+
+    physical_pipeline = build_l4_checkpoint(version="test-dev")
+    dropout_pipeline = build_random_layer_dropout_checkpoint(version="test-dev")
+    physical_growth_pilot = build_l4_growth_pilot_checkpoint(version="test-dev")
+    dropout_growth_pilot = build_random_layer_dropout_growth_pilot_checkpoint(version="test-dev")
+    assert len(physical_pipeline.deps) == len(dropout_pipeline.deps) == 1
+    assert len(physical_growth_pilot.deps) == len(dropout_growth_pilot.deps) == 1
+    assert len(build_l4_source_pilot_checkpoint(version="test-dev").deps) == 0
+    assert len(build_random_layer_dropout_source_pilot_checkpoint(version="test-dev").deps) == 0
+
+
+def test_random_layer_dropout_selection_is_sorted_unique_and_updates_only_active_qb_layers():
+    indices = _random_active_layer_indices(
+        jnp.array(17, dtype=jnp.int32),
+        num_layers=48,
+        active_layer_count=4,
+        seed=0,
+    )
+    repeated_indices = _random_active_layer_indices(
+        jnp.array(17, dtype=jnp.int32),
+        num_layers=48,
+        active_layer_count=4,
+        seed=0,
+    )
+    assert jnp.array_equal(indices, repeated_indices)
+    assert indices.shape == (4,)
+    assert jnp.all(indices[:-1] < indices[1:])
+
+    previous = jnp.arange(48 * 2, dtype=jnp.float32).reshape(48, 2)
+    current = jnp.full((4, 2), -1, dtype=jnp.float32)
+    updated = _updated_qb_betas(previous, current, indices)
+    assert jnp.array_equal(updated[indices], current)
+    assert jnp.count_nonzero(jnp.all(updated == previous, axis=1)) == 44
+
+
+def test_random_layer_dropout_freezes_inactive_parameters_and_optimizer_state():
+    updates = {
+        "stacked_block_segments": ({"stacked": jnp.full((4, 2), 3.0)},),
+        "output_proj": jnp.full((2, 2), 5.0),
+    }
+    previous_opt_state = {
+        "momentum": {
+            "stacked_block_segments": ({"stacked": jnp.arange(8, dtype=jnp.float32).reshape(4, 2)},),
+            "output_proj": jnp.full((2, 2), 7.0),
+        }
+    }
+    next_opt_state = jax.tree.map(lambda value: value + 100, previous_opt_state)
+
+    frozen_updates, frozen_opt_state = _freeze_inactive_layer_updates(
+        updates,
+        previous_opt_state,
+        next_opt_state,
+        active_layer_indices=jnp.array([1, 3], dtype=jnp.int32),
+        num_layers=4,
+    )
+
+    assert jnp.array_equal(
+        frozen_updates["stacked_block_segments"][0]["stacked"],
+        jnp.array([[0, 0], [3, 3], [0, 0], [3, 3]], dtype=jnp.float32),
+    )
+    assert jnp.array_equal(frozen_updates["output_proj"], updates["output_proj"])
+    frozen_momentum = frozen_opt_state["momentum"]["stacked_block_segments"][0]["stacked"]
+    previous_momentum = previous_opt_state["momentum"]["stacked_block_segments"][0]["stacked"]
+    inactive_indices = jnp.array([0, 2])
+    active_indices = jnp.array([1, 3])
+    assert jnp.array_equal(frozen_momentum[inactive_indices], previous_momentum[inactive_indices])
+    assert jnp.array_equal(frozen_momentum[active_indices], previous_momentum[active_indices] + 100)
+    assert jnp.array_equal(
+        frozen_opt_state["momentum"]["output_proj"],
+        next_opt_state["momentum"]["output_proj"],
+    )
+
+
+def test_array_stacked_active_layer_indices_match_full_order_when_all_selected():
+    model_config = GrugModelConfig(
+        vocab_size=32,
+        hidden_dim=16,
+        intermediate_dim=8,
+        shared_expert_intermediate_dim=8,
+        num_experts=2,
+        num_experts_per_token=1,
+        num_layers=4,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        max_seq_len=8,
+        sliding_window=4,
+        block_storage="array_stacked",
+        block_segment_lengths=(4,),
+        block_segment_shared_expert_intermediate_dims=(8,),
+        moe_implementation="ring",
+    )
+    tokens = jnp.arange(8, dtype=jnp.int32).reshape(1, 8)
+
+    with set_mesh(compact_grug_mesh()):
+        model = Transformer.init(model_config, key=jax.random.PRNGKey(0))
+        full_hidden, full_metrics = model(tokens)
+        selected_hidden, selected_metrics = model(
+            tokens,
+            active_layer_indices=jnp.arange(4, dtype=jnp.int32),
+        )
+
+    assert jnp.array_equal(selected_hidden, full_hidden)
+    assert jnp.array_equal(selected_metrics["qb_beta_per_layer"], full_metrics["qb_beta_per_layer"])
 
 
 def test_paloma_eval_is_checkpoint_only_and_bounded(tmp_path):

@@ -888,6 +888,8 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
+        *,
+        active_layer_indices: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         if mask is None:
             mask = AttentionMask.causal()
@@ -913,6 +915,8 @@ class Transformer(eqx.Module):
             remat_policy = None
 
         if self.blocks is not None:
+            if active_layer_indices is not None:
+                raise ValueError("active_layer_indices requires array-stacked blocks")
             num_blocks = len(self.blocks)
             moe_router_stats: list[dict[str, jax.Array]] = []
             for i, block in enumerate(self.blocks):
@@ -970,16 +974,38 @@ class Transformer(eqx.Module):
                 return eqx.filter_checkpoint(layer, policy=remat_policy)(carry_hidden, layer_mask, False, disable_rope)
 
             segment_router_stats = []
-            first_layer = 0
-            for stacked_segment in self.stacked_block_segments:
-                segment_length = stacked_segment.num_layers
+            if active_layer_indices is None:
+                first_layer = 0
+                for stacked_segment in self.stacked_block_segments:
+                    segment_length = stacked_segment.num_layers
+                    hidden, stacked_router_stats = jax.lax.scan(
+                        _scan_layers,
+                        hidden,
+                        xs=(stacked_segment.stacked, mask_schedule[first_layer : first_layer + segment_length]),
+                    )
+                    segment_router_stats.append(stacked_router_stats)
+                    first_layer += segment_length
+            else:
+                if len(self.stacked_block_segments) != 1:
+                    raise ValueError("active_layer_indices requires one homogeneous block segment")
+                if active_layer_indices.ndim != 1:
+                    raise ValueError("active_layer_indices must be a rank-one array")
+                stacked_segment = self.stacked_block_segments[0]
+
+                def _scan_selected_layers(
+                    carry_hidden: Float[Array, "B S D"],
+                    scan_inputs: tuple[jax.Array, jax.Array],
+                ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+                    layer_index, layer_use_long_mask = scan_inputs
+                    layer = stacked_segment.get_layer(layer_index)
+                    return _scan_layers(carry_hidden, (layer, layer_use_long_mask))
+
                 hidden, stacked_router_stats = jax.lax.scan(
-                    _scan_layers,
+                    _scan_selected_layers,
                     hidden,
-                    xs=(stacked_segment.stacked, mask_schedule[first_layer : first_layer + segment_length]),
+                    xs=(active_layer_indices, jnp.take(mask_schedule, active_layer_indices)),
                 )
                 segment_router_stats.append(stacked_router_stats)
-                first_layer += segment_length
             router_metrics = {
                 "routing_entropy_per_layer": jnp.concatenate(
                     [stats["routing_entropy"] for stats in segment_router_stats], axis=0
@@ -1043,6 +1069,7 @@ class Transformer(eqx.Module):
         reduction: str = "mean",
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
+        active_layer_indices: jax.Array | None = None,
     ) -> tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         return self._next_token_loss_with_router_metrics(
             token_ids,
@@ -1051,6 +1078,7 @@ class Transformer(eqx.Module):
             reduction=reduction,
             logsumexp_weight=logsumexp_weight,
             loss_dtype=loss_dtype,
+            active_layer_indices=active_layer_indices,
         )
 
     def _next_token_loss_with_router_metrics(
@@ -1062,8 +1090,9 @@ class Transformer(eqx.Module):
         reduction: str,
         logsumexp_weight: float | None,
         loss_dtype: jnp.dtype,
+        active_layer_indices: jax.Array | None = None,
     ) -> tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
-        hidden, router_metrics = self(token_ids, mask=mask)
+        hidden, router_metrics = self(token_ids, mask=mask, active_layer_indices=active_layer_indices)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 

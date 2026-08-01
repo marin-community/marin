@@ -66,6 +66,7 @@ class CouponClippingLaunchConfig:
     optimizer_decay_steps: int = DECAY_STEPS
     initialize_from: str | None = None
     depth_growth: DepthGrowthConfig | None = None
+    random_layer_dropout_count: int | None = None
     learning_rate: CouponClippingLearningRate = SELECTED_LEARNING_RATE
     watch_interval: int = 0
 
@@ -123,6 +124,7 @@ def run_coupon_clipping_trial(config: CouponClippingLaunchConfig) -> None:
             optimizer=build_optimizer_config(config.learning_rate, decay_steps=config.optimizer_decay_steps),
             optimizer_num_train_steps=config.optimizer_num_train_steps,
             depth_growth=config.depth_growth,
+            random_layer_dropout_count=config.random_layer_dropout_count,
             trainer=grug_trainer,
             eval=None,
             processes_per_task=1,

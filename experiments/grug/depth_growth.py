@@ -55,10 +55,14 @@ class DepthGrowthConfig:
     def __post_init__(self) -> None:
         if self.source_layers < 1:
             raise ValueError(f"source_layers must be positive, got {self.source_layers}")
-        if self.target_layers <= self.source_layers:
+        if self.target_layers < self.source_layers:
             raise ValueError(
-                f"target_layers must exceed source_layers, got {self.source_layers} -> {self.target_layers}"
+                f"target_layers must not be smaller than source_layers, got {self.source_layers} -> {self.target_layers}"
             )
+        if self.width_expansion_factor < 1:
+            raise ValueError(f"width_expansion_factor must be positive, got {self.width_expansion_factor}")
+        if self.target_layers == self.source_layers and self.width_expansion_factor == 1:
+            raise ValueError("depth growth must increase the layer count, width, or both")
         if (
             self.new_layer_initialization is NewLayerInitialization.REPEAT
             and self.target_layers % self.source_layers != 0
@@ -66,8 +70,6 @@ class DepthGrowthConfig:
             raise ValueError(
                 f"target_layers must be divisible by source_layers, got {self.source_layers} -> {self.target_layers}"
             )
-        if self.width_expansion_factor < 1:
-            raise ValueError(f"width_expansion_factor must be positive, got {self.width_expansion_factor}")
         if self.expected_step < 1:
             raise ValueError(f"expected_step must be positive, got {self.expected_step}")
         if self.expected_data_offset < 0:
