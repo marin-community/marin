@@ -251,3 +251,13 @@ The first wave did not produce a greater-than-5x model suitable for SFT or RL. F
 - Result: the focused config and state-growth suite passed 28 tests, including an end-to-end CPU update through the stochastic-depth path. Pre-commit lint, formatting, and type checks passed. Both source coordinators are pending behind the same scheduler backlog as the WD2 transition canary; neither has a hardware metric yet.
 - Interpretation: the 20% full-depth tail imposes a 5x idealized ceiling, so these arms cannot satisfy the headline greater-than-5x objective. They are mechanism probes for WD1's capability failure. The physical source stores 1.340B parameters; the stochastic source stores 11.735B and may lose most of its speed advantage to dense Muon/Adam processing even though it executes the same four transformer blocks.
 - Next action: compare 64-update median tokens/s and finite loss after each 128-update source canary, require successful transition canaries, and admit production only if the measured source rate justifies the full run. Evaluate any terminal checkpoints on the same bounded Paloma protocol.
+
+### 2026-08-01 22:20 - CC16-017 L4 rollout policy
+
+- Hypothesis: the stochastic-depth source's optimizer overhead is itself an experiment outcome, so source speed should not prevent collecting the requested 80/20 quality result.
+- Commit Hash: `a144c61c8e`.
+- Command: `scratch/20260801_l4_layerdrop_canary_rollout.zsh` waits on both source canaries in parallel, submits each matching transition canary after source success, and submits each full arm after transition success.
+- Config: production job IDs are `/power/ccx-l4-tail20-coord` and `/power/ccx-ld4-tail20-coord`; each retains the 5,120+1,280 update schedule.
+- Result: the two source coordinators are assigned, with no worker attempt or metric yet. The local rollout monitor is armed.
+- Interpretation: source throughput remains a required measurement, not a production admission threshold. A failed source or transition canary still stops only its corresponding chain.
+- Next action: collect source throughput and transition health, then monitor both automatically submitted production arms at the established 30-minute cadence.
