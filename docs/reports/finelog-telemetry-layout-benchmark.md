@@ -88,8 +88,8 @@ No Iris job or remote object read was used.
 | Alerts | One-hour latest progress, producer heartbeat, queue, GPU, and forwarding-gap states |
 | Accounting | Weekly user/project accelerator accounting |
 
-Every fact query has an upper and lower timestamp bound. The checked SQL is
-stored in the raw JSON outputs. The fleet SQL intentionally exercises the
+Every fact query has an upper and lower timestamp bound. The harness builds the
+checked SQL from the workload corpus. The fleet SQL intentionally exercises the
 required names and grouping shape, but `max(worker_state)` is not latest-value
 semantics and summing counter samples is not a counter delta. Its values are not
 used as correctness evidence. The errors SQL likewise sums `*_total` counter
@@ -124,7 +124,7 @@ uv run --group dev python -m finelog.benchmarks.telemetry_layout_bench baseline 
   --cold-iterations 3 --warm-iterations 7 --warmup-iterations 1 \
   --concurrency 1 4 8 --concurrency-queries-per-worker 2 \
   --work-dir /tmp/finelog-baseline-final-205-100k \
-  --output ../../docs/reports/finelog-telemetry-benchmark-results/baseline-100k-8-files.json
+  --output /tmp/finelog-baseline-100k.json
 
 uv run --group dev python -m finelog.benchmarks.telemetry_layout_bench baseline \
   --rows 500000 --duration-days 14 --batch-rows 25000 --segments 32 \
@@ -132,7 +132,7 @@ uv run --group dev python -m finelog.benchmarks.telemetry_layout_bench baseline 
   --cold-iterations 3 --warm-iterations 7 --warmup-iterations 1 \
   --concurrency 1 4 8 --concurrency-queries-per-worker 2 \
   --work-dir /tmp/finelog-baseline-final-205-500k \
-  --output ../../docs/reports/finelog-telemetry-benchmark-results/baseline-500k-32-files.json
+  --output /tmp/finelog-baseline-500k.json
 
 uv run --group dev python -m finelog.benchmarks.telemetry_layout_bench baseline \
   --rows 1000000 --duration-days 14 --batch-rows 25000 --segments 111 \
@@ -140,7 +140,7 @@ uv run --group dev python -m finelog.benchmarks.telemetry_layout_bench baseline 
   --cold-iterations 3 --warm-iterations 7 --warmup-iterations 1 \
   --concurrency 1 4 8 --concurrency-queries-per-worker 2 \
   --work-dir /tmp/finelog-baseline-final-205-1m-111 \
-  --output ../../docs/reports/finelog-telemetry-benchmark-results/baseline-1m-111-files-128-decoys.json
+  --output /tmp/finelog-baseline-1m.json
 ```
 
 The latency columns are the median across the ten workload-specific p50 or p95
@@ -168,7 +168,7 @@ uv run --group dev python -m finelog.benchmarks.telemetry_layout_bench baseline 
   --cold-iterations 3 --warm-iterations 7 --warmup-iterations 1 \
   --concurrency 1 4 8 --concurrency-queries-per-worker 2 \
   --work-dir /tmp/finelog-baseline-final-205-1m-111 \
-  --output ../../docs/reports/finelog-telemetry-benchmark-results/baseline-1m-111-files-128-decoys.json
+  --output /tmp/finelog-baseline-1m.json
 ```
 
 | Workload | Cold p50 / p95 | Warm p50 / p95 | Cold plan p50 / p95 | Warm plan p50 / p95 | RSS growth |
@@ -196,7 +196,7 @@ uv run --group dev python -m finelog.benchmarks.telemetry_layout_bench baseline 
   --cold-iterations 3 --warm-iterations 7 --warmup-iterations 1 \
   --concurrency 1 4 8 --concurrency-queries-per-worker 2 \
   --work-dir /tmp/finelog-baseline-final-205-1m-111 \
-  --output ../../docs/reports/finelog-telemetry-benchmark-results/baseline-1m-111-files-128-decoys.json
+  --output /tmp/finelog-baseline-1m.json
 ```
 
 | Workload | Files pruned | Row groups pruned / matched | Scan | Metadata | File open |
@@ -227,7 +227,7 @@ uv run --group dev python -m finelog.benchmarks.telemetry_layout_bench baseline 
   --cold-iterations 3 --warm-iterations 7 --warmup-iterations 1 \
   --concurrency 1 4 8 --concurrency-queries-per-worker 2 \
   --work-dir /tmp/finelog-baseline-final-205-1m-111 \
-  --output ../../docs/reports/finelog-telemetry-benchmark-results/baseline-1m-111-files-128-decoys.json
+  --output /tmp/finelog-baseline-1m.json
 ```
 
 | Concurrency | Queries | p50 / p95 | Throughput | Peak RSS |
@@ -256,7 +256,7 @@ uv run --group dev python -m finelog.benchmarks.telemetry_layout_bench binding \
   --cold-iterations 3 --warm-iterations 7 --warmup-iterations 1 \
   --concurrency 1 4 8 --concurrency-queries-per-worker 2 \
   --work-dir /tmp/finelog-binding-final-205-1m-111-v2 \
-  --output ../../docs/reports/finelog-telemetry-benchmark-results/binding-nonempty-decoys-1m-111-files.json
+  --output /tmp/finelog-binding-1m.json
 ```
 
 | Variant | Providers / total segments | Workload | Cold query p50 / p95 | Cold plan p50 / p95 | Warm plan p50 / p95 | RSS growth |
@@ -296,7 +296,7 @@ uv run --group dev python -m finelog.benchmarks.telemetry_layout_bench manifest 
   --cold-iterations 3 --warm-iterations 7 --warmup-iterations 1 \
   --concurrency 1 4 8 --concurrency-queries-per-worker 2 \
   --work-dir /tmp/finelog-manifest-final-205-1m-111 \
-  --output ../../docs/reports/finelog-telemetry-benchmark-results/candidates-binding-manifest-1m-111-files.json
+  --output /tmp/finelog-manifest-1m.json
 ```
 
 | Workload | Selected files | Selection p50 / p95 | Same-command all-files control → manifest cold p50 | Control → manifest warm p50 | Manifest metadata / open |
@@ -343,7 +343,7 @@ uv run --group dev python -m finelog.benchmarks.telemetry_layout_bench layouts \
   --cold-iterations 3 --warm-iterations 7 --warmup-iterations 1 \
   --concurrency 1 4 8 --concurrency-queries-per-worker 2 \
   --work-dir /tmp/finelog-layouts-final-205-100k-v3 \
-  --output ../../docs/reports/finelog-telemetry-benchmark-results/candidates-layouts-100k-8-files.json
+  --output /tmp/finelog-layouts-100k.json
 ```
 
 | Layout | Files built | Cold p50 / p95 | Warm p50 / p95 | Cold planning p50 | Matched files / row groups | Preparation |
@@ -379,7 +379,7 @@ uv run --group dev python -m finelog.benchmarks.telemetry_layout_bench \
   --source-log-dir /tmp/finelog-baseline-final-205-500k/current \
   --rows 500000 --duration-days 14 --batch-rows 25000 --segments 32 \
   --distinct-run-ids 100000 --bucket-counts 64 128 \
-  --output ../../docs/reports/finelog-telemetry-benchmark-results/partition-projection-500k-day-64-128.json
+  --output /tmp/finelog-partition-projection-500k.json
 ```
 
 | Transform | Nonempty / maximum before segment multiplicity | Rows per partition min / p50 / p95 / max | Proportional payload | Selection p50 range | Run 15m / node 24h / alert 1h / accounting 7d files |
@@ -429,7 +429,7 @@ uv run --group dev python -m finelog.benchmarks.telemetry_layout_bench rollups \
   --rows 500000 --duration-days 14 --batch-rows 25000 --segments 32 \
   --distinct-run-ids 100000 --resolutions minute hour \
   --work-dir /tmp/finelog-rollups-final-205-500k-v2 \
-  --output ../../docs/reports/finelog-telemetry-benchmark-results/rollup-proxies-500k-32-files.json
+  --output /tmp/finelog-rollup-proxies-500k.json
 ```
 
 | Resolution / method | Time | Output rows | Output Parquet | Peak RSS | Fixed-projection aggregate-state `difference_count` |
@@ -469,7 +469,7 @@ uv run --group dev python -m finelog.benchmarks.telemetry_layout_bench catalog \
   --warmup-iterations 1 --concurrency 1 4 8 \
   --concurrency-queries-per-worker 2 \
   --work-dir /tmp/finelog-catalog-final-205-100k \
-  --output ../../docs/reports/finelog-telemetry-benchmark-results/run-catalog-100k.json
+  --output /tmp/finelog-run-catalog-100k.json
 ```
 
 | IDs / files | Cold p50 / p95 | Warm p50 / p95 | Cold / warm planning p50 | Files / row groups matched | Scan | RSS growth |
@@ -490,7 +490,7 @@ component. A 10M or Iris run would not change the selected smallest fix.
 The result does not prove production storage capacity, 64/128-bucket query
 latency, or rollup compression. Those are explicitly unmeasured.
 
-## Reproduction and raw results
+## Reproduction
 
 The harness is under `finelog.benchmarks`:
 
@@ -498,19 +498,8 @@ The harness is under `finelog.benchmarks`:
 - `query_measurement.py`: StatsService cold/warm/planning/scan/RSS/load metrics;
 - `layout_candidates.py`: current stores, manifests, layouts, partition
   projections, catalog, and rollup proxies;
-- `telemetry_layout_bench.py`: checked CLI.
-
-Raw outputs:
-
-- [100k baseline](finelog-telemetry-benchmark-results/baseline-100k-8-files.json)
-- [500k baseline](finelog-telemetry-benchmark-results/baseline-500k-32-files.json)
-- [1M/111-file baseline](finelog-telemetry-benchmark-results/baseline-1m-111-files-128-decoys.json)
-- [nonempty binding](finelog-telemetry-benchmark-results/binding-nonempty-decoys-1m-111-files.json)
-- [manifest](finelog-telemetry-benchmark-results/candidates-binding-manifest-1m-111-files.json)
-- [layout mechanics](finelog-telemetry-benchmark-results/candidates-layouts-100k-8-files.json)
-- [64/128 projection](finelog-telemetry-benchmark-results/partition-projection-500k-day-64-128.json)
-- [rollup proxies](finelog-telemetry-benchmark-results/rollup-proxies-500k-32-files.json)
-- [100k run catalog](finelog-telemetry-benchmark-results/run-catalog-100k.json)
+- `telemetry_layout_bench.py`: checked CLI. Its optional JSON output is a local
+  reproducibility aid; the tables above are the retained result record.
 
 Relevant engine behavior is in
 `lib/finelog/rust/src/store/store.rs::query_providers`,

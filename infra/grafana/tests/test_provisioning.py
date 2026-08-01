@@ -304,37 +304,6 @@ def test_dashboard_datasource_uids_are_provisioned():
             assert uid in uids, f"{name} panel {panel.get('id')}: unknown datasource {uid!r}"
 
 
-def test_inference_dashboard_uses_the_bounded_identity_endpoint():
-    dashboard = _stitched_dashboards()["inference.json"]
-    variables = {variable["name"]: variable for variable in dashboard["templating"]["list"]}
-    targets = [target for panel in dashboard["panels"] for target in panel["targets"]]
-
-    assert variables["identity"]["type"] == "textbox"
-    assert variables["identity_kind"]["query"] == "job_id,root_run_uid,execution_uid"
-    assert {target["url"] for target in targets} == {"/v1/vllm/overview"}
-    assert {
-        next(param["value"] for param in target["url_options"]["params"] if param["key"] == "view") for target in targets
-    } == {
-        "counter_total",
-        "freshness",
-        "freshness_detail",
-        "latency",
-        "request_outcome",
-        "saturation",
-        "saturation_summary",
-        "token_rate",
-    }
-    for target in targets:
-        params = {param["key"]: param["value"] for param in target["url_options"]["params"]}
-        assert params.keys() == {"identity_kind", "identity", "from", "to", "bucket_ms", "view"}
-        assert params["identity_kind"] == "${identity_kind}"
-        assert params["identity"] == "${identity}"
-        assert params["from"] == "${__from}"
-        assert params["to"] == "${__to}"
-        assert params["bucket_ms"] == "${__interval_ms}"
-        assert "sql" not in params
-
-
 def test_status_page_has_each_required_source():
     dashboard = _stitched_dashboards()["infra.json"]
     (panel,) = dashboard["panels"]

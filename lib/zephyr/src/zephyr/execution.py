@@ -329,7 +329,7 @@ class ZephyrCoordinator:
         self._map_cost = map_cost
         self._reduce_cost = reduce_cost
         self._pipeline_running: bool = False
-        runtime_telemetry.configure("zephyr", role=runtime_telemetry.TelemetryRole.COORDINATOR)
+        runtime_telemetry.configure("zephyr")
 
         # Set at each _start_stage so _log_status can show average throughput since stage start.
         self._stage_monotonic_start: float | None = None

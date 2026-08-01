@@ -13,25 +13,12 @@ import uuid
 from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Protocol
 
 import requests
 
-from rigging.telemetry_serialization import (
-    json_bytes as _json_bytes,
-)
-from rigging.telemetry_serialization import (
-    json_bytes_bounded as _json_bytes_bounded,
-)
-from rigging.telemetry_serialization import (
-    validate_attributes as _validate_attributes,
-)
-from rigging.telemetry_serialization import (
-    validate_event_body as _validate_event_body,
-)
-from rigging.telemetry_serialization import (
-    validate_string as _validate_string,
-)
+from rigging.telemetry import serialization
 from rigging.timing import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
@@ -46,6 +33,21 @@ _MAX_REQUEST_BYTES = 4 << 20
 _MAX_SHUTDOWN_TIMEOUT = 5.0
 _WARNING_INTERVAL = 60.0
 _EVENT_KIND = "event"
+
+
+class TelemetryRole(StrEnum):
+    """Bounded process roles for telemetry resources."""
+
+    CONTROLLER = "controller"
+    COORDINATOR = "coordinator"
+    TRAINER = "trainer"
+    ROLLOUT = "rollout"
+    INFERENCE = "inference"
+    ENVIRONMENT = "environment"
+    STORAGE = "storage"
+    WEIGHT = "weight"
+    WORKER = "worker"
+    EVALUATOR = "evaluator"
 
 
 @dataclass(frozen=True)
@@ -81,8 +83,13 @@ class _Config:
     def validate(self) -> None:
         if not self.endpoint.startswith(("http://", "https://")):
             raise ValueError("endpoint must use http:// or https://")
-        _validate_string(self.service, "service")
-        _validate_attributes(self.attributes)
+        serialization.validate_string(self.service, "service")
+        serialization.validate_attributes(self.attributes)
+        if role := self.attributes.get("role"):
+            try:
+                TelemetryRole(role)
+            except ValueError:
+                raise ValueError(f"unknown telemetry role: {role}") from None
         limits = (
             self.max_queue_records,
             self.max_queue_bytes,
@@ -300,7 +307,7 @@ class _Runtime:
         return _PendingBatch(batch_id, body, len(selected), sum(map(len, bodies)))
 
     def _batch_body(self, batch_id: str, records: list[bytes]) -> bytes:
-        resource = _json_bytes({"attributes": self.config.attributes, "service": self.config.service})
+        resource = serialization.json_bytes({"attributes": self.config.attributes, "service": self.config.service})
         return b"".join(
             (
                 b'{"batch_id":"',
@@ -405,7 +412,12 @@ def histogram(name: str, *, unit: str = "") -> Histogram:
     return Histogram(name, "histogram", unit)
 
 
-def event(name: str, body: Any, *, attributes: Mapping[str, str] | None = None) -> None:
+def event(
+    name: str,
+    body: serialization.EventBody,
+    *,
+    attributes: Mapping[str, str] | None = None,
+) -> None:
     """Emit one structured event when configured."""
     _emit(_EVENT_KIND, name, body=body, attributes=attributes)
 
@@ -520,7 +532,7 @@ def _emit(
     name: str,
     *,
     value: float | None = None,
-    body: Any = None,
+    body: serialization.EventBody | None = None,
     unit: str = "",
     attributes: Mapping[str, str] | None = None,
 ) -> None:
@@ -528,11 +540,11 @@ def _emit(
     if runtime is None:
         return
     try:
-        _validate_string(name, "name")
+        serialization.validate_string(name, "name")
         if unit:
-            _validate_string(unit, "unit")
+            serialization.validate_string(unit, "unit")
         attrs = dict(attributes or {})
-        _validate_attributes(attrs)
+        serialization.validate_attributes(attrs)
         record: dict[str, Any] = {
             "attributes": attrs,
             "kind": kind,
@@ -541,16 +553,17 @@ def _emit(
         }
         if kind == _EVENT_KIND:
             record_budget = runtime.max_record_bytes()
-            fixed_size = len(_json_bytes_bounded({**record, "body": None}, record_budget))
-            _validate_event_body(body, record_budget - fixed_size)
-            record["body"] = body
+            fixed_size = len(serialization.json_bytes_bounded({**record, "body": None}, record_budget))
+            if body is None:
+                raise ValueError("event body is required")
+            record["body"] = serialization.event_fields(body, record_budget - fixed_size)
         else:
             numeric = float(value)  # type: ignore[arg-type]
             if not math.isfinite(numeric):
                 raise ValueError("metric value must be finite")
             record["unit"] = unit
             record["value"] = numeric
-        runtime.emit(_json_bytes_bounded(record, runtime.max_record_bytes()))
+        runtime.emit(serialization.json_bytes_bounded(record, runtime.max_record_bytes()))
     except Exception:
         with runtime._condition:
             runtime._lost_records += 1

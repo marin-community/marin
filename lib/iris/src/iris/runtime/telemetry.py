@@ -6,7 +6,6 @@
 import logging
 import os
 from collections.abc import Mapping
-from enum import StrEnum
 
 from rigging import telemetry
 
@@ -20,7 +19,6 @@ logger = logging.getLogger(__name__)
 _RESERVED_RESOURCE_ATTRIBUTES = {
     "root_run_uid",
     "execution_uid",
-    "role",
     "job_id",
     "task_id",
     "attempt",
@@ -30,21 +28,6 @@ _RESERVED_RESOURCE_ATTRIBUTES = {
     "run",
     "run_id",
 }
-
-
-class TelemetryRole(StrEnum):
-    """Bounded process roles accepted by Iris-owned telemetry resources."""
-
-    CONTROLLER = "controller"
-    COORDINATOR = "coordinator"
-    TRAINER = "trainer"
-    ROLLOUT = "rollout"
-    INFERENCE = "inference"
-    ENVIRONMENT = "environment"
-    STORAGE = "storage"
-    WEIGHT = "weight"
-    WORKER = "worker"
-    EVALUATOR = "evaluator"
 
 
 def _identity(job_info: JobInfo) -> dict[str, str]:
@@ -70,7 +53,6 @@ def _execution_uid(job_info: JobInfo) -> str:
 def configure(
     service: str,
     *,
-    role: TelemetryRole,
     root_run_uid: str | None = None,
     execution_uid: str | None = None,
     attributes: Mapping[str, str] | None = None,
@@ -89,7 +71,6 @@ def configure(
             raise ValueError(f"Iris owns canonical telemetry attributes: {names}")
         resource = _identity(job_info)
         resource.update(extra)
-        resource["role"] = role.value
         resource["root_run_uid"] = root_run_uid or str(job_info.job_id)
         resource["execution_uid"] = execution_uid or _execution_uid(job_info)
         if service == "vllm":

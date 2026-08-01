@@ -53,13 +53,15 @@ class RecordingTelemetryTransport:
 
     def __init__(self) -> None:
         self.records: list[dict[str, Any]] = []
+        self.resources: list[dict[str, Any]] = []
         self.condition = threading.Condition()
 
     def post(self, endpoint: str, body: bytes, batch_id: str, timeout: tuple[float, float]) -> _TelemetryResponse:
         del endpoint, timeout
-        records = json.loads(body)["records"]
+        payload = json.loads(body)
         with self.condition:
-            self.records.extend(records)
+            self.records.extend(payload["records"])
+            self.resources.append(payload["resource"])
             self.condition.notify_all()
         return _TelemetryResponse(batch_id)
 

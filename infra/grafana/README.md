@@ -30,7 +30,6 @@ fetch server-side, so nothing outside the container reaches it.
 
 ```
 GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
-GET /finelog/{cluster}/v1/vllm/overview          bounded vLLM job/run overview
 GET /finelog/marin/fleet_health                  main query probe + k8s mirror readiness
 GET /finelog/marin/alerts/fleet_health           alert rows: server labels + value(0|1)
 GET /finelog/marin/alerts/training_stalls        active jobs + stalled-progress value(0|1)
@@ -66,31 +65,12 @@ time column without casting. finelog has JSON SQL UDFs, so a panel groups by a l
 `label_<key>` fields. The Kubernetes dashboard uses the hub datasource for a
 bounded recent view of `iris.task_event`, beside the live API server events.
 
-`v1/vllm/overview` is the fixed query behind `dashboards/inference.json`. It
-requires `identity_kind` (`job_id`, `root_run_uid`, or `execution_uid`),
-`identity`, `from`, `to`, and `bucket_ms`; accepts an optional output `view`;
-rejects ranges longer than seven days; clamps the bucket count to 720; and caps
-the Finelog response at 10,000 rows. The query reads only `service='vllm'`.
-Imported Prometheus cumulative snapshots keep origin, service, metric, resource
-attributes, and metric attributes separate through `LAG`, using a 45-second
-predecessor scan while retaining the requested raw `timestamp_ms` bounds. The
-query discards reset-negative counter deltas. For histograms, a reset or missing
-predecessor in any stored bucket/count/sum component invalidates the complete
-origin/service/resource/family sample before mean or quantile aggregation.
-Native Rigging counter rows bypass `LAG` and sum their already-delta values.
-KV-cache average retains the binned, unweighted-replica semantics; KV-cache peak
-comes from raw current samples before adaptive bin averaging.
-
-Freshness is computed per full origin/service/resource identity. The summary is
-the worst replica, and the `freshness_detail` view returns up to 128 replicas in
-worst-first order with that identity in `series`, so a stopped producer cannot be
-hidden by a healthy peer. The response always includes a summary freshness row,
-so no data does not look like an empty successful panel. The bounded scan can
-only identify replicas observed in the requested window or its predecessor
-lookback. `telemetry_v1` currently lacks an ingest/export timestamp, so the rows
-can identify an in-range sample gap or a range ending after the last producer
-timestamp but cannot assign that gap to the producer, direct exporter, or
-federation path.
+`v1/vllm/overview` backs the inference dashboard with a bounded, entity-scoped
+Finelog query. Operators select a job, root effort, or execution and a raw time
+window to compare token throughput, request pressure, KV-cache use,
+latency/outcomes, and worst-replica freshness after a serve exits; reset-aware
+deltas preserve replica identity, and an explicit no-data row distinguishes
+missing telemetry from healthy application silence.
 
 `fleet_health` reads one row from `finelog-marin`'s `log` namespace and combines that
 result with the three CoreWeave mirror Deployments' HTTP-readiness state. A hub query

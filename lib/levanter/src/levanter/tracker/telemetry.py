@@ -124,7 +124,6 @@ class TelemetryConfig(TrackerConfig):
     def init(self, run_id: Optional[str]) -> Tracker:
         runtime_telemetry.configure(
             "levanter",
-            role=runtime_telemetry.TelemetryRole.TRAINER,
             root_run_uid=run_id,
         )
         return TelemetryTracker()

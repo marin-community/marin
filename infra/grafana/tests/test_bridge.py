@@ -20,14 +20,12 @@ from loom_alerts import LoomAlertClient, LoomAlertDeliveryError
 from server import create_app, workload_overview
 from starlette.testclient import TestClient
 from training_stalls import telemetry_query, training_stall_alert_rows
-from vllm_observability import VLLM_MAX_RESULT_ROWS
 from wandb_source import WandbSource
 from zephyr_stalls import zephyr_progress_query, zephyr_stall_alert_rows
 
 # 2026-07-17T03:00:00Z and +1h, as Grafana sends them.
 FROM_MS = 1_784_257_200_000
 TO_MS = FROM_MS + 3_600_000
-VLLM_BUCKET_MS = 60_000
 MARIN = ClusterTarget(
     name="marin", project="p", zone="z", instance_filter="name = finelog-marin", controller_filter="labels.x=true"
 )
@@ -64,7 +62,6 @@ class FakeSource:
             error="",
         )
         self.queries: list[str] = []
-        self.max_rows: list[int] = []
 
     @property
     def target(self) -> ClusterTarget:
@@ -72,7 +69,6 @@ class FakeSource:
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
         self.queries.append(sql)
-        self.max_rows.append(max_rows)
         if self._raises is not None:
             raise self._raises
         return self._table
@@ -142,54 +138,6 @@ def test_oversized_result_is_a_400_with_guidance():
     resp = _get(_client(FakeSource(raises=QueryResultTooLargeError("query returned 500000 rows"))), "SELECT 1")
     assert resp.status_code == 400
     assert "narrow the time range" in resp.json()["error"]
-
-
-def test_vllm_overview_requires_identity_and_bounded_time_range():
-    client = _client(FakeSource())
-    base = {"from": FROM_MS, "to": TO_MS, "bucket_ms": VLLM_BUCKET_MS}
-
-    missing_identity = client.get("/finelog/marin/v1/vllm/overview", params=base)
-    invalid_identity_kind = client.get(
-        "/finelog/marin/v1/vllm/overview",
-        params={**base, "identity_kind": "run", "identity": "/serve"},
-    )
-    oversized_range = client.get(
-        "/finelog/marin/v1/vllm/overview",
-        params={
-            "identity_kind": "job_id",
-            "identity": "/serve",
-            "from": FROM_MS,
-            "to": FROM_MS + 8 * 24 * 60 * 60 * 1000,
-            "bucket_ms": VLLM_BUCKET_MS,
-        },
-    )
-
-    assert missing_identity.status_code == 400
-    assert invalid_identity_kind.status_code == 400
-    assert oversized_range.status_code == 400
-
-
-def test_vllm_overview_runs_one_capped_query_for_dashboard_views():
-    source = FakeSource(finelog_result(section=["freshness", "freshness_detail", "token_rate"], value=[15.0, 30.0, 2.0]))
-    client = _client(source)
-    params = {
-        "identity_kind": "job_id",
-        "identity": "/serve",
-        "from": FROM_MS,
-        "to": TO_MS,
-        "bucket_ms": VLLM_BUCKET_MS,
-    }
-
-    first = client.get("/finelog/marin/v1/vllm/overview", params={**params, "view": "freshness"})
-    second = client.get("/finelog/marin/v1/vllm/overview", params={**params, "view": "token_rate"})
-    detail = client.get("/finelog/marin/v1/vllm/overview", params={**params, "view": "freshness_detail"})
-
-    assert first.status_code == 200
-    assert first.json() == [{"section": "freshness", "value": 15.0}]
-    assert second.json() == [{"section": "token_rate", "value": 2.0}]
-    assert detail.json() == [{"section": "freshness_detail", "value": 30.0}]
-    assert len(source.queries) == 1
-    assert source.max_rows == [min(bridge_config().max_rows, VLLM_MAX_RESULT_ROWS)]
 
 
 def test_overview_provisioning_returns_latest_cycle_summary():

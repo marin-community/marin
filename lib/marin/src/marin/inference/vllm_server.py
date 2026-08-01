@@ -19,7 +19,9 @@ from urllib.parse import urlparse
 
 import requests
 from iris.runtime import telemetry as runtime_telemetry
+from rigging import telemetry
 from rigging.filesystem import marin_prefix
+from rigging.telemetry import probes
 from rigging.timing import Deadline, ExponentialBackoff, retry_with_backoff
 
 from marin.inference.config import WORKER_PYTHON_VERSION, InferenceModelConfig, VllmCompilationCacheMode
@@ -301,11 +303,15 @@ class VllmServerHandle:
     log_pump: _LogPump | None = None
     # Polls the server's /metrics into direct process telemetry; None until ready.
     metrics_forwarder: VllmMetricsForwarder | None = None
+    # Collects host-local NVIDIA and NCCL evidence; None until telemetry is configured.
+    hardware_probes: probes.ProbeSession | None = None
 
     def stop(self, *, timeout_seconds: float = 10) -> None:
         # Stop the metrics poller before the process dies so it does not scrape a dead endpoint.
         if self.metrics_forwarder is not None:
             self.metrics_forwarder.stop(timeout=timeout_seconds)
+        if self.hardware_probes is not None:
+            self.hardware_probes.shutdown(timeout_seconds)
 
         self._signal(signal.SIGTERM)
         try:
@@ -918,6 +924,15 @@ def _start_vllm_native_server(
 
     # Now that the server answers, forward its /metrics (throughput, TTFT, queue depth) to
     # direct telemetry so it reaches Finelog. The metrics endpoint sits at the root, not under /v1.
-    runtime_telemetry.configure(VLLM_METRICS_SERVICE, role=runtime_telemetry.TelemetryRole.INFERENCE)
+    runtime_telemetry.configure(
+        VLLM_METRICS_SERVICE,
+        attributes={"role": telemetry.TelemetryRole.INFERENCE.value},
+    )
+    if not telemetry.runtime_status().configured:
+        return handle
     metrics_url = f"http://{host}:{resolved_port}/metrics"
-    return dataclasses.replace(handle, metrics_forwarder=start_vllm_metrics_forwarding(metrics_url))
+    return dataclasses.replace(
+        handle,
+        metrics_forwarder=start_vllm_metrics_forwarding(metrics_url),
+        hardware_probes=probes.start(),
+    )

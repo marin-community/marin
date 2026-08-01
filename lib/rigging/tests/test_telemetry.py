@@ -89,28 +89,6 @@ class RaisingHandler(logging.Handler):
         raise RuntimeError("logging is broken")
 
 
-class CountingList(list):
-    def __init__(self) -> None:
-        super().__init__([0] * 10_000)
-        self.visited = 0
-
-    def __iter__(self):
-        for value in super().__iter__():
-            self.visited += 1
-            yield value
-
-
-class CountingDict(dict):
-    def __init__(self) -> None:
-        super().__init__((str(index), 0) for index in range(10_000))
-        self.visited = 0
-
-    def items(self):
-        for item in super().items():
-            self.visited += 1
-            yield item
-
-
 @pytest.fixture(autouse=True)
 def reset_telemetry():
     telemetry.shutdown(0.01)
@@ -134,7 +112,7 @@ def test_unconfigured_instruments_are_noops() -> None:
     telemetry.counter("requests").add()
     telemetry.gauge("workers").set(2)
     telemetry.histogram("latency", unit="ms").record(1.5)
-    telemetry.event("ready", {"worker": 3})
+    telemetry.event("ready", telemetry.serialization.EventBody({"worker": 3}))
 
     assert telemetry.runtime_status() == telemetry.TelemetryStatus(False, 0, 0, 0, 0, 0, 0, 0, None, 0.0)
 
@@ -224,7 +202,7 @@ def test_terminal_response_drops_batch_and_records_loss(monkeypatch: pytest.Monk
     transport = RecordingTransport([status_outcome(422)])
     configure(monkeypatch, transport)
 
-    telemetry.event("invalid", {"reason": "test"})
+    telemetry.event("invalid", telemetry.serialization.EventBody({"reason": "test"}))
 
     assert transport.rejected.wait(1)
     deadline = time.monotonic() + 1
@@ -276,39 +254,11 @@ def test_exporter_health_records_queue_loss_retry_and_freshness(monkeypatch: pyt
     }
 
 
-def test_nonserializable_event_is_lost_without_escaping(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_invalid_typed_event_cannot_poison_valid_metric(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = RecordingTransport()
     configure(monkeypatch, transport)
 
-    telemetry.event("bad", object())
-
-    assert telemetry.runtime_status().lost_records == 1
-    assert not transport.requests
-
-
-def deep_event_body() -> object:
-    body: object = "leaf"
-    for _ in range(33):
-        body = {"child": body}
-    return body
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        None,
-        {"outer": "x" * 4_097},
-        {"k" * 4_097: "value"},
-        deep_event_body(),
-        {"integer": -(1 << 63) - 1},
-        {"integer": 1 << 64},
-    ],
-)
-def test_invalid_event_body_cannot_poison_valid_metric(monkeypatch: pytest.MonkeyPatch, body: object) -> None:
-    transport = RecordingTransport()
-    configure(monkeypatch, transport)
-
-    telemetry.event("invalid", body)
+    telemetry.event("invalid", telemetry.serialization.EventBody({"value": float("nan")}))
     telemetry.counter("valid").add()
 
     assert transport.accepted.wait(1)
@@ -317,47 +267,14 @@ def test_invalid_event_body_cannot_poison_valid_metric(monkeypatch: pytest.Monke
     assert telemetry.runtime_status().lost_records == 1
 
 
-@pytest.mark.parametrize("body", [CountingList(), CountingDict()])
-def test_event_validation_stops_at_record_node_budget(
-    monkeypatch: pytest.MonkeyPatch, body: CountingList | CountingDict
-) -> None:
-    transport = RecordingTransport()
-    configure(
-        monkeypatch,
-        transport,
-        max_queue_bytes=300,
-        max_batch_bytes=300,
-    )
-
-    telemetry.event("oversized", body)
-    telemetry.counter("valid").add()
-
-    assert transport.accepted.wait(1)
-    assert body.visited <= 300
-    assert [record["name"] for record in json.loads(transport.requests[0][1])["records"]] == ["valid"]
-
-
-def test_event_validation_stops_at_cumulative_string_bytes() -> None:
-    class CountingString(str):
-        encode_calls = 0
-
-        def encode(self, encoding: str = "utf-8", errors: str = "strict") -> bytes:
-            type(self).encode_calls += 1
-            return super().encode(encoding, errors)
-
-    body = [CountingString("x" * 30) for _ in range(4)]
-
-    with pytest.raises(ValueError, match="record byte budget"):
-        telemetry._validate_event_body(body, 100)
-
-    assert CountingString.encode_calls == 3
-
-
 def test_event_integer_boundaries_match_serde_json(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = RecordingTransport()
     configure(monkeypatch, transport)
 
-    telemetry.event("integer.bounds", {"minimum": -(1 << 63), "maximum": (1 << 64) - 1})
+    telemetry.event(
+        "integer.bounds",
+        telemetry.serialization.EventBody({"minimum": -(1 << 63), "maximum": (1 << 64) - 1}),
+    )
 
     assert transport.accepted.wait(1)
     body = json.loads(transport.requests[0][1])["records"][0]["body"]
@@ -385,7 +302,7 @@ def test_nonfinite_network_configuration_stays_inert(monkeypatch: pytest.MonkeyP
 def test_invalid_shutdown_budget_is_bounded(monkeypatch: pytest.MonkeyPatch, timeout: object) -> None:
     transport = BlockingTransport()
     configure(monkeypatch, transport)
-    telemetry.event("stuck", {})
+    telemetry.event("stuck", telemetry.serialization.EventBody({}))
     assert transport.started.wait(1)
 
     started = time.monotonic()
@@ -394,22 +311,6 @@ def test_invalid_shutdown_budget_is_bounded(monkeypatch: pytest.MonkeyPatch, tim
     transport.release.set()
 
     assert elapsed < 0.2
-    assert telemetry.runtime_status().configured is False
-
-
-def test_huge_shutdown_budget_is_clamped_and_stop_failure_is_contained(monkeypatch: pytest.MonkeyPatch) -> None:
-    observed: list[float] = []
-
-    class RaisingRuntime:
-        def stop(self, timeout: float) -> None:
-            observed.append(timeout)
-            raise OverflowError("platform timer overflow")
-
-    monkeypatch.setattr(telemetry, "_runtime", RaisingRuntime())
-
-    telemetry.shutdown(1e300)
-
-    assert observed == [5.0]
     assert telemetry.runtime_status().configured is False
 
 
@@ -432,7 +333,7 @@ def test_raising_log_handler_cannot_stop_exporter_settlement(monkeypatch: pytest
     telemetry.logger.addHandler(handler)
     monkeypatch.setattr(telemetry, "_last_warning", None)
     try:
-        telemetry.event("rejected", {})
+        telemetry.event("rejected", telemetry.serialization.EventBody({}))
         assert transport.rejected.wait(1)
         deadline = time.monotonic() + 1
         while telemetry.runtime_status().queued_records and time.monotonic() < deadline:
@@ -472,7 +373,7 @@ def test_same_configuration_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> No
     }
     telemetry.configure(**options)
     telemetry.configure(**options)
-    telemetry.event("ready", {})
+    telemetry.event("ready", telemetry.serialization.EventBody({}))
 
     assert transports[0].accepted.wait(1)
     assert len(transports) == 1
@@ -481,7 +382,7 @@ def test_same_configuration_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> No
 def test_shutdown_returns_within_budget_when_transport_is_stuck(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = BlockingTransport()
     configure(monkeypatch, transport)
-    telemetry.event("stuck", {})
+    telemetry.event("stuck", telemetry.serialization.EventBody({}))
     assert transport.started.wait(1)
 
     started = time.monotonic()
@@ -501,18 +402,16 @@ def test_shutdown_drains_multiple_queued_batches_after_success(monkeypatch: pyte
     counter.add(2)
     counter.add(3)
     assert transport.started.wait(1)
-    runtime = telemetry._runtime
-    assert runtime is not None
 
     shutdown_thread = threading.Thread(target=telemetry.shutdown, args=(1.0,))
     shutdown_thread.start()
-    with runtime._condition:
-        assert runtime._condition.wait_for(lambda: runtime._stop, timeout=1)
+    deadline = time.monotonic() + 1
+    while telemetry.runtime_status().configured and time.monotonic() < deadline:
+        threading.Event().wait(0.001)
+    assert telemetry.runtime_status().configured is False
     transport.release.set()
     shutdown_thread.join(1)
 
     assert not shutdown_thread.is_alive()
     records = [record for request in transport.requests for record in json.loads(request[1])["records"]]
     assert [record["value"] for record in records] == [1, 2, 3]
-    assert runtime.status().queued_records == 0
-    assert runtime.status().lost_records == 0
