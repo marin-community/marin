@@ -21,7 +21,8 @@ import requests
 from iris.runtime import telemetry as runtime_telemetry
 from rigging import telemetry
 from rigging.filesystem import marin_prefix
-from rigging.telemetry import probes
+from rigging.telemetry.probes import nccl
+from rigging.telemetry.probes.runner import PeriodicProbe
 from rigging.telemetry.prometheus import PrometheusForwarder
 from rigging.timing import Deadline, ExponentialBackoff, retry_with_backoff
 
@@ -305,15 +306,15 @@ class VllmServerHandle:
     log_pump: _LogPump | None = None
     # Polls the server's /metrics into direct process telemetry; None until ready.
     metrics_forwarder: PrometheusForwarder | None = None
-    # Collects host-local NVIDIA and NCCL evidence; None until telemetry is configured.
-    hardware_probes: probes.ProbeSession | None = None
+    # Collects communicator-local NCCL RAS evidence; None until telemetry is configured.
+    nccl_probe: PeriodicProbe | None = None
 
     def stop(self, *, timeout_seconds: float = 10) -> None:
         # Stop the metrics poller before the process dies so it does not scrape a dead endpoint.
         if self.metrics_forwarder is not None:
             self.metrics_forwarder.stop(timeout=timeout_seconds)
-        if self.hardware_probes is not None:
-            self.hardware_probes.shutdown(timeout_seconds)
+        if self.nccl_probe is not None:
+            self.nccl_probe.shutdown(timeout_seconds)
 
         self._signal(signal.SIGTERM)
         try:
@@ -940,8 +941,9 @@ def _start_vllm_native_server(
     )
     metrics_forwarder.start()
     logger.info("Forwarding vLLM metrics from %s to telemetry_v1", metrics_url)
+    nccl_probe = nccl.start() if isinstance(launcher, IsolatedCudaVllm) else None
     return dataclasses.replace(
         handle,
         metrics_forwarder=metrics_forwarder,
-        hardware_probes=probes.start(),
+        nccl_probe=nccl_probe,
     )

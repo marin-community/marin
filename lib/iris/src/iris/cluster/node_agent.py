@@ -15,7 +15,6 @@ from rigging import telemetry
 from rigging.auth import BearerTokenInjector, StaticTokenProvider
 from rigging.log_setup import configure_logging
 from rigging.telemetry.probes import nvidia
-from rigging.telemetry.probes.runner import BoundedCommandRunner
 
 from iris.cluster.backends.k8s.node_metrics import (
     NodeMetrics,
@@ -43,7 +42,6 @@ from iris.rpc.controller_connect import EndpointServiceClientSync
 logger = logging.getLogger(__name__)
 
 DEFAULT_COLLECTION_INTERVAL = 30.0
-NVIDIA_COLLECTION_INTERVAL = 10 * 60.0
 K8S_API_TIMEOUT = 2.0
 NODE_EXPORTER_ADDRESS = "127.0.0.1"
 _BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
@@ -215,20 +213,16 @@ def run_gcp(config_path: Path) -> None:
         device_variant=config.accelerator_variant or hardware.gpu_name,
     )
     collector = HostMetricsCollector(disk_path=config.cache_dir)
-    runner = BoundedCommandRunner()
+    nvidia_probe = nvidia.start() if target.device_type == "gpu" else None
     stop = threading.Event()
     _install_signal_handlers(stop)
-    next_nvidia_collection = 0.0
     try:
         while not stop.is_set():
-            now = time.monotonic()
             collect_gcp_once(collector, target, hardware)
-            if now >= next_nvidia_collection:
-                nvidia.collect(runner)
-                next_nvidia_collection = now + NVIDIA_COLLECTION_INTERVAL
             stop.wait(DEFAULT_COLLECTION_INTERVAL)
     finally:
-        runner.cancel(2.0)
+        if nvidia_probe is not None:
+            nvidia_probe.shutdown(2.0)
         telemetry.shutdown(5.0)
 
 

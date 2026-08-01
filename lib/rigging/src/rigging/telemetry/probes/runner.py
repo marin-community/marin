@@ -10,12 +10,15 @@ import selectors
 import signal
 import subprocess
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from rigging.timing import Deadline
 
 MAX_OUTPUT_BYTES = 256 * 1024
 _PROCESS_REAP_TIMEOUT = 0.1
+_DEFAULT_INTERVAL = 10 * 60.0
+_MAX_SHUTDOWN_TIMEOUT = 5.0
 
 logger = logging.getLogger(__name__)
 
@@ -134,3 +137,49 @@ class BoundedCommandRunner:
         except subprocess.TimeoutExpired:
             logger.warning("telemetry probe process %s was not reaped after termination", process.pid)
             return
+
+
+class PeriodicProbe:
+    """Run one concrete collector periodically with bounded shutdown."""
+
+    def __init__(self, name: str, collect: Callable[[BoundedCommandRunner], None]) -> None:
+        self._name = name
+        self._collect = collect
+        self._stop = threading.Event()
+        self._runner = BoundedCommandRunner()
+        self._thread = threading.Thread(target=self._run, name=f"rigging-probe-{name}", daemon=True)
+        self._shutdown_lock = threading.Lock()
+        self._shutdown = False
+        self._thread.start()
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                self._collect(self._runner)
+            except Exception:
+                logger.warning("%s telemetry probe failed", self._name, exc_info=True)
+            if self._stop.wait(_DEFAULT_INTERVAL):
+                return
+
+    def shutdown(self, timeout: float = 2.0) -> None:
+        """Stop scheduling and reap the active subprocess within one budget."""
+        try:
+            budget = float(timeout)
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("shutdown timeout must be nonnegative and finite") from None
+        if not math.isfinite(budget) or budget < 0:
+            raise ValueError("shutdown timeout must be nonnegative and finite")
+        with self._shutdown_lock:
+            if self._shutdown:
+                return
+            self._shutdown = True
+            deadline = Deadline.from_seconds(min(budget, _MAX_SHUTDOWN_TIMEOUT))
+            self._stop.set()
+            self._runner.cancel(deadline.remaining_seconds())
+            self._thread.join(deadline.remaining_seconds())
+
+    def __enter__(self) -> "PeriodicProbe":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.shutdown()

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 from rigging import telemetry
-from rigging.telemetry import probes
+from rigging.telemetry.probes import nccl, nvidia
 from rigging.testing import RecordingTelemetryTransport
 
 
@@ -91,7 +91,7 @@ def _nccl_payload() -> dict[str, object]:
     }
 
 
-def test_default_probes_emit_stable_nvidia_and_nccl_evidence(
+def test_nvidia_probe_emits_only_stable_hardware_evidence(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -107,8 +107,28 @@ def test_default_probes_emit_stable_nvidia_and_nccl_evidence(
     )
     transport = _configure(monkeypatch)
 
-    session = probes.start()
+    session = nvidia.start()
     inventory = transport.record("hardware_inventory", {"gpu_uuid": "GPU-f81d4fae"})
+    session.shutdown()
+
+    assert inventory["attributes"]["pci_bus_id"] == "00000000:17:00.0"
+    assert inventory["attributes"]["source_temporality"] == telemetry.CURRENT_SNAPSHOT
+    assert not any(record["name"] == "communicators" for record in transport.records)
+
+
+def test_nccl_probe_emits_only_communicator_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_commands(
+        monkeypatch,
+        tmp_path,
+        nvidia_source="raise SystemExit(2)",
+        nccl_source=f"print({json.dumps(_nccl_payload())!r})",
+    )
+    transport = _configure(monkeypatch)
+
+    session = nccl.start()
     rank = transport.record(
         "communicator_rank_status",
         {"communicator_hash": "0xae94423cfbb2ef4a", "rank": "1"},
@@ -116,12 +136,11 @@ def test_default_probes_emit_stable_nvidia_and_nccl_evidence(
     collective = transport.record("collective_operations", {"collective": "AllReduce", "rank": "0"})
     session.shutdown()
 
-    assert inventory["attributes"]["pci_bus_id"] == "00000000:17:00.0"
-    assert inventory["attributes"]["source_temporality"] == telemetry.CURRENT_SNAPSHOT
     assert rank["attributes"]["rank_state"] == "missing"
     assert rank["attributes"]["unresponsive"] == "true"
     assert collective["value"] == 12
     assert collective["attributes"]["source_temporality"] == telemetry.CUMULATIVE_SNAPSHOT
+    assert not any(record["name"] == "hardware_inventory" for record in transport.records)
 
 
 def test_nvidia_probe_falls_back_to_stable_inventory_fields(
@@ -138,7 +157,7 @@ print({baseline!r})
     _install_commands(monkeypatch, tmp_path, nvidia_source=nvidia_source, nccl_source="raise SystemExit(2)")
     transport = _configure(monkeypatch)
 
-    session = probes.start()
+    session = nvidia.start()
     memory = transport.record("gpu_memory_total_bytes", {"gpu_uuid": "GPU-f81d4fae"})
     session.shutdown()
 
@@ -157,9 +176,11 @@ def test_output_limit_drops_one_probe_without_blocking_its_peer(
     )
     transport = _configure(monkeypatch)
 
-    session = probes.start()
+    nvidia_session = nvidia.start()
+    nccl_session = nccl.start()
     transport.record("communicators", {})
-    session.shutdown()
+    nvidia_session.shutdown()
+    nccl_session.shutdown()
 
     assert not any(record["name"] == "hardware_inventory" for record in transport.records)
 
@@ -187,16 +208,18 @@ threading.Event().wait(60)
     nccl_command.write_text(nccl_command.read_text().replace("PROBE_PID_PATH", "NCCL_PID_PATH"))
     monkeypatch.setenv("NCCL_PID_PATH", str(nccl_pid))
 
-    session = probes.start()
+    nvidia_session = nvidia.start()
+    nccl_session = nccl.start()
     deadline = time.monotonic() + 2
     while not (nvidia_pid.exists() and nccl_pid.exists()) and time.monotonic() < deadline:
         threading.Event().wait(0.001)
     assert nvidia_pid.exists() and nccl_pid.exists()
 
     started = time.monotonic()
-    session.shutdown(0.5)
+    nvidia_session.shutdown(0.5)
+    nccl_session.shutdown(0.5)
 
-    assert time.monotonic() - started < 0.7
+    assert time.monotonic() - started < 1.2
     for path in (nvidia_pid, nccl_pid):
         with pytest.raises(ProcessLookupError):
             os.kill(int(path.read_text()), 0)
@@ -206,7 +229,7 @@ def test_import_does_not_start_probe_threads() -> None:
     code = """
 import threading
 before = {thread.ident for thread in threading.enumerate()}
-from rigging.telemetry import probes
+from rigging.telemetry.probes import nccl, nvidia
 after = [thread for thread in threading.enumerate() if thread.ident not in before]
 assert after == [], after
 """

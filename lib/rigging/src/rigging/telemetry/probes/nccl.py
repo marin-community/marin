@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from typing import NamedTuple
 
 from rigging import telemetry
-from rigging.telemetry.probes.runner import BoundedCommandRunner
+from rigging.telemetry.probes.runner import BoundedCommandRunner, PeriodicProbe
 
 TIMEOUT = 8.0
 _MAX_COMMUNICATORS = 256
@@ -21,6 +21,11 @@ _MAX_FIELD_BYTES = 256
 _MAX_EXACT_COUNT = 2**53 - 1
 
 logger = logging.getLogger(__name__)
+
+
+def start() -> PeriodicProbe:
+    """Collect NCCL RAS communicator evidence until shutdown."""
+    return PeriodicProbe("nccl_ras", collect)
 
 
 class _Metric(NamedTuple):

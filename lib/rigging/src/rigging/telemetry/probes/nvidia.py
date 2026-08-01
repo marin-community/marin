@@ -9,7 +9,7 @@ import logging
 from typing import NamedTuple
 
 from rigging import telemetry
-from rigging.telemetry.probes.runner import BoundedCommandRunner, CommandOutput
+from rigging.telemetry.probes.runner import BoundedCommandRunner, CommandOutput, PeriodicProbe
 from rigging.timing import Deadline
 
 TIMEOUT = 5.0
@@ -39,6 +39,11 @@ _EXTENDED_FIELDS = (
 _NOT_AVAILABLE = frozenset({"", "n/a", "[n/a]", "not supported", "[not supported]", "unknown error"})
 
 logger = logging.getLogger(__name__)
+
+
+def start() -> PeriodicProbe:
+    """Collect NVIDIA inventory and slow-health evidence until shutdown."""
+    return PeriodicProbe("nvidia_smi", collect)
 
 
 class _Metric(NamedTuple):
