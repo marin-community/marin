@@ -372,3 +372,10 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Source bundle: Iris workspace bundle, 9.4 MB. The submit output did not report a content ID.
 - Status: A08 has the federated request. The coordinator waits on the peer, with zero reported failures or preemptions.
 - Next action: Keep this one request and monitor it through the 25-step GPU gate.
+
+### 2026-08-02 02:10 UTC - MHEP-002 full artifact corrects partial telemetry
+
+- Correction: The earlier MHEP-002 entry used a 22-sample telemetry summary. The full offline artifact contains 24 MFU samples.
+- Final performance: Median MFU is 19.3689%, mean MFU is 19.2053%, p10 MFU is 18.5799%, and p90 MFU is 19.6090%. The last sample is 19.4278% MFU, 314,831 tokens/s, and 13.3224 seconds.
+- Final training values: Loss is 6.0933 and MoE drop fraction is 9.6723% at zero-based step 24.
+- Comparison rule: Use these full-artifact values for MHEP-002. The prior 19.2735% median and 315,838 tokens/s values remain a partial 22-sample telemetry snapshot.
