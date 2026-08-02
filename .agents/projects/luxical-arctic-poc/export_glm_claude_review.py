@@ -43,6 +43,7 @@ def export_review(run_id: str, output_root: StoragePath) -> None:
     ]
     for index, chunk in enumerate(chunks):
         logger.info("%s%04d/%04d:%s", CLAUDE_REVIEW_CHUNK_MARKER, index, len(chunks), chunk)
+    logger.info("GLM_SEMANTIC_SUMMARY=%s", json.dumps(summary, sort_keys=True))
     logger.info(
         "GLM_CLAUDE_REVIEW_EXPORT=%s",
         json.dumps({"run_id": run_id, "documents": len(documents), "assignments": len(assignments)}, sort_keys=True),
