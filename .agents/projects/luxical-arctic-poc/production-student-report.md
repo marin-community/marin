@@ -4,10 +4,11 @@ Status: evaluation in progress
 
 ## TL;DR
 
-The 3M student runs 3.00349 times as fast as Luxical-One on CPU. Its vectors
-pass all health gates. The student fails the held-out semantic gates and the
-model-hidden neighborhood review. The largest failure is on non-English text,
-where the neighborhood score is 0.19355. The nested 10M rung is in preparation.
+The 3M and 10M students are faster than Luxical-One on CPU. Their vectors pass
+all health gates. Both students fail the held-out semantic gates and the
+model-hidden neighborhood review. The 10M rung improves non-English text and
+some global metrics. It does not improve the overall hidden-review score, and
+it reduces the code score. The nested 30M rung is the final pure-scaling test.
 
 ## Decision rule
 
@@ -15,7 +16,7 @@ Do not approve a production student until every required gate passes on fixed
 held-out documents. Source provenance is not a prediction target. A source can
 contain many unrelated semantic domains and document forms.
 
-The current candidate is the 3M Arctic FastTransformer. It has 9,299,200
+The current candidate is the 10M Arctic FastTransformer. It has 9,299,200
 parameters and returns 256-dimensional vectors. It is the lead candidate, not
 an approved production model.
 
@@ -23,22 +24,23 @@ an approved production model.
 
 | Gate | Requirement | Current result | State |
 | --- | --- | --- | --- |
-| Finite output | 100% finite vectors | 100% on 74,752 documents and the 1,000-document semantic screen | Pass |
-| Non-constant output | At least 99% unique vectors | 100% on the semantic screen | Pass |
-| Global geometry | Effective-rank fraction at least 0.25 | 0.33326 on the semantic screen | Pass |
-| Exact CPU speed | At least 0.85 times Luxical-One | 3.00349 times Luxical-One | Pass |
+| Finite output | 100% finite vectors | 100% on the 10,000-document held-out set | Pass |
+| Non-constant output | At least 99% unique vectors | 99.97% on the held-out set | Pass |
+| Global geometry | Effective-rank fraction at least 0.25 | 0.42414 on the held-out set | Pass |
+| Exact CPU speed | At least 0.85 times Luxical-One | 10.36458 times Luxical-One on the paired 10M test | Pass |
 | Coarse semantic screen | No metric more than 0.02 below the best tested teacher | Passed all eight fixed metrics | Pass |
 | Label reliability | Independent review gates for a frozen hierarchy | Tail adjudication changed each global metric by at most 0.00458 and changed no gate decision | Pass |
-| Fine semantic coherence | Parent, leaf, and form gates on accepted labels | Parent macro-F1, form macro-F1, and leaf cluster NMI fail | Fail |
-| Blind neighborhood review | Student is not worse than the best teacher | Score 0.4475; 95% interval [0.3800, 0.5150] | Fail |
+| Fine semantic coherence | Parent, leaf, and form gates on accepted labels | The 10M parent macro-F1 gate fails; leaf and form global gates pass | Fail |
+| Blind neighborhood review | Student is not worse than the best teacher | 10M score 0.4450; 95% interval [0.3775, 0.5125] | Fail |
 | Held-out robustness | All large semantic groups pass | Parent, form, and leaf large-group gates fail | Fail |
 | Optional ladder input | Bounded loader below 8 GiB peak RSS | 1.62 GB on all 3M rows | Pass |
 | Release artifact | Pinned model, tokenizer, loader, and production smoke | Not built | Open |
 
-The exact paired CPU test used 20,000 fixed documents, five alternating timed
-repeats, eight CPU threads, and the CPU JAX backend. The student median was
-18,492.61 documents per second. Pinned Luxical-One reached 6,157.05 documents
-per second.
+Each exact paired CPU test used 20,000 fixed documents, five alternating timed
+repeats, eight CPU threads, and the CPU JAX backend. On the 10M test host, the
+student median was 6,798.62 documents per second. Pinned Luxical-One reached
+655.95 documents per second. This host was slower than the 3M test host. The
+paired ratio is the portable release gate.
 
 The coarse 1,000-document screen found coherent recipe, literature, code, and
 molecule neighborhoods. It also found weak government-statistics and
@@ -110,6 +112,26 @@ instructions, administrative records, and narrative text. The exact set
 depends on the hierarchy level. The vectors do not collapse. The failure is
 semantic loss.
 
+## Held-out 10M result
+
+The 10M student is not collapsed. All 10,000 vectors are finite. The unique
+fraction at four decimals is 0.9997. The effective-rank fraction is 0.42414,
+up from 0.35219 at 3M. The total normalized variance is 0.85427, up from
+0.84226.
+
+Some global semantic metrics improve. Form cross-source nearest-label macro-F1
+improves by 0.02388 and passes. Leaf cluster NMI improves by 0.00970 and
+passes. Parent cross-source nearest-label macro-F1 changes by -0.00010 and
+still fails. The parent value is 0.44703. Scale alone did not improve this
+failed metric.
+
+Large-group gates still fail at all three levels. Failed parent groups include
+corporate and business text, humanities and culture, intellectual property,
+medical and biological text, unclear text, and technical documentation. Leaf
+and form results also show losses in administrative records, narrative text,
+reference text, structured data, and technical specifications. The exact group
+set depends on the hierarchy level.
+
 ## Required embedding gates
 
 Use only documents that were not used to train the student. Exclude neighbors
@@ -159,6 +181,18 @@ was 0.41667, so the code gate failed. The non-English group had 31 queries and
 a score of 0.19355. The other-text group had 121 queries and a score of
 0.47107. All three group gates failed.
 
+Claude Opus 5 repeated the same model-hidden method for the 10M student. The
+student had 84 wins, 10 ties, and 106 losses. Its score was 0.4450. The paired
+95-percent interval was [0.3775, 0.5125]. Thus, the overall gate failed and did
+not improve from the 3M score of 0.4475.
+
+The 10M code group had 50 queries and a score of 0.4500. This is lower than the
+3M score of 0.55208. The non-English group had 31 queries and a score of
+0.32258. This is higher than the 3M score of 0.19355, but it still fails. The
+other-text group had 119 queries and a score of 0.47479. It is nearly unchanged
+from 3M. More training data changed which groups were weak, but did not improve
+the overall visible result.
+
 ## Release gates
 
 - Repeat the exact CPU benchmark from a pinned release artifact. The median
@@ -193,14 +227,24 @@ a score of 0.19355. The other-text group had 121 queries and a score of
 - Blind neighborhood report:
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/adjudicated-v1/blind-neighborhood-review-v1/claude-opus-5-report.json`
   (SHA-256 `d4f8c4b7b679540b367cb4d9f02d7e77151b79bea036e50a841faa1bf1ca394f`)
+- 10M model SHA-256:
+  `fb3bb5f0e6e625bf72b2052ec7a76e6aa172f90fd2cebd551f045ac7bac473d3`
+- 10M exact CPU report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/speed/cpu-trained-full-full-10m.json`
+- 10M adjudicated held-out report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/student-fast_arctic_10m/adjudicated-v1/embedding-screen-v1/report.json`
+- 10M blind neighborhood report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/student-fast_arctic_10m/adjudicated-v1/blind-neighborhood-review-v1/claude-opus-5-report.json`
+  (SHA-256 `d149ac1a316bab66e5e87cb8ec29af016e4085e9388d3fde858c4f91ded86b8f`)
 
 ## Open decision
 
-Reject the current 3M candidate. Train the nested 10M rung with the same
-architecture, loss, tokenizer map, and Arctic teacher. Train the 30M rung only
-if 10M does not pass. Stop the ladder when two adjacent rungs improve the failed
-metric by less than 0.005. Change the teacher or objective only when the teacher
-passes the failed evaluation and scale does not close the gap.
+Reject the 3M and 10M candidates. Train the nested 30M rung with the same
+architecture, loss, tokenizer map, and Arctic teacher. This is the final
+pure-scaling test. The 3M-to-10M hidden-review score changed by -0.0025. If the
+10M-to-30M score improves by less than 0.005, two adjacent scaling changes will
+have failed the stop rule. Stop scaling and change the teacher windows or the
+training objective at that point.
 
 The disk-backed staged loader passed its 3M canary with 1,623,203,840 bytes of
 peak RSS. It scanned every row and saw all 146 sources. This is a 79.1 percent
@@ -212,5 +256,5 @@ The Arctic teacher embeds three head, middle, and tail windows. Short documents
 can repeat the same text, and medium documents can have overlapping windows.
 Exact repeats do not change an averaged embedding, but overlap can weight the
 middle of a document more heavily. The independent GLM labels and blind
-neighborhood review must catch a harmful effect. If the candidate fails those
-gates, test a deduplicated-window teacher before more Arctic scaling.
+neighborhood review must catch a harmful effect. If the 30M candidate fails
+those gates, stop scaling and test a deduplicated-window teacher.
