@@ -1465,3 +1465,14 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 - Resume job `/rav/lux-glm52-hierarchy-direct-b200-003` was submitted at
   interactive priority. It will restore the taxonomy and first 650 compact
   labels.
+- The resume passed the prior invalid leaf-to-parent row and completed all
+  1,000 compact labels. The compact pilot has 1.5 percent fallback labels, a
+  25 percent largest parent, and full use of all 12 parents and 23 leaves.
+- One compact precedence rule names `FORMS_TEMPLATES`, which is not in the
+  taxonomy. The saved assignments use only valid IDs, but this taxonomy is not
+  eligible for the frozen evaluation until the rule is corrected.
+- Hierarchy validation now rejects unknown IDs in precedence rules. A failed
+  hierarchy request also gives its exact validation error and JSON to the next
+  model attempt. Eight focused hierarchy tests pass.
+- The balanced hierarchy request is still active. Its first outputs reached
+  the generation limit and did not produce a saved taxonomy.
