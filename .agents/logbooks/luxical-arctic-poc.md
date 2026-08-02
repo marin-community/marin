@@ -1388,3 +1388,15 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 - Accepted the large-rung memory concern. Do not run 10M or 30M with the current materialized loader. Add and test a bounded sharded or streaming loader first.
 - The source-inventory provenance limit was already recorded. The unused results collector was already deleted. Source-name categories are not used in the production semantic gates.
 - The remaining survey, manifest-helper, old Arctic wrapper, and report-compression findings are outside the production evaluation path. They do not change saved artifacts or current trust gates.
+
+### GLM-5.2 H100 fallback check
+
+- The pinned FP8 checkpoint index reports 755,617,140,416 bytes of model
+  weights across 141 shards.
+- Eight 80 GB H100 devices provide only 640 GB before runtime memory. They
+  cannot hold this checkpoint.
+- The model has 64 attention heads and 256 routed experts. The next practical
+  tensor-parallel size after eight is 16, not 12.
+- A 16-H100 gang is not a smaller placement request than the active
+  eight-B200 gang. Keep the B200 request queued unless the scheduler rejects
+  it or a different model-serving plan is proven first.
