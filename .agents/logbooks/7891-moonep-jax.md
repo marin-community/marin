@@ -86,3 +86,13 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Result: Pooled quantile, local-average counterexample, and two-device reduction checks pass. Pyrefly reports zero errors.
 - Interpretation: The implementation matches the report algorithm within one bin width and preserves the local estimator as a control.
 - Next action: Implement the MoonEP allocation planner and compare it with the independent reference.
+
+### 2026-08-02 10:06 UTC - Four-GPU MoonEP correctness gate
+
+- Hypothesis: The portable MoonEP schedule preserves dense MoE outputs and gradients under full owner skew.
+- Commit Hash: `e4a085e56`.
+- Command: Four-GPU GB200 pytest for dense output and gradient parity.
+- Config: Eight experts, top-2, four EP ranks, full routing to one owner, and four-token compute padding.
+- Result: The output and gradients for tokens, gate/up weights, and down weights pass. The test completed in 97.00 seconds.
+- Interpretation: Token dispatch, sparse expert copies, return order, and automatic differentiation are correct. The Pallas grouped GEMM corrupted isolated rows, so the portable path selects the XLA grouped GEMM.
+- Next action: Run MNEP-003 on one NVL72 and profile the combined path.
