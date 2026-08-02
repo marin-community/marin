@@ -1365,3 +1365,7 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 - The direct server entrypoint submits the two-replica gang through federation. It uses explicit task ports and runs the bounded hierarchy client on rank zero.
 - Focused direct-server, lifecycle, hierarchy, review, and metric tests pass.
 - The old parent-child run stopped before model startup. Direct job `/rav/lux-glm52-hierarchy-direct-b200-001` entered the federation queue at interactive priority without an idle coordinator accelerator.
+- A four-device fit smoke reached model construction with 64 GiB of host memory, then the container was OOM-killed at the first streamed weight load. The tensor and expert-parallel shape is valid, but 64 GiB is not enough host memory.
+- A 96 GiB four-device retry reserved accelerator quota but could not find a node with the required host memory. It was stopped because its reservation could prevent the primary eight-device gang from admission.
+- The direct eight-device hierarchy run remains the only active accelerator request for this experiment.
+- `production-student-report.md` defines the remaining label, 10,000-document, blind-neighborhood, robustness, release, and peer-review gates. The exact CPU speed gate is already complete.
