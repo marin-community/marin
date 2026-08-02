@@ -632,3 +632,14 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Loss check: The small change from 3.64 at step 129 to 3.67 at step 135 was brief; loss then fell to 3.50. It does not meet the sustained-loss stop rule.
 - Logs: No exception, OOM, dead-node, resource error, non-finite value, or retry is present.
 - Decision: Continue the same job at the normal monitor cadence.
+
+### 2026-08-02 05:48 UTC - MHEP-008 final gate passed
+
+- Completion: The coordinator and all 16 GPU tasks succeeded with exit 0, zero failures, and zero preemptions. All workers reached step 200 of 200. The training loop took about 40 minutes and 35 seconds after startup.
+- Shutdown: Coordination-service connection warnings appeared only after step 200 while peers exited. The scheduler records success for every task, so these are normal shutdown warnings.
+- W&B artifact: The durable offline `tracker_metrics.jsonl` summary has `_step=199`, `global_step=199`, and 199 MFU samples for the zero-based 200-step run.
+- Performance: Median MFU is 23.6969%, mean MFU is 23.6329%, p10 MFU is 22.8856%, and p90 MFU is 24.0928%. The last sample is 23.6283% MFU, 382,902 tokens/s, and 10.9540 seconds.
+- Training: Final loss is 3.3119. Final MoE drop fraction is 7.4113%.
+- MHEP-004 change: Median MFU is 0.4262 percentage points lower than the 25-step selection gate. Final drop fraction is 2.2673 percentage points lower. The 200-step optimizer uses the recorded compute-scaled learning rates, so this is the required stability gate rather than another selection comparison.
+- Decision: The selected fixed all-to-all, gather-dispatch, custom-adjoint, capacity-1.0 stack passes the final gate. Receiver-ECHO and three-choice spill remain rejected. XProf is not necessary.
+- Next action: Complete branch review, required checks, and the pull request.
