@@ -88,6 +88,7 @@ def build_hero_run(
     qb_method: QuantileBalancingMethod = QuantileBalancingMethod.LOCAL_EXACT,
     qb_histogram_bins: int = 1000,
     moonep_jax_wheel_build: MoonEPJaxWheelBuild | None = None,
+    processes_per_task: int = HERO_PROCESSES_PER_TASK,
     profile_start_step: int | None = None,
     profile_num_steps: int = 2,
     version: str | None = None,
@@ -99,6 +100,8 @@ def build_hero_run(
         raise ValueError(f"num_steps must be positive, got {num_steps}")
     if profile_num_steps <= 0:
         raise ValueError(f"profile_num_steps must be positive, got {profile_num_steps}")
+    if processes_per_task <= 0 or HERO_GPUS_PER_NODE % processes_per_task != 0:
+        raise ValueError(f"processes_per_task={processes_per_task} must divide {HERO_GPUS_PER_NODE} GPUs per node")
     if profile_start_step is not None and profile_start_step < MIN_HERO_PROFILE_START_STEP:
         raise ValueError(f"profile_start_step must be at least {MIN_HERO_PROFILE_START_STEP}")
     if profile_start_step is not None and profile_start_step + profile_num_steps > num_steps:
@@ -186,7 +189,7 @@ def build_hero_run(
             optimizer=optimizer,
             trainer=dataclasses.replace(grug_trainer, trainer=trainer),
             eval=None,
-            processes_per_task=HERO_PROCESSES_PER_TASK,
+            processes_per_task=processes_per_task,
             moonep_jax_wheel_build=moonep_jax_wheel_build,
         )
 
@@ -252,6 +255,13 @@ def build_hero_run(
     help="Fixed JAX wheel build for MoonEP rack runs.",
 )
 @click.option(
+    "--processes-per-task",
+    type=click.IntRange(min=1, max=HERO_GPUS_PER_NODE),
+    default=HERO_PROCESSES_PER_TASK,
+    show_default=True,
+    help="JAX processes per four-GPU rack worker.",
+)
+@click.option(
     "--profile-start-step",
     type=click.IntRange(min=MIN_HERO_PROFILE_START_STEP),
     default=None,
@@ -274,6 +284,7 @@ def main(
     qb_method: str,
     qb_histogram_bins: int,
     moonep_jax_wheel_build: str | None,
+    processes_per_task: int,
     profile_start_step: int | None,
     profile_num_steps: int,
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -288,6 +299,7 @@ def main(
         moonep_jax_wheel_build=(
             MoonEPJaxWheelBuild(moonep_jax_wheel_build) if moonep_jax_wheel_build is not None else None
         ),
+        processes_per_task=processes_per_task,
         profile_start_step=profile_start_step,
         profile_num_steps=profile_num_steps,
     )

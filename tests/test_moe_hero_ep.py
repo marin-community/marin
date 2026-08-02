@@ -15,6 +15,7 @@ import pytest
 from fray.cluster import ResourceConfig
 from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
+from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_ep import grugmuon_hero, launch, train
 from experiments.grug.moe_hero_ep.jax_wheel_setup import MoonEPJaxWheelBuild
@@ -229,6 +230,28 @@ def test_profile_window_rejects_steps_skipped_by_callback_runner():
             num_steps=5,
             profile_start_step=2,
         )
+
+
+def test_hero_process_count_must_divide_local_gpus():
+    with pytest.raises(ValueError, match="processes_per_task=3 must divide 4 GPUs per node"):
+        launch.build_hero_run(
+            run_id="invalid-process-count",
+            num_steps=3,
+            processes_per_task=3,
+        )
+
+
+def test_hero_process_count_reaches_training_config():
+    step = launch.build_hero_run(
+        run_id="one-process-per-gpu",
+        num_steps=3,
+        processes_per_task=4,
+        version="dev",
+    )
+
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.processes_per_task == 4
 
 
 def test_ep_newton_schulz_returns_to_expert_sharding():
