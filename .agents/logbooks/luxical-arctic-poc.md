@@ -1535,3 +1535,26 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 - The raw and adjudicated student metrics must differ by at most 0.02, and the
   gate decision must not change. This checks that boundary-label noise does not
   control the student decision.
+
+### Held-out hierarchical embedding result
+
+- The fixed GLM hierarchy labeled all 10,000 new held-out documents. The raw
+  embedding evaluation job completed without a failure or preemption.
+- The 3M Fast Transformer remains finite and non-constant. Its finite fraction
+  is 1.0, its four-decimal unique fraction is 0.9997, its effective-rank
+  fraction is 0.35219, and its total variance is 0.84226.
+- The 3M student fails the fixed semantic release gates. Parent and form
+  nearest-primary macro-F1 fail. Leaf cluster NMI fails. Large-group F1 also
+  fails at all three hierarchy levels.
+- The parent macro-F1 is 0.44498. The best saved teacher value is 0.47415.
+  The form macro-F1 is 0.37281. The best saved teacher value is 0.41156.
+  The leaf cluster NMI is 0.40660. The best saved teacher value is 0.42961.
+- The failures include large code groups. `SOFTWARE_CODE` trails its best
+  teacher by 0.04395 F1, and the `CODE` form trails by 0.04100. The result is
+  not a code-collapse failure because the student remains diverse, but it is a
+  measurable semantic-quality loss.
+- This raw result starts the larger student rung. The low-confidence 5 percent
+  label adjudication and label-sensitivity check remain active. They cannot
+  release the 3M student unless the fixed gate decisions stay stable.
+- Raw report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/raw-v1/embedding-screen-v1/report.json`.
