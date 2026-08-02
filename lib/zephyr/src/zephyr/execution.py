@@ -56,7 +56,6 @@ MAX_WORKERS_PER_JOB = 1_024
 
 
 def _generate_execution_id() -> str:
-    """Generate unique ID for this execution to avoid conflicts."""
     ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     return f"{ts}-{uuid.uuid4().hex[:8]}"
 
@@ -148,17 +147,13 @@ def _resolve_task_resources(
     worker_resources: ResourceConfig,
     map_task_resources: ResourceConfig | None,
     reduce_task_resources: ResourceConfig | None,
-) -> tuple[ResourceConfig, ResourceConfig, int]:
-    """Resolve task resources and calculate the task packing limit."""
+) -> tuple[ResourceConfig, ResourceConfig]:
+    """Resolve and validate the map and reduce task resources."""
     resolved_map = map_task_resources or worker_resources
     resolved_reduce = reduce_task_resources or resolved_map
     _validate_task_resources(worker_resources, resolved_map, "map")
     _validate_task_resources(worker_resources, resolved_reduce, "reduce")
-    tasks_per_worker = min(
-        _tasks_per_worker(worker_resources, resolved_map),
-        _tasks_per_worker(worker_resources, resolved_reduce),
-    )
-    return resolved_map, resolved_reduce, tasks_per_worker
+    return resolved_map, resolved_reduce
 
 
 class _ContextState(enum.StrEnum):
@@ -215,6 +210,23 @@ class ZephyrContext:
     one shared pool and keeps it active until context exit. Child jobs can
     receive the entered context through Fray serialization. Borrowed contexts
     keep the coordinator handle but do not own pool shutdown.
+
+    Shared calls do not recreate a failed pool. Each thread has its own shared-data
+    view. A caller that starts a thread must copy or initialize the required view.
+
+    Args:
+        client: Fray client. Zephyr selects the current client when this is not set.
+        max_workers: Worker limit for a dedicated pool or an owned shared pool.
+        resources: CPU, memory, and device resources for each worker.
+        coordinator_resources: Resources for the coordinator actor.
+        chunk_storage_prefix: Storage prefix for shared data, chunks, and results.
+        name: Name prefix for actor groups.
+        no_workers_timeout: Maximum wait for a live worker during one stage.
+        max_execution_retries: Maximum pool retries for a dedicated execute call.
+        stage_runner_factory: Factory for the worker stage runner.
+        heartbeat_timeout: Maximum time between worker heartbeats.
+        max_shard_failures: Maximum task failures for one shard.
+        max_shard_infra_failures: Maximum worker failures while one shard is active.
     """
 
     client: Client | None = None
@@ -435,7 +447,7 @@ class ZephyrContext:
             return ZephyrExecutionResult(results=[], counters={})
 
         assert self.resources is not None
-        resolved_map, resolved_reduce, tasks_per_worker = _resolve_task_resources(
+        resolved_map, resolved_reduce = _resolve_task_resources(
             self.resources,
             map_task_resources,
             reduce_task_resources,
@@ -465,6 +477,10 @@ class ZephyrContext:
                     coordinator.release_execution.remote(execution_id).result(timeout=10.0)
 
         assert state is _ContextState.NEW
+        tasks_per_worker = min(
+            _tasks_per_worker(self.resources, resolved_map),
+            _tasks_per_worker(self.resources, resolved_reduce),
+        )
         last_exception: Exception | None = None
         backoff = ExponentialBackoff(initial=2.0, maximum=60.0, factor=2.0, jitter=0.1)
         for attempt in range(self.max_execution_retries + 1):
