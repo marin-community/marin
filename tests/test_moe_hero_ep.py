@@ -381,6 +381,12 @@ def test_run_grug_selects_collective_overlap_limit(
             None,
         ),
         (
+            MoonEPJaxWheelBuild.LSA_NCCL_2307_NOOP_AFTER_DEVICE_COMM_20260802,
+            "jax-f9f6bbace-xla-5d53e1e-nccl2307-noop-after-device-comm-20260802",
+            "4b1ddc5011aa44126ff711c4efe2fe889ef43d380e31609e560437cc6cbee0cd",
+            None,
+        ),
+        (
             MoonEPJaxWheelBuild.LSA_NCCL_2307_FULL_MNNVL_20260802,
             "jax-f9f6bbace-xla-5d53e1e-nccl2307-hybrid-weak-20260802",
             "c71148f3901030525093480bbdf6582d255d7b34af5564a636ac409b24de1ffa",

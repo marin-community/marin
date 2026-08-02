@@ -830,3 +830,20 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - PJRT SHA-256: `ba8fb4ba686e18ec710f6495e7f4e8d407cadf5076e8786a06314d30443e6eb4`.
 - Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-noop-run-collective-20260802`.
 - Expected rack result: The collective returns and the probe reports sampled value mismatches.
+
+### 2026-08-02 20:44 UTC - MNEP-040 clears prepare-time setup
+
+- Run ID: `mnep-040-ragged-noop-run-collective-20260802-2041`.
+- Snapshot: `mnep-040-ragged-noop-run-collective-20260802-2041` at `cf43590dc`.
+- Result: The collective completed without a CUDA fault.
+- Result: Task 0 reported the expected 189 sampled value mismatches.
+- Interpretation: Clique preparation, symmetric allocation, and communicator initialization are safe.
+- Next gate: Get the LSA device communicator, then return before kernel launch.
+
+### 2026-08-02 20:46 UTC - Return-after-device-communicator XLA build
+
+- Patch: Complete buffer lookup and LSA device-communicator lookup, then return before kernel launch.
+- Patch file: `experiments/grug/moe_hero_ep/xla_patches/0010-return-after-device-communicator-lookup.patch`.
+- PJRT SHA-256: `4b1ddc5011aa44126ff711c4efe2fe889ef43d380e31609e560437cc6cbee0cd`.
+- Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-noop-after-device-comm-20260802`.
+- Expected rack result: The collective completes and the probe reports sampled value mismatches.
