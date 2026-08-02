@@ -65,7 +65,7 @@ def test_comparison_measures_blinded_label_agreement() -> None:
         {
             "sample_index": 2,
             "primary_bucket_id": "SCIENCE",
-            "secondary_bucket_ids": [],
+            "secondary_bucket_ids": ["CODE"],
             "language": "Python",
             "document_type": "Code",
             "confidence": 0.6,
@@ -79,4 +79,7 @@ def test_comparison_measures_blinded_label_agreement() -> None:
     assert result["language_exact_agreement"] == 1.0
     assert result["document_type_exact_agreement"] == 1.0
     assert result["secondary_overlap_fraction"] == 0.5
+    assert result["bucket_set_overlap_fraction"] == 1.0
+    assert result["glm_primary_in_claude_set_fraction"] == 1.0
+    assert result["claude_primary_in_glm_set_fraction"] == 0.5
     assert [row["sample_index"] for row in result["disagreements"]] == [2]

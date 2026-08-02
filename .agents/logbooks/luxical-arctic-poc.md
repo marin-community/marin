@@ -1209,3 +1209,18 @@ The taxonomy can supply labels for a direct embedding quality test.
 - One response omitted the optional rationale field on three attempts.
 - Primary and secondary bucket IDs remained valid.
 - The corrective change accepts an empty rationale while retaining all label gates.
+
+### Pilot completion and blinded review
+
+- Job `/rav/lux-glm52-semantic-1000-b200-004` completed all 1,000 descriptions and assignments.
+- All 38 buckets received documents. The largest bucket held 13.5 percent, and the five largest held 44.9 percent.
+- The effective bucket count was 24.53. `OTHER_UNCLEAR` held 0.3 percent.
+- Mean GLM confidence was 0.93751. Confidence is a diagnostic, not an accuracy measure.
+- The final resumed attempt took 1,729 seconds. This is not a clean full-run speed measurement.
+- Claude classified 20 documents with the frozen vocabulary and without source metadata or GLM labels.
+- Exact primary agreement was 50 percent. This fails the 70 percent stop gate for student work.
+- Nineteen of 20 GLM and Claude label sets shared at least one bucket.
+- Exact language and document-type string gates were invalid. The prompts allowed names, codes, and free-text types.
+- Two inspected disagreements showed valid competing primary labels. The main fault is overlapping bucket scope and missing primary-label precedence.
+- Do not train the student on these single primary labels. Revise the target as multi-label or hierarchical labels first.
+- Report: `.agents/projects/luxical-arctic-poc/glm-semantic-label-report.md`.

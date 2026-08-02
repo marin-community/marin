@@ -103,6 +103,9 @@ def comparison(package: dict[str, Any], claude_rows: list[dict[str, Any]]) -> di
     language_matches = 0
     document_type_matches = 0
     secondary_overlaps = 0
+    bucket_set_overlaps = 0
+    glm_primary_in_claude_set = 0
+    claude_primary_in_glm_set = 0
     disagreements = []
     for sample_index in sorted(glm_by_index):
         glm_row = glm_by_index[sample_index]
@@ -110,11 +113,16 @@ def comparison(package: dict[str, Any], claude_rows: list[dict[str, Any]]) -> di
         primary_match = glm_row["primary_bucket_id"] == claude_row["primary_bucket_id"]
         language_match = glm_row["language"].casefold() == str(claude_row["language"]).casefold()
         document_type_match = glm_row["document_type"].casefold() == str(claude_row["document_type"]).casefold()
+        glm_bucket_set = {glm_row["primary_bucket_id"], *glm_row["secondary_bucket_ids"]}
+        claude_bucket_set = {claude_row["primary_bucket_id"], *claude_row["secondary_bucket_ids"]}
         secondary_overlap = bool(set(glm_row["secondary_bucket_ids"]) & set(claude_row["secondary_bucket_ids"]))
         primary_matches += primary_match
         language_matches += language_match
         document_type_matches += document_type_match
         secondary_overlaps += secondary_overlap
+        bucket_set_overlaps += bool(glm_bucket_set & claude_bucket_set)
+        glm_primary_in_claude_set += glm_row["primary_bucket_id"] in claude_bucket_set
+        claude_primary_in_glm_set += claude_row["primary_bucket_id"] in glm_bucket_set
         if not primary_match:
             disagreements.append(
                 {
@@ -134,6 +142,9 @@ def comparison(package: dict[str, Any], claude_rows: list[dict[str, Any]]) -> di
         "language_exact_agreement": language_matches / count,
         "document_type_exact_agreement": document_type_matches / count,
         "secondary_overlap_fraction": secondary_overlaps / count,
+        "bucket_set_overlap_fraction": bucket_set_overlaps / count,
+        "glm_primary_in_claude_set_fraction": glm_primary_in_claude_set / count,
+        "claude_primary_in_glm_set_fraction": claude_primary_in_glm_set / count,
         "disagreements": disagreements,
         "claude_assignments": claude_rows,
     }
