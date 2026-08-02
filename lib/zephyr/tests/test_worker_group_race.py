@@ -18,7 +18,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from conftest import _TEST_TASK_COST, _TEST_WORKER_AVAILABLE, _make_test_coordinator, start_test_stage
-from zephyr.execution import PullStatus
+from zephyr.coordinator import PullStatus
 from zephyr.shuffle import ListShard
 from zephyr.stage_io import ShardTask, TaskResult
 from zephyr.worker_context import CounterSnapshot

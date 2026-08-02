@@ -9,8 +9,8 @@ import threading
 import pytest
 from rigging import telemetry
 from zephyr import counters
+from zephyr.coordinator import ZephyrCoordinator, ZephyrExecutionResult, _PipelineExecution
 from zephyr.counters import ScopedCounters
-from zephyr.execution import ZephyrCoordinator, ZephyrExecutionResult, _PipelineExecution
 from zephyr.runners import _InProcessWorkerContext
 from zephyr.stage_io import ZephyrTaskResources
 from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot, _worker_ctx_var

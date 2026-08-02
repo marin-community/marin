@@ -27,21 +27,17 @@ from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from rigging import telemetry
 from zephyr import counters
-from zephyr.dataset import Dataset
-from zephyr.execution import (
-    _NON_RETRYABLE_ERRORS,
-    MAX_IRIS_WORKER_REPLICAS,
+from zephyr.coordinator import (
     MAX_SHARD_FAILURES,
     MAX_SHARD_INFRA_FAILURES,
     ZEPHYR_PROGRESS_TIME_METRIC,
     CoordinatorUnreachable,
     PullStatus,
     WorkerState,
-    ZephyrContext,
     ZephyrCoordinator,
-    ZephyrWorker,
-    _distributed_worker_limit,
 )
+from zephyr.dataset import Dataset
+from zephyr.execution import _NON_RETRYABLE_ERRORS, MAX_IRIS_WORKER_REPLICAS, ZephyrContext, _distributed_worker_limit
 from zephyr.plan import PhysicalStage, StageType, compute_plan
 from zephyr.shuffle import ListShard
 from zephyr.stage_io import (
@@ -52,6 +48,7 @@ from zephyr.stage_io import (
     _ensure_picklable_exception,
 )
 from zephyr.stats import ZEPHYR_STAGE_BYTES_PROCESSED_KEY, ZEPHYR_STAGE_ITEM_COUNT_KEY
+from zephyr.worker import ZephyrWorker
 from zephyr.worker_context import CounterEntry, CounterSnapshot, zephyr_worker_ctx
 
 
@@ -199,18 +196,15 @@ def test_context_manager_reuses_one_pool(local_client, tmp_path):
     )
 
     with ctx:
-        coordinator = ctx._coordinator_handle
-        workers = ctx._worker_group
+        pool = ctx._pool
         first = ctx.execute(Dataset.from_list([1, 2]).map(lambda value: value + 1))
         second = ctx.execute(Dataset.from_list([3, 4]).map(lambda value: value * 2))
         assert sorted(first.results) == [2, 3]
         assert sorted(second.results) == [6, 8]
-        assert ctx._coordinator_handle is coordinator
-        assert ctx._worker_group is workers
+        assert ctx._pool is pool
         assert not list(Path(chunk_prefix).rglob("*"))
 
-    assert ctx._coordinator_handle is None
-    assert ctx._worker_group is None
+    assert ctx._pool is None
 
 
 def test_serialized_context_borrows_pool_and_can_put(local_client, tmp_path):
