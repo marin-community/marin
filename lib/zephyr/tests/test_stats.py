@@ -40,7 +40,7 @@ def test_pipeline_metrics_keep_complete_recent_time_bins():
             "cpu_cores": 1.25,
             "memory_bytes": 2048.0,
             "active_shards": 2,
-        }
+        },
     ]
     writer = StatsWriter(cast(LogClient, log_client))
 
