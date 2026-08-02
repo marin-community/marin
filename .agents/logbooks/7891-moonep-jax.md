@@ -309,3 +309,70 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Fix: Use sigmoid scores for these three operations. Keep the bias out of the mixture weights and router gradients.
 - Gate: A crafted large-logit case now selects the sigmoid-score route and keeps every required bias in the report's range.
 - Action: Replace the queued MNEP-014 rack run with a corrected snapshot after the code gate passes.
+
+### 2026-08-02 14:43 UTC - MNEP-016 proves the low-host admission request
+
+- Run ID: `mnep-016-sigmoid-qb-low-host-smoke-3-20260802-1443`.
+- Command: The existing GPU pod ran `.agents/tmp/launch_mnep016.py` and submitted the child job directly.
+- Config: Each of 16 workers requested four GB200 GPUs, 16 CPUs, 88 GiB RAM, and 256 GiB disk.
+- Admission: Kueue admitted all 16 workers on `DH1-393-US-EAST-08A` without a resource wait.
+- Failure: Every worker stopped during setup with `ModuleNotFoundError: No module named 'experiments.grug.moe_hero_ep'`.
+- Cause: A direct child submission reused the GPU pod source bundle. The bundle did not contain the MoonEP experiment package.
+- Action: Stop the child job before GPU setup and submit a top-level coordinator from the current worktree.
+
+### 2026-08-02 14:55 UTC - MNEP-017 bundled rack smoke contract
+
+- Goal: Run three combined MoonEP and global QB steps with one JAX process for each GPU.
+- Snapshot: `mnep-017-sigmoid-qb-low-host-bundled-smoke-3-20260802-1451` at `18d3b9832`.
+- Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 0 --job-name mnep-017-sigmoid-qb-low-host-bundled-smoke-3-20260802-1451-coord -e WANDB_MODE offline -e WANDB_PROJECT rav_moe -- python -m experiments.grug.moe_hero_ep.launch --run-id mnep-017-sigmoid-qb-low-host-bundled-smoke-3-20260802-1451 --num-steps 3 --moe-implementation moonep_jax --moonep-token-padding 128 --moonep-grouped-gemm quack --qb-method global_histogram --qb-histogram-bins 1000 --moonep-jax-wheel-build lsa-20260802 --processes-per-task 4 --worker-cpu 16 --worker-ram-gb 88 --version 2026.08.02 --run`.
+- Config: EP64, 16 workers, four processes for each worker, fixed XLA, sigmoid-score QB, 1,000 bins, and the device kernel.
+- Source: The top-level coordinator bundled the current worktree before federation to `cw-us-east-08a`.
+- State: The coordinator is active. The 16 GPU tasks wait for MNEP-013 to release the NVL72.
+- Stop criteria: Stop on the first retry, setup error, transport error, non-finite loss, or dropped assignment.
+
+### 2026-08-02 15:05 UTC - MNEP-013 profile serialization exceeds the barrier timeout
+
+- Run ID: `mnep-013-host-nccl-profile-5-20260802-1341`.
+- Snapshot: `mnep-013-host-nccl-profile-5-20260802-1341` at `a0180e182`.
+- Config: The run used five steps, a two-step profile from step three, the host-NCCL path, and one process for each task.
+- Model result: Fifteen ranks completed all five model steps. The last reported loss was 8.16.
+- Profile result: Rank zero entered `jax.profiler.stop_trace` and used 42 GiB of host RAM.
+- Failure: The remaining ranks entered `barrier_sync()` and exceeded its 200-second timeout before rank zero serialized the trace.
+- Evidence: Iris reported exit 133 for task zero and one failure across 16 tasks.
+- Artifact: No profile file was written before the failure.
+- Interpretation: The model step is correct. The profile window and HLO data are too large for the profile barrier.
+- Action: Use one profile step without HLO data before a change to the common barrier timeout.
+
+### 2026-08-02 15:05 UTC - MNEP-017 rules out process layout as the EP64 fix
+
+- Run ID: `mnep-017-sigmoid-qb-low-host-bundled-smoke-3-20260802-1451`.
+- Snapshot: `mnep-017-sigmoid-qb-low-host-bundled-smoke-3-20260802-1451` at `18d3b9832`.
+- Config: The run used 16 workers, four JAX processes for each worker, one GPU for each process, 16 CPUs, and 88 GiB RAM.
+- Admission: Kueue placed the run on one NVL72 without a resource wait.
+- Setup: All processes installed the fixed JAX build and NCCL 2.29.7. The full EP64 program compiled.
+- Failure: All four local ranks on task 10 reported `CUDA_ERROR_ILLEGAL_ADDRESS` before step zero.
+- Stack: The failure occurred in `AsyncExecution::ExecutionGuard`, `AsyncStartThunk`, and `WhileThunk` during completion-event recording.
+- Evidence: Iris reported exit 250 for task 10 and one failure across 16 tasks.
+- Interpretation: One process for each GPU does not make the multi-node ragged device kernel correct.
+- Decision: Stop process-layout tests. Replace the device kernel with a bounded standard collective, or optimize the correct host-NCCL path.
+
+### 2026-08-02 15:30 UTC - XLA two-slice decomposition passes the local parity gate
+
+- Hypothesis: XLA can replace the unsafe cross-slice ragged kernel and keep its fast device kernel inside each slice.
+- Snapshot: `f1353baa0`.
+- Runtime: The fixed XLA build used a two-GPU slice override on four GB200 GPUs.
+- HLO: The optimized program used all-gather groups `{0,2}` and `{1,3}`, plus a standard metadata all-to-all across the same groups.
+- HLO: The remaining ragged collective groups were `{0,1}` and `{2,3}`.
+- Result: The full-owner-skew test passed output and input, `w13`, and `w2` gradient parity in 123.91 seconds.
+- Source: [OpenXLA PR 46570](https://github.com/openxla/xla/pull/46570) describes this decomposition as the efficient multi-host fallback when the copy kernel is not available.
+- Decision: Use two 32-GPU slices for the next EP64 rack test.
+
+### 2026-08-02 15:30 UTC - MNEP-018 two-slice rack smoke contract
+
+- Goal: Compile and execute three combined MoonEP and global QB steps through the two-slice XLA decomposition.
+- Run ID: `mnep-018-two-slice-device-smoke-3-20260802-1530`.
+- Snapshot: `f1353baa0`.
+- Config: EP64, 16 workers, one process for each worker, fixed XLA, sigmoid-score QB, 1,000 bins, 16 CPUs, and 88 GiB RAM.
+- Transport: Standard collectives connect two 32-GPU slices. The NCCL LSA and GIN kernel operates only inside each slice.
+- Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 0 --job-name mnep-018-two-slice-device-smoke-3-20260802-1530-coord -e WANDB_MODE offline -e WANDB_PROJECT rav_moe -- python -m experiments.grug.moe_hero_ep.launch --run-id mnep-018-two-slice-device-smoke-3-20260802-1530 --num-steps 3 --moe-implementation moonep_jax --moonep-token-padding 128 --moonep-grouped-gemm quack --qb-method global_histogram --qb-histogram-bins 1000 --moonep-jax-wheel-build lsa-20260802 --processes-per-task 1 --worker-cpu 16 --worker-ram-gb 88 --version 2026.08.02 --run`.
+- Stop criteria: Stop on the first retry, setup error, transport error, non-finite loss, or dropped assignment.
