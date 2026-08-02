@@ -108,6 +108,7 @@ def build_hero_run(*, run_id: str, num_steps: int, version: str | None = None) -
                     "fixed-a2a",
                     "gather-dispatch",
                     "custom-adjoint",
+                    "capacity-1.0625",
                     "gb200",
                     "MHEP",
                 ],
