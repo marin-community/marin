@@ -580,3 +580,31 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Cause: The probe requested 32 GiB of host memory. The training workers request 256 GiB.
 - Fix: Match the probe CPU, host memory, and disk requests to the training workers.
 - Next gate: Repeat the 640 MiB probe with the corrected worker resources.
+
+### 2026-08-02 18:06 UTC - MNEP-027 corrected rack probe contract
+
+- Goal: Execute one balanced 640 MiB ragged all-to-all on one NVL72 with the corrected worker resources.
+- Run ID: `mnep-027-ragged-640m-resource-fixed-20260802-1806`.
+- Snapshot: `mnep-027-ragged-640m-resource-fixed-20260802-1806` at `3e128c559`.
+- Shape: Use 65,536 rows per rank, 5,120 bfloat16 elements per row, and 64 equal peer segments.
+- Resources: Request 32 CPUs, 256 GiB of host memory, and four GB200 GPUs for each worker.
+- Gate: Require attempt-zero completion, checksum `6193152`, zero sampled mismatches, and no transport error.
+
+### 2026-08-02 18:11 UTC - MNEP-027 isolates the remote-domain failure
+
+- Topology: All 16 workers ran in NVLink domain `DH1-125-US-EAST-08A`.
+- Result: A lower-domain rank reported 98,304 sampled mismatches before task 10 failed with a CUDA illegal address.
+- Interpretation: The mismatch count equals all three sampled columns for the 32,768 rows from the remote NVLink domain.
+- Interpretation: Local-domain copies are correct. Cross-domain GIN writes do not produce valid output.
+- Source comparison: NVIDIA's hybrid all-to-all example reserves only hybrid barriers and GIN signals.
+- Source difference: XLA also reserves separate LSA and rail-GIN barriers that its hybrid kernel does not use.
+- Next gate: Build XLA with the device communicator requirements matched to NVIDIA's hybrid example.
+
+### 2026-08-02 18:17 UTC - Hybrid-resource PJRT build
+
+- Patch: Reserve hybrid barriers and GIN signals, but do not reserve unused separate LSA and rail-GIN barriers.
+- Source: JAX `f9f6bbace`, XLA `5d53e1e`, NCCL 2.30.7, CUDA 13.0, cuDNN 9.12, and `sm_100`.
+- PJRT SHA-256: `ad8ee4dff204460f10bff5eb468957b332131203b628bf02ad2bcc0fdff73d0f`.
+- Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-hybrid-resources-20260802`.
+- Local gate: The four-GPU 640 MiB probe passed in 3.456048 seconds with checksum `294912` and zero mismatches.
+- Next gate: Run the same balanced probe at EP64 on one NVL72.

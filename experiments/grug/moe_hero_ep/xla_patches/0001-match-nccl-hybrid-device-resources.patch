@@ -1,0 +1,13 @@
+diff --git a/xla/backends/gpu/runtime/ragged_all_to_all_thunk.h b/xla/backends/gpu/runtime/ragged_all_to_all_thunk.h
+index 91399868c..b31b2a5ae 100644
+--- a/xla/backends/gpu/runtime/ragged_all_to_all_thunk.h
++++ b/xla/backends/gpu/runtime/ragged_all_to_all_thunk.h
+@@ -215,8 +215,6 @@ class RaggedAllToAllThunk : public CollectiveThunk {
+   GpuDeviceCommunicator::Requirements DeviceKernelDevCommRequirements() const {
+     GpuDeviceCommunicator::Requirements requirements;
+     requirements.barrier_count = device_kernel_barrier_count();
+-    requirements.lsa_barrier_count = device_kernel_barrier_count();
+-    requirements.rail_gin_barrier_count = device_kernel_barrier_count();
+     requirements.gin_signal_count = device_kernel_barrier_count();
+     requirements.gin_connection_full = true;
+     return requirements;

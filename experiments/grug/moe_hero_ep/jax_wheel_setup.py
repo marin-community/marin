@@ -11,12 +11,15 @@ from fray.cluster import ResourceConfig
 from iris.cluster.setup_scripts import cuda_toolchain_setup_script, default_setup_script
 from marin.training.run_environment import extras_for_resources
 
+_WHEEL_ARTIFACT_ROOT = "s3://marin-us-east-02a/marin/research/moonep"
+
 
 class MoonEPJaxWheelBuild(StrEnum):
     """Named JAX builds that are valid for the MoonEP rack experiment."""
 
     LSA_20260802 = "lsa-20260802"
     LSA_NCCL_2307_20260802 = "lsa-nccl-2307-20260802"
+    LSA_NCCL_2307_HYBRID_20260802 = "lsa-nccl-2307-hybrid-resources-20260802"
 
 
 @dataclass(frozen=True)
@@ -32,7 +35,7 @@ class _WheelSet:
 
 
 _LSA_20260802 = _WheelSet(
-    prefix="s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-20260802",
+    prefix=f"{_WHEEL_ARTIFACT_ROOT}/jax-f9f6bbace-xla-5d53e1e-20260802",
     wheels=(
         _WheelArtifact(
             filename="jax-0.11.1.dev20260802+f9f6bbace-py3-none-any.whl",
@@ -54,7 +57,7 @@ _LSA_20260802 = _WheelSet(
 )
 
 _LSA_NCCL_2307_20260802 = _WheelSet(
-    prefix="s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-20260802",
+    prefix=f"{_WHEEL_ARTIFACT_ROOT}/jax-f9f6bbace-xla-5d53e1e-nccl2307-20260802",
     wheels=(
         _WheelArtifact(
             filename="jax-0.11.1.dev20260802+f9f6bbace-py3-none-any.whl",
@@ -75,12 +78,36 @@ _LSA_NCCL_2307_20260802 = _WheelSet(
     ),
 )
 
+_LSA_NCCL_2307_HYBRID_20260802 = _WheelSet(
+    prefix=f"{_WHEEL_ARTIFACT_ROOT}/jax-f9f6bbace-xla-5d53e1e-nccl2307-hybrid-resources-20260802",
+    wheels=(
+        _WheelArtifact(
+            filename="jax-0.11.1.dev20260802+f9f6bbace-py3-none-any.whl",
+            sha256="40b447b71c8a45032abe9ebdbadfd9d0d434165500c27831a408a8ee053dac4d",
+        ),
+        _WheelArtifact(
+            filename="jax_cuda13_pjrt-0.11.1.dev0+selfbuilt-py3-none-manylinux_2_27_aarch64.whl",
+            sha256="ad8ee4dff204460f10bff5eb468957b332131203b628bf02ad2bcc0fdff73d0f",
+        ),
+        _WheelArtifact(
+            filename="jax_cuda13_plugin-0.11.1.dev0+selfbuilt-cp312-cp312-manylinux_2_27_aarch64.whl",
+            sha256="d04ee6bdc956979fa0c43ed95bfdba7bc4f665ceceb34531ef792cff742ddf95",
+        ),
+        _WheelArtifact(
+            filename="jaxlib-0.11.1.dev0+selfbuilt-cp312-cp312-manylinux_2_27_aarch64.whl",
+            sha256="03e838842547a66af13bc93a533ce1943dc0f2eb83026a94994eca7f47c072b4",
+        ),
+    ),
+)
+
 
 def _wheel_set(build: MoonEPJaxWheelBuild) -> _WheelSet:
     if build == MoonEPJaxWheelBuild.LSA_20260802:
         return _LSA_20260802
     if build == MoonEPJaxWheelBuild.LSA_NCCL_2307_20260802:
         return _LSA_NCCL_2307_20260802
+    if build == MoonEPJaxWheelBuild.LSA_NCCL_2307_HYBRID_20260802:
+        return _LSA_NCCL_2307_HYBRID_20260802
     raise ValueError(f"unknown MoonEP JAX wheel build: {build}")
 
 
