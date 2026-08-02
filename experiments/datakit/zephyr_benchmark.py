@@ -15,6 +15,7 @@ Example::
         --coordinator-cpu 8 --coordinator-ram 32g --coordinator-disk 16g \
         --pool-workers 60 --pool-cpu 16 --pool-ram 160g --pool-disk 32g \
         --task-cpu 1 --task-ram 10g --task-disk 2g \
+        --output-prefix s3://bucket/tmp/ttl=7d/zephyr-100b-v1/outputs \
         --chunk-storage-prefix s3://bucket/tmp/ttl=7d/zephyr-100b-v1/chunks \
         --last-stage fuzzy \
         --max-concurrent 4 --dedup-max-parallelism 4096
@@ -61,6 +62,17 @@ def _steps_through(steps: ZephyrDatakitSteps, last_stage: LastStage) -> list[Ste
     return selected
 
 
+def _route_outputs(steps: ZephyrDatakitSteps, output_prefix: str) -> ZephyrDatakitSteps:
+    tokenize = {name: replace(step, output_path_prefix=output_prefix) for name, step in steps.tokenize.items()}
+    minhash = {name: replace(step, output_path_prefix=output_prefix) for name, step in steps.minhash.items()}
+    return ZephyrDatakitSteps(
+        exact_dedup=replace(steps.exact_dedup, output_path_prefix=output_prefix),
+        tokenize=tokenize,
+        minhash=minhash,
+        fuzzy_dedup=replace(steps.fuzzy_dedup, output_path_prefix=output_prefix, deps=list(minhash.values())),
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sample-prefix", required=True)
@@ -76,6 +88,7 @@ def main() -> None:
     parser.add_argument("--task-cpu", required=True, type=float)
     parser.add_argument("--task-ram", required=True)
     parser.add_argument("--task-disk", required=True)
+    parser.add_argument("--output-prefix", required=True)
     parser.add_argument("--chunk-storage-prefix", required=True)
     parser.add_argument("--last-stage", required=True, type=LastStage, choices=list(LastStage))
     parser.add_argument("--max-concurrent", required=True, type=int)
@@ -107,7 +120,7 @@ def main() -> None:
         chunk_storage_prefix=args.chunk_storage_prefix,
         stage_runner_factory=SubprocessRunner,
     ) as zephyr_context:
-        steps = zephyr_datakit_steps(sources, scale, zephyr_context)
+        steps = _route_outputs(zephyr_datakit_steps(sources, scale, zephyr_context), args.output_prefix)
         StepRunner().run(_steps_through(steps, args.last_stage), max_concurrent=args.max_concurrent)
 
 
