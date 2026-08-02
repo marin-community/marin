@@ -211,17 +211,18 @@ class _Runtime:
         self._thread = threading.Thread(target=self._run, name="rigging-telemetry", daemon=True)
         self._thread.start()
 
-    def emit(self, record: bytes) -> None:
+    def emit(self, record: bytes) -> bool:
+        """Return whether ``record`` was queued; a false result is counted as lost."""
         with self._condition:
             if self._stop or len(record) + self._empty_envelope_size() > self.config.max_batch_bytes:
                 self._lost_records += 1
-                return
+                return False
             if (
                 self._resident_records >= self.config.max_queue_records
                 or self._resident_bytes + len(record) > self.config.max_queue_bytes
             ):
                 self._lost_records += 1
-                return
+                return False
             queued = _QueuedRecord(record, time.monotonic())
             self._records.append(queued)
             if self._oldest_queued_at is None:
@@ -229,6 +230,12 @@ class _Runtime:
             self._resident_records += 1
             self._resident_bytes += len(record)
             self._condition.notify()
+            return True
+
+    def count_lost(self, records: int = 1) -> None:
+        """Count records that could not be validated or queued for export."""
+        with self._condition:
+            self._lost_records += records
 
     def status(self) -> TelemetryStatus:
         with self._condition:
@@ -535,6 +542,20 @@ def _emit(
     runtime = _runtime
     if runtime is None:
         return
+    _emit_to_runtime(runtime, kind, name, value=value, body=body, unit=unit, attributes=attributes)
+
+
+def _emit_to_runtime(
+    runtime: _Runtime,
+    kind: str,
+    name: str,
+    *,
+    value: float | None = None,
+    body: serialization.EventBody | None = None,
+    unit: str = "",
+    attributes: Mapping[str, str] | None = None,
+) -> bool:
+    """Return whether one validated record was queued in the selected runtime."""
     try:
         serialization.validate_string(name, "name")
         if unit:
@@ -559,10 +580,10 @@ def _emit(
                 raise ValueError("metric value must be finite")
             record["unit"] = unit
             record["value"] = numeric
-        runtime.emit(serialization.json_bytes_bounded(record, runtime.max_record_bytes()))
+        return runtime.emit(serialization.json_bytes_bounded(record, runtime.max_record_bytes()))
     except Exception:
-        with runtime._condition:
-            runtime._lost_records += 1
+        runtime.count_lost()
+        return False
 
 
 def _valid_ack(response: _Response, batch_id: str) -> bool:
