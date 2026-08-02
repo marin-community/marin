@@ -481,3 +481,22 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - PJRT SHA-256: `a1bb00b9ed594e7d1b85251bce63660bb85c5f7a661d618af677cee481a4572a`.
 - Host wheels: The JAX, jaxlib, and CUDA plugin hashes match the prior source-identical build.
 - Next gate: Install this complete wheel set and repeat full-owner-skew parity on four local GPUs.
+
+### 2026-08-02 17:25 UTC - NCCL 2.30.7 header build passes local parity
+
+- Setup: The clean checkout at `ae283d1e8` used the rebuilt PJRT wheel and the NCCL 2.30.7 runtime.
+- Device gate: JAX found all four GB200 GPUs in the development pod.
+- Correctness: The full-owner-skew test passed output and input, `w13`, and `w2` gradient parity.
+- Result: `1 passed, 3 warnings in 109.07s`.
+- Scope: This gate uses one local LSA domain. The rack gate must test multi-node GIN.
+
+### 2026-08-02 17:26 UTC - MNEP-023 rebuilt-header smoke contract
+
+- Goal: Execute three combined MoonEP and global QB steps through the direct EP64 device kernel.
+- Run ID: `mnep-023-direct-nccl2307-headers-smoke-3-20260802-1726`.
+- Snapshot: `mnep-023-direct-nccl2307-headers-smoke-3-20260802-1726`.
+- Runtime: Use fixed XLA `5d53e1e` built against NCCL 2.30.7, with the matching runtime, an 84% main pool, and four in-flight collectives.
+- Config: Use 16 workers, four GB200 GPUs per worker, one JAX process per worker, sigmoid-score global histogram QB, and QuACK grouped GEMM.
+- Gate: Require attempt-zero completion, finite loss, zero dropped assignments, and no transport error.
+- Stop criteria: Stop on the first retry, memory error, transport error, non-finite loss, or dropped assignment.
+- Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 0 --job-name mnep-023-direct-nccl2307-headers-smoke-3-20260802-1726-coord -e WANDB_MODE offline -e WANDB_PROJECT rav_moe -- python -m experiments.grug.moe_hero_ep.launch --run-id mnep-023-direct-nccl2307-headers-smoke-3-20260802-1726 --num-steps 3 --moe-implementation moonep_jax --moonep-token-padding 128 --moonep-grouped-gemm quack --qb-method global_histogram --qb-histogram-bins 1000 --moonep-jax-wheel-build lsa-nccl-2307-20260802 --moonep-transport direct_device --processes-per-task 1 --worker-cpu 16 --worker-ram-gb 88 --version 2026.08.02 --run`.
