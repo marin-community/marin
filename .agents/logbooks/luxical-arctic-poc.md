@@ -1352,3 +1352,7 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 - The first callback run timed out after the default five-minute client wait while the server was still queued.
 - The corrected coordinator wait is unbounded inside the two-hour parent timeout.
 - The stopped attempts wrote no taxonomy or assignments.
+- A scheduler query found broad accelerator saturation. It also confirmed that the nested server could not federate after its one-accelerator parent selected a site.
+- The direct server entrypoint submits the two-replica gang through federation. It uses explicit task ports and runs the bounded hierarchy client on rank zero.
+- Focused direct-server, lifecycle, hierarchy, review, and metric tests pass.
+- The old parent-child run stopped before model startup. Direct job `/rav/lux-glm52-hierarchy-direct-b200-001` entered the federation queue at interactive priority without an idle coordinator accelerator.
