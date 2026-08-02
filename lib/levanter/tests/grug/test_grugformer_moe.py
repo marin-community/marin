@@ -19,11 +19,7 @@ from haliax.nn.ragged_dot import ragged_dot
 import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispatch_indices_with_assignment_ids
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
-from levanter.grug._moe.ep_fixed_all_to_all import (
-    _assign_with_spill,
-    _moe_mlp_ep_fixed_a2a_local,
-    _moe_mlp_ep_fixed_a2a_spill_local,
-)
+from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -446,10 +442,7 @@ def test_moe_expert_mlp_init_uses_logical_weight_pspecs():
     assert mlp.w_down.sharding.spec == P(None, "model", "data")
 
 
-@pytest.mark.parametrize(
-    "implementation",
-    ["ring", "ragged_all_to_all", "fixed_all_to_all", "fixed_all_to_all_spill", "echo_receiver"],
-)
+@pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all", "fixed_all_to_all"])
 def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
     mesh = _make_abstract_moe_mesh(data=2, expert=2, model=1)
 
@@ -589,100 +582,6 @@ def test_fixed_all_to_all_drops_assignments_over_capacity():
     assert int(dropped) == 4
 
 
-def test_spill_preserves_capacity_and_uses_candidate_weight():
-    selected_experts = jnp.array(
-        [
-            [0, 1],
-            [0, 1],
-            [0, 2],
-        ],
-        dtype=jnp.int32,
-    )
-    combine_weights = jnp.array(
-        [
-            [0.9, 0.1],
-            [0.8, 0.2],
-            [0.7, 0.3],
-        ],
-        dtype=jnp.float32,
-    )
-    capacity = 2
-
-    _, _, _, baseline_keep = _assign_with_spill(
-        selected_experts,
-        combine_weights,
-        num_experts=3,
-        capacity=capacity,
-        attempts=0,
-    )
-    target, slot, routed_weights, keep = _assign_with_spill(
-        selected_experts,
-        combine_weights,
-        num_experts=3,
-        capacity=capacity,
-        attempts=1,
-    )
-
-    assert int(baseline_keep.sum()) == 5
-    assert int(keep.sum()) == 6
-    assert int(target[4]) == 2
-    assert float(routed_weights[4]) == pytest.approx(0.3)
-    occupied_slots = np.asarray(target[keep] * capacity + slot[keep])
-    assert len(np.unique(occupied_slots)) == int(keep.sum())
-    assert int(slot[keep].min()) >= 0
-    assert int(slot[keep].max()) < capacity
-
-
-def test_fixed_all_to_all_spill_uses_candidate_expert_value_and_gradients():
-    mesh = Mesh(
-        np.asarray([jax.devices()[0]]),
-        axis_names=("expert",),
-        axis_types=(AxisType.Explicit,),
-    )
-    x = jnp.ones((3, 1), dtype=jnp.float32)
-    selected_experts = jnp.array([[0, 1], [0, 1], [0, 2]], dtype=jnp.int32)
-    combine_weights = jnp.array([[0.9, 0.1], [0.8, 0.2], [0.7, 0.3]], dtype=jnp.float32)
-    expert_scale = jnp.array([1.0, 10.0, 100.0], dtype=jnp.float32)[:, None, None]
-    w_up_gate = jnp.concatenate([expert_scale, jnp.ones_like(expert_scale)], axis=2)
-    w_down = jnp.ones((3, 1, 1), dtype=jnp.float32)
-
-    def spill_a2a(x, combine_weights):
-        return _moe_mlp_ep_fixed_a2a_spill_local(
-            x,
-            selected_experts,
-            combine_weights,
-            w_up_gate,
-            w_down,
-            activation_fn=lambda value: value,
-            num_experts=3,
-            capacity_factor=1.0,
-        )
-
-    sharded_spill_a2a = jax.shard_map(
-        spill_a2a,
-        mesh=mesh,
-        in_specs=(P(), P()),
-        out_specs=(P(), P()),
-        check_vma=False,
-    )
-    with jax.set_mesh(mesh):
-        actual, dropped = sharded_spill_a2a(x, combine_weights)
-        x_gradient, weight_gradient = jax.grad(
-            lambda x, combine_weights: jnp.sum(sharded_spill_a2a(x, combine_weights)[0]),
-            argnums=(0, 1),
-        )(x, combine_weights)
-
-    np.testing.assert_allclose(np.asarray(actual), np.array([[1.9], [2.8], [60.0]]), rtol=1e-5, atol=1e-5)
-    np.testing.assert_allclose(np.asarray(x_gradient), np.array([[3.8], [5.6], [120.0]]), rtol=1e-5, atol=1e-5)
-    np.testing.assert_allclose(
-        np.asarray(weight_gradient),
-        np.array([[1.0, 10.0], [1.0, 10.0], [0.0, 200.0]]),
-        rtol=1e-5,
-        atol=1e-5,
-    )
-    assert int(dropped) == 0
-
-
 @pytest.mark.slow
 def test_fixed_all_to_all_matches_dense_cross_shard_value_and_gradients():
     env = os.environ.copy()
@@ -759,157 +658,6 @@ def test_fixed_all_to_all_matches_dense_cross_shard_value_and_gradients():
             )(x, w_up_gate, w_down)
 
         np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
-        for actual_gradient, expected_gradient in zip(actual_gradients, expected_gradients, strict=True):
-            np.testing.assert_allclose(
-                np.asarray(actual_gradient),
-                np.asarray(expected_gradient),
-                rtol=1e-5,
-                atol=1e-5,
-            )
-    """
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
-
-
-@pytest.mark.slow
-def test_echo_receiver_matches_dense_cross_shard_value_and_gradients():
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
-    script = """
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
-
-        import levanter.grug._moe.ep_echo_receiver as echo_receiver
-        from levanter.grug.grug_moe import moe_mlp
-
-        assert jax.device_count() == 4
-        mesh = Mesh(
-            np.asarray(jax.devices()),
-            axis_names=("expert",),
-            axis_types=(AxisType.Explicit,),
-        )
-
-        def reference_exchange(
-            local_weights,
-            packed_local_experts,
-            input_offsets,
-            send_sizes,
-            output_offsets,
-            recv_sizes,
-            *,
-            max_receiver_experts,
-        ):
-            del recv_sizes
-            padded_weights = jnp.concatenate(
-                [local_weights, jnp.zeros((1, *local_weights.shape[1:]), dtype=local_weights.dtype)],
-                axis=0,
-            )
-            send_weights = padded_weights[packed_local_experts]
-            all_send_weights = jax.lax.all_gather(send_weights, "expert")
-            all_input_offsets = jax.lax.all_gather(input_offsets, "expert")
-            all_send_sizes = jax.lax.all_gather(send_sizes, "expert")
-            all_output_offsets = jax.lax.all_gather(output_offsets, "expert")
-            receiver_index = jax.lax.axis_index("expert")
-            output = jnp.zeros(
-                (max_receiver_experts, *local_weights.shape[1:]),
-                dtype=local_weights.dtype,
-            )
-            segment_positions = jnp.arange(max_receiver_experts, dtype=jnp.int32)
-            for sender_index in range(all_send_weights.shape[0]):
-                segment_size = all_send_sizes[sender_index, receiver_index]
-                input_position = all_input_offsets[sender_index, receiver_index] + segment_positions
-                input_position = jnp.minimum(input_position, all_send_weights.shape[1] - 1)
-                output_position = all_output_offsets[sender_index, receiver_index] + segment_positions
-                output_position = jnp.where(
-                    segment_positions < segment_size,
-                    output_position,
-                    max_receiver_experts,
-                )
-                output = output.at[output_position].set(
-                    all_send_weights[sender_index, input_position],
-                    mode="drop",
-                )
-            return output
-
-        echo_receiver._exchange_clone_weights = reference_exchange
-
-        tokens = 8
-        hidden_dim = 4
-        intermediate_dim = 3
-        num_experts = 8
-        selected_experts = jnp.tile(jnp.asarray([[0, 1]], dtype=jnp.int32), (tokens, 1))
-        x = jax.random.normal(jax.random.key(0), (tokens, hidden_dim))
-        combine_weights = jax.nn.softmax(jax.random.normal(jax.random.key(1), (tokens, 2)), axis=-1)
-        w_up_gate = jax.random.normal(
-            jax.random.key(2),
-            (num_experts, hidden_dim, 2 * intermediate_dim),
-        )
-        w_down = jax.random.normal(
-            jax.random.key(3),
-            (num_experts, intermediate_dim, hidden_dim),
-        )
-        cotangent = jax.random.normal(jax.random.key(4), (tokens, hidden_dim))
-
-        def dense_loss(x, combine_weights, w_up_gate, w_down):
-            selected_w13 = w_up_gate[selected_experts]
-            hidden = jnp.einsum("th,tkhi->tki", x, selected_w13)
-            gate, up = jnp.split(hidden, [intermediate_dim], axis=-1)
-            expert_output = jnp.einsum(
-                "tki,tkih->tkh",
-                jax.nn.silu(gate) * up,
-                w_down[selected_experts],
-            )
-            output = jnp.einsum("tkh,tk->th", expert_output, combine_weights)
-            return jnp.sum(output * cotangent)
-
-        expected_value, expected_gradients = jax.value_and_grad(
-            dense_loss,
-            argnums=(0, 1, 2, 3),
-        )(x, combine_weights, w_up_gate, w_down)
-
-        batch_sharding = NamedSharding(mesh, P("expert", None))
-        expert_sharding = NamedSharding(mesh, P("expert", None, None))
-        x = jax.device_put(x, batch_sharding)
-        selected_experts = jax.device_put(selected_experts, batch_sharding)
-        combine_weights = jax.device_put(combine_weights, batch_sharding)
-        w_up_gate = jax.device_put(w_up_gate, expert_sharding)
-        w_down = jax.device_put(w_down, expert_sharding)
-        cotangent = jax.device_put(cotangent, batch_sharding)
-
-        def echo_loss(x, combine_weights, w_up_gate, w_down):
-            output, dropped = moe_mlp(
-                x,
-                selected_experts,
-                combine_weights,
-                w_up_gate,
-                w_down,
-                activation=jax.nn.silu,
-                implementation="echo_receiver",
-                mesh=mesh,
-                capacity_factor=1.0,
-                report_capacity_overflow=True,
-            )
-            return jnp.sum(output * cotangent), dropped
-
-        with jax.set_mesh(mesh):
-            (actual_value, dropped), actual_gradients = jax.value_and_grad(
-                echo_loss,
-                argnums=(0, 1, 2, 3),
-                has_aux=True,
-            )(x, combine_weights, w_up_gate, w_down)
-
-        assert int(dropped) == 0
-        np.testing.assert_allclose(np.asarray(actual_value), np.asarray(expected_value), rtol=1e-5, atol=1e-5)
         for actual_gradient, expected_gradient in zip(actual_gradients, expected_gradients, strict=True):
             np.testing.assert_allclose(
                 np.asarray(actual_gradient),

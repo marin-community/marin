@@ -24,24 +24,13 @@ MoeImplementation: TypeAlias = Literal[
     "ring",  # Expert-parallel all-gather + psum-scatter backend.
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
     "fixed_all_to_all",  # Expert-parallel fixed-capacity all-to-all backend.
-    "fixed_all_to_all_spill",  # Fixed all-to-all with three same-token spill attempts.
-    "echo_receiver",  # Receiver-balanced EP backend with portable grouped GEMMs.
-    "echo_receiver_cute",  # Receiver-balanced EP backend with QuACK grouped GEMMs.
     "deepep",  # Expert-parallel DeepEP intranode dispatch/combine backend.
     "scatter",  # Single-process grouped GMM with scatter-add combine.
     "sonic",  # Single-process raw Sonic Triton gather/combine backend.
     "sonic_cute",  # Single-process QuACK SM100 (Blackwell/B200) grouped-GEMM backend.
 ]
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
-_EP_MOE_IMPLEMENTATIONS = (
-    "ring",
-    "ragged_all_to_all",
-    "fixed_all_to_all",
-    "fixed_all_to_all_spill",
-    "echo_receiver",
-    "echo_receiver_cute",
-    "deepep",
-)
+_EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all", "fixed_all_to_all", "deepep")
 # Local means no collectives over an expert axis. These backends can still run
 # under ordinary data/model sharding through the no-EP shard_map path.
 _LOCAL_MOE_IMPLEMENTATIONS = (
