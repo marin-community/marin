@@ -779,3 +779,20 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - PJRT SHA-256: `2a9411320bbc9fc36ce21c60eb9a2825b3c54b2a6afcbb75cbfa0fb9ed3a1023`.
 - Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-lsa-barrier-only-20260802`.
 - Expected rack result: The kernel completes and the probe reports sampled value mismatches.
+
+### 2026-08-02 20:23 UTC - MNEP-037 reproduces with only the LSA barrier
+
+- Run ID: `mnep-037-ragged-lsa-barrier-only-20260802-2018`.
+- Snapshot: `mnep-037-ragged-lsa-barrier-only-20260802-2018` at `8add8fae7`.
+- Result: Task 10 failed with the same CUDA illegal address.
+- Interpretation: A split communicator fails before any data transfer or world-GIN barrier.
+- Node check: Kubernetes reports node `s9jtxs64` as ready, with no GPU, NVLink, memory, or PCI fault condition.
+- Next gate: Return from the device kernel before it reads the NCCL device communicator.
+
+### 2026-08-02 20:25 UTC - Empty XLA device-kernel diagnostic build
+
+- Patch: Return at the start of the ragged all-to-all device kernel.
+- Patch file: `experiments/grug/moe_hero_ep/xla_patches/0007-return-from-device-kernel-for-isolation.patch`.
+- PJRT SHA-256: `458f3277349276d5a13a3c652d625339f34c8602ed5a230f9bea861e1005fa44`.
+- Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-noop-kernel-20260802`.
+- Expected rack result: The kernel completes and the probe reports sampled value mismatches.
