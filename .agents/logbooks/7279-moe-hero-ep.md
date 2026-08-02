@@ -323,3 +323,11 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - GPU job: `/rav/mhep-002-fixed-25-20260802-0041-coord/grug-train-mhep-002-fixed-25-20260802-0041`.
 - Status: All 16 GPU tasks wait before their first attempts. The coordinator and GPU job report zero failures and zero preemptions.
 - Decision: Keep the one verified request and its queue position.
+
+### 2026-08-02 01:16 UTC - MHEP-002 GPU gate completed
+
+- GPU result: All 16 workers succeeded with exit 0, zero failures, and zero preemptions. Each worker used four GB200 GPUs. Iris reports an 18-minute 16-second task duration.
+- Progress: Training reached step 18 with finite loss 6.40. Durable telemetry later recorded zero-based step 22 with MoE drop fraction 10.9523%.
+- Comparison: The fixed sender-local capacity has much more routing loss than the ragged baseline final value of 2.4099% at the same capacity factor 1.0.
+- Result: The 25-step accelerator gate passes. The final offline summary is still required for the MFU comparison.
+- Next action: Read `tracker_metrics.jsonl`, then use both MFU and routing loss to decide whether gather dispatch is the next gate.
