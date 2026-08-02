@@ -16,10 +16,10 @@ these artifacts to produce duplicate markers.
 
 import logging
 import os
-from collections.abc import Iterator
 
 import dupekit
 import pyarrow as pa
+import pyarrow.compute as pc
 from fray.types import ResourceConfig
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath, prefix_join
@@ -31,7 +31,6 @@ from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
-from marin.processing.classification.deduplication.dedup_commons import _load_batches
 
 logger = logging.getLogger(__name__)
 MINHASH_ATTR_DATA_VERSION = 3
@@ -82,12 +81,12 @@ class MinHashAttrData(BaseModel):
     counters: dict[str, int | float]
 
 
-def _attr_records(batch: pa.RecordBatch, params: MinHashParams) -> list[dict]:
-    """Run the dupekit MinHash+LSH pipeline on *batch* and yield attr records.
+def _minhash_batch(batch: pa.RecordBatch, params: MinHashParams) -> pa.RecordBatch:
+    """Run the dupekit MinHash+LSH pipeline without materializing Python rows.
 
-    Yields one ``{id, buckets}`` record per input document with at least one
-    bucket. Documents whose signature column is null (empty/whitespace text
-    after cleaning) are dropped and counted via ``minhash/empty_signatures``.
+    Returns one ``{id, buckets}`` row per input document with at least one
+    bucket. Documents whose signature column is null are dropped and counted
+    via ``minhash/empty_signatures``.
     """
     if params.text_cap_chars is not None:
         # Truncate the text column to cap shingle count per doc. Mega-docs
@@ -99,22 +98,15 @@ def _attr_records(batch: pa.RecordBatch, params: MinHashParams) -> list[dict]:
         # the v1 (uncapped) run, and sweep the cap to find the
         # recall/precision knee. See `minhash/text_truncated` counter for
         # the per-job cap rate.
-        cap = params.text_cap_chars
-        n_truncated = 0
-        truncated: list[str] = []
-        for t in batch["text"]:
-            text = t.as_py() or ""
-            if len(text) > cap:
-                truncated.append(text[:cap])
-                n_truncated += 1
-            else:
-                truncated.append(text)
+        text = pc.fill_null(batch["text"], "")
+        truncated_mask = pc.greater(pc.utf8_length(text), params.text_cap_chars)
+        n_truncated = pc.sum(pc.cast(truncated_mask, pa.int64())).as_py() or 0
         if n_truncated:
             counters.pipeline.update_counter("minhash/text_truncated", n_truncated)
         batch = batch.set_column(
             batch.schema.get_field_index("text"),
             "text",
-            pa.array(truncated, type=pa.string()),
+            pc.utf8_slice_codeunits(text, 0, params.text_cap_chars),
         )
 
     pipeline = [
@@ -130,25 +122,18 @@ def _attr_records(batch: pa.RecordBatch, params: MinHashParams) -> list[dict]:
         dupekit.Transformation.SelectColumns(columns=["id", "buckets"]),
     ]
     result_batch = dupekit.transform(batch, pipeline)
-    ids = result_batch["id"]
-    buckets_col = result_batch["buckets"]
+    valid_signatures = pc.is_valid(result_batch["buckets"])
+    documents = pc.sum(pc.cast(valid_signatures, pa.int64())).as_py() or 0
+    empty_signatures = result_batch.num_rows - documents
+    if empty_signatures:
+        counters.pipeline.update_counter("minhash/empty_signatures", empty_signatures)
 
-    out: list[dict] = []
-    for doc_id, doc_buckets in zip(ids, buckets_col, strict=True):
-        if not doc_buckets.is_valid:
-            counters.pipeline.update_counter("minhash/empty_signatures", 1)
-            continue
-        bucket_strs = [str(b) for b in doc_buckets.as_py()]
-        counters.pipeline.update_counter("minhash/documents", 1)
-        counters.pipeline.update_counter("minhash/buckets", len(bucket_strs))
-        out.append({"id": doc_id.as_py(), "buckets": bucket_strs})
-    return out
-
-
-def _shard_attr_records(shard_path: str, params: MinHashParams) -> Iterator[dict]:
-    """Stream ``{id, buckets}`` attr records for one source parquet shard."""
-    for batch in _load_batches(shard_path, columns=["id", "text"]):
-        yield from _attr_records(batch, params)
+    result_batch = result_batch.filter(valid_signatures)
+    bucket_strings = pc.cast(result_batch["buckets"], pa.list_(pa.string()))
+    bucket_count = pc.sum(pc.list_value_length(bucket_strings)).as_py() or 0
+    counters.pipeline.update_counter("minhash/documents", documents)
+    counters.pipeline.update_counter("minhash/buckets", bucket_count)
+    return result_batch.set_column(result_batch.schema.get_field_index("buckets"), "buckets", bucket_strings)
 
 
 def compute_minhash_attrs(
@@ -242,7 +227,8 @@ def compute_minhash_attrs(
 
     pipeline = (
         Dataset.from_list(source_shards)
-        .flat_map(lambda path, p=params: _shard_attr_records(path, p))
+        .load_parquet(columns=["id", "text"], batch_mode=True)
+        .map_batches(lambda batch, p=params: _minhash_batch(batch, p))
         .write_parquet(_output_path, skip_existing=True)
     )
     outcome = ctx.execute(pipeline, verbose=True)

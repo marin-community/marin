@@ -18,6 +18,7 @@ from marin.processing.classification.deduplication.fuzzy_dups import compute_fuz
 from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashAttrData,
     MinHashParams,
+    _minhash_batch,
     compute_minhash_attrs,
 )
 from zephyr.writers import write_jsonl_file, write_parquet_file
@@ -69,6 +70,22 @@ def _write_minhash_attr_dataset(
         attr_dir=attr_dir,
         counters={},
     )
+
+
+def test_minhash_batch_preserves_arrow_and_filters_null_text():
+    batch = pa.RecordBatch.from_pydict(
+        {
+            "id": ["content", "empty"],
+            "text": ["a sufficiently long document for minhash", None],
+        }
+    )
+
+    result = _minhash_batch(batch, TEST_MINHASH_PARAMS)
+
+    assert isinstance(result, pa.RecordBatch)
+    assert result.schema == pa.schema([pa.field("id", pa.string()), pa.field("buckets", pa.list_(pa.string()))])
+    assert result.column("id").to_pylist() == ["content"]
+    assert len(result.column("buckets")[0].as_py()) == TEST_MINHASH_PARAMS.num_bands
 
 
 def test_minhash_attrs_co_partitioned_with_source(fox_corpus, monkeypatch):
