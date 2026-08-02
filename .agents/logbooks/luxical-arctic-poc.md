@@ -1154,3 +1154,41 @@ uv run iris --cluster=marin job run --no-wait \
   seconds with zero failures and zero preemptions.
 - The stored report has no legacy comparison gates. Its category variance gate
   remains false, and the overall POC result remains false.
+
+## 2026-08-02: GLM-5.2 semantic-label pilot
+
+### Hypothesis
+
+GLM-5.2 can create a source-blind semantic taxonomy for 1,000 fixed evaluation documents.
+The taxonomy can supply labels for a direct embedding quality test.
+
+### Method
+
+- Select exactly 1,000 evaluation documents across all 146 sources.
+- Give six or seven documents to each source through a fixed hash order.
+- Do not include source names in a model prompt.
+- Ask GLM-5.2 for document facets, a 30 through 50 bucket taxonomy, and final assignments.
+- Use one federated eight-GB200 server at interactive priority.
+- Give a stratified, blinded result sample and the frozen taxonomy to Claude.
+
+### Gates
+
+- GLM returns 1,000 valid descriptions and 1,000 valid assignments.
+- The fallback bucket contains at most 10 percent of the documents.
+- Manual review accepts at least 90 percent of the sampled assignments.
+- Claude exact primary-bucket agreement is at least 80 percent on 20 blinded documents.
+- Claude language and document-type agreement is at least 90 percent.
+
+### Stop conditions
+
+- Stop if invalid JSON or invalid bucket IDs occur after three attempts.
+- Stop if GLM cannot start after one corrective change.
+- Stop before student work if Claude primary-bucket agreement is less than 70 percent.
+
+### Reproducibility
+
+- Base commit before GLM integration: `4a0abf3c894c87e6fbc9f68fcf41d9852f0ce38c`.
+- GLM source branch tip: `075379e6bc3866ea1c14f285ad7e58dba26e0dda`.
+- GLM model revision: `ba978f7d347eaf65d22f1a86833408afdb953541`.
+- Evaluation manifest: `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/manifest.json`.
+- Seed: 42.

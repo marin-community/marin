@@ -48,6 +48,7 @@ class Glm52LaunchConfig:
     vllm_endpoint: str
     ray_endpoint: str
     server: ServerConfig
+    priority_band: int = job_pb2.PRIORITY_BAND_BATCH
 
 
 def _ray_worker_port_args(*excluded_ports: int) -> list[str]:
@@ -295,7 +296,7 @@ def submit_glm52(ctx, launch: Glm52LaunchConfig):
         replicas=VLLM_REPLICAS,
         timeout=Duration.from_hours(RUN_TIMEOUT_HOURS),
         max_retries_failure=0,
-        priority_band=job_pb2.PRIORITY_BAND_BATCH,
+        priority_band=launch.priority_band,
     )
 
 

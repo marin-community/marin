@@ -1,0 +1,35 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+PROJECT = Path(__file__).parents[2] / ".agents" / "projects" / "luxical-arctic-poc"
+sys.path.insert(0, str(PROJECT))
+
+from glm_semantic_labels import OTHER_BUCKET_ID, parse_buckets, parse_json_object, source_quotas  # noqa: E402
+
+
+def test_source_quotas_are_balanced_and_exact() -> None:
+    quotas = source_quotas([f"source-{index}" for index in range(146)], 1_000)
+
+    assert sum(quotas.values()) == 1_000
+    assert set(quotas.values()) == {6, 7}
+    assert list(quotas.values()).count(7) == 124
+
+
+def test_parse_json_object_accepts_plain_and_fenced_json() -> None:
+    value = {"bucket": "SCIENCE"}
+
+    assert parse_json_object(json.dumps(value)) == value
+    assert parse_json_object(f"```json\n{json.dumps(value)}\n```") == value
+
+
+def test_parse_buckets_rejects_duplicate_identifiers() -> None:
+    row = {"bucket_id": OTHER_BUCKET_ID, "name": "Other", "definition": "Other", "include": [], "exclude": []}
+
+    with pytest.raises(ValueError, match="duplicate"):
+        parse_buckets({"buckets": [row, row]})
