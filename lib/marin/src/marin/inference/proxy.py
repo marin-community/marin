@@ -78,6 +78,7 @@ class InferenceProxy:
         self.app = Starlette(
             routes=[
                 Route("/health", self._health),
+                Route("/tokenize", self._forward, methods=["POST"]),
                 Route("/v1/{path:path}", self._forward, methods=["GET", "POST", "OPTIONS"]),
             ],
         )

@@ -488,6 +488,26 @@ def test_inference_proxy_rejects_streaming_before_submitting_to_broker(
     assert mock_cluster.broker.size() == 0
 
 
+def test_inference_proxy_forwards_tokenize_from_server_root(
+    mock_cluster: MockInferenceCluster,
+) -> None:
+    messages = [{"role": "user", "content": "hello"}]
+    proxy_root = mock_cluster.proxy.endpoint.base_url.removesuffix("/v1")
+
+    response = httpx.post(
+        f"{proxy_root}/tokenize",
+        json={"model": mock_cluster.model, "messages": messages},
+        timeout=5,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"count": len(json.dumps(messages))}
+    requests = mock_cluster.upstream.requests_for("/tokenize")
+    assert [request.payload for request in requests] == [{"model": mock_cluster.model, "messages": messages}]
+    assert mock_cluster.broker.pending() == []
+    assert mock_cluster.broker.size() == 0
+
+
 @pytest.mark.asyncio
 async def test_inference_worker_refills_slots_while_slow_request_is_in_flight() -> None:
     broker = InferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
