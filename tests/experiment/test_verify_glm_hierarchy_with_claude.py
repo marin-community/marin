@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import sys
 from pathlib import Path
 
@@ -9,7 +10,7 @@ import pytest
 PROJECT = Path(__file__).parents[2] / ".agents" / "projects" / "luxical-arctic-poc"
 sys.path.insert(0, str(PROJECT))
 
-from verify_glm_hierarchy_with_claude import comparison, review_indices  # noqa: E402
+from verify_glm_hierarchy_with_claude import comparison, parse_claude_envelope, review_indices  # noqa: E402
 
 
 def test_review_indices_keep_representative_and_stress_samples_separate() -> None:
@@ -120,3 +121,20 @@ def test_comparison_rejects_leaf_under_wrong_parent() -> None:
 
     with pytest.raises(ValueError, match="wrong parent"):
         comparison(package, claude_rows)
+
+
+def test_parse_claude_envelope_records_exact_model_and_cost() -> None:
+    output = json.dumps(
+        {
+            "is_error": False,
+            "result": '{"assignments":[{"sample_index":1}]}',
+            "modelUsage": {"claude-opus-5": {"inputTokens": 10}},
+            "total_cost_usd": 0.25,
+        }
+    )
+
+    review = parse_claude_envelope(output, "claude-opus-5")
+
+    assert review.assignments == [{"sample_index": 1}]
+    assert review.model_usage == {"claude-opus-5": {"inputTokens": 10}}
+    assert review.cost_usd == 0.25

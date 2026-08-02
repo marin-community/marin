@@ -9,9 +9,17 @@ import math
 import subprocess
 import sys
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import Any
 
 from glm_semantic_labels import parse_json_object, stable_order
+
+
+@dataclass(frozen=True)
+class ClaudeReview:
+    assignments: list[dict[str, Any]]
+    model_usage: dict[str, Any]
+    cost_usd: float
 
 
 def review_indices(
@@ -57,24 +65,61 @@ Documents:
 {json.dumps(documents, ensure_ascii=False)}"""
 
 
-def claude_assignments(package: dict[str, Any], model: str, batch_size: int) -> list[dict[str, Any]]:
+def parse_claude_envelope(output: str, model: str) -> ClaudeReview:
+    """Return validated assignments and attribution from Claude JSON output."""
+    envelope = json.loads(output)
+    if envelope.get("is_error"):
+        raise RuntimeError(f"Claude failed: {envelope.get('errors', [])}")
+    model_usage = envelope["modelUsage"]
+    if model not in model_usage:
+        raise ValueError(f"Claude did not report the requested model {model}")
+    payload = parse_json_object(str(envelope["result"]))
+    rows = payload["assignments"]
+    if not isinstance(rows, list):
+        raise ValueError("Claude did not return an assignments array")
+    return ClaudeReview(rows, model_usage, float(envelope["total_cost_usd"]))
+
+
+def claude_assignments(
+    package: dict[str, Any],
+    model: str,
+    batch_size: int,
+    max_budget_usd: float,
+) -> ClaudeReview:
     """Ask a pinned Claude model for blinded assignments in bounded batches."""
     documents = package["documents"]
-    output = []
+    assignments = []
+    model_usage = {}
+    cost_usd = 0.0
     for start in range(0, len(documents), batch_size):
+        remaining_budget = max_budget_usd - cost_usd
+        if remaining_budget <= 0:
+            raise RuntimeError(f"Claude review reached its ${max_budget_usd:.2f} budget")
         result = subprocess.run(
-            ["claude", "-p", "--model", model, "--no-session-persistence", "--safe-mode"],
+            [
+                "claude",
+                "-p",
+                "--model",
+                model,
+                "--output-format",
+                "json",
+                "--max-budget-usd",
+                str(remaining_budget),
+                "--no-session-persistence",
+                "--safe-mode",
+            ],
             input=claude_prompt(package, documents[start : start + batch_size]),
-            check=True,
+            check=False,
             capture_output=True,
             text=True,
         )
-        payload = parse_json_object(result.stdout)
-        rows = payload["assignments"]
-        if not isinstance(rows, list):
-            raise ValueError("Claude did not return an assignments array")
-        output.extend(rows)
-    return output
+        batch = parse_claude_envelope(result.stdout, model)
+        if result.returncode != 0:
+            raise RuntimeError(f"Claude exited with code {result.returncode}")
+        assignments.extend(batch.assignments)
+        model_usage.update(batch.model_usage)
+        cost_usd += batch.cost_usd
+    return ClaudeReview(assignments, model_usage, cost_usd)
 
 
 def wilson_interval(successes: int, count: int, z: float = 1.959963984540054) -> tuple[float, float]:
@@ -197,14 +242,19 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--claude-model", required=True)
     parser.add_argument("--batch-size", type=int, default=20)
+    parser.add_argument("--max-budget-usd", type=float, required=True)
     args = parser.parse_args()
-    if args.batch_size < 1:
-        parser.error("--batch-size must be positive")
+    if args.batch_size < 1 or args.max_budget_usd <= 0:
+        parser.error("--batch-size and --max-budget-usd must be positive")
+    if not args.claude_model.startswith("claude-"):
+        parser.error("--claude-model must be a full model ID")
     package = json.load(sys.stdin)
-    rows = claude_assignments(package, args.claude_model, args.batch_size)
-    result = comparison(package, rows)
+    review = claude_assignments(package, args.claude_model, args.batch_size, args.max_budget_usd)
+    result = comparison(package, review.assignments)
     result["claude_model"] = args.claude_model
-    result["claude_assignments"] = rows
+    result["claude_model_usage"] = review.model_usage
+    result["claude_cost_usd"] = review.cost_usd
+    result["claude_assignments"] = review.assignments
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
 
 
