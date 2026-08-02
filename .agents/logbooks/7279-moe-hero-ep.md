@@ -331,3 +331,11 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Comparison: The fixed sender-local capacity has much more routing loss than the ragged baseline final value of 2.4099% at the same capacity factor 1.0.
 - Result: The 25-step accelerator gate passes. The final offline summary is still required for the MFU comparison.
 - Next action: Read `tracker_metrics.jsonl`, then use both MFU and routing loss to decide whether gather dispatch is the next gate.
+
+### 2026-08-02 01:32 UTC - MHEP-002 metrics select gather dispatch
+
+- Completion: The root coordinator and all GPU tasks succeeded. Zero-based step 23 has finite loss 6.1136, and the offline summary reports `global_step` 24.
+- Performance: Median MFU is 19.2735%, mean MFU is 19.1850%, p10 MFU is 18.5687%, and p90 MFU is 19.6132% over 22 samples. The last sample is 19.4899% MFU, 315,838 tokens/s, and 13.2799 seconds.
+- Baseline change: Median MFU improves by 4.3121 percentage points, or 28.8% relative, from the ragged MHEP-001 value of 14.9614%. Last-sample throughput improves by 21.3%.
+- Routing: The offline summary reports 9.672% final MoE drops. This is 7.262 percentage points above the ragged final value at the same capacity factor 1.0.
+- Decision: Keep fixed-capacity all-to-all because its MFU gain is large. MHEP-003 will change only dispatch construction from repeated bf16 activation scatter to int32 source scatter plus activation gather. This does not address capacity loss; it isolates the next source-backed performance feature before a routing-capacity change.
