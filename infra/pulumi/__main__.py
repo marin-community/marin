@@ -8,8 +8,9 @@ typed `provisioning:` section, and declares that cluster's resources. One stack 
 `pulumi up` provisions all of a stack's declared resources together. The provider decides
 which resources: CoreWeave declares the controller RBAC, reserved NodePools, Kueue objects,
 the Traefik/cert-manager/federation-ingress stack, and configured Cloudflare CNAMEs; GCP declares
-the reserved federation-egress static IPs and the Artifact Registry pull-through mirrors. Components not yet implemented
-(object storage, the CKS cluster object itself; GCP IAM/GCLB+IAP/buckets) are tracked in
+the reserved federation-egress static IPs, the Artifact Registry pull-through mirrors, and every
+IAM grant on the project (`iac.gcp.iam.GcpIam`, replacing `infra/permissions`). Components not
+yet implemented (object storage, the CKS cluster object itself, GCLB+IAP) are tracked in
 README.md's "Future work".
 """
 
@@ -31,7 +32,9 @@ from iac.coreweave.dns import FederationDns, FederationDnsArgs
 from iac.coreweave.kueue import KueueAddon, KueueAddonArgs
 from iac.coreweave.rbac import GrafanaObserverRbac, GrafanaObserverRbacArgs, IrisRbac, IrisRbacArgs
 from iac.coreweave.traefik import TraefikAddon, TraefikAddonArgs
+from iac.gcp import iam_data
 from iac.gcp.addresses import GcpStaticAddresses, GcpStaticAddressesArgs
+from iac.gcp.iam import GcpIam, GcpIamArgs
 from iac.gcp.registries import GcpArtifactRegistries, GcpArtifactRegistriesArgs
 from iac.nodepools import derive_nodepools
 from rigging.secrets import resolve_secret_spec
@@ -196,6 +199,25 @@ def _build_gcp(cluster: str, *, adopt: bool) -> None:
         GcpArtifactRegistriesArgs(
             project=gcp_provisioning.project,
             registries=gcp_provisioning.registries,
+            adopt=adopt,
+        ),
+        gcp_provider=gcp_provider,
+    )
+    GcpIam(
+        "iam",
+        GcpIamArgs(
+            project=gcp_provisioning.project,
+            kms_location=iam_data.KMS_LOCATION,
+            kms_key_ring=iam_data.KMS_KEY_RING,
+            kms_key=iam_data.KMS_KEY,
+            custom_roles=iam_data.CUSTOM_ROLES,
+            owned_service_accounts=iam_data.OWNED_SERVICE_ACCOUNTS,
+            project_grants=iam_data.PROJECT_GRANTS,
+            kms_grants=iam_data.KMS_GRANTS,
+            secrets=iam_data.SECRETS,
+            buckets=iam_data.BUCKETS,
+            artifact_repositories=iam_data.ARTIFACT_REPOSITORIES,
+            service_accounts=iam_data.SERVICE_ACCOUNTS,
             adopt=adopt,
         ),
         gcp_provider=gcp_provider,
