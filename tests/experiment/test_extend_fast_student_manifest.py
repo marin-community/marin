@@ -16,6 +16,7 @@ sys.path.insert(0, str(PROJECT))
 from build_manifest import PositionOrder, block_sample_positions  # noqa: E402
 from extend_fast_student_manifest import (  # noqa: E402
     EXPANSION_VERSION,
+    assigned_source_names,
     extended_source_table,
     fixed_global_positions,
     reusable_source_result,
@@ -215,3 +216,12 @@ def test_reusable_source_result_requires_exact_inputs() -> None:
     assert reusable_source_result(report, "different-sha", "10m", {"10m": 100}, "input-sha") is None
     assert reusable_source_result(report, "base-sha", "10m", {"10m": 101}, "input-sha") is None
     assert reusable_source_result(report, "base-sha", "10m", {"10m": 100}, "different-input") is None
+
+
+def test_assigned_source_names_partitions_all_sources() -> None:
+    sources = ["d", "b", "e", "a", "c"]
+
+    shards = [assigned_source_names(sources, index, 3) for index in range(3)]
+
+    assert shards == [["a", "d"], ["b", "e"], ["c"]]
+    assert sorted(source for shard in shards for source in shard) == sorted(sources)

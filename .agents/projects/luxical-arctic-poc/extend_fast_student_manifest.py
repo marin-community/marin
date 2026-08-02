@@ -9,6 +9,7 @@ import json
 import logging
 import tempfile
 from collections import Counter
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -224,7 +225,16 @@ def reusable_source_result(
     return source_result
 
 
-def build_expanded_manifest(rung: str) -> dict[str, Any]:
+def assigned_source_names(sources: Iterable[str], shard_index: int, num_shards: int) -> list[str]:
+    """Assign sorted source names to independent manifest workers."""
+    if num_shards < 1:
+        raise ValueError("The manifest shard count must be positive")
+    if not 0 <= shard_index < num_shards:
+        raise ValueError(f"Manifest shard index {shard_index} is outside [0, {num_shards})")
+    return [source for index, source in enumerate(sorted(sources)) if index % num_shards == shard_index]
+
+
+def build_expanded_manifest(rung: str, shard_index: int = 0, num_shards: int = 1) -> dict[str, Any]:
     """Build one exact larger rung around the unchanged base manifest."""
     included_rungs = [name for name, target in RUNG_TARGETS.items() if target <= RUNG_TARGETS[rung]]
     root = f"{MANIFEST_ROOT}/fast-student/expanded-{rung}"
@@ -246,9 +256,18 @@ def build_expanded_manifest(rung: str) -> dict[str, Any]:
                 raise ValueError(f"The {name} quota for {source} is not nested")
             previous = quota
 
+    assigned_sources = assigned_source_names(base["sources"], shard_index, num_shards)
     sources = {}
-    for index, (source, result) in enumerate(sorted(base["sources"].items()), start=1):
-        logger.info("Extending source %d/%d: %s", index, len(base["sources"]), source)
+    for index, source in enumerate(assigned_sources, start=1):
+        result = base["sources"][source]
+        logger.info(
+            "Extending assigned source %d/%d on shard %d/%d: %s",
+            index,
+            len(assigned_sources),
+            shard_index,
+            num_shards,
+            source,
+        )
         rung_quotas = {name: quotas_by_rung[name][source] for name in included_rungs}
         target_quota = rung_quotas[rung]
         filesystem, files, protocol, input_snapshot_sha256 = source_files[source]
@@ -326,6 +345,17 @@ def build_expanded_manifest(rung: str) -> dict[str, Any]:
         )
         sources[source] = source_result
 
+    if num_shards > 1:
+        return {
+            "base_manifest_sha256": base["sha256"],
+            "rung": rung,
+            "rows": sum(quotas_by_rung[rung][source] for source in assigned_sources),
+            "sources": len(sources),
+            "shard_index": shard_index,
+            "num_shards": num_shards,
+            "finalized": False,
+        }
+
     manifest = {
         **{key: value for key, value in base.items() if key not in {"sha256", "sources", "training_targets"}},
         "version": MANIFEST_VERSION,
@@ -347,16 +377,23 @@ def build_expanded_manifest(rung: str) -> dict[str, Any]:
         "rung": rung,
         "rows": sum(quotas_by_rung[rung].values()),
         "sources": len(sources),
+        "shard_index": shard_index,
+        "num_shards": num_shards,
+        "finalized": True,
     }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--rung", choices=tuple(RUNG_TARGETS), required=True)
+    parser.add_argument("--shard-index", type=int, default=0)
+    parser.add_argument("--num-shards", type=int, default=1)
     arguments = parser.parse_args()
-    summary = build_expanded_manifest(arguments.rung)
-    Path(f"/tmp/luxical-fast-student-extended-manifest-{arguments.rung}").write_text(json.dumps(summary, sort_keys=True))
-    logger.info("FAST_STUDENT_EXPANDED_MANIFEST=%s", json.dumps(summary, sort_keys=True))
+    summary = build_expanded_manifest(arguments.rung, arguments.shard_index, arguments.num_shards)
+    result_file = Path(f"/tmp/luxical-fast-student-extended-manifest-{arguments.rung}-{arguments.shard_index:02d}")
+    result_file.write_text(json.dumps(summary, sort_keys=True))
+    marker = "FAST_STUDENT_EXPANDED_MANIFEST" if summary["finalized"] else "FAST_STUDENT_EXPANDED_MANIFEST_SHARD"
+    logger.info("%s=%s", marker, json.dumps(summary, sort_keys=True))
 
 
 if __name__ == "__main__":
