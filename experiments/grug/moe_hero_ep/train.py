@@ -42,6 +42,7 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
+from experiments.grug.moe_hero_ep.jax_wheel_setup import MoonEPJaxWheelBuild, moonep_jax_setup_scripts
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
@@ -142,6 +143,7 @@ class GrugRunConfig:
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.hooks.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
+    moonep_jax_wheel_build: MoonEPJaxWheelBuild | None = None
 
 
 def build_train_dataset(
@@ -668,6 +670,7 @@ def run_grug(config: GrugRunConfig) -> None:
         local_entrypoint=_run_grug_local,
         resources=config.resources,
         processes_per_task=config.processes_per_task,
+        setup_scripts=moonep_jax_setup_scripts(config.moonep_jax_wheel_build, config.resources),
     )
 
 

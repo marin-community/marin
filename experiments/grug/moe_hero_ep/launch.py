@@ -24,6 +24,7 @@ from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
+from experiments.grug.moe_hero_ep.jax_wheel_setup import MoonEPJaxWheelBuild
 from experiments.grug.moe_hero_ep.quantile_balancing import QuantileBalancingMethod
 from experiments.grug.moe_hero_ep.train import GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.llama import llama3_tokenizer
@@ -69,6 +70,7 @@ def build_hero_run(
     moonep_grouped_gemm: MoonEPGroupedGemm = MoonEPGroupedGemm.QUACK,
     qb_method: QuantileBalancingMethod = QuantileBalancingMethod.LOCAL_EXACT,
     qb_histogram_bins: int = 1000,
+    moonep_jax_wheel_build: MoonEPJaxWheelBuild | None = None,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the one-rack EP64 hero throughput run."""
@@ -76,6 +78,8 @@ def build_hero_run(
         raise ValueError("run_id must not be empty")
     if num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
+    if moonep_jax_wheel_build is not None and moe_implementation != "moonep_jax":
+        raise ValueError("a MoonEP JAX wheel build requires the moonep_jax implementation")
 
     moonep_config = (
         MoonEPConfig(token_padding=moonep_token_padding, grouped_gemm=moonep_grouped_gemm)
@@ -158,6 +162,7 @@ def build_hero_run(
             trainer=dataclasses.replace(grug_trainer, trainer=trainer),
             eval=None,
             processes_per_task=HERO_PROCESSES_PER_TASK,
+            moonep_jax_wheel_build=moonep_jax_wheel_build,
         )
 
     return ArtifactStep(
@@ -215,6 +220,12 @@ def build_hero_run(
     show_default=True,
     help="Number of global histogram bins.",
 )
+@click.option(
+    "--moonep-jax-wheel-build",
+    type=click.Choice([build.value for build in MoonEPJaxWheelBuild]),
+    default=None,
+    help="Fixed JAX wheel build for MoonEP rack runs.",
+)
 @build_options
 def main(
     run_id: str,
@@ -224,6 +235,7 @@ def main(
     moonep_grouped_gemm: str,
     qb_method: str,
     qb_histogram_bins: int,
+    moonep_jax_wheel_build: str | None,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_hero_run(
         run_id=run_id,
@@ -233,6 +245,9 @@ def main(
         moonep_grouped_gemm=MoonEPGroupedGemm(moonep_grouped_gemm),
         qb_method=QuantileBalancingMethod(qb_method),
         qb_histogram_bins=qb_histogram_bins,
+        moonep_jax_wheel_build=(
+            MoonEPJaxWheelBuild(moonep_jax_wheel_build) if moonep_jax_wheel_build is not None else None
+        ),
     )
 
 

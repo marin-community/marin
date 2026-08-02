@@ -255,3 +255,16 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Gate: The four-GPU full-owner-skew test passed output and input, `w13`, and `w2` gradient comparisons.
 - Result: `1 passed, 146 warnings in 169.59s` on four GB200 GPUs.
 - Next action: Repeat this gate with the fixed XLA wheels before the EP64 rack run.
+
+### 2026-08-02 13:05 UTC - Fixed XLA build passes local runtime gates
+
+- Build: JAX `f9f6bbaced02ef315d20b34facec09e79f356503` with XLA `5d53e1e40cd08655e8fe52f104f35b57ce35a626`.
+- Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-20260802`.
+- Hash: JAX `40b447b71c8a45032abe9ebdbadfd9d0d434165500c27831a408a8ee053dac4d`.
+- Hash: JAX PJRT `fd2724cd9f128ea1a0d1f74029ce6fcdaf7915db1a351b088316cc821ac2408d`.
+- Hash: JAX plugin `d04ee6bdc956979fa0c43ed95bfdba7bc4f665ceceb34531ef792cff742ddf95`.
+- Hash: jaxlib `03e838842547a66af13bc93a533ce1943dc0f2eb83026a94994eca7f47c072b4`.
+- Gate: The fixed-XLA four-GPU output and gradient test passed in 130.54 seconds.
+- Setup: `--moonep-jax-wheel-build lsa-20260802` keeps standard GPU setup, checks all hashes, and restores CUDA 13 libraries.
+- Setup gate: A clean generated task environment installed the fixed build and found four GB200 GPUs.
+- Next action: Submit MNEP-011 for three combined EP64 steps on one NVL72 rack.

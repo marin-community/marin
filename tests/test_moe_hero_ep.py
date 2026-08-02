@@ -11,10 +11,12 @@ from unittest.mock import patch
 import jax
 import jax.numpy as jnp
 import numpy as np
+from fray.cluster import ResourceConfig
 from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 
 from experiments.grug.moe_hero_ep import grugmuon_hero, train
+from experiments.grug.moe_hero_ep.jax_wheel_setup import MoonEPJaxWheelBuild
 from experiments.grug.moe_hero_ep.quantile_balancing import histogram_quantile_bias
 
 
@@ -162,6 +164,7 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
         trainer=SimpleNamespace(trainer=SimpleNamespace(id="test-run")),
         resources=object(),
         processes_per_task=1,
+        moonep_jax_wheel_build=None,
     )
 
     with patch.object(train, "dispatch_grug_training_run"):
@@ -180,6 +183,31 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
         assert os.environ[name] == value
     for name, value in train.MOONEP_RUNTIME_ENV.items():
         assert os.environ[name] == value
+
+
+def test_run_grug_adds_verified_jax_wheels_after_standard_gpu_setup():
+    config = SimpleNamespace(
+        model=SimpleNamespace(moe_implementation="moonep_jax"),
+        trainer=SimpleNamespace(trainer=SimpleNamespace(id="fixed-jax-test")),
+        resources=ResourceConfig.with_gpu("GB200", count=4, cpu=32, ram="256g", disk="256g"),
+        processes_per_task=1,
+        moonep_jax_wheel_build=MoonEPJaxWheelBuild.LSA_20260802,
+    )
+
+    with patch.object(train, "dispatch_grug_training_run") as dispatch:
+        train.run_grug(config)
+
+    scripts = dispatch.call_args.kwargs["setup_scripts"]
+
+    assert scripts is not None
+    assert len(scripts) == 3
+    assert "uv sync" in scripts[0]
+    assert "--extra gpu" in scripts[0]
+    assert "fsspec.core.url_to_fs" in scripts[1]
+    assert "--no-deps --reinstall" in scripts[1]
+    assert "40b447b71c8a45032abe9ebdbadfd9d0d434165500c27831a408a8ee053dac4d" in scripts[1]
+    assert "03e838842547a66af13bc93a533ce1943dc0f2eb83026a94994eca7f47c072b4" in scripts[1]
+    assert "staging CUDA toolchain" in scripts[2]
 
 
 def test_ep_newton_schulz_returns_to_expert_sharding():

@@ -4,7 +4,7 @@
 import logging
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TypeVar
 
 from fray.cluster import ResourceConfig
@@ -45,6 +45,7 @@ def dispatch_grug_training_run(
     resources: ResourceConfig,
     max_retries_failure: int = 3,
     processes_per_task: int = 1,
+    setup_scripts: Sequence[str] | None = None,
 ) -> None:
     """Submit a grug train entrypoint through Fray and wait for completion."""
     safe_run_id = _safe_job_suffix(run_id)
@@ -53,7 +54,11 @@ def dispatch_grug_training_run(
         name=f"grug-train-{safe_run_id}",
         entrypoint=Entrypoint.from_callable(local_entrypoint, args=[config]),
         resources=resources,
-        environment=create_environment(env_vars=env_vars, extras=extras_for_resources(resources)),
+        environment=create_environment(
+            env_vars=env_vars,
+            extras=extras_for_resources(resources),
+            setup_scripts=setup_scripts,
+        ),
         max_retries_failure=max_retries_failure,
         max_task_failures=10,
         processes_per_task=processes_per_task,
