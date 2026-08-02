@@ -66,9 +66,6 @@ _XLA_FLAG_DEFAULTS = (
 _MOONEP_XLA_FLAG_DEFAULTS = (
     # The full EP64 program needs 146.43 GiB before rematerialization.
     "--xla_gpu_memory_limit_slop_factor=106",
-    # JAX 0.11.0 uses an NCCL device communicator for this barrier. NCCL 2.28.9
-    # crashes while it copies the communicator requirements on one NVL72.
-    "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false",
 )
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.

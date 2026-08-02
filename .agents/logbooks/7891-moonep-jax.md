@@ -193,3 +193,28 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Runtime: Use an 84% main pool, a 106% scheduler factor, and the standard NCCL ragged path.
 - Stop criteria: Stop on any task failure, non-finite loss, transport error, or incomplete step 3.
 - Next action: Promote these settings to a 25-step run only if MNEP-008 passes.
+
+### 2026-08-02 11:49 UTC - MNEP-008 correct but below the MFU gate
+
+- Result: The 16-worker child job completed all three steps without a transport error.
+- Correctness: Final loss was 9.4065, and all three steps reported zero dropped assignments.
+- Performance: Two MFU samples had a 6.7023% median with a 38.617-second final step.
+- Interpretation: Standard NCCL ragged transport proves rack correctness, but it misses the 21.7% MFU gate.
+- Action: Keep this run as the correctness fallback and restore the one-shot path with a compatible NCCL release.
+
+### 2026-08-02 11:49 UTC - NCCL 2.29.7 restores the one-shot gate
+
+- Reproducer: JAX 0.11.0 and NCCL 2.28.9 crashed the four-GPU value and gradient test in `ncclDevCommCreate`.
+- Treatment: The same environment with NCCL 2.29.7 passed the test in 143.21 seconds.
+- Source check: NCCL 2.29 adds versioned device API structures and cross-version checks.
+- Decision: Pin the Marin and Levanter CUDA 13 extras to NCCL 2.29.7.
+- Decision: Remove the host-NCCL fallback flag and retain the 84% pool with the 106% scheduler factor.
+
+### 2026-08-02 11:49 UTC - MNEP-009 NCCL 2.29.7 smoke contract
+
+- Goal: Execute three combined steps through XLA's one-shot ragged path on one NVL72.
+- Run ID: `mnep-009-quack-nccl2297-smoke-3-20260802-1149`.
+- Config: EP64, batch 1024, sequence 4096, 256 experts, top-8, and global histogram QB with 1,000 bins.
+- Runtime: Use NCCL 2.29.7, an 84% main pool, and a 106% scheduler factor.
+- Stop criteria: Stop on any task failure, non-finite loss, transport error, or incomplete step 3.
+- Next action: Launch the 25-step MFU gate only if MNEP-009 passes.
