@@ -2,22 +2,24 @@
 
 ## Problem
 
-Grug already has clean module boundaries in `experiments/grug/base/model.py:78-195`
+Grug already has clean module boundaries in `experiments/grug/base/model.py`
 via `@named_call`, and the train loop already supports sampled auxiliary logging in
-`experiments/grug/base/train.py:330-396`. What it does not surface is the thing you
-usually want when a run goes numerically bad: which module's backward-gradient scale is
-vanishing or blowing up, and how that module sits in the surrounding dataflow.
+`_make_train_step` (`experiments/grug/base/train.py`). What it does not surface is
+the thing you usually want when a run goes numerically bad: which module's
+backward-gradient scale is vanishing or blowing up, and how that module sits in the
+surrounding dataflow.
 
 Today the closest built-in signal is parameter/update watching. That lives in
-`levanter.callbacks.watch.compute_watch_stats(...)` and is wired from
-`experiments/grug/base/train.py:369-382`, but it says nothing about the cotangent
+`levanter.callbacks.watch.compute_watch_stats(...)` and is wired into the sampled
+`compute_watch` branch of `_make_train_step`, but it says nothing about the cotangent
 flow through intermediate activations. If a linear-attention block is unstable, the
 parameter norm alone is usually too late and too indirect.
 
 We also already have a precedent for trace artifacts. The generic trainer writes JAXpr
-and HLO artifacts in `lib/levanter/src/levanter/trainer.py:761-777`. Grug can reuse
-that basic idea, but with a graph collapsed onto named module scopes and annotated
-with sampled backward-flow stats.
+and HLO artifacts in `Trainer._maybe_save_jaxpr`
+(`lib/levanter/src/levanter/trainer.py`). Grug can reuse that basic idea, but with a
+graph collapsed onto named module scopes and annotated with sampled backward-flow
+stats.
 
 ## Goals
 
@@ -39,7 +41,7 @@ canonical Grug base template.
 
 ### 1) Reusable backward marker
 
-`lib/levanter/src/levanter/analysis/backward_flow.py:88-145` adds:
+`lib/levanter/src/levanter/analysis/backward_flow.py` adds:
 
 - `capture_backward_flow(...)`: a tracing-time context that turns logging on and can
   carry an optional gradient scale
@@ -112,9 +114,9 @@ def trace_grads(fn):
 
 ### 2) JAXpr-to-DAG projection
 
-`lib/levanter/src/levanter/analysis/backward_flow.py:147-214` walks a traced JAXpr,
-recurses into single-child nested JAXprs (enough for Grug's checkpointed blocks), and
-builds a graph over normalized scope names instead of primitive names.
+`backward_flow_graph_from_jaxpr(...)` walks a traced JAXpr, recurses into
+single-child nested JAXprs (enough for Grug's checkpointed blocks), and builds a graph
+over normalized scope names instead of primitive names.
 
 The graph is then collapsed onto the nodes that actually emitted backward-flow metrics.
 That keeps the rendered artifact readable even when the underlying JAXpr contains many
@@ -122,7 +124,7 @@ unnamed primitive groups.
 
 ### 3) Small Grug wiring
 
-`experiments/grug/base/model.py:78-195` gets explicit markers at the module
+`experiments/grug/base/model.py` gets explicit markers at the module
 boundaries we care about:
 
 - `CausalSelfAttention.__call__` input and output
@@ -131,9 +133,9 @@ boundaries we care about:
   `resid_out`
 - `Transformer.__call__` for embeddings and final hidden state
 
-The transformer loop also adds `jax.named_scope(f"block_{i}")` at
-`experiments/grug/base/model.py:191-193` so repeated layers do not collapse into a
-single node in the graph.
+The transformer loop in `Transformer.__call__` also adds
+`jax.named_scope(f"block_{i}")` so repeated layers do not collapse into a single node
+in the graph.
 
 `Block` itself is treated as a visual plate/container in the renderer rather than a
 metric-bearing flow node. The actual dataflow is represented as residual-stream nodes
@@ -142,14 +144,14 @@ that stream.
 
 ### 4) Sampled train-step path
 
-`experiments/grug/base/train.py:58-68` adds a `BackwardFlowConfig` field to the
+`experiments/grug/base/train.py` adds a `BackwardFlowConfig` field to the
 trainer config. The reusable `BackwardFlowConfig()` default remains disabled with
 `interval=0`, but base Grug chooses `interval=50` so important runs get sampled
 backward-flow artifacts without extra launch wiring. Set `interval=0` in a run config to
 disable it.
 
 When `compute_backward_flow` is true, the jitted train step in
-`experiments/grug/base/train.py:330-396` runs `jax.value_and_grad(...)` inside both:
+`_make_train_step` runs `jax.value_and_grad(...)` inside both:
 
 - `capture_backward_flow(...)` to activate the module markers
 - `levanter.tracker.defer_tracker_for_jit()` to smuggle the per-node stats out of JIT
@@ -164,7 +166,7 @@ is explicitly infrequent.
 
 ### 5) Artifact emission
 
-On sampled steps, `experiments/grug/base/train.py:571-586`:
+On sampled steps, `_write_backward_flow_artifact` (`experiments/grug/base/train.py`):
 
 1. logs the scalar backward-flow metrics
 2. traces one grad JAXpr for the current batch shape
@@ -204,7 +206,7 @@ remain available in scalar metrics and node labels for shape-aware debugging.
 ## Notes
 
 - This first pass relies on `jax._src.source_info_util.current_name_stack()` at
-  `lib/levanter/src/levanter/analysis/backward_flow.py:17`. That is an internal API.
+  `lib/levanter/src/levanter/analysis/backward_flow.py`. That is an internal API.
   The design keeps that dependency isolated in one file so it is easy to replace if
   JAX eventually exposes a public equivalent.
 - The train-step contract stays intact. `_make_train_step(...)` still returns the same
