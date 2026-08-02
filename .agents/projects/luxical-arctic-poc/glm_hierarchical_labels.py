@@ -293,6 +293,7 @@ def assign_document(
     leaf_parent = {row.bucket_id: row.parent_id for row in hierarchy.leaves}
     form_ids = {row.bucket_id for row in FORMS}
     for attempt in range(MAX_ATTEMPTS):
+        payload: dict[str, Any] | None = None
         try:
             payload = completion(
                 vllm_url,
@@ -337,9 +338,20 @@ def assign_document(
                 confidence=confidence,
                 rationale=str(payload.get("rationale", "")),
             )
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError) as error:
             if attempt + 1 == MAX_ATTEMPTS:
                 raise
+            if payload is not None:
+                messages.append({"role": "assistant", "content": json.dumps(payload, ensure_ascii=False)})
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        f"The previous assignment is invalid: {error}. Return a corrected JSON assignment. "
+                        "Use only taxonomy IDs and make each selected leaf belong to its selected parent."
+                    ),
+                }
+            )
     raise AssertionError("The assignment retry loop did not return or raise")
 
 

@@ -72,6 +72,35 @@ def test_assign_document_checks_primary_leaf_parent(monkeypatch: pytest.MonkeyPa
         assign_document("http://server", document, value, 0)
 
 
+def test_assign_document_gives_validation_error_to_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    value, _ = hierarchy()
+    invalid = {
+        "primary_parent_id": "SCIENCE",
+        "secondary_parent_ids": [],
+        "primary_leaf_id": "FICTION",
+        "secondary_leaf_ids": [],
+        "form_id": FORMS[0].bucket_id,
+        "confidence": 0.9,
+        "rationale": "Test",
+    }
+    corrected = invalid | {"primary_leaf_id": "BIOLOGY"}
+    calls = []
+
+    def completion(*args, **kwargs):
+        calls.append(args[1].copy())
+        return invalid if len(calls) == 1 else corrected
+
+    monkeypatch.setattr(hierarchical_labels, "completion", completion)
+    document = SampleDocument(0, "hash", "hidden", "standard", 0, "Text")
+
+    assignment = assign_document("http://server", document, value, 0)
+
+    assert assignment.primary_leaf_id == "BIOLOGY"
+    assert len(calls) == 2
+    assert calls[1][-2] == {"role": "assistant", "content": hierarchical_labels.json.dumps(invalid)}
+    assert "primary leaf has the wrong parent" in calls[1][-1]["content"]
+
+
 def test_run_waits_for_queued_server_without_client_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     waits = []
 
