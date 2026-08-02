@@ -84,9 +84,9 @@ def build_hero_run(*, run_id: str, num_steps: int, version: str | None = None) -
     train_resources = ResourceConfig.with_gpu(
         "GB200",
         count=HERO_GPUS_PER_NODE,
-        cpu=32,
-        ram="256g",
-        disk="256g",
+        cpu=120,
+        ram="850g",
+        disk="1t",
         replicas=HERO_EP_NODES,
     )
     name = f"grug/{run_id}"
