@@ -1236,3 +1236,52 @@ The taxonomy can supply labels for a direct embedding quality test.
 - Accepted code fixes also restore a cached taxonomy before candidate work and remove raw review packages from durable job logs.
 - The direct task-output stream remains because the local Claude client cannot read the private object store.
 - Retry-loop and checkpoint-loop refactors remain separate cleanup. They do not change the stored pilot result.
+
+## 2026-08-02: Semantic embedding screen
+
+### Background research brief
+
+#### Question
+
+Can the saved 3M Fast Transformer form coherent semantic neighborhoods while it keeps its measured CPU speed?
+
+#### Internal evidence
+
+- The 3M Arctic student reached 23,228 documents per second on CPU. Luxical reached 8,958 documents per second.
+- The student improved the old source probe over Luxical. Its only old blocker was source concentration.
+- Source concentration is not a valid target for this task. One source can contain many unrelated document types.
+- Qwen3-Embedding-0.6B gave the best saved code and multilingual probe result among the tested teachers.
+- A 750K cross-dimension Qwen student lost variance and quality. It is a useful negative control.
+- GLM-5.2 assigned 1,000 fixed documents to 38 semantic buckets. The labels contain useful multi-label overlap.
+- The 38-bucket taxonomy has unclear primary-label precedence. It is not sufficient for a production claim.
+
+#### External evidence
+
+- [Qwen3 Embedding](https://arxiv.org/abs/2506.05176) targets multilingual text, code, retrieval, and flexible output dimensions.
+- [Gecko](https://arxiv.org/abs/2403.20327) uses LLM-generated pairs and relabeled hard negatives to train a compact embedding model.
+- [Improving Text Embeddings with Large Language Models](https://arxiv.org/abs/2401.00368) creates diverse synthetic matching tasks and training triplets.
+- [VICReg](https://arxiv.org/abs/2105.04906) adds variance and covariance terms that prevent representation collapse.
+- [VCReg](https://arxiv.org/abs/2306.13292) reports better transfer when supervised training controls variance and covariance.
+
+#### Hypothesis
+
+The saved 3M Arctic student keeps useful semantic geometry even though it failed source-concentration gates.
+
+#### Experiment
+
+- Align saved vectors to the 1,000 fixed documents by document hash.
+- Do not use source metadata in any quality metric.
+- Compare Luxical, the 3M student, the failed Qwen student, Arctic, Qwen, and LFM.
+- Measure label agreement within ten nearest neighbors, primary-label nearest-neighbor F1, and cluster NMI.
+- Measure finite outputs, unique outputs, effective rank, variance, and pairwise cosine spread.
+- Keep a private gallery with representative queries and nearest neighbors for direct inspection.
+
+#### Falsifier
+
+Reject the current student if any semantic metric is more than 0.02 below Qwen on this screen.
+Also reject it for non-finite vectors, repeated vectors, low effective rank, or less than 0.8 times Luxical CPU speed.
+
+#### Interpretation limit
+
+A pass only permits the next evaluation stage. It does not establish production quality.
+The next stage needs a smaller hierarchy, representative independent review, held-out labels, and a new paired speed test.
