@@ -23,7 +23,7 @@ from evaluate_semantic_embeddings import (
     semantic_sample,
 )
 from evaluate_teacher_candidate import CANDIDATES
-from glm_hierarchical_labels import OUTPUT_ROOT, HierarchicalAssignment, parse_hierarchy
+from glm_hierarchical_labels import OUTPUT_ROOT, VARIANTS, HierarchicalAssignment, parse_hierarchy, validate_hierarchy
 from glm_semantic_labels import SampleDocument, read_json, read_jsonl, stable_order
 from rigging.filesystem import StoragePath, atomic_rename
 from semantic_embedding_metrics import (
@@ -318,7 +318,7 @@ def main() -> None:
     for variant_name in args.variants:
         current_variant_root = OUTPUT_ROOT / args.run_id / variant_name
         taxonomy = read_json(str(current_variant_root / "taxonomy.json"))
-        parse_hierarchy(taxonomy)
+        validate_hierarchy(parse_hierarchy(taxonomy), VARIANTS[variant_name])
         assignment_root = (
             current_variant_root / args.evaluation_run_id if args.evaluation_run_id is not None else current_variant_root
         )
