@@ -270,3 +270,15 @@ author: Marin
 - Semantic gate: Both arms counted 16,236,550 documents, 422,150,300 buckets, and 867 truncated texts. Region-local validation found 103 matching basenames, identical schemas and per-file row counts, byte-identical aggregate output size of 7,710,290,996 bytes, and exact equality for the first, middle, and last output tables.
 - Interpretation: The sustained CPU result confirms that per-n-gram native allocation is a meaningful cost at production scale, while the 64-slot packing result remains the larger elapsed-time gain. The accepted implementation preserves context-sensitive Unicode lowercase behavior instead of trading semantics for another small speed increment.
 - Next action: Commit the native kernel milestone and update PR #7888. Continue coordinating the larger native-scatter opportunity with PR #7200 rather than duplicating its implementation.
+
+### 2026-08-02 - Z10X-018 100B S3 benchmark topology checkpoint
+
+- Hypothesis: A bounded set of concurrent Zephyr pools can expose source-level parallelism on the full 100B sample without creating thousands of Iris/Kubernetes tasks, while stage CPU metrics identify the remaining serialization and native-code costs.
+- Commit Hash: `18ab481c1`.
+- Input: `sample_100b_8ae7a94f` in region-local S3 contains 115 sources, 768 normalized shards, and 103,716,988 records. Hugging Face corpus ingress and dependency setup are excluded from all controlled timings.
+- Topology probe: One 243-worker pool reserved 3,888 vCPU and completed global exact dedup in 80.03 seconds using 47,028.72 CPU-seconds. One 60-worker pool completed the same stage in 92.20 seconds using 12,579.71 CPU-seconds. The smaller pool traded 15.2% wall time for 73.3% less CPU, leaving capacity for three concurrent source pipelines; four 60-worker pools reserve at most 3,840 vCPU and 240 Kubernetes tasks.
+- Scope correction: The full reference DAG is not a clean Zephyr benchmark on this fleet because Luxical imports a CUDA-enabled Torch build on CPU-only pods and fails on missing `libcublasLt`. The S3-native benchmark entry point therefore reuses only global exact dedup, per-source tokenization, native MinHash, and global fuzzy dedup.
+- User direction: Treat the 60-worker/four-stream layout as a reasonable heuristic and stop spending primary effort on packing. After the 100B checkpoint, focus on individual-stage serialization, Python allocation, Arrow retention, native lowering, and writer backpressure.
+- Follow-up: Rebase the branch onto PR #7145 (`zephyr: share worker pools across pipelines`) and measure its single shared pool across concurrent task streams. That PR reports an 880-second shared-pool versus 1,542-second dedicated-pool 100M smoke, but it remains secondary to per-stage optimization.
+- Active job: `/loom/zephyr-10x-datakit-100b-18ab-v5`, federated to `cw-us-east-02a` at batch priority with four concurrent pools of at most 60 workers × 16 vCPU, 160 GiB RAM, and 32 GiB disk.
+- Next action: Wait for the controlled 100B stage report, pause for review, then rank serialization/native/writer hotspots by aggregate CPU and active time before implementing the next change.
