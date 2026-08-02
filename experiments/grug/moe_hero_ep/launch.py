@@ -23,6 +23,7 @@ from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
+from experiments.grug.moe_hero_ep.quantile_balancing import QuantileBalancingMethod
 from experiments.grug.moe_hero_ep.train import GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.llama import llama3_tokenizer
 
@@ -58,18 +59,31 @@ class HeroThroughputResult(Artifact):
     """
 
 
-def build_hero_run(*, run_id: str, num_steps: int, version: str | None = None) -> ArtifactStep[HeroThroughputResult]:
+def build_hero_run(
+    *,
+    run_id: str,
+    num_steps: int,
+    qb_method: QuantileBalancingMethod = QuantileBalancingMethod.LOCAL_EXACT,
+    qb_histogram_bins: int = 1000,
+    version: str | None = None,
+) -> ArtifactStep[HeroThroughputResult]:
     """Build the one-rack EP64 hero throughput run."""
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
     if num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
 
-    model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=HERO_EP_BATCH_SIZE)
+    model, optimizer = build_hero_configs(
+        num_train_steps=num_steps,
+        batch_size=HERO_EP_BATCH_SIZE,
+        qb_method=qb_method,
+        qb_histogram_bins=qb_histogram_bins,
+    )
     if model.moe_implementation is None:
         raise ValueError("the EP hero requires an explicit MoE implementation")
     backend_tag = model.moe_implementation.replace("_", "-")
     capacity_tag = f"capacity-{model.capacity_factor:g}"
+    qb_tag = f"qb-{model.qb_method.value.replace('_', '-')}"
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
     grug_trainer = GrugTrainerConfig(
         data_seed=None,
@@ -111,6 +125,7 @@ def build_hero_run(*, run_id: str, num_steps: int, version: str | None = None) -
                     "ep",
                     backend_tag,
                     capacity_tag,
+                    qb_tag,
                     "gb200",
                     "MHEP",
                 ],
@@ -153,9 +168,33 @@ def build_hero_run(*, run_id: str, num_steps: int, version: str | None = None) -
     show_default=True,
     help="Number of training steps.",
 )
+@click.option(
+    "--qb-method",
+    type=click.Choice([method.value for method in QuantileBalancingMethod]),
+    default=QuantileBalancingMethod.LOCAL_EXACT.value,
+    show_default=True,
+    help="Quantile-balancing estimator.",
+)
+@click.option(
+    "--qb-histogram-bins",
+    type=click.IntRange(min=2),
+    default=1000,
+    show_default=True,
+    help="Number of global histogram bins.",
+)
 @build_options
-def main(run_id: str, num_steps: int) -> ArtifactStep[HeroThroughputResult]:
-    return build_hero_run(run_id=run_id, num_steps=num_steps)
+def main(
+    run_id: str,
+    num_steps: int,
+    qb_method: str,
+    qb_histogram_bins: int,
+) -> ArtifactStep[HeroThroughputResult]:
+    return build_hero_run(
+        run_id=run_id,
+        num_steps=num_steps,
+        qb_method=QuantileBalancingMethod(qb_method),
+        qb_histogram_bins=qb_histogram_bins,
+    )
 
 
 if __name__ == "__main__":

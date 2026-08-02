@@ -10,10 +10,143 @@ from unittest.mock import patch
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 
 from experiments.grug.moe_hero_ep import grugmuon_hero, train
+from experiments.grug.moe_hero_ep.quantile_balancing import histogram_quantile_bias
+
+
+def _exact_required_bias_quantile(required_bias: np.ndarray, *, top_k: int) -> np.ndarray:
+    target_rank = (required_bias.shape[0] * top_k + required_bias.shape[1] - 1) // required_bias.shape[1]
+    target = np.sort(required_bias, axis=0)[target_rank - 1]
+    return target - target.mean()
+
+
+def test_histogram_qb_matches_pooled_quantile_within_one_bin():
+    required_bias = np.array(
+        [
+            [-0.85, -0.75, -0.65, -0.55],
+            [-0.70, -0.45, -0.20, 0.05],
+            [-0.55, -0.15, 0.25, 0.65],
+            [-0.40, 0.15, 0.70, -0.80],
+            [-0.25, 0.45, -0.75, -0.30],
+            [-0.10, 0.75, -0.35, 0.20],
+            [0.05, -0.80, 0.05, 0.70],
+            [0.20, -0.50, 0.45, -0.60],
+            [0.35, -0.20, 0.85, -0.10],
+            [0.50, 0.10, -0.55, 0.40],
+            [0.65, 0.40, -0.15, 0.90],
+            [0.80, 0.70, 0.35, -0.70],
+            [0.90, 0.90, 0.75, 0.10],
+        ],
+        dtype=np.float32,
+    )
+    current_bias = np.array([-0.2, -0.1, 0.1, 0.2], dtype=np.float32)
+    num_bins = 32
+
+    actual = histogram_quantile_bias(
+        jnp.asarray(required_bias),
+        jnp.asarray(current_bias),
+        top_k=1,
+        num_bins=num_bins,
+        reduce_axes=(),
+    )
+    expected = _exact_required_bias_quantile(required_bias, top_k=1)
+    bin_width = (current_bias.max() - current_bias.min() + 2.0) / num_bins
+
+    np.testing.assert_allclose(np.asarray(actual), expected, atol=bin_width, rtol=0)
+
+
+def test_histogram_qb_uses_pooled_distribution_instead_of_local_quantile_average():
+    shards = np.array(
+        [
+            [[-0.9, -0.9], [-0.8, -0.8], [-0.7, -0.7], [0.9, -0.6]],
+            [[-0.6, -0.5], [-0.5, -0.4], [-0.4, -0.3], [-0.3, -0.2]],
+        ],
+        dtype=np.float32,
+    )
+    pooled = shards.reshape(-1, 2)
+    local_targets = np.stack([_exact_required_bias_quantile(shard, top_k=1) for shard in shards])
+    averaged_local_target = local_targets.mean(axis=0)
+
+    actual = histogram_quantile_bias(
+        jnp.asarray(pooled),
+        jnp.zeros((2,), dtype=jnp.float32),
+        top_k=1,
+        num_bins=200,
+        reduce_axes=(),
+    )
+    expected = _exact_required_bias_quantile(pooled, top_k=1)
+
+    np.testing.assert_allclose(np.asarray(actual), expected, atol=0.011, rtol=0)
+    assert np.max(np.abs(np.asarray(actual) - averaged_local_target)) > 0.02
+
+
+def test_histogram_qb_reduces_shard_histograms_before_quantile():
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=2"
+    script = """
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+        from experiments.grug.moe_hero_ep.quantile_balancing import histogram_quantile_bias
+
+        required_bias = jnp.array(
+            [
+                [-0.9, -0.9],
+                [-0.8, -0.8],
+                [-0.7, -0.7],
+                [0.9, -0.6],
+                [-0.6, -0.5],
+                [-0.5, -0.4],
+                [-0.4, -0.3],
+                [-0.3, -0.2],
+            ],
+            dtype=jnp.float32,
+        )
+        mesh = Mesh(
+            np.asarray(jax.devices()),
+            ("data",),
+            axis_types=(AxisType.Explicit,),
+        )
+        required_bias = jax.device_put(required_bias, NamedSharding(mesh, P("data", None)))
+        current_bias = jax.device_put(jnp.zeros((2,), dtype=jnp.float32), NamedSharding(mesh, P(None)))
+
+        target = jax.shard_map(
+            lambda required, bias: histogram_quantile_bias(
+                required,
+                bias,
+                top_k=1,
+                num_bins=200,
+                reduce_axes=("data",),
+            ),
+            mesh=mesh,
+            in_specs=(P("data", None), P(None)),
+            out_specs=P(None),
+        )
+        with jax.set_mesh(mesh):
+            actual = jax.jit(target)(required_bias, current_bias)
+
+        expected = np.array([0.0, 0.0], dtype=np.float32)
+        averaged_local_target = np.array([-0.025, 0.025], dtype=np.float32)
+        np.testing.assert_allclose(np.asarray(actual), expected, atol=0.011, rtol=0)
+        assert np.max(np.abs(np.asarray(actual) - averaged_local_target)) > 0.02
+    """
+
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch):

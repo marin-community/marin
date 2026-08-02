@@ -52,6 +52,11 @@ from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
 
+from experiments.grug.moe_hero_ep.quantile_balancing import (
+    QuantileBalancingMethod,
+    histogram_quantile_bias,
+)
+
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
 # Large-vocab CE via the plain-XLA path (no shared-memory tiling, so v_block can be large).
@@ -158,6 +163,8 @@ class GrugModelConfig:
     sconv_sites: tuple[str, ...] = ("k", "v", "attn", "mlp")
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
+    qb_method: QuantileBalancingMethod = QuantileBalancingMethod.LOCAL_EXACT
+    qb_histogram_bins: int = 1000
     expert_chunks: int = 1
     report_capacity_overflow: bool = False
     remat_mode: RematMode = "recompute_all"
@@ -198,6 +205,10 @@ class GrugModelConfig:
             raise ValueError("capacity_factor must be positive")
         if self.expert_chunks <= 0:
             raise ValueError("expert_chunks must be positive")
+        if not isinstance(self.qb_method, QuantileBalancingMethod):
+            raise ValueError(f"qb_method must be a QuantileBalancingMethod, got {self.qb_method!r}")
+        if self.qb_histogram_bins < 2:
+            raise ValueError("qb_histogram_bins must be at least 2")
         if self.num_shared_experts <= 0:
             raise ValueError("num_shared_experts must be positive")
         resolve_moe_implementation(self.moe_implementation)
@@ -771,26 +782,49 @@ class MoEMLP(eqx.Module):
             num_experts=self.cfg.num_experts,
             num_experts_per_token=self.cfg.num_experts_per_token,
         )
-        # Sharded QB: compute beta locally per device, then average.
         mesh = get_abstract_mesh()
-        s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
-        num_devices = 1
-        for a in _BATCH_AXES:
-            num_devices *= mesh.shape[a]
-        local_tokens = s_minus_alpha.shape[0] // num_devices
-        qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
+        if self.cfg.qb_method == QuantileBalancingMethod.LOCAL_EXACT:
+            s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
+            num_devices = 1
+            for axis_name in _BATCH_AXES:
+                num_devices *= mesh.shape[axis_name]
+            local_tokens = s_minus_alpha.shape[0] // num_devices
+            qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
 
-        def _local_qb_beta(s_ma):
-            topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
-            beta = topk_vals[:, -1]
-            return jax.lax.pmean(beta, axis_name=_BATCH_AXES)
+            def _local_qb_beta(s_ma):
+                topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
+                beta = topk_vals[:, -1]
+                return jax.lax.pmean(beta, axis_name=_BATCH_AXES)
 
-        router_stats["qb_beta"] = shard_map(
-            _local_qb_beta,
-            mesh=mesh,
-            in_specs=(P(_BATCH_AXES, None),),
-            out_specs=P(),
-        )(s_minus_alpha)
+            qb_beta = shard_map(
+                _local_qb_beta,
+                mesh=mesh,
+                in_specs=(P(_BATCH_AXES, None),),
+                out_specs=P(),
+            )(s_minus_alpha)
+        elif self.cfg.qb_method == QuantileBalancingMethod.GLOBAL_HISTOGRAM:
+            required_bias = reshard(qb_alpha - router_logits, P(_BATCH_AXES, None))
+            current_bias = reshard(self.router_bias, P(None))
+
+            def _global_histogram_qb(required, bias):
+                return histogram_quantile_bias(
+                    required,
+                    bias,
+                    top_k=self.cfg.num_experts_per_token,
+                    num_bins=self.cfg.qb_histogram_bins,
+                    reduce_axes=_BATCH_AXES,
+                )
+
+            qb_bias = shard_map(
+                _global_histogram_qb,
+                mesh=mesh,
+                in_specs=(P(_BATCH_AXES, None), P(None)),
+                out_specs=P(),
+            )(required_bias, current_bias)
+            qb_beta = -qb_bias
+        else:
+            raise AssertionError(f"Unhandled QB method {self.cfg.qb_method!r}")
+        router_stats["qb_beta"] = qb_beta
 
         moe_out = self.expert_mlp(
             x_flat,

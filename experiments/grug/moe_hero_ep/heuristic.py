@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 from experiments.grug.moe_hero_ep.model import GrugModelConfig
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
+from experiments.grug.moe_hero_ep.quantile_balancing import QuantileBalancingMethod
 
 
 @dataclass(frozen=True)
@@ -73,7 +74,13 @@ class MoeHeuristic:
         )
 
 
-def build_hero_configs(*, num_train_steps: int, batch_size: int) -> tuple[GrugModelConfig, GrugMoeMuonHConfig]:
+def build_hero_configs(
+    *,
+    num_train_steps: int,
+    batch_size: int,
+    qb_method: QuantileBalancingMethod = QuantileBalancingMethod.LOCAL_EXACT,
+    qb_histogram_bins: int = 1000,
+) -> tuple[GrugModelConfig, GrugMoeMuonHConfig]:
     """The fixed EP64 hero model plus its compute-scaled MuonH optimizer."""
     model = GrugModelConfig(
         vocab_size=128_256,
@@ -95,6 +102,8 @@ def build_hero_configs(*, num_train_steps: int, batch_size: int) -> tuple[GrugMo
         qk_mult=1.3,
         attention_implementation="gpu_fa4_cute",
         moe_implementation="fixed_all_to_all",
+        qb_method=qb_method,
+        qb_histogram_bins=qb_histogram_bins,
         expert_chunks=1,
         report_capacity_overflow=True,
     )
