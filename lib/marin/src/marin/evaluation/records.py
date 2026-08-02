@@ -15,6 +15,7 @@ imports -- so it can be vendored verbatim into a standalone dashboard image that
 """
 
 import logging
+import posixpath
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -284,48 +285,41 @@ def _read_candidates(urls: list[str], cached: Mapping[str, EvalRunRecord]) -> li
 
 
 def scan_records(prefix: str, cached: Mapping[str, EvalRunRecord] | None = None) -> RecordScan:
-    """Scan eval records under ``prefix`` without enumerating result payloads.
+    """Return current records under ``prefix`` and a cache for the next scan.
 
     Every root supports the flat ``{prefix}/{run_id}/record.json`` layout. Roots named ``evals`` also
-    include the historical artifact layout
-    ``{prefix}/{model}/{evals}/{version}/{run_id}/record.json``. Discovery uses delimiter-based
-    directory listings at these fixed depths; object-store glob implementations otherwise enumerate
-    the complete result subtree. Record bodies are read concurrently because request latency dominates
-    their small payloads.
+    include ``{prefix}/{model}/{evals}/{version}/{run_id}/record.json``.
 
-    ``cached`` maps immutable record paths from the previous successful pass to parsed records. A
-    listed path already in that cache does not issue another object GET. New paths and prior parse
-    failures are read. Deleted paths fall out of the returned cache.
+    Valid paths in ``cached`` are reused. New records and prior parse failures are read, and deleted
+    paths are absent from the returned cache.
     """
     cached = cached or {}
     fs, root = url_to_fs(prefix)
-    protocol = f"{prefix.split('://', 1)[0]}://" if "://" in prefix else ""
     records: list[EvalRunRecord] = []
     failures: list[RecordParseFailure] = []
-
-    top_level = _directory_children(fs, root)
-    flat_urls = [f"{protocol}{directory}/{RECORD_FILE}" for directory in top_level]
-    flat_reads = _read_candidates(flat_urls, cached)
     records_by_path: dict[str, EvalRunRecord] = {}
-    for url, result in zip(flat_urls, flat_reads, strict=True):
-        if result.record is not None:
-            records.append(result.record)
-            records_by_path[url] = result.record
-        if result.failure is not None:
-            failures.append(result.failure)
+
+    def collect(urls: list[str], results: list[_RecordRead]) -> None:
+        for url, result in zip(urls, results, strict=True):
+            if result.record is not None:
+                records.append(result.record)
+                records_by_path[url] = result.record
+            if result.failure is not None:
+                failures.append(result.failure)
+
+    # Object-store globs recurse into result payloads. Walk only the two supported record layouts.
+    top_level = _directory_children(fs, root)
+    flat_urls = [fs.unstrip_protocol(posixpath.join(directory, RECORD_FILE)) for directory in top_level]
+    flat_reads = _read_candidates(flat_urls, cached)
+    collect(flat_urls, flat_reads)
 
     if prefix.rstrip("/").endswith("/evals"):
         artifact_roots = [directory for directory, result in zip(top_level, flat_reads, strict=True) if result.missing]
         artifact_runs = artifact_roots
         for _ in range(3):
             artifact_runs = [child for parent in artifact_runs for child in _directory_children(fs, parent)]
-        artifact_urls = [f"{protocol}{directory}/{RECORD_FILE}" for directory in artifact_runs]
-        for url, result in zip(artifact_urls, _read_candidates(artifact_urls, cached), strict=True):
-            if result.record is not None:
-                records.append(result.record)
-                records_by_path[url] = result.record
-            if result.failure is not None:
-                failures.append(result.failure)
+        artifact_urls = [fs.unstrip_protocol(posixpath.join(directory, RECORD_FILE)) for directory in artifact_runs]
+        collect(artifact_urls, _read_candidates(artifact_urls, cached))
     return RecordScan(records=tuple(records), failures=tuple(failures), records_by_path=records_by_path)
 
 

@@ -36,7 +36,7 @@ from experiments.evaluation.models import models
 
 @dataclass(frozen=True)
 class EvalStepConfig:
-    """One eval run's identity (model + eval selection + instance cap) and its output root."""
+    """One pipeline eval's model, eval selection, version, and runtime overrides."""
 
     model: str
     evals: str

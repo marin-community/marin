@@ -4,8 +4,8 @@
 """Eval-results dashboard server (Starlette + uvicorn).
 
 Serves a bundled Vue SPA plus a small JSON API over the eval run records. New records live under the
-GCS or CoreWeave ``evals`` output root; the former ``eval-metadata/runs`` roots remain readable during
-migration. Records are indexed into CloudSQL Postgres.
+GCS or CoreWeave ``evals`` output root. Records in the legacy ``eval-metadata/runs`` roots remain
+readable and are indexed into CloudSQL Postgres.
 
 A background task ingests the records on startup and every ``EVALDASH_INGEST_INTERVAL`` seconds
 (default 300). Reads are served through a ``RecordStore`` selected by ``EVALDASH_STORE``: the

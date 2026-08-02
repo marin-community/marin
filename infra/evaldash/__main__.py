@@ -23,6 +23,12 @@ import pulumi
 import pulumi_cloudflare as cloudflare
 import pulumi_gcp as gcp
 from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv
+from marin.evaluation.records import (
+    CW_RECORDS_PREFIX,
+    DEFAULT_RECORDS_PREFIX,
+    LEGACY_CW_RECORDS_PREFIX,
+    LEGACY_DEFAULT_RECORDS_PREFIX,
+)
 
 PROJECT = "hai-gcp-models"
 REGION = "us-central1"
@@ -39,10 +45,10 @@ CLOUDSQL_INSTANCE = "hai-gcp-models:us-central1:marin-metadata"
 # credentials, so GPU runs write to the CW-local S3 store.
 RECORDS_PREFIXES = ",".join(
     (
-        "gs://marin-eval-metadata/evals",
-        "s3://marin-us-east-02a/marin/evals",
-        "gs://marin-eval-metadata/runs",
-        "s3://marin-us-east-02a/marin/eval-metadata/runs",
+        DEFAULT_RECORDS_PREFIX,
+        CW_RECORDS_PREFIX,
+        LEGACY_DEFAULT_RECORDS_PREFIX,
+        LEGACY_CW_RECORDS_PREFIX,
     )
 )
 EVAL_DB_NAME = "evals"
