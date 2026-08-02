@@ -20,11 +20,14 @@ from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_EXPERT_HIDDEN,
     _CHECKPOINT_MOE_OUTPUT,
+    MoonEPGroupedGemm,
     split_moe_w13_output,
 )
 from levanter.grug._moe.ep_common import _shard_a2a_params
 from levanter.grug._moe.ep_fixed_all_to_all import _combine_gather, _dispatch_gather
 from levanter.grug.sharding import _batch_axes
+
+_QUACK_ALIGNMENT = 128
 
 
 class MoonEPPlan(NamedTuple):
@@ -159,10 +162,9 @@ def moon_ep_plan(
     remote_group_sizes = jnp.where(experts_to_copy >= 0, remote_group_sizes, 0)
     group_experts = jnp.concatenate((local_experts, experts_to_copy), axis=1)
     group_sizes = jnp.concatenate((local_group_sizes, remote_group_sizes), axis=1)
-    padded_group_sizes = jnp.where(
-        group_sizes > 0,
+    padded_group_sizes = jnp.maximum(
         ((group_sizes + token_padding - 1) // token_padding) * token_padding,
-        0,
+        token_padding,
     )
     group_ends = jnp.cumsum(padded_group_sizes, axis=1, dtype=jnp.int32)
     group_offsets = group_ends - padded_group_sizes
@@ -283,6 +285,7 @@ def _moe_mlp_ep_moonep_local(
     num_experts: int,
     capacity_factor: float,
     token_padding: int,
+    grouped_gemm: MoonEPGroupedGemm,
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
     """Run portable MoonEP with sparse expert copies and exact receiver loads."""
     if capacity_factor != 1.0:
@@ -296,7 +299,7 @@ def _moe_mlp_ep_moonep_local(
     tokens_per_rank, hidden_dim = x_local.shape
     top_k = selected_experts_local.shape[1]
     assignments_per_rank = tokens_per_rank * top_k
-    receiver_capacity = assignments_per_rank + 2 * local_experts * (token_padding - 1)
+    receiver_capacity = assignments_per_rank + 2 * local_experts * token_padding
     flat_experts = selected_experts_local.reshape(-1).astype(jnp.int32)
     local_expert_counts = jnp.bincount(flat_experts, length=num_experts).astype(jnp.int32)
     all_expert_counts = jax.lax.all_gather(local_expert_counts, "expert")
@@ -360,21 +363,43 @@ def _moe_mlp_ep_moonep_local(
         group_sizes = plan.padded_group_sizes[rank]
         layout_size = jnp.sum(group_sizes, dtype=jnp.int32)
         group_sizes = group_sizes.at[-1].add(receiver_capacity - layout_size)
-        w13_out = tree_checkpoint_name(
-            ragged_dot(expert_inputs, group_w13, group_sizes, implementation="xla"),
-            _CHECKPOINT_EXPERT_HIDDEN,
-        )
-        gate, up = split_moe_w13_output(
-            w13_out,
-            intermediate_dim=group_w2.shape[1],
-            interleaved=False,
-        )
-        expert_outputs = ragged_dot(
-            activation_fn(gate) * up,
-            group_w2,
-            group_sizes,
-            implementation="xla",
-        )
+        if grouped_gemm == MoonEPGroupedGemm.QUACK:
+            if activation_fn is not jax.nn.silu:
+                raise ValueError("MoonEP QuACK grouped GEMM requires SiLU")
+            if hidden_dim % _QUACK_ALIGNMENT != 0 or group_w2.shape[1] % _QUACK_ALIGNMENT != 0:
+                raise ValueError(
+                    f"MoonEP QuACK dimensions must be multiples of {_QUACK_ALIGNMENT}, "
+                    f"got hidden={hidden_dim} and intermediate={group_w2.shape[1]}"
+                )
+            from levanter.grug._moe.sonic_cute import _expert_mlp, _interleave_gate_up  # noqa: PLC0415
+
+            cumulative_group_sizes = jnp.concatenate(
+                [jnp.zeros((1,), dtype=jnp.int32), jnp.cumsum(group_sizes, dtype=jnp.int32)]
+            )
+            interleaved_w13 = _interleave_gate_up(group_w13, group_w2.shape[1])
+            expert_outputs = _expert_mlp(
+                expert_inputs,
+                interleaved_w13,
+                group_w2,
+                group_sizes,
+                cumulative_group_sizes,
+            )
+        else:
+            w13_out = tree_checkpoint_name(
+                ragged_dot(expert_inputs, group_w13, group_sizes, implementation="xla"),
+                _CHECKPOINT_EXPERT_HIDDEN,
+            )
+            gate, up = split_moe_w13_output(
+                w13_out,
+                intermediate_dim=group_w2.shape[1],
+                interleaved=False,
+            )
+            expert_outputs = ragged_dot(
+                activation_fn(gate) * up,
+                group_w2,
+                group_sizes,
+                implementation="xla",
+            )
 
     with jax.named_scope("moonep_combine"):
         outputs_in_receive_order = expert_outputs[receiver_positions]

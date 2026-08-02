@@ -5,6 +5,7 @@
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Literal, TypeAlias, cast, get_args
 
 import jax
@@ -79,10 +80,18 @@ class MoonEPConfig:
     """Static MoonEP receiver-layout parameters."""
 
     token_padding: int
+    grouped_gemm: "MoonEPGroupedGemm"
 
     def __post_init__(self) -> None:
         if self.token_padding <= 0:
             raise ValueError("token_padding must be positive")
+
+
+class MoonEPGroupedGemm(StrEnum):
+    """Grouped GEMM implementation for MoonEP compute groups."""
+
+    XLA = "xla"
+    QUACK = "quack"
 
 
 def resolve_moe_implementation(implementation: MoeImplementation | str | None) -> MoeImplementation:

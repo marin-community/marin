@@ -25,6 +25,7 @@ from levanter.grug.grug_moe import (
     MoEExpertMlp,
     MoEExpertMlpPspecs,
     MoonEPConfig,
+    MoonEPGroupedGemm,
     MoeImplementation,
     _compact_by_keep_mask,
     _expand_from_keep_mask,
@@ -491,7 +492,11 @@ def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
                 implementation=implementation,
                 mesh=mesh,
                 capacity_factor=1.0 if implementation == "moonep_jax" else 1.25,
-                moonep_config=MoonEPConfig(token_padding=4) if implementation == "moonep_jax" else None,
+                moonep_config=(
+                    MoonEPConfig(token_padding=4, grouped_gemm=MoonEPGroupedGemm.XLA)
+                    if implementation == "moonep_jax"
+                    else None
+                ),
             )
 
         platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
@@ -689,19 +694,19 @@ def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu():
         axis_types=(AxisType.Explicit,),
     )
     tokens = 8
-    hidden_dim = 16
-    intermediate_dim = 24
+    hidden_dim = 128
+    intermediate_dim = 128
     num_experts = 8
     selected_experts = jnp.tile(jnp.asarray([[0, 1]], dtype=jnp.int32), (tokens, 1))
-    x = jax.random.normal(jax.random.key(51), (tokens, hidden_dim), dtype=jnp.float32)
-    combine_weights = jax.nn.softmax(jax.random.normal(jax.random.key(52), (tokens, 2)), axis=-1)
+    x = jax.random.normal(jax.random.key(51), (tokens, hidden_dim), dtype=jnp.float32).astype(jnp.bfloat16)
+    combine_weights = jax.nn.softmax(jax.random.normal(jax.random.key(52), (tokens, 2)), axis=-1).astype(jnp.bfloat16)
     w_up_gate = 0.1 * jax.random.normal(
         jax.random.key(53), (num_experts, hidden_dim, 2 * intermediate_dim), dtype=jnp.float32
-    )
+    ).astype(jnp.bfloat16)
     w_down = 0.1 * jax.random.normal(
         jax.random.key(54), (num_experts, intermediate_dim, hidden_dim), dtype=jnp.float32
-    )
-    cotangent = jax.random.normal(jax.random.key(55), x.shape, dtype=jnp.float32)
+    ).astype(jnp.bfloat16)
+    cotangent = jax.random.normal(jax.random.key(55), x.shape, dtype=jnp.float32).astype(jnp.bfloat16)
 
     def dense_output(x, w_up_gate, w_down):
         selected_w13 = w_up_gate[selected_experts]
@@ -740,26 +745,32 @@ def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu():
             implementation="moonep_jax",
             mesh=mesh,
             capacity_factor=1.0,
-            moonep_config=MoonEPConfig(token_padding=4),
+            moonep_config=MoonEPConfig(token_padding=4, grouped_gemm=MoonEPGroupedGemm.QUACK),
             report_capacity_overflow=True,
         )
 
     with jax.set_mesh(mesh):
         actual, errors = moonep_output(x, w_up_gate, w_down)
 
-    np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=2e-3, atol=2e-4)
+    np.testing.assert_allclose(
+        np.asarray(actual.astype(jnp.float32)),
+        np.asarray(expected.astype(jnp.float32)),
+        rtol=5e-2,
+        atol=3e-2,
+    )
     with jax.set_mesh(mesh):
         actual_gradients = jax.grad(
             lambda x, w_up_gate, w_down: jnp.sum(moonep_output(x, w_up_gate, w_down)[0] * cotangent),
             argnums=(0, 1, 2),
         )(x, w_up_gate, w_down)
     for actual_gradient, expected_gradient in zip(actual_gradients, expected_gradients, strict=True):
-        np.testing.assert_allclose(
-            np.asarray(actual_gradient),
-            np.asarray(expected_gradient),
-            rtol=2e-3,
-            atol=5e-4,
-        )
+        actual_gradient_array = np.asarray(actual_gradient.astype(jnp.float32))
+        expected_gradient_array = np.asarray(expected_gradient.astype(jnp.float32))
+        difference = actual_gradient_array - expected_gradient_array
+        max_error = float(np.max(np.abs(difference)))
+        relative_l2_error = float(np.linalg.norm(difference) / np.linalg.norm(expected_gradient_array))
+        assert max_error <= 0.2
+        assert relative_l2_error <= 0.02
     assert int(errors) == 0
 
 

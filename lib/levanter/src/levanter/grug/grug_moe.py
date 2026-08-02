@@ -32,6 +32,7 @@ from levanter.grug._moe.common import (
     MOE_REMAT_SAVE_NAMES as MOE_REMAT_SAVE_NAMES,
     MoEExpertMlpPspecs,
     MoonEPConfig,
+    MoonEPGroupedGemm,
     MoeActivation,
     MoeImplementation,
     PspecAxis,
@@ -269,7 +270,11 @@ def moe_mlp(
         if resolved_implementation == "moonep_jax":
             if moonep_config is None:
                 raise AssertionError("MoonEP config validation did not run")
-            shard_local_call = partial(shard_local_call, token_padding=moonep_config.token_padding)
+            shard_local_call = partial(
+                shard_local_call,
+                token_padding=moonep_config.token_padding,
+                grouped_gemm=moonep_config.grouped_gemm,
+            )
 
         shard_fn = shard_map(
             shard_local_call,
@@ -360,6 +365,7 @@ __all__ = [
     "MoEExpertMlp",
     "MoEExpertMlpPspecs",
     "MoonEPConfig",
+    "MoonEPGroupedGemm",
     "MoeImplementation",
     "PspecAxis",
     "moe_mlp",

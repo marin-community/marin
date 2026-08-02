@@ -64,6 +64,7 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 | MNEP-001 | Fixed all-to-all | Global histogram | QB-only effect |
 | MNEP-002 | MoonEP JAX | Local exact | Zero-drop MoonEP effect |
 | MNEP-003 | MoonEP JAX | Global histogram | Combined correctness and MFU |
+| MNEP-004 | MoonEP JAX with QuACK | Global histogram | Rack retry after XLA OOM |
 
 ## Entry Log
 
@@ -107,3 +108,22 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - W&B identity: Project `rav_moe`, group `moe-hero-ep`, and run name `mnep-003-combined-25-20260802-1010` in offline capture mode.
 - Stop criteria: Stop on task retry, OOM, non-finite loss, transport errors, or incomplete step 25.
 - Next action: Commit and tag this contract, submit once, and monitor to a terminal state.
+
+### 2026-08-02 10:17 UTC - MNEP-003 failed before step zero
+
+- Job: `/rav/mnep-003-combined-25-20260802-1010-coord`.
+- Result: All 16 workers initialized, but the XLA grouped GEMM requested a 180.62 GiB temporary and OOMed before step zero.
+- Evidence: Iris recorded one task failure and zero preemptions. The parent job was stopped before its automatic retry could repeat the OOM.
+- Interpretation: XLA grouped GEMM is a correctness reference only. It is not a viable rack compute path.
+- Next action: Select the existing QuACK SM100 grouped GEMM and rerun the four-GPU output and gradient gate.
+
+### 2026-08-02 10:42 UTC - QuACK correctness gate and MNEP-004 contract
+
+- Code change: Add an explicit XLA or QuACK compute backend. QuACK requires SiLU and 128-aligned hidden and intermediate dimensions.
+- Padding change: Every local and copied expert has one non-empty padding bucket. This removes duplicate group boundaries in QuACK weight gradients and adds eight rows per GPU for the hero shape.
+- Four-GPU result: Bfloat16 outputs and gradients pass against the dense oracle under full owner skew. The QuACK test completed in 124.32 seconds.
+- Run ID: `mnep-004-quack-combined-25-20260802-1042`.
+- Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 50 --job-name mnep-004-quack-combined-25-20260802-1042-coord -e WANDB_MODE offline -e WANDB_PROJECT rav_moe -- python -m experiments.grug.moe_hero_ep.launch --run-id mnep-004-quack-combined-25-20260802-1042 --num-steps 25 --moe-implementation moonep_jax --moonep-token-padding 128 --moonep-grouped-gemm quack --qb-method global_histogram --qb-histogram-bins 1000 --version 2026.08.02 --run`.
+- Config: EP64, batch 1024, sequence 4096, 256 experts, top-8, and 16 workers with four GB200 GPUs each.
+- Stop criteria: Stop on task retry, OOM, non-finite loss, transport errors, or incomplete step 25.
+- Next action: Commit and tag the QuACK snapshot, submit MNEP-004 once, and monitor it to a terminal state.

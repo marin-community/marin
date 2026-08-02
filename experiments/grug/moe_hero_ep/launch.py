@@ -12,7 +12,7 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.data.text.datasets import BlockShuffleConfig
-from levanter.grug.grug_moe import MoeImplementation, MoonEPConfig, resolve_moe_implementation
+from levanter.grug.grug_moe import MoeImplementation, MoonEPConfig, MoonEPGroupedGemm, resolve_moe_implementation
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.artifact import Artifact
@@ -66,6 +66,7 @@ def build_hero_run(
     num_steps: int,
     moe_implementation: MoeImplementation = "fixed_all_to_all",
     moonep_token_padding: int = 128,
+    moonep_grouped_gemm: MoonEPGroupedGemm = MoonEPGroupedGemm.QUACK,
     qb_method: QuantileBalancingMethod = QuantileBalancingMethod.LOCAL_EXACT,
     qb_histogram_bins: int = 1000,
     version: str | None = None,
@@ -76,7 +77,11 @@ def build_hero_run(
     if num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
 
-    moonep_config = MoonEPConfig(token_padding=moonep_token_padding) if moe_implementation == "moonep_jax" else None
+    moonep_config = (
+        MoonEPConfig(token_padding=moonep_token_padding, grouped_gemm=moonep_grouped_gemm)
+        if moe_implementation == "moonep_jax"
+        else None
+    )
     model, optimizer = build_hero_configs(
         num_train_steps=num_steps,
         batch_size=HERO_EP_BATCH_SIZE,
@@ -190,6 +195,13 @@ def build_hero_run(
     help="MoonEP compute-group padding.",
 )
 @click.option(
+    "--moonep-grouped-gemm",
+    type=click.Choice([choice.value for choice in MoonEPGroupedGemm]),
+    default=MoonEPGroupedGemm.QUACK.value,
+    show_default=True,
+    help="MoonEP grouped GEMM implementation.",
+)
+@click.option(
     "--qb-method",
     type=click.Choice([method.value for method in QuantileBalancingMethod]),
     default=QuantileBalancingMethod.LOCAL_EXACT.value,
@@ -209,6 +221,7 @@ def main(
     num_steps: int,
     moe_implementation: str,
     moonep_token_padding: int,
+    moonep_grouped_gemm: str,
     qb_method: str,
     qb_histogram_bins: int,
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -217,6 +230,7 @@ def main(
         num_steps=num_steps,
         moe_implementation=resolve_moe_implementation(moe_implementation),
         moonep_token_padding=moonep_token_padding,
+        moonep_grouped_gemm=MoonEPGroupedGemm(moonep_grouped_gemm),
         qb_method=QuantileBalancingMethod(qb_method),
         qb_histogram_bins=qb_histogram_bins,
     )

@@ -92,7 +92,8 @@ def test_moonep_plan_bounds_remote_experts_and_sender_weight_copies_under_full_s
 
     assert int(jnp.max(plan.remote_expert_counts)) == 1
     assert int(jnp.max(plan.weight_copy_counts)) == 3
-    assert int(jnp.max(jnp.sum(plan.padded_group_sizes, axis=1))) <= 8 + 2 * 2 * 3
+    assert int(jnp.min(plan.padded_group_sizes)) == 4
+    assert int(jnp.max(jnp.sum(plan.padded_group_sizes, axis=1))) <= 8 + 2 * 2 * 4
     assert int(plan.violations) == 0
 
 
