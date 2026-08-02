@@ -34,6 +34,7 @@ from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
 MINHASH_ATTR_DATA_VERSION = 3
+_MAX_MINHASH_TASKS_PER_WORKER = 16
 
 
 class MinHashParams(BaseModel):
@@ -172,12 +173,13 @@ def compute_minhash_attrs(
             chars (~100K shingles at ngram=5). Pass ``None`` to disable
             (pre-v2 behavior).
         seed: MinHash seed.
-        worker_resources: Per-worker resource request. Sized similarly to the
-            old ``dedup_fuzzy_document``: dupekit's Rust MinHash pipeline uses
-            a native thread pool and may consume up to ~2 cores beyond the
-            Python thread. Required when ``map_task_resources`` is set.
+        worker_resources: Per-Iris-worker resource request. Unless
+            ``map_task_resources`` is explicit, each whole worker CPU admits
+            one concurrent MinHash subprocess, capped at 16 per worker.
         max_workers: Max Zephyr workers. Defaults to Zephyr's own default.
-        map_task_resources: ResourceConfig for map-stage tasks.
+        map_task_resources: ResourceConfig for map-stage tasks. Defaults to a
+            single-CPU, proportional RAM/disk share of ``worker_resources``,
+            with at most 16 shares per worker.
         reduce_task_resources: ResourceConfig for reduce-stage tasks.
 
     Returns:
@@ -207,14 +209,23 @@ def compute_minhash_attrs(
         params,
     )
 
+    resources = worker_resources or ResourceConfig(cpu=5, ram="32g", disk="5g")
+    if map_task_resources is None:
+        tasks_per_worker = max(1, min(_MAX_MINHASH_TASKS_PER_WORKER, int(resources.cpu)))
+        task_cpu = min(1.0, resources.cpu)
+        map_task_resources = resources.scale(
+            cpu=task_cpu / resources.cpu,
+            ram=1 / tasks_per_worker,
+            disk=1 / tasks_per_worker,
+        )
+
     ctx_kwargs: dict = {
         "name": "minhash-attrs",
-        "resources": worker_resources or ResourceConfig(cpu=5, ram="32g", disk="5g"),
+        "resources": resources,
+        "map_task_resources": map_task_resources,
     }
     if max_workers is not None:
         ctx_kwargs["max_workers"] = max_workers
-    if map_task_resources is not None:
-        ctx_kwargs["map_task_resources"] = map_task_resources
     if reduce_task_resources is not None:
         ctx_kwargs["reduce_task_resources"] = reduce_task_resources
     ctx = ZephyrContext(**ctx_kwargs)

@@ -6,6 +6,7 @@ import os
 import random
 import string
 from pathlib import Path
+from types import SimpleNamespace
 
 import dupekit
 import pyarrow as pa
@@ -13,6 +14,7 @@ import pyarrow.parquet as pq
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
+from fray.types import ResourceConfig
 from marin.datakit.normalize import NormalizedData, generate_id, normalize_to_parquet
 from marin.processing.classification.deduplication.fuzzy_dups import compute_fuzzy_dups_attrs
 from marin.processing.classification.deduplication.fuzzy_minhash import (
@@ -86,6 +88,53 @@ def test_minhash_batch_preserves_arrow_and_filters_null_text():
     assert result.schema == pa.schema([pa.field("id", pa.string()), pa.field("buckets", pa.list_(pa.string()))])
     assert result.column("id").to_pylist() == ["content"]
     assert len(result.column("buckets")[0].as_py()) == TEST_MINHASH_PARAMS.num_bands
+
+
+def test_minhash_attrs_default_and_explicit_task_packing(tmp_path, monkeypatch):
+    source_dir = tmp_path / "normalized" / "outputs" / "main"
+    source_dir.mkdir(parents=True)
+    pq.write_table(
+        pa.table({"id": ["document"], "text": ["a sufficiently long document for minhash"]}),
+        source_dir / "part-00000.parquet",
+    )
+    source = NormalizedData(main_output_dir=str(source_dir), dup_output_dir=str(tmp_path / "duplicates"), counters={})
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+
+    contexts = []
+
+    def capture_context(context, _pipeline, *, verbose):
+        assert verbose
+        contexts.append(context)
+        return SimpleNamespace(counters={})
+
+    monkeypatch.setattr(
+        "marin.processing.classification.deduplication.fuzzy_minhash.ZephyrContext.execute", capture_context
+    )
+    worker_resources = ResourceConfig(cpu=4, ram="16g", disk="4g")
+    compute_minhash_attrs(
+        source=source,
+        output_path=str(tmp_path / "derived"),
+        worker_resources=worker_resources,
+    )
+    explicit_task_resources = ResourceConfig(cpu=2, ram="8g", disk="2g")
+    compute_minhash_attrs(
+        source=source,
+        output_path=str(tmp_path / "explicit"),
+        worker_resources=worker_resources,
+        map_task_resources=explicit_task_resources,
+    )
+    compute_minhash_attrs(
+        source=source,
+        output_path=str(tmp_path / "capped"),
+        worker_resources=ResourceConfig(cpu=64, ram="64g", disk="16g"),
+    )
+
+    assert contexts[0].min_tasks_per_worker == 4
+    assert contexts[0].map_task_resources == ResourceConfig(cpu=1, ram="4g", disk="1g")
+    assert contexts[1].min_tasks_per_worker == 2
+    assert contexts[1].map_task_resources is explicit_task_resources
+    assert contexts[2].min_tasks_per_worker == 16
+    assert contexts[2].map_task_resources == ResourceConfig(cpu=1, ram="4g", disk="1g")
 
 
 def test_minhash_attrs_co_partitioned_with_source(fox_corpus, monkeypatch):

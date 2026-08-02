@@ -213,3 +213,35 @@ author: Marin
 - User direction: Treat worker startup as an additive cost rather than the dominant long-run optimization. Use reasonable packing heuristics, keep Iris/Kubernetes task counts at roughly 1,000 or fewer, and multiplex additional Zephyr shards through the bounded pool.
 - Implementation decision: Replace the advisory 1,024-worker default with a 1,000-replica distributed ceiling that also caps explicit requests. Local execution remains uncapped. Existing workers already pull successive shards, so this changes only control-plane fan-out and does not limit dataset size or shard count.
 - Next action: validate and land the ceiling guardrail, then shift benchmark effort to large, region-local canary stages and per-record Arrow/native reductions.
+
+### 2026-08-02 - Z10X-013 Arrow-native MinHash local correctness and memory control
+
+- Hypothesis: Keeping each Parquet batch in Arrow through text truncation, DupeKit MinHash, null filtering, bucket casting, and writing will remove Python row materialization without changing MinHash output.
+- Commit Hash: `a8cec3276`
+- Config: 10,000 unique FineWeb-derived documents; unchanged MinHash parameters; row baseline from `624ee4a00` versus the Arrow batch implementation; fresh local processes.
+- Result: The row baseline used 20.11 CPU-seconds, peaked at 804,679,680 bytes RSS, averaged 717,458,637 bytes, and wrote 4,896,672 bytes. The Arrow treatment used 19.94 CPU-seconds, peaked at 455,237,632 bytes RSS, averaged 446,997,299 bytes, and wrote 4,902,337 bytes. CPU was effectively flat while peak RSS fell 43.4% and average RSS fell 37.7%.
+- Semantic gate: Both arms produced the same canonical digest, `3014592c2be427e1169845b19a75780c80c2b5bd010c08437e1d34e660c792c9`, over the same logical rows. The full fuzzy-dedup test module passed 71 tests; repository checks including Pyrefly passed.
+- Interpretation: This small run is a correctness and memory control, not evidence of a scale throughput gain. MinHash's native hashing work dominates at 10,000 documents, so the production-scale A/B must decide whether avoiding Python conversion matters for sustained CPU or only memory.
+- Next action: compare the old row path and Arrow path on the same 103 production shards containing 16,236,550 distinct documents and 41.10 GB of region-local compressed input.
+
+### 2026-08-02 - Z10X-014 production-scale MinHash row versus Arrow A/B
+
+- Hypothesis: Avoiding row dictionaries in the production MinHash attribute stage will reduce sustained CPU and memory, with a larger effect than the 10K control once conversion costs accumulate over millions of documents.
+- Commit Hashes: row baseline `624ee4a00`; Arrow treatment `a8cec3276`.
+- Jobs: `/loom/zephyr-10x-minhash-large-row-v2` and `/loom/zephyr-10x-minhash-large-batch-v1`, both submitted through the `marin` Iris federation to `cw-us-east-02a` at batch priority with non-preemptible workers. Both completed without retries, failures, or preemptions.
+- Config: The same 103 production shards under `sample_100b_8ae7a94f/nemotron_cc_v2/medium_quality`, totaling 41,098,991,064 compressed input bytes and 16,236,550 distinct documents. Both arms used 16 Iris workers, each reserving 5 CPU, 32 GiB RAM, and 5 GiB disk, with one Zephyr task per worker.
+- Result: Baseline execution `20260802-025956-765fbe35` used 17,346.21 CPU-seconds, 2,350,424,064 peak bytes, 2,048,113,527 average bytes, and 1,222.30 stage seconds. Arrow execution `20260802-032241-3c0973e9` used 16,914.10 CPU-seconds, 992,964,608 peak bytes, 851,460,279 average bytes, and 1,187.41 stage seconds. Arrow reduced CPU 2.49% (1.026x), peak memory 57.75%, average memory 58.43%, and stage elapsed 2.85%.
+- Semantic gate: Both arms counted 16,236,550 documents, 422,150,300 buckets, and 867 truncated texts. A region-local validation job found 103 matching basenames, identical schemas, and 16,236,550 rows in each output; the first, middle, and last output tables were exactly equal. Output sizes were 7,707,007,971 row bytes and 7,710,290,996 Arrow bytes.
+- Interpretation: Python row conversion is not a primary CPU cost in this compute-heavy stage. The Arrow path's value is the large memory reduction, which makes denser subprocess packing safe. Finelog reports about one busy CPU per nominal five-CPU worker in both arms, consistent with DupeKit's current single-threaded Rust loops.
+- Next action: hold the Iris worker count at 16 and run four one-CPU, 4-GiB MinHash subprocess slots per worker to measure steady-state utilization and wall-time uplift independently of worker startup.
+
+### 2026-08-02 - Z10X-015 production-scale MinHash subprocess packing
+
+- Hypothesis: MinHash is single-core per shard, so multiplexing four subprocesses inside each Iris worker will recover otherwise idle reserved CPUs without materially increasing aggregate CPU or Kubernetes fan-out.
+- Commit Hash: `a8cec3276`.
+- Job: `/loom/zephyr-10x-minhash-large-packed4-v1`, submitted through the `marin` Iris federation to `cw-us-east-02a` at batch priority with non-preemptible workers. The job completed without retries, failures, or preemptions.
+- Config: The same 103 shards, 41.10 GB compressed input, 16,236,550 documents, and Arrow MinHash implementation as `Z10X-014`. Both treatments used 16 Iris workers. The one-slot arm reserved 5 CPU and 32 GiB per worker; the packed arm reserved 4 CPU and 16 GiB per worker and admitted four one-CPU, 4-GiB Zephyr subprocesses per worker, for 64 concurrent shard tasks behind 16 Kubernetes workers.
+- Result: Packed execution `20260802-034647-60a91c1b` used 16,955.22 CPU-seconds, 988,962,816 peak bytes per subprocess, 844,256,864 average bytes, and 342.88 stage seconds. The one-slot Arrow arm used 16,914.10 CPU-seconds and 1,187.41 stage seconds. Packing improved stage elapsed 3.46x while changing aggregate CPU by +0.24%; peak and average per-subprocess memory were slightly lower. End-to-end root-job duration improved from 21m06.65s to 6m57.43s (3.03x), with setup and teardown included.
+- Semantic gate: Both arms counted 16,236,550 documents, 422,150,300 buckets, and 867 truncated texts. Region-local validation found 103 matching basenames, identical schema and row totals, byte-identical aggregate output size of 7,710,290,996 bytes, and exact equality for the first, middle, and last output tables.
+- Interpretation: This is a steady-state utilization gain, not a startup-overhead result. The Iris/Kubernetes task count stays at 16 while Zephyr multiplexes 103 shards through 64 process slots. The flat CPU total shows that packing changes elapsed time and reserved-resource efficiency rather than algorithmic work.
+- Next action: make single-CPU task packing the MinHash default heuristic, retaining explicit overrides, then validate the configuration behavior and rerun the relevant local tests and repository checks.
