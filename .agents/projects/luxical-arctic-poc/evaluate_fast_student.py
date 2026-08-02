@@ -125,7 +125,7 @@ def write_report(report: dict[str, Any], config_name: str, rung: str) -> tuple[s
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--rung", choices=("64k", "750k", "3m"), required=True)
+    parser.add_argument("--rung", choices=("64k", "750k", "3m", "10m", "30m"), required=True)
     parser.add_argument("--config", choices=("full", "slim"), required=True)
     parser.add_argument("--treatment", choices=TREATMENTS, default="baseline")
     return parser.parse_args()

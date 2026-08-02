@@ -119,10 +119,15 @@ def label_levels(assignments: list[HierarchicalAssignment]) -> dict[str, tuple[n
     }
 
 
-def embedding_models(documents: list[SampleDocument]) -> tuple[dict[str, np.ndarray], dict[str, Any], dict[str, Any]]:
+def embedding_models(
+    documents: list[SampleDocument],
+    student_model: str,
+    student_training_name: str,
+    student_rung: str,
+) -> tuple[dict[str, np.ndarray], dict[str, Any], dict[str, Any]]:
     """Load all saved student, baseline, and teacher vectors once."""
     manifest = read_json(MANIFEST_URL)
-    models, metadata = local_model_vectors(documents)
+    models, metadata = local_model_vectors(documents, student_model, student_training_name, student_rung)
     models["arctic_medium"] = arctic_vectors(manifest, documents)
     models["qwen3_embedding_0.6b"] = candidate_vectors("qwen3-embedding-0.6b", manifest, documents)
     models["lfm2.5_embedding_350m"] = candidate_vectors("lfm2.5-embedding-350m", manifest, documents)
@@ -132,10 +137,12 @@ def embedding_models(documents: list[SampleDocument]) -> tuple[dict[str, np.ndar
     return models, metadata, manifest
 
 
-def group_f1_gates(model_metrics: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def group_f1_gates(
+    model_metrics: dict[str, dict[str, Any]], student_model: str = "fast_arctic_3m"
+) -> dict[str, dict[str, Any]]:
     """Compare student F1 with the best teacher for each large label group."""
     metric = "cross_group_nearest_primary_per_label"
-    student_groups = model_metrics["fast_arctic_3m"][metric]
+    student_groups = model_metrics[student_model][metric]
     output = {}
     for label, student in student_groups.items():
         support = int(student["support"])
@@ -162,6 +169,7 @@ def variant_metrics(
     sources: np.ndarray,
     speed_ratio: float,
     maximum_pair_count: int | None,
+    student_model: str = "fast_arctic_3m",
 ) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
     """Return per-level metrics and student gates for one hierarchy."""
     neighbor_cache = {}
@@ -198,9 +206,9 @@ def variant_metrics(
                 seed=SEED,
             )
         reference = best_reference_metrics(model_metrics)
-        gates = student_gates(model_metrics["fast_arctic_3m"], reference, speed_ratio)
-        groups = group_f1_gates(model_metrics)
-        student_metrics = model_metrics["fast_arctic_3m"]
+        gates = student_gates(model_metrics[student_model], reference, speed_ratio)
+        groups = group_f1_gates(model_metrics, student_model)
+        student_metrics = model_metrics[student_model]
         health_gates = {
             "finite": float(student_metrics["finite_fraction"]) == 1.0,
             "unique": float(student_metrics["unique_fraction_4dp"]) >= 0.99,
@@ -208,18 +216,30 @@ def variant_metrics(
             "total_variance": float(student_metrics["total_variance"]) >= 0.50,
             "cpu_speed": speed_ratio >= 0.85,
         }
-        levels[level] = {
+        level_report = {
             "label_count": cluster_count,
             "models": model_metrics,
             "best_semantic_reference_metrics": reference,
-            "fast_arctic_3m_gates_against_best_teacher": gates,
-            "fast_arctic_3m_large_group_f1": groups,
-            "fast_arctic_3m_large_group_gates_passed": all(row["passed"] for row in groups.values()),
-            "fast_arctic_3m_health_gates": health_gates,
-            "fast_arctic_3m_all_gates_passed": (
+            "student_model": student_model,
+            "student_gates_against_best_teacher": gates,
+            "student_large_group_f1": groups,
+            "student_large_group_gates_passed": all(row["passed"] for row in groups.values()),
+            "student_health_gates": health_gates,
+            "student_all_gates_passed": (
                 all(gates.values()) and all(row["passed"] for row in groups.values()) and all(health_gates.values())
             ),
         }
+        if student_model == "fast_arctic_3m":
+            level_report.update(
+                {
+                    "fast_arctic_3m_gates_against_best_teacher": gates,
+                    "fast_arctic_3m_large_group_f1": groups,
+                    "fast_arctic_3m_large_group_gates_passed": level_report["student_large_group_gates_passed"],
+                    "fast_arctic_3m_health_gates": health_gates,
+                    "fast_arctic_3m_all_gates_passed": level_report["student_all_gates_passed"],
+                }
+            )
+        levels[level] = level_report
     return levels, cross_group_neighbor_cache
 
 
@@ -267,6 +287,7 @@ def blind_neighborhood_package(
     assignments: list[HierarchicalAssignment],
     cross_group_neighbors: dict[str, np.ndarray],
     reference_model: str,
+    student_model: str = "fast_arctic_3m",
 ) -> dict[str, Any]:
     """Return randomized model-blind neighbor sets for independent review."""
     document_by_index = {row.sample_index: row for row in documents}
@@ -274,7 +295,7 @@ def blind_neighborhood_package(
     items = []
     for sample_index in neighborhood_review_indices(assignments, REVIEW_QUERY_COUNT):
         student_first = stable_order(f"neighborhood-review-side:{sample_index}")[0] % 2 == 0
-        model_order = ("fast_arctic_3m", reference_model) if student_first else (reference_model, "fast_arctic_3m")
+        model_order = (student_model, reference_model) if student_first else (reference_model, student_model)
         sets = {}
         for side, model in zip(("A", "B"), model_order, strict=True):
             sets[side] = [
@@ -294,7 +315,7 @@ def blind_neighborhood_package(
         )
     return {
         "reference_model": reference_model,
-        "student_model": "fast_arctic_3m",
+        "student_model": student_model,
         "items": items,
         "source_metadata_in_review": False,
         "same_source_neighbors_excluded": True,
@@ -327,6 +348,10 @@ def main() -> None:
     parser.add_argument("--evaluation-run-id")
     parser.add_argument("--adjudication-review-url")
     parser.add_argument("--maximum-pair-count", type=int, default=DEFAULT_MAXIMUM_PAIR_COUNT)
+    parser.add_argument("--student-model", default="fast_arctic_3m")
+    parser.add_argument("--student-training-name", default="full")
+    parser.add_argument("--student-rung", default="3m")
+    parser.add_argument("--speed-report-url", default=EXACT_SPEED_REPORT_URL)
     args = parser.parse_args()
     if args.maximum_pair_count < 1:
         parser.error("--maximum-pair-count must be positive")
@@ -347,9 +372,19 @@ def main() -> None:
         documents.sort(key=lambda row: row.sample_index)
         if [row.sample_index for row in documents] != list(range(len(documents))):
             raise ValueError("The held-out evaluation documents are not complete")
-        report_root = evaluation_root / ("adjudicated-v1" if args.adjudication_review_url else "raw-v1")
-    models, metadata, manifest = embedding_models(documents)
-    speed_report = read_json(EXACT_SPEED_REPORT_URL)
+        label_root = "adjudicated-v1" if args.adjudication_review_url else "raw-v1"
+        report_root = (
+            evaluation_root / label_root
+            if args.student_model == "fast_arctic_3m"
+            else evaluation_root / f"student-{args.student_model}" / label_root
+        )
+    models, metadata, manifest = embedding_models(
+        documents,
+        args.student_model,
+        args.student_training_name,
+        args.student_rung,
+    )
+    speed_report = read_json(args.speed_report_url)
     speed_ratio = float(speed_report["student_to_baseline_ratio"])
     sources = np.asarray([row.source for row in documents])
     variants = {}
@@ -377,6 +412,7 @@ def main() -> None:
             sources,
             speed_ratio,
             args.maximum_pair_count,
+            args.student_model,
         )
         variants[variant_name] = metrics
         evaluation_assignments = assignments
@@ -390,8 +426,11 @@ def main() -> None:
         "source_metadata_usage": ["align_saved_vectors", "exclude_same_source_neighbors"],
         "source_metadata_used_as_quality_target": False,
         "semantic_reference_models": list(SEMANTIC_REFERENCE_MODELS),
-        "fast_arctic_3m_cpu_speed_ratio": speed_ratio,
-        "speed_report_url": EXACT_SPEED_REPORT_URL,
+        "student_model": args.student_model,
+        "student_training_name": args.student_training_name,
+        "student_rung": args.student_rung,
+        "student_cpu_speed_ratio": speed_ratio,
+        "speed_report_url": args.speed_report_url,
         "maximum_pair_count": args.maximum_pair_count,
         "label_version": "adjudicated" if adjudication_review is not None else "raw_glm",
         "adjudication_review_url": args.adjudication_review_url,
@@ -399,6 +438,8 @@ def main() -> None:
         "model_metadata": metadata,
         "variants": variants,
     }
+    if args.student_model == "fast_arctic_3m":
+        report["fast_arctic_3m_cpu_speed_ratio"] = speed_ratio
     if args.evaluation_run_id is not None:
         assert evaluation_assignments is not None and evaluation_neighbors is not None
         accepted_variant = args.variants[0]
@@ -408,6 +449,7 @@ def main() -> None:
             evaluation_assignments,
             evaluation_neighbors,
             reference_model,
+            args.student_model,
         )
         report["blind_neighborhood_reference_model"] = reference_model
         report["blind_neighborhood_reference_scores"] = reference_scores

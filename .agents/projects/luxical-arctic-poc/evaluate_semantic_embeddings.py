@@ -160,8 +160,15 @@ def candidate_vectors(candidate_name: str, manifest: dict[str, Any], documents: 
     return np.stack([selected[index] for index in range(len(documents))])
 
 
-def local_model_vectors(documents: list[SampleDocument]) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
+def local_model_vectors(
+    documents: list[SampleDocument],
+    student_model: str = "fast_arctic_3m",
+    student_training_name: str = "full",
+    student_rung: str = "3m",
+) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
     """Embed the semantic sample with the saved local-inference models."""
+    if student_model in {"luxical_one", "fast_qwen_crossdim_750k", *SEMANTIC_REFERENCE_MODELS}:
+        raise ValueError(f"The student model name is reserved: {student_model}")
     texts = [document.text for document in documents]
     baseline_path = hf_hub_download(
         repo_id=BASELINE_REPO,
@@ -171,11 +178,11 @@ def local_model_vectors(documents: list[SampleDocument]) -> tuple[dict[str, np.n
     with tempfile.TemporaryDirectory() as temporary_directory:
         directory = Path(temporary_directory)
         baseline = Embedder.load(baseline_path)
-        student, training_report = load_student("full", "full", "3m", directory)
+        student, training_report = load_student("full", student_training_name, student_rung, directory)
         qwen_student, qwen_training_report = load_student("full", "full-qwen3-06b-1024-crossdim", "750k", directory)
         vectors = {
             "luxical_one": normalize_embeddings(baseline(texts, batch_size=4_096)),
-            "fast_arctic_3m": normalize_embeddings(student(texts, batch_size=4_096)),
+            student_model: normalize_embeddings(student(texts, batch_size=4_096)),
             "fast_qwen_crossdim_750k": normalize_embeddings(qwen_student(texts, batch_size=4_096)),
         }
     metadata = {
@@ -184,7 +191,7 @@ def local_model_vectors(documents: list[SampleDocument]) -> tuple[dict[str, np.n
             "file": BASELINE_FILE,
             "revision": BASELINE_REVISION,
         },
-        "fast_arctic_3m": training_report,
+        student_model: training_report,
         "fast_qwen_crossdim_750k": qwen_training_report,
     }
     return vectors, metadata

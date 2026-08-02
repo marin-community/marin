@@ -119,6 +119,9 @@ def test_group_f1_gates_compare_each_large_group_with_its_best_teacher() -> None
     assert gates["A"]["delta"] == pytest.approx(-0.03)
     assert gates["A"]["passed"]
 
+    model_metrics["fast_arctic_10m"] = model_metrics.pop("fast_arctic_3m")
+    assert group_f1_gates(model_metrics, "fast_arctic_10m") == gates
+
 
 def test_strongest_reference_model_uses_all_levels_and_fixed_metrics() -> None:
     metric_names = (
