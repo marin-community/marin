@@ -24,6 +24,7 @@ from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import (
     _NON_RETRYABLE_ERRORS,
+    MAX_IRIS_WORKER_REPLICAS,
     MAX_SHARD_FAILURES,
     MAX_SHARD_INFRA_FAILURES,
     ZEPHYR_PROGRESS_TIME_METRIC,
@@ -34,6 +35,7 @@ from zephyr.execution import (
     ZephyrCoordinator,
     ZephyrWorker,
     ZephyrWorkerError,
+    _distributed_worker_limit,
     _ensure_picklable_exception,
 )
 from zephyr.plan import PhysicalStage, StageType, compute_plan
@@ -1503,6 +1505,18 @@ def test_zephyr_context_min_tasks_per_worker_from_packing_computes_expected_tigh
     )
     # map fits 4x, reduce fits 2x → min is 2
     assert ctx.min_tasks_per_worker == 2
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        (None, MAX_IRIS_WORKER_REPLICAS),
+        (512, 512),
+        (4096, MAX_IRIS_WORKER_REPLICAS),
+    ],
+)
+def test_distributed_worker_limit_caps_iris_replicas(configured: int | None, expected: int):
+    assert _distributed_worker_limit(configured) == expected
 
 
 def test_zephyr_context_mismatching_optional_parameters_raises_value_error():

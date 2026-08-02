@@ -190,3 +190,26 @@ author: Marin
 - Gates: all 64 output footers contribute to file, row, byte, and schema checks; a fixed-4,096-row logical digest of a representative shard verifies values and order across arms. Zephyr `cpu_time_total` and memory statistics from Finelog are the primary performance signals; the harness wall time is context only.
 - Caveat: Reusing the same pinned real-data object avoids a large staging copy and is valid for map/filter/write CPU measurement, but it does not represent source-key diversity and must not be used for deduplication-ratio or shuffle-skew conclusions.
 - Next action: validate the distributed path with a two-shard federated smoke, then launch the 64-shard A/B through the same Marin federation route.
+
+### 2026-08-02 - Z10X-011 CoreWeave 64-slot representation A/B
+
+- Hypothesis: The Arrow batch map/write path will reduce aggregate stage CPU and peak shard memory at 6.4M rows, while 16 actors with four slots will reach the stage barrier faster than 64 single-slot actors at the same fleet size.
+- Commit Hash: `624ee4a00`
+- Job: `/loom/zephyr-10x-chunk-medium-v1`, submitted to the `marin` controller with `--target-cluster cw-us-east-02a --priority batch --no-preemptible`; root and all child coordinators/workers succeeded without retries or preemptions.
+- Config: 64 logical shards, each reading the same pinned 100K-row FineWeb-Edu corpus from the region-local S3 store; 6.4M input rows and 2.7648M output rows per arm. Every arm requested 64 CPU slots, 4 GiB RAM and 1 GiB disk per task slot.
+- Representation result: `row:4` execution `20260802-021748-8f6a0fb8` used 234.47 CPU-seconds, 717,950,976 peak bytes, and 467,111,808 average bytes. `batch:4` execution `20260802-021849-7cc00933` used 174.29 CPU-seconds, 663,384,064 peak bytes, and 444,455,488 average bytes. The batch arm reduced CPU by 25.67% (1.35x efficiency), peak memory by 7.60%, and average memory by 4.85%.
+- Topology result: `batch:1` execution `20260802-021951-1d26f591` used 171.37 CPU-seconds, 670,048,256 peak bytes, and 465,542,912 average bytes versus 174.29, 663,384,064, and 444,455,488 for `batch:4`. Compute cost is within 1.7%, but the observed stage barrier was 16.94s for 64 one-slot actors versus 7.52s for 16 four-slot actors; logs show the larger pool ramping from 3 to 46 live workers while work was already completing.
+- Semantic gate: Each arm wrote 64 files and 2,764,800 rows with the same schema and representative digest `a5d554e45924c994206d4c3f025932a5151d2b23c84d67d8a8a4b481c2dcf756`. `records_in` and `records_out` matched exactly. Finelog `bytes_processed` differs by output-path string length between row and batch arms and is not a data-byte counter for this fused stage.
+- Interpretation: Chunk-native map/write remains a real efficiency win at medium scale, though the gain is smaller than the 1.75x local 1M-row result. Packing four task slots per actor preserves compute efficiency and substantially reduces readiness delay for this short stage. The wall comparison is a topology signal, not a code-efficiency verdict, and needs a broader packing sweep before choosing a default.
+- Next action: run a 64-slot `batch:16,8,4,2,1` topology sweep on 10K-row shards in reverse order, then use CPU-neutral stage-barrier and worker-ramp evidence to choose the first recommended packing range.
+
+### 2026-08-02 - Z10X-012 worker-pool ceiling and topology heuristic
+
+- Hypothesis: Packing lightweight tasks into a modest number of Iris replicas controls fixed startup cost without changing steady-state CPU efficiency; excess shards should multiplex through the worker pull loop instead of creating an unbounded Kubernetes task set.
+- Commit Hash: working tree based on `624ee4a00`
+- Job: `/loom/zephyr-10x-topology-sweep-v1`, federated through `marin` to `cw-us-east-02a` at batch priority with non-preemptible worker resources. All five arms succeeded with no retries or preemptions.
+- Config: 64 total CPU slots and 640K logical records per arm; packing order `16,8,4,2,1` subprocess slots per Iris replica, corresponding to `4,8,16,32,64` worker replicas. This intentionally small sweep characterizes fixed overhead only.
+- Result: Finelog CPU totals were 34.16, 33.88, 33.35, 33.42, and 32.35 seconds, respectively; compute cost was effectively flat. Stage barriers were 4.11, 4.71, 4.06, 8.16, and 11.85 seconds. All arms produced matching counts, schema, and digest. Four to sixteen process slots avoided the slower large-pool ramp, with no meaningful distinction inside that range.
+- User direction: Treat worker startup as an additive cost rather than the dominant long-run optimization. Use reasonable packing heuristics, keep Iris/Kubernetes task counts at roughly 1,000 or fewer, and multiplex additional Zephyr shards through the bounded pool.
+- Implementation decision: Replace the advisory 1,024-worker default with a 1,000-replica distributed ceiling that also caps explicit requests. Local execution remains uncapped. Existing workers already pull successive shards, so this changes only control-plane fan-out and does not limit dataset size or shard count.
+- Next action: validate and land the ceiling guardrail, then shift benchmark effort to large, region-local canary stages and per-record Arrow/native reductions.

@@ -91,7 +91,9 @@ MAX_SHARD_INFRA_FAILURES = 20
 # Typical status text for a 6-stage pipeline is ~300 chars.
 MAX_STATUS_TEXT_LENGTH = 1000
 
-MAX_WORKERS_PER_JOB = 1_024
+# Keep a Zephyr worker actor group below the practical Iris/Kubernetes control-plane
+# ceiling. Additional shards are pulled by these long-lived replicas.
+MAX_IRIS_WORKER_REPLICAS = 1_000
 
 ZEPHYR_PROGRESS_TIME_METRIC = "progress_time_seconds"
 
@@ -1715,6 +1717,11 @@ def _compute_min_tasks_per_worker(
     )
 
 
+def _distributed_worker_limit(configured: int | None) -> int:
+    requested = configured or MAX_IRIS_WORKER_REPLICAS
+    return min(requested, MAX_IRIS_WORKER_REPLICAS)
+
+
 @dataclass
 class ZephyrContext:
     """Execution context for Zephyr pipelines.
@@ -1729,8 +1736,9 @@ class ZephyrContext:
         client: The fray client to use. If None, auto-detects using current_client().
         max_workers: Upper bound on worker count. The actual count is
             min(max_workers, num_shards), computed at first execute(). If None,
-            defaults to os.cpu_count() for LocalClient, or ``MAX_WORKERS_PER_JOB``
-            (1024) for distributed clients.
+            defaults to os.cpu_count() for LocalClient, or ``MAX_IRIS_WORKER_REPLICAS``
+            (1,000) for distributed clients. Explicit distributed values above
+            1,000 are capped so excess shards multiplex through existing workers.
         resources: Resource config per worker.
         coordinator_resources: Resource config for the coordinator job. Defaults to 2 GB.
         chunk_storage_prefix: Storage prefix for intermediate chunks. If None, defaults
@@ -1927,9 +1935,19 @@ class ZephyrContext:
                 limit = self.max_workers
                 if limit is None and isinstance(self.client, LocalClient):
                     limit = os.cpu_count() or 1
+                elif not isinstance(self.client, LocalClient):
+                    distributed_limit = _distributed_worker_limit(limit)
+                    if limit is not None and distributed_limit != limit:
+                        logger.warning(
+                            "Capping max_workers=%d at the Iris worker replica limit of %d; "
+                            "remaining shards will be multiplexed through the worker pool",
+                            limit,
+                            distributed_limit,
+                        )
+                    limit = distributed_limit
 
                 needed_workers = math.ceil(plan.num_shards / self.min_tasks_per_worker)
-                actual_workers = min((limit or MAX_WORKERS_PER_JOB), needed_workers)
+                actual_workers = min(limit or MAX_IRIS_WORKER_REPLICAS, needed_workers)
 
                 config = _CoordinatorJobConfig(
                     plan=plan,
