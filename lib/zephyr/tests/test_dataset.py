@@ -8,6 +8,7 @@ from functools import partial
 from pathlib import Path
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import pytest
 from fray.local_backend import LocalClient
@@ -1390,6 +1391,32 @@ def test_dataset_load_parquet_batch(tmp_path, zephyr_ctx):
     assert all(isinstance(b, pa.RecordBatch) for b in results)
     all_rows = [row for b in results for row in b.to_pylist()]
     assert sorted(all_rows, key=lambda r: r["id"]) == records
+
+
+def test_dataset_map_batches_writes_parquet(tmp_path, zephyr_ctx):
+    input_path = str(tmp_path / "input.parquet")
+    output_path = str(tmp_path / "output.parquet")
+    pq.write_table(pa.Table.from_pylist([{"value": value} for value in range(6)]), input_path, row_group_size=2)
+
+    def enrich_batch(batch: pa.RecordBatch) -> pa.RecordBatch:
+        assert isinstance(batch, pa.RecordBatch)
+        filtered = batch.filter(pc.greater_equal(batch.column("value"), 2))
+        return filtered.append_column("double", pc.multiply(filtered.column("value"), 2))
+
+    dataset = (
+        Dataset.from_list([input_path])
+        .load_parquet(batch_mode=True)
+        .map_batches(enrich_batch)
+        .write_parquet(output_path)
+    )
+
+    assert zephyr_ctx.execute(dataset).results == [output_path]
+    assert pq.read_table(output_path).to_pylist() == [
+        {"value": 2, "double": 4},
+        {"value": 3, "double": 6},
+        {"value": 4, "double": 8},
+        {"value": 5, "double": 10},
+    ]
 
 
 def test_dataset_load_parquet_batch_include_file_paths(tmp_path, zephyr_ctx):

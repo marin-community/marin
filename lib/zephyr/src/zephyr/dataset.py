@@ -146,6 +146,16 @@ class MapOp:
 
 
 @dataclass
+class MapBatchesOp:
+    """Map operation over Arrow RecordBatches."""
+
+    fn: Callable[[RecordBatch], RecordBatch]
+
+    def __repr__(self):
+        return f"MapBatchesOp(fn={_get_fn_name(self.fn)})"
+
+
+@dataclass
 class FilterOp:
     """Filter operation - keeps elements matching predicate."""
 
@@ -335,6 +345,7 @@ class JoinOp:
 
 LogicalOp = (
     MapOp
+    | MapBatchesOp
     | FilterOp
     | SelectOp
     | TakePerShardOp
@@ -450,6 +461,25 @@ class Dataset(Generic[T]):
             [2, 4, 6]
         """
         return cast("Dataset[R]", self._derive(MapOp(fn)))
+
+    def map_batches(
+        self: "Dataset[RecordBatch]",
+        fn: Callable[[RecordBatch], RecordBatch],
+    ) -> "Dataset[RecordBatch]":
+        """Map a function over Arrow RecordBatches without materializing Python rows.
+
+        Each input batch produces exactly one output batch. The callback may
+        change the row count or schema, including returning a typed empty batch.
+        When writing Parquet or Vortex, all output batches in a shard must have
+        the same schema.
+
+        Args:
+            fn: Function that transforms one RecordBatch into another.
+
+        Returns:
+            New dataset with a batch map operation appended.
+        """
+        return cast("Dataset[RecordBatch]", self._derive(MapBatchesOp(fn)))
 
     def filter(self, predicate: Callable[[T], bool] | Expr) -> "Dataset[T]":
         """Filter dataset elements by a predicate or expression.

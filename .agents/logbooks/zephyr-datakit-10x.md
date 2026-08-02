@@ -1,0 +1,172 @@
+---
+topic: zephyr-datakit-10x
+issue: https://github.com/marin-community/marin/issues/7885
+description: Benchmark and optimize representative Zephyr datakit pipelines toward a 10x throughput improvement.
+author: Marin
+---
+
+# Zephyr Datakit 10x: Research Logbook
+
+## Scope
+
+- Goal: Reduce end-to-end processing time by 10x on representative datakit pipelines without changing output semantics.
+- Primary metrics: per-stage active task time, CPU time, bytes and records per second, peak memory, task retries, and end-to-end wall time after excluding scheduler wait.
+- Constraints: benchmark with real data locally before medium-scale Iris runs; use `cw-us-east-02a` or `cw-rno2a` at batch priority for remote runs; preserve safe local pytest marker defaults; do not move large data across regions.
+- Coordinating issue/PR: https://github.com/marin-community/marin/issues/7885
+- Experiment prefix: `Z10X`
+- Shared tags: `zephyr-10x`, `datakit`
+
+## Current TL;DR
+
+- Research and the first real-data local baseline use untouched commit `d1d081a33`.
+- The current code already contains Arrow batch reads, PyArrow expression lowering, Polars-based shuffle internals, and separate map/reduce resource configurations. It still materializes Python rows at the default reader, shuffle adapter, reducer, and writer boundaries.
+- Direct DataFrame shuffle ingestion has the best existing matched evidence: PR #7200 reduced tier-2 Map→Scatter CPU from 293.6s to 120.6s (2.43x). Fixed-resource worker packing in PR #6996 did not improve compute time.
+- The proposed first milestone is a real-data local harness plus direct Arrow batch writing and an explicit `map_batches` API. The research artifact defines 10K/100K/1M-row local sizes and tier-shaped remote gates.
+- The first implementation milestone now measures 1.76x lower wall time, 1.75x lower process CPU, and 16.8% lower RSS growth at 1M rows with exact logical-output parity.
+- A 10x end-to-end gain is a north star, not the current estimate. Near-term evidence supports a 1.5–2.5x pipeline target; individual row-heavy kernels may improve by 10x.
+
+## Current Baseline
+
+- Date: 2026-08-02
+- Code ref: `d1d081a33`
+- Corpus: 10,000 rows from the first ten row groups of FineWeb-Edu conversion `92cece42bcce787ee4af4619ab449fe48d86230d`; local input 28,551,851 bytes.
+- Row path, five fresh-process repetitions: median wall 0.744s, median process CPU 0.694s, median RSS growth 122,515,456 bytes, 13,446 input rows/s.
+- Output: 4,320 rows, 12,691,805 bytes, semantic digest `640a9d64eeeff2e58c1517f8e70c1fea664239db3f8b167f40d87dd235b0d881`.
+
+## Hypothesis Queue
+
+### Active
+
+- `Z10X-001`: Packing several Zephyr task subprocesses into each Iris-hosted actor may reduce Iris task count and amortize fixed worker costs, but controlled prior results show no compute win when total resources are fixed. Next test: compare 1, 4, 8, and 16 task slots per actor with a fixed 16-64-slot fleet, including startup and preemption cost.
+- `Z10X-002`: Preserving `pyarrow.RecordBatch` or `polars.DataFrame` chunks across fused map/filter/write operations will remove Python row conversion and improve throughput on schema-stable stages. Next test: benchmark identity, projection, filter, and derived-column transforms with row and chunk APIs.
+- `Z10X-003`: Lowering supported transforms into Polars expressions will outperform equivalent Python callbacks, especially for text-length, null, projection, and scalar predicates. Next test: measure matched semantics on a representative normalized-text shard.
+- `Z10X-004`: Stage-specific chunk size and worker/process topology will outperform one global setting because normalize, shuffle, and tokenization have different CPU, memory, and I/O profiles. Next test: derive a small factorial sweep from tier canary resource definitions.
+- `Z10X-005`: Reusing spawned subprocesses will amortize interpreter imports, JIT, and model loading on short shards without `fork` hazards. Next test: measure fixed per-shard startup before designing a runner.
+
+### Blocked
+
+- None.
+
+### Falsified / Dead End
+
+- Worker packing as a compute-speed optimization at fixed CPU/RAM: PR #6996 found parity or a slight regression. Packing remains useful for reducing Iris replicas and controller work.
+- `joblib` as a general cross-process model cache: issue #7120 found that native tokenizer/Numba state is not picklable and imports/JIT remain per subprocess. A persistent process is the relevant alternative.
+
+### Promoted
+
+- None.
+
+## Decision Log
+
+- 2026-08-02: Use per-stage Finelog task statistics for remote A/B decisions; wall time remains a secondary signal because Iris queueing and worker provisioning add noise.
+- 2026-08-02: Require output parity and retry/error checks before accepting throughput improvements.
+- 2026-08-02: Track the research in GitHub issue #7885 and this append-only logbook; publish architecture tradeoffs separately as a Weaver artifact.
+- 2026-08-02: Define 64-way execution as task slots, not Iris actor replicas. The topology sweep holds 64 CPU fixed and compares 64×1, 16×4, 8×8, and 4×16 actor/slot shapes.
+- 2026-08-02: Do not run the canonical tier-3 Nemotron data on the allowed CoreWeave clusters; its source is pinned to `europe-west4`. Use tier-3 shard geometry with region-local data instead.
+- 2026-08-02: Keep the first code milestone distinct from open PR #7200: implement and benchmark Arrow batch map/write first, then coordinate productionization or replacement of #7200 rather than duplicating it.
+- 2026-08-02: Make msgpack-based routing hash, per-shard membership, and per-shard order parity hard gates for any native scatter path.
+- 2026-08-02: Run the fixed-resource topology comparison at batch priority on non-preemptible workers; measure packed-actor retry blast radius in a separate preemptible condition.
+
+## Negative Results Index
+
+- `Z10X-N01`: Fixed-resource actor packing did not make stages faster in PR #6996.
+- `Z10X-N02`: The tier-2 Polars shuffle port did not improve end-to-end wall time in PR #5963, showing that tier-1 gains do not generalize automatically to skewed inputs.
+- `Z10X-N03`: `joblib` could not share the loaded Luxical model across subprocesses in issue #7120.
+
+## Entry Log
+
+### 2026-08-02 00:26 UTC - Z10X-000 research prologue
+
+- Hypothesis: The current post-Fray Zephyr implementation retains enough Python row materialization and fixed process topology to leave a multi-fold local improvement available, with additional scale gains from worker multiplexing.
+- Commit Hash: `d1d081a33`
+- Command: `weaver summary`; code and GitHub/Echo discovery commands will be recorded in the background-research entry.
+- Config: local checkout at `origin/main`; no benchmark data selected yet.
+- Result: Found prior Zephyr performance work in `.agents/projects/20260430-zephyr-performance/`, merged stage-specific resource support in PR #6996, merged Polars shuffle internals in PR #5963, and an open DataFrame-native scatter proof of concept in PR #7200.
+- Interpretation: The 2026-04 proposal is useful prior art, but several recommendations are now implemented or obsolete. The new research must profile the current execution path before ranking changes.
+- Next action: audit current code, canary definitions, GitHub history, and Finelog benchmark tooling; then choose local baseline stages and sizes.
+
+### 2026-08-02 - Z10X-001 background research and current-state audit
+
+- Hypothesis: Row materialization remains the largest tractable overhead after the merged Polars shuffle internals, while packing primarily improves orchestration density.
+- Commit Hash: `d1d081a33`
+- Sources: current Zephyr/Fray/datakit code; `.agents/projects/20260430-zephyr-performance/`; Echo repository, GitHub, and wiki indexes; PRs #5814, #5859, #5963, #6996, #7145, and #7200; issues #7120 and #7686; Apache Arrow, Polars, and DataFusion documentation.
+- Result: `load_parquet(batch_mode=True)` already yields RecordBatches, but non-scatter stage output uses pickle chunks, shuffle wraps each item in a cloudpickle payload after Python key evaluation, and the writer rebuilds tables with `from_pylist`. Fray represents an actor group as one Iris job with N replicas. Tier 3 already packs 16 map tasks per actor for several stages.
+- Prior measurements: Parquet row-group/batch exact-dedup example 16m→6m; tier-1 Polars shuffle 4671s→3442s (1.36x), tier-2 no gain; direct DataFrame scatter 293.6s→120.6s Map→Scatter CPU (2.43x); shared pools 1542s→880s only in a startup-bound 100M smoke; fixed-resource packing parity/slight regression.
+- External evidence: Arrow RecordBatch is the bounded streaming unit; Polars recommends expressions and lazy/streaming execution; DataFusion documents Python object conversion as one of the slowest UDF paths. These sources support the representation choice, not a numeric uplift claim.
+- Interpretation: Implement the shortest complete batch path first—RecordBatch read, batch callback/native expression, direct batch writer—then generalize the proven native scatter approach. Benchmark topology independently at fixed fleet resources.
+- Next action: publish `.agents/projects/20260802-zephyr-datakit-10x/research.md` as a Weaver artifact and request Claude Opus review before implementation.
+
+### 2026-08-02 - Z10X-002 Claude Opus research review
+
+- Hypothesis: An independent review will catch incorrect architecture assumptions or benchmark gates before they become implementation work.
+- Commit Hash: `d1d081a33`
+- Review artifact: https://loom.oa.dev/s/pok3gck3/artifacts/opus-review
+- Result: Opus verified every cited code path and all eight prior-work measurements. It required explicit coordination with open PR #7200, bit-for-bit stable routing and per-shard order gates, a schema/empty-batch contract, non-preemptible topology comparisons, and a clearer separation between the 10x final evidence threshold and the approximately 1.9x illustrative representation-only ceiling.
+- Incorporation: Revision 2 limits the first implementation to the distinct batch map/write path; treats #7200 as an existing prototype to land/harden or explicitly replace; removes persistent-process work from the first required matrix; marks 3–6x speculative; verifies DupeKit RecordBatch input/output; and documents the repeated corpus as invalid for connected-components or dedup-ratio benchmarks.
+- Interpretation: The first milestone is now bounded enough to implement without duplicating active work. A 10x end-to-end claim remains gated on repeated full-pipeline evidence and likely requires algorithmic/materialization changes beyond this first tranche.
+- Next action: publish research revision 2 and its issue update, then build the real-data L1 harness and record the untouched row-path baseline before changing writer/API code.
+
+### 2026-08-02 - Z10X-003 untouched 10K row-path baseline
+
+- Hypothesis: A fused row-wise filter/map/write stage provides a stable real-data baseline for measuring the cost of Python row materialization at small scale.
+- Commit Hash: `d1d081a33`
+- Command: `uv run python lib/zephyr/tests/benchmark_chunk_pipeline.py --rows 10000 --modes row --repeat 5`
+- Config: FineWeb-Edu conversion `92cece42bcce787ee4af4619ab449fe48d86230d`, first ten row groups, columns `id,text,score`; filter `score >= 3`; derive `text_chars`; one local Zephyr thread; each repetition in a fresh subprocess.
+- Result: Wall seconds 0.744, 0.744, 0.663, 0.712, 0.777 (median 0.744); process CPU seconds median 0.694; RSS growth median 122,515,456 bytes; 4,320 output rows and 12,691,805 output bytes.
+- Semantic gate: digest `640a9d64eeeff2e58c1517f8e70c1fea664239db3f8b167f40d87dd235b0d881`, computed over canonical 4,096-row Arrow batches so Parquet row-group layout does not affect parity.
+- Interpretation: Startup and imports are material at 10K rows, so this size is a correctness and fixed-cost probe rather than the primary throughput gate.
+- Next action: measure untouched 100K and 1M row paths, then add failing behavior tests for direct RecordBatch map/write.
+
+### 2026-08-02 - Z10X-004 untouched 100K row-path baseline
+
+- Hypothesis: Scaling the same corpus and transform to 100K rows will reduce fixed-cost dominance enough to expose Python row conversion and writer costs.
+- Commit Hash: `d1d081a33`
+- Command: `uv run python lib/zephyr/tests/benchmark_chunk_pipeline.py --rows 100000 --modes row --repeat 5`
+- Config: Deterministic tenfold repetition of the pinned 10K corpus with suffixed IDs; otherwise identical to `Z10X-003`.
+- Result: Wall seconds 10.366, 9.973, 25.577, 23.661, 6.828 (median 10.366); process CPU seconds median 8.900; RSS growth median 365,535,232 bytes; 43,200 output rows and 126,895,804 output bytes; median 9,647 input rows/s.
+- Semantic gate: digest `a5d554e45924c994206d4c3f025932a5151d2b23c84d67d8a8a4b481c2dcf756` was identical in all repetitions.
+- Interpretation: The result shows substantial host-noise variance, including two 2.3–3.4x slower samples. Use medians for the initial local comparison and require an interleaved row/batch A/B after implementation; do not interpret the extremes as code effects.
+- Next action: measure the untouched 1M row path with five fresh-process repetitions before changing library code.
+
+### 2026-08-02 - Z10X-005 untouched 1M row-path baseline
+
+- Hypothesis: At 1M rows, fixed startup cost will be small enough for this stage to serve as the primary local throughput and memory gate.
+- Commit Hash: `d1d081a33`
+- Command: `uv run python lib/zephyr/tests/benchmark_chunk_pipeline.py --rows 1000000 --modes row --repeat 5`
+- Config: Deterministic hundredfold repetition of the pinned 10K corpus with suffixed IDs; otherwise identical to `Z10X-003`.
+- Result: Wall seconds 59.971, 56.024, 57.295, 59.236, 68.337 (median 59.236); process CPU seconds median 62.289; RSS growth median 419,147,776 bytes; 432,000 output rows and 1,268,648,680 output bytes; median 16,882 input rows/s.
+- Semantic gate: digest `a572e6383444e3a88db93b311737f7f34743635dd3183af3affe6b0f7269f1b0` was identical in all repetitions.
+- Interpretation: Unlike the 100K probe, four of five wall-time samples fall in a 7% band. Use the 1M median as the primary untouched baseline and preserve the 68.3s sample in the distribution rather than trimming it.
+- Next action: add behavior tests for the public RecordBatch map/write contract, demonstrate that they fail on untouched code, then implement the direct path.
+
+### 2026-08-02 - Z10X-006 batch map/write behavior and 10K A/B
+
+- Hypothesis: Fusing Arrow batch read, filter/map, and direct batch writing will reduce CPU and memory while preserving logical output.
+- Commit Hash: working tree based on `d1d081a33`
+- Test command: `uv run --project lib/zephyr pytest lib/zephyr/tests/test_writers.py::test_write_parquet_file_accepts_record_batches lib/zephyr/tests/test_writers.py::test_write_parquet_file_preserves_typed_empty_record_batch lib/zephyr/tests/test_writers.py::test_write_parquet_file_rejects_record_batch_schema_drift lib/zephyr/tests/test_dataset.py::test_dataset_map_batches_writes_parquet -q`
+- Behavior result: All four tests failed on untouched code at the row-only writer or missing `Dataset.map_batches`; all four pass after the direct RecordBatch implementation.
+- Benchmark command: `uv run python lib/zephyr/tests/benchmark_chunk_pipeline.py --rows 10000 --modes row,batch --repeat 5`
+- Result: Interleaved median wall 0.735s row versus 0.539s batch (1.36x); process CPU 0.689s versus 0.478s (1.44x); RSS growth 146,636,800 versus 111,845,376 bytes (23.7% lower).
+- Semantic gate: Both arms produced 4,320 rows with schema `id,text,score,text_chars` and digest `640a9d64eeeff2e58c1517f8e70c1fea664239db3f8b167f40d87dd235b0d881` in every repetition.
+- Interpretation: Even the startup-sensitive size shows a repeatable gain, and the treatment's direct Parquet layout is slightly smaller without changing logical output. Larger sizes determine whether conversion savings grow with data volume.
+- Next action: run the same interleaved A/B at 100K and 1M rows.
+
+### 2026-08-02 - Z10X-007 100K row versus batch A/B
+
+- Hypothesis: The batch-path advantage will grow at 100K rows as per-row Python conversion becomes a larger fraction of stage work.
+- Commit Hash: working tree based on `d1d081a33`
+- Command: `uv run python lib/zephyr/tests/benchmark_chunk_pipeline.py --rows 100000 --modes row,batch --repeat 5`
+- Result: Interleaved median wall 6.975s row versus 4.066s batch (1.72x); process CPU 6.808s versus 4.219s (1.61x); RSS growth 371,568,640 versus 311,525,376 bytes (16.2% lower).
+- Semantic gate: Both arms produced 43,200 rows with digest `a5d554e45924c994206d4c3f025932a5151d2b23c84d67d8a8a4b481c2dcf756` in every repetition.
+- Interpretation: The matched interleaved comparison is materially less noisy than the untouched 100K series and confirms that the gain comes from the batch representation rather than the row-writer refactor. The batch arm was faster in every pair.
+- Next action: run the primary 1M interleaved A/B, then lint and broaden behavior regression coverage.
+
+### 2026-08-02 - Z10X-008 1M row versus batch A/B
+
+- Hypothesis: The direct Arrow path will retain at least the 100K throughput gain on the primary 1M local gate without increasing peak memory.
+- Commit Hash: working tree based on `d1d081a33`
+- Command: `uv run python lib/zephyr/tests/benchmark_chunk_pipeline.py --rows 1000000 --modes row,batch --repeat 5`
+- Result: Interleaved median wall 60.328s row versus 34.329s batch (1.76x); process CPU 63.912s versus 36.446s (1.75x); RSS growth 422,920,192 versus 351,944,704 bytes (16.8% lower). The batch arm sustained 29,129 median input rows/s versus 16,576 for rows.
+- Semantic gate: Both arms produced 432,000 rows with schema `id,text,score,text_chars` and digest `a572e6383444e3a88db93b311737f7f34743635dd3183af3affe6b0f7269f1b0` in every repetition.
+- Interpretation: The milestone delivers a stable 1.75–1.76x improvement for the representative map/filter/write stage, not 10x end-to-end. Batch wall times span only 2.8%, while one row outlier raises row variance; the median CPU result independently matches the wall-time uplift.
+- Next action: finish regression coverage, run required checks, snapshot the milestone in a PR, then define the first medium-scale tier-shaped A/B from this API.
