@@ -1,0 +1,22 @@
+{
+  "added_variants": [
+    "coupon_clipping"
+  ],
+  "base_sha": "23d17c62f7fedb20e7f5f8fb21d05689f39711c7",
+  "head_sha": "8883b25e81776dd324bfbdaeaace8e5c12a5e2be",
+  "report_count": 1,
+  "reports": [
+    {
+      "closest_variant": "base",
+      "distance_score": 4256,
+      "report_relpath": "coupon_clipping/index.html",
+      "status_counts": {
+        "added": 36,
+        "changed": 4,
+        "removed": 0,
+        "unchanged": 0
+      },
+      "variant": "coupon_clipping"
+    }
+  ]
+}
