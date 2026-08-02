@@ -58,7 +58,6 @@ MAX_IRIS_WORKER_REPLICAS = 1_000
 
 
 def _generate_execution_id() -> str:
-    """Generate unique ID for this execution to avoid conflicts."""
     ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     return f"{ts}-{uuid.uuid4().hex[:8]}"
 
@@ -155,17 +154,13 @@ def _resolve_task_resources(
     worker_resources: ResourceConfig,
     map_task_resources: ResourceConfig | None,
     reduce_task_resources: ResourceConfig | None,
-) -> tuple[ResourceConfig, ResourceConfig, int]:
-    """Resolve task resources and calculate the task packing limit."""
+) -> tuple[ResourceConfig, ResourceConfig]:
+    """Resolve and validate the map and reduce task resources."""
     resolved_map = map_task_resources or worker_resources
     resolved_reduce = reduce_task_resources or resolved_map
     _validate_task_resources(worker_resources, resolved_map, "map")
     _validate_task_resources(worker_resources, resolved_reduce, "reduce")
-    tasks_per_worker = min(
-        _tasks_per_worker(worker_resources, resolved_map),
-        _tasks_per_worker(worker_resources, resolved_reduce),
-    )
-    return resolved_map, resolved_reduce, tasks_per_worker
+    return resolved_map, resolved_reduce
 
 
 class _ContextState(enum.StrEnum):
@@ -223,41 +218,24 @@ class ZephyrContext:
     receive the entered context through Fray serialization. Borrowed contexts
     keep the coordinator handle but do not own pool shutdown.
 
+    Shared calls do not recreate a failed pool. Each thread has its own shared-data
+    view. A caller that starts a thread must copy or initialize the required view.
+
     Args:
-        client: The fray client to use. If None, auto-detects using current_client().
-        max_workers: Upper bound on worker count. The actual count is
-            min(max_workers, num_shards), computed at first execute(). If None,
-            defaults to os.cpu_count() for LocalClient, or ``MAX_IRIS_WORKER_REPLICAS``
-            (1,000) for distributed clients. Explicit distributed values above
-            1,000 are capped so excess shards multiplex through existing workers.
-        resources: Resource config per worker.
-        coordinator_resources: Resource config for the coordinator job. Defaults to 2 GB.
-        chunk_storage_prefix: Storage prefix for intermediate chunks. If None, defaults
-            to MARIN_PREFIX/tmp/zephyr or /tmp/zephyr.
-        name: Descriptive name for this context, used in actor group names for debugging.
-            Defaults to a random 8-character hex string.
-        no_workers_timeout: Seconds to wait for at least one worker before failing a stage.
-            Defaults to 600s.
-        max_execution_retries: Maximum number of times to retry a pipeline execution after
-            an infrastructure failure (e.g., coordinator VM preemption). Application errors
-            (ZephyrWorkerError) are never retried. Defaults to 100.
-        stage_runner_factory: Callable ``() -> StageRunner``.
-            Defaults to ``InlineRunner`` for ``LocalClient`` and ``SubprocessRunner``
-            for distributed clients.
-        map_task_resources: ResourceConfig specifying resources required by a single map task.
-            Defaults to ``resources``. Requires ``resources`` to be set explicitly.
-        reduce_task_resources: ResourceConfig specifying resources required by a single reduce task.
-            Defaults to ``map_task_resources``.
-        heartbeat_timeout: Seconds without a worker heartbeat before the coordinator
-            marks the worker FAILED and requeues its in-flight shard. Defaults to 120.
-            Long-running stages (e.g. vLLM inference with cold XLA compile) may need
-            to raise this; the JAX/XLA tracer can starve the worker's heartbeat thread
-            during compile.
-        max_shard_failures: Maximum explicit task-error retries per shard before the
-            pipeline aborts. Defaults to ``MAX_SHARD_FAILURES``.
-        max_shard_infra_failures: Maximum infra failures (preemption / heartbeat timeout)
-            observed while the same shard was in flight before treating the shard payload
-            as a deterministic crasher and aborting. Defaults to ``MAX_SHARD_INFRA_FAILURES``.
+        client: Fray client. Zephyr selects the current client when this is not set.
+        max_workers: Worker limit for a dedicated or owned shared pool. Distributed
+            pools are capped at 1,000 Iris replicas; excess shards multiplex through
+            those workers.
+        resources: CPU, memory, and device resources for each worker.
+        coordinator_resources: Resources for the coordinator actor.
+        chunk_storage_prefix: Storage prefix for shared data, chunks, and results.
+        name: Name prefix for actor groups.
+        no_workers_timeout: Maximum wait for a live worker during one stage.
+        max_execution_retries: Maximum pool retries for a dedicated execute call.
+        stage_runner_factory: Factory for the worker stage runner.
+        heartbeat_timeout: Maximum time between worker heartbeats.
+        max_shard_failures: Maximum task failures for one shard.
+        max_shard_infra_failures: Maximum worker failures while one shard is active.
     """
 
     client: Client | None = None
@@ -485,7 +463,7 @@ class ZephyrContext:
             return ZephyrExecutionResult(results=[], counters={})
 
         assert self.resources is not None
-        resolved_map, resolved_reduce, tasks_per_worker = _resolve_task_resources(
+        resolved_map, resolved_reduce = _resolve_task_resources(
             self.resources,
             map_task_resources,
             reduce_task_resources,
@@ -515,6 +493,10 @@ class ZephyrContext:
                     coordinator.release_execution.remote(execution_id).result(timeout=10.0)
 
         assert state is _ContextState.NEW
+        tasks_per_worker = min(
+            _tasks_per_worker(self.resources, resolved_map),
+            _tasks_per_worker(self.resources, resolved_reduce),
+        )
         last_exception: Exception | None = None
         backoff = ExponentialBackoff(initial=2.0, maximum=60.0, factor=2.0, jitter=0.1)
         for attempt in range(self.max_execution_retries + 1):

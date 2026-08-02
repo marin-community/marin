@@ -41,7 +41,6 @@ def _make_coordinator(
     )
     coord._executions = {run.execution_id: run}
     coord._worker_counters = {str(i): s for i, s in enumerate(inflight or [])}
-    coord._progress_time_seconds = 0.0
     for snapshot in completed:
         run.fold_counters(snapshot)
     return coord

@@ -514,18 +514,20 @@ class IrisActorGroup:
                 If None, probes all indices.
         """
         client = self._get_client()
-        resolver = client.resolver_for_job(self._job_id)
         # Single RPC: prefix match all actors for this group
         # _host_actor registers endpoints as "{job_id}/{name}-{task_index}"
         prefix = f"{self._job_id}/{self._name}-"
         endpoints = client.list_endpoints(prefix=prefix)
 
         newly_discovered: list[ActorHandle] = []
+        resolver = None
         for ep in endpoints:
             if target is not None and len(self._discovered_names) >= target:
                 break
             if ep.name in self._discovered_names:
                 continue
+            if resolver is None:
+                resolver = client.resolver_for_job(self._job_id)
             self._discovered_names.add(ep.name)
             handle = IrisActorHandle(ep.name, resolver=resolver)
             self._handles.append(handle)

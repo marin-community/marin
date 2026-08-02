@@ -144,7 +144,7 @@ class _PipelineExecution:
     task_queue: deque[ShardTask] = field(default_factory=deque)
     results: dict[int, TaskResult] = field(default_factory=dict)
     stage_name: str = ""
-    # Index of the currently active stage. For joins and reshards, the parent's index.
+    # Joins and reshards use the parent stage index.
     current_stage_index: int = 0
     plan_stages: list = field(default_factory=list)
     total_shards: int = 0
@@ -175,6 +175,7 @@ class _PipelineExecution:
     completed_totals: dict[tuple[str | None, str, Aggregation], CounterEntry] = field(default_factory=dict)
     # Set at each _start_stage so status logs show throughput since stage start.
     stage_monotonic_start: float | None = None
+    progress_time_seconds: float = 0.0
     done: bool = False
     finished: threading.Event = field(default_factory=threading.Event)
     terminal_error: Exception | None = None
@@ -327,12 +328,6 @@ class ZephyrCoordinator:
         self._worker_group: Any = None  # ActorGroup, set via set_worker_group()
         self._coordinator_thread: threading.Thread | None = None
         self._shutdown_event = threading.Event()
-        # Unix time of the newest stage start or shard completion across all
-        # executions, published as ZEPHYR_PROGRESS_TIME_METRIC so a stalled
-        # coordinator is visible. Per-pipeline progress lives on the executions.
-        self._progress_time_seconds: float = 0.0
-
-        # Lock for accessing coordinator state from background thread
         self._lock = threading.Lock()
 
         # Throttle Iris task-status pushes; the coordinator loop ticks more
@@ -348,7 +343,6 @@ class ZephyrCoordinator:
 
         logger.info("Coordinator initialized")
 
-        # Start coordinator background loop (heartbeat checking only)
         self._coordinator_thread = threading.Thread(
             target=self._coordinator_loop, daemon=True, name="zephyr-coordinator-loop"
         )
@@ -447,12 +441,16 @@ class ZephyrCoordinator:
     def _publish_telemetry(self) -> None:
         """Publish coordinator-owned counter snapshots."""
         with self._lock:
-            progress_time_seconds = self._progress_time_seconds
             snapshots = [
-                (run.execution_id, {name: entry.value for name, entry in run.merged_counters().items()})
+                (
+                    run.execution_id,
+                    run.progress_time_seconds,
+                    {name: entry.value for name, entry in run.merged_counters().items()},
+                )
                 for run in self._executions.values()
+                if not run.done
             ]
-        for execution_id, counters in snapshots:
+        for execution_id, progress_time_seconds, counters in snapshots:
             attributes = {**_SNAPSHOT_ATTRIBUTES, "run": execution_id}
             for name, value in counters.items():
                 metric_name = re.sub(r"[^a-zA-Z0-9_]", "_", name.removeprefix("zephyr/"))
@@ -502,7 +500,10 @@ class ZephyrCoordinator:
     def _report_task_stats(self) -> None:
         """Publish pipeline progress telemetry and Iris task status."""
         detail_md, summary_md = self._build_status_md()
-        self._publish_telemetry()
+        try:
+            self._publish_telemetry()
+        except Exception:
+            logger.warning("Failed to publish coordinator telemetry", exc_info=True)
         _push_iris_task_status(self._task_stats_limiter, lambda: (detail_md, summary_md))
 
     def _log_status(self) -> None:
@@ -577,16 +578,15 @@ class ZephyrCoordinator:
         worker_id: str,
         kind: ShardFailureKind,
         error_info: str | None = None,
-    ) -> bool:
+    ) -> None:
         """Requeue an in-flight shard. Abort its execution at a per-shard limit.
 
         TASK errors are bounded by ``MAX_SHARD_FAILURES``. INFRA failures
         observed while the *same* shard was in flight are bounded by
-        ``MAX_SHARD_INFRA_FAILURES`` so a payload that deterministically
-        crashes its worker (native SIGSEGV, OOM) doesn't loop forever now
-        that shard execution is in-process.
+        ``MAX_SHARD_INFRA_FAILURES``. This limit stops a shard that repeatedly
+        causes a native crash or OOM.
 
-        Must be called with lock held. Returns True if the execution was aborted.
+        Must be called with the lock held.
         """
         entry = run.in_flight.pop(shard_idx, None)
 
@@ -597,7 +597,7 @@ class ZephyrCoordinator:
             self._worker_counters[worker_id] = CounterSnapshot.empty(existing.generation)
 
         if entry is None:
-            return False
+            return
 
         task = entry.task
 
@@ -628,7 +628,7 @@ class ZephyrCoordinator:
                     f"Shard {shard_idx} failed {error_attempts} times "
                     f"(max {self._max_shard_failures}), last failure on worker {worker_id}.{error_detail}"
                 )
-                return True
+                return
 
             logger.warning(
                 "[%s] Shard %d failed on worker %s (task error %d/%d), re-queuing.",
@@ -654,10 +654,10 @@ class ZephyrCoordinator:
                 )
                 run.fatal_error = (
                     f"Shard {shard_idx} crashed its worker {infra_attempts} times "
-                    f"(max {self._max_shard_infra_failures} infra failures while in flight); "
-                    f"last failure on worker {worker_id}."
+                    f"(max {self._max_shard_infra_failures} infra failures while in flight). "
+                    f"Last failure on worker {worker_id}."
                 )
-                return True
+                return
 
             logger.warning(
                 "[%s] Shard %d requeued from worker %s due to infra failure (preemption/heartbeat). "
@@ -673,15 +673,12 @@ class ZephyrCoordinator:
             )
 
         if run.fatal_error is not None:
-            # The execution is winding down and its storage is about to be
-            # deleted. A requeued shard would have no valid output location
-            # write to, and would keep the drain from ever finishing.
+            # A requeued shard has no valid output location to write to after a failure.
             logger.info("[%s] Not requeuing shard %d: execution already failed", run.execution_id, shard_idx)
-            return True
+            return
 
         run.task_queue.append(task)
         run.retries += 1
-        return False
 
     def _maybe_requeue_worker_tasks(self, worker_id: str) -> None:
         """Requeue all in-flight tasks for a worker as INFRA failures (preemption/heartbeat)."""
@@ -742,8 +739,6 @@ class ZephyrCoordinator:
                 self._worker_states[worker_id] = WorkerState.DONE
                 return PullStatus.SHUTDOWN, None
 
-            # Otherwise the worker idles: more tasks can still arrive, from a
-            # later stage of this pipeline or from the next pipeline.
             return PullStatus.NO_WORK_BACKOFF, None
 
     def _worker_is_releasable_locked(self, worker_id: str) -> bool:
@@ -855,7 +850,7 @@ class ZephyrCoordinator:
 
             run.results[shard_idx] = result
             run.completed_shards += 1
-            self._progress_time_seconds = time.time()
+            run.progress_time_seconds = time.time()
             run.in_flight.pop(shard_idx, None)
             run.fold_counters(counter_snapshot)
             # Zero the in-flight counters but keep the generation watermark
@@ -996,10 +991,8 @@ class ZephyrCoordinator:
     def abort(self, reason: str) -> None:
         """Fail the coordinator pool: every active execution aborts immediately.
 
-        Called when the coordinator as a whole cannot make progress. This can
-        worker job terminated permanently (e.g. all retries exhausted after
-        OOM) or the maintenance loop crashed. New run_pipeline calls are
-        rejected afterwards.
+        This applies when the worker job stops permanently or the maintenance
+        loop fails. New run_pipeline calls are rejected afterwards.
         """
         with self._lock:
             if self._pool_error is None:
@@ -1021,7 +1014,7 @@ class ZephyrCoordinator:
         """Load a new stage's tasks into the execution's queue."""
         with self._lock:
             run.start_stage(stage_name, current_stage_index, tasks, is_last_stage=is_last_stage)
-            self._progress_time_seconds = time.time()
+            run.progress_time_seconds = time.time()
 
     def _wait_for_stage(self, run: _PipelineExecution) -> None:
         """Block until the execution's current stage completes or errors."""
@@ -1162,12 +1155,7 @@ class ZephyrCoordinator:
                     is_last_stage=(stage_idx == last_worker_stage_idx),
                 )
 
-            # Flatten final results — each shard may involve I/O (unpickling from
-            # remote storage), so parallelize across shards with a thread pool.
-            def _materialize_shard(shard):
-                return list(shard)
-
-            materialized = self._result_executor.map(_materialize_shard, shards)
+            materialized = self._result_executor.map(list, shards)
 
             flat_result = []
             for items in materialized:

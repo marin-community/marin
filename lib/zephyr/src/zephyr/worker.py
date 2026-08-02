@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 def _format_worker_status_md(active_tasks: int, stage: str) -> tuple[str, str]:
-    """Return worker status text for Iris."""
+    """Return worker status text, or two idle values when no task is active."""
     if active_tasks == 0 or not stage:
         return "idle", "idle"
     summary = f"**{stage}** — {active_tasks} task(s)"

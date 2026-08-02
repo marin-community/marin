@@ -650,6 +650,7 @@ def test_progress_metric_resets_at_stage_start_and_advances_after_a_shard(coordi
     start_test_stage(coordinator, [task])
     coordinator._publish_telemetry()
     assert emitted[-1][0] == 1_000.0
+    assert emitted[-1][1]["run"] == _TEST_EXECUTION_ID
 
     coordinator.register_worker("worker-0", MagicMock())
     status, work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
@@ -668,18 +669,37 @@ def test_progress_metric_resets_at_stage_start_and_advances_after_a_shard(coordi
     assert emitted[-1][0] == 1_010.0
 
 
-def test_pipeline_progress_metric_includes_execution_identity(coordinator, monkeypatch):
-    plan = compute_plan(Dataset.from_list([]))
-    coordinator.run_pipeline(plan, "run-1", _TEST_TASK_COST, _TEST_TASK_COST)
-    emitted = []
+def test_progress_metric_isolated_between_executions(coordinator, monkeypatch):
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name="test",
+        cost=_TEST_TASK_COST,
+    )
+    timestamps = iter((1_000.0, 2_000.0))
+    monkeypatch.setattr(time, "time", lambda: next(timestamps))
+    first = start_test_stage(coordinator, [task], execution_id="run-1")
+    start_test_stage(coordinator, [task], execution_id="run-2")
+    emitted: list[tuple[str, float, dict]] = []
 
     class Gauge:
-        def set(self, value, *, attributes=None):
-            emitted.append(attributes)
+        def __init__(self, name):
+            self.name = name
 
-    monkeypatch.setattr(telemetry, "gauge", lambda name, **kwargs: Gauge())
+        def set(self, value, *, attributes=None):
+            emitted.append((self.name, value, attributes))
+
+    monkeypatch.setattr(telemetry, "gauge", lambda name, **kwargs: Gauge(name))
     coordinator._publish_telemetry()
-    assert all(attributes["run"] == "run-1" for attributes in emitted)
+    progress = {attributes["run"]: value for name, value, attributes in emitted if name == ZEPHYR_PROGRESS_TIME_METRIC}
+    assert progress == {"run-1": 1_000.0, "run-2": 2_000.0}
+
+    first.done = True
+    emitted.clear()
+    coordinator._publish_telemetry()
+    assert {attributes["run"] for _, _, attributes in emitted} == {"run-2"}
 
 
 def test_disk_chunk_write_uses_unique_paths(tmp_path):
