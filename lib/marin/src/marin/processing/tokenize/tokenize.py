@@ -317,7 +317,6 @@ def _run_split(
 
     ctx = ZephyrContext(
         resources=config.worker_resources,
-        map_task_resources=config.map_task_resources,
         max_workers=min(config.max_workers, len(file_groups)),
         name=f"tokenize-{split_name}",
     )
@@ -331,6 +330,7 @@ def _run_split(
         dataset=tokenized_ds,
         output_path=prefix,
         batch_size=batch_size,
+        task_resources=config.map_task_resources,
     )
 
     stats_path, _ = write_stats_json(prefix, ledger)

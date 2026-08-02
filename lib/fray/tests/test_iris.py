@@ -8,8 +8,10 @@ Integration tests that need a running cluster are marked with @pytest.mark.iris.
 """
 
 import pickle
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import fray.iris_backend as iris_backend
 import pytest
 from fray.iris_backend import (
     FrayIrisClient,
@@ -134,12 +136,39 @@ class TestIrisActorHandlePickle:
 
     def test_pickle_drops_client(self):
         """Client is transient state — pickle should not carry it."""
-        handle = IrisActorHandle("my-actor")
+        handle = IrisActorHandle("my-actor", resolver=MagicMock())
         # Manually set client to simulate resolved state
         handle._client = "fake-client"
         data = pickle.dumps(handle)
         restored = pickle.loads(data)
         assert restored._client is None
+        assert restored._resolver is None
+
+
+def test_actor_group_created_by_driver_uses_creating_client(monkeypatch):
+    fake_iris = MagicMock()
+    fake_iris.submit.return_value = MagicMock(job_id="/user/job")
+    fake_iris.list_endpoints.return_value = [SimpleNamespace(name="/user/job/dummy-0")]
+    resolver = MagicMock()
+    fake_iris.resolver_for_job.return_value = resolver
+    fake_actor = MagicMock()
+    fake_actor.ping.return_value = "pong"
+    actor_clients = []
+
+    def actor_client(actor_resolver, endpoint_name):
+        actor_clients.append((actor_resolver, endpoint_name))
+        return fake_actor
+
+    monkeypatch.setattr(iris_backend, "ActorClient", actor_client)
+
+    client = FrayIrisClient.from_iris_client(fake_iris)
+    group = client.create_actor_group(object, name="dummy", count=1)
+    handle = group.wait_ready(count=1, timeout=0)[0]
+
+    assert handle.ping() == "pong"
+    assert actor_clients == [(resolver, "/user/job/dummy-0")]
+    group.discover_new()
+    fake_iris.resolver_for_job.assert_called_once_with("/user/job")
 
 
 def test_iris_job_handle_returns_a_globally_bounded_tail():
