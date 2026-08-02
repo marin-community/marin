@@ -17,9 +17,11 @@ from verify_glm_hierarchy_with_claude import (  # noqa: E402
     REVIEW_CHUNK_MARKER,
     claude_assignments,
     comparison,
+    load_review_checkpoint,
     parse_claude_envelope,
     review_indices,
     review_package_from_chunks,
+    write_review_checkpoint,
 )
 
 
@@ -68,6 +70,36 @@ def test_claude_assignments_corrects_invalid_batch(monkeypatch: pytest.MonkeyPat
     assert review.assignments == [corrected]
     assert review.cost_usd == 0.5
     assert "secondary leaf under an unselected parent" in prompts[1]
+
+
+def test_review_checkpoint_round_trip_and_input_binding(tmp_path: Path) -> None:
+    package = {
+        "taxonomy": {
+            "parents": [{"bucket_id": "SCIENCE"}],
+            "leaves": [{"bucket_id": "BIOLOGY", "parent_id": "SCIENCE"}],
+            "forms": [{"bucket_id": "RESEARCH"}],
+        },
+        "documents": [{"sample_index": 1, "text": "Biology"}],
+    }
+    assignment = {
+        "sample_index": 1,
+        "primary_parent_id": "SCIENCE",
+        "secondary_parent_ids": [],
+        "primary_leaf_id": "BIOLOGY",
+        "secondary_leaf_ids": [],
+        "form_id": "RESEARCH",
+        "confidence": 0.8,
+        "rationale": "Biology.",
+    }
+    checkpoint = tmp_path / "review.json"
+    review = verifier.ClaudeReview([assignment], [{"claude-opus-5": {"inputTokens": 10}}], 0.25)
+
+    write_review_checkpoint(checkpoint, package, "claude-opus-5", 20, review)
+
+    assert load_review_checkpoint(checkpoint, package, "claude-opus-5", 20) == review
+    changed = package | {"documents": [{"sample_index": 1, "text": "Changed"}]}
+    with pytest.raises(ValueError, match="different review inputs"):
+        load_review_checkpoint(checkpoint, changed, "claude-opus-5", 20)
 
 
 def test_review_indices_keep_representative_and_stress_samples_separate() -> None:

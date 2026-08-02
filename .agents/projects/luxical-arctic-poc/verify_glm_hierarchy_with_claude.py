@@ -6,6 +6,7 @@
 import argparse
 import base64
 import gzip
+import hashlib
 import json
 import math
 import subprocess
@@ -26,6 +27,62 @@ class ClaudeReview:
     assignments: list[dict[str, Any]]
     model_usage_batches: list[dict[str, Any]]
     cost_usd: float
+
+
+def review_package_sha256(package: dict[str, Any]) -> str:
+    """Return a digest that binds a checkpoint to its private review package."""
+    payload = json.dumps(package, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def write_review_checkpoint(
+    path: Path,
+    package: dict[str, Any],
+    model: str,
+    batch_size: int,
+    review: ClaudeReview,
+) -> None:
+    """Atomically save completed review batches without document text."""
+    checkpoint = {
+        "package_sha256": review_package_sha256(package),
+        "model": model,
+        "batch_size": batch_size,
+        "assignments": review.assignments,
+        "model_usage_batches": review.model_usage_batches,
+        "cost_usd": review.cost_usd,
+    }
+    temporary = path.with_name(f"{path.name}.tmp")
+    temporary.write_text(json.dumps(checkpoint, ensure_ascii=False, sort_keys=True))
+    temporary.replace(path)
+
+
+def load_review_checkpoint(
+    path: Path | None,
+    package: dict[str, Any],
+    model: str,
+    batch_size: int,
+) -> ClaudeReview:
+    """Load and validate completed prefix batches from a local checkpoint."""
+    if path is None or not path.exists():
+        return ClaudeReview([], [], 0.0)
+    checkpoint = json.loads(path.read_text())
+    expected = {
+        "package_sha256": review_package_sha256(package),
+        "model": model,
+        "batch_size": batch_size,
+    }
+    if any(checkpoint.get(key) != value for key, value in expected.items()):
+        raise ValueError("The Claude checkpoint has different review inputs")
+    assignments = checkpoint.get("assignments")
+    usage = checkpoint.get("model_usage_batches")
+    if not isinstance(assignments, list) or not isinstance(usage, list):
+        raise ValueError("The Claude checkpoint is incomplete")
+    documents = package["documents"]
+    if len(assignments) > len(documents) or (len(assignments) % batch_size and len(assignments) != len(documents)):
+        raise ValueError("The Claude checkpoint does not end at a batch boundary")
+    prefix_package = package | {"documents": documents[: len(assignments)]}
+    validate_claude_rows(prefix_package, assignments)
+    return ClaudeReview(assignments, usage, float(checkpoint["cost_usd"]))
 
 
 def review_package_from_chunks(output: str) -> dict[str, Any]:
@@ -120,13 +177,15 @@ def claude_assignments(
     model: str,
     batch_size: int,
     max_budget_usd: float,
+    checkpoint_path: Path | None = None,
 ) -> ClaudeReview:
     """Ask a pinned Claude model for blinded assignments in bounded batches."""
     documents = package["documents"]
-    assignments = []
-    model_usage_batches = []
-    cost_usd = 0.0
-    for start in range(0, len(documents), batch_size):
+    saved = load_review_checkpoint(checkpoint_path, package, model, batch_size)
+    assignments = list(saved.assignments)
+    model_usage_batches = list(saved.model_usage_batches)
+    cost_usd = saved.cost_usd
+    for start in range(len(assignments), len(documents), batch_size):
         batch_documents = documents[start : start + batch_size]
         batch_package = package | {"documents": batch_documents}
         prompt = claude_prompt(package, batch_documents)
@@ -160,6 +219,14 @@ def claude_assignments(
             try:
                 validate_claude_rows(batch_package, review.assignments)
                 assignments.extend(review.assignments)
+                if checkpoint_path is not None:
+                    write_review_checkpoint(
+                        checkpoint_path,
+                        package,
+                        model,
+                        batch_size,
+                        ClaudeReview(assignments, model_usage_batches, cost_usd),
+                    )
                 break
             except ValueError as error:
                 if attempt + 1 == MAX_REVIEW_ATTEMPTS:
@@ -295,13 +362,20 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=20)
     parser.add_argument("--max-budget-usd", type=float, required=True)
     parser.add_argument("--output-path", type=Path)
+    parser.add_argument("--checkpoint-path", type=Path)
     args = parser.parse_args()
     if args.batch_size < 1 or args.max_budget_usd <= 0:
         parser.error("--batch-size and --max-budget-usd must be positive")
     if not args.claude_model.startswith("claude-"):
         parser.error("--claude-model must be a full model ID")
     package = review_package_from_chunks(sys.stdin.read())
-    review = claude_assignments(package, args.claude_model, args.batch_size, args.max_budget_usd)
+    review = claude_assignments(
+        package,
+        args.claude_model,
+        args.batch_size,
+        args.max_budget_usd,
+        args.checkpoint_path,
+    )
     result = comparison(package, review.assignments)
     result["claude_model"] = args.claude_model
     result["claude_model_usage_batches"] = review.model_usage_batches
