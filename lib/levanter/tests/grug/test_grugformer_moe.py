@@ -543,18 +543,42 @@ def test_fixed_all_to_all_drops_assignments_over_capacity():
     with jax.set_mesh(mesh):
         actual, dropped = sharded_fixed_a2a(x, selected_experts, combine_weights, w_up_gate, w_down)
 
-    selected_w13 = w_up_gate[selected_experts]
-    hidden = jnp.einsum("th,tkhi->tki", x, selected_w13)
-    gate, up = jnp.split(hidden, [intermediate_dim], axis=-1)
-    expert_output = jnp.einsum(
-        "tki,tkih->tkh",
-        jax.nn.silu(gate) * up,
-        w_down[selected_experts],
-    )
     keep = jnp.asarray([[True, True], [True, True], [False, False], [False, False]])
-    expected = jnp.einsum("tkh,tk->th", expert_output, combine_weights * keep)
+
+    def dense_output(x, w_up_gate, w_down):
+        selected_w13 = w_up_gate[selected_experts]
+        hidden = jnp.einsum("th,tkhi->tki", x, selected_w13)
+        gate, up = jnp.split(hidden, [intermediate_dim], axis=-1)
+        expert_output = jnp.einsum(
+            "tki,tkih->tkh",
+            jax.nn.silu(gate) * up,
+            w_down[selected_experts],
+        )
+        return jnp.einsum("tkh,tk->th", expert_output, combine_weights * keep)
+
+    cotangent = jax.random.normal(jax.random.key(42), x.shape)
+    with jax.set_mesh(mesh):
+        actual_gradients = jax.grad(
+            lambda x, w_up_gate, w_down: jnp.sum(
+                sharded_fixed_a2a(x, selected_experts, combine_weights, w_up_gate, w_down)[0] * cotangent
+            ),
+            argnums=(0, 1, 2),
+        )(x, w_up_gate, w_down)
+
+    expected = dense_output(x, w_up_gate, w_down)
+    expected_gradients = jax.grad(
+        lambda x, w_up_gate, w_down: jnp.sum(dense_output(x, w_up_gate, w_down) * cotangent),
+        argnums=(0, 1, 2),
+    )(x, w_up_gate, w_down)
 
     np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
+    for actual_gradient, expected_gradient in zip(actual_gradients, expected_gradients, strict=True):
+        np.testing.assert_allclose(
+            np.asarray(actual_gradient),
+            np.asarray(expected_gradient),
+            rtol=1e-5,
+            atol=1e-5,
+        )
     assert int(dropped) == 4
 
 
