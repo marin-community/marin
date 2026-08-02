@@ -138,5 +138,6 @@ def test_comparison_scores_randomized_student_sides_and_content_groups() -> None
     assert result["overall"]["student_wins"] == 1
     assert result["overall"]["ties"] == 1
     assert result["overall"]["student_win_plus_half_tie_fraction"] == pytest.approx(0.75)
+    assert isinstance(result["overall"]["release_gate_passed"], bool)
     assert result["code"]["documents"] == 1
     assert result["non_english"]["documents"] == 1

@@ -275,7 +275,7 @@ def preference_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "student_win_plus_half_tie_fraction": float(values.mean()),
         "paired_bootstrap_95pct": [lower, upper],
         "release_gate_applicable": len(rows) >= 30,
-        "release_gate_passed": len(rows) >= 30 and values.mean() >= 0.50 and lower >= 0.45,
+        "release_gate_passed": bool(len(rows) >= 30 and values.mean() >= 0.50 and lower >= 0.45),
     }
 
 
