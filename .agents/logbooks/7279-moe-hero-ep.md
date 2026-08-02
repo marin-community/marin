@@ -603,3 +603,10 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - GPU allocation: All 16 tasks run with four GB200 GPUs each; no task is pending or complete.
 - Logs: The first 15-minute scan has no matched loss failure, exception, OOM, dead-node, or resource error.
 - Decision: Keep the one admitted job and use the normal monitor cadence.
+
+### 2026-08-02 04:58 UTC - MHEP-008 healthy at the first normal check
+
+- State: The coordinator and GPU child continue to run. All 16 GPU tasks run with zero failures and zero preemptions.
+- Progress: The latest visible sample is step 15 of 200. Loss fell from 7.57 at step 9 to 6.90 at step 15.
+- Logs: No exception, OOM, dead-node, resource error, non-finite value, or retry is present.
+- Decision: Continue the same job at the normal monitor cadence.
