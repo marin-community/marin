@@ -789,9 +789,7 @@ class Block(eqx.Module):
 
 
 def _long_layer_schedule(num_layers: int) -> jax.Array:
-    """Bool[num_layers] mask marking the 'long' (full causal) layers: every 4th layer
-    plus the last one. Rides into the ``lax.scan`` body as a per-layer scan input so the
-    scan can pick the sliding-window vs full mask at runtime."""
+    """Mark every fourth layer and the final layer as full-causal."""
     idx = jnp.arange(num_layers)
     return ((idx % 4) == 3) | (idx == num_layers - 1)
 

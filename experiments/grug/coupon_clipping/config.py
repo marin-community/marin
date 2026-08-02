@@ -7,6 +7,7 @@ import dataclasses
 import math
 from dataclasses import dataclass
 from enum import StrEnum
+from types import MappingProxyType
 from typing import cast
 
 from levanter.grug.attention import GrugAttentionImplementation
@@ -84,17 +85,21 @@ class CouponClippingLearningRate(StrEnum):
 SELECTED_LEARNING_RATE = CouponClippingLearningRate.HIGH
 
 
-_SHARED_WIDTHS_BY_ARM = {
-    CouponClippingArm.C0_P0: UNIFORM_SHARED_WIDTHS,
-    CouponClippingArm.P1: FAT_FIRST_SHARED_WIDTHS,
-    CouponClippingArm.P2: FAT_MIDDLE_SHARED_WIDTHS,
-}
+_SHARED_WIDTHS_BY_ARM = MappingProxyType(
+    {
+        CouponClippingArm.C0_P0: UNIFORM_SHARED_WIDTHS,
+        CouponClippingArm.P1: FAT_FIRST_SHARED_WIDTHS,
+        CouponClippingArm.P2: FAT_MIDDLE_SHARED_WIDTHS,
+    }
+)
 
-_LEARNING_RATES = {
-    CouponClippingLearningRate.LOW: (LOW_MUONH_LEARNING_RATE, LOW_ADAM_LEARNING_RATE),
-    CouponClippingLearningRate.CENTER: (MUONH_LEARNING_RATE, ADAM_LEARNING_RATE),
-    CouponClippingLearningRate.HIGH: (HIGH_MUONH_LEARNING_RATE, HIGH_ADAM_LEARNING_RATE),
-}
+_LEARNING_RATES = MappingProxyType(
+    {
+        CouponClippingLearningRate.LOW: (LOW_MUONH_LEARNING_RATE, LOW_ADAM_LEARNING_RATE),
+        CouponClippingLearningRate.CENTER: (MUONH_LEARNING_RATE, ADAM_LEARNING_RATE),
+        CouponClippingLearningRate.HIGH: (HIGH_MUONH_LEARNING_RATE, HIGH_ADAM_LEARNING_RATE),
+    }
+)
 
 
 @dataclass(frozen=True)

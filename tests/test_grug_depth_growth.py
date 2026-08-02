@@ -225,7 +225,7 @@ def test_load_and_grow_grug_depth_state_resolves_latest_checkpoint():
         assert path == "s3://example/checkpoints"
         return f"{path}/step-7"
 
-    def fake_load(exemplar, path: str, **kwargs):
+    def fake_load(exemplar, path: str, **_kwargs):
         assert exemplar is source
         loaded_paths.append(path)
         return source
