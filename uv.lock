@@ -2337,6 +2337,23 @@ wheels = [
 ]
 
 [[package]]
+name = "google-cloud-kms"
+version = "3.16.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "google-api-core", extra = ["grpc"] },
+    { name = "google-auth" },
+    { name = "grpc-google-iam-v1" },
+    { name = "grpcio" },
+    { name = "proto-plus" },
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/73/53/4bde1d2c31e72e898c2bdfac25ac27da52c3b4e1936a411fbe96f01d65a4/google_cloud_kms-3.16.0.tar.gz", hash = "sha256:c89c66ccffc1358f973801ed1b45bd92b35ddbbc2545db9032af6d4643b20c76", size = 448119, upload-time = "2026-07-16T20:36:20.6Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/76/b0/f102b5c077df60cfeac7ace7a1ccbe6d5e934dfadf37ff8b8ddbcdce8a24/google_cloud_kms-3.16.0-py3-none-any.whl", hash = "sha256:ad3c102961ba58179f7261814d9cd28dded93603bd33c8224b4b072897bbe81e", size = 359027, upload-time = "2026-07-16T20:35:57.575Z" },
+]
+
+[[package]]
 name = "google-cloud-secret-manager"
 version = "2.29.0"
 source = { registry = "https://pypi.org/simple" }
@@ -5368,6 +5385,7 @@ dependencies = [
 
 [package.optional-dependencies]
 deploy = [
+    { name = "google-cloud-kms" },
     { name = "pulumi" },
     { name = "pulumi-cloudflare" },
     { name = "pulumi-command" },
@@ -5379,6 +5397,7 @@ deploy = [
 
 [package.metadata]
 requires-dist = [
+    { name = "google-cloud-kms", marker = "extra == 'deploy'", specifier = ">=2.24.0" },
     { name = "marin-iris", extras = ["controller"], editable = "lib/iris" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "pulumi", marker = "extra == 'deploy'", specifier = ">=3.140,<4" },
@@ -11548,7 +11567,7 @@ wheels = [
 
 [[package]]
 name = "vllm"
-version = "1+tpu"
+version = "0.20.1rc1.dev1465+gafb267194.tpu"
 source = { git = "https://github.com/marin-community/vllm.git?rev=afb26719464d5957e695bde478ae93a160b11d14#afb26719464d5957e695bde478ae93a160b11d14" }
 dependencies = [
     { name = "aiohttp" },
