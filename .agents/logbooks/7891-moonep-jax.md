@@ -539,3 +539,20 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Check: Each receiver samples the first, middle, and last column and verifies the source rank for every row.
 - Runtime: Use the rebuilt fixed wheels, NCCL 2.30.7, and XLA's direct device kernel.
 - Purpose: Remove model, optimizer, grouped GEMM, and QB work from the failing path.
+
+### 2026-08-02 17:54 UTC - The 5 GiB probe passes one local LSA domain
+
+- Setup: One process used four local GB200 GPUs, the rebuilt PJRT wheel, and NCCL 2.30.7.
+- Result: The probe passed in 3.891037 seconds with checksum `2359296` and zero sampled mismatches.
+- Interpretation: Large input and output offsets are correct inside one local LSA domain.
+- Next gate: Run the same shape at EP64 to exercise the multi-node path without training work.
+
+### 2026-08-02 17:54 UTC - MNEP-025 focused rack probe contract
+
+- Goal: Execute and verify one balanced 5 GiB ragged all-to-all on one NVL72.
+- Run ID: `mnep-025-ragged-5g-probe-20260802-1754`.
+- Snapshot: `mnep-025-ragged-5g-probe-20260802-1754`.
+- Shape: Use 524,288 rows per rank, 5,120 bfloat16 elements per row, and 64 equal peer segments.
+- Gate: Require attempt-zero completion, checksum `49545216`, zero sampled mismatches, and no transport error.
+- Stop criteria: Stop on any retry, memory error, transport error, or value mismatch.
+- Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 3600 --max-retries 0 --job-name mnep-025-ragged-5g-probe-20260802-1754-coord -- python -m experiments.grug.moe_hero_ep.ragged_device_probe --run-id mnep-025-ragged-5g-probe-20260802-1754 --rows-per-rank 524288 --row-elements 5120 --moonep-jax-wheel-build lsa-nccl-2307-20260802`.
