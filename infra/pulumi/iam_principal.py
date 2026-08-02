@@ -39,9 +39,9 @@ _PRINCIPAL_RECORD_RE = re.compile(rf"^[+-]\s*({PRINCIPAL_ID_PATTERN}):\s+(\S+)\s
 
 def grant(email: str, project_roles: tuple[str, ...]) -> None:
     """Update project role grants for one encrypted human principal."""
-    client = kms_v1.KeyManagementServiceClient()
-    key_id = crypto_key_id()
     config = load_iam_config()
+    client = kms_v1.KeyManagementServiceClient()
+    key_id = crypto_key_id(config)
     updated = grant_project_roles(
         config,
         email,
@@ -58,9 +58,9 @@ def grant(email: str, project_roles: tuple[str, ...]) -> None:
 
 def register(email: str) -> None:
     """Register one encrypted human principal and print its opaque ID."""
-    client = kms_v1.KeyManagementServiceClient()
-    key_id = crypto_key_id()
     config = load_iam_config()
+    client = kms_v1.KeyManagementServiceClient()
+    key_id = crypto_key_id(config)
     registration = register_principal(
         config,
         email,
@@ -74,8 +74,9 @@ def register(email: str) -> None:
 
 def decrypt_ciphertexts(ciphertexts: list[str]) -> None:
     """Print plaintext principals for explicit ciphertext arguments."""
+    config = load_iam_config()
     client = kms_v1.KeyManagementServiceClient()
-    key_id = crypto_key_id()
+    key_id = crypto_key_id(config)
     for ciphertext in ciphertexts:
         print(decrypt_member(client, key_id, ciphertext))
 
@@ -97,7 +98,7 @@ def decrypt_diff() -> None:
             changed_references.append((line[0], match.group(1)))
 
     client = kms_v1.KeyManagementServiceClient()
-    key_id = crypto_key_id()
+    key_id = crypto_key_id(config)
     printed = 0
     referenced_ids = {principal_id for _, principal_id in changed_references}
     for marker, principal_id in changed_references:

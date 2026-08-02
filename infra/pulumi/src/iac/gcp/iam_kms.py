@@ -9,15 +9,14 @@ import base64
 
 from google.cloud import kms_v1
 
-from iac.gcp.iam_config import load_iam_config
+from iac.gcp.iam_config import GcpIamConfig
 
 # The YAML names only the key ring/key, not the project the key lives under. That
 # project matches lib/iris/config/marin.yaml's provisioning.gcp.project.
 PROJECT = "hai-gcp-models"
 
 
-def crypto_key_id() -> str:
-    config = load_iam_config()
+def crypto_key_id(config: GcpIamConfig) -> str:
     return (
         f"projects/{PROJECT}/locations/{config.kms_location}/keyRings/{config.kms_key_ring}/"
         f"cryptoKeys/{config.kms_key}"

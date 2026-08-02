@@ -122,8 +122,9 @@ def _iter_grants(config: GcpIamConfig) -> Iterator[tuple[str, str, GcpRoleGrant]
     """Yield (container, resource, grant) for every declared role grant."""
     for grant in config.project_grants:
         yield "project_grants", PROJECT, grant
+    key_id = crypto_key_id(config)
     for grant in config.kms_grants:
-        yield "kms_grants", crypto_key_id(), grant
+        yield "kms_grants", key_id, grant
     for secret in config.secrets:
         for grant in secret.grants:
             yield "secrets", secret.secret, grant
@@ -144,7 +145,7 @@ def decrypt(out_path: Path) -> None:
 
     config = load_iam_config()
     client = kms_v1.KeyManagementServiceClient()
-    key_id = crypto_key_id()
+    key_id = crypto_key_id(config)
     principal_ids = {principal.ciphertext: principal.principal_id for principal in config.principals}
     grants_by_id: dict[str, list[AuditGrant]] = {principal.principal_id: [] for principal in config.principals}
     for container, resource, grant in _iter_grants(config):
@@ -195,7 +196,7 @@ def encrypt(in_path: Path) -> None:
 
     emails = {record.principal_id: record.email for record in records}
     client = kms_v1.KeyManagementServiceClient()
-    key_id = crypto_key_id()
+    key_id = crypto_key_id(config)
     principals = tuple(
         GcpPrincipal(
             principal_id=principal.principal_id,
