@@ -10,13 +10,14 @@ import os
 import socket
 import subprocess
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.client import IrisClient
 from iris.cluster.config import load_config
+from iris.rpc import job_pb2
 from marin.evaluation.harbor.dataset import validate_harbor_dataset_source
 from marin.evaluation.harbor.driver_config import (
     ValidatedHarborConfig,
@@ -73,6 +74,8 @@ class LaunchSpec:
     limit: int | None
     records_prefix: str | None
     cluster: str
+    target_cluster: str | None = None
+    priority_band: int = job_pb2.PRIORITY_BAND_INHERIT
     version: str | None = None
     description: str | None = None
 
@@ -196,6 +199,10 @@ def build_evaluation_batch(
     """Resolve experiment names into one model-serving evaluation batch."""
     model = models()[spec.model]
     accelerator = MARIN_EVAL_HARDWARE.select(model, spec.platform, spec.accelerator)
+    if spec.target_cluster is not None:
+        if accelerator.platform is not Platform.GPU:
+            raise ValueError("--target-cluster is supported only for GPU evaluations")
+        accelerator = replace(accelerator, target_cluster=spec.target_cluster, region=None)
     definitions = _preflight_definitions(_evaluation_definitions(spec), model, spec.limit)
     records_prefix = records_prefix_for(accelerator, spec)
     created_at = datetime.now(UTC).isoformat()
@@ -236,6 +243,7 @@ def build_evaluation_batch(
         evaluations=tuple(evaluations),
         provenance=provenance,
         secret_env=secret_env,
+        priority_band=spec.priority_band,
     )
 
 

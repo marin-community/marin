@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
+from iris.rpc import job_pb2
 from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, HarborDatasetKind, ValidatedHarborConfig
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig, ResourceHint
@@ -191,11 +192,13 @@ def test_submit_evaluation_batch_resolves_declared_secrets_outside_the_pickled_b
         evaluations=(evaluation,),
         provenance=LaunchProvenance(git_sha="abc", launch_host="host"),
         secret_env={"DAYTONA_API_KEY": ("env:MARIN_TEST_EVAL_SECRET",)},
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
     )
 
     submit_evaluation_batch(batch, Client())
 
     assert captured["environment"].env_vars["DAYTONA_API_KEY"] == resolved_value
+    assert captured["priority_band"] == job_pb2.PRIORITY_BAND_BATCH
     assert resolved_value.encode() not in captured["entrypoint"].workdir_files["_callable.pkl"]
 
 
@@ -409,6 +412,14 @@ def test_launch_accepts_registry_evals_and_repeated_harbor_configs(tmp_path, mon
             str(first),
             "--harbor-config",
             str(second),
+            "--priority",
+            "batch",
+            "--target-cluster",
+            "cw-rno2a",
+            "--platform",
+            "gpu",
+            "--accelerator",
+            "H100x1",
             "--dry-run",
         ],
     )
@@ -417,6 +428,8 @@ def test_launch_accepts_registry_evals_and_repeated_harbor_configs(tmp_path, mon
     assert "eval=mmlu-smoke" in result.output
     assert "eval=first-policy" in result.output
     assert "eval=second-policy" in result.output
+    assert "priority: batch" in result.output
+    assert "region_or_cluster=cw-rno2a" in result.output
 
 
 def test_build_evaluation_batch_defaults_results_to_eval_root(monkeypatch):

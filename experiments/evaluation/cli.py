@@ -14,6 +14,7 @@ from pathlib import Path
 
 import click
 from iris.cli.connect import open_iris_client
+from iris.rpc import job_pb2
 from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import Platform, default_platform
 from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, list_records
@@ -43,7 +44,8 @@ def _resolve_eval_keys(evals_arg: str) -> tuple[str, ...]:
 
 
 def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
-    click.echo(f"model: {spec.model}  platform: {spec.platform.value}  cluster: {spec.cluster}")
+    priority = job_pb2.PriorityBand.Name(batch.priority_band).removeprefix("PRIORITY_BAND_").lower()
+    click.echo(f"model: {spec.model}  platform: {spec.platform.value}  cluster: {spec.cluster}  priority: {priority}")
     for evaluation in batch.evaluations:
         tasks = [task.name for task in evaluation.identity.eval_ref.tasks]
         click.echo(
@@ -81,6 +83,18 @@ def cli() -> None:
     help="Force tpu or gpu; defaults from the model.",
 )
 @click.option("--accelerator", default=None, help="Slice override, e.g. 'v6e-8' or 'H100x8'.")
+@click.option(
+    "--target-cluster",
+    default=None,
+    help="Route a GPU evaluation to this Iris cluster instead of the fleet profile's cluster.",
+)
+@click.option(
+    "--priority",
+    type=click.Choice(("inherit", "production", "interactive", "batch")),
+    default="inherit",
+    show_default=True,
+    help="Iris priority band for the evaluation and its child jobs.",
+)
 @click.option("--limit", type=int, default=None, help="Override max eval instances per task.")
 @click.option(
     "--version",
@@ -103,6 +117,8 @@ def launch(
     harbor_config: tuple[Path, ...],
     platform: str | None,
     accelerator: str | None,
+    target_cluster: str | None,
+    priority: str,
     limit: int | None,
     version: str | None,
     description: str | None,
@@ -138,6 +154,8 @@ def launch(
         limit=limit,
         records_prefix=records_prefix,
         cluster=cluster,
+        target_cluster=target_cluster,
+        priority_band=job_pb2.PriorityBand.Value(f"PRIORITY_BAND_{priority.upper()}"),
         version=version,
         description=description,
     )
