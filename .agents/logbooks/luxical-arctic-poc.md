@@ -1476,3 +1476,9 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
   model attempt. Eight focused hierarchy tests pass.
 - The balanced hierarchy request is still active. Its first outputs reached
   the generation limit and did not produce a saved taxonomy.
+- The final balanced output had 37 non-fallback parents instead of the allowed
+  12 through 16. This was a hierarchy-generation validation failure, not a
+  server or data failure.
+- Corrected job `/rav/lux-glm52-hierarchy-direct-b200-004` runs only the
+  balanced variant. Both four-device replicas were admitted at interactive
+  priority. The compact checkpoints remain unchanged.
