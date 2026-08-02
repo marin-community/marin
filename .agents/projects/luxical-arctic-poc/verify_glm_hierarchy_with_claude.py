@@ -4,6 +4,8 @@
 """Compare blinded Claude labels with one GLM semantic hierarchy."""
 
 import argparse
+import base64
+import gzip
 import json
 import math
 import subprocess
@@ -14,12 +16,43 @@ from typing import Any
 
 from glm_semantic_labels import parse_json_object, stable_order
 
+REVIEW_CHUNK_MARKER = "GLM_HIERARCHY_REVIEW_CHUNK="
+
 
 @dataclass(frozen=True)
 class ClaudeReview:
     assignments: list[dict[str, Any]]
     model_usage: dict[str, Any]
     cost_usd: float
+
+
+def review_package_from_chunks(output: str) -> dict[str, Any]:
+    """Read one compressed hierarchy review package from task output."""
+    chunks = {}
+    expected_count = None
+    for line in output.splitlines():
+        if REVIEW_CHUNK_MARKER not in line:
+            continue
+        record = line.partition(REVIEW_CHUNK_MARKER)[2]
+        header, separator, chunk = record.partition(":")
+        if not separator:
+            raise ValueError("A hierarchy review chunk has no separator")
+        index_text, separator, count_text = header.partition("/")
+        if not separator:
+            raise ValueError("A hierarchy review chunk has no count")
+        index = int(index_text)
+        count = int(count_text)
+        if expected_count is not None and count != expected_count:
+            raise ValueError("Hierarchy review chunk counts differ")
+        expected_count = count
+        chunks[index] = chunk
+    if expected_count is None:
+        raise ValueError("The task output has no hierarchy review chunks")
+    missing = sorted(set(range(expected_count)) - set(chunks))
+    if missing:
+        raise ValueError(f"Hierarchy review chunks are missing indices {missing}")
+    encoded = "".join(chunks[index] for index in range(expected_count))
+    return json.loads(gzip.decompress(base64.b64decode(encoded)))
 
 
 def review_indices(
@@ -248,7 +281,7 @@ def main() -> None:
         parser.error("--batch-size and --max-budget-usd must be positive")
     if not args.claude_model.startswith("claude-"):
         parser.error("--claude-model must be a full model ID")
-    package = json.load(sys.stdin)
+    package = review_package_from_chunks(sys.stdin.read())
     review = claude_assignments(package, args.claude_model, args.batch_size, args.max_budget_usd)
     result = comparison(package, review.assignments)
     result["claude_model"] = args.claude_model

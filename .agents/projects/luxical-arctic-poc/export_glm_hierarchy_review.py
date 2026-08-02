@@ -4,13 +4,17 @@
 """Export private review samples from a completed GLM hierarchy run."""
 
 import argparse
+import base64
+import gzip
 import json
 from dataclasses import asdict
 from typing import Any
 
 from glm_hierarchical_labels import FORMS, OUTPUT_ROOT, HierarchicalAssignment, parse_hierarchy
 from glm_semantic_labels import SampleDocument, read_json, read_jsonl
-from verify_glm_hierarchy_with_claude import review_indices
+from verify_glm_hierarchy_with_claude import REVIEW_CHUNK_MARKER, review_indices
+
+REVIEW_CHUNK_SIZE = 8_000
 
 
 def review_package(
@@ -44,9 +48,8 @@ def export_review(
     variant: str,
     representative_size: int,
     stress_size: int,
-    output: str,
 ) -> None:
-    """Load one complete hierarchy and write its private review package."""
+    """Load one complete hierarchy and stream its private review package."""
     root = OUTPUT_ROOT / run_id
     documents = [SampleDocument(**row) for row in read_jsonl(root.parent.parent / "sample-private.jsonl.gz")]
     taxonomy = read_json(str(root / variant / "taxonomy.json"))
@@ -56,8 +59,11 @@ def export_review(
     if len(documents) != 1_000 or len(assignments) != len(documents):
         raise ValueError("The hierarchy review inputs are not complete")
     package = review_package(documents, assignments, taxonomy, representative_size, stress_size)
-    with open(output, "w") as file:
-        json.dump(package, file, ensure_ascii=False, sort_keys=True)
+    compressed = gzip.compress(json.dumps(package, ensure_ascii=False, sort_keys=True).encode())
+    encoded = base64.b64encode(compressed).decode()
+    chunks = [encoded[start : start + REVIEW_CHUNK_SIZE] for start in range(0, len(encoded), REVIEW_CHUNK_SIZE)]
+    for index, chunk in enumerate(chunks):
+        print(f"{REVIEW_CHUNK_MARKER}{index:04d}/{len(chunks):04d}:{chunk}")
 
 
 def main() -> None:
@@ -67,9 +73,8 @@ def main() -> None:
     parser.add_argument("--variant", choices=("compact", "balanced"), required=True)
     parser.add_argument("--representative-size", type=int, default=100)
     parser.add_argument("--stress-size", type=int, default=50)
-    parser.add_argument("--output", required=True)
     args = parser.parse_args()
-    export_review(args.run_id, args.variant, args.representative_size, args.stress_size, args.output)
+    export_review(args.run_id, args.variant, args.representative_size, args.stress_size)
 
 
 if __name__ == "__main__":

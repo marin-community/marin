@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import base64
+import gzip
 import json
 import sys
 from pathlib import Path
@@ -10,7 +12,13 @@ import pytest
 PROJECT = Path(__file__).parents[2] / ".agents" / "projects" / "luxical-arctic-poc"
 sys.path.insert(0, str(PROJECT))
 
-from verify_glm_hierarchy_with_claude import comparison, parse_claude_envelope, review_indices  # noqa: E402
+from verify_glm_hierarchy_with_claude import (  # noqa: E402
+    REVIEW_CHUNK_MARKER,
+    comparison,
+    parse_claude_envelope,
+    review_indices,
+    review_package_from_chunks,
+)
 
 
 def test_review_indices_keep_representative_and_stress_samples_separate() -> None:
@@ -138,3 +146,17 @@ def test_parse_claude_envelope_records_exact_model_and_cost() -> None:
     assert review.assignments == [{"sample_index": 1}]
     assert review.model_usage == {"claude-opus-5": {"inputTokens": 10}}
     assert review.cost_usd == 0.25
+
+
+def test_review_package_from_chunks_accepts_task_prefixes_and_reorders_chunks() -> None:
+    package = {"documents": [{"sample_index": 1, "text": "private"}]}
+    encoded = base64.b64encode(gzip.compress(json.dumps(package).encode())).decode()
+    split = len(encoded) // 2
+    output = "\n".join(
+        [
+            f"task prefix {REVIEW_CHUNK_MARKER}0001/0002:{encoded[split:]}",
+            f"task prefix {REVIEW_CHUNK_MARKER}0000/0002:{encoded[:split]}",
+        ]
+    )
+
+    assert review_package_from_chunks(output) == package
