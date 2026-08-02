@@ -427,3 +427,26 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - MHEP-003 change: Median MFU improves by 2.2465 percentage points, or 10.3% relative. Last-sample throughput improves by 7.8%.
 - Training: Final loss is 6.0858. Final MoE drop fraction is 9.6786%, within 0.038 percentage points of MHEP-003.
 - Decision: Keep the structured custom VJPs. MHEP-005 will change only the capacity factor from 1.0 to 1.0625. This tests the smallest configuration change that can reduce dropped assignments.
+
+### 2026-08-02 02:48 UTC - MHEP-005 local gate passed
+
+- Code snapshot: `bccd8eb809`.
+- Change: The hero capacity factor increases from 1.0 to 1.0625. Model structure, routing, dispatch code, collectives, optimizer, batch, mesh, and runtime settings stay unchanged.
+- Tests: The four EP hero tests passed. Changed-file pre-commit checks passed.
+- Dry run: The plan resolves capacity factor 1.0625, fixed all-to-all with gather dispatch and custom adjoints, 25 steps, batch 1024, EP64, and 16 workers with four GB200 GPUs each.
+
+### 2026-08-02 02:48 UTC - MHEP-005 launch contract ready
+
+- Hypothesis: Capacity factor 1.0625 reduces the MHEP-004 final drop fraction of 9.6786% with a small MFU cost.
+- Run ID: `mhep-005-capacity-25-20260802-0248`.
+- Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 50 --job-name mhep-005-capacity-25-20260802-0248-coord -e WANDB_MODE offline -- python -m experiments.grug.moe_hero_ep.launch --run-id mhep-005-capacity-25-20260802-0248 --num-steps 25 --version 2026.08.02 --run`.
+- Code snapshot: `bccd8eb809`; the clean launch commit will include this log entry.
+- Output identity: `s3://marin-us-east-02a/marin/grug/mhep-005-capacity-25-20260802-0248/2026.08.02`.
+- Hardware: 16 workers with four GB200 GPUs each on `cw-us-east-08a`; 64 GPUs total.
+- W&B: ID and display name `mhep-005-capacity-25-20260802-0248`, project `marin_moe`, group `moe-hero-ep`, resume `allow`, and offline mode.
+- Initialization: None.
+- Final step: 25.
+- Checkpoint policy: No checkpoints. This gate writes metrics only.
+- DRI and babysitter: `rav`; `rav/codex` owns the monitor.
+- Stop criteria: Stop on terminal failure, non-finite loss, task retry, OOM, or incomplete step 25.
+- Next action: Commit this contract, submit the coordinator, and monitor it to a terminal state.
