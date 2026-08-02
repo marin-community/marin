@@ -75,3 +75,21 @@ def test_completion_doubles_token_limit_for_invalid_json(monkeypatch: pytest.Mon
 
     assert result == {"answer": 42}
     assert [request["max_tokens"] for request in requests] == [128, 256, 512]
+
+
+def test_assignment_accepts_missing_optional_rationale(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = {
+        "primary_bucket_id": "SCIENCE",
+        "secondary_bucket_ids": [],
+        "language": "English",
+        "document_type": "article",
+        "confidence": 0.8,
+    }
+    monkeypatch.setattr(semantic_labels, "completion", lambda *args, **kwargs: payload)
+    document = semantic_labels.SampleDocument(0, "hash", "hidden", "standard", 0, "Science text")
+    bucket = semantic_labels.Bucket("SCIENCE", "Science", "Science", [], [])
+
+    assignment = semantic_labels.assign_document("http://server", document, [bucket])
+
+    assert assignment.primary_bucket_id == "SCIENCE"
+    assert assignment.rationale == ""

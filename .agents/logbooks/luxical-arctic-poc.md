@@ -1200,3 +1200,12 @@ The taxonomy can supply labels for a direct embedding quality test.
 - The first description batch failed because one JSON response was incomplete after three attempts.
 - The child server stopped through the parent cleanup path.
 - The corrective change doubles the output-token limit on each JSON retry.
+
+### Pilot run 002
+
+- Job `/rav/lux-glm52-semantic-1000-b200-003` wrote all 1,000 descriptions.
+- GLM created 38 buckets, including the required fallback bucket.
+- The job wrote 150 assignment checkpoints.
+- One response omitted the optional rationale field on three attempts.
+- Primary and secondary bucket IDs remained valid.
+- The corrective change accepts an empty rationale while retaining all label gates.

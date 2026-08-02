@@ -377,7 +377,7 @@ def assign_document(vllm_url: str, document: SampleDocument, buckets: list[Bucke
                 language=str(payload["language"]),
                 document_type=str(payload["document_type"]),
                 confidence=confidence,
-                rationale=str(payload["rationale"]),
+                rationale=str(payload.get("rationale", "")),
             )
         except (KeyError, TypeError, ValueError):
             if attempt + 1 == MAX_ATTEMPTS:
