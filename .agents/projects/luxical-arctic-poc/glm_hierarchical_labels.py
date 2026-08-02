@@ -6,6 +6,7 @@
 import argparse
 import json
 import logging
+import re
 import time
 from collections import Counter
 from dataclasses import asdict, dataclass
@@ -233,6 +234,15 @@ def validate_hierarchy(hierarchy: Hierarchy, variant: Variant) -> None:
     if not hierarchy.precedence_rules:
         raise ValueError("The hierarchy has no precedence rules")
     known_parents = set(parent_ids)
+    known_bucket_ids = known_parents | set(leaf_ids)
+    referenced_bucket_ids = {
+        bucket_id
+        for rule in hierarchy.precedence_rules
+        for bucket_id in re.findall(r"\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b", rule)
+    }
+    unknown_bucket_ids = referenced_bucket_ids - known_bucket_ids
+    if unknown_bucket_ids:
+        raise ValueError(f"A precedence rule has unknown bucket IDs: {sorted(unknown_bucket_ids)}")
     if any(leaf.parent_id not in known_parents for leaf in hierarchy.leaves):
         raise ValueError("A hierarchy leaf has an unknown parent")
     parent_counts = Counter(leaf.parent_id for leaf in hierarchy.leaves)
@@ -246,22 +256,40 @@ def validate_hierarchy(hierarchy: Hierarchy, variant: Variant) -> None:
 def build_hierarchy(vllm_url: str, records: list[dict[str, Any]], variant: Variant, root: StoragePath) -> Hierarchy:
     """Build or restore one checked hierarchy."""
     path = root / variant.name / "taxonomy.json"
-    if path.exists():
-        hierarchy = parse_hierarchy(read_json(str(path)))
-        validate_hierarchy(hierarchy, variant)
-        return hierarchy
     messages = [{"role": "user", "content": hierarchy_prompt(records, variant)}]
+    if path.exists():
+        payload = read_json(str(path))
+        try:
+            hierarchy = parse_hierarchy(payload)
+            validate_hierarchy(hierarchy, variant)
+            return hierarchy
+        except (KeyError, TypeError, ValueError) as error:
+            messages.extend(hierarchy_correction_messages(payload, error))
     for attempt in range(MAX_ATTEMPTS):
+        payload = None
         try:
             payload = completion(vllm_url, messages, max_tokens=8_192, seed=SEED + 400_000 + attempt)
             hierarchy = parse_hierarchy(payload)
             validate_hierarchy(hierarchy, variant)
             write_json(str(path), asdict(hierarchy))
             return hierarchy
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError) as error:
             if attempt + 1 == MAX_ATTEMPTS:
                 raise
+            if payload is not None:
+                messages.extend(hierarchy_correction_messages(payload, error))
     raise AssertionError("The hierarchy retry loop did not return or raise")
+
+
+def hierarchy_correction_messages(payload: dict[str, Any], error: Exception) -> list[dict[str, str]]:
+    """Return feedback that asks the model to correct an invalid hierarchy."""
+    return [
+        {"role": "assistant", "content": json.dumps(payload)},
+        {
+            "role": "user",
+            "content": f"Correct the complete hierarchy JSON. Validation error: {error}",
+        },
+    ]
 
 
 ASSIGNMENT_SYSTEM = """Assign one document to a semantic domain hierarchy and a separate document form.

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -16,10 +17,12 @@ from glm_hierarchical_labels import (  # noqa: E402
     LeafBucket,
     Variant,
     assign_document,
+    build_hierarchy,
     hierarchy_launch_config,
     validate_hierarchy,
 )
 from glm_semantic_labels import OTHER_BUCKET_ID, Bucket, SampleDocument  # noqa: E402
+from rigging.filesystem import StoragePath  # noqa: E402
 
 
 def hierarchy() -> tuple[Hierarchy, Variant]:
@@ -52,6 +55,35 @@ def test_validate_hierarchy_rejects_leaf_with_unknown_parent() -> None:
 
     with pytest.raises(ValueError, match="unknown parent"):
         validate_hierarchy(value, variant)
+
+
+def test_validate_hierarchy_rejects_precedence_rule_with_unknown_bucket() -> None:
+    value, variant = hierarchy()
+    value = Hierarchy(value.parents, value.leaves, ["Classify forms under FORMS_TEMPLATES."])
+
+    with pytest.raises(ValueError, match=r"unknown bucket IDs.*FORMS_TEMPLATES"):
+        validate_hierarchy(value, variant)
+
+
+def test_build_hierarchy_gives_validation_error_to_retry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    value, variant = hierarchy()
+    invalid = asdict(Hierarchy(value.parents, value.leaves, ["Classify forms under FORMS_TEMPLATES."]))
+    corrected = asdict(value)
+    calls = []
+
+    def completion(*args, **kwargs):
+        calls.append(args[1].copy())
+        return invalid if len(calls) == 1 else corrected
+
+    monkeypatch.setattr(hierarchical_labels, "completion", completion)
+    (tmp_path / variant.name).mkdir()
+
+    result = build_hierarchy("http://server", [], variant, StoragePath(str(tmp_path)))
+
+    assert result == value
+    assert len(calls) == 2
+    assert calls[1][-2] == {"role": "assistant", "content": hierarchical_labels.json.dumps(invalid)}
+    assert "FORMS_TEMPLATES" in calls[1][-1]["content"]
 
 
 def test_assign_document_checks_primary_leaf_parent(monkeypatch: pytest.MonkeyPatch) -> None:
