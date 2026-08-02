@@ -15,7 +15,7 @@ from click.testing import CliRunner
 from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, HarborDatasetKind, ValidatedHarborConfig
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig, ResourceHint
-from marin.evaluation.records import EvalRef, RunStatus, read_record
+from marin.evaluation.records import DEFAULT_RECORDS_PREFIX, EvalRef, RunStatus, read_record
 from marin.evaluation.runner import (
     Evaluation,
     EvaluationBatch,
@@ -417,3 +417,23 @@ def test_launch_accepts_registry_evals_and_repeated_harbor_configs(tmp_path, mon
     assert "eval=mmlu-smoke" in result.output
     assert "eval=first-policy" in result.output
     assert "eval=second-policy" in result.output
+
+
+def test_launch_defaults_to_eval_output_root(monkeypatch):
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "launch",
+            "--model",
+            "qwen3-8b",
+            "--evals",
+            "mmlu-smoke",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert f"records={DEFAULT_RECORDS_PREFIX}" in result.output
+    assert DEFAULT_RECORDS_PREFIX.endswith("/evals")

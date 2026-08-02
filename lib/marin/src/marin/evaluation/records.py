@@ -1,18 +1,22 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The canonical eval-run record and its object-store layout.
+"""The canonical eval-run record and its object-store layouts.
 
 One eval launch writes one ``record.json`` under ``{prefix}/{run_id}/record.json``: the durable,
 self-describing account of what model was evaluated on what hardware, whether it succeeded, and the
 per-task metrics it produced. The record is the source of truth; evaldash builds its query index from
-these object-store records.
+these object-store records. New runs use an ``evals`` prefix. Evaldash also reads the former
+``eval-metadata/runs`` prefixes and the bounded artifact layout produced before pipeline evals adopted
+the shared output root.
 
 This module is import-light on purpose -- stdlib plus fsspec and Pydantic only, no marin/levanter/iris
 imports -- so it can be vendored verbatim into a standalone dashboard image that only reads records back.
 """
 
 import logging
+from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -22,12 +26,15 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_RECORDS_PREFIX = "gs://marin-eval-metadata/runs"
+DEFAULT_RECORDS_PREFIX = "gs://marin-eval-metadata/evals"
 # CoreWeave runs write records to the CW-local object store: their workers hold CW S3
 # credentials but no GCP ones. The dashboard's ingest scans both prefixes. Access from outside
 # the cluster needs `rigging.filesystem.s3_compat.configure_coreweave_s3()` first.
-CW_RECORDS_PREFIX = "s3://marin-us-east-02a/marin/eval-metadata/runs"
+CW_RECORDS_PREFIX = "s3://marin-us-east-02a/marin/evals"
+LEGACY_DEFAULT_RECORDS_PREFIX = "gs://marin-eval-metadata/runs"
+LEGACY_CW_RECORDS_PREFIX = "s3://marin-us-east-02a/marin/eval-metadata/runs"
 RECORD_FILE = "record.json"
+_MAX_RECORD_READERS = 16
 
 
 class RunStatus(StrEnum):
@@ -235,23 +242,97 @@ class RecordParseFailure:
     error: str
 
 
-def read_records(prefix: str) -> tuple[list[EvalRunRecord], list[RecordParseFailure]]:
-    """Read every ``{prefix}/*/record.json``, returning the parsed records and, separately, the paths
-    that failed to parse with their error. Parse failures are logged and collected rather than raised,
-    so one malformed record never hides the rest."""
+@dataclass(frozen=True)
+class _RecordRead:
+    record: EvalRunRecord | None = None
+    failure: RecordParseFailure | None = None
+    missing: bool = False
+
+
+@dataclass(frozen=True)
+class RecordScan:
+    """One prefix scan, including its path-keyed cache for the next pass."""
+
+    records: tuple[EvalRunRecord, ...]
+    failures: tuple[RecordParseFailure, ...]
+    records_by_path: dict[str, EvalRunRecord]
+
+
+def _directory_children(fs, path: str) -> list[str]:
+    """Immediate child directories of ``path``; an absent object-store prefix is empty."""
+    try:
+        children = fs.ls(path, detail=True)
+    except FileNotFoundError:
+        return []
+    return sorted(child["name"] for child in children if child.get("type") == "directory")
+
+
+def _read_candidates(urls: list[str], cached: Mapping[str, EvalRunRecord]) -> list[_RecordRead]:
+    def parse(url: str) -> _RecordRead:
+        if url in cached:
+            return _RecordRead(record=cached[url])
+        try:
+            return _RecordRead(record=read_record(url))
+        except FileNotFoundError:
+            return _RecordRead(missing=True)
+        except Exception as exc:
+            logger.warning("skipping unparseable eval record at %s", url, exc_info=True)
+            return _RecordRead(failure=RecordParseFailure(path=url, error=f"{type(exc).__name__}: {exc}"))
+
+    with ThreadPoolExecutor(max_workers=min(_MAX_RECORD_READERS, max(1, len(urls)))) as executor:
+        return list(executor.map(parse, urls))
+
+
+def scan_records(prefix: str, cached: Mapping[str, EvalRunRecord] | None = None) -> RecordScan:
+    """Scan eval records under ``prefix`` without enumerating result payloads.
+
+    Every root supports the flat ``{prefix}/{run_id}/record.json`` layout. Roots named ``evals`` also
+    include the historical artifact layout
+    ``{prefix}/{model}/{evals}/{version}/{run_id}/record.json``. Discovery uses delimiter-based
+    directory listings at these fixed depths; object-store glob implementations otherwise enumerate
+    the complete result subtree. Record bodies are read concurrently because request latency dominates
+    their small payloads.
+
+    ``cached`` maps immutable record paths from the previous successful pass to parsed records. A
+    listed path already in that cache does not issue another object GET. New paths and prior parse
+    failures are read. Deleted paths fall out of the returned cache.
+    """
+    cached = cached or {}
     fs, root = url_to_fs(prefix)
-    pattern = f"{root.rstrip('/')}/*/{RECORD_FILE}"
     protocol = f"{prefix.split('://', 1)[0]}://" if "://" in prefix else ""
     records: list[EvalRunRecord] = []
     failures: list[RecordParseFailure] = []
-    for match in sorted(fs.glob(pattern)):
-        url = f"{protocol}{match}"
-        try:
-            records.append(read_record(url))
-        except Exception as exc:
-            logger.warning("skipping unparseable eval record at %s", url, exc_info=True)
-            failures.append(RecordParseFailure(path=url, error=f"{type(exc).__name__}: {exc}"))
-    return records, failures
+
+    top_level = _directory_children(fs, root)
+    flat_urls = [f"{protocol}{directory}/{RECORD_FILE}" for directory in top_level]
+    flat_reads = _read_candidates(flat_urls, cached)
+    records_by_path: dict[str, EvalRunRecord] = {}
+    for url, result in zip(flat_urls, flat_reads, strict=True):
+        if result.record is not None:
+            records.append(result.record)
+            records_by_path[url] = result.record
+        if result.failure is not None:
+            failures.append(result.failure)
+
+    if prefix.rstrip("/").endswith("/evals"):
+        artifact_roots = [directory for directory, result in zip(top_level, flat_reads, strict=True) if result.missing]
+        artifact_runs = artifact_roots
+        for _ in range(3):
+            artifact_runs = [child for parent in artifact_runs for child in _directory_children(fs, parent)]
+        artifact_urls = [f"{protocol}{directory}/{RECORD_FILE}" for directory in artifact_runs]
+        for url, result in zip(artifact_urls, _read_candidates(artifact_urls, cached), strict=True):
+            if result.record is not None:
+                records.append(result.record)
+                records_by_path[url] = result.record
+            if result.failure is not None:
+                failures.append(result.failure)
+    return RecordScan(records=tuple(records), failures=tuple(failures), records_by_path=records_by_path)
+
+
+def read_records(prefix: str) -> tuple[list[EvalRunRecord], list[RecordParseFailure]]:
+    """Read every eval record under ``prefix`` and return records plus parse failures."""
+    scan = scan_records(prefix)
+    return list(scan.records), list(scan.failures)
 
 
 def list_records(prefix: str) -> list[EvalRunRecord]:
