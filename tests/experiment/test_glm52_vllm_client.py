@@ -2,9 +2,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from contextlib import contextmanager
+from subprocess import CompletedProcess
 
 import experiments.rollout_data.glm52_vllm as glm52_vllm
 from experiments.rollout_data.glm52_vllm import Glm52LaunchConfig, ServerConfig
+
+
+def test_ray_worker_accepts_head_shutdown(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(glm52_vllm, "wait_for_endpoint_url", lambda *args, **kwargs: "head:6379")
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return CompletedProcess(command, 1)
+
+    monkeypatch.setattr(glm52_vllm.subprocess, "run", run)
+
+    glm52_vllm._serve_ray_worker("worker", "endpoint", ["ray"], {})
+
+    assert calls[0][1]["check"] is False
 
 
 def test_run_vllm_calls_registered_client_and_stops_server(monkeypatch) -> None:

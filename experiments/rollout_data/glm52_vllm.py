@@ -266,7 +266,7 @@ def _serve_ray_worker(
             "--disable-usage-stats",
             "--block",
         ],
-        check=True,
+        check=False,
         env=environment,
     )
 
