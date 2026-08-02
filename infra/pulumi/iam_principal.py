@@ -2,10 +2,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Encrypt or decrypt one `user:<email>` principal at a time against the marin-iac KMS key.
+"""Encrypt or decrypt one `user:<email>` principal against the marin-iac KMS key.
 
-`iam_audit.py` round-trips the members *already* in iam_data.py through a JSON file for bulk
-rotation. This handles the two single-principal operations that file can't:
+Adding a grant needs the ciphertext for a new person's email; reviewing a grant PR needs the
+plaintext behind the encrypted members in the diff. This does both, one principal at a time:
 
     # Adding a grant: turn a new person's email into the snippet to paste into iam_data.py.
     uv run --package marin-iac --extra deploy python infra/pulumi/iam_principal.py encrypt alice@openathena.ai
@@ -19,8 +19,7 @@ rotation. This handles the two single-principal operations that file can't:
 the key — the same access `pulumi up`/`preview` already requires (see infra/pulumi/README.md).
 
 GCP KMS encryption is non-deterministic: encrypting the same email twice yields different
-ciphertext. That is fine for adding a brand-new grant; it is why rotating an existing member
-goes through iam_audit.py, which matches on the old ciphertext instead.
+ciphertext.
 """
 
 import argparse
@@ -31,8 +30,8 @@ from google.cloud import kms_v1
 from iac.gcp.iam_kms import crypto_key_id, decrypt_member, encrypt_email
 
 # A GcpEncryptedMember spans two lines in source (the wrapper and the `ciphertext="..."` arg),
-# and a unified diff prefixes each line independently, so the whole-member regex iam_audit.py
-# uses to scan file text can't match a diff. Match the ciphertext token alone instead.
+# and a unified diff prefixes each line independently, so match the ciphertext token alone
+# rather than the whole `GcpEncryptedMember(...)` wrapper, which a diff line can't carry.
 _CIPHERTEXT_RE = re.compile(r'ciphertext="([^"]+)"')
 
 

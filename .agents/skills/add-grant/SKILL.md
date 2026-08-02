@@ -118,3 +118,9 @@ reads a leading `*` as an alias).
   emails**. Note in the body that a reviewer should run `review-grant`, then
   `pulumi up` on the affected stack(s): `marin` for `iam_data.py`,
   `marin-<service>` for a `viewers` change.
+- Assign the PR to the grant approvers so one of them picks up `review-grant`:
+
+  ```bash
+  gh pr edit <n> --repo marin-community/marin \
+    --add-assignee yonromai,ravwojdyla,rjpower
+  ```

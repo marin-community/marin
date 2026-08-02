@@ -56,9 +56,9 @@ For example:
 
 ```
 PR #1234 grants:
-  + alice@openathena.ai  →  roles/storage.objectViewer  on project hai-gcp-models
-  + alice@openathena.ai  →  IAP viewer on evaldash.oa.dev
-  - bob@openathena.ai    →  roles/bigquery.dataViewer   (revoked)
+  + alice@openathena.ai → roles/storage.objectViewer on project hai-gcp-models
+  + alice@openathena.ai → IAP viewer on evaldash.oa.dev
+  - bob@openathena.ai → roles/bigquery.dataViewer (revoked)
 Apply this? (yes/no)
 ```
 
@@ -103,3 +103,16 @@ Read the preview before applying. For the `marin` stack, expect only the
 `IAMMember` create/delete for this grant — **any NodePool or other unexpected
 `replace`/`delete` means stop** and reconcile, exactly as the pulumi README
 warns. Once `up` is clean, tell the user the grant is live.
+
+## 6. Confirm on the PR
+
+Comment on the merged PR that `pulumi up` ran and the grant is live, so the
+requester and any watcher see the change reached production, not just `main`:
+
+```bash
+gh pr comment <n> --repo marin-community/marin \
+  --body "🤖 \`pulumi up\` on the \`<stack>\` stack succeeded — the grant is live."
+```
+
+An agent comment must begin with `🤖` (see AGENTS.md). If `pulumi up` did not run
+(the user is applying it themselves), skip this and let them confirm instead.
