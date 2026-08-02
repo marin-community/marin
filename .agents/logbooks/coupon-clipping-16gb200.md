@@ -261,3 +261,13 @@ The first wave did not produce a greater-than-5x model suitable for SFT or RL. F
 - Result: the two source coordinators are assigned, with no worker attempt or metric yet. The local rollout monitor is armed.
 - Interpretation: source throughput remains a required measurement, not a production admission threshold. A failed source or transition canary still stops only its corresponding chain.
 - Next action: collect source throughput and transition health, then monitor both automatically submitted production arms at the established 30-minute cadence.
+
+### 2026-08-02 02:15 - CC16-018 L4 wave four-hour checkpoint
+
+- Hypothesis: a physical four-layer source or uniformly sampling four positions from a stored 48-layer source can preserve at least 5x source throughput while improving the shallow phase's learning capacity relative to WD1.
+- Commit Hash: `b860bf37ef`.
+- Command: production coordinators `/power/ccx-l4-tail20-coord`, `/power/ccx-ld4-tail20-coord`, and `/power/ccx-wd2-tail10-coord` ran concurrently on `cw-us-east-08a`; metrics are W&B summaries sampled at 02:15 UTC, four hours after the L4 source-canary launch.
+- Config: physical L4 and random sample-four train 5,120 narrow updates followed by 1,280 `d3072/L48` updates. WD2 trains 5,760 `d768/L1` updates followed by 640 full-depth updates.
+- Result: physical L4 reached source step 5,108 at loss 2.5382 and 1.261M tok/s. Random sample-four reached source step 4,058 at loss 3.3038 and 1.262M tok/s. WD2 reached target step 6,201, or 442/640 tail updates, at loss 4.0695 and 196k tok/s. The completed source canaries measured median post-warmup rates of 1.310M and 1.271M tok/s for physical and random L4, 6.89x and 6.68x C0's 190.2k. All active runs reported 99.976% valid targets, zero mean capacity overflow, zero task failures, and zero preemptions. WD2's target incurred a roughly 50-minute initial data/compile stall before recovering to normal updates.
+- Interpretation: storing 48 narrow layers and freezing inactive optimizer slices did not impose a material throughput penalty versus storing four physical layers. At matched source step 4,058, however, the trailing-64 loss was 2.4457 for physical L4 and 3.3342 for random sample-four, a 0.8885 deficit for stochastic depth. The common full-depth tail will test whether distributing updates across target positions repays that source-learning penalty during adaptation.
+- Next action: require successful source checkpoints and automatic transitions for both L4 arms, finish WD2, then launch matched bounded Paloma evaluations from all three terminal checkpoints.
