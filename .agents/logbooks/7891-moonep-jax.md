@@ -158,3 +158,18 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Config: MNEP-005 settings except `XLA_PYTHON_CLIENT_MEM_FRACTION=0.84`.
 - Stop criteria: Stop on any task failure, non-finite loss, transport error, or incomplete step 3.
 - Next action: Promote 84% to a 25-step run only if MNEP-006 passes.
+
+### 2026-08-02 11:14 UTC - MNEP-006 compiler failure
+
+- Result: The 84% run failed with exit 139 during XLA scheduling, before executable launch.
+- Interpretation: The allocator split is sufficient for the program and collective pools, but the scheduler still uses its independent memory limit.
+- Source check: XLA computes the scheduler limit from 80% of device memory, input and output size, and `xla_gpu_memory_limit_slop_factor`. The default factor is 95.
+- Action: Keep the 84% allocator split and set the scheduler slop factor to 106. This raises the observed 133.22 GiB target above the 146.43 GiB original schedule without reducing collective memory.
+
+### 2026-08-02 11:14 UTC - MNEP-007 scheduler-limit smoke contract
+
+- Goal: Compile and execute three combined steps with an 84% JAX memory fraction and a 106% XLA scheduler slop factor.
+- Run ID: `mnep-007-quack-mem84-slop106-smoke-3-20260802-1114`.
+- Config: MNEP-006 settings plus `XLA_FLAGS=--xla_gpu_memory_limit_slop_factor=106`.
+- Stop criteria: Stop on any task failure, non-finite loss, transport error, or incomplete step 3.
+- Next action: Promote both memory settings to a 25-step run only if MNEP-007 passes.
