@@ -53,10 +53,9 @@ def histogram_quantile_bias(
     """Estimate the pooled QB target with one integer histogram reduction."""
     if required_bias.ndim != 2:
         raise ValueError(f"required_bias must have shape [tokens, experts], got {required_bias.shape}")
-    if current_bias.shape != (required_bias.shape[1],):
-        raise ValueError(
-            f"current_bias must have shape ({required_bias.shape[1]},), got {current_bias.shape}"
-        )
+    expected_bias_shape = (required_bias.shape[1],)
+    if current_bias.shape != expected_bias_shape:
+        raise ValueError(f"current_bias must have shape {expected_bias_shape}, got {current_bias.shape}")
     if top_k <= 0 or top_k > required_bias.shape[1]:
         raise ValueError(f"top_k must be in [1, {required_bias.shape[1]}], got {top_k}")
     if num_bins < 2:

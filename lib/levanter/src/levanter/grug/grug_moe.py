@@ -31,6 +31,7 @@ from levanter.grug._moe.common import (
     _init_weight,
     MOE_REMAT_SAVE_NAMES as MOE_REMAT_SAVE_NAMES,
     MoEExpertMlpPspecs,
+    MoonEPConfig,
     MoeActivation,
     MoeImplementation,
     PspecAxis,
@@ -45,6 +46,7 @@ from levanter.grug._moe.ep_common import (
 )
 from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
+from levanter.grug._moe.ep_moonep import _moe_mlp_ep_moonep_local
 from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.local import _moe_mlp_local
@@ -71,6 +73,7 @@ class MoEExpertMlp(eqx.Module):
     activation: MoeActivation = eqx.field(static=True)
     capacity_factor: float = eqx.field(static=True)
     expert_chunks: int = eqx.field(static=True, default=1)
+    moonep_config: MoonEPConfig | None = eqx.field(static=True, default=None)
 
     @staticmethod
     def init(
@@ -84,6 +87,7 @@ class MoEExpertMlp(eqx.Module):
         activation: MoeActivation = ActivationFunctionEnum.silu,
         capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
         expert_chunks: int = 1,
+        moonep_config: MoonEPConfig | None = None,
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
@@ -102,6 +106,7 @@ class MoEExpertMlp(eqx.Module):
             activation=activation,
             capacity_factor=capacity_factor,
             expert_chunks=expert_chunks,
+            moonep_config=moonep_config,
         )
 
     @named_call
@@ -127,6 +132,7 @@ class MoEExpertMlp(eqx.Module):
             capacity_factor=self.capacity_factor,
             report_capacity_overflow=report_capacity_overflow,
             expert_chunks=self.expert_chunks,
+            moonep_config=self.moonep_config,
         )
 
 
@@ -144,6 +150,7 @@ def moe_mlp(
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
     report_capacity_overflow: bool = False,
     expert_chunks: int = 1,
+    moonep_config: MoonEPConfig | None = None,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -158,6 +165,13 @@ def moe_mlp(
     greater than one split the expert bank into equal, statically sized chunks.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
+    if resolved_implementation == "moonep_jax":
+        if moonep_config is None:
+            raise ValueError("implementation='moonep_jax' requires moonep_config")
+        if capacity_factor != 1.0:
+            raise ValueError("implementation='moonep_jax' requires capacity_factor=1.0")
+    elif moonep_config is not None:
+        raise ValueError("moonep_config is only valid with implementation='moonep_jax'")
 
     if mesh is None:
         mesh = _current_mesh()
@@ -190,6 +204,9 @@ def moe_mlp(
 
     has_expert_axis = _mesh_has_axis(mesh, "expert")
     expert_axis_size = _mesh_axis_size(mesh, "expert")
+
+    if resolved_implementation == "moonep_jax" and (not has_expert_axis or expert_axis_size <= 1):
+        raise ValueError("implementation='moonep_jax' requires an expert axis with size greater than one")
 
     if mesh is None or mesh.empty:
         out, dropped = _moe_mlp_local(
@@ -227,6 +244,8 @@ def moe_mlp(
             shard_local_fn = _moe_mlp_ep_ragged_a2a_local
         elif resolved_implementation == "fixed_all_to_all":
             shard_local_fn = _moe_mlp_ep_fixed_a2a_local
+        elif resolved_implementation == "moonep_jax":
+            shard_local_fn = _moe_mlp_ep_moonep_local
         elif resolved_implementation == "deepep":
             shard_local_fn = _moe_mlp_ep_deepep_local
         else:
@@ -241,13 +260,19 @@ def moe_mlp(
         w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
         w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
 
+        shard_local_call = partial(
+            shard_local_fn,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+            capacity_factor=capacity_factor,
+        )
+        if resolved_implementation == "moonep_jax":
+            if moonep_config is None:
+                raise AssertionError("MoonEP config validation did not run")
+            shard_local_call = partial(shard_local_call, token_padding=moonep_config.token_padding)
+
         shard_fn = shard_map(
-            partial(
-                shard_local_fn,
-                activation_fn=activation_fn,
-                num_experts=num_experts,
-                capacity_factor=capacity_factor,
-            ),
+            shard_local_call,
             mesh=mesh,
             in_specs=(
                 batch_spec,
@@ -334,6 +359,7 @@ __all__ = [
     "MoeActivation",
     "MoEExpertMlp",
     "MoEExpertMlpPspecs",
+    "MoonEPConfig",
     "MoeImplementation",
     "PspecAxis",
     "moe_mlp",

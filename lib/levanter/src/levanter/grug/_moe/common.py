@@ -24,13 +24,14 @@ MoeImplementation: TypeAlias = Literal[
     "ring",  # Expert-parallel all-gather + psum-scatter backend.
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
     "fixed_all_to_all",  # Expert-parallel all-to-all with fixed sender/expert cells.
+    "moonep_jax",  # Dynamic redundant experts with portable JAX collectives.
     "deepep",  # Expert-parallel DeepEP intranode dispatch/combine backend.
     "scatter",  # Single-process grouped GMM with scatter-add combine.
     "sonic",  # Single-process raw Sonic Triton gather/combine backend.
     "sonic_cute",  # Single-process QuACK SM100 (Blackwell/B200) grouped-GEMM backend.
 ]
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
-_EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all", "fixed_all_to_all", "deepep")
+_EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all", "fixed_all_to_all", "moonep_jax", "deepep")
 # Local means no collectives over an expert axis. These backends can still run
 # under ordinary data/model sharding through the no-EP shard_map path.
 _LOCAL_MOE_IMPLEMENTATIONS = (
@@ -71,6 +72,17 @@ class MoEExpertMlpPspecs:
     @property
     def w_down(self) -> P:
         return P(self.expert, self.intermediate, self.hidden)
+
+
+@dataclass(frozen=True)
+class MoonEPConfig:
+    """Static MoonEP receiver-layout parameters."""
+
+    token_padding: int
+
+    def __post_init__(self) -> None:
+        if self.token_padding <= 0:
+            raise ValueError("token_padding must be positive")
 
 
 def resolve_moe_implementation(implementation: MoeImplementation | str | None) -> MoeImplementation:

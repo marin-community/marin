@@ -12,6 +12,8 @@ pairs it with the fixed hero model spec so a launcher gets both configs back fro
 import math
 from dataclasses import dataclass
 
+from levanter.grug.grug_moe import MoeImplementation, MoonEPConfig
+
 from experiments.grug.moe_hero_ep.model import GrugModelConfig
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_ep.quantile_balancing import QuantileBalancingMethod
@@ -78,6 +80,8 @@ def build_hero_configs(
     *,
     num_train_steps: int,
     batch_size: int,
+    moe_implementation: MoeImplementation = "fixed_all_to_all",
+    moonep_config: MoonEPConfig | None = None,
     qb_method: QuantileBalancingMethod = QuantileBalancingMethod.LOCAL_EXACT,
     qb_histogram_bins: int = 1000,
 ) -> tuple[GrugModelConfig, GrugMoeMuonHConfig]:
@@ -101,7 +105,8 @@ def build_hero_configs(
         initializer_std=0.5 / math.sqrt(5120),
         qk_mult=1.3,
         attention_implementation="gpu_fa4_cute",
-        moe_implementation="fixed_all_to_all",
+        moe_implementation=moe_implementation,
+        moonep_config=moonep_config,
         qb_method=qb_method,
         qb_histogram_bins=qb_histogram_bins,
         expert_chunks=1,

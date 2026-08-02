@@ -44,6 +44,7 @@ from levanter.grug.grug_moe import (
     MoeActivation,
     MoEExpertMlp,
     MoeImplementation,
+    MoonEPConfig,
     resolve_moe_implementation,
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
@@ -163,6 +164,7 @@ class GrugModelConfig:
     sconv_sites: tuple[str, ...] = ("k", "v", "attn", "mlp")
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
+    moonep_config: MoonEPConfig | None = None
     qb_method: QuantileBalancingMethod = QuantileBalancingMethod.LOCAL_EXACT
     qb_histogram_bins: int = 1000
     expert_chunks: int = 1
@@ -211,7 +213,11 @@ class GrugModelConfig:
             raise ValueError("qb_histogram_bins must be at least 2")
         if self.num_shared_experts <= 0:
             raise ValueError("num_shared_experts must be positive")
-        resolve_moe_implementation(self.moe_implementation)
+        resolved_moe = resolve_moe_implementation(self.moe_implementation)
+        if resolved_moe == "moonep_jax" and self.moonep_config is None:
+            raise ValueError("moe_implementation='moonep_jax' requires moonep_config")
+        if resolved_moe != "moonep_jax" and self.moonep_config is not None:
+            raise ValueError("moonep_config is only valid with moe_implementation='moonep_jax'")
 
     @property
     def Embed(self) -> Axis:
@@ -749,6 +755,7 @@ class MoEMLP(eqx.Module):
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=cfg.capacity_factor,
                 expert_chunks=cfg.expert_chunks,
+                moonep_config=cfg.moonep_config,
             ),
             cfg=cfg,
         )

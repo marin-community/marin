@@ -12,6 +12,7 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.data.text.datasets import BlockShuffleConfig
+from levanter.grug.grug_moe import MoeImplementation, MoonEPConfig, resolve_moe_implementation
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.artifact import Artifact
@@ -63,6 +64,8 @@ def build_hero_run(
     *,
     run_id: str,
     num_steps: int,
+    moe_implementation: MoeImplementation = "fixed_all_to_all",
+    moonep_token_padding: int = 128,
     qb_method: QuantileBalancingMethod = QuantileBalancingMethod.LOCAL_EXACT,
     qb_histogram_bins: int = 1000,
     version: str | None = None,
@@ -73,9 +76,12 @@ def build_hero_run(
     if num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
 
+    moonep_config = MoonEPConfig(token_padding=moonep_token_padding) if moe_implementation == "moonep_jax" else None
     model, optimizer = build_hero_configs(
         num_train_steps=num_steps,
         batch_size=HERO_EP_BATCH_SIZE,
+        moe_implementation=moe_implementation,
+        moonep_config=moonep_config,
         qb_method=qb_method,
         qb_histogram_bins=qb_histogram_bins,
     )
@@ -84,6 +90,7 @@ def build_hero_run(
     backend_tag = model.moe_implementation.replace("_", "-")
     capacity_tag = f"capacity-{model.capacity_factor:g}"
     qb_tag = f"qb-{model.qb_method.value.replace('_', '-')}"
+    experiment_tag = "MNEP" if run_id.upper().startswith("MNEP") else "MHEP"
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
     grug_trainer = GrugTrainerConfig(
         data_seed=None,
@@ -127,7 +134,7 @@ def build_hero_run(
                     capacity_tag,
                     qb_tag,
                     "gb200",
-                    "MHEP",
+                    experiment_tag,
                 ],
                 group="moe-hero-ep",
                 name=run_id,
@@ -169,6 +176,20 @@ def build_hero_run(
     help="Number of training steps.",
 )
 @click.option(
+    "--moe-implementation",
+    type=click.Choice(["fixed_all_to_all", "moonep_jax"]),
+    default="fixed_all_to_all",
+    show_default=True,
+    help="Expert-parallel transport backend.",
+)
+@click.option(
+    "--moonep-token-padding",
+    type=click.IntRange(min=1),
+    default=128,
+    show_default=True,
+    help="MoonEP compute-group padding.",
+)
+@click.option(
     "--qb-method",
     type=click.Choice([method.value for method in QuantileBalancingMethod]),
     default=QuantileBalancingMethod.LOCAL_EXACT.value,
@@ -186,12 +207,16 @@ def build_hero_run(
 def main(
     run_id: str,
     num_steps: int,
+    moe_implementation: str,
+    moonep_token_padding: int,
     qb_method: str,
     qb_histogram_bins: int,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_hero_run(
         run_id=run_id,
         num_steps=num_steps,
+        moe_implementation=resolve_moe_implementation(moe_implementation),
+        moonep_token_padding=moonep_token_padding,
         qb_method=QuantileBalancingMethod(qb_method),
         qb_histogram_bins=qb_histogram_bins,
     )

@@ -24,6 +24,7 @@ from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
     MoEExpertMlpPspecs,
+    MoonEPConfig,
     MoeImplementation,
     _compact_by_keep_mask,
     _expand_from_keep_mask,
@@ -442,7 +443,7 @@ def test_moe_expert_mlp_init_uses_logical_weight_pspecs():
     assert mlp.w_down.sharding.spec == P(None, "model", "data")
 
 
-@pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all", "fixed_all_to_all"])
+@pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all", "fixed_all_to_all", "moonep_jax"])
 def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
     mesh = _make_abstract_moe_mesh(data=2, expert=2, model=1)
 
@@ -489,6 +490,8 @@ def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
                 activation=ActivationFunctionEnum.silu,
                 implementation=implementation,
                 mesh=mesh,
+                capacity_factor=1.0 if implementation == "moonep_jax" else 1.25,
+                moonep_config=MoonEPConfig(token_padding=4) if implementation == "moonep_jax" else None,
             )
 
         platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
@@ -674,6 +677,90 @@ def test_fixed_all_to_all_matches_dense_cross_shard_value_and_gradients():
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu():
+    if jax.default_backend() != "gpu" or jax.device_count() != 4:
+        pytest.skip("requires one four-GPU GB200 tray")
+
+    mesh = Mesh(
+        np.asarray(jax.devices()),
+        axis_names=("expert",),
+        axis_types=(AxisType.Explicit,),
+    )
+    tokens = 8
+    hidden_dim = 16
+    intermediate_dim = 24
+    num_experts = 8
+    selected_experts = jnp.tile(jnp.asarray([[0, 1]], dtype=jnp.int32), (tokens, 1))
+    x = jax.random.normal(jax.random.key(51), (tokens, hidden_dim), dtype=jnp.float32)
+    combine_weights = jax.nn.softmax(jax.random.normal(jax.random.key(52), (tokens, 2)), axis=-1)
+    w_up_gate = 0.1 * jax.random.normal(
+        jax.random.key(53), (num_experts, hidden_dim, 2 * intermediate_dim), dtype=jnp.float32
+    )
+    w_down = 0.1 * jax.random.normal(
+        jax.random.key(54), (num_experts, intermediate_dim, hidden_dim), dtype=jnp.float32
+    )
+    cotangent = jax.random.normal(jax.random.key(55), x.shape, dtype=jnp.float32)
+
+    def dense_output(x, w_up_gate, w_down):
+        selected_w13 = w_up_gate[selected_experts]
+        hidden = jnp.einsum("th,tkhi->tki", x, selected_w13)
+        gate, up = jnp.split(hidden, [intermediate_dim], axis=-1)
+        expert_output = jnp.einsum(
+            "tki,tkih->tkh",
+            jax.nn.silu(gate) * up,
+            w_down[selected_experts],
+        )
+        return jnp.einsum("tkh,tk->th", expert_output, combine_weights)
+
+    expected = dense_output(x, w_up_gate, w_down)
+    expected_gradients = jax.grad(
+        lambda x, w_up_gate, w_down: jnp.sum(dense_output(x, w_up_gate, w_down) * cotangent),
+        argnums=(0, 1, 2),
+    )(x, w_up_gate, w_down)
+
+    batch_sharding = NamedSharding(mesh, P("expert", None))
+    expert_sharding = NamedSharding(mesh, P("expert", None, None))
+    x = jax.device_put(x, batch_sharding)
+    selected_experts = jax.device_put(selected_experts, batch_sharding)
+    combine_weights = jax.device_put(combine_weights, batch_sharding)
+    w_up_gate = jax.device_put(w_up_gate, expert_sharding)
+    w_down = jax.device_put(w_down, expert_sharding)
+    cotangent = jax.device_put(cotangent, batch_sharding)
+
+    def moonep_output(x, w_up_gate, w_down):
+        return moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation=jax.nn.silu,
+            implementation="moonep_jax",
+            mesh=mesh,
+            capacity_factor=1.0,
+            moonep_config=MoonEPConfig(token_padding=4),
+            report_capacity_overflow=True,
+        )
+
+    with jax.set_mesh(mesh):
+        actual, errors = moonep_output(x, w_up_gate, w_down)
+
+    np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=2e-3, atol=2e-4)
+    with jax.set_mesh(mesh):
+        actual_gradients = jax.grad(
+            lambda x, w_up_gate, w_down: jnp.sum(moonep_output(x, w_up_gate, w_down)[0] * cotangent),
+            argnums=(0, 1, 2),
+        )(x, w_up_gate, w_down)
+    for actual_gradient, expected_gradient in zip(actual_gradients, expected_gradients, strict=True):
+        np.testing.assert_allclose(
+            np.asarray(actual_gradient),
+            np.asarray(expected_gradient),
+            rtol=2e-3,
+            atol=5e-4,
+        )
+    assert int(errors) == 0
 
 
 def test_shard_a2a_params_uses_sender_side_output_offsets():
