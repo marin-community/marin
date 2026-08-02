@@ -11,19 +11,7 @@ from levanter.optim.util import CoefficientType
 from levanter.utils.jax_utils import leaf_key_paths
 
 from experiments.grug.moe_hero_ep.adamh import scale_by_adamh
-from experiments.grug.moe_hero_ep.grugmuon_hero import _grug_scale_with_muon_hero
-
-
-def _target_named_sharding(array) -> jax.sharding.NamedSharding | None:
-    if array is None or not hasattr(array, "shape"):
-        return None
-    sharding = getattr(array, "sharding", None)
-    if sharding is None:
-        aval = jax.typeof(array)
-        sharding = getattr(aval, "sharding", None)
-    if isinstance(sharding, jax.sharding.NamedSharding):
-        return sharding
-    return None
+from experiments.grug.moe_hero_ep.grugmuon_hero import _grug_scale_with_muon_hero, _target_named_sharding
 
 
 def _match_named_update_sharding() -> optax.GradientTransformation:

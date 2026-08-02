@@ -11,7 +11,6 @@ import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
-from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import BlockShuffleConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -30,8 +29,9 @@ from experiments.llama import llama3_tokenizer
 DEFAULT_HERO_STEPS = 25
 DEFAULT_WANDB_PROJECT = "marin_moe"
 HERO_EP_BATCH_SIZE = 1024
-HERO_EP_EXPERT_AXIS_SIZE = 64
 HERO_EP_NODES = 16
+HERO_GPUS_PER_NODE = 4
+HERO_EP_EXPERT_AXIS_SIZE = HERO_EP_NODES * HERO_GPUS_PER_NODE
 HERO_PROCESSES_PER_TASK = 1
 HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
 
@@ -66,6 +66,10 @@ def build_hero_run(*, run_id: str, num_steps: int, version: str | None = None) -
         raise ValueError(f"num_steps must be positive, got {num_steps}")
 
     model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=HERO_EP_BATCH_SIZE)
+    if model.moe_implementation is None:
+        raise ValueError("the EP hero requires an explicit MoE implementation")
+    backend_tag = model.moe_implementation.replace("_", "-")
+    capacity_tag = f"capacity-{model.capacity_factor:g}"
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
     grug_trainer = GrugTrainerConfig(
         data_seed=None,
@@ -79,7 +83,7 @@ def build_hero_run(*, run_id: str, num_steps: int, version: str | None = None) -
     )
     train_resources = ResourceConfig.with_gpu(
         "GB200",
-        count=4,
+        count=HERO_GPUS_PER_NODE,
         cpu=32,
         ram="256g",
         disk="256g",
@@ -95,7 +99,7 @@ def build_hero_run(*, run_id: str, num_steps: int, version: str | None = None) -
             seed=0,
             train_batch_size=HERO_EP_BATCH_SIZE,
             num_train_steps=num_steps,
-            profiler=ProfilerConfig(enabled=False, start_step=8, num_steps=0),
+            profiler=ProfilerConfig(enabled=False),
             mp=jmp.get_policy(HERO_MIXED_PRECISION),
             tracker=WandbConfig(
                 entity="marin-community",
@@ -105,10 +109,8 @@ def build_hero_run(*, run_id: str, num_steps: int, version: str | None = None) -
                     "moe",
                     "hero",
                     "ep",
-                    "fixed-a2a",
-                    "gather-dispatch",
-                    "custom-adjoint",
-                    "capacity-1.0",
+                    backend_tag,
+                    capacity_tag,
                     "gb200",
                     "MHEP",
                 ],
@@ -120,15 +122,6 @@ def build_hero_run(*, run_id: str, num_steps: int, version: str | None = None) -
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
-            checkpointer=CheckpointerConfig(
-                base_path=f"{ctx.output_path}/checkpoints",
-                temporary_base_path=None,
-                save_interval=None,
-                keep=None,
-                append_run_id_to_base_path=False,
-                delete_old_temp_checkpoints=True,
-                keep_last_temporary_checkpoints=1,
-            ),
         )
         return GrugRunConfig(
             model=model,

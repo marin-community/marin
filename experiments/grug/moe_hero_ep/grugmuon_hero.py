@@ -41,6 +41,8 @@ def _intra_rack_axes(mesh) -> list[tuple[str, int]]:
 
 
 def _target_named_sharding(array) -> NamedSharding | None:
+    if array is None or not hasattr(array, "shape"):
+        return None
     sharding = getattr(array, "sharding", None)
     if sharding is None:
         sharding = getattr(jax.typeof(array), "sharding", None)
@@ -232,18 +234,7 @@ def _newtonschulz_4d_distributed(
     orig_4d_spec = PartitionSpec(None, "expert", *trailing)
 
     if int(mesh.shape.get("expert", 1)) > 1:
-        candidate_axes = [(name, size) for name, size in mesh_shape_items if name != "expert"]
-        best_axes: tuple[str, ...] = ()
-        best_shards = 1
-        for mask in range(1, 1 << len(candidate_axes)):
-            subset = [candidate_axes[i] for i in range(len(candidate_axes)) if mask & (1 << i)]
-            prod = math.prod(size for _, size in subset)
-            if layers % prod == 0 and prod > best_shards:
-                best_axes = tuple(name for name, _ in subset)
-                best_shards = prod
-
-        layer_spec = best_axes[0] if len(best_axes) == 1 else best_axes or None
-        distributed_4d_spec = PartitionSpec(layer_spec, "expert", None, None)
+        distributed_4d_spec = PartitionSpec(None, "expert", None, None)
         x_distributed = reshard(x.astype(jnp.bfloat16), distributed_4d_spec)
         if use_syrk:
 

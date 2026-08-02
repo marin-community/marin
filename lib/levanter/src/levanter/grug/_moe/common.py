@@ -23,7 +23,7 @@ MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Ar
 MoeImplementation: TypeAlias = Literal[
     "ring",  # Expert-parallel all-gather + psum-scatter backend.
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
-    "fixed_all_to_all",  # Expert-parallel fixed-capacity all-to-all backend.
+    "fixed_all_to_all",  # Expert-parallel all-to-all with fixed sender/expert cells.
     "deepep",  # Expert-parallel DeepEP intranode dispatch/combine backend.
     "scatter",  # Single-process grouped GMM with scatter-add combine.
     "sonic",  # Single-process raw Sonic Triton gather/combine backend.

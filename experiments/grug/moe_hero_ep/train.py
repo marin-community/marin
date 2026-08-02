@@ -55,7 +55,6 @@ HERO_EP_RUNTIME_ENV = {
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
 }
 _XLA_FLAG_DEFAULTS = (
-    "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false",
     "--xla_gpu_experimental_parallel_collective_overlap_limit=4",
     "--xla_gpu_enable_latency_hiding_scheduler=true",
 )
@@ -499,8 +498,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         state = _init_state(model_key)
 
-        # This throughput reproduction intentionally produces no checkpoint.
-        checkpointer = None
         state = restore_grug_state_from_checkpoint(
             state,
             checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
@@ -628,19 +625,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)
 
-                if checkpointer is not None:
-                    checkpointer.on_step(tree=state, step=int(state.step))
         except BaseException:
-            logger.exception(
-                "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
-            )
+            logger.exception("Fatal error in grug training loop; skipping final callbacks to preserve root cause")
             raise
         else:
             # Mirror classic trainer behavior: force callbacks on the last completed step.
             state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
-            if checkpointer is not None:
-                checkpointer.on_step(tree=state, step=int(state.step), force=True)
-                checkpointer.wait_until_finished()
 
     levanter.tracker.current_tracker().finish()
 

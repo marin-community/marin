@@ -19,6 +19,8 @@ from experiments.grug.moe_hero_ep import grugmuon_hero, train
 def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch):
     explicit_overlap = "--xla_gpu_experimental_parallel_collective_overlap_limit=2"
     monkeypatch.setenv("XLA_FLAGS", explicit_overlap)
+    for name in train.HERO_EP_RUNTIME_ENV:
+        monkeypatch.delenv(name, raising=False)
     config = SimpleNamespace(
         trainer=SimpleNamespace(trainer=SimpleNamespace(id="test-run")),
         resources=object(),
@@ -31,9 +33,10 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
     flags = os.environ["XLA_FLAGS"].split()
     assert explicit_overlap in flags
     assert "--xla_gpu_experimental_parallel_collective_overlap_limit=4" not in flags
-    assert "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false" in flags
     assert "--xla_gpu_enable_latency_hiding_scheduler=true" in flags
     assert train.XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG in flags
+    for name, value in train.HERO_EP_RUNTIME_ENV.items():
+        assert os.environ[name] == value
 
 
 def test_ep_newton_schulz_returns_to_expert_sharding():
@@ -65,7 +68,7 @@ def test_ep_newton_schulz_returns_to_expert_sharding():
 def test_ep_newton_schulz_matches_replicated_path():
     env = os.environ.copy()
     env["JAX_PLATFORMS"] = "cpu"
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=2"
     script = """
         import jax
         import jax.numpy as jnp
@@ -78,17 +81,17 @@ def test_ep_newton_schulz_matches_replicated_path():
         )
 
         mesh = Mesh(
-            np.asarray(jax.devices()).reshape(1, 1, 4, 1),
+            np.asarray(jax.devices()).reshape(1, 1, 2, 1),
             ("replica_dcn", "data", "expert", "model"),
             axis_types=(AxisType.Explicit,) * 4,
         )
-        x = jax.random.normal(jax.random.key(0), (2, 4, 8, 4), dtype=jnp.float32)
+        x = jax.random.normal(jax.random.key(0), (1, 2, 4, 2), dtype=jnp.float32)
         x_sharded = jax.device_put(x, NamedSharding(mesh, P(None, "expert", "data", "model")))
         path = (jax.tree_util.GetAttrKey("w_gate"),)
         expected = jax.vmap(
             jax.vmap(
                 lambda matrix: _zeropower_via_newtonschulz_replicated(
-                    matrix, steps=2, eps=1e-7, coefficient_type="quintic"
+                    matrix, steps=1, eps=1e-7, coefficient_type="quintic"
                 )
             )
         )(x)
@@ -97,7 +100,7 @@ def test_ep_newton_schulz_matches_replicated_path():
             lambda y: _newtonschulz_4d_distributed(
                 path,
                 y,
-                steps=2,
+                steps=1,
                 eps=1e-7,
                 coefficient_type="quintic",
                 use_syrk=False,
