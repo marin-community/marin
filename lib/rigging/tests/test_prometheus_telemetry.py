@@ -1,11 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from collections import defaultdict
 from collections.abc import Iterator
 
 import pytest
 from rigging import telemetry
-from rigging.telemetry.prometheus import PrometheusForwarder
+from rigging.telemetry.prometheus import ForwardedPrometheusSample, PrometheusForwarder
 from rigging.testing import RecordingTelemetryTransport
 
 _SCRAPE = """
@@ -19,6 +20,14 @@ vllm:request_duration_seconds_sum 9
 vllm:request_duration_seconds_count 4
 # TYPE process_cpu_seconds counter
 process_cpu_seconds_total 9
+"""
+
+_RAY_SCRAPE = """
+# TYPE ray_tasks gauge
+ray_tasks{State="RUNNING",JobId="job-1",WorkerId="worker-1"} 2
+ray_tasks{State="RUNNING",JobId="job-1",WorkerId="worker-2"} 3
+# TYPE ray_tasks_internal gauge
+ray_tasks_internal{State="RUNNING",JobId="job-1"} 99
 """
 
 
@@ -45,6 +54,30 @@ def _forwarder(body: str | None) -> PrometheusForwarder:
     )
 
 
+def _ray_task_transform(families) -> tuple[ForwardedPrometheusSample, ...]:
+    tasks_by_attributes: defaultdict[tuple[tuple[str, str], ...], float] = defaultdict(float)
+    for family in families:
+        if family.name != "ray_tasks":
+            continue
+        for sample in family.samples:
+            attributes = {
+                "ray_job_id": sample.labels["JobId"],
+                "task_state": sample.labels["State"].lower(),
+            }
+            tasks_by_attributes[tuple(sorted(attributes.items()))] += float(sample.value)
+    return tuple(
+        ForwardedPrometheusSample(
+            name="tasks",
+            value=value,
+            unit="{task}",
+            attributes=dict(attributes),
+            source_kind="gauge",
+            source_temporality=telemetry.CURRENT_SNAPSHOT,
+        )
+        for attributes, value in tasks_by_attributes.items()
+    )
+
+
 def test_filtered_snapshots_preserve_prometheus_temporality(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = _transport(monkeypatch)
     labels = ",".join(f'label_{index}="x"' for index in range(62))
@@ -66,8 +99,94 @@ def test_filtered_snapshots_preserve_prometheus_temporality(monkeypatch: pytest.
     assert by_name["request_duration_seconds_sum"]["attributes"]["source_temporality"] == "cumulative_snapshot"
     assert "process_cpu_seconds_total" not in by_name
     assert "oversized" not in by_name
+    assert "prometheus_forwarded_samples" not in by_name
     assert telemetry.runtime_status().lost_records == 1
     assert by_name["prometheus_source_available"]["value"] == 1
+
+
+def test_transform_uses_exact_family_selection_and_aggregates_after_label_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _transport(monkeypatch)
+    PrometheusForwarder(
+        "http://ray/metrics",
+        metric_source="ray",
+        transform=_ray_task_transform,
+        max_forwarded_samples=128,
+        fetch=lambda _url: _RAY_SCRAPE,
+    ).poll_once()
+
+    task = transport.record("tasks", {"ray_job_id": "job-1", "task_state": "running"})
+    assert task["value"] == 5
+    assert task["unit"] == "{task}"
+    assert task["attributes"] == {
+        "metric_source": "ray",
+        "ray_job_id": "job-1",
+        "source_kind": "gauge",
+        "source_temporality": "current_snapshot",
+        "task_state": "running",
+    }
+    assert len([record for record in transport.records if record["name"] == "tasks"]) == 1
+
+
+def test_transform_output_cap_reports_dropped_samples(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = _transport(monkeypatch)
+
+    def transform(_families) -> tuple[ForwardedPrometheusSample, ...]:
+        return tuple(
+            ForwardedPrometheusSample(
+                name="bounded_metric",
+                value=index,
+                unit="1",
+                attributes={"index": str(index)},
+                source_kind="gauge",
+                source_temporality=telemetry.CURRENT_SNAPSHOT,
+            )
+            for index in range(4)
+        )
+
+    PrometheusForwarder(
+        "http://ray/metrics",
+        metric_source="ray",
+        transform=transform,
+        max_forwarded_samples=2,
+        fetch=lambda _url: _RAY_SCRAPE,
+    ).poll_once()
+
+    forwarded = transport.record("prometheus_forwarded_samples", {"metric_source": "ray"})
+    dropped = transport.record("prometheus_dropped_samples", {"metric_source": "ray"})
+    assert forwarded["value"] == 2
+    assert dropped["value"] == 2
+    assert dropped["attributes"]["drop_reason"] == "sample_limit"
+    forwarded_indices = sorted(
+        record["attributes"]["index"] for record in transport.records if record["name"] == "bounded_metric"
+    )
+    assert forwarded_indices == [
+        "0",
+        "1",
+    ]
+
+
+def test_transform_failure_is_isolated_and_reported(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = _transport(monkeypatch)
+
+    def transform(_families) -> tuple[ForwardedPrometheusSample, ...]:
+        raise RuntimeError("policy failed")
+
+    forwarder = PrometheusForwarder(
+        "http://ray/metrics",
+        metric_source="ray",
+        transform=transform,
+        max_forwarded_samples=128,
+        fetch=lambda _url: _RAY_SCRAPE,
+    )
+    forwarder.poll_once()
+
+    source = transport.record("prometheus_source_available", {"metric_source": "ray"})
+    failures = transport.record("prometheus_transform_failures", {"metric_source": "ray"})
+    assert source["value"] == 0
+    assert failures["value"] == 1
+    assert not [record for record in transport.records if record["name"] == "tasks"]
 
 
 def test_failed_scrape_skips_source_metrics_but_reports_exporter_health(monkeypatch: pytest.MonkeyPatch) -> None:
