@@ -39,12 +39,23 @@ def test_semantic_metrics_find_coherent_neighbors_and_clusters() -> None:
     primary = np.asarray(["A", "A", "A", "B", "B", "B"])
     label_sets = [frozenset((label,)) for label in primary]
 
-    metrics, neighbors = semantic_metrics(vectors, primary, label_sets, neighbor_count=1, cluster_count=2, seed=42)
+    groups = np.asarray(["one", "one", "two", "three", "three", "four"])
+    metrics, neighbors = semantic_metrics(
+        vectors,
+        primary,
+        label_sets,
+        neighbor_count=1,
+        cluster_count=2,
+        seed=42,
+        exclusion_groups=groups,
+    )
 
     assert metrics["neighbor_any_label_fraction"] == 1.0
     assert metrics["nearest_primary_macro_f1"] == 1.0
     assert metrics["cluster_nmi"] == 1.0
     assert metrics["cluster_purity"] == 1.0
+    assert metrics["cross_group_neighbor_any_label_fraction"] == 1.0
+    assert metrics["neighbor_same_group_fraction"] == 2 / 3
     assert np.all(primary[neighbors[:, 0]] == primary)
 
 
@@ -60,19 +71,27 @@ def test_student_gates_compare_semantics_health_and_speed() -> None:
         "finite_fraction": 1.0,
         "unique_fraction_4dp": 1.0,
         "effective_rank": 40.0,
+        "effective_rank_fraction": 0.4,
         "neighbor_any_label_fraction": 0.8,
         "neighbor_label_jaccard": 0.6,
         "nearest_primary_macro_f1": 0.5,
         "cluster_nmi": 0.4,
+        "cross_group_neighbor_any_label_fraction": 0.8,
+        "cross_group_neighbor_label_jaccard": 0.6,
+        "cross_group_nearest_primary_macro_f1": 0.5,
     }
     student = {
         "finite_fraction": 1.0,
         "unique_fraction_4dp": 0.999,
         "effective_rank": 20.0,
+        "effective_rank_fraction": 0.2,
         "neighbor_any_label_fraction": 0.78,
         "neighbor_label_jaccard": 0.58,
         "nearest_primary_macro_f1": 0.48,
         "cluster_nmi": 0.38,
+        "cross_group_neighbor_any_label_fraction": 0.78,
+        "cross_group_neighbor_label_jaccard": 0.58,
+        "cross_group_nearest_primary_macro_f1": 0.48,
     }
 
     assert all(student_gates(student, teacher, speed_ratio=0.8).values())

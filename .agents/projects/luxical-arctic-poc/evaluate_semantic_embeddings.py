@@ -54,11 +54,12 @@ GLM_RUN_ROOT = StoragePath(
     "s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/"
     "evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001"
 )
-OUTPUT_ROOT = GLM_RUN_ROOT / "embedding-screen-v1"
+OUTPUT_ROOT = GLM_RUN_ROOT / "embedding-screen-v2"
 NEIGHBOR_COUNT = 10
 GALLERY_DOCUMENTS = 25
 GALLERY_NEIGHBORS = 3
 SEED = 42
+SEMANTIC_REFERENCE_MODELS = ("arctic_medium", "qwen3_embedding_0.6b", "lfm2.5_embedding_350m")
 FAST_STUDENT_REPORT_URL = (
     "s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/"
     "evaluation/fast-student/full/3m/report.json"
@@ -239,15 +240,29 @@ def neighbor_gallery(
     return output
 
 
+def best_reference_metrics(model_metrics: dict[str, dict[str, object]]) -> dict[str, float]:
+    """Return the strongest teacher value for each numeric semantic metric."""
+    names = set.intersection(*(set(model_metrics[name]) for name in SEMANTIC_REFERENCE_MODELS))
+    return {
+        name: max(float(model_metrics[model][name]) for model in SEMANTIC_REFERENCE_MODELS)
+        for name in names
+        if isinstance(model_metrics[SEMANTIC_REFERENCE_MODELS[0]][name], int | float)
+    }
+
+
 def report_html(report: dict[str, Any]) -> str:
     """Return a private single-page semantic screen report."""
     metric_names = (
         "neighbor_any_label_fraction",
         "neighbor_label_jaccard",
         "nearest_primary_macro_f1",
+        "cross_group_neighbor_any_label_fraction",
+        "cross_group_neighbor_label_jaccard",
+        "cross_group_nearest_primary_macro_f1",
         "cluster_nmi",
         "cluster_purity",
         "effective_rank",
+        "effective_rank_fraction",
     )
     rows = []
     for name, metrics in report["models"].items():
@@ -304,6 +319,7 @@ def main() -> None:
     label_sets = [
         frozenset((assignment.primary_bucket_id, *assignment.secondary_bucket_ids)) for assignment in assignments
     ]
+    sources = np.asarray([document.source for document in documents])
     model_metrics = {}
     model_neighbors = {}
     for name, vectors in models.items():
@@ -315,6 +331,7 @@ def main() -> None:
             neighbor_count=NEIGHBOR_COUNT,
             cluster_count=len(buckets),
             seed=SEED,
+            exclusion_groups=sources,
         )
         model_metrics[name] = metrics
         model_neighbors[name] = neighbors
@@ -324,19 +341,23 @@ def main() -> None:
 
     speed_report = read_json(FAST_STUDENT_REPORT_URL)
     speed_ratio = float(speed_report["comparison"]["speed_ratio"])
-    gates = student_gates(model_metrics["fast_arctic_3m"], model_metrics["qwen3_embedding_0.6b"], speed_ratio)
+    reference_metrics = best_reference_metrics(model_metrics)
+    gates = student_gates(model_metrics["fast_arctic_3m"], reference_metrics, speed_ratio)
     report = {
         "documents": len(documents),
         "taxonomy_buckets": len(buckets),
         "semantic_run_root": str(GLM_RUN_ROOT),
         "manifest_url": MANIFEST_URL,
         "manifest_sha256": manifest["sha256"],
-        "source_metadata_used_for_alignment_only": True,
+        "source_metadata_usage": ["align_saved_vectors", "exclude_same_source_neighbors"],
+        "source_metadata_used_as_quality_target": False,
         "neighbor_count": NEIGHBOR_COUNT,
         "models": model_metrics,
         "model_metadata": metadata,
         "fast_arctic_3m_cpu_speed_ratio": speed_ratio,
-        "fast_arctic_3m_gates_against_qwen": gates,
+        "semantic_reference_models": list(SEMANTIC_REFERENCE_MODELS),
+        "best_semantic_reference_metrics": reference_metrics,
+        "fast_arctic_3m_gates_against_best_teacher": gates,
         "fast_arctic_3m_all_screen_gates_passed": all(gates.values()),
         "gallery": neighbor_gallery(models, model_neighbors, documents, assignments),
     }
@@ -345,7 +366,7 @@ def main() -> None:
         "json_url": json_url,
         "html_url": html_url,
         "models": {name: metrics for name, metrics in model_metrics.items()},
-        "fast_arctic_3m_gates_against_qwen": gates,
+        "fast_arctic_3m_gates_against_best_teacher": gates,
         "fast_arctic_3m_all_screen_gates_passed": all(gates.values()),
     }
     RESULT_FILE.write_text(json.dumps(summary, sort_keys=True))

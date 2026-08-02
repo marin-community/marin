@@ -71,6 +71,21 @@ def nearest_neighbors(vectors: np.ndarray, count: int) -> np.ndarray:
     return np.take_along_axis(candidates, order, axis=1)
 
 
+def nearest_neighbors_outside_groups(vectors: np.ndarray, groups: np.ndarray, count: int) -> np.ndarray:
+    """Return cosine-neighbor indices after excluding each query group."""
+    if len(groups) != len(vectors):
+        raise ValueError("Embedding and group counts differ")
+    count = min(count, len(vectors) - max(Counter(groups).values()))
+    if count < 1:
+        raise ValueError("No cross-group neighbor is available")
+    similarities = vectors @ vectors.T
+    similarities[groups[:, None] == groups[None, :]] = -np.inf
+    candidates = np.argpartition(similarities, -count, axis=1)[:, -count:]
+    candidate_scores = np.take_along_axis(similarities, candidates, axis=1)
+    order = np.argsort(-candidate_scores, axis=1)
+    return np.take_along_axis(candidates, order, axis=1)
+
+
 def cluster_purity(primary_labels: np.ndarray, cluster_labels: np.ndarray) -> float:
     """Return the fraction assigned to the largest primary label in each cluster."""
     correct = 0
@@ -80,19 +95,12 @@ def cluster_purity(primary_labels: np.ndarray, cluster_labels: np.ndarray) -> fl
     return correct / len(primary_labels)
 
 
-def semantic_metrics(
-    vectors: np.ndarray,
+def label_neighborhood_metrics(
+    neighbors: np.ndarray,
     primary_labels: np.ndarray,
     label_sets: list[frozenset[str]],
-    neighbor_count: int,
-    cluster_count: int,
-    seed: int,
-) -> tuple[dict[str, object], np.ndarray]:
-    """Return semantic-coherence metrics and nearest-neighbor indices."""
-    normalized = normalize_embeddings(vectors)
-    if len(primary_labels) != len(normalized) or len(label_sets) != len(normalized):
-        raise ValueError("Embedding and label counts differ")
-    neighbors = nearest_neighbors(normalized, neighbor_count)
+) -> dict[str, float]:
+    """Return semantic label agreement for one neighbor matrix."""
     any_matches = []
     jaccards = []
     primary_matches = []
@@ -104,6 +112,31 @@ def semantic_metrics(
             any_matches.append(bool(intersection))
             jaccards.append(len(intersection) / len(query_labels | neighbor_labels))
         primary_matches.append(primary_labels[index] == primary_labels[row[0]])
+    return {
+        "neighbor_any_label_fraction": float(np.mean(any_matches)),
+        "neighbor_label_jaccard": float(np.mean(jaccards)),
+        "nearest_primary_accuracy": float(np.mean(primary_matches)),
+        "nearest_primary_macro_f1": float(
+            f1_score(primary_labels, primary_labels[neighbors[:, 0]], average="macro", zero_division=0)
+        ),
+    }
+
+
+def semantic_metrics(
+    vectors: np.ndarray,
+    primary_labels: np.ndarray,
+    label_sets: list[frozenset[str]],
+    neighbor_count: int,
+    cluster_count: int,
+    seed: int,
+    exclusion_groups: np.ndarray | None = None,
+) -> tuple[dict[str, object], np.ndarray]:
+    """Return semantic-coherence metrics and nearest-neighbor indices."""
+    normalized = normalize_embeddings(vectors)
+    if len(primary_labels) != len(normalized) or len(label_sets) != len(normalized):
+        raise ValueError("Embedding and label counts differ")
+    neighbors = nearest_neighbors(normalized, neighbor_count)
+    neighborhood = label_neighborhood_metrics(neighbors, primary_labels, label_sets)
 
     clustering = KMeans(n_clusters=cluster_count, n_init=10, random_state=seed).fit_predict(normalized)
     cluster_counts = np.bincount(clustering, minlength=cluster_count)
@@ -111,22 +144,19 @@ def semantic_metrics(
     pair_left, pair_right = np.triu_indices(len(normalized), k=1)
     pair_cosines = np.sum(normalized[pair_left] * normalized[pair_right], axis=1)
     rounded_unique = np.unique(np.round(normalized, decimals=4), axis=0).shape[0] / len(normalized)
+    rank = effective_rank(normalized)
     metrics: dict[str, object] = {
         "documents": len(normalized),
         "dimension": normalized.shape[1],
         "finite_fraction": float(np.isfinite(normalized).all(axis=1).mean()),
         "unique_fraction_4dp": float(rounded_unique),
-        "effective_rank": effective_rank(normalized),
+        "effective_rank": rank,
+        "effective_rank_fraction": rank / min(len(normalized) - 1, normalized.shape[1]),
         "total_variance": float(np.var(normalized, axis=0).sum()),
         "pair_cosine_mean": float(pair_cosines.mean()),
         "pair_cosine_standard_deviation": float(pair_cosines.std()),
         "neighbor_count": neighbors.shape[1],
-        "neighbor_any_label_fraction": float(np.mean(any_matches)),
-        "neighbor_label_jaccard": float(np.mean(jaccards)),
-        "nearest_primary_accuracy": float(np.mean(primary_matches)),
-        "nearest_primary_macro_f1": float(
-            f1_score(primary_labels, primary_labels[neighbors[:, 0]], average="macro", zero_division=0)
-        ),
+        **neighborhood,
         "cluster_count": cluster_count,
         "cluster_nmi": float(normalized_mutual_info_score(primary_labels, clustering)),
         "cluster_purity": float(cluster_purity(primary_labels, clustering)),
@@ -136,6 +166,13 @@ def semantic_metrics(
         ),
         "cluster_sizes_descending": sorted((int(value) for value in cluster_counts), reverse=True),
     }
+    if exclusion_groups is not None:
+        cross_group_neighbors = nearest_neighbors_outside_groups(normalized, exclusion_groups, neighbor_count)
+        cross_group = label_neighborhood_metrics(cross_group_neighbors, primary_labels, label_sets)
+        metrics["neighbor_same_group_fraction"] = float(
+            np.mean(exclusion_groups[neighbors] == exclusion_groups[:, None])
+        )
+        metrics.update({f"cross_group_{name}": value for name, value in cross_group.items()})
     return metrics, neighbors
 
 
@@ -161,15 +198,18 @@ def student_gates(student: dict[str, object], teacher: dict[str, object], speed_
     return {
         "finite": numeric_student["finite_fraction"] == 1.0,
         "unique": numeric_student["unique_fraction_4dp"] >= 0.99,
-        "effective_rank": numeric_student["effective_rank"] >= 0.5 * numeric_teacher["effective_rank"],
-        "neighbor_any_label": (
-            numeric_student["neighbor_any_label_fraction"] >= numeric_teacher["neighbor_any_label_fraction"] - 0.02
+        "effective_rank": numeric_student["effective_rank_fraction"] >= 0.5 * numeric_teacher["effective_rank_fraction"],
+        "cross_group_neighbor_any_label": (
+            numeric_student["cross_group_neighbor_any_label_fraction"]
+            >= numeric_teacher["cross_group_neighbor_any_label_fraction"] - 0.02
         ),
-        "neighbor_label_jaccard": (
-            numeric_student["neighbor_label_jaccard"] >= numeric_teacher["neighbor_label_jaccard"] - 0.02
+        "cross_group_neighbor_label_jaccard": (
+            numeric_student["cross_group_neighbor_label_jaccard"]
+            >= numeric_teacher["cross_group_neighbor_label_jaccard"] - 0.02
         ),
-        "nearest_primary_macro_f1": (
-            numeric_student["nearest_primary_macro_f1"] >= numeric_teacher["nearest_primary_macro_f1"] - 0.02
+        "cross_group_nearest_primary_macro_f1": (
+            numeric_student["cross_group_nearest_primary_macro_f1"]
+            >= numeric_teacher["cross_group_nearest_primary_macro_f1"] - 0.02
         ),
         "cluster_nmi": numeric_student["cluster_nmi"] >= numeric_teacher["cluster_nmi"] - 0.02,
         "cpu_speed": speed_ratio >= 0.8,
