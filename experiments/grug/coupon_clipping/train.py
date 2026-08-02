@@ -407,9 +407,9 @@ def _make_train_step(
     *,
     z_loss_weight: float,
     ema_beta: float | None,
-    num_layers: int,
-    random_layer_dropout_count: int | None,
-    random_layer_dropout_seed: int,
+    num_layers: int = 6,
+    random_layer_dropout_count: int | None = None,
+    random_layer_dropout_seed: int = 0,
     watch_config: WatchConfig | None = None,
 ):
     if random_layer_dropout_count is not None and not 1 <= random_layer_dropout_count < num_layers:
