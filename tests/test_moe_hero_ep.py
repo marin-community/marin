@@ -312,27 +312,37 @@ def test_run_grug_selects_collective_overlap_limit(
 
 
 @pytest.mark.parametrize(
-    ("wheel_build", "expected_prefix", "expected_pjrt_sha256"),
+    ("wheel_build", "expected_prefix", "expected_pjrt_sha256", "expected_runtime_sha256"),
     [
         (
             MoonEPJaxWheelBuild.LSA_20260802,
             "jax-f9f6bbace-xla-5d53e1e-20260802",
             "fd2724cd9f128ea1a0d1f74029ce6fcdaf7915db1a351b088316cc821ac2408d",
+            None,
         ),
         (
             MoonEPJaxWheelBuild.LSA_NCCL_2307_20260802,
             "jax-f9f6bbace-xla-5d53e1e-nccl2307-20260802",
             "a1bb00b9ed594e7d1b85251bce63660bb85c5f7a661d618af677cee481a4572a",
+            None,
         ),
         (
             MoonEPJaxWheelBuild.LSA_NCCL_2307_HYBRID_20260802,
             "jax-f9f6bbace-xla-5d53e1e-nccl2307-hybrid-resources-20260802",
             "ad8ee4dff204460f10bff5eb468957b332131203b628bf02ad2bcc0fdff73d0f",
+            None,
         ),
         (
             MoonEPJaxWheelBuild.LSA_NCCL_2307_HYBRID_WEAK_20260802,
             "jax-f9f6bbace-xla-5d53e1e-nccl2307-hybrid-weak-20260802",
             "c71148f3901030525093480bbdf6582d255d7b34af5564a636ac409b24de1ffa",
+            None,
+        ),
+        (
+            MoonEPJaxWheelBuild.LSA_NCCL_2307_FULL_MNNVL_20260802,
+            "jax-f9f6bbace-xla-5d53e1e-nccl2307-hybrid-weak-20260802",
+            "c71148f3901030525093480bbdf6582d255d7b34af5564a636ac409b24de1ffa",
+            "e38471a61852b2ec56265a1d39b866a33d65b340498380c1ba2101c77e729b38",
         ),
     ],
 )
@@ -340,6 +350,7 @@ def test_run_grug_adds_verified_jax_wheels_after_standard_gpu_setup(
     wheel_build: MoonEPJaxWheelBuild,
     expected_prefix: str,
     expected_pjrt_sha256: str,
+    expected_runtime_sha256: str | None,
 ):
     config = SimpleNamespace(
         model=SimpleNamespace(moe_implementation="moonep_jax"),
@@ -365,6 +376,9 @@ def test_run_grug_adds_verified_jax_wheels_after_standard_gpu_setup(
     assert expected_pjrt_sha256 in scripts[1]
     assert "40b447b71c8a45032abe9ebdbadfd9d0d434165500c27831a408a8ee053dac4d" in scripts[1]
     assert "03e838842547a66af13bc93a533ce1943dc0f2eb83026a94994eca7f47c072b4" in scripts[1]
+    if expected_runtime_sha256 is not None:
+        assert expected_runtime_sha256 in scripts[1]
+        assert "nvidia/nccl/lib/libnccl.so.2" in scripts[1]
     assert "staging CUDA toolchain" in scripts[2]
 
 

@@ -659,3 +659,37 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-hybrid-weak-20260802`.
 - Local gate: The four-GPU 640 MiB probe passed in 3.867382 seconds with checksum `294912` and zero mismatches.
 - Next gate: Repeat the 4 KiB and 10 MiB per-peer cases at EP64.
+
+### 2026-08-02 18:32 UTC - MNEP-031 weak-signal rack probe contract
+
+- Goal: Test explicit weak GIN signals with the minimum 4 KiB per-peer payload.
+- Run ID: `mnep-031-ragged-hybrid-weak-20260802-1832`.
+- Snapshot: `mnep-031-ragged-hybrid-weak-20260802-1832` at `81a394ee4`.
+- Gate: Require attempt-zero completion, checksum `6193152`, zero sampled mismatches, and no transport error.
+
+### 2026-08-02 18:39 UTC - MNEP-031 rules out weak signals
+
+- Result: The workers for ranks 32 through 63 failed with the same CUDA illegal address.
+- Result: Explicit weak GIN completion signals did not change the failure.
+- Next gate: Confirm the physical topology and inspect NCCL's LSA team selection.
+
+### 2026-08-02 18:44 UTC - Topology correction
+
+- Correction: All 64 GPUs are in one physical NVL72 and one MNNVL fabric.
+- NCCL reports one 64-rank clique, one 64-rank NVLink domain, and four local ranks on each worker.
+- NCCL still creates a four-rank LSA team because `p2pCrossClique` is false and `computeLsaSize` uses the worker-size greatest common divisor.
+- XLA therefore uses LSA for three peers and GIN for the other 60 peers. This is a logical transport split, not a physical rack split.
+- The earlier `remote-domain`, `lower-domain`, and `upper-domain` terms in this logbook refer to this logical rank split.
+
+### 2026-08-02 19:05 UTC - Full-MNNVL LSA runtime
+
+- Source: Clone XLA at `5d53e1e40cd` into `.agents/tmp/xla-5d53` for direct source inspection.
+- Finding: XLA follows the LSA team size that NCCL exports. It cannot use direct LSA pointers for peers outside that team.
+- Patch: Extend NCCL's LSA team to all ranks when the communicator covers one complete MNNVL domain.
+- Patch file: `experiments/grug/moe_hero_ep/nccl_patches/0001-use-full-mnnvl-domain-for-lsa.patch`.
+- Build: NCCL 2.30.7 at `73cf112`, CUDA 13.0.48, CCCL 2.8.5, GCC 14, and `sm_100`.
+- Runtime SHA-256: `e38471a61852b2ec56265a1d39b866a33d65b340498380c1ba2101c77e729b38`.
+- Artifact: `s3://marin-us-east-02a/marin/research/moonep/nccl-2.30.7-full-mnnvl-lsa-20260802/libnccl.so.2.30.7`.
+- Local gate: The four-GPU probe passed in 3.337760 seconds with checksum `294912` and zero mismatches.
+- Caveat: NCCL disables MNNVL for the one-worker probe, so only the rack gate can test the new team selection.
+- Next gate: Run the minimum balanced probe at EP64 and require the `LSA extended to full MNNVL domain` log record.

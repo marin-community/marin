@@ -21,6 +21,7 @@ class MoonEPJaxWheelBuild(StrEnum):
     LSA_NCCL_2307_20260802 = "lsa-nccl-2307-20260802"
     LSA_NCCL_2307_HYBRID_20260802 = "lsa-nccl-2307-hybrid-resources-20260802"
     LSA_NCCL_2307_HYBRID_WEAK_20260802 = "lsa-nccl-2307-hybrid-weak-20260802"
+    LSA_NCCL_2307_FULL_MNNVL_20260802 = "lsa-nccl-2307-full-mnnvl-20260802"
 
 
 @dataclass(frozen=True)
@@ -30,9 +31,18 @@ class _WheelArtifact:
 
 
 @dataclass(frozen=True)
+class _RuntimeLibraryArtifact:
+    prefix: str
+    filename: str
+    sha256: str
+    site_packages_path: str
+
+
+@dataclass(frozen=True)
 class _WheelSet:
     prefix: str
     wheels: tuple[_WheelArtifact, ...]
+    runtime_libraries: tuple[_RuntimeLibraryArtifact, ...] = ()
 
 
 _LSA_20260802 = _WheelSet(
@@ -123,6 +133,19 @@ _LSA_NCCL_2307_HYBRID_WEAK_20260802 = _WheelSet(
     ),
 )
 
+_LSA_NCCL_2307_FULL_MNNVL_20260802 = _WheelSet(
+    prefix=_LSA_NCCL_2307_HYBRID_WEAK_20260802.prefix,
+    wheels=_LSA_NCCL_2307_HYBRID_WEAK_20260802.wheels,
+    runtime_libraries=(
+        _RuntimeLibraryArtifact(
+            prefix=f"{_WHEEL_ARTIFACT_ROOT}/nccl-2.30.7-full-mnnvl-lsa-20260802",
+            filename="libnccl.so.2.30.7",
+            sha256="e38471a61852b2ec56265a1d39b866a33d65b340498380c1ba2101c77e729b38",
+            site_packages_path="nvidia/nccl/lib/libnccl.so.2",
+        ),
+    ),
+)
+
 
 def _wheel_set(build: MoonEPJaxWheelBuild) -> _WheelSet:
     if build == MoonEPJaxWheelBuild.LSA_20260802:
@@ -133,12 +156,19 @@ def _wheel_set(build: MoonEPJaxWheelBuild) -> _WheelSet:
         return _LSA_NCCL_2307_HYBRID_20260802
     if build == MoonEPJaxWheelBuild.LSA_NCCL_2307_HYBRID_WEAK_20260802:
         return _LSA_NCCL_2307_HYBRID_WEAK_20260802
+    if build == MoonEPJaxWheelBuild.LSA_NCCL_2307_FULL_MNNVL_20260802:
+        return _LSA_NCCL_2307_FULL_MNNVL_20260802
     raise ValueError(f"unknown MoonEP JAX wheel build: {build}")
 
 
 def _wheel_install_script(build: MoonEPJaxWheelBuild) -> str:
     wheel_set = _wheel_set(build)
-    wheel_records = tuple((wheel.filename, wheel.sha256) for wheel in wheel_set.wheels)
+    artifact_records = tuple((wheel_set.prefix, wheel.filename, wheel.sha256) for wheel in wheel_set.wheels) + tuple(
+        (library.prefix, library.filename, library.sha256) for library in wheel_set.runtime_libraries
+    )
+    runtime_library_records = tuple(
+        (library.filename, library.site_packages_path) for library in wheel_set.runtime_libraries
+    )
     wheel_paths = " ".join(f'"$wheel_dir/{wheel.filename}"' for wheel in wheel_set.wheels)
     return f"""set -e
 : "${{IRIS_WORKDIR:?}}"
@@ -154,11 +184,10 @@ from pathlib import Path
 
 import fsspec
 
-prefix = {wheel_set.prefix!r}
-wheels = {wheel_records!r}
+artifacts = {artifact_records!r}
 wheel_dir = Path(os.environ["IRIS_WORKDIR"]) / ".moonep-jax" / {build.value!r}
-filesystem, remote_root = fsspec.core.url_to_fs(prefix)
-for filename, expected_sha256 in wheels:
+for prefix, filename, expected_sha256 in artifacts:
+    filesystem, remote_root = fsspec.core.url_to_fs(prefix)
     digest = hashlib.sha256()
     destination = wheel_dir / filename
     with filesystem.open(f"{{remote_root}}/{{filename}}", "rb") as source, destination.open("wb") as target:
@@ -172,14 +201,27 @@ PY
 echo 'installing fixed MoonEP JAX wheels'
 uv pip install --python "$IRIS_VENV/bin/python" --no-deps --reinstall {wheel_paths}
 "$IRIS_VENV/bin/python" - <<'PY'
-import jax
-import jaxlib
+import os
+import shutil
+import sysconfig
+from importlib.metadata import version
+from pathlib import Path
 
-if jax.__version__ != "0.11.1.dev20260802+f9f6bbace":
-    raise ValueError(f"unexpected JAX version: {{jax.__version__}}")
-if jaxlib.__version__ != "0.11.1.dev0+selfbuilt":
-    raise ValueError(f"unexpected jaxlib version: {{jaxlib.__version__}}")
-print(f"fixed MoonEP JAX runtime: jax={{jax.__version__}} jaxlib={{jaxlib.__version__}}")
+wheel_dir = Path(os.environ["IRIS_WORKDIR"]) / ".moonep-jax" / {build.value!r}
+site_packages = Path(sysconfig.get_path("purelib"))
+for filename, site_packages_path in {runtime_library_records!r}:
+    source = wheel_dir / filename
+    target = site_packages / site_packages_path
+    target.unlink(missing_ok=True)
+    shutil.copy2(source, target)
+
+jax_version = version("jax")
+jaxlib_version = version("jaxlib")
+if jax_version != "0.11.1.dev20260802+f9f6bbace":
+    raise ValueError(f"unexpected JAX version: {{jax_version}}")
+if jaxlib_version != "0.11.1.dev0+selfbuilt":
+    raise ValueError(f"unexpected jaxlib version: {{jaxlib_version}}")
+print(f"fixed MoonEP JAX runtime: jax={{jax_version}} jaxlib={{jaxlib_version}}")
 PY
 """
 
