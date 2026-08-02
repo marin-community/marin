@@ -37,6 +37,11 @@ molecule neighborhoods. It also found weak government-statistics and
 technical-support neighborhoods. Its 38 labels have unclear primary-label
 precedence. This screen cannot support a production decision.
 
+All semantic neighbor, pair, rank, variance, and cluster metrics L2-normalize
+each vector first. The older source-provenance collapse report used a different
+evaluation path. Its concentration and source-probe values are historical
+context, not production trust gates.
+
 ## Required label gates
 
 GLM-5.2 creates two candidate domain hierarchies. Domain and document form are
@@ -133,3 +138,14 @@ semantic quality gate, train a nested 3M, 10M, and 30M ladder with the same
 architecture and loss. Stop the ladder when two adjacent rungs improve the
 failed metric by less than 0.005. Change the teacher or objective only when the
 teacher itself passes the failed evaluation and scale does not close the gap.
+
+Do not start a rung above 3M with the current materialized training loader.
+First add a sharded or streaming loader and prove bounded peak host memory on a
+small run. The present loader can require tens of GiB at larger rungs.
+
+The Arctic teacher embeds three head, middle, and tail windows. Short documents
+can repeat the same text, and medium documents can have overlapping windows.
+Exact repeats do not change an averaged embedding, but overlap can weight the
+middle of a document more heavily. The independent GLM labels and blind
+neighborhood review must catch a harmful effect. If the candidate fails those
+gates, test a deduplicated-window teacher before more Arctic scaling.

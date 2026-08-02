@@ -1379,3 +1379,12 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 - A 200-query blind review compares the student with the strongest saved teacher. Model names, GLM labels, and source metadata are hidden. Set order is deterministic and randomized for each query.
 - Claude will identify the visible query language and whether code is central. Code and non-English subgroup results therefore use document content instead of source names.
 - Twenty-six focused hierarchy, server, label, metric, and review tests pass.
+
+### Pre-results peer review
+
+- Rejected the branch-revert blocker. Current `origin/main` at `23d17c62f7fedb20e7f5f8fb21d05689f39711c7` is the exact merge base and an ancestor of this branch. The reviewer compared with an older base.
+- Accepted the need to state vector normalization. The production semantic path normalizes every vector before neighbor, pair, rank, variance, and cluster metrics. Older source-provenance metrics are not production gates.
+- Accepted the Arctic window-overlap caveat. Exact repeated windows do not change an average. Overlapping medium-document windows can give the middle more weight. Independent labels and blind review gate the effect.
+- Accepted the large-rung memory concern. Do not run 10M or 30M with the current materialized loader. Add and test a bounded sharded or streaming loader first.
+- The source-inventory provenance limit was already recorded. The unused results collector was already deleted. Source-name categories are not used in the production semantic gates.
+- The remaining survey, manifest-helper, old Arctic wrapper, and report-compression findings are outside the production evaluation path. They do not change saved artifacts or current trust gates.
