@@ -257,3 +257,11 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Status: The 16 GPU tasks remain pending about 53 minutes after child-job submission.
 - Evidence: The only scheduler diagnostic is `Pending on peer cw-us-east-08a`. The job has zero failures, zero preemptions, and no worker logs.
 - Decision: Keep the verified interactive request and wait for full gang admission.
+
+### 2026-08-02 00:08 UTC - MHEP-001 training started
+
+- Status: All 16 GPU tasks run on A08 with zero failures and zero preemptions.
+- Progress: Training reached step 18 of 25. Logged loss was 7.94 at step 6, 7.18 at step 10, 6.70 at step 14, and 6.40 at step 18.
+- Evidence: All workers reported the same progress and finite loss. No OOM, non-finite value, traceback, failure, or preemption appeared in the logs.
+- Telemetry caveat: A direct Finelog query is not available in this shell because its cached IAP credentials have expired. The final offline W&B artifact is the fallback metric source.
+- Next action: Monitor all tasks to a terminal state, then extract steady-step metrics from the saved artifact.
