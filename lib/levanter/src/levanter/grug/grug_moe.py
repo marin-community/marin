@@ -44,6 +44,10 @@ from levanter.grug._moe.ep_common import (
     _shard_a2a_params as _shard_a2a_params,
 )
 from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
+from levanter.grug._moe.ep_echo_receiver import (
+    _moe_mlp_ep_echo_receiver_cute_local,
+    _moe_mlp_ep_echo_receiver_local,
+)
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
@@ -227,6 +231,10 @@ def moe_mlp(
             shard_local_fn = _moe_mlp_ep_ragged_a2a_local
         elif resolved_implementation == "fixed_all_to_all":
             shard_local_fn = _moe_mlp_ep_fixed_a2a_local
+        elif resolved_implementation == "echo_receiver":
+            shard_local_fn = _moe_mlp_ep_echo_receiver_local
+        elif resolved_implementation == "echo_receiver_cute":
+            shard_local_fn = _moe_mlp_ep_echo_receiver_cute_local
         elif resolved_implementation == "deepep":
             shard_local_fn = _moe_mlp_ep_deepep_local
         else:
