@@ -726,3 +726,22 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-hybrid-cta16-20260802`.
 - Local gate: The four-GPU 640 MiB probe passed in 3.553119 seconds with checksum `294912` and zero mismatches.
 - Next gate: Repeat the 4 KiB EP64 probe on one NVL72.
+
+### 2026-08-02 19:43 UTC - MNEP-034 rules out CTA pressure
+
+- Run ID: `mnep-034-ragged-hybrid-cta16-20260802-1940`.
+- Snapshot: `mnep-034-ragged-hybrid-cta16-20260802-1940` at `3aa760408`.
+- Result: Task 10 failed with the same CUDA illegal address. Iris stopped the other 15 tasks through coscheduling.
+- Interpretation: Reducing the launch and barrier grid from 64 to 16 CTAs does not fix the cross-node path.
+- Next gate: Replace XLA's legacy hybrid barrier with the NCCL 2.30 world-GIN barrier API.
+
+### 2026-08-02 19:46 UTC - NCCL 2.30 world-GIN PJRT build
+
+- Finding: XLA PR 41903 still uses `barrierCount` and `ncclBarrierSession`, which NVIDIA documents as the pre-2.30 compatibility path.
+- Patch: Use `worldGinBarrierCount` and `ncclGinBarrierSession` for NCCL 2.30 or newer.
+- Patch: Keep a separate LSA barrier to order local P2P copies before each world-GIN barrier.
+- Patch file: `experiments/grug/moe_hero_ep/xla_patches/0004-use-nccl-230-world-gin-barriers.patch`.
+- PJRT SHA-256: `c2521e40e7cd87f445b42445ba5221771b89c754caf5fa81c92a7b47add6cb31`.
+- Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-world-gin-20260802`.
+- Local gate: The four-GPU 640 MiB probe passed in 3.785112 seconds with checksum `294912` and zero mismatches.
+- Next gate: Repeat the 4 KiB EP64 probe on one NVL72.

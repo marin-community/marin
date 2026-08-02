@@ -1,0 +1,65 @@
+diff --git a/xla/backends/gpu/collectives/nccl_communicator.cc b/xla/backends/gpu/collectives/nccl_communicator.cc
+--- a/xla/backends/gpu/collectives/nccl_communicator.cc
++++ b/xla/backends/gpu/collectives/nccl_communicator.cc
+@@ -1215,7 +1215,11 @@ NcclDeviceCommunicator::CreateFrom(const NcclCommunicator& comm,
+ #if NCCL_VERSION_CODE >= 22900
+   if (use_gin) {
+     reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
++#if NCCL_VERSION_CODE >= 23000
++    reqs.worldGinBarrierCount = requirements.barrier_count;
++#else
+     reqs.barrierCount = requirements.barrier_count;
++#endif
+     reqs.railGinBarrierCount = requirements.rail_gin_barrier_count;
+     reqs.ginSignalCount = requirements.gin_signal_count;
+     SetDevCommGinConnection(reqs, use_gin, requirements.gin_connection_full);
+diff --git a/xla/backends/gpu/runtime/ragged_all_to_all_thunk.h b/xla/backends/gpu/runtime/ragged_all_to_all_thunk.h
+--- a/xla/backends/gpu/runtime/ragged_all_to_all_thunk.h
++++ b/xla/backends/gpu/runtime/ragged_all_to_all_thunk.h
+@@ -215,6 +215,7 @@ class RaggedAllToAllThunk : public CollectiveThunk {
+   GpuDeviceCommunicator::Requirements DeviceKernelDevCommRequirements() const {
+     GpuDeviceCommunicator::Requirements requirements;
+     requirements.barrier_count = device_kernel_barrier_count();
++    requirements.lsa_barrier_count = device_kernel_barrier_count();
+     requirements.gin_signal_count = device_kernel_barrier_count();
+     requirements.gin_connection_full = true;
+     return requirements;
+diff --git a/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h b/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h
+--- a/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h
++++ b/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h
+@@ -175,10 +175,20 @@ __global__ void __launch_bounds__(512) RaggedAllToAllDeviceKernelImpl(
+     uint64_t signal_value =
+         (blockIdx.x == 0) ? gin.readSignal(signal_index) : 0;
+ 
++#if NCCL_VERSION_CODE >= 23000
++    ncclLsaBarrierSession<ncclCoopCta> lsa_bar{
++        ncclCoopCta(), dev_comm, ncclTeamTagLsa{}, blockIdx.x};
++    ncclGinBarrierSession<ncclCoopCta> world_bar{
++        ncclCoopCta(), gin, ncclTeamTagWorld(), blockIdx.x};
++    lsa_bar.sync(ncclCoopCta(), ::cuda::memory_order_acquire);
++    world_bar.sync(ncclCoopCta(), ::cuda::memory_order_acquire,
++                   ncclGinFenceLevel::None);
++#else
+     ncclBarrierSession<ncclCoopCta> bar{ncclCoopCta(), ncclTeamTagWorld(), gin,
+                                         blockIdx.x};
+     bar.sync(ncclCoopCta(), ::cuda::memory_order_acquire,
+              ncclGinFenceLevel::Relaxed);
++#endif
+ 
+     RaggedAllToAllCopy<kVectorSize>(
+         send_win, recv_win, input_offsets_ptr, send_sizes_ptr,
+@@ -194,8 +204,14 @@ __global__ void __launch_bounds__(512) RaggedAllToAllDeviceKernelImpl(
+     }
+ 
+     gin.flush(ncclCoopCta());
++#if NCCL_VERSION_CODE >= 23000
++    lsa_bar.sync(ncclCoopCta(), ::cuda::memory_order_release);
++    world_bar.sync(ncclCoopCta(), ::cuda::memory_order_release,
++                   ncclGinFenceLevel::None);
++#else
+     bar.sync(ncclCoopCta(), ::cuda::memory_order_release,
+              ncclGinFenceLevel::Relaxed);
++#endif
+   } else {
+     ncclLsaBarrierSession<ncclCoopCta> bar{ncclCoopCta(), dev_comm,
+                                            ncclTeamTagLsa{}, blockIdx.x};
