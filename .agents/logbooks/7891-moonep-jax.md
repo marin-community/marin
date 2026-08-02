@@ -127,3 +127,19 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Config: EP64, batch 1024, sequence 4096, 256 experts, top-8, and 16 workers with four GB200 GPUs each.
 - Stop criteria: Stop on task retry, OOM, non-finite loss, transport errors, or incomplete step 25.
 - Next action: Commit and tag the QuACK snapshot, submit MNEP-004 once, and monitor it to a terminal state.
+
+### 2026-08-02 10:56 UTC - MNEP-004 full-program memory failure
+
+- Result: Task 0 failed twice with exit 139 while XLA compiled the first training step. The other 15 tasks stopped through atomic rescheduling.
+- Evidence: The first attempt reported 146.43 GiB before rematerialization and 141.52 GiB after rematerialization. The compiler target was 133.22 GiB.
+- Isolation: Full-shape QuACK forward and gradient calls passed on one GB200 with 525,312 rows, hidden size 5,120, intermediate size 1,280, and eight groups.
+- Interpretation: The QuACK kernel supports the hero shape. The complete training graph exceeds the default compiler memory target and enters a failing rematerialization path.
+- Action: MNEP-004 was stopped before a third rack attempt.
+
+### 2026-08-02 10:56 UTC - MNEP-005 memory-fraction smoke contract
+
+- Goal: Compile and execute three combined steps with a 92% JAX memory fraction.
+- Run ID: `mnep-005-quack-mem92-smoke-3-20260802-1056`.
+- Config: MNEP-004 settings plus `XLA_PYTHON_CLIENT_MEM_FRACTION=0.92` and no task retries.
+- Stop criteria: Stop on any task failure, non-finite loss, transport error, or incomplete step 3.
+- Next action: Submit one rack request. Promote the memory setting to the 25-step run only if this smoke test passes.
