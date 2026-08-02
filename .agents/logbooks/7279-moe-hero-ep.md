@@ -316,3 +316,10 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Source bundle: Iris workspace bundle, 9.4 MB. The submit output did not report a content ID.
 - Status: A08 has the federated request. The coordinator waits for peer acceptance, with zero failures and zero preemptions.
 - Next action: Keep this one request and monitor it through the 25-step GPU gate.
+
+### 2026-08-02 00:53 UTC - MHEP-002 waits for full-rack admission
+
+- Coordinator: `/rav/mhep-002-fixed-25-20260802-0041-coord` runs on A08.
+- GPU job: `/rav/mhep-002-fixed-25-20260802-0041-coord/grug-train-mhep-002-fixed-25-20260802-0041`.
+- Status: All 16 GPU tasks wait before their first attempts. The coordinator and GPU job report zero failures and zero preemptions.
+- Decision: Keep the one verified request and its queue position.
