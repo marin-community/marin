@@ -10,6 +10,7 @@ PROJECT = Path(__file__).parents[2] / ".agents" / "projects" / "luxical-arctic-p
 sys.path.insert(0, str(PROJECT))
 
 from evaluate_hierarchical_embeddings import (  # noqa: E402
+    adjudicated_assignments,
     group_f1_gates,
     label_levels,
     neighborhood_review_indices,
@@ -32,6 +33,67 @@ def test_label_levels_keep_domains_and_forms_separate() -> None:
     assert levels["leaf"][1] == [frozenset({"BIOLOGY", "PYTHON"}), frozenset({"PYTHON"})]
     assert levels["form"][0].tolist() == ["RESEARCH", "CODE"]
     assert levels["form"][1] == [frozenset({"RESEARCH"}), frozenset({"CODE"})]
+
+
+def test_adjudicated_assignments_replace_only_reviewed_rows() -> None:
+    assignments = [
+        HierarchicalAssignment(0, "SCIENCE", [], "BIOLOGY", [], "GENERAL_PROSE", 0.4, "GLM"),
+        HierarchicalAssignment(1, "ARTS", [], "FICTION", [], "NARRATIVE", 0.9, "GLM"),
+    ]
+    taxonomy = {
+        "parents": [{"bucket_id": "SCIENCE"}, {"bucket_id": "ARTS"}],
+        "leaves": [
+            {"bucket_id": "BIOLOGY", "parent_id": "SCIENCE"},
+            {"bucket_id": "FICTION", "parent_id": "ARTS"},
+        ],
+    }
+    review = {
+        "adjudication": {"documents": 1},
+        "claude_assignments": [
+            {
+                "sample_index": 0,
+                "primary_parent_id": "ARTS",
+                "secondary_parent_ids": [],
+                "primary_leaf_id": "FICTION",
+                "secondary_leaf_ids": [],
+                "form_id": "NARRATIVE",
+                "confidence": 0.8,
+                "rationale": "Claude",
+            }
+        ],
+    }
+
+    result = adjudicated_assignments(assignments, taxonomy, review)
+
+    assert result[0].primary_parent_id == "ARTS"
+    assert result[0].rationale == "Claude"
+    assert result[1] == assignments[1]
+
+
+def test_adjudicated_assignments_reject_unknown_sample() -> None:
+    assignments = [HierarchicalAssignment(0, "SCIENCE", [], "BIOLOGY", [], "GENERAL_PROSE", 0.4, "GLM")]
+    taxonomy = {
+        "parents": [{"bucket_id": "SCIENCE"}],
+        "leaves": [{"bucket_id": "BIOLOGY", "parent_id": "SCIENCE"}],
+    }
+    review = {
+        "adjudication": {"documents": 1},
+        "claude_assignments": [
+            {
+                "sample_index": 2,
+                "primary_parent_id": "SCIENCE",
+                "secondary_parent_ids": [],
+                "primary_leaf_id": "BIOLOGY",
+                "secondary_leaf_ids": [],
+                "form_id": "GENERAL_PROSE",
+                "confidence": 0.8,
+                "rationale": "Claude",
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="unknown sample"):
+        adjudicated_assignments(assignments, taxonomy, review)
 
 
 def test_group_f1_gates_compare_each_large_group_with_its_best_teacher() -> None:

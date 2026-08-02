@@ -4,6 +4,7 @@
 """Evaluate saved embeddings with accepted hierarchical semantic labels."""
 
 import argparse
+import hashlib
 import json
 import logging
 from dataclasses import asdict
@@ -23,7 +24,14 @@ from evaluate_semantic_embeddings import (
     semantic_sample,
 )
 from evaluate_teacher_candidate import CANDIDATES
-from glm_hierarchical_labels import OUTPUT_ROOT, VARIANTS, HierarchicalAssignment, parse_hierarchy, validate_hierarchy
+from glm_hierarchical_labels import (
+    FORMS,
+    OUTPUT_ROOT,
+    VARIANTS,
+    HierarchicalAssignment,
+    parse_hierarchy,
+    validate_hierarchy,
+)
 from glm_semantic_labels import SampleDocument, read_json, read_jsonl, stable_order
 from rigging.filesystem import StoragePath, atomic_rename
 from semantic_embedding_metrics import (
@@ -34,6 +42,7 @@ from semantic_embedding_metrics import (
     semantic_metrics,
     student_gates,
 )
+from verify_glm_hierarchy_with_claude import validate_claude_rows
 
 SEED = 42
 DEFAULT_RUN_ID = "hierarchy-1000-20260802-001"
@@ -62,6 +71,34 @@ def hierarchical_assignments(root: StoragePath, documents: list[SampleDocument])
     if [row.sample_index for row in assignments] != expected:
         raise ValueError(f"The hierarchy assignments at {root} are not complete and aligned")
     return assignments
+
+
+def adjudicated_assignments(
+    assignments: list[HierarchicalAssignment],
+    taxonomy: dict[str, Any],
+    review: dict[str, Any],
+) -> list[HierarchicalAssignment]:
+    """Replace the reviewed low-confidence rows with valid Claude labels."""
+    rows = review.get("claude_assignments")
+    metrics = review.get("adjudication")
+    if not isinstance(rows, list) or not isinstance(metrics, dict):
+        raise ValueError("The adjudication review has no complete assignment result")
+    if int(metrics.get("documents", -1)) != len(rows):
+        raise ValueError("The adjudication review count differs from its assignments")
+    indices = [int(row["sample_index"]) for row in rows]
+    assignment_by_index = {row.sample_index: row for row in assignments}
+    if len(assignment_by_index) != len(assignments):
+        raise ValueError("The full assignment table has duplicate sample indices")
+    if not set(indices).issubset(assignment_by_index):
+        raise ValueError("The adjudication review contains an unknown sample index")
+    validation_package = {
+        "taxonomy": taxonomy | {"forms": [asdict(row) for row in FORMS]},
+        "documents": [{"sample_index": index} for index in indices],
+    }
+    validate_claude_rows(validation_package, rows)
+    for row in rows:
+        assignment_by_index[int(row["sample_index"])] = HierarchicalAssignment(**row)
+    return [assignment_by_index[row.sample_index] for row in assignments]
 
 
 def label_levels(assignments: list[HierarchicalAssignment]) -> dict[str, tuple[np.ndarray, list[frozenset[str]]]]:
@@ -288,12 +325,15 @@ def main() -> None:
     parser.add_argument("--run-id", default=DEFAULT_RUN_ID)
     parser.add_argument("--variants", nargs="+", choices=DEFAULT_VARIANTS, default=list(DEFAULT_VARIANTS))
     parser.add_argument("--evaluation-run-id")
+    parser.add_argument("--adjudication-review-url")
     parser.add_argument("--maximum-pair-count", type=int, default=DEFAULT_MAXIMUM_PAIR_COUNT)
     args = parser.parse_args()
     if args.maximum_pair_count < 1:
         parser.error("--maximum-pair-count must be positive")
     if args.evaluation_run_id is not None and len(args.variants) != 1:
         parser.error("A held-out evaluation requires exactly one accepted hierarchy variant")
+    if args.adjudication_review_url is not None and args.evaluation_run_id is None:
+        parser.error("An adjudication review requires a held-out evaluation")
     logging.basicConfig(level=logging.INFO)
 
     variant = args.variants[0]
@@ -307,7 +347,7 @@ def main() -> None:
         documents.sort(key=lambda row: row.sample_index)
         if [row.sample_index for row in documents] != list(range(len(documents))):
             raise ValueError("The held-out evaluation documents are not complete")
-        report_root = evaluation_root
+        report_root = evaluation_root / ("adjudicated-v1" if args.adjudication_review_url else "raw-v1")
     models, metadata, manifest = embedding_models(documents)
     speed_report = read_json(EXACT_SPEED_REPORT_URL)
     speed_ratio = float(speed_report["student_to_baseline_ratio"])
@@ -315,6 +355,12 @@ def main() -> None:
     variants = {}
     evaluation_assignments = None
     evaluation_neighbors = None
+    adjudication_review = None
+    adjudication_sha256 = None
+    if args.adjudication_review_url is not None:
+        adjudication_text = StoragePath(args.adjudication_review_url).read_text()
+        adjudication_sha256 = hashlib.sha256(adjudication_text.encode()).hexdigest()
+        adjudication_review = json.loads(adjudication_text)
     for variant_name in args.variants:
         current_variant_root = OUTPUT_ROOT / args.run_id / variant_name
         taxonomy = read_json(str(current_variant_root / "taxonomy.json"))
@@ -323,6 +369,8 @@ def main() -> None:
             current_variant_root / args.evaluation_run_id if args.evaluation_run_id is not None else current_variant_root
         )
         assignments = hierarchical_assignments(assignment_root, documents)
+        if adjudication_review is not None:
+            assignments = adjudicated_assignments(assignments, taxonomy, adjudication_review)
         metrics, cross_group_neighbors = variant_metrics(
             models,
             assignments,
@@ -345,6 +393,9 @@ def main() -> None:
         "fast_arctic_3m_cpu_speed_ratio": speed_ratio,
         "speed_report_url": EXACT_SPEED_REPORT_URL,
         "maximum_pair_count": args.maximum_pair_count,
+        "label_version": "adjudicated" if adjudication_review is not None else "raw_glm",
+        "adjudication_review_url": args.adjudication_review_url,
+        "adjudication_review_sha256": adjudication_sha256,
         "model_metadata": metadata,
         "variants": variants,
     }
