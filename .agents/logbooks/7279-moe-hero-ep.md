@@ -387,3 +387,27 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - MHEP-002 change: Median MFU improves by 2.5077 percentage points, or 12.9% relative. Last-sample throughput improves by 14.5%.
 - Training: Final loss is 6.0917. Final MoE drop fraction is 9.7165%, within 0.045 percentage points of MHEP-002.
 - Decision: Keep gather dispatch. MHEP-004 will add only structured custom VJPs for the dispatch and combine gathers. This tests the source-backed backward-scatter removal before any routing-capacity change.
+
+### 2026-08-02 02:26 UTC - MHEP-004 local gate passed
+
+- Code snapshot: `9ba891724`.
+- Change: Two structured custom VJPs replace generic gather transposes. Dispatch backward gathers kept send slots and sums top-k rows per token. Combine backward uses the injective slot-to-assignment inverse.
+- Scope: The backend change adds 58 net lines. The capacity-overflow test adds 24 net lines for dropped-assignment gradient checks. Routing, capacity, forward values, collectives, model, optimizer, batch, mesh, and runtime settings stay unchanged.
+- Tests: The full Grug MoE backend file passed with 15 tests and 6 skips. The capacity-overflow value and gradient test passed. The explicit four-device value-and-gradient test passed. Four EP hero tests passed. Changed-file pre-commit checks and Pyrefly passed.
+- Dry run: The plan resolves fixed all-to-all with gather-dispatch and custom-adjoint tags, 25 steps, batch 1024, EP64, and 16 workers with four GB200 GPUs each.
+
+### 2026-08-02 02:26 UTC - MHEP-004 launch contract ready
+
+- Hypothesis: Structured gather transposes improve the MHEP-003 median MFU of 21.8766% without changing loss or routing loss.
+- Run ID: `mhep-004-adjoint-25-20260802-0226`.
+- Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 50 --job-name mhep-004-adjoint-25-20260802-0226-coord -e WANDB_MODE offline -- python -m experiments.grug.moe_hero_ep.launch --run-id mhep-004-adjoint-25-20260802-0226 --num-steps 25 --version 2026.08.02 --run`.
+- Code snapshot: `9ba891724`; the clean launch commit will include this log entry.
+- Output identity: `s3://marin-us-east-02a/marin/grug/mhep-004-adjoint-25-20260802-0226/2026.08.02`.
+- Hardware: 16 workers with four GB200 GPUs each on `cw-us-east-08a`; 64 GPUs total.
+- W&B: ID and display name `mhep-004-adjoint-25-20260802-0226`, project `marin_moe`, group `moe-hero-ep`, resume `allow`, and offline mode.
+- Initialization: None.
+- Final step: 25.
+- Checkpoint policy: No checkpoints. This gate writes metrics only.
+- DRI and babysitter: `rav`; `rav/codex` owns the monitor.
+- Stop criteria: Stop on terminal failure, non-finite loss, task retry, OOM, or incomplete step 25.
+- Next action: Commit this contract, submit the coordinator, and monitor it to a terminal state.
