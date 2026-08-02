@@ -11,6 +11,8 @@ sys.path.insert(0, str(PROJECT))
 
 from semantic_embedding_metrics import (  # noqa: E402
     cosine_order_fidelity,
+    nearest_neighbors_outside_groups,
+    normalize_embeddings,
     sampled_pairs,
     semantic_metrics,
     stored_vector_rows,
@@ -62,6 +64,21 @@ def test_semantic_metrics_find_coherent_neighbors_and_clusters() -> None:
         "B": {"support": 3, "f1": 1.0},
     }
     assert np.all(primary[neighbors[:, 0]] == primary)
+
+    cross_group_neighbors = nearest_neighbors_outside_groups(normalize_embeddings(vectors), groups, 1)
+    cached_metrics, cached_neighbors = semantic_metrics(
+        vectors,
+        primary,
+        label_sets,
+        neighbor_count=1,
+        cluster_count=2,
+        seed=42,
+        exclusion_groups=groups,
+        precomputed_neighbors=neighbors,
+        precomputed_cross_group_neighbors=cross_group_neighbors,
+    )
+    assert cached_metrics == metrics
+    np.testing.assert_array_equal(cached_neighbors, neighbors)
 
 
 def test_cosine_order_fidelity_is_one_for_rotated_vectors() -> None:

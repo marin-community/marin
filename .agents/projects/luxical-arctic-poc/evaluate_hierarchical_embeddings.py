@@ -26,7 +26,14 @@ from evaluate_teacher_candidate import CANDIDATES
 from glm_hierarchical_labels import OUTPUT_ROOT, HierarchicalAssignment, parse_hierarchy
 from glm_semantic_labels import SampleDocument, read_json, read_jsonl
 from rigging.filesystem import StoragePath, atomic_rename
-from semantic_embedding_metrics import cosine_order_fidelity, semantic_metrics, student_gates
+from semantic_embedding_metrics import (
+    cosine_order_fidelity,
+    nearest_neighbors,
+    nearest_neighbors_outside_groups,
+    normalize_embeddings,
+    semantic_metrics,
+    student_gates,
+)
 
 SEED = 42
 DEFAULT_RUN_ID = "hierarchy-1000-20260802-001"
@@ -117,6 +124,12 @@ def variant_metrics(
     maximum_pair_count: int | None,
 ) -> dict[str, Any]:
     """Return per-level metrics and student gates for one hierarchy."""
+    neighbor_cache = {}
+    cross_group_neighbor_cache = {}
+    for name, vectors in models.items():
+        normalized = normalize_embeddings(vectors)
+        neighbor_cache[name] = nearest_neighbors(normalized, NEIGHBOR_COUNT)
+        cross_group_neighbor_cache[name] = nearest_neighbors_outside_groups(normalized, sources, NEIGHBOR_COUNT)
     levels = {}
     for level, (primary_labels, label_sets) in label_levels(assignments).items():
         cluster_count = len(set(primary_labels.tolist()))
@@ -132,6 +145,8 @@ def variant_metrics(
                 seed=SEED,
                 exclusion_groups=sources,
                 maximum_pair_count=maximum_pair_count,
+                precomputed_neighbors=neighbor_cache[name],
+                precomputed_cross_group_neighbors=cross_group_neighbor_cache[name],
             )
             model_metrics[name] = metrics
         qwen_vectors = models["qwen3_embedding_0.6b"]

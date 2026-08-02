@@ -163,12 +163,18 @@ def semantic_metrics(
     seed: int,
     exclusion_groups: np.ndarray | None = None,
     maximum_pair_count: int | None = None,
+    precomputed_neighbors: np.ndarray | None = None,
+    precomputed_cross_group_neighbors: np.ndarray | None = None,
 ) -> tuple[dict[str, object], np.ndarray]:
     """Return semantic-coherence metrics and nearest-neighbor indices."""
     normalized = normalize_embeddings(vectors)
     if len(primary_labels) != len(normalized) or len(label_sets) != len(normalized):
         raise ValueError("Embedding and label counts differ")
-    neighbors = nearest_neighbors(normalized, neighbor_count)
+    neighbors = precomputed_neighbors
+    if neighbors is None:
+        neighbors = nearest_neighbors(normalized, neighbor_count)
+    if len(neighbors) != len(normalized):
+        raise ValueError("The precomputed neighbor count differs from the embeddings")
     neighborhood = label_neighborhood_metrics(neighbors, primary_labels, label_sets)
 
     clustering = KMeans(n_clusters=cluster_count, n_init=10, random_state=seed).fit_predict(normalized)
@@ -201,7 +207,11 @@ def semantic_metrics(
         "cluster_sizes_descending": sorted((int(value) for value in cluster_counts), reverse=True),
     }
     if exclusion_groups is not None:
-        cross_group_neighbors = nearest_neighbors_outside_groups(normalized, exclusion_groups, neighbor_count)
+        cross_group_neighbors = precomputed_cross_group_neighbors
+        if cross_group_neighbors is None:
+            cross_group_neighbors = nearest_neighbors_outside_groups(normalized, exclusion_groups, neighbor_count)
+        if len(cross_group_neighbors) != len(normalized):
+            raise ValueError("The precomputed cross-group neighbor count differs from the embeddings")
         cross_group = label_neighborhood_metrics(cross_group_neighbors, primary_labels, label_sets)
         metrics["neighbor_same_group_fraction"] = float(
             np.mean(exclusion_groups[neighbors] == exclusion_groups[:, None])
