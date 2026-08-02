@@ -1029,6 +1029,9 @@ PROJECT_GRANTS: tuple[GcpRoleGrant, ...] = (
             GcpEncryptedMember(
                 ciphertext="CiQAKk3j6aM1cvMrBEbJ2ePmiYdFSsHrbI6/1GyeR6klqc8zNqwSQgCdtF6iwzsEl6d0eglJ/ciU1+CzdBfAAjgVXoR4PqZ65bW6xflRbssZGs8mAUedfmcOJbQSpnGhXsPo0bJy7TvjrA=="
             ),
+            GcpEncryptedMember(
+                ciphertext="CiQAKk3j6fgMf61FVEtp0V9YlyIoV1cTlbQfsX3SUjkVvhqAlp8SOQCdtF6iWgYGtbPiXHphalp6BT4zzVcGCml7SGl/0WrrOv4xvqyA/cWaE4XCV9ShI1mROr681jsQEg=="
+            ),
         ),
     ),
     GcpRoleGrant(
@@ -1056,6 +1059,9 @@ PROJECT_GRANTS: tuple[GcpRoleGrant, ...] = (
             ),
             GcpEncryptedMember(
                 ciphertext="CiQAKk3j6aM1cvMrBEbJ2ePmiYdFSsHrbI6/1GyeR6klqc8zNqwSQgCdtF6iwzsEl6d0eglJ/ciU1+CzdBfAAjgVXoR4PqZ65bW6xflRbssZGs8mAUedfmcOJbQSpnGhXsPo0bJy7TvjrA=="
+            ),
+            GcpEncryptedMember(
+                ciphertext="CiQAKk3j6fgMf61FVEtp0V9YlyIoV1cTlbQfsX3SUjkVvhqAlp8SOQCdtF6iWgYGtbPiXHphalp6BT4zzVcGCml7SGl/0WrrOv4xvqyA/cWaE4XCV9ShI1mROr681jsQEg=="
             ),
         ),
     ),
