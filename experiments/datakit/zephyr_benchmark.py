@@ -12,6 +12,7 @@ Example::
     python -m experiments.datakit.zephyr_benchmark \
         --sample-prefix s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f \
         --sources all --run-tag zephyr-100b-v1 \
+        --coordinator-cpu 8 --coordinator-ram 32g --coordinator-disk 16g \
         --pool-workers 60 --pool-cpu 16 --pool-ram 160g --pool-disk 32g \
         --task-cpu 1 --task-ram 10g --task-disk 2g \
         --chunk-storage-prefix s3://bucket/tmp/ttl=7d/zephyr-100b-v1/chunks \
@@ -65,6 +66,9 @@ def main() -> None:
     parser.add_argument("--sample-prefix", required=True)
     parser.add_argument("--sources", required=True, help="Comma-separated source names or 'all'.")
     parser.add_argument("--run-tag", required=True, help="Fresh identity tag that forces uncached benchmark stages.")
+    parser.add_argument("--coordinator-cpu", required=True, type=float)
+    parser.add_argument("--coordinator-ram", required=True)
+    parser.add_argument("--coordinator-disk", required=True)
     parser.add_argument("--pool-workers", required=True, type=int)
     parser.add_argument("--pool-cpu", required=True, type=float)
     parser.add_argument("--pool-ram", required=True)
@@ -81,6 +85,12 @@ def main() -> None:
     configure_logging(logging.INFO)
     selected_sources = None if args.sources == "all" else [name.strip() for name in args.sources.split(",")]
     sources = sample_sources(args.sample_prefix, selected_sources, args.run_tag)
+    coordinator = ResourceConfig(
+        cpu=args.coordinator_cpu,
+        ram=args.coordinator_ram,
+        disk=args.coordinator_disk,
+        preemptible=False,
+    )
     pool_worker = ResourceConfig(cpu=args.pool_cpu, ram=args.pool_ram, disk=args.pool_disk)
     task = ResourceConfig(cpu=args.task_cpu, ram=args.task_ram, disk=args.task_disk)
     scale = replace(
@@ -91,6 +101,7 @@ def main() -> None:
     with ZephyrContext(
         name="datakit-zephyr-benchmark",
         resources=pool_worker,
+        coordinator_resources=coordinator,
         max_workers=args.pool_workers,
         chunk_storage_prefix=args.chunk_storage_prefix,
         stage_runner_factory=SubprocessRunner,
