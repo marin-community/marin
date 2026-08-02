@@ -284,3 +284,27 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Tests: The full Grug MoE backend file passed with 15 tests and 6 skips. The explicit four-device value-and-gradient comparison passed. Five EP-hero and launch-contract tests passed. Changed-file pre-commit checks and Pyrefly passed.
 - Dry run: The launch plan resolves fixed all-to-all, 25 steps, batch 1024, EP64, and the same 16 by 4 GB200 resource request.
 - Next action: Wait for the MHEP-001 metric reader, record its comparable baseline, then submit the MHEP-002 one-rack gate with a 21,600-second coordinator timeout.
+
+### 2026-08-02 00:41 UTC - MHEP-001 baseline metrics recorded
+
+- Source: The final offline W&B summary in `tracker_metrics.jsonl` at `s3://marin-us-east-02a/marin/grug/mhep-001-ragged-25-20260801-2148/2026.08.01`.
+- Completion: `global_step` is 24 for the zero-based 25-step gate. Final loss is 6.0798.
+- Performance: Median MFU is 14.9614%, mean MFU is 14.7248%, p10 MFU is 12.8391%, and p90 MFU is 16.0921% over 24 samples. The last sample is 16.0705% MFU and 260,426 tokens/s.
+- Routing: Final MoE drop fraction is 2.4099% at capacity factor 1.0.
+- Result: MHEP-001 passes its GPU gate. These values are the comparison baseline for MHEP-002.
+
+### 2026-08-02 00:41 UTC - MHEP-002 launch contract ready
+
+- Hypothesis: Fixed-capacity all-to-all improves the ragged baseline MFU and completes 25 steps without gather dispatch, spill, or a custom adjoint.
+- Run ID: `mhep-002-fixed-25-20260802-0041`.
+- Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 50 --job-name mhep-002-fixed-25-20260802-0041-coord -e WANDB_MODE offline -- python -m experiments.grug.moe_hero_ep.launch --run-id mhep-002-fixed-25-20260802-0041 --num-steps 25 --version 2026.08.02 --run`.
+- Code snapshot: `63499c1ce`; the clean launch commit will include this log entry.
+- Output identity: `s3://marin-us-east-02a/marin/grug/mhep-002-fixed-25-20260802-0041/2026.08.02`.
+- Hardware: 16 workers with four GB200 GPUs each on `cw-us-east-08a`; 64 GPUs total.
+- W&B: ID and display name `mhep-002-fixed-25-20260802-0041`, project `marin_moe`, group `moe-hero-ep`, resume `allow`, and offline mode.
+- Initialization: None.
+- Final step: 25.
+- Checkpoint policy: No checkpoints. This gate writes metrics only.
+- DRI and babysitter: `rav`; `rav/codex` owns the monitor.
+- Stop criteria: Stop on terminal failure, non-finite loss, task retry, OOM, or incomplete step 25.
+- Next action: Commit this contract, submit the coordinator, and monitor it to a terminal state.
