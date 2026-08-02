@@ -745,3 +745,20 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-world-gin-20260802`.
 - Local gate: The four-GPU 640 MiB probe passed in 3.785112 seconds with checksum `294912` and zero mismatches.
 - Next gate: Repeat the 4 KiB EP64 probe on one NVL72.
+
+### 2026-08-02 19:53 UTC - MNEP-035 rules out the legacy barrier API
+
+- Run ID: `mnep-035-ragged-world-gin-20260802-1948`.
+- Snapshot: `mnep-035-ragged-world-gin-20260802-1948` at `85b74dcce`.
+- Result: Task 10 failed with the same CUDA illegal address on ranks 40 through 43.
+- Result: NCCL formed one 64-rank communicator on one NVL72 and completed initialization.
+- Interpretation: The NCCL 2.30 world-GIN barrier does not fix the device transport fault.
+- Next gate: Disable the data transfer but keep both barriers. A normal value mismatch will show that the barriers complete.
+
+### 2026-08-02 20:06 UTC - Barrier-only XLA diagnostic build
+
+- Patch: Keep the entry and exit barriers, but do not run LSA copies, GIN puts, signal waits, or GIN flushes.
+- Patch file: `experiments/grug/moe_hero_ep/xla_patches/0005-disable-transfer-for-barrier-isolation.patch`.
+- PJRT SHA-256: `d3e391455196736d8793e4a983c63ed1644fe90e8ce87e9f56635fa43c83196c`.
+- Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-barrier-only-20260802`.
+- Expected rack result: The kernel completes and the probe reports sampled value mismatches.

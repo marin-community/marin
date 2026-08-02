@@ -1,0 +1,60 @@
+diff --git a/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h b/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h
+--- a/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h
++++ b/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h
+@@ -24,6 +24,8 @@ limitations under the License.
+ 
+ namespace stream_executor::gpu {
+ 
++constexpr bool kRunRaggedAllToAllTransfers = false;
++
+ template <int64_t kSize>
+ struct alignas(kSize) DeviceVec {
+   uint8_t data[kSize];
+@@ -172,9 +174,6 @@ __global__ void __launch_bounds__(512) RaggedAllToAllDeviceKernelImpl(
+     const unsigned int signal_index = 0;
+ 
+     ncclGin gin{dev_comm, gin_context};
+-    uint64_t signal_value =
+-        (blockIdx.x == 0) ? gin.readSignal(signal_index) : 0;
+-
+ #if NCCL_VERSION_CODE >= 23000
+     ncclLsaBarrierSession<ncclCoopCta> lsa_bar{
+         ncclCoopCta(), dev_comm, ncclTeamTagLsa{}, blockIdx.x};
+@@ -192,20 +191,24 @@ __global__ void __launch_bounds__(512) RaggedAllToAllDeviceKernelImpl(
+              ncclGinFenceLevel::Relaxed);
+ #endif
+ 
+-    RaggedAllToAllCopy<kVectorSize>(
+-        send_win, recv_win, input_offsets_ptr, send_sizes_ptr,
+-        output_offsets_ptr, num_updates_per_replica, num_row_elements,
+-        input_buffer_offset_bytes, output_buffer_offset_bytes, start_lsa,
+-        lsa_size, num_ranks, &gin, world, signal_index);
+-
+-    const int num_remote_peers =
+-        (num_ranks - lsa_size) * num_updates_per_replica;
+-    if (blockIdx.x == 0) {
+-      gin.waitSignal(ncclCoopCta(), signal_index,
+-                     signal_value + num_remote_peers);
+-    }
++    if constexpr (kRunRaggedAllToAllTransfers) {
++      uint64_t signal_value =
++          (blockIdx.x == 0) ? gin.readSignal(signal_index) : 0;
++      RaggedAllToAllCopy<kVectorSize>(
++          send_win, recv_win, input_offsets_ptr, send_sizes_ptr,
++          output_offsets_ptr, num_updates_per_replica, num_row_elements,
++          input_buffer_offset_bytes, output_buffer_offset_bytes, start_lsa,
++          lsa_size, num_ranks, &gin, world, signal_index);
+ 
+-    gin.flush(ncclCoopCta());
++      const int num_remote_peers =
++          (num_ranks - lsa_size) * num_updates_per_replica;
++      if (blockIdx.x == 0) {
++        gin.waitSignal(ncclCoopCta(), signal_index,
++                       signal_value + num_remote_peers);
++      }
++
++      gin.flush(ncclCoopCta());
++    }
+ #if NCCL_VERSION_CODE >= 23000
+     lsa_bar.sync(ncclCoopCta(), ::cuda::memory_order_release);
+     world_bar.sync(ncclCoopCta(), ::cuda::memory_order_release,
