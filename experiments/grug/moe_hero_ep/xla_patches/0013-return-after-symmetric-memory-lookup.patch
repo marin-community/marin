@@ -1,0 +1,21 @@
+diff --git a/xla/backends/gpu/runtime/ragged_all_to_all_thunk.cc b/xla/backends/gpu/runtime/ragged_all_to_all_thunk.cc
+--- a/xla/backends/gpu/runtime/ragged_all_to_all_thunk.cc
++++ b/xla/backends/gpu/runtime/ragged_all_to_all_thunk.cc
+@@ -763,8 +763,6 @@ absl::Status RaggedAllToAllThunk::RunCollective(const ExecuteParams& params,
+                    ConvertToDeviceBuffers(params.buffer_allocations, buffers(),
+                                           config_.config.operand_element_type));
+ 
+-  return absl::OkStatus();
+-
+   ASSIGN_OR_RETURN(bool peer_access_enabled,
+                    params.collective_cliques->peer_access_enabled(clique_key));
+ 
+@@ -783,6 +781,8 @@ absl::Status RaggedAllToAllThunk::RunCollective(const ExecuteParams& params,
+         params.collective_memory->FindSymmetricMemory(
+             clique_key, device_buffers[1].destination_buffer);
+ 
++    return absl::OkStatus();
++
+     if (input_sym != nullptr && output_sym != nullptr) {
+       ASSIGN_OR_RETURN(int32_t num_ranks, comm.NumRanks());
+ 

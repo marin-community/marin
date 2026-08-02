@@ -882,3 +882,21 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - PJRT SHA-256: `3475c89c11683f1106290ab487f55087bd924b6de9c787153f83f9403ce9b2bf`.
 - Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-noop-after-buffer-conversion-20260802`.
 - Expected rack result: The collective completes and the probe reports sampled value mismatches.
+
+### 2026-08-02 22:11 UTC - MNEP-043 clears device-buffer conversion
+
+- Run ID: `mnep-043-ragged-noop-after-buffer-conversion-20260802-2207`.
+- Snapshot: `mnep-043-ragged-noop-after-buffer-conversion-20260802-2207` at `8fcd363b6`.
+- Result: The collective completed without a CUDA fault.
+- Result: Task 1 reported the expected 189 sampled value mismatches.
+- Interpretation: `ConvertToDeviceBuffers` is safe.
+- Echo milestone: `#1865`.
+- Next gate: Include peer-access state and symmetric-memory lookup, then return before `Comm::NumRanks`.
+
+### 2026-08-02 22:12 UTC - Return-after-symmetric-lookup XLA build
+
+- Patch: Resolve both symmetric-memory windows, then return before `Comm::NumRanks`.
+- Patch file: `experiments/grug/moe_hero_ep/xla_patches/0013-return-after-symmetric-memory-lookup.patch`.
+- PJRT SHA-256: `a5c642dd2476faf51287ad7cd5d4734b27d9ab5cc4fd1cb2353d575de8e536a8`.
+- Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-noop-after-symmetric-lookup-20260802`.
+- Expected rack result: The collective completes and the probe reports sampled value mismatches.
