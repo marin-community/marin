@@ -582,7 +582,6 @@ def test_fixed_all_to_all_drops_assignments_over_capacity():
     assert int(dropped) == 4
 
 
-@pytest.mark.slow
 def test_fixed_all_to_all_matches_dense_cross_shard_value_and_gradients():
     env = os.environ.copy()
     env["JAX_PLATFORMS"] = "cpu"

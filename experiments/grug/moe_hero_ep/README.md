@@ -3,18 +3,11 @@
 This self-contained variant is the one-rack EP64 baseline for GB200 NVL72.
 It starts from the FSDP hero at PR 7876 and changes only the parts that EP64 requires.
 
-## Current Gate
+## Result
 
-`MHEP-001` completed 25 steps with the existing JAX ragged all-to-all backend.
-`MHEP-002` completed 25 steps with fixed-capacity all-to-all dispatch.
-`MHEP-003` completed 25 steps with gather dispatch.
-`MHEP-004` completed 25 steps with structured gather transposes that avoid scatter in the backward pass.
-`MHEP-005` completed 25 steps with a fixed dispatch capacity factor of 1.0625. It was slower than `MHEP-004`.
-`MHEP-006` completed 25 steps with receiver-ECHO. It reduced drops but lost 5.9132 median MFU points.
-`MHEP-007` completed 25 steps with three spill attempts. It reduced drops but lost 0.0401 median MFU points
-and added 106 net backend and dispatch lines. `MHEP-004` is the selected minimal stack.
-`MHEP-008` passed the final 200-step gate for that stack. It measured 23.6969% median MFU,
-382,902 last-sample tokens/s, 7.4113% final MoE drop rate, and 3.3119 final loss.
+`MHEP-004` is the selected 25-step stack. Receiver-ECHO and three-choice spill reduced drops but did not
+increase MFU, so they are not in the final code. `MHEP-008` passed the 200-step gate with 23.6969% median
+MFU, 382,902 last-sample tokens/s, 7.4113% final MoE drop rate, and 3.3119 final loss.
 
 ## Configuration
 
@@ -37,9 +30,9 @@ Print the plan without a GPU run:
 
 ```bash
 python -m experiments.grug.moe_hero_ep.launch \
-  --run-id MHEP-008-final-200 \
+  --run-id mhep-008-final-200 \
   --num-steps 200 \
-  --version dev
+  --version 2026.08.02
 ```
 
 Submit the one-rack gate through the Marin Iris controller:
@@ -52,7 +45,7 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
   --job-name "${run_id}-coord" \
   -e WANDB_MODE offline \
   -- python -m experiments.grug.moe_hero_ep.launch \
-    --run-id "$run_id" --num-steps 200 --version dev --run
+    --run-id "$run_id" --num-steps 200 --version 2026.08.02 --run
 ```
 
 W&B uses project `marin_moe`, group `moe-hero-ep`, the supplied run ID, and offline mode.

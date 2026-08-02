@@ -22,7 +22,7 @@ def _dispatch_gather(
     linear_indices: Int[Array, " assignments"],
     keep: Array,
 ) -> Float[Array, "send H"]:
-    """Gather token rows into the fixed-capacity send buffer."""
+    """Gather dispatch rows with a backward gather that avoids scatter-add."""
     hidden_dim = x_local.shape[1]
     padded_x = jnp.concatenate([x_local, jnp.zeros((1, hidden_dim), x_local.dtype)], axis=0)
     return padded_x[token_sources]
@@ -53,7 +53,7 @@ def _combine_gather(
     keep: Array,
     assignment_sources: Int[Array, " send"],
 ) -> Float[Array, "assignments H"]:
-    """Gather expert outputs from send slots into assignment order."""
+    """Restore assignment order with a backward gather from unique send slots."""
     return jnp.where(keep[:, None], send_output[gather_indices], 0)
 
 
@@ -85,7 +85,13 @@ def _moe_mlp_ep_fixed_a2a_local(
     num_experts: int,
     capacity_factor: float,
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
-    """Run fixed-capacity all-to-all dispatch, expert MLPs, and combine."""
+    """Run fixed-capacity all-to-all dispatch, expert MLPs, and combine.
+
+    ``capacity_factor`` scales each fixed (sender shard, global expert) cell as
+    ``ceil(factor * local assignments / num_experts)``. An idle cell cannot lend
+    rows to a hot cell. Thus, this factor is not directly comparable to the
+    receiver-pool factor in the ragged all-to-all backend.
+    """
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
         raise ValueError(f"num_experts={num_experts} must be divisible by local expert count={local_experts}")
