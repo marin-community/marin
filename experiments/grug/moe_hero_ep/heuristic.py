@@ -94,7 +94,7 @@ def build_hero_configs(*, num_train_steps: int, batch_size: int) -> tuple[GrugMo
         initializer_std=0.5 / math.sqrt(5120),
         qk_mult=1.3,
         attention_implementation="gpu_fa4_cute",
-        moe_implementation="ragged_all_to_all",
+        moe_implementation="fixed_all_to_all",
         expert_chunks=1,
         report_capacity_overflow=True,
     )
