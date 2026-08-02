@@ -155,6 +155,10 @@ class GrugModelConfig:
     sconv: bool = False
     sconv_kernel: int = 4
     sconv_sites: tuple[str, ...] = ("k", "v", "attn", "mlp")
+    # Fuse the Q/K/V projections into a single GEMM and run one SConv over the contiguous K||V channel
+    # block (instead of two). Mathematically identical to the unfused path (per-column GEMM + depthwise
+    # conv); purely a kernel-count/tensor-core-fill optimization. Requires K and V SConv sites together.
+    fused_qkv: bool = False
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     expert_chunks: int = 1
@@ -405,27 +409,56 @@ class ShortConv(eqx.Module):
 
 
 class CausalSelfAttention(eqx.Module):
-    w_q: Float[Array, "D NH"]
-    w_k: Float[Array, "D MH"]
-    w_v: Float[Array, "D MH"]
+    w_q: "Float[Array, 'D NH'] | None"
+    w_k: "Float[Array, 'D MH'] | None"
+    w_v: "Float[Array, 'D MH'] | None"
+    w_qkv: "jax.Array | None"  # fused [D, (N+2M)H] when cfg.fused_qkv (else w_q/w_k/w_v are used)
     w_o: Float[Array, "NH D"]
     attn_gate: Float[Array, "D N"]
-    sconv_k: "ShortConv | None"  # SConv after the K projection (cfg.sconv)
-    sconv_v: "ShortConv | None"  # SConv after the V projection (cfg.sconv)
+    sconv_k: "ShortConv | None"  # SConv after the K projection (cfg.sconv, unfused)
+    sconv_v: "ShortConv | None"  # SConv after the V projection (cfg.sconv, unfused)
+    sconv_kv: "ShortConv | None"  # one SConv over the K||V block (cfg.sconv, fused)
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
         k_q, k_k, k_v, k_o = random.split(key, 4)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.stored_kv_heads, cfg.inferred_head_dim
+        w_q = _init_weight(k_q, (d, n * h), cfg.initializer_std)
+        w_k = _init_weight(k_k, (d, m * h), cfg.initializer_std)
+        w_v = _init_weight(k_v, (d, m * h), cfg.initializer_std)
+        w_o = reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data"))
+        attn_gate = reshard(jnp.zeros((d, n)), P(None, None))
+        sconv_k_on = cfg.sconv and "k" in cfg.sconv_sites
+        sconv_v_on = cfg.sconv and "v" in cfg.sconv_sites
+        if cfg.fused_qkv:
+            # Concatenate the same per-projection inits so the fused weights equal the unfused ones
+            # exactly (identical model math -> clean A/B); one stored GEMM weight, one KV SConv.
+            if sconv_k_on != sconv_v_on:
+                raise ValueError("fused_qkv requires the K and V SConv sites together (both or neither)")
+            sconv_kv = ShortConv.init(2 * m * h, cfg.sconv_kernel) if sconv_k_on else None
+            return CausalSelfAttention(
+                w_q=None,
+                w_k=None,
+                w_v=None,
+                w_qkv=reshard(jnp.concatenate([w_q, w_k, w_v], axis=1), P("data", "model")),
+                w_o=w_o,
+                attn_gate=attn_gate,
+                sconv_k=None,
+                sconv_v=None,
+                sconv_kv=sconv_kv,
+                cfg=cfg,
+            )
         return CausalSelfAttention(
-            w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
-            w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
-            w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
-            w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
-            attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
-            sconv_k=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
-            sconv_v=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "v" in cfg.sconv_sites else None),
+            w_q=reshard(w_q, P("data", "model")),
+            w_k=reshard(w_k, P("data", "model")),
+            w_v=reshard(w_v, P("data", "model")),
+            w_qkv=None,
+            w_o=w_o,
+            attn_gate=attn_gate,
+            sconv_k=ShortConv.init(m * h, cfg.sconv_kernel) if sconv_k_on else None,
+            sconv_v=ShortConv.init(m * h, cfg.sconv_kernel) if sconv_v_on else None,
+            sconv_kv=None,
             cfg=cfg,
         )
 
@@ -441,17 +474,29 @@ class CausalSelfAttention(eqx.Module):
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
 
-        q_flat = jnp.einsum("bsh,hd->bsd", x, self.w_q)
-        k_flat = jnp.einsum("bsh,hd->bsd", x, self.w_k)
-        v_flat = jnp.einsum("bsh,hd->bsd", x, self.w_v)
-        # SConv: depthwise causal conv after the K/V projections. segment_ids (packed-document
-        # boundaries) come from the mask so the conv never mixes across a document boundary.
+        # segment_ids (packed-document boundaries) come from the mask so the SConv never mixes across a
+        # document boundary.
         _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
         sconv_segment_ids = _seg[0] if _seg is not None else None
-        if self.sconv_k is not None:
-            k_flat = self.sconv_k(k_flat, sconv_segment_ids)
-        if self.sconv_v is not None:
-            v_flat = self.sconv_v(v_flat, sconv_segment_ids)
+        if self.cfg.fused_qkv:
+            # One QKV GEMM, then one SConv over the contiguous K||V block (fewer kernel launches).
+            qkv_flat = jnp.einsum("bsh,hd->bsd", x, self.w_qkv)
+            n_ch = self.cfg.num_heads * head_dim
+            q_flat = qkv_flat[..., :n_ch]
+            kv_flat = qkv_flat[..., n_ch:]
+            if self.sconv_kv is not None:
+                kv_flat = self.sconv_kv(kv_flat, sconv_segment_ids)
+            m_ch = self.cfg.stored_kv_heads * head_dim
+            k_flat = kv_flat[..., :m_ch]
+            v_flat = kv_flat[..., m_ch:]
+        else:
+            q_flat = jnp.einsum("bsh,hd->bsd", x, self.w_q)
+            k_flat = jnp.einsum("bsh,hd->bsd", x, self.w_k)
+            v_flat = jnp.einsum("bsh,hd->bsd", x, self.w_v)
+            if self.sconv_k is not None:
+                k_flat = self.sconv_k(k_flat, sconv_segment_ids)
+            if self.sconv_v is not None:
+                v_flat = self.sconv_v(v_flat, sconv_segment_ids)
         q = rearrange(q_flat, "... (n d) -> ... n d", d=head_dim)
         k = rearrange(k_flat, "... (m d) -> ... m d", d=head_dim)
         v = rearrange(v_flat, "... (m d) -> ... m d", d=head_dim)
