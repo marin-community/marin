@@ -1527,3 +1527,11 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/claude-review-v1/report.json`.
 - Held-out job `/rav/lux-glm52-heldout-10k-b200-001` was submitted with the
   curated compact taxonomy for exactly 10,000 new documents.
+- The held-out review now fixes the adjudication population before results are
+  visible. It selects the lowest-confidence 5 percent, which matches the failed
+  50-of-1,000 pilot stress sample. The source-blind exporter has four behavior
+  tests. The embedding evaluator can replace only these rows with checked
+  Claude labels. It keeps separate raw and adjudicated artifacts.
+- The raw and adjudicated student metrics must differ by at most 0.02, and the
+  gate decision must not change. This checks that boundary-label noise does not
+  control the student decision.

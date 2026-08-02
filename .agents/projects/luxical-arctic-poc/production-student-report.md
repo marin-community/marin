@@ -73,6 +73,12 @@ pass the fixed gates. On the 50 lowest-confidence documents, exact parent and
 form agreement fell to 38% and 58%. The final held-out labels must therefore
 adjudicate the low-confidence tail before embedding metrics are approved.
 
+Use the lowest-confidence 5 percent for this adjudication. This is the same
+fraction as the failed 50-document pilot stress sample. Run the embedding gates
+once with the raw GLM labels and once with the Claude labels for this tail. No
+fixed student metric can change by more than 0.02, and the gate decision cannot
+change. A larger change means that label noise controls the result.
+
 ## Required embedding gates
 
 Use only documents that were not used to train the student. Exclude neighbors
