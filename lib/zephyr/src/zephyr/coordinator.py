@@ -296,7 +296,11 @@ class ZephyrCoordinator:
         max_shard_failures: int = MAX_SHARD_FAILURES,
         max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES,
         drain_idle_workers: bool = False,
+        max_concurrent_pipelines: int = MAX_CONCURRENT_PIPELINES,
     ) -> None:
+        if max_concurrent_pipelines < 1:
+            raise ValueError("max_concurrent_pipelines must be at least 1")
+
         # Pipeline executions keyed by execution_id, insertion-ordered. All
         # per-pipeline state lives in the _PipelineExecution values.
         self._executions: dict[str, _PipelineExecution] = {}
@@ -320,6 +324,7 @@ class ZephyrCoordinator:
         self._heartbeat_timeout = heartbeat_timeout
         self._max_shard_failures = max_shard_failures
         self._max_shard_infra_failures = max_shard_infra_failures
+        self._max_concurrent_pipelines = max_concurrent_pipelines
         # Per-worker in-flight counter snapshots. Each snapshot carries a
         # monotonic generation so the coordinator can discard stale or
         # out-of-order heartbeats.
@@ -1106,9 +1111,10 @@ class ZephyrCoordinator:
                 owns_execution = False
             else:
                 active = sum(1 for r in self._executions.values() if not r.done)
-                if active >= MAX_CONCURRENT_PIPELINES:
+                if active >= self._max_concurrent_pipelines:
                     raise RuntimeError(
-                        f"Coordinator already runs {active} concurrent pipelines (max {MAX_CONCURRENT_PIPELINES})"
+                        f"Coordinator already runs {active} concurrent pipelines "
+                        f"(max {self._max_concurrent_pipelines})"
                     )
                 run = _PipelineExecution(
                     execution_id=execution_id,

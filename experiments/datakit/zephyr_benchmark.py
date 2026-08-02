@@ -102,6 +102,7 @@ def main() -> None:
         name="datakit-zephyr-benchmark",
         resources=pool_worker,
         coordinator_resources=coordinator,
+        max_concurrent_pipelines=args.max_concurrent,
         max_workers=args.pool_workers,
         chunk_storage_prefix=args.chunk_storage_prefix,
         stage_runner_factory=SubprocessRunner,

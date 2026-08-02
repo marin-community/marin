@@ -38,7 +38,7 @@ from zephyr.coordinator import (
 )
 from zephyr.dataset import Dataset
 from zephyr.execution import _NON_RETRYABLE_ERRORS, MAX_IRIS_WORKER_REPLICAS, ZephyrContext, _distributed_worker_limit
-from zephyr.plan import PhysicalStage, StageType, compute_plan
+from zephyr.plan import compute_plan
 from zephyr.shuffle import ListShard
 from zephyr.stage_io import (
     PickleDiskChunk,
@@ -58,6 +58,15 @@ class _UnpicklableError(Exception):
     def __init__(self, a, b, c):
         self.a, self.b, self.c = a, b, c
         super().__init__(f"boom {a}/{b}/{c}")  # self.args = (message,) -> revive needs 3 args
+
+
+_CONCURRENT_PIPELINE_BARRIER: threading.Barrier | None = None
+
+
+def _wait_for_concurrent_pipelines(value: int) -> int:
+    assert _CONCURRENT_PIPELINE_BARRIER is not None
+    _CONCURRENT_PIPELINE_BARRIER.wait(timeout=10)
+    return value
 
 
 def test_ensure_picklable_exception_passes_through_picklable():
@@ -299,6 +308,35 @@ def test_failed_shared_execution_does_not_stop_another(local_client, tmp_path):
         assert sorted(succeeded.result().results) == [4, 6]
         with pytest.raises(ZephyrWorkerError, match="ValueError"):
             failed.result()
+
+
+def test_shared_context_can_raise_concurrent_pipeline_limit(local_client, tmp_path):
+    """A sized coordinator can admit more than the conservative default."""
+    global _CONCURRENT_PIPELINE_BARRIER
+    pipeline_count = 17
+    _CONCURRENT_PIPELINE_BARRIER = threading.Barrier(pipeline_count)
+    ctx = ZephyrContext(
+        client=local_client,
+        max_workers=1,
+        resources=ResourceConfig(cpu=pipeline_count, ram="8g"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name="test-shared-concurrency-limit",
+        max_concurrent_pipelines=pipeline_count,
+    )
+
+    try:
+        with ctx, ThreadPoolExecutor(max_workers=pipeline_count) as executor:
+            futures = [
+                executor.submit(
+                    ctx.execute,
+                    Dataset.from_list([value]).map(_wait_for_concurrent_pipelines),
+                    map_task_resources=ResourceConfig(cpu=1, ram="256m"),
+                )
+                for value in range(pipeline_count)
+            ]
+            assert sorted(future.result().results[0] for future in futures) == list(range(pipeline_count))
+    finally:
+        _CONCURRENT_PIPELINE_BARRIER = None
 
 
 def test_pull_task_rotates_between_executions(coordinator):

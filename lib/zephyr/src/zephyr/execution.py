@@ -28,6 +28,7 @@ from rigging.filesystem import StoragePath, TransferBudgetExceeded, marin_temp_b
 from rigging.timing import ExponentialBackoff
 
 from zephyr.coordinator import (
+    MAX_CONCURRENT_PIPELINES,
     MAX_SHARD_FAILURES,
     MAX_SHARD_INFRA_FAILURES,
     ZephyrCoordinator,
@@ -236,6 +237,7 @@ class ZephyrContext:
         heartbeat_timeout: Maximum time between worker heartbeats.
         max_shard_failures: Maximum task failures for one shard.
         max_shard_infra_failures: Maximum worker failures while one shard is active.
+        max_concurrent_pipelines: Maximum pipelines admitted to a shared coordinator.
     """
 
     client: Client | None = None
@@ -252,6 +254,7 @@ class ZephyrContext:
     heartbeat_timeout: float = 120.0
     max_shard_failures: int = MAX_SHARD_FAILURES
     max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES
+    max_concurrent_pipelines: int = MAX_CONCURRENT_PIPELINES
 
     _shared_data: ContextVar[dict[str, Any] | None] = field(init=False, repr=False)
     _state: _ContextState = field(init=False, default=_ContextState.NEW, repr=False)
@@ -277,6 +280,8 @@ class ZephyrContext:
 
         if self.no_workers_timeout is None:
             self.no_workers_timeout = 6 * 60 * 60
+        if self.max_concurrent_pipelines < 1:
+            raise ValueError("max_concurrent_pipelines must be at least 1")
 
         if self.chunk_storage_prefix is None:
             self.chunk_storage_prefix = marin_temp_bucket(ttl_days=1, prefix="zephyr")
@@ -369,10 +374,11 @@ class ZephyrContext:
             self.max_shard_failures,
             self.max_shard_infra_failures,
             idle_policy is _IdleWorkerPolicy.DRAIN,
+            self.max_concurrent_pipelines,
             name=coordinator_name,
             count=1,
             resources=self.coordinator_resources,
-            actor_config=ActorConfig(max_concurrency=100),
+            actor_config=ActorConfig(max_concurrency=self.max_concurrent_pipelines + 100),
         )
         coordinator: ActorHandle | None = None
         worker_group: ActorGroup | None = None
