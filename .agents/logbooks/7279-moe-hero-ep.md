@@ -379,3 +379,11 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Final performance: Median MFU is 19.3689%, mean MFU is 19.2053%, p10 MFU is 18.5799%, and p90 MFU is 19.6090%. The last sample is 19.4278% MFU, 314,831 tokens/s, and 13.3224 seconds.
 - Final training values: Loss is 6.0933 and MoE drop fraction is 9.6723% at zero-based step 24.
 - Comparison rule: Use these full-artifact values for MHEP-002. The prior 19.2735% median and 315,838 tokens/s values remain a partial 22-sample telemetry snapshot.
+
+### 2026-08-02 02:18 UTC - MHEP-003 gather dispatch passes
+
+- Completion: The root coordinator and all 16 GPU tasks succeeded with exit 0, zero failures, and zero preemptions. The run completed all 25 steps.
+- Performance: Median MFU is 21.8766%, mean MFU is 21.6602%, p10 MFU is 20.5804%, and p90 MFU is 22.2728% over 24 samples. The last sample is 22.2428% MFU, 360,450 tokens/s, and 11.6363 seconds.
+- MHEP-002 change: Median MFU improves by 2.5077 percentage points, or 12.9% relative. Last-sample throughput improves by 14.5%.
+- Training: Final loss is 6.0917. Final MoE drop fraction is 9.7165%, within 0.045 percentage points of MHEP-002.
+- Decision: Keep gather dispatch. MHEP-004 will add only structured custom VJPs for the dispatch and combine gathers. This tests the source-backed backward-scatter removal before any routing-capacity change.
