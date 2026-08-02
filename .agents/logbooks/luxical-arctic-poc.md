@@ -1292,3 +1292,20 @@ The next stage needs a smaller hierarchy, representative independent review, hel
 - The loader used document hashes as unique row keys. One source contains duplicate document hashes.
 - Evaluation rank is the stable unique row key. The correction aligns by evaluation rank and checks the document hash.
 - A regression test covers duplicate hashes with different evaluation ranks.
+
+### Cross-source screen
+
+- Job `/rav/lux-semantic-embedding-screen-b200-002` succeeded in 3 minutes 3 seconds.
+- The screen excludes all neighbors from the query source. Source identity is not a prediction target.
+- The 3M student passed all eight screening gates against the best tested teacher value for each metric.
+- Its cross-source label overlap was 0.63020. Arctic reached 0.62770, LFM reached 0.60130, and Qwen reached 0.56330.
+- Its cross-source label Jaccard was 0.31825. Arctic reached 0.31236, LFM reached 0.30300, and Qwen reached 0.27284.
+- Its cross-source nearest-label macro-F1 was 0.22061. LFM reached 0.22008, Arctic reached 0.21863, and Qwen reached 0.19091.
+- Its cluster NMI was 0.47628. LFM reached 0.46923, Arctic reached 0.45611, and Qwen reached 0.44816.
+- Its effective-rank fraction was 0.33326. Arctic reached 0.61674, Luxical reached 0.41543, and Qwen reached 0.28118.
+- All models returned finite and unique vectors. The student's total normalized variance was 0.83994.
+- The inherited paired CPU speed ratio remains 2.59315 against Luxical-One.
+- Direct inspection found coherent recipe, literature, code, and molecule neighborhoods.
+- It also found weak government-statistics and technical-support neighborhoods. The 38 primary buckets remain too broad and overlapping.
+- Artifact: `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/embedding-screen-v2/report.json`.
+- This result advances the student to hierarchical-label evaluation. It does not establish production quality.
