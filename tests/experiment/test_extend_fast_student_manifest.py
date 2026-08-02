@@ -7,15 +7,18 @@ from pathlib import Path
 import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
+import pyarrow.parquet as pq
+import pytest
 
 PROJECT = Path(__file__).parents[2] / ".agents" / "projects" / "luxical-arctic-poc"
 sys.path.insert(0, str(PROJECT))
 
+from build_manifest import PositionOrder, block_sample_positions  # noqa: E402
 from extend_fast_student_manifest import (  # noqa: E402
     EXPANSION_VERSION,
     extended_source_table,
+    fixed_global_positions,
     reusable_source_result,
-    sample_positions_excluding,
 )
 
 
@@ -64,20 +67,90 @@ def base_table() -> pa.Table:
     return pa.Table.from_pylist(rows)
 
 
-def test_sample_positions_excluding_is_deterministic_and_disjoint() -> None:
+def selection_positions(row_count: int) -> np.ndarray:
+    return block_sample_positions(
+        np.random.default_rng(42),
+        100,
+        row_count,
+        excluded={1, 2, 10, 11},
+        block_size=8,
+        position_order=PositionOrder.SELECTION,
+    )
+
+
+def test_block_sample_positions_is_deterministic_disjoint_and_nested() -> None:
     excluded = {1, 2, 10, 11}
-    first = sample_positions_excluding(np.random.default_rng(42), 100, 30, excluded)
-    second = sample_positions_excluding(np.random.default_rng(42), 100, 30, excluded)
+    first = selection_positions(30)
+    second = selection_positions(30)
+    larger = selection_positions(60)
 
     np.testing.assert_array_equal(first, second)
+    np.testing.assert_array_equal(larger[: len(first)], first)
     assert len(first) == len(set(first.tolist())) == 30
     assert set(first.tolist()).isdisjoint(excluded)
 
 
-def test_sample_positions_excluding_supports_dense_remainder() -> None:
-    selected = sample_positions_excluding(np.random.default_rng(42), 10, 4, {0, 1, 2, 3, 4, 5})
+def test_block_sample_positions_supports_dense_remainder() -> None:
+    selected = block_sample_positions(
+        np.random.default_rng(42),
+        10,
+        4,
+        excluded={0, 1, 2, 3, 4, 5},
+        block_size=2,
+        position_order=PositionOrder.SELECTION,
+    )
 
-    np.testing.assert_array_equal(selected, np.asarray([6, 7, 8, 9]))
+    assert set(selected.tolist()) == {6, 7, 8, 9}
+
+
+def test_block_sample_positions_rejects_invalid_exclusions() -> None:
+    with pytest.raises(ValueError, match="outside"):
+        block_sample_positions(np.random.default_rng(42), 10, 1, excluded={10})
+    with pytest.raises(ValueError, match="available"):
+        block_sample_positions(np.random.default_rng(42), 10, 7, excluded={0, 1, 2, 3})
+
+
+def test_fixed_global_positions_maps_groups_and_files(tmp_path: Path) -> None:
+    parquet_path = tmp_path / "source.parquet"
+    pq.write_table(pa.table({"id": list(range(6))}), parquet_path, row_group_size=2)
+    uri = f"file://{parquet_path}"
+    table = pa.Table.from_pylist(
+        [
+            {"input_path": uri, "input_row_group": 0, "input_row_in_group": 1},
+            {"input_path": uri, "input_row_group": 2, "input_row_in_group": 0},
+        ]
+    )
+
+    positions = fixed_global_positions(table, None, [(str(parquet_path), 6)], "file")
+
+    assert positions == {1, 4}
+    extension = block_sample_positions(
+        np.random.default_rng(42),
+        6,
+        3,
+        excluded=positions,
+        block_size=2,
+        position_order=PositionOrder.SELECTION,
+    )
+    assert set(extension.tolist()).isdisjoint(positions)
+
+
+def test_fixed_global_positions_rejects_unknown_and_duplicate_coordinates(tmp_path: Path) -> None:
+    parquet_path = tmp_path / "source.parquet"
+    pq.write_table(pa.table({"id": list(range(4))}), parquet_path, row_group_size=2)
+    uri = f"file://{parquet_path}"
+    unknown = pa.Table.from_pylist([{"input_path": uri, "input_row_group": 2, "input_row_in_group": 0}])
+    duplicate = pa.Table.from_pylist(
+        [
+            {"input_path": uri, "input_row_group": 0, "input_row_in_group": 1},
+            {"input_path": uri, "input_row_group": 0, "input_row_in_group": 1},
+        ]
+    )
+
+    with pytest.raises(ValueError, match="unknown input row group"):
+        fixed_global_positions(unknown, None, [(str(parquet_path), 4)], "file")
+    with pytest.raises(ValueError, match="duplicate input positions"):
+        fixed_global_positions(duplicate, None, [(str(parquet_path), 4)], "file")
 
 
 def test_extended_source_table_preserves_base_rows() -> None:
@@ -97,19 +170,34 @@ def test_extended_source_table_preserves_base_rows() -> None:
             "input_row_group": 1,
             "input_row_in_group": 1,
         },
+        {
+            "id": "new-2",
+            "raw_text": "third text",
+            "input_path": "s3://bucket/source.parquet",
+            "input_row_group": 1,
+            "input_row_in_group": 2,
+        },
+        {
+            "id": "new-3",
+            "raw_text": "fourth text",
+            "input_path": "s3://bucket/source.parquet",
+            "input_row_group": 1,
+            "input_row_in_group": 3,
+        },
     ]
 
-    output = extended_source_table("source", base, extension, target_quota=5)
+    output = extended_source_table("source", base, extension, {"10m": 5, "30m": 7})
 
     assert output.select(base.column_names).slice(0, len(base)).equals(base)
-    assert output["train_rank"].to_pylist()[-2:] == [3, 4]
-    assert pc.sum(output["in_expanded_rung"]).as_py() == 5
+    assert output["train_rank"].to_pylist()[-4:] == [3, 4, 5, 6]
+    assert pc.sum(output["in_10m"]).as_py() == 5
+    assert pc.sum(output["in_30m"]).as_py() == 7
     assert pc.sum(output["in_3m"]).as_py() == 3
 
 
 def test_extended_source_table_rejects_non_nested_target() -> None:
-    with np.testing.assert_raises_regex(ValueError, "extension count"):
-        extended_source_table("source", base_table(), [], target_quota=2)
+    with pytest.raises(ValueError, match="smaller than the fixed base"):
+        extended_source_table("source", base_table(), [], {"10m": 2})
 
 
 def test_reusable_source_result_requires_exact_inputs() -> None:
@@ -118,10 +206,12 @@ def test_reusable_source_result_requires_exact_inputs() -> None:
         "expansion_version": EXPANSION_VERSION,
         "base_manifest_sha256": "base-sha",
         "rung": "10m",
-        "quota": 100,
+        "rung_quotas": {"10m": 100},
+        "input_snapshot_sha256": "input-sha",
         "source_result": result,
     }
 
-    assert reusable_source_result(report, "base-sha", "10m", 100) == result
-    assert reusable_source_result(report, "different-sha", "10m", 100) is None
-    assert reusable_source_result(report, "base-sha", "10m", 101) is None
+    assert reusable_source_result(report, "base-sha", "10m", {"10m": 100}, "input-sha") == result
+    assert reusable_source_result(report, "different-sha", "10m", {"10m": 100}, "input-sha") is None
+    assert reusable_source_result(report, "base-sha", "10m", {"10m": 101}, "input-sha") is None
+    assert reusable_source_result(report, "base-sha", "10m", {"10m": 100}, "different-input") is None

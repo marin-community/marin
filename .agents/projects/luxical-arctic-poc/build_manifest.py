@@ -10,7 +10,9 @@ import math
 import posixpath
 import re
 from collections import Counter, defaultdict
+from collections.abc import Set as AbstractSet
 from concurrent.futures import ThreadPoolExecutor
+from enum import StrEnum
 from functools import partial
 from itertools import accumulate
 from pathlib import Path
@@ -46,6 +48,13 @@ IO_WORKERS = 16
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+
+class PositionOrder(StrEnum):
+    """Select the order of sampled source positions."""
+
+    SORTED = "sorted"
+    SELECTION = "selection"
 
 
 def stable_seed(label: str) -> int:
@@ -164,40 +173,55 @@ def block_sample_positions(
     rng: np.random.Generator,
     total_rows: int,
     row_count: int,
+    *,
+    excluded: AbstractSet[int] = frozenset(),
+    block_size: int | None = None,
+    position_order: PositionOrder = PositionOrder.SORTED,
 ) -> np.ndarray[Any, np.dtype[np.int64]]:
     """Select unique rows from uniform circular blocks."""
-    if row_count > total_rows:
-        raise ValueError(f"Only {total_rows} rows are available for a sample of {row_count}")
-    if 2 * row_count > total_rows:
+    if any(position < 0 or position >= total_rows for position in excluded):
+        raise ValueError("An excluded position is outside the source")
+    available_rows = total_rows - len(excluded)
+    if row_count > available_rows:
+        raise ValueError(f"Only {available_rows} rows are available for a sample of {row_count}")
+    if row_count == 0:
+        return np.empty(0, dtype=np.int64)
+    if not excluded and 2 * row_count > total_rows:
         return np.sort(rng.choice(total_rows, size=row_count, replace=False))
 
-    block_size = max(1, math.ceil(row_count / SAMPLE_BLOCKS_PER_SOURCE))
+    selected_block_size = block_size or max(1, math.ceil(row_count / SAMPLE_BLOCKS_PER_SOURCE))
     positions: dict[int, None] = {}
     while len(positions) < row_count:
+        if len(positions) + len(excluded) >= 9 * total_rows // 10:
+            remaining = np.asarray(
+                [position for position in range(total_rows) if position not in excluded and position not in positions],
+                dtype=np.int64,
+            )
+            rng.shuffle(remaining)
+            for position in remaining[: row_count - len(positions)]:
+                positions[int(position)] = None
+            break
         block_start = int(rng.integers(total_rows))
-        for offset in range(block_size):
+        for offset in range(selected_block_size):
             position = (block_start + offset) % total_rows
+            if position in excluded:
+                continue
             positions.setdefault(position, None)
             if len(positions) == row_count:
                 break
-    return np.sort(np.fromiter(positions, dtype=np.int64))
+    output = np.fromiter(positions, dtype=np.int64)
+    return output if position_order == PositionOrder.SELECTION else np.sort(output)
 
 
-def selected_source_rows(
+def selected_source_position_rows(
     filesystem: Any,
     files: list[tuple[str, int]],
-    source: str,
-    row_count: int,
+    global_positions: np.ndarray[Any, np.dtype[np.int64]],
     protocol: str,
 ) -> tuple[list[dict[str, Any]], Counter[str]]:
-    """Read a uniform row sample across all source files."""
-    rng = np.random.default_rng(stable_seed(f"rows:{source}"))
+    """Read source-global positions and return their per-file counts."""
     file_counts = np.asarray([file_rows for _, file_rows in files], dtype=np.int64)
     file_ends = np.cumsum(file_counts)
-    total_rows = int(file_ends[-1])
-    if row_count > total_rows:
-        raise ValueError(f"Source {source} has {total_rows} rows; requested {row_count}")
-    global_positions = block_sample_positions(rng, total_rows, row_count)
     file_indices = np.searchsorted(file_ends, global_positions, side="right")
     rows = []
     selected_counts: Counter[str] = Counter()
@@ -212,8 +236,25 @@ def selected_source_rows(
         row_batches = executor.map(partial(selected_file_task, filesystem, protocol), selections)
         for batch in row_batches:
             rows.extend(batch)
-    if len(rows) != row_count:
-        raise ValueError(f"Source {source} returned {len(rows)} rows; expected {row_count}")
+    if len(rows) != len(global_positions):
+        raise ValueError(f"Source returned {len(rows)} rows; expected {len(global_positions)}")
+    return rows, selected_counts
+
+
+def selected_source_rows(
+    filesystem: Any,
+    files: list[tuple[str, int]],
+    source: str,
+    row_count: int,
+    protocol: str,
+) -> tuple[list[dict[str, Any]], Counter[str]]:
+    """Read a uniform row sample across all source files."""
+    rng = np.random.default_rng(stable_seed(f"rows:{source}"))
+    total_rows = sum(file_rows for _, file_rows in files)
+    if row_count > total_rows:
+        raise ValueError(f"Source {source} has {total_rows} rows; requested {row_count}")
+    global_positions = block_sample_positions(rng, total_rows, row_count)
+    rows, selected_counts = selected_source_position_rows(filesystem, files, global_positions, protocol)
     split_rng = np.random.default_rng(stable_seed(f"split:{source}"))
     shuffled_rows = [rows[index] for index in split_rng.permutation(len(rows))]
     return shuffled_rows, selected_counts
