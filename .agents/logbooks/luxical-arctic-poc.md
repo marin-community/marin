@@ -1443,3 +1443,13 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
   rescheduled both replicas as one unit. This was not a model, data, or schema
   failure, and the attempt produced no hierarchy labels.
 - The replacement attempt started at 10:45 UTC and remains active.
+- The replacement worker resolved the prior attempt's still-leased Ray
+  endpoint. Its process retried the old head address while the new head waited
+  for the missing four devices. The stable endpoint name made automatic
+  preemption recovery unsafe.
+- The GLM launcher now adds the Iris attempt number to the internal Ray
+  endpoint name. Two focused port and retry tests pass.
+- The stuck job was stopped. Corrected job
+  `/rav/lux-glm52-hierarchy-direct-b200-002` started at interactive priority.
+  Direct process inspection confirmed that its worker uses its current head
+  address and that both replicas joined the same Ray cluster.
