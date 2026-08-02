@@ -29,7 +29,7 @@ from evaluate_teacher_candidate import (
     Candidate,
     CandidateEmbedder,
 )
-from ladder_config import MANIFEST_ROOT
+from ladder_config import MANIFEST_ROOT, read_json, write_json
 from rigging.filesystem import atomic_rename
 
 MANIFEST_URL = f"{MANIFEST_ROOT}/manifest.json"
@@ -55,21 +55,6 @@ TEACHER_POOLING_METADATA_KEY = b"luxical_teacher_pooling_implementation"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
-
-
-def read_json(url: str) -> dict[str, Any]:
-    """Read one JSON object from private storage."""
-    filesystem, path = fsspec.core.url_to_fs(url)
-    with filesystem.open(path) as file:
-        return json.load(file)
-
-
-def write_json(url: str, value: dict[str, Any]) -> None:
-    """Write one JSON object atomically."""
-    filesystem, path = fsspec.core.url_to_fs(url)
-    with atomic_rename(path, fs=filesystem) as temporary_path:
-        with filesystem.open(temporary_path, "w") as file:
-            json.dump(value, file, indent=2, sort_keys=True)
 
 
 def teacher_metadata(candidate: Candidate, manifest_sha256: str) -> dict[bytes, bytes]:
@@ -274,8 +259,7 @@ def run_audit(num_shards: int) -> dict[str, Any]:
     manifest = read_json(MANIFEST_URL)
     candidate = CANDIDATES[TEACHER_NAME]
     shard_reports = [
-        read_json(f"{TEACHER_ROOT}/shards/shard-{index:02d}-of-{num_shards:02d}.json")
-        for index in range(num_shards)
+        read_json(f"{TEACHER_ROOT}/shards/shard-{index:02d}-of-{num_shards:02d}.json") for index in range(num_shards)
     ]
     for index, report in enumerate(shard_reports):
         if report["shard_index"] != index or report["num_shards"] != num_shards:
@@ -320,7 +304,6 @@ def run_audit(num_shards: int) -> dict[str, Any]:
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse one shard or audit request."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("shard", "audit"), required=True)
     parser.add_argument("--num-shards", type=int, required=True)

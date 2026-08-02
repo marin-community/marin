@@ -1,6 +1,6 @@
 # FastTransformer Arctic student report
 
-Status: Qwen teacher size ladder complete; peer review addressed
+Status: Qwen cross-dimension 750K POC complete; peer review addressed
 
 ## Decision
 
@@ -29,6 +29,13 @@ gates. It processed 29.19 documents per second, 3.24 times slower than the 0.6B
 model. The batch sizes were 32 and 128, so this is not an isolated model-size
 effect. The 4B result did not meet the fixed 8B start condition. Thus, the 8B
 test did not run.
+
+The 750K cross-dimension Qwen student also fails. It has 140 regular collapse
+failures and adds 94 failures beyond Qwen. Overall, multilingual, and standard
+macro-F1 miss their gates. CPU speed stays 2.5931 times Luxical-One.
+
+Do not scale the unconstrained alignment head to 3M rows. The focused report
+is `qwen-crossdim-student-report.md`.
 
 ## Controlled inputs
 
