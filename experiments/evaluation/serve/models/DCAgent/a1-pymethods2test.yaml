@@ -1,0 +1,15 @@
+name: a1-pymethods2test
+location: DCAgent/a1-pymethods2test
+revision: b52582cf4bcfec23f73e9dfa04437a1d7c220cfd
+apply_chat_template: true
+resource_hint:
+  hbm_gb: 21
+serve:
+  max_model_len: 32768
+  tool_call_parser: hermes
+  reasoning_parser: qwen3
+  vllm_extra_args:
+  - --enable-prefix-caching
+agent:
+  agent_kwargs:
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'

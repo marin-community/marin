@@ -1,0 +1,15 @@
+name: a1-stackexchange_unix
+location: DCAgent/a1-stackexchange_unix
+revision: 818bda51c20451e79beb2d618c3959d063e645b0
+apply_chat_template: true
+resource_hint:
+  hbm_gb: 21
+serve:
+  max_model_len: 32768
+  tool_call_parser: hermes
+  reasoning_parser: qwen3
+  vllm_extra_args:
+  - --enable-prefix-caching
+agent:
+  agent_kwargs:
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'

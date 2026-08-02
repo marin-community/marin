@@ -1,0 +1,15 @@
+name: a1-mind2web
+location: DCAgent/a1-mind2web
+revision: c1bea701c4c4555c21b54baf0f50d55cf95c32e4
+apply_chat_template: true
+resource_hint:
+  hbm_gb: 21
+serve:
+  max_model_len: 32768
+  tool_call_parser: hermes
+  reasoning_parser: qwen3
+  vllm_extra_args:
+  - --enable-prefix-caching
+agent:
+  agent_kwargs:
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'

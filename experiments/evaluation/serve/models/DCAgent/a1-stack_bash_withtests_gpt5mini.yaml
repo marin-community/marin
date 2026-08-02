@@ -1,0 +1,15 @@
+name: a1-stack_bash_withtests_gpt5mini
+location: DCAgent/a1-stack_bash_withtests_gpt5mini
+revision: 46f266ad8fee1082d473a549874d53e51a6b5a50
+apply_chat_template: true
+resource_hint:
+  hbm_gb: 21
+serve:
+  max_model_len: 32768
+  tool_call_parser: hermes
+  reasoning_parser: qwen3
+  vllm_extra_args:
+  - --enable-prefix-caching
+agent:
+  agent_kwargs:
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'

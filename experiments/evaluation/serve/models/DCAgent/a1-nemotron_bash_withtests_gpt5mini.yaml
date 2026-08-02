@@ -1,0 +1,15 @@
+name: a1-nemotron_bash_withtests_gpt5mini
+location: DCAgent/a1-nemotron_bash_withtests_gpt5mini
+revision: 67e072b1ee6acb02d370cf0aa510a6da6cb21479
+apply_chat_template: true
+resource_hint:
+  hbm_gb: 21
+serve:
+  max_model_len: 32768
+  tool_call_parser: hermes
+  reasoning_parser: qwen3
+  vllm_extra_args:
+  - --enable-prefix-caching
+agent:
+  agent_kwargs:
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'

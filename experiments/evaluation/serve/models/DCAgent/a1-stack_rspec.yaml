@@ -1,0 +1,15 @@
+name: a1-stack_rspec
+location: DCAgent/a1-stack_rspec
+revision: e0a5f804a24f6f0d50e42f04a615aab44145b07d
+apply_chat_template: true
+resource_hint:
+  hbm_gb: 21
+serve:
+  max_model_len: 32768
+  tool_call_parser: hermes
+  reasoning_parser: qwen3
+  vllm_extra_args:
+  - --enable-prefix-caching
+agent:
+  agent_kwargs:
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'
