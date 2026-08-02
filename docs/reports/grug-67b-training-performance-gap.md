@@ -1,8 +1,8 @@
 # Grug 67B training performance: Levanter and MarinSkyRL
 
-Status: the headline, five planned MarinSkyRL measurements, and the added eager
-matched-CE isolation control are complete and content-hash verified. No result
-is pending.
+Status: the frozen headline cohort, the eager matched-CE isolation control, and
+the separately labeled present-day routed-expert attribution are complete and
+content-hash verified. No result is pending.
 
 ## Executive answer
 
@@ -25,6 +25,16 @@ both miss the predeclared absolute 0.01 consistency gate. The two MarinSkyRL
 values differ by only 0.000013. The numerical mismatch is therefore not
 localized to the attention backend. The headline timing and direct
 within-MarinSkyRL interventions remain valid.
+
+A separately labeled present-day matched-CE run partitions its 6,854.120-second
+critical-rank wall into 5,583.786 seconds (81.466%) in routed experts and a
+1,270.334-second exact nonexpert remainder. Subtracting all 253.176 seconds of
+Levanter's matched-CE wall gives a useful 5,330.611-second hybrid diagnostic,
+equal to 79.138% of the frozen gap. It is not a lower bound on the frozen gap:
+the full-replay stacks fail the represented-parameter/loss comparability gate,
+and the 111.351-second source bridge does not partition expert from nonexpert
+drift. The exact blocker and the paired experiment that resolves it are stated
+below.
 
 The comparison uses one content-addressed rollout replay, the June step-630
 weights, pinned measurement-freeze source in both repositories, and 32
@@ -72,8 +82,7 @@ positions. The integer `response_mask` is also binary and differs from
 `loss_mask` at zero positions. Thus the operational action set, summing the
 loss mask, and counting selected positions all use the same exact tokens.
 
-The replay was recovered with
-[`scripts/perf/recover_ray_spill.py`](../../scripts/perf/recover_ray_spill.py).
+The replay was recovered with `scripts/perf/recover_ray_spill.py`.
 The manifest embeds the source job, image, revision, spill-object key and
 offset, object ETag, payload hash, checked backing-storage reconstruction,
 per-field hashes, and every exported shard hash.
@@ -151,7 +160,7 @@ Black-only formatting to the evidence scripts. It does not change the executed
 benchmark logic, so the content-hashed native results retain their measured
 source revision `3b1000dc5`.
 
-The final report branch then merged Marin main `602a8ba93` after measurement.
+The final report branch then merged Marin main `4a0abf3c8` after measurement.
 That integration passed the focused code and branch-wide checks, but no
 benchmark result is relabeled: every result stays pinned to the source revision
 it executed.
@@ -232,6 +241,25 @@ They differ from each other by only 0.000013. Attention arithmetic therefore
 does not explain the cross-stack mismatch. Both rows are valid timing
 observations, but neither is an accepted common-objective causal control.
 
+The mismatch is precise at the comparison boundary even though it is not
+localized to one tensor. Levanter starts from FP32 master parameters and casts
+for BF16 compute; MarinSkyRL starts from parameters already stored in BF16 in
+the Hugging Face export. They therefore do not use identical represented
+parameter values, and the 0.95% full-replay loss difference shows that
+provenance alone is not enough to make them a common-objective control. This
+report does not claim that representation rounding explains every part of the
+loss difference.
+
+A smaller common-representation oracle provides the alternative semantic
+boundary. [Marin commit `6195867835efa48c03b739a3aa67ef06cea78f16`](https://github.com/marin-community/marin/commit/6195867835efa48c03b739a3aa67ef06cea78f16)
+exports ordinary FP32 values that both implementations load exactly. On that
+fixture, MarinSkyRL matches every selected route exactly; hidden states,
+outputs, weights, query-bias candidates, and loss use `2e-5` absolute and
+relative tolerances; selected gradients use `5e-5`; and one deterministic SGD
+plus query-bias update preserves the next routes exactly. This establishes
+implementation agreement when the represented values are shared. It is a
+correctness oracle, not a full-replay timing result.
+
 The three native CE values were 1.9947575, 1.9947482, and 1.9947525. Every
 warmup and timed JAX process reported zero non-finite gradient arrays or
 elements.
@@ -271,6 +299,105 @@ identity closes with zero error.
 | MarinSkyRL FlashAttention intervention, `Mfop - Meop` | -222.543 | -3.304% | Same operational path and replay; attention backend changed |
 | Subtract Levanter native-path increment, `-(Nop - Nce)` | -2.684 | -0.040% | Same native configuration and replay |
 | Fastest operational gap, `Mfop - Nop` | 6,735.810 | 100% | Stack-native headlines |
+
+### Present-day routed-expert refinement
+
+The frozen operational gap remains 6,735.810478 seconds. A separately labeled
+present-day run now measures the routed-expert boundary on the same replay and
+matched-CE endpoint. On the critical rank, the 26 `GrugMoeExperts` modules take
+5,583.786 seconds: 246.012 seconds in their initial forwards and 5,337.774
+seconds in their full backward spans. The backward spans include
+gradient-checkpoint recomputation. Layer-level FSDP communication is outside
+them. Everything else, including attention, CE, other modules, communication,
+Python gaps, and barriers, is the nonnegative 1,270.334-second remainder. These
+two spans partition the current 6,854.120-second synchronized wall; the recorded
+fields close within `4e-13` seconds of arithmetic roundoff.
+
+| Present-day matched-CE sample | Seconds | Share of wall |
+| --- | ---: | ---: |
+| Routed experts: initial forward | 246.012 | 3.589% |
+| Routed experts: full backward, including recompute | 5,337.774 | 77.877% |
+| Routed experts: total | 5,583.786 | 81.466% |
+| Nonexpert remainder | 1,270.334 | 18.534% |
+| Synchronized wall | 6,854.120 | 100% |
+
+This result is not inserted into the frozen cohort. Let `Nop` and `Nce` be the
+frozen Levanter operational and matched-CE walls, `Mfop` and `Mfce` the frozen
+MarinSkyRL FlashAttention operational and matched-CE walls, `W` the present-day
+instrumented wall, and `E` and `O` its expert and nonexpert parts. The exact
+bridge is:
+
+```text
+Mfop - Nop = (Mfop - Mfce) + (Mfce - W) + E + O - Nce + (Nce - Nop)
+```
+
+| Exact term | Seconds | Meaning |
+| --- | ---: | --- |
+| Frozen MarinSkyRL operational boundary, `Mfop - Mfce` | +26.199 | Direct frozen within-stack difference |
+| Source and measurement bridge, `Mfce - W` | +111.351 | Current-main drift, run noise, and instrumentation cost; not given a mechanism label |
+| Present-day routed experts, `E` | +5,583.786 | Non-overlapping critical-rank CUDA spans |
+| Present-day nonexpert remainder, `O` | +1,270.334 | Every other operation, communication, and idle gap |
+| Subtract frozen Levanter matched CE, `-Nce` | -253.176 | Assigns the complete native CE wall before making a mechanism claim |
+| Frozen Levanter boundary, `Nce - Nop` | -2.684 | Direct frozen within-stack difference |
+| Frozen fastest operational gap, `Mfop - Nop` | 6,735.810 | Exact algebraic total; recorded fields close within `4e-13` seconds |
+
+The bridge is explicit because the present-day source and hooks were not in the
+frozen run. The current CE is `2.0136915405338756`, exactly equal to the
+predeclared MarinSkyRL reference and inside the `1e-4` within-stack invariance
+gate. Together with the tiny probe's exact loss and gradient comparison, this
+supports using the hooks as an attribution instrument; it does not establish
+full-scale gradient identity. It also does not repair the failed historical
+cross-stack CE gate or claim identical represented weights between stacks.
+
+For scale only, give routed experts all `Nce = 253.175519` seconds of Levanter's
+complete matched-CE wall. The resulting hybrid diagnostic is
+`H = max(0, E - Nce) = 5,330.611` seconds, or 79.138% of the frozen gap. This is
+deliberately **not** called frozen gap closure or a lower bound. The Levanter
+full replay starts from FP32 master values while MarinSkyRL starts from the BF16
+export; their CE values miss the predeclared gate, their routes are not replayed,
+and therefore compatible full-scale expert work has not been established. In
+addition, the aggregate `Mfce - W` bridge cannot show whether expert and
+nonexpert time moved in opposite directions between revisions.
+
+The measured causal statement is narrower and still useful: routed-expert spans
+occupy 5,583.786 seconds, or 81.466%, of the present-day MarinSkyRL matched-CE
+wall under the accepted within-stack instrumentation gates. The exact blocker to
+transferring that partition into the frozen cross-stack gap is the missing
+common-representation full-replay control plus component-wise bridge. The
+cheapest discriminator is the paired eager/grouped 32-H100 run below at one
+pinned owner source, with identical represented values, replayed routes (or an
+exact route/load-shape check), and the same expert/nonexpert hooks in both arms.
+
+### Present-day expert-attribution contract
+
+The contract was frozen before submission. It keeps the exact content-addressed
+replay, BF16 Hugging Face revision, 32-H100 topology, 128 microbatches per rank,
+global token-weighted CE through backward, and no optimizer. Barriers and CUDA
+synchronization bracket the worker timer. Forward hooks count only initial
+model forwards. Full module-backward hooks include checkpoint recompute, so the
+two expert categories do not overlap. The predeclared invariance gate is a
+finite loss within `1e-4` of `2.0136915405338756`, plus finite nonempty
+gradients on all ranks, 26 instrumented modules, 3,328 forward calls, 3,328
+backward calls, and an exact nonnegative expert/nonexpert partition. The
+predeclaration text had SHA-256
+`68e0da2da5091a8ba887f015de5258f1c41ac2323b2f445364c312c8d50b020a`
+before the job was submitted.
+
+Before the full run, a one-H100 tiny probe found the exact same loss and every
+parameter gradient with and without hooks, while recording the expected three
+modules and three calls in each phase. Its tiny timings are not used here.
+
+The independent readback passed every gate. This is one bounded sample, so no
+spread is claimed. Its source is
+[`08f814440579854313a258a8dd658176557f907d`](https://github.com/marin-community/MarinSkyRL/commit/08f814440579854313a258a8dd658176557f907d),
+based on MarinSkyRL main `cc8c8e8de2e7242d7e18f0563933fea0a26ac649`
+plus the minimum ported fixed-replay and attribution delta. It ran image
+`ghcr.io/marin-community/marinskyrl@sha256:5f35056daee57d25f134aa2171126645be6750944c92bec27962cfae412041d3`.
+The revision audit from frozen baseline `1388f3ec` to `cc8c8e8d` found one
+model-path change, `2088965` (#267), which only accepts the newer four-value
+FlashAttention unpadding return; no routed-expert implementation changed. This
+narrows the bridge, but does not turn its aggregate wall delta into a
+component-wise expert bridge.
 
 ### MarinSkyRL phase evidence
 
@@ -323,9 +450,15 @@ The old isolated kernels are roadmap evidence only. In
 B=1/S=4096, current FlashAttention measured 4.245 ms for one attention block
 forward/backward versus 18.796 ms eager. A separate one-H100 exact-shape sparse
 MoE block in the grouped/EP development goal measured 15.844 ms with grouped
-experts versus 1,739.815 ms in the Python expert loop. That owning goal did not
-clear its pinned end-to-end correctness gates at the freeze. Neither kernel
-ratio is an end-to-end policy-step speedup.
+experts versus 1,739.815 ms in the Python expert loop, a 109.812x kernel ratio.
+Peak allocated memory was 10.204 GiB grouped versus 12.045 GiB eager. The
+[measured source `41d5b40`](https://github.com/marin-community/MarinSkyRL/commit/41d5b40)
+also passed its four-H100 semantic parity gate. The owner's current
+[draft PR #276](https://github.com/marin-community/MarinSkyRL/pull/276) is at
+[`3a011552`](https://github.com/marin-community/MarinSkyRL/commit/3a0115528588f86f53104faac8fef15a4c7a5895)
+with later correctness work and green CI. That newer implementation is not
+relabeled as the source of the older measurement. Neither isolated kernel ratio
+is an end-to-end policy-step speedup.
 
 ## What the old numbers do not prove
 
@@ -335,10 +468,13 @@ work. The closest old Levanter number used 64 H100s, synthetic 4K causal-LM
 data, ring EP8, and a different batch. Their roughly 14x normalized ratio is
 not an apples-to-apples result and is not used here.
 
-The separate grouped-expert/trainer-EP goal in the measurement workspace had
-not completed its pinned correctness gates or opened its owning PR at this
-measurement freeze. Its branch and kernel evidence therefore stay out of every
-headline and matched-control table. [MarinSkyRL #249](https://github.com/marin-community/MarinSkyRL/pull/249)
+The separate grouped-expert/trainer-EP goal had not completed its pinned gates
+at the historical measurement freeze, so its later evidence stays out of every
+frozen headline and matched-control table. A separate 32-H100 production
+`policy_train` observation at the measured owner revision took 429.220 seconds,
+but it used a different replay and boundary and was manually stopped after its
+required gates. It is unmatched diagnostic evidence, not a bridge into the
+frozen arithmetic. [MarinSkyRL #249](https://github.com/marin-community/MarinSkyRL/pull/249)
 owns the separate MuonH prerequisite; this comparison keeps AdamW and does not
 attribute grouped-expert work to that PR.
 
@@ -349,20 +485,23 @@ so it does not replace any row or roadmap gate in this report.
 
 ## Roadmap
 
-| Rank | Opportunity | Bounded end-to-end gain | Confidence | Effort | Main dependency | Acceptance metric |
+| Rank | Opportunity | Measured or bounded end-to-end benefit | Confidence | Effort | Main dependency | Acceptance metric |
 | ---: | --- | --- | --- | --- | --- | --- |
-| 1 | Attack the broad per-layer execution gap: complete grouped experts and trainer EP correctness, then measure the same replay | ≤6,933.802 s raw upper bound (≤99.172% of MSRL wall) | Low | Large | Owning grouped/EP correctness gates | Numerical parity plus a fixed-replay 32-H100 matched-CE gain with no regression in the operational boundary |
-| 2 | Avoid disabled entropy computation in the policy forward | ≤29.794 s in the FA pair; 24.471 s in the eager pair | Medium | Small | Preserve policy metrics and gradients | Same reported metrics and gradients; beat the 17.390 s headline spread |
-| 3 | Amortize 128 Python launches, status reductions, post-backward diagnostics, and the final barrier | ≤13.485 s (≤0.193% of MSRL wall) | Low | Medium | Memory-safe batching or graph capture | Same replay and gradients; reduce the directly measured status-plus-residual bound |
-| 4 | Keep FlashAttention as the Grug training default | 222.543 s (3.085% of eager) already realized | High | Done | Packed-mask correctness | Eager/FA matched CE agrees within 0.000013 and FA has no slower fixed-replay wall |
+| 1 | Measure the owner's grouped-expert path against its eager expert loop on this exact replay and matched-CE boundary | At most the present 5,583.786-second expert span; no frozen-gap closure is claimed before the paired result | High that this is the dominant present-day MarinSkyRL boundary; cross-stack recovery unmeasured | Medium measurement tranche; implementation already exists | Pin one owner source: `41d5b40` has measured four-H100 parity; `3a011552` is the newer current head | Paired 32-H100 runs at one correctness-passed owner source; identical represented values, same replay, routes or exact route/load-shape check, loss, finite gradients, hook counts, and nonexpert accounting; report wall and expert-span deltas |
+| 2 | Keep FlashAttention as the Grug training default | 222.543 seconds (3.085% of eager) already realized | High | Done | Packed-mask correctness | Eager/FA matched CE agrees within 0.000013 and FA has no slower fixed-replay wall |
+| 3 | Avoid disabled entropy computation in the policy forward | At most 29.794 seconds in the frozen FA operational/matched pair; 24.471 seconds in the eager pair | Medium | Small | Preserve required policy metrics and gradients | Same replay and gradients; beat the 17.390-second FA headline spread |
+| 4 | Amortize Python launches, status reductions, post-backward diagnostics, and the final barrier | At most 13.485 seconds from frozen status-plus-residual spans | Low | Medium | Memory-safe batching or graph capture | Same replay and gradients; reduce the directly measured status-plus-residual bound |
 
-The smallest useful next tranche is one fixed-replay A/B that avoids computing
-entropy when it is not used by the loss, while preserving every required
-reported metric and the policy gradients. Promote an implementation only if
-the same 32-H100 operational boundary is numerically valid and improves by
-more than 17.390 seconds, the observed three-sample FlashAttention spread. Do
-not start the larger grouped/EP implementation here; its owning goal must first
-clear correctness.
+The smallest useful next tranche is not another isolated kernel test. It is one
+paired 32-H100 fixed-replay A/B at one pinned owner source: eager experts versus
+grouped experts, with the attribution hooks left on in both arms. Source
+`41d5b40` already has the measured four-H100 parity gate; if the owner instead
+uses current head `3a011552`, first repeat that gate rather than transferring
+the older result. The A/B tests whether the 109.812x one-H100 kernel ratio survives
+the actual 128-microbatch boundary and measures how much of both the expert
+span and end-to-end wall it removes. Trainer EP can remain off for this first
+discriminator; add it only after the grouped-only arm closes its numerical and
+accounting gates.
 
 ## Reproduction and artifacts
 
@@ -377,6 +516,8 @@ Measurement jobs:
 - [MarinSkyRL headline](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fgrug-perf-msrl-headline-f57b3b60-r4)
 - [MarinSkyRL eager matched-CE isolation](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fgrug-perf-msrl-eager-matched-f57b3b60-r1)
 - [Eager matched-CE independent result verifier](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fgrug-perf-fetch-msrl-eager-matched-f57b3b60-r1-20260801)
+- [Present-day routed-expert attribution](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fgrug-gap-attr-msrl-ce-08f8144-s1-20260801)
+- [Routed-expert independent result verifier](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fgrug-gap-attr-fetch-verify-08f8144-s1-20260801)
 
 Content-hashed result objects:
 
@@ -388,6 +529,7 @@ Content-hashed result objects:
 - `s3://marin-us-east-02a/iris/grug-training-perf-gap/20260731/msrl/headline-eager-operational-f57b3b60-r4-s1.json`
 - `s3://marin-us-east-02a/iris/grug-training-perf-gap/20260731/msrl/headline-fa-matched-ce-f57b3b60-r4-s1.json`
 - `s3://marin-us-east-02a/iris/grug-training-perf-gap/20260731/msrl/headline-eager-matched-ce-f57b3b60-r1.json`
+- `s3://marin-us-east-02a/iris/grug-training-perf-gap/20260801/attribution/headline-fa-matched-ce-expert-08f8144-s1.json`
 
 Each JSON object includes a canonical `result_sha256` over its content excluding
 that field. Independent CPU readbacks recomputed and matched these accepted
@@ -402,10 +544,10 @@ hashes:
 | MarinSkyRL eager operational | `5d036d0af5193b7ee21eabfe201fb9fd4cec8a2906dfa2d151d113b36b81b0d5` |
 | MarinSkyRL FA matched CE | `0a205b68f1671abc517a7ab5978b32e1f102071cdb49497f3f05855e5b0f0d1d` |
 | MarinSkyRL eager matched CE | `298a9bc2c5aa121c340a769d2931c8c42c29440b6c7917b71f18d6fa99c68e01` |
+| MarinSkyRL present-day routed-expert attribution | `51163e4045b5c64d97d6812966680a4e2538f065e20137cd5d7837ffdca3fa22` (payload `b105ae3029bf3239319a44159aeef8808b1f6a982d3779ff3be09447f70e8cbc`) |
 
 The durable benchmark drivers are
-[`scripts/perf/grug_levanter_fixed_replay_benchmark.py`](../../scripts/perf/grug_levanter_fixed_replay_benchmark.py)
-in Marin and
+`scripts/perf/grug_levanter_fixed_replay_benchmark.py` in Marin and
 [`skyrl-train/scripts/grug_fixed_replay_benchmark.py`](https://github.com/marin-community/MarinSkyRL/blob/f57b3b60f894606b8b4f4ff0a6fe7fffa2141042/skyrl-train/scripts/grug_fixed_replay_benchmark.py)
 in MarinSkyRL. Each result records source and image identity, configuration,
 topology, GPU UUIDs, timing boundary, replay identity, start-state evidence,
@@ -441,5 +583,12 @@ FlashAttention operational samples 2 and 3, then one FlashAttention
 `--objective matched_ce`. The one-node preflight used
 `--mode preflight --attention-backend flash_attention_2 --objective
 operational` with a rank-0 profile URI.
+
+The separately labeled present-day attribution used the same model, model
+revision, manifest, logical batch, `headline`, `flash_attention_2`, and
+`matched_ce` arguments, plus `--expert-attribution`, source
+`08f814440579854313a258a8dd658176557f907d`, image
+`ghcr.io/marin-community/marinskyrl@sha256:5f35056daee57d25f134aa2171126645be6750944c92bec27962cfae412041d3`,
+sample 1, and the 2026-08-01 attribution result URI above.
 
 </details>

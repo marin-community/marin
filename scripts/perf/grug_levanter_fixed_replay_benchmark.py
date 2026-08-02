@@ -29,6 +29,7 @@ import dataclasses
 import datetime as dt
 import gc
 import hashlib
+import importlib
 import json
 import shutil
 import socket
@@ -62,7 +63,6 @@ from levanter.grug.sharding import compact_grug_mesh
 from safetensors import safe_open
 
 from experiments.june_tpu_67b_a2b.moe.model import Transformer
-from experiments.june_tpu_67b_a2b.moe.sft_67b_a2b_2stage import _model, _optimizer
 from experiments.june_tpu_67b_a2b.moe.train import GrugTrainState, _apply_qb_betas
 from scripts.perf.grug_fixed_replay import build_loss_weight, repacked_operational_micro_loss
 
@@ -751,6 +751,12 @@ def _config_evidence(
 
 
 def main() -> None:
+    # Importing this experiment module registers its named optimizer. Keep that
+    # side effect out of test collection, which imports benchmark modules.
+    experiment = importlib.import_module("experiments.june_tpu_67b_a2b.moe.sft_67b_a2b_2stage")
+    _model = experiment._model
+    _optimizer = experiment._optimizer
+
     args = parse_args()
     if args.samples <= 0:
         raise ValueError("--samples must be positive")
