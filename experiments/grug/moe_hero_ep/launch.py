@@ -37,6 +37,8 @@ HERO_EP_NODES = 16
 HERO_GPUS_PER_NODE = 4
 HERO_EP_EXPERT_AXIS_SIZE = HERO_EP_NODES * HERO_GPUS_PER_NODE
 HERO_PROCESSES_PER_TASK = 1
+HERO_WORKER_CPU = 32
+HERO_WORKER_RAM_GB = 256
 HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
 
 _SLIMPAJAMA_TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")
@@ -89,6 +91,8 @@ def build_hero_run(
     qb_histogram_bins: int = 1000,
     moonep_jax_wheel_build: MoonEPJaxWheelBuild | None = None,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
+    worker_cpu: int = HERO_WORKER_CPU,
+    worker_ram_gb: int = HERO_WORKER_RAM_GB,
     profile_start_step: int | None = None,
     profile_num_steps: int = 2,
     version: str | None = None,
@@ -102,6 +106,10 @@ def build_hero_run(
         raise ValueError(f"profile_num_steps must be positive, got {profile_num_steps}")
     if processes_per_task <= 0 or HERO_GPUS_PER_NODE % processes_per_task != 0:
         raise ValueError(f"processes_per_task={processes_per_task} must divide {HERO_GPUS_PER_NODE} GPUs per node")
+    if worker_cpu <= 0:
+        raise ValueError(f"worker_cpu must be positive, got {worker_cpu}")
+    if worker_ram_gb <= 0:
+        raise ValueError(f"worker_ram_gb must be positive, got {worker_ram_gb}")
     if profile_start_step is not None and profile_start_step < MIN_HERO_PROFILE_START_STEP:
         raise ValueError(f"profile_start_step must be at least {MIN_HERO_PROFILE_START_STEP}")
     if profile_start_step is not None and profile_start_step + profile_num_steps > num_steps:
@@ -142,8 +150,8 @@ def build_hero_run(
     train_resources = ResourceConfig.with_gpu(
         "GB200",
         count=HERO_GPUS_PER_NODE,
-        cpu=32,
-        ram="256g",
+        cpu=worker_cpu,
+        ram=f"{worker_ram_gb}g",
         disk="256g",
         replicas=HERO_EP_NODES,
     )
@@ -262,6 +270,20 @@ def build_hero_run(
     help="JAX processes per four-GPU rack worker.",
 )
 @click.option(
+    "--worker-cpu",
+    type=click.IntRange(min=1),
+    default=HERO_WORKER_CPU,
+    show_default=True,
+    help="CPU count for each rack worker.",
+)
+@click.option(
+    "--worker-ram-gb",
+    type=click.IntRange(min=1),
+    default=HERO_WORKER_RAM_GB,
+    show_default=True,
+    help="RAM in GiB for each rack worker.",
+)
+@click.option(
     "--profile-start-step",
     type=click.IntRange(min=MIN_HERO_PROFILE_START_STEP),
     default=None,
@@ -285,6 +307,8 @@ def main(
     qb_histogram_bins: int,
     moonep_jax_wheel_build: str | None,
     processes_per_task: int,
+    worker_cpu: int,
+    worker_ram_gb: int,
     profile_start_step: int | None,
     profile_num_steps: int,
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -300,6 +324,8 @@ def main(
             MoonEPJaxWheelBuild(moonep_jax_wheel_build) if moonep_jax_wheel_build is not None else None
         ),
         processes_per_task=processes_per_task,
+        worker_cpu=worker_cpu,
+        worker_ram_gb=worker_ram_gb,
         profile_start_step=profile_start_step,
         profile_num_steps=profile_num_steps,
     )

@@ -305,6 +305,23 @@ def test_hero_process_count_reaches_training_config():
     assert config.processes_per_task == 4
 
 
+@pytest.mark.parametrize(
+    ("worker_cpu", "worker_ram_gb", "message"),
+    [
+        (0, launch.HERO_WORKER_RAM_GB, "worker_cpu must be positive, got 0"),
+        (launch.HERO_WORKER_CPU, 0, "worker_ram_gb must be positive, got 0"),
+    ],
+)
+def test_hero_worker_resources_must_be_positive(worker_cpu: int, worker_ram_gb: int, message: str):
+    with pytest.raises(ValueError, match=message):
+        launch.build_hero_run(
+            run_id="invalid-worker-resources",
+            num_steps=3,
+            worker_cpu=worker_cpu,
+            worker_ram_gb=worker_ram_gb,
+        )
+
+
 def test_ep_newton_schulz_returns_to_expert_sharding():
     mesh = AbstractMesh(
         axis_sizes=(1, 1, 64, 1),
