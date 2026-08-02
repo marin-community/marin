@@ -21,6 +21,7 @@ from verify_blind_neighborhood_with_claude import (  # noqa: E402
     package_from_chunks,
     public_items,
     write_review_checkpoint,
+    write_review_result,
 )
 
 
@@ -85,6 +86,16 @@ def test_review_checkpoint_round_trip_and_input_binding(tmp_path: Path) -> None:
     changed = review_package | {"items": [review_package["items"][0] | {"query": "changed"}, review_package["items"][1]]}
     with pytest.raises(ValueError, match="different review inputs"):
         load_review_checkpoint(checkpoint, changed, "claude-opus-5", 10)
+
+
+def test_write_review_result_replaces_complete_json(tmp_path: Path) -> None:
+    output = tmp_path / "result.json"
+    output.write_text("stale")
+
+    write_review_result(output, {"rationale": "cohérent", "score": 0.75})
+
+    assert json.loads(output.read_text()) == {"rationale": "cohérent", "score": 0.75}
+    assert not output.with_name("result.json.tmp").exists()
 
 
 def test_claude_decisions_corrects_an_incomplete_batch(monkeypatch: pytest.MonkeyPatch) -> None:

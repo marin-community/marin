@@ -58,6 +58,13 @@ def write_review_checkpoint(
     temporary.replace(path)
 
 
+def write_review_result(path: Path, result: dict[str, Any]) -> None:
+    """Atomically write the complete review result."""
+    temporary = path.with_name(f"{path.name}.tmp")
+    temporary.write_text(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+    temporary.replace(path)
+
+
 def load_review_checkpoint(
     path: Path | None,
     package: dict[str, Any],
@@ -330,6 +337,7 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=10)
     parser.add_argument("--max-budget-usd", type=float, required=True)
     parser.add_argument("--checkpoint-path", type=Path)
+    parser.add_argument("--output-path", type=Path)
     args = parser.parse_args()
     if args.batch_size < 1 or args.max_budget_usd <= 0:
         parser.error("--batch-size and --max-budget-usd must be positive")
@@ -349,6 +357,8 @@ def main() -> None:
     result["claude_cost_usd"] = review.cost_usd
     result["reference_model"] = package["reference_model"]
     result["student_model"] = package["student_model"]
+    if args.output_path is not None:
+        write_review_result(args.output_path, result)
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
 
 
