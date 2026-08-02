@@ -223,9 +223,7 @@ def test_dashboard_reports_selected_pipeline_failure(actor_context, tmp_path):
             status = _rpc(client, "GetStatus", {"executionId": "failed-exec"})
             assert status["phase"] == "PIPELINE_PHASE_FAILED"
             assert "test stage failed" in status["fatalError"]
-            failed_nodes = [
-                node for node in status["nodeStatuses"] if node["state"] == "PLAN_NODE_STATE_FAILED"
-            ]
+            failed_nodes = [node for node in status["nodeStatuses"] if node["state"] == "PLAN_NODE_STATE_FAILED"]
             assert [node["nodeId"] for node in failed_nodes] == ["main/stage/0"]
     finally:
         coordinator.shutdown()

@@ -184,9 +184,7 @@ def pipeline_plan(
                     auxiliary=auxiliary,
                 )
             )
-            response.edges.append(
-                dashboard_pb2.PlanEdge(source_node_id=previous_node_id, target_node_id=node_id)
-            )
+            response.edges.append(dashboard_pb2.PlanEdge(source_node_id=previous_node_id, target_node_id=node_id))
             previous_node_id = node_id
             current_shards = output_shards
 
