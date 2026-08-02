@@ -189,6 +189,7 @@ def tokenize_batches_with_id(
     responsible for ``ctx.put('tokenizer_name', ...)`` and
     ``ctx.put('tokenizer_backend', ...)`` before pipeline execution.
     """
+    initialization_start = time.monotonic()
     ctx = zephyr_worker_ctx()
     name = ctx.get_shared("tokenizer_name")
     backend = ctx.get_shared("tokenizer_backend")
@@ -204,6 +205,7 @@ def tokenize_batches_with_id(
     if hasattr(inner, "_long_string_workaround"):
         inner._long_string_workaround = True
     processor = IdPreservingPreprocessor(inner)
+    counters.pipeline.update_counter("tokenize/initialization_seconds", time.monotonic() - initialization_start)
 
     batch_count = 0
     record_count = 0
@@ -231,6 +233,7 @@ def tokenize_batches_with_id(
             )
 
     elapsed = time.monotonic() - start_time
+    counters.pipeline.update_counter("tokenize/processing_seconds", elapsed)
     tok_per_sec = token_count / elapsed if elapsed > 0 else 0
     doc_per_sec = record_count / elapsed if elapsed > 0 else 0
     avg_tok_per_doc = token_count / record_count if record_count > 0 else 0
