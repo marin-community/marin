@@ -46,6 +46,39 @@ def test_qb_routing_uses_sigmoid_scores_for_bias_and_cutoff():
     assert np.all(required_bias <= float(jnp.max(current_bias)) + 1.0)
 
 
+def test_histogram_qb_converges_from_strong_router_skew():
+    num_tokens = 4096
+    num_experts = 16
+    top_k = 2
+    target_load = num_tokens * top_k // num_experts
+    router_logits = jax.random.normal(
+        jax.random.key(0),
+        (num_tokens, num_experts),
+        dtype=jnp.float32,
+    ) + jnp.linspace(-2.0, 2.0, num_experts)
+    bias = jnp.zeros((num_experts,), dtype=jnp.float32)
+    load_errors = []
+
+    for _ in range(6):
+        router_scores, selected_experts, cutoff = quantile_balancing_routes(
+            router_logits,
+            bias,
+            top_k=top_k,
+        )
+        expert_loads = jnp.bincount(selected_experts.reshape(-1), length=num_experts)
+        load_errors.append(int(jnp.max(jnp.abs(expert_loads - target_load))))
+        bias = histogram_quantile_bias(
+            cutoff - router_scores,
+            bias,
+            top_k=top_k,
+            num_bins=1000,
+            reduce_axes=(),
+        )
+
+    assert load_errors[0] > target_load
+    assert load_errors[-1] < target_load // 10
+
+
 def test_histogram_qb_matches_pooled_quantile_within_one_bin():
     required_bias = np.array(
         [
