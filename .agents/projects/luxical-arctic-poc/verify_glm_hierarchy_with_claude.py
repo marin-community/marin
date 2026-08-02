@@ -18,6 +18,7 @@ from typing import Any
 from glm_semantic_labels import parse_json_object, stable_order
 
 REVIEW_CHUNK_MARKER = "GLM_HIERARCHY_REVIEW_CHUNK="
+MAX_REVIEW_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -126,33 +127,49 @@ def claude_assignments(
     model_usage_batches = []
     cost_usd = 0.0
     for start in range(0, len(documents), batch_size):
-        remaining_budget = max_budget_usd - cost_usd
-        if remaining_budget <= 0:
-            raise RuntimeError(f"Claude review reached its ${max_budget_usd:.2f} budget")
-        result = subprocess.run(
-            [
-                "claude",
-                "-p",
-                "--model",
-                model,
-                "--output-format",
-                "json",
-                "--max-budget-usd",
-                str(remaining_budget),
-                "--no-session-persistence",
-                "--safe-mode",
-            ],
-            input=claude_prompt(package, documents[start : start + batch_size]),
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        batch = parse_claude_envelope(result.stdout, model)
-        if result.returncode != 0:
-            raise RuntimeError(f"Claude exited with code {result.returncode}")
-        assignments.extend(batch.assignments)
-        model_usage_batches.extend(batch.model_usage_batches)
-        cost_usd += batch.cost_usd
+        batch_documents = documents[start : start + batch_size]
+        batch_package = package | {"documents": batch_documents}
+        prompt = claude_prompt(package, batch_documents)
+        for attempt in range(MAX_REVIEW_ATTEMPTS):
+            remaining_budget = max_budget_usd - cost_usd
+            if remaining_budget <= 0:
+                raise RuntimeError(f"Claude review reached its ${max_budget_usd:.2f} budget")
+            result = subprocess.run(
+                [
+                    "claude",
+                    "-p",
+                    "--model",
+                    model,
+                    "--output-format",
+                    "json",
+                    "--max-budget-usd",
+                    str(remaining_budget),
+                    "--no-session-persistence",
+                    "--safe-mode",
+                ],
+                input=prompt,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            review = parse_claude_envelope(result.stdout, model)
+            if result.returncode != 0:
+                raise RuntimeError(f"Claude exited with code {result.returncode}")
+            model_usage_batches.extend(review.model_usage_batches)
+            cost_usd += review.cost_usd
+            try:
+                validate_claude_rows(batch_package, review.assignments)
+                assignments.extend(review.assignments)
+                break
+            except ValueError as error:
+                if attempt + 1 == MAX_REVIEW_ATTEMPTS:
+                    raise
+                prompt = (
+                    f"{claude_prompt(package, batch_documents)}\n\n"
+                    f"Your prior JSON failed validation: {error}\n"
+                    f"Prior assignments:\n{json.dumps(review.assignments, ensure_ascii=False)}\n"
+                    "Return the corrected complete assignments JSON for this batch."
+                )
     return ClaudeReview(assignments, model_usage_batches, cost_usd)
 
 

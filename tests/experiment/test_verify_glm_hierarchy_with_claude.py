@@ -12,13 +12,62 @@ import pytest
 PROJECT = Path(__file__).parents[2] / ".agents" / "projects" / "luxical-arctic-poc"
 sys.path.insert(0, str(PROJECT))
 
+import verify_glm_hierarchy_with_claude as verifier  # noqa: E402
 from verify_glm_hierarchy_with_claude import (  # noqa: E402
     REVIEW_CHUNK_MARKER,
+    claude_assignments,
     comparison,
     parse_claude_envelope,
     review_indices,
     review_package_from_chunks,
 )
+
+
+def test_claude_assignments_corrects_invalid_batch(monkeypatch: pytest.MonkeyPatch) -> None:
+    package = {
+        "taxonomy": {
+            "parents": [{"bucket_id": "SCIENCE"}, {"bucket_id": "ARTS"}],
+            "leaves": [
+                {"bucket_id": "BIOLOGY", "parent_id": "SCIENCE"},
+                {"bucket_id": "FICTION", "parent_id": "ARTS"},
+            ],
+            "forms": [{"bucket_id": "RESEARCH"}],
+        },
+        "documents": [{"sample_index": 1, "text": "Biology"}],
+    }
+    invalid = {
+        "sample_index": 1,
+        "primary_parent_id": "SCIENCE",
+        "secondary_parent_ids": [],
+        "primary_leaf_id": "BIOLOGY",
+        "secondary_leaf_ids": ["FICTION"],
+        "form_id": "RESEARCH",
+        "confidence": 0.8,
+        "rationale": "Biology.",
+    }
+    corrected = invalid | {"secondary_parent_ids": ["ARTS"]}
+    prompts = []
+
+    def run(*args, **kwargs):
+        prompts.append(kwargs["input"])
+        assignment = invalid if len(prompts) == 1 else corrected
+        output = json.dumps(
+            {
+                "is_error": False,
+                "result": json.dumps({"assignments": [assignment]}),
+                "modelUsage": {"claude-opus-5": {"inputTokens": 10}},
+                "total_cost_usd": 0.25,
+            }
+        )
+        return verifier.subprocess.CompletedProcess(args[0], 0, stdout=output, stderr="")
+
+    monkeypatch.setattr(verifier.subprocess, "run", run)
+
+    review = claude_assignments(package, "claude-opus-5", batch_size=20, max_budget_usd=2)
+
+    assert review.assignments == [corrected]
+    assert review.cost_usd == 0.5
+    assert "secondary leaf under an unselected parent" in prompts[1]
 
 
 def test_review_indices_keep_representative_and_stress_samples_separate() -> None:
