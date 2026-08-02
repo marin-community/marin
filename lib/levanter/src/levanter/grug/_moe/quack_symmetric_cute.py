@@ -21,6 +21,7 @@ Lazy-imported (quack/cutlass-dsl is Blackwell-only), like the sonic MoE backend.
 from __future__ import annotations
 
 import jax
+import jax.numpy as jnp
 
 import cutlass
 import cutlass.cute as cute
@@ -31,12 +32,15 @@ from quack.gemm_symmetric import GemmSymmetricMixin, GemmSymmetricSm100
 
 try:
     from quack.cute_dsl_utils import get_max_active_clusters
-except ImportError:  # pragma: no cover - name moved across quack versions
+except Exception:  # pragma: no cover - name moved across quack versions
     from quack.gemm_act import get_max_active_clusters
 
-from levanter.grug._moe.quack_cute_dtype import SM100_FALLBACK_MAX_ACTIVE_CLUSTERS, quack_cute_dtype
-
 _ACC = cutlass.Float32
+_JAX_TO_CUTE = {
+    jnp.dtype(jnp.bfloat16): cutlass.BFloat16,
+    jnp.dtype(jnp.float16): cutlass.Float16,
+    jnp.dtype(jnp.float32): cutlass.Float32,
+}
 
 # QuACK's SM100 symmetric config (_symmetric_gemm_config): tile (256, 256), cluster_M 2, static.
 # NOTE: (256, 128) benchmarks 1.62x faster on the isolated [96, 2560, 5120] expert gram, but it
@@ -47,6 +51,11 @@ _ACC = cutlass.Float32
 _DEFAULT_MMA_TILER = (256, 256)
 _DEFAULT_CLUSTER = (2, 1, 1)
 _DEFAULT_SWIZZLE = 8
+_FALLBACK_MAX_ACTIVE_CLUSTERS = 148
+
+
+def _cute_dtype(dt):
+    return _JAX_TO_CUTE[jnp.dtype(dt)]
 
 
 def _transpose_mn(mD):
@@ -84,11 +93,11 @@ def quack_symmetric_gemm(
     The kernel computes ``A @ B^T``, so both operands are ``X``, k-major ([M, K, L], mode (1,2,0)).
     """
     L, M, K = X.shape
-    a_dtype = quack_cute_dtype(X.dtype)
+    a_dtype = _cute_dtype(X.dtype)
     try:
         mac = get_max_active_clusters(cluster_mnk[0] * cluster_mnk[1])
     except Exception:
-        mac = SM100_FALLBACK_MAX_ACTIVE_CLUSTERS
+        mac = _FALLBACK_MAX_ACTIVE_CLUSTERS
     launcher = _build_launcher(
         a_dtype=a_dtype, mma_tiler_mnk=mma_tiler_mnk, cluster_mnk=cluster_mnk, mac=mac, max_swizzle=max_swizzle
     )

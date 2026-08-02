@@ -67,7 +67,7 @@ from levanter.metrics import Metric, auto_metric_from_name, unwrap_metrics
 from levanter.optim.model_averaging import ModelAveragingConfig
 from levanter.schedule import BatchSchedule, IntSchedule, ScheduleStep, distinct_values, value_at_step
 from levanter.tracker import TrackerConfig, capture_time
-from levanter.tracker.telltale import TelltaleConfig
+from levanter.tracker.telemetry import TelemetryConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_training_mask
 from levanter.utils import cloud_utils
@@ -290,7 +290,7 @@ class Trainer:
         except RuntimeError:
             # No global tracker set, create one
             self.tracker = levanter.tracker.CompositeTracker(
-                [c.init(self.run_id) for c in _compose_with_telltale(config.tracker)]
+                [c.init(self.run_id) for c in _compose_with_telemetry(config.tracker)]
             )
 
         if add_default_hooks:
@@ -794,16 +794,16 @@ class Trainer:
         return fn(*args, **kwargs)
 
 
-def _compose_with_telltale(config: TrackerConfig | Sequence[TrackerConfig]) -> list[TrackerConfig]:
-    """The configured tracker(s), with a ``TelltaleConfig`` appended unless one is already present."""
+def _compose_with_telemetry(config: TrackerConfig | Sequence[TrackerConfig]) -> list[TrackerConfig]:
+    """The configured tracker(s), with telemetry appended unless already present."""
     configs = list(config) if isinstance(config, Sequence) else [config]
-    if not any(isinstance(c, TelltaleConfig) for c in configs):
-        configs = [*configs, TelltaleConfig()]
+    if not any(isinstance(c, TelemetryConfig) for c in configs):
+        configs = [*configs, TelemetryConfig()]
     return configs
 
 
 def _initialize_global_tracker(config, run_id):
-    tracker = levanter.tracker.CompositeTracker([c.init(run_id) for c in _compose_with_telltale(config)])
+    tracker = levanter.tracker.CompositeTracker([c.init(run_id) for c in _compose_with_telemetry(config)])
     levanter.tracker.set_global_tracker(tracker)
 
 

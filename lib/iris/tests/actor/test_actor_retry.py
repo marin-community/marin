@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import iris.actor.client as actor_client_module
 import iris.actor.pool as actor_pool_module
 import pytest
+from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.actor.client import ActorClient
 from iris.actor.pool import ActorPool
@@ -113,6 +114,67 @@ def test_actor_client_retries_on_transient_rpc_error():
         assert result == 1
     finally:
         server.stop()
+
+
+def test_actor_client_reresolves_endpoint_when_actor_is_missing():
+    stale_server = ActorServer(host="127.0.0.1")
+    stale_port = stale_server.serve_background()
+    replacement_server = ActorServer(host="127.0.0.1")
+    replacement_server.register("counter", Counter())
+    replacement_port = replacement_server.serve_background()
+
+    try:
+        resolver = SwitchingResolver(
+            [
+                {"counter": f"http://127.0.0.1:{stale_port}"},
+                {"counter": f"http://127.0.0.1:{replacement_port}"},
+            ]
+        )
+        client = ActorClient(
+            resolver,
+            "counter",
+            max_call_attempts=3,
+            backoff=ExponentialBackoff(initial=0.05, maximum=0.1),
+        )
+
+        assert client.increment() == 1
+    finally:
+        stale_server.stop()
+        replacement_server.stop()
+
+
+def test_actor_client_does_not_reresolve_endpoint_when_method_is_missing():
+    class CounterWithProbe(Counter):
+        def probe(self) -> str:
+            return "replacement"
+
+    original_server = ActorServer(host="127.0.0.1")
+    original_server.register("counter", Counter())
+    original_port = original_server.serve_background()
+    replacement_server = ActorServer(host="127.0.0.1")
+    replacement_server.register("counter", CounterWithProbe())
+    replacement_port = replacement_server.serve_background()
+
+    try:
+        resolver = SwitchingResolver(
+            [
+                {"counter": f"http://127.0.0.1:{original_port}"},
+                {"counter": f"http://127.0.0.1:{replacement_port}"},
+            ]
+        )
+        client = ActorClient(
+            resolver,
+            "counter",
+            max_call_attempts=3,
+            backoff=ExponentialBackoff(initial=0.05, maximum=0.1),
+        )
+
+        with pytest.raises(ConnectError) as exc_info:
+            client.probe()
+        assert exc_info.value.code is Code.NOT_FOUND
+    finally:
+        original_server.stop()
+        replacement_server.stop()
 
 
 def test_actor_client_does_not_retry_on_application_error():

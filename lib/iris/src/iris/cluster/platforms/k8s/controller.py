@@ -30,7 +30,9 @@ from iris.cluster.config import (
     assert_no_inlined_secrets,
     config_to_dict,
 )
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, collect_inject_env, projects_task_env_secret
+from iris.cluster.node_agent import SERVICE_NAME as _NODE_AGENT_NAME
 from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
 from iris.cluster.platforms.k8s.kueue_manifests import RESOURCE_FLAVOR_NAME
 from iris.cluster.platforms.k8s.nodepool_manifests import nodepool_name
@@ -44,6 +46,7 @@ from iris.cluster.platforms.k8s.types import (
     parse_k8s_timestamp,
 )
 from iris.cluster.platforms.types import InfraError, Labels, local_queue_name
+from iris.cluster.runtime.env import IRIS_NAMESPACE_ENV, IRIS_NODE_NAME_ENV
 
 logger = logging.getLogger(__name__)
 
@@ -300,6 +303,59 @@ def _build_controller_deployment(
     }
 
 
+def _build_node_agent_daemonset(*, namespace: str, image: str) -> dict:
+    """Run the Iris physical-node collector once on every Kubernetes node."""
+    return {
+        "apiVersion": "apps/v1",
+        "kind": "DaemonSet",
+        "metadata": {"name": _NODE_AGENT_NAME, "namespace": namespace},
+        "spec": {
+            "selector": {"matchLabels": {"app": _NODE_AGENT_NAME}},
+            "template": {
+                "metadata": {"labels": {"app": _NODE_AGENT_NAME}},
+                "spec": {
+                    "serviceAccountName": "iris-controller",
+                    "priorityClassName": IRIS_PRIORITY_CLASS_SYSTEM,
+                    "hostNetwork": True,
+                    "dnsPolicy": "ClusterFirstWithHostNet",
+                    "terminationGracePeriodSeconds": 10,
+                    "tolerations": [{"operator": "Exists"}],
+                    "containers": [
+                        {
+                            "name": _NODE_AGENT_NAME,
+                            "image": image,
+                            "imagePullPolicy": "Always",
+                            "command": [
+                                ".venv/bin/python",
+                                "-m",
+                                "iris.cluster.node_agent",
+                                "k8s",
+                                "--config=/etc/iris/config.json",
+                            ],
+                            "env": [
+                                {
+                                    "name": IRIS_NODE_NAME_ENV,
+                                    "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}},
+                                },
+                                {
+                                    "name": IRIS_NAMESPACE_ENV,
+                                    "valueFrom": {"fieldRef": {"fieldPath": "metadata.namespace"}},
+                                },
+                            ],
+                            "resources": {
+                                "requests": {"cpu": "50m", "memory": "64Mi"},
+                                "limits": {"cpu": "1", "memory": "512Mi"},
+                            },
+                            "volumeMounts": [{"name": "config", "mountPath": "/etc/iris", "readOnly": True}],
+                        }
+                    ],
+                    "volumes": [{"name": "config", "configMap": {"name": "iris-cluster-config"}}],
+                },
+            },
+        },
+    }
+
+
 def _build_controller_state_pvc(*, namespace: str) -> dict:
     """Build the PVC that stores the controller SQLite state."""
     return {
@@ -444,6 +500,14 @@ class K8sControllerProvider:
 
         self.ensure_kueue_queues(config)
         self.ensure_priority_classes()
+        if config.finelog.config or LOG_SERVER_ENDPOINT_NAME in config.endpoints:
+            self._kubectl.apply_json(
+                _build_node_agent_daemonset(namespace=self._namespace, image=config.controller.image)
+            )
+            logger.info("DaemonSet %s applied", _NODE_AGENT_NAME)
+        else:
+            self._kubectl.delete(K8sResource.DAEMONSETS, _NODE_AGENT_NAME)
+            logger.info("Node telemetry is unconfigured; DaemonSet %s is absent", _NODE_AGENT_NAME)
         if local_state_hostpath:
             logger.info("controller local state uses node-local hostPath %s (no PVC)", state_mount_path)
         else:
@@ -559,6 +623,7 @@ class K8sControllerProvider:
         service_name = cw.service_name or "iris-controller-svc"
 
         self._kubectl.delete(K8sResource.DEPLOYMENTS, "iris-controller")
+        self._kubectl.delete(K8sResource.DAEMONSETS, _NODE_AGENT_NAME)
         self._kubectl.delete(K8sResource.SERVICES, service_name)
         self._kubectl.delete(K8sResource.PDBS, "iris-controller-pdb")
         self._kubectl.delete(K8sResource.CONFIGMAPS, "iris-cluster-config")

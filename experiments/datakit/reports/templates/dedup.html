@@ -74,7 +74,7 @@ document.getElementById("params").textContent =
   Object.entries(D.params).map(([k,v]) => `${k}=${v === null ? "none" : v}`).join("  ·  ");
 let srows = `<tr><th>source</th><th>sampled members</th><th>distinct clusters</th></tr>`;
 for (const s of D.sources) {
-  srows += `<tr><td title="${s.source_main_dir}">${s.label}</td>` +
+  srows += `<tr><td title="${s.source_key}">${s.label}</td>` +
     `<td class="num">${s.sampled_members.toLocaleString()}</td>` +
     `<td class="num">${s.sampled_clusters.toLocaleString()}</td></tr>`;
 }

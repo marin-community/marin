@@ -19,6 +19,13 @@ from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig, fla
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 
 
+def _replicate_metadata(x: jax.Array) -> jax.Array:
+    mesh = get_abstract_mesh()
+    if mesh is None or mesh.empty:
+        return x
+    return reshard(x, P(None, None))
+
+
 def _batched_segment_ids(segment_ids: jax.Array, *, batch_size: int, seq_len: int) -> jax.Array:
     if segment_ids.ndim == 1:
         if segment_ids.shape[0] != seq_len:
@@ -50,12 +57,7 @@ def _packed_segment_start_positions(
     segment_ids = _batched_segment_ids(segment_ids, batch_size=batch_size, seq_len=seq_len)
     valid = segment_ids >= 0
     starts = _segment_starts(segment_ids)
-    # Pin the position ids replicated (P(None, None)) rather than letting XLA leave the arange
-    # constant on {maximal device=0}. Otherwise the [B, S] lower_bounds broadcast built from it is
-    # device-0, and the downstream reshard to the batch-sharded metadata spec becomes an
-    # "involuntary full rematerialization" (replicate-then-partition) -- serialized through device 0
-    # every attention, which builds cross-rank collective skew and wedges the all-to-all at scale.
-    positions = reshard(jnp.arange(seq_len, dtype=jnp.int32)[None, :], P(None, None))
+    positions = _replicate_metadata(jnp.arange(seq_len, dtype=jnp.int32)[None, :])
     start_positions = jnp.where(starts, positions, 0)
     current_start: jax.Array = jax.lax.associative_scan(jnp.maximum, start_positions, axis=1)
     return jnp.where(valid, current_start, seq_len)
@@ -80,9 +82,7 @@ def _packed_segment_causal_lower_bounds(
         seq_len=seq_len,
     )
     if sliding_window is not None:
-        # Replicated position ids (not {maximal device=0}) so the downstream batch-sharded reshard
-        # is a clean slice rather than an involuntary full-remat scatter through device 0.
-        positions = reshard(jnp.arange(seq_len, dtype=jnp.int32)[None, :], P(None, None))
+        positions = _replicate_metadata(jnp.arange(seq_len, dtype=jnp.int32)[None, :])
         window_lower_bounds = positions - (sliding_window - 1)
         lower_bounds = jnp.maximum(lower_bounds, window_lower_bounds)
     return jnp.where(valid, lower_bounds, seq_len), valid
@@ -97,21 +97,13 @@ def _simple_causal_lower_bounds(
     if sliding_window is not None and sliding_window <= 0:
         raise ValueError(f"sliding_window must be positive, got {sliding_window}")
 
-    # Pin the position ids replicated (P(None, None)) rather than letting XLA leave the arange
-    # constant on {maximal device=0}. Otherwise the [B, S] lower_bounds broadcast built from it is
-    # device-0, and the downstream reshard to the batch-sharded metadata spec becomes an
-    # "involuntary full rematerialization" (replicate-then-partition) -- serialized through device 0
-    # every attention, which builds cross-rank collective skew and wedges the all-to-all at scale.
-    positions = reshard(jnp.arange(seq_len, dtype=jnp.int32)[None, :], P(None, None))
+    positions = _replicate_metadata(jnp.arange(seq_len, dtype=jnp.int32)[None, :])
     if sliding_window is None:
-        lower_bounds = reshard(jnp.zeros((1, seq_len), dtype=jnp.int32), P(None, None))
+        lower_bounds = _replicate_metadata(jnp.zeros((1, seq_len), dtype=jnp.int32))
     else:
         lower_bounds = jnp.maximum(positions - (sliding_window - 1), 0)
-    # Keep the batch-broadcast bounds/valid replicated (not {maximal device=0}); the downstream
-    # reshard to the batch-sharded metadata spec is then a clean per-device slice rather than an
-    # involuntary full-remat scatter that serializes through device 0.
-    lower_bounds = reshard(jnp.broadcast_to(lower_bounds, (batch_size, seq_len)), P(None, None))
-    valid = reshard(jnp.ones((batch_size, seq_len), dtype=jnp.bool_), P(None, None))
+    lower_bounds = _replicate_metadata(jnp.broadcast_to(lower_bounds, (batch_size, seq_len)))
+    valid = _replicate_metadata(jnp.ones((batch_size, seq_len), dtype=jnp.bool_))
     return lower_bounds, valid
 
 
@@ -328,9 +320,8 @@ def gpu_fa4_cute_attention(
 
     _validate_head_layout(q, k, backend_name="gpu_fa4_cute_attention")
     if isinstance(mask, AttentionMask) and mask.fa4_bounds is not None:
-        # Precomputed metadata path: the caller built (lower_bounds, valid) outside any lax.cond and
-        # selected it per layer, so the pure_callback never reads a conditional output (no device-0
-        # remat). See AttentionMask.fa4_bounds.
+        # The caller precomputed and selected the per-token metadata outside any per-layer scan/cond
+        # (see fa4_cute_segment_bounds); use it directly instead of rebuilding from the static mask.
         lower_bounds, valid = mask.fa4_bounds
     else:
         lower_bounds, valid = _self_attention_lower_bounds(
@@ -359,15 +350,33 @@ def fa4_cute_segment_bounds(
     seq_len: int,
     sliding_window: int | None,
 ) -> tuple[Int[Array, "B S"], Bool[Array, "B S"]]:
-    """Return per-token lower bounds and validity for FA4 causal attention."""
+    """Compute FA4/CuTe per-token ``(lower_bounds, valid)`` for ``mask`` at a given window.
+
+    Exposed so callers can precompute the metadata once outside a ``lax.scan``/``lax.cond`` and
+    select it per layer via :meth:`AttentionMask.with_fa4_bounds`. This lets a homogeneous layer
+    scan pick a per-layer sliding window (a static field the scan body cannot vary) by selecting
+    between precomputed bound arrays.
+    """
     if not isinstance(mask, AttentionMask):
         raise NotImplementedError("fa4_cute_segment_bounds requires an AttentionMask.")
     if not mask.is_causal:
         raise NotImplementedError("fa4_cute_segment_bounds supports only causal self-attention.")
     if mask.segment_ids is None:
         return _simple_causal_lower_bounds(batch_size=batch_size, seq_len=seq_len, sliding_window=sliding_window)
-    q_segment_ids, _ = mask.segment_ids
+    q_segment_ids, kv_segment_ids = mask.segment_ids
+    # These bounds derive from the q ids alone. Self-attention commonly carries q and kv ids as
+    # distinct-but-equal arrays, so assert value equality at runtime (matching the regular FA4 path
+    # in ``_packed_self_attention_segment_ids``) rather than rejecting on object identity, which
+    # would break normal packed training.
+    same_segment_ids = q_segment_ids is kv_segment_ids
     q_segment_ids = _batched_segment_ids(q_segment_ids, batch_size=batch_size, seq_len=seq_len)
+    if not same_segment_ids:
+        kv_segment_ids = _batched_segment_ids(kv_segment_ids, batch_size=batch_size, seq_len=seq_len)
+        q_segment_ids = eqx.error_if(
+            q_segment_ids,
+            jnp.any(q_segment_ids != kv_segment_ids),
+            "fa4_cute_segment_bounds requires matching q/kv segment ids.",
+        )
     return _packed_segment_causal_lower_bounds(
         q_segment_ids,
         batch_size=batch_size,

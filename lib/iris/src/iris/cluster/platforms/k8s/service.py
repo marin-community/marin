@@ -55,6 +55,13 @@ DEFAULT_TIMEOUT: float = 60.0
 # Threshold for slow-operation warnings (milliseconds)
 _SLOW_THRESHOLD_MS: int = 2000
 
+# Items requested per LIST page. An unpaginated list of a large collection
+# streams one chunked response body that no timeout bounds — the client arms a
+# per-recv socket timeout, which every arriving chunk resets — so a slow list
+# parks its caller indefinitely. Chunked lists bound both the response body and
+# the API server's etcd range read.
+_LIST_PAGE_LIMIT: int = 500
+
 # API error bodies quote the offending manifest; keep enough to identify the
 # verdict without flooding logs.
 _ERROR_BODY_MAX_LEN: int = 500
@@ -75,6 +82,17 @@ class K8sService(Protocol):
     def apply_json(self, manifest: dict) -> None: ...
 
     def get_json(self, resource: K8sResource, name: str) -> dict | None: ...
+
+    def iter_json(
+        self,
+        resource: K8sResource,
+        *,
+        labels: dict[str, str] | None = None,
+        field_selector: str | None = None,
+        namespace: str | None = None,
+    ) -> Iterator[dict]:
+        """Yield matching resources one page at a time."""
+        ...
 
     def list_json(
         self,
@@ -341,6 +359,50 @@ class CloudK8sService:
 
     # -- list ----------------------------------------------------------------
 
+    def iter_json(
+        self,
+        resource: K8sResource,
+        *,
+        labels: dict[str, str] | None = None,
+        field_selector: str | None = None,
+        namespace: str | None = None,
+    ) -> Iterator[dict]:
+        """Yield matching resources one page at a time.
+
+        Each page is its own bounded request: an unpaginated list streams a single
+        chunked body that no timeout bounds, because the per-recv socket timeout the
+        client arms is reset by every arriving chunk. A caller that keeps only a few
+        fields per item, or that stops early, never holds the whole collection.
+
+        ``namespace`` overrides the service's own namespace for cross-namespace reads.
+        """
+        logger.info(
+            "k8s: LIST %s labels=%s field_selector=%s namespace=%s", resource.plural, labels, field_selector, namespace
+        )
+        kwargs = {"namespace": namespace} if namespace else self._ns_kwargs(resource)
+        if labels:
+            kwargs["label_selector"] = _label_selector(labels)
+        if field_selector:
+            kwargs["field_selector"] = field_selector
+        kwargs.update(self._request_timeout_kwargs())
+        api = self._resource_api(resource)
+        continue_token = ""
+        with slow_log(logger, f"list {resource.plural}", threshold_ms=_SLOW_THRESHOLD_MS):
+            while True:
+                page_kwargs = dict(kwargs, limit=_LIST_PAGE_LIMIT)
+                if continue_token:
+                    page_kwargs["_continue"] = continue_token
+                try:
+                    result = api.get(**page_kwargs)
+                except ApiException as e:
+                    raise KubectlError(f"list {resource.plural} failed ({e.status}): {e.reason}") from e
+                for item in result.items:
+                    yield item.to_dict()
+                meta = result.metadata
+                continue_token = (meta["continue"] if meta is not None else None) or ""
+                if not continue_token:
+                    return
+
     def list_json(
         self,
         resource: K8sResource,
@@ -349,19 +411,7 @@ class CloudK8sService:
         field_selector: str | None = None,
     ) -> list[dict]:
         """List Kubernetes resources, optionally filtered by labels and/or field selectors."""
-        logger.info("k8s: LIST %s labels=%s field_selector=%s", resource.plural, labels, field_selector)
-        kwargs = self._ns_kwargs(resource)
-        if labels:
-            kwargs["label_selector"] = _label_selector(labels)
-        if field_selector:
-            kwargs["field_selector"] = field_selector
-        kwargs.update(self._request_timeout_kwargs())
-        with slow_log(logger, f"list {resource.plural}", threshold_ms=_SLOW_THRESHOLD_MS):
-            try:
-                result = self._resource_api(resource).get(**kwargs)
-                return [item.to_dict() for item in result.items]
-            except ApiException as e:
-                raise KubectlError(f"list {resource.plural} failed ({e.status}): {e.reason}") from e
+        return list(self.iter_json(resource, labels=labels, field_selector=field_selector))
 
     # -- delete --------------------------------------------------------------
 
@@ -393,43 +443,34 @@ class CloudK8sService:
                 self.delete(resource, name, force=force, wait=wait)
 
     def delete_by_labels(self, resource: K8sResource, labels: dict[str, str], *, wait: bool = False) -> None:
-        """Delete all resources matching the given label selector."""
+        """Delete all resources matching the given label selector.
+
+        Lists the selector and deletes each match by name. A single DELETE on the
+        collection URL would be one request instead of N, but Kubernetes treats that as
+        the ``deletecollection`` verb, which the controller ClusterRole does not grant
+        (see CLUSTER_ROLE_RULES) — it would 403 at runtime.
+        """
         if not labels:
             return
         selector = _label_selector(labels)
-        logger.info("k8s: DELETE_COLLECTION %s labels=%s", resource.plural, labels)
-        kwargs = self._ns_kwargs(resource)
-        kwargs["label_selector"] = selector
-        if not wait:
-            kwargs["propagation_policy"] = "Background"
-        kwargs.update(self._request_timeout_kwargs())
+        logger.info("k8s: DELETE_BY_LABELS %s labels=%s", resource.plural, labels)
+        # iter_json and delete each raise KubectlError already, and delete tolerates
+        # NotFound, so there is nothing left here to translate.
         with slow_log(logger, f"delete_by_labels {resource.plural} -l {selector}", threshold_ms=_SLOW_THRESHOLD_MS):
-            try:
-                api = self._resource_api(resource)
-                items = api.get(**{k: v for k, v in kwargs.items() if k != "propagation_policy"}).items
-                for item in items:
-                    self.delete(resource, item.metadata.name, wait=wait)
-            except NotFoundError:
-                return
-            except ApiException as e:
-                raise KubectlError(
-                    f"delete_by_labels {resource.plural} -l {selector} failed ({e.status}): {e.reason}"
-                ) from e
+            for item in self.iter_json(resource, labels=labels):
+                name = item.get("metadata", {}).get("name")
+                if name:
+                    self.delete(resource, name, wait=wait)
 
     # -- cross-namespace pod operations ---------------------------------------
 
     def list_pods_in_namespace(self, namespace: str) -> list[dict]:
-        """List pods in an explicit namespace (not the service's own)."""
-        logger.info("k8s: LIST pods namespace=%s", namespace)
-        with slow_log(logger, f"list pods in {namespace}", threshold_ms=_SLOW_THRESHOLD_MS):
-            try:
-                result = self._resource_api(K8sResource.PODS).get(
-                    namespace=namespace,
-                    **self._request_timeout_kwargs(),
-                )
-                return [item.to_dict() for item in result.items]
-            except ApiException as e:
-                raise KubectlError(f"list pods in {namespace} failed ({e.status}): {e.reason}") from e
+        """List pods in an explicit namespace (not the service's own).
+
+        Chunked like every other list: this one runs on the control loop (blocker
+        eviction) against foreign tenant namespaces, which are larger than Iris's own.
+        """
+        return list(self.iter_json(K8sResource.PODS, namespace=namespace))
 
     def delete_pod_in_namespace(self, namespace: str, name: str) -> None:
         """Delete a pod in an explicit namespace, ignoring NotFound."""

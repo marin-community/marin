@@ -9,6 +9,7 @@
 """Advance isolated external projects and publish their locked Git revisions."""
 
 import argparse
+import json
 import re
 import subprocess
 import tomllib
@@ -18,6 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 EXTERNAL_ROOT = Path(__file__).with_name("external")
 GENERATED_PINS = ROOT / "lib" / "marin" / "src" / "marin" / "external_dependencies.py"
+GIT_SUFFIX = ".git"
 
 
 @dataclass(frozen=True)
@@ -39,6 +41,19 @@ class LockedDependency:
     version: str
     commit: str
     runtime_requirements: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class UpstreamCommit:
+    commit: str
+    subject: str
+
+
+@dataclass(frozen=True)
+class DependencyUpdate:
+    previous: LockedDependency
+    current: LockedDependency
+    commits: tuple[UpstreamCommit, ...]
 
 
 EXTERNAL_PROJECTS = (
@@ -144,20 +159,112 @@ EXTERNAL_DEPENDENCIES = (
 '''
 
 
-def render_summary(dependencies: tuple[LockedDependency, ...]) -> str:
+def github_repository_path(repository: str) -> str:
+    """Return an owner/repository path from a GitHub HTTPS URL."""
+    prefix = "https://github.com/"
+    repository_path = repository.removesuffix(GIT_SUFFIX).removeprefix(prefix)
+    if not repository.startswith(prefix) or repository_path.count("/") != 1:
+        raise ValueError(f"expected a GitHub HTTPS repository, found {repository!r}")
+    return repository_path
+
+
+def github_commits(repository: str, base: str, head: str) -> tuple[UpstreamCommit, ...]:
+    """Return every commit in a GitHub comparison, oldest first."""
+    repository_path = github_repository_path(repository)
+    result = subprocess.run(
+        [
+            "gh",
+            "api",
+            f"repos/{repository_path}/compare/{base}...{head}",
+            "--method",
+            "GET",
+            "-f",
+            "per_page=100",
+            "--paginate",
+            "--slurp",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    pages = json.loads(result.stdout)
+    if not pages or any(page["status"] != "ahead" for page in pages):
+        statuses = sorted({page["status"] for page in pages})
+        raise ValueError(f"{repository}: expected {base}..{head} to be ahead, found {statuses}")
+
+    commits = tuple(
+        UpstreamCommit(
+            commit=commit["sha"],
+            subject=commit["commit"]["message"].partition("\n")[0],
+        )
+        for page in pages
+        for commit in page["commits"]
+    )
+    expected_commits = pages[0]["total_commits"]
+    if len(commits) != expected_commits:
+        raise ValueError(f"{repository}: expected {expected_commits} commits in {base}..{head}, found {len(commits)}")
+    return commits
+
+
+def dependency_updates(
+    previous: tuple[LockedDependency, ...],
+    current: tuple[LockedDependency, ...],
+) -> tuple[DependencyUpdate, ...]:
+    """Return changed dependency ranges with their upstream commits."""
+    previous_by_project = {dependency.project.config_name: dependency for dependency in previous}
+    updates = []
+    for current_dependency in current:
+        previous_dependency = previous_by_project[current_dependency.project.config_name]
+        if previous_dependency.commit == current_dependency.commit:
+            continue
+        if previous_dependency.repository != current_dependency.repository:
+            raise ValueError(
+                f"{current_dependency.project.config_name}: cannot compare different repositories "
+                f"{previous_dependency.repository!r} and {current_dependency.repository!r}"
+            )
+        updates.append(
+            DependencyUpdate(
+                previous=previous_dependency,
+                current=current_dependency,
+                commits=github_commits(
+                    current_dependency.repository,
+                    previous_dependency.commit,
+                    current_dependency.commit,
+                ),
+            )
+        )
+    return tuple(updates)
+
+
+def render_summary(
+    dependencies: tuple[LockedDependency, ...],
+    updates: tuple[DependencyUpdate, ...],
+) -> str:
     """Render the resolved external revisions for an automated pull request."""
     rows = "\n".join(
         f"| `{dependency.project.config_name}` | `{dependency.project.distribution}` | "
         f"`{dependency.version}` | "
         f"[`{dependency.commit[:12]}`]"
-        f"({dependency.repository.removesuffix('.git')}/commit/{dependency.commit}) |"
+        f"({dependency.repository.removesuffix(GIT_SUFFIX)}/commit/{dependency.commit}) |"
         for dependency in dependencies
     )
+    update_sections = "\n\n".join(
+        f"### {update.current.project.config_name} "
+        f"(`{update.previous.commit[:12]}` → `{update.current.commit[:12]}`)\n\n"
+        + "\n".join(
+            f"- [`{commit.commit[:12]}`]"
+            f"({update.current.repository.removesuffix(GIT_SUFFIX)}/commit/{commit.commit}): "
+            f"{commit.subject}"
+            for commit in update.commits
+        )
+        for update in updates
+    )
+    upstream_commits = f"\n\n## Upstream commits\n\n{update_sections}" if update_sections else ""
     return f"""Advance Marin's isolated external runtimes to the current commits on their configured branches.
 
 | Project | Distribution | Version | Commit |
 | --- | --- | --- | --- |
-{rows}
+{rows}{upstream_commits}
 
 Generated by `config/update-external.py`. Review the linked upstream changes before merging.
 """
@@ -203,6 +310,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     selected = tuple(project_by_name(name) for name in args.projects) or EXTERNAL_PROJECTS
+    previous_dependencies = tuple(locked_dependency(project) for project in EXTERNAL_PROJECTS)
     if not args.check:
         for project in selected:
             subprocess.run(
@@ -224,7 +332,8 @@ def main() -> None:
             f"{dependency.project.distribution}=={dependency.version} commit={dependency.commit}"
         )
     if args.summary_file is not None:
-        args.summary_file.write_text(render_summary(dependencies))
+        updates = dependency_updates(previous_dependencies, dependencies)
+        args.summary_file.write_text(render_summary(dependencies, updates))
     pins_match = synchronize_file(GENERATED_PINS, render_pins(dependencies), check=args.check)
     if args.check and not pins_match:
         raise SystemExit("external dependency pins are stale; run `uv run config/update-external.py`")

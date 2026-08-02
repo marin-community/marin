@@ -6,6 +6,7 @@
 import threading
 
 import pytest
+from fray.actor import ActorHandle, ActorUnavailableError, current_actor
 from fray.local_backend import LocalClient
 
 
@@ -24,6 +25,22 @@ class Counter:
 class Adder:
     def add(self, a: int, b: int) -> int:
         return a + b
+
+
+class _ActorConstructionError(RuntimeError):
+    pass
+
+
+class FailSecondActor:
+    def __init__(self, handles: list[ActorHandle]):
+        actor = current_actor()
+        self._index = actor.index
+        handles.append(actor.handle)
+        if self._index == 1:
+            raise _ActorConstructionError
+
+    def get(self) -> int:
+        return self._index
 
 
 @pytest.fixture
@@ -76,7 +93,17 @@ def test_actor_group_shutdown(client: LocalClient):
     handles = group.wait_ready()
     assert len(handles) == 2
     group.shutdown()
-    # Shutdown completes without error - no statuses() in protocol
+    with pytest.raises(ActorUnavailableError):
+        handles[0].get()
+
+
+def test_actor_group_construction_failure_removes_ready_actors(client: LocalClient):
+    handles: list[ActorHandle] = []
+    with pytest.raises(_ActorConstructionError):
+        client.create_actor_group(FailSecondActor, handles, name="failing-actors", count=2)
+
+    with pytest.raises(ActorUnavailableError):
+        handles[0].get()
 
 
 def test_concurrent_remote_calls_thread_safety(client: LocalClient):

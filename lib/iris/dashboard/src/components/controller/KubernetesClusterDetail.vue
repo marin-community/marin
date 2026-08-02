@@ -89,10 +89,6 @@ function num(v?: string): number {
   return v ? Number(v) : 0
 }
 
-function nodeHasMetrics(node: NodeStatus): boolean {
-  return num(node.metricsTs) > 0
-}
-
 function nodeHealthLabel(node: NodeStatus): string {
   if (!node.ready) return node.statusSummary || 'NotReady'
   if (!node.schedulable) return 'Cordoned'
@@ -126,29 +122,6 @@ function acceleratorLabel(node: NodeStatus): string {
 
 function isGpuNode(node: NodeStatus): boolean {
   return (node.gpuCount ?? 0) > 0
-}
-
-function usagePercent(used: number, total: number): number {
-  if (total <= 0) return 0
-  return Math.min(100, Math.round((used / total) * 100))
-}
-
-// CPU/memory fill is pressure: green with headroom, warning tight, danger near full.
-function pressureBarClass(percent: number): string {
-  if (percent >= 90) return 'bg-status-danger'
-  if (percent >= 75) return 'bg-status-warning'
-  return 'bg-status-success'
-}
-
-// GPU temperature thresholds (H100 throttles ~87°C).
-function tempClass(celsius: number): string {
-  if (celsius >= 85) return 'text-status-danger'
-  if (celsius >= 70) return 'text-status-warning'
-  return 'text-status-success'
-}
-
-function memPercent(node: NodeStatus): number {
-  return usagePercent(num(node.memUsedBytes), num(node.memTotalBytes))
 }
 
 // -- Computed --
@@ -271,7 +244,6 @@ function nodeDisplayClass(nodeName?: string, phase?: string): string {
               <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Node</th>
               <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Health</th>
               <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Accelerator</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left w-52">GPU</th>
               <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left w-40">CPU</th>
               <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left w-44">Memory</th>
               <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-right w-16">Pods</th>
@@ -307,51 +279,14 @@ function nodeDisplayClass(nodeName?: string, phase?: string): string {
                 {{ acceleratorLabel(node) }}
               </td>
 
-              <!-- GPU: utilization bar + HBM used/total + hottest-GPU temp -->
-              <td class="px-3 py-2">
-                <template v-if="isGpuNode(node) && nodeHasMetrics(node)">
-                  <div class="flex items-center gap-2">
-                    <div class="flex-1 h-1.5 rounded-full bg-surface-border overflow-hidden">
-                      <div class="h-full rounded-full bg-accent transition-all duration-500" :style="{ width: Math.round(node.gpuUtilPct ?? 0) + '%' }" />
-                    </div>
-                    <span class="text-xs font-mono text-text-secondary w-9 text-right">{{ Math.round(node.gpuUtilPct ?? 0) }}%</span>
-                  </div>
-                  <div class="mt-1 text-xs font-mono text-text-muted">
-                    {{ formatBytes(num(node.hbmUsedBytes)) }} / {{ formatBytes(num(node.hbmTotalBytes)) }}
-                    <span class="mx-1 text-surface-border">|</span>
-                    <span :class="tempClass(node.gpuTempC ?? 0)">{{ Math.round(node.gpuTempC ?? 0) }}°C</span>
-                  </div>
-                </template>
-                <span v-else class="text-xs text-text-muted">—</span>
+              <!-- CPU allocatable capacity -->
+              <td class="px-3 py-2 text-xs font-mono text-text-muted">
+                {{ Math.round(num(node.cpuMillicores) / 1000) }} cores
               </td>
 
-              <!-- CPU: live utilization bar over allocatable core count -->
-              <td class="px-3 py-2">
-                <div v-if="nodeHasMetrics(node)" class="flex items-center gap-2">
-                  <div class="flex-1 h-1.5 rounded-full bg-surface-border overflow-hidden">
-                    <div :class="['h-full rounded-full transition-all duration-500', pressureBarClass(node.cpuPct ?? 0)]" :style="{ width: Math.round(node.cpuPct ?? 0) + '%' }" />
-                  </div>
-                  <span class="text-xs font-mono text-text-secondary w-9 text-right">{{ Math.round(node.cpuPct ?? 0) }}%</span>
-                </div>
-                <div class="text-xs font-mono text-text-muted" :class="{ 'mt-1': nodeHasMetrics(node) }">
-                  {{ Math.round(num(node.cpuMillicores) / 1000) }} cores
-                </div>
-              </td>
-
-              <!-- Memory: live used/total bar -->
-              <td class="px-3 py-2">
-                <template v-if="nodeHasMetrics(node) && num(node.memTotalBytes) > 0">
-                  <div class="flex items-center gap-2">
-                    <div class="flex-1 h-1.5 rounded-full bg-surface-border overflow-hidden">
-                      <div :class="['h-full rounded-full transition-all duration-500', pressureBarClass(memPercent(node))]" :style="{ width: memPercent(node) + '%' }" />
-                    </div>
-                    <span class="text-xs font-mono text-text-secondary w-9 text-right">{{ memPercent(node) }}%</span>
-                  </div>
-                  <div class="mt-1 text-xs font-mono text-text-muted">
-                    {{ formatBytes(num(node.memUsedBytes)) }} / {{ formatBytes(num(node.memTotalBytes)) }}
-                  </div>
-                </template>
-                <span v-else class="text-xs font-mono text-text-muted">{{ formatBytes(num(node.memoryBytes)) }}</span>
+              <!-- Memory allocatable capacity -->
+              <td class="px-3 py-2 text-xs font-mono text-text-muted">
+                {{ formatBytes(num(node.memoryBytes)) }}
               </td>
 
               <!-- Pods -->

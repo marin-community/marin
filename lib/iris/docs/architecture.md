@@ -78,7 +78,9 @@ shared concerns (`redaction`, `service_mode`, `log_keys`,
   lifecycle Protocols get/stop machines.
 
 `runtime/` abstracts *task execution* behind `ContainerRuntime` (Docker /
-subprocess). `worker/` is the agent daemon that runs on each machine.
+subprocess). `worker/` is the task agent daemon. The Iris node-agent entrypoint
+runs beside it on GCP and as a Kubernetes DaemonSet, publishing physical host
+and accelerator evidence independently of task and application telemetry.
 
 The `TaskBackend` contract type lives in the controller layer
 (`controller/backend.py`), and the two implementations in `backends/` import it

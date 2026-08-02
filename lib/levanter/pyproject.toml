@@ -89,7 +89,7 @@ gpu = [
   # FA4 CuTe/THD attention and QuACK SM100 MoE backends.
   "nvidia-cutlass-dsl[cu13]==4.6.0; sys_platform == 'linux'",
   "flash-attn-4[cu13]>=4.0.0b16,<4.1; sys_platform == 'linux'",
-  # QuACK SM100 (Blackwell/B200) grouped-GEMM MoE backend (sonic_cute).
+  # Quack 0.5 uses CUTLASS APIs removed in 4.6; 0.6.1 pins the matching DSL.
   "quack-kernels[cu13]==0.6.1; sys_platform == 'linux'",
   # Optional raw Sonic MoE gather/combine backend. Keep jax-triton exact:
   # 0.3.0 is missing the CUDA backend API needed by our current stack.

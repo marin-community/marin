@@ -109,9 +109,7 @@ class AttentionMask(eqx.Module):
     # Optional precomputed FA4/CuTe per-token metadata (lower_bounds, valid), both [B, S] int32/bool.
     # When set, ``gpu_fa4_cute_attention`` uses these directly instead of rebuilding from
     # ``segment_ids``/``sliding_window``. This lets a caller compute the metadata once outside a
-    # ``lax.scan``/``lax.cond`` and select it per layer, keeping the FA4 pure_callback out of a
-    # conditional (a conditional output feeding the callback is pinned to {maximal device=0} and
-    # forces an involuntary full rematerialization that wedges the MoE all-to-all at scale).
+    # ``lax.scan`` and select a per-layer sliding window (a static field the scan body cannot vary).
     fa4_bounds: tuple[jax.Array, jax.Array] | None = None
 
     @classmethod

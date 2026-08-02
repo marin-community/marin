@@ -18,7 +18,7 @@ dependencies = [
     "fasttext-wheel>=0.9.2",
     "marin-fray",
     "marin-iris",
-    "marin-rigging",
+    "marin-rigging[prometheus]",
     "fsspec>=2025.3.0",
     "gcsfs",
     "google-api-python-client>=2.175.0",

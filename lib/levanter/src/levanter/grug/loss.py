@@ -16,6 +16,7 @@ from jax.sharding import Mesh, NamedSharding, PartitionSpec as P, get_abstract_m
 
 from haliax.jax_utils import named_call
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
+    BlockSizes,
     fused_cross_entropy_loss_and_logsumexp_penalty,
 )
 
@@ -163,6 +164,7 @@ def fused_linear_softmax_cross_entropy_loss(
     dtype: jnp.dtype = jnp.float32,
     precision: jax.lax.PrecisionLike = None,
     implementation: str | tuple[str, ...] | None = None,
+    block_sizes: BlockSizes | None = None,
 ) -> jax.Array:
     """Compute cross-entropy loss via the fused kernel path.
 
@@ -176,6 +178,7 @@ def fused_linear_softmax_cross_entropy_loss(
         dtype: Accumulator dtype for logits/logsumexp.
         precision: Optional matmul precision override for XLA/reference paths.
         implementation: Optional fused CE backend selection override.
+        block_sizes: Optional kernel block-size override (tune v_block_size for large vocab).
 
     Returns:
         If reduction=="none": array with shape labels.shape.
@@ -211,32 +214,19 @@ def fused_linear_softmax_cross_entropy_loss(
         flat_labels = shard_labels.reshape((-1,)).astype(jnp.int32)
         flat_weight = shard_weight.reshape((-1,))
 
-        if os.environ.get("CE_IMPL") == "liger":
-            ce_chunk = int(os.environ.get("CE_LIGER_CHUNK", "8192"))
-            if ce_chunk <= 0:
-                # 0 -> one chunk per shard: a single CE iteration per device (max MFU).
-                ce_chunk = flat_hidden.shape[0]
-            loss = _liger_weighted_ce(
-                flat_hidden,
-                shard_lm_head,
-                flat_labels,
-                flat_weight.astype(dtype),
-                float(logsumexp_weight or 0.0),
-                ce_chunk,
-            )
-        else:
-            loss = fused_cross_entropy_loss_and_logsumexp_penalty(
-                flat_hidden,
-                flat_labels,
-                shard_lm_head,
-                reduction=None,
-                weight=flat_weight,
-                logsumexp_weight=logsumexp_weight,
-                dtype=dtype,
-                logit_soft_cap=None,
-                precision=precision,
-                implementation=implementation,
-            )
+        loss = fused_cross_entropy_loss_and_logsumexp_penalty(
+            flat_hidden,
+            flat_labels,
+            shard_lm_head,
+            reduction=None,
+            weight=flat_weight,
+            logsumexp_weight=logsumexp_weight,
+            dtype=dtype,
+            logit_soft_cap=None,
+            precision=precision,
+            implementation=implementation,
+            block_sizes=block_sizes,
+        )
 
         if reduction_mode is None:
             return loss.reshape(shard_labels.shape)

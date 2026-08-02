@@ -12,6 +12,7 @@ dashboard never sends admin RPC SQL, and every route feeds Infinity's backend pa
 Routes, grouped by source (cluster is a path segment where it applies):
 
     GET /finelog/{cluster}/query?sql=&from=&to=  finelog SQL (window macros, cached per bucket)
+    GET /finelog/{cluster}/v1/vllm/overview       bounded per-job/run vLLM telemetry
     GET /finelog/marin/fleet_health              hub query health + k8s mirror readiness
     GET /finelog/marin/alerts/fleet_health       alert rows: server labels + value(0|1)
     GET /finelog/marin/alerts/training_stalls    active jobs + stalled-progress value(0|1)
@@ -91,7 +92,13 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
-from training_stalls import task_state_query, telltale_query, training_stall_alert_rows
+from training_stalls import task_state_query, telemetry_query, training_stall_alert_rows
+from vllm_observability import (
+    VLLM_MAX_RESULT_ROWS,
+    VLLM_OVERVIEW_SECTIONS,
+    VllmIdentityField,
+    vllm_overview_query,
+)
 from wandb_source import WandbSource
 from zephyr_stalls import zephyr_progress_query, zephyr_stall_alert_rows
 
@@ -265,6 +272,14 @@ def _optional_time(params, name: str) -> datetime | None:
         raise _BadRequest(str(err)) from err
 
 
+def _require_time(params, name: str) -> datetime:
+    raw = _require(params, name)
+    try:
+        return _parse_time(raw, name)
+    except ValueError as err:
+        raise _BadRequest(str(err)) from err
+
+
 def _bucket(at: datetime | None, ttl: float) -> int | None:
     """Snap at to a TTL-wide bucket so a drifting window keeps one cache key."""
     return None if at is None else int(at.timestamp() // max(ttl, 1))
@@ -333,6 +348,68 @@ def create_app(
         except QueryResultTooLargeError as err:
             return JSONResponse({"error": f"{err}; narrow the time range or aggregate"}, status_code=400)
 
+    def vllm_overview(request: Request) -> JSONResponse:
+        try:
+            target = _target_for(request.path_params["cluster"], finelog_sources)
+            params = request.query_params
+            try:
+                identity_field = VllmIdentityField(_require(params, "identity_kind"))
+            except ValueError as err:
+                allowed = ", ".join(field.value for field in VllmIdentityField)
+                raise _BadRequest(f"identity_kind must be one of: {allowed}") from err
+            identity = _require(params, "identity")
+            view = params.get("view")
+            if view and view not in VLLM_OVERVIEW_SECTIONS:
+                raise _BadRequest(f"unknown vLLM overview view {view!r}; configured: {sorted(VLLM_OVERVIEW_SECTIONS)}")
+            start = _require_time(params, "from")
+            end = _require_time(params, "to")
+            try:
+                requested_bucket_ms = int(_require(params, "bucket_ms"))
+            except ValueError as err:
+                raise _BadRequest("bucket_ms must be an integer") from err
+            try:
+                overview = vllm_overview_query(
+                    identity_field,
+                    identity,
+                    round(start.timestamp() * 1000),
+                    round(end.timestamp() * 1000),
+                    requested_bucket_ms,
+                )
+            except ValueError as err:
+                raise _BadRequest(str(err)) from err
+
+            key = (
+                target.name,
+                "vllm_overview",
+                overview.identity_field,
+                overview.identity,
+                overview.start_ms,
+                overview.end_ms,
+                overview.bucket_ms,
+            )
+
+            def run() -> list[dict[str, object]]:
+                logger.info(
+                    "vLLM overview %s: %s=%s [%d, %d)",
+                    target.name,
+                    overview.identity_field,
+                    overview.identity,
+                    overview.start_ms,
+                    overview.end_ms,
+                )
+                table = finelog_sources[target.name].query(
+                    overview.sql,
+                    max_rows=min(config.max_rows, VLLM_MAX_RESULT_ROWS),
+                )
+                return rows_to_json(table)
+
+            rows = finelog_cache.get_or_compute(key, run)
+            return JSONResponse(rows if not view else [row for row in rows if row.get("section") == view])
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        except QueryResultTooLargeError as err:
+            return JSONResponse({"error": f"{err}; narrow the vLLM time range"}, status_code=400)
+
     def fleet_health_rows() -> list[FinelogHealth]:
         _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
         return finelog_health_cache.get_or_compute(
@@ -360,8 +437,8 @@ def create_app(
             def run() -> list[dict]:
                 source = finelog_sources[target.name]
                 task_states = source.query(task_state_query(now), max_rows=config.max_rows)
-                telltale_metrics = source.query(telltale_query(now), max_rows=config.max_rows)
-                return training_stall_alert_rows(task_states, telltale_metrics, now)
+                telemetry_metrics = source.query(telemetry_query(now), max_rows=config.max_rows)
+                return training_stall_alert_rows(task_states, telemetry_metrics, now)
 
             key = ("training_stalls", _bucket(now, config.cache_ttl))
             return JSONResponse(finelog_cache.get_or_compute(key, run))
@@ -581,6 +658,7 @@ def create_app(
             Route("/wandb/{chart}", wandb_chart),
             Route("/overview/provisioning", overview_provisioning),
             Route("/finelog/{cluster}/query", query),
+            Route("/finelog/{cluster}/v1/vllm/overview", vllm_overview),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/fleet_health", finelog_fleet_health),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/fleet_health", finelog_alerts_fleet_health),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_stalls", finelog_alerts_training_stalls),

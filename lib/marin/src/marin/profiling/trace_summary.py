@@ -208,7 +208,7 @@ def summarize_complete_events(
         limit=max(hot_op_limit, 500),
     )
 
-    summary = ProfileSummary.create(
+    summary = ProfileSummary(
         source_format=source_format,
         source_path=str(source_path),
         run_metadata=run_metadata or RunMetadata(),

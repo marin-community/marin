@@ -35,10 +35,11 @@ when the archive or updated body would exceed GitHub's size limit.
 `ops-external-dependencies.yaml` advances the isolated Evalchemy, Harbor, and
 MarinSkyRL projects at 09:00 UTC each day. It runs
 `uv run config/update-external.py` without a project selector, records each
-resolved version and commit in the job summary, and opens or refreshes one
-`automation/external-dependencies` pull request when generated state changes.
-The Nightshift GitHub App token lets normal pull request checks run on the
-automation branch.
+resolved version and commit in the job summary, and includes every upstream
+commit subject between the old and new revisions. It opens or refreshes one
+`automation/external-dependencies` pull request when generated state changes
+and enables squash auto-merge. The Nightshift GitHub App token lets normal pull
+request checks run on the automation branch.
 
 ## Canonical recipe: open or update a bot PR with `git + gh`
 

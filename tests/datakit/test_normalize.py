@@ -12,7 +12,8 @@ import pyarrow.parquet as pq
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
-from marin.datakit.normalize import generate_id, normalize_to_parquet
+from marin.datakit.normalize import NORMALIZED_DATA_VERSION, NormalizedData, generate_id, normalize_to_parquet
+from marin.execution.artifact import ArtifactRecord, read_artifact, write_artifact, write_record
 
 
 @pytest.fixture(autouse=True)
@@ -43,6 +44,74 @@ def _read_all_parquet(output_dir: Path) -> list[dict]:
     for pf in sorted((output_dir / "outputs" / "main").glob("*.parquet")):
         records.extend(pq.read_table(str(pf)).to_pylist())
     return records
+
+
+def test_normalized_data_artifact_stores_relative_output_dirs(tmp_path: Path, monkeypatch):
+    marin_root = tmp_path / "marin"
+    monkeypatch.setenv("MARIN_PREFIX", str(marin_root))
+    artifact_dir = tmp_path / "artifact"
+    artifact_dir.mkdir()
+
+    write_artifact(
+        NormalizedData(
+            main_output_dir=str(marin_root / "datakit/source/outputs/main"),
+            dup_output_dir=str(marin_root / "datakit/source/outputs/dups"),
+            counters={"records": 3},
+        ),
+        str(artifact_dir),
+    )
+
+    record = json.loads((artifact_dir / ".artifact.json").read_text())
+    assert record["result"] == {
+        "version": NORMALIZED_DATA_VERSION,
+        "main_output_dir": "datakit/source/outputs/main",
+        "dup_output_dir": "datakit/source/outputs/dups",
+        "counters": {"records": 3},
+    }
+
+    loaded = read_artifact(str(artifact_dir), NormalizedData)
+    assert loaded.main_output_dir == str(marin_root / "datakit/source/outputs/main")
+    assert loaded.dup_output_dir == str(marin_root / "datakit/source/outputs/dups")
+
+
+def test_normalized_data_loads_v1_paths_from_another_region(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central1")
+    artifact_dir = tmp_path / "artifact"
+    artifact_dir.mkdir()
+    write_record(
+        ArtifactRecord(
+            output_path=str(artifact_dir),
+            result={
+                "version": "v1",
+                "main_output_dir": "s3://marin-us-east-02a/marin/datakit/source/outputs/main",
+                "dup_output_dir": "s3://marin-us-east-02a/marin/datakit/source/outputs/dups",
+                "counters": {},
+            },
+        )
+    )
+
+    loaded = read_artifact(str(artifact_dir), NormalizedData)
+    assert loaded.version == NORMALIZED_DATA_VERSION
+    assert loaded.main_output_dir == "s3://marin-us-east-02a/marin/datakit/source/outputs/main"
+    assert loaded.dup_output_dir == "s3://marin-us-east-02a/marin/datakit/source/outputs/dups"
+
+
+def test_normalized_data_artifact_preserves_output_dirs_outside_active_prefix(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central1")
+    artifact_dir = tmp_path / "artifact"
+    artifact_dir.mkdir()
+    write_artifact(
+        NormalizedData(
+            main_output_dir="s3://unregistered-bucket/data/outputs/main",
+            dup_output_dir="s3://unregistered-bucket/data/outputs/dups",
+            counters={},
+        ),
+        str(artifact_dir),
+    )
+
+    loaded = read_artifact(str(artifact_dir), NormalizedData)
+    assert loaded.main_output_dir == "s3://unregistered-bucket/data/outputs/main"
+    assert loaded.dup_output_dir == "s3://unregistered-bucket/data/outputs/dups"
 
 
 def test_normalize_happy_path(tmp_path: Path, write_jsonl_gz):
@@ -160,6 +229,38 @@ def test_bare_mode_strips_extra_columns(tmp_path: Path, write_jsonl_gz):
         assert set(r.keys()) == {"id", "text", "source_id"}
     assert {r["source_id"] for r in results} == {"a", "b"}
     assert {r["text"] for r in results} == {"row a", "row b"}
+
+
+def test_drop_fields_removes_selected_columns_and_preserves_metadata(tmp_path: Path, write_jsonl_gz):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+
+    records = [
+        {
+            "identifier": "a",
+            "text": "row a",
+            "__index_level_0__": 0,
+            "open_type": "Open Science",
+        },
+        {
+            "identifier": "b",
+            "text": "row b",
+            "open_type": "Open Culture",
+        },
+    ]
+    write_jsonl_gz(input_dir / "data.jsonl.gz", records)
+
+    normalize_to_parquet(
+        input_path=str(input_dir),
+        output_path=str(output_dir),
+        id_field="identifier",
+        drop_fields=("__index_level_0__",),
+    )
+
+    results = _read_all_parquet(output_dir)
+    assert {record["source_id"] for record in results} == {"a", "b"}
+    assert {record["open_type"] for record in results} == {"Open Science", "Open Culture"}
+    assert all("__index_level_0__" not in record for record in results)
 
 
 def test_missing_id_field_silently_skipped(tmp_path: Path, write_jsonl_gz):

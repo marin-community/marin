@@ -68,8 +68,8 @@ def build_image(
     first requested platform only.
 
     ``cargo_profile`` selects the Rust build profile baked into the image.
-    ``release`` (default) is the optimized fat-LTO production build; ``fast``
-    skips LTO for a much quicker final link, suited to dev/test deploys.
+    ``release`` (default) uses opt-level 3 without LTO; ``fast`` lowers
+    optimization to level 2 for dev/test deploys.
     """
     marin_root = find_marin_root()
     dockerfile = marin_root / "lib" / "finelog" / "deploy" / "Dockerfile"

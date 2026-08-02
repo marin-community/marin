@@ -9,8 +9,6 @@ via submitted jobs, and deferred actor handle resolution.
 """
 
 import logging
-import os
-import sys
 import threading
 import time
 from concurrent.futures import Future
@@ -18,6 +16,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import cloudpickle
+from connectrpc.errors import ConnectError
 from iris.actor.client import ActorClient
 from iris.actor.server import ActorServer
 from iris.client.client import IrisClient as IrisClientLib
@@ -46,12 +45,14 @@ from iris.cluster.types import (
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.hooks.multigpu import build_multigpu_hook
 from iris.rpc import actor_pb2, job_pb2
+from iris.rpc.errors import is_retryable_error
 from rigging.timing import ExponentialBackoff
 
 from fray.actor import (
     ActorContext,
     ActorFuture,
     ActorHandle,
+    ActorUnavailableError,
     HostedActor,
     _reset_current_actor,
     _set_current_actor,
@@ -302,29 +303,9 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     logger.info(f"Actor {actor_name} shutting down")
     server.stop()
 
-    failed = bool(actor_ctx._errors)
-    if failed:
-        logger.error(
-            "Actor %s recorded %d failure(s); first: %r",
-            actor_name,
-            len(actor_ctx._errors),
-            actor_ctx._errors[0],
-            exc_info=actor_ctx._errors[0],
-        )
-
-    # WORKAROUND for the pyqwest interpreter-shutdown crash: CPython
-    # finalization force-unwinds pyqwest's native (tokio) threads and aborts the
-    # process (SIGABRT/SIGSEGV, exit 134/139). Best-effort drain the in-task
-    # finelog client, then hard-exit via os._exit to skip finalization entirely.
-    # Success/failure is encoded in the exit code since this bypasses the raise.
-    if ctx.client is not None:
-        try:
-            ctx.client.shutdown()
-        except Exception:
-            logger.warning("in-task client shutdown failed (ignored before os._exit)", exc_info=True)
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(1 if failed else 0)
+    if actor_ctx._errors:
+        logger.error("Actor %s recorded %d failure(s); raising the first", actor_name, len(actor_ctx._errors))
+        raise actor_ctx._errors[0]
 
 
 class IrisActorHandle:
@@ -425,6 +406,15 @@ class _ThreadFuture:
         return self._future.result(timeout=timeout)
 
 
+def _call_actor_method(method: Any, args: tuple, kwargs: dict) -> Any:
+    try:
+        return method(*args, **kwargs)
+    except ConnectError as exc:
+        if is_retryable_error(exc):
+            raise ActorUnavailableError(str(exc)) from exc
+        raise
+
+
 class _IrisActorMethod:
     """Wraps a method on an Iris actor.
 
@@ -445,16 +435,16 @@ class _IrisActorMethod:
     def remote(self, *args: Any, **kwargs: Any) -> ActorFuture:
         client = self._handle._resolve()
         method = getattr(client, self._method)
-        return _ThreadFuture(method, args, kwargs)
+        return _ThreadFuture(_call_actor_method, (method, args, kwargs), {})
 
     def submit(self, *args: Any, **kwargs: Any) -> ActorFuture:
         client = self._handle._resolve()
-        op_id = client.start_operation(self._method, *args, **kwargs)
+        op_id = _call_actor_method(client.start_operation, (self._method, *args), kwargs)
         return OperationFuture(client, op_id)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         client = self._handle._resolve()
-        return getattr(client, self._method)(*args, **kwargs)
+        return _call_actor_method(getattr(client, self._method), args, kwargs)
 
 
 class IrisActorGroup:
