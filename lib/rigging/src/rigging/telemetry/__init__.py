@@ -81,13 +81,16 @@ class MetricSnapshot:
 
 @dataclass(frozen=True)
 class MetricPublishResult:
-    """Bounded admission result for one metric snapshot publication."""
+    """Bounded admission result for one metric snapshot publication.
+
+    ``sample_limit_dropped_records`` never reached telemetry admission.
+    ``telemetry_lost_records`` reached admission but could not enter the queue.
+    """
 
     configured: bool
-    input_records: int
     enqueued_records: int
-    limited_records: int
-    lost_records: int
+    sample_limit_dropped_records: int
+    telemetry_lost_records: int
 
 
 class MetricSnapshotPublisher:
@@ -111,7 +114,7 @@ class MetricSnapshotPublisher:
         input_records = len(snapshots)
         runtime = _runtime
         if runtime is None:
-            return MetricPublishResult(False, input_records, 0, 0, 0)
+            return MetricPublishResult(False, 0, 0, 0)
 
         selected = snapshots[: self._max_records]
         prepared: list[tuple[MetricSnapshot, dict[str, str]]] = []
@@ -136,7 +139,8 @@ class MetricSnapshotPublisher:
 
         enqueued = 0
         for snapshot, attributes in prepared:
-            enqueued += _emit(
+            enqueued += _emit_to_runtime(
+                runtime,
                 "gauge",
                 snapshot.name,
                 value=snapshot.value,
@@ -145,10 +149,9 @@ class MetricSnapshotPublisher:
             )
         return MetricPublishResult(
             configured=True,
-            input_records=input_records,
             enqueued_records=enqueued,
-            limited_records=max(0, input_records - len(selected)),
-            lost_records=len(selected) - enqueued,
+            sample_limit_dropped_records=max(0, input_records - len(selected)),
+            telemetry_lost_records=len(selected) - enqueued,
         )
 
 
@@ -297,6 +300,7 @@ class _Runtime:
         self._thread.start()
 
     def emit(self, record: bytes) -> bool:
+        """Return whether ``record`` was queued; a false result is counted as lost."""
         with self._condition:
             if self._stop or len(record) + self._empty_envelope_size() > self.config.max_batch_bytes:
                 self._lost_records += 1
@@ -617,10 +621,24 @@ def _emit(
     body: serialization.EventBody | None = None,
     unit: str = "",
     attributes: Mapping[str, str] | None = None,
-) -> bool:
+) -> None:
     runtime = _runtime
     if runtime is None:
-        return False
+        return
+    _emit_to_runtime(runtime, kind, name, value=value, body=body, unit=unit, attributes=attributes)
+
+
+def _emit_to_runtime(
+    runtime: _Runtime,
+    kind: str,
+    name: str,
+    *,
+    value: float | None = None,
+    body: serialization.EventBody | None = None,
+    unit: str = "",
+    attributes: Mapping[str, str] | None = None,
+) -> bool:
+    """Return whether one validated record was queued in the selected runtime."""
     try:
         serialization.validate_string(name, "name")
         if unit:

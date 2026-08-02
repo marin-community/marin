@@ -8,6 +8,7 @@ import requests
 from prometheus_client.core import Metric as PrometheusMetric
 from rigging import telemetry
 from rigging.telemetry.prometheus import (
+    DEFAULT_MAX_SCRAPE_BYTES,
     PrometheusCollector,
     PrometheusProcessor,
     PrometheusScrapeError,
@@ -191,7 +192,7 @@ def test_scrape_failure_is_reported_separately(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_scraper_rejects_oversized_response_before_reading_body(monkeypatch: pytest.MonkeyPatch) -> None:
-    response = _PrometheusResponse(_SCRAPE, content_length=(16 << 20) + 1)
+    response = _PrometheusResponse(_SCRAPE, content_length=DEFAULT_MAX_SCRAPE_BYTES + 1)
     monkeypatch.setattr("rigging.telemetry.prometheus.requests.get", lambda *_args, **_kwargs: response)
 
     with pytest.raises(PrometheusScrapeError):

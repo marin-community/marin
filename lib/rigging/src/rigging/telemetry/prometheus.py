@@ -7,6 +7,7 @@ import logging
 import math
 import threading
 from collections.abc import Callable, Sequence
+from enum import StrEnum
 
 import requests
 from prometheus_client.core import Metric as PrometheusMetric
@@ -21,6 +22,12 @@ DEFAULT_POLL_INTERVAL = 15.0
 DEFAULT_MAX_SCRAPE_BYTES = 16 << 20
 
 type PrometheusProcessor = Callable[[tuple[PrometheusMetric, ...]], Sequence[telemetry.MetricSnapshot]]
+
+
+class _PrometheusStage(StrEnum):
+    SCRAPE = "scrape"
+    PROCESS = "process"
+    PUBLISH = "publish"
 
 
 class PrometheusScrapeError(RuntimeError):
@@ -134,7 +141,7 @@ class PrometheusCollector:
         self._processor = processor
         self._publisher = publisher
         self._poll_interval = poll_interval
-        self._stage_failures = {"scrape": 0, "process": 0, "publish": 0}
+        self._stage_failures = {stage: 0 for stage in _PrometheusStage}
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name=f"{metric_source}-metrics", daemon=True)
 
@@ -147,26 +154,26 @@ class PrometheusCollector:
         try:
             families = self._scraper.scrape()
         except Exception:
-            self._stage_failed("scrape")
+            self._stage_failed(_PrometheusStage.SCRAPE)
             self._record_health(source_available=False)
             return
 
         try:
             snapshots = self._processor(families)
         except Exception:
-            self._stage_failed("process")
+            self._stage_failed(_PrometheusStage.PROCESS)
             self._record_health(source_available=True)
             return
 
         try:
             result = self._publisher.publish(snapshots)
         except Exception:
-            self._stage_failed("publish")
+            self._stage_failed(_PrometheusStage.PUBLISH)
             self._record_health(source_available=True)
             return
         self._record_health(source_available=True, result=result)
 
-    def _stage_failed(self, stage: str) -> None:
+    def _stage_failed(self, stage: _PrometheusStage) -> None:
         self._stage_failures[stage] += 1
         logger.warning("Prometheus %s stage failed for %s", stage, self._metric_source, exc_info=True)
 
@@ -188,7 +195,7 @@ class PrometheusCollector:
         for stage, failures in self._stage_failures.items():
             telemetry.gauge("prometheus_stage_failures", unit="{failure}").set(
                 failures,
-                attributes={**cumulative, "stage": stage},
+                attributes={**cumulative, "stage": stage.value},
             )
         if result is not None and result.configured:
             telemetry.gauge("prometheus_enqueued_samples", unit="{sample}").set(
@@ -196,12 +203,12 @@ class PrometheusCollector:
                 attributes=current,
             )
             telemetry.gauge("prometheus_dropped_samples", unit="{sample}").set(
-                result.limited_records,
+                result.sample_limit_dropped_records,
                 attributes={**current, "drop_reason": "sample_limit"},
             )
             telemetry.gauge("prometheus_dropped_samples", unit="{sample}").set(
-                result.lost_records,
-                attributes={**current, "drop_reason": "telemetry_admission"},
+                result.telemetry_lost_records,
+                attributes={**current, "drop_reason": "telemetry_loss"},
             )
         telemetry.record_runtime_health()
 
