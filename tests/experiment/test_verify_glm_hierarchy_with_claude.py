@@ -1,0 +1,122 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import sys
+from pathlib import Path
+
+import pytest
+
+PROJECT = Path(__file__).parents[2] / ".agents" / "projects" / "luxical-arctic-poc"
+sys.path.insert(0, str(PROJECT))
+
+from verify_glm_hierarchy_with_claude import comparison, review_indices  # noqa: E402
+
+
+def test_review_indices_keep_representative_and_stress_samples_separate() -> None:
+    assignments = [
+        {"sample_index": index, "confidence": confidence} for index, confidence in enumerate([0.8, 0.1, 0.7, 0.2, 0.6])
+    ]
+
+    samples = review_indices(assignments, representative_size=2, stress_size=2)
+
+    assert len(samples["representative"]) == 2
+    assert len(samples["stress"]) == 2
+    assert set(samples["representative"]).isdisjoint(samples["stress"])
+    remaining = set(range(5)) - set(samples["representative"])
+    assert samples["stress"] == sorted(remaining, key=lambda index: assignments[index]["confidence"])[:2]
+
+
+def test_comparison_measures_parent_leaf_and_form_agreement() -> None:
+    package = {
+        "taxonomy": {
+            "parents": [{"bucket_id": "SCIENCE"}, {"bucket_id": "ARTS"}],
+            "leaves": [
+                {"bucket_id": "BIOLOGY", "parent_id": "SCIENCE"},
+                {"bucket_id": "FICTION", "parent_id": "ARTS"},
+            ],
+            "forms": [{"bucket_id": "RESEARCH"}, {"bucket_id": "NARRATIVE"}],
+        },
+        "documents": [{"sample_index": 1, "text": "a"}, {"sample_index": 2, "text": "b"}],
+        "samples": {"representative": [1], "stress": [2]},
+        "glm_assignments": [
+            {
+                "sample_index": 1,
+                "primary_parent_id": "SCIENCE",
+                "secondary_parent_ids": [],
+                "primary_leaf_id": "BIOLOGY",
+                "secondary_leaf_ids": [],
+                "form_id": "RESEARCH",
+                "confidence": 0.9,
+                "rationale": "Biology paper.",
+            },
+            {
+                "sample_index": 2,
+                "primary_parent_id": "ARTS",
+                "secondary_parent_ids": ["SCIENCE"],
+                "primary_leaf_id": "FICTION",
+                "secondary_leaf_ids": ["BIOLOGY"],
+                "form_id": "NARRATIVE",
+                "confidence": 0.6,
+                "rationale": "Story.",
+            },
+        ],
+    }
+    claude_rows = [
+        {
+            "sample_index": 1,
+            "primary_parent_id": "SCIENCE",
+            "secondary_parent_ids": [],
+            "primary_leaf_id": "BIOLOGY",
+            "secondary_leaf_ids": [],
+            "form_id": "RESEARCH",
+            "confidence": 0.8,
+            "rationale": "Paper.",
+        },
+        {
+            "sample_index": 2,
+            "primary_parent_id": "SCIENCE",
+            "secondary_parent_ids": ["ARTS"],
+            "primary_leaf_id": "BIOLOGY",
+            "secondary_leaf_ids": ["FICTION"],
+            "form_id": "RESEARCH",
+            "confidence": 0.5,
+            "rationale": "Scientific fiction.",
+        },
+    ]
+
+    result = comparison(package, claude_rows)
+
+    assert result["representative"]["primary_parent_exact_agreement"] == 1.0
+    assert result["representative"]["form_exact_agreement"] == 1.0
+    assert result["stress"]["primary_parent_exact_agreement"] == 0.0
+    assert result["stress"]["any_parent_overlap_fraction"] == 1.0
+    assert result["stress"]["any_leaf_overlap_fraction"] == 1.0
+    assert result["stress"]["form_exact_agreement"] == 0.0
+
+
+def test_comparison_rejects_leaf_under_wrong_parent() -> None:
+    package = {
+        "taxonomy": {
+            "parents": [{"bucket_id": "SCIENCE"}, {"bucket_id": "ARTS"}],
+            "leaves": [{"bucket_id": "BIOLOGY", "parent_id": "SCIENCE"}],
+            "forms": [{"bucket_id": "RESEARCH"}],
+        },
+        "documents": [{"sample_index": 1, "text": "a"}],
+        "samples": {"representative": [1]},
+        "glm_assignments": [{"sample_index": 1}],
+    }
+    claude_rows = [
+        {
+            "sample_index": 1,
+            "primary_parent_id": "ARTS",
+            "secondary_parent_ids": [],
+            "primary_leaf_id": "BIOLOGY",
+            "secondary_leaf_ids": [],
+            "form_id": "RESEARCH",
+            "confidence": 0.8,
+            "rationale": "Test.",
+        }
+    ]
+
+    with pytest.raises(ValueError, match="wrong parent"):
+        comparison(package, claude_rows)
