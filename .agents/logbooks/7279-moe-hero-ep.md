@@ -540,3 +540,11 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - DRI and babysitter: `rav`; `rav/codex` owns the monitor.
 - Stop criteria: Stop on terminal failure, non-finite loss, task retry, OOM, or incomplete step 25.
 - Next action: Commit this contract, submit the coordinator once, and monitor it to a terminal state.
+
+### 2026-08-02 04:17 UTC - MHEP-007 submitted
+
+- Job: `/rav/mhep-007-spill-25-20260802-0416-coord`.
+- Launch commit: `fd37ec8d8`; spill code snapshot: `93ac94998`; clean tree.
+- Source bundle: Iris workspace bundle, 9.4 MB. The submit output did not report a content ID.
+- Status: A08 has the one federated request. No duplicate request was submitted.
+- Next action: Wait 120 seconds for immediate failure, then use the normal monitor cadence until the 25-step gate reaches a terminal state.
