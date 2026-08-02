@@ -917,3 +917,14 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - PJRT SHA-256: `3a4cf444687179fea6545a25cec73ec930dd875ec1bd033e8495262c02430042`.
 - Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-report-device-predicate-20260802`.
 - Expected rack result: The probe reports the false predicate without a CUDA fault.
+
+### 2026-08-02 22:28 UTC - MNEP-045 finds the missing symmetric-buffer flag
+
+- Run ID: `mnep-045-ragged-report-device-predicate-20260802-2221`.
+- Snapshot: `mnep-045-ragged-report-device-predicate-20260802-2221` at `e31b9d9c0`.
+- Result: XLA reported `uses_device_kernel=0`, `supports_device_comm=1`, `has_collective_memory=1`, and `has_lsa_size=1`.
+- Finding: `UsesDeviceKernel()` requires both the device-kernel option and the NCCL symmetric-buffer option.
+- Finding: Marin set the device-kernel option but did not set the symmetric-buffer option.
+- Fix: Add `--xla_gpu_experimental_enable_nccl_symmetric_buffers=true` to the MoonEP XLA defaults.
+- Local gate: All 37 MoonEP tests pass.
+- Next gate: Use the current diagnostic PJRT at EP64. The expected value mismatch proves that XLA selected the device path and completed symmetric-memory lookup.

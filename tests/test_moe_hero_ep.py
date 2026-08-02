@@ -237,6 +237,7 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
         f"--xla_gpu_unsupported_override_fast_interconnect_slice_size={train.MOONEP_FAST_INTERCONNECT_SLICE_SIZE}"
         in flags
     )
+    assert "--xla_gpu_experimental_enable_nccl_symmetric_buffers=true" in flags
     assert "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true" in flags
     assert not any(flag.startswith("--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl") for flag in flags)
     assert train.XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG in flags
@@ -265,6 +266,7 @@ def test_run_grug_selects_direct_device_transport(monkeypatch):
         f"--xla_gpu_experimental_parallel_collective_overlap_limit="
         f"{train.MOONEP_DIRECT_DEVICE_COLLECTIVE_OVERLAP_LIMIT}" in flags
     )
+    assert "--xla_gpu_experimental_enable_nccl_symmetric_buffers=true" in flags
     assert "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true" in flags
     assert "--xla_gpu_unsupported_enable_ragged_all_to_all_multi_host_decomposer=true" not in flags
     assert not any(flag.startswith("--xla_gpu_unsupported_override_fast_interconnect_slice_size") for flag in flags)

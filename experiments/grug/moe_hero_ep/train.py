@@ -65,6 +65,9 @@ _XLA_FLAG_DEFAULTS = ("--xla_gpu_enable_latency_hiding_scheduler=true",)
 _MOONEP_COMMON_XLA_FLAG_DEFAULTS = (
     # The full EP64 program needs 146.43 GiB before rematerialization.
     "--xla_gpu_memory_limit_slop_factor=106",
+    # The device kernel reads and writes peer buffers through NCCL's
+    # symmetric-memory window.
+    "--xla_gpu_experimental_enable_nccl_symmetric_buffers=true",
     "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
 )
 _MOONEP_TWO_SLICE_XLA_FLAG_DEFAULTS = (
