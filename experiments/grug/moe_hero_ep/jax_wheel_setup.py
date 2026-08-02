@@ -238,6 +238,6 @@ def moonep_jax_setup_scripts(
     python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
     return [
         default_setup_script(extras=extras, python_version=python_version),
-        _wheel_install_script(build),
         cuda_toolchain_setup_script(),
+        _wheel_install_script(build),
     ]

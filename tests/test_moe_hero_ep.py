@@ -370,16 +370,16 @@ def test_run_grug_adds_verified_jax_wheels_after_standard_gpu_setup(
     assert len(scripts) == 3
     assert "uv sync" in scripts[0]
     assert "--extra gpu" in scripts[0]
-    assert "fsspec.core.url_to_fs" in scripts[1]
-    assert "--no-deps --reinstall" in scripts[1]
-    assert expected_prefix in scripts[1]
-    assert expected_pjrt_sha256 in scripts[1]
-    assert "40b447b71c8a45032abe9ebdbadfd9d0d434165500c27831a408a8ee053dac4d" in scripts[1]
-    assert "03e838842547a66af13bc93a533ce1943dc0f2eb83026a94994eca7f47c072b4" in scripts[1]
+    assert "staging CUDA toolchain" in scripts[1]
+    assert "fsspec.core.url_to_fs" in scripts[2]
+    assert "--no-deps --reinstall" in scripts[2]
+    assert expected_prefix in scripts[2]
+    assert expected_pjrt_sha256 in scripts[2]
+    assert "40b447b71c8a45032abe9ebdbadfd9d0d434165500c27831a408a8ee053dac4d" in scripts[2]
+    assert "03e838842547a66af13bc93a533ce1943dc0f2eb83026a94994eca7f47c072b4" in scripts[2]
     if expected_runtime_sha256 is not None:
-        assert expected_runtime_sha256 in scripts[1]
-        assert "nvidia/nccl/lib/libnccl.so.2" in scripts[1]
-    assert "staging CUDA toolchain" in scripts[2]
+        assert expected_runtime_sha256 in scripts[2]
+        assert "nvidia/nccl/lib/libnccl.so.2" in scripts[2]
 
 
 def test_profile_window_uses_one_process_and_compact_timeline():

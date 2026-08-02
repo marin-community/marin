@@ -693,3 +693,12 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Local gate: The four-GPU probe passed in 3.337760 seconds with checksum `294912` and zero mismatches.
 - Caveat: NCCL disables MNNVL for the one-worker probe, so only the rack gate can test the new team selection.
 - Next gate: Run the minimum balanced probe at EP64 and require the `LSA extended to full MNNVL domain` log record.
+
+### 2026-08-02 19:12 UTC - MNEP-032 setup-order failure
+
+- Run ID: `mnep-032-ragged-full-mnnvl-lsa-20260802-1906`.
+- Result: Task 10 failed with the known CUDA illegal address before the output check.
+- Cause: The final CUDA setup step reinstalled `nvidia-nccl-cu13` after the fixed runtime was copied into the virtual environment.
+- Interpretation: MNEP-032 used stock NCCL and did not test the full-MNNVL LSA patch.
+- Fix: Run CUDA library restoration before the fixed JAX and NCCL artifact installation.
+- Next gate: Repeat the same EP64 probe and verify the patched NCCL version and LSA log record.
