@@ -520,3 +520,22 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Gate: Require attempt-zero completion, finite loss, zero dropped assignments, and no transport error.
 - Stop criteria: Stop on the first retry, memory error, transport error, non-finite loss, or dropped assignment.
 - Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 0 --job-name mnep-024-direct-serialized-smoke-3-20260802-1735-coord -e WANDB_MODE offline -e WANDB_PROJECT rav_moe -- python -m experiments.grug.moe_hero_ep.launch --run-id mnep-024-direct-serialized-smoke-3-20260802-1735 --num-steps 3 --moe-implementation moonep_jax --moonep-token-padding 128 --moonep-grouped-gemm quack --qb-method global_histogram --qb-histogram-bins 1000 --moonep-jax-wheel-build lsa-nccl-2307-20260802 --moonep-transport direct_device --processes-per-task 1 --worker-cpu 16 --worker-ram-gb 88 --version 2026.08.02 --run`.
+
+### 2026-08-02 17:44 UTC - MNEP-024 rules out collective concurrency
+
+- Placement: All 16 workers used NVLink domain `DH1-124-US-EAST-08A` on one NVL72.
+- Setup: Every worker verified the rebuilt fixed wheels and the NCCL 2.30.7 runtime.
+- Failure: Tasks 8 through 15 reported a CUDA illegal address before step zero.
+- Error: All four local GPU threads failed while XLA recorded an asynchronous completion event.
+- Stack: The failure passed through `AsyncExecution`, `AsyncStartThunk`, and `WhileThunk`.
+- Result: A direct overlap limit of one did not change the failure, so concurrent kernel slot reuse is not the cause.
+- Action: Stop the parent when Iris started attempt one.
+- Decision: Restore overlap four and isolate the 5 GiB ragged activation transport without the model.
+
+### 2026-08-02 17:52 UTC - Focused EP64 transport probe
+
+- Shape: Each rank sends a 5 GiB bfloat16 buffer with 524,288 rows and 5,120 elements per row.
+- Pattern: Every rank sends equal 8,192-row segments to all 64 ranks.
+- Check: Each receiver samples the first, middle, and last column and verifies the source rank for every row.
+- Runtime: Use the rebuilt fixed wheels, NCCL 2.30.7, and XLA's direct device kernel.
+- Purpose: Remove model, optimizer, grouped GEMM, and QB work from the failing path.

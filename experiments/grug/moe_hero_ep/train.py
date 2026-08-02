@@ -60,9 +60,7 @@ HERO_EP_RUNTIME_ENV = {
 MOONEP_FAST_INTERCONNECT_SLICE_SIZE = 32
 HERO_EP_COLLECTIVE_OVERLAP_LIMIT = 4
 MOONEP_TWO_SLICE_COLLECTIVE_OVERLAP_LIMIT = 3
-# XLA's direct multi-node kernel uses one NCCL GIN signal slot and CTA-indexed
-# barriers for every launch. Do not overlap launches that share those slots.
-MOONEP_DIRECT_DEVICE_COLLECTIVE_OVERLAP_LIMIT = 1
+MOONEP_DIRECT_DEVICE_COLLECTIVE_OVERLAP_LIMIT = 4
 _XLA_FLAG_DEFAULTS = ("--xla_gpu_enable_latency_hiding_scheduler=true",)
 _MOONEP_COMMON_XLA_FLAG_DEFAULTS = (
     # The full EP64 program needs 146.43 GiB before rematerialization.
