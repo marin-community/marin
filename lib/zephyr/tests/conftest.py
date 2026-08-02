@@ -23,7 +23,8 @@ from iris.cluster.config import load_config, make_local_config
 from iris.cluster.lifecycle import connect_cluster
 from iris.cluster.types import Entrypoint, ResourceSpec
 from rigging.timing import ExponentialBackoff
-from zephyr.execution import ZephyrContext, ZephyrCoordinator, _PipelineExecution
+from zephyr.coordinator import ZephyrCoordinator, _PipelineExecution
+from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file
 from zephyr.stage_io import ShardTask, ZephyrTaskResources
 
