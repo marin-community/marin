@@ -39,7 +39,6 @@ from experiments.rollout_data.glm52_vllm import (
     Glm52LaunchConfig,
     ServerConfig,
     submit_glm52,
-    wait_for_endpoint_url,
 )
 
 logger = logging.getLogger(__name__)
@@ -396,11 +395,14 @@ def summary(variant: Variant, hierarchy: Hierarchy, assignments: list[Hierarchic
     }
 
 
-def run(run_id: str, variants: list[Variant], batch_size: int, concurrency: int) -> None:
-    """Build and apply each hierarchy with one shared GLM server."""
-    ctx = iris_ctx()
-    if ctx is None or ctx.client is None:
-        raise RuntimeError("The hierarchy pipeline must run inside an Iris job")
+def label_hierarchies(
+    vllm_url: str,
+    run_id: str,
+    variants: list[Variant],
+    batch_size: int,
+    concurrency: int,
+) -> None:
+    """Build and apply each hierarchy from the GLM server head task."""
     documents, descriptions, pilot_assignments, pilot_buckets = source_inputs()
     records = representative_records(descriptions, pilot_assignments, pilot_buckets)
     root = OUTPUT_ROOT / run_id
@@ -417,37 +419,48 @@ def run(run_id: str, variants: list[Variant], batch_size: int, concurrency: int)
             "assignment_input": "raw_document_view",
         },
     )
+    started = time.time()
+    summaries = {}
+    for index, variant in enumerate(variants):
+        variant_root = root / variant.name
+        hierarchy = build_hierarchy(vllm_url, records, variant, root)
+        assignments = assign_with_checkpoints(
+            vllm_url,
+            documents,
+            hierarchy,
+            index,
+            variant_root,
+            batch_size,
+            concurrency,
+        )
+        result = summary(variant, hierarchy, assignments)
+        write_json(str(variant_root / "summary.json"), result)
+        summaries[variant.name] = result
+    output = {"run_id": run_id, "elapsed_seconds": time.time() - started, "variants": summaries}
+    write_json(str(root / "summary.json"), output)
+    logger.info("GLM_HIERARCHICAL_LABELS=%s", json.dumps(output, sort_keys=True))
+
+
+def run(run_id: str, variants: list[Variant], batch_size: int, concurrency: int) -> None:
+    """Run labeling within one shared federated GLM server job."""
+    ctx = iris_ctx()
+    if ctx is None or ctx.client is None:
+        raise RuntimeError("The hierarchy pipeline must run inside an Iris job")
     launch = Glm52LaunchConfig(
         vllm_endpoint=f"glm52-hierarchy-{run_id}",
         ray_endpoint=f"glm52-hierarchy-ray-{run_id}",
         server=ServerConfig(max_model_len=DEFAULT_MAX_MODEL_LEN, max_num_seqs=DEFAULT_MAX_NUM_SEQS),
         priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
+        client=partial(
+            label_hierarchies,
+            run_id=run_id,
+            variants=variants,
+            batch_size=batch_size,
+            concurrency=concurrency,
+        ),
     )
     server_job = submit_glm52(ctx, launch)
-    started = time.time()
-    try:
-        vllm_url = wait_for_endpoint_url(launch.vllm_endpoint, server_job)
-        summaries = {}
-        for index, variant in enumerate(variants):
-            variant_root = root / variant.name
-            hierarchy = build_hierarchy(vllm_url, records, variant, root)
-            assignments = assign_with_checkpoints(
-                vllm_url,
-                documents,
-                hierarchy,
-                index,
-                variant_root,
-                batch_size,
-                concurrency,
-            )
-            result = summary(variant, hierarchy, assignments)
-            write_json(str(variant_root / "summary.json"), result)
-            summaries[variant.name] = result
-        output = {"run_id": run_id, "elapsed_seconds": time.time() - started, "variants": summaries}
-        write_json(str(root / "summary.json"), output)
-        logger.info("GLM_HIERARCHICAL_LABELS=%s", json.dumps(output, sort_keys=True))
-    finally:
-        server_job.terminate()
+    server_job.wait(raise_on_failure=True)
 
 
 def main() -> None:

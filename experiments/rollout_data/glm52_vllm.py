@@ -5,6 +5,7 @@ import os
 import socket
 import subprocess
 import tempfile
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,6 +50,7 @@ class Glm52LaunchConfig:
     ray_endpoint: str
     server: ServerConfig
     priority_band: int = job_pb2.PRIORITY_BAND_BATCH
+    client: Callable[[str], None] | None = None
 
 
 def _ray_worker_port_args(*excluded_ports: int) -> list[str]:
@@ -182,6 +184,9 @@ def _run_vllm(
             check_alive=lambda: _check_process_alive(process),
         )
         with ctx.registry.registered(launch.vllm_endpoint, base_url):
+            if launch.client is not None:
+                launch.client(base_url)
+                return
             return_code = process.wait()
             raise RuntimeError(f"vLLM exited with code {return_code}")
     finally:

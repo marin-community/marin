@@ -1340,3 +1340,12 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 - Stop one variant after three invalid taxonomy responses.
 - Stop assignment after the same schema error repeats after one correction.
 - Do not use a hierarchy for production evaluation if Claude primary-parent agreement is below 70 percent.
+
+### Placement correction
+
+- The first CPU coordinator had no private object-store identity and failed before GLM startup.
+- A federated one-B200 coordinator reached storage, but the eight-B200 server remained capacity-blocked.
+- The coordinator can also leave a four-GPU domain partially occupied.
+- A B200 availability constraint without an attached GPU could not federate and created no job.
+- The corrected design runs the label client inside the GLM head task. The CPU coordinator only submits and waits for the eight-B200 job.
+- The stopped attempts wrote no taxonomy or assignments.
