@@ -447,13 +447,16 @@ def hierarchy_launch_config(
     variants: list[Variant],
     batch_size: int,
     concurrency: int,
+    tensor_parallel_size: int,
+    max_model_len: int,
+    max_num_seqs: int,
 ) -> Glm52LaunchConfig:
     """Return the GLM server and bounded hierarchy-label client config."""
     return Glm52LaunchConfig(
         vllm_endpoint=f"glm52-hierarchy-{run_id}",
         ray_endpoint=f"glm52-hierarchy-ray-{run_id}",
-        server=ServerConfig(max_model_len=DEFAULT_MAX_MODEL_LEN, max_num_seqs=DEFAULT_MAX_NUM_SEQS),
-        tensor_parallel_size=TENSOR_PARALLEL_SIZE,
+        server=ServerConfig(max_model_len=max_model_len, max_num_seqs=max_num_seqs),
+        tensor_parallel_size=tensor_parallel_size,
         priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
         client=partial(
             label_hierarchies,
@@ -470,7 +473,15 @@ def run(run_id: str, variants: list[Variant], batch_size: int, concurrency: int)
     ctx = iris_ctx()
     if ctx is None or ctx.client is None:
         raise RuntimeError("The hierarchy pipeline must run inside an Iris job")
-    launch = hierarchy_launch_config(run_id, variants, batch_size, concurrency)
+    launch = hierarchy_launch_config(
+        run_id,
+        variants,
+        batch_size,
+        concurrency,
+        TENSOR_PARALLEL_SIZE,
+        DEFAULT_MAX_MODEL_LEN,
+        DEFAULT_MAX_NUM_SEQS,
+    )
     server_job = submit_glm52(ctx, launch)
     server_job.wait(timeout=float("inf"), raise_on_failure=True)
 

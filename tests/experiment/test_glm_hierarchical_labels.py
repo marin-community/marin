@@ -93,7 +93,18 @@ def test_run_waits_for_queued_server_without_client_timeout(monkeypatch: pytest.
 def test_hierarchy_launch_config_keeps_callback_in_server_head() -> None:
     _, variant = hierarchy()
 
-    launch = hierarchy_launch_config("run", [variant], batch_size=10, concurrency=2)
+    launch = hierarchy_launch_config(
+        "run",
+        [variant],
+        batch_size=10,
+        concurrency=2,
+        tensor_parallel_size=4,
+        max_model_len=16_384,
+        max_num_seqs=4,
+    )
 
     assert launch.client is not None
+    assert launch.tensor_parallel_size == 4
+    assert launch.server.max_model_len == 16_384
+    assert launch.server.max_num_seqs == 4
     assert launch.priority_band == hierarchical_labels.job_pb2.PRIORITY_BAND_INTERACTIVE

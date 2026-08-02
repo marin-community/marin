@@ -21,15 +21,30 @@ def main() -> None:
     parser.add_argument("--variants", nargs="+", choices=tuple(VARIANTS), default=list(VARIANTS))
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
+    parser.add_argument("--tensor-parallel-size", type=int, required=True)
+    parser.add_argument("--max-model-len", type=int, required=True)
+    parser.add_argument("--max-num-seqs", type=int, required=True)
     args = parser.parse_args()
-    if args.batch_size < 1 or args.concurrency < 1:
-        parser.error("--batch-size and --concurrency must be positive")
+    if (
+        min(
+            args.batch_size,
+            args.concurrency,
+            args.tensor_parallel_size,
+            args.max_model_len,
+            args.max_num_seqs,
+        )
+        < 1
+    ):
+        parser.error("All numeric arguments must be positive")
     logging.basicConfig(level=logging.INFO)
     launch = hierarchy_launch_config(
         args.run_id,
         [VARIANTS[name] for name in args.variants],
         args.batch_size,
         args.concurrency,
+        args.tensor_parallel_size,
+        args.max_model_len,
+        args.max_num_seqs,
     )
     serve_glm52(launch, RAY_PORT, HTTP_PORT)
 
