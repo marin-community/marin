@@ -96,3 +96,14 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Result: The output and gradients for tokens, gate/up weights, and down weights pass. The test completed in 97.00 seconds.
 - Interpretation: Token dispatch, sparse expert copies, return order, and automatic differentiation are correct. The Pallas grouped GEMM corrupted isolated rows, so the portable path selects the XLA grouped GEMM.
 - Next action: Run MNEP-003 on one NVL72 and profile the combined path.
+
+### 2026-08-02 10:10 UTC - MNEP-003 rack launch contract
+
+- Goal: Verify zero transport errors, finite training, and initial MFU for combined MoonEP and global histogram QB.
+- Run ID: `mnep-003-combined-25-20260802-1010`.
+- Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 50 --job-name mnep-003-combined-25-20260802-1010-coord -e WANDB_MODE offline -e WANDB_PROJECT rav_moe -- python -m experiments.grug.moe_hero_ep.launch --run-id mnep-003-combined-25-20260802-1010 --num-steps 25 --moe-implementation moonep_jax --moonep-token-padding 128 --qb-method global_histogram --qb-histogram-bins 1000 --version 2026.08.02 --run`.
+- Config: EP64, batch 1024, sequence 4096, 256 experts, top-8, and 16 workers with four GB200 GPUs each.
+- Output: `s3://marin-us-east-02a/marin/grug/mnep-003-combined-25-20260802-1010/2026.08.02`.
+- W&B identity: Project `rav_moe`, group `moe-hero-ep`, and run name `mnep-003-combined-25-20260802-1010` in offline capture mode.
+- Stop criteria: Stop on task retry, OOM, non-finite loss, transport errors, or incomplete step 25.
+- Next action: Commit and tag this contract, submit once, and monitor to a terminal state.
