@@ -1309,3 +1309,34 @@ The next stage needs a smaller hierarchy, representative independent review, hel
 - It also found weak government-statistics and technical-support neighborhoods. The 38 primary buckets remain too broad and overlapping.
 - Artifact: `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/embedding-screen-v2/report.json`.
 - This result advances the student to hierarchical-label evaluation. It does not establish production quality.
+
+## 2026-08-02: Hierarchical semantic labels
+
+### Hypothesis
+
+A smaller domain hierarchy will reduce valid primary-label disagreements while it keeps useful semantic detail.
+
+### Method
+
+- Reuse the fixed 1,000 document views and their saved GLM descriptions.
+- Create compact and balanced domain hierarchies with 8 through 12 and 12 through 16 non-fallback parents.
+- Keep document form as a separate controlled label. Do not mix form with semantic domain.
+- Assign every document from its raw source-blind view.
+- Give both frozen taxonomies and shared representative documents to a pinned Claude model.
+
+### Gates
+
+- Both hierarchies pass all parent, leaf, fallback, and precedence validation.
+- Each hierarchy assigns all 1,000 documents with valid IDs.
+- The fallback parent contains at most 5 percent of documents.
+- The largest parent contains at most 30 percent of documents.
+- At least 80 percent of non-fallback parents and leaves receive documents.
+- Claude exact primary-parent agreement is at least 80 percent on 100 representative documents.
+- Claude any-parent overlap is at least 90 percent on the same documents.
+- Claude exact document-form agreement is at least 85 percent.
+
+### Stop conditions
+
+- Stop one variant after three invalid taxonomy responses.
+- Stop assignment after the same schema error repeats after one correction.
+- Do not use a hierarchy for production evaluation if Claude primary-parent agreement is below 70 percent.
