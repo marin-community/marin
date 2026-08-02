@@ -225,7 +225,9 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
 
     flags = os.environ["XLA_FLAGS"].split()
     assert explicit_overlap in flags
-    assert "--xla_gpu_experimental_parallel_collective_overlap_limit=4" not in flags
+    assert (
+        f"--xla_gpu_experimental_parallel_collective_overlap_limit={train.MOONEP_COLLECTIVE_OVERLAP_LIMIT}" not in flags
+    )
     assert explicit_slop in flags
     assert "--xla_gpu_memory_limit_slop_factor=106" not in flags
     assert "--xla_gpu_enable_latency_hiding_scheduler=true" in flags
@@ -241,6 +243,31 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
         assert os.environ[name] == value
     for name, value in train.MOONEP_RUNTIME_ENV.items():
         assert os.environ[name] == value
+
+
+@pytest.mark.parametrize(
+    ("moe_implementation", "expected_limit"),
+    [
+        ("fixed_all_to_all", train.HERO_EP_COLLECTIVE_OVERLAP_LIMIT),
+        ("moonep_jax", train.MOONEP_COLLECTIVE_OVERLAP_LIMIT),
+    ],
+)
+def test_run_grug_selects_collective_overlap_limit(monkeypatch, moe_implementation: str, expected_limit: int):
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    config = SimpleNamespace(
+        model=SimpleNamespace(moe_implementation=moe_implementation),
+        trainer=SimpleNamespace(trainer=SimpleNamespace(id="test-run")),
+        resources=object(),
+        processes_per_task=1,
+        moonep_jax_wheel_build=None,
+    )
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    assert (
+        f"--xla_gpu_experimental_parallel_collective_overlap_limit={expected_limit}" in os.environ["XLA_FLAGS"].split()
+    )
 
 
 def test_run_grug_adds_verified_jax_wheels_after_standard_gpu_setup():

@@ -62,10 +62,9 @@ MOONEP_RUNTIME_ENV = {
     "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.80",
 }
 MOONEP_FAST_INTERCONNECT_SLICE_SIZE = 32
-_XLA_FLAG_DEFAULTS = (
-    "--xla_gpu_experimental_parallel_collective_overlap_limit=4",
-    "--xla_gpu_enable_latency_hiding_scheduler=true",
-)
+HERO_EP_COLLECTIVE_OVERLAP_LIMIT = 4
+MOONEP_COLLECTIVE_OVERLAP_LIMIT = 3
+_XLA_FLAG_DEFAULTS = ("--xla_gpu_enable_latency_hiding_scheduler=true",)
 _MOONEP_XLA_FLAG_DEFAULTS = (
     # The full EP64 program needs 146.43 GiB before rematerialization.
     "--xla_gpu_memory_limit_slop_factor=106",
@@ -88,7 +87,13 @@ def _apply_hero_ep_runtime_defaults(moe_implementation: MoeImplementation | None
             os.environ.setdefault(name, value)
 
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
-    flag_defaults = list(_XLA_FLAG_DEFAULTS)
+    overlap_limit = (
+        MOONEP_COLLECTIVE_OVERLAP_LIMIT if moe_implementation == "moonep_jax" else HERO_EP_COLLECTIVE_OVERLAP_LIMIT
+    )
+    flag_defaults = [
+        f"--xla_gpu_experimental_parallel_collective_overlap_limit={overlap_limit}",
+        *_XLA_FLAG_DEFAULTS,
+    ]
     if moe_implementation == "moonep_jax":
         flag_defaults.extend(_MOONEP_XLA_FLAG_DEFAULTS)
     flag_defaults.append(XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG)

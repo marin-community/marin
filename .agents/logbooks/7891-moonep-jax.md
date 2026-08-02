@@ -393,3 +393,20 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Gate: Require attempt-zero completion, finite loss, zero dropped assignments, and no transport error.
 - Stop criteria: Stop on the first retry, compiler OOM, collective OOM, transport error, non-finite loss, or dropped assignment.
 - Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 0 --job-name mnep-019-two-slice-mem80-smoke-3-20260802-1552-coord -e WANDB_MODE offline -e WANDB_PROJECT rav_moe -- python -m experiments.grug.moe_hero_ep.launch --run-id mnep-019-two-slice-mem80-smoke-3-20260802-1552 --num-steps 3 --moe-implementation moonep_jax --moonep-token-padding 128 --moonep-grouped-gemm quack --qb-method global_histogram --qb-histogram-bins 1000 --moonep-jax-wheel-build lsa-20260802 --processes-per-task 1 --worker-cpu 16 --worker-ram-gb 88 --version 2026.08.02 --run`.
+
+### 2026-08-02 16:05 UTC - MNEP-019 isolates collective overlap memory
+
+- Result: The 80% pool compiled the complete train step, but task zero again failed before step zero in the decomposed NCCL all-to-all.
+- Device state: The main CUDA async pool held about 148 GiB. The separate collective space had about 37 GiB available.
+- Shape: Each rank has 524,288 token assignments. One bfloat16 hidden buffer is exactly 5 GiB, and the two-slice dispatch all-gather produces 10 GiB.
+- Source: XLA documents that `xla_gpu_experimental_parallel_collective_overlap_limit` controls the number of in-flight collectives. The current value is four.
+- Interpretation: Four concurrent 10 GiB decomposed buffers exceed the 20% collective space. Lowering the main pool further would put the measured program schedule at risk.
+- Decision: Keep the 80% main pool and limit MoonEP to three in-flight collectives. Keep the existing four-collective limit for the fixed all-to-all baseline.
+
+### 2026-08-02 16:05 UTC - MNEP-020 bounded-overlap smoke contract
+
+- Goal: Execute three combined MoonEP and global QB steps with the two-slice transport and at most three in-flight collectives.
+- Run ID: `mnep-020-two-slice-overlap3-smoke-3-20260802-1605`.
+- Config: Match MNEP-019 with an 80% main pool, but reduce the MoonEP collective overlap limit from four to three.
+- Gate: Require attempt-zero completion, finite loss, zero dropped assignments, and no transport error.
+- Stop criteria: Stop on the first retry, memory error, transport error, non-finite loss, or dropped assignment.
