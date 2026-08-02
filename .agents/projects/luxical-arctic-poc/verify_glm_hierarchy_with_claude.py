@@ -12,6 +12,7 @@ import subprocess
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from glm_semantic_labels import parse_json_object, stable_order
@@ -276,6 +277,7 @@ def main() -> None:
     parser.add_argument("--claude-model", required=True)
     parser.add_argument("--batch-size", type=int, default=20)
     parser.add_argument("--max-budget-usd", type=float, required=True)
+    parser.add_argument("--output-path", type=Path)
     args = parser.parse_args()
     if args.batch_size < 1 or args.max_budget_usd <= 0:
         parser.error("--batch-size and --max-budget-usd must be positive")
@@ -288,7 +290,27 @@ def main() -> None:
     result["claude_model_usage_batches"] = review.model_usage_batches
     result["claude_cost_usd"] = review.cost_usd
     result["claude_assignments"] = review.assignments
-    print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+    output = json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True)
+    if args.output_path is None:
+        print(output)
+        return
+    args.output_path.write_text(output)
+    print(
+        json.dumps(
+            {
+                "claude_cost_usd": review.cost_usd,
+                "claude_model": args.claude_model,
+                "output_path": str(args.output_path),
+                "representative": {
+                    key: value for key, value in result["representative"].items() if key != "disagreements"
+                },
+                "stress": {key: value for key, value in result["stress"].items() if key != "disagreements"},
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+    )
 
 
 if __name__ == "__main__":
