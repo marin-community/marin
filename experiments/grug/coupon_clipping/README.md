@@ -44,9 +44,11 @@ order, 6.711B-token horizon, optimizer schedule, and 16-GB200 topology.
   the former inserts 44 identity layers, while the latter trains four randomly
   sampled positions from an existing 48-layer stack.
 - `c_short.py`: the 3,200-update full-depth WSD control.
-- `paloma_wd1.py`, `paloma_c_short.py`, and `paloma_c0.py`: checkpoint-only
-  Paloma evaluations for the main treatment and controls. Each subset is capped
-  at eight batches of 64 sequences and the result is written to `metrics.json`.
+- `paloma_wd1.py`, `paloma_wd2.py`, `paloma_l4.py`,
+  `paloma_random_layer_dropout.py`, `paloma_c_short.py`, and `paloma_c0.py`:
+  checkpoint-only Paloma evaluations for the treatments and controls. Each
+  subset is capped at eight batches of 64 sequences and the result is written
+  to `metrics.json`.
 
 The production arms use the 0.625x candidate selected by the 128-update control
 gate. The low, center, and high pilots remain explicit entry points so the gate

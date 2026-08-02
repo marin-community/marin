@@ -278,7 +278,24 @@ The first wave did not produce a greater-than-5x model suitable for SFT or RL. F
 - Commit Hash: `01d588e941`.
 - Command: target child `/power/ccx-wd2-tail10-coord/grug-train-ccx-wd2-d768-l1-to-d3072-l48-tail640`, followed by checkpoint-only evaluator `/power/cc16-paloma-wd2-coord`.
 - Config: WD2 trained `d768/L1/E64/top4` through update 5,760, expanded to a 5.484B-active `d3072/L48/E64/top4` target, and trained 640 full-depth updates. Paloma used the same 77 bounded batches as C0, C-short, and WD1.
-- Result: the source median was 2.467M tok/s and its trailing-64 loss was 4.2403. The target median was 199,982 tok/s and its trailing-64 loss was 4.0602. The terminal worker checkpoint completed about 3h15m after coordinator submission, or approximately 3.2x faster than C0. Paloma micro/macro loss was 4.8521/4.9983 and micro/macro BPB was 1.6929/1.7683. WD1's corresponding Paloma losses were 4.8286/4.9927; C-short's were 2.9030/3.0368.
+- Result: the source median was 2.467M tok/s and its trailing-64 loss was 4.2403. The target median was 199,982 tok/s and its trailing-64 loss was 4.0602. The terminal worker checkpoint completed about 3h07m after the first coordinator task admission, or approximately 3.3x faster than C0. Paloma micro/macro loss was 4.8521/4.9983 and micro/macro BPB was 1.6929/1.7683. WD1's corresponding Paloma losses were 4.8286/4.9927; C-short's were 2.9030/3.0368.
 - Interpretation: the 10% full-depth tail neither meets the greater-than-5x systems gate nor recovers capability beyond WD1. About 50 minutes of initial target data/compile stall consumed the expected loop margin, and the target training loss improved only 0.1801 from the source's terminal mean. The Paloma result is effectively unchanged from WD1.
 - Failure note: the target child, terminal W&B run, and Paloma coordinator succeeded. The production parent was preempted during teardown, replayed the already-complete source step, then failed in a JAX coordination-service teardown. No terminal artifact was lost; the successful checkpoint-only evaluation independently restored and scored it.
 - Next action: do not promote WD2 90/10. Finish the two L4 80/20 tails and Paloma evaluations, then compare whether coherent L4 capacity or stochastic layer coverage produces a materially better checkpoint despite their 5x ideal ceiling.
+
+### 2026-08-02 04:53 - CC16-020 L4 terminal comparison
+
+- Hypothesis: training every target position through random sample-four updates improves full-depth adaptation enough to offset its worse shallow learning curve relative to a coherent physical-L4 source.
+- Commit Hash: `169746548b`.
+- Command: production coordinators `/power/ccx-l4-tail20-coord` and `/power/ccx-ld4-tail20-coord`, followed by checkpoint-only evaluators `/power/cc16-paloma-l4-coord` and `/power/cc16-paloma-random-layer-dropout-coord`.
+- Config: each arm trained 5,120 narrow updates that executed four layers and 1,280 full `d3072/L48` updates. Physical L4 stored four source blocks and inserted 44 identity blocks before its suffix. Random sample-four stored 48 narrow blocks, executed four uniformly sampled ordered positions per source update, and widened in place.
+- Result:
+
+  | Arm | Coordinator time | Speedup vs C0 | Source median | Terminal train loss | Paloma micro | Paloma macro |
+  |---|---:|---:|---:|---:|---:|---:|
+  | Physical L4 | 4h36m | 2.25x | 1.291M tok/s | 2.2866 | 3.1426 | 3.2884 |
+  | Random sample-four | 4h40m | 2.22x | 1.260M tok/s | 2.2525 | 3.0946 | 3.2356 |
+
+  At matched source step 4,058, trailing-64 loss was 2.4457 for physical L4 and 3.3342 for random sample-four. After the common tail, random sample-four reversed the train-loss ranking by 0.0341 and beat physical L4 on all 16 Paloma subsets by 0.02-0.11 loss. It remained worse than C-short on all 16 subsets by 0.12-0.28. Both production and Paloma coordinators succeeded without task failure or preemption; training reported 99.976% valid targets and zero mean router overflow.
+- Interpretation: distributed target-layer coverage helps subsequent full-depth adaptation, but arbitrary sampled paths learn the shallow phase less efficiently than a coherent four-layer stack. Neither 80/20 arm approaches the greater-than-5x target; setup reduced the measured 3.1-3.3x loop projection to about 2.2x. Random sample-four improves C-short speed by only about 15% while producing worse Paloma.
+- Next action: do not promote either completed arm. Prioritize a 95/5 narrow L4 source and contiguous four-layer window sampling, with periodic full-depth refresh as a separate ablation. Require an observed greater-than-5x terminal checkpoint and Paloma near C-short before spending on SFT/RL.
