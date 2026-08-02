@@ -555,3 +555,12 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - GPU allocation: All 16 tasks run with four GB200 GPUs each; no task is pending or complete.
 - Logs: The first 15-minute scan has no matched loss failure, exception, OOM, dead-node, or resource error.
 - Decision: Keep the one admitted job and use the normal monitor cadence.
+
+### 2026-08-02 04:39 UTC - MHEP-007 spill is not selected
+
+- Completion: The coordinator and all 16 GPU tasks succeeded with exit 0, zero failures, and zero preemptions. The run completed all 25 steps. Each GPU task ran for 7 minutes and 20 seconds.
+- Performance: Median MFU is 24.0829%, mean MFU is 24.1721%, p10 MFU is 23.7578%, and p90 MFU is 24.8420% over 24 samples. The last sample is 23.8640% MFU, 386,721 tokens/s, and 10.8458 seconds.
+- MHEP-004 change: Median MFU falls by 0.0401 percentage points, or 0.17% relative. Last-sample throughput falls by 0.46%.
+- Training: Final loss is 6.1049. Final MoE drop fraction falls from 9.6786% to 5.8806%, a reduction of 3.7980 percentage points.
+- Code cost: Spill adds 106 net backend and public-dispatch lines, plus 101 net test lines.
+- Decision: Do not select spill. It is a throughput tie but does not exceed MHEP-004 median MFU and adds code. The selection rule prefers the highest MFU with the least code. Remove receiver-ECHO and spill from the final diff, restore MHEP-004, and run its final 200-step gate. XProf is not necessary for this selection decision.
