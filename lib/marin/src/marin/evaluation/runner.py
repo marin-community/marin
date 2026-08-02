@@ -30,7 +30,11 @@ from marin.evaluation.records import (
     record_path,
     write_record,
 )
-from marin.evaluation.serving_config import inference_config_for_model
+from marin.evaluation.serving_config import (
+    BATCH_ENDPOINT_READY_TIMEOUT_SECONDS,
+    ENDPOINT_READY_TIMEOUT_SECONDS,
+    inference_config_for_model,
+)
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
 from marin.inference.types import RunningModel
 
@@ -335,6 +339,11 @@ def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
         batch.model,
         batch.accelerator,
         env_vars=runtime_env,
+        endpoint_ready_timeout_seconds=(
+            BATCH_ENDPOINT_READY_TIMEOUT_SECONDS
+            if batch.priority_band == job_pb2.PRIORITY_BAND_BATCH
+            else ENDPOINT_READY_TIMEOUT_SECONDS
+        ),
         capability_origin=batch.capability_origin,
         api_model=batch.api_model,
     )

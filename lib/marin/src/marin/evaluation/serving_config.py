@@ -26,6 +26,7 @@ from marin.inference.config import (
 )
 
 ENDPOINT_READY_TIMEOUT_SECONDS = 2400
+BATCH_ENDPOINT_READY_TIMEOUT_SECONDS = 24 * 60 * 60
 EVAL_SERVE_MAX_NUM_BATCHED_TOKENS = 512
 DEFAULT_SERVE_CPU = 8.0
 _HF_CONFIG_FILENAME = "config.json"
@@ -121,6 +122,7 @@ def inference_config_for_model(
     accelerator: AcceleratorChoice,
     *,
     env_vars: Mapping[str, str],
+    endpoint_ready_timeout_seconds: float = ENDPOINT_READY_TIMEOUT_SECONDS,
     capability_origin: str | None = None,
     api_model: str | None = None,
     instances: int = 1,
@@ -195,7 +197,7 @@ def inference_config_for_model(
         iris=IrisConfig(
             worker_resources=resources,
             worker_environment=environment,
-            endpoint_ready_timeout_seconds=ENDPOINT_READY_TIMEOUT_SECONDS,
+            endpoint_ready_timeout_seconds=endpoint_ready_timeout_seconds,
         ),
         instances=instances,
         broker=broker,
