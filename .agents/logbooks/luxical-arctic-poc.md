@@ -1418,3 +1418,10 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
   remaining gate before a larger rung is permitted.
 - Forty-three focused training, hierarchy, label, metric, and review tests
   pass.
+- The first full 3M canary scanned every batch and source and exited cleanly,
+  but peak RSS reached 7,777,198,080 bytes. The process retained clean mapped
+  pages after staging. This passes the provisional 8 GiB gate but does not
+  prove that a 30M run is bounded.
+- The corrected loader flushes and releases mapped pages with
+  `MADV_DONTNEED` after each staged source and each epoch block. A second 3M
+  canary must show a materially lower peak before the loader gate passes.

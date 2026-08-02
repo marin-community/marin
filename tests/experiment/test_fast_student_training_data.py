@@ -123,6 +123,7 @@ def test_staged_rows_preserve_all_rows_and_return_fixed_batches(tmp_path: Path) 
     }
     report = staged.memory_report(block_rows=8)
     assert report["maximum_source_rows"] == 7
+    assert report["source_row_limit"] == 8
     assert report["epoch_block_rows"] == 8
     assert report["full_array_bytes_on_disk"] > report["estimated_epoch_block_array_bytes"]
 

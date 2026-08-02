@@ -3,6 +3,8 @@
 
 """Provide bounded training batches for the fast embedding student."""
 
+import logging
+import mmap
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +16,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from luxical.training import dequantize_8bit_uniform_scalar_quantized
 
+logger = logging.getLogger(__name__)
+
 
 class StagedMemoryReport(TypedDict):
     """Describe the disk-backed loader memory bounds."""
@@ -22,6 +26,7 @@ class StagedMemoryReport(TypedDict):
     rows: int
     staging_chunk_rows: int
     maximum_source_rows: int
+    source_row_limit: int
     epoch_block_rows: int
     estimated_maximum_source_array_bytes: int
     estimated_epoch_block_array_bytes: int
@@ -79,12 +84,17 @@ class StagedTrainingRows:
     teacher_dimension: int
     staging_chunk_rows: int
     maximum_source_rows: int
+    source_row_limit: int
     disk_bytes: int
 
     def audit_ids(self, rows: int) -> np.ndarray:
         """Return a fixed staged prefix for the embedding audit."""
         ids = np.load(self.ids_path, mmap_mode="r")
-        return np.asarray(ids[: min(rows, self.rows)]).copy()
+        if not isinstance(ids, np.memmap):
+            raise TypeError(f"The staged ID array has type {type(ids).__name__}")
+        audit = np.asarray(ids[: min(rows, self.rows)]).copy()
+        release_memmap_pages(ids)
+        return audit
 
     def epoch_batches(
         self,
@@ -101,6 +111,8 @@ class StagedTrainingRows:
         ids = np.load(self.ids_path, mmap_mode="r")
         teacher = np.load(self.teacher_path, mmap_mode="r")
         source_ids = np.load(self.source_ids_path, mmap_mode="r")
+        if not all(isinstance(array, np.memmap) for array in (ids, teacher, source_ids)):
+            raise TypeError("The staged training arrays are not memory maps")
         if ids.shape != (self.rows, self.id_width):
             raise ValueError(f"The staged ID array has shape {ids.shape}")
         if teacher.shape != (self.rows, self.teacher_dimension):
@@ -128,6 +140,7 @@ class StagedTrainingRows:
                     teacher=block_teacher[selected],
                     source_ids=block_source_ids[selected],
                 )
+            release_memmap_pages(ids, teacher, source_ids)
 
     def memory_report(self, block_rows: int) -> StagedMemoryReport:
         """Return conservative array-memory limits for one staged run."""
@@ -137,6 +150,7 @@ class StagedTrainingRows:
             "rows": self.rows,
             "staging_chunk_rows": self.staging_chunk_rows,
             "maximum_source_rows": self.maximum_source_rows,
+            "source_row_limit": self.source_row_limit,
             "epoch_block_rows": block_rows,
             "estimated_maximum_source_array_bytes": self.maximum_source_rows * bytes_per_row,
             "estimated_epoch_block_array_bytes": min(self.rows, block_rows) * bytes_per_row,
@@ -232,6 +246,16 @@ def interleaved_chunk_placements(
     if staged_start != sum(source_rows):
         raise ValueError(f"Chunk placements cover {staged_start} rows; expected {sum(source_rows)}")
     return placements
+
+
+def release_memmap_pages(*arrays: np.memmap) -> None:
+    """Flush mapped files and release their resident pages."""
+    for array in arrays:
+        array.flush()
+        mapping = array.base
+        if not isinstance(mapping, mmap.mmap):
+            raise TypeError(f"The memory map has base type {type(mapping).__name__}")
+        mapping.madvise(mmap.MADV_DONTNEED)
 
 
 def _read_table(url: str, columns: list[str], rows: int) -> pa.Table:
@@ -337,6 +361,7 @@ def stage_training_rows(
         shape=(total_rows,),
     )
     for source in sources:
+        logger.info("Staging source %d/%d: %s (%d rows)", source.source_id + 1, len(sources), source.source, source.rows)
         ids, teacher = source_arrays(
             source,
             id_width,
@@ -349,9 +374,8 @@ def stage_training_rows(
             staged_ids[staged_slice] = ids[source_slice]
             staged_teacher[staged_slice] = teacher[source_slice]
             staged_source_ids[staged_slice] = source.source_id
-    staged_ids.flush()
-    staged_teacher.flush()
-    staged_source_ids.flush()
+        release_memmap_pages(staged_ids, staged_teacher, staged_source_ids)
+    release_memmap_pages(staged_ids, staged_teacher, staged_source_ids)
     del staged_ids, staged_teacher, staged_source_ids
     disk_bytes = sum(path.stat().st_size for path in (ids_path, teacher_path, source_ids_path))
     return StagedTrainingRows(
@@ -363,5 +387,6 @@ def stage_training_rows(
         teacher_dimension=teacher_dimension,
         staging_chunk_rows=chunk_rows,
         maximum_source_rows=largest_source,
+        source_row_limit=maximum_source_rows,
         disk_bytes=disk_bytes,
     )
