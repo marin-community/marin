@@ -60,6 +60,7 @@ MOONEP_RUNTIME_ENV = {
     # Keep enough HBM outside the main pool for the 15 GiB collective arena.
     "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.84",
 }
+MOONEP_FAST_INTERCONNECT_SLICE_SIZE = 32
 _XLA_FLAG_DEFAULTS = (
     "--xla_gpu_experimental_parallel_collective_overlap_limit=4",
     "--xla_gpu_enable_latency_hiding_scheduler=true",
@@ -67,8 +68,11 @@ _XLA_FLAG_DEFAULTS = (
 _MOONEP_XLA_FLAG_DEFAULTS = (
     # The full EP64 program needs 146.43 GiB before rematerialization.
     "--xla_gpu_memory_limit_slop_factor=106",
-    # Use the multi-node NCCL LSA/GIN kernel. The older NCCL barrier kernel
-    # faults on the first EP64 collective on one GB200 NVL72 rack.
+    # Decompose EP64 into two standard cross-slice collectives and two local
+    # ragged collectives. The direct EP64 device kernel causes an illegal access.
+    "--xla_gpu_unsupported_enable_ragged_all_to_all_multi_host_decomposer=true",
+    f"--xla_gpu_unsupported_override_fast_interconnect_slice_size={MOONEP_FAST_INTERCONNECT_SLICE_SIZE}",
+    # Use the NCCL LSA/GIN kernel only inside each 32-GPU slice.
     "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
 )
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU

@@ -229,6 +229,11 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
     assert explicit_slop in flags
     assert "--xla_gpu_memory_limit_slop_factor=106" not in flags
     assert "--xla_gpu_enable_latency_hiding_scheduler=true" in flags
+    assert "--xla_gpu_unsupported_enable_ragged_all_to_all_multi_host_decomposer=true" in flags
+    assert (
+        f"--xla_gpu_unsupported_override_fast_interconnect_slice_size={train.MOONEP_FAST_INTERCONNECT_SLICE_SIZE}"
+        in flags
+    )
     assert "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true" in flags
     assert not any(flag.startswith("--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl") for flag in flags)
     assert train.XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG in flags
@@ -263,7 +268,7 @@ def test_run_grug_adds_verified_jax_wheels_after_standard_gpu_setup():
     assert "staging CUDA toolchain" in scripts[2]
 
 
-def test_profile_window_uses_one_process_and_keeps_hlo_metadata():
+def test_profile_window_uses_one_process_and_compact_timeline():
     profiler = launch._hero_profiler_config(start_step=3, num_steps=2)
     assert profiler.enabled
     assert profiler.start_step == 3
@@ -271,7 +276,7 @@ def test_profile_window_uses_one_process_and_keeps_hlo_metadata():
     assert profiler.process_index == 0
     assert profiler.profile_options.host_tracer_level == 1
     assert profiler.profile_options.python_tracer_level == 0
-    assert profiler.profile_options.enable_hlo_proto
+    assert not profiler.profile_options.enable_hlo_proto
 
 
 def test_profile_window_rejects_steps_skipped_by_callback_runner():

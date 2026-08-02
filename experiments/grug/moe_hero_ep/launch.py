@@ -66,7 +66,7 @@ def _hero_profiler_config(start_step: int | None, num_steps: int) -> ProfilerCon
         profile_options=ProfileOptionsConfig(
             host_tracer_level=1,
             python_tracer_level=0,
-            enable_hlo_proto=True,
+            enable_hlo_proto=False,
         ),
     )
 
