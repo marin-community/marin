@@ -864,3 +864,21 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - PJRT SHA-256: `b3c2d632c70628d026af8bc87f09d48c405b03a57dcba69880327b66ecd748d2`.
 - Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-noop-before-device-comm-20260802`.
 - Expected rack result: The collective completes and the probe reports sampled value mismatches.
+
+### 2026-08-02 22:04 UTC - MNEP-042 moves the boundary before `GetDeviceComm`
+
+- Run ID: `mnep-042-ragged-noop-before-device-comm-20260802-2200`.
+- Snapshot: `mnep-042-ragged-noop-before-device-comm-20260802-2200` at `cc813e39a`.
+- Result: Task 10 failed with the same CUDA illegal address after 21 seconds.
+- Result: The code returned before `GetDeviceComm` and before the device kernel.
+- Interpretation: `GetDeviceComm` is not the source of the fault.
+- Echo milestone: `#1864`.
+- Next gate: Convert the device buffers, then return before the next host lookup.
+
+### 2026-08-02 22:05 UTC - Return-after-buffer-conversion XLA build
+
+- Patch: Convert the five device buffers, then return before all other host checks.
+- Patch file: `experiments/grug/moe_hero_ep/xla_patches/0012-return-after-device-buffer-conversion.patch`.
+- PJRT SHA-256: `3475c89c11683f1106290ab487f55087bd924b6de9c787153f83f9403ce9b2bf`.
+- Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-noop-after-buffer-conversion-20260802`.
+- Expected rack result: The collective completes and the probe reports sampled value mismatches.
