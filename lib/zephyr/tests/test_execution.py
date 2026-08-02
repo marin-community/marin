@@ -301,6 +301,31 @@ def test_failed_shared_execution_does_not_stop_another(local_client, tmp_path):
             failed.result()
 
 
+def test_pull_task_rotates_between_executions(coordinator):
+    tasks = [
+        ShardTask(
+            shard_idx=shard_idx,
+            total_shards=2,
+            shard=ListShard(refs=[]),
+            operations=[],
+            stage_name="test",
+            cost=_TEST_TASK_COST,
+        )
+        for shard_idx in range(2)
+    ]
+    start_test_stage(coordinator, tasks, execution_id="run-1")
+    start_test_stage(coordinator, tasks, execution_id="run-2")
+
+    execution_order = []
+    for _ in range(4):
+        status, work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+        assert status == PullStatus.RUN_TASK
+        assert work is not None
+        execution_order.append(work.execution_id)
+
+    assert execution_order == ["run-1", "run-2", "run-1", "run-2"]
+
+
 def test_duplicate_execution_id_joins_terminal_execution(coordinator):
     """A repeated execution ID returns the retained terminal result."""
     plan = compute_plan(Dataset.from_list([]))
