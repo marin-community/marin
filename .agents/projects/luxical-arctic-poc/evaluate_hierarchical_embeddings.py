@@ -24,7 +24,7 @@ from evaluate_semantic_embeddings import (
 )
 from evaluate_teacher_candidate import CANDIDATES
 from glm_hierarchical_labels import OUTPUT_ROOT, HierarchicalAssignment, parse_hierarchy
-from glm_semantic_labels import SampleDocument, read_json, read_jsonl
+from glm_semantic_labels import SampleDocument, read_json, read_jsonl, stable_order
 from rigging.filesystem import StoragePath, atomic_rename
 from semantic_embedding_metrics import (
     cosine_order_fidelity,
@@ -41,6 +41,9 @@ DEFAULT_VARIANTS = ("compact", "balanced")
 DEFAULT_MAXIMUM_PAIR_COUNT = 1_000_000
 MINIMUM_GROUP_SUPPORT = 30
 MAXIMUM_GROUP_F1_LOSS = 0.03
+REVIEW_QUERY_COUNT = 200
+REVIEW_NEIGHBOR_COUNT = 5
+REVIEW_TEXT_CHARACTERS = 600
 EXACT_SPEED_REPORT_URL = (
     "s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/"
     "fast-student/speed/cpu-trained-full-full-3m.json"
@@ -122,7 +125,7 @@ def variant_metrics(
     sources: np.ndarray,
     speed_ratio: float,
     maximum_pair_count: int | None,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
     """Return per-level metrics and student gates for one hierarchy."""
     neighbor_cache = {}
     cross_group_neighbor_cache = {}
@@ -180,7 +183,93 @@ def variant_metrics(
                 all(gates.values()) and all(row["passed"] for row in groups.values()) and all(health_gates.values())
             ),
         }
-    return levels
+    return levels, cross_group_neighbor_cache
+
+
+def strongest_reference_model(levels: dict[str, Any]) -> tuple[str, dict[str, float]]:
+    """Select one teacher by its mean across fixed hierarchy metrics."""
+    metric_names = (
+        "cross_group_neighbor_any_label_fraction",
+        "cross_group_neighbor_label_jaccard",
+        "cross_group_nearest_primary_macro_f1",
+        "cluster_nmi",
+    )
+    scores = {
+        model: float(
+            np.mean(
+                [
+                    float(levels[level]["models"][model][metric])
+                    for level in ("parent", "leaf", "form")
+                    for metric in metric_names
+                ]
+            )
+        )
+        for model in SEMANTIC_REFERENCE_MODELS
+    }
+    return max(scores, key=lambda name: scores[name]), scores
+
+
+def neighborhood_review_indices(assignments: list[HierarchicalAssignment], count: int) -> list[int]:
+    """Return a stable review sample with up to 30 central-code queries."""
+    if count < 1 or count > len(assignments):
+        raise ValueError("The neighborhood review size is invalid")
+    code = sorted(
+        (row.sample_index for row in assignments if row.form_id == "CODE"),
+        key=lambda value: stable_order(f"neighborhood-review-code:{value}"),
+    )[: min(30, count)]
+    selected = set(code)
+    remaining = sorted(
+        (row.sample_index for row in assignments if row.sample_index not in selected),
+        key=lambda value: stable_order(f"neighborhood-review-population:{value}"),
+    )
+    return [*code, *remaining[: count - len(code)]]
+
+
+def blind_neighborhood_package(
+    documents: list[SampleDocument],
+    assignments: list[HierarchicalAssignment],
+    cross_group_neighbors: dict[str, np.ndarray],
+    reference_model: str,
+) -> dict[str, Any]:
+    """Return randomized model-blind neighbor sets for independent review."""
+    document_by_index = {row.sample_index: row for row in documents}
+    assignment_by_index = {row.sample_index: row for row in assignments}
+    items = []
+    for sample_index in neighborhood_review_indices(assignments, REVIEW_QUERY_COUNT):
+        student_first = stable_order(f"neighborhood-review-side:{sample_index}")[0] % 2 == 0
+        model_order = ("fast_arctic_3m", reference_model) if student_first else (reference_model, "fast_arctic_3m")
+        sets = {}
+        for side, model in zip(("A", "B"), model_order, strict=True):
+            sets[side] = [
+                document_by_index[int(index)].text[:REVIEW_TEXT_CHARACTERS]
+                for index in cross_group_neighbors[model][sample_index, :REVIEW_NEIGHBOR_COUNT]
+            ]
+        assignment = assignment_by_index[sample_index]
+        items.append(
+            {
+                "sample_index": sample_index,
+                "query": document_by_index[sample_index].text[:REVIEW_TEXT_CHARACTERS],
+                "sets": sets,
+                "student_side": "A" if student_first else "B",
+                "glm_primary_parent_id": assignment.primary_parent_id,
+                "glm_form_id": assignment.form_id,
+            }
+        )
+    return {
+        "reference_model": reference_model,
+        "student_model": "fast_arctic_3m",
+        "items": items,
+        "source_metadata_in_review": False,
+        "same_source_neighbors_excluded": True,
+        "selection": "30 central-code queries when available, then a stable uniform sample",
+    }
+
+
+def write_blind_neighborhood_package(root: StoragePath, package: dict[str, Any]) -> str:
+    """Write one private compressed blind-review package."""
+    url = str(root / "blind-neighborhood-review-v1" / "package.json.gz")
+    StoragePath(url).write_text(json.dumps(package, ensure_ascii=False, sort_keys=True), compression="gzip")
+    return url
 
 
 def write_report(root: StoragePath, report: dict[str, Any]) -> str:
@@ -224,6 +313,8 @@ def main() -> None:
     speed_ratio = float(speed_report["student_to_baseline_ratio"])
     sources = np.asarray([row.source for row in documents])
     variants = {}
+    evaluation_assignments = None
+    evaluation_neighbors = None
     for variant_name in args.variants:
         current_variant_root = OUTPUT_ROOT / args.run_id / variant_name
         taxonomy = read_json(str(current_variant_root / "taxonomy.json"))
@@ -232,13 +323,16 @@ def main() -> None:
             current_variant_root / args.evaluation_run_id if args.evaluation_run_id is not None else current_variant_root
         )
         assignments = hierarchical_assignments(assignment_root, documents)
-        variants[variant_name] = variant_metrics(
+        metrics, cross_group_neighbors = variant_metrics(
             models,
             assignments,
             sources,
             speed_ratio,
             args.maximum_pair_count,
         )
+        variants[variant_name] = metrics
+        evaluation_assignments = assignments
+        evaluation_neighbors = cross_group_neighbors
     report = {
         "documents": len(documents),
         "hierarchy_run_root": str(OUTPUT_ROOT / args.run_id),
@@ -254,6 +348,19 @@ def main() -> None:
         "model_metadata": metadata,
         "variants": variants,
     }
+    if args.evaluation_run_id is not None:
+        assert evaluation_assignments is not None and evaluation_neighbors is not None
+        accepted_variant = args.variants[0]
+        reference_model, reference_scores = strongest_reference_model(variants[accepted_variant])
+        package = blind_neighborhood_package(
+            documents,
+            evaluation_assignments,
+            evaluation_neighbors,
+            reference_model,
+        )
+        report["blind_neighborhood_reference_model"] = reference_model
+        report["blind_neighborhood_reference_scores"] = reference_scores
+        report["blind_neighborhood_package_url"] = write_blind_neighborhood_package(report_root, package)
     url = write_report(report_root, report)
     result = {"report_url": url, "variants": variants}
     RESULT_FILE.write_text(json.dumps(result, sort_keys=True))
