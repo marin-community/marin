@@ -226,42 +226,33 @@ def _assignment_destinations(
     return jnp.minimum(destinations, num_ranks - 1), errors
 
 
-def _exchange_remote_weights(
+def _exchange_remote_weights_impl(
     local_weights: jax.Array,
     experts_to_copy: Int[Array, "R B"],
     rank: Int[Array, ""],
 ) -> jax.Array:
     num_ranks, experts_per_rank = experts_to_copy.shape
-    max_send_copies = max(num_ranks + experts_per_rank - 2, 1)
     valid = experts_to_copy >= 0
     safe_experts = jnp.maximum(experts_to_copy, 0)
     owners = safe_experts // experts_per_rank
     needed_from_rank = jnp.logical_and(valid, owners == rank)
-    compact_positions = jnp.cumsum(needed_from_rank.reshape(-1), dtype=jnp.int32) - 1
-    compact_positions = jnp.where(needed_from_rank.reshape(-1), compact_positions, max_send_copies)
-    local_indices = (safe_experts % experts_per_rank).reshape(-1)
-    packed_local_indices = (
-        jnp.full((max_send_copies,), experts_per_rank, dtype=jnp.int32)
-        .at[compact_positions]
-        .set(local_indices, mode="drop")
+    input_offsets = (safe_experts % experts_per_rank).reshape(-1)
+    send_sizes = needed_from_rank.reshape(-1).astype(jnp.int32)
+    output_offsets = jnp.broadcast_to(
+        jnp.arange(experts_per_rank, dtype=jnp.int32)[None, :], experts_to_copy.shape
+    ).reshape(-1)
+    receiver_owners = owners[rank]
+    recv_sizes = (
+        jnp.logical_and(
+            valid[rank][None, :],
+            receiver_owners[None, :] == jnp.arange(num_ranks, dtype=jnp.int32)[:, None],
+        )
+        .reshape(-1)
+        .astype(jnp.int32)
     )
-
-    destination_ids = jnp.broadcast_to(
-        jnp.arange(num_ranks, dtype=jnp.int32)[:, None],
-        experts_to_copy.shape,
-    )
-    send_matrix = jnp.zeros((num_ranks, num_ranks), dtype=jnp.int32)
-    send_matrix = send_matrix.at[owners.reshape(-1), destination_ids.reshape(-1)].add(valid.reshape(-1))
-    input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(send_matrix, rank)
-
-    padded_local_weights = jnp.concatenate(
-        [local_weights, jnp.zeros((1, *local_weights.shape[1:]), dtype=local_weights.dtype)],
-        axis=0,
-    )
-    send_weights = padded_local_weights[packed_local_indices]
     receiver_weights = jnp.zeros((experts_per_rank, *local_weights.shape[1:]), dtype=local_weights.dtype)
-    received_weights = jax.lax.ragged_all_to_all(
-        send_weights,
+    return jax.lax.ragged_all_to_all(
+        local_weights,
         receiver_weights,
         input_offsets,
         send_sizes,
@@ -269,9 +260,81 @@ def _exchange_remote_weights(
         recv_sizes,
         axis_name="expert",
     )
-    receiver_owner_order = jnp.argsort(jnp.where(valid[rank], owners[rank], num_ranks), stable=True)
-    receiver_load_order = jnp.argsort(receiver_owner_order)
-    return received_weights[receiver_load_order]
+
+
+def _return_remote_weight_gradients(
+    remote_gradients: jax.Array,
+    experts_to_copy: Int[Array, "R B"],
+    rank: Int[Array, ""],
+) -> jax.Array:
+    num_ranks, experts_per_rank = experts_to_copy.shape
+    max_recv_copies = max(num_ranks + experts_per_rank - 2, 1)
+    valid = experts_to_copy >= 0
+    safe_experts = jnp.maximum(experts_to_copy, 0)
+    owners = safe_experts // experts_per_rank
+    owner_ids = jnp.arange(num_ranks, dtype=jnp.int32)[:, None, None]
+    copies_by_owner = jnp.logical_and(valid[None, :, :], owners[None, :, :] == owner_ids)
+    compact_positions = jnp.cumsum(copies_by_owner.reshape(num_ranks, -1), axis=1, dtype=jnp.int32) - 1
+    compact_positions = compact_positions.reshape(copies_by_owner.shape)
+
+    sender_copies = copies_by_owner[:, rank, :]
+    input_offsets = jnp.broadcast_to(
+        jnp.arange(experts_per_rank, dtype=jnp.int32)[None, :], sender_copies.shape
+    ).reshape(-1)
+    send_sizes = sender_copies.reshape(-1).astype(jnp.int32)
+    output_offsets = compact_positions[:, rank, :].reshape(-1)
+    recv_sizes = copies_by_owner[rank].reshape(-1).astype(jnp.int32)
+    packed_gradients = jax.lax.ragged_all_to_all(
+        remote_gradients,
+        jnp.zeros((max_recv_copies, *remote_gradients.shape[1:]), dtype=remote_gradients.dtype),
+        input_offsets,
+        send_sizes,
+        output_offsets,
+        recv_sizes,
+        axis_name="expert",
+    )
+
+    local_indices = (safe_experts % experts_per_rank).reshape(-1)
+    receiver_copies = copies_by_owner[rank].reshape(-1)
+    receiver_positions = compact_positions[rank].reshape(-1)
+    packed_local_indices = (
+        jnp.full((max_recv_copies,), experts_per_rank, dtype=jnp.int32)
+        .at[jnp.where(receiver_copies, receiver_positions, max_recv_copies)]
+        .set(local_indices, mode="drop")
+    )
+    return (
+        jnp.zeros((experts_per_rank, *remote_gradients.shape[1:]), dtype=remote_gradients.dtype)
+        .at[packed_local_indices]
+        .add(packed_gradients, mode="drop")
+    )
+
+
+@jax.custom_vjp
+def _exchange_remote_weights(
+    local_weights: jax.Array,
+    experts_to_copy: Int[Array, "R B"],
+    rank: Int[Array, ""],
+) -> jax.Array:
+    return _exchange_remote_weights_impl(local_weights, experts_to_copy, rank)
+
+
+def _exchange_remote_weights_fwd(
+    local_weights: jax.Array,
+    experts_to_copy: Int[Array, "R B"],
+    rank: Int[Array, ""],
+) -> tuple[jax.Array, tuple[jax.Array, jax.Array]]:
+    return _exchange_remote_weights_impl(local_weights, experts_to_copy, rank), (experts_to_copy, rank)
+
+
+def _exchange_remote_weights_bwd(
+    residuals: tuple[jax.Array, jax.Array],
+    remote_gradients: jax.Array,
+) -> tuple[jax.Array, None, None]:
+    experts_to_copy, rank = residuals
+    return _return_remote_weight_gradients(remote_gradients, experts_to_copy, rank), None, None
+
+
+_exchange_remote_weights.defvjp(_exchange_remote_weights_fwd, _exchange_remote_weights_bwd)
 
 
 def _moe_mlp_ep_moonep_local(

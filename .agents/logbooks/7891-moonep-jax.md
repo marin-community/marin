@@ -236,3 +236,22 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Runtime: Use JAX `0.11.1.dev20260731`, NCCL 2.29.7, an 84% main pool, a 106% scheduler factor, and the device-kernel flag.
 - Stop criteria: Stop on any task failure, non-finite loss, transport error, or incomplete step 3.
 - Next action: Launch the 25-step correctness and MFU gate only if MNEP-010 passes.
+
+### 2026-08-02 12:35 UTC - MNEP-010 lacks the multi-node LSA fix
+
+- Result: The EP64 program compiled, but rank 10 failed before step zero with a CUDA illegal address.
+- Evidence: All four local GPU threads failed when XLA recorded the completion event for an asynchronous collective.
+- Source: JAX `0.11.1.dev20260731` pins XLA `2d26accb73ec90841df9f6156d877b19782300dd` from July 30.
+- Source: XLA `0d993720fac7a1b5f7522b1c525a9354ebb04f0b` reads the NCCL LSA domain size from `nLsaTeams` on multi-node NVLink.
+- Gap: The LSA fix is 67 XLA commits after the MNEP-010 wheel source.
+- Decision: Build JAX at `f9f6bbaced02ef315d20b34facec09e79f356503`, which pins fixed XLA `5d53e1e40cd08655e8fe52f104f35b57ce35a626`.
+- Next action: Do the four-GPU parity gate, then do one EP64 three-step gate with the fixed XLA wheel.
+
+### 2026-08-02 12:53 UTC - Direct weight sends pass the four-GPU parity gate
+
+- Change: Use multiple ragged updates per peer to send each expert from its owner buffer.
+- Change: Use a custom gradient path to sum duplicate expert gradients at the owner.
+- Memory: This removes the 66-row forward sender buffer for each weight projection at the hero shape.
+- Gate: The four-GPU full-owner-skew test passed output and input, `w13`, and `w2` gradient comparisons.
+- Result: `1 passed, 146 warnings in 169.59s` on four GB200 GPUs.
+- Next action: Repeat this gate with the fixed XLA wheels before the EP64 rack run.
