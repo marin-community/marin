@@ -274,3 +274,13 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Interpretation: The training gate completed. The outer failure does not indicate a model, optimizer, distributed-training, or GPU-task failure.
 - Decision: Use a 21,600-second outer coordinator timeout for later gates so a long child queue wait cannot hide a successful result.
 - Next action: Read `tracker_metrics.jsonl` through an A08 CPU task and verify final step and steady-step metrics before the fixed-capacity feature gate.
+
+### 2026-08-02 00:34 UTC - MHEP-002 local gate passed
+
+- Hypothesis: Fixed-capacity all-to-all can remove ragged collective overhead without gather dispatch, spill, a custom adjoint, or runtime environment switches.
+- Code snapshot: `63499c1ce`.
+- Config change: Select `fixed_all_to_all` at capacity factor 1.0. All other hero model, optimizer, mesh, batch, and runtime settings stay unchanged.
+- Code size: The new backend file is 107 lines.
+- Tests: The full Grug MoE backend file passed with 15 tests and 6 skips. The explicit four-device value-and-gradient comparison passed. Five EP-hero and launch-contract tests passed. Changed-file pre-commit checks and Pyrefly passed.
+- Dry run: The launch plan resolves fixed all-to-all, 25 steps, batch 1024, EP64, and the same 16 by 4 GB200 resource request.
+- Next action: Wait for the MHEP-001 metric reader, record its comparable baseline, then submit the MHEP-002 one-rack gate with a 21,600-second coordinator timeout.
