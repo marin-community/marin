@@ -72,6 +72,8 @@ author: Marin
 - `Z10X-N01`: Fixed-resource actor packing did not make stages faster in PR #6996.
 - `Z10X-N02`: The tier-2 Polars shuffle port did not improve end-to-end wall time in PR #5963, showing that tier-1 gains do not generalize automatically to skewed inputs.
 - `Z10X-N03`: `joblib` could not share the loaded Luxical model across subprocesses in issue #7120.
+- `Z10X-N04`: Size-aware MinHash shard ordering improved the modeled 103-shard makespan by less than 1%; the production files are already nearly uniform.
+- `Z10X-N05`: Fusing MinHash and LSH into one native transformation was 1.9% slower after the allocation-free n-gram change; the fused API was discarded.
 
 ## Entry Log
 
@@ -245,3 +247,26 @@ author: Marin
 - Semantic gate: Both arms counted 16,236,550 documents, 422,150,300 buckets, and 867 truncated texts. Region-local validation found 103 matching basenames, identical schema and row totals, byte-identical aggregate output size of 7,710,290,996 bytes, and exact equality for the first, middle, and last output tables.
 - Interpretation: This is a steady-state utilization gain, not a startup-overhead result. The Iris/Kubernetes task count stays at 16 while Zephyr multiplexes 103 shards through 64 process slots. The flat CPU total shows that packing changes elapsed time and reserved-resource efficiency rather than algorithmic work.
 - Next action: make single-CPU task packing the MinHash default heuristic, retaining explicit overrides, then validate the configuration behavior and rerun the relevant local tests and repository checks.
+
+### 2026-08-02 - Z10X-016 production shard-ordering negative result
+
+- Hypothesis: Scheduling the largest MinHash shards first will reduce the second-wave tail after packing raises concurrency from 16 to 64 process slots.
+- Commit Hash: `a458d6087`.
+- Job: `/loom/zephyr-10x-minhash-shard-skew-v1`, submitted through the `marin` Iris federation to `cw-us-east-02a` at batch priority. The analysis read only region-local object metadata and Parquet footer counts.
+- Config: The same 103 production shards used in `Z10X-014` and `Z10X-015`. Compare lexical input order with longest-processing-time-first proxies based on compressed object bytes and row counts, at 16 and 64 process slots.
+- Result: Nearly every shard is approximately 400 MB compressed, with one small final shard. Size- or row-aware ordering improved modeled makespan by only 0.02–0.21% at 16 slots and 0.28–0.93% at 64 slots.
+- Interpretation: The observed tail is the unavoidable second wave of 103 similarly sized shards over 64 slots, not meaningful input skew. Listing metadata or reading 103 footers in the scheduler would add complexity and remote calls for less than 1% modeled benefit.
+- Next action: Do not add size-aware ordering for this workload. Reduce per-example native CPU and intermediate allocation instead.
+
+### 2026-08-02 - Z10X-017 allocation-light native MinHash kernel
+
+- Hypothesis: Hashing UTF-8 slices instead of allocating one Rust `String` per character n-gram, and collapsing punctuation and whitespace without an intermediate string or regular-expression replacement, will reduce sustained MinHash CPU without changing signatures.
+- Commit Hash: working tree based on `a458d6087`.
+- Implementation: Keep whole-string lowercase semantics, remove the regex and punctuation-table pass, use byte windows for ASCII text, and use character-boundary byte slices for Unicode n-grams. The public CleanText, MinHash, and MinHashLSH transformations remain separate. A proposed fused MinHash+LSH transformation was 1.9% slower after the allocation improvements and was removed.
+- Local result: On 10,000 unique FineWeb-derived documents with the production 286-permutation, 26-band configuration, the released kernel used a 19.1667-second median CPU time and the optimized kernel used 16.0367 seconds, a 16.33% reduction (1.195x). CleanText alone improved from 1.41376 to 0.460507 median CPU-seconds (3.07x).
+- Compatibility gate: An initial per-character lowercase optimization passed narrow golden tests but changed Greek final sigma and therefore some production buckets. The first 16.24M-document treatment was discarded. Restoring whole-string lowercase produced byte-identical CleanText, MinHash, and LSH output on 100,000 deterministic mixed-Unicode documents, including the failing sigma context. The regression is covered explicitly in the unit tests.
+- Job: `/loom/zephyr-10x-minhash-native-wheel-v3`, execution `20260802-054752-0b85bdf1`, submitted through the `marin` Iris federation to `cw-us-east-02a` at batch priority. It used the same 103 shards, 41.10 GB compressed input, 16,236,550 documents, 16 Iris workers, and four one-CPU Zephyr subprocess slots per worker as the packed baseline. The job completed with no failures, retries, or preemptions.
+- Production result: The optimized stage used 14,928.82 CPU-seconds versus 16,955.22, a reduction of 11.95% (1.136x). Stage elapsed fell from 342.88 to 303.63 seconds (1.129x); end-to-end root duration fell from 6m57.43s to 6m14.40s (1.115x). Peak subprocess memory changed by +0.62% and average memory by -1.33%. Against the original one-slot row stage, the cumulative stage elapsed improvement is 4.03x and CPU is 13.94% lower.
+- Semantic gate: Both arms counted 16,236,550 documents, 422,150,300 buckets, and 867 truncated texts. Region-local validation found 103 matching basenames, identical schemas and per-file row counts, byte-identical aggregate output size of 7,710,290,996 bytes, and exact equality for the first, middle, and last output tables.
+- Interpretation: The sustained CPU result confirms that per-n-gram native allocation is a meaningful cost at production scale, while the 64-slot packing result remains the larger elapsed-time gain. The accepted implementation preserves context-sensitive Unicode lowercase behavior instead of trading semantics for another small speed increment.
+- Next action: Commit the native kernel milestone and update PR #7888. Continue coordinating the larger native-scatter opportunity with PR #7200 rather than duplicating its implementation.
