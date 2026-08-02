@@ -98,6 +98,7 @@ class ActorServer:
         host: str = "0.0.0.0",
         port: int | None = None,
         threads: ThreadContainer | None = None,
+        max_concurrency: int = 32,
     ):
         """Initialize the actor server.
 
@@ -105,6 +106,7 @@ class ActorServer:
             host: Host address to bind to
             port: Port to bind to. If None or 0, auto-assigns a free port.
             threads: ThreadContainer for managing server threads. If None, uses the default registry.
+            max_concurrency: Maximum actor methods that may run concurrently.
         """
         self._host = host
         self._port = port
@@ -115,7 +117,7 @@ class ActorServer:
         self._server: uvicorn.Server | None = None
         # Create dedicated executor for running actor methods
         # This avoids relying on asyncio's default executor which can be shut down prematurely
-        self._executor = self._threads.spawn_executor(max_workers=32, prefix="actor-method")
+        self._executor = self._threads.spawn_executor(max_workers=max_concurrency, prefix="actor-method")
         self._operations: dict[str, OperationState] = {}
         self._operations_lock = threading.Lock()
 
