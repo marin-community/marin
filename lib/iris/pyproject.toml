@@ -21,7 +21,7 @@ dependencies = [
     "cloudpickle>=3.1.2",
     "connect-python>=0.9.0",
     # pyqwest 0.6.1 fixes SIGSEGV during interpreter shutdown with an active sync request.
-    "pyqwest>=0.6.1",
+    "pyqwest>=0.6.1,<0.7",
     "fsspec>=2024.0.0",
     "gcsfs>=2024.0.0",
     "google-auth>=2.0",

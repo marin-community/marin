@@ -5486,7 +5486,7 @@ requires-dist = [
     { name = "marin-rigging", extras = ["secrets"], marker = "extra == 'controller'", editable = "lib/rigging" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.12.0" },
-    { name = "pyqwest", specifier = ">=0.6.1" },
+    { name = "pyqwest", specifier = ">=0.6.1,<0.7" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "s3fs", specifier = ">=2024.0.0" },
     { name = "sqlalchemy", specifier = ">=2.0" },
