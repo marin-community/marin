@@ -329,6 +329,11 @@ def test_run_grug_selects_collective_overlap_limit(
             "jax-f9f6bbace-xla-5d53e1e-nccl2307-hybrid-resources-20260802",
             "ad8ee4dff204460f10bff5eb468957b332131203b628bf02ad2bcc0fdff73d0f",
         ),
+        (
+            MoonEPJaxWheelBuild.LSA_NCCL_2307_HYBRID_WEAK_20260802,
+            "jax-f9f6bbace-xla-5d53e1e-nccl2307-hybrid-weak-20260802",
+            "c71148f3901030525093480bbdf6582d255d7b34af5564a636ac409b24de1ffa",
+        ),
     ],
 )
 def test_run_grug_adds_verified_jax_wheels_after_standard_gpu_setup(

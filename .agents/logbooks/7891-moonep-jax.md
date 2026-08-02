@@ -608,3 +608,54 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-hybrid-resources-20260802`.
 - Local gate: The four-GPU 640 MiB probe passed in 3.456048 seconds with checksum `294912` and zero mismatches.
 - Next gate: Run the same balanced probe at EP64 on one NVL72.
+
+### 2026-08-02 18:20 UTC - MNEP-028 hybrid-resource rack probe contract
+
+- Goal: Test the corrected hybrid device communicator with a balanced cross-domain transfer.
+- Run ID: `mnep-028-ragged-hybrid-resources-20260802-1820`.
+- Snapshot: `mnep-028-ragged-hybrid-resources-20260802-1820` at `1c9607519`.
+- Shape: Use 65,536 rows per rank, 5,120 bfloat16 elements per row, and 64 equal peer segments.
+- Gate: Require attempt-zero completion, checksum `6193152`, zero sampled mismatches, and no transport error.
+
+### 2026-08-02 18:23 UTC - MNEP-028 falsifies the resource-layout hypothesis
+
+- Result: All eight workers for ranks 32 through 63 reported CUDA illegal addresses after communicator setup.
+- Result: The lower-domain workers stayed active until Iris stopped them through coscheduling.
+- Interpretation: Removing the two unused device resources did not change the cross-domain failure.
+- Next gate: Reduce each remote GIN put from 10 MiB to 1 MiB without changing the peer set.
+
+### 2026-08-02 18:23 UTC - MNEP-029 transfer-size gate
+
+- Goal: Test whether a 1 MiB GIN put crosses the NVLink-domain boundary correctly.
+- Run ID: `mnep-029-ragged-64m-probe-20260802-1823`.
+- Snapshot: `mnep-028-ragged-hybrid-resources-20260802-1820` at `1c9607519`.
+- Shape: Use 65,536 rows per rank, 512 bfloat16 elements per row, and 64 equal peer segments.
+- Gate: Require attempt-zero completion, checksum `6193152`, zero sampled mismatches, and no transport error.
+
+### 2026-08-02 18:25 UTC - MNEP-029 fails with 1 MiB puts
+
+- Result: The eight workers for ranks 32 through 63 failed again. The lower-domain workers stayed active.
+- Interpretation: A 1 MiB per-peer transfer does not remove the directional cross-domain failure.
+- Next gate: Test 4 KiB per peer, which matches the scale of NVIDIA's educational hybrid example.
+
+### 2026-08-02 18:25 UTC - MNEP-030 minimum transfer gate
+
+- Goal: Test whether the cross-domain GIN path can move any payload for this XLA allocation.
+- Run ID: `mnep-030-ragged-256k-probe-20260802-1825`.
+- Shape: Use 65,536 rows per rank, two bfloat16 elements per row, and 64 equal peer segments.
+- Per-peer payload: 4 KiB.
+- Gate: Require attempt-zero completion, checksum `6193152`, zero sampled mismatches, and no transport error.
+
+### 2026-08-02 18:29 UTC - MNEP-030 rules out payload size
+
+- Result: The 4 KiB per-peer case failed with the same upper-domain CUDA illegal addresses.
+- Interpretation: The fault does not depend on the payload size from 4 KiB through 10 MiB.
+- Next gate: Replace XLA's deprecated strong legacy completion signal with the explicit weak signal from NVIDIA's example.
+
+### 2026-08-02 18:29 UTC - Weak-signal PJRT build
+
+- Patch: Use `ncclGin_WeakSignalInc` for each remote put.
+- PJRT SHA-256: `c71148f3901030525093480bbdf6582d255d7b34af5564a636ac409b24de1ffa`.
+- Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-hybrid-weak-20260802`.
+- Local gate: The four-GPU 640 MiB probe passed in 3.867382 seconds with checksum `294912` and zero mismatches.
+- Next gate: Repeat the 4 KiB and 10 MiB per-peer cases at EP64.
