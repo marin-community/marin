@@ -26,13 +26,6 @@ from typing import ClassVar, NamedTuple
 from finelog.client.log_client import Table
 from rigging.timing import Timestamp
 
-from iris.cluster.backends.k8s.node_metrics import (
-    CW_EXPORTERS_NAMESPACE,
-    DEFAULT_NODE_STATS_POLL_INTERVAL,
-    NodeMetrics,
-    NodeStatsCollector,
-    NodeTarget,
-)
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
@@ -78,6 +71,7 @@ from iris.cluster.platforms.k8s.types import (
     parse_k8s_timestamp,
 )
 from iris.cluster.runtime.env import (
+    IRIS_NODE_NAME_ENV,
     STANDARD_MOUNTS,
     VENV_PATH,
     WORKDIR_MOUNT,
@@ -104,7 +98,6 @@ from iris.cluster.stats.tables import (
     ProfileTrigger,
     TaskEventRow,
     TaskEventSeverity,
-    WorkerStatus,
     build_task_stat,
     stats_timestamp,
 )
@@ -811,6 +804,12 @@ def _build_pod_manifest(
         {
             "name": "IRIS_ADVERTISE_HOST",
             "valueFrom": {"fieldRef": {"fieldPath": "status.podIP"}},
+        }
+    )
+    env_list.append(
+        {
+            "name": IRIS_NODE_NAME_ENV,
+            "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}},
         }
     )
 
@@ -1631,13 +1630,6 @@ def _node_label(node: dict, keys: tuple[str, ...]) -> str:
     return ""
 
 
-def _node_internal_ip(node: dict) -> str:
-    for addr in node.get("status", {}).get("addresses", []):
-        if addr.get("type") == "InternalIP":
-            return addr.get("address", "")
-    return ""
-
-
 def _node_ready(node: dict) -> bool:
     for cond in node.get("status", {}).get("conditions", []):
         if cond.get("type") == "Ready":
@@ -1687,11 +1679,8 @@ def _node_status_proto(
     running_pods: int,
     cpu_mc: int,
     mem_bytes: int,
-    metrics: NodeMetrics | None,
-    metrics_ts: int,
 ) -> controller_pb2.Controller.NodeStatus:
-    """Build a NodeStatus proto: node identity/liveness + the latest scraped readings."""
-    m = metrics or NodeMetrics()
+    """Build a NodeStatus proto from Kubernetes identity and capacity."""
     return controller_pb2.Controller.NodeStatus(
         name=node.get("metadata", {}).get("name", ""),
         ready=_node_ready(node),
@@ -1699,53 +1688,14 @@ def _node_status_proto(
         status_summary=_node_status_summary(node),
         instance_type=_node_label(node, _INSTANCE_TYPE_LABELS),
         region=_node_label(node, _REGION_LABELS),
-        gpu_count=m.gpu_count if m.gpu_count is not None else _node_gpu_count(node),
-        gpu_model=m.gpu_model or _node_label(node, _GPU_MODEL_LABELS),
+        gpu_count=_node_gpu_count(node),
+        gpu_model=_node_label(node, _GPU_MODEL_LABELS),
         cpu_millicores=cpu_mc,
         memory_bytes=mem_bytes,
         disk_bytes=_node_disk_bytes(node),
         running_pods=running_pods,
         created=node.get("metadata", {}).get("creationTimestamp", ""),
-        metrics_ts=metrics_ts if metrics is not None else 0,
-        cpu_pct=m.cpu_pct or 0.0,
-        mem_used_bytes=m.mem_used_bytes or 0,
-        mem_total_bytes=m.mem_total_bytes or 0,
-        disk_used_bytes=m.disk_used_bytes or 0,
-        disk_total_bytes=m.disk_total_bytes or 0,
-        net_recv_bytes=m.net_recv_bytes or 0,
-        net_sent_bytes=m.net_sent_bytes or 0,
-        hbm_used_bytes=m.hbm_used_bytes or 0,
-        hbm_total_bytes=m.hbm_total_bytes or 0,
-        gpu_util_pct=m.gpu_util_pct or 0.0,
-        gpu_temp_c=m.gpu_temp_c or 0.0,
-        gpu_power_w=m.gpu_power_w or 0.0,
     )
-
-
-def _node_targets(nodes: list[dict], pods: list[dict]) -> list[NodeTarget]:
-    """Build the per-node scrape targets + row identity from the cached kubectl state."""
-    running = _running_pods_by_node(pods)
-    targets: list[NodeTarget] = []
-    for node in nodes:
-        name = node.get("metadata", {}).get("name", "")
-        if not name:
-            continue
-        occupied = running.get(name, 0)
-        device_type = "gpu" if _node_gpu_count(node) > 0 else "cpu"
-        targets.append(
-            NodeTarget(
-                name=name,
-                internal_ip=_node_internal_ip(node),
-                status=WorkerStatus.RUNNING if occupied else WorkerStatus.IDLE,
-                device_type=device_type,
-                device_variant=_node_label(node, _GPU_MODEL_LABELS),
-                zone=_node_label(node, _REGION_LABELS),
-                cpu_count=_node_cpu_millicores(node) // 1000,
-                memory_bytes=_node_memory_bytes(node),
-                running_pod_count=occupied,
-            )
-        )
-    return targets
 
 
 class ClusterState:
@@ -1766,17 +1716,6 @@ class ClusterState:
         self._nodes: list[dict] = []
         self._workloads: list[dict] = []
         self._node_pools: list[controller_pb2.Controller.NodePoolStatus] = []
-        # Latest per-node host/GPU readings from the node-stats collector's scrape,
-        # folded into the NodeStatus rows so the dashboard shows live utilization
-        # without re-scraping on every status call. Empty until the first scrape.
-        self._node_metrics: dict[str, NodeMetrics] = {}
-        self._node_metrics_ts: int = 0
-
-    def set_node_metrics(self, metrics: dict[str, NodeMetrics], ts_ms: int) -> None:
-        """Replace the cached exporter snapshot (called by the node-stats collector)."""
-        with self._lock:
-            self._node_metrics = dict(metrics)
-            self._node_metrics_ts = ts_ms
 
     def update(
         self,
@@ -1850,8 +1789,6 @@ class ClusterState:
             nodes = self._nodes[:]
             workloads = self._workloads[:]
             node_pools = self._node_pools[:]
-            node_metrics = dict(self._node_metrics)
-            metrics_ts = self._node_metrics_ts
 
         total_nodes = len(nodes)
         schedulable_nodes = 0
@@ -1875,8 +1812,6 @@ class ClusterState:
                     running_pods=running.get(name, 0),
                     cpu_mc=cpu_mc,
                     mem_bytes=mem_bytes,
-                    metrics=node_metrics.get(name),
-                    metrics_ts=metrics_ts,
                 )
             )
 
@@ -2323,15 +2258,6 @@ class K8sTaskProvider:
     # Pre-resolved iris.profile Table handle, passed alongside task_stats_table.
     # None in test mode.
     profile_table: Table | None = None
-    # Pre-resolved iris.worker Table handle. A k8s cluster has no per-node worker
-    # daemon, so the backend writes one iris.worker row per node (host + GPU
-    # readings) here, surfacing nodes as workers. None in tests without finelog.
-    worker_stats_table: Table | None = None
-    # Namespace whose node-exporter/dcgm-exporter DaemonSets the node-stats
-    # collector scrapes (CoreWeave's cw-exporters by default).
-    exporters_namespace: str = CW_EXPORTERS_NAMESPACE
-    # Node-stats scrape cadence, coarser than the reconcile tick (see NodeStatsCollector).
-    node_stats_poll_interval: float = DEFAULT_NODE_STATS_POLL_INTERVAL
     # Resource-usage poll cadence. Defaults to the metrics-server scrape
     # resolution (15s) — sampling faster only re-reads the same value. One bulk
     # metrics list per tick covers every managed pod (see ResourceCollector).
@@ -2369,7 +2295,6 @@ class K8sTaskProvider:
     _dispatched_attempts: set[tuple[str, int]] = field(default_factory=set, init=False, repr=False)
     _resource_collector: ResourceCollector | None = field(default=None, init=False, repr=False)
     _periodic_profiler: PeriodicProfiler | None = field(default=None, init=False, repr=False)
-    _node_stats_collector: NodeStatsCollector | None = field(default=None, init=False, repr=False)
     _task_event_log: TaskEventLog | None = field(default=None, init=False, repr=False)
     _cluster_state: ClusterState = field(default_factory=ClusterState, init=False, repr=False)
     _last_gc_time: float = field(default=0.0, init=False, repr=False)
@@ -2399,19 +2324,6 @@ class K8sTaskProvider:
                 poll_interval=self.profile_poll_interval,
             )
         return self._periodic_profiler
-
-    def _ensure_node_stats_collector(self) -> NodeStatsCollector | None:
-        if self.worker_stats_table is None:
-            return None
-        if self._node_stats_collector is None:
-            self._node_stats_collector = NodeStatsCollector(
-                self.kubectl,
-                self.worker_stats_table,
-                exporters_namespace=self.exporters_namespace,
-                poll_interval=self.node_stats_poll_interval,
-                on_snapshot=self._cluster_state.set_node_metrics,
-            )
-        return self._node_stats_collector
 
     def _ensure_task_event_log(self) -> TaskEventLog | None:
         if self.task_event_table is None:
@@ -2582,13 +2494,6 @@ class K8sTaskProvider:
         node_pools = _fetch_node_pools(self.kubectl, self.pods.managed_label)
         self._cluster_state.update(managed_pods, nodes, workloads, node_pools)
 
-        # Declare the node set for the background scrape (host + GPU readings ->
-        # iris.worker rows). The collector owns the exporter I/O off the reconcile
-        # path; here we only hand it the freshly-synced nodes.
-        node_collector = self._ensure_node_stats_collector()
-        if node_collector is not None:
-            node_collector.set_nodes(_node_targets(nodes, managed_pods))
-
         self._maybe_gc_terminal_resources(managed_pods)
 
         return updates
@@ -2714,8 +2619,6 @@ class K8sTaskProvider:
             self._resource_collector.close()
         if self._periodic_profiler is not None:
             self._periodic_profiler.close()
-        if self._node_stats_collector is not None:
-            self._node_stats_collector.close()
 
     def get_cluster_status(self) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
         """Return cluster status from the latest sync() snapshot. No kubectl calls."""

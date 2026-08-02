@@ -37,6 +37,8 @@ from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 
 logger = logging.getLogger(__name__)
 
+ACTOR_SERVER_STARTUP_TIMEOUT = Duration.from_seconds(5.0)
+
 # Type aliases
 ActorId = NewType("ActorId", str)
 
@@ -325,30 +327,49 @@ class ActorServer:
 
         self._app = self._create_app()
 
-        if bind_port == 0:
-            with socket.socket() as s:
-                s.bind(("", 0))
-                self._actual_port = s.getsockname()[1]
-        else:
-            self._actual_port = bind_port
+        # Keep the kernel allocation bound until Uvicorn adopts it. Probing an
+        # ephemeral port and closing the socket first lets concurrent actors
+        # select the same port before either server begins listening.
+        family = socket.AF_INET6 if ":" in self._host else socket.AF_INET
+        listener = socket.socket(family=family)
+        try:
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listener.bind((self._host, bind_port))
+        except OSError:
+            listener.close()
+            raise
+        self._actual_port = listener.getsockname()[1]
 
-        assert self._actual_port is not None
-        config = uvicorn.Config(
-            self._app,
-            host=self._host,
-            port=self._actual_port,
-            log_level="error",
-            log_config=None,
-            timeout_keep_alive=120,
+        try:
+            config = uvicorn.Config(
+                self._app,
+                host=self._host,
+                port=self._actual_port,
+                log_level="error",
+                log_config=None,
+                timeout_keep_alive=120,
+            )
+            self._server = uvicorn.Server(config)
+            thread = self._threads.spawn_server(
+                self._server,
+                name=f"actor-server-{self._actual_port}",
+                sockets=[listener],
+            )
+        except Exception:
+            listener.close()
+            raise
+
+        ready_or_exited = ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
+            lambda: self._server.started or not thread.is_alive,
+            timeout=ACTOR_SERVER_STARTUP_TIMEOUT,
         )
-        self._server = uvicorn.Server(config)
-
-        self._threads.spawn_server(self._server, name=f"actor-server-{self._actual_port}")
-
-        ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
-            lambda: self._server.started,
-            timeout=Duration.from_seconds(5.0),
-        )
+        if not ready_or_exited:
+            raise TimeoutError(
+                f"Actor server did not start on {self._host}:{self._actual_port} within "
+                f"{ACTOR_SERVER_STARTUP_TIMEOUT.to_seconds():g} seconds"
+            )
+        if not self._server.started:
+            raise RuntimeError(f"Actor server exited before listening on {self._host}:{self._actual_port}")
 
         return self._actual_port
 

@@ -19,13 +19,16 @@ from urllib.parse import urlparse
 
 import requests
 from iris.runtime import telemetry as runtime_telemetry
+from rigging import telemetry
 from rigging.filesystem import marin_prefix
+from rigging.telemetry.probes import nccl
+from rigging.telemetry.probes.runner import PeriodicProbe
+from rigging.telemetry.prometheus import PrometheusForwarder
 from rigging.timing import Deadline, ExponentialBackoff, retry_with_backoff
 
 from marin.inference.config import WORKER_PYTHON_VERSION, InferenceModelConfig, VllmCompilationCacheMode
 from marin.inference.tpu_vllm_pins import tpu_inference_fork_ref, vllm_fork_ref
 from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
-from marin.inference.vllm_metrics import VLLM_METRICS_SERVICE, VllmMetricsForwarder, start_vllm_metrics_forwarding
 
 logger = logging.getLogger(__name__)
 # Bounded tail for the failure path and diagnostics(); the full stream reaches the job log, so
@@ -45,6 +48,8 @@ _AWS_CONFIG_FILE_ENV_VAR = "AWS_CONFIG_FILE"
 _RUNAI_STREAMER_READ_MARKER = "could not receive runai_response"
 _LINUX_PROC_ROOT = "/proc"
 _LINUX_DEAD_PROCESS_STATES = frozenset({"X", "Z"})
+_VLLM_METRICS_SERVICE = "vllm"
+_VLLM_METRIC_PREFIX = "vllm:"
 
 
 class _ProcessGroupStatus(StrEnum):
@@ -300,12 +305,16 @@ class VllmServerHandle:
     # Owns the reader threads and on-disk log files.
     log_pump: _LogPump | None = None
     # Polls the server's /metrics into direct process telemetry; None until ready.
-    metrics_forwarder: VllmMetricsForwarder | None = None
+    metrics_forwarder: PrometheusForwarder | None = None
+    # Collects communicator-local NCCL RAS evidence; None until telemetry is configured.
+    nccl_probe: PeriodicProbe | None = None
 
     def stop(self, *, timeout_seconds: float = 10) -> None:
         # Stop the metrics poller before the process dies so it does not scrape a dead endpoint.
         if self.metrics_forwarder is not None:
             self.metrics_forwarder.stop(timeout=timeout_seconds)
+        if self.nccl_probe is not None:
+            self.nccl_probe.shutdown(timeout_seconds)
 
         self._signal(signal.SIGTERM)
         try:
@@ -918,6 +927,23 @@ def _start_vllm_native_server(
 
     # Now that the server answers, forward its /metrics (throughput, TTFT, queue depth) to
     # direct telemetry so it reaches Finelog. The metrics endpoint sits at the root, not under /v1.
-    runtime_telemetry.configure(VLLM_METRICS_SERVICE)
+    runtime_telemetry.configure(
+        _VLLM_METRICS_SERVICE,
+        attributes={"role": telemetry.TelemetryRole.INFERENCE.value},
+    )
+    if not telemetry.runtime_status().configured:
+        return handle
     metrics_url = f"http://{host}:{resolved_port}/metrics"
-    return dataclasses.replace(handle, metrics_forwarder=start_vllm_metrics_forwarding(metrics_url))
+    metrics_forwarder = PrometheusForwarder(
+        metrics_url,
+        metric_prefix=_VLLM_METRIC_PREFIX,
+        metric_source=_VLLM_METRICS_SERVICE,
+    )
+    metrics_forwarder.start()
+    logger.info("Forwarding vLLM metrics from %s to telemetry_v1", metrics_url)
+    nccl_probe = nccl.start() if isinstance(launcher, IsolatedCudaVllm) else None
+    return dataclasses.replace(
+        handle,
+        metrics_forwarder=metrics_forwarder,
+        nccl_probe=nccl_probe,
+    )
