@@ -900,3 +900,20 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - PJRT SHA-256: `a5c642dd2476faf51287ad7cd5d4734b27d9ab5cc4fd1cb2353d575de8e536a8`.
 - Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-noop-after-symmetric-lookup-20260802`.
 - Expected rack result: The collective completes and the probe reports sampled value mismatches.
+
+### 2026-08-02 22:18 UTC - MNEP-044 finds a conditional fallback
+
+- Run ID: `mnep-044-ragged-noop-after-symmetric-lookup-20260802-2214`.
+- Snapshot: `mnep-044-ragged-noop-after-symmetric-lookup-20260802-2214` at `f42c97c20`.
+- Result: Task 10 failed with the same CUDA illegal address after 27 seconds.
+- Finding: The diagnostic return was inside the device-path predicate.
+- Interpretation: A false predicate lets a rank start the older fallback path.
+- Next gate: Replace the fallback with an error that reports all device-path predicates.
+
+### 2026-08-02 22:19 UTC - Device-predicate report XLA build
+
+- Patch: Report the four device-path predicate values instead of starting the fallback.
+- Patch file: `experiments/grug/moe_hero_ep/xla_patches/0014-report-device-path-predicate.patch`.
+- PJRT SHA-256: `3a4cf444687179fea6545a25cec73ec930dd875ec1bd033e8495262c02430042`.
+- Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-report-device-predicate-20260802`.
+- Expected rack result: The probe reports the false predicate without a CUDA fault.
