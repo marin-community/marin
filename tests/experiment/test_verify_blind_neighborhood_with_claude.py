@@ -83,6 +83,7 @@ def test_review_checkpoint_round_trip_and_input_binding(tmp_path: Path) -> None:
     write_review_checkpoint(checkpoint, review_package, "claude-opus-5", 10, review)
 
     assert load_review_checkpoint(checkpoint, review_package, "claude-opus-5", 10) == review
+    assert load_review_checkpoint(checkpoint, review_package, "claude-opus-5", 1) == review
     changed = review_package | {"items": [review_package["items"][0] | {"query": "changed"}, review_package["items"][1]]}
     with pytest.raises(ValueError, match="different review inputs"):
         load_review_checkpoint(checkpoint, changed, "claude-opus-5", 10)

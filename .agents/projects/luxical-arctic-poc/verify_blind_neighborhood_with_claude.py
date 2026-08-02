@@ -78,17 +78,19 @@ def load_review_checkpoint(
     expected = {
         "package_sha256": review_package_sha256(package),
         "model": model,
-        "batch_size": batch_size,
     }
     if any(checkpoint.get(key) != value for key, value in expected.items()):
         raise ValueError("The Claude checkpoint has different review inputs")
+    saved_batch_size = checkpoint.get("batch_size")
+    if not isinstance(saved_batch_size, int) or saved_batch_size < 1:
+        raise ValueError("The Claude checkpoint has an invalid batch size")
     decisions = checkpoint.get("decisions")
     usage = checkpoint.get("model_usage_batches")
     if not isinstance(decisions, list) or not isinstance(usage, list):
         raise ValueError("The Claude checkpoint is incomplete")
     items = package["items"]
-    if len(decisions) > len(items) or (len(decisions) % batch_size and len(decisions) != len(items)):
-        raise ValueError("The Claude checkpoint does not end at a batch boundary")
+    if len(decisions) > len(items):
+        raise ValueError("The Claude checkpoint has too many decisions")
     validate_decisions(package | {"items": items[: len(decisions)]}, decisions)
     return ClaudeNeighborhoodReview(decisions, usage, float(checkpoint["cost_usd"]))
 
