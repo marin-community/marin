@@ -36,6 +36,7 @@ BASE_MANIFEST_URL = f"{MANIFEST_ROOT}/manifest.json"
 RUNG_TARGETS = {"10m": 10_000_000, "30m": 30_000_000}
 MAXIMUM_TRAIN_ROWS_PER_SOURCE = 262_144
 EXTENSION_BLOCK_ROWS = 4_096
+EXTENSION_READ_CHUNK_ROWS = 4_096
 MANIFEST_VERSION = 3
 EXPANSION_VERSION = 1
 
@@ -110,17 +111,15 @@ def fixed_global_positions(
     return output
 
 
-def selected_extension_rows(
-    filesystem: Any,
+def extension_positions(
     files: list[tuple[str, int]],
     source: str,
     row_count: int,
     excluded: set[int],
-    protocol: str,
-) -> tuple[list[dict[str, Any]], Counter[str]]:
-    """Read one deterministic extension that excludes all fixed base rows."""
+) -> np.ndarray[Any, np.dtype[np.int64]]:
+    """Return one deterministic extension that excludes all fixed base rows."""
     total_rows = sum(count for _, count in files)
-    positions = block_sample_positions(
+    return block_sample_positions(
         np.random.default_rng(stable_seed(f"extended-rows:{source}")),
         total_rows,
         row_count,
@@ -128,12 +127,48 @@ def selected_extension_rows(
         block_size=EXTENSION_BLOCK_ROWS,
         position_order=PositionOrder.SELECTION,
     )
-    rows, selected_counts = selected_source_position_rows(filesystem, files, positions, protocol)
-    row_positions = source_global_positions(rows, filesystem, files, protocol)
-    row_by_position = dict(zip(row_positions, rows, strict=True))
-    if len(row_by_position) != len(rows):
-        raise ValueError(f"Source {source} returned duplicate extension positions")
-    return [row_by_position[int(position)] for position in positions], selected_counts
+
+
+def bounded_extension_table(
+    source: str,
+    category: str,
+    extension_rows: list[dict[str, Any]],
+    first_train_rank: int,
+    rung_quotas: dict[str, int],
+    schema: pa.Schema,
+) -> pa.Table:
+    """Convert raw extension rows to a bounded manifest table."""
+    output_rows = []
+    for offset, input_row in enumerate(extension_rows):
+        row = dict(input_row)
+        raw_text = str(row.pop("raw_text"))
+        train_rank = first_train_rank + offset
+        output_rows.append(
+            row
+            | {
+                "source": source,
+                "source_category": category,
+                "split": "train",
+                "eval_rank": -1,
+                "train_rank": train_rank,
+                "in_750k": False,
+                "in_3m": False,
+                "raw_characters": len(raw_text),
+                "raw_sha256": hashlib.sha256(raw_text.encode()).hexdigest(),
+                "normalized_sha256": hashlib.sha256(normalized_text(raw_text).encode()).hexdigest(),
+                "text": document_view(raw_text),
+                **{f"in_{rung}": train_rank < quota for rung, quota in rung_quotas.items()},
+            }
+        )
+    return pa.Table.from_pylist(output_rows, schema=schema)
+
+
+def base_with_rung_columns(base_table: pa.Table, rung_quotas: dict[str, int]) -> pa.Table:
+    """Add expanded rung membership to unchanged base rows."""
+    output = base_table
+    for rung in rung_quotas:
+        output = output.append_column(f"in_{rung}", pc.equal(base_table["split"], "train"))
+    return output
 
 
 def extended_source_table(
@@ -152,40 +187,77 @@ def extended_source_table(
     if len(extension_rows) != target_quota - base_train_rows:
         raise ValueError(f"The extension count is invalid for {source}")
 
-    base_with_rung = base_table
-    for rung in rung_quotas:
-        base_with_rung = base_with_rung.append_column(f"in_{rung}", pc.equal(base_table["split"], "train"))
+    base_with_rung = base_with_rung_columns(base_table, rung_quotas)
     category = str(base_table["source_category"][0].as_py())
-    output_rows = []
-    for offset, input_row in enumerate(extension_rows):
-        row = dict(input_row)
-        raw_text = str(row.pop("raw_text"))
-        train_rank = base_train_rows + offset
-        output_rows.append(
-            row
-            | {
-                "source": source,
-                "source_category": category,
-                "split": "train",
-                "eval_rank": -1,
-                "train_rank": train_rank,
-                "in_750k": False,
-                "in_3m": False,
-                "raw_characters": len(raw_text),
-                "raw_sha256": hashlib.sha256(raw_text.encode()).hexdigest(),
-                "normalized_sha256": hashlib.sha256(normalized_text(raw_text).encode()).hexdigest(),
-                "text": document_view(raw_text),
-                **{f"in_{rung}": train_rank < quota for rung, quota in rung_quotas.items()},
-            }
+    if extension_rows:
+        extension_table = bounded_extension_table(
+            source,
+            category,
+            extension_rows,
+            base_train_rows,
+            rung_quotas,
+            base_with_rung.schema,
         )
-    if output_rows:
-        extension_table = pa.Table.from_pylist(output_rows, schema=base_with_rung.schema)
         output = pa.concat_tables((base_with_rung, extension_table))
     else:
         output = base_with_rung
     if len(output) != EVAL_ROWS_PER_SOURCE + target_quota:
         raise ValueError(f"The expanded source {source} has an unexpected row count")
     return output
+
+
+def selected_extension_table(
+    filesystem: Any,
+    files: list[tuple[str, int]],
+    source: str,
+    base_table: pa.Table,
+    rung_quotas: dict[str, int],
+    protocol: str,
+    read_chunk_rows: int = EXTENSION_READ_CHUNK_ROWS,
+) -> tuple[pa.Table, Counter[str]]:
+    """Read raw rows in chunks and return one bounded expanded source table."""
+    if read_chunk_rows < 1:
+        raise ValueError("The extension read chunk must be positive")
+    base_train_rows = int(pc.sum(pc.equal(base_table["split"], "train")).as_py())
+    if len(base_table) != EVAL_ROWS_PER_SOURCE + base_train_rows:
+        raise ValueError(f"The base source {source} has an unexpected split count")
+    target_quota = max(rung_quotas.values())
+    if any(quota < base_train_rows for quota in rung_quotas.values()):
+        raise ValueError(f"An expanded quota is smaller than the fixed base for {source}")
+    positions = extension_positions(
+        files,
+        source,
+        target_quota - base_train_rows,
+        fixed_global_positions(base_table, filesystem, files, protocol),
+    )
+    base_with_rung = base_with_rung_columns(base_table, rung_quotas)
+    category = str(base_table["source_category"][0].as_py())
+    tables = [base_with_rung]
+    selected_counts: Counter[str] = Counter()
+    for start in range(0, len(positions), read_chunk_rows):
+        chunk_positions = positions[start : start + read_chunk_rows]
+        rows, chunk_counts = selected_source_position_rows(filesystem, files, chunk_positions, protocol)
+        row_positions = source_global_positions(rows, filesystem, files, protocol)
+        row_by_position = dict(zip(row_positions, rows, strict=True))
+        if len(row_by_position) != len(rows):
+            raise ValueError(f"Source {source} returned duplicate extension positions")
+        ordered_rows = [row_by_position[int(position)] for position in chunk_positions]
+        tables.append(
+            bounded_extension_table(
+                source,
+                category,
+                ordered_rows,
+                base_train_rows + start,
+                rung_quotas,
+                base_with_rung.schema,
+            )
+        )
+        selected_counts.update(chunk_counts)
+        logger.info("Bounded extension rows for %s: %d/%d", source, start + len(chunk_positions), len(positions))
+    output = pa.concat_tables(tables)
+    if len(output) != EVAL_ROWS_PER_SOURCE + target_quota:
+        raise ValueError(f"The expanded source {source} has an unexpected row count")
+    return output, selected_counts
 
 
 def write_source_table(root: str, source: str, table: pa.Table) -> tuple[str, str]:
@@ -296,16 +368,14 @@ def build_expanded_manifest(rung: str, shard_index: int = 0, num_shards: int = 1
         base_rows = int(result["counts"]["train_3m"])
         if len(base_table) != EVAL_ROWS_PER_SOURCE + base_rows:
             raise ValueError(f"The fixed base row count differs for {source}")
-        excluded = fixed_global_positions(base_table, filesystem, files, protocol)
-        extension_rows, selected_counts = selected_extension_rows(
+        table, selected_counts = selected_extension_table(
             filesystem,
             files,
             source,
-            target_quota - base_rows,
-            excluded,
+            base_table,
+            rung_quotas,
             protocol,
         )
-        table = extended_source_table(source, base_table, extension_rows, rung_quotas)
         output_url, digest = write_source_table(root, source, table)
         base_selected_counts = {str(row["path"]): int(row["selected_rows"]) for row in result["selected_input_files"]}
         combined_selected_counts = Counter(base_selected_counts)

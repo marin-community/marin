@@ -20,6 +20,7 @@ from extend_fast_student_manifest import (  # noqa: E402
     extended_source_table,
     fixed_global_positions,
     reusable_source_result,
+    selected_extension_table,
 )
 
 
@@ -225,3 +226,33 @@ def test_assigned_source_names_partitions_all_sources() -> None:
 
     assert shards == [["a", "d"], ["b", "e"], ["c"]]
     assert sorted(source for shard in shards for source in shard) == sorted(sources)
+
+
+def test_selected_extension_table_is_independent_of_read_chunk_size(tmp_path: Path) -> None:
+    parquet_path = tmp_path / "source.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "id": [f"row-{index}" for index in range(520)],
+                "text": [f"raw text {index}" for index in range(520)],
+            }
+        ),
+        parquet_path,
+        row_group_size=520,
+    )
+    uri = f"file://{parquet_path}"
+    base = base_table()
+    base = base.set_column(
+        base.schema.get_field_index("input_path"),
+        "input_path",
+        pa.array([uri] * len(base)),
+    )
+    arguments = (None, [(str(parquet_path), 520)], "source", base, {"10m": 5, "30m": 7}, "file")
+
+    chunked, chunked_counts = selected_extension_table(*arguments, read_chunk_rows=2)
+    single, single_counts = selected_extension_table(*arguments, read_chunk_rows=100)
+
+    assert chunked.equals(single)
+    assert chunked_counts == single_counts == {uri: 4}
+    assert len(chunked) == 519
+    assert chunked["train_rank"].to_pylist()[-4:] == [3, 4, 5, 6]
