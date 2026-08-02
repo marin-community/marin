@@ -76,8 +76,9 @@ adjudicate the low-confidence tail before embedding metrics are approved.
 Use the lowest-confidence 5 percent for this adjudication. This is the same
 fraction as the failed 50-document pilot stress sample. Run the embedding gates
 once with the raw GLM labels and once with the Claude labels for this tail. No
-fixed student metric can change by more than 0.02, and the gate decision cannot
-change. A larger change means that label noise controls the result.
+fixed global student metric can change by more than 0.02. The full gate decision
+and the large-group gate decision cannot change. A larger change means that
+label noise controls the result.
 
 ## Required embedding gates
 
