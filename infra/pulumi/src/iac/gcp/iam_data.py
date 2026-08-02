@@ -432,7 +432,6 @@ PROJECT_GRANTS: tuple[GcpRoleGrant, ...] = (
             "serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com",
             "serviceAccount:marin-evaldash@hai-gcp-models.iam.gserviceaccount.com",
             "serviceAccount:marin-grafana@hai-gcp-models.iam.gserviceaccount.com",
-            "serviceAccount:marin-ops-ui@hai-gcp-models.iam.gserviceaccount.com",
             "serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com",
         ),
     ),
@@ -1433,15 +1432,6 @@ SECRETS: tuple[GcpSecretIam, ...] = (
         ),
     ),
     GcpSecretIam(
-        secret="cloudsql-ops-app-password",
-        grants=(
-            GcpRoleGrant(
-                role="roles/secretmanager.secretAccessor",
-                members=("serviceAccount:marin-ops-ui@hai-gcp-models.iam.gserviceaccount.com",),
-            ),
-        ),
-    ),
-    GcpSecretIam(
         secret="cw-object-storage-key-id",
         grants=(
             GcpRoleGrant(
@@ -1539,10 +1529,7 @@ SECRETS: tuple[GcpSecretIam, ...] = (
             ),
             GcpRoleGrant(
                 role="roles/secretmanager.secretAccessor",
-                members=(
-                    "serviceAccount:marin-grafana@hai-gcp-models.iam.gserviceaccount.com",
-                    "serviceAccount:marin-ops-ui@hai-gcp-models.iam.gserviceaccount.com",
-                ),
+                members=("serviceAccount:marin-grafana@hai-gcp-models.iam.gserviceaccount.com",),
             ),
         ),
     ),
@@ -2745,15 +2732,6 @@ SERVICE_ACCOUNTS: tuple[GcpServiceAccountIam, ...] = (
                         ciphertext="CiQAKk3j6ST/37jHzUocMCie+yosQq43hcElwIdi40g4rHOK2wASOwCdtF6i2om+bNBjBhBe3yUuZ0ZBAoOdByF4EKrAUsz8kiiXYukoA+yO28iQAjtwAXkrwpesh+xBLqYN"
                     ),
                 ),
-            ),
-        ),
-    ),
-    GcpServiceAccountIam(
-        email="marin-ops-ui@hai-gcp-models.iam.gserviceaccount.com",
-        grants=(
-            GcpRoleGrant(
-                role="roles/iam.serviceAccountTokenCreator",
-                members=("serviceAccount:marin-ops-ui@hai-gcp-models.iam.gserviceaccount.com",),
             ),
         ),
     ),

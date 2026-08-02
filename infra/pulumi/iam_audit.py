@@ -36,7 +36,7 @@ IAM_DATA_PATH = Path(__file__).resolve().parent / "src" / "iac" / "gcp" / "iam_d
 _CIPHERTEXT_RE = re.compile(r'GcpEncryptedMember\(\s*ciphertext="([^"]+)"\s*\)')
 
 _NONDETERMINISM_WARNING = (
-    "note: GCP KMS encryption is non-deterministic — re-encrypting produces different "
+    "NOTE: GCP KMS encryption is non-deterministic — re-encrypting produces different "
     "ciphertext for every entry, even ones whose email you didn't change, so the resulting "
     "diff in iam_data.py won't be limited to the member(s) you actually edited."
 )
@@ -74,6 +74,8 @@ def decrypt(out_path: Path) -> None:
     ciphertext is reused verbatim everywhere they're granted access, so grouping this way is
     both a more useful audit view and what makes `encrypt` unambiguous: rotating a person's
     email replaces every occurrence of their old ciphertext in one pass."""
+    print(_NONDETERMINISM_WARNING)
+
     client = kms_v1.KeyManagementServiceClient()
     crypto_key_id = _crypto_key_id()
     by_ciphertext: dict[str, dict] = {}
@@ -97,11 +99,11 @@ def decrypt(out_path: Path) -> None:
         record["grants"].sort(key=lambda g: (g["container"], g["resource"], g["role"]))
     out_path.write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
     print(f"wrote {len(records)} decrypted members ({sum(len(r['grants']) for r in records)} grants) to {out_path}")
-    print(_NONDETERMINISM_WARNING)
 
 
 def encrypt(in_path: Path) -> None:
     print(_NONDETERMINISM_WARNING)
+
     records = json.loads(in_path.read_text(encoding="utf-8"))
     client = kms_v1.KeyManagementServiceClient()
     crypto_key_id = _crypto_key_id()
