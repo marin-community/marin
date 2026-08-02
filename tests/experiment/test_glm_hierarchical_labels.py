@@ -69,3 +69,21 @@ def test_assign_document_checks_primary_leaf_parent(monkeypatch: pytest.MonkeyPa
 
     with pytest.raises(ValueError, match="wrong parent"):
         assign_document("http://server", document, value, 0)
+
+
+def test_run_waits_for_queued_server_without_client_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    waits = []
+
+    class Job:
+        def wait(self, timeout: float, raise_on_failure: bool) -> None:
+            waits.append((timeout, raise_on_failure))
+
+    class Context:
+        client = object()
+
+    monkeypatch.setattr(hierarchical_labels, "iris_ctx", Context)
+    monkeypatch.setattr(hierarchical_labels, "submit_glm52", lambda *args, **kwargs: Job())
+
+    hierarchical_labels.run("run", [], batch_size=50, concurrency=1)
+
+    assert waits == [(float("inf"), True)]

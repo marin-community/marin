@@ -1347,5 +1347,8 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 - A federated one-B200 coordinator reached storage, but the eight-B200 server remained capacity-blocked.
 - The coordinator can also leave a four-GPU domain partially occupied.
 - A B200 availability constraint without an attached GPU could not federate and created no job.
-- The corrected design runs the label client inside the GLM head task. The CPU coordinator only submits and waits for the eight-B200 job.
+- The label client now runs inside the GLM head task. This keeps private data and HTTP traffic within the server job.
+- Nested GPU jobs do not federate from a CPU-only coordinator. The coordinator still needs a federated B200 placement.
+- The first callback run timed out after the default five-minute client wait while the server was still queued.
+- The corrected coordinator wait is unbounded inside the two-hour parent timeout.
 - The stopped attempts wrote no taxonomy or assignments.

@@ -460,7 +460,7 @@ def run(run_id: str, variants: list[Variant], batch_size: int, concurrency: int)
         ),
     )
     server_job = submit_glm52(ctx, launch)
-    server_job.wait(raise_on_failure=True)
+    server_job.wait(timeout=float("inf"), raise_on_failure=True)
 
 
 def main() -> None:
