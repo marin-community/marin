@@ -30,6 +30,14 @@ DEFAULT_RECORDS_PREFIX = "gs://marin-eval-metadata/evals"
 # credentials but no GCP ones. The dashboard's ingest scans both prefixes. Access from outside
 # the cluster needs `rigging.filesystem.s3_compat.configure_coreweave_s3()` first.
 CW_RECORDS_PREFIX = "s3://marin-us-east-02a/marin/evals"
+LEGACY_GCP_RECORDS_PREFIX = "gs://marin-eval-metadata/runs"
+LEGACY_CW_RECORDS_PREFIX = "s3://marin-us-east-02a/marin/eval-metadata/runs"
+DEFAULT_SCAN_PREFIXES = (
+    DEFAULT_RECORDS_PREFIX,
+    CW_RECORDS_PREFIX,
+    LEGACY_GCP_RECORDS_PREFIX,
+    LEGACY_CW_RECORDS_PREFIX,
+)
 RECORD_FILE = "record.json"
 _MAX_RECORD_READERS = 16
 

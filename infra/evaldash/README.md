@@ -10,6 +10,10 @@ credentials come from Secret Manager; endpoint/addressing via
 (`hai-gcp-models:us-central1:marin-metadata`, database `evals`). A Starlette app serves a JSON API over
 that index and the built Vue SPA. Served at https://evaldash.oa.dev.
 
+The default scan also includes the former flat `gs://marin-eval-metadata/runs` and
+`s3://marin-us-east-02a/marin/eval-metadata/runs` roots because older CLI checkouts still write there.
+Canonical `evals` roots have precedence when the same migrated `run_id` exists in both locations.
+
 Record discovery uses a delimiter-based directory listing and checks only `*/record.json`. It does not
 recursively enumerate results, samples, trajectories, or other evaluator payloads. It reads candidate
 record bodies with up to 16 concurrent object-store requests. Successful records are cached by

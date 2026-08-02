@@ -4,7 +4,8 @@
 """Eval-results dashboard server (Starlette + uvicorn).
 
 Serves a bundled Vue SPA plus a small JSON API over eval run records under the GCS or CoreWeave
-``evals`` output root.
+``evals`` output root. It also scans the former flat ``eval-metadata/runs`` roots while older CLI
+checkouts can still write there.
 
 A background task ingests the records on startup and every ``EVALDASH_INGEST_INTERVAL`` seconds
 (default 300). Reads are served through a ``RecordStore`` selected by ``EVALDASH_STORE``: the
@@ -50,8 +51,7 @@ import samples
 import sqlalchemy
 import uvicorn
 from marin.evaluation.records import (
-    CW_RECORDS_PREFIX,
-    DEFAULT_RECORDS_PREFIX,
+    DEFAULT_SCAN_PREFIXES,
     EvalRunRecord,
     RecordParseFailure,
     scan_records,
@@ -81,7 +81,7 @@ RECORDS_PREFIXES = tuple(
     part.strip()
     for part in os.environ.get(
         "RECORDS_PREFIXES",
-        ",".join((DEFAULT_RECORDS_PREFIX, CW_RECORDS_PREFIX)),
+        ",".join(DEFAULT_SCAN_PREFIXES),
     ).split(",")
     if part.strip()
 )
@@ -115,6 +115,14 @@ class StoreInfo:
     backend: str
     instance: str | None
     database: str | None
+
+
+def _deduplicate_records(records: list[EvalRunRecord]) -> list[EvalRunRecord]:
+    """Keep the first record for each run ID so prefix order defines migration precedence."""
+    by_id: dict[str, EvalRunRecord] = {}
+    for record in records:
+        by_id.setdefault(record.run_id, record)
+    return list(by_id.values())
 
 
 def record_to_row(record: EvalRunRecord) -> dict:
@@ -191,6 +199,7 @@ class RecordStore:
 
     def refresh(self, records: list[EvalRunRecord]) -> None:
         """Absorb a fresh record listing. The base only swaps the snapshot; Postgres also upserts."""
+        records = _deduplicate_records(records)
         self._set_snapshot(records)
         logger.info("memory store refreshed: %d records", len(records))
 
@@ -366,6 +375,7 @@ class PgRecordStore(RecordStore):
         return StoreInfo(backend=self.backend, instance=self._instance, database=self._database)
 
     def refresh(self, records: list[EvalRunRecord]) -> None:
+        records = _deduplicate_records(records)
         self._set_snapshot(records)
         for record in records:
             upsert_record(self._engine, record)
@@ -489,6 +499,7 @@ class Ingestor:
     """
 
     def __init__(self, store: RecordStore, prefixes: tuple[str, ...], interval: float) -> None:
+        """Create an ingestor whose prefixes are ordered from highest to lowest precedence."""
         self._store = store
         self._prefixes = prefixes
         self.interval = interval
