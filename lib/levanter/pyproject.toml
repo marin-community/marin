@@ -81,7 +81,12 @@ Homepage = "https://github.com/stanford-crfm/levanter"
 
 [project.optional-dependencies]
 gpu = [
-  "jax[cuda13]==0.11.0",
+  # This nightly contains XLA's NCCL LSA/GIN device-initiated ragged all-to-all.
+  # https://github.com/openxla/xla/pull/46116
+  "jax[cuda13]==0.11.1.dev20260731",
+  "jaxlib==0.11.1.dev20260731",
+  "jax-cuda13-plugin[with-cuda]==0.11.1.dev20260731; sys_platform == 'linux'",
+  "jax-cuda13-pjrt==0.11.1.dev20260731; sys_platform == 'linux'",
   # B200 emits a cuBLAS warning with older CUDA 13 cuBLAS builds.
   "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
   # JAX 0.11 ragged all-to-all needs the versioned device API in NCCL 2.29.7.
@@ -183,6 +188,17 @@ conflicts = [
     { extra = "tpu" },
   ],
 ]  # Never solve for both GPU and TPU at once
+
+[[tool.uv.index]]
+name = "jax-nightly"
+url = "https://us-python.pkg.dev/ml-oss-artifacts-published/jax-public-nightly-artifacts-registry/simple/"
+explicit = true
+
+[tool.uv.sources]
+jax = [{ index = "jax-nightly", extra = "gpu" }]
+jaxlib = [{ index = "jax-nightly", extra = "gpu" }]
+jax-cuda13-plugin = [{ index = "jax-nightly", extra = "gpu" }]
+jax-cuda13-pjrt = [{ index = "jax-nightly", extra = "gpu" }]
 
 [tool.ruff]
 line-length = 119

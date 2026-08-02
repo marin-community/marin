@@ -66,6 +66,9 @@ _XLA_FLAG_DEFAULTS = (
 _MOONEP_XLA_FLAG_DEFAULTS = (
     # The full EP64 program needs 146.43 GiB before rematerialization.
     "--xla_gpu_memory_limit_slop_factor=106",
+    # Use the multi-node NCCL LSA/GIN kernel. The older NCCL barrier kernel
+    # faults on the first EP64 collective on one GB200 NVL72 rack.
+    "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
 )
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.

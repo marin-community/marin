@@ -218,3 +218,21 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Runtime: Use NCCL 2.29.7, an 84% main pool, and a 106% scheduler factor.
 - Stop criteria: Stop on any task failure, non-finite loss, transport error, or incomplete step 3.
 - Next action: Launch the 25-step MFU gate only if MNEP-009 passes.
+
+### 2026-08-02 12:14 UTC - MNEP-009 one-shot kernel failure
+
+- Result: The EP64 training step compiled, but many ranks reported a CUDA illegal address at the same timestamp before step zero.
+- Evidence: XLA failed while it recorded the completion event for an asynchronous collective. The workers then exited with signal 5.
+- Interpretation: NCCL 2.29.7 fixes device-communicator creation, but XLA 0.11.0's older multi-node one-shot kernel is not correct at EP64.
+- Source check: OpenXLA PR 46116 adds a later NCCL LSA and GIN device kernel for multi-node ragged all-to-all.
+- Four-GPU gate: JAX `0.11.1.dev20260731` with the new device-kernel flag passed MoonEP output and gradient parity in 119.88 seconds.
+- Decision: Pin the exact July 31 GPU nightly and enable its device kernel only for MoonEP.
+
+### 2026-08-02 12:14 UTC - MNEP-010 device-kernel smoke contract
+
+- Goal: Execute three combined steps through XLA's NCCL LSA and GIN device kernel on one NVL72.
+- Run ID: `mnep-010-device-kernel-smoke-3-20260802-1214`.
+- Config: EP64, batch 1024, sequence 4096, 256 experts, top-8, and global histogram QB with 1,000 bins.
+- Runtime: Use JAX `0.11.1.dev20260731`, NCCL 2.29.7, an 84% main pool, a 106% scheduler factor, and the device-kernel flag.
+- Stop criteria: Stop on any task failure, non-finite loss, transport error, or incomplete step 3.
+- Next action: Launch the 25-step correctness and MFU gate only if MNEP-010 passes.
