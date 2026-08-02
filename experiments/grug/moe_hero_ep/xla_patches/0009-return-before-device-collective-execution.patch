@@ -1,0 +1,12 @@
+diff --git a/xla/backends/gpu/runtime/ragged_all_to_all_thunk.cc b/xla/backends/gpu/runtime/ragged_all_to_all_thunk.cc
+--- a/xla/backends/gpu/runtime/ragged_all_to_all_thunk.cc
++++ b/xla/backends/gpu/runtime/ragged_all_to_all_thunk.cc
+@@ -763,6 +763,8 @@ absl::Status RaggedAllToAllThunk::RunCollective(const ExecuteParams& params,
+                                                 const GpuCliqueKey& clique_key,
+                                                 se::Stream& stream,
+                                                 Communicator& comm) {
++  return absl::OkStatus();
++
+   ASSIGN_OR_RETURN(std::vector<DeviceBufferPair> device_buffers,
+                    ConvertToDeviceBuffers(params.buffer_allocations, buffers(),
+                                           config_.config.operand_element_type));

@@ -813,3 +813,20 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - PJRT SHA-256: `c2b5461dfbfd53dfcebf76af16eb55736c02aa934020e81edc2477d59851f973`.
 - Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-noop-lsa-host-20260802`.
 - Expected rack result: The kernel completes and the probe reports sampled value mismatches.
+
+### 2026-08-02 20:38 UTC - MNEP-039 rules out GIN resource setup
+
+- Run ID: `mnep-039-ragged-noop-lsa-host-20260802-2034`.
+- Snapshot: `mnep-039-ragged-noop-lsa-host-20260802-2034` at `285c4838f`.
+- Result: Task 10 failed with the same CUDA illegal address.
+- Result: XLA requested only LSA device resources and launched an empty kernel.
+- Interpretation: GIN resource creation is not the source of the fault.
+- Next gate: Return before `RunCollective` gets device state or launches a kernel.
+
+### 2026-08-02 20:39 UTC - Empty RunCollective XLA diagnostic build
+
+- Patch: Return from `RunCollective` before buffer lookup, device communicator lookup, or kernel launch.
+- Patch file: `experiments/grug/moe_hero_ep/xla_patches/0009-return-before-device-collective-execution.patch`.
+- PJRT SHA-256: `ba8fb4ba686e18ec710f6495e7f4e8d407cadf5076e8786a06314d30443e6eb4`.
+- Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-noop-run-collective-20260802`.
+- Expected rack result: The collective returns and the probe reports sampled value mismatches.
