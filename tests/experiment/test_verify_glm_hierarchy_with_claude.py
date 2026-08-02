@@ -180,6 +180,34 @@ def test_comparison_rejects_leaf_under_wrong_parent() -> None:
         comparison(package, claude_rows)
 
 
+def test_comparison_accepts_named_adjudication_sample() -> None:
+    package = {
+        "taxonomy": {
+            "parents": [{"bucket_id": "SCIENCE"}],
+            "leaves": [{"bucket_id": "BIOLOGY", "parent_id": "SCIENCE"}],
+            "forms": [{"bucket_id": "RESEARCH"}],
+        },
+        "documents": [{"sample_index": 1, "text": "a"}],
+        "samples": {"adjudication": [1]},
+        "glm_assignments": [
+            {
+                "sample_index": 1,
+                "primary_parent_id": "SCIENCE",
+                "secondary_parent_ids": [],
+                "primary_leaf_id": "BIOLOGY",
+                "secondary_leaf_ids": [],
+                "form_id": "RESEARCH",
+                "confidence": 0.6,
+                "rationale": "Test",
+            }
+        ],
+    }
+
+    result = comparison(package, package["glm_assignments"])
+
+    assert result["adjudication"]["primary_parent_exact_agreement"] == 1.0
+
+
 def test_parse_claude_envelope_records_exact_model_and_cost() -> None:
     output = json.dumps(
         {

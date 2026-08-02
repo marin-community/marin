@@ -318,10 +318,11 @@ def main() -> None:
                 "claude_cost_usd": review.cost_usd,
                 "claude_model": args.claude_model,
                 "output_path": str(args.output_path),
-                "representative": {
-                    key: value for key, value in result["representative"].items() if key != "disagreements"
+                "samples": {
+                    name: {key: value for key, value in metrics.items() if key != "disagreements"}
+                    for name, metrics in result.items()
+                    if isinstance(metrics, dict) and "documents" in metrics
                 },
-                "stress": {key: value for key, value in result["stress"].items() if key != "disagreements"},
             },
             ensure_ascii=False,
             indent=2,
