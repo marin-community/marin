@@ -11,6 +11,7 @@ actor name lives in the URL path.
 import json
 from dataclasses import asdict
 
+import httpx
 import pytest
 from connectrpc.errors import ConnectError
 from iris.actor.client import ActorClient
@@ -19,6 +20,10 @@ from iris.actor.server import ActorServer
 from iris.cluster.controller.endpoint_service import ProxyEndpointMapping, ProxyRegistrySnapshot
 from iris.cluster.controller.native_proxy import NativeProxy
 from iris.managed_thread import ThreadContainer
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Route
 
 
 class StatusActor:
@@ -33,6 +38,22 @@ class StatusActor:
 
     def echo(self, message: str) -> str:
         return f"echo: {message}"
+
+
+class DashboardActor(StatusActor):
+    """Actor that serves browser routes beside its generic actor RPC."""
+
+    def __init__(self) -> None:
+        super().__init__()
+
+        async def dashboard(request: Request) -> JSONResponse:
+            return JSONResponse({"proxy_prefix": request.headers.get("x-forwarded-prefix")})
+
+        self._dashboard = Starlette(routes=[Route("/", dashboard)])
+
+    @property
+    def web_application(self) -> Starlette:
+        return self._dashboard
 
 
 def _start_proxy(
@@ -125,6 +146,30 @@ def test_proxy_namespaced_actor(permissive_native_proxy_auth_json: str):
 
         result = client.get_status()
         assert result["documents_processed"] == 1
+    finally:
+        proxy.stop()
+        threads.stop()
+
+
+def test_proxy_serves_actor_dashboard_and_rpc(permissive_native_proxy_auth_json: str):
+    """The browser and actor client use one private endpoint through Iris."""
+    threads = ThreadContainer()
+    actor_name = "test/dashboard"
+    actor_server = ActorServer(host="127.0.0.1", threads=threads)
+    actor_server.register(actor_name, DashboardActor())
+    actor_port = actor_server.serve_background()
+
+    try:
+        proxy_url, proxy = _start_proxy(
+            permissive_native_proxy_auth_json,
+            endpoints={actor_name: f"http://127.0.0.1:{actor_port}"},
+        )
+        response = httpx.get(f"{proxy_url}/proxy/test.dashboard/")
+        assert response.status_code == 200
+        assert response.json() == {"proxy_prefix": "/proxy/test.dashboard"}
+
+        actor_client = ActorClient(ProxyResolver(proxy_url), actor_name, max_call_attempts=1)
+        assert actor_client.echo("still-rpc") == "echo: still-rpc"
     finally:
         proxy.stop()
         threads.stop()

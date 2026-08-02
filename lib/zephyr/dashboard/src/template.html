@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- The coordinator rewrites this base from X-Forwarded-Prefix. -->
+    <base href="/" />
+    <title>Zephyr Coordinator</title>
+    <script>
+      try {
+        var stored = localStorage.getItem('zephyr-dark-mode')
+        if (stored === 'true' || (stored === null && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark')
+        }
+      } catch (e) {}
+    </script>
+  </head>
+  <body class="bg-surface text-text font-sans antialiased">
+    <div id="app"></div>
+  </body>
+</html>
