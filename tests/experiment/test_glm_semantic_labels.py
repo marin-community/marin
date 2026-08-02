@@ -10,9 +10,11 @@ import pytest
 PROJECT = Path(__file__).parents[2] / ".agents" / "projects" / "luxical-arctic-poc"
 sys.path.insert(0, str(PROJECT))
 
+import glm_semantic_labels as semantic_labels  # noqa: E402
 from glm_semantic_labels import (  # noqa: E402
     OTHER_BUCKET_ID,
     Assignment,
+    completion,
     parse_buckets,
     parse_json_object,
     review_indices,
@@ -51,3 +53,25 @@ def test_review_indices_select_low_confidence_across_buckets() -> None:
     selected = review_indices(assignments, 3)
 
     assert set(selected) == {3, 4, 5}
+
+
+def test_completion_doubles_token_limit_for_invalid_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    requests = []
+
+    class Response:
+        ok = True
+
+        def json(self) -> dict:
+            content = '{"answer":' if len(requests) < 3 else '{"answer": 42}'
+            return {"choices": [{"message": {"content": content}, "finish_reason": "length"}]}
+
+    def post(*args, **kwargs) -> Response:
+        requests.append(kwargs["json"])
+        return Response()
+
+    monkeypatch.setattr(semantic_labels.requests, "post", post)
+
+    result = completion("http://server", [{"role": "user", "content": "prompt"}], max_tokens=128, seed=42)
+
+    assert result == {"answer": 42}
+    assert [request["max_tokens"] for request in requests] == [128, 256, 512]

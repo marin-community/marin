@@ -181,13 +181,14 @@ def completion(vllm_url: str, messages: list[dict[str, str]], max_tokens: int, s
     """Return one validated JSON response from GLM-5.2."""
     request_messages = list(messages)
     for attempt in range(MAX_ATTEMPTS):
+        attempt_max_tokens = max_tokens * 2**attempt
         response = requests.post(
             f"{vllm_url}/v1/chat/completions",
             json={
                 "model": MODEL,
                 "messages": request_messages,
                 "temperature": 0.0,
-                "max_tokens": max_tokens,
+                "max_tokens": attempt_max_tokens,
                 "seed": seed + attempt,
                 "response_format": {"type": "json_object"},
                 "chat_template_kwargs": {"enable_thinking": False},
@@ -196,14 +197,20 @@ def completion(vllm_url: str, messages: list[dict[str, str]], max_tokens: int, s
         )
         if not response.ok:
             raise RuntimeError(f"vLLM returned {response.status_code}: {response.text[:2000]}")
-        content = response.json()["choices"][0]["message"].get("content")
+        choice = response.json()["choices"][0]
+        content = choice["message"].get("content")
         if not isinstance(content, str):
             raise ValueError("The model response has no text content")
         try:
             return parse_json_object(content)
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError) as error:
             if attempt + 1 == MAX_ATTEMPTS:
-                raise
+                message = (
+                    f"GLM returned invalid JSON after {MAX_ATTEMPTS} attempts. "
+                    f"The final finish reason was {choice.get('finish_reason')!r}. "
+                    f"The content had {len(content)} characters."
+                )
+                raise ValueError(message) from error
             request_messages = [
                 *messages,
                 {"role": "assistant", "content": content},

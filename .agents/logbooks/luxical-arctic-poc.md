@@ -1192,3 +1192,11 @@ The taxonomy can supply labels for a direct embedding quality test.
 - GLM model revision: `ba978f7d347eaf65d22f1a86833408afdb953541`.
 - Evaluation manifest: `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/manifest.json`.
 - Seed: 42.
+
+### Pilot run 001
+
+- Job `/rav/lux-glm52-semantic-1000-b200-002` reached the GLM endpoint.
+- The model cache hit, and all eight ranks loaded the pinned FP8 model.
+- The first description batch failed because one JSON response was incomplete after three attempts.
+- The child server stopped through the parent cleanup path.
+- The corrective change doubles the output-token limit on each JSON retry.
