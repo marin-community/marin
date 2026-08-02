@@ -13,7 +13,8 @@ It starts from the FSDP hero at PR 7876 and changes only the parts that EP64 req
 `MHEP-006` completed 25 steps with receiver-ECHO. It reduced drops but lost 5.9132 median MFU points.
 `MHEP-007` completed 25 steps with three spill attempts. It reduced drops but lost 0.0401 median MFU points
 and added 106 net backend and dispatch lines. `MHEP-004` is the selected minimal stack.
-`MHEP-008` is the final 200-step gate for that stack.
+`MHEP-008` passed the final 200-step gate for that stack. It measured 23.6969% median MFU,
+382,902 last-sample tokens/s, 7.4113% final MoE drop rate, and 3.3119 final loss.
 
 ## Configuration
 
@@ -21,6 +22,7 @@ and added 106 net backend and dispatch lines. `MHEP-004` is the selected minimal
 - Attention: 40 heads, 10 KV heads, sequence length 4096, and sliding window 2048.
 - Mesh: 64-way expert parallelism across 16 workers with four GB200 GPUs each.
 - Batch: 1024 sequences.
+- Router: top-8 quantile balancing with next-step, stop-gradient expert biases and no auxiliary balancing loss.
 - MoE backend: `fixed_all_to_all` with gather dispatch, structured custom VJPs, and capacity factor 1.0.
 - Optimizer: MuonH with on-device optimizer state.
 - Runtime: GPU command buffers off, `cuda_async`, PGLE off, and collective overlap limit 4.
@@ -43,18 +45,18 @@ python -m experiments.grug.moe_hero_ep.launch \
 Submit the one-rack gate through the Marin Iris controller:
 
 ```bash
-run_id="MHEP-008-final-200"
-iris --cluster=marin job run --no-wait --enable-extra-resources \
+run_id="mhep-008-final-200"
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources \
   --target-cluster cw-us-east-08a --priority interactive \
   --cpu 2 --memory 8GB --disk 32GB --timeout 21600 \
   --job-name "${run_id}-coord" \
-  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -e WANDB_MODE offline \
   -- python -m experiments.grug.moe_hero_ep.launch \
     --run-id "$run_id" --num-steps 200 --version dev --run
 ```
 
-W&B uses `marin-community/marin_moe`, group `moe-hero-ep`, and the supplied run ID.
-Use `WANDB_PROJECT` to select a different project.
+W&B uses project `marin_moe`, group `moe-hero-ep`, the supplied run ID, and offline mode.
+The run output includes the durable W&B metrics artifact.
 
 ## Result Record
 
